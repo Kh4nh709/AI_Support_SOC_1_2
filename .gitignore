@@ -1,0 +1,20 @@
+# Python
+**/__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Secrets - NEVER commit
+backend/.env
+
+# Runtime data (regenerated)
+backend/data/chroma/
+backend/.hf_cache/
+
+# Evaluation output
+backend/evaluation/results/*.csv
+backend/evaluation/results/*.png
+
+# Editor / OS
+.DS_Store

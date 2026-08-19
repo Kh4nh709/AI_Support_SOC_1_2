@@ -1,0 +1,1405 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rà soát SOC AI Assistant — Báo cáo audit kiến trúc &amp; bảo mật</title>
+<meta name="description" content="Audit kiến trúc và bảo mật hệ thống LLM hỗ trợ SOC Analyst phân tích alert: luồng xử lý thực tế trích từ code, đối chiếu 10 bước triage chuẩn, 20 phát hiện có trích dẫn file/dòng.">
+<style>
+  /* ==========================================================================
+     Rà soát SOC AI Assistant — tài liệu độc lập, không phụ thuộc mạng.
+     Thiết kế cam kết một tông sáng: đây là văn bản để đọc và để in ra PDF.
+     Mọi màu đều khai báo tường minh nên trang giữ nguyên diện mạo trên mọi nền.
+     ========================================================================== */
+
+  :root {
+    --ground:       #F4F6F8;
+    --surface:      #FFFFFF;
+    --surface-2:    #EDF1F4;
+    --ink:          #16202B;
+    --ink-soft:     #5A6773;
+    --ink-faint:    #8593A0;
+    --rule:         #DDE3E9;
+    --rule-strong:  #C3CCD5;
+    --accent:       #0E5C63;
+    --accent-ink:   #0A4A50;
+    --accent-soft:  #E1EFEF;
+
+    --crit:      #B3261E;  --crit-soft: #FBE9E7;
+    --high:      #B0530C;  --high-soft: #FCEEE2;
+    --med:       #766100;  --med-soft:  #F7F2DC;
+    --low:       #35618E;  --low-soft:  #E7EFF7;
+    --ok:        #1F6B45;  --ok-soft:   #E3F1E9;
+
+    --f-display: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, "Times New Roman", serif;
+    --f-body: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --f-mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page { max-width: 1000px; margin: 0 auto; padding: 0 24px 96px; }
+  .prose { max-width: 68ch; }
+
+  /* ---------------- masthead ---------------- */
+  .masthead {
+    border-bottom: 2px solid var(--ink);
+    padding: 56px 0 20px;
+    margin-bottom: 36px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .eyebrow {
+    font-family: var(--f-mono); font-size: 11.5px;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent);
+    display: flex; flex-wrap: wrap; gap: 8px 18px;
+  }
+  .masthead h1 {
+    font-family: var(--f-display); font-weight: 600;
+    font-size: clamp(32px, 5.2vw, 50px); line-height: 1.08;
+    letter-spacing: -0.015em; margin: 0; text-wrap: balance;
+  }
+  .standfirst { font-size: 17.5px; color: var(--ink-soft); max-width: 62ch; margin: 0; }
+  .meta-strip {
+    display: flex; flex-wrap: wrap; gap: 6px 28px;
+    font-family: var(--f-mono); font-size: 12px; color: var(--ink-faint);
+    padding-top: 6px;
+  }
+  .meta-strip b { color: var(--ink-soft); font-weight: 500; }
+
+  /* ---------------- table of contents ---------------- */
+  .toc {
+    background: var(--surface); border: 1px solid var(--rule);
+    border-radius: 3px; padding: 20px 26px; margin-bottom: 8px;
+  }
+  .toc h2 {
+    font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--ink-faint); font-weight: 500;
+    margin: 0 0 12px; display: block;
+  }
+  .toc ol { list-style: none; margin: 0; padding: 0; columns: 2; column-gap: 40px; }
+  .toc li { margin: 0 0 7px; break-inside: avoid; }
+  .toc a { text-decoration: none; color: var(--ink); display: flex; gap: 12px; align-items: baseline; }
+  .toc a:hover { color: var(--accent); }
+  .toc .n { font-family: var(--f-mono); font-size: 11.5px; color: var(--accent); flex: none; }
+
+  /* ---------------- sections ---------------- */
+  section { margin-top: 60px; scroll-margin-top: 20px; }
+  h2 {
+    font-family: var(--f-display); font-weight: 600;
+    font-size: clamp(24px, 3.4vw, 32px); line-height: 1.2;
+    letter-spacing: -0.01em; margin: 0 0 6px; text-wrap: balance;
+    display: flex; align-items: baseline; gap: 14px;
+  }
+  h2 .num {
+    font-family: var(--f-mono); font-size: 13px; font-weight: 500;
+    color: var(--accent); letter-spacing: 0.08em; flex: none;
+  }
+  h3 {
+    font-family: var(--f-body); font-weight: 650; font-size: 17px;
+    letter-spacing: -0.005em; margin: 36px 0 10px;
+  }
+  .section-note { color: var(--ink-soft); font-size: 15px; margin: 0 0 24px; max-width: 66ch; }
+  p { margin: 0 0 14px; }
+  ul, ol { margin: 0 0 14px; padding-left: 22px; }
+  li { margin-bottom: 7px; }
+  li::marker { color: var(--ink-faint); }
+
+  code, .ref { font-family: var(--f-mono); font-size: 0.855em; }
+  code {
+    background: var(--surface-2); border: 1px solid var(--rule);
+    border-radius: 3px; padding: 1px 5px; color: var(--accent-ink);
+    word-break: break-word;
+  }
+
+  /* ---------------- verdict ---------------- */
+  .verdict {
+    background: var(--surface); border: 1px solid var(--rule);
+    border-left: 4px solid var(--crit); border-radius: 3px;
+    padding: 22px 26px; margin-bottom: 28px;
+  }
+  .verdict .label {
+    font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--crit); display: block; margin-bottom: 8px;
+  }
+  .verdict p { margin: 0; font-size: 16.5px; }
+  .verdict p + p { margin-top: 12px; }
+
+  /* ---------------- scorecard ---------------- */
+  .scorecard {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+    gap: 1px; background: var(--rule); border: 1px solid var(--rule);
+    border-radius: 3px; overflow: hidden; margin: 28px 0;
+  }
+  .tile { background: var(--surface); padding: 18px 16px; display: flex; flex-direction: column; gap: 4px; }
+  .tile .n {
+    font-family: var(--f-mono); font-size: 30px; font-weight: 500;
+    line-height: 1; font-variant-numeric: tabular-nums;
+  }
+  .tile .k {
+    font-family: var(--f-mono); font-size: 10.5px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--ink-faint);
+  }
+  .tile.c .n { color: var(--crit); }
+  .tile.h .n { color: var(--high); }
+  .tile.m .n { color: var(--med); }
+  .tile.l .n { color: var(--low); }
+
+  /* ==========================================================================
+     Sơ đồ luồng — dựng bằng CSS grid, không dùng thư viện vẽ.
+     Ba cột: phụ trợ trái · trục chính · gap thiếu bên phải.
+     Mũi tên nối là pseudo-element nằm trong khoảng row-gap.
+     ========================================================================== */
+  .flow {
+    display: grid;
+    grid-template-columns: 178px minmax(0, 1fr) 214px;
+    column-gap: 20px; row-gap: 40px;
+    background: var(--surface); border: 1px solid var(--rule-strong);
+    border-radius: 3px; padding: 30px 24px 34px;
+    margin: 8px 0 10px;
+  }
+  .frow { display: contents; }
+
+  .stage {
+    position: relative;
+    background: var(--surface-2); border: 1px solid var(--rule-strong);
+    border-radius: 3px; padding: 12px 16px;
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  /* đường nối dọc + mũi tên, đặt trong khoảng row-gap phía dưới */
+  .stage::after {
+    content: ""; position: absolute; left: 50%; top: 100%;
+    width: 1px; height: 32px; background: var(--rule-strong);
+  }
+  .stage::before {
+    content: ""; position: absolute; left: 50%; top: calc(100% + 30px);
+    transform: translateX(-50%);
+    border-left: 5px solid transparent; border-right: 5px solid transparent;
+    border-top: 7px solid var(--rule-strong);
+  }
+  .stage.last::after, .stage.last::before { display: none; }
+
+  .stage .st {
+    font-family: var(--f-body); font-weight: 650; font-size: 14px; line-height: 1.35;
+  }
+  .stage .sref {
+    font-family: var(--f-mono); font-size: 11px; color: var(--ink-soft); line-height: 1.5;
+  }
+  .stage .snote { font-size: 12.5px; color: var(--ink-soft); line-height: 1.45; }
+
+  .stage.guard { background: var(--accent-soft); border-color: var(--accent); }
+  .stage.guard .st { color: var(--accent-ink); }
+  .stage.weak  { background: var(--high-soft); border-color: var(--high); }
+  .stage.weak .st { color: var(--high); }
+  .stage.store { background: var(--surface); border-style: double; border-width: 3px; }
+
+  .aside, .gap { align-self: center; }
+
+  .aside {
+    border: 1px solid var(--rule); border-radius: 3px;
+    background: var(--surface); padding: 9px 12px;
+    font-size: 12px; color: var(--ink-soft); line-height: 1.45;
+  }
+  .aside b {
+    display: block; font-family: var(--f-mono); font-size: 10px;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 500; margin-bottom: 3px;
+  }
+
+  .gap {
+    position: relative;
+    border: 1.5px dashed var(--crit); border-radius: 3px;
+    background: var(--crit-soft); padding: 9px 12px;
+    font-size: 12px; color: var(--crit); line-height: 1.45;
+  }
+  .gap b {
+    display: block; font-family: var(--f-mono); font-size: 10px;
+    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 3px; font-weight: 600;
+  }
+  .gap::before {
+    content: ""; position: absolute; right: 100%; top: 50%;
+    width: 20px; height: 0; border-top: 1.5px dashed var(--crit);
+  }
+
+  .flow-legend {
+    display: flex; flex-wrap: wrap; gap: 8px 22px;
+    font-family: var(--f-mono); font-size: 11px; color: var(--ink-faint);
+    margin-top: 4px;
+  }
+  .flow-legend span { display: flex; align-items: center; gap: 7px; }
+  .swatch { width: 13px; height: 13px; border-radius: 2px; border: 1px solid; flex: none; }
+  .swatch.g { background: var(--accent-soft); border-color: var(--accent); }
+  .swatch.w { background: var(--high-soft); border-color: var(--high); }
+  .swatch.x { background: var(--crit-soft); border-color: var(--crit); border-style: dashed; }
+  .swatch.n { background: var(--surface-2); border-color: var(--rule-strong); }
+
+  figure { margin: 0; }
+  figcaption {
+    font-family: var(--f-mono); font-size: 12px; color: var(--ink-faint);
+    line-height: 1.5; margin: 10px 0 28px;
+  }
+
+  /* ---------------- tables ---------------- */
+  .tablewrap {
+    overflow-x: auto; border: 1px solid var(--rule); border-radius: 3px;
+    background: var(--surface); margin: 22px 0;
+  }
+  table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 14.5px; }
+  th {
+    text-align: left; font-family: var(--f-mono); font-size: 10.5px;
+    letter-spacing: 0.11em; text-transform: uppercase; color: var(--ink-faint);
+    font-weight: 500; padding: 12px 14px; border-bottom: 1px solid var(--rule-strong);
+    background: var(--surface-2); vertical-align: bottom; white-space: nowrap;
+  }
+  td { padding: 13px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; line-height: 1.55; }
+  tbody tr:last-child td { border-bottom: none; }
+  td .ref { color: var(--ink-soft); display: block; margin-top: 5px; font-size: 12px; line-height: 1.5; }
+  td.step { white-space: nowrap; }
+  td.step .sn { font-family: var(--f-mono); color: var(--ink-faint); font-size: 12px; margin-right: 6px; }
+
+  /* ---------------- chips ---------------- */
+  .chip {
+    display: inline-block; font-family: var(--f-mono); font-size: 10.5px;
+    letter-spacing: 0.07em; text-transform: uppercase; padding: 3px 8px;
+    border-radius: 2px; white-space: nowrap; border: 1px solid transparent;
+  }
+  .chip.yes     { background: var(--ok-soft);   color: var(--ok);   border-color: var(--ok); }
+  .chip.partial { background: var(--med-soft);  color: var(--med);  border-color: var(--med); }
+  .chip.form    { background: var(--high-soft); color: var(--high); border-color: var(--high); }
+  .chip.no      { background: var(--crit-soft); color: var(--crit); border-color: var(--crit); }
+
+  /* ---------------- findings ---------------- */
+  .findings { display: flex; flex-direction: column; gap: 16px; margin-top: 24px; }
+  .finding {
+    background: var(--surface); border: 1px solid var(--rule);
+    border-left: 4px solid var(--rule-strong); border-radius: 3px; padding: 20px 24px;
+  }
+  .finding.c { border-left-color: var(--crit); }
+  .finding.h { border-left-color: var(--high); }
+  .finding.m { border-left-color: var(--med); }
+  .finding.l { border-left-color: var(--low); }
+  .finding-head {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 12px; margin-bottom: 10px;
+  }
+  .finding-head .sev {
+    font-family: var(--f-mono); font-size: 10.5px; letter-spacing: 0.12em;
+    text-transform: uppercase; flex: none;
+  }
+  .finding.c .sev { color: var(--crit); }
+  .finding.h .sev { color: var(--high); }
+  .finding.m .sev { color: var(--med); }
+  .finding.l .sev { color: var(--low); }
+  .finding-head .id { font-family: var(--f-mono); font-size: 11px; color: var(--ink-faint); flex: none; }
+  .finding-head h4 {
+    font-family: var(--f-body); font-weight: 650; font-size: 16.5px; margin: 0;
+    line-height: 1.35; flex: 1 1 320px; letter-spacing: -0.005em;
+  }
+  .finding p { margin: 0 0 12px; font-size: 15px; }
+  .finding p:last-child { margin-bottom: 0; }
+  .finding ul { font-size: 15px; margin-bottom: 12px; }
+  .evidence {
+    border-top: 1px solid var(--rule); margin-top: 14px; padding-top: 11px;
+    font-family: var(--f-mono); font-size: 12px; color: var(--ink-soft);
+    line-height: 1.65; word-break: break-word;
+  }
+  .evidence b {
+    color: var(--ink-faint); font-weight: 500; letter-spacing: 0.1em;
+    text-transform: uppercase; font-size: 10px; display: block; margin-bottom: 3px;
+  }
+  .impact {
+    background: var(--surface-2); border-radius: 3px; padding: 11px 14px;
+    font-size: 14.5px; margin: 0 0 12px;
+  }
+  .impact b { font-weight: 650; }
+
+  /* ---------------- credits ---------------- */
+  .credits { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin-top: 20px; }
+  .credit {
+    background: var(--surface); border: 1px solid var(--rule);
+    border-top: 3px solid var(--ok); border-radius: 3px; padding: 16px 18px;
+  }
+  .credit h4 { font-family: var(--f-body); font-size: 15px; font-weight: 650; margin: 0 0 6px; }
+  .credit p { font-size: 14.5px; margin: 0; color: var(--ink-soft); }
+  .credit .ref { display: block; margin-top: 8px; font-size: 11.5px; color: var(--ink-faint); }
+
+  /* ---------------- code ---------------- */
+  pre.code {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 3px;
+    padding: 16px 18px; overflow-x: auto; font-family: var(--f-mono);
+    font-size: 12.5px; line-height: 1.7; margin: 14px 0 18px; color: var(--ink);
+  }
+  pre.code .cm  { color: var(--ink-faint); }
+  pre.code .add { color: var(--ok); }
+
+  /* ---------------- fixes ---------------- */
+  .fix { border-top: 1px solid var(--rule); padding-top: 22px; margin-top: 22px; }
+  .fix:first-of-type { border-top: none; padding-top: 0; }
+  .fix h3 { margin-top: 0; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .fix h3 .tag {
+    font-family: var(--f-mono); font-size: 10.5px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--accent); flex: none;
+  }
+
+  .callout {
+    background: var(--accent-soft); border-left: 3px solid var(--accent);
+    border-radius: 0 3px 3px 0; padding: 14px 18px; margin: 20px 0; font-size: 15px;
+  }
+  .callout b { font-weight: 650; }
+
+  footer {
+    margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--rule);
+    font-family: var(--f-mono); font-size: 12px; color: var(--ink-faint); line-height: 1.7;
+  }
+
+  a { color: var(--accent); }
+  a:focus-visible, :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---------------- màn hình hẹp ---------------- */
+  @media (max-width: 800px) {
+    .flow { grid-template-columns: minmax(0, 1fr); row-gap: 34px; }
+    .aside, .gap { align-self: stretch; }
+    .gap::before { display: none; }
+    .stage::after { height: 26px; }
+    .stage::before { top: calc(100% + 24px); }
+  }
+  @media (max-width: 620px) {
+    .page { padding: 0 18px 64px; }
+    .finding { padding: 18px 18px; }
+    h2 { flex-direction: column; gap: 4px; }
+    .toc ol { columns: 1; }
+  }
+
+  /* ==========================================================================
+     In ra PDF. Màu mức độ nghiêm trọng mang thông tin nên phải giữ khi in.
+     ========================================================================== */
+  @media print {
+    :root { --ground: #FFFFFF; }
+    html, body {
+      background: #FFFFFF;
+      font-size: 10.5pt;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .page { max-width: none; padding: 0; }
+    .masthead { padding-top: 0; }
+    .toc { break-after: page; }
+    section { margin-top: 26pt; break-before: auto; }
+    h2, h3 { break-after: avoid; }
+    .finding, .credit, .fix, figure, .verdict, .scorecard, pre.code, .callout, .tablewrap {
+      break-inside: avoid;
+    }
+    .flow { break-inside: avoid; padding: 16px; }
+    table { min-width: 0; font-size: 9pt; }
+    .tablewrap { overflow: visible; }
+    pre.code { font-size: 8.5pt; white-space: pre-wrap; }
+    a { color: var(--ink); text-decoration: none; }
+    footer { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="eyebrow">
+      <span>Security Architecture Review</span>
+      <span>Final-Project</span>
+      <span>19 · 08 · 2026</span>
+    </div>
+    <h1>Rà soát SOC AI Assistant</h1>
+    <p class="standfirst">
+      Audit toàn bộ codebase hệ thống LLM hỗ trợ SOC Analyst phân tích alert: đối chiếu luồng
+      xử lý thực tế trong code với quy trình alert triage chuẩn, và soi các rủi ro đặc thù khi
+      đưa dữ liệu do kẻ tấn công kiểm soát vào một mô hình ngôn ngữ.
+    </p>
+    <div class="meta-strip">
+      <span><b>Phạm vi:</b> backend/app · frontend · evaluation · docker-compose</span>
+      <span><b>Khối lượng:</b> ~4.550 dòng Python</span>
+      <span><b>Vai trò:</b> Security Architect / SOC Lead</span>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="Mục lục">
+    <h2>Mục lục</h2>
+    <ol>
+      <li><a href="#tomtat"><span class="n">00</span><span>Tóm tắt điều hành</span></a></li>
+      <li><a href="#luong"><span class="n">01</span><span>Luồng xử lý thực tế trích từ code</span></a></li>
+      <li><a href="#sosanh"><span class="n">02</span><span>Đối chiếu với quy trình SOC chuẩn</span></a></li>
+      <li><a href="#gap"><span class="n">03</span><span>Danh sách gap theo mức độ ưu tiên</span></a></li>
+      <li><a href="#tot"><span class="n">04</span><span>Những điểm làm đúng, cần giữ</span></a></li>
+      <li><a href="#ruiro"><span class="n">05</span><span>Rủi ro bảo mật cụ thể</span></a></li>
+      <li><a href="#dexuat"><span class="n">06</span><span>Đề xuất cải thiện</span></a></li>
+      <li><a href="#giadinh"><span class="n">07</span><span>Giả định và giới hạn</span></a></li>
+    </ol>
+  </nav>
+
+  <!-- ================= 00 · TÓM TẮT ================= -->
+  <section id="tomtat">
+    <h2><span class="num">00</span>Tóm tắt điều hành</h2>
+
+    <div class="verdict">
+      <span class="label">Kết luận</span>
+      <p>
+        Đây là một <b>đồ án kỹ thuật RAG rất tốt</b>, nhưng <b>chưa phải một hệ thống SOC</b>.
+        Phần "phân tích" (retrieval lai, ReAct agent, structured output, chống hallucination)
+        được làm sâu và có kiểm chứng. Phần "vận hành" — audit trail, feedback loop, correlation
+        đưa vào suy luận, human-in-the-loop thực sự — hoặc thiếu hẳn, hoặc tồn tại dưới dạng
+        code chết không được nối vào luồng chính.
+      </p>
+      <p>
+        Nghiêm trọng nhất: hệ thống <b>không lưu một dòng log nào</b> về những gì đã gửi cho LLM
+        và LLM đã trả về. Với một công cụ mà đầu ra là khuyến nghị xử lý sự cố an ninh, đây là
+        lỗi nghiệp vụ, không phải lỗi kỹ thuật.
+      </p>
+    </div>
+
+    <div class="scorecard">
+      <div class="tile c"><span class="n">5</span><span class="k">Critical</span></div>
+      <div class="tile h"><span class="n">5</span><span class="k">High</span></div>
+      <div class="tile m"><span class="n">6</span><span class="k">Medium</span></div>
+      <div class="tile l"><span class="n">4</span><span class="k">Low</span></div>
+      <div class="tile"><span class="n">4/10</span><span class="k">Bước SOC đạt</span></div>
+    </div>
+
+    <div class="prose">
+      <p>Ba nhận định định hướng toàn bộ báo cáo này:</p>
+      <ol>
+        <li>
+          <b>Enrichment bị giao cho LLM tự quyết.</b> Trong SOC thật, enrichment là một bước
+          <em>tất định</em> chạy trước khi con người hay máy suy luận. Ở đây, việc tra IoC, tra
+          MITRE, lấy playbook đều là <em>tool</em> mà agent <em>có thể</em> gọi hoặc không. Cùng
+          một alert, hai lần chạy có thể ra hai bộ ngữ cảnh khác nhau.
+        </li>
+        <li>
+          <b>Phòng thủ prompt injection chỉ bọc một nửa số kênh.</b> <code>description</code> và
+          <code>raw_log</code> được bọc delimiter; nhưng ngữ cảnh RAG, kết quả tool, mô tả IoC và
+          báo cáo threat intel — tất cả đều đi thẳng vào prompt không bọc, <em>trái với chính
+          nội dung system prompt đang khẳng định với model</em>.
+        </li>
+        <li>
+          <b>"Con người ra quyết định cuối" hiện đúng theo nghĩa hệ thống không làm gì cả.</b>
+          Ràng buộc "chỉ khuyến nghị" được cưỡng chế thật trong code — điểm này làm tốt. Nhưng
+          analyst không có bất kỳ nút nào để xác nhận, bác bỏ hay sửa kết luận của LLM.
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ================= 01 · LUỒNG ================= -->
+  <section id="luong">
+    <h2><span class="num">01</span>Luồng xử lý thực tế trích từ code</h2>
+    <p class="section-note">
+      Sơ đồ dưới đây dựng từ code đang chạy, không phải từ tài liệu thiết kế. Khối nét đứt đỏ là
+      những bước quy trình SOC yêu cầu nhưng <em>không tồn tại</em> trong codebase.
+    </p>
+
+    <figure>
+      <div class="flow">
+
+        <div class="frow">
+          <div class="aside"><b>Nguồn</b>Wazuh Manager đẩy alert (giả định: integration script)</div>
+          <div class="stage">
+            <span class="st">1 · POST /wazuh-webhook</span>
+            <span class="sref">routers/webhook.py:18</span>
+            <span class="snote">Nhận envelope OpenSearch <code>_source</code>. Không xác thực.</span>
+          </div>
+          <div></div>
+        </div>
+
+        <div class="frow">
+          <div></div>
+          <div class="stage">
+            <span class="st">2 · Chuẩn hóa &amp; phân loại</span>
+            <span class="sref">wazuh_ingest.py:25 · category_resolver.py</span>
+            <span class="snote">Validate 5 trường bắt buộc → <code>Alert</code>. Category qua 5 tầng: mitre → groups → decoder → port.</span>
+          </div>
+          <div></div>
+        </div>
+
+        <div class="frow">
+          <div></div>
+          <div class="stage store">
+            <span class="st">3 · Postgres · bảng alerts</span>
+            <span class="sref">db.py:284 · UPSERT ON CONFLICT</span>
+          </div>
+          <div class="gap"><b>Thiếu</b>Deduplication &amp; suppression</div>
+        </div>
+
+        <div class="frow">
+          <div class="aside"><b>Analyst</b>Chọn alert trên UI<br>frontend/app.js:486</div>
+          <div class="stage">
+            <span class="st">4 · POST /analyze-alert</span>
+            <span class="sref">routers/alerts.py:50 → :34 resolve_alert</span>
+          </div>
+          <div></div>
+        </div>
+
+        <div class="frow">
+          <div></div>
+          <div class="stage">
+            <span class="st">5 · Retrieval lai</span>
+            <span class="sref">rag_service.py:551</span>
+            <span class="snote">BM25 + vector → RRF → cross-encoder rerank → lọc category + trần đa dạng nguồn.</span>
+          </div>
+          <div class="gap"><b>Thiếu</b>Enrichment tất định: asset · user · lịch sử alert</div>
+        </div>
+
+        <div class="frow">
+          <div></div>
+          <div class="stage weak">
+            <span class="st">6 · Dựng prompt</span>
+            <span class="sref">prompts.py:139 · prompt_guard.py:146</span>
+            <span class="snote">Bọc nonce delimiter <b>chỉ cho description + raw_log</b>. Chunk RAG và kết quả tool đi vào <b>không bọc</b> (prompts.py:165).</span>
+          </div>
+          <div></div>
+        </div>
+
+        <div class="frow">
+          <div class="aside"><b>Vòng lặp trao đổi</b>6 tool: get_alert_by_id · lookup_ioc · get_playbook · map_mitre · summarize_ti · suggest_response_steps<br>executor.py:19</div>
+          <div class="stage">
+            <span class="st">7 · Agent ReAct · tối đa 6 bước</span>
+            <span class="sref">llm_service.py:66 → claude_provider.py:36</span>
+            <span class="snote">Gọi model tại <code>api.deepseek.com</code>. Tool lỗi → chuỗi lỗi feed lại model, không abort.</span>
+          </div>
+          <div></div>
+        </div>
+
+        <div class="frow">
+          <div></div>
+          <div class="stage">
+            <span class="st">8 · Thu kết quả có cấu trúc</span>
+            <span class="sref">prompts.py:247 · analysis_service.py:94</span>
+            <span class="snote">Tool terminal <code>submit_analysis</code>; nếu args rỗng → fallback JSON 3 lần kèm tự sửa cú pháp.</span>
+          </div>
+          <div></div>
+        </div>
+
+        <div class="frow">
+          <div></div>
+          <div class="stage guard">
+            <span class="st">9 · Cưỡng chế an toàn</span>
+            <span class="sref">output_guard.py:28</span>
+            <span class="snote">Ép <code>requires_human_approval=True</code> vô điều kiện + ghi đè disclaimer.</span>
+          </div>
+          <div></div>
+        </div>
+
+        <div class="frow">
+          <div></div>
+          <div class="stage guard">
+            <span class="st">10 · Kiểm chứng trích dẫn</span>
+            <span class="sref">prompts.py:468</span>
+            <span class="snote">Đối chiếu mọi <code>source</code> model trích với tập nguồn thực sự đã thấy.</span>
+          </div>
+          <div></div>
+        </div>
+
+        <div class="frow">
+          <div class="aside"><b>Panel rời</b>GET /correlate<br>alerts.py:76 — không đi vào prompt</div>
+          <div class="stage weak last">
+            <span class="st">11 · Frontend hiển thị 8.1–8.5</span>
+            <span class="sref">frontend/app.js:396</span>
+            <span class="snote"><b>Chỉ đọc.</b> Không nút xác nhận / bác bỏ / sửa. Không lưu gì.</span>
+          </div>
+          <div class="gap"><b>Thiếu</b>Audit trail · Feedback loop</div>
+        </div>
+
+      </div>
+
+      <div class="flow-legend">
+        <span><i class="swatch n"></i>Bước có thật</span>
+        <span><i class="swatch g"></i>Kiểm soát có hiệu lực</span>
+        <span><i class="swatch w"></i>Có nhưng yếu / không nối vào suy luận</span>
+        <span><i class="swatch x"></i>Không tồn tại trong code</span>
+      </div>
+
+      <figcaption>
+        Hình 1 — Luồng dữ liệu thực tế từ lúc alert phát sinh tới lúc analyst nhìn thấy kết quả.
+      </figcaption>
+    </figure>
+
+    <h3>Chi tiết từng bước: module, I/O, xử lý lỗi</h3>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Bước</th><th>Module</th><th>Input → Output</th><th>Xử lý lỗi</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Nhận alert</td>
+            <td><span class="ref">routers/webhook.py:18<br>wazuh_ingest.py:25</span></td>
+            <td>Envelope OpenSearch <code>_source</code> → <code>Alert</code> pydantic</td>
+            <td><span class="chip yes">Tốt</span><span class="ref">Thiếu trường bắt buộc → 400 kèm tên trường (wazuh_ingest.py:40‑52)</span></td>
+          </tr>
+          <tr>
+            <td>Lưu trữ</td>
+            <td><span class="ref">db.py:284</span></td>
+            <td><code>Alert</code> + payload gốc → row Postgres (JSONB)</td>
+            <td><span class="chip form">Không bắt</span><span class="ref">Lỗi DB nổi lên thành 500 trần</span></td>
+          </tr>
+          <tr>
+            <td>Retrieval</td>
+            <td><span class="ref">rag_service.py:551</span></td>
+            <td><code>Alert</code> → n <code>RetrievedChunk</code> kèm <code>source</code></td>
+            <td><span class="chip form">Không bắt</span><span class="ref">Chroma lỗi → 502 chung ở alerts.py:68</span></td>
+          </tr>
+          <tr>
+            <td>Dựng prompt</td>
+            <td><span class="ref">prompts.py:139<br>prompt_guard.py:146</span></td>
+            <td><code>Alert</code> + chunks → chuỗi user message</td>
+            <td><span class="chip partial">Một phần</span><span class="ref">Bọc 2/5 kênh untrusted; findings bị vứt bỏ</span></td>
+          </tr>
+          <tr>
+            <td>Vòng lặp agent</td>
+            <td><span class="ref">llm_service.py:66</span></td>
+            <td>prompt → <code>AgentRunResult</code> (≤6 bước)</td>
+            <td><span class="chip yes">Tốt</span><span class="ref">Tool lỗi → chuỗi lỗi feed lại model (:150); hết bước → degrade mềm (:166)</span></td>
+          </tr>
+          <tr>
+            <td>Parse kết quả</td>
+            <td><span class="ref">analysis_service.py:94</span></td>
+            <td>tool args / text → dict → <code>AnalysisResult</code></td>
+            <td><span class="chip yes">Tốt</span><span class="ref">3 lần thử JSON + tự sửa cú pháp, rồi mới raise</span></td>
+          </tr>
+          <tr>
+            <td>Cưỡng chế an toàn</td>
+            <td><span class="ref">output_guard.py:28</span></td>
+            <td><code>AnalysisResult</code> → bản đã ép cờ phê duyệt</td>
+            <td><span class="chip yes">Tốt</span><span class="ref">Vô điều kiện, không phụ thuộc model</span></td>
+          </tr>
+          <tr>
+            <td>Trả về analyst</td>
+            <td><span class="ref">frontend/app.js:396</span></td>
+            <td><code>AnalyzeOutcome</code> → HTML 8.1–8.5 + trace</td>
+            <td><span class="chip no">Không có hành động</span><span class="ref">Chỉ hiển thị; không lưu, không phản hồi</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <b>Giả định đã dùng.</b> Không có file cấu hình Wazuh integrator trong repo, nên tôi giả định
+      alert được Wazuh push vào <code>POST /wazuh-webhook</code> theo cơ chế integration script.
+      Không tìm thấy đường nào khác ghi vào bảng <code>alerts</code> ngoài endpoint này
+      (<code>db.upsert_alert</code> chỉ có duy nhất một caller).
+    </div>
+  </section>
+
+  <!-- ================= 02 · ĐỐI CHIẾU ================= -->
+  <section id="sosanh">
+    <h2><span class="num">02</span>Đối chiếu với quy trình SOC chuẩn</h2>
+    <p class="section-note">
+      Mười bước theo mô hình alert triage phổ biến (NIST SP 800‑61 Detection &amp; Analysis,
+      SANS IR). Cột đánh giá trả lời đúng câu hỏi: có làm đúng ý nghĩa nghiệp vụ, hay chỉ làm
+      cho có?
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Bước chuẩn</th><th>Có?</th><th>Đánh giá nghiệp vụ</th><th>Module</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="step"><span class="sn">1</span>Alert Ingestion</td>
+            <td><span class="chip yes">Có, thật</span></td>
+            <td>Parse envelope Wazuh thật, validate trường bắt buộc, upsert idempotent. Hạn chế: <b>một nguồn duy nhất</b>, push-only, không xác thực.</td>
+            <td><span class="ref">webhook.py:18<br>wazuh_ingest.py:25</span></td>
+          </tr>
+          <tr>
+            <td class="step"><span class="sn">2</span>Normalization &amp; Dedup</td>
+            <td><span class="chip partial">Một nửa</span></td>
+            <td>Normalization <b>làm rất kỹ</b>: 5 tầng fallback phân loại category, chuẩn hóa <code>rule.level</code> 0‑15 → 4 mức severity. Dedup/suppression <b>hoàn toàn không có</b> — <code>ON CONFLICT</code> chỉ chống trùng lặp khi Wazuh gửi lại cùng <code>alert_id</code>.</td>
+            <td><span class="ref">category_resolver.py:24‑160<br>wazuh_ingest.py:14<br>db.py:65</span></td>
+          </tr>
+          <tr>
+            <td class="step"><span class="sn">3</span>Enrichment</td>
+            <td><span class="chip form">Hình thức</span></td>
+            <td>Có nguồn làm giàu tốt (IoC có TTL/expiry, TI có cờ stale, MITRE 697 kỹ thuật, RAG playbook) nhưng <b>chạy theo ý LLM, không tất định</b>. Thiếu hẳn asset criticality, user context, lịch sử alert.</td>
+            <td><span class="ref">tools/executor.py:19‑103<br>rag_service.py:551</span></td>
+          </tr>
+          <tr>
+            <td class="step"><span class="sn">4</span>Correlation</td>
+            <td><span class="chip form">Code chết</span></td>
+            <td>Thuật toán đúng và hợp lý (chung host/user/IP trong cửa sổ 2h, sắp theo thời gian). Nhưng <b>không bao giờ được đưa vào prompt</b> — LLM luôn phân tích alert đơn lẻ, không thấy chuỗi tấn công.</td>
+            <td><span class="ref">correlation_service.py:35<br>alerts.py:76 (endpoint rời)</span></td>
+          </tr>
+          <tr>
+            <td class="step"><span class="sn">5</span>Triage / Prioritization</td>
+            <td><span class="chip partial">Một phần</span></td>
+            <td>Có đánh giá lại severity độc lập với SIEM + verdict TP/FP/cần điều tra + độ tin cậy. Nhưng <b>không có xếp hàng ưu tiên giữa các alert</b> và không có trọng số tài sản — chỉ là nhãn trên một alert.</td>
+            <td><span class="ref">models/analysis.py:47‑77</span></td>
+          </tr>
+          <tr>
+            <td class="step"><span class="sn">6</span>Analysis</td>
+            <td><span class="chip yes">Có, tốt</span></td>
+            <td>Phần mạnh nhất của đồ án: ReAct agent, map MITRE ATT&amp;CK, bắt buộc trích dẫn nguồn, có trường <code>missing_information</code> chống bịa, có trace từng bước cho analyst kiểm chứng.</td>
+            <td><span class="ref">llm_service.py:66<br>prompts.py:247</span></td>
+          </tr>
+          <tr>
+            <td class="step"><span class="sn">7</span>Recommendation / Response</td>
+            <td><span class="chip yes">Có, đúng</span></td>
+            <td>Đúng chuẩn nghiệp vụ: chỉ khuyến nghị, kèm rationale và priority; các bước response lấy từ playbook thay vì để model tự nghĩ. Ràng buộc "không tự thực thi" được <b>cưỡng chế trong code</b>, không phải chỉ dặn model.</td>
+            <td><span class="ref">output_guard.py:28<br>config.py:102</span></td>
+          </tr>
+          <tr>
+            <td class="step"><span class="sn">8</span>Human review &amp; decision</td>
+            <td><span class="chip form">Chỉ đọc</span></td>
+            <td>Analyst xem được đầy đủ kết quả + trace + cảnh báo trích dẫn sai. Nhưng <b>không có nút xác nhận / bác bỏ / sửa</b>, không có trạng thái alert (new → in progress → closed), không có gán người xử lý.</td>
+            <td><span class="ref">frontend/app.js:396‑452</span></td>
+          </tr>
+          <tr>
+            <td class="step"><span class="sn">9</span>Feedback loop</td>
+            <td><span class="chip no">Không</span></td>
+            <td>Đã có <b>bản kế hoạch chi tiết</b> (SQLite + collection Chroma <code>analyst_feedback</code>, chèn precedent vào prompt) nhưng <b>0% được viết</b>: không có <code>models/feedback.py</code>, <code>services/feedback_service.py</code> hay router <code>/feedback</code>.</td>
+            <td><span class="ref">docs/superpowers/plans/<br>2026-07-19-feedback-memory.md</span></td>
+          </tr>
+          <tr>
+            <td class="step"><span class="sn">10</span>Audit &amp; Logging</td>
+            <td><span class="chip no">Không</span></td>
+            <td><b>Không có một dòng log nào trong toàn bộ ứng dụng</b> — module <code>logging</code> chưa từng được import. Kết quả phân tích không được lưu ở đâu cả. Prompt gửi đi và phản hồi LLM biến mất ngay khi HTTP response được trả.</td>
+            <td><span class="ref">db.py chỉ có 2 bảng:<br>alerts (:22) và iocs (:106)</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================= 03 · GAP ================= -->
+  <section id="gap">
+    <h2><span class="num">03</span>Danh sách gap theo mức độ ưu tiên</h2>
+    <p class="section-note">
+      Xếp hạng theo tác động nghiệp vụ SOC và mức độ rủi ro, không theo độ khó sửa.
+    </p>
+
+    <div class="findings">
+
+      <div class="finding c">
+        <div class="finding-head"><span class="sev">Critical</span><span class="id">G‑01</span><h4>Không có audit trail cho bất kỳ tương tác LLM nào</h4></div>
+        <p>
+          <code>grep -rn "^import logging" app/</code> trả về rỗng. Không có bảng nào lưu kết quả
+          phân tích: <code>db.py</code> chỉ định nghĩa <code>alerts</code> (:22‑44) và
+          <code>iocs</code> (:106‑126). <code>analyze_alert()</code> dựng
+          <code>AnalyzeOutcome</code> rồi <code>return</code> thẳng (analysis_service.py:174‑181)
+          — không ghi xuống đâu cả.
+        </p>
+        <p class="impact">
+          <b>Hậu quả nghiệp vụ:</b> không thể trả lời câu hỏi cơ bản nhất của mọi cuộc điều tra
+          sau sự cố — "sáu tuần trước hệ thống đã nói gì về alert này, dựa trên ngữ cảnh nào?".
+          Không có dữ liệu để đo MTTR hay tỉ lệ false positive giảm được — tức là <b>không chứng
+          minh được chính mục tiêu của đồ án</b>. Vi phạm yêu cầu lưu vết của mọi khung compliance.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>app/services/db.py:22‑44, :106‑126 · app/services/analysis_service.py:174‑181 · toàn bộ app/ không import logging</div>
+      </div>
+
+      <div class="finding c">
+        <div class="finding-head"><span class="sev">Critical</span><span class="id">G‑02</span><h4>Kênh prompt injection gián tiếp không được bọc — trái với chính system prompt</h4></div>
+        <p>
+          System prompt nói với model rằng "IoC notes, threat intel excerpts" được bọc trong
+          marker <code>&lt;&lt;&lt;UNTRUSTED_DATA&gt;&gt;&gt;</code> (prompt_guard.py:170‑181).
+          Thực tế trong code:
+        </p>
+        <ul>
+          <li>Chunk RAG được nối thẳng: <code>f"[source: {c.source}]\n{c.content}"</code> — prompts.py:165, <b>không bọc</b>.</li>
+          <li>Kết quả tool trả về chuỗi thô, đưa vào <code>Message(role="tool", ...)</code> — llm_service.py:153, <b>không bọc</b>. Bao gồm nội dung playbook, trích đoạn TI, và trường <code>description</code> của IoC.</li>
+        </ul>
+        <p>
+          Đây là kênh khai thác thực tế: <code>scripts/fetch_threat_intel.py</code> kéo dữ liệu từ
+          feed bên ngoài (Feodo Tracker, CISA KEV) sinh ra markdown đi vào KB → vào ngữ cảnh RAG
+          không bọc. Và <code>POST /iocs</code> (không xác thực) cho phép bất kỳ ai ghi một IoC có
+          <code>description</code> tùy ý, chờ agent gọi <code>lookup_ioc</code> là nội dung đó vào
+          thẳng prompt.
+        </p>
+        <p class="impact">
+          <b>Hậu quả:</b> model được dặn "tin những gì ngoài marker" trong khi nội dung không đáng
+          tin lại nằm ngoài marker — biến biện pháp phòng thủ thành phản tác dụng.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>app/services/prompts.py:164‑169 · app/services/llm_service.py:153 · app/tools/executor.py:43‑92 · app/security/prompt_guard.py:170‑181 (lời hứa) vs prompts.py:160‑161 (thực tế chỉ 2 trường)</div>
+      </div>
+
+      <div class="finding c">
+        <div class="finding-head"><span class="sev">Critical</span><span class="id">G‑03</span><h4>Dữ liệu alert gửi nguyên vẹn ra API bên thứ ba, không che giấu</h4></div>
+        <p>
+          <code>backend/.env</code> trỏ <code>ANTROPHIC_URL=https://api.deepseek.com</code>,
+          <code>CLAUDE_MODEL=deepseek-v4-pro</code>. <code>ClaudeProvider</code> nhận
+          <code>base_url</code> này (claude_provider.py:25‑27) rồi gửi toàn bộ prompt đi.
+          Prompt chứa: IP nội bộ nguồn/đích, tên tài khoản, tên host/agent, và
+          <code>raw_log</code> đầy đủ.
+        </p>
+        <p>
+          Không tồn tại lớp che/ẩn nào — tìm <code>asset|mask|redact|anonymi|pseudonym</code>
+          trong <code>app/</code> không ra kết quả nào liên quan.
+        </p>
+        <p class="impact">
+          <b>Hậu quả:</b> mọi lần phân tích là một lần chuyển dữ liệu telemetry nội bộ ra nhà cung
+          cấp nước ngoài. Với dữ liệu SOC thật, đây là vấn đề pháp lý (Nghị định 13/2023 về bảo vệ
+          dữ liệu cá nhân, và cả yêu cầu nội bộ về phân loại thông tin), không chỉ vấn đề kỹ thuật.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>backend/.env (ANTROPHIC_URL, CLAUDE_MODEL) · app/providers/claude_provider.py:24‑27, :36‑47 · app/services/prompts.py:121‑136 (trường đưa vào prompt)</div>
+      </div>
+
+      <div class="finding c">
+        <div class="finding-head"><span class="sev">Critical</span><span class="id">G‑04</span><h4>Toàn bộ endpoint không xác thực, kể cả các endpoint ghi</h4></div>
+        <p>
+          Không có <code>Depends</code>, API key hay bất kỳ cơ chế xác thực nào trong
+          <code>app/</code>. Các endpoint ghi đang mở: <code>POST /wazuh-webhook</code>,
+          <code>POST /iocs</code>, <code>POST /iocs/bulk</code>,
+          <code>DELETE /iocs/{value}</code>, <code>POST /admin/reindex</code>.
+        </p>
+        <p>
+          Kèm theo: <code>CORS_ORIGINS=*</code> đi cùng <code>allow_credentials=True</code>
+          (main.py:64‑70) — Starlette sẽ echo lại origin của request, nghĩa là <em>mọi</em>
+          website đều gọi được API kèm credentials.
+        </p>
+        <p class="impact">
+          <b>Hậu quả:</b> kẻ tấn công tự bơm alert giả vào kho alert rồi để hệ thống phân tích
+          chúng (đầu độc đầu vào), hoặc ghi đè reputation IoC để một IP độc bị đánh dấu là sạch —
+          tấn công trực tiếp vào chất lượng quyết định của analyst. Code đã <em>ghi chú</em> là
+          "prototype, chỉ chạy trong lab" (ioc.py:8‑10, admin.py:10‑11) nhưng không có gì cưỡng
+          chế điều đó.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>app/main.py:64‑70, :84‑90 · app/routers/ioc.py:34‑72 · app/routers/webhook.py:17 · app/routers/admin.py:21 · app/config.py:110‑114</div>
+      </div>
+
+      <div class="finding c">
+        <div class="finding-head"><span class="sev">Critical</span><span class="id">G‑05</span><h4>Không có feedback loop — vòng cải tiến bị hở hoàn toàn</h4></div>
+        <p>
+          Bản kế hoạch <code>docs/superpowers/plans/2026-07-19-feedback-memory.md</code> mô tả đầy
+          đủ: <code>POST /feedback</code>, lưu SQLite, embed vào collection
+          <code>analyst_feedback</code>, chèn "Analyst-reviewed precedents" vào prompt lần sau,
+          kèm cả sàng lọc injection cho ghi chú của analyst. <b>Toàn bộ checkbox còn trống</b> và
+          không file nào trong kế hoạch tồn tại.
+        </p>
+        <p class="impact">
+          <b>Hậu quả:</b> hệ thống không học được gì từ analyst. Nếu LLM phân loại sai một loại
+          alert, nó sẽ sai y hệt như vậy mãi mãi. Đây chính là bước 9 trong quy trình chuẩn và là
+          thứ phân biệt "trợ lý phân tích" với "công cụ sinh văn bản".
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>Kế hoạch tồn tại, code không: không có app/models/feedback.py, app/services/feedback_service.py, app/routers/feedback.py · app/main.py:84‑90 không đăng ký router feedback</div>
+      </div>
+
+      <div class="finding h">
+        <div class="finding-head"><span class="sev">High</span><span class="id">G‑06</span><h4>Kết quả phát hiện injection được tính rồi vứt bỏ</h4></div>
+        <p>
+          <code>wrap_untrusted()</code> gọi <code>detect_injection()</code> và trả về
+          <code>UntrustedFieldResult</code> có <code>findings</code> + property
+          <code>risk_level</code> (prompt_guard.py:44‑53, :159‑165). Nhưng nơi duy nhất dùng nó
+          trong luồng chạy thật chỉ lấy <code>.wrapped</code>:
+        </p>
+<pre class="code"><span class="cm"># app/services/prompts.py:160-161</span>
+wrapped_description=wrap_untrusted(alert.description, label="description").wrapped,
+wrapped_raw_log=wrap_untrusted(alert.raw_log, label="raw_log").wrapped,   <span class="cm">← findings mất ở đây</span></pre>
+        <p>
+          <code>risk_level</code> không được đọc ở bất kỳ đâu ngoài chính dataclass.
+          <code>check_narrative_for_leakage()</code> chỉ được gọi trong harness đánh giá offline
+          (run_eval.py:322), <b>không bao giờ trong đường chạy API</b>.
+        </p>
+        <p class="impact">
+          <b>Hậu quả:</b> một alert chứa nỗ lực prompt injection được phát hiện chính xác — rồi
+          không ai biết. Analyst không thấy cảnh báo, hệ thống không ghi lại, không có ngưỡng chặn.
+          Bản thân việc có injection trong log <em>là một phát hiện an ninh</em> đáng để điều tra.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>app/services/prompts.py:160‑161 · app/security/prompt_guard.py:44‑53, :159‑165 · app/security/output_guard.py:65 chỉ có caller ở evaluation/run_eval.py:322</div>
+      </div>
+
+      <div class="finding h">
+        <div class="finding-head"><span class="sev">High</span><span class="id">G‑07</span><h4>Correlation không được đưa vào suy luận của LLM</h4></div>
+        <p>
+          <code>correlate_alert_by_id()</code> chỉ có duy nhất một caller: endpoint
+          <code>GET /correlate</code> (alerts.py:76‑81). Frontend gọi nó vào một panel riêng khi
+          analyst bấm (app.js:479). <code>analyze_alert()</code> <b>không hề gọi</b> — xác nhận
+          bằng cách tìm chuỗi <code>correlat</code> trong <code>analysis_service.py</code>: không
+          có kết quả.
+        </p>
+        <p class="impact">
+          <b>Hậu quả:</b> LLM đánh giá TP/FP cho từng alert trong chân không. Một lần đăng nhập
+          thành công sau 200 lần thất bại từ cùng IP <em>phải</em> đổi kết luận — nhưng model
+          không có thông tin đó. Đây là loại sai lầm mà chính đồ án đặt mục tiêu khắc phục.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>app/services/correlation_service.py:72 · app/routers/alerts.py:76‑81 · frontend/app.js:476‑484 · app/services/analysis_service.py:136‑181 (không tham chiếu)</div>
+      </div>
+
+      <div class="finding h">
+        <div class="finding-head"><span class="sev">High</span><span class="id">G‑08</span><h4>Không có deduplication, suppression hay giới hạn tần suất</h4></div>
+        <p>
+          <code>ON CONFLICT (alert_id) DO UPDATE</code> (db.py:65) chỉ xử lý việc Wazuh gửi lại
+          cùng một alert. Nó <em>không</em> gộp các alert khác <code>alert_id</code> nhưng cùng mô
+          tả một sự việc. Không có logic fingerprint/cluster nào trong codebase.
+        </p>
+        <p class="impact">
+          <b>Hậu quả:</b> một đợt brute-force sinh 1.000 alert = 1.000 lần phân tích LLM, mỗi lần
+          tới 6 lượt gọi model. Vừa tốn chi phí, vừa nhấn chìm analyst trong đúng thứ nhiễu mà hệ
+          thống đáng lẽ phải lọc bớt.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>app/services/db.py:55‑83 · không có logic dedup trong app/ (chỉ có _dedup cho danh sách category tại category_resolver.py:95)</div>
+      </div>
+
+      <div class="finding h">
+        <div class="finding-head"><span class="sev">High</span><span class="id">G‑09</span><h4>Không có timeout, retry, rate limit hay hàng đợi khi gọi LLM</h4></div>
+        <p>
+          <code>self._client.messages.create(**kwargs)</code> (claude_provider.py:46) gọi đồng bộ,
+          không đặt timeout, không retry, không backoff. Endpoint là <code>def</code> đồng bộ
+          (alerts.py:51) nên chạy trong threadpool giới hạn của Starlette.
+        </p>
+        <p>
+          Chi phí xấu nhất cho một request: 6 lượt agent + 3 lượt fallback JSON =
+          <b>9 lượt gọi model tuần tự</b>, mỗi lượt tối đa 8.192 token đầu ra (config.py:94).
+        </p>
+        <p class="impact">
+          <b>Hậu quả:</b> throughput thực tế là vài alert mỗi phút, và một sự cố phía nhà cung cấp
+          model sẽ làm treo threadpool thay vì xếp hàng chờ. Không đáp ứng được câu hỏi "bao nhiêu
+          alert/giây" ở bất kỳ quy mô SOC nào.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>app/providers/claude_provider.py:45‑47 · app/config.py:86, :94 · app/services/analysis_service.py:91, :116 · app/routers/alerts.py:51</div>
+      </div>
+
+      <div class="finding h">
+        <div class="finding-head"><span class="sev">High</span><span class="id">G‑10</span><h4>Human-in-the-loop chỉ là hiển thị, không phải kiểm soát</h4></div>
+        <p>
+          Tìm <code>feedback|approve|accept|reject|override|confirm</code> trong
+          <code>frontend/app.js</code> và <code>index.html</code>: chỉ khớp ở phần <em>hiển thị</em>
+          verdict do LLM sinh ra. Không có control nào để analyst xác nhận, bác bỏ hay chỉnh sửa;
+          không có trạng thái vòng đời alert; không có gán người xử lý.
+        </p>
+        <p class="impact">
+          <b>Hậu quả:</b> luận điểm "con người vẫn ra quyết định cuối" hiện chỉ đúng ở nghĩa tiêu
+          cực — hệ thống không tự làm gì, nhưng cũng không ghi nhận được rằng con người đã quyết
+          định gì. Kết hợp với G‑01 và G‑05, quyết định của analyst hoàn toàn không tồn tại trong
+          hệ thống.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>frontend/app.js:396‑452 (renderAnalyzeOutcome chỉ sinh HTML) · frontend/index.html không có form phản hồi</div>
+      </div>
+
+      <div class="finding m">
+        <div class="finding-head"><span class="sev">Medium</span><span class="id">G‑11</span><h4>Không có ngữ cảnh tài sản (asset criticality)</h4></div>
+        <p>
+          Không tồn tại khái niệm mức độ quan trọng của tài sản, chủ sở hữu hệ thống hay tác động
+          nghiệp vụ ở bất kỳ đâu trong <code>app/</code>. Prompt chỉ đưa vào tên
+          <code>agent</code> (prompts.py:129).
+        </p>
+        <p class="impact">
+          <b>Hậu quả:</b> "brute-force SSH vào máy in phòng lab" và "brute-force SSH vào domain
+          controller" được đánh giá severity như nhau. Prioritization mà thiếu trọng số tài sản
+          thì không phải prioritization.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>Không có kết quả cho asset|criticality|business_impact|owner trong app/ · app/services/prompts.py:121‑136</div>
+      </div>
+
+      <div class="finding m">
+        <div class="finding-head"><span class="sev">Medium</span><span class="id">G‑12</span><h4>Thiếu lịch sử alert trong ngữ cảnh</h4></div>
+        <p>
+          Agent có tool <code>get_alert_by_id</code> nhưng để dùng nó thì phải <em>biết trước</em>
+          ID cần tra — thông tin không có trong prompt. Không có tool nào kiểu
+          "các alert gần đây của host/IP này".
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>app/tools/schemas.py:10‑24 · app/services/data_access.py:35‑40 (load_alerts không được expose thành tool)</div>
+      </div>
+
+      <div class="finding m">
+        <div class="finding-head"><span class="sev">Medium</span><span class="id">G‑13</span><h4>Cache KB không bị xóa khi reindex — sửa playbook không có hiệu lực</h4></div>
+        <p>
+          <code>_load_markdown_docs</code> dùng <code>@lru_cache(maxsize=None)</code>
+          (data_access.py:94). <code>POST /admin/reindex</code> chỉ gọi
+          <code>rag_service.invalidate()</code> (admin.py:23), không đụng tới cache này.
+        </p>
+        <p class="impact">
+          <b>Hậu quả:</b> sau khi sửa một playbook, RAG trả về nội dung mới nhưng tool
+          <code>get_playbook</code>/<code>suggest_response_steps</code> vẫn trả nội dung cũ cho tới
+          khi restart — hai nguồn sự thật lệch nhau ngay trong cùng một prompt.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>app/services/data_access.py:94 · app/routers/admin.py:21‑24</div>
+      </div>
+
+      <div class="finding m">
+        <div class="finding-head"><span class="sev">Medium</span><span class="id">G‑14</span><h4>Phát hiện injection dựa hoàn toàn vào regex tiếng Anh</h4></div>
+        <p>
+          19 pattern regex + 1 heuristic base64 + 1 kiểm tra khoảng cách từ khóa
+          (prompt_guard.py:60‑99), bộ test 15 case. Không xử lý homoglyph, chèn ký tự xen kẽ, hay
+          câu lệnh bằng ngôn ngữ khác tiếng Anh.
+        </p>
+        <p>
+          Điểm cộng: bản thân module ghi rõ đây là "detection only", và ranh giới an toàn thật nằm
+          ở <code>output_guard</code> — đây là thiết kế đúng. Vấn đề là số liệu "tỉ lệ phát hiện"
+          rút ra từ bộ 15 case sẽ lạc quan quá mức nếu đem vào báo cáo đồ án.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>app/security/prompt_guard.py:60‑99 · backend/data/attacks/prompt_injection_cases.json (15 case)</div>
+      </div>
+
+      <div class="finding m">
+        <div class="finding-head"><span class="sev">Medium</span><span class="id">G‑15</span><h4>Thông báo lỗi rò rỉ nội bộ ra client</h4></div>
+        <p>
+          <code>except Exception as exc: raise HTTPException(502, f"...{type(exc).__name__}: {exc}")</code>
+          (alerts.py:68‑73, lặp lại ở chat.py:37‑38, :46‑47) đẩy tên class và message của exception
+          gốc ra ngoài — có thể gồm chuỗi kết nối DB hoặc phần URL nhà cung cấp model.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>app/routers/alerts.py:68‑73 · app/routers/chat.py:37‑38, :46‑47 · app/routers/compare.py:80</div>
+      </div>
+
+      <div class="finding m">
+        <div class="finding-head"><span class="sev">Medium</span><span class="id">G‑16</span><h4>Dấu thời gian không có múi giờ và dùng API đã deprecated</h4></div>
+        <p>
+          <code>datetime.utcnow().isoformat()</code> (analysis.py:115) sinh chuỗi naive, không hậu
+          tố <code>Z</code>. Trong khi đó alert lưu <code>TIMESTAMPTZ</code> (db.py:34).
+          <code>utcnow()</code> đã deprecated từ Python 3.12.
+        </p>
+        <p class="impact">
+          <b>Hậu quả:</b> mốc thời gian của phân tích không so sánh được với mốc thời gian alert —
+          vấn đề trực tiếp cho forensics.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>app/models/analysis.py:115 · app/services/db.py:34</div>
+      </div>
+
+      <div class="finding l">
+        <div class="finding-head"><span class="sev">Low</span><span class="id">G‑17</span><h4><code>assert</code> làm tripwire an toàn sẽ biến mất với <code>python -O</code></h4></div>
+        <p>
+          <code>assert ALLOW_AUTO_REMEDIATION is False</code> (output_guard.py:39) bị strip khi
+          chạy tối ưu hóa. May mắn là phần cưỡng chế thật (:41‑45) không phụ thuộc assert nên
+          degrade an toàn — nhưng lớp bảo vệ chống việc sửa cờ về sau thì mất.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>app/security/output_guard.py:39</div>
+      </div>
+
+      <div class="finding l">
+        <div class="finding-head"><span class="sev">Low</span><span class="id">G‑18</span><h4>Comment trong docker-compose sai lệch về nơi chứa API key</h4></div>
+        <p>
+          docker-compose.yml:9‑12 viết "key baked into app/config.py", nhưng config.py:79 đọc từ
+          biến môi trường. Comment sai về vị trí bí mật là loại nhầm lẫn dễ dẫn tới commit nhầm.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>docker-compose.yml:9‑12 · app/config.py:79‑81</div>
+      </div>
+
+      <div class="finding l">
+        <div class="finding-head"><span class="sev">Low</span><span class="id">G‑19</span><h4>Postgres expose ra host với mật khẩu mặc định</h4></div>
+        <p>
+          <code>ports: 5432:5432</code> với <code>soc_app/soc_app_password</code>
+          (docker-compose.yml:60‑63). Không cần thiết cho vận hành vì backend nối qua mạng nội bộ
+          của compose.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>docker-compose.yml:56‑65</div>
+      </div>
+
+      <div class="finding l">
+        <div class="finding-head"><span class="sev">Low</span><span class="id">G‑20</span><h4>Lỗi chính tả <code>ANTROPHIC_URL</code> trong bề mặt cấu hình công khai</h4></div>
+        <p>
+          config.py:81 và <code>.env</code> dùng <code>ANTROPHIC_URL</code> (đúng phải là
+          <code>ANTHROPIC</code>). Chỉ là mỹ quan, nhưng nó xuất hiện trong tài liệu cấu hình mà
+          người chấm đồ án sẽ đọc.
+        </p>
+        <div class="evidence"><b>Bằng chứng</b>app/config.py:81</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ================= 04 · ĐIỂM TỐT ================= -->
+  <section id="tot">
+    <h2><span class="num">04</span>Những điểm làm đúng, cần giữ</h2>
+    <p class="section-note">
+      Phản biện nghiêm khắc không có nghĩa là bỏ qua phần làm tốt. Sáu điểm dưới đây vượt trên mặt
+      bằng đồ án cùng loại và nên được nêu bật trong báo cáo.
+    </p>
+
+    <div class="credits">
+      <div class="credit">
+        <h4>Ranh giới an toàn cưỡng chế bằng code</h4>
+        <p>"Chỉ khuyến nghị" không được giao cho prompt. <code>enforce_safety_constraints()</code> ép <code>requires_human_approval=True</code> vô điều kiện sau khi sinh, nên injection có thành công cũng không lật được ràng buộc này.</p>
+        <span class="ref">output_guard.py:28‑46 · config.py:102</span>
+      </div>
+      <div class="credit">
+        <h4>Delimiter có nonce ngẫu nhiên</h4>
+        <p>Mỗi lần bọc sinh nonce riêng, và nội dung giả mạo delimiter bị vô hiệu hóa trước. Kẻ tấn công không đoán được chuỗi biên để giả mạo thẻ đóng — đúng cách làm.</p>
+        <span class="ref">prompt_guard.py:137‑165</span>
+      </div>
+      <div class="credit">
+        <h4>Kiểm chứng trích dẫn</h4>
+        <p><code>verify_citations()</code> đối chiếu mọi nguồn model trích với tập nguồn thực sự đã thấy trong hội thoại, và trả cảnh báo ra UI. Đây là biện pháp chống hallucination có thể đo được, không phải lời hứa trong prompt.</p>
+        <span class="ref">prompts.py:455‑481 · analysis_service.py:171‑172</span>
+      </div>
+      <div class="credit">
+        <h4>Xử lý suy giảm nhiều lớp</h4>
+        <p>Tool lỗi → chuỗi lỗi feed lại model. Hết bước → thông điệp mềm thay vì crash. Tool call rỗng → fallback JSON 3 lần kèm tự sửa cú pháp. Không có đường nào crash trần ra analyst.</p>
+        <span class="ref">llm_service.py:150, :166 · analysis_service.py:94‑133</span>
+      </div>
+      <div class="credit">
+        <h4>Kỹ thuật RAG có kiểm chứng</h4>
+        <p>BM25 + vector qua RRF, cross-encoder rerank, ngưỡng đã hiệu chỉnh trên index thật (P@5 0,382 → 0,535), trần chunk theo nguồn để playbook không bị MITRE lấn chỗ, tokenizer giữ nguyên IP/hash/technique ID.</p>
+        <span class="ref">rag_service.py:44‑120 · .env (ghi chú hiệu chỉnh)</span>
+      </div>
+      <div class="credit">
+        <h4>Harness đánh giá 4 suite</h4>
+        <p>retrieval / answers / alerts / injection, có LLM-as-judge, xuất CSV + biểu đồ. Suite injection chạy case thật qua toàn pipeline và <em>assert</em> ranh giới an toàn vẫn giữ.</p>
+        <span class="ref">evaluation/run_eval.py:300‑340</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 05 · RỦI RO ================= -->
+  <section id="ruiro">
+    <h2><span class="num">05</span>Rủi ro bảo mật cụ thể</h2>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Kịch bản tấn công</th><th>Đường đi trong code</th><th>Mức</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Injection gián tiếp qua TI feed</b><br>Kẻ tấn công đưa nội dung dạng chỉ thị vào một feed công khai; <code>fetch_threat_intel.py</code> kéo về sinh markdown → vào KB → vào ngữ cảnh RAG <b>không bọc</b>.</td>
+            <td><span class="ref">scripts/fetch_threat_intel.py → data/knowledge_base/threat_intel/generated/ → rag_service.retrieve_for_alert → prompts.py:165</span></td>
+            <td><span class="chip no">Critical</span></td>
+          </tr>
+          <tr>
+            <td><b>Injection lưu trữ qua IoC</b><br><code>POST /iocs</code> không xác thực; trường <code>description</code> tùy ý, đi vào prompt qua kết quả tool <code>lookup_ioc</code> không bọc.</td>
+            <td><span class="ref">routers/ioc.py:34 → db.upsert_ioc → executor.py:43‑56 → llm_service.py:153</span></td>
+            <td><span class="chip no">Critical</span></td>
+          </tr>
+          <tr>
+            <td><b>Đầu độc kho alert</b><br>Bơm alert giả qua webhook không xác thực để làm nhiễu thống kê, hoặc dựng bẫy correlation cho analyst.</td>
+            <td><span class="ref">routers/webhook.py:18 → db.upsert_alert (không xác thực, không rate limit)</span></td>
+            <td><span class="chip no">Critical</span></td>
+          </tr>
+          <tr>
+            <td><b>Rò rỉ dữ liệu ra bên thứ ba</b><br>IP nội bộ, tài khoản, hostname, raw log gửi nguyên vẹn tới <code>api.deepseek.com</code>, không che, không lưu vết đã gửi gì.</td>
+            <td><span class="ref">.env → claude_provider.py:25‑27, :46 (không có lớp che, không có log)</span></td>
+            <td><span class="chip no">Critical</span></td>
+          </tr>
+          <tr>
+            <td><b>Injection trực tiếp qua raw_log</b><br>Chèn chỉ thị vào log để lái kết luận LLM (ví dụ ép verdict false_positive).</td>
+            <td><span class="ref">Đã giảm thiểu: bọc nonce prompts.py:160 + output_guard.py:28. Còn lại: kết luận TP/FP <em>có thể</em> bị lái mà không có gì phát hiện — findings bị vứt (G‑06)</span></td>
+            <td><span class="chip form">High</span></td>
+          </tr>
+          <tr>
+            <td><b>Tấn công qua trình duyệt (CORS)</b><br><code>allow_origins=*</code> + <code>allow_credentials=True</code>: web bất kỳ gọi được API ghi.</td>
+            <td><span class="ref">main.py:64‑70 · config.py:110‑114</span></td>
+            <td><span class="chip form">High</span></td>
+          </tr>
+          <tr>
+            <td><b>Cạn tài nguyên / chi phí</b><br>Không rate limit; mỗi request tới 9 lượt gọi model, mỗi lượt 8k token đầu ra.</td>
+            <td><span class="ref">config.py:86, :94 · analysis_service.py:87‑91</span></td>
+            <td><span class="chip partial">Medium</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================= 06 · ĐỀ XUẤT ================= -->
+  <section id="dexuat">
+    <h2><span class="num">06</span>Đề xuất cải thiện</h2>
+    <p class="section-note">
+      Xếp theo thứ tự nên làm. Bốn mục đầu là bắt buộc trước khi hệ thống được gọi là "hỗ trợ SOC";
+      chúng cũng là những mục cho ra số liệu để viết báo cáo đồ án.
+    </p>
+
+    <div class="fix">
+      <h3><span class="tag">Fix 1 · G‑01</span>Bảng audit cho mọi lần chạy phân tích</h3>
+      <p>
+        Thêm bảng <code>analysis_runs</code> vào <code>db.py</code> và ghi vào cuối
+        <code>analyze_alert()</code>. Lưu cả prompt đã gửi và phản hồi thô — đó chính là thứ cần
+        cho forensics.
+      </p>
+<pre class="code"><span class="cm"># app/services/db.py — thêm cạnh _SCHEMA</span>
+_ANALYSIS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS analysis_runs (
+    run_id          UUID PRIMARY KEY,
+    alert_id        TEXT NOT NULL REFERENCES alerts(alert_id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    provider_model  TEXT NOT NULL,
+    rag_mode        TEXT NOT NULL,
+    system_prompt   TEXT NOT NULL,
+    user_message    TEXT NOT NULL,        <span class="cm">-- prompt thật đã gửi</span>
+    agent_trace     JSONB NOT NULL,       <span class="cm">-- tool call + kết quả từng bước</span>
+    result          JSONB NOT NULL,       <span class="cm">-- AnalysisResult sau output_guard</span>
+    injection_findings JSONB NOT NULL DEFAULT '[]',
+    citation_warnings  JSONB NOT NULL DEFAULT '[]',
+    latency_ms      REAL NOT NULL,
+    input_tokens    INTEGER NOT NULL,
+    output_tokens   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS analysis_runs_alert_idx ON analysis_runs (alert_id, created_at DESC);
+"""</pre>
+      <p>
+        Bảng này mở khóa luôn cả phần đo lường của đồ án: MTTR, tỉ lệ TP/FP theo thời gian,
+        chi phí token mỗi alert.
+      </p>
+    </div>
+
+    <div class="fix">
+      <h3><span class="tag">Fix 2 · G‑02</span>Bọc <em>mọi</em> kênh không tin cậy</h3>
+      <p>
+        Ngữ cảnh RAG và kết quả tool phải đi qua <code>wrap_untrusted()</code> giống hệt
+        <code>raw_log</code>. Chỉ hai chỗ cần sửa:
+      </p>
+<pre class="code"><span class="cm"># app/services/prompts.py:164-169 — bọc chunk RAG</span>
+if rag_chunks:
+    context_blocks = "\n\n".join(
+<span class="add">        f"[source: {c.source}]\n{wrap_untrusted(c.content, label=f'kb:{c.source}').wrapped}"</span>
+        for c in rag_chunks
+    )
+
+<span class="cm"># app/services/analysis_service.py:52-55 — bọc kết quả tool</span>
+def executor(name: str, arguments: dict) -&gt; str:
+    text = execute_tool(name, arguments)
+    collected.append(text)          <span class="cm"># giữ bản thô cho extract_cited_sources</span>
+<span class="add">    guarded = wrap_untrusted(text, label=f"tool:{name}")</span>
+<span class="add">    if guarded.risk_level != "none":</span>
+<span class="add">        injection_log.append((name, guarded.findings))   # → Fix 3</span>
+<span class="add">    return guarded.wrapped</span></pre>
+      <p>
+        Lưu ý giữ <code>collected</code> ở dạng thô để <code>extract_cited_sources()</code>
+        (prompts.py:455) vẫn nhận diện được các dòng <code>source:</code>.
+      </p>
+    </div>
+
+    <div class="fix">
+      <h3><span class="tag">Fix 3 · G‑06</span>Đưa phát hiện injection ra tới analyst</h3>
+      <p>
+        Thêm trường vào <code>AnalyzeOutcome</code> và trả kèm kết quả, song song với
+        <code>citation_warnings</code> vốn đã có sẵn cơ chế hiển thị ở frontend:
+      </p>
+<pre class="code"><span class="cm"># app/models/analyze.py</span>
+<span class="add">injection_findings: List[InjectionFindingView] = Field(default_factory=list,</span>
+<span class="add">    description="Dấu hiệu prompt injection phát hiện trong dữ liệu untrusted của alert.")</span>
+<span class="add">injection_risk: Literal["none","medium","high"] = "none"</span></pre>
+      <p>
+        Đồng thời gọi <code>check_narrative_for_leakage()</code> trong đường chạy thật (hiện chỉ
+        dùng ở harness đánh giá) và gắn cờ nếu narrative có dấu hiệu tuân theo chỉ thị nhúng.
+        Với <code>injection_risk == "high"</code>, cân nhắc buộc verdict về
+        <code>needs_investigation</code> — một alert chứa injection <em>bản thân nó</em> là sự cố.
+      </p>
+    </div>
+
+    <div class="fix">
+      <h3><span class="tag">Fix 4 · G‑03</span>Lớp che dữ liệu trước khi rời hạ tầng</h3>
+      <p>
+        Chèn một bước pseudonymize giữa <code>build_alert_user_message()</code> và provider: thay
+        IP nội bộ, username, hostname bằng token ổn định (<code>HOST_1</code>,
+        <code>USER_A</code>, <code>IP_INT_3</code>), giữ bảng ánh xạ trong bộ nhớ của request, rồi
+        khôi phục lại trong <code>AnalysisResult</code> trước khi trả cho analyst. LLM vẫn suy luận
+        được về quan hệ giữa các thực thể mà không cần biết định danh thật.
+      </p>
+      <p>
+        Nếu đồ án muốn giữ nguyên việc dùng endpoint bên thứ ba, tối thiểu phải ghi rõ trong báo
+        cáo: dữ liệu gì rời khỏi hệ thống, đi tới đâu, và vì sao chấp nhận được trong phạm vi
+        phòng lab.
+      </p>
+    </div>
+
+    <div class="fix">
+      <h3><span class="tag">Fix 5 · G‑07</span>Nối correlation vào prompt</h3>
+      <p>
+        Sửa <code>analyze_alert()</code> thành enrichment tất định thay vì để agent tự quyết:
+      </p>
+<pre class="code"><span class="cm"># app/services/analysis_service.py:142-148</span>
+def analyze_alert(alert, use_rag=USE_RAG, rag_mode=RAG_MODE, provider_name=None):
+    rag_chunks = get_rag_service().retrieve_for_alert(alert, mode=rag_mode) if use_rag else []
+<span class="add">    try:</span>
+<span class="add">        correlation = correlate_alerts(alert, data_access.load_alerts())</span>
+<span class="add">    except Exception:      # correlation hỏng không được làm chết phân tích</span>
+<span class="add">        correlation = None</span>
+    user_message = prompts.build_alert_user_message(
+<span class="add">        alert, rag_chunks=rag_chunks, rag_enabled=use_rag, correlation=correlation)</span></pre>
+      <p>
+        Trong <code>build_alert_user_message</code>, render các alert liên quan thành một khối
+        "Chuỗi alert liên quan trong ±2h" kèm trường chung và độ lệch thời gian. Đây là thay đổi có
+        tác động lớn nhất tới <em>chất lượng kết luận</em> trên mỗi dòng code bỏ ra, và cho một
+        phép đo A/B rất đẹp cho báo cáo: TP/FP accuracy có correlation vs không.
+      </p>
+    </div>
+
+    <div class="fix">
+      <h3><span class="tag">Fix 6 · G‑05, G‑10</span>Thực thi bản kế hoạch feedback đã có</h3>
+      <p>
+        Kế hoạch <code>2026-07-19-feedback-memory.md</code> đã đủ chi tiết để triển khai trực tiếp
+        và đã tính tới cả nguy cơ injection từ ghi chú của analyst. Cần bổ sung phần frontend mà kế
+        hoạch cố tình để ngoài phạm vi: ba nút <b>Xác nhận</b> / <b>Bác bỏ</b> /
+        <b>Sửa</b> trên panel kết quả, ghi vào <code>analysis_runs</code> ở Fix 1.
+      </p>
+      <p>
+        Chỉ khi có bảng này thì mới trả lời được câu hỏi mà hội đồng chắc chắn sẽ hỏi:
+        <em>"làm sao chứng minh hệ thống giảm được false positive?"</em>
+      </p>
+    </div>
+
+    <div class="fix">
+      <h3><span class="tag">Fix 7 · G‑04, G‑09</span>Xác thực, hàng đợi và giới hạn tần suất</h3>
+      <ul>
+        <li>API key dạng shared secret qua header cho tất cả endpoint ghi (<code>Depends</code> ở cấp router) — đủ cho một prototype, và loại bỏ toàn bộ nhóm rủi ro đầu độc dữ liệu.</li>
+        <li><code>CORS_ORIGINS</code> đặt danh sách cụ thể, bỏ <code>allow_credentials</code> nếu không thực sự dùng cookie.</li>
+        <li>Timeout tường minh + retry có backoff cho <code>messages.create()</code>; cân nhắc <code>max_retries</code> của SDK Anthropic.</li>
+        <li>Tách <code>/analyze-alert</code> thành ghi hàng đợi + polling kết quả. Với 9 lượt gọi model tuần tự, mô hình request đồng bộ không thể mở rộng.</li>
+      </ul>
+    </div>
+
+    <div class="fix">
+      <h3><span class="tag">Fix 8 · G‑08, G‑11</span>Dedup và trọng số tài sản</h3>
+      <p>
+        Dedup: tính fingerprint <code>(rule_id, srcip, dstip, agent, cửa sổ 5 phút)</code> khi
+        ingest; alert trùng fingerprint tăng bộ đếm thay vì tạo bản ghi mới, và không kích hoạt
+        phân tích LLM mới. Riêng việc này đã cắt phần lớn khối lượng LLM ở G‑09.
+      </p>
+      <p>
+        Asset: một bảng <code>assets(hostname, criticality, owner, environment)</code> đơn giản,
+        join theo <code>alert.agent</code>, đưa vào prompt. Không cần CMDB đầy đủ — chỉ cần
+        ba mức quan trọng là severity assessment có ý nghĩa thật.
+      </p>
+    </div>
+  </section>
+
+  <!-- ================= 07 · GIẢ ĐỊNH ================= -->
+  <section id="giadinh">
+    <h2><span class="num">07</span>Giả định và giới hạn của bản rà soát</h2>
+    <div class="prose">
+      <ul>
+        <li>
+          <b>Nguồn alert.</b> Không có cấu hình Wazuh integrator trong repo. Giả định alert được
+          push vào <code>POST /wazuh-webhook</code>. Không có đường ghi nào khác vào bảng
+          <code>alerts</code>.
+        </li>
+        <li>
+          <b>Không chạy hệ thống.</b> Môi trường rà soát không có Postgres, không có index Chroma
+          thật và không có credential LLM. Mọi nhận định rút từ đọc code, không từ quan sát runtime;
+          các con số hiệu năng là suy ra từ cấu hình (<code>MAX_AGENT_STEPS=6</code>,
+          <code>_FALLBACK_JSON_ATTEMPTS=3</code>), không phải đo thực tế.
+        </li>
+        <li>
+          <b>Không chạy test suite.</b> Repo có ~50 file test, đây là điểm mạnh đáng ghi nhận,
+          nhưng bản rà soát này không xác nhận chúng pass.
+        </li>
+        <li>
+          <b>Nội dung knowledge base.</b> Chất lượng nghiệp vụ của các playbook trong
+          <code>data/knowledge_base/</code> không được đánh giá — chỉ đánh giá cơ chế truy xuất và
+          đưa chúng vào prompt.
+        </li>
+        <li>
+          <b>Bối cảnh đồ án.</b> Nhiều mục Critical được code <em>ghi chú rõ</em> là lựa chọn có ý
+          thức cho prototype (ioc.py:8‑10, admin.py:10‑11, docker-compose.yml:54‑55). Tôi vẫn xếp
+          hạng theo tiêu chuẩn SOC vì đề bài yêu cầu ưu tiên tính đúng đắn nghiệp vụ — nhưng khi
+          viết báo cáo, hãy trình bày chúng là <em>giới hạn phạm vi đã biết</em>, không phải lỗi bị
+          bỏ sót. Sự khác biệt đó rất quan trọng trước hội đồng.
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    Rà soát SOC AI Assistant · 19 tháng 8, 2026 · 20 phát hiện trên ~4.550 dòng Python<br>
+    Mọi nhận định đều neo vào file và số dòng cụ thể tại thời điểm rà soát.
+  </footer>
+
+</div>
+</body>
+</html>
