@@ -1,0 +1,42 @@
+{
+  "triage": {
+    "_nguon": "phase-5:110-118 · P5-5 tập đóng ba giá trị",
+    "type": "object",
+    "required": ["suggested_action", "confidence", "ly_do", "bang_chung"],
+    "properties": {
+      "suggested_action": {"enum": ["false_positive", "needs_review", "escalate"]},
+      "confidence": {"enum": ["low", "medium", "high"]},
+      "ly_do": {"type": "string"},
+      "bang_chung": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+      "playbook_used": {"type": ["string", "null"]}
+    }
+  },
+  "investigate": {
+    "_nguon": "phase-7:262-272 · need_more_data là giá trị thứ tư ① không có",
+    "type": "object",
+    "required": ["summary", "attack_narrative", "suggested_conclusion", "confidence", "gia_thuyet", "evidence"],
+    "properties": {
+      "summary": {"type": "string"},
+      "attack_narrative": {"type": "string"},
+      "suggested_conclusion": {"enum": ["false_positive", "policy_violation", "confirmed_incident", "need_more_data"]},
+      "confidence": {"enum": ["low", "medium", "high"]},
+      "gia_thuyet": {
+        "type": "array", "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": ["noi_dung", "evidence_for", "evidence_against"],
+          "properties": {
+            "noi_dung": {"type": "string"},
+            "evidence_for": {"type": "array", "items": {"type": "string"}},
+            "evidence_against": {"type": "array", "items": {"type": "string"}, "minItems": 1}
+          }
+        }
+      },
+      "evidence": {"type": "array", "items": {"type": "object",
+                   "required": ["alert_id", "why"],
+                   "properties": {"alert_id": {"type": "string"}, "why": {"type": "string"}}}},
+      "next_steps": {"type": "array", "items": {"type": "string"}},
+      "playbook_used": {"type": ["string", "null"]}
+    }
+  }
+}

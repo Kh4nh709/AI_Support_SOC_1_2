@@ -1,0 +1,32 @@
+{
+  "_nguon": "phase-7:104-121 · tám tool, TẤT CẢ chỉ đọc. Không tool nào INSERT/UPDATE, không tool nào gọi ra ngoài.",
+  "_allowlist": "phase-7:127-140 · năm tập giá trị dựng TRƯỚC vòng lặp trong MỘT transaction đọc, rồi COMMIT (R-D0-2). Tham số ngoài tập → từ chối TRƯỚC khi chạy, tính một vòng, ghi agent_trace.status='rejected_arg' + một dòng citation_warnings.",
+  "tools": [
+    {"name": "get_alert_detail", "chi_doc": true, "package": "domain/",
+     "mo_ta": "Một alert đầy đủ, kèm raw_log. Dùng để kéo về alert nằm ngoài 10 đại diện.",
+     "params": {"alert_id": "string"}, "allowlist": {"alert_id": "case_alerts(case_id) ∪ alerts.duplicate_of ∈ đó"}},
+    {"name": "search_case_timeline", "chi_doc": true, "package": "domain/",
+     "mo_ta": "Dòng thời gian đã lọc. Dùng khi tầng 3 bị cắt còn 100 dòng.",
+     "params": {"rule_id": "string?", "host": "string?", "user": "string?", "from": "string?", "to": "string?"},
+     "allowlist": {"host": "DISTINCT agent_name của case", "user": "DISTINCT alert_user IS NOT NULL của case",
+                   "rule_id": "DISTINCT rule_id của case"}},
+    {"name": "get_correlation_summary", "chi_doc": true, "package": "domain/correlation.py",
+     "mo_ta": "Tóm tắt cụm tương quan chưa vào case.",
+     "params": {"alert_id": "string"}, "allowlist": {"alert_id": "như get_alert_detail"}},
+    {"name": "get_playbook", "chi_doc": true, "package": "kb/",
+     "mo_ta": "Một playbook, khi category của cụm khác category chính của case.",
+     "params": {"category": "string"}, "allowlist": {"category": "CATEGORY_MAP.keys() — tập đóng 11 giá trị"}},
+    {"name": "lookup_ioc", "chi_doc": true, "package": "enrichment/",
+     "mo_ta": "Uy tín IoC nội bộ cho giá trị mới lộ ra giữa chừng điều tra.",
+     "params": {"value": "string"}, "allowlist": {"value": "DISTINCT srcip, dstip của case, trừ chuỗi rỗng"}},
+    {"name": "lookup_asset", "chi_doc": true, "package": "enrichment/",
+     "mo_ta": "Mức trọng yếu tài sản cho host xuất hiện trong raw_log.",
+     "params": {"hostname": "string"}, "allowlist": {"hostname": "DISTINCT agent_name của case"}},
+    {"name": "lookup_identity", "chi_doc": true, "package": "enrichment/",
+     "mo_ta": "Danh tính và is_privileged cho tài khoản lộ ra giữa chừng.",
+     "params": {"username": "string"}, "allowlist": {"username": "DISTINCT alert_user IS NOT NULL của case"}},
+    {"name": "get_audit_history", "chi_doc": true, "package": "audit/",
+     "mo_ta": "Lịch sử audit_events — 'alert này Tier 1 đã quyết gì?'",
+     "params": {"subject_id": "string"}, "allowlist": {"subject_id": "alert_id của case ∪ chính case_id"}}
+  ]
+}

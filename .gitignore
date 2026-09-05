@@ -18,3 +18,12 @@ backend/evaluation/results/*.png
 
 # Editor / OS
 .DS_Store
+
+# v3 secrets & local config
+.env
+conf/*.yaml
+conf/*.csv
+conf/root-ca.pem
+!conf/*.example
+backups/
+eval/results/

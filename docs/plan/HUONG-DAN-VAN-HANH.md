@@ -11,9 +11,9 @@ Bản tiếng Việt, chi tiết hơn `README.md`. Mọi đường dẫn tính t
 3. Đọc một lần `docs/plan/00-context-pack.md` (20 phút). Bạn là người duy nhất đọc toàn bộ; agent chỉ đọc phần được chỉ.
 4. Commit thư mục `docs/plan/` ngay: `git add docs/plan && git commit -m "plan: coordination files"`. Từ đây mọi thay đổi của agent trong `docs/plan/` đều có lịch sử.
 5. Ba việc chỉ bạn làm được, cần xong **trước khi chạy Planner P0** (hoặc song song, nhưng P0 sẽ đứng ở "Owner actions" cho tới khi xong):
-   - Tạo user chỉ đọc trên Wazuh indexer; copy `root-ca.pem` (trên máy Wazuh: `/etc/wazuh-indexer/certs/root-ca.pem`) vào `conf/`.
+   - Tạo user chỉ đọc trên OpenSearch (`https://127.0.0.1:9400`; **không phải** `wazuh-indexer` — service đó `inactive`/`disabled`); copy `root-ca.pem` (máy này: `/etc/logstash/opensearch-certs/root-ca.pem`, đọc được không cần sudo) vào `conf/root-ca.pem`.
    - Lấy API key DeepSeek.
-   - Mở `Final-Project`, kiểm tra parser Wazuh / `category_resolver` / `prompt_guard` còn chạy được không (chạy thử một hàm với alert mẫu). Ghi kết quả một dòng vào `docs/plan/INBOX.md` dạng `QUESTION` để Director ghi thành `DEC-001`.
+   - Mở `Final-Project`, kiểm tra parser Wazuh / `category_resolver` / `prompt_guard` còn chạy được không (chạy thử một hàm với alert mẫu). Ghi kết quả một dòng vào `docs/plan/INBOX.md` dạng `QUESTION` để Director ghi thành `DEC-002`.
 
 Lưu ý lịch: hôm nay đã là 05/09, tức D0 và D1 của plan gộp làm một ngày. Chạy P0 buổi sáng, P1 buổi chiều; P1-T01 (smoke test) có thể chạy ngay khi có API key, song song với P0.
 

@@ -29,7 +29,13 @@ Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (re
 
 ## Owner actions (Director writes; Owner clears)
 
-- [ ] (none yet)
+- [ ] Tạo `soc_ro` trên OpenSearch — chặn P0 exit gate + P2 puller (06/09). Xem INBOX 2026-09-05 BLOCKER, chọn phương án A/B/C.
+- [x] API key DeepSeek → `.env` — xong 05/09, nghiệm thu §7.5 ĐẠT (`deepseek-v4-flash`, HTTP 200, JSON hợp lệ, có `usage`, 1,02 s). P1-T01 hết chặn.
+- [ ] Xác nhận retention `wazuh-alerts-*` (index sớm nhất + tổng docs) — quyết định sàn của G1. Chờ `soc_ro`.
+- [ ] `conf/inventory.yaml` (phải có `user1-IA1803`) + `conf/identities.yaml` (phải có `user1`) — sau khi Planner P0 sinh `.example`.
+- [x] `.gitignore` chặn `.env`/`conf/` — xong 05/09 (repo có remote GitHub công khai).
+- [x] Copy CA vào `conf/root-ca.pem`, TLS verify sạch — xong 05/09.
+- [x] Kiểm tra `Final-Project` — xong, kết quả ở INBOX 05/09 QUESTION (sẽ thành DEC-002).
 
 ## Daily gate log
 

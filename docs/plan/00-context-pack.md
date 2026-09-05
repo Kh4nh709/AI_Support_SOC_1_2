@@ -102,7 +102,7 @@ Changing any of these requires a Decision Request in `docs/plan/INBOX.md` and Di
 ```
 MAX_PAYLOAD_BYTES=2_097_152  RAW_LOG_MAX_BYTES=1_024_000  PROMPT_LOG_MAX_BYTES=32_768
 DEDUP_IDLE_GAP_MINUTES=15  MAX_CLUSTER_AGE_HOURS=4  MAX_CLUSTER_AGE_AUTOCLOSED_MINUTES=30  MAX_CLUSTER_SIZE=1000
-INDEXER_URL  INDEXER_USER  INDEXER_PASSWORD  INDEXER_CA(required: path to the indexer root CA, e.g. Wazuh's root-ca.pem; no insecure mode)  INDEXER_INDEX="wazuh-alerts-*"
+INDEXER_URL  INDEXER_USER  INDEXER_PASSWORD  INDEXER_CA(required: path to the indexer root CA, on this host conf/root-ca.pem; no insecure mode)  INDEXER_INDEX="wazuh-alerts-*"
 PULL_INTERVAL_S=60  PULL_OVERLAP_S=60  PULL_PAGE=500  PULL_START="2026-08-01"
 HEARTBEAT_RULE_ID="100999"  HEARTBEAT_MAX_AGE_MIN=30  SILENCE_WARN_HOURS=3
 JOB_MAX_ATTEMPTS=3  JOB_BACKOFF=[10,60,300]  JOB_LOCK_TIMEOUT_S=300  N_WORKER=1
@@ -115,6 +115,8 @@ JWT_SECRET  JWT_TTL_HOURS=8  LOGIN_MAX_FAILS=5  LOCKOUT_MINUTES=15
 RETENTION_DAYS=365  BACKUP_HOUR=2  EVAL_BLIND_FRACTION=0.5  DISPLAY_TZ="Asia/Ho_Chi_Minh"
 NOTIFY_TELEGRAM_BOT_TOKEN  NOTIFY_TELEGRAM_CHAT_ID  (or NOTIFY_SMTP_*)
 ```
+
+**Indexer environment on this host — verified 05/09/2026, differs from the generic Wazuh layout (DEC-001).** The alert store is a plain OpenSearch at `https://127.0.0.1:9400`; `wazuh-indexer.service` is `inactive` and `disabled` and must not be started. The manager writes `/var/ossec/logs/alerts/alerts.json`, which **Logstash** (`/etc/logstash/conf.d/wazuh-opensearch.conf`) ships into `wazuh-alerts-4.x-YYYY.MM.dd`, so `INDEXER_INDEX="wazuh-alerts-*"` is unchanged but end-to-end latency includes a Logstash flush. The root CA is `/etc/logstash/opensearch-certs/root-ca.pem` (world-readable, no sudo), copied to `conf/root-ca.pem`; it is OpenSearch's bundled demo CA (`CN = Example Com Inc. Root CA`, valid to 2034-02-17) — a limitation to record in P8. `alerts.json` is **not** readable without root, so the D3/F2 file fallback is unavailable: the puller is the only path to history.
 
 ### 6.4 HTTP API (24 operations)
 
@@ -186,7 +188,7 @@ If the schedule slips, cut in this order (Director decides, Owner approves): ②
 
 ## 11. Human-only tasks (never assign to an agent)
 
-Create a read-only indexer user, copy the indexer root CA file (on the Wazuh host, typically `/etc/wazuh-indexer/certs/root-ca.pem`) into `conf/` and share `INDEXER_*` env values; add the heartbeat wodle + local rule on the Wazuh manager; obtain the DeepSeek API key; write `conf/inventory.yaml` and `conf/identities.yaml` (must include `user1-IA1803` and `user1`); run attack and benign scenarios on the lab agent; label clusters (two people, blind, independent); review the daily digest; write and review playbook decision tables with the advisor; approve scope cuts and contract changes; run the backup restore drill sign-off; write the thesis report.
+Create a read-only indexer user, copy the indexer root CA file (on this host: `/etc/logstash/opensearch-certs/root-ca.pem`) into `conf/root-ca.pem` and share `INDEXER_*` env values; add the heartbeat wodle + local rule on the Wazuh manager; obtain the DeepSeek API key; write `conf/inventory.yaml` and `conf/identities.yaml` (must include `user1-IA1803` and `user1`); run attack and benign scenarios on the lab agent; label clusters (two people, blind, independent); review the daily digest; write and review playbook decision tables with the advisor; approve scope cuts and contract changes; run the backup restore drill sign-off; write the thesis report.
 
 ## 12. Definition of Done (global)
 
