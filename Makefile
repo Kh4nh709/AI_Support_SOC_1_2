@@ -63,6 +63,7 @@ lint:
 	@echo "lint: no path to check"
 else
 lint:
+	$(PY) scripts/gen_env_example.py --check
 	$(PY) -m ruff check --config backend/pyproject.toml $(LINT_PATHS)
 	$(PY) -m black --check --config backend/pyproject.toml $(LINT_PATHS)
 endif

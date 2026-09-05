@@ -49,7 +49,7 @@ T02 is the root because the coder template requires `make lint` / `make test` be
 ## INBOX items raised by this plan
 
 - `2026-09-05 · P0-T02 · DECISION_REQUEST` — **resolved, DEC-003.** `DATABASE_URL`, `DATABASE_URL_OWNER`, `TEST_DATABASE_URL` enter §6.3 (53 keys now); `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `DB_PORT` stay out of the contract and live only in `docker-compose.yml` and `.env.example`. T02 transcribes §6.3; it does not extend it.
-- `2026-09-05 · P0-T05 / P1 · DECISION_REQUEST` — **resolved, DEC-004.** §6.2 is untouched; the database moves onto its vocabulary. `assets.criticality` is re-CHECKed over `high|medium|low|unknown` and `owner text NULL`, `role text NULL` are added, in P1. T05 writes the format for the post-DEC-004 shape; `crown_jewel` and `normal` cease to exist.
+- `2026-09-05 · P0-T05 / P1 · DECISION_REQUEST` — **resolved, DEC-004.** §6.2 is untouched; the database moves onto its vocabulary. `assets.criticality` is re-CHECKed over `high|medium|low|unknown` and `owner text NULL`, `role text NULL` are added, in P1. T05 writes the format for the post-DEC-004 shape; `crown_jewel` and `normal` cease to exist. <!-- superseded-ok: DEC-004 the validator must reject this value by name -->
 - `2026-09-05 · P0 / P1 · BLOCKER` — **open.** No PostgreSQL an agent can use: docker socket unreachable and the account has no `CREATEDB`. Does not block task authoring; T03's DB fixture skips loudly until it clears.
 
 ## Hand-off to P1
@@ -57,8 +57,8 @@ T02 is the root because the coder template requires `make lint` / `make test` be
 DEC-004 lands in P1's migration set and pulls three things with it. The first is now settled; the other two are still open and must be placed before the code that reads them is written:
 
 1. ~~**Which migration carries the `assets` change.**~~ **Settled 2026-09-05 by the Owner (DEC-004, "Carried by").** `013_assets_enrichment.sql` carries the whole of it — DEC-004's CHECK swap and `owner`/`role`, plus §6.1's `source`, `loaded_at`, `active` on all three enrichment tables — so no table's DDL is split across migrations. The four previously planned migrations shift up by one to `014`–`017` and `016_alter_alerts_jobs_llm_runs_users.sql` loses its `assets/identities/iocs` line. `01-plan.md` and `prompts/P1.md` carry the new numbering; P1's exit gate now reads "migrations 013–017". `001_bang_nen.sql` is an applied migration and is not edited; `schema.sql` is regenerated with `build_schema.py`.
-2. **The risk-score formula loses a tier.** `docs/phase-4-enrichment.md:170` weights four values — `{"crown_jewel": 30, "high": 20, "normal": 5, "low": 0}` — and two of them no longer exist. The formula must be re-weighted onto `high|medium|low|unknown` before `soar/risk.py` is written in P2, and the worked examples at `docs/phase-4-enrichment.md:145` and `:183` re-derived. This is a v1-spec change, so it needs its own decision.
-3. **Two playbooks branch on a value that is gone.** `kb/playbooks/malware.md:36` and `kb/playbooks/ssh_brute_force.md:34` both key on `asset_context.criticality = crown_jewel`. They are rewritten when the Owner and the advisor review the playbooks and fill `reviewed_by/at` in P3.
+2. **The risk-score formula loses a tier.** `docs/phase-4-enrichment.md:170` weights four values — `{"crown_jewel": 30, "high": 20, "normal": 5, "low": 0}` — and two of them no longer exist. The formula must be re-weighted onto `high|medium|low|unknown` before `soar/risk.py` is written in P2, and the worked examples at `docs/phase-4-enrichment.md:145` and `:183` re-derived. This is a v1-spec change, so it needs its own decision. <!-- superseded-ok: DEC-004 the validator must reject this value by name -->
+3. **Two playbooks branch on a value that is gone.** `kb/playbooks/malware.md:36` and `kb/playbooks/ssh_brute_force.md:34` both key on `asset_context.criticality = crown_jewel`. They are rewritten when the Owner and the advisor review the playbooks and fill `reviewed_by/at` in P3. <!-- superseded-ok: DEC-004 the validator must reject this value by name -->
 
 ---
 
@@ -151,7 +151,7 @@ DEC-004 lands in P1's migration set and pulls three things with it. The first is
   - `python3 -c "import sys;sys.path.insert(0,'backend');from app.enrichment.inventory import validate;print(validate(['conf/inventory.yaml.example','conf/identities.yaml.example','conf/iocs.csv.example']))"` → `[]`
   - `grep -c 'user1-IA1803' conf/inventory.yaml.example` → ≥ `1` · `grep -c 'user1' conf/identities.yaml.example` → ≥ `1`
   - `python3 -c "import yaml;d=yaml.safe_load(open('conf/inventory.yaml.example'));assert all(a['criticality'] in ('high','medium','low','unknown') for a in d['assets']);print('OK')"` → `OK`
-  - `grep -rn 'crown_jewel' conf/inventory.yaml.example docs/inventory-format.md` → no output (exit 1)
+  - `grep -rn 'crown_jewel' conf/inventory.yaml.example docs/inventory-format.md` → no output (exit 1) <!-- superseded-ok: DEC-004 the validator must reject this value by name -->
   - `git check-ignore -q conf/inventory.yaml.example; echo $?` → `1`
   - `make test` → exit 0 · `make lint` → exit 0
 - Estimate: 1.5 h

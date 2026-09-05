@@ -1,0 +1,678 @@
+# superseded.yaml — claims a decision has killed, and where they must not reappear.
+#
+# WHY. Four earlier attempts at the propagation problem — DEC-009's note, `Drafted by:`,
+# `Propagated to:`, the manual sweep — all REPORT to a human; none DETECTS. `Propagated to:`
+# is still a self-report: it lists what the author remembers editing. This file is enforced by
+# backend/tests/test_superseded_claims.py, so a dead claim that comes back fails a test instead
+# of waiting to be rediscovered when it bites a Coder. DEC-027.
+#
+# SCOPE IS NOT OPTIONAL. Only forward-looking artifacts are scanned (32 files today). Reports,
+# reviews, audits, INBOX.md and DECISIONS.md are HISTORY and MUST still carry the old wording.
+# Unscoped, "docker compose" matches 10 files and most are legitimate; scoped, five rules give
+# five hits, all reviewable in a minute. A noisy linter is an ignored linter.
+#
+# STATUS
+#   fixed → asserted hard. The regression guard the project did not have.
+#   open  → xfails, so `make test` stays green while the backlog burns down. An open row that
+#           PASSES shows up as an xpass: the debt is gone, flip it to `fixed`.
+#   Count remaining debt:  python3 -m pytest -c backend/pyproject.toml \
+#                            backend/tests/test_superseded_claims.py -rs
+#
+# EXCEPTIONS. A live document may legitimately name a dead thing — migration 016 dropping
+# `sampled_for_control`, a card telling a validator to reject `crown_jewel` by name, a note
+# saying the `wazuh-indexer` service is inactive. Put on that line, the way noqa works:
+#     <!-- superseded-ok: DEC-nnn short reason -->
+# Visible and reviewable, never silent.
+#
+# TWO KINDS OF PATTERN. Rows seeded from the 2026-09-05 sweep carry long verbatim fragments:
+# precise, but they only catch an exact re-paste. The hand-written `dec*-` rows carry the short
+# canonical form of the dead claim and catch a paraphrase too — that layer found a bare `pytest`
+# in reviewer.md's own checklist that the four-agent sweep had declared clean. Prefer the short
+# form when adding a rule, and prove it fails before trusting it (DEC-025).
+#
+# LIMIT, stated plainly: this catches a RECORDED claim resurfacing. It cannot catch a new
+# supersession nobody recorded. Only process covers that — see reviewer.md's checklist.
+
+scan:
+  include:
+  - docs/plan/00-context-pack.md
+  - docs/plan/01-plan.md
+  - docs/plan/STATE.md
+  - docs/plan/README.md
+  - docs/plan/HUONG-DAN-VAN-HANH.md
+  - docs/plan/prompts/*.md
+  - docs/plan/tasks/*/*-tasks.md
+  - docs/plan/tasks/*/*.prompt.md
+  exclude_suffixes:
+  - .report.md
+  - .review.md
+  - .audit.md
+  exclude_names:
+  - INBOX.md
+  - DECISIONS.md
+  - superseded.yaml
+rules:
+- id: dec-024-01
+  dec: DEC-024(a) (supersedes DEC-023 item 3 and DEC-023 item 6's gate qualif
+  severity: high
+  status: fixed
+  pattern: '- P1-T06 Migration 017 — **amended 05/09 under DEC-023**: grants for `app_rw` (never `CREA'
+  artifact: docs/plan/prompts/P1.md
+  reason: 'This is the same withdrawn ruling as the known P1-T06.prompt.md:105 instance, but in a different
+    artifact and one nobody has been told to fix. P1.md is the Planner prompt: if P1-T06 is ever re-planned'
+  allow: []
+- id: dec-021-02
+  dec: DEC-021 (no Makefile target may require docker) and DEC-018 (§3 runtim
+  severity: high
+  status: fixed
+  pattern: '- `scripts/backup.sh` (`pg_dump -Fc` to `backups/`, keep 14) + compose cron entry; `scripts/restore.sh`.'
+  artifact: docs/plan/prompts/P5.md
+  reason: 'Measured on this host: `grep -cE ''COMPOSE|docker compose'' Makefile` → 0, and `docker info`
+    fails (CLI present, daemon unreachable). A backup scheduled by a compose cron entry never fires on
+    the only h'
+  allow: []
+- id: dec-024-03
+  dec: DEC-024(a) (supersedes DEC-023 item 3)
+  severity: high
+  status: fixed
+  pattern: 'Migration 017 never creates the role: it checks `pg_roles` and stops with a message naming'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/00-context-pack.md
+  reason: This is the frozen §6.1 text a migration Coder transcribes, and it is the source the known-stale
+    P1-T06.prompt.md:105 line was copied from — fixing the card while leaving this sentence in place regene
+  allow: []
+- id: dec-018-dec-021-04
+  dec: DEC-018 · DEC-021
+  severity: high
+  status: fixed
+  pattern: '`make test` runs everything; `make test-db` needs the c'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/00-context-pack.md
+  reason: 'Measurably false on the only host this is built on: `grep -cE ''COMPOSE|docker compose'' Makefile`
+    returns 0 and the delivered recipe reads `TEST_DATABASE_URL`, then exits non-zero with remediation.
+    §3 '
+  allow: []
+- id: dec-014-05
+  dec: DEC-014 (qualifies DEC-001) · DEC-017 · DEC-019
+  severity: high
+  status: fixed
+  pattern: '`alerts.json` is **not** readable without root, so the D3/F2 file fallback is unavailable:'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/00-context-pack.md
+  reason: DEC-019 is an Owner decision that reversed exactly this sentence, and DEC-014 had already qualified
+    it in DECISIONS.md ("unavailable" holds for the application, not for the Owner; R2 is dead). This
+    no
+  allow: []
+- id: dec-024-06
+  dec: DEC-024(a)
+  severity: high
+  status: fixed
+  pattern: And `grep -c 'CREATE ROLE' docs/Schema/017_append_only_and_roles.sql` → `0` (design note 3
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T06.prompt.md
+  reason: This is the sharpest live instance of the reported failure mode. Design note 3 of this same
+    card was updated and now reads "SUPERSEDED BY DEC-024(a) … 017 therefore creates `app_rw` when it
+    is absent"
+  allow: []
+- id: dec-024-07
+  dec: DEC-024(a)
+  severity: high
+  status: fixed
+  pattern: -- Runs as the database owner. Needs role app_rw to exist on the cluster -- (cluster-globa
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T06.prompt.md
+  reason: Design note 1 opens "The migration. Write it exactly like this." — it is the block the Coder
+    transcribes. It still implements DEC-023 item 3 ("017 never runs CREATE ROLE"), which DEC-024(a) superseded
+  allow: []
+- id: dec-024-08
+  dec: DEC-024(a)
+  severity: high
+  status: fixed
+  pattern: 017 never runs `CREATE ROLE`; it checks `pg_roles` and stops with a message naming the pre
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-tasks.md
+  reason: 'DEC-024''s Supersedes line reads "DEC-023 item 3 (017 may now create the role, as NOLOGIN)".
+    This sentence is item 3 verbatim and was never updated. Every migration card''s "Read first" sends
+    the agent '
+  allow: []
+- id: dec-024-09
+  dec: DEC-024(a)
+  severity: high
+  status: fixed
+  pattern: 'DEC-023: 017 never runs `CREATE ROLE`; it checks `pg_roles` and stops with a message namin'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-tasks.md
+  reason: 'The middle column of this same row was updated and now says, in bold, "**superseded 05/09 by
+    DEC-024(a)**: `user1` is now a superuser, so `CREATE ROLE` succeeds (measured) and 017 creates `app_rw`
+    as '
+  allow: []
+- id: dec-024-10
+  dec: DEC-024(a) (supersedes DEC-023 item 6's qualifier)
+  severity: high
+  status: fixed
+  pattern: 013–017 apply on a clean `soc_dev` with one command, on a cluster where role `app_rw` exists
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-tasks.md
+  reason: 'A second, separate site of the withdrawn qualifier in the same file. The known instance at
+    P1-tasks.md:136 has since been annotated ("qualifier withdrawn by DEC-024(a)"), so this line is now
+    the only '
+  allow: []
+- id: dec-023-item-8-11
+  dec: DEC-023 item 8 (the db-pytest acceptance rule, 'extending DEC-006'), D
+  severity: medium
+  status: fixed
+  pattern: 'Run these mechanically and paste the evidence: - `grep -l "{{" docs/plan/tasks/P<n>/*.prom'
+  artifact: docs/plan/prompts/director.md
+  reason: 'This list is the gate on Planner output, and it is exactly what the last three phases'' defects
+    walked through. Measured in DEC-023 item 8: five bare `pytest -m db` acceptance lines shipped in P1''s
+    car'
+  allow: []
+- id: dec-018-dec-021-12
+  dec: DEC-018 · DEC-021
+  severity: medium
+  status: fixed
+  pattern: '`scripts/backup.sh` + compose cron; `scripts/restore.sh'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/01-plan.md
+  reason: DEC-018 amended the runtime to local processes plus native PostgreSQL because the docker socket
+    is unreachable to the run-as account, and DEC-021 logged the Owner's ruling that nothing in the build
+    ma
+  allow: []
+- id: dec-024-13
+  dec: DEC-024(a)
+  severity: medium
+  status: fixed
+  pattern: '[:62] **Không cấp — DEC-023 mục 2/3:** `CREATEROLE` không làm `app_rw` LOGIN được (E5), 01'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/STATE.md
+  reason: 'Both lines state DEC-023 item 3 as standing rule, and DEC-024(a) supersedes it: 017 may create
+    `app_rw` (as NOLOGIN) when the cluster lacks it. Line 62 compounds it — its whole "Không cấp" rationale
+    i'
+  allow: []
+- id: dec-007-item-7-dec-009-14
+  dec: DEC-007 item 7 / DEC-009
+  severity: medium
+  status: fixed
+  pattern: '| **Planner** | Once per phase … | `prompts/P<n>.md` | `tasks/P<n>/P<n>-tasks.md` (task ca'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/README.md
+  reason: 'DEC-007 item 7 ruled the inverse: "`<TASK_ID>.prompt.md` is the authoritative card … `P0-tasks.md`
+    is the Planner''s index", and DEC-009 exists because that ruling had not reached the files agents
+    read'
+  allow: []
+- id: dec-022-15
+  dec: DEC-022 (INBOX 2026-09-05 · P1-T02 · DECISION_REQUEST, Resolved)
+  severity: medium
+  status: fixed
+  pattern: An INBOX `DECISION_REQUEST` is open in case the Director prefers 016; if it is ruled that
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T02.prompt.md
+  reason: 'DEC-022 ruled it: "`enrich_cache` — confirmed in 013 … It is already written into P1-T02''s
+    card, so confirming costs nothing and moving it would cost a card rewrite for no gain." INBOX.md:120
+    marks th'
+  allow: []
+- id: dec-022-16
+  dec: DEC-022 (INBOX 2026-09-05 · P1-T01 · QUESTION, Resolved)
+  severity: medium
+  status: fixed
+  pattern: An INBOX QUESTION is open for the Owner to widen this; do not widen it
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T01.prompt.md
+  reason: 'DEC-022 resolved it as option A on 05/09 and INBOX.md:128 records the resolution, including
+    that `prompts/P1.md` was amended so the phase brief stops contradicting this card. The card still
+    describes '
+  allow: []
+- id: dec-022-17
+  dec: DEC-022
+  severity: medium
+  status: fixed
+  pattern: 'Recommended: `DROP COLUMN IF EXISTS` as a recorded no-op and strike the line from §6.1. No'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-tasks.md
+  reason: 'DEC-022 answered all three, and it explicitly REJECTED the second half of the first recommendation:
+    "I am taking the first half and declining the second … Striking text from §6.1 would be a frozen-con'
+  allow: []
+- id: dec-021-18
+  dec: DEC-021 (corrects DEC-011's exit-code claim)
+  severity: medium
+  status: fixed
+  pattern: Whole-suite runs go through `make test-db`, which refuses an unset or unreachable DSN (mea
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-tasks.md
+  reason: 'DEC-021 recorded, measured across recipes exiting 1, 2, 3, 7 and 99, that "GNU Make remaps
+    **any** failing recipe to **exit 2**" and laid down the general rule: "an acceptance line may require
+    ''non-ze'
+  allow: []
+- id: dec-014-19
+  dec: 'DEC-014 ("Ordered: a P2 measurement task, dedup compression on one rea'
+  severity: low
+  status: fixed
+  pattern: :16 "... dedup 6 predicates and two concurrent sessions on one cluster; ..." :32 "T05 dedu
+  artifact: docs/plan/prompts/P2.md
+  reason: DEC-014 used the word 'Ordered' twice and made the measurement a precondition on any budget
+    claim ('Until it reports, no document should assert the cap is comfortable'), because the real mean
+    is 60× t
+  allow: []
+- id: dec-015-20
+  dec: 'DEC-015 ("Recorded deviation: `director.md:42` prescribes `git merge -'
+  severity: low
+  status: fixed
+  pattern: ':16 "Merge: for each task with status `approved`, `git checkout main && git merge --no-ff'
+  artifact: docs/plan/prompts/director.md
+  reason: DEC-015 explicitly names `director.md:42` as text its author has been deviating from, and DEC-021
+    merged P0-T07 the deviant way ('rebased and re-verified first'), so the practice is ongoing rather
+    tha
+  allow: []
+- id: dec-023-item-2-dec-024-21
+  dec: DEC-023 item 2 · DEC-024(a)
+  severity: low
+  status: fixed
+  pattern: Create a read-only indexer user, copy the indexer root CA file … obtain the DeepSeek API k
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/00-context-pack.md
+  reason: '§11 is the enumerated "never assign to an agent" list, and this is now the one step in the
+    build that the run-as account provably cannot perform (measured under DEC-023: `user1` cannot `ALTER
+    ROLE app'
+  allow: []
+- id: dec-024-context-22
+  dec: DEC-024 Context ("`app_rw` is now a LOGIN role and `user1` is a superu
+  severity: low
+  status: fixed
+  pattern: '`app_rw` becomes a LOGIN role by one superuser command the Owner runs **before P2** (HUONG-DAN
+    §0).'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-tasks.md and P1-T06.prompt.md
+  reason: 'DEC-024''s Context records the step as already completed, and it re-measures here: `app_rw`
+    rolcanlogin=t, `user1` rolsuper=t. P1-tasks.md:214-215 was updated to say so ("as of 05/09 it is a
+    **LOGIN** '
+  allow: []
+- id: dec-024-23
+  dec: DEC-024(b)
+  severity: low
+  status: fixed
+  pattern: '(b) The owner''s socket session is passwordless and can `DROP TRIGGER`: append-only is enfo'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T06.prompt.md and P1-tasks.md
+  reason: 'DEC-024(b) re-measured this on one table carrying both layers and ruled that `docs/limitations.md`
+    "carries the three-way result above verbatim, not a summary of it": as `app_rw` → permission denied; '
+  allow: []
+- id: dec-024-24
+  dec: DEC-024(c)
+  severity: low
+  status: fixed
+  pattern: 'With `--offline` the script makes no network call at all: alerts come from the cache (or f'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T01.prompt.md
+  reason: 'DEC-024(c) rules that the five probe fixtures ride with the Owner''s commit and that "**P1-T01
+    then cites them** instead of synthesising adversarial samples: real documents beat invented ones for
+    a smo'
+  allow: []
+- id: dec-017-25
+  dec: 'DEC-017 (F2 measured false) and DEC-019 (Owner: G1 draws from both sou'
+  severity: high
+  status: open
+  pattern: 'Owner actions: heartbeat wodle + rule on Wazuh; run `backfill --since 2026-08-01`; confirm
+    inventory content.'
+  artifact: docs/plan/prompts/P2.md
+  reason: director.md:21 orders the evening gate checked literally — run the commands, do not accept reports
+    as proof. Run literally, this gate either fails (nothing from 01/08 exists in the indexer) or is pass
+  allow: []
+- id: dec-018-26
+  dec: 'DEC-018 (a worktree has no .env) + DEC-021 (which put the export line '
+  severity: high
+  status: open
+  pattern: '3. Before reporting run: `make lint`, `make test`, and `make test-db` if you touched anyth'
+  artifact: docs/plan/prompts/coder-template.md
+  reason: 'This is the known DEC-018 defect repeated in the other prompt. DEC-021 fixed reviewer.md —
+    ''a rule is worthless until the prompt that sends the agent says so'' — but coder-template.md is the
+    generator '
+  allow: []
+- id: dec-022-27
+  dec: DEC-022
+  severity: high
+  status: open
+  pattern: records JSON-parse rate, schema-valid rate (against `triage_v2`), p50/p95 latency, tokens
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/01-plan.md
+  reason: DEC-022 amended `prompts/P1.md` for exactly this wording and said leaving the phase brief and
+    the card contradicting each other "is the DEC-009 defect all over again" — but 01-plan.md, the document
+    th
+  allow: []
+- id: dec-017-dec-019-28
+  dec: DEC-017 / DEC-019
+  severity: high
+  status: open
+  pattern: '| 06/09 | Thêm wodle `command` + rule heartbeat trên Wazuh manager; chạy `backfill --since'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/HUONG-DAN-VAN-HANH.md
+  reason: This is §4 "Việc chỉ bạn làm được, theo ngày" — the Owner's own action list, and the only place
+    the runbook tells the Owner how history gets loaded. DEC-017 measured the indexer holds four days
+    (02/09
+  allow: []
+- id: dec-015-dec-018-29
+  dec: DEC-015 / DEC-018 (blocker closed)
+  severity: high
+  status: open
+  pattern: '| P0 exit gate item 2 | 2026-09-05 | `eval/indexer_probe.py` cannot be run for real — `soc'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/STATE.md
+  reason: 'This row sits in the "Blockers (open)" table, un-struck, while DEC-015 closed it: "`soc_ro`
+    (item 1) — INBOX `2026-09-05 · P0 / P2 · BLOCKER` closed" and "P0 exit gate item 2 (item 9) is MET"
+    (probe r'
+  allow: []
+- id: dec-021-30
+  dec: DEC-021
+  severity: high
+  status: open
+  pattern: T07 (không thuộc cổng ra) đang chờ duyệt và là thứ duy nhất chặn phát
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/STATE.md
+  reason: 'DEC-021 records the opposite: "**P0-T07 is merged** at `0bdbede`, rebased and re-verified first
+    … **Every P0 task is now merged.**" Verified independently — `git branch --contains 0bdbede` returns
+    `ma'
+  allow: []
+- id: dec-024-31
+  dec: DEC-024(a)
+  severity: high
+  status: open
+  pattern: 6. **Điều kiện tiên quyết một lần cho mỗi cụm PostgreSQL — chỉ superuser làm được (DEC-023
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/HUONG-DAN-VAN-HANH.md
+  reason: 'Three separate claims here are superseded by DEC-024(a), which explicitly supersedes DEC-023
+    item 3 and item 6''s qualifier. (i) "Role `app_rw` phải tồn tại trên cụm" is no longer a prerequisite
+    — 017 '
+  allow: []
+- id: dec-024-32
+  dec: DEC-024(a) (supersedes DEC-023 item 6)
+  severity: high
+  status: open
+  pattern: '**Cổng ra đã sửa lời văn** (DEC-023 mục 6): 013–017 áp dụng bằng một lệnh trên `soc_dev` s'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/STATE.md
+  reason: 'The withdrawn gate qualifier, at a fourth site the known list does not name. DEC-024(a) is
+    explicit: "the exit gate reads: **''migrations 013–017 apply on a clean `soc_dev` with one command
+    on any clus'
+  allow: []
+- id: dec-010-33
+  dec: DEC-010 (with DEC-015's propagation finding)
+  severity: high
+  status: open
+  pattern: 3. Coder tự tạo nhánh `task/P<n>-Tnn`, viết test, code, chạy `make test`, ghi `…report.md`
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/HUONG-DAN-VAN-HANH.md
+  reason: 'DEC-010''s own Consequences name this file and this step: "`HUONG-DAN-VAN-HANH.md` §1 step
+    B gains the worktree creation as part of dispatch, and step C removes it after merge." It never happened
+    — mea'
+  allow: []
+- id: dec-019-34
+  dec: DEC-019 ("`alerts.source` must not be visible on the labelling page ..
+  severity: medium
+  status: open
+  pattern: a single response filter that removes the ① suggestion (and `llm_runs`-derived fields) from
+    **every** response
+  artifact: docs/plan/prompts/P6.md (and the filter it reuses, docs/plan/prompts/P4.md)
+  reason: DEC-019 named the P4 and P6 cards explicitly and said the rule was 'flagged ... rather than
+    assumed'. The ruling propagated to the selection queries — P6.md:17 and P7.md:18 already read `source
+    IN ('w
+  allow: []
+- id: dec-001-35
+  dec: DEC-001 (demo CA), DEC-012 (user1 read as non-privileged), DEC-023 (tw
+  severity: medium
+  status: open
+  pattern: '- `docs/limitations.md`: the list from the architecture §9 plus anything discovered (autho'
+  artifact: docs/plan/prompts/P8.md
+  reason: Four decisions say in terms that a named limitation 'must' land in `docs/limitations.md` during
+    P8, and DEC-024(b) goes further — 'carries the three-way result above verbatim, not a summary of it',
+    be
+  allow: []
+- id: dec-023-item-6-36
+  dec: DEC-023 item 6 (the drill's one unmeasured expectation) and DEC-024(a)
+  severity: medium
+  status: open
+  pattern: '- Restore drill: `scripts/restore.sh` into an empty database, `make test-db`, row counts b'
+  artifact: docs/plan/prompts/P8.md
+  reason: DEC-023 item 6 explicitly hands the restore drill an expectation it labels unmeasured, and DEC-023's
+    closing line lists the two superuser statements and the `pg_restore` behaviour under 'Not measured,
+  allow: []
+- id: dec-019-37
+  dec: 'DEC-019 ("`sort_key` needs the one rule the archive cannot supply ... '
+  severity: medium
+  status: open
+  pattern: '`search_after` from the last hit''s `sort`; `sort_key` = first sort value; duplicates are
+    d'
+  artifact: docs/plan/prompts/P2.md
+  reason: P2.md:16 already requires the parser to handle 'both envelope shapes', so the replay path is
+    inside P2's scope — but the one derivation DEC-019 says 'both' newly introduces is stated here unconditiona
+  allow: []
+- id: dec-014-38
+  dec: DEC-014 ("The 1% with no `agent` object must not be rejected — ruled n
+  severity: medium
+  status: open
+  pattern: '- `alert_time` ← `fields.timestamp[0]` if present else `_source.timestamp` normalised (`+0'
+  artifact: docs/plan/prompts/P2.md
+  reason: 'DEC-014 ruled this ''now, before P2 codes it'' and called the alternative ''a data-loss defect,
+    not validation''. This bullet is the exact place a Coder reads the field derivations — it already
+    gives the '
+  allow: []
+- id: dec-021-39
+  dec: DEC-021 (no Makefile target may require docker) and DEC-018 (§3 runtim
+  severity: medium
+  status: open
+  pattern: '- P1-T07 `make migrate` and schema regeneration hook (`build_schema.py` if practical), CI-'
+  artifact: docs/plan/prompts/P1.md
+  reason: P1-T07 is live — DEC-024 dispatched it, and recorded that it is the one card that never got
+    the pre-dispatch audit DEC-006 requires, 'the weakest link in this dispatch'. A 'fresh container'
+    is unreach
+  allow: []
+- id: dec-024-40
+  dec: DEC-024(a) (supersedes DEC-023 item 3)
+  severity: medium
+  status: open
+  pattern: Granting that role LOGIN and a password stays a one-off out-of-band step in HUONG-DAN §0,
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/01-plan.md
+  reason: 'Not the instance in my brief: the "on a cluster where role `app_rw` exists" qualifier has already
+    been removed from the working tree, and this is the surviving half of the same edit. The cell now
+    stat'
+  allow: []
+- id: dec-014-41
+  dec: DEC-014
+  severity: medium
+  status: open
+  pattern: 'Tests: parser (7 blocks + fixture expectations), category permutations, dedup predicates +'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/01-plan.md
+  reason: DEC-014 uses the word "Ordered" twice, both times naming P2 ("a P2 measurement task, dedup compression
+    on one real day"; "Ordered into P2 as the dedup test fixture in place of a synthetic burst"), and
+  allow: []
+- id: dec-019-42
+  dec: DEC-019
+  severity: medium
+  status: open
+  pattern: shows cluster context (representative alert, raw_log, correlation, occurrence, category, p
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/01-plan.md
+  reason: DEC-019's closing consequence is "One thing to check before P6 labels anything… Flagged for
+    the P4/P6 cards rather than assumed", and this line is the enumeration a P6 card will copy — it reads
+    as the
+  allow: []
+- id: dec-024-43
+  dec: 'DEC-024 (context: the superuser grant completed)'
+  severity: medium
+  status: open
+  pattern: '- [ ] **Chủ đồ án (TRƯỚC KHI PHÁT P2, DEC-023 mục 2 — không cần cho P1):** `sudo -u postgr'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/STATE.md
+  reason: 'Still an open `[ ]` in the live "Owner actions" list, but DEC-024''s Context records it as
+    done: "The Owner completed DEC-023''s superuser prerequisite and went past item 6: `app_rw` is now
+    a LOGIN role'
+  allow: []
+- id: dec-010-44
+  dec: DEC-010
+  severity: medium
+  status: open
+  pattern: 3. **Dispatch.** For each task in status `todo` whose dependencies are `done`, start a Cod
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/README.md
+  reason: '"Coders work on their own branch" is the pre-DEC-010 formulation of isolation. DEC-010 raised
+    the bar to the checkout: "Every dispatched task gets its own `git worktree` at dispatch … No agent
+    shares '
+  allow: []
+- id: dec-022-45
+  dec: DEC-022 (INBOX 2026-09-05 · P1-T05 · DECISION_REQUEST, Resolved)
+  severity: medium
+  status: open
+  pattern: An INBOX `DECISION_REQUEST` is already o
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T05.prompt.md
+  reason: 'DEC-022 closed it on 05/09 (INBOX.md:112, "option A, first half only"): migration 016 keeps
+    `DROP COLUMN IF EXISTS`, and §6.1 is annotated rather than struck. Presenting the question as open
+    leaves th'
+  allow: []
+- id: dec-023-item-8-46
+  dec: DEC-023 item 8 (extending DEC-006)
+  severity: medium
+  status: open
+  pattern: '`python3 -m pytest -c backend/pyproject.toml backend/tests/test_smoke_test.py -q` → passes'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T01.prompt.md
+  reason: 'DEC-023 item 8 measured that `backend/pyproject.toml`''s addopts already carries `-q`, so a
+    card''s extra `-q` means `-qq` and "the summary line disappears". Re-measured here on this repo: without
+    the e'
+  allow: []
+- id: dec-016-47
+  dec: DEC-016 ("DEC-013's carve-out is withdrawn") · DEC-023 item 6 · DEC-02
+  severity: medium
+  status: fixed
+  pattern: Say in your report that P1's exit gate is met only in its carved-out form, "013–016 apply
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T07.prompt.md
+  reason: The "carved-out form" is DEC-013's, created when 017 was blocked pending an Owner decision;
+    DEC-016 withdrew it in terms ("DEC-013's carve-out is withdrawn"), and DEC-023 item 6 then DEC-024(a)
+    restat
+  allow: []
+- id: dec-002-48
+  dec: DEC-002 (port `prompt_guard.detect_injection` into `security/detector.
+  severity: low
+  status: open
+  pattern: '5. Legacy artifact to port and fix: `llm/prompt_builder.py`, `llm/templates/triage_system.'
+  artifact: docs/plan/prompts/P3.md
+  reason: DEC-002 assigns two P3 deliverables by name and draws a hard line between them — one is a port,
+    the other is deliberately not — and P3.md, which owns both files (:17), never mentions `Final-Project`
+    a
+  allow: []
+- id: dec-005-49
+  dec: DEC-005 (migrations live flat in `docs/Schema/`; there is no `docs/Sch
+  severity: low
+  status: open
+  pattern: '`backend/tests/conftest.py` with a PostgreSQL fixture that applies `docs/Schema/schema.sql'
+  artifact: docs/plan/prompts/P0.md
+  reason: 'DEC-005 closed this exact ''or wherever P0 decided'' ambiguity and listed the two sites it
+    corrected (`01-plan.md:46`, `prompts/P1.md:17`); P0.md kept the older, vaguer form. Low severity because
+    P0 is '
+  allow: []
+- id: dec-012-50
+  dec: DEC-012
+  severity: low
+  status: open
+  pattern: '- [ ] `conf/inventory.yaml` (phải có `user1-IA1803`) + `conf/identities.yaml` (phải có `us'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/STATE.md
+  reason: 'An open `[ ]` in the live Owner-actions list for work DEC-012 records as complete: "The Owner
+    wrote `conf/inventory.yaml`, `conf/identities.yaml` and `conf/iocs.csv` from real host data; `validate()` '
+  allow: []
+- id: dec-017-dec-019-51
+  dec: DEC-017 / DEC-019 (mis-citation of DEC-016, itself withdrawn by DEC-02
+  severity: low
+  status: open
+  pattern: 'Câu trả lời retention chính là tin xấu: indexer chỉ có 4 ngày, không phải 5 tuần → F2 sai,'
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/STATE.md
+  reason: 'DEC-016 is "Migration 017 takes route D, plus a TRUNCATE trigger it cannot ship without" —
+    it says nothing about F2, retention or the indexer — and it was withdrawn wholesale by DEC-020. The
+    decision '
+  allow: []
+- id: dec024a-never-creates-role
+  dec: DEC-024(a)
+  severity: high
+  status: fixed
+  pattern: never creates the role
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC superseded 017 never creating the role; a forward-looking document must not assert it.
+  allow: []
+- id: dec024a-never-runs-create-role
+  dec: DEC-024(a)
+  severity: high
+  status: fixed
+  pattern: never runs `CREATE ROLE`
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC superseded 017 never running CREATE ROLE; a forward-looking document must not assert it.
+  allow: []
+- id: dec024a-gate-qualifier
+  dec: DEC-024(a)
+  severity: high
+  status: open
+  pattern: cluster where role `app_rw` exists
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC superseded the withdrawn P1 exit-gate qualifier; a forward-looking document must not assert
+    it.
+  allow: []
+- id: dec024a-rolcreaterole-false
+  dec: DEC-024(a)
+  severity: high
+  status: open
+  pattern: '`user1` has `rolcreaterole = f`'
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC superseded the false rationale for 017 never creating the role; a forward-looking document
+    must not assert it.
+  allow: []
+- id: dec023-app-rw-nologin
+  dec: DEC-023 route 2b
+  severity: high
+  status: fixed
+  pattern: '`app_rw` is **NOLOGIN**'
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC superseded app_rw being NOLOGIN; a forward-looking document must not assert it.
+  allow: []
+- id: dec021-compose-cron
+  dec: DEC-021
+  severity: high
+  status: open
+  pattern: compose cron
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC superseded scheduling anything through a compose cron entry; a forward-looking document
+    must not assert it.
+  allow: []
+- id: dec018-test-db-needs-compose
+  dec: DEC-018/DEC-021
+  severity: high
+  status: fixed
+  pattern: '`make test-db` needs the compose'
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC superseded make test-db needing the compose db; a forward-looking document must not assert
+    it.
+  allow: []
+- id: dec021-docker-compose-runtime
+  dec: DEC-018/DEC-021
+  severity: high
+  status: fixed
+  pattern: '`docker compose`: `app`'
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC superseded docker compose as the runtime shape; a forward-looking document must not assert
+    it.
+  allow: []
+- id: dec017-backfill-from-0108
+  dec: DEC-017/DEC-019
+  severity: high
+  status: fixed
+  pattern: backfill from 01/08
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC superseded a backfill gate from 01/08; a forward-looking document must not assert it.
+  allow: []
+- id: dec004-crown-jewel
+  dec: DEC-004
+  severity: high
+  status: open
+  pattern: crown_jewel
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC superseded the criticality value DEC-004 abolished; a forward-looking document must not
+    assert it.
+  allow: []
+- id: dec004-migration-013-016
+  dec: DEC-004
+  severity: high
+  status: open
+  pattern: 013–016
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC superseded the pre-DEC-004 migration range; a forward-looking document must not assert it.
+  allow: []
+- id: dec005-bare-pytest
+  dec: DEC-005
+  severity: high
+  status: fixed
+  pattern: '`pytest backend/tests'
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC superseded bare pytest, which does not resolve app.*; a forward-looking document must not
+    assert it.
+  allow: []
+- id: dec001-wazuh-indexer-service
+  dec: DEC-001
+  severity: high
+  status: fixed
+  pattern: wazuh-indexer
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC superseded the wazuh-indexer service, which is inactive here; a forward-looking document
+    must not assert it.
+  allow: []
+- id: dec022-sampled-for-control
+  dec: DEC-022
+  severity: high
+  status: open
+  pattern: sampled_for_control
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC superseded a column that has never existed; a forward-looking document must not assert it.
+  allow: []

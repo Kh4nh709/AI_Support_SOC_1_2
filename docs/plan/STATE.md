@@ -7,7 +7,7 @@ Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (re
 | Phase | Planned days | Status | Exit gate met on | Notes |
 |---|---|---|---|---|
 | P0 Preparation | D0 04/09 | **done** | **2026-09-05** | Cổng ra ĐẠT cả 5 mục (kiểm từng mục trên `main`). T01–T06 merged, 77 test xanh. T07 (không thuộc cổng ra) đang chờ duyệt và là thứ duy nhất chặn phát P1. |
-| P1 Smoke test + schema | D1 05/09 | todo | — | 7 task đã lập kế hoạch (`tasks/P1/P1-tasks.md`). **Cả 7 phát được** (P0-T07 đã merge @ `0bdbede`; **DEC-023 gỡ chặn P1-T06** — phát sau khi P1-T03 merge); P1-T07 chạy theo số migration thực có. Tổng `must` = 17 h so với ngân sách 8 h (**+112 %**) — xem ghi chú ngân sách ở đầu `P1-tasks.md`. **Cổng ra đã sửa lời văn** (DEC-023 mục 6): 013–017 áp dụng bằng một lệnh trên `soc_dev` sạch, trên cụm đã có role `app_rw`. |
+| P1 Smoke test + schema | D1 05/09 | todo | — | 7 task đã lập kế hoạch (`tasks/P1/P1-tasks.md`). **Cả 7 phát được** (P0-T07 đã merge @ `0bdbede`; **DEC-023 gỡ chặn P1-T06** — phát sau khi P1-T03 merge); P1-T07 chạy theo số migration thực có. Tổng `must` = 17 h so với ngân sách 8 h (**+112 %**) — xem ghi chú ngân sách ở đầu `P1-tasks.md`. **Cổng ra đã sửa lời văn** (DEC-023 mục 6): 013–017 áp dụng bằng một lệnh trên `soc_dev` sạch, trên **bất kỳ cụm nào mà người chạy migration tạo được role** — phụ chú "cụm đã có `app_rw`" bị rút bởi DEC-024(a). |
 | P2 Intake + pipeline | D2–D3 06–07/09 | todo | — | — |
 | P3 AI pipeline ① | D4 08/09 | todo | — | — |
 | P4 UI + auth + blind | D5 09/09 | todo | — | — |

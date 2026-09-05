@@ -30,13 +30,14 @@ harness defects that would have failed every migration card's last acceptance li
    each of those three once set. All of it in 017; 014 adds no privileges.
 2. **"The application connects as `app_rw`" — route 2b, verbatim.** `app_rw` becomes a LOGIN role by
    one superuser command the Owner runs **before P2** (HUONG-DAN §0). Not needed for P1: 017 only
-   grants and revokes, and its tests `SET ROLE app_rw` from the owner. 017 never runs `CREATE ROLE`;
-   it checks `pg_roles` and stops with a message naming the prerequisite.
+   grants and revokes, and its tests `SET ROLE app_rw` from the owner. **superseded 05/09 by DEC-024(a)** — 017 **creates** `app_rw` as `NOLOGIN`
+   when `pg_roles` shows it absent (`user1` is now a superuser and `CREATE ROLE` succeeds), and stops
+   loudly only when creation is refused.
 3. **G9 — route 4d.** `intake.raw_text text` holds the received bytes; `raw_payload` is
    `GENERATED ALWAYS AS (raw_text::jsonb) STORED`. T03's DDL, acceptances and byte-compare test
    changed accordingly.
-4. **The exit gate** reads "013–017 apply on a clean `soc_dev` with one command, on a cluster where
-   role `app_rw` exists" — true on this cluster with no superuser action.
+4. **The exit gate** reads "013–017 apply on a clean `soc_dev` with one command **on any cluster whose
+   migrator can create roles**" — the "where role `app_rw` exists" qualifier is withdrawn by DEC-024(a).
 5. **Two harness defects fixed on `main`** (Owner hotfix, DEC-023 item 7): `test_conftest_helpers.py`
    no longer hard-codes `count == 12`, and `make test-db` takes `TESTS=<path>`. Planning decision 6
    below is now a rule: every db-marked pytest line sets `TEST_DATABASE_URL` inline to a private
@@ -211,7 +212,7 @@ Everything below was measured on this host before these cards were written, per 
 
 | Claim in `prompts/P1.md` or handed to me | Measured | Consequence |
 |---|---|---|
-| "017 … `CREATE ROLE app_rw` and the owner role" | `app_rw` **already exists on this cluster**, and as of 05/09 it is a **LOGIN** role with a SCRAM password (the Owner's one-off step) — not the NOLOGIN, no-attribute role earlier entries describe; the application connects as it directly. **superseded 05/09 by DEC-024(a)**: `user1` is now a superuser, so `CREATE ROLE` succeeds (measured) and 017 creates `app_rw` as `NOLOGIN` when absent. It is created NOLOGIN deliberately — a passwordless LOGIN role cannot connect, and a password must never sit in a migration on a public remote (DEC-022). The earlier reading, that `rolcreaterole = f` made even a conditional create impossible, was true when DEC-020 was written and is false now | DEC-023: 017 never runs `CREATE ROLE`; it checks `pg_roles` and stops with a message naming the one-off superuser step (HUONG-DAN §0). The gate carries the qualifier "on a cluster where role `app_rw` exists" |
+| "017 … `CREATE ROLE app_rw` and the owner role" | `app_rw` **already exists on this cluster**, and as of 05/09 it is a **LOGIN** role with a SCRAM password (the Owner's one-off step) — not the NOLOGIN, no-attribute role earlier entries describe; the application connects as it directly. **superseded 05/09 by DEC-024(a)**: `user1` is now a superuser, so `CREATE ROLE` succeeds (measured) and 017 creates `app_rw` as `NOLOGIN` when absent. It is created NOLOGIN deliberately — a passwordless LOGIN role cannot connect, and a password must never sit in a migration on a public remote (DEC-022). The earlier reading, that `rolcreaterole = f` made even a conditional create impossible, was true when DEC-020 was written and is false now | DEC-024(a) supersedes DEC-023 here: 017 **creates** `app_rw` as `NOLOGIN` when absent, and stops loudly only if creation is refused. The gate carries **no** qualifier |
 | "`conftest.py` connects as `app_rw` for tests that exercise the application" | **Updated 05/09:** `app_rw` is now a LOGIN role with a SCRAM password (DEC-023 route 2b, completed by the Owner), so something *can* connect as it — the earlier "NOLOGIN, nothing can connect" reading is spent | Unchanged for P1 tests, for a different reason: `conftest.py` stays as the owner and uses `SET ROLE app_rw` (`user1` is a member), because the password lives only in `.env`, which is git-ignored and absent from every worktree (DEC-018). A test that connected as `app_rw` directly would pass for the Owner and fail for every Coder. The application connects as `app_rw` from P2 using `DATABASE_URL` |
 | "`soc_dev` does not exist / `createdb soc_dev` belongs in the first migration task" | `soc_dev` **exists**, owner `user1`, 14 tables, 12 migrations recorded — DEC-015 created it | No card creates it. Cards create their own scratch databases instead |
 | §6.1 "`alerts` + … `source ∈ wazuh|lab|replay`" | `alerts.source` **already exists** (`text NOT NULL DEFAULT 'wazuh'`, from 002), with **no CHECK** | 016 adds `ck_alerts_source` only. `ADD COLUMN source` would fail |
