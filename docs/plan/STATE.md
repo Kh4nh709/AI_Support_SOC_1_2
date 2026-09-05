@@ -6,7 +6,7 @@ Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (re
 
 | Phase | Planned days | Status | Exit gate met on | Notes |
 |---|---|---|---|---|
-| P0 Preparation | D0 04/09 | in-progress | — | T01+T02 merged 05/09; T03–T06 hết chặn phụ thuộc, đã soát trước khi phát (DEC-006) |
+| P0 Preparation | D0 04/09 | in-progress | — | 5/6 merged 05/09 (T01–T05); còn T06. `make test` 77 pass. Cổng ra: mục 2 (probe chạy thật) vẫn chờ `soc_ro` |
 | P1 Smoke test + schema | D1 05/09 | todo | — | — |
 | P2 Intake + pipeline | D2–D3 06–07/09 | todo | — | — |
 | P3 AI pipeline ① | D4 08/09 | todo | — | — |
@@ -22,10 +22,10 @@ Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (re
 |---|---|---|---|---|---|---|---|---|
 | P0-T01 | Repo hygiene and `.gitignore` | must | done | task/P0-T01 | — | no — duyệt vòng 2 ĐẠT (8/8), merge vào `main` @ `8ecddb5` | 2026-09-05 director |
 | P0-T02 | Build scaffold: requirements, pyproject, Makefile, compose, `.env.example` | must | done | task/P0-T02 | — | no — đã rebase lên `main`, chạy lại 9/9 lệnh nghiệm thu ĐẠT, merge @ `7450778` | 2026-09-05 director |
-| P0-T03 | Test harness: DB fixture, fake LLM, import-rule scan, canonical fixture | must | review | task/P0-T03 | P0-T01, P0-T02 (ĐÃ merge) | không chặn — 9/9 nghiệm thu ĐẠT trên DB thật (DEC-008), gồm cả `scripts/migrate.sh` đã sửa và tự kiểm end-to-end | 2026-09-05 coder | report: `P0-T03.report.md`
-| P0-T04 | `eval/indexer_probe.py` — offline-verifiable indexer probe | must | todo | task/P0-T04 | P0-T02 (ĐÃ merge) | không chặn — cả 8 lệnh nghiệm thu chạy trên fixture ghi sẵn; `soc_ro` chỉ chặn lần chạy THẬT (`--save-samples`), là việc của chủ đồ án sau khi merge | 2026-09-05 director | **hàng đợi** — vào chỗ trống đầu tiên
-| P0-T05 | Inventory examples, format document, `inventory.validate()` | must | approved | task/P0-T05 | P0-T02 (ĐÃ merge) | có — chờ Director merge; sau khi merge, chủ đồ án viết `conf/*.yaml` + `conf/iocs.csv` từ ba tệp `.example` (mục Owner actions). Reviewer APPROVE, 10/10 nghiệm thu ĐẠT tái đo trong worktree cô lập; xem `docs/plan/tasks/P0/P0-T05.review.md` | 2026-09-05 reviewer | **DISPATCH 2/3**
-| P0-T06 | Package skeletons per context pack §4 | should | todo | task/P0-T06 | P0-T02 (ĐÃ merge) | no | 2026-09-05 planner | **DISPATCH 3/3**
+| P0-T03 | Test harness: DB fixture, fake LLM, import-rule scan, canonical fixture | must | done | task/P0-T03 | P0-T01, P0-T02 | no — duyệt ĐẠT, rebase + chạy lại 9/9 (gồm DB thật và mục 9 kiểm bản vá `migrate.sh`), merge @ `eb3916d` | 2026-09-05 director | — |
+| P0-T04 | `eval/indexer_probe.py` — offline-verifiable indexer probe | must | done | task/P0-T04 | P0-T02 | no — duyệt ĐẠT, rebase + chạy lại 8/8, merge @ `8b68466`. Quy tắc 6 nay chạy được vì T03 đã merge | 2026-09-05 director | — |
+| P0-T05 | Inventory examples, format document, `inventory.validate()` | must | done | task/P0-T05 | P0-T02 | có — chủ đồ án viết `conf/inventory.yaml`, `conf/identities.yaml`, `conf/iocs.csv` từ 3 tệp `.example` | 2026-09-05 director | — |
+| P0-T06 | Package skeletons per context pack §4 | should | todo | task/P0-T06 | P0-T02 | no | 2026-09-05 director | **đang phát — 1/3 slot dùng** |
 
 ## Blockers (open)
 
@@ -59,4 +59,5 @@ Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (re
 
 | Date | Phase | Gate advanced? | Cuts applied | Notes |
 |---|---|---|---|---|
+| 2026-09-05 | P0 | 5/6 | — | T01–T05 merged, 77 test xanh. DEC-007…DEC-010. Lỗi `make migrate` (008–012 không tự ghi) phát hiện nhờ `CREATEDB` và đã vá trong T03. Còn T06 + `soc_ro`. |
 | 2026-09-05 | P0 | chưa | — | P0-T02 duyệt ĐẠT; P0-T01 trả về sửa báo cáo. DEC-002…DEC-006 đã commit lên `main` (`202e9ca`). Soát trước khi phát T03–T06 theo DEC-006: sửa 9 chỗ, còn 7 điểm chờ quyết. Cổng kế tiếp: merge `task/P0-T02` vào `main`. |

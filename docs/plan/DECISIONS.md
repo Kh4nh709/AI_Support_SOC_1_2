@@ -130,3 +130,15 @@ Consequences:
   - `HUONG-DAN-VAN-HANH.md` §checklist told the Planner to prove no two tasks touch the same file by grepping `P<n>-tasks.md`. File scope lives in the prompt, so that check could pass while two prompts collide. It now greps `P<n>-T*.prompt.md`. (The T03/T05/T06 disjointness check run before dispatch was already done against the prompts, so the dispatch stands.)
   - Nothing about the acceptance sets themselves changed; this is a pointer fix. The underlying divergence between each prompt and its index entry remains, and stays a Director defect to reconcile per DEC-007 item 7.
 Supersedes: — (extends DEC-007 item 7)
+
+## DEC-010 · 2026-09-05 · One dedicated git worktree per task, from the moment it is dispatched
+Scope: tactical
+Decided by: Director
+Context: The single shared checkout has now caused four incidents in one day, each costing real work. P0-T01's Coder measured `git status --porcelain` against a tree carrying the Director's uncommitted edits and honestly recorded acceptance 3 as FAIL when it passes cleanly. DEC-002…DEC-006 sat uncommitted in that same tree, invisible to any fresh clone, while P0-T02 was built and approved against a tree that predated them. HEAD then moved under the Director mid-edit, landing the DEC-009 planning commit on `task/P0-T05` and sweeping the T05 reviewer's verdict in with it — which would have failed T05 on the Reviewer's own checklist item 8 for a scope violation the Director introduced. The Reviewer independently reached the same recommendation while approving P0-T03, and the T03 and T04 sessions, which did use their own worktrees, hit none of it.
+Decision: Every dispatched task gets its own `git worktree` at dispatch, and the Director's plan edits stay in the primary checkout on `main`. No agent shares a checkout with another.
+Consequences:
+  - `HUONG-DAN-VAN-HANH.md` §1 step B gains the worktree creation as part of dispatch, and step C removes it after merge. The Coder prompt and the Reviewer prompt both say to work only inside the worktree they were given.
+  - A Reviewer already verifies in an isolated checkout; this makes the Coder's tree isolated too, so `git status --porcelain` is meaningful for the first time and acceptance items that depend on a clean tree stop producing false failures.
+  - The Director never commits from a task worktree. Before any `git add`, confirm `git rev-parse --abbrev-ref HEAD` is `main` in the primary checkout — HEAD moving under a long edit is what caused the DEC-009 misplacement, and a one-line check catches it.
+  - This is process only: no card, contract or acceptance command changes.
+Supersedes: —
