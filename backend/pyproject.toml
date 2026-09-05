@@ -1,0 +1,24 @@
+# Tool configuration only — no build backend, no project metadata.
+# The file stays in backend/ (DEC-005): every tool is invoked from the
+# repository root with an explicit config flag, which makes backend/ the
+# rootdir, which is what makes `pythonpath = ["."]` resolve `app.*`.
+#   python3 -m pytest -c backend/pyproject.toml backend/tests
+#   python3 -m ruff check --config backend/pyproject.toml backend eval
+#   python3 -m black --check --config backend/pyproject.toml backend eval
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+markers = [
+  "db: needs a PostgreSQL reachable at TEST_DATABASE_URL",
+  "live: calls a live external service (LLM or indexer); skipped by default",
+]
+addopts = "-q --strict-markers"

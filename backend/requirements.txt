@@ -1,0 +1,25 @@
+# AI Support SOC — pinned dependencies (context pack §3).
+# Exact `==` pins only, no ranges: the build must be reproducible from a clean
+# checkout. Every version below is the one verified on the build host
+# (Python 3.12.3, pip 26.2.1).
+# Nothing is added here without a decision — no python-dotenv (the .env reader
+# is stdlib), no alembic/sqlalchemy (psycopg 3 + plain SQL), no
+# pytest-postgresql (the DB fixture is DSN-based, P0-T03).
+
+# --- runtime ---------------------------------------------------------------
+fastapi==0.141.1
+uvicorn==0.52.3
+psycopg==3.3.4
+psycopg-binary==3.3.4
+Jinja2==3.1.2
+PyYAML==6.0.3
+argon2-cffi==25.1.0
+PyJWT==2.7.0
+httpx==0.28.1
+openai==3.8.0
+pydantic==2.13.4
+
+# --- dev -------------------------------------------------------------------
+pytest==9.1.1
+ruff==0.16.6
+black==26.5.1
