@@ -1,0 +1,66 @@
+# AI Support SOC — the three services of context pack §3: app, worker, db.
+#
+# NOT RUNNABLE YET, ON PURPOSE. `app.web.main` arrives in P2 and
+# `app.infra.worker` in P4, so `docker compose up` cannot succeed today; the
+# acceptance for this file is `docker compose config`, which needs no daemon.
+# On this host an agent account cannot reach /var/run/docker.sock either —
+# docs/plan/INBOX.md, 2026-09-05 · P0 / P1 · BLOCKER.
+#
+# No `version:` key: it is obsolete in Compose v2+.
+#
+# POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB and DB_PORT are Compose-only
+# variables (DEC-003). They are read here and nowhere else; backend/app/infra/
+# config.py never learns about them. The application reaches PostgreSQL through
+# DATABASE_URL / DATABASE_URL_OWNER from .env.
+#
+# Host port 5432 is taken by the system PostgreSQL, so db publishes 55432.
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${DB_PORT:-55432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  app:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    command: uvicorn app.web.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # One worker process (N_WORKER=1, §3). The jobs table uses
+  # FOR UPDATE SKIP LOCKED, so a second one can be started without code changes.
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    command: python -m app.infra.worker
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
