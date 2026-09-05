@@ -4,14 +4,16 @@
 # (DEC-005): pytest, ruff and black all read backend/pyproject.toml, which is
 # what makes backend/ the rootdir and `app.*` importable.
 #
-# `test-db`, `run-app` and `run-worker` need the docker daemon; on this host an
-# agent account cannot reach /var/run/docker.sock — see docs/plan/INBOX.md
-# (2026-09-05 · P0 / P1 · BLOCKER). No other target depends on the daemon.
+# NO TARGET REQUIRES DOCKER. PostgreSQL runs natively on this host and the
+# application and worker run as ordinary processes. docker-compose.yml is kept
+# as a portable alternative for a machine that has a working daemon; nothing in
+# this file depends on it. Owner decision, 05/09/2026.
 
 PY             ?= python3
 PYTEST         ?= $(PY) -m pytest -c backend/pyproject.toml
-COMPOSE        ?= docker compose
 MIGRATIONS_DIR ?= docs/Schema
+APP_HOST       ?= 127.0.0.1
+APP_PORT       ?= 8000
 
 # eval/ arrives with P0-T04/P0-T06; lint only what is on disk.
 LINT_PATHS := $(wildcard backend eval)
@@ -22,11 +24,11 @@ LINT_PATHS := $(wildcard backend eval)
 help:
 	@echo "AI Support SOC — make targets"
 	@echo "  test        run the unit tests (excludes db and live markers)"
-	@echo "  test-db     start the compose db service and run the db-marked tests"
+	@echo "  test-db     run the db-marked tests against TEST_DATABASE_URL"
 	@echo "  lint        ruff check + black --check over $(LINT_PATHS)"
 	@echo "  migrate     apply docs/Schema migrations to DATABASE_URL_OWNER"
-	@echo "  run-app     docker compose up app (FastAPI on :8000)"
-	@echo "  run-worker  docker compose up worker (jobs)"
+	@echo "  run-app     uvicorn on $(APP_HOST):$(APP_PORT)"
+	@echo "  run-worker  the job worker as a local process"
 	@echo "  backup      pg_dump --format=custom into backups/"
 
 # pytest exits 5 when it collects nothing. backend/tests/ is empty until
@@ -35,25 +37,23 @@ test:
 	@$(PYTEST) -m "not db and not live" backend/tests; rc=$$?; \
 	if [ $$rc -eq 5 ]; then echo "no tests collected — ok"; exit 0; fi; exit $$rc
 
+# TEST_DATABASE_URL wins from the environment; otherwise the last assignment in
+# .env is used. A trailing comment is only stripped when whitespace precedes the
+# `#`, so a `#` inside a DSN password survives.
 test-db:
-	@if ! $(COMPOSE) ps >/dev/null 2>&1; then \
-	  echo "test-db: the docker daemon is unreachable — see docs/plan/INBOX.md (2026-09-05 · P0 / P1 · BLOCKER)" >&2; \
+	@dsn="$${TEST_DATABASE_URL:-$$(sed -n 's/^[[:space:]]*TEST_DATABASE_URL[[:space:]]*=[[:space:]]*//p' .env 2>/dev/null | sed 's/[[:space:]][[:space:]]*#.*$$//' | tail -1)}"; \
+	if [ -z "$$dsn" ]; then \
+	  echo "test-db: TEST_DATABASE_URL is unset and .env carries no value for it." >&2; \
+	  echo "test-db: PostgreSQL is native on this host — use TEST_DATABASE_URL=postgresql:///soc_test" >&2; \
 	  exit 1; \
-	fi
-	$(COMPOSE) up -d db
-	@cid=$$($(COMPOSE) ps -q db); \
-	echo "test-db: waiting up to 60 s for the db healthcheck"; \
-	i=0; \
-	while [ $$i -lt 60 ]; do \
-	  state=$$(docker inspect -f '{{.State.Health.Status}}' "$$cid" 2>/dev/null || echo unknown); \
-	  if [ "$$state" = "healthy" ]; then echo "test-db: db healthy after $$i s"; break; fi; \
-	  i=$$((i + 1)); sleep 1; \
-	done; \
-	if [ "$$state" != "healthy" ]; then \
-	  echo "test-db: db did not become healthy within 60 s (last state: $$state)" >&2; \
+	fi; \
+	if ! psql "$$dsn" -tAc 'select 1' >/dev/null 2>&1; then \
+	  echo "test-db: TEST_DATABASE_URL is set but unreachable: $$dsn" >&2; \
+	  echo "test-db: create it with  createdb $${dsn##*/}" >&2; \
 	  exit 1; \
-	fi
-	$(PYTEST) -m "db and not live" backend/tests
+	fi; \
+	echo "test-db: using $$dsn"; \
+	TEST_DATABASE_URL="$$dsn" $(PYTEST) -m "db and not live" backend/tests
 
 # Guarded at parse time, not inside the recipe: an `exit 0` in a recipe line
 # only ends that line's shell, it does not stop the target.
@@ -70,10 +70,10 @@ migrate:
 	MIGRATIONS_DIR=$(MIGRATIONS_DIR) bash scripts/migrate.sh
 
 run-app:
-	$(COMPOSE) up app
+	PYTHONPATH=backend $(PY) -m uvicorn app.web.main:app --host $(APP_HOST) --port $(APP_PORT)
 
 run-worker:
-	$(COMPOSE) up worker
+	PYTHONPATH=backend $(PY) -m app.infra.worker
 
 backup:
 	bash scripts/backup.sh

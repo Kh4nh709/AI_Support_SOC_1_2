@@ -1,5 +1,9 @@
 # AI Support SOC — the three services of context pack §3: app, worker, db.
 #
+# OPTIONAL SINCE 05/09. PostgreSQL runs natively on this host and the Makefile
+# no longer references compose at all (Owner decision). This file is kept as a
+# portable path for a machine with a working daemon.
+#
 # NOT RUNNABLE YET, ON PURPOSE. `app.web.main` arrives in P2 and
 # `app.infra.worker` in P4, so `docker compose up` cannot succeed today; the
 # acceptance for this file is `docker compose config`, which needs no daemon.
