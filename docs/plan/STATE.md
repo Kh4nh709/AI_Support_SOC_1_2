@@ -25,7 +25,7 @@ Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (re
 | P0-T03 | Test harness: DB fixture, fake LLM, import-rule scan, canonical fixture | must | done | task/P0-T03 | P0-T01, P0-T02 | no — duyệt ĐẠT, rebase + chạy lại 9/9 (gồm DB thật và mục 9 kiểm bản vá `migrate.sh`), merge @ `eb3916d` | 2026-09-05 director | — |
 | P0-T04 | `eval/indexer_probe.py` — offline-verifiable indexer probe | must | done | task/P0-T04 | P0-T02 | no — duyệt ĐẠT, rebase + chạy lại 8/8, merge @ `8b68466`. Quy tắc 6 nay chạy được vì T03 đã merge | 2026-09-05 director | — |
 | P0-T05 | Inventory examples, format document, `inventory.validate()` | must | done | task/P0-T05 | P0-T02 | có — chủ đồ án viết `conf/inventory.yaml`, `conf/identities.yaml`, `conf/iocs.csv` từ 3 tệp `.example`. **Duyệt vòng 2 (độc lập) ĐẠT** — 10/10 nghiệm thu theo *prompt card*, đo lại trên worktree cô lập và trên cây đã merge; quy tắc nhập khẩu nay chạy thật (`test_import_rules.py` 12 passed, quét thẳng module → 0 vi phạm), `make test` 77 passed, `make lint` sạch. Không có phát hiện chặn; 9 ghi chú không chặn ở `docs/plan/tasks/P0/P0-T05.review.md` | 2026-09-05 reviewer | — |
-| P0-T06 | Package skeletons per context pack §4 | should | todo | task/P0-T06 | P0-T02 | no | 2026-09-05 director | **đang phát — 1/3 slot dùng** |
+| P0-T06 | Package skeletons per context pack §4 | should | review | task/P0-T06 | P0-T02 | no | 2026-09-05 coder | báo cáo `P0-T06.report.md` xong, 7/7 nghiệm thu ĐẠT, chờ Reviewer |
 
 ## Blockers (open)
 
