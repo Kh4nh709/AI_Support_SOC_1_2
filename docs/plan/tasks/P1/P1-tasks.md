@@ -5,64 +5,87 @@ and does the v3 schema apply cleanly.
 
 ---
 
-## ⛔ Dispatch precondition — nothing in this phase dispatches until P0-T07 merges
+## Dispatch state — read this before dispatching anything
 
-`P0-T07` is on branch `task/P0-T07`, status `approved`, **not on `main`**. Until it merges:
+**The P0-T07 precondition is cleared.** It merged at `0bdbede` while this plan was being written;
+DEC-021 records the re-verification and "every P0 task is now merged". Measured on `main` just now:
+the `test-db` recipe reads `TEST_DATABASE_URL` from the environment and then from `.env`, with no
+`docker compose` gate, and `grep -cE 'COMPOSE|docker compose' Makefile` → `0`. Six of the seven
+cards below end in a `make test-db` line and all six are now runnable.
 
-- `main`'s `make test-db` still gates on `docker compose ps` and exits 1 on this host (measured
-  on `main` today), so **every DB acceptance line in every card below is unrunnable**.
-- Verified in the `task/P0-T07` worktree today: `TEST_DATABASE_URL=postgresql:///soc_test make test-db`
-  → `test-db: using postgresql:///soc_test` · `3 passed, 77 deselected` · exit 0.
+**But migration 017 was re-blocked in the same window.** `2e516fc` records **DEC-020**, which
+withdraws DEC-016's acceptance of route D and sends 017 back to the Owner on two questions. So:
 
-Six of the seven cards here end in a `make test-db` line. Dispatching before the merge would
-produce six false failures. **Merge `task/P0-T07` into `main` first, then dispatch.**
+| | |
+|---|---|
+| Dispatchable now | **P1-T01, P1-T02, P1-T03, P1-T04, P1-T05** — six coder-hours of them are on the critical path |
+| Blocked | **P1-T06** (migration 017) — on DEC-020's two Owner questions, not on any task |
+| Conditional | **P1-T07** — runs on whatever migrations are on `main`; see its preflight |
 
----
+**What DEC-020 blocks P1-T06 on** (neither is mine to decide, and neither is a coder's):
+
+1. **§6.1 contradicts G12.** §6.1 orders `REVOKE UPDATE, DELETE ON … intake FROM app_rw`, but G12
+   requires every `intake` row to get `processed_at` or `error` within 60 s — which is an UPDATE by
+   the application. As written the contract forbids its own pipeline's commit step, **under every
+   route**. DEC-020 carries a measured fix (`REVOKE UPDATE, DELETE, TRUNCATE … FROM app_rw, PUBLIC`
+   then `GRANT UPDATE (processed_at, outcome, error) ON intake TO app_rw`, plus a trigger pinning
+   the receipt columns), but that is a §6.1 **wording change** and therefore the Owner's.
+2. **§6.1 says verbatim "The application connects as `app_rw`".** Route D has it connect as the
+   owner and `SET ROLE`. Changing that text is the Owner's for the same reason route C was.
+
+DEC-020 also corrects the gate wording: roles are cluster-global and `user1` cannot `CREATE ROLE`
+at all, so a conditional `DO` block only appears self-contained because a superuser created
+`app_rw` here first. **P1's exit gate must therefore read either "013–016 apply on a clean
+`soc_dev`, with 017 carved out" (DEC-013's shape, restored) or, once 017 is settled, "013–017
+apply on a clean `soc_dev` on a cluster where `app_rw` already exists".** Recording that is the
+Director's; I have written the cards for the first shape and flagged the second.
+
+**What survives DEC-016 and is not in question:** the statement-level `BEFORE TRUNCATE` trigger. An
+independent verification reproduced it, DEC-020 keeps it explicitly, and whichever route wins, 017
+carries it on all three tables. Re-measured on a throwaway database today: with only the row-level
+trigger, `TRUNCATE audit_events` as the owner wipes the table silently; with the statement-level
+trigger it raises `append-only table: audit_events is immutable` and the rows survive.
 
 ## ⚠️ Budget note — this phase does not fit its day, and by a lot
 
 | | |
 |---|---|
 | Sum of `must` estimates | **17 h** |
+| Of which dispatchable today (P1-T06 blocked) | **14.5 h** |
 | Day budget (`01-plan.md`, D1) | 8 h |
-| Overbooking | **+112 %** — the re-plan threshold is 30 % |
-| Wall-clock at the 3-coder cap | ≈ 6.5 h, *if* three coders run continuously from hour one |
-| Critical path | P1-T03 (2 h) → P1-T06 (2.5 h) → P1-T07 (1.5 h) = **6 h** |
+| Overbooking | **+112 %** on the full set, **+81 %** on the dispatchable set — the re-plan threshold is 30 % |
+| Wall-clock at the 3-coder cap | ≈ 6 h, *if* three coders run continuously from hour one |
+| Critical path (with T06 blocked) | P1-T01 (4 h) alone, or P1-T05 (3 h) → P1-T07 (1.5 h) = 4.5 h |
 
 Two things make the arithmetic worse than the ratio alone suggests:
 
-1. **D1 is already spent.** `HUONG-DAN-VAN-HANH.md` §0 merged D0 and D1 into 05/09 ("Chạy P0
-   buổi sáng, P1 buổi chiều"), and P0 consumed the whole day: P0's own budget note planned
-   10 h in 8 h, then T07 was added on top and is still in review. P1 therefore starts on
-   **06/09**, which is P2's D2.
-2. **Seven tasks means seven dispatch → review → merge cycles**, and that is Owner time, not
-   coder time. It is not in the 17 h.
+1. **D1 is already spent.** `HUONG-DAN-VAN-HANH.md` §0 merged D0 and D1 into 05/09 ("Chạy P0 buổi
+   sáng, P1 buổi chiều"), and P0 consumed the whole day: P0's own budget note planned 10 h in 8 h,
+   then T07 was added on top and merged only this evening. P1 therefore starts on **06/09**, which
+   is P2's D2.
+2. **Seven tasks means seven dispatch → review → merge cycles**, and that is Owner time, not coder
+   time. It is not in the 17 h. P0 needed two review rounds on two of its seven.
 
 ### What I propose moves (Director/Owner call — I am not deciding it)
 
-**Recommended: accept the overrun and run P1 as one full day on 06/09, cutting nothing.**
-Nothing here is padding: five migrations are five disjoint DDL files that P2 cannot start
-without, and the smoke test is the phase's other half. Compressing by merging cards saves
-coordination, not hours.
+**Recommended: accept the overrun and run P1 as one full day on 06/09, cutting nothing.** Nothing
+here is padding: five migrations are five disjoint DDL files that P2 cannot start without, and the
+smoke test is the phase's other half. Merging cards saves coordination, not hours.
 
-**If D2 must be protected, the single designated lever is P1-T04 (migration 015).** It is the
-only `must` in this phase that nothing reads before P4:
+**If D2 must be protected, the single designated lever is P1-T04 (migration 015).** It is the only
+`must` in this phase that nothing reads before P4:
 
 - `triage_labels`, `autoclose_reviews` → P6 labelling and P5 digest
 - `case_notes` → P5 · `eval_runs` → P7 · `system_health` → P5 health job
-- P2 needs 013 (enrichment upsert), 014 (intake/cursor/heartbeat), 016 (`alerts.manager_id`,
-  `origin_host`, `source` CHECK, `suggestion_visible`, `jobs.job_type='pull'`) and 017
-  (append-only on `intake`) — **and none of 015.**
+- P2 needs 013 (enrichment upsert), 014 (intake/cursor/heartbeat) and 016 (`alerts.manager_id`,
+  `origin_host`, `source` CHECK, `suggestion_visible`, `jobs.job_type='pull'`) — **and none of 015.**
 
-Moving it saves 2.5 h (17 h → 14.5 h, still +81 %) and **requires amending P1's exit gate**
-from "migrations 013–017 apply on a clean DB" to "013, 014, 016, 017 apply; 015 deferred to
-P4". That is an exit-gate change, so it is the Director's to make and the Owner's to approve.
+Moving it saves 2.5 h and **requires amending P1's exit gate** to drop 015 as well as 017. That is
+an exit-gate change: the Director proposes, the Owner approves.
 
-**Do not cut P1-T01 or P1-T06.** T01 is the model-acceptance evidence that gates P3 and is the
-first evidence chapter of the report. T06 carries G2/G11 append-only enforcement, and DEC-016
-states its TRUNCATE trigger is not optional.
-
----
+**Do not cut P1-T01.** It is the model-acceptance evidence that gates P3 and the first evidence
+chapter of the report. **P1-T06 is not a cut** — it is blocked on a contract question, which is a
+different thing and must be recorded as such.
 
 ## Critical path and waves
 
@@ -73,6 +96,7 @@ P1-T04  015 labels/reviews/… (2.5 h) ───┤
 P1-T05  016 alter alerts/jobs/… (3 h) ──┼──▶ P1-T07  make migrate + schema.sql (1.5 h)
 P1-T03  014 intake/cursor/hb (2 h) ──┬──┘
                                      └──▶ P1-T06  017 append_only_and_roles (2.5 h) ──▶ T07
+                                          ⛔ BLOCKED on DEC-020 — do not dispatch
 ```
 
 **The suggested decomposition in `prompts/P1.md` says the critical path is T02 → T04 → T05 → T06.
@@ -91,9 +115,14 @@ correctly. Proven today on a throwaway database with a stand-in `013`: clean DB 
 schema.sql, recorded 12 base migrations` → `applying 013_probe` → `1 applied, 12 already
 present`; re-run → `0 applied, 13 already present`.
 
-**Wave 1 (3 coders):** T01, T03, T05 — T03 is on the critical path, T05 is the largest migration.
-**Wave 2 (3 coders):** T02, T04, T06 — T06 the moment T03 is merged.
-**Wave 3:** T07, alone, after all five migrations are on `main`.
+**Wave 1 (3 coders):** T01, T05, T03 — T01 is the longest single task, T05 the largest migration,
+T03 the one T06 will need the moment DEC-020 is answered.
+**Wave 2 (3 coders):** T02, T04, and **T06 only if DEC-020 has landed by then**.
+**Wave 3:** T07, alone, after every migration that is going to merge has merged.
+
+**With P1-T06 blocked, the `014 → 017` edge is inert** and there is no multi-task critical path
+left: the longest chain is T05 (3 h) → T07 (1.5 h). T01 at 4 h is then the phase's longest pole and
+should be dispatched first for that reason alone.
 
 ---
 
@@ -102,8 +131,8 @@ present`; re-run → `0 applied, 13 already present`.
 | Gate item (`01-plan.md`) | Covered by | Notes |
 |---|---|---|
 | `docs/smoke-test-D1.md` with numbers | T01 | Not blocked — `.env` carries all six `LLM_*` keys and the model answered today |
-| Migrations 013–017 apply on a clean DB | T02, T03, T04, T05, T06 — proven together by **T07** | Each card proves its own migration on a fresh database; T07 proves the five in order |
-| DB tests green (`make test-db`) | every card's last acceptance line; **T07 runs the full suite** | Depends on P0-T07 |
+| Migrations 013–017 apply on a clean DB | T02, T03, T04, T05 — and T06 **only when DEC-020 is answered** — proven together by **T07** | **The gate wording must change.** DEC-020 restores DEC-013's carve-out: it reads "013–016 apply on a clean `soc_dev`" until 017 is settled, and even then needs the qualifier "on a cluster where `app_rw` already exists" unless the Owner grants `CREATEROLE`. Director's to record |
+| DB tests green (`make test-db`) | every card's last acceptance line; **T07 runs the full suite** | Unblocked — P0-T07 merged at `0bdbede` |
 | Model accepted or fallback chosen | **Owner action**, from T01's report | Not a task |
 
 ---
@@ -171,14 +200,15 @@ Everything below was measured on this host before these cards were written, per 
 
 | Claim in `prompts/P1.md` or handed to me | Measured | Consequence |
 |---|---|---|
-| "017 … `CREATE ROLE app_rw` and the owner role" | `app_rw` **already exists**: NOLOGIN, no attributes, `user1` is a member, `SET ROLE app_rw` succeeds. `user1` has `rolcreaterole = f`, so an unconditional `CREATE ROLE` **fails** | 017's role creation is a conditional `DO` block (DEC-016) |
-| "`conftest.py` connects as `app_rw` for tests that exercise the application" | `app_rw` is **NOLOGIN** — nothing can connect as it | Void. Route D: connect as the owner, issue `SET ROLE app_rw`. Struck from T06's card |
+| "017 … `CREATE ROLE app_rw` and the owner role" | `app_rw` **already exists**: NOLOGIN, no attributes, `user1` is a member, `SET ROLE app_rw` succeeds. `user1` has `rolcreaterole = f`, so an unconditional `CREATE ROLE` **fails** — and per DEC-020, a conditional one fails too the moment the role is genuinely absent, because roles are cluster-global and `user1` cannot create one at all | 017's role creation is a conditional `DO` block, and the gate carries the "on a cluster where `app_rw` already exists" qualifier unless the Owner grants `CREATEROLE` |
+| "`conftest.py` connects as `app_rw` for tests that exercise the application" | `app_rw` is **NOLOGIN** — nothing can connect as it | Void as written. Whether the application connects as the owner and issues `SET ROLE` is **DEC-020's second Owner question**, so T06's card leaves it open rather than assuming route D |
 | "`soc_dev` does not exist / `createdb soc_dev` belongs in the first migration task" | `soc_dev` **exists**, owner `user1`, 14 tables, 12 migrations recorded — DEC-015 created it | No card creates it. Cards create their own scratch databases instead |
 | §6.1 "`alerts` + … `source ∈ wazuh|lab|replay`" | `alerts.source` **already exists** (`text NOT NULL DEFAULT 'wazuh'`, from 002), with **no CHECK** | 016 adds `ck_alerts_source` only. `ADD COLUMN source` would fail |
 | §6.1 "drop `sampled_for_control`" | **No such column.** It is a jsonb *payload key* in `docs/phase-3-auto-close.md:166`, never a column | 016 uses `DROP COLUMN IF EXISTS` — a documented no-op. INBOX item filed |
 | §6.1 "`assets/identities/iocs` + `source`, `loaded_at`, `active`" | `iocs.source` **already exists** and is **half the primary key**: `006_chot_hop_dong.sql:54-56`, `iocs_pkey PRIMARY KEY (value, source)` | 013 adds `source` to `assets` and `identities` only; `iocs` gets `loaded_at` and `active` |
+| §6.1 "Append-only enforcement: `REVOKE UPDATE, DELETE ON audit_events, llm_runs, intake FROM app_rw`" | Contradicts **G12** — `intake.processed_at` / `outcome` / `error` are written by an UPDATE after the pipeline job runs, so the contract forbids its own commit step **under every route**. Found by DEC-020's verification, not by me | 017 is blocked; the fix is a §6.1 wording change and the Owner's. **P1-T03 must not add its own workaround** — 014 creates `intake` with no privileges attached, which is correct either way |
 | §6.1 "Dropped from v3: `enrich_cache`, `prompt_versions`" | `enrich_cache` exists (from 010), no FK or view depends on it. `prompt_versions` **never existed** | `DROP TABLE enrich_cache` assigned to 013. Nothing to do for `prompt_versions` |
-| §6.1 "`jobs.job_type ∈ pipeline\|triage\|investigate\|digest\|health\|pull`" | current `ck_jobs_job_type` is **`('enrich','triage')`** — architecture §5's table says 5 values without `pull`; §6.1 says 6 | §6.1 wins (§0 precedence). 016 recreates over the 6 v3 values |
+| §6.1 "`jobs.job_type ∈ pipeline\|triage\|investigate\|digest\|health\|pull`" | current `ck_jobs_job_type` is **`('enrich','triage')`** — measured pre-state: `INSERT … VALUES ('pull','x')` fails today and `('triage','x')` succeeds, which is the exact inversion P1-T05's acceptance 5 must produce — architecture §5's table says 5 values without `pull`; §6.1 says 6 | §6.1 wins (§0 precedence). 016 recreates over the 6 v3 values |
 | §6.1 "`audit_events.event_type` CHECK set = 21 v1 names + 6" | `ck_audit_event_type` holds exactly **21** values — counted | New set = 27. The 21 are pasted verbatim into T05's card |
 | Model unverified | Verified independently today: `deepseek-v4-flash`, HTTP 200, `json_object` honoured, content parsed as JSON, 1.33 s | T01 is not blocked |
 | Indexer holds 7,451 documents | `_count` on `wazuh-alerts-*` = **7,495** (live and growing), **42 distinct `rule.id`**, 10 distinct `rule.level` (3–12) | Enough for 30, but see T01's stratification note |
@@ -210,8 +240,8 @@ Everything below was measured on this host before these cards were written, per 
 | P1-T03 | Migration 014 `intake_cursor_heartbeat` | must | 2 h | — | no |
 | P1-T04 | Migration 015 `labels_reviews_notes_eval_health` | must | 2.5 h | — | no |
 | P1-T05 | Migration 016 `alter_alerts_jobs_llm_runs_users` | must | 3 h | — | no |
-| P1-T06 | Migration 017 `append_only_and_roles` | must | 2.5 h | P1-T03 | no |
-| P1-T07 | `make migrate` end-to-end, `schema.sql` regeneration, `make test-db` green | must | 1.5 h | T02–T06 | no |
+| P1-T06 | Migration 017 `append_only_and_roles` | must — **blocked** | 2.5 h | P1-T03 **and DEC-020's two Owner questions** | **yes — the two §6.1 questions in DEC-020** |
+| P1-T07 | `make migrate` end-to-end, `schema.sql` regeneration, `make test-db` green | must | 1.5 h | T02–T05, and T06 if it merges | no |
 
 File scope is disjoint by construction: one `.sql` file and one test file per migration task.
 `docs/Schema/schema.sql` is touched only by T07.
@@ -270,14 +300,14 @@ File scope is disjoint by construction: one `.sql` file and one test file per mi
 - Risk / notes: The largest card. `alerts.source` exists — add the CHECK, not the column. `sampled_for_control` does not exist — `DROP COLUMN IF EXISTS`. `ck_jobs_job_type` is currently `('enrich','triage')`, so `enrich` is dropped from the set as the phase spec requires.
 
 ### P1-T06 · Migration 017 `append_only_and_roles`
-- Priority: must
+- Priority: must — **BLOCKED on DEC-020, do not dispatch**
 - Goal: `audit_events`, `llm_runs` and `intake` are append-only against both the privilege layer and the trigger layer, TRUNCATE included.
-- Scope in: `017_append_only_and_roles.sql` + tests. Scope out: `conftest.py` (unchanged — nothing connects as `app_rw`); `schema.sql` (T07).
+- Scope in: `017_append_only_and_roles.sql` + tests. Scope out: `conftest.py`; `schema.sql` (T07).
 - Files — create: `docs/Schema/017_append_only_and_roles.sql`, `backend/tests/test_schema_v3_017.py` / modify: —
-- Contracts touched: §6.1 append-only clause — implements DEC-016 route D.
-- Depends on: **P1-T03** (`intake` must exist)
-- Estimate: 2.5 h
-- Risk / notes: `CREATE ROLE` is conditional or the migration aborts here (`app_rw` exists; `user1` has no `CREATEROLE`). The BEFORE TRUNCATE statement-level trigger is **not optional** (DEC-016) and gets its own acceptance line on all three tables.
+- Contracts touched: §6.1 append-only clause and the role split — **both currently under Owner review (DEC-020)**.
+- Depends on: **P1-T03** (`intake` must exist) **and DEC-020's two Owner questions being answered**.
+- Estimate: 2.5 h once unblocked
+- Risk / notes: The card is written and carries everything that is settled — the trigger function, the six triggers, the conditional role creation, the explicit privilege list — with the two contested clauses marked and left unwritten. **It needs one re-plan pass after the DEC lands**, because the answer to question 1 changes the `REVOKE`/`GRANT` lines and the answer to question 2 changes whether `conftest.py` is in scope at all. Do not let a coder guess either. The `BEFORE TRUNCATE` statement-level trigger is settled and survives DEC-016's withdrawal.
 
 ### P1-T07 · `make migrate` end to end, `schema.sql` regeneration, `make test-db` green
 - Priority: must
@@ -285,7 +315,7 @@ File scope is disjoint by construction: one `.sql` file and one test file per mi
 - Scope in: regenerating `schema.sql`; `backend/tests/test_schema_v3.py`. Scope out: editing any `NNN_*.sql`; editing `build_schema.py`; the `Makefile`.
 - Files — create: `backend/tests/test_schema_v3.py` / modify: `docs/Schema/schema.sql` (regenerated, never hand-edited)
 - Contracts touched: none
-- Depends on: P1-T02, P1-T03, P1-T04, P1-T05, P1-T06 — all merged into `main`
+- Depends on: P1-T02, P1-T03, P1-T04, P1-T05 merged into `main`; P1-T06 too **if it has been unblocked and merged**. Its preflight counts what is actually there and says which case it is in
 - Estimate: 1.5 h
 - Risk / notes: If a migration is broken this is where it shows. The task **reports** the failure and does not fix another task's `.sql` file; that goes back to its owner.
 
@@ -311,9 +341,13 @@ File scope is disjoint by construction: one `.sql` file and one test file per mi
    two playbooks branching on `crown_jewel` (`kb/playbooks/malware.md:36`,
    `kb/playbooks/ssh_brute_force.md:34`, rewritten at the P3 playbook review). 013 lands the
    column change; it does not settle either.
-5. **`docs/limitations.md` (P8) owes one line from DEC-016**: the application session can
-   `RESET ROLE` to `user1`, which owns the database and can `DROP TRIGGER`. Route D's residual,
-   irreducible weakening.
+5. **`docs/limitations.md` (P8) owes a line about the append-only escape surface, and DEC-020
+   widened it.** Not "a session can `RESET ROLE`" — measured, **all** of `RESET ROLE`,
+   `SET ROLE NONE`, `SET ROLE user1`, `SET SESSION AUTHORIZATION user1` and `DISCARD ALL`
+   (pgbouncer's default reset query) return a pooled connection to the owner, which can then
+   `DROP TRIGGER`. The line must say "the application's own connection can return to the owner by
+   several ordinary means". Whatever route 017 ends up taking, this is the residual weakening to
+   publish.
 6. **DEC-017 / DEC-019 — the G1 source — does not touch P1.** I was told it is still escalated;
    `main` @ `f1c7472` records DEC-019 as the Owner's answer ("both"). Either way nothing in this
    phase depends on it: no card here reads an alert source, and `alerts.source ∈ wazuh|lab|replay`
