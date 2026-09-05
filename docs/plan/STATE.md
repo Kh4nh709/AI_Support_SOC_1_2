@@ -20,7 +20,7 @@ Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (re
 
 | Task | Title | Priority | Status | Branch | Depends on | Owner action needed? | Last update |
 |---|---|---|---|---|---|---|---|
-| P0-T01 | Repo hygiene and `.gitignore` | must | changes | task/P0-T01 | — | no — AC5/AC8 đã sửa trong card (DEC-006); còn lại là Coder chỉnh số liệu báo cáo | 2026-09-05 director |
+| P0-T01 | Repo hygiene and `.gitignore` | must | review | task/P0-T01 | — | no | 2026-09-05 coder |
 | P0-T02 | Build scaffold: requirements, pyproject, Makefile, compose, `.env.example` | must | approved | task/P0-T02 | — | no — hết chặn, DEC-003 | 2026-09-05 reviewer |
 | P0-T03 | Test harness: DB fixture, fake LLM, import-rule scan, canonical fixture | must | todo | task/P0-T03 | P0-T01, P0-T02 | yes — INBOX 05/09 P0/P1 BLOCKER (no DB for `make test-db`) | 2026-09-05 planner |
 | P0-T04 | `eval/indexer_probe.py` — offline-verifiable indexer probe | must | todo | task/P0-T04 | P0-T02 | yes — live run needs `soc_ro` (INBOX 05/09 P0/P2 BLOCKER) | 2026-09-05 planner |
