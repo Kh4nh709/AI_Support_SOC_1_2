@@ -73,7 +73,7 @@ Details: Verified on IA1803 as `user1`. (a) Docker is installed (29.7.2, compose
 Blocks: `make test-db` on every task from P0-T03 onward; P1's migration verification; P2's dedup concurrency tests (two sessions, advisory locks) which cannot be faked. Does **not** block: P0-T01…T06 authoring and their acceptance, `make test`, P1-T01 smoke test.
 Options: A) A PostgreSQL superuser grants the account database-creation rights — `sudo -u postgres psql -c 'ALTER ROLE user1 CREATEDB'` — after which `TEST_DATABASE_URL=postgresql://user1@127.0.0.1:5432/soc_test` works with no docker at all. One command, recommended. B) Fix docker access — `sudo chown root:docker /var/run/docker.sock` (or add the account to gid 1001) — which also unblocks `make run-app` / `run-worker` later, and keeps the test database inside the compose stack on port 55432 as `.env.example` assumes. C) The Owner runs `make test-db` by hand at each review point and pastes the output — no privilege change, but every Reviewer verdict then depends on a human step.
 Frozen contract affected: none
-Resolved: open
+Resolved: 2026-09-05 · DEC-008 · option A. Verified independently: `rolcreatedb = t`, createdb/CREATE/INSERT/SELECT/dropdb all pass. **Correction to option A's DSN:** `postgresql://user1@127.0.0.1:5432/soc_test` fails with `fe_sendauth: no password supplied` — TCP needs a password here. The recorded value is `TEST_DATABASE_URL=postgresql:///soc_test` (socket, passwordless, no docker). Closing this immediately exposed a second defect that only a real database could reveal: `make migrate` exits 3 on a clean DB because migrations 008–012 never record themselves; the fix is specified and pre-verified in P0-T03 design note 7.
 
 ## 2026-09-05 · P0-T01 · QUESTION
 From: Reviewer

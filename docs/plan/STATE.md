@@ -18,21 +18,21 @@ Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (re
 
 ## Tasks
 
-| Task | Title | Priority | Status | Branch | Depends on | Owner action needed? | Last update |
-|---|---|---|---|---|---|---|---|
+| Task | Title | Priority | Status | Branch | Depends on | Owner action needed? | Last update | Dispatch |
+|---|---|---|---|---|---|---|---|---|
 | P0-T01 | Repo hygiene and `.gitignore` | must | done | task/P0-T01 | — | no — duyệt vòng 2 ĐẠT (8/8), merge vào `main` @ `8ecddb5` | 2026-09-05 director |
 | P0-T02 | Build scaffold: requirements, pyproject, Makefile, compose, `.env.example` | must | done | task/P0-T02 | — | no — đã rebase lên `main`, chạy lại 9/9 lệnh nghiệm thu ĐẠT, merge @ `7450778` | 2026-09-05 director |
-| P0-T03 | Test harness: DB fixture, fake LLM, import-rule scan, canonical fixture | must | todo | task/P0-T03 | P0-T01, P0-T02 (ĐÃ merge) | yes — INBOX 05/09 P0/P1 BLOCKER (no DB for `make test-db`) | 2026-09-05 planner |
-| P0-T04 | `eval/indexer_probe.py` — offline-verifiable indexer probe | must | todo | task/P0-T04 | P0-T02 (ĐÃ merge) | không chặn — cả 8 lệnh nghiệm thu chạy trên fixture ghi sẵn; `soc_ro` chỉ chặn lần chạy THẬT (`--save-samples`), là việc của chủ đồ án sau khi merge | 2026-09-05 director |
-| P0-T05 | Inventory examples, format document, `inventory.validate()` | must | todo | task/P0-T05 | P0-T02 (ĐÃ merge) | no — hết chặn, DEC-004 | 2026-09-05 director |
-| P0-T06 | Package skeletons per context pack §4 | should | todo | task/P0-T06 | P0-T02 (ĐÃ merge) | no | 2026-09-05 planner |
+| P0-T03 | Test harness: DB fixture, fake LLM, import-rule scan, canonical fixture | must | todo | task/P0-T03 | P0-T01, P0-T02 (ĐÃ merge) | không chặn — `CREATEDB` đã cấp (DEC-008), nghiệm thu nay là chạy DB THẬT, skip = trượt. Kèm sửa `scripts/migrate.sh` (đã tự kiểm) | 2026-09-05 director | **DISPATCH 1/3**
+| P0-T04 | `eval/indexer_probe.py` — offline-verifiable indexer probe | must | todo | task/P0-T04 | P0-T02 (ĐÃ merge) | không chặn — cả 8 lệnh nghiệm thu chạy trên fixture ghi sẵn; `soc_ro` chỉ chặn lần chạy THẬT (`--save-samples`), là việc của chủ đồ án sau khi merge | 2026-09-05 director | **hàng đợi** — vào chỗ trống đầu tiên
+| P0-T05 | Inventory examples, format document, `inventory.validate()` | must | todo | task/P0-T05 | P0-T02 (ĐÃ merge) | no — hết chặn, DEC-004 | 2026-09-05 director | **DISPATCH 2/3**
+| P0-T06 | Package skeletons per context pack §4 | should | todo | task/P0-T06 | P0-T02 (ĐÃ merge) | no | 2026-09-05 planner | **DISPATCH 3/3**
 
 ## Blockers (open)
 
 | Task | Since | What is blocked | Who can unblock |
 |---|---|---|---|
 | P0 exit gate item 2 | 2026-09-05 | `eval/indexer_probe.py` cannot be run for real — `soc_ro` does not exist. P0-T04 ships and is accepted offline; the live run stays an Owner action. | Owner (INBOX 05/09 · P0/P2 · BLOCKER) |
-| P0-T03 / P1 / P2 | 2026-09-05 | `make test-db` cannot be exercised by any agent: docker socket unreachable and the account has no `CREATEDB`. DB tests skip loudly; P1's "migrations apply on a clean DB" cannot be verified. | Owner (INBOX 05/09 · P0/P1 · BLOCKER, option A is one command) |
+| ~~P0-T03 / P1 / P2~~ | 2026-09-05 | **ĐÓNG 05/09 — DEC-008.** `CREATEDB` đã cấp và tự kiểm lại: `rolcreatedb = t`, createdb/CREATE/INSERT/SELECT/dropdb đều chạy. `TEST_DATABASE_URL=postgresql:///soc_test` (socket; dạng TCP trong báo cáo đòi mật khẩu, không dùng được). Đóng nó lộ ra lỗi thứ hai: `make migrate` thoát 3 trên DB sạch — xem DEC-008. | — |
 
 ## Owner actions (Director writes; Owner clears)
 
@@ -49,7 +49,7 @@ Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (re
 - [x] **Owner/Director:** commit khối sửa kế hoạch — xong 05/09, `main` @ `202e9ca` (14 tệp, DEC-002…DEC-006 + 2 phiếu duyệt). Bản sao mới của repo nay tìm được đầy đủ vết phê duyệt; working tree sạch nên AC3 của P0-T01 đo được thật. Coder phải rebase `task/P0-T01`, `task/P0-T02` lên `main` trước khi làm lại.
 - [x] **Director:** soát trước khi phát 4 card T03–T06 theo DEC-006 — xong 05/09. Chạy thật 37 lệnh nghiệm thu trên cây "main + P0-T02 đã merge"; 3 nghi vấn, 2 bị bác sau khi phản biện, 1 đúng. Đã sửa 9 chỗ (5 card gọi `pytest` trần trái DEC-005; T05 bắt viết bảng ánh xạ trái DEC-004; `P0-tasks.md` còn `013`–`016`; T03 `localhost:9400` trái DEC-001; …). Biên bản: `docs/plan/tasks/P0/P0-predispatch-audit.md`. Còn 7 điểm cần anh quyết, xem §Still open.
 - [ ] **Director:** DEC-005 chốt 2 lời gọi chiến thuật của Planner — migration nằm phẳng trong `docs/Schema/`, pytest luôn gọi `python3 -m pytest -c backend/pyproject.toml`. Mọi lệnh nghiệm thu trong task card dùng đúng dạng đó.
-- [ ] Mở đường cho test DB (INBOX 05/09 · P0/P1 · BLOCKER). Nhanh nhất: `sudo -u postgres psql -c 'ALTER ROLE user1 CREATEDB'`. Chặn P1 exit gate.
+- [x] Mở đường cho test DB — xong 05/09, `ALTER ROLE user1 CREATEDB`. Đã tự kiểm lại đầu-cuối (DEC-008). DSN dùng được là `postgresql:///soc_test`, KHÔNG phải dạng TCP `user1@127.0.0.1:5432` (đòi mật khẩu). P1 exit gate hết chặn.
 - [ ] Sau khi có `soc_ro`: chạy `python3 eval/indexer_probe.py --save-samples 5`, dán bảng đếm theo ngày + ngày index sớm nhất vào STATE.md, commit 5 fixture mẫu. Đóng P0 exit gate item 2 và trả lời luôn câu hỏi retention.
 - [ ] Sau khi P0-T05 merge: viết `conf/inventory.yaml` (phải có `user1-IA1803`), `conf/identities.yaml` (phải có `user1`), `conf/iocs.csv` từ ba tệp `.example`; kiểm bằng `python3 -c "import sys;sys.path.insert(0,'backend');from app.enrichment.inventory import validate;print(validate() or 'OK')"`.
 - [ ] Xác nhận `Bản đồ kiến trúc AI Support SOC.html` + `_files/` ở gốc repo được đưa vào `.gitignore` (P0-T01) — bản page-save cũ, bản hiện hành là `docs/kien-truc-v3-14-ngay.html`.
