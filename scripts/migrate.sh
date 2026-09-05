@@ -29,7 +29,15 @@ present=0
 if [ -z "$(psql "$DSN" -tAc "SELECT to_regclass('public.schema_migrations')")" ]; then
   echo "migrate: schema_migrations absent — applying the base schema $MIG_DIR/schema.sql"
   psql "$DSN" -v ON_ERROR_STOP=1 -q -f "$MIG_DIR/schema.sql"
-  echo "migrate: applied schema.sql (records 001_bang_nen … 012_hop_dong_job_llm itself)"
+  # schema.sql IS migrations 001-012 concatenated, so each one it was built from is
+  # applied by definition. Five (008-012) never learned to record themselves, so
+  # record the whole set here, read from schema.sql's own source banners.
+  for v in $(grep -oE 'migrations/[0-9]{3}_[a-z0-9_]+\.sql' "$MIG_DIR/schema.sql" \
+             | sed 's|.*/||; s|\.sql$||' | sort -u); do
+    psql "$DSN" -v ON_ERROR_STOP=1 -tAc \
+      "INSERT INTO schema_migrations (version) VALUES ('$v') ON CONFLICT DO NOTHING" >/dev/null
+  done
+  echo "migrate: applied schema.sql, recorded $(psql "$DSN" -tAc 'SELECT count(*) FROM schema_migrations') base migrations"
 fi
 
 for f in "$MIG_DIR"/[0-9][0-9][0-9]_*.sql; do
