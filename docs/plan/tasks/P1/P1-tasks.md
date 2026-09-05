@@ -285,7 +285,7 @@ File scope is disjoint by construction: one `.sql` file and one test file per mi
 - Priority: must
 - Goal: the intake ledger and the puller's two state tables exist with the UNIQUE that makes double-pull idempotent.
 - Scope in: `014_intake_cursor_heartbeat.sql` + tests. Scope out: the puller (P2); `schema.sql` (T07).
-- Files — create: `docs/Schema/014_intake_cursor_heartbeat.sql`, `backend/tests/test_schema_v3_014.py` / modify: —
+- Files — create: `docs/Schema/014_intake_cursor_heartbeat.sql`, `backend/tests/test_schema_v3_014.py`, `backend/tests/fixtures/archive_line_5503.json` (**sửa 06/09, DEC-028** — ghi chú thiết kế 8 + nghiệm thu 10 đòi fixture này, bản đầu bỏ sót) / modify: —
 - Contracts touched: §6.1 — new tables, transcribe.
 - Depends on: —
 - Estimate: 2 h

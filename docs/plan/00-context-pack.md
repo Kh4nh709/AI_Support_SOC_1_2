@@ -196,7 +196,7 @@ Create a read-only indexer user, copy the indexer root CA file (on this host: `/
 
 ## 12. Definition of Done (global)
 
-A task is done when: all acceptance tests in its card pass in a clean checkout; `make test` is green; `tests/test_import_rules.py` passes; the linter passes on every template touched; no frozen contract was changed; the task report exists; the Reviewer returned APPROVE; the Director marked it done in `docs/plan/STATE.md`.
+A task is done when: all acceptance tests in its card pass in a clean checkout; `make test` is green; `tests/test_import_rules.py` passes; the linter passes on every template touched; no frozen contract was changed; the task report exists; the Reviewer returned APPROVE **and the `.review.md` recording it is committed on the task branch** (DEC-028 — this clause used to outcome-test the Reviewer while artifact-testing the Coder one clause earlier; a verdict that exists only in chat is not one, and `backend/tests/test_review_artifacts.py` enforces it); the Director marked it done in `docs/plan/STATE.md`.
 
 A phase is done when its exit gate in `docs/plan/01-plan.md` is satisfied and the Director has recorded it.
 
