@@ -4,9 +4,15 @@ WHY THIS EXISTS (DEC-028). P1-T02 and P1-T03 were both reviewed properly: the
 Reviewers ran every acceptance command, wrote a full `.review.md`, and set their
 STATE.md row to `approved`. Both then reported truthfully that they had done so.
 Neither artifact reached anyone. They were written *inside the task worktree*,
-left untracked, and the Director never looks in a sibling worktree — `git
-worktree remove` would have deleted the only copy. The verdicts survived purely
-because they were also stated in chat.
+left untracked, and the Director never looks in a sibling worktree. The verdicts
+reached the merge only because they were also stated in chat; nothing in the
+repository carried them.
+
+Measured, because the first draft of this docstring overstated it: `git worktree
+remove` REFUSES on untracked files (`fatal: … contains modified or untracked
+files`, exit 128) and the file survives. Only `--force` destroys it, and that is
+silent. So the refusal is a safety net nobody was reading — a Director cleaning
+up and hitting that fatal is being told there is unrescued work in there.
 
 The gap that allowed it: context pack §12 artifact-tests the Coder's report ("the
 task report exists") but only outcome-tests the Reviewer's ("the Reviewer
@@ -22,7 +28,7 @@ the claim that the definition of done in §12 was met.
 TRACKED, NOT MERELY PRESENT. The check is `git ls-files`, not `path.exists()`.
 The exact failure being guarded against was a file that existed on disk and in no
 commit, so existence alone would have passed while the artifact was still one
-`worktree remove` from gone.
+`worktree remove --force` from gone.
 
 ESCAPE. A row that is legitimately `done` with no review carries
 `review-waived: <reason>` in any cell; say why, the way `superseded-ok` works.
@@ -122,5 +128,5 @@ def test_approved_or_done_row_has_a_committed_verdict(task_id, status, line):
     assert _tracked(rel), (
         f"{task_id} is `{status}` and {rel} exists but git does not track it. "
         "This is the exact P1-T02/P1-T03 failure: written in a worktree, never "
-        "committed, one `git worktree remove` from gone. `git add` it (DEC-028)."
+        "committed, so it reaches no merge and no reader. `git add` it (DEC-028)."
     )
