@@ -681,3 +681,45 @@ def test_build_cases_never_pads_a_short_live_sample_but_may_cycle_offline():
     assert sum(1 for c in live if c.klass == "real") == 4
     assert sum(1 for c in offline if c.klass == "real") == smoke.N_REAL
     assert len(offline) == smoke.N_TOTAL_ALERTS
+
+
+def test_the_per_call_table_gives_a_repair_round_its_own_row(tmp_path):
+    """A repair is a second call, so "per call" must show it — with its own tokens."""
+    cfg, _ = smoke.load_config(Path(os.devnull))
+    record = {
+        "label": "real-01",
+        "class": "real",
+        "rule_id": "40112",
+        "rule_level": 12,
+        "severity": "critical",
+        "prompt_bytes": 2673,
+        "calls": 2,
+        "origin": "live",
+        "latency_s": 12.5,
+        "usage": {"prompt_tokens": 2400, "completion_tokens": 900, "reasoning_tokens": 800},
+        "reasoning_present": True,
+        "cost_usd": 0.002,
+        "excerpt": "first answer",
+        "json_ok": True,
+        "problems_first": ["confidence: 'very_high' is not one of low|medium|high"],
+        "schema_ok_first": False,
+        "schema_ok_final": True,
+        "problems": [],
+        "repaired": True,
+        "repair_origin": "live",
+        "repair_latency_s": 9.5,
+        "repair_usage": {"prompt_tokens": 2500, "completion_tokens": 700, "reasoning_tokens": 600},
+        "repair_reasoning_present": True,
+        "repair_cost_usd": 0.0008,
+        "repair_excerpt": "repaired answer",
+    }
+    summary = smoke.summarise([record], cfg)
+
+    text = smoke.render_report(summary, [record], cfg=cfg, cache_dir=tmp_path, offline=False)
+    table = [line for line in text.splitlines() if line.startswith("| real-01")]
+
+    assert len(table) == 2, table
+    assert "real-01·repair" in table[1]
+    assert "9.50" in table[1] and "12.50" in table[0]
+    assert "600" in table[1], "the repair round's own reasoning_tokens"
+    assert "confidence" in text, "the problem that caused the repair is counted in §6"

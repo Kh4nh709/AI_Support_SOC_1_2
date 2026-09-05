@@ -784,7 +784,8 @@ def store_cached(cache_dir: Path, key: str, payload: dict[str, Any]) -> Path:
     directory = Path(cache_dir)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{key}.json"
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    stamped = {"stored_at": datetime.now(UTC).isoformat(timespec="seconds"), **payload}
+    path.write_text(json.dumps(stamped, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return path
 
 
@@ -1138,10 +1139,12 @@ def run_case(
             record["repair_origin"] = second["origin"]
             record["repair_latency_s"] = second.get("latency_s")
             record["repair_usage"] = second.get("usage") or {}
-            record["cost_usd"] += second.get(
+            record["repair_reasoning_present"] = bool(second.get("reasoning_present"))
+            record["repair_cost_usd"] = second.get(
                 "cost_usd",
                 compute_cost(record["repair_usage"], cfg.price_in_per_m, cfg.price_out_per_m),
             )
+            record["cost_usd"] += record["repair_cost_usd"]
             repaired_obj, repair_error = _decode(second.get("content", ""))
             record["repair_excerpt"] = _excerpt(second.get("content", ""))
             final = [repair_error] if repair_error else validate_triage_v2(repaired_obj)
@@ -1211,9 +1214,9 @@ def summarise(records: Sequence[dict[str, Any]], cfg: Config) -> dict[str, Any]:
 
     origins = {"live": 0, "cache": 0, "canned": 0, "skipped": 0}
     for record in records:
-        origins[record.get("origin", "skipped")] = origins.get(record.get("origin"), 0) + 1
-        if record.get("repair_origin"):
-            origins[record["repair_origin"]] += 1
+        for origin in (record.get("origin"), record.get("repair_origin")):
+            if origin:
+                origins[origin] = origins.get(origin, 0) + 1
 
     completion = sum(r.get("usage", {}).get("completion_tokens", 0) or 0 for r in records)
     completion += sum(r.get("repair_usage", {}).get("completion_tokens", 0) or 0 for r in records)
@@ -1335,12 +1338,18 @@ def render_report(
         f"{sum(1 for r in records if r['class'] == 'adversarial')} adversarial) plus "
         f"{summary['overall']['repairs']} repair round(s)"
     )
-    add(f"- **Total spend:** ${summary['total_cost_usd']:.4f}")
+    add(
+        f"- **Total spend:** ${summary['total_cost_usd']:.4f} — the billed cost of the "
+        f"{summary['total_calls']} calls below, whether paid by this run or by the run that "
+        f"filled the cache"
+    )
     add(
         f"- **Provenance:** {summary['origins']['live']} live · "
         f"{summary['origins']['cache']} replayed from cache · "
         f"{summary['origins']['canned']} canned (offline) · "
-        f"{summary['origins']['skipped']} skipped"
+        f"{summary['origins']['skipped']} skipped. A cache entry is a recorded live response, "
+        f"keyed by `sha256(model + system + user)`; re-rendering this report from a warm cache "
+        f"makes no network call and costs nothing (design note 9)."
     )
     add(
         f"- **Full raw responses:** `{Path(cache_dir).relative_to(REPO_ROOT) if str(cache_dir).startswith(str(REPO_ROOT)) else cache_dir}/`"
@@ -1523,18 +1532,42 @@ def render_report(
     )
     add("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for record in records:
-        usage = record.get("usage") or {}
-        add(
-            f"| {record['label']} | {record['class']} | `{record['rule_id']}` | "
-            f"{record['prompt_bytes']:,} | {_num(record.get('latency_s'), 2)} | "
-            f"{_num(usage.get('prompt_tokens'), 0)} | "
-            f"{_num(usage.get('completion_tokens'), 0)} | "
-            f"{_num(usage.get('reasoning_tokens'), 0)} | "
-            f"{'yes' if record.get('reasoning_present') else 'no'} | "
-            f"{'ok' if record.get('json_ok') else 'FAIL'} | "
-            f"{'ok' if record.get('schema_ok_first') else ('repaired' if record.get('schema_ok_final') else 'FAIL')} | "
-            f"{(record.get('cost_usd') or 0.0):.5f} | `{_cell(record.get('excerpt', ''))}` |"
-        )
+        rows_for_record = [
+            (
+                record["label"],
+                record.get("usage") or {},
+                record.get("latency_s"),
+                record.get("reasoning_present"),
+                record.get("json_ok"),
+                "ok" if record.get("schema_ok_first") else "FAIL",
+                record.get("cost_usd", 0.0) - (record.get("repair_cost_usd") or 0.0),
+                record.get("excerpt", ""),
+            )
+        ]
+        if record.get("repaired"):
+            rows_for_record.append(
+                (
+                    f"{record['label']}·repair",
+                    record.get("repair_usage") or {},
+                    record.get("repair_latency_s"),
+                    record.get("repair_reasoning_present"),
+                    not record.get("problems"),
+                    "ok" if record.get("schema_ok_final") else "FAIL",
+                    record.get("repair_cost_usd") or 0.0,
+                    record.get("repair_excerpt", ""),
+                )
+            )
+        for label, usage, latency, reasoning, json_ok, schema, cost, excerpt in rows_for_record:
+            add(
+                f"| {label} | {record['class']} | `{record['rule_id']}` | "
+                f"{record['prompt_bytes']:,} | {_num(latency, 2)} | "
+                f"{_num(usage.get('prompt_tokens'), 0)} | "
+                f"{_num(usage.get('completion_tokens'), 0)} | "
+                f"{_num(usage.get('reasoning_tokens'), 0)} | "
+                f"{'yes' if reasoning else 'no'} | "
+                f"{'ok' if json_ok else 'FAIL'} | {schema} | "
+                f"{cost:.5f} | `{_cell(excerpt)}` |"
+            )
     add("")
 
     add("## 8 · Recommendation (the decision is the Owner's)")
