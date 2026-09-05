@@ -78,7 +78,13 @@ These need a decision before or with dispatch; none blocks the others:
 
 ## Dispatch prerequisite
 
-Every one of T03–T06 carries `Depends on: P0-T02 — verify it is merged into main`.
-`P0-T02` is approved but **not merged**; `Makefile`, `backend/pyproject.toml`,
-`.env.example` and `scripts/` exist only on the branch. Merging it is the gate.
-`docs/plan/STATE.md` is the only conflicting file and `main`'s copy wins wholesale.
+All four cards carry `Depends on: P0-T02 — verify it is merged into main`. **That gate is now
+closed:** P0-T01 merged at `8ecddb5` and P0-T02 at `7450778`, the latter rebased onto main
+first and re-verified — all nine of its acceptance commands re-run on the rebased tree,
+including the §6.3 comparison, which returns `missing: []` and exactly the four Compose-only
+keys DEC-003 kept out of the contract.
+
+The seven questions above are settled by **DEC-007**; the corresponding card edits are applied.
+`soc_ro` gates only P0-T04's live `--save-samples` run, not its acceptance, which is driven
+entirely by recorded fixtures — so P0-T04 is dispatchable. The remaining Owner blocker that
+actually stops work is `CREATEDB`, and it stops P1's exit gate rather than any P0 card.

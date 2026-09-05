@@ -1,6 +1,6 @@
 # STATE — AI Support SOC v3 build board
 
-Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (review verdict), Director (everything else). Keep rows one line. Status ∈ todo · in-progress · review · changes · done · blocked · cut.
+Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (review verdict), Director (everything else). Keep rows one line. Status ∈ todo · in-progress · review (Coder reported) · approved (Reviewer APPROVE, awaiting merge) · changes (Reviewer CHANGES) · done (merged by Director) · blocked · cut. The authority for this list is `README.md` §Conventions; `prompts/reviewer.md` mandates `approved` on an APPROVE. Never drop `approved` — it is what makes the approved-but-unmerged queue visible.
 
 ## Phase gates
 
@@ -23,7 +23,7 @@ Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (re
 | P0-T01 | Repo hygiene and `.gitignore` | must | done | task/P0-T01 | — | no — duyệt vòng 2 ĐẠT (8/8), merge vào `main` @ `8ecddb5` | 2026-09-05 director |
 | P0-T02 | Build scaffold: requirements, pyproject, Makefile, compose, `.env.example` | must | done | task/P0-T02 | — | no — đã rebase lên `main`, chạy lại 9/9 lệnh nghiệm thu ĐẠT, merge @ `7450778` | 2026-09-05 director |
 | P0-T03 | Test harness: DB fixture, fake LLM, import-rule scan, canonical fixture | must | todo | task/P0-T03 | P0-T01, P0-T02 (ĐÃ merge) | yes — INBOX 05/09 P0/P1 BLOCKER (no DB for `make test-db`) | 2026-09-05 planner |
-| P0-T04 | `eval/indexer_probe.py` — offline-verifiable indexer probe | must | todo | task/P0-T04 | P0-T02 (ĐÃ merge) | yes — live run needs `soc_ro` (INBOX 05/09 P0/P2 BLOCKER) | 2026-09-05 planner |
+| P0-T04 | `eval/indexer_probe.py` — offline-verifiable indexer probe | must | todo | task/P0-T04 | P0-T02 (ĐÃ merge) | không chặn — cả 8 lệnh nghiệm thu chạy trên fixture ghi sẵn; `soc_ro` chỉ chặn lần chạy THẬT (`--save-samples`), là việc của chủ đồ án sau khi merge | 2026-09-05 director |
 | P0-T05 | Inventory examples, format document, `inventory.validate()` | must | todo | task/P0-T05 | P0-T02 (ĐÃ merge) | no — hết chặn, DEC-004 | 2026-09-05 director |
 | P0-T06 | Package skeletons per context pack §4 | should | todo | task/P0-T06 | P0-T02 (ĐÃ merge) | no | 2026-09-05 planner |
 

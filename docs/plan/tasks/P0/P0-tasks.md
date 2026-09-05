@@ -1,6 +1,16 @@
 # P0 · Preparation — task cards
 
 Phase objective: make the repo buildable and every later phase unblocked — environment, coordination files, canonical fixtures.
+
+**DEC-007 — which copy of a card is authoritative.** Each task has a full
+`docs/plan/tasks/P0/<TASK_ID>.prompt.md` and a shorter entry in this file. DEC-006 makes the
+acceptance set the Director's deliverable, so it needs exactly one home:
+**`<TASK_ID>.prompt.md` is authoritative** for acceptance commands, file scope and design
+notes. This file is the Planner's index — estimates, waves, dependencies, risk notes — and
+where it restates an acceptance command that copy must match the prompt verbatim or not
+appear at all. A Coder executes the prompt; a Reviewer verifies against the prompt; if the
+two disagree the prompt wins, and the divergence is a Director defect to fix rather than a
+Coder's judgment call.
 Day budget: 1 day (≈ 8 h), planned for 05/09/2026 (D0 and D1 are merged into one day, see `HUONG-DAN-VAN-HANH.md` §0).
 
 ## Budget note
@@ -15,7 +25,7 @@ P0-T02 (3 h, build scaffold)  ──┬──▶ P0-T03 (3 h, test harness) ─�
 P0-T01 (0.5 h, git hygiene) ────┴──▶ P0-T05 (1.5 h, conf examples)
 ```
 
-Wave 1 (2 coders): T01, T02. Wave 2 (3 coders): T03, T04, T05. Wave 3: T06.
+Wave 1 (2 coders): T01, T02. Wave 2 (3 coders): T03, T04, T05. Wave 3: T06. **DEC-007 — the waves are scheduling preference, not dependency.** T06's only hard dependency is `P0-T02`, as its `Depends on:` field, its entry below and `STATE.md` all say; its acceptance #1 carries an explicit escape hatch for `P0-T03` not being on `main`. T06 may therefore run in wave 2 whenever a fourth coder is free. Where this diagram and a card's `Depends on:` field disagree, the **field** wins.
 T02 is the root because the coder template requires `make lint` / `make test` before every report; T01 is exempted from that rule in its own prompt (it ships no code and must land before T03 so that `docs/Schema/` is tracked in a clean checkout).
 
 ## Exit-gate coverage
