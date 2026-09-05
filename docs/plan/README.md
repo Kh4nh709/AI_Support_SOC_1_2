@@ -34,7 +34,7 @@ docs/plan/
 
 1. **Morning (10 min).** Run the Director. It reads `STATE.md` and `INBOX.md`, resolves what it can, and prints "Owner actions" (things only you can do: credentials, lab runs, labeling, approvals). Do those first.
 2. **If a new phase starts.** Run the Planner with `prompts/P<n>.md`. Read the task list once; if a task looks wrong, say so to the Director (it will re-plan), not to the Coder.
-3. **Dispatch.** For each task in status `todo` whose dependencies are `done`, start a Coder with its `.prompt.md`. Max 3 at once. Coders work on their own branch.
+3. **Dispatch (DEC-010).** For each task in status `todo` whose dependencies are `done`: the Director creates its worktree in the morning run — `git worktree add ../AI_Support_SOC_1_2-<TASK_ID> -b task/<TASK_ID> main` — and you open one Coder session **inside that directory** with its `.prompt.md`. Max 3 at once, disjoint files. No agent ever shares a checkout; after merge the Director removes the worktree with a plain `git worktree remove` — a refusal means uncommitted work is stranded there (DEC-028).
 4. **Review.** When a Coder reports, run the Reviewer with the task id. `CHANGES` → send the review file back to the same Coder. `APPROVE` → the Director merges (or you merge with `git merge --no-ff task/<TASK_ID>`) and marks `done`.
 5. **Evening (10 min).** Run the Director for the daily gate: it checks the phase exit gate, applies the cut order if needed, and writes tomorrow's Owner actions.
 

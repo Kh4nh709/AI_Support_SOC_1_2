@@ -250,10 +250,10 @@ Everything below was measured on this host before these cards were written, per 
 | P1-T01 | `eval/smoke_test.py` + `docs/smoke-test-D1.md` | must | 4 h | — | yes, after: read the report, accept the model |
 | P1-T02 | Migration 013 `assets_enrichment` (+ drop `enrich_cache`) | must | 1.5 h | — | no |
 | P1-T03 | Migration 014 `intake_cursor_heartbeat` | must | 2 h | — | no |
-| P1-T04 | Migration 015 `labels_reviews_notes_eval_health` | must | 2.5 h | — | no |
+| P1-T04 | Migration 015 `labels_reviews_notes_eval_health` | must — **off the P1 exit gate since 06/09 (DEC-029); not cut; merges before P4** | 2.5 h | — | no |
 | P1-T05 | Migration 016 `alter_alerts_jobs_llm_runs_users` | must | 3 h | — | no |
 | P1-T06 | Migration 017 `append_only_and_roles` | must | 2.5 h | P1-T03 (unblocked by DEC-023) | no — the superuser step that makes `app_rw` LOGIN is a P2 prerequisite, not this task's |
-| P1-T07 | `make migrate` end-to-end, `schema.sql` regeneration, `make test-db` green | must | 1.5 h | T02–T05, and T06 if it merges | no |
+| P1-T07 | `make migrate` end-to-end, `schema.sql` regeneration, `make test-db` green | must | 1.5 h | T02, T03, T05; T06 if it merges; T04 if it merges (DEC-029) | no |
 
 File scope is disjoint by construction: one `.sql` file and one test file per migration task.
 `docs/Schema/schema.sql` is touched only by T07.

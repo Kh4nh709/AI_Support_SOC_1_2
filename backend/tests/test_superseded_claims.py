@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import glob
 import pathlib
+import re
 
 import pytest
 import yaml
@@ -52,6 +53,34 @@ def _in_scope() -> list[pathlib.Path]:
 SCOPE = _in_scope()
 
 
+_DEC_TOKEN = re.compile(r"DEC-\d{3}")
+# The marker's head: one or more DEC ids (optionally suffixed like "(a)"), comma/space
+# separated, before any prose. Only the head counts.
+_MARKER_HEAD = re.compile(r"\s*((?:DEC-\d{3}(?:\([a-z]\))?[\s,]*)+)")
+
+
+def _exempted(line: str, rule: dict) -> bool:
+    """A `superseded-ok:` marker exempts the line only for the DECs named in its head.
+
+    Line-level markers silence every rule that matches the line. Measured 06/09: a
+    marker written for DEC-024(a) on STATE.md:67 also silenced DEC-004's `013–016`
+    rule on the same line and that row went XPASS — a fix nobody made, reported as
+    made; and a DEC-004 marker on P1-T07.prompt.md:105 had been hiding DEC-016's
+    withdrawn carve-out sentence since the DEC-027 sweep. So a marker names the DECs
+    it exempts, first, before any prose: `<!-- superseded-ok: DEC-024(a), DEC-004 —
+    why -->`. Prose is not parsed — "the pre-DEC-004 range" in a reason does not
+    exempt DEC-004 — which is what makes the head the only thing a reviewer has to
+    read. A marker for another DEC is not an exemption; it is a hit with a
+    misleading comment.
+    """
+    if EXEMPT_MARKER not in line:
+        return False
+    head = _MARKER_HEAD.match(line[line.index(EXEMPT_MARKER) + len(EXEMPT_MARKER) :])
+    named = set(_DEC_TOKEN.findall(head.group(1))) if head else set()
+    wanted = set(_DEC_TOKEN.findall(str(rule["dec"])))
+    return bool(named & wanted)
+
+
 def _offending_lines(rule: dict) -> list[str]:
     """Every in-scope line carrying the dead claim, minus exempted and allowed ones."""
     allowed = set(rule.get("allow") or [])
@@ -63,7 +92,7 @@ def _offending_lines(rule: dict) -> list[str]:
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if rule["pattern"] not in line:
                 continue
-            if EXEMPT_MARKER in line:  # visible, reviewable exception
+            if _exempted(line, rule):  # visible, reviewable exception — for THIS rule's DEC
                 continue
             if f"{rel}:{lineno}" in allowed:
                 continue

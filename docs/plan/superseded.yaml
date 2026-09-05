@@ -291,7 +291,8 @@ rules:
 - id: dec-017-25
   dec: 'DEC-017 (F2 measured false) and DEC-019 (Owner: G1 draws from both sou'
   severity: high
-  status: open
+  status: fixed
+  cleared: "06/09 · DEC-031 · P2.md:40 rewritten (two-source backfill, DEC-019); E5 check on the board: STATE.md Owner action 'Planner P2 (DEC-019)'"
   pattern: 'Owner actions: heartbeat wodle + rule on Wazuh; run `backfill --since 2026-08-01`; confirm
     inventory content.'
   artifact: docs/plan/prompts/P2.md
@@ -321,7 +322,8 @@ rules:
 - id: dec-017-dec-019-28
   dec: DEC-017 / DEC-019
   severity: high
-  status: open
+  status: fixed
+  cleared: "06/09 · DEC-031 · HUONG-DAN §4 06/09 row rewritten (today's real Owner actions; backfill per DEC-019)"
   pattern: '| 06/09 | Thêm wodle `command` + rule heartbeat trên Wazuh manager; chạy `backfill --since'
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/HUONG-DAN-VAN-HANH.md
   reason: This is §4 "Việc chỉ bạn làm được, theo ngày" — the Owner's own action list, and the only place
@@ -331,7 +333,7 @@ rules:
 - id: dec-015-dec-018-29
   dec: DEC-015 / DEC-018 (blocker closed)
   severity: high
-  status: open
+  status: fixed
   pattern: '| P0 exit gate item 2 | 2026-09-05 | `eval/indexer_probe.py` cannot be run for real — `soc'
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/STATE.md
   reason: 'This row sits in the "Blockers (open)" table, un-struck, while DEC-015 closed it: "`soc_ro`
@@ -341,7 +343,7 @@ rules:
 - id: dec-021-30
   dec: DEC-021
   severity: high
-  status: open
+  status: fixed
   pattern: T07 (không thuộc cổng ra) đang chờ duyệt và là thứ duy nhất chặn phát
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/STATE.md
   reason: 'DEC-021 records the opposite: "**P0-T07 is merged** at `0bdbede`, rebased and re-verified first
@@ -351,7 +353,7 @@ rules:
 - id: dec-024-31
   dec: DEC-024(a)
   severity: high
-  status: open
+  status: fixed
   pattern: 6. **Điều kiện tiên quyết một lần cho mỗi cụm PostgreSQL — chỉ superuser làm được (DEC-023
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/HUONG-DAN-VAN-HANH.md
   reason: 'Three separate claims here are superseded by DEC-024(a), which explicitly supersedes DEC-023
@@ -361,7 +363,7 @@ rules:
 - id: dec-024-32
   dec: DEC-024(a) (supersedes DEC-023 item 6)
   severity: high
-  status: open
+  status: fixed
   pattern: '**Cổng ra đã sửa lời văn** (DEC-023 mục 6): 013–017 áp dụng bằng một lệnh trên `soc_dev` s'
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/STATE.md
   reason: 'The withdrawn gate qualifier, at a fourth site the known list does not name. DEC-024(a) is
@@ -371,7 +373,7 @@ rules:
 - id: dec-010-33
   dec: DEC-010 (with DEC-015's propagation finding)
   severity: high
-  status: open
+  status: fixed
   pattern: 3. Coder tự tạo nhánh `task/P<n>-Tnn`, viết test, code, chạy `make test`, ghi `…report.md`
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/HUONG-DAN-VAN-HANH.md
   reason: 'DEC-010''s own Consequences name this file and this step: "`HUONG-DAN-VAN-HANH.md` §1 step
@@ -411,7 +413,8 @@ rules:
 - id: dec-019-37
   dec: 'DEC-019 ("`sort_key` needs the one rule the archive cannot supply ... '
   severity: medium
-  status: open
+  status: fixed
+  cleared: "06/09 · DEC-031 · P2.md:23 rewritten (replay sort_key = epoch-millis; raw_payload byte-identical); E5 check: Owner action 'Planner P2 (DEC-019)'"
   pattern: '`search_after` from the last hit''s `sort`; `sort_key` = first sort value; duplicates are
     d'
   artifact: docs/plan/prompts/P2.md
@@ -421,7 +424,8 @@ rules:
 - id: dec-014-38
   dec: DEC-014 ("The 1% with no `agent` object must not be rejected — ruled n
   severity: medium
-  status: open
+  status: fixed
+  cleared: "06/09 · DEC-031 · P2.md:22 rewritten (no-agent fallback to manager.name); E5 check: Owner action 'Planner P2 (lệnh, DEC-014)' second line"
   pattern: '- `alert_time` ← `fields.timestamp[0]` if present else `_source.timestamp` normalised (`+0'
   artifact: docs/plan/prompts/P2.md
   reason: 'DEC-014 ruled this ''now, before P2 codes it'' and called the alternative ''a data-loss defect,
@@ -441,7 +445,7 @@ rules:
 - id: dec-024-40
   dec: DEC-024(a) (supersedes DEC-023 item 3)
   severity: medium
-  status: open
+  status: fixed
   pattern: Granting that role LOGIN and a password stays a one-off out-of-band step in HUONG-DAN §0,
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/01-plan.md
   reason: 'Not the instance in my brief: the "on a cluster where role `app_rw` exists" qualifier has already
@@ -451,7 +455,8 @@ rules:
 - id: dec-014-41
   dec: DEC-014
   severity: medium
-  status: open
+  status: fixed
+  cleared: "06/09 · DEC-031 · 01-plan.md:65 rewritten (16/08 dedup measurement first); mirrored in P2.md:16,32 (T15); E5 check: Owner action 'Planner P2 (lệnh, DEC-014)' first line"
   pattern: 'Tests: parser (7 blocks + fixture expectations), category permutations, dedup predicates +'
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/01-plan.md
   reason: DEC-014 uses the word "Ordered" twice, both times naming P2 ("a P2 measurement task, dedup compression
@@ -470,7 +475,8 @@ rules:
 - id: dec-024-43
   dec: 'DEC-024 (context: the superuser grant completed)'
   severity: medium
-  status: open
+  status: fixed
+  cleared: "06/09 · DEC-031 · STATE.md Owner action checked [x] after re-measuring app_rw|t|t and session_user=app_rw"
   pattern: '- [ ] **Chủ đồ án (TRƯỚC KHI PHÁT P2, DEC-023 mục 2 — không cần cho P1):** `sudo -u postgr'
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/STATE.md
   reason: 'Still an open `[ ]` in the live "Owner actions" list, but DEC-024''s Context records it as
@@ -480,7 +486,7 @@ rules:
 - id: dec-010-44
   dec: DEC-010
   severity: medium
-  status: open
+  status: fixed
   pattern: 3. **Dispatch.** For each task in status `todo` whose dependencies are `done`, start a Cod
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/README.md
   reason: '"Coders work on their own branch" is the pre-DEC-010 formulation of isolation. DEC-010 raised
@@ -540,7 +546,7 @@ rules:
 - id: dec-012-50
   dec: DEC-012
   severity: low
-  status: open
+  status: fixed
   pattern: '- [ ] `conf/inventory.yaml` (phải có `user1-IA1803`) + `conf/identities.yaml` (phải có `us'
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/STATE.md
   reason: 'An open `[ ]` in the live Owner-actions list for work DEC-012 records as complete: "The Owner
@@ -549,7 +555,7 @@ rules:
 - id: dec-017-dec-019-51
   dec: DEC-017 / DEC-019 (mis-citation of DEC-016, itself withdrawn by DEC-02
   severity: low
-  status: open
+  status: fixed
   pattern: 'Câu trả lời retention chính là tin xấu: indexer chỉ có 4 ngày, không phải 5 tuần → F2 sai,'
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/STATE.md
   reason: 'DEC-016 is "Migration 017 takes route D, plus a TRUNCATE trigger it cannot ship without" —
@@ -575,7 +581,7 @@ rules:
 - id: dec024a-gate-qualifier
   dec: DEC-024(a)
   severity: high
-  status: open
+  status: fixed
   pattern: cluster where role `app_rw` exists
   artifact: (canonical short form — catches paraphrase, not just re-paste)
   reason: DEC superseded the withdrawn P1 exit-gate qualifier; a forward-looking document must not assert
@@ -645,7 +651,7 @@ rules:
 - id: dec004-migration-013-016
   dec: DEC-004
   severity: high
-  status: open
+  status: fixed
   pattern: 013–016
   artifact: (canonical short form — catches paraphrase, not just re-paste)
   reason: DEC superseded the pre-DEC-004 migration range; a forward-looking document must not assert it.
