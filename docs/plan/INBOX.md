@@ -34,7 +34,7 @@ Details: Verified on IA1803 with root. The OpenSearch admin credential is stored
 Blocks: `eval/indexer_probe.py` being run for real (P0 exit gate), the retention check that sizes G1, and the whole P2 puller path from 06/09. P0 task authoring, P1-T01 smoke test, and Planner P0 are NOT blocked.
 Options: A) Owner supplies the OpenSearch admin password (set at install, typically `OPENSEARCH_INITIAL_ADMIN_PASSWORD`) — no change to existing security config (recommended). B) Use the admin TLS certificate with `securityadmin.sh` — the supported route when the password is lost; requires locating `admin.pem`/`admin-key.pem`. C) Reset the admin password via a new bcrypt hash in `internal_users.yml` applied with `securityadmin.sh` — risks breaking the Logstash ingest account if Logstash authenticates as `admin`.
 Frozen contract affected: none
-Resolved: open
+Resolved: 2026-09-05 · DEC-015 · `soc_ro` exists and is verified independently: authenticates with role `soc_reader`, `_count` on `wazuh-alerts-*` returns 7,452, `POST _doc` returns 403, `_cat/indices` returns 200. A 24-character generated password is in `.env`. `INDEXER_URL` stays `https://127.0.0.1:9400` (DEC-001): the server certificate's SAN carries only `localhost`, `127.0.0.1` and `::1`, so `79.79.79.11:9400` cannot be used without an insecure mode, which §6.3 forbids. Closing it immediately falsified F2 — the indexer holds four days, not five weeks; see DEC-016.
 
 ## 2026-09-05 · P0-T02 · DECISION_REQUEST
 From: Planner (P0)

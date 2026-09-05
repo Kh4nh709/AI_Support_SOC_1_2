@@ -21,7 +21,7 @@ You are a coding agent with shell access to the repository (current working dire
 {{ACCEPTANCE}}
 
 ## Working rules
-1. `git checkout main && git pull` (if a remote exists) then `git checkout -b task/{{TASK_ID}}`.
+1. **Work in your own git worktree — never the shared checkout (DEC-010).** From the primary checkout run `git worktree add ../AI_Support_SOC_1_2-{{TASK_ID}} -b task/{{TASK_ID}} main`, then `cd` into it and stay there for the whole task. Do **not** run `git checkout` in the primary checkout: another agent is working there, and HEAD moving under someone mid-edit has already put one commit on the wrong branch. The Director removes the worktree after your task merges.
 2. TDD: write or complete the acceptance tests first, watch them fail, implement, watch them pass. Add unit tests for edge cases you discover.
 3. Before reporting run: `make lint`, `make test`, and `make test-db` if you touched anything that talks to PostgreSQL. All green, in a clean tree (`git status` shows only your intended changes).
 4. Frozen contracts (context pack §6: schema/migrations, `output_schemas.json`, config keys, API routes, import rules and allowlist, job types, event types) are never modified by you. If the task cannot be completed without such a change: stop, append a `DECISION_REQUEST` to `docs/plan/INBOX.md` using its format, set your task row in `docs/plan/STATE.md` to `blocked`, and write the report with what you have.
