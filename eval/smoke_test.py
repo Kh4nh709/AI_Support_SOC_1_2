@@ -1084,14 +1084,27 @@ def run_case(
         if budget["spent"] >= budget["cap"]:
             budget["tripped"] = 1.0
             return None
-        payload = call_model(
-            client,
-            model=cfg.llm_model,
-            system=system,
-            user=message,
-            timeout_s=cfg.llm_timeout_s,
-            retry=cfg.llm_retry,
-        )
+        try:
+            payload = call_model(
+                client,
+                model=cfg.llm_model,
+                system=system,
+                user=message,
+                timeout_s=cfg.llm_timeout_s,
+                retry=cfg.llm_retry,
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad call must not lose the other 37
+            # Not cached: a transport failure is not a measurement, and caching it
+            # would make every later run replay the failure for free.
+            return {
+                "content": "",
+                "reasoning_present": False,
+                "usage": {},
+                "latency_s": None,
+                "attempts": cfg.llm_retry + 1,
+                "origin": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
         payload["cost_usd"] = compute_cost(
             payload["usage"], cfg.price_in_per_m, cfg.price_out_per_m
         )
@@ -1108,6 +1121,15 @@ def run_case(
 
     record["calls"] = 1
     record["origin"] = first["origin"]
+    if first["origin"] == "error":
+        record["error"] = first.get("error", "")
+        record["json_ok"] = False
+        record["schema_ok_first"] = False
+        record["schema_ok_final"] = False
+        record["cost_usd"] = 0.0
+        record["problems"] = [record["error"]]
+        # No repair round: resending after a transport failure measures nothing.
+        return record
     record["latency_s"] = first.get("latency_s")
     record["usage"] = first.get("usage") or {}
     record["reasoning_present"] = bool(first.get("reasoning_present"))
@@ -1212,7 +1234,7 @@ def summarise(records: Sequence[dict[str, Any]], cfg: Config) -> dict[str, Any]:
         if subset:
             classes[klass] = class_metrics(subset)
 
-    origins = {"live": 0, "cache": 0, "canned": 0, "skipped": 0}
+    origins = {"live": 0, "cache": 0, "canned": 0, "skipped": 0, "error": 0}
     for record in records:
         for origin in (record.get("origin"), record.get("repair_origin")):
             if origin:
@@ -1347,7 +1369,8 @@ def render_report(
         f"- **Provenance:** {summary['origins']['live']} live · "
         f"{summary['origins']['cache']} replayed from cache · "
         f"{summary['origins']['canned']} canned (offline) · "
-        f"{summary['origins']['skipped']} skipped. A cache entry is a recorded live response, "
+        f"{summary['origins']['skipped']} skipped · {summary['origins']['error']} failed. "
+        f"A cache entry is a recorded live response, "
         f"keyed by `sha256(model + system + user)`; re-rendering this report from a warm cache "
         f"makes no network call and costs nothing (design note 9)."
     )
@@ -1767,7 +1790,8 @@ def main(
     print(
         f"  provenance: {summary['origins']['live']} live · "
         f"{summary['origins']['cache']} from cache · "
-        f"{summary['origins']['canned']} canned · {summary['origins']['skipped']} skipped"
+        f"{summary['origins']['canned']} canned · {summary['origins']['skipped']} skipped · "
+        f"{summary['origins']['error']} failed"
     )
     for name, required, shown, ok in threshold_rows(summary, records):
         print(f"  [{'PASS' if ok else 'FAIL'}] {name}: {shown} (required {required})")

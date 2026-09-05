@@ -723,3 +723,55 @@ def test_the_per_call_table_gives_a_repair_round_its_own_row(tmp_path):
     assert "9.50" in table[1] and "12.50" in table[0]
     assert "600" in table[1], "the repair round's own reasoning_tokens"
     assert "confidence" in text, "the problem that caused the repair is counted in §6"
+
+
+def test_a_failed_call_is_recorded_not_raised(tmp_path):
+    """One 4xx must not throw away the other 37 measurements."""
+    cfg, _ = smoke.load_config(Path(os.devnull))
+    client = FakeClient([TransientStub(400)] * 4)
+    budget = {"spent": 0.0, "cap": 1.0, "tripped": 0.0}
+
+    record = smoke.run_case(
+        smoke.Case("real-01", "real", CANONICAL),
+        cfg=cfg,
+        cache_dir=tmp_path,
+        offline=False,
+        refresh=False,
+        client=client,
+        budget=budget,
+    )
+
+    assert record["origin"] == "error"
+    assert record["json_ok"] is False
+    assert record["repaired"] is False
+    assert client.calls == 1, "a failed call is not worth a repair round"
+    assert "400" in record["error"]
+    assert not list(tmp_path.glob("*.json")), "a failure is never cached"
+
+
+def test_a_failed_call_is_counted_in_the_summary_and_the_report(tmp_path):
+    cfg, _ = smoke.load_config(Path(os.devnull))
+    records = [
+        {
+            "label": "real-01",
+            "class": "real",
+            "rule_id": "40112",
+            "rule_level": 12,
+            "severity": "critical",
+            "prompt_bytes": 100,
+            "calls": 1,
+            "origin": "error",
+            "error": "HTTP 400",
+            "json_ok": False,
+            "schema_ok_first": False,
+            "schema_ok_final": False,
+            "repaired": False,
+            "cost_usd": 0.0,
+        }
+    ]
+
+    summary = smoke.summarise(records, cfg)
+    text = smoke.render_report(summary, records, cfg=cfg, cache_dir=tmp_path, offline=False)
+
+    assert summary["origins"]["error"] == 1
+    assert "1 failed" in text
