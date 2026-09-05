@@ -1,0 +1,86 @@
+{
+    "rule": {
+      "tsc": [
+        "CC6.1",
+        "CC6.8",
+        "CC7.2",
+        "CC7.3"
+      ],
+      "pci_dss": [
+        "10.2.4",
+        "10.2.5"
+      ],
+      "description": "PAM: User login failed.",
+      "mail": false,
+      "mitre": {
+        "tactic": [
+          "Credential Access"
+        ],
+        "technique": [
+          "Password Guessing"
+        ],
+        "id": [
+          "T1110.001"
+        ]
+      },
+      "firedtimes": 1,
+      "id": "5503",
+      "hipaa": [
+        "164.312.b"
+      ],
+      "level": 5,
+      "gpg13": [
+        "7.8"
+      ],
+      "groups": [
+        "pam",
+        "syslog",
+        "authentication_failed"
+      ],
+      "nist_800_53": [
+        "AU.14",
+        "AC.7"
+      ],
+      "gdpr": [
+        "IV_35.7.d",
+        "IV_32.2"
+      ]
+    },
+    "@timestamp": "2026-09-02T09:15:37.599599843Z",
+    "path": "/var/ossec/logs/alerts/alerts.json",
+    "predecoder": {
+      "program_name": "sshd",
+      "hostname": "user1-IA1803",
+      "timestamp": "Sep 02 09:15:35"
+    },
+    "data": {
+      "tty": "ssh",
+      "uid": "0",
+      "srcip": "202.165.25.8",
+      "dstuser": "root",
+      "euid": "0"
+    },
+    "id": "1788340536.1509017",
+    "tags": [
+      "wazuh_alerts"
+    ],
+    "location": "journald",
+    "event": {
+      "original": "{\"timestamp\":\"2026-09-02T16:15:36.255+0700\",\"rule\":{\"level\":5,\"description\":\"PAM: User login failed.\",\"id\":\"5503\",\"mitre\":{\"id\":[\"T1110.001\"],\"tactic\":[\"Credential Access\"],\"technique\":[\"Password Guessing\"]},\"firedtimes\":1,\"mail\":false,\"groups\":[\"pam\",\"syslog\",\"authentication_failed\"],\"pci_dss\":[\"10.2.4\",\"10.2.5\"],\"gpg13\":[\"7.8\"],\"gdpr\":[\"IV_35.7.d\",\"IV_32.2\"],\"hipaa\":[\"164.312.b\"],\"nist_800_53\":[\"AU.14\",\"AC.7\"],\"tsc\":[\"CC6.1\",\"CC6.8\",\"CC7.2\",\"CC7.3\"]},\"agent\":{\"id\":\"001\",\"name\":\"user1-IA1803\",\"ip\":\"79.79.79.12\"},\"manager\":{\"name\":\"IA1803\"},\"id\":\"1788340536.1509017\",\"full_log\":\"Sep 02 09:15:35 user1-IA1803 sshd[86189]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=202.165.25.8  user=root\",\"predecoder\":{\"program_name\":\"sshd\",\"timestamp\":\"Sep 02 09:15:35\",\"hostname\":\"user1-IA1803\"},\"decoder\":{\"name\":\"pam\"},\"data\":{\"srcip\":\"202.165.25.8\",\"dstuser\":\"root\",\"uid\":\"0\",\"euid\":\"0\",\"tty\":\"ssh\"},\"location\":\"journald\"}"
+    },
+    "agent": {
+      "ip": "79.79.79.12",
+      "name": "user1-IA1803",
+      "id": "001"
+    },
+    "timestamp": "2026-09-02T16:15:36.255+0700",
+    "decoder": {
+      "name": "pam"
+    },
+    "full_log": "Sep 02 09:15:35 user1-IA1803 sshd[86189]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=202.165.25.8  user=root",
+    "manager": {
+      "name": "IA1803"
+    },
+    "@version": "1",
+    "host": "IA1803"
+  }
