@@ -1,0 +1,298 @@
+{
+  "took": 14,
+  "timed_out": false,
+  "_shards": {
+    "total": 1,
+    "successful": 1,
+    "skipped": 0,
+    "failed": 0
+  },
+  "hits": {
+    "total": {
+      "value": 63,
+      "relation": "eq"
+    },
+    "max_score": null,
+    "hits": [
+      {
+        "_index": "wazuh-alerts-4.x-2026.08.16",
+        "_id": "-pe4C6ABLQcppv5YO4pl",
+        "_source": {
+          "predecoder": {
+            "hostname": "user1-IA1803",
+            "program_name": "sshd",
+            "timestamp": "Aug 16 17:56:55"
+          },
+          "input": {
+            "type": "log"
+          },
+          "agent": {
+            "ip": "79.79.79.12",
+            "name": "user1-IA1803",
+            "id": "001"
+          },
+          "manager": {
+            "name": "IA1803"
+          },
+          "data": {
+            "srcip": "127.0.0.1",
+            "dstuser": "user1",
+            "srcport": "48104"
+          },
+          "rule": {
+            "mail": true,
+            "level": 12,
+            "description": "Multiple authentication failures followed by a success.",
+            "groups": [
+              "syslog",
+              "attacks"
+            ],
+            "frequency": 2,
+            "firedtimes": 1,
+            "mitre": {
+              "technique": [
+                "Valid Accounts",
+                "Brute Force"
+              ],
+              "id": [
+                "T1078",
+                "T1110"
+              ],
+              "tactic": [
+                "Defense Evasion",
+                "Persistence",
+                "Privilege Escalation",
+                "Initial Access",
+                "Credential Access"
+              ]
+            },
+            "id": "40112"
+          },
+          "location": "journald",
+          "decoder": {
+            "parent": "sshd",
+            "name": "sshd"
+          },
+          "id": "1786903016.121311",
+          "full_log": "Aug 16 17:56:55 user1-IA1803 sshd[136570]: Accepted password for user1 from 127.0.0.1 port 48104 ssh2",
+          "timestamp": "2026-08-17T00:56:56.130+0700"
+        },
+        "fields": {
+          "timestamp": [
+            "2026-08-16T17:56:56.130Z"
+          ]
+        },
+        "sort": [
+          1786903016130
+        ]
+      },
+      {
+        "_index": "wazuh-alerts-4.x-2026.08.16",
+        "_id": "_Je4C6ABLQcppv5YO4pm",
+        "_source": {
+          "predecoder": {
+            "hostname": "user1-IA1803",
+            "program_name": "sshd",
+            "timestamp": "Aug 16 17:57:00"
+          },
+          "input": {
+            "type": "log"
+          },
+          "agent": {
+            "ip": "79.79.79.12",
+            "name": "user1-IA1803",
+            "id": "001"
+          },
+          "manager": {
+            "name": "IA1803"
+          },
+          "data": {
+            "srcip": "203.0.113.45",
+            "srcport": "51022"
+          },
+          "rule": {
+            "mail": false,
+            "level": 5,
+            "description": "sshd: Attempt to login using a non-existent user",
+            "groups": [
+              "syslog",
+              "sshd",
+              "invalid_login",
+              "authentication_failed"
+            ],
+            "frequency": 1,
+            "firedtimes": 3,
+            "mitre": {
+              "technique": [
+                "Valid Accounts"
+              ],
+              "id": [
+                "T1078"
+              ],
+              "tactic": [
+                "Defense Evasion",
+                "Persistence",
+                "Privilege Escalation",
+                "Initial Access"
+              ]
+            },
+            "id": "5710"
+          },
+          "location": "journald",
+          "decoder": {
+            "parent": "sshd",
+            "name": "sshd"
+          },
+          "id": "1786903020.121512",
+          "full_log": "Aug 16 17:57:00 user1-IA1803 sshd[136612]: Invalid user admin from 203.0.113.45 port 51022",
+          "timestamp": "2026-08-17T00:57:00.450+0700"
+        },
+        "fields": {
+          "timestamp": [
+            "2026-08-16T17:57:00.450Z"
+          ]
+        },
+        "sort": [
+          1786903020450
+        ]
+      },
+      {
+        "_index": "wazuh-alerts-4.x-2026.08.16",
+        "_id": "_Ze4C6ABLQcppv5YO4pn",
+        "_source": {
+          "predecoder": {
+            "hostname": "user1-IA1803",
+            "program_name": "sudo",
+            "timestamp": "Aug 16 18:01:23"
+          },
+          "input": {
+            "type": "log"
+          },
+          "agent": {
+            "ip": "79.79.79.12",
+            "name": "user1-IA1803",
+            "id": "001"
+          },
+          "manager": {
+            "name": "IA1803"
+          },
+          "data": {
+            "srcuser": "user1",
+            "dstuser": "root"
+          },
+          "rule": {
+            "mail": false,
+            "level": 5,
+            "description": "PAM: User login failed.",
+            "groups": [
+              "pam",
+              "syslog",
+              "authentication_failed"
+            ],
+            "frequency": 1,
+            "firedtimes": 8,
+            "mitre": {
+              "technique": [
+                "Brute Force"
+              ],
+              "id": [
+                "T1110"
+              ],
+              "tactic": [
+                "Credential Access"
+              ]
+            },
+            "id": "5503"
+          },
+          "location": "journald",
+          "decoder": {
+            "name": "pam"
+          },
+          "id": "1786903283.122004",
+          "full_log": "Aug 16 18:01:23 user1-IA1803 sudo: pam_unix(sudo:auth): authentication failure; logname=user1 uid=1000 euid=0 tty=/dev/pts/1 ruser=user1 rhost=  user=user1",
+          "timestamp": "2026-08-17T01:01:23.900+0700"
+        },
+        "fields": {
+          "timestamp": [
+            "2026-08-16T18:01:23.900Z"
+          ]
+        },
+        "sort": [
+          1786903283900
+        ]
+      },
+      {
+        "_index": "wazuh-alerts-4.x-2026.08.16",
+        "_id": "_pe4C6ABLQcppv5YO4po",
+        "_source": {
+          "predecoder": {
+            "hostname": "user1-IA1803",
+            "program_name": "sshd",
+            "timestamp": "Aug 16 18:04:11"
+          },
+          "input": {
+            "type": "log"
+          },
+          "agent": {
+            "ip": "79.79.79.12",
+            "name": "user1-IA1803",
+            "id": "001"
+          },
+          "manager": {
+            "name": "IA1803"
+          },
+          "data": {
+            "srcip": "203.0.113.45",
+            "dstuser": "user1",
+            "srcport": "51044"
+          },
+          "rule": {
+            "mail": true,
+            "level": 12,
+            "description": "Multiple authentication failures followed by a success.",
+            "groups": [
+              "syslog",
+              "attacks"
+            ],
+            "frequency": 2,
+            "firedtimes": 2,
+            "mitre": {
+              "technique": [
+                "Valid Accounts",
+                "Brute Force"
+              ],
+              "id": [
+                "T1078",
+                "T1110"
+              ],
+              "tactic": [
+                "Defense Evasion",
+                "Persistence",
+                "Privilege Escalation",
+                "Initial Access",
+                "Credential Access"
+              ]
+            },
+            "id": "40112"
+          },
+          "location": "journald",
+          "decoder": {
+            "parent": "sshd",
+            "name": "sshd"
+          },
+          "id": "1786903451.122388",
+          "full_log": "Aug 16 18:04:11 user1-IA1803 sshd[136988]: Accepted password for user1 from 203.0.113.45 port 51044 ssh2",
+          "timestamp": "2026-08-17T01:04:11.275+0700"
+        },
+        "fields": {
+          "timestamp": [
+            "2026-08-16T18:04:11.275Z"
+          ]
+        },
+        "sort": [
+          1786903451275
+        ]
+      }
+    ]
+  }
+}

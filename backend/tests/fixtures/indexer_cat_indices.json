@@ -1,0 +1,37 @@
+[
+  {
+    "index": "wazuh-alerts-4.x-2026.07.30",
+    "docs.count": "41",
+    "store.size": "320.1kb"
+  },
+  {
+    "index": "wazuh-alerts-4.x-2026.08.01",
+    "docs.count": "52",
+    "store.size": "401.7kb"
+  },
+  {
+    "index": "wazuh-alerts-4.x-2026.08.02",
+    "docs.count": "47",
+    "store.size": "366.2kb"
+  },
+  {
+    "index": "wazuh-alerts-4.x-2026.08.03",
+    "docs.count": "58",
+    "store.size": "455.9kb"
+  },
+  {
+    "index": "wazuh-alerts-4.x-2026.08.15",
+    "docs.count": "49",
+    "store.size": "381.4kb"
+  },
+  {
+    "index": "wazuh-alerts-4.x-2026.08.16",
+    "docs.count": "63",
+    "store.size": "498.0kb"
+  },
+  {
+    "index": "wazuh-alerts-4.x-rollover-000001",
+    "docs.count": "7",
+    "store.size": "12.4kb"
+  }
+]
