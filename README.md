@@ -50,8 +50,8 @@ Không có package nào tên `shared/` — mỗi mối quan tâm xuyên suốt �
 
 | File | Nội dung |
 |---|---|
-| `docs/2026-08-19-soc-triage-rebuild-design.md` | Tài liệu thiết kế: kiến trúc, mô hình dữ liệu, 2 pipeline LLM, lộ trình, cách đo |
-| `docs/audit-report.html` | Rà soát kiến trúc & bảo mật bản tiền nhiệm — 20 phát hiện, cơ sở cho các quyết định thiết kế |
+| `docs/kien-truc-v3-14-ngay.html` | Kiến trúc v3: quyết định, tổng quan, thành phần, tầng AI, dữ liệu/API/config, đánh giá, sequence, lịch trình, rủi ro |
+| `docs/chot-v3-14-ngay.md` | Quyết định chốt v3 D1–D20, danh sách cắt giảm C1–C10 và thứ tự cắt |
 
 ## Quan hệ với dự án tiền nhiệm
 

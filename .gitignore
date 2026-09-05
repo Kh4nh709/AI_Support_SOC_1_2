@@ -27,3 +27,14 @@ conf/root-ca.pem
 !conf/*.example
 backups/
 eval/results/
+
+# P0-T01: lint/type/coverage caches
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# P0-T01: legacy browser page-save, superseded by docs/kien-truc-v3-14-ngay.html
+Bản đồ kiến trúc AI Support SOC.html
+Bản đồ kiến trúc AI Support SOC_files/
