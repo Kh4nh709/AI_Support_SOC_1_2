@@ -6,7 +6,7 @@ Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (re
 
 | Phase | Planned days | Status | Exit gate met on | Notes |
 |---|---|---|---|---|
-| P0 Preparation | D0 04/09 | todo | — | — |
+| P0 Preparation | D0 04/09 | in-progress | — | T01+T02 merged 05/09; T03–T06 hết chặn phụ thuộc, đã soát trước khi phát (DEC-006) |
 | P1 Smoke test + schema | D1 05/09 | todo | — | — |
 | P2 Intake + pipeline | D2–D3 06–07/09 | todo | — | — |
 | P3 AI pipeline ① | D4 08/09 | todo | — | — |
@@ -20,12 +20,12 @@ Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (re
 
 | Task | Title | Priority | Status | Branch | Depends on | Owner action needed? | Last update |
 |---|---|---|---|---|---|---|---|
-| P0-T01 | Repo hygiene and `.gitignore` | must | approved | task/P0-T01 | — | no — đã merge vào `main` @ `8ecddb5` (duyệt vòng 2 ĐẠT, 8/8 lệnh nghiệm thu) | 2026-09-05 director |
-| P0-T02 | Build scaffold: requirements, pyproject, Makefile, compose, `.env.example` | must | approved | task/P0-T02 | — | no — hết chặn, DEC-003 | 2026-09-05 reviewer |
-| P0-T03 | Test harness: DB fixture, fake LLM, import-rule scan, canonical fixture | must | todo | task/P0-T03 | P0-T01, P0-T02 | yes — INBOX 05/09 P0/P1 BLOCKER (no DB for `make test-db`) | 2026-09-05 planner |
-| P0-T04 | `eval/indexer_probe.py` — offline-verifiable indexer probe | must | todo | task/P0-T04 | P0-T02 | yes — live run needs `soc_ro` (INBOX 05/09 P0/P2 BLOCKER) | 2026-09-05 planner |
-| P0-T05 | Inventory examples, format document, `inventory.validate()` | must | todo | task/P0-T05 | P0-T02 | no — hết chặn, DEC-004 | 2026-09-05 director |
-| P0-T06 | Package skeletons per context pack §4 | should | todo | task/P0-T06 | P0-T02 | no | 2026-09-05 planner |
+| P0-T01 | Repo hygiene and `.gitignore` | must | done | task/P0-T01 | — | no — duyệt vòng 2 ĐẠT (8/8), merge vào `main` @ `8ecddb5` | 2026-09-05 director |
+| P0-T02 | Build scaffold: requirements, pyproject, Makefile, compose, `.env.example` | must | done | task/P0-T02 | — | no — đã rebase lên `main`, chạy lại 9/9 lệnh nghiệm thu ĐẠT, merge @ `7450778` | 2026-09-05 director |
+| P0-T03 | Test harness: DB fixture, fake LLM, import-rule scan, canonical fixture | must | todo | task/P0-T03 | P0-T01, P0-T02 (ĐÃ merge) | yes — INBOX 05/09 P0/P1 BLOCKER (no DB for `make test-db`) | 2026-09-05 planner |
+| P0-T04 | `eval/indexer_probe.py` — offline-verifiable indexer probe | must | todo | task/P0-T04 | P0-T02 (ĐÃ merge) | yes — live run needs `soc_ro` (INBOX 05/09 P0/P2 BLOCKER) | 2026-09-05 planner |
+| P0-T05 | Inventory examples, format document, `inventory.validate()` | must | todo | task/P0-T05 | P0-T02 (ĐÃ merge) | no — hết chặn, DEC-004 | 2026-09-05 director |
+| P0-T06 | Package skeletons per context pack §4 | should | todo | task/P0-T06 | P0-T02 (ĐÃ merge) | no | 2026-09-05 planner |
 
 ## Blockers (open)
 
