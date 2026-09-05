@@ -34,7 +34,8 @@ Owner: the thesis author (also Tier-1/Tier-2 analyst together with the advisor).
 
 ## 3. Runtime shape
 
-- `docker compose`: `app` (FastAPI: intake webhook + REST API + HTMX UI), `worker` (all jobs: `pipeline`, `triage`, `investigate`, `digest`, `health`, `pull`), `db` (PostgreSQL 16). One worker process; the `jobs` table uses `FOR UPDATE SKIP LOCKED` so a second worker can be started without code changes.
+- **Local processes, no container runtime required (amended 05/09/2026, DEC-018).** `app` (FastAPI: intake webhook + REST API + HTMX UI) via `make run-app`, `worker` (all jobs: `pipeline`, `triage`, `investigate`, `digest`, `health`, `pull`) via `make run-worker`, and **PostgreSQL 16 native on `127.0.0.1:5432`** — `soc_dev` for the application, `soc_test` for the suite, both owned by the run-as account. One worker process; the `jobs` table uses `FOR UPDATE SKIP LOCKED` so a second worker can be started without code changes.
+- `docker-compose.yml` is **retained but optional**: no `Makefile` target references it (`grep -cE 'COMPOSE|docker compose' Makefile` → `0`), and nothing in the build depends on a daemon. It exists for a host that has one. This line used to read "`docker compose`: app, worker, db" and was false on the only host this is built on, where the docker socket is unreachable to the run-as account.
 - Python 3.12, FastAPI, psycopg 3, Jinja2 + HTMX (server-rendered, no build step), pytest, `openai` SDK pointed at DeepSeek `base_url`, PyYAML, argon2-cffi, PyJWT, httpx. Pin versions in `backend/requirements.txt` (P0).
 - Secrets only via environment variables (`.env` is git-ignored). Never log secrets, never log full prompts to stdout (they go to `llm_runs`).
 
