@@ -38,7 +38,11 @@ Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (re
 
 - [ ] Tạo `soc_ro` trên OpenSearch — chặn P0 exit gate + P2 puller (06/09). Xem INBOX 2026-09-05 BLOCKER, chọn phương án A/B/C.
 - [x] API key DeepSeek → `.env` — xong 05/09, nghiệm thu §7.5 ĐẠT (`deepseek-v4-flash`, HTTP 200, JSON hợp lệ, có `usage`, 1,02 s). P1-T01 hết chặn.
-- [ ] Xác nhận retention `wazuh-alerts-*` (index sớm nhất + tổng docs) — quyết định sàn của G1. Chờ `soc_ro`.
+- [x] Xác nhận retention — xong 05/09 bằng kho lưu của manager (root), KHÔNG cần `soc_ro`: 84,376 alert / 29 ngày (08/08–05/09), median 592, mean 3,013, đỉnh 47,917 ngày 16/08. R2 chết, xem DEC-014.
+- [ ] **Planner P2 (lệnh, DEC-014):** thêm task đo **tỉ lệ nén dedup trên một ngày thật** — chạy TRƯỚC mọi phát biểu về ngân sách LLM. Chừng nào chưa có số, không tài liệu nào được nói `LLM_MONTHLY_USD_CAP=30` là đủ.
+- [ ] **Planner P2 (lệnh, DEC-014):** dùng ngày **16/08** (47,917 alert, rule 40112) làm fixture kiểm dedup thay cho burst tổng hợp — nó đụng thật vào `MAX_CLUSTER_SIZE=1000` và `MAX_CLUSTER_AGE_HOURS=4`.
+- [ ] **Chủ đồ án (sau khi có số dedup, DEC-014):** xem lại C8. Lý do cắt đã ghi ("vô nghĩa ở 50/ngày") nay vô hiệu. C8 vẫn cắt cho tới khi anh quyết — bỏ cắt là quyền của anh, không phải Director.
+- [ ] **Planner P6 (DEC-014):** G1 nay backfill được từ kho lưu (36,459 alert ngoài ngày bão). Xem lại sàn 300 cụm và tỉ lệ lab lành tính — không cần độn nữa.
 - [ ] `conf/inventory.yaml` (phải có `user1-IA1803`) + `conf/identities.yaml` (phải có `user1`) — sau khi Planner P0 sinh `.example`.
 - [x] `.gitignore` chặn `.env`/`conf/` — xong 05/09 (repo có remote GitHub công khai).
 - [x] Copy CA vào `conf/root-ca.pem`, TLS verify sạch — xong 05/09.
