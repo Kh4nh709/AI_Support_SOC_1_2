@@ -117,3 +117,16 @@ Consequences:
   - `scripts/migrate.sh` and `.env.example` join P0-T03's "Files — modify"; its acceptance gains item 9 (clean-DB migrate + idempotent re-run) and item 3 now requires DB tests to **pass**, with a second invocation proving the skip path still works where no database exists.
   - **Dispatch, at the standing cap of 3 concurrent coders** (`01-plan.md` cross-phase rules, `HUONG-DAN` §1 step B, `director.md` decision rights — ordering is the Director's, the cap is the Owner's and is not raised): **P0-T03, P0-T05, P0-T06** now; **P0-T04** takes the first slot that frees. The Owner's reasoning is recorded as the rationale: T03's acceptance is real for the first time today and it produces the canonical fixture every later phase builds on, while T04 accepts on recorded fixtures whenever it runs.
 Supersedes: —
+
+## DEC-009 · 2026-09-05 · DEC-007 item 7 propagated to the role prompts that agents actually read
+Scope: tactical
+Decided by: Director
+Context: DEC-007 item 7 made `<TASK_ID>.prompt.md` the authoritative card and `<PHASE>-tasks.md` the Planner's index — but the ruling was recorded only in `DECISIONS.md` and the P0 card files. Every role prompt that tells an agent where to find the card still pointed at the index. The Owner caught it on `reviewer.md:7`; measuring it turned up three more sites, and the near-miss was live: P0-T03's prompt carries **9** acceptance items, the index restates **7**, and the two missing ones are exactly the pair added by DEC-008 — the real-database run and item 9, which is the only thing that exercises the `scripts/migrate.sh` fix. A Reviewer following `reviewer.md` today would have approved P0-T03 without ever running the fix that task exists to land.
+Decision: A rule about which file is authoritative is worthless until the prompts that send agents to a file say so. Correct all four sites and treat "propagate to the role prompts" as part of any future ruling that changes where an agent looks.
+Consequences:
+  - `prompts/reviewer.md` §Read now names `<TASK_ID>.prompt.md` as the card, requires every acceptance command **in the prompt** to be run in order with real output pasted, and demotes the index to a cross-check whose shorter list must never define what was exercised. A divergence is a note to the Director, not something the Reviewer reconciles.
+  - `prompts/coder-template.md` — the generator — no longer calls the index "your card". Since it is the template, this stops the error at source for P1–P8.
+  - All six already-generated `P0-T0*.prompt.md` files carried the same line, including the three dispatched this afternoon (T03, T05, T06). Fixed in place; the coders now hold prompts that name themselves as the card.
+  - `HUONG-DAN-VAN-HANH.md` §checklist told the Planner to prove no two tasks touch the same file by grepping `P<n>-tasks.md`. File scope lives in the prompt, so that check could pass while two prompts collide. It now greps `P<n>-T*.prompt.md`. (The T03/T05/T06 disjointness check run before dispatch was already done against the prompts, so the dispatch stands.)
+  - Nothing about the acceptance sets themselves changed; this is a pointer fix. The underlying divergence between each prompt and its index entry remains, and stays a Director defect to reconcile per DEC-007 item 7.
+Supersedes: — (extends DEC-007 item 7)
