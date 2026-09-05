@@ -1,0 +1,28 @@
+{
+  "alert_id": "1786903016.121311",
+  "manager_id": "IA1803",
+  "alert_time": "2026-08-16T17:56:56.130Z",
+  "event_time": null,
+  "agent_name": "user1-IA1803",
+  "origin_host": "user1-IA1803",
+  "agent_id": "001",
+  "agent_ip": "79.79.79.12",
+  "srcip": "127.0.0.1",
+  "dstip": "",
+  "src_port": 48104,
+  "dst_port": 0,
+  "alert_user": "user1",
+  "rule_id": "40112",
+  "rule_level": 12,
+  "severity": "critical",
+  "category": "ssh_brute_force",
+  "categories": ["ssh_brute_force", "suspicious_login"],
+  "decoder": "sshd",
+  "srcip_is_private": true,
+  "_expected_behaviour": [
+    "never auto-closed",
+    "ioc lookup skipped",
+    "gate step 4 forbids false_positive",
+    "decision-table rule sbf-3"
+  ]
+}
