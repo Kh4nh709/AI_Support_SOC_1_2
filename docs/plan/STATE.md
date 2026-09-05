@@ -20,11 +20,11 @@ Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (re
 
 | Task | Title | Priority | Status | Branch | Depends on | Owner action needed? | Last update |
 |---|---|---|---|---|---|---|---|
-| P0-T01 | Repo hygiene and `.gitignore` | must | todo | task/P0-T01 | — | no | 2026-09-05 planner |
-| P0-T02 | Build scaffold: requirements, pyproject, Makefile, compose, `.env.example` | must | todo | task/P0-T02 | — | yes — INBOX 05/09 P0-T02 DECISION_REQUEST (database keys) | 2026-09-05 planner |
+| P0-T01 | Repo hygiene and `.gitignore` | must | changes | task/P0-T01 | — | no — AC5/AC8 đã sửa trong card (DEC-006); còn lại là Coder chỉnh số liệu báo cáo | 2026-09-05 director |
+| P0-T02 | Build scaffold: requirements, pyproject, Makefile, compose, `.env.example` | must | approved | task/P0-T02 | — | no — hết chặn, DEC-003 | 2026-09-05 reviewer |
 | P0-T03 | Test harness: DB fixture, fake LLM, import-rule scan, canonical fixture | must | todo | task/P0-T03 | P0-T01, P0-T02 | yes — INBOX 05/09 P0/P1 BLOCKER (no DB for `make test-db`) | 2026-09-05 planner |
 | P0-T04 | `eval/indexer_probe.py` — offline-verifiable indexer probe | must | todo | task/P0-T04 | P0-T02 | yes — live run needs `soc_ro` (INBOX 05/09 P0/P2 BLOCKER) | 2026-09-05 planner |
-| P0-T05 | Inventory examples, format document, `inventory.validate()` | must | todo | task/P0-T05 | P0-T02 | yes — INBOX 05/09 P0-T05/P1 DECISION_REQUEST (assets contract) | 2026-09-05 planner |
+| P0-T05 | Inventory examples, format document, `inventory.validate()` | must | todo | task/P0-T05 | P0-T02 | no — hết chặn, DEC-004 | 2026-09-05 director |
 | P0-T06 | Package skeletons per context pack §4 | should | todo | task/P0-T06 | P0-T02 | no | 2026-09-05 planner |
 
 ## Blockers (open)
@@ -43,8 +43,11 @@ Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (re
 - [x] `.gitignore` chặn `.env`/`conf/` — xong 05/09 (repo có remote GitHub công khai).
 - [x] Copy CA vào `conf/root-ca.pem`, TLS verify sạch — xong 05/09.
 - [x] Kiểm tra `Final-Project` — xong, kết quả ở INBOX 05/09 QUESTION (sẽ thành DEC-002).
-- [ ] **Director:** ghi INBOX 05/09 QUESTION (`Final-Project`) thành `DEC-002` — đây là mục 5 của P0 exit gate, không phải task của coder.
-- [ ] **Director:** trả lời 2 DECISION_REQUEST của Planner P0 (khoá cấu hình database; hợp đồng `assets`) — P0-T02 và P0-T05 chạy được trong lúc chờ, nhưng P1 cần câu trả lời trước khi viết migration 013–016.
+- [x] **Director:** ghi INBOX 05/09 QUESTION (`Final-Project`) thành `DEC-002` — xong 05/09, phương án A: bê bảng ánh xạ category + `detect_injection` sang, viết mới `ingest/wazuh_parser.py` và `security/wrap.py`. Đóng mục 5 của P0 exit gate.
+- [x] **Director:** trả lời 2 DECISION_REQUEST của Planner P0 — xong 05/09: `DEC-003` (3 khoá database vào §6.3, 4 khoá Compose ở ngoài) và `DEC-004` (DB đổi theo §6.2: CHECK `high|medium|low|unknown`, thêm `owner`/`role` NULL). P0-T02 và P0-T05 đã cập nhật theo.
+- [ ] **P1 Planner:** DEC-004 còn kéo theo 2 việc (việc thứ 3 — chọn migration — đã chốt 05/09: `013_assets_enrichment.sql`, bốn migration cũ dời thành `014`–`017`, cổng ra P1 nay là "migrations 013–017"): tính lại công thức risk_score `docs/phase-4-enrichment.md:170` (mất 2 bậc `crown_jewel`/`normal` — là sửa đặc tả v1, cần quyết định riêng), và sửa 2 playbook rẽ nhánh theo `crown_jewel` (`kb/playbooks/malware.md:36`, `kb/playbooks/ssh_brute_force.md:34`, làm khi duyệt playbook ở P3). Chi tiết ở `docs/plan/tasks/P0/P0-tasks.md` §Hand-off to P1.
+- [ ] **Owner/Director:** commit khối sửa kế hoạch đang nằm trong working tree (DEC-002…DEC-006, `00-context-pack.md`, `01-plan.md`, `INBOX.md`, `STATE.md`, `prompts/P1.md`, 3 card P0). Chưa commit thì bản sao mới của repo KHÔNG tìm thấy DEC-003/DEC-004 — xem INBOX 05/09 · P0-T02 · QUESTION. Đây cũng là nguyên nhân AC3 của P0-T01 bị đo thành FAIL.
+- [ ] **Director:** DEC-005 chốt 2 lời gọi chiến thuật của Planner — migration nằm phẳng trong `docs/Schema/`, pytest luôn gọi `python3 -m pytest -c backend/pyproject.toml`. Mọi lệnh nghiệm thu trong task card dùng đúng dạng đó.
 - [ ] Mở đường cho test DB (INBOX 05/09 · P0/P1 · BLOCKER). Nhanh nhất: `sudo -u postgres psql -c 'ALTER ROLE user1 CREATEDB'`. Chặn P1 exit gate.
 - [ ] Sau khi có `soc_ro`: chạy `python3 eval/indexer_probe.py --save-samples 5`, dán bảng đếm theo ngày + ngày index sớm nhất vào STATE.md, commit 5 fixture mẫu. Đóng P0 exit gate item 2 và trả lời luôn câu hỏi retention.
 - [ ] Sau khi P0-T05 merge: viết `conf/inventory.yaml` (phải có `user1-IA1803`), `conf/identities.yaml` (phải có `user1`), `conf/iocs.csv` từ ba tệp `.example`; kiểm bằng `python3 -c "import sys;sys.path.insert(0,'backend');from app.enrichment.inventory import validate;print(validate() or 'OK')"`.

@@ -110,6 +110,37 @@ Số phiên mở cùng lúc: director + reviewer + ≤ 3 coder = 5. Planner ch�
 | Trễ lịch | director | `We are one day behind. Propose cuts from this phase's cut candidates and the cross-phase order; do not extend.` |
 | Coder muốn đổi schema | phiên coder | `Do not change contracts. Write a DECISION_REQUEST to docs/plan/INBOX.md and stop.` |
 | Kết thúc ngày cuối giai đoạn | director | `Confirm the P<n> exit gate by running its commands; record the result.` |
+| **Coder báo xong** | director | `<TASK_ID> reported. Do a result-intake run.` |
+| **Reviewer trả APPROVE** | director | `<TASK_ID> approved. Merge and continue.` |
+| **Reviewer trả CHANGES** | director | `<TASK_ID> review returned CHANGES. Triage it.` |
+| **Coder báo blocked** | director | `<TASK_ID> is blocked. Resolve or escalate.` |
+| **Planner chạy xong** | director | `Planner P<n> finished. Validate its output.` |
+
+Năm dòng in đậm là **nhịp thứ ba** của Director (`prompts/director.md` → *Result-intake run*), chạy giữa ngày mỗi khi có agent trả kết quả. Bạn **không dán ngữ cảnh**, chỉ dán con trỏ: mã task + chuyện gì xảy ra. Director tự đọc file.
+
+---
+
+## 3b. Định tuyến: vấn đề nào đưa ai
+
+| Vấn đề | Ai trả lời | Cách đưa |
+|---|---|---|
+| Coder không hiểu yêu cầu trong card | Không ai — chỉ đường | `See context pack §6.3.` Không giải thích lại bằng ngữ cảnh mới trong chat |
+| Coder muốn sửa schema / `output_schemas.json` / config key / route API / job type | Director → Owner nếu đụng §6 | Gõ vào phiên coder: `Do not change contracts. Write a DECISION_REQUEST to docs/plan/INBOX.md and stop.` |
+| Coder bí vì thiếu hạ tầng (DB, credential, mạng) | Director → thành Owner action | Coder tự ghi `BLOCKER` sau 30′; bạn gõ vào director: `<TASK_ID> is blocked. Resolve or escalate.` |
+| **Lệnh acceptance trong card viết sai** | **Director**, không phải Coder | Card do Planner viết, Coder không có quyền sửa: `<TASK_ID> acceptance #<n> is malformed: <lý do>. Rule on it and correct the card.` |
+| Coder vượt ước tính > 50 % | Director | `<TASK_ID> is 2h over estimate. Split or cut.` |
+| Hai coder đụng cùng một file | Director (Reviewer phát hiện) | Director dừng coder sau, tái phân file, bảo Planner sửa card |
+| Reviewer trả `CHANGES` | Đúng phiên coder cũ, sau khi Director phân loại | `Read docs/plan/tasks/<PHASE>/<TASK_ID>.review.md. Fix every blocking finding, re-run all acceptance commands, update the report, set STATE.md back to review.` |
+| `CHANGES` quá 2 vòng | Director | `<TASK_ID> has failed review twice. Decide: split, cut, or change approach.` |
+| `make test` đỏ sau merge | Director tự xử | Nó `git revert -m 1`, task về `changes`, dán lỗi vào file review |
+| Trễ lịch, gate không nhích | Director đề xuất → **bạn duyệt** | `We are one day behind. Propose cuts from this phase's cut candidates and the cross-phase order; do not extend.` |
+| Cắt một D-item (D1–D20) | **Bạn** | `Decision on cutting <x>: approve. Record as DEC.` |
+| Đổi model, vượt trần chi phí | **Bạn** | — |
+| Bất cứ gì đụng **tính hợp lệ đánh giá** (gán nhãn mù, đóng băng gold, nhánh mù, G3) | **Bạn, và chỉ bạn** | Director bị cấm nới các quy tắc này vì lý do lịch |
+| Việc §11 (credential, wodle, lab, gán nhãn, inventory) | **Bạn** | Không giao agent trong mọi trường hợp |
+| Agent quên, hỏi lại thứ đã có trong tài liệu | Chỉ đường; nếu tài liệu **thiếu thật** thì thêm vào context pack rồi bảo nó đọc lại | Không bao giờ vá bằng lời giải thích trong chat |
+
+Gộp một câu: **kỹ thuật → Director · phạm vi, tiền, tính hợp lệ khoa học, việc tay chân → bạn · mọi câu hỏi đi qua file, không đi qua chat.**
 
 ---
 

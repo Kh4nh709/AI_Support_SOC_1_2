@@ -36,13 +36,19 @@ T02 is the root because the coder template requires `make lint` / `make test` be
 3. **`eval/` is a package** (`eval/__init__.py` with a docstring) per context pack §4, but its contents are run as scripts (`python3 eval/indexer_probe.py`), never imported by `backend/app/`.
 4. **`pyproject.toml` lives in `backend/`** as the deliverable says; every tool is invoked from the repo root with an explicit config flag (`pytest -c backend/pyproject.toml`, `ruff check --config backend/pyproject.toml`). Verified working with `pythonpath = ["."]` (rootdir becomes `backend/`).
 
-## Open INBOX items raised by this plan
+## INBOX items raised by this plan
 
-- `2026-09-05 · P0-T02 · DECISION_REQUEST` — context pack §6.3 lists no database connection key; T02 needs one for compose, the Makefile and the conftest.
-- `2026-09-05 · P0-T05 / P1 · DECISION_REQUEST` — `assets` contract: criticality vocabulary mismatch between the DB CHECK and the LLM output schema, and `owner` / `role` (named in §7.1) have no column.
-- `2026-09-05 · P0 / P1 · BLOCKER` — no PostgreSQL an agent can use: docker socket unreachable and `user1` has no `CREATEDB`.
+- `2026-09-05 · P0-T02 · DECISION_REQUEST` — **resolved, DEC-003.** `DATABASE_URL`, `DATABASE_URL_OWNER`, `TEST_DATABASE_URL` enter §6.3 (53 keys now); `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `DB_PORT` stay out of the contract and live only in `docker-compose.yml` and `.env.example`. T02 transcribes §6.3; it does not extend it.
+- `2026-09-05 · P0-T05 / P1 · DECISION_REQUEST` — **resolved, DEC-004.** §6.2 is untouched; the database moves onto its vocabulary. `assets.criticality` is re-CHECKed over `high|medium|low|unknown` and `owner text NULL`, `role text NULL` are added, in P1. T05 writes the format for the post-DEC-004 shape; `crown_jewel` and `normal` cease to exist.
+- `2026-09-05 · P0 / P1 · BLOCKER` — **open.** No PostgreSQL an agent can use: docker socket unreachable and the account has no `CREATEDB`. Does not block task authoring; T03's DB fixture skips loudly until it clears.
 
-None of the three blocks task authoring; each card says how to proceed while it is open.
+## Hand-off to P1
+
+DEC-004 lands in P1's migration set and pulls three things with it. The first is now settled; the other two are still open and must be placed before the code that reads them is written:
+
+1. ~~**Which migration carries the `assets` change.**~~ **Settled 2026-09-05 by the Owner (DEC-004, "Carried by").** `013_assets_enrichment.sql` carries the whole of it — DEC-004's CHECK swap and `owner`/`role`, plus §6.1's `source`, `loaded_at`, `active` on all three enrichment tables — so no table's DDL is split across migrations. The four previously planned migrations shift up by one to `014`–`017` and `016_alter_alerts_jobs_llm_runs_users.sql` loses its `assets/identities/iocs` line. `01-plan.md` and `prompts/P1.md` carry the new numbering; P1's exit gate now reads "migrations 013–017". `001_bang_nen.sql` is an applied migration and is not edited; `schema.sql` is regenerated with `build_schema.py`.
+2. **The risk-score formula loses a tier.** `docs/phase-4-enrichment.md:170` weights four values — `{"crown_jewel": 30, "high": 20, "normal": 5, "low": 0}` — and two of them no longer exist. The formula must be re-weighted onto `high|medium|low|unknown` before `soar/risk.py` is written in P2, and the worked examples at `docs/phase-4-enrichment.md:145` and `:183` re-derived. This is a v1-spec change, so it needs its own decision.
+3. **Two playbooks branch on a value that is gone.** `kb/playbooks/malware.md:36` and `kb/playbooks/ssh_brute_force.md:34` both key on `asset_context.criticality = crown_jewel`. They are rewritten when the Owner and the advisor review the playbooks and fill `reviewed_by/at` in P3.
 
 ---
 
@@ -59,7 +65,7 @@ None of the three blocks task authoring; each card says how to proceed while it 
   - `git ls-files kb llm docs | wc -l` → ≥ `45`
   - `git status --porcelain` → empty
   - `git ls-files | grep -E '^\.env$|^conf/root-ca\.pem$|__pycache__'` → no output (exit 1)
-  - `git check-ignore -q .env backups eval/results conf/inventory.yaml conf/root-ca.pem && echo IGNORED` → `IGNORED`
+  - `for p in .env backups/ eval/results/ conf/inventory.yaml conf/root-ca.pem; do git check-ignore -q "$p" || echo "NOT IGNORED: $p"; done` → no output. Two things are load-bearing here: `-q` accepts exactly **one** pathname per call (more than one is `fatal: --quiet is only valid with a single pathname`, exit 128), which is why this is a loop; and the trailing slashes on `backups/` and `eval/results/` are required, because both patterns are directory-only and neither directory exists on disk, so the bare names correctly report *not* ignored (DEC-006)
   - `git check-ignore -q conf/inventory.yaml.example; echo $?` → `1` (the `.example` files are **not** ignored)
   - `grep -c '2026-08-19-soc-triage-rebuild-design\|audit-report' README.md` → `0`
 - Estimate: 0.5 h
@@ -71,7 +77,7 @@ None of the three blocks task authoring; each card says how to proceed while it 
 - Scope in: pinned dependencies; ruff/black/pytest configuration; the seven Makefile targets; a three-service compose file; `.env.example`; the two shell scripts the Makefile calls.
   Scope out: any file under `backend/app/` or `backend/tests/`; `.gitignore` (T01); writing tests (T03).
 - Files: create: `backend/requirements.txt`, `backend/pyproject.toml`, `backend/Dockerfile`, `Makefile`, `docker-compose.yml`, `.env.example`, `scripts/migrate.sh`, `scripts/backup.sh` / modify: —
-- Contracts touched: config keys §6.3 → INBOX `2026-09-05 · P0-T02 · DECISION_REQUEST` (database keys are missing from §6.3)
+- Contracts touched: config keys §6.3 → **DEC-003** (three database keys added to the contract; the four Compose variables stay out). Settled — transcribe, do not extend.
 - Depends on: —
 - Acceptance (all must pass):
   - `make test` → exit 0 (prints `no tests collected` while `backend/tests/` is still empty)
@@ -80,7 +86,7 @@ None of the three blocks task authoring; each card says how to proceed while it 
   - `docker compose config | grep -E '^  (app|worker|db):' | wc -l` → `3`
   - `docker compose config | grep -c healthcheck` → ≥ `1`
   - `make -n migrate run-app run-worker backup` → exit 0, prints a command for each target
-  - every one of the **50** keys of context pack §6.3 appears in `.env.example`, and the only extra keys are the database/compose ones from the INBOX item — run the two-line comparison given in the prompt's design notes and paste both lists into the report; both must be empty
+  - every one of the **53** keys of context pack §6.3 appears in `.env.example`, and the only extras are the four Compose-only variables — run the comparison in the prompt's design notes and paste both lists: `missing: []`, `extra: ['DB_PORT', 'POSTGRES_DB', 'POSTGRES_PASSWORD', 'POSTGRES_USER']`
   - `bash -n scripts/migrate.sh scripts/backup.sh` → exit 0
 - Estimate: 3 h
 - Risk / notes: 0 collected tests makes pytest exit 5 — the `test` recipe must translate 5 into 0 (see design notes in the prompt). Nothing in compose is runnable yet (`app.web.main` and `app.infra.worker` arrive in P2/P4); the acceptance is `config`, not `up`.
@@ -128,13 +134,14 @@ None of the three blocks task authoring; each card says how to proceed while it 
 - Scope in: the three `.example` files; `docs/inventory-format.md`; `enrichment/inventory.py` containing `validate()` and nothing else.
   Scope out: loading into the database, the `active` / `loaded_at` upsert, `POST /api/admin/reload-inventory` (all P2); `enrichment/lookups.py` (T06); the real `conf/*.yaml` content (Owner).
 - Files: create: `conf/inventory.yaml.example`, `conf/identities.yaml.example`, `conf/iocs.csv.example`, `docs/inventory-format.md`, `backend/app/enrichment/inventory.py`, `backend/tests/test_inventory_validate.py` / modify: —
-- Contracts touched: schema §6.1 `assets` → INBOX `2026-09-05 · P0-T05 / P1 · DECISION_REQUEST` (criticality vocabulary; `owner` / `role` columns). Proceed with the recommended reading; do not write a migration.
+- Contracts touched: schema §6.1 `assets` → **DEC-004** (criticality CHECK becomes `high|medium|low|unknown`; `owner text NULL`, `role text NULL` added). Settled — write the format for the post-DEC-004 shape; the migration itself is P1's.
 - Depends on: P0-T02
 - Acceptance (all must pass):
   - `python3 -m pytest -c backend/pyproject.toml backend/tests/test_inventory_validate.py -q` → passes, ≥ 10 tests
   - `python3 -c "import sys;sys.path.insert(0,'backend');from app.enrichment.inventory import validate;print(validate(['conf/inventory.yaml.example','conf/identities.yaml.example','conf/iocs.csv.example']))"` → `[]`
   - `grep -c 'user1-IA1803' conf/inventory.yaml.example` → ≥ `1` · `grep -c 'user1' conf/identities.yaml.example` → ≥ `1`
-  - `python3 -c "import yaml;d=yaml.safe_load(open('conf/inventory.yaml.example'));assert d['assets'][0]['criticality'] in ('crown_jewel','high','normal','low');print('OK')"` → `OK`
+  - `python3 -c "import yaml;d=yaml.safe_load(open('conf/inventory.yaml.example'));assert all(a['criticality'] in ('high','medium','low','unknown') for a in d['assets']);print('OK')"` → `OK`
+  - `grep -rn 'crown_jewel' conf/inventory.yaml.example docs/inventory-format.md` → no output (exit 1)
   - `git check-ignore -q conf/inventory.yaml.example; echo $?` → `1`
   - `make test` → exit 0 · `make lint` → exit 0
 - Estimate: 1.5 h
