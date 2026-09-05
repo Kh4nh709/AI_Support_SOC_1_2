@@ -142,3 +142,37 @@ Consequences:
   - The Director never commits from a task worktree. Before any `git add`, confirm `git rev-parse --abbrev-ref HEAD` is `main` in the primary checkout — HEAD moving under a long edit is what caused the DEC-009 misplacement, and a one-line check catches it.
   - This is process only: no card, contract or acceptance command changes.
 Supersedes: —
+
+## DEC-011 · 2026-09-05 · `make test-db` hard-requires docker; fixed as P0-T07 before P1 dispatch
+Scope: tactical
+Decided by: Director
+Context: The Owner measured `make test-db` on `main`: exit 1, "the docker daemon is unreachable", citing an INBOX blocker DEC-008 already closed. The tests underneath are fine — `TEST_DATABASE_URL=postgresql:///soc_test python3 -m pytest … -m db -q` gives 3 passed, and `scripts/migrate.sh` on a clean database gives 12 recorded, 14 tables, exit 0, idempotent. The target alone is at fault: it gates on `docker compose ps` before anything else and offers no path for an already-reachable `TEST_DATABASE_URL`. It survived P0-T02's review and P0-T03's because T03 acceptance #3 invokes pytest directly and never the target — a gap DEC-006's execute-every-acceptance-line rule does not close, because the defect is in a command no acceptance line runs. I had also called P1's exit gate "measurable"; with this target broken it is not.
+Decision: Fix the target so a reachable `TEST_DATABASE_URL` is used directly and compose is the fallback, not the precondition. It ships as **P0-T07**, a P0 follow-up rather than a P1 task, and must land before P1 is dispatched.
+Consequences:
+  - **Why P0 and not P1.** `Makefile` is a P0-T02 deliverable and this is P0 scaffold debt; P1 is smoke test and schema, not repairing P0's scaffold. Two coder slots are free now (T03/T04/T05 merged, only T06 running), so it costs a slot today instead of delaying P1 tomorrow. It is **not** a P0 exit-gate item and does not hold T06 or P0 closure — but `coder-template.md` rule 3 and `reviewer.md` checklist item 1 both order every agent to run `make test-db`, and P1's gate reads "DB tests green", so P1 cannot dispatch over it.
+  - **The Planner writes the card, not the Director** (`prompts/director.md`: the Director does not create task cards). This entry is the re-plan order and carries the verified fix so the Planner does not re-derive it.
+  - **Verified fix** — prototyped and run before this was recorded, all three paths measured on this host:
+    ```
+    test-db:
+    	@dsn="$${TEST_DATABASE_URL:-}"; \
+    	if [ -z "$$dsn" ] && [ -f .env ]; then \
+    	  dsn=$$(sed -n 's/^[[:space:]]*TEST_DATABASE_URL[[:space:]]*=[[:space:]]*//p' .env \
+    	         | tail -1 | sed 's/[[:space:]][[:space:]]*#.*$$//'); \
+    	fi; \
+    	if [ -n "$$dsn" ] && psql "$$dsn" -tAc 'SELECT 1' >/dev/null 2>&1; then \
+    	  echo "test-db: TEST_DATABASE_URL is reachable — running directly, no docker needed"; \
+    	  TEST_DATABASE_URL="$$dsn" $(PYTEST) -m "db and not live" backend/tests; \
+    	elif $(COMPOSE) ps >/dev/null 2>&1; then \
+    	  <the existing compose-up + healthcheck-wait + pytest block, unchanged>; \
+    	else \
+    	  echo "test-db: no reachable TEST_DATABASE_URL and no docker daemon." >&2; \
+    	  echo "  Set TEST_DATABASE_URL to a reachable database whose name ends in _test" >&2; \
+    	  echo "  (on this host: postgresql:///soc_test — see DEC-008), or start docker." >&2; \
+    	  exit 1; \
+    	fi
+    ```
+    Path A, `TEST_DATABASE_URL=postgresql:///soc_test`: `3 passed, 77 deselected`, exit 0, no docker. Path B, unreachable DSN and no docker: the three-line message above, exit 1. Path C, variable unset: falls back to `.env`, and since the Owner's `.env` has no `TEST_DATABASE_URL` it lands on Path B's message rather than a stack trace. `make test`, `make lint` and `make -n migrate run-app run-worker backup` are unchanged. The comment strip requires whitespace before `#` so a `#` inside a DSN survives; the last assignment wins, matching the ten-line parser P0-T02 already uses.
+  - **The stale message goes too.** The current text cites `docs/plan/INBOX.md (2026-09-05 · P0 / P1 · BLOCKER)`, closed by DEC-008. Pointing an agent at a closed blocker is its own defect.
+  - **Acceptance must exercise the target itself**, not just the tests beneath it: `make test-db` with a reachable DSN → exit 0; with an unreachable DSN and no docker → exit 1 and a message naming `TEST_DATABASE_URL`; and `make test`/`make lint` unchanged. The lesson generalises — where a card ships a wrapper, at least one acceptance line runs the wrapper.
+  - **Owner action:** the `.env` on this host predates DEC-003 and carries none of `DATABASE_URL`, `DATABASE_URL_OWNER`, `TEST_DATABASE_URL`. Add `TEST_DATABASE_URL=postgresql:///soc_test` so the target's `.env` fallback works without an exported variable.
+Supersedes: —
