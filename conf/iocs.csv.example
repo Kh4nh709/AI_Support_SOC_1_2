@@ -1,0 +1,33 @@
+value,reputation,expires_at,source
+203.0.113.10,malicious,2030-12-31T00:00:00Z,manual
+203.0.113.45,suspicious,2030-06-30T00:00:00Z,"manual # seen in a phishing mail"
+198.51.100.7,clean,2030-12-31T00:00:00Z,manual
+#
+# conf/iocs.csv — hand-maintained indicators of compromise.
+# Loaded by enrichment/inventory.py; INVENTORY_PATHS in .env points here.
+#
+# The header row must stay the FIRST line of the file so that a plain reader
+# (csv.DictReader; a spreadsheet) sees the columns. Notes therefore live below
+# the data. Columns in this order:
+#   value       IP or domain; matched against the alert's srcip and dstip
+#   reputation  malicious | suspicious | clean
+#   expires_at  ISO-8601 UTC with a timezone; e.g. 2030-12-31T00:00:00Z
+#   source      optional free text: where the indicator came from
+#
+# The enrichment query is
+#   SELECT * FROM iocs WHERE value IN ($srcip,$dstip) AND expires_at > now()
+# so a row whose expires_at has passed is invisible rather than wrong. validate()
+# still reports it — prefixed `warning:` — so an expired row does not rot unseen.
+#
+# `not_found` and `skipped` are NOT the same (§6.2 output schema): a value that is
+# simply absent from this file yields not_found; a lookup that was never performed
+# yields skipped. G8' blocks auto-close on malicious and suspicious only, so
+# neither not_found nor skipped blocks anything on its own.
+#
+# Blank lines and lines whose first non-space character is `#` are ignored
+# (DEC-007), which is why these notes are safe to keep in the real conf/iocs.csv.
+# A `#` inside a quoted field is part of the value, not a comment — see the
+# suspicious row above.
+#
+# The example rows use the documentation ranges 203.0.113.0/24 and 198.51.100.0/24
+# only. Never put a real address of the estate into an example file.

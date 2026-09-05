@@ -1,0 +1,28 @@
+# conf/inventory.yaml — hand-maintained asset inventory.
+# Loaded by enrichment/inventory.py; INVENTORY_PATHS in .env points here.
+# G8': a host that is NOT listed here can never be auto-closed. Omission is safe, not lax.
+#
+# Copy this file to conf/inventory.yaml (the real file is git-ignored) and check it with
+# the one-line command at the end of docs/inventory-format.md.
+version: 1
+assets:
+  - hostname: user1-IA1803        # matched against alerts.agent_name, then alerts.origin_host
+    criticality: medium           # high | medium | low | unknown   (DB CHECK after DEC-004; see docs/inventory-format.md)
+    owner: "Nguyen Van A"         # optional free text — reaches the model only inside <untrusted_data> (§7.1)
+    role: "lab workstation"       # optional free text, same rule
+
+  - hostname: example-dc-01
+    criticality: high             # `high` is a hard auto-close block (G8')
+    owner: "Doi Ha tang"
+    role: "domain controller"
+
+  # In the estate, criticality not yet assessed. This is NOT the same as leaving
+  # the host out of the file: an absent host is a hard auto-close block, while
+  # `unknown` is not. Omit a host only when it genuinely is not ours.
+  - hostname: example-nas-02
+    criticality: unknown
+    owner: "Doi Ha tang"
+
+  # owner and role are optional — omit them entirely when there is nothing to say.
+  - hostname: example-printer-03
+    criticality: low

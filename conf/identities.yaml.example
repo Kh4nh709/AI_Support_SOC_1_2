@@ -1,0 +1,13 @@
+# conf/identities.yaml — hand-maintained account context.
+# Loaded by enrichment/inventory.py; INVENTORY_PATHS in .env points here.
+# Two columns only, exactly the two the database has: username, is_privileged.
+#
+# "identity" here is the account NAMED IN THE ALERT (data.dstuser / data.srcuser),
+# not the analyst who operates this system.
+version: 1
+identities:
+  - username: user1               # matched against alerts.alert_user
+    is_privileged: false          # unquoted true/false; "false" in quotes is a string, not a boolean
+
+  - username: example-admin
+    is_privileged: true           # a privileged account is a hard auto-close block (G8')
