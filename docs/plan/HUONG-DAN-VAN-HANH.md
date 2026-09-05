@@ -167,6 +167,7 @@ Gộp một câu: **kỹ thuật → Director · phạm vi, tiền, tính hợp 
 ## 5. Checklist 5 phút sau khi Planner chạy
 
 - [ ] Mỗi task có **Acceptance** là lệnh chạy được (`pytest …`, `make …`, `python …`), không phải câu "hoạt động đúng".
+- [ ] Mỗi lệnh Acceptance có **ca hỏng chứng minh được**, không chỉ ca chạy (DEC-025). Tự hỏi "làm gì thì nó đỏ?" — nếu không làm nó đỏ được thì lệnh đó không kiểm cái nó nói là kiểm. Bốn lỗi trong dự án này đều một hình dạng: lệnh xanh mà không chứng minh gì.
 - [ ] Không có hai task cùng sửa một file — grep tên tệp trong các `P<n>-T*.prompt.md`, **không phải** trong `P<n>-tasks.md`: phạm vi tệp nằm ở prompt (DEC-007 mục 7), bản chỉ mục có thể thiếu.
 - [ ] Tổng giờ `must` ≤ ngân sách ngày × 1,3; nếu vượt, Planner đã ghi rõ ở đầu file cắt gì.
 - [ ] Không còn `{{` trong bất kỳ `*.prompt.md` nào: `grep -l "{{" docs/plan/tasks/P<n>/*.prompt.md` phải rỗng.
