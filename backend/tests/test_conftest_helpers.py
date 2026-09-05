@@ -4,7 +4,7 @@ This is the only file that may carry a `db`-marked test (see P0-T03 card, accept
 
 import pytest
 
-from tests.conftest import _maintenance_dsn, redact_dsn, require_test_dsn
+from tests.conftest import REPO_ROOT, _maintenance_dsn, redact_dsn, require_test_dsn
 
 
 def test_require_test_dsn_accepts_a_test_suffixed_database():
@@ -52,7 +52,9 @@ def test_db_fixture_hands_out_a_connection_to_a_migrated_database(db):
         cur.execute("SELECT count(*) FROM schema_migrations")
         (count,) = cur.fetchone()
 
-    assert count == 12
+    # One row per NNN_*.sql in docs/Schema — never a literal, so a new migration
+    # does not turn this red (DEC-023).
+    assert count == len(list((REPO_ROOT / "docs" / "Schema").glob("[0-9][0-9][0-9]_*.sql")))
 
 
 @pytest.mark.db

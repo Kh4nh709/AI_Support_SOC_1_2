@@ -13,49 +13,51 @@ the `test-db` recipe reads `TEST_DATABASE_URL` from the environment and then fro
 `docker compose` gate, and `grep -cE 'COMPOSE|docker compose' Makefile` → `0`. Six of the seven
 cards below end in a `make test-db` line and all six are now runnable.
 
-**But migration 017 was re-blocked in the same window.** `2e516fc` records **DEC-020**, which
-withdraws DEC-016's acceptance of route D and sends 017 back to the Owner on two questions. So:
+**Migration 017 was re-blocked in the same window and unblocked the same day.** `2e516fc` records
+**DEC-020** (two Owner questions on §6.1); **DEC-023** answers both, re-words G9, and fixes two
+harness defects that would have failed every migration card's last acceptance line. So:
 
 | | |
 |---|---|
-| Dispatchable now | **P1-T01, P1-T02, P1-T03, P1-T04, P1-T05** — six coder-hours of them are on the critical path |
-| Blocked | **P1-T06** (migration 017) — on DEC-020's two Owner questions, not on any task |
-| Conditional | **P1-T07** — runs on whatever migrations are on `main`; see its preflight |
+| Dispatchable now | **P1-T01, P1-T02, P1-T03, P1-T04, P1-T05** |
+| Dispatchable after P1-T03 merges | **P1-T06** — migration 017 puts triggers on `intake`, which 014 creates |
+| Last | **P1-T07** — runs on whatever migrations are on `main`; see its preflight |
 
-**What DEC-020 blocks P1-T06 on** (neither is mine to decide, and neither is a coder's):
+**What DEC-023 settled** (the cards below were corrected in the same pass, 05/09):
 
-1. **§6.1 contradicts G12.** §6.1 orders `REVOKE UPDATE, DELETE ON … intake FROM app_rw`, but G12
-   requires every `intake` row to get `processed_at` or `error` within 60 s — which is an UPDATE by
-   the application. As written the contract forbids its own pipeline's commit step, **under every
-   route**. DEC-020 carries a measured fix (`REVOKE UPDATE, DELETE, TRUNCATE … FROM app_rw, PUBLIC`
-   then `GRANT UPDATE (processed_at, outcome, error) ON intake TO app_rw`, plus a trigger pinning
-   the receipt columns), but that is a §6.1 **wording change** and therefore the Owner's.
-2. **§6.1 says verbatim "The application connects as `app_rw`".** Route D has it connect as the
-   owner and `SET ROLE`. Changing that text is the Owner's for the same reason route C was.
-
-DEC-020 also corrects the gate wording: roles are cluster-global and `user1` cannot `CREATE ROLE`
-at all, so a conditional `DO` block only appears self-contained because a superuser created
-`app_rw` here first. **P1's exit gate must therefore read either "013–016 apply on a clean
-`soc_dev`, with 017 carved out" (DEC-013's shape, restored) or, once 017 is settled, "013–017
-apply on a clean `soc_dev` on a cluster where `app_rw` already exists".** Recording that is the
-Director's; I have written the cards for the first shape and flagged the second.
+1. **§6.1 vs G12 — route 1a.** `intake` stays append-only; the completion write is a column-level
+   `GRANT UPDATE (processed_at, outcome, error)` plus a trigger that pins every other column and pins
+   each of those three once set. All of it in 017; 014 adds no privileges.
+2. **"The application connects as `app_rw`" — route 2b, verbatim.** `app_rw` becomes a LOGIN role by
+   one superuser command the Owner runs **before P2** (HUONG-DAN §0). Not needed for P1: 017 only
+   grants and revokes, and its tests `SET ROLE app_rw` from the owner. 017 never runs `CREATE ROLE`;
+   it checks `pg_roles` and stops with a message naming the prerequisite.
+3. **G9 — route 4d.** `intake.raw_text text` holds the received bytes; `raw_payload` is
+   `GENERATED ALWAYS AS (raw_text::jsonb) STORED`. T03's DDL, acceptances and byte-compare test
+   changed accordingly.
+4. **The exit gate** reads "013–017 apply on a clean `soc_dev` with one command, on a cluster where
+   role `app_rw` exists" — true on this cluster with no superuser action.
+5. **Two harness defects fixed on `main`** (Owner hotfix, DEC-023 item 7): `test_conftest_helpers.py`
+   no longer hard-codes `count == 12`, and `make test-db` takes `TESTS=<path>`. Planning decision 6
+   below is now a rule: every db-marked pytest line sets `TEST_DATABASE_URL` inline to a private
+   `soc_p1t0N_test`, passes `-rs`, never adds `-q`, and states `N passed` with `skipped` absent.
 
 **What survives DEC-016 and is not in question:** the statement-level `BEFORE TRUNCATE` trigger. An
-independent verification reproduced it, DEC-020 keeps it explicitly, and whichever route wins, 017
-carries it on all three tables. Re-measured on a throwaway database today: with only the row-level
-trigger, `TRUNCATE audit_events` as the owner wipes the table silently; with the statement-level
-trigger it raises `append-only table: audit_events is immutable` and the rows survive.
+independent verification reproduced it, DEC-020 kept it, DEC-023 measured it again, and 017 carries
+it on all three tables: with only the row-level trigger, `TRUNCATE audit_events` as the owner wipes
+the table silently; with the statement-level trigger it raises `append-only table: audit_events is
+immutable` and the rows survive.
 
 ## ⚠️ Budget note — this phase does not fit its day, and by a lot
 
 | | |
 |---|---|
 | Sum of `must` estimates | **17 h** |
-| Of which dispatchable today (P1-T06 blocked) | **14.5 h** |
+| Of which dispatchable today | **17 h** — all of it; DEC-023 unblocked P1-T06, which waits only on P1-T03 |
 | Day budget (`01-plan.md`, D1) | 8 h |
-| Overbooking | **+112 %** on the full set, **+81 %** on the dispatchable set — the re-plan threshold is 30 % |
+| Overbooking | **+112 %** — the re-plan threshold is 30 % |
 | Wall-clock at the 3-coder cap | ≈ 6 h, *if* three coders run continuously from hour one |
-| Critical path (with T06 blocked) | P1-T01 (4 h) alone, or P1-T05 (3 h) → P1-T07 (1.5 h) = 4.5 h |
+| Critical path | P1-T03 (2 h) → P1-T06 (2.5 h) → P1-T07 (1.5 h) = 6 h; P1-T01 (4 h) is the longest single pole |
 
 Two things make the arithmetic worse than the ratio alone suggests:
 
@@ -84,8 +86,8 @@ Moving it saves 2.5 h and **requires amending P1's exit gate** to drop 015 as we
 an exit-gate change: the Director proposes, the Owner approves.
 
 **Do not cut P1-T01.** It is the model-acceptance evidence that gates P3 and the first evidence
-chapter of the report. **P1-T06 is not a cut** — it is blocked on a contract question, which is a
-different thing and must be recorded as such.
+chapter of the report. **P1-T06 is not a cut** — it is the append-only guarantee behind G2 and G11, and DEC-023
+settled its contract questions.
 
 ## Critical path and waves
 
@@ -96,7 +98,7 @@ P1-T04  015 labels/reviews/… (2.5 h) ───┤
 P1-T05  016 alter alerts/jobs/… (3 h) ──┼──▶ P1-T07  make migrate + schema.sql (1.5 h)
 P1-T03  014 intake/cursor/hb (2 h) ──┬──┘
                                      └──▶ P1-T06  017 append_only_and_roles (2.5 h) ──▶ T07
-                                          ⛔ BLOCKED on DEC-020 — do not dispatch
+                                          (unblocked by DEC-023; dispatch once T03 has merged)
 ```
 
 **The suggested decomposition in `prompts/P1.md` says the critical path is T02 → T04 → T05 → T06.
@@ -115,14 +117,14 @@ correctly. Proven today on a throwaway database with a stand-in `013`: clean DB 
 schema.sql, recorded 12 base migrations` → `applying 013_probe` → `1 applied, 12 already
 present`; re-run → `0 applied, 13 already present`.
 
-**Wave 1 (3 coders):** T01, T05, T03 — T01 is the longest single task, T05 the largest migration,
-T03 the one T06 will need the moment DEC-020 is answered.
-**Wave 2 (3 coders):** T02, T04, and **T06 only if DEC-020 has landed by then**.
+**Wave 1 (3 coders):** T01, T03, T05 — T01 is the longest single task, T03 heads the only
+multi-task chain (T06 needs it), T05 the largest migration.
+**Wave 2 (3 coders):** T02, T04, and **T06 as soon as T03 has merged**.
 **Wave 3:** T07, alone, after every migration that is going to merge has merged.
 
-**With P1-T06 blocked, the `014 → 017` edge is inert** and there is no multi-task critical path
-left: the longest chain is T05 (3 h) → T07 (1.5 h). T01 at 4 h is then the phase's longest pole and
-should be dispatched first for that reason alone.
+**The `014 → 017` edge is the phase's only multi-task chain:** T03 (2 h) → T06 (2.5 h) → T07 (1.5 h)
+= 6 h, which is why T03 goes in wave 1. T01 at 4 h is the longest single pole and is dispatched
+first for that reason alone.
 
 ---
 
@@ -131,7 +133,7 @@ should be dispatched first for that reason alone.
 | Gate item (`01-plan.md`) | Covered by | Notes |
 |---|---|---|
 | `docs/smoke-test-D1.md` with numbers | T01 | Not blocked — `.env` carries all six `LLM_*` keys and the model answered today |
-| Migrations 013–017 apply on a clean DB | T02, T03, T04, T05 — and T06 **only when DEC-020 is answered** — proven together by **T07** | **The gate wording must change.** DEC-020 restores DEC-013's carve-out: it reads "013–016 apply on a clean `soc_dev`" until 017 is settled, and even then needs the qualifier "on a cluster where `app_rw` already exists" unless the Owner grants `CREATEROLE`. Director's to record |
+| Migrations 013–017 apply on a clean `soc_dev` with one command, on a cluster where role `app_rw` exists | T02, T03, T04, T05, T06 — proven together by **T07** | Wording settled by DEC-023 item 6 and written into `01-plan.md`. True on this cluster with no superuser action; another cluster needs the one-off step in HUONG-DAN §0 first, and 017 stops with a message naming it |
 | DB tests green (`make test-db`) | every card's last acceptance line; **T07 runs the full suite** | Unblocked — P0-T07 merged at `0bdbede` |
 | Model accepted or fallback chosen | **Owner action**, from T01's report | Not a task |
 
@@ -176,21 +178,30 @@ should be dispatched first for that reason alone.
    pass every P1 test — which all run as the owner — and break the application in P2. 017 also
    grants sequence usage as defence in depth.
 
-6. **Every acceptance line sets its DSN inline.** `.env` is git-ignored, so a task worktree has
-   none (DEC-018 recorded this biting the P0-T07 review). The Owner's `.env` also carries no
-   `DATABASE_URL_OWNER` — measured: it has the six `LLM_*`, five `INDEXER_*`, `PULL_START` and
-   `TEST_DATABASE_URL`, and nothing else. So every card writes
-   `TEST_DATABASE_URL=postgresql:///soc_test make test-db` and passes the migration DSN as
-   `scripts/migrate.sh`'s positional argument. No card depends on a file it cannot see.
+6. **Every acceptance line sets its DSN inline, to a database private to the task — now a rule
+   (DEC-023 item 8, extending DEC-006).** `.env` is git-ignored, so a task worktree has none
+   (DEC-018 recorded this biting the P0-T07 review), and a db-marked pytest run with
+   `TEST_DATABASE_URL` unset **skips every db test and still exits 0** (measured: `sss`,
+   `3 skipped`; with an extra `-q` even the summary line disappears). So every db-marked pytest line
+   in a card (1) sets `TEST_DATABASE_URL=postgresql:///soc_p1t0N_test` inline — the conftest drops,
+   recreates and migrates whatever `_test` database it is given, so five parallel tasks never share
+   `soc_test` — (2) passes `-rs` and never adds `-q` (`addopts` already has one; `-qq` hides the
+   count), and (3) states its expected result as a numeric `N passed` with `skipped` absent; the
+   Reviewer greps the pasted output for `skipped`, and a hit fails the acceptance regardless of exit
+   code. Whole-suite runs go through `make test-db`, which refuses an unset or unreachable DSN
+   (measured, exit 1 both ways), and `make test-db TESTS=<path>` narrows it to one file. Migration
+   DSNs are passed as `scripts/migrate.sh`'s positional argument. No card depends on a file it
+   cannot see.
 
 7. **No task needs a daemon.** Context pack §3 as amended by DEC-018: local processes, native
    PostgreSQL 16 on `127.0.0.1:5432`, `grep -cE 'COMPOSE|docker compose' Makefile` → 0. The
    phrase "on a fresh container" in `prompts/P1.md` T07 is void.
 
-8. **Each task creates and drops its own scratch database.** `soc_dev` is shared and
-   `soc_test` belongs to the conftest fixture, which drops and recreates it every session.
-   A card that needs a clean database creates `soc_p1t0N` with `createdb`, migrates it, asserts,
-   and drops it. `CREATEDB` is granted (DEC-008, re-measured today: `rolcreatedb = t`).
+8. **Each task creates and drops its own scratch databases — two of them.** `soc_dev` is shared
+   and `soc_test` would be shared by every task's pytest run, each of which drops and recreates
+   it. A card creates `soc_p1t0N` with `createdb` for its shell lines (migrate it, assert, drop
+   it) and points the pytest `db` fixture at `soc_p1t0N_test` (decision 6). `CREATEDB` is granted
+   (DEC-008, re-measured today: `rolcreatedb = t`).
 
 ---
 
@@ -200,13 +211,13 @@ Everything below was measured on this host before these cards were written, per 
 
 | Claim in `prompts/P1.md` or handed to me | Measured | Consequence |
 |---|---|---|
-| "017 … `CREATE ROLE app_rw` and the owner role" | `app_rw` **already exists**: NOLOGIN, no attributes, `user1` is a member, `SET ROLE app_rw` succeeds. `user1` has `rolcreaterole = f`, so an unconditional `CREATE ROLE` **fails** — and per DEC-020, a conditional one fails too the moment the role is genuinely absent, because roles are cluster-global and `user1` cannot create one at all | 017's role creation is a conditional `DO` block, and the gate carries the "on a cluster where `app_rw` already exists" qualifier unless the Owner grants `CREATEROLE` |
-| "`conftest.py` connects as `app_rw` for tests that exercise the application" | `app_rw` is **NOLOGIN** — nothing can connect as it | Void as written. Whether the application connects as the owner and issues `SET ROLE` is **DEC-020's second Owner question**, so T06's card leaves it open rather than assuming route D |
+| "017 … `CREATE ROLE app_rw` and the owner role" | `app_rw` **already exists**: NOLOGIN, no attributes, `user1` is a member, `SET ROLE app_rw` succeeds. `user1` has `rolcreaterole = f`, so an unconditional `CREATE ROLE` **fails** — and per DEC-020, a conditional one fails too the moment the role is genuinely absent, because roles are cluster-global and `user1` cannot create one at all | DEC-023: 017 never runs `CREATE ROLE`; it checks `pg_roles` and stops with a message naming the one-off superuser step (HUONG-DAN §0). The gate carries the qualifier "on a cluster where role `app_rw` exists" |
+| "`conftest.py` connects as `app_rw` for tests that exercise the application" | `app_rw` is **NOLOGIN** — nothing can connect as it | Void for tests: `conftest.py` stays as the owner and tests use `SET ROLE app_rw` (`user1` is a member). The application itself connects as `app_rw` from P2, after a superuser makes the role LOGIN — DEC-023 route 2b |
 | "`soc_dev` does not exist / `createdb soc_dev` belongs in the first migration task" | `soc_dev` **exists**, owner `user1`, 14 tables, 12 migrations recorded — DEC-015 created it | No card creates it. Cards create their own scratch databases instead |
 | §6.1 "`alerts` + … `source ∈ wazuh|lab|replay`" | `alerts.source` **already exists** (`text NOT NULL DEFAULT 'wazuh'`, from 002), with **no CHECK** | 016 adds `ck_alerts_source` only. `ADD COLUMN source` would fail |
 | §6.1 "drop `sampled_for_control`" | **No such column.** It is a jsonb *payload key* in `docs/phase-3-auto-close.md:166`, never a column | 016 uses `DROP COLUMN IF EXISTS` — a documented no-op. INBOX item filed |
 | §6.1 "`assets/identities/iocs` + `source`, `loaded_at`, `active`" | `iocs.source` **already exists** and is **half the primary key**: `006_chot_hop_dong.sql:54-56`, `iocs_pkey PRIMARY KEY (value, source)` | 013 adds `source` to `assets` and `identities` only; `iocs` gets `loaded_at` and `active` |
-| §6.1 "Append-only enforcement: `REVOKE UPDATE, DELETE ON audit_events, llm_runs, intake FROM app_rw`" | Contradicts **G12** — `intake.processed_at` / `outcome` / `error` are written by an UPDATE after the pipeline job runs, so the contract forbids its own commit step **under every route**. Found by DEC-020's verification, not by me | 017 is blocked; the fix is a §6.1 wording change and the Owner's. **P1-T03 must not add its own workaround** — 014 creates `intake` with no privileges attached, which is correct either way |
+| §6.1 "Append-only enforcement: `REVOKE UPDATE, DELETE ON audit_events, llm_runs, intake FROM app_rw`" | Contradicts **G12** — `intake.processed_at` / `outcome` / `error` are written by an UPDATE after the pipeline job runs, so the contract forbids its own commit step **under every route**. Found by DEC-020's verification, not by me | Resolved by DEC-023 (route 1a): `REVOKE UPDATE, DELETE, TRUNCATE` then a column-level `GRANT UPDATE (processed_at, outcome, error)` plus a pinning trigger, all in 017. **P1-T03 adds no privileges** — 014 creates `intake` (now with `raw_text` and a generated `raw_payload`, DEC-023 item 5) and nothing else |
 | §6.1 "Dropped from v3: `enrich_cache`, `prompt_versions`" | `enrich_cache` exists (from 010), no FK or view depends on it. `prompt_versions` **never existed** | `DROP TABLE enrich_cache` assigned to 013. Nothing to do for `prompt_versions` |
 | §6.1 "`jobs.job_type ∈ pipeline\|triage\|investigate\|digest\|health\|pull`" | current `ck_jobs_job_type` is **`('enrich','triage')`** — measured pre-state: `INSERT … VALUES ('pull','x')` fails today and `('triage','x')` succeeds, which is the exact inversion P1-T05's acceptance 5 must produce — architecture §5's table says 5 values without `pull`; §6.1 says 6 | §6.1 wins (§0 precedence). 016 recreates over the 6 v3 values |
 | §6.1 "`audit_events.event_type` CHECK set = 21 v1 names + 6" | `ck_audit_event_type` holds exactly **21** values — counted | New set = 27. The 21 are pasted verbatim into T05's card |
@@ -240,7 +251,7 @@ Everything below was measured on this host before these cards were written, per 
 | P1-T03 | Migration 014 `intake_cursor_heartbeat` | must | 2 h | — | no |
 | P1-T04 | Migration 015 `labels_reviews_notes_eval_health` | must | 2.5 h | — | no |
 | P1-T05 | Migration 016 `alter_alerts_jobs_llm_runs_users` | must | 3 h | — | no |
-| P1-T06 | Migration 017 `append_only_and_roles` | must — **blocked** | 2.5 h | P1-T03 **and DEC-020's two Owner questions** | **yes — the two §6.1 questions in DEC-020** |
+| P1-T06 | Migration 017 `append_only_and_roles` | must | 2.5 h | P1-T03 (unblocked by DEC-023) | no — the superuser step that makes `app_rw` LOGIN is a P2 prerequisite, not this task's |
 | P1-T07 | `make migrate` end-to-end, `schema.sql` regeneration, `make test-db` green | must | 1.5 h | T02–T05, and T06 if it merges | no |
 
 File scope is disjoint by construction: one `.sql` file and one test file per migration task.
@@ -277,7 +288,7 @@ File scope is disjoint by construction: one `.sql` file and one test file per mi
 - Contracts touched: §6.1 — new tables, transcribe.
 - Depends on: —
 - Estimate: 2 h
-- Risk / notes: On the critical path — P1-T06 cannot start until this merges. `intake_id` must be `GENERATED BY DEFAULT AS IDENTITY` (planning decision 5).
+- Risk / notes: On the critical path — P1-T06 cannot start until this merges. `intake_id` must be `GENERATED BY DEFAULT AS IDENTITY` (planning decision 5). DEC-023: `raw_text text NOT NULL` holds the received bytes and `raw_payload` is `GENERATED ALWAYS AS (raw_text::jsonb) STORED`; the card carries the byte-compare test with its control assertion.
 
 ### P1-T04 · Migration 015 `labels_reviews_notes_eval_health`
 - Priority: must — **the designated cut if the day runs long** (see the budget note)
@@ -300,14 +311,14 @@ File scope is disjoint by construction: one `.sql` file and one test file per mi
 - Risk / notes: The largest card. `alerts.source` exists — add the CHECK, not the column. `sampled_for_control` does not exist — `DROP COLUMN IF EXISTS`. `ck_jobs_job_type` is currently `('enrich','triage')`, so `enrich` is dropped from the set as the phase spec requires.
 
 ### P1-T06 · Migration 017 `append_only_and_roles`
-- Priority: must — **BLOCKED on DEC-020, do not dispatch**
-- Goal: `audit_events`, `llm_runs` and `intake` are append-only against both the privilege layer and the trigger layer, TRUNCATE included.
-- Scope in: `017_append_only_and_roles.sql` + tests. Scope out: `conftest.py`; `schema.sql` (T07).
+- Priority: must — dispatch once P1-T03 has merged (unblocked by DEC-023)
+- Goal: `audit_events`, `llm_runs` and `intake` are append-only against both the privilege layer and the trigger layer, TRUNCATE included, with G12's completion write on `intake` still possible.
+- Scope in: `017_append_only_and_roles.sql` + tests. Scope out: `conftest.py` (unchanged — tests `SET ROLE app_rw` from the owner); making `app_rw` LOGIN (Owner, superuser, before P2); `schema.sql` (T07).
 - Files — create: `docs/Schema/017_append_only_and_roles.sql`, `backend/tests/test_schema_v3_017.py` / modify: —
-- Contracts touched: §6.1 append-only clause and the role split — **both currently under Owner review (DEC-020)**.
-- Depends on: **P1-T03** (`intake` must exist) **and DEC-020's two Owner questions being answered**.
-- Estimate: 2.5 h once unblocked
-- Risk / notes: The card is written and carries everything that is settled — the trigger function, the six triggers, the conditional role creation, the explicit privilege list — with the two contested clauses marked and left unwritten. **It needs one re-plan pass after the DEC lands**, because the answer to question 1 changes the `REVOKE`/`GRANT` lines and the answer to question 2 changes whether `conftest.py` is in scope at all. Do not let a coder guess either. The `BEFORE TRUNCATE` statement-level trigger is settled and survives DEC-016's withdrawal.
+- Contracts touched: §6.1 append-only clause as amended by DEC-023 — settled; transcribe.
+- Depends on: **P1-T03** (`intake` must exist, with `raw_text`).
+- Estimate: 2.5 h
+- Risk / notes: The card was re-planned in full on 05/09: the whole migration is written out (no `CREATE ROLE` — a `pg_roles` guard instead; `REVOKE` before the column `GRANT`, which is load-bearing; two trigger functions, seven triggers; explicit grants plus default privileges), and every acceptance line was run against a database built by `migrate.sh` + 014. The `BEFORE TRUNCATE` statement-level trigger is settled and survives DEC-016's withdrawal.
 
 ### P1-T07 · `make migrate` end to end, `schema.sql` regeneration, `make test-db` green
 - Priority: must
@@ -315,7 +326,7 @@ File scope is disjoint by construction: one `.sql` file and one test file per mi
 - Scope in: regenerating `schema.sql`; `backend/tests/test_schema_v3.py`. Scope out: editing any `NNN_*.sql`; editing `build_schema.py`; the `Makefile`.
 - Files — create: `backend/tests/test_schema_v3.py` / modify: `docs/Schema/schema.sql` (regenerated, never hand-edited)
 - Contracts touched: none
-- Depends on: P1-T02, P1-T03, P1-T04, P1-T05 merged into `main`; P1-T06 too **if it has been unblocked and merged**. Its preflight counts what is actually there and says which case it is in
+- Depends on: P1-T02, P1-T03, P1-T04, P1-T05 merged into `main`; P1-T06 too **if it has merged** (unblocked by DEC-023). Its preflight counts what is actually there and says which case it is in
 - Estimate: 1.5 h
 - Risk / notes: If a migration is broken this is where it shows. The task **reports** the failure and does not fix another task's `.sql` file; that goes back to its owner.
 
@@ -341,13 +352,13 @@ File scope is disjoint by construction: one `.sql` file and one test file per mi
    two playbooks branching on `crown_jewel` (`kb/playbooks/malware.md:36`,
    `kb/playbooks/ssh_brute_force.md:34`, rewritten at the P3 playbook review). 013 lands the
    column change; it does not settle either.
-5. **`docs/limitations.md` (P8) owes a line about the append-only escape surface, and DEC-020
-   widened it.** Not "a session can `RESET ROLE`" — measured, **all** of `RESET ROLE`,
-   `SET ROLE NONE`, `SET ROLE user1`, `SET SESSION AUTHORIZATION user1` and `DISCARD ALL`
-   (pgbouncer's default reset query) return a pooled connection to the owner, which can then
-   `DROP TRIGGER`. The line must say "the application's own connection can return to the owner by
-   several ordinary means". Whatever route 017 ends up taking, this is the residual weakening to
-   publish.
+5. **`docs/limitations.md` (P8) owes two lines on the append-only enforcement (DEC-023).**
+   (a) `app_rw` also holds legacy grants on the v1 `soc`, which making it LOGIN exposes to the same
+   password; `DATABASE_URL` points only at `soc_dev`, and `REVOKE CONNECT ON DATABASE soc FROM
+   app_rw` needs `postgres`. (b) The owner's socket session is passwordless and can `DROP TRIGGER`:
+   append-only is enforced against the application, not against whoever holds the `user1` OS
+   account. The earlier `RESET ROLE` / `DISCARD ALL` line is withdrawn — it described an application
+   session that *was* the owner, which DEC-023's route 2b removed.
 6. **DEC-017 / DEC-019 — the G1 source — does not touch P1.** I was told it is still escalated;
    `main` @ `f1c7472` records DEC-019 as the Owner's answer ("both"). Either way nothing in this
    phase depends on it: no card here reads an alert source, and `alerts.source ∈ wazuh|lab|replay`

@@ -1,0 +1,94 @@
+{
+  "_index": "wazuh-alerts-4.x-2026.09.02",
+  "_id": "57xpYaABBuJZI1OQ-UVO",
+  "_score": null,
+  "_source": {
+    "rule": {
+      "level": 6,
+      "description": "Executed python script from /tmp/ folder.",
+      "mail": false,
+      "mitre": {
+        "tactic": [
+          "Execution"
+        ],
+        "technique": [
+          "Python"
+        ],
+        "id": [
+          "T1059.006"
+        ]
+      },
+      "groups": [
+        "audit_detections"
+      ],
+      "firedtimes": 1,
+      "id": "92601"
+    },
+    "@timestamp": "2026-09-02T09:18:50.080321971Z",
+    "path": "/var/ossec/logs/alerts/alerts.json",
+    "data": {
+      "audit": {
+        "tty": "(none)",
+        "uid": "1000",
+        "key": "exec",
+        "auid": "1000",
+        "euid": "1000",
+        "id": "419305",
+        "fsgid": "1000",
+        "arch": "c000003e",
+        "cwd": "/tmp/probe-esc",
+        "exe": "/usr/bin/python3.12",
+        "execve": {
+          "a0": "/usr/bin/python3",
+          "a2": "--fix",
+          "argc": "3",
+          "a1": "/tmp/probe-esc/director/check_settings.py"
+        },
+        "command": "python3",
+        "egid": "1000",
+        "session": "785",
+        "file": {
+          "inode": "15730583",
+          "mode": "0100755",
+          "name": "/usr/bin/python3"
+        },
+        "pid": "987390",
+        "exit": "0",
+        "success": "yes",
+        "suid": "1000",
+        "gid": "1000",
+        "fsuid": "1000",
+        "syscall": "59",
+        "ppid": "987389",
+        "sgid": "1000",
+        "type": "SYSCALL"
+      }
+    },
+    "id": "1788340729.1510032",
+    "tags": [
+      "wazuh_alerts"
+    ],
+    "location": "/var/log/audit/audit.log",
+    "event": {
+      "original": "{\"timestamp\":\"2026-09-02T16:18:49.557+0700\",\"rule\":{\"level\":6,\"description\":\"Executed python script from /tmp/ folder.\",\"id\":\"92601\",\"mitre\":{\"id\":[\"T1059.006\"],\"tactic\":[\"Execution\"],\"technique\":[\"Python\"]},\"firedtimes\":1,\"mail\":false,\"groups\":[\"audit_detections\"]},\"agent\":{\"id\":\"000\",\"name\":\"IA1803\"},\"manager\":{\"name\":\"IA1803\"},\"id\":\"1788340729.1510032\",\"full_log\":\"type=SYSCALL msg=audit(1788340728.902:419305): arch=c000003e syscall=59 success=yes exit=0 a0=75595a3c6430 a1=75595a3c6450 a2=7fffccb000d8 a3=75595ac148a8 items=2 ppid=987389 pid=987390 auid=1000 uid=1000 gid=1000 euid=1000 suid=1000 fsuid=1000 egid=1000 sgid=1000 fsgid=1000 tty=(none) ses=785 comm=\\\"python3\\\" exe=\\\"/usr/bin/python3.12\\\" subj=unconfined key=\\\"exec\\\"\\u001dARCH=x86_64 SYSCALL=execve AUID=\\\"user1\\\" UID=\\\"user1\\\" GID=\\\"user1\\\" EUID=\\\"user1\\\" SUID=\\\"user1\\\" FSUID=\\\"user1\\\" EGID=\\\"user1\\\" SGID=\\\"user1\\\" FSGID=\\\"user1\\\" type=EXECVE msg=audit(1788340728.902:419305): argc=3 a0=\\\"/usr/bin/python3\\\" a1=\\\"/tmp/probe-esc/director/check_settings.py\\\" a2=\\\"--fix\\\" type=CWD msg=audit(1788340728.902:419305): cwd=\\\"/tmp/probe-esc\\\" type=PATH msg=audit(1788340728.902:419305): item=0 name=\\\"/usr/bin/python3\\\" inode=15730583 dev=08:02 mode=0100755 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0\\u001dOUID=\\\"root\\\" OGID=\\\"root\\\" type=PATH msg=audit(1788340728.902:419305): item=1 name=\\\"/lib64/ld-linux-x86-64.so.2\\\" inode=15731106 dev=08:02 mode=0100755 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0\\u001dOUID=\\\"root\\\" OGID=\\\"root\\\" type=PROCTITLE msg=audit(1788340728.902:419305): proctitle=2F7573722F62696E2F707974686F6E33002F746D702F70726F62652D6573632F6469726563746F722F636865636B5F73657474696E67732E7079002D2D666978\",\"decoder\":{\"parent\":\"auditd\",\"name\":\"auditd\"},\"data\":{\"audit\":{\"type\":\"SYSCALL\",\"id\":\"419305\",\"arch\":\"c000003e\",\"syscall\":\"59\",\"success\":\"yes\",\"exit\":\"0\",\"ppid\":\"987389\",\"pid\":\"987390\",\"auid\":\"1000\",\"uid\":\"1000\",\"gid\":\"1000\",\"euid\":\"1000\",\"suid\":\"1000\",\"fsuid\":\"1000\",\"egid\":\"1000\",\"sgid\":\"1000\",\"fsgid\":\"1000\",\"tty\":\"(none)\",\"session\":\"785\",\"command\":\"python3\",\"exe\":\"/usr/bin/python3.12\",\"key\":\"exec\",\"execve\":{\"argc\":\"3\",\"a0\":\"/usr/bin/python3\",\"a1\":\"/tmp/probe-esc/director/check_settings.py\",\"a2\":\"--fix\"},\"cwd\":\"/tmp/probe-esc\",\"file\":{\"name\":\"/usr/bin/python3\",\"inode\":\"15730583\",\"mode\":\"0100755\"}}},\"location\":\"/var/log/audit/audit.log\"}"
+    },
+    "agent": {
+      "id": "000",
+      "name": "IA1803"
+    },
+    "timestamp": "2026-09-02T16:18:49.557+0700",
+    "decoder": {
+      "name": "auditd",
+      "parent": "auditd"
+    },
+    "full_log": "type=SYSCALL msg=audit(1788340728.902:419305): arch=c000003e syscall=59 success=yes exit=0 a0=75595a3c6430 a1=75595a3c6450 a2=7fffccb000d8 a3=75595ac148a8 items=2 ppid=987389 pid=987390 auid=1000 uid=1000 gid=1000 euid=1000 suid=1000 fsuid=1000 egid=1000 sgid=1000 fsgid=1000 tty=(none) ses=785 comm=\"python3\" exe=\"/usr/bin/python3.12\" subj=unconfined key=\"exec\"\u001dARCH=x86_64 SYSCALL=execve AUID=\"user1\" UID=\"user1\" GID=\"user1\" EUID=\"user1\" SUID=\"user1\" FSUID=\"user1\" EGID=\"user1\" SGID=\"user1\" FSGID=\"user1\" type=EXECVE msg=audit(1788340728.902:419305): argc=3 a0=\"/usr/bin/python3\" a1=\"/tmp/probe-esc/director/check_settings.py\" a2=\"--fix\" type=CWD msg=audit(1788340728.902:419305): cwd=\"/tmp/probe-esc\" type=PATH msg=audit(1788340728.902:419305): item=0 name=\"/usr/bin/python3\" inode=15730583 dev=08:02 mode=0100755 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0\u001dOUID=\"root\" OGID=\"root\" type=PATH msg=audit(1788340728.902:419305): item=1 name=\"/lib64/ld-linux-x86-64.so.2\" inode=15731106 dev=08:02 mode=0100755 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0\u001dOUID=\"root\" OGID=\"root\" type=PROCTITLE msg=audit(1788340728.902:419305): proctitle=2F7573722F62696E2F707974686F6E33002F746D702F70726F62652D6573632F6469726563746F722F636865636B5F73657474696E67732E7079002D2D666978",
+    "manager": {
+      "name": "IA1803"
+    },
+    "@version": "1",
+    "host": "IA1803"
+  },
+  "sort": [
+    1788340729557
+  ]
+}

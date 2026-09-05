@@ -1,0 +1,70 @@
+{
+  "_index": "wazuh-alerts-4.x-2026.09.02",
+  "_id": "z7xiYaABBuJZI1OQIioV",
+  "_score": null,
+  "_source": {
+    "rule": {
+      "tsc": [
+        "CC6.1",
+        "CC7.2",
+        "CC7.3",
+        "PI1.4",
+        "PI1.5",
+        "CC7.1",
+        "CC8.1"
+      ],
+      "pci_dss": [
+        "10.5.2",
+        "10.5.5"
+      ],
+      "description": "Log file rotated.",
+      "mail": false,
+      "firedtimes": 4,
+      "id": "591",
+      "hipaa": [
+        "164.312.b"
+      ],
+      "level": 3,
+      "gpg13": [
+        "10.1"
+      ],
+      "groups": [
+        "ossec"
+      ],
+      "nist_800_53": [
+        "AU.9"
+      ],
+      "gdpr": [
+        "II_5.1.f",
+        "IV_35.7.d"
+      ]
+    },
+    "@timestamp": "2026-09-02T09:10:15.737472141Z",
+    "path": "/var/ossec/logs/alerts/alerts.json",
+    "id": "1788340214.1508655",
+    "tags": [
+      "wazuh_alerts"
+    ],
+    "location": "logcollector",
+    "event": {
+      "original": "{\"timestamp\":\"2026-09-02T16:10:14.689+0700\",\"rule\":{\"level\":3,\"description\":\"Log file rotated.\",\"id\":\"591\",\"firedtimes\":4,\"mail\":false,\"groups\":[\"ossec\"],\"pci_dss\":[\"10.5.2\",\"10.5.5\"],\"gpg13\":[\"10.1\"],\"gdpr\":[\"II_5.1.f\",\"IV_35.7.d\"],\"hipaa\":[\"164.312.b\"],\"nist_800_53\":[\"AU.9\"],\"tsc\":[\"CC6.1\",\"CC7.2\",\"CC7.3\",\"PI1.4\",\"PI1.5\",\"CC7.1\",\"CC8.1\"]},\"agent\":{\"id\":\"000\",\"name\":\"IA1803\"},\"manager\":{\"name\":\"IA1803\"},\"id\":\"1788340214.1508655\",\"full_log\":\"ossec: File rotated (inode changed): '/var/log/audit/audit.log'.\",\"decoder\":{\"name\":\"ossec\"},\"location\":\"logcollector\"}"
+    },
+    "agent": {
+      "id": "000",
+      "name": "IA1803"
+    },
+    "timestamp": "2026-09-02T16:10:14.689+0700",
+    "decoder": {
+      "name": "ossec"
+    },
+    "full_log": "ossec: File rotated (inode changed): '/var/log/audit/audit.log'.",
+    "manager": {
+      "name": "IA1803"
+    },
+    "@version": "1",
+    "host": "IA1803"
+  },
+  "sort": [
+    1788340214689
+  ]
+}

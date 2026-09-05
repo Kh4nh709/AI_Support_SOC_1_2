@@ -1,0 +1,59 @@
+{
+  "_index": "wazuh-alerts-4.x-2026.09.02",
+  "_id": "2LxtYaABBuJZI1OQ91Sv",
+  "_score": null,
+  "_source": {
+    "rule": {
+      "level": 11,
+      "description": "Possible kernel level rootkit",
+      "mail": false,
+      "mitre": {
+        "tactic": [
+          "Defense Evasion"
+        ],
+        "technique": [
+          "Rootkit"
+        ],
+        "id": [
+          "T1014"
+        ]
+      },
+      "groups": [
+        "ossec",
+        "rootcheck"
+      ],
+      "firedtimes": 1,
+      "id": "521"
+    },
+    "@timestamp": "2026-09-02T09:23:11.809473203Z",
+    "path": "/var/ossec/logs/alerts/alerts.json",
+    "data": {
+      "title": "Anomaly detected in file '/tmp/.mount_ObsidiXxdw5L'."
+    },
+    "id": "1788340990.1853286",
+    "tags": [
+      "wazuh_alerts"
+    ],
+    "location": "rootcheck",
+    "event": {
+      "original": "{\"timestamp\":\"2026-09-02T16:23:10.823+0700\",\"rule\":{\"level\":11,\"description\":\"Possible kernel level rootkit\",\"id\":\"521\",\"mitre\":{\"id\":[\"T1014\"],\"tactic\":[\"Defense Evasion\"],\"technique\":[\"Rootkit\"]},\"firedtimes\":1,\"mail\":false,\"groups\":[\"ossec\",\"rootcheck\"]},\"agent\":{\"id\":\"000\",\"name\":\"IA1803\"},\"manager\":{\"name\":\"IA1803\"},\"id\":\"1788340990.1853286\",\"full_log\":\"Anomaly detected in file '/tmp/.mount_ObsidiXxdw5L'. Hidden from stats, but showing up on readdir. Possible kernel level rootkit.\",\"decoder\":{\"name\":\"rootcheck\"},\"data\":{\"title\":\"Anomaly detected in file '/tmp/.mount_ObsidiXxdw5L'.\"},\"location\":\"rootcheck\"}"
+    },
+    "agent": {
+      "id": "000",
+      "name": "IA1803"
+    },
+    "timestamp": "2026-09-02T16:23:10.823+0700",
+    "decoder": {
+      "name": "rootcheck"
+    },
+    "full_log": "Anomaly detected in file '/tmp/.mount_ObsidiXxdw5L'. Hidden from stats, but showing up on readdir. Possible kernel level rootkit.",
+    "manager": {
+      "name": "IA1803"
+    },
+    "@version": "1",
+    "host": "IA1803"
+  },
+  "sort": [
+    1788340990823
+  ]
+}

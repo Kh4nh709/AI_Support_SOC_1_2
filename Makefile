@@ -11,6 +11,7 @@
 
 PY             ?= python3
 PYTEST         ?= $(PY) -m pytest -c backend/pyproject.toml
+TESTS          ?= backend/tests
 MIGRATIONS_DIR ?= docs/Schema
 APP_HOST       ?= 127.0.0.1
 APP_PORT       ?= 8000
@@ -24,7 +25,7 @@ LINT_PATHS := $(wildcard backend eval)
 help:
 	@echo "AI Support SOC — make targets"
 	@echo "  test        run the unit tests (excludes db and live markers)"
-	@echo "  test-db     run the db-marked tests against TEST_DATABASE_URL"
+	@echo "  test-db     run the db-marked tests against TEST_DATABASE_URL (TESTS=<path> narrows the run)"
 	@echo "  lint        ruff check + black --check over $(LINT_PATHS)"
 	@echo "  migrate     apply docs/Schema migrations to DATABASE_URL_OWNER"
 	@echo "  run-app     uvicorn on $(APP_HOST):$(APP_PORT)"
@@ -53,7 +54,7 @@ test-db:
 	  exit 1; \
 	fi; \
 	echo "test-db: using $$dsn"; \
-	TEST_DATABASE_URL="$$dsn" $(PYTEST) -m "db and not live" backend/tests
+	TEST_DATABASE_URL="$$dsn" $(PYTEST) -m "db and not live" -rs $(TESTS)
 
 # Guarded at parse time, not inside the recipe: an `exit 0` in a recipe line
 # only ends that line's shell, it does not stop the target.
