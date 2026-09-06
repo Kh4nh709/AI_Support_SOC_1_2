@@ -114,7 +114,8 @@ rules:
   dec: DEC-024(a)
   severity: high
   status: fixed
-  pattern: -- Runs as the database owner. Needs role app_rw to exist on the cluster -- (cluster-globa
+  pattern: Needs role app_rw to exist on the cluster
+  pattern_note: canonical short form (DEC-039). The original joined two source lines with ' -- ' and _offending_lines() matches per line, so it could never fire.
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T06.prompt.md
   reason: Design note 1 opens "The migration. Write it exactly like this." — it is the block the Coder
     transcribes. It still implements DEC-023 item 3 ("017 never runs CREATE ROLE"), which DEC-024(a) superseded
@@ -123,7 +124,8 @@ rules:
   dec: DEC-024(a)
   severity: high
   status: fixed
-  pattern: 017 never runs `CREATE ROLE`; it checks `pg_roles` and stops with a message naming the pre
+  pattern: '`pg_roles` guard instead'
+  pattern_note: canonical short form (DEC-039). The original carried DEC-023 item 3 verbatim and missed the paraphrase actually written at P1-tasks.md:322.
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-tasks.md
   reason: 'DEC-024''s Supersedes line reads "DEC-023 item 3 (017 may now create the role, as NOLOGIN)".
     This sentence is item 3 verbatim and was never updated. Every migration card''s "Read first" sends

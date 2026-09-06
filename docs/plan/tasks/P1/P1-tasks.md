@@ -319,7 +319,7 @@ File scope is disjoint by construction: one `.sql` file and one test file per mi
 - Contracts touched: §6.1 append-only clause as amended by DEC-023 — settled; transcribe.
 - Depends on: **P1-T03** (`intake` must exist, with `raw_text`).
 - Estimate: 2.5 h
-- Risk / notes: The card was re-planned in full on 05/09: the whole migration is written out (no `CREATE ROLE` — a `pg_roles` guard instead; `REVOKE` before the column `GRANT`, which is load-bearing; two trigger functions, seven triggers; explicit grants plus default privileges), and every acceptance line was run against a database built by `migrate.sh` + 014. The `BEFORE TRUNCATE` statement-level trigger is settled and survives DEC-016's withdrawal.
+- Risk / notes: The card was re-planned in full on 05/09: the whole migration is written out (**it creates `app_rw` as NOLOGIN when absent, guarded by a `pg_roles` existence check — DEC-024(a) withdrew the earlier ruling that forbade it**; `REVOKE` before the column `GRANT`, which is load-bearing; two trigger functions, seven triggers; explicit grants plus default privileges), and every acceptance line was run against a database built by `migrate.sh` + 014. The `BEFORE TRUNCATE` statement-level trigger is settled and survives DEC-016's withdrawal.
 
 ### P1-T07 · `make migrate` end to end, `schema.sql` regeneration, `make test-db` green
 - Priority: must
