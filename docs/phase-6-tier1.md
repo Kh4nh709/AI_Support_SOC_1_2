@@ -170,6 +170,13 @@ INSERT INTO cases (case_id, title, status, severity, created_by, created_at)
 VALUES ($uuid, $title, 'investigating', $severity, $user_id, now());
 
 -- ② Cố định hóa cụm tương quan — đây là lúc DUY NHẤT correlation được lưu
+-- CHỈ CHÈN ALERT GỐC (DEC-036, 06/09). Mỗi nhánh UNION phải lọc `duplicate_of IS NULL`.
+--   Đo trên DB đã migrate: `ck_alerts_ban_sao_phai_seal_va_tro_goc` buộc mọi dòng `duplicate`
+--   có `sealed_at`, và CHECK trạng thái cấm dòng đã seal sang 'escalated_tier2' — nên nếu ②
+--   chèn bản sao thì ③a (chạm MỌI dòng case_alerts có case_id IS NULL) vi phạm CHECK, và phép
+--   so số dòng của chính ③a cũng lệch. ③b bên dưới đã xử lý bản sao đúng cách (chỉ gắn
+--   case_id), và ghi chú cuối mục này đã nói tư cách thành viên tính được bằng
+--   `duplicate_of IN (case_alerts)` — nên heads-only KHÔNG mất thông tin nào.
 INSERT INTO case_alerts (case_id, alert_id, added_by, added_at)
 SELECT $uuid, alert_id, $user_id, now()
 FROM (

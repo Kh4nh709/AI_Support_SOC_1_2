@@ -48,13 +48,13 @@ Owner: the thesis author (also Tier-1/Tier-2 analyst together with the advisor).
 | `tier1/` | tier | domain, llm, kb, security, infra, audit | `queue.py`, `decide.py`, `triage.py` (job ①), `digest.py` |
 | `tier2/` | tier | domain, llm, kb, security, infra, audit, enrichment | `dossier.py`, `investigate.py` (job ②), `conclude.py` |
 | `domain/` | infra | infra, audit | `alert.py`, `transitions.py`, `correlation.py` |
-| `infra/` | infra | — | `db.py`, `jobs.py`, `worker.py`, `auth.py`, `config.py`, `errors.py`, `puller.py`, `intake.py`, `health.py`, `notify.py` |
+| `infra/` | infra | — | `db.py`, `jobs.py`, `worker.py` (**the claim/lock/retry/reclaim loop only — it names no handler and imports no tier; DEC-037**), `auth.py`, `config.py`, `errors.py`, `puller.py`, `intake.py`, `health.py`, `notify.py` |
 | `audit/` | infra | infra | `events.py`, `llm_runs.py` |
 | `security/` | infra | infra | `wrap.py` (nonce, boc), `linter.py`, `gate.py`, `detector.py`, `output_guard.py` |
 | `llm/` | infra | security, infra, kb | `adapter.py`, `builder.py` (typed), `triage.py` (proposer + verifier), `investigate.py`, `templates/` |
 | `kb/` | infra | infra | `playbooks/*.md`, `decision_tables/*.yaml`, `lookup.py` |
 | `enrichment/` | infra | infra | `inventory.py` (YAML/CSV loader), `lookups.py` |
-| `web/` | composition root | everything | Jinja templates, HTMX routes |
+| `web/` | composition root | everything | `main.py` (FastAPI app), **`worker.py` — the job worker entry point and the job-type → handler table (`make run-worker` runs `app.web.worker`); that table maps job types to tier code, so under G1 only a composition root may hold it (DEC-037)**, Jinja templates, HTMX routes |
 | `eval/` | composition root | everything | `build_gold.py`, `label_export.py`, `run_configs.py`, `report.py`, `regression_gate.py`, `smoke_test.py` |
 
 The legacy top-level `llm/` directory is moved into `backend/app/llm/` and `backend/app/security/` during P3; after that the top-level `llm/` is deleted.

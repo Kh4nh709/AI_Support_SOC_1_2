@@ -524,3 +524,73 @@ Consequences:
   - **No `superseded.yaml` row, and why.** The false meaning was never written as a sentence a pattern could match; it was an unstated assumption behind "timeout 120 s". A canonical row for a phrase that appears nowhere would be `fixed` without ever having been red — exactly the vacuous guard DEC-027 forbids. The guard here is the P3 test the brief requires: the fake that stalls past the deadline.
   - **The report's §4 headroom argument is retired on this ground alone.** "`LLM_TIMEOUT_S` is already 120 s" was offered as headroom for accepting the model; the measurement exceeded it and the number bounded nothing. DEC-032 already says so; recorded here so the contract entry is complete without it.
 Supersedes: — (annotates §6.3 / §7.5; extends DEC-032)
+
+## DEC-034 · 2026-09-06 · `risk_score` asset weights on the DEC-004 vocabulary: `high 30 · medium 10 · low 0 · unknown 0`
+Scope: tactical
+Decided by: Director
+Drafted by: Director (Opus 5)
+Propagated to: `docs/phase-4-enrichment.md:170` (annotated in place — nine documents cite that file by line number, so the line count is unchanged) · `INBOX.md` (2026-09-06 · P2-T10 · DECISION_REQUEST resolved) · `STATE.md` (the Director action it closes)
+Context: `docs/phase-4-enrichment.md:170` weights the asset term over `crown_jewel|high|normal|low`, two of which DEC-004 abolished; `inventory.validate()` now rejects them, so `soar/risk.py` (P2-T10) could not be written from the spec. DEC-004's own Consequences ordered this follow-up on 05/09 and it was never taken.
+Decision: **Option A — `{"high": 30, "medium": 10, "low": 0, "unknown": 0}`.** v3's `high` inherits `crown_jewel`'s 30 because `high` is now the tier that is a hard auto-close block (G8′), which is the role the abolished value played; every worked example in phase-4 survives verbatim under these numbers.
+Consequences:
+  - Inside my rights: `risk_score` weights are a v1-spec constant, not a §6 item, and no threshold anywhere reads the score — it is displayed and logged, never compared. Nothing in §6 changes.
+  - `unknown` scores 0 rather than a middle value on purpose: an asset missing from the inventory is already a hard auto-close block, so giving it risk points would double-count the same fact in the one direction that matters.
+  - The spec line is annotated rather than struck: the old map is quoted in the annotation so a reader meeting a v1 transcript recognises it, per the DEC-022 precedent for frozen text.
+  - P2-T10's card already carries option A as its default, so no card changes.
+Supersedes: — (completes DEC-004's second follow-up)
+
+## DEC-035 · 2026-09-06 · A replay row is recognised by document shape, for P2 only; P6's `lab` is left open
+Scope: tactical
+Decided by: Director
+Drafted by: Director (Opus 5)
+Propagated to: `INBOX.md` (2026-09-06 · P2-T10 / P2-T13 · DECISION_REQUEST resolved) · `STATE.md` (the Director action it closes, and the P6 hand-off it leaves open)
+Context: `intake.via ∈ pull|webhook` has no value for an archive replay row, and the pipeline job reads one `intake` row that carries no source. DEC-019 provisioned `alerts.source ∈ wazuh|lab|replay` but not the place the pipeline learns which rows are replay.
+Decision: **Option A — derive it from the document shape, for P2 only.** A pulled indexer hit carries the envelope keys `_id`/`_index`/`_source`/`sort`; an archive line carries none of them. `source = 'replay'` when `via = 'pull'` and the envelope is absent, `'wazuh'` otherwise. P6's `lab` source is explicitly **not** decided here.
+Consequences:
+  - Chosen over B and C because both are §6.1 changes needing the Owner and a migration `018` for a distinction the data already makes; the shape test was measured today rather than assumed, and A costs nothing that B could not still buy later if P6 wants it.
+  - **The narrowness is the point, and it is a liability, not a saving.** P6's loader has exactly the same gap and A does not solve it: a `lab` row is also envelope-free and would derive as `replay`. P6 must either widen the CHECK (B) or add `intake.source` (C) — a decision that belongs with the P6 cards, before the loader is written, and it is on the board as an open Owner/Planner item, not left implicit in this entry.
+  - No frozen contract changes; `intake.via` keeps its two values.
+Supersedes: —
+
+## DEC-036 · 2026-09-06 · `case_alerts` holds heads only; phase-6's escalate ② is annotated so the failing form is not transcribed
+Scope: tactical
+Decided by: Director
+Drafted by: Director (Opus 5)
+Propagated to: `docs/phase-6-tier1.md` § Escalate ② (eight annotation lines — no file cites this one by line number, verified) · `INBOX.md` (2026-09-06 · P2-T06 · QUESTION resolved) · `STATE.md` (the Director action it closes)
+Context: phase-6's escalate ② inserts the trigger alert's duplicates into `case_alerts`; its ③a then flips every `case_alerts` row with `case_id IS NULL` to `escalated_tier2`. On the migrated database `ck_alerts_ban_sao_phai_seal_va_tro_goc` requires every `duplicate` row to carry `sealed_at`, and a sealed row may not take that status — so the transaction as written fails, and ③a's own row-count comparison would disagree too.
+Decision: **Option A — `case_alerts` holds heads only.** Every UNION arm in ② filters `duplicate_of IS NULL`; ③b keeps handling duplicates exactly as it already does, by setting `case_id` and leaving `status = 'duplicate'`.
+Consequences:
+  - **The spec already contained its own answer twice**, which is why this is a transcription fix and not a design change: ③b's comment says a duplicate always has `sealed_at` so changing its status would violate H3, and the note below the block says case membership is still computable as `duplicate_of IN (case_alerts)` — "đúng như P7 đang làm". Only ② disagreed with the rest of its own section.
+  - Option B — keep duplicates in `case_alerts` and narrow ③a's WHERE — was rejected because it puts rows into a membership table that every later reader must then filter, buying nothing: the same membership is already derivable.
+  - No frozen contract changes: the CHECKs are v1 schema already in §6.1's kept list, and the edit is to a v1 spec paragraph.
+  - Annotated in the same commit, as the Owner required, so the next reader meets the correction at the point of transcription rather than in the log.
+Supersedes: —
+
+## DEC-037 · 2026-09-06 · The job worker's handler table lives in the composition root; §4's package map is corrected to match
+Scope: tactical
+Decided by: Director
+Drafted by: Director (Opus 5)
+Propagated to: `00-context-pack.md` §4 (the `infra/` and `web/` rows, in place — the file's line count is unchanged) · this entry is cited by `P2-T02` (loop), `P2-T10` (table, `make run-worker`, and the Makefile diff assertion) and `P2-T11` (the `pull` job seed)
+Context: the Planner put the job-type → handler table in `web/worker.py`, left `infra/worker.py` naming no handler, and made P2-T10 repoint `make run-worker` at `app.web.worker`. The Owner asked whether that reading of G1 is right, and said plainly to say so if it is not.
+Decision: **It is right, and it is forced — there is no other legal home.** G1 reads "infrastructure packages never import tiers", with one allowlisted exception (`soar/pipeline.py` → `ingest`). The handler table must name tier code — `soar.pipeline` for the `pipeline` job, `tier1.triage` for `triage` — so any module holding it imports tiers. `infra/` may not. §4 gives exactly two packages that may import everything, `web/` and `eval/`, and a long-running process belongs in `web/`, not in the evaluation harness. Therefore §4's package map, which lists `worker.py` under `infra/` and mentions nothing of the kind under `web/`, is now stale and is corrected here.
+Consequences:
+  - **What each module owns.** `infra/worker.py`: the claim/lock/retry/reclaim loop, no handler names, no tier imports — it stays testable without any tier. `web/worker.py`: the entry point, the table, and the first `pull` job seed. `make run-worker` runs `app.web.worker` (P2-T10 makes that change and asserts the Makefile diff is exactly two lines).
+  - **`test_import_rules.py` needs no allowlist entry, and that is the check that the reading is right.** `ALLOWED` grants `web` everything and `ALLOWLIST` holds only `("soar.pipeline", "ingest")`; a handler table in `web/` adds no violation, while the same table in `infra/` would need a new allowlist pair — and the file's own docstring says any change to `ALLOWED`/`ALLOWLIST` requires a `DECISIONS.md` id. The design that needs no exception is the one G1 was written for.
+  - **Why the package map had to move rather than the code.** §4 is not a frozen contract (frozen is §6 only), so this is the Director's to correct; had the map been frozen, the Owner would be reading an escalation instead.
+  - Recorded because two audiences would otherwise have to guess: a P2 Coder reading §4 to place a file, and whoever next edits `test_import_rules.py`.
+Supersedes: — (amends §4's package map)
+
+## DEC-038 · 2026-09-06 · E5 on the Planner's P2 output: accepted, with two cards sent back and the two file overlaps ruled sequential
+Scope: tactical
+Decided by: Director
+Drafted by: Director (Opus 5)
+Propagated to: `STATE.md` (P2 phase row carries the E5 result; the all-cards blocker row; the struck `P2-T14` row; the Planner re-plan Owner action) · committed separately as `plan: P2 tasks` @ `05e77b5` so the Planner's output is one clean commit and this ruling is another
+Context: `director.md` E5 lists six mechanical checks. Run by command on `05e77b5`, not from the Planner's report.
+Decision: **Accept the P2 plan and dispatch from it. Two cards go back to the Planner for a one-line fix each; neither blocks wave 1.**
+Consequences:
+  - **What passed, with the command.** 14 `P2-Tnn.prompt.md` + `P2-tasks.md` (`ls`); `grep -l '{{' docs/plan/tasks/P2/*.md` → silent; STATE rows ↔ card files an exact bijection by `comm -3` over both sorted id lists, 14 = 14; every P2 row `todo` except T12 `blocked`; §11's human-only list assigns nothing to an agent — the heartbeat wodle appears only as an Owner action on T11; the budget note is at the top of `P2-tasks.md` (+144 %), which is what E5 requires when the sum exceeds day × 1.3.
+  - **Acceptance lines: 149 items, 148 carry a runnable command.** My first pass flagged three; two were false positives I checked rather than reported — T03's item 3 puts its command on the continuation line, and T10's item 7 delegates to design note 5, which spells out the subprocess, the env var and both SQL counts. **The real one is `P2-T09` acceptance 4** ("Determinism and ordering… Paste the three outcomes"): three assertions, no command, no pointer. It is precisely the DEC-025 shape — an item that can be reported green without anything having been run — so it goes back rather than being waved through.
+  - **`P2-T11` goes back for the opposite reason: a missing procedure, not a missing command.** Its Owner action (heartbeat wodle + local rule `100999`) has no exact block anywhere in the repository — `chot-v3-14-ngay.md:68` describes D2 in one sentence and nothing states the XML or the `local_rules.xml` entry. P2-T13 sets the standard: its design note 3 carries the root command verbatim, and its Owner action just points at it. T11 owes the same. I did not write the block myself: the manager side is §11 human-only, `user1` cannot read `/var/ossec/` to check the current `ossec.conf`, and inventing a config block I cannot verify is the failure mode this project has spent two days closing.
+  - **The two file overlaps are sequential by dependency, and I am letting them stand.** `infra/puller.py` is modified by T11 then T13, and `web/main.py` is created by T08 then modified by T12; both later cards name the earlier one in `Depends on:` and in `Scope out:` ("P2-T13 modifies this file after you"). E5's disjointness rule exists so two coders never hold one file at once, and a `Depends on: … merged` edge makes that impossible. Ordering and parallelism are the Director's, so this is a ruling, not an exception: **T13 is never dispatched before T11 has merged, and T12 never before T08 has merged** — recorded in the wave plan rather than left to a scheduler's judgement on the day.
+  - **`P2-T14` is not a lost task** — folded into P2-T10 by planning decision 10, since the import scanner and the `("soar.pipeline", "ingest")` allowlist pair are what T10 both creates and must prove. STATE now carries a struck `P2-T14` row saying so, because the next reader scanning T01…T15 sees a gap, not a footnote.
+Supersedes: —

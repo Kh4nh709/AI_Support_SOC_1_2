@@ -167,7 +167,7 @@ Lỗi 2 tinh tế hơn. Ngữ cảnh **nên** ảnh hưởng tới thứ tự �
 RISK_BASE   = {"critical": 70, "high": 50, "medium": 28, "low": 10}
 CONTEXT_CAP = 25          # trần TỔNG cho mọi khoản thưởng ngữ cảnh
 
-context  = {"crown_jewel": 30, "high": 20, "normal": 5, "low": 0}.get(asset.criticality, 0)
+context  = {"high": 30, "medium": 10, "low": 0, "unknown": 0}.get(asset.criticality, 0)  # DEC-034 06/09: v3 vocabulary. Was {"crown_jewel": 30, "high": 20, "normal": 5, "low": 0} — DEC-004 abolished crown_jewel/normal and inventory.validate() rejects them. v3 `high` inherits crown_jewel's 30 because `high` is now the hard auto-close block (G8'), and every worked example below survives verbatim.
 context += 15 if identity.is_privileged else 0
 context += {"malicious": 25, "suspicious": 10, "clean": 0}.get(ioc.reputation, 0)
 context += 10 if occurrence_count >= 100 else (5 if occurrence_count >= 10 else 0)
