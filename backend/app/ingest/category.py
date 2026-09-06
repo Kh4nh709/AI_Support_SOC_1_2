@@ -134,11 +134,13 @@ class Resolution:
 
 
 def _safe_str(value: object) -> str:
-    """`str(value).strip()`, defensively — never raises, whatever `value` is."""
-    try:
-        return str(value).strip()
-    except Exception:
-        return ""
+    """`str(value).strip()` — the original's defensive coercion (design note 6).
+
+    Every signal here comes from JSON (the indexer response, or a decoded
+    archive line), so `value` is always `None`, `bool`, `int`, `float`, `str`,
+    `list` or `dict` — none of which can make `str()` itself raise.
+    """
+    return str(value).strip()
 
 
 def _iter(sequence: object):

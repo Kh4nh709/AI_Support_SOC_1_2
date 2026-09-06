@@ -17,7 +17,6 @@ import re
 from pathlib import Path
 
 import pytest
-
 from app.ingest.category import (
     DECODER_TO_CATEGORY,
     GROUP_TO_CATEGORY,
@@ -213,9 +212,7 @@ def test_ten_playbooks_exist_on_disk_matching_r5s_premise():
 
 def test_resolved_by_values_match_the_db_check_constraint():
     text = SCHEMA_SQL.read_text(encoding="utf-8")
-    match = re.search(
-        r"ck_alerts_resolved_by\s+CHECK \(resolved_by IN \(([^)]+)\)\)", text
-    )
+    match = re.search(r"ck_alerts_resolved_by\s+CHECK \(resolved_by IN \(([^)]+)\)\)", text)
     assert match, "ck_alerts_resolved_by constraint not found in schema.sql"
     values = {v.strip().strip("'") for v in match.group(1).split(",")}
     assert values == RESOLVED_BY_SET
