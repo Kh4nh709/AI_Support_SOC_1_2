@@ -37,6 +37,7 @@ ENV_KEYS = (
     "LLM_MODEL_PROPOSER",
     "LLM_TIMEOUT_S",
     "LLM_RETRY",
+    "LLM_THINKING",
     "LLM_PRICE_IN_PER_M",
     "LLM_PRICE_OUT_PER_M",
     "LLM_MONTHLY_USD_CAP",
@@ -457,7 +458,7 @@ def test_call_model_retries_a_transient_failure_then_succeeds():
     client = FakeClient([TransientStub(503), Completion('{"ok": true}')])
 
     result = smoke.call_model(
-        client, model="m", system="s", user="u", timeout_s=1, retry=2, pause=0
+        client, model="m", system="s", user="u", timeout_s=1, thinking="enabled", retry=2, pause=0
     )
 
     assert result["content"] == '{"ok": true}'
@@ -470,7 +471,16 @@ def test_call_model_gives_up_after_the_configured_number_of_retries():
     client = FakeClient([TransientStub(500)] * 5)
 
     with pytest.raises(TransientStub):
-        smoke.call_model(client, model="m", system="s", user="u", timeout_s=1, retry=2, pause=0)
+        smoke.call_model(
+            client,
+            model="m",
+            system="s",
+            user="u",
+            timeout_s=1,
+            thinking="enabled",
+            retry=2,
+            pause=0,
+        )
 
     assert client.calls == 3, "one attempt plus two retries"
 
@@ -479,7 +489,16 @@ def test_a_4xx_is_not_retried():
     client = FakeClient([TransientStub(400)] * 5)
 
     with pytest.raises(TransientStub):
-        smoke.call_model(client, model="m", system="s", user="u", timeout_s=1, retry=2, pause=0)
+        smoke.call_model(
+            client,
+            model="m",
+            system="s",
+            user="u",
+            timeout_s=1,
+            thinking="enabled",
+            retry=2,
+            pause=0,
+        )
 
     assert client.calls == 1
 
@@ -487,12 +506,13 @@ def test_a_4xx_is_not_retried():
 # --- the cache (design note 9) ---------------------------------------------
 
 
-def test_cache_key_depends_on_model_system_and_user():
-    base = smoke.cache_key("m", "s", "u")
-    assert base != smoke.cache_key("m2", "s", "u")
-    assert base != smoke.cache_key("m", "s2", "u")
-    assert base != smoke.cache_key("m", "s", "u2")
-    assert base == smoke.cache_key("m", "s", "u")
+def test_cache_key_depends_on_model_system_user_and_thinking_mode():
+    base = smoke.cache_key("m", "s", "u", "enabled")
+    assert base != smoke.cache_key("m2", "s", "u", "enabled")
+    assert base != smoke.cache_key("m", "s2", "u", "enabled")
+    assert base != smoke.cache_key("m", "s", "u2", "enabled")
+    assert base != smoke.cache_key("m", "s", "u", "disabled")
+    assert base == smoke.cache_key("m", "s", "u", "enabled")
     assert len(base) == 64
 
 
@@ -506,7 +526,7 @@ def test_the_cache_key_survives_a_fresh_nonce():
 
 
 def test_store_and_load_round_trip(tmp_path):
-    key = smoke.cache_key("m", "s", "u")
+    key = smoke.cache_key("m", "s", "u", "enabled")
     smoke.store_cached(tmp_path, key, {"content": "{}", "usage": {"prompt_tokens": 1}})
 
     assert smoke.load_cached(tmp_path, key)["content"] == "{}"
@@ -514,7 +534,7 @@ def test_store_and_load_round_trip(tmp_path):
 
 
 def test_the_cache_never_holds_a_credential(tmp_path):
-    key = smoke.cache_key("m", "s", "u")
+    key = smoke.cache_key("m", "s", "u", "enabled")
     path = smoke.store_cached(tmp_path, key, {"content": "{}", "usage": {}})
     text = path.read_text(encoding="utf-8")
 
@@ -650,7 +670,9 @@ def test_offline_replays_a_cached_response_instead_of_the_canned_one(tmp_path, c
     cache = tmp_path / "c"
     smoke.store_alerts(cache, [CANONICAL] * smoke.N_REAL)
     system, user, nonce = smoke.build_prompt(CANONICAL)
-    key = smoke.cache_key(smoke.DEFAULT_MODEL, system, smoke.stable_user(user, nonce))
+    key = smoke.cache_key(
+        smoke.DEFAULT_MODEL, system, smoke.stable_user(user, nonce), smoke.DEFAULT_THINKING
+    )
     smoke.store_cached(
         cache,
         key,
@@ -818,3 +840,192 @@ def test_injection_outcome_tolerates_an_unparsable_response():
         "obeyed": False,
         "quoted": False,
     }
+
+
+# --- LLM_THINKING (§6.3, DEC-032) ------------------------------------------
+#
+# DeepSeek's two text models answer the same prompt with reasoning on or off,
+# switched by `extra_body={"thinking": {"type": …}}`. Reasoning was 95.2 % of
+# the billed output in the D1 thinking run, so the mode changes what every
+# number below it means: it must reach the request, and it must never let one
+# mode's answer be replayed from the other mode's cache entry.
+
+
+@pytest.mark.parametrize("mode", ["enabled", "disabled"])
+def test_call_model_sends_the_configured_thinking_mode_as_extra_body(mode):
+    client = FakeClient([Completion('{"ok": true}')])
+
+    smoke.call_model(
+        client, model="m", system="s", user="u", timeout_s=1, thinking=mode, retry=0, pause=0
+    )
+
+    assert client.kwargs[0]["extra_body"] == {"thinking": {"type": mode}}
+
+
+def test_the_default_thinking_mode_is_enabled_and_the_environment_overrides_it(monkeypatch):
+    """§6.3: default `enabled`, so behaviour is unchanged for anyone who sets nothing."""
+    assert smoke.DEFAULT_THINKING == "enabled"
+
+    default, _ = smoke.load_config(Path(os.devnull))
+    assert default.llm_thinking == "enabled"
+
+    monkeypatch.setenv("LLM_THINKING", "  DISABLED ")
+    overridden, problems = smoke.load_config(Path(os.devnull))
+
+    assert overridden.llm_thinking == "disabled"
+    assert not [p for p in problems if "LLM_THINKING" in p]
+
+
+def test_load_config_rejects_a_thinking_value_outside_the_closed_set(monkeypatch):
+    monkeypatch.setenv("LLM_THINKING", "sometimes")
+
+    cfg, problems = smoke.load_config(Path(os.devnull))
+
+    assert cfg.llm_thinking == "sometimes", "the value is reported, never silently corrected"
+    assert [p for p in problems if "LLM_THINKING" in p and "disabled" in p]
+
+
+def test_disabled_thinking_gives_the_same_prompt_a_different_cache_key():
+    """The two runs are two measurements of the same prompt; one cache entry
+    must never answer for the other (DEC-032, P1-T08 contract)."""
+    enabled = smoke.cache_key("m", "s", "u", "enabled")
+    disabled = smoke.cache_key("m", "s", "u", "disabled")
+
+    assert enabled != disabled
+    assert enabled == smoke.cache_key("m", "s", "u", "enabled")
+    assert len(disabled) == 64
+
+
+def test_a_cached_thinking_answer_is_not_replayed_for_a_non_thinking_run(
+    tmp_path, capsys, monkeypatch
+):
+    """The wiring, not just the key: Config → run_case → cache_key."""
+    cache = tmp_path / "c"
+    smoke.store_alerts(cache, [CANONICAL] * smoke.N_REAL)
+    system, user, nonce = smoke.build_prompt(CANONICAL)
+    stable = smoke.stable_user(user, nonce)
+    smoke.store_cached(
+        cache,
+        smoke.cache_key(smoke.DEFAULT_MODEL, system, stable, "enabled"),
+        {"content": json.dumps(valid_payload()), "usage": {}, "origin": "live"},
+    )
+    argv = ["--offline", "--env-file", os.devnull, "--cache-dir", str(cache), "--json"]
+
+    assert smoke.main(argv) == 0
+    thinking = json.loads(capsys.readouterr().out)
+
+    monkeypatch.setenv("LLM_THINKING", "disabled")
+    assert smoke.main(argv) == 0
+    non_thinking = json.loads(capsys.readouterr().out)
+
+    assert thinking["origins"]["cache"] >= 1
+    assert non_thinking["origins"]["cache"] == 0, "the thinking entry answered for disabled"
+    assert non_thinking["thinking"] == "disabled"
+
+
+def test_the_report_header_names_the_thinking_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_THINKING", "disabled")
+    report = tmp_path / "smoke.md"
+
+    rc = smoke.main(
+        [
+            "--offline",
+            "--env-file",
+            os.devnull,
+            "--cache-dir",
+            str(tmp_path / "c"),
+            "--report",
+            str(report),
+        ]
+    )
+    header = report.read_text(encoding="utf-8").split("## 1", 1)[0]
+
+    assert rc == 0
+    assert "thinking: disabled" in header
+    assert "extra_body" in header
+
+
+def test_the_thinking_reference_is_read_verbatim_from_the_committed_d1_report():
+    """Acceptance 4: every thinking-side number matches docs/smoke-test-D1.md.
+
+    The cells are copied, not recomputed — a number that is copied cannot drift.
+    """
+    ref = smoke.read_thinking_reference(smoke.D1_THINKING_REPORT)
+
+    assert ref is not None
+    assert ref["json_parse_rate"] == "100.0 %"
+    assert ref["schema_rate_first"] == "100.0 %"
+    assert ref["schema_rate_repaired"] == "100.0 %"
+    assert ref["p50_latency_s"] == "35.01"
+    assert ref["p95_latency_s"] == "101.82"
+    assert ref["large_p95_latency_s"] == "139.10"
+    assert ref["mean_completion_tokens"] == "6,220"
+    assert ref["mean_reasoning_tokens"] == "5,922"
+    assert ref["cost_usd"] == "0.1577"
+    assert ref["reasoning_present"] == "38 of 38"
+
+    d1 = smoke.D1_THINKING_REPORT.read_text(encoding="utf-8")
+    for key, cell in ref.items():
+        if key != "path":
+            assert cell in d1, f"{key}={cell!r} is not a string docs/smoke-test-D1.md prints"
+
+
+def test_read_thinking_reference_returns_none_for_a_file_it_cannot_parse(tmp_path):
+    assert smoke.read_thinking_reference(tmp_path / "absent.md") is None
+    half = tmp_path / "half.md"
+    half.write_text("| **all** | 38 | 100.0 % |\n", encoding="utf-8")
+    assert smoke.read_thinking_reference(half) is None
+
+
+def test_the_side_by_side_table_carries_every_row_the_contract_names(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_THINKING", "disabled")
+    report = tmp_path / "smoke.md"
+
+    smoke.main(
+        [
+            "--offline",
+            "--env-file",
+            os.devnull,
+            "--cache-dir",
+            str(tmp_path / "c"),
+            "--report",
+            str(report),
+        ]
+    )
+    table = report.read_text(encoding="utf-8").split("## 9", 1)[-1]
+
+    for name, _key in smoke.SIDE_BY_SIDE_ROWS:
+        assert name in table, f"the side-by-side table has no {name!r} row"
+    assert "docs/smoke-test-D1.md" in table
+    assert "thinking: disabled" in table
+    for cell in ("101.82", "139.10", "5,922", "0.1577"):
+        assert cell in table, "the thinking column must carry the committed D1 numbers"
+
+
+def test_the_side_by_side_table_says_so_when_the_reference_is_unreadable(tmp_path):
+    cfg, _ = smoke.load_config(Path(os.devnull))
+    records = [
+        {
+            "label": "real-01",
+            "class": "real",
+            "rule_id": "1",
+            "rule_level": 3,
+            "severity": "low",
+            "prompt_bytes": 2673,
+            "origin": "canned",
+            "usage": {},
+        }
+    ]
+    summary = smoke.summarise(records, cfg)
+
+    text = smoke.render_report(
+        summary,
+        records,
+        cfg=cfg,
+        cache_dir=tmp_path,
+        offline=True,
+        compare_path=tmp_path / "nowhere.md",
+    )
+
+    assert "## 9" in text
+    assert "not available" in text.lower()
