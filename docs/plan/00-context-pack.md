@@ -109,11 +109,11 @@ PULL_INTERVAL_S=60  PULL_OVERLAP_S=60  PULL_PAGE=500  PULL_START="2026-08-01"
 HEARTBEAT_RULE_ID="100999"  HEARTBEAT_MAX_AGE_MIN=30  SILENCE_WARN_HOURS=3
 JOB_MAX_ATTEMPTS=3  JOB_BACKOFF=[10,60,300]  JOB_LOCK_TIMEOUT_S=300  N_WORKER=1
 INVENTORY_PATHS=["conf/inventory.yaml","conf/identities.yaml","conf/iocs.csv"]
-LLM_BASE_URL  LLM_API_KEY  LLM_MODEL_PROPOSER  LLM_MODEL_VERIFIER(default=proposer)  LLM_TIMEOUT_S=120(a wall-clock deadline per model call, enforced by the adapter — the SDK/httpx timeout it was mapped to bounds only the gap between received bytes; measured 05/09: 139.1 s completed under timeout=120; DEC-033, Owner)  LLM_RETRY=2  LLM_THINKING=enabled(enabled|disabled — DeepSeek `thinking.type`, sent as `extra_body`; enters the cache key of every measurement; DEC-032, approved explicitly by the Owner 06/09)
+LLM_BASE_URL  LLM_API_KEY  LLM_MODEL_PROPOSER  LLM_MODEL_VERIFIER(default=proposer)  LLM_TIMEOUT_S=120(a wall-clock deadline per model call, enforced by the adapter — the SDK/httpx timeout it was mapped to bounds only the gap between received bytes; measured 05/09: 139.1 s completed under timeout=120; DEC-033, Owner)  LLM_RETRY=2  LLM_THINKING=disabled(enabled|disabled — DeepSeek `thinking.type`, sent as `extra_body`; **default flipped to `disabled` 06/09 by the Owner, DEC-042**, on P1-T08's measurement; enters the cache key of every measurement, P7's included; DEC-032, DEC-042)
 LLM_MONTHLY_USD_CAP=30  LLM_PRICE_IN_PER_M  LLM_PRICE_OUT_PER_M
 PROMPT_TOTAL_BUDGET_TOKENS=40_000  CASE_PROMPT_BUDGET_TOKENS=60_000  ANALYZE_QUOTA_PER_USER_DAY=30
 NEVER_AUTOCLOSE_AGENTS=[]  AUTOCLOSE_RULE_WIDTH_PCT=30  REVIEW_DELTA_TOLERANCE=20  MAX_ALERTS_PER_CASE=200
-JWT_SECRET  JWT_TTL_HOURS=8  LOGIN_MAX_FAILS=5  LOCKOUT_MINUTES=15
+JWT_SECRET  JWT_TTL_HOURS=8  LOGIN_MAX_FAILS=5  LOCKOUT_MINUTES=15  WEBHOOK_API_KEY(empty -> POST /webhook/alerts answers 503 webhook disabled; DEC-040, Owner)  WEBHOOK_IP_ALLOWLIST(JSON list of CIDRs, empty -> deny all; DEC-040, Owner)
 RETENTION_DAYS=365  BACKUP_HOUR=2  EVAL_BLIND_FRACTION=0.5  DISPLAY_TZ="Asia/Ho_Chi_Minh"
 NOTIFY_TELEGRAM_BOT_TOKEN  NOTIFY_TELEGRAM_CHAT_ID  (or NOTIFY_SMTP_*)
 ```

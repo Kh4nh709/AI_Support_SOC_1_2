@@ -609,3 +609,57 @@ Consequences:
   - **Two defects of my own, caught in the same pass and recorded rather than quietly fixed.** (1) Resolving the P1-T06 merge conflict, I appended a note to the STATE row and dropped its closing `|`, breaking the markdown row; a check across every `| P` row now confirms none is missing a terminator. (2) My first correction to `P1-tasks.md` quoted the dead phrase — *DEC-024(a) withdrew the earlier "never creates the role" ruling* — which tripped the canonical `dec024a-never-creates-role` rule. The rule was right and I was wrong: a correction that re-asserts the dead sentence in order to deny it still puts the sentence in a forward-looking document. Rephrased to describe the withdrawal without quoting it. Where a mention genuinely must quote it — the STATE row reporting that the claim is still written elsewhere — the line carries a `superseded-ok` marker naming DEC-024(a).
   - The Reviewer's other three notes are non-blocking and recorded on the task row: `insufficient_privilege` **is** reachable (the report understates its own coverage, an error in the safe direction), the TRUNCATE statement-trigger test is redundant rather than discriminating, and acceptance 12's `N ≥ 12` should have been a numeric count per DEC-023 item 8.
 Supersedes: —
+
+## DEC-040 · 2026-09-06 · §6.3 gains `WEBHOOK_API_KEY` and `WEBHOOK_IP_ALLOWLIST`; P2-T12 moves to P4
+Scope: contract
+Decided by: Owner
+Drafted by: Director (Opus 5)
+Propagated to: `00-context-pack.md` §6.3 (appended to the auth line, file line count unchanged) · `.env.example` (regenerated, 54 → 56 keys, with a comment outside the generated block) · `INBOX.md` (2026-09-06 · P2-T12 · DECISION_REQUEST resolved) · `STATE.md` (P2-T12 row and the Owner action)
+Context: architecture §3.1 specifies `X-API-Key + IP allowlist → 401 / 403` for `POST /webhook/alerts` and §6.3 had no key for it, so P2-T12 was carded `blocked`.
+Decision: **Option A.** `WEBHOOK_API_KEY` — empty means the route answers `503 webhook disabled`; `WEBHOOK_IP_ALLOWLIST` — a JSON list of CIDRs, empty means deny all. Both default empty, so the system's behaviour today is unchanged and the route cannot be accidentally exposed by adding it. **P2-T12 moves to P4 regardless**, per DEC-041's lever (a): it is the secondary intake path, off P2's exit gate, and P4 is where `web/` routes and `infra/auth.py` are built.
+Consequences:
+  - Fail-closed on both keys was the point of preferring A over a bare key: an allowlist that defaults to "allow all" is worse than no allowlist, because it reads as protection.
+  - `.env.example` regenerated from §6.3 by `scripts/gen_env_example.py`; `--check` passes at 56 keys. No value is committed.
+  - P4's card set owes the route, the two keys and the `503`/`401`/`403` behaviours in one task; `P2-tasks.md` hand-off item 3 already anticipated this.
+Supersedes: —
+
+## DEC-041 · 2026-09-06 · The second slipped day, taken as one decision: levers (a)+(b), P3 starts 09/09, ② deferred to the 08/09 gate
+Scope: scope-cut
+Decided by: Owner
+Drafted by: Director (Opus 5)
+Propagated to: `01-plan.md` (P7 row re-dated; P2/P3 annotations) · `STATE.md` (phase rows, the folded Owner action closed)
+Context: P2's plan needs ≈ 19 h of wall-clock at three coders against a two-day budget, which puts P3's start on 09/09 — a second slipped day, reserved to the Owner by DEC-030. The Director folded three levers into one question rather than asking four times.
+Decision: **(a) P2-T12 → P4, (b) P2-T07 and P2-T15 run in P3's window, P3 starts 09/09, and ② is not cut today** — it is decided at the 08/09 evening gate on measured numbers.
+Consequences:
+  - **What each lever bought, in wall-clock, as put to the Owner:** (a) 0 h — T12 was already blocked and off the gate; it clears a blocked card from the board. (b) 2.5 h — T15 is the tail (t=16.5→19); T07 is parallel at t=9 and buys 0 h but frees a slot. Together **19 h → 16.5 h**: two long days, not three.
+  - **(c) cutting ② buys 0 h for P2** and was never a P2 lever — it is how the slipped day gets *paid for* downstream, freeing most of P5 so P6/P7 keep their dates. Deferring it to the 08/09 gate costs nothing and buys real information, and ② is first in the §10 cut order if P2 has not landed by then.
+  - Dates shift by one: P3 09/09, P4 10/09, P5 11/09, P6 12–14/09, P7 15/09, P8 16–17/09 against the 18/09 deadline. P8's buffer, already cut to two days by DEC-030, stays two. **There is no third day available without cutting scope** — that is the number to hold the 08/09 gate against.
+Supersedes: — (spends the second day DEC-030 reserved)
+
+## DEC-042 · 2026-09-06 · `LLM_THINKING=disabled` becomes the default; the accuracy question becomes a paired P7 ablation
+Scope: model
+Decided by: Owner
+Drafted by: Director (Opus 5)
+Propagated to: `00-context-pack.md` §6.3 (default flipped) · `.env.example` · `01-plan.md` (P7 row) · `prompts/P7.md` (the paired ablation, the exit gate, **and the cache key**) · `STATE.md` (the model Owner action closed, P7 note)
+Context: P1-T08 re-measured the 38-alert smoke test with DeepSeek's thinking mode off. All five §4.5 thresholds pass: p95 3.65 s against 101.82 s, the ≥ 30 KB class 2.82 s against 139.10 s, $0.0091 against $0.1577, with JSON and schema validity identical at 100 %.
+Decision: **`LLM_THINKING=disabled` is the default.** `LLM_THINKING` stays a §6.3 knob so P7 can flip it.
+Consequences:
+  - **What this settles and what it does not, stated as the caveat the report itself raised.** The two runs are **not the same 38 alerts** — the acceptance command passes `--refresh`, which re-fetched. So this settles **latency, output format and cost** and settles **nothing about verdict accuracy**. That is not left as an open question: it becomes a P7 deliverable.
+  - **The paired ablation, and why P7 rather than here.** P7 runs **B4 twice on the frozen gold set**, `enabled` against `disabled`, reported per cluster with McNemar on the disagreements — same gold sha, same prompts, same clusters, one variable. ≈ 440 clusters × 2 × $0.00415 ≈ **$1.83**. The smoke test measures *format* on **unpaired** samples; the gold set measures *judgement* on **identical** ones. A paired comparison is the only kind that can answer an accuracy question, and the gold set is the only place in this build where inputs are identical by construction.
+  - **A defect found while writing the ablation into the brief, which would have voided it silently.** `prompts/P7.md` specified the eval cache as `sha256(prompt + model + template)` — **no thinking mode**. Both B4 runs would have hit the same cache entries, replayed one mode's answers for both arms, and reported a null difference with every command green. This is the same defect P1-T08 had to fix in `eval/smoke_test.py`, one document downstream. The key now includes `LLM_THINKING` and the brief says why in the line itself.
+  - **Why disabling is architecturally coherent and not merely cheap.** D9 and D10 build the system on *not trusting the model's reasoning*: the gate re-derives `structured_basis` from database facts, checks every quote is a substring of a named block, refuses `false_positive` without structural evidence, and a facts-only verifier re-derives the verdict. The reasoning trace is never an input to any of that. **95.2 % of billed output tokens were reasoning the gate discards by design** — so removing it takes away something the architecture already declines to rely on. If the ablation shows accuracy depends on it, that is a finding about the gate, not only about the model, and it is better learned on the gold set than in production.
+  - `LLM_MODEL_PROPOSER` is unchanged: `deepseek-v4-flash` in both modes, same weights and prices.
+Supersedes: — (completes DEC-032's two-dataset decision)
+
+## DEC-043 · 2026-09-06 · Two stale-reference errors: a migration reviewed against a tree that no longer exists, and a "changes vanished" report drawn from a stale snapshot
+Scope: tactical
+Decided by: Owner (rule) · Director (the second finding)
+Drafted by: Director (Opus 5)
+Propagated to: `prompts/reviewer.md` (the fast-forward checklist line) · `tasks/P1/P1-T04.prompt.md` rule 1 already carries it (written by the other session, 06/09) · this entry
+Context: P1-T06 was reviewed at merge-base `a80483e`, before `016` merged; 016 and 017 alter the same five tables, so the combination that actually ships had been run by nobody until the Director checked it at merge time. Separately, another session reported that `DECISIONS.md`'s modification was "gone from the tree without a commit — not mine, another session's."
+Decision: **Every migration branch is fast-forwarded onto `main` before the Reviewer runs, and `reviewer.md`'s checklist says so**: `git merge --ff-only main` must succeed and `git merge-base` must equal `main`, or the verdict is `CHANGES`. **And the data-loss report is recorded as a false alarm with its mechanism**, because an unexplained "changes vanished" justifies an investigation nobody needs.
+Consequences:
+  - **The review rule is structural, not a patch on one task.** A Reviewer verifies a branch against that branch's merge-base; for application code the difference is usually cosmetic, for a migration it is a different database. Anything less means each migration is reviewed against a tree that no longer exists — and the failure is invisible, because every acceptance command passes against the stale base.
+  - **The false alarm, measured rather than argued.** `git diff HEAD -- docs/plan/DECISIONS.md` is empty, `git status --porcelain` on it is empty, and DEC-038 is present in both the working tree and `HEAD`. Nothing was lost. The timing corroborates the mechanism the Owner proposed: `DECISIONS.md` last changed in `5e10b22` at 15:39:49, and `1e8d93c` moved `HEAD` at 15:42:07 without touching that file. A session holding a snapshot from before 15:39:49 would have seen the file modified, then clean after the commit, while `HEAD` still looked unchanged *relative to its own remembered snapshot* — so the edit appears to vanish without a commit.
+  - **Both findings are one shape, which is why they share an entry: a conclusion drawn from a reference that has moved, by a check that could not have detected the opposite.** The Reviewer's acceptance commands could not fail against the stale base; the vanished-changes check could not distinguish "someone reverted it" from "someone committed it". This is the family DEC-025 and DEC-027 name — a green that proves nothing — reached from the other direction, and it has now produced at least four retractions this week, three of them the Owner's own and two of them mine. **The cure is the same in both halves: state what reference you measured against, and prefer a check that can come out the other way.**
+Supersedes: —
