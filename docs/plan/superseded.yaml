@@ -682,3 +682,43 @@ rules:
   artifact: (canonical short form — catches paraphrase, not just re-paste)
   reason: DEC superseded a column that has never existed; a forward-looking document must not assert it.
   allow: []
+- id: dec032-state-51-chua-co-so
+  dec: DEC-032 (amends DEC-014 — the dedup ratio is measured, 30.2:1)
+  severity: high
+  status: fixed
+  pattern: "Chừng nào chưa có số, không tài liệu nào được nói `LLM_MONTHLY_USD_CAP=30` là đủ."
+  artifact: docs/plan/STATE.md (Owner action 'Planner P2 (lệnh, DEC-014)')
+  reason: The Owner measured the ratio on the full 29-day archive on 06/09 — 30.2:1, 2,778 clusters, ≈ 96/day — so "as long as there is no number" is false; the P2 task is now a verification against that number, not the first measurement.
+  allow: []
+- id: dec032-state-64-chua-do
+  dec: DEC-032 (amends DEC-014 — the dedup ratio is measured, 30.2:1)
+  severity: high
+  status: fixed
+  pattern: "và tỉ lệ đó chưa đo, DEC-014"
+  artifact: docs/plan/STATE.md (Owner action on the model decision)
+  reason: Same fact; the Director's own model-decision text asserted the ratio unmeasured hours after the Owner had measured it — the DEC-026 defect with the Owner's data.
+  allow: []
+- id: dec032-p2-until-reported
+  dec: DEC-032 (amends DEC-014 — the dedup ratio is measured, 30.2:1)
+  severity: high
+  status: fixed
+  pattern: "until it has reported no document may assert `LLM_MONTHLY_USD_CAP=30` is sufficient"
+  artifact: docs/plan/prompts/P2.md (Tests required)
+  reason: The Planner reads this line; it would have planned T15 as the first measurement and forbidden any budget statement until then. The number exists; T15 verifies the implementation against it.
+  allow: []
+- id: dec032-plan-65-before-claim
+  dec: DEC-032 (amends DEC-014 — the dedup ratio is measured, 30.2:1)
+  severity: medium
+  status: fixed
+  pattern: "reported as a ratio before any LLM-budget claim"
+  artifact: docs/plan/01-plan.md (P2 tests line)
+  reason: Same fact in the plan's P2 section; the budget claim is now made, with the number, in DEC-032.
+  allow: []
+- id: dec032-context-pack-18-unmeasured
+  dec: DEC-032 (amends DEC-014 — the dedup ratio is measured, 30.2:1)
+  severity: high
+  status: fixed
+  pattern: "depends on the dedup ratio, which is unmeasured"
+  artifact: docs/plan/00-context-pack.md §1 (the #1 source of truth)
+  reason: §1 is what every agent reads first; it asserted the ratio unmeasured after the Owner had measured it on 06/09 (30.2:1, 2,778 clusters, ≈ 96/day). Fifth site of the same fact.
+  allow: []
