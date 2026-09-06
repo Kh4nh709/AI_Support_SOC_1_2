@@ -32,8 +32,8 @@ Run it from the repository root::
     python3 eval/smoke_test.py --refresh               # ignore the cache
 
 Responses are cached under ``eval/results/smoke/`` (git-ignored), keyed by
-``sha256(model + "\\n" + system + "\\n" + user)``, so a second run costs
-nothing. ``LLM_API_KEY`` and ``INDEXER_PASSWORD`` are never printed, never
+``sha256(model + system + user + LLM_THINKING)``, so a second run in the same
+mode costs nothing and a run in the other mode is never served from it. ``LLM_API_KEY`` and ``INDEXER_PASSWORD`` are never printed, never
 written to the cache and never written to the report.
 
 Exit codes: 0 ok · 2 configuration problem · 3 transport or TLS failure ·
@@ -64,6 +64,9 @@ import openai
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_FILE = REPO_ROOT / ".env"
+# The thinking run, committed by P1-T01. DEC-032 requires the two runs side by
+# side; its numbers are read back out of this file rather than recomputed.
+D1_THINKING_REPORT = REPO_ROOT / "docs" / "smoke-test-D1.md"
 DEFAULT_CACHE_DIR = REPO_ROOT / "eval" / "results" / "smoke"
 FIXTURES_DIR = REPO_ROOT / "backend" / "tests" / "fixtures"
 
@@ -77,6 +80,8 @@ EXIT_BUDGET = 5
 # same value. Kept as a default so an --offline run has a stable cache key.
 DEFAULT_MODEL = "deepseek-v4-flash"
 DEFAULT_TIMEOUT_S = 120.0  # §6.3 LLM_TIMEOUT_S
+DEFAULT_THINKING = "enabled"  # §6.3 LLM_THINKING — the mode DeepSeek uses by default
+THINKING_MODES = ("enabled", "disabled")  # §6.3, the closed set (DEC-032)
 DEFAULT_RETRY = 2  # §6.3 LLM_RETRY
 DEFAULT_MAX_SPEND_USD = 0.50  # card note 14: a full run costs ≈ $0.04
 
@@ -320,6 +325,7 @@ class Config:
     llm_model: str
     llm_timeout_s: float
     llm_retry: int
+    llm_thinking: str
     price_in_per_m: float
     price_out_per_m: float
     monthly_cap_usd: float
@@ -334,7 +340,8 @@ class Config:
         return (
             f"Config(llm_base_url={self.llm_base_url!r}, llm_api_key='<redacted>', "
             f"llm_model={self.llm_model!r}, llm_timeout_s={self.llm_timeout_s}, "
-            f"llm_retry={self.llm_retry}, price_in_per_m={self.price_in_per_m}, "
+            f"llm_retry={self.llm_retry}, llm_thinking={self.llm_thinking!r}, "
+            f"price_in_per_m={self.price_in_per_m}, "
             f"price_out_per_m={self.price_out_per_m}, monthly_cap_usd={self.monthly_cap_usd}, "
             f"indexer_url={self.indexer_url!r}, indexer_user={self.indexer_user!r}, "
             f"indexer_password='<redacted>', indexer_ca={self.indexer_ca!r}, "
@@ -370,6 +377,7 @@ def load_config(env_file: Path) -> tuple[Config, list[str]]:
         llm_model=lookup("LLM_MODEL_PROPOSER").strip() or DEFAULT_MODEL,
         llm_timeout_s=_number(lookup("LLM_TIMEOUT_S"), DEFAULT_TIMEOUT_S),
         llm_retry=int(_number(lookup("LLM_RETRY"), DEFAULT_RETRY)),
+        llm_thinking=lookup("LLM_THINKING").strip().lower() or DEFAULT_THINKING,
         price_in_per_m=_number(lookup("LLM_PRICE_IN_PER_M"), 0.0),
         price_out_per_m=_number(lookup("LLM_PRICE_OUT_PER_M"), 0.0),
         monthly_cap_usd=_number(lookup("LLM_MONTHLY_USD_CAP"), 0.0),
@@ -392,6 +400,12 @@ def load_config(env_file: Path) -> tuple[Config, list[str]]:
             f"INDEXER_CA={ca_raw} does not point at a readable file (resolved to "
             f"{cfg.indexer_ca}). It is required: TLS is always verified against it "
             f"and §6.3 allows no unverified mode."
+        )
+    if cfg.llm_thinking not in THINKING_MODES:
+        problems.append(
+            f"LLM_THINKING={cfg.llm_thinking!r} is not one of "
+            f"{'|'.join(THINKING_MODES)} — §6.3 fixes the closed set and the value is "
+            f"sent to the model verbatim as extra_body.thinking.type"
         )
     if cfg.price_in_per_m <= 0 or cfg.price_out_per_m <= 0:
         problems.append(
@@ -591,8 +605,8 @@ def stable_user(user: str, nonce: str) -> str:
 
     §7.1 requires a fresh nonce per build, which would make every cache key
     unique and design note 9's "a second run makes no network call" impossible.
-    The key is still ``sha256(model + "\\n" + system + "\\n" + user)``; this is
-    what ``user`` means for that hash.
+    The key is still ``sha256(model + system + user + thinking)``; this is what
+    ``user`` means for that hash.
     """
     return user.replace(nonce, "NONCE")
 
@@ -763,9 +777,17 @@ def fixture_alerts() -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def cache_key(model: str, system: str, user: str) -> str:
+def cache_key(model: str, system: str, user: str, thinking: str) -> str:
+    """The key of one measurement.
+
+    ``thinking`` is part of it and has no default: the same prompt answered
+    with reasoning on and with reasoning off are two different measurements —
+    95.2 % of the billed output in the D1 thinking run was reasoning tokens —
+    and neither may ever be served from the other's entry (DEC-032). A default
+    here is exactly how a mode gets silently left out of a key, so there is none.
+    """
     digest = hashlib.sha256()
-    digest.update(f"{model}\n{system}\n{user}".encode())
+    digest.update(f"{model}\n{system}\n{user}\nthinking={thinking}".encode())
     return digest.hexdigest()
 
 
@@ -900,10 +922,18 @@ def call_model(
     system: str,
     user: str,
     timeout_s: float,
+    thinking: str,
     retry: int = DEFAULT_RETRY,
     pause: float = 2.0,
 ) -> dict[str, Any]:
-    """One completion, with ``retry`` retries on a network error or a 5xx."""
+    """One completion, with ``retry`` retries on a network error or a 5xx.
+
+    ``thinking`` is sent as ``extra_body={"thinking": {"type": …}}`` — the
+    OpenAI-compatible endpoint's switch between DeepSeek's thinking and
+    non-thinking modes (§6.3 ``LLM_THINKING``, DEC-032). It is required, not
+    defaulted: every call this script makes is a measurement, and a
+    measurement whose mode was left to a default measures something unknown.
+    """
     last: BaseException | None = None
     for attempt in range(1, retry + 2):
         started = time.monotonic()
@@ -915,6 +945,7 @@ def call_model(
                     {"role": "user", "content": user},
                 ],
                 response_format={"type": "json_object"},
+                extra_body={"thinking": {"type": thinking}},
                 timeout=timeout_s,
             )
         except Exception as exc:
@@ -1094,7 +1125,7 @@ def run_case(
     }
 
     def send(message: str, tag: str) -> dict[str, Any] | None:
-        key = cache_key(cfg.llm_model, system, stable_user(message, nonce))
+        key = cache_key(cfg.llm_model, system, stable_user(message, nonce), cfg.llm_thinking)
         if not refresh:
             cached = load_cached(cache_dir, key)
             if cached is not None:
@@ -1111,6 +1142,7 @@ def run_case(
                 system=system,
                 user=message,
                 timeout_s=cfg.llm_timeout_s,
+                thinking=cfg.llm_thinking,
                 retry=cfg.llm_retry,
             )
         except Exception as exc:  # noqa: BLE001 — one bad call must not lose the other 37
@@ -1271,6 +1303,7 @@ def summarise(records: Sequence[dict[str, Any]], cfg: Config) -> dict[str, Any]:
 
     return {
         "model": cfg.llm_model,
+        "thinking": cfg.llm_thinking,
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "classes": classes,
         "overall": class_metrics(records),
@@ -1341,6 +1374,124 @@ def _cell(text: str) -> str:
     return re.sub(r"\s+", " ", str(text)).replace("|", "\\|").strip()
 
 
+# --- the thinking run, read back out of its committed report ---------------
+#
+# DEC-032's P1-T08 contract: the two runs side by side, and every thinking-side
+# number matching docs/smoke-test-D1.md. The cells are therefore *copied* out of
+# that file as the strings it already prints, never re-derived from a cache that
+# a --refresh may have replaced — a number that is copied cannot drift.
+
+D1_CLASS_LABELS = ("real", "large", "adversarial")
+
+# (row label, key) — the ten measures DEC-032 names, in its order.
+SIDE_BY_SIDE_ROWS = (
+    ("JSON parses", "json_parse_rate"),
+    ("Schema-valid `triage_v2`, first attempt", "schema_rate_first"),
+    ("Schema-valid `triage_v2`, after one repair", "schema_rate_repaired"),
+    ("p50 latency (s)", "p50_latency_s"),
+    ("p95 latency (s)", "p95_latency_s"),
+    ("p95 latency, ≥ 30 KB class (s)", "large_p95_latency_s"),
+    ("mean completion tokens per call", "mean_completion_tokens"),
+    ("mean reasoning tokens per call", "mean_reasoning_tokens"),
+    ("`reasoning_content` present", "reasoning_present"),
+    ("cost, all calls (USD)", "cost_usd"),
+)
+
+# The nine cells of the "**all**" row of §2, in the order that table prints them.
+_ALL_ROW_KEYS = (
+    "json_parse_rate",
+    "schema_rate_first",
+    "schema_rate_repaired",
+    "p50_latency_s",
+    "p95_latency_s",
+    "mean_prompt_tokens",
+    "mean_completion_tokens",
+    "mean_reasoning_tokens",
+    "cost_usd",
+)
+
+
+def _table_cells(line: str) -> list[str]:
+    return [cell.strip() for cell in line.split("|")]
+
+
+def read_thinking_reference(path: Path) -> dict[str, str] | None:
+    """The thinking run's numbers, verbatim, or ``None`` if they cannot be read.
+
+    Two tables are read: §2's ``**all**`` and ``≥ 30 KB`` rows, and §7, whose
+    ``reasoning_content present`` column is counted call by call. Anything else
+    in the file is ignored, and a file that does not carry both tables is
+    reported as unavailable rather than half-parsed into a wrong comparison.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    ref: dict[str, str] = {}
+    reasoning_yes = 0
+    reasoning_total = 0
+    for line in text.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = _table_cells(line)
+        head = cells[1] if len(cells) > 1 else ""
+        if head == "**all**" and len(cells) >= 12:
+            ref.update(zip(_ALL_ROW_KEYS, cells[3:12], strict=True))
+        elif head.startswith("≥ 30 KB") and len(cells) >= 8:
+            ref["large_p95_latency_s"] = cells[7]
+        elif len(cells) > 9 and cells[2] in D1_CLASS_LABELS and cells[9] in ("yes", "no"):
+            reasoning_total += 1
+            reasoning_yes += cells[9] == "yes"
+
+    if reasoning_total:
+        ref["reasoning_present"] = f"{reasoning_yes} of {reasoning_total}"
+    if any(key not in ref for _label, key in SIDE_BY_SIDE_ROWS):
+        return None
+    ref["path"] = str(path)
+    return ref
+
+
+def _to_number(text: str) -> float | None:
+    try:
+        return float(str(text).replace(",", "").replace("%", "").strip())
+    except ValueError:
+        return None
+
+
+def _change_cell(before: str, after: str) -> str:
+    """``after − before``, in the unit ``after`` is printed in, or an em dash."""
+    first, second = _to_number(before), _to_number(after)
+    if first is None or second is None:
+        return "—"
+    digits = len(after.split(".")[1].rstrip(" %")) if "." in after else 0
+    suffix = " pp" if after.rstrip().endswith("%") else ""
+    return f"{second - first:+,.{digits}f}{suffix}"
+
+
+def this_run_cells(summary: dict[str, Any], records: Sequence[dict[str, Any]]) -> dict[str, str]:
+    """This run's side of the table, formatted exactly as §2 and §7 format it."""
+    overall = summary["overall"]
+    large = summary["classes"].get("large") or {}
+    flags = []
+    for record in records:
+        flags.append(bool(record.get("reasoning_present")))
+        if record.get("repaired"):
+            flags.append(bool(record.get("repair_reasoning_present")))
+    return {
+        "json_parse_rate": _pct(overall["json_parse_rate"]),
+        "schema_rate_first": _pct(overall["schema_rate_first"]),
+        "schema_rate_repaired": _pct(overall["schema_rate_repaired"]),
+        "p50_latency_s": _num(overall["p50_latency_s"], 2),
+        "p95_latency_s": _num(overall["p95_latency_s"], 2),
+        "large_p95_latency_s": _num(large.get("p95_latency_s"), 2),
+        "mean_completion_tokens": _num(overall["mean_completion_tokens"], 0),
+        "mean_reasoning_tokens": _num(overall["mean_reasoning_tokens"], 0),
+        "reasoning_present": f"{sum(flags)} of {len(flags)}",
+        "cost_usd": f"{overall['cost_usd']:.4f}",
+    }
+
+
 def render_report(
     summary: dict[str, Any],
     records: Sequence[dict[str, Any]],
@@ -1348,8 +1499,11 @@ def render_report(
     cfg: Config,
     cache_dir: Path,
     offline: bool,
+    compare_path: Path = D1_THINKING_REPORT,
+    report_path: str | None = None,
 ) -> str:
     endpoint = safe_url(cfg.llm_base_url) if cfg.llm_base_url else "(unset)"
+    report_name = report_path or "<the path you passed to --report>"
     cached_files = len(list(Path(cache_dir).glob("*.json"))) if Path(cache_dir).is_dir() else 0
     rows = threshold_rows(summary, records)
     missed = [row for row in rows if not row[3]]
@@ -1357,7 +1511,8 @@ def render_report(
     out: list[str] = []
     add = out.append
 
-    add(f"# Smoke test D1 — `{summary['model']}`")
+    mode = summary.get("thinking", cfg.llm_thinking)
+    add(f"# Smoke test D1 — `{summary['model']}` (thinking: {mode})")
     add("")
     add(
         "Architecture §4.5 puts this measurement before any other AI code. It answers one "
@@ -1369,6 +1524,13 @@ def render_report(
     )
     add("")
     add(f"- **Model:** `{summary['model']}` (`LLM_MODEL_PROPOSER`) at `{endpoint}`")
+    add(
+        f"- **Mode: `thinking: {mode}`** (`LLM_THINKING={mode}`, §6.3) — sent to the "
+        f'model as `extra_body={{"thinking": {{"type": "{mode}"}}}}`. DeepSeek\'s text '
+        "models answer in either mode; in the thinking mode 95.2 % of the billed output "
+        "was reasoning tokens, so this line decides what every number below means "
+        "(DEC-032)."
+    )
     add(f"- **Generated:** {summary['generated_at']} (UTC)")
     add(
         f"- **Total calls:** {summary['total_calls']} — {len(records)} first attempts "
@@ -1390,7 +1552,8 @@ def render_report(
         f"**{summary['live_measurements']} of {len(records)} responses are real "
         f"measurements** — answered live by the model, either during this run or during the "
         f"run that filled the cache. A cache entry is a recorded live response keyed by "
-        f"`sha256(model + system + user)`, so re-rendering this report from a warm cache makes "
+        f"`sha256(model + system + user + thinking)`, so re-rendering this report from a "
+        f"warm cache makes "
         f"no network call and costs nothing (design note 9)."
     )
     add(
@@ -1654,8 +1817,57 @@ def render_report(
     )
     add("")
     add(
-        "Reproduce: `python3 eval/smoke_test.py --report docs/smoke-test-D1.md` "
-        "(add `--refresh` to ignore the cache; `--offline` makes no network call at all)."
+        f"Reproduce: `LLM_THINKING={mode} python3 eval/smoke_test.py --report "
+        f"{report_name}` (add `--refresh` to ignore the cache; `--offline` makes no "
+        "network call at all). The mode is part of the cache key, so a run in the other "
+        "mode never replays these entries."
+    )
+    add("")
+
+    add("## 9 · Side by side: the thinking run and this one")
+    add("")
+    reference = read_thinking_reference(compare_path)
+    try:
+        compare_name = str(Path(compare_path).relative_to(REPO_ROOT))
+    except ValueError:
+        compare_name = str(compare_path)
+    if reference is None:
+        add(
+            f"**The thinking run's numbers are not available:** `{compare_name}` could not be "
+            "read, or it does not carry the two tables this section copies from (§2's "
+            "`**all**` and `≥ 30 KB` rows, and §7's `reasoning_content present` column). "
+            "Nothing is compared here rather than compared against a guess."
+        )
+        add("")
+        return "\n".join(out)
+
+    mine = this_run_cells(summary, records)
+    add(
+        f"DEC-032 asks the two runs be read together. The left column is copied cell for "
+        f"cell out of `{compare_name}` — the thinking run measured 05/09 — and nothing in it "
+        f"is recomputed here. The right column is this run. Both columns are the same "
+        f"measures in the same units; *change* is right minus left."
+    )
+    add("")
+    add(f"| Measure | thinking — `{compare_name}` | `thinking: {mode}` — this run | change |")
+    add("|---|---|---|---|")
+    for label, key in SIDE_BY_SIDE_ROWS:
+        before, after = reference[key], mine[key]
+        add(f"| {label} | {before} | {after} | {_change_cell(before, after)} |")
+    add("")
+    add(
+        "**The two samples are not the same 38 alerts.** The thinking run read its 30 real "
+        "alerts from the indexer on 05/09; the acceptance command for this run passes "
+        "`--refresh`, which re-fetches, so the sample is whatever the index held when it ran. "
+        "The 5 padded and 3 adversarial alerts are derived from each run's own first alerts. "
+        "Latency, token counts and cost are therefore compared across two draws of the same "
+        "population, not across one fixed set — a difference of a few seconds in p50 is not "
+        "evidence, and the mode's effect on reasoning tokens is."
+    )
+    add("")
+    add(
+        "The decision rule the Owner set is in DEC-032 and is not applied here: this section "
+        "puts the two datasets in one place, and accepting the model is an Owner action."
     )
     add("")
     return "\n".join(out)
@@ -1797,7 +2009,14 @@ def main(
         report_path = Path(args.report)
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(
-            render_report(summary, records, cfg=cfg, cache_dir=cache_dir, offline=args.offline),
+            render_report(
+                summary,
+                records,
+                cfg=cfg,
+                cache_dir=cache_dir,
+                offline=args.offline,
+                report_path=args.report,
+            ),
             encoding="utf-8",
         )
 
@@ -1807,8 +2026,10 @@ def main(
 
     overall = summary["overall"]
     print(
-        f"smoke_test · {summary['model']} · {len(records)} alerts · "
-        f"{summary['total_calls']} calls · ${summary['total_cost_usd']:.4f}"
+        f"smoke_test · {summary['model']} · thinking: {summary['thinking']} · "
+        f"{len(records)} alerts · {summary['total_calls']} calls · "
+        f"spend ${summary['total_cost_usd']:.4f} of the "
+        f"${float(args.max_spend_usd):.2f} --max-spend-usd guard"
     )
     print(
         f"  JSON parses {_pct(overall['json_parse_rate'])} · "
