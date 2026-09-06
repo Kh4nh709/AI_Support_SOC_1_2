@@ -106,7 +106,9 @@ def accepts(db, sql, params=None, role=None):
     """Expect `sql` to be accepted; fail with the error it raised otherwise."""
     error = _run(db, sql, params, role)
     if error is not None:
-        raise AssertionError(f"statement was rejected but should have been accepted: {sql}\n{error}")
+        raise AssertionError(
+            f"statement was rejected but should have been accepted: {sql}\n{error}"
+        )
 
 
 def seed(db, table, subject_id):
@@ -140,9 +142,7 @@ def count(db, table):
 @pytest.mark.db
 def test_migration_017_records_itself_in_schema_migrations(db):
     with db.cursor() as cur:
-        cur.execute(
-            "SELECT 1 FROM schema_migrations WHERE version = '017_append_only_and_roles'"
-        )
+        cur.execute("SELECT 1 FROM schema_migrations WHERE version = '017_append_only_and_roles'")
         assert cur.fetchone() is not None, "017 did not record itself; migrate.sh will re-apply it"
 
 
