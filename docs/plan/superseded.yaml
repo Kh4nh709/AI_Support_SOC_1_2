@@ -526,7 +526,8 @@ rules:
 - id: dec-002-48
   dec: DEC-002 (port `prompt_guard.detect_injection` into `security/detector.
   severity: low
-  status: open
+  status: fixed
+  cleared: '2026-09-06 · prompts/P3.md:10 rewritten with DEC-002''s port / rewrite / move verdicts (Fable, pre-Planner P3 sweep); red step: the row xfailed on the old line before the edit'
   pattern: '5. Legacy artifact to port and fix: `llm/prompt_builder.py`, `llm/templates/triage_system.'
   artifact: docs/plan/prompts/P3.md
   reason: DEC-002 assigns two P3 deliverables by name and draws a hard line between them — one is a port,

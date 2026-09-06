@@ -37,6 +37,55 @@ shows both merges. `P1-T04` (015) is **not** a P2 precondition (DEC-029: due bef
 
 ---
 
+## Pre-dispatch cut list — a proposal for the Director to rule on (06/09, Fable)
+
+Written because the overbooking note below is the third in a row (P0 +25 %, P1 +112 %, P2 +144 %)
+and the first two changed nothing until the slip was already recorded (DEC-030). This section names
+the cards, not the percentage. Nothing here is decided: the Director rules on cuts inside the phase,
+the Owner approves the second slipped day (DEC-030; STATE Owner action ②). Arithmetic: three coders,
+8 h days, `t` = coder-hours from 07/09 08:00 (t=8 ends 07/09, t=16 ends 08/09, t=24 ends 09/09);
+estimates and dependencies as in the wave table below; **review/merge cycles counted as zero**, which
+they are not — P0 ran seven in a day with two second rounds.
+
+| Card | h | Verdict | Lands (t → date) | If deferred: what it costs |
+|---|---|---|---|---|
+| P2-T01 config+errors | 2 | **LAND** — everything imports it | t 0–2 · 07/09 am | not a candidate |
+| P2-T03 category | 2 | **LAND** — the parser depends on it | t 0–2 · 07/09 am | not a candidate |
+| P2-T02 db+jobs+worker | 3.5 | **LAND** — never cut (intake path, §10) | t 2–5.5 · 07/09 | not a candidate |
+| P2-T04 alert model+parser | 3.5 | **LAND** — never cut (intake path, §10) | t 2–5.5 · 07/09 | not a candidate |
+| P2-T05 dedup | 3.5 | **LAND** — gate item "dedup tests green" | t 5.5–9 · 07→08/09 | not a candidate |
+| P2-T06 transitions | 4 | **LAND** — gate item "18 transitions" | t 5.5–9.5 · 07→08/09 | not a candidate |
+| P2-T11 puller | 3.5 | **LAND** — never cut (§10); G7 needs it | t 5.5–9 · 07→08/09 | not a candidate |
+| P2-T08 inventory+lookups | 3 | **LAND** — T10 waits on it | t 9–12 · 08/09 | not a candidate |
+| P2-T09 autoclose | 3.5 | **LAND** — gate items "auto-close", "simulate" | t 9–12.5 · 08/09 | not a candidate: auto-close rules are the *last* step of §10's cut order, after ②, digest UI, health job and login |
+| P2-T13 backfill CLI | 2 | **LAND** — gate item "backfill from both sources"; only its live archive run is the Owner's | t 11–13 · 08/09 | not a candidate |
+| P2-T10 risk+pipeline+G7 | 4 | **LAND** — it *is* the gate | t 12.5–16.5 · 08/09 → 09/09 08:30 | not a candidate |
+| P2-T07 correlation | 2 | **LAND while a slot is idle — it is** (the third slot idles t 9–11 and t 13–16.5); defer to P3's window only if a coder is missing | t 9–11 · 08/09 | 0 h off P2's wall-clock (off the critical chain); P3's prompt-builder card (≤ 5 correlation samples in the ① prompt) gains a hard `Depends on` that P3's Planner must card — 2 h moved, not saved |
+| P2-T15 dedup verification | 2.5 | **DEFER to P3's window** — unless the Owner's archive export exists by 09/09 08:00, in which case it runs in the idle third slot | t 16.5–19 · 09/09 am, only with the export | 2.5 h off the tail (P2 done 09/09 ≈ 08:30 instead of ≈ 11:00); DEC-014's check of the coded dedup against 2,778 lands a day later; nothing on the P2 gate reads it |
+| P2-T12 webhook | 2 (`should`) | **DEFER to P4** — blocked on INBOX ① (§6.3 keys) and off the gate | — | 0 h (never in the chain); F1's secondary intake path is absent until P4; the two §6.3 keys are the Owner's decision either way (STATE Owner action ①) |
+
+**What the table says.** With three coders running continuously, every `must` card lands by
+**09/09 ≈ 11:00** with T15 and **≈ 08:30** without it; the phase needs 07, 08 and the morning of
+09/09 whichever way. The only cards worth moving are the two the wave table already shows off the
+critical chain (T07, T15) and the one that is blocked (T12) — and moving T07 buys no wall-clock. So
+the proposal is: **land T01–T06, T08–T11, T13 and T07; defer T12 to P4 and T15 to P3's window (or
+run T15 on 09/09 morning if the export is there); P3 starts 09/09 after the P2 gate** — which is the
+second slipped day and the Owner's decision (STATE Owner action ②), not a cut.
+
+**The number that decides the date is not in the table.** Twelve dispatch → review → merge cycles
+at ~1 h of Owner attention each add ~5 h to the critical chain (T03 → T04 → T09 → T10) if they run
+one at a time, pushing T10's merge from 09/09 08:30 to the end of 09/09. Two things keep that from
+becoming a third slipped day: the Director merges approved cards in batches inside one intake run
+rather than one per run, and P3's Planner runs on 08/09 evening against §6 exactly as P2's did on
+06/09 (DEC-031), so P3's coders start the moment the P2 gate is met.
+
+**Not proposed, and why.** ② (P5) is §10's first cut and DEC-030's trigger names it, but it buys P2
+nothing — it pays for the slipped day at P5, and STATE Owner action ② already puts it on the table
+for the 08/09 evening gate. Cutting inside P2 below T07/T15/T12 means cutting gate items or never-cut
+items, which §10 forbids at the Director's level.
+
+---
+
 ## ⚠️ Budget note — this phase does not fit two days, on hours or on wall-clock
 
 | | |
