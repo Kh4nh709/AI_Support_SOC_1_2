@@ -722,3 +722,11 @@ rules:
   artifact: docs/plan/00-context-pack.md §1 (the #1 source of truth)
   reason: §1 is what every agent reads first; it asserted the ratio unmeasured after the Owner had measured it on 06/09 (30.2:1, 2,778 clusters, ≈ 96/day). Fifth site of the same fact.
   allow: []
+- id: dec014-amend-no-agent-one-percent
+  dec: DEC-014 (amended 06/09 — the ≈ 1 % / ≈ 870-line no-`agent` figure is withdrawn by the Owner, measured zero)
+  severity: high
+  status: fixed
+  pattern: "(≈ 1 % of real traffic)"
+  artifact: docs/plan/prompts/P2.md:22 (field derivations the Planner copies into the parser card)
+  reason: The Owner re-parsed every archive line as JSON and found zero alerts without an `agent` object; the ≈ 1 % was a line-counting artifact and was withdrawn. The fallback rule stays as defensive behaviour; the frequency must not be asserted, and the Director had reasoned from it in DEC-014's first arithmetic note.
+  allow: []
