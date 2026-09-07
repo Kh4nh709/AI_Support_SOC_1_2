@@ -420,7 +420,8 @@ rules:
   dec: DEC-001 (demo CA), DEC-012 (user1 read as non-privileged), DEC-023 (tw
   severity: medium
   status: open
-  pattern: '- `docs/limitations.md`: the list from the architecture §9 plus anything discovered (autho'
+  pattern: the list from the architecture §9 plus anything discovered
+  pattern_note: "repointed 07/09 (DEC-052). The original quoted the whole enumeration; the Director then edited that line to add DEC-052's limitation, which silenced the row without discharging its debt — the four named limitations still are not in it. Short stable form so an edit to the line cannot retire the reminder."
   artifact: docs/plan/prompts/P8.md
   reason: Four decisions say in terms that a named limitation 'must' land in `docs/limitations.md` during
     P8, and DEC-024(b) goes further — 'carries the three-way result above verbatim, not a summary of it',
