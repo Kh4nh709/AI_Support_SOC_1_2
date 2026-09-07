@@ -17,6 +17,7 @@ from app.infra.errors import ConfigError
 
 def test_connect_with_no_dsn_and_no_database_url_raises_config_error(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(infra_db.config, "load", lambda: type("C", (), {"DATABASE_URL": ""})())
     with pytest.raises(ConfigError, match="DATABASE_URL"):
         infra_db.connect()
 
