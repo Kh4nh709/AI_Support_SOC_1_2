@@ -39,12 +39,20 @@ _rules = _spec["rules"]
 def _in_scope() -> list[pathlib.Path]:
     """Forward-looking artifacts only — history is excluded by construction."""
     found: set[pathlib.Path] = set()
+    done_phases = _scan.get("exclude_completed_phases", [])
     for pattern in _scan["include"]:
         for hit in glob.glob(str(REPO_ROOT / pattern)):
             path = pathlib.Path(hit)
             if path.name in _scan["exclude_names"]:
                 continue
             if any(path.name.endswith(sfx) for sfx in _scan["exclude_suffixes"]):
+                continue
+            rel = str(path.relative_to(REPO_ROOT))
+            # A completed phase's cards, index and brief are history (DEC-049).
+            if any(
+                f"tasks/{ph}/" in rel or rel.endswith((f"prompts/{ph}.md", f"{ph}-tasks.md"))
+                for ph in done_phases
+            ):
                 continue
             found.add(path)
     return sorted(found)
@@ -100,6 +108,32 @@ def _offending_lines(rule: dict) -> list[str]:
     return hits
 
 
+def test_scan_scope_tracks_completed_phases():
+    """The exclusion list and STATE.md's phase table must agree, both ways (DEC-049).
+
+    Forgetting to retire a finished phase leaves dead guards running against cards
+    nobody will act on; retiring a live one silently stops guarding work in flight.
+    The second is the dangerous direction, so both are asserted.
+    """
+    state = (REPO_ROOT / "docs" / "plan" / "STATE.md").read_text(encoding="utf-8")
+    done, live = set(), set()
+    for line in state.splitlines():
+        m = re.match(r"^\|\s*(P\d)\s[^|]*\|[^|]*\|\s*\**([a-z-]+)\**\s*\|", line)
+        if not m:
+            continue
+        (done if m.group(2) == "done" else live).add(m.group(1))
+    assert done, "no phase row parsed as done — this check would be vacuous"
+    excluded = set(_scan.get("exclude_completed_phases", []))
+    assert not (done - excluded), (
+        f"phase(s) {sorted(done - excluded)} are `done` in STATE.md but their cards are still "
+        "scanned; add them to `exclude_completed_phases` and retire their rows (DEC-049)"
+    )
+    assert not (excluded & live), (
+        f"phase(s) {sorted(excluded & live)} are excluded from the scan but are NOT `done` in "
+        "STATE.md — live work is going unguarded"
+    )
+
+
 def test_scope_is_not_empty_and_excludes_history():
     """The scoping is load-bearing: if it silently caught nothing, every rule would pass."""
     assert SCOPE, "no forward-looking artifacts matched — the include globs are wrong"
@@ -113,7 +147,12 @@ def test_every_rule_is_well_formed():
     for rule in _rules:
         for field in ("id", "dec", "status", "pattern", "reason"):
             assert rule.get(field), f"rule {rule.get('id')!r} is missing {field}"
-        assert rule["status"] in ("fixed", "open"), rule["id"]
+        assert rule["status"] in ("fixed", "open", "retired"), rule["id"]
+        if rule["status"] == "retired":
+            # Retired rows are history: their artifact left the scan (DEC-049).
+            # They are kept, not deleted, so the trail survives — and they must
+            # say why, or "retired" becomes a way to silence a live rule.
+            assert rule.get("cleared"), f"retired rule {rule['id']} has no `cleared:` reason"
         assert rule["id"] not in seen, f"duplicate rule id {rule['id']}"
         seen.add(rule["id"])
 

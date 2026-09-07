@@ -729,3 +729,48 @@ Consequences:
   - **P2-T04 is bucket (a), one line.** `test_wazuh_parser.py:157`'s docstring says `datetime.fromisoformat` rejects `+0700` unnormalised; on this project's pinned Python 3.12 it parses it natively, and the Coder's own report §3 says so. The parser's normalisation is still correct and still wanted; only the docstring's justification is false. No code change.
   - **P1 is complete: all eight tasks merged.** The exit gate was already recorded met on the DEC-029 set at `81b5371`; 015 has now landed as DEC-029 required before P4.
 Supersedes: —
+
+## DEC-048 · 2026-09-07 · Intake runs are batched — priced against the ② cut, which it outranks by roughly threefold and costs no scope
+Scope: tactical
+Decided by: Director
+Drafted by: Director (Opus 5)
+Propagated to: `prompts/director.md` (result-intake trigger) · `HUONG-DAN-VAN-HANH.md` §1 step D (the Owner's runbook, which is where the trigger is actually pulled) · `STATE.md` (the ② line at tonight's gate)
+Context: the Owner measured report-to-merge elapsed and found a tenfold split. I corroborated it from commit timestamps and found two more unbatched cases than were listed.
+Decision: **The Director does not run one intake per report. Reports accumulate and one intake run merges every ready task in dependency order. Batching is priced before any scope cut is proposed, and tonight it displaces the ② question.**
+Consequences:
+  - **The measurement, mine, from `git show -s --format=%ct` on each report commit and its merge commit.** Batched — three tasks merged in one run: **0.5, 0.4, 0.5 h**, mean **0.47**. Unbatched: **6.0, 5.9, 6.7, 13.0, 13.1, 15.1 h**, mean **10.0**, median **9.9**. The Owner's four unbatched figures are confirmed; P2-T01 at 13.0 and P2-T03 at 13.1 are two they did not list, and both are worse than any of theirs. Ratio ≈ **21×** on the means, ≈ 13× on the Owner's conservative subset.
+  - **What it is worth in wall-clock, which is the only currency that matters against a cut.** Latency converts to schedule only on the critical path, so the count is *sequential merge gates*, not tasks. P2 has **four** left: {T02, T04} → {T05, T06, T07, T08, T09, T11} → {T10} → {T13, T15}. At the conservative 6 h median that is **24 h** of pure latency; at the measured 10 h mean, 40 h. Batched: 4 × 0.5 ≈ **2 h**. **Saving ≈ 22–38 h, i.e. 2.75 to 4.75 working days.** Against roughly **eleven coder-hours** of work left across eleven tasks — which at three coders is about four hours of actual coding. The pipeline is a day of work wrapped in three days of waiting.
+  - **Priced against ②, as the Owner required.** Cutting ② buys **0 h in P2** and frees most of one P5 day ≈ **8 h ≈ 1 day**, and costs a D-item that is half the thesis claim. Batching buys **≈ 2.75 days minimum**, costs **nothing**, and is reversible on the next run. **Batching outranks the cut by about threefold on the conservative reading and is free.** My recommendation at tonight's gate is therefore: **do not spend ②**; batch, re-measure at the 08/09 gate, and keep ② as the lever it was — first in the §10 order if the measurement does not hold.
+  - **The honest cost, because batching is not free of risk.** Merging several branches in one run is exactly the condition that produced DEC-047 — two approved branches composing into a defect neither had. Batching makes that *more* likely, not less. Two things make it safe enough to take: `make lint` now runs `build_schema.py --check`, which is what turned that class from invisible to red for generated files; and DEC-047's own discipline — when two branches in a batch touch related surfaces, merge them into a scratch worktree and run the suite there **before** touching `main`. That step is not optional in a batched run; it is what buys the tenfold back.
+  - The bottleneck was never the coding. Eleven coder-hours remain and the review/merge cycle is spending twice that in waiting.
+Supersedes: —
+
+## DEC-049 · 2026-09-07 · A completed phase's cards leave the forward-looking scope; 18 register rows retired rather than deleted
+Scope: tactical
+Decided by: Director
+Drafted by: Director (Opus 5)
+Propagated to: `superseded.yaml` (`scan.exclude_completed_phases: [P0, P1]`; 18 rows → `status: retired` each with a `cleared:` reason) · `backend/tests/test_superseded_claims.py` (`_in_scope()` honours it; `retired` accepted only with a reason; new `test_scan_scope_tracks_completed_phases`)
+Context: the Owner put the scope question sharply — either finished cards leave the forward-looking scope, or their register rows are permanent noise in a detector whose whole value is a low false-positive rate.
+Decision: **A completed phase's cards, index and brief leave the scan.** `P0` and `P1` are excluded now; each future phase joins the list when its row goes `done`, and a test enforces the agreement in both directions.
+Consequences:
+  - **Correction to the premise, measured.** The count was not 20 open rows in P1 cards. It is **17 rows keyed to P1 artifacts, of which 14 were `fixed` and 3 `open`** (plus one P0 row) — 18 retired in total. The `open` ones were the visible noise: they xfail every run and could never be cleared, because clearing them means editing a card for a task that has already merged. The 14 `fixed` ones were the quieter problem — hard-asserting guards that will run forever against files no agent will act on again. The substance of the question holds; only the number differs.
+  - **Why this does not lose the protection.** The risk of retiring a card's guard is that a future card copies the dead claim out of it. But the copy lands in a **live** card, which is in scope, and the fifteen canonical short-form rules are artifact-independent — they fire at the destination. **The catch point moves to where the claim can still do harm**, which is the correct place for it, and is exactly how `dec024a-gate-qualifier` already works.
+  - **Retired, not deleted.** Each row keeps its pattern, its reason and its history, and gains `cleared:` naming the phase and its previous status. `retired` without a `cleared:` reason fails the well-formedness test, so "retired" cannot become a quiet way to silence a live rule.
+  - **The list cannot drift from reality.** `test_scan_scope_tracks_completed_phases` parses STATE's phase table and asserts both directions: a phase `done` but still scanned fails (dead guards), and a phase excluded but not `done` fails (**live work going unguarded** — the dangerous direction). **Broken both ways before trusting it:** removing `P1` from the list → red naming P1; adding the live `P2` → red naming P2.
+  - **Two rows xpassed during the sweep and were not left sitting.** `dec-018-26` and `dec024a-rolcreaterole-false` no longer matched anywhere: both flipped `open` → `fixed` with a `cleared:` note, and both re-broken by injecting their pattern into a live in-scope brief to prove they still fire rather than assuming a silent pass meant a real fix.
+  - Scope went from 48 files to **30**; P2's 16 files stay guarded. Register: 44 `fixed`, 10 `open`, 18 `retired`.
+Supersedes: —
+
+## DEC-050 · 2026-09-07 · P2-T02 is repaired by reverting the revert on `main` first — the obvious route silently does not restore the modules
+Scope: tactical
+Decided by: Director
+Drafted by: Director (Opus 5)
+Propagated to: `INBOX.md` (2026-09-07 · P2-T02 · DECISION_REQUEST resolved) · `STATE.md` (P2-T02 row carries the sequence) · the Coder's instruction
+Context: `18e82d5` reverted P2-T02's merge (DEC-047), so `task/P2-T02` is an ancestor of `main` with its content reverted out. An ordinary `git merge` answers "Already up to date.", exits 0 and lands nothing.
+Decision: **Option A — revert the revert on `main`, then merge the Coder's fix — and the two happen in the same intake run, not in sequence across runs.**
+Consequences:
+  - **The refinement decides it, and I measured it rather than reasoning about it.** Committing the fix on top of the existing branch does *not* work. On a stand-in branch carrying exactly the one-line test fix, merging into `main` gave `DU backend/tests/test_db.py` — a modify/delete conflict — **and `backend/app/infra/db.py` still at 0 `def`s afterwards**, because for a file the new commit did not touch, `theirs` equals the merge base and git keeps `ours`, which is main's reverted version. A loud conflict beside a silently unrestored module is worse than the no-op, because the conflict draws the eye to the file that is fine.
+  - **Sequencing, which the INBOX item did not fix and which matters.** Reverting the revert *before* the Coder reports would restore the failing test to `main` and leave it red — the state E2 exists to prevent. So the order inside one run is: revert `18e82d5`, resolve, merge the branch carrying the fix, verify green. Not two runs. This is DEC-048's batching applied to its first case.
+  - Route B (recreate the branch by cherry-pick) reaches the same content but costs the Coder branch plumbing mid-round, and both the board's `Branch` column and DEC-045's guard key on `task/P2-T02`. Route C discards the review trail DEC-028 requires. Neither is worth it when A's only conflict is in a plan file.
+  - **Confirmed independently before ruling:** `merge-base --is-ancestor` true, `main..task/P2-T02` **0 commits**, `db.py` 0 defs on `main` against 2 on the branch, plain merge "Already up to date." Fable's guard (invariant 3 in `test_dispatch_state.py`) is already committed and states in its own docstring what it cannot see — the committed-fix case above — which is the right way to ship a partial guard.
+Supersedes: —

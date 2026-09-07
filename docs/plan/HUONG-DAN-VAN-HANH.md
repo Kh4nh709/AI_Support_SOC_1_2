@@ -60,12 +60,13 @@ Lưu ý lịch: hôm nay đã là 05/09, tức D0 và D1 của plan gộp làm m
    > Read `docs/plan/prompts/director.md` and do the morning run.
    Nó: đối chiếu STATE với git, xử lý INBOX, **merge** các task `approved` vào `main` và chạy `make test`, in "Owner actions today" và "Dispatch now".
 3. Bạn làm "Owner actions", rồi dispatch theo danh sách (bước B).
-4. Khi có mục INBOX giữa ngày:
+4. **Gom lô rồi mới gọi Director (DEC-048).** Đừng gọi một lượt intake cho mỗi báo cáo. Đo 07/09: từ lúc Coder ghi báo cáo tới lúc merge, **gom lô 0,47 h trung bình** so với **10,0 h khi làm lẻ** — chênh 21 lần trên cùng một quy trình. P2 còn 4 cửa merge nối tiếp nên gom lô đáng **22–38 giờ** đồng hồ, trong khi công việc code còn lại chỉ khoảng 11 giờ. Cách làm: để 2–3 task báo cáo xong rồi gõ **một** câu, ví dụ `P2-T05, P2-T06, P2-T08 reviewed. Do a result-intake run.` — Director trộn tất cả theo thứ tự phụ thuộc trong một lượt.
+5. Khi có mục INBOX giữa ngày:
    > INBOX has new items. Resolve or escalate them.
-5. Tối:
+6. Tối:
    > Read `docs/plan/prompts/director.md` and do the evening run (daily gate).
    Nó kiểm exit gate của giai đoạn bằng lệnh thật, ghi "Daily gate log", áp cut nếu trễ (ghi `DEC-`), in kế hoạch ngày mai.
-6. Khi Director escalate (ghi trong "Owner actions" kèm phương án đề nghị): bạn quyết bằng một câu trong phiên director:
+7. Khi Director escalate (ghi trong "Owner actions" kèm phương án đề nghị): bạn quyết bằng một câu trong phiên director:
    > Decision on DEC request about <x>: approve option B. Record it.
 
 ### Bước E · Sang giai đoạn kế
