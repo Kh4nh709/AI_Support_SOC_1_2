@@ -6,7 +6,7 @@ BEGIN;
 -- KHÔNG SỬA TRỰC TIẾP — sửa migration rồi chạy lại build_schema.py.
 --   Kiểm trong CI:  python3 build_schema.py --check
 --
--- Nguồn : 001_bang_nen.sql, 002_alerts.sql, 003_jobs_audit_llm.sql, 004_indexes_alerts.sql, 005_index_lop_bao_ve_2.sql, 006_chot_hop_dong.sql, 007_users.sql, 008_audit_event_type.sql, 009_audit_actor.sql, 010_enrich_cache.sql, 011_auth.sql, 012_hop_dong_job_llm.sql
+-- Nguồn : 001_bang_nen.sql, 002_alerts.sql, 003_jobs_audit_llm.sql, 004_indexes_alerts.sql, 005_index_lop_bao_ve_2.sql, 006_chot_hop_dong.sql, 007_users.sql, 008_audit_event_type.sql, 009_audit_actor.sql, 010_enrich_cache.sql, 011_auth.sql, 012_hop_dong_job_llm.sql, 013_assets_enrichment.sql, 014_intake_cursor_heartbeat.sql, 016_alter_alerts_jobs_llm_runs_users.sql, 017_append_only_and_roles.sql
 -- Đích  : PostgreSQL 16 (đã chạy thử trên 16.15)
 -- Dùng  : psql -d <db> -v ON_ERROR_STOP=1 -f schema.sql
 --
@@ -882,5 +882,445 @@ CREATE UNIQUE INDEX ux_jobs_mot_job_song_moi_subject
 ALTER TABLE llm_runs ADD CONSTRAINT ck_llm_runs_v1_mot_pipeline_khong_tool CHECK (
   pipeline <> 'triage' OR agent_trace IS NULL OR agent_trace->'rounds' IS NULL
   OR jsonb_array_length(agent_trace->'rounds') = 0);
+
+-- ┌──────────────────────────────────────────────────────────────────────────┐
+-- │ NGUỒN: migrations/013_assets_enrichment.sql
+-- └──────────────────────────────────────────────────────────────────────────┘
+-- ============================================================================
+-- 013_assets_enrichment.sql — AI Support SOC
+-- Ba bảng làm giàu (`assets`, `identities`, `iocs`) chuyển sang từ vựng của
+-- §6.2 và nhận ba cột xuất xứ mà bộ nạp inventory của P2 upsert.
+-- Chạy sau 012. KHÔNG sửa 001-012: chúng đã áp.
+--
+-- (1) VÌ SAO ĐỔI CHECK — DEC-004: `assets.criticality` bị CHECK theo
+--     `crown_jewel|high|normal|low` trong khi §6.2 `structured_basis.asset_criticality`
+--     là `high|medium|low|unknown`. Bước 2 của cổng (§7.3) so `structured_basis` với
+--     dữ kiện CSDL theo từng trường, nên hai từ vựng nghĩa là trường ấy LUÔN lệch và
+--     mọi phán quyết tụt xuống `needs_review`. CSDL đổi theo §6.2, không bao giờ ngược lại.
+--     KHÔNG cần chuyển dữ liệu: `assets`, `identities`, `iocs` đều RỖNG trên `soc_dev`,
+--     `soc_test` và `soc` — đo ngày 05/09/2026. Nếu một CSDL nào đó còn dòng
+--     `crown_jewel`/`normal` thì ADD CONSTRAINT hỏng ngay, và đó là hành vi ĐÚNG.
+--
+-- (2) `owner`, `role` — §7.1 liệt "inventory lookup values (owner, role text)" vào
+--     nhóm LUÔN nằm trong khối <untrusted_data>, nhưng chưa cột nào giữ chúng.
+--     text NULL: một asset không có trong inventory thì không có cả hai.
+--
+-- (3) `source`, `loaded_at`, `active` — inventory-format.md §4: mỗi dòng được upsert
+--     kèm tên tệp, thời điểm nạp và `active = true`; dòng BIẾN MẤT khỏi tệp bị đánh
+--     `active = false`, KHÔNG xoá, để lịch sử làm giàu của cảnh báo cũ vẫn truy được.
+--     `active` NOT NULL DEFAULT true — mọi tra cứu lọc theo nó. `source`/`loaded_at`
+--     GIỮ NULL: NULL nghĩa là "dòng này không đến từ tệp inventory". KHÔNG đặt
+--     DEFAULT 'inventory' — một chuỗi xuất xứ SAI tệ hơn một NULL thành thật, và P2
+--     luôn ghi giá trị thật.
+--
+-- (4) `iocs.source` KHÔNG thêm ở đây. `006_chot_hop_dong.sql:54` đã thêm
+--     `source text NOT NULL DEFAULT 'internal'` và dòng 56 đổi khoá chính thành
+--     `iocs_pkey PRIMARY KEY (value, source)`. ADD COLUMN lần nữa sẽ hỏng với
+--     "column \"source\" of relation \"iocs\" already exists". Yêu cầu
+--     "`assets/identities/iocs` + `source`" của §6.1 với `iocs` đã thoả từ 006.
+--
+-- (5) `enrich_cache` — §6.1 "Dropped from v3", giao cho 013 (DEC-004/DEC-005: DDL của
+--     một bảng không bao giờ tách đôi, và 013 là migration của các bảng làm giàu).
+--     Đo được: không FK nào, không view nào phụ thuộc, nên DROP TABLE trơn — hai
+--     index `enrich_cache_pkey` và `ix_enrich_cache_het_han` đi theo bảng.
+--     §6.1 cũng liệt `prompt_versions` là bị bỏ — bảng ấy CHƯA TỪNG TỒN TẠI, không có gì để làm.
+-- ============================================================================
+
+-- ── (1) · assets — từ vựng §6.2, DEC-004 ────────────────────────────────────
+ALTER TABLE assets DROP CONSTRAINT ck_assets_criticality;
+ALTER TABLE assets ADD CONSTRAINT ck_assets_criticality
+  CHECK (criticality IN ('high','medium','low','unknown'));
+
+-- ── (2) · assets — §7.1 ─────────────────────────────────────────────────────
+ALTER TABLE assets ADD COLUMN owner text,
+                   ADD COLUMN role  text;
+
+-- ── (3) · ba cột xuất xứ — inventory-format.md §4 ───────────────────────────
+ALTER TABLE assets ADD COLUMN source    text,
+                   ADD COLUMN loaded_at timestamptz,
+                   ADD COLUMN active    boolean NOT NULL DEFAULT true;
+
+ALTER TABLE identities ADD COLUMN source    text,
+                       ADD COLUMN loaded_at timestamptz,
+                       ADD COLUMN active    boolean NOT NULL DEFAULT true;
+
+-- ── (4) · iocs — `source` đã có từ 006 và là nửa khoá chính ──────────────────
+ALTER TABLE iocs ADD COLUMN loaded_at timestamptz,
+                 ADD COLUMN active    boolean NOT NULL DEFAULT true;
+
+-- ── (5) · §6.1 "Dropped from v3" ────────────────────────────────────────────
+DROP TABLE enrich_cache;
+
+INSERT INTO schema_migrations (version) VALUES ('013_assets_enrichment');
+
+-- ┌──────────────────────────────────────────────────────────────────────────┐
+-- │ NGUỒN: migrations/014_intake_cursor_heartbeat.sql
+-- └──────────────────────────────────────────────────────────────────────────┘
+-- ============================================================================
+-- 014_intake_cursor_heartbeat.sql — the intake ledger and the puller's state
+--
+-- Context pack §6.1 (three new v3 tables) and §5 (the flow that writes them):
+--   intake            one row per document read from a manager, plus a receipt
+--   source_cursor     where the next pull resumes from, per manager
+--   source_heartbeat  when a manager was last heard from, and last heard with
+--
+-- Append-only enforcement on `intake` is NOT here. Migration 017 owns it and
+-- applies it on top of this file (DEC-023 item 1): REVOKE UPDATE, DELETE,
+-- TRUNCATE, then a column-level GRANT UPDATE (processed_at, outcome, error) for
+-- the G12 completion write, then the pinning triggers. This file creates the
+-- three tables with their constraints and nothing else — no GRANT, no REVOKE,
+-- no trigger, no index beyond the ones the keys imply.
+-- ============================================================================
+
+
+-- ---------------------------------------------------------------------------
+-- intake — the ledger every alert enters through, from either intake path
+-- (§5: the 60 s puller, and POST /webhook/alerts as the secondary path).
+--
+-- G9, as re-worded by DEC-023: `raw_text` is the received document unchanged —
+-- the webhook body, the hit object's bytes sliced from the pull response, or
+-- the archive line for a replay row — and `raw_payload` is derived from it and
+-- may be normalised. Byte identity cannot hold on jsonb: measured on this
+-- cluster, '{"b":1,"a":2,  "c":3}' comes back from jsonb as
+-- '{"a": 2, "b": 1, "c": 3}' — keys reordered, whitespace collapsed. So the
+-- received document lives in `text` (server_encoding is UTF8 and JSON text is
+-- UTF-8 by RFC 8259, so text preserves every valid input byte and rejects
+-- invalid UTF-8 loudly) and the jsonb is generated from it, never inserted.
+-- The generated column doubles as the well-formedness check: 'not json' fails
+-- with `invalid input syntax for type json`.
+--
+-- No foreign key to `alerts`, in either direction. §6.1 gives `alerts` no
+-- `intake_id` and `intake` no `alert_id`; the link is carried by the
+-- jobs('pipeline', intake_id) row. An FK here would extend a frozen contract.
+-- ---------------------------------------------------------------------------
+CREATE TABLE intake (
+  intake_id        bigint      GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  manager_id       text        NOT NULL,   -- §6.3 WAZUH_MANAGER_ID, e.g. 'IA1803'
+  source_alert_id  text        NOT NULL,   -- the manager's own alert id, e.g. '1788340536.1509017'
+  raw_text         text        NOT NULL,   -- G9: the received bytes, unchanged (DEC-023)
+  raw_payload      jsonb       NOT NULL GENERATED ALWAYS AS (raw_text::jsonb) STORED,
+  sort_key         bigint,                 -- indexer `sort`; computed for replay rows (DEC-019)
+  via              text        NOT NULL,
+  received_at      timestamptz NOT NULL DEFAULT now(),  -- §9: control time comes from the DB
+  processed_at     timestamptz,            -- G12: this or `error`, within 60 s
+  outcome          text,
+  error            text,
+
+  -- §5 · the puller overlaps its window by 60 s, so it re-reads rows it has
+  -- already stored. This is what makes a double pull idempotent.
+  CONSTRAINT uq_intake_manager_source UNIQUE (manager_id, source_alert_id),
+
+  CONSTRAINT ck_intake_via     CHECK (via IN ('pull','webhook')),
+
+  -- Both `outcome` and `processed_at` are nullable on purpose: a row is
+  -- inserted the moment it is read and only later resolved. G12 is what forces
+  -- a value within 60 s, and G12 is a health check in P5, not a DB constraint —
+  -- so the CHECK has to admit NULL or it would reject every fresh row.
+  CONSTRAINT ck_intake_outcome CHECK (outcome IS NULL
+    OR outcome IN ('alert','duplicate','auto_closed','heartbeat','rejected'))
+);
+
+-- ---------------------------------------------------------------------------
+-- source_cursor — the persistent `search_after` cursor, one row per manager.
+-- Everything but the key is nullable: a manager is registered before its first
+-- pull has produced anything to resume from, and `last_error` holds the last
+-- failure without stopping the next attempt.
+-- ---------------------------------------------------------------------------
+CREATE TABLE source_cursor (
+  manager_id   text PRIMARY KEY,
+  last_sort    bigint,       -- the `sort` value of the last hit consumed
+  last_pull_at timestamptz,
+  last_error   text
+);
+
+-- ---------------------------------------------------------------------------
+-- source_heartbeat — `last_seen_at` is when the manager answered at all,
+-- `last_alert_at` is when it last answered with an alert. The gap between the
+-- two is what heartbeat detection reads in P2; a quiet manager is not a dead
+-- one (DEC-014: the median day is 592 alerts, but the distribution is spiky).
+-- ---------------------------------------------------------------------------
+CREATE TABLE source_heartbeat (
+  manager_id    text PRIMARY KEY,
+  last_seen_at  timestamptz,
+  last_alert_at timestamptz
+);
+
+INSERT INTO schema_migrations (version) VALUES ('014_intake_cursor_heartbeat');
+
+-- ┌──────────────────────────────────────────────────────────────────────────┐
+-- │ NGUỒN: migrations/016_alter_alerts_jobs_llm_runs_users.sql
+-- └──────────────────────────────────────────────────────────────────────────┘
+-- ============================================================================
+-- 016_alter_alerts_jobs_llm_runs_users.sql — the v1 tables take their v3 shape
+--
+-- Context pack §6.1, "v3 altered", for the five tables this file owns:
+--   alerts        + manager_id, origin_host, suggestion_visible; source CHECKed
+--   jobs          job_type set replaced by the six v3 values
+--   llm_runs      + the eight columns ① and ② write, role CHECKed
+--   users         + the three lockout columns
+--   audit_events  event_type set = 21 v1 names + 6 v3 names
+--
+-- Runs after 014. It does not depend on 015 (another P1 task owns it, in parallel):
+-- the two files touch no common table, so either merge order works. Does not touch
+-- 001-014: they have applied.
+--
+-- Every one of the five tables is EMPTY — measured 06/09/2026 on `soc_dev`,
+-- `soc_test` and the v1 `soc` database — so the two DROP/ADD CONSTRAINT pairs
+-- below need no data migration and no NOT VALID. If some database does hold a
+-- row that the new set refuses, ADD CONSTRAINT fails there and that is the
+-- correct behaviour: the row is the defect, not the constraint.
+--
+-- ── Three places where §6.1 and the v1 database disagreed ───────────────────
+--
+-- (1) `alerts.source` ALREADY EXISTS. `002_alerts.sql:434` created it as
+--     `source text NOT NULL DEFAULT 'wazuh'` with NO CHECK. §6.1's
+--     "`source ∈ wazuh|lab|replay`" is therefore a missing CONSTRAINT, not a
+--     missing column: `ADD COLUMN source` here would fail with
+--     `column "source" of relation "alerts" already exists`. Measured.
+--
+-- (2) `alerts.sampled_for_control` HAS NEVER EXISTED (DEC-022). §6.1 and
+--     architecture §5 both order it dropped, but it is a jsonb payload KEY
+--     inside a `jsonb_build_object(...)` audit event
+--     (`docs/phase-3-auto-close.md:166`), not a column — measured on the
+--     migrated `soc_dev`, where `alerts` has 51 columns and none is named
+--     that. The clause is kept rather than struck, and satisfied literally
+--     with `DROP COLUMN IF EXISTS`: the migration states the contract, and
+--     here it is a verified no-op that emits `NOTICE … skipping` and exits 0.
+--     Do not go looking for the column.
+--
+-- (3) `ck_jobs_job_type` WAS `('enrich','triage')` — measured, not read off a
+--     document. Architecture §5 shows five values; §6.1 gives six, including
+--     `pull`; §0 makes the context pack the higher source of truth, so the six
+--     v3 values win and `enrich` ceases to exist. After this file,
+--     `INSERT … ('pull', …)` succeeds and `('enrich', …)` fails — the exact
+--     inversion of the v1 database.
+--
+-- ── What is deliberately NOT here ──────────────────────────────────────────
+--
+-- `role` is nullable and `ck_llm_runs_role` admits NULL. §6.1 writes
+-- "`llm_runs` + `role ∈ proposer|verifier|investigator`" — a closed set for a
+-- value that is PRESENT, not a NOT NULL. v1 rows carry no role at all, and a
+-- bare `role IN (…)` would reject every insert that omits it.
+--
+-- `stopped_by` gets no CHECK. §6.1 gives it no closed set, and inventing one
+-- would be an extension of a frozen contract.
+--
+-- `manager_id` and `origin_host` stay nullable for the same reason: §6.1 lists
+-- the columns and no NOT NULL. It also keeps the DEC-019 replay path cheap.
+-- `suggestion_visible` DOES get `NOT NULL DEFAULT true` — §6.1 writes the
+-- default explicitly and DEC-023 annotated the clause with the NOT NULL, since
+-- a tri-state flag on the blind branch is a defect magnet. Transcription, not
+-- extension.
+--
+-- `cost_usd numeric(10,5)` is $0.00001 granularity. Measured 06/09/2026: one
+-- trivial `deepseek-v4-flash` call costs about $0.0000287, which this column
+-- stores as 0.00003. Per-call cost is therefore held ROUNDED; any total that
+-- needs precision must be summed from `input_tokens`/`output_tokens`.
+-- ============================================================================
+
+
+-- ---------------------------------------------------------------------------
+-- alerts — §6.1: + manager_id, origin_host, suggestion_visible; source CHECKed
+-- ---------------------------------------------------------------------------
+ALTER TABLE alerts ADD COLUMN manager_id  text,          -- §6.3 WAZUH_MANAGER_ID, e.g. 'IA1803'
+                   ADD COLUMN origin_host text,          -- predecoder.hostname
+                   ADD COLUMN suggestion_visible boolean NOT NULL DEFAULT true;
+
+-- See note (2): states the contract, drops nothing on any database we have.
+ALTER TABLE alerts DROP COLUMN IF EXISTS sampled_for_control;
+
+-- See note (1): the column was already here, only the closed set was missing.
+ALTER TABLE alerts ADD CONSTRAINT ck_alerts_source
+  CHECK (source IN ('wazuh','lab','replay'));
+
+-- ---------------------------------------------------------------------------
+-- jobs — §6.1 + §6.5: pull (every 60 s), pipeline(intake_id), triage(alert_id),
+-- investigate(case_id), digest (daily 08:00), health (every 5 min). See note (3).
+-- ---------------------------------------------------------------------------
+ALTER TABLE jobs DROP CONSTRAINT ck_jobs_job_type;
+ALTER TABLE jobs ADD CONSTRAINT ck_jobs_job_type
+  CHECK (job_type IN ('pipeline','triage','investigate','digest','health','pull'));
+
+-- ---------------------------------------------------------------------------
+-- llm_runs — the eight columns ① and ② write. `gate_result` is written for
+-- every row (G11); `verifier_result` and `evidence_check` only where the step
+-- runs, hence all three nullable.
+-- ---------------------------------------------------------------------------
+ALTER TABLE llm_runs ADD COLUMN role            text,
+                     ADD COLUMN model_id        text,
+                     ADD COLUMN prompt_version  text,          -- git sha
+                     ADD COLUMN gate_result     jsonb,
+                     ADD COLUMN verifier_result jsonb,
+                     ADD COLUMN evidence_check  jsonb,
+                     ADD COLUMN cost_usd        numeric(10,5),
+                     ADD COLUMN stopped_by      text;
+
+ALTER TABLE llm_runs ADD CONSTRAINT ck_llm_runs_role
+  CHECK (role IS NULL OR role IN ('proposer','verifier','investigator'));
+
+-- ---------------------------------------------------------------------------
+-- users — §6.1: the three columns the lockout and session-invalidation paths
+-- read. `failed_logins` counts from zero for every existing row, so the
+-- DEFAULT plus NOT NULL backfills them; the two timestamps mean "never" when
+-- NULL, which is the correct state for an account that has never been locked.
+-- ---------------------------------------------------------------------------
+ALTER TABLE users ADD COLUMN sessions_invalid_before timestamptz,
+                  ADD COLUMN failed_logins integer NOT NULL DEFAULT 0,
+                  ADD COLUMN locked_until  timestamptz;
+
+-- ---------------------------------------------------------------------------
+-- audit_events — §6.1: 21 v1 names + 6 v3 names = 27.
+--
+-- The first 21 are the constraint 008 froze, dumped from the live database with
+-- `pg_get_constraintdef` and kept in that order, so a diff against the old
+-- definition shows six additions and nothing else. 008's reasoning still holds
+-- and is not repeated here: this CHECK guards the VALID STRING SET, not the
+-- emission policy, which is why names the current phase never emits stay in it.
+-- ---------------------------------------------------------------------------
+ALTER TABLE audit_events DROP CONSTRAINT ck_audit_event_type;
+ALTER TABLE audit_events ADD CONSTRAINT ck_audit_event_type CHECK (event_type IN (
+  'alert.received',
+  'alert.duplicate_merged',
+  'alert.auto_closed',
+  'alert.autoclose_blocked_critical',
+  'alert.enrich_started',
+  'alert.enriched',
+  'alert.reopened',
+  'job.exhausted',
+  'triage.suggested',
+  'alert.acknowledged',
+  'tier1.decided',
+  'tier1.escalated',
+  'case.opened',
+  'case.truncated',
+  'case.analyzed',
+  'tier2.concluded',
+  'authz.denied',
+  'admin.user_created',
+  'admin.user_updated',
+  'admin.job_retried',
+  'admin.autoclose_rule_toggled',
+  'autoclose.reviewed',
+  'rule.suspected_wrong',
+  'llm.gate_forced',
+  'llm.builder_violation',
+  'health.alarm',
+  'label.created'
+));
+
+INSERT INTO schema_migrations (version) VALUES ('016_alter_alerts_jobs_llm_runs_users');
+
+-- ┌──────────────────────────────────────────────────────────────────────────┐
+-- │ NGUỒN: migrations/017_append_only_and_roles.sql
+-- └──────────────────────────────────────────────────────────────────────────┘
+-- ============================================================================
+-- 017_append_only_and_roles.sql — AI Support SOC
+-- §6.1 "Append-only enforcement", as amended by DEC-023 and DEC-024(a).
+-- Runs after 016, as the database owner. KHÔNG sửa 001-016: chúng đã áp.
+--
+-- `audit_events`, `llm_runs` and `intake` become append-only against TWO layers,
+-- because neither one alone covers everyone who can reach the database:
+--
+--   Layer 1 — privileges. Binds the application role `app_rw`, and answers
+--     before any trigger runs. It does NOT bind the owner, who is the grantor.
+--   Layer 2 — triggers. Bind everyone the privilege layer does not, the owner
+--     included. A row trigger does not fire on TRUNCATE (DEC-016, measured), so
+--     each table also carries a BEFORE TRUNCATE ... FOR EACH STATEMENT trigger.
+--
+-- The one write that must survive both layers is G12's: every `intake` row gets
+-- `processed_at` or `error` within 60 s, which is one UPDATE on a row that was
+-- INSERTed on arrival. Layer 1 admits it as a column-level grant, layer 2 as the
+-- only shape `intake_pin_receipt()` lets through.
+--
+-- `app_rw` is cluster-global, not per-database. This file creates it when it is
+-- absent, so migrations 013-017 are one repeatable command on any cluster whose
+-- migrator can create roles (DEC-024(a)). It is created NOLOGIN deliberately:
+-- the role authenticates over TCP with a SCRAM password, a passwordless LOGIN
+-- role cannot connect at all, and a password must never enter a migration on a
+-- public remote (DEC-022). Granting LOGIN and a password stays a one-off
+-- out-of-band step per cluster — HUONG-DAN-VAN-HANH.md §0. NOLOGIN is enough
+-- here: every GRANT/REVOKE and both append-only layers bind a NOLOGIN role
+-- exactly as they bind a LOGIN one.
+--
+-- `domain_rw` is a v1 role on the legacy `soc` database and holds nothing on
+-- `soc_dev` (DEC-024(d)). This migration names `app_rw` only.
+-- ============================================================================
+
+-- The role must exist before anything below can bind it. Create it when absent;
+-- fail loudly, never silently, when this migrator is not allowed to — a REVOKE
+-- that binds nothing is the one outcome that must not be reachable.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_rw') THEN
+    BEGIN
+      CREATE ROLE app_rw NOLOGIN;
+    EXCEPTION WHEN insufficient_privilege THEN
+      RAISE EXCEPTION USING
+        MESSAGE = 'migration 017: role app_rw does not exist and this migrator cannot create it',
+        HINT    = 'one-off superuser step, see docs/plan/HUONG-DAN-VAN-HANH.md §0 "Prerequisites"';
+    END;
+  END IF;
+END
+$$;
+
+-- Application privileges: an explicit list, so TRUNCATE is never granted.
+-- `GRANT ALL PRIVILEGES` would carry TRUNCATE and quietly undo half of this file.
+GRANT USAGE ON SCHEMA public TO app_rw;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_rw;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_rw;
+-- v1 uses GENERATED BY DEFAULT AS IDENTITY, which needs no sequence grant; the
+-- line above closes the gap if anyone ever adds a `serial`. The two lines below
+-- cover tables created after 017, so P2 needs no grants migration of its own.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_rw;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO app_rw;
+
+-- Bookkeeping table is the migrator's alone.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON schema_migrations FROM app_rw, PUBLIC;
+
+-- Layer 1 — privileges. Table-level REVOKE first: a table-level REVOKE also
+-- removes column-level grants of the same kind, so the column GRANT must follow
+-- it. Measured the other way round, has_column_privilege(...) came back false.
+REVOKE UPDATE, DELETE, TRUNCATE ON audit_events, llm_runs, intake FROM app_rw, PUBLIC;
+GRANT  UPDATE (processed_at, outcome, error) ON intake TO app_rw;   -- G12 completion write
+
+-- Layer 2 — triggers, which also bind the owner.
+CREATE FUNCTION raise_immutable() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+  RAISE EXCEPTION 'append-only table: % is immutable', TG_TABLE_NAME;
+END
+$fn$;
+
+-- `intake` is the one append-only table with a legitimate second write. Payload
+-- columns never change; the three receipt columns may each be written once.
+CREATE FUNCTION intake_pin_receipt() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+  IF NEW.intake_id       IS DISTINCT FROM OLD.intake_id
+  OR NEW.manager_id      IS DISTINCT FROM OLD.manager_id
+  OR NEW.source_alert_id IS DISTINCT FROM OLD.source_alert_id
+  OR NEW.raw_text        IS DISTINCT FROM OLD.raw_text
+  OR NEW.sort_key        IS DISTINCT FROM OLD.sort_key
+  OR NEW.via             IS DISTINCT FROM OLD.via
+  OR NEW.received_at     IS DISTINCT FROM OLD.received_at THEN
+    RAISE EXCEPTION 'append-only table: intake row % payload columns are immutable', OLD.intake_id;
+  END IF;
+  IF (OLD.processed_at IS NOT NULL AND NEW.processed_at IS DISTINCT FROM OLD.processed_at)
+  OR (OLD.outcome      IS NOT NULL AND NEW.outcome      IS DISTINCT FROM OLD.outcome)
+  OR (OLD.error        IS NOT NULL AND NEW.error        IS DISTINCT FROM OLD.error) THEN
+    RAISE EXCEPTION 'append-only table: intake row % receipt columns are pinned once set', OLD.intake_id;
+  END IF;
+  RETURN NEW;
+END
+$fn$;
+
+CREATE TRIGGER trg_audit_events_immutable   BEFORE UPDATE OR DELETE ON audit_events FOR EACH ROW       EXECUTE FUNCTION raise_immutable();
+CREATE TRIGGER trg_llm_runs_immutable       BEFORE UPDATE OR DELETE ON llm_runs     FOR EACH ROW       EXECUTE FUNCTION raise_immutable();
+CREATE TRIGGER trg_intake_pin_receipt       BEFORE UPDATE           ON intake       FOR EACH ROW       EXECUTE FUNCTION intake_pin_receipt();
+CREATE TRIGGER trg_intake_immutable         BEFORE DELETE           ON intake       FOR EACH ROW       EXECUTE FUNCTION raise_immutable();
+-- A row trigger does not fire on TRUNCATE (DEC-016, kept by DEC-020).
+CREATE TRIGGER trg_audit_events_no_truncate BEFORE TRUNCATE ON audit_events FOR EACH STATEMENT EXECUTE FUNCTION raise_immutable();
+CREATE TRIGGER trg_llm_runs_no_truncate     BEFORE TRUNCATE ON llm_runs     FOR EACH STATEMENT EXECUTE FUNCTION raise_immutable();
+CREATE TRIGGER trg_intake_no_truncate       BEFORE TRUNCATE ON intake       FOR EACH STATEMENT EXECUTE FUNCTION raise_immutable();
+
+INSERT INTO schema_migrations (version) VALUES ('017_append_only_and_roles');
 
 COMMIT;
