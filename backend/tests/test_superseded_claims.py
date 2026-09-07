@@ -13,6 +13,8 @@ linter is an ignored linter.
   status: fixed  -> asserted hard. The regression guard.
   status: open   -> xfail, so `make test` stays green while the backlog burns down.
                     Count the remaining debt with `-rs`, or read the xfail total.
+  status: cleared -> the debt was paid; the pattern was a reminder anchor on live text, so
+                    the row is closed with a `cleared:` reason instead of becoming a guard.
 
 A live document may legitimately name a dead thing. Mark that line, the way noqa works:
     <!-- superseded-ok: DEC-nnn short reason -->
@@ -147,14 +149,44 @@ def test_every_rule_is_well_formed():
     for rule in _rules:
         for field in ("id", "dec", "status", "pattern", "reason"):
             assert rule.get(field), f"rule {rule.get('id')!r} is missing {field}"
-        assert rule["status"] in ("fixed", "open", "retired"), rule["id"]
-        if rule["status"] == "retired":
+        assert rule["status"] in ("fixed", "open", "retired", "cleared"), rule["id"]
+        if rule["status"] in ("retired", "cleared"):
             # Retired rows are history: their artifact left the scan (DEC-049).
-            # They are kept, not deleted, so the trail survives — and they must
-            # say why, or "retired" becomes a way to silence a live rule.
-            assert rule.get("cleared"), f"retired rule {rule['id']} has no `cleared:` reason"
+            # Cleared rows paid their debt but their pattern was a reminder anchor
+            # on live text (DEC-052's repoint shape), so it can never become a
+            # guard. Both are kept, not deleted, so the trail survives — and both
+            # must say why, or either status becomes a way to silence a live rule.
+            assert rule.get(
+                "cleared"
+            ), f"{rule['status']} rule {rule['id']} has no `cleared:` reason"
         assert rule["id"] not in seen, f"duplicate rule id {rule['id']}"
         seen.add(rule["id"])
+
+
+#: Measured 07/09 over the 72 rows then in the register: every hand-written canonical
+#: short form is <= 47 characters and every fragment seeded verbatim by the 2026-09-05
+#: sweep is >= 55 (the sweep cut at 90). 50 sits in the gap between the two populations.
+LONG_PATTERN = 50
+
+
+def test_open_rows_with_long_patterns_carry_a_pattern_note():
+    """An open row is a live reminder; a long verbatim pattern makes it a fragile one.
+
+    DEC-039: a long verbatim pattern is a vacuous guard by default. DEC-052: it is also
+    silently retired by any edit to the text it quotes, a well-meant one included — the
+    row goes xpass with its debt unpaid. So an open row longer than `LONG_PATTERN` must
+    say why it is long (`pattern_note`), or be repointed at a short canonical form.
+    Broken before trusted (DEC-027): a 60-character open row without a note goes red.
+    """
+    offenders = [
+        f"{r['id']} ({len(r['pattern'])} chars)"
+        for r in _rules
+        if r["status"] == "open" and len(r["pattern"]) > LONG_PATTERN and not r.get("pattern_note")
+    ]
+    assert not offenders, (
+        f"open rows with a pattern over {LONG_PATTERN} characters and no `pattern_note` "
+        f"(repoint to a short canonical form, DEC-039/DEC-052): {offenders}"
+    )
 
 
 @pytest.mark.parametrize(
