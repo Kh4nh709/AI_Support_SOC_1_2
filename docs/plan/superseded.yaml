@@ -590,6 +590,20 @@ rules:
   reason: DEC superseded the withdrawn P1 exit-gate qualifier; a forward-looking document must not assert
     it.
   allow: []
+- id: dec042-two-dataset-call-open
+  dec: DEC-042 (completes DEC-032's two-dataset decision)
+  severity: high
+  status: fixed
+  pattern: two-dataset call
+  pattern_note: 'Short canonical form on purpose (DEC-039): the dead claim is that the model
+    decision is still open pending two datasets. Any paraphrase that keeps the phrase is caught;
+    a long quotation of the 06/09 sentence would not have been.'
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: 'DEC-042 closed it on 06/09 on P1-T08''s measurement: `LLM_THINKING=disabled` is the
+    default and the accuracy question became a paired P7 ablation. A forward-looking document
+    that still tells its Planner the call may be open will have that Planner hedge the adapter
+    across both modes and leave the live task conditional on a decision that exists.'
+  allow: []
 - id: dec024a-rolcreaterole-false
   dec: DEC-024(a)
   severity: high
