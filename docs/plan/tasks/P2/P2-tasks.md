@@ -60,9 +60,9 @@ they are not — P0 ran seven in a day with two second rounds.
 | P2-T09 autoclose | 3.5 | **LAND** — gate items "auto-close", "simulate" | t 9–12.5 · 08/09 | not a candidate: auto-close rules are the *last* step of §10's cut order, after ②, digest UI, health job and login |
 | P2-T13 backfill CLI | 2 | **LAND** — gate item "backfill from both sources"; only its live archive run is the Owner's | t 11–13 · 08/09 | not a candidate |
 | P2-T10 risk+pipeline+G7 | 4 | **LAND** — it *is* the gate | t 12.5–16.5 · 08/09 → 09/09 08:30 | not a candidate |
-| P2-T07 correlation | 2 | **LAND while a slot is idle — it is** (the third slot idles t 9–11 and t 13–16.5); defer to P3's window only if a coder is missing | t 9–11 · 08/09 | 0 h off P2's wall-clock (off the critical chain); P3's prompt-builder card (≤ 5 correlation samples in the ① prompt) gains a hard `Depends on` that P3's Planner must card — 2 h moved, not saved |
-| P2-T15 dedup verification | 2.5 | **DEFER to P3's window** — unless the Owner's archive export exists by 09/09 08:00, in which case it runs in the idle third slot | t 16.5–19 · 09/09 am, only with the export | 2.5 h off the tail (P2 done 09/09 ≈ 08:30 instead of ≈ 11:00); DEC-014's check of the coded dedup against 2,778 lands a day later; nothing on the P2 gate reads it |
-| P2-T12 webhook | 2 (`should`) | **DEFER to P4** — blocked on INBOX ① (§6.3 keys) and off the gate | — | 0 h (never in the chain); F1's secondary intake path is absent until P4; the two §6.3 keys are the Owner's decision either way (STATE Owner action ①) |
+| P2-T07 correlation | 2 | **MOVED to P3's window — DEC-041 (b), 06/09.** Was: LAND while a slot is idle (the third slot idles t 9–11 and t 13–16.5); defer to P3's window only if a coder is missing | t 9–11 · 08/09 | 0 h off P2's wall-clock (off the critical chain); P3's prompt-builder card (≤ 5 correlation samples in the ① prompt) gains a hard `Depends on` that P3's Planner must card — 2 h moved, not saved |
+| P2-T15 dedup verification | 2.5 | **MOVED to P3's window — DEC-041 (b), 06/09.** Was: DEFER — unless the Owner's archive export exists by 09/09 08:00, in which case it runs in the idle third slot | t 16.5–19 · 09/09 am, only with the export | 2.5 h off the tail (P2 done 09/09 ≈ 08:30 instead of ≈ 11:00); DEC-014's check of the coded dedup against 2,778 lands a day later; nothing on the P2 gate reads it |
+| P2-T12 webhook | 2 (`should`) | **MOVED to P4 — DEC-040 + DEC-041 (a), 06/09; the two §6.3 keys exist.** Was: DEFER to P4 — blocked on INBOX ① (§6.3 keys) and off the gate | — | 0 h (never in the chain); F1's secondary intake path is absent until P4; the two §6.3 keys are the Owner's decision either way (STATE Owner action ①) |
 
 **What the table says.** With three coders running continuously, every `must` card lands by
 **09/09 ≈ 11:00** with T15 and **≈ 08:30** without it; the phase needs 07, 08 and the morning of
@@ -83,6 +83,46 @@ rather than one per run, and P3's Planner runs on 08/09 evening against §6 exac
 nothing — it pays for the slipped day at P5, and STATE Owner action ② already puts it on the table
 for the 08/09 evening gate. Cutting inside P2 below T07/T15/T12 means cutting gate items or never-cut
 items, which §10 forbids at the Director's level.
+
+### 07/09 · where P2 lands, for tonight's gate (arithmetic, not a decision)
+
+Measured this morning on `main` @ `f935fa6`. **Done 2 of 14** — T01, T03. **T02 `changes`** (its merge
+landed nothing; INBOX `2026-09-07 · P2-T02`). **T04 `changes`** (one docstring; 23 commits behind
+`main`, `git merge main` conflicts on `STATE.md` only). Five cards queue behind those two: T05, T06,
+T08, T09 need T02+T04; T11 needs T02.
+
+**If T02 and T04 both merge today.** Once they are on `main`, five cards unblock at once and the
+three-coder schedule is bounded by the chain, not the hours (17.5 h of work, 3 slots):
+
+| t (coder-hours after T02+T04 land) | slot 1 | slot 2 | slot 3 |
+|---|---|---|---|
+| 0 → 3.5 | T06 (4 h) | T05 (3.5 h) | T11 (3.5 h) |
+| 3.5 → 7 | …T06, then T13 (2 h) | T09 (3.5 h) | T08 (3 h) |
+| 7 → 11 | **T10 (4 h)** — waits on T05, T06, T08, T09, T11 | idle | idle |
+
+**≈ 11 coder-hours**, so: merge T02+T04 today → the P2 gate is met **late on 09/09** (08/09 full day
++ ~3 h). That is the same morning P3 starts under DEC-041, with no margin. **Slip T02/T04 to
+tomorrow → the gate moves to 10/09**, which is the third slipped day and puts the ② cut live.
+
+**The 12 remaining cycles cost more than the 11 hours.** Measured from git — Coder's report commit to
+merge commit, elapsed: P1-T05 6.0 h, P1-T06 6.7 h, P1-T08 5.9 h, P1-T07 15.1 h (three rounds) — but
+P1-T02 **0.5 h**, P1-T03 **0.4 h** and P2-T02 **0.6 h**, because those were merged in batches inside
+one intake run. The variable is not the review, it is how long a finished branch waits for an intake
+run. Nine cycles remain inside P2 (T02, T04, T05, T06, T08, T09, T10, T11, T13) plus T07 and T15 in
+P3's window and T12 in P4 — twelve in all. At the batched rate that is ≈ 5 h of Owner time across the
+two days; at the unbatched rate it exceeds the 11 h of coder work and *becomes* the critical path.
+**The single highest-value scheduling act is therefore batching intake: merge every `approved` branch
+in one run rather than one per run.**
+
+**Which cards move first — the honest answer is that the levers are already spent.** DEC-040 took T12
+to P4; DEC-041 took T07 and T15 into P3's window. What remains in P2 is the exit gate itself: T05
+(dedup tests), T06 (18 transitions), T09 (auto-close + simulate), T10 (G7), T13 (backfill both
+sources), plus T02/T04/T08 that everything else stands on. §10 forbids cutting intake/puller, and
+auto-close rules are the **last** item in its cut order, after ② → digest UI → health job → login. So
+there is **nothing left to cut inside P2**: tonight's choice is ② at P5 (DEC-041's trigger, paid from
+a later phase) or a recorded third slipped day. Both are the Owner's under DEC-030. A third option
+worth naming because it costs nothing: **P3's Planner runs on the 08/09 evening**, as P2's did on
+06/09, so P3's coders start the moment the gate is met rather than a planning run later.
 
 ---
 

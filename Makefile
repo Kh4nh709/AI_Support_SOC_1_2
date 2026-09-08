@@ -64,6 +64,7 @@ lint:
 else
 lint:
 	$(PY) scripts/gen_env_example.py --check
+	$(PY) docs/Schema/build_schema.py --check
 	$(PY) -m ruff check --config backend/pyproject.toml $(LINT_PATHS)
 	$(PY) -m black --check --config backend/pyproject.toml $(LINT_PATHS)
 endif

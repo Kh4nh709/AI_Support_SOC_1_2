@@ -15,6 +15,8 @@
 #   fixed → asserted hard. The regression guard the project did not have.
 #   open  → xfails, so `make test` stays green while the backlog burns down. An open row that
 #           PASSES shows up as an xpass: the debt is gone, flip it to `fixed`.
+#   cleared → the debt was paid, but the pattern was a reminder anchor on live text (the DEC-052
+#           repoint shape), so it can never become a guard: closed with a `cleared:` reason, not scanned.
 #   Count remaining debt:  python3 -m pytest -c backend/pyproject.toml \
 #                            backend/tests/test_superseded_claims.py -rs
 #
@@ -29,6 +31,9 @@
 # canonical form of the dead claim and catch a paraphrase too — that layer found a bare `pytest`
 # in reviewer.md's own checklist that the four-agent sweep had declared clean. Prefer the short
 # form when adding a rule, and prove it fails before trusting it (DEC-025).
+# An OPEN row whose pattern is longer than 50 characters must carry a `pattern_note` saying why
+# (test_open_rows_with_long_patterns_carry_a_pattern_note, 07/09): DEC-052 showed a long quotation
+# is retired by any edit to the text it quotes, a well-meant one included.
 #
 # LIMIT, stated plainly: this catches a RECORDED claim resurfacing. It cannot catch a new
 # supersession nobody recorded. Only process covers that — see reviewer.md's checklist.
@@ -51,11 +56,21 @@ scan:
   - INBOX.md
   - DECISIONS.md
   - superseded.yaml
+  # Completed phases leave the scope (DEC-049). A card for a merged task is not
+  # forward-looking: no agent will act on it again, so a dead claim sitting in one
+  # cannot mislead anybody. If a LIVE card ever copies text out of a retired one,
+  # the copy lands in a live card and the canonical short-form rules fire there —
+  # which is the right catch point. `test_scan_scope_tracks_completed_phases`
+  # fails if this list disagrees with STATE.md's phase table in either direction.
+  exclude_completed_phases:
+  - P0
+  - P1
 rules:
 - id: dec-024-01
   dec: DEC-024(a) (supersedes DEC-023 item 3 and DEC-023 item 6's gate qualif
   severity: high
-  status: fixed
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: fixed)"
   pattern: '- P1-T06 Migration 017 — **amended 05/09 under DEC-023**: grants for `app_rw` (never `CREA'
   artifact: docs/plan/prompts/P1.md
   reason: 'This is the same withdrawn ruling as the known P1-T06.prompt.md:105 instance, but in a different
@@ -103,7 +118,8 @@ rules:
 - id: dec-024-06
   dec: DEC-024(a)
   severity: high
-  status: fixed
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: fixed)"
   pattern: And `grep -c 'CREATE ROLE' docs/Schema/017_append_only_and_roles.sql` → `0` (design note 3
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T06.prompt.md
   reason: This is the sharpest live instance of the reported failure mode. Design note 3 of this same
@@ -113,7 +129,8 @@ rules:
 - id: dec-024-07
   dec: DEC-024(a)
   severity: high
-  status: fixed
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: fixed)"
   pattern: Needs role app_rw to exist on the cluster
   pattern_note: canonical short form (DEC-039). The original joined two source lines with ' -- ' and _offending_lines() matches per line, so it could never fire.
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T06.prompt.md
@@ -123,7 +140,8 @@ rules:
 - id: dec-024-08
   dec: DEC-024(a)
   severity: high
-  status: fixed
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: fixed)"
   pattern: '`pg_roles` guard instead'
   pattern_note: canonical short form (DEC-039). The original carried DEC-023 item 3 verbatim and missed the paraphrase actually written at P1-tasks.md:322.
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-tasks.md
@@ -134,7 +152,8 @@ rules:
 - id: dec-024-09
   dec: DEC-024(a)
   severity: high
-  status: fixed
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: fixed)"
   pattern: 'DEC-023: 017 never runs `CREATE ROLE`; it checks `pg_roles` and stops with a message namin'
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-tasks.md
   reason: 'The middle column of this same row was updated and now says, in bold, "**superseded 05/09 by
@@ -144,7 +163,8 @@ rules:
 - id: dec-024-10
   dec: DEC-024(a) (supersedes DEC-023 item 6's qualifier)
   severity: high
-  status: fixed
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: fixed)"
   pattern: 013–017 apply on a clean `soc_dev` with one command, on a cluster where role `app_rw` exists
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-tasks.md
   reason: 'A second, separate site of the withdrawn qualifier in the same file. The known instance at
@@ -194,7 +214,8 @@ rules:
 - id: dec-022-15
   dec: DEC-022 (INBOX 2026-09-05 · P1-T02 · DECISION_REQUEST, Resolved)
   severity: medium
-  status: fixed
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: fixed)"
   pattern: An INBOX `DECISION_REQUEST` is open in case the Director prefers 016; if it is ruled that
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T02.prompt.md
   reason: 'DEC-022 ruled it: "`enrich_cache` — confirmed in 013 … It is already written into P1-T02''s
@@ -204,7 +225,8 @@ rules:
 - id: dec-022-16
   dec: DEC-022 (INBOX 2026-09-05 · P1-T01 · QUESTION, Resolved)
   severity: medium
-  status: fixed
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: fixed)"
   pattern: An INBOX QUESTION is open for the Owner to widen this; do not widen it
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T01.prompt.md
   reason: 'DEC-022 resolved it as option A on 05/09 and INBOX.md:128 records the resolution, including
@@ -214,7 +236,8 @@ rules:
 - id: dec-022-17
   dec: DEC-022
   severity: medium
-  status: fixed
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: fixed)"
   pattern: 'Recommended: `DROP COLUMN IF EXISTS` as a recorded no-op and strike the line from §6.1. No'
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-tasks.md
   reason: 'DEC-022 answered all three, and it explicitly REJECTED the second half of the first recommendation:
@@ -223,7 +246,8 @@ rules:
 - id: dec-021-18
   dec: DEC-021 (corrects DEC-011's exit-code claim)
   severity: medium
-  status: fixed
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: fixed)"
   pattern: Whole-suite runs go through `make test-db`, which refuses an unset or unreachable DSN (mea
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-tasks.md
   reason: 'DEC-021 recorded, measured across recipes exiting 1, 2, 3, 7 and 99, that "GNU Make remaps
@@ -263,7 +287,8 @@ rules:
 - id: dec-024-context-22
   dec: DEC-024 Context ("`app_rw` is now a LOGIN role and `user1` is a superu
   severity: low
-  status: fixed
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: fixed)"
   pattern: '`app_rw` becomes a LOGIN role by one superuser command the Owner runs **before P2** (HUONG-DAN
     §0).'
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-tasks.md and P1-T06.prompt.md
@@ -274,7 +299,8 @@ rules:
 - id: dec-024-23
   dec: DEC-024(b)
   severity: low
-  status: fixed
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: fixed)"
   pattern: '(b) The owner''s socket session is passwordless and can `DROP TRIGGER`: append-only is enfo'
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T06.prompt.md and P1-tasks.md
   reason: 'DEC-024(b) re-measured this on one table carrying both layers and ruled that `docs/limitations.md`
@@ -283,7 +309,8 @@ rules:
 - id: dec-024-24
   dec: DEC-024(c)
   severity: low
-  status: fixed
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: fixed)"
   pattern: 'With `--offline` the script makes no network call at all: alerts come from the cache (or f'
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T01.prompt.md
   reason: 'DEC-024(c) rules that the five probe fixtures ride with the Owner''s commit and that "**P1-T01
@@ -304,7 +331,8 @@ rules:
 - id: dec-018-26
   dec: 'DEC-018 (a worktree has no .env) + DEC-021 (which put the export line '
   severity: high
-  status: open
+  status: fixed
+  cleared: "2026-09-07 · DEC-049 hygiene sweep · coder-template.md rule 3 now carries the explicit TEST_DATABASE_URL form; pattern no longer matches, flipped open->fixed and re-broken to prove it still fires"
   pattern: '3. Before reporting run: `make lint`, `make test`, and `make test-db` if you touched anyth'
   artifact: docs/plan/prompts/coder-template.md
   reason: 'This is the known DEC-018 defect repeated in the other prompt. DEC-021 fixed reviewer.md —
@@ -314,9 +342,11 @@ rules:
 - id: dec-022-27
   dec: DEC-022
   severity: high
-  status: open
-  pattern: records JSON-parse rate, schema-valid rate (against `triage_v2`), p50/p95 latency, tokens
-  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/01-plan.md
+  status: fixed
+  cleared: "2026-09-07 · 01-plan.md:44 rewritten (300-character excerpts to the report, full responses to git-ignored eval/results/smoke/ — DEC-022); the row went xpass after the edit, flipped open→fixed, and was red-stepped by injecting the pattern into prompts/P6.md"
+  pattern: and the raw responses
+  pattern_note: "repointed 07/09 (DEC-039, DEC-052). The original quoted 89 characters of 01-plan.md:44 — a P1 deliverable line still in scope because 01-plan.md is scanned whole — and an edit to any of the eight metrics it names would have retired the row. This one is the dead claim's canonical form: DEC-022 sent the full responses to git-ignored `eval/results/smoke/` and only 300-character excerpts to the report, so 'and the raw responses' is exactly the withdrawn sentence. When 01-plan.md:44 is corrected, flip to `fixed` (red-step by injection first) and it guards re-paste and paraphrase alike."
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/01-plan.md:44
   reason: DEC-022 amended `prompts/P1.md` for exactly this wording and said leaving the phase brief and
     the card contradicting each other "is the DEC-009 defect all over again" — but 01-plan.md, the document
     th
@@ -385,10 +415,11 @@ rules:
 - id: dec-019-34
   dec: DEC-019 ("`alerts.source` must not be visible on the labelling page ..
   severity: medium
-  status: open
-  pattern: a single response filter that removes the ① suggestion (and `llm_runs`-derived fields) from
-    **every** response
-  artifact: docs/plan/prompts/P6.md (and the filter it reuses, docs/plan/prompts/P4.md)
+  status: cleared
+  cleared: "2026-09-07 · debt paid: P6.md:19 and :29 name `source` (values `replay`/`wazuh`/`lab`), P4.md:18 and :27 give the filter a `labeling` mode, 01-plan.md:118 says never `alerts.source` (DEC-019). The pattern is a reminder anchor on live text, so the row closes instead of converting to a guard."
+  pattern: a dedicated test enumerates forbidden substrings
+  pattern_note: "repointed 07/09 (DEC-039, DEC-052 — one of the four erosion-prone open rows). The original quoted 110 characters of P4.md:18, so any edit to that sentence would have retired the row without paying its debt. This is a reminder anchor on P6.md:29, the enumeration that lacks `source`: the row stays red until that list names `source` (a labeller who can see `replay` vs `wazuh` infers the storm day — DEC-019), and it is then closed with `cleared:`, not flipped to `fixed`, because the anchor is live text and not a dead claim. The P4 half — the filter's labeling mode strips `alerts.source` — was written into P4.md:18 in the same pass."
+  artifact: docs/plan/prompts/P6.md:29 (and the filter it reuses, docs/plan/prompts/P4.md:18)
   reason: DEC-019 named the P4 and P6 cards explicitly and said the rule was 'flagged ... rather than
     assumed'. The ruling propagated to the selection queries — P6.md:17 and P7.md:18 already read `source
     IN ('w
@@ -396,8 +427,10 @@ rules:
 - id: dec-001-35
   dec: DEC-001 (demo CA), DEC-012 (user1 read as non-privileged), DEC-023 (tw
   severity: medium
-  status: open
-  pattern: '- `docs/limitations.md`: the list from the architecture §9 plus anything discovered (autho'
+  status: cleared
+  cleared: "2026-09-07 · debt paid: P8.md:21 now carries DEC-001's demo CA, DEC-012's user1 reading, DEC-023's two statements, DEC-024(b)'s three-way result verbatim, and A7 (DEC-053). Reminder anchor on live text (repointed by DEC-052); closed, not converted to a guard."
+  pattern: the list from the architecture §9 plus anything discovered
+  pattern_note: "repointed 07/09 (DEC-052). The original quoted the whole enumeration; the Director then edited that line to add DEC-052's limitation, which silenced the row without discharging its debt — the four named limitations still are not in it. Short stable form so an edit to the line cannot retire the reminder."
   artifact: docs/plan/prompts/P8.md
   reason: Four decisions say in terms that a named limitation 'must' land in `docs/limitations.md` during
     P8, and DEC-024(b) goes further — 'carries the three-way result above verbatim, not a summary of it',
@@ -406,9 +439,11 @@ rules:
 - id: dec-023-item-6-36
   dec: DEC-023 item 6 (the drill's one unmeasured expectation) and DEC-024(a)
   severity: medium
-  status: open
-  pattern: '- Restore drill: `scripts/restore.sh` into an empty database, `make test-db`, row counts b'
-  artifact: docs/plan/prompts/P8.md
+  status: cleared
+  cleared: "2026-09-07 · debt paid: P8.md:17 states DEC-023 item 6's dump/restore expectation (GRANT … TO app_rw lines; pg_restore errors when the role is absent) and DEC-024(a)'s credential step. Reminder anchor on live text; closed, not converted to a guard."
+  pattern: 'Restore drill: `scripts/restore.sh`'
+  pattern_note: "repointed 07/09 (DEC-039, DEC-052). The original quoted 90 characters of P8.md:17, the restore-drill line, so an edit to it would have retired the row silently. Reminder anchor on that line: it stays red until the drill states DEC-023 item 6's unmeasured expectation (a custom-format dump carries `GRANT … TO app_rw`; `pg_restore` into a cluster without the role reports those lines as errors) and DEC-024(a)'s credential step if the drill asserts the application connects; then close it with `cleared:`, not `fixed` — the anchor is live text."
+  artifact: docs/plan/prompts/P8.md:17
   reason: DEC-023 item 6 explicitly hands the restore drill an expectation it labels unmeasured, and DEC-023's
     closing line lists the two superuser statements and the `pg_restore` behaviour under 'Not measured,
   allow: []
@@ -437,7 +472,8 @@ rules:
 - id: dec-021-39
   dec: DEC-021 (no Makefile target may require docker) and DEC-018 (§3 runtim
   severity: medium
-  status: open
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: open)"
   pattern: '- P1-T07 `make migrate` and schema regeneration hook (`build_schema.py` if practical), CI-'
   artifact: docs/plan/prompts/P1.md
   reason: P1-T07 is live — DEC-024 dispatched it, and recorded that it is the one card that never got
@@ -467,9 +503,11 @@ rules:
 - id: dec-019-42
   dec: DEC-019
   severity: medium
-  status: open
-  pattern: shows cluster context (representative alert, raw_log, correlation, occurrence, category, p
-  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/01-plan.md
+  status: cleared
+  cleared: "2026-09-07 · debt paid: 01-plan.md:118 now says the page never shows `alerts.source` (DEC-019). Reminder anchor on live text; closed, not converted to a guard."
+  pattern: shows cluster context
+  pattern_note: "repointed 07/09 (DEC-039, DEC-052). The original quoted 90 characters of 01-plan.md:118's enumeration; adding `source` to it would have retired the row whether or not the addition was made. Reminder anchor on that line: red until the enumeration says the page never shows `alerts.source` (DEC-019); then close with `cleared:` — live text is not a dead claim."
+  artifact: /project/project/AI_Support_SOC_1_2/docs/plan/01-plan.md:118
   reason: DEC-019's closing consequence is "One thing to check before P6 labels anything… Flagged for
     the P4/P6 cards rather than assumed", and this line is the enumeration a P6 card will copy — it reads
     as the
@@ -498,7 +536,8 @@ rules:
 - id: dec-022-45
   dec: DEC-022 (INBOX 2026-09-05 · P1-T05 · DECISION_REQUEST, Resolved)
   severity: medium
-  status: open
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: open)"
   pattern: An INBOX `DECISION_REQUEST` is already o
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T05.prompt.md
   reason: 'DEC-022 closed it on 05/09 (INBOX.md:112, "option A, first half only"): migration 016 keeps
@@ -508,7 +547,8 @@ rules:
 - id: dec-023-item-8-46
   dec: DEC-023 item 8 (extending DEC-006)
   severity: medium
-  status: open
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: open)"
   pattern: '`python3 -m pytest -c backend/pyproject.toml backend/tests/test_smoke_test.py -q` → passes'
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T01.prompt.md
   reason: 'DEC-023 item 8 measured that `backend/pyproject.toml`''s addopts already carries `-q`, so a
@@ -518,7 +558,8 @@ rules:
 - id: dec-016-47
   dec: DEC-016 ("DEC-013's carve-out is withdrawn") · DEC-023 item 6 · DEC-02
   severity: medium
-  status: fixed
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P1 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: fixed)"
   pattern: Say in your report that P1's exit gate is met only in its carved-out form, "013–016 apply
   artifact: /project/project/AI_Support_SOC_1_2/docs/plan/tasks/P1/P1-T07.prompt.md
   reason: The "carved-out form" is DEC-013's, created when 017 was blocked pending an Owner decision;
@@ -539,7 +580,8 @@ rules:
 - id: dec-005-49
   dec: DEC-005 (migrations live flat in `docs/Schema/`; there is no `docs/Sch
   severity: low
-  status: open
+  status: retired
+  cleared: "2026-09-07 · DEC-049 · P0 is complete and its cards left the forward-looking scope; this row guarded an artifact no agent will act on again (was: open)"
   pattern: '`backend/tests/conftest.py` with a PostgreSQL fixture that applies `docs/Schema/schema.sql'
   artifact: docs/plan/prompts/P0.md
   reason: 'DEC-005 closed this exact ''or wherever P0 decided'' ambiguity and listed the two sites it
@@ -590,10 +632,25 @@ rules:
   reason: DEC superseded the withdrawn P1 exit-gate qualifier; a forward-looking document must not assert
     it.
   allow: []
+- id: dec042-two-dataset-call-open
+  dec: DEC-042 (completes DEC-032's two-dataset decision)
+  severity: high
+  status: fixed
+  pattern: two-dataset call
+  pattern_note: 'Short canonical form on purpose (DEC-039): the dead claim is that the model
+    decision is still open pending two datasets. Any paraphrase that keeps the phrase is caught;
+    a long quotation of the 06/09 sentence would not have been.'
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: 'DEC-042 closed it on 06/09 on P1-T08''s measurement: `LLM_THINKING=disabled` is the
+    default and the accuracy question became a paired P7 ablation. A forward-looking document
+    that still tells its Planner the call may be open will have that Planner hedge the adapter
+    across both modes and leave the live task conditional on a decision that exists.'
+  allow: []
 - id: dec024a-rolcreaterole-false
   dec: DEC-024(a)
   severity: high
-  status: open
+  status: fixed
+  cleared: "2026-09-07 · DEC-049 hygiene sweep · the rolcreaterole=f rationale is gone from every in-scope document; flipped open->fixed and re-broken to prove it still fires"
   pattern: '`user1` has `rolcreaterole = f`'
   artifact: (canonical short form — catches paraphrase, not just re-paste)
   reason: DEC superseded the false rationale for 017 never creating the role; a forward-looking document
@@ -732,4 +789,40 @@ rules:
   pattern: "(≈ 1 % of real traffic)"
   artifact: docs/plan/prompts/P2.md:22 (field derivations the Planner copies into the parser card)
   reason: The Owner re-parsed every archive line as JSON and found zero alerts without an `agent` object; the ≈ 1 % was a line-counting artifact and was withdrawn. The fallback rule stays as defensive behaviour; the frequency must not be asserted, and the Director had reasoned from it in DEC-014's first arithmetic note.
+  allow: []
+- id: dec053-band-12-9-7
+  dec: DEC-053
+  severity: high
+  status: fixed
+  pattern: ≥12/≥9/≥7
+  pattern_note: "canonical short form of the withdrawn severity banding (DEC-053); the spec band is ≥12/≥8/≥5 at docs/phase-1-tiep-nhan-chuan-hoa.md:148, which eval/smoke_test.py:510 and P2-T04's domain/alert.py code. Red-stepped 07/09 by injecting the string into prompts/P6.md — fired — then removed. Sibling rows cover the ASCII spelling and the count it produced."
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC-053 pinned severity to the spec band; a forward-looking document that bands ≥12/≥9/≥7 makes P6's strata and P7's per-severity rows incomparable.
+  allow: []
+- id: dec053-band-ascii
+  dec: DEC-053
+  severity: high
+  status: fixed
+  pattern: '>=12/>=9/>=7'
+  pattern_note: "the ASCII spelling of dec053-band-12-9-7 (the commit message of bc0d0c0 uses it). Red-stepped 07/09 by injection into prompts/P6.md."
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC-053 pinned severity to the spec band; see dec053-band-12-9-7.
+  allow: []
+- id: dec053-crit-high-158
+  dec: DEC-053
+  severity: high
+  status: fixed
+  pattern: crit+high 158
+  pattern_note: "the figure the withdrawn band produced (high 133 / crit+high 158); the spec band gives high 150 / crit+high 175 of 3,070 clusters (DEC-053, re-measured 07/09 with the real predicates: both figures reproduce exactly under their respective bands). Red-stepped 07/09 by injection into prompts/P6.md."
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: 158 is the withdrawn band's count; a forward-looking document quoting it sizes the escalate pool on the wrong band (DEC-053).
+  allow: []
+- id: dec018-compose-db
+  dec: DEC-018/DEC-021
+  severity: high
+  status: fixed
+  pattern: the compose db
+  pattern_note: "canonical short form; found live in prompts/P5.md:23 on 07/09 ('backup script produces a file in CI (against the compose db)'), which the sibling rows dec018-test-db-needs-compose and dec021-docker-compose-runtime did not match. P5.md:23 rewritten the same day; red-stepped by injection into prompts/P6.md."
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC-018 amended the runtime to native PostgreSQL and DEC-021 ruled that no target may require docker; a forward-looking document that runs anything 'against the compose db' points a Coder at a database that does not exist on this host.
   allow: []

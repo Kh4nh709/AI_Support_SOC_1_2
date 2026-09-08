@@ -24,6 +24,9 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TEST_DATABASE_URL = "postgresql://soc:soc@127.0.0.1:55432/soc_test"
 
+# A path no checkout can contain, for the autouse fixture below (DEC-047).
+_NO_AMBIENT_ENV_FILE = Path(__file__).resolve().parent / "_no_such_dir" / ".env"
+
 
 def _dbname(dsn: str) -> str:
     return urllib.parse.urlparse(dsn).path.lstrip("/")
@@ -65,6 +68,27 @@ def _maintenance_dsn(dsn: str) -> str:
     suffix = f"?{parsed.query}" if parsed.query else ""
     suffix += f"#{parsed.fragment}" if parsed.fragment else ""
     return f"{parsed.scheme}://{parsed.netloc}/postgres{suffix}"
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_env_file(monkeypatch):
+    """No test may read the repository's real `.env` unless it names it.
+
+    WHY (DEC-047). `config.load()` defaults to `env_file=".env"`, resolved against
+    the current working directory. Every agent works in a git worktree and `.env`
+    is git-ignored, so a test that calls `load()` — or anything that falls back to
+    it, like `db.connect()` with no DSN — sees no file for the Coder and no file
+    for the Reviewer, and sees the real one on `main`. Green everywhere it is run
+    and red exactly where it ships; it cost a merge and a revert once.
+
+    Pointing the default at a path no checkout can contain makes the two
+    environments identical by construction rather than by every author
+    remembering. A test that wants a file passes `env_file=` explicitly and is
+    untouched — `test_config.py` does exactly that on every one of its calls.
+    """
+    from app.infra import config
+
+    monkeypatch.setitem(config.load.__kwdefaults__, "env_file", _NO_AMBIENT_ENV_FILE)
 
 
 @pytest.fixture(scope="session")

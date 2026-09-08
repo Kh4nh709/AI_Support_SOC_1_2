@@ -13,6 +13,8 @@ linter is an ignored linter.
   status: fixed  -> asserted hard. The regression guard.
   status: open   -> xfail, so `make test` stays green while the backlog burns down.
                     Count the remaining debt with `-rs`, or read the xfail total.
+  status: cleared -> the debt was paid; the pattern was a reminder anchor on live text, so
+                    the row is closed with a `cleared:` reason instead of becoming a guard.
 
 A live document may legitimately name a dead thing. Mark that line, the way noqa works:
     <!-- superseded-ok: DEC-nnn short reason -->
@@ -39,12 +41,20 @@ _rules = _spec["rules"]
 def _in_scope() -> list[pathlib.Path]:
     """Forward-looking artifacts only — history is excluded by construction."""
     found: set[pathlib.Path] = set()
+    done_phases = _scan.get("exclude_completed_phases", [])
     for pattern in _scan["include"]:
         for hit in glob.glob(str(REPO_ROOT / pattern)):
             path = pathlib.Path(hit)
             if path.name in _scan["exclude_names"]:
                 continue
             if any(path.name.endswith(sfx) for sfx in _scan["exclude_suffixes"]):
+                continue
+            rel = str(path.relative_to(REPO_ROOT))
+            # A completed phase's cards, index and brief are history (DEC-049).
+            if any(
+                f"tasks/{ph}/" in rel or rel.endswith((f"prompts/{ph}.md", f"{ph}-tasks.md"))
+                for ph in done_phases
+            ):
                 continue
             found.add(path)
     return sorted(found)
@@ -100,6 +110,32 @@ def _offending_lines(rule: dict) -> list[str]:
     return hits
 
 
+def test_scan_scope_tracks_completed_phases():
+    """The exclusion list and STATE.md's phase table must agree, both ways (DEC-049).
+
+    Forgetting to retire a finished phase leaves dead guards running against cards
+    nobody will act on; retiring a live one silently stops guarding work in flight.
+    The second is the dangerous direction, so both are asserted.
+    """
+    state = (REPO_ROOT / "docs" / "plan" / "STATE.md").read_text(encoding="utf-8")
+    done, live = set(), set()
+    for line in state.splitlines():
+        m = re.match(r"^\|\s*(P\d)\s[^|]*\|[^|]*\|\s*\**([a-z-]+)\**\s*\|", line)
+        if not m:
+            continue
+        (done if m.group(2) == "done" else live).add(m.group(1))
+    assert done, "no phase row parsed as done — this check would be vacuous"
+    excluded = set(_scan.get("exclude_completed_phases", []))
+    assert not (done - excluded), (
+        f"phase(s) {sorted(done - excluded)} are `done` in STATE.md but their cards are still "
+        "scanned; add them to `exclude_completed_phases` and retire their rows (DEC-049)"
+    )
+    assert not (excluded & live), (
+        f"phase(s) {sorted(excluded & live)} are excluded from the scan but are NOT `done` in "
+        "STATE.md — live work is going unguarded"
+    )
+
+
 def test_scope_is_not_empty_and_excludes_history():
     """The scoping is load-bearing: if it silently caught nothing, every rule would pass."""
     assert SCOPE, "no forward-looking artifacts matched — the include globs are wrong"
@@ -113,9 +149,44 @@ def test_every_rule_is_well_formed():
     for rule in _rules:
         for field in ("id", "dec", "status", "pattern", "reason"):
             assert rule.get(field), f"rule {rule.get('id')!r} is missing {field}"
-        assert rule["status"] in ("fixed", "open"), rule["id"]
+        assert rule["status"] in ("fixed", "open", "retired", "cleared"), rule["id"]
+        if rule["status"] in ("retired", "cleared"):
+            # Retired rows are history: their artifact left the scan (DEC-049).
+            # Cleared rows paid their debt but their pattern was a reminder anchor
+            # on live text (DEC-052's repoint shape), so it can never become a
+            # guard. Both are kept, not deleted, so the trail survives — and both
+            # must say why, or either status becomes a way to silence a live rule.
+            assert rule.get(
+                "cleared"
+            ), f"{rule['status']} rule {rule['id']} has no `cleared:` reason"
         assert rule["id"] not in seen, f"duplicate rule id {rule['id']}"
         seen.add(rule["id"])
+
+
+#: Measured 07/09 over the 72 rows then in the register: every hand-written canonical
+#: short form is <= 47 characters and every fragment seeded verbatim by the 2026-09-05
+#: sweep is >= 55 (the sweep cut at 90). 50 sits in the gap between the two populations.
+LONG_PATTERN = 50
+
+
+def test_open_rows_with_long_patterns_carry_a_pattern_note():
+    """An open row is a live reminder; a long verbatim pattern makes it a fragile one.
+
+    DEC-039: a long verbatim pattern is a vacuous guard by default. DEC-052: it is also
+    silently retired by any edit to the text it quotes, a well-meant one included — the
+    row goes xpass with its debt unpaid. So an open row longer than `LONG_PATTERN` must
+    say why it is long (`pattern_note`), or be repointed at a short canonical form.
+    Broken before trusted (DEC-027): a 60-character open row without a note goes red.
+    """
+    offenders = [
+        f"{r['id']} ({len(r['pattern'])} chars)"
+        for r in _rules
+        if r["status"] == "open" and len(r["pattern"]) > LONG_PATTERN and not r.get("pattern_note")
+    ]
+    assert not offenders, (
+        f"open rows with a pattern over {LONG_PATTERN} characters and no `pattern_note` "
+        f"(repoint to a short canonical form, DEC-039/DEC-052): {offenders}"
+    )
 
 
 @pytest.mark.parametrize(
