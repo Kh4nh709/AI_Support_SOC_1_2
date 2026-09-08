@@ -15,8 +15,19 @@ import pytest
 from app.infra.errors import ConfigError
 
 
-def test_connect_with_no_dsn_and_no_database_url_raises_config_error(monkeypatch):
+def test_connect_with_no_dsn_and_no_database_url_raises_config_error(monkeypatch, tmp_path):
+    """Both tiers `config.load()` reads must be empty for this to prove anything.
+
+    `load()` reads `.env` at a path relative to the process CWD, so deleting the
+    environment variable alone leaves the file tier live: run from a checkout that
+    has a `.env` (every developer machine and `main` itself — only a fresh
+    worktree lacks one, DEC-010) `connect()` would pick that DSN up and open a
+    real connection instead of raising. `chdir` into an empty directory makes the
+    absence deliberate rather than an accident of where pytest was invoked.
+    """
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert not (tmp_path / ".env").exists()
     with pytest.raises(ConfigError, match="DATABASE_URL"):
         infra_db.connect()
 
