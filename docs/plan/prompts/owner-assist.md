@@ -91,8 +91,10 @@ clusters on the same host.** The benign block is a scenario too — run it and l
 ## 3 · The two decisions — 5 minutes, then hands off
 
 Both are the Owner's alone. Put the numbers in front of them in **ten lines each**, take the
-answer, and stop. All figures are already computed in `A1-A5-decision-material-2026-09-07.md`;
-re-deriving them wastes the Owner's five minutes.
+answer, and stop. **A5's** figures are already computed in
+`A1-A5-decision-material-2026-09-07.md` **§1**; re-deriving them wastes the Owner's five
+minutes. **A6 is not in that file** — the name stops at A5. Its material is `DECISIONS.md`
+DEC-051 + `INVENTORY-2026-09-07.md` A6 + `STATE.md:74`, and it carries **three** options there.
 
 **A5 — the `unknown` taxonomy.** 1,812 of 3,070 clusters (59.0 %) are `unknown`. Six routes are
 costed in §1 of the decision material. The recommendation on the board is **route 4 (keep
@@ -100,9 +102,12 @@ costed in §1 of the decision material. The recommendation on the board is **rou
 move `unknown` only 59.0 % → 53.3 %, because `syscheck` + `vulnerability-detector` are just 175 of
 the 1,812; the rest is the estate's own operating noise.
 
-**A6 — DESKTOP-MIRSO17.** Agent 002, 2,472 alerts on one evening, 23 clusters (0.7 % of 3,070).
-In or out of the inventory. Director recommends **B — leave it out, G8′ blocks it anyway, name it
-in `docs/limitations.md`.**
+**A6 — DESKTOP-MIRSO17.** Agent 002, 2,472 alerts all on one evening (05/09 19–21h), 23
+clusters (0.7 % of 3,070) — a Windows host enrolling and running its first CIS/SCA baseline,
+not an attack. Three options, per DEC-051: **A)** add it to `conf/inventory.yaml`; **B)** leave
+it out — G8′ blocks auto-close, the 23 clusters pin `needs_review`, name it in
+`docs/limitations.md`; **C)** exclude it from replay entirely (loses the 23 clusters from G1
+and touches evaluation validity). Director recommends **B**. Gates P2-T08/T09 carding.
 
 **Then hand off, and do not freelance this part:** `DECISIONS.md` and `STATE.md` are the
 **Director's** files. Write the Owner's answer into `docs/plan/INBOX.md` in the file's own format

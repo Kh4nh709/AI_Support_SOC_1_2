@@ -60,7 +60,10 @@ buộc, để model không học "host lab = escalate".
 
 ### 1.3 Hai quyết định — 5 phút, bảng đã có
 
-Đọc `docs/plan/A1-A5-decision-material-2026-09-07.md` §1, §2 rồi trả lời Director một câu.
+**A5** — `docs/plan/A1-A5-decision-material-2026-09-07.md` **§1** (sáu route, đã tính sẵn).
+**A6** — **không nằm trong file đó** (tên file chỉ tới A5): đọc `DECISIONS.md` DEC-051 +
+`INVENTORY-2026-09-07.md` A6 + `STATE.md:74`; ở đó A6 có **ba** lựa chọn, không phải hai.
+Trả lời một câu mỗi mục; Owner Assist ghi vào `INBOX.md`, Director gán số DEC ở cổng tối.
 
 ### 1.4 Mỗi lần agent báo xong: Reviewer → Director. **Gộp lô.**
 

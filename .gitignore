@@ -44,3 +44,7 @@ Bản đồ kiến trúc AI Support SOC_files/
 *.sw?
 *~
 .*.swp
+
+# Detection author 2026-09-08: host config backup, not a deliverable.
+# Carries the live <integration> api_key from ossec.conf:342 — must never be committed.
+conf/ossec.conf.bak-*

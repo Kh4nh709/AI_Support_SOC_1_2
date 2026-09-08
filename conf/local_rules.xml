@@ -1,0 +1,174 @@
+<!--
+  AI_Support_SOC — local detection content for IA1803
+  Authored 2026-09-08 under DEC-056 (route B). Deployed to /var/ossec/etc/rules/local_rules.xml.
+
+  Four rules. One is a liveness beacon; three are detections that make the
+  `ransomware`, `data_exfiltration` and `c2_beacon` categories of
+  backend/app/ingest/category.py reachable on a host that has no network sensor,
+  no web server and no anti-virus.
+
+  Ids: 100999 is fixed by HEARTBEAT_RULE_ID (00-context-pack.md §6.3). The
+  detections use a fresh 1003xx block: 100101, 100112, 100200, 100204 and 100205
+  all appear in the 30-day archive and are deliberately not reused, so the
+  archive's own history stays unambiguous.
+
+  Signal basis, measured on this host on 2026-09-08 against the 30-day archive
+  (92,030 alerts): auditd is live and the running audit ruleset carries an
+  execve watch keyed "exec" (2,337 alerts) plus "privesc" (467), "modules" (5)
+  and "identity" (4). All three detections below therefore hang off the stock
+  `audit` group, the same construction the stock ruleset uses for 92600-92605.
+
+  DEC-056 amendment 3 applies to rules 100301-100303: the behaviour the lab
+  generates is real, but the detection logic that classifies it was written by
+  the operator whose system is being evaluated. Each rule's premise, and the
+  gap in that premise, is stated above it so a reader can judge the circularity
+  rather than take the recall number at face value.
+-->
+
+<group name="local,">
+
+  <!--
+    100999 — pipeline heartbeat. Not a detection, and it is not pretending to be
+    one: it is a liveness beacon for the ingest path (chot-v3-14-ngay.md D2).
+    Its premise is thin by construction and that is the point — it must fire on
+    a schedule with no adversary present.
+
+    Level 3 is the minimum that enters alerts.json: ossec.conf line 25 sets
+    log_alert_level to 3, and anything below it never reaches the indexer, so
+    the P2-T11 freshness check would read zero forever.
+
+    No `ignore` attribute on purpose. Rule 531, the stock sibling on this same
+    parent, carries ignore="7200"; that would suppress repeat beats and make a
+    live pipeline look dead to a 30-minute freshness window.
+
+    Parent 530 ("Wazuh process monitoring rules", level 0) is the stock rule for
+    `ossec: output: '<tag>': ...`, verified by logtest on this host.
+  -->
+  <rule id="100999" level="3">
+    <if_sid>530</if_sid>
+    <match>ossec: output: 'soc_heartbeat':</match>
+    <description>SOC pipeline heartbeat.</description>
+    <group>soc_heartbeat,</group>
+  </rule>
+
+  <!--
+    100301 — ransomware (T1486, Data Encrypted for Impact).
+
+    Premise: on Linux the observable core of T1486 is bulk symmetric encryption
+    of data in place. A ransomware operator that shells out to the platform's
+    own crypto tools must supply the passphrase non-interactively, because there
+    is no operator at a terminal to type it. An administrator encrypting one
+    archive by hand is prompted instead. So the rule is not "openssl ran" — it
+    is "a symmetric encryption tool ran with its passphrase supplied on the
+    command line", which is a behavioural property, not a string.
+
+    This is also what the T1486 Linux atomics in Atomic Red Team do, and
+    chot-v3-14-ngay.md §C names Atomic Red Team as the scenario source.
+
+    Where the premise is thin, stated: a family that implements AES in its own
+    binary never execs a crypto tool and this rule will not see it — which is
+    most modern Linux ransomware. It is a signal for the shell-script tier of
+    the threat only. It also cannot see volume: one execve carries no count of
+    files touched, so a developer encrypting a single backup with a passphrase
+    flag is a false positive by design. The corroborating signal is FIM
+    (rules 550/554) on the encrypted paths; that rule is not authored here
+    because syscheck on this manager is scheduled at 12h and would not close
+    the loop inside a lab window.
+
+    Level 12 = critical in the pinned band (DEC-054).
+  -->
+  <rule id="100301" level="12">
+    <if_group>audit</if_group>
+    <field name="audit.exe" type="pcre2">/(?:openssl|gpg|gpg2)$</field>
+    <match type="pcre2">a\d+="enc".*a\d+="-(?:k|pass|kfile)"|a\d+="(?:-c|--symmetric)".*a\d+="--(?:batch|passphrase|passphrase-fd|passphrase-file)"</match>
+    <description>Possible ransomware: non-interactive symmetric encryption via $(audit.exe).</description>
+    <mitre>
+      <id>T1486</id>
+    </mitre>
+    <group>ransomware,</group>
+  </rule>
+
+  <!--
+    100302 — data exfiltration (T1041, Exfiltration Over C2 Channel).
+
+    Premise: this host has no network sensor, so exfiltration is only visible at
+    the point a process is told to send a local file outward. The rule requires
+    that the command line names a local file as the body of an outbound request
+    — curl's upload/PUT and multipart-from-file forms, wget's post-from-file
+    form. Downloading (the overwhelmingly common use of both tools here) does
+    not match, and neither does an API call whose body is inline text; the
+    discriminator is a file path leaving the machine.
+
+    Where the premise is thin, stated: T1041 proper means exfiltration over an
+    already-established C2 channel, and a command-line upload is closer to T1048.
+    T1041 is used because it is the id the resolver maps to `data_exfiltration`
+    (category.py, tier 1) and because the alternative would be a category this
+    estate cannot reach at all. The rule is also blind to the two exfiltration
+    paths that matter most on a real estate — an interpreter opening its own
+    socket, and a transfer inside an existing SSH session — because neither
+    produces a distinguishable execve. The group `exfiltration` is carried as
+    well so the alert still resolves at tier 3 if the MITRE block is ever lost
+    in transport.
+
+    Level 10 = high in the pinned band. Not critical: a single upload is a lead
+    an analyst confirms, not a confirmed incident. It also stays below the
+    level 11 threshold of the `<integration>` block at ossec.conf line 343.
+  -->
+  <rule id="100302" level="10">
+    <if_group>audit</if_group>
+    <field name="audit.exe" type="pcre2">/(?:curl|wget)$</field>
+    <match type="pcre2">a\d+="(?:-T|--upload-file)"|a\d+="--post-file|a\d+="(?:-F|--form|-d|--data|--data-binary|--data-raw)".*a\d+="[^"]*@/</match>
+    <description>Possible data exfiltration: local file uploaded via $(audit.exe).</description>
+    <mitre>
+      <id>T1041</id>
+    </mitre>
+    <group>exfiltration,</group>
+  </rule>
+
+  <!--
+    100303 — C2 channel (T1071, Application Layer Protocol).
+
+    Premise: the two ways an operator attaches a shell to a socket on a stock
+    Linux box without dropping a binary are bash's /dev/tcp and /dev/udp
+    pseudo-devices, and netcat/socat's exec option. Neither has a routine
+    administrative use on this host: /dev/tcp appears in no legitimate package
+    script, and `nc -e` is compiled out of most distributions precisely because
+    its only use is this one. Both are strong single-event signals.
+
+    One property of auditd that this rule has to carry, found by running the
+    command rather than by reasoning about it: auditd hex-encodes any execve
+    argument that contains a space or a shell metacharacter. A reverse shell is
+    always written `bash -c 'exec 3<>/dev/tcp/host/port'`, so the argument that
+    names the pseudo-device is recorded as
+    `a2=6578656320333C3E2F6465762F7463702F...`, never as a quoted string. The
+    plain-text branch below therefore cannot fire on the case the rule exists
+    for, and the hex branch is the one that does the work: 2F6465762F7463702F
+    is `/dev/tcp/` and 2F6465762F7564702F is `/dev/udp/`. Hex is byte-aligned
+    from the start of the argument, so a match on an odd nibble boundary would
+    have to be a coincidence of the surrounding bytes; the plain branch is kept
+    for the case where the path arrives as an argument of its own.
+
+    Where the premise is thin, stated plainly: this rule does not detect
+    beaconing. Beaconing is periodicity, and periodicity is not visible in one
+    execve — it needs flow records this host does not produce (INVENTORY A8: the
+    five stock Suricata rules decode as `json` and carry no MITRE, so installing
+    Suricata would classify nothing). What this rule detects is the
+    establishment of the channel. The category is named `c2_beacon` by
+    category.py and the rule is mapped into it, but the evaluation chapter
+    should say that `c2_beacon`'s recall on this estate is recall on channel
+    setup, not on beacon traffic. An implant using plain HTTPS to a
+    reputable-looking host is invisible here and no local rule can change that.
+
+    Level 12 = critical in the pinned band.
+  -->
+  <rule id="100303" level="12">
+    <if_group>audit</if_group>
+    <match type="pcre2">(?:a\d+=|proctitle=)[0-9A-F]*2F6465762F(?:7463|7564)702F|a\d+="[^"]*/dev/(?:tcp|udp)/[0-9a-zA-Z.:_-]+|exe="[^"]*/(?:nc|nc\.openbsd|nc\.traditional|ncat|netcat|socat)".*a\d+="(?:-e|--exec|--sh-exec|EXEC:[^"]*|SYSTEM:[^"]*)"</match>
+    <description>Possible C2 channel: shell attached to a network socket.</description>
+    <mitre>
+      <id>T1071</id>
+    </mitre>
+    <group>c2_beacon,</group>
+  </rule>
+
+</group>
