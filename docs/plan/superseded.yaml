@@ -826,3 +826,21 @@ rules:
   artifact: (canonical short form — catches paraphrase, not just re-paste)
   reason: DEC-018 amended the runtime to native PostgreSQL and DEC-021 ruled that no target may require docker; a forward-looking document that runs anything 'against the compose db' points a Coder at a database that does not exist on this host.
   allow: []
+- id: dec055-six-of-ten-zero
+  dec: DEC-055
+  severity: high
+  status: fixed
+  pattern: Six of the ten playbook categories
+  pattern_note: "short canonical form of the count DEC-055 retires. `web_attack`'s 8 live clusters were all local rule 100112 (audit log clearing, T1070) reaching the category through the over-broad `attack` group, so the true count is seven of ten and the live set is three. Red-stepped 08/09 by injecting the phrase into prompts/P5.md."
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC-055 measured that web_attack has no genuine live cluster; a forward-looking document that counts six zero-coverage categories overstates G1's category coverage and understates what G2 must supply.
+  allow: []
+- id: dec055-attack-group-web
+  dec: DEC-055
+  severity: medium
+  status: fixed
+  pattern: '`web_attack` 8'
+  pattern_note: "the figure the over-broad `attack` key produced. After P2-T16 the category has zero live clusters; a document quoting 8 is quoting a mis-mapping. Red-stepped 08/09 by injection into prompts/P5.md."
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC-055 retires the 8-cluster web_attack figure; it was rule 100112, an audit rule, and the rule itself no longer exists on the manager.
+  allow: []

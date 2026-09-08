@@ -96,6 +96,20 @@ def test_render_asks_the_question_for_every_unacknowledged_pair():
     assert "STATE.md" not in text
 
 
+def test_a_phase_brief_touched_twice_is_reported_like_a_card():
+    """A phase brief is what a Planner turns into cards, so two decisions editing one is the
+    same seam as two editing a card (08/09: `prompts/P6.md` carried five decisions in three
+    days and the report could not see it). Touched once, it is not an overlap."""
+    decs = dec_overlaps.parse_decisions(
+        (REPO_ROOT / "docs" / "plan" / "DECISIONS.md").read_text(encoding="utf-8")
+    )
+    report = dec_overlaps.overlaps(decs)
+    assert "prompts/P6.md" in report
+    touched = {d for d, _ in report["prompts/P6.md"]}
+    assert {"DEC-055", "DEC-056"} <= touched
+    assert "prompts/P0.md" not in report  # touched by no decision at all
+
+
 def test_the_real_log_reproduces_the_dec_044_instance_and_excludes_state():
     """DEC-044: DEC-029 added the 015-absent rider to P1-T07's card and DEC-044 re-cut it —
     the first known instance of the class. The mechanism must at least see that one."""
