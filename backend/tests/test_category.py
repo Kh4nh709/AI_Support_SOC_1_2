@@ -251,8 +251,8 @@ def test_mapping_version_is_pinned_to_a_hash_of_the_four_tables():
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     # If this assertion fails, you edited a mapping table: bump MAPPING_VERSION
     # in category.py in the same commit, then update this literal to match.
-    assert digest == "e6bb6833fd382b2793935900cdf0dbe5d9bb0e07ab8126cf4543ca1caa78f128"
-    assert MAPPING_VERSION == "v3.1"
+    assert digest == "33ed2ec1be828c578f009b33b5e8ec27a746f7353238fa6b46551761bd720f2d"
+    assert MAPPING_VERSION == "v3.2"
 
 
 # --------------------------------------------------------------------------
@@ -278,6 +278,41 @@ def test_multiple_group_matches_are_collected_and_sorted_by_priority():
     assert r.category == "malware"
     assert r.categories == ("malware", "privilege_escalation")
     assert r.resolved_by == "rule_groups"
+
+
+# --------------------------------------------------------------------------
+# DEC-055 — `attack` was over-broad; `sqlinjection` and `web-accesslog` replace it
+# --------------------------------------------------------------------------
+
+
+def test_rule_100112_audit_log_cleared_is_not_a_web_attack():
+    # Local rule 100112 "audit log cleared" (T1070.002/.003, defense evasion)
+    # carries these four groups and nothing else. Before DEC-055 it reached
+    # `web_attack` at tier 3 through GROUP_TO_CATEGORY["attack"] -- 8 of 8 live
+    # `web_attack` clusters on the archive were this rule, on a host that runs
+    # no web server. With `attack` gone it has no signal left and falls through.
+    r = resolve([], ["local", "audit", "attack", "defense_evasion"], None, 0)
+    assert r.category == "unknown"
+    assert r.resolved_by == "none"
+    assert r.categories == ()
+
+
+def test_rule_31170_sql_injection_still_resolves_to_web_attack():
+    # Stock rule 31170 "SQL injection attempt". The ported table spelled this
+    # `sql_injection`; the stock ruleset writes `sqlinjection`, so removing
+    # `attack` without adding that spelling would drop this rule to `unknown`.
+    r = resolve([], ["attack", "sqlinjection", "pci_dss_6.5"], None, 0)
+    assert r.category == "web_attack"
+    assert r.resolved_by == "rule_groups"
+
+
+def test_web_accesslog_decoder_reaches_web_attack_at_tier_4():
+    # `0245-web_rules.xml` is decoded by `web-accesslog`; the substring table
+    # reached `apache-errorlog` but nothing named `web-accesslog`, so the web
+    # access log had no tier-4 route at all.
+    r = resolve([], [], "web-accesslog", 0)
+    assert r.category == "web_attack"
+    assert r.resolved_by == "decoder"
 
 
 # --------------------------------------------------------------------------
