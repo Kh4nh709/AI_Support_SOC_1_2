@@ -64,7 +64,7 @@ the deploy commands, the logtest transcript, the rollback, and the two commands 
   Line 25: `<log_alert_level>3</log_alert_level>`. A rule below level 3 never enters `alerts.json`,
   never reaches the indexer, and G2 never sees it. Existing wodles at lines 64 (`cis-cat`),
   75 (`osquery`), 84 (`syscollector`) — write the new one against what is actually there.
-- **Two commands need root and are the Owner's, not yours:** `systemctl restart wazuh-manager`
+- **Two commands need root and are the Owner's, not yours:** `systemctl restart wazuh-manager` <!-- superseded-ok: DEC-064 — dated record / the instruction that created the row; the container form is `sudo docker restart 8e3772d039ed` -->
   and `apt install -y clamav clamav-daemon`.
 - Resolver tier 1 is an **exact** `rule.mitre.id` match. Already present in `category.py`:
   `T1486`→`ransomware`, `T1041`→`data_exfiltration`, `T1071` and `T1071.004`→`c2_beacon`.

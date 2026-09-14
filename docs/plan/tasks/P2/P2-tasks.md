@@ -229,8 +229,12 @@ the puller against a recorded page, so the pull job must exist first.
    offers the explicit column as the cleaner long-term answer, which matters again for P6's `lab`.
 
 4. **`AlertContext` is a domain value.** `domain/alert.py` (P2-T04) defines
-   `AlertContext(asset_present: bool, asset_criticality: str, identity_privileged: bool | None,
-   ioc_reputation: str, lookup_status: dict)`; `enrichment/lookups.py` (P2-T08) fills it, `ingest/autoclose.py`
+   `AlertContext(asset_present: bool, asset_criticality: str, asset_owner: str | None,
+   asset_role: str | None, identity_privileged: bool | None, ioc_reputation: str,
+   lookup_status: dict[str, str])` — **seven fields, corrected 14/09 (DEC-067): this index said
+   five and `P2-T04.prompt.md:82` said seven, and the shipped dataclass follows the card. T08,
+   T09 and T10 read THIS paragraph, so the index was the wrong one by `asset_owner` and
+   `asset_role`**; `enrichment/lookups.py` (P2-T08) fills it, `ingest/autoclose.py`
    (P2-T09) and `soar/risk.py` (P2-T10) read it. This is what lets T08 and T09 run in parallel, and it
    keeps the three-state lookup semantics (`found` / `not_found` / `skipped`, phase-4 §"Ba trạng thái")
    in one place. Import direction holds: `enrichment → domain` is not allowed by §4, so **lookups do

@@ -49,7 +49,7 @@ was true of a manager that no longer exists.** `/var/ossec` is gone, group `wazu
 | write `/var/ossec/etc/rules/local_rules.xml` | **no** — dir is `drwxrwx--- root:wazuh`, `user1` is in group `wazuh` | agent | <!-- superseded-ok: DEC-063 — dated 08/09 capability record; the supersession note above this table is the correction -->
 | run `wazuh-logtest` | **no** — `rwxr-x--- root:wazuh`, verified running as `user1` via `sg wazuh` | agent |
 | read/edit `/var/ossec/etc/ossec.conf` (the heartbeat wodle) | **no** — `rw-rw---- root:wazuh` | agent |
-| `systemctl restart wazuh-manager` | **yes** | **Owner** |
+| `systemctl restart wazuh-manager` | **yes** | **Owner** | <!-- superseded-ok: DEC-064 — dated record / the instruction that created the row; the container form is `sudo docker restart 8e3772d039ed` -->
 | `apt install -y clamav clamav-daemon` | **yes** | **Owner** |
 
 So the Owner's part is **two commands**, not a sitting. Your job around them:

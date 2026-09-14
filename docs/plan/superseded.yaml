@@ -862,3 +862,12 @@ rules:
   artifact: (canonical short form — catches paraphrase, not just re-paste)
   reason: "DEC-063 measured `getent group wazuh` → nothing and `getent group 124` → nothing on 14/09. Every capability that sentence grants — writing local_rules.xml without sudo, running wazuh-logtest, reading ossec.conf — rests on a group that no longer exists, and an agent told it is in that group will report a failure as a blocker instead of asking the Owner where the new manager keeps its config."
   allow: []
+- id: dec064-systemctl-restart-wazuh-manager
+  dec: DEC-064
+  severity: high
+  status: fixed
+  pattern: systemctl restart wazuh-manager
+  pattern_note: "the host-service restart. DEC-061 measured that no wazuh unit file exists on this host; DEC-064 measured why - the manager is Docker container 8e3772d039ed and the restart is `sudo docker restart 8e3772d039ed`. Three in-scope hits when this row was written, all inside dated 08/09 capability tables or the run note that ordered this row; each is marked `superseded-ok: DEC-064` rather than rewritten, because those tables are the record of what was true on 08/09."
+  artifact: (canonical short form - catches paraphrase, not just re-paste)
+  reason: "an agent or Owner handed this command gets `Failed to restart wazuh-manager.service: Unit wazuh-manager.service not found` and will read a working stack as a broken one. The container form also carries a warning the host form never needed: `docker cp` edits are lost on `docker rm` or `compose down/up`."
+  allow: []
