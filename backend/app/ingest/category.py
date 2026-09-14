@@ -42,7 +42,7 @@ from dataclasses import dataclass
 #: Bump in the same commit as any edit to the four tables below — it is what
 #: tells a later reader which alerts need re-classifying. `test_category.py`
 #: hashes the tables and pins this value as a reminder to do so.
-MAPPING_VERSION = "v3.1"
+MAPPING_VERSION = "v3.2"
 
 #: phase-1 §Khối 5, verbatim — declared once, applied to every tier's
 #: candidate set (not only the MITRE tier).
@@ -96,8 +96,8 @@ GROUP_TO_CATEGORY: dict[str, str] = {
     "recon": "recon",
     "nmap": "recon",
     "sql_injection": "web_attack",
+    "sqlinjection": "web_attack",
     "web_attack": "web_attack",
-    "attack": "web_attack",
     "virus": "malware",
     "malware": "malware",
     "clamd": "malware",
@@ -111,6 +111,7 @@ DECODER_TO_CATEGORY: dict[str, str] = {
     "nginx": "web_attack",
     "iis": "web_attack",
     "modsecurity": "web_attack",
+    "web-accesslog": "web_attack",
     "suricata": "c2_beacon",
     "clamd": "malware",
 }
