@@ -34,9 +34,19 @@ submit **18/09**. Slack is zero (INVENTORY B1) — a slip consumes a deliverable
 The schedule budgets 30–45 minutes on the assumption the Owner does it all as root. **Measured
 2026-09-08, that is wrong in the Owner's favour:**
 
+**Re-measured 14/09 22:15 (Support Agent, at the Owner's instruction): every "no" in this table
+was true of a manager that no longer exists.** `/var/ossec` is gone, group `wazuh` is gone
+(`sg wazuh` → no such group), and the manager that runs now writes
+`/data/wazuh/logs/alerts/alerts.json` (mode 777, `manager.name` `wazuh.manager`) with its
+`etc/` **not** under `/data/wazuh` and not visible from `user1`; `systemctl` has no
+`wazuh-manager` unit, so the restart command is also unknown. Rule `100999` and rules
+`100301`–`100303` are **not live** on it (0 hits, 14/09 12:56–15:15Z). Treat each row as
+"unknown — Owner" until re-measured on the new manager; details in
+`docs/wazuh-manager-changes.md` §0 and `docs/plan/INBOX.md` 2026-09-14 · P2 / host.
+
 | step | needs root? | who |
 |---|---|---|
-| write `/var/ossec/etc/rules/local_rules.xml` | **no** — dir is `drwxrwx--- root:wazuh`, `user1` is in group `wazuh` | agent |
+| write `/var/ossec/etc/rules/local_rules.xml` | **no** — dir is `drwxrwx--- root:wazuh`, `user1` is in group `wazuh` | agent | <!-- superseded-ok: DEC-063 — dated 08/09 capability record; the supersession note above this table is the correction -->
 | run `wazuh-logtest` | **no** — `rwxr-x--- root:wazuh`, verified running as `user1` via `sg wazuh` | agent |
 | read/edit `/var/ossec/etc/ossec.conf` (the heartbeat wodle) | **no** — `rw-rw---- root:wazuh` | agent |
 | `systemctl restart wazuh-manager` | **yes** | **Owner** |

@@ -40,8 +40,19 @@ the deploy commands, the logtest transcript, the rollback, and the two commands 
 
 ## 2 · Facts measured on this host 2026-09-08 — do not re-derive, do not assume otherwise
 
+> **Superseded 14/09 — re-derive everything in this section before acting on it.** Measured
+> 2026-09-14 22:15 as `user1` (Support Agent, at the Owner's instruction): `/var/ossec` does not
+> exist; group `wazuh` does not exist (`sg wazuh` → no such group); the running manager writes
+> `/data/wazuh/logs/alerts/alerts.json` (`manager.name` `wazuh.manager`) and its `etc/`,
+> `etc/rules/`, `bin/wazuh-logtest` and `ossec.conf` are not under `/data/wazuh` and not visible
+> from `user1`; `rule.id 100999` and `100301`–`100303` occur 0 times in that file.
+> `conf/local_rules.xml` in the repo is still the authored content (DEC-056, DEC-059). Where the
+> new manager keeps its config, how it is restarted and whether `wazuh-logtest` can be run at all
+> are Owner questions — `docs/plan/INBOX.md` 2026-09-14 · P2 / host, and
+> `docs/wazuh-manager-changes.md` §0.
+
 - `/var/ossec/etc/rules` is `drwxrwx--- root:wazuh` and **empty since 2026-08-17 00:41**.
-  `user1` is in group `wazuh` (gid 124), so **you can create `local_rules.xml` yourself — no sudo.**
+  `user1` is in group `wazuh` (gid 124), so **you can create `local_rules.xml` yourself — no sudo.** <!-- superseded-ok: DEC-063 — dated 08/09 capability record; the supersession note above this table is the correction -->
   Verified: `sg wazuh -c 'touch /var/ossec/etc/rules/.writetest'` → created, owner `user1:wazuh`.
 - `/var/ossec/bin/wazuh-logtest` is `rwxr-x--- root:wazuh` and **runs as `user1` under `sg wazuh`.**
   Verified with full `-v` rule debugging on an sshd line. Feed it from a file, not a pipe:
