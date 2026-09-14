@@ -826,3 +826,39 @@ rules:
   artifact: (canonical short form — catches paraphrase, not just re-paste)
   reason: DEC-018 amended the runtime to native PostgreSQL and DEC-021 ruled that no target may require docker; a forward-looking document that runs anything 'against the compose db' points a Coder at a database that does not exist on this host.
   allow: []
+- id: dec055-six-of-ten-zero
+  dec: DEC-055
+  severity: high
+  status: fixed
+  pattern: Six of the ten playbook categories
+  pattern_note: "short canonical form of the count DEC-055 retires. `web_attack`'s 8 live clusters were all local rule 100112 (audit log clearing, T1070) reaching the category through the over-broad `attack` group, so the true count is seven of ten and the live set is three. Red-stepped 08/09 by injecting the phrase into prompts/P5.md."
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC-055 measured that web_attack has no genuine live cluster; a forward-looking document that counts six zero-coverage categories overstates G1's category coverage and understates what G2 must supply.
+  allow: []
+- id: dec055-attack-group-web
+  dec: DEC-055
+  severity: medium
+  status: fixed
+  pattern: '`web_attack` 8'
+  pattern_note: "the figure the over-broad `attack` key produced. After P2-T16 the category has zero live clusters; a document quoting 8 is quoting a mis-mapping. Red-stepped 08/09 by injection into prompts/P5.md."
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: DEC-055 retires the 8-cluster web_attack figure; it was rule 100112, an audit rule, and the rule itself no longer exists on the manager.
+  allow: []
+- id: dec063-sg-wazuh-zcat-export
+  dec: DEC-063
+  severity: high
+  status: fixed
+  pattern: sg wazuh -c 'zcat -f
+  pattern_note: "the 07/09 export procedure's canonical head (DEC-051). Zero occurrences in scope when this row was written — P2-T13.prompt.md note 3 had already been re-derived to the `sudo sh -c` form, so this is a pure regression guard, not a debt. Deliberately narrow: the bare token `sg wazuh` appears 9 times in scope, most of them in dated history or in the sentence saying the group no longer exists, and a row on the token would fire on all of them."
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: "measured 14/09 (DEC-063): group `wazuh` does not exist on this host any more, so `sg wazuh` fails with 'no such group'; and the manager's tree is `/data/wazuh/`, whose `logs/alerts/2026/` is drwxr-x--- gid 999 and unreadable by `user1` at all. A forward-looking document handing the Owner this command hands them a procedure that cannot run, for a path that does not exist."
+  allow: []
+- id: dec063-user1-in-group-wazuh
+  dec: DEC-063
+  severity: high
+  status: fixed
+  pattern: '`user1` is in group `wazuh`'
+  pattern_note: "present tense only — the capability claim, not the history. P2-T13.prompt.md:54 says `user1` **was** in group `wazuh` and must keep saying it. Two live hits when this row was written, both inside the dated 08/09 capability tables that carry a supersession note above them (owner-assist.md:49, detection-author.md:55); both lines are marked `superseded-ok: DEC-063` rather than rewritten, because those tables are the record of what was true on 08/09."
+  artifact: (canonical short form — catches paraphrase, not just re-paste)
+  reason: "DEC-063 measured `getent group wazuh` → nothing and `getent group 124` → nothing on 14/09. Every capability that sentence grants — writing local_rules.xml without sudo, running wazuh-logtest, reading ossec.conf — rests on a group that no longer exists, and an agent told it is in that group will report a failure as a blocker instead of asking the Owner where the new manager keeps its config."
+  allow: []

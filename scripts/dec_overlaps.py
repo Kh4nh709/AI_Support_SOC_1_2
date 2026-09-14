@@ -8,8 +8,9 @@ the fast-forward treadmill, DEC-047 schema.sql) and no mechanism. DEC-044 named 
 from the log — and nothing computed it. This does.
 
 Scope, so the report is signal and not churn: rule-bearing artifacts only — the context
-pack, ``prompts/reviewer.md``, ``01-plan.md``, and any task card touched by two decisions.
-The board is never reported: seventeen decisions touch it because churn is its function.
+pack, ``prompts/reviewer.md``, ``01-plan.md``, and any task card **or phase brief** touched by
+two decisions. The board is never reported: seventeen decisions touch it because churn is its
+function.
 
 What it sees and what it cannot, stated plainly. An artifact-level overlap is a proxy for a
 rule-level one. DEC-044's own instance (DEC-029 then DEC-044 on P1-T07's card) is visible.
@@ -31,6 +32,12 @@ from dataclasses import dataclass, field
 
 RULE_BEARING = ("00-context-pack.md", "01-plan.md", "prompts/reviewer.md")
 CARD = re.compile(r"tasks/P\d/P\d-T\d\d\.prompt\.md$")
+#: A phase brief is what a Planner turns into cards, so two decisions editing one is the same
+#: seam as two editing a card. Added 08/09 after the reporter's own first week: `prompts/P6.md`
+#: took five decisions in three days (DEC-052, 053, 054, 055, 056) and the report could not see
+#: it, because the original scoping rule named only the pack, `reviewer.md`, `01-plan.md` and
+#: cards. Gated on "touched twice" exactly as cards are, so a brief edited once stays quiet.
+BRIEF = re.compile(r"prompts/P\d\.md$")
 BOARD = "STATE.md"
 
 _HEADER = re.compile(r"^## (DEC-\d{3}) · (\S+) · (.*)$", re.MULTILINE)
@@ -131,7 +138,9 @@ def parse_decisions(text: str) -> list[Decision]:
 def _rule_bearing(path: str, touches: int) -> bool:
     if path == BOARD:
         return False
-    return path in RULE_BEARING or (bool(CARD.search(path)) and touches >= 2)
+    if path in RULE_BEARING:
+        return True
+    return bool(CARD.search(path) or BRIEF.search(path)) and touches >= 2
 
 
 def overlaps(
@@ -180,7 +189,8 @@ def render(decisions: list[Decision], everything: bool = False) -> str:
     all_pairs = pairs(decisions, everything)
     intro = (
         f"Parsed {len(decisions)} decisions, {with_line} with a `Propagated to:` line. "
-        f"Scope: {', '.join(RULE_BEARING)} and any task card touched twice; the board is excluded "
+        f"Scope: {', '.join(RULE_BEARING)} and any task card or phase brief touched twice; "
+        "the board is excluded "
         "by design (churn is its function). An overlap is a question, not a finding: "
         "**do the two rules still compose on that text?** A pair is *acknowledged* when the later "
         "entry names the earlier id anywhere in its text — a weak proxy for having asked."
