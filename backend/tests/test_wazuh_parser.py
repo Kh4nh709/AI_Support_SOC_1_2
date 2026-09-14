@@ -153,8 +153,10 @@ def test_raw_payload_khong_phai_tham_chieu_toi_envelope(archive_bare_doc):
 
 
 def test_timestamp_offset_khong_dau_hai_cham(archive_bare_doc):
-    """'+0700' (no colon) is exactly the sample archive line's own shape —
-    `datetime.fromisoformat` rejects it unnormalised; the parser must not."""
+    """'+0700' (no colon) is exactly the sample archive line's own shape.
+    `datetime.fromisoformat` parses it natively on py312; `_parse_iso`
+    normalises it anyway so the parser does not depend on the interpreter
+    version (report §3)."""
     raw_line = json.loads(archive_bare_doc["event"]["original"])
     assert raw_line["timestamp"] == "2026-09-02T16:15:36.255+0700"
     result = parse_wazuh_alert(raw_line)
