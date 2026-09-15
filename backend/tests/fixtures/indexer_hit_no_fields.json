@@ -1,0 +1,67 @@
+{
+  "_index": "wazuh-alerts-4.x-2026.08.16",
+  "_id": "-pe4C6ABLQcppv5YO4pl",
+  "_source": {
+    "predecoder": {
+      "hostname": "user1-IA1803",
+      "program_name": "sshd",
+      "timestamp": "Aug 16 17:56:55"
+    },
+    "input": {
+      "type": "log"
+    },
+    "agent": {
+      "ip": "79.79.79.12",
+      "name": "user1-IA1803",
+      "id": "001"
+    },
+    "manager": {
+      "name": "IA1803"
+    },
+    "data": {
+      "srcip": "127.0.0.1",
+      "dstuser": "user1",
+      "srcport": "48104"
+    },
+    "rule": {
+      "mail": true,
+      "level": 12,
+      "description": "Multiple authentication failures followed by a success.",
+      "groups": [
+        "syslog",
+        "attacks"
+      ],
+      "frequency": 2,
+      "firedtimes": 1,
+      "mitre": {
+        "technique": [
+          "Valid Accounts",
+          "Brute Force"
+        ],
+        "id": [
+          "T1078",
+          "T1110"
+        ],
+        "tactic": [
+          "Defense Evasion",
+          "Persistence",
+          "Privilege Escalation",
+          "Initial Access",
+          "Credential Access"
+        ]
+      },
+      "id": "40112"
+    },
+    "location": "journald",
+    "decoder": {
+      "parent": "sshd",
+      "name": "sshd"
+    },
+    "id": "1786903016.121311",
+    "full_log": "Aug 16 17:56:55 user1-IA1803 sshd[136570]: Accepted password for user1 from 127.0.0.1 port 48104 ssh2",
+    "timestamp": "2026-08-17T00:56:56.130+0700"
+  },
+  "sort": [
+    1786903016130
+  ]
+}
