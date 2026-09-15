@@ -76,7 +76,7 @@ run-app:
 	PYTHONPATH=backend $(PY) -m uvicorn app.web.main:app --host $(APP_HOST) --port $(APP_PORT)
 
 run-worker:
-	PYTHONPATH=backend $(PY) -m app.infra.worker
+	PYTHONPATH=backend $(PY) -m app.web.worker
 
 backup:
 	bash scripts/backup.sh
