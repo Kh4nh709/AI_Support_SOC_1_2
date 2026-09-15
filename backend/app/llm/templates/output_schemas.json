@@ -1,0 +1,49 @@
+{
+  "triage_v2": {
+    "suggested_action": "false_positive|needs_review|escalate",
+    "confidence": "low|medium|high",
+    "structured_basis": {
+      "severity": "critical|high|medium|low",
+      "ioc_reputation": "malicious|suspicious|clean|not_found|skipped",
+      "asset_criticality": "high|medium|low|unknown",
+      "identity_privileged": "true|false|unknown",
+      "occurrence_count": 0,
+      "playbook_rule_applied": "string|null"
+    },
+    "reasons": [
+      {
+        "claim": "string",
+        "quote": "verbatim substring of one block",
+        "source": "wazuh_raw_log|rule_description|correlation_samples|kb_playbook|context"
+      }
+    ],
+    "playbook_used": "string|null"
+  },
+  "verifier_v1": {
+    "agree": true,
+    "structured_only_verdict": "false_positive|needs_review|escalate",
+    "reason": "string"
+  },
+  "investigate_v2": {
+    "summary": "string",
+    "attack_narrative": "string",
+    "suggested_conclusion": "false_positive|policy_violation|confirmed_incident|need_more_data",
+    "confidence": "low|medium|high",
+    "gia_thuyet": [
+      {
+        "noi_dung": "string",
+        "evidence_for": ["string"],
+        "evidence_against": ["string (minItems 1)"]
+      }
+    ],
+    "evidence": [
+      {
+        "alert_id": "string",
+        "quote": "verbatim substring of that alert's raw_log or description",
+        "why": "string"
+      }
+    ],
+    "next_steps": ["string"],
+    "playbook_used": "string|null"
+  }
+}
