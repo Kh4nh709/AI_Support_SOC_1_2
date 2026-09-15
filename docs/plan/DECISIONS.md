@@ -1172,3 +1172,16 @@ Consequences:
   - **The two commitments A is being spent on, both dated 20/09 and both written as Owner actions, not reminders.** (1) **Book the two labellers by name and date for 26–27/09**, written into `STATE.md` — other people's availability is the one constraint an extension cannot buy back, and P6 cannot label without it. (2) **The ② trigger check.** Same date, same place: two checks, one gate, so they cannot drift apart.
   - **Merge-cadence check (DEC-043), and it matters here because a dated trigger is exactly the shape DEC-043 got wrong.** The trigger fires on a date and a gate state, not on an equality between branches, so no merge to `main` can break it and no open branch is put on a treadmill. It is satisfiable after any merge.
 Supersedes: **DEC-041**'s dates for P3–P8 and `LICH-TRINH-08-09.md`'s day-by-day from 09/09 onward (both kept as history, neither edited); answers **DEC-062**'s escalation
+
+## DEC-072 · 2026-09-15 · P2-T11 acceptance 5 graded the same work two ways; the card is corrected, and the Coder is charged nothing
+Scope: task cards
+Decided by: Director (E3 bucket (b) — a card defect is not the Coder's to fix)
+Drafted by: Director (Opus 5)
+Propagated to: `tasks/P2/P2-T11.prompt.md` (acceptance 5) · `STATE.md` (P2-T11 row) · **DEC-067** (same class, same card family) · **DEC-068** (the measurement that made note 9 conditional in the first place)
+Context: note 9 says *"acceptance 5's `grep -c 'synthetic'` flips from `≥ 1` to `0`"* once the synthetic fixture is replaced by a recorded document. Acceptance 5 itself still read a flat `→ ≥ 1 (the fixture is declared constructed)`. Both sentences are mine, written a day apart, and they grade the same file in opposite directions. **Measured this run on `task/P2-T11`:** `backend/tests/fixtures/indexer_heartbeat_hit.json` is a **real document** (`_index: wazuh-alerts-4.x-2026.09.15`, a real `_id`, the `05:16:48.595Z` beat), and `grep -c 'synthetic' backend/tests/test_puller.py` → **0**.
+Decision: **Acceptance 5's clause becomes conditional and names note 9 as the authority.** The Coder followed note 9, did the swap, and **wrote the divergence up themselves** (`P2-T11.report.md:143-148`) instead of quietly matching the literal — which is the behaviour the project wants and the reason this cost nobody a round.
+Consequences:
+  - **Bucket (b): nothing is charged to P2-T11.** Had this gone to the Reviewer unfixed, a literal read of acceptance 5 would have produced a CHANGES finding against a Coder who did exactly the right thing — a review round consumed by a rule of mine.
+  - **Third card defect of mine in two days** (DEC-067 carried two). The pattern is the same each time: a rule updated in one place in the card and not in the other. The cheap guard is to grep the card for the acceptance number whenever a design note changes what that acceptance measures.
+  - **Merge-cadence check (DEC-043).** One acceptance clause; no standing equality across branches.
+Supersedes: — (corrects one acceptance clause of `P2-T11.prompt.md`; DEC-068 is the measurement behind it)
