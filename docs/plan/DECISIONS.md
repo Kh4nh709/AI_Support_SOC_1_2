@@ -1371,3 +1371,23 @@ Consequences:
   - **The cheap half is one command and it is not mine.** Loading the inventory is `POST /api/admin/reload-inventory` (P2-T08 shipped it) or `inventory.load()` — but `conf/inventory.yaml` and the application database are the Owner's, and doing it changes what every subsequent enrichment reads. It costs minutes; the G1 question costs a decision.
   - **Merge-cadence check (DEC-043).** Two escalations and a verification; no standing equality.
 Supersedes: — (does not disturb DEC-079; makes explicit what `P2-tasks.md` decision 9 already said)
+
+## DEC-083 · 2026-09-15 · DEC-082's first half is closed by measurement: the inventory is loaded, the 383 stored heads are permanently `unknown`, and the IoC term is structurally dead
+Scope: environment / evaluation
+Decided by: **Owner** (ran the load) · Director (independent verification and the two consequences)
+Drafted by: Director (Opus 5)
+Propagated to: `STATE.md` (the DEC-082 Owner-action row, first half ticked) · `prompts/P8.md` (limitations: the IoC term) · **DEC-082** (first half discharged; the G1 half stays open) · **DEC-058**, **DEC-066** (both confirmed against a loaded table) · **DEC-012** (the `identities` content it settled, now actually in the database)
+Context: **re-derived by me, not accepted from the report; every figure the Owner gave reproduces.**
+  - `assets` **4** — `HR-computer|medium|active`, `IA1803|high|active`, `user1-IA1803|medium|active`, `wazuh.manager|high|active`. `identities` **2** — `root|privileged|active`, `user1|not privileged|active`, which is DEC-012's ruling, now in the database rather than only in a file. `iocs` **0**.
+  - **The zero is the file, and I checked rather than assumed:** `conf/iocs.csv` is 31 lines, of which the **data rows are 0** — line 1 is the header `value,reputation,expires_at,source` and every other line is a `#` comment, which DEC-013 made legal. A successful load of an empty table, not a failed load.
+  - **The upsert holds.** The Owner ran it twice; `assets` is **4**, not 8.
+  - **`lookup_asset` now resolves**, tested against the loaded table through the product function: all four inventory hosts return `status: found` with their criticality, and `DESKTOP-MIRSO17` returns `status: not_found, present: False, criticality: unknown` — which is DEC-058 option B working exactly as ruled.
+  - **The 383 stored heads did not move, exactly as predicted:** `asset_context->>'criticality'` × `lookup_status->>'asset'` over `duplicate_of is null` is **`unknown` / `not_found` on 383 of 383**, and the head count is still 383.
+Decision: **DEC-082's first half is closed. Its second half — the G1 route — stays open and is the one that matters.**
+Consequences:
+  - **The 383 stored heads are permanently `unknown` and no supported path changes that.** Enrichment is written into the row at the A5/A6 edge (`transitions.py:311`, columns set at `:337-347`), and the only edge into `enriching` is **A4, from `received`** (`transitions.py:76`) — there is no `queued_tier1 → enriching` transition. So **the P4 pilot must not be run on these heads** without saying what they are: a corpus on which G8′'s asset block fired on 100 % of rows because the table behind it was empty at the time, not because the estate is unknown.
+  - **A structurally dead term in the risk formula, worth a limitation sentence rather than a shrug.** `soar/risk.py:23` is `IOC = {"malicious": 25, "suspicious": 10, "clean": 0, "not_found": 0, "skipped": 0}` and `:34` sums `asset + identity + ioc + occurrence`. With `iocs` empty, every alert on this estate scores **`ioc = 0`**, so **one of the four context addends can never contribute**, and no `risk_score` this project reports is sensitive to IoC reputation. That is a property of the estate, not a defect — but unstated it would let a reader believe the IoC path was exercised.
+  - **DEC-058 and DEC-066 are confirmed rather than revisited.** The file carries exactly the four hosts DEC-066 put in it; `DESKTOP-MIRSO17` is out, per DEC-058 option B; and the lookup behaves accordingly on both sides.
+  - **A denominator footnote, because the same host now has two true numbers.** DEC-058 sized `DESKTOP-MIRSO17` at **23 clusters, 0.7 % of 3,070** in the archive; in the stored corpus it is **18 of 383 heads, 4.7 %**. Two corpora, both right, never to be quoted against each other.
+  - **Merge-cadence check (DEC-043).** A closure record; no standing equality across branches.
+Supersedes: — (discharges the first half of DEC-082; the G1 question is untouched)
