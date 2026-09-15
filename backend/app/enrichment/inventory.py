@@ -1,13 +1,16 @@
-"""Validation of the three hand-maintained inventory files (P0-T05).
+"""Validation and loading of the three hand-maintained inventory files (P0-T05, P2-T08).
 
 `conf/inventory.yaml`, `conf/identities.yaml` and `conf/iocs.csv` are written by
 hand; `docs/inventory-format.md` is the format they follow. `validate()` is what
 tells the Owner whether those files are usable before any of their content
-reaches a database.
+reaches a database; it reads files and does nothing else — standard library plus
+PyYAML, no infrastructure module, no driver, no network.
 
-It is run before a database exists, so this module reads files and does nothing
-else: standard library plus PyYAML, no infrastructure module, no driver, no
-network. Loading rows and the `active` / `loaded_at` upsert belong to P2.
+`load()` (P2-T08) is the other half: it validates first (a half-loaded inventory
+is worse than the old one), then upserts each file's rows into `assets`,
+`identities` and `iocs`, stamping `source`, `loaded_at` and `active`. It needs a
+real connection, so it is the one place in this module that imports `psycopg`
+and `app.infra.errors` — both allowed under `enrichment → infra` (context pack §4).
 
 Vocabulary (DEC-004): `assets.criticality` is `high | medium | low | unknown`,
 the same closed set as `structured_basis.asset_criticality` in the §6.2 output
@@ -18,13 +21,17 @@ is gone and there is nothing to map.
 from __future__ import annotations
 
 import csv
+import dataclasses
 import json
 import os
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+import psycopg
 import yaml
+
+from app.infra.errors import PermanentError
 
 DEFAULT_PATHS: tuple[str, ...] = (
     "conf/inventory.yaml",
@@ -80,6 +87,154 @@ def validate(paths: Sequence[str | Path] | None = None) -> list[str]:
     for path in resolved:
         out.extend(_validate_file(path))
     return out
+
+
+@dataclasses.dataclass(frozen=True)
+class LoadReport:
+    """What one `load()` call did — the counts the reload route returns as JSON."""
+
+    assets: int
+    identities: int
+    iocs: int
+    deactivated: int
+    warnings: list[str]
+
+
+def load(conn: psycopg.Connection, paths: Sequence[str | Path] | None = None) -> LoadReport:
+    """Validate the three files, then upsert their rows into `assets`, `identities`
+    and `iocs` on `conn` — one transaction the *caller* owns (this function never
+    calls `commit`/`rollback`).
+
+    Any problem `validate()` reports that is not a `warning: ` line aborts the
+    load before anything is written: `PermanentError` lists the problems
+    (`docs/inventory-format.md` §4 — a half-loaded inventory is worse than the
+    old one). `warning: ` lines (e.g. an already-expired IoC) load anyway and
+    come back on `LoadReport.warnings`.
+
+    Absent rows are flipped `active = false`, never `DELETE`d — the enrichment
+    history of past alerts stays intact (§4). `assets`/`identities` upsert on
+    their file's own primary key and scope deactivation to rows that came from
+    the *same* file (`source` = its basename); `iocs` upserts on `(value,
+    source)` — its own CSV column, not the loader's file name — and deactivates
+    every active row whose pair is absent from the file, file-scoping making no
+    sense there since the primary key does not include a file name.
+    """
+    problems = validate(paths)
+    errors = [p for p in problems if not p.startswith(WARNING)]
+    if errors:
+        raise PermanentError("\n".join(errors))
+    warnings = [p for p in problems if p.startswith(WARNING)]
+
+    resolved = [Path(p) for p in paths] if paths is not None else _paths_from_env()[0]
+
+    assets = identities = iocs = deactivated = 0
+    for path in resolved:
+        text = path.read_text(encoding="utf-8")
+        if _is_csv(path, text):
+            rows, _ = _read_csv(text, str(path))
+            n, deact = _load_iocs(conn, rows)
+            iocs += n
+        else:
+            doc, _ = _read_yaml(text, str(path))
+            if isinstance(doc, Mapping) and "assets" in doc:
+                n, deact = _load_assets(conn, doc["assets"], path.name)
+                assets += n
+            elif isinstance(doc, Mapping) and "identities" in doc:
+                n, deact = _load_identities(conn, doc["identities"], path.name)
+                identities += n
+            else:
+                continue
+        deactivated += deact
+
+    return LoadReport(
+        assets=assets, identities=identities, iocs=iocs, deactivated=deactivated, warnings=warnings
+    )
+
+
+def _load_assets(conn: psycopg.Connection, items: list[Mapping], source: str) -> tuple[int, int]:
+    hostnames = [str(item["hostname"]).strip() for item in items]
+    for item, hostname in zip(items, hostnames, strict=True):
+        conn.execute(
+            """
+            INSERT INTO assets (hostname, criticality, owner, role, source, loaded_at, active,
+                                 updated_at)
+            VALUES (%s, %s, %s, %s, %s, now(), true, now())
+            ON CONFLICT (hostname) DO UPDATE SET
+                criticality = EXCLUDED.criticality,
+                owner       = EXCLUDED.owner,
+                role        = EXCLUDED.role,
+                source      = EXCLUDED.source,
+                loaded_at   = EXCLUDED.loaded_at,
+                active      = true,
+                updated_at  = now()
+            """,
+            (hostname, item["criticality"], item.get("owner"), item.get("role"), source),
+        )
+    result = conn.execute(
+        "UPDATE assets SET active = false, updated_at = now() "
+        "WHERE source = %s AND active AND hostname <> ALL(%s::text[])",
+        (source, hostnames),
+    )
+    return len(items), result.rowcount
+
+
+def _load_identities(
+    conn: psycopg.Connection, items: list[Mapping], source: str
+) -> tuple[int, int]:
+    usernames = [str(item["username"]).strip() for item in items]
+    for item, username in zip(items, usernames, strict=True):
+        conn.execute(
+            """
+            INSERT INTO identities (username, is_privileged, source, loaded_at, active,
+                                     updated_at)
+            VALUES (%s, %s, %s, now(), true, now())
+            ON CONFLICT (username) DO UPDATE SET
+                is_privileged = EXCLUDED.is_privileged,
+                source        = EXCLUDED.source,
+                loaded_at     = EXCLUDED.loaded_at,
+                active        = true,
+                updated_at    = now()
+            """,
+            (username, bool(item.get("is_privileged")), source),
+        )
+    result = conn.execute(
+        "UPDATE identities SET active = false, updated_at = now() "
+        "WHERE source = %s AND active AND username <> ALL(%s::text[])",
+        (source, usernames),
+    )
+    return len(items), result.rowcount
+
+
+def _load_iocs(conn: psycopg.Connection, rows: Iterable[Mapping[str, str]]) -> tuple[int, int]:
+    rows = list(rows)
+    values = [row["value"].strip() for row in rows]
+    sources = [(row.get("source") or "").strip() or "internal" for row in rows]
+    for row, value, source in zip(rows, values, sources, strict=True):
+        conn.execute(
+            """
+            INSERT INTO iocs (value, source, reputation, expires_at, loaded_at, active,
+                               updated_at)
+            VALUES (%s, %s, %s, %s, now(), true, now())
+            ON CONFLICT (value, source) DO UPDATE SET
+                reputation  = EXCLUDED.reputation,
+                expires_at  = EXCLUDED.expires_at,
+                loaded_at   = EXCLUDED.loaded_at,
+                active      = true,
+                updated_at  = now()
+            """,
+            (value, source, row["reputation"].strip(), row["expires_at"].strip()),
+        )
+    result = conn.execute(
+        """
+        UPDATE iocs SET active = false, updated_at = now()
+        WHERE active AND NOT EXISTS (
+            SELECT 1 FROM unnest(%s::text[], %s::text[]) AS f(value, source)
+            WHERE f.value = iocs.value AND f.source = iocs.source
+        )
+        """,
+        (values, sources),
+    )
+    return len(rows), result.rowcount
 
 
 def validate_assets(doc: object, source: str) -> list[str]:
