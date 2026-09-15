@@ -1,0 +1,44 @@
+{
+  "_index": "wazuh-alerts-4.x-2026.09.15",
+  "_id": "YFF_o6AB00kc9VC2Iv8E",
+  "_score": null,
+  "_source": {
+    "agent": {
+      "name": "wazuh.manager",
+      "id": "000"
+    },
+    "manager": {
+      "name": "wazuh.manager"
+    },
+    "rule": {
+      "firedtimes": 1,
+      "mail": false,
+      "level": 3,
+      "description": "SOC pipeline heartbeat.",
+      "groups": [
+        "local",
+        "soc_heartbeat"
+      ],
+      "id": "100999"
+    },
+    "decoder": {
+      "name": "ossec"
+    },
+    "full_log": "ossec: output: 'soc_heartbeat':\nsoc_heartbeat_2026-09-15T05:16:48Z",
+    "input": {
+      "type": "log"
+    },
+    "@timestamp": "2026-09-15T05:16:48.595Z",
+    "location": "soc_heartbeat",
+    "id": "1789449408.1241609",
+    "timestamp": "2026-09-15T05:16:48.595+0000"
+  },
+  "fields": {
+    "timestamp": [
+      "2026-09-15T05:16:48.595Z"
+    ]
+  },
+  "sort": [
+    1789449408595
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "took": 5,
+  "timed_out": false,
+  "_shards": {"total": 1, "successful": 1, "skipped": 0, "failed": 0},
+  "hits": {
+    "total": {"value": 65, "relation": "eq"},
+    "max_score": null,
+    "hits": [
+      {
+        "_index": "wazuh-alerts-4.x-2026.08.16",
+        "_id": "AZe4C6ABLQcppv5YO4pq",
+        "_source": {
+          "predecoder": {"hostname": "user1-IA1803", "program_name": "sshd", "timestamp": "Aug 16 18:09:47"},
+          "input": {"type": "log"},
+          "agent": {"ip": "79.79.79.12", "name": "user1-IA1803", "id": "001"},
+          "manager": {"name": "IA1803"},
+          "data": {"srcip": "198.51.100.23", "dstuser": "admin", "srcport": "51101"},
+          "rule": {"mail": false, "level": 5, "description": "sshd: Attempt to login using a non-existent user", "groups": ["syslog", "sshd", "invalid_login", "authentication_failed"], "frequency": 1, "firedtimes": 4, "mitre": {"technique": ["Valid Accounts"], "id": ["T1078"], "tactic": ["Defense Evasion", "Persistence", "Privilege Escalation", "Initial Access"]}, "id": "5710"},
+          "location": "journald",
+          "decoder": {"parent": "sshd", "name": "sshd"},
+          "id": "1786903787.122501",
+          "full_log": "Aug 16 18:09:47 user1-IA1803 sshd[137021]: Invalid user admin from 198.51.100.23 port 51101",
+          "timestamp": "2026-08-17T01:09:47.612+0700"
+        },
+        "fields": {"timestamp": ["2026-08-16T18:09:47.612Z"]},
+        "sort": [1786903787612]
+      },
+      {"sort":[1786903812004]  ,"fields":{ "timestamp" :["2026-08-16T18:10:12.004Z"]},
+       "_id":"AJe4C6ABLQcppv5YO4pr","_index" :"wazuh-alerts-4.x-2026.08.16",
+        "_source":{"timestamp":"2026-08-17T01:10:12.004+0700"   ,"id" :"1786903812.122777",
+      "full_log":"Aug 16 18:10:12 user1-IA1803 sudo: pam_unix(sudo:auth): authentication failure; logname=user1 uid=1000 euid=0 tty=/dev/pts/2 ruser=user1 rhost=  user=root",
+       "decoder":{"name":"pam"},"location" :"journald",
+        "rule":{  "id":"5503","mitre":{"tactic":["Credential Access"],"id":["T1110"],"technique":["Brute Force"]},"firedtimes":9,"frequency":1,"groups":["pam","syslog","authentication_failed"],"description":"PAM: User login failed.","level":5,"mail":false},
+        "manager":{"name":"IA1803"},"agent":{"id":"001","name":"user1-IA1803","ip":"79.79.79.12"},
+        "data":{"srcuser":"user1","dstuser":"root"},
+        "input":{"type":"log"},
+        "predecoder":{"timestamp":"Aug 16 18:10:12","program_name":"sudo","hostname":"user1-IA1803"}
+        }
+      }
+    ]
+  }
+}
