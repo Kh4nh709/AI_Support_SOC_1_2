@@ -386,7 +386,7 @@ T11 creates, T13 modifies) are ordered by their `Depends on:` fields.
 - Risk / notes: F4, DEC-014 (no-`agent` fallback, no frequency cited), DEC-019 (keep the `_source.timestamp` fallback). `event_time` is always NULL (planning decision 5).
 
 ### P2-T05 · `ingest/dedup.py`
-- Priority: must · Estimate: 3.5 h · Depends on: P2-T02, P2-T04
+- Priority: must · Estimate: 3.5 h · Depends on: P2-T02, P2-T04, **P2-T06** (added 15/09, DEC-074: `evaluate()` imports `AutocloseMatch` from `app.domain.transitions`, which only P2-T06 defines — the line omitted it and the Reviewer measured the ImportError)
 - Goal: `cluster_lock`, `find_open_cluster`, `bump_parent` exactly as phase-2 specifies, with the lock key built in SQL and proven serialising across two sessions.
 - Files — modify: `backend/app/ingest/dedup.py`. Create: `backend/tests/test_dedup.py`.
 - Contracts touched: none.
