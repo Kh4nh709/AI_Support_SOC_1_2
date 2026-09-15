@@ -31,7 +31,7 @@ import time
 import uuid
 from concurrent import futures
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
@@ -289,29 +289,38 @@ def test_ban_sao_khong_the_lam_goc(db):
     assert dedup.find_open_cluster(db, _probe()) is None
 
 
-def test_status_khac_duplicate_la_lop_chan_doc_lap(db):
-    """The duplicate row trips BOTH layers by construction — the DB CHECK
-    `ck_alerts_ban_sao_phai_seal_va_tro_goc` forces `closed_at` *and*
-    `sealed_at` on it, so it already fails "still absorbing". That makes
-    `test_ban_sao_khong_the_lam_goc` above unable to tell the two layers apart.
+def test_status_khac_duplicate_la_lop_chan_thu_hai(db):
+    """`status <> 'duplicate'` has to hold on its own, so this test removes the
+    layer in front of it.
 
-    This test isolates the second one: the same four-column probe with only
-    `status <> 'duplicate'` applied still finds nothing, while the same probe
-    without it finds the row. Without this, `status <> 'duplicate'` could be
-    deleted from the module and every other test would stay green.
+    Measured while writing this file: delete `AND status <> 'duplicate'` from
+    `dedup.py` and every other test here stays green. The predicate is
+    unreachable under the schema as it stands, because the first layer already
+    excludes every duplicate — `ck_alerts_ban_sao_phai_seal_va_tro_goc` will
+    not let a `duplicate` row exist without both `closed_at` and `sealed_at`,
+    so it can never satisfy "still absorbing". A test that cannot go red is not
+    a test, and phase-2 calls this predicate the *second* layer, which means it
+    is meant to hold when the first one does not.
+
+    So: drop that CHECK inside this transaction (DDL is transactional in
+    PostgreSQL and the `db` fixture rolls back), insert the unsealed duplicate
+    the constraint would have refused, prove it passes the still-absorbing
+    layer, and assert the query still refuses to make it a head. That is D2 —
+    no duplicate chains, whatever upstream does.
     """
+    db.execute("ALTER TABLE alerts DROP CONSTRAINT ck_alerts_ban_sao_phai_seal_va_tro_goc")
     parent = _insert_alert(db, status="closed_fp")
-    child = _insert_alert(db, status="duplicate", duplicate_of=parent)
-    where_key = "WHERE rule_id = %s AND srcip = %s AND agent_name = %s AND dstip = %s"
-    key = (KEY_RULE_ID, KEY_SRCIP, KEY_AGENT, KEY_DSTIP)
+    child = _insert_alert(db, status="duplicate", duplicate_of=parent, ts_sql={"sealed_at": "NULL"})
 
-    found = db.execute(f"SELECT alert_id FROM alerts {where_key}", key).fetchall()
-    assert {r[0] for r in found} == {parent, child}
-
-    kept = db.execute(
-        f"SELECT alert_id FROM alerts {where_key} AND status <> 'duplicate'", key
+    still_absorbing = db.execute(
+        "SELECT alert_id FROM alerts "
+        "WHERE rule_id = %s AND srcip = %s AND agent_name = %s AND dstip = %s "
+        "AND (closed_at IS NULL OR sealed_at IS NULL)",
+        (KEY_RULE_ID, KEY_SRCIP, KEY_AGENT, KEY_DSTIP),
     ).fetchall()
-    assert {r[0] for r in kept} == {parent}
+    assert [row[0] for row in still_absorbing] == [child], "the duplicate must reach layer two"
+
+    assert dedup.find_open_cluster(db, _probe()) is None
 
 
 # ── 4 · IDLE_GAP — the sliding window on last_seen_at ────────────────────────
@@ -665,6 +674,11 @@ def test_last_seen_at_luon_bang_now_cua_db(db):
     window the moment it is created, which kills dedup 100% with no error
     anywhere. Anchor: the row's own `now()` at the moment of reading, not the
     test host's clock.
+
+    The bound is two-sided on purpose. Written as `age < 1s` alone it passed
+    against a deliberately broken `bump_parent` that wrote a *future* agent
+    timestamp — a negative age is under one second too, and the fast-agent
+    half of B2 is exactly the case that produces one.
     """
     parent = _insert_alert(db, ts_sql={"last_seen_at": "now() - interval '2 hours'"})
     dedup.bump_parent(db, parent)
@@ -673,7 +687,7 @@ def test_last_seen_at_luon_bang_now_cua_db(db):
         "FROM alerts WHERE alert_id = %s",
         (parent,),
     ).fetchone()
-    assert age.total_seconds() < 1.0, age
+    assert timedelta(0) <= age < timedelta(seconds=1), age
     assert moved is True
 
 
