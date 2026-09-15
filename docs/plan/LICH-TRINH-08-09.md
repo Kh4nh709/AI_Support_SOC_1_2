@@ -1,5 +1,7 @@
 # Lịch trình 08/09 → 18/09 — ai làm gì, phiên nào chạy song song
 
+> **SUPERSEDED 15/09 — DEC-071. Lịch theo ngày từ 09/09 trở đi ở §3 là LỊCH SỬ, không phải kế hoạch.** Hạn đã dời **18/09 → 02/10** (phương án A: chưa cắt gì; cắt ②/digest/health/login trở thành **cò súng có ngày: hết 20/09 mà cổng ra P2 chưa đạt thì ② tự rơi theo thứ tự §10**). Lịch hiện hành ở `01-plan.md` (bảng phase) và `STATE.md` §Phase gates. **Giữ nguyên, không sửa** — hai ràng buộc ở §0 và cách đóng khung cuối tuần gán nhãn ở §1.5 vẫn đúng và lịch mới dựa vào chúng; chỉ các NGÀY là sai.
+
 Lập 08/09. Thay thế mọi ước lượng lịch cũ trong đầu; `01-plan.md` và `STATE.md` vẫn là nguồn
 chính thức cho exit gate, file này chỉ sắp thứ tự và phân vai.
 
