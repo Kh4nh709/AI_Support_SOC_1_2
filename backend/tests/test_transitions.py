@@ -1271,7 +1271,6 @@ def test_no_triage_job_after_reopen(db):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="P2-T07 not merged")
 def test_escalate_pulls_in_real_correlated_alerts(db):
     """Without mocking correlated_cluster_ids: an alert on the same agent
     within +/-2h should be pulled into the case as a correlated head. Proves
@@ -1289,7 +1288,6 @@ def test_escalate_pulls_in_real_correlated_alerts(db):
     assert len(heads) == 2
 
 
-@pytest.mark.skip(reason="P2-T07 not merged")
 def test_escalate_truncates_real_correlated_alerts_at_cap(db, monkeypatch):
     """Same as test_escalate_truncates_at_max_alerts_per_case, but against the
     real correlation query instead of a mocked return value."""
