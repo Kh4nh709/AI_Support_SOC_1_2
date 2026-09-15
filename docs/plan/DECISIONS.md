@@ -1214,3 +1214,23 @@ Consequences:
   - **Bucket (b): charged to nobody.** Fourth and fifth card defects of mine in three days (DEC-067 carried two, DEC-072 one). All five are the same failure: a rule stated in one part of a card and contradicted in another. The cheap guard remains — when a design note changes what an acceptance measures, grep the card for that acceptance number.
   - **Merge-cadence check.** Two document corrections; no standing equality.
 Supersedes: — (corrects `P2-T09.prompt.md` acceptance 10 and the `Depends on` line in `P2-tasks.md`)
+
+## DEC-075 · 2026-09-15 · P2's gate: three of four items met; item 2 is blocked because the application's own database is five migrations behind and its own role cannot read `alerts`
+Scope: environment / exit gate
+Decided by: Director (the gate verdict and the diagnosis) · **Owner** (the execution step — escalated)
+Drafted by: Director (Opus 5)
+Propagated to: `INBOX.md` (2026-09-15 · P2 gate item 2 · BLOCKER) · `STATE.md` (Owner action; the P2 phase-gate row; the gate log) · **DEC-071** (its 20/09 ② trigger fires on this gate) · **DEC-029** (the P1 gate's "clean `soc_dev`" wording is exactly what let this hide) · **DEC-023/DEC-024** (`017` is what grants `app_rw`)
+Context: **measured this run, after merging P2-T10 and P2-T13.** The four items of `01-plan.md:9`, each run rather than reasoned about:
+  1. **G7 test green (< 30 s, LLM off) — MET.** `backend/tests/test_g7_llm_off.py` exists on `main` (5,619 bytes) and passes: **1 passed**, and the test prints its own figure — **`G7 elapsed: 0.144s`** against a 30 s threshold.
+  2. **Backfill, both halves — NOT MET,** and not for the reason anyone expected. See below.
+  3. **dedup / auto-close / simulate tests green — MET.** `test_dedup.py` **47 passed**; `test_autoclose.py` **41 passed**, of which **3** are `simulate` tests by name.
+  4. **18 transitions tested — MET.** `test_transitions.py` **47 passed, 2 skipped**, both skips declared (`:1274`, `:1292` — *P2-T07 not merged*, a forward dependency in the P3 window, DEC-041).
+  Item 2's blocker, measured: as `app_rw` through `DATABASE_URL`, `select count(*) from alerts` → `permission denied`, `from intake` → `relation "intake" does not exist`. As `user1` on the socket, `schema_migrations` holds **12 rows** (`001`…`012`) while `docs/Schema/` holds **17**; `pg_tables` shows the v1 set with no `intake`, no `source_cursor`, no `source_heartbeat`, and `enrich_cache` still present though `013` drops it; `role_table_grants` on `alerts` lists **only `user1`**.
+Decision: **The P2 exit gate is 3 of 4. It does not close today, and the missing item is an environment step, not code.** The execution is escalated: every table is empty (`alerts` 0, `jobs` 0, `cases` 0, `audit_events` 0, `enrich_cache` **0**), so `bash scripts/migrate.sh "$DATABASE_URL"` destroys nothing and `017` then grants `app_rw`. I did not run it: it changes the shared application database, and item 2 needs the Owner anyway because `P2-T13.prompt.md`'s scope-out makes the real archive replay Owner-run.
+Consequences:
+  - **Why 527 passing tests said nothing about this, which is the finding worth keeping.** Every suite builds its own database — `make test-db` creates `soc_test`, each card used `soc_p2t<nn>_test`, and the **P1 exit gate applied `013`–`017` to a *clean* `soc_dev`** (DEC-029's wording), meaning a freshly created one, not the one `DATABASE_URL` names. So the migrations are proven correct and have never been applied where the application runs. **Green everywhere, proving nothing about the one database that ships** — the project's named failure, found in its own environment rather than in a report.
+  - **The gate wording did not hide it; the gate wording is what exposed it.** The Owner's 15/09 re-write of item 2 asks for *one real `pull_once`* and *a real replay* rather than a test. A test-shaped item would have passed on fixtures and this would have surfaced in P4, with a pilot on it.
+  - **It bites DEC-071's trigger.** The ② cut fires automatically at end of **20/09** if this gate is not met. One `make migrate` plus two runs stands between P2 closing and ② being cut, so the item is dated, not open-ended.
+  - **P4 inherits the same database.** Fixing it now costs one command; fixing it during the pilot costs the pilot.
+  - **Merge-cadence check (DEC-043).** A gate verdict and an escalation; no standing equality across branches.
+Supersedes: — (records the P2 gate verdict of 15/09; does not change `01-plan.md:9`, which the Owner re-worded and which is satisfiable as written)
