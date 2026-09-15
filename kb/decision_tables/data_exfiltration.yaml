@@ -1,0 +1,18 @@
+# kb/decision_tables/data_exfiltration.yaml — SKELETON. Content is the Owner's + advisor's (§11).
+# reviewed_by/reviewed_at stay null until that sitting; while null the gate treats the table as absent
+# (architecture §3.10) and records decision_table_unreviewed:<category> in gate_result.warnings.
+category: data_exfiltration
+playbook: data_exfiltration_v1
+reviewed_by: null
+reviewed_at: null
+rules:
+  - id: dex-1
+    if: {severity: [low, medium], ioc_reputation: [not_found, clean], asset_criticality: [low, medium],
+         identity_privileged: ["false"], occurrence_lt: 50}
+    then: false_positive
+  - id: dex-2
+    if: {ioc_reputation: [malicious, suspicious]}
+    then: escalate
+  - id: dex-3
+    if: {rule_level_gte: 12}
+    then: escalate

@@ -1,0 +1,22 @@
+# kb/decision_tables/privilege_escalation.yaml — SKELETON. Content is the Owner's + advisor's (§11).
+# reviewed_by/reviewed_at stay null until that sitting; while null the gate treats the table as absent
+# (architecture §3.10) and records decision_table_unreviewed:<category> in gate_result.warnings.
+# DEC-055: sudo -> privilege_escalation classifies 57 clusters of rule 5402 (successful sudo,
+# level 3, routine administration) today; rootcheck -> privilege_escalation classifies 21 more
+# (rules 510/521). Neither is measurably wrong, so nothing is changed here — the Owner decides
+# whether a rule should name rule 5402 specifically. Not policy, same as the rest of this file.
+category: privilege_escalation
+playbook: privilege_escalation_v1
+reviewed_by: null
+reviewed_at: null
+rules:
+  - id: pre-1
+    if: {severity: [low, medium], ioc_reputation: [not_found, clean], asset_criticality: [low, medium],
+         identity_privileged: ["false"], occurrence_lt: 50}
+    then: false_positive
+  - id: pre-2
+    if: {ioc_reputation: [malicious, suspicious]}
+    then: escalate
+  - id: pre-3
+    if: {rule_level_gte: 12}
+    then: escalate
