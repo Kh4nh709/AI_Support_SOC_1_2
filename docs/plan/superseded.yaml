@@ -65,6 +65,7 @@ scan:
   exclude_completed_phases:
   - P0
   - P1
+  - P2   # closed 15/09, DEC-079 (DEC-049 retires a done phase's cards from the scan)
 rules:
 - id: dec-024-01
   dec: DEC-024(a) (supersedes DEC-023 item 3 and DEC-023 item 6's gate qualif
