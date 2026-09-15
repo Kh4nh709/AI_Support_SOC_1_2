@@ -97,8 +97,46 @@ def _branches() -> set[str]:
     return set(proc.stdout.split())
 
 
+def _rev(ref: str) -> str:
+    proc = subprocess.run(
+        ["git", "rev-parse", ref],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return proc.stdout.strip()
+
+
+def _on_main() -> bool:
+    """True on `main`, and also in a DETACHED worktree sitting at main's commit.
+
+    The `--abbrev-ref HEAD` form alone returns the literal string "HEAD" when
+    detached, which would skip invariant 3 in exactly the place it matters most:
+    `prompts/reviewer.md:11` mandates `git worktree add --detach` for the
+    shipping-state route (DEC-046/047), and the module docstring's own motivating
+    sentence is "Run in a detached worktree at `main`". Measured 15/09 in such a
+    worktree: `--abbrev-ref HEAD` -> "HEAD" while `rev-parse HEAD` == `rev-parse
+    main`. Comparing commits covers both. (The STATE.md-vs-`git show main:` form
+    was rejected: it goes silent whenever the board has uncommitted edits, which
+    is precisely while the Director is editing it.)
+    """
+    proc = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.stdout.strip() == "main":
+        return True
+    head, main = _rev("HEAD"), _rev("main")
+    return bool(head) and head == main
+
+
 _ROWS = _rows()
 _BRANCHES = _branches()
+_ON_MAIN = _on_main()
 
 
 def test_git_is_readable():
@@ -133,6 +171,13 @@ def test_dispatched_task_has_a_branch(task_id, status, line):
     )
 
 
+@pytest.mark.skipif(
+    not _ON_MAIN,
+    reason="invariant 3 only (DEC-073): it compares this checkout's STATE.md snapshot "
+    "against live git, but on a task branch `main` is the real ref while STATE.md is a "
+    "snapshot — so after any merge to `main` every open branch goes red through no fault "
+    "of its own. Invariants 1 and 2 are branch-safe and keep running everywhere.",
+)
 @pytest.mark.parametrize(
     "task_id",
     [r[0] for r in _ROWS if r[1] == "approved" and f"task/{r[0]}" in _BRANCHES],
