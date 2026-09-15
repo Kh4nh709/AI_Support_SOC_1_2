@@ -7,6 +7,60 @@ Everything below was run on this host as `user1` under `sg wazuh`. Nothing here 
 committed and **the manager has not been restarted** — the two commands that need root are
 in §4 and they are the Owner's.
 
+## 0 · 14/09 — read first: the manager described below no longer exists
+
+Measured 2026-09-14 22:15 as `user1`, at the Owner's instruction (Support Agent; the Owner's own
+report is that the current Wazuh output is `/data/wazuh/logs/alerts/alerts.json`):
+
+| thing | state on 14/09 |
+|---|---|
+| `/var/ossec` | **does not exist** — §1, §3, §4.1 and §6 name paths that are gone |
+| group `wazuh` (gid 124) | **does not exist** (`getent group wazuh` → nothing); every `sg wazuh` form in this file fails with "no such group" |
+| running manager | **yes, a new one** — first alert `rule 502 "Wazuh server started"` at 12:56:30Z, `manager.name` = `wazuh.manager` (was `IA1803`), ports 1514/1515/55000 listening; no `wazuh-manager` systemd unit, so §4.1's `systemctl restart wazuh-manager` has nothing to restart — how it is restarted is not visible from `user1` (`docker ps` → permission denied) |
+| deployment | **the official `wazuh-docker` single-node stack, 4.14.7** — `/opt/wazuh/wazuh-docker/single-node/docker-compose.yml`, world-readable. Services `wazuh.manager` (container `8e3772d039ed`), `wazuh.indexer` (`005bea3363a9`), `wazuh.dashboard` (`af6ba99bcec7`) |
+| its `ossec.conf` | **bind-mounted from the host**: `./config/wazuh_cluster/wazuh_manager.conf` → `/wazuh-config-mount/etc/ossec.conf`, which the image copies over `/var/ossec/etc/ossec.conf` **at every start**. Editing the copy inside the container is therefore reverted on the next restart, silently. **The heartbeat stanza is already in that host file** (`grep -c 'soc_heartbeat\|full_command'` → 2) and `<rule_dir>etc/rules</rule_dir>` is line 264 |
+| its `etc/rules/` | inside the **named volume `wazuh_etc`** — nothing on the host, but a `docker cp` into it survives `restart` and `docker rm` (only `compose down -v` destroys it) |
+| `bin/wazuh-logtest` | inside the container; needs `sudo docker exec`, since `/var/run/docker.sock` is `1001:1001` |
+| `/data/wazuh/logs/alerts/alerts.json` | mode 777, uid/gid 999 (no local name), readable by `user1`; 2,624 lines, 12:56–15:15Z |
+| `/data/wazuh/logs/alerts/2026/`, `/data/wazuh/logs/archives/` | `drwxr-x---` gid 999 — **not readable by `user1`** |
+| rule `100999` on the new manager | **0** hits in the file over 2 h 19 min **and 0 in the indexer** (`_count?q=rule.id:100999` → 0 of 2,968). **Cause identified 15/09: the stanza is applied — the rule is missing.** The `full_command` runs, but with no `<rule id="100999">` loaded nothing becomes an alert. Only `local_rules.xml` is outstanding |
+| rules `100301`–`100303` on the new manager | **0** hits; `/var/ossec/etc/rules/local_rules.xml` (§1 "staged") went with the tree — the authored content survives only as `conf/local_rules.xml` in the repo |
+| port 9400 (`INDEXER_URL`) | **dead.** The alert store is now the Wazuh indexer on **19200** (`ports: 19200:9200`), holding `wazuh-alerts-4.x-2026.09.14` with **2,968 documents** — **filebeat is shipping**. `:9200` is Graylog's OpenSearch (`CN = 79.79.79.11` / `CN = Graylog CA`), not ours |
+| the new CA, and a TLS trap | the root CA is `OU = Wazuh, O = Wazuh` (valid to 2036-09-11), copied to `conf/root-ca.pem` on 15/09. **The server certificate's only SAN is `DNS:wazuh.indexer`** — so `https://127.0.0.1:19200` fails with *"no alternative certificate subject name matches target host name"*, while `https://wazuh.indexer:19200` verifies and returns 401. §6.3 forbids an insecure mode, so the URL must use the name, with `127.0.0.1 wazuh.indexer` in `/etc/hosts` (root, one line) |
+| `/home/user1/archive/alerts-2026-08-08_09-07.jsonl` | **intact**, 113,379,904 bytes |
+
+What still stands: the rule content and the §5 logtest transcripts (they prove the file parses and
+matches on a 4.14.7 ruleset), and DEC-059's mechanism of record (§3 option B, `localfile`
+`full_command`). Everything path-, group- and restart-shaped in §1–§4 and §6 is superseded by §0.1 below — **do not
+run §4.1 as written**; it names a host path and a systemd unit that do not exist.
+
+### 0.1 · What actually remains, measured 15/09 — one command block, and it is the Owner's
+
+`/var/run/docker.sock` is `srw-rw---- 1001:1001`, so `user1` is denied and every line needs `sudo`.
+
+```bash
+# 1 · the ONLY outstanding half of the rules work: the rule file (the stanza is already applied)
+sudo docker cp conf/local_rules.xml 8e3772d039ed:/var/ossec/etc/rules/local_rules.xml
+sudo docker exec 8e3772d039ed chown wazuh:wazuh /var/ossec/etc/rules/local_rules.xml
+sudo docker exec 8e3772d039ed chmod 660 /var/ossec/etc/rules/local_rules.xml
+sudo docker restart 8e3772d039ed
+
+# 2 · the TLS name, so the app can verify instead of running insecure (§6.3 forbids insecure)
+echo '127.0.0.1 wazuh.indexer' | sudo tee -a /etc/hosts
+
+# 3 · verify, 20 minutes after the restart — two hits 600 s apart, not one
+grep -c '"id":"100999"' /data/wazuh/logs/alerts/alerts.json          # >= 2
+grep '"id":"100999"' /data/wazuh/logs/alerts/alerts.json | grep -o '"timestamp":"[^"]*"' | tail -3
+```
+
+**Do not** `docker cp` an edited `ossec.conf` into the container: the image overwrites it from
+`/opt/wazuh/wazuh-docker/single-node/config/wazuh_cluster/wazuh_manager.conf` at every start, so
+the change would disappear at the next restart with every command still exiting 0. That host file
+is where the heartbeat stanza already lives, and it is where any further manager-config change
+belongs. A read-only indexer account is still outstanding and is §6.3 work (DEC-065).
+
+The open questions are in `docs/plan/INBOX.md` 2026-09-14 · P2 / host and the 15/09 entry.
+
 ---
 
 ## 1 · State right now
