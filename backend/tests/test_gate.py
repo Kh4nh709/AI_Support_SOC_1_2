@@ -14,13 +14,17 @@ import itertools
 
 import pytest
 from app.security import gate, output_guard, wrap
+
 from tests.fakes.llm import TRIAGE_V2_ESCALATE, TRIAGE_V2_FALSE_POSITIVE
 
 NONCE = wrap.new_nonce()
 
 
 def _blocks(**text_by_source: str) -> dict[str, wrap.Block]:
-    return {source: wrap.untrusted_block(text, source, nonce=NONCE) for source, text in text_by_source.items()}
+    return {
+        source: wrap.untrusted_block(text, source, nonce=NONCE)
+        for source, text in text_by_source.items()
+    }
 
 
 def _facts_from(structured_basis: dict, **overrides) -> dict:
@@ -147,7 +151,9 @@ def test_step2_string_fields_compared_case_insensitively():
 
 
 def test_step2_occurrence_is_integer_equal_at_build_time():
-    basis = dict(TRIAGE_V2_ESCALATE["structured_basis"], occurrence_count="1")  # model sent a string
+    basis = dict(
+        TRIAGE_V2_ESCALATE["structured_basis"], occurrence_count="1"
+    )  # model sent a string
     parsed = dict(TRIAGE_V2_ESCALATE, structured_basis=basis)
     facts = _facts_from(TRIAGE_V2_ESCALATE["structured_basis"], occurrence_count=1)
     state = gate.start(parsed, facts, _escalate_blocks(), repaired=False)
@@ -165,7 +171,9 @@ def test_step2_occurrence_is_integer_equal_at_build_time():
 def test_step2_playbook_rule_applied_is_not_compared():
     basis = dict(TRIAGE_V2_ESCALATE["structured_basis"], playbook_rule_applied="not-in-facts")
     parsed = dict(TRIAGE_V2_ESCALATE, structured_basis=basis)
-    facts = _facts_from(TRIAGE_V2_ESCALATE["structured_basis"])  # facts carry no playbook_rule_applied key at all
+    facts = _facts_from(
+        TRIAGE_V2_ESCALATE["structured_basis"]
+    )  # facts carry no playbook_rule_applied key at all
     state = gate.start(parsed, facts, _escalate_blocks(), repaired=False)
 
     gate.step2_basis(state)
@@ -181,7 +189,11 @@ def test_step2_playbook_rule_applied_is_not_compared():
 
 def test_step3_invalid_quote_dropped_survivors_kept():
     good = TRIAGE_V2_FALSE_POSITIVE["reasons"][0]
-    bad = {"claim": "fabricated", "quote": "this text is nowhere in any block", "source": "rule_description"}
+    bad = {
+        "claim": "fabricated",
+        "quote": "this text is nowhere in any block",
+        "source": "rule_description",
+    }
     parsed = dict(TRIAGE_V2_FALSE_POSITIVE, reasons=[good, bad])
     facts = _facts_from(TRIAGE_V2_FALSE_POSITIVE["structured_basis"])
     state = gate.start(parsed, facts, _fp_blocks(), repaired=False)
@@ -418,7 +430,8 @@ def test_step6_disagree_forces():
     assert state.verdict == "escalate"
 
     gate.step6_verifier(
-        state, {"agree": False, "structured_only_verdict": "escalate", "reason": "insufficient basis"}
+        state,
+        {"agree": False, "structured_only_verdict": "escalate", "reason": "insufficient basis"},
     )
 
     assert state.verdict == "needs_review"
@@ -471,7 +484,9 @@ def test_step6_agrees_and_matches_keeps_verdict():
 
 
 def test_step6_compares_against_post_step4_verdict():
-    parsed, facts = _fp_parsed_and_facts(playbook_rule_applied=None)  # step 4 will force needs_review
+    parsed, facts = _fp_parsed_and_facts(
+        playbook_rule_applied=None
+    )  # step 4 will force needs_review
     state = _state_after_1_to_5(parsed, facts, _fp_blocks(), rule_check=_rule_check_no_rule_cited)
     assert state.verdict == "needs_review"
     assert state.proposed_verdict == "false_positive"
@@ -608,7 +623,9 @@ def test_gate_result_shape_and_forced_flag():
         state, {"agree": False, "structured_only_verdict": "escalate", "reason": "insufficient"}
     )
 
-    doc = gate.gate_result(state, prompt_version="abc123+deadbeef", playbook_used_effective="ssh_brute_force")
+    doc = gate.gate_result(
+        state, prompt_version="abc123+deadbeef", playbook_used_effective="ssh_brute_force"
+    )
 
     assert doc == {
         "version": 1,
@@ -655,7 +672,9 @@ def test_verdict_is_monotone():
     remaining steps must leave the verdict at needs_review — none may set it back
     to false_positive or escalate, even when every individual step's own
     admission conditions would otherwise be satisfied."""
-    parsed, facts = _fp_parsed_and_facts(playbook_rule_applied="sbf-1")  # all step-4 conditions hold
+    parsed, facts = _fp_parsed_and_facts(
+        playbook_rule_applied="sbf-1"
+    )  # all step-4 conditions hold
 
     def build_forced_state():
         state = gate.start(parsed, facts, _fp_blocks(), repaired=False)
