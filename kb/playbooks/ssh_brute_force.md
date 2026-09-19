@@ -31,7 +31,7 @@
 
 ## 5 · Ngữ cảnh làm đổi kết luận
 
-- `asset_context.criticality = crown_jewel` → hạ ngưỡng, đừng chờ đủ bằng chứng như máy thường.
+- `asset_context.criticality = high` → hạ ngưỡng, đừng chờ đủ bằng chứng như máy thường; `unknown` (không có trong kiểm kê) → **không** kết luận vô hại, xử lý như `high` cho tới khi kiểm kê trả lời.
 - `identity_context.is_privileged = true` cho tài khoản bị nhắm → nâng mức, kể cả khi chưa thành công.
 - `lookup_status` thiếu → **không** kết luận vô hại chỉ vì thiếu ngữ cảnh.
 
