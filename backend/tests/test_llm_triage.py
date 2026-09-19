@@ -295,6 +295,15 @@ def test_build_facts_defaults_when_context_columns_are_bare():
     assert facts["identity_privileged"] == "unknown"
 
 
+def test_build_facts_rejects_a_value_outside_the_closed_set():
+    """`assets.criticality` is DEC-004's closed set; a retired value (`crown_jewel`) is a
+    contract violation upstream and fails loudly rather than being laundered to unknown."""
+    with pytest.raises(ValueError):
+        T.build_facts(_inp(asset_context={"criticality": "crown_jewel"}), None)
+    with pytest.raises(ValueError):
+        T.build_facts(_inp(ioc_context={"reputation": "bad"}), None)
+
+
 # ────────────────────────────────────────────────────────────── the ① prompt
 def test_proposer_prompt_has_five_blocks_with_the_reason_sources():
     built = _build()
@@ -486,6 +495,33 @@ def test_no_correlation_emits_sentence_outside():
     facts = T.build_facts(_inp(), None)
     none = T.build_proposer_prompt(_inp(), facts, None, PLAYBOOK, REVIEWED, cfg=_cfg(), nonce=NONCE)
     assert B.SENTENCE_NO_CORRELATION in _residual(none.prompt.user)
+
+
+def test_correlation_caps_apply_under_budget_too():
+    """Phase-5's 20 rows / 5 samples are caps on the input, not budget cuts: nothing is
+    warned when a larger summary is trimmed to them."""
+    built = _build(correlation=_correlation(n_rows=25, n_samples=7))
+    residual = _residual(built.prompt.user)
+    assert residual.count("rule_id: 57") == 20
+    assert built.prompt.block_index["correlation_samples"].plain.count("alert_id=") == 5
+    assert not any(w in CUT_NAMES for w in built.warnings)
+
+
+def test_fresh_nonce_per_build_when_none_is_given():
+    facts = T.build_facts(_inp(), None)
+    first = T.build_proposer_prompt(_inp(), facts, None, PLAYBOOK, REVIEWED, cfg=_cfg())
+    second = T.build_proposer_prompt(_inp(), facts, None, PLAYBOOK, REVIEWED, cfg=_cfg())
+    assert first.prompt.nonce != second.prompt.nonce
+    assert re.fullmatch(r"[0-9a-f]{16}", first.prompt.nonce)
+    assert _lint(first.prompt.user, nonce=first.prompt.nonce) == []
+    assert _lint(first.prompt.user, nonce=second.prompt.nonce) != []  # the boundary is the nonce
+
+
+def test_empty_playbook_text_reads_as_no_playbook():
+    built = _build(playbook="")
+    assert "kb_playbook" not in built.prompt.block_index
+    assert B.SENTENCE_NO_PLAYBOOK in _residual(built.prompt.user)
+    assert built.warnings == ["no_playbook"]
 
 
 def test_correlation_rows_and_samples_rendering():
@@ -872,6 +908,57 @@ def test_repair_never_echoes_an_unexpected_key():
     assert "- <root>: unexpected key" in repair_user
     assert "- structured_basis: unexpected key" in repair_user
     assert _lint(repair_user, extra=T.REPAIR_CONSTANTS) == []
+
+
+def test_propose_scalar_json_is_not_an_object():
+    fake = RecordingLLM(responses=["42", "null"])
+    proposal = T.propose(fake, _build(), cfg=_cfg())
+    assert proposal.parsed is None and proposal.calls == 2
+    assert proposal.schema_errors == ["<root>: expected a JSON object"]
+
+
+def test_repair_unexpected_key_with_dots_maps_to_a_known_object():
+    """The key is the model's; a dot inside it must not fabricate a path segment. The
+    validator's message cannot tell a root key that *spells* a nested path from that
+    path, so `structured_basis.severity` at root lands on `structured_basis` — wrong
+    parent, still value-free; a key spelling nothing known lands on `<root>`."""
+    bad = dict(TRIAGE_V2_ESCALATE)
+    bad["structured_basis.severity"] = 1  # a root key that spells a nested path
+    bad["a.b.c"] = 2
+    reasons = [dict(TRIAGE_V2_ESCALATE["reasons"][0], **{"x.y": 3})]
+    bad["reasons"] = reasons
+    fake = RecordingLLM(responses=[bad, TRIAGE_V2_ESCALATE])
+    T.propose(fake, _build(), cfg=_cfg())
+    suffix = fake.calls[1]["user"].split(B.HEADING_REPAIR, 1)[1]
+    lines = [ln for ln in suffix.splitlines() if ln.startswith(B.BULLET)]
+    assert lines == [
+        "- reasons[]: unexpected key",
+        "- structured_basis: unexpected key",
+        "- <root>: unexpected key",
+    ]
+    assert "a.b" not in fake.calls[1]["user"] and "x.y" not in fake.calls[1]["user"]
+    assert _lint(fake.calls[1]["user"], extra=T.REPAIR_CONSTANTS) == []
+
+
+class _NoneCounterLLM(RecordingLLM):
+    """The real adapter's usage shape: two cache counters that may be `None`, `attempts`."""
+
+    def complete(self, **kwargs):
+        result = super().complete(**kwargs)
+        usage = dict(result.usage, prompt_cache_hit_tokens=None, reasoning_tokens=0, attempts=1)
+        return dataclasses.replace(result, usage=usage)
+
+
+def test_usage_sum_carries_none_counters_and_adds_the_rest():
+    fake = _NoneCounterLLM(responses=['{"suggested_action": "maybe"}', TRIAGE_V2_ESCALATE])
+    proposal = T.propose(fake, _build(), cfg=_cfg())
+    assert proposal.calls == 2
+    assert proposal.usage["attempts"] == 2
+    assert proposal.usage["reasoning_tokens"] == 0
+    assert proposal.usage["prompt_cache_hit_tokens"] is None
+    assert proposal.usage["prompt_tokens"] == sum(
+        len(c["system"]) + len(c["user"]) for c in fake.calls
+    )
 
 
 def test_repair_prompt_violation_is_a_permanent_error(monkeypatch):
