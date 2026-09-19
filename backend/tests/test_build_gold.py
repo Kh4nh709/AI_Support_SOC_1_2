@@ -330,6 +330,14 @@ def test_allocate_category_floor_topup_moves_from_largest():
     )
     assert "category floor 3: suspicious_login stays at 1 of 2 -- nothing can be moved" in table
 
+    # two donors with surplus: privilege_escalation comes first in PRIORITY order
+    # but ssh_brute_force holds the largest allocation, so ssh gives.
+    # proportional 8 x (4, 7, 1) / 12 = 2.67, 4.67, 0.67 -> 3, 5, 0; floor 2 lifts
+    # suspicious_login to min(2, pool 1) = 1, taken from ssh (5 -> 4), not priv.
+    pool2 = _pool({(PRIV, "medium"): 4, (SSH, "medium"): 7, (SUSP, "low"): 1})
+    sample = build_gold.allocate(pool2, 8, **_params(category_floor=2))
+    assert _by_stratum(sample) == {(PRIV, "medium"): 3, (SSH, "medium"): 4, (SUSP, "low"): 1}
+
     # floor 10 is unsatisfiable for ssh itself (min(10, 8) = 8 > its 4): a donor
     # never gives below its own floor, so nothing can be moved and the
     # proportional allocation stands -- reported by the table, never forced.
@@ -376,6 +384,52 @@ def test_allocate_returns_whole_pool_when_target_exceeds_it():
     sample = build_gold.allocate(pool, 100, **_params(unknown_cap_pct=100.0))
     assert sorted(row.cluster_id for row in sample) == sorted(row.cluster_id for row in pool)
     assert [row.cluster_id for row in sample] == sorted(row.cluster_id for row in sample)
+
+
+def test_allocate_never_exceeds_the_target_when_take_all_fills_the_room():
+    """Review finding: with the take-all rule on, the unknown medium/low draw
+    is bounded by the room left under the target, not only by the cap --
+    otherwise budget 4 on top of 6 crit+high would return 10 rows for 8."""
+    pool = _pool({(SSH, "high"): 6, (UNKNOWN, "medium"): 10})
+    sample = build_gold.allocate(pool, 8, **_params(unknown_cap_pct=50.0))
+    assert len(sample) == 8
+    assert _by_stratum(sample) == {(SSH, "high"): 6, (UNKNOWN, "medium"): 2}
+
+    # crit+high exactly at the target: nothing else may enter
+    pool = _pool({(SSH, "high"): 6, (UNKNOWN, "high"): 4, (UNKNOWN, "medium"): 10})
+    sample = build_gold.allocate(pool, 10, **_params(unknown_cap_pct=50.0))
+    assert _by_stratum(sample) == {(SSH, "high"): 6, (UNKNOWN, "high"): 4}
+
+
+@pytest.mark.parametrize("take_all", [True, False])
+@pytest.mark.parametrize("cap", [0.0, 25.0, 50.0, 100.0])
+@pytest.mark.parametrize("target", [1, 5, 8, 12, 40])
+def test_allocate_size_contract_across_branches(take_all, cap, target):
+    """Never more than min(target, len(pool)); exactly that unless the cap
+    binds (and then the table says so)."""
+    pool = _pool(
+        {
+            (UNKNOWN, "critical"): 1,
+            (UNKNOWN, "high"): 2,
+            (UNKNOWN, "medium"): 3,
+            (SSH, "high"): 1,
+            (SSH, "medium"): 3,
+            (PRIV, "low"): 2,
+        }
+    )
+    params = _params(unknown_cap_pct=cap, take_all_crit_high=take_all, category_floor=1)
+    sample = build_gold.allocate(pool, target, **params)
+    bound = min(target, len(pool))
+    assert len(sample) <= bound
+    assert len({row.cluster_id for row in sample}) == len(sample)
+    assert [row.cluster_id for row in sample] == sorted(row.cluster_id for row in sample)
+    table = build_gold.coverage_table(
+        pool, sample, denominator_label="G1", params=_alloc_params(target, **params)
+    )
+    if len(sample) < bound:
+        assert f"sample short: {len(sample)} of {bound}" in table
+    else:
+        assert "sample short" not in table
 
 
 def _stable_pool() -> list:
@@ -755,6 +809,20 @@ def test_g2_without_recorded_windows_exits_3_before_any_connection(tmp_path, mon
         "x",
     )
     assert rc == 3
+
+
+def test_malformed_dsn_exits_2_without_printing_it(tmp_path, monkeypatch, capsys):
+    """`psycopg.connect("x")` fails before any server is reached (a
+    ProgrammingError, not an OperationalError): still exit 2, no traceback,
+    no DSN on either stream, no files."""
+    rc, out = _run_main(
+        tmp_path, monkeypatch, _mixed_docs(), "--check-db", "--dsn", "x-not-a-dsn-secret"
+    )
+    assert rc == build_gold.EXIT_ARCHIVE == 2
+    captured = capsys.readouterr()
+    assert "DSN unreadable" in captured.err
+    assert "x-not-a-dsn-secret" not in captured.out + captured.err
+    assert not (out / "gold_candidates.csv").exists()
 
 
 def test_no_dsn_exits_2_without_printing_one(tmp_path, monkeypatch, capsys):

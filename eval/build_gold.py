@@ -229,6 +229,12 @@ class CheckDb:
     missing: tuple[str, ...]
 
 
+class DsnUnreadable(Exception):
+    """`psycopg.connect` failed -- a DSN libpq cannot parse (`ProgrammingError`)
+    or a server it cannot reach (`OperationalError`); the DSN itself is never
+    carried in the message."""
+
+
 class UntaggedWindow(Exception):
     def __init__(self, window: LabWindow, untagged: int) -> None:
         super().__init__(window.scenario_id)
@@ -598,8 +604,11 @@ def _plan(
                 notes.append(
                     f"unknown cap exceeded by the take-all rule: {taken_unknown} of {budget}"
                 )
+            room = effective_target - n_crit_high
             if UNKNOWN in categories:
-                split_category(UNKNOWN, max(0, budget - taken_unknown), ("medium", "low"))
+                split_category(
+                    UNKNOWN, min(max(0, budget - taken_unknown), room), ("medium", "low")
+                )
             remaining = effective_target - sum(plan.values())
             fixed = {
                 category: sum(plan.get((category, severity), 0) for severity in CRIT_HIGH)
@@ -635,6 +644,7 @@ def _plan(
                 split_category(category, alloc[category], SEVERITIES)
 
     planned = sum(plan.values())
+    assert planned <= effective_target, (planned, effective_target)
     if planned < effective_target:
         notes.append(
             f"sample short: {planned} of {effective_target} -- the unknown cap (budget "
@@ -793,8 +803,8 @@ def coverage_table(
         )
     else:
         lines.append(
-            f"- {label}'s severity mix is not enriched (take-all rule off): {sample_ch} of "
-            f"{n_sample} crit+high against {pool_ch} of {n_pool} in the pool"
+            f"- {label}'s severity mix is not enriched by design (take-all rule off): "
+            f"{sample_ch} of {n_sample} against {pool_ch} of {n_pool}"
         )
     lines.extend(extra_sample_lines)
     lines.append("- allocator notes: " + ("; ".join(plan.notes) if plan.notes else "none"))
@@ -1027,7 +1037,10 @@ def write_outputs(
 def _read_only_connection(dsn: str) -> Iterator[psycopg.Connection]:
     """One transaction, `SET TRANSACTION READ ONLY` first -- this script never
     writes a row, and the server enforces it."""
-    conn = psycopg.connect(dsn)
+    try:
+        conn = psycopg.connect(dsn)
+    except psycopg.Error as exc:
+        raise DsnUnreadable(type(exc).__name__) from None
     try:
         conn.execute("SET TRANSACTION READ ONLY")
         yield conn
@@ -1174,8 +1187,8 @@ def main(argv: list[str] | None = None) -> int:
                         pool=g2_pool,
                         sample=g2_sample,
                     )
-        except psycopg.OperationalError as exc:
-            print(f"build_gold: DSN unreachable: {type(exc).__name__}", file=sys.stderr)
+        except DsnUnreadable as exc:
+            print(f"build_gold: DSN unreadable: {exc}", file=sys.stderr)
             return EXIT_ARCHIVE
         except UntaggedWindow as exc:
             w = exc.window
