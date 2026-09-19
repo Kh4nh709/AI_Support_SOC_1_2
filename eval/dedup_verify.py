@@ -52,7 +52,7 @@ import argparse
 import json
 import sys
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -82,7 +82,17 @@ ClusterKey = tuple[str, str, str, str]
 
 @dataclass
 class Cluster:
-    """One offline cluster: the open-cluster window the fold tracked for one key."""
+    """One offline cluster: the open-cluster window the fold tracked for one key.
+
+    `members` is every alert id of the cluster in fold order, and `members[0]`
+    is the head **by construction**: `fold_clusters` sorts by
+    `(alert_time, alert_id)` before folding, so the alert that opens a cluster
+    is its earliest one -- there is no second "head" field to keep in step.
+    After the fold `count == len(members)` for every cluster (a test, not an
+    assumption). The report (`build_report`/`format_json`) never carries
+    `members`: it is 3,051 per-day counts on the archive, not 92,011 ids --
+    the ids are `eval/build_gold.py`'s to write (DEC-084).
+    """
 
     key: ClusterKey
     first_seen: datetime
@@ -92,6 +102,7 @@ class Cluster:
     #: joining -- idle_gap | max_age | max_size | None (still open when the
     #: fold ran out of alerts, i.e. it hit no ceiling at all).
     closed_by: str | None = None
+    members: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -148,8 +159,10 @@ def fold_clusters(alerts: list[Alert], cfg: config.Config) -> list[Cluster]:
     """Design note 2's fold, over alerts already read from the archive.
 
     Sorted by `alert_time` (stable, then by `alert_id`) so the fold sees each
-    key's alerts in the order they actually fired. The three ceilings are read
-    from `cfg` -- this function never hardcodes a minute, an hour or a count.
+    key's alerts in the order they actually fired -- which is also what makes
+    `Cluster.members[0]` the head: the opening alert is the earliest. The
+    three ceilings are read from `cfg` -- this function never hardcodes a
+    minute, an hour or a count.
     """
     ordered = sorted(alerts, key=lambda alert: (alert.alert_time, alert.alert_id))
     idle_gap = timedelta(minutes=cfg.DEDUP_IDLE_GAP_MINUTES)
@@ -172,11 +185,17 @@ def fold_clusters(alerts: list[Alert], cfg: config.Config) -> list[Cluster]:
         if head is None or reason is not None:
             if head is not None:
                 head.closed_by = reason
-            cluster = Cluster(key=key, first_seen=alert.alert_time, last_seen=alert.alert_time)
+            cluster = Cluster(
+                key=key,
+                first_seen=alert.alert_time,
+                last_seen=alert.alert_time,
+                members=[alert.alert_id],
+            )
             open_by_key[key] = cluster
             all_clusters.append(cluster)
         else:
             head.count += 1
+            head.members.append(alert.alert_id)
             head.last_seen = alert.alert_time
     return all_clusters
 
