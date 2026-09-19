@@ -1,0 +1,9 @@
+## Alert
+- alert_id: 1786903016.121311
+- rule: 40112 · Multiple authentication failures followed by a success.
+- severity: critical
+- category: ssh_brute_force
+
+<untrusted_data nonce="0123456789abcdef" source="rule_description">
+Multiple authentication failures followed by a success.
+</untrusted_data nonce="0123456789abcdef">

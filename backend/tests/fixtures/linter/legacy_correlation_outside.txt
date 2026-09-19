@@ -1,0 +1,11 @@
+## Alert
+- alert_id: 1786903016.121311
+- severity: critical
+- category: ssh_brute_force
+
+## Tương quan ±2h
+- 5710 · Accepted password for user1 from 127.0.0.1 port 48104 ssh2
+
+<untrusted_data nonce="0123456789abcdef" source="correlation_samples">
+same srcip, 12 clusters in the last two hours
+</untrusted_data nonce="0123456789abcdef">

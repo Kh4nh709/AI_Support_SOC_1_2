@@ -1,0 +1,47 @@
+## Alert
+
+alert_id: 1786903016.121311
+
+rule_id: 40112 · rule_level: 12
+
+severity: critical · category: ssh_brute_force
+
+occurrence_count: 3
+
+alert_time: 2026-08-16T17:56:56+00:00
+
+mitre: T1110
+
+agent_id: 001
+
+<untrusted_data nonce="0123456789abcdef" source="rule_description" alert_id="1786903016.121311">
+Multiple authentication failures followed by a success.
+</untrusted_data nonce="0123456789abcdef">
+
+## Ngữ cảnh
+
+<untrusted_data nonce="0123456789abcdef" source="context" alert_id="1786903016.121311">
+hostname: user1-IA1803, role: workstation, owner: (unassigned)
+</untrusted_data nonce="0123456789abcdef">
+
+ioc: không có trong cơ sở dữ liệu nội bộ — vắng mặt không phải bằng chứng vô hại
+
+<untrusted_data nonce="0123456789abcdef" source="wazuh_raw_log" alert_id="1786903016.121311">
+Aug 16 17:56:55 user1-IA1803 sshd[136570]: Accepted password for user1 from 127.0.0.1 port 48104 ssh2
+</untrusted_data nonce="0123456789abcdef">
+
+## Tương quan ±2h
+
+<untrusted_data nonce="0123456789abcdef" source="correlation_samples">
+5710 alerts, 12 clusters, same srcip, last seen 2026-08-16T17:50:00+00:00
+</untrusted_data nonce="0123456789abcdef">
+
+## Playbook
+
+<untrusted_data nonce="0123456789abcdef" source="kb_playbook" category="ssh_brute_force">
+SSH brute force: check occurrence_count and asset_criticality before escalating.
+</untrusted_data nonce="0123456789abcdef">
+
+## Yêu cầu
+
+Trả về DUY NHẤT một đối tượng JSON theo schema triage_v2.
