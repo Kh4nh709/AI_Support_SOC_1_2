@@ -339,6 +339,28 @@ def test_scan_never_mutates_and_never_raises():
     detector.scan([garbage_block])  # must not raise
 
 
+class _FakeBlock:
+    def __init__(self, plain, source="context", truncated=False):
+        self.plain, self.source, self.truncated = plain, source, truncated
+
+
+@pytest.mark.parametrize("bad_plain", [None, b"\x00\xff", 123])
+def test_scan_never_raises_on_non_str_plain(bad_plain):
+    assert detector.scan([_FakeBlock(bad_plain)]) == []
+
+
+def test_hidden_chars_counted_once():
+    findings = detector.scan([make_block("hello\u200bworld")])
+    hidden = [f for f in findings if f.category == "obfuscation_hidden_chars"]
+    assert len(hidden) == 1
+    assert hidden[0].pattern != "heuristic:hidden_chars"
+    assert hidden[0].level == "medium"
+
+    findings_two = detector.scan([make_block("a\u200bb\u200cc")])
+    hidden_two = [f for f in findings_two if f.category == "obfuscation_hidden_chars"]
+    assert len(hidden_two) == 2
+
+
 def test_no_verdict_vocabulary_in_module():
     module_path = (
         pathlib.Path(__file__).resolve().parent.parent / "app" / "security" / "detector.py"

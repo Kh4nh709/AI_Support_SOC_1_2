@@ -39,7 +39,7 @@ _MATCH_CAP = 80
 class Finding:
     category: str  # instruction_override | role_override | fake_role_marker | prompt_exfiltration |
     # forbidden_action_request | delimiter_escape_attempt | obfuscation_hidden_chars |
-    # possible_obfuscation | delimiter_lookalike | nonce_shaped_token | fake_truncation_marker |
+    # possible_obfuscation | nonce_shaped_token | fake_truncation_marker |
     # role_marker_flood | imperative_density
     pattern: str  # the regex source or "heuristic:<name>"
     matched_text: str  # <=80 chars of the match -- attacker text; stored in llm_runs, never printed
@@ -285,26 +285,35 @@ def scan(blocks: Iterable[Block]) -> list[Finding]:
     """Findings only — never mutates `blocks`, never raises, never decides."""
     findings: list[Finding] = []
     for block in blocks:
-        text = block.plain if isinstance(block.plain, str) else ""
+        if not isinstance(block.plain, str):
+            continue  # design note 4: None/bytes/int text is no text -- no findings, no raise
+        text = block.plain
         source = block.source if isinstance(block.source, str) else ""
-        for pattern, category in PATTERNS:
-            for m in pattern.finditer(text):
-                findings.append(
-                    Finding(
-                        category=category,
-                        pattern=pattern.pattern,
-                        matched_text=m.group(0)[:_MATCH_CAP],
-                        source=source,
-                        level=_REGEX_CATEGORY_LEVEL[category],
-                    )
-                )
+        regex_findings = [
+            Finding(
+                category=category,
+                pattern=pattern.pattern,
+                matched_text=m.group(0)[:_MATCH_CAP],
+                source=source,
+                level=_REGEX_CATEGORY_LEVEL[category],
+            )
+            for pattern, category in PATTERNS
+            for m in pattern.finditer(text)
+        ]
+        findings.extend(regex_findings)
+        # design note 6 (DEC-092): a heuristic that rediscovers a regex hit on the
+        # same (source, category, matched_text) is a duplicate, not a second finding.
+        seen = {(f.source, f.category, f.matched_text) for f in regex_findings}
         for heuristic in HEURISTICS:
             for category, pattern_name, matched_text, finding_level in heuristic(block):
+                matched_text = matched_text[:_MATCH_CAP]
+                if (source, category, matched_text) in seen:
+                    continue
                 findings.append(
                     Finding(
                         category=category,
                         pattern=pattern_name,
-                        matched_text=matched_text[:_MATCH_CAP],
+                        matched_text=matched_text,
                         source=source,
                         level=finding_level,
                     )
