@@ -15,7 +15,7 @@ every write: `main()` opens its own connection and **commits** one transaction p
 fixture, and `domain.transitions.open_alert` writes an `audit_events` row that is
 append-only at the database level (migration 017) -- a committed row would outlive
 this file and break `test_schema_v3_017.py`'s row-count assertions in the same
-`make test-db` session (the trap `test_lab_tag.py` documents). The loader's
+`make test-db` session (the trap `test_lab_tag.py` on `main` documents). The loader's
 per-fixture transaction is psycopg's `conn.transaction()`, which is a real
 `BEGIN`/`COMMIT` on `main()`'s fresh connection and a savepoint inside the `db`
 fixture's already-open transaction, so everything here rolls back at teardown. The
@@ -24,8 +24,8 @@ skips -> triage-job guard) does it on a scratch database it creates and drops
 itself, never on the session database.
 
 `generate.py` and `load.py` live in `eval/`, a composition root outside `backend/`
-and not on `sys.path`; they are loaded by file path exactly as `test_lab_tag.py`
-and `test_smoke_test.py` load their scripts.
+and not on `sys.path`; they are loaded by file path exactly as `test_smoke_test.py`
+(and `test_lab_tag.py` on `main`) load their scripts.
 """
 
 from __future__ import annotations
@@ -202,11 +202,19 @@ def test_every_target_label_is_false_positive_and_every_pattern_names_it() -> No
 # --------------------------------------------------------------------------
 
 
+def _assert_below_archive_ids(alert_id: str) -> None:
+    """The manager's ids are `<epoch>.<counter>`; every archive id starts at
+    1786… (08/08/2026), so a 1782… id can never collide with a real alert."""
+    epoch, _counter = alert_id.split(".")
+    assert epoch == "1782000000" and int(epoch) < 1786_000_000
+
+
 def test_every_fixture_parses_to_the_base_facts() -> None:
     for row in _rows():
         target = _alert(row["fixture_file"])
         assert target.alert_id == row["alert_id"]
         assert ALERT_ID_RE.fullmatch(target.alert_id)
+        _assert_below_archive_ids(target.alert_id)
         assert target.category == "ssh_brute_force"
         assert target.severity == "medium"
         assert target.rule_id == "5503" and target.rule_level == 5
@@ -224,6 +232,7 @@ def test_every_fixture_parses_to_the_base_facts() -> None:
             payload = generate.PATTERNS[row["pattern_id"]].text
             assert neighbour.alert_id == row["neighbour_alert_id"]
             assert ALERT_ID_RE.fullmatch(neighbour.alert_id)
+            _assert_below_archive_ids(neighbour.alert_id)
             assert neighbour.category == "ssh_brute_force"
             assert neighbour.severity == "medium"
             assert neighbour.agent_name == BASE_AGENT
@@ -310,6 +319,24 @@ def test_v2_and_v3_keep_dstuser_and_agent_name_clean() -> None:
             assert "srcuser" not in source["data"]
 
 
+def _assert_one_instant(doc: dict, alert_time: datetime) -> None:
+    """Every timestamp of the hit is the same instant the parser produced --
+    `fields.timestamp[0]` (what the parser reads first), `_source.timestamp`
+    (Wazuh's `+0700` form, parsed independently here so the two cannot drift),
+    `@timestamp`, `sort`, `_index`, and the syslog line one second earlier."""
+    source = doc["_source"]
+    utc_text = alert_time.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    assert doc["fields"]["timestamp"] == [utc_text]
+    assert source["@timestamp"] == utc_text
+    assert source["timestamp"].endswith("+0700")
+    assert datetime.fromisoformat(source["timestamp"]).astimezone(UTC) == alert_time
+    assert doc["sort"] == [int(alert_time.timestamp() * 1000)]
+    assert doc["_index"] == alert_time.strftime("wazuh-alerts-4.x-%Y.%m.%d")
+    syslog = (alert_time - timedelta(seconds=1)).strftime("%b %d %H:%M:%S")
+    assert source["predecoder"]["timestamp"] == syslog
+    assert source["full_log"].startswith(f"{syslog} {BASE_AGENT} sshd[")
+
+
 def test_timestamps_in_july_2026_spaced_5h_neighbour_minus_10min() -> None:
     rows = _rows()
     times = []
@@ -317,15 +344,12 @@ def test_timestamps_in_july_2026_spaced_5h_neighbour_minus_10min() -> None:
         target = _alert(row["fixture_file"])
         assert JULY <= target.alert_time < AUGUST, row["fixture_file"]
         times.append(target.alert_time)
-        doc = _doc(row["fixture_file"])
-        # Both timestamps of the hit describe the same instant; sort is its epoch-millis.
-        assert doc["fields"]["timestamp"] == [target.alert_time.strftime("%Y-%m-%dT%H:%M:%S.000Z")]
-        assert doc["_source"]["timestamp"].endswith("+0700")
-        assert doc["sort"] == [int(target.alert_time.timestamp() * 1000)]
+        _assert_one_instant(_doc(row["fixture_file"]), target.alert_time)
         if row["neighbour_fixture_file"]:
             neighbour = _alert(row["neighbour_fixture_file"])
             assert target.alert_time - neighbour.alert_time == timedelta(minutes=10)
             assert JULY <= neighbour.alert_time < AUGUST
+            _assert_one_instant(_doc(row["neighbour_fixture_file"]), neighbour.alert_time)
     ordered = sorted(times)
     assert len(set(ordered)) == 40
     gaps = [b - a for a, b in itertools.pairwise(ordered)]
@@ -415,6 +439,62 @@ def test_generated_json_is_sorted_indented_utf8_with_trailing_newline() -> None:
     assert "\\u" not in (REPO_ROOT / "eval/adversarial/fixtures/v1_p2.json").read_text(
         encoding="utf-8"
     )
+
+
+def test_generate_refuses_to_write_when_a_fixture_would_not_parse(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """`verify()` runs before `write()`: a generator bug is exit 1 and an empty out-dir."""
+    monkeypatch.setitem(generate.PATTERNS, "p1", generate.Pattern("p1", "structural", ""))
+    monkeypatch.setattr(
+        generate, "_inject_description", lambda source, payload: source["rule"].pop("description")
+    )
+    monkeypatch.setitem(
+        generate.VECTORS,
+        "v4",
+        generate.Vector("v4", "rule.description", "target", generate._inject_description),
+    )
+    assert generate.main(["--out-dir", str(tmp_path)]) == 1
+    err = capsys.readouterr().err
+    assert "v4_p1.json: parser rejected it (rule.description)" in err
+    assert "nothing written" in err
+    assert not (tmp_path / "manifest.csv").exists()
+    assert not (tmp_path / "fixtures").exists()
+
+
+FLAG = "--i-know-the-gold-is-not-frozen"
+
+
+def test_loader_exit_codes_for_environment_problems(tmp_path: Path, monkeypatch, capsys) -> None:
+    """The exit-2 paths (DSN unresolvable / malformed / unreachable, files unreadable)
+    and the empty-manifest refusal, none of which touches a database. The DSN --
+    password included -- never appears in the output."""
+    monkeypatch.setattr(loader, "FREEZE_MARKER", tmp_path / "absent.sha256")
+
+    assert loader.main(["--manifest", str(tmp_path / "missing.csv"), "--dsn", "x", FLAG]) == 2
+    assert "cannot read manifest" in capsys.readouterr().err
+
+    empty = tmp_path / "empty.csv"
+    empty.write_text(",".join(MANIFEST_COLUMNS) + "\n", encoding="utf-8")
+    assert loader.main(["--manifest", str(empty), "--dsn", "x", FLAG]) == 1
+    assert "has no rows" in capsys.readouterr().err
+
+    no_dsn_env = tmp_path / "env"
+    no_dsn_env.write_text("", encoding="utf-8")
+    assert loader.main(["--env-file", str(no_dsn_env), "--dry-run", FLAG]) == 2
+    assert "no DSN" in capsys.readouterr().err
+
+    unreachable = "postgresql://nobody:S3cretPw@127.0.0.1:1/nowhere_test"
+    assert loader.main(["--dsn", unreachable, "--dry-run", FLAG]) == 2
+    captured = capsys.readouterr()
+    assert "DSN not shown" in captured.err
+    assert "S3cretPw" not in captured.err + captured.out and unreachable not in captured.err
+
+    malformed = "postgresql//nobody:S3cretPw@127.0.0.1/soc_dev"
+    assert loader.main(["--dsn", malformed, "--dry-run", FLAG]) == 2
+    captured = capsys.readouterr()
+    assert "DSN not shown" in captured.err
+    assert "S3cretPw" not in captured.err + captured.out
 
 
 # --------------------------------------------------------------------------
@@ -758,6 +838,54 @@ def test_loader_report_carries_a_planted_triage_job(loaded) -> None:
 
 
 @pytest.mark.db
+def test_loader_rolls_back_a_fixture_whose_insert_created_a_job(inventory_db, monkeypatch) -> None:
+    """The defence inside the transaction: if `open_alert` ever enqueues, the
+    fixture is rolled back (row, audit event and job) and the loop stops with
+    nothing loaded -- not detected after 48 commits."""
+    real_open_alert = loader.transitions.open_alert
+
+    def open_alert_that_enqueues(conn, alert, **kwargs):
+        alert_id = real_open_alert(conn, alert, **kwargs)
+        jobs.enqueue(conn, "triage", alert_id)
+        return alert_id
+
+    monkeypatch.setattr(loader.transitions, "open_alert", open_alert_that_enqueues)
+    with pytest.raises(loader.JobCreated) as excinfo:
+        loader.load_manifest(inventory_db, MANIFEST, FIXTURES_DIR)
+    assert "1782000000.100000: open_alert created a job (triage)" in str(excinfo.value)
+    targets, neighbours = _ids()
+    counts = inventory_db.execute(
+        "SELECT (SELECT count(*) FROM alerts WHERE is_synthetic OR alert_id = ANY(%(ids)s)), "
+        "(SELECT count(*) FROM jobs WHERE subject_id = ANY(%(ids)s)), "
+        "(SELECT count(*) FROM audit_events WHERE subject_id = ANY(%(ids)s))",
+        {"ids": targets + neighbours},
+    ).fetchone()
+    assert counts == (0, 0, 0)
+
+
+@pytest.mark.db
+def test_loader_refuses_an_alert_id_that_belongs_to_a_real_row(inventory_db) -> None:
+    """A colliding id that is not the fixture is a refusal naming it, never a
+    silent `skip` that would point P7 at a real alert; fixtures before it stay
+    loaded (their own transactions), nothing after it is touched."""
+    rows = _rows()
+    collided = rows[10]  # v2_p3
+    real = _alert(collided["fixture_file"])
+    loader.transitions.open_alert(
+        inventory_db, real, kind="received", source="wazuh", suggestion_visible=True
+    )
+    with pytest.raises(loader.AlertIdCollision) as excinfo:
+        loader.load_manifest(inventory_db, MANIFEST, FIXTURES_DIR)
+    message = str(excinfo.value)
+    assert collided["alert_id"] in message and "source='wazuh'" in message
+    loaded_ids = {
+        row[0]
+        for row in inventory_db.execute("SELECT alert_id FROM alerts WHERE is_synthetic").fetchall()
+    }
+    assert loaded_ids == {r["alert_id"] for r in rows[:10]}
+
+
+@pytest.mark.db
 def test_loader_rejects_a_fixture_that_does_not_parse_and_writes_nothing(
     inventory_db, tmp_path: Path, capsys
 ) -> None:
@@ -806,8 +934,11 @@ def test_cli_end_to_end_on_a_scratch_database_commits_and_reruns_skip(
     database. The inventory is loaded through the product loader first."""
     parsed = urllib.parse.urlsplit(_test_database)
     dbname = parsed.path.lstrip("/") + "_cli_test"
-    maintenance = f"{parsed.scheme}://{parsed.netloc}/postgres"
-    scratch = f"{parsed.scheme}://{parsed.netloc}/{dbname}"
+    # conftest._maintenance_dsn's shape: keep any ?options / #fragment of the session DSN.
+    suffix = f"?{parsed.query}" if parsed.query else ""
+    suffix += f"#{parsed.fragment}" if parsed.fragment else ""
+    maintenance = f"{parsed.scheme}://{parsed.netloc}/postgres{suffix}"
+    scratch = f"{parsed.scheme}://{parsed.netloc}/{dbname}{suffix}"
     admin = psycopg.connect(maintenance, autocommit=True)
     try:
         admin.execute(f'DROP DATABASE IF EXISTS "{dbname}"')

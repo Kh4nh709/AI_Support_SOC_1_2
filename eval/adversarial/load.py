@@ -30,7 +30,11 @@ transition (the `triage` job is created there -- and a `triage` job is exactly
 how the model would see G3 before P7), no `intake` row (a fixture was never
 received; G9/G12 are about received documents), no job of any kind. After the
 loop the loader counts `triage` jobs over the loaded ids and refuses (exit 1) on
-anything but zero -- a defence against a future `open_alert` that creates one.
+anything but zero -- the card's defence against a future `open_alert` that
+creates one; because that count runs after the per-fixture commits, the real
+defence sits inside each transaction: a job of any type for the fixture just
+inserted raises, the fixture rolls back, and the loop stops before anything
+reaches a worker.
 
 The per-fixture transaction is psycopg's `conn.transaction()`: `BEGIN`/`COMMIT`
 on the fresh connection `main()` opens, a savepoint when a test runs the loader
@@ -44,9 +48,11 @@ is deliberately unpleasant. Never run this against `soc_dev` before the freeze,
 with or without the flag. A DSN is read, never printed.
 
 Exit codes: 0 done (including a run that skipped everything); 1 refused --
-freeze marker absent, a fixture the parser rejects, a `triage` job found; 2 the
-DSN could not be resolved, the database could not be reached, or the manifest
-or a fixture file could not be read.
+freeze marker absent, a fixture the parser rejects, an `alert_id` that exists
+and is not that fixture, a job created for a fixture (rolled back), a `triage`
+job found after the loop, a concurrent insert; 2 the DSN could not be resolved
+or was malformed, the database could not be reached, or the manifest or a
+fixture file could not be read.
 """
 
 from __future__ import annotations
@@ -195,10 +201,24 @@ def build_context(conn: psycopg.Connection, alert: Alert) -> AlertContext:
     )
 
 
-def _exists(conn: psycopg.Connection, alert_id: str) -> bool:
-    return (
-        conn.execute("SELECT 1 FROM alerts WHERE alert_id = %s", (alert_id,)).fetchone() is not None
-    )
+class AlertIdCollision(Refusal):
+    """A row with a fixture's `alert_id` exists and is not that G3 fixture."""
+
+
+class JobCreated(Refusal):
+    """`open_alert` created a job for a fixture -- the transaction is rolled back."""
+
+
+def _existing_row(conn: psycopg.Connection, alert_id: str) -> tuple | None:
+    """`(is_synthetic, source, _adversarial tag)` of the row with this id, or None.
+    The card's idempotency check is `SELECT 1 … WHERE alert_id = %s`; this one
+    also reads what the row is, so a colliding id that is *not* the fixture is
+    a refusal rather than a silent `skip` that would point P7 at a real alert."""
+    return conn.execute(
+        "SELECT is_synthetic, source, raw_payload->>'_adversarial' FROM alerts "
+        "WHERE alert_id = %s",
+        (alert_id,),
+    ).fetchone()
 
 
 #: The six columns the A5 transition sets (transitions.py:337-347), plus `is_synthetic`.
@@ -236,6 +256,19 @@ def insert_synthetic(conn: psycopg.Connection, alert: Alert) -> None:
             alert.alert_id,
         ),
     )
+    # The defence, inside the transaction: a job of any type for this fixture
+    # means `open_alert` (or something it calls) now enqueues -- raise, and the
+    # caller's `conn.transaction()` rolls this fixture back before it is durable.
+    # The post-loop count in `load_planned` is the belt over everything loaded.
+    created = conn.execute(
+        "SELECT job_type FROM jobs WHERE subject_id = %s ORDER BY job_id", (alert.alert_id,)
+    ).fetchall()
+    if created:
+        kinds = ", ".join(row[0] for row in created)
+        raise JobCreated(
+            f"{alert.alert_id}: open_alert created a job ({kinds}) -- G3 must never reach a "
+            "worker; the fixture was rolled back and nothing after it was loaded"
+        )
 
 
 def count_triage_jobs(conn: psycopg.Connection, alert_ids: Sequence[str]) -> int:
@@ -253,22 +286,37 @@ def load_planned(
     out: TextIO = sys.stdout,
 ) -> LoadReport:
     """One transaction per fixture; `dry_run` only reads (the existence check) and
-    prints the plan. The `triage` count is reported, never asserted here --
-    `main()` refuses on it; a test asserts it directly."""
+    prints the plan. A fixture whose insert created a job is rolled back and the
+    loop stops (`JobCreated`); the post-loop `triage` count over every planned id
+    is reported here and refused by `main()` -- a test asserts it directly."""
     loaded_targets = loaded_neighbours = skipped = 0
     for item in planned:
         label = (
             f"{item.alert.alert_id} {item.vector}/{item.pattern_id} {item.role} {item.path.name}"
         )
         with conn.transaction():
-            if _exists(conn, item.alert.alert_id):
+            existing = _existing_row(conn, item.alert.alert_id)
+            if existing is not None:
+                if existing != (True, SOURCE, item.pattern_id):
+                    raise AlertIdCollision(
+                        f"{label}: a row with this alert_id exists and is not this fixture "
+                        f"(is_synthetic={existing[0]}, source={existing[1]!r}, "
+                        f"_adversarial={existing[2]!r}); nothing after it was loaded"
+                    )
                 skipped += 1
                 print(f"load: skip {label}: already loaded", file=out)
                 continue
             if dry_run:
                 print(f"load: would load {label}", file=out)
             else:
-                insert_synthetic(conn, item.alert)
+                try:
+                    insert_synthetic(conn, item.alert)
+                except transitions.StaleState as exc:
+                    # The id appeared between the check above and the INSERT: a
+                    # concurrent run. This fixture rolls back; a re-run skips it.
+                    raise Refusal(
+                        f"{label}: inserted concurrently ({exc}); re-run to skip it"
+                    ) from exc
                 print(f"load: loaded {label}", file=out)
         if item.role == "target":
             loaded_targets += 1
@@ -361,8 +409,13 @@ def main(argv: list[str] | None = None) -> int:
     except EnvironmentProblem as exc:
         print(f"load: {exc}", file=sys.stderr)
         return EXIT_ENV
-    except psycopg.OperationalError:
-        print("load: could not reach the database (DSN not shown)", file=sys.stderr)
+    except psycopg.Error as exc:
+        # OperationalError (unreachable) or ProgrammingError (malformed DSN): the
+        # exception text can quote the DSN, so neither it nor the DSN is printed.
+        print(
+            f"load: could not open the database connection ({type(exc).__name__}; DSN not shown)",
+            file=sys.stderr,
+        )
         return EXIT_ENV
 
     try:
