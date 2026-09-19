@@ -872,3 +872,17 @@ rules:
   artifact: (canonical short form - catches paraphrase, not just re-paste)
   reason: "an agent or Owner handed this command gets `Failed to restart wazuh-manager.service: Unit wazuh-manager.service not found` and will read a working stack as a broken one. The container form also carries a warning the host form never needed: `docker cp` edits are lost on `docker rm` or `compose down/up`."
   allow: []
+
+- id: dec091-alerts-json-grep
+  dec: DEC-091
+  severity: high
+  status: fixed
+  pattern: "' /data/wazuh/logs/alerts/alerts.json"
+  pattern_note: "a quote, a space, then the path - the shape of the file as a grep ARGUMENT (`grep -c '\"id\":\"1003' /data/wazuh/logs/alerts/alerts.json`), not a prose mention of the file. Since the 16/09 reboot the file is mode 640 `dnsmasq:systemd-journal` and `user1` cannot read it; every alert check is an indexer `_count` through `.env`'s `soc_ro` (DEC-091 carries the measured commands). The four dated director-run prompts are allowed by file: they are executed one-shot instructions, the record of what was true on their day (the DEC-064 precedent). P6.md:18 and STATE.md's closed blocker row carry `superseded-ok: DEC-091` - both quote a 15/09 measurement."
+  artifact: (canonical short form - catches every file grep, not just the two the P6-T05 card had)
+  reason: "an Owner or Coder handed this command on 22/09 gets `Permission denied` and reads a working manager as a broken one - or, worse, reads `0` as the negative-check baseline when the grep never ran. The P6-T05 card prescribed it at :22 and the runbook copied it seven times; the card is corrected and the runbook swap is bucket (b)."
+  allow:
+  - docs/plan/prompts/director-run-2026-09-15.md
+  - docs/plan/prompts/director-run-2026-09-15-closeout.md
+  - docs/plan/prompts/director-run-2026-09-15-owner-answers.md
+  - docs/plan/prompts/director-run-2026-09-19-restart.md
