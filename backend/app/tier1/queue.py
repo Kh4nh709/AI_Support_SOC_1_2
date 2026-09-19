@@ -336,8 +336,7 @@ def get_alert_view(
     head_id = view["alert_id"]
 
     view["targeted_accounts"] = [
-        record[0]
-        for record in conn.execute(_TARGETED_ACCOUNTS_SQL, (head_id, head_id)).fetchall()
+        record[0] for record in conn.execute(_TARGETED_ACCOUNTS_SQL, (head_id, head_id)).fetchall()
     ]
 
     summary = correlation.summarize_for_prompt(

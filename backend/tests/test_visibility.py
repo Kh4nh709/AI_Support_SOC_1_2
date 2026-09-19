@@ -267,7 +267,13 @@ def test_constant_sets_are_the_card_verbatim():
         "triage_status",
     }
     assert ANALYST_HIDE <= LABELING_DENYLIST
-    assert {"source", "status", "suggestion_visible", "risk_score", "risk_band"} <= LABELING_DENYLIST
+    assert {
+        "source",
+        "status",
+        "suggestion_visible",
+        "risk_score",
+        "risk_band",
+    } <= LABELING_DENYLIST
     assert LABELING_PREFIXES == ("llm_", "verifier")
     assert isinstance(SHOW_STATES, frozenset)
     assert isinstance(ANALYST_HIDE, frozenset)

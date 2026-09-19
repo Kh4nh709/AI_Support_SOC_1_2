@@ -400,7 +400,11 @@ def test_queue_lateral_join_picks_proposer_and_does_not_double(db):
         alert_id,
         role="verifier",
         result=VERIFIER_RESULT,
-        gate_result={"role": "verifier", "compared_to": "false_positive", "proposer_run_id": proposer},
+        gate_result={
+            "role": "verifier",
+            "compared_to": "false_positive",
+            "proposer_run_id": proposer,
+        },
         offset_s=1,
     )
 
@@ -412,7 +416,11 @@ def test_queue_lateral_join_picks_proposer_and_does_not_double(db):
 
     # A later proposer row (a re-triage) is the one that shows; still one row.
     later = _insert_run(
-        db, alert_id, role="proposer", result={**RESULT, "suggested_action": "needs_review"}, offset_s=2
+        db,
+        alert_id,
+        role="proposer",
+        result={**RESULT, "suggested_action": "needs_review"},
+        offset_s=2,
     )
     rows = [row for row in _all_rows(db) if row["alert_id"] == alert_id]
     assert len(rows) == 1
@@ -493,7 +501,9 @@ def test_latest_suggestion_none_when_result_null(db):
 
     # A verifier row alone is not a suggestion either.
     other = _queued(db)
-    _insert_run(db, other, role="verifier", result=VERIFIER_RESULT, gate_result={"role": "verifier"})
+    _insert_run(
+        db, other, role="verifier", result=VERIFIER_RESULT, gate_result={"role": "verifier"}
+    )
     assert latest_suggestion(db, other) is None
 
 
@@ -572,7 +582,9 @@ def test_latest_suggestion_reads_p3_t10_shape_and_latest_proposer_wins(db):
     _insert_run(db, alert_id, role="verifier", result=VERIFIER_RESULT, gate_result={}, offset_s=1)
     assert latest_suggestion(db, alert_id).run_id == run_id
     # ...a later proposer row is, and `reasons` is capped at 10.
-    twelve = [{"claim": f"c{i}", "quote": "q", "source": "kb_playbook", "extra": i} for i in range(12)]
+    twelve = [
+        {"claim": f"c{i}", "quote": "q", "source": "kb_playbook", "extra": i} for i in range(12)
+    ]
     later = _insert_run(
         db,
         alert_id,
