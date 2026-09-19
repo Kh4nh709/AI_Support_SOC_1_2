@@ -48,6 +48,7 @@ import psycopg
 import pytest
 from app.domain import correlation
 from app.enrichment import inventory
+from app.infra import jobs
 from app.ingest.wazuh_parser import parse_wazuh_alert
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -477,7 +478,6 @@ def inventory_db(db, tmp_path: Path):
 def loaded(inventory_db):
     report = loader.load_manifest(inventory_db, MANIFEST, FIXTURES_DIR)
     assert (report.loaded_targets, report.loaded_neighbours, report.skipped) == (40, 8, 0)
-    assert report.triage_jobs == 0
     return inventory_db
 
 
@@ -593,6 +593,7 @@ def test_loader_inserts_received_synthetic_lab_heads_with_context(loaded) -> Non
 def test_loader_creates_no_triage_job_and_no_intake_row(loaded) -> None:
     targets, neighbours = _ids()
     ids = targets + neighbours
+    assert loader.count_triage_jobs(loaded, ids) == 0
     jobs = loaded.execute(
         "SELECT count(*) FROM jobs WHERE job_type = 'triage' AND subject_id = ANY(%s)", (ids,)
     ).fetchone()[0]
@@ -618,10 +619,22 @@ def test_loader_creates_no_triage_job_and_no_intake_row(loaded) -> None:
 
 @pytest.mark.db
 def test_loader_rows_invisible_to_queue_and_escalate_predicates(loaded) -> None:
+    """The queue predicate hides G3 rows for two independent reasons -- `status`
+    (never past `received`) and `is_synthetic` (the flag every reported figure
+    filters on). Each half is proven alone so that dropping either one is a
+    red test, not a row still hidden by the other."""
     targets, neighbours = _ids()
     ids = targets + neighbours
     queued = loaded.execute(QUEUE_SQL + " AND alert_id = ANY(%s)", (ids,)).fetchall()
     assert queued == []
+    by_flag_alone = loaded.execute(
+        "SELECT alert_id FROM alerts WHERE NOT is_synthetic AND alert_id = ANY(%s)", (ids,)
+    ).fetchall()
+    assert by_flag_alone == []
+    by_status_alone = loaded.execute(
+        "SELECT alert_id FROM alerts WHERE status <> 'received' AND alert_id = ANY(%s)", (ids,)
+    ).fetchall()
+    assert by_status_alone == []
     # The escalate predicate, via the product function on every target.
     for row in _rows():
         target = _alert(row["fixture_file"])
@@ -737,6 +750,14 @@ def test_v5_neighbour_is_found_by_correlation_and_v1_target_has_none(loaded) -> 
 
 
 @pytest.mark.db
+def test_loader_report_carries_a_planted_triage_job(loaded) -> None:
+    targets, _neighbours = _ids()
+    jobs.enqueue(loaded, "triage", targets[5])
+    report = loader.load_manifest(loaded, MANIFEST, FIXTURES_DIR)
+    assert (report.loaded, report.skipped, report.triage_jobs) == (0, 48, 1)
+
+
+@pytest.mark.db
 def test_loader_rejects_a_fixture_that_does_not_parse_and_writes_nothing(
     inventory_db, tmp_path: Path, capsys
 ) -> None:
@@ -842,6 +863,25 @@ def test_cli_end_to_end_on_a_scratch_database_commits_and_reruns_skip(
             "loaded 0 (0 targets + 0 neighbours), skipped 48 existing, triage jobs 0"
             in second.stdout
         )
+
+        # The post-loop guard: a `triage` job on any loaded id is exit 1, even when
+        # the run itself loaded nothing (a future open_alert that enqueues would
+        # surface exactly here).
+        targets, _neighbours = _ids()
+        with psycopg.connect(scratch) as conn:
+            jobs.enqueue(conn, "triage", targets[0])
+            conn.commit()
+        third = subprocess.run(
+            [sys.executable, str(LOAD_PATH), "--dsn", scratch, "--i-know-the-gold-is-not-frozen"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        assert third.returncode == 1
+        assert "skipped 48 existing, triage jobs 1" in third.stdout
+        assert "refusing" in third.stderr and "triage job" in third.stderr
     finally:
         admin.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
         admin.close()
