@@ -206,3 +206,12 @@ def test_fixture_constants_are_the_builders():
     for sentence in (B.SENTENCE_ABSENT, B.SENTENCE_REQUEST_TRIAGE):
         assert sentence in B.TEMPLATE_CONSTANTS
         assert sentence in text
+
+
+def test_ids_match_the_builders_patterns():
+    """`linter._ID_PATTERNS` is a private copy of `builder.ID_PATTERNS` (the module may not
+    import `llm`, design note 5) — this is the drift guard `linter.py`'s comment names."""
+    expected = tuple(B.ID_PATTERNS.values())
+    assert len(L._ID_PATTERNS) == len(expected) == 5
+    for kind, want, got in zip(B.ID_PATTERNS, expected, L._ID_PATTERNS, strict=True):
+        assert got == want, f"{kind}: linter {got.pattern!r} != builder {want.pattern!r}"
