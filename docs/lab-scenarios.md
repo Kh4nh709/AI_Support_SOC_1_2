@@ -56,6 +56,8 @@ sources, before any scenario is written that depends on a rule:
 4. **`grep -c '"id":"1003' /data/wazuh/logs/alerts/alerts.json` was `0` on 15/09, and DEC-068 says
    plainly this is not a failure: "those are the three lab rules … they fire only when a scenario
    runs, and no scenario has been run."** That is the state this runbook exists to change.
+   (Measured then via the file; since the 16/09 reboot that file is unreadable by `user1` — point
+   5 below — and every count in this runbook is the indexer `_count`, §1 item 2.)
 5. **Re-verified in this session (16/09), and it reproduces the access pattern DEC-064 describes,
    not a fresh problem:** `/data/wazuh/logs/alerts/alerts.json` and everything under
    `/data/wazuh/logs/alerts/2026/` answer **Permission denied** to `user1` from this checkout — the
@@ -89,8 +91,9 @@ Run from the primary checkout on `user1-IA1803`. Every `sudo`/`docker` line is t
 2. **The rules file is loaded** (DEC-068's own gate, re-run fresh — do not assume yesterday's
    answer still holds after any manager restart):
    ```bash
-   grep -c '"id":"100999"' /data/wazuh/logs/alerts/alerts.json     # expect >= 2, two timestamps ~600s apart
-   grep -c '"id":"1003' /data/wazuh/logs/alerts/alerts.json        # note the number — today's negative-check baseline
+   set -a; . ./.env; set +a
+   curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" "$INDEXER_URL/wazuh-alerts-*/_count" -H 'Content-Type: application/json' -d '{"query":{"term":{"rule.id":"100999"}}}'   # expect count >= 2 (19/09: 523)
+   curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" "$INDEXER_URL/wazuh-alerts-*/_count" -H 'Content-Type: application/json' -d '{"query":{"prefix":{"rule.id":"1003"}}}'   # note the count — today's negative-check baseline (19/09: 0)
    ```
    If the first is `0`, stop — the four-rule file is not live on this manager right now, and no
    scenario below can produce a `1003xx` alert until it is (`docker cp conf/local_rules.xml
@@ -581,7 +584,7 @@ falls through to stock `80700` ("Audit: Messages grouped", level 0, no alert).
 
 #### Negative check
 
-**Before:** `grep -c '"id":"100301"' /data/wazuh/logs/alerts/alerts.json` → record the count.
+**Before:** `curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" "$INDEXER_URL/wazuh-alerts-*/_count" -H 'Content-Type: application/json' -d '{"query":{"term":{"rule.id":"100301"}}}'` → record the count.
 **After** the benign twin above: re-run the same command.
 
 **Expected:** the count is **unchanged**. A test that requires a `pass`/`k`/`kfile` flag before it
@@ -644,7 +647,7 @@ download command falls through to `80700`, level 0.
 
 #### Negative check
 
-**Before:** `grep -c '"id":"100302"' /data/wazuh/logs/alerts/alerts.json` → record the count.
+**Before:** `curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" "$INDEXER_URL/wazuh-alerts-*/_count" -H 'Content-Type: application/json' -d '{"query":{"term":{"rule.id":"100302"}}}'` → record the count.
 **After** the benign twin above: re-run the same command.
 
 **Expected:** the count is **unchanged** — a download never matches the upload-shaped `<match>`.
@@ -708,7 +711,7 @@ command falls through to `80700`, level 0.
 
 #### Negative check
 
-**Before:** `grep -c '"id":"100303"' /data/wazuh/logs/alerts/alerts.json` → record the count.
+**Before:** `curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" "$INDEXER_URL/wazuh-alerts-*/_count" -H 'Content-Type: application/json' -d '{"query":{"term":{"rule.id":"100303"}}}'` → record the count.
 **After** the benign twin above: re-run the same command.
 
 **Expected:** the count is **unchanged** — a bare port check never attaches a shell, so neither the
