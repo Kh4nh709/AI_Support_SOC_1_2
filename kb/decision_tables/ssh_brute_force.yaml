@@ -1,18 +1,41 @@
 # kb/decision_tables/ssh_brute_force.yaml — SKELETON. Content is the Owner's + advisor's (§11).
 # reviewed_by/reviewed_at stay null until that sitting; while null the gate treats the table as absent
 # (architecture §3.10) and records decision_table_unreviewed:<category> in gate_result.warnings.
+#
+# DRAFT 19/09/2026 by the KB Drafter (docs/plan/prompts/kb-drafter-run-2026-09-19.md) for the sitting to
+# review, amend and sign — nothing here is policy until reviewed_by is non-null. Evidence = the 30-day
+# fold (scripts/measure_clusters.py --routes: 3,070 clusters; this category 968, of which 67 loopback
+# clusters leave the G1 pool per DEC-053 -> 901) + kb/playbooks/ssh_brute_force.md by line. apply_table
+# is first match in file order; every two rules with different actions are disjoint on the 2,520-point
+# grid, so order only picks which same-action id is reported. No match -> B1 answers needs_review
+# (docs/plan/prompts/P7.md:17). Questions for the sitting: docs/plan/kb-review-sheet-2026-09-19.md §1.
 category: ssh_brute_force
 playbook: ssh_brute_force_v1
 reviewed_by: null
 reviewed_at: null
 rules:
+  # evidence: architecture §3.10 example, verbatim; playbook ssh_brute_force.md:20 (one REAL account), :22 (few failures, no success), :36 (lookup missing -> not harmless, so ioc=skipped stays out). Fold: 0 of 968 clusters — every low/medium user1-targeted failure (25 clusters: 5503 ×18, 5760 ×4, 5762 ×3; the other 23 user1 clusters are level ≥ 10) is ioc=skipped (PAM without srcip, or LAN 172.25.25.28/.29) or on IA1803 (high); admitting `skipped` would catch 14 (sheet §1 Q1)
   - id: sbf-1
     if: {severity: [low, medium], ioc_reputation: [not_found, clean], asset_criticality: [low, medium],
          identity_privileged: ["false"], occurrence_lt: 50}
     then: false_positive
+  # evidence: playbook ssh_brute_force.md:28 (external srcip, ioc malicious/suspicious). Fold: 0 of 968 — conf/iocs.csv is empty by design, every G1 lookup is not_found (767) or skipped (201); serves the pilot only — the lab's srcip is 127.0.0.1 (skipped) and the runbook seeds no indicator
   - id: sbf-2
     if: {ioc_reputation: [malicious, suspicious]}
     then: escalate
+  # evidence: playbook ssh_brute_force.md:26 (a success after the failure chain — the strongest signal). Fold: 11 of 968, all critical — rule 100101 ×7 (level 14, archive-era local rule, gone since 17/08) + 40112 ×4 (level 12), all user1 on user1-IA1803; 10 are loopback, 1 stays in the G1 pool (= DEC-086's 1 critical). test_sbf_rules_from_architecture_3_10 pins this id at the canonical alert
   - id: sbf-3
     if: {rule_level_gte: 12}
     then: escalate
+  # evidence: playbook ssh_brute_force.md:27 (many accounts in dictionary order) + :14 (500 in 30 s is a scanner) — the level-10 Wazuh frequency rules; lab-scenarios.md:246 expects `escalate` for the 8-in-2-minutes burst, but its per-attempt rules (:210, 5503/5760/5710, level 5, user1, loopback) match NO rule here — only the frequency rule 5712/5763 (:261-264) reaches this band. Fold: 39 of 968, all level 10 (high) — 5551 ×12, 5763 ×12, 5712 ×11, 2502 ×4, all on user1-IA1803 (medium); 11 stay in the G1 pool (= DEC-086's 11 high)
+  - id: sbf-4
+    if: {rule_level_gte: 8, rule_level_lt: 12}
+    then: escalate
+  # evidence: playbook ssh_brute_force.md:8 + :20 — the FP branch needs a REAL account; identity unknown is a name absent from conf/identities.yaml (the dictionary case, admin1/admin/namnguyen — which §4 :27 leans REAL for; the draft stops at needs_review because 514 escalates would be 57 % of the pool) or no name at all (2501/5740/5503 without a user ×130; 5762's 'by' parser artefact ×34; 68 of those are level-4 connection resets, not login attempts). Fold: 543 of 968 land here (514 in the G1 pool) — 5710 ×368 (admin1 ×320, admin ×9, namnguyen ×2 …), 2501 ×66, 5762 ×35, 5740 ×33, 5503 ×31, 5760 ×10; IA1803 264 / user1-IA1803 279; 475 medium + 68 low. Sheet §1 Q2: keep needs_review or treat external + non-existent account as Internet noise
+  - id: sbf-5
+    if: {severity: [low, medium], ioc_reputation: [not_found, clean, skipped], identity_privileged: ["unknown"]}
+    then: needs_review
+  # evidence: playbook ssh_brute_force.md:35 (targeted account privileged -> raise the level even without a success). Fold: 350 of 968 land here — 5760 ×322, 5503 ×27, 5762 ×1, all alert_user=root (identity true); IA1803 173 / user1-IA1803 177; 349 medium. root's password login is locked (conf/identities.yaml:16). Draft reads ":35 raise" as needs_review — 350 escalates would be 39 % of the G1 pool. Sheet §1 Q3: flip to escalate? (stays grid-consistent)
+  - id: sbf-6
+    if: {severity: [low, medium], ioc_reputation: [not_found, clean, skipped], identity_privileged: ["true"]}
+    then: needs_review
