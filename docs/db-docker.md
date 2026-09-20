@@ -9,9 +9,9 @@ on IA1803 untouched as a fallback until the submission (02/10).
 
 | Service | Container | Host address | Notes |
 |---|---|---|---|
-| `db` | `soc-db` (postgres:16) | `127.0.0.1:55432` (`DB_PORT` in `.env`) | volume `pgdata`; first start restores `backups/latest.dump` |
-| `app` | `soc-app` | `http://127.0.0.1:8000` | uvicorn `app.web.main:app` |
-| `worker` | `soc-worker` | — | `app.web.worker`; pulls from the indexer, runs pipeline + triage jobs |
+| `db` | `ai_support_soc_1_2-db-1` (postgres:16) | `127.0.0.1:55432` (`DB_PORT` in `.env`) | volume `pgdata`; first start restores `backups/latest.dump` |
+| `app` | `ai_support_soc_1_2-app-1` | `http://127.0.0.1:8000` | uvicorn `app.web.main:app` |
+| `worker` | `ai_support_soc_1_2-worker-1` | — | `app.web.worker`; pulls from the indexer, runs pipeline + triage jobs |
 
 Inside the containers the repository layout is mirrored under `/srv` (`backend/app`, `conf/`, `kb/`,
 `.env`) so every relative path behaves exactly as on the host. `backend/app`, `conf/` and `kb/` are
