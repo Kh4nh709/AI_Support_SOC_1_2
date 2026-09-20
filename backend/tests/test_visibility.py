@@ -90,14 +90,13 @@ def _fixture_view(source: str = "replay") -> dict[str, Any]:
         "raw_log": "Aug 16 17:56:55 user1-IA1803 sshd[136570]: wazuh Accepted password for user1",
         "raw_log_truncated": False,
         "occurrence_count": 3,
-        "triaged_count": 1,
         "first_seen_at": _T,
         "last_seen_at": _T,
         "targeted_accounts": ["root", "user1"],
         "playbook": "# playbook",
         "correlated_now": 2,
-        "needs_retriage": False,
         # --- ANALYST_HIDE: dropped on a blind, undecided head -------------------
+        "run_id": "11111111-1111-1111-1111-111111111111",
         "suggestion": {
             "run_id": "11111111-1111-1111-1111-111111111111",
             "suggested_action": "false_positive",
@@ -134,9 +133,10 @@ def _fixture_view(source: str = "replay") -> dict[str, Any]:
         "gate_result": {"forced": False},
         "verifier_result": {"agree": True},
         "llm_run_id": "11111111-1111-1111-1111-111111111111",
-        "run_id": "11111111-1111-1111-1111-111111111111",
         "gate": {"forced": False},
         "correlated_at_analysis": 1,
+        "triaged_count": 1,  # says how often ① ran (DEC-101)
+        "needs_retriage": False,
         # --- LABELING_PREFIXES -------------------------------------------------
         "llm_confidence": "high",
         "verifier_verdict": "false_positive",
@@ -186,7 +186,7 @@ def _fixture_view(source: str = "replay") -> dict[str, Any]:
 # The literal survivor sets (not derived from the module's constants).
 _ALL_KEYS = frozenset(_fixture_view())
 _ANALYST_BLIND_SURVIVORS = _ALL_KEYS - frozenset(
-    {"suggestion", "suggested_action", "confidence", "gate_forced", "triage_status"}
+    {"suggestion", "suggested_action", "confidence", "gate_forced", "triage_status", "run_id"}
 )
 _LABELING_SURVIVORS = frozenset(
     {
@@ -213,13 +213,11 @@ _LABELING_SURVIVORS = frozenset(
         "raw_log",
         "raw_log_truncated",
         "occurrence_count",
-        "triaged_count",
         "first_seen_at",
         "last_seen_at",
         "targeted_accounts",
         "playbook",
         "correlated_now",
-        "needs_retriage",
         "correlation",
     }
 )
@@ -265,8 +263,10 @@ def test_constant_sets_are_the_card_verbatim():
         "confidence",
         "gate_forced",
         "triage_status",
+        "run_id",  # DEC-101
     }
     assert ANALYST_HIDE <= LABELING_DENYLIST
+    assert {"triaged_count", "needs_retriage"} <= LABELING_DENYLIST  # DEC-101
     assert {
         "source",
         "status",
@@ -375,6 +375,8 @@ def test_labeling_recurses_into_correlation():
     assert "llm_note" not in sample
     assert sample["alert_id"] == "p4t02-other"
     assert "suggestion" not in out  # gone whole, not hollowed out
+    assert "triaged_count" not in out and "needs_retriage" not in out  # DEC-101
+    assert out["occurrence_count"] == 3  # the cluster size itself is not ① metadata
     # A deeper nesting: dict → list → dict → list → dict.
     deep = {
         "a": [{"b": [{"status": "closed_fp", "keep": 1, "llm_x": 2, "verifier_y": 3}]}],
@@ -394,6 +396,8 @@ def test_analyst_mode_keeps_other_clusters_status():
 
     assert "triage_status" not in out
     assert "suggestion" not in out
+    assert "run_id" not in out  # a blind row does not even say "① ran" (DEC-101)
+    assert out["triaged_count"] == 1  # analyst mode hides the verdict, not the counts
     assert [row["status"] for row in out["correlation"]["rows"]] == ["closed_fp", "escalated_tier2"]
     assert out["correlation"]["samples"][0]["status"] == "closed_fp"
     assert out["status"] == "queued_tier1"  # the head's own status is not a ① key

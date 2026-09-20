@@ -7,9 +7,9 @@ parameter here. `strip` rebuilds the dict it is given and never mutates it.
 
 | mode       | when                                                  | drops                                                   | why |
 |------------|-------------------------------------------------------|---------------------------------------------------------|-----|
-| `analyst`  | `suggestion_visible` is false **and** `status` is not in `SHOW_STATES` | `ANALYST_HIDE` at the **top level** only | the blind arm: the analyst may know they are on it (`suggestion_visible` stays) but not what the model said; `triage_status` goes too because "ready"/"unavailable" leaks whether ① produced a verdict. Nested `correlation` rows keep their `status` — that is *other* clusters' history, which an analyst may see. |
+| `analyst`  | `suggestion_visible` is false **and** `status` is not in `SHOW_STATES` | `ANALYST_HIDE` at the **top level** only | the blind arm: the analyst may know they are on it (`suggestion_visible` stays) but not what the model said; `triage_status` goes too because "ready"/"unavailable" leaks whether ① produced a verdict, and so does the queue row's top-level `run_id` — a blind row must not even say "① ran" (DEC-101). Nested `correlation` rows keep their `status` — that is *other* clusters' history, which an analyst may see. |
 | `analyst`  | otherwise (visible arm, or already decided)           | nothing — an equal copy                                 | once decided, the ① verdict is evaluation material (P8's agreement metric); `auto_closed` is in `SHOW_STATES` because D8's digest (P5) reviews auto-closed clusters *against* ①. A reopened alert (A17 → `queued_tier1`) is blind again. |
-| `labeling` | **always**, whatever the two flags say                | `LABELING_DENYLIST` and every key starting with one of `LABELING_PREFIXES`, **recursively** through nested dicts and lists | `source` — DEC-019: `replay` vs `wazuh` lets a labeller infer the storm day; `status` — a pilot decision (a correlated cluster's `closed_fp` too) is human context the labeller must reach on their own; the rest is LLM-derived (`suggestion`, `gate*`, `verifier*`, `llm_*`, `run_id`) or enrichment (`risk_*`, `*_context`, `lookup_status`) the labeller must not be primed with. |
+| `labeling` | **always**, whatever the two flags say                | `LABELING_DENYLIST` and every key starting with one of `LABELING_PREFIXES`, **recursively** through nested dicts and lists | `source` — DEC-019: `replay` vs `wazuh` lets a labeller infer the storm day; `status` — a pilot decision (a correlated cluster's `closed_fp` too) is human context the labeller must reach on their own; the rest is LLM-derived (`suggestion`, `gate*`, `verifier*`, `llm_*`, `run_id`; `triaged_count`/`needs_retriage` say how often ① ran — DEC-101) or enrichment (`risk_*`, `*_context`, `lookup_status`) the labeller must not be primed with. |
 """
 
 from __future__ import annotations
@@ -23,9 +23,9 @@ SHOW_STATES: frozenset[str] = frozenset(
 )
 
 #: The keys a blind, undecided head loses in analyst mode — the ① verdict and everything
-#: that would let an analyst infer it.
+#: that would let an analyst infer it, including that ① ran at all (`run_id`, DEC-101).
 ANALYST_HIDE: frozenset[str] = frozenset(
-    {"suggestion", "suggested_action", "confidence", "gate_forced", "triage_status"}
+    {"suggestion", "suggested_action", "confidence", "gate_forced", "triage_status", "run_id"}
 )
 
 #: Everything a labeller must never receive, at any depth (module docstring, row 3).
@@ -56,6 +56,8 @@ LABELING_DENYLIST: frozenset[str] = ANALYST_HIDE | frozenset(
         "run_id",
         "gate",
         "correlated_at_analysis",
+        "triaged_count",
+        "needs_retriage",
     }
 )
 

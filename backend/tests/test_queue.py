@@ -87,7 +87,7 @@ GATE: dict[str, Any] = {
     "proposed_verdict": "false_positive",
     "final_verdict": "false_positive",
     "forced": False,
-    "forced_by": None,
+    "forced_by": [],  # a LIST — security/gate.py:42,90 appends step names to a list (DEC-101)
     "warnings": [],
     "facts": {"correlated_clusters": 2},
     "verifier_verdict": "false_positive",
@@ -369,7 +369,10 @@ def test_queue_blind_row_has_no_suggestion_keys(db):
 
     for key in ANALYST_HIDE:
         assert key not in row, key
+    assert "run_id" not in row  # a blind row does not even say "① ran" (DEC-101)
+    assert "triage_status" not in row
     assert row["suggestion_visible"] is False  # the analyst may know they are on the blind arm
+    assert row["triaged_count"] == 0  # analyst mode hides the verdict, not the counts
     assert row["alert_id"] == alert_id
 
 
@@ -560,7 +563,7 @@ def test_latest_suggestion_reads_p3_t10_shape_and_latest_proposer_wins(db):
     assert suggestion.reasons == [{"claim": "c", "quote": "q", "source": "wazuh_raw_log"}]
     assert suggestion.gate == {
         "forced": False,
-        "forced_by": None,
+        "forced_by": [],
         "proposed_verdict": "false_positive",
         "final_verdict": "false_positive",
         "verifier_verdict": "false_positive",
@@ -723,6 +726,8 @@ def test_view_labeling_mode_has_no_forbidden_keys_anywhere(db):
     assert not [key for key in keys if key.startswith(LABELING_PREFIXES)]
     assert "risk_score" not in view and "risk_band" not in view
     assert "suggestion" not in view and "source" not in view and "status" not in view
+    assert "triaged_count" not in view and "needs_retriage" not in view  # DEC-101
+    assert view["occurrence_count"] == 1
     assert view["correlation"]["rows"] and view["correlation"]["samples"]
     for row in view["correlation"]["rows"]:
         assert "status" not in row
