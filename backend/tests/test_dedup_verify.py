@@ -388,3 +388,47 @@ def test_no_raw_alert_content_in_stdout(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "10.0.0.5" not in out
     assert "someone-else" not in out
+
+
+# --- membership (P6-T01, DEC-084's first half) ----------------------------------
+
+
+@pytest.mark.parametrize("build", [_file_a, _file_b, _file_c])
+def test_members_match_count_and_head_is_first(tmp_path, build):
+    """`count == len(members)` on every cluster, `members[0]` is the cluster's
+    earliest alert (the head, by construction of the `alert_time` sort), and the
+    union of every cluster's members is exactly the parsed ids -- nothing lost,
+    nothing counted twice."""
+    path = tmp_path / "in.jsonl"
+    build(path)
+    clusters, stats = _fold(path)
+    by_id = {alert.alert_id: alert for alert in stats.alerts}
+
+    seen: list[str] = []
+    for cluster in clusters:
+        assert cluster.count == len(cluster.members)
+        assert cluster.members, "a cluster is opened by an alert, so it is never empty"
+        head = by_id[cluster.members[0]]
+        assert head.alert_time == cluster.first_seen
+        assert all(
+            by_id[member].alert_time >= head.alert_time for member in cluster.members[1:]
+        ), "the head is the earliest alert of its cluster"
+        assert by_id[cluster.members[-1]].alert_time == cluster.last_seen
+        seen.extend(cluster.members)
+    assert len(seen) == len(set(seen)) == stats.parsed
+    assert set(seen) == set(by_id)
+
+
+def test_json_report_carries_no_members(tmp_path):
+    """The JSON report stays per-day counts (3,051 lines on the archive), never
+    92,011 ids -- `members` is the fold's, not the report's."""
+    path = tmp_path / "b.jsonl"
+    _file_b(path)
+    stats = dedup_verify.read_archive(path)
+    clusters = dedup_verify.fold_clusters(stats.alerts, _cfg())
+    assert clusters[0].members, "precondition: the fold did record members"
+    rendered = dedup_verify.format_json(
+        dedup_verify.build_report(path, stats, clusters, _cfg(), expect=2, tolerance_pct=1.0)
+    )
+    assert "members" not in rendered
+    assert "b500" not in rendered, "no alert id of the fold leaks into the report"
