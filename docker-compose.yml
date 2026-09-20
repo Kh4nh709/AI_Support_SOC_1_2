@@ -67,7 +67,9 @@ services:
       - ./conf:/srv/conf:ro                    # inventory, identities, iocs, root-ca.pem
       - ./kb:/srv/kb:ro                        # decision tables + playbooks (kb/lookup.py KB_ROOT)
     extra_hosts:
-      - "wazuh.indexer:host-gateway"           # the indexer stays on the host (:19200)
+      # The indexer stays on IA1803 (:19200). On IA1803 itself `host-gateway` reaches it;
+      # on any other server set INDEXER_HOST_IP=<IA1803's Tailscale IP> in .env (Compose-only).
+      - "wazuh.indexer:${INDEXER_HOST_IP:-host-gateway}"
     command: python -m uvicorn app.web.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
