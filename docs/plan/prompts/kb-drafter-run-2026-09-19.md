@@ -22,7 +22,7 @@ records the outcome as a DEC. Written by the Support Agent at the Owner's instru
    `category`, `playbook`, and **`reviewed_by: null` / `reviewed_at: null` exactly as they are**.
 3. `kb/playbooks/*.md` — the ten playbooks; a table must agree with its playbook's decision
    branches. Two lines are known-wrong and are P3-T12's to fix, not yours:
-   `ssh_brute_force.md:34`, `malware.md:36` (`crown_jewel`, a vocabulary DEC-004 retired).
+   `ssh_brute_force.md:34`, `malware.md:36` (`crown_jewel`, a vocabulary DEC-004 retired). <!-- superseded-ok: DEC-004 names the retired value to say it is retired -->
 4. `docs/kien-truc-v3-14-ngay.html` §3.10 — the decision-table design and its worked examples.
 5. `docs/plan/DECISIONS.md` — **DEC-034** (asset weights `high 30 · medium 10 · low 0 ·
    unknown 0`; `high` is a hard auto-close block, G8′), **DEC-052** (asset-hygiene alerts stay

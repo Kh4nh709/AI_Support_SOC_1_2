@@ -1,18 +1,39 @@
 # kb/decision_tables/web_attack.yaml — SKELETON. Content is the Owner's + advisor's (§11).
 # reviewed_by/reviewed_at stay null until that sitting; while null the gate treats the table as absent
 # (architecture §3.10) and records decision_table_unreviewed:<category> in gate_result.warnings.
+#
+# DRAFT 19/09/2026 by the KB Drafter (docs/plan/prompts/kb-drafter-run-2026-09-19.md) for the sitting to
+# review, amend and sign — nothing here is policy until reviewed_by is non-null. Zero-cluster category: its 8
+# archive clusters were rule 100112 (audit log cleared) reaching web_attack through the over-broad `attack`
+# group, removed by DEC-055 -> 0 of 3,070 today; no web server runs on the lab host and the runbook has no
+# scenario (lab-scenarios.md:823-825). Web access-log alerts carry a srcip but no user
+# (identity_privileged=unknown). Evidence = kb/playbooks/web_attack.md by line only.
+# apply_table is first match in file order; every two rules with different actions are disjoint on the
+# 2,520-point grid. No match -> B1 answers needs_review (docs/plan/prompts/P7.md:17). Questions for the sitting:
+# docs/plan/kb-review-sheet-2026-09-19.md §9.
 category: web_attack
 playbook: web_attack_v1
 reviewed_by: null
 reviewed_at: null
 rules:
+  # evidence: This rule is the STRUCTURAL precondition under which an FP verdict is permitted (architecture §4: false_positive only on structural evidence the attacker cannot steer); the cited §3 branches are the text ① reads, not table facts. playbook web_attack.md:21 (the whole cluster is 404s on common scan paths), :22 (target application does not exist), :23 (legitimate search-engine bot); :37 (lookup missing -> not harmless) keeps ioc=skipped out. identity_privileged admits `unknown` because access-log alerts name no user (deviation from the §3.10 pattern, as in recon). (no archive clusters after DEC-055; no lab scenario.) Sheet §9 Q1
   - id: web-1
     if: {severity: [low, medium], ioc_reputation: [not_found, clean], asset_criticality: [low, medium],
-         identity_privileged: ["false"], occurrence_lt: 50}
+         identity_privileged: ["false", "unknown"], occurrence_lt: 50}
     then: false_positive
+  # evidence: playbook web_attack.md:16 (srcip + ioc_context; scanner IPs recur across threat-intel sources) — the playbook treats a bad IoC as a signal to check, and a malicious IoC is a G8′ hard block in every category. (no archive clusters after DEC-055; no lab scenario)
   - id: web-2
     if: {ioc_reputation: [malicious, suspicious]}
     then: escalate
+  # evidence: §3.10 pattern; playbook web_attack.md:28 (a 200/500 on the very request carrying the payload — the server processed something), :30 (new file in the web root, or malware/c2_beacon from the same agent afterwards). (no archive clusters after DEC-055; no lab scenario)
   - id: web-3
     if: {rule_level_gte: 12}
     then: escalate
+  # evidence: playbook web_attack.md:35 (Internet-facing server + high criticality -> every suspicious 200 opens a case) + DEC-034 (high = the crown-jewel tier). Restricted to asset high on purpose: :7 says mass 4xx is a scanner missing, so the high band alone is not `escalate` in this category. (no archive clusters after DEC-055; no lab scenario.) Sheet §9 Q2
+  - id: web-4
+    if: {rule_level_gte: 8, rule_level_lt: 12, asset_criticality: [high]}
+    then: escalate
+  # evidence: playbook web_attack.md:37 (`lookup_status` missing the external IoC -> absence is NOT evidence of harmlessness) written as an explicit floor for the low/medium band. (no archive clusters after DEC-055; no lab scenario)
+  - id: web-5
+    if: {severity: [low, medium], ioc_reputation: [skipped]}
+    then: needs_review

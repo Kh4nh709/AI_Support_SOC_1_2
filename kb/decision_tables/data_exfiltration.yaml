@@ -1,18 +1,35 @@
 # kb/decision_tables/data_exfiltration.yaml — SKELETON. Content is the Owner's + advisor's (§11).
 # reviewed_by/reviewed_at stay null until that sitting; while null the gate treats the table as absent
 # (architecture §3.10) and records decision_table_unreviewed:<category> in gate_result.warnings.
+#
+# DRAFT 19/09/2026 by the KB Drafter (docs/plan/prompts/kb-drafter-run-2026-09-19.md) for the sitting to
+# review, amend and sign — nothing here is policy until reviewed_by is non-null. Lab category: 0 of 3,070
+# archive clusters (DEC-053); reached only through local rule 100302 (level 10, T1041,
+# conf/local_rules.xml:117) — lab-scenarios.md:596-655; DEC-056 amendment 3 applies. The auditd execve records
+# behind 100302 carry no srcip/dstip, so on the lab host ioc_reputation is `skipped`. Evidence =
+# kb/playbooks/data_exfiltration.md by line + the runbook.
+# apply_table is first match in file order; every two rules with different actions are disjoint on the
+# 2,520-point grid. No match -> B1 answers needs_review (docs/plan/prompts/P7.md:17). Questions for the sitting:
+# docs/plan/kb-review-sheet-2026-09-19.md §5.
 category: data_exfiltration
 playbook: data_exfiltration_v1
 reviewed_by: null
 reviewed_at: null
 rules:
+  # evidence: §3.10 pattern. This rule is the STRUCTURAL precondition under which an FP verdict is permitted (architecture §4: false_positive only on structural evidence the attacker cannot steer); the cited §3 branches are the text ① reads, not table facts. playbook data_exfiltration.md:21 (scheduled backup to an approved cloud service), :22 (known business-software sync), :24 (large volume but an internal destination). ioc=skipped stays out: :8 and :15 make the DESTINATION the deciding question, and `skipped` means no destination was looked up (absent or private IP, lookups.py:77-92) — indistinguishable from :24's approved internal destination, so the sitting may admit it. (no archive clusters — lab category; 100302 is level 10 so the lab never reaches this rule.) Sheet §5 Q1
   - id: dex-1
     if: {severity: [low, medium], ioc_reputation: [not_found, clean], asset_criticality: [low, medium],
          identity_privileged: ["false"], occurrence_lt: 50}
     then: false_positive
+  # evidence: this playbook has no IoC line of its own; :8 and :15 make the destination the question and a malicious/suspicious destination is the one destination fact the table can see; a malicious IoC is a G8′ hard block in every category (autoclose.py:265). (no archive clusters — lab category)
   - id: dex-2
     if: {ioc_reputation: [malicious, suspicious]}
     then: escalate
+  # evidence: §3.10 pattern; playbook data_exfiltration.md:36 (personal or customer data -> legal consequence, open a case even when unsure). (no archive clusters — lab category; no critical-level exfiltration rule in conf/local_rules.xml or the archive; the stock ruleset is not readable from this repo)
   - id: dex-3
     if: {rule_level_gte: 12}
+    then: escalate
+  # evidence: lab-scenarios.md:631-633 — rule 100302 "Possible data exfiltration: local file uploaded via $(audit.exe)", level 10 (conf/local_rules.xml:117), expected label escalate; playbook data_exfiltration.md:36 (open a case even when unsure). Counter-reading, for the sitting: the rule's own docstring (conf/local_rules.xml:113-114) calls a single upload 'a lead an analyst confirms, not a confirmed incident' and playbook :23 leans FP for a confirmable bulk upload — the draft follows the runbook's expected label; sheet §5 Q2. The benign twin (:637-646, a download) fires no rule. (no archive clusters — lab category)
+  - id: dex-4
+    if: {rule_level_gte: 8, rule_level_lt: 12}
     then: escalate

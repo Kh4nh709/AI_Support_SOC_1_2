@@ -1,18 +1,35 @@
 # kb/decision_tables/c2_beacon.yaml — SKELETON. Content is the Owner's + advisor's (§11).
 # reviewed_by/reviewed_at stay null until that sitting; while null the gate treats the table as absent
 # (architecture §3.10) and records decision_table_unreviewed:<category> in gate_result.warnings.
+#
+# DRAFT 19/09/2026 by the KB Drafter (docs/plan/prompts/kb-drafter-run-2026-09-19.md) for the sitting to
+# review, amend and sign — nothing here is policy until reviewed_by is non-null. Lab category: 0 of 3,070
+# archive clusters (DEC-053); reached only through local rule 100303 (level 12, T1071,
+# conf/local_rules.xml:164) — lab-scenarios.md:657-718; DEC-056 amendment 3 applies, and the rule detects
+# channel SETUP, not beaconing periodicity (lab-scenarios.md:659-661; conf/local_rules.xml:151-159). The auditd record carries no srcip/dstip (hex argv),
+# so on the lab host ioc_reputation is `skipped`. Evidence = kb/playbooks/c2_beacon.md by line + the runbook.
+# apply_table is first match in file order; every two rules with different actions are disjoint on the
+# 2,520-point grid. No match -> B1 answers needs_review (docs/plan/prompts/P7.md:17). Questions for the sitting:
+# docs/plan/kb-review-sheet-2026-09-19.md §6.
 category: c2_beacon
 playbook: c2_beacon_v1
 reviewed_by: null
 reviewed_at: null
 rules:
+  # evidence: §3.10 pattern. This rule is the STRUCTURAL precondition under which an FP verdict is permitted (architecture §4: false_positive only on structural evidence the attacker cannot steer); the cited §3 branches are the text ① reads, not table facts. playbook c2_beacon.md:21 (legitimate software checking for updates), :22 (destination in the vendor's range), :23 (regular but sparse, signed system service), :24 (many hosts, internal destination); :37 (lookup missing -> not harmless) keeps ioc=skipped out. (no archive clusters — lab category; 100303 is level 12 so the lab never reaches this rule)
   - id: c2b-1
     if: {severity: [low, medium], ioc_reputation: [not_found, clean], asset_criticality: [low, medium],
          identity_privileged: ["false"], occurrence_lt: 50}
     then: false_positive
+  # evidence: playbook c2_beacon.md:15 (dstip + ioc_context; a domain registered within 30 days is its own signal), :29 (raw IP with no domain, or a just-registered domain). (no archive clusters — lab category)
   - id: c2b-2
     if: {ioc_reputation: [malicious, suspicious]}
     then: escalate
+  # evidence: lab-scenarios.md:695-697 — rule 100303 "Possible C2 channel: shell attached to a network socket", level 12 (conf/local_rules.xml:164), expected label escalate; conf/local_rules.xml:151-162 (the rule detects channel ESTABLISHMENT — one execve — and sets level 12 = critical in the pinned band, DEC-053); the playbook's §4 branches (:28 periodicity, :29 destination, :30 process path) are not visible in one execve, so the authored level carries the judgement here. The benign twin (:701-710, `nc -z` port check) fires no rule. (no archive clusters — lab category)
   - id: c2b-3
     if: {rule_level_gte: 12}
     then: escalate
+  # evidence: playbook c2_beacon.md:37 (`lookup_status` could not resolve the external IoC -> do NOT conclude harmless for lack of data) written as an explicit floor: a low/medium beacon alert whose destination was never looked up stays with a human. (no archive clusters — lab category; on the lab host every 100303 record is IP-less, but that one is level 12 -> c2b-3.) Sheet §6 Q1
+  - id: c2b-4
+    if: {severity: [low, medium], ioc_reputation: [skipped]}
+    then: needs_review
