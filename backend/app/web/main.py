@@ -1,55 +1,41 @@
 """web/main.py — the FastAPI application (composition root, context pack §4).
 
-`make run-app` already points `uvicorn` at `app.web.main:app`. Only one route
-exists so far: `POST /api/admin/reload-inventory` (P2-T08). `GET /health` is
-P5, `POST /webhook/alerts` is P2-T12, and every `tier1`/`tier2`/`admin` route of
-§6.4 arrives with its own task — nothing here anticipates them.
+`make run-app` points `uvicorn` at `app.web.main:app`. Routes live in modules
+under `app.web.routers/`, discovered and mounted here (P4-tasks.md planning
+decision 1) — a later card adds one module there and touches no shared file.
+The one exception is `POST /api/admin/reload-inventory` (P2-T08), kept here
+with its body unchanged and now behind the `admin` role (P4-T01).
+
+`get_conn` lives in `app.web.deps` and is re-exported so that
+`test_reload_inventory.py`'s `dependency_overrides[main.get_conn]` keeps
+hitting the same object (`main.get_conn is deps.get_conn`).
 """
 
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Iterator
 from typing import Annotated
 
-import psycopg
 from fastapi import Depends, FastAPI, HTTPException
 
 from app.enrichment.inventory import load
-from app.infra import db
+from app.infra.auth import Claims
 from app.infra.errors import PermanentError
+from app.web.deps import Conn, get_conn, require_role  # re-export: tests override main.get_conn
+from app.web.routers import iter_routers
+
+__all__ = ["app", "get_conn"]
 
 app = FastAPI()
 
-
-def get_conn() -> Iterator[psycopg.Connection]:
-    """One connection per request: committed on success, rolled back on error,
-    closed always. `db.connect()` (no DSN) reads `Config.DATABASE_URL`, the
-    `app_rw` role's DSN — absent from every worktree's `.env`-less environment,
-    which is why every test overrides this dependency (design note 4) rather
-    than exercising the default.
-    """
-    conn = db.connect()
-    try:
-        yield conn
-    except BaseException:
-        conn.rollback()
-        raise
-    else:
-        conn.commit()
-    finally:
-        conn.close()
-
-
-_Conn = Annotated[psycopg.Connection, Depends(get_conn)]
+for router in iter_routers():
+    app.include_router(router)
 
 
 @app.post("/api/admin/reload-inventory")
-def reload_inventory(conn: _Conn) -> dict:
-    # No authentication in P2 (context pack §6.4 hand-off item 2 / P2-tasks.md
-    # P2-T08 row): P4 wraps this route with the `admin` role dependency once
-    # `infra/auth.py` exists. DEC-058 / DEC-066: the block this route's data
-    # feeds (G8′ "asset not in inventory") is unchanged by that hand-off.
+def reload_inventory(conn: Conn, _: Annotated[Claims, Depends(require_role("admin"))]) -> dict:
+    # DEC-058 / DEC-066: the block this route's data feeds (G8′ "asset not in
+    # inventory") is unchanged by the role dependency P4-T01 added.
     try:
         report = load(conn)
     except PermanentError as exc:

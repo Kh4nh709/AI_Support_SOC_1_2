@@ -15,7 +15,8 @@ from pathlib import Path
 from textwrap import dedent
 
 import pytest
-from app.web import main
+from app.infra import auth
+from app.web import deps, main
 from fastapi.testclient import TestClient
 
 
@@ -58,11 +59,22 @@ def _valid_files(tmp_path: Path) -> list[str]:
 
 @pytest.fixture
 def client(db):
+    # P4-T01: the route is behind `require_role("admin")`. `current_user` is
+    # overridden with a seeded admin — never the role check itself, so a
+    # `tier1` claim would still be refused — and the seed is rolled back with
+    # the rest of the `db` fixture's transaction.
+    admin_id = auth.create_user(
+        db, username="p2t08-admin", display_name="Admin", role="admin", password="unused"
+    )
     main.app.dependency_overrides[main.get_conn] = lambda: db
+    main.app.dependency_overrides[deps.current_user] = lambda: auth.Claims(
+        user_id=admin_id, username="p2t08-admin", role="admin", iat=0.0, exp=0.0
+    )
     try:
         yield TestClient(main.app)
     finally:
         main.app.dependency_overrides.pop(main.get_conn, None)
+        main.app.dependency_overrides.pop(deps.current_user, None)
 
 
 # --------------------------------------------------------------------------
@@ -143,11 +155,26 @@ def test_reload_inventory_succeeds_as_app_rw(
     assert response.json()["assets"] == 1
 
 
-def test_only_the_reload_inventory_route_exists_under_api() -> None:
+@pytest.mark.db
+def test_reload_inventory_without_session_is_401(
+    tmp_path: Path, monkeypatch, client: TestClient
+) -> None:
+    main.app.dependency_overrides.pop(deps.current_user)
+    monkeypatch.setenv("INVENTORY_PATHS", json.dumps(_valid_files(tmp_path)))
+    response = client.post("/api/admin/reload-inventory")
+    assert response.status_code == 401
+    assert response.json() == {"detail": "not authenticated"}
+
+
+def test_reload_inventory_route_exists_under_api() -> None:
+    # P4-T01: this used to assert the route was the *only* `/api/` path. Routers
+    # are now discovered from `app.web.routers/` and every later card adds one,
+    # so an exact snapshot here would make this file the shared file planning
+    # decision 1 exists to avoid; each card asserts its own routes instead.
     api_paths = sorted(
         route.path for route in main.app.routes if getattr(route, "path", "").startswith("/api/")
     )
-    assert api_paths == ["/api/admin/reload-inventory"]
+    assert "/api/admin/reload-inventory" in api_paths
 
 
 def test_reload_inventory_route_accepts_post_only() -> None:
@@ -180,7 +207,7 @@ class _FakeConn:
 
 def test_get_conn_commits_and_closes_on_success(monkeypatch) -> None:
     fake = _FakeConn()
-    monkeypatch.setattr(main.db, "connect", lambda: fake)
+    monkeypatch.setattr(deps.db, "connect", lambda: fake)
     gen = main.get_conn()
     conn = next(gen)
     assert conn is fake
@@ -193,7 +220,7 @@ def test_get_conn_commits_and_closes_on_success(monkeypatch) -> None:
 
 def test_get_conn_rolls_back_and_closes_on_exception(monkeypatch) -> None:
     fake = _FakeConn()
-    monkeypatch.setattr(main.db, "connect", lambda: fake)
+    monkeypatch.setattr(deps.db, "connect", lambda: fake)
     gen = main.get_conn()
     next(gen)
     with pytest.raises(ValueError, match="boom"):
