@@ -71,7 +71,7 @@ The same rule binds the Owner. The consequence (the Director's incident table, `
 - **(b) New live alerts are enriched correctly** (the inventory has been loaded since 15/09) — and ≈ **79 %** of them come from one Windows endpoint, `HR-computer` (SCA / EventChannel noise; 79.4 % of the 14/09 sample — DEC-066). This is the estate, not a defect, and it is **not a reason to add a filter** (`docs/plan/prompts/planner-run-P4-2026-09-19.md` §2): a filtered pilot would measure the filter. Decide the noise as noise — that is what the false-positive half of the evaluation is for.
 - **(c) The risk column is a band, never a number** — Thấp · Vừa · Cao · Rất cao (`docs/phase-4-enrichment.md:198-207`), shown with the alert's own severity. The score is not on the page by design.
 - **(d) ⚑ beside a suggestion** means the gate forced the verdict (`gate.forced`; the detail page says which step, *"cổng đã ép: …"*). Expected on this corpus: the 383 heads all miss `asset_criticality`, so ① on them is forced to `needs_review` — the gate working, not ① failing.
-- **(e) *"Gợi ý ① ẩn — nhánh mù"*** on a detail page is the blind branch: the suggestion exists and is hidden until the alert is decided. *"Chưa có gợi ý ①"* is different — ① has not run on that alert yet (row **g**).
+- **(e) *"Gợi ý ① ẩn — nhánh mù"*** on a detail page is the blind branch: whatever ① said — or has not yet said — about that alert is hidden until it is decided, and so is whether ① ran at all (`triage_status` and `run_id` are stripped with the suggestion — DEC-101). *"Chưa có gợi ý ①"* appears only on the visible branch and means ① has not run on that alert yet (row **g**). In the queue the ① column shows `—` in both cases.
 
 ### 5 · Daily checks — two minutes, each morning
 
