@@ -193,3 +193,24 @@ def test_approved_task_has_something_left_to_merge(task_id):
         "have the Coder recreate the branch from current `main`. See the module "
         "docstring for what this guard cannot see."
     )
+
+
+_MARKER_RE = re.compile(r"^(<<<<<<< |=======$|>>>>>>> )", re.MULTILINE)
+_PLAN_FILES = ("STATE.md", "DECISIONS.md", "INBOX.md", "superseded.yaml")
+
+
+@pytest.mark.parametrize("name", _PLAN_FILES)
+def test_plan_files_carry_no_conflict_markers(name):
+    """Invariant 4 (DEC-102): a merge that lands `<<<<<<<`/`>>>>>>>` in a plan file is red.
+
+    Two sessions committed docs/plan/STATE.md with its conflict markers in one day
+    (a9c667a — DEC-100; cdb77b3 on task/P4-T02) and a green suite hid both, because
+    nothing read the file for that shape. This does. The `=======` alternative is anchored
+    to a whole line so a Markdown setext underline inside a cell cannot trip it.
+    """
+    text = (REPO_ROOT / "docs" / "plan" / name).read_text(encoding="utf-8")
+    hits = [m.start() for m in _MARKER_RE.finditer(text)]
+    assert not hits, (
+        f"docs/plan/{name} carries a merge-conflict marker at offset(s) {hits[:3]} — a merge "
+        "was committed unresolved; resolve the file by hand before anything else (DEC-102)."
+    )
