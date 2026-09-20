@@ -1,50 +1,76 @@
-# AI Support SOC — the three services of context pack §3: app, worker, db.
+# AI Support SOC — the three services of context pack §3: db, app, worker.
 #
-# OPTIONAL SINCE 05/09. PostgreSQL runs natively on this host and the Makefile
-# no longer references compose at all (Owner decision). This file is kept as a
-# portable path for a machine with a working daemon.
+# CANONICAL SINCE 20/09/2026 (Owner decision): PostgreSQL runs in the `db`
+# container and is the only database the application, the worker and the
+# Makefile targets use. The native PostgreSQL that served 05–20/09 is left in
+# place on IA1803 as a fallback only; nothing here depends on it.
 #
-# NOT RUNNABLE YET, ON PURPOSE. `app.web.main` arrives in P2 and
-# `app.infra.worker` in P4, so `docker compose up` cannot succeed today; the
-# acceptance for this file is `docker compose config`, which needs no daemon.
-# On this host an agent account cannot reach /var/run/docker.sock either —
-# docs/plan/INBOX.md, 2026-09-05 · P0 / P1 · BLOCKER.
+# Restore = `git clone` + the private files (.env, conf/) + `docker compose up -d`:
+# on its FIRST start the db container restores backups/latest.dump (tracked in
+# git — Owner decision 20/09) through db/init/02-restore.sh; later starts reuse
+# the pgdata volume and never touch the dump again.
+#
+# Ports on the host: db 55432 (5432 is the native cluster on IA1803; on a fresh
+# machine set DB_PORT=5432 in .env), app 8000.
 #
 # No `version:` key: it is obsolete in Compose v2+.
 #
-# POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB and DB_PORT are Compose-only
-# variables (DEC-003). They are read here and nowhere else; backend/app/infra/
-# config.py never learns about them. The application reaches PostgreSQL through
-# DATABASE_URL / DATABASE_URL_OWNER from .env.
-#
-# Host port 5432 is taken by the system PostgreSQL, so db publishes 55432.
+# POSTGRES_*, APP_RW_PASSWORD and DB_PORT are Compose-only variables (DEC-003):
+# read here and by db/init/*.sh, never by backend/app/infra/config.py. The
+# application reaches PostgreSQL through DATABASE_URL / DATABASE_URL_OWNER —
+# from .env when it runs on the host (127.0.0.1:${DB_PORT}), overridden below
+# with the in-network address (db:5432) when it runs in a container.
 
 services:
   db:
     image: postgres:16
+    container_name: soc-db
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:-soc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD missing in .env (Compose-only block)}
+      POSTGRES_DB: ${POSTGRES_DB:-soc_dev}
+      APP_RW_PASSWORD: ${APP_RW_PASSWORD:?APP_RW_PASSWORD missing in .env (Compose-only block)}
     ports:
       - "${DB_PORT:-55432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - ./backups:/backups:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 20
-      start_period: 5s
+      start_period: 10s
+    restart: unless-stopped
 
-  app:
+  # Both application services share one image and one set of mounts. The
+  # repository layout is mirrored under /srv so every relative path the code
+  # uses on the host (conf/, kb/, .env, INDEXER_CA) resolves unchanged.
+  app: &backend
     build:
       context: .
       dockerfile: backend/Dockerfile
+    image: ai-support-soc/backend:local
+    container_name: soc-app
+    # Run as the host user so the bind-mounted private files keep their strict
+    # modes (conf/root-ca.pem is 0400 and owned by the Owner) and stay readable.
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file:
       - path: .env
-        required: false
-    command: uvicorn app.web.main:app --host 0.0.0.0 --port 8000
+        required: true
+    environment:
+      DATABASE_URL: postgresql://app_rw:${APP_RW_PASSWORD}@db:5432/${POSTGRES_DB:-soc_dev}
+      DATABASE_URL_OWNER: postgresql://${POSTGRES_USER:-soc}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-soc_dev}
+      PYTHONUNBUFFERED: "1"
+      HOME: /tmp
+    volumes:
+      - ./backend/app:/srv/backend/app:ro     # live code: a merge needs `restart`, not `build`
+      - ./conf:/srv/conf:ro                    # inventory, identities, iocs, root-ca.pem
+      - ./kb:/srv/kb:ro                        # decision tables + playbooks (kb/lookup.py KB_ROOT)
+    extra_hosts:
+      - "wazuh.indexer:host-gateway"           # the indexer stays on the host (:19200)
+    command: python -m uvicorn app.web.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     depends_on:
@@ -54,17 +80,13 @@ services:
 
   # One worker process (N_WORKER=1, §3). The jobs table uses
   # FOR UPDATE SKIP LOCKED, so a second one can be started without code changes.
+  # Restart it after any merge that touches web/worker.py, soar/, infra/puller.py
+  # (DEC-099): `docker compose restart worker`.
   worker:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    env_file:
-      - path: .env
-        required: false
-    command: python -m app.infra.worker
-    depends_on:
-      db:
-        condition: service_healthy
+    <<: *backend
+    container_name: soc-worker
+    command: python -m app.web.worker
+    ports: []
 
 volumes:
   pgdata:

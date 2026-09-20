@@ -25,7 +25,8 @@ conf/*.yaml
 conf/*.csv
 conf/root-ca.pem
 !conf/*.example
-backups/
+backups/*
+!backups/latest.dump
 eval/results/
 
 # P0-T01: lint/type/coverage caches
