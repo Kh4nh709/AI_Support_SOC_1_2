@@ -1,14 +1,18 @@
-# Reviewer — round-1 review, 20/09: P4-T01 (auth, deps, routers package, seed CLI)
+# Reviewer — 20/09: P4-T01 (round 1, done 12:16 — APPROVE), P3-T10 (round 1), P4-T02 (round 2 after the Director's (b) fixes)
 
-One session, named `reviewer-P4-T01`. `prompts/reviewer.md` governs — verify, never fix; the card
+One session per task, named `reviewer-<task>`. `prompts/reviewer.md` governs — verify, never fix; the card
 is the contract; the verdict is an artifact on the task branch (DEC-028). Measured by the Director
 at E1, 20/09 11:52–12:20 (DEC-101); every figure is a claim to reproduce.
 
-**Paste line:**
+**Paste lines — one per session (P4-T01's review is done and merged, `348c199`; its section stays as the record):**
 
 ```
 Read docs/plan/prompts/reviewer.md and act as the Reviewer. Then read
-docs/plan/prompts/reviewer-run-2026-09-20.md §P4-T01. Task: P4-T01.
+docs/plan/prompts/reviewer-run-2026-09-20.md §P3-T10. Task: P3-T10.
+```
+```
+Read docs/plan/prompts/reviewer.md and act as the Reviewer. Then read
+docs/plan/prompts/reviewer-run-2026-09-20.md §P4-T02. Task: P4-T02.
 ```
 
 ## §P4-T01 — `infra/auth.py`, `web/deps.py`, `web/routers/{__init__,auth}.py`, `web/main.py` rewritten, seed CLI
@@ -21,3 +25,21 @@ docs/plan/prompts/reviewer-run-2026-09-20.md §P4-T01. Task: P4-T01.
 - Report counts to reproduce: `test_auth.py` **41 passed** (report `:116`; `grep -c '^def test_'` → 41 on the branch — the card asks for **≥ 22** and 22 names), `test_reload_inventory.py` **9 passed** with the new `…without_session_is_401` (`:145`), `test_import_rules.py` **12 passed** (`:152`), `make lint` 0 / 120 files (`:186`), `make test` **804 / 1 / 484 / 3** on the branch's tree (`:187`; `main` alone reads 930 today after the overnight merges — a different tree). Acceptance 6: `python3 -m app.infra.auth --help` exit 0 and `seed-users --help | grep -c password` → 0 (the CLI never takes a password on `argv`, `P4-T01.prompt.md:30`). Items 1 and 7 need `TEST_DATABASE_URL` — private `soc_p4t01_test`, `-rs`, no `-q`; the committing tests build, migrate and drop a module-scoped scratch database (`fbc41f0`) — check it is dropped after the run (`select datname from pg_database where datname like 'soc_p4t01%'` → only yours).
 - Frozen contracts: none (no migration, no `config.py` key added — `JWT_SECRET`, `JWT_TTL_HOURS`, `LOGIN_MAX_FAILS`, `LOCKOUT_MINUTES` pre-exist at `config.py:149-152`; the two §6.4 auth operations implemented; `POST /api/admin/reload-inventory` wrapped with `require_role("admin")` and kept at its path). `JWT_SECRET == ""` → `AuthDisabled` before any SQL (`P4-T01.prompt.md:24`) — make it red.
 - Buckets: round 1. (a) Coder, (b) card — the acceptance-4 amendment is already (b) and closed —, (c) contract/host.
+
+## §P3-T10 — `tier1/triage.py` (the `triage` job), `audit/llm_runs.py`, the `HANDLERS` line in `web/worker.py`
+
+- Branch: `228bfc2` (+4, 20/09 12:0x–12:28). Merge-base `c22d55f`. Delta: `backend/app/tier1/triage.py`, `backend/app/audit/llm_runs.py`, `backend/app/web/worker.py`, `backend/tests/test_triage_job.py`, `backend/tests/test_llm_runs.py` + report + STATE row — exactly the card's Files list (`P3-T10.prompt.md:14-15`); the `worker.py` diff is **one import + the `HANDLERS` line** and nothing else (measured: `git diff main...task/P3-T10 -- backend/app/web/worker.py` → 3 changed lines). §6 files: 0. Worktree clean.
+- **DEC-046:** `main` moved `c22d55f` → `6e377c8` (P4-T01's auth/deps/routers/`web/main.py` rewrite, P3-T12's two playbook lines) — **9** `backend/`+`kb/` files, **0** overlap, and `tier1/triage.py` imports none of them. The composed tree was not built by the Director this time (the two batches are disjoint by file and by import); build it yourself if you want it — `web/main.py` on `main` is now P4-T01's discovering composition root and `web/worker.py` is untouched by it.
+- **This card is gate item 3's writer:** every `llm_runs` row it writes must carry `gate_result` (G11 — `gate_result IS NULL` must be 0 after any run) and `cost_usd`; `jobs` holds **499 pending `triage`** rows on `soc_dev` right now (DEC-099) and the Owner Assist restarts the worker at this card's merge so the daemon drains them with the real key (DEC-102, option A). Read the card's error table against the code: `unavailable` + audit on the llm-disabled path, transient vs permanent, the last-attempt branch — the report says its three extra tests cover the `verify()`-side failure branches of design note 2 that the card's acceptance list never reaches (report `:25`: `test_verify_transient_before_last_attempt_propagates_and_writes_nothing`, `test_verify_transient_on_last_attempt…`, one more) — **a disclosed deviation to weigh, not a finding**: 25 tests where the card names 19.
+- Card: **12 acceptance items, 6 need `TEST_DATABASE_URL`** (private `soc_p3t10_test`, `-rs`, no `-q`). Report counts to reproduce: `test_triage_job.py` + `test_llm_runs.py` → **25 passed** (`:25`; `grep -c '^def test_'` → 20 + 5 on the branch); the `-k` selections at `:26-29` (1 / 1 / 2 / 1 passed); `test_import_rules.py` **12 passed** (`:36`); `make lint` 0; `make test` / `make test-db` per the report's §2 item 12 — on the branch's own tree, not `main`'s (950 / 503 today).
+- Frozen contracts: none — `jobs.job_type` already includes `triage` (§6.1), `llm_runs` columns pre-exist (migration 016), no config key, no route. The handler must **never** enqueue anything for `source='lab'` G3 rows that P6-T04's loader marks `is_synthetic` (the loader refuses if a `triage` job exists — `load.py:263-278`) — that is P6-T04's guard, but if this handler ever creates a job from a row rather than consuming one, say so.
+- Buckets: round 1. (a) Coder, (b) card, (c) contract/host.
+
+## §P4-T02 — round 2: `tier1/visibility.py` + `tier1/queue.py` after the Director's two (b) corrections
+
+- Branch: `cf60080` (+10 on `main`; two merges of `main` inside — `2b95b04`, `cdb77b3`; the second was **amended after the Coder caught STATE.md conflict markers it had committed** — the same class as DEC-100's slip; disclosed in the report; the branch's `docs/plan/STATE.md` carries **0** markers now, measured). Merge-base `c22d55f`. Delta: the four card files (`P4-T02.prompt.md:14-15`) + report + STATE row; §6 0; worktree clean.
+- **What round 2 was for (DEC-101, bucket (b), free to the Coder), verified landed on the branch:** `ANALYST_HIDE` now carries `"run_id"` (`visibility.py`, the frozenset literal); `LABELING_DENYLIST` carries `triaged_count` and `needs_retriage` (3 hits); the `llm_runs` fixtures write `"forced_by": []` (2 hits, 0 `null` left). Round 1 had no Reviewer pass — the E1 triage found the two gaps in the Coder's own §3 — so this is your **first** look at the whole card, and round 2 is not charged: **bucket accounting starts at round 1 for (a) findings.**
+- **DEC-046:** `main` moved `c22d55f` → `6e377c8` — 9 files, **0** overlap; `tier1/queue.py`/`visibility.py` import none of them. P4-T03 (routes) and P4-T05 (pages) are the consumers and are not written yet; P6-T02 imports `visibility.strip(mode="labeling")` — read design note 5's table (`:28`) against the code with DEC-019 (LLM-derived hidden regardless of flags in labeling mode) and DEC-085 (`source ∈ wazuh|lab|replay` — the key is removed, so all three values vanish; `test_labeling_mode_strips_source_for_every_value` and red case (f), remove `"source"` from the denylist → red).
+- Card: **7 acceptance items**; items 1 and 7 need `TEST_DATABASE_URL` (private `soc_p4t02_test`). Report counts to reproduce (`:41-45`): `test_queue.py` + `test_visibility.py` → **53 passed** (the card asks ≥ 40 with 22 names + the 24-case matrix); `-k "matrix and labeling" | grep -c PASSED` → 12; item 5's one-liner exact output — **recompute it**, the survivor set changed in round 2; `make test` / `make test-db` per §2 on the branch's tree. The queue row's `gate_forced` is jsonb text → `bool | None`; `run_id` UUID → `str` (report §3 item 4). `proposer_raw` is never read (G11 — the ungated verdict must not reach the queue; report `:74`): grep the module for it → 0.
+- Frozen contracts: none (no config key — `RETRIAGE_FACTOR`/`ABS_DELTA` are module constants, acceptance 4 greps `config.py` for them → none; no route; `llm_runs` read-only via one `SELECT`).
+- Buckets: (a) Coder, (b) card, (c) contract/host; the two DEC-101 items are closed (b).

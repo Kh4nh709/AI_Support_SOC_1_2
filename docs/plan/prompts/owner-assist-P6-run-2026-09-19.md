@@ -34,7 +34,7 @@ Start it from the **primary checkout** (it needs `.env`), detached, with a log o
 cd /project/project/AI_Support_SOC_1_2
 mkdir -p /home/user1/soc-logs
 PYTHONUNBUFFERED=1 nohup setsid make run-worker > /home/user1/soc-logs/worker-$(date +%F).log 2>&1 &   # PYTHONUNBUFFERED=1 added 20/09 (DEC-099): unbuffered log lines, no product change
-echo $! > /home/user1/soc-logs/worker.pid; sleep 20; tail -n 20 /home/user1/soc-logs/worker-$(date +%F).log
+sleep 2; pgrep -f 'make run-worker' > /home/user1/soc-logs/worker.pid; sleep 18; tail -n 20 /home/user1/soc-logs/worker-$(date +%F).log   # pidfile from pgrep, not $! (setsid forks — $! is an exited PID; DEC-102). The pid is the process-group leader: stop with `kill -- -$(cat /home/user1/soc-logs/worker.pid)`
 ```
 
 Then prove it, with these three and nothing softer:
