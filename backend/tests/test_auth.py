@@ -1,14 +1,17 @@
 """P4-T01 — `infra/auth.py`, `web/deps.py`, `web/routers/auth.py`, the discovering `main.py`
 and the seed CLI.
 
-Transaction discipline, because it decides what these tests can see. `now()` in
-PostgreSQL is the *transaction start* time, and the `db` fixture holds one open
-transaction until teardown. `logout`/`deactivate` write `sessions_invalid_before
-= now()`, so a test that logs in and then logs out inside one transaction would
-stamp the logout *before* the token's `iat` and prove nothing. Tests that need
-time to move therefore commit between steps through the `committed` helper,
-which deletes the users it created at teardown (`audit_events` is append-only —
-those rows stay, keyed by usernames no other test uses).
+Two databases, on purpose. `now()` in PostgreSQL is the *transaction start*
+time and the shared `db` fixture holds one open transaction until teardown, so
+a test that logs in and then logs out inside that transaction would stamp
+`sessions_invalid_before` *before* the token's `iat` and prove nothing. Tests
+that need time to move — and the API tests, whose `get_conn` override commits
+the way the real dependency does — therefore run against a **scratch database
+this module builds, migrates and drops itself** (`scratch_dsn`/`sdb`, the
+`test_pipeline.py` pattern): every commit leaves `admin.user_created` /
+`authz.denied` rows behind, `audit_events` is append-only to the owner too, and
+`test_schema_v3_017.py` counts that table from zero. Tests that never commit
+use the shared `db` fixture like everyone else.
 
 The API tests override `deps.get_conn` with a generator that has the real
 dependency's shape (commit on success, rollback on any exception) rather than
@@ -40,6 +43,8 @@ from app.infra import auth, config
 from app.web import deps, main
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
+
+from tests import conftest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SECRET = "test-secret"
@@ -73,40 +78,84 @@ def _row(db, user_id: str) -> tuple:
     ).fetchone()
 
 
+def _scratch_dbname() -> str:
+    """`<session dbname>_auth_test`: unique per session DSN (a Coder and a
+    Reviewer on different DSNs cannot collide) and still ending in `_test`."""
+    session = os.environ.get("TEST_DATABASE_URL", conftest.DEFAULT_TEST_DATABASE_URL)
+    return f"{conftest._dbname(session)}_auth_test"
+
+
+@pytest.fixture(scope="module")
+def scratch_dsn():
+    if shutil.which("psql") is None or shutil.which("createdb") is None:
+        pytest.skip("psql/createdb not on PATH — cannot build the auth scratch database")
+    dbname = _scratch_dbname()
+    subprocess.run(["dropdb", "--if-exists", dbname], check=True, capture_output=True)
+    subprocess.run(["createdb", dbname], check=True, capture_output=True)
+    dsn = f"postgresql:///{dbname}"
+    result = subprocess.run(
+        ["bash", "scripts/migrate.sh", dsn],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"scratch migrate failed:\n{result.stderr}"
+    try:
+        yield dsn
+    finally:
+        subprocess.run(["dropdb", "--if-exists", dbname], check=False, capture_output=True)
+
+
 @pytest.fixture
-def committed(db):
-    """Create users that are committed at once (so every later step is its own
-    transaction and `now()` moves) and deleted at teardown."""
-    created: list[str] = []
+def sdb(scratch_dsn):
+    """A connection to the scratch database; whatever a test commits stays
+    until the module drops the database."""
+    conn = psycopg.connect(scratch_dsn)
+    try:
+        yield conn
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+@pytest.fixture(autouse=True)
+def _require_db_marker_for_scratch(request):
+    # conftest enforces this for `db`; the scratch fixtures need PostgreSQL too,
+    # and `make test` deselects only what is marked.
+    uses = {"sdb", "scratch_dsn"} & set(request.fixturenames)
+    if uses and request.node.get_closest_marker("db") is None:
+        pytest.fail(f"{request.node.nodeid} uses {sorted(uses)} without @pytest.mark.db")
+
+
+@pytest.fixture
+def committed(sdb):
+    """Create users that are committed at once, so every later step is its own
+    transaction and `now()` moves."""
 
     def make(
         *, role: str = "tier1", password: str = PASSWORD, prefix: str = "u"
     ) -> tuple[str, str]:
-        username, user_id = _seed(db, role=role, password=password, prefix=prefix)
-        db.commit()
-        created.append(user_id)
+        username, user_id = _seed(sdb, role=role, password=password, prefix=prefix)
+        sdb.commit()
         return username, user_id
 
-    yield make
-    db.rollback()
-    for user_id in created:
-        db.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
-    db.commit()
+    return make
 
 
 @pytest.fixture
-def client(db):
-    """`TestClient` on the real app with `get_conn` → the `db` fixture wrapped in the
-    real dependency's commit/rollback shape, and `get_config` → a literal secret."""
+def client(sdb):
+    """`TestClient` on the real app with `get_conn` → the scratch connection wrapped
+    in the real dependency's commit/rollback shape, and `get_config` → a literal secret."""
 
     def get_conn():
         try:
-            yield db
+            yield sdb
         except BaseException:
-            db.rollback()
+            sdb.rollback()
             raise
         else:
-            db.commit()
+            sdb.commit()
 
     main.app.dependency_overrides[deps.get_conn] = get_conn
     main.app.dependency_overrides[deps.get_config] = lambda: _cfg()
@@ -335,26 +384,26 @@ def test_expired_lock_lets_the_right_password_in_and_resets(db) -> None:
 
 
 @pytest.mark.db
-def test_logout_kills_earlier_token_and_later_login_works_without_sleep(committed, db) -> None:
+def test_logout_kills_earlier_token_and_later_login_works_without_sleep(committed, sdb) -> None:
     cfg = _cfg()
     username, user_id = committed(prefix="logout")
-    first = auth.issue_token(auth.login(db, username, PASSWORD, cfg), cfg)
-    db.commit()
-    assert auth.verify(db, first, cfg).user_id == user_id
+    first = auth.issue_token(auth.login(sdb, username, PASSWORD, cfg), cfg)
+    sdb.commit()
+    assert auth.verify(sdb, first, cfg).user_id == user_id
 
     # Force the logout and the next login into the SAME second (planning decision
     # 8's case): with an integer `iat`, or `<` instead of `<=`, the later token
     # would die with the earlier one. Retrying is cheap; the loop almost always
     # exits on the first pass.
     for _ in range(50):
-        auth.logout(db, user_id)
-        db.commit()
+        auth.logout(sdb, user_id)
+        sdb.commit()
         with pytest.raises(auth.Unauthorized) as excinfo:
-            auth.verify(db, first, cfg)
+            auth.verify(sdb, first, cfg)
         assert excinfo.value.reason == "logged_out"
-        later = auth.login(db, username, PASSWORD, cfg)
-        db.commit()
-        (invalid_epoch,) = db.execute(
+        later = auth.login(sdb, username, PASSWORD, cfg)
+        sdb.commit()
+        (invalid_epoch,) = sdb.execute(
             "SELECT EXTRACT(EPOCH FROM sessions_invalid_before) FROM users WHERE user_id = %s",
             (user_id,),
         ).fetchone()
@@ -364,22 +413,22 @@ def test_logout_kills_earlier_token_and_later_login_works_without_sleep(committe
         pytest.fail("could not place a logout and a login inside the same second")
 
     assert later.iat > float(invalid_epoch)
-    assert auth.verify(db, auth.issue_token(later, cfg), cfg).user_id == user_id
+    assert auth.verify(sdb, auth.issue_token(later, cfg), cfg).user_id == user_id
 
 
 @pytest.mark.db
-def test_deactivate_kills_tokens(committed, db) -> None:
+def test_deactivate_kills_tokens(committed, sdb) -> None:
     cfg = _cfg()
     username, user_id = committed(prefix="deact")
-    token = auth.issue_token(auth.login(db, username, PASSWORD, cfg), cfg)
-    db.commit()
-    assert auth.deactivate(db, username) is True
-    db.commit()
+    token = auth.issue_token(auth.login(sdb, username, PASSWORD, cfg), cfg)
+    sdb.commit()
+    assert auth.deactivate(sdb, username) is True
+    sdb.commit()
     with pytest.raises(auth.Unauthorized) as excinfo:
-        auth.verify(db, token, cfg)
+        auth.verify(sdb, token, cfg)
     assert excinfo.value.reason == "inactive"
-    assert _row(db, user_id)[2] is not None  # sessions_invalid_before set at the same moment
-    assert auth.deactivate(db, _name("nobody")) is False
+    assert _row(sdb, user_id)[2] is not None  # sessions_invalid_before set at the same moment
+    assert auth.deactivate(sdb, _name("nobody")) is False
 
 
 @pytest.mark.db
@@ -430,7 +479,7 @@ def test_set_password(db) -> None:
 
 
 @pytest.mark.db
-def test_api_login_sets_cookie_and_returns_token(committed, client, db) -> None:
+def test_api_login_sets_cookie_and_returns_token(committed, client, sdb) -> None:
     username, user_id = committed(prefix="api")
     before = datetime.now(UTC)
     response = _api_login(client, username)
@@ -440,7 +489,7 @@ def test_api_login_sets_cookie_and_returns_token(committed, client, db) -> None:
     assert body["role"] == "tier1" and body["user_id"] == user_id
     expires_at = datetime.fromisoformat(body["expires_at"])
     assert timedelta(hours=8) <= expires_at - before < timedelta(hours=8, seconds=30)
-    assert auth.verify(db, body["token"], _cfg()).user_id == user_id
+    assert auth.verify(sdb, body["token"], _cfg()).user_id == user_id
 
     cookie = response.headers["set-cookie"]
     assert cookie.startswith(f"{deps.COOKIE_NAME}={body['token']};")
@@ -452,7 +501,7 @@ def test_api_login_sets_cookie_and_returns_token(committed, client, db) -> None:
 
 
 @pytest.mark.db
-def test_api_cookie_alone_authenticates_and_bearer_wins_over_it(committed, client, db) -> None:
+def test_api_cookie_alone_authenticates_and_bearer_wins_over_it(committed, client, sdb) -> None:
     username, _ = committed(prefix="cookie")
     token = _api_login(client, username).json()["token"]
     assert client.cookies[deps.COOKIE_NAME] == token
@@ -466,11 +515,11 @@ def test_api_cookie_alone_authenticates_and_bearer_wins_over_it(committed, clien
 
 
 @pytest.mark.db
-def test_api_invalid_credentials_body_never_says_which(committed, client, db) -> None:
+def test_api_invalid_credentials_body_never_says_which(committed, client, sdb) -> None:
     username, _ = committed(prefix="which")
     inactive, _ = committed(prefix="inact")
-    auth.deactivate(db, inactive)
-    db.commit()
+    auth.deactivate(sdb, inactive)
+    sdb.commit()
     bodies = {
         _api_login(client, _name("nobody")).json()["detail"],
         _api_login(client, username, "wrong").json()["detail"],
@@ -480,7 +529,7 @@ def test_api_invalid_credentials_body_never_says_which(committed, client, db) ->
 
 
 @pytest.mark.db
-def test_api_five_wrong_passwords_is_423(committed, client, db) -> None:
+def test_api_five_wrong_passwords_is_423(committed, client, sdb) -> None:
     username, user_id = committed(prefix="five")
     for _ in range(4):
         response = _api_login(client, username, "wrong")
@@ -497,7 +546,7 @@ def test_api_five_wrong_passwords_is_423(committed, client, db) -> None:
     sixth = _api_login(client, username)
     assert sixth.status_code == 423
     assert sixth.json()["locked_until"] == body["locked_until"]
-    assert _row(db, user_id)[0] == 5
+    assert _row(sdb, user_id)[0] == 5
 
 
 @pytest.mark.db
@@ -527,15 +576,15 @@ def test_api_logout_without_a_session_is_401(client) -> None:
 
 
 @pytest.mark.db
-def test_api_logout_commits_before_the_204_is_sent(committed, client, db, _test_database) -> None:
+def test_api_logout_commits_before_the_204_is_sent(committed, client, sdb, scratch_dsn) -> None:
     """FastAPI 0.141.1 runs `get_conn`'s exit code — the commit — after the
     response is sent (measured), so the route commits itself: at the moment
     the 204 leaves, the old token must already be dead on another connection."""
     username, _ = committed(prefix="asgi")
     token = _api_login(client, username).json()["token"]
-    db.commit()
+    sdb.commit()
     seen: list[str] = []
-    with psycopg.connect(_test_database) as other:
+    with psycopg.connect(scratch_dsn) as other:
 
         async def receive() -> dict:
             return {"type": "http.request", "body": b"", "more_body": False}
@@ -570,7 +619,7 @@ def test_api_logout_commits_before_the_204_is_sent(committed, client, db, _test_
 
 @pytest.mark.db
 def test_reload_inventory_as_tier1_is_403_and_authz_denied_persists(
-    committed, client, _test_database, monkeypatch
+    committed, client, scratch_dsn, monkeypatch
 ) -> None:
     monkeypatch.setenv("INVENTORY_PATHS", json.dumps(["/nonexistent/p4t01/inventory.yaml"]))
     username, user_id = committed(prefix="t1")
@@ -579,7 +628,7 @@ def test_reload_inventory_as_tier1_is_403_and_authz_denied_persists(
     assert response.status_code == 403
     assert response.json() == {"detail": "forbidden"}
     # A second connection sees only what was committed: the row survived the 403.
-    with psycopg.connect(_test_database) as other:
+    with psycopg.connect(scratch_dsn) as other:
         rows = other.execute(
             "SELECT subject_id, actor_role, actor_id, payload FROM audit_events "
             "WHERE event_type = 'authz.denied' AND actor_id = %s",
@@ -596,7 +645,9 @@ def test_reload_inventory_as_tier1_is_403_and_authz_denied_persists(
 
 
 @pytest.mark.db
-def test_reload_inventory_as_admin_is_not_403(committed, client, db, tmp_path, monkeypatch) -> None:
+def test_reload_inventory_as_admin_is_not_403(
+    committed, client, sdb, tmp_path, monkeypatch
+) -> None:
     monkeypatch.setenv("INVENTORY_PATHS", json.dumps([str(tmp_path / "missing.yaml")]))
     username, user_id = committed(role="admin", prefix="adm")
     token = _api_login(client, username).json()["token"]
@@ -604,7 +655,7 @@ def test_reload_inventory_as_admin_is_not_403(committed, client, db, tmp_path, m
     # past both dependencies: P2-T08's own 422 for a file that is not there
     assert response.status_code == 422, response.text
     assert any("file not found" in problem for problem in response.json()["detail"])
-    (denied,) = db.execute(
+    (denied,) = sdb.execute(
         "SELECT count(*) FROM audit_events WHERE event_type = 'authz.denied' AND actor_id = %s",
         (user_id,),
     ).fetchone()
@@ -690,8 +741,8 @@ def _run_cli(args: list[str], env: dict[str, str]) -> subprocess.CompletedProces
 
 
 @pytest.mark.db
-def test_cli_seed_users_creates_then_skips(db, _test_database) -> None:
-    dsn = _test_database
+def test_cli_seed_users_creates_then_skips(sdb, scratch_dsn) -> None:
+    dsn = scratch_dsn
     one, two = _name("cli-a"), _name("cli-b")
     env = {_env_key(one): "one-pw", _env_key(two): "two-pw"}
     args = [
@@ -707,47 +758,42 @@ def test_cli_seed_users_creates_then_skips(db, _test_database) -> None:
         "admin",
         "Bravo Two",
     ]
-    try:
-        first = _run_cli(args, env)
-        assert first.returncode == 0, first.stdout + first.stderr
-        assert f"created: {one} (tier1)" in first.stdout
-        assert f"created: {two} (admin)" in first.stdout
-        hashes = dict(
-            db.execute(
-                "SELECT username, password_hash FROM users WHERE username IN (%s, %s)", (one, two)
-            ).fetchall()
-        )
-        assert set(hashes) == {one, two}
-        assert auth.login(db, one, "one-pw", _cfg()).role == "tier1"
-        db.commit()
+    first = _run_cli(args, env)
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert f"created: {one} (tier1)" in first.stdout
+    assert f"created: {two} (admin)" in first.stdout
+    hashes = dict(
+        sdb.execute(
+            "SELECT username, password_hash FROM users WHERE username IN (%s, %s)", (one, two)
+        ).fetchall()
+    )
+    assert set(hashes) == {one, two}
+    assert auth.login(sdb, one, "one-pw", _cfg()).role == "tier1"
+    sdb.commit()
 
-        second = _run_cli(args, {_env_key(one): "changed", _env_key(two): "changed"})
-        assert second.returncode == 0, second.stdout + second.stderr
-        assert f"exists, skipped: {one}" in second.stdout
-        assert f"exists, skipped: {two}" in second.stdout
-        assert "created:" not in second.stdout
-        again = dict(
-            db.execute(
-                "SELECT username, password_hash FROM users WHERE username IN (%s, %s)", (one, two)
-            ).fetchall()
-        )
-        assert again == hashes  # never overwritten
+    second = _run_cli(args, {_env_key(one): "changed", _env_key(two): "changed"})
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert f"exists, skipped: {one}" in second.stdout
+    assert f"exists, skipped: {two}" in second.stdout
+    assert "created:" not in second.stdout
+    again = dict(
+        sdb.execute(
+            "SELECT username, password_hash FROM users WHERE username IN (%s, %s)", (one, two)
+        ).fetchall()
+    )
+    assert again == hashes  # never overwritten
 
-        for output in (first, second):
-            text = output.stdout + output.stderr
-            for secret in ("one-pw", "two-pw", "changed", dsn, *hashes.values()):
-                assert secret not in text
-        (events,) = db.execute(
-            "SELECT count(*) FROM audit_events WHERE event_type = 'admin.user_created' "
-            "AND actor_role = 'system' AND actor_id IS NULL "
-            "AND payload->>'username' IN (%s, %s)",
-            (one, two),
-        ).fetchone()
-        assert events == 2
-    finally:
-        db.rollback()
-        db.execute("DELETE FROM users WHERE username IN (%s, %s)", (one, two))
-        db.commit()
+    for output in (first, second):
+        text = output.stdout + output.stderr
+        for secret in ("one-pw", "two-pw", "changed", dsn, *hashes.values()):
+            assert secret not in text
+    (events,) = sdb.execute(
+        "SELECT count(*) FROM audit_events WHERE event_type = 'admin.user_created' "
+        "AND actor_role = 'system' AND actor_id IS NULL "
+        "AND payload->>'username' IN (%s, %s)",
+        (one, two),
+    ).fetchone()
+    assert events == 2
 
 
 def test_cli_has_no_password_argument() -> None:
@@ -827,57 +873,50 @@ def test_cli_bad_role_exits_1(capsys, monkeypatch) -> None:
 
 
 @pytest.mark.db
-def test_cli_set_password_deactivate_and_exit_codes(
-    db, _test_database, capsys, monkeypatch
-) -> None:
-    dsn = _test_database
+def test_cli_set_password_deactivate_and_exit_codes(sdb, scratch_dsn, capsys, monkeypatch) -> None:
+    dsn = scratch_dsn
     username = _name("cli-c")
     key = _env_key(username)
-    try:
-        monkeypatch.setenv(key, "first")
-        assert auth.main(["seed-users", "--dsn", dsn, "--user", username, "tier2", "Charlie"]) == 0
-        assert auth.login(db, username, "first", _cfg()).role == "tier2"
-        db.commit()
+    monkeypatch.setenv(key, "first")
+    assert auth.main(["seed-users", "--dsn", dsn, "--user", username, "tier2", "Charlie"]) == 0
+    assert auth.login(sdb, username, "first", _cfg()).role == "tier2"
+    sdb.commit()
 
-        monkeypatch.setenv(key, "second")
-        assert auth.main(["--dsn", dsn, "set-password", username]) == 0
-        assert auth.login(db, username, "second", _cfg()).role == "tier2"
-        db.commit()
+    monkeypatch.setenv(key, "second")
+    assert auth.main(["--dsn", dsn, "set-password", username]) == 0
+    assert auth.login(sdb, username, "second", _cfg()).role == "tier2"
+    sdb.commit()
 
-        monkeypatch.delenv(key)
-        monkeypatch.setattr(auth.getpass, "getpass", lambda prompt: "")
-        assert auth.main(["set-password", "--dsn", dsn, username]) == 1
-        assert auth.main(["seed-users", "--dsn", dsn, "--user", _name("cli-d"), "tier1", "D"]) == 1
+    monkeypatch.delenv(key)
+    monkeypatch.setattr(auth.getpass, "getpass", lambda prompt: "")
+    assert auth.main(["set-password", "--dsn", dsn, username]) == 1
+    assert auth.main(["seed-users", "--dsn", dsn, "--user", _name("cli-d"), "tier1", "D"]) == 1
 
-        assert auth.main(["set-password", "--dsn", dsn, _name("nobody")]) == 1
-        assert auth.main(["deactivate", "--dsn", dsn, _name("nobody")]) == 1
-        assert auth.main(["deactivate", "--dsn", dsn, username]) == 0
-        with pytest.raises(auth.LoginFailed) as excinfo:
-            auth.login(db, username, "second", _cfg())
-        assert excinfo.value.reason == "inactive"
-        db.commit()
+    assert auth.main(["set-password", "--dsn", dsn, _name("nobody")]) == 1
+    assert auth.main(["deactivate", "--dsn", dsn, _name("nobody")]) == 1
+    assert auth.main(["deactivate", "--dsn", dsn, username]) == 0
+    with pytest.raises(auth.LoginFailed) as excinfo:
+        auth.login(sdb, username, "second", _cfg())
+    assert excinfo.value.reason == "inactive"
+    sdb.commit()
 
-        monkeypatch.setenv(key, "x")
-        assert (
-            auth.main(
-                [
-                    "seed-users",
-                    "--dsn",
-                    "postgresql:///p4t01_no_such_db",
-                    "--user",
-                    username,
-                    "tier1",
-                    "C",
-                ]
-            )
-            == 2
+    monkeypatch.setenv(key, "x")
+    assert (
+        auth.main(
+            [
+                "seed-users",
+                "--dsn",
+                "postgresql:///p4t01_no_such_db",
+                "--user",
+                username,
+                "tier1",
+                "C",
+            ]
         )
-        captured = capsys.readouterr()
-        assert "p4t01_no_such_db" not in captured.out
-        assert "postgresql:///" not in captured.out + captured.err
-        for secret in ("first", "second"):
-            assert secret not in captured.out + captured.err
-    finally:
-        db.rollback()
-        db.execute("DELETE FROM users WHERE username = %s", (username,))
-        db.commit()
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert "p4t01_no_such_db" not in captured.out
+    assert "postgresql:///" not in captured.out + captured.err
+    for secret in ("first", "second"):
+        assert secret not in captured.out + captured.err
