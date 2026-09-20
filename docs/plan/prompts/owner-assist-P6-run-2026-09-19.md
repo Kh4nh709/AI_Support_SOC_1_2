@@ -28,13 +28,13 @@ waiting behind that cursor.
 pending — there is). The 383 `triage` jobs stay pending until P3's ① lands and the worker is
 restarted with the new handlers — that is expected, not a fault.
 
-Start it from the **primary checkout** (it needs `.env`), detached, with a log outside the repo:
+**Since 20/09 20:52 the worker is a docker compose service (DEC-105; `docs/db-docker.md`) — the `nohup setsid make run-worker` / pidfile / `kill -- -<pgid>` procedure below is RETIRED and must never be run again while the container exists: two pullers on one `source_cursor` corrupt it.** Start, restart and stop it from the **primary checkout** (compose reads `.env`):
 
 ```bash
 cd /project/project/AI_Support_SOC_1_2
-mkdir -p /home/user1/soc-logs
-PYTHONUNBUFFERED=1 nohup setsid make run-worker > /home/user1/soc-logs/worker-$(date +%F).log 2>&1 &   # PYTHONUNBUFFERED=1 added 20/09 (DEC-099): unbuffered log lines, no product change
-sleep 2; pgrep -f 'make run-worker' > /home/user1/soc-logs/worker.pid; sleep 18; tail -n 20 /home/user1/soc-logs/worker-$(date +%F).log   # pidfile from pgrep, not $! (setsid forks — $! is an exited PID; DEC-102). The pid is the process-group leader: stop with `kill -- -$(cat /home/user1/soc-logs/worker.pid)`
+make run-worker                      # = docker compose up -d --wait db worker (idempotent; a running worker is left alone)
+docker compose restart worker        # after ANY merge that touches backend/app/web/worker.py, soar/, infra/puller.py — the code is bind-mounted, no rebuild
+docker compose logs --since 5m worker | tail -n 20   # the JSON job lines; `docker compose stop worker` to stop; never `make run-worker-native` beside it
 ```
 
 Then prove it, with these three and nothing softer:

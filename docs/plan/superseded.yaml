@@ -66,6 +66,7 @@ scan:
   - P0
   - P1
   - P2   # closed 15/09, DEC-079 (DEC-049 retires a done phase's cards from the scan)
+  - P3   # gate met 4/4 on 20/09, DEC-105 (P3-T11 still open as work — the P2-T07 precedent: the phase closes on the gate; its live card is still reviewed against the card text, not the scan)
 rules:
 - id: dec-024-01
   dec: DEC-024(a) (supersedes DEC-023 item 3 and DEC-023 item 6's gate qualif
