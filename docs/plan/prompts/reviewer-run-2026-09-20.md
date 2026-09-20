@@ -1,4 +1,4 @@
-# Reviewer — 20/09: P4-T01 (round 1, done 12:16 — APPROVE), P3-T10 (round 1), P4-T02 (round 2 after the Director's (b) fixes)
+# Reviewer — 20/09: P4-T01 (done — APPROVE, merged), P3-T10 and P4-T02 (open), P6-T03 and P4-T07 (round 1)
 
 One session per task, named `reviewer-<task>`. `prompts/reviewer.md` governs — verify, never fix; the card
 is the contract; the verdict is an artifact on the task branch (DEC-028). Measured by the Director
@@ -13,6 +13,14 @@ docs/plan/prompts/reviewer-run-2026-09-20.md §P3-T10. Task: P3-T10.
 ```
 Read docs/plan/prompts/reviewer.md and act as the Reviewer. Then read
 docs/plan/prompts/reviewer-run-2026-09-20.md §P4-T02. Task: P4-T02.
+```
+```
+Read docs/plan/prompts/reviewer.md and act as the Reviewer. Then read
+docs/plan/prompts/reviewer-run-2026-09-20.md §P6-T03. Task: P6-T03.
+```
+```
+Read docs/plan/prompts/reviewer.md and act as the Reviewer. Then read
+docs/plan/prompts/reviewer-run-2026-09-20.md §P4-T07. Task: P4-T07.
 ```
 
 ## §P4-T01 — `infra/auth.py`, `web/deps.py`, `web/routers/{__init__,auth}.py`, `web/main.py` rewritten, seed CLI
@@ -43,3 +51,23 @@ docs/plan/prompts/reviewer-run-2026-09-20.md §P4-T02. Task: P4-T02.
 - Card: **7 acceptance items**; items 1 and 7 need `TEST_DATABASE_URL` (private `soc_p4t02_test`). Report counts to reproduce (`:41-45`): `test_queue.py` + `test_visibility.py` → **53 passed** (the card asks ≥ 40 with 22 names + the 24-case matrix); `-k "matrix and labeling" | grep -c PASSED` → 12; item 5's one-liner exact output — **recompute it**, the survivor set changed in round 2; `make test` / `make test-db` per §2 on the branch's tree. The queue row's `gate_forced` is jsonb text → `bool | None`; `run_id` UUID → `str` (report §3 item 4). `proposer_raw` is never read (G11 — the ungated verdict must not reach the queue; report `:74`): grep the module for it → 0.
 - Frozen contracts: none (no config key — `RETRIAGE_FACTOR`/`ABS_DELTA` are module constants, acceptance 4 greps `config.py` for them → none; no route; `llm_runs` read-only via one `SELECT`).
 - Buckets: (a) Coder, (b) card, (c) contract/host; the two DEC-101 items are closed (b).
+
+## §P6-T03 — `eval/label_export.py`: `kappa`, `disagreements`, `freeze` (version-by-existence), `report`
+
+- Branch: `2db4530` (+3, 20/09 13:55–13:58: `93dbc8d` the module, `01e1779` the tests, `2db4530` report + row). Merge-base `761b85d` (the KB-draft merge). Delta: `eval/label_export.py`, `backend/tests/test_label_export.py` + report + STATE row — exactly the card's Files list (`P6-T03.prompt.md:14-15`); §6 0; worktree clean; STATE.md on the branch carries 0 markers.
+- **DEC-046:** `main` moved `761b85d` → `c02701f` — **10** `backend/`+`kb/` files (P4-T01's auth/deps/routers/`web/main.py`, P3-T12's two playbook lines, invariant 4 in `test_dispatch_state.py`), **0** overlap, none imported by `eval/label_export.py` (it reads `gold_candidates.csv` and `triage_labels` — P6-T01's format on `main` and migration 015's table). Review the branch as it stands.
+- **Evaluation-validity surface — read these against the standing rules, not only the card:** the gold set is frozen by sha256 in git before any evaluation run; labels changed after an eval run create `gold_v2`, never overwrite (`freeze` is version-by-existence — `gold_v1.csv` present → v2 + diff); `source='disagreement'` rows; the adjudicator id is the **single write** this script makes (`--adjudicator-id`); `report` never opens a database (design note 5, read literally — report `:171-176`). The 25/09 and 27–28/09 Owner steps (`kappa` → `disagreements` → adjudication → `freeze` → `report`) run from the primary checkout; the card's `must` is what those steps need.
+- Card: **7 acceptance items**; the db-backed ones need `TEST_DATABASE_URL` (private `soc_p6t03_test`). Report counts to reproduce: `test_label_export.py` **24 passed** (`:72`; `grep -c '^def test_'` → 22 — two are parametrised; 5 `@pytest.mark.db`), `test_import_rules.py` **12 passed** (`:131`, `eval/` is a composition root), `make test` **949/1/481/3** and `make test-db` **481** on the branch's tree (`:136-138`) — `main` reads 955 / 503 today, a different tree. The DEC-025 red steps for items 1 and 2 are in §2 — reproduce them yourself.
+- **Two disclosed deviations (report §3), for you to weigh:** (1) implementation before tests — the DEC-025 red cases were demonstrated after writing, not before; every named test has one (check that each red is real, not a re-telling); (2) `test_freeze_writes_v1_sha_and_disagreement_rows` inserts its fixture alerts directly instead of via `open_alert`, because `open_alert` writes an append-only `audit_events` row that a committing test cannot clean (the same reasoning `test_lab_tag.py` recorded, P6-T05 round 1 accepted) — the `p6t03c-` rows are swept by an autouse fixture ordered before `db`'s rollback. Confirm the sweep leaves `soc_p6t03_test` at 0 rows of each.
+- Frozen contracts: none — `triage_labels` (migration 015) read, one adjudicator write, no schema, no config key, no route.
+- Buckets: round 1. (a) Coder, (b) card, (c) contract/host.
+
+## §P4-T07 — `docs/runbook.md` §Pilot + `backend/tests/test_runbook_pilot.py`
+
+- Branch: `c49bf76` (+9, 20/09 13:2x–14:12). Merge-base `6e377c8`. Delta: `docs/runbook.md` (109 lines, new), `backend/tests/test_runbook_pilot.py` (9 tests) + report + STATE row — exactly the card's Files (`P4-T07.prompt.md:14-15`, modify none); §6 0; clean; 0 markers.
+- **DEC-046:** `main` moved one commit (`c02701f`, invariant 4) — 1 file, 0 overlap. Review the branch as it stands.
+- **This is the document the Owner executes to start the pilot**, and it names things that do not all exist on `main` yet: P4-T01's seed CLI (merged `348c199`), P4-T05's pages (not written), P3-T10's ① (in review). The card says the document must say which commands need which merge — check that every command is runnable *on the day it is meant to be run* and that the preconditions name the merge they wait for (report `:21`: the negative checks — no `alerts.json` path, no indexer value, no inline `SEED_PASSWORD_X=`, no secret/DSN value — measured by the Director on the branch: `alerts.json` **0**, `wazuh.indexer|19200|9400` **0**, `seed-users` **2**, `--user` **4**, `## Pilot` **1**).
+- **Three commits react to Director decisions of the same day** — read them as the card's letter, not as drift: `1432f6e` §4(e) "on a blind alert the page hides whether ① ran, not only what it said" (DEC-101 — `run_id` joined the hidden set); `72a067b` "the worker is restarted after P3-T10's merge (row g) and after any merge touching `worker.py`" (DEC-102, option A); `5c2813e` the `unavailable` remedy reads `llm_runs.stopped_by` and `jobs.last_error` (there is no error column on `llm_runs` — confirm against migration 016/`schema.sql`).
+- Card: **4 acceptance items**; none DB-backed. Report counts to reproduce: `test_runbook_pilot.py` **23 passed** (`:25`; `grep -c '^def test_'` → 9, the rest parametrised — the `-k` selections at `:26-30`: 22 / 22 / 22 / 23 (fence masking) / 3, and the three negative checks *pass on emptiness* — make one red by appending a forbidden string, as the report did with `alerts.json`); `make test` **973/1/503/2** on the branch's tree (`:36`). The positive checks are scoped to `## Pilot` so a P8 section cannot stand in for it (`596cf3e`) — verify the scoping, it is what makes the test load-bearing.
+- **§11 check (checklist item 4 of E5, here as a review item):** the document must never instruct the Coder to run the pilot, decide alerts, seed real users or tell the advisor the rule — it instructs the **Owner**; the Coder ran nothing against `soc_dev`, the worker, the app or the indexer (card `:3`, `:51`). Confirm the report says so and the diff contains no such run.
+- Frozen contracts: none (a Markdown document and a test). Buckets: round 1.
