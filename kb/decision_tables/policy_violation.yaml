@@ -1,18 +1,40 @@
 # kb/decision_tables/policy_violation.yaml — SKELETON. Content is the Owner's + advisor's (§11).
 # reviewed_by/reviewed_at stay null until that sitting; while null the gate treats the table as absent
 # (architecture §3.10) and records decision_table_unreviewed:<category> in gate_result.warnings.
+#
+# DRAFT 19/09/2026 by the KB Drafter (docs/plan/prompts/kb-drafter-run-2026-09-19.md) for the sitting to
+# review, amend and sign — nothing here is policy until reviewed_by is non-null. No-signal category: 0 of
+# 3,070 archive clusters, no resolver entry reaches it, no Linux stock rule carries a fitting group and no
+# local rule was authored (DEC-057 decided it inside A5; lab-scenarios.md:826-827). Evidence =
+# kb/playbooks/policy_violation.md by line only. The playbook's own usual conclusion is
+# concluded_policy_violation (:3) — neither an incident nor a false positive — which the three table actions
+# cannot express; needs_review is the closest.
+# apply_table is first match in file order; every two rules with different actions are disjoint on the
+# 2,520-point grid. No match -> B1 answers needs_review (docs/plan/prompts/P7.md:17). Questions for the sitting:
+# docs/plan/kb-review-sheet-2026-09-19.md §10.
 category: policy_violation
 playbook: policy_violation_v1
 reviewed_by: null
 reviewed_at: null
 rules:
+  # evidence: This rule is the STRUCTURAL precondition under which an FP verdict is permitted (architecture §4: false_positive only on structural evidence the attacker cannot steer); the cited §3 branches are the text ① reads, not table facts. playbook policy_violation.md:21 (user holds an approved exception the rule does not know), :22 (banned software approved for that department), :23 (infrastructure change with a ticket); :25 — here false_positive means the RULE is wrong, not that nothing happened. (no archive clusters — no-signal category, DEC-057.) Sheet §10 Q1
   - id: pol-1
     if: {severity: [low, medium], ioc_reputation: [not_found, clean], asset_criticality: [low, medium],
          identity_privileged: ["false"], occurrence_lt: 50}
     then: false_positive
+  # evidence: §3.10 pattern; playbook policy_violation.md:32 (another alert in the same window -> no longer a plain policy violation) is the nearest branch — no IoC line of its own; a malicious IoC is a G8′ hard block in every category. The sitting may strike it. (no archive clusters — no-signal category)
   - id: pol-2
     if: {ioc_reputation: [malicious, suspicious]}
     then: escalate
+  # evidence: playbook policy_violation.md:29 (behaviour that reduces detection: AV off, logs deleted, monitoring stopped) — the archive's one such rule, 100112 "audit log cleared" (level 12, T1070), resolves `unknown` since DEC-055 and would land here only if the resolver ever reached this category. (no archive clusters — no-signal category)
   - id: pol-3
     if: {rule_level_gte: 12}
+    then: escalate
+  # evidence: playbook policy_violation.md:37 (critical host -> every change to protective configuration opens a case) + DEC-034 (high = the crown-jewel tier). (no archive clusters — no-signal category.) Sheet §10 Q2
+  - id: pol-4
+    if: {rule_level_gte: 8, rule_level_lt: 12, asset_criticality: [high]}
+    then: escalate
+  # evidence: playbook policy_violation.md:36 (a privileged violator is more serious — knows more and can do more) + :30 (installing tools usable for attack). (no archive clusters — no-signal category.) Sheet §10 Q2
+  - id: pol-5
+    if: {rule_level_gte: 8, rule_level_lt: 12, identity_privileged: ["true"]}
     then: escalate
