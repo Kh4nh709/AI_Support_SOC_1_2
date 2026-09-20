@@ -116,18 +116,24 @@ def _table_rows(body: str) -> list[list[str]]:
     return rows
 
 
-def _seed_command() -> str:
-    """The `seed-users` command with its `\\`-continued lines joined into one string."""
+def _seed_commands() -> list[str]:
+    """Every `python3 -m app.infra.auth seed-users` invocation that creates users, each with
+    its `\\`-continued lines joined into one string. A `seed-users --help` probe is not one."""
     lines = _text().splitlines()
+    found = []
     for i, line in enumerate(lines):
-        if "seed-users" in line and "python3 -m app.infra.auth" in line:
-            joined = [line.rstrip()]
-            j = i
-            while joined[-1].endswith("\\") and j + 1 < len(lines):
-                j += 1
-                joined.append(lines[j].rstrip())
-            return " ".join(part.rstrip("\\").strip() for part in joined)
-    raise AssertionError("no `python3 -m app.infra.auth seed-users` command in the runbook")
+        if "python3 -m app.infra.auth seed-users" not in line:
+            continue
+        joined = [line.rstrip()]
+        j = i
+        while joined[-1].endswith("\\") and j + 1 < len(lines):
+            j += 1
+            joined.append(lines[j].rstrip())
+        cmd = " ".join(part.rstrip("\\").strip() for part in joined)
+        if "--user" in cmd:
+            found.append(cmd)
+    assert found, "no `python3 -m app.infra.auth seed-users … --user …` command in the runbook"
+    return found
 
 
 # --------------------------------------------------------------------------- tests
@@ -197,7 +203,9 @@ def test_advisor_rule_in_both_languages():
 
 
 def test_seed_users_command_has_four_users_and_no_password():
-    cmd = _seed_command()
+    commands = _seed_commands()
+    assert len(commands) == 1, f"the seed command should be written once, found {len(commands)}"
+    cmd = commands[0]
     users = re.findall(r"--user\s+\S+\s+(tier1|tier2|admin)\b", cmd)
     assert len(users) >= 4, f"expected four --user triples, found {len(users)}: {cmd}"
     assert sorted(users) == ["admin", "admin", "tier1", "tier2"], users
