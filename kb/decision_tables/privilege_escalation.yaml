@@ -5,18 +5,40 @@
 # level 3, routine administration) today; rootcheck -> privilege_escalation classifies 21 more
 # (rules 510/521). Neither is measurably wrong, so nothing is changed here — the Owner decides
 # whether a rule should name rule 5402 specifically. Not policy, same as the rest of this file.
+#
+# DRAFT 19/09/2026 by the KB Drafter (docs/plan/prompts/kb-drafter-run-2026-09-19.md) for the sitting to
+# review, amend and sign — nothing here is policy until reviewed_by is non-null. Evidence = the 30-day
+# fold (3,070 clusters; this category 108, all in the G1 pool; DEC-086 samples 40 = 31 high · 1 medium ·
+# 8 low) + kb/playbooks/privilege_escalation.md by line. Every one of the 108 clusters carries no IP, so
+# ioc_reputation is `skipped` on all of them; sudo alerts name the TARGET account (data.dstuser=root ->
+# identity_privileged=true). A table cannot name a rule id — the DEC-055 questions are answered through
+# the facts (pre-5) and as PROPOSALS in docs/plan/kb-review-sheet-2026-09-19.md §3 and §11.
+# apply_table is first match in file order; different-action rules are disjoint on the grid. No match ->
+# needs_review (docs/plan/prompts/P7.md:17): 14 of the 108 clusters — 510 ×10 (rootcheck, level 7, IA1803, identity
+# unknown; DEC-055's second question) and 5407 ×4 (sudo by service accounts, level 3).
 category: privilege_escalation
 playbook: privilege_escalation_v1
 reviewed_by: null
 reviewed_at: null
 rules:
+  # evidence: playbook privilege_escalation.md:21 (admin, right procedure, familiar host), :22 (automation by design), :23 (approved install). ioc=skipped admitted (108/108 clusters are IP-less; no lookup-missing clause in this playbook). Fold: 0 of 108 — no cluster has identity_privileged=false: sudo alerts name root (true, 64 clusters); the 44 unknown are rootcheck/auditd naming nobody (39: 100205 ×18, 521 ×11, 510 ×10), sudo by accounts absent from conf/identities.yaml (5407 ×4) and 513 ×1. :21's 'administrator acting correctly' names root on this estate (dstuser) — the FP branch describes exactly the population this rule cannot admit. The lab's benign twin `sudo true` (lab-scenarios.md:402-406, rule 5402) also names root and cannot reach this rule. Sheet §3 Q1
   - id: pre-1
-    if: {severity: [low, medium], ioc_reputation: [not_found, clean], asset_criticality: [low, medium],
+    if: {severity: [low, medium], ioc_reputation: [not_found, clean, skipped], asset_criticality: [low, medium],
          identity_privileged: ["false"], occurrence_lt: 50}
     then: false_positive
+  # evidence: §3.10 pattern; playbook privilege_escalation.md:29 (a known exploit just before) is the nearest branch — this playbook has no IoC line of its own. Fold: 0 of 108 and structurally unreachable here (no IP on any sudo/rootcheck/auditd alert); kept because a malicious IoC is a G8′ hard block in every category. The sitting may strike it
   - id: pre-2
     if: {ioc_reputation: [malicious, suspicious]}
     then: escalate
+  # evidence: §3.10 pattern; playbook privilege_escalation.md:32 (the full chain: odd login -> escalation -> lateral movement). Fold: 0 of 108 — the highest level in this category is 11 (rule 521); kept for any critical-level escalation rule the pilot meets
   - id: pre-3
     if: {rule_level_gte: 12}
     then: escalate
+  # evidence: playbook privilege_escalation.md:28 (escalation by a process that is not an admin tool), :37 (critical host -> assume the worst until excluded); DEC-053 (crit+high is where escalate is plausible), DEC-086 (all 31 high are in G1). Fold: 31 of 108, all high — 100205 ×18 (level 10, archive-era local rule "privilege change via gdm-session-worker", gone since 17/08; IA1803; occurrence 2-198), 521 ×11 (level 11 "possible kernel level rootkit", rootcheck, IA1803), 5404 ×1 (level 10, three failed sudo, user1-IA1803), 513 ×1 (level 9, DESKTOP-MIRSO17 -> asset unknown, DEC-058). playbook :22 (automation running privileged by design) reads 100205 — the display manager's own setuid — as FP at least as well as :28 reads it as real. 100205 (level 10) IS separable from 521 (level 11) by level: `rule_level_gte: 11` would keep 521 and drop 100205, 5404 (10) and 513 (9) — sheet §3 Q2
+  - id: pre-4
+    if: {rule_level_gte: 8, rule_level_lt: 12}
+    then: escalate
+  # evidence: DEC-055's first question, answered through the facts: rule 5402 (successful sudo to ROOT, level 3) ×57 = 704 alerts, IA1803 38 / user1-IA1803 19, alert_user=root on all 57 (identity true), occurrence 1-206; plus 5403 ×5 (first sudo, level 4) and 5401 ×1 (failed sudo, level 5 — the lab attack's expected rule, lab-scenarios.md:361/:397 expects escalate; B1 answers needs_review here, sheet §3 Q3). Playbook :24 calls unfiltered-sudo a rule to fix and :36 says an already-privileged identity may be normal — but identity_privileged=true is a G8′ hard block (ingest/autoclose.py:263) and gate step 4 forbids false_positive on it, so the table cannot say false_positive here without being wrong on its face. Draft: explicit needs_review; PROPOSAL in sheet §11
+  - id: pre-5
+    if: {severity: [low, medium], ioc_reputation: [not_found, clean, skipped], identity_privileged: ["true"]}
+    then: needs_review
