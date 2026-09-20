@@ -703,7 +703,7 @@ rules:
 - id: dec004-crown-jewel
   dec: DEC-004
   severity: high
-  status: open
+  status: fixed   # flipped 20/09 (DEC-101): the two playbook lines are P3-T12's (in review, 0/0 on its branch); the five in-scope mentions are citations of the retirement, each marked superseded-ok
   pattern: crown_jewel
   artifact: (canonical short form — catches paraphrase, not just re-paste)
   reason: DEC superseded the criticality value DEC-004 abolished; a forward-looking document must not
