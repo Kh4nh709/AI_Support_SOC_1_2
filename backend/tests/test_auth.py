@@ -577,9 +577,11 @@ def test_api_logout_without_a_session_is_401(client) -> None:
 
 @pytest.mark.db
 def test_api_logout_commits_before_the_204_is_sent(committed, client, sdb, scratch_dsn) -> None:
-    """FastAPI 0.141.1 runs `get_conn`'s exit code — the commit — after the
-    response is sent (measured), so the route commits itself: at the moment
-    the 204 leaves, the old token must already be dead on another connection."""
+    """`Conn` declares `Depends(get_conn, scope="function")`: the commit runs
+    before the response is sent. With FastAPI 0.141.1's default scope it runs
+    after (measured), and the client would hold a 204 while the old token still
+    verified elsewhere — so at the moment the 204 leaves, the old token must
+    already be dead on another connection."""
     username, _ = committed(prefix="asgi")
     token = _api_login(client, username).json()["token"]
     sdb.commit()

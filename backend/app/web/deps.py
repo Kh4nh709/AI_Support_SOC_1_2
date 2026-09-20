@@ -59,7 +59,13 @@ def get_config() -> Config:
     return config.load()
 
 
-Conn = Annotated[psycopg.Connection, Depends(get_conn)]
+# `scope="function"` (FastAPI ≥ 0.121): `get_conn`'s exit code — the commit —
+# runs after the path operation and *before* the response is sent. The default
+# `"request"` scope runs it after the response has gone out (measured on
+# 0.141.1 at the ASGI level), so a 2xx would not yet mean the write is visible
+# to any other connection — a logout answering 204 while the old token still
+# verified. A route's exception still reaches the `except` above first.
+Conn = Annotated[psycopg.Connection, Depends(get_conn, scope="function")]
 Cfg = Annotated[Config, Depends(get_config)]
 
 
