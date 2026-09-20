@@ -67,6 +67,9 @@ INDEXER_VALUE_FORBIDDEN = ["wazuh.indexer", "127.0.0.1:19200", "9400"]
 H2_RE = re.compile(r"^## (.*)$", re.MULTILINE)
 H3_RE = re.compile(r"^### (.*)$", re.MULTILINE)
 TABLE_ROW_RE = re.compile(r"^\|.*\|\s*$")
+# A cell boundary is an unescaped pipe; `\|` inside a cell is a literal pipe (GFM tables),
+# which psql's `-A` output (`4|2`) and a `2>&1 | tee` command both need.
+CELL_SPLIT_RE = re.compile(r"(?<!\\)\|")
 
 
 def _text() -> str:
@@ -105,7 +108,8 @@ def _table_rows(body: str) -> list[list[str]]:
     for line in body.splitlines():
         if not TABLE_ROW_RE.match(line):
             continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        inner = line.strip()[1:-1]  # drop the leading and trailing pipe only
+        cells = [c.strip().replace("\\|", "|") for c in CELL_SPLIT_RE.split(inner)]
         if all(re.fullmatch(r":?-{3,}:?", c) for c in cells):
             continue
         rows.append(cells)
