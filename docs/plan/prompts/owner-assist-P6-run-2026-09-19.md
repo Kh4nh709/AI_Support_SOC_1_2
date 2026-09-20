@@ -33,7 +33,7 @@ Start it from the **primary checkout** (it needs `.env`), detached, with a log o
 ```bash
 cd /project/project/AI_Support_SOC_1_2
 mkdir -p /home/user1/soc-logs
-nohup setsid make run-worker > /home/user1/soc-logs/worker-$(date +%F).log 2>&1 &
+PYTHONUNBUFFERED=1 nohup setsid make run-worker > /home/user1/soc-logs/worker-$(date +%F).log 2>&1 &   # PYTHONUNBUFFERED=1 added 20/09 (DEC-099): unbuffered log lines, no product change
 echo $! > /home/user1/soc-logs/worker.pid; sleep 20; tail -n 20 /home/user1/soc-logs/worker-$(date +%F).log
 ```
 
