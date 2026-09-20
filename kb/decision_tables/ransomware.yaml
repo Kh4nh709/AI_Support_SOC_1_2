@@ -1,18 +1,35 @@
 # kb/decision_tables/ransomware.yaml — SKELETON. Content is the Owner's + advisor's (§11).
 # reviewed_by/reviewed_at stay null until that sitting; while null the gate treats the table as absent
 # (architecture §3.10) and records decision_table_unreviewed:<category> in gate_result.warnings.
+#
+# DRAFT 19/09/2026 by the KB Drafter (docs/plan/prompts/kb-drafter-run-2026-09-19.md) for the sitting to
+# review, amend and sign — nothing here is policy until reviewed_by is non-null. Lab category: 0 of 3,070
+# archive clusters (DEC-053/055); reached only through local rule 100301 (level 12, T1486,
+# conf/local_rules.xml:80) — lab-scenarios.md:529-593; DEC-056 amendment 3 (author-written detection) applies.
+# Evidence = kb/playbooks/ransomware.md by line + the runbook. The skeleton's false_positive rule is
+# deliberately ABSENT: playbook :25 says even a likely false positive is never closed silently in this
+# category.
+# apply_table is first match in file order; every two rules with different actions are disjoint on the
+# 2,520-point grid. No match -> B1 answers needs_review (docs/plan/prompts/P7.md:17). Questions for the sitting:
+# docs/plan/kb-review-sheet-2026-09-19.md §4.
 category: ransomware
 playbook: ransomware_v1
 reviewed_by: null
 reviewed_at: null
 rules:
+  # evidence: playbook ransomware.md:25 (even when leaning false positive, do not close silently — record the reason and fix the rule) + :3 (an hour's delay loses a system); replaces the §3.10 false_positive rule with an explicit needs_review floor for everything below the high band. (no archive clusters — lab category; no low/medium ransomware rule exists on the manager: 100301 is level 12.) Sheet §4 Q1
   - id: ran-1
-    if: {severity: [low, medium], ioc_reputation: [not_found, clean], asset_criticality: [low, medium],
-         identity_privileged: ["false"], occurrence_lt: 50}
-    then: false_positive
+    if: {severity: [low, medium], ioc_reputation: [not_found, clean, skipped]}
+    then: needs_review
+  # evidence: §3.10 pattern; playbook ransomware.md:32 (spread through an admin account), :33 (prior suspicious_login/privilege_escalation on the fleet) are the nearest branches — no IoC line of its own; a malicious IoC is a G8′ hard block in every category. (no archive clusters — lab category)
   - id: ran-2
     if: {ioc_reputation: [malicious, suspicious]}
     then: escalate
+  # evidence: lab-scenarios.md:565-567 — rule 100301 "Possible ransomware: non-interactive symmetric encryption via $(audit.exe).", level 12 (conf/local_rules.xml:80), expected label escalate; playbook ransomware.md:29-31 (mass rename, shadow-copy deletion, ransom note), :39 (a critical alert is never auto-closed, G8). The benign twin (:571-583, interactive `openssl enc` without -k) fires no rule at all, so there is nothing for the table to say about it. (no archive clusters — lab category)
   - id: ran-3
     if: {rule_level_gte: 12}
+    then: escalate
+  # evidence: playbook ransomware.md:3 (the evidence threshold to act must be lower than for every other type) + :29-:31 (mass rename, shadow-copy deletion, ransom note — what a high-band rule would encode). :37 (any file or database server hit -> highest level) is ASSET-scoped and is not encoded: ran-1 leaves a low/medium alert on a high asset at needs_review — sheet §4 Q3. (no archive clusters — lab category; no rule at this band exists today, so this rule is the playbook's threshold written down for the pilot.) Sheet §4 Q2
+  - id: ran-4
+    if: {rule_level_gte: 8, rule_level_lt: 12}
     then: escalate
