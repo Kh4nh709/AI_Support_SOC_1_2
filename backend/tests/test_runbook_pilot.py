@@ -142,9 +142,9 @@ def _seed_commands() -> list[str]:
 def test_header_says_p8_extends_this_file():
     head = _text().splitlines()[:3]
     assert head[0].startswith("# "), f"line 1 is not a title: {head[0]!r}"
-    assert any("P8" in line and "extend" in line for line in head), (
-        "the first three lines must say P8 extends this file"
-    )
+    assert any(
+        "P8" in line and "extend" in line for line in head
+    ), "the first three lines must say P8 extends this file"
 
 
 def test_pilot_section_and_eight_subsections_in_order():
