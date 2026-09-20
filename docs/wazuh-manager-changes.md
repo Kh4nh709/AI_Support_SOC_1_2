@@ -9,6 +9,8 @@ in §4 and they are the Owner's.
 
 ## 0 · 14/09 — read first: the manager described below no longer exists
 
+**20/09** — file-based checks retired (DEC-091); commands below use the indexer `_count`.
+
 Measured 2026-09-14 22:15 as `user1`, at the Owner's instruction (Support Agent; the Owner's own
 report is that the current Wazuh output is `/data/wazuh/logs/alerts/alerts.json`):
 
@@ -21,7 +23,7 @@ report is that the current Wazuh output is `/data/wazuh/logs/alerts/alerts.json`
 | its `ossec.conf` | **two files, and both matter.** The host's `./config/wazuh_cluster/wazuh_manager.conf` is bind-mounted to `/wazuh-config-mount/etc/ossec.conf`; the **live** file is `/var/ossec/etc/ossec.conf` inside the named volume `wazuh_etc`. **Measured 15/09, correcting this file's earlier claim: the image copies the mount into the volume only while the volume is being seeded, NOT at every start.** Proof, after a restart with the stanza in the host file: `docker exec … grep -c soc_heartbeat /var/ossec/etc/ossec.conf` → **0**, and `ossec.log` at 04:51:33 lists only the three stock commands (`df -P`, `netstat …`, `last -n 20`). A manager-config change must therefore be written into the **live** file with `docker cp`, and into the host file as well so a future fresh volume inherits it. `<rule_dir>etc/rules</rule_dir>` is line 264 of the host file, `<log_alert_level>3</log_alert_level>` line 18 |
 | its `etc/rules/` | inside the **named volume `wazuh_etc`** — nothing on the host, but a `docker cp` into it survives `restart` and `docker rm` (only `compose down -v` destroys it) |
 | `bin/wazuh-logtest` | inside the container; needs `sudo docker exec`, since `/var/run/docker.sock` is `1001:1001` |
-| `/data/wazuh/logs/alerts/alerts.json` | mode 777, uid/gid 999 (no local name), readable by `user1`; 2,624 lines, 12:56–15:15Z |
+| `/data/wazuh/logs/alerts/alerts.json` | mode 777, uid/gid 999 (no local name), readable by `user1`; 2,624 lines, 12:56–15:15Z (measured then via the file; since the 16/09 reboot the file is unreadable by user1 — DEC-091; every count in this document is the indexer _count) |
 | `/data/wazuh/logs/alerts/2026/`, `/data/wazuh/logs/archives/` | `drwxr-x---` gid 999 — **not readable by `user1`** |
 | rule `100999` on the new manager | **0**, through two rounds of diagnosis, each retracting a claim of mine. **Round 1 (11:45):** `grep -c 'soc_heartbeat\|full_command'` → 2 on the host config was read as "both terms present"; both matches are the stock `full_command` localfiles (lines 238, 245) and `soc_heartbeat` occurred **zero** times — the 08/09 stanza died with the old host. **Round 2 (12:05):** with the stanza added to the host file and the manager restarted at 04:51:15Z, `100999` was still 0 at **05:04:22Z — past the +600 s mark of 05:04**, so "not yet due" is excluded too; the cause is the row above, the live file never received it. `local_rules.xml` itself is fine and persists across restart: `ls -l /var/ossec/etc/rules/` → `-rw-rw---- wazuh wazuh 9289`, which also proves a `docker cp` into the named volume survives. **The producer is the only thing still missing, and §0.1 now edits the file the manager actually reads** |
 | rules `100301`–`100303` on the new manager | **0** hits; `/var/ossec/etc/rules/local_rules.xml` (§1 "staged") went with the tree — the authored content survives only as `conf/local_rules.xml` in the repo |
@@ -65,9 +67,11 @@ sudo docker restart 8e3772d039ed
 
 # immediate proof, ~40 s later — logcollector prints the command list it accepted
 sleep 40; sudo grep "soc_heartbeat" /data/wazuh/logs/ossec.log | tail -3
-# then, 20 minutes later — two hits 600 s apart, not one
-grep -c '"id":"100999"' /data/wazuh/logs/alerts/alerts.json          # >= 2
-grep '"id":"100999"' /data/wazuh/logs/alerts/alerts.json | grep -o '"timestamp":"[^"]*"' | tail -3
+# then, 20 minutes later — two hits 600 s apart, not one (DEC-091: via the indexer, not the file)
+set -a; . ./.env; set +a
+curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" "$INDEXER_URL/wazuh-alerts-*/_count" -H 'Content-Type: application/json' -d '{"query":{"term":{"rule.id":"100999"}}}'   # expect count >= 2
+curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" "$INDEXER_URL/wazuh-alerts-*/_search" -H 'Content-Type: application/json' -d '{"query":{"term":{"rule.id":"100999"}},"size":2,"sort":[{"timestamp":"desc"}],"_source":["timestamp"]}' | jq -r '.hits.hits[]._source.timestamp'
+# measured 20/09: 2026-09-20T07:57:11.812+0000 and 2026-09-20T07:47:11.657+0000 — 600.155 s apart (field is timestamp, not @timestamp)
 ```
 
 `ossec.log`'s `Monitoring full output of command(600): …` line is what turns a ten-minute wait into
@@ -533,7 +537,9 @@ Recorded here so they are not lost; none is acted on.
    application**" — and DEC-001 rests on it. The statement was probably true when written on
    05/09 and stopped being true when `user1` joined the group. This is not the Detection Author's
    to change; it is raised as a decision block in the report because it reopens whether the
-   puller is the only path to history for the app.
+   puller is the only path to history for the app. (measured then via the file; since the
+   16/09 reboot the file is unreadable by user1 — DEC-091; every count in this document is
+   the indexer _count.)
 
 5. **The audit events this document's §5 rests on are in production data.** They were generated
    at 2026-09-08 08:41:48–08:42:38 UTC on the same host G1 draws from. They produced no alert
