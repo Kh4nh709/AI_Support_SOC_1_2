@@ -166,15 +166,11 @@ def test_reload_inventory_without_session_is_401(
     assert response.json() == {"detail": "not authenticated"}
 
 
-def test_reload_inventory_route_exists_under_api() -> None:
-    # P4-T01: this used to assert the route was the *only* `/api/` path. Routers
-    # are now discovered from `app.web.routers/` and every later card adds one,
-    # so an exact snapshot here would make this file the shared file planning
-    # decision 1 exists to avoid; each card asserts its own routes instead.
+def test_only_the_reload_inventory_route_exists_under_api() -> None:
     api_paths = sorted(
         route.path for route in main.app.routes if getattr(route, "path", "").startswith("/api/")
     )
-    assert "/api/admin/reload-inventory" in api_paths
+    assert api_paths == ["/api/admin/reload-inventory"]
 
 
 def test_reload_inventory_route_accepts_post_only() -> None:

@@ -19,6 +19,7 @@ dependency's shape (commit on success, rollback on any exception) rather than
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import importlib
 import json
@@ -253,18 +254,45 @@ def test_login_resets_failed_logins(db) -> None:
 
 
 @pytest.mark.db
-def test_unknown_user_and_inactive_user_are_login_failed(db) -> None:
+def test_unknown_user_and_inactive_user_are_login_failed(db, monkeypatch) -> None:
     cfg = _cfg()
+    checks: list[str] = []
+    real_verify = auth.verify_password
+    monkeypatch.setattr(
+        auth, "verify_password", lambda h, pw: checks.append(h) or real_verify(h, pw)
+    )
     with pytest.raises(auth.LoginFailed) as excinfo:
         auth.login(db, _name("nobody"), PASSWORD, cfg)
     assert excinfo.value.reason == "unknown_user"
+    assert checks == [auth.DUMMY_HASH]  # the timing-safe shape: a real argon2 check
     username, user_id = _seed(db, prefix="inactive")
     assert auth.deactivate(db, username) is True
+    checks.clear()
     with pytest.raises(auth.LoginFailed) as excinfo:
         auth.login(db, username, PASSWORD, cfg)
     assert excinfo.value.reason == "inactive"
+    # the same body AND the same cost as an unknown user: no timing tell
+    assert checks == [auth.DUMMY_HASH]
     # an inactive user's right password neither counts as a failure nor locks
     assert _row(db, user_id)[:2] == (0, None)
+
+
+@pytest.mark.db
+def test_auth_flow_works_as_app_rw(db) -> None:
+    """The Owner runs `seed-users` and the app runs everything else as `app_rw`
+    (migration 017's grants): INSERT/UPDATE on `users`, INSERT on `audit_events`."""
+    db.execute("SET ROLE app_rw")
+    cfg = _cfg()
+    username, user_id = _seed(db, prefix="rw")
+    with pytest.raises(auth.LoginFailed):
+        auth.login(db, username, "wrong", cfg)
+    token = auth.issue_token(auth.login(db, username, PASSWORD, cfg), cfg)
+    assert auth.verify(db, token, cfg).user_id == user_id
+    auth.logout(db, user_id)
+    assert auth.set_password(db, username, "other") is True
+    assert auth.deactivate(db, username) is True
+    (role,) = db.execute("SELECT current_user").fetchone()
+    assert role == "app_rw"
 
 
 @pytest.mark.db
@@ -491,6 +519,53 @@ def test_api_logout_without_a_session_is_401(client) -> None:
     response = client.post("/api/auth/logout")
     assert response.status_code == 401
     assert response.json() == {"detail": "not authenticated"}
+    # a blank cookie or a blank bearer is "no token", not a malformed one
+    blank_cookie = client.post("/api/auth/logout", headers={"Cookie": f"{deps.COOKIE_NAME}="})
+    assert blank_cookie.json() == {"detail": "not authenticated"}
+    blank_bearer = client.post("/api/auth/logout", headers={"Authorization": "Bearer "})
+    assert blank_bearer.json() == {"detail": "not authenticated"}
+
+
+@pytest.mark.db
+def test_api_logout_commits_before_the_204_is_sent(committed, client, db, _test_database) -> None:
+    """FastAPI 0.141.1 runs `get_conn`'s exit code — the commit — after the
+    response is sent (measured), so the route commits itself: at the moment
+    the 204 leaves, the old token must already be dead on another connection."""
+    username, _ = committed(prefix="asgi")
+    token = _api_login(client, username).json()["token"]
+    db.commit()
+    seen: list[str] = []
+    with psycopg.connect(_test_database) as other:
+
+        async def receive() -> dict:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message: dict) -> None:
+            if message["type"] != "http.response.start":
+                return
+            other.rollback()  # a fresh snapshot: only committed rows are visible
+            try:
+                auth.verify(other, token, _cfg())
+                seen.append(f"{message['status']}: old token still valid")
+            except auth.Unauthorized as exc:
+                seen.append(f"{message['status']}: {exc.reason}")
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/auth/logout",
+            "raw_path": b"/api/auth/logout",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [(b"host", b"testserver"), (b"authorization", f"Bearer {token}".encode())],
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+        }
+        asyncio.run(main.app(scope, receive, send))
+    assert seen == ["204: logged_out"]
 
 
 @pytest.mark.db
@@ -684,6 +759,63 @@ def test_cli_has_no_password_argument() -> None:
     assert "password" not in subparsers.choices["seed-users"].format_help()
 
 
+def test_cli_unparseable_dsn_exits_2_without_echoing_it(capsys, monkeypatch) -> None:
+    # psycopg's conninfo parser quotes the string it rejects; the CLI must not.
+    monkeypatch.setenv("SEED_PASSWORD_X", "pw")
+    for argv in (
+        ["seed-users", "--dsn", "postgres:/u:S3CRET@h/db", "--user", "x", "tier1", "X"],
+        ["--dsn", "postgres:/u:S3CRET@h/db", "seed-users", "--user", "x", "tier1", "X"],
+        ["--dsn", "postgres:/u:S3CRET@h/db", "set-password", "x"],
+        ["--dsn", "postgres:/u:S3CRET@h/db", "deactivate", "x"],
+    ):
+        assert auth.main(argv) == 2, argv
+        captured = capsys.readouterr()
+        assert "S3CRET" not in captured.out + captured.err
+        assert "could not be parsed" in captured.err
+
+
+def test_cli_common_options_are_accepted_before_the_subcommand() -> None:
+    parser = auth.build_parser()
+    before = parser.parse_args(["--dsn", "d1", "--env-file", "e1", "deactivate", "x"])
+    after = parser.parse_args(["deactivate", "--dsn", "d2", "--env-file", "e2", "x"])
+    neither = parser.parse_args(["deactivate", "x"])
+    assert (before.dsn, before.env_file) == ("d1", "e1")
+    assert (after.dsn, after.env_file) == ("d2", "e2")
+    assert (neither.dsn, neither.env_file) == (None, ".env")
+
+
+def test_cli_getpass_eof_is_an_empty_password(capsys, monkeypatch) -> None:
+    monkeypatch.delenv("SEED_PASSWORD_X", raising=False)
+
+    def no_tty(prompt: str) -> str:
+        raise EOFError
+
+    monkeypatch.setattr(auth.getpass, "getpass", no_tty)
+    assert auth._read_password("x") == ""
+
+
+def test_cli_duplicate_password_keys_exit_1_before_connecting(capsys, monkeypatch) -> None:
+    monkeypatch.setenv("SEED_PASSWORD_A_B", "pw")
+    rc = auth.main(
+        [
+            "seed-users",
+            "--dsn",
+            "postgresql:///p4t01_unreachable",
+            "--user",
+            "a-b",
+            "tier1",
+            "A",
+            "--user",
+            "a_b",
+            "admin",
+            "B",
+        ]
+    )
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "SEED_PASSWORD_A_B" in captured.err and "a-b" in captured.err and "a_b" in captured.err
+
+
 def test_cli_bad_role_exits_1(capsys, monkeypatch) -> None:
     monkeypatch.setenv("SEED_PASSWORD_X", "pw")
     # no reachable DSN is needed: the role is validated before connecting
@@ -708,7 +840,7 @@ def test_cli_set_password_deactivate_and_exit_codes(
         db.commit()
 
         monkeypatch.setenv(key, "second")
-        assert auth.main(["set-password", "--dsn", dsn, username]) == 0
+        assert auth.main(["--dsn", dsn, "set-password", username]) == 0
         assert auth.login(db, username, "second", _cfg()).role == "tier2"
         db.commit()
 

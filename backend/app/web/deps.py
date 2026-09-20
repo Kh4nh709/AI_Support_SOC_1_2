@@ -68,7 +68,7 @@ def read_token(request: Request) -> str | None:
     scheme, _, value = request.headers.get("authorization", "").partition(" ")
     if scheme.lower() == "bearer" and value.strip():
         return value.strip()
-    return request.cookies.get(COOKIE_NAME)
+    return request.cookies.get(COOKIE_NAME) or None
 
 
 def set_session_cookie(response: Response, token: str, cfg: Config) -> None:

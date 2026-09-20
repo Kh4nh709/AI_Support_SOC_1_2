@@ -65,6 +65,10 @@ def login(body: LoginBody, response: Response, conn: Conn, cfg: Cfg) -> dict:
 @router.post("/api/auth/logout", status_code=204)
 def logout(conn: Conn, claims: Annotated[Claims, Depends(current_user)]) -> Response:
     auth.logout(conn, claims.user_id)
+    # FastAPI 0.141.1 runs `get_conn`'s exit code — its commit — *after* the
+    # response has been sent (measured), so without this the client holds a
+    # 204 while the old token still verifies on every other connection.
+    conn.commit()
     response = Response(status_code=204)
     clear_session_cookie(response)
     return response

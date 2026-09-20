@@ -135,6 +135,7 @@ def login(conn: psycopg.Connection, username: str, password: str, cfg: Config) -
     if locked:
         raise AccountLocked(locked_until)
     if not is_active:
+        verify_password(DUMMY_HASH, password)  # the same cost as "unknown_user": no timing tell
         raise LoginFailed("inactive")
     if not verify_password(password_hash, password):
         _failed, locked_until, locked = conn.execute(
@@ -279,21 +280,37 @@ def _read_password(username: str) -> str:
     value = os.environ.get(_env_key(username))
     if value:
         return value
-    return getpass.getpass(f"password for {username}: ")
+    try:
+        return getpass.getpass(f"password for {username}: ")
+    except EOFError:  # no terminal and stdin exhausted: the "empty password" path, not a traceback
+        return ""
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _common_options(*, top_level: bool) -> argparse.ArgumentParser:
+    """`--env-file` / `--dsn`, accepted before or after the subcommand. The
+    subcommand copies default to SUPPRESS so a value given before the
+    subcommand survives; putting them only on the subcommands would make
+    `--dsn X seed-users …` an argparse "invalid choice: 'X'" error that echoes
+    the DSN (rule 11)."""
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
         "--env-file",
-        default=".env",
+        default=".env" if top_level else argparse.SUPPRESS,
         help="where DATABASE_URL is read from when --dsn is not given (default: .env)",
     )
     common.add_argument(
-        "--dsn", default=None, help="connect here instead of DATABASE_URL (never printed)"
+        "--dsn",
+        default=None if top_level else argparse.SUPPRESS,
+        help="connect here instead of DATABASE_URL (never printed)",
     )
+    return common
+
+
+def build_parser() -> argparse.ArgumentParser:
+    common = _common_options(top_level=False)
     parser = argparse.ArgumentParser(
         prog="python3 -m app.infra.auth",
+        parents=[_common_options(top_level=True)],
         description="Manage the users table. A credential is never an argument: "
         "it is read from SEED_PASSWORD_<USERNAME> (with '-' as '_') or prompted for.",
     )
@@ -379,18 +396,34 @@ def _deactivate(conn: psycopg.Connection, username: str, out) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "seed-users":
-        for _username, role, _display_name in args.user:
+        keys: dict[str, str] = {}
+        for username, role, _display_name in args.user:
             if role not in ROLES:
                 print(
                     f"error: role must be one of {'|'.join(ROLES)}, got {role!r}", file=sys.stderr
                 )
                 return _EXIT_INPUT
+            # `alice-admin` and `alice_admin` (or a case pair) would silently
+            # share one password: refuse before anything is created.
+            key = _env_key(username)
+            if key in keys:
+                print(
+                    f"error: --user {keys[key]} and --user {username} both read {key}",
+                    file=sys.stderr,
+                )
+                return _EXIT_INPUT
+            keys[key] = username
     try:
         conn = _connect(args)
     except (psycopg.OperationalError, ConfigError) as exc:
-        # `str(exc)` names the failure (a missing database, a refused password),
-        # never the DSN — libpq does not echo the connection string.
+        # libpq's message names the failure (a missing database, a refused
+        # password) and never the connection string, so it is safe to show.
         print(f"error: cannot connect to the database: {exc}", file=sys.stderr)
+        return _EXIT_DSN
+    except psycopg.Error:
+        # psycopg's own conninfo parser quotes the string it could not parse —
+        # a DSN, possibly with a password — so this message is fixed (rule 11).
+        print("error: cannot connect to the database: the DSN could not be parsed", file=sys.stderr)
         return _EXIT_DSN
     try:
         if args.command == "seed-users":
