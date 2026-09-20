@@ -1,7 +1,7 @@
 """Order and page the Tier-1 queue by risk score and arrival time for the analyst to work.
 
 Two readers and one helper, all read-only (`SELECT`s inside the caller's transaction;
-no `UPDATE alerts` here — G2), every column list explicit (G10):
+nothing here writes `alerts` — G2), every column list explicit (G10):
 
 - `list_queue` — the phase-6 queue (`docs/phase-6-tier1.md` §Hàng đợi): `needs_retriage`
   computed at query time, `risk_score DESC NULLS LAST`, `first_seen_at ASC`, `NOT
