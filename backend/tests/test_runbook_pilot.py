@@ -12,8 +12,10 @@ handful of literal strings the card names, the two quoted rules verbatim, and th
 prohibitions: no file-based alert check (DEC-091 — the file is unreadable to `user1`
 and the application never reads it), no indexer value restated (DEC-070 — the checklist
 reads `$INDEXER_URL` from `.env`), and no password on a command line (DEC-095). It does
-not judge prose. P8 extends the same file with its own sections; this test looks only
-inside `## Pilot`.
+not judge prose. P8 extends the same file with its own sections: the structure, the
+required strings, the two rules and the seed command are asserted inside `## Pilot`
+only, so a P8 section that mentions `JWT_SECRET` cannot stand in for the Pilot section
+losing it; the prohibitions apply to the whole file, as the card's acceptance-2 greps do.
 
 PURE. No database, no socket, no fixture: `python3 -m pytest -c backend/pyproject.toml
 backend/tests/test_runbook_pilot.py` runs anywhere the repository is checked out.
@@ -77,9 +79,23 @@ def _text() -> str:
     return RUNBOOK_PATH.read_text(encoding="utf-8")
 
 
+def _mask_fences(text: str) -> str:
+    """`text` with every line inside a ``` fence replaced by spaces of the same length, so a
+    heading regex cannot match a bash comment such as `## step 2` inside a command block.
+    Lengths and newlines are kept, so an index into the masked text is valid in `text`."""
+    out, fenced = [], False
+    for line in text.split("\n"):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            out.append(" " * len(line))
+        else:
+            out.append(" " * len(line) if fenced else line)
+    return "\n".join(out)
+
+
 def _pilot_section(text: str) -> str:
-    """The body from `## Pilot` to the next `## ` heading (or EOF)."""
-    heads = [m for m in H2_RE.finditer(text)]
+    """The body from `## Pilot` to the next `## ` heading (or EOF), fences ignored for headings."""
+    heads = [m for m in H2_RE.finditer(_mask_fences(text))]
     pilot = [m for m in heads if m.group(1).strip() == "Pilot"]
     assert len(pilot) == 1, f"expected exactly one '## Pilot' heading, found {len(pilot)}"
     start = pilot[0].start()
@@ -89,14 +105,19 @@ def _pilot_section(text: str) -> str:
 
 
 def _subsections(section: str) -> list[str]:
-    return [m.group(1).strip() for m in H3_RE.finditer(section)]
+    return [m.group(1).strip() for m in H3_RE.finditer(_mask_fences(section))]
+
+
+def _first_word(heading: str) -> str:
+    words = heading.split()
+    return words[0] if words else ""
 
 
 def _subsection_body(section: str, number: str) -> str:
     """The body of the `### <number> …` subsection, up to the next `### `."""
-    heads = list(H3_RE.finditer(section))
+    heads = list(H3_RE.finditer(_mask_fences(section)))
     for i, m in enumerate(heads):
-        if m.group(1).strip().split()[0] == number:
+        if _first_word(m.group(1)) == number:
             end = heads[i + 1].start() if i + 1 < len(heads) else len(section)
             return section[m.end() : end]
     raise AssertionError(f"no '### {number} …' subsection in ## Pilot")
@@ -119,7 +140,7 @@ def _table_rows(body: str) -> list[list[str]]:
 def _seed_commands() -> list[str]:
     """Every `python3 -m app.infra.auth seed-users` invocation that creates users, each with
     its `\\`-continued lines joined into one string. A `seed-users --help` probe is not one."""
-    lines = _text().splitlines()
+    lines = _pilot_section(_text()).splitlines()
     found = []
     for i, line in enumerate(lines):
         if "python3 -m app.infra.auth seed-users" not in line:
@@ -150,7 +171,7 @@ def test_header_says_p8_extends_this_file():
 def test_pilot_section_and_eight_subsections_in_order():
     section = _pilot_section(_text())
     subs = _subsections(section)
-    numbered = [s.split()[0] for s in subs if s and s.split()[0].isdigit()]
+    numbered = [_first_word(s) for s in subs if _first_word(s).isdigit()]
     # The card enumerates `0 …` through `8 …` and asks for them in order; its own
     # acceptance 2 counts `^### ` ≥ 9, so the enumeration (nine headings) is what is pinned.
     assert numbered == [str(n) for n in range(9)], f"numbered subsections out of order: {numbered}"
@@ -179,7 +200,7 @@ def test_preconditions_table_rows_have_commands():
     ids=[n if isinstance(n, str) else n[0] for n in REQUIRED_STRINGS],
 )
 def test_required_strings_present(needle):
-    text = _text()
+    text = _pilot_section(_text())
     alternatives = (needle,) if isinstance(needle, str) else needle
     assert any(alt in text for alt in alternatives), f"missing: {alternatives}"
 
@@ -197,7 +218,7 @@ def test_no_indexer_value_restated():
 
 
 def test_advisor_rule_in_both_languages():
-    text = _text()
+    text = _pilot_section(_text())
     assert ADVISOR_RULE_VI in text, "the advisor's rule is missing in Vietnamese"
     assert ADVISOR_RULE_EN in text, "the advisor's rule is missing in English"
 
@@ -217,5 +238,8 @@ def test_seed_users_command_has_four_users_and_no_password():
 
 def test_no_secret_or_dsn_value():
     text = _text()
-    assert not re.search(r"JWT_SECRET=[0-9A-Za-z]{16,}", text), "a JWT_SECRET value is written"
-    assert not re.search(r"postgresql://[^\s:/]+:[^@\s]+@", text), "a DSN with a password"
+    assert not re.search(
+        r"JWT_SECRET=[\"']?[0-9A-Za-z]{16,}", text
+    ), "a JWT_SECRET value is written"
+    assert not re.search(r"postgres(ql)?://[^\s:/]+:[^@\s]+@", text), "a DSN with a password"
+    assert not re.search(r"PGPASSWORD=\S+", text), "a PGPASSWORD value is written"
