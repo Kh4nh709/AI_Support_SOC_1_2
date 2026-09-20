@@ -229,6 +229,7 @@ Not an INBOX item, but named: the labelling routes' role (`admin`) is architectu
 | P6-T03 | `eval/label_export.py` — `kappa` (3 × 3 Cohen's κ, overall / per `gold_set` / per category), `disagreements` (adjudication CSV), `freeze` (`gold_v1.csv` + `.sha256`, version-by-existence, `source='disagreement'` rows), `report` (`docs/gold-v1-report.md`) | must (per-category κ `should`) | 4.5 h | P6-T01 | **yes** — run 27–28/09; adjudicate; commit the sha |
 | P6-T04 | `eval/adversarial/` — `generate.py` (5 vectors × 8 patterns from the 5503 base, 40 targets + 8 neighbours), `fixtures/*.json`, `manifest.csv`, `load.py` (`is_synthetic`, `source='lab'`, `_adversarial`, no job, no queue), tests | must | 3.5 h | — | **yes — in P7, not before**: run the loader after the freeze |
 | P6-T05 | `docs/lab-scenarios.md` (8 categories: attack + benign twin, expected rule ids, pre-flight, per-window check, timestamp checklist) + `eval/lab_tag.py` + `eval/lab_windows.csv` + test | must (ART ids `should`, verified only) | 3 h | — (INBOX item 1 for the mechanism; written for option D) | **yes** — install ClamAV (sudo), run the scenarios 22–24/09, log seconds, run `lab_tag.py` after each window |
+| P6-T06 | **Addendum 20/09 (DEC-100; DEC-096 (b) item 3):** `build_gold.py`'s `coverage_table` writes the DEC-086 sentence — *"This sample is stratified, not random: no rate computed from it is an estate-wide rate."* — immediately after the enrichment line of every sample section; two tests; `eval/gold_coverage.md` regenerated (+1 line, the other three generated files byte-identical) | must | 0.5 h | P6-T01 (merged `a9c667a`) | **yes** — the 25/09 `--g1 --g2` run must happen **after** this merges, or the regenerated file loses the sentence again |
 
 File scope is disjoint by construction: **T01** owns `eval/dedup_verify.py`, `eval/build_gold.py`,
 `backend/tests/test_dedup_verify.py`, `backend/tests/test_build_gold.py` and the four generated files
@@ -279,6 +280,14 @@ and does not list them. No file appears in two cards.
 - Risk / notes: every scenario command must be one the Owner can paste; ClamAV install is `sudo` and Owner-only (`docs/wazuh-manager-changes.md` §4.2); rule `100301`–`100303` match conditions are quoted from `conf/local_rules.xml`, not paraphrased.
 
 ---
+
+### P6-T06 · the DEC-086 sentence in `eval/gold_coverage.md` (addendum, 20/09)
+- Priority: must · Estimate: 0.5 h · Depends on: P6-T01 (merged)
+- Goal: one `lines.append(f"- {DEC086_SENTENCE}")` in `coverage_table` after the enrichment branch (both G1 and G2 sample sections get it); `test_coverage_table_dec086_sentence_immediately_after_enrichment_line` (position, not presence — the red step moves the line above the branch) and `test_coverage_document_has_dec086_sentence_once_per_sample_section` (1 for `G1 only`, 2 for `G1 + G2`); regenerate with the P6-T01 acceptance-4 command and commit `eval/gold_coverage.md` (`git diff main --numstat` → `1 0`), the three CSV/gzip files unchanged.
+- Files — modify: `eval/build_gold.py`, `backend/tests/test_build_gold.py`, `eval/gold_coverage.md` (regenerated). Create: none.
+- Contracts touched: none.
+- Risk / notes: dispatchable into an idle slot now (DEC-103: nothing else is legal); deadline **before the Owner's 25/09 run**. P6-T03's `report` copies the G1 sample section verbatim, so the sentence reaches `docs/gold-v1-report.md` without a P6-T03 change; `prompts/P7.md:18` and `prompts/P8.md` are DEC-086's other two homes and are the Director's sweeps, not code.
+
 
 ## 10 · Labelling day plan — 26–27/09 (Sat–Sun), Owner + advisor
 
