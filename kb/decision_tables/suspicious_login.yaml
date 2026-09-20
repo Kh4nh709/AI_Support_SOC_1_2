@@ -1,18 +1,39 @@
 # kb/decision_tables/suspicious_login.yaml — SKELETON. Content is the Owner's + advisor's (§11).
 # reviewed_by/reviewed_at stay null until that sitting; while null the gate treats the table as absent
 # (architecture §3.10) and records decision_table_unreviewed:<category> in gate_result.warnings.
+#
+# DRAFT 19/09/2026 by the KB Drafter (docs/plan/prompts/kb-drafter-run-2026-09-19.md) for the sitting to
+# review, amend and sign — nothing here is policy until reviewed_by is non-null. Evidence = the 30-day
+# fold (3,070 clusters; this category 174, all level 3 = low, all in the G1 pool; DEC-086 samples 25)
+# + kb/playbooks/suspicious_login.md by line. Only two stock rules reach this category on this estate —
+# 5501 "PAM: Login session opened" ×94 and 5715 "sshd: authentication success" ×80 — i.e. every live
+# cluster is a plain successful login (lab-scenarios.md:303-306). apply_table is first match in file
+# order; different-action rules are disjoint on the grid. No match -> needs_review (docs/plan/prompts/P7.md:17) —
+# exactly 1 of the 174 clusters (5501, alert_user=art, identity unknown, user1-IA1803).
+# Questions for the sitting: docs/plan/kb-review-sheet-2026-09-19.md §2.
 category: suspicious_login
 playbook: suspicious_login_v1
 reviewed_by: null
 reviewed_at: null
 rules:
+  # evidence: playbook suspicious_login.md:21 (remote-work user, domestic ISP range — the grid has no geography fact, so :27's opposite clause 'from a place where the unit has no activity' cannot be honoured), :22 (maintenance window), :23 (a service account from its own host — the nearest line blessing LOCAL origin, hence ioc=skipped is admitted here, a deviation from the §3.10 pattern; this playbook has no lookup-missing clause; note the admitted clusters are the human account user1, not a service account). Fold: 48 of 174 — all alert_user=user1 on user1-IA1803 (medium): 5715 ×30 (16 external VN ISP srcip = not_found, 14 LAN 172.25.25.x/192.168.x = skipped), 5501 ×18 (no srcip = skipped); 0 with occurrence >= 50. Without `skipped`: 16 (sheet §2 Q1)
   - id: sul-1
-    if: {severity: [low, medium], ioc_reputation: [not_found, clean], asset_criticality: [low, medium],
+    if: {severity: [low, medium], ioc_reputation: [not_found, clean, skipped], asset_criticality: [low, medium],
          identity_privileged: ["false"], occurrence_lt: 50}
     then: false_positive
+  # evidence: playbook suspicious_login.md:27 (a success from an IP with bad ioc_context). Fold: 0 of 174 — conf/iocs.csv is empty by design (65 not_found, 109 skipped); serves G2 and the pilot
   - id: sul-2
     if: {ioc_reputation: [malicious, suspicious]}
     then: escalate
+  # evidence: playbook suspicious_login.md:29 (a success right after a failure chain = brute force that WORKED). Fold: 0 of 174 — the rule that says this, 40112 (level 12), resolves ssh_brute_force because T1110 outranks T1078 (lab-scenarios.md:299, :325-327); kept for any critical-level login rule the pilot meets
   - id: sul-3
     if: {rule_level_gte: 12}
     then: escalate
+  # evidence: playbook suspicious_login.md:34 (privileged account -> treat as high until excluded). Fold: 32 of 174 — 5501 ×32 with alert_user=root (identity true): IA1803 22 / user1-IA1803 10; occurrence 1-49 (6 single sessions, 12 clusters of 10+ — the sudo/cron session shape). Draft reads ":34 high until excluded" as needs_review (an analyst excludes), not escalate. Sheet §2 Q2
+  - id: sul-4
+    if: {severity: [low, medium], ioc_reputation: [not_found, clean, skipped], identity_privileged: ["true"]}
+    then: needs_review
+  # evidence: playbook suspicious_login.md:35 (asset criticality high -> one odd login is enough to open a case) + DEC-034 (high = the crown-jewel tier, G8′ hard block) + DEC-058 (unlisted asset pins needs_review). Fold: 115 of 174 are on IA1803 (high) — 5501 ×65, 5715 ×50; identity user1 ×91, root ×22, other ×2. The 22 root clusters are reported by sul-4 first (same action), so this id is reported on 93; 91 of the 115 are user1's own logins to the manager. Draft says needs_review, not escalate: the stock rules fire on EVERY login, not only odd ones. Sheet §2 Q3
+  - id: sul-5
+    if: {severity: [low, medium], ioc_reputation: [not_found, clean, skipped], asset_criticality: [high, unknown]}
+    then: needs_review

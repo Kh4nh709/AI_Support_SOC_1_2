@@ -1,18 +1,41 @@
 # kb/decision_tables/recon.yaml — SKELETON. Content is the Owner's + advisor's (§11).
 # reviewed_by/reviewed_at stay null until that sitting; while null the gate treats the table as absent
 # (architecture §3.10) and records decision_table_unreviewed:<category> in gate_result.warnings.
+#
+# DRAFT 19/09/2026 by the KB Drafter (docs/plan/prompts/kb-drafter-run-2026-09-19.md) for the sitting to
+# review, amend and sign — nothing here is policy until reviewed_by is non-null. Lab category: 0 of 3,070
+# archive clusters (DEC-053); expected stock rules 5706 "insecure connection attempt (scan)" (per probe), 5731
+# "SSH Scanning" and 40601 "Network scan from same source ip" (threshold rules) — lab-scenarios.md:412-474;
+# all three have 0 archive hits and their levels are NOT recorded anywhere in this repo (kb-draft-report §3).
+# In this category `skipped` = a PRIVATE srcip = an INTERNAL scanner (playbook :7, :28), the dangerous case;
+# `not_found` = external = Internet background noise (:23). Evidence = kb/playbooks/recon.md by line + the
+# runbook.
+# apply_table is first match in file order; every two rules with different actions are disjoint on the
+# 2,520-point grid. No match -> B1 answers needs_review (docs/plan/prompts/P7.md:17). Questions for the sitting:
+# docs/plan/kb-review-sheet-2026-09-19.md §8.
 category: recon
 playbook: recon_v1
 reviewed_by: null
 reviewed_at: null
 rules:
+  # evidence: This rule is the STRUCTURAL precondition under which an FP verdict is permitted (architecture §4: false_positive only on structural evidence the attacker cannot steer); the cited §3 branches are the text ① reads, not table facts. playbook recon.md:23 (scans from the Internet against the public surface — background noise, continuous on every public address) + :21/:22 (registered scanner, monitoring probes). identity_privileged admits `unknown` as well as "false": scan alerts carry no user field, so `unknown` is the only value they ever have (deviation from the §3.10 pattern, sheet §8 Q1). (no archive clusters — lab category; the lab scans from 127.0.0.1 -> skipped -> never this rule)
   - id: rec-1
     if: {severity: [low, medium], ioc_reputation: [not_found, clean], asset_criticality: [low, medium],
-         identity_privileged: ["false"], occurrence_lt: 50}
+         identity_privileged: ["false", "unknown"], occurrence_lt: 50}
     then: false_positive
+  # evidence: §3.10 pattern; playbook recon.md:38 (missing ioc_context is not evidence of harmlessness) is the only IoC line — the playbook has no "IoC bad -> real" branch; kept because a malicious IoC is a G8′ hard block in every category. (no archive clusters — lab category)
   - id: rec-2
     if: {ioc_reputation: [malicious, suspicious]}
     then: escalate
+  # evidence: §3.10 pattern; playbook recon.md:31 (probe followed by an authentication or exploit attempt on the service just found). (no archive clusters — lab category; no critical-level recon rule is expected)
   - id: rec-3
     if: {rule_level_gte: 12}
     then: escalate
+  # evidence: lab-scenarios.md:449-461 — the threshold rules 5731 / 40601 are what the six-probe burst is expected to cross, expected label escalate; playbook recon.md:28 (internal source that is not a registered scanner), :29 (narrow scan at admin ports on a few critical hosts). Levels of 5731/40601 are unverified in this repo — the rule assumes they sit in the high band, as Wazuh frequency rules do; CONFIRM against the lab's per-window by_rule breakdown (runbook §2 step 5). Sheet §8 Q2
+  - id: rec-4
+    if: {rule_level_gte: 8, rule_level_lt: 12}
+    then: escalate
+  # evidence: playbook recon.md:7 + :28 (an internal source is far more serious — a foothold), :36 (internal source + user workstation -> treat as compromised until excluded), :38 (missing lookup is not harmlessness): a low/medium scan from a private address never leaves the queue on its own. The lab's single self-scan (:463-470, one 5706 from 127.0.0.1) lands here as needs_review, not escalate. (no archive clusters — lab category)
+  - id: rec-5
+    if: {severity: [low, medium], ioc_reputation: [skipped]}
+    then: needs_review
