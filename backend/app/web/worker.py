@@ -20,8 +20,9 @@ from app.infra.jobs import enqueue
 from app.infra.puller import pull_job
 from app.infra.worker import run_forever
 from app.soar.pipeline import run_pipeline_job
+from app.tier1.triage import run_triage_job
 
-HANDLERS = {"pull": pull_job, "pipeline": run_pipeline_job}
+HANDLERS = {"pull": pull_job, "pipeline": run_pipeline_job, "triage": run_triage_job}
 
 
 def main(argv: Sequence[str]) -> None:
