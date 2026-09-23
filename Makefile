@@ -12,7 +12,11 @@
 # the cutover. The native cluster that served 05–20/09 stays on IA1803 as a
 # fallback only (`run-app-native` / `run-worker-native`).
 
-PY             ?= python3
+# `python3` on ATTT-M1 is 3.14 with no pytest/ruff (DEC-106); this project's toolchain is the
+# .venv of the primary checkout. Resolve it here so every target works unchanged from the
+# primary checkout AND from a task worktree (which has no .venv of its own), while still
+# falling back to python3 on a host where python3 IS the toolchain. `make <t> PY=...` still wins.
+PY             ?= $(firstword $(wildcard .venv/bin/python ../AI_Support_SOC_1_2/.venv/bin/python) python3)
 PYTEST         ?= $(PY) -m pytest -c backend/pyproject.toml
 TESTS          ?= backend/tests
 MIGRATIONS_DIR ?= docs/Schema
