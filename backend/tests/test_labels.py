@@ -668,6 +668,29 @@ def test_load_candidates_discards_source_and_friends(tmp_path) -> None:
     assert fields.isdisjoint({"source", "stratum", "agent_name", "rule_id"})
 
 
+#: P6-T07's trailing candidate columns (`eval/build_gold.py` `CANDIDATE_COLUMNS`),
+#: spelled out here rather than imported — tests do not import across the `eval`
+#: boundary. The window truth rides in the same file this page reads (DEC-117).
+TRUTH_COLUMNS = ["scenario_id", "kind", "truth_label"]
+
+
+def test_load_candidates_drops_the_window_truth_columns(tmp_path) -> None:
+    """P6-T10 (DEC-117): the input boundary of blindness. A candidates file that
+    carries P6-T07's `scenario_id`/`kind`/`truth_label` yields `Candidate`s with
+    none of them — neither as a field nor as a value. The allowlist tests on the
+    JSON and the page are the second barrier; this is the first."""
+    truth = {"scenario_id": "ZZSCN-TRUTH1", "kind": "attack", "truth_label": "escalate"}
+    rows = [{**row, **truth} for row in _candidate_rows()]
+    path = _write_csv(tmp_path / "c.csv", CANDIDATE_HEADER + TRUTH_COLUMNS, rows)
+    candidates = labels.load_candidates(path=path)
+    assert len(candidates) == len(rows)
+    for candidate in candidates:
+        fields = {f.name for f in dataclasses.fields(candidate)}
+        assert fields.isdisjoint(TRUTH_COLUMNS)
+        values = {str(v) for v in dataclasses.asdict(candidate).values()}
+        assert values.isdisjoint(truth.values())
+
+
 # ---------------------------------------------------------------------------
 # What reaches the JSON response
 # ---------------------------------------------------------------------------
