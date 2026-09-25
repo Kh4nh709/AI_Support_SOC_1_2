@@ -2130,3 +2130,14 @@ Decision:
   3. **The gate does not yet require the G2 candidate and the G3 candidate to share a prompt version.** Without that check it could pass F1 from one prompt and ASR from another. It matters only for a v1 → v1.1 comparison, which DEC-116 makes unlikely; it is added before any such comparison runs, and is not a merge blocker.
   4. `git merge main` ran in this Coder's session (a no-op); the two earlier refusals (DEC-122 item 5) were session-specific, not a rule.
 Supersedes: nothing
+
+## DEC-125 · 2026-09-26 · P7-T05 merged; the report↔gate JSON keys are checked at the first real report run
+Scope: **plan** (a merge) · **evaluation validity** (committed evidence carries no raw log text)
+Decided by: Director, under the Owner's delegation (DEC-116)
+Drafted by: Director (Opus 5.5)
+Propagated to: `STATE.md` (P7-T05 → done) · `tasks/P7/P7-T05.review.md` · P7-T08 (one check added at the run)
+Decision:
+  1. **P7-T05 merged** (Director review APPROVE). `eval/report.py` renders the ablation, per-category and adversarial tables and the per-alert predictions CSV: every file opens with the DEC-111 caveat, the deferral rate sits beside strict recall(escalate), the CSV has an exact 20-column header with no free-text column, output is byte-identical, and the database is read only. Four DEC-025 red steps shown and restored. Composed tree: `make lint` 0; `make test` 1 failed (`test_backfill_cli.py:184`, DEC-113) / 1164 passed; `make test-db` 608 passed.
+  2. **The report reads P7-T06's and P7-T07's decision JSON with defensive `.get`**, so a key mismatch shows as an empty line, never a crash. The first real report run in P7-T08 checks that the gate line renders; a mismatch is a one-function follow-up.
+  3. The CSV `outcome` column is the decision class (escalate, close, review, error), on the truth's scale; the human baseline is scored against the truth carried on the G2 predictions, identical across G2 runs.
+Supersedes: nothing
