@@ -125,8 +125,15 @@ def api_post(conn: Conn, claims: Admin, body: LabelIn) -> dict[str, Any]:
         )
     except labels.LabelError as exc:
         status = _STATUS_FOR[type(exc)]
-        raise HTTPException(status_code=status, detail=_DETAIL_FOR.get(type(exc), str(exc))) from exc
-    return {"cluster_id": result.cluster_id, "done": result.done, "total": result.total, "next": result.next}
+        raise HTTPException(
+            status_code=status, detail=_DETAIL_FOR.get(type(exc), str(exc))
+        ) from exc
+    return {
+        "cluster_id": result.cluster_id,
+        "done": result.done,
+        "total": result.total,
+        "next": result.next,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +190,9 @@ def labels_submit(
     note: Annotated[str | None, Form()] = None,
 ):
     try:
-        _submit(conn, user.user_id, cluster_id=cluster_id, label=label, confidence=confidence, note=note)
+        _submit(
+            conn, user.user_id, cluster_id=cluster_id, label=label, confidence=confidence, note=note
+        )
     except labels.LabelError as exc:
         # Nothing was written (the INSERT sits in a savepoint), so redrawing
         # the page from inside the request's transaction is safe.

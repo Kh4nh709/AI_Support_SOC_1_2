@@ -293,8 +293,16 @@ def _candidate_rows() -> list[dict[str, Any]]:
     ]
 
 
-def _g1(cluster_id: str, rule_id: str, agent: str, user: str, srcip: str, first: datetime,
-        last: datetime, occurrence: int) -> dict[str, Any]:
+def _g1(
+    cluster_id: str,
+    rule_id: str,
+    agent: str,
+    user: str,
+    srcip: str,
+    first: datetime,
+    last: datetime,
+    occurrence: int,
+) -> dict[str, Any]:
     return {
         "cluster_id": cluster_id,
         "alert_id": cluster_id,
@@ -316,25 +324,75 @@ def _g1(cluster_id: str, rule_id: str, agent: str, user: str, srcip: str, first:
 def _g1_rows() -> list[dict[str, Any]]:
     agent = _A40112.agent_name
     return [
-        _g1(_A40112.alert_id, "40112", agent, "user1", "127.0.0.1", _T, _T + timedelta(minutes=2), 3),
+        _g1(
+            _A40112.alert_id, "40112", agent, "user1", "127.0.0.1", _T, _T + timedelta(minutes=2), 3
+        ),
         # hit on agent_name only, 30 minutes after the head
-        _g1("g1-hit-agent", "5503", agent, "someone", "", _T + timedelta(minutes=30),
-            _T + timedelta(minutes=34), 4),
+        _g1(
+            "g1-hit-agent",
+            "5503",
+            agent,
+            "someone",
+            "",
+            _T + timedelta(minutes=30),
+            _T + timedelta(minutes=34),
+            4,
+        ),
         # hit on alert_user only, before the head
-        _g1("g1-hit-user", "5710", "OTHER-HOST", "user1", "", _T - timedelta(minutes=90),
-            _T - timedelta(minutes=80), 2),
+        _g1(
+            "g1-hit-user",
+            "5710",
+            "OTHER-HOST",
+            "user1",
+            "",
+            _T - timedelta(minutes=90),
+            _T - timedelta(minutes=80),
+            2,
+        ),
         # hit on srcip only; starts before the window, ends inside it
-        _g1("g1-hit-srcip", "5760", "OTHER-HOST-2", "", "127.0.0.1", _T - timedelta(hours=3),
-            _T - timedelta(minutes=110), 6),
+        _g1(
+            "g1-hit-srcip",
+            "5760",
+            "OTHER-HOST-2",
+            "",
+            "127.0.0.1",
+            _T - timedelta(hours=3),
+            _T - timedelta(minutes=110),
+            6,
+        ),
         # miss: same agent, 5 hours later
-        _g1("g1-miss-late", "5503", agent, "someone", "", _T + timedelta(hours=5),
-            _T + timedelta(hours=5, minutes=3), 9),
+        _g1(
+            "g1-miss-late",
+            "5503",
+            agent,
+            "someone",
+            "",
+            _T + timedelta(hours=5),
+            _T + timedelta(hours=5, minutes=3),
+            9,
+        ),
         # miss: in the window, but no key in common
-        _g1("g1-miss-keys", "5503", "UNRELATED", "bob", "10.9.9.9", _T + timedelta(minutes=10),
-            _T + timedelta(minutes=12), 5),
+        _g1(
+            "g1-miss-keys",
+            "5503",
+            "UNRELATED",
+            "bob",
+            "10.9.9.9",
+            _T + timedelta(minutes=10),
+            _T + timedelta(minutes=12),
+            5,
+        ),
         # the second G1 candidate's own cluster, weeks away
-        _g1(_A5503.alert_id, "5503", _A5503.agent_name, "root", "202.165.25.8",
-            _A5503.alert_time, _A5503.alert_time, 1),
+        _g1(
+            _A5503.alert_id,
+            "5503",
+            _A5503.agent_name,
+            "root",
+            "202.165.25.8",
+            _A5503.alert_time,
+            _A5503.alert_time,
+            1,
+        ),
     ]
 
 
@@ -370,8 +428,13 @@ def _insert_proposer_run(conn: psycopg.Connection, alert_id: str) -> None:
     )
 
 
-def _open(conn: psycopg.Connection, alert: Alert, *, source: str = "wazuh",
-          suggestion_visible: bool = True) -> None:
+def _open(
+    conn: psycopg.Connection,
+    alert: Alert,
+    *,
+    source: str = "wazuh",
+    suggestion_visible: bool = True,
+) -> None:
     open_alert(conn, alert, kind="received", source=source, suggestion_visible=suggestion_visible)
 
 
@@ -441,8 +504,13 @@ def client(db, seeded):
             main.app.dependency_overrides.pop(dep, None)
 
 
-def _label_directly(conn: psycopg.Connection, user_id: str, alert_id: str,
-                    label: str = "benign", note: str | None = None) -> None:
+def _label_directly(
+    conn: psycopg.Connection,
+    user_id: str,
+    alert_id: str,
+    label: str = "benign",
+    note: str | None = None,
+) -> None:
     conn.execute(
         "INSERT INTO triage_labels (alert_id, labeler_id, source, label, confidence, note) "
         "VALUES (%s, %s, 'gold_offline', %s, '2', %s)",
@@ -988,9 +1056,7 @@ def test_undo_last_own_label_only_and_refused_after_freeze(client, db, seeded) -
     assert resp.status_code == 303
 
     remaining = set(
-        db.execute(
-            "SELECT alert_id, labeler_id::text FROM triage_labels ORDER BY 1, 2"
-        ).fetchall()
+        db.execute("SELECT alert_id, labeler_id::text FROM triage_labels ORDER BY 1, 2").fetchall()
     )
     assert remaining == {(older, USER_A), (newer, USER_B)}
     undo = db.execute(
@@ -1005,8 +1071,11 @@ def test_undo_last_own_label_only_and_refused_after_freeze(client, db, seeded) -
     assert 'id="undo-form"' not in _page(client)
     resp = client.http.post("/admin/labels/undo")
     assert resp.status_code == 409
-    assert db.execute(
-        "SELECT count(*) FROM triage_labels WHERE labeler_id = %s", (USER_A,)
-    ).fetchone()[0] == 1
+    assert (
+        db.execute(
+            "SELECT count(*) FROM triage_labels WHERE labeler_id = %s", (USER_A,)
+        ).fetchone()[0]
+        == 1
+    )
     with pytest.raises(labels.Frozen):
         labels.undo_last(db, USER_A, freeze_marker=labels.FREEZE_MARKER)

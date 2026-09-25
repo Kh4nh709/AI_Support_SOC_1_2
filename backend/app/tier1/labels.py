@@ -352,9 +352,7 @@ def _group(clusters: Iterable[G1Cluster]) -> list[CorrelationView]:
     return views[:CORRELATION_MAX_ROWS]
 
 
-def _g1_samples(
-    conn: psycopg.Connection, clusters: Sequence[G1Cluster]
-) -> list[dict[str, Any]]:
+def _g1_samples(conn: psycopg.Connection, clusters: Sequence[G1Cluster]) -> list[dict[str, Any]]:
     """Up to 5 correlated heads (highest `occurrence_count`, newest first — the
     order `domain.correlation.samples_query` uses), numbers from the file,
     `description`/`raw_log` from `alerts` by the explicit-column query."""
