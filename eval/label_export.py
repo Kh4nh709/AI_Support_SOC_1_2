@@ -247,6 +247,12 @@ class MissingFinalLabel(Exception):
         self.cluster_ids = list(cluster_ids)
 
 
+class ExclusionFileMalformed(ValueError):
+    """`excluded_scenarios.csv` carries data rows but no `scenario_id` column.
+    Reading it as "exclude nothing" would freeze a misfired scenario into gold
+    while the committed record says it was excluded (P6-T11, DEC-120)."""
+
+
 # --- kappa -- the 3 x 3 formula, ten lines (prompts/P6.md:31) ----------------------
 
 
@@ -307,7 +313,9 @@ def vs_truth(
         return {
             "labeler_id": labeler_id,
             **result.to_json(),
-            "accuracy": result.p_o,
+            # n = 0 carries no accuracy, not 0.0: a 0.0 here would read as a human
+            # baseline of zero in P7/P8 before anyone has labelled (P6-T11, DEC-120).
+            "accuracy": result.p_o if result.n else None,
             "by_category": by_category,
         }
 
@@ -533,10 +541,20 @@ def read_excluded_scenarios(path: Path) -> list[str]:
         return []
     ordered: dict[str, None] = {}
     with path.open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
-            scenario_id = (row.get("scenario_id") or "").strip()
-            if scenario_id:
-                ordered.setdefault(scenario_id, None)
+        reader = csv.DictReader(handle)
+        # Header names are compared stripped, so " scenario_id " still reads.
+        rows = [{(key or "").strip(): value for key, value in row.items()} for row in reader]
+        fieldnames = [(name or "").strip() for name in (reader.fieldnames or [])]
+    if rows and "scenario_id" not in fieldnames:
+        raise ExclusionFileMalformed(
+            f"{path}: {len(rows)} data row(s) but no 'scenario_id' column "
+            f"(header: {', '.join(fieldnames) or '(empty)'}); "
+            "expected scenario_id,reason,decided_in"
+        )
+    for row in rows:
+        scenario_id = (row.get("scenario_id") or "").strip()
+        if scenario_id:
+            ordered.setdefault(scenario_id, None)
     return list(ordered)
 
 
@@ -1020,9 +1038,15 @@ def render_report(
         else:
             for key in ("a", "b"):
                 entry = vs.get(key) or {}
+                accuracy = entry.get("accuracy")
+                accuracy_text = (
+                    accuracy
+                    if entry.get("n") and accuracy is not None
+                    else "(not available -- no label against a window truth yet)"
+                )
                 lines.append(
                     f"  - {entry.get('labeler_id', '(unknown)')}: "
-                    f"n={entry.get('n', 0)} accuracy={entry.get('accuracy')}"
+                    f"n={entry.get('n', 0)} accuracy={accuracy_text}"
                 )
                 for category, cat_doc in sorted((entry.get("by_category") or {}).items()):
                     lines.append(
@@ -1037,6 +1061,10 @@ def render_report(
     else:
         pool = _extract_section(coverage_text, "## G1 pool") or ""
         sample = _extract_section(coverage_text, "## G1 sample") or ""
+        # G2-only coverage (DEC-111) has no G1 sections: the G1-derived lines below
+        # find nothing, and the G2 block further down states that instead of letting
+        # them vanish silently (P6-T11, DEC-120).
+        g1_present = bool(pool)
         limitations: list[str] = []
 
         unknown_line = _extract_line(pool, "- `unknown` share of the pool:")
@@ -1063,6 +1091,37 @@ def render_report(
         desktop_line = _extract_line(pool, "- `DESKTOP-MIRSO17`")
         if desktop_line:
             limitations.append(desktop_line.lstrip("- ") + " (DEC-058).")
+        if not g1_present:
+            limitations.append(
+                "G1 is void (DEC-111): its limitations -- the loopback exclusion (DEC-053), the "
+                "`unknown` share and B1's recall ceiling (DEC-057), DESKTOP-MIRSO17 (DEC-058) -- "
+                "describe a corpus that was built and not evaluated; the evaluated set is G2 alone."
+            )
+            xii = next(
+                (
+                    line
+                    for line in coverage_text.splitlines()
+                    if "author-generated lab traffic" in line
+                ),
+                None,
+            )
+            limitations.append(
+                xii.lstrip("- ").strip() + " (DEC-111, limitation xii)."
+                if xii
+                else "(the DEC-111 (xii) sentence is not in `eval/gold_coverage.md` -- re-run "
+                "`build_gold.py --g2`)"
+            )
+            for prefix in (
+                "- in_window_unexpected (DEC-114):",
+                "- G2's severity mix",
+                "- benign lab clusters in the sample",
+            ):
+                found = _extract_line(coverage_text, prefix)
+                limitations.append(
+                    found.lstrip("- ").rstrip(".") + "."
+                    if found
+                    else f"({prefix.lstrip('- ').rstrip(':')} is not in `eval/gold_coverage.md`)"
+                )
 
         limitations.append(
             "`web_attack` and `policy_violation` are absent categories (DEC-055, DEC-057)."
@@ -1087,11 +1146,19 @@ def render_report(
             "after the fact by `eval/lab_tag.py`, never an agent-name rule (DEC-085, planning "
             "decision 3)."
         )
-        limitations.append(
-            "G2's September dates are readable in `raw_log`, so a labeller can recognise a "
-            "cluster as lab traffic by date; the control is the >= 20 benign lab clusters on "
-            "the same host, not concealment."
-        )
+        if g1_present:
+            limitations.append(
+                "G2's September dates are readable in `raw_log`, so a labeller can recognise a "
+                "cluster as lab traffic by date; the control is the >= 20 benign lab clusters on "
+                "the same host, not concealment."
+            )
+        else:
+            limitations.append(
+                "Every gold candidate is lab traffic from the 26-27/09 windows (G2 only), so a "
+                "date does not separate lab from production; what keeps the labelling blind is "
+                "that `truth_label`, `kind` and `scenario_id` never reach the labelling page "
+                "(DEC-117, P6-T10)."
+            )
         enrich_line = _extract_line(sample, "- G1's severity mix")
         if enrich_line:
             limitations.append(enrich_line.lstrip("- ") + ".")
@@ -1314,7 +1381,7 @@ def cmd_freeze(args: argparse.Namespace) -> int:
     excluded_path = Path(args.excluded_scenarios)
     try:
         excluded_ids = read_excluded_scenarios(excluded_path)
-    except OSError as exc:
+    except (OSError, ExclusionFileMalformed) as exc:
         print(
             f"label_export: refusing --excluded-scenarios {args.excluded_scenarios!r}: {exc}",
             file=sys.stderr,

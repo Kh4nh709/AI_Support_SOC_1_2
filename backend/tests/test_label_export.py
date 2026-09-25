@@ -1316,3 +1316,147 @@ def test_report_vs_truth_missing_is_not_available():
     )
     assert "Human baseline vs window truth" in text
     assert "(not available -- kappa_v1.json carries no vs_truth)" in text
+
+
+# --- P6-T11 (DEC-120): the three follow-ups from the P6-T09 review ---------------------
+
+
+def test_read_excluded_scenarios_refuses_rows_without_a_scenario_id_column(tmp_path):
+    """A misnamed header must not read as "exclude nothing": the misfired scenario
+    would be frozen while the committed record says it was excluded."""
+    path = tmp_path / "excluded_scenarios.csv"
+    path.write_text("scenario,reason,decided_in\nRW-A1,misfired,DEC-999\n", encoding="utf-8")
+    with pytest.raises(label_export.ExclusionFileMalformed, match="no 'scenario_id' column"):
+        label_export.read_excluded_scenarios(path)
+
+
+def test_read_excluded_scenarios_header_only_is_empty_whatever_the_header(tmp_path):
+    path = tmp_path / "excluded_scenarios.csv"
+    path.write_text("scenario,reason,decided_in\n", encoding="utf-8")
+    assert label_export.read_excluded_scenarios(path) == []
+
+
+def test_read_excluded_scenarios_tolerates_a_padded_header(tmp_path):
+    path = tmp_path / "excluded_scenarios.csv"
+    path.write_text(
+        " scenario_id , reason , decided_in\nRW-A1 ,misfired,DEC-999\n", encoding="utf-8"
+    )
+    assert label_export.read_excluded_scenarios(path) == ["RW-A1"]
+
+
+def test_freeze_refuses_an_exclusion_file_without_scenario_id_before_any_connection(
+    tmp_path, capsys
+):
+    candidates_csv = tmp_path / "gold_candidates.csv"
+    _write_candidates_csv(
+        candidates_csv, [_truth_candidate_dict("keep-1", "escalate", scenario="rw-1")]
+    )
+    excluded_csv = tmp_path / "excluded_scenarios.csv"
+    excluded_csv.write_text("scenario,reason,decided_in\nrw-1,misfired,DEC-999\n", encoding="utf-8")
+    rc = label_export.main(
+        [
+            "freeze",
+            "--candidates",
+            str(candidates_csv),
+            "--excluded-scenarios",
+            str(excluded_csv),
+            "--out-dir",
+            str(tmp_path / "out"),
+            "--dsn",
+            "postgresql://never-used",
+        ]
+    )
+    assert rc == label_export.EXIT_UNREADABLE
+    assert "no 'scenario_id' column" in capsys.readouterr().err
+    assert not (tmp_path / "out").exists()
+
+
+def test_vs_truth_with_no_truth_pairs_carries_no_accuracy():
+    empty = label_export.vs_truth([_plain_candidate("x")], {}, "A", "B")
+    assert empty["a"]["n"] == 0 and empty["a"]["accuracy"] is None
+    assert empty["b"]["n"] == 0 and empty["b"]["accuracy"] is None
+
+
+def _minimal_kappa_doc(vs_truth: dict | None) -> dict:
+    doc = {
+        "overall": {"n": 0, "kappa": None, "confusion": {}},
+        "disagreements": 0,
+        "disagreement_rate": None,
+        "by_gold_set": {},
+        "by_category": {},
+    }
+    if vs_truth is not None:
+        doc["vs_truth"] = vs_truth
+    return doc
+
+
+def _report(kappa_doc: dict, coverage_text: str | None) -> str:
+    return label_export.render_report(
+        gold_rows=_report_gold_rows(),
+        version=1,
+        sha256_hex=None,
+        frozen_at=None,
+        adjudicator_id=None,
+        git_log_line="commit: abc1234",
+        kappa_doc=kappa_doc,
+        coverage_text=coverage_text,
+        manifest_rows=None,
+        adjudication_present=False,
+    )
+
+
+def test_report_vs_truth_with_n_zero_prints_not_available_never_a_zero():
+    kappa_doc = _minimal_kappa_doc(
+        {
+            "a": {"labeler_id": "labeller-A", "n": 0, "accuracy": None, "by_category": {}},
+            # a kappa_v1.json written before this fix carried 0.0 for n = 0
+            "b": {"labeler_id": "labeller-B", "n": 0, "accuracy": 0.0, "by_category": {}},
+        }
+    )
+    text = _report(kappa_doc, coverage_text=None)
+    assert "labeller-A: n=0 accuracy=(not available" in text
+    assert "labeller-B: n=0 accuracy=(not available" in text
+    assert "accuracy=0.0" not in text and "accuracy=None" not in text
+
+
+G2_ONLY_COVERAGE = (
+    "# Gold coverage — G2 only\n"
+    "\n"
+    "## Run\n"
+    "- G1: not built (DEC-111 — the 08/08–07/09 history is void; its files stay in git)\n"
+    "\n"
+    "## G2 — lab windows (`eval/lab_windows.csv`)\n"
+    "- in_window_unexpected (DEC-114): 3 of 40 heads found, excluded, never labelled\n"
+    "\n"
+    "## G2 pool (denominator 37)\n"
+    "\n"
+    "## G2 sample (denominator 37)\n"
+    "- G2's severity mix is not enriched by design (take-all rule off): 12 of 37\n"
+    "This corpus is author-generated lab traffic on the author's host with window-known "
+    "truth: no rate computed from it is an estate rate, of any estate.\n"
+    "- truth in the sample (window, DEC-111/114/115): escalate 25 · benign 12\n"
+    "- benign lab clusters in the sample ≥ 20: 12 — MISS\n"
+)
+
+
+def test_report_g2_only_limitations_state_g1_void_and_carry_the_g2_lines():
+    text = _report(_minimal_kappa_doc(None), coverage_text=G2_ONLY_COVERAGE)
+    limitations = text.split("## 5. Limitations for P8", 1)[1]
+    assert "G1 is void (DEC-111)" in limitations
+    assert "author-generated lab traffic" in limitations and "limitation xii" in limitations
+    assert "in_window_unexpected (DEC-114): 3 of 40 heads found" in limitations
+    assert "G2's severity mix is not enriched by design" in limitations
+    assert "benign lab clusters in the sample ≥ 20: 12 — MISS" in limitations
+    assert "Every gold candidate is lab traffic" in limitations
+    assert "G2's September dates are readable" not in limitations
+
+
+def test_report_g2_only_limitations_name_a_missing_g2_line_instead_of_dropping_it():
+    coverage = "\n".join(
+        line
+        for line in G2_ONLY_COVERAGE.splitlines()
+        if not line.startswith("- in_window_unexpected")
+    )
+    text = _report(_minimal_kappa_doc(None), coverage_text=coverage)
+    limitations = text.split("## 5. Limitations for P8", 1)[1]
+    assert "(in_window_unexpected (DEC-114) is not in `eval/gold_coverage.md`)" in limitations
