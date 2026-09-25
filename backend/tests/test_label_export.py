@@ -1063,3 +1063,256 @@ def test_kappa_vs_truth_per_labeller():
     empty = label_export.vs_truth([_plain_candidate("x")], {}, "A", "B")
     assert empty["a"]["n"] == 0 and empty["a"]["kappa"] is None
     assert empty["b"]["n"] == 0 and empty["b"]["reason"] == "n = 0"
+
+
+# --- P6-T09: disagreements vs the window truth (DEC-115 ruling 3a) --------------------
+
+
+def _truth_candidate_dict(cluster_id, truth, *, scenario="sbf-1", kind="attack"):
+    return {
+        "cluster_id": cluster_id,
+        "gold_set": "G2",
+        "alert_id": cluster_id,
+        "category": "ssh_brute_force",
+        "severity": "high",
+        "source": "lab",
+        "stratum": "ssh_brute_force|high",
+        "occurrence_count": "1",
+        "first_seen": "2026-09-26T02:00:00+00:00",
+        "last_seen": "2026-09-26T02:00:00+00:00",
+        "agent_name": "attt-m1-lab",
+        "rule_id": "5710",
+        "scenario_id": scenario,
+        "kind": kind,
+        "truth_label": truth,
+    }
+
+
+def test_disagreements_window_basis_one_row_per_differing_labeller():
+    # truth escalate, A agrees / B differs -> one window row for B
+    c_one = _truth_candidate("w1", "escalate", scenario="sbf-1")
+    # truth benign, both differ -> two window rows
+    c_two = _truth_candidate("w2", "benign", scenario="bb-1", kind="benign")
+    # truth escalate, both agree -> no row
+    c_three = _truth_candidate("w3", "escalate", scenario="pe-1")
+    pairs = {
+        "w1": _pair("w1", "escalate", "benign"),
+        "w2": _pair("w2", "escalate", "false_positive"),
+        "w3": _pair("w3", "escalate", "escalate"),
+    }
+    rows = label_export.build_adjudication_rows([c_one, c_two, c_three], pairs, "A", "B")
+    assert all(r.basis == "window" for r in rows)
+    assert [(r.cluster_id, r.labeler, r.labeler_label, r.truth_label) for r in rows] == [
+        ("w1", "B", "benign", "escalate"),
+        ("w2", "A", "escalate", "benign"),
+        ("w2", "B", "false_positive", "benign"),
+    ]
+    # a window row leaves the peer columns empty (the labeller's own label rides in labeler_label)
+    assert all(r.label_a == "" and r.label_b == "" for r in rows)
+
+
+def test_disagreements_peer_basis_kept_when_no_truth():
+    truth_c = _truth_candidate("t1", "escalate")  # both agree with truth -> no row
+    plain = _plain_candidate("p1")  # no truth_label
+    pairs = {
+        "t1": _pair("t1", "escalate", "escalate"),
+        "p1": _pair("p1", "escalate", "benign", note_a="a note", note_b="b note"),
+    }
+    rows = label_export.build_adjudication_rows([truth_c, plain], pairs, "A", "B")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.cluster_id == "p1" and row.basis == "peer"
+    assert row.label_a == "escalate" and row.label_b == "benign"
+    assert row.note_a == "a note" and row.note_b == "b note"
+    assert row.truth_label == "" and row.labeler == "" and row.labeler_label == ""
+
+
+@pytest.mark.db
+def test_disagreements_writes_window_rows_to_the_csv(same_connection, tmp_path):
+    db = same_connection
+    labeler_a = _make_user(db, prefix="p6t09d")
+    labeler_b = _make_user(db, prefix="p6t09d")
+    base = datetime(2026, 9, 26, 2, 0, 0, tzinfo=UTC)
+    _insert_head(db, "wd-1", base)
+    _label(db, "wd-1", labeler_a, label="escalate", confidence="2", note="")
+    _label(db, "wd-1", labeler_b, label="benign", confidence="3", note="b differs")
+
+    candidates_csv = tmp_path / "gold_candidates.csv"
+    _write_candidates_csv(candidates_csv, [_truth_candidate_dict("wd-1", "escalate")])
+    out_path = tmp_path / "adjudication_v1.csv"
+    rc = label_export.main(
+        [
+            "disagreements",
+            "--candidates",
+            str(candidates_csv),
+            "--out",
+            str(out_path),
+            "--dsn",
+            "postgresql://never-used",
+            "--labeler-a",
+            labeler_a,
+            "--labeler-b",
+            labeler_b,
+        ]
+    )
+    assert rc == label_export.EXIT_OK
+    with out_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["basis"] == "window"
+    assert row["truth_label"] == "escalate"
+    assert row["labeler"] == labeler_b and row["labeler_label"] == "benign"
+    assert row["final_label"] == ""
+
+
+# --- P6-T09: freeze honours a committed scenario exclusion (DEC-117) ------------------
+
+
+def test_read_excluded_scenarios_absent_is_empty_and_dedups(tmp_path):
+    assert label_export.read_excluded_scenarios(tmp_path / "nope.csv") == []
+    path = tmp_path / "excluded_scenarios.csv"
+    path.write_text(
+        "scenario_id,reason,decided_in\n"
+        "sbf-1,misfire,DEC-120\n"
+        ",blank id skipped,DEC-120\n"
+        "sbf-1,duplicate,DEC-120\n"
+        "dx-2,no in-scope head,DEC-121\n",
+        encoding="utf-8",
+    )
+    assert label_export.read_excluded_scenarios(path) == ["sbf-1", "dx-2"]
+
+
+def test_apply_scenario_exclusions_drops_matched_and_flags_unmatched():
+    cands = [
+        _truth_candidate("a1", "escalate", scenario="sbf-1"),
+        _truth_candidate("a2", "escalate", scenario="sbf-1"),
+        _truth_candidate("b1", "benign", scenario="dx-2", kind="benign"),
+    ]
+    res = label_export.apply_scenario_exclusions(cands, ["sbf-1", "ghost"])
+    assert [c.cluster_id for c in res.kept] == ["b1"]
+    assert res.dropped == 2
+    assert res.matched == ["sbf-1"] and res.unmatched == ["ghost"]
+    # an empty exclusion list is a no-op
+    res0 = label_export.apply_scenario_exclusions(cands, [])
+    assert res0.dropped == 0 and len(res0.kept) == 3
+
+
+@pytest.mark.db
+def test_freeze_excludes_committed_scenarios(same_connection, tmp_path, capsys):
+    db = same_connection
+    labeler_a = _make_user(db, prefix="p6t09x")
+    labeler_b = _make_user(db, prefix="p6t09x")
+    base = datetime(2026, 9, 26, 3, 0, 0, tzinfo=UTC)
+    for offset, cid in enumerate(("keep-1", "drop-1")):
+        _insert_head(db, cid, base + timedelta(minutes=offset))
+        _label(db, cid, labeler_a, label="escalate", confidence="2", note="")
+        _label(db, cid, labeler_b, label="escalate", confidence="2", note="")
+
+    candidates_csv = tmp_path / "gold_candidates.csv"
+    _write_candidates_csv(
+        candidates_csv,
+        [
+            _truth_candidate_dict("keep-1", "escalate", scenario="sbf-1"),
+            _truth_candidate_dict("drop-1", "escalate", scenario="dx-9"),
+        ],
+    )
+    excluded_csv = tmp_path / "excluded_scenarios.csv"
+    excluded_csv.write_text(
+        "scenario_id,reason,decided_in\ndx-9,misfire,DEC-120\nghost,no head,DEC-121\n",
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "out"
+    rc = label_export.main(
+        [
+            "freeze",
+            "--candidates",
+            str(candidates_csv),
+            "--excluded-scenarios",
+            str(excluded_csv),
+            "--out-dir",
+            str(out_dir),
+            "--dsn",
+            "postgresql://never-used",
+            "--labeler-a",
+            labeler_a,
+            "--labeler-b",
+            labeler_b,
+        ]
+    )
+    assert rc == label_export.EXIT_OK
+    captured = capsys.readouterr()
+    assert "excluded 1 candidates from 1 scenarios: dx-9" in captured.out
+    assert "excluded scenario 'ghost' matched no candidate" in captured.err
+    with (out_dir / "gold_v1.csv").open(newline="", encoding="utf-8") as handle:
+        frozen = {row["cluster_id"] for row in csv.DictReader(handle)}
+    assert frozen == {"keep-1"}
+
+
+def test_freeze_absent_exclusion_file_is_a_no_op(tmp_path):
+    # the pure path: no file -> no ids -> nothing dropped
+    assert label_export.read_excluded_scenarios(tmp_path / "eval" / "excluded_scenarios.csv") == []
+
+
+# --- P6-T09: report drops the G1 wording and prints vs_truth (item C) -----------------
+
+
+def test_report_prints_vs_truth_and_drops_the_g1_rows_gate():
+    kappa_doc = {
+        "overall": {"n": 4, "kappa": 0.7, "confusion": {}},
+        "disagreements": 0,
+        "disagreement_rate": 0.0,
+        "by_gold_set": {"G2": {"n": 4, "kappa": 0.7}},
+        "by_category": {"ssh_brute_force": {"n": 4, "kappa": 0.7}},
+        "vs_truth": {
+            "a": {
+                "labeler_id": "labeller-A",
+                "n": 4,
+                "accuracy": 1.0,
+                "by_category": {"ssh_brute_force": {"n": 4, "p_o": 1.0, "kappa": None}},
+            },
+            "b": {"labeler_id": "labeller-B", "n": 3, "accuracy": 0.667, "by_category": {}},
+        },
+    }
+    text = label_export.render_report(
+        gold_rows=_report_gold_rows(),
+        version=1,
+        sha256_hex="a" * 64,
+        frozen_at="2026-09-28T10:00:00+00:00",
+        adjudicator_id=None,
+        git_log_line="commit: abc1234",
+        kappa_doc=kappa_doc,
+        coverage_text=None,
+        manifest_rows=None,
+        adjudication_present=True,
+    )
+    assert "G1 rows" not in text
+    assert "G2 rows" in text and ">= 100" in text
+    assert "Human baseline vs window truth" in text
+    assert "labeller-A: n=4 accuracy=1.0" in text
+    assert "labeller-B: n=3 accuracy=0.667" in text
+    assert "ssh_brute_force: n=4 accuracy=1.0" in text
+
+
+def test_report_vs_truth_missing_is_not_available():
+    kappa_doc = {
+        "overall": {"n": 2, "kappa": None, "confusion": {}},
+        "disagreements": 0,
+        "disagreement_rate": 0.0,
+        "by_gold_set": {},
+        "by_category": {},
+    }
+    text = label_export.render_report(
+        gold_rows=_report_gold_rows(),
+        version=1,
+        sha256_hex=None,
+        frozen_at=None,
+        adjudicator_id=None,
+        git_log_line="commit: abc1234",
+        kappa_doc=kappa_doc,
+        coverage_text=None,
+        manifest_rows=None,
+        adjudication_present=False,
+    )
+    assert "Human baseline vs window truth" in text
+    assert "(not available -- kappa_v1.json carries no vs_truth)" in text

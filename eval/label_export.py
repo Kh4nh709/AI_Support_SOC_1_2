@@ -78,6 +78,12 @@ ADJUDICATION_COLUMNS: tuple[str, ...] = (
     "note_b",
     "final_label",
     "final_note",
+    # P6-T09 (DEC-115 ruling 3a): the row's basis, and for a window-basis row the
+    # window truth, the disagreeing labeller and that labeller's label.
+    "basis",
+    "truth_label",
+    "labeler",
+    "labeler_label",
 )
 GOLD_COLUMNS: tuple[str, ...] = (
     "cluster_id",
@@ -399,33 +405,157 @@ def read_adjudication(path: Path) -> dict[str, AdjudicationRow]:
         }
 
 
-def write_adjudication_csv(
-    path: Path,
-    disagreeing: Sequence[LabelPair],
-    candidates_by_id: Mapping[str, Candidate],
-) -> None:
-    ordered = sorted(disagreeing, key=lambda pair: pair.cluster_id)
+@dataclass(frozen=True)
+class AdjRow:
+    """One adjudication-file row. `basis='peer'` is a human-vs-human
+    disagreement (the meeting fills `final_label`); `basis='window'` is a
+    human-vs-window-truth disagreement (DEC-111: the window is the answer, so
+    the row is the human-baseline record, not a decision to be made)."""
+
+    cluster_id: str
+    gold_set: str
+    category: str
+    severity: str
+    label_a: str
+    confidence_a: str
+    note_a: str
+    label_b: str
+    confidence_b: str
+    note_b: str
+    basis: str
+    truth_label: str
+    labeler: str
+    labeler_label: str
+
+
+def build_adjudication_rows(
+    candidates: Sequence[Candidate],
+    pairs: Mapping[str, LabelPair],
+    labeler_a: str,
+    labeler_b: str,
+) -> list[AdjRow]:
+    """The adjudication rows (DEC-115 ruling 3a). A candidate carrying a window
+    `truth_label` yields one **window**-basis row per labeller whose label
+    differs from that truth (0, 1 or 2 rows); a candidate with no truth yields
+    the original **peer**-basis row only when both humans labelled it and
+    disagree. Ordered by `(cluster_id, basis, labeler)`."""
+    rows: list[AdjRow] = []
+    for candidate in candidates:
+        pair = pairs.get(candidate.cluster_id, _EMPTY_PAIR)
+        if candidate.truth_label:
+            for labeler_id, label in ((labeler_a, pair.label_a), (labeler_b, pair.label_b)):
+                if label is not None and label != candidate.truth_label:
+                    rows.append(
+                        AdjRow(
+                            cluster_id=candidate.cluster_id,
+                            gold_set=candidate.gold_set,
+                            category=candidate.category,
+                            severity=candidate.severity,
+                            label_a="",
+                            confidence_a="",
+                            note_a="",
+                            label_b="",
+                            confidence_b="",
+                            note_b="",
+                            basis="window",
+                            truth_label=candidate.truth_label,
+                            labeler=str(labeler_id),
+                            labeler_label=label,
+                        )
+                    )
+        elif pair.both_labelled and pair.disagrees:
+            rows.append(
+                AdjRow(
+                    cluster_id=candidate.cluster_id,
+                    gold_set=candidate.gold_set,
+                    category=candidate.category,
+                    severity=candidate.severity,
+                    label_a=pair.label_a or "",
+                    confidence_a=pair.confidence_a or "",
+                    note_a=pair.note_a or "",
+                    label_b=pair.label_b or "",
+                    confidence_b=pair.confidence_b or "",
+                    note_b=pair.note_b or "",
+                    basis="peer",
+                    truth_label="",
+                    labeler="",
+                    labeler_label="",
+                )
+            )
+    rows.sort(key=lambda r: (r.cluster_id, r.basis, r.labeler))
+    return rows
+
+
+def write_adjudication_csv(path: Path, rows: Sequence[AdjRow]) -> None:
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle, lineterminator="\n", quoting=csv.QUOTE_MINIMAL)
         writer.writerow(ADJUDICATION_COLUMNS)
-        for pair in ordered:
-            candidate = candidates_by_id[pair.cluster_id]
+        for row in rows:
             writer.writerow(
                 (
-                    pair.cluster_id,
-                    candidate.gold_set,
-                    candidate.category,
-                    candidate.severity,
-                    pair.label_a or "",
-                    pair.confidence_a or "",
-                    pair.note_a or "",
-                    pair.label_b or "",
-                    pair.confidence_b or "",
-                    pair.note_b or "",
+                    row.cluster_id,
+                    row.gold_set,
+                    row.category,
+                    row.severity,
+                    row.label_a,
+                    row.confidence_a,
+                    row.note_a,
+                    row.label_b,
+                    row.confidence_b,
+                    row.note_b,
                     "",
                     "",
+                    row.basis,
+                    row.truth_label,
+                    row.labeler,
+                    row.labeler_label,
                 )
             )
+
+
+# --- freeze: the committed scenario exclusion (DEC-117, design decision B) ---------
+
+
+@dataclass(frozen=True)
+class ExclusionResult:
+    kept: list[Candidate]
+    dropped: int
+    matched: list[str]
+    unmatched: list[str]
+
+
+def read_excluded_scenarios(path: Path) -> list[str]:
+    """Ordered, de-duplicated `scenario_id`s from a committed
+    `excluded_scenarios.csv` (`scenario_id,reason,decided_in`); `[]` when the
+    file is absent. A blank id is skipped. A misfired scenario is excluded by
+    this committed record, never by a flag typed at freeze time (DEC-117)."""
+    if not path.exists():
+        return []
+    ordered: dict[str, None] = {}
+    with path.open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            scenario_id = (row.get("scenario_id") or "").strip()
+            if scenario_id:
+                ordered.setdefault(scenario_id, None)
+    return list(ordered)
+
+
+def apply_scenario_exclusions(
+    candidates: Sequence[Candidate], excluded_ids: Sequence[str]
+) -> ExclusionResult:
+    """Drop every candidate whose `scenario_id` is listed. `matched` are the
+    excluded ids that hit at least one candidate; `unmatched` the ids that hit
+    none -- a warning, not an error (the scenario may have produced no in-scope
+    head)."""
+    excluded = set(excluded_ids)
+    present = {c.scenario_id for c in candidates if c.scenario_id}
+    kept = [c for c in candidates if c.scenario_id not in excluded]
+    return ExclusionResult(
+        kept=kept,
+        dropped=len(candidates) - len(kept),
+        matched=[sid for sid in excluded_ids if sid in present],
+        unmatched=[sid for sid in excluded_ids if sid not in present],
+    )
 
 
 # --- freeze -- pure rules (design note 6, testable without a database) -----------
@@ -827,7 +957,6 @@ def render_report(
         for category in categories
         for label in LABELS
     ]
-    g1_n = sum(1 for row in gold_rows if row.gold_set == "G1")
     g2_n = sum(1 for row in gold_rows if row.gold_set == "G2")
     g2_benign = sum(
         1 for row in gold_rows if row.gold_set == "G2" and row.label in ("benign", "false_positive")
@@ -848,8 +977,7 @@ def render_report(
         "",
         _md_table(category_rows, ("category", "label", "n")),
         "",
-        _gate_line("G1 rows", g1_n, 300),
-        _gate_line("G2 rows", g2_n, 60),
+        _gate_line("G2 rows", g2_n, 100),
         _gate_line("G2 benign clusters (benign + false_positive)", g2_benign, 20),
         g3_line,
         "",
@@ -885,6 +1013,21 @@ def render_report(
         lines += ["", "By category:"]
         for category, doc in sorted(kappa_doc.get("by_category", {}).items()):
             lines.append(f"  - {category}: n={doc['n']} kappa={doc['kappa']}")
+        lines += ["", "Human baseline vs window truth (DEC-111):"]
+        vs = kappa_doc.get("vs_truth")
+        if not vs:
+            lines.append("  (not available -- kappa_v1.json carries no vs_truth)")
+        else:
+            for key in ("a", "b"):
+                entry = vs.get(key) or {}
+                lines.append(
+                    f"  - {entry.get('labeler_id', '(unknown)')}: "
+                    f"n={entry.get('n', 0)} accuracy={entry.get('accuracy')}"
+                )
+                for category, cat_doc in sorted((entry.get("by_category") or {}).items()):
+                    lines.append(
+                        f"    - {category}: n={cat_doc.get('n', 0)} accuracy={cat_doc.get('p_o')}"
+                    )
         lines.append("")
 
     # --- 5. Limitations for P8 ---
@@ -922,8 +1065,7 @@ def render_report(
             limitations.append(desktop_line.lstrip("- ") + " (DEC-058).")
 
         limitations.append(
-            "`web_attack` and `policy_violation` are zero-cluster categories in G1 today "
-            "(DEC-055, DEC-057)."
+            "`web_attack` and `policy_violation` are absent categories (DEC-055, DEC-057)."
         )
         g2_pool = _extract_section(coverage_text, "## G2 pool")
         for category in ("ransomware", "data_exfiltration", "c2_beacon"):
@@ -1031,6 +1173,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_freeze = sub.add_parser("freeze", help="freeze the adjudicated labels into gold_vN.csv")
     _add_common_args(p_freeze)
     p_freeze.add_argument("--adjudication", default="eval/adjudication_v1.csv", metavar="PATH")
+    p_freeze.add_argument(
+        "--excluded-scenarios", default="eval/excluded_scenarios.csv", metavar="PATH"
+    )
     p_freeze.add_argument("--out-dir", default="eval", metavar="DIR")
     p_freeze.add_argument("--adjudicator-id", default=None, metavar="UUID")
     p_freeze.add_argument("--allow-partial", action="store_true")
@@ -1147,13 +1292,14 @@ def cmd_disagreements(args: argparse.Namespace) -> int:
         _print_labeler_violation(exc)
         return EXIT_REFUSED
 
-    candidates_by_id = {candidate.cluster_id: candidate for candidate in candidates}
     both = {cluster_id: pair for cluster_id, pair in pairs.items() if pair.both_labelled}
     not_yet_both = len(candidates) - len(both)
-    disagreeing = [pair for pair in both.values() if pair.disagrees]
-    write_adjudication_csv(out_path, disagreeing, candidates_by_id)
+    rows = build_adjudication_rows(candidates, pairs, labeler_a, labeler_b)
+    write_adjudication_csv(out_path, rows)
+    window_n = sum(1 for row in rows if row.basis == "window")
+    peer_n = sum(1 for row in rows if row.basis == "peer")
     print(f"not yet labelled by both: {not_yet_both}")
-    print(f"disagreements: {len(disagreeing)} -> {out_path}")
+    print(f"disagreements: {len(rows)} ({window_n} vs-window, {peer_n} vs-peer) -> {out_path}")
     return EXIT_OK
 
 
@@ -1164,6 +1310,30 @@ def cmd_freeze(args: argparse.Namespace) -> int:
         print(f"label_export: refusing --candidates {args.candidates!r}: {exc}", file=sys.stderr)
         return EXIT_UNREADABLE
     candidate_ids = [candidate.cluster_id for candidate in candidates]
+
+    excluded_path = Path(args.excluded_scenarios)
+    try:
+        excluded_ids = read_excluded_scenarios(excluded_path)
+    except OSError as exc:
+        print(
+            f"label_export: refusing --excluded-scenarios {args.excluded_scenarios!r}: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_UNREADABLE
+    if excluded_ids:
+        exclusion = apply_scenario_exclusions(candidates, excluded_ids)
+        ids_text = ", ".join(exclusion.matched) if exclusion.matched else "(none matched)"
+        print(
+            f"excluded {exclusion.dropped} candidates from {len(exclusion.matched)} scenarios: "
+            f"{ids_text}"
+        )
+        for scenario_id in exclusion.unmatched:
+            print(
+                f"label_export: warning: excluded scenario {scenario_id!r} matched no candidate",
+                file=sys.stderr,
+            )
+        candidates = exclusion.kept
+        candidate_ids = [candidate.cluster_id for candidate in candidates]
 
     adjudication_path = Path(args.adjudication)
     try:
