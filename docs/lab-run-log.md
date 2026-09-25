@@ -1,7 +1,41 @@
 # Lab run log — G2 scenario timing
 
 Kept by the Owner Assist, **filled in real time during the run**, not reconstructed afterwards.
-Opened 2026-09-08. Absolute deadline for all runs: **11/09**.
+Opened 2026-09-08. Absolute deadline for all runs: **11/09** — superseded; the lab week is now
+**22–25/09** with labelling 26–27/09 (DEC-071's 02/10 submission date; see
+`docs/plan/prompts/reload-run-2026-09-23-ATTT-M1.md`).
+
+## 23/09 — read first: host moved, table still blank, nothing to mark
+
+DEC-106 (22/09) moved this box to ATTT-M1, which runs its own new Wazuh stack — no history from
+IA1803 came across. Checked before touching this file: **every `alerts`/`clusters`/`category
+observed` cell in the table below is still blank** — no scenario in `docs/lab-scenarios.md` has
+ever been run, on IA1803 or here. There is therefore no row to mark against the 20/09
+17:00Z–22/09 07:41Z gap (`docs/lab-scenarios.md` §0′ point 5 makes the same check for that file).
+The table's structure and the ≥8/10-categories / 100-clusters / ≥20-benign-clusters floor are
+unchanged (`docs/chot-v3-14-ngay.md` §C) and this file stays the log to fill once scenarios can
+run — which needs the two blockers in `docs/lab-scenarios.md` §0′ cleared first (a Linux agent
+enrolled, and `conf/local_rules.xml` deployed to `single-node-wazuh.manager-1`).
+
+The **pre-run baseline** below is IA1803's, measured 2026-09-08, and describes a manager that no
+longer exists. Re-measured on ATTT-M1's own stack, 23/09, from inside the worker container
+(`docker compose exec -T worker python3 -c ...` — the host itself cannot reach the indexer, no
+`wazuh.indexer` line in `/etc/hosts` per DEC-106):
+
+| figure | value | command |
+|---|---|---|
+| total alerts in `wazuh-alerts-*` | **1,536** | `_count`, no filter |
+| earliest document | **2026-09-22T07:41:28.868Z** | `_search` sort `timestamp` asc, size 1 |
+| latest document | **2026-09-23T03:25:37.849Z** | `_search` sort `timestamp` desc, size 1 |
+| alerts in the last 60 min | **2** | `_count` + `range timestamp gte now-60m` |
+| `rule.id:100999` (heartbeat) | **0** | `_count` term query — expected: rule not deployed yet, see `docs/wazuh-manager-changes.md` §0′ |
+| `rule.id:100301`/`100302`/`100303` | **0 / 0 / 0** | same, all three local rules |
+| agents seen | `Windows_Endpoint` 1,349 · `wazuh.manager` 186 · `pfSense.home.arpa` 1 | `_search` aggs on `agent.name` |
+| wazuh-manager health | all core daemons running (`wazuh-control status`) | `docker exec single-node-wazuh.manager-1 /var/ossec/bin/wazuh-control status` |
+
+This host's own noise floor (2/hour so far, far below IA1803's measured ~34/hour) is not yet a
+reliable estimate — it reflects an idle box with no lab or production Linux traffic, not a
+measured steady state; re-check it once a lab agent is enrolled and running for a few hours.
 
 ## Why the seconds are the deliverable
 

@@ -5,6 +5,60 @@ Addressed to the person running the lab (the Owner). Every command in this file 
 (`wazuh.manager`). This is a runbook, not code: nothing here is executed by an agent (P6-T05 §11 —
 "you write the runbook; you do not run a scenario, install a package or touch the Wazuh manager").
 
+## 0′ · 23/09 — read first: the host and the manager this file assumed are both gone
+
+**DEC-106 (22/09): the box moved to ATTT-M1, and it runs its own brand-new Wazuh stack** —
+containers `single-node-wazuh.{manager,indexer,dashboard}-1`, manager version still `4.14.7 rc1`
+(same as IA1803's, confirmed from `/var/ossec/VERSION.json` in the new container) but otherwise
+nothing carried across: no history, no rules, no agents. This section is the 23/09 re-measurement
+that §0's original text below asked for before trusting any of it; nothing below this block is
+edited in place so the record of what IA1803's manager looked like stays intact.
+
+1. **`user1-IA1803` does not exist on this stack, and neither does any other Linux host.** Measured
+   twice, 23/09: `docker exec single-node-wazuh.manager-1 /var/ossec/bin/agent_control -l` lists
+   exactly three agents — `000 wazuh.manager (server)`, `001 Windows_Endpoint`,
+   `003 pfSense.home.arpa` — and the indexer's own `agent.name` aggregation over all 1,536
+   documents agrees: `Windows_Endpoint` (1,349), `wazuh.manager` (186), `pfSense.home.arpa` (1).
+   **Every command in this file targets a host that is not enrolled here.** Nothing in §3 can be
+   run — not "will be marked wrong," literally has nowhere to execute — until the Owner enrols a
+   Linux lab workstation on ATTT-M1 (open item, `STATE.md`). `HR-computer`, `DC01` and `kali` are
+   equally gone; no scenario written against any of the four original hosts has a host today.
+2. **`conf/local_rules.xml` (the four authored rules) is not deployed on this manager**, so even
+   `ransomware`/`data_exfiltration`/`c2_beacon` would not classify once a host exists. Measured
+   23/09: the live `/var/ossec/etc/rules/local_rules.xml` inside `single-node-wazuh.manager-1` is
+   **497 bytes, md5 `11bdb298d71a9bc09f7ebed616e5afca`, one rule (`id="100001"`)** — the stock
+   example file the image ships with, not the authored content. The repo's own
+   `conf/local_rules.xml` is unchanged and still correct (9,289 bytes, md5
+   `afd2ef60d7d3418cbdc27c493ad9eccf`) — it has simply never been copied into this container. The
+   deploy commands are in `docs/wazuh-manager-changes.md` §0′; only the container name changed.
+3. **The heartbeat wodle stanza is already in this manager's `ossec.conf`** (lines 252–253,
+   `soc_heartbeat`/`/usr/bin/date`) — it must have been carried over by whatever restored this box
+   — but rule `100999` does not exist here (point 2), and the indexer confirms it: `rule.id:100999`
+   → **0**, `rule.id:530` (the stock parent it would fall back to) → **0** too. Restarting the
+   manager after deploying the real `local_rules.xml` is expected to make `100999` start counting;
+   until then it is silent, not broken.
+4. **Alert history on this stack begins `2026-09-22T07:41:28.868Z`** and runs to
+   `2026-09-23T03:25:37.849Z` at last check, **1,536** documents total, **2** in the last 60
+   minutes — this host is far quieter than IA1803's measured ~34/hour, because nothing here is
+   generating lab or production Linux traffic yet. This is the new pre-run baseline; §1 point 4's
+   `1003xx` archive-derived expectations still hold (they come from the 30-day archive file, not
+   from either manager), but every *live* count elsewhere in §0/§1 below (DEC-068, DEC-069, the
+   `/data/wazuh/logs/...` paths) describes IA1803's now-unreachable manager and must not be read as
+   current.
+5. **No scenario in this file has actually been run yet** — every `Start:`/`End:` field in §3 is
+   still `__:__:__`, checked by grep across the whole document 23/09. So the standing instruction
+   to mark, without re-dating, any scenario recorded as run in the 20/09 17:00Z–22/09 07:41Z gap
+   has nothing to mark: no row exists in that state. If a scenario is later found to have been run
+   in that window by some record outside this file (a shell history, a chat log), it goes here as
+   "no alert rows on this host, and none will appear — the window predates this stack's first
+   document by design, not by a query that might still find them."
+
+**Net effect on the 22–25/09 lab week:** zero of the eight categories in §4 can be attempted on
+ATTT-M1 today. Both blockers (no Linux agent, no deployed local rules) are Owner actions already on
+`STATE.md`; this file stays as the runbook to hand them the moment either lands, and §0's original
+text below is left as written because it is still the accurate history of IA1803's manager, which
+is what DEC-068/DEC-069 are citations of, not a description of the box this repo now runs on.
+
 ## 0 · Dates and rules
 
 - **22–24/09** — run the scenarios below. **25/09 morning** — reserve for anything that did not

@@ -7,6 +7,45 @@ Everything below was run on this host as `user1` under `sg wazuh`. Nothing here 
 committed and **the manager has not been restarted** — the two commands that need root are
 in §4 and they are the Owner's.
 
+## 0′ · 23/09 — read first: this is a third manager, not the one §0 describes
+
+**DEC-106 (22/09):** the box moved to ATTT-M1 and stood up its own Wazuh stack from scratch —
+`docker ps` shows `single-node-wazuh.manager-1` (plus `.indexer-1`, `.dashboard-1`), same
+`wazuh-docker` single-node layout and the same manager version as §0's container
+(`/var/ossec/VERSION.json` → `4.14.7 rc1`, commit `8c41e20`), but a different container and no
+data carried over — the indexer's earliest document is `2026-09-22T07:41:28Z`. Measured fresh on
+this container 23/09, not assumed from §0 or §1 below:
+
+| thing | state on `single-node-wazuh.manager-1`, 23/09 |
+|---|---|
+| `/var/ossec/etc/rules/local_rules.xml` | **the stock example file**, not ours — 497 bytes, md5 `11bdb298d71a9bc09f7ebed616e5afca`, one rule (`id="100001"`). The four authored rules have never been copied into this container. |
+| `conf/local_rules.xml` (this repo) | **unchanged and still correct** — 9,289 bytes, md5 `afd2ef60d7d3418cbdc27c493ad9eccf`, the same file §2 below describes. Nothing about the rule content needs re-authoring; only the deploy step is outstanding, on a new container. |
+| `ossec.conf`'s heartbeat wodle (`soc_heartbeat`, lines 252–253) | **already present** on this manager — carried over by whatever restored the box, unlike the rules file. It cannot classify without `100999` (previous row), so it is currently just an unclassified `full_command` under stock rule 530. |
+| indexer counts, 23/09 | `rule.id:100999` → 0, `rule.id:100301/302/303` → 0, `rule.id:100001` (the stub's own rule) → 0, `rule.id:530` → 0 — consistent with "never deployed," not with "deployed but not yet fired" |
+| manager health | `wazuh-control status`: `analysisd`, `logcollector`, `remoted`, `modulesd`, `syscheckd`, `wazuh-db`, `authd`, `apid` all running; `clusterd`/`maild`/`agentlessd`/`csyslogd` not running, expected for single-node |
+| enrolled agents | `agent_control -l` → `000 wazuh.manager (server)`, `001 Windows_Endpoint`, `003 pfSense.home.arpa`. **No Linux workstation agent exists on this stack** — see `docs/lab-scenarios.md` §0′, which is where this blocks the lab week, not here. |
+
+**The deploy commands are unchanged in substance from §0.1 below — only the container name and the
+path to `local_rules.xml` (a straight file copy, no `ossec.conf` edit needed for the rules
+themselves) change:**
+
+```bash
+docker cp conf/local_rules.xml single-node-wazuh.manager-1:/var/ossec/etc/rules/local_rules.xml
+docker exec single-node-wazuh.manager-1 chown wazuh:wazuh /var/ossec/etc/rules/local_rules.xml
+docker exec single-node-wazuh.manager-1 md5sum /var/ossec/etc/rules/local_rules.xml   # expect afd2ef60d7d3418cbdc27c493ad9eccf
+docker restart single-node-wazuh.manager-1
+```
+
+Both commands need whatever access level owns this host's Docker daemon — the same root-vs-`user1`
+split §0.1 describes may or may not hold on ATTT-M1; this has not been re-measured, so treat the
+two lines above as **the Owner's**, per this file's own rule of engagement, until shown otherwise.
+After the restart, re-run this section's indexer checks; `100999` should start counting on its own
+(the wodle is already live), while `100301`–`100303` stay at 0 until a scenario exists to fire
+them — which needs the Linux agent from the row above first.
+
+Everything from §0 onward below this point describes IA1803's manager (08/09–20/09) and is left
+as written; it is the record of that manager, not a claim about this one.
+
 ## 0 · 14/09 — read first: the manager described below no longer exists
 
 **20/09** — file-based checks retired (DEC-091); commands below use the indexer `_count`.
