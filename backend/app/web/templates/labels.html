@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Gán nhãn — AI Support SOC{% endblock %}
+{% block content %}
+<h1>Gán nhãn tập vàng</h1>
+<p>Đã gán: <strong data-field="progress">{{ progress.done }} / {{ progress.total }}</strong></p>
+
+{% if not candidates_present %}
+<p>Chưa có ứng viên — no candidates — <code>eval/gold_candidates.csv</code> is not present.</p>
+{% elif view is none %}
+<section id="finished">
+  <h2>Đã xong</h2>
+  <p>Bạn đã gán nhãn toàn bộ {{ progress.total }} cụm.</p>
+</section>
+{% else %}
+<section id="cluster">
+  <p>
+    <strong data-field="category">{{ view.category }}</strong> ·
+    <span data-field="severity">{{ view.severity }}</span> ·
+    rule <span data-field="rule_id">{{ view.rule_id }}</span>
+    (level <span data-field="rule_level">{{ view.rule_level }}</span>) ·
+    cụm <code data-field="gold_cluster_id">{{ view.gold_cluster_id }}</code>
+  </p>
+
+  <h2>Alert đại diện</h2>
+  <table>
+    <tr><th>Thời điểm</th><td data-field="alert_time">{{ view.alert_time | local_time(tz) }}</td></tr>
+    <tr><th>Agent</th><td data-field="agent_name">{{ view.agent_name }}</td></tr>
+    <tr><th>User</th><td data-field="alert_user">{{ view.alert_user or "" }}</td></tr>
+    <tr><th>Src → Dst</th><td><span data-field="srcip">{{ view.srcip or "" }}</span> → <span data-field="dstip">{{ view.dstip or "" }}</span></td></tr>
+    <tr><th>Mô tả</th><td><span data-field="description">{{ view.description }}</span></td></tr>
+  </table>
+
+  <h3>raw_log</h3>
+  <pre data-field="raw_log">{{ view.raw_log }}</pre>
+  {% if view.raw_log_truncated_for_display %}
+  <p data-field="raw_log_truncated_for_display">[cut for display at 32 KB]</p>
+  {% endif %}
+
+  <p>
+    Số lần xuất hiện: <strong data-field="occurrence_count">{{ view.occurrence_count }}</strong> ·
+    từ <span data-field="first_seen">{{ view.first_seen | local_time(tz) }}</span>
+    đến <span data-field="last_seen">{{ view.last_seen | local_time(tz) }}</span>
+  </p>
+
+  <h2>Tương quan ±2 giờ</h2>
+  <div data-field="correlation">
+    {% if view.correlation.rows %}
+    <table>
+      <tr><th>Rule</th><th>Category</th><th>Số cụm</th><th>Số alert</th><th>Đầu</th><th>Cuối</th></tr>
+      {% for row in view.correlation.rows %}
+      <tr>
+        <td>{{ row.rule_id }}</td><td>{{ row.category }}</td>
+        <td>{{ row.cluster_count }}</td><td>{{ row.alert_count }}</td>
+        <td>{{ row.first_seen | local_time(tz) }}</td><td>{{ row.last_seen | local_time(tz) }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p>Không có cụm tương quan trong ±2 giờ.</p>
+    {% endif %}
+    {% for sample in view.correlation.samples %}
+    <details>
+      <summary>{{ sample.rule_id }} · {{ sample.category }} · {{ sample.severity }} · ×{{ sample.occurrence_count }} · {{ sample.alert_time | local_time(tz) }} — <span data-field="description">{{ sample.description or "" }}</span></summary>
+      <pre data-field="raw_log">{{ sample.raw_log or "" }}</pre>
+    </details>
+    {% endfor %}
+  </div>
+
+  <h2>Playbook</h2>
+  <pre data-field="playbook">{{ view.playbook }}</pre>
+
+  <form id="label-form" method="post" action="/admin/labels">
+    <input type="hidden" name="cluster_id" value="{{ view.gold_cluster_id }}">
+    <fieldset>
+      <legend>Nhãn</legend>
+      <label><input type="radio" name="label" value="false_positive" required> Báo động giả</label>
+      <label><input type="radio" name="label" value="benign"> Thật nhưng vô hại</label>
+      <label><input type="radio" name="label" value="escalate"> Cần chuyển tier 2</label>
+    </fieldset>
+    <label for="confidence">Độ chắc chắn</label>
+    <select id="confidence" name="confidence" required>
+      <option value="1">1 — thấp</option>
+      <option value="2" selected>2 — vừa</option>
+      <option value="3">3 — cao</option>
+    </select>
+    <label for="note">Ghi chú (một dòng)</label>
+    <input id="note" name="note" type="text" maxlength="200">
+    <button type="submit">Lưu nhãn</button>
+  </form>
+</section>
+{% endif %}
+{% if candidates_present and undo_allowed and progress.done > 0 %}
+<form id="undo-form" method="post" action="/admin/labels/undo">
+  <button type="submit">Hoàn tác nhãn vừa gán</button>
+</form>
+{% endif %}
+{% endblock %}
