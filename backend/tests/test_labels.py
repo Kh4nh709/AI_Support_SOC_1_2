@@ -624,6 +624,24 @@ def test_json_response_keys_are_allowlisted(client, db) -> None:
 
 
 @pytest.mark.db
+def test_allowlist_holds_without_p4_filter(db, seeded, monkeypatch) -> None:
+    """The allowlist is the mechanism, P4's filter the second layer: with the
+    filter neutralised the view is still exactly the allowlist, with no `source`
+    value and no `status` anywhere."""
+    monkeypatch.setattr(labels.visibility, "strip", lambda view, **_: dict(view))
+    g1_clusters = labels.load_g1_clusters(path=labels.G1_CLUSTERS_PATH)
+    for candidate in labels.load_candidates(path=labels.CANDIDATES_PATH):
+        view = labels.cluster_view(db, candidate, g1_clusters=g1_clusters)
+        assert set(view) == ALLOWED_VIEW_KEYS
+        for row in view["correlation"]["rows"]:
+            assert set(row) == CORRELATION_ROW_KEYS
+        for sample in view["correlation"]["samples"]:
+            assert set(sample) <= SAMPLE_KEYS
+        values = _string_values(json.loads(json.dumps(view, default=str)), skip=FREE_TEXT_KEYS)
+        assert [v for v in values if SOURCE_TOKENS.search(v)] == []
+
+
+@pytest.mark.db
 def test_json_response_has_no_forbidden_substrings_with_suggestion_visible_true(client, db) -> None:
     visible, run = db.execute(
         "SELECT a.suggestion_visible, count(r.run_id) FROM alerts a "
