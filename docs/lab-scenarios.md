@@ -1,193 +1,134 @@
-# Lab scenarios — the G2 runbook for `user1-IA1803` (22–24/09/2026)
+# Lab scenarios — the G2 runbook for `attt-m1-lab` (26–27/09/2026)
 
 Addressed to the person running the lab (the Owner). Every command in this file runs **only** on
-`user1-IA1803` — never on `HR-computer` (the Windows workstation) and never on the manager itself
-(`wazuh.manager`). This is a runbook, not code: nothing here is executed by an agent (P6-T05 §11 —
-"you write the runbook; you do not run a scenario, install a package or touch the Wazuh manager").
+`attt-m1-lab` — agent 004, the native Wazuh agent on the ATTT-M1 host itself (DEC-112), enrolled to
+`127.0.0.1`. Never on `Windows_Endpoint` (agent 001) and never on the manager container
+(`single-node-wazuh.manager-1`, agent 000). This is a runbook, not code: nothing here is executed by
+an agent (P6-T05 §11 — "you write the runbook; you do not run a scenario, install a package or touch
+the Wazuh manager").
 
-## 0′ · 23/09 — read first: the host and the manager this file assumed are both gone
+ATTT-M1 is both the lab host **and** the host of the MISP, TheHive, Cortex, Graylog, n8n and
+Elasticsearch containers. Their background traffic reaches the same indexer, so heads unrelated to a
+scenario fall inside its window; **DEC-114 is why they never become gold truth** — a head is scoped
+to a scenario only when its `rule.id` is one of that scenario's declared Expected rules, and every
+other in-window head is excluded as `in_window_unexpected` and counted, never labelled.
 
-**DEC-106 (22/09): the box moved to ATTT-M1, and it runs its own brand-new Wazuh stack** —
-containers `single-node-wazuh.{manager,indexer,dashboard}-1`, manager version still `4.14.7 rc1`
-(same as IA1803's, confirmed from `/var/ossec/VERSION.json` in the new container) but otherwise
-nothing carried across: no history, no rules, no agents. This section is the 23/09 re-measurement
-that §0's original text below asked for before trusting any of it; nothing below this block is
-edited in place so the record of what IA1803's manager looked like stays intact.
+## 0 · Dates, host state, and the rules of the run
 
-1. **`user1-IA1803` does not exist on this stack, and neither does any other Linux host.** Measured
-   twice, 23/09: `docker exec single-node-wazuh.manager-1 /var/ossec/bin/agent_control -l` lists
-   exactly three agents — `000 wazuh.manager (server)`, `001 Windows_Endpoint`,
-   `003 pfSense.home.arpa` — and the indexer's own `agent.name` aggregation over all 1,536
-   documents agrees: `Windows_Endpoint` (1,349), `wazuh.manager` (186), `pfSense.home.arpa` (1).
-   **Every command in this file targets a host that is not enrolled here.** Nothing in §3 can be
-   run — not "will be marked wrong," literally has nowhere to execute — until the Owner enrols a
-   Linux lab workstation on ATTT-M1 (open item, `STATE.md`). `HR-computer`, `DC01` and `kali` are
-   equally gone; no scenario written against any of the four original hosts has a host today.
-2. **`conf/local_rules.xml` (the four authored rules) is not deployed on this manager**, so even
-   `ransomware`/`data_exfiltration`/`c2_beacon` would not classify once a host exists. Measured
-   23/09: the live `/var/ossec/etc/rules/local_rules.xml` inside `single-node-wazuh.manager-1` is
-   **497 bytes, md5 `11bdb298d71a9bc09f7ebed616e5afca`, one rule (`id="100001"`)** — the stock
-   example file the image ships with, not the authored content. The repo's own
-   `conf/local_rules.xml` is unchanged and still correct (9,289 bytes, md5
-   `afd2ef60d7d3418cbdc27c493ad9eccf`) — it has simply never been copied into this container. The
-   deploy commands are in `docs/wazuh-manager-changes.md` §0′; only the container name changed.
-3. **The heartbeat wodle stanza is already in this manager's `ossec.conf`** (lines 252–253,
-   `soc_heartbeat`/`/usr/bin/date`) — it must have been carried over by whatever restored this box
-   — but rule `100999` does not exist here (point 2), and the indexer confirms it: `rule.id:100999`
-   → **0**, `rule.id:530` (the stock parent it would fall back to) → **0** too. Restarting the
-   manager after deploying the real `local_rules.xml` is expected to make `100999` start counting;
-   until then it is silent, not broken.
-4. **Alert history on this stack begins `2026-09-22T07:41:28.868Z`** and runs to
-   `2026-09-23T03:25:37.849Z` at last check, **1,536** documents total, **2** in the last 60
-   minutes — this host is far quieter than IA1803's measured ~34/hour, because nothing here is
-   generating lab or production Linux traffic yet. This is the new pre-run baseline; §1 point 4's
-   `1003xx` archive-derived expectations still hold (they come from the 30-day archive file, not
-   from either manager), but every *live* count elsewhere in §0/§1 below (DEC-068, DEC-069, the
-   `/data/wazuh/logs/...` paths) describes IA1803's now-unreachable manager and must not be read as
-   current.
-5. **No scenario in this file has actually been run yet** — every `Start:`/`End:` field in §3 is
-   still `__:__:__`, checked by grep across the whole document 23/09. So the standing instruction
-   to mark, without re-dating, any scenario recorded as run in the 20/09 17:00Z–22/09 07:41Z gap
-   has nothing to mark: no row exists in that state. If a scenario is later found to have been run
-   in that window by some record outside this file (a shell history, a chat log), it goes here as
-   "no alert rows on this host, and none will appear — the window predates this stack's first
-   document by design, not by a query that might still find them."
+- **26–27/09** — run the scenarios below on `attt-m1-lab`. **28/09** — labelling (two annotators,
+  blind) and the gold freeze. The build command is §6, no longer run here.
+- **The corpus starts 26/09 00:00 UTC = 07:00 +07:00** (`PULL_START=2026-09-26`, DEC-112). Nothing
+  before that reaches `alerts`; **no window opens before 26/09 07:05 +07:00** (§1 check 8).
+- **The seconds are the tag.** `attt-m1-lab` shares the estate with the container services above, so
+  a lab alert is told from background only by the window you write down. `source='lab'` is applied
+  **after the fact, by time window** (`eval/lab_tag.py`, DEC-085), never by agent name. A scenario
+  whose start and end seconds are not recorded is lost for G2. That is why every block below carries
+  a blank `Start: __:__:__  End: __:__:__` line — filling it in **is** the deliverable.
+- **A category with no alert is a zero row, never a synthetic one** (`docs/chot-v3-14-ngay.md` §A2:
+  *"nếu không sinh được thì bỏ category đó khỏi bảng kết quả, không giả"*).
+- **Nothing is edited in the database by hand.** The only write path is the Wazuh pipeline (real
+  traffic → puller → worker) then `eval/lab_tag.py`, which touches `source` only, never `status`.
 
-**Net effect on the 22–25/09 lab week:** zero of the eight categories in §4 can be attempted on
-ATTT-M1 today. Both blockers (no Linux agent, no deployed local rules) are Owner actions already on
-`STATE.md`; this file stays as the runbook to hand them the moment either lands, and §0's original
-text below is left as written because it is still the accurate history of IA1803's manager, which
-is what DEC-068/DEC-069 are citations of, not a description of the box this repo now runs on.
+#### Three rules for how a scenario is run (read before the first window)
 
-## 0 · Dates and rules
+1. **Run every scenario from a login terminal, signed in as `user1`; a `sudo` inside it is fine,
+   because the login uid survives `sudo` (DEC-113).** Never from `docker exec`, a systemd unit, cron
+   or an agent-run command: auditd records execve only for `auid>=1000` and `auid!=unset`
+   (`/etc/audit/rules.d/soc-exec.rules`, DEC-113), and those contexts carry no login uid, so
+   `100301`/`100302`/`100303` cannot see them.
+2. **Inside a window, run only the scenario (DEC-114).** Truth is scoped to the scenario's declared
+   Expected rules, but an unrelated command you run inside a `privilege_escalation` window that
+   happens to fire `5402` is counted as that scenario's attack. Do nothing else in the window.
+3. **Windows never overlap.** `build_gold.py --g2` refuses overlapping windows of the same agent
+   with exit 3 (P6-T07). The schedule in §5 spaces every window; keep to it.
 
-- **22–24/09** — run the scenarios below. **25/09 morning** — reserve for anything that did not
-  fire the first time. **25/09 afternoon** — from the primary checkout (never a worktree):
-  `PYTHONPATH=backend python3 eval/build_gold.py --archive-file /home/user1/archive/alerts-2026-08-08_09-07.jsonl --g1 --g2 --lab-windows eval/lab_windows.csv --env-file .env`
-  (P6-T01's command, `P6-tasks.md` §11 item 4), read `eval/gold_coverage.md`, commit the four files.
-- **The seconds are the tag.** `user1-IA1803` is both the lab host and the only Linux production
-  host — there is no separate lab agent (`docs/lab-run-log.md:8-11`; DEC-085, INBOX `2026-09-16 ·
-  P6 / lab tagging`, option D). `source='lab'` is applied **after the fact, by time window**, never
-  by agent name. A scenario whose start and end seconds are not written down cannot be told apart
-  from this host's own **~34 alerts/hour of operating noise** (`docs/lab-run-log.md:15-17`) and is
-  lost for both G1 and G2. This is why every command block below carries a blank
-  `Start: __:__:__  End: __:__:__` line — filling it in **is** the deliverable of the day, not
-  paperwork around it.
-- **A category with no alert is a zero row, never a synthetic one.** If a scenario produces
-  nothing, the coverage table records it as a category with zero clusters — it is excluded from
-  the results and **never synthesised** (`docs/chot-v3-14-ngay.md` §A2: *"nếu không sinh được thì
-  bỏ category đó khỏi bảng kết quả, không giả"*).
-- **Nothing is edited in the database by hand.** The only write path from this runbook into
-  `alerts` is the Wazuh pipeline itself (real traffic → puller → worker) followed by
-  `eval/lab_tag.py`, which touches `source` only (never `status` — G2, `00-context-pack.md` §2).
-- **Do not run scenarios on `HR-computer` or the manager.** `HR-computer` is the Windows
-  workstation (agent 002) and has no relationship to any category here; the manager
-  (`wazuh.manager`) is the thing watching, not the thing being watched.
+#### What is loaded on this manager, measured 25/09 (each fact with its DEC)
 
-#### What is actually loaded on the manager, and where this was read
+1. **The four authored rules are deployed and firing.** `local_rules.xml` in
+   `single-node-wazuh.manager-1` is md5 `afd2ef60d7d3418cbdc27c493ad9eccf` (the repo's file), and
+   `rule.id:100999` (heartbeat) counts again after five days silent — 10:35:21Z, DEC-113 block 1.
+   `100301`/`100302`/`100303` stay at 0 until a scenario fires them (§1 check 2 is the baseline).
+2. **Agent 004 `attt-m1-lab` is Active** (`agent_control -l`, DEC-112/113 block 2), version pinned
+   `≤ 4.14.7` and held.
+3. **ClamAV and auditd are installed and active**, with the `execve` watch narrowed to `auid>=1000`
+   (DEC-113 block 3 — this removed a ~123/min MISP-healthcheck storm on `100303`). The agent's own
+   `ossec.conf` reads `/var/log/clamav/clamav.log` and `/var/log/audit/audit.log`
+   (`docs/plan/prompts/lab-rebuild-run-2026-09-25.md` block 3).
+4. **`soc_dev` is a fresh database** (`0|4|7|17` alerts|users|assets|migrations at reset, DEC-118);
+   `attt-m1-lab` is in `conf/inventory.yaml` at `criticality: medium`, so auto-close has somewhere
+   to fire (DEC-112).
 
-The card that seeded this runbook predates two measurements; both are re-stated here, from primary
-sources, before any scenario is written that depends on a rule:
+#### History
 
-1. **`conf/local_rules.xml` is in this repository** — 9,289 bytes, four rules: `100999` (heartbeat),
-   `100301` (T1486 → `ransomware`), `100302` (T1041 → `data_exfiltration`), `100303` (T1071 →
-   `c2_beacon`). Read directly from the file in this checkout (§3 quotes every `<match>`).
-2. **The Wazuh stack was rebuilt as a Docker single-node stack on 14/09** (DEC-064: manager =
-   container `8e3772d039ed`, indexer = `005bea3363a9`, dashboard = `af6ba99bcec7`, official
-   `wazuh-docker` 4.14.7). DEC-069 corrected the deploy procedure: a rules-file change has to land
-   in **both** the live file (`docker cp` into the container) and the host's bind-mounted
-   `config/wazuh_cluster/wazuh_manager.conf`, because either alone survives only one of the two
-   failure modes (a plain restart vs. a rebuilt `wazuh_etc` volume).
-3. **DEC-068 (15/09 13:05, Director, read-only as `user1`) is the measurement that the four rules
-   are actually loaded, not just staged:** `grep -o 'rule id="[0-9]*"' conf/local_rules.xml` →
-   `100301`, `100302`, `100303`, `100999`, and it is `100999` **from that file** that is firing —
-   proof the file parsed and loaded, not just that it exists on disk. Six heartbeat hits at four
-   ~600.2 s intervals (`05:16:48` … `05:58:24`, all `+0000`) confirm `<frequency>600</frequency>`
-   is in effect. DEC-069 separately confirms the file's durability: `local_rules.xml` inside the
-   container is `-rw-rw---- wazuh wazuh 9289`, md5 `afd2ef60d7d3418cbdc27c493ad9eccf`, unchanged
-   after a restart (the named volume `wazuh_etc` survives `restart` and `docker rm`, dying only on
-   `compose down -v`).
-4. **`grep -c '"id":"1003' /data/wazuh/logs/alerts/alerts.json` was `0` on 15/09, and DEC-068 says
-   plainly this is not a failure: "those are the three lab rules … they fire only when a scenario
-   runs, and no scenario has been run."** That is the state this runbook exists to change.
-   (Measured then via the file; since the 16/09 reboot that file is unreadable by `user1` — point
-   5 below — and every count in this runbook is the indexer `_count`, §1 item 2.)
-5. **Re-verified in this session (16/09), and it reproduces the access pattern DEC-064 describes,
-   not a fresh problem:** `/data/wazuh/logs/alerts/alerts.json` and everything under
-   `/data/wazuh/logs/alerts/2026/` answer **Permission denied** to `user1` from this checkout — the
-   directories are `drwxr-x---`, group `systemd-journal`/gid 999, exactly as DEC-064 measured
-   (`user1` is not in that group). `docker ps` also answers **permission denied while trying to
-   connect to the docker API** — `/var/run/docker.sock` is not owned by the `docker` group here
-   either, matching DEC-064's note. This confirms, rather than overrides, DEC-056's own statement
-   that a Coder "cannot read the manager's stock ruleset … and has no network" — every `sudo`
-   command in §1's pre-flight below is the **Owner's**, not something this runbook can run for you.
-   Independently, `select count(*) from alerts where source='lab'` against `soc_dev` returns **0**
-   (16/09) — no scenario has produced a tagged row yet, consistent with point 4.
-
-**Consequence for what follows.** Every stock rule id this runbook expects is checked against the
-30-day archive (`/home/user1/archive/alerts-2026-08-08_09-07.jsonl`, readable, 113,379,904 bytes) —
-the one thing a Coder can read without the manager. An id that never fired in the archive is marked
-**"(not in the archive — expected from the ruleset, unverified here)"** and is never presented as
-verified; §3's per-category table says exactly which ones. The three local rules are verified
-instead through `conf/local_rules.xml`'s own text, the offline `category.resolve()` function, and
-the logtest transcripts already captured in `docs/wazuh-manager-changes.md` §5 (items 2–4) before
-this host was rebuilt — content DEC-064's context note says explicitly "still stands."
+The 22–24/09 version of this runbook (written for IA1803, before the move) is whole at
+`git show pre-lab-reset:docs/lab-scenarios.md`; the 23/09 re-measurement that recorded the move and
+the not-yet-deployed state (the `## 0′` block this section replaces) is `413ca19`. DEC-064/068/069's
+IA1803 manager, and every `/data/wazuh/logs/...` path they cite, live only in those two references —
+not on the box this runbook now runs on.
 
 ## 1 · Pre-flight (once, before the first window, and re-checked each morning)
 
-Run from the primary checkout on `user1-IA1803`. Every `sudo`/`docker` line is the Owner's.
+Run from the primary checkout on ATTT-M1. Every `sudo`/`docker` line is the Owner's.
 
-1. **The pipeline is live**, so lab rows reach `alerts` in real time:
+1. **The pipeline is live**, so lab rows reach `alerts` in real time. The worker runs under docker
+   compose since the cutover (DEC-105), so check the containers directly, not a host worker process:
    ```bash
-   make run-worker   # from the primary checkout, left running for the whole 22–24/09 window
-   psql "$DATABASE_URL" -Atc "select last_seen_at from source_heartbeat"   # must be within 10 min
+   docker compose ps app worker          # both Up
+   psql "$DATABASE_URL" -Atc "select last_pull_at, coalesce(last_error,'null') from source_cursor"
    ```
-2. **The rules file is loaded** (DEC-068's own gate, re-run fresh — do not assume yesterday's
-   answer still holds after any manager restart):
+   `last_pull_at` within 2 minutes and `last_error` null.
+2. **The four-rule file is loaded** (re-run fresh — a manager restart could have reverted it):
    ```bash
    set -a; . ./.env; set +a
-   curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" "$INDEXER_URL/wazuh-alerts-*/_count" -H 'Content-Type: application/json' -d '{"query":{"term":{"rule.id":"100999"}}}'   # expect count >= 2 (19/09: 523)
-   curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" "$INDEXER_URL/wazuh-alerts-*/_count" -H 'Content-Type: application/json' -d '{"query":{"prefix":{"rule.id":"1003"}}}'   # note the count — today's negative-check baseline (19/09: 0)
+   curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" "$INDEXER_URL/wazuh-alerts-*/_count" -H 'Content-Type: application/json' -d '{"query":{"term":{"rule.id":"100999"}}}'   # expect count >= 2 (heartbeat, DEC-113)
+   curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" "$INDEXER_URL/wazuh-alerts-*/_count" -H 'Content-Type: application/json' -d '{"query":{"prefix":{"rule.id":"1003"}}}'   # note the count — today's negative-check baseline
    ```
-   If the first is `0`, stop — the four-rule file is not live on this manager right now, and no
-   scenario below can produce a `1003xx` alert until it is (`docker cp conf/local_rules.xml
-   8e3772d039ed:/var/ossec/etc/rules/local_rules.xml` + the DEC-069 host-file copy + a restart —
-   §0.1 of `docs/wazuh-manager-changes.md`, corrected by DEC-069, is the Owner's exact procedure).
-3. **auditd is live and watching execve** — the three local rules hang off `<if_group>audit</if_group>`
-   (`conf/local_rules.xml`'s own header comment):
+   If the first is `0`, stop — the rules are not live, and no `1003xx` scenario can fire. The deploy
+   is the four commands in `docs/wazuh-manager-changes.md` §0′ (`docker cp conf/local_rules.xml
+   single-node-wazuh.manager-1:/var/ossec/etc/rules/local_rules.xml` + `chown` + `md5sum` +
+   `docker restart`), the Owner's.
+3. **Agent 004 is Active** (Owner's command):
    ```bash
-   sudo auditctl -l | grep -c execve
+   docker exec single-node-wazuh.manager-1 /var/ossec/bin/agent_control -l
    ```
-   `>= 1` expected. If `0`, `ransomware`, `data_exfiltration` and `c2_beacon` cannot fire — stop and
-   record it in the checklist's notes column rather than running those three scenarios blind.
-4. **ClamAV is present, for `malware`** (`docs/wazuh-manager-changes.md` §4.2, quoted verbatim):
+   Expect a line `Name: attt-m1-lab, ... Active`. A `Disconnected` here means the agent is down and
+   nothing below will produce an alert.
+4. **auditd is watching execve, scoped to login users** (DEC-113 — the scope is what keeps a service
+   account's shell out of `100301`–`100303`, and it is why §0 rule 1 requires a login terminal):
    ```bash
-   sudo apt install -y clamav clamav-daemon
-   command -v clamscan && systemctl is-active clamav-daemon   # expect /usr/bin/clamscan, active
+   sudo auditctl -l | grep execve
    ```
-5. **The agent collects ClamAV's own log** — installing the package is not enough; Wazuh has to be
-   told to read `/var/log/clamav/clamav.log`:
+   Expect **two** lines (b64 and b32), each carrying `-F auid>=1000 -F auid!=-1 -S execve -k exec`.
+   If either the count is below 2 or the `auid` filter is missing, `ransomware`/`data_exfiltration`/
+   `c2_beacon` will either not fire or will fire on background noise — stop and record it.
+5. **ClamAV is present, for `malware`** — installed already (DEC-113 block 3), so this is a check,
+   not an install:
    ```bash
-   grep -n "clamav" /var/ossec/etc/ossec.conf
+   systemctl is-active clamav-daemon clamav-freshclam    # both active
+   sudo grep -n 'clamav.log' /var/ossec/etc/ossec.conf   # the agent's <localfile> reads it
    ```
-   If nothing is printed, add (Owner step, needs an agent restart to take effect):
-   ```xml
-   <localfile>
-     <log_format>syslog</log_format>
-     <location>/var/log/clamav/clamav.log</location>
-   </localfile>
+   If the `grep` is empty the agent is not reading ClamAV's log; the two `<localfile>` blocks are in
+   `docs/plan/prompts/lab-rebuild-run-2026-09-25.md` block 3. The malware scenario itself is the
+   verification: `52502` must appear after the EICAR scan in §3.
+6. **sshd accepts password auth on the addresses the schedule uses** (Owner — the effective config
+   is root-only; a Coder reading `/etc/ssh/sshd_config*` as `user1` on 25/09 found the main file
+   unreadable and the drop-in dir `/etc/ssh/sshd_config.d/` empty, so nothing about the effective
+   setting can be asserted from here — run `sshd -T`):
+   ```bash
+   sudo sshd -T | grep -Ei '^(passwordauthentication|listenaddress|maxauthtries)'
    ```
-   then restart the agent and confirm with the malware scenario itself: rule `52502` must appear
-   after the EICAR scan in §3 — that is the verification, not an assumption made here.
-6. **Scratch directory for every file-based scenario:**
+   `passwordauthentication yes` is needed for the interactive ssh loops in §3. If it is `no`, the
+   `ssh_brute_force`/`suspicious_login` scenarios cannot produce a password-prompt failure — record
+   it and either enable it for the lab window or skip those two categories (§5's yield table shows
+   the cost).
+7. **Scratch directory for every file-based scenario:**
    ```bash
    mkdir -p /tmp/lab && printf 'lab plain text\n' > /tmp/lab/plain.txt
    ```
-7. **`paramiko` is not assumed for the `ssh_brute_force` loop** — checked in this checkout, not on
-   the lab host (the two may differ, and §3 says so): `backend/requirements.txt` does not list it,
-   and `python3 -c "import paramiko"` here raises `ModuleNotFoundError`. §3's `ssh_brute_force`
-   scenario is therefore written as the manual/interactive `ssh` loop the card names as the
-   fallback, not a `paramiko` script.
+8. **No window opens before 26/09 07:05 +07:00.** `PULL_START=2026-09-26` means 07:00 +07:00 is the
+   earliest instant that reaches `alerts` (DEC-112); the five-minute margin covers pull + pipeline
+   latency (§2 step 3's 3-minute rule plus slack). A window started earlier tags rows that were
+   never ingested.
 
 ## 2 · The window protocol — repeat this shape for every scenario in §3
 
@@ -196,51 +137,73 @@ Run from the primary checkout on `user1-IA1803`. Every `sudo`/`docker` line is t
    ```bash
    date -u +%FT%TZ ; date +%FT%T%z
    ```
-2. **Run the command(s)** from the scenario's `#### Attack` or `#### Benign twin` block.
+2. **Run the command(s)** from the scenario's `#### Attack` or `#### Benign twin` block — and
+   nothing else (§0 rule 2).
 3. **Wait ≥ 3 minutes** before checking anything — `PULL_INTERVAL_S` is 60 s
    (`backend/app/infra/config.py:118`) and Logstash/filebeat plus the pipeline job need their own
    margin on top of it (`docs/lab-run-log.md` uses the same 3-minute rule).
 4. **Write the end second** (same two commands as step 1).
-5. **The per-window check**, copied from `docs/lab-run-log.md`, read-only as `soc_ro`, from the
-   primary checkout — substitute this run's start/end:
+5. **Do not open the next window until this End is written.** Overlapping windows of the same agent
+   are refused by `build_gold.py --g2` with exit 3 (P6-T07); the two seconds you just wrote are the
+   record that they did not overlap. One window at a time.
+6. **The per-window check**, copied from `docs/lab-run-log.md`, read-only, from the primary checkout
+   — substitute this run's start/end:
    ```bash
    set -a; . ./.env; set +a
-   S="<start, e.g. 2026-09-22T14:00:00+07:00>"; E="<end>"
+   S="<start, e.g. 2026-09-26T14:00:00+07:00>"; E="<end>"
 
    # alerts in the window
    curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" \
      "$INDEXER_URL/wazuh-alerts-*/_count" -H 'Content-Type: application/json' \
      -d "{\"query\":{\"range\":{\"@timestamp\":{\"gte\":\"$S\",\"lte\":\"$E\"}}}}"
 
-   # which rules actually fired — this separates the scenario from the host's own ~34/hour noise
+   # which rules fired, and from which source ip — by_rule tells the scenario from the host's
+   # background; by_srcip proves the schedule's srcip rotation gave a distinct cluster key (§5)
    curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" \
      "$INDEXER_URL/wazuh-alerts-*/_search?size=0" -H 'Content-Type: application/json' \
      -d "{\"query\":{\"range\":{\"@timestamp\":{\"gte\":\"$S\",\"lte\":\"$E\"}}},
-          \"aggs\":{\"by_rule\":{\"terms\":{\"field\":\"rule.id\",\"size\":20}}}}"
+          \"aggs\":{\"by_rule\":{\"terms\":{\"field\":\"rule.id\",\"size\":20}},
+                    \"by_srcip\":{\"terms\":{\"field\":\"data.srcip\",\"size\":20}}}}"
    ```
    Each scenario in §3 additionally gives a **rule-scoped** count (its own `#### Attack` /
    `#### Benign twin` block) — that one answers "did *this* rule fire," the block above answers
    "what fired in this window at all," which is what tells noise apart from signal.
-6. **Tag the window** — this is what turns "an indexer count" into `source='lab'`:
+7. **Tag the window** — this is what turns "an indexer count" into `source='lab'`:
    ```bash
    PYTHONPATH=backend python3 eval/lab_tag.py \
-     --agent user1-IA1803 --since "$S" --until "$E" \
+     --agent attt-m1-lab --since "$S" --until "$E" \
      --scenario <this run's scenario_id from §5> --category <category or "benign"> \
      --kind <attack|benign> --env-file .env
    ```
    A **zero retag is not an error** — it prints `retagged 0 alerts …` and still appends a row; a
    category that produced nothing in a given window is a finding, not a bug (§0).
-7. **Fill the checklist row** (§5) — `alerts`, `clusters` (leave blank until `build_gold.py --g2`
+8. **Fill the checklist row** (§5) — `alerts`, `clusters` (leave blank until `build_gold.py --g2`
    folds the window; `alerts` alone is enough to know the scenario worked), `rules seen` (the
-   `by_rule` aggregation from step 5), and check off `lab_tag run?`.
+   `by_rule` aggregation from step 6), and check off `lab_tag run?`.
 
 ## 3 · Scenarios
 
-Every attack command below is prefixed by §2's window protocol (steps 1–4 wrap the command; steps
-5–7 follow it) and every id named as expected is checked against the archive in §0's "not in the
+Every attack command below is prefixed by §2's window protocol (steps 1–2 wrap the command; steps
+5–8 follow it) and every id named as expected is checked against the archive in §0's "not in the
 archive" sense. Every section ends with the label an analyst should reach — stated as the runbook's
 own expectation, **not** shown to the labellers; the labelling page is blind and this file is not on
 it.
+
+**The source address — `$SRC` — and why it rotates.** A cluster key is
+`(rule_id, srcip, dstip, agent_name)`. Measured 25/09, `ip route show table local` gives
+`local 127.0.0.0/8 dev lo … src 127.0.0.1`, so without an explicit bind **every loopback connection
+reports `srcip = 127.0.0.1`**, whatever the destination — so two same-category ssh windows to
+`127.0.0.1` would share a key and the second would dedup into the first (`IDLE_GAP` 15 min). The
+ssh-based scenarios (`ssh_brute_force`, `suspicious_login`, `recon`) therefore bind their source
+with `ssh -b "$SRC"`, taking `$SRC` from the schedule's `srcip` column (§5): the loopback aliases
+`127.0.0.1`, `127.0.0.2`, `127.0.0.3` (all already routable on `lo`, no setup). **Fallback, measured
+if needed:** if the first `SBF` window's `by_srcip` aggregation (§2 step 6) still shows only
+`127.0.0.1` — some sshd builds log the peer of the accepted socket, not the bound source — switch
+`$SRC` to the host's own LAN addresses `79.79.79.14` (`enp86s0`) or `79.79.78.119` (`wlo1`, Wi-Fi,
+DHCP — re-read with `ip -4 addr` before using), where the kernel records that address as the source.
+The local-rule scenarios (`ransomware`, `data_exfiltration`, `c2_beacon`) and `malware` are execve-
+or ClamAV-driven, not network-source-driven, so they rely on the ≥ 20-minute spacing in §5 instead
+of `srcip`. Set it once per window before the command: `SRC=127.0.0.2   # from §5's srcip column`.
 
 ### ssh_brute_force
 
@@ -250,7 +213,7 @@ it.
 
 ```bash
 for i in $(seq 1 8); do
-  ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+  ssh -b "$SRC" -o PreferredAuthentications=password -o PubkeyAuthentication=no \
       -o StrictHostKeyChecking=no -o NumberOfPasswordPrompts=1 -o ConnectTimeout=5 \
       user1@127.0.0.1 true
   # type any wrong string at the password prompt, Enter, and move to the next iteration —
@@ -264,10 +227,10 @@ Run all 8 inside **2 minutes** — the frequency rule below needs the burst, not
 **Expected rule:** each failed attempt fires **one** of `5503` (PAM decoder path) or `5760`/`5710`
 (sshd decoder path) — resolves `ssh_brute_force` either way via `T1110.001` (tier 1, exact MITRE
 match), so which literal id this host emits does not change the category; the per-window `by_rule`
-breakdown (§2 step 5) shows which one. **Not** `40112` ("multiple failures followed by a success")
+breakdown (§2 step 6) shows which one. **Not** `40112` ("multiple failures followed by a success")
 — this scenario deliberately never succeeds, so `40112`'s own precondition never fires.
 
-**Indexer check** (rule-scoped; run alongside §2 step 5):
+**Indexer check** (rule-scoped; run alongside §2 step 6):
 ```bash
 curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" \
   "$INDEXER_URL/wazuh-alerts-*/_count" -H 'Content-Type: application/json' \
@@ -276,7 +239,7 @@ curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" \
 
 **Start:** `__:__:__` (+07:00)   **End:** `__:__:__` (+07:00)
 
-**Tag it (§2 step 6):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent user1-IA1803 --since "$S" --until "$E" --scenario SBF-A<n> --category ssh_brute_force --kind attack --env-file .env`
+**Tag it (§2 step 7):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent attt-m1-lab --since "$S" --until "$E" --scenario SBF-A<n> --category ssh_brute_force --kind attack --env-file .env`
 
 **The loopback caveat.** `srcip = 127.0.0.1` is exactly what DEC-053 excludes from **G1** (67
 loopback `ssh_brute_force` clusters, 662 alerts, dropped from the fold's pool). For **G2** it is
@@ -304,10 +267,10 @@ regardless, and this runbook does not re-derive Wazuh's own rule text beyond wha
 A single mistyped password, corrected on the next try — the shape of a person, not a script:
 
 ```bash
-ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+ssh -b "$SRC" -o PreferredAuthentications=password -o PubkeyAuthentication=no \
     -o StrictHostKeyChecking=no -o NumberOfPasswordPrompts=1 -o ConnectTimeout=5 \
     user1@127.0.0.1 true    # type the WRONG password once
-ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+ssh -b "$SRC" -o PreferredAuthentications=password -o PubkeyAuthentication=no \
     -o StrictHostKeyChecking=no -o NumberOfPasswordPrompts=3 -o ConnectTimeout=5 \
     user1@127.0.0.1 true    # type the RIGHT password
 ```
@@ -341,11 +304,11 @@ about where it actually resolves:
 
 ```bash
 for i in $(seq 1 3); do
-  ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+  ssh -b "$SRC" -o PreferredAuthentications=password -o PubkeyAuthentication=no \
       -o StrictHostKeyChecking=no -o NumberOfPasswordPrompts=1 -o ConnectTimeout=5 \
       user1@127.0.0.1 true    # wrong password, x3
 done
-ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+ssh -b "$SRC" -o PreferredAuthentications=password -o PubkeyAuthentication=no \
     -o StrictHostKeyChecking=no -o NumberOfPasswordPrompts=3 -o ConnectTimeout=5 \
     user1@127.0.0.1 true      # right password
 ```
@@ -368,7 +331,7 @@ curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" \
 
 **Start:** `__:__:__` (+07:00)   **End:** `__:__:__` (+07:00)
 
-**Tag it (§2 step 6):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent user1-IA1803 --since "$S" --until "$E" --scenario SL-A<n> --category suspicious_login --kind attack --env-file .env`
+**Tag it (§2 step 7):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent attt-m1-lab --since "$S" --until "$E" --scenario SL-A<n> --category suspicious_login --kind attack --env-file .env`
 
 #### Expected rules
 
@@ -387,7 +350,7 @@ the labeller-facing evaluation chapter that the category it lands in is `ssh_bru
 The plain admin login this category's own clusters actually look like:
 
 ```bash
-ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+ssh -b "$SRC" -o PreferredAuthentications=password -o PubkeyAuthentication=no \
     -o StrictHostKeyChecking=no -o NumberOfPasswordPrompts=3 -o ConnectTimeout=5 \
     user1@127.0.0.1 true    # right password, first try
 ```
@@ -429,11 +392,11 @@ curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" \
 
 **Start:** `__:__:__` (+07:00)   **End:** `__:__:__` (+07:00)
 
-**Tag it (§2 step 6):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent user1-IA1803 --since "$S" --until "$E" --scenario PE-A<n> --category privilege_escalation --kind attack --env-file .env`
+**Tag it (§2 step 7):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent attt-m1-lab --since "$S" --until "$E" --scenario PE-A<n> --category privilege_escalation --kind attack --env-file .env`
 
 **Rootcheck note:** `510`/`521` fire on the rootcheck schedule, not on demand — do not wait for
 them inside this window; if the schedule happens to land during the lab days, the per-window
-`by_rule` breakdown (§2 step 5) will show it as host noise, not as this scenario's evidence.
+`by_rule` breakdown (§2 step 6) will show it as host noise, not as this scenario's evidence.
 
 #### Expected rules
 
@@ -472,7 +435,7 @@ sudo -k && sudo true    # correct password — routine administration
 
 ```bash
 for i in $(seq 1 6); do
-  nc -z -w1 127.0.0.1 22
+  nc -s "$SRC" -z -w1 127.0.0.1 22
 done
 # or, if nc is unavailable:
 ssh-keyscan -T2 127.0.0.1 ; ssh-keyscan -T2 127.0.0.1 ; ssh-keyscan -T2 127.0.0.1
@@ -498,7 +461,7 @@ curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" \
 
 **Start:** `__:__:__` (+07:00)   **End:** `__:__:__` (+07:00)
 
-**Tag it (§2 step 6):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent user1-IA1803 --since "$S" --until "$E" --scenario RC-A<n> --category recon --kind attack --env-file .env`
+**Tag it (§2 step 7):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent attt-m1-lab --since "$S" --until "$E" --scenario RC-A<n> --category recon --kind attack --env-file .env`
 
 #### Expected rules
 
@@ -555,7 +518,7 @@ curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" \
 
 **Start:** `__:__:__` (+07:00)   **End:** `__:__:__` (+07:00)
 
-**Tag it (§2 step 6):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent user1-IA1803 --since "$S" --until "$E" --scenario MW-A<n> --category malware --kind attack --env-file .env`
+**Tag it (§2 step 7):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent attt-m1-lab --since "$S" --until "$E" --scenario MW-A<n> --category malware --kind attack --env-file .env`
 
 #### Expected rules
 
@@ -610,7 +573,7 @@ curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" \
 
 **Start:** `__:__:__` (+07:00)   **End:** `__:__:__` (+07:00)
 
-**Tag it (§2 step 6):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent user1-IA1803 --since "$S" --until "$E" --scenario RW-A<n> --category ransomware --kind attack --env-file .env`
+**Tag it (§2 step 7):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent attt-m1-lab --since "$S" --until "$E" --scenario RW-A<n> --category ransomware --kind attack --env-file .env`
 
 #### Expected rules
 
@@ -676,7 +639,7 @@ curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" \
 
 **Start:** `__:__:__` (+07:00)   **End:** `__:__:__` (+07:00)
 
-**Tag it (§2 step 6):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent user1-IA1803 --since "$S" --until "$E" --scenario DX-A<n> --category data_exfiltration --kind attack --env-file .env`
+**Tag it (§2 step 7):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent attt-m1-lab --since "$S" --until "$E" --scenario DX-A<n> --category data_exfiltration --kind attack --env-file .env`
 
 #### Expected rules
 
@@ -740,7 +703,7 @@ curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" \
 
 **Start:** `__:__:__` (+07:00)   **End:** `__:__:__` (+07:00)
 
-**Tag it (§2 step 6):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent user1-IA1803 --since "$S" --until "$E" --scenario C2-A<n> --category c2_beacon --kind attack --env-file .env`
+**Tag it (§2 step 7):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent attt-m1-lab --since "$S" --until "$E" --scenario C2-A<n> --category c2_beacon --kind attack --env-file .env`
 
 #### Expected rules
 
@@ -773,14 +736,19 @@ hex branch nor the plain-text branch of the `<match>` fires.
 
 ## 4 · The benign block
 
-Run **once per day** (22, 23, 24/09), as its own `--kind benign --category benign` window —
-`docs/chot-v3-14-ngay.md` §A2's benign activity on the same host, run deliberately so the labellers
-never learn "lab host = escalate" from hostname alone:
+Run **once per day** (`BB-D1` on 26/09, `BB-D2` on 27/09), each **≤ 10 minutes**, as its own
+`--kind benign --category benign` window — `docs/chot-v3-14-ngay.md` §A2's benign activity on the
+same host, run deliberately so the labellers never learn "lab host = escalate" from hostname alone.
+**Keep it short on purpose:** the benign block declares no Expected rules, so by DEC-114 it is the
+one unscoped window — *every* head of `attt-m1-lab` inside it becomes a `benign` truth row, including
+the container hosts' background that happens to land in the window. A short window bounds how much of
+that background enters G2 while still yielding benign clusters. Give the admin login its own `srcip`
+from the rotation (§3) so it does not merge with an attack window's ssh key.
 
 ```bash
 sudo apt update && sudo apt -s upgrade   # package listing / simulated upgrade — no state change forced
 crontab -l                                # inspect the existing cron jobs (read-only, generates its own log line)
-ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+ssh -b "$SRC" -o PreferredAuthentications=password -o PubkeyAuthentication=no \
     -o StrictHostKeyChecking=no -o NumberOfPasswordPrompts=3 -o ConnectTimeout=5 \
     user1@127.0.0.1 true                  # admin login, correct password first try
 ssh-keyscan -T2 127.0.0.1                 # self scan
@@ -793,93 +761,193 @@ that is why it is tagged `--category benign` rather than one specific category. 
 host's own ~34 alerts/hour of noise falling inside the window, this is where most of the ≥ 20
 benign lab clusters (§ floor, `docs/lab-run-log.md` §"The floor to reach") come from.
 
-**Start:** `__:__:__` (+07:00)   **End:** `__:__:__` (+07:00) — one line per day, three total.
+**Start:** `__:__:__` (+07:00)   **End:** `__:__:__` (+07:00) — one line per day, two total.
 
-**Tag it (§2 step 6):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent user1-IA1803 --since "$S" --until "$E" --scenario BB-D<n> --category benign --kind benign --env-file .env`
+**Tag it (§2 step 7):** `PYTHONPATH=backend python3 eval/lab_tag.py --agent attt-m1-lab --since "$S" --until "$E" --scenario BB-D<n> --category benign --kind benign --env-file .env`
 
-## 5 · Checklist
+## 5 · The two-day schedule
 
-Pre-filled with the scenario ids used in §3's examples. **Interleave, do not batch**: run each
-day's rows in the order listed (not all four repeats of one category back to back) — the cluster
-key is `(rule_id, srcip, dstip, agent_name)` and `IDLE_GAP` is 15 minutes
-(`00-context-pack.md` §5), so two runs of the *same* category 5 minutes apart merge into one
-cluster, while running a *different* category in between naturally clears the 20-minute spacing
-rule with no idle waiting. Target: **4 attack runs per category over the three days ≈ 32 attack
-clusters**, plus the benign twins, plus the three benign-block windows.
+Interleaved, not batched (DEC-111). The cluster key is `(rule_id, srcip, dstip, agent_name)` and
+`IDLE_GAP` is 15 min (`00-context-pack.md` §5), so the schedule earns a new cluster two ways: an
+**ssh-based** window takes a fresh `srcip` from §3's rotation (a new key with no waiting), and a
+**non-ssh** window (sudo `5401/5402`, rootcheck `510/521`, ClamAV `52502`, audit `100301`–`100303`)
+waits ≥ 20 min since the last window of its category. Running the eight categories round-robin at an
+8-minute cadence puts ~64 min between same-category windows, so the non-ssh spacing is free. The
+rules, restated as the schedule keeps them:
 
-| # | category | kind | scenario_id | start | end | alerts | clusters | rules seen | lab_tag run? | notes |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | ssh_brute_force | attack | `SBF-A1` | | | | | | ☐ | day 1 |
-| 2 | suspicious_login | attack | `SL-A1` | | | | | | ☐ | day 1 |
-| 3 | privilege_escalation | attack | `PE-A1` | | | | | | ☐ | day 1 |
-| 4 | recon | attack | `RC-A1` | | | | | | ☐ | day 1 |
-| 5 | malware | attack | `MW-A1` | | | | | | ☐ | day 1 |
-| 6 | ransomware | attack | `RW-A1` | | | | | | ☐ | day 1 |
-| 7 | data_exfiltration | attack | `DX-A1` | | | | | | ☐ | day 1 |
-| 8 | c2_beacon | attack | `C2-A1` | | | | | | ☐ | day 1 |
-| 9 | **benign** | benign | `BB-D1` | | | | | | ☐ | day 1, §4 |
-| 10 | ssh_brute_force | attack | `SBF-A2` | | | | | | ☐ | day 2 |
-| 11 | suspicious_login | attack | `SL-A2` | | | | | | ☐ | day 2 |
-| 12 | privilege_escalation | attack | `PE-A2` | | | | | | ☐ | day 2 |
-| 13 | recon | attack | `RC-A2` | | | | | | ☐ | day 2 |
-| 14 | malware | attack | `MW-A2` | | | | | | ☐ | day 2 |
-| 15 | ransomware | attack | `RW-A2` | | | | | | ☐ | day 2 |
-| 16 | data_exfiltration | attack | `DX-A2` | | | | | | ☐ | day 2 |
-| 17 | c2_beacon | attack | `C2-A2` | | | | | | ☐ | day 2 |
-| 18 | ssh_brute_force | benign | `SBF-B1` | | | | | | ☐ | day 2, twin |
-| 19 | suspicious_login | benign | `SL-B1` | | | | | | ☐ | day 2, twin |
-| 20 | privilege_escalation | benign | `PE-B1` | | | | | | ☐ | day 2, twin |
-| 21 | recon | benign | `RC-B1` | | | | | | ☐ | day 2, twin |
-| 22 | malware | benign | `MW-B1` | | | | | | ☐ | day 2, twin |
-| 23 | ransomware | benign | `RW-B1` | | | | | | ☐ | day 2, twin (negative check) |
-| 24 | data_exfiltration | benign | `DX-B1` | | | | | | ☐ | day 2, twin (negative check) |
-| 25 | c2_beacon | benign | `C2-B1` | | | | | | ☐ | day 2, twin (negative check) |
-| 26 | **benign** | benign | `BB-D2` | | | | | | ☐ | day 2, §4 |
-| 27 | ssh_brute_force | attack | `SBF-A3` | | | | | | ☐ | day 3 |
-| 28 | suspicious_login | attack | `SL-A3` | | | | | | ☐ | day 3 |
-| 29 | privilege_escalation | attack | `PE-A3` | | | | | | ☐ | day 3 |
-| 30 | recon | attack | `RC-A3` | | | | | | ☐ | day 3 |
-| 31 | malware | attack | `MW-A3` | | | | | | ☐ | day 3 |
-| 32 | ransomware | attack | `RW-A3` | | | | | | ☐ | day 3 |
-| 33 | data_exfiltration | attack | `DX-A3` | | | | | | ☐ | day 3 |
-| 34 | c2_beacon | attack | `C2-A3` | | | | | | ☐ | day 3 |
-| 35 | ssh_brute_force | attack | `SBF-A4` | | | | | | ☐ | day 3, ≥20 min after row 27 |
-| 36 | suspicious_login | attack | `SL-A4` | | | | | | ☐ | day 3, ≥20 min after row 28 |
-| 37 | privilege_escalation | attack | `PE-A4` | | | | | | ☐ | day 3, ≥20 min after row 29 |
-| 38 | recon | attack | `RC-A4` | | | | | | ☐ | day 3, ≥20 min after row 30 |
-| 39 | malware | attack | `MW-A4` | | | | | | ☐ | day 3, ≥20 min after row 31 |
-| 40 | ransomware | attack | `RW-A4` | | | | | | ☐ | day 3, ≥20 min after row 32 |
-| 41 | data_exfiltration | attack | `DX-A4` | | | | | | ☐ | day 3, ≥20 min after row 33 |
-| 42 | c2_beacon | attack | `C2-A4` | | | | | | ☐ | day 3, ≥20 min after row 34 |
-| 43 | **benign** | benign | `BB-D3` | | | | | | ☐ | day 3, §4 |
+- **(a)** Day 1 opens with the three audit scenarios RW-A1, DX-A1, C2-A1 (rows 1–3), in that order
+  — the only proof `100301`/`100302`/`100303` still fire under DEC-113's `auid` filter. After each,
+  read the rule-scoped count
+  (§3) before going on; **if it is 0, the `auid` filter is the first suspect** (DEC-113), and §1
+  check 4 is where you look.
+- **(b)** Two windows that could share a cluster key start ≥ 20 min apart. ssh-based windows avoid
+  this by rotating `srcip`; non-ssh windows rely on the cadence.
+- **(c)** A benign twin that shares rule ids with its attack (`SBF`/`SL`'s `5760/5503`, `PE`'s
+  `5402`) takes a different `srcip` or starts ≥ 20 min after that attack.
+- **(d)** No window overlaps another (§2 step 5; `build_gold.py --g2` exits 3 on an overlap).
+- **(e)** Ids are unique, match `^[A-Za-z0-9_-]{1,16}$`, and use the prefixes SBF, SL, PE, RC, MW,
+  RW, DX, C2, BB with the suffix -A*n* (attack), -B*n* (twin), -D*n* (benign block).
 
-Excluded deliberately from every row above: `web_attack`, `policy_violation` (§7 says why).
+**Day 1 — 2026-09-26 (+07:00), interleaved, 8-minute cadence.**
 
-## 6 · After the last window (25/09)
+| # | category | kind | scenario_id | planned start (+07:00) | srcip | notes |
+|---|---|---|---|---|---|---|
+| 1 | ransomware | attack | `RW-A1` | 07:05 | n/a — space ≥20 min | run first; check the rule-scoped count before continuing (DEC-113) |
+| 2 | data_exfiltration | attack | `DX-A1` | 07:13 | n/a — space ≥20 min | run first; check the rule-scoped count before continuing (DEC-113) |
+| 3 | c2_beacon | attack | `C2-A1` | 07:21 | n/a — space ≥20 min | run first; check the rule-scoped count before continuing (DEC-113) |
+| 4 | ssh_brute_force | attack | `SBF-A1` | 07:29 | 127.0.0.1 |  |
+| 5 | suspicious_login | attack | `SL-A1` | 07:37 | 127.0.0.1 |  |
+| 6 | privilege_escalation | attack | `PE-A1` | 07:45 | n/a — space ≥20 min |  |
+| 7 | recon | attack | `RC-A1` | 07:53 | 127.0.0.1 |  |
+| 8 | malware | attack | `MW-A1` | 08:01 | n/a — space ≥20 min |  |
+| 9 | ransomware | attack | `RW-A2` | 08:09 | n/a — space ≥20 min |  |
+| 10 | data_exfiltration | attack | `DX-A2` | 08:17 | n/a — space ≥20 min |  |
+| 11 | c2_beacon | attack | `C2-A2` | 08:25 | n/a — space ≥20 min |  |
+| 12 | ssh_brute_force | attack | `SBF-A2` | 08:33 | 127.0.0.2 |  |
+| 13 | suspicious_login | attack | `SL-A2` | 08:41 | 127.0.0.2 |  |
+| 14 | privilege_escalation | attack | `PE-A2` | 08:49 | n/a — space ≥20 min |  |
+| 15 | recon | attack | `RC-A2` | 08:57 | 127.0.0.2 |  |
+| 16 | malware | attack | `MW-A2` | 09:05 | n/a — space ≥20 min |  |
+| 17 | ransomware | attack | `RW-A3` | 09:13 | n/a — space ≥20 min |  |
+| 18 | data_exfiltration | attack | `DX-A3` | 09:21 | n/a — space ≥20 min |  |
+| 19 | c2_beacon | attack | `C2-A3` | 09:29 | n/a — space ≥20 min |  |
+| 20 | ssh_brute_force | attack | `SBF-A3` | 09:37 | 127.0.0.3 |  |
+| 21 | suspicious_login | attack | `SL-A3` | 09:45 | 127.0.0.3 |  |
+| 22 | privilege_escalation | attack | `PE-A3` | 09:53 | n/a — space ≥20 min |  |
+| 23 | recon | attack | `RC-A3` | 10:01 | 127.0.0.3 |  |
+| 24 | malware | attack | `MW-A3` | 10:09 | n/a — space ≥20 min |  |
+| 25 | ransomware | attack | `RW-A4` | 10:17 | n/a — space ≥20 min |  |
+| 26 | data_exfiltration | attack | `DX-A4` | 10:25 | n/a — space ≥20 min |  |
+| 27 | c2_beacon | attack | `C2-A4` | 10:33 | n/a — space ≥20 min |  |
+| 28 | ssh_brute_force | attack | `SBF-A4` | 10:41 | 127.0.0.4 |  |
+| 29 | suspicious_login | attack | `SL-A4` | 10:49 | 127.0.0.4 |  |
+| 30 | privilege_escalation | attack | `PE-A4` | 10:57 | n/a — space ≥20 min |  |
+| 31 | recon | attack | `RC-A4` | 11:05 | 127.0.0.4 |  |
+| 32 | malware | attack | `MW-A4` | 11:13 | n/a — space ≥20 min |  |
+| 33 | ransomware | attack | `RW-A5` | 11:21 | n/a — space ≥20 min |  |
+| 34 | data_exfiltration | attack | `DX-A5` | 11:29 | n/a — space ≥20 min |  |
+| 35 | c2_beacon | attack | `C2-A5` | 11:37 | n/a — space ≥20 min |  |
+| 36 | ssh_brute_force | attack | `SBF-A5` | 11:45 | 127.0.0.5 |  |
+| 37 | suspicious_login | attack | `SL-A5` | 11:53 | 127.0.0.5 |  |
+| 38 | **benign** | benign | `BB-D1` | 12:01 | `127.0.0.30` | §4 benign block, ≤10 min |
+
+**Day 2 — 2026-09-27 (+07:00), interleaved, 8-minute cadence.**
+
+| # | category | kind | scenario_id | planned start (+07:00) | srcip | notes |
+|---|---|---|---|---|---|---|
+| 1 | privilege_escalation | attack | `PE-A5` | 07:05 | n/a — space ≥20 min |  |
+| 2 | recon | attack | `RC-A5` | 07:13 | 127.0.0.5 |  |
+| 3 | malware | attack | `MW-A5` | 07:21 | n/a — space ≥20 min |  |
+| 4 | ransomware | attack | `RW-A6` | 07:29 | n/a — space ≥20 min |  |
+| 5 | data_exfiltration | attack | `DX-A6` | 07:37 | n/a — space ≥20 min |  |
+| 6 | c2_beacon | attack | `C2-A6` | 07:45 | n/a — space ≥20 min |  |
+| 7 | ssh_brute_force | attack | `SBF-A6` | 07:53 | 127.0.0.6 |  |
+| 8 | suspicious_login | attack | `SL-A6` | 08:01 | 127.0.0.6 |  |
+| 9 | privilege_escalation | attack | `PE-A6` | 08:09 | n/a — space ≥20 min |  |
+| 10 | recon | attack | `RC-A6` | 08:17 | 127.0.0.6 |  |
+| 11 | malware | attack | `MW-A6` | 08:25 | n/a — space ≥20 min |  |
+| 12 | ransomware | attack | `RW-A7` | 08:33 | n/a — space ≥20 min |  |
+| 13 | data_exfiltration | attack | `DX-A7` | 08:41 | n/a — space ≥20 min |  |
+| 14 | c2_beacon | attack | `C2-A7` | 08:49 | n/a — space ≥20 min |  |
+| 15 | ssh_brute_force | attack | `SBF-A7` | 08:57 | 127.0.0.7 |  |
+| 16 | suspicious_login | attack | `SL-A7` | 09:05 | 127.0.0.7 |  |
+| 17 | privilege_escalation | attack | `PE-A7` | 09:13 | n/a — space ≥20 min |  |
+| 18 | recon | attack | `RC-A7` | 09:21 | 127.0.0.7 |  |
+| 19 | malware | attack | `MW-A7` | 09:29 | n/a — space ≥20 min |  |
+| 20 | ransomware | benign | `RW-B1` | 09:37 | n/a — space ≥20 min | twin — distinct srcip / ≥20 min from its attack (constraint c) |
+| 21 | data_exfiltration | benign | `DX-B1` | 09:45 | n/a — space ≥20 min | twin — distinct srcip / ≥20 min from its attack (constraint c) |
+| 22 | c2_beacon | benign | `C2-B1` | 09:53 | n/a — space ≥20 min | twin — distinct srcip / ≥20 min from its attack (constraint c) |
+| 23 | ssh_brute_force | attack | `SBF-A8` | 10:01 | 127.0.0.8 |  |
+| 24 | suspicious_login | attack | `SL-A8` | 10:09 | 127.0.0.8 |  |
+| 25 | privilege_escalation | benign | `PE-B1` | 10:17 | n/a — space ≥20 min | twin — distinct srcip / ≥20 min from its attack (constraint c) |
+| 26 | recon | attack | `RC-A8` | 10:25 | 127.0.0.8 |  |
+| 27 | malware | benign | `MW-B1` | 10:33 | n/a — space ≥20 min | twin — distinct srcip / ≥20 min from its attack (constraint c) |
+| 28 | ssh_brute_force | attack | `SBF-A9` | 10:41 | 127.0.0.9 |  |
+| 29 | suspicious_login | benign | `SL-B1` | 10:49 | 127.0.0.21 | twin — distinct srcip / ≥20 min from its attack (constraint c) |
+| 30 | privilege_escalation | benign | `PE-B2` | 10:57 | n/a — space ≥20 min | twin — distinct srcip / ≥20 min from its attack (constraint c) |
+| 31 | recon | benign | `RC-B1` | 11:05 | 127.0.0.21 | twin — distinct srcip / ≥20 min from its attack (constraint c) |
+| 32 | ssh_brute_force | attack | `SBF-A10` | 11:13 | 127.0.0.10 |  |
+| 33 | suspicious_login | benign | `SL-B2` | 11:21 | 127.0.0.22 | twin — distinct srcip / ≥20 min from its attack (constraint c) |
+| 34 | recon | benign | `RC-B2` | 11:29 | 127.0.0.22 | twin — distinct srcip / ≥20 min from its attack (constraint c) |
+| 35 | ssh_brute_force | benign | `SBF-B1` | 11:37 | 127.0.0.21 | twin — distinct srcip / ≥20 min from its attack (constraint c) |
+| 36 | ssh_brute_force | benign | `SBF-B2` | 11:45 | 127.0.0.22 | twin — distinct srcip / ≥20 min from its attack (constraint c) |
+| 37 | **benign** | benign | `BB-D2` | 11:53 | `127.0.0.30` | §4 benign block, ≤10 min |
+
+#### Yield — the arithmetic behind the floors
+
+In-scope clusters counted as distinct cluster keys among the **declared** Expected rules the
+scenario's own text says fire (§3); anything else in a window is `in_window_unexpected` and excluded
+(DEC-114), so it is not counted here. The negative-check twins `RW-B`, `DX-B`, `C2-B` and the
+clean-scan `MW-B` yield **0 in-scope clusters by design** (their whole point is that the rule stays
+silent), so they add nothing to the attack column and are the `0` twin rows below.
+
+| category | attack windows | in-scope / window | attack clusters | twin windows | benign twin clusters |
+|---|---|---|---|---|---|
+| ransomware (`RW`) | 7 | 1 — 100301 (1); interactive twin 0 | 7 | 1 | 0 |
+| data_exfiltration (`DX`) | 7 | 1 — 100302 (1); download twin 0 | 7 | 1 | 0 |
+| c2_beacon (`C2`) | 7 | 1 — 100303 (1); port-check twin 0 | 7 | 1 | 0 |
+| ssh_brute_force (`SBF`) | 10 | 2 — 5760/5503 (1) + 5712 burst (1) | 20 | 2 | 2 |
+| suspicious_login (`SL`) | 8 | 2 — 40112 (1) + 5715 success (1) | 16 | 2 | 2 |
+| privilege_escalation (`PE`) | 7 | 1 — 5401 attack / 5402 twin (1) | 7 | 2 | 2 |
+| recon (`RC`) | 8 | 1 — 5731 (1) | 8 | 2 | 2 |
+| malware (`MW`) | 7 | 1 — 52502 (1); clean-scan twin 0 | 7 | 1 | 0 |
+
+- Attack in-scope clusters: **79** (sum of the attack-clusters column).
+- Benign twin clusters: **8**; benign-block clusters: **10–24**,
+  background-dependent (each block is unscoped by DEC-114, so its benign count is whatever real
+  background lands in the ≤10-min window; **16** used as the planning mid-point).
+- **in-scope clusters planned: 103** — attack 79 + benign (8 twin +
+  16 block) = 103 ≥ 100.
+- **benign clusters planned: 24** — 8 twin + 16 block ≥ 20.
+- Categories covered: **8 of 8**. Windows: Day 1 38 (~5.1 h), Day 2 37 (~5.0 h), each
+  within the 5–6 h budget.
+
+If a category yields fewer clusters than planned (a rule that does not fire on this host, a `srcip`
+that the sshd build does not honour — §3's fallback), record the shortfall in the checklist's notes
+and in `docs/lab-run-log.md`; the coverage floor is checked for real by `build_gold.py` in §6, and a
+genuine miss is a zero row, never a synthesised one (§0).
+
+## 6 · After the last window (evening of 27/09)
+
+G2 only — G1 is dropped (DEC-111), so there is no archive to read. Requires **P6-T07 merged into
+`main`** (the G2-only build; if `--g2` still demands an archive input, P6-T07 is not in yet):
 
 ```bash
 # from the primary checkout
 PYTHONPATH=backend python3 eval/build_gold.py \
-  --archive-file /home/user1/archive/alerts-2026-08-08_09-07.jsonl \
-  --g1 --g2 --lab-windows eval/lab_windows.csv --env-file .env
+  --g2 --lab-windows eval/lab_windows.csv --g2-target 150 --g2-floor 100 \
+  --env-file .env --out-dir eval
 ```
 
-Read `eval/gold_coverage.md`. It must show **G2 ≥ 60** (floor; target 100) with every one of the
-eight categories in §3 listed — a category that produced zero clusters is a **zero row**, printed
-as such, **never synthesised** (§0). `≥ 20` of G2's clusters must be benign (checked after
-labelling, by `label_export.py report` — not a selection rule, `P6-tasks.md` planning decision 10).
-Commit `eval/gold_candidates.csv`, `eval/g1_clusters.csv`, `eval/g1_members.csv.gz`,
-`eval/gold_coverage.md`, and `eval/lab_windows.csv` with its now-populated rows (this runbook ships
-the file with its header only — every row after it is the Owner's).
+Read `eval/gold_coverage.md`:
+
+- the **`in_window_unexpected`** column and its totals line — the background heads DEC-114 excluded,
+  per window; a large number here is expected (the container hosts) and is not a failure;
+- **G2 ≥ 100** in-scope clusters over the eight categories — a category that produced zero clusters
+  is a **zero row**, printed as such, **never synthesised** (§0);
+- the **benign ≥ 20** line;
+- any window whose heads were not all tagged (a build error, not a silent drop).
+
+Commit **only** `eval/gold_candidates.csv`, `eval/gold_coverage.md`, and `eval/lab_windows.csv` with
+its now-populated rows (this runbook ships the file with its header only). **Do not** commit
+`eval/g1_*` — the G1 record stays exactly as it is (DEC-111).
 
 ## 7 · What is deliberately not here
 
-- **`web_attack`** — no web server runs on `user1-IA1803` and none of its 8 archive clusters are
-  anything but the `GROUP_TO_CATEGORY["attack"]` mis-mapping DEC-055 already removed; a scenario
-  here would classify nothing (DEC-055, DEC-056).
+- **`web_attack`** — not for want of a web service: MISP's nginx and n8n both run on
+  ATTT-M1. The reason is that **no rule on this manager maps to `web_attack`** after DEC-055's fix
+  removed the `GROUP_TO_CATEGORY["attack"]` mis-mapping, so a scenario would classify nothing; and
+  an attack aimed at one of the production service containers is outside the lab's bounds anyway
+  (DEC-055, DEC-056).
 - **`policy_violation`** — no Linux stock rule carries a fitting group and no local rule was
   authored for it; it has no signal at all, not a weak one (DEC-057, which decided it inside A5
   rather than here).
+- **A shell spawned by a service account is not in scope, and that is a real detection gap.** Under
+  DEC-113's `auid>=1000` filter, auditd does not record execve for a process with no login uid — a
+  daemon, a container entrypoint, cron. So `100301`–`100303` cannot see a ransomware/exfil/C2 action
+  taken *by* one of the container services, only one a logged-in operator takes. The G2 scenarios
+  are unaffected (§0 rule 1 runs them from a login shell), but the gap is real and P8's
+  `docs/limitations.md` carries it.
 - **Suricata** — installing it classifies nothing on this estate: its five stock rules decode as
   `json`, carry no MITRE id and no mapped group, so `DECODER_TO_CATEGORY["suricata"]` can never
   match (INBOX `2026-09-08 · P6 / G2`; `docs/chot-v3-14-ngay.md` §A2's own warning, confirmed by
