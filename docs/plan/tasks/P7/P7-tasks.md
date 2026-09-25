@@ -1,10 +1,10 @@
 # P7 · Evaluation — task cards
 
-> **⚠️ INCOMPLETE PLAN (25/09, Planner P7).** Only **P7-T01** and **P7-T02** have cards
-> (`P7-T01.prompt.md`, `P7-T02.prompt.md`); both depend on nothing and are dispatchable. The
-> Planner's run was stopped while writing P7-T03, so **P7-T03 … P7-T08 are described in this index
-> but have no card**, and `STATE.md` carries rows for T01 and T02 only. Do not dispatch a card that
-> has no `.prompt.md`. The Director completes or re-plans T03–T08 (and E5 cannot pass until then).
+> **Complete as of 25/09 late (DEC-122).** The first Planner run was stopped mid-way through P7-T03
+> (DEC-121); a fresh Planner session the Owner opened wrote P7-T03 … P7-T08, committed verbatim at
+> `108a8ac`. All eight cards now exist and passed E5 (DEC-122). Where this index and a card differ,
+> **the card wins** — in particular §3 item 4 below, whose "safe" secondary metric was dropped
+> (DEC-121 Q1 as landed in P7-T03). `must` is now **16.0 h** (T08, the Director's run card, adds 1.5 h).
 
 Phase objective: numbers with confidence intervals for the five configurations B0–B4 on the frozen
 gold set, ASR on the adversarial set G3, the paired thinking ablation (DEC-042), and at most one
@@ -90,7 +90,10 @@ before T04 starts. T05 and T06 need only T03's metric names and run beside T04.
    predicts in ①'s space `false_positive | needs_review | escalate`. T03 scores on **decision
    classes**: `close` (truth `benign`; prediction `false_positive`), `review` (prediction
    `needs_review`; no truth), `escalate` (both sides). **Strict** (primary, the brief's) counts
-   `review` as wrong; **safe** (secondary) counts `review` as correct for either truth. Macro-F1 is
+   `review` as wrong. *(Superseded 25/09, DEC-121 Q1 as landed in P7-T03: the "safe" secondary
+   metric was dropped — the full truth × outcome table plus the deferral rate beside strict
+   recall(escalate) let a reader derive it; a crashed or capped run is its own `error` outcome,
+   counted wrong, DEC-122.)* Macro-F1 is
    taken only over classes with truth support (`close`, `escalate`); a zero-support class is
    reported `n/a`, never 0 or 1. The brief's "precision(false_positive)" becomes **precision of
    `close`** = P(truth `benign` | prediction `false_positive`) — the auto-close safety number. The
