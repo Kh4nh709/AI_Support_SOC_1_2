@@ -7,6 +7,13 @@ call is made from this job, never from a request handler (§7.5); the whole hand
 runs inside the worker's one transaction (`infra/worker.py`'s `transaction(conn,
 statement_timeout=...)`), so a retry never sees a partial write.
 
+One code path, two callers (P7-T01; P7 planning decision 1). `evaluate_alert` is the
+computation for one alert — load, build, lint, propose, gate, verify — and it writes
+nothing. `run_triage_job` is `evaluate_alert` with the deployed switches (`DEPLOYED`)
+followed by exactly the rows, events and `triage_status` this job has always written.
+The evaluation harness calls `evaluate_alert` with B2's or B3's `EvalSwitches`, so what
+is measured is what is deployed; no copy of the sequencing lives anywhere else.
+
 `_set_triage_status` is this module's only write to `alerts` — it names
 `triage_status` and `triaged_count` and nothing else (G2). `domain/`, not `tier1/`,
 is the only package that may ever write `alerts.status`.
@@ -14,10 +21,12 @@ is the only package that may ever write `alerts.status`.
 
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -32,13 +41,20 @@ from app.infra.errors import PermanentError, TransientError
 from app.infra.jobs import Job
 from app.kb import lookup as kb
 from app.llm import builder
-from app.llm.adapter import DeepSeekAdapter, LLMBudgetExceeded, cost_usd
+from app.llm.adapter import DeepSeekAdapter, LLMBudgetExceeded, cost_usd, estimate_tokens
+
+# `_system_prompt` and `_sum_usage` are reused, not copied: an override template is
+# composed exactly as the deployed one is, and an evaluation's usage is summed exactly
+# as `Proposal.usage` is. `llm/triage.py` itself is out of P7-T01's scope (frozen).
 from app.llm.triage import (
     TRIAGE_TEMPLATE,
     VERIFIER_TEMPLATE,
     BuiltTriagePrompt,
     Proposal,
     TriageInput,
+    Verification,
+    _sum_usage,
+    _system_prompt,
     build_facts,
     build_proposer_prompt,
     build_verifier_prompt,
@@ -336,29 +352,196 @@ def _verify_failed_last_attempt(
     _set_triage_status(conn, alert_id, "unavailable")
 
 
-def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = None) -> None:
-    """Run pipeline (1) for one alert and record everything (context pack §5, §7.3).
+# ─────────────────────────────────────────────────────────── the ① core (P7-T01)
+#: `EvalSwitches.gate_mode`'s closed set (P7 planning decision 1). "full" is the deployed
+#: gate: steps 1-5, the verifier as step 6, then step 7. "steps_1_3" is B3's restricted
+#: re-run: steps 1-3, then the step-7 output guard — no step 4, no step 5, no verifier
+#: call (architecture §6: "cổng chỉ bước 1–3").
+GATE_MODES = frozenset({"full", "steps_1_3"})
 
-    `adapter` defaults to a real `DeepSeekAdapter`; every test passes a fake instead
-    (design note 7) — production and P3-T11 are the only callers that leave it
-    `None`.
+#: `TriageEvaluation.outcome`'s closed set: one per way ① can end for an alert.
+OUTCOMES = frozenset(
+    {"ok", "builder_violation", "schema", "cap", "transient", "verifier_transient", "verifier_cap"}
+)
+
+
+@dataclass(frozen=True)
+class EvalSwitches:
+    """How `evaluate_alert` runs ① (P7 planning decision 1). The defaults are the
+    deployed pipeline: `DEPLOYED`, configuration B4. B2 is `include_context=False,
+    include_correlation=False` — `build_proposer_prompt`'s own switches, each section
+    left out whole, heading included. B3 is `gate_mode="steps_1_3"`.
+    `proposer_template` replaces the proposer's system template
+    (`llm/templates/triage_system.txt`; the rendered `triage_v2` schema is still
+    appended) and makes `prompt_version` `file:<sha256 of the template, 12 hex>`."""
+
+    include_context: bool = True
+    include_correlation: bool = True
+    gate_mode: str = "full"
+    proposer_template: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.gate_mode not in GATE_MODES:
+            raise ValueError(
+                f"gate_mode must be one of {sorted(GATE_MODES)}, got {self.gate_mode!r}"
+            )
+
+
+#: The only switches `run_triage_job` ever runs.
+DEPLOYED = EvalSwitches()
+
+
+@dataclass(frozen=True)
+class TriageEvaluation:
+    """① on one alert, computed and not written (P7-T01).
+
+    `outcome` (`OUTCOMES`): "ok" — the gate ran to step 7; "builder_violation" — the
+    proposer prompt failed the linter and no call was made; "schema" — still invalid
+    after the repair round; "cap" / "transient" — the proposer call raised
+    `LLMBudgetExceeded` / `TransientError`; "verifier_cap" / "verifier_transient" — the
+    same from the verifier call, after a schema-valid proposal.
+
+    `final_verdict` (the gated `suggested_action`) and `gate_result` exist only for
+    "ok". `proposed_verdict`, `reasons_kept`, `reasons_dropped`, `forced_by` and
+    `verifier_verdict` are read from the gate state whenever the gate started (steps
+    4-7 never change either reason list, so the two counts are step 3's). `calls`,
+    `usage`, `latency_ms` and `cost_usd` are summed over the adapter results that came
+    back: a call that raised returned nothing to count or price. `model_id` is the
+    proposer response's. The fields from `built` on are the intermediates
+    `run_triage_job` writes its rows from.
     """
-    cfg = config.load()
-    _raise_idle_timeout(conn, cfg)
 
-    alert_id = job.subject_id
+    alert_id: str
+    switches: EvalSwitches
+    outcome: str
+    proposed_verdict: str | None
+    final_verdict: str | None
+    gate_result: dict | None
+    reasons_kept: int | None
+    reasons_dropped: int | None
+    forced_by: tuple[str, ...]
+    verifier_verdict: str | None
+    model_id: str | None
+    prompt_version: str
+    usage: dict
+    cost_usd: float
+    latency_ms: int
+    calls: int
+    facts: dict[str, Any]
+    built: BuiltTriagePrompt
+    findings: list[Any]
+    violations: list[Any]
+    proposal: Proposal | None
+    state: gate.GateState | None
+    verdict_for_verifier: str | None
+    vbuilt: BuiltTriagePrompt | None
+    verification: Verification | None
+    result: dict | None
+    exception: Exception | None
+
+    def __post_init__(self) -> None:
+        if self.outcome not in OUTCOMES:
+            raise ValueError(f"outcome must be one of {sorted(OUTCOMES)}, got {self.outcome!r}")
+
+
+def _with_proposer_template(
+    built: BuiltTriagePrompt, template: Path
+) -> tuple[BuiltTriagePrompt, str]:
+    """`built` with its system prompt rendered from `template` instead of
+    `TRIAGE_TEMPLATE`, by the same `_system_prompt` (the template, then the `triage_v2`
+    schema), plus the override's `prompt_version`. `build_proposer_prompt` takes no
+    template, so the system prompt is swapped after the build: the user message is
+    untouched, and phase-5's budget cuts were decided against the deployed system
+    prompt's size (`estimated_tokens` is recomputed for the prompt actually sent)."""
+    template = Path(template)
+    prompt = replace(built.prompt, system=_system_prompt(template, "triage_v2"))
+    estimated = estimate_tokens(prompt.system) + estimate_tokens(prompt.user)
+    version = "file:" + hashlib.sha256(template.read_bytes()).hexdigest()[:12]
+    return replace(built, prompt=prompt, estimated_tokens=estimated), version
+
+
+def _evaluation(
+    outcome: str,
+    *,
+    alert_id: str,
+    switches: EvalSwitches,
+    cfg: config.Config,
+    pv: str,
+    facts: dict[str, Any],
+    built: BuiltTriagePrompt,
+    findings: list[Any],
+    violations: list[Any] | None = None,
+    proposal: Proposal | None = None,
+    state: gate.GateState | None = None,
+    verdict_for_verifier: str | None = None,
+    vbuilt: BuiltTriagePrompt | None = None,
+    verification: Verification | None = None,
+    result: dict | None = None,
+    exception: Exception | None = None,
+) -> TriageEvaluation:
+    """The one place a `TriageEvaluation` is derived from what the run produced."""
+    answered = [r for r in (proposal, verification) if r is not None]
+    ok = outcome == "ok"
+    return TriageEvaluation(
+        alert_id=alert_id,
+        switches=switches,
+        outcome=outcome,
+        proposed_verdict=state.proposed_verdict if state is not None else None,
+        final_verdict=result["suggested_action"] if ok else None,
+        gate_result=(
+            gate.gate_result(
+                state, prompt_version=pv, playbook_used_effective=built.playbook_used_effective
+            )
+            if ok
+            else None
+        ),
+        reasons_kept=len(state.reasons) if state is not None else None,
+        reasons_dropped=len(state.dropped_reasons) if state is not None else None,
+        forced_by=tuple(state.forced_by) if state is not None else (),
+        verifier_verdict=state.verifier_verdict if state is not None else None,
+        model_id=proposal.model if proposal is not None else None,
+        prompt_version=pv,
+        usage=_sum_usage([r.usage for r in answered]),
+        cost_usd=round(sum((cost_usd(r.usage, cfg) for r in answered), 0.0), 5),
+        latency_ms=sum(r.latency_ms for r in answered),
+        calls=sum(r.calls for r in answered),
+        facts=facts,
+        built=built,
+        findings=findings,
+        violations=list(violations or ()),
+        proposal=proposal,
+        state=state,
+        verdict_for_verifier=verdict_for_verifier,
+        vbuilt=vbuilt,
+        verification=verification,
+        result=result,
+        exception=exception,
+    )
+
+
+def evaluate_alert(
+    conn: psycopg.Connection,
+    alert_id: str,
+    *,
+    adapter: Any | None,
+    cfg: config.Config,
+    switches: EvalSwitches = DEPLOYED,
+) -> TriageEvaluation | None:
+    """Pipeline (1) for one alert, computed and returned, never written (P7-T01);
+    `None` when the alert does not exist.
+
+    Only `SELECT`s run on `conn`: no `llm_runs`, no `audit_events`, no `alerts` column,
+    no `triage_status`, no job. `LLMBudgetExceeded` and `TransientError` become
+    `outcome`s instead of raising; anything else — a `PermanentError` such as a verifier
+    prompt the linter rejects — propagates exactly as it always has. The alert's status,
+    `llm_enabled` and the idle timeout are the job's checks, not this function's: an
+    evaluation may run on a closed alert. `adapter=None` builds the real
+    `DeepSeekAdapter` at the same point, with the same spend check, as the job always
+    has.
+    """
     row = _load(conn, alert_id)
     if row is None:
-        raise PermanentError(f"alert not found: {alert_id}")
-
-    if row.status in _CLOSED_STATUSES:
-        _log({"triage": "skipped", "alert_id": alert_id, "status": row.status})
-        return
-
-    if not cfg.llm_enabled:
-        _set_triage_status(conn, alert_id, "unavailable")
-        _log({"triage": "unavailable", "alert_id": alert_id, "stopped_by": "disabled"})
-        return
+        return None
 
     subject = _Subject(
         alert_id=row.alert_id,
@@ -398,7 +581,20 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
         last_seen_at=row.last_seen_at,
     )
     facts = build_facts(inp, corr)
-    built = build_proposer_prompt(inp, facts, corr, playbook_text, table, cfg=cfg)
+    built = build_proposer_prompt(
+        inp,
+        facts,
+        corr,
+        playbook_text,
+        table,
+        cfg=cfg,
+        include_context=switches.include_context,
+        include_correlation=switches.include_correlation,
+    )
+    if switches.proposer_template is None:
+        pv = prompt_version(TRIAGE_TEMPLATE)
+    else:
+        built, pv = _with_proposer_template(built, switches.proposer_template)
 
     findings = detector.scan(built.prompt.block_index.values())
     violations = linter.lint(
@@ -407,98 +603,40 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
         constants=builder.TEMPLATE_CONSTANTS,
         enums=builder.ENUM_VALUES,
     )
+    evaluation = partial(
+        _evaluation,
+        alert_id=alert_id,
+        switches=switches,
+        cfg=cfg,
+        pv=pv,
+        facts=facts,
+        built=built,
+        findings=findings,
+    )
     if violations:
-        llm_runs.write_run(
-            conn,
-            run_id=uuid4(),
-            role="proposer",
-            subject_id=alert_id,
-            system_prompt=built.prompt.system,
-            user_message=built.prompt.user,
-            result=None,
-            gate_result={
-                "error": "builder_violation",
-                "violations": [f"{v.kind}:{(v.token or '')[:200]}" for v in violations],
-            },
-            verifier_result=None,
-            injection_findings=detector.as_json(findings),
-            citation_warnings=built.warnings,
-            input_tokens=None,
-            output_tokens=None,
-            latency_ms=None,
-            model_id=None,
-            prompt_version=prompt_version(TRIAGE_TEMPLATE),
-            cost_usd=None,
-            stopped_by="linter",
-        )
-        write_event(
-            conn,
-            "llm.builder_violation",
-            alert_id,
-            "system",
-            payload={"violations_count": len(violations)},
-        )
-        _set_triage_status(conn, alert_id, "unavailable")
-        return
+        return evaluation("builder_violation", violations=violations)
 
     llm_adapter = adapter or DeepSeekAdapter(cfg, spent_usd=partial(llm_runs.month_spend_usd, conn))
 
     try:
         proposal = propose(llm_adapter, built, cfg=cfg)
-    except LLMBudgetExceeded:
-        llm_runs.write_run(
-            conn,
-            run_id=uuid4(),
-            role="proposer",
-            subject_id=alert_id,
-            system_prompt=built.prompt.system,
-            user_message=built.prompt.user,
-            result=None,
-            gate_result={"error": "cap", "facts": facts},
-            verifier_result=None,
-            injection_findings=detector.as_json(findings),
-            citation_warnings=built.warnings,
-            input_tokens=None,
-            output_tokens=None,
-            latency_ms=None,
-            model_id=None,
-            prompt_version=prompt_version(TRIAGE_TEMPLATE),
-            cost_usd=None,
-            stopped_by="cap",
-        )
-        _set_triage_status(conn, alert_id, "unavailable")
-        return
+    except LLMBudgetExceeded as exc:
+        return evaluation("cap", exception=exc)
     except TransientError as exc:
-        _last_attempt_or_raise(conn, job, cfg, exc, built, facts)
-        return
+        return evaluation("transient", exception=exc)
 
     if proposal.parsed is None:
-        llm_runs.write_run(
-            conn,
-            run_id=uuid4(),
-            role="proposer",
-            subject_id=alert_id,
-            system_prompt=built.prompt.system,
-            user_message=built.prompt.user,
-            result=None,
-            gate_result={
-                "error": "schema",
-                "schema_errors": proposal.schema_errors,
-                "facts": facts,
-            },
-            verifier_result=None,
-            injection_findings=detector.as_json(findings),
-            citation_warnings=built.warnings,
-            input_tokens=proposal.usage.get("prompt_tokens"),
-            output_tokens=proposal.usage.get("completion_tokens"),
-            latency_ms=proposal.latency_ms,
-            model_id=proposal.model,
-            prompt_version=prompt_version(TRIAGE_TEMPLATE),
-            cost_usd=cost_usd(proposal.usage, cfg),
-            stopped_by="schema",
+        return evaluation("schema", proposal=proposal)
+
+    if switches.gate_mode == "steps_1_3":
+        # B3 — `gate.py` keeps its step functions importable for exactly this re-run.
+        state = gate.start(
+            proposal.parsed, facts, built.prompt.block_index, repaired=proposal.repaired
         )
-        _set_triage_status(conn, alert_id, "unavailable")
-        return
+        gate.step2_basis(state)
+        gate.step3_quotes(state)
+        result = gate.step7_output_guard(state)
+        return evaluation("ok", proposal=proposal, state=state, result=result)
 
     rule_check = _make_rule_check(table, facts)
     state = gate.run_steps_1_to_5(
@@ -528,15 +666,179 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
     try:
         verification = verify(llm_adapter, vbuilt, cfg=cfg)
     except LLMBudgetExceeded as exc:
+        return evaluation(
+            "verifier_cap",
+            proposal=proposal,
+            state=state,
+            verdict_for_verifier=verdict_for_verifier,
+            vbuilt=vbuilt,
+            exception=exc,
+        )
+    except TransientError as exc:
+        return evaluation(
+            "verifier_transient",
+            proposal=proposal,
+            state=state,
+            verdict_for_verifier=verdict_for_verifier,
+            vbuilt=vbuilt,
+            exception=exc,
+        )
+
+    gate.step6_verifier(state, verification.parsed)
+    result = gate.step7_output_guard(state)
+    return evaluation(
+        "ok",
+        proposal=proposal,
+        state=state,
+        verdict_for_verifier=verdict_for_verifier,
+        vbuilt=vbuilt,
+        verification=verification,
+        result=result,
+    )
+
+
+def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = None) -> None:
+    """Run pipeline (1) for one alert and record everything (context pack §5, §7.3).
+
+    `adapter` defaults to a real `DeepSeekAdapter`; every test passes a fake instead
+    (design note 7) — production and P3-T11 are the only callers that leave it
+    `None`.
+
+    The computation is `evaluate_alert(..., switches=DEPLOYED)` (P7-T01). What follows
+    it performs, per outcome, exactly the writes, events, status changes and raises this
+    job made before that split; `test_triage_job.py` pins them.
+    """
+    cfg = config.load()
+    _raise_idle_timeout(conn, cfg)
+
+    alert_id = job.subject_id
+    row = _load(conn, alert_id)
+    if row is None:
+        raise PermanentError(f"alert not found: {alert_id}")
+
+    if row.status in _CLOSED_STATUSES:
+        _log({"triage": "skipped", "alert_id": alert_id, "status": row.status})
+        return
+
+    if not cfg.llm_enabled:
+        _set_triage_status(conn, alert_id, "unavailable")
+        _log({"triage": "unavailable", "alert_id": alert_id, "stopped_by": "disabled"})
+        return
+
+    ev = evaluate_alert(conn, alert_id, adapter=adapter, cfg=cfg, switches=DEPLOYED)
+    if ev is None:  # gone between the `_load` above and the evaluation's own read
+        raise PermanentError(f"alert not found: {alert_id}")
+    built, facts, proposal = ev.built, ev.facts, ev.proposal
+
+    if ev.outcome == "builder_violation":
+        llm_runs.write_run(
+            conn,
+            run_id=uuid4(),
+            role="proposer",
+            subject_id=alert_id,
+            system_prompt=built.prompt.system,
+            user_message=built.prompt.user,
+            result=None,
+            gate_result={
+                "error": "builder_violation",
+                "violations": [f"{v.kind}:{(v.token or '')[:200]}" for v in ev.violations],
+            },
+            verifier_result=None,
+            injection_findings=detector.as_json(ev.findings),
+            citation_warnings=built.warnings,
+            input_tokens=None,
+            output_tokens=None,
+            latency_ms=None,
+            model_id=None,
+            prompt_version=prompt_version(TRIAGE_TEMPLATE),
+            cost_usd=None,
+            stopped_by="linter",
+        )
+        write_event(
+            conn,
+            "llm.builder_violation",
+            alert_id,
+            "system",
+            payload={"violations_count": len(ev.violations)},
+        )
+        _set_triage_status(conn, alert_id, "unavailable")
+        return
+
+    if ev.outcome == "cap":
+        llm_runs.write_run(
+            conn,
+            run_id=uuid4(),
+            role="proposer",
+            subject_id=alert_id,
+            system_prompt=built.prompt.system,
+            user_message=built.prompt.user,
+            result=None,
+            gate_result={"error": "cap", "facts": facts},
+            verifier_result=None,
+            injection_findings=detector.as_json(ev.findings),
+            citation_warnings=built.warnings,
+            input_tokens=None,
+            output_tokens=None,
+            latency_ms=None,
+            model_id=None,
+            prompt_version=prompt_version(TRIAGE_TEMPLATE),
+            cost_usd=None,
+            stopped_by="cap",
+        )
+        _set_triage_status(conn, alert_id, "unavailable")
+        return
+
+    if ev.outcome == "transient":
+        _last_attempt_or_raise(conn, job, cfg, ev.exception, built, facts)
+        return
+
+    if ev.outcome == "schema":
+        llm_runs.write_run(
+            conn,
+            run_id=uuid4(),
+            role="proposer",
+            subject_id=alert_id,
+            system_prompt=built.prompt.system,
+            user_message=built.prompt.user,
+            result=None,
+            gate_result={
+                "error": "schema",
+                "schema_errors": proposal.schema_errors,
+                "facts": facts,
+            },
+            verifier_result=None,
+            injection_findings=detector.as_json(ev.findings),
+            citation_warnings=built.warnings,
+            input_tokens=proposal.usage.get("prompt_tokens"),
+            output_tokens=proposal.usage.get("completion_tokens"),
+            latency_ms=proposal.latency_ms,
+            model_id=proposal.model,
+            prompt_version=prompt_version(TRIAGE_TEMPLATE),
+            cost_usd=cost_usd(proposal.usage, cfg),
+            stopped_by="schema",
+        )
+        _set_triage_status(conn, alert_id, "unavailable")
+        return
+
+    if ev.outcome == "verifier_cap":
         _verify_failed_last_attempt(
-            conn, built, vbuilt, facts, proposal, alert_id, cfg, exc, stopped_by="cap"
+            conn, built, ev.vbuilt, facts, proposal, alert_id, cfg, ev.exception, stopped_by="cap"
         )
         return
-    except TransientError as exc:
+
+    if ev.outcome == "verifier_transient":
         if job.attempts < cfg.JOB_MAX_ATTEMPTS:
-            raise
+            raise ev.exception
         _verify_failed_last_attempt(
-            conn, built, vbuilt, facts, proposal, alert_id, cfg, exc, stopped_by="transient"
+            conn,
+            built,
+            ev.vbuilt,
+            facts,
+            proposal,
+            alert_id,
+            cfg,
+            ev.exception,
+            stopped_by="transient",
         )
         write_event(
             conn,
@@ -547,12 +849,9 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
         )
         return
 
-    gate.step6_verifier(state, verification.parsed)
-    result = gate.step7_output_guard(state)
-    pv = prompt_version(TRIAGE_TEMPLATE)
-    g = gate.gate_result(
-        state, prompt_version=pv, playbook_used_effective=built.playbook_used_effective
-    )
+    # "ok": the gate ran to step 7.
+    state, vbuilt, verification = ev.state, ev.vbuilt, ev.verification
+    result, g = ev.result, ev.gate_result
 
     proposer_id = llm_runs.write_run(
         conn,
@@ -564,13 +863,13 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
         result=result,
         gate_result=g,
         verifier_result=verification.parsed,
-        injection_findings=detector.as_json(findings),
+        injection_findings=detector.as_json(ev.findings),
         citation_warnings=built.warnings,
         input_tokens=proposal.usage.get("prompt_tokens"),
         output_tokens=proposal.usage.get("completion_tokens"),
         latency_ms=proposal.latency_ms,
         model_id=proposal.model,
-        prompt_version=pv,
+        prompt_version=ev.prompt_version,
         cost_usd=cost_usd(proposal.usage, cfg),
         stopped_by=None,
     )
@@ -585,7 +884,7 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
         gate_result={
             "role": "verifier",
             "step6": state.steps["6"],
-            "compared_to": verdict_for_verifier,
+            "compared_to": ev.verdict_for_verifier,
             "proposer_run_id": str(proposer_id),
         },
         verifier_result=verification.parsed,
