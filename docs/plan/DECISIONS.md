@@ -2118,3 +2118,15 @@ Decision:
   3. **The Makefile `test-db` password mask is a second facet of the DEC-122 leak.** The `sed` that hides the password stops at the first `@`, so a password containing `@` is partially printed to the terminal. This, not only the assertion in the P7-T01 fixture, is a route by which a partial password reached a log. The `Makefile` is a P0 deliverable outside `docs/plan/`, so the Owner fixes the mask to cover the whole password and commits it, alongside the DEC-122 rotation and the port bind.
   4. **P7-T05 and P7-T06 dispatched** (`task/P7-T05`, `task/P7-T06` at the post-merge tip, read back from the worktree list). Both depend only on P7-T03, now merged, and are built in parallel with the lab (the plan's 26–28/09 harness build). P7-T04 still waits for P7-T01's merge after the 27/09 lab; P7-T07 is `should` and waits for T04 and T06; P7-T08 is the Director's live run on 29/09.
 Supersedes: nothing
+
+## DEC-124 · 2026-09-26 · P7-T06 merged; its cross-pair prompt check is a follow-up gated on v1.1
+Scope: **plan** (a merge, a follow-up) · **evaluation validity** (what the regression gate compares)
+Decided by: Director, under the Owner's delegation (DEC-116)
+Drafted by: Director (Opus 5.5)
+Propagated to: `STATE.md` (P7-T06 → done) · `tasks/P7/P7-T06.review.md`
+Decision:
+  1. **P7-T06 merged** (`28d21f5`; Director review APPROVE). `eval/regression_gate.py` decides pass/fail between two metrics documents: a macro-F1 drop above 0.03 fails, strict recall(escalate) may not drop and is compared on counts, ASR may not rise; a pair that differs in gold sha, gold set, config, thinking mode or n is refused. Three DEC-025 red steps shown and restored. Composed tree: `make lint` 0; `make test` 1 failed (`test_backfill_cli.py:184`, DEC-113) / 1151 passed; `make test-db` 607 passed.
+  2. **`prompt_version` is read from the `eval_runs` column**, the authority; P7-T04 may copy it into the run header so a saved document describes itself.
+  3. **The gate does not yet require the G2 candidate and the G3 candidate to share a prompt version.** Without that check it could pass F1 from one prompt and ASR from another. It matters only for a v1 → v1.1 comparison, which DEC-116 makes unlikely; it is added before any such comparison runs, and is not a merge blocker.
+  4. `git merge main` ran in this Coder's session (a no-op); the two earlier refusals (DEC-122 item 5) were session-specific, not a rule.
+Supersedes: nothing
