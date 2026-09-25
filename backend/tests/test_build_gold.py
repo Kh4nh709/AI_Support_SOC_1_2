@@ -914,10 +914,13 @@ def test_g2_rows_numbers_are_clock_free_min_max_alert_time(db, tmp_path, capsys)
         )
     )
 
-    rows = build_gold.g2_rows(db, windows)
+    # P6-T07: g2_rows scopes by rule_id against the scenario's declared ids.
+    rule_id = db.execute("SELECT rule_id FROM alerts WHERE alert_id = %s", (head,)).fetchone()[0]
+    rows = build_gold.g2_rows(db, windows, expected={SSH: frozenset({rule_id})})
     assert [row.cluster_id for row in rows] == [head]
     row = rows[0]
     assert row.gold_set == "G2" and row.source == "lab"
+    assert row.truth_label == "escalate" and row.scenario_id == "sbf-1" and row.kind == "attack"
     assert row.closed_by == "" and row.excluded_reason == ""
     assert row.occurrence_count == 2
     assert row.first_seen == dup_time.astimezone(UTC)
@@ -971,23 +974,18 @@ def test_g2_excludes_synthetic_and_manifest_ids(db, tmp_path):
     listed = _insert_head(db, "p6t01-manifest", base + timedelta(minutes=2), srcip="10.1.2.3")
     _tag_lab(db, kept, synthetic, listed)
     db.execute("UPDATE alerts SET is_synthetic = true WHERE alert_id = %s", (synthetic,))
-    # two overlapping windows both contain `kept`: it is emitted once
+    # one window (overlaps are refused now, see test_overlapping_windows_...); all three heads
+    # share the fixture rule id, so the scope keeps only the non-synthetic, non-manifest one.
     windows = build_gold.read_lab_windows(
         _windows_csv(
             tmp_path / "w.csv",
-            [
-                _window("sbf-3", base - timedelta(minutes=1), base + timedelta(minutes=5)),
-                _window(
-                    "ben-1",
-                    base - timedelta(minutes=2),
-                    base + timedelta(minutes=1),
-                    kind="benign",
-                    category="benign",
-                ),
-            ],
+            [_window("sbf-3", base - timedelta(minutes=1), base + timedelta(minutes=5))],
         )
     )
-    rows = build_gold.g2_rows(db, windows, manifest_ids=frozenset({listed}))
+    rule_id = db.execute("SELECT rule_id FROM alerts WHERE alert_id = %s", (kept,)).fetchone()[0]
+    rows = build_gold.g2_rows(
+        db, windows, expected={SSH: frozenset({rule_id})}, manifest_ids=frozenset({listed})
+    )
     assert [row.cluster_id for row in rows] == [kept]
 
 
@@ -1102,3 +1100,285 @@ def test_g2_run_writes_g2_rows_after_g1_and_reports_floor(
     assert "mix-1" in coverage
     assert "zero clusters" in coverage and "ransomware" in coverage
     assert "G2 3 ≥ 60: MISS" in coverage
+
+
+# --- P6-T07: expected rules, scope, overlap, truth, G2-only coverage -----------------
+
+LAB_SCENARIOS = REPO_ROOT / "docs" / "lab-scenarios.md"
+
+
+def _g2row(cluster_id, category, severity, *, scenario, kind, truth, rule_id="5503"):
+    return build_gold.ClusterRow(
+        cluster_id=cluster_id,
+        gold_set="G2",
+        alert_id=cluster_id,
+        rule_id=rule_id,
+        category=category,
+        severity=severity,
+        agent_name=LAB_AGENT,
+        alert_user=None,
+        srcip="10.5.5.5",
+        dstip="",
+        source="lab",
+        first_seen=T0.astimezone(UTC),
+        last_seen=T0.astimezone(UTC),
+        occurrence_count=1,
+        closed_by="",
+        excluded_reason="",
+        scenario_id=scenario,
+        kind=kind,
+        truth_label=truth,
+    )
+
+
+def test_expected_rules_parses_the_committed_runbook():
+    m = build_gold.expected_rules(LAB_SCENARIOS)
+    assert len(m) == 8
+    assert sum(len(ids) for ids in m.values()) == 19
+    assert m[SSH] == frozenset({"5710", "5760", "5503", "2501", "5712"})
+    assert m["ransomware"] == frozenset({"100301"})
+    assert m["c2_beacon"] == frozenset({"100303"})
+
+
+def test_expected_rules_refuses_empty_table_and_duplicate_id(tmp_path):
+    empty = tmp_path / "empty.md"
+    empty.write_text(
+        "### ssh_brute_force\n\n#### Expected rules\n\n| id | note |\n|---|---|\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(build_gold.ExpectedRulesUnreadable):
+        build_gold.expected_rules(empty)
+
+    dup = tmp_path / "dup.md"
+    dup.write_text(
+        "### ssh_brute_force\n\n#### Expected rules\n\n| id |\n|---|\n| `5503` |\n\n"
+        "### suspicious_login\n\n#### Expected rules\n\n| id |\n|---|\n| `5503` |\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(build_gold.ExpectedRulesUnreadable):
+        build_gold.expected_rules(dup)
+
+
+def test_archive_file_optional_only_for_g2_only(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(config_module, "load", lambda env_file=".env": _cfg())
+    assert build_gold.main(["--g1", "--out-dir", str(tmp_path)]) == build_gold.EXIT_ARCHIVE == 2
+    assert "--archive-file" in capsys.readouterr().err
+    assert build_gold.main(["--out-dir", str(tmp_path)]) == 2
+    assert build_gold.main(["--check-db", "--out-dir", str(tmp_path)]) == 2
+    empty = _windows_csv(tmp_path / "w.csv", [])
+    rc = build_gold.main(
+        [
+            "--g2",
+            "--lab-windows",
+            str(empty),
+            "--lab-scenarios",
+            str(LAB_SCENARIOS),
+            "--out-dir",
+            str(tmp_path),
+        ]
+    )
+    assert rc == build_gold.EXIT_LAB_WINDOW == 3
+    assert "no lab windows recorded" in capsys.readouterr().err
+
+
+def test_overlapping_windows_exit_3_before_any_connection(tmp_path, monkeypatch, capsys):
+    def refuse(_dsn):
+        raise AssertionError("overlap must be caught before any connection")
+
+    monkeypatch.setattr(build_gold, "_read_only_connection", refuse)
+    base = W0 + timedelta(hours=8)
+    windows = _windows_csv(
+        tmp_path / "w.csv",
+        [
+            _window("sbf-a", base, base + timedelta(minutes=10)),
+            _window("sbf-b", base + timedelta(minutes=5), base + timedelta(minutes=15)),
+        ],
+    )
+    rc, _ = _run_main(
+        tmp_path,
+        monkeypatch,
+        _mixed_docs(),
+        "--g2",
+        "--lab-windows",
+        str(windows),
+        "--lab-scenarios",
+        str(LAB_SCENARIOS),
+        "--dsn",
+        "x",
+    )
+    assert rc == build_gold.EXIT_LAB_WINDOW == 3
+    err = capsys.readouterr().err
+    assert "sbf-a" in err and "sbf-b" in err and "overlap" in err
+
+
+def test_g2_only_coverage_has_run_windows_truth_and_xii_sentence():
+    base = W0 + timedelta(hours=9)
+    windows = (
+        build_gold.LabWindow("atk", SSH, "attack", LAB_AGENT, base, base + timedelta(minutes=10)),
+        build_gold.LabWindow(
+            "ben",
+            "benign",
+            "benign",
+            LAB_AGENT,
+            base + timedelta(minutes=20),
+            base + timedelta(minutes=30),
+        ),
+    )
+    pool = [
+        _g2row("g2-atk", SSH, "high", scenario="atk", kind="attack", truth="escalate"),
+        _g2row("g2-ben", UNKNOWN, "low", scenario="ben", kind="benign", truth="benign"),
+    ]
+    g2 = build_gold.G2Result(
+        windows=windows,
+        heads_per_window={"atk": 2, "ben": 1},
+        pool=pool,
+        sample=list(pool),
+        excluded_per_window={"atk": 1, "ben": 0},
+    )
+    params = _alloc_params(
+        100, 60, unknown_cap_pct=50.0, take_all_crit_high=False, category_floor=5
+    )
+    doc = build_gold.coverage_document(
+        cfg=_cfg(),
+        g2=g2,
+        g2_params=params,
+        lab_windows_path="eval/lab_windows.csv",
+        lab_scenarios_path="docs/lab-scenarios.md",
+        expected=build_gold.expected_rules(LAB_SCENARIOS),
+    )
+    lines = doc.splitlines()
+    assert lines[0] == "# Gold coverage — G2 only"
+    assert "## G1" not in doc
+    assert any("G1: not built" in line for line in lines)
+    assert (
+        "| scenario_id | kind | category_expected | since | until | heads found | in scope "
+        "| in_window_unexpected |"
+    ) in doc
+    assert "- in_window_unexpected (DEC-114): 1 of 3 heads found, excluded, never labelled" in doc
+    assert "- truth in the sample (window, DEC-111/114/115): escalate 1 · benign 1" in doc
+    assert "- benign lab clusters in the sample ≥ 20: 1 — MISS" in doc
+    assert doc.count(build_gold.DEC111_SENTENCE) == 1
+    mix = next(i for i, line in enumerate(lines) if line.startswith("- G2's severity mix"))
+    assert lines[mix + 1] == build_gold.DEC111_SENTENCE
+
+
+@pytest.mark.db
+def test_g2_scope_by_declared_rule_id_not_category(db, tmp_path):
+    base = W0 + timedelta(hours=10)
+    in_ssh = _insert_head(db, "p6t07-in-ssh", base, srcip="10.7.1.1", category=SSH, rule_id="5503")
+    in_unknown = _insert_head(
+        db,
+        "p6t07-in-unknown",
+        base + timedelta(minutes=1),
+        srcip="10.7.1.2",
+        category=UNKNOWN,
+        rule_id="5503",
+    )
+    out_rule = _insert_head(
+        db, "p6t07-out", base + timedelta(minutes=2), srcip="10.7.1.3", rule_id="550"
+    )
+    _tag_lab(db, in_ssh, in_unknown, out_rule)
+    windows = build_gold.read_lab_windows(
+        _windows_csv(
+            tmp_path / "w.csv",
+            [_window("sbf-scope", base - timedelta(minutes=1), base + timedelta(minutes=5))],
+        )
+    )
+    rows, heads, excluded = build_gold._g2_select(db, windows, expected={SSH: frozenset({"5503"})})
+    assert sorted(r.cluster_id for r in rows) == sorted([in_ssh, in_unknown])
+    assert {r.truth_label for r in rows} == {"escalate"}
+    assert heads["sbf-scope"] == 3
+    assert excluded["sbf-scope"] == 1
+
+
+@pytest.mark.db
+def test_g2_benign_twin_scoped_and_benign_block_unscoped(db, tmp_path):
+    twin_base = W0 + timedelta(hours=11)
+    block_base = W0 + timedelta(hours=12)
+    twin_in = _insert_head(
+        db, "p6t07-twin-in", twin_base, srcip="10.7.2.1", category=PRIV, rule_id="5402"
+    )
+    twin_out = _insert_head(
+        db, "p6t07-twin-out", twin_base + timedelta(minutes=1), srcip="10.7.2.2", rule_id="550"
+    )
+    block_head = _insert_head(db, "p6t07-block", block_base, srcip="10.7.2.3", rule_id="550")
+    _tag_lab(db, twin_in, twin_out, block_head)
+    windows = build_gold.read_lab_windows(
+        _windows_csv(
+            tmp_path / "w.csv",
+            [
+                _window(
+                    "pe-twin",
+                    twin_base - timedelta(minutes=1),
+                    twin_base + timedelta(minutes=5),
+                    kind="benign",
+                    category=PRIV,
+                ),
+                _window(
+                    "bb-1",
+                    block_base - timedelta(minutes=1),
+                    block_base + timedelta(minutes=5),
+                    kind="benign",
+                    category="benign",
+                ),
+            ],
+        )
+    )
+    rows, _, excluded = build_gold._g2_select(db, windows, expected={PRIV: frozenset({"5402"})})
+    assert sorted(r.cluster_id for r in rows) == sorted([twin_in, block_head])
+    assert {r.truth_label for r in rows} == {"benign"}
+    assert excluded["pe-twin"] == 1 and excluded["bb-1"] == 0
+
+
+@pytest.mark.db
+def test_g2_only_run_writes_candidates_and_coverage_and_leaves_g1_files(
+    same_connection, tmp_path, monkeypatch, capsys
+):
+    db = same_connection
+    base = W0 + timedelta(hours=13)
+    head = _insert_head(db, "p6t07-only", base, srcip="10.7.3.1", category=SSH, rule_id="5503")
+    _tag_lab(db, head)
+    out = tmp_path / "out"
+    out.mkdir()
+    seeded_clusters = out / "g1_clusters.csv"
+    seeded_members = out / "g1_members.csv.gz"
+    seeded_clusters.write_bytes(b"SENTINEL-G1-CLUSTERS\n")
+    seeded_members.write_bytes(b"SENTINEL-G1-MEMBERS\n")
+    before = (seeded_clusters.read_bytes(), seeded_members.read_bytes())
+    windows = _windows_csv(
+        tmp_path / "w.csv",
+        [_window("sbf-only", base - timedelta(minutes=1), base + timedelta(minutes=5))],
+    )
+    monkeypatch.setattr(config_module, "load", lambda env_file=".env": _cfg())
+    rc = build_gold.main(
+        [
+            "--g2",
+            "--lab-windows",
+            str(windows),
+            "--lab-scenarios",
+            str(LAB_SCENARIOS),
+            "--out-dir",
+            str(out),
+            "--dsn",
+            "postgresql://never-used",
+            "--g2-floor",
+            "0",
+        ]
+    )
+    assert rc == build_gold.EXIT_OK == 0
+    out_text = capsys.readouterr().out
+    assert (
+        "G2 only · windows 1 · heads 1 · in scope 1 · in_window_unexpected 0 · G2 sample 1"
+        in out_text
+    )
+    assert (seeded_clusters.read_bytes(), seeded_members.read_bytes()) == before
+    with (out / "gold_candidates.csv").open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        assert reader.fieldnames == list(build_gold.CANDIDATE_COLUMNS)
+        candidates = list(reader)
+    assert [c["gold_set"] for c in candidates] == ["G2"]
+    row = candidates[0]
+    assert row["scenario_id"] == "sbf-only" and row["kind"] == "attack"
+    assert row["truth_label"] == "escalate"
+    coverage = (out / "gold_coverage.md").read_text(encoding="utf-8")
+    assert coverage.splitlines()[0] == "# Gold coverage — G2 only"
