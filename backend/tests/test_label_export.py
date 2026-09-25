@@ -957,3 +957,109 @@ def test_freeze_writes_v1_sha_and_disagreement_rows(
         (disagree_id, labeler_a),
     ).fetchone()
     assert disagreement_row == ("escalate", "meeting: escalate")
+
+
+# --- P6-T07: window truth wins at freeze; each labeller measured against it ----------
+
+
+def _truth_candidate(cluster_id, truth, *, scenario="atk", kind="attack", gold_set="G2"):
+    return label_export.Candidate(
+        cluster_id=cluster_id,
+        gold_set=gold_set,
+        alert_id=cluster_id,
+        category="ssh_brute_force",
+        severity="high",
+        source="lab",
+        occurrence_count="1",
+        first_seen="2026-09-26T02:00:00+00:00",
+        last_seen="2026-09-26T02:00:00+00:00",
+        scenario_id=scenario,
+        kind=kind,
+        truth_label=truth,
+    )
+
+
+def _plain_candidate(cluster_id):
+    return label_export.Candidate(
+        cluster_id=cluster_id,
+        gold_set="G1",
+        alert_id=cluster_id,
+        category="ssh_brute_force",
+        severity="high",
+        source="replay",
+        occurrence_count="1",
+        first_seen="2026-08-08T09:00:00+00:00",
+        last_seen="2026-08-08T09:00:00+00:00",
+    )
+
+
+def test_freeze_takes_truth_label_even_when_humans_disagree_or_are_missing():
+    disagreed = _truth_candidate("t-disagree", "escalate", scenario="sbf-1", kind="attack")
+    unlabelled = _truth_candidate("t-missing", "benign", scenario="bb-1", kind="benign")
+    # one truth row where the two humans disagree with no adjudication, and one truth row
+    # nobody labelled: today's rules would raise MissingFinalLabel / PartialLabelled; a window
+    # truth freezes regardless (DEC-111).
+    pairs = {"t-disagree": _pair("t-disagree", "escalate", "benign")}
+    result = label_export.build_gold_rows(
+        [disagreed, unlabelled], pairs, adjudication={}, allow_partial=False
+    )
+    by_id = {row.cluster_id: row for row in result.rows}
+    assert set(by_id) == {"t-disagree", "t-missing"}
+    assert by_id["t-disagree"].label == "escalate" and by_id["t-disagree"].adjudicated is False
+    assert by_id["t-missing"].label == "benign"
+    assert by_id["t-disagree"].scenario_id == "sbf-1" and by_id["t-disagree"].kind == "attack"
+    assert by_id["t-missing"].scenario_id == "bb-1" and by_id["t-missing"].kind == "benign"
+
+    # red step (DEC-025): a truth_label not in LABELS is a build defect.
+    bad = _truth_candidate("t-bad", "maybe")
+    with pytest.raises(ValueError):
+        label_export.build_gold_rows([bad], {}, adjudication={}, allow_partial=False)
+
+
+def test_freeze_rows_without_truth_keep_the_old_rules():
+    truth_c = _truth_candidate("t-ok", "escalate")
+    plain_disagree = _plain_candidate("p1")
+    pairs = {
+        "t-ok": _pair("t-ok", "escalate", "benign"),
+        "p1": _pair("p1", "escalate", "benign"),
+    }
+    # the non-truth disagreement with no adjudication still raises, naming only the non-truth id
+    with pytest.raises(label_export.MissingFinalLabel) as excinfo:
+        label_export.build_gold_rows(
+            [truth_c, plain_disagree], pairs, adjudication={}, allow_partial=False
+        )
+    assert excinfo.value.cluster_ids == ["p1"]
+
+    # a non-truth candidate nobody labelled still raises PartialLabelled; the truth row does not
+    partial = _plain_candidate("p2")
+    with pytest.raises(label_export.PartialLabelled) as excinfo2:
+        label_export.build_gold_rows(
+            [truth_c, partial],
+            {"t-ok": _pair("t-ok", "escalate", "escalate")},
+            adjudication={},
+            allow_partial=False,
+        )
+    assert excinfo2.value.cluster_ids == ["p2"]
+
+
+def test_kappa_vs_truth_per_labeller():
+    candidates = [
+        _truth_candidate("c1", "escalate"),
+        _truth_candidate("c2", "benign"),
+        _truth_candidate("c3", "escalate"),
+        _truth_candidate("c4", "benign"),
+    ]
+    pairs = {
+        # labeller A correct on all four; labeller B labels c1..c3 (2 of 3 correct), not c4
+        "c1": label_export.LabelPair("c1", "escalate", "2", "", "escalate", "3", ""),
+        "c2": label_export.LabelPair("c2", "benign", "2", "", "benign", "3", ""),
+        "c3": label_export.LabelPair("c3", "escalate", "2", "", "false_positive", "3", ""),
+        "c4": label_export.LabelPair("c4", "benign", "2", "", None, None, None),
+    }
+    result = label_export.vs_truth(candidates, pairs, "A", "B")
+    assert result["a"]["labeler_id"] == "A" and result["b"]["labeler_id"] == "B"
+    assert result["a"]["n"] == 4 and result["a"]["accuracy"] == 1.0
+    assert result["b"]["n"] == 3 and result["b"]["accuracy"] == pytest.approx(2 / 3)
+    empty = label_export.vs_truth([_plain_candidate("x")], {}, "A", "B")
+    assert empty["a"]["n"] == 0 and empty["a"]["kappa"] is None
+    assert empty["b"]["n"] == 0 and empty["b"]["reason"] == "n = 0"

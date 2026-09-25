@@ -94,6 +94,8 @@ GOLD_COLUMNS: tuple[str, ...] = (
     "occurrence_count",
     "first_seen",
     "last_seen",
+    "scenario_id",
+    "kind",
 )
 
 _LABELER_COUNTS_SQL = (
@@ -121,7 +123,9 @@ def _now_iso() -> str:
 @dataclass(frozen=True)
 class Candidate:
     """One row of `eval/gold_candidates.csv` (P6-T01's format); extra columns
-    (`stratum`, `agent_name`, `rule_id`) are read but not carried here."""
+    (`stratum`, `agent_name`, `rule_id`) are read but not carried here. The G2
+    columns `scenario_id`, `kind`, `truth_label` (P6-T07) are read when present
+    and default to `""` for a committed G1 file that has no such columns."""
 
     cluster_id: str
     gold_set: str
@@ -132,6 +136,9 @@ class Candidate:
     occurrence_count: str
     first_seen: str
     last_seen: str
+    scenario_id: str = ""
+    kind: str = ""
+    truth_label: str = ""
 
 
 @dataclass(frozen=True)
@@ -178,6 +185,8 @@ class GoldRow:
     occurrence_count: str
     first_seen: str
     last_seen: str
+    scenario_id: str = ""
+    kind: str = ""
 
 
 @dataclass(frozen=True)
@@ -263,6 +272,45 @@ def cohen_kappa(pairs: Sequence[tuple[str, str]]) -> KappaResult:
     return KappaResult(n=n, p_o=p_o, p_e=p_e, kappa=kappa, confusion=confusion, reason=None)
 
 
+def vs_truth(
+    candidates: Sequence[Candidate],
+    pairs: Mapping[str, LabelPair],
+    labeler_a: str,
+    labeler_b: str,
+) -> dict:
+    """Each labeller's agreement with the window truth (DEC-111), pure, no I/O.
+
+    Over the candidates that carry a non-empty `truth_label` and that *this*
+    labeller labelled, the pairs are `(truth_label, labeller_label)`. `accuracy`
+    duplicates `p_o` on purpose -- it is the human-baseline figure P7 compares
+    the model against. One labeller's gap never shrinks the other's `n`; no
+    truth rows leaves both entries at `n = 0`, `kappa = null` (`reason = "n = 0"`)."""
+    truth_candidates = [c for c in candidates if c.truth_label]
+    by_id = {c.cluster_id: c for c in truth_candidates}
+
+    def entry(labeler_id: str, pick) -> dict:
+        pairs_by_cluster: dict[str, tuple[str, str]] = {}
+        for candidate in truth_candidates:
+            label = pick(pairs.get(candidate.cluster_id, _EMPTY_PAIR))
+            if label is not None:
+                pairs_by_cluster[candidate.cluster_id] = (candidate.truth_label, label)
+        result = cohen_kappa(list(pairs_by_cluster.values()))
+        by_category = group_kappa(
+            pairs_by_cluster, {cid: by_id[cid].category for cid in pairs_by_cluster}
+        )
+        return {
+            "labeler_id": labeler_id,
+            **result.to_json(),
+            "accuracy": result.p_o,
+            "by_category": by_category,
+        }
+
+    return {
+        "a": entry(labeler_a, lambda pair: pair.label_a),
+        "b": entry(labeler_b, lambda pair: pair.label_b),
+    }
+
+
 # --- shared I/O ---------------------------------------------------------------------
 
 
@@ -279,6 +327,9 @@ def read_candidates(path: Path) -> list[Candidate]:
                 occurrence_count=row["occurrence_count"],
                 first_seen=row["first_seen"],
                 last_seen=row["last_seen"],
+                scenario_id=row.get("scenario_id") or "",
+                kind=row.get("kind") or "",
+                truth_label=row.get("truth_label") or "",
             )
             for row in csv.DictReader(handle)
         ]
@@ -393,10 +444,18 @@ def build_gold_rows(
     *,
     allow_partial: bool,
 ) -> FreezeResult:
-    """Rules (i)-(iii) of the freeze design note. Raises `PartialLabelled` or
-    `MissingFinalLabel` instead of writing anything when a rule is broken."""
+    """Rules (i)-(iii) of the freeze design note for candidates with no
+    `truth_label`. A candidate that carries a window `truth_label` (P6-T07,
+    DEC-111/DEC-114/DEC-115) freezes at that label with `adjudicated=False`,
+    **whether or not the two humans agree or even labelled it** -- a human
+    disagreement with the window is the human-baseline figure, not a freeze
+    blocker -- so a truth row raises neither `PartialLabelled` nor
+    `MissingFinalLabel`. Raises `ValueError` on a `truth_label` not in `LABELS`
+    (a build defect)."""
     partial_ids = sorted(
-        c.cluster_id for c in candidates if not pairs.get(c.cluster_id, _EMPTY_PAIR).both_labelled
+        c.cluster_id
+        for c in candidates
+        if not c.truth_label and not pairs.get(c.cluster_id, _EMPTY_PAIR).both_labelled
     )
     if partial_ids and not allow_partial:
         raise PartialLabelled(partial_ids)
@@ -405,6 +464,33 @@ def build_gold_rows(
     rows: list[GoldRow] = []
     for candidate in candidates:
         pair = pairs.get(candidate.cluster_id, _EMPTY_PAIR)
+        if candidate.truth_label:
+            if candidate.truth_label not in LABELS:
+                raise ValueError(
+                    f"candidate {candidate.cluster_id}: truth_label "
+                    f"{candidate.truth_label!r} is not one of {LABELS}"
+                )
+            rows.append(
+                GoldRow(
+                    cluster_id=candidate.cluster_id,
+                    gold_set=candidate.gold_set,
+                    alert_id=candidate.alert_id,
+                    category=candidate.category,
+                    severity=candidate.severity,
+                    source=candidate.source,
+                    label=candidate.truth_label,
+                    adjudicated=False,
+                    note=pair.note_a or pair.note_b or "",
+                    confidence_a=pair.confidence_a or "",
+                    confidence_b=pair.confidence_b or "",
+                    occurrence_count=candidate.occurrence_count,
+                    first_seen=candidate.first_seen,
+                    last_seen=candidate.last_seen,
+                    scenario_id=candidate.scenario_id,
+                    kind=candidate.kind,
+                )
+            )
+            continue
         if not pair.both_labelled:
             continue
         if not pair.disagrees:
@@ -477,6 +563,8 @@ def write_gold_csv(path: Path, rows: Sequence[GoldRow]) -> None:
                     row.occurrence_count,
                     row.first_seen,
                     row.last_seen,
+                    row.scenario_id,
+                    row.kind,
                 )
             )
 
@@ -1009,6 +1097,7 @@ def cmd_kappa(args: argparse.Namespace) -> int:
         "overall": overall.to_json(),
         "by_gold_set": by_gold_set,
         "by_category": by_category,
+        "vs_truth": vs_truth(candidates, pairs, labeler_a, labeler_b),
         "disagreements": disagreements,
         "disagreement_rate": (disagreements / len(both)) if both else None,
         "computed_at": _now_iso(),
