@@ -2201,3 +2201,31 @@ Decision:
   2. **While the lab runs (26–27/09), no agent command names the live database.** The card's acceptance 4 (the same-database refusal) runs against a non-empty stand-in database. `restore.sh` reads `DATABASE_URL` from its environment only, so the stand-in proves the guard. The run against the real name belongs to the P8 drill, executed by the Director after the lab.
   3. Installing the crontab line stays the Owner's action (P5-tasks §10 item 6). The schedule is reported as not armed until the Owner runs it.
 Supersedes: nothing (DEC-116's auto-cut still applies to every other P5 card)
+
+## DEC-129 · 2026-09-26 · P8 planned by the Director against what exists: the pilot export becomes an operations export (the human pilot never ran), the restore drill waits for P5-T12, six cards; the two open INBOX items closed
+Scope: **plan** (a phase planned; a deliverable re-scoped) · **evaluation validity** (a metric that cannot be measured is stated as such, never as zero)
+Decided by: Director, under the Owner's delegation (25/09: "all responsibility is yours"; DEC-116)
+Drafted by: Director (Opus 5.5)
+Propagated to: `tasks/P8/` (index + P8-T01…T06) · `STATE.md` (6 P8 rows; P8 phase row → in-progress) · `INBOX.md` (2 items resolved)
+Decision:
+  1. **P8 is planned by the Director, not a forked Planner.** A fork inherits this context and has twice been stopped by a safety classifier mid-card (DEC-121). P8 has no offensive content, but the Director holds the 26/09 measurements the plan rests on.
+  2. **The brief's `eval/pilot_export.py` is replaced by `eval/ops_export.py` (P8-T01).**
+     - Every pilot metric in architecture §6 needs the Tier-1 console, which was deprioritized (DEC-116): decisions by branch and person, acknowledge → decide, ① vs human agreement on the blind branch, the digest's wrong-close rate, ② ratings. `soc_dev` holds 0 `tier1.*` events, 0 `triage_labels` and 0 `autoclose_reviews` (26/09).
+     - The operations export measures what ran online over the lab period: intake and dedup, the pull loop, ① online (the gate-forced rate, which is architecture §6's own online metric), latency, cost, failure classes, auto-close.
+     - It prints each human-decision metric as "not measured — <reason> (<DEC>)" beside the counted evidence, never as a zero, and every figure beside the SQL that produced it.
+     - The exit gate's `docs/results/pilot.md` becomes `docs/results/operations.md`.
+  3. **The cards:**
+     - P8-T01: operations export (Coder, `must`).
+     - P8-T02: restore drill (run card by the Director; the Owner signs; after the lab; needs P5-T12).
+     - P8-T03: the runbook completed, with the Pilot section bannered as not run (Coder, `must`, after P5-T12).
+     - P8-T04: demo script over what exists (Coder, `should`, first in the cut order).
+     - P8-T05: `docs/limitations.md` with `⟦G2: …⟧` placeholders (Coder, `must`).
+     - P8-T06: close-out (run card): the ops run, the placeholders filled, the INBOX re-check, the P4/P5 leftovers cut at the 30/09 gate, the final suite, `STATE.md` closed, tag `v1.0`, which the Owner pushes.
+     - Totals: `must` 9.5 h, `should` 1 h.
+  4. **Concurrency is held at 2 Coders while P7-T04 runs.** P7-T04 is on the 29/09 critical path, and the 25/09 usage-limit stop (DEC-122) showed that parallel agents can exhaust the rolling window together. P8-T01 takes the next free slot, then P8-T05 and P8-T04, then P8-T03 after P5-T12.
+  5. **Agents write evidence documents, not the thesis.** The Owner writes the chapters from `docs/results/*`, `docs/limitations.md` and `docs/restore-drill.md` (`prompts/P8.md`: "the rest is the Owner writing the thesis").
+  6. **INBOX: the two open items are resolved.**
+     - The 23/09 G1-provenance note is moot, since G1 is void (DEC-111). Its correction (the 19 rejected lines were stored) stays as history for limitation (vi).
+     - The 23/09 P5-T11 notifier question is not decided, because P5-T11 is deprioritized and cut on 30/09. If the Owner raises it, the recommendation is option A.
+     - INBOX has 0 open items.
+Supersedes: `prompts/P8.md`'s `pilot_export.py` deliverable and `docs/results/pilot.md` exit-gate item (replaced as in item 2); nothing else in the brief
