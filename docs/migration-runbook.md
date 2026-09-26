@@ -5,6 +5,12 @@ DB + worker + toàn bộ trạng thái làm việc (repo, session Claude Code); 
 dashboard, agent) ở lại IA1803** — server mới đọc indexer qua mạng. Đợt 2 (dời Wazuh) là việc khác,
 cần DEC riêng.
 
+> **22/09/2026 — đợt 1 đã chạy một lần, sang ATTT-M1, và tiền đề trên đã vỡ ngay trong lần đó
+> (DEC-106).** Wazuh **không** ở lại IA1803 và cũng **không** được dời sang: máy mới dựng **một stack
+> Wazuh độc lập của riêng nó**, worker đọc stack đó qua `soc_ro` / role `soc_ro_role` (chỉ đọc,
+> `wazuh-alerts-*`). Hệ quả cho người đọc runbook này lần sau: các bước có dấu **(ĐỢT 1-BIS)** bên dưới
+> đổi nghĩa khi indexer nằm **ngay trên máy mới**. Đợt 2 (dời stack IA1803) vẫn còn nguyên, chưa làm.
+
 Nguyên tắc: **không bao giờ có hai worker cùng sống** trên một `source_cursor` — tắt bên cũ trước khi
 bật bên mới. Mọi bước có lệnh kiểm; chưa kiểm thì chưa tính là xong.
 
@@ -106,7 +112,18 @@ DATABASE_URL_OWNER=postgresql://soc:<POSTGRES_PASSWORD>@127.0.0.1:5432/soc_dev
 TEST_DATABASE_URL=postgresql://soc:<POSTGRES_PASSWORD>@127.0.0.1:5432/soc_test
 INDEXER_HOST_IP=<IP Tailscale của IA1803>   # container tới indexer qua IP này; trên IA1803 để trống
 ```
-và `/etc/hosts` của server mới: `<IP Tailscale IA1803>  wazuh.indexer` (cho psql/curl/test chạy ngoài container).
+
+**(ĐỢT 1-BIS) Nếu indexer nằm ngay trên máy mới** (stack Wazuh riêng, như ATTT-M1 22/09 — DEC-106):
+**để `INDEXER_HOST_IP` TRỐNG / không khai báo.** `docker-compose.yml:72` mặc định `host-gateway`, container
+sẽ tới `:19200` của chính máy đó. Đặt IP IA1803 vào đây lúc này là **trỏ ngược puller về stack cũ**.
+Ba giá trị `INDEXER_URL` / `INDEXER_USER` / `INDEXER_CA` **không đổi một ký tự** nhưng đã chỉ sang cluster
+khác — và vì CA dùng chung từ `single-node-config.tgz`, **bắt tay TLS thành công không chứng minh được
+mình đang nói chuyện với stack nào**. Chỉ đường mạng quyết định (DEC-106).
+
+và `/etc/hosts` của server mới: `<IP Tailscale IA1803>  wazuh.indexer` — **(ĐỢT 1-BIS)** nếu indexer ở
+ngay máy mới thì `127.0.0.1  wazuh.indexer`. **Dòng này bắt buộc** (cho psql/curl/test chạy ngoài container):
+thiếu nó `eval/indexer_probe.py` và `eval/smoke_test.py` chết bằng `ConnectError`, trong khi container vẫn
+chạy bình thường — một kiểu hỏng chỉ hiện ở nửa host.
 
 Kiểm indexer trước khi bật gì: `set -a; . ./.env; set +a; curl -s --cacert "$INDEXER_CA" -u "$INDEXER_USER:$INDEXER_PASSWORD" "$INDEXER_URL/_cluster/health" | head -c 200` → JSON `"status"`.
 
@@ -119,8 +136,8 @@ Kiểm indexer trước khi bật gì: `set -a; . ./.env; set +a; curl -s --cace
 cp $B/db/soc_dev.dump backups/latest.dump
 make db-up                                  # tạo app_rw, restore dump, cấp default privileges
 docker compose logs db | grep 'init:'       # "restored — 17 migrations recorded"
+set -a; . ./.env; set +a                    # TRƯỚC make migrate — nếu không: "migrate: no DSN" (DEC-106)
 make migrate                                # "0 applied, 17 already present"
-set -a; . ./.env; set +a
 psql "$DATABASE_URL" -Atc "select last_sort, last_pull_at from source_cursor; select count(*) from alerts; select count(*) from llm_runs"
 ```
 Ba số phải **bằng đúng** `db/counts-before.txt` của bộ backup (cùng snapshot).
@@ -184,16 +201,26 @@ Owner Assist: `The worker now runs on <server>; re-arm the watch on container ai
 
 ---
 
-## 5 · Kiểm tra cuối — 8 dòng, thiếu một là chưa xong
+## 5 · Kiểm tra cuối — 9 dòng, thiếu một là chưa xong
 
 1. `sha256sum -c SHA256SUMS` → 0 lỗi trên server mới.
-2. `git status -sb` → `## main...origin/main`, `git worktree list` đủ task đang mở.
-3. `make migrate` → `0 applied, 17 already present`.
+2. `git status -sb` → `## main...origin/main`, `git worktree list` đủ task đang mở (đối chiếu
+   `$B/git/worktrees.txt`, từng dòng).
+3. `set -a; . ./.env; set +a` rồi `make migrate` → `0 applied, 17 already present`. Chạy trước khi
+   source `.env` thì được `migrate: no DSN` — đó là thứ tự sai, không phải hỏng (DEC-106).
 4. 3 số `source_cursor` / `alerts` / `llm_runs` = `counts-before.txt`.
 5. `last_pull_at` tiến, `last_error` rỗng, heartbeat < 10 phút.
 6. `POST /api/auth/login` sai mật khẩu → 401.
-7. `make lint` 0 · `make test` xanh · `make test-db` xanh.
-8. `claude` trong `/project/project/AI_Support_SOC_1_2` → `/resume` thấy phiên Director; trên máy cũ `docker compose ps` → không còn worker.
+7. `make lint` 0 · `make test` xanh · `make test-db` xanh. **Kiểm `python3` trước:** `Makefile:15` là
+   `PY ?= python3`; nếu `python3` của máy mới không phải bản có `pytest`/`ruff` thì cả ba lệnh chết ở
+   `No module named …` — **lỗi môi trường, không phải test đỏ**. Dùng `make <target> PY=.venv/bin/python`
+   (ATTT-M1 22/09: `python3` là 3.14, toolchain nằm ở `.venv` 3.12 — lint sạch · test **1042 passed, 1
+   skipped, 549 deselected, 2 xfailed** · test-db **549 passed, 1045 deselected**). Chạy `make test-db`
+   thì kiểm `ps aux` xem có phiên khác đang chạy không — hai phiên chung `soc_test` làm đỏ giả (DEC-104).
+8. **(ĐỢT 1-BIS, nếu đổi stack Wazuh)** trước khi bật worker: số doc trong indexer mới và mốc thời gian
+   sớm nhất của nó, so với `last_sort` mang sang — xem §7. Sau khi bật: số alert `source='wazuh'` tăng
+   **đúng bằng** số doc của indexer mới, `replay` không đổi.
+9. `claude` trong `/project/project/AI_Support_SOC_1_2` → `/resume` thấy phiên Director; trên máy cũ `docker compose ps` → không còn worker. **Không với tới máy cũ thì ghi là "chưa kiểm", đừng ghi là "đã xuống"** — DEC-106 ghi đúng như vậy cho ATTT-M1.
 
 ---
 
@@ -212,3 +239,28 @@ nếu đã có dữ liệu phát sinh bên đó. Vẫn quy tắc một worker.
 `WAZUH_MANAGER_SERVER` trong 4 agent (HR-computer, DC01, kali, user1-IA1803) và enroll lại →
 `INDEXER_HOST_IP` bỏ trống (về `host-gateway`) → cursor: cùng index cũ thì giữ; index mới thì
 `PULL_START` + reset cursor theo thủ tục riêng. Không làm trong tuần lab.
+
+**Quy tắc cursor khi đổi stack — bắt buộc, rút từ DEC-106 (22/09).** `source_cursor.last_sort` là
+**mốc nước cao** của `search_after`: mang nó sang một stack có **tập tài liệu khác** thì mọi doc **cũ
+hơn** nó bị bỏ qua **lặng lẽ** — không lỗi, không dòng log, không khoảng trống nào nhìn thấy được.
+Trước khi bật worker trên stack mới, đo một bất đẳng thức:
+
+```bash
+# mốc sớm nhất của indexer MỚI, và số doc của nó
+GET $INDEXER_INDEX/_search {"size":0,"aggs":{"mn":{"min":{"field":"timestamp"}}}}   # → min_ts
+psql "$DATABASE_URL" -Atc "select last_sort from source_cursor"                      # → last_sort
+```
+
+`last_sort < min_ts` → mang cursor sang được, không mất gì (ATTT-M1 22/09: `1789924048963` <
+`1790062888868`, và 1.372 doc → đúng 1.372 dòng `alerts`). **Ngược lại → phải reset cursor theo
+`PULL_START`**, đừng mang sang. Ghi lại cả hai số vào DEC.
+
+**Và: dữ liệu của stack cũ KHÔNG tự đi theo.** Đổi stack mà không dời volume indexer = luồng sống có
+một lỗ đúng bằng khoảng thời gian giữa alert cuối của stack cũ và alert đầu của stack mới; retention
+của indexer cũ là 4 ngày (DEC-017), nên quá 4 ngày thì lỗ đó **vĩnh viễn**. ATTT-M1: **38 h 41 m**
+(20/09 17:00:11Z → 22/09 07:41:28Z). G1 không việc gì (đóng băng 08/08–07/09) — thứ mất là tính liên
+tục của luồng sống cho pilot P4 và lab.
+
+**Kiểm kê phải theo agent của stack mới.** Stack mới = danh sách agent mới. Tên host nào không có trong
+`conf/inventory.yaml` thì G8′ ghim `needs_review` (DEC-066) — ATTT-M1 22/09: `Windows_Endpoint` chiếm
+1.186/1.372 alert và **không** có trong kiểm kê.

@@ -316,6 +316,124 @@ def test_web_accesslog_decoder_reaches_web_attack_at_tier_4():
 
 
 # --------------------------------------------------------------------------
+# docs/lab-scenarios.md §3 `ssh_brute_force` — "Expected rules" table, ported
+# 1:1: each stock rule id's real mitre/group signature (read from the manager's
+# own ruleset, not guessed) is pinned here so a ruleset upgrade that drops a
+# `<mitre>` block or renames a group fails this suite before it fails a lab run.
+# --------------------------------------------------------------------------
+
+
+def test_rule_5710_non_existent_user_login_resolves_to_ssh_brute_force():
+    # 0095-sshd_rules.xml: "sshd: Attempt to login using a non-existent user".
+    # mitre T1110.001 + T1021.004 (T1021.004 has no table entry, ignored).
+    r = resolve(
+        ["T1110.001", "T1021.004"],
+        [
+            "authentication_failed", "invalid_login", "gdpr_IV_35.7.d", "gdpr_IV_32.2",
+            "gpg13_7.1", "hipaa_164.312.b", "nist_800_53_AU.14", "nist_800_53_AC.7",
+            "pci_dss_10.2.4", "pci_dss_10.2.5", "pci_dss_10.6.1",
+            "tsc_CC6.1", "tsc_CC6.8", "tsc_CC7.2", "tsc_CC7.3",
+        ],
+        "sshd",
+        0,
+    )
+    assert r.category == "ssh_brute_force"
+    assert r.resolved_by == "mitre"
+
+
+def test_rule_5760_sshd_authentication_failed_resolves_to_ssh_brute_force():
+    # 0095-sshd_rules.xml: "sshd: authentication failed." (Failed password/keyboard).
+    r = resolve(
+        ["T1110.001", "T1021.004"],
+        [
+            "authentication_failed", "gdpr_IV_35.7.d", "gdpr_IV_32.2", "gpg13_7.1",
+            "hipaa_164.312.b", "nist_800_53_AU.14", "nist_800_53_AC.7",
+            "pci_dss_10.2.4", "pci_dss_10.2.5", "tsc_CC6.1", "tsc_CC6.8", "tsc_CC7.2", "tsc_CC7.3",
+        ],
+        "sshd",
+        0,
+    )
+    assert r.category == "ssh_brute_force"
+    assert r.resolved_by == "mitre"
+
+
+def test_rule_5503_pam_user_login_failed_resolves_to_ssh_brute_force():
+    # 0085-pam_rules.xml: "PAM: User login failed." — decoder is `pam`, not `sshd`,
+    # so this one only resolves at all because tier 1 (mitre) fires first.
+    r = resolve(
+        ["T1110.001"],
+        [
+            "authentication_failed", "pci_dss_10.2.4", "pci_dss_10.2.5", "gpg13_7.8",
+            "gdpr_IV_35.7.d", "gdpr_IV_32.2", "hipaa_164.312.b",
+            "nist_800_53_AU.14", "nist_800_53_AC.7", "tsc_CC6.1", "tsc_CC6.8", "tsc_CC7.2", "tsc_CC7.3",
+        ],
+        "pam",
+        0,
+    )
+    assert r.category == "ssh_brute_force"
+    assert r.resolved_by == "mitre"
+
+
+def test_rule_2501_syslog_authentication_failure_has_no_mitre_block_resolves_via_rule_groups():
+    # 0020-syslog_rules.xml: "syslog: User authentication failure." carries no
+    # <mitre> block at all (verified against the live ruleset) — tier 1/2 must
+    # both come back empty and tier 3 (rule.groups) must be what actually resolves it.
+    r = resolve(
+        [],
+        [
+            "authentication_failed", "pci_dss_10.2.4", "pci_dss_10.2.5", "gpg13_7.8",
+            "gdpr_IV_35.7.d", "gdpr_IV_32.2", "hipaa_164.312.b",
+            "nist_800_53_AU.14", "nist_800_53_AC.7", "tsc_CC6.1", "tsc_CC6.8", "tsc_CC7.2", "tsc_CC7.3",
+        ],
+        None,
+        0,
+    )
+    assert r.category == "ssh_brute_force"
+    assert r.resolved_by == "rule_groups"
+
+
+def test_rule_5712_sshd_brute_force_non_existent_user_resolves_to_ssh_brute_force():
+    # 0095-sshd_rules.xml: "sshd: brute force trying to get access to the
+    # system. Non existent user." — the frequency correlation rule itself.
+    r = resolve(
+        ["T1110"],
+        [
+            "authentication_failures", "gdpr_IV_35.7.d", "gdpr_IV_32.2", "hipaa_164.312.b",
+            "nist_800_53_SI.4", "nist_800_53_AU.14", "nist_800_53_AC.7",
+            "pci_dss_11.4", "pci_dss_10.2.4", "pci_dss_10.2.5",
+            "tsc_CC6.1", "tsc_CC6.8", "tsc_CC7.2", "tsc_CC7.3",
+        ],
+        "sshd",
+        0,
+    )
+    assert r.category == "ssh_brute_force"
+    assert r.resolved_by == "mitre"
+
+
+def test_rule_40112_multiple_failures_then_success_ssh_brute_force_outranks_suspicious_login():
+    # 0280-attack_rules.xml: "Multiple authentication failures followed by a
+    # success." carries both T1078 (suspicious_login) and T1110 (ssh_brute_force);
+    # the runbook is explicit this resolves ssh_brute_force, not suspicious_login,
+    # because T1110 outranks T1078 in PRIORITY — same rule as the canonical alert
+    # above, pinned here under its own rule id so a PRIORITY reorder is caught
+    # against the exact scenario the lab runbook names.
+    r = resolve(
+        ["T1078", "T1110"],
+        [
+            "pci_dss_10.2.4", "pci_dss_10.2.5", "pci_dss_11.4", "gpg13_7.1", "gpg13_7.8",
+            "gdpr_IV_35.7.d", "gdpr_IV_32.2", "hipaa_164.312.b",
+            "nist_800_53_AU.14", "nist_800_53_AC.7", "nist_800_53_SI.4",
+            "tsc_CC6.1", "tsc_CC6.8", "tsc_CC7.2", "tsc_CC7.3",
+        ],
+        "sshd",
+        0,
+    )
+    assert r.category == "ssh_brute_force"
+    assert r.categories == ("ssh_brute_force", "suspicious_login")
+    assert r.resolved_by == "mitre"
+
+
+# --------------------------------------------------------------------------
 # acceptance 6, mirrored here so a code change fails pytest too
 # --------------------------------------------------------------------------
 
