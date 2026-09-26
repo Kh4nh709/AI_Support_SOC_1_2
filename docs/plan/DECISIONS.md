@@ -2288,3 +2288,32 @@ Decision:
   4. **P7-T08 now checks that the human baseline's labellers pair with `kappa_v1.json`'s.** `human` and `kappa` both call `resolve_labelers`, but over different ids, and `report.py` pairs them by the key a/b. A swap would exchange the two labellers' vs-truth accuracies in the committed table. Both files carry `labeler_id`, so step 5 compares them and stops on a mismatch.
   5. **An expected cache effect is recorded, not investigated.** B4's verifier prompt carries no alert id, so alerts with equal facts and reasons share a verifier entry. A first B4 run with `cache_hits > 0` is correct.
 Supersedes: nothing
+
+## DEC-132 · 2026-09-26 · P8-T05 merged (`docs/limitations.md`, 38 items); all ten decision tables are unsigned, so ① can never keep a `false_positive` — the Owner and the advisor sign them before the first label on 28/09, or P7-T08 reports B4's close class and G3 ASR as structural; the report's `web_attack` sentence is corrected
+Scope: **evaluation validity** (what B4 and B1 measure on 29/09; the order of signing and labelling) · **plan** (a merge, an Owner action with a deadline, a run-card amendment)
+Decided by: Director, under the Owner's delegation (DEC-116). The signing itself is the Owner's and the advisor's (§11, DEC-098).
+Drafted by: Director (Opus 5.5)
+Propagated to: `STATE.md` (P8-T05 → done; Owner action: the signing sitting) · `tasks/P8/P8-T05.review.md` · `tasks/P7/P7-T08.prompt.md` (DEC-132 banner) · `eval/report.py` (`NEVER_SYNTHESISED` web_attack reason, follow-up commit)
+Decision:
+  1. **P8-T05 is merged** (Director review APPROVE, `f4f96ff`). `docs/limitations.md` holds 38 items. Each carries Statement · Measured · Source · Affects. G1 appears only as (ix)'s history paragraph. Figures are copied from their DECs. 25 `⟦G2: …⟧` placeholders are filled at P8-T06.
+  2. **The finding: all ten `kb/decision_tables/*.yaml` read `reviewed_by: null`.** Re-measured by the Director on 26/09.
+     - Gate step 4's rule check answers `table_unreviewed` (`tier1/triage.py:208-209`). So ① — live and in B4 — forces every `false_positive` to `needs_review`, whatever the facts.
+     - Consequences for P7:
+       - B4 can close nothing on G2, so its close-class figures are structural.
+       - B4's G3 ASR is 0 **by construction**, not by resisting injection; architecture §6 expects "B3 > 0, B4 ≈ 0".
+       - B1, by design (`kb/lookup.py:6,140`), scores the agent-drafted, unsigned tables. That contradicts DEC-098 item 4's "cannot leak into … B1".
+     - The signing sitting (§11, a 90-minute review of `docs/plan/kb-review-sheet-2026-09-19.md`) has been an open Owner action since 19/09.
+  3. **Ruling: sign before the first label on 28/09.** The Owner and the advisor are together that day for the labelling. A sitting first thing fixes the policy before either of them sees an evaluation candidate. Conditions:
+     - Each table is signed as drafted, or amended with a one-line reason.
+     - **No amendment may reference lab-specific values**: the `127.0.0.x` srcip rotation, the lab host's name, scenario times. The traffic already exists and its author sits at the table, so any such rule would fit the policy to the test set.
+     - The Owner sends the outcome: per table, signed as drafted or the amendments; the two signers; the date.
+     - The Director transcribes it into the YAML on the director branch, runs the consistency tests, and commits with both signers named. The Owner fast-forwards.
+     - **Hard deadline: before P7-T08 starts on 29/09.** From signing until the last P7-T08 run, no table is edited.
+  4. **If the tables are still unsigned at P7-T08, the run goes ahead and says so.** The run log records `grep -H reviewed_by kb/decision_tables/*.yaml` and B1's `kb:` hash. `docs/limitations.md` (xi) and (xxviii) are then filled to say:
+     - step 4 kept no `false_positive`;
+     - B4's close class and G3 ASR are structural;
+     - B1 scored the unsigned drafts.
+
+     A silent run on unsigned tables is not allowed.
+  5. **`eval/report.py`'s `web_attack` reason is corrected** before P7-T08 renders the committed tables (P8-T05 open question 3). "No web server on the host" was DEC-055's 08/09 fact about IA1803. On ATTT-M1 web containers run (`docs/lab-scenarios.md` §7). The reason `web_attack` has no G2 data is that attacking the host's production web containers is outside the lab's bounds, so no scenario feeds the web rules DEC-055 routes there. A one-string fix, committed separately with the suite re-run.
+Supersedes: nothing (DEC-098 item 4's claim about B1 is corrected in fact, not in rule — (xi) states it)
