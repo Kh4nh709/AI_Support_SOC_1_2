@@ -2141,3 +2141,29 @@ Decision:
   2. **The report reads P7-T06's and P7-T07's decision JSON with defensive `.get`**, so a key mismatch shows as an empty line, never a crash. The first real report run in P7-T08 checks that the gate line renders; a mismatch is a one-function follow-up.
   3. The CSV `outcome` column is the decision class (escalate, close, review, error), on the truth's scale; the human baseline is scored against the truth carried on the G2 predictions, identical across G2 runs.
 Supersedes: nothing
+
+## DEC-126 · 2026-09-26 · P7-T01 approved, its landing held until after the last lab window of 27/09; composed off-branch as P7-T04's base; P7-T04 dispatched with 12 amendments; the Coder's open questions ruled
+Scope: **plan** (a review, a dispatch on a composed base) · **evaluation validity** (every lab window is triaged by one version of ①; the harness records no free text)
+Decided by: Director, under the Owner's delegation (DEC-116)
+Drafted by: Director (Opus 5.5)
+Propagated to: `STATE.md` (P7-T01 → approved; P7-T04 DISPATCHED; P7 phase row → in-progress) · `tasks/P7/P7-T01.review.md` · `tasks/P7/P7-T04.prompt.md` (amendment banner)
+Decision:
+  1. **P7-T01 is approved** (Director review APPROVE). Read branch by branch, `run_triage_job` keeps every write call's arguments, and `gate_result` is computed as before. B3's `steps_1_3` is a faithful restriction of the deployed gate: it drops exactly step 4 and step 6, and the dropped step 5 only records. B2 uses the builder's own switches. Three DEC-025 red steps were shown by the Coder.
+  2. **Its landing is held (DEC-121 Q3).** The branch was composed onto the director tip `bbaec61` as `35631b7` (`git merge-tree -X ours`; the only conflict was the P7-T01 `STATE.md` row, kept as the director's). That commit is kept **off** `director/lab-rebuild-0925`, on `director/p7-t01-composed`, so the Owner's fast-forwards of `main` cannot reach the worker before the lab ends. Whole suite on `35631b7`: `make lint` 0; `make test` 1 failed (`test_backfill_cli.py:184`, DEC-113) / 1170 passed; `make test-db` 630 passed. After the Owner reports the last window of 27/09 closed, the Director merges `director/p7-t01-composed`, sets the row to `done` and re-runs the suite. The Owner then fast-forwards `main`, restarts the worker and checks it.
+  3. **P7-T04 is dispatched early, on `35631b7`**, so the harness is built while the lab runs. Its card's "merged into `main`" dependency is met by that base, and its scope checks diff against `35631b7`, not `main`. It lands after P7-T01.
+  4. **P7-T04 amendments** (card banner), from the merged code of T02, T03, T05 and T06 and from the T01 review:
+     - The gold sha goes on the run header and in `eval_runs.metrics`, never per prediction (DEC-123).
+     - A G3 prediction's `cluster_id` is its target's `alert_id`.
+     - B0 and B1 record no measurements.
+     - `cached` and `billed_usd` come from `CachingAdapter.results`.
+     - `model_id` covers the verifier's calls too.
+     - Evidence counts are copied as given, verifier failures included.
+     - B2–B4 are refused when `llm_enabled` is false.
+     - The month spend is computed once and handed to `SpendGuard`, with no connection shared across threads.
+     - The results `error` field is a closed token, never `str(exc)`, because P7-T05 copies it into the committed CSV.
+     - The P7-T01 fixture rule keeps DSNs out of assertion output.
+     - The host uses the venv `python` and `PY=` on every `make` target.
+  5. **The T01 Coder's open questions:**
+     - (1) An override template's budget is P7-T07's to show. The adapter's pre-send check still guards the prompt sent, and `llm/triage.py` stays frozen.
+     - (2)–(4) are carried by amendments 6–8 of the P7-T04 card.
+Supersedes: nothing
