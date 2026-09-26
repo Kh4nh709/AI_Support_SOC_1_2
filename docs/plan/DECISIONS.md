@@ -2190,3 +2190,14 @@ Decision:
      - v1.1 is reported as not built for lack of human corrections. That is a consequence of the lab-only corpus: limitation (xii) and DEC-116's deprioritized digest.
      - The card stays in the tree as the design record.
 Supersedes: nothing
+
+## DEC-128 · 2026-09-26 · P5-T12 (`scripts/restore.sh`, backup retention, crontab file) promoted onto the P8 spine and dispatched; no agent command names the live database while the lab runs
+Scope: **plan** (one deprioritized card promoted) · **operations** (the restore drill's tool; the live database during the lab)
+Decided by: Director, under the Owner's delegation (DEC-116)
+Drafted by: Director (Opus 5.5)
+Propagated to: `STATE.md` (P5-T12 DISPATCHED) · `tasks/P5/P5-T12.prompt.md` (amendment banner)
+Decision:
+  1. **P5-T12 is promoted.** Its own header says it is the one P5 card whose absence blocks a later phase. P8's restore drill needs `scripts/restore.sh`, and `backups/` holds only the 22/09 `latest.dump`. The rest of P5 stays deprioritized and auto-cut on 30/09 (DEC-116); P5-T12 is exempt from that cut. It is dispatched on the director tip `dfb2d44`, in parallel with P7-T04 (2 Coders, within the ≤ 3 rule).
+  2. **While the lab runs (26–27/09), no agent command names the live database.** The card's acceptance 4 (the same-database refusal) runs against a non-empty stand-in database. `restore.sh` reads `DATABASE_URL` from its environment only, so the stand-in proves the guard. The run against the real name belongs to the P8 drill, executed by the Director after the lab.
+  3. Installing the crontab line stays the Owner's action (P5-tasks §10 item 6). The schedule is reported as not armed until the Owner runs it.
+Supersedes: nothing (DEC-116's auto-cut still applies to every other P5 card)
