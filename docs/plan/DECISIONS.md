@@ -2262,3 +2262,29 @@ Decision:
   5. **Arming the backup waits for the fast-forward**: the old `backup.sh` would read `--quiet` as a DSN. The first run overwrites the primary checkout's uncommitted 22/09 `latest.dump`. That loses nothing, because the pre-reset data is kept at `/home/user1/soc-backups-keep/pre-reset-2026-09-25.dump` (DEC-113).
   6. **P8-T02's drill restores a fresh `backup.sh` dump**, as its step 2 already says, never the tracked `latest.dump`. That file carries default-ACL entries for role `user1`, which fail on restore. The fresh-volume path that restores the tracked file goes into P8-T03's runbook as a known caveat.
 Supersedes: nothing
+
+## DEC-131 · 2026-09-26 · P7-T04 approved; it lands together with P7-T01 after the last lab window, via one off-branch composition; P7-T08 gains a labeller-pairing check
+Scope: **plan** (a review; the landing order of two held cards) · **evaluation validity** (the human baseline's a/b pairing; the read-only evaluation)
+Decided by: Director, under the Owner's delegation (DEC-116)
+Drafted by: Director (Opus 5.5)
+Propagated to: `STATE.md` (P7-T04 → approved; P7-T01 row notes the combined landing) · `tasks/P7/P7-T04.review.md` · `tasks/P7/P7-T08.prompt.md` (DEC-131 banner)
+Decision:
+  1. **P7-T04 is approved** (`task/P7-T04` @ `d0e9467`). What the code does:
+     - `eval/run_configs.py` checks the frozen gold before reading `.env` or connecting. The sha must match, both files must be tracked, and neither may differ from `HEAD`.
+     - B0 and B1 run deterministically. B2, B3 and B4 run only as `EvalSwitches` values through `evaluate_alert`.
+     - Each worker gets its own `READ ONLY` connection.
+     - Thinking mode is identical in the request and the cache key, by construction.
+     - The month spend is computed once, and `SpendGuard` stops the run at the cap. More than $5 needs approval.
+     - The results file carries error tokens, never `str(exc)`.
+
+     27 tests; four DEC-025 red steps shown and restored.
+  2. **It carries P7-T01, so both land together.** `director/p7-t01-t04-composed` (`f654b28`) is the director tip `72d7168` with `task/P7-T04` merged. It stays **off** the director branch until the Owner reports the last window of 27/09 closed. Whole suite on it: `make lint` 0; `make test` 1 failed (`test_backfill_cli.py:184`, DEC-113) / 1207 passed; `make test-db` 649 passed. At the landing:
+     - the Director merges it, re-composing if the branch has moved;
+     - both rows become `done`, and the suite is re-run;
+     - the Owner fast-forwards `main` and restarts the worker.
+
+     It supersedes `director/p7-t01-composed` as T01's landing commit.
+  3. **The Coder's deviations are accepted** (review). The most consequential: `label_export.read_gold_csv` drops `scenario_id` and `kind`. T04 reads them from the same file after checking the header. The only other caller never uses them, so the two-line fix is a follow-up, not a blocker.
+  4. **P7-T08 now checks that the human baseline's labellers pair with `kappa_v1.json`'s.** `human` and `kappa` both call `resolve_labelers`, but over different ids, and `report.py` pairs them by the key a/b. A swap would exchange the two labellers' vs-truth accuracies in the committed table. Both files carry `labeler_id`, so step 5 compares them and stops on a mismatch.
+  5. **An expected cache effect is recorded, not investigated.** B4's verifier prompt carries no alert id, so alerts with equal facts and reasons share a verifier entry. A first B4 run with `cache_hits > 0` is correct.
+Supersedes: nothing
