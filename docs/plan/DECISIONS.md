@@ -2458,3 +2458,22 @@ Decision:
   4. **The other seven rows are kept.** SBF-A1, SL-A1, PE-A1, RC-A1, MW-A1, SL-A2, SL-A3 carry valid §5 ids and the Owner's own recorded Start/End, check out read-only (correct `source`/heads, no `wazuh` line, tag-after-End+2min respected), and RC-A1's 0 rows is a real finding (recon produced nothing). The identity of the process that typed a correct `lab_tag.py` call does not corrupt data whose window bounds are the Owner's.
   5. **The one-tagger rule has now failed three times** (RW-A1/RW-A01 duplicate; the churn of reassignment; these 9 rows). The cause is the Owner pasting scenario execution into whichever session is at hand, and that session running `lab_tag.py` (auto-mode allows it). **Only the Owner can stop it**, by sending every window as a line to `Owner assist` and letting no other session run `lab_tag.py`. This is surfaced to the Owner, not enforced by the Director. The `lab_tag.py` read-check-then-append gap stays recorded (DEC-135 item 6); a lockfile is a post-lab card only if the discipline cannot hold, not a mid-lab tool change.
 Supersedes: nothing
+
+## DEC-139 · 2026-09-26 · BB-D1's benign window is 24 min (§4 guideline is ≤ 10 min): kept, because it is the Owner's recorded window, not one fitted to the data — the line between a long honest window (keep) and a reconstructed one (drop)
+Scope: **evaluation validity** (what enters the benign class; the keep/drop rule for a deviating window)
+Decided by: Director, under the Owner's delegation (DEC-116)
+Drafted by: Director (Opus 4.8)
+Propagated to: `STATE.md` (the import task) · the tagging session `Owner assist` (ruling relayed) · recorded for the gold report and `docs/limitations.md` (x)
+Decision:
+  1. **BB-D1 is kept.** `Owner assist` tagged it from the Owner's recorded line (17:43:17–18:07:22 +07:00 = 10:43:17–11:07:22Z), 27 alerts / 4 heads, benign/benign. Validation passed: §5 id, not already present, offsets present, and it overlaps no `attt-m1-lab` window (the last attack window ends 10:04:44Z, 38 min earlier). Read-only check: only a `lab|27|4` line, no `wazuh`. Tagged at End + 2 min with a fresh pull.
+  2. **The deviation:** the window is 24 min 05 s against §4's ≤ 10 min. The scenario activity ran ~1 min (background rules 80730/40704/550/52507, no srcip). This is **not** a validity problem:
+     - the benign block is unscoped by design (DEC-114): its truth is "benign window → benign", and every head in it is real host background correctly labelled `benign`;
+     - it overlaps no attack window, so no head carries two truths;
+     - 4 heads is modest, not an inflation of the benign class (the planning midpoint was ~16 per block).
+  3. **The keep/drop line, stated for any future deviating window:**
+     - **Keep** a window whose Start/End are the ones the Owner *recorded at run time*, even if it is longer than a guideline or catches more background than expected — that is honest provenance.
+     - **Drop** a window whose bounds were *reconstructed from the alerts* after the fact (SL-A3-2, DEC-138) — that fits the window to the data and is forbidden.
+
+     `Owner assist` was right not to shorten BB-D1: shrinking it to the activity would have turned an honest window into a fitted one.
+  4. Recorded as a deviation in the gold report and `docs/limitations.md` (x). No CSV edit, no DB write.
+Supersedes: nothing
