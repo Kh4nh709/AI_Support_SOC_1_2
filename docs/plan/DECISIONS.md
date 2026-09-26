@@ -2167,3 +2167,26 @@ Decision:
      - (1) An override template's budget is P7-T07's to show. The adapter's pre-send check still guards the prompt sent, and `llm/triage.py` stays frozen.
      - (2)–(4) are carried by amendments 6–8 of the P7-T04 card.
 Supersedes: nothing
+
+## DEC-127 · 2026-09-26 · P7-T07 (prompt v1.1 few-shot builder) cut: no human correction of ① exists to learn from; P7-T08 records "not built" with two upper-bound counts measured at the run
+Scope: **plan** (a `should` card cut) · **evaluation validity** (the not-built claim is measured, never assumed)
+Decided by: Director, under the Owner's delegation (DEC-116)
+Drafted by: Director (Opus 5.5)
+Propagated to: `STATE.md` (P7-T07 → cut) · `tasks/P7/P7-T07.prompt.md` (CUT banner) · `tasks/P7/P7-T08.prompt.md` (step 6 banner)
+Decision:
+  1. **P7-T07 is cut** — `should`, and first in P7's cut order. The card itself says the likely outcome was "not built" (DEC-121 Q2).
+     - **Measured on `soc_dev` 26/09 10:50 (read-only):** `triage_labels` 0 rows of any source; `autoclose_reviews` 0 rows.
+     - The database was reset on 25/09 for the lab rebuild (DEC-111/113).
+     - No code path writes `triage_labels(source='digest')`, because P5's digest is deprioritized (DEC-116).
+     - The lab adds no human review of ① verdicts.
+     - So the built path cannot happen before the 29/09 run. The card would buy only a tested "exit 4", at ≈ 2.5 h of agent time (a real constraint after the 25/09 usage-limit stops) plus a merge.
+  2. **The not-built record is measured, not asserted.** P7-T08 step 6 runs two read-only counts at the run and writes them into `fewshot_decision.json`:
+     - `triage_labels where source='digest'`
+     - `autoclose_reviews where verdict='wrong'`
+
+     Both are upper bounds of T07's definition, so `0` proves the cut lost nothing. If either is non-zero, the record says "<n> candidate rows existed and were not examined" and never "0 qualifying rows". `report.py` prints the reason verbatim on the v1.1 line.
+  3. **What the thesis keeps:**
+     - The regression gate (P7-T06, merged and tested) is the activation mechanism the design describes.
+     - v1.1 is reported as not built for lack of human corrections. That is a consequence of the lab-only corpus: limitation (xii) and DEC-116's deprioritized digest.
+     - The card stays in the tree as the design record.
+Supersedes: nothing
