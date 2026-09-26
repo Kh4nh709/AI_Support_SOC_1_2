@@ -2229,3 +2229,36 @@ Decision:
      - The 23/09 P5-T11 notifier question is not decided, because P5-T11 is deprioritized and cut on 30/09. If the Owner raises it, the recommendation is option A.
      - INBOX has 0 open items.
 Supersedes: `prompts/P8.md`'s `pilot_export.py` deliverable and `docs/results/pilot.md` exit-gate item (replaced as in item 2); nothing else in the brief
+
+## DEC-130 · 2026-09-26 · P5-T12 merged: `restore.sh`, keep-14 backups, the crontab line, all on server-major PostgreSQL tools; `make db-restore` found destructive on this host, so P8-T07 fixes it along with two credential leaks in test output; nobody runs `make db-restore` until then
+Scope: **operations** (backup and restore on this host) · **plan** (one card merged, one bug-fix card added)
+Decided by: Director, under the Owner's delegation (DEC-116)
+Drafted by: Director (Opus 5.5)
+Propagated to: `STATE.md` (P5-T12 → done; P8-T07 row; P8-T03 now waits on P8-T07; two Owner actions) · `tasks/P5/P5-T12.review.md` · `tasks/P8/P8-T07.prompt.md`
+Decision:
+  1. **P5-T12 is merged** (Director review APPROVE, `7c83691`).
+     - `scripts/restore.sh` restores into a named database. Before connecting to anything, it refuses:
+       - an unset `DATABASE_URL`;
+       - the database `DATABASE_URL` or `DATABASE_URL_OWNER` names;
+       - a system name;
+       - `--force` on a name not ending in `_test`.
+
+       A non-empty target is refused unless `--force` is given. It prints the drill record: migrations and five table counts.
+     - `backup.sh` keeps the `BACKUP_KEEP` (default 14) newest dumps, writes through `.partial` + `pg_restore --list` + rename, and never counts or prunes `latest.dump`. `RETENTION_DAYS` no longer drives pruning.
+     - `conf/soc-backup.cron` is one user-crontab line at 02:00 (not a compose cron, DEC-018/021). It is **not armed**; that is the Owner's action.
+     - Composed tree: `make lint` 0; `make test` 1 failed (`test_backfill_cli.py:184`, DEC-113) / 1186 passed; `make test-db` 613 passed.
+  2. **Server-major tools are a host fact the scripts now encode.** PATH holds PostgreSQL 18 and the server is 16:
+     - `pg_dump` 18's archive (format 1.16) is unreadable by `pg_restore` 16, the container's fresh-volume restore;
+     - `pg_restore` 18 into 16 fails on `SET transaction_timeout`.
+
+     Both scripts use `/usr/lib/postgresql/<server major>/bin` and warn when it is absent.
+  3. **`make db-restore` is destructive on this host.** It stops app and worker, drops the live database, then runs PATH's `pg_restore` 18, which fails. The live database would be left empty. **Until P8-T07 lands, nobody runs it** (Owner action).
+  4. **P8-T07 (new card, `must`, ≈ 1.5 h)** covers three fixes:
+     - `db-restore` checks the archive with the server-major `pg_restore` before it stops or drops anything;
+     - `test-db`'s mask covers the whole password (the DEC-123 facet);
+     - `conftest.py`'s DSN fixtures get a redacted `repr`. pytest prints a failing test's arguments, and a raw DSN string would print its password: the DEC-122 pattern, measured by P5-T12's Coder.
+
+     P8-T03 (the runbook) is dispatched after P8-T07, so it documents the fixed target.
+  5. **Arming the backup waits for the fast-forward**: the old `backup.sh` would read `--quiet` as a DSN. The first run overwrites the primary checkout's uncommitted 22/09 `latest.dump`. That loses nothing, because the pre-reset data is kept at `/home/user1/soc-backups-keep/pre-reset-2026-09-25.dump` (DEC-113).
+  6. **P8-T02's drill restores a fresh `backup.sh` dump**, as its step 2 already says, never the tracked `latest.dump`. That file carries default-ACL entries for role `user1`, which fail on restore. The fresh-volume path that restores the tracked file goes into P8-T03's runbook as a known caveat.
+Supersedes: nothing

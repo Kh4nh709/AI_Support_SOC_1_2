@@ -1,0 +1,22 @@
+# conf/soc-backup.cron — the nightly database backup: ONE line for the Owner's user crontab.
+#
+# Install once, from the repository root (appends — lines already in the crontab are kept):
+#     (crontab -l 2>/dev/null; cat conf/soc-backup.cron) | crontab -
+# Armed?  `crontab -l` shows the 02:00 line below — exactly one line of it names the script.
+# Fired?  backups/ holds a soc-<UTC stamp>.dump from last night, and ~/soc-backup.log gains one
+#         "backup: ok" line per night. The file is the proof, not the crontab (prompts/P5.md).
+#
+# Why a user crontab: this job depends on nothing but the host's cron daemon (active and enabled
+# on ATTT-M1, measured 26/09), pg_dump and the database port. A schedule that needs a daemon
+# the run-as account may be unable to reach is a schedule that silently never runs, and a
+# backup that silently never runs is worse than none, because it is believed (DEC-018,
+# DEC-021). The sanctioned alternative, a systemd user timer, only fires while user1 is logged
+# in unless lingering is enabled by root (Linger=no here, measured 26/09).
+#
+# 02:00 is BACKUP_HOUR (context pack §6.3) in the host's timezone, Asia/Ho_Chi_Minh on ATTT-M1.
+# The DSN comes from .env (DATABASE_URL_OWNER). The script keeps the 14 newest dumps and
+# refreshes backups/latest.dump. The braces send stdout AND stderr of every step — the cd and
+# the sourcing of .env included — to ~/soc-backup.log. MAILTO="" because this host has no
+# mail transport (no sendmail): cron's mail would vanish, and the failure with it.
+MAILTO=""
+0 2 * * * { cd /project/project/AI_Support_SOC_1_2 && set -a && . ./.env && set +a && /bin/bash /project/project/AI_Support_SOC_1_2/scripts/backup.sh --quiet; } >> "$HOME/soc-backup.log" 2>&1
