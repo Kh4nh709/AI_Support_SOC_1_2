@@ -2415,3 +2415,31 @@ Decision:
      - It becomes a `docs/limitations.md` line at P8-T06.
   4. **The demo's labelling page.** After 28/09 both admin accounts show "Đã xong". The Owner takes a screenshot of `/admin/labels` with a real candidate **before the first label on 28/09** and uses it in segment 4. The demo never presses save.
 Supersedes: nothing
+
+## DEC-137 · 2026-09-26 · The gold-day run sheet (27/09 evening → 28/09); C2-A1's untagged late duplicate is left and recorded; two taggers are active, so the Owner picks one, and the per-window routine is corrected
+Scope: **evaluation validity** (window provenance; the order sign → label → adjudicate → freeze) · **plan** (a run sheet)
+Decided by: Director, under the Owner's delegation (DEC-116). Choosing the tagger is the Owner's.
+Drafted by: Director (Opus 5.5)
+Propagated to: `prompts/gold-day-run-2026-09-28.md` (new) · the tagging session `ai-support-soc-1-2-d1` (hold until the Owner decides)
+Decision:
+  1. **One run sheet for the two days**, `docs/plan/prompts/gold-day-run-2026-09-28.md`.
+     - **Part A (27/09, after the last window).** T tags the last window. D imports `lab_windows.csv` (RW-A1 normalized), lands P7-T01/T04, and builds G2 from the director worktree. O fast-forwards and runs `docker compose up -d app worker`, which applies the `./eval` mount and P7-T01's code together.
+     - **Part B (28/09).**
+       - The signing sitting comes before the first label (DEC-132), then the demo screenshot.
+       - Blind labelling by `khanh-admin` and `nguyen-admin`, separately. Neither opens the truth-bearing files.
+       - D produces κ and the disagreements.
+       - The adjudication decides only which scenarios misfired, into `eval/excluded_scenarios.csv` (DEC-120).
+       - D freezes `gold_v1` and renders the gold report.
+
+     Each step names who acts and has an **expected** line.
+  2. **C2-A1's late duplicate is left untagged and recorded.** The window (05:59:27Z–06:00:33Z) holds three rule-100303 alerts of one cluster. The head and one duplicate are `lab`. The duplicate at 06:00:28.578Z is still `wazuh`: the retag ran at 06:00:49Z, 16 s after the End, before that alert was pulled.
+     - G2 selects heads, so the build and the truth are unaffected.
+     - A corrective run under a new id would record a second window overlapping C2-A1, and `build_gold.py --g2` would exit 3.
+     - One row's `source` therefore disagrees with its window. `docs/limitations.md` (x) carries it at P8-T06.
+  3. **Two taggers are active, and there must be one.** RW-A1, DX-A1 and C2-A1 were tagged by a session other than `ai-support-soc-1-2-d1`, most likely the Owner following `docs/lab-scenarios.md` §2 step 7. The tagging session holds, read-only, until the Owner names the single tagger (DEC-135's rule stands).
+  4. **The per-window routine is corrected to the runbook's own words**, whoever tags:
+     - write the End only after the ≥ 3-minute wait (§2 steps 3–4). The three windows so far are 26 s, 43 s and 66 s long.
+     - tag only once `source_cursor.last_pull_at` has passed the End, about 1–2 minutes later. The tags so far ran 16–24 s after the End, which is how C2-A1's late alert was missed.
+
+     Neither changes a window already recorded; they are recorded as they are.
+Supersedes: nothing
