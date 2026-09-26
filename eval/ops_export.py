@@ -644,7 +644,10 @@ def _intake_section(res: Mapping[str, list[tuple]]) -> list[str]:
         f"- heads (`duplicate_of IS NULL`): {heads}",
         f"- duplicates merged (`duplicate_of IS NOT NULL`): {duplicates}",
         f"- alerts per head: {_rate(alerts, heads)}",
-        f"- max `occurrence_count` over the heads: {_count_or_na(max_occurrence)}",
+        (
+            "- max `occurrence_count` over the heads, the column at the run: "
+            f"{_count_or_na(max_occurrence)}"
+        ),
     ]
 
 
@@ -657,7 +660,10 @@ def _pull_section(res: Mapping[str, list[tuple]]) -> list[str]:
     return [
         "## 3 · The pull loop",
         "",
-        f"### `jobs` of type `pull` by `status`, `scheduled_at` in the window ({Q_PULL.qid})",
+        (
+            "### `jobs` of type `pull` by `status` at the run, `scheduled_at` in the window "
+            f"({Q_PULL.qid})"
+        ),
         "",
         _table(["status", "jobs"], res[Q_PULL.qid]),
         "",
@@ -758,7 +764,7 @@ def _online_section(res: Mapping[str, list[tuple]]) -> list[str]:
         "",
         _table(["role", "prompt_version", "rows"], res[Q_PROMPT.qid]),
         "",
-        f"### `triage_status` of the heads ({Q_TRIAGE_STATUS.qid})",
+        f"### `triage_status` of the heads, at the run ({Q_TRIAGE_STATUS.qid})",
         "",
         _table(["triage_status", "heads"], res[Q_TRIAGE_STATUS.qid]),
     ]

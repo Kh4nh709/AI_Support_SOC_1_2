@@ -603,7 +603,7 @@ def test_figures_match_a_seeded_fixture(db):
         "- heads (`duplicate_of IS NULL`): 3",
         "- duplicates merged (`duplicate_of IS NOT NULL`): 2",
         "- alerts per head: 1.667 (5 / 3)",
-        "- max `occurrence_count` over the heads: 3",
+        "- max `occurrence_count` over the heads, the column at the run: 3",
     ):
         assert line in text, line
     assert (
@@ -687,7 +687,7 @@ def test_synthetic_rows_are_excluded_and_counted_once(db):
     for line in (
         "- alerts: 5",
         "- heads (`duplicate_of IS NULL`): 3",
-        "- max `occurrence_count` over the heads: 3",
+        "- max `occurrence_count` over the heads, the column at the run: 3",
         "- proposer rows: 7",
         "- rows where the gate ran: 4",
         "- `job.exhausted` events: 1",
