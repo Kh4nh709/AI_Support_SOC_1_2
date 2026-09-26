@@ -2317,3 +2317,20 @@ Decision:
      A silent run on unsigned tables is not allowed.
   5. **`eval/report.py`'s `web_attack` reason is corrected** before P7-T08 renders the committed tables (P8-T05 open question 3). "No web server on the host" was DEC-055's 08/09 fact about IA1803. On ATTT-M1 web containers run (`docs/lab-scenarios.md` §7). The reason `web_attack` has no G2 data is that attacking the host's production web containers is outside the lab's bounds, so no scenario feeds the web rules DEC-055 routes there. A one-string fix, committed separately with the suite re-run.
 Supersedes: nothing (DEC-098 item 4's claim about B1 is corrected in fact, not in rule — (xi) states it)
+
+## DEC-133 · 2026-09-26 · P8-T01 merged: the operations export, one read-only snapshot, every figure beside its SQL, the human-pilot metrics stated as not measured; P8-T06 runs it to the close-out instant
+Scope: **plan** (a merge) · **evaluation validity** (an online record that never states an unmeasured metric as zero)
+Decided by: Director, under the Owner's delegation (DEC-116)
+Drafted by: Director (Opus 5.5)
+Propagated to: `STATE.md` (P8-T01 → done) · `tasks/P8/P8-T01.review.md`
+Decision:
+  1. **P8-T01 is merged** (Director review APPROVE, `002da02`).
+     - `eval/ops_export.py` writes the online operating record over `[--since, --until)`: intake, dedup, the pull loop, ① online, auto-close. It runs in one `REPEATABLE READ, READ ONLY` snapshot.
+     - Each figure names its query (Q01–Q28), and section 8 prints every query verbatim.
+     - G3's synthetic rows are excluded everywhere and counted once. No free-text column reaches the file.
+     - Each architecture §6 human-decision metric prints "not measured", with its precondition, its DEC and the counted evidence, never a zero or a rate over n < 1.
+     - 22 tests; four DEC-025 red steps.
+     - Composed tree: `make lint` 0; `make test` 1 failed (`test_backfill_cli.py:184`, DEC-113) / 1202 passed; `make test-db` 625 passed.
+  2. **P8-T06 runs it with `--until` = the close-out instant** (UTC, to the second), the worker left running. The four figures that read current state are labelled "at the run". The command line is the report's identity.
+  3. The §6 proxies the Coder listed are not added. ① vs gold labels would repeat P7's B4 figure, and a wrong-close rate scored against window truth belongs to P7. Neither is a pilot metric.
+Supersedes: nothing
