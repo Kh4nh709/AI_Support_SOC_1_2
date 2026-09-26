@@ -88,7 +88,10 @@ LAB_CATEGORIES: tuple[str, ...] = (
 NEVER_SYNTHESISED: tuple[tuple[str, str], ...] = (
     (
         "web_attack",
-        "no web server on the host, and the `attack` over-mapping was removed (DEC-055)",
+        (
+            "no lab route: the host's web containers are production services outside the lab's "
+            "bounds, so no scenario feeds the web rules DEC-055 routes here (DEC-055, DEC-056, DEC-132)"
+        ),
     ),
     ("policy_violation", "no signal in any Linux stock rule and no lab route (DEC-057)"),
 )
