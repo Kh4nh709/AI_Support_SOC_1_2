@@ -54,7 +54,10 @@ test:
 
 # TEST_DATABASE_URL wins from the environment; otherwise the last assignment in
 # .env is used. A trailing comment is only stripped when whitespace precedes the
-# `#`, so a `#` inside a DSN password survives. Reachability is checked on the
+# `#`, so a `#` inside a DSN password survives. The DSN is only ever shown through
+# `scripts/dsn_env.py --redact`, the routine conftest.py redacts with: the whole
+# password becomes ***, whatever it holds (the sed before it stopped at the first
+# `@` and printed the rest — DEC-123). Reachability is checked on the
 # server's `postgres` maintenance database: the test database itself is dropped
 # and recreated by backend/tests/conftest.py, so it need not exist beforehand.
 test-db:
@@ -64,7 +67,7 @@ test-db:
 	  echo "test-db: PostgreSQL is native on this host — use TEST_DATABASE_URL=postgresql:///soc_test" >&2; \
 	  exit 1; \
 	fi; \
-	shown="$$(printf '%s' "$$dsn" | sed -E 's#://([^:/@]+):[^@]*@#://\1:***@#')"; \
+	shown="$$($(PY) scripts/dsn_env.py --redact "$$dsn")" || shown="(hidden: dsn_env.py --redact failed)"; \
 	if ! psql "$${dsn%/*}/postgres" -tAc 'select 1' >/dev/null 2>&1; then \
 	  echo "test-db: TEST_DATABASE_URL is set but its server is unreachable: $$shown" >&2; \
 	  echo "test-db: the database itself is (re)created by the tests; the server must be up — make db-up" >&2; \
@@ -112,16 +115,54 @@ db-shell:
 	psql "$$dsn"
 
 # Replace the live database with a dump: FILE=backups/soc-<ts>.dump (default latest).
-# Stops app and worker first so no connection holds the database open.
+# The real-recovery tool (a rehearsal is scripts/restore.sh): it stops app and worker
+# so no connection holds the database open, drops and recreates the database that
+# .env's DATABASE_URL_OWNER names, restores the dump into it and restarts them.
+# Nothing is stopped or dropped before the dump has been read (pg_restore --list)
+# with the pg_restore of the SERVER's major version — PG_LIB/<major>/bin, as
+# backup.sh and restore.sh pick it, else PATH's with a warning. On ATTT-M1 PATH has
+# PostgreSQL 18 and the server is 16: pg_dump 18's archive is unreadable by
+# pg_restore 16, and pg_restore 18 into 16 fails on `SET transaction_timeout`, so
+# PATH's binary dropped the live database and restored nothing (P5-T12, DEC-130).
+# A pg_restore newer than the server passes --list and still fails there, so it is
+# refused too. Exit 2 — a server it cannot ask, a pg_restore newer than the server,
+# a dump that binary cannot read — means nothing was stopped or dropped.
+db-restore: PG_LIB ?= /usr/lib/postgresql
 db-restore:
 	@f="$${FILE:-backups/latest.dump}"; [ -s "$$f" ] || { echo "db-restore: no such dump: $$f" >&2; exit 2; }; \
 	dsn="$$(sed -n 's/^[[:space:]]*DATABASE_URL_OWNER[[:space:]]*=[[:space:]]*//p' .env | sed 's/[[:space:]][[:space:]]*#.*$$//' | tail -1)"; \
+	[ -n "$$dsn" ] || { echo "db-restore: .env names no DATABASE_URL_OWNER — nothing was stopped or dropped" >&2; exit 2; }; \
 	db="$${dsn##*/}"; maint="$${dsn%/*}/postgres"; \
-	$(COMPOSE) stop app worker; \
-	psql "$$maint" -v ON_ERROR_STOP=1 -c "drop database if exists \"$$db\"" -c "create database \"$$db\""; \
-	pg_restore --no-owner --role="$$(echo "$$dsn" | sed -E 's#^[a-z]+://([^:/@]+).*#\1#')" --exit-on-error -d "$$dsn" "$$f"; \
-	echo "db-restore: $$f → $$db ($$(psql "$$dsn" -tAc 'select count(*) from schema_migrations') migrations)"; \
-	$(COMPOSE) up -d app worker
+	major="$$(psql "$$maint" -XtAc "select current_setting('server_version_num')::int / 10000" 2>/dev/null)"; \
+	case "$$major" in ''|*[!0-9]*) echo "db-restore: cannot ask the server DATABASE_URL_OWNER names for its version (is db up?) — nothing was stopped or dropped" >&2; exit 2;; esac; \
+	if [ -x "$(PG_LIB)/$$major/bin/pg_restore" ] && [ -x "$(PG_LIB)/$$major/bin/psql" ]; then \
+	  pg_restore="$(PG_LIB)/$$major/bin/pg_restore"; psql="$(PG_LIB)/$$major/bin/psql"; \
+	else \
+	  pg_restore="$$(command -v pg_restore)"; psql="$$(command -v psql)"; \
+	  echo "db-restore: warning — no PostgreSQL $$major client under $(PG_LIB); using $$pg_restore, which may be unable to restore into a $$major server" >&2; \
+	fi; \
+	echo "db-restore: server $$major, $$pg_restore"; \
+	have="$$("$$pg_restore" --version 2>/dev/null | sed -nE 's/^pg_restore \(PostgreSQL\) ([0-9]+).*/\1/p')"; \
+	if [ -n "$$have" ] && [ "$$have" -gt "$$major" ]; then \
+	  echo "db-restore: REFUSED — $$pg_restore is PostgreSQL $$have, the server $$major: a newer pg_restore fails into an older server (SET transaction_timeout, P5-T12); install the $$major client — nothing was stopped or dropped" >&2; exit 2; \
+	fi; \
+	if ! "$$pg_restore" --list "$$f" >/dev/null; then \
+	  echo "db-restore: REFUSED — $$pg_restore cannot read $$f; nothing was stopped or dropped" >&2; exit 2; \
+	fi; \
+	role="$$(echo "$$dsn" | sed -E 's#^[a-z]+://([^:/@]+).*#\1#')"; \
+	stage=stop; $(COMPOSE) stop app worker \
+	  && stage=drop && "$$psql" "$$maint" -X -v ON_ERROR_STOP=1 -c "drop database if exists \"$$db\"" -c "create database \"$$db\"" \
+	  && stage=restore && "$$pg_restore" --no-owner --role="$$role" --exit-on-error -d "$$dsn" "$$f"; \
+	rc=$$?; \
+	if [ $$rc -eq 0 ]; then \
+	  echo "db-restore: $$f → $$db ($$("$$psql" "$$dsn" -XtAc 'select count(*) from schema_migrations') migrations)"; \
+	elif [ "$$stage" = stop ]; then \
+	  echo "db-restore: FAILED stopping app and worker (exit $$rc) — nothing was dropped" >&2; \
+	else \
+	  echo "db-restore: FAILED at $$stage (exit $$rc) — $$db may be missing or partial: read the error above" >&2; \
+	fi; \
+	$(COMPOSE) up -d app worker || { echo "db-restore: FAILED restarting app and worker" >&2; [ $$rc -ne 0 ] || rc=1; }; \
+	exit $$rc
 
 logs:
 	$(COMPOSE) logs -f --tail=100
