@@ -2401,3 +2401,17 @@ Decision:
      Both are the same instant; the first retagged the 3 alerts and the second found none left. A third session ran both; the tagging session did not. When the Director imports the file onto the director branch for the G2 build, it keeps **one row, `RW-A1`, carrying the first run's data** (3 retagged, `tagged_at` 05:47:34Z) and drops the 0-retag duplicate. Two overlapping rows would make `build_gold.py --g2` exit 3. The primary file stays as written until then.
   6. **A known gap, not fixed:** `lab_tag.py` checks overlap and id against the file as read at start, then appends, with no lock. Two concurrent taggers can both pass. With one tagger it cannot happen, so this is recorded rather than built.
 Supersedes: the Director's 26/09 "send me the five lines and I tag" arrangement (chat, not a DEC)
+
+## DEC-136 · 2026-09-26 · P8-T03 (runbook) and P8-T04 (demo) merged; pulling stops silently after its retry limit, so a stale pull cursor is a stop during the lab
+Scope: **operations** (the runbook; pull-loop liveness during the lab) · **plan** (two docs merges)
+Decided by: Director, under the Owner's delegation (DEC-116)
+Drafted by: Director (Opus 5.5)
+Propagated to: `STATE.md` (P8-T03, P8-T04 → done; Owner action on the pull loop and the demo screenshot) · `tasks/P8/P8-T03.review.md` · `tasks/P8/P8-T04.review.md`
+Decision:
+  1. **P8-T03 is merged** (Director review APPROVE, `2a8208a`). `docs/runbook.md` now opens with start/stop, the environment keys (62, names only), backup and restore, what to watch, and common failures. Every command was verified on a private stand-in or marked "(not run by the agent)". `## Pilot` is kept byte-for-byte under a dated "Not run" banner.
+  2. **P8-T04 is merged** (Director review APPROVE, `5d01afd`). `docs/demo.md` is a 10-minute, five-segment script. Its demo terminal is read-only by `PGOPTIONS`. Its four queries were run against real gate output, and it names the Owner's benign block by section only.
+  3. **The pull loop stops silently.** Measured by P8-T03's Coder with the real worker loop: after `JOB_MAX_ATTEMPTS` failed pulls, nothing re-queues the pull until the worker restarts. An indexer outage longer than about 70 s therefore ends ingestion, and no alarm exists.
+     - **During the lab**, `source_cursor.last_pull_at` older than 5 minutes is a stop. The tagging session tells the Owner, who runs `docker compose restart worker`. That is a plain restart with no code change, since `main` does not carry P7-T01. Healthy at 26/09 12:59: last pull 23 s ago, 119 succeeded and 0 failed in 2 h.
+     - It becomes a `docs/limitations.md` line at P8-T06.
+  4. **The demo's labelling page.** After 28/09 both admin accounts show "Đã xong". The Owner takes a screenshot of `/admin/labels` with a real candidate **before the first label on 28/09** and uses it in segment 4. The demo never presses save.
+Supersedes: nothing
