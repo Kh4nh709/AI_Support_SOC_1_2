@@ -10,9 +10,23 @@ see docs/plan/INBOX.md 2026-09-05 · P0 / P1 · BLOCKER. They fail loudly
 (`pytest.skip` naming the unreachable DSN) rather than silently passing.
 `require_test_dsn` and `redact_dsn` are the only parts of this file that do
 not need a live server, and are unit-tested in test_conftest_helpers.py.
+
+No failing test may print a database password (DEC-122, DEC-123, DEC-130). pytest
+prints, for a failure, the arguments of the test and of the last frame, the operands
+of a failed assert, and the captured output. Two layers stop a password there:
+- every DSN this file hands out is a `Dsn`: still a `str` — psycopg.connect, f-strings
+  and subprocess arguments get the real value — but its repr, which is what pytest
+  prints for arguments, locals and assert operands, is `redact_dsn(self)`;
+- `pytest_runtest_makereport` masks the environment's database passwords in every
+  report, for what a repr cannot reach: psycopg's own `connect` frame (it rebinds
+  its argument to a plain `host=… password=…` string before it fails), a `str()` or
+  slice of a DSN, a text diff, a subprocess's arguments, captured output.
+Both are proven by inner pytest runs in test_credential_hygiene.py.
 """
 
+import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import urllib.parse
@@ -28,14 +42,45 @@ DEFAULT_TEST_DATABASE_URL = "postgresql://soc:soc@127.0.0.1:55432/soc_test"
 _NO_AMBIENT_ENV_FILE = Path(__file__).resolve().parent / "_no_such_dir" / ".env"
 
 
+def _load_dsn_env():
+    """scripts/dsn_env.py — the one redaction routine; `make test-db` runs the same file."""
+    spec = importlib.util.spec_from_file_location(
+        "_soc_dsn_env", REPO_ROOT / "scripts" / "dsn_env.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_dsn_env = _load_dsn_env()
+
+
 def _dbname(dsn: str) -> str:
     return urllib.parse.urlparse(dsn).path.lstrip("/")
 
 
-def require_test_dsn(dsn: str) -> str:
-    """Return `dsn` unchanged, or `pytest.fail` if its database name doesn't end in
+def redact_dsn(dsn: str) -> str:
+    """`dsn` with every password in it replaced by '***' (`scripts/dsn_env.py --redact`).
+
+    The whole password, whatever it contains: urllib.parse ends a URI's authority at the
+    first `/`, `?` or `#`, so a password holding one came back unmasked, DSN and all."""
+    return _dsn_env.redact(str(dsn))
+
+
+class Dsn(str):
+    """A DSN whose repr is redacted: pytest prints a failing test's arguments with repr()."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return repr(redact_dsn(self))
+
+
+def require_test_dsn(dsn: str) -> Dsn:
+    """Return `dsn` as a `Dsn`, or `pytest.fail` if its database name doesn't end in
     `_test`. This fixture drops and recreates the database; this rail is what stops
     it from wiping a non-test database such as `soc`."""
+    dsn = Dsn(dsn)  # first: this frame's own argument is printed if the rail fires
     if not _dbname(dsn).endswith("_test"):
         pytest.fail(
             f"refusing {redact_dsn(dsn)}: TEST_DATABASE_URL's database name must end "
@@ -44,18 +89,7 @@ def require_test_dsn(dsn: str) -> str:
     return dsn
 
 
-def redact_dsn(dsn: str) -> str:
-    """`dsn` with its password, if any, replaced by '***'."""
-    parsed = urllib.parse.urlsplit(dsn)
-    if parsed.password is None:
-        return dsn
-    netloc = f"{parsed.username or ''}:***@{parsed.hostname or ''}"
-    if parsed.port:
-        netloc += f":{parsed.port}"
-    return urllib.parse.urlunsplit(parsed._replace(netloc=netloc))
-
-
-def _maintenance_dsn(dsn: str) -> str:
+def _maintenance_dsn(dsn: str) -> Dsn:
     """Same server and credentials as `dsn`, but the `postgres` maintenance database.
 
     Built manually rather than via urllib.parse.urlunsplit: urlunsplit only keeps the
@@ -67,7 +101,7 @@ def _maintenance_dsn(dsn: str) -> str:
     parsed = urllib.parse.urlsplit(dsn)
     suffix = f"?{parsed.query}" if parsed.query else ""
     suffix += f"#{parsed.fragment}" if parsed.fragment else ""
-    return f"{parsed.scheme}://{parsed.netloc}/postgres{suffix}"
+    return Dsn(f"{parsed.scheme}://{parsed.netloc}/postgres{suffix}")
 
 
 @pytest.fixture(autouse=True)
@@ -92,7 +126,7 @@ def _no_ambient_env_file(monkeypatch):
 
 
 @pytest.fixture(scope="session")
-def _test_database():
+def _test_database() -> Dsn:
     dsn = require_test_dsn(os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL))
 
     if shutil.which("psql") is None:
@@ -123,9 +157,13 @@ def _test_database():
         text=True,
         check=False,
     )
-    assert (
-        result.returncode == 0
-    ), f"scripts/migrate.sh failed for {redact_dsn(dsn)}:\n{result.stderr}"
+    # Not `assert result.returncode == 0`: pytest explains that by printing `result` whole,
+    # argument list and DSN included (P5-T12's finding at this line). Plain values only.
+    if result.returncode != 0:
+        pytest.fail(
+            f"scripts/migrate.sh failed for {redact_dsn(dsn)} "
+            f"(exit {result.returncode}):\n{result.stderr}"
+        )
     return dsn
 
 
@@ -144,3 +182,67 @@ def db(_test_database):
     finally:
         conn.rollback()
         conn.close()
+
+
+# --- the report layer (module docstring) ---------------------------------------------------
+
+_DSN_VARIABLES = ("TEST_DATABASE_URL", "DATABASE_URL", "DATABASE_URL_OWNER")
+_SHORTEST_SECRET = 4
+
+
+def _secrets() -> list[str]:
+    """Every form in which a database password from the environment can be printed.
+
+    The password of each DSN variable, and PGPASSWORD (`make test-db` exports it); each
+    as written and percent-decoded; each as libpq's conninfo quoting and Python's repr
+    escape it; and each piece between URI delimiters, which libpq prints on its own when
+    it splits a DSN with a raw `@` or `/` in the password its own way (`could not
+    translate host name "…"`, `invalid integer value "…" for connection option "port"`).
+    Anything shorter than _SHORTEST_SECRET is left alone: masking it everywhere would
+    garble the report, and a password that short protects nothing. Longest first.
+    """
+    found = {os.environ.get("PGPASSWORD", "")}
+    for name in _DSN_VARIABLES:
+        found.update(_dsn_env.passwords(os.environ.get(name, "")))
+    forms = set()
+    for password in found:
+        for form in (password, urllib.parse.unquote(password)):
+            quoted = form.replace("\\", "\\\\").replace("'", "\\'")
+            forms.update((form, quoted, repr(form)[1:-1], repr(quoted)[1:-1]))
+            forms.update(re.split(r"[@:/?#]", form))
+    return sorted((f for f in forms if len(f) >= _SHORTEST_SECRET), key=len, reverse=True)
+
+
+def _mask(text: str, secrets: list[str]) -> str:
+    if "..." in text:  # pytest cut a long repr short: one end of a password may sit at the cut
+        for secret in secrets:
+            for k in range(len(secret) - 1, 1, -1):
+                text = text.replace(secret[:k] + "...", "***...")
+                text = text.replace("..." + secret[-k:], "...***")
+    for secret in secrets:
+        text = text.replace(secret, "***")
+    return text
+
+
+def _mask_report(report, secrets: list[str]) -> None:
+    longrepr = report.longrepr
+    if isinstance(longrepr, tuple):  # a skip: (path, lineno, reason)
+        report.longrepr = (*longrepr[:-1], _mask(str(longrepr[-1]), secrets))
+    elif longrepr is not None:
+        text = str(longrepr)
+        masked = _mask(text, secrets)
+        if masked != text:  # the report becomes plain text only when it held a password
+            report.longrepr = masked
+    report.sections = [(title, _mask(body, secrets)) for title, body in report.sections]
+    if isinstance(getattr(report, "wasxfail", None), str):
+        report.wasxfail = _mask(report.wasxfail, secrets)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item, call):
+    """Mask the environment's database passwords in every test report (second layer)."""
+    report = yield
+    secrets = _secrets()
+    if secrets:
+        _mask_report(report, secrets)
+    return report

@@ -2334,3 +2334,35 @@ Decision:
   2. **P8-T06 runs it with `--until` = the close-out instant** (UTC, to the second), the worker left running. The four figures that read current state are labelled "at the run". The command line is the report's identity.
   3. The §6 proxies the Coder listed are not added. ① vs gold labels would repeat P7's B4 figure, and a wrong-close rate scored against window truth belongs to P7. Neither is a pilot metric.
 Supersedes: nothing
+
+## DEC-134 · 2026-09-26 · P8-T07 merged: `make db-restore` can no longer drop the live database before it knows the dump restores, `test-db` masks the whole password, and a failing test cannot print one; agents count processes, never list them
+Scope: **operations** (the real-recovery target; credential hygiene in test output) · **plan** (a merge; P8-T03 amended and dispatched)
+Decided by: Director, under the Owner's delegation (DEC-116)
+Drafted by: Director (Opus 5.5)
+Propagated to: `STATE.md` (P8-T07 → done) · `tasks/P8/P8-T07.review.md` · `tasks/P8/P8-T03.prompt.md` (DEC-134 banner) · the Director's memory note on the `soc_test` race (count with `pgrep -fc`, never `ps aux`)
+Decision:
+  1. **P8-T07 is merged** (Director review APPROVE, `62ee3a8`). Before `db-restore` stops app/worker or drops anything, it:
+     - takes the server's major version;
+     - uses that version's `pg_restore`/`psql`;
+     - refuses a `pg_restore` newer than the server;
+     - refuses a dump it cannot `--list`.
+
+     Its stages are chained, and the exit code is honest. The other two fixes:
+     - `test-db` shows the DSN through `scripts/dsn_env.py --redact`, which `conftest.redact_dsn` now shares: the whole password, whatever it holds.
+     - The fixtures hand out `Dsn` strings with a redacted `repr`, and a report hook masks the environment's passwords in every test report.
+
+     40 tests; six red steps. Composed tree: `make lint` 0; `make test` 1 failed (`test_backfill_cli.py:184`, DEC-113) / 1238 passed; `make test-db` 630 passed.
+  2. **The Owner action "do not run `make db-restore`" (DEC-130) lifts once `main` carries this merge.**
+  3. **Accepted deviations:**
+     - refusing a newer `pg_restore`, since the literal PATH fallback drops and then fails on this host;
+     - `--redact` masking from `user:` to the last `@`, because `urllib` returned the whole DSN for a raw `/`, `#` or `?` in a password;
+     - the report hook as a second layer.
+  4. **DSNs travel as process arguments** (`psql`, `migrate.sh`, `pg_restore`), so listing another session's processes prints a password.
+     - The Director's memory note told agents to `ps aux | grep …`. It is corrected to **count only**: `pgrep -fc 'migrate.sh|make test-db'`.
+     - Moving the DSNs to `PGPASSWORD` is not built; `docs/limitations.md` (xxxiv) records it at close-out.
+  5. **P8-T03 (the runbook) is amended and dispatched.** It must say:
+     - rehearse with `restore.sh` on a fresh `backup.sh` dump, not the tracked `latest.dump`, whose `user1` ACL entries fail;
+     - `db-restore` is the real recovery, and after a failure past the drop, stop app and worker at once;
+     - the nightly schedule is armed;
+     - count processes, never list them.
+Supersedes: nothing
