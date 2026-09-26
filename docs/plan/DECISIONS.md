@@ -2366,3 +2366,38 @@ Decision:
      - the nightly schedule is armed;
      - count processes, never list them.
 Supersedes: nothing
+
+## DEC-135 · 2026-09-26 · The app container could not see `eval/gold_candidates.csv`, so the blind labelling page would have been empty on 28/09 — `./eval` mounted read-only, with a guard test; one tagger for the lab windows; the RW-A1 double-tag normalized at import
+Scope: **evaluation validity** (the 28/09 labelling must run; the window provenance must be one consistent file) · **operations** (a compose mount)
+Decided by: Director, under the Owner's delegation (DEC-116)
+Drafted by: Director (Opus 5.5)
+Propagated to: `docker-compose.yml` (one mount) · `backend/tests/test_compose_mounts.py` (new) · `STATE.md` (Owner action: apply the mount before labelling) · the tagging session `ai-support-soc-1-2-d1` (rules sent and acknowledged)
+Decision:
+  1. **The defect.** The code computes `REPO_ROOT = Path(__file__).resolve().parents[3]`, which is `/srv` in the containers, and `tier1/labels.py` reads `REPO_ROOT/eval/gold_candidates.csv`. But `backend/Dockerfile` copies only `backend/app` and `kb`, and `docker-compose.yml` mounted only `backend/app`, `conf` and `kb`. So the blind labelling page, served from the `app` container, would have found no candidates on 28/09. Every native test passed, because natively `REPO_ROOT` is the checkout. P6-T02's review could not see it. Found by reading the compose file.
+  2. **The fix.** `- ./eval:/srv/eval:ro` on the shared `backend` anchor, so `app` and `worker` alike. `backend/tests/test_compose_mounts.py` pins three things:
+     - `labels.CANDIDATES_PATH`'s top directory is mounted read-only in `app`;
+     - `KB_ROOT`'s top directory is mounted read-only in `app`;
+     - `worker` shares `app`'s mounts.
+
+     The first test failed on the old file and passes now. `docker compose config` validates. `make lint` 0; `make test` 1 failed (`test_backfill_cli.py:184`, DEC-113) / 1245 passed. The mount exposes nothing new to a viewer: the page already reads this same file natively, and its allowlist view (P6-T02) and input-boundary test (P6-T10) are the blindness barriers.
+  3. **Applying it is the Owner's**, because a container change is Owner-run. Before the first label on 28/09:
+     - fast-forward `main`, then `docker compose up -d app worker` (`restart` does not apply a compose change);
+     - check `docker compose exec app ls /srv/eval/gold_candidates.csv`;
+     - open `/admin/labels` and see candidates.
+
+     This coincides with the 27/09 evening landing of P7-T01/T04, which needs the same worker recreation.
+  4. **One tagger.** The primary checkout's `eval/lab_windows.csv` is the single provenance file.
+     - The session at the Owner's side (`ai-support-soc-1-2-d1`) is the sole tagger. It has acknowledged the rules:
+       - ids exactly as `docs/lab-scenarios.md` §5;
+       - never `--allow-overlap`;
+       - the End written after the ≥ 3-minute wait;
+       - tag only after the pull has passed the End;
+       - no hand edits.
+     - The Director does not tag, which withdraws the earlier "send me the lines" arrangement so the file is not split. Neither the Owner nor any other session runs `lab_tag.py`.
+  5. **The RW-A1 double-tag is normalized at import.** The file holds, verbatim:
+     - `RW-A01,ransomware,attack,attt-m1-lab,2026-09-26T12:43:37+07:00,2026-09-26T12:44:03+07:00,3,2026-09-26T05:47:34.048165+00:00`
+     - `RW-A1,ransomware,attack,attt-m1-lab,2026-09-26T05:43:37Z,2026-09-26T05:44:03Z,0,2026-09-26T05:49:01.461411+00:00`
+
+     Both are the same instant; the first retagged the 3 alerts and the second found none left. A third session ran both; the tagging session did not. When the Director imports the file onto the director branch for the G2 build, it keeps **one row, `RW-A1`, carrying the first run's data** (3 retagged, `tagged_at` 05:47:34Z) and drops the 0-retag duplicate. Two overlapping rows would make `build_gold.py --g2` exit 3. The primary file stays as written until then.
+  6. **A known gap, not fixed:** `lab_tag.py` checks overlap and id against the file as read at start, then appends, with no lock. Two concurrent taggers can both pass. With one tagger it cannot happen, so this is recorded rather than built.
+Supersedes: the Director's 26/09 "send me the five lines and I tag" arrangement (chat, not a DEC)

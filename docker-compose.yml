@@ -66,6 +66,7 @@ services:
       - ./backend/app:/srv/backend/app:ro     # live code: a merge needs `restart`, not `build`
       - ./conf:/srv/conf:ro                    # inventory, identities, iocs, root-ca.pem
       - ./kb:/srv/kb:ro                        # decision tables + playbooks (kb/lookup.py KB_ROOT)
+      - ./eval:/srv/eval:ro                    # gold_candidates.csv for the labelling page (DEC-135)
     extra_hosts:
       # The indexer stays on IA1803 (:19200). On IA1803 itself `host-gateway` reaches it;
       # on any other server set INDEXER_HOST_IP=<IA1803's Tailscale IP> in .env (Compose-only).
