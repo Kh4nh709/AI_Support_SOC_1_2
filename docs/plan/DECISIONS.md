@@ -2477,3 +2477,18 @@ Decision:
      `Owner assist` was right not to shorten BB-D1: shrinking it to the activity would have turned an honest window into a fitted one.
   4. Recorded as a deviation in the gold report and `docs/limitations.md` (x). No CSV edit, no DB write.
 Supersedes: nothing
+
+## DEC-140 · 2026-09-27 · Lab done; the window file imported and normalized (75 rows); the build is blocked by one untagged head in C2-A1 — the Owner completes that tag; recon produced nothing
+Scope: **evaluation validity** (the G2 window provenance; one recorded window's tag completed) · **plan** (Part A of the gold-day run)
+Decided by: Director, under the Owner's delegation (DEC-116). The DB write is the Owner's.
+Drafted by: Director (Opus 5.5)
+Propagated to: `eval/lab_windows.csv` (imported, normalized) · `STATE.md` (import task; Owner action for the C2-A1 retag) · recorded for the gold report and `docs/limitations.md`
+Decision:
+  1. **The lab is done.** `Owner assist` reports every §5 id has a row (78 in the primary CSV); BB-D2 (the last) is tagged. No §5 id went unrun.
+  2. **Imported and normalized to 75 rows** in the director branch, per DEC-135/138: RW-A01 → RW-A1 (the 0-retag duplicate dropped), SSH-A1 and SL-A3-2 dropped. Every kept row is byte-identical to the primary file; all ids unique; all offsets present. Read-only precheck: **no overlapping windows**.
+  3. **The build is blocked by one untagged head in C2-A1.** `_g2_select` raises `UntaggedWindow` (exit 3) if any head (`duplicate_of IS NULL`) inside a window is not `source='lab'` — the DEC-085 safeguard. C2-A1's window (2026-09-26T05:59:27Z–06:00:33Z) holds 1 such head and 1 such duplicate. This is the C2-A1 late-pull straggler: DEC-137 recorded it as a duplicate and left it, but it is a head, so the build cannot proceed until it is `lab`.
+     - **Fix (Owner, one write to `soc_dev`):** complete the tag of the recorded window — set every remaining `wazuh` row in C2-A1's exact recorded bounds to `lab`. This is `lab_tag.py`'s own retag on a window whose bounds are unchanged (the Owner's recorded End), not a window fitted to the data. `lab_tag.py` itself refuses (the id already exists), so a bare `UPDATE` is used and no CSV row is added.
+     - After the Owner confirms, the Director re-runs the precheck and builds G2.
+  4. **The second-tagger failure recurred at scale:** the 64 windows of 27/09 were tagged by an unidentified session, not `Owner assist` (DEC-138 again). They are kept: `Owner assist` verified them read-only — §5-valid ids, the Owner's recorded bounds, no overlaps, no untagged head except C2-A1. The identity of the process that typed a correct call does not corrupt data whose bounds are the Owner's.
+  5. **Recon produced nothing.** All eight RC-A windows retagged 0, and RC-B1/RC-B2 (the twins) 0 — so `recon` has **no G2 cluster at all**. RW-B1/DX-B1/C2-B1/MW-B1 at 0 are by design (their twins are meant to stay silent). Recorded for the gold report and `docs/limitations.md` (category coverage): G2 covers seven of eight lab categories with data; recon is a declared, measured gap.
+Supersedes: DEC-137 item 2 (the C2-A1 straggler is a head and is tagged, not left)
