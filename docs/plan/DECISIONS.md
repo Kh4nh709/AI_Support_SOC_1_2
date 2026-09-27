@@ -2508,3 +2508,15 @@ Decision:
      With `web_attack` and `policy_violation` (no lab route), G2 covers **five of ten** playbook categories with escalate data, plus a benign class. The evaluation chapter states this; recall(escalate) rests on 48 clusters, precision(close) on 8 (wide CIs, reported).
   4. **The candidate set is committed for the 28/09 blind labelling.** `eval/gold_candidates.csv` carries `scenario_id`/`kind`/`truth_label` for `freeze` and κ; blindness is the labelling page's allowlist (`VIEW_KEYS`, the P6-T10 barrier test), not a stripped file, and the labellers are told not to open the truth-bearing files. This is the candidate set unless more windows are added before labelling (option A declines that).
 Supersedes: nothing
+
+## DEC-142 · 2026-09-27 · P7-T01 and P7-T04 landed on the director branch after the lab; the P7 harness code is complete, only the 29/09 run remains
+Scope: **plan** (two held cards landed) · the deployed ① path changes (behaviour-preserving)
+Decided by: Director, under the Owner's delegation (DEC-116)
+Drafted by: Director (Opus 4.8)
+Propagated to: `STATE.md` (P7-T01, P7-T04 → done) · the Owner action (fast-forward + `docker compose up -d`)
+Decision:
+  1. **Landed.** With the lab finished (DEC-140), `task/P7-T04` — which carries `task/P7-T01` via its base `35631b7` — was re-composed onto the current director tip and merged. The only conflict was the P7-T04 `STATE.md` row; P7-T01's row was set `done` beside it. `director/p7-t01-composed` and `director/p7-t01-t04-composed` are superseded as landing pointers; the merge is on the branch now.
+  2. **Whole suite on the merged tree:** `make lint` 0; `make test` 1 failed (`test_backfill_cli.py:184`, the DEC-113 host fact) / 1264 passed; `make test-db` 666 passed. `run_triage_job` is now `evaluate_alert(..., DEPLOYED)` plus the unchanged writes; `test_triage_job.py`'s 20 pins hold.
+  3. **The P7 harness code is complete:** T01 (① core + switches), T02 (cache), T03 (metrics), T04 (run driver), T05 (report), T06 (regression gate) merged; T07 cut (DEC-127); **T08 is the Director's live run on 29/09**, the only P7 item left.
+  4. **Owner action — one `docker compose up -d app worker`** (not `restart`), after fast-forwarding `main`. That single recreate applies three things at once: P7-T01's ① code in the worker, the `./eval` mount (DEC-135), and the presence of `eval/gold_candidates.csv` for the 28/09 labelling page. P7-T01 is behaviour-preserving, so the worker triaging identically before and after is expected; labelling does not run ①.
+Supersedes: `director/p7-t01-composed`, `director/p7-t01-t04-composed` as landing pointers (the commits stay for the record)
