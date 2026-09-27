@@ -2520,3 +2520,20 @@ Decision:
   3. **The P7 harness code is complete:** T01 (① core + switches), T02 (cache), T03 (metrics), T04 (run driver), T05 (report), T06 (regression gate) merged; T07 cut (DEC-127); **T08 is the Director's live run on 29/09**, the only P7 item left.
   4. **Owner action — one `docker compose up -d app worker`** (not `restart`), after fast-forwarding `main`. That single recreate applies three things at once: P7-T01's ① code in the worker, the `./eval` mount (DEC-135), and the presence of `eval/gold_candidates.csv` for the 28/09 labelling page. P7-T01 is behaviour-preserving, so the worker triaging identically before and after is expected; labelling does not run ①.
 Supersedes: `director/p7-t01-composed`, `director/p7-t01-t04-composed` as landing pointers (the commits stay for the record)
+
+## DEC-143 · 2026-09-27 · A stray `git add -A` commit (22698ff) was pushed to the public `main`; it is merged into the director branch with its junk undone, so `main` can fast-forward again; the Owner accepts the re-exposed password hashes
+Scope: **operations** (repository integrity; a public secret exposure) · **plan** (reconciling a diverged `main`)
+Decided by: the Owner (not to rotate passwords); Director (the reconciliation)
+Drafted by: Director (Opus 5.5)
+Propagated to: the director branch (merge of `main`) · `.gitignore` (`.claude/worktrees/`) · `docs/limitations.md` (xxxvi) at close-out
+Decision:
+  1. **What happened.** `main` diverged: commit `22698ff` ("commit", Kh4nh709, 26/09 20:32 +07), a `git add -A` sweep of the primary checkout, **pushed to `origin/main` on the public GitHub remote.** It carried: a fresh `backups/latest.dump` (387 KB, the current accounts' argon2 hashes), three worktree directories committed as gitlinks, the **deletion of `P6-T07`/`P6-T08` cards**, a 26/09 `eval/lab_windows.csv`, a clarifying note in `docs/lab-scenarios.md`, 118 lines of category tests, and several other sessions' prompt docs.
+  2. **The Owner declines to rotate the passwords** whose hashes are now public again (they had been re-seeded 25/09, DEC-112). Recorded as an **accepted risk**; `docs/limitations.md` (xxxvi) states it at close-out. The Director does not force-push or rewrite the public history.
+  3. **Reconciled by merging `main` into the director branch** (not by resetting `main`, which is pushed), keeping the good and undoing the junk:
+     - **kept from `main`:** the category tests (black-formatted — they failed `make lint` as committed), `.claude/settings.json`, `.codegraph/.gitignore`, the prompt docs, the migration-runbook edits, the new `latest.dump` (already public; not resurrecting the old one), and the `lab-scenarios.md` note (it touches a command block and a note only, **not** the Expected-rules tables, so G2 is unaffected);
+     - **kept from the director branch:** `eval/lab_windows.csv` (the normalized 75 rows, DEC-140) and `eval/gold_candidates.csv`/`gold_coverage.md` (the accepted 56, DEC-141);
+     - **restored:** `P6-T07.prompt.md` and `P6-T08.prompt.md` (the audit trail `main` had deleted);
+     - **removed:** the three `.claude/worktrees/*` gitlinks, and **`.claude/worktrees/` is now in `.gitignore`** so a future `git add -A` cannot commit them again.
+  4. Whole suite on the merged tree: `make lint` 0 (after formatting); `make test` 1 failed (`test_backfill_cli.py:184`, DEC-113) / 1270 passed; `make test-db` 666 passed. `main` can now fast-forward to the director branch.
+  5. **Standing rule for the primary checkout:** no `git add -A`, and no commit of `backups/latest.dump` — the nightly backup now refreshes it daily, so one more sweep-and-push re-exposes the current hashes. Commits happen on the director branch; the Owner fast-forwards.
+Supersedes: nothing

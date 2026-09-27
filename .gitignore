@@ -19,6 +19,10 @@ backend/evaluation/results/*.png
 # Editor / OS
 .DS_Store
 
+# Claude Code worktrees — working directories, never tracked (a stray `git add -A`
+# committed these as gitlinks once, 22698ff; keep settings.json, ignore the worktrees).
+.claude/worktrees/
+
 # v3 secrets & local config
 .env
 conf/*.yaml

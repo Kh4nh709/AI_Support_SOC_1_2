@@ -303,15 +303,24 @@ A success immediately after a failure burst — the "attack flavour" the card na
 about where it actually resolves:
 
 ```bash
-for i in $(seq 1 3); do
+for i in $(seq 1 8); do
   ssh -b "$SRC" -o PreferredAuthentications=password -o PubkeyAuthentication=no \
       -o StrictHostKeyChecking=no -o NumberOfPasswordPrompts=1 -o ConnectTimeout=5 \
-      user1@127.0.0.1 true    # wrong password, x3
+      user1@127.0.0.1 true    # wrong password, x8
 done
 ssh -b "$SRC" -o PreferredAuthentications=password -o PubkeyAuthentication=no \
     -o StrictHostKeyChecking=no -o NumberOfPasswordPrompts=3 -o ConnectTimeout=5 \
     user1@127.0.0.1 true      # right password
 ```
+
+**Why 8, not 3 (found by running it, not by reading the rule):** `40112`'s own condition is
+`<if_matched_group>authentication_failures</if_matched_group>` — the *plural* group, which only
+`5712`/`5763` (the brute-force **correlation** rules) carry. A lone failure (`5710`/`5716`/`5760`/
+`5503`) only carries the singular `authentication_failed` and does not satisfy `40112` no matter how
+many of them precede the success. `5763` itself needs `frequency="8"` within `timeframe="120"` to
+fire — so the success has to land within `5763`'s own `timeframe="240"` window *after* a burst that
+already crossed 8, not after 3. Verified live on this host: 3 failures + success produced `5760`/
+`5503`/`5715` but no `5712`/`5763`/`40112`; 8 failures + success produced `5763` then `40112`.
 
 **Expected rule:** `40112` "Multiple authentication failures followed by a success," level 12 —
 **this resolves `ssh_brute_force`, not `suspicious_login`**, because its MITRE block carries both
