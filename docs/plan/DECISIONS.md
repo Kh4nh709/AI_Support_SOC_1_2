@@ -2492,3 +2492,19 @@ Decision:
   4. **The second-tagger failure recurred at scale:** the 64 windows of 27/09 were tagged by an unidentified session, not `Owner assist` (DEC-138 again). They are kept: `Owner assist` verified them read-only — §5-valid ids, the Owner's recorded bounds, no overlaps, no untagged head except C2-A1. The identity of the process that typed a correct call does not corrupt data whose bounds are the Owner's.
   5. **Recon produced nothing.** All eight RC-A windows retagged 0, and RC-B1/RC-B2 (the twins) 0 — so `recon` has **no G2 cluster at all**. RW-B1/DX-B1/C2-B1/MW-B1 at 0 are by design (their twins are meant to stay silent). Recorded for the gold report and `docs/limitations.md` (category coverage): G2 covers seven of eight lab categories with data; recon is a declared, measured gap.
 Supersedes: DEC-137 item 2 (the C2-A1 straggler is a head and is tagged, not left)
+
+## DEC-141 · 2026-09-27 · G2 built and accepted at 56 clusters (option A, the Owner); candidate set committed for the 28/09 labelling; two lab categories empty by measurement
+Scope: **evaluation validity** (the frozen-candidate size and composition) · **plan** (Part A of the gold-day run)
+Decided by: the Owner (accept at 56, option A); Director (the build and its record)
+Drafted by: Director (Opus 4.8)
+Propagated to: `eval/gold_candidates.csv`, `eval/gold_coverage.md` (committed) · `STATE.md` (import task) · recorded for the gold report and `docs/limitations.md`
+Decision:
+  1. **G2 built read-only from the 75 windows: 56 in-scope clusters, 129 heads, 73 `in_window_unexpected` (excluded and counted, DEC-114).** Both floors are missed and that is allowed (a floor is a target, not a gate; `build_gold` writes the set and exits 1): G2 56 < 100, benign 8 < 20.
+  2. **The Owner accepts the set as built (option A).** Composition (in-scope clusters): ssh_brute_force 24, malware 8, data_exfiltration 7, ransomware 6, c2_beacon 6, unknown 3, suspicious_login 2. Window truth: **escalate 48, benign 8**.
+  3. **Two lab categories are empty, by measurement, and recorded as such (never synthesised):**
+     - **recon** — its rule fired on none of the eight RC windows.
+     - **privilege_escalation** — its windows fired, but the heads resolve to the generic authentication rules (ssh_brute_force's), outside PE's declared Expected set, so every one is `in_window_unexpected`. `docs/lab-scenarios.md` §3 predicted exactly this. Neither is a volume problem, so more windows would not fill them.
+
+     With `web_attack` and `policy_violation` (no lab route), G2 covers **five of ten** playbook categories with escalate data, plus a benign class. The evaluation chapter states this; recall(escalate) rests on 48 clusters, precision(close) on 8 (wide CIs, reported).
+  4. **The candidate set is committed for the 28/09 blind labelling.** `eval/gold_candidates.csv` carries `scenario_id`/`kind`/`truth_label` for `freeze` and κ; blindness is the labelling page's allowlist (`VIEW_KEYS`, the P6-T10 barrier test), not a stripped file, and the labellers are told not to open the truth-bearing files. This is the candidate set unless more windows are added before labelling (option A declines that).
+Supersedes: nothing
