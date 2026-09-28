@@ -13,8 +13,8 @@
 # Questions for the sitting: docs/plan/kb-review-sheet-2026-09-19.md §2.
 category: suspicious_login
 playbook: suspicious_login_v1
-reviewed_by: null
-reviewed_at: null
+reviewed_by: "NCK + MNN"
+reviewed_at: "2026-09-28"
 rules:
   # evidence: playbook suspicious_login.md:21 (remote-work user, domestic ISP range — the grid has no geography fact, so :27's opposite clause 'from a place where the unit has no activity' cannot be honoured), :22 (maintenance window), :23 (a service account from its own host — the nearest line blessing LOCAL origin, hence ioc=skipped is admitted here, a deviation from the §3.10 pattern; this playbook has no lookup-missing clause; note the admitted clusters are the human account user1, not a service account). Fold: 48 of 174 — all alert_user=user1 on user1-IA1803 (medium): 5715 ×30 (16 external VN ISP srcip = not_found, 14 LAN 172.25.25.x/192.168.x = skipped), 5501 ×18 (no srcip = skipped); 0 with occurrence >= 50. Without `skipped`: 16 (sheet §2 Q1)
   - id: sul-1

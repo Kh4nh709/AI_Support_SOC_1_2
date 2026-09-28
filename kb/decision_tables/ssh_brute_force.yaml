@@ -11,8 +11,8 @@
 # (docs/plan/prompts/P7.md:17). Questions for the sitting: docs/plan/kb-review-sheet-2026-09-19.md §1.
 category: ssh_brute_force
 playbook: ssh_brute_force_v1
-reviewed_by: null
-reviewed_at: null
+reviewed_by: "NCK + MNN"
+reviewed_at: "2026-09-28"
 rules:
   # evidence: architecture §3.10 example, verbatim; playbook ssh_brute_force.md:20 (one REAL account), :22 (few failures, no success), :36 (lookup missing -> not harmless, so ioc=skipped stays out). Fold: 0 of 968 clusters — every low/medium user1-targeted failure (25 clusters: 5503 ×18, 5760 ×4, 5762 ×3; the other 23 user1 clusters are level ≥ 10) is ioc=skipped (PAM without srcip, or LAN 172.25.25.28/.29) or on IA1803 (high); admitting `skipped` would catch 14 (sheet §1 Q1)
   - id: sbf-1
@@ -34,7 +34,7 @@ rules:
   # evidence: playbook ssh_brute_force.md:8 + :20 — the FP branch needs a REAL account; identity unknown is a name absent from conf/identities.yaml (the dictionary case, admin1/admin/namnguyen — which §4 :27 leans REAL for; the draft stops at needs_review because 514 escalates would be 57 % of the pool) or no name at all (2501/5740/5503 without a user ×130; 5762's 'by' parser artefact ×34; 68 of those are level-4 connection resets, not login attempts). Fold: 543 of 968 land here (514 in the G1 pool) — 5710 ×368 (admin1 ×320, admin ×9, namnguyen ×2 …), 2501 ×66, 5762 ×35, 5740 ×33, 5503 ×31, 5760 ×10; IA1803 264 / user1-IA1803 279; 475 medium + 68 low. Sheet §1 Q2: keep needs_review or treat external + non-existent account as Internet noise
   - id: sbf-5
     if: {severity: [low, medium], ioc_reputation: [not_found, clean, skipped], identity_privileged: ["unknown"]}
-    then: needs_review
+    then: escalate
   # evidence: playbook ssh_brute_force.md:35 (targeted account privileged -> raise the level even without a success). Fold: 350 of 968 land here — 5760 ×322, 5503 ×27, 5762 ×1, all alert_user=root (identity true); IA1803 173 / user1-IA1803 177; 349 medium. root's password login is locked (conf/identities.yaml:16). Draft reads ":35 raise" as needs_review — 350 escalates would be 39 % of the G1 pool. Sheet §1 Q3: flip to escalate? (stays grid-consistent)
   - id: sbf-6
     if: {severity: [low, medium], ioc_reputation: [not_found, clean, skipped], identity_privileged: ["true"]}

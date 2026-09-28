@@ -15,8 +15,8 @@
 # docs/plan/kb-review-sheet-2026-09-19.md §8.
 category: recon
 playbook: recon_v1
-reviewed_by: null
-reviewed_at: null
+reviewed_by: "NCK + MNN"
+reviewed_at: "2026-09-28"
 rules:
   # evidence: This rule is the STRUCTURAL precondition under which an FP verdict is permitted (architecture §4: false_positive only on structural evidence the attacker cannot steer); the cited §3 branches are the text ① reads, not table facts. playbook recon.md:23 (scans from the Internet against the public surface — background noise, continuous on every public address) + :21/:22 (registered scanner, monitoring probes). identity_privileged admits `unknown` as well as "false": scan alerts carry no user field, so `unknown` is the only value they ever have (deviation from the §3.10 pattern, sheet §8 Q1). (no archive clusters — lab category; the lab scans from 127.0.0.1 -> skipped -> never this rule)
   - id: rec-1

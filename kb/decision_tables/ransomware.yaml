@@ -14,8 +14,8 @@
 # docs/plan/kb-review-sheet-2026-09-19.md §4.
 category: ransomware
 playbook: ransomware_v1
-reviewed_by: null
-reviewed_at: null
+reviewed_by: "NCK + MNN"
+reviewed_at: "2026-09-28"
 rules:
   # evidence: playbook ransomware.md:25 (even when leaning false positive, do not close silently — record the reason and fix the rule) + :3 (an hour's delay loses a system); replaces the §3.10 false_positive rule with an explicit needs_review floor for everything below the high band. (no archive clusters — lab category; no low/medium ransomware rule exists on the manager: 100301 is level 12.) Sheet §4 Q1
   - id: ran-1

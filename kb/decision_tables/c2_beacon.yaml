@@ -13,8 +13,8 @@
 # docs/plan/kb-review-sheet-2026-09-19.md §6.
 category: c2_beacon
 playbook: c2_beacon_v1
-reviewed_by: null
-reviewed_at: null
+reviewed_by: "NCK + MNN"
+reviewed_at: "2026-09-28"
 rules:
   # evidence: §3.10 pattern. This rule is the STRUCTURAL precondition under which an FP verdict is permitted (architecture §4: false_positive only on structural evidence the attacker cannot steer); the cited §3 branches are the text ① reads, not table facts. playbook c2_beacon.md:21 (legitimate software checking for updates), :22 (destination in the vendor's range), :23 (regular but sparse, signed system service), :24 (many hosts, internal destination); :37 (lookup missing -> not harmless) keeps ioc=skipped out. (no archive clusters — lab category; 100303 is level 12 so the lab never reaches this rule)
   - id: c2b-1

@@ -415,9 +415,14 @@ def test_largest_playbook_under_3000_tokens():
     assert max(sizes.values()) < 3000, sizes
 
 
-def test_skeletons_are_unreviewed():
-    for category in CATEGORIES:
-        table = lookup.get_decision_table(category)
-        assert table.reviewed_by is None
-        assert table.reviewed_at is None
-        assert table.reviewed is False
+#: DEC-145: all ten tables signed at the 28/09 sitting, in this exact form.
+SIGNED_BY = "NCK + MNN"
+SIGNED_AT = "2026-09-28"
+
+
+@pytest.mark.parametrize("category", CATEGORIES)
+def test_tables_are_reviewed(category):
+    table = lookup.get_decision_table(category)
+    assert table.reviewed_by == SIGNED_BY
+    assert table.reviewed_at == SIGNED_AT
+    assert table.reviewed is True

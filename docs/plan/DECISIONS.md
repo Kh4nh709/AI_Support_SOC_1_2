@@ -2565,3 +2565,56 @@ Decision:
   4. **The unit baseline is now fully green.** `/var/ossec` no longer exists on ATTT-M1, so DEC-113's `test_backfill_cli.py:184` failure no longer reproduces. `make test` on the clean tree: 1271 passed, 1 skipped, 2 xfailed, 0 failed. From today, any `make test` failure is new.
   5. **`freeze` only reads the DB unless given `--adjudicator-id`,** and G never passes that flag. With it, `freeze` inserts `triage_labels(source='disagreement')` rows, which is a DB write and so the Owner's. Every G2 candidate carries a window `truth_label`, so `freeze` needs neither two labels nor a `final_label` for any candidate.
 Supersedes: DEC-137's assignment of Part B's D steps to the Director session (the steps are unchanged; G runs them)
+
+## DEC-145 · 2026-09-28 · B1: all ten decision tables signed by NCK + MNN on 28/09, two amended (`ssh_brute_force` sbf-5 → escalate; `privilege_escalation` pre-1 struck, pre-4 narrowed to level 11); the Owner saw one candidate before the sitting and the Director ruled the signing goes ahead
+Scope: **policy** (the ten `kb/decision_tables/*.yaml` become policy) · **evaluation** (the frozen tables B1 and ① are measured with) · **tests** (the review-state test inverted)
+Decided by: the Owner and the advisor (table content and signatures, typed by the Owner in session G's chat); Director 1 (the ruling in item 1)
+Drafted by: session G (gold-day-0928-5f, Claude Opus 5.5)
+Propagated to: `kb/decision_tables/*.yaml` (ten files) · `backend/tests/test_kb_lookup.py` (`test_skeletons_are_unreviewed` → `test_tables_are_reviewed`) · `docs/limitations.md` gets the sentence in item 6 (Director, at hand-back)
+Decision:
+  1. **The Owner opened `/admin/labels` before the sitting.** At about 19:00 on 28/09, before any table had been presented, the Owner opened `http://79.79.79.14:8000/admin/labels`. The Owner's answers:
+     - (1) the page showed one candidate cluster, and nothing was clicked;
+     - (2) only the Owner saw it, and the advisor did not;
+     - (3) opened at about 19:00.
+
+     Opening the page writes nothing: only submit and undo write (`tier1/labels.py:539`, `:576`). Director 1's ruling, verbatim:
+     > Director 1 quyết (ghi nguyên văn vào DEC-145): B1 tiếp tục ngay, dù O trả lời ba câu thế nào.
+     > - Nếu trang chỉ hiện trang đăng nhập: chưa ai thấy ứng viên nào, nên không có sai lệch.
+     > - Nếu O đã thấy một cụm: vẫn ký. O là người chạy toàn bộ kịch bản lab, nên đã biết về lưu lượng lab nhiều hơn những gì một trang ứng viên cho thấy. Rào chắn thật của DEC-132 là mục 3 (không sửa theo giá trị riêng của lab), và rào đó vẫn giữ nguyên.
+     > - Thêm một điều kiện cho mọi bảng bị sửa: lý do một dòng phải dựa vào bằng chứng trong tờ rà soát (fold 30 ngày, runbook, playbook), không dựa vào những gì đã thấy trên trang ứng viên. Lý do không đạt điều kiện này thì không chép.
+     > - Nếu đã bấm "Lưu nhãn": giữ nguyên nhãn đó, không Hoàn tác. Đó là nhãn thật của O, và O vẫn mù với chân lý.
+     > - Nếu A đã thấy màn hình: xử lý như trên, và ghi lại.
+     > - DEC-145 ghi: câu trả lời của O cho (1), (2), (3), giờ mở trang, và phán quyết này. Không cần DEC riêng.
+     > - Nhắc O không mở lại /admin/labels trước bước 17.
+  2. **Signers and date.** Every table carries `reviewed_by: "NCK + MNN"` and `reviewed_at: "2026-09-28"`.
+     - The Owner first answered "skip người ký". G set out the choices: sign in another written form, give names later, or leave the tables unsigned.
+     - The Owner chose to sign and wrote "1 NCK 2 MNN" (signer 1 NCK, signer 2 MNN). The string is transcribed exactly.
+  3. **Table outcomes** (walked question by question on review sheet §1–§10; each line confirmed by the Owner with "đúng"). Both amendments' reasons rest on sheet evidence, per item 1.
+
+     | table | outcome |
+     |---|---|
+     | `ssh_brute_force` | **amended:** `sbf-5` `then: needs_review` → `then: escalate` (sheet §1 Q2, the "escalate (per :27)" option). Reason: "một nguồn IP thử nhiều tài khoản không tồn tại là dấu hiệu dò quét tài khoản" (playbook ssh_brute_force :27). The Owner was told first that the table cannot count accounts per IP, so the rule escalates every low/medium identity-unknown cluster: 514 in the G1 pool / 543 in the fold, including the 164 with no account name and the 68 level-4 resets. On the 901-cluster pool, escalate goes from 12 to about 526. Q1, Q3 and Q4 stay as drafted |
+     | `suspicious_login` | signed as drafted (Q1 keep `skipped`, Q2 and Q3 needs_review; Q4 was information only) |
+     | `privilege_escalation` | **amended:** (a) `pre-1` struck. Reason: "gây nhiễu mà không dùng tới": 0/108 fold clusters, structurally unreachable (sheet §3 Q1). (b) `pre-4` `rule_level_gte: 8` → `11` (sheet §3 Q2). Reason: "nâng quyền có nhiều mức độ và log nhiễu": 100205 ×18 is gdm-session-worker, playbook :22. After both, on 108 clusters: escalate 11 · false_positive 0 · needs_review 97. Q3 accepted as drafted |
+     | `ransomware` | signed as drafted |
+     | `data_exfiltration` | signed as drafted |
+     | `c2_beacon` | signed as drafted |
+     | `malware` | signed as drafted |
+     | `recon` | signed as drafted, with the sheet §8 Q2 assumption recorded: `rec-4` assumes `5731`/`40601` are in the high band. Their levels are unverified in the repo and were not checked against lab data, to preserve blindness |
+     | `web_attack` | signed as drafted |
+     | `policy_violation` | signed as drafted |
+
+     Only `if`/`then` and the two signature lines changed; evidence comments are untouched, except that `pre-1`'s own comment went with the rule. `check_consistency` returns `[]` and `reviewed` is `True` for all ten.
+
+     To keep the advisor blind, G did not read out the sheet's lab notes: §3 Q3's lab-attack note, and the runbook expectations and benign twins in §4–§10.
+  4. **Proposals** (recorded only; nothing is installed before the last P7-T08 run):
+     - §11 (`5402` sudo → root): **A**, accept. The limitations sentence from §11 A is the Director's to add.
+     - §12 (rootcheck → `malware`): **A**, leave as is.
+     - §13 (dropped categories): **persistence (i)**, add a `persistence` category. The Owner and the advisor write its playbook; the resolver and a table follow. This is by a Director DEC after P7-T08, because it changes the measured pool. The other three stay dropped.
+  5. **Signed tables' tree hash:** `git rev-parse HEAD:kb/decision_tables` = `48329d72fd1f7611c006cb44748317df2d2d4faf`. From this commit until the last P7-T08 run, no table is edited; P7-T08 proves that against this hash.
+  6. **Sentence for `docs/limitations.md`:** *"The ten decision tables were drafted by an agent from a 30-day fold, then reviewed, amended and signed by the Owner and the advisor on 28/09/2026."*
+  7. **Suite on this commit.**
+     - `make lint`: 0.
+     - `make test`: 1280 passed, 1 skipped, 2 xfailed, 0 failed. That is 1271 − 1 inverted test + 10 parametrised cases; no other test moved.
+     - `make test-db`: 666 passed. It ran with no other pytest running (`pgrep -fc '[p]ytest'` → 0), through a temporary `.env` symlink to the primary checkout, removed right after; the DSN was only shown redacted.
+Supersedes: nothing

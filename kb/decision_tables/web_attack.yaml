@@ -13,8 +13,8 @@
 # docs/plan/kb-review-sheet-2026-09-19.md §9.
 category: web_attack
 playbook: web_attack_v1
-reviewed_by: null
-reviewed_at: null
+reviewed_by: "NCK + MNN"
+reviewed_at: "2026-09-28"
 rules:
   # evidence: This rule is the STRUCTURAL precondition under which an FP verdict is permitted (architecture §4: false_positive only on structural evidence the attacker cannot steer); the cited §3 branches are the text ① reads, not table facts. playbook web_attack.md:21 (the whole cluster is 404s on common scan paths), :22 (target application does not exist), :23 (legitimate search-engine bot); :37 (lookup missing -> not harmless) keeps ioc=skipped out. identity_privileged admits `unknown` because access-log alerts name no user (deviation from the §3.10 pattern, as in recon). (no archive clusters after DEC-055; no lab scenario.) Sheet §9 Q1
   - id: web-1
