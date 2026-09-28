@@ -115,6 +115,31 @@ the Measured paragraph of item (ix) in section B.
 - **Affects.** The `ransomware`, `data_exfiltration` and `c2_beacon` rows of `docs/results/per_category.md`.
   The evaluation chapter names these three as resting on author-written detection.
 
+### (xlii) · `privilege_escalation`'s declared attack rule never fires: `user1`'s sudo is passwordless
+
+- **Statement.** `docs/lab-scenarios.md` §3 `privilege_escalation`'s `#### Attack` block declares `5401`
+  ("Failed attempt to run sudo") as the Expected rule for `sudo -S true <<< '<wrong password>'`. On
+  ATTT-M1, `user1`'s sudoers entry is `(ALL) NOPASSWD: ALL` (the same passwordless-sudo fact item (xxx)
+  already names for a different consequence), so `sudo -S` never reaches a password prompt at all — it
+  succeeds regardless of what is piped to it, firing `5402` ("Successful sudo to ROOT executed") instead.
+  `5401` did not fire in any `PE-A*` attack window across this run. The scenario's other line, `su - root
+  -c true <<< '<wrong>'`, is unaffected (`su` always requires the real root password) and correctly fires
+  `5503`. This is a mismatch between the runbook's declared per-window truth and what the host actually
+  produces, not a pipeline or tagging defect — every `PE-A*` window's `by_rule` breakdown shows `5402` +
+  `5503`, never `5401`.
+- **Measured.** `sudo -n -l` on ATTT-M1, 27/09: `(ALL) NOPASSWD: ALL`. Confirmed live across all 7
+  `PE-A1`–`PE-A7` attack windows of this run (`eval/lab_windows.csv`, `since`/`until` 27/09 04:51–07:44Z):
+  `5402` and `5503` present in every window's manager `alerts.log` slice, `5401` in none.
+- **Source.** This run (27/09), not yet a DEC — `sudo -n -l` output and the `PE-A*` rows of
+  `eval/lab_windows.csv` are the primary evidence; cross-reference item (xxx) for the same underlying
+  sudoers fact reached from `identities.yaml`/DEC-112/DEC-113. Flagging for the Director to fold into the
+  decision record if item (xv)'s "pre-declared Expected rules" premise needs a documented exception for
+  this category.
+- **Affects.** `privilege_escalation`'s row of `docs/results/per_category.md`: the category's in-scope
+  truth in this corpus is `5402`, not the runbook's declared `5401`. `category.py` still resolves both to
+  `privilege_escalation` (tier 2, `T1548.003` → `T1548`), so the category-level label is unaffected — only
+  the specific-rule-id claim in the runbook and in item (xv)'s premise is.
+
 ### (xviii) · Category coverage: eight of ten playbook categories; `web_attack` and `policy_violation` absent
 
 - **Statement.** G2 has scenarios for eight of the ten playbook categories; `web_attack` and

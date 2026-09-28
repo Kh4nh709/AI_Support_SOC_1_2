@@ -2686,3 +2686,60 @@ Decision:
      - change the passwords of `khanh-admin` and `nguyen-admin`, because the app is exposed on the LAN (Director 1);
      - `docs/limitations.md` has an uncommitted local modification in the primary checkout that is not G's; left untouched, and reported to Director 1.
 Supersedes: nothing
+
+## DEC-148 · 2026-09-29 · Session G's gold-day hand-back is accepted: the director branch fast-forwards to `d750247`, and everything is re-verified; G's seven open items are disposed of; (xlii) is carried into the branch from the primary checkout
+Scope: **plan** (the hand-back of DEC-144) · **evaluation validity** (re-verification before P7-T08) · **operations** (the primary checkout's local edit)
+Decided by: Director, under the Owner's delegation (DEC-116)
+Drafted by: Director (Opus 5.5)
+Propagated to: the director branch (fast-forward to `d750247`) · `docs/limitations.md` (item (xlii), verbatim) · the Owner (restore before the next fast-forward)
+Decision:
+  1. **Accepted.** `director/lab-rebuild-0925` fast-forwarded to G's tip `d750247`: `2841bb1` DEC-145, then `d750247` DEC-146/147. The Owner had already fast-forwarded `main` to it. G's review points hold:
+     - the test inversion is exact: `test_tables_are_reviewed` is parametrised over the ten tables, with the signed string and the date;
+     - only `if`/`then` and signature lines changed in the tables;
+     - both amendments cite review-sheet evidence: `sbf-5` cites §1 Q2's "escalate (per :27)" option; `pre-1`/`pre-4` cite §3 Q1/Q2.
+  2. **Re-verified on the director branch, 29/09.**
+     - `sha256sum -c eval/gold_v1.sha256` → `OK` (56 rows).
+     - `git rev-parse HEAD:kb/decision_tables` → `48329d72fd1f7611c006cb44748317df2d2d4faf`.
+     - All ten tables read `reviewed_by: "NCK + MNN"`.
+     - `eval/excluded_scenarios.csv` holds the header only.
+     - `make lint` 0; `make test` 1280 passed / 0 failed; `make test-db` 666 passed.
+  3. **G's open items.**
+     1. **The primary checkout's uncommitted `docs/limitations.md` edit.** It is item **(xlii)**: `privilege_escalation`'s declared rule `5401` never fires, because `user1`'s sudo is passwordless, so `5402` fires instead. It was written by an unidentified session on 27/09 at 16:05, and is exactly HEAD plus that one item.
+        - It is carried into the branch **verbatim**, so the text lives in git rather than only in one working tree. Before the next fast-forward the Owner runs `git restore docs/limitations.md`; nothing is lost.
+        - Its claim is consistent with DEC-141 item 3: every PE head is `in_window_unexpected`. The rule ids it names (`5402`, `5503`) are re-checked read-only at P8-T06 before the thesis cites (xlii).
+     2. **Three sentences go into `docs/limitations.md` at P8-T06:** DEC-145 item 6, §11 A, and DEC-146 item 3.
+     3. **`docs/gold-v1-report.md` §6 was added by hand after the render.** `label_export.py report` is not re-run. If it ever must be, §6 is re-appended from DEC-146.
+     4. **Passwords.** The Owner was reminded to change `khanh-admin`'s and `nguyen-admin`'s passwords after the freeze (a six-digit password on a LAN-reachable app).
+     5. **Scratch files.** `/home/user1/gold-day-0928-scratch/{candidates_54.csv,kappa_54.json}` stay outside the repo until submission. The 54-cluster figures are reproducible from DEC-146: the two cluster ids and the `kappa --candidates … --out …` command.
+     6. **Sessions without a role** asked for one or for status and were refused a role: `user1-0a`, "agent communication inquiry", and the fork `[bc7db1]`. Status went only to the one that asked, and it was process-only (no cluster content).
+     7. **Persistence and Windows.** Persistence (DEC-145 item 4) is a Director DEC after P7-T08. Windows is DEC-149.
+  4. **`STATE.md` is not reconciled in this commit.** On 28/09 a safety classifier stopped the Director's read of the 28/09 rows. The Owner decides whether the Director updates them. Until then DEC-144 to DEC-148 are the record of 28/09.
+Supersedes: nothing
+
+## DEC-149 · 2026-09-29 · Windows alerts are added beside the Linux path, on an isolated branch merged only after the last P7-T08 run; a new MITRE-named `brute_force` category; implemented, not measured
+Scope: **plan** (a new, post-evaluation scope item, P9) · **evaluation validity** (nothing reaches the measured system before P7-T08 ends)
+Decided by: the Owner (the scope: verbatim in `docs/plan/tasks/P9/P9-tasks.md` §0); Director (the guardrails and the cards)
+Drafted by: Director (Opus 5.5)
+Propagated to: `docs/plan/tasks/P9/P9-tasks.md` (Owner prerequisites P9-O1; Coder cards P9-T01, P9-T02) · branch `feature/windows-alerts` · `docs/limitations.md` one line at P8-T06
+Decision:
+  1. **The Owner's scope (28/09).**
+     - Linux and Windows run side by side, and the current work is not dropped.
+     - The Windows side only **adds**, and changes nothing that exists.
+     - Windows credential attacks get a **new** category named after MITRE T1110. It is **`brute_force`**, unless the Owner renames it before P9-T02 is dispatched.
+     - Work starts once the gold day is done.
+  2. **What changes, measured against the code (the Director's 28/09 walk-through of one Windows alert).**
+     - The puller, dedup, enrichment code, ① and the gate are unchanged.
+     - The parser ignores `data.win.*` today: a Windows alert gets no IP, no user and an empty `raw_log`. This is P9-T01.
+     - The resolver files Windows T1110 under `ssh_brute_force` today. P9-T02 adds a Windows-only tier, keyed on `decoder ∋ windows_eventchannel`, plus the `brute_force` playbook and table skeleton.
+     - The inventory and identities rows are the Owner's (P9-O1).
+  3. **Guardrails.**
+     - Work happens in its own branch and worktree, cut from the director branch. Nothing is merged, restarted or touched in the primary checkout until the **last P7-T08 run**, and until the Director has reviewed it.
+     - Linux results stay byte-identical. P9-T02 proves it with a read-only re-resolve of every non-Windows alert: 0 differences.
+     - The ten signed tables are untouched.
+     - `brute_force.yaml` stays unsigned, so ① cannot auto-close a `brute_force` alert until it is signed.
+     - Synthetic fixtures are test-only and marked. Real captured alerts are required before merge.
+  4. **Not in the evaluation.** `gold_v1` has no Windows data. The thesis presents Windows as *implemented, not measured*, and `docs/results/` is not re-rendered after the merge. Measuring it needs a Windows lab, a `gold_v2` and a signing.
+  5. **Open.**
+     - `c2_beacon` and `data_exfiltration` have weak Windows signal without a network IDS; Suricata is absent.
+     - Pending the Owner's confirmation: status codes and Logon Types go into playbook text only, and add no `lookup.py` fact.
+Supersedes: nothing
