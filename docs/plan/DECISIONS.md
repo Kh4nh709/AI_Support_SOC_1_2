@@ -2537,3 +2537,31 @@ Decision:
   4. Whole suite on the merged tree: `make lint` 0 (after formatting); `make test` 1 failed (`test_backfill_cli.py:184`, DEC-113) / 1270 passed; `make test-db` 666 passed. `main` can now fast-forward to the director branch.
   5. **Standing rule for the primary checkout:** no `git add -A`, and no commit of `backups/latest.dump` — the nightly backup now refreshes it daily, so one more sweep-and-push re-exposes the current hashes. Commits happen on the director branch; the Owner fast-forwards.
 Supersedes: nothing
+
+## DEC-144 · 2026-09-28 · The 28/09 gold day (run sheet Part B) is handed to a separate session G on its own branch; the Director branch takes no commits until hand-back; DEC-145 onward are G's today
+Scope: **plan** (who runs Part B; branch and DEC-number ownership) · **operations** (the test baseline; what `freeze` writes)
+Decided by: the Owner (a separate session guides the day); Director (the handover terms)
+Drafted by: Director (Opus 5.5)
+Propagated to: `docs/plan/prompts/gold-day-guide-2026-09-28.md` (G's prompt) · branch `director/gold-day-0928` and worktree `.claude/worktrees/gold-day-0928` · `STATE.md` reconciled from G's DECs at hand-back
+Decision:
+  1. **Handover.** The Owner asked for a separate session to guide 28/09. Session G:
+     - runs Part B of `gold-day-run-2026-09-28.md`, B1–B6: the signing sitting, the blind labelling, κ, the adjudication and the freeze;
+     - does the D steps itself;
+     - follows `docs/plan/prompts/gold-day-guide-2026-09-28.md`, which wins where the two differ.
+
+     G works on `director/gold-day-0928`, cut from this commit. The Owner fast-forwards `main` to it after B1 and again after B6.
+
+     `director/lab-rebuild-0925` takes **no commits** until the Director fast-forwards it to G's tip at hand-back.
+
+     G's worktree is not created with `EnterWorktree` by name, because that branches from `origin/main`, which is still `22698ff` (DEC-143).
+  2. **DEC numbers.** DEC-145 onward belong to G for 28/09, numbered in the order events happen (expected: 145 signing, 146 adjudication, 147 freeze). G leaves `STATE.md` alone.
+  3. **Measured for B1 on 28/09.** The Director applied placeholder signatures to all ten tables in an uncommitted copy, ran the suite, then restored the copy. Nothing was committed.
+     - `make test` had exactly one failure: `test_kb_lookup.py::test_skeletons_are_unreviewed`, red by design (review sheet §15 item 1).
+     - `make test-db`: 666 passed.
+
+     So the signing commit carries that test's inverse, and nothing else in the suite depends on the tables' review state.
+
+     Review sheet §15 item 2 is out of date. It says nothing reads `reviewed` yet, but the gate's `rule_check` now reads it (`tier1/triage.py:225`, `table_unreviewed`). A signature therefore changes ① at runtime from the next alert.
+  4. **The unit baseline is now fully green.** `/var/ossec` no longer exists on ATTT-M1, so DEC-113's `test_backfill_cli.py:184` failure no longer reproduces. `make test` on the clean tree: 1271 passed, 1 skipped, 2 xfailed, 0 failed. From today, any `make test` failure is new.
+  5. **`freeze` only reads the DB unless given `--adjudicator-id`,** and G never passes that flag. With it, `freeze` inserts `triage_labels(source='disagreement')` rows, which is a DB write and so the Owner's. Every G2 candidate carries a window `truth_label`, so `freeze` needs neither two labels nor a `final_label` for any candidate.
+Supersedes: DEC-137's assignment of Part B's D steps to the Director session (the steps are unchanged; G runs them)
