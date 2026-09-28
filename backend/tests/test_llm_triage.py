@@ -852,6 +852,19 @@ def test_propose_repair_succeeds_second_try():
     assert proposal.schema_errors == []
 
 
+def test_propose_reads_a_boolean_identity_privileged_first_try():
+    # P7-T09: the rendered vocabulary `true|false|unknown` reads as JSON literals.
+    answer = json.loads(json.dumps(TRIAGE_V2_ESCALATE))
+    answer["structured_basis"]["identity_privileged"] = True
+    fake = RecordingLLM(responses=[answer])
+    proposal = T.propose(fake, _build(), cfg=_cfg())
+    assert proposal.schema_errors == []
+    assert proposal.repaired is False
+    assert proposal.calls == 1
+    assert proposal.parsed["structured_basis"]["identity_privileged"] == "true"
+    assert json.loads(proposal.content)["structured_basis"]["identity_privileged"] is True
+
+
 def test_propose_non_json_content_is_repaired_with_root_error():
     fake = RecordingLLM(responses=["not json at all", "[1, 2]"])
     proposal = T.propose(fake, _build(), cfg=_cfg())

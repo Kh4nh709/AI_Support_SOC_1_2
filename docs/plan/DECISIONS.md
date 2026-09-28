@@ -2743,3 +2743,29 @@ Decision:
      - `c2_beacon` and `data_exfiltration` have weak Windows signal without a network IDS; Suricata is absent.
      - Pending the Owner's confirmation: status codes and Logon Types go into playbook text only, and add no `lookup.py` fact.
 Supersedes: nothing
+
+## DEC-150 · 2026-09-29 · P7-T08 stopped at its first live run on a pre-existing ① defect: the model answers `identity_privileged: true` as a JSON boolean, which fails the schema; hotfix P7-T09 normalises it, is reviewed and merged, and P7-T08 re-runs its live sequence from B2
+Scope: **evaluation validity** (what P7-T08 measures) · **code** (`llm/schemas.py`, `llm/triage.py`) · **production** (the same fix reaches the worker)
+Decided by: Director, under the Owner's delegation (DEC-116); the Owner authorised the Director to run P7-T08 (29/09)
+Drafted by: Director (Opus 5.5)
+Propagated to: `docs/plan/tasks/P7/P7-T09.prompt.md` · `P7-T09.review.md` · `backend/app/llm/schemas.py` (`normalise`) · `backend/app/llm/triage.py` (`_parse`) · the P7-T08 run log · the Owner (fast-forward + `docker compose restart app worker`)
+Decision:
+  1. **The stop.** B2 on G2 (`4c02f4f8`, the first live run) ended with `errors=11` of 56, which is 19.6 %. That is above P7-T08's 5 % line. All eleven are `outcome=schema`: 10 `ssh_brute_force` and 1 `suspicious_login`. As the card requires, the sequence stopped and the error class was recorded before any re-run.
+  2. **The cause predates the run and the signing, and is production-wide.**
+     - Production `llm_runs` holds 121 proposer schema failures, and every one carries the same message: `structured_basis.identity_privileged: expected one of true|false|unknown`.
+     - Before the tables were signed, `ssh_brute_force` failed 72 of its 131 runs, and `suspicious_login` 24 of its 88.
+     - The mechanism: `schemas.render()` shows the vocabulary as `true|false|unknown`. The model answers the JSON literal `true`, and the repair round quotes the same vocabulary back, so it fails again.
+     - This is not a defect of P7-T01…T07. It is ①'s own parsing (P3). Its evidence is production data that existed before `gold_v1` was frozen, so the fix is not fitted to the gold set.
+  3. **The fix (P7-T09).**
+     - `schemas.normalise` turns a JSON boolean into its string, but only at an enum leaf whose vocabulary spells it. Of ten enum leaves, the only one is `identity_privileged`. `_parse` calls it before `validate`.
+     - The accepted values are unchanged. Every other mismatch still reaches `validate` and the repair round.
+     - `render()` and the templates are untouched, so the template hash inside `prompt_version` and the cache keys do not change.
+     - Review: a separate read-only reviewer session found no blocker and no `should`; its six nits were applied or recorded (`P7-T09.review.md`).
+     - Suite: `make lint` 0; `make test` 1289 passed; `make test-db` 666 passed.
+  4. **P7-T08 continues on this commit.**
+     - B0 and B1 (`23b98113`, `a3ba93e0`) are kept. They make no LLM call and are unaffected.
+     - The live sequence restarts at B2 and runs B2 → B4-enabled → G3 on one commit, with no commit between runs, because `prompt_version` carries the git rev.
+     - The pre-fix B2 row `4c02f4f8` stays in `eval_runs` and is named in the run log. The render selects the post-fix runs with `--run-ids`.
+     - The thesis reports the defect and its rate (limitations, at P8-T06), and the post-fix figures as the measurement.
+  5. **Production.** After the Owner fast-forwards `main`, `docker compose restart app worker` loads the fix (a code-only change, per the memory rule). Live `ssh_brute_force` alerts then stop ending as `unavailable` for this reason.
+Supersedes: nothing

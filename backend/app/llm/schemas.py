@@ -36,6 +36,12 @@ module, it is the contract (gate step 3 handles "zero reasons left" separately).
 prompt quotes these messages outside a block, and the value may be attacker
 controlled). An unknown schema ``name`` raises ``KeyError``.
 
+``normalise(name, obj) -> obj`` runs before ``validate`` (``llm/triage.py`` ``_parse``):
+a JSON boolean at an enum leaf whose vocabulary spells it — only
+``structured_basis.identity_privileged: true|false|unknown`` — becomes that string.
+The rendered vocabulary reads as JSON literals, and the model answers ``true``, not
+``"true"`` (P7-T09). Every other mismatch is left for ``validate`` to report.
+
 ``render(name) -> str`` renders the schema for a system prompt: one line per field,
 ``path: vocabulary|kind``, nested objects indented two spaces, arrays as
 ``path[]: ...``. Two calls on the same file produce identical bytes.
@@ -175,6 +181,35 @@ def validate(name: str, obj: Any) -> list[str]:
     """
     schema = _get_schema(name)
     return _validate_node("", schema, obj)
+
+
+# ---------------------------------------------------------------------------
+# normalise()
+# ---------------------------------------------------------------------------
+
+
+def _normalise_node(node: Any, value: Any) -> Any:
+    if isinstance(node, dict) and isinstance(value, dict):
+        return {k: _normalise_node(node[k], v) if k in node else v for k, v in value.items()}
+    if isinstance(node, list) and isinstance(value, list):
+        return [_normalise_node(node[0], item) for item in value]
+    if isinstance(node, str) and isinstance(value, bool):
+        kind, extra = _classify_string_spec(node)
+        spelled = "true" if value else "false"
+        if kind == "enum":
+            values, _nullable = extra
+            if spelled in values:
+                return spelled
+    return value
+
+
+def normalise(name: str, obj: Any) -> Any:
+    """A copy of ``obj`` with the JSON booleans the ``name`` vocabulary spells as strings.
+
+    The set of accepted values is unchanged; every other mismatch is left for ``validate``.
+    ``name`` not in ``output_schemas.json`` → ``KeyError``.
+    """
+    return _normalise_node(_get_schema(name), obj)
 
 
 # ---------------------------------------------------------------------------

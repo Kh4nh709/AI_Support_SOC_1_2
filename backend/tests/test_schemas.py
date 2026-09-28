@@ -167,3 +167,59 @@ def test_check_script_agrees_with_context_pack():
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "output_schemas.json == context pack §6.2" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# normalise() — P7-T09
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("answer,spelled", [(True, "true"), (False, "false")])
+def test_normalise_spells_a_boolean_identity_privileged_as_its_string(answer, spelled):
+    payload = json.loads(json.dumps(TRIAGE_V2_ESCALATE))
+    payload["structured_basis"]["identity_privileged"] = answer
+
+    assert schemas.validate("triage_v2", payload) == [
+        "structured_basis.identity_privileged: expected one of true|false|unknown"
+    ]
+    normalised = schemas.normalise("triage_v2", payload)
+
+    assert normalised["structured_basis"]["identity_privileged"] == spelled
+    assert schemas.validate("triage_v2", normalised) == []
+    assert payload["structured_basis"]["identity_privileged"] is answer  # input not mutated
+
+
+def test_normalise_leaves_every_other_mismatch_for_validate():
+    payload = json.loads(json.dumps(TRIAGE_V2_ESCALATE))
+    payload["suggested_action"] = False  # "false" only prefixes false_positive: exact match
+    payload["structured_basis"]["occurrence_count"] = True  # an integer leaf
+    payload["unexpected_field"] = False  # a key outside the schema
+
+    normalised = schemas.normalise("triage_v2", payload)
+
+    assert normalised == payload
+    problems = schemas.validate("triage_v2", normalised)
+    assert "suggested_action: expected one of false_positive|needs_review|escalate" in problems
+    assert "structured_basis.occurrence_count: expected integer" in problems
+    assert "unexpected_field: unexpected key" in problems
+
+
+@pytest.mark.parametrize(
+    "name,payload",
+    [
+        ("triage_v2", TRIAGE_V2_ESCALATE),
+        ("triage_v2", TRIAGE_V2_FALSE_POSITIVE),
+        ("verifier_v1", VERIFIER_V1_AGREE),
+        ("verifier_v1", VERIFIER_V1_DISAGREE),
+        ("investigate_v2", INVESTIGATE_V2_OK),
+    ],
+    ids=[
+        "TRIAGE_V2_ESCALATE",
+        "TRIAGE_V2_FALSE_POSITIVE",
+        "VERIFIER_V1_AGREE",
+        "VERIFIER_V1_DISAGREE",
+        "INVESTIGATE_V2_OK",
+    ],
+)
+def test_normalise_is_the_identity_on_valid_payloads(name, payload):
+    assert schemas.normalise(name, payload) == payload

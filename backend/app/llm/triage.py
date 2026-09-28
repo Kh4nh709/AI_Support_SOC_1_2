@@ -689,6 +689,7 @@ def _parse(schema_name: str, content: str) -> tuple[dict | None, list[str]]:
         return None, [_ROOT_ERROR]
     if not isinstance(parsed, dict):
         return None, [_ROOT_ERROR]
+    parsed = schemas.normalise(schema_name, parsed)
     return parsed, schemas.validate(schema_name, parsed)
 
 
