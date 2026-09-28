@@ -1,0 +1,9 @@
+{
+  "adjudicated": 0,
+  "adjudicator_id": null,
+  "candidates": 56,
+  "dropped_unlabelled": 0,
+  "frozen": 56,
+  "frozen_at": "2026-09-28T17:00:23.064281+00:00",
+  "sha256": "c5f43d77c92257b15aecae7234c5940c73f48a327945ad1dc9a9f1a30227468f"
+}

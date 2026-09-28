@@ -2618,3 +2618,71 @@ Decision:
      - `make test`: 1280 passed, 1 skipped, 2 xfailed, 0 failed. That is 1271 − 1 inverted test + 10 parametrised cases; no other test moved.
      - `make test-db`: 666 passed. It ran with no other pytest running (`pgrep -fc '[p]ytest'` → 0), through a temporary `.env` symlink to the primary checkout, removed right after; the DSN was only shown redacted.
 Supersedes: nothing
+
+## DEC-146 · 2026-09-28 · B3–B5: both labellers finished (56/56 each), κ 0.862 on 56 and 0.860 on the 54-cluster baseline; two of the Owner's labels consulted an AI and are set aside from the Owner's baseline, kept in the DB (option a); no AI-assisted labelling for gold_v1; adjudication: no scenario ran broken, nothing excluded
+Scope: **evaluation** (the human baseline and κ of gold_v1) · **data** (`eval/kappa_v1.json`, `eval/adjudication_v1.csv`, `eval/excluded_scenarios.csv`)
+Decided by: the Owner and the advisor (labels; adjudication); Director 1 (items 2 and 3)
+Drafted by: session G (gold-day-0928-5f, Claude Opus 5.5)
+Propagated to: `eval/kappa_v1.json` · `eval/adjudication_v1.csv` · `eval/excluded_scenarios.csv` (header only) · `docs/gold-v1-report.md` §6 · `docs/limitations.md` gets one line on item 3 at P8-T06 (Director)
+Decision:
+  1. **Labelling.** All labels were written after the signing commit `2841bb1` (22:26:32 +07). Read-only DB counts:
+     - `khanh-admin` (the Owner): 56/56, 23:02:54–23:25:11;
+     - `nguyen-admin` (the advisor): 56/56, 22:44:44–23:08:01;
+     - no duplicates, and no third labeller.
+
+     Director 1 checked the app access log, 22:30–23:20, read-only:
+     - `nguyen-admin`: 172.25.25.30, 62 GET and 58 POST `/admin/labels`;
+     - `khanh-admin`: 172.25.25.29, 5 GET and 2 POST (the first two labels);
+     - no POST to `/api/admin/labels`.
+
+     Median seconds between consecutive labels: `khanh-admin` 11.1, `nguyen-admin` 11.1. For the advisor, the mean was about 25 s per cluster, with 41 clusters in the last ~8 minutes. These are recorded as a measure, not a finding.
+  2. **No AI-assisted labelling for gold_v1** (Director 1). While labelling, the Owner twice asked G for label suggestions "from your analysis". G refused both times.
+
+     Human labels are the baseline ① is compared against; with AI suggestions, κ and vs_truth would be AI against AI, and could not be reported as human. An "AI-assisted labelling" experiment would be a separate study, outside gold_v1.
+  3. **Two of the Owner's labels consulted an AI.** The Owner first answered "Không, Không" to the two confirmation questions. That was ambiguous, because each question carried a negation, so G asked again. The Owner's words, verbatim: *"1. không. 2. Không. Cả 2 đều tự gán. Riêng khanh có tham khảo 2 cái của ai nhưng đã tự chỉnh lại"*.
+
+     Shown their own labels in time order (cluster_id, time, own label only), the Owner named "Cụm 1-2": clusters `1790492151.731994` (23:02:54) and `1790490206.625514` (23:06:25).
+
+     Director 1's ruling, option (a):
+     - nothing is deleted, and both rows stay in the DB as the record;
+     - the official κ runs as usual on 56;
+     - a sensitivity run uses the same tool on a 54-cluster copy of the candidates, outside the repo and not committed;
+     - **the Owner's baseline (κ and vs_truth) is the 54-cluster run**;
+     - the advisor's vs_truth stays on 56;
+     - the 56-cluster figures are reported beside them for transparency.
+  4. **κ and vs_truth** (`label_export.py kappa`; rows of the vs_truth confusion are the window truth):
+
+     | measure | 56 clusters (as recorded) | 54 clusters (Owner's baseline) |
+     |---|---|---|
+     | κ between labellers | 0.862 (p_o 0.946) | **0.860** (p_o 0.944) |
+     | peer disagreements | 3 (5.4 %) | 3 (5.6 %) |
+     | `khanh-admin` vs truth | acc 0.821 · κ 0.426 | **acc 0.815 · κ 0.422** |
+     | `nguyen-admin` vs truth | **acc 0.786 · κ 0.368** | acc 0.778 · κ 0.364 |
+
+     κ by category (56): `ssh_brute_force` 0.778 · `malware` 0.600 · `c2_beacon` 0.000 (5/6 agree, one label class). `ransomware`, `data_exfiltration`, `suspicious_login` and `unknown` agree 100%; their κ is undefined (p_e = 1).
+  5. **Adjudication (B5).** `label_export.py disagreements` found 22 labeller-vs-window rows across 12 scenarios, and 0 vs-peer rows:
+     - MW-A1…MW-A7: truth escalate; both labellers chose benign, except the advisor chose false_positive on MW-A7;
+     - BB-D1: truth benign; both chose false_positive;
+     - SL-B1 and SL-B2: truth benign; both chose escalate;
+     - C2-A1 and SL-A8: truth escalate; the advisor chose benign.
+
+     The meeting's one question was whether a scenario ran broken. The Owner answered "Không hỏng", so nothing is excluded, and `eval/excluded_scenarios.csv` is the header `scenario_id,reason,decided_in` alone. The 22 rows stay as the human baseline.
+Supersedes: nothing
+
+## DEC-147 · 2026-09-28 · B6: gold_v1 frozen at 56 rows, sha256 c5f43d77…468f; κ 0.862 (0.860 on the Owner's 54-cluster baseline); no exclusions; from here gold_v1.* is never edited
+Scope: **evaluation** (the frozen gold set P7-T08 runs against)
+Decided by: the Owner and the advisor (labels, adjudication); session G ran the D steps
+Drafted by: session G (gold-day-0928-5f, Claude Opus 5.5)
+Propagated to: `eval/gold_v1.csv` · `eval/gold_v1.sha256` · `eval/gold_v1.freeze.json` · `eval/kappa_v1.json` · `eval/adjudication_v1.csv` · `eval/excluded_scenarios.csv` · `docs/gold-v1-report.md`
+Decision:
+  1. **Freeze.** `label_export.py freeze --out-dir eval` ran without `--adjudicator-id`, so it wrote no `triage_labels` rows. Result:
+     - 56 of 56 candidates frozen, 0 dropped, 0 adjudicated (every G2 candidate takes its window truth);
+     - `frozen_at` 2026-09-28T17:00:23Z;
+     - **sha256 `c5f43d77c92257b15aecae7234c5940c73f48a327945ad1dc9a9f1a30227468f`**, and `sha256sum -c eval/gold_v1.sha256` → `eval/gold_v1.csv: OK`.
+  2. **Report.** `label_export.py report` → `docs/gold-v1-report.md`. Session G appended §6 by hand after the render, with the DEC-146 facts: labellers, the two AI-consulted clusters and the 54-cluster figures, speeds, adjudication, and the pre-sitting page view. A re-render would drop §6.
+  3. **κ overall** 0.862 on 56 (target ≥ 0.6 met); 0.860 on the Owner's 54-cluster baseline (DEC-146). **Exclusions:** none.
+  4. From this commit, `gold_v1.*` is never edited; any change is `gold_v2`, by existence. After the Owner fast-forwards `main`, the labelling page disables *Hoàn tác* because the freeze marker exists.
+  5. **Follow-ups for the Owner:**
+     - change the passwords of `khanh-admin` and `nguyen-admin`, because the app is exposed on the LAN (Director 1);
+     - `docs/limitations.md` has an uncommitted local modification in the primary checkout that is not G's; left untouched, and reported to Director 1.
+Supersedes: nothing

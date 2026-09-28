@@ -1,0 +1,623 @@
+{
+  "candidates": 56,
+  "labelled_by_both": 56,
+  "labeler_a": "1a794b27-b7c8-445d-bdc4-9edbc6041ddb",
+  "labeler_b": "4c5f8e18-7b8a-4f74-b940-44dd357dc47f",
+  "overall": {
+    "n": 56,
+    "p_o": 0.9464285714285714,
+    "p_e": 0.612563775510204,
+    "kappa": 0.8617283950617284,
+    "confusion": {
+      "false_positive": {
+        "false_positive": 1,
+        "benign": 0,
+        "escalate": 0
+      },
+      "benign": {
+        "false_positive": 1,
+        "benign": 11,
+        "escalate": 0
+      },
+      "escalate": {
+        "false_positive": 0,
+        "benign": 2,
+        "escalate": 41
+      }
+    },
+    "reason": null
+  },
+  "by_gold_set": {
+    "G2": {
+      "n": 56,
+      "p_o": 0.9464285714285714,
+      "p_e": 0.612563775510204,
+      "kappa": 0.8617283950617284,
+      "confusion": {
+        "false_positive": {
+          "false_positive": 1,
+          "benign": 0,
+          "escalate": 0
+        },
+        "benign": {
+          "false_positive": 1,
+          "benign": 11,
+          "escalate": 0
+        },
+        "escalate": {
+          "false_positive": 0,
+          "benign": 2,
+          "escalate": 41
+        }
+      },
+      "reason": null
+    }
+  },
+  "by_category": {
+    "c2_beacon": {
+      "n": 6,
+      "p_o": 0.8333333333333334,
+      "p_e": 0.8333333333333334,
+      "kappa": 0.0,
+      "confusion": {
+        "false_positive": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 0
+        },
+        "benign": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 0
+        },
+        "escalate": {
+          "false_positive": 0,
+          "benign": 1,
+          "escalate": 5
+        }
+      },
+      "reason": null
+    },
+    "data_exfiltration": {
+      "n": 7,
+      "p_o": 1.0,
+      "p_e": 1.0,
+      "kappa": null,
+      "confusion": {
+        "false_positive": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 0
+        },
+        "benign": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 0
+        },
+        "escalate": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 7
+        }
+      },
+      "reason": "p_e = 1"
+    },
+    "malware": {
+      "n": 8,
+      "p_o": 0.875,
+      "p_e": 0.6875,
+      "kappa": 0.6,
+      "confusion": {
+        "false_positive": {
+          "false_positive": 1,
+          "benign": 0,
+          "escalate": 0
+        },
+        "benign": {
+          "false_positive": 1,
+          "benign": 6,
+          "escalate": 0
+        },
+        "escalate": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 0
+        }
+      },
+      "reason": null
+    },
+    "ransomware": {
+      "n": 6,
+      "p_o": 1.0,
+      "p_e": 1.0,
+      "kappa": null,
+      "confusion": {
+        "false_positive": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 0
+        },
+        "benign": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 0
+        },
+        "escalate": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 6
+        }
+      },
+      "reason": "p_e = 1"
+    },
+    "ssh_brute_force": {
+      "n": 24,
+      "p_o": 0.9583333333333334,
+      "p_e": 0.8124999999999999,
+      "kappa": 0.7777777777777781,
+      "confusion": {
+        "false_positive": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 0
+        },
+        "benign": {
+          "false_positive": 0,
+          "benign": 2,
+          "escalate": 0
+        },
+        "escalate": {
+          "false_positive": 0,
+          "benign": 1,
+          "escalate": 21
+        }
+      },
+      "reason": null
+    },
+    "suspicious_login": {
+      "n": 2,
+      "p_o": 1.0,
+      "p_e": 1.0,
+      "kappa": null,
+      "confusion": {
+        "false_positive": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 0
+        },
+        "benign": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 0
+        },
+        "escalate": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 2
+        }
+      },
+      "reason": "p_e = 1"
+    },
+    "unknown": {
+      "n": 3,
+      "p_o": 1.0,
+      "p_e": 1.0,
+      "kappa": null,
+      "confusion": {
+        "false_positive": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 0
+        },
+        "benign": {
+          "false_positive": 0,
+          "benign": 3,
+          "escalate": 0
+        },
+        "escalate": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 0
+        }
+      },
+      "reason": "p_e = 1"
+    }
+  },
+  "vs_truth": {
+    "a": {
+      "labeler_id": "1a794b27-b7c8-445d-bdc4-9edbc6041ddb",
+      "n": 56,
+      "p_o": 0.8214285714285714,
+      "p_e": 0.6887755102040817,
+      "kappa": 0.4262295081967211,
+      "confusion": {
+        "false_positive": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 0
+        },
+        "benign": {
+          "false_positive": 1,
+          "benign": 5,
+          "escalate": 2
+        },
+        "escalate": {
+          "false_positive": 0,
+          "benign": 7,
+          "escalate": 41
+        }
+      },
+      "reason": null,
+      "accuracy": 0.8214285714285714,
+      "by_category": {
+        "c2_beacon": {
+          "n": 6,
+          "p_o": 1.0,
+          "p_e": 1.0,
+          "kappa": null,
+          "confusion": {
+            "false_positive": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "benign": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "escalate": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 6
+            }
+          },
+          "reason": "p_e = 1"
+        },
+        "data_exfiltration": {
+          "n": 7,
+          "p_o": 1.0,
+          "p_e": 1.0,
+          "kappa": null,
+          "confusion": {
+            "false_positive": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "benign": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "escalate": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 7
+            }
+          },
+          "reason": "p_e = 1"
+        },
+        "malware": {
+          "n": 8,
+          "p_o": 0.0,
+          "p_e": 0.109375,
+          "kappa": -0.12280701754385964,
+          "confusion": {
+            "false_positive": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "benign": {
+              "false_positive": 1,
+              "benign": 0,
+              "escalate": 0
+            },
+            "escalate": {
+              "false_positive": 0,
+              "benign": 7,
+              "escalate": 0
+            }
+          },
+          "reason": null
+        },
+        "ransomware": {
+          "n": 6,
+          "p_o": 1.0,
+          "p_e": 1.0,
+          "kappa": null,
+          "confusion": {
+            "false_positive": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "benign": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "escalate": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 6
+            }
+          },
+          "reason": "p_e = 1"
+        },
+        "ssh_brute_force": {
+          "n": 24,
+          "p_o": 1.0,
+          "p_e": 0.8472222222222221,
+          "kappa": 1.0,
+          "confusion": {
+            "false_positive": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "benign": {
+              "false_positive": 0,
+              "benign": 2,
+              "escalate": 0
+            },
+            "escalate": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 22
+            }
+          },
+          "reason": null
+        },
+        "suspicious_login": {
+          "n": 2,
+          "p_o": 0.0,
+          "p_e": 0.0,
+          "kappa": 0.0,
+          "confusion": {
+            "false_positive": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "benign": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 2
+            },
+            "escalate": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            }
+          },
+          "reason": null
+        },
+        "unknown": {
+          "n": 3,
+          "p_o": 1.0,
+          "p_e": 1.0,
+          "kappa": null,
+          "confusion": {
+            "false_positive": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "benign": {
+              "false_positive": 0,
+              "benign": 3,
+              "escalate": 0
+            },
+            "escalate": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            }
+          },
+          "reason": "p_e = 1"
+        }
+      }
+    },
+    "b": {
+      "labeler_id": "4c5f8e18-7b8a-4f74-b940-44dd357dc47f",
+      "n": 56,
+      "p_o": 0.7857142857142857,
+      "p_e": 0.6607142857142857,
+      "kappa": 0.3684210526315789,
+      "confusion": {
+        "false_positive": {
+          "false_positive": 0,
+          "benign": 0,
+          "escalate": 0
+        },
+        "benign": {
+          "false_positive": 1,
+          "benign": 5,
+          "escalate": 2
+        },
+        "escalate": {
+          "false_positive": 1,
+          "benign": 8,
+          "escalate": 39
+        }
+      },
+      "reason": null,
+      "accuracy": 0.7857142857142857,
+      "by_category": {
+        "c2_beacon": {
+          "n": 6,
+          "p_o": 0.8333333333333334,
+          "p_e": 0.8333333333333334,
+          "kappa": 0.0,
+          "confusion": {
+            "false_positive": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "benign": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "escalate": {
+              "false_positive": 0,
+              "benign": 1,
+              "escalate": 5
+            }
+          },
+          "reason": null
+        },
+        "data_exfiltration": {
+          "n": 7,
+          "p_o": 1.0,
+          "p_e": 1.0,
+          "kappa": null,
+          "confusion": {
+            "false_positive": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "benign": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "escalate": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 7
+            }
+          },
+          "reason": "p_e = 1"
+        },
+        "malware": {
+          "n": 8,
+          "p_o": 0.0,
+          "p_e": 0.09375,
+          "kappa": -0.10344827586206896,
+          "confusion": {
+            "false_positive": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "benign": {
+              "false_positive": 1,
+              "benign": 0,
+              "escalate": 0
+            },
+            "escalate": {
+              "false_positive": 1,
+              "benign": 6,
+              "escalate": 0
+            }
+          },
+          "reason": null
+        },
+        "ransomware": {
+          "n": 6,
+          "p_o": 1.0,
+          "p_e": 1.0,
+          "kappa": null,
+          "confusion": {
+            "false_positive": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "benign": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "escalate": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 6
+            }
+          },
+          "reason": "p_e = 1"
+        },
+        "ssh_brute_force": {
+          "n": 24,
+          "p_o": 0.9583333333333334,
+          "p_e": 0.8124999999999999,
+          "kappa": 0.7777777777777781,
+          "confusion": {
+            "false_positive": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "benign": {
+              "false_positive": 0,
+              "benign": 2,
+              "escalate": 0
+            },
+            "escalate": {
+              "false_positive": 0,
+              "benign": 1,
+              "escalate": 21
+            }
+          },
+          "reason": null
+        },
+        "suspicious_login": {
+          "n": 2,
+          "p_o": 0.0,
+          "p_e": 0.0,
+          "kappa": 0.0,
+          "confusion": {
+            "false_positive": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "benign": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 2
+            },
+            "escalate": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            }
+          },
+          "reason": null
+        },
+        "unknown": {
+          "n": 3,
+          "p_o": 1.0,
+          "p_e": 1.0,
+          "kappa": null,
+          "confusion": {
+            "false_positive": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            },
+            "benign": {
+              "false_positive": 0,
+              "benign": 3,
+              "escalate": 0
+            },
+            "escalate": {
+              "false_positive": 0,
+              "benign": 0,
+              "escalate": 0
+            }
+          },
+          "reason": "p_e = 1"
+        }
+      }
+    }
+  },
+  "disagreements": 3,
+  "disagreement_rate": 0.05357142857142857,
+  "computed_at": "2026-09-28T16:53:21.005938+00:00"
+}
