@@ -23,7 +23,7 @@
     <td>{{ row.occurrence_count }}</td>
     <td>{{ row.first_seen_at | local_time(tz) }}</td>
     <td>
-      {% if "suggested_action" in row %}{{ row.suggested_action }} ({{ row.confidence }}){% if row.gate_forced %} ⚑{% endif %}{% else %}—{% endif %}
+      {% if "suggested_action" in row %}{% if row.suggested_action %}{{ row.suggested_action }} ({{ row.confidence }}){% if row.gate_forced %} ⚑{% endif %}{% else %}chưa có{% endif %}{% else %}—{% endif %}
     </td>
   </tr>
   {% endfor %}

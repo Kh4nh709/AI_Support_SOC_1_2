@@ -1,12 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Alert {{ view.alert_id }} — AI Support SOC{% endblock %}
 {% block content %}
-{% set STATUS_LABELS = {
-  "received": "Đã nhận", "duplicate": "Bản sao", "enriching": "Đang làm giàu dữ liệu",
-  "queued_tier1": "Chờ xử lý", "tier1_active": "Đang xử lý", "auto_closed": "Tự động đóng",
-  "escalated_tier2": "Đã chuyển tier 2", "closed_fp": "Đã đóng — dương tính giả",
-  "closed_benign": "Đã đóng — lành tính", "closed_confirmed": "Đã đóng — xác nhận sự cố"
-} %}
 
 <section data-section="header">
   <h1>{{ view.category }} <span class="{{ view.risk_band | band_class }}">{{ view.risk_band or "—" }}</span> ({{ view.severity }})</h1>
@@ -14,7 +8,7 @@
     <tr><th>Rule</th><td>{{ view.rule_id }} (level {{ view.rule_level }})</td></tr>
     <tr><th>Agent</th><td>{{ view.agent_name }}</td></tr>
     <tr><th>Thời điểm</th><td>{{ view.alert_time | local_time(tz) }}</td></tr>
-    <tr><th>Trạng thái</th><td>{{ STATUS_LABELS.get(view.status, view.status) }}</td></tr>
+    <tr><th>Trạng thái</th><td>{{ status_labels.get(view.status, view.status) }}</td></tr>
     <tr><th>Số lần xuất hiện</th><td>{{ view.occurrence_count }}</td></tr>
     <tr><th>Thấy lần đầu → gần nhất</th>
         <td>{{ view.first_seen_at | local_time(tz) }} → {{ view.last_seen_at | local_time(tz) }}</td></tr>
@@ -24,7 +18,7 @@
   </table>
 </section>
 
-<section data-section="raw_log">
+<section>
   <h2>raw_log</h2>
   <pre data-section="raw_log">{{ view.raw_log }}</pre>
   {% if view.raw_log_truncated %}
@@ -75,7 +69,8 @@
   <h2>Ngữ cảnh làm giàu dữ liệu</h2>
   <table>
     <tr><th>Asset criticality</th><td>{{ (view.asset_context or {}).criticality }}</td></tr>
-    <tr><th>Danh tính đặc quyền</th><td>{{ (view.identity_context or {}).privileged }}</td></tr>
+    <tr><th>Danh tính đặc quyền</th>
+        <td>{% set priv = (view.identity_context or {}).privileged %}{{ "không rõ" if priv is none else priv }}</td></tr>
     <tr><th>IoC reputation</th><td>{{ (view.ioc_context or {}).reputation }}</td></tr>
     <tr><th>Trạng thái tra cứu</th>
         <td>
@@ -107,6 +102,16 @@
 </section>
 
 <section data-section="decision">
+  {# Review round 1, blocker B1: an empty placeholder *outside* `#decision` —
+     `_decision_form.html`'s own outerHTML swap replaces everything inside
+     `#decision`, so a landing zone inside it would be wiped by the very swap it is
+     meant to survive. `_flash.html`'s OOB fragment (`id="flash"`, `hx-swap-oob`)
+     only relocates into an element htmx can already find in the DOM; `flash` is
+     always `None` on this GET (base.html's own `_flash.html` include therefore
+     renders nothing), so without this placeholder there is no `#flash` anywhere on
+     first load and htmx drops the fragment silently — proven in the Reviewer's
+     jsdom harness. #}
+  <div id="flash"></div>
   {% include "_decision_form.html" %}
 </section>
 {% endblock %}

@@ -428,7 +428,10 @@ def test_decide_partial_redirects_and_closes_cluster(db, client) -> None:
         data={"decision": "benign", "reason": "matches the KB", "seen_occurrence_count": "1"},
     )
     assert resp.status_code == 200, resp.text
-    assert resp.headers["HX-Redirect"] == "/queue"
+    # Review round 1, S2: the confirmation now travels as a query string on the
+    # redirect target (HX-Redirect's body is dead code — htmx navigates before it
+    # ever processes a swap), so the exact target carries `?flash=closed&n=...`.
+    assert resp.headers["HX-Redirect"].startswith("/queue")
     status = db.execute("SELECT status FROM alerts WHERE alert_id = %s", (alert_id,)).fetchone()[0]
     assert status == "closed_benign"
 
@@ -453,12 +456,19 @@ def test_decide_stale_seen_count_is_409_flash_with_n_and_m_and_refreshed_field(
 
     resp = client.http.post(
         f"/alerts/{alert_id}/decide",
-        data={"decision": "benign", "reason": "x", "seen_occurrence_count": "1"},
+        data={
+            "decision": "benign",
+            "reason": "the typed reason survives",
+            "seen_occurrence_count": "1",
+        },
     )
     assert resp.status_code == 409, resp.text
     assert "lên 22" in resp.text
     assert "chênh 21" in resp.text
     assert 'name="seen_occurrence_count" value="22"' in resp.text
+    # Review round 1, N9: the analyst's own unsaved text survives the re-render —
+    # escaped by Jinja's autoescape like every other value here, never reset to empty.
+    assert "the typed reason survives" in resp.text
 
 
 def test_decide_409_rolls_back_before_the_wrappers_commit(db, real_shape_client) -> None:
@@ -538,7 +548,9 @@ def test_escalate_partial_redirects_with_case(db, client) -> None:
     alert_id = _active(db)
 
     resp = client.http.post(f"/alerts/{alert_id}/escalate", data={"title": "brute force"})
-    assert resp.headers["HX-Redirect"] == "/queue"
+    # Review round 1, S2: same as decide — the confirmation travels on the redirect
+    # target's query string now, not a dead-code response body.
+    assert resp.headers["HX-Redirect"].startswith("/queue")
     case_id = db.execute("SELECT case_id FROM alerts WHERE alert_id = %s", (alert_id,)).fetchone()[
         0
     ]
@@ -578,6 +590,10 @@ def test_page_without_session_redirects_to_login(db) -> None:
 def test_unknown_alert_is_404(client) -> None:
     resp = client.http.get("/alerts/does-not-exist")
     assert resp.status_code == 404, resp.text
+    # Review round 1, nit N7: an HTML page (through `templating.render`, same as
+    # every other page), never a bare `HTTPException`'s JSON body.
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "Không tìm thấy alert" in resp.text
 
 
 def test_before_swap_listener_present(db, client) -> None:
@@ -587,3 +603,193 @@ def test_before_swap_listener_present(db, client) -> None:
     assert resp.status_code == 200, resp.text
     assert "shouldSwap" in resp.text
     assert "409" in resp.text and "422" in resp.text and "503" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Review round 1 — blocker B1, shoulds S2-S5, nits N6-N9
+# ---------------------------------------------------------------------------
+
+
+def test_flash_placeholder_precedes_decision(db, client) -> None:
+    """Blocker B1: an empty `<div id="flash"></div>` outside `#decision` is the only
+    landing zone `_flash.html`'s OOB fragment has on first load (`flash` is always
+    `None` on a GET, so `_flash.html`'s own conditional div never renders). Exactly
+    one `id="flash"` on the page, and it comes before `id="decision"`."""
+    alert_id = _queued(db)
+
+    resp = client.http.get(f"/alerts/{alert_id}")
+    assert resp.status_code == 200, resp.text
+    assert resp.text.count('id="flash"') == 1
+    assert resp.text.index('id="flash"') < resp.text.index('id="decision"')
+
+
+def test_queue_flash_closed_shows_message(db, client) -> None:
+    """Should S2: the decide-success confirmation now arrives as
+    `?flash=closed&n=<closed_count>` on the redirect target, not a dead HX-Redirect
+    body — `/queue` builds the fixed message from it."""
+    resp = client.http.get("/queue", params={"flash": "closed", "n": "3"})
+    assert resp.status_code == 200, resp.text
+    assert "Đã đóng cụm (3 alert)" in resp.text
+
+
+def test_queue_flash_unknown_kind_shows_nothing(db, client) -> None:
+    """Should S2: an unrecognised `flash` kind is dropped whole, never echoed —
+    `?flash=<script>` never reaches the page at all, not even escaped."""
+    resp = client.http.get("/queue", params={"flash": "<script>alert(1)</script>"})
+    assert resp.status_code == 200, resp.text
+    assert "<script>alert(1)</script>" not in resp.text
+    assert "&lt;script&gt;" not in resp.text
+
+
+def test_queue_flash_bad_n_shows_nothing(db, client) -> None:
+    """Should S2: `n=abc` (not digits-only) suppresses the whole flash rather than
+    interpolating something broken or unbounded."""
+    resp = client.http.get("/queue", params={"flash": "closed", "n": "abc"})
+    assert resp.status_code == 200, resp.text
+    assert "Đã đóng cụm" not in resp.text
+
+
+def test_queue_flash_escalated_with_cut_shows_case_and_truncation(db, client) -> None:
+    """Should S2: the escalate-success confirmation, `case` an 8-hex id, `cut=1`
+    appending the truncation note (`cfg.MAX_ALERTS_PER_CASE`, default 200)."""
+    resp = client.http.get("/queue", params={"flash": "escalated", "case": "abc12345", "cut": "1"})
+    assert resp.status_code == 200, resp.text
+    assert "Đã mở case abc12345" in resp.text
+    assert "cắt ở 200 cụm" in resp.text
+
+
+def test_queue_flash_bad_case_shows_nothing(db, client) -> None:
+    """Should S2: `case` must be exactly 8 hex characters — anything else (here,
+    a short, non-hex string) suppresses the flash."""
+    resp = client.http.get("/queue", params={"flash": "escalated", "case": "not-hex!"})
+    assert resp.status_code == 200, resp.text
+    assert "Đã mở case" not in resp.text
+
+
+def test_decision_controls_hidden_for_non_tier1(db, client) -> None:
+    """Should S3: only `tier1` sees the decide/escalate controls — a tier2 or admin
+    viewer sees a plain sentence instead, so a click never silently does nothing
+    (the frozen `require_role("tier1")` 403 is JSON and htmx drops it unseen)."""
+    alert_id = _active(db)
+    client.as_role("tier2", TIER2_ID)
+
+    resp = client.http.get(f"/alerts/{alert_id}")
+    assert resp.status_code == 200, resp.text
+    assert "Chỉ Tier 1 thao tác được" in resp.text
+    assert f'hx-post="/alerts/{alert_id}/decide"' not in resp.text
+    assert f'hx-post="/alerts/{alert_id}/escalate"' not in resp.text
+
+
+def test_decision_controls_shown_for_tier1(db, client) -> None:
+    """The mirror of the above: a tier1 viewer still sees the real controls."""
+    alert_id = _active(db)
+
+    resp = client.http.get(f"/alerts/{alert_id}")
+    assert resp.status_code == 200, resp.text
+    assert "Chỉ Tier 1 thao tác được" not in resp.text
+    assert f'hx-post="/alerts/{alert_id}/decide"' in resp.text
+
+
+def test_case_link_gated_by_role(db, client) -> None:
+    """Should S3: `/cases/{id}` is tier2/admin's page — a tier1 viewer sees the
+    short case id as plain text, never a link to a page they cannot open."""
+    alert_id = _active(db)
+    result = decide_module.escalate(
+        db, alert_id, decide_module.Actor(TIER1_ID, "tier1"), title="brute force"
+    )
+    case_id = result["case_id"]
+
+    resp_tier1 = client.http.get(f"/alerts/{alert_id}")
+    assert resp_tier1.status_code == 200, resp_tier1.text
+    assert f'href="/cases/{case_id}"' not in resp_tier1.text
+    assert case_id[:8] in resp_tier1.text
+
+    client.as_role("tier2", TIER2_ID)
+    resp_tier2 = client.http.get(f"/alerts/{alert_id}")
+    assert resp_tier2.status_code == 200, resp_tier2.text
+    assert f'href="/cases/{case_id}"' in resp_tier2.text
+
+
+def test_queue_visible_row_with_no_verdict_shows_chua_co(db, client) -> None:
+    """Should S4: a visible head whose latest proposer run has no verdict yet
+    (`result->>'suggested_action'` is NULL, the row's key is present but `None`)
+    must render "chưa có", never the literal string "None (None)"."""
+    alert_id = _queued(db, suggestion_visible=True)
+    # No `_insert_run`: `suggested_action` is a present-but-NULL SQL column, not an
+    # absent dict key (that only happens via `visibility.strip`'s removal).
+
+    resp = client.http.get("/queue")
+    assert resp.status_code == 200, resp.text
+    assert "None (None)" not in resp.text
+    row_start = resp.text.index(f'href="/alerts/{alert_id}"')
+    row_end = resp.text.index("</tr>", row_start)
+    assert "chưa có" in resp.text[row_start:row_end]
+
+
+@pytest.mark.parametrize(
+    "method,path_suffix,kwargs",
+    [
+        ("get", "", {}),
+        ("post", "/acknowledge", {}),
+        (
+            "post",
+            "/decide",
+            {"data": {"decision": "benign", "reason": "x", "seen_occurrence_count": "1"}},
+        ),
+        ("post", "/escalate", {"data": {"title": "t"}}),
+        ("post", "/reopen", {"data": {"reason": "x"}}),
+    ],
+)
+def test_nul_byte_in_path_is_404_not_500(client, method, path_suffix, kwargs) -> None:
+    """Nit N8: a NUL byte in the `{alert_id}` path segment (`/alerts/a%00b...`) is
+    rejected before any query — psycopg would otherwise raise a driver-level error,
+    a 500, not a clean 404. `%00`, not a raw `\\x00`: httpx itself refuses to send a
+    literal control character in a URL, so the percent-encoded form is what actually
+    reaches the ASGI layer as a NUL byte once the router decodes the path segment."""
+    resp = getattr(client.http, method)(f"/alerts/a%00b{path_suffix}", **kwargs)
+    assert resp.status_code == 404, resp.text
+
+
+def test_decide_bad_decision_on_unknown_alert_is_404_not_500(client) -> None:
+    """Nit N9: the `_decision_fragment`/`view is None` branch is reachable, not
+    unreachable — `decide.decide` raises `ValueError` for a bad `decision` *before*
+    it ever checks whether `alert_id` exists, so the re-read this router does on the
+    `422` path can find a genuinely nonexistent alert."""
+    resp = client.http.post(
+        "/alerts/does-not-exist/decide",
+        data={"decision": "not_a_real_choice", "reason": "x", "seen_occurrence_count": "1"},
+    )
+    assert resp.status_code == 404, resp.text
+
+
+def test_decide_invalid_severity_on_escalate_is_422_with_fixed_vietnamese_text(
+    db, real_shape_client
+) -> None:
+    """Nit N6: a fixed Vietnamese sentence, never `str(exc)` — an invalid `severity`
+    is this router's own check (`decide.escalate` does not validate it itself).
+    `real_shape_client`, not the plain `client` fixture: this router's 422 path calls
+    a real `conn.rollback()` (pitfall 1's pattern extends to every non-2xx fragment),
+    which on the plain fixture's shared, uncommitted `db` connection would also undo
+    this test's own `_active` setup."""
+    client, _calls = real_shape_client
+    alert_id = _active(db)
+
+    resp = client.http.post(
+        f"/alerts/{alert_id}/escalate", data={"title": "t", "severity": "not-a-real-severity"}
+    )
+    assert resp.status_code == 422, resp.text
+    assert "Mức độ nghiêm trọng không hợp lệ." in resp.text
+    assert "not-a-real-severity" not in resp.text
+
+
+def test_reopen_nul_byte_reason_is_422_with_fixed_vietnamese_text(db, real_shape_client) -> None:
+    """Nit N6: the NUL-byte branch of `_error_text`, not the generic reason text —
+    proven on `reopen` (the other two routes' NUL case is `test_api_nul_byte_in_
+    reason_or_title_is_422`'s pattern at the API layer, already covered there).
+    `real_shape_client` for the same reason as the severity test above."""
+    client, _calls = real_shape_client
+    alert_id = _auto_closed(db)
+
+    resp = client.http.post(f"/alerts/{alert_id}/reopen", data={"reason": "a\x00b"})
+    assert resp.status_code == 422, resp.text
+    assert "Dữ liệu chứa ký tự không hợp lệ." in resp.text
