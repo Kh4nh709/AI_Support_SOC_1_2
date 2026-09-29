@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Rule auto-close — AI Support SOC{% endblock %}
+{% block content %}
+<h1>Rule auto-close</h1>
+<p>Sáu chặn cứng (G8′) chạy <strong>trước</strong> mọi rule, luôn luôn — kể cả một rule khớp mọi thứ:</p>
+<ul id="hard-blocks">
+  {% for code, label in hard_blocks %}
+  <li data-block="{{ code }}">{{ label }}</li>
+  {% endfor %}
+</ul>
+
+<h2>Rule hiện có</h2>
+{% if not rules %}
+<p>Chưa có rule nào.</p>
+{% else %}
+<table>
+  <tr><th>Tên</th><th>Bật</th><th>Điều kiện</th><th>Lý do</th><th>Tạo lúc</th><th>Độ rộng (7 ngày)</th><th></th></tr>
+  {% for rule in rules %}
+  <tr data-rule-id="{{ rule.rule_id }}">
+    <td data-field="name">{{ rule.name }}</td>
+    <td data-field="enabled">{{ "bật" if rule.enabled else "tắt" }}</td>
+    <td><pre data-field="match">{{ rule.match_json }}</pre></td>
+    <td data-field="reason">{{ rule.reason }}</td>
+    <td data-field="created_at">{{ rule.created_at | local_time(tz) }}</td>
+    <td data-field="width_pct">
+      {% if rule.width_pct is not none %}
+      <strong>⚠ {{ rule.width_pct }}% &gt; {{ width_pct_threshold }}%</strong>
+      {% endif %}
+    </td>
+    <td>
+      <form method="post" action="/admin/rules/{{ rule.rule_id }}/toggle">
+        <input type="hidden" name="enabled" value="{{ "false" if rule.enabled else "true" }}">
+        <button type="submit">{{ "Tắt" if rule.enabled else "Bật" }}</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+<h2>Tạo rule mới</h2>
+<p>Xem trước dùng đúng vị từ của bộ máy, đã tính cả sáu chặn cứng — xem trước xong mới có nút tạo.</p>
+<form id="preview-form" method="post" action="/admin/rules/preview">
+  <label for="name">Tên</label>
+  <input id="name" name="name" type="text" required value="{{ form.name }}">
+  <label for="reason">Lý do</label>
+  <input id="reason" name="reason" type="text" required value="{{ form.reason }}">
+  <label for="match_json">Điều kiện (JSON array — field/op/value)</label>
+  <textarea id="match_json" name="match_json" rows="4" required>{{ form.match_json }}</textarea>
+  <button type="submit">Xem trước</button>
+</form>
+
+{% if preview is not none %}
+<section id="preview">
+  <h3>Kết quả xem trước</h3>
+  <p>
+    Số cụm sẽ đóng (30 ngày): <strong data-field="clusters">{{ preview.clusters }}</strong> ·
+    Số alert (gồm bản sao): <strong data-field="alerts">{{ preview.alerts }}</strong>
+  </p>
+  <h4>Theo mức độ nghiêm trọng</h4>
+  <ul data-field="by_severity">
+    {% for severity, count in preview.by_severity.items() %}
+    <li>{{ severity }}: {{ count }}</li>
+    {% endfor %}
+  </ul>
+  <h4>Theo asset criticality</h4>
+  <ul data-field="by_asset_criticality">
+    {% for criticality, count in preview.by_asset_criticality.items() %}
+    <li>{{ criticality }}: {{ count }}</li>
+    {% endfor %}
+  </ul>
+  <h4>Mẫu alert (tối đa 20)</h4>
+  <ul data-field="samples">
+    {% for alert_id in preview.samples %}
+    <li><a href="/alerts/{{ alert_id }}">{{ alert_id }}</a></li>
+    {% endfor %}
+  </ul>
+
+  {% if preview.clusters == 0 %}
+  <div id="empty-preview-tally">
+    {% if matched %}
+    <p>Rule khớp <strong data-field="tally_matched">{{ matched }}</strong> cụm, cả {{ matched }} bị chặn cứng:</p>
+    <ul>
+      {% for code, label, count in tally %}
+      <li data-block="{{ code }}">{{ label }}: {{ count }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p data-field="tally_none">Rule không khớp cụm nào trong 30 ngày qua.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <form id="create-form" method="post" action="/admin/rules">
+    <input type="hidden" name="name" value="{{ form.name }}">
+    <input type="hidden" name="reason" value="{{ form.reason }}">
+    <input type="hidden" name="match_json" value="{{ form.match_json }}">
+    <button type="submit">Tạo rule</button>
+  </form>
+</section>
+{% endif %}
+{% endblock %}
