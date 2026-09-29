@@ -5,7 +5,7 @@ Every command in those five sections runs **from the primary checkout**, in one 
 
 ## Start and stop
 
-`db` is PostgreSQL 16 on port `55432` (`DB_PORT`, volume `pgdata`), `app` is uvicorn on port `8000`, `worker` runs the `pull`, `pipeline` and `triage` jobs; the stack publishes both ports on every interface of the host (`docs/limitations.md` (xxxv)).
+`db` is PostgreSQL 16 on port `55432` (`DB_PORT`, volume `pgdata`), `app` is uvicorn on port `8000`, `worker` runs the `pull`, `pipeline`, `triage`, `health` and `digest` jobs (`backend/app/web/handlers/`, discovered by `iter_handlers()`; `investigate` joins once P5-T04 merges). **Every worker start re-arms three self-scheduling chains** — `pull` and `health` (`enqueue`, idempotent through the jobs table's partial unique index) and `digest` (`digest.ensure_scheduled`) — so a chain that died is repaired by `docker compose restart worker` alone, no other action (**Alarms**, below). The stack publishes both ports on every interface of the host (`docs/limitations.md` (xxxv)).
 
 | action | command | expected |
 |---|---|---|
@@ -155,20 +155,28 @@ The drill's full record is `docs/restore-drill.md` (P8-T02: a `backup.sh` dump o
 
 ## Restore drill (P8)
 
-P8-T02 runs the drill (30/09) and fills the table below; this card (P5-T13) deliberately leaves it empty — the ten fields are a pasteable, quick-reference summary of what `restore.sh`'s printed block and `make test-db` gave on the day, not a replacement for the fuller `docs/restore-drill.md` record above.
+The full, signed record of every drill is `docs/restore-drill.md` (P8-T02's card); this is the quick reference, not a second copy of it.
 
-| field | value |
-|---|---|
-| date | |
-| dump used | |
-| target database | |
-| `pg_restore` exit | |
-| `schema_migrations` count | |
-| five table counts (`alerts` / `intake` / `llm_runs` / `jobs` / `audit_events`) | |
-| `make test-db` result | |
-| elapsed | |
-| who ran it | |
-| verdict | |
+**How to run one** — back up, then restore the fresh dump into a scratch database, never the live one:
+
+```bash
+bash scripts/backup.sh                                          # DSN from DATABASE_URL_OWNER
+DUMP="$(ls -t backups/soc-*.dump | head -1)"
+bash scripts/restore.sh "$DUMP" --into soc_restore_drill; echo "exit=$?"
+```
+
+Verify **before ≤ restored ≤ after** on `schema_migrations` (= 17) and the five tables `restore.sh` itself
+prints (`alerts`, `intake`, `llm_runs`, `jobs`, `audit_events`): count each on `soc_dev` before the backup
+and again after the restore finishes — the pipeline keeps ingesting during the drill, so the restored count
+must sit between the two (equal to both only if nothing landed in the gap, as P8-T02's own drill found).
+Then, as `app_rw` (the `DATABASE_URL` role, database name swapped to the target): `select count(*) from
+alerts` must equal the restored count — `permission denied` fails the drill outright.
+
+**Last drill: 29/09/2026 13:50 UTC — PASS — signed by the Owner — full record `docs/restore-drill.md`.**
+
+**Clean-up.** The scratch database (`soc_restore_drill`) stays in place until the Owner signs; then
+`dropdb soc_restore_drill`, run by the Owner or by the Director at the Owner's word —
+`docs/restore-drill.md`'s own Clean-up section records whether it has been.
 
 ## What to watch (manual checks, beyond the ten alarms)
 

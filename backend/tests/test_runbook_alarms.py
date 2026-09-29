@@ -12,10 +12,13 @@ side rotted — a check added to the code with no row, or a row renamed
 without renaming the check, both have to go red, in opposite ways.
 
 This file also pins the two smaller honesty properties P5-T13 added:
-`## Restore drill (P8)` exists exactly once with its ten-line template left
-empty (P8-T02 fills it, not this card — 30/09), and `## ② operations` exists
-with *some* content, worded so a later fill-in (once P5-T04 merges, DEC-151)
-does not have to touch this test.
+`## Restore drill (P8)` exists exactly once, names the full signed record
+(`docs/restore-drill.md`, P8-T02) and carries a "Last drill: … — PASS|FAIL —
+signed by the Owner …" line and the clean-up rule — the empty ten-field
+template this section held before P8-T02 ran and was signed (29/09) is gone,
+at the Director's follow-up, once there was a real drill to point at instead
+— and `## ② operations` exists with *some* content, worded so a later
+fill-in (once P5-T04 merges, DEC-151) does not have to touch this test.
 
 PURE. No database, no socket, no fixture: reads `docs/runbook.md` and
 `backend/app/infra/health.py` as text only. Runs anywhere the repository is
@@ -39,19 +42,14 @@ NAME_CELL_RE = re.compile(r"^`([a-z_]+)`$")
 # Every `CheckResult(...)` call in infra/health.py names its check first,
 # either on the same line or (the multi-line early-return form) the next one.
 CHECK_RESULT_RE = re.compile(r'CheckResult\(\s*"([a-z_]+)"')
-
-RESTORE_DRILL_FIELDS = [
-    "date",
-    "dump used",
-    "target database",
-    "`pg_restore` exit",
-    "`schema_migrations` count",
-    "five table counts (`alerts` / `intake` / `llm_runs` / `jobs` / `audit_events`)",
-    "`make test-db` result",
-    "elapsed",
-    "who ran it",
-    "verdict",
-]
+# The quick-reference "Last drill" line's shape, not its literal date, so a
+# later, real drill re-running this line does not have to touch this test —
+# only the line's format is pinned (verdict word, "signed by the Owner", and
+# the pointer to the full record).
+LAST_DRILL_RE = re.compile(
+    r"Last drill: \d{2}/\d{2}/\d{4} \d{2}:\d{2} UTC — (PASS|FAIL) — signed by the Owner"
+    r" — full record `docs/restore-drill\.md`"
+)
 
 
 def _text() -> str:
@@ -155,17 +153,24 @@ def test_restore_drill_heading_appears_once():
     assert _text().count("## Restore drill (P8)") == 1
 
 
-def test_restore_drill_template_is_the_ten_empty_fields():
+def test_restore_drill_section_points_at_the_full_record_and_a_current_result():
+    """P8-T02 ran and was signed (29/09) before this card's follow-up: the
+    empty ten-field template is gone (the Director's own call — nothing left
+    to leave empty once a real, signed drill exists), replaced by how to run
+    one, a pointer to the full record, and the clean-up rule."""
     section = _section(_text(), "Restore drill (P8)")
-    rows = _table_rows(section)
-    assert rows, "no table in ## Restore drill (P8)"
-    header = [c.lower() for c in rows[0]]
-    assert header == ["field", "value"], f"unexpected header: {rows[0]}"
-    data = rows[1:]
-    assert len(data) == 10, f"expected the ten-line template, found {len(data)} row(s): {data}"
-    assert [row[0] for row in data] == RESTORE_DRILL_FIELDS, [row[0] for row in data]
-    for row in data:
-        assert row[1] == "", f"P8 fills this, not P5-T13 — {row[0]!r} is not left empty: {row[1]!r}"
+    assert "docs/restore-drill.md" in section, "no pointer to the full signed record"
+    assert (
+        "scripts/backup.sh" in section and "scripts/restore.sh" in section
+    ), "no how-to-run-a-drill steps"
+    assert (
+        "before" in section and "restored" in section and "after" in section
+    ), "no before/restored/after criterion"
+    assert LAST_DRILL_RE.search(section), (
+        "no 'Last drill: <date> UTC — PASS|FAIL — signed by the Owner — "
+        "full record `docs/restore-drill.md`' line"
+    )
+    assert "dropdb" in section and "soc_restore_drill" in section, "no clean-up rule"
 
 
 def test_two_circle_operations_heading_present_with_some_content():
