@@ -374,13 +374,18 @@ def decide(
     seen_occurrence_count: int,
     llm_suggestion: str | None,
     llm_confidence: str | None,
+    gate_forced: bool | None = None,
+    suggestion_visible: bool | None = None,
+    llm_run_id: str | None = None,
 ) -> None:
     """A8/A9 (+ A10 fan-out) — tier1_active -> closed_fp|closed_benign, applied
     to the whole cluster in one transaction. P6-1's optimistic lock: the guard
     is read with `SELECT ... FOR UPDATE`, which is safe here (unlike a bare
     guard-then-UPDATE) because the row stays locked until this transaction
     ends, so no concurrent writer can move it out from under the later
-    `UPDATE`s."""
+    `UPDATE`s. The three keyword-only fields default to `None` and extend the
+    `tier1.decided` payload for P8's evaluation join (P4-T03); existing callers
+    and `test_transitions.py` are untouched."""
     if decision not in ("closed_fp", "closed_benign"):
         raise IllegalTransition(f"A08/A09: no edge for decision={decision!r}")
 
@@ -425,6 +430,9 @@ def decide(
             "occurrence_count": occurrence_count,
             "llm_suggestion": llm_suggestion,
             "llm_confidence": llm_confidence,
+            "gate_forced": gate_forced,
+            "suggestion_visible": suggestion_visible,
+            "llm_run_id": llm_run_id,
         },
     )
 

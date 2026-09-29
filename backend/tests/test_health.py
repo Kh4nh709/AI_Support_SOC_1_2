@@ -30,6 +30,7 @@ import pytest
 from app.infra import auth, health, notify
 from app.infra.config import Config
 from app.infra.jobs import JOB_TYPES, Job
+from app.tier1 import digest
 from app.web import deps, main
 from app.web.handlers import health as health_handler
 from fastapi.testclient import TestClient
@@ -530,6 +531,48 @@ def test_digest_unreviewed_boundary_pins_the_local_day_edges(db, tmp_path):
     assert (
         must_not_count and must_count
     )  # both rows exist — the count, not their absence, is the proof
+
+
+@pytest.mark.db
+def test_digest_unreviewed_matches_unreviewed_count(db, tmp_path):
+    """Cross-check with `tier1.digest.unreviewed_count` (round 1 addendum):
+    both sides read `DISPLAY_TZ` local-day bounds independently — check 9 in
+    Python (`infra` imports nothing, design note 1(a)), `unreviewed_count` in
+    SQL (`_DAY_LOWER`/`_DAY_UPPER`) — and must agree on the same fixture as
+    the M1 boundary pair above: one alert auto-closed at 00:30 local on D-1
+    (counts on both sides), one at 00:30 local on D (counts on neither), and
+    — round 1 addendum's own note — one *synthetic* alert inside D-1's window
+    (excluded on both sides: `unreviewed_count` is the reference for the
+    `NOT a.is_synthetic` predicate check 9 gained to match it)."""
+    at_1800_local_d = datetime(2026, 9, 29, 11, 0, 0, tzinfo=UTC)  # 18:00 local, day D (9/29)
+    at_0030_local_d = datetime(2026, 9, 28, 17, 30, 0, tzinfo=UTC)  # 00:30 local, day D
+    at_0030_local_d_minus_1 = datetime(2026, 9, 27, 17, 30, 0, tzinfo=UTC)  # 00:30 local, D-1
+    day_minus_1 = (
+        "2026-09-28"  # D-1 as YYYY-MM-DD, the date `at_0030_local_d_minus_1` falls on locally
+    )
+
+    _insert_alert(db, status="auto_closed", closed_at=at_0030_local_d, received_at=at_0030_local_d)
+    _insert_alert(
+        db,
+        status="auto_closed",
+        closed_at=at_0030_local_d_minus_1,
+        received_at=at_0030_local_d_minus_1,
+    )
+    _insert_alert(
+        db,
+        status="auto_closed",
+        closed_at=at_0030_local_d_minus_1,
+        received_at=at_0030_local_d_minus_1,
+        is_synthetic=True,
+    )
+
+    report = health.check(db, _cfg(), clock=_clock_at(at_1800_local_d), backups_dir=tmp_path)
+    check = _by_name(report)["digest_unreviewed"]
+
+    reference = digest.unreviewed_count(db, day_minus_1, tz=_cfg().DISPLAY_TZ)
+
+    assert check.value == reference
+    assert reference == 1  # the one real D-1 00:30 alert — not D's, not the synthetic one
 
 
 # 10 · disk_free -------------------------------------------------------------------

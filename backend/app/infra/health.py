@@ -223,7 +223,13 @@ def _check_digest_unreviewed(conn: psycopg.Connection, now_local: datetime) -> C
     """Design note 1(a) — three lines of SQL, not `tier1.digest`. Evaluated
     only from 17:00 local onward (`now_local`, derived from the database's own
     clock); `ok` before that, so the alarm reads as "nobody reviewed it
-    today", never "it is 09:00"."""
+    today", never "it is 09:00".
+
+    P5-T11 review round 1 addendum: `NOT a.is_synthetic` added to match
+    `tier1.digest.unreviewed_count`'s own `_UNREVIEWED_COUNT_SQL` exactly —
+    `digest` excludes synthetic alerts (round 1 · N8 there, matching
+    `queue.list_queue`/`ingest.autoclose.simulate`); `unreviewed_count` is the
+    reference both sides agree with (`test_digest_unreviewed_matches_unreviewed_count`)."""
     if now_local.hour < _DIGEST_GATE_HOUR:
         return CheckResult(
             "digest_unreviewed", True, None, 0, f"not evaluated before {_DIGEST_GATE_HOUR}:00 local"
@@ -236,6 +242,7 @@ def _check_digest_unreviewed(conn: psycopg.Connection, now_local: datetime) -> C
         FROM alerts a
         LEFT JOIN autoclose_reviews r ON r.alert_id = a.alert_id
         WHERE a.status = 'auto_closed'
+          AND NOT a.is_synthetic
           AND a.closed_at >= %s AND a.closed_at < %s
           AND r.alert_id IS NULL
         """,
