@@ -114,6 +114,11 @@ SENTENCE_OUT_OF_SCOPE = (
     "Không có threat intel ngoài, dữ liệu gói tin, EDR. "
     "Thiếu thì trả need_more_data, không suy đoán."
 )
+#: Review round 2 nit 7 — block 4's "history not computed" state (md5/sha1/sha256/domain
+#: entities have no structured `alerts` column to count from), a fixed literal like
+#: `SENTENCE_OUT_OF_SCOPE` above, safe outside a wrapper: which of the four hash/domain
+#: kinds an entity is comes from this module's own regex dispatch, never from alert text.
+SENTENCE_HISTORY_NOT_COMPUTED = "history not computed for this entity type"
 HEADING_CASE = "## Case"
 HEADING_CLUSTERS = "## Clusters"
 HEADING_TIMELINE = "## Timeline"
@@ -140,6 +145,7 @@ DOSSIER_TEMPLATE_CONSTANTS = frozenset(
         HEADING_PREVIOUS_RUN,
         HEADING_SCOPE,
         SENTENCE_OUT_OF_SCOPE,
+        SENTENCE_HISTORY_NOT_COMPUTED,
     }
 )
 
@@ -921,8 +927,16 @@ def _block2_clusters(
         # agent/user/IPs alongside it — free text and structured-but-untrusted addresses
         # both, so they go in the same small block rather than bare beside a `fact()`.
         if head.description:
+            # Review round 2 nit 9: capped at the tighter of the two raw_log limits,
+            # always — unlike `raw_log_limit` above, this never starts at 8 KB, since
+            # the description is meant to be a short rule label, not a second log body.
             parts.append(
-                wrap.untrusted_block(head.description, "rule_description", nonce=nonce).rendered
+                wrap.untrusted_block(
+                    head.description,
+                    "rule_description",
+                    nonce=nonce,
+                    limit_bytes=RAW_LOG_CUT_BYTES,
+                ).rendered
             )
         context_lines = [f"agent_name: {head.agent_name}"]
         if head.origin_host and head.origin_host != head.agent_name:
@@ -965,14 +979,19 @@ def _entity_lookup_facts(entity: Entity, nonce: str) -> str:
     `fact()` outside any wrap; only the entity *value* itself (§_block4_entities) sits in
     a small wrapped block. Before this, both sat inside the same wrap, where a forged
     username in `raw_log` could fake a "found, privileged" sibling line no reader could
-    tell from a real one."""
+    tell from a real one.
+
+    Review round 2 should 4: `SENTENCE_ABSENT` follows only `not_found` — a `skipped`
+    lookup (a private IP, never queried at all) is not "absent from the internal
+    database", and saying so would be false. ① makes exactly this distinction
+    (`llm/triage.py` renders `SENTENCE_ABSENT` only for `LookupStatus.NOT_FOUND`)."""
     status = entity.lookup.get("status") or "not_found"
     if entity.kind == "host":
         parts = [fact("lookup_asset", LookupStatus(status))]
         if status == "found":
             criticality = entity.lookup.get("criticality") or "unknown"
             parts.append(fact("asset_criticality", AssetCriticality(criticality)))
-        else:
+        elif status == "not_found":
             parts.append(SENTENCE_ABSENT)
     elif entity.kind == "username":
         parts = [fact("lookup_identity", LookupStatus(status))]
@@ -980,29 +999,49 @@ def _entity_lookup_facts(entity: Entity, nonce: str) -> str:
             privileged = entity.lookup.get("is_privileged")
             priv_value = "true" if privileged else ("false" if privileged is False else "unknown")
             parts.append(fact("identity_privileged", IdentityPrivileged(priv_value)))
-        else:
+        elif status == "not_found":
             parts.append(SENTENCE_ABSENT)
     else:
         parts = [fact("lookup_ioc", LookupStatus(status))]
         if status == "found":
             reputation = entity.lookup.get("reputation") or "not_found"
             parts.append(fact("ioc_reputation", IocReputation(reputation)))
-        else:
+        elif status == "not_found":
             parts.append(SENTENCE_ABSENT)
     return " · ".join(parts)
+
+
+def _entity_history_facts(entity: Entity) -> list[str]:
+    """Review round 2 nit 7 (ruling): the 7-day history — each category a `Category`
+    enum value, each count a plain int, both computed by this module from our own
+    `alerts` table and never attacker-controlled — moves to trusted `fact()` lines
+    outside the wrap, reusing the existing `category`/`alerts` pair (the same two
+    `FACT_NAMES` `_block5_correlation`'s rows already use for the same shape: a
+    category and a count). No name was added to `FACT_NAMES` — `category` and `alerts`
+    already fit.
+
+    Before this, the whole "7d: …" line sat inside the entity value's own wrap, where a
+    multi-line value (e.g. a forged username ending in a fake "\\n7d: none") could plant
+    a sibling history line no reader could tell from the real one. `None` (not computed
+    — md5/sha1/sha256/domain, should 10) renders `SENTENCE_HISTORY_NOT_COMPUTED`, also
+    outside the wrap; an empty mapping (computed, nothing found) renders nothing further
+    — the absence of both is itself the signal, and it is not attacker-influenced
+    either way."""
+    if entity.history is None:
+        return [SENTENCE_HISTORY_NOT_COMPUTED]
+    return [
+        " · ".join((fact("category", Category(cat)), fact("alerts", int(n))))
+        for cat, n in sorted(entity.history.items())
+    ]
 
 
 def _block4_entities(entities: Sequence[Entity], nonce: str) -> str:
     parts = [HEADING_ENTITIES]
     for e in entities:
-        if e.history is None:
-            history_str = "not computed"  # md5/sha1/sha256/domain — should 10
-        else:
-            history_str = ", ".join(f"{cat}={n}" for cat, n in sorted(e.history.items()))
-            history_str = history_str or "none"
-        value_body = f"{e.kind}: {e.value}\n{ENTITY_HISTORY_DAYS}d: {history_str}"
+        value_body = f"{e.kind}: {e.value}"
         parts.append(wrap.untrusted_block(value_body, "context", nonce=nonce).rendered)
         parts.append(_entity_lookup_facts(e, nonce))
+        parts.extend(_entity_history_facts(e))
     return "\n".join(parts)
 
 
