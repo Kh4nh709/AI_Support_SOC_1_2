@@ -35,7 +35,7 @@ from app.infra.worker import Handler
 #: (`"5s"`, `"250ms"`, `"3min"`) — the same three units `SET LOCAL statement_timeout`
 #: accepts unambiguously without a space (P5-T01 review round 1, finding 4, deferred to
 #: whichever module first declares a `STATEMENT_TIMEOUT`; P5-T04 is that module).
-_STATEMENT_TIMEOUT_RE = re.compile(r"^\d+(ms|s|min)$")
+_STATEMENT_TIMEOUT_RE = re.compile(r"^(\d+)(ms|s|min)$")
 
 
 def _load_modules() -> list[ModuleType]:
@@ -81,11 +81,25 @@ def iter_timeouts() -> dict[str, str]:
     for module in _load_modules():
         statement_timeout = getattr(module, "STATEMENT_TIMEOUT", None)
         if statement_timeout is not None:
-            if not _STATEMENT_TIMEOUT_RE.fullmatch(statement_timeout):
+            # A non-string (`5`, `5.0`, a `bytes`) is checked first: `re.fullmatch` on it
+            # would raise a bare `TypeError` naming neither the module nor the value (N10).
+            match = (
+                _STATEMENT_TIMEOUT_RE.fullmatch(statement_timeout)
+                if isinstance(statement_timeout, str)
+                else None
+            )
+            if match is None:
                 raise PermanentError(
-                    f"{module.__name__}: STATEMENT_TIMEOUT must match "
+                    f"{module.__name__}: STATEMENT_TIMEOUT must be a string matching "
                     f"{_STATEMENT_TIMEOUT_RE.pattern!r} (Postgres duration form, e.g. "
                     f"'5s'), got {statement_timeout!r}"
+                )
+            # `0` means "no timeout" to Postgres — a handler that asked for no limit on
+            # its own statements has not asked for a limit at all (N10).
+            if int(match.group(1)) == 0:
+                raise PermanentError(
+                    f"{module.__name__}: STATEMENT_TIMEOUT {statement_timeout!r} is zero, "
+                    "which Postgres reads as 'no timeout'"
                 )
             timeouts[module.JOB_TYPE] = statement_timeout
     return timeouts

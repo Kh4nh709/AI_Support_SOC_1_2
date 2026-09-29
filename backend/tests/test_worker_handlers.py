@@ -187,7 +187,28 @@ def test_iter_timeouts_maps_a_declared_timeout_by_job_type(tmp_path, monkeypatch
 
 @pytest.mark.parametrize(
     "value",
-    ["5", "5 s", "5seconds", "-5s", "5.5s", "5ms ", "PT5S", ""],
+    [
+        "5",
+        "5 s",
+        "5seconds",
+        "-5s",
+        "5.5s",
+        "5ms ",
+        "PT5S",
+        "",
+        # N10 (P5-T04 review round 1): a non-string is a `PermanentError` naming the module
+        # and the value, not a bare `TypeError` out of `re.fullmatch` ...
+        5,
+        5.0,
+        b"5s",
+        # ... and zero, in any unit or spelling, is "no timeout" to Postgres — the handler
+        # that declares it has not asked for a limit at all.
+        "0s",
+        "0",
+        "0ms",
+        "0min",
+        "00s",
+    ],
 )
 def test_iter_timeouts_rejects_a_malformed_statement_timeout(tmp_path, monkeypatch, value):
     # P5-T04: the P5-T01 review's deferred nit ("nothing pinned a declared
@@ -209,7 +230,7 @@ def test_iter_timeouts_rejects_a_malformed_statement_timeout(tmp_path, monkeypat
         _forget("scratch_bad_timeout")
 
 
-@pytest.mark.parametrize("value", ["5s", "250ms", "3min", "0s"])
+@pytest.mark.parametrize("value", ["5s", "250ms", "3min", "1ms", "10s"])
 def test_iter_timeouts_accepts_every_postgres_duration_form(tmp_path, monkeypatch, value):
     _write(
         tmp_path,
