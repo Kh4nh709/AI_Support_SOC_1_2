@@ -106,6 +106,19 @@ def test_dry_run_prints_bytes_tokens_and_the_within_line(fixtures, system_text, 
     assert "within ±2% of 12800" in out
 
 
+def test_estimate_tokens_is_len_over_four_rounded():
+    """Pins the formula design note 2 specifies: 400 chars / 4 = exactly 100."""
+    assert im.estimate_tokens("x" * 400) == 100
+
+
+def test_dossier_total_tokens_is_the_sum_of_both_pieces_estimates(fixtures, system_text):
+    """Pins how ``total_tokens`` is computed — the sum of two independent len/4
+    estimates, not (for example) one estimate over the concatenated text, which
+    would differ by up to a couple of tokens because of the joining whitespace."""
+    dossier = im.resolve_plan(fixtures, system_text, 12_800, sizing_nonce=im.SIZING_NONCE)
+    assert dossier.total_tokens == round(len(system_text) / 4) + round(len(dossier.user_text) / 4)
+
+
 # --- block order matches §7.6 (design note 8) -------------------------------
 
 
@@ -146,59 +159,118 @@ def test_red_case_b_a_block_moved_outside_its_wrapper_trips_the_linter(fixtures,
     assert violations != []
 
 
-def test_red_case_c_a_50_percent_stop_fails_the_tolerance_check(fixtures, system_text):
-    """DEC-025 red case (c): a plan that stopped padding at 50 % of the budget must
-    fail the ± 2 % check — proving the tolerance assertion above is checked for
-    real and would have gone red had the loop stopped early, for both arms."""
+def test_red_case_c_a_wrong_tolerance_constant_fails_the_real_two_percent_check(
+    fixtures, system_text, monkeypatch
+):
+    """DEC-025 red case (c), reproduced against the real ``resolve_plan`` (not an
+    inline copy of its algorithm): monkeypatching the module's own ``TOLERANCE``
+    to 0.5 makes the padding loop's real stopping condition equivalent to "stop at
+    50 % of the budget" — design note 8(c)'s exact defect — and the result fails
+    the true ± 2 % window for both arms, proving
+    ``test_resolve_plan_reaches_the_budget_within_two_percent`` is checked for
+    real and would go red had ``TOLERANCE`` regressed to something this loose."""
+    monkeypatch.setattr(im, "TOLERANCE", 0.5)
     for budget_tokens in (60_000, 12_800):
-        half_plan = im.base_plan(fixtures)
-        # Simulate "stopped at 50 %" by taking the real plan and truncating it to
-        # roughly half its padding clusters.
-        full = im.resolve_plan(fixtures, system_text, budget_tokens, sizing_nonce=im.SIZING_NONCE)
-        cut = full.plan[: len(full.plan) // 2] or half_plan
-        stunted_user = im.build_user_text(fixtures, cut, im.SIZING_NONCE)
-        stunted_total = im._total_tokens(system_text, stunted_user)
-        lower = budget_tokens * (1 - im.TOLERANCE)
-        assert stunted_total < lower
+        dossier = im.resolve_plan(
+            fixtures, system_text, budget_tokens, sizing_nonce=im.SIZING_NONCE
+        )
+        assert dossier is not None
+        real_lower = budget_tokens * (1 - 0.02)  # the true ± 2 % window, independent of the patch
+        assert dossier.total_tokens < real_lower
 
 
 # --- the cache key (design note 5/8) ----------------------------------------
 
 
-def test_cache_key_changes_with_thinking_and_with_budget_not_with_calls():
+def test_cache_key_changes_with_thinking_and_with_budget():
+    """Unit-level pin on the pure function itself — genuine assertions (each input
+    is independently varied and checked), not the tautological "does not change
+    with --calls" claim this test used to also make: ``cache_key`` never takes a
+    ``calls`` parameter at all, so that could never have been anything other than
+    true by construction. The *behavioural* versions of both properties —
+    ``run_arm`` making new calls when the mode changes, and a warm cache surviving
+    a bump in ``--calls`` — are below, exercising the real call path instead."""
     base = im.cache_key("m", "s", "u", "disabled", 60_000)
 
     assert base != im.cache_key("m", "s", "u", "enabled", 60_000), "thinking must change the key"
     assert base != im.cache_key("m", "s", "u", "disabled", 12_800), "budget must change the key"
     assert base == im.cache_key("m", "s", "u", "disabled", 60_000), "same inputs, same key"
 
-    # --calls is not a cache_key input at all: computing it any number of times
-    # with the same (model, system, user, thinking, budget) never changes it.
-    repeated = {im.cache_key("m", "s", "u", "disabled", 60_000) for _ in range(5)}
-    assert repeated == {base}
+
+def test_run_arm_makes_new_calls_when_thinking_mode_changes(fixtures, system_text, tmp_path):
+    """Kills the mutant "LLM_THINKING dropped from cache_key" at the ``run_arm``
+    level (DEC-025 red case (a), now exercising the real product path instead of
+    an inline copy of the hash formula): the same cache directory, the same
+    fixtures and budget, but a different ``LLM_THINKING`` must make N brand new
+    calls, never replay the other mode's cache entries (DEC-032/DEC-042)."""
+    import dataclasses
+
+    adapter = _FakeAdapter(usage={"prompt_tokens": 100, "completion_tokens": 50})
+    budget = {"spent": 0.0, "cap": 10.0, "tripped": False}
+    im.run_arm(
+        adapter,
+        FAKE_CFG,
+        fixtures,
+        system_text,
+        20_000,
+        calls=3,
+        cache_dir=tmp_path,
+        refresh=True,
+        budget=budget,
+    )
+    assert len(adapter.calls) == 3
+
+    enabled_cfg = dataclasses.replace(FAKE_CFG, LLM_THINKING="enabled")
+    budget2 = {"spent": 0.0, "cap": 10.0, "tripped": False}
+    im.run_arm(
+        adapter,
+        enabled_cfg,
+        fixtures,
+        system_text,
+        20_000,
+        calls=3,
+        cache_dir=tmp_path,
+        refresh=False,
+        budget=budget2,
+    )
+    assert (
+        len(adapter.calls) == 6
+    ), "a different thinking mode must never replay the other mode's cache"
 
 
-def test_red_case_a_dropping_thinking_from_the_key_loses_the_mode_difference():
-    """DEC-025 red case (a): a cache key built WITHOUT the thinking mode collapses
-    the two arms of a mode comparison into one entry — the defect
-    ``eval/investigate_measure.cache_key`` is written to avoid. Reproduced here by
-    computing the same broken formula inline (never by editing the product
-    function), asserting the *difference* the real cache_key preserves and the
-    broken one loses."""
-    import hashlib
+def test_bumping_calls_reuses_the_existing_cache_entries(fixtures, system_text, tmp_path):
+    """Kills the mutant "call index left out of the nonce/key": raising --calls
+    from 2 to 3 on a warm cache must make exactly one new call — the first two
+    replay from the cache built by the calls=2 run."""
+    adapter = _FakeAdapter(usage={"prompt_tokens": 100, "completion_tokens": 50})
+    budget = {"spent": 0.0, "cap": 10.0, "tripped": False}
+    im.run_arm(
+        adapter,
+        FAKE_CFG,
+        fixtures,
+        system_text,
+        20_000,
+        calls=2,
+        cache_dir=tmp_path,
+        refresh=False,
+        budget=budget,
+    )
+    assert len(adapter.calls) == 2
 
-    def broken_cache_key(model, system, user, thinking, budget_tokens):
-        digest = hashlib.sha256()
-        digest.update(f"{model}\n{system}\n{user}\nbudget={budget_tokens}".encode())
-        return digest.hexdigest()
-
-    broken_a = broken_cache_key("m", "s", "u", "enabled", 60_000)
-    broken_b = broken_cache_key("m", "s", "u", "disabled", 60_000)
-    assert broken_a == broken_b, "the broken formula collapses the two modes (the defect)"
-
-    real_a = im.cache_key("m", "s", "u", "enabled", 60_000)
-    real_b = im.cache_key("m", "s", "u", "disabled", 60_000)
-    assert real_a != real_b, "the real cache_key keeps the two modes apart"
+    im.run_arm(
+        adapter,
+        FAKE_CFG,
+        fixtures,
+        system_text,
+        20_000,
+        calls=3,
+        cache_dir=tmp_path,
+        refresh=False,
+        budget=budget,
+    )
+    assert (
+        len(adapter.calls) == 3
+    ), "raising --calls must add exactly one new call, not resend the first two"
 
 
 def test_store_and_load_cache_round_trip(tmp_path):
@@ -226,7 +298,10 @@ class _FakeAdapter:
         )
 
 
-def test_max_spend_usd_aborts_before_the_crossing_call(fixtures, system_text, tmp_path):
+def test_the_spend_guard_stops_once_the_cap_is_reached(fixtures, system_text, tmp_path):
+    """--max-spend-usd is checked before each send, so it stops calling once the
+    running total has reached the cap — never mid-flight, and never by letting
+    one call's cost push the total past the cap first."""
     # cost of one call: 20000/1e6*0.014 + 500/1e6*0.66 = 0.00028 + 0.00033 = 0.00061
     adapter = _FakeAdapter(usage={"prompt_tokens": 20_000, "completion_tokens": 500})
     budget = {"spent": 0.0, "cap": 0.0005, "tripped": False}
@@ -244,7 +319,7 @@ def test_max_spend_usd_aborts_before_the_crossing_call(fixtures, system_text, tm
     )
 
     assert dossier.within_tolerance
-    assert len(adapter.calls) == 1, "the guard must stop calling before the second, crossing call"
+    assert len(adapter.calls) == 1, "the guard must stop calling once the cap is reached"
     origins = [r["origin"] for r in records]
     assert origins[0] == "live"
     assert origins[1:] == ["skipped"] * 4
@@ -436,6 +511,47 @@ def test_a_schema_valid_first_attempt_needs_no_repair(fixtures, system_text):
     assert record["repaired"] is False
     assert record["schema_ok_first"] is True
     assert record["schema_ok_repaired"] is True
+
+
+def test_a_timeout_is_counted_by_arm_metrics_and_rendered_in_the_report(fixtures, system_text):
+    """The wall-clock deadline (DEC-033) path was previously untested end to end:
+    a fake adapter that raises ``LLMTimeout`` must produce a record
+    ``arm_metrics`` counts under ``over_timeout``, and that count must actually
+    reach the rendered report's `over LLM_TIMEOUT_S` column."""
+
+    class _TimeoutAdapter:
+        def complete(self, *, system, user, response_format=None, timeout_s=None):
+            raise im.llm_adapter.LLMTimeout(f"model call exceeded {timeout_s} s wall-clock")
+
+    record = im.send_and_validate(
+        _TimeoutAdapter(), "system with JSON", "user", FAKE_CFG, {"spent": 0.0}
+    )
+    assert record["stopped_by"] == "timeout"
+    assert record["timed_out"] is True
+
+    metrics = im.arm_metrics([record])
+    assert metrics["over_timeout"] == 1
+
+    arms_data = {
+        60_000: {
+            "records": [record],
+            "cluster_count": 131,
+            "system_bytes": 2_586,
+            "user_bytes": 235_061,
+            "estimated_tokens": 59_254,
+        }
+    }
+    report = im.render_report(
+        arms_data,
+        cfg=FAKE_CFG,
+        calls_per_arm=1,
+        generated_at="2026-09-29T12:00:00+00:00",
+        git_sha="deadbee",
+    )
+    # The two-arm table's last column is "over `LLM_TIMEOUT_S`"; with exactly one
+    # record and it a timeout, that cell reads 1.
+    row = next(line for line in report.splitlines() if line.startswith("| 60,000 |"))
+    assert row.rstrip("|").rsplit("|", 1)[-1].strip() == "1"
 
 
 # --- the report renders both arms with a fake record set (design note 8) ---

@@ -95,8 +95,10 @@ FIXTURE_CATEGORY: dict[str, str] = {
 
 # A fixed 16-hex-char nonce used only for *sizing* — planning how many clusters are
 # needed. Length, not value, is what affects prompt size, so this keeps the padding
-# loop deterministic; every live call still gets its own `wrap.new_nonce()` (§6.5:
-# "nonce regenerated per attempt").
+# loop deterministic; every live call still gets its own nonce from
+# `deterministic_nonce()` below (§6.5: "nonce regenerated per attempt" — reproducible
+# across separate invocations rather than `wrap.new_nonce()`'s randomness; see that
+# function's docstring for why, and why this is never a pattern for product code).
 SIZING_NONCE = "0" * 16
 
 # ---------------------------------------------------------------------------
@@ -536,6 +538,7 @@ def _empty_record(*, stopped_by: str, error: str, timed_out: bool) -> dict[str, 
         "stopped_by": stopped_by,
         "timed_out": timed_out,
         "error": error,
+        "problems_first": [],  # nothing to report — no response was ever parsed
     }
 
 
@@ -543,7 +546,12 @@ def send_and_validate(
     adapter: Any, system_text: str, user_text: str, cfg: Config, budget: dict[str, float]
 ) -> dict[str, Any]:
     """One measurement: send, validate, and — matching §7.5's gate step 1 — one
-    repair round when the first attempt is not schema-valid."""
+    repair round when the first attempt is not schema-valid. ``latency_ms`` on the
+    returned record is **end-to-end** (first attempt plus a repair round, when one
+    happened) — ``repair_latency_ms`` carries the repair round's own contribution
+    separately, both for transparency and so ``render_report`` can tell an
+    end-to-end figure apart from a cache entry that predates this field and only
+    ever recorded the first attempt's latency alone."""
     try:
         result = adapter.complete(
             system=system_text,
@@ -569,7 +577,7 @@ def send_and_validate(
     parsed, decode_error = _decode_json(result.content)
     problems_first = [decode_error] if decode_error else schemas.validate("investigate_v2", parsed)
     record: dict[str, Any] = {
-        "latency_ms": result.latency_ms,
+        "latency_ms": result.latency_ms,  # first-attempt latency; summed below if repaired
         "input_tokens": usage.get("prompt_tokens"),
         "output_tokens": usage.get("completion_tokens"),
         "cost_usd": cost,
@@ -580,6 +588,11 @@ def send_and_validate(
         "stopped_by": None,
         "timed_out": False,
         "error": None,
+        # Validator messages only, never the offending value (schemas.validate's own
+        # contract) — safe to persist and to render; capped at 3 so a pathological
+        # response with dozens of violations cannot blow up the cache file or the
+        # report table.
+        "problems_first": list(problems_first[:3]),
     }
     if not problems_first:
         return record
@@ -611,6 +624,8 @@ def send_and_validate(
     record["output_tokens"] = (record["output_tokens"] or 0) + int(
         repair_usage.get("completion_tokens") or 0
     )
+    record["repair_latency_ms"] = repair_result.latency_ms
+    record["latency_ms"] = (record["latency_ms"] or 0) + repair_result.latency_ms  # end-to-end
     repaired_obj, repair_decode_error = _decode_json(repair_result.content)
     problems_repair = (
         [repair_decode_error]
@@ -623,14 +638,23 @@ def send_and_validate(
 
 
 def deterministic_nonce(call_index: int) -> str:
-    """A reproducible per-call nonce, the same 16-hex-char shape ``wrap.new_nonce()``
-    produces. §6.5 requires a fresh nonce "regenerated per attempt" — satisfied here
-    by every call index getting its own distinct value — but a *random* nonce would
-    make every one of the N calls in an arm as unrepeatable as the others, which
-    would break acceptance 3 (a rerun without ``--refresh`` must replay every call
-    from the cache, byte-identical). Determinism does not weaken the property the
-    nonce boundary exists for (design note 8): the linter and the wrapper only need
-    a value the built prompt does not otherwise contain, not an unpredictable one."""
+    """A reproducible per-call nonce **for this measurement script only, over the
+    six committed, non-adversarial fixtures it builds from — never a pattern to
+    copy into product code.** Same 16-hex-char shape as ``wrap.new_nonce()``, but
+    derived from ``call_index`` instead of ``secrets.token_hex``. §6.5 requires a
+    fresh nonce "regenerated per attempt", satisfied here (call 0, 1, 2, … each get
+    their own value), but a genuinely *random* nonce would make every one of the N
+    calls in an arm as unrepeatable as the others across separate invocations of
+    this script, which would break acceptance 3 (a rerun without ``--refresh`` must
+    replay every call from the cache, byte-identical). Determinism does not weaken
+    the property the nonce boundary exists for on this input (design note 8): the
+    linter and the wrapper only need a value the built prompt does not otherwise
+    contain, not an unpredictable one — but that reasoning holds only because the
+    six fixtures are fixed and trusted. Production code
+    (``app.security.wrap.new_nonce``, and P5-T04's ``llm/investigate.py``) sends
+    real, possibly attacker-influenced alert content and must keep a genuinely
+    random nonce — a predictable one there would let an attacker who has seen
+    this script forge the untrusted-data boundary."""
     return f"{call_index:016x}"
 
 
@@ -739,10 +763,12 @@ def arm_metrics(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-# The §4.5 thresholds (DEC-032's reading: p95 ≤ 60 s while JSON ≥ 90 % and
-# schema-valid-after-one-repair ≥ 98 % hold), applied per arm here — the current
-# context pack carries no literal "§4.5" heading (a deviation from the card,
-# recorded in the report); DEC-032 is the surviving source for these four numbers.
+# The §4.5 thresholds, applied per arm here — the current context pack carries no
+# literal "§4.5" heading (a deviation from the card, recorded in the report).
+# DEC-032's "Owner's decision rule" names three of these four: p95 ≤ 60 s while
+# JSON ≥ 90 % and schema-valid-after-one-repair ≥ 98 % hold. The fourth —
+# schema-valid on the *first* attempt ≥ 90 % — is not in DEC-032; it is quoted
+# from architecture §4.5 in docs/smoke-test-D1-nothink.md:17-19's own §1 table.
 THRESHOLDS: tuple[tuple[str, str, float, str, str], ...] = (
     ("JSON parses", "json_rate", 0.90, "≥ 90 %", "ge"),
     ("Schema-valid `investigate_v2`, first attempt", "schema_rate_first", 0.90, "≥ 90 %", "ge"),
@@ -791,10 +817,10 @@ def ceiling_section(cfg: Config) -> str:
         f"`MAX_ALERTS_PER_CASE = {cfg.MAX_ALERTS_PER_CASE}`. So the largest dossier a real case on "
         f"this deployment can ever produce is ≈ {CEILING_HEADS_TOKENS:,} tokens — "
         f"{pct:.0f} % of `CASE_PROMPT_BUDGET_TOKENS = {cfg.CASE_PROMPT_BUDGET_TOKENS:,}`. "
-        "The 60 k arm below measures a class this deployment never reaches; the 12.8 k arm "
+        "The 60 k arm above measures a class this deployment never reaches; the 12.8 k arm "
         "measures the class it actually will. Both numbers are in the table above — reporting "
         "only the 60 k arm would be a different way of measuring the wrong thing (the mistake "
-        "DEC-025 exists to name)."
+        "DEC-032 exists to name)."
     )
 
 
@@ -812,9 +838,13 @@ def _num(value: float | None, digits: int = 2) -> str:
 
 
 def _git_sha() -> str:
+    """``git describe --always --dirty`` rather than a bare short sha: a rerun's
+    report is byte-identical to an earlier one only at the same HEAD *and* the same
+    dirty/clean state, and ``--dirty`` makes that visible instead of silently
+    naming a commit that does not fully describe the tree the report came from."""
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
+            ["git", "describe", "--always", "--dirty"],
             cwd=REPO_ROOT,
             text=True,
             stderr=subprocess.DEVNULL,
@@ -830,6 +860,45 @@ def _provenance(record: dict[str, Any]) -> str:
     file (acceptance 3): "N live" always counts responses fetched live at some
     point, never fewer just because a later run replayed them from the cache."""
     return record.get("provenance") or record.get("origin") or "unknown"
+
+
+def _latency_cell(record: dict[str, Any]) -> str:
+    """The per-call latency column: end-to-end (first attempt plus repair, when
+    one happened) for any record that carries ``repair_latency_ms``. A record
+    that was repaired but predates that field recorded only its first attempt's
+    latency and never the repair round's — rendering that number unlabelled would
+    silently understate the real end-to-end cost, so it renders as not recorded
+    instead, per this round's rule for a field an old cache entry cannot supply."""
+    latency_ms = record.get("latency_ms")
+    if latency_ms is None:
+        return "n/a"
+    if record.get("repaired") and "repair_latency_ms" not in record:
+        return "n/a (not recorded in this cache)"
+    return f"{latency_ms / 1000:.2f}"
+
+
+def _problems_cell(record: dict[str, Any]) -> str:
+    """Up to 3 schema-validator messages from the first attempt — validator text
+    only, never the offending value (``schemas.validate``'s own contract), so this
+    is safe to render. A record from before this field existed renders as not
+    recorded rather than the misleading "—" a schema-valid call gets."""
+    if "problems_first" not in record:
+        return "n/a (not recorded in this cache)"
+    problems = record["problems_first"]
+    return "; ".join(problems) if problems else "—"
+
+
+def _first_attempt_tokens(records: Sequence[dict[str, Any]]) -> int | None:
+    """The real, model-reported ``prompt_tokens`` of one *unrepaired* call in this
+    arm — every call in an arm sends the same content (only the nonce differs, and
+    that does not move the byte count enough to matter), so this is a clean proxy
+    for "what one first attempt at this budget actually costs in tokens", unlike
+    the arm's blended mean (which is inflated by any repaired call's doubled
+    send)."""
+    for record in records:
+        if not record.get("repaired") and record.get("input_tokens") is not None:
+            return record["input_tokens"]
+    return None
 
 
 def render_report(
@@ -850,9 +919,11 @@ def render_report(
     lines.append("# ② size-class measurement — `investigate_v2` at 60 k against the 12.8 k ceiling")
     lines.append("")
     lines.append(
-        "DEC-032 amendment (b) / DEC-097: the measurement the 28/09 ② agent-day rests on. "
-        "This report only measures format, latency and cost — the decision is DEC-097's "
-        "and the Owner's (§8)."
+        "DEC-032 amendment (b) / DEC-097: the measurement ②'s survival was conditioned on. "
+        "DEC-151 has since reinstated the whole ② bundle outright, superseding DEC-097's "
+        "28/09 one-agent-day arming condition; this report only measures format, latency "
+        "and cost — the decision on what to build atop these numbers is DEC-097's and the "
+        "Owner's (§6)."
     )
     lines.append("")
     lines.append(f"- **Date:** {generated_at}")
@@ -868,31 +939,86 @@ def render_report(
     lines.append(
         "- **Token estimate:** `len(text) / 4`, rounded — the crude estimator the card cites "
         "`eval/smoke_test.py` for; that script does not actually carry a pre-send estimator "
-        "(a card inaccuracy, recorded in the task report). The exact byte count is printed "
-        "alongside every estimate below so a reader can redo the arithmetic with a real "
+        "(a card inaccuracy, recorded in the task report). The nearest real precedent is "
+        "`app.llm.adapter.estimate_tokens` (`len(text.encode('utf-8')) / 2.5`, ①'s per-send "
+        "budget guard, not this script's own sizing loop). The exact system and user byte "
+        "counts and the `len/4` estimate are in the two-arm table below, next to the real, "
+        "model-reported token counts, so a reader can redo the arithmetic with a real "
         "tokeniser."
+    )
+    lines.append(
+        f"- **Scale:** {calls_per_arm} per arm (the card's own acceptance names 30; the "
+        "Director's dispatch authorised a live measurement under $0.10, which a 30-call, "
+        "two-arm run risked exceeding on the output side — see the task report's deviation "
+        "1). Two earlier live runs of the same two prompts, made while developing this "
+        f"script, are **not tabulated** here — only the {calls_per_arm} calls per arm stored "
+        "under the cache this report was rendered from are. §2's verdicts are therefore "
+        f"indicative at n = {calls_per_arm}, not a claim of statistical power."
     )
     lines.append("")
     lines.append("## 1 · Two-arm table")
     lines.append("")
     lines.append(
-        "| Arm (tokens) | clusters | n | JSON parses | schema valid (1st) | schema valid "
-        "(after repair) | p50 (s) | p95 (s) | max (s) | mean input tok | mean output tok | "
+        "| Arm (tokens) | clusters | system bytes | user bytes | `len/4` est. | n | JSON "
+        "parses | schema valid (1st) | schema valid (after repair) | p50 (s) | p95 (s) | "
+        "max (s) | mean input tok (incl. repair) | mean output tok (incl. repair) | "
         "cost (USD) | over `LLM_TIMEOUT_S` |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    ratio_notes: list[str] = []
     for budget_tokens in sorted(arms_data, reverse=True):
         data = arms_data[budget_tokens]
         m = arm_metrics(data["records"])
+        system_bytes = data.get("system_bytes")
+        user_bytes = data.get("user_bytes")
+        estimated_tokens = data.get("estimated_tokens")
+        first_tokens = _first_attempt_tokens(data["records"])
+        if (
+            first_tokens
+            and estimated_tokens
+            and system_bytes is not None
+            and user_bytes is not None
+        ):
+            ratio = first_tokens / estimated_tokens
+            bytes_per_token = (system_bytes + user_bytes) / first_tokens
+            ratio_notes.append(
+                (budget_tokens, first_tokens, estimated_tokens, ratio, bytes_per_token)
+            )
+        system_bytes_s = f"{system_bytes:,}" if system_bytes is not None else "n/a"
+        user_bytes_s = f"{user_bytes:,}" if user_bytes is not None else "n/a"
+        estimated_s = f"{estimated_tokens:,}" if estimated_tokens is not None else "n/a"
         lines.append(
-            f"| {budget_tokens:,} | {data['cluster_count']} | {m['n']} | {_pct(m['json_rate'])} | "
+            f"| {budget_tokens:,} | {data['cluster_count']} | {system_bytes_s} | {user_bytes_s} | "
+            f"{estimated_s} | {m['n']} | {_pct(m['json_rate'])} | "
             f"{_pct(m['schema_rate_first'])} | {_pct(m['schema_rate_repaired'])} | "
             f"{_num(m['p50_latency_s'])} | {_num(m['p95_latency_s'])} | {_num(m['max_latency_s'])} | "
             f"{_num(m['mean_input_tokens'], 0)} | {_num(m['mean_output_tokens'], 0)} | "
             f"{m['total_cost_usd']:.5f} | {m['over_timeout']} |"
         )
     lines.append("")
-    lines.append("## 2 · Verdict against the §4.5 thresholds (DEC-032's reading)")
+    if ratio_notes:
+        ratios = ", ".join(
+            f"{budget_tokens:,}: {first_tokens:,} real vs {estimated_tokens:,} estimated "
+            f"({ratio:.2f}×, {bytes_per_token:.2f} bytes/real-token)"
+            for budget_tokens, first_tokens, estimated_tokens, ratio, bytes_per_token in ratio_notes
+        )
+        lo_ratio = min(r[3] for r in ratio_notes)
+        hi_ratio = max(r[3] for r in ratio_notes)
+        lo_bpt = min(r[4] for r in ratio_notes)
+        hi_bpt = max(r[4] for r in ratio_notes)
+        lines.append(
+            f"The `len/4` estimate undershoots this model's real tokenizer by "
+            f"≈ {lo_ratio:.2f}–{hi_ratio:.2f}× ({ratios}) — real prompts run "
+            f"≈ {lo_bpt:.2f}–{hi_bpt:.2f} bytes per real token, not 4; both arms above and "
+            "the 12,828-token ceiling in §3 are expressed on the same crude `len/4` scale, "
+            "so the same undershoot applies to the ceiling figure too."
+        )
+        lines.append("")
+    lines.append(
+        "## 2 · Verdict against the §4.5 thresholds (three from DEC-032, the "
+        "first-attempt one from architecture §4.5 as quoted in "
+        "`docs/smoke-test-D1-nothink.md:17-19`)"
+    )
     lines.append("")
     lines.append("| Arm (tokens) | Threshold | Required | Measured | Verdict |")
     lines.append("|---|---|---|---|---|")
@@ -921,25 +1047,35 @@ def render_report(
     lines.append("## 5 · Per call")
     lines.append("")
     lines.append(
-        "| arm | # | origin | latency (s) | input tok | output tok | JSON | schema (1st) | schema (final) | cost (USD) | stopped_by |"
+        "Row `12,800 / 3`'s `latency (s), end-to-end` predates `repair_latency_ms` — it "
+        "renders as not recorded rather than the first-attempt-only number the old cache "
+        "actually stored, which would silently understate its real end-to-end cost (see "
+        "the task report's Review round 1 section)."
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("")
+    lines.append(
+        "| arm | # | origin | latency (s), end-to-end | input tok (incl. repair) | "
+        "output tok (incl. repair) | JSON | schema (1st) | schema (final) | cost (USD) | "
+        "stopped_by | first-attempt problems |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for budget_tokens in sorted(arms_data, reverse=True):
         for i, r in enumerate(arms_data[budget_tokens]["records"], start=1):
-            latency_s = "n/a" if r.get("latency_ms") is None else f"{r['latency_ms'] / 1000:.2f}"
             lines.append(
-                f"| {budget_tokens:,} | {i} | {_provenance(r)} | {latency_s} | "
+                f"| {budget_tokens:,} | {i} | {_provenance(r)} | {_latency_cell(r)} | "
                 f"{r.get('input_tokens', 'n/a')} | {r.get('output_tokens', 'n/a')} | "
                 f"{'ok' if r.get('json_ok') else 'no'} | {'ok' if r.get('schema_ok_first') else 'no'} | "
                 f"{'ok' if r.get('schema_ok_repaired') else 'no'} | {r.get('cost_usd', 0.0):.5f} | "
-                f"{r.get('stopped_by') or '—'} |"
+                f"{r.get('stopped_by') or '—'} | {_problems_cell(r)} |"
             )
     lines.append("")
     lines.append("## 6 · DEC-097")
     lines.append("")
     lines.append(
         'This is the measurement DEC-097 arms ② on: *"a surviving ② gets exactly one '
-        "agent-day, 28/09, after DEC-032's measurement at its own prompt size.\"* The numbers "
+        "agent-day, 28/09, after DEC-032's measurement at its own prompt size.\"* (DEC-151 "
+        "has since reinstated the ② bundle outright, so this no longer gates ②'s survival "
+        "— it is still the measurement that arming condition was written for.) The numbers "
         "above are that measurement. **This card reports numbers; it does not recommend a "
         "cut** (scope out) — the decision is DEC-097's and the Owner's."
     )
@@ -1090,7 +1226,13 @@ def main(
         except ValueError as exc:
             print(f"investigate_measure: {exc}", file=sys.stderr)
             return EXIT_CONFIG
-        arms_data[budget_tokens] = {"records": records, "cluster_count": len(dossier.plan)}
+        arms_data[budget_tokens] = {
+            "records": records,
+            "cluster_count": len(dossier.plan),
+            "system_bytes": len(system_text.encode("utf-8")),
+            "user_bytes": len(dossier.user_text.encode("utf-8")),
+            "estimated_tokens": dossier.total_tokens,
+        }
         if budget.get("tripped"):
             break
 
