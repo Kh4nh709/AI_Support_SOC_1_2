@@ -52,16 +52,19 @@ NOTE_BODY_MAX_BYTES = 4000
 
 
 class ConcludeConflict(Exception):
-    """The case is not `investigating` — either already concluded or absent
+    """The case exists but is not `investigating` — already concluded
     (`domain.transitions.StaleState`, translated with the extra read design
     note 1 asks for). `web/routers/tier2.py` maps this to 409. `status` is
-    `None` only when `case_id` names no row at all; `concluded_by`/
-    `concluded_at` are set only when the case has in fact been concluded."""
+    always the case's real, current status; `concluded_by`/`concluded_at`
+    are set because a case this exception fires for is always concluded (the
+    only other way to leave `investigating` in the three-state
+    `ck_cases_status` CHECK). A `case_id` that names no row at all is
+    `UnknownCase`, not this — see below."""
 
     def __init__(
         self,
         case_id: str,
-        status: str | None,
+        status: str,
         *,
         concluded_by: Any = None,
         concluded_at: datetime | None = None,
@@ -74,7 +77,8 @@ class ConcludeConflict(Exception):
 
 
 class UnknownCase(Exception):
-    """`case_id` matches no row in `cases` — raised by `add_note` (the
+    """`case_id` matches no row in `cases`. Raised by `submit` (the case
+    re-read after `StaleState` comes back empty) and by `add_note` (the
     `fk_case_notes_case` foreign key firing on the `INSERT`, translated
     rather than left as a raw `IntegrityError`). Maps to 404."""
 
@@ -101,6 +105,8 @@ def submit(
         raise ValueError(f"conclusion: no such value {conclusion!r}")
     if not reason or not reason.strip():
         raise ValueError("reason: must not be empty")
+    if "\x00" in reason:
+        raise ValueError("reason: must not contain a NUL byte")
 
     conn.execute(sql.SQL("SET LOCAL statement_timeout = {}").format(sql.Literal(STATEMENT_TIMEOUT)))
     try:
@@ -111,7 +117,7 @@ def submit(
             (case_id,),
         ).fetchone()
         if row is None:
-            raise ConcludeConflict(case_id, None) from exc
+            raise UnknownCase(case_id) from exc
         status, concluded_by, concluded_at = row
         raise ConcludeConflict(
             case_id, status, concluded_by=concluded_by, concluded_at=concluded_at
@@ -134,6 +140,8 @@ def add_note(conn: psycopg.Connection, case_id: str, author_id: str, body: str) 
     type). No audit event — see the module docstring."""
     if not body or not body.strip():
         raise ValueError("body: must not be empty")
+    if "\x00" in body:
+        raise ValueError("body: must not contain a NUL byte")
     encoded = body.encode("utf-8")
     if len(encoded) > NOTE_BODY_MAX_BYTES:
         raise ValueError(f"body: exceeds {NOTE_BODY_MAX_BYTES} bytes ({len(encoded)})")
