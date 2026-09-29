@@ -256,6 +256,25 @@ def test_admin_nav_link_only_for_admin() -> None:
     assert "/admin/labels" not in html_tier1
 
 
+def test_cases_and_rules_nav_links_follow_the_role() -> None:
+    # Added by the Director at the P5-T07 merge: `/cases` (P5-T07) for tier2 and
+    # admin, `/admin/rules` (P5-T10) for admin only.
+    template = templating.templates.get_template("base.html")
+    html = {
+        role: template.render(
+            user=auth.Claims(user_id="1", username="u", role=role, iat=0.0, exp=0.0),
+            htmx_src=templating.HTMX_SRC,
+            htmx_integrity=None,
+        )
+        for role in ("tier1", "tier2", "admin")
+    }
+    assert 'href="/cases"' not in html["tier1"]
+    assert 'href="/cases"' in html["tier2"]
+    assert 'href="/cases"' in html["admin"]
+    assert 'href="/admin/rules"' in html["admin"]
+    assert 'href="/admin/rules"' not in html["tier2"]
+
+
 # --------------------------------------------------------------------------
 # pages.page_user — not wired to any route in this card, so tested on an
 # ad-hoc app (P4-T05 and P6-T02 wire it to real pages). Nothing here ever

@@ -40,8 +40,12 @@
 </header>
 <nav>
   <a href="/queue">Hàng đợi</a>
+  {% if user and user.role in ("tier2", "admin") %}
+  <a href="/cases">Case</a>
+  {% endif %}
   {% if user and user.role == "admin" %}
   <a href="/admin/labels">Gán nhãn</a>
+  <a href="/admin/rules">Rule tự đóng</a>
   {% endif %}
 </nav>
 <main>
