@@ -2769,3 +2769,30 @@ Decision:
      - The thesis reports the defect and its rate (limitations, at P8-T06), and the post-fix figures as the measurement.
   5. **Production.** After the Owner fast-forwards `main`, `docker compose restart app worker` loads the fix (a code-only change, per the memory rule). Live `ssh_brute_force` alerts then stop ending as `unavailable` for this reason.
 Supersedes: nothing
+
+## DEC-151 · 2026-09-29 · By the Owner's order, P4 and P5 are reinstated: P4-T03/T05/T06 and every open P5 card, ② included, are built in four dependency waves by Coder sessions with one Reviewer each; P7's measured results do not move; a code cut-off at 01/10 12:00 protects the close-out and the 02/10 submission
+Scope: **plan** (reverses DEC-116's deprioritization and DEC-111's cut of ②) · **evaluation validity** (what the reinstated work may and may not touch) · **schedule**
+Decided by: **the Owner** (*"Theo lệnh tôi Thực hiện khôi phục lại P4 và P5"*, 29/09); Director (the waves, the guardrails, and the cut-off recommendation)
+Drafted by: Director (Opus 5.5)
+Propagated to: `STATE.md` (the fifteen rows note this DEC; the wave-1 rows go to `in-progress`) · Coder and Reviewer sessions, one pair per card · the P8-T06 close-out
+Decision:
+  1. **Reinstated.** 15 cards:
+     - P4-T03, P4-T05, P4-T06: Tier-1 decide logic, queue/detail pages, the e2e test;
+     - P5-T01…T11 and T13: worker handler discovery, the ② bundle T02→T05, tier-2 REST and case pages, digest job and page, rules screen, health and notify, runbook alarms.
+
+     P5-T12 was already done. The card estimates total **≈ 45 h**, with three days to 02/10. Stated once, as DEC-116 required: this competes with P8-T02 (30/09) and P8-T06 (01/10) for the same days.
+  2. **Waves**, dispatched as each wave's dependencies merge into the director branch:
+     - **Wave 1:** P4-T03, P5-T01, P5-T02, P5-T06, P5-T10;
+     - **Wave 2:** P4-T05, P5-T03, P5-T07, P5-T08, P5-T11;
+     - **Wave 3:** P4-T06, P5-T04, P5-T09, P5-T13;
+     - **Wave 4:** P5-T05.
+
+     Each card gets a Coder in its own isolated worktree, cut from the current director tip, then a separate read-only Reviewer. The Director merges on APPROVE and re-runs the whole suite. Each Coder tests against a private test database, so parallel runs do not share `soc_test`.
+  3. **Guardrails.**
+     - The cards were written 19–25/09. Where a card disagrees with current code or a later DEC, the current code and `DECISIONS.md` win, and the Coder records the deviation.
+     - No card touches `eval/gold_v1.*`, `kb/decision_tables/` (the ten signed tables), the committed `docs/results/`, or the eval harness's measured paths.
+     - Migrations are written and tested on private databases only. The Owner applies them to `soc_dev` after merge.
+     - Owner actions stay the Owner's: the Telegram token or the log sink for P5-T11; the first digest review (T09); the first rule (T10).
+  4. **P7's results do not move.** The measured system is `656e61e` (P7-T08 run log). Everything reinstated lands after it, and the thesis states it as *built after the evaluation, not measured*. `docs/results/` is not re-rendered.
+  5. **Cut-off (the Director's recommendation; the Owner may move it).** Code merges stop at **01/10 12:00**. A card not merged and green by then is recorded as not completed, and the tree is closed from what merged. P8-T06 and the `v1.0` tag run on that tree. This keeps a working submission guaranteed rather than hoped for.
+Supersedes: DEC-116 (the deprioritization and its 30/09 auto-cut); DEC-111's cut of ② (the rest of DEC-111 stands)
