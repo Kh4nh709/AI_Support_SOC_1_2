@@ -15,6 +15,24 @@ nothing:
   5. destination port                                    -> resolved_by='dst_port'
   nothing matches                                        -> category='unknown', resolved_by='none'
 
+For an alert whose decoder name contains `windows_eventchannel` (P9-T02,
+DEC-149), three Windows tiers run first, in the shared tiers' own order on the
+Windows tables, and the port tier never runs:
+
+  W1. exact MITRE technique id, `WINDOWS_TECHNIQUE_TO_CATEGORY` -> resolved_by='mitre'
+  W2. its parent technique id, same table                    -> resolved_by='mitre_parent'
+  W3. `rule.groups`, `WINDOWS_GROUP_TO_CATEGORY`             -> resolved_by='rule_groups'
+  then tiers 1-4; never tier 5 — a Windows host's destination port is not a
+  category signal, so a Windows alert nothing else matches is `unknown`/`none`.
+
+They file Windows login attempts under `brute_force` rather than
+`ssh_brute_force` — by T1110 (any sub-technique, through W2) or by Wazuh's
+`authentication_failed`/`authentication_failures` groups, which the stock
+single-4625 rule carries with T1531 — and add the Windows-only technique ids the
+shared table has no key for. resolved_by stays inside the DB's
+`ck_alerts_resolved_by` set. The four shared tables are not edited and any other
+decoder skips W1-W3 and keeps tier 5, so its alerts cannot change category.
+
 Within a tier, ALL matching signals are collected — never "first match wins":
 a real alert routinely carries two MITRE techniques that both resolve (the
 canonical alert has `T1078` and `T1110` together). The collected set is
@@ -36,16 +54,18 @@ resolve to `unknown`/`none` instead (R1, R2).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-#: Bump in the same commit as any edit to the four tables below — it is what
-#: tells a later reader which alerts need re-classifying. `test_category.py`
-#: hashes the tables and pins this value as a reminder to do so.
-MAPPING_VERSION = "v3.2"
+#: Bump in the same commit as any edit to the tables below (the four shared ones
+#: and the two Windows ones) — it is what tells a later reader which alerts need
+#: re-classifying. `test_category.py` hashes the tables and pins this value as a
+#: reminder to do so. v3.3: the Windows tiers (P9-T02); the shared tables are v3.2's.
+MAPPING_VERSION = "v3.3"
 
 #: phase-1 §Khối 5, verbatim — declared once, applied to every tier's
-#: candidate set (not only the MITRE tier).
+#: candidate set (not only the MITRE tier). `brute_force` (P9-T02) sits directly
+#: after `ssh_brute_force`: the same attack, on Windows.
 PRIORITY: tuple[str, ...] = (
     "ransomware",
     "malware",
@@ -53,12 +73,44 @@ PRIORITY: tuple[str, ...] = (
     "data_exfiltration",
     "privilege_escalation",
     "ssh_brute_force",
+    "brute_force",
     "web_attack",
     "suspicious_login",
     "recon",
     "policy_violation",
     "unknown",
 )
+
+#: The Windows tiers' guard: a substring of the decoder name, like tier 4's keys.
+WINDOWS_DECODER = "windows_eventchannel"
+
+# Windows tiers W1-W2 (P9-T02, DEC-149), only for an alert whose decoder is
+# `windows_eventchannel`: the exact id, then the part before the first '.', as
+# tiers 1-2 do. T1110 is MITRE ATT&CK "Brute Force" — every sub-technique reaches
+# it through W2; the rest are Windows-only ids with no key in the shared table below.
+WINDOWS_TECHNIQUE_TO_CATEGORY: dict[str, str] = {
+    "T1110": "brute_force",
+    "T1110.001": "brute_force",
+    "T1110.003": "brute_force",
+    "T1490": "ransomware",
+    "T1485": "ransomware",
+    "T1071.001": "c2_beacon",
+    "T1573": "c2_beacon",
+    "T1048": "data_exfiltration",
+    "T1567": "data_exfiltration",
+    "T1059.001": "malware",
+}
+
+# Windows tier W3 — rule.groups. Wazuh's Windows logon rules carry these groups
+# whatever their MITRE block says (the stock single-4625 rule is T1531 +
+# `authentication_failed`), so a Windows login attempt reaches `brute_force` here
+# before the shared tier 3 could file it under `ssh_brute_force`.
+WINDOWS_GROUP_TO_CATEGORY: dict[str, str] = {
+    "authentication_failed": "brute_force",
+    "authentication_failures": "brute_force",
+    "invalid_login": "brute_force",
+    "authentication_success": "suspicious_login",
+}
 
 # Tiers 1-2 share one table: a plain technique ("T1110") and a specific
 # sub-technique ("T1110.001") may each be a key in their own right, or only the
@@ -163,33 +215,47 @@ def _sort_by_priority(categories: list[str]) -> tuple[str, ...]:
     return tuple(seen)
 
 
-def _tier_mitre_exact(mitre_ids: Sequence[str]) -> list[str]:
+def _is_windows(decoder: str | None) -> bool:
+    """Whether the Windows tiers apply: `windows_eventchannel` in the decoder name."""
+    return WINDOWS_DECODER in _safe_str(decoder).lower()
+
+
+# Tiers 1-3 take their table as an argument so that W1-W3 run the very same code
+# on the Windows tables; the default is the shared table, the only one any other
+# decoder ever sees.
+
+
+def _tier_mitre_exact(
+    mitre_ids: Sequence[str], table: Mapping[str, str] = TECHNIQUE_TO_CATEGORY
+) -> list[str]:
     out: list[str] = []
     for raw in _iter(mitre_ids):
         tid = _safe_str(raw).upper()
-        if tid and tid in TECHNIQUE_TO_CATEGORY:
-            out.append(TECHNIQUE_TO_CATEGORY[tid])
+        if tid and tid in table:
+            out.append(table[tid])
     return out
 
 
-def _tier_mitre_parent(mitre_ids: Sequence[str]) -> list[str]:
+def _tier_mitre_parent(
+    mitre_ids: Sequence[str], table: Mapping[str, str] = TECHNIQUE_TO_CATEGORY
+) -> list[str]:
     out: list[str] = []
     for raw in _iter(mitre_ids):
         tid = _safe_str(raw).upper()
         if not tid or "." not in tid:
             continue
         parent = tid.split(".")[0]
-        if parent in TECHNIQUE_TO_CATEGORY:
-            out.append(TECHNIQUE_TO_CATEGORY[parent])
+        if parent in table:
+            out.append(table[parent])
     return out
 
 
-def _tier_groups(groups: Sequence[str]) -> list[str]:
+def _tier_groups(groups: Sequence[str], table: Mapping[str, str] = GROUP_TO_CATEGORY) -> list[str]:
     out: list[str] = []
     for raw in _iter(groups):
         key = _safe_str(raw).lower()
-        if key and key in GROUP_TO_CATEGORY:
-            out.append(GROUP_TO_CATEGORY[key])
+        if key and key in table:
+            out.append(table[key])
     return out
 
 
@@ -214,17 +280,30 @@ def resolve(
     decoder: str | None,
     dst_port: int,
 ) -> Resolution:
-    """Resolve `category`/`categories` from all four signals, five tiers in order.
+    """Resolve `category`/`categories` from all four signals, five tiers in order —
+    for a `windows_eventchannel` alert, W1-W3 first and no tier 5.
 
     Never raises (R1, R2): every malformed signal — `None`, a non-string
     element, a port that is not an `int` — is simply skipped, not raised on.
     """
+    windows = _is_windows(decoder)
+    windows_tiers = (
+        (
+            (_tier_mitre_exact(mitre_ids, WINDOWS_TECHNIQUE_TO_CATEGORY), "mitre"),
+            (_tier_mitre_parent(mitre_ids, WINDOWS_TECHNIQUE_TO_CATEGORY), "mitre_parent"),
+            (_tier_groups(groups, WINDOWS_GROUP_TO_CATEGORY), "rule_groups"),
+        )
+        if windows
+        else ()
+    )
     for candidates, resolved_by in (
+        *windows_tiers,
         (_tier_mitre_exact(mitre_ids), "mitre"),
         (_tier_mitre_parent(mitre_ids), "mitre_parent"),
         (_tier_groups(groups), "rule_groups"),
         (_tier_decoder(decoder), "decoder"),
-        (_tier_port(dst_port), "dst_port"),
+        # A Windows host's destination port is not a category signal.
+        ([] if windows else _tier_port(dst_port), "dst_port"),
     ):
         sorted_categories = _sort_by_priority(candidates)
         if sorted_categories:

@@ -133,7 +133,7 @@ A Windows eventchannel alert keeps these under `data.win.eventdata`/`data.win.sy
 3. **Check, read-only.** The alert arrives with:
    - a non-empty `raw_log`;
    - `alert_user` set;
-   - a category of `suspicious_login` or `brute_force`.
+   - a category of `brute_force` (rule 60122 via the Windows group tier, `024beda`; the 9 real 60122 rows confirm it).
 
    It is triaged, and the verdict is not `false_positive` for `brute_force`, because that table is unsigned.
 4. `docs/limitations.md` gains one line at P8-T06: *"Windows alerts are parsed, categorised and triaged (P9), but no Windows data is in gold_v1: implemented, not measured."* Measuring it needs a Windows lab, a `gold_v2` and a signing of `brute_force.yaml`.

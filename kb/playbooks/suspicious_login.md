@@ -38,3 +38,10 @@
 
 - Lịch sử đăng nhập 30 ngày của tài khoản: IP, giờ, giao thức thường dùng.
 - Xác nhận với chính người dùng hoặc quản lý trực tiếp — bước rẻ nhất và quyết định nhất.
+
+## 7 · Windows (added 29/09, P9-T02, not reviewed)
+
+- 4624 **ngay sau một chuỗi 4625** cùng tài khoản hoặc cùng nguồn → brute force **thành công**; tìm alert `brute_force` trên cùng `agent_name` ngay trước đó.
+- `Logon Type` 10 (RDP) từ một nguồn lần đầu thấy, hoặc ngoài giờ, trên máy vốn không ai đăng nhập từ xa.
+- 4648 — đăng nhập bằng thông tin chỉ định (`runas`, kết nối tới máy khác bằng tài khoản khác): dấu hiệu di chuyển ngang khi tài khoản không phải của người đang dùng máy.
+- 4672 — phiên mới được cấp đặc quyền: một lần đăng nhập lạ kèm 4672 là đăng nhập **quản trị**, nâng mức.

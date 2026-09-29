@@ -1,0 +1,3859 @@
+{
+  "_comment": "P9-T01 §3 test 1 (docs/plan/tasks/P9/P9-tasks.md): parse_wazuh_alert() of the BASE commit over test_wazuh_parser_windows.linux_corpus(), written before wazuh_parser.py was edited. Never regenerate: a parser change is proved against this file, not written into it.",
+  "base_commit": "ba7b070",
+  "cases": {
+    "alert_40112.json": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1786903016.121311",
+        "manager_id": "IA1803",
+        "rule_id": "40112",
+        "description": "Multiple authentication failures followed by a success.",
+        "agent_name": "user1-IA1803",
+        "agent_id": "001",
+        "agent_ip": "79.79.79.12",
+        "origin_host": "user1-IA1803",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "127.0.0.1",
+        "dstip": "",
+        "src_port": 48104,
+        "dst_port": 0,
+        "alert_user": "user1",
+        "decoder": "sshd",
+        "mitre_ids": [
+          "T1078",
+          "T1110"
+        ],
+        "rule_groups": [
+          "syslog",
+          "attacks"
+        ],
+        "rule_level": 12,
+        "severity": "critical",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force",
+          "suspicious_login"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": true,
+        "dstip_is_private": null,
+        "raw_log": "Aug 16 17:56:55 user1-IA1803 sshd[136570]: Accepted password for user1 from 127.0.0.1 port 48104 ssh2",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "76fcfceb90ed06f6be274be022445ff693254b73edbdb70180244328119b2a1a",
+        "raw_payload": {
+          "predecoder": {
+            "hostname": "user1-IA1803",
+            "program_name": "sshd",
+            "timestamp": "Aug 16 17:56:55"
+          },
+          "input": {
+            "type": "log"
+          },
+          "agent": {
+            "ip": "79.79.79.12",
+            "name": "user1-IA1803",
+            "id": "001"
+          },
+          "manager": {
+            "name": "IA1803"
+          },
+          "data": {
+            "srcip": "127.0.0.1",
+            "dstuser": "user1",
+            "srcport": "48104"
+          },
+          "rule": {
+            "mail": true,
+            "level": 12,
+            "description": "Multiple authentication failures followed by a success.",
+            "groups": [
+              "syslog",
+              "attacks"
+            ],
+            "frequency": 2,
+            "firedtimes": 1,
+            "mitre": {
+              "technique": [
+                "Valid Accounts",
+                "Brute Force"
+              ],
+              "id": [
+                "T1078",
+                "T1110"
+              ],
+              "tactic": [
+                "Defense Evasion",
+                "Persistence",
+                "Privilege Escalation",
+                "Initial Access",
+                "Credential Access"
+              ]
+            },
+            "id": "40112"
+          },
+          "location": "journald",
+          "decoder": {
+            "parent": "sshd",
+            "name": "sshd"
+          },
+          "id": "1786903016.121311",
+          "full_log": "Aug 16 17:56:55 user1-IA1803 sshd[136570]: Accepted password for user1 from 127.0.0.1 port 48104 ssh2",
+          "timestamp": "2026-08-17T00:56:56.130+0700"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "alert_40112.json without its agent object": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1786903016.121311",
+        "manager_id": "IA1803",
+        "rule_id": "40112",
+        "description": "Multiple authentication failures followed by a success.",
+        "agent_name": "IA1803",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "user1-IA1803",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "127.0.0.1",
+        "dstip": "",
+        "src_port": 48104,
+        "dst_port": 0,
+        "alert_user": "user1",
+        "decoder": "sshd",
+        "mitre_ids": [
+          "T1078",
+          "T1110"
+        ],
+        "rule_groups": [
+          "syslog",
+          "attacks"
+        ],
+        "rule_level": 12,
+        "severity": "critical",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force",
+          "suspicious_login"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": true,
+        "dstip_is_private": null,
+        "raw_log": "Aug 16 17:56:55 user1-IA1803 sshd[136570]: Accepted password for user1 from 127.0.0.1 port 48104 ssh2",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "3ee80ed90d52aca6623e66cf120f9d48e8b0d9e2a35c584d91ce8a89ec7beef3",
+        "raw_payload": {
+          "predecoder": {
+            "hostname": "user1-IA1803",
+            "program_name": "sshd",
+            "timestamp": "Aug 16 17:56:55"
+          },
+          "input": {
+            "type": "log"
+          },
+          "manager": {
+            "name": "IA1803"
+          },
+          "data": {
+            "srcip": "127.0.0.1",
+            "dstuser": "user1",
+            "srcport": "48104"
+          },
+          "rule": {
+            "mail": true,
+            "level": 12,
+            "description": "Multiple authentication failures followed by a success.",
+            "groups": [
+              "syslog",
+              "attacks"
+            ],
+            "frequency": 2,
+            "firedtimes": 1,
+            "mitre": {
+              "technique": [
+                "Valid Accounts",
+                "Brute Force"
+              ],
+              "id": [
+                "T1078",
+                "T1110"
+              ],
+              "tactic": [
+                "Defense Evasion",
+                "Persistence",
+                "Privilege Escalation",
+                "Initial Access",
+                "Credential Access"
+              ]
+            },
+            "id": "40112"
+          },
+          "location": "journald",
+          "decoder": {
+            "parent": "sshd",
+            "name": "sshd"
+          },
+          "id": "1786903016.121311",
+          "full_log": "Aug 16 17:56:55 user1-IA1803 sshd[136570]: Accepted password for user1 from 127.0.0.1 port 48104 ssh2",
+          "timestamp": "2026-08-17T00:56:56.130+0700"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "alert_40112.json with rule.level 11": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1786903016.121311",
+        "manager_id": "IA1803",
+        "rule_id": "40112",
+        "description": "Multiple authentication failures followed by a success.",
+        "agent_name": "user1-IA1803",
+        "agent_id": "001",
+        "agent_ip": "79.79.79.12",
+        "origin_host": "user1-IA1803",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "127.0.0.1",
+        "dstip": "",
+        "src_port": 48104,
+        "dst_port": 0,
+        "alert_user": "user1",
+        "decoder": "sshd",
+        "mitre_ids": [
+          "T1078",
+          "T1110"
+        ],
+        "rule_groups": [
+          "syslog",
+          "attacks"
+        ],
+        "rule_level": 11,
+        "severity": "high",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force",
+          "suspicious_login"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": true,
+        "dstip_is_private": null,
+        "raw_log": "Aug 16 17:56:55 user1-IA1803 sshd[136570]: Accepted password for user1 from 127.0.0.1 port 48104 ssh2",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "76fcfceb90ed06f6be274be022445ff693254b73edbdb70180244328119b2a1a",
+        "raw_payload": {
+          "predecoder": {
+            "hostname": "user1-IA1803",
+            "program_name": "sshd",
+            "timestamp": "Aug 16 17:56:55"
+          },
+          "input": {
+            "type": "log"
+          },
+          "agent": {
+            "ip": "79.79.79.12",
+            "name": "user1-IA1803",
+            "id": "001"
+          },
+          "manager": {
+            "name": "IA1803"
+          },
+          "data": {
+            "srcip": "127.0.0.1",
+            "dstuser": "user1",
+            "srcport": "48104"
+          },
+          "rule": {
+            "mail": true,
+            "level": 11,
+            "description": "Multiple authentication failures followed by a success.",
+            "groups": [
+              "syslog",
+              "attacks"
+            ],
+            "frequency": 2,
+            "firedtimes": 1,
+            "mitre": {
+              "technique": [
+                "Valid Accounts",
+                "Brute Force"
+              ],
+              "id": [
+                "T1078",
+                "T1110"
+              ],
+              "tactic": [
+                "Defense Evasion",
+                "Persistence",
+                "Privilege Escalation",
+                "Initial Access",
+                "Credential Access"
+              ]
+            },
+            "id": "40112"
+          },
+          "location": "journald",
+          "decoder": {
+            "parent": "sshd",
+            "name": "sshd"
+          },
+          "id": "1786903016.121311",
+          "full_log": "Aug 16 17:56:55 user1-IA1803 sshd[136570]: Accepted password for user1 from 127.0.0.1 port 48104 ssh2",
+          "timestamp": "2026-08-17T00:56:56.130+0700"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "indexer_hit_no_fields.json": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1786903016.121311",
+        "manager_id": "IA1803",
+        "rule_id": "40112",
+        "description": "Multiple authentication failures followed by a success.",
+        "agent_name": "user1-IA1803",
+        "agent_id": "001",
+        "agent_ip": "79.79.79.12",
+        "origin_host": "user1-IA1803",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "127.0.0.1",
+        "dstip": "",
+        "src_port": 48104,
+        "dst_port": 0,
+        "alert_user": "user1",
+        "decoder": "sshd",
+        "mitre_ids": [
+          "T1078",
+          "T1110"
+        ],
+        "rule_groups": [
+          "syslog",
+          "attacks"
+        ],
+        "rule_level": 12,
+        "severity": "critical",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force",
+          "suspicious_login"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": true,
+        "dstip_is_private": null,
+        "raw_log": "Aug 16 17:56:55 user1-IA1803 sshd[136570]: Accepted password for user1 from 127.0.0.1 port 48104 ssh2",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "76fcfceb90ed06f6be274be022445ff693254b73edbdb70180244328119b2a1a",
+        "raw_payload": {
+          "predecoder": {
+            "hostname": "user1-IA1803",
+            "program_name": "sshd",
+            "timestamp": "Aug 16 17:56:55"
+          },
+          "input": {
+            "type": "log"
+          },
+          "agent": {
+            "ip": "79.79.79.12",
+            "name": "user1-IA1803",
+            "id": "001"
+          },
+          "manager": {
+            "name": "IA1803"
+          },
+          "data": {
+            "srcip": "127.0.0.1",
+            "dstuser": "user1",
+            "srcport": "48104"
+          },
+          "rule": {
+            "mail": true,
+            "level": 12,
+            "description": "Multiple authentication failures followed by a success.",
+            "groups": [
+              "syslog",
+              "attacks"
+            ],
+            "frequency": 2,
+            "firedtimes": 1,
+            "mitre": {
+              "technique": [
+                "Valid Accounts",
+                "Brute Force"
+              ],
+              "id": [
+                "T1078",
+                "T1110"
+              ],
+              "tactic": [
+                "Defense Evasion",
+                "Persistence",
+                "Privilege Escalation",
+                "Initial Access",
+                "Credential Access"
+              ]
+            },
+            "id": "40112"
+          },
+          "location": "journald",
+          "decoder": {
+            "parent": "sshd",
+            "name": "sshd"
+          },
+          "id": "1786903016.121311",
+          "full_log": "Aug 16 17:56:55 user1-IA1803 sshd[136570]: Accepted password for user1 from 127.0.0.1 port 48104 ssh2",
+          "timestamp": "2026-08-17T00:56:56.130+0700"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "archive_line_5503.json": {
+      "envelope": "bare",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1788340536.1509017",
+        "manager_id": "IA1803",
+        "rule_id": "5503",
+        "description": "PAM: User login failed.",
+        "agent_name": "user1-IA1803",
+        "agent_id": "001",
+        "agent_ip": "79.79.79.12",
+        "origin_host": "user1-IA1803",
+        "alert_time": "2026-09-02T09:15:36.255000+00:00",
+        "event_time": null,
+        "srcip": "202.165.25.8",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": "root",
+        "decoder": "pam",
+        "mitre_ids": [
+          "T1110.001"
+        ],
+        "rule_groups": [
+          "pam",
+          "syslog",
+          "authentication_failed"
+        ],
+        "rule_level": 5,
+        "severity": "medium",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": false,
+        "dstip_is_private": null,
+        "raw_log": "Sep 02 09:15:35 user1-IA1803 sshd[86189]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=202.165.25.8  user=root",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "ce4e502be1d12dd80d784dd1c5e694a7c2bd171cb8974beec1e062fc66d2775b",
+        "raw_payload": {
+          "rule": {
+            "tsc": [
+              "CC6.1",
+              "CC6.8",
+              "CC7.2",
+              "CC7.3"
+            ],
+            "pci_dss": [
+              "10.2.4",
+              "10.2.5"
+            ],
+            "description": "PAM: User login failed.",
+            "mail": false,
+            "mitre": {
+              "tactic": [
+                "Credential Access"
+              ],
+              "technique": [
+                "Password Guessing"
+              ],
+              "id": [
+                "T1110.001"
+              ]
+            },
+            "firedtimes": 1,
+            "id": "5503",
+            "hipaa": [
+              "164.312.b"
+            ],
+            "level": 5,
+            "gpg13": [
+              "7.8"
+            ],
+            "groups": [
+              "pam",
+              "syslog",
+              "authentication_failed"
+            ],
+            "nist_800_53": [
+              "AU.14",
+              "AC.7"
+            ],
+            "gdpr": [
+              "IV_35.7.d",
+              "IV_32.2"
+            ]
+          },
+          "@timestamp": "2026-09-02T09:15:37.599599843Z",
+          "path": "/var/ossec/logs/alerts/alerts.json",
+          "predecoder": {
+            "program_name": "sshd",
+            "hostname": "user1-IA1803",
+            "timestamp": "Sep 02 09:15:35"
+          },
+          "data": {
+            "tty": "ssh",
+            "uid": "0",
+            "srcip": "202.165.25.8",
+            "dstuser": "root",
+            "euid": "0"
+          },
+          "id": "1788340536.1509017",
+          "tags": [
+            "wazuh_alerts"
+          ],
+          "location": "journald",
+          "event": {
+            "original": "{\"timestamp\":\"2026-09-02T16:15:36.255+0700\",\"rule\":{\"level\":5,\"description\":\"PAM: User login failed.\",\"id\":\"5503\",\"mitre\":{\"id\":[\"T1110.001\"],\"tactic\":[\"Credential Access\"],\"technique\":[\"Password Guessing\"]},\"firedtimes\":1,\"mail\":false,\"groups\":[\"pam\",\"syslog\",\"authentication_failed\"],\"pci_dss\":[\"10.2.4\",\"10.2.5\"],\"gpg13\":[\"7.8\"],\"gdpr\":[\"IV_35.7.d\",\"IV_32.2\"],\"hipaa\":[\"164.312.b\"],\"nist_800_53\":[\"AU.14\",\"AC.7\"],\"tsc\":[\"CC6.1\",\"CC6.8\",\"CC7.2\",\"CC7.3\"]},\"agent\":{\"id\":\"001\",\"name\":\"user1-IA1803\",\"ip\":\"79.79.79.12\"},\"manager\":{\"name\":\"IA1803\"},\"id\":\"1788340536.1509017\",\"full_log\":\"Sep 02 09:15:35 user1-IA1803 sshd[86189]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=202.165.25.8  user=root\",\"predecoder\":{\"program_name\":\"sshd\",\"timestamp\":\"Sep 02 09:15:35\",\"hostname\":\"user1-IA1803\"},\"decoder\":{\"name\":\"pam\"},\"data\":{\"srcip\":\"202.165.25.8\",\"dstuser\":\"root\",\"uid\":\"0\",\"euid\":\"0\",\"tty\":\"ssh\"},\"location\":\"journald\"}"
+          },
+          "agent": {
+            "ip": "79.79.79.12",
+            "name": "user1-IA1803",
+            "id": "001"
+          },
+          "timestamp": "2026-09-02T16:15:36.255+0700",
+          "decoder": {
+            "name": "pam"
+          },
+          "full_log": "Sep 02 09:15:35 user1-IA1803 sshd[86189]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=202.165.25.8  user=root",
+          "manager": {
+            "name": "IA1803"
+          },
+          "@version": "1",
+          "host": "IA1803"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "archive_line_5503.json event.original": {
+      "envelope": "bare",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1788340536.1509017",
+        "manager_id": "IA1803",
+        "rule_id": "5503",
+        "description": "PAM: User login failed.",
+        "agent_name": "user1-IA1803",
+        "agent_id": "001",
+        "agent_ip": "79.79.79.12",
+        "origin_host": "user1-IA1803",
+        "alert_time": "2026-09-02T09:15:36.255000+00:00",
+        "event_time": null,
+        "srcip": "202.165.25.8",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": "root",
+        "decoder": "pam",
+        "mitre_ids": [
+          "T1110.001"
+        ],
+        "rule_groups": [
+          "pam",
+          "syslog",
+          "authentication_failed"
+        ],
+        "rule_level": 5,
+        "severity": "medium",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": false,
+        "dstip_is_private": null,
+        "raw_log": "Sep 02 09:15:35 user1-IA1803 sshd[86189]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=202.165.25.8  user=root",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "ce4e502be1d12dd80d784dd1c5e694a7c2bd171cb8974beec1e062fc66d2775b",
+        "raw_payload": {
+          "timestamp": "2026-09-02T16:15:36.255+0700",
+          "rule": {
+            "level": 5,
+            "description": "PAM: User login failed.",
+            "id": "5503",
+            "mitre": {
+              "id": [
+                "T1110.001"
+              ],
+              "tactic": [
+                "Credential Access"
+              ],
+              "technique": [
+                "Password Guessing"
+              ]
+            },
+            "firedtimes": 1,
+            "mail": false,
+            "groups": [
+              "pam",
+              "syslog",
+              "authentication_failed"
+            ],
+            "pci_dss": [
+              "10.2.4",
+              "10.2.5"
+            ],
+            "gpg13": [
+              "7.8"
+            ],
+            "gdpr": [
+              "IV_35.7.d",
+              "IV_32.2"
+            ],
+            "hipaa": [
+              "164.312.b"
+            ],
+            "nist_800_53": [
+              "AU.14",
+              "AC.7"
+            ],
+            "tsc": [
+              "CC6.1",
+              "CC6.8",
+              "CC7.2",
+              "CC7.3"
+            ]
+          },
+          "agent": {
+            "id": "001",
+            "name": "user1-IA1803",
+            "ip": "79.79.79.12"
+          },
+          "manager": {
+            "name": "IA1803"
+          },
+          "id": "1788340536.1509017",
+          "full_log": "Sep 02 09:15:35 user1-IA1803 sshd[86189]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=202.165.25.8  user=root",
+          "predecoder": {
+            "program_name": "sshd",
+            "timestamp": "Sep 02 09:15:35",
+            "hostname": "user1-IA1803"
+          },
+          "decoder": {
+            "name": "pam"
+          },
+          "data": {
+            "srcip": "202.165.25.8",
+            "dstuser": "root",
+            "uid": "0",
+            "euid": "0",
+            "tty": "ssh"
+          },
+          "location": "journald"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "indexer_heartbeat_hit.json": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1789449408.1241609",
+        "manager_id": "wazuh.manager",
+        "rule_id": "100999",
+        "description": "SOC pipeline heartbeat.",
+        "agent_name": "wazuh.manager",
+        "agent_id": "000",
+        "agent_ip": null,
+        "origin_host": "wazuh.manager",
+        "alert_time": "2026-09-15T05:16:48.595000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": "ossec",
+        "mitre_ids": [],
+        "rule_groups": [
+          "local",
+          "soc_heartbeat"
+        ],
+        "rule_level": 3,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "ossec: output: 'soc_heartbeat':\nsoc_heartbeat_2026-09-15T05:16:48Z",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "a7fba388ea5c7b01ebb72426f8583ffbcb52581aa83685c64402c62997c775ca",
+        "raw_payload": {
+          "agent": {
+            "name": "wazuh.manager",
+            "id": "000"
+          },
+          "manager": {
+            "name": "wazuh.manager"
+          },
+          "rule": {
+            "firedtimes": 1,
+            "mail": false,
+            "level": 3,
+            "description": "SOC pipeline heartbeat.",
+            "groups": [
+              "local",
+              "soc_heartbeat"
+            ],
+            "id": "100999"
+          },
+          "decoder": {
+            "name": "ossec"
+          },
+          "full_log": "ossec: output: 'soc_heartbeat':\nsoc_heartbeat_2026-09-15T05:16:48Z",
+          "input": {
+            "type": "log"
+          },
+          "@timestamp": "2026-09-15T05:16:48.595Z",
+          "location": "soc_heartbeat",
+          "id": "1789449408.1241609",
+          "timestamp": "2026-09-15T05:16:48.595+0000"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "indexer_sample_rule521.json": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1788340990.1853286",
+        "manager_id": "IA1803",
+        "rule_id": "521",
+        "description": "Possible kernel level rootkit",
+        "agent_name": "IA1803",
+        "agent_id": "000",
+        "agent_ip": null,
+        "origin_host": "IA1803",
+        "alert_time": "2026-09-02T09:23:10.823000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": "rootcheck",
+        "mitre_ids": [
+          "T1014"
+        ],
+        "rule_groups": [
+          "ossec",
+          "rootcheck"
+        ],
+        "rule_level": 11,
+        "severity": "high",
+        "category": "privilege_escalation",
+        "categories": [
+          "privilege_escalation"
+        ],
+        "resolved_by": "rule_groups",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "Anomaly detected in file '/tmp/.mount_ObsidiXxdw5L'. Hidden from stats, but showing up on readdir. Possible kernel level rootkit.",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "20ef96df30907a8fdb38d255733baec9f3f7e9ea4990b0752c97077fd1fa6988",
+        "raw_payload": {
+          "rule": {
+            "level": 11,
+            "description": "Possible kernel level rootkit",
+            "mail": false,
+            "mitre": {
+              "tactic": [
+                "Defense Evasion"
+              ],
+              "technique": [
+                "Rootkit"
+              ],
+              "id": [
+                "T1014"
+              ]
+            },
+            "groups": [
+              "ossec",
+              "rootcheck"
+            ],
+            "firedtimes": 1,
+            "id": "521"
+          },
+          "@timestamp": "2026-09-02T09:23:11.809473203Z",
+          "path": "/var/ossec/logs/alerts/alerts.json",
+          "data": {
+            "title": "Anomaly detected in file '/tmp/.mount_ObsidiXxdw5L'."
+          },
+          "id": "1788340990.1853286",
+          "tags": [
+            "wazuh_alerts"
+          ],
+          "location": "rootcheck",
+          "event": {
+            "original": "{\"timestamp\":\"2026-09-02T16:23:10.823+0700\",\"rule\":{\"level\":11,\"description\":\"Possible kernel level rootkit\",\"id\":\"521\",\"mitre\":{\"id\":[\"T1014\"],\"tactic\":[\"Defense Evasion\"],\"technique\":[\"Rootkit\"]},\"firedtimes\":1,\"mail\":false,\"groups\":[\"ossec\",\"rootcheck\"]},\"agent\":{\"id\":\"000\",\"name\":\"IA1803\"},\"manager\":{\"name\":\"IA1803\"},\"id\":\"1788340990.1853286\",\"full_log\":\"Anomaly detected in file '/tmp/.mount_ObsidiXxdw5L'. Hidden from stats, but showing up on readdir. Possible kernel level rootkit.\",\"decoder\":{\"name\":\"rootcheck\"},\"data\":{\"title\":\"Anomaly detected in file '/tmp/.mount_ObsidiXxdw5L'.\"},\"location\":\"rootcheck\"}"
+          },
+          "agent": {
+            "id": "000",
+            "name": "IA1803"
+          },
+          "timestamp": "2026-09-02T16:23:10.823+0700",
+          "decoder": {
+            "name": "rootcheck"
+          },
+          "full_log": "Anomaly detected in file '/tmp/.mount_ObsidiXxdw5L'. Hidden from stats, but showing up on readdir. Possible kernel level rootkit.",
+          "manager": {
+            "name": "IA1803"
+          },
+          "@version": "1",
+          "host": "IA1803"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "indexer_sample_rule591.json": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1788340214.1508655",
+        "manager_id": "IA1803",
+        "rule_id": "591",
+        "description": "Log file rotated.",
+        "agent_name": "IA1803",
+        "agent_id": "000",
+        "agent_ip": null,
+        "origin_host": "IA1803",
+        "alert_time": "2026-09-02T09:10:14.689000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": "ossec",
+        "mitre_ids": [],
+        "rule_groups": [
+          "ossec"
+        ],
+        "rule_level": 3,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "ossec: File rotated (inode changed): '/var/log/audit/audit.log'.",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "9da314cf1d290ecad260412c7a58c6bcdb74582f4e51ffce32830b1cee86bcd6",
+        "raw_payload": {
+          "rule": {
+            "tsc": [
+              "CC6.1",
+              "CC7.2",
+              "CC7.3",
+              "PI1.4",
+              "PI1.5",
+              "CC7.1",
+              "CC8.1"
+            ],
+            "pci_dss": [
+              "10.5.2",
+              "10.5.5"
+            ],
+            "description": "Log file rotated.",
+            "mail": false,
+            "firedtimes": 4,
+            "id": "591",
+            "hipaa": [
+              "164.312.b"
+            ],
+            "level": 3,
+            "gpg13": [
+              "10.1"
+            ],
+            "groups": [
+              "ossec"
+            ],
+            "nist_800_53": [
+              "AU.9"
+            ],
+            "gdpr": [
+              "II_5.1.f",
+              "IV_35.7.d"
+            ]
+          },
+          "@timestamp": "2026-09-02T09:10:15.737472141Z",
+          "path": "/var/ossec/logs/alerts/alerts.json",
+          "id": "1788340214.1508655",
+          "tags": [
+            "wazuh_alerts"
+          ],
+          "location": "logcollector",
+          "event": {
+            "original": "{\"timestamp\":\"2026-09-02T16:10:14.689+0700\",\"rule\":{\"level\":3,\"description\":\"Log file rotated.\",\"id\":\"591\",\"firedtimes\":4,\"mail\":false,\"groups\":[\"ossec\"],\"pci_dss\":[\"10.5.2\",\"10.5.5\"],\"gpg13\":[\"10.1\"],\"gdpr\":[\"II_5.1.f\",\"IV_35.7.d\"],\"hipaa\":[\"164.312.b\"],\"nist_800_53\":[\"AU.9\"],\"tsc\":[\"CC6.1\",\"CC7.2\",\"CC7.3\",\"PI1.4\",\"PI1.5\",\"CC7.1\",\"CC8.1\"]},\"agent\":{\"id\":\"000\",\"name\":\"IA1803\"},\"manager\":{\"name\":\"IA1803\"},\"id\":\"1788340214.1508655\",\"full_log\":\"ossec: File rotated (inode changed): '/var/log/audit/audit.log'.\",\"decoder\":{\"name\":\"ossec\"},\"location\":\"logcollector\"}"
+          },
+          "agent": {
+            "id": "000",
+            "name": "IA1803"
+          },
+          "timestamp": "2026-09-02T16:10:14.689+0700",
+          "decoder": {
+            "name": "ossec"
+          },
+          "full_log": "ossec: File rotated (inode changed): '/var/log/audit/audit.log'.",
+          "manager": {
+            "name": "IA1803"
+          },
+          "@version": "1",
+          "host": "IA1803"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "indexer_sample_rule5503.json": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1788340536.1509017",
+        "manager_id": "IA1803",
+        "rule_id": "5503",
+        "description": "PAM: User login failed.",
+        "agent_name": "user1-IA1803",
+        "agent_id": "001",
+        "agent_ip": "79.79.79.12",
+        "origin_host": "user1-IA1803",
+        "alert_time": "2026-09-02T09:15:36.255000+00:00",
+        "event_time": null,
+        "srcip": "202.165.25.8",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": "root",
+        "decoder": "pam",
+        "mitre_ids": [
+          "T1110.001"
+        ],
+        "rule_groups": [
+          "pam",
+          "syslog",
+          "authentication_failed"
+        ],
+        "rule_level": 5,
+        "severity": "medium",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": false,
+        "dstip_is_private": null,
+        "raw_log": "Sep 02 09:15:35 user1-IA1803 sshd[86189]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=202.165.25.8  user=root",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "ce4e502be1d12dd80d784dd1c5e694a7c2bd171cb8974beec1e062fc66d2775b",
+        "raw_payload": {
+          "rule": {
+            "tsc": [
+              "CC6.1",
+              "CC6.8",
+              "CC7.2",
+              "CC7.3"
+            ],
+            "pci_dss": [
+              "10.2.4",
+              "10.2.5"
+            ],
+            "description": "PAM: User login failed.",
+            "mail": false,
+            "mitre": {
+              "tactic": [
+                "Credential Access"
+              ],
+              "technique": [
+                "Password Guessing"
+              ],
+              "id": [
+                "T1110.001"
+              ]
+            },
+            "firedtimes": 1,
+            "id": "5503",
+            "hipaa": [
+              "164.312.b"
+            ],
+            "level": 5,
+            "gpg13": [
+              "7.8"
+            ],
+            "groups": [
+              "pam",
+              "syslog",
+              "authentication_failed"
+            ],
+            "nist_800_53": [
+              "AU.14",
+              "AC.7"
+            ],
+            "gdpr": [
+              "IV_35.7.d",
+              "IV_32.2"
+            ]
+          },
+          "@timestamp": "2026-09-02T09:15:37.599599843Z",
+          "path": "/var/ossec/logs/alerts/alerts.json",
+          "predecoder": {
+            "program_name": "sshd",
+            "hostname": "user1-IA1803",
+            "timestamp": "Sep 02 09:15:35"
+          },
+          "data": {
+            "tty": "ssh",
+            "uid": "0",
+            "srcip": "202.165.25.8",
+            "dstuser": "root",
+            "euid": "0"
+          },
+          "id": "1788340536.1509017",
+          "tags": [
+            "wazuh_alerts"
+          ],
+          "location": "journald",
+          "event": {
+            "original": "{\"timestamp\":\"2026-09-02T16:15:36.255+0700\",\"rule\":{\"level\":5,\"description\":\"PAM: User login failed.\",\"id\":\"5503\",\"mitre\":{\"id\":[\"T1110.001\"],\"tactic\":[\"Credential Access\"],\"technique\":[\"Password Guessing\"]},\"firedtimes\":1,\"mail\":false,\"groups\":[\"pam\",\"syslog\",\"authentication_failed\"],\"pci_dss\":[\"10.2.4\",\"10.2.5\"],\"gpg13\":[\"7.8\"],\"gdpr\":[\"IV_35.7.d\",\"IV_32.2\"],\"hipaa\":[\"164.312.b\"],\"nist_800_53\":[\"AU.14\",\"AC.7\"],\"tsc\":[\"CC6.1\",\"CC6.8\",\"CC7.2\",\"CC7.3\"]},\"agent\":{\"id\":\"001\",\"name\":\"user1-IA1803\",\"ip\":\"79.79.79.12\"},\"manager\":{\"name\":\"IA1803\"},\"id\":\"1788340536.1509017\",\"full_log\":\"Sep 02 09:15:35 user1-IA1803 sshd[86189]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=202.165.25.8  user=root\",\"predecoder\":{\"program_name\":\"sshd\",\"timestamp\":\"Sep 02 09:15:35\",\"hostname\":\"user1-IA1803\"},\"decoder\":{\"name\":\"pam\"},\"data\":{\"srcip\":\"202.165.25.8\",\"dstuser\":\"root\",\"uid\":\"0\",\"euid\":\"0\",\"tty\":\"ssh\"},\"location\":\"journald\"}"
+          },
+          "agent": {
+            "ip": "79.79.79.12",
+            "name": "user1-IA1803",
+            "id": "001"
+          },
+          "timestamp": "2026-09-02T16:15:36.255+0700",
+          "decoder": {
+            "name": "pam"
+          },
+          "full_log": "Sep 02 09:15:35 user1-IA1803 sshd[86189]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=202.165.25.8  user=root",
+          "manager": {
+            "name": "IA1803"
+          },
+          "@version": "1",
+          "host": "IA1803"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "indexer_sample_rule5760.json": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1788340538.1509552",
+        "manager_id": "IA1803",
+        "rule_id": "5760",
+        "description": "sshd: authentication failed.",
+        "agent_name": "user1-IA1803",
+        "agent_id": "001",
+        "agent_ip": "79.79.79.12",
+        "origin_host": "user1-IA1803",
+        "alert_time": "2026-09-02T09:15:38.307000+00:00",
+        "event_time": null,
+        "srcip": "202.165.25.8",
+        "dstip": "",
+        "src_port": 34914,
+        "dst_port": 0,
+        "alert_user": "root",
+        "decoder": "sshd",
+        "mitre_ids": [
+          "T1110.001",
+          "T1021.004"
+        ],
+        "rule_groups": [
+          "syslog",
+          "sshd",
+          "authentication_failed"
+        ],
+        "rule_level": 5,
+        "severity": "medium",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": false,
+        "dstip_is_private": null,
+        "raw_log": "Sep 02 09:15:37 user1-IA1803 sshd[86189]: Failed password for root from 202.165.25.8 port 34914 ssh2",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "73215b60bdd16371c40b63a736e827bf0ea5bc07fa204a966c8d7aa97061baa3",
+        "raw_payload": {
+          "rule": {
+            "tsc": [
+              "CC6.1",
+              "CC6.8",
+              "CC7.2",
+              "CC7.3"
+            ],
+            "pci_dss": [
+              "10.2.4",
+              "10.2.5"
+            ],
+            "description": "sshd: authentication failed.",
+            "mail": false,
+            "mitre": {
+              "tactic": [
+                "Credential Access",
+                "Lateral Movement"
+              ],
+              "technique": [
+                "Password Guessing",
+                "SSH"
+              ],
+              "id": [
+                "T1110.001",
+                "T1021.004"
+              ]
+            },
+            "firedtimes": 1,
+            "id": "5760",
+            "hipaa": [
+              "164.312.b"
+            ],
+            "level": 5,
+            "gpg13": [
+              "7.1"
+            ],
+            "groups": [
+              "syslog",
+              "sshd",
+              "authentication_failed"
+            ],
+            "nist_800_53": [
+              "AU.14",
+              "AC.7"
+            ],
+            "gdpr": [
+              "IV_35.7.d",
+              "IV_32.2"
+            ]
+          },
+          "@timestamp": "2026-09-02T09:15:39.606223732Z",
+          "path": "/var/ossec/logs/alerts/alerts.json",
+          "predecoder": {
+            "program_name": "sshd",
+            "hostname": "user1-IA1803",
+            "timestamp": "Sep 02 09:15:37"
+          },
+          "data": {
+            "srcip": "202.165.25.8",
+            "dstuser": "root",
+            "srcport": "34914"
+          },
+          "id": "1788340538.1509552",
+          "tags": [
+            "wazuh_alerts"
+          ],
+          "location": "journald",
+          "event": {
+            "original": "{\"timestamp\":\"2026-09-02T16:15:38.307+0700\",\"rule\":{\"level\":5,\"description\":\"sshd: authentication failed.\",\"id\":\"5760\",\"mitre\":{\"id\":[\"T1110.001\",\"T1021.004\"],\"tactic\":[\"Credential Access\",\"Lateral Movement\"],\"technique\":[\"Password Guessing\",\"SSH\"]},\"firedtimes\":1,\"mail\":false,\"groups\":[\"syslog\",\"sshd\",\"authentication_failed\"],\"gdpr\":[\"IV_35.7.d\",\"IV_32.2\"],\"gpg13\":[\"7.1\"],\"hipaa\":[\"164.312.b\"],\"nist_800_53\":[\"AU.14\",\"AC.7\"],\"pci_dss\":[\"10.2.4\",\"10.2.5\"],\"tsc\":[\"CC6.1\",\"CC6.8\",\"CC7.2\",\"CC7.3\"]},\"agent\":{\"id\":\"001\",\"name\":\"user1-IA1803\",\"ip\":\"79.79.79.12\"},\"manager\":{\"name\":\"IA1803\"},\"id\":\"1788340538.1509552\",\"full_log\":\"Sep 02 09:15:37 user1-IA1803 sshd[86189]: Failed password for root from 202.165.25.8 port 34914 ssh2\",\"predecoder\":{\"program_name\":\"sshd\",\"timestamp\":\"Sep 02 09:15:37\",\"hostname\":\"user1-IA1803\"},\"decoder\":{\"parent\":\"sshd\",\"name\":\"sshd\"},\"data\":{\"srcip\":\"202.165.25.8\",\"srcport\":\"34914\",\"dstuser\":\"root\"},\"location\":\"journald\"}"
+          },
+          "agent": {
+            "ip": "79.79.79.12",
+            "name": "user1-IA1803",
+            "id": "001"
+          },
+          "timestamp": "2026-09-02T16:15:38.307+0700",
+          "decoder": {
+            "name": "sshd",
+            "parent": "sshd"
+          },
+          "full_log": "Sep 02 09:15:37 user1-IA1803 sshd[86189]: Failed password for root from 202.165.25.8 port 34914 ssh2",
+          "manager": {
+            "name": "IA1803"
+          },
+          "@version": "1",
+          "host": "IA1803"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "indexer_sample_rule92601.json": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1788340729.1510032",
+        "manager_id": "IA1803",
+        "rule_id": "92601",
+        "description": "Executed python script from /tmp/ folder.",
+        "agent_name": "IA1803",
+        "agent_id": "000",
+        "agent_ip": null,
+        "origin_host": "IA1803",
+        "alert_time": "2026-09-02T09:18:49.557000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": "auditd",
+        "mitre_ids": [
+          "T1059.006"
+        ],
+        "rule_groups": [
+          "audit_detections"
+        ],
+        "rule_level": 6,
+        "severity": "medium",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "type=SYSCALL msg=audit(1788340728.902:419305): arch=c000003e syscall=59 success=yes exit=0 a0=75595a3c6430 a1=75595a3c6450 a2=7fffccb000d8 a3=75595ac148a8 items=2 ppid=987389 pid=987390 auid=1000 uid=1000 gid=1000 euid=1000 suid=1000 fsuid=1000 egid=1000 sgid=1000 fsgid=1000 tty=(none) ses=785 comm=\"python3\" exe=\"/usr/bin/python3.12\" subj=unconfined key=\"exec\"\u001dARCH=x86_64 SYSCALL=execve AUID=\"user1\" UID=\"user1\" GID=\"user1\" EUID=\"user1\" SUID=\"user1\" FSUID=\"user1\" EGID=\"user1\" SGID=\"user1\" FSGID=\"user1\" type=EXECVE msg=audit(1788340728.902:419305): argc=3 a0=\"/usr/bin/python3\" a1=\"/tmp/probe-esc/director/check_settings.py\" a2=\"--fix\" type=CWD msg=audit(1788340728.902:419305): cwd=\"/tmp/probe-esc\" type=PATH msg=audit(1788340728.902:419305): item=0 name=\"/usr/bin/python3\" inode=15730583 dev=08:02 mode=0100755 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0\u001dOUID=\"root\" OGID=\"root\" type=PATH msg=audit(1788340728.902:419305): item=1 name=\"/lib64/ld-linux-x86-64.so.2\" inode=15731106 dev=08:02 mode=0100755 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0\u001dOUID=\"root\" OGID=\"root\" type=PROCTITLE msg=audit(1788340728.902:419305): proctitle=2F7573722F62696E2F707974686F6E33002F746D702F70726F62652D6573632F6469726563746F722F636865636B5F73657474696E67732E7079002D2D666978",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "800afc1302c7084cee784e77ce63dcc5094e01abebab4f95d2405fa8d2229ee1",
+        "raw_payload": {
+          "rule": {
+            "level": 6,
+            "description": "Executed python script from /tmp/ folder.",
+            "mail": false,
+            "mitre": {
+              "tactic": [
+                "Execution"
+              ],
+              "technique": [
+                "Python"
+              ],
+              "id": [
+                "T1059.006"
+              ]
+            },
+            "groups": [
+              "audit_detections"
+            ],
+            "firedtimes": 1,
+            "id": "92601"
+          },
+          "@timestamp": "2026-09-02T09:18:50.080321971Z",
+          "path": "/var/ossec/logs/alerts/alerts.json",
+          "data": {
+            "audit": {
+              "tty": "(none)",
+              "uid": "1000",
+              "key": "exec",
+              "auid": "1000",
+              "euid": "1000",
+              "id": "419305",
+              "fsgid": "1000",
+              "arch": "c000003e",
+              "cwd": "/tmp/probe-esc",
+              "exe": "/usr/bin/python3.12",
+              "execve": {
+                "a0": "/usr/bin/python3",
+                "a2": "--fix",
+                "argc": "3",
+                "a1": "/tmp/probe-esc/director/check_settings.py"
+              },
+              "command": "python3",
+              "egid": "1000",
+              "session": "785",
+              "file": {
+                "inode": "15730583",
+                "mode": "0100755",
+                "name": "/usr/bin/python3"
+              },
+              "pid": "987390",
+              "exit": "0",
+              "success": "yes",
+              "suid": "1000",
+              "gid": "1000",
+              "fsuid": "1000",
+              "syscall": "59",
+              "ppid": "987389",
+              "sgid": "1000",
+              "type": "SYSCALL"
+            }
+          },
+          "id": "1788340729.1510032",
+          "tags": [
+            "wazuh_alerts"
+          ],
+          "location": "/var/log/audit/audit.log",
+          "event": {
+            "original": "{\"timestamp\":\"2026-09-02T16:18:49.557+0700\",\"rule\":{\"level\":6,\"description\":\"Executed python script from /tmp/ folder.\",\"id\":\"92601\",\"mitre\":{\"id\":[\"T1059.006\"],\"tactic\":[\"Execution\"],\"technique\":[\"Python\"]},\"firedtimes\":1,\"mail\":false,\"groups\":[\"audit_detections\"]},\"agent\":{\"id\":\"000\",\"name\":\"IA1803\"},\"manager\":{\"name\":\"IA1803\"},\"id\":\"1788340729.1510032\",\"full_log\":\"type=SYSCALL msg=audit(1788340728.902:419305): arch=c000003e syscall=59 success=yes exit=0 a0=75595a3c6430 a1=75595a3c6450 a2=7fffccb000d8 a3=75595ac148a8 items=2 ppid=987389 pid=987390 auid=1000 uid=1000 gid=1000 euid=1000 suid=1000 fsuid=1000 egid=1000 sgid=1000 fsgid=1000 tty=(none) ses=785 comm=\\\"python3\\\" exe=\\\"/usr/bin/python3.12\\\" subj=unconfined key=\\\"exec\\\"\\u001dARCH=x86_64 SYSCALL=execve AUID=\\\"user1\\\" UID=\\\"user1\\\" GID=\\\"user1\\\" EUID=\\\"user1\\\" SUID=\\\"user1\\\" FSUID=\\\"user1\\\" EGID=\\\"user1\\\" SGID=\\\"user1\\\" FSGID=\\\"user1\\\" type=EXECVE msg=audit(1788340728.902:419305): argc=3 a0=\\\"/usr/bin/python3\\\" a1=\\\"/tmp/probe-esc/director/check_settings.py\\\" a2=\\\"--fix\\\" type=CWD msg=audit(1788340728.902:419305): cwd=\\\"/tmp/probe-esc\\\" type=PATH msg=audit(1788340728.902:419305): item=0 name=\\\"/usr/bin/python3\\\" inode=15730583 dev=08:02 mode=0100755 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0\\u001dOUID=\\\"root\\\" OGID=\\\"root\\\" type=PATH msg=audit(1788340728.902:419305): item=1 name=\\\"/lib64/ld-linux-x86-64.so.2\\\" inode=15731106 dev=08:02 mode=0100755 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0\\u001dOUID=\\\"root\\\" OGID=\\\"root\\\" type=PROCTITLE msg=audit(1788340728.902:419305): proctitle=2F7573722F62696E2F707974686F6E33002F746D702F70726F62652D6573632F6469726563746F722F636865636B5F73657474696E67732E7079002D2D666978\",\"decoder\":{\"parent\":\"auditd\",\"name\":\"auditd\"},\"data\":{\"audit\":{\"type\":\"SYSCALL\",\"id\":\"419305\",\"arch\":\"c000003e\",\"syscall\":\"59\",\"success\":\"yes\",\"exit\":\"0\",\"ppid\":\"987389\",\"pid\":\"987390\",\"auid\":\"1000\",\"uid\":\"1000\",\"gid\":\"1000\",\"euid\":\"1000\",\"suid\":\"1000\",\"fsuid\":\"1000\",\"egid\":\"1000\",\"sgid\":\"1000\",\"fsgid\":\"1000\",\"tty\":\"(none)\",\"session\":\"785\",\"command\":\"python3\",\"exe\":\"/usr/bin/python3.12\",\"key\":\"exec\",\"execve\":{\"argc\":\"3\",\"a0\":\"/usr/bin/python3\",\"a1\":\"/tmp/probe-esc/director/check_settings.py\",\"a2\":\"--fix\"},\"cwd\":\"/tmp/probe-esc\",\"file\":{\"name\":\"/usr/bin/python3\",\"inode\":\"15730583\",\"mode\":\"0100755\"}}},\"location\":\"/var/log/audit/audit.log\"}"
+          },
+          "agent": {
+            "id": "000",
+            "name": "IA1803"
+          },
+          "timestamp": "2026-09-02T16:18:49.557+0700",
+          "decoder": {
+            "name": "auditd",
+            "parent": "auditd"
+          },
+          "full_log": "type=SYSCALL msg=audit(1788340728.902:419305): arch=c000003e syscall=59 success=yes exit=0 a0=75595a3c6430 a1=75595a3c6450 a2=7fffccb000d8 a3=75595ac148a8 items=2 ppid=987389 pid=987390 auid=1000 uid=1000 gid=1000 euid=1000 suid=1000 fsuid=1000 egid=1000 sgid=1000 fsgid=1000 tty=(none) ses=785 comm=\"python3\" exe=\"/usr/bin/python3.12\" subj=unconfined key=\"exec\"\u001dARCH=x86_64 SYSCALL=execve AUID=\"user1\" UID=\"user1\" GID=\"user1\" EUID=\"user1\" SUID=\"user1\" FSUID=\"user1\" EGID=\"user1\" SGID=\"user1\" FSGID=\"user1\" type=EXECVE msg=audit(1788340728.902:419305): argc=3 a0=\"/usr/bin/python3\" a1=\"/tmp/probe-esc/director/check_settings.py\" a2=\"--fix\" type=CWD msg=audit(1788340728.902:419305): cwd=\"/tmp/probe-esc\" type=PATH msg=audit(1788340728.902:419305): item=0 name=\"/usr/bin/python3\" inode=15730583 dev=08:02 mode=0100755 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0\u001dOUID=\"root\" OGID=\"root\" type=PATH msg=audit(1788340728.902:419305): item=1 name=\"/lib64/ld-linux-x86-64.so.2\" inode=15731106 dev=08:02 mode=0100755 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0\u001dOUID=\"root\" OGID=\"root\" type=PROCTITLE msg=audit(1788340728.902:419305): proctitle=2F7573722F62696E2F707974686F6E33002F746D702F70726F62652D6573632F6469726563746F722F636865636B5F73657474696E67732E7079002D2D666978",
+          "manager": {
+            "name": "IA1803"
+          },
+          "@version": "1",
+          "host": "IA1803"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "indexer_search_page.json hits[0]": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1786903016.121311",
+        "manager_id": "IA1803",
+        "rule_id": "40112",
+        "description": "Multiple authentication failures followed by a success.",
+        "agent_name": "user1-IA1803",
+        "agent_id": "001",
+        "agent_ip": "79.79.79.12",
+        "origin_host": "user1-IA1803",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "127.0.0.1",
+        "dstip": "",
+        "src_port": 48104,
+        "dst_port": 0,
+        "alert_user": "user1",
+        "decoder": "sshd",
+        "mitre_ids": [
+          "T1078",
+          "T1110"
+        ],
+        "rule_groups": [
+          "syslog",
+          "attacks"
+        ],
+        "rule_level": 12,
+        "severity": "critical",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force",
+          "suspicious_login"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": true,
+        "dstip_is_private": null,
+        "raw_log": "Aug 16 17:56:55 user1-IA1803 sshd[136570]: Accepted password for user1 from 127.0.0.1 port 48104 ssh2",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "76fcfceb90ed06f6be274be022445ff693254b73edbdb70180244328119b2a1a",
+        "raw_payload": {
+          "predecoder": {
+            "hostname": "user1-IA1803",
+            "program_name": "sshd",
+            "timestamp": "Aug 16 17:56:55"
+          },
+          "input": {
+            "type": "log"
+          },
+          "agent": {
+            "ip": "79.79.79.12",
+            "name": "user1-IA1803",
+            "id": "001"
+          },
+          "manager": {
+            "name": "IA1803"
+          },
+          "data": {
+            "srcip": "127.0.0.1",
+            "dstuser": "user1",
+            "srcport": "48104"
+          },
+          "rule": {
+            "mail": true,
+            "level": 12,
+            "description": "Multiple authentication failures followed by a success.",
+            "groups": [
+              "syslog",
+              "attacks"
+            ],
+            "frequency": 2,
+            "firedtimes": 1,
+            "mitre": {
+              "technique": [
+                "Valid Accounts",
+                "Brute Force"
+              ],
+              "id": [
+                "T1078",
+                "T1110"
+              ],
+              "tactic": [
+                "Defense Evasion",
+                "Persistence",
+                "Privilege Escalation",
+                "Initial Access",
+                "Credential Access"
+              ]
+            },
+            "id": "40112"
+          },
+          "location": "journald",
+          "decoder": {
+            "parent": "sshd",
+            "name": "sshd"
+          },
+          "id": "1786903016.121311",
+          "full_log": "Aug 16 17:56:55 user1-IA1803 sshd[136570]: Accepted password for user1 from 127.0.0.1 port 48104 ssh2",
+          "timestamp": "2026-08-17T00:56:56.130+0700"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "indexer_search_page.json hits[1]": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1786903020.121512",
+        "manager_id": "IA1803",
+        "rule_id": "5710",
+        "description": "sshd: Attempt to login using a non-existent user",
+        "agent_name": "user1-IA1803",
+        "agent_id": "001",
+        "agent_ip": "79.79.79.12",
+        "origin_host": "user1-IA1803",
+        "alert_time": "2026-08-16T17:57:00.450000+00:00",
+        "event_time": null,
+        "srcip": "203.0.113.45",
+        "dstip": "",
+        "src_port": 51022,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": "sshd",
+        "mitre_ids": [
+          "T1078"
+        ],
+        "rule_groups": [
+          "syslog",
+          "sshd",
+          "invalid_login",
+          "authentication_failed"
+        ],
+        "rule_level": 5,
+        "severity": "medium",
+        "category": "suspicious_login",
+        "categories": [
+          "suspicious_login"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": true,
+        "dstip_is_private": null,
+        "raw_log": "Aug 16 17:57:00 user1-IA1803 sshd[136612]: Invalid user admin from 203.0.113.45 port 51022",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "dac1d787859a30bffefdb92405e3827e0d6371a9938e6ad6c40861a78c65b534",
+        "raw_payload": {
+          "predecoder": {
+            "hostname": "user1-IA1803",
+            "program_name": "sshd",
+            "timestamp": "Aug 16 17:57:00"
+          },
+          "input": {
+            "type": "log"
+          },
+          "agent": {
+            "ip": "79.79.79.12",
+            "name": "user1-IA1803",
+            "id": "001"
+          },
+          "manager": {
+            "name": "IA1803"
+          },
+          "data": {
+            "srcip": "203.0.113.45",
+            "srcport": "51022"
+          },
+          "rule": {
+            "mail": false,
+            "level": 5,
+            "description": "sshd: Attempt to login using a non-existent user",
+            "groups": [
+              "syslog",
+              "sshd",
+              "invalid_login",
+              "authentication_failed"
+            ],
+            "frequency": 1,
+            "firedtimes": 3,
+            "mitre": {
+              "technique": [
+                "Valid Accounts"
+              ],
+              "id": [
+                "T1078"
+              ],
+              "tactic": [
+                "Defense Evasion",
+                "Persistence",
+                "Privilege Escalation",
+                "Initial Access"
+              ]
+            },
+            "id": "5710"
+          },
+          "location": "journald",
+          "decoder": {
+            "parent": "sshd",
+            "name": "sshd"
+          },
+          "id": "1786903020.121512",
+          "full_log": "Aug 16 17:57:00 user1-IA1803 sshd[136612]: Invalid user admin from 203.0.113.45 port 51022",
+          "timestamp": "2026-08-17T00:57:00.450+0700"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "indexer_search_page.json hits[2]": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1786903283.122004",
+        "manager_id": "IA1803",
+        "rule_id": "5503",
+        "description": "PAM: User login failed.",
+        "agent_name": "user1-IA1803",
+        "agent_id": "001",
+        "agent_ip": "79.79.79.12",
+        "origin_host": "user1-IA1803",
+        "alert_time": "2026-08-16T18:01:23.900000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": "root",
+        "decoder": "pam",
+        "mitre_ids": [
+          "T1110"
+        ],
+        "rule_groups": [
+          "pam",
+          "syslog",
+          "authentication_failed"
+        ],
+        "rule_level": 5,
+        "severity": "medium",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "Aug 16 18:01:23 user1-IA1803 sudo: pam_unix(sudo:auth): authentication failure; logname=user1 uid=1000 euid=0 tty=/dev/pts/1 ruser=user1 rhost=  user=user1",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "e3850b2412f74027080a9c99a27e09b9af002d8ec3d8f5ec6baf14d17cbc211f",
+        "raw_payload": {
+          "predecoder": {
+            "hostname": "user1-IA1803",
+            "program_name": "sudo",
+            "timestamp": "Aug 16 18:01:23"
+          },
+          "input": {
+            "type": "log"
+          },
+          "agent": {
+            "ip": "79.79.79.12",
+            "name": "user1-IA1803",
+            "id": "001"
+          },
+          "manager": {
+            "name": "IA1803"
+          },
+          "data": {
+            "srcuser": "user1",
+            "dstuser": "root"
+          },
+          "rule": {
+            "mail": false,
+            "level": 5,
+            "description": "PAM: User login failed.",
+            "groups": [
+              "pam",
+              "syslog",
+              "authentication_failed"
+            ],
+            "frequency": 1,
+            "firedtimes": 8,
+            "mitre": {
+              "technique": [
+                "Brute Force"
+              ],
+              "id": [
+                "T1110"
+              ],
+              "tactic": [
+                "Credential Access"
+              ]
+            },
+            "id": "5503"
+          },
+          "location": "journald",
+          "decoder": {
+            "name": "pam"
+          },
+          "id": "1786903283.122004",
+          "full_log": "Aug 16 18:01:23 user1-IA1803 sudo: pam_unix(sudo:auth): authentication failure; logname=user1 uid=1000 euid=0 tty=/dev/pts/1 ruser=user1 rhost=  user=user1",
+          "timestamp": "2026-08-17T01:01:23.900+0700"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "indexer_search_page.json hits[3]": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1786903451.122388",
+        "manager_id": "IA1803",
+        "rule_id": "40112",
+        "description": "Multiple authentication failures followed by a success.",
+        "agent_name": "user1-IA1803",
+        "agent_id": "001",
+        "agent_ip": "79.79.79.12",
+        "origin_host": "user1-IA1803",
+        "alert_time": "2026-08-16T18:04:11.275000+00:00",
+        "event_time": null,
+        "srcip": "203.0.113.45",
+        "dstip": "",
+        "src_port": 51044,
+        "dst_port": 0,
+        "alert_user": "user1",
+        "decoder": "sshd",
+        "mitre_ids": [
+          "T1078",
+          "T1110"
+        ],
+        "rule_groups": [
+          "syslog",
+          "attacks"
+        ],
+        "rule_level": 12,
+        "severity": "critical",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force",
+          "suspicious_login"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": true,
+        "dstip_is_private": null,
+        "raw_log": "Aug 16 18:04:11 user1-IA1803 sshd[136988]: Accepted password for user1 from 203.0.113.45 port 51044 ssh2",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "c0a7b8de1b1395f331796a88c470db4f3f5dc12c53e6c81190dc94c30baccfd0",
+        "raw_payload": {
+          "predecoder": {
+            "hostname": "user1-IA1803",
+            "program_name": "sshd",
+            "timestamp": "Aug 16 18:04:11"
+          },
+          "input": {
+            "type": "log"
+          },
+          "agent": {
+            "ip": "79.79.79.12",
+            "name": "user1-IA1803",
+            "id": "001"
+          },
+          "manager": {
+            "name": "IA1803"
+          },
+          "data": {
+            "srcip": "203.0.113.45",
+            "dstuser": "user1",
+            "srcport": "51044"
+          },
+          "rule": {
+            "mail": true,
+            "level": 12,
+            "description": "Multiple authentication failures followed by a success.",
+            "groups": [
+              "syslog",
+              "attacks"
+            ],
+            "frequency": 2,
+            "firedtimes": 2,
+            "mitre": {
+              "technique": [
+                "Valid Accounts",
+                "Brute Force"
+              ],
+              "id": [
+                "T1078",
+                "T1110"
+              ],
+              "tactic": [
+                "Defense Evasion",
+                "Persistence",
+                "Privilege Escalation",
+                "Initial Access",
+                "Credential Access"
+              ]
+            },
+            "id": "40112"
+          },
+          "location": "journald",
+          "decoder": {
+            "parent": "sshd",
+            "name": "sshd"
+          },
+          "id": "1786903451.122388",
+          "full_log": "Aug 16 18:04:11 user1-IA1803 sshd[136988]: Accepted password for user1 from 203.0.113.45 port 51044 ssh2",
+          "timestamp": "2026-08-17T01:04:11.275+0700"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "indexer_search_page_2.json hits[0]": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1786903787.122501",
+        "manager_id": "IA1803",
+        "rule_id": "5710",
+        "description": "sshd: Attempt to login using a non-existent user",
+        "agent_name": "user1-IA1803",
+        "agent_id": "001",
+        "agent_ip": "79.79.79.12",
+        "origin_host": "user1-IA1803",
+        "alert_time": "2026-08-16T18:09:47.612000+00:00",
+        "event_time": null,
+        "srcip": "198.51.100.23",
+        "dstip": "",
+        "src_port": 51101,
+        "dst_port": 0,
+        "alert_user": "admin",
+        "decoder": "sshd",
+        "mitre_ids": [
+          "T1078"
+        ],
+        "rule_groups": [
+          "syslog",
+          "sshd",
+          "invalid_login",
+          "authentication_failed"
+        ],
+        "rule_level": 5,
+        "severity": "medium",
+        "category": "suspicious_login",
+        "categories": [
+          "suspicious_login"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": true,
+        "dstip_is_private": null,
+        "raw_log": "Aug 16 18:09:47 user1-IA1803 sshd[137021]: Invalid user admin from 198.51.100.23 port 51101",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "f44b02d28500a7fe7f2d1ae87f14352d1dd5b52f14842f8f09a50f18083b189b",
+        "raw_payload": {
+          "predecoder": {
+            "hostname": "user1-IA1803",
+            "program_name": "sshd",
+            "timestamp": "Aug 16 18:09:47"
+          },
+          "input": {
+            "type": "log"
+          },
+          "agent": {
+            "ip": "79.79.79.12",
+            "name": "user1-IA1803",
+            "id": "001"
+          },
+          "manager": {
+            "name": "IA1803"
+          },
+          "data": {
+            "srcip": "198.51.100.23",
+            "dstuser": "admin",
+            "srcport": "51101"
+          },
+          "rule": {
+            "mail": false,
+            "level": 5,
+            "description": "sshd: Attempt to login using a non-existent user",
+            "groups": [
+              "syslog",
+              "sshd",
+              "invalid_login",
+              "authentication_failed"
+            ],
+            "frequency": 1,
+            "firedtimes": 4,
+            "mitre": {
+              "technique": [
+                "Valid Accounts"
+              ],
+              "id": [
+                "T1078"
+              ],
+              "tactic": [
+                "Defense Evasion",
+                "Persistence",
+                "Privilege Escalation",
+                "Initial Access"
+              ]
+            },
+            "id": "5710"
+          },
+          "location": "journald",
+          "decoder": {
+            "parent": "sshd",
+            "name": "sshd"
+          },
+          "id": "1786903787.122501",
+          "full_log": "Aug 16 18:09:47 user1-IA1803 sshd[137021]: Invalid user admin from 198.51.100.23 port 51101",
+          "timestamp": "2026-08-17T01:09:47.612+0700"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "indexer_search_page_2.json hits[1]": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1786903812.122777",
+        "manager_id": "IA1803",
+        "rule_id": "5503",
+        "description": "PAM: User login failed.",
+        "agent_name": "user1-IA1803",
+        "agent_id": "001",
+        "agent_ip": "79.79.79.12",
+        "origin_host": "user1-IA1803",
+        "alert_time": "2026-08-16T18:10:12.004000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": "root",
+        "decoder": "pam",
+        "mitre_ids": [
+          "T1110"
+        ],
+        "rule_groups": [
+          "pam",
+          "syslog",
+          "authentication_failed"
+        ],
+        "rule_level": 5,
+        "severity": "medium",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "Aug 16 18:10:12 user1-IA1803 sudo: pam_unix(sudo:auth): authentication failure; logname=user1 uid=1000 euid=0 tty=/dev/pts/2 ruser=user1 rhost=  user=root",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "1c5433e0019708ff6103fbbbe611155c61479917bf8629524c23cb4909bc55e4",
+        "raw_payload": {
+          "timestamp": "2026-08-17T01:10:12.004+0700",
+          "id": "1786903812.122777",
+          "full_log": "Aug 16 18:10:12 user1-IA1803 sudo: pam_unix(sudo:auth): authentication failure; logname=user1 uid=1000 euid=0 tty=/dev/pts/2 ruser=user1 rhost=  user=root",
+          "decoder": {
+            "name": "pam"
+          },
+          "location": "journald",
+          "rule": {
+            "id": "5503",
+            "mitre": {
+              "tactic": [
+                "Credential Access"
+              ],
+              "id": [
+                "T1110"
+              ],
+              "technique": [
+                "Brute Force"
+              ]
+            },
+            "firedtimes": 9,
+            "frequency": 1,
+            "groups": [
+              "pam",
+              "syslog",
+              "authentication_failed"
+            ],
+            "description": "PAM: User login failed.",
+            "level": 5,
+            "mail": false
+          },
+          "manager": {
+            "name": "IA1803"
+          },
+          "agent": {
+            "id": "001",
+            "name": "user1-IA1803",
+            "ip": "79.79.79.12"
+          },
+          "data": {
+            "srcuser": "user1",
+            "dstuser": "root"
+          },
+          "input": {
+            "type": "log"
+          },
+          "predecoder": {
+            "timestamp": "Aug 16 18:10:12",
+            "program_name": "sudo",
+            "hostname": "user1-IA1803"
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: rule.id missing": {
+      "envelope": "bare",
+      "rejection": "rule.id",
+      "alert": null
+    },
+    "inline: new year's eve predecoder": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2027-01-01T00:00:01+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "2498b838db50505cfe95a28941139c9d3527c82d34ad9950c553c357b94bb661",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "predecoder": {
+            "timestamp": "Dec 31 23:59:59"
+          },
+          "timestamp": "2027-01-01T00:00:01+0000"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: garbage predecoder timestamp": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "predecoder": {
+            "timestamp": "not-a-time"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: no timestamp at all": {
+      "envelope": "bare",
+      "rejection": "timestamp",
+      "alert": null
+    },
+    "inline: srcport 'unknown'": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "data": {
+            "srcport": "unknown"
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: srcport ''": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "data": {
+            "srcport": ""
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: srcport '  48104  '": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 48104,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "data": {
+            "srcport": "  48104  "
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: srcport None": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "data": {
+            "srcport": null
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: minimal, no data object": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: dstuser and srcuser": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": "root",
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "data": {
+            "dstuser": "root",
+            "srcuser": "eve"
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: srcuser only": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": "eve",
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "data": {
+            "srcuser": "eve"
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: empty dstuser, srcuser": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": "eve",
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "data": {
+            "dstuser": "",
+            "srcuser": "eve"
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: _doc_with mitre T1110": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [
+          "T1110"
+        ],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d",
+            "mitre": {
+              "id": [
+                "T1110"
+              ]
+            },
+            "groups": []
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "decoder": {},
+          "data": {
+            "dstport": 0
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: _doc_with mitre T1110.001": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [
+          "T1110.001"
+        ],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d",
+            "mitre": {
+              "id": [
+                "T1110.001"
+              ]
+            },
+            "groups": []
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "decoder": {},
+          "data": {
+            "dstport": 0
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: _doc_with groups authentication_failed": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [
+          "authentication_failed"
+        ],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force"
+        ],
+        "resolved_by": "rule_groups",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d",
+            "mitre": {
+              "id": []
+            },
+            "groups": [
+              "authentication_failed"
+            ]
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "decoder": {},
+          "data": {
+            "dstport": 0
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: _doc_with decoder sshd": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": "sshd",
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force"
+        ],
+        "resolved_by": "decoder",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d",
+            "mitre": {
+              "id": []
+            },
+            "groups": []
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "decoder": {
+            "name": "sshd"
+          },
+          "data": {
+            "dstport": 0
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: _doc_with dst_port 22": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 22,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force"
+        ],
+        "resolved_by": "dst_port",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d",
+            "mitre": {
+              "id": []
+            },
+            "groups": []
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "decoder": {},
+          "data": {
+            "dstport": 22
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: _doc_with mitre T1078+T1110": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [
+          "T1078",
+          "T1110"
+        ],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force",
+          "suspicious_login"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d",
+            "mitre": {
+              "id": [
+                "T1078",
+                "T1110"
+              ]
+            },
+            "groups": []
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "decoder": {},
+          "data": {
+            "dstport": 0
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: _doc_with mitre T1110+T1078": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [
+          "T1110",
+          "T1078"
+        ],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "ssh_brute_force",
+        "categories": [
+          "ssh_brute_force",
+          "suspicious_login"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d",
+            "mitre": {
+              "id": [
+                "T1110",
+                "T1078"
+              ]
+            },
+            "groups": []
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "decoder": {},
+          "data": {
+            "dstport": 0
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: _doc_with no signal": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d",
+            "mitre": {
+              "id": []
+            },
+            "groups": []
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "decoder": {},
+          "data": {
+            "dstport": 0
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: _doc_with mitre T1078": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [
+          "T1078"
+        ],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "suspicious_login",
+        "categories": [
+          "suspicious_login"
+        ],
+        "resolved_by": "mitre",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d",
+            "mitre": {
+              "id": [
+                "T1078"
+              ]
+            },
+            "groups": []
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "decoder": {},
+          "data": {
+            "dstport": 0
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: _doc_with dst_port 80": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 80,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "web_attack",
+        "categories": [
+          "web_attack"
+        ],
+        "resolved_by": "dst_port",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d",
+            "mitre": {
+              "id": []
+            },
+            "groups": []
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "decoder": {},
+          "data": {
+            "dstport": 80
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: srcip 127.0.0.1": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "127.0.0.1",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": true,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "d06ff08c110067737c16cdea49b62f89a6e87fd012fc71b4e1ab24857e009d6b",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "data": {
+            "srcip": "127.0.0.1"
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: srcip 10.1.2.3": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "10.1.2.3",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": true,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "03cf9b1376e23a7dc41ee69b734e306fe4b64c63a770ffe030d7d7d22a82abd3",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "data": {
+            "srcip": "10.1.2.3"
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: srcip 192.168.1.1": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "192.168.1.1",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": true,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "8f21de54e6dfe8193a42d1f24126be43de25f9c806990643b7520ef17f899b0c",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "data": {
+            "srcip": "192.168.1.1"
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: srcip 169.254.1.1": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "169.254.1.1",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": true,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "801ba8ae400328ccb53a9d0a0fd8baab4f36ce2ba490f60e0e24a5dafcad6bf1",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "data": {
+            "srcip": "169.254.1.1"
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: srcip 8.8.8.8": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "8.8.8.8",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": false,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "1b1c5df7ab306f342c1bcf5fa90825cdab75595768281f727c4c7bd16503f74f",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "data": {
+            "srcip": "8.8.8.8"
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: srcip not-an-ip": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "not-an-ip",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "",
+        "raw_log_truncated": false,
+        "event_bucket_hash": "62a15bd73af9367581105dfe4b164e409e5760273e578261f8ec9890b7cb6bd6",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "data": {
+            "srcip": "not-an-ip"
+          }
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: full_log 50 bytes, limit 20": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "xxxxxxxxxxxxxxxxxxxx",
+        "raw_log_truncated": true,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "full_log": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: full_log 'é'*7, limit 10": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "ééééé",
+        "raw_log_truncated": true,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "full_log": "ééééééé"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: full_log 100 bytes, limit 5": {
+      "envelope": "indexer_hit",
+      "rejection": null,
+      "alert": {
+        "alert_id": "1.1",
+        "manager_id": "default",
+        "rule_id": "1",
+        "description": "d",
+        "agent_name": "default",
+        "agent_id": null,
+        "agent_ip": null,
+        "origin_host": "default",
+        "alert_time": "2026-08-16T17:56:56.130000+00:00",
+        "event_time": null,
+        "srcip": "",
+        "dstip": "",
+        "src_port": 0,
+        "dst_port": 0,
+        "alert_user": null,
+        "decoder": null,
+        "mitre_ids": [],
+        "rule_groups": [],
+        "rule_level": 0,
+        "severity": "low",
+        "category": "unknown",
+        "categories": [],
+        "resolved_by": "none",
+        "mapping_version": "v3.2",
+        "srcip_is_private": null,
+        "dstip_is_private": null,
+        "raw_log": "xxxxx",
+        "raw_log_truncated": true,
+        "event_bucket_hash": "6826b1ed033f1eebfd6f88839d64e60af4a0e3f7f5d16369129e1b6365deb0d2",
+        "raw_payload": {
+          "id": "1.1",
+          "rule": {
+            "id": "1",
+            "description": "d"
+          },
+          "timestamp": "2026-08-16T17:56:56.130+0000",
+          "full_log": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        "status": "received",
+        "duplicate_of": null,
+        "occurrence_count": 1,
+        "risk_score": null,
+        "triage_status": "pending",
+        "triaged_count": 0,
+        "case_id": null,
+        "acknowledged_at": null,
+        "closed_at": null,
+        "close_reason": null
+      }
+    },
+    "inline: id missing": {
+      "envelope": "bare",
+      "rejection": "id",
+      "alert": null
+    },
+    "inline: garbage timestamp": {
+      "envelope": "bare",
+      "rejection": "timestamp",
+      "alert": null
+    },
+    "inline: rule.id missing, valid timestamp": {
+      "envelope": "bare",
+      "rejection": "rule.id",
+      "alert": null
+    },
+    "inline: empty object": {
+      "envelope": "bare",
+      "rejection": "id",
+      "alert": null
+    },
+    "inline: empty _source": {
+      "envelope": "indexer_hit",
+      "rejection": "id",
+      "alert": null
+    },
+    "inline: id None": {
+      "envelope": "bare",
+      "rejection": "id",
+      "alert": null
+    },
+    "inline: rule None": {
+      "envelope": "bare",
+      "rejection": "id",
+      "alert": null
+    }
+  }
+}

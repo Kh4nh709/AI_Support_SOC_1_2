@@ -1,0 +1,71 @@
+{
+  "_fixture": "synthetic",
+  "_index": "wazuh-alerts-4.x-2026.09.29",
+  "_id": "synthetic-4625-network-logon-failure",
+  "_source": {
+    "_fixture": "synthetic",
+    "timestamp": "2026-09-29T08:10:02.114+0000",
+    "rule": {
+      "level": 5,
+      "description": "Logon Failure - Unknown user or bad password",
+      "id": "60122",
+      "mitre": {
+        "id": ["T1531"],
+        "tactic": ["Impact"],
+        "technique": ["Account Access Removal"]
+      },
+      "firedtimes": 1,
+      "mail": false,
+      "groups": ["windows", "windows_security", "authentication_failed"]
+    },
+    "agent": {"id": "007", "name": "WIN-LAB-01", "ip": "192.168.56.20"},
+    "manager": {"name": "wazuh-manager"},
+    "id": "1790000001.000101",
+    "decoder": {"name": "windows_eventchannel"},
+    "data": {
+      "win": {
+        "system": {
+          "providerName": "Microsoft-Windows-Security-Auditing",
+          "providerGuid": "{54849625-5478-4994-a5ba-3e3b0328c30d}",
+          "eventID": "4625",
+          "version": "0",
+          "level": "0",
+          "task": "12544",
+          "opcode": "0",
+          "keywords": "0x8010000000000000",
+          "systemTime": "2026-09-29T08:10:01.9731234Z",
+          "eventRecordID": "48211",
+          "processID": "812",
+          "threadID": "4420",
+          "channel": "Security",
+          "computer": "WIN-LAB-01",
+          "severityValue": "AUDIT_FAILURE",
+          "message": "\"An account failed to log on.\r\n\r\nSubject:\r\n\tSecurity ID:\t\tS-1-0-0\r\n\tAccount Name:\t\t-\r\n\tAccount Domain:\t\t-\r\n\tLogon ID:\t\t0x0\r\n\r\nLogon Type:\t\t\t3\r\n\r\nAccount For Which Logon Failed:\r\n\tSecurity ID:\t\tS-1-0-0\r\n\tAccount Name:\t\tlabadmin\r\n\tAccount Domain:\t\t\r\n\r\nFailure Information:\r\n\tFailure Reason:\t\tUnknown user name or bad password.\r\n\tStatus:\t\t\t0xC000006D\r\n\tSub Status:\t\t0xC000006A\r\n\r\nProcess Information:\r\n\tCaller Process ID:\t0x0\r\n\tCaller Process Name:\t-\r\n\r\nNetwork Information:\r\n\tWorkstation Name:\tWKS-UNKNOWN\r\n\tSource Network Address:\t192.168.56.101\r\n\tSource Port:\t\t51234\r\n\r\nDetailed Authentication Information:\r\n\tLogon Process:\t\tNtLmSsp \r\n\tAuthentication Package:\tNTLM\""
+        },
+        "eventdata": {
+          "subjectUserSid": "S-1-0-0",
+          "subjectUserName": "-",
+          "subjectDomainName": "-",
+          "subjectLogonId": "0x0",
+          "targetUserSid": "S-1-0-0",
+          "targetUserName": "labadmin",
+          "status": "0xc000006d",
+          "failureReason": "%%2313",
+          "subStatus": "0xc000006a",
+          "logonType": "3",
+          "logonProcessName": "NtLmSsp",
+          "authenticationPackageName": "NTLM",
+          "workstationName": "WKS-UNKNOWN",
+          "transmittedServices": "-",
+          "lmPackageName": "-",
+          "keyLength": "0",
+          "processId": "0x0",
+          "processName": "-",
+          "ipAddress": "192.168.56.101",
+          "ipPort": "51234"
+        }
+      }
+    },
+    "location": "EventChannel"
+  }
+}

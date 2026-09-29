@@ -42,3 +42,9 @@
 - Toàn bộ kết nối ra ngoài của máy trong 24–72 giờ, để đo nhịp thật.
 - Thông tin đăng ký tên miền đích.
 - Cây tiến trình của tiến trình mở kết nối.
+
+## 7 · Windows (added 29/09, P9-T02, not reviewed)
+
+- Sysmon 3 (kết nối mạng) lặp **đều đặn** từ cùng `Image` tới cùng đích — đo nhịp trên chuỗi alert, không trên một alert.
+- Sysmon 22 (truy vấn DNS) bất thường: tên miền dài và ngẫu nhiên, vừa đăng ký, hoặc một tiến trình lạ hỏi cùng một tên miền liên tục.
+- **Không có IDS mạng thì tín hiệu phía Windows yếu**: chỉ thấy máy nào kết nối tới đâu, không thấy nội dung. Thiếu dữ liệu mạng không phải bằng chứng vô hại.

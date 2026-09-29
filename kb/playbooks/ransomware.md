@@ -43,3 +43,9 @@
 - Danh sách file bị chạm và mốc thời gian đầu tiên.
 - Tình trạng bản sao lưu gần nhất và bản chụp.
 - Đường lây: tài khoản nào, máy nào trước.
+
+## 7 · Windows (added 29/09, P9-T02, not reviewed)
+
+- Sysmon 1 chạy `vssadmin`, `wbadmin` hoặc `bcdedit` với tham số xoá bản chụp hay tắt khôi phục — dấu hiệu quyết định ở §2, nhìn qua cây tiến trình.
+- Sysmon 11 (tạo file) **hàng loạt** từ một tiến trình trong thời gian ngắn, nhất là cùng một đuôi lạ, hoặc cùng một file đòi tiền chuộc ở nhiều thư mục.
+- Tiến trình sinh các lệnh trên chạy từ thư mục người dùng hoặc thư mục tạm → xử lý như đang mã hoá.

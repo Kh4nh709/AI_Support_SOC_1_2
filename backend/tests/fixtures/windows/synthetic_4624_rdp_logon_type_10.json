@@ -1,0 +1,75 @@
+{
+  "_fixture": "synthetic",
+  "_index": "wazuh-alerts-4.x-2026.09.29",
+  "_id": "synthetic-4624-rdp-logon-type-10",
+  "_source": {
+    "_fixture": "synthetic",
+    "timestamp": "2026-09-29T08:12:40.301+0000",
+    "rule": {
+      "level": 3,
+      "description": "Windows Logon Success",
+      "id": "60106",
+      "mitre": {
+        "id": ["T1078"],
+        "tactic": ["Defense Evasion", "Persistence", "Privilege Escalation", "Initial Access"],
+        "technique": ["Valid Accounts"]
+      },
+      "firedtimes": 1,
+      "mail": false,
+      "groups": ["windows", "windows_security", "authentication_success"]
+    },
+    "agent": {"id": "007", "name": "WIN-LAB-01", "ip": "192.168.56.20"},
+    "manager": {"name": "wazuh-manager"},
+    "id": "1790000001.000102",
+    "decoder": {"name": "windows_eventchannel"},
+    "data": {
+      "win": {
+        "system": {
+          "providerName": "Microsoft-Windows-Security-Auditing",
+          "providerGuid": "{54849625-5478-4994-a5ba-3e3b0328c30d}",
+          "eventID": "4624",
+          "version": "2",
+          "level": "0",
+          "task": "12544",
+          "opcode": "0",
+          "keywords": "0x8020000000000000",
+          "systemTime": "2026-09-29T08:12:40.1187421Z",
+          "eventRecordID": "48236",
+          "processID": "812",
+          "threadID": "5016",
+          "channel": "Security",
+          "computer": "WIN-LAB-01",
+          "severityValue": "AUDIT_SUCCESS",
+          "message": "\"An account was successfully logged on.\r\n\r\nSubject:\r\n\tSecurity ID:\t\tS-1-5-18\r\n\tAccount Name:\t\tWIN-LAB-01$\r\n\tAccount Domain:\t\tWORKGROUP\r\n\tLogon ID:\t\t0x3E7\r\n\r\nLogon Information:\r\n\tLogon Type:\t\t10\r\n\tRestricted Admin Mode:\tNo\r\n\tVirtual Account:\t\tNo\r\n\tElevated Token:\t\tYes\r\n\r\nNew Logon:\r\n\tSecurity ID:\t\tS-1-5-21-1000000001-1000000002-1000000003-1001\r\n\tAccount Name:\t\tlabuser\r\n\tAccount Domain:\t\tWIN-LAB-01\r\n\tLogon ID:\t\t0x6A3F1C\r\n\r\nProcess Information:\r\n\tProcess ID:\t\t0x2c4\r\n\tProcess Name:\t\tC:\\Windows\\System32\\svchost.exe\r\n\r\nNetwork Information:\r\n\tWorkstation Name:\tWIN-LAB-01\r\n\tSource Network Address:\t10.10.20.15\r\n\tSource Port:\t\t0\r\n\r\nDetailed Authentication Information:\r\n\tLogon Process:\t\tUser32 \r\n\tAuthentication Package:\tNegotiate\""
+        },
+        "eventdata": {
+          "subjectUserSid": "S-1-5-18",
+          "subjectUserName": "WIN-LAB-01$",
+          "subjectDomainName": "WORKGROUP",
+          "subjectLogonId": "0x3e7",
+          "targetUserSid": "S-1-5-21-1000000001-1000000002-1000000003-1001",
+          "targetUserName": "labuser",
+          "targetDomainName": "WIN-LAB-01",
+          "targetLogonId": "0x6a3f1c",
+          "logonType": "10",
+          "logonProcessName": "User32",
+          "authenticationPackageName": "Negotiate",
+          "workstationName": "WIN-LAB-01",
+          "logonGuid": "{00000000-0000-0000-0000-000000000000}",
+          "transmittedServices": "-",
+          "lmPackageName": "-",
+          "keyLength": "0",
+          "processId": "0x2c4",
+          "processName": "C:\\Windows\\System32\\svchost.exe",
+          "ipAddress": "10.10.20.15",
+          "ipPort": "0",
+          "impersonationLevel": "%%1833",
+          "restrictedAdminMode": "%%1843",
+          "virtualAccount": "%%1843",
+          "elevatedToken": "%%1842"
+        }
+      }
+    },
+    "location": "EventChannel"
+  }
+}

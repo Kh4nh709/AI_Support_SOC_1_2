@@ -2796,3 +2796,27 @@ Decision:
   4. **P7's results do not move.** The measured system is `656e61e` (P7-T08 run log). Everything reinstated lands after it, and the thesis states it as *built after the evaluation, not measured*. `docs/results/` is not re-rendered.
   5. **Cut-off (the Director's recommendation; the Owner may move it).** Code merges stop at **01/10 12:00**. A card not merged and green by then is recorded as not completed, and the tree is closed from what merged. P8-T06 and the `v1.0` tag run on that tree. This keeps a working submission guaranteed rather than hoped for.
 Supersedes: DEC-116 (the deprioritization and its 30/09 auto-cut); DEC-111's cut of ② (the rest of DEC-111 stands)
+
+## DEC-152 · 2026-09-29 · P9 (Windows alerts) merged after P7-T08: both cards APPROVE with five nits applied at merge; the Owner waives real Windows fixtures and declines the ① deferral analysis; Windows is built, not measured
+Scope: **code** (`ingest/wazuh_parser.py`, `ingest/category.py`, `llm/builder.py` enum, `kb/`) · **plan** (DEC-149 carried out) · **evaluation validity** (what the merge changes for the live ①)
+Decided by: Director, on the Reviewer's APPROVE · **the Owner** (items 3 and 4, 29/09)
+Drafted by: Director (Opus 5.5)
+Propagated to: `STATE.md` (P9-T01, P9-T02 → done) · `P9-T01.review.md`, `P9-T02.review.md` · `P9-tasks.md` §5 · `docs/limitations.md` at P8-T06 · the Owner (fast-forward, restart, one wrong password)
+Decision:
+  1. **Merged.** The branch `worktree-agent-a1eee109a03cd9a9d` merges into the director branch with `--no-ff` and no conflict:
+     - `4623a75` P9-T01;
+     - `e84cabf` P9-T02;
+     - `80a8621` the reports;
+     - `024beda` the Director's follow-up: a Windows group tier, T1110 parent matching, and no port tier for Windows.
+
+     The condition was "merged only after the last P7-T08 run", and it holds: `11976f8`.
+  2. **The Reviewer's evidence, from a separate session with read-only DB access.**
+     - Linux parses byte-identically: all 5,488 real non-Windows documents, base versus HEAD, differ on no field except `mapping_version`.
+     - Re-resolving 5,047 non-Windows rows gives 0 differences.
+     - Of 2,969 Windows rows, 10 move `ssh_brute_force` → `brute_force` (60122 ×9, 60204 ×1).
+     - The ten signed tables are byte-identical (tree `48329d72…`), and no test was weakened.
+     - Five nits were applied in this merge: a playbook wording, the `bf-3` evidence note, the `_win_json` docstring and the §5 expectation. The identity case note is an Owner action (P9-O1).
+  3. **The Owner waives real Windows alerts as test fixtures** (*"Không dùng làm dữ liệu"*). P9-tasks §1 item 4's pre-merge requirement is lifted. The evidence is instead the synthetic fixtures, each marked `"_fixture": "synthetic"`, plus read-only counts over the real rows that print counts only.
+  4. **The Owner declines the proposed post-hoc analysis of why ① defers** (*"Không đồng ý đề xuất"*). The thesis reports P7's numbers as measured, with no root-cause breakdown.
+  5. **What the merge changes live (not measured).** New alerts carry `mapping_version` v3.3. Five shared playbooks gain unreviewed Windows sections that ① now reads. `brute_force.yaml` stays unsigned, so ① never auto-closes a `brute_force` alert. `docs/results/` and `eval/gold_coverage.md` are **not** re-rendered. `docs/limitations.md` (P8-T06) states "implemented, not measured" together with these three facts.
+Supersedes: nothing
