@@ -40,7 +40,10 @@ _DECISION_MAP: dict[str, Literal["closed_fp", "closed_benign"]] = {
 #: The initial escalate guard (design note 4): the trigger's own status decides
 #: which of the three kinds a pre-existing refusal is (§5 — `transitions.escalate`
 #: itself has no such guard). A status not listed here (received/enriching/
-#: duplicate) falls back to "not_active".
+#: duplicate) falls back to "not_active". Keyed on `status` alone rather than
+#: derived from `_conflict_row`'s `case_id` column: `escalated_tier2` already
+#: implies a case, and no test exercises the two disagreeing (review round 1,
+#: nit 6) — left as the cheaper of the two correct shapes.
 _ESCALATE_GUARD_KIND: dict[str, str] = {
     "escalated_tier2": "already_in_case",
     "closed_fp": "already_decided",
@@ -109,6 +112,12 @@ def _conflict_body(
     if seen_occurrence_count is not None:
         body["delta"] = occurrence_count - seen_occurrence_count
     body["status"] = status
+    # `decided_by` is the row's `acknowledged_by`, not a separate "who closed it"
+    # column (there is none — only `domain/` writes `alerts.status`, and it does
+    # not record a closer). v1 assumes the acknowledger is who later decided
+    # (review round 1, nit 7) — true under P6-2's "the first acknowledger wins"
+    # and this module's own flow, false only if a row were closed by a path that
+    # bypasses `tier1/decide.py` entirely.
     body["decided_by"] = acknowledged_by_name if decided else None
     body["decision"] = status if decided else None
     body["decided_at"] = closed_at.isoformat() if closed_at is not None else None
@@ -198,8 +207,9 @@ def decide(
         )
     except transitions.StaleState:
         row = _conflict_row(conn, alert_id)
-        status = row[0] if row is not None else None
-        closed_at = row[3] if row is not None else None
+        if row is None:
+            raise NotFound(f"alert_id={alert_id!r} does not exist") from None
+        status, closed_at = row[0], row[3]
         if status != "tier1_active":
             kind = "already_decided" if closed_at is not None else "not_active"
         else:
@@ -246,9 +256,20 @@ def escalate(
         severity = alert_severity
 
     try:
-        case_id = transitions.escalate(
-            conn, alert_id, actor.user_id, title=title, severity=severity
-        )
+        # A savepoint (review round 1, item 3): `transitions.escalate`'s two
+        # `StaleState` flavors differ in how much SQL already ran — a
+        # `UniqueViolation` on `case_alerts` (a candidate claimed concurrently)
+        # aborts the connection's current transaction before this function's
+        # own `_conflict()` re-read could run; the rowcount-mismatch flavor
+        # leaves a `cases` row and partial `UPDATE`s uncommitted but the
+        # transaction itself still usable. `conn.transaction()` opens a
+        # `SAVEPOINT` here and rolls back to it (not the whole request's
+        # transaction) on any exception, so both flavors leave `_conflict()`'s
+        # read on a working transaction and nothing half-written survives.
+        with conn.transaction():
+            case_id = transitions.escalate(
+                conn, alert_id, actor.user_id, title=title, severity=severity
+            )
     except transitions.StaleState:
         raise _conflict(conn, alert_id, kind="already_in_case") from None
 
@@ -270,10 +291,17 @@ def escalate(
 
 
 def reopen(conn: psycopg.Connection, alert_id: str, actor: Actor, *, reason: str) -> dict:
-    """A17 — `auto_closed` only. `transitions.reopen`'s own `ValueError` (empty
-    `reason`) propagates untouched."""
+    """A17 — `auto_closed` only. `reason` stripped, 1-500 chars (the same bound
+    as `decide`'s), rather than `transitions.reopen`'s bare "non-empty" check —
+    review round 1, item 10."""
+    reason = reason.strip()
+    if not 1 <= len(reason) <= 500:
+        raise ValueError("reason: must be 1-500 characters")
     try:
         transitions.reopen(conn, alert_id, actor.user_id, reason=reason)
     except transitions.StaleState:
-        raise _conflict(conn, alert_id, kind="not_reopenable") from None
+        row = _conflict_row(conn, alert_id)
+        if row is None:
+            raise NotFound(f"alert_id={alert_id!r} does not exist") from None
+        raise DecisionConflict(_conflict_body(conn, row, kind="not_reopenable")) from None
     return {"alert_id": alert_id, "status": "queued_tier1"}
