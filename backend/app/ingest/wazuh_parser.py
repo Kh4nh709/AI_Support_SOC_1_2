@@ -12,6 +12,12 @@ object *is* the alert. `ParseResult.envelope` is `"indexer_hit"` or `"bare"`
 which cannot be told apart once `_source` is absent (P2-tasks.md planning
 decision 6; DEC-019).
 
+A Windows eventchannel alert (decoder `windows_eventchannel`) keeps the peer
+address, ports, user and log line under `data.win.eventdata` / `data.win.system`
+instead of `data.*` / `full_log`. `_windows_fields()` reads them, and they fill
+only the fields the Linux shape left empty — a Linux alert has no `data.win`
+mapping and never reaches that code (P9-T01, DEC-149).
+
 Pure (R1): no clock, no DB, no network. `parse_wazuh_alert()` is total (R2) —
 it never raises on the classification path; it rejects only when the alert
 has no identity (`id`, `rule.id`, `rule.description` or a parseable
@@ -23,6 +29,7 @@ and `ingest.category` (same package, not judged by the G1 AST scan).
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -35,6 +42,11 @@ from app.ingest import category
 
 _OFFSET_NO_COLON_RE = re.compile(r"([+-]\d{2})(\d{2})$")
 
+#: What a Windows event writes into an address field when there is no real peer
+#: (card P9-T01): `-` and `""` mean "none"; the loopback and unspecified addresses
+#: are the machine talking to itself. Applied to `data.win` values only.
+_WINDOWS_EMPTY_ADDRESSES = frozenset({"-", "", "127.0.0.1", "::1", "0.0.0.0"})
+
 
 @dataclass(frozen=True)
 class ParseResult:
@@ -43,6 +55,22 @@ class ParseResult:
     alert: Alert | None
     rejection: str | None
     envelope: Literal["indexer_hit", "bare"]
+
+
+@dataclass(frozen=True)
+class _WindowsFields:
+    """The values a Windows eventchannel alert carries under `data.win` for the fields
+    the Linux shape keeps under `data.*` and `full_log`, already filtered: `""`, `0` or
+    `None` means Windows had nothing to add. Not new `Alert` fields — `eventID`,
+    `status`, `logonType` and the rest stay in `raw_payload` and reach ① through
+    `raw_log`."""
+
+    srcip: str
+    dstip: str
+    src_port: int
+    dst_port: int
+    user: str | None
+    raw_log: str
 
 
 def _dict(value: object) -> dict:
@@ -127,6 +155,79 @@ def _resolve_alert_time(doc: Mapping, alert_obj: Mapping, envelope: str) -> date
     return parsed
 
 
+def _win_text(value: object) -> str:
+    """`value` stripped if it is a string, else `""`: every eventchannel field is a
+    string, so anything else is treated as absent, never raised on (R2)."""
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _win_address(eventdata: Mapping, *keys: str) -> str:
+    """The first of `keys` holding a real address, else `""`."""
+    for key in keys:
+        value = _win_text(eventdata.get(key))
+        if value not in _WINDOWS_EMPTY_ADDRESSES:
+            return value
+    return ""
+
+
+def _win_port(eventdata: Mapping, *keys: str) -> int:
+    """The first of `keys` holding a value other than `-`/`""`, as `_safe_int` reads it."""
+    for key in keys:
+        value = _win_text(eventdata.get(key))
+        if value not in ("", "-"):
+            return _safe_int(value, 0)
+    return 0
+
+
+def _win_account(value: object) -> str | None:
+    """A named account, or `None` for `-`, `""` and a machine account (`NAME$`)."""
+    name = _win_text(value)
+    if name in ("", "-") or name.endswith("$"):
+        return None
+    return name
+
+
+def _win_json(win: Mapping) -> str:
+    """`data.win` as sorted JSON: the log line of an event with no `system.message`.
+    `default=str` and the guard only matter for a mapping JSON cannot have produced
+    (a non-string key, a cycle); such an event keeps an empty `raw_log` (R2)."""
+    try:
+        return json.dumps(win, sort_keys=True, ensure_ascii=False, default=str)
+    except (TypeError, ValueError, RecursionError):
+        return ""
+
+
+def _windows_fields(data: Mapping) -> _WindowsFields | None:
+    """srcip/dstip/ports/user/raw_log from `data.win` (card P9-T01), or `None` when
+    `data.win` is not a mapping — the case of every Linux alert.
+
+    - srcip: `eventdata.ipAddress` (4624/4625/4648/4776), else `eventdata.sourceIp`
+      (Sysmon 3); dstip: `eventdata.destinationIp`.
+    - ports: `eventdata.ipPort`, else `eventdata.sourcePort`; `eventdata.destinationPort`.
+    - user: `eventdata.targetUserName`, else `eventdata.subjectUserName`, else the
+      account part of Sysmon's `eventdata.user` (`DOMAIN\\name` -> `name`).
+    - raw_log: `system.message` if non-empty, else `data.win` as sorted JSON.
+    """
+    win = data.get("win")
+    if not isinstance(win, dict):
+        return None
+    eventdata = _dict(win.get("eventdata"))
+    system = _dict(win.get("system"))
+    message = system.get("message")
+    return _WindowsFields(
+        srcip=_win_address(eventdata, "ipAddress", "sourceIp"),
+        dstip=_win_address(eventdata, "destinationIp"),
+        src_port=_win_port(eventdata, "ipPort", "sourcePort"),
+        dst_port=_win_port(eventdata, "destinationPort"),
+        user=(
+            _win_account(eventdata.get("targetUserName"))
+            or _win_account(eventdata.get("subjectUserName"))
+            or _win_account(_win_text(eventdata.get("user")).rpartition("\\")[2])
+        ),
+        raw_log=message if isinstance(message, str) and message.strip() else _win_json(win),
+    )
+
+
 def parse_wazuh_alert(doc: Mapping) -> ParseResult:
     envelope: Literal["indexer_hit", "bare"] = (
         "indexer_hit" if isinstance(doc, Mapping) and "_source" in doc else "bare"
@@ -178,6 +279,15 @@ def parse_wazuh_alert(doc: Mapping) -> ParseResult:
     src_port = _safe_int(data.get("srcport"), 0)
     dst_port = _safe_int(data.get("dstport"), 0)
     alert_user = data.get("dstuser") or data.get("srcuser") or None
+    # P9-T01: a Windows eventchannel alert keeps these under `data.win`. Its values fill
+    # only what the lines above left empty, never replace one (card §3 test 3).
+    windows = _windows_fields(data)
+    if windows is not None:
+        srcip = srcip or windows.srcip
+        dstip = dstip or windows.dstip
+        src_port = src_port or windows.src_port
+        dst_port = dst_port or windows.dst_port
+        alert_user = alert_user or windows.user
 
     decoder_obj = _dict(alert_obj.get("decoder"))
     decoder = decoder_obj.get("name") or decoder_obj.get("parent") or None
@@ -195,6 +305,9 @@ def parse_wazuh_alert(doc: Mapping) -> ParseResult:
     dstip_is_private = _is_private(dstip)
 
     full_log = alert_obj.get("full_log") or ""
+    if not full_log and windows is not None:
+        # An eventchannel alert usually has no full_log (P9-T01).
+        full_log = windows.raw_log
     raw_log, raw_log_truncated = _truncate_raw_log(full_log, config.load().RAW_LOG_MAX_BYTES)
 
     event_bucket_hash = compute_event_bucket_hash(rule_id, srcip, dstip, agent_name, alert_time)

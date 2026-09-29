@@ -1,0 +1,80 @@
+{
+  "_fixture": "synthetic",
+  "_index": "wazuh-alerts-4.x-2026.09.29",
+  "_id": "synthetic-defender-1116-detection",
+  "_source": {
+    "_fixture": "synthetic",
+    "timestamp": "2026-09-29T08:30:44.402+0000",
+    "rule": {
+      "level": 12,
+      "description": "Windows Defender: malware or potentially unwanted software detected (synthetic fixture)",
+      "id": "62123",
+      "firedtimes": 1,
+      "mail": true,
+      "groups": ["windows", "windows_defender", "virus"]
+    },
+    "agent": {"id": "007", "name": "WIN-LAB-01", "ip": "192.168.56.20"},
+    "manager": {"name": "wazuh-manager"},
+    "id": "1790000001.000108",
+    "decoder": {"name": "windows_eventchannel"},
+    "data": {
+      "win": {
+        "system": {
+          "providerName": "Microsoft-Windows-Windows Defender",
+          "providerGuid": "{11cd958a-c507-4ef3-b3f2-5fd9dfbd2c78}",
+          "eventID": "1116",
+          "version": "0",
+          "level": "3",
+          "task": "0",
+          "opcode": "0",
+          "keywords": "0x8000000000000000",
+          "systemTime": "2026-09-29T08:30:44.1012004Z",
+          "eventRecordID": "2210",
+          "processID": "4088",
+          "threadID": "7420",
+          "channel": "Microsoft-Windows-Windows Defender/Operational",
+          "computer": "WIN-LAB-01",
+          "severityValue": "WARNING",
+          "message": "\"Microsoft Defender Antivirus has detected malware or other potentially unwanted software.\r\n For more information please see the following:\r\nhttps://go.microsoft.com/fwlink/?linkid=37020&name=Virus:DOS/EICAR_Test_File&threatid=2147519003&enterprise=0\r\n \tName: Virus:DOS/EICAR_Test_File\r\n \tID: 2147519003\r\n \tSeverity: Severe\r\n \tCategory: Virus\r\n \tPath: file:_C:\\Users\\labuser\\Downloads\\eicar_test.txt\r\n \tDetection Origin: Local machine\r\n \tDetection Type: Concrete\r\n \tDetection Source: Real-Time Protection\r\n \tUser: WIN-LAB-01\\labuser\r\n \tProcess Name: C:\\Windows\\explorer.exe\r\n \tSecurity intelligence Version: AV: 1.419.1.0, AS: 1.419.1.0, NIS: 1.419.1.0\r\n \tEngine Version: AM: 1.1.24080.9, NIS: 1.1.24080.9\""
+        },
+        "eventdata": {
+          "product Name": "Microsoft Defender Antivirus",
+          "product Version": "4.18.24080.9",
+          "detection ID": "{7c1f2a55-0000-0000-0000-000000000001}",
+          "detection Time": "2026-09-29T08:30:44.101Z",
+          "threat ID": "2147519003",
+          "threat Name": "Virus:DOS/EICAR_Test_File",
+          "severity ID": "5",
+          "severity Name": "Severe",
+          "category ID": "42",
+          "category Name": "Virus",
+          "fWLink": "https://go.microsoft.com/fwlink/?linkid=37020&name=Virus:DOS/EICAR_Test_File&threatid=2147519003&enterprise=0",
+          "status Code": "1",
+          "state": "1",
+          "source ID": "3",
+          "source Name": "Real-Time Protection",
+          "process Name": "C:\\Windows\\explorer.exe",
+          "detection User": "WIN-LAB-01\\labuser",
+          "path": "file:_C:\\Users\\labuser\\Downloads\\eicar_test.txt",
+          "origin ID": "1",
+          "origin Name": "Local machine",
+          "execution ID": "0",
+          "execution Name": "Unknown",
+          "type ID": "0",
+          "type Name": "Concrete",
+          "pre Execution Status": "0",
+          "action ID": "9",
+          "action Name": "Not Applicable",
+          "error Code": "0x00000000",
+          "error Description": "The operation completed successfully. ",
+          "post Clean Status": "0",
+          "additional Actions ID": "0",
+          "additional Actions String": "No additional actions required",
+          "security intelligence Version": "AV: 1.419.1.0, AS: 1.419.1.0, NIS: 1.419.1.0",
+          "engine Version": "AM: 1.1.24080.9, NIS: 1.1.24080.9"
+        }
+      }
+    },
+    "location": "EventChannel"
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "_fixture": "synthetic",
+  "_index": "wazuh-alerts-4.x-2026.09.29",
+  "_id": "synthetic-sysmon-1-process-create",
+  "_source": {
+    "_fixture": "synthetic",
+    "timestamp": "2026-09-29T08:20:11.520+0000",
+    "rule": {
+      "level": 6,
+      "description": "Process started from a user-writable folder (synthetic fixture)",
+      "id": "92213",
+      "mitre": {
+        "id": ["T1204"],
+        "tactic": ["Execution"],
+        "technique": ["User Execution"]
+      },
+      "firedtimes": 1,
+      "mail": false,
+      "groups": ["sysmon", "sysmon_event1", "windows"]
+    },
+    "agent": {"id": "007", "name": "WIN-LAB-01", "ip": "192.168.56.20"},
+    "manager": {"name": "wazuh-manager"},
+    "id": "1790000001.000104",
+    "decoder": {"name": "windows_eventchannel"},
+    "data": {
+      "win": {
+        "system": {
+          "providerName": "Microsoft-Windows-Sysmon",
+          "providerGuid": "{5770385f-c22a-43e0-bf4c-06f5698ffbd9}",
+          "eventID": "1",
+          "version": "5",
+          "level": "4",
+          "task": "1",
+          "opcode": "0",
+          "keywords": "0x8000000000000000",
+          "systemTime": "2026-09-29T08:20:11.4021993Z",
+          "eventRecordID": "90412",
+          "processID": "3052",
+          "threadID": "4176",
+          "channel": "Microsoft-Windows-Sysmon/Operational",
+          "computer": "WIN-LAB-01",
+          "severityValue": "INFORMATION",
+          "message": "\"Process Create:\r\nRuleName: -\r\nUtcTime: 2026-09-29 08:20:11.402\r\nProcessGuid: {5e3b2a10-0000-0000-0000-000000000001}\r\nProcessId: 6120\r\nImage: C:\\Users\\labuser\\AppData\\Local\\Temp\\setup_helper.exe\r\nFileVersion: -\r\nDescription: -\r\nProduct: -\r\nCompany: -\r\nOriginalFileName: -\r\nCommandLine: \"C:\\Users\\labuser\\AppData\\Local\\Temp\\setup_helper.exe\" /quiet\r\nCurrentDirectory: C:\\Users\\labuser\\Downloads\\\r\nUser: WIN-LAB-01\\labuser\r\nLogonGuid: {5e3b2a10-0000-0000-0000-000000000002}\r\nLogonId: 0x6A3F1C\r\nTerminalSessionId: 1\r\nIntegrityLevel: Medium\r\nHashes: SHA256=0000000000000000000000000000000000000000000000000000000000000000\r\nParentProcessGuid: {5e3b2a10-0000-0000-0000-000000000003}\r\nParentProcessId: 4312\r\nParentImage: C:\\Windows\\explorer.exe\r\nParentCommandLine: C:\\Windows\\Explorer.EXE\r\nParentUser: WIN-LAB-01\\labuser\""
+        },
+        "eventdata": {
+          "ruleName": "-",
+          "utcTime": "2026-09-29 08:20:11.402",
+          "processGuid": "{5e3b2a10-0000-0000-0000-000000000001}",
+          "processId": "6120",
+          "image": "C:\\Users\\labuser\\AppData\\Local\\Temp\\setup_helper.exe",
+          "fileVersion": "-",
+          "description": "-",
+          "product": "-",
+          "company": "-",
+          "originalFileName": "-",
+          "commandLine": "\"C:\\Users\\labuser\\AppData\\Local\\Temp\\setup_helper.exe\" /quiet",
+          "currentDirectory": "C:\\Users\\labuser\\Downloads\\",
+          "user": "WIN-LAB-01\\labuser",
+          "logonGuid": "{5e3b2a10-0000-0000-0000-000000000002}",
+          "logonId": "0x6a3f1c",
+          "terminalSessionId": "1",
+          "integrityLevel": "Medium",
+          "hashes": "SHA256=0000000000000000000000000000000000000000000000000000000000000000",
+          "parentProcessGuid": "{5e3b2a10-0000-0000-0000-000000000003}",
+          "parentProcessId": "4312",
+          "parentImage": "C:\\Windows\\explorer.exe",
+          "parentCommandLine": "C:\\Windows\\Explorer.EXE",
+          "parentUser": "WIN-LAB-01\\labuser"
+        }
+      }
+    },
+    "location": "EventChannel"
+  }
+}
