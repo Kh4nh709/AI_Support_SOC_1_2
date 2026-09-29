@@ -2820,3 +2820,44 @@ Decision:
   4. **The Owner declines the proposed post-hoc analysis of why ① defers** (*"Không đồng ý đề xuất"*). The thesis reports P7's numbers as measured, with no root-cause breakdown.
   5. **What the merge changes live (not measured).** New alerts carry `mapping_version` v3.3. Five shared playbooks gain unreviewed Windows sections that ① now reads. `brute_force.yaml` stays unsigned, so ① never auto-closes a `brute_force` alert. `docs/results/` and `eval/gold_coverage.md` are **not** re-rendered. `docs/limitations.md` (P8-T06) states "implemented, not measured" together with these three facts.
 Supersedes: nothing
+
+## DEC-153 · 2026-09-30 · P4's exit gate is met: all eight cards are merged and `test_e2e_tier1.py` is the proof. Coders now run on Sonnet 5.5 at xhigh effort by the Owner's rule, after the Director found every Coder since 29/09 had run Sonnet 5. The P8-T02 restore drill passed and the Owner signed it
+Scope: **plan** (P4 closed; the DEC-151 waves continue) · **process** (which model and effort the Coder sessions run on) · **operations** (the restore drill)
+Decided by: Director, on the Reviewers' verdicts · **the Owner** (item 2: *"Coder nên dùng model sonnet 5.5 mức xhigh effort"*, *"Các công việc coder router về model sonnet 5.5"*, 30/09; item 3: the permission to run the drill, then the signature and the permission to drop the drill DB, 29/09)
+Drafted by: Director (Opus 5.5)
+Propagated to: `STATE.md` (P4 phase row → done; P4-T03/T05/T06, P5-T03/T07/T08/T09/T11/T13, P8-T02 → done) · `superseded.yaml` (`P4` added to `exclude_completed_phases`) · each card's `.review.md` · `docs/restore-drill.md`
+Decision:
+  1. **P4's exit gate is met on 30/09.**
+     - All eight cards are merged. DEC-151 reinstated T03, T05 and T06.
+     - Each card had a separate Reviewer.
+     - `backend/tests/test_e2e_tier1.py` is the gate's evidence. It runs real sessions through the HTML routes on its own scratch database. It proves:
+       - the blind branch is absent in the queue and the detail page for all three roles;
+       - the ① block appears after the decision, with the `tier1.decided` payload;
+       - fan-out;
+       - escalate pulls in the correlated head;
+       - reopen works only from `auto_closed`;
+       - a 409 reports both N and M;
+       - lockout;
+       - server-side session invalidation on logout.
+     - The Director re-ran the logout mutation on the merged tree, and it went red.
+     - The Tier-1 pilot has been live since P4-T05 merged (`969ce96`).
+  2. **Coder sessions run on Sonnet 5.5 at xhigh effort.**
+     - The Owner asked for Sonnet 5.5 on 29/09. The Director dispatched `model: "sonnet"`, which in Claude Code 2.1.284 resolves to `claude-sonnet-5`, and told the Owner that Sonnet 5.5 did not exist. That was wrong.
+     - The Owner's "Supporter" session transcript records `claude-sonnet-5-5`, which proves it does exist.
+     - **The fix, applied mid-session:**
+       - The Director session's `.claude/settings.local.json` is git-ignored and local to its worktree. It now sets `ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5-5` and `CLAUDE_CODE_EFFORT_LEVEL=xhigh`. The second setting also moves the Director itself from max to xhigh.
+       - `~/.claude/settings.json` gains `modelSettings.claude-sonnet-5-5.effortLevel = xhigh`.
+       - `~/.claude/agents/coder-sonnet55.md` sets model `claude-sonnet-5-5` and `effort: xhigh`. It loads at the next session start.
+     - **Verified:** two probes and the first real Coder's transcript show `"model":"claude-sonnet-5-5"` and `"effort":"xhigh"`.
+     - **Which work ran on which model:**
+       - Cards that were already running on Sonnet 5 finished their last step there.
+       - Every Coder dispatched afterwards runs Sonnet 5.5: the P5-T04 and P4-T06 review rounds, and P5-T05.
+       - Reviewers inherit the Director's model, Opus 5.5.
+       - Each card's review file names the model its Coder ran.
+  3. **The P8-T02 restore drill passed on 29/09 at 13:50 UTC.** The record is `docs/restore-drill.md`.
+     - Before = restored = after on all eight tables, and all 17 migrations were present.
+     - The live-name guard exited 2 without connecting.
+     - `app_rw` reads the copy.
+     - The Director ran it at the Owner's word. The Owner signed it (khanh, 29/09).
+     - `soc_restore_drill` was dropped at the Owner's word, and `soc_dev` was untouched.
+Supersedes: nothing
