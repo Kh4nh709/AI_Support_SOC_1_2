@@ -6,17 +6,25 @@ All logic is `app.tier1.digest` (`build`, `review`) and `app.ingest.autoclose`
 (`load_rules`, read-only, for the two-empty-states distinction); this module
 writes no SQL of its own (scope out — `tier1/digest.py` is not edited here).
 
-**Days are local (P5-T08 review round 1 · S4).** `build`/`review` take `day`
-as a date string in `cfg.DISPLAY_TZ`. The default day is **yesterday** in
-that zone — the 08:00-local job reviews yesterday, so that is what a reviewer
-opening this page without a `?day=` cold expects to clear. `?day=YYYY-MM-DD`
-picks any day; a link to today (so far) is always shown.
+**Days are local (P5-T08 review round 1 · S4).** `build`/`unreviewed_count`
+take `day` as a date string in `cfg.DISPLAY_TZ`. The default day is
+**yesterday** in that zone — the 08:00-local job reviews yesterday, so that
+is what a reviewer opening this page without a `?day=` cold expects to
+clear. `?day=YYYY-MM-DD` picks any day; a link to today (so far) is always
+shown. A malformed `?day=` never 4xx's the page itself (nit 8): it falls
+back to the default day and says so in a flash — this is a page, and a page
+answers with HTML, never a bare JSON error body.
 
 **`wrong` reopens the alert, and `build()` stops listing it** (it only shows
 `auto_closed` rows). The re-rendered row for a successful `Sai` therefore
 cannot come from a fresh `build()` call — it is built from the pre-review
 snapshot (`before`, read at the top of `review_submit`, before anything is
 mutated) plus the verdict, exactly as the card's deviation note directs.
+The "đã mở lại..." note is keyed on an explicit `reopened` flag set only by
+*this* success path (review round 1, nit 10) — never on
+`row.reviewed_verdict == "wrong"` alone, which can be a stale historical
+verdict on a cluster that auto-closed again after being reopened (P5-T08's
+own recorded limit: `autoclose_reviews` is keyed on `alert_id` alone).
 
 **A 409 is a normal outcome** (`StaleState`/`AlreadyReviewed` from
 `digest.review`): `conn.rollback()` first — a returned response is a success
@@ -24,14 +32,18 @@ as far as `get_conn` is concerned and would otherwise commit whatever the
 guard itself read (P4-T03's `_conflict_response` shape, `web/routers/tier1.py`)
 — then the row is re-read from the database before it is re-rendered, never
 served from the pre-call snapshot, so two reviewers racing the same row see
-the row the way it actually ended up, not the way either of them last saw it.
+the row the way it actually ended up, not the way either of them last saw
+it. When neither the re-read nor the pre-call snapshot has any cosmetic data
+left for the alert (review round 1, should-4), the row renders as one wide
+cell naming the id and the conflict — never a fake-looking row of blank
+cells and a "Số lần 0" that reads as real (but wrong) data.
 """
 
 from __future__ import annotations
 
 import dataclasses
 from datetime import date, datetime, timedelta
-from typing import Annotated, Literal
+from typing import Annotated
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -54,11 +66,19 @@ Admin = Annotated[Claims, Depends(require_admin)]
 
 _VERDICT_LABEL = {"correct": "Đúng", "wrong": "Sai", "unsure": "Không chắc"}
 
-_ALREADY_REVIEWED_TEXT = "cụm này đã được duyệt trước đó"
-_STALE_STATE_TEXT = "cụm không còn ở trạng thái tự đóng"
-_REOPENED_TEXT = "đã mở lại về hàng đợi Tier 1"
+_ALREADY_REVIEWED_TEXT = "Cụm này đã được duyệt trước đó"
+_STALE_STATE_TEXT = "Cụm không còn ở trạng thái tự đóng"
+_REOPENED_CLAUSE = "đã mở lại về hàng đợi Tier 1"
+_DAY_INVALID_TEXT = "Ngày không hợp lệ — phải có dạng YYYY-MM-DD"
+_VERDICT_INVALID_TEXT = "Đánh giá không hợp lệ"
+#: The row's own wide-cell text on a conflict with no cosmetic data left to
+#: show (should-4) — the same clause the flash carries, so the row and the
+#: flash agree.
+_CONFLICT_ROW_TEXT = "trạng thái đã thay đổi — tải lại trang"
 
 _ROW_TEMPLATE = "_digest_row.html"
+_ROW_COLUMNS = 10  # autoclose_rule_name, rule_id, description, severity, category,
+# agent_name, occurrence_count, span, suggested_action, verdict (nit 9's split)
 
 
 # ---------------------------------------------------------------------------
@@ -81,11 +101,16 @@ def _yesterday_local(tz: str) -> str:
     return (_now_local(tz) - timedelta(days=1)).date().isoformat()
 
 
-def _parse_day(raw: str) -> str:
+def _parse_day(raw: str) -> str | None:
+    """`raw` as a normalised `YYYY-MM-DD`, or `None` if it is not one — never
+    raises. Every caller decides for itself what "not a valid day" means for
+    its own response (review round 1, nit 8): the page falls back and says
+    so in a flash; a row POST answers 422 with the row plus a flash. Neither
+    is a bare JSON error body."""
     try:
         return date.fromisoformat(raw).isoformat()
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="day: phải có dạng YYYY-MM-DD") from exc
+    except ValueError:
+        return None
 
 
 def _find(rows: list[digest.DigestRow], alert_id: str) -> digest.DigestRow | None:
@@ -109,19 +134,36 @@ _BLANK_ROW_FIELDS = {
 
 
 def _blank_row(alert_id: str, *, reviewed_verdict: str | None) -> digest.DigestRow:
-    """A row with no cosmetic data, for the rare case a re-read finds nothing
-    to show (the alert_id was never on this day's digest at all — a hardcoded
-    or stale id, not a real race). Still routes through the one row template
-    rather than hand-built HTML, so autoescaping and the reviewed/conflict
-    branches stay the same for every caller."""
+    """A placeholder for the rare case neither a fresh re-read nor the
+    pre-call snapshot has any cosmetic data for `alert_id` — a hardcoded or
+    stale id, or the wrong `day` was posted, not a real race. Always
+    rendered with `blank=True` (never the normal nine data cells): review
+    round 1, should-4 — a row of empty cells and a "Số lần 0" reads as real
+    (if odd) data, not as the conflict it actually is."""
     return digest.DigestRow(
         alert_id=alert_id, reviewed_verdict=reviewed_verdict, **_BLANK_ROW_FIELDS
     )
 
 
-def _render_row(row: digest.DigestRow, *, day: str, tz: str, conflict: bool = False) -> str:
+def _render_row(
+    row: digest.DigestRow,
+    *,
+    day: str,
+    tz: str,
+    conflict: bool = False,
+    blank: bool = False,
+    reopened: bool = False,
+) -> str:
     return templating.templates.get_template(_ROW_TEMPLATE).render(
-        row=row, day=day, tz=tz, verdict_labels=_VERDICT_LABEL, conflict=conflict
+        row=row,
+        day=day,
+        tz=tz,
+        verdict_labels=_VERDICT_LABEL,
+        conflict=conflict,
+        blank=blank,
+        reopened=reopened,
+        conflict_text=_CONFLICT_ROW_TEXT,
+        colspan=_ROW_COLUMNS,
     )
 
 
@@ -137,8 +179,12 @@ def _fragment(
     tz: str,
     conflict: bool,
     status_code: int,
+    blank: bool = False,
+    reopened: bool = False,
 ) -> HTMLResponse:
-    body = _render_row(row, day=day, tz=tz, conflict=conflict) + _render_flash(flash)
+    body = _render_row(
+        row, day=day, tz=tz, conflict=conflict, blank=blank, reopened=reopened
+    ) + _render_flash(flash)
     return HTMLResponse(content=body, status_code=status_code)
 
 
@@ -155,11 +201,10 @@ def _page(
     *,
     day: str,
     flash: dict[str, str] | None = None,
-    status_code: int = 200,
 ) -> HTMLResponse:
     tz = cfg.DISPLAY_TZ
     rows = digest.build(conn, day, tz=tz)
-    page = templating.render(
+    return templating.render(
         request,
         "digest.html",
         user=user,
@@ -168,16 +213,13 @@ def _page(
         day=day,
         today=_today_local(tz),
         rows=rows,
-        # design note 1's two empty states: no *enabled* rule at all, versus a
-        # rule that simply closed nothing today. `load_rules` (existing,
-        # read-only, `app.ingest.autoclose`) is used rather than the private
-        # `reload_rules`/`_cached_rules` so this page-view never resets the
-        # live evaluate() pipeline's TTL cache as a side effect.
+        # review round 1's blocker: rows first. A rule that closed clusters
+        # earlier today and was then disabled must never hide those rows —
+        # `rules_exist` (design note 1's *other* empty state) is consulted
+        # by the template only when `rows` is itself empty.
         rules_exist=bool(autoclose.load_rules(conn)),
         verdict_labels=_VERDICT_LABEL,
     )
-    page.status_code = status_code
-    return page
 
 
 @router.get("/admin/digest", response_class=HTMLResponse)
@@ -190,8 +232,15 @@ def digest_page(
     day: str | None = None,
 ) -> HTMLResponse:
     tz = cfg.DISPLAY_TZ
-    resolved_day = _parse_day(day) if day else _yesterday_local(tz)
-    return _page(request, conn, cfg, user, day=resolved_day)
+    flash: dict[str, str] | None = None
+    if day:
+        resolved_day = _parse_day(day)
+        if resolved_day is None:
+            resolved_day = _yesterday_local(tz)
+            flash = {"level": "error", "text": f"{_DAY_INVALID_TEXT} — hiển thị {resolved_day}"}
+    else:
+        resolved_day = _yesterday_local(tz)
+    return _page(request, conn, cfg, user, day=resolved_day, flash=flash)
 
 
 @router.post("/admin/digest/{alert_id}/review", response_class=HTMLResponse)
@@ -203,12 +252,37 @@ def review_submit(
     _: Admin,
     alert_id: str,
     day: Annotated[str, Form()],
-    verdict: Annotated[Literal["correct", "wrong", "unsure"], Form()],
+    verdict: Annotated[str, Form()],
 ) -> HTMLResponse:
     del request  # the fragment needs no page-level context (no `{% extends %}`)
+    if "\x00" in alert_id:
+        # review round 1, nit 7: a NUL byte can never name a real alert_id
+        # (Postgres text columns cannot hold one) — 404, matching P4-T05's
+        # merged pages, never a raw 500 from psycopg rejecting it later.
+        raise HTTPException(status_code=404)
     tz = cfg.DISPLAY_TZ
-    day = _parse_day(day)
+
+    parsed_day = _parse_day(day)
+    if parsed_day is None:
+        flash = {"level": "error", "text": _DAY_INVALID_TEXT}
+        return _fragment(
+            _blank_row(alert_id, reviewed_verdict=None),
+            flash,
+            day=day,
+            tz=tz,
+            conflict=True,
+            blank=True,
+            status_code=422,
+        )
+    day = parsed_day
+
     before = _find(digest.build(conn, day, tz=tz), alert_id)
+
+    if verdict not in _VERDICT_LABEL:
+        flash = {"level": "error", "text": _VERDICT_INVALID_TEXT}
+        blank = before is None
+        row = before if not blank else _blank_row(alert_id, reviewed_verdict=None)
+        return _fragment(row, flash, day=day, tz=tz, conflict=blank, blank=blank, status_code=422)
 
     try:
         digest.review(conn, alert_id, verdict, user.user_id)
@@ -233,13 +307,14 @@ def review_submit(
             # pre-call cosmetic snapshot, buttons suppressed.
             return _fragment(before, flash, day=day, tz=tz, conflict=True, status_code=409)
         # Neither snapshot has it — a hardcoded/wrong alert_id, or the wrong
-        # `day` was posted. No cosmetic data exists to show.
+        # `day` was posted. No cosmetic data exists to show (should-4).
         return _fragment(
             _blank_row(alert_id, reviewed_verdict=None),
             flash,
             day=day,
             tz=tz,
             conflict=True,
+            blank=True,
             status_code=409,
         )
 
@@ -247,17 +322,39 @@ def review_submit(
         # `build()` only lists `auto_closed` rows; `wrong` just reopened this
         # one (queued_tier1), so it is gone from a fresh `build()`. Render
         # from the pre-call snapshot plus the verdict instead (card deviation).
+        blank = before is None
         row = (
             dataclasses.replace(before, reviewed_verdict="wrong")
-            if before is not None
+            if not blank
             else _blank_row(alert_id, reviewed_verdict="wrong")
         )
-        flash_text = _REOPENED_TEXT
-    else:
-        row = _find(digest.build(conn, day, tz=tz), alert_id)
-        if row is None:  # practically unreachable — review() just proved it auto_closed
-            row = _blank_row(alert_id, reviewed_verdict=verdict)
-        flash_text = f"Đã ghi nhận: {_VERDICT_LABEL[verdict]}"
+        flash_text = f"Đã ghi nhận: {_VERDICT_LABEL['wrong']} — {_REOPENED_CLAUSE}"
+        return _fragment(
+            row,
+            {"level": "info", "text": flash_text},
+            day=day,
+            tz=tz,
+            conflict=False,
+            blank=blank,
+            # review round 1, nit 10: `reopened` is this call's own flag, set
+            # only on this success path — never derived from
+            # `reviewed_verdict == "wrong"`, which can be a stale verdict
+            # from a cluster that auto-closed again after being reopened.
+            reopened=True,
+            status_code=200,
+        )
 
-    flash = {"level": "info", "text": flash_text}
-    return _fragment(row, flash, day=day, tz=tz, conflict=False, status_code=200)
+    row = _find(digest.build(conn, day, tz=tz), alert_id)
+    blank = row is None
+    if blank:  # practically unreachable — review() just proved it auto_closed
+        row = _blank_row(alert_id, reviewed_verdict=verdict)
+    flash_text = f"Đã ghi nhận: {_VERDICT_LABEL[verdict]}"
+    return _fragment(
+        row,
+        {"level": "info", "text": flash_text},
+        day=day,
+        tz=tz,
+        conflict=False,
+        blank=blank,
+        status_code=200,
+    )

@@ -27,12 +27,21 @@ regardless of `db`'s later rollback:
   own docstring names the exact prior incident: `test_schema_v3_017.py`
   assumes `audit_events` starts empty). `test_non_admin_is_refused_...`
   therefore runs on its own scratch database (`sdb`/`scratch_dsn`).
-- `test_409_rolls_back_before_the_wrappers_commit` needs `get_conn`'s *real*
-  shape (commit on success, rollback on exception) to prove the ordering
-  (known pitfall 1) — `commit`/`rollback` are replaced with call recorders so
-  nothing really persists, and the genuine `rollback` runs at teardown,
-  before the `db` fixture's own (`test_tier1_api.py`'s
+- `test_409_rolls_back_before_a_later_commit_would_run` needs `get_conn`'s
+  *real* shape (commit on success, rollback on exception) to prove the
+  ordering (known pitfall 1) — `commit`/`rollback` are replaced with call
+  recorders so nothing really persists, and the genuine `rollback` runs at
+  teardown, before the `db` fixture's own (`test_tier1_api.py`'s
   `real_shape_client` pattern for P4-T03's `_conflict_response`).
+
+Review round 1 (DEC-151): a third test needs the same treatment for a
+different reason —
+`test_non_admin_is_refused_and_authz_denied_row_persists_on_another_connection`
+must prove `authz.denied` is durable, not merely visible to the same
+session that wrote it, so its `get_conn` wraps the scratch connection in
+the real commit/rollback shape (`test_auth.py`'s own `client` fixture
+pattern) and the row is read back on a *second*, independent connection
+(`test_auth.py:623-646`).
 """
 
 from __future__ import annotations
@@ -43,7 +52,7 @@ import os
 import shutil
 import subprocess
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -219,11 +228,34 @@ def client(db):
 # ---------------------------------------------------------------------------
 
 
+def test_display_tz_is_utc_plus_7() -> None:
+    """Sanity check on the environment's tzdata (review round 1, nit 6): the
+    day-boundary tests below assume Asia/Ho_Chi_Minh is a fixed UTC+7 with
+    no DST — if this ever went red, every "default day"/"00:30 local"
+    assertion below would be testing the wrong boundary."""
+    assert admin_digest._now_local(_TZ).utcoffset() == timedelta(hours=7)
+
+
 @pytest.mark.db
 def test_default_day_is_yesterday_in_display_tz(client, monkeypatch) -> None:
     tc, _db, _admin_id = client
     monkeypatch.setattr(
         admin_digest, "_now_local", lambda tz: datetime(2026, 9, 30, 9, 0, tzinfo=ZoneInfo(tz))
+    )
+    resp = tc.get("/admin/digest")
+    assert resp.status_code == 200
+    assert 'data-field="day">2026-09-29<' in resp.text
+
+
+@pytest.mark.db
+def test_default_day_at_0030_local_is_still_yesterday(client, monkeypatch) -> None:
+    """Review round 1, nit 6: 00:30 local on the 30th is 17:30 UTC on the
+    29th — if the default-day seam ever confused the two clocks (used UTC's
+    date instead of the local one), "yesterday" would come out as the 28th,
+    not the 29th."""
+    tc, _db, _admin_id = client
+    monkeypatch.setattr(
+        admin_digest, "_now_local", lambda tz: datetime(2026, 9, 30, 0, 30, tzinfo=ZoneInfo(tz))
     )
     resp = tc.get("/admin/digest")
     assert resp.status_code == 200
@@ -242,10 +274,19 @@ def test_day_query_param_overrides_the_default(client) -> None:
 
 
 @pytest.mark.db
-def test_malformed_day_is_422(client) -> None:
+def test_malformed_day_falls_back_to_default_with_an_error_flash(client, monkeypatch) -> None:
+    """Review round 1, nit 8: this is a page — it answers with HTML, never a
+    bare JSON error body. A malformed `?day=` degrades gracefully to the
+    usual default (yesterday, local) instead of refusing the whole page."""
     tc, _db, _admin_id = client
+    monkeypatch.setattr(
+        admin_digest, "_now_local", lambda tz: datetime(2026, 9, 30, 9, 0, tzinfo=ZoneInfo(tz))
+    )
     resp = tc.get("/admin/digest?day=not-a-date")
-    assert resp.status_code == 422
+    assert resp.status_code == 200
+    assert 'data-field="day">2026-09-29<' in resp.text
+    assert "Ngày không hợp lệ" in resp.text
+    assert resp.text.count('id="flash"') == 1  # base.html's own, guarded digest.html placeholder
 
 
 @pytest.mark.db
@@ -269,7 +310,7 @@ def test_empty_state_no_rules_at_all(client) -> None:
     tc, _db, _admin_id = client
     resp = tc.get(f"/admin/digest?day={_DAY}")
     assert resp.status_code == 200
-    assert "Chưa có rule tự đóng nào." in resp.text
+    assert "Chưa có rule tự đóng nào đang bật." in resp.text
     assert "Không có cụm nào bị tự đóng trong ngày." not in resp.text
 
 
@@ -280,21 +321,43 @@ def test_empty_state_no_clusters_today(client) -> None:
     resp = tc.get(f"/admin/digest?day={_DAY}")
     assert resp.status_code == 200
     assert "Không có cụm nào bị tự đóng trong ngày." in resp.text
-    assert "Chưa có rule tự đóng nào." not in resp.text
+    assert "Chưa có rule tự đóng nào đang bật." not in resp.text
 
 
 @pytest.mark.db
-def test_a_disabled_only_rule_still_reads_as_no_rule(client) -> None:
+def test_a_disabled_only_rule_with_no_rows_still_reads_as_no_rule(client) -> None:
     """`load_rules` (this page's read) only ever returns *enabled* rules — a
     rule that exists but is off cannot have closed anything today either, so
-    the "why is this page empty" message stays the rule one."""
+    the "why is this page empty" message stays the rule one — deviation 4,
+    kept, with the review round 1 wording refinement ("...đang bật")."""
     tc, db, admin_id = client
     rule_id = _make_autoclose_rule(db, admin_id)
     db.execute(
         "UPDATE autoclose_rules SET enabled = false WHERE autoclose_rule_id = %s", (rule_id,)
     )
     resp = tc.get(f"/admin/digest?day={_DAY}")
-    assert "Chưa có rule tự đóng nào." in resp.text
+    assert "Chưa có rule tự đóng nào đang bật." in resp.text
+
+
+@pytest.mark.db
+def test_rows_show_even_when_no_rule_is_currently_enabled(client) -> None:
+    """Review round 1's blocker: a rule that closed clusters earlier and was
+    then disabled must never hide those rows behind the "no rule" empty
+    state — `rows` is checked first, `rules_exist` only when `rows` is
+    itself empty. Red step: the card's original `{% if not rules_exist %}
+    ... {% elif not rows %} ... {% else %}` ordering — this test goes red
+    against it (the empty-no-rules sentence shows instead of the table)."""
+    tc, db, admin_id = client
+    rule_id = _make_autoclose_rule(db, admin_id)
+    aid = _insert_alert(db, alert_id="row-survives-disable", autoclose_rule_id=rule_id)
+    db.execute(
+        "UPDATE autoclose_rules SET enabled = false WHERE autoclose_rule_id = %s", (rule_id,)
+    )
+    resp = tc.get(f"/admin/digest?day={_DAY}")
+    assert resp.status_code == 200
+    assert "Chưa có rule tự đóng nào đang bật." not in resp.text
+    assert "Không có cụm nào bị tự đóng trong ngày." not in resp.text
+    assert f'data-alert-id="{aid}"' in resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -423,16 +486,31 @@ def test_correct_writes_the_label_and_shows_the_reviewed_row(client) -> None:
 
 @pytest.mark.db
 def test_wrong_reopens_the_alert_and_the_row_says_so(client) -> None:
+    """Review round 1, should-2: both assertions are scoped to the returned
+    *row*, not the whole response (which also contains the flash — a
+    page-wide `in resp.text` check would pass even if the row itself said
+    nothing), and the description is distinctive enough that `in` cannot be
+    vacuously true."""
     tc, db, admin_id = client
     rule_id = _make_autoclose_rule(db, admin_id)
-    aid = _insert_alert(db, alert_id="v-wrong", autoclose_rule_id=rule_id, description="d")
+    aid = _insert_alert(
+        db,
+        alert_id="v-wrong",
+        autoclose_rule_id=rule_id,
+        description="distinctive-brute-force-marker-9f3c",
+    )
 
     resp = tc.post(f"/admin/digest/{aid}/review", data={"day": _DAY, "verdict": "wrong"})
     assert resp.status_code == 200
-    assert "đã mở lại về hàng đợi Tier 1" in resp.text
+    row_html = _scoped(resp.text, f'data-alert-id="{aid}"')
+    assert 'data-field="reopened-note"' in row_html
+    assert "đã mở lại về hàng đợi Tier 1" in row_html
     # The reopened row is still built from the pre-call snapshot: its
     # cosmetic data survives even though build() would no longer return it.
-    assert "d" in _scoped(resp.text, f'data-alert-id="{aid}"')
+    assert 'data-field="description">distinctive-brute-force-marker-9f3c<' in row_html
+    # The flash also carries the note, in the sentence-case combined form
+    # (review round 1, nit 11).
+    assert "Đã ghi nhận: Sai — đã mở lại về hàng đợi Tier 1" in resp.text
 
     status = db.execute("SELECT status FROM alerts WHERE alert_id = %s", (aid,)).fetchone()[0]
     assert status == "queued_tier1"
@@ -540,7 +618,7 @@ def test_second_review_is_409_and_shows_the_first_reviewers_verdict(scratch_clie
 
     second = tc.post(f"/admin/digest/{aid}/review", data={"day": _DAY, "verdict": "unsure"})
     assert second.status_code == 409
-    assert "cụm này đã được duyệt trước đó" in second.text
+    assert "Cụm này đã được duyệt trước đó" in second.text
     # request 1 committed for real (this fixture's whole point), so its
     # verdict is durably visible to request 2's own read, whether that read
     # happens before or after request 2's `review()` call — end to end, the
@@ -619,18 +697,19 @@ def test_review_on_a_never_auto_closed_alert_is_409_stale_state(client) -> None:
     )
     resp = tc.post(f"/admin/digest/{aid}/review", data={"day": _DAY, "verdict": "correct"})
     assert resp.status_code == 409
-    assert "cụm không còn ở trạng thái tự đóng" in resp.text
+    assert "Cụm không còn ở trạng thái tự đóng" in resp.text
 
 
 @pytest.mark.db
-def test_review_on_an_already_reopened_alert_is_409_with_no_stale_buttons(client) -> None:
+def test_review_on_an_already_reopened_alert_is_409_with_a_named_blank_row(client) -> None:
     """The alert left `auto_closed` entirely (a `wrong` review, from an
     earlier request in this same test). `build()` only lists `auto_closed`
     rows, so neither a fresh re-read nor this *second* request's own
     pre-call snapshot (captured after the alert was already reopened) has
     anything left to show for it — correctly so: there is nothing honest
-    left to display, and the conflict fragment falls back to a blank row
-    with the conflict note, never stale buttons and never a stack trace."""
+    left to display. Review round 1, should-4: the row renders as one wide
+    cell naming the alert id and the conflict, never nine empty-looking
+    cells and a "Số lần 0" that reads as real (if odd) data."""
     tc, db, admin_id = client
     rule_id = _make_autoclose_rule(db, admin_id)
     aid = _insert_alert(
@@ -640,10 +719,14 @@ def test_review_on_an_already_reopened_alert_is_409_with_no_stale_buttons(client
 
     resp = tc.post(f"/admin/digest/{aid}/review", data={"day": _DAY, "verdict": "correct"})
     assert resp.status_code == 409
-    assert "cụm không còn ở trạng thái tự đóng" in resp.text
+    assert "Cụm không còn ở trạng thái tự đóng" in resp.text
     row_html = _scoped(resp.text, f'data-alert-id="{aid}"')
-    assert 'data-field="conflict-note"' in row_html
+    assert f'data-field="blank-conflict">Cụm {aid}:' in row_html
+    assert "trạng thái đã thay đổi — tải lại trang" in row_html
+    assert 'colspan="10"' in row_html
     assert "hx-post=" not in row_html  # no buttons are offered on a conflict row
+    assert 'data-field="occurrence_count"' not in row_html  # no fake "Số lần 0"
+    assert "zzz" not in row_html  # the stale cosmetic snapshot is not shown either
 
 
 @pytest.mark.db
@@ -732,7 +815,7 @@ def test_page_carries_exactly_one_flash_placeholder_empty_state(client) -> None:
     tc, _db, _admin_id = client
     resp = tc.get(f"/admin/digest?day={_DAY}")
     assert resp.status_code == 200
-    assert "Chưa có rule tự đóng nào." in resp.text
+    assert "Chưa có rule tự đóng nào đang bật." in resp.text
     assert resp.text.count('id="flash"') == 1
 
 
@@ -813,9 +896,29 @@ _ADMIN_DIGEST_ROUTES: tuple[tuple[str, str, dict[str, Any]], ...] = (
 
 @pytest.mark.parametrize("method, path, kwargs", _ADMIN_DIGEST_ROUTES)
 @pytest.mark.db
-def test_non_admin_is_refused_and_authz_denied_row_present(sdb, method, path, kwargs) -> None:
+def test_non_admin_is_refused_and_authz_denied_row_persists_on_another_connection(
+    sdb, scratch_dsn, method, path, kwargs
+) -> None:
+    """Review round 1, should-3: `sdb.execute(...)` reading back on the
+    *same* connection that wrote the row would pass even if `require_role`
+    never called `conn.commit()` at all — same-session reads see their own
+    uncommitted writes regardless. `get_conn` here has the real dependency's
+    commit/rollback shape (`test_auth.py`'s `client` fixture pattern), and
+    the row is read back on a *second*, independent connection
+    (`test_auth.py:623-646`'s own pattern), so only a row that is genuinely,
+    durably committed can make this test pass."""
     tier1_claims = Claims(user_id=str(uuid.uuid4()), username="t1", role="tier1", iat=0.0, exp=0.0)
-    main.app.dependency_overrides[deps.get_conn] = lambda: sdb
+
+    def get_conn():
+        try:
+            yield sdb
+        except BaseException:
+            sdb.rollback()
+            raise
+        else:
+            sdb.commit()
+
+    main.app.dependency_overrides[deps.get_conn] = get_conn
     main.app.dependency_overrides[deps.current_user] = lambda: tier1_claims
     main.app.dependency_overrides[pages.page_user] = lambda: tier1_claims
     try:
@@ -827,16 +930,149 @@ def test_non_admin_is_refused_and_authz_denied_row_present(sdb, method, path, kw
         main.app.dependency_overrides.pop(pages.page_user, None)
 
     assert resp.status_code == 403, f"{method.upper()} {path} -> {resp.status_code}: {resp.text}"
-    row = sdb.execute(
-        "SELECT payload->'required' AS required, payload->>'role' AS role "
-        "FROM audit_events WHERE event_type = 'authz.denied' AND subject_id = %s "
-        "ORDER BY created_at DESC LIMIT 1",
-        (path,),
-    ).fetchone()
+    with psycopg.connect(scratch_dsn) as other:
+        row = other.execute(
+            "SELECT payload->'required' AS required, payload->>'role' AS role "
+            "FROM audit_events WHERE event_type = 'authz.denied' AND subject_id = %s "
+            "ORDER BY created_at DESC LIMIT 1",
+            (path,),
+        ).fetchone()
     assert row is not None, f"no authz.denied row for {path}"
     required, role = row
     assert required == ["admin"]
     assert role == "tier1"
+
+
+# ---------------------------------------------------------------------------
+# Review round 1, nit 7: a NUL byte in the path is 404, never 500
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_nul_byte_in_alert_id_is_404_not_500(client) -> None:
+    tc, _db, _admin_id = client
+    resp = tc.post("/admin/digest/%00/review", data={"day": _DAY, "verdict": "correct"})
+    assert resp.status_code == 404, resp.text
+
+
+# ---------------------------------------------------------------------------
+# Review round 1, nit 8: a bad POST is still HTML — the row plus a flash,
+# never a bare JSON error body
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_post_malformed_day_is_422_with_a_named_blank_row_and_flash(client) -> None:
+    tc, db, admin_id = client
+    rule_id = _make_autoclose_rule(db, admin_id)
+    aid = _insert_alert(db, alert_id="bad-day-post", autoclose_rule_id=rule_id)
+    resp = tc.post(f"/admin/digest/{aid}/review", data={"day": "not-a-date", "verdict": "correct"})
+    assert resp.status_code == 422
+    assert "Ngày không hợp lệ" in resp.text
+    row_html = _scoped(resp.text, f'data-alert-id="{aid}"')
+    assert f'data-field="blank-conflict">Cụm {aid}:' in row_html
+    assert 'colspan="10"' in row_html
+    # Nothing was written — the malformed day is rejected before any review.
+    reviewed = db.execute(
+        "SELECT count(*) FROM autoclose_reviews WHERE alert_id = %s", (aid,)
+    ).fetchone()[0]
+    assert reviewed == 0
+
+
+@pytest.mark.db
+def test_post_invalid_verdict_is_422_with_the_real_row_and_flash(client) -> None:
+    tc, db, admin_id = client
+    rule_id = _make_autoclose_rule(db, admin_id)
+    aid = _insert_alert(
+        db, alert_id="bad-verdict-post", autoclose_rule_id=rule_id, description="keep-me"
+    )
+    resp = tc.post(f"/admin/digest/{aid}/review", data={"day": _DAY, "verdict": "maybe"})
+    assert resp.status_code == 422
+    assert "Đánh giá không hợp lệ" in resp.text
+    row_html = _scoped(resp.text, f'data-alert-id="{aid}"')
+    # The alert's own row is still known (unlike the blank-row case above),
+    # so it renders normally — cosmetic data and all three buttons intact —
+    # rather than as a named blank conflict row.
+    assert 'data-field="description">keep-me<' in row_html
+    assert resp.text.count(f'hx-post="/admin/digest/{aid}/review"') == 3
+    reviewed = db.execute(
+        "SELECT count(*) FROM autoclose_reviews WHERE alert_id = %s", (aid,)
+    ).fetchone()[0]
+    assert reviewed == 0
+
+
+# ---------------------------------------------------------------------------
+# Review round 1, nit 9: the rule cell is two columns
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_rule_cell_is_split_into_two_columns(client) -> None:
+    tc, db, admin_id = client
+    rule_id = _make_autoclose_rule(db, admin_id, name="named-scanner-rule")
+    aid = _insert_alert(db, alert_id="split-cols", autoclose_rule_id=rule_id)
+    resp = tc.get(f"/admin/digest?day={_DAY}")
+    assert resp.status_code == 200
+    assert "<th>Rule tự đóng</th><th>Rule</th>" in resp.text
+    row_html = _scoped(resp.text, f'data-alert-id="{aid}"')
+    assert 'data-field="autoclose_rule_name">named-scanner-rule<' in row_html
+    assert 'data-field="rule_id">40112<' in row_html
+
+
+# ---------------------------------------------------------------------------
+# Review round 1, nit 10: the reopened note is a per-response flag, never
+# derived from a (possibly stale) reviewed_verdict == "wrong"
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_a_stale_wrong_verdict_on_page_render_carries_no_reopened_note(client) -> None:
+    """P5-T08's own recorded limit: `autoclose_reviews` is keyed on
+    `alert_id` alone, so an alert that was auto-closed, reviewed `wrong`
+    (reopening it), and later auto-closed *again* still carries its old
+    `wrong` review row when `build()` joins it back in. The page must show
+    "Sai" (the historical verdict is real) without implying *this* render
+    just reopened it — the note is this request's own flag, not derived
+    from `reviewed_verdict`."""
+    tc, db, admin_id = client
+    rule_id = _make_autoclose_rule(db, admin_id)
+    aid = _insert_alert(db, alert_id="stale-wrong", autoclose_rule_id=rule_id)
+    db.execute(
+        "INSERT INTO autoclose_reviews (alert_id, reviewer_id, verdict) VALUES (%s, %s, 'wrong')",
+        (aid, admin_id),
+    )
+    # Simulate the second auto-close the limit describes: still auto_closed
+    # by the time this page renders, with the old review row still joined.
+    resp = tc.get(f"/admin/digest?day={_DAY}")
+    assert resp.status_code == 200
+    row_html = _scoped(resp.text, f'data-alert-id="{aid}"')
+    assert 'data-field="reviewed-verdict">Sai<' in row_html
+    assert 'data-field="reopened-note"' not in row_html
+
+
+# ---------------------------------------------------------------------------
+# Review round 1, nit 5: a reviewed row is greyed, a disagreement is styled
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_reviewed_row_carries_the_reviewed_class(client) -> None:
+    tc, db, admin_id = client
+    rule_id = _make_autoclose_rule(db, admin_id)
+    aid = _insert_alert(db, alert_id="greyed", autoclose_rule_id=rule_id)
+    resp = tc.post(f"/admin/digest/{aid}/review", data={"day": _DAY, "verdict": "correct"})
+    assert resp.status_code == 200
+    assert f'data-alert-id="{aid}" class="reviewed' in resp.text
+
+
+def test_style_block_covers_reviewed_and_disagreement_and_lives_in_digest_html() -> None:
+    templates_dir = REPO_ROOT / "backend" / "app" / "web" / "templates"
+    digest_text = (templates_dir / "digest.html").read_text(encoding="utf-8")
+    assert "tr.reviewed" in digest_text
+    assert "tr.disagreement" in digest_text
+    base_text = (templates_dir / "base.html").read_text(encoding="utf-8")
+    assert "reviewed" not in base_text
+    assert "disagreement" not in base_text
 
 
 # ---------------------------------------------------------------------------
