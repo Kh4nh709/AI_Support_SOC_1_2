@@ -178,6 +178,16 @@ def _insert_run(conn: psycopg.Connection, alert_id: str) -> str:
     return str(row[0])
 
 
+def _make_case(conn: psycopg.Connection, created_by: str, *, title: str = "other") -> str:
+    case_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO cases (case_id, title, status, severity, created_by) "
+        "VALUES (%s, %s, 'investigating', 'high', %s)",
+        (case_id, title, created_by),
+    )
+    return case_id
+
+
 def _status(conn: psycopg.Connection, alert_id: str) -> str:
     return conn.execute("SELECT status FROM alerts WHERE alert_id = %s", (alert_id,)).fetchone()[0]
 
@@ -436,6 +446,61 @@ def test_escalate_already_in_case_is_conflict(db) -> None:
     with pytest.raises(DecisionConflict) as excinfo:
         escalate(db, head, _actor(USER_ID), title="t2", severity="high")
     assert excinfo.value.body["kind"] == "already_in_case"
+
+
+def test_escalate_candidate_claimed_concurrently_is_conflict_and_nothing_half_written(db) -> None:
+    """Review round 1, item 3 — the `UniqueViolation` flavor of `transitions.
+    escalate`'s `StaleState` (a correlated candidate already sits in
+    `case_alerts` for another case): without the savepoint around the call,
+    the connection's transaction is aborted by the `UniqueViolation` and
+    `_conflict()`'s own re-read would itself raise `InFailedSqlTransaction`
+    instead of building the 409 body."""
+    _seed_user(db, USER_ID, USER_NAME)
+    agent = f"probe-agent-{next(_counter)}"
+    trigger = _active(db, agent_name=agent)
+    other = _queued(db, agent_name=agent)
+    other_case = _make_case(db, USER_ID)
+    db.execute(
+        "INSERT INTO case_alerts (case_id, alert_id, added_by) VALUES (%s, %s, %s)",
+        (other_case, other, USER_ID),
+    )
+    cases_before = db.execute("SELECT count(*) FROM cases").fetchone()[0]
+
+    with pytest.raises(DecisionConflict) as excinfo:
+        escalate(db, trigger, _actor(USER_ID), title="t", severity="high")
+    assert excinfo.value.body["kind"] == "already_in_case"
+
+    assert db.execute("SELECT count(*) FROM cases").fetchone()[0] == cases_before
+    status, case_id = db.execute(
+        "SELECT status, case_id FROM alerts WHERE alert_id = %s", (trigger,)
+    ).fetchone()
+    assert (status, case_id) == ("tier1_active", None)
+
+
+def test_escalate_rowcount_mismatch_is_conflict_and_nothing_half_written(db) -> None:
+    """Review round 1, item 3 — the other `StaleState` flavor: a correlated
+    candidate's `case_id` is already set directly (no `case_alerts` row, so no
+    `UniqueViolation`), so `transitions.escalate` gets as far as inserting the
+    `cases` row, the two `case_alerts` rows and updating the trigger's own
+    status before the rowcount mismatch on `other` raises `StaleState`. The
+    savepoint must undo all of it, not just skip re-raising."""
+    _seed_user(db, USER_ID, USER_NAME)
+    agent = f"probe-agent-{next(_counter)}"
+    trigger = _active(db, agent_name=agent)
+    other = _queued(db, agent_name=agent)
+    other_case = _make_case(db, USER_ID)
+    db.execute("UPDATE alerts SET case_id = %s WHERE alert_id = %s", (other_case, other))
+    cases_before = db.execute("SELECT count(*) FROM cases").fetchone()[0]
+
+    with pytest.raises(DecisionConflict) as excinfo:
+        escalate(db, trigger, _actor(USER_ID), title="t", severity="high")
+    assert excinfo.value.body["kind"] == "already_in_case"
+
+    assert db.execute("SELECT count(*) FROM cases").fetchone()[0] == cases_before
+    status, case_id = db.execute(
+        "SELECT status, case_id FROM alerts WHERE alert_id = %s", (trigger,)
+    ).fetchone()
+    assert (status, case_id) == ("tier1_active", None)
 
 
 # ---------------------------------------------------------------------------
