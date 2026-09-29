@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import time
+import urllib.parse
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -973,9 +974,43 @@ def test_handler_exposes_job_type_and_reschedules_every_5_minutes(monkeypatch):
 # ===========================================================================
 
 
-def _scratch_dbname() -> str:
+def _scratch_source_parts() -> urllib.parse.SplitResult:
     session = os.environ.get("TEST_DATABASE_URL", conftest.DEFAULT_TEST_DATABASE_URL)
-    return f"{conftest._dbname(session)}_health_test"
+    return urllib.parse.urlsplit(session)
+
+
+def _scratch_dbname() -> str:
+    return f"{_scratch_source_parts().path.lstrip('/')}_health_test"
+
+
+def _scratch_dsn(dbname: str) -> str:
+    """A full DSN — scheme/host/port/user/password copied verbatim from
+    `TEST_DATABASE_URL`, only the path (database name) replaced — never a
+    bare `postgresql:///<name>`. `psycopg.connect` resolves a host-less DSN
+    through this *process's* own `PGHOST`/`PGPORT`/`PGUSER` environment
+    variables, and a bare `pytest -m db` invocation that only sets
+    `TEST_DATABASE_URL` (`order_proof.sh`, unlike `make test-db`'s
+    `scripts/dsn_env.py` export) never populates them — replacing only the
+    path keeps this fixture correct either way."""
+    return urllib.parse.urlunsplit(_scratch_source_parts()._replace(path=f"/{dbname}"))
+
+
+def _scratch_subprocess_env(dsn: str) -> dict[str, str]:
+    """`PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD` for the bare `dropdb`/
+    `createdb` commands below, derived from `dsn` itself for the same reason
+    `_scratch_dsn` is a full DSN — never relied on from the ambient
+    environment."""
+    parts = urllib.parse.urlsplit(dsn)
+    env = dict(os.environ)
+    if parts.hostname:
+        env["PGHOST"] = parts.hostname
+    if parts.port:
+        env["PGPORT"] = str(parts.port)
+    if parts.username:
+        env["PGUSER"] = urllib.parse.unquote(parts.username)
+    if parts.password:
+        env["PGPASSWORD"] = urllib.parse.unquote(parts.password)
+    return env
 
 
 @pytest.fixture(scope="module")
@@ -983,9 +1018,10 @@ def scratch_dsn():
     if shutil.which("psql") is None or shutil.which("createdb") is None:
         pytest.skip("psql/createdb not on PATH — cannot build the health scratch database")
     dbname = _scratch_dbname()
-    subprocess.run(["dropdb", "--if-exists", dbname], check=True, capture_output=True)
-    subprocess.run(["createdb", dbname], check=True, capture_output=True)
-    dsn = f"postgresql:///{dbname}"
+    dsn = _scratch_dsn(dbname)
+    env = _scratch_subprocess_env(dsn)
+    subprocess.run(["dropdb", "--if-exists", dbname], check=True, capture_output=True, env=env)
+    subprocess.run(["createdb", dbname], check=True, capture_output=True, env=env)
     result = subprocess.run(
         ["bash", "scripts/migrate.sh", dsn],
         cwd=REPO_ROOT,
@@ -997,7 +1033,7 @@ def scratch_dsn():
     try:
         yield dsn
     finally:
-        subprocess.run(["dropdb", "--if-exists", dbname], check=False, capture_output=True)
+        subprocess.run(["dropdb", "--if-exists", dbname], check=False, capture_output=True, env=env)
 
 
 @pytest.fixture
