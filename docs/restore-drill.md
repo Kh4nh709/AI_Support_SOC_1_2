@@ -85,6 +85,9 @@ The pipeline kept pulling during the drill. No new alert landed in the one secon
 
 ## Clean-up
 `soc_restore_drill` stays in place until the Owner signs. After that, `dropdb soc_restore_drill` is run by the Owner, or by the Director at the Owner's word. This section will record which.
-- **29/09/2026:** signed. The drop is still awaiting the Owner's word, so `soc_restore_drill` is still in place.
+- **29/09/2026:** signed.
+- **29/09/2026 14:01 UTC:** at the Owner's word in chat ("Được phép xóa db tạm"), the Director dropped `soc_restore_drill`. It ran `DROP DATABASE IF EXISTS soc_restore_drill` on the `postgres` maintenance database, with that one name hard-coded.
+  - Before the drop the database existed (1); after it, 0.
+  - `soc_dev` still exists. A read-only check straight afterwards showed its `pull`, `health` and `digest` chains armed, with 5 health runs and 0 failing.
 
 Signed: khanh (Owner) date 29/09/2026
