@@ -1,0 +1,23 @@
+{# `_suggestion.html` — P4-T05. Included by `alert.html` only when `view.suggestion`
+   is present (the blind branch already decided this at the filter, never here —
+   `app.tier1.visibility.strip`). Inherits `view` and `correlated_now` from the
+   including template's context (Jinja `{% include %}` default). #}
+<p>
+  <strong>{{ view.suggestion.suggested_action }}</strong>
+  (độ chắc chắn: {{ view.suggestion.confidence }})
+</p>
+{% if view.suggestion.gate.forced %}
+<p>
+  cổng đã ép: {{ view.suggestion.gate.forced_by | join(", ") if view.suggestion.gate.forced_by else "không" }};
+  đề xuất gốc: {{ view.suggestion.gate.proposed_verdict }}
+</p>
+{% endif %}
+<p>Verifier: {{ view.suggestion.gate.verifier_verdict }} · cảnh báo cổng: {{ view.suggestion.gate.warnings | length }}</p>
+<ul>
+  {% for reason in view.suggestion.reasons %}
+  <li>{{ reason.claim }} — “{{ reason.quote }}” — {{ reason.source }}</li>
+  {% endfor %}
+</ul>
+{% if view.suggestion.correlated_at_analysis is not none and view.suggestion.correlated_at_analysis != correlated_now %}
+<p>gợi ý dựa trên {{ view.suggestion.correlated_at_analysis }} cụm liên quan tại thời điểm phân tích; hiện có {{ correlated_now }}</p>
+{% endif %}

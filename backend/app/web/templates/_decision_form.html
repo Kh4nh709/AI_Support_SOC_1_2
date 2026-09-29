@@ -1,0 +1,56 @@
+{# `_decision_form.html` — P4-T05. Included by `alert.html`'s `decision` section on a
+   normal page load, and re-rendered stand-alone as the body of every HTMX partial
+   response (acknowledge/decide/escalate/reopen, success or refusal). Branches on
+   `view.status` alone — never on who is viewing (P6-2: no lock, the first
+   acknowledger wins the SLA mark and everyone may still read and act). #}
+<div id="decision">
+{% if view.status == "queued_tier1" %}
+  <button type="button" hx-post="/alerts/{{ view.alert_id }}/acknowledge"
+          hx-target="#decision" hx-swap="outerHTML">Tiếp nhận</button>
+{% elif view.status == "tier1_active" %}
+  {% if view.acknowledged_by_name %}
+  <p>{{ view.acknowledged_by_name }} đang xử lý</p>
+  {% endif %}
+  <form hx-post="/alerts/{{ view.alert_id }}/decide" hx-target="#decision" hx-swap="outerHTML">
+    <fieldset>
+      <legend>Quyết định</legend>
+      <label><input type="radio" name="decision" value="false_positive" required> Dương tính giả</label>
+      <label><input type="radio" name="decision" value="benign"> Lành tính</label>
+    </fieldset>
+    <label for="reason">Lý do</label>
+    <textarea id="reason" name="reason" maxlength="500" required></textarea>
+    <input type="hidden" name="seen_occurrence_count" value="{{ view.occurrence_count }}">
+    <button type="submit">Ghi quyết định</button>
+  </form>
+  <form hx-post="/alerts/{{ view.alert_id }}/escalate" hx-target="#decision" hx-swap="outerHTML">
+    <fieldset>
+      <legend>Chuyển tier 2</legend>
+      <label for="title">Tiêu đề case</label>
+      <input id="title" name="title" type="text" required maxlength="200"
+             value="{{ view.category }} — {{ view.agent_name }}">
+      <label for="severity">Mức độ nghiêm trọng</label>
+      <select id="severity" name="severity">
+        <option value="critical" {% if view.severity == "critical" %}selected{% endif %}>Nghiêm trọng</option>
+        <option value="high" {% if view.severity == "high" %}selected{% endif %}>Cao</option>
+        <option value="medium" {% if view.severity == "medium" %}selected{% endif %}>Trung bình</option>
+        <option value="low" {% if view.severity == "low" %}selected{% endif %}>Thấp</option>
+      </select>
+      <button type="submit">Mở case</button>
+    </fieldset>
+  </form>
+{% elif view.status == "auto_closed" %}
+  <p>Alert này đã được tự động đóng.</p>
+  <form hx-post="/alerts/{{ view.alert_id }}/reopen" hx-target="#decision" hx-swap="outerHTML">
+    <label for="reopen-reason">Lý do mở lại</label>
+    <textarea id="reopen-reason" name="reason" maxlength="500" required></textarea>
+    <button type="submit">Mở lại</button>
+  </form>
+{% elif view.status in ("closed_fp", "closed_benign", "closed_confirmed", "escalated_tier2") %}
+  <p>Đã quyết: {{ view.status }} — {{ view.close_reason or "" }}</p>
+  {% if view.case_id %}
+  <p><a href="/cases/{{ view.case_id }}">Xem case</a></p>
+  {% endif %}
+{% else %}
+  <p>Trạng thái: {{ view.status }}</p>
+{% endif %}
+</div>
