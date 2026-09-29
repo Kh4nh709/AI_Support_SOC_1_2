@@ -56,6 +56,7 @@ class Category(Enum):
     DATA_EXFILTRATION = "data_exfiltration"
     PRIVILEGE_ESCALATION = "privilege_escalation"
     SSH_BRUTE_FORCE = "ssh_brute_force"
+    BRUTE_FORCE = "brute_force"  # Windows credential attacks, MITRE T1110 (P9-T02)
     WEB_ATTACK = "web_attack"
     SUSPICIOUS_LOGIN = "suspicious_login"
     RECON = "recon"

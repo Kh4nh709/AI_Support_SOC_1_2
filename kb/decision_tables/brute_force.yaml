@@ -1,0 +1,44 @@
+# kb/decision_tables/brute_force.yaml — SKELETON, UNSIGNED. Content is the Owner's + advisor's (§11).
+# reviewed_by/reviewed_at stay null until that sitting; while null the gate treats the table as absent
+# (architecture §3.10), records decision_table_unreviewed:<category> in gate_result.warnings, and gate
+# step 4 answers table_unreviewed — so ① never auto-closes a brute_force alert until it is signed.
+#
+# DRAFT 29/09/2026 — agent-drafted (P9-T02, DEC-149), not reviewed — for the sitting to review, amend and
+# sign. Windows credential attacks, MITRE ATT&CK T1110. Rules over the existing facts only; Windows status
+# codes and logon types live in kb/playbooks/brute_force.md, never here (DEC-149's working assumption: no
+# new fact, no change to the table contract the ten signed tables were signed against). The six rule
+# shapes mirror the signed ssh_brute_force.yaml (sbf-1..6, 28/09) — the same attack on another platform;
+# evidence = kb/playbooks/brute_force.md by line. No fold is measured: gold_v1 holds no Windows alert
+# (implemented, not measured). apply_table is first match in file order; every two rules with different
+# actions are disjoint on the 2,520-point grid (check_consistency returns []). No match -> B1 answers
+# needs_review (docs/plan/prompts/P7.md:17).
+category: brute_force
+playbook: brute_force_v1
+reviewed_by: null
+reviewed_at: null
+rules:
+  # evidence: playbook brute_force.md:31 (one REAL account, 0xC000006A a few times), :33 (no success after the chain, no 4740), :47 (lookup missing -> not harmless, so ioc=skipped stays out). Mirrors sbf-1
+  - id: bf-1
+    if: {severity: [low, medium], ioc_reputation: [not_found, clean], asset_criticality: [low, medium],
+         identity_privileged: ["false"], occurrence_lt: 50}
+    then: false_positive
+  # evidence: playbook brute_force.md:39 (network or RDP attempts from an external srcip, ioc malicious/suspicious). Mirrors sbf-2
+  - id: bf-2
+    if: {ioc_reputation: [malicious, suspicious]}
+    then: escalate
+  # evidence: playbook brute_force.md:37 (a 4624 success after the failure chain — the strongest signal). Mirrors sbf-3
+  - id: bf-3
+    if: {rule_level_gte: 12}
+    then: escalate
+  # evidence: playbook brute_force.md:38 (many accounts from one source — spraying) + :40 (lockouts on many accounts) — the band of Wazuh's Windows frequency and lockout rules (levels 9-10). Mirrors sbf-4
+  - id: bf-4
+    if: {rule_level_gte: 8, rule_level_lt: 12}
+    then: escalate
+  # evidence: playbook brute_force.md:38 (0xC0000064, names that do not exist) — identity unknown is a name absent from conf/identities.yaml, or no name at all. Mirrors sbf-5
+  - id: bf-5
+    if: {severity: [low, medium], ioc_reputation: [not_found, clean, skipped], identity_privileged: ["unknown"]}
+    then: escalate
+  # evidence: playbook brute_force.md:41 (Administrator or a member of an administrators group targeted) + :46 (privileged -> raise, even without a success). Mirrors sbf-6, which the sitting read as needs_review
+  - id: bf-6
+    if: {severity: [low, medium], ioc_reputation: [not_found, clean, skipped], identity_privileged: ["true"]}
+    then: needs_review

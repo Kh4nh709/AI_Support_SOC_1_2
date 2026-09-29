@@ -202,7 +202,20 @@ def test_priority_table_is_covered_by_playbooks_plus_unknown():
 def test_ten_playbooks_exist_on_disk_matching_r5s_premise():
     # If this fails, kb/playbooks/ changed shape and the two tests above are
     # trivially vacuous (an empty PLAYBOOKS set would pass both for free).
-    assert len(PLAYBOOKS) == 10
+    # P9-T02 (DEC-149) adds an eleventh, `brute_force`; the ten are now named, not only counted.
+    assert len(PLAYBOOKS) == 11
+    assert PLAYBOOKS - {"brute_force"} == {
+        "ransomware",
+        "malware",
+        "c2_beacon",
+        "data_exfiltration",
+        "privilege_escalation",
+        "ssh_brute_force",
+        "web_attack",
+        "suspicious_login",
+        "recon",
+        "policy_violation",
+    }
 
 
 # --------------------------------------------------------------------------
@@ -252,7 +265,17 @@ def test_mapping_version_is_pinned_to_a_hash_of_the_four_tables():
     # If this assertion fails, you edited a mapping table: bump MAPPING_VERSION
     # in category.py in the same commit, then update this literal to match.
     assert digest == "33ed2ec1be828c578f009b33b5e8ec27a746f7353238fa6b46551761bd720f2d"
-    assert MAPPING_VERSION == "v3.2"
+    # P9-T02 (DEC-149): the four shared tables above still hash to their v3.2 value, so
+    # no alert outside the Windows tier can change category. The Windows tier's table,
+    # with the decoder that guards it, is hashed as well; it is what moved v3.2 -> v3.3.
+    from app.ingest.category import WINDOWS_DECODER, WINDOWS_TECHNIQUE_TO_CATEGORY
+
+    windows = json.dumps(
+        {"decoder": WINDOWS_DECODER, "technique": WINDOWS_TECHNIQUE_TO_CATEGORY}, sort_keys=True
+    )
+    windows_digest = hashlib.sha256(windows.encode("utf-8")).hexdigest()
+    assert windows_digest == "a75a1be28c4c8f2e97ba458f5f8baf31b881db2016aff3dab52ccad3da6bb60d"
+    assert MAPPING_VERSION == "v3.3"
 
 
 # --------------------------------------------------------------------------

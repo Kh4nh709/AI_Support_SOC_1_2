@@ -42,3 +42,9 @@
 - Đường nền lưu lượng ra của chính máy đó trong 30 ngày.
 - Danh sách file được truy cập ngay trước thời điểm gửi.
 - Xác nhận nghiệp vụ: dữ liệu này có lý do rời khỏi mạng không.
+
+## 7 · Windows (added 29/09, P9-T02, not reviewed)
+
+- Sysmon 1 chạy công cụ đẩy dữ liệu ra ngoài: `rclone`, `curl -T` (tải file lên), `certutil`, hoặc trình nén (`7z`, `rar`, `tar`) trên thư mục dữ liệu.
+- Sysmon 11 tạo file nén lớn trong thư mục tạm hoặc thư mục người dùng ngay trước một kết nối ra ngoài (Sysmon 3).
+- **Không có IDS mạng thì tín hiệu phía Windows yếu**: không đo được khối lượng thật đi ra, chỉ thấy công cụ và file. Thiếu số liệu mạng không phải bằng chứng vô hại.

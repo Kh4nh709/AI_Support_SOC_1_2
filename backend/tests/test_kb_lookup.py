@@ -418,11 +418,36 @@ def test_largest_playbook_under_3000_tokens():
 #: DEC-145: all ten tables signed at the 28/09 sitting, in this exact form.
 SIGNED_BY = "NCK + MNN"
 SIGNED_AT = "2026-09-28"
+#: The ten categories signed on 28/09, by name — not derived from PRIORITY, so a category
+#: added later (`brute_force`, P9-T02) cannot join them without a signing.
+SIGNED_CATEGORIES = (
+    "ssh_brute_force",
+    "suspicious_login",
+    "privilege_escalation",
+    "ransomware",
+    "data_exfiltration",
+    "c2_beacon",
+    "malware",
+    "recon",
+    "web_attack",
+    "policy_violation",
+)
 
 
-@pytest.mark.parametrize("category", CATEGORIES)
+@pytest.mark.parametrize("category", SIGNED_CATEGORIES)
 def test_tables_are_reviewed(category):
     table = lookup.get_decision_table(category)
     assert table.reviewed_by == SIGNED_BY
     assert table.reviewed_at == SIGNED_AT
     assert table.reviewed is True
+
+
+def test_brute_force_table_is_unreviewed():
+    """P9-T02 (DEC-149): agent-drafted, not signed. While reviewed_by/reviewed_at are null the
+    gate's step 4 answers `table_unreviewed`, so ① never auto-closes a `brute_force` alert."""
+    table = lookup.get_decision_table("brute_force")
+    assert table.reviewed_by is None
+    assert table.reviewed_at is None
+    assert table.reviewed is False
+    # Every category is one of the ten signed on 28/09 or this unsigned one — nothing else.
+    assert set(CATEGORIES) == set(SIGNED_CATEGORIES) | {"brute_force"}

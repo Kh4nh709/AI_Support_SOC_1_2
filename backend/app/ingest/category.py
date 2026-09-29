@@ -15,6 +15,16 @@ nothing:
   5. destination port                                    -> resolved_by='dst_port'
   nothing matches                                        -> category='unknown', resolved_by='none'
 
+A Windows tier sits in front of tier 1 and is consulted only when the decoder
+name contains `windows_eventchannel` (P9-T02, DEC-149): an exact MITRE technique
+id in `WINDOWS_TECHNIQUE_TO_CATEGORY` -> resolved_by='mitre' (the DB's
+`ck_alerts_resolved_by` set has no other value for an exact technique match).
+It files Windows credential attacks (T1110) under `brute_force` rather than
+`ssh_brute_force`, and adds the Windows-only technique ids the shared table has
+no key for. When it matches nothing, the five tiers run unchanged. The four
+shared tables are not edited, so an alert from any other decoder cannot change
+category.
+
 Within a tier, ALL matching signals are collected — never "first match wins":
 a real alert routinely carries two MITRE techniques that both resolve (the
 canonical alert has `T1078` and `T1110` together). The collected set is
@@ -39,13 +49,15 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-#: Bump in the same commit as any edit to the four tables below — it is what
-#: tells a later reader which alerts need re-classifying. `test_category.py`
-#: hashes the tables and pins this value as a reminder to do so.
-MAPPING_VERSION = "v3.2"
+#: Bump in the same commit as any edit to the tables below (the four shared ones
+#: and the Windows one) — it is what tells a later reader which alerts need
+#: re-classifying. `test_category.py` hashes the tables and pins this value as a
+#: reminder to do so. v3.3: the Windows tier (P9-T02); the shared tables are v3.2's.
+MAPPING_VERSION = "v3.3"
 
 #: phase-1 §Khối 5, verbatim — declared once, applied to every tier's
-#: candidate set (not only the MITRE tier).
+#: candidate set (not only the MITRE tier). `brute_force` (P9-T02) sits directly
+#: after `ssh_brute_force`: the same attack, on Windows.
 PRIORITY: tuple[str, ...] = (
     "ransomware",
     "malware",
@@ -53,12 +65,33 @@ PRIORITY: tuple[str, ...] = (
     "data_exfiltration",
     "privilege_escalation",
     "ssh_brute_force",
+    "brute_force",
     "web_attack",
     "suspicious_login",
     "recon",
     "policy_violation",
     "unknown",
 )
+
+#: The Windows tier's guard: a substring of the decoder name, like tier 4's keys.
+WINDOWS_DECODER = "windows_eventchannel"
+
+# The Windows tier (P9-T02, DEC-149) — exact technique ids only, and only for an
+# alert whose decoder is `windows_eventchannel`. T1110 is MITRE ATT&CK "Brute
+# Force" (.001 password guessing, .003 password spraying); the rest are
+# Windows-only ids with no key in the shared table below.
+WINDOWS_TECHNIQUE_TO_CATEGORY: dict[str, str] = {
+    "T1110": "brute_force",
+    "T1110.001": "brute_force",
+    "T1110.003": "brute_force",
+    "T1490": "ransomware",
+    "T1485": "ransomware",
+    "T1071.001": "c2_beacon",
+    "T1573": "c2_beacon",
+    "T1048": "data_exfiltration",
+    "T1567": "data_exfiltration",
+    "T1059.001": "malware",
+}
 
 # Tiers 1-2 share one table: a plain technique ("T1110") and a specific
 # sub-technique ("T1110.001") may each be a key in their own right, or only the
@@ -163,6 +196,18 @@ def _sort_by_priority(categories: list[str]) -> tuple[str, ...]:
     return tuple(seen)
 
 
+def _tier_windows(mitre_ids: Sequence[str], decoder: str | None) -> list[str]:
+    """The Windows tier: nothing unless the decoder is `windows_eventchannel`."""
+    if WINDOWS_DECODER not in _safe_str(decoder).lower():
+        return []
+    out: list[str] = []
+    for raw in _iter(mitre_ids):
+        tid = _safe_str(raw).upper()
+        if tid and tid in WINDOWS_TECHNIQUE_TO_CATEGORY:
+            out.append(WINDOWS_TECHNIQUE_TO_CATEGORY[tid])
+    return out
+
+
 def _tier_mitre_exact(mitre_ids: Sequence[str]) -> list[str]:
     out: list[str] = []
     for raw in _iter(mitre_ids):
@@ -214,12 +259,14 @@ def resolve(
     decoder: str | None,
     dst_port: int,
 ) -> Resolution:
-    """Resolve `category`/`categories` from all four signals, five tiers in order.
+    """Resolve `category`/`categories` from all four signals, five tiers in order
+    (after the Windows tier, for a `windows_eventchannel` alert).
 
     Never raises (R1, R2): every malformed signal — `None`, a non-string
     element, a port that is not an `int` — is simply skipped, not raised on.
     """
     for candidates, resolved_by in (
+        (_tier_windows(mitre_ids, decoder), "mitre"),
         (_tier_mitre_exact(mitre_ids), "mitre"),
         (_tier_mitre_parent(mitre_ids), "mitre_parent"),
         (_tier_groups(groups), "rule_groups"),
