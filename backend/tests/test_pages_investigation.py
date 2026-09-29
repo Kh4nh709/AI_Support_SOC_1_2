@@ -127,11 +127,25 @@ def _add_head(conn, case_id: str, added_by: str, **alert_kwargs) -> str:
     return alert_id
 
 
-def _insert_job(conn, case_id: str, status: str, *, attempts: int = 1) -> int:
+def _insert_job(
+    conn,
+    case_id: str,
+    status: str,
+    *,
+    attempts: int = 1,
+    scheduled_ago: timedelta | None = None,
+    locked_ago: timedelta | None = None,
+    created_ago: timedelta | None = None,
+) -> int:
+    """`*_ago` place the timestamps relative to the database's `now()` (the page measures a job's
+    age by the database clock too); left out, the column keeps its default (`now()` for
+    `scheduled_at` and `created_at`, NULL for `locked_at`)."""
     row = conn.execute(
-        "INSERT INTO jobs (job_type, subject_id, status, attempts) "
-        "VALUES ('investigate', %s, %s, %s) RETURNING job_id",
-        (case_id, status, attempts),
+        "INSERT INTO jobs (job_type, subject_id, status, attempts, scheduled_at, locked_at, "
+        "created_at) VALUES ('investigate', %s, %s, %s, now() - COALESCE(%s, interval '0'), "
+        "CASE WHEN %s::interval IS NULL THEN NULL ELSE now() - %s::interval END, "
+        "now() - COALESCE(%s, interval '0')) RETURNING job_id",
+        (case_id, status, attempts, scheduled_ago, locked_ago, locked_ago, created_ago),
     ).fetchone()
     return row[0]
 
@@ -249,6 +263,11 @@ def _evidence_items(html: str) -> list[str]:
     return [c.split("</li>")[0] for c in html.split('<li data-field="evidence"')[1:]]
 
 
+def _containers(html: str, name: str) -> list[str]:
+    """The inner HTML of every `<div data-field="<name>">` (those divs never nest another div)."""
+    return re.findall(rf'<div data-field="{name}">(.*?)</div>', html, re.DOTALL)
+
+
 def _has_button(html: str) -> bool:
     return 'data-field="analyze_button"' in html
 
@@ -356,6 +375,175 @@ def test_a_transient_attempt_row_between_attempts_is_not_a_result(client, db):
     assert not _fields(resp.text, "analysis_stopped")
 
 
+# --- a live job nobody picks up (review round 1, S2) ------------------------------------
+# JOB_LOCK_TIMEOUT_S is 300 in the fixture's config, so the stall bound is 2 x 300 s = 10 minutes.
+
+
+def _assert_stalled(html: str, case_id: str, job_id: int, minutes: int) -> None:
+    run_id = tier2_investigate.run_id_for_job(job_id)
+    assert 'data-state="stalled"' in html
+    assert not _polls(html)  # the section has no hx-trigger: nothing keeps asking
+    assert "hx-trigger" not in html
+    assert not _has_button(html)  # a second click would only meet the single-flight 409
+    (text,) = _fields(html, "analysis_stalled")
+    assert text == f"Chưa được xử lý sau {minutes} phút — kiểm tra worker"
+    assert not _fields(html, "analysis_running")
+    # "Kiểm tra lại": one more GET of the same state, never a POST.
+    (recheck,) = re.findall(
+        r'<button[^>]*data-field="analysis_recheck"[^>]*>(.*?)</button>', html, re.DOTALL
+    )
+    assert recheck.strip() == "Kiểm tra lại"
+    assert f'hx-get="/cases/{case_id}/investigation?run_id={run_id}"' in html
+    assert 'hx-target="#investigation"' in html and 'hx-swap="outerHTML"' in html
+    assert "hx-post" not in html
+
+
+def test_a_job_pending_for_eleven_minutes_is_stalled_with_a_recheck_and_no_poll(client, db):
+    case_id = _make_case(db, client.user_id)
+    job_id = _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=11))
+
+    resp = _get(client, case_id)
+
+    assert resp.status_code == 200
+    _assert_stalled(resp.text, case_id, job_id, 11)
+
+
+def test_the_stalled_text_does_not_say_the_worker_is_dead(client, db):
+    """A triage backlog can legitimately delay the job, so the page says to check, not that
+    something died."""
+    case_id = _make_case(db, client.user_id)
+    _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=25))
+
+    (text,) = _fields(_get(client, case_id).text, "analysis_stalled")
+
+    assert "25 phút" in text  # the actual age, not the bound
+    for claim in ("chết", "hỏng", "dừng", "lỗi", "thất bại"):
+        assert claim not in text
+
+
+@pytest.mark.parametrize(
+    ("minutes", "state"),
+    [(1, "running"), (9, "running"), (11, "stalled")],
+)
+def test_a_pending_job_is_stalled_only_past_twice_the_lock_timeout(client, db, minutes, state):
+    case_id = _make_case(db, client.user_id)
+    _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=minutes))
+
+    resp = _get(client, case_id)
+
+    assert f'data-state="{state}"' in resp.text
+    assert _polls(resp.text) == (state == "running")
+    assert _has_button(resp.text) is False  # neither state offers a second job
+
+
+def test_a_running_job_locked_eleven_minutes_ago_is_stalled(client, db):
+    case_id = _make_case(db, client.user_id)
+    job_id = _insert_job(
+        db,
+        case_id,
+        "running",
+        scheduled_ago=timedelta(minutes=12),
+        locked_ago=timedelta(minutes=11),
+    )
+
+    _assert_stalled(_get(client, case_id).text, case_id, job_id, 11)
+
+
+def test_a_running_job_is_measured_from_its_lock_not_from_how_long_it_queued(client, db):
+    """It waited 30 minutes in the queue but a worker locked it a minute ago: it is running."""
+    case_id = _make_case(db, client.user_id)
+    _insert_job(
+        db,
+        case_id,
+        "running",
+        scheduled_ago=timedelta(minutes=30),
+        locked_ago=timedelta(minutes=1),
+    )
+
+    resp = _get(client, case_id)
+
+    assert 'data-state="running"' in resp.text and _polls(resp.text)
+
+
+def test_a_pending_job_is_measured_from_scheduled_at_not_created_at(client, db):
+    """A retry's backoff moves `scheduled_at`: created an hour ago, due only now, is not stalled.
+    The same job scheduled into the future (a backoff still counting down) is not stalled either."""
+    case_id = _make_case(db, client.user_id)
+    _insert_job(db, case_id, "pending", created_ago=timedelta(hours=1))
+    assert 'data-state="running"' in _get(client, case_id).text
+
+    other = _make_case(db, client.user_id)
+    _insert_job(db, other, "pending", scheduled_ago=timedelta(minutes=-5))
+    assert 'data-state="running"' in _get(client, other).text
+
+
+def test_the_stall_bound_follows_job_lock_timeout_s(client, db):
+    """Nothing is hard-coded to ten minutes: with a 60 s lock timeout, three minutes is a stall."""
+    case_id = _make_case(db, client.user_id)
+    job_id = _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=3))
+    assert 'data-state="running"' in _get(client, case_id).text  # 180 s < 2 x 300 s
+
+    main.app.dependency_overrides[deps.get_config] = lambda: config.Config(
+        ANALYZE_QUOTA_PER_USER_DAY=2, JOB_LOCK_TIMEOUT_S=60
+    )
+
+    _assert_stalled(_get(client, case_id).text, case_id, job_id, 3)  # 180 s > 2 x 60 s
+
+
+def test_a_stalled_job_that_did_write_its_row_is_done(client, db):
+    """The final row wins over the job's age, as it does over a live job's status."""
+    case_id = _make_case(db, client.user_id)
+    job_id = _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=30))
+    _insert_run(db, case_id, job_id=job_id, result=_result(summary="LATE-BUT-HERE"))
+
+    resp = _get(client, case_id)
+
+    assert 'data-state="done"' in resp.text
+    assert _fields(resp.text, "analysis_summary") == ["LATE-BUT-HERE"]
+    assert not _fields(resp.text, "analysis_stalled")
+
+
+def test_a_stalled_job_hides_the_previous_result_like_a_running_one(client, db):
+    case_id = _make_case(db, client.user_id)
+    old_job = _insert_job(db, case_id, "succeeded")
+    _insert_run(db, case_id, job_id=old_job, result=_result(summary="PREVIOUS"), created_at=_PAST)
+    _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=11))
+
+    resp = _get(client, case_id)
+
+    assert 'data-state="stalled"' in resp.text
+    assert "PREVIOUS" not in resp.text
+
+
+def test_the_recheck_gets_the_live_state_once_the_worker_has_finished(client, db):
+    """ "Kiểm tra lại" is the same GET: once the job has finished the answer is the result."""
+    case_id = _make_case(db, client.user_id)
+    job_id = _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=11))
+    stalled = _get(client, case_id)
+    (recheck_url,) = re.findall(r'hx-get="([^"]+)"', stalled.text)
+
+    _insert_run(db, case_id, job_id=job_id, result=_result(summary="FINISHED-AFTER-ALL"))
+    db.execute("UPDATE jobs SET status = 'succeeded' WHERE job_id = %s", (job_id,))
+    resp = client.http.get(recheck_url, headers=_HTMX)
+
+    assert 'data-state="done"' in resp.text
+    assert _fields(resp.text, "analysis_summary") == ["FINISHED-AFTER-ALL"]
+
+
+def test_a_second_click_on_a_stalled_job_is_the_409_and_still_shows_the_stall(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(db, "rollback", lambda: None)
+    case_id = _make_case(db, client.user_id)
+    job_id = _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=11))
+
+    resp = _post(client, case_id)
+
+    assert resp.status_code == 409
+    assert "Đang có một lượt phân tích chạy cho case này" in resp.text
+    _assert_stalled(resp.text, case_id, job_id, 11)
+
+
 def test_done_renders_the_result_and_stops_polling(client, db):
     case_id = _make_case(db, client.user_id)
     job_id = _insert_job(db, case_id, "succeeded")
@@ -382,6 +570,77 @@ def test_done_renders_the_result_and_stops_polling(client, db):
     assert _has_button(resp.text)  # an open case can be analysed again
 
 
+def test_support_and_counter_evidence_sit_under_their_own_labels(client, db):
+    """Review round 1, B1: `evidence_against` must never read as support. Each list is in its
+    own labelled container, so the two are separable by position and by name."""
+    case_id = _make_case(db, client.user_id)
+    _insert_run(
+        db,
+        case_id,
+        result=_result(
+            gia_thuyet=[
+                {
+                    "noi_dung": "HYPOTHESIS-TEXT",
+                    "evidence_for": ["FOR-ONE", "FOR-TWO"],
+                    "evidence_against": ["AGAINST-ONE", "AGAINST-TWO"],
+                }
+            ]
+        ),
+    )
+
+    resp = _get(client, case_id)
+
+    (support,) = _containers(resp.text, "hypothesis_for")
+    (counter,) = _containers(resp.text, "hypothesis_against")
+    assert "Bằng chứng ủng hộ" in support and "Bằng chứng phản bác" not in support
+    assert "FOR-ONE" in support and "FOR-TWO" in support
+    assert "AGAINST-ONE" not in support and "AGAINST-TWO" not in support
+    assert "Bằng chứng phản bác" in counter and "Bằng chứng ủng hộ" not in counter
+    assert "AGAINST-ONE" in counter and "AGAINST-TWO" in counter
+    assert "FOR-ONE" not in counter and "FOR-TWO" not in counter
+    assert _fields(resp.text, "evidence_against") == ["AGAINST-ONE", "AGAINST-TWO"]
+    assert _fields(resp.text, "evidence_for") == ["FOR-ONE", "FOR-TWO"]
+    assert not _fields(resp.text, "evidence_against_missing")  # counter-evidence was given
+
+
+def test_an_empty_evidence_against_is_flagged_not_skipped(client, db):
+    """The output schema requires `evidence_against` (minItems 1): an empty list is a model that
+    skipped the counter-argument, and the reader is told so — for that hypothesis only."""
+    case_id = _make_case(db, client.user_id)
+    _insert_run(
+        db,
+        case_id,
+        result=_result(
+            gia_thuyet=[
+                {"noi_dung": "H-WITHOUT", "evidence_for": ["F1"], "evidence_against": []},
+                {"noi_dung": "H-WITH", "evidence_for": ["F2"], "evidence_against": ["A2"]},
+            ]
+        ),
+    )
+
+    resp = _get(client, case_id)
+
+    assert len(_containers(resp.text, "hypothesis_against")) == 2  # always rendered
+    (warning,) = _fields(resp.text, "evidence_against_missing")
+    assert "không nêu bằng chứng phản bác" in warning
+    without, with_ = _containers(resp.text, "hypothesis_against")
+    assert "evidence_against_missing" in without and "Bằng chứng phản bác" in without
+    assert "evidence_against_missing" not in with_ and "A2" in with_
+
+
+@pytest.mark.parametrize(
+    "hypothesis", [{"noi_dung": "H"}, {"noi_dung": "H", "evidence_against": "x"}]
+)
+def test_a_missing_or_malformed_evidence_against_is_flagged_too(client, db, hypothesis):
+    case_id = _make_case(db, client.user_id)
+    _insert_run(db, case_id, result=_result(gia_thuyet=[hypothesis]))
+
+    resp = _get(client, case_id)
+
+    assert len(_fields(resp.text, "evidence_against_missing")) == 1
+    assert not _fields(resp.text, "evidence_against")
+
+
 def test_the_newest_job_wins_and_older_runs_stay_out_of_the_way(client, db):
     case_id = _make_case(db, client.user_id)
     older = _insert_job(db, case_id, "succeeded")
@@ -398,15 +657,42 @@ def test_the_newest_job_wins_and_older_runs_stay_out_of_the_way(client, db):
 
 
 def test_a_run_of_another_case_is_never_shown(client, db):
+    """Review round 1, N4: the request itself names case B's run (`?run_id=<B's run>`) on case
+    A's page, and nothing of B comes back — not its text, not its run id. The hint is not a
+    lookup key: with nothing of A's own behind it the answer is the failure state, as for
+    any `run_id` this case has no trace of."""
     case_a = _make_case(db, client.user_id)
     case_b = _make_case(db, client.user_id)
     job_b = _insert_job(db, case_b, "succeeded")
-    _insert_run(db, case_b, job_id=job_b, result=_result(summary="CASE-B-SUMMARY"))
+    run_b = _insert_run(
+        db,
+        case_b,
+        job_id=job_b,
+        result=_result(summary="CASE-B-SUMMARY", attack_narrative="CASE-B-NARRATIVE"),
+        agent_trace={"alert_count": 77, "total_occurrences": 777},
+    )
 
-    resp = _get(client, case_a)
+    resp = _get(client, case_a, run_id=str(run_b))
 
-    assert 'data-state="idle"' in resp.text
-    assert "CASE-B-SUMMARY" not in resp.text
+    assert resp.status_code == 200
+    assert 'data-state="failed"' in resp.text
+    for b_only in ("CASE-B-SUMMARY", "CASE-B-NARRATIVE", str(run_b), "Lúc phân tích"):
+        assert b_only not in resp.text  # "Lúc phân tích" = B's recorded snapshot line
+    assert not _fields(resp.text, "analysis_summary")
+
+
+def test_a_run_of_another_case_never_replaces_this_cases_own_result(client, db):
+    case_a = _make_case(db, client.user_id)
+    case_b = _make_case(db, client.user_id)
+    job_a = _insert_job(db, case_a, "succeeded")
+    _insert_run(db, case_a, job_id=job_a, result=_result(summary="CASE-A-SUMMARY"))
+    job_b = _insert_job(db, case_b, "succeeded")
+    run_b = _insert_run(db, case_b, job_id=job_b, result=_result(summary="CASE-B-SUMMARY"))
+
+    resp = _get(client, case_a, run_id=str(run_b))
+
+    assert _fields(resp.text, "analysis_summary") == ["CASE-A-SUMMARY"]
+    assert "CASE-B-SUMMARY" not in resp.text and str(run_b) not in resp.text
 
 
 def test_without_any_job_the_latest_final_row_is_shown(client, db):
@@ -673,6 +959,23 @@ def test_an_overruled_conclusion_shows_need_more_data_and_the_original(client, d
     (overruled,) = _fields(resp.text, "analysis_overruled")
     assert "false_positive" in overruled and "need_more_data" in overruled
     assert "không có bằng chứng nào" in overruled
+    # Review round 1, N3: the Vietnamese label beside each code — the codes stay.
+    assert "Không phải sự cố (false_positive)" in overruled
+    assert "Cần thêm dữ liệu (need_more_data)" in overruled
+
+
+def test_an_unknown_overruled_code_is_shown_as_it_is_and_escaped(client, db):
+    case_id = _make_case(db, client.user_id)
+    check = {"verified": [], "rejected": [], "original_conclusion": _SCRIPT}
+    _insert_run(
+        db, case_id, result=_result(suggested_conclusion="need_more_data"), evidence_check=check
+    )
+
+    resp = _get(client, case_id)
+
+    (overruled,) = _fields(resp.text, "analysis_overruled")
+    assert "&lt;script&gt;" in overruled and "<script>" not in resp.text
+    assert "Cần thêm dữ liệu (need_more_data)" in overruled
 
 
 def test_forced_by_is_said_in_words(client, db):
@@ -692,6 +995,7 @@ def test_forced_by_is_said_in_words(client, db):
     (overruled,) = _fields(resp.text, "analysis_overruled")
     assert "tiêm lệnh" in overruled
     assert "false_positive" in overruled and "need_more_data" in overruled
+    assert "Không phải sự cố (false_positive)" in overruled  # N3, on this path too
     assert (
         "không có bằng chứng nào" not in overruled
     )  # the evidence verified; the cause is the injection
