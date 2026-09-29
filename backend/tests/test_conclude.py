@@ -214,11 +214,22 @@ def test_submit_raises_conflict_with_current_status_when_already_concluded(db):
     assert exc.concluded_at is not None
 
 
-def test_submit_raises_conflict_for_a_case_that_does_not_exist(db):
+def test_submit_raises_unknown_case_for_a_case_that_does_not_exist(db):
+    """A case that never existed is 404, not 409 — distinct from
+    `ConcludeConflict`, which is only for a case that exists but has left
+    `investigating` (review round 1, item 3)."""
     user = _make_user(db)
-    with pytest.raises(conclude.ConcludeConflict) as excinfo:
-        conclude.submit(db, str(uuid.uuid4()), user, conclusion="concluded_fp", reason="x")
-    assert excinfo.value.status is None
+    missing = str(uuid.uuid4())
+    with pytest.raises(conclude.UnknownCase) as excinfo:
+        conclude.submit(db, missing, user, conclusion="concluded_fp", reason="x")
+    assert excinfo.value.case_id == missing
+
+
+def test_submit_rejects_a_nul_byte_in_reason(db):
+    user = _make_user(db)
+    case_id = _make_case(db, user)
+    with pytest.raises(ValueError, match="reason"):
+        conclude.submit(db, case_id, user, conclusion="concluded_fp", reason="x\x00y")
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +249,13 @@ def test_add_note_rejects_body_over_the_cap(db):
     case_id = _make_case(db, user)
     with pytest.raises(ValueError, match="body"):
         conclude.add_note(db, case_id, user, "x" * (conclude.NOTE_BODY_MAX_BYTES + 1))
+
+
+def test_add_note_rejects_a_nul_byte(db):
+    user = _make_user(db)
+    case_id = _make_case(db, user)
+    with pytest.raises(ValueError, match="body"):
+        conclude.add_note(db, case_id, user, "a\x00b")
 
 
 def test_add_note_unknown_case_raises(db):

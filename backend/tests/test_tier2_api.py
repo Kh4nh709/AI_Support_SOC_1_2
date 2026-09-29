@@ -119,7 +119,20 @@ def client(db):
     c = _Client(user_id)
 
     def get_conn():
-        yield db  # never committed: the `db` fixture rolls everything back
+        # The real dependency's shape (`deps.get_conn`): rollback on any
+        # exception, re-raise. No `else: db.commit()` — this connection is
+        # the shared `db` fixture's, and its own teardown rolls everything
+        # back; a real commit here would leak past this one test (`db`'s
+        # rollback only undoes the transaction *after* a commit, not the
+        # commit itself — a committed row is permanent, `test_auth.py:1-21`).
+        # `require_role`'s own inline `conn.commit()` on the 403 path is the
+        # one place that still needs handling, and it is handled per-test by
+        # monkeypatching `db.commit` (see the 403 test below), not here.
+        try:
+            yield db
+        except BaseException:
+            db.rollback()
+            raise
 
     main.app.dependency_overrides[deps.get_conn] = get_conn
     main.app.dependency_overrides[deps.get_config] = lambda: config.Config()
@@ -136,18 +149,49 @@ def client(db):
 # ---------------------------------------------------------------------------
 
 
-def test_tier1_role_gets_403_and_writes_authz_denied(client, db):
+@pytest.mark.parametrize(
+    "method,route,json_body",
+    [
+        ("get", "/api/tier2/cases", None),
+        ("get", "/api/tier2/cases/{case_id}", None),
+        ("post", "/api/tier2/cases/{case_id}/notes", {"body": "x"}),
+        (
+            "post",
+            "/api/tier2/cases/{case_id}/conclude",
+            {"conclusion": "concluded_fp", "reason": "x"},
+        ),
+    ],
+    ids=["list", "detail", "notes", "conclude"],
+)
+def test_tier1_role_gets_403_and_writes_authz_denied(
+    client, db, monkeypatch, method, route, json_body
+):
+    """`require_role` (`web/deps.py`) commits the `authz.denied` row itself,
+    before raising — a real `conn.commit()` on the shared `db` fixture's
+    connection, which nothing later can undo (`test_auth.py:1-21`:
+    `audit_events` is append-only, and `test_schema_v3_017.py` counts it
+    from zero). `db.commit` is monkeypatched to a spy that reads the row
+    back *instead of* committing it for real — proving the write happened,
+    in the right shape, without leaving anything for the `db` fixture's own
+    rollback-at-teardown to fail to clean up."""
     client.role = "tier1"
+    path = route.format(case_id=str(uuid.uuid4()))
+    seen_at_commit: list[list[str]] = []
 
-    resp = client.http.get("/api/tier2/cases")
+    def _spy_commit() -> None:
+        rows = db.execute(
+            "SELECT event_type FROM audit_events WHERE actor_id = %s ORDER BY audit_id",
+            (client.user_id,),
+        ).fetchall()
+        seen_at_commit.append([r[0] for r in rows])
+
+    monkeypatch.setattr(db, "commit", _spy_commit)
+
+    call = getattr(client.http, method)
+    resp = call(path, json=json_body) if json_body is not None else call(path)
 
     assert resp.status_code == 403
-    row = db.execute(
-        "SELECT event_type FROM audit_events WHERE actor_id = %s ORDER BY audit_id DESC LIMIT 1",
-        (client.user_id,),
-    ).fetchone()
-    assert row is not None
-    assert row[0] == "authz.denied"
+    assert seen_at_commit == [["authz.denied"]]
 
 
 def test_admin_role_is_also_allowed(client, db):
@@ -366,13 +410,51 @@ def test_conclude_route_503_on_statement_timeout(client, db, monkeypatch):
     assert resp.status_code == 503
 
 
-def test_conclude_route_404_style_conflict_for_unknown_case(client):
-    """`conclude_case`'s `StaleState` does not distinguish "never existed"
-    from "already concluded" (design note 1) — both translate to 409, not
-    404. Recorded here as the behaviour this card inherits, not adds."""
+def test_conclude_route_404_for_unknown_case(client):
+    """Review round 1, item 3: a case that never existed is 404, not 409 —
+    `submit()` raises `UnknownCase` (not `ConcludeConflict`) when its re-read
+    after `StaleState` comes back empty."""
     resp = client.http.post(
         f"/api/tier2/cases/{uuid.uuid4()}/conclude",
         json={"conclusion": "concluded_fp", "reason": "x"},
     )
-    assert resp.status_code == 409
-    assert resp.json()["detail"]["status"] is None
+    assert resp.status_code == 404
+
+
+def test_conclude_route_422_on_nul_byte_in_reason(client, db):
+    case_id = _make_case(db, client.user_id)
+    resp = client.http.post(
+        f"/api/tier2/cases/{case_id}/conclude",
+        json={"conclusion": "concluded_fp", "reason": "x\x00y"},
+    )
+    assert resp.status_code == 422
+
+
+def test_notes_route_422_on_nul_byte_in_body(client, db):
+    case_id = _make_case(db, client.user_id)
+    resp = client.http.post(f"/api/tier2/cases/{case_id}/notes", json={"body": "a\x00b"})
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Malformed `case_id` — 422 before any SQL (review round 1, item 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "method,route,json_body",
+    [
+        ("get", "/api/tier2/cases/not-a-uuid", None),
+        ("post", "/api/tier2/cases/not-a-uuid/notes", {"body": "x"}),
+        (
+            "post",
+            "/api/tier2/cases/not-a-uuid/conclude",
+            {"conclusion": "concluded_fp", "reason": "x"},
+        ),
+    ],
+    ids=["detail", "notes", "conclude"],
+)
+def test_malformed_case_id_is_422_not_500(client, method, route, json_body):
+    call = getattr(client.http, method)
+    resp = call(route, json=json_body) if json_body is not None else call(route)
+    assert resp.status_code == 422
