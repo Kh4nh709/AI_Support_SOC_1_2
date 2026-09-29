@@ -22,7 +22,7 @@ from typing import Annotated, Literal
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.infra.auth import Claims
 from app.tier1 import decide, queue
@@ -35,19 +35,52 @@ def _actor(claims: Claims) -> decide.Actor:
     return decide.Actor(user_id=claims.user_id, role=claims.role)
 
 
+def _conflict_response(conn: psycopg.Connection, exc: decide.DecisionConflict) -> JSONResponse:
+    """A returned `Response` is a success as far as `get_conn` is concerned — it
+    would commit (planning decision 3's dependency, P4-tasks.md:141,156). Roll
+    back first, so a 409 never persists a guard's own reads or anything a
+    call before it wrote (review round 1, item 4)."""
+    conn.rollback()
+    return JSONResponse(status_code=409, content=exc.body)
+
+
+def _no_nul(value: str) -> str:
+    """A NUL byte (0x00) cannot be stored in a `text` column — psycopg raises a
+    driver-level error, not a clean 422, if one reaches a query. Rejected at the
+    body's own validation instead (review round 1, item 10)."""
+    if "\x00" in value:
+        raise ValueError("must not contain a NUL byte")
+    return value
+
+
 class DecideIn(BaseModel):
     decision: Literal["false_positive", "benign"]
     reason: str
     seen_occurrence_count: int
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_no_nul(cls, value: str) -> str:
+        return _no_nul(value)
 
 
 class EscalateIn(BaseModel):
     title: str
     severity: Literal["critical", "high", "medium", "low"] | None = None
 
+    @field_validator("title")
+    @classmethod
+    def _title_no_nul(cls, value: str) -> str:
+        return _no_nul(value)
+
 
 class ReopenIn(BaseModel):
     reason: str
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_no_nul(cls, value: str) -> str:
+        return _no_nul(value)
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +132,7 @@ def post_acknowledge(
     except decide.NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except decide.DecisionConflict as exc:
-        return JSONResponse(status_code=409, content=exc.body)
+        return _conflict_response(conn, exc)
 
 
 @router.post("/alerts/{alert_id}/decide")
@@ -118,10 +151,12 @@ def post_decide(
             reason=body.reason,
             seen_occurrence_count=body.seen_occurrence_count,
         )
+    except decide.NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except decide.DecisionConflict as exc:
-        return JSONResponse(status_code=409, content=exc.body)
+        return _conflict_response(conn, exc)
     except psycopg.errors.QueryCanceled as exc:
         raise HTTPException(
             status_code=503, detail="fan-out timed out; nothing was written"
@@ -144,7 +179,7 @@ def post_escalate(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except decide.DecisionConflict as exc:
-        return JSONResponse(status_code=409, content=exc.body)
+        return _conflict_response(conn, exc)
 
 
 @router.post("/alerts/{alert_id}/reopen")
@@ -156,7 +191,9 @@ def post_reopen(
 ) -> dict:
     try:
         return decide.reopen(conn, alert_id, _actor(claims), reason=body.reason)
+    except decide.NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except decide.DecisionConflict as exc:
-        return JSONResponse(status_code=409, content=exc.body)
+        return _conflict_response(conn, exc)
