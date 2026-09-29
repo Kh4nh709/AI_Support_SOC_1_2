@@ -19,17 +19,23 @@ import pytest
 from app.infra import puller
 from app.infra.errors import PermanentError
 from app.soar import pipeline
-from app.tier1 import triage
+from app.tier1 import digest, triage
 from app.web import handlers as handlers_pkg
 from app.web.worker import HANDLERS, TIMEOUTS
 
 
-def test_iter_handlers_discovers_the_three_on_main():
+def test_iter_handlers_discovers_every_handler_module():
+    # P5-T08: extended from "the three" (pull/pipeline/triage, P5-T01's own
+    # set at merge) to include `digest`, the fourth module this card adds —
+    # the discovery contract the P5-T01 package docstring names explicitly
+    # ("a later card ... adds one module without touching any shared file").
+    # Extension, not narrowing: every P5-T01 assertion below still holds.
     result = handlers_pkg.iter_handlers()
-    assert set(result) == {"pipeline", "pull", "triage"}
+    assert set(result) == {"pipeline", "pull", "triage", "digest"}
     assert result["pull"] is puller.pull_job
     assert result["pipeline"] is pipeline.run_pipeline_job
     assert result["triage"] is triage.run_triage_job
+    assert result["digest"] is digest.run_digest_job
 
 
 def test_iter_timeouts_is_empty_until_a_module_declares_one():
