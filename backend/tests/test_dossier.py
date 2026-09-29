@@ -1667,3 +1667,122 @@ def test_notes_render_oldest_first_when_inserted_newest_first(db):
 
     text = strip_nonce(dossier.build(db, case_id, nonce="zk" + "z" * 14).text, "zk" + "z" * 14)
     assert text.index("FIRST-NOTE") < text.index("SECOND-NOTE")
+
+
+# ---------------------------------------------------------------------------
+# Dossier.blocks (P5-T04 review round 1, B2) — the additive attribute the per-block
+# injection scan reads.
+# ---------------------------------------------------------------------------
+
+_WRAPPED_BLOCK_RE = re.compile(
+    r'<untrusted_data nonce="(?P<nonce>[^"]+)" source="(?P<source>[^"]+)"[^>]*>\n'
+    r"(?P<body>.*?)\n"
+    r'</untrusted_data nonce="(?P=nonce)">',
+    re.DOTALL,
+)
+
+
+def _wrapped_contents(text: str) -> list[tuple[str, str]]:
+    """What `text` actually wraps, read back out of the rendered dossier: each block's
+    source and its body with the HTML escaping undone (`html.escape(plain, quote=False)`
+    is exactly reversed by `html.unescape`, since `&` only ever appears as `&amp;`)."""
+    import html
+
+    return [
+        (m.group("source"), html.unescape(m.group("body")))
+        for m in _WRAPPED_BLOCK_RE.finditer(text)
+    ]
+
+
+@pytest.mark.db
+def test_blocks_are_exactly_the_wrapped_contents(db):
+    """`Dossier.blocks` is the `(source, body)` of every `untrusted_block` in `text`, in
+    render order, unescaped — checked against the text itself rather than against what
+    the fixture inserted, so a block wrapped anywhere without being recorded fails here.
+    The fixture puts `&`, `<` and `>` in every free-text field a case has, so the
+    escaped-versus-plain distinction is exercised in every source."""
+    user = _make_user(db)
+    case_id = _make_case(db, user, title="AT&T <b>login</b> anomaly")
+    _make_head(
+        db,
+        case_id,
+        user,
+        agent_name="host<1>&co",
+        alert_user="a&b",
+        srcip="203.0.113.7",
+        description="rule <desc> & more",
+        raw_log="GET /a.php?id=1&x=<script>alert(1)</script> HTTP/1.1",
+    )
+    db.execute(
+        "INSERT INTO case_notes (case_id, author_id, body) VALUES (%s, %s, %s)",
+        (case_id, user, "note: a < b && c > d"),
+    )
+    db.execute(
+        "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, system_prompt, "
+        "user_message, result) VALUES (%s, 'investigate', 'case', %s, 'sys', 'usr', %s)",
+        (
+            str(uuid.uuid4()),
+            case_id,
+            Jsonb({"summary": "prior <run> & result", "suggested_conclusion": "need_more_data"}),
+        ),
+    )
+
+    result = dossier.build(db, case_id, nonce="b" * 16)
+
+    assert list(result.blocks) == _wrapped_contents(result.text)
+    kinds = {kind for kind, _body in result.blocks}
+    assert {"wazuh_raw_log", "rule_description", "context", "kb_playbook", "proposer"} <= kinds
+    # unescaped, and without the wrapper: the raw_log body is the log itself
+    assert (
+        "wazuh_raw_log",
+        "GET /a.php?id=1&x=<script>alert(1)</script> HTTP/1.1",
+    ) in result.blocks
+    assert ("rule_description", "rule <desc> & more") in result.blocks
+    assert all("<untrusted_data" not in body for _kind, body in result.blocks)
+    assert all(isinstance(entry, tuple) and len(entry) == 2 for entry in result.blocks)
+
+
+@pytest.mark.db
+def test_blocks_come_from_the_final_render_only(db):
+    """The budget cascade renders `text` up to four times; a sink that were only appended
+    to would carry the first render's twenty 8 KB raw_log blocks into `blocks`. Here every
+    step fires (the same fixture and calibrated budget as
+    `test_truncation_steps_fire_in_section_7_6_order`), and `blocks` still equals what the
+    final `text` wraps."""
+    user = _make_user(db)
+    case_id = _make_case(db, user)
+    for i in range(20):
+        _make_head(
+            db,
+            case_id,
+            user,
+            alert_time=_BASE_TIME + timedelta(minutes=i),
+            raw_log="X" * 20_000,
+        )
+    from app.infra import config as config_module
+
+    cfg = dataclasses.replace(config_module.load(), CASE_PROMPT_BUDGET_TOKENS=18_450)
+
+    result = dossier.build(db, case_id, nonce="e" * 16, cfg=cfg)
+
+    assert [t["step"] for t in result.truncations] == [
+        dossier.STEP_RAW_LOG_CUT,
+        dossier.STEP_REPRESENTATIVES_CUT,
+        dossier.STEP_TIMELINE_DROPPED,
+    ]
+    assert list(result.blocks) == _wrapped_contents(result.text)
+    raw_logs = [body for kind, body in result.blocks if kind == "wazuh_raw_log"]
+    assert len(raw_logs) == dossier.MAX_REPRESENTATIVE_CLUSTERS < 20
+
+
+def test_a_hand_built_dossier_needs_no_blocks():
+    """`blocks` defaults to `()`, so a test double or an older caller that builds a
+    `Dossier` from its five original fields is still valid."""
+    built = dossier.Dossier(
+        text="t",
+        nonce="n",
+        snapshot=dossier.Snapshot(alert_count=0, total_occurrences=0, last_seen_at=None),
+        truncations=(),
+        estimated_tokens=1,
+    )
+    assert built.blocks == ()

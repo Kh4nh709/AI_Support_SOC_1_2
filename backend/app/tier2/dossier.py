@@ -306,11 +306,23 @@ class Snapshot:
 
 @dataclass(frozen=True)
 class Dossier:
+    """`blocks` (P5-T04 review round 1, B2) is additive: one `(block_kind, body)` per
+    `untrusted_block` in `text`, in render order, of the FINAL render only (the budget
+    cascade renders several times; only the last one is `text`). `block_kind` is the
+    block's `source` (`wazuh_raw_log`, `rule_description`, `context`, ...); `body` is the
+    block's `Block.plain` — the free text as the model sees it (NFKC-normalised, the
+    nonce stripped, truncated when bounded) but **not** HTML-escaped and **without** the
+    `<untrusted_data ...>` wrapper. That is the shape `security.detector.scan` is
+    documented to run over, so a consumer can scan block by block instead of scanning
+    `text`, whose own wrapper tags are what `heuristic:delimiter_lookalike` flags.
+    Defaults to `()` so a hand-built `Dossier` (a test double) stays valid."""
+
     text: str
     nonce: str
     snapshot: Snapshot
     truncations: tuple[dict[str, Any], ...]
     estimated_tokens: int
+    blocks: tuple[tuple[str, str], ...] = ()
 
 
 class UnknownCase(Exception):
@@ -843,7 +855,29 @@ def _iso(value: datetime) -> str:
     return _utc(value).isoformat(timespec="seconds")
 
 
-def _id_fact(name: str, kind: str, value: str, nonce: str) -> str:
+#: What `Dossier.blocks` is built from: every block function appends `(source, plain)` here
+#: as it wraps, and `build()`'s inner `render()` starts a fresh list per render.
+_BlockSink = list[tuple[str, str]]
+
+
+def _wrapped(
+    sink: _BlockSink | None,
+    text: str,
+    source: str,
+    nonce: str,
+    *,
+    limit_bytes: int | None = None,
+) -> str:
+    """`wrap.untrusted_block(...).rendered`, recording `(source, block.plain)` in `sink`
+    on the way (P5-T04 review round 1, B2). The one place a block is wrapped in this
+    module, so `Dossier.blocks` cannot drift from what `Dossier.text` contains."""
+    block = wrap.untrusted_block(text, source, nonce=nonce, limit_bytes=limit_bytes)
+    if sink is not None:
+        sink.append((source, block.plain))
+    return block.rendered
+
+
+def _id_fact(name: str, kind: str, value: str, nonce: str, sink: _BlockSink | None = None) -> str:
     """`fact(name, Id(kind, value))` — or, for a value that fails the id pattern (which
     must never happen for a real ingested `alert_id`/`rule_id` but must never crash the
     build either, nit 15), the raw value inside its own small wrapped block instead of a
@@ -851,7 +885,7 @@ def _id_fact(name: str, kind: str, value: str, nonce: str) -> str:
     try:
         return fact(name, Id(kind, value))
     except ValueError:
-        return wrap.untrusted_block(f"{name}: {value}", "context", nonce=nonce).rendered
+        return _wrapped(sink, f"{name}: {value}", "context", nonce)
 
 
 def _block1_case(
@@ -862,6 +896,7 @@ def _block1_case(
     nonce: str,
     *,
     representatives_shown: int | None,
+    sink: _BlockSink | None = None,
 ) -> str:
     total_dup = sum(span[0] for span in dup_spans.values())
     total_occurrences = sum(h.occurrence_count for h in heads)
@@ -874,7 +909,7 @@ def _block1_case(
         parts.append(fact("first_seen", _utc(min(h.first_seen_at for h in heads))))
         parts.append(fact("last_seen", _utc(max(h.last_seen_at for h in heads))))
     if trigger_alert_id:
-        parts.append(_id_fact("alert_id", "alert_id", trigger_alert_id, nonce))
+        parts.append(_id_fact("alert_id", "alert_id", trigger_alert_id, nonce, sink))
     context_lines = [f"title: {case_row['title']}"]
     if case_row.get("created_by"):
         context_lines.append(f"escalated_by: {case_row['created_by']}")
@@ -886,7 +921,7 @@ def _block1_case(
             f"representatives_shown: {representatives_shown} of {len(heads)} "
             f"{wrap.TRUNCATION_MARKER}"
         )
-    parts.append(wrap.untrusted_block("\n".join(context_lines), "context", nonce=nonce).rendered)
+    parts.append(_wrapped(sink, "\n".join(context_lines), "context", nonce))
     return "\n".join(parts)
 
 
@@ -896,12 +931,13 @@ def _block2_clusters(
     nonce: str,
     *,
     raw_log_limit: int,
+    sink: _BlockSink | None = None,
 ) -> str:
     parts = [HEADING_CLUSTERS]
     for head in heads:
         line = [
-            _id_fact("alert_id", "alert_id", head.alert_id, nonce),
-            _id_fact("rule_id", "rule_id", head.rule_id, nonce),
+            _id_fact("alert_id", "alert_id", head.alert_id, nonce, sink),
+            _id_fact("rule_id", "rule_id", head.rule_id, nonce, sink),
             fact("severity", Severity(head.severity)),
             fact("category", Category(head.category)),
             fact("occurrence_count", int(head.occurrence_count)),
@@ -913,12 +949,7 @@ def _block2_clusters(
             line.append(fact("last_seen", _utc(dup_last)))
         parts.append(" · ".join(line))
         parts.append(
-            wrap.untrusted_block(
-                head.raw_log,
-                "wazuh_raw_log",
-                nonce=nonce,
-                limit_bytes=raw_log_limit,
-            ).rendered
+            _wrapped(sink, head.raw_log, "wazuh_raw_log", nonce, limit_bytes=raw_log_limit)
         )
         # Blocker 5: 249 of 842 real heads carry an empty `raw_log`, and P5-T04's evidence
         # check accepts a quote from `raw_log` *or* `description` — the description was
@@ -931,12 +962,13 @@ def _block2_clusters(
             # always — unlike `raw_log_limit` above, this never starts at 8 KB, since
             # the description is meant to be a short rule label, not a second log body.
             parts.append(
-                wrap.untrusted_block(
+                _wrapped(
+                    sink,
                     head.description,
                     "rule_description",
-                    nonce=nonce,
+                    nonce,
                     limit_bytes=RAW_LOG_CUT_BYTES,
-                ).rendered
+                )
             )
         context_lines = [f"agent_name: {head.agent_name}"]
         if head.origin_host and head.origin_host != head.agent_name:
@@ -947,14 +979,17 @@ def _block2_clusters(
             context_lines.append(f"srcip: {head.srcip}")
         if head.dstip:
             context_lines.append(f"dstip: {head.dstip}")
-        parts.append(
-            wrap.untrusted_block("\n".join(context_lines), "context", nonce=nonce).rendered
-        )
+        parts.append(_wrapped(sink, "\n".join(context_lines), "context", nonce))
     return "\n".join(parts)
 
 
 def _block3_timeline(
-    rows: Sequence[tuple[Any, ...]], nonce: str, *, capped: bool, dropped: bool
+    rows: Sequence[tuple[Any, ...]],
+    nonce: str,
+    *,
+    capped: bool,
+    dropped: bool,
+    sink: _BlockSink | None = None,
 ) -> str:
     if dropped:
         # Should 7: the drop must not leave an empty wrapped block — the mark itself is
@@ -968,7 +1003,7 @@ def _block3_timeline(
         if capped:
             lines.insert(TIMELINE_HEAD_LINES, wrap.TRUNCATION_MARKER)
         body = "\n".join(lines) if lines else wrap.TRUNCATION_MARKER
-    wrapped = wrap.untrusted_block(body, "context", nonce=nonce).rendered
+    wrapped = _wrapped(sink, body, "context", nonce)
     return f"{HEADING_TIMELINE}\n{wrapped}"
 
 
@@ -1035,11 +1070,11 @@ def _entity_history_facts(entity: Entity) -> list[str]:
     ]
 
 
-def _block4_entities(entities: Sequence[Entity], nonce: str) -> str:
+def _block4_entities(entities: Sequence[Entity], nonce: str, sink: _BlockSink | None = None) -> str:
     parts = [HEADING_ENTITIES]
     for e in entities:
         value_body = f"{e.kind}: {e.value}"
-        parts.append(wrap.untrusted_block(value_body, "context", nonce=nonce).rendered)
+        parts.append(_wrapped(sink, value_body, "context", nonce))
         parts.append(_entity_lookup_facts(e, nonce))
         parts.extend(_entity_history_facts(e))
     return "\n".join(parts)
@@ -1069,11 +1104,12 @@ def _block5_correlation(
     heads: Sequence[_Head],
     correlation_by_head: Mapping[str, tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]],
     nonce: str,
+    sink: _BlockSink | None = None,
 ) -> str:
     parts = [HEADING_CORRELATION]
     shown_samples: set[str] = set()
     for head in heads:
-        parts.append(_id_fact("alert_id", "alert_id", head.alert_id, nonce))
+        parts.append(_id_fact("alert_id", "alert_id", head.alert_id, nonce, sink))
         rows, samples = correlation_by_head.get(head.alert_id, ([], []))
         if not rows:
             parts.append(SENTENCE_NO_CORRELATION)
@@ -1091,7 +1127,7 @@ def _block5_correlation(
             parts.append(
                 " · ".join(
                     (
-                        _id_fact("rule_id", "rule_id", rule_id, nonce),
+                        _id_fact("rule_id", "rule_id", rule_id, nonce, sink),
                         fact("category", Category(category)),
                         fact("status", AlertStatus(status)),
                         fact("clusters", int(cluster_count)),
@@ -1110,11 +1146,13 @@ def _block5_correlation(
             shown_samples.add(s[0])
         if new_samples:
             body = "\n\n".join(_render_correlation_sample(s, nonce) for s in new_samples)
-            parts.append(wrap.untrusted_block(body, "correlation_samples", nonce=nonce).rendered)
+            parts.append(_wrapped(sink, body, "correlation_samples", nonce))
     return "\n".join(parts)
 
 
-def _block6_tier1(rows: Sequence[tuple[Any, ...]], nonce: str) -> str:
+def _block6_tier1(
+    rows: Sequence[tuple[Any, ...]], nonce: str, sink: _BlockSink | None = None
+) -> str:
     # Nit 13: only event_type/subject_id/actor_role/created_at are ever read here — a
     # `tier1.decided` payload's `llm_suggestion`/`llm_confidence` (or any other payload
     # key) never reaches the dossier; there is no path in this function that touches
@@ -1123,17 +1161,17 @@ def _block6_tier1(rows: Sequence[tuple[Any, ...]], nonce: str) -> str:
     for _audit_id, event_type, subject_id, _actor_id, actor_role, _payload, created_at in rows:
         lines.append(f"{_iso(created_at)} · {event_type} · {subject_id} · {actor_role}")
     body = "\n".join(lines)
-    wrapped = wrap.untrusted_block(body, "context", nonce=nonce).rendered
+    wrapped = _wrapped(sink, body, "context", nonce)
     return f"{HEADING_TIER1}\n{wrapped}"
 
 
-def _block7_playbooks(categories: Sequence[str], nonce: str) -> str:
+def _block7_playbooks(categories: Sequence[str], nonce: str, sink: _BlockSink | None = None) -> str:
     parts = [HEADING_PLAYBOOKS]
     for cat in categories:
         parts.append(fact("category", Category(cat)))
         text = get_playbook(cat)
         if text:
-            parts.append(wrap.untrusted_block(text, "kb_playbook", nonce=nonce).rendered)
+            parts.append(_wrapped(sink, text, "kb_playbook", nonce))
         else:
             parts.append(SENTENCE_NO_PLAYBOOK)
     return "\n".join(parts)
@@ -1143,6 +1181,7 @@ def _block8_notes_and_previous(
     notes: Sequence[tuple[Any, ...]],
     previous_run: tuple[Any, ...] | None,
     nonce: str,
+    sink: _BlockSink | None = None,
 ) -> str:
     parts = [HEADING_NOTES]
     if notes:
@@ -1150,14 +1189,14 @@ def _block8_notes_and_previous(
             f"{_iso(created_at)} ({author_id}):\n{body_text}"
             for author_id, body_text, created_at in notes
         )
-        parts.append(wrap.untrusted_block(body, "context", nonce=nonce).rendered)
+        parts.append(_wrapped(sink, body, "context", nonce))
     parts.append(HEADING_PREVIOUS_RUN)
     if previous_run is not None:
         _run_id, result, created_at = previous_run
         body = f"{_iso(created_at)}\n{json.dumps(result, ensure_ascii=False, sort_keys=True)}"
         # Injection accumulating across rounds (docs/phase-7-tier2.md:250): a previous ②
         # result that was itself injected must not re-enter the next prompt unwrapped.
-        parts.append(wrap.untrusted_block(body, "proposer", nonce=nonce).rendered)
+        parts.append(_wrapped(sink, body, "proposer", nonce))
     return "\n".join(parts)
 
 
@@ -1248,22 +1287,40 @@ def build(
     kept_ids: frozenset[str] | None = None
     timeline_dropped = False
 
+    # `Dossier.blocks`: filled by the block functions as they wrap, and emptied at the start
+    # of every render — the budget cascade below renders up to four times, and only the
+    # last render is `text`.
+    blocks: _BlockSink = []
+
     def render() -> str:
+        blocks.clear()
         display_heads = heads if kept_ids is None else [h for h in heads if h.alert_id in kept_ids]
         shown = len(display_heads) if kept_ids is not None else None
         sections = [
             _block1_case(
-                case_row, heads, dup_spans, trigger_alert_id, nonce, representatives_shown=shown
+                case_row,
+                heads,
+                dup_spans,
+                trigger_alert_id,
+                nonce,
+                representatives_shown=shown,
+                sink=blocks,
             ),
-            _block2_clusters(display_heads, dup_spans, nonce, raw_log_limit=raw_log_limit),
+            _block2_clusters(
+                display_heads, dup_spans, nonce, raw_log_limit=raw_log_limit, sink=blocks
+            ),
             _block3_timeline(
-                timeline_rows, nonce, capped=timeline_capped, dropped=timeline_dropped
+                timeline_rows,
+                nonce,
+                capped=timeline_capped,
+                dropped=timeline_dropped,
+                sink=blocks,
             ),
-            _block4_entities(entities, nonce),
-            _block5_correlation(display_heads, correlation_by_head, nonce),
-            _block6_tier1(tier1_rows, nonce),
-            _block7_playbooks(categories, nonce),
-            _block8_notes_and_previous(notes, previous_run, nonce),
+            _block4_entities(entities, nonce, blocks),
+            _block5_correlation(display_heads, correlation_by_head, nonce, blocks),
+            _block6_tier1(tier1_rows, nonce, blocks),
+            _block7_playbooks(categories, nonce, blocks),
+            _block8_notes_and_previous(notes, previous_run, nonce, blocks),
             _block9_scope(),
         ]
         return "\n\n".join(sections)
@@ -1310,4 +1367,5 @@ def build(
         snapshot=snapshot,
         truncations=tuple(truncations),
         estimated_tokens=estimated,
+        blocks=tuple(blocks),
     )
