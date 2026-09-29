@@ -19,17 +19,23 @@ import pytest
 from app.infra import puller
 from app.infra.errors import PermanentError
 from app.soar import pipeline
-from app.tier1 import triage
+from app.tier1 import digest, triage
 from app.web import handlers as handlers_pkg
 from app.web.worker import HANDLERS, TIMEOUTS
 
 
-def test_iter_handlers_discovers_the_three_on_main():
+def test_iter_handlers_discovers_every_handler_module():
+    # P5-T08: extended from "the three" (pull/pipeline/triage, P5-T01's own
+    # set at merge) to include `digest`, the fourth module this card adds —
+    # the discovery contract the P5-T01 package docstring names explicitly
+    # ("a later card ... adds one module without touching any shared file").
+    # Extension, not narrowing: every P5-T01 assertion below still holds.
     result = handlers_pkg.iter_handlers()
-    assert set(result) == {"pipeline", "pull", "triage"}
+    assert set(result) == {"pipeline", "pull", "triage", "digest"}
     assert result["pull"] is puller.pull_job
     assert result["pipeline"] is pipeline.run_pipeline_job
     assert result["triage"] is triage.run_triage_job
+    assert result["digest"] is digest.run_digest_job
 
 
 def test_iter_timeouts_is_empty_until_a_module_declares_one():
@@ -45,7 +51,12 @@ def test_main_passes_timeouts_to_run_forever(monkeypatch):
     """Design note 5(c)'s red-step-discriminating assertion: `TIMEOUTS ==
     iter_timeouts()` alone stays green even if `main()` never hands it to
     `run_forever` — so this inspects the actual call, via `monkeypatch` on
-    `app.web.worker.run_forever`, rather than the module-level mapping."""
+    `app.web.worker.run_forever`, rather than the module-level mapping.
+
+    P5-T08 review round 1 · A2: also asserts `digest.ensure_scheduled` is
+    called exactly once, with `main`'s own connection — the Director lifted
+    the "no diff in worker.py" rule for this one line, so a fake stands in
+    for the tier function itself rather than for anything shared."""
     from app.web import worker as worker_module
 
     captured: dict[str, object] = {}
@@ -58,15 +69,22 @@ def test_main_passes_timeouts_to_run_forever(monkeypatch):
         def commit(self) -> None:
             pass
 
+    fake_conn = _FakeConn()
+
+    def fake_ensure_scheduled(conn):
+        captured.setdefault("ensure_scheduled_calls", []).append(conn)
+
     monkeypatch.setattr(worker_module, "run_forever", fake_run_forever)
     monkeypatch.setattr(worker_module.config, "load", lambda: None)
-    monkeypatch.setattr(worker_module.db, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(worker_module.db, "connect", lambda: fake_conn)
     monkeypatch.setattr(worker_module, "enqueue", lambda conn, job_type, subject_id: None)
+    monkeypatch.setattr(worker_module.digest, "ensure_scheduled", fake_ensure_scheduled)
 
     worker_module.main(["--once"])
 
     assert captured["timeouts"] is worker_module.TIMEOUTS
     assert captured["handlers"] is worker_module.HANDLERS
+    assert captured["ensure_scheduled_calls"] == [fake_conn]
 
 
 def _write(tmp_path, name: str, body: str) -> None:
