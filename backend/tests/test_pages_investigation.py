@@ -143,7 +143,11 @@ def _result(**overrides) -> dict:
         "suggested_conclusion": "confirmed_incident",
         "confidence": "high",
         "gia_thuyet": [
-            {"noi_dung": "HYPOTHESIS-TEXT", "evidence_for": ["FOR-TEXT"], "evidence_against": ["AGAINST-TEXT"]}
+            {
+                "noi_dung": "HYPOTHESIS-TEXT",
+                "evidence_for": ["FOR-TEXT"],
+                "evidence_against": ["AGAINST-TEXT"],
+            }
         ],
         "evidence": [],
         "next_steps": ["STEP-TEXT"],
@@ -237,7 +241,7 @@ def _post(client: _Client, case_id: str):
 
 def _fields(html: str, name: str) -> list[str]:
     """The text of every element carrying `data-field="<name>"` (first closing tag)."""
-    return [m.strip() for m in re.findall(rf'data-field="{name}"[^>]*>(.*?)</', html, re.S)]
+    return [m.strip() for m in re.findall(rf'data-field="{name}"[^>]*>(.*?)</', html, re.DOTALL)]
 
 
 def _evidence_items(html: str) -> list[str]:
@@ -264,10 +268,11 @@ def test_openapi_lists_both_routes():
     assert "/cases/{case_id}/investigation" in paths
 
 
-def test_the_case_page_carries_a_shell_that_loads_the_state(client, db):
-    """`case.html` includes `_investigation.html` with no run data (P5-T07 owns the page
-    and passes no investigation), so the included partial is a shell that fetches the
-    real state on load — the one seam the two cards share."""
+def test_case_page_renders_the_partial_when_present(client, db):
+    """The seam, from this side (the card's name for it): `case.html` includes
+    `_investigation.html` with no run data (P5-T07 owns the page and passes no
+    investigation), so the included partial is a shell that fetches the real state on
+    load. P5-T07 owns the mirror test, that the page renders without the partial."""
     case_id = _make_case(db, client.user_id)
 
     resp = client.http.get(f"/cases/{case_id}")
@@ -380,7 +385,9 @@ def test_done_renders_the_result_and_stops_polling(client, db):
 def test_the_newest_job_wins_and_older_runs_stay_out_of_the_way(client, db):
     case_id = _make_case(db, client.user_id)
     older = _insert_job(db, case_id, "succeeded")
-    _insert_run(db, case_id, job_id=older, result=_result(summary="OLDER-SUMMARY"), created_at=_PAST)
+    _insert_run(
+        db, case_id, job_id=older, result=_result(summary="OLDER-SUMMARY"), created_at=_PAST
+    )
     newer = _insert_job(db, case_id, "succeeded")
     _insert_run(db, case_id, job_id=newer, result=_result(summary="NEWER-SUMMARY"))
 
@@ -407,7 +414,9 @@ def test_without_any_job_the_latest_final_row_is_shown(client, db):
     transient attempt is the answer."""
     case_id = _make_case(db, client.user_id)
     _insert_run(db, case_id, result=_result(summary="OLD-RUN"), created_at=_PAST)
-    _insert_run(db, case_id, result=_result(summary="NEW-RUN"), created_at=_PAST + timedelta(days=1))
+    _insert_run(
+        db, case_id, result=_result(summary="NEW-RUN"), created_at=_PAST + timedelta(days=1)
+    )
     _insert_run(db, case_id, stopped_by="transient", created_at=_PAST + timedelta(days=2))
 
     resp = _get(client, case_id)
@@ -529,7 +538,9 @@ def test_a_malformed_run_id_is_ignored(client, db):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("status", ["concluded_fp", "concluded_policy_violation", "confirmed_incident"])
+@pytest.mark.parametrize(
+    "status", ["concluded_fp", "concluded_policy_violation", "confirmed_incident"]
+)
 def test_a_concluded_case_hides_the_button_and_shows_the_last_result(client, db, status):
     case_id = _make_case(db, client.user_id, status=status)
     job_id = _insert_job(db, case_id, "succeeded")
@@ -607,7 +618,10 @@ def test_an_unverified_item_is_marked_and_a_verified_one_is_not(client, db):
             {"alert_id": "a-2", "quote": "QUOTE-TWO-BAD", "why": "w2"},
         ]
     )
-    check = {"verified": [0], "rejected": [{"index": 1, "alert_id": "a-2", "reason": "quote_not_found"}]}
+    check = {
+        "verified": [0],
+        "rejected": [{"index": 1, "alert_id": "a-2", "reason": "quote_not_found"}],
+    }
     _insert_run(db, case_id, result=parsed, evidence_check=check)
 
     resp = _get(client, case_id)
@@ -634,9 +648,7 @@ def test_a_rejected_index_pointing_nowhere_does_not_verify_an_item(client, db):
     never coerced into a mark."""
     case_id = _make_case(db, client.user_id)
     parsed = _result(evidence=[{"alert_id": "a-1", "quote": "SOME-QUOTE-HERE", "why": "w"}])
-    _insert_run(
-        db, case_id, result=parsed, evidence_check={"verified": ["0", 7], "rejected": []}
-    )
+    _insert_run(db, case_id, result=parsed, evidence_check={"verified": ["0", 7], "rejected": []})
 
     (item,) = _evidence_items(_get(client, case_id).text)
 
@@ -680,7 +692,9 @@ def test_forced_by_is_said_in_words(client, db):
     (overruled,) = _fields(resp.text, "analysis_overruled")
     assert "tiêm lệnh" in overruled
     assert "false_positive" in overruled and "need_more_data" in overruled
-    assert "không có bằng chứng nào" not in overruled  # the evidence verified; the cause is the injection
+    assert (
+        "không có bằng chứng nào" not in overruled
+    )  # the evidence verified; the cause is the injection
 
 
 def test_an_unremarkable_result_has_no_overrule_note(client, db):
@@ -704,7 +718,11 @@ def test_every_model_string_is_escaped(client, db, payload):
         attack_narrative=f"N {payload}",
         confidence=payload,
         gia_thuyet=[
-            {"noi_dung": f"H {payload}", "evidence_for": [f"F {payload}"], "evidence_against": [f"A {payload}"]}
+            {
+                "noi_dung": f"H {payload}",
+                "evidence_for": [f"F {payload}"],
+                "evidence_against": [f"A {payload}"],
+            }
         ],
         evidence=[{"alert_id": f"id {payload}", "quote": f"Q {payload}", "why": f"W {payload}"}],
         next_steps=[f"X {payload}"],
@@ -716,9 +734,20 @@ def test_every_model_string_is_escaped(client, db, payload):
     resp = _get(client, case_id)
 
     assert "<script>" not in resp.text and "<img" not in resp.text
-    escaped = payload.replace("<", "&lt;").replace(">", "&gt;").replace('"', "&#34;").replace("'", "&#39;")
-    for field in ("analysis_summary", "hypothesis_text", "evidence_quote", "evidence_why", "next_step"):
-        (text, *_) = _fields(resp.text, field)
+    escaped = (
+        payload.replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&#34;")
+        .replace("'", "&#39;")
+    )
+    for field in (
+        "analysis_summary",
+        "hypothesis_text",
+        "evidence_quote",
+        "evidence_why",
+        "next_step",
+    ):
+        text, *_ = _fields(resp.text, field)
         assert escaped in text, field
     assert escaped in resp.text.split('data-field="analysis_narrative"')[1].split("</pre>")[0]
 
@@ -877,7 +906,9 @@ def test_a_plain_form_post_redirects_back_to_the_case(client, db, monkeypatch):
 
     assert resp.status_code == 303
     assert resp.headers["location"] == f"/cases/{case_id}"
-    assert db.execute("SELECT count(*) FROM jobs WHERE subject_id = %s", (case_id,)).fetchone()[0] == 1
+    assert (
+        db.execute("SELECT count(*) FROM jobs WHERE subject_id = %s", (case_id,)).fetchone()[0] == 1
+    )
 
 
 def test_a_second_post_is_a_409_naming_the_running_analysis_inside_the_fragment(
@@ -895,8 +926,10 @@ def test_a_second_post_is_a_409_naming_the_running_analysis_inside_the_fragment(
     assert message == "Đang có một lượt phân tích chạy cho case này"
     assert 'data-state="running"' in second.text and _polls(second.text)
     assert 'id="flash"' not in second.text  # not an OOB flash: case.html has no #flash target
-    assert 'hx-swap-oob' not in second.text
-    assert db.execute("SELECT count(*) FROM jobs WHERE subject_id = %s", (case_id,)).fetchone()[0] == 1
+    assert "hx-swap-oob" not in second.text
+    assert (
+        db.execute("SELECT count(*) FROM jobs WHERE subject_id = %s", (case_id,)).fetchone()[0] == 1
+    )
 
 
 def test_the_quota_answers_200_with_the_message_inside_the_fragment(client, db, monkeypatch):
@@ -916,10 +949,15 @@ def test_the_quota_answers_200_with_the_message_inside_the_fragment(client, db, 
     assert 'data-state="running"' not in responses[2].text
     assert _has_button(responses[2].text)
     assert commits == ["commit", "commit"]  # the refused third commits nothing
-    assert db.execute("SELECT count(*) FROM jobs WHERE subject_id = %s", (cases[2],)).fetchone()[0] == 0
+    assert (
+        db.execute("SELECT count(*) FROM jobs WHERE subject_id = %s", (cases[2],)).fetchone()[0]
+        == 0
+    )
 
 
-@pytest.mark.parametrize("status", ["concluded_fp", "concluded_policy_violation", "confirmed_incident"])
+@pytest.mark.parametrize(
+    "status", ["concluded_fp", "concluded_policy_violation", "confirmed_incident"]
+)
 def test_a_concluded_case_is_a_409_with_the_message_and_no_button(client, db, monkeypatch, status):
     case_id = _make_case(db, client.user_id, status=status)
     monkeypatch.setattr(db, "commit", lambda: None)
@@ -931,7 +969,9 @@ def test_a_concluded_case_is_a_409_with_the_message_and_no_button(client, db, mo
     (message,) = _fields(resp.text, "analyze_message")
     assert "Case đã kết luận" in message
     assert not _has_button(resp.text)
-    assert db.execute("SELECT count(*) FROM jobs WHERE subject_id = %s", (case_id,)).fetchone()[0] == 0
+    assert (
+        db.execute("SELECT count(*) FROM jobs WHERE subject_id = %s", (case_id,)).fetchone()[0] == 0
+    )
     assert (
         db.execute(
             "SELECT count(*) FROM audit_events WHERE event_type = 'case.analyzed' AND subject_id = %s",
@@ -1020,9 +1060,7 @@ def test_button_then_poll_then_result(client, db, monkeypatch):
     (job_id,) = db.execute(
         "SELECT job_id FROM jobs WHERE subject_id = %s AND job_type = 'investigate'", (case_id,)
     ).fetchone()
-    parsed = _result(
-        evidence=[{"alert_id": head, "quote": "Failed password for root", "why": "w"}]
-    )
+    parsed = _result(evidence=[{"alert_id": head, "quote": "Failed password for root", "why": "w"}])
     check = tier2_investigate._check_evidence(db, case_id, parsed)
     _insert_run(db, case_id, job_id=job_id, result=parsed, evidence_check=check)
     db.execute("UPDATE jobs SET status = 'succeeded' WHERE job_id = %s", (job_id,))

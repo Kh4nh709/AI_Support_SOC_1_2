@@ -166,9 +166,7 @@ def _latest_final_row(conn: psycopg.Connection, case_id: str) -> tuple | None:
 
 
 def _current_values(conn: psycopg.Connection, case_id: str) -> dict[str, Any]:
-    alert_count, total_occurrences, last_seen_at = conn.execute(
-        _CURRENT_SQL, (case_id,)
-    ).fetchone()
+    alert_count, total_occurrences, last_seen_at = conn.execute(_CURRENT_SQL, (case_id,)).fetchone()
     return {
         "alert_count": int(alert_count),
         "total_occurrences": int(total_occurrences),
@@ -237,9 +235,11 @@ def _evidence_rows(result: dict[str, Any], check: dict[str, Any]) -> list[dict[s
                 "quote": item.get("quote"),
                 "why": item.get("why"),
                 "verified": is_verified,
-                "reason_text": None
-                if is_verified
-                else REJECT_TEXT.get(rejected.get(index), REJECT_TEXT_UNKNOWN),
+                "reason_text": (
+                    None
+                    if is_verified
+                    else REJECT_TEXT.get(rejected.get(index), REJECT_TEXT_UNKNOWN)
+                ),
             }
         )
     return rows
@@ -409,9 +409,7 @@ def investigation_page(
         conn.rollback()
         return _not_found_page(request, user)
     view = _derive_view(conn, case_id_str, _parse_uuid(run_id))
-    return _render_state(
-        request, conn, cfg, case_id_str, status == OPEN_CASE_STATUS, view=view
-    )
+    return _render_state(request, conn, cfg, case_id_str, status == OPEN_CASE_STATUS, view=view)
 
 
 # ---------------------------------------------------------------------------
