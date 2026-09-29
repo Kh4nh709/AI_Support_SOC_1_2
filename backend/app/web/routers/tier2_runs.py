@@ -45,8 +45,16 @@ require_tier2 = require_role("tier2", "admin")
 Tier2 = Annotated[Claims, Depends(require_tier2)]
 
 
-def _case_exists(conn: Any, case_id: str) -> bool:
-    return conn.execute("SELECT 1 FROM cases WHERE case_id = %s", (case_id,)).fetchone() is not None
+#: The only `cases.status` value that is not a conclusion (`ck_cases_status`: `investigating`
+#: | `concluded_fp` | `concluded_policy_violation` | `confirmed_incident`). Everything else
+#: is concluded — `confirmed_incident` included, though it does not start with `concluded_`.
+OPEN_CASE_STATUS = "investigating"
+
+
+def _case_status(conn: Any, case_id: str) -> str | None:
+    """`cases.status`, or `None` when there is no such case."""
+    row = conn.execute("SELECT status FROM cases WHERE case_id = %s", (case_id,)).fetchone()
+    return None if row is None else row[0]
 
 
 def _analyze_quota_count(conn: Any, actor_id: str) -> int:
@@ -60,9 +68,13 @@ def _analyze_quota_count(conn: Any, actor_id: str) -> int:
 
 @router.post("/cases/{case_id}/analyze", status_code=202)
 def api_analyze(conn: Conn, claims: Tier2, cfg: Cfg, case_id: uuid.UUID) -> dict[str, Any]:
-    """404 if the case does not exist; 409 when `enqueue()` returns `None` (a run is
-    already live for this case — the single-flight index, not a query); 429 over
-    `ANALYZE_QUOTA_PER_USER_DAY`; 202 `{run_id, job_id}` otherwise.
+    """404 if the case does not exist; **409 "case đã kết luận" when the case is already
+    concluded** (review round 1, N15 — a conclusion is the end of the analysis, so a run
+    on it would spend money on a case nobody can act on, and would be checked against the
+    quota before it was refused; nothing is enqueued and no quota row is written); 429
+    over `ANALYZE_QUOTA_PER_USER_DAY`; 409 when `enqueue()` returns `None` (a run is
+    already live for this case — the single-flight index, not a query); 202
+    `{run_id, job_id}` otherwise.
 
     Every non-2xx path rolls back first (`web/routers/tier1.py`'s `_conflict_response`
     precedent — a returned `Response` is a success as far as `get_conn` is concerned and
@@ -75,9 +87,14 @@ def api_analyze(conn: Conn, claims: Tier2, cfg: Cfg, case_id: uuid.UUID) -> dict
     403's)."""
     case_id_str = str(case_id)
 
-    if not _case_exists(conn, case_id_str):
+    status = _case_status(conn, case_id_str)
+    if status is None:
         conn.rollback()
         raise HTTPException(status_code=404, detail="case not found")
+
+    if status != OPEN_CASE_STATUS:
+        conn.rollback()
+        raise HTTPException(status_code=409, detail="case đã kết luận")
 
     if _analyze_quota_count(conn, claims.user_id) >= cfg.ANALYZE_QUOTA_PER_USER_DAY:
         conn.rollback()
@@ -105,9 +122,12 @@ def api_analyze(conn: Conn, claims: Tier2, cfg: Cfg, case_id: uuid.UUID) -> dict
 
 @router.get("/runs/{run_id}")
 def api_get_run(conn: Conn, claims: Tier2, run_id: uuid.UUID) -> dict[str, Any]:
-    """`{status: "done", result, evidence_check, citation_warnings}` once the row
-    exists; `{status: "running"}` while a live `investigate` job's deterministic id
-    matches and no row exists yet; **404** otherwise.
+    """`{status: "done", result, evidence_check, citation_warnings, stopped_by}` once the
+    job's FINAL row exists (`stopped_by` is `null` on a normal answer; `cap` / `permanent`
+    / `linter` / `schema` / `transient` say why `result` is `null` — N13);
+    `{status: "running"}` while a live `investigate` job's deterministic id matches and no
+    final row exists yet — which includes the gap between two attempts, whose transient
+    rows sit under attempt-scoped ids this route never looks up (B1); **404** otherwise.
 
     The suggestion-visibility rule (§6.4: "the suggestion of ① is removed from any
     response while `suggestion_visible = false`") does **not** apply here — ② is
@@ -119,17 +139,18 @@ def api_get_run(conn: Conn, claims: Tier2, run_id: uuid.UUID) -> dict[str, Any]:
     # any run; there is no per-case ownership column to filter on (`web/routers/
     # tier2.py`'s `list_cases`/`case_detail` have none either).
     row = conn.execute(
-        "SELECT result, evidence_check, citation_warnings FROM llm_runs "
+        "SELECT result, evidence_check, citation_warnings, stopped_by FROM llm_runs "
         "WHERE run_id = %s AND pipeline = 'investigate'",
         (str(run_id),),
     ).fetchone()
     if row is not None:
-        result, evidence_check, citation_warnings = row
+        result, evidence_check, citation_warnings, stopped_by = row
         return {
             "status": "done",
             "result": result,
             "evidence_check": evidence_check,
             "citation_warnings": citation_warnings,
+            "stopped_by": stopped_by,
         }
 
     live_job_ids = conn.execute(

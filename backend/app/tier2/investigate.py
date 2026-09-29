@@ -32,35 +32,47 @@ for non-timeout errors could in theory push a single send past 120 s across up t
 14.65 s and at the 12.8 k real-corpus ceiling is 14.68 s — the practical number is under
 30 s even with a repair, far inside the 240 s theoretical bound and the 300 s job lock.
 
-**The isolation level (Director item 4).** `dossier.build()` is attempted under
-`REPEATABLE READ READ ONLY` — see `_try_repeatable_read_only()` below and the report for
-whether the worker's transaction shape allows it.
+**The isolation level (Director item 4).** `dossier.build()` runs under `REPEATABLE READ`
+(not `READ ONLY` — this handler still writes in the same transaction); see
+`_set_repeatable_read()` below. A failure to set it is loud (`PermanentError`), never a
+silent fallback.
+
+**One `run_id` per outcome, one row per failed attempt (review round 1, B1).** `llm_runs`
+is append-only with `run_id` as its primary key, so a retried job cannot write its row
+twice under one id. A non-final attempt that ends transient (a timeout, a 5xx) writes its
+row — carrying whatever paid calls it made — under `attempt_run_id(job_id, attempts)`;
+only the job's *final* outcome (success, a permanent error, or the last attempt) uses
+`run_id_for_job(job_id)`, the id the route returned in the 202.
+
+**The injection scan is per block (review round 1, B2)** — `_scan_for_injection`; the
+evidence check accepts a quote copied from the dossier's escaped text (B3) and rejects
+quotes too short to prove anything (S4) — `_check_evidence`; every paid call is costed on
+whichever row its attempt writes (S7) — `llm.investigate.Spend`; and a concurrent
+`conclude` cannot cost the run its row (S5) — the end of `run_investigate_job`.
 """
 
 from __future__ import annotations
 
+import html
 import uuid
 from functools import partial
 from typing import Any
 
+import httpx
 import psycopg
+import psycopg.errors
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from app.audit.llm_runs import month_spend_usd
 from app.infra import config
-from app.infra.errors import PermanentError
+from app.infra.errors import PermanentError, TransientError
 from app.infra.jobs import Job
 from app.llm import investigate as llm_investigate
-from app.llm.adapter import (
-    DeepSeekAdapter,
-    LLMBudgetExceeded,
-    LLMPermanent,
-    LLMTimeout,
-    cost_usd,
-)
+from app.llm.adapter import DeepSeekAdapter, LLMBudgetExceeded, LLMPermanent, cost_usd
 from app.llm.triage import prompt_version
 from app.security import detector, wrap
+from app.security.gate import _norm
 from app.tier2 import dossier as dossier_mod
 
 #: uuid5(NAMESPACE_URL, "https://ai-support-soc/llm_runs/investigate") — a fixed
@@ -76,7 +88,17 @@ RUN_NAMESPACE = uuid.UUID("9c411a22-9778-5fc9-8403-1b7ec9e85b9f")
 
 
 def run_id_for_job(job_id: int) -> uuid.UUID:
+    """The id of a job's FINAL outcome row — the one `POST /analyze` returned in its 202
+    and `GET /runs/{run_id}` looks up."""
     return uuid.uuid5(RUN_NAMESPACE, f"investigate:{job_id}")
+
+
+def attempt_run_id(job_id: int, attempts: int) -> uuid.UUID:
+    """The id of a NON-final attempt's transient row (review round 1, B1). `attempts` is
+    `Job.attempts` — `claim_job` increments it, so it is 1-based and differs on every
+    retry of the same job. Never returned to a caller: a route only ever names
+    `run_id_for_job(job_id)`."""
+    return uuid.uuid5(RUN_NAMESPACE, f"investigate:{job_id}:attempt:{attempts}")
 
 
 def _raise_idle_timeout(conn: psycopg.Connection, cfg: config.Config) -> None:
@@ -90,69 +112,52 @@ def _raise_idle_timeout(conn: psycopg.Connection, cfg: config.Config) -> None:
     )
 
 
-def _try_repeatable_read_only(conn: psycopg.Connection) -> bool:
-    """`REPEATABLE READ` for the dossier read (design note 4), called right after the
-    idle-timeout raise above and before any other statement.
+def _set_repeatable_read(conn: psycopg.Connection) -> None:
+    """`REPEATABLE READ` for the dossier read (design note 4), issued right after the
+    idle-timeout raise above and before any other statement. A failure is loud (S6): the
+    statement is the handler's isolation guarantee, so a handler that could not get it
+    must not carry on without it.
 
     **Deviation from the card's literal words, measured rather than guessed.** Design
-    note 4 asks for `REPEATABLE READ READ ONLY`. Four things were tried:
+    note 4 asks for `REPEATABLE READ READ ONLY`. Three things were tried:
 
     1. A bare `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY` in this
-       position — i.e. after `infra/db.py::transaction()`'s own `BEGIN` +
-       `SET LOCAL statement_timeout` + `SET LOCAL idle_in_transaction_session_timeout`,
-       and this module's own second `SET LOCAL idle_in_transaction_session_timeout`
-       raise — **succeeds as a statement**. Postgres requires `SET TRANSACTION
-       ISOLATION LEVEL` to precede any statement that reads or writes a table; a
-       `SET LOCAL <parameter>` is a session-parameter change, not table access, so
-       none of the four prior statements count against that rule.
+       position — after `infra/db.py::transaction()`'s own `BEGIN` + two `SET LOCAL`s and
+       this module's own third — **succeeds as a statement**: Postgres requires `SET
+       TRANSACTION ISOLATION LEVEL` to precede any statement that reads or writes a
+       table, and a `SET LOCAL <parameter>` is not table access.
     2. **But `READ ONLY` breaks the handler**, because it is not scoped to "just the
        dossier read" — it applies to the rest of this *same* worker-provided
        transaction, and this handler still has to write the `llm_runs` row and update
-       `cases.last_analyzed_at` later in that same transaction (design note 3(b));
-       both then fail with `psycopg.errors.ReadOnlySqlTransaction: cannot execute
-       INSERT in a read-only transaction`. `SET TRANSACTION READ WRITE` cannot lift it
-       partway through either — it is the same `SET TRANSACTION` command, bound by the
-       same "before any query" rule, and by the time the dossier's own queries have
-       run there is no query-free point left in this transaction to issue it from.
-       Ending the transaction early to start a fresh read-write one would leave this
-       handler's writes outside the worker's own commit boundary — the "not
-       restructure the worker" the card ropes off, since `infra/worker.py::
-       _run_claimed_job` commits the handler's writes and the `succeeded` status
-       together in one transaction it owns, not one this handler is free to split.
-       **So `READ ONLY` is dropped**; `REPEATABLE READ` alone gives the property design
-       note 4 is actually after — one consistent snapshot across the dossier's nine
-       blocks — without conflicting with the write this same transaction must still
-       do. Verified directly against the real test database: a `SELECT` followed by an
-       `INSERT` both succeed under plain `REPEATABLE READ` in this position.
-    3. Wrapping the `SET TRANSACTION ISOLATION LEVEL` statement in a `SAVEPOINT` first
-       — the seemingly safer choice, so a rejection would abort only the attempt,
-       never the idle-timeout raise already in this transaction — **always fails**,
-       with `psycopg.errors.ActiveSqlTransaction: SET TRANSACTION ISOLATION LEVEL must
-       not be called in a subtransaction`. Postgres refuses this specific statement
-       inside *any* savepoint, regardless of what ran before the savepoint — a
-       savepoint-based safety net is unusable for this one statement.
-    4. If something other than a savepoint has already queried this transaction —
-       true only when a caller does not respect "first statement" (never the real
-       worker; nothing in `test_investigate.py`'s own tests does this to
-       `run_investigate_job` either, by construction — see `_build_case_with_head`'s
-       docstring) — Postgres refuses with `SET TRANSACTION ISOLATION LEVEL must be
-       called before any query` and the transaction is now aborted; the only recovery
-       is a full `ROLLBACK`, so this function performs one and reports `False` rather
-       than raising into the worker's generic handler-exception path, per the card's
-       explicit permission to report rather than restructure. The caller
-       (`run_investigate_job`) re-applies `_raise_idle_timeout` immediately after
-       (idempotent, cheap) since the rollback undid it too, and continues without the
-       stronger isolation level.
+       `cases.last_analyzed_at` later in it (design note 3(b)); both then fail with
+       `ReadOnlySqlTransaction`. `SET TRANSACTION READ WRITE` cannot lift it partway
+       through (same command, same "before any query" rule), and ending the transaction
+       early would put this handler's writes outside the worker's own commit boundary
+       (`infra/worker.py::_run_claimed_job` commits the handler's writes and the
+       `succeeded` status together). **So `READ ONLY` is dropped**; `REPEATABLE READ`
+       alone gives the property design note 4 is actually after — one consistent snapshot
+       across the dossier's nine blocks — without conflicting with the write.
+    3. Wrapping the statement in a `SAVEPOINT` always fails (`ActiveSqlTransaction`:
+       "must not be called in a subtransaction"), so there is no savepoint-based safety
+       net for this one statement.
 
-    Name kept as `_try_repeatable_read_only` (not renamed to `_try_repeatable_read`)
-    so a reader grepping for the card's own words finds this function and its
-    docstring explaining the departure, rather than nothing."""
+    **No fallback (review round 1, S6).** The first version of this function answered a
+    rejection ("must be called before any query" — a caller that did not respect "first
+    statement") with a full `ROLLBACK`, a `False` return, and a handler that carried on
+    at the default `READ COMMITTED`: a dossier read across several snapshots, silently.
+    That is the one thing this statement exists to prevent, so a rejection is now a
+    `PermanentError` — the contract was broken by the caller, a retry would break it the
+    same way, and the worker's own path fails the job loudly. A connection-level failure
+    (`OperationalError`) is not a contract failure and is left to the worker's transient
+    path."""
     try:
         conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-    except psycopg.Error:
-        conn.rollback()
-        return False
-    return True
+    except psycopg.OperationalError:
+        raise
+    except psycopg.Error as exc:
+        raise PermanentError(
+            f"could not set REPEATABLE READ for the dossier read: {str(exc).strip()}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -201,16 +206,16 @@ def _write_llm_run(
     system_prompt: str,
     user_message: str,
     agent_trace: dict[str, Any] | None,
-    result: dict[str, Any] | None,
-    evidence_check: dict[str, Any] | None,
-    citation_warnings: list[str] | None,
-    injection_findings: list[dict[str, Any]] | None,
     input_tokens: int | None,
     output_tokens: int | None,
     latency_ms: int | None,
     model_id: str | None,
     cost_usd_value: float | None,
     stopped_by: str | None,
+    result: dict[str, Any] | None = None,
+    evidence_check: dict[str, Any] | None = None,
+    citation_warnings: list[str] | None = None,
+    injection_findings: list[dict[str, Any]] | None = None,
 ) -> None:
     conn.execute(
         _LLM_RUNS_INSERT_SQL,
@@ -240,6 +245,51 @@ def _write_llm_run(
     )
 
 
+def _usage_columns(
+    usage: dict[str, Any], latency_ms: int, model: str | None, cfg: config.Config
+) -> dict[str, Any]:
+    """The five `llm_runs` columns one set of paid calls fills."""
+    return {
+        "input_tokens": usage.get("prompt_tokens"),
+        "output_tokens": usage.get("completion_tokens"),
+        "latency_ms": latency_ms,
+        "model_id": model,
+        "cost_usd_value": cost_usd(usage, cfg),
+    }
+
+
+def _spend_columns(spend: llm_investigate.Spend, cfg: config.Config) -> dict[str, Any]:
+    """Whatever this attempt actually paid for (S7) — the first call's usage when the
+    repair call then raised, both calls' when the repair prompt failed after the fact —
+    or all NULL when no call was answered (a first-call timeout has no usage to record)."""
+    if not spend.calls:
+        return {
+            "input_tokens": None,
+            "output_tokens": None,
+            "latency_ms": None,
+            "model_id": None,
+            "cost_usd_value": None,
+        }
+    return _usage_columns(spend.usage, spend.latency_ms, spend.model, cfg)
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """Whether a failed LLM step is worth a retried attempt (and so an attempt-scoped
+    row). `TransientError` covers `LLMTimeout`; a transport error and an HTTP status
+    `>= 500` (the adapter re-raises the raw provider error, carrying `.status_code`,
+    once its own retries are spent) are the other two shapes `infra/errors.classify`
+    calls transient. Deliberately NOT `classify()` itself: that call counts an
+    unclassified exception as a side effect (the worker's health line reads it) and
+    would make this handler write a row for a programming bug (`TypeError`, ...) — an
+    exception this predicate does not recognise is simply re-raised, untouched."""
+    if isinstance(exc, (TransientError, httpx.TransportError)):
+        return True
+    status = getattr(exc, "status_code", None)
+    if not isinstance(status, int):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    return isinstance(status, int) and status >= 500
+
+
 def _snapshot_trace(dossier: llm_investigate.DossierLike) -> dict[str, Any]:
     """The P7-2 snapshot plus `Dossier.truncations`/`estimated_tokens`, together in
     `agent_trace` (this card's choice — see the report; `result` stays the pure
@@ -267,60 +317,87 @@ _EVIDENCE_ALERTS_SQL = """
 """
 
 
+#: A quote shorter than this, after normalisation, is not evidence (S4): one character
+#: (or a run of spaces) is a substring of nearly every log line, so "verifying" it proves
+#: nothing and would let a hallucinated citation count towards the `verified` list that
+#: keeps a `false_positive` from being overruled. Eight characters is the shortest span
+#: that still holds a real token (an address, a port, a short path, a verb + argument).
+MIN_QUOTE_CHARS = 8
+
+
+def _searchable(text: str) -> tuple[str, str]:
+    """The two forms of an alert's text a quote may have been cut from: the plain text
+    (the model un-escaped what it saw) and the exact escaped form the dossier showed it
+    (`wrap.untrusted_block` NFKC-folds, then `html.escape(..., quote=False)`s, so a
+    `&`, `<` or `>` in a log appears as `&amp;`, `&lt;`, `&gt;` in the dossier — the
+    form a quote copied straight from `dossier.text` carries, B3). Both go through ①'s
+    gate normalisation (`security.gate._norm`: NFKC, whitespace collapsed) so a quote
+    that differs from the log only in spacing still matches — `security.gate.step3_quotes`
+    matches `block.plain` and `block.escaped` the same way."""
+    folded = wrap.normalise(text)
+    return _norm(folded), _norm(html.escape(folded, quote=False))
+
+
 def _check_evidence(
     conn: psycopg.Connection, case_id: str, parsed: dict[str, Any]
 ) -> dict[str, Any]:
     """Per `evidence[i]`: `alert_id` must be a case head or a duplicate of one (DEC-036's
-    query shape) *and* `quote` must be a substring of that alert's `raw_log` or
-    `description` after `security.wrap.normalise` (NFKC) on both sides."""
+    query shape) *and* `quote` must be at least `MIN_QUOTE_CHARS` long after
+    normalisation *and* a substring of that alert's `raw_log` or `description`, plain or
+    escaped (`_searchable`). Rejection reasons: `not_in_case`, `quote_too_short`,
+    `quote_not_found`."""
     rows = conn.execute(_EVIDENCE_ALERTS_SQL, (case_id, case_id)).fetchall()
     texts = {
-        alert_id: (raw_log or "", description or "") for alert_id, raw_log, description in rows
+        alert_id: (*_searchable(raw_log or ""), *_searchable(description or ""))
+        for alert_id, raw_log, description in rows
     }
 
     verified: list[int] = []
     rejected: list[dict[str, Any]] = []
     for index, item in enumerate(parsed.get("evidence") or []):
         alert_id = item.get("alert_id")
-        quote = item.get("quote") or ""
         if alert_id not in texts:
             rejected.append({"index": index, "alert_id": alert_id, "reason": "not_in_case"})
             continue
-        normalised_quote = wrap.normalise(quote)
-        raw_log, description = texts[alert_id]
-        found = bool(normalised_quote) and (
-            normalised_quote in wrap.normalise(raw_log)
-            or normalised_quote in wrap.normalise(description)
-        )
-        if found:
+        quote = _norm(item.get("quote") or "")
+        if len(quote) < MIN_QUOTE_CHARS:
+            rejected.append({"index": index, "alert_id": alert_id, "reason": "quote_too_short"})
+        elif any(quote in text for text in texts[alert_id]):
             verified.append(index)
         else:
             rejected.append({"index": index, "alert_id": alert_id, "reason": "quote_not_found"})
     return {"verified": verified, "rejected": rejected}
 
 
-def _scan_for_injection(dossier: llm_investigate.DossierLike) -> list[detector.Finding]:
-    """`app.security.detector` over the dossier (design note 4). `detector.scan()` is
-    documented to run over per-block `.plain` content, never the assembled prompt
-    (`security/detector.py`'s own module docstring) — but `Dossier`'s public API
-    (`.text`, `.nonce`, `.snapshot`, `.truncations`, `.estimated_tokens`; P5-T03's file,
-    not touched by this card) exposes no block index, so this scans `dossier.text` as
-    one synthetic block. Recorded as a deviation in the report: the practical risk is
-    bounded (the detector's 20+3+5 patterns target injection shapes — base64 runs,
-    imperative-command density, hidden characters, delimiter look-alikes — that the
-    dossier's own short, structural Vietnamese headings do not resemble), and the
-    direction of any false positive is the conservative one (forcing `need_more_data`
-    on a clean case, never the reverse)."""
-    synthetic = wrap.Block(
-        source="context",
-        attrs={},
-        plain=dossier.text,
-        escaped=dossier.text,
-        truncated=False,
-        dropped_bytes=0,
-        rendered=dossier.text,
-    )
-    return detector.scan([synthetic])
+def _scan_for_injection(dossier: dossier_mod.Dossier) -> list[detector.Finding]:
+    """`app.security.detector` over each wrapped block's own body, one block at a time
+    (design note 4; review round 1, B2). `detector.scan()` is documented to run over
+    per-block `.plain` content, never the assembled prompt — and the first version of
+    this function scanned `dossier.text` whole, whose own `<untrusted_data ...>` wrappers
+    trip `heuristic:delimiter_lookalike` (high) on every dossier, so every clean case
+    read `high` and no `false_positive` could ever stand. `Dossier.blocks` (additive,
+    P5-T04 round 1) hands over exactly the `(block_kind, body)` pairs the wrapper
+    rendered — `body` being the block's `plain` text (NFKC-folded, nonce-stripped,
+    truncated, unescaped; no wrapper) — and each becomes one `wrap.Block` here so a
+    finding names the dossier block (`raw_log`, `correlation_samples`, ...) it came from.
+
+    Known limit: the truncation flag is not carried, so a legitimate `[truncated] N bytes
+    dropped` marker `wrap.truncate_block` appended reads as a `fake_truncation_marker`
+    (medium). That level forces nothing (only `high` does), and it is recorded in
+    `injection_findings` for the analyst to see."""
+    blocks = [
+        wrap.Block(
+            source=source,
+            attrs={},
+            plain=body,
+            escaped=body,
+            truncated=False,
+            dropped_bytes=0,
+            rendered=body,
+        )
+        for source, body in dossier.blocks
+    ]
+    return detector.scan(blocks)
 
 
 def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = None) -> None:
@@ -328,10 +405,7 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
     every test passes a fake instead (design note 8)."""
     cfg = config.load()
     _raise_idle_timeout(conn, cfg)
-    if not _try_repeatable_read_only(conn):
-        # The rollback inside _try_repeatable_read_only undid the raise above too
-        # (same transaction) — cheap and idempotent to redo.
-        _raise_idle_timeout(conn, cfg)
+    _set_repeatable_read(conn)
 
     case_id = job.subject_id
 
@@ -351,8 +425,24 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
     system, user = llm_investigate.build(dossier, nonce=nonce, cfg=cfg)
     run_id = run_id_for_job(job.job_id)
     agent_trace = _snapshot_trace(dossier)
+    spend = llm_investigate.Spend()
 
     llm_adapter = adapter or DeepSeekAdapter(cfg, spent_usd=partial(month_spend_usd, conn))
+
+    def write_row(row_id: uuid.UUID, stopped_by: str | None, **outcome: Any) -> None:
+        """This attempt's one `llm_runs` row. The usage columns come from `spend` unless
+        the caller passes its own (`**outcome`) — so a failure row still carries whatever
+        was already paid for (S7)."""
+        _write_llm_run(
+            conn,
+            run_id=row_id,
+            case_id=case_id,
+            system_prompt=system,
+            user_message=user,
+            agent_trace=agent_trace,
+            stopped_by=stopped_by,
+            **{**_spend_columns(spend, cfg), **outcome},
+        )
 
     try:
         result = llm_investigate.investigate(
@@ -361,102 +451,44 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
             nonce=nonce,
             cfg=cfg,
             extra_constants=dossier_mod.DOSSIER_TEMPLATE_CONSTANTS,
+            spend=spend,
         )
-    except LLMTimeout:
-        # Transient (design note 3(d)): the row must survive the reschedule, and the
-        # worker's `transaction()` rolls back the whole handler transaction on any
-        # exception it lets through — so this commits explicitly before re-raising,
-        # the same "commit before the caller sees the failure" shape `deps.require_role`
-        # uses for its own 403 (P4 planning decision 3), applied to a job instead of a
-        # route.
-        _write_llm_run(
-            conn,
-            run_id=run_id,
-            case_id=case_id,
-            system_prompt=system,
-            user_message=user,
-            agent_trace=agent_trace,
-            result=None,
-            evidence_check=None,
-            citation_warnings=None,
-            injection_findings=None,
-            input_tokens=None,
-            output_tokens=None,
-            latency_ms=None,
-            model_id=None,
-            cost_usd_value=None,
-            stopped_by="transient",
-        )
-        conn.commit()
-        raise
     except LLMBudgetExceeded:
-        _write_llm_run(
-            conn,
-            run_id=run_id,
-            case_id=case_id,
-            system_prompt=system,
-            user_message=user,
-            agent_trace=agent_trace,
-            result=None,
-            evidence_check=None,
-            citation_warnings=None,
-            injection_findings=None,
-            input_tokens=None,
-            output_tokens=None,
-            latency_ms=None,
-            model_id=None,
-            cost_usd_value=None,
-            stopped_by="cap",
-        )
+        write_row(run_id, "cap")
         return  # permanent by nature (the cap will not clear itself) — no retry warranted
     except LLMPermanent:
-        _write_llm_run(
-            conn,
-            run_id=run_id,
-            case_id=case_id,
-            system_prompt=system,
-            user_message=user,
-            agent_trace=agent_trace,
-            result=None,
-            evidence_check=None,
-            citation_warnings=None,
-            injection_findings=None,
-            input_tokens=None,
-            output_tokens=None,
-            latency_ms=None,
-            model_id=None,
-            cost_usd_value=None,
-            stopped_by="permanent",
-        )
+        write_row(run_id, "permanent")
         return
     except PermanentError:
         # The pre-send linter guard (G6′, `llm.investigate._lint_or_raise`) — a
         # template defect, not a model outcome. Caught after the two LLM-specific
         # PermanentError subclasses above so their own `stopped_by` values are not
         # shadowed by this catch-all.
-        _write_llm_run(
-            conn,
-            run_id=run_id,
-            case_id=case_id,
-            system_prompt=system,
-            user_message=user,
-            agent_trace=agent_trace,
-            result=None,
-            evidence_check=None,
-            citation_warnings=None,
-            injection_findings=None,
-            input_tokens=None,
-            output_tokens=None,
-            latency_ms=None,
-            model_id=None,
-            cost_usd_value=None,
-            stopped_by="linter",
-        )
+        write_row(run_id, "linter")
         return
+    except Exception as exc:
+        if not _is_transient(exc):
+            raise
+        # Transient (design note 3(d)): the row must survive the reschedule, and the
+        # worker's `transaction()` rolls back the whole handler transaction on any
+        # exception it lets through — so this commits explicitly before re-raising,
+        # the same "commit before the caller sees the failure" shape `deps.require_role`
+        # uses for its own 403 (P4 planning decision 3), applied to a job instead of a
+        # route.
+        #
+        # B1: `llm_runs.run_id` is a primary key and the table is append-only, so the
+        # retry would die on `llm_runs_pkey` if every attempt wrote `run_id_for_job`.
+        # A non-final attempt writes under its own attempt-scoped id; only the LAST
+        # attempt — after which the job is `failed` and nothing will run again —
+        # writes the id the route handed out, so `GET /runs/{run_id}` answers `running`
+        # between attempts and `done` (stopped_by='transient', result NULL) only once
+        # nothing more will run.
+        is_final = job.attempts >= cfg.JOB_MAX_ATTEMPTS
+        write_row(run_id if is_final else attempt_run_id(job.job_id, job.attempts), "transient")
+        conn.commit()
+        raise
 
-    usage_input = result.usage.get("prompt_tokens")
-    usage_output = result.usage.get("completion_tokens")
-    usage_cost = cost_usd(result.usage, cfg)
+    usage_columns = _usage_columns(result.usage, result.latency_ms, result.model, cfg)
 
     if result.parsed is None:
         # Schema-invalid after the one repair (design note 2: "a second failure sets
@@ -464,24 +496,7 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
         # outcome (`tier1/triage.py`'s `run_triage_job`): write the row with the real
         # usage/cost the calls actually spent, and complete normally — a response was
         # received and recorded, so no retry would change anything.
-        _write_llm_run(
-            conn,
-            run_id=run_id,
-            case_id=case_id,
-            system_prompt=system,
-            user_message=user,
-            agent_trace=agent_trace,
-            result=None,
-            evidence_check=None,
-            citation_warnings=None,
-            injection_findings=None,
-            input_tokens=usage_input,
-            output_tokens=usage_output,
-            latency_ms=result.latency_ms,
-            model_id=result.model,
-            cost_usd_value=usage_cost,
-            stopped_by="schema",
-        )
+        write_row(run_id, "schema", **usage_columns)
         return
 
     evidence_check = _check_evidence(conn, case_id, result.parsed)
@@ -511,22 +526,25 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
         for item in evidence_check["rejected"]
     ]
 
-    _write_llm_run(
-        conn,
-        run_id=run_id,
-        case_id=case_id,
-        system_prompt=system,
-        user_message=user,
-        agent_trace=agent_trace,
+    write_row(
+        run_id,
+        None,
         result=final_result,
         evidence_check=evidence_check,
         citation_warnings=citation_warnings or None,
         injection_findings=detector.as_json(findings),
-        input_tokens=usage_input,
-        output_tokens=usage_output,
-        latency_ms=result.latency_ms,
-        model_id=result.model,
-        cost_usd_value=usage_cost,
-        stopped_by=None,
+        **usage_columns,
     )
-    conn.execute("UPDATE cases SET last_analyzed_at = now() WHERE case_id = %s", (case_id,))
+
+    # S5: under REPEATABLE READ a `cases` row that a concurrent transaction (a Tier-2
+    # `conclude`, ...) changed after this transaction's snapshot cannot be updated —
+    # Postgres raises `SerializationFailure` (40001) and aborts the transaction, which
+    # would throw away the `llm_runs` row just written and the paid call with it. The
+    # timestamp is a convenience and the run row is the record, so the UPDATE runs in a
+    # savepoint: on a serialization failure only the savepoint is rolled back, the
+    # timestamp is skipped, and the row (and the job's success) stand.
+    try:
+        with conn.transaction():
+            conn.execute("UPDATE cases SET last_analyzed_at = now() WHERE case_id = %s", (case_id,))
+    except psycopg.errors.SerializationFailure:
+        pass

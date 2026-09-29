@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -218,6 +218,36 @@ def _sum_usage(usages: list[dict[str, Any]]) -> dict[str, Any]:
     return total
 
 
+@dataclass
+class Spend:
+    """Every paid call `investigate()` made so far, carried out to the caller even when
+    a later call raises (review round 1, S7). A call that fails *after* an earlier one
+    was answered — the repair turn timing out, or the repair prompt failing the linter —
+    still cost the first call's tokens; the exception discards `InvestigateResult`, so
+    without this the job would write that attempt's row with no usage and no cost and
+    the month-to-date cap (`audit.llm_runs.month_spend_usd`) would under-count. Follows
+    ①'s pattern in `tier1/triage.py` ("the proposer's usage is recorded even when the
+    verifier fails"). A call that itself raised has no usage to record: it is simply
+    not here."""
+
+    usages: list[dict[str, Any]] = field(default_factory=list)
+    latency_ms: int = 0
+    model: str | None = None
+
+    def record(self, result: Any) -> None:
+        self.usages.append(result.usage)
+        self.latency_ms += int(result.latency_ms)
+        self.model = result.model
+
+    @property
+    def calls(self) -> int:
+        return len(self.usages)
+
+    @property
+    def usage(self) -> dict[str, Any]:
+        return _sum_usage(self.usages)
+
+
 @dataclass(frozen=True)
 class InvestigateResult:
     content: str  # the last call's `choices[0].message.content`, verbatim
@@ -237,6 +267,7 @@ def investigate(
     nonce: str,
     cfg: Config,
     extra_constants: frozenset[str] = frozenset(),
+    spend: Spend | None = None,
 ) -> InvestigateResult:
     """One call against `investigate_v2`, at most one repair. `response_format={"type":
     "json_object"}` (design note 2); `model` is deliberately not passed — the adapter's
@@ -246,7 +277,9 @@ def investigate(
 
     `LLMTimeout`, `LLMBudgetExceeded` and `LLMPermanent` (`app.llm.adapter`) are not
     caught here: they propagate to `tier2/investigate.py`, which is the module with a
-    connection to record them against (design note 3(d))."""
+    connection to record them against (design note 3(d)). `spend`, when given, receives
+    every *answered* call as it is made — so the caller still sees what the first call
+    cost when the repair call (or the repair prompt's own lint) raises (S7)."""
     system = _system_prompt()
     user = dossier.text
     _lint_or_raise(user, nonce=nonce, extra_constants=extra_constants)
@@ -257,6 +290,8 @@ def investigate(
         response_format={"type": "json_object"},
         timeout_s=cfg.LLM_TIMEOUT_S,
     )
+    if spend is not None:
+        spend.record(result)
     parsed, errors = _parse(result.content)
     usages = [result.usage]
     latency_ms = int(result.latency_ms)
@@ -271,6 +306,8 @@ def investigate(
             response_format={"type": "json_object"},
             timeout_s=cfg.LLM_TIMEOUT_S,
         )
+        if spend is not None:
+            spend.record(result)
         parsed, errors = _parse(result.content)
         usages.append(result.usage)
         latency_ms += int(result.latency_ms)
