@@ -266,15 +266,25 @@ def test_mapping_version_is_pinned_to_a_hash_of_the_four_tables():
     # in category.py in the same commit, then update this literal to match.
     assert digest == "33ed2ec1be828c578f009b33b5e8ec27a746f7353238fa6b46551761bd720f2d"
     # P9-T02 (DEC-149): the four shared tables above still hash to their v3.2 value, so
-    # no alert outside the Windows tier can change category. The Windows tier's table,
-    # with the decoder that guards it, is hashed as well; it is what moved v3.2 -> v3.3.
-    from app.ingest.category import WINDOWS_DECODER, WINDOWS_TECHNIQUE_TO_CATEGORY
+    # no alert outside the Windows tiers can change category. The two Windows tables,
+    # with the decoder that guards them, are hashed as well; they are what moved
+    # v3.2 -> v3.3 (the group table joined before v3.3 was ever merged).
+    from app.ingest.category import (
+        WINDOWS_DECODER,
+        WINDOWS_GROUP_TO_CATEGORY,
+        WINDOWS_TECHNIQUE_TO_CATEGORY,
+    )
 
     windows = json.dumps(
-        {"decoder": WINDOWS_DECODER, "technique": WINDOWS_TECHNIQUE_TO_CATEGORY}, sort_keys=True
+        {
+            "decoder": WINDOWS_DECODER,
+            "technique": WINDOWS_TECHNIQUE_TO_CATEGORY,
+            "group": WINDOWS_GROUP_TO_CATEGORY,
+        },
+        sort_keys=True,
     )
     windows_digest = hashlib.sha256(windows.encode("utf-8")).hexdigest()
-    assert windows_digest == "a75a1be28c4c8f2e97ba458f5f8baf31b881db2016aff3dab52ccad3da6bb60d"
+    assert windows_digest == "06afb21cdcf65fd424b48fcb2012846667013336bdefbd8cc99df435f2bb9f88"
     assert MAPPING_VERSION == "v3.3"
 
 
