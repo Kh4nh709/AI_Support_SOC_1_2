@@ -21,15 +21,21 @@ from app.infra.errors import PermanentError
 from app.soar import pipeline
 from app.tier1 import triage
 from app.web import handlers as handlers_pkg
+from app.web.handlers import health as health_handler
 from app.web.worker import HANDLERS, TIMEOUTS
 
 
-def test_iter_handlers_discovers_the_three_on_main():
+def test_iter_handlers_discovers_every_handler_module_on_main():
+    # P5-T11: a fourth module (health.py) joins pull/pipeline/triage — the set
+    # this asserts grows by one every time a later P5 card adds its own
+    # module, exactly as planning decision 1 intends (P5-tasks.md §6.1);
+    # this test's job is to track that set, not pin it at three forever.
     result = handlers_pkg.iter_handlers()
-    assert set(result) == {"pipeline", "pull", "triage"}
+    assert set(result) == {"pipeline", "pull", "triage", "health"}
     assert result["pull"] is puller.pull_job
     assert result["pipeline"] is pipeline.run_pipeline_job
     assert result["triage"] is triage.run_triage_job
+    assert result["health"] is health_handler.handle
 
 
 def test_iter_timeouts_is_empty_until_a_module_declares_one():
