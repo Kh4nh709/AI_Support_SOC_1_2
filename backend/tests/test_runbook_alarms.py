@@ -23,10 +23,27 @@ fill-in (once P5-T04 merges, DEC-151) does not have to touch this test.
 PURE. No database, no socket, no fixture: reads `docs/runbook.md` and
 `backend/app/infra/health.py` as text only. Runs anywhere the repository is
 checked out, exactly like `test_runbook_pilot.py`.
+
+Review round 1, finding 7: check names are extracted from `infra/health.py`
+by `ast`, not a regex. A regex anchored on `CheckResult(\"` has three blind
+spots, each a *silent* undercount rather than a red test: a check named by
+keyword (`CheckResult(name=...)`, M4) never matches because the pattern
+expects the string right after the opening paren; a name containing a digit
+(M5) is never followed by the closing quote where the character class
+`[a-z_]+` stops, so the match fails outright; and a name held in a variable
+or constant (`CheckResult(_NAME, ...)`, M6) is not a quoted string at all.
+`_extract_check_names` walks the AST instead: a string literal is a string
+literal regardless of position (positional or `name=`) or spelling (digits
+included), which handles M4 and M5 for free, and a `CheckResult(...)` whose
+name argument is *not* a string literal now fails loudly, naming the file
+and line, instead of silently vanishing from the set (M6).
 """
 
+import ast
 import pathlib
 import re
+
+import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 RUNBOOK_PATH = REPO_ROOT / "docs" / "runbook.md"
@@ -39,9 +56,6 @@ TABLE_ROW_RE = re.compile(r"^\|.*\|\s*$", re.MULTILINE)
 # shell command inside one cell).
 CELL_SPLIT_RE = re.compile(r"(?<!\\)\|")
 NAME_CELL_RE = re.compile(r"^`([a-z_]+)`$")
-# Every `CheckResult(...)` call in infra/health.py names its check first,
-# either on the same line or (the multi-line early-return form) the next one.
-CHECK_RESULT_RE = re.compile(r'CheckResult\(\s*"([a-z_]+)"')
 # The quick-reference "Last drill" line's shape, not its literal date, so a
 # later, real drill re-running this line does not have to touch this test —
 # only the line's format is pinned (verdict word, "signed by the Owner", and
@@ -99,9 +113,42 @@ def _table_rows(body: str) -> list[list[str]]:
     return rows
 
 
+def _extract_check_names(source: str, *, where: str) -> set[str]:
+    """Every `CheckResult(...)` call's check name in `source`, by AST
+    (review round 1, finding 7 — see the module docstring for M4/M5/M6).
+    `where` is a filename used only for `ast.parse` and in an assertion
+    message; it need not exist on disk (the M4/M5/M6 tests below pass a
+    synthetic snippet, not a real file)."""
+    tree = ast.parse(source, filename=where)
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "CheckResult"
+        ):
+            continue
+        arg = (
+            node.args[0]
+            if node.args
+            else next((kw.value for kw in node.keywords if kw.arg == "name"), None)
+        )
+        assert arg is not None, (
+            f"{where}:{node.lineno}: a CheckResult(...) call with neither a positional "
+            "first argument nor a name= keyword"
+        )
+        assert isinstance(arg, ast.Constant) and isinstance(arg.value, str), (
+            f"{where}:{node.lineno}: CheckResult's name is not a string literal "
+            f"({ast.dump(arg)}) — a name held in a variable or constant cannot be "
+            "checked against ## Alarms"
+        )
+        names.add(arg.value)
+    return names
+
+
 def _health_check_names() -> set[str]:
     text = HEALTH_PATH.read_text(encoding="utf-8")
-    names = set(CHECK_RESULT_RE.findall(text))
+    names = _extract_check_names(text, where=str(HEALTH_PATH))
     assert names, f"no CheckResult(...) calls found in {HEALTH_PATH}"
     return names
 
@@ -123,8 +170,41 @@ def _alarm_table_check_names() -> set[str]:
 # --------------------------------------------------------------------------- tests
 
 
+def test_extract_check_names_finds_a_keyword_name_argument():
+    """M4 — a regex anchored on `CheckResult("` misses this; ast does not
+    care whether the name arrived positionally or by keyword."""
+    src = 'x = CheckResult(name="disk_free", ok=True, value=1, threshold=2, detail="d")\n'
+    assert _extract_check_names(src, where="<m4>") == {"disk_free"}
+
+
+def test_extract_check_names_finds_a_name_with_a_digit():
+    """M5 — a regex character class of `[a-z_]+` cannot match a digit, so it
+    is never followed by the closing quote where the class stops: the match
+    fails outright and the name silently vanishes. ast reads the string
+    literal whole, digit included."""
+    src = 'x = CheckResult("digest_unreviewed_2", True, 1, 2, "d")\n'
+    assert _extract_check_names(src, where="<m5>") == {"digest_unreviewed_2"}
+
+
+def test_extract_check_names_fails_loudly_on_a_name_held_in_a_constant():
+    """M6 — a regex requires a literal `"` right after `CheckResult(` and
+    silently finds nothing for `CheckResult(_NAME, ...)`: the check
+    disappears from the set with no error, which would misreport later as
+    `## Alarms` naming a check that "does not exist". ast can tell a `Name`
+    node from a string `Constant` and raises here, naming the line, instead
+    of a silent undercount."""
+    src = '_NAME = "disk_free"\nx = CheckResult(_NAME, True, 1, 2, "d")\n'
+    with pytest.raises(AssertionError, match=r"<m6>:2: .*not a string literal"):
+        _extract_check_names(src, where="<m6>")
+
+
 def test_alarms_heading_appears_once():
-    assert _text().count("## Alarms") == 1
+    # Not a substring count: review round 1's preamble fix (finding 15)
+    # cross-references `` `## Alarms` `` in prose several times, so a naive
+    # `_text().count(...)` over-counts. `_section` anchors on the heading
+    # line itself (`H2_RE`, start of line) and already asserts there is
+    # exactly one; calling it is the test.
+    _section(_text(), "Alarms")
 
 
 def test_alarm_table_has_exactly_ten_rows_on_both_sides():
@@ -150,7 +230,9 @@ def test_alarm_table_matches_health_py_both_directions():
 
 
 def test_restore_drill_heading_appears_once():
-    assert _text().count("## Restore drill (P8)") == 1
+    # Same reasoning as test_alarms_heading_appears_once: the preamble now
+    # cross-references `` `## Restore drill (P8)` `` in prose too.
+    _section(_text(), "Restore drill (P8)")
 
 
 def test_restore_drill_section_points_at_the_full_record_and_a_current_result():
@@ -170,7 +252,13 @@ def test_restore_drill_section_points_at_the_full_record_and_a_current_result():
         "no 'Last drill: <date> UTC — PASS|FAIL — signed by the Owner — "
         "full record `docs/restore-drill.md`' line"
     )
-    assert "dropdb" in section and "soc_restore_drill" in section, "no clean-up rule"
+    assert "drop database" in section and "soc_restore_drill" in section, "no clean-up rule"
+    assert 'psql "$DATABASE_URL_OWNER"' in section, (
+        "the clean-up command should be `psql \"$DATABASE_URL_OWNER\" -c 'drop database ...'` "
+        "(review round 1, finding 4) — a bare `dropdb` reaches libpq's default socket, the "
+        "wrong server on this host; a prose mention warning against it is fine, the command "
+        "itself must not be the bare form"
+    )
 
 
 def test_two_circle_operations_heading_present_with_some_content():
@@ -178,9 +266,10 @@ def test_two_circle_operations_heading_present_with_some_content():
     P5-T04 merges, DEC-151): today it must be the one-line DEC-151 stub, but
     this assertion only requires the heading to exist once with a non-empty
     body, so a later real ② write-up does not have to touch this test."""
-    text = _text()
-    assert text.count("## ② operations") == 1
-    body = _section(text, "② operations").strip()
+    # Anchored on the heading line via _section (not a substring count —
+    # see test_alarms_heading_appears_once), so a future prose
+    # cross-reference to `` `## ② operations` `` elsewhere cannot break this.
+    body = _section(_text(), "② operations").strip()
     assert body, "## ② operations has no content — at least the DEC-151 stub line is required"
 
 
