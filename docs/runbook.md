@@ -1,5 +1,5 @@
 # Runbook — AI Support SOC v3
-This file is P8's deliverable (`docs/plan/prompts/P8.md`): P4-T07 created it with the `## Pilot` section only; P8-T03 extended it on 26/09/2026 with the five operating sections before `## Pilot` (start and stop, environment keys, backup and restore, what to watch, common failures).
+This file is P8's deliverable (`docs/plan/prompts/P8.md`): P4-T07 created it with the `## Pilot` section only; P8-T03 extended it on 26/09/2026 with the five operating sections before `## Pilot` (start and stop, environment keys, backup and restore, what to watch, common failures). Coder P5-T13 (Director 1, DEC-151 wave 3) added **Alarms**, **Restore drill (P8)** and the **② operations** stub on 29/09/2026, once P5-T11 (health/notify) and P5-T12 (backup/restore) had merged.
 
 Every command in those five sections runs **from the primary checkout**, in one shell that has sourced `.env` — never from an agent's worktree, which has no `.env` and whose `docker compose` addresses a different compose project: `cd /project/project/AI_Support_SOC_1_2 && set -a; . ./.env; set +a; echo "${DATABASE_URL:+env ok}"` → `env ok`. No value from `.env` is restated here (DEC-070). *(not run by the agent)* marks an expected output only the live stack can give; every other one was measured by P8-T03 on this host, on a private `soc_p8t03_*_test` database standing in for `soc_dev` (`docs/plan/tasks/P8/P8-T03.report.md`).
 
@@ -45,8 +45,8 @@ The 62 keys of `.env.example`, one row each, no values. `.env.example` is genera
 | `PULL_PAGE` | hits per indexer page | default | no |
 | `PULL_START` | where the first pull starts when `source_cursor` is empty | default | no |
 | `HEARTBEAT_RULE_ID` | the manager heartbeat's rule: recorded in `intake`, never an alert | default | no |
-| `HEARTBEAT_MAX_AGE_MIN` | read by nothing (the health job, P5-T11, was not built) | default | no |
-| `SILENCE_WARN_HOURS` | read by nothing (P5-T11) | default | no |
+| `HEARTBEAT_MAX_AGE_MIN` | the health job's `heartbeat` check: how old `source_heartbeat` may be before it alarms, minutes (**Alarms**) | default | no |
+| `SILENCE_WARN_HOURS` | read by nothing (the health job, P5-T11, uses its own `heartbeat` check instead) | default | no |
 | `JOB_MAX_ATTEMPTS` | attempts per job; then `failed` and a `job.exhausted` event | default | no |
 | `JOB_BACKOFF` | seconds before each retry | default | no |
 | `JOB_LOCK_TIMEOUT_S` | a `running` job locked longer than this is re-queued by the worker | default | no |
@@ -79,14 +79,49 @@ The 62 keys of `.env.example`, one row each, no values. `.env.example` is genera
 | `BACKUP_HOUR` | the nightly backup's hour, written into `conf/soc-backup.cron` as `0 2 * * *`; the key itself is read by nothing at run time | default | no |
 | `EVAL_BLIND_FRACTION` | the share of alerts whose ① suggestion is hidden (the blind branch) | default | no |
 | `DISPLAY_TZ` | the timezone of the times on the pages | default | no |
-| `NOTIFY_TELEGRAM_BOT_TOKEN` | read by nothing (`infra/notify.py` was not built) | Owner | yes |
-| `NOTIFY_TELEGRAM_CHAT_ID` | read by nothing (the same) | Owner | yes |
+| `NOTIFY_TELEGRAM_BOT_TOKEN` | the health job's alarm sink (`infra/notify.py`): set together with the chat id → Telegram; either empty → the log sink (**Alarms**) | Owner | yes |
+| `NOTIFY_TELEGRAM_CHAT_ID` | the Telegram chat an alarm is sent to — the same condition as `NOTIFY_TELEGRAM_BOT_TOKEN` | Owner | yes |
 | `POSTGRES_USER` | Compose: the `db` superuser, owner of every object | default | no |
 | `POSTGRES_PASSWORD` | Compose: its password; `docker compose` refuses to start without it | Owner | yes |
 | `POSTGRES_DB` | Compose: the database name | default | no |
 | `DB_PORT` | Compose: `db`'s port on the host | default | no |
 | `APP_RW_PASSWORD` | Compose: `app_rw`'s password, set by `01-roles.sh` on a first start | Owner | yes |
 | `INDEXER_HOST_IP` | Compose: the indexer's address as the containers see it; empty means `host-gateway`, this host | Owner | no |
+
+## Alarms
+
+`infra/health.py` runs ten checks every 5 minutes (the `health` job, re-armed by every worker start — see "Noticing a dead chain" below) and writes one `system_health` row per run. **The alarm state is the set of currently-failing check names, not a single ok/alarm flag.** A notification goes out whenever that set changes in either direction — a new failure, a recovery, or both together — but `audit_events.health.alarm` (payload `{"failing": […], "new": […]}`) is written only when a name is **new** to the failing set that tick; a tick that only recovers (the set shrinks, nothing new joins) still notifies but writes no `health.alarm` row. The daily 08:05 `DISPLAY_TZ` summary notifies the same way and never writes `health.alarm` either — it is a roll-up, not an event.
+
+| check | threshold | what it means | first look | what to do |
+|---|---|---|---|---|
+| `heartbeat` | `HEARTBEAT_MAX_AGE_MIN` = 30 min (§6.3 default) | no row in `source_heartbeat` newer than the threshold — the manager's heartbeat (rule `100999`) has not reached `intake` in time | `psql "$DATABASE_URL" -Atc "select extract(epoch from (now() - max(last_seen_at)))/60 from source_heartbeat"` | Common failures, "Indexer down, or its certificate rejected" |
+| `intake_backlog` | 5 min (module constant, no §6.3 key) | the oldest unprocessed `intake` row has waited past the threshold — the `pipeline` job is not draining intake (breaks G12) | `psql "$DATABASE_URL" -Atc "select extract(epoch from (now() - min(received_at)))/60 from intake where processed_at is null and error is null"` | What to watch, "pending jobs by type"; then restart the worker |
+| `job_backlog` | 10 min (module constant) | a due `pending` job has waited past the threshold — the worker loop is not claiming jobs | `psql "$DATABASE_URL" -Atc "select extract(epoch from (now() - min(scheduled_at)))/60 from jobs where status='pending' and scheduled_at <= now()"` | Common failures, "Worker stuck" |
+| `llm_null_ratio` | 30% of the last hour's `llm_runs` (module constant) | more than three in ten model calls in the last hour came back with a null result | `psql "$DATABASE_URL" -Atc "select count(*) filter (where result is null), count(*) from llm_runs where created_at > now() - interval '1 hour'"` | Common failures, "Model API down" |
+| `triage_unavailable` | 10% of the last 24h's `alerts` (module constant) | more than one alert in ten received in the last day ended `triage_status='unavailable'` — ① gave up on it | `psql "$DATABASE_URL" -Atc "select count(*) filter (where triage_status='unavailable'), count(*) from alerts where received_at > now() - interval '24 hours'"` | Common failures, "Model API down"; or the `monthly_cost` row below if the cap was hit |
+| `monthly_cost` | 80% of `LLM_MONTHLY_USD_CAP` (§6.3 default $30 → alarms at $24) | this month's `llm_runs.cost_usd` has reached the threshold; ① stops entirely (`stopped_by='cap'`) at 100% | `psql "$DATABASE_URL" -Atc "select round(coalesce(sum(cost_usd),0),2) from llm_runs where date_trunc('month', created_at) = date_trunc('month', now())"` | Common failures, "Monthly cap reached" — expected near month-end on a low cap, not a defect |
+| `backup_age` | 36h (module constant) | the newest `backups/soc-*.dump` (falling back to `latest.dump`) is older than the threshold, or there is none. Reads `/srv/backups` **inside** the app/worker containers — `./backups:/srv/backups:ro`, added to `docker-compose.yml` at the P5-T11 merge; a mount change needs `docker compose up -d`, not `restart` | `ls -lt backups/soc-*.dump 2>/dev/null \| head -1` (host) or `docker compose exec -T app ls -lt /srv/backups/soc-*.dump` (what the check itself reads) | Backup and restore, above — check the schedule is armed, run `bash scripts/backup.sh` by hand |
+| `inventory_empty` | `assets` count > 0 (literal) | the inventory table is completely empty — says nothing about coverage, only that it is not zero | `psql "$DATABASE_URL" -Atc "select count(*) from assets"` | `POST /api/admin/reload-inventory` as `admin`, or Pilot §1 row c |
+| `digest_unreviewed` | 0 misses; only evaluated from 17:00 `DISPLAY_TZ` onward (`ok` unconditionally before that — module constant hour) | at least one of yesterday's auto-closed, non-synthetic alerts still has no `autoclose_reviews` row after 17:00 local | `/admin/digest`, or `psql "$DATABASE_URL" -Atc "select count(*) from alerts a left join autoclose_reviews r on r.alert_id=a.alert_id where a.status='auto_closed' and not a.is_synthetic and a.closed_at >= date_trunc('day', now(), 'Asia/Ho_Chi_Minh') - interval '1 day' and a.closed_at < date_trunc('day', now(), 'Asia/Ho_Chi_Minh') and r.alert_id is null"` | review the digest page (P5-T09); nothing to do before 17:00 |
+| `disk_free` | 20% free (module constant) | less than a fifth of the filesystem under the working directory (`/srv` in the containers) is free | `docker compose exec -T app df -h /srv`, or on the host `df -h --output=pcent . \| tail -1` | prune beyond the 14 kept dumps (should not be needed — `backup.sh` already prunes), check other growth, grow the volume |
+
+**What is expected, and what would be news.** This section was written without querying `soc_dev` or running `docker` (P5-T13's working rules) — read `GET /health`, below, for the live state. `backup_age` should read `ok` as long as the crontab armed on 26/09 (Backup and restore, above) keeps firing; `crontab -l \| grep -c backup.sh` reading `0` explains an alarm here without being a code defect. `inventory_empty` should read `ok` once `assets` is non-empty (loaded since 15/09, Pilot §1 row c) — but a non-empty inventory says nothing about coverage: an asset outside `conf/inventory.yaml` also reads `unknown` and is hard-blocked from auto-close (G8′), silently, which this check cannot see (`docs/limitations.md`). `digest_unreviewed` reads `ok` all day until 17:00 local, and is expected `ok` for as long as no auto-close rule exists (P5-T10 is an Owner action — no rule, no auto-closed alerts, nothing to miss). `monthly_cost` should stay well under 80% for most of a month on the default cap. The other five — `heartbeat`, `intake_backlog`, `job_backlog`, `llm_null_ratio`, `triage_unavailable`, `disk_free` — are expected `ok` whenever the stack is healthy; any of them firing is news, and the matching Common failures row is where to start.
+
+**Noticing a dead chain.** A dead worker, or a dead `health` chain on its own, raises no alarm of its own — it shows only as a stale `checked_at`. The `health` job re-enqueues itself every 300 s; if the worker process is down, or the `health` chain alone died (an exception past its retries), no new `system_health` row is written and no check ever fires, because nothing runs to fire it. Notice it by the row's own age, not by waiting for a red check: read `checked_at` from `GET /health` (below), or `psql "$DATABASE_URL" -Atc "select now() - checked_at from system_health order by checked_at desc limit 1"` — under about ten minutes is healthy (the job runs every 5 minutes); older than that, the chain stopped. **The repair is the same for any of the three self-scheduling chains** (`pull`, `health`, `digest`): every worker start re-arms all three — `web/worker.py`'s `main()` runs `enqueue(conn, "pull", "indexer")`, `enqueue(conn, "health", "system")` and `digest.ensure_scheduled(conn)`, all idempotent, before the loop starts — so `docker compose restart worker` re-arms a dead chain with no other action. `PYTHONPATH=backend python3 -m app.tier1.digest --ensure --env-file .env` still exists to re-arm just the `digest` chain by hand, without restarting the worker.
+
+**Reading the live state — `GET /health` is loopback-open only *inside* the app container.** Under `docker-compose.yml`, port 8000 is published on `0.0.0.0` through Docker's own `docker-proxy`, so a request from the host itself is **not** loopback and answers `403` without an admin session — even from the Docker host, and even though `make run-app`'s bare-host form made that exemption work. The command that works under compose:
+
+```bash
+docker compose exec -T app python -c "import urllib.request as u;print(u.urlopen('http://127.0.0.1:8000/health').read().decode())"
+```
+
+An admin session in the browser also works (`http://<host>:8000/health`, signed in as `admin`). The body is exactly `{"checked_at": …, "checks": […], "ok": …}` — the newest `system_health` row, no DSN, no secret, no filesystem path.
+
+**Where an alarm goes.** `infra/notify.py` sends to Telegram only when both `NOTIFY_TELEGRAM_BOT_TOKEN` and `NOTIFY_TELEGRAM_CHAT_ID` are set in `.env`; Telegram is optional, and the bot token is never logged (silenced at the `httpx` logger too, not only this module's own). With either unset — the default on this host — every alarm goes to the **log sink** instead: one JSON line per send, `{"notify_sink": "log", "level": "alarm"|"ok", "text": "…"}`. Read them from the worker's own log:
+
+```bash
+docker compose logs worker | grep notify_sink
+```
 
 ## Backup and restore
 
@@ -116,11 +151,28 @@ make db-restore FILE=backups/soc-<UTC stamp>.dump    # the dump that just rehear
 
 → `db-restore: server 16, /usr/lib/postgresql/16/bin/pg_restore`; compose stops `app` and `worker`; `db-restore: backups/soc-….dump → soc_dev (17 migrations)`; compose starts them *(not run by the agent)*. Before it stops anything it asks the server its major version and reads the dump with that version's `pg_restore` (P8-T07). **Exit 2** (`… nothing was stopped or dropped`): the server did not answer (`make db-up`), the only `pg_restore` is newer than the server, or it cannot read the dump. **`FAILED at drop` or `FAILED at restore`**: the target has already started `app` and `worker` again, on a missing or partial database. Run `docker compose stop app worker` **at once**; repair: rehearse the next-newest `soc-*.dump`, then `make db-restore FILE=<it>`; then `docker compose up -d app worker`.
 
-The drill's record is `docs/restore-drill.md` (P8-T02: a `backup.sh` dump of `soc_dev` restored into `soc_restore_drill`, counts before ≤ restored ≤ after).
+The drill's full record is `docs/restore-drill.md` (P8-T02: a `backup.sh` dump of `soc_dev` restored into `soc_restore_drill`, counts before ≤ restored ≤ after).
 
-## What to watch (there is no alarm)
+## Restore drill (P8)
 
-`infra/health.py` was not built (P5-T11 deprioritized, DEC-116): the file is a one-line skeleton, nothing checks the system and nothing sends an alarm. Run these by hand, each morning and after every change; the last column is the healthy answer.
+P8-T02 runs the drill (30/09) and fills the table below; this card (P5-T13) deliberately leaves it empty — the ten fields are a pasteable, quick-reference summary of what `restore.sh`'s printed block and `make test-db` gave on the day, not a replacement for the fuller `docs/restore-drill.md` record above.
+
+| field | value |
+|---|---|
+| date | |
+| dump used | |
+| target database | |
+| `pg_restore` exit | |
+| `schema_migrations` count | |
+| five table counts (`alerts` / `intake` / `llm_runs` / `jobs` / `audit_events`) | |
+| `make test-db` result | |
+| elapsed | |
+| who ran it | |
+| verdict | |
+
+## What to watch (manual checks, beyond the ten alarms)
+
+`infra/health.py` now runs the ten checks of **Alarms**, above, automatically every 5 minutes and sends on any change — read `GET /health` or the alarm before reaching for these. The manual checks below still earn their place: for what the ten checks do not cover (the ① `stopped_by` breakdown, per-job-type backlog, another test run on the server) and as a second look when you would rather read the numbers yourself. Run these by hand, each morning and after every change; the last column is the healthy answer.
 
 | watch | command | healthy |
 |---|---|---|
@@ -144,6 +196,10 @@ Every `psql` check below ran on the stand-in; the failure answers `no response`,
 | **Worker stuck**: pending jobs growing, a `running` job older than `JOB_LOCK_TIMEOUT_S` | `psql "$DATABASE_URL" -Atc "select job_type, date_trunc('second', now() - locked_at) from jobs where status = 'running' order by locked_at limit 3"` → an age above `00:05:00` | `docker compose restart worker`: the loop re-queues every `running` job locked longer than `JOB_LOCK_TIMEOUT_S` (300 s) and runs the `pull` again; `docker compose logs --tail=5 worker` then shows `"outcome": "succeeded"`. |
 | **Database container down**: pages fail, `psql` cannot connect | `docker compose ps db` · `pg_isready -h 127.0.0.1 -p "${DB_PORT:-55432}"` → `127.0.0.1:55432 - no response` | `make db-up` (it returns once `db` is healthy), then `docker compose restart app worker`. Never `docker compose down -v`. |
 | **`JWT_SECRET` unset**: the login answers `503` | `grep -c '^JWT_SECRET=.\+' .env` → `0` · `curl -s -X POST http://127.0.0.1:8000/api/auth/login -H 'Content-Type: application/json' -d '{"username":"precheck-nobody","password":"x"}'` → `{"detail":"auth disabled: JWT_SECRET unset"}` | `.venv/bin/python -c "import secrets; print(secrets.token_hex(32))"` → paste as `JWT_SECRET=<value>` into `.env`, never into `.env.example`, a commit or a chat; then `docker compose up -d --force-recreate app`. The same `curl` → `{"detail":"invalid credentials"}`. |
+
+## ② operations
+
+Điền khi P5-T04 merge (DEC-151).
 
 ## Pilot
 
