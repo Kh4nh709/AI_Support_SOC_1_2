@@ -28,7 +28,7 @@ from datetime import datetime
 from typing import Annotated, Any
 
 import psycopg
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.domain import transitions
@@ -76,18 +76,24 @@ HEAD_STATUS_LABELS: dict[str, str] = {
 #: `confirmed_incident` is the end of this project's scope, and the screen
 #: must not imply a response step follows.
 CONFIRMED_INCIDENT_SCOPE_NOTE = (
-    "Kết luận này chỉ ghi nhận sự cố — hệ thống dừng lại ở đây, không tự "
-    "động cách ly, ứng cứu hay khắc phục (hệ thống phát hiện và phân loại, "
-    "không ứng cứu)."
+    "Kết luận này chỉ ghi nhận sự cố — hệ thống dừng lại ở đây, không có "
+    "bước cách ly, ứng cứu hay khắc phục nào (hệ thống phát hiện và phân "
+    "loại, không ứng cứu)."
 )
 
-_SUPPLEMENT_COLUMNS: tuple[str, ...] = ("alert_id", "raw_log", "risk_score", "last_seen_at")
+_SUPPLEMENT_COLUMNS: tuple[str, ...] = (
+    "alert_id",
+    "raw_log",
+    "raw_log_truncated",
+    "risk_score",
+    "last_seen_at",
+)
 
 
 def _supplement(conn: psycopg.Connection, alert_ids: list[str]) -> dict[str, dict[str, Any]]:
-    """`raw_log`, `risk_score` and `last_seen_at` for `alert_ids` — the module
-    docstring's deviation. One `alert_id = ANY(...)` read, G10 explicit
-    columns, `{}` for an empty case."""
+    """`raw_log`, `raw_log_truncated`, `risk_score` and `last_seen_at` for
+    `alert_ids` — the module docstring's deviation. One `alert_id = ANY(...)`
+    read, G10 explicit columns, `{}` for an empty case."""
     if not alert_ids:
         return {}
     rows = conn.execute(
@@ -106,24 +112,82 @@ def _username(conn: psycopg.Connection, user_id: Any) -> str | None:
     return row[0] if row else None
 
 
-def _enrich_heads(conn: psycopg.Connection, heads: list[dict[str, Any]]) -> datetime | None:
-    """Merges `_supplement`'s three fields into each head in place — `raw_log`
-    (escaped by the template, never `|safe`), `risk_band` (`risk_score`
-    replaced by the band, never the bare number — P4's rule; `risk_score`
-    itself is not stored on the dict, so it cannot leak into the template by
-    accident). Returns the latest `last_seen_at` among heads still
-    `escalated_tier2` (H3: unsealed for the whole span of an investigation,
-    D-C5) — `None` when no head is still absorbing duplicates, the
-    ongoing-cluster signal `docs/phase-7-tier2.md` §P7-2 asks the page to
-    show."""
+def _not_found_page(
+    request: Request, user: Claims | None, *, status_code: int = 404
+) -> HTMLResponse:
+    """Review round 1, alignment item: an unknown or missing case renders an
+    HTML page through the same `templating.render` path every other page
+    uses — never a bare `HTTPException`'s JSON body."""
+    page = templating.render(request, "case_not_found.html", user=user)
+    page.status_code = status_code
+    return page
+
+
+def _conclude_error_text(exc: ValueError) -> str:
+    """A Vietnamese sentence for `conclude.submit`'s `ValueError`s — review
+    round 1, nit N7: never `str(exc)` (English, and for the bad-conclusion
+    case would echo the posted value verbatim back into the page)."""
+    msg = str(exc)
+    if msg.startswith("conclusion:"):
+        return "Kết luận không hợp lệ."
+    if "NUL" in msg:
+        return "Lý do chứa ký tự không hợp lệ."
+    if msg.startswith("reason:"):
+        return "Lý do không được để trống."
+    return "Dữ liệu không hợp lệ."  # pragma: no cover — no other ValueError shape exists today
+
+
+def _note_error_text(exc: ValueError) -> str:
+    """A Vietnamese sentence for `conclude.add_note`'s `ValueError`s — same
+    reasoning as `_conclude_error_text`."""
+    msg = str(exc)
+    if "NUL" in msg:
+        return "Ghi chú chứa ký tự không hợp lệ."
+    if "exceeds" in msg:
+        return "Ghi chú quá dài."
+    if msg.startswith("body:"):
+        return "Ghi chú không được để trống."
+    return "Dữ liệu không hợp lệ."  # pragma: no cover — no other ValueError shape exists today
+
+
+def _enrich_heads(
+    conn: psycopg.Connection, heads: list[dict[str, Any]], since: datetime
+) -> datetime | None:
+    """Merges `_supplement`'s fields into each head in place — `raw_log`
+    (escaped by the template, never `|safe`) with `raw_log_truncated`,
+    `risk_band` (`risk_score` replaced by the band, never the bare number —
+    P4's rule; `risk_score` itself is not stored on the dict, so it cannot
+    leak into the template by accident) and `last_seen_at` (shown per head,
+    `local_time`-formatted, design note 3).
+
+    Returns the latest `last_seen_at` among heads that are both still
+    `escalated_tier2` **and** newer than `since` — `None` when no head
+    qualifies. Review round 1, blocker B1: `alerts.last_seen_at` is `NOT NULL
+    DEFAULT now()`, so `last_seen_at is not None` alone is always true and
+    the old rule reduced to "the case is open." `since` is
+    `case.last_analyzed_at or case.created_at`, matching
+    `docs/phase-7-tier2.md:452`'s "`last_seen_at` mới hơn `last_analyzed_at`"
+    once ② starts writing `last_analyzed_at`, and correct before that too:
+    `escalate` inserts the case and its heads in one transaction (`now()` is
+    the transaction start time), so an unbumped head's `last_seen_at` equals
+    `case.created_at` exactly — not "newer than" — and only `bump_parent`
+    (a duplicate arriving) ever moves it forward. Known limit, noted in the
+    report: a duplicate whose dedup transaction overlaps the `escalate`
+    transaction can be missed until the next duplicate arrives, since both
+    transactions read their own `now()` snapshot.
+    """
     supplement = _supplement(conn, [h["alert_id"] for h in heads])
     ongoing_last_seen = None
     for head in heads:
         extra = supplement.get(head["alert_id"], {})
         head["raw_log"] = extra.get("raw_log", "")
+        head["raw_log_truncated"] = bool(extra.get("raw_log_truncated"))
         head["risk_band"] = risk_band(extra.get("risk_score"))
         last_seen = extra.get("last_seen_at")
-        is_growing = head["status"] == "escalated_tier2" and last_seen is not None
+        head["last_seen_at"] = last_seen
+        is_growing = (
+            head["status"] == "escalated_tier2" and last_seen is not None and last_seen > since
+        )
         if is_growing and (ongoing_last_seen is None or last_seen > ongoing_last_seen):
             ongoing_last_seen = last_seen
     return ongoing_last_seen
@@ -174,8 +238,9 @@ def _case_page(
 ) -> HTMLResponse:
     case = tier2.case_detail(conn, case_id)
     if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    ongoing_last_seen = _enrich_heads(conn, case["heads"])
+        return _not_found_page(request, user)
+    since = case["last_analyzed_at"] or case["created_at"]
+    ongoing_last_seen = _enrich_heads(conn, case["heads"], since)
     concluded_by_name = _username(conn, case["concluded_by"])
     page = templating.render(
         request,
@@ -237,6 +302,10 @@ def _notes_fragment(
     return page
 
 
+def _is_htmx(request: Request) -> bool:
+    return request.headers.get("HX-Request") == "true"
+
+
 @router.post("/cases/{case_id}/notes", response_class=HTMLResponse)
 def add_note_page(
     request: Request,
@@ -245,18 +314,35 @@ def add_note_page(
     user: Annotated[Claims, Depends(page_user)],
     _: Tier2,
     case_id: uuid.UUID,
-    body: Annotated[str, Form()],
-) -> HTMLResponse:
+    body: Annotated[str, Form()] = "",
+):
     case_id_str = str(case_id)
+    htmx = _is_htmx(request)
     try:
         conclude.add_note(conn, case_id_str, user.user_id, body)
     except ValueError as exc:
-        return _notes_fragment(
-            request, conn, cfg, case_id_str, note_error=str(exc), status_code=422
+        text = _note_error_text(exc)
+        if htmx:
+            return _notes_fragment(
+                request, conn, cfg, case_id_str, note_error=text, status_code=422
+            )
+        return _case_page(
+            request,
+            conn,
+            cfg,
+            user,
+            case_id_str,
+            flash={"level": "error", "text": text},
+            status_code=422,
         )
-    except conclude.UnknownCase as exc:
-        raise HTTPException(status_code=404, detail="case not found") from exc
-    return _notes_fragment(request, conn, cfg, case_id_str)
+    except conclude.UnknownCase:
+        return _not_found_page(request, user)
+    if htmx:
+        return _notes_fragment(request, conn, cfg, case_id_str)
+    # review round 1, nit N10: a plain (non-htmx) form POST redirects, like
+    # every other page mutation in this app (labels.py's own convention) —
+    # only an htmx request gets the bare `_case_notes.html` fragment back.
+    return RedirectResponse(f"/cases/{case_id_str}", status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -272,12 +358,20 @@ def conclude_page(
     user: Annotated[Claims, Depends(page_user)],
     _: Tier2,
     case_id: uuid.UUID,
-    conclusion: Annotated[str, Form()],
-    reason: Annotated[str, Form()],
+    conclusion: Annotated[str, Form()] = "",
+    reason: Annotated[str, Form()] = "",
 ):
     case_id_str = str(case_id)
     try:
-        conclude.submit(conn, case_id_str, user.user_id, conclusion=conclusion, reason=reason)
+        # review round 1, should S2: a savepoint. `psycopg.errors.QueryCanceled`
+        # (a real statement-timeout abort) leaves the surrounding transaction
+        # unusable — the re-read `_case_page` does next would raise
+        # `InFailedSqlTransaction`. `conn.transaction()` rolls back to this
+        # savepoint on *any* exception out of the block (re-raising it
+        # unchanged), which restores the connection before every `except`
+        # below runs its own query.
+        with conn.transaction():
+            conclude.submit(conn, case_id_str, user.user_id, conclusion=conclusion, reason=reason)
     except ValueError as exc:
         return _case_page(
             request,
@@ -285,18 +379,19 @@ def conclude_page(
             cfg,
             user,
             case_id_str,
-            flash={"level": "error", "text": str(exc)},
+            flash={"level": "error", "text": _conclude_error_text(exc)},
             status_code=422,
         )
-    except conclude.UnknownCase as exc:
-        raise HTTPException(status_code=404, detail="case not found") from exc
+    except conclude.UnknownCase:
+        return _not_found_page(request, user)
     except conclude.ConcludeConflict as exc:
-        # design note 3: "a 409 renders through _flash.html saying who
-        # concluded it and when — never a silent overwrite and never a raw
-        # status code."
+        # design note 3 / docs/phase-7-tier2.md:349: who, what and when —
+        # never a silent overwrite and never a raw status code (review round
+        # 1, nit N6 added "what": the conclusion itself).
         who = _username(conn, exc.concluded_by) or str(exc.concluded_by)
+        what = STATUS_LABELS.get(exc.status, exc.status)
         when = templating.local_time(exc.concluded_at, cfg.DISPLAY_TZ)
-        text = f"Case đã được {who} kết luận lúc {when} — không ghi đè."
+        text = f"Case đã được {who} kết luận là “{what}” lúc {when} — không ghi đè."
         return _case_page(
             request,
             conn,

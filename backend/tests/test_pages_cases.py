@@ -20,6 +20,7 @@ round; `test_tier2_api.py`'s pattern, reused here unchanged).
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import uuid
 from datetime import UTC, datetime
@@ -251,8 +252,10 @@ def test_cases_list_shows_vietnamese_status_and_duplicate_inclusive_count(client
 
     assert resp.status_code == 200
     assert "Đang điều tra" in resp.text
-    row = resp.text[resp.text.index("dup-case") :]
-    assert ">1<" in row.split("</tr>")[0] or "cluster_count" in row  # sanity: page rendered a row
+    # review round 1, nit N9: the old `or` made this assertion vacuous
+    # ("cluster_count" is always in the row's own `data-field` attribute).
+    row = resp.text[resp.text.index("dup-case") :].split("</tr>")[0]
+    assert 'data-field="cluster_count">1<' in row
     assert 'data-field="occurrence_count">5<' in row
 
 
@@ -266,6 +269,19 @@ def test_cases_list_is_offset_paged(client, db):
     assert resp.text.count('data-field="case_title"') == 1
     assert 'data-field="prev_page"' in resp.text
     assert 'data-field="next_page"' in resp.text
+
+
+def test_cases_list_pager_hides_next_on_a_short_last_page(client, db):
+    """Review round 1, alignment item: `next` never lands on an empty page —
+    fewer rows than `limit` came back, so there is nothing after this page."""
+    u = client.user_id
+    [_make_case(db, u, title=f"short-page-{i}") for i in range(2)]
+
+    resp = client.http.get("/cases", params={"offset": 0, "limit": 50})
+
+    assert resp.status_code == 200
+    assert 'data-field="next_page"' not in resp.text
+    assert 'data-field="prev_page"' not in resp.text  # offset == 0 too
 
 
 def test_cases_list_shows_never_analyzed_placeholder(client, db):
@@ -329,9 +345,51 @@ def test_case_detail_escapes_raw_log_script_tag(client, db):
     assert "&lt;script&gt;" in resp.text
 
 
-def test_case_detail_404_when_absent(client):
+def test_case_detail_shows_raw_log_truncated_note(client, db):
+    """Review round 1, alignment item: `raw_log_truncated` shows the cut
+    line under the head's raw_log."""
+    u = client.user_id
+    case_id = _make_case(db, u)
+    head = _insert_alert(db, status="escalated_tier2", case_id=case_id)
+    _add_head(db, case_id, head, u)
+    db.execute("UPDATE alerts SET raw_log_truncated = true WHERE alert_id = %s", (head,))
+
+    resp = client.http.get(f"/cases/{case_id}")
+
+    assert resp.status_code == 200
+    assert 'data-field="raw_log_truncated"' in resp.text
+    assert "[đã cắt ở 1000 KB]" in resp.text
+
+
+def test_case_detail_shows_per_head_last_seen_at(client, db):
+    """Review round 1, should S3: design note 3 lists `last_seen_at` as a
+    per-head column. `ck_alerts_last_seen_khong_lui` forbids `last_seen_at <
+    first_seen_at`, so it is moved forward from `now()`, not to a fixed past
+    date."""
+    u = client.user_id
+    case_id = _make_case(db, u)
+    head = _insert_alert(db, status="escalated_tier2", case_id=case_id)
+    _add_head(db, case_id, head, u)
+    db.execute(
+        "UPDATE alerts SET last_seen_at = now() + interval '5 minutes' WHERE alert_id = %s",
+        (head,),
+    )
+
+    resp = client.http.get(f"/cases/{case_id}")
+
+    assert resp.status_code == 200
+    assert 'data-field="last_seen_at"' in resp.text
+
+
+def test_case_detail_404_when_absent_renders_html_not_json(client):
+    """Review round 1, alignment item: an unknown case is an HTML page
+    through `templating.render`, never a bare `HTTPException` JSON body."""
     resp = client.http.get(f"/cases/{uuid.uuid4()}")
     assert resp.status_code == 404
+    assert resp.headers["content-type"].startswith("text/html")
+    assert 'data-field="not_found"' in resp.text
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(resp.text)
 
 
 # ---------------------------------------------------------------------------
@@ -339,38 +397,87 @@ def test_case_detail_404_when_absent(client):
 # ---------------------------------------------------------------------------
 
 
-def test_ongoing_label_appears_only_while_a_head_is_still_absorbing_duplicates(client, db):
-    u = client.user_id
-    growing = _make_case(db, u, title="growing")
-    head = _insert_alert(
-        db, status="escalated_tier2", case_id=growing, last_seen_at=datetime.now(UTC)
-    )
-    _add_head(db, growing, head, u)
+def _ongoing_shown(resp) -> bool:
+    return 'data-field="ongoing_label"' in resp.text
 
-    done = _make_case(
+
+def test_ongoing_label_matrix(client, db):
+    """Review round 1, blocker B1 — the five cases, in order, re-run from the
+    Reviewer's probe (`test_zz_review_probe.py::test_ongoing_label_matrix`,
+    read but not copied). `alerts.last_seen_at` is `NOT NULL DEFAULT now()`,
+    so the old `last_seen is not None` rule showed the label on every open
+    case — cases 1 and 3 below are exactly the two that caught it. Every
+    statement in this test shares the `db` fixture's one open transaction, so
+    every un-adjusted `now()` below is the *same* instant (`escalate`'s own
+    shape — case and head inserted together); only an explicit `interval`
+    offset moves a timestamp relative to it."""
+    u = client.user_id
+
+    # 1 · open, head never grew after escalation — hidden
+    c1 = _make_case(db, u, title="never-grew")
+    h1 = _insert_alert(db, status="escalated_tier2", case_id=c1)
+    _add_head(db, c1, h1, u)
+
+    # 2 · open, head bumped after the case was created — shown
+    c2 = _make_case(db, u, title="grew")
+    h2 = _insert_alert(db, status="escalated_tier2", case_id=c2)
+    _add_head(db, c2, h2, u)
+    db.execute(
+        "UPDATE alerts SET last_seen_at = now() + interval '1 minute' WHERE alert_id = %s", (h2,)
+    )
+
+    # 3 · open, grew, then analysed after the last duplicate — hidden
+    c3 = _make_case(db, u, title="analysed-after")
+    h3 = _insert_alert(db, status="escalated_tier2", case_id=c3)
+    _add_head(db, c3, h3, u)
+    db.execute(
+        "UPDATE alerts SET last_seen_at = now() + interval '1 minute' WHERE alert_id = %s", (h3,)
+    )
+    db.execute(
+        "UPDATE cases SET last_analyzed_at = now() + interval '2 minutes' WHERE case_id = %s", (c3,)
+    )
+
+    # 4 · open, a duplicate arrived after the analysis — shown
+    c4 = _make_case(db, u, title="grew-after-analysis")
+    h4 = _insert_alert(db, status="escalated_tier2", case_id=c4)
+    _add_head(db, c4, h4, u)
+    db.execute(
+        "UPDATE cases SET last_analyzed_at = now() + interval '2 minutes' WHERE case_id = %s", (c4,)
+    )
+    db.execute(
+        "UPDATE alerts SET last_seen_at = now() + interval '3 minutes' WHERE alert_id = %s", (h4,)
+    )
+
+    # 5 · concluded (heads closed + sealed), last_seen_at after creation — hidden
+    c5 = _make_case(
         db,
         u,
-        title="settled",
+        title="concluded",
         status="concluded_fp",
         concluded_at=_PAST,
         concluded_by=u,
         conclusion_reason="x",
     )
-    closed_head = _insert_alert(
-        db,
-        status="closed_fp",
-        case_id=done,
-        closed_at=_PAST,
-        sealed_at=_PAST,
-        last_seen_at=datetime.now(UTC),
+    h5 = _insert_alert(db, status="closed_fp", case_id=c5, closed_at=_PAST, sealed_at=_PAST)
+    _add_head(db, c5, h5, u)
+    db.execute(
+        "UPDATE alerts SET last_seen_at = now() + interval '1 minute' WHERE alert_id = %s", (h5,)
     )
-    _add_head(db, done, closed_head, u)
 
-    growing_resp = client.http.get(f"/cases/{growing}")
-    done_resp = client.http.get(f"/cases/{done}")
-
-    assert 'data-field="ongoing_label"' in growing_resp.text
-    assert 'data-field="ongoing_label"' not in done_resp.text
+    result = {
+        "1 open, never grew": _ongoing_shown(client.http.get(f"/cases/{c1}")),
+        "2 open, grew after creation": _ongoing_shown(client.http.get(f"/cases/{c2}")),
+        "3 open, analysed after last dup": _ongoing_shown(client.http.get(f"/cases/{c3}")),
+        "4 open, grew after analysis": _ongoing_shown(client.http.get(f"/cases/{c4}")),
+        "5 concluded": _ongoing_shown(client.http.get(f"/cases/{c5}")),
+    }
+    assert result == {
+        "1 open, never grew": False,
+        "2 open, grew after creation": True,
+        "3 open, analysed after last dup": False,
+        "4 open, grew after analysis": True,
+        "5 concluded": False,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -378,10 +485,15 @@ def test_ongoing_label_appears_only_while_a_head_is_still_absorbing_duplicates(c
 # ---------------------------------------------------------------------------
 
 
-def test_add_note_returns_the_notes_fragment_with_the_new_note(client, db):
+_HX = {"HX-Request": "true"}
+
+
+def test_add_note_htmx_returns_the_notes_fragment_with_the_new_note(client, db):
     case_id = _make_case(db, client.user_id)
 
-    resp = client.http.post(f"/cases/{case_id}/notes", data={"body": "watch this cluster"})
+    resp = client.http.post(
+        f"/cases/{case_id}/notes", data={"body": "watch this cluster"}, headers=_HX
+    )
 
     assert resp.status_code == 200
     assert "watch this cluster" in resp.text
@@ -391,20 +503,48 @@ def test_add_note_returns_the_notes_fragment_with_the_new_note(client, db):
     assert row[0] == "watch this cluster"
 
 
-def test_add_note_empty_body_is_422_with_inline_error(client, db):
+def test_add_note_htmx_empty_body_is_422_with_inline_vietnamese_error(client, db):
     case_id = _make_case(db, client.user_id)
-    resp = client.http.post(f"/cases/{case_id}/notes", data={"body": "   "})
+    resp = client.http.post(f"/cases/{case_id}/notes", data={"body": "   "}, headers=_HX)
     assert resp.status_code == 422
     assert 'data-field="note_error"' in resp.text
+    # review round 1, nit N7: a Vietnamese sentence, never str(ValueError)
+    assert "must not be empty" not in resp.text
+    assert "để trống" in resp.text
     assert (
         db.execute("SELECT count(*) FROM case_notes WHERE case_id = %s", (case_id,)).fetchone()[0]
         == 0
     )
 
 
-def test_add_note_unknown_case_is_404(client):
+def test_add_note_no_htmx_success_redirects(client, db):
+    """Review round 1, nit N10: without an `HX-Request` header (a plain
+    browser form submission, or a JS-disabled fallback) the route redirects
+    like every other page mutation, instead of handing back a bare fragment
+    no full-page load would ever render meaningfully."""
+    case_id = _make_case(db, client.user_id)
+
+    resp = client.http.post(f"/cases/{case_id}/notes", data={"body": "no js here"})
+
+    assert resp.status_code == 303
+    assert resp.headers["location"] == f"/cases/{case_id}"
+    row = db.execute("SELECT body FROM case_notes WHERE case_id = %s", (case_id,)).fetchone()
+    assert row[0] == "no js here"
+
+
+def test_add_note_no_htmx_empty_body_422_redraws_case_page_with_flash(client, db):
+    case_id = _make_case(db, client.user_id)
+    resp = client.http.post(f"/cases/{case_id}/notes", data={"body": "   "})
+    assert resp.status_code == 422
+    assert 'id="flash"' in resp.text
+    assert "để trống" in resp.text
+    assert "<nav>" in resp.text  # the full case page, not the bare fragment
+
+
+def test_add_note_unknown_case_is_404_html(client):
     resp = client.http.post(f"/cases/{uuid.uuid4()}/notes", data={"body": "orphan"})
     assert resp.status_code == 404
+    assert 'data-field="not_found"' in resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -442,11 +582,28 @@ def test_conclude_empty_reason_is_422_server_side(client, db):
     )
     assert resp.status_code == 422
     assert 'id="flash"' in resp.text
+    # review round 1, nit N7: a Vietnamese sentence, never str(ValueError)
+    assert "must not be empty" not in resp.text
+    assert "để trống" in resp.text
     status = db.execute("SELECT status FROM cases WHERE case_id = %s", (case_id,)).fetchone()[0]
     assert status == "investigating"
 
 
-def test_conclude_409_renders_flash_naming_the_concluder(client, db):
+def test_conclude_missing_fields_are_422_not_a_bare_fastapi_error(client, db):
+    """Review round 1, nit N7: `conclusion`/`reason` default to `""`, so a
+    field missing from the POST body entirely still reaches
+    `conclude.submit`'s own validation (a Vietnamese flash), rather than
+    FastAPI's own JSON 422 for a required field."""
+    case_id = _make_case(db, client.user_id)
+    no_conclusion = client.http.post(f"/cases/{case_id}/conclude", data={"reason": "r"})
+    no_reason = client.http.post(f"/cases/{case_id}/conclude", data={"conclusion": "concluded_fp"})
+    for resp in (no_conclusion, no_reason):
+        assert resp.status_code == 422
+        assert 'id="flash"' in resp.text
+        assert resp.headers["content-type"].startswith("text/html")
+
+
+def test_conclude_409_renders_flash_naming_who_what_and_when(client, db):
     u = client.user_id
     other = _make_user(db)
     case_id = _make_case(
@@ -467,15 +624,18 @@ def test_conclude_409_renders_flash_naming_the_concluder(client, db):
 
     assert resp.status_code == 409
     assert 'id="flash"' in resp.text
-    assert concluder_name in resp.text
+    # review round 1, nit N6: docs/phase-7-tier2.md:349 — who, what and when
+    assert concluder_name in resp.text  # who
+    assert "Không phải sự cố" in resp.text  # what — STATUS_LABELS["concluded_fp"]
     assert "không ghi đè" in resp.text
 
 
-def test_conclude_unknown_case_is_404(client):
+def test_conclude_unknown_case_is_404_html(client):
     resp = client.http.post(
         f"/cases/{uuid.uuid4()}/conclude", data={"conclusion": "concluded_fp", "reason": "x"}
     )
     assert resp.status_code == 404
+    assert 'data-field="not_found"' in resp.text
 
 
 def test_conclude_500_on_illegal_transition_shows_flash_not_a_traceback(client, db, monkeypatch):
@@ -497,7 +657,74 @@ def test_confirmed_incident_scope_note_is_on_the_screen(client, db):
     case_id = _make_case(db, client.user_id)
     resp = client.http.get(f"/cases/{case_id}")
     assert 'data-field="scope_note"' in resp.text
-    assert "không tự" in resp.text and "ứng cứu" in resp.text
+    assert "không có" in resp.text and "ứng cứu" in resp.text
+
+
+def test_confirmed_incident_scope_note_also_shows_on_the_concluded_screen(client, db):
+    """Review round 1, nit N8: the scope sentence repeats on an already
+    concluded `confirmed_incident` case, not only on the still-open form."""
+    u = client.user_id
+    case_id = _make_case(
+        db,
+        u,
+        status="confirmed_incident",
+        concluded_at=_PAST,
+        concluded_by=u,
+        conclusion_reason="real incident",
+    )
+    resp = client.http.get(f"/cases/{case_id}")
+    assert resp.status_code == 200
+    assert 'data-field="scope_note"' in resp.text
+    # the open-form radios are gone (case.status != "investigating")
+    assert 'name="conclusion"' not in resp.text
+
+
+def test_confirmed_incident_scope_note_absent_from_other_concluded_screens(client, db):
+    u = client.user_id
+    case_id = _make_case(
+        db, u, status="concluded_fp", concluded_at=_PAST, concluded_by=u, conclusion_reason="fp"
+    )
+    resp = client.http.get(f"/cases/{case_id}")
+    assert 'data-field="scope_note"' not in resp.text
+
+
+def test_conclude_statement_timeout_renders_503_flash_and_case_stays_investigating(
+    client, db, monkeypatch
+):
+    """Review round 1, should S2 — the Reviewer's probe, read (not copied):
+    a real statement timeout aborts the transaction exactly as a slow A16
+    fan-out would; without the savepoint the re-read in `_case_page` raises
+    `InFailedSqlTransaction` instead of rendering the 503 flash."""
+    case_id = _make_case(db, client.user_id)
+    head = _insert_alert(db, status="escalated_tier2", case_id=case_id)
+    _add_head(db, case_id, head, client.user_id)
+
+    def _slow_conclude(conn, cid, uid, *, conclusion, reason):
+        conn.execute("SET LOCAL statement_timeout = '10ms'")
+        conn.execute("SELECT pg_sleep(1)")
+
+    monkeypatch.setattr(conclude.transitions, "conclude_case", _slow_conclude)
+
+    resp = client.http.post(
+        f"/cases/{case_id}/conclude", data={"conclusion": "concluded_fp", "reason": "slow"}
+    )
+
+    assert resp.status_code == 503
+    assert 'id="flash"' in resp.text
+    status = db.execute("SELECT status FROM cases WHERE case_id = %s", (case_id,)).fetchone()[0]
+    assert status == "investigating"
+
+
+def test_case_html_has_the_htmx_before_swap_listener(client, db):
+    """Review round 1, should S4: htmx 2.0.4 does not swap 4xx/5xx responses
+    by default, so without this listener the notes form's 422 would never
+    show. This is the only script the page carries."""
+    case_id = _make_case(db, client.user_id)
+    resp = client.http.get(f"/cases/{case_id}")
+    assert "htmx:beforeSwap" in resp.text
+    assert "shouldSwap" in resp.text
+    for code in ("409", "422", "503"):
+        assert code in resp.text
 
 
 # ---------------------------------------------------------------------------
