@@ -20,6 +20,7 @@ from app.infra import puller
 from app.infra.errors import PermanentError
 from app.soar import pipeline
 from app.tier1 import digest, triage
+from app.tier2 import investigate
 from app.web import handlers as handlers_pkg
 from app.web.handlers import health as health_handler
 from app.web.worker import HANDLERS, TIMEOUTS
@@ -29,18 +30,28 @@ def test_iter_handlers_discovers_every_handler_module():
     # Grows by one every time a later P5 card adds its own module, exactly as
     # planning decision 1 intends (P5-tasks.md §6.1) — this test's job is to
     # track that set, not pin it at any fixed count forever. P5-T01's three
-    # (pull/pipeline/triage) plus P5-T08's `digest` plus P5-T11's `health`.
+    # (pull/pipeline/triage) plus P5-T08's `digest` plus P5-T11's `health`
+    # plus P5-T04's `investigate`, the sixth module.
     result = handlers_pkg.iter_handlers()
-    assert set(result) == {"digest", "health", "pipeline", "pull", "triage"}
+    assert set(result) == {"digest", "health", "investigate", "pipeline", "pull", "triage"}
     assert result["pull"] is puller.pull_job
     assert result["pipeline"] is pipeline.run_pipeline_job
     assert result["triage"] is triage.run_triage_job
     assert result["digest"] is digest.run_digest_job
     assert result["health"] is health_handler.handle
+    assert result["investigate"] is investigate.run_investigate_job
 
 
-def test_iter_timeouts_is_empty_until_a_module_declares_one():
-    assert handlers_pkg.iter_timeouts() == {}
+def test_iter_timeouts_reflects_the_declared_timeouts():
+    # P5-T04: renamed from "is_empty_until_a_module_declares_one" (P5-T01's own name)
+    # now that one has — `investigate` is the first module to declare a
+    # STATEMENT_TIMEOUT, exactly the case P5-T01's review round 1 (finding 1)
+    # anticipated when it added test_iter_timeouts_maps_a_declared_timeout_by_job_type
+    # on a scratch package below. This test's job is unchanged: it still pins the
+    # *real* package's total `iter_timeouts()` result; only what that result now is
+    # has changed, the same kind of update test_iter_handlers_discovers_every_
+    # handler_module above already received once, from P5-T08.
+    assert handlers_pkg.iter_timeouts() == {"investigate": "5s"}
 
 
 def test_worker_module_exposes_both_mappings():
@@ -172,3 +183,62 @@ def test_iter_timeouts_maps_a_declared_timeout_by_job_type(tmp_path, monkeypatch
         assert handlers_pkg.iter_timeouts() == {"health": "5s"}
     finally:
         _forget("scratch_t", "scratch_u")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "5",
+        "5 s",
+        "5seconds",
+        "-5s",
+        "5.5s",
+        "5ms ",
+        "PT5S",
+        "",
+        # N10 (P5-T04 review round 1): a non-string is a `PermanentError` naming the module
+        # and the value, not a bare `TypeError` out of `re.fullmatch` ...
+        5,
+        5.0,
+        b"5s",
+        # ... and zero, in any unit or spelling, is "no timeout" to Postgres — the handler
+        # that declares it has not asked for a limit at all.
+        "0s",
+        "0",
+        "0ms",
+        "0min",
+        "00s",
+    ],
+)
+def test_iter_timeouts_rejects_a_malformed_statement_timeout(tmp_path, monkeypatch, value):
+    # P5-T04: the P5-T01 review's deferred nit ("nothing pinned a declared
+    # STATEMENT_TIMEOUT") — validated against the Postgres duration form
+    # (^\d+(ms|s|min)$) at discovery time, so a typo fails loudly here rather than as
+    # a `SET LOCAL statement_timeout = '...'` syntax error the first time the job runs.
+    _write(
+        tmp_path,
+        "scratch_bad_timeout",
+        f'JOB_TYPE = "health"\nSTATEMENT_TIMEOUT = {value!r}\n\n\ndef handle(conn, job):\n    pass\n',
+    )
+    _point_package_at(monkeypatch, tmp_path)
+    try:
+        with pytest.raises(PermanentError) as exc_info:
+            handlers_pkg.iter_timeouts()
+        assert "scratch_bad_timeout" in str(exc_info.value)
+        assert "STATEMENT_TIMEOUT" in str(exc_info.value)
+    finally:
+        _forget("scratch_bad_timeout")
+
+
+@pytest.mark.parametrize("value", ["5s", "250ms", "3min", "1ms", "10s"])
+def test_iter_timeouts_accepts_every_postgres_duration_form(tmp_path, monkeypatch, value):
+    _write(
+        tmp_path,
+        "scratch_good_timeout",
+        f'JOB_TYPE = "health"\nSTATEMENT_TIMEOUT = {value!r}\n\n\ndef handle(conn, job):\n    pass\n',
+    )
+    _point_package_at(monkeypatch, tmp_path)
+    try:
+        assert handlers_pkg.iter_timeouts() == {"health": value}
+    finally:
+        _forget("scratch_good_timeout")
