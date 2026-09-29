@@ -189,7 +189,15 @@ def client(db):
     c = _Client()
 
     def get_conn():
-        yield db  # never committed: the `db` fixture rolls everything back
+        # The real dependency's shape minus the success commit (review round 1,
+        # item 9): a route's own exception still rolls back mid-request, exactly
+        # like production, but a normal return never commits — every test stays
+        # inside the `db` fixture's one transaction, rolled back at teardown.
+        try:
+            yield db
+        except BaseException:
+            db.rollback()
+            raise
 
     main.app.dependency_overrides[deps.get_conn] = get_conn
     main.app.dependency_overrides[deps.get_config] = lambda: config.Config()
@@ -201,7 +209,14 @@ def client(db):
             main.app.dependency_overrides.pop(dep, None)
 
 
-_SUGGESTION_KEYS = ("suggestion", "suggested_action", "confidence", "gate_forced", "triage_status")
+_SUGGESTION_KEYS = (
+    "suggestion",
+    "suggested_action",
+    "confidence",
+    "gate_forced",
+    "triage_status",
+    "run_id",  # ANALYST_HIDE also drops the queue row's top-level run_id (DEC-101)
+)
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +250,7 @@ def test_api_blind_queue_row_has_no_suggestion_keys(db, client) -> None:
     row = rows[0]
     for key in _SUGGESTION_KEYS:
         assert key not in row, key
+    assert "false_positive" not in resp.text
 
 
 def test_api_after_decision_suggestion_appears_and_payload_joins(db, client) -> None:
@@ -282,20 +298,61 @@ def test_api_visible_alert_shows_suggestion_before_decision(db, client) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_api_tier2_post_decide_is_403_and_audited(db, client) -> None:
+def test_api_tier2_post_decide_is_403_and_audited(db, client, monkeypatch, _test_database) -> None:
+    """Review round 1, BLOCKER 1. `require_role`'s 403 path calls `conn.commit()`
+    directly (planning decision 3) — on the shared `db` fixture connection that
+    would make everything this test set up (the seeded users, the alert, the
+    `authz.denied` row and, critically, the pending `triage` job `finish_
+    enrichment` enqueues) permanent: `db`'s own `rollback()` at teardown only
+    undoes what came *after* that commit, which is nothing. A leaked pending
+    job is exactly what `test_triage_job.py::test_idle_timeout_survives_an_
+    eleven_second_call` claimed instead of its own in review round 1's finding
+    — not a timing flake.
+
+    `db.commit` is monkeypatched to a spy: it records the `authz.denied` row
+    for `TIER2_ID` at the moment of the real commit (still visible to `db`
+    itself — read-your-own-writes, uncommitted or not) and does **not** call
+    through, so nothing survives this test's own rollback. A second, entirely
+    separate connection then proves it: no row of this test's making is
+    visible to anyone else."""
     alert_id = _active(db)
+
+    commits: list[list[tuple]] = []
+
+    def _spy_commit() -> None:
+        commits.append(
+            db.execute(
+                "SELECT payload FROM audit_events WHERE event_type = 'authz.denied' "
+                "AND actor_id = %s",
+                (TIER2_ID,),
+            ).fetchall()
+        )
+
+    monkeypatch.setattr(db, "commit", _spy_commit)
+
     client.as_role("tier2", TIER2_ID)
     resp = client.http.post(
         f"/api/tier1/alerts/{alert_id}/decide",
         json={"decision": "benign", "reason": "x", "seen_occurrence_count": 1},
     )
     assert resp.status_code == 403, resp.text
-    events = db.execute(
-        "SELECT payload FROM audit_events WHERE event_type = 'authz.denied' AND actor_id = %s",
-        (TIER2_ID,),
-    ).fetchall()
-    assert len(events) == 1
-    assert events[0][0]["required"] == ["tier1"]
+
+    assert len(commits) == 1  # exactly one commit attempt
+    assert len(commits[0]) == 1  # exactly one authz.denied row, at that moment
+    assert commits[0][0][0]["required"] == ["tier1"]
+
+    # Proof: a fresh, independent connection sees none of it — jobs, alerts, users.
+    fresh = psycopg.connect(_test_database)
+    try:
+        counts = fresh.execute(
+            "SELECT (SELECT count(*) FROM jobs WHERE subject_id = %s), "
+            "(SELECT count(*) FROM alerts WHERE alert_id = %s), "
+            "(SELECT count(*) FROM users WHERE user_id = %s)",
+            (alert_id, alert_id, TIER2_ID),
+        ).fetchone()
+    finally:
+        fresh.close()
+    assert counts == (0, 0, 0), counts
 
 
 def test_api_decide_409_body_has_n_and_m(db, client) -> None:
@@ -314,6 +371,63 @@ def test_api_decide_409_body_has_n_and_m(db, client) -> None:
     assert body["seen_occurrence_count"] == 4
 
 
+@pytest.fixture
+def real_shape_client(db, monkeypatch):
+    """`get_conn` with the *real* dependency's shape (commit on success,
+    rollback on exception) — needed only to prove a 409 rolls back before that
+    commit would run (review round 1, item 4). `commit`/`rollback` are
+    replaced by call recorders so nothing really persists; the genuine
+    `rollback` is called explicitly at teardown, before handing back to the
+    `db` fixture's own, so its teardown is never silently skipped."""
+    calls: list[str] = []
+    real_rollback = db.rollback
+    monkeypatch.setattr(db, "commit", lambda: calls.append("commit"))
+    monkeypatch.setattr(db, "rollback", lambda: calls.append("rollback"))
+
+    def get_conn():
+        try:
+            yield db
+        except BaseException:
+            db.rollback()
+            raise
+        else:
+            db.commit()
+
+    main.app.dependency_overrides[deps.get_conn] = get_conn
+    main.app.dependency_overrides[deps.get_config] = lambda: config.Config()
+    main.app.dependency_overrides[deps.current_user] = lambda: Claims(
+        user_id=TIER1_ID, username=TIER1_ID, role="tier1", iat=0.0, exp=0.0
+    )
+    try:
+        yield TestClient(main.app), calls
+    finally:
+        for dep in (deps.get_conn, deps.get_config, deps.current_user):
+            main.app.dependency_overrides.pop(dep, None)
+        monkeypatch.undo()
+        real_rollback()
+
+
+def test_api_409_rolls_back_before_the_wrappers_commit(db, real_shape_client) -> None:
+    """Review round 1, item 4. Without `_conflict_response`'s explicit
+    `conn.rollback()`, a 409 `JSONResponse` is a normal *return*, not an
+    exception — the real `get_conn` would take its `else: conn.commit()`
+    branch and persist the guard's own reads (planning decision 3 is about
+    the opposite direction: a *4xx that must persist a write* commits before
+    raising; a 409 must persist nothing, so it must roll back before
+    returning)."""
+    _seed_users(db)
+    http, calls = real_shape_client
+    alert_id = _active(db)
+    db.execute("UPDATE alerts SET occurrence_count = 25 WHERE alert_id = %s", (alert_id,))
+
+    resp = http.post(
+        f"/api/tier1/alerts/{alert_id}/decide",
+        json={"decision": "benign", "reason": "x", "seen_occurrence_count": 4},
+    )
+    assert resp.status_code == 409, resp.text
+    assert calls[:1] == ["rollback"], calls
+
+
 def test_api_bad_body_is_422(db, client) -> None:
     alert_id = _active(db)
     client.as_role("tier1", TIER1_ID)
@@ -327,6 +441,25 @@ def test_api_bad_body_is_422(db, client) -> None:
 def test_api_unknown_alert_is_404(client) -> None:
     client.as_role("tier1", TIER1_ID)
     resp = client.http.get("/api/tier1/alerts/does-not-exist")
+    assert resp.status_code == 404, resp.text
+
+
+@pytest.mark.parametrize(
+    "verb,body",
+    [
+        ("acknowledge", None),
+        ("decide", {"decision": "benign", "reason": "x", "seen_occurrence_count": 1}),
+        ("escalate", {"title": "t"}),
+        ("reopen", {"reason": "x"}),
+    ],
+)
+def test_api_unknown_alert_post_is_404_for_every_verb(client, verb, body) -> None:
+    """Review round 1, item 5 — `decide` and `reopen` fell through to a 409
+    (`transitions.*`'s own `StaleState` on a nonexistent id) before `tier1/
+    decide.py` re-read `None` and raised `NotFound`; `acknowledge` and
+    `escalate` already had their own `FOR UPDATE` guard and were always 404."""
+    client.as_role("tier1", TIER1_ID)
+    resp = client.http.post(f"/api/tier1/alerts/does-not-exist/{verb}", json=body)
     assert resp.status_code == 404, resp.text
 
 
@@ -366,3 +499,18 @@ def test_api_reopen_200(db, client) -> None:
     )
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"alert_id": alert_id, "status": "queued_tier1"}
+
+
+@pytest.mark.parametrize("verb", ["decide", "escalate", "reopen"])
+def test_api_nul_byte_in_reason_or_title_is_422(db, client, verb) -> None:
+    """Review round 1, item 10 — a NUL byte can never reach a query: rejected
+    by the body's own Pydantic validation, before any DB call."""
+    client.as_role("tier1", TIER1_ID)
+    alert_id = _auto_closed(db) if verb == "reopen" else _active(db)
+    body = {
+        "decide": {"decision": "benign", "reason": "a\x00b", "seen_occurrence_count": 1},
+        "escalate": {"title": "a\x00b"},
+        "reopen": {"reason": "a\x00b"},
+    }[verb]
+    resp = client.http.post(f"/api/tier1/alerts/{alert_id}/{verb}", json=body)
+    assert resp.status_code == 422, resp.text
