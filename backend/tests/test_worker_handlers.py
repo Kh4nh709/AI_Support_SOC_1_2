@@ -22,22 +22,23 @@ from app.soar import pipeline
 from app.tier1 import digest, triage
 from app.tier2 import investigate
 from app.web import handlers as handlers_pkg
+from app.web.handlers import health as health_handler
 from app.web.worker import HANDLERS, TIMEOUTS
 
 
 def test_iter_handlers_discovers_every_handler_module():
-    # P5-T08: extended from "the three" (pull/pipeline/triage, P5-T01's own
-    # set at merge) to include `digest`, the fourth module this card adds —
-    # the discovery contract the P5-T01 package docstring names explicitly
-    # ("a later card ... adds one module without touching any shared file").
-    # Extension, not narrowing: every P5-T01 assertion below still holds.
-    # P5-T04: extended again to include `investigate`, the fifth module.
+    # Grows by one every time a later P5 card adds its own module, exactly as
+    # planning decision 1 intends (P5-tasks.md §6.1) — this test's job is to
+    # track that set, not pin it at any fixed count forever. P5-T01's three
+    # (pull/pipeline/triage) plus P5-T08's `digest` plus P5-T11's `health`
+    # plus P5-T04's `investigate`, the sixth module.
     result = handlers_pkg.iter_handlers()
-    assert set(result) == {"pipeline", "pull", "triage", "digest", "investigate"}
+    assert set(result) == {"digest", "health", "investigate", "pipeline", "pull", "triage"}
     assert result["pull"] is puller.pull_job
     assert result["pipeline"] is pipeline.run_pipeline_job
     assert result["triage"] is triage.run_triage_job
     assert result["digest"] is digest.run_digest_job
+    assert result["health"] is health_handler.handle
     assert result["investigate"] is investigate.run_investigate_job
 
 
@@ -64,13 +65,20 @@ def test_main_passes_timeouts_to_run_forever(monkeypatch):
     `run_forever` — so this inspects the actual call, via `monkeypatch` on
     `app.web.worker.run_forever`, rather than the module-level mapping.
 
+    P5-T11 review round 1, seeding: also captures every `enqueue(...)` call
+    `main()` makes before it starts the loop — `health`'s "system" seed joins
+    `pull`'s "indexer" one line down, both idempotent through the same
+    partial unique index, so a restart re-arms a dead `health` chain exactly
+    as it already does for `pull`.
+
     P5-T08 review round 1 · A2: also asserts `digest.ensure_scheduled` is
     called exactly once, with `main`'s own connection — the Director lifted
-    the "no diff in worker.py" rule for this one line, so a fake stands in
-    for the tier function itself rather than for anything shared."""
+    the "no diff in worker.py" rule for this one line (both cards), so a fake
+    stands in for the tier function itself rather than for anything shared."""
     from app.web import worker as worker_module
 
     captured: dict[str, object] = {}
+    enqueued: list[tuple[str, str]] = []
 
     def fake_run_forever(conn_factory, handlers, *, once, timeouts=None):
         captured["handlers"] = handlers
@@ -82,19 +90,23 @@ def test_main_passes_timeouts_to_run_forever(monkeypatch):
 
     fake_conn = _FakeConn()
 
+    def fake_enqueue(conn, job_type, subject_id):
+        enqueued.append((job_type, subject_id))
+
     def fake_ensure_scheduled(conn):
         captured.setdefault("ensure_scheduled_calls", []).append(conn)
 
     monkeypatch.setattr(worker_module, "run_forever", fake_run_forever)
     monkeypatch.setattr(worker_module.config, "load", lambda: None)
     monkeypatch.setattr(worker_module.db, "connect", lambda: fake_conn)
-    monkeypatch.setattr(worker_module, "enqueue", lambda conn, job_type, subject_id: None)
+    monkeypatch.setattr(worker_module, "enqueue", fake_enqueue)
     monkeypatch.setattr(worker_module.digest, "ensure_scheduled", fake_ensure_scheduled)
 
     worker_module.main(["--once"])
 
     assert captured["timeouts"] is worker_module.TIMEOUTS
     assert captured["handlers"] is worker_module.HANDLERS
+    assert enqueued == [("pull", "indexer"), ("health", "system")]
     assert captured["ensure_scheduled_calls"] == [fake_conn]
 
 

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Hàng đợi — AI Support SOC{% endblock %}
+{% block content %}
+<h1>Hàng đợi Tier-1</h1>
+<p>{{ page.total }} cụm đang chờ</p>
+<table>
+  <tr>
+    <th>#</th><th>Mức</th><th>Category</th><th>Rule</th><th>Mô tả</th>
+    <th>Agent</th><th>Số lần</th><th>Thấy lần đầu</th><th>①</th>
+  </tr>
+  {% for row in page.rows %}
+  <tr {% if row.needs_retriage %}data-needs-retriage="true"{% endif %}>
+    <td>{{ loop.index + (page.page - 1) * page.page_size }}</td>
+    <td>
+      {% if row.needs_retriage %}⟳ {% endif %}
+      <span class="{{ row.risk_band | band_class }}">{{ row.risk_band or "—" }}</span>
+      ({{ row.severity }})
+    </td>
+    <td>{{ row.category }}</td>
+    <td>{{ row.rule_id }}</td>
+    <td><a href="/alerts/{{ row.alert_id }}">{{ row.description | truncate(120) }}</a></td>
+    <td>{{ row.agent_name }}</td>
+    <td>{{ row.occurrence_count }}</td>
+    <td>{{ row.first_seen_at | local_time(tz) }}</td>
+    <td>
+      {% if "suggested_action" in row %}{% if row.suggested_action %}{{ row.suggested_action }} ({{ row.confidence }}){% if row.gate_forced %} ⚑{% endif %}{% else %}chưa có{% endif %}{% else %}—{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+<p>
+  {% if page.page > 1 %}<a href="/queue?page={{ page.page - 1 }}">« trang trước</a>{% else %}« trang trước{% endif %}
+  ·
+  {% if page.page < total_pages %}<a href="/queue?page={{ page.page + 1 }}">trang sau »</a>{% else %}trang sau »{% endif %}
+</p>
+{% endblock %}

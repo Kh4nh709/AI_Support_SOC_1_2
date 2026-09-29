@@ -58,6 +58,15 @@ def test_the_decision_tables_are_mounted_read_only_in_the_app():
     _assert_mounted_read_only("app", top)
 
 
+def test_the_backups_directory_is_mounted_read_only_for_the_health_job():
+    # Added by the Director at the P5-T11 merge: `infra/health.py`'s backup-age check reads
+    # `backups/` relative to the working directory, which is /srv in both services
+    # (backend/Dockerfile's WORKDIR). `.dockerignore` keeps it out of the image, so without
+    # this mount the check reports "no backup file found" for ever.
+    _assert_mounted_read_only("worker", "backups")
+    _assert_mounted_read_only("app", "backups")
+
+
 def test_the_worker_shares_the_app_mounts():
     services = _compose()["services"]
     assert services["worker"]["volumes"] == services["app"]["volumes"]

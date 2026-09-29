@@ -21,31 +21,41 @@ either — see the task report's Deviations section. Nothing here is a proposal 
 
 Deterministic build (design note 3): no read of the wall clock, no pseudo-random source, no
 freshly generated id, no bare `set` iteration reaching the rendered text, and every query
-carries an explicit `ORDER BY`
-ending in a primary key. The one non-deterministic input is `nonce`, a required keyword
-parameter — never generated in here.
+that can return more than one row for its key carries an explicit `ORDER BY` sufficient to
+make its output order repeatable — not always literally "ends in the table's primary key"
+(a grouped query orders by its group key, which is what identifies *its* rows; see Review
+round 1 finding 6 in the task report for where the first cut of this docstring overstated
+it). The one non-deterministic input is `nonce`, a required keyword parameter — never
+generated in here.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import psycopg
 
-from app.domain import correlation
+from app.domain.correlation import _WINDOW_PREDICATE
+from app.domain.correlation import _params as _correlation_params
 from app.infra import config
 from app.kb.lookup import get_playbook
 from app.llm.builder import (
     SENTENCE_ABSENT,
     SENTENCE_NO_CORRELATION,
     SENTENCE_NO_PLAYBOOK,
+    AlertStatus,
+    AssetCriticality,
     Category,
     Id,
+    IdentityPrivileged,
+    IocReputation,
+    LookupStatus,
     Severity,
     fact,
 )
@@ -57,15 +67,33 @@ from app.security import wrap
 RAW_LOG_INITIAL_BYTES = 8_192
 RAW_LOG_CUT_BYTES = 4_096
 MAX_REPRESENTATIVE_CLUSTERS = 15
+#: The 300-line baseline (design note 1 block 3) is a structural cap, not a budget-driven
+#: cut: applied unconditionally, keeping the earliest and latest halves with a mark between
+#: them (should 8) rather than only the earliest events. `STEP_TIMELINE_DROPPED` below is
+#: the separate, budget-driven cascade step that removes the whole block.
 TIMELINE_MAX_LINES = 300
+TIMELINE_HEAD_LINES = 150
+TIMELINE_TAIL_LINES = TIMELINE_MAX_LINES - TIMELINE_HEAD_LINES
 MAX_ENTITIES = 50
 ENTITY_HISTORY_DAYS = 7
+#: Block 5's per-sample cap (design note "Block 5 samples are outside the cut cascade" —
+#: Review round 1 finding 4/G): mirrors `llm.triage.SAMPLE_RAW_LOG_LIMIT_BYTES`'s role for
+#: ①'s correlation section, applied unconditionally per sample, never part of the three
+#: budget-driven steps below.
+SAMPLE_RAW_LOG_LIMIT_BYTES = 2_048
+MAX_CORRELATION_ROWS = 20
+MAX_CORRELATION_SAMPLES = 5
 
 STEP_RAW_LOG_CUT = "raw_log_8kb_to_4kb"
 STEP_REPRESENTATIVES_CUT = "representatives_to_15_clusters"
+STEP_TIMELINE_CAPPED = "timeline_cap_300"
 STEP_TIMELINE_DROPPED = "timeline_dropped"
 STEP_STILL_OVER_BUDGET = "budget_exceeded_after_cuts"
 STEP_ENTITIES_CAPPED = "entities_cap_50"
+
+#: Should 8: the representatives cut's ranking, worst-first (design note 4 keeps the
+#: *biggest* clusters — the same instinct DEC-034 named for `risk_score`'s own weights).
+_SEVERITY_RANK = {"critical": 3, "high": 2, "medium": 1, "low": 0}
 
 
 def _estimate_tokens(text: str) -> int:
@@ -86,6 +114,11 @@ SENTENCE_OUT_OF_SCOPE = (
     "Không có threat intel ngoài, dữ liệu gói tin, EDR. "
     "Thiếu thì trả need_more_data, không suy đoán."
 )
+#: Review round 2 nit 7 — block 4's "history not computed" state (md5/sha1/sha256/domain
+#: entities have no structured `alerts` column to count from), a fixed literal like
+#: `SENTENCE_OUT_OF_SCOPE` above, safe outside a wrapper: which of the four hash/domain
+#: kinds an entity is comes from this module's own regex dispatch, never from alert text.
+SENTENCE_HISTORY_NOT_COMPUTED = "history not computed for this entity type"
 HEADING_CASE = "## Case"
 HEADING_CLUSTERS = "## Clusters"
 HEADING_TIMELINE = "## Timeline"
@@ -112,6 +145,7 @@ DOSSIER_TEMPLATE_CONSTANTS = frozenset(
         HEADING_PREVIOUS_RUN,
         HEADING_SCOPE,
         SENTENCE_OUT_OF_SCOPE,
+        SENTENCE_HISTORY_NOT_COMPUTED,
     }
 )
 
@@ -121,10 +155,12 @@ DOSSIER_TEMPLATE_CONSTANTS = frozenset(
 #: docstring reference and the task report for the worked-through reasoning.
 _IPV4_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
 _IPV4_RE = re.compile(rf"\b{_IPV4_OCTET}(?:\.{_IPV4_OCTET}){{3}}\b")
-_IPV6_RE = re.compile(
-    r"\b(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f]{1,4}\b"  # full/partial form, >= 3 groups
-    r"|\b(?:[0-9A-Fa-f]{1,4}:)+:(?:[0-9A-Fa-f]{1,4}:?)*[0-9A-Fa-f]{1,4}\b"  # "::" compressed
-)
+#: A candidate *finder*, deliberately over-inclusive (it also matches `17:56:55`, a
+#: timestamp, and `00:1a:2b:3c:4d:5e`, a MAC address) — `_extract_ipv6` is what actually
+#: decides, by handing every candidate to `ipaddress.IPv6Address` (Review round 1 blocker
+#: 1): that constructor requires exactly 8 groups unless `::` compresses a run of them, so
+#: a 3-group timestamp or a 6-group MAC never validates, while `fe80::1` does.
+_IPV6_CANDIDATE_RE = re.compile(r"\b[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{0,4}){2,7}\b")
 #: One combined hex-run scan classified by exact length (32/40/64) rather than three
 #: separate regexes — a 33-char run greedily matches once as a run of 33 and is simply not
 #: one of the three lengths, so it is never classified as any hash family (the near-miss
@@ -248,7 +284,10 @@ class Entity:
     kind: str
     value: str
     count_7d: int
-    history: Mapping[str, int]
+    #: `None` means "not computed" (md5/sha1/sha256/domain — no structured `alerts`
+    #: column to count from, should 10); an empty mapping means "computed, found
+    #: nothing in the window" — the two render differently (`_block4_entities`).
+    history: Mapping[str, int] | None
     lookup: Mapping[str, Any]
 
 
@@ -300,6 +339,7 @@ class _Head:
     origin_host: str | None
     alert_user: str | None
     srcip: str
+    dstip: str
     raw_payload: Mapping[str, Any]
 
 
@@ -308,11 +348,15 @@ class _Head:
 #: = %s)`; duplicates are `duplicate_of IN` that *same* subquery — never `JOIN case_alerts
 #: USING (alert_id)`, which would miss every duplicate (DEC-036).
 _CASE_ALERT_IDS = "SELECT alert_id FROM case_alerts WHERE case_id = %s"
+#: The same subquery, named-parameter form, for the correlation queries below, which also
+#: bind `domain.correlation._WINDOW_PREDICATE`'s `%(...)s` placeholders in the same call —
+#: psycopg does not accept mixed `%s`/`%(name)s` placeholders against one params mapping.
+_CASE_ALERT_IDS_NAMED = "SELECT alert_id FROM case_alerts WHERE case_id = %(case_id)s"
 
 _HEADS_SQL = f"""
     SELECT alert_id, rule_id, rule_level, severity, category, occurrence_count,
            alert_time, first_seen_at, last_seen_at, description, raw_log,
-           agent_name, origin_host, alert_user, srcip, raw_payload
+           agent_name, origin_host, alert_user, srcip, dstip, raw_payload
     FROM alerts
     WHERE alert_id IN ({_CASE_ALERT_IDS})
     ORDER BY alert_time, alert_id
@@ -326,12 +370,69 @@ _DUPLICATE_SPANS_SQL = f"""
     ORDER BY duplicate_of
 """
 
+#: Should 11: a `UNION ALL` of the PK path and the `ix_alerts_duplicate_of` path, rather
+#: than one `OR`ed `WHERE` — the single-column `IN` on each side lets the planner use the
+#: index each predicate actually has, where the `OR` form forced a sequential scan.
+_TIMELINE_BASE_SQL = f"""
+    SELECT alert_time, rule_id, agent_name, alert_user, alert_id FROM alerts
+     WHERE alert_id IN ({_CASE_ALERT_IDS})
+    UNION ALL
+    SELECT alert_time, rule_id, agent_name, alert_user, alert_id FROM alerts
+     WHERE duplicate_of IN ({_CASE_ALERT_IDS})
+"""
+#: Fetches one more row than the structural cap so `_fetch_timeline` can tell "exactly
+#: 300" from "more than 300" without a separate `count(*)` round trip. Ordered so the
+#: common (uncapped) case needs nothing further — the `ORDER BY alert_time, alert_id`
+#: substring is what the Coder's and the Reviewer's determinism tests monkeypatch away.
 _TIMELINE_SQL = f"""
-    SELECT alert_time, rule_id, agent_name, alert_user, alert_id
-    FROM alerts
-    WHERE alert_id IN ({_CASE_ALERT_IDS}) OR duplicate_of IN ({_CASE_ALERT_IDS})
+    {_TIMELINE_BASE_SQL}
     ORDER BY alert_time, alert_id
-    LIMIT {TIMELINE_MAX_LINES}
+    LIMIT {TIMELINE_MAX_LINES + 1}
+"""
+#: Only reached when `_TIMELINE_SQL` came back with `TIMELINE_MAX_LINES + 1` rows (should
+#: 8: keep head *and* tail, never only the earliest 300) — the newest events, DESC then
+#: reversed in Python, so the two halves never overlap (`TIMELINE_HEAD_LINES +
+#: TIMELINE_TAIL_LINES == TIMELINE_MAX_LINES`, so more than 300 rows always leaves a gap
+#: between the two halves for the marker to stand in for).
+_TIMELINE_TAIL_SQL = f"""
+    {_TIMELINE_BASE_SQL}
+    ORDER BY alert_time DESC, alert_id DESC
+    LIMIT {TIMELINE_TAIL_LINES}
+"""
+#: Exact count for the capped case's `truncations` entry (should 7) — not needed, and not
+#: run, when `_TIMELINE_SQL` alone already answered the whole case.
+_TIMELINE_COUNT_SQL = f"SELECT count(*) FROM ({_TIMELINE_BASE_SQL}) t"
+
+#: Blocker 4: this module's own correlation queries, not `domain.correlation`'s —
+#: `domain.correlation.rows_query`/`samples_query` never exclude the case's own heads
+#: (deviation 6 flipped: they must), are not a total order, and cap samples' `raw_log` not
+#: at all. `_WINDOW_PREDICATE` (the ±2h agent/user/srcip window) is imported, not copied,
+#: so this can never drift from what `escalate`'s own correlation reads.
+_CORRELATION_ROWS_SQL = f"""
+    SELECT rule_id, category, status,
+           count(*) AS cluster_count,
+           sum(occurrence_count) AS alert_count,
+           min(alert_time) AS first_seen,
+           max(alert_time) AS last_seen,
+           count(DISTINCT srcip) AS src_ip_count
+    FROM alerts
+    WHERE {_WINDOW_PREDICATE}
+      AND status <> 'duplicate'
+      AND alert_id NOT IN ({_CASE_ALERT_IDS_NAMED})
+    GROUP BY rule_id, category, status
+    ORDER BY sum(occurrence_count) DESC, rule_id, category, status
+    LIMIT {MAX_CORRELATION_ROWS}
+"""
+
+_CORRELATION_SAMPLES_SQL = f"""
+    SELECT alert_id, rule_id, category, severity, status, occurrence_count,
+           alert_time, description, raw_log
+    FROM alerts
+    WHERE {_WINDOW_PREDICATE}
+      AND status <> 'duplicate'
+      AND alert_id NOT IN ({_CASE_ALERT_IDS_NAMED})
+    ORDER BY occurrence_count DESC, alert_time DESC, alert_id
+    LIMIT {MAX_CORRELATION_SAMPLES}
 """
 
 _TIER1_EVENTS_SQL = f"""
@@ -385,12 +486,39 @@ def _fetch_duplicate_spans(
     return {row[0]: (row[1], row[2], row[3]) for row in rows}
 
 
-def _fetch_timeline(conn: psycopg.Connection, case_id: str) -> list[tuple[Any, ...]]:
-    return conn.execute(_TIMELINE_SQL, (case_id, case_id)).fetchall()
+def _fetch_timeline(
+    conn: psycopg.Connection, case_id: str
+) -> tuple[list[tuple[Any, ...]], bool, int]:
+    """`(rows, capped, total)`. `rows` fetched ascending, `LIMIT 301`: 300 or fewer answers
+    the whole case, `capped=False`, `total == len(rows)`. More than that means the case has
+    over 300 timeline events — should 8: keep the earliest `TIMELINE_HEAD_LINES` *and* the
+    latest `TIMELINE_TAIL_LINES`, never only the earliest 300, so the tail is fetched with
+    its own DESC query and reversed; `capped=True`, the two halves are concatenated (a gap
+    always separates them — see `_TIMELINE_TAIL_SQL`'s docstring), and `total` is the exact
+    count for the `truncations` entry (should 7)."""
+    rows = conn.execute(_TIMELINE_SQL, (case_id, case_id)).fetchall()
+    if len(rows) <= TIMELINE_MAX_LINES:
+        return rows, False, len(rows)
+    total = conn.execute(_TIMELINE_COUNT_SQL, (case_id, case_id)).fetchone()[0]
+    tail = list(reversed(conn.execute(_TIMELINE_TAIL_SQL, (case_id, case_id)).fetchall()))
+    return rows[:TIMELINE_HEAD_LINES] + tail, True, total
 
 
 def _fetch_tier1_events(conn: psycopg.Connection, case_id: str) -> list[tuple[Any, ...]]:
     return conn.execute(_TIER1_EVENTS_SQL, (case_id,)).fetchall()
+
+
+def _fetch_correlation(
+    conn: psycopg.Connection, case_id: str, head: _Head
+) -> tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]:
+    """`(rows, samples)` for one head's ±2h window, this module's own queries (blocker 4):
+    the case's own alerts excluded in SQL (deviation 6, flipped), a total order on each
+    (tie-breakers `rule_id, category, status` / `alert_id`), samples uncapped in row count
+    here — `_block5_correlation` caps and dedupes across heads at render time."""
+    params = {**_correlation_params(head), "case_id": case_id}
+    rows = conn.execute(_CORRELATION_ROWS_SQL, params).fetchall()
+    samples = conn.execute(_CORRELATION_SAMPLES_SQL, params).fetchall()
+    return rows, samples
 
 
 def _fetch_trigger_alert_id(conn: psycopg.Connection, case_id: str) -> str | None:
@@ -412,7 +540,42 @@ def _extract_ipv4(text: str) -> set[str]:
 
 
 def _extract_ipv6(text: str) -> set[str]:
-    return {m.group().lower() for m in _IPV6_RE.finditer(text) if m.group().count(":") >= 2}
+    found: set[str] = set()
+    for m in _IPV6_CANDIDATE_RE.finditer(text):
+        candidate = m.group()
+        try:
+            ipaddress.IPv6Address(candidate)
+        except ValueError:
+            continue  # `17:56:55` (a timestamp), `00:1a:2b:3c:4d:5e` (a MAC) — rejected
+        found.add(candidate.lower())
+    return found
+
+
+def _classify_ip(value: str | None) -> str | None:
+    """`"ipv4"` / `"ipv6"` / `None` for a structured `srcip`/`dstip` column value — used to
+    add those columns to the entity set directly (Review round 1 blocker 2), not through
+    the free-text regexes above: the column is already a parsed, structured address, never
+    itself a hostname or free text."""
+    if not value:
+        return None
+    try:
+        return "ipv6" if ipaddress.ip_address(value).version == 6 else "ipv4"
+    except ValueError:
+        return None
+
+
+def _is_private_ip(value: str) -> bool:
+    """The same test `ingest/wazuh_parser.py`'s `_is_private` runs to fill
+    `alerts.srcip_is_private`/`dstip_is_private` (phase-1 Khối 7, chốt C4) — mirrored,
+    not imported: `tier2` may not import `ingest` (context pack §4). `is_private` alone
+    already covers the RFC 5737 documentation ranges (`203.0.113.0/24` and its
+    neighbours) on this Python; the other three are named explicitly anyway, so this
+    reads correctly on an older stdlib too."""
+    try:
+        addr = ipaddress.ip_address(value)
+        return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved
+    except ValueError:
+        return False
 
 
 def _extract_hashes(text: str) -> dict[str, set[str]]:
@@ -445,10 +608,22 @@ def _raw_payload_str(raw_payload: Mapping[str, Any], *path: str) -> str | None:
 
 def _extract_raw_values(heads: Sequence[_Head]) -> dict[str, set[str]]:
     """Every raw entity string, by type — regex families from `raw_log` + `description`
-    (design note 2's *"From the case's raw_logs and descriptions"*), usernames from the
-    two `raw_payload` paths, hosts from the already-parsed `agent_name`/`origin_host`
-    columns (which is what `agent.name`/`predecoder.hostname` resolve to at ingest —
-    `ingest/wazuh_parser.py` — so no jsonb path walk is needed for hosts)."""
+    (design note 2's *"From the case's raw_logs and descriptions"*); hosts from the
+    already-parsed `agent_name`/`origin_host` columns (what `agent.name`/
+    `predecoder.hostname` resolve to at ingest — `ingest/wazuh_parser.py` — so no jsonb
+    path walk is needed for hosts).
+
+    **Usernames and IPs — Review round 1 blocker 2.** A Windows alert's targeted user
+    (`eventdata.targetUserName`) and source address (`eventdata.ipAddress`) never appear
+    under `raw_payload["data"]["dstuser"/"srcuser"]` — only a Linux/syslog alert's do
+    (DEC-149/152 win over this card's original wording, DEC-151 item 3). `alerts.alert_user`
+    is the column every ingest path already resolves onto (`dstuser` preferred, `srcuser`
+    fallback, then the Windows `eventdata` chain — `ingest/wazuh_parser.py`), so it is the
+    primary username source here; `data.srcuser` is read *in addition*, as a Linux-only
+    supplement, for the lateral-movement case where it differs from the resolved user.
+    Likewise `srcip`/`dstip` — already-parsed, structured addresses, not free text — are
+    entities in their own right alongside whatever the regexes find in `raw_log`/
+    `description`."""
     values: dict[str, set[str]] = {t: set() for t in ENTITY_TYPE_ORDER}
     for head in heads:
         text = f"{head.raw_log}\n{head.description}"
@@ -459,10 +634,15 @@ def _extract_raw_values(heads: Sequence[_Head]) -> dict[str, set[str]]:
         values["sha1"] |= hashes["sha1"]
         values["sha256"] |= hashes["sha256"]
         values["domain"] |= _extract_domains(text)
-        for path in (("data", "dstuser"), ("data", "srcuser")):
-            user = _raw_payload_str(head.raw_payload, *path)
-            if user:
-                values["username"].add(user)
+        for column in (head.srcip, head.dstip):
+            kind = _classify_ip(column)
+            if kind is not None:
+                values[kind].add(column)
+        if head.alert_user:
+            values["username"].add(head.alert_user)
+        linux_srcuser = _raw_payload_str(head.raw_payload, "data", "srcuser")
+        if linux_srcuser:
+            values["username"].add(linux_srcuser)
         if head.agent_name:
             values["host"].add(head.agent_name)
         if head.origin_host and head.origin_host != head.agent_name:
@@ -495,24 +675,40 @@ def _bulk_identity_lookup(conn: psycopg.Connection, users: list[str]) -> dict[st
 
 
 def _bulk_ioc_lookup(conn: psycopg.Connection, values: list[str]) -> dict[str, dict[str, Any]]:
+    """Blocker 3: `iocs`' PK is `(value, source)`, so more than one row can share a
+    `value`. Mirrors `enrichment.lookups.lookup_ioc`'s worst-wins rule
+    (`malicious > suspicious > clean`) and adds the total order that function's own bare
+    `max()` over an unordered query never had: ties broken by `source`, so which row
+    "wins" never depends on `iocs`' physical row order. The private-IP "skip, don't even
+    look up" rule lives in the caller (`_build_entities`), which is where an entity first
+    knows whether its own value is a private address."""
     if not values:
         return {}
     rows = conn.execute(
-        "SELECT value, reputation FROM iocs "
-        "WHERE value = ANY(%s) AND active AND expires_at > now() ORDER BY value",
+        "SELECT value, source, reputation FROM iocs "
+        "WHERE value = ANY(%s) AND active AND expires_at > now() "
+        "ORDER BY value, "
+        "CASE reputation WHEN 'malicious' THEN 3 WHEN 'suspicious' THEN 2 "
+        "WHEN 'clean' THEN 1 ELSE 0 END DESC, source",
         (values,),
     ).fetchall()
-    return {r[0]: {"status": "found", "reputation": r[1]} for r in rows}
+    out: dict[str, dict[str, Any]] = {}
+    for value, _source, reputation in rows:
+        if value not in out:  # first row per value, by the ORDER BY above, is worst-wins
+            out[value] = {"status": "found", "reputation": reputation}
+    return out
 
 
-def _bulk_host_history(conn: psycopg.Connection, hosts: list[str]) -> dict[str, dict[str, int]]:
+def _bulk_host_history(
+    conn: psycopg.Connection, hosts: list[str], window: tuple[datetime, datetime]
+) -> dict[str, dict[str, int]]:
     if not hosts:
         return {}
     rows = conn.execute(
-        f"SELECT agent_name, category, count(*) FROM alerts "
-        f"WHERE agent_name = ANY(%s) AND alert_time > now() - interval '{ENTITY_HISTORY_DAYS} days' "
-        f"GROUP BY agent_name, category ORDER BY agent_name, category",
-        (hosts,),
+        "SELECT agent_name, category, count(*) FROM alerts "
+        "WHERE agent_name = ANY(%s) AND alert_time >= %s AND alert_time < %s "
+        "GROUP BY agent_name, category ORDER BY agent_name, category",
+        (hosts, *window),
     ).fetchall()
     out: dict[str, dict[str, int]] = {}
     for host, cat, n in rows:
@@ -520,14 +716,16 @@ def _bulk_host_history(conn: psycopg.Connection, hosts: list[str]) -> dict[str, 
     return out
 
 
-def _bulk_username_history(conn: psycopg.Connection, users: list[str]) -> dict[str, dict[str, int]]:
+def _bulk_username_history(
+    conn: psycopg.Connection, users: list[str], window: tuple[datetime, datetime]
+) -> dict[str, dict[str, int]]:
     if not users:
         return {}
     rows = conn.execute(
-        f"SELECT alert_user, category, count(*) FROM alerts "
-        f"WHERE alert_user = ANY(%s) AND alert_time > now() - interval '{ENTITY_HISTORY_DAYS} days' "
-        f"GROUP BY alert_user, category ORDER BY alert_user, category",
-        (users,),
+        "SELECT alert_user, category, count(*) FROM alerts "
+        "WHERE alert_user = ANY(%s) AND alert_time >= %s AND alert_time < %s "
+        "GROUP BY alert_user, category ORDER BY alert_user, category",
+        (users, *window),
     ).fetchall()
     out: dict[str, dict[str, int]] = {}
     for user, cat, n in rows:
@@ -535,23 +733,25 @@ def _bulk_username_history(conn: psycopg.Connection, users: list[str]) -> dict[s
     return out
 
 
-def _bulk_ip_history(conn: psycopg.Connection, ips: list[str]) -> dict[str, dict[str, int]]:
+def _bulk_ip_history(
+    conn: psycopg.Connection, ips: list[str], window: tuple[datetime, datetime]
+) -> dict[str, dict[str, int]]:
     """One SQL for both IPv4 and IPv6 entities: an IP can appear as `srcip` or `dstip`."""
     if not ips:
         return {}
     rows = conn.execute(
-        f"""
+        """
         SELECT ip, category, count(*) FROM (
             SELECT srcip AS ip, category FROM alerts
-             WHERE srcip = ANY(%s) AND alert_time > now() - interval '{ENTITY_HISTORY_DAYS} days'
+             WHERE srcip = ANY(%s) AND alert_time >= %s AND alert_time < %s
             UNION ALL
             SELECT dstip AS ip, category FROM alerts
-             WHERE dstip = ANY(%s) AND alert_time > now() - interval '{ENTITY_HISTORY_DAYS} days'
+             WHERE dstip = ANY(%s) AND alert_time >= %s AND alert_time < %s
         ) x
         GROUP BY ip, category
         ORDER BY ip, category
         """,
-        (ips, ips),
+        (ips, *window, ips, *window),
     ).fetchall()
     out: dict[str, dict[str, int]] = {}
     for ip, cat, n in rows:
@@ -560,42 +760,69 @@ def _bulk_ip_history(conn: psycopg.Connection, ips: list[str]) -> dict[str, dict
     return out
 
 
+def _history_window(heads: Sequence[_Head]) -> tuple[datetime, datetime] | None:
+    """Should 10 (ruling): anchored *before* the case, at `[earliest head alert_time -
+    7 days, earliest head alert_time)` — independent of `now()` (so two builds of the same
+    case are identical regardless of when either runs) and excluding the case's own
+    alerts by construction (the window ends strictly before the case started, so nothing
+    the case itself created can fall inside it): "was this entity seen before the
+    incident". `None` when there are no heads to anchor on."""
+    if not heads:
+        return None
+    anchor = min(h.alert_time for h in heads)
+    return anchor - timedelta(days=ENTITY_HISTORY_DAYS), anchor
+
+
 def _build_entities(conn: psycopg.Connection, heads: Sequence[_Head]) -> tuple[Entity, ...]:
     """Cap 50, ordered deterministically by (type, -count_7d, value) — a value can appear
     only once per type, so this key is always a strict total order regardless of which
     order the extraction or the bulk queries happen to visit rows in (design note 2, 3)."""
     raw = _extract_raw_values(heads)
+    window = _history_window(heads)
     ip_values = sorted(raw["ipv4"] | raw["ipv6"])
+    public_ip_values = [v for v in ip_values if not _is_private_ip(v)]
     host_lookup = _bulk_asset_lookup(conn, sorted(raw["host"]))
-    host_history = _bulk_host_history(conn, sorted(raw["host"]))
     user_lookup = _bulk_identity_lookup(conn, sorted(raw["username"]))
-    user_history = _bulk_username_history(conn, sorted(raw["username"]))
-    ip_history = _bulk_ip_history(conn, ip_values)
     ioc_values = sorted(
-        raw["ipv4"] | raw["ipv6"] | raw["md5"] | raw["sha1"] | raw["sha256"] | raw["domain"]
+        set(public_ip_values) | raw["md5"] | raw["sha1"] | raw["sha256"] | raw["domain"]
     )
     ioc_lookup = _bulk_ioc_lookup(conn, ioc_values)
+    if window is None:
+        host_history: dict[str, dict[str, int]] = {}
+        user_history: dict[str, dict[str, int]] = {}
+        ip_history: dict[str, dict[str, int]] = {}
+    else:
+        host_history = _bulk_host_history(conn, sorted(raw["host"]), window)
+        user_history = _bulk_username_history(conn, sorted(raw["username"]), window)
+        ip_history = _bulk_ip_history(conn, ip_values, window)
 
     entities: list[Entity] = []
     for kind in ENTITY_TYPE_ORDER:
+        # md5/sha1/sha256/domain have no structured `alerts` column to count history from
+        # (Review round 1 deviation 4, kept): "not computed", never "none" (should 10) —
+        # `history=None` in the `else` branch below is that state; the other four kinds
+        # always set a dict (possibly empty, meaning "computed, found nothing").
         for value in sorted(raw[kind]):
             if kind == "host":
                 lookup = host_lookup.get(value, {"status": "not_found"})
-                history = host_history.get(value, {})
+                history: dict[str, int] | None = host_history.get(value, {})
             elif kind == "username":
                 lookup = user_lookup.get(value, {"status": "not_found"})
                 history = user_history.get(value, {})
             elif kind in ("ipv4", "ipv6"):
-                lookup = ioc_lookup.get(value, {"status": "not_found"})
+                if _is_private_ip(value):  # C4 in enrichment/lookups.py: never looked up
+                    lookup = {"status": "skipped", "reputation": "skipped"}
+                else:
+                    lookup = ioc_lookup.get(value, {"status": "not_found"})
                 history = ip_history.get(value, {})
-            else:  # md5 / sha1 / sha256 / domain — no structured alerts column for history
+            else:
                 lookup = ioc_lookup.get(value, {"status": "not_found"})
-                history = {}
+                history = None
             entities.append(
                 Entity(
                     kind=kind,
                     value=value,
-                    count_7d=sum(history.values()),
+                    count_7d=sum(history.values()) if history else 0,
                     history=history,
                     lookup=lookup,
                 )
@@ -606,12 +833,35 @@ def _build_entities(conn: psycopg.Connection, heads: Sequence[_Head]) -> tuple[E
 
 
 # ─────────────────────────────────────────────────────────────── rendering (design note 1)
+def _utc(value: datetime) -> datetime:
+    """Nit 15: render every datetime on a fixed offset, never the session's `TimeZone`
+    GUC — two builds under different ambient timezones must produce the same text."""
+    return value.astimezone(UTC)
+
+
+def _iso(value: datetime) -> str:
+    return _utc(value).isoformat(timespec="seconds")
+
+
+def _id_fact(name: str, kind: str, value: str, nonce: str) -> str:
+    """`fact(name, Id(kind, value))` — or, for a value that fails the id pattern (which
+    must never happen for a real ingested `alert_id`/`rule_id` but must never crash the
+    build either, nit 15), the raw value inside its own small wrapped block instead of a
+    raised `ValueError`."""
+    try:
+        return fact(name, Id(kind, value))
+    except ValueError:
+        return wrap.untrusted_block(f"{name}: {value}", "context", nonce=nonce).rendered
+
+
 def _block1_case(
     case_row: Mapping[str, Any],
     heads: Sequence[_Head],
     dup_spans: Mapping[str, tuple[int, datetime, datetime]],
     trigger_alert_id: str | None,
     nonce: str,
+    *,
+    representatives_shown: int | None,
 ) -> str:
     total_dup = sum(span[0] for span in dup_spans.values())
     total_occurrences = sum(h.occurrence_count for h in heads)
@@ -621,16 +871,21 @@ def _block1_case(
     parts.append(fact("occurrence_count", int(total_occurrences)))
     parts.append(fact("alerts", int(len(heads) + total_dup)))
     if heads:
-        parts.append(fact("first_seen", min(h.alert_time for h in heads)))
-        parts.append(fact("last_seen", max(h.alert_time for h in heads)))
+        parts.append(fact("first_seen", _utc(min(h.first_seen_at for h in heads))))
+        parts.append(fact("last_seen", _utc(max(h.last_seen_at for h in heads))))
     if trigger_alert_id:
-        try:
-            parts.append(fact("alert_id", Id("alert_id", trigger_alert_id)))
-        except ValueError:
-            pass  # design note: a malformed id from an old audit row is never echoed raw
+        parts.append(_id_fact("alert_id", "alert_id", trigger_alert_id, nonce))
     context_lines = [f"title: {case_row['title']}"]
     if case_row.get("created_by"):
         context_lines.append(f"escalated_by: {case_row['created_by']}")
+    # Should 7: block 1's `clusters: N` next to how many block 2 actually lists, inside
+    # the block that carries the mark — a bare "clusters: 20" beside 15 listed clusters
+    # says nothing on its own about the cut.
+    if representatives_shown is not None and representatives_shown < len(heads):
+        context_lines.append(
+            f"representatives_shown: {representatives_shown} of {len(heads)} "
+            f"{wrap.TRUNCATION_MARKER}"
+        )
     parts.append(wrap.untrusted_block("\n".join(context_lines), "context", nonce=nonce).rendered)
     return "\n".join(parts)
 
@@ -645,18 +900,17 @@ def _block2_clusters(
     parts = [HEADING_CLUSTERS]
     for head in heads:
         line = [
-            fact("alert_id", Id("alert_id", head.alert_id)),
-            fact("rule_id", Id("rule_id", head.rule_id)),
+            _id_fact("alert_id", "alert_id", head.alert_id, nonce),
+            _id_fact("rule_id", "rule_id", head.rule_id, nonce),
             fact("severity", Severity(head.severity)),
             fact("category", Category(head.category)),
             fact("occurrence_count", int(head.occurrence_count)),
         ]
         span = dup_spans.get(head.alert_id)
         if span is not None:
-            dup_count, dup_first, dup_last = span
-            line.append(fact("alerts", int(dup_count)))
-            line.append(fact("first_seen", dup_first))
-            line.append(fact("last_seen", dup_last))
+            _dup_count, dup_first, dup_last = span
+            line.append(fact("first_seen", _utc(dup_first)))
+            line.append(fact("last_seen", _utc(dup_last)))
         parts.append(" · ".join(line))
         parts.append(
             wrap.untrusted_block(
@@ -666,89 +920,208 @@ def _block2_clusters(
                 limit_bytes=raw_log_limit,
             ).rendered
         )
+        # Blocker 5: 249 of 842 real heads carry an empty `raw_log`, and P5-T04's evidence
+        # check accepts a quote from `raw_log` *or* `description` — the description was
+        # never rendered anywhere before this. Wrapped separately (its own source, so a
+        # linter/evidence reader can tell which field a quote came from), with the head's
+        # agent/user/IPs alongside it — free text and structured-but-untrusted addresses
+        # both, so they go in the same small block rather than bare beside a `fact()`.
+        if head.description:
+            # Review round 2 nit 9: capped at the tighter of the two raw_log limits,
+            # always — unlike `raw_log_limit` above, this never starts at 8 KB, since
+            # the description is meant to be a short rule label, not a second log body.
+            parts.append(
+                wrap.untrusted_block(
+                    head.description,
+                    "rule_description",
+                    nonce=nonce,
+                    limit_bytes=RAW_LOG_CUT_BYTES,
+                ).rendered
+            )
+        context_lines = [f"agent_name: {head.agent_name}"]
+        if head.origin_host and head.origin_host != head.agent_name:
+            context_lines.append(f"origin_host: {head.origin_host}")
+        if head.alert_user:
+            context_lines.append(f"alert_user: {head.alert_user}")
+        if head.srcip:
+            context_lines.append(f"srcip: {head.srcip}")
+        if head.dstip:
+            context_lines.append(f"dstip: {head.dstip}")
+        parts.append(
+            wrap.untrusted_block("\n".join(context_lines), "context", nonce=nonce).rendered
+        )
     return "\n".join(parts)
 
 
-def _block3_timeline(rows: Sequence[tuple[Any, ...]], nonce: str) -> str:
-    lines = [
-        f"{alert_time.isoformat(timespec='seconds')} · {rule_id} · {agent_name} · {alert_user or ''}"
-        for alert_time, rule_id, agent_name, alert_user, _alert_id in rows
-    ]
-    body = "\n".join(lines)
+def _block3_timeline(
+    rows: Sequence[tuple[Any, ...]], nonce: str, *, capped: bool, dropped: bool
+) -> str:
+    if dropped:
+        # Should 7: the drop must not leave an empty wrapped block — the mark itself is
+        # the content.
+        body = wrap.TRUNCATION_MARKER
+    else:
+        lines = [
+            f"{_iso(alert_time)} · {rule_id} · {agent_name} · {alert_user or ''}"
+            for alert_time, rule_id, agent_name, alert_user, _alert_id in rows
+        ]
+        if capped:
+            lines.insert(TIMELINE_HEAD_LINES, wrap.TRUNCATION_MARKER)
+        body = "\n".join(lines) if lines else wrap.TRUNCATION_MARKER
     wrapped = wrap.untrusted_block(body, "context", nonce=nonce).rendered
     return f"{HEADING_TIMELINE}\n{wrapped}"
 
 
-def _entity_detail(entity: Entity) -> str:
-    if entity.lookup.get("status") != "found":
-        return SENTENCE_ABSENT
+def _entity_lookup_facts(entity: Entity, nonce: str) -> str:
+    """Should 9: the lookup *result* — found/not_found/skipped and, when found, the
+    criticality/privilege/reputation — is trusted, closed-set data (it came from our own
+    `assets`/`identities`/`iocs`, never from the alert), so it is rendered through
+    `fact()` outside any wrap; only the entity *value* itself (§_block4_entities) sits in
+    a small wrapped block. Before this, both sat inside the same wrap, where a forged
+    username in `raw_log` could fake a "found, privileged" sibling line no reader could
+    tell from a real one.
+
+    Review round 2 should 4: `SENTENCE_ABSENT` follows only `not_found` — a `skipped`
+    lookup (a private IP, never queried at all) is not "absent from the internal
+    database", and saying so would be false. ① makes exactly this distinction
+    (`llm/triage.py` renders `SENTENCE_ABSENT` only for `LookupStatus.NOT_FOUND`)."""
+    status = entity.lookup.get("status") or "not_found"
     if entity.kind == "host":
-        return f"criticality={entity.lookup.get('criticality')}"
-    if entity.kind == "username":
-        return f"privileged={entity.lookup.get('is_privileged')}"
-    return f"reputation={entity.lookup.get('reputation')}"
+        parts = [fact("lookup_asset", LookupStatus(status))]
+        if status == "found":
+            criticality = entity.lookup.get("criticality") or "unknown"
+            parts.append(fact("asset_criticality", AssetCriticality(criticality)))
+        elif status == "not_found":
+            parts.append(SENTENCE_ABSENT)
+    elif entity.kind == "username":
+        parts = [fact("lookup_identity", LookupStatus(status))]
+        if status == "found":
+            privileged = entity.lookup.get("is_privileged")
+            priv_value = "true" if privileged else ("false" if privileged is False else "unknown")
+            parts.append(fact("identity_privileged", IdentityPrivileged(priv_value)))
+        elif status == "not_found":
+            parts.append(SENTENCE_ABSENT)
+    else:
+        parts = [fact("lookup_ioc", LookupStatus(status))]
+        if status == "found":
+            reputation = entity.lookup.get("reputation") or "not_found"
+            parts.append(fact("ioc_reputation", IocReputation(reputation)))
+        elif status == "not_found":
+            parts.append(SENTENCE_ABSENT)
+    return " · ".join(parts)
+
+
+def _entity_history_facts(entity: Entity) -> list[str]:
+    """Review round 2 nit 7 (ruling): the 7-day history — each category a `Category`
+    enum value, each count a plain int, both computed by this module from our own
+    `alerts` table and never attacker-controlled — moves to trusted `fact()` lines
+    outside the wrap, reusing the existing `category`/`alerts` pair (the same two
+    `FACT_NAMES` `_block5_correlation`'s rows already use for the same shape: a
+    category and a count). No name was added to `FACT_NAMES` — `category` and `alerts`
+    already fit.
+
+    Before this, the whole "7d: …" line sat inside the entity value's own wrap, where a
+    multi-line value (e.g. a forged username ending in a fake "\\n7d: none") could plant
+    a sibling history line no reader could tell from the real one. `None` (not computed
+    — md5/sha1/sha256/domain, should 10) renders `SENTENCE_HISTORY_NOT_COMPUTED`, also
+    outside the wrap; an empty mapping (computed, nothing found) renders nothing further
+    — the absence of both is itself the signal, and it is not attacker-influenced
+    either way."""
+    if entity.history is None:
+        return [SENTENCE_HISTORY_NOT_COMPUTED]
+    return [
+        " · ".join((fact("category", Category(cat)), fact("alerts", int(n))))
+        for cat, n in sorted(entity.history.items())
+    ]
 
 
 def _block4_entities(entities: Sequence[Entity], nonce: str) -> str:
-    lines = []
+    parts = [HEADING_ENTITIES]
     for e in entities:
-        history_str = ", ".join(f"{cat}={n}" for cat, n in sorted(e.history.items())) or "none"
-        lines.append(
-            f"{e.kind}: {e.value} | lookup: {e.lookup.get('status')} | "
-            f"{_entity_detail(e)} | {ENTITY_HISTORY_DAYS}d: {history_str}"
-        )
-    body = "\n".join(lines)
-    wrapped = wrap.untrusted_block(body, "context", nonce=nonce).rendered
-    return f"{HEADING_ENTITIES}\n{wrapped}"
+        value_body = f"{e.kind}: {e.value}"
+        parts.append(wrap.untrusted_block(value_body, "context", nonce=nonce).rendered)
+        parts.append(_entity_lookup_facts(e, nonce))
+        parts.extend(_entity_history_facts(e))
+    return "\n".join(parts)
+
+
+def _render_correlation_sample(sample: tuple[Any, ...], nonce: str) -> str:
+    (
+        alert_id,
+        rule_id,
+        category,
+        _severity,
+        _status,
+        occurrence_count,
+        alert_time,
+        description,
+        raw_log,
+    ) = sample
+    raw_log, _truncated = wrap.truncate_block(raw_log or "", SAMPLE_RAW_LOG_LIMIT_BYTES)
+    header = (
+        f"alert_id={alert_id} rule_id={rule_id} category={category} "
+        f"occurrence={occurrence_count} alert_time={_iso(alert_time)}"
+    )
+    return "\n".join((header, description or "", raw_log))
 
 
 def _block5_correlation(
     heads: Sequence[_Head],
-    correlation_by_head: Mapping[str, correlation.CorrelationSummary],
-    case_head_ids: frozenset[str],
+    correlation_by_head: Mapping[str, tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]],
     nonce: str,
 ) -> str:
     parts = [HEADING_CORRELATION]
+    shown_samples: set[str] = set()
     for head in heads:
-        parts.append(fact("alert_id", Id("alert_id", head.alert_id)))
-        summary = correlation_by_head.get(head.alert_id)
-        rows = summary.rows if summary is not None else ()
+        parts.append(_id_fact("alert_id", "alert_id", head.alert_id, nonce))
+        rows, samples = correlation_by_head.get(head.alert_id, ([], []))
         if not rows:
             parts.append(SENTENCE_NO_CORRELATION)
             continue
-        for row in rows:
+        for (
+            rule_id,
+            category,
+            status,
+            cluster_count,
+            alert_count,
+            first_seen,
+            last_seen,
+            src_ip_count,
+        ) in rows:
             parts.append(
                 " · ".join(
                     (
-                        fact("rule_id", Id("rule_id", row.rule_id)),
-                        fact("category", Category(row.category)),
-                        fact("clusters", int(row.cluster_count)),
-                        fact("alerts", int(row.alert_count)),
-                        fact("src_ips", int(row.src_ip_count)),
-                        fact("first_seen", row.first_seen),
-                        fact("last_seen", row.last_seen),
+                        _id_fact("rule_id", "rule_id", rule_id, nonce),
+                        fact("category", Category(category)),
+                        fact("status", AlertStatus(status)),
+                        fact("clusters", int(cluster_count)),
+                        fact("alerts", int(alert_count)),
+                        fact("src_ips", int(src_ip_count)),
+                        fact("first_seen", _utc(first_seen)),
+                        fact("last_seen", _utc(last_seen)),
                     )
                 )
             )
-        # "clusters not already in the case" (design note 1 block 5): the samples are
-        # the only place a concrete alert_id is named, so that is where this is applied.
-        samples = [s for s in summary.samples if s.get("alert_id") not in case_head_ids]
-        if samples:
-            body = "\n\n".join(
-                f"alert_id={s.get('alert_id')} rule_id={s.get('rule_id')} "
-                f"category={s.get('category')}\n{s.get('description') or ''}\n{s.get('raw_log') or ''}"
-                for s in samples
-            )
+        # Deduplicate across heads: the same external alert can fall in more than one
+        # head's ±2h window, and design note 1 asks for it as evidence once, not once per
+        # head it happens to correlate with.
+        new_samples = [s for s in samples if s[0] not in shown_samples]
+        for s in new_samples:
+            shown_samples.add(s[0])
+        if new_samples:
+            body = "\n\n".join(_render_correlation_sample(s, nonce) for s in new_samples)
             parts.append(wrap.untrusted_block(body, "correlation_samples", nonce=nonce).rendered)
     return "\n".join(parts)
 
 
 def _block6_tier1(rows: Sequence[tuple[Any, ...]], nonce: str) -> str:
+    # Nit 13: only event_type/subject_id/actor_role/created_at are ever read here — a
+    # `tier1.decided` payload's `llm_suggestion`/`llm_confidence` (or any other payload
+    # key) never reaches the dossier; there is no path in this function that touches
+    # `payload` at all.
     lines = []
     for _audit_id, event_type, subject_id, _actor_id, actor_role, _payload, created_at in rows:
-        lines.append(
-            f"{created_at.isoformat(timespec='seconds')} · {event_type} · {subject_id} · {actor_role}"
-        )
+        lines.append(f"{_iso(created_at)} · {event_type} · {subject_id} · {actor_role}")
     body = "\n".join(lines)
     wrapped = wrap.untrusted_block(body, "context", nonce=nonce).rendered
     return f"{HEADING_TIER1}\n{wrapped}"
@@ -774,14 +1147,14 @@ def _block8_notes_and_previous(
     parts = [HEADING_NOTES]
     if notes:
         body = "\n\n".join(
-            f"{created_at.isoformat(timespec='seconds')} ({author_id}):\n{body_text}"
+            f"{_iso(created_at)} ({author_id}):\n{body_text}"
             for author_id, body_text, created_at in notes
         )
         parts.append(wrap.untrusted_block(body, "context", nonce=nonce).rendered)
     parts.append(HEADING_PREVIOUS_RUN)
     if previous_run is not None:
         _run_id, result, created_at = previous_run
-        body = f"{created_at.isoformat(timespec='seconds')}\n{json.dumps(result, ensure_ascii=False, sort_keys=True)}"
+        body = f"{_iso(created_at)}\n{json.dumps(result, ensure_ascii=False, sort_keys=True)}"
         # Injection accumulating across rounds (docs/phase-7-tier2.md:250): a previous ②
         # result that was itself injected must not re-enter the next prompt unwrapped.
         parts.append(wrap.untrusted_block(body, "proposer", nonce=nonce).rendered)
@@ -790,6 +1163,36 @@ def _block8_notes_and_previous(
 
 def _block9_scope() -> str:
     return f"{HEADING_SCOPE}\n{SENTENCE_OUT_OF_SCOPE}"
+
+
+def _select_representatives(
+    heads: Sequence[_Head], trigger_alert_id: str | None, limit: int
+) -> frozenset[str]:
+    """Should 8: which heads survive the representatives cut. The escalation trigger
+    (`case.opened`'s `trigger_alert_id`, when it is one of this case's own heads) is
+    always kept; the rest are ranked worst-first — severity, then `rule_level`, then
+    `occurrence_count`, each descending — ties broken by `alert_id` for a total order, so
+    the cap cuts the same heads every time (design note 2's rule for the entity cap,
+    applied here too)."""
+    if len(heads) <= limit:
+        return frozenset(h.alert_id for h in heads)
+    head_ids = {h.alert_id for h in heads}
+    trigger = trigger_alert_id if trigger_alert_id in head_ids else None
+    rest = [h for h in heads if h.alert_id != trigger]
+    ranked = sorted(
+        rest,
+        key=lambda h: (
+            -_SEVERITY_RANK.get(h.severity, -1),
+            -h.rule_level,
+            -h.occurrence_count,
+            h.alert_id,
+        ),
+    )
+    keep_count = limit - (1 if trigger else 0)
+    kept = {h.alert_id for h in ranked[:keep_count]}
+    if trigger:
+        kept.add(trigger)
+    return frozenset(kept)
 
 
 # ─────────────────────────────────────────────────────────────────────── build()
@@ -808,23 +1211,31 @@ def build(
 
     heads = _fetch_heads(conn, case_id)
     dup_spans = _fetch_duplicate_spans(conn, case_id)
-    timeline_rows = _fetch_timeline(conn, case_id)
+    timeline_rows, timeline_capped, timeline_total = _fetch_timeline(conn, case_id)
     tier1_rows = _fetch_tier1_events(conn, case_id)
     trigger_alert_id = _fetch_trigger_alert_id(conn, case_id)
     notes = _fetch_notes(conn, case_id)
     previous_run = _fetch_previous_run(conn, case_id)
     categories = sorted({h.category for h in heads})
 
-    entities_all = _build_entities(conn, heads)
     truncations: list[dict[str, Any]] = []
+    if timeline_capped:
+        # Should 7/8: the 300-line structural cap is unconditional, like the entity cap
+        # below — recorded regardless of whether the token budget is ever exceeded, and
+        # distinct from `STEP_TIMELINE_DROPPED`, the budget-driven cascade step that can
+        # remove the block entirely.
+        truncations.append(
+            {"step": STEP_TIMELINE_CAPPED, "before": timeline_total, "after": TIMELINE_MAX_LINES}
+        )
+
+    entities_all = _build_entities(conn, heads)
     if len(entities_all) > MAX_ENTITIES:
         truncations.append(
             {"step": STEP_ENTITIES_CAPPED, "before": len(entities_all), "after": MAX_ENTITIES}
         )
     entities = entities_all[:MAX_ENTITIES]
 
-    case_head_ids = frozenset(h.alert_id for h in heads)
-    correlation_by_head = {h.alert_id: correlation.summarize_for_prompt(conn, h) for h in heads}
+    correlation_by_head = {h.alert_id: _fetch_correlation(conn, case_id, h) for h in heads}
 
     total_dup = sum(span[0] for span in dup_spans.values())
     snapshot = Snapshot(
@@ -834,17 +1245,22 @@ def build(
     )
 
     raw_log_limit = RAW_LOG_INITIAL_BYTES
-    n_clusters = len(heads)
-    timeline_active = list(timeline_rows)
+    kept_ids: frozenset[str] | None = None
+    timeline_dropped = False
 
     def render() -> str:
-        display_heads = heads[:n_clusters]
+        display_heads = heads if kept_ids is None else [h for h in heads if h.alert_id in kept_ids]
+        shown = len(display_heads) if kept_ids is not None else None
         sections = [
-            _block1_case(case_row, heads, dup_spans, trigger_alert_id, nonce),
+            _block1_case(
+                case_row, heads, dup_spans, trigger_alert_id, nonce, representatives_shown=shown
+            ),
             _block2_clusters(display_heads, dup_spans, nonce, raw_log_limit=raw_log_limit),
-            _block3_timeline(timeline_active, nonce),
+            _block3_timeline(
+                timeline_rows, nonce, capped=timeline_capped, dropped=timeline_dropped
+            ),
             _block4_entities(entities, nonce),
-            _block5_correlation(display_heads, correlation_by_head, case_head_ids, nonce),
+            _block5_correlation(display_heads, correlation_by_head, nonce),
             _block6_tier1(tier1_rows, nonce),
             _block7_playbooks(categories, nonce),
             _block8_notes_and_previous(notes, previous_run, nonce),
@@ -858,21 +1274,27 @@ def build(
 
     if estimated > budget and raw_log_limit > RAW_LOG_CUT_BYTES:
         before = estimated
+        # Nit 14: only worth recording — and only worth re-rendering for — if some
+        # cluster's `raw_log` actually exceeds the tighter limit; otherwise the cut is a
+        # no-op and the step is skipped (the limit is still tightened, harmlessly, for
+        # whatever renders after this point).
+        would_cut = any(len(h.raw_log.encode("utf-8")) > RAW_LOG_CUT_BYTES for h in heads)
         raw_log_limit = RAW_LOG_CUT_BYTES
-        text = render()
-        estimated = _estimate_tokens(text)
-        truncations.append({"step": STEP_RAW_LOG_CUT, "before": before, "after": estimated})
+        if would_cut:
+            text = render()
+            estimated = _estimate_tokens(text)
+            truncations.append({"step": STEP_RAW_LOG_CUT, "before": before, "after": estimated})
 
-    if estimated > budget and n_clusters > MAX_REPRESENTATIVE_CLUSTERS:
+    if estimated > budget and len(heads) > MAX_REPRESENTATIVE_CLUSTERS:
         before = estimated
-        n_clusters = MAX_REPRESENTATIVE_CLUSTERS
+        kept_ids = _select_representatives(heads, trigger_alert_id, MAX_REPRESENTATIVE_CLUSTERS)
         text = render()
         estimated = _estimate_tokens(text)
         truncations.append({"step": STEP_REPRESENTATIVES_CUT, "before": before, "after": estimated})
 
-    if estimated > budget and timeline_active:
+    if estimated > budget and not timeline_dropped and (timeline_rows or timeline_capped):
         before = estimated
-        timeline_active = []
+        timeline_dropped = True
         text = render()
         estimated = _estimate_tokens(text)
         truncations.append({"step": STEP_TIMELINE_DROPPED, "before": before, "after": estimated})
