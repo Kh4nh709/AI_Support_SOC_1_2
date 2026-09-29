@@ -1,0 +1,49 @@
+{#
+  One digest row — included by digest.html's table loop, and rendered
+  standalone (get_template("_digest_row.html").render(...)) as the HTMX
+  fragment `POST /admin/digest/{alert_id}/review` swaps in via
+  hx-target="closest tr" / hx-swap="outerHTML" (P5-T09).
+
+  Context: `row` (a tier1.digest.DigestRow), `day` (YYYY-MM-DD, for the
+  buttons' hidden field), `tz` (cfg.DISPLAY_TZ), `verdict_labels` (dict),
+  `conflict` (bool, default falsy — true only on a 409 where `row` carries
+  no reviewed_verdict of its own, so the buttons must still not be offered).
+#}
+<tr data-alert-id="{{ row.alert_id }}"{% if row.disagreement %} class="disagreement"{% endif %}>
+  <td data-field="rule">{{ row.autoclose_rule_name or row.rule_id }}</td>
+  <td data-field="description">{{ row.description }}</td>
+  <td data-field="severity">{{ row.severity }}</td>
+  <td data-field="category">{{ row.category }}</td>
+  <td data-field="agent_name">{{ row.agent_name }}</td>
+  <td data-field="occurrence_count">{{ row.occurrence_count }}</td>
+  <td data-field="span">{{ row.first_seen_at | local_time(tz) }} – {{ row.last_seen_at | local_time(tz) }}</td>
+  <td data-field="suggested_action">
+    {{ row.suggested_action or "(chưa có kết quả ①)" }}{% if row.disagreement %} <strong data-field="disagreement-marker">⚠ ① không đề xuất đóng</strong>{% endif %}
+  </td>
+  <td data-field="verdict">
+    {% if row.reviewed_verdict %}
+    <span data-field="reviewed-verdict">{{ verdict_labels.get(row.reviewed_verdict, row.reviewed_verdict) }}</span>
+    {% if row.reviewed_verdict == "wrong" %}
+    <span data-field="reopened-note">đã mở lại về hàng đợi Tier 1</span>
+    {% endif %}
+    {% elif conflict %}
+    <span data-field="conflict-note">trạng thái đã thay đổi — tải lại trang</span>
+    {% else %}
+    <form hx-post="/admin/digest/{{ row.alert_id }}/review" hx-target="closest tr" hx-swap="outerHTML" style="display:inline">
+      <input type="hidden" name="day" value="{{ day }}">
+      <input type="hidden" name="verdict" value="correct">
+      <button type="submit" data-action="correct">Đúng</button>
+    </form>
+    <form hx-post="/admin/digest/{{ row.alert_id }}/review" hx-target="closest tr" hx-swap="outerHTML" style="display:inline">
+      <input type="hidden" name="day" value="{{ day }}">
+      <input type="hidden" name="verdict" value="wrong">
+      <button type="submit" data-action="wrong">Sai</button>
+    </form>
+    <form hx-post="/admin/digest/{{ row.alert_id }}/review" hx-target="closest tr" hx-swap="outerHTML" style="display:inline">
+      <input type="hidden" name="day" value="{{ day }}">
+      <input type="hidden" name="verdict" value="unsure">
+      <button type="submit" data-action="unsure">Không chắc</button>
+    </form>
+    {% endif %}
+  </td>
+</tr>
