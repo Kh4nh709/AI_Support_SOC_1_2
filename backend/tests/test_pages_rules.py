@@ -1,0 +1,537 @@
+"""P5-T10 — the admin rules screen: `web/routers/admin_rules.py`,
+`web/templates/rules.html`. A screen over three functions `app.ingest.autoclose`
+already has and already tests (`simulate`, `rule_width_report`, `reload_rules`)
+— this file inserts alerts and rules directly with plain SQL and never imports
+from `test_autoclose.py` (a different card's test file, out of this card's
+scope), so it stays self-contained.
+
+Every db-marked test uses the shared `db` fixture, overridden into the app as
+`deps.get_conn` directly (no commit/rollback shape — `test_reload_inventory.py`'s
+pattern): every write in a test is visible to that same test's own assertions
+because they share one uncommitted transaction, and the fixture's teardown
+rolls the whole thing back. `pages.page_user` and `deps.current_user` are both
+overridden (P5-T10's routes mix `page_user`-gated HTML routes and
+`require_role("admin")`-gated API routes, and `page_user` does not go through
+`deps.current_user` — it reads the cookie/token directly via `optional_user`).
+
+One exception: `deps.require_role`'s dependency commits *before* raising its
+403 (P4 planning decision 3 — the `authz.denied` row must survive), and that
+commit is real and permanent regardless of the `db` fixture's later rollback.
+Run on the shared session database, it would leak an `audit_events` row past
+this file into whichever test runs next in the same `make test-db` session —
+measured: `test_schema_v3_017.py` sorts after `test_pages_rules.py` and
+assumes `audit_events` starts empty, so it broke on exactly this leak the
+first time this test used the shared `db` fixture. `test_non_admin_is_refused`
+below therefore gets its own scratch database (`test_pages_login.py`'s
+pattern), so its one real commit never reaches a shared table.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import shutil
+import subprocess
+import uuid
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import psycopg
+import pytest
+from app.domain.alert import Alert, AlertContext
+from app.infra import auth
+from app.infra.auth import Claims
+from app.ingest import autoclose
+from app.web import deps, main
+from app.web.routers import pages
+from fastapi.testclient import TestClient
+from psycopg.types.json import Jsonb
+
+from tests import conftest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+REASON_MATCH_EVERYTHING = "[]"
+_ALERT_TIME = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _reset_rule_cache():
+    autoclose._rule_cache = None
+    yield
+    autoclose._rule_cache = None
+
+
+def _alert(**overrides: Any) -> Alert:
+    """A `severity=medium`, non-privileged, present-asset alert — the only
+    G8'-closable shape (test_autoclose.py's `_alert`/`_ctx` factories'
+    intent, reproduced here so this file imports nothing from another card's
+    test module)."""
+    fields: dict[str, Any] = {
+        "alert_id": "p5t10-cache-alert",
+        "manager_id": "IA1803",
+        "rule_id": "40112",
+        "description": "d",
+        "agent_name": "some-agent",
+        "agent_id": "001",
+        "agent_ip": None,
+        "origin_host": "some-agent",
+        "alert_time": _ALERT_TIME,
+        "event_time": None,
+        "srcip": "127.0.0.1",
+        "dstip": "",
+        "src_port": 1,
+        "dst_port": 0,
+        "alert_user": "user1",
+        "decoder": "sshd",
+        "mitre_ids": (),
+        "rule_groups": (),
+        "rule_level": 5,
+        "severity": "medium",
+        "category": "generic",
+        "categories": (),
+        "resolved_by": "none",
+        "mapping_version": "v1",
+        "srcip_is_private": True,
+        "dstip_is_private": None,
+        "raw_log": "log",
+        "raw_log_truncated": False,
+        "event_bucket_hash": "0" * 64,
+        "raw_payload": {},
+    }
+    fields.update(overrides)
+    return Alert(**fields)
+
+
+def _ctx(**overrides: Any) -> AlertContext:
+    fields: dict[str, Any] = {
+        "asset_present": True,
+        "asset_criticality": "medium",
+        "asset_owner": None,
+        "asset_role": None,
+        "identity_privileged": False,
+        "ioc_reputation": "not_found",
+        "lookup_status": {"asset": "found", "identity": "found", "ioc": "not_found"},
+    }
+    fields.update(overrides)
+    return AlertContext(**fields)
+
+
+# ---------------------------------------------------------------------------
+# Factories — plain SQL, minimal columns, the two CHECKs that bite here
+# satisfied explicitly: ck_alerts_hash_sha256_hex (64 hex chars) and
+# ck_alerts_g3_terminal_phai_co_closed_at (a terminal status needs closed_at).
+# ---------------------------------------------------------------------------
+
+
+def _insert_alert(
+    conn: Any,
+    *,
+    alert_id: str,
+    severity: str = "medium",
+    agent_name: str = "some-agent",
+    occurrence_count: int = 1,
+    status: str = "received",
+    autoclose_rule_id: str | None = None,
+    asset_context: dict | None = None,
+    identity_context: dict | None = None,
+    ioc_context: dict | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO alerts (
+            alert_id, rule_id, rule_level, severity, description, agent_name, alert_time,
+            category, resolved_by, mapping_version, event_bucket_hash, raw_payload,
+            status, occurrence_count, autoclose_rule_id, closed_at,
+            asset_context, identity_context, ioc_context
+        ) VALUES (
+            %(alert_id)s, '1', 5, %(severity)s, 'd', %(agent_name)s, now(),
+            'generic', 'none', 'v1', %(event_bucket_hash)s, %(raw_payload)s,
+            %(status)s, %(occurrence_count)s, %(autoclose_rule_id)s,
+            CASE WHEN %(status)s = 'received' THEN NULL ELSE now() END,
+            %(asset_context)s, %(identity_context)s, %(ioc_context)s
+        )
+        """,
+        {
+            "alert_id": alert_id,
+            "severity": severity,
+            "agent_name": agent_name,
+            "event_bucket_hash": hashlib.sha256(alert_id.encode()).hexdigest(),
+            "raw_payload": Jsonb({}),
+            "status": status,
+            "occurrence_count": occurrence_count,
+            "autoclose_rule_id": autoclose_rule_id,
+            "asset_context": Jsonb(asset_context) if asset_context is not None else None,
+            "identity_context": Jsonb(identity_context) if identity_context is not None else None,
+            "ioc_context": Jsonb(ioc_context) if ioc_context is not None else None,
+        },
+    )
+
+
+def _insert_rule(
+    conn: Any,
+    *,
+    rule_id: str,
+    created_by: str,
+    match: list | None = None,
+    name: str = "r",
+    reason: str = "t",
+    enabled: bool = True,
+) -> None:
+    conn.execute(
+        "INSERT INTO autoclose_rules (autoclose_rule_id, name, enabled, match, reason, created_by) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (rule_id, name, enabled, Jsonb(match if match is not None else []), reason, created_by),
+    )
+
+
+def _seed_admin(conn: Any, *, prefix: str = "admin") -> tuple[str, Claims]:
+    user_id = auth.create_user(
+        conn,
+        username=f"p5t10-{prefix}-{uuid.uuid4().hex[:8]}",
+        display_name="P5-T10 Admin",
+        role="admin",
+        password="unused",
+    )
+    claims = Claims(user_id=user_id, username="p5t10-admin", role="admin", iat=0.0, exp=0.0)
+    return user_id, claims
+
+
+# ---------------------------------------------------------------------------
+# The client — get_conn -> db; page_user and current_user -> a fixed Claims
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def client(db):
+    admin_id, claims = _seed_admin(db)
+    main.app.dependency_overrides[deps.get_conn] = lambda: db
+    main.app.dependency_overrides[deps.current_user] = lambda: claims
+    main.app.dependency_overrides[pages.page_user] = lambda: claims
+    try:
+        yield TestClient(main.app, follow_redirects=False), db, admin_id
+    finally:
+        main.app.dependency_overrides.pop(deps.get_conn, None)
+        main.app.dependency_overrides.pop(deps.current_user, None)
+        main.app.dependency_overrides.pop(pages.page_user, None)
+
+
+# ---------------------------------------------------------------------------
+# The preview: renders every SimulateStats field, writes nothing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_preview_writes_nothing(client) -> None:
+    """Also the card's own acceptance-1 name: renders every `SimulateStats`
+    field and writes nothing (design note 6)."""
+    tc, db, _ = client
+    _insert_alert(
+        db,
+        alert_id="prev-1",
+        severity="medium",
+        asset_context={"present": True, "criticality": "medium"},
+        identity_context={"privileged": False},
+        ioc_context={"reputation": "not_found"},
+    )
+    resp = tc.post(
+        "/admin/rules/preview",
+        data={"name": "n", "reason": "r", "match_json": REASON_MATCH_EVERYTHING},
+    )
+    assert resp.status_code == 200
+    assert 'data-field="clusters">1<' in resp.text
+    assert 'data-field="alerts">1<' in resp.text
+    assert "medium: 1" in resp.text  # by_severity
+    assert "prev-1" in resp.text  # samples, as a link to the alert page
+    assert '/alerts/prev-1"' in resp.text
+
+    count = db.execute("SELECT count(*) FROM autoclose_rules").fetchone()[0]
+    assert count == 0
+
+
+@pytest.mark.db
+def test_whitelist_violation_renders_422_flash_naming_the_field(client) -> None:
+    tc, db, _ = client
+    resp = tc.post(
+        "/admin/rules/preview",
+        data={
+            "name": "n",
+            "reason": "r",
+            "match_json": '[{"field": "risk_score", "op": "lte", "value": 10}]',
+        },
+    )
+    assert resp.status_code == 422
+    assert "risk_score" in resp.text
+    count = db.execute("SELECT count(*) FROM autoclose_rules").fetchone()[0]
+    assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Create: writes the row, the audit event, and is live without the cache TTL
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_create_writes_row_audit_and_makes_load_rules_return_it_immediately(client) -> None:
+    tc, db, admin_id = client
+    alert, ctx = _alert(), _ctx()
+    # Warm the 60 s rule cache first, as "no rules" — evaluate()'s normal,
+    # cached path (`_cached_rules`). `load_rules()` alone never touches this
+    # cache (it always re-queries), so it cannot discriminate reload_rules()
+    # being called or not — evaluate() is what design note 6 actually needs.
+    assert autoclose.evaluate(db, alert, ctx).match is None
+
+    resp = tc.post(
+        "/admin/rules",
+        data={"name": "everything", "reason": "test rule", "match_json": REASON_MATCH_EVERYTHING},
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/admin/rules"
+
+    row = db.execute(
+        "SELECT autoclose_rule_id, name, enabled, created_by FROM autoclose_rules"
+    ).fetchone()
+    assert row is not None
+    rule_id, name, enabled, created_by = row
+    assert name == "everything"
+    assert enabled is True
+    assert str(created_by) == admin_id
+
+    audit_row = db.execute(
+        "SELECT actor_id, payload FROM audit_events "
+        "WHERE event_type = 'admin.autoclose_rule_toggled' AND subject_id = %s",
+        (str(rule_id),),
+    ).fetchone()
+    assert audit_row is not None
+    actor_id, payload = audit_row
+    assert str(actor_id) == admin_id
+    assert payload == {"name": "everything", "before": False, "after": True}
+
+    # Live immediately, from the SAME still-warm cache window — no waiting
+    # for RULE_CACHE_TTL_S (design note 6; DEC-025 red case (a)).
+    after = autoclose.evaluate(db, alert, ctx)
+    assert after.match is not None
+    assert after.match.rule_id == str(rule_id)
+
+
+@pytest.mark.db
+def test_create_whitelist_violation_renders_422_and_writes_nothing(client) -> None:
+    tc, db, _ = client
+    resp = tc.post(
+        "/admin/rules",
+        data={
+            "name": "n",
+            "reason": "r",
+            "match_json": '[{"field": "risk_score", "op": "lte", "value": 10}]',
+        },
+    )
+    assert resp.status_code == 422
+    assert "risk_score" in resp.text
+    count = db.execute("SELECT count(*) FROM autoclose_rules").fetchone()[0]
+    assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Toggle: writes before/after, flips the rule's effect, live immediately
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_toggle_is_live_without_waiting_for_the_cache(client) -> None:
+    """The card's own acceptance-1 name: writes before/after and flips the
+    rule's effect without waiting for `RULE_CACHE_TTL_S` (design note 6)."""
+    tc, db, admin_id = client
+    rule_id = str(uuid.uuid4())
+    _insert_rule(db, rule_id=rule_id, created_by=admin_id, match=[], enabled=True)
+
+    alert, ctx = _alert(), _ctx()
+    # Warm the cache with the rule enabled first (the cached `evaluate()`
+    # path — `load_rules()` alone always re-queries and cannot discriminate
+    # reload_rules() being called or not, see the create test above).
+    before = autoclose.evaluate(db, alert, ctx)
+    assert before.match is not None
+    assert before.match.rule_id == rule_id
+
+    resp = tc.post(f"/admin/rules/{rule_id}/toggle", data={"enabled": "false"})
+    assert resp.status_code == 303
+
+    enabled = db.execute(
+        "SELECT enabled FROM autoclose_rules WHERE autoclose_rule_id = %s", (rule_id,)
+    ).fetchone()[0]
+    assert enabled is False
+
+    payload = db.execute(
+        "SELECT payload FROM audit_events "
+        "WHERE event_type = 'admin.autoclose_rule_toggled' AND subject_id = %s",
+        (rule_id,),
+    ).fetchone()[0]
+    assert payload == {"name": "r", "before": True, "after": False}
+
+    # Live immediately, from the SAME still-warm cache window — no waiting
+    # for RULE_CACHE_TTL_S (design note 6; DEC-025 red case (a)).
+    after = autoclose.evaluate(db, alert, ctx)
+    assert after.match is None
+
+
+# ---------------------------------------------------------------------------
+# The width warning — belongs here, and only for a rule above the threshold
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_width_warning_appears_above_threshold_and_not_below(client) -> None:
+    tc, db, admin_id = client
+    wide_id = str(uuid.uuid4())
+    narrow_id = str(uuid.uuid4())
+    _insert_rule(db, rule_id=wide_id, created_by=admin_id, name="wide-rule")
+    _insert_rule(db, rule_id=narrow_id, created_by=admin_id, name="narrow-rule")
+
+    _insert_alert(
+        db,
+        alert_id="width-big",
+        status="auto_closed",
+        occurrence_count=5000,
+        autoclose_rule_id=wide_id,
+    )
+    _insert_alert(
+        db,
+        alert_id="width-small",
+        status="auto_closed",
+        occurrence_count=1,
+        autoclose_rule_id=narrow_id,
+    )
+    for i in range(100):
+        _insert_alert(db, alert_id=f"width-other-{i}", status="received", occurrence_count=1)
+
+    resp = tc.get("/admin/rules")
+    assert resp.status_code == 200
+    assert "wide-rule" in resp.text
+    assert "narrow-rule" in resp.text
+
+    # The wide rule's row carries a width warning; the narrow rule's does not.
+    wide_pos = resp.text.index("wide-rule")
+    narrow_pos = resp.text.index("narrow-rule")
+    wide_row_end = resp.text.index("</tr>", wide_pos)
+    narrow_row_end = resp.text.index("</tr>", narrow_pos)
+    assert "⚠" in resp.text[wide_pos:wide_row_end]
+    assert "⚠" not in resp.text[narrow_pos:narrow_row_end]
+
+
+# ---------------------------------------------------------------------------
+# Role and refusal — its own scratch database (module docstring): this is
+# the one test whose commit is real (`require_role`'s commit-before-raise),
+# and it must never land in the shared session database.
+# ---------------------------------------------------------------------------
+
+
+def _scratch_dbname() -> str:
+    session = os.environ.get("TEST_DATABASE_URL", conftest.DEFAULT_TEST_DATABASE_URL)
+    return f"{conftest._dbname(session)}_rules_scratch_test"
+
+
+@pytest.fixture(scope="module")
+def scratch_dsn():
+    if shutil.which("psql") is None or shutil.which("createdb") is None:
+        pytest.skip("psql/createdb not on PATH — cannot build the rules scratch database")
+    dbname = _scratch_dbname()
+    subprocess.run(["dropdb", "--if-exists", dbname], check=True, capture_output=True)
+    subprocess.run(["createdb", dbname], check=True, capture_output=True)
+    dsn = f"postgresql:///{dbname}"
+    result = subprocess.run(
+        ["bash", "scripts/migrate.sh", dsn],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"scratch migrate failed:\n{result.stderr}"
+    try:
+        yield dsn
+    finally:
+        subprocess.run(["dropdb", "--if-exists", dbname], check=False, capture_output=True)
+
+
+@pytest.fixture
+def sdb(scratch_dsn):
+    conn = psycopg.connect(scratch_dsn)
+    try:
+        yield conn
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+@pytest.fixture(autouse=True)
+def _require_db_marker_for_scratch(request):
+    uses = {"sdb", "scratch_dsn"} & set(request.fixturenames)
+    if uses and request.node.get_closest_marker("db") is None:
+        pytest.fail(f"{request.node.nodeid} uses {sorted(uses)} without @pytest.mark.db")
+
+
+@pytest.mark.db
+def test_non_admin_is_refused_and_authz_denied_row_present(sdb) -> None:
+    tier1_claims = Claims(user_id=str(uuid.uuid4()), username="t1", role="tier1", iat=0.0, exp=0.0)
+    main.app.dependency_overrides[deps.get_conn] = lambda: sdb
+    main.app.dependency_overrides[deps.current_user] = lambda: tier1_claims
+    main.app.dependency_overrides[pages.page_user] = lambda: tier1_claims
+    try:
+        tc = TestClient(main.app, follow_redirects=False)
+        resp = tc.get("/admin/rules")
+    finally:
+        main.app.dependency_overrides.pop(deps.get_conn, None)
+        main.app.dependency_overrides.pop(deps.current_user, None)
+        main.app.dependency_overrides.pop(pages.page_user, None)
+
+    assert resp.status_code == 403
+    row = sdb.execute(
+        "SELECT required, role FROM ("
+        "  SELECT payload->'required' AS required, payload->>'role' AS role"
+        "  FROM audit_events WHERE event_type = 'authz.denied'"
+        ") s"
+    ).fetchone()
+    assert row is not None
+    required, role = row
+    assert required == ["admin"]
+    assert role == "tier1"
+
+
+# ---------------------------------------------------------------------------
+# The routes exist, and only these — sorted(app.openapi()["paths"]) (DEC-101 b)
+# ---------------------------------------------------------------------------
+
+
+def test_rules_routes_are_listed() -> None:
+    paths = set(main.app.openapi()["paths"])
+    assert "/admin/rules" in paths
+    assert "/admin/rules/preview" in paths
+    assert "/admin/rules/{rule_id}/toggle" in paths
+    assert "/api/admin/rules" in paths
+    assert "/api/admin/rules/simulate" in paths
+
+
+# ---------------------------------------------------------------------------
+# The JSON API (§6.4) — a thin sanity check; the page tests above are the
+# card's real acceptance surface (design note 6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_api_simulate_create_and_toggle(client) -> None:
+    tc, _db, _admin_id = client
+
+    sim = tc.post("/api/admin/rules/simulate", json={"match": []})
+    assert sim.status_code == 200
+    assert sim.json()["clusters"] == 0
+
+    created = tc.post("/api/admin/rules", json={"name": "api-rule", "reason": "t", "match": []})
+    assert created.status_code == 201
+    rule_id = created.json()["rule_id"]
+
+    toggled = tc.patch("/api/admin/rules", json={"rule_id": rule_id, "enabled": False})
+    assert toggled.status_code == 200
+    assert toggled.json()["enabled"] is False
+
+    listed = tc.get("/api/admin/rules")
+    assert listed.status_code == 200
+    row = next(r for r in listed.json() if r["rule_id"] == rule_id)
+    assert row["enabled"] is False
