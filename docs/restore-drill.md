@@ -85,5 +85,6 @@ The pipeline kept pulling during the drill. No new alert landed in the one secon
 
 ## Clean-up
 `soc_restore_drill` stays in place until the Owner signs. After that, `dropdb soc_restore_drill` is run by the Owner, or by the Director at the Owner's word. This section will record which.
+- **29/09/2026:** signed. The drop is still awaiting the Owner's word, so `soc_restore_drill` is still in place.
 
-Signed: ________ (Owner) date ______
+Signed: khanh (Owner) date 29/09/2026
