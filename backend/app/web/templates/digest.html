@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Digest tự đóng — AI Support SOC{% endblock %}
+{% block content %}
+<style>
+  /* Page-specific — never in base.html (this page's own file, per the card). */
+  tr.reviewed { color: #6b7280; background: #f9fafb; }
+  tr.disagreement { background: #fff7ed; }
+  tr.reviewed.disagreement { background: #fef3c7; }
+</style>
+<h1>Digest tự đóng cụm</h1>
+{% if not flash %}
+{#
+  An empty out-of-band swap target for _flash.html's `hx-swap-oob="true"`
+  div: this page's own flash is falsy far more often than not (see
+  admin_digest._page/digest_page), and when it is, base.html's own
+  `{% include "_flash.html" %}` inside <main> renders nothing — no #flash
+  element would otherwise exist for a row POST's fragment response to swap
+  into, and htmx silently drops an out-of-band swap with no matching id in
+  the DOM (Director heads-up, verified against htmx 2.0.4 in jsdom by the
+  P4-T05 review). Guarded on `flash` (review round 1, nit 8) so a GET that
+  *does* carry one (the malformed-`?day=` fallback) never renders two
+  `id="flash"` elements — base.html's own conditional one is the one that
+  fires then. Outside the table any row's outerHTML swap replaces, so it is
+  never touched by that swap either way.
+#}
+<div id="flash"></div>
+{% endif %}
+<p>
+  Ngày <strong data-field="day">{{ day }}</strong>
+  · <a href="/admin/digest?day={{ today }}" data-field="today-link">hôm nay (đến giờ)</a>
+</p>
+<form method="get" action="/admin/digest">
+  <label for="day-picker">Chọn ngày</label>
+  <input id="day-picker" type="date" name="day" value="{{ day }}">
+  <button type="submit">Xem</button>
+</form>
+
+{% if rows %}
+<table id="digest-rows">
+  <tr>
+    <th>Rule tự đóng</th><th>Rule</th><th>Mô tả</th><th>Mức độ</th><th>Loại</th><th>Agent</th>
+    <th>Số lần</th><th>Khoảng thời gian</th><th>① đề xuất</th><th>Duyệt</th>
+  </tr>
+  {% for row in rows %}
+  {% include "_digest_row.html" %}
+  {% endfor %}
+</table>
+{% elif not rules_exist %}
+<p data-field="empty-no-rules">Chưa có rule tự đóng nào đang bật.</p>
+{% else %}
+<p data-field="empty-no-clusters">Không có cụm nào bị tự đóng trong ngày.</p>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+document.body.addEventListener("htmx:beforeSwap", function (evt) {
+  if ([409, 422, 503].includes(evt.detail.xhr.status)) { evt.detail.shouldSwap = true; }
+});
+</script>
+{% endblock %}

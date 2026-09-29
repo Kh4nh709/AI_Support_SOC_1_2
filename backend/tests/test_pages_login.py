@@ -273,6 +273,10 @@ def test_cases_and_rules_nav_links_follow_the_role() -> None:
     assert 'href="/cases"' in html["admin"]
     assert 'href="/admin/rules"' in html["admin"]
     assert 'href="/admin/rules"' not in html["tier2"]
+    # Added at the P5-T09 merge: the digest review page, admin only.
+    assert 'href="/admin/digest"' in html["admin"]
+    assert 'href="/admin/digest"' not in html["tier2"]
+    assert 'href="/admin/digest"' not in html["tier1"]
 
 
 # --------------------------------------------------------------------------
