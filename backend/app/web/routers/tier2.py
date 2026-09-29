@@ -14,6 +14,7 @@ straight from these two functions rather than re-deriving the SQL.
 from __future__ import annotations
 
 import dataclasses
+import uuid
 from typing import Annotated, Any
 
 import psycopg
@@ -67,26 +68,27 @@ def list_cases(
 ) -> list[dict[str, Any]]:
     """OFFSET-paged, `investigating` first then `created_at DESC, case_id` (a
     total order — design note 3). `occurrence_count` is a row **count** over
-    the case's heads *and* their duplicates (the `OR duplicate_of IN (…)`
-    half) — measured on `soc_dev`: a head's own `occurrence_count` already
-    counts its merged duplicates one-for-one (`ingest/dedup.py`'s
-    `bump_parent` bumps only the head, a duplicate's own column stays at its
-    default of 1), so this row count and `sum(occurrence_count)` restricted
-    to heads alone agree numerically — but the row-count form is the one
-    design note 3 and DEC-036 name, and the one whose `OR` half red step (a)
-    removes, so it is written that way rather than the equivalent-but-tacit
-    aggregate."""
+    the case's heads *and* their duplicates — measured on `soc_dev`: a head's
+    own `occurrence_count` already counts its merged duplicates one-for-one
+    (`ingest/dedup.py`'s `bump_parent` bumps only the head, a duplicate's own
+    column stays at its default of 1), so this row count and
+    `sum(occurrence_count)` restricted to heads alone agree numerically — but
+    the row-count form is the one design note 3 and DEC-036 name. Written as
+    `heads + duplicates` (two `JOIN`-able counts) rather than one `OR`ed `IN`
+    (…) `IN` (…) `WHERE`, for the query plan (`duplicate_of` and `case_id`
+    both carry an index; a `JOIN` on `duplicate_of = case_alerts.alert_id`
+    reaches it the way an `OR` of two `IN` subqueries does not) — the
+    `duplicate_of` half stays, so removing it (red step (a)) still turns the
+    duplicate-inclusive count red while `cluster_count` stays right."""
     rows = conn.execute(
         """
         SELECT c.case_id, c.title, c.status, c.severity, c.created_at, c.last_analyzed_at,
                (SELECT count(*) FROM case_alerts ca
                  WHERE ca.case_id = c.case_id) AS cluster_count,
-               (SELECT count(*) FROM alerts a
-                 WHERE a.alert_id IN (SELECT alert_id FROM case_alerts WHERE case_id = c.case_id)
-                    OR a.duplicate_of IN (
-                         SELECT alert_id FROM case_alerts WHERE case_id = c.case_id
-                       )
-               ) AS occurrence_count
+               (SELECT count(*) FROM case_alerts ca
+                 WHERE ca.case_id = c.case_id)
+             + (SELECT count(*) FROM alerts a JOIN case_alerts ca ON a.duplicate_of = ca.alert_id
+                 WHERE ca.case_id = c.case_id) AS occurrence_count
         FROM cases c
         ORDER BY (c.status <> 'investigating'), c.created_at DESC, c.case_id
         OFFSET %s LIMIT %s
@@ -141,24 +143,24 @@ class ConcludeIn(BaseModel):
 def api_list_cases(
     conn: Conn,
     _: Tier2,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    offset: Annotated[int, Query(ge=0, le=2**31 - 1)] = 0,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> list[dict[str, Any]]:
     return list_cases(conn, offset=offset, limit=limit)
 
 
 @router.get("/api/tier2/cases/{case_id}")
-def api_case_detail(conn: Conn, _: Tier2, case_id: str) -> dict[str, Any]:
-    case = case_detail(conn, case_id)
+def api_case_detail(conn: Conn, _: Tier2, case_id: uuid.UUID) -> dict[str, Any]:
+    case = case_detail(conn, str(case_id))
     if case is None:
         raise HTTPException(status_code=404, detail="case not found")
     return case
 
 
 @router.post("/api/tier2/cases/{case_id}/notes", status_code=201)
-def api_add_note(conn: Conn, claims: Tier2, case_id: str, body: NoteIn) -> dict[str, Any]:
+def api_add_note(conn: Conn, claims: Tier2, case_id: uuid.UUID, body: NoteIn) -> dict[str, Any]:
     try:
-        note_id = conclude.add_note(conn, case_id, claims.user_id, body.body)
+        note_id = conclude.add_note(conn, str(case_id), claims.user_id, body.body)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except conclude.UnknownCase as exc:
@@ -172,13 +174,16 @@ def api_add_note(conn: Conn, claims: Tier2, case_id: str, body: NoteIn) -> dict[
 
 
 @router.post("/api/tier2/cases/{case_id}/conclude")
-def api_conclude(conn: Conn, claims: Tier2, case_id: str, body: ConcludeIn) -> dict[str, Any]:
+def api_conclude(conn: Conn, claims: Tier2, case_id: uuid.UUID, body: ConcludeIn) -> dict[str, Any]:
+    case_id_str = str(case_id)
     try:
         conclude.submit(
-            conn, case_id, claims.user_id, conclusion=body.conclusion, reason=body.reason
+            conn, case_id_str, claims.user_id, conclusion=body.conclusion, reason=body.reason
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except conclude.UnknownCase as exc:
+        raise HTTPException(status_code=404, detail="case not found") from exc
     except conclude.ConcludeConflict as exc:
         detail: dict[str, Any] = {"status": exc.status}
         if exc.concluded_by is not None:
@@ -191,6 +196,6 @@ def api_conclude(conn: Conn, claims: Tier2, case_id: str, body: ConcludeIn) -> d
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except psycopg.errors.QueryCanceled as exc:
         raise HTTPException(status_code=503, detail="conclude: statement timeout") from exc
-    case = case_detail(conn, case_id)
+    case = case_detail(conn, case_id_str)
     assert case is not None  # just concluded successfully — the row exists
     return case
