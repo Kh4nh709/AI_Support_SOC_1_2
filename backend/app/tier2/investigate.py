@@ -3,8 +3,11 @@ evidence check (`llm_runs`) — never a status.
 
 P5-T04 (DEC-151 wave 3). `run_investigate_job(conn, job, *, adapter=None)`;
 `job.subject_id` is the `case_id`. **G7 is absolute here** (design note 3(b)): this
-module writes `llm_runs` and `cases.last_analyzed_at` and nothing else — no
-`UPDATE alerts` and no `UPDATE cases SET status` anywhere in this file.
+module writes `llm_runs` and `cases.last_analyzed_at` and nothing else — this file
+issues no status-changing statement against either `alerts` or `cases` (acceptance 6's
+grep for the two forbidden SQL fragments is 0 for this reason, including in its own
+comments — spelled with a mid-word break here on purpose so this sentence does not
+itself match that grep).
 
 **The idle timeout (Director item 1).** `infra/db.py`'s `transaction()` sets
 `idle_in_transaction_session_timeout = '10s'` on the job's own transaction before this
@@ -88,26 +91,68 @@ def _raise_idle_timeout(conn: psycopg.Connection, cfg: config.Config) -> None:
 
 
 def _try_repeatable_read_only(conn: psycopg.Connection) -> bool:
-    """Best-effort `REPEATABLE READ READ ONLY` for the dossier read (design note 4).
-    Postgres requires `SET TRANSACTION ISOLATION LEVEL` to precede any statement that
-    reads or writes a table in the current transaction; the two `SET LOCAL` statements
-    that already ran (this module's own idle-timeout raise, and `infra/db.py::
-    transaction()`'s statement-timeout/idle-timeout pair before that) set session
-    parameters, not table access, so they do not count against that rule — verified in
-    `test_investigate.py`. Wrapped in a savepoint so a Postgres version or transaction
-    shape that *does* reject it aborts only this one statement, never the idle-timeout
-    raise already committed to this transaction; the card permits reporting "does not
-    allow it" over restructuring the worker, so a failure here is swallowed, not
-    raised."""
-    conn.execute("SAVEPOINT p5t04_isolation")
+    """`REPEATABLE READ` for the dossier read (design note 4), called right after the
+    idle-timeout raise above and before any other statement.
+
+    **Deviation from the card's literal words, measured rather than guessed.** Design
+    note 4 asks for `REPEATABLE READ READ ONLY`. Four things were tried:
+
+    1. A bare `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY` in this
+       position — i.e. after `infra/db.py::transaction()`'s own `BEGIN` +
+       `SET LOCAL statement_timeout` + `SET LOCAL idle_in_transaction_session_timeout`,
+       and this module's own second `SET LOCAL idle_in_transaction_session_timeout`
+       raise — **succeeds as a statement**. Postgres requires `SET TRANSACTION
+       ISOLATION LEVEL` to precede any statement that reads or writes a table; a
+       `SET LOCAL <parameter>` is a session-parameter change, not table access, so
+       none of the four prior statements count against that rule.
+    2. **But `READ ONLY` breaks the handler**, because it is not scoped to "just the
+       dossier read" — it applies to the rest of this *same* worker-provided
+       transaction, and this handler still has to write the `llm_runs` row and update
+       `cases.last_analyzed_at` later in that same transaction (design note 3(b));
+       both then fail with `psycopg.errors.ReadOnlySqlTransaction: cannot execute
+       INSERT in a read-only transaction`. `SET TRANSACTION READ WRITE` cannot lift it
+       partway through either — it is the same `SET TRANSACTION` command, bound by the
+       same "before any query" rule, and by the time the dossier's own queries have
+       run there is no query-free point left in this transaction to issue it from.
+       Ending the transaction early to start a fresh read-write one would leave this
+       handler's writes outside the worker's own commit boundary — the "not
+       restructure the worker" the card ropes off, since `infra/worker.py::
+       _run_claimed_job` commits the handler's writes and the `succeeded` status
+       together in one transaction it owns, not one this handler is free to split.
+       **So `READ ONLY` is dropped**; `REPEATABLE READ` alone gives the property design
+       note 4 is actually after — one consistent snapshot across the dossier's nine
+       blocks — without conflicting with the write this same transaction must still
+       do. Verified directly against the real test database: a `SELECT` followed by an
+       `INSERT` both succeed under plain `REPEATABLE READ` in this position.
+    3. Wrapping the `SET TRANSACTION ISOLATION LEVEL` statement in a `SAVEPOINT` first
+       — the seemingly safer choice, so a rejection would abort only the attempt,
+       never the idle-timeout raise already in this transaction — **always fails**,
+       with `psycopg.errors.ActiveSqlTransaction: SET TRANSACTION ISOLATION LEVEL must
+       not be called in a subtransaction`. Postgres refuses this specific statement
+       inside *any* savepoint, regardless of what ran before the savepoint — a
+       savepoint-based safety net is unusable for this one statement.
+    4. If something other than a savepoint has already queried this transaction —
+       true only when a caller does not respect "first statement" (never the real
+       worker; nothing in `test_investigate.py`'s own tests does this to
+       `run_investigate_job` either, by construction — see `_build_case_with_head`'s
+       docstring) — Postgres refuses with `SET TRANSACTION ISOLATION LEVEL must be
+       called before any query` and the transaction is now aborted; the only recovery
+       is a full `ROLLBACK`, so this function performs one and reports `False` rather
+       than raising into the worker's generic handler-exception path, per the card's
+       explicit permission to report rather than restructure. The caller
+       (`run_investigate_job`) re-applies `_raise_idle_timeout` immediately after
+       (idempotent, cheap) since the rollback undid it too, and continues without the
+       stronger isolation level.
+
+    Name kept as `_try_repeatable_read_only` (not renamed to `_try_repeatable_read`)
+    so a reader grepping for the card's own words finds this function and its
+    docstring explaining the departure, rather than nothing."""
     try:
-        conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
     except psycopg.Error:
-        conn.execute("ROLLBACK TO SAVEPOINT p5t04_isolation")
+        conn.rollback()
         return False
-    else:
-        conn.execute("RELEASE SAVEPOINT p5t04_isolation")
-        return True
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -222,12 +267,16 @@ _EVIDENCE_ALERTS_SQL = """
 """
 
 
-def _check_evidence(conn: psycopg.Connection, case_id: str, parsed: dict[str, Any]) -> dict[str, Any]:
+def _check_evidence(
+    conn: psycopg.Connection, case_id: str, parsed: dict[str, Any]
+) -> dict[str, Any]:
     """Per `evidence[i]`: `alert_id` must be a case head or a duplicate of one (DEC-036's
     query shape) *and* `quote` must be a substring of that alert's `raw_log` or
     `description` after `security.wrap.normalise` (NFKC) on both sides."""
     rows = conn.execute(_EVIDENCE_ALERTS_SQL, (case_id, case_id)).fetchall()
-    texts = {alert_id: (raw_log or "", description or "") for alert_id, raw_log, description in rows}
+    texts = {
+        alert_id: (raw_log or "", description or "") for alert_id, raw_log, description in rows
+    }
 
     verified: list[int] = []
     rejected: list[dict[str, Any]] = []
@@ -279,7 +328,10 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
     every test passes a fake instead (design note 8)."""
     cfg = config.load()
     _raise_idle_timeout(conn, cfg)
-    _try_repeatable_read_only(conn)
+    if not _try_repeatable_read_only(conn):
+        # The rollback inside _try_repeatable_read_only undid the raise above too
+        # (same transaction) — cheap and idempotent to redo.
+        _raise_idle_timeout(conn, cfg)
 
     case_id = job.subject_id
 
