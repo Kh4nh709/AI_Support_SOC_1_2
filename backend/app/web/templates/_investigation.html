@@ -1,0 +1,177 @@
+{# `_investigation.html` — the ② half of the case screen (P5-T05, DEC-151 wave 4).
+
+   Two modes, one file, one element (`<section id="investigation">`, always swapped as
+   outerHTML):
+
+   * SHELL — `case.html` (P5-T07) includes this partial with `case`, `case_id`, `user`
+     and `tz` but no `investigation`, and that page is not this card's to edit. So an
+     undefined `investigation` renders a shell that fetches the real state on load
+     (`GET /cases/{id}/investigation`). That is the whole seam (P5-tasks.md planning
+     decision 2): with this file absent, `case.html`'s `ignore missing` renders nothing.
+   * STATE — rendered by `web/routers/case_analyze_pages.py`, which passes `investigation`
+     (`state` = idle | running | stalled | done | failed), `case_open`, `message`,
+     `current`, `tz`.
+
+   Everything the model wrote is untrusted and is autoescaped here. Nothing in this file
+   marks text as trusted or switches escaping off; a test greps the file for each way of
+   doing so.
+
+   Every message ("Đang có một lượt phân tích…", the quota, "Case đã kết luận…") is rendered
+   INSIDE this section. `case.html` has no `#flash` placeholder, so an out-of-band
+   `_flash.html` would be silently dropped by htmx 2.0.4; a message in the swapped fragment
+   is swapped with it. #}
+{% if investigation is not defined %}
+<section id="investigation" data-field="investigation" data-state="loading"
+         hx-get="/cases/{{ case_id }}/investigation" hx-trigger="load" hx-swap="outerHTML">
+  <h2>Trợ lý điều tra ②</h2>
+  <p>Đang tải phân tích…</p>
+</section>
+{% else %}
+{% set running = investigation.state == "running" %}
+{% set stalled = investigation.state == "stalled" %}
+<section id="investigation" data-field="investigation" data-state="{{ investigation.state }}"
+  {%- if running %} data-run-id="{{ investigation.run_id }}"
+         hx-get="/cases/{{ case_id }}/investigation?run_id={{ investigation.run_id }}"
+         hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+  <h2>Trợ lý điều tra ②</h2>
+
+  {% if message %}
+  <p class="flash flash-{{ message.level }}" data-field="analyze_message" role="status">{{ message.text }}</p>
+  {% endif %}
+
+  {% if investigation.state == "idle" %}
+  <p data-field="analysis_idle">
+    {% if case_open %}Chưa có phân tích nào cho case này.{% else %}Case đã kết luận và chưa có phân tích nào.{% endif %}
+  </p>
+
+  {% elif running %}
+  <p data-field="analysis_running">Đang phân tích…</p>
+
+  {# A job nobody has picked up for far longer than the worker's own lock timeout. No polling
+     (the section has no hx-trigger) and no Phân tích button (a second click would only meet
+     the single-flight 409); "Kiểm tra lại" is one more GET of the same state. The text does
+     not claim the worker is dead — a triage backlog can legitimately delay the job. #}
+  {% elif stalled %}
+  <p class="flash flash-warn" data-field="analysis_stalled">Chưa được xử lý sau {{ investigation.minutes }} phút — kiểm tra worker</p>
+  <button type="button" data-field="analysis_recheck"
+          hx-get="/cases/{{ case_id }}/investigation?run_id={{ investigation.run_id }}"
+          hx-target="#investigation" hx-swap="outerHTML">Kiểm tra lại</button>
+
+  {% elif investigation.state == "failed" %}
+  <p class="flash flash-error" data-field="analysis_failed">{% if case_open %}Phân tích thất bại — có thể thử lại{% else %}Phân tích thất bại{% endif %}</p>
+  {% endif %}
+
+  {% set run = investigation.run %}
+  {% if run and not running and not stalled %}
+  {% if investigation.state == "failed" %}
+  <h3>Kết quả của lượt phân tích trước</h3>
+  {% endif %}
+
+  {% if run.result is none %}
+  <p class="flash flash-warn" data-field="analysis_stopped">Phân tích không có kết quả: {{ run.stopped_text }}{% if case_open %} — có thể thử lại{% endif %}</p>
+  {% else %}
+  <p data-field="analysis_meta">Kết quả lúc {{ run.created_at | local_time(tz) }}</p>
+  <p>
+    <strong data-field="analysis_conclusion">{{ run.conclusion_label }}</strong>
+    (<code data-field="analysis_conclusion_code">{{ run.conclusion }}</code>)
+    — độ chắc chắn: <span data-field="analysis_confidence">{{ run.confidence }}</span>
+  </p>
+  <p data-field="analysis_advisory">Đây chỉ là gợi ý của trợ lý — kết luận do Tier 2 quyết định.</p>
+
+  {% if run.overruled %}
+  <p class="flash flash-warn" data-field="analysis_overruled">{{ run.overruled }}</p>
+  {% endif %}
+
+  <h3>Tóm tắt</h3>
+  <p data-field="analysis_summary">{{ run.summary }}</p>
+
+  <h3>Diễn biến</h3>
+  <pre data-field="analysis_narrative">{{ run.narrative }}</pre>
+
+  {% if run.hypotheses %}
+  <h3>Giả thuyết</h3>
+  <ol>
+    {% for h in run.hypotheses %}
+    <li data-field="hypothesis">
+      <span data-field="hypothesis_text">{{ h.text }}</span>
+      {# Two labelled lists, each in its own container: counter-evidence must never be
+         readable as support. The against block is ALWAYS rendered — the output schema
+         requires at least one item (`evidence_against: minItems 1`), so an empty list is a
+         model that skipped the counter-argument, and the reader is told so. #}
+      {% if h.evidence_for %}
+      <div data-field="hypothesis_for">
+        <h4>Bằng chứng ủng hộ</h4>
+        <ul>
+          {% for line in h.evidence_for %}<li data-field="evidence_for">{{ line }}</li>{% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+      <div data-field="hypothesis_against">
+        <h4>Bằng chứng phản bác</h4>
+        {% if h.evidence_against %}
+        <ul>
+          {% for line in h.evidence_against %}<li data-field="evidence_against">{{ line }}</li>{% endfor %}
+        </ul>
+        {% else %}
+        <p class="flash flash-warn" data-field="evidence_against_missing">Mô hình không nêu bằng chứng phản bác nào cho giả thuyết này — kết quả không đúng định dạng yêu cầu (mỗi giả thuyết phải có ít nhất một bằng chứng phản bác), hãy đọc giả thuyết này thận trọng.</p>
+        {% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+
+  <h3>Bằng chứng</h3>
+  {% if run.evidence %}
+  <ul>
+    {% for item in run.evidence %}
+    <li data-field="evidence" data-verified="{{ 'true' if item.verified else 'false' }}">
+      {% if item.verified %}
+      <strong data-field="evidence_mark">Đã kiểm chứng</strong>
+      {% else %}
+      <strong data-field="evidence_mark">Chưa kiểm chứng</strong>
+      {% endif %}
+      — alert <code data-field="evidence_alert">{{ item.alert_id }}</code>
+      — “<span data-field="evidence_quote">{{ item.quote }}</span>”
+      — <span data-field="evidence_why">{{ item.why }}</span>
+      {% if not item.verified %}
+      <em data-field="evidence_reason">({{ item.reason_text }})</em>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p>Trợ lý không đưa ra bằng chứng nào.</p>
+  {% endif %}
+
+  {% if run.next_steps %}
+  <h3>Bước tiếp theo</h3>
+  <ul>
+    {% for step in run.next_steps %}<li data-field="next_step">{{ step }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if run.playbook_used %}
+  <p data-field="analysis_playbook">Playbook: {{ run.playbook_used }}</p>
+  {% endif %}
+
+  {# The recorded snapshot beside the current values (P7-2). The "ongoing" label is
+     P5-T07's, on the page — deliberately not repeated here. #}
+  {% if run.snapshot %}
+  <p data-field="analysis_snapshot">Lúc phân tích: {{ run.snapshot.alert_count }} alert, {{ run.snapshot.total_occurrences }} lần xuất hiện{% if run.snapshot.last_seen_at %}, alert mới nhất {{ run.snapshot.last_seen_at | local_time(tz) }}{% endif %}.</p>
+  <p data-field="analysis_current">Hiện tại: {{ current.alert_count }} alert, {{ current.total_occurrences }} lần xuất hiện{% if current.last_seen_at %}, alert mới nhất {{ current.last_seen_at | local_time(tz) }}{% endif %}.</p>
+  {% if run.changed %}
+  <p data-field="analysis_changed">Dữ liệu của case đã thay đổi kể từ lượt phân tích này.</p>
+  {% endif %}
+  {% endif %}
+  {% endif %}
+  {% endif %}
+
+  {% if case_open and not running and not stalled %}
+  <form id="analyze-form" hx-post="/cases/{{ case_id }}/analyze" hx-target="#investigation" hx-swap="outerHTML"
+        method="post" action="/cases/{{ case_id }}/analyze">
+    <button type="submit" data-field="analyze_button">Phân tích</button>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
