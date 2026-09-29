@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}{{ case.title }} — AI Support SOC{% endblock %}
+{% block content %}
+<h1 data-field="title">{{ case.title }}</h1>
+<p>
+  Trạng thái: <strong data-field="status">{{ status_labels.get(case.status, case.status) }}</strong> ·
+  Mức độ: <span data-field="severity">{{ case.severity }}</span> ·
+  Tạo lúc: <span data-field="created_at">{{ case.created_at | local_time(tz) }}</span> ·
+  Phân tích gần nhất: <span data-field="last_analyzed_at">{{ case.last_analyzed_at | local_time(tz) if case.last_analyzed_at else "chưa phân tích" }}</span>
+</p>
+
+{% if ongoing %}
+<p class="flash flash-warn" data-field="ongoing_label">
+  đợt tấn công đang tiếp diễn — bộ đếm đang tăng
+  {% if ongoing_last_seen %}(đến {{ ongoing_last_seen | local_time(tz) }}){% endif %}
+</p>
+{% endif %}
+
+<h2>Cụm cảnh báo</h2>
+{% if case.heads %}
+<table>
+  <tr>
+    <th>Alert</th><th>Rule</th><th>Mức độ</th><th>Điểm rủi ro</th><th>Mô tả</th>
+    <th>Agent</th><th>Thời điểm</th><th>Số lần xuất hiện</th><th>Trạng thái</th>
+  </tr>
+  {% for head in case.heads %}
+  <tr>
+    <td data-field="alert_id">{{ head.alert_id }}</td>
+    <td data-field="rule_id">{{ head.rule_id }}</td>
+    <td data-field="severity">{{ head.severity }}</td>
+    <td class="{{ head.risk_band | band_class }}" data-field="risk_band">{{ head.risk_band or "" }}</td>
+    <td data-field="description">{{ head.description }}</td>
+    <td data-field="agent_name">{{ head.agent_name }}</td>
+    <td data-field="alert_time">{{ head.alert_time | local_time(tz) }}</td>
+    <td data-field="occurrence_count">{{ head.occurrence_count }}</td>
+    <td data-field="head_status">{{ head_status_labels.get(head.status, head.status) }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% for head in case.heads %}
+<details>
+  <summary>raw_log — {{ head.alert_id }}</summary>
+  <pre data-field="raw_log">{{ head.raw_log }}</pre>
+</details>
+{% endfor %}
+{% else %}
+<p>Case chưa có cảnh báo nào.</p>
+{% endif %}
+
+{# The ② seam — P5-tasks.md planning decision 2, DEC-097. Renders nothing #}
+{# when _investigation.html is absent (② cut on 25/09); P5-T05 fills it in #}
+{# when ② survives. This token is load-bearing — do not "tidy" it away. #}
+{% include "_investigation.html" ignore missing %}
+
+{% include "_case_notes.html" %}
+
+<h2>Kết luận</h2>
+{% if case.status == "investigating" %}
+<form method="post" action="/cases/{{ case.case_id }}/conclude">
+  <fieldset>
+    <legend>Kết luận</legend>
+    <label>
+      <input type="radio" name="conclusion" value="concluded_fp" required>
+      {{ status_labels["concluded_fp"] }}
+    </label>
+    <label>
+      <input type="radio" name="conclusion" value="concluded_policy_violation">
+      {{ status_labels["concluded_policy_violation"] }}
+    </label>
+    <label>
+      <input type="radio" name="conclusion" value="confirmed_incident">
+      {{ status_labels["confirmed_incident"] }}
+      <br><small data-field="scope_note">{{ scope_note }}</small>
+    </label>
+  </fieldset>
+  <label for="reason">Lý do (bắt buộc)</label>
+  <textarea id="reason" name="reason" required></textarea>
+  <button type="submit">Kết luận case</button>
+</form>
+{% else %}
+<p data-field="concluded_summary">
+  Đã kết luận: <strong data-field="conclusion_reason">{{ case.conclusion_reason }}</strong>
+  lúc <span data-field="concluded_at">{{ case.concluded_at | local_time(tz) }}</span>
+  {% if concluded_by_name %}bởi <span data-field="concluded_by_name">{{ concluded_by_name }}</span>{% endif %}.
+</p>
+{% endif %}
+{% endblock %}
