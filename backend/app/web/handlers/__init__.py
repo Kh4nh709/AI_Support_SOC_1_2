@@ -24,11 +24,18 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+import re
 from types import ModuleType
 
 from app.infra.errors import PermanentError
 from app.infra.jobs import JOB_TYPES
 from app.infra.worker import Handler
+
+#: The Postgres duration form this codebase's `STATEMENT_TIMEOUT` values actually take
+#: (`"5s"`, `"250ms"`, `"3min"`) — the same three units `SET LOCAL statement_timeout`
+#: accepts unambiguously without a space (P5-T01 review round 1, finding 4, deferred to
+#: whichever module first declares a `STATEMENT_TIMEOUT`; P5-T04 is that module).
+_STATEMENT_TIMEOUT_RE = re.compile(r"^\d+(ms|s|min)$")
 
 
 def _load_modules() -> list[ModuleType]:
@@ -61,10 +68,24 @@ def iter_handlers() -> dict[str, Handler]:
 
 def iter_timeouts() -> dict[str, str]:
     """Every module's `STATEMENT_TIMEOUT`, keyed by `JOB_TYPE`, for the modules
-    that declare one — empty until the first one does."""
+    that declare one — empty until the first one does.
+
+    Validated against `_STATEMENT_TIMEOUT_RE` here, at discovery time, so a malformed
+    value (a typo, a bare number with no unit, a space before the unit) is a
+    `PermanentError` naming the module and the value — the same fail-fast shape
+    `iter_handlers()` already gives a bad `JOB_TYPE` — rather than a `SET LOCAL
+    statement_timeout = '...'` syntax error surfacing later, deep inside
+    `infra/db.py::transaction()`, the first time the job actually runs.
+    """
     timeouts: dict[str, str] = {}
     for module in _load_modules():
         statement_timeout = getattr(module, "STATEMENT_TIMEOUT", None)
         if statement_timeout is not None:
+            if not _STATEMENT_TIMEOUT_RE.fullmatch(statement_timeout):
+                raise PermanentError(
+                    f"{module.__name__}: STATEMENT_TIMEOUT must match "
+                    f"{_STATEMENT_TIMEOUT_RE.pattern!r} (Postgres duration form, e.g. "
+                    f"'5s'), got {statement_timeout!r}"
+                )
             timeouts[module.JOB_TYPE] = statement_timeout
     return timeouts

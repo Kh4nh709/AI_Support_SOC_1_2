@@ -20,6 +20,7 @@ from app.infra import puller
 from app.infra.errors import PermanentError
 from app.soar import pipeline
 from app.tier1 import digest, triage
+from app.tier2 import investigate
 from app.web import handlers as handlers_pkg
 from app.web.worker import HANDLERS, TIMEOUTS
 
@@ -30,12 +31,14 @@ def test_iter_handlers_discovers_every_handler_module():
     # the discovery contract the P5-T01 package docstring names explicitly
     # ("a later card ... adds one module without touching any shared file").
     # Extension, not narrowing: every P5-T01 assertion below still holds.
+    # P5-T04: extended again to include `investigate`, the fifth module.
     result = handlers_pkg.iter_handlers()
-    assert set(result) == {"pipeline", "pull", "triage", "digest"}
+    assert set(result) == {"pipeline", "pull", "triage", "digest", "investigate"}
     assert result["pull"] is puller.pull_job
     assert result["pipeline"] is pipeline.run_pipeline_job
     assert result["triage"] is triage.run_triage_job
     assert result["digest"] is digest.run_digest_job
+    assert result["investigate"] is investigate.run_investigate_job
 
 
 def test_iter_timeouts_is_empty_until_a_module_declares_one():
