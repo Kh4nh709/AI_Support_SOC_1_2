@@ -248,7 +248,85 @@ Every `psql` check below ran on the stand-in; the failure answers `no response`,
 
 ## ② operations
 
-Điền khi P5-T04 merge (DEC-151).
+The ② assistant (P5-T04, DEC-151) reads one case and writes an investigation for a Tier-2 analyst. It is advice, and it stops at classification: **`confirmed_incident` records an incident, and the system contains nothing and remediates nothing** — `docs/phase-7-tier2.md` names it the thesis's scope stop (Tier 3 is designed, not built; the system detects and classifies, it does not respond). Every claim below was read out of the merged code. No live model call was made writing this section, so every model-side outcome is described from the code and its fake-model tests, not seen. Commands the agent did not run are marked *(not run by the agent)*.
+
+### Running an analysis
+
+On a case page, a **tier2** or **admin** session sees the ② panel (`Trợ lý điều tra ②`). The panel moves through four states:
+
+| state | what the page says | what you can do |
+|---|---|---|
+| idle | `Chưa có phân tích nào cho case này.` | press **Phân tích** |
+| running | `Đang phân tích…`; the panel re-fetches itself every 3 s | wait: the button is hidden while a job is live |
+| done | the result: conclusion, confidence, summary, narrative, hypotheses, evidence with its marks, next steps, and the recorded snapshot beside the current alert count | read it; press **Phân tích** again for a fresh run |
+| failed | `Phân tích thất bại — có thể thử lại`, and the last finished run's result underneath if there was one | press **Phân tích** |
+
+The same through the API (an analyst session cookie or token, tier2 or admin) *(not run by the agent)*: `POST /api/tier2/cases/{id}/analyze` answers `202 {run_id, job_id}`, then `GET /api/tier2/runs/{run_id}` answers `running` until the job finishes and `done` with `{status, result, evidence_check, citation_warnings, stopped_by}` after. A `404` on that `GET` means no such run: the page treats a job that ended without a run row as **failed**, the API cannot tell it from an unknown id.
+
+The refusals, in the order the API checks them:
+
+| answer | when | on the page |
+|---|---|---|
+| `404` | no such case | — |
+| `409` `case đã kết luận` | the case is no longer `investigating` | the button is not drawn: `Case đã kết luận — không thể phân tích thêm` |
+| `429` `analyze quota exceeded for today` | the user already made `ANALYZE_QUOTA_PER_USER_DAY` (default 30) analyses in the last day | HTTP `200`, and the panel says `Đã dùng hết N lượt phân tích hôm nay` |
+| `409` `an investigation is already running for this case` | a job for this case is `pending` or `running` (one live job per case, by the jobs table's partial unique index) | `Đang có một lượt phân tích chạy cho case này` |
+
+The quota counts `case.analyzed` rows in `audit_events` for that user, at request time. The count and the insert are two steps, not one: two requests racing at the limit can both pass, so a user can end **one over** the limit (N14, accepted, P5-T04 review).
+
+### What ② does
+
+One press builds the nine-block dossier from the database alone (case facts, representative alerts and logs, timeline, entities, correlation, Tier-1 decisions, playbooks, analyst notes and the previous ② result, and the scope block), inside an estimated budget of `CASE_PROMPT_BUDGET_TOKENS` (default 60,000; the estimate is characters over four); if it is over, it cuts in a fixed order — raw logs to 4 KB, representatives to 15 clusters, the timeline — and records each step. It lints the prompt (G6') before anything is sent, then makes **one** model call with no tools, plus **at most one** repair call when the answer breaks the schema. It scans each dossier block for prompt injection, checks the cited evidence against the case's alerts, and writes a single `llm_runs` row. **It changes no case or alert status (G7): the only writes are `llm_runs` and `cases.last_analyzed_at`**; the route adds the `case.analyzed` audit event. The snapshot, the cut steps (`agent_trace.truncations`) and `estimated_tokens` are stored in that row's `agent_trace`.
+
+### What `need_more_data` means
+
+Two different things wear the same label. It is **the model's own answer** when it says it lacks data. Or it is an **overrule**: ② replaced the model's conclusion because (a) **no cited evidence verified**, or (b) the dossier held a **high-severity injection finding** and the model had said `false_positive`. On an overrule the panel shows a warning line, `Mô hình đề xuất <original> nhưng kết luận đã bị hạ xuống need_more_data: <reason>`, and the row keeps `evidence_check.original_conclusion` (and `forced_by = high_severity_injection_finding` for (b)). Read the original before acting on the label: an overruled `confirmed_incident` is a real lead the check could not back with a log line.
+
+### The evidence marks
+
+Each cited item is marked **`Đã kiểm chứng`** (verified) or **`Chưa kiểm chứng`** with a reason. **Verified** means the quote is a verbatim substring of the `raw_log` or the description of an alert in this case, after Unicode NFKC and whitespace collapsing, in either the plain or the HTML-escaped form the model was shown; an alert that is a duplicate of a case alert counts as that alert. The rejections:
+
+| reason | on screen | means |
+|---|---|---|
+| `not_in_case` | `alert này không thuộc case` | the `alert_id` is not in the case, nor a duplicate of one |
+| `quote_not_found` | `trích dẫn không có trong log hay mô tả của alert` | the alert is in the case, the text is not in it |
+| `quote_too_short` | `trích dẫn ngắn hơn 8 ký tự …` | under `8` characters after normalising: too short to prove anything |
+
+### Cost and failures
+
+**Every paid call is costed**, into whichever row that attempt writes, including a failed attempt's. A job that is retried leaves one row per non-final attempt with `stopped_by = 'transient'` under an attempt-scoped `run_id`, so the month's spend (`LLM_MONTHLY_USD_CAP`, default 30, summed over all `llm_runs`) never loses a call. The outcomes of a run:
+
+| `stopped_by` | when |
+|---|---|
+| (empty) | a valid result was recorded |
+| `cap` | the monthly cap was already reached when the run started: **0 model calls** were made |
+| `permanent` | the API answered a 4xx, which the adapter never retries (a rejected key, a malformed request, a prompt past the model's context window): retrying changes nothing |
+| `linter` | the dossier failed the safety lint before sending |
+| `schema` | the answer broke the schema, and the one repair broke it again |
+| `transient` | the model timed out or answered 5xx |
+
+`LLMTimeout` is not retried inside the model adapter: the job is retried instead, up to `JOB_MAX_ATTEMPTS` (3) attempts, `JOB_BACKOFF` apart (10 s, then 60 s). A job that exhausts them ends `failed` with a `job.exhausted` event. What the page then says depends on the last attempt: after a model timeout or 5xx it wrote the `transient` row and the page says `Phân tích không có kết quả: <reason>`; if it died on anything else there is no row and the page says `Phân tích thất bại — có thể thử lại`. The same `Phân tích không có kết quả: <reason>` line is what `cap`, `permanent`, `linter` and `schema` show, because those runs finish normally with a row and no result. A case's investigate runs, read only *(not run by the agent)*:
+
+```
+psql "$DATABASE_URL" -Atc "select created_at, stopped_by, cost_usd, run_id from llm_runs where pipeline = 'investigate' and subject_id = '<case_id>' order by created_at"
+```
+
+`stopped_by` is empty for a recorded result and `transient` for a non-final attempt. `<case_id>` is the case id from the page's address, not an alert id.
+
+### Operating notes
+
+- The `investigate` handler runs on the `jobs` queue in the existing `worker` container (found by `iter_handlers()`, nothing to enable). Its statements carry a `5 s` statement timeout, and its first statement raises the idle-in-transaction timeout from `10 s` to `JOB_LOCK_TIMEOUT_S`, since the transaction is open across the model call.
+- **`2 × LLM_TIMEOUT_S < JOB_LOCK_TIMEOUT_S`** must hold (240 s against 300 s by default): a send and its one repair must both finish before `reclaim_stale` re-queues a job it thinks is dead. Nothing enforces it in `.env`. Raise one, raise the other.
+- With `LLM_MODEL_PROPOSER` empty the job completes without reading the case and writes nothing (no row, no status change). The page then says `Phân tích thất bại — có thể thử lại` while it is polling and `Chưa có phân tích nào cho case này.` after a reload.
+- A merge that changes ② is a code-only change: `docker compose restart app worker` *(not run by the agent)*; the code is a live mount. A compose or mount change is `docker compose up -d`.
+- **If the worker is down, a queued job stays `pending` and the page keeps saying `Đang phân tích…` and re-fetching every 3 s.** There is no stale-job state and no timeout on the page (P5-T05 open question 1). Check `docker compose ps worker` and the pending-jobs row of **What to watch**; `docker compose restart worker` starts the job. A job locked for longer than `JOB_LOCK_TIMEOUT_S` is re-queued by the worker's loop (**Worker stuck**, above).
+
+### Limitations
+
+- ② is **built but not measured**. The frozen gold set was run through ① only (P7); no figure exists for how often ② is right. Treat its conclusion as a starting point for the analyst, not a verdict.
+- The `[truncated] N bytes dropped` marker the dossier puts in a cut block reads to the injection scan as a **medium** finding (the truncation flag is not carried to it). Only **high** overrules a `false_positive`, so this is noise, not a wrong conclusion.
+- The quota can be exceeded by one per race (above).
+- The polling, the four states and the overrule text were exercised against a fake model and a probe of the htmx swap; the panel was not driven in a real browser (P5-T05 open question 3).
 
 ## Pilot
 
