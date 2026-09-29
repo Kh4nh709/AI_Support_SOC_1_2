@@ -17,8 +17,10 @@ This file also pins the two smaller honesty properties P5-T13 added:
 signed by the Owner …" line and the clean-up rule — the empty ten-field
 template this section held before P8-T02 ran and was signed (29/09) is gone,
 at the Director's follow-up, once there was a real drill to point at instead
-— and `## ② operations` exists with *some* content, worded so a later
-fill-in (once P5-T04 merges, DEC-151) does not have to touch this test.
+— and `## ② operations` (filled in once P5-T04 merged, DEC-151): one tolerant test
+(the heading exists once, with some content) and one exact test that pins every fact the
+section must state, each with its own message, so removing one names it. A third test
+checks the defaults the section quotes against `backend/app/infra/config.py`.
 
 PURE. No database, no socket, no fixture: reads `docs/runbook.md` and
 `backend/app/infra/health.py` as text only. Runs anywhere the repository is
@@ -262,20 +264,203 @@ def test_restore_drill_section_points_at_the_full_record_and_a_current_result():
 
 
 def test_two_circle_operations_heading_present_with_some_content():
-    """Tolerant on purpose (Director 1's follow-up fills this in once
-    P5-T04 merges, DEC-151): today it must be the one-line DEC-151 stub, but
-    this assertion only requires the heading to exist once with a non-empty
-    body, so a later real ② write-up does not have to touch this test."""
+    """Tolerant on purpose: this assertion only requires the heading to exist once
+    with a non-empty body, so a later rewording of the ② section does not have to
+    touch it. The exact facts are pinned by the test below."""
     # Anchored on the heading line via _section (not a substring count —
     # see test_alarms_heading_appears_once), so a future prose
     # cross-reference to `` `## ② operations` `` elsewhere cannot break this.
     body = _section(_text(), "② operations").strip()
-    assert body, "## ② operations has no content — at least the DEC-151 stub line is required"
+    assert body, "## ② operations has no content"
 
 
-def test_two_circle_operations_is_today_the_dec_151_stub():
-    """Today's actual content, not just "non-empty" — separated from the
-    tolerant test above so this one, and only this one, needs to change
-    when P5-T04 merges and Director 1's follow-up fills the section in."""
-    body = _section(_text(), "② operations").strip()
-    assert body == "Điền khi P5-T04 merge (DEC-151).", body
+# Every fact the filled ② section must state (Director 1's addendum to P5-T13,
+# DEC-151), as (what it says, a substring that proves it). Each was read out of the
+# merged P5-T04 / P5-T05 code; the substrings are wording the section uses, so a
+# rewording that drops one has to say the fact again or update this list on purpose.
+TWO_CIRCLE_REQUIRED_FACTS: list[tuple[str, str]] = [
+    # scope (P5-T13 acceptance 3)
+    ("the confirmed_incident scope: it records, it does not contain", "`confirmed_incident`"),
+    ("... and nothing is contained or remediated", "contains nothing and remediates nothing"),
+    # 1. how to run an analysis
+    ("the button label", "**Phân tích**"),
+    ("the running state", "`Đang phân tích…`"),
+    ("the 3 s poll", "every 3 s"),
+    ("the failed state text", "`Phân tích thất bại — có thể thử lại`"),
+    ("the analyze endpoint", "`POST /api/tier2/cases/{id}/analyze`"),
+    ("the run endpoint", "`GET /api/tier2/runs/{run_id}`"),
+    ("the 202 answer", "`202 {run_id, job_id}`"),
+    ("a concluded case is 409", "`409` `case đã kết luận`"),
+    ("already running is 409", "`409` `an investigation is already running for this case`"),
+    ("the quota is 429 on the API", "`429` `analyze quota exceeded for today`"),
+    ("the quota key", "`ANALYZE_QUOTA_PER_USER_DAY`"),
+    ("the quota is counted from audit_events", "`audit_events`"),
+    ("the quota's one-over race", "**one over**"),
+    # 2. what (2) does
+    ("the nine-block dossier", "nine-block dossier"),
+    ("the 60k token budget", "`CASE_PROMPT_BUDGET_TOKENS` (default 60,000"),
+    ("the cut steps are recorded", "`agent_trace.truncations`"),
+    ("the linter", "It lints the prompt (G6')"),
+    ("one call, no tools", "no tools"),
+    ("at most one repair", "**at most one** repair"),
+    ("the per-block injection scan", "scans each dossier block for prompt injection"),
+    ("the evidence check", "checks the cited evidence"),
+    ("G7: no status changes", "**It changes no case or alert status (G7)"),
+    ("the only writes", "`llm_runs` and `cases.last_analyzed_at`"),
+    # 3. need_more_data
+    ("need_more_data is two things", "`need_more_data`"),
+    ("the model's own answer", "**the model's own answer**"),
+    ("an overrule", "**overrule**"),
+    ("overrule on no verified evidence", "**no cited evidence verified**"),
+    ("overrule on a high injection finding", "**high-severity injection finding**"),
+    ("the original conclusion is kept", "`evidence_check.original_conclusion`"),
+    ("forced_by is kept", "`forced_by = high_severity_injection_finding`"),
+    # 4. the evidence marks
+    ("verified: verbatim substring", "verbatim substring"),
+    ("verified: NFKC", "NFKC"),
+    ("verified: plain or HTML-escaped", "HTML-escaped"),
+    ("verified: duplicates count", "duplicate of a case alert"),
+    ("the verified mark", "`Đã kiểm chứng`"),
+    ("the unverified mark", "`Chưa kiểm chứng`"),
+    ("reason not_in_case", "`not_in_case`"),
+    ("reason quote_not_found", "`quote_not_found`"),
+    ("reason quote_too_short", "`quote_too_short`"),
+    ("the 8-character floor", "under `8` characters"),
+    # 5. cost and failures
+    ("every paid call is costed", "**Every paid call is costed**"),
+    ("a non-final attempt's row", "`stopped_by = 'transient'` under an attempt-scoped `run_id`"),
+    ("the monthly cap key", "`LLM_MONTHLY_USD_CAP`"),
+    ("the cap stops a run with 0 calls", "**0 model calls**"),
+    ("stopped_by cap", "| `cap` |"),
+    ("stopped_by permanent", "| `permanent` |"),
+    ("stopped_by linter", "| `linter` |"),
+    ("stopped_by schema", "| `schema` |"),
+    ("stopped_by transient", "| `transient` |"),
+    (
+        "a timeout is not retried in the adapter",
+        "`LLMTimeout` is not retried inside the model adapter",
+    ),
+    ("the retry count", "`JOB_MAX_ATTEMPTS` (3)"),
+    ("the backoff", "10 s, then 60 s"),
+    ("job.exhausted", "`job.exhausted`"),
+    ("a no-result run's screen line", "`Phân tích không có kết quả: <reason>`"),
+    (
+        "the read-only runs query: the command",
+        'psql "$DATABASE_URL" -Atc "select created_at, stopped_by, cost_usd, run_id from llm_runs',
+    ),
+    (
+        "the read-only runs query: the filter",
+        "pipeline = 'investigate' and subject_id = '<case_id>'",
+    ),
+    # 6. operations
+    ("the 5 s statement timeout", "`5 s` statement timeout"),
+    (
+        "the idle timeout is raised",
+        "raises the idle-in-transaction timeout from `10 s` to `JOB_LOCK_TIMEOUT_S`",
+    ),
+    ("the timeout relation", "`2 × LLM_TIMEOUT_S < JOB_LOCK_TIMEOUT_S`"),
+    ("restart after a merge", "`docker compose restart app worker`"),
+    ("the compose rule", "`docker compose up -d`"),
+    ("a pending job while the worker is down", "a queued job stays `pending`"),
+    ("... and what the page does", "re-fetching every 3 s"),
+    # 7. limitations
+    ("not measured on the gold set", "**built but not measured**"),
+    ("P7 measured (1) only", "run through ① only (P7)"),
+    ("the [truncated] marker reads as medium", "**medium** finding"),
+    ("the quota race is repeated in the limits", "The quota can be exceeded by one per race"),
+    # what the agent could not run
+    ("unrun commands are marked", "*(not run by the agent)*"),
+]
+
+
+def test_two_circle_operations_states_every_required_fact():
+    """The filled section, not just "non-empty" (separated from the tolerant test above
+    so this one, and only this one, fails when a required fact is removed or reworded)."""
+    body = _section(_text(), "② operations")
+    assert "Điền khi P5-T04 merge" not in body, "the DEC-151 stub line is still in the section"
+    missing = [(what, needle) for what, needle in TWO_CIRCLE_REQUIRED_FACTS if needle not in body]
+    assert not missing, "## ② operations no longer states: " + "; ".join(
+        f"{what} (expected {needle!r})" for what, needle in missing
+    )
+
+
+CONFIG_PATH = REPO_ROOT / "backend" / "app" / "infra" / "config.py"
+
+
+def test_two_circle_operations_defaults_match_config():
+    """The three defaults the section quotes (`CASE_PROMPT_BUDGET_TOKENS` 60,000,
+    `ANALYZE_QUOTA_PER_USER_DAY` 30, `LLM_MONTHLY_USD_CAP` 30) and the 2 x 120 < 300
+    relation are read from `config.py` as text, so a changed default fails here instead
+    of leaving the runbook quoting the old one. Pure: no import of the product."""
+    config = CONFIG_PATH.read_text(encoding="utf-8")
+
+    def default(name: str) -> int:
+        m = re.search(rf"^    {name}: int = ([\d_]+)$", config, re.MULTILINE)
+        assert m, f"no `{name}: int = <default>` field in {CONFIG_PATH}"
+        return int(m.group(1).replace("_", ""))
+
+    body = _section(_text(), "② operations")
+    assert default("CASE_PROMPT_BUDGET_TOKENS") == 60_000 and "default 60,000" in body
+    assert default("ANALYZE_QUOTA_PER_USER_DAY") == 30 and "(default 30)" in body
+    assert default("LLM_MONTHLY_USD_CAP") == 30 and "`LLM_MONTHLY_USD_CAP`, default 30" in body
+    assert default("JOB_MAX_ATTEMPTS") == 3 and "`JOB_MAX_ATTEMPTS` (3)" in body
+    assert 2 * default("LLM_TIMEOUT_S") < default("JOB_LOCK_TIMEOUT_S"), (
+        "the defaults no longer satisfy 2 x LLM_TIMEOUT_S < JOB_LOCK_TIMEOUT_S, "
+        "which the section states as a rule"
+    )
+
+
+HANDLERS_DIR = REPO_ROOT / "backend" / "app" / "web" / "handlers"
+JOB_TYPE_RE = re.compile(r'^JOB_TYPE = "([a-z_]+)"$', re.MULTILINE)
+
+
+def _handler_job_types() -> list[str]:
+    """Every `JOB_TYPE = "..."` declared in `backend/app/web/handlers/`, read as text."""
+    found = []
+    for path in sorted(HANDLERS_DIR.glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        m = JOB_TYPE_RE.search(path.read_text(encoding="utf-8"))
+        if m:
+            found.append(m.group(1))
+    return found
+
+
+def test_start_and_stop_lists_every_worker_handler():
+    """Stale once P5-T04 merged (Director 1's follow-up to the ② addendum):
+    `## Start and stop` must name every `JOB_TYPE` in `backend/app/web/handlers/` and
+    must not say a handler is still to come."""
+    job_types = _handler_job_types()
+    assert "investigate" in job_types, f"no handler declares JOB_TYPE 'investigate': {job_types}"
+    start_and_stop = _section(_text(), "Start and stop")
+    # The list itself ("`worker` runs the `a`, `b` and `c` jobs"), not the parenthesis after
+    # it, which may mention a job type without listing it.
+    lists = re.findall(r"`worker` runs the (.*?) jobs", start_and_stop)
+    assert len(lists) == 1, "expected exactly one '`worker` runs the ... jobs' list"
+    missing = [j for j in job_types if f"`{j}`" not in lists[0]]
+    assert not missing, f"## Start and stop does not list the worker handlers: {missing}"
+    assert "joins once" not in start_and_stop, "## Start and stop still says a handler is to come"
+
+
+def test_environment_keys_rows_for_the_two_circle_settings_name_their_readers():
+    """The `CASE_PROMPT_BUDGET_TOKENS` and `ANALYZE_QUOTA_PER_USER_DAY` rows said "read by
+    nothing" until P5-T04 merged. They must now name the files that read them, and those
+    files must still mention the key (so the row cannot go stale a second time)."""
+    rows = {
+        row[0]: row[1] for row in _table_rows(_section(_text(), "Environment keys")) if len(row) > 1
+    }
+    readers_by_key = {
+        "CASE_PROMPT_BUDGET_TOKENS": ["tier2/dossier.py"],
+        "ANALYZE_QUOTA_PER_USER_DAY": [
+            "web/routers/tier2_runs.py",
+            "web/routers/case_analyze_pages.py",
+        ],
+    }
+    for key, readers in readers_by_key.items():
+        what = rows.get(f"`{key}`")
+        assert what is not None, f"## Environment keys has no row for {key}"
+        assert "read by nothing" not in what, f"{key}: still says 'read by nothing': {what}"
+        for reader in readers:
+            assert reader in what, f"{key}: the row does not name {reader}: {what}"
+            source = (REPO_ROOT / "backend" / "app" / reader).read_text(encoding="utf-8")
+            assert key in source, f"{reader} no longer reads {key} — the row is stale again"

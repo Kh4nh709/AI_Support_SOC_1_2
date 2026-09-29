@@ -2861,3 +2861,26 @@ Decision:
      - The Director ran it at the Owner's word. The Owner signed it (khanh, 29/09).
      - `soc_restore_drill` was dropped at the Owner's word, and `soc_dev` was untouched.
 Supersedes: nothing
+
+## DEC-154 · 2026-09-30 · P5 is complete: all thirteen cards are merged. ② (the single-shot Tier-2 analysis) is built and live, but not measured. The runbook's ② section is filled
+Scope: **plan** (P5 closed; the DEC-151 reinstatement ends) · **evaluation validity** (what ② is and is not claimed to be)
+Decided by: Director, on each card's Reviewer verdict (DEC-151)
+Drafted by: Director (Opus 5.5)
+Propagated to: `STATE.md` (P5 phase row → done) · `superseded.yaml` (`P5` added to `exclude_completed_phases`) · `docs/runbook.md` `## ② operations` · `docs/limitations.md` at P8-T06
+Decision:
+  1. **P5 is complete.**
+     - All thirteen cards are merged. Each card had a separate Reviewer, and every REQUEST CHANGES was fixed and checked at merge.
+     - T04 took two Reviewer rounds; T05 was driven with the real htmx in jsdom.
+     - Coders ran on Sonnet 5 until DEC-153, and on Sonnet 5.5 at xhigh effort afterwards. Each card's review file names the model its Coder used.
+  2. **② is built and live, but not measured.**
+     - `POST /analyze` builds the nine-block dossier and makes one model call plus at most one repair.
+     - It lints the prompt, scans for injection block by block, and checks every quote against the case's own alerts. The response is overruled to `need_more_data` when evidence is unverified or an injection finding is high.
+     - It writes only `llm_runs` and `cases.last_analyzed_at` (G7).
+     - The frozen gold set (P7) measured ① only. No accuracy figure exists for ②, and `docs/limitations.md` states this.
+     - P5-T02's size-class measurement (n = 3) is the only live number: cost and latency at the 60k size.
+  3. **Recorded limitations, carried to P8-T06:**
+     - The quota's check-then-insert race: one analysis over the limit per simultaneous request.
+     - `[truncated]` markers read as medium injection findings.
+     - A crash between the last attempt's commit and `finish_job` can make one uncosted call.
+     - The shell stays on "Đang tải…" if its load returns 403, 404 or 500.
+Supersedes: nothing
