@@ -1,23 +1,31 @@
 """The daily digest of auto-closed clusters for human review (P5-T08,
 P5-tasks.md §6.5, `docs/kien-truc-v3-14-ngay.html` §3.4).
 
-`build(conn, day)` reads every alert auto-closed in `day`'s 24h (UTC, §9),
-disagreements first — ①'s verdict, read the one way this codebase reads it
-(`tier1.queue.latest_suggestion`, P4 planning decision 5: one function reads
-①, one place to change). `review(conn, alert_id, verdict, reviewer_id)` is
-the human's one action on a row: `correct` confirms the auto-close and writes
-the `false_positive` gold label; `wrong` reopens the alert through
+`build(conn, day)` reads every alert auto-closed in `day`'s 24h **in the
+display zone** (`cfg.DISPLAY_TZ`, review round 1 · S4 — the digest is read by
+people in that zone, not in UTC), disagreements first — ①'s verdict, read the
+one way this codebase reads it (`tier1.queue.latest_suggestion`, P4 planning
+decision 5: one function reads ①, one place to change). `review(conn,
+alert_id, verdict, reviewer_id)` is the human's one action on a row, and its
+whole body is one savepoint (review round 1 · B1/B3): a status guard applies
+to every verdict, a second review of an already-reviewed alert is a conflict
+(`AlreadyReviewed`, not an upsert — round 1 flips design note 2(a)), `correct`
+writes the gold `false_positive` label, `wrong` reopens the alert through
 `domain.transitions.reopen` (A17) and writes **no** label — a `wrong` verdict
 says only that auto-closing was wrong, not what the alert *is* (design note
 2(b); "Tỉ lệ đóng nhầm của báo cáo = wrong / reviewed ... đo bằng người ...
-Không dùng model làm thước đo rule"); `unsure` writes only the review.
-`rule.suspected_wrong` fires once per rule per 7-day window at >= 2 `wrong`
-verdicts. `ensure_scheduled(conn)` is the self-chaining half: it enqueues
-tomorrow's digest job at 08:00, `scheduled_at` evaluated by the database
-(§9 — control timestamps are never a Python value), the same mechanism
-`infra/puller.py` uses for `pull`'s `Reschedule`. `to_csv(rows)` is the cut
-path (§10: "digest UI (CSV instead)") — it carries everything the page would
-show, including ①'s verdict and the disagreement flag.
+Không dùng model làm thước đo rule"); `unsure` writes only the review. Every
+verdict writes an `autoclose.reviewed` audit event (G2/B2: every human
+decision is one); `correct` also writes `label.created`. `rule.suspected_wrong`
+fires once per rule per 7-day window at >= 2 `wrong` verdicts, guarded by a
+transaction-scoped advisory lock on the rule id (round 1 · N9). `ensure_scheduled(conn)`
+is the self-chaining half: it enqueues tomorrow's digest job at 08:00 **local**,
+`scheduled_at` evaluated by the database (§9 — control timestamps are never a
+Python value), the same mechanism `infra/puller.py` uses for `pull`'s
+`Reschedule`. A job that fires on local day D reviews local day D-1 (round 1 ·
+S4). `to_csv(rows)` is the cut path (§10: "digest UI (CSV instead)") — it
+carries everything the page would show, including ①'s verdict and the
+disagreement flag.
 
 G2: only `domain/` writes `alerts.status` — this module calls `reopen`, it
 never issues a status-setting UPDATE against `alerts` itself.
@@ -31,7 +39,7 @@ import dataclasses
 import io
 import json
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -39,12 +47,22 @@ import psycopg
 from psycopg import sql
 
 from app.audit.events import write_event
-from app.domain.transitions import reopen
+from app.domain.transitions import StaleState, reopen
 from app.infra import config, db
+from app.infra.errors import PermanentError
 from app.infra.jobs import Job, enqueue
 from app.tier1.queue import latest_suggestion
 
 _SUSPECTED_WRONG_THRESHOLD = 2
+
+
+class AlreadyReviewed(StaleState):
+    """A second review of an alert that already has one (review round 1
+    ruling on design note 2(a): the first review wins; someone who changes
+    their mind uses the Tier-1 reopen, not a second digest review).
+    Subclasses `StaleState` so a caller that only wants "this row moved under
+    you, render a conflict" — P5-T09's one 409 path — needs no second
+    `except`, while a caller that cares can still catch this specifically."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -68,7 +86,15 @@ class DigestRow:
     reviewed_verdict: str | None
 
 
-_BUILD_SQL = """
+# Day bounds, in the display zone (round 1 · S4): `day` is a naive calendar
+# date; casting it (and day+1) to `timestamp` then `AT TIME ZONE tz`
+# interprets that naive instant AS local wall-clock time in `tz` and converts
+# it to the `timestamptz` `closed_at` actually is — never plain UTC, and `tz`
+# is always a bound parameter (`%(tz)s`), never formatted into the SQL text.
+_DAY_LOWER = "(%(day)s::date)::timestamp AT TIME ZONE %(tz)s"
+_DAY_UPPER = "(%(day)s::date + 1)::timestamp AT TIME ZONE %(tz)s"
+
+_BUILD_SQL = f"""
     SELECT
         a.alert_id, a.rule_id, a.description, a.severity, a.category,
         a.agent_name, a.occurrence_count, a.first_seen_at, a.last_seen_at,
@@ -77,21 +103,37 @@ _BUILD_SQL = """
     LEFT JOIN autoclose_rules r ON r.autoclose_rule_id = a.autoclose_rule_id
     LEFT JOIN autoclose_reviews rev ON rev.alert_id = a.alert_id
     WHERE a.status = 'auto_closed'
-      AND a.closed_at >= %(day)s::date
-      AND a.closed_at <  %(day)s::date + 1
+      AND NOT a.is_synthetic
+      AND a.closed_at >= {_DAY_LOWER}
+      AND a.closed_at <  {_DAY_UPPER}
+"""
+
+_UNREVIEWED_COUNT_SQL = f"""
+    SELECT count(*)
+    FROM alerts a
+    LEFT JOIN autoclose_reviews rev ON rev.alert_id = a.alert_id
+    WHERE a.status = 'auto_closed'
+      AND NOT a.is_synthetic
+      AND a.closed_at >= {_DAY_LOWER}
+      AND a.closed_at <  {_DAY_UPPER}
+      AND rev.alert_id IS NULL
 """
 
 
-def build(conn: psycopg.Connection, day: str) -> list[DigestRow]:
-    """Every cluster auto-closed in `day`'s 24h, disagreements first (design
-    note 1): ①'s `suggested_action` sorts to the top when it is not
-    `false_positive` — the rule closed it and the model would not have; ties
-    break on `occurrence_count DESC`, then `alert_id`, so the order is total
-    and the CSV is diffable. A row with no ① run at all (the `triage` job
-    D8 enqueues on every auto-close has not finished yet) is left out of the
+def build(conn: psycopg.Connection, day: str, *, tz: str | None = None) -> list[DigestRow]:
+    """Every cluster auto-closed in `day`'s 24h **in the display zone**
+    (`tz`, default `cfg.DISPLAY_TZ` — round 1 · S4), excluding synthetic
+    alerts (round 1 · N8, matching `queue.py`'s `list_queue` and
+    `ingest/autoclose.simulate`), disagreements first (design note 1): ①'s
+    `suggested_action` sorts to the top when it is not `false_positive` — the
+    rule closed it and the model would not have; ties break on
+    `occurrence_count DESC`, then `alert_id`, so the order is total and the
+    CSV is diffable. A row with no ① run at all (the `triage` job D8
+    enqueues on every auto-close has not finished yet) is left out of the
     disagreement group — there is no verdict to disagree with. Already
     reviewed alerts carry their verdict; they are not excluded."""
-    records = conn.execute(_BUILD_SQL, {"day": day}).fetchall()
+    tz = tz or config.load().DISPLAY_TZ
+    records = conn.execute(_BUILD_SQL, {"day": day, "tz": tz}).fetchall()
     rows: list[DigestRow] = []
     for (
         alert_id,
@@ -132,22 +174,13 @@ def build(conn: psycopg.Connection, day: str) -> list[DigestRow]:
     return rows
 
 
-def unreviewed_count(conn: psycopg.Connection, day: str) -> int:
-    """How many of `day`'s auto-closed clusters have no `autoclose_reviews`
-    row yet. Exposed for P5-T11's health job (the 17:00 threshold is its own,
-    not this card's — this card only exposes the number)."""
-    row = conn.execute(
-        """
-        SELECT count(*)
-        FROM alerts a
-        LEFT JOIN autoclose_reviews rev ON rev.alert_id = a.alert_id
-        WHERE a.status = 'auto_closed'
-          AND a.closed_at >= %(day)s::date
-          AND a.closed_at <  %(day)s::date + 1
-          AND rev.alert_id IS NULL
-        """,
-        {"day": day},
-    ).fetchone()
+def unreviewed_count(conn: psycopg.Connection, day: str, *, tz: str | None = None) -> int:
+    """How many of `day`'s auto-closed clusters (display zone `tz`, real
+    alerts only — same rules as `build`) have no `autoclose_reviews` row yet.
+    Exposed for P5-T11's health job (the 17:00 threshold is its own, not this
+    card's — this card only exposes the number)."""
+    tz = tz or config.load().DISPLAY_TZ
+    row = conn.execute(_UNREVIEWED_COUNT_SQL, {"day": day, "tz": tz}).fetchone()
     return row[0]
 
 
@@ -157,66 +190,139 @@ def review(
     verdict: Literal["correct", "wrong", "unsure"],
     reviewer_id: str,
 ) -> None:
-    """Design note 2's three effects, in the caller's transaction — this
-    function never commits, matching every other domain-adjacent call in this
-    codebase (`reopen`, `decide`, `conclude_case`).
+    """Review round 1 (B1/B2/B3): the whole body is one savepoint
+    (`with conn.transaction():`), so a raise midway leaves nothing
+    half-written — the caller's own transaction is untouched either way, the
+    same pattern `tier1/labels.py`'s `submit_label` uses. In order:
 
-    (a) One `autoclose_reviews` row per alert (the PK is `alert_id` alone): a
-    second review of the same alert upserts — last reviewer wins.
-    (b) `correct` confirms the auto-close read the cluster right and writes
-    the gold `false_positive` label (`source='digest'`). `wrong` and `unsure`
-    write **no** label: `wrong` says only that auto-closing was wrong, not
-    what the alert *is*, and inventing a label from "not this" would put a
-    fabricated row in P7's evaluation table (design note 2(b) — flagged for
-    the Director in the report; a one-line change to `wrong -> escalate` if
-    they prefer it).
-    (c) `wrong` reopens the alert (A17, `auto_closed -> queued_tier1`,
-    `autoclose_rule_id` untouched by `reopen`) and checks whether its rule
-    now has >= 2 `wrong` verdicts in the last 7 days. A `StaleState` from
-    `reopen` (the alert is no longer `auto_closed`) propagates uncaught — the
-    caller renders it as a conflict, not a 500.
+    1. `SELECT status, autoclose_rule_id ... FOR UPDATE` — missing, or not
+       `auto_closed`, is `StaleState`, for *every* verdict including
+       `correct`/`unsure` (B1: there was no status guard at all before this
+       round). The row lock also makes the read-then-write below atomic
+       against a second reviewer.
+    2. `INSERT INTO autoclose_reviews ... ON CONFLICT (alert_id) DO NOTHING
+       RETURNING ...` — no row back means someone already reviewed this
+       alert: `AlreadyReviewed` (round 1 ruling flips design note 2(a) —
+       the first review wins; changing your mind goes through the Tier-1
+       reopen, not a second digest review).
+    3. `autoclose.reviewed` (B2/G2 — every human decision is an audit event),
+       for every verdict: `{verdict, autoclose_rule_id, suggested_action,
+       run_id}`, the last two from `latest_suggestion` (`None` when ① has
+       not run yet).
+    4. `correct` writes the gold `false_positive` label (`source='digest'`,
+       a plain INSERT now — the upsert is gone with (2), so a second
+       `correct` from the same reviewer can no longer reach this line) and
+       its own `label.created` event (`tier1/labels.py`'s payload shape,
+       plus `"source": "digest"`). `wrong` and `unsure` write **no** label: a
+       `wrong` verdict says only that auto-closing was wrong, not what the
+       alert *is* — inventing a label from "not this" would put a fabricated
+       row in P7's evaluation table (design note 2(b), unchanged).
+    5. `wrong` reopens the alert (A17, `auto_closed -> queued_tier1`,
+       `autoclose_rule_id` untouched by `reopen`) inside the same savepoint,
+       then checks `rule.suspected_wrong`.
     """
-    conn.execute(
-        """
-        INSERT INTO autoclose_reviews (alert_id, reviewer_id, verdict)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (alert_id) DO UPDATE SET
-            reviewer_id = EXCLUDED.reviewer_id,
-            verdict = EXCLUDED.verdict,
-            reviewed_at = now()
-        """,
-        (alert_id, reviewer_id, verdict),
-    )
-    if verdict == "correct":
-        conn.execute(
+    with conn.transaction():
+        row = conn.execute(
+            "SELECT status, autoclose_rule_id FROM alerts WHERE alert_id = %s FOR UPDATE",
+            (alert_id,),
+        ).fetchone()
+        if row is None:
+            raise StaleState(f"review: alert_id={alert_id!r} does not exist")
+        status, autoclose_rule_id = row
+        if status != "auto_closed":
+            raise StaleState(
+                f"review: alert_id={alert_id!r} is in status {status!r}, " "expected 'auto_closed'"
+            )
+        rule_id = str(autoclose_rule_id) if autoclose_rule_id is not None else None
+
+        inserted = conn.execute(
             """
-            INSERT INTO triage_labels (alert_id, labeler_id, source, label)
-            VALUES (%s, %s, 'digest', 'false_positive')
-            ON CONFLICT (alert_id, labeler_id, source) DO UPDATE SET
-                label = EXCLUDED.label,
-                created_at = now()
+            INSERT INTO autoclose_reviews (alert_id, reviewer_id, verdict)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (alert_id) DO NOTHING
+            RETURNING alert_id
             """,
-            (alert_id, reviewer_id),
+            (alert_id, reviewer_id, verdict),
+        ).fetchone()
+        if inserted is None:
+            raise AlreadyReviewed(f"review: alert_id={alert_id!r} already has a review")
+
+        suggestion = latest_suggestion(conn, alert_id)
+        write_event(
+            conn,
+            "autoclose.reviewed",
+            alert_id,
+            "admin",
+            actor_id=reviewer_id,
+            payload={
+                "verdict": verdict,
+                "autoclose_rule_id": rule_id,
+                "suggested_action": suggestion.suggested_action if suggestion else None,
+                "run_id": suggestion.run_id if suggestion else None,
+            },
         )
-    elif verdict == "wrong":
-        reopen(conn, alert_id, reviewer_id, reason="digest")
-        _flag_rule_if_suspected_wrong(conn, alert_id)
+
+        if verdict == "correct":
+            conn.execute(
+                """
+                INSERT INTO triage_labels (alert_id, labeler_id, source, label)
+                VALUES (%s, %s, 'digest', 'false_positive')
+                """,
+                (alert_id, reviewer_id),
+            )
+            write_event(
+                conn,
+                "label.created",
+                alert_id,
+                "admin",
+                actor_id=reviewer_id,
+                payload={
+                    "alert_id": alert_id,
+                    "labeler_id": reviewer_id,
+                    "label": "false_positive",
+                    "confidence": None,
+                    "gold_set": None,
+                    "source": "digest",
+                },
+            )
+        elif verdict == "wrong":
+            reopen(conn, alert_id, reviewer_id, reason="digest")
+            _flag_rule_if_suspected_wrong(conn, rule_id)
 
 
-def _flag_rule_if_suspected_wrong(conn: psycopg.Connection, alert_id: str) -> None:
+_RULE_SUSPECTED_WRONG_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext(%s))"
+
+
+def _lock_rule_for_suspected_wrong(conn: psycopg.Connection, rule_id: str) -> None:
+    """Round 1 · N9: a transaction-scoped advisory lock on one autoclose
+    rule id, taken before the check-then-insert below —
+    `ingest/dedup.py`'s `cluster_lock` pattern, one key instead of four, so
+    two concurrent `wrong` reviews of the same rule serialise instead of
+    both reading `wrong_count = 1` and neither firing, or both firing a
+    duplicate event. `None` is refused rather than passed through:
+    `pg_advisory_xact_lock(NULL)` silently takes no lock and raises nothing
+    (`cluster_lock`'s own reasoning)."""
+    if rule_id is None:
+        raise PermanentError(
+            "_lock_rule_for_suspected_wrong: rule_id is None; "
+            "pg_advisory_xact_lock(NULL) takes no lock and raises nothing"
+        )
+    conn.execute(_RULE_SUSPECTED_WRONG_LOCK_SQL, (rule_id,))
+
+
+def _flag_rule_if_suspected_wrong(conn: psycopg.Connection, rule_id: str | None) -> None:
     """Design note 3: after a `wrong` review, count that rule's `wrong`
     verdicts in the last 7 days (join `autoclose_reviews` to
     `alerts.autoclose_rule_id`); at >= 2, write `rule.suspected_wrong` once
     per rule per 7-day window — an existing event in the window stops a
-    re-fire on every later `wrong`. Notification is P5-T11's; this writes the
-    record, not a message."""
-    row = conn.execute(
-        "SELECT autoclose_rule_id FROM alerts WHERE alert_id = %s", (alert_id,)
-    ).fetchone()
-    rule_id = row[0] if row else None
+    re-fire on every later `wrong`. Round 1 · N9: skipped entirely when the
+    alert carries no `autoclose_rule_id` (should not happen for an
+    `auto_closed` alert today, but "skip" — not "crash" — is the right
+    response if it ever does), and otherwise guarded by the advisory lock
+    above. Notification is P5-T11's; this writes the record, not a message."""
     if rule_id is None:
         return
-    rule_id = str(rule_id)
+    _lock_rule_for_suspected_wrong(conn, rule_id)
 
     wrong_count = conn.execute(
         """
@@ -302,34 +408,86 @@ def to_csv(rows: Sequence[DigestRow]) -> str:
     return buf.getvalue()
 
 
-def ensure_scheduled(conn: psycopg.Connection) -> int | None:
-    """The self-chaining half (design note 4): enqueue tomorrow's `digest`
-    job, or do nothing if one is already live. `scheduled_at` is a
-    `psycopg.sql` expression the database evaluates —
-    `now()::date + 1 + time '08:00'`, never a Python timestamp (§9: control
-    timestamps come from the database's own clock) — the same mechanism
-    `infra/puller.py` uses for `pull`'s `Reschedule`. `subject_id` (the ISO
-    date that makes the job idempotent per day) is read back from that same
-    `now()::date + 1`, so it never disagrees with the scheduled time or with
-    this process's own clock. Also reachable from the CLI (`--ensure`) so a
-    chain that was ever broken can be re-armed by hand."""
-    tomorrow = conn.execute("SELECT (now()::date + 1)::text").fetchone()[0]
-    return enqueue(
-        conn,
-        "digest",
-        tomorrow,
-        scheduled_at=sql.SQL("now()::date + 1 + time '08:00'"),
-    )
+def _previous_day(day: str) -> str:
+    """Pure calendar arithmetic on an already-fixed day string — not a
+    control-timestamp read (§9), so plain Python `date` math is fine here:
+    nothing about "yesterday" depends on this process's clock, only on the
+    `day` value already handed in."""
+    return (date.fromisoformat(day) - timedelta(days=1)).isoformat()
+
+
+def _next_run_expr(tz: str, *, as_of: sql.Composable | None = None) -> sql.Composable:
+    """The **next** 08:00 local (round 1 · A1): today's, if `as_of` (default
+    `now()`, the database's own clock — §9) is still before 08:00 local;
+    otherwise tomorrow's. A worker restart at 07:00 local after a broken
+    chain must still get that day's digest, which is exactly the branch this
+    adds — `run_digest_job`'s own self re-arm always lands in the "tomorrow"
+    branch without any special-casing, because it runs at or after 08:00 (it
+    *is* the 08:00 job).
+
+    `tz` is embedded via `sql.Literal` (psycopg's own safe value quoting,
+    not string formatting): `enqueue()` (`infra/jobs.py`, a shared file this
+    card does not touch) binds only `job_type`/`subject_id` positionally, so
+    a third bound parameter has nowhere to go — its own docstring names
+    `sql.Literal` as the sanctioned way to build a `scheduled_at` expression.
+    `as_of` is the same kind of seam, private to this module: every real
+    caller leaves it `None` (`now()`); a test may pass a fixed
+    `sql.Literal`-wrapped instant to exercise both sides of 08:00
+    deterministically."""
+    as_of = as_of or sql.SQL("now()")
+    return sql.SQL(
+        "((CASE WHEN ({as_of} AT TIME ZONE {tz})::time < time '08:00'"
+        " THEN ({as_of} AT TIME ZONE {tz})::date"
+        " ELSE ({as_of} AT TIME ZONE {tz})::date + 1 END)"
+        " + time '08:00') AT TIME ZONE {tz}"
+    ).format(as_of=as_of, tz=sql.Literal(tz))
+
+
+def ensure_scheduled(
+    conn: psycopg.Connection, *, tz: str | None = None, as_of: sql.Composable | None = None
+) -> int | None:
+    """The self-chaining half (design note 4, round 1 · S4/A1): enqueue the
+    next `digest` job **at 08:00 local** (`tz`, default `cfg.DISPLAY_TZ`), or
+    do nothing if one is already live. See `_next_run_expr` for "next".
+
+    `subject_id` (the ISO date that makes the job idempotent per day) is
+    that run's date *in the display zone*, read back from the database so it
+    never disagrees with `scheduled_at` or with this process's own clock —
+    both come from the one `_next_run_expr(...)` Composable, evaluated twice
+    inside the same transaction (so the same `now()`, per Postgres's own
+    transaction-stable clock) rather than computed twice by two different
+    formulas that could drift apart. Reachable from the CLI (`--ensure`) and
+    called once at every worker start (`web/worker.py`, round 1 · A2) so the
+    chain seeds and re-arms itself without an Owner action; the CLI flag
+    stays for re-arming by hand if the chain is ever found broken.
+    """
+    tz = tz or config.load().DISPLAY_TZ
+    run_at = _next_run_expr(tz, as_of=as_of)
+    # `({run_at}) AT TIME ZONE {tz}` converts the timestamptz back to a naive
+    # local timestamp before `::date` — casting a timestamptz straight to
+    # `date` uses the session's own TimeZone setting, not `tz`, and the two
+    # need not agree.
+    next_run_date = conn.execute(
+        sql.SQL("SELECT (({run_at}) AT TIME ZONE {tz})::date::text").format(
+            run_at=run_at, tz=sql.Literal(tz)
+        )
+    ).fetchone()[0]
+    return enqueue(conn, "digest", next_run_date, scheduled_at=run_at)
 
 
 def run_digest_job(conn: psycopg.Connection, job: Job) -> None:
-    """§6.5's `digest` handler: build `job.subject_id`'s digest (so a broken
-    query fails the job loudly, not silently — nothing here persists the
-    rows; the CSV and the page, P5-T09, build on demand from `build()`
-    itself), log a one-line summary, then re-arm tomorrow's job."""
-    rows = build(conn, job.subject_id)
-    print(json.dumps({"day": job.subject_id, "clusters": len(rows)}))
-    ensure_scheduled(conn)
+    """§6.5's `digest` handler. Round 1 · S4: the job that fires on local day
+    D (`job.subject_id`) reviews local day D-1 — `ensure_scheduled` always
+    arms *tomorrow*, so the job that runs today is reviewing what closed
+    yesterday. Builds the digest (so a broken query fails the job loudly,
+    not silently — nothing here persists the rows; the CSV and the page,
+    P5-T09, build on demand from `build()` itself), logs a one-line summary,
+    then re-arms tomorrow's job."""
+    cfg = config.load()
+    reviewed_day = _previous_day(job.subject_id)
+    rows = build(conn, reviewed_day, tz=cfg.DISPLAY_TZ)
+    print(json.dumps({"day": reviewed_day, "clusters": len(rows)}))
+    ensure_scheduled(conn, tz=cfg.DISPLAY_TZ)
 
 
 # =============================================================================
@@ -342,32 +500,38 @@ def _cmd(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python3 -m app.tier1.digest",
         description=(
-            "--ensure enqueues tomorrow's digest job if the chain is not "
-            "already armed (re-arms it by hand after a break). --csv PATH "
-            "writes the day's digest as CSV; --day YYYY-MM-DD picks the day "
-            "(default: today, the database's own clock). Either or both."
+            "--ensure enqueues tomorrow's digest job (08:00 local, cfg.DISPLAY_TZ) if "
+            "the chain is not already armed (re-arms it by hand after a break). --csv "
+            "PATH writes the day's digest as CSV; --day YYYY-MM-DD picks the day "
+            "(default: today, local). Either or both."
         ),
     )
     parser.add_argument("--ensure", action="store_true", help="enqueue tomorrow's digest job")
     parser.add_argument("--csv", metavar="PATH", help="write the day's digest as CSV to PATH")
-    parser.add_argument("--day", metavar="YYYY-MM-DD", help="default: today")
+    parser.add_argument("--day", metavar="YYYY-MM-DD", help="default: today, local (DISPLAY_TZ)")
     parser.add_argument("--env-file", default=".env")
     args = parser.parse_args(argv)
     if not args.ensure and not args.csv:
         parser.error("nothing to do: pass --ensure and/or --csv PATH")
 
     cfg = config.load(env_file=args.env_file)
+    tz = cfg.DISPLAY_TZ
     conn = db.connect(cfg.DATABASE_URL)
     try:
         if args.ensure:
-            job_id = ensure_scheduled(conn)
+            job_id = ensure_scheduled(conn, tz=tz)
             conn.commit()
             print(f"digest: ensure_scheduled -> job_id={job_id}")
         if args.csv:
-            day = args.day or conn.execute("SELECT now()::date::text").fetchone()[0]
-            rows = build(conn, day)
+            day = (
+                args.day
+                or conn.execute(
+                    "SELECT (now() AT TIME ZONE %(tz)s)::date::text", {"tz": tz}
+                ).fetchone()[0]
+            )
+            rows = build(conn, day, tz=tz)
             Path(args.csv).write_text(to_csv(rows), encoding="utf-8")
-            print(f"digest: wrote {len(rows)} row(s) for {day} to {args.csv}")
+            print(f"digest: wrote {len(rows)} row(s) for {day} ({tz}) to {args.csv}")
     finally:
         conn.close()
     return 0

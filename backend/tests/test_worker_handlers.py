@@ -51,7 +51,12 @@ def test_main_passes_timeouts_to_run_forever(monkeypatch):
     """Design note 5(c)'s red-step-discriminating assertion: `TIMEOUTS ==
     iter_timeouts()` alone stays green even if `main()` never hands it to
     `run_forever` — so this inspects the actual call, via `monkeypatch` on
-    `app.web.worker.run_forever`, rather than the module-level mapping."""
+    `app.web.worker.run_forever`, rather than the module-level mapping.
+
+    P5-T08 review round 1 · A2: also asserts `digest.ensure_scheduled` is
+    called exactly once, with `main`'s own connection — the Director lifted
+    the "no diff in worker.py" rule for this one line, so a fake stands in
+    for the tier function itself rather than for anything shared."""
     from app.web import worker as worker_module
 
     captured: dict[str, object] = {}
@@ -64,15 +69,22 @@ def test_main_passes_timeouts_to_run_forever(monkeypatch):
         def commit(self) -> None:
             pass
 
+    fake_conn = _FakeConn()
+
+    def fake_ensure_scheduled(conn):
+        captured.setdefault("ensure_scheduled_calls", []).append(conn)
+
     monkeypatch.setattr(worker_module, "run_forever", fake_run_forever)
     monkeypatch.setattr(worker_module.config, "load", lambda: None)
-    monkeypatch.setattr(worker_module.db, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(worker_module.db, "connect", lambda: fake_conn)
     monkeypatch.setattr(worker_module, "enqueue", lambda conn, job_type, subject_id: None)
+    monkeypatch.setattr(worker_module.digest, "ensure_scheduled", fake_ensure_scheduled)
 
     worker_module.main(["--once"])
 
     assert captured["timeouts"] is worker_module.TIMEOUTS
     assert captured["handlers"] is worker_module.HANDLERS
+    assert captured["ensure_scheduled_calls"] == [fake_conn]
 
 
 def _write(tmp_path, name: str, body: str) -> None:
