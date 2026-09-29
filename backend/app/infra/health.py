@@ -1,6 +1,16 @@
 """`infra.health` — the ten §3.9 thresholds, one `system_health` row per run,
 `notify.send` only on a state change plus a daily 08:05 summary, and
-`health.alarm` written on every `ok -> alarm` transition.
+`health.alarm` written whenever a new check name joins the failing set.
+
+Review round 1, S3: "state" is the *set* of currently-failing check names,
+read back from the previous run's `system_health.checks` jsonb — not the
+single `ok` boolean this module used before. A check that stays failing (say
+`backup_age`) no longer masks a later, different check starting to fail: the
+send-on-change rule fires whenever the set itself changes, in either
+direction, and `health.alarm` is written only for the names that are new to
+the set this tick (`payload = {"failing": [...], "new": [...]}`) — a
+recovery-only change (the set shrinks, nothing new joins) sends but writes no
+alarm event.
 
 `infra` imports nothing (G1, context pack §4) and that decides three things
 here (P5-tasks.md design note 1): (a) check 9 (`digest_unreviewed`) cannot
@@ -253,11 +263,19 @@ def _check_disk_free() -> CheckResult:
 # ── persistence and the state-change notification rule (design notes 3, 4) ──
 
 
-def _read_latest(conn: psycopg.Connection) -> tuple[datetime, bool] | None:
+def _read_latest(conn: psycopg.Connection) -> tuple[datetime, frozenset[str]] | None:
+    """`(checked_at, failing_names)` of the newest `system_health` row, or
+    `None` — S3: the previous *state* is the set of check names that were
+    failing, read back from that row's own `checks` jsonb, not a single `ok`
+    boolean."""
     row = conn.execute(
-        "SELECT checked_at, ok FROM system_health ORDER BY checked_at DESC LIMIT 1"
+        "SELECT checked_at, checks FROM system_health ORDER BY checked_at DESC LIMIT 1"
     ).fetchone()
-    return (row[0], row[1]) if row else None
+    if row is None:
+        return None
+    checked_at, checks_json = row
+    failing = frozenset(c["name"] for c in checks_json if not c["ok"])
+    return checked_at, failing
 
 
 def _insert_report(
@@ -281,17 +299,21 @@ def _insert_report(
     return row[0]
 
 
-def _write_alarm_event(conn: psycopg.Connection, checks: list[CheckResult]) -> None:
+def _write_alarm_event(conn: psycopg.Connection, failing: list[str], new: list[str]) -> None:
     """`health.alarm`, written with raw SQL — exactly `infra/jobs.py:152`'s
     precedent for `job.exhausted`, because `infra` imports nothing (G1) and
     cannot call `app.audit.events.write_event`. `actor_role='system'` requires
     `actor_id IS NULL` (`ck_audit_actor_id_theo_role`), so it is omitted, not
-    passed as `None` — matching the precedent's own column list."""
-    failing = [c.name for c in checks if not c.ok]
+    passed as `None` — matching the precedent's own column list.
+
+    S3: `failing` is every name currently failing (sorted), `new` is only the
+    names that joined the set this tick (sorted) — the caller only calls this
+    when `new` is non-empty; a recovery-only tick (the set shrinks, nothing
+    new joins) sends through `notify.send` but writes no `health.alarm`."""
     conn.execute(
         "INSERT INTO audit_events (event_type, subject_id, actor_role, payload) "
         "VALUES (%s, %s, %s, %s)",
-        ("health.alarm", "system", "system", Jsonb({"failing": failing})),
+        ("health.alarm", "system", "system", Jsonb({"failing": failing, "new": new})),
     )
 
 
@@ -366,15 +388,25 @@ def check(
     row_checked_at = _insert_report(conn, checked_at, checks, ok)
 
     if row_checked_at is not None:
-        previous_ok = previous[1] if previous is not None else True
+        current_failing = frozenset(c.name for c in checks if not c.ok)
         previous_checked_at = previous[0] if previous is not None else None
-        state_changed = previous_ok != ok
+        previous_failing = previous[1] if previous is not None else frozenset()
+        # S3: state is the *set* of failing names — changes in either
+        # direction (a new failure, a recovery, or both at once) are a state
+        # change, not just an ok/alarm flip.
+        state_changed = previous_failing != current_failing
         summary_due = _is_daily_summary_due(now_local, previous_checked_at, cfg.DISPLAY_TZ)
         if state_changed or summary_due:
             text = _format_message(ok, checks, state_changed=state_changed)
             level = "alarm" if not ok else "ok"
             notify.send(level, text, cfg=cfg)
-            if state_changed and not ok:
-                _write_alarm_event(conn, checks)
+
+        if state_changed:
+            new_failures = current_failing - previous_failing
+            if new_failures:
+                # Only a name that is new to the set writes health.alarm — a
+                # recovery-only change (the set shrinks, nothing new joins)
+                # already sent above and stops there (S3).
+                _write_alarm_event(conn, sorted(current_failing), sorted(new_failures))
 
     return HealthReport(checked_at=row_checked_at, checks=checks, ok=ok)

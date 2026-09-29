@@ -51,10 +51,17 @@ def test_main_passes_timeouts_to_run_forever(monkeypatch):
     """Design note 5(c)'s red-step-discriminating assertion: `TIMEOUTS ==
     iter_timeouts()` alone stays green even if `main()` never hands it to
     `run_forever` — so this inspects the actual call, via `monkeypatch` on
-    `app.web.worker.run_forever`, rather than the module-level mapping."""
+    `app.web.worker.run_forever`, rather than the module-level mapping.
+
+    Review round 1, seeding: also captures every `enqueue(...)` call `main()`
+    makes before it starts the loop — `health`'s "system" seed joins `pull`'s
+    "indexer" one line down, both idempotent through the same partial unique
+    index, so a restart re-arms a dead `health` chain exactly as it already
+    does for `pull`."""
     from app.web import worker as worker_module
 
     captured: dict[str, object] = {}
+    enqueued: list[tuple[str, str]] = []
 
     def fake_run_forever(conn_factory, handlers, *, once, timeouts=None):
         captured["handlers"] = handlers
@@ -64,15 +71,19 @@ def test_main_passes_timeouts_to_run_forever(monkeypatch):
         def commit(self) -> None:
             pass
 
+    def fake_enqueue(conn, job_type, subject_id):
+        enqueued.append((job_type, subject_id))
+
     monkeypatch.setattr(worker_module, "run_forever", fake_run_forever)
     monkeypatch.setattr(worker_module.config, "load", lambda: None)
     monkeypatch.setattr(worker_module.db, "connect", lambda: _FakeConn())
-    monkeypatch.setattr(worker_module, "enqueue", lambda conn, job_type, subject_id: None)
+    monkeypatch.setattr(worker_module, "enqueue", fake_enqueue)
 
     worker_module.main(["--once"])
 
     assert captured["timeouts"] is worker_module.TIMEOUTS
     assert captured["handlers"] is worker_module.HANDLERS
+    assert enqueued == [("pull", "indexer"), ("health", "system")]
 
 
 def _write(tmp_path, name: str, body: str) -> None:

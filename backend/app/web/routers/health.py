@@ -14,11 +14,20 @@ distinguishing the two for a caller outside the trust boundary in the first
 place. `web/deps.py` itself is untouched (not in this card's file list); both
 functions are reused exactly as written elsewhere.
 
-Limitation (design note 6, stated, not hidden): `request.client.host` is the
-direct TCP peer. Behind a reverse proxy it would be the proxy's own address,
-not the original caller's — this deployment has none (`make run-app` binds
-`127.0.0.1:8000`), so the check is correct here and would need revisiting
-behind one.
+Limitation (design note 6, stated, not hidden; corrected in review round 1,
+S5): `request.client.host` is the direct TCP peer. `make run-app` binds
+`127.0.0.1:8000` — the exemption is correct there. Under `docker-compose.yml`
+the app container binds `0.0.0.0:8000` and publishes `8000:8000`, so a
+request that arrives via the host's published port is proxied by Docker's
+own `docker-proxy`, which is the peer this route then sees — never
+`127.0.0.1`. **The exemption still never applies to that request, which is
+correct** (it is not the app's own host loopback), but it also never applies
+to a legitimate operator polling from the Docker host over the published
+port the way `make run-app` allowed — only a request made *inside* the app
+container is loopback under compose:
+`docker compose exec -T app python -c "import urllib.request as u;
+print(u.urlopen('http://127.0.0.1:8000/health').read().decode())"`
+(the command P5-T13's runbook should give for the alarm table).
 
 The response body is exactly the newest `system_health` row (`checked_at`,
 `checks`, `ok`) — no DSN, no secret, no internal filesystem path: `checks`'

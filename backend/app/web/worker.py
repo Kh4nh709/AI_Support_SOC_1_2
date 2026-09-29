@@ -30,8 +30,13 @@ def main(argv: Sequence[str]) -> None:
     config.load()  # fail fast on a bad environment before a connection is opened
     conn = db.connect()
     # Single-flight through the partial unique index (ux_jobs_mot_job_song_moi_subject)
-    # — a no-op once one `pull` job is already pending/running.
+    # — a no-op once one `pull`/`health` job is already pending/running, and a
+    # re-arm of a dead chain on every restart otherwise. P5-T11 review round 1
+    # seeding ruling: `health`'s subject_id is the constant "system" (no
+    # per-job data), so re-enqueuing it here on every worker start is exactly
+    # what `pull`'s own "indexer" seed already does one line up.
     enqueue(conn, "pull", "indexer")
+    enqueue(conn, "health", "system")
     conn.commit()
     run_forever(lambda: conn, HANDLERS, once="--once" in argv, timeouts=TIMEOUTS)
 

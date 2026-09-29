@@ -12,6 +12,7 @@ raises, and the bot token never appears in captured output.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import replace
 
 import httpx
@@ -60,6 +61,25 @@ def test_telegram_arm_builds_the_right_url_and_posts_once():
     assert body == {"chat_id": _CHAT_ID, "text": "[alarm] disk free 12%"}
 
 
+def test_build_client_never_disables_tls_verification(monkeypatch):
+    """N8, mutant M10: `_build_client` must never pass `verify=False` — the
+    `MockTransport`-based tests above never exercise real TLS, so this spies
+    on the actual keyword arguments `httpx.Client(...)` is constructed with."""
+    captured: dict[str, object] = {}
+    real_init = httpx.Client.__init__
+
+    def spy_init(self, *args, **kwargs):
+        captured.update(kwargs)
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.Client, "__init__", spy_init)
+
+    client = notify._build_client()
+    client.close()
+
+    assert captured.get("verify", True) is not False
+
+
 def test_an_httpx_exception_returns_false_and_does_not_propagate():
     """Design note 7's most important test: a notifier that raises would take
     the health job down with it. Red step (a) — DEC-025: temporarily narrow
@@ -87,15 +107,36 @@ def test_a_4xx_response_returns_false_and_does_not_propagate():
     assert result is False
 
 
-def test_token_never_appears_in_captured_output_on_telegram_failure(capsys, caplog):
-    def handler(request: httpx.Request) -> httpx.Response:
+def test_token_never_appears_in_captured_records(capsys, caplog):
+    """Review round 1, S4: `httpx` itself logs each request's URL at INFO
+    (`httpx/_client.py`) — a bot token embedded in that URL would reach any
+    handler attached to the `httpx` logger regardless of what this module
+    does, unless that logger is silenced (the fix: `notify.py`'s module-level
+    `logging.getLogger("httpx").setLevel(logging.WARNING)`). `caplog` is set
+    to DEBUG so nothing is filtered out *before* it reaches this assertion —
+    the point is to prove the token never reaches a captured record at all,
+    not merely that it is absent from this module's own log line. Two
+    scenarios, both through the real `httpx` request path (`MockTransport`,
+    no real network): a 200 (the send succeeds) and a 401 (the send fails)."""
+    caplog.set_level(logging.DEBUG)
+
+    def ok_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True})
+
+    def unauthorized_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"ok": False, "description": "Unauthorized"})
+
+    def timeout_handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectTimeout("boom", request=request)
 
-    notify.send("alarm", "x", cfg=_telegram_cfg(), client_factory=_mock_client_factory(handler))
+    for handler in (ok_handler, unauthorized_handler, timeout_handler):
+        notify.send("alarm", "x", cfg=_telegram_cfg(), client_factory=_mock_client_factory(handler))
 
     out = capsys.readouterr().out
     assert _TOKEN not in out
     assert _TOKEN not in caplog.text
+    for record in caplog.records:
+        assert _TOKEN not in record.getMessage()
 
 
 # ---------------------------------------------------------------------------

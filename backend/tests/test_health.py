@@ -17,12 +17,14 @@ import itertools
 import os
 import shutil
 import subprocess
+import time
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import httpx
 import psycopg
 import pytest
 from app.infra import auth, health, notify
@@ -35,7 +37,11 @@ from psycopg.types.json import Jsonb
 
 from tests import conftest
 
-pytestmark = pytest.mark.db
+# Review round 1, N9: no module-level `pytestmark` — every `db`/`sdb`-using
+# test below carries its own `@pytest.mark.db` explicitly; the three pure
+# tests (`test_is_daily_summary_due_pure_boundary`, `test_health_is_in_job_types`,
+# `test_handler_exposes_job_type_and_reschedules_every_5_minutes`) carry none,
+# so they run in the fast `make test` suite instead of only under `test-db`.
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -230,6 +236,24 @@ def test_heartbeat_fires_when_never_recorded(db, tmp_path):
     assert "no heartbeat" in check.detail
 
 
+@pytest.mark.db
+def test_heartbeat_at_exact_threshold_is_ok(db, tmp_path):
+    """N8, mutant M4 (`<=` -> `<`): `last_seen_at` and the check's own `now()`
+    read are set in the SAME uncommitted transaction, so Postgres's `now()`
+    (transaction-stable, not wall-clock-per-statement) makes the age compute
+    to *exactly* `HEARTBEAT_MAX_AGE_MIN` — deterministic, no timing jitter."""
+    cfg = _cfg()
+    db.execute(
+        "INSERT INTO source_heartbeat (manager_id, last_seen_at) "
+        "VALUES ('indexer', now() - (%s * interval '1 minute'))",
+        (cfg.HEARTBEAT_MAX_AGE_MIN,),
+    )
+    report = health.check(db, cfg, clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+    check = _by_name(report)["heartbeat"]
+    assert check.value == cfg.HEARTBEAT_MAX_AGE_MIN
+    assert check.ok is True  # exactly at the threshold is still ok (`<=`)
+
+
 # 2 · intake_backlog -----------------------------------------------------------
 
 
@@ -377,6 +401,34 @@ def test_backup_age_passes_with_a_fresh_dump(db, tmp_path):
     assert _by_name(report)["backup_age"].ok is True
 
 
+@pytest.mark.db
+def test_backup_age_falls_back_to_latest_dump_when_present(db, tmp_path):
+    """S6, mutant M12: no `soc-*.dump` at all, only `backups/latest.dump` —
+    the fallback (§3.9) must be read, not treated as "no backup file"."""
+    latest = tmp_path / "latest.dump"
+    latest.write_bytes(b"pg_dump placeholder")
+    report = health.check(db, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+    check = _by_name(report)["backup_age"]
+    assert check.ok is True
+    assert "no backup file" not in check.detail
+
+
+@pytest.mark.db
+def test_backup_age_picks_the_newest_of_several_dumps(db, tmp_path):
+    """S6, mutant M13: two `soc-*.dump` files, the older one alone would fail
+    the 36h threshold — the newest one's mtime must be what is judged."""
+    old_dump = _write_backup(tmp_path, name="soc-20260101T000000Z.dump")
+    new_dump = _write_backup(tmp_path, name="soc-20260929T000000Z.dump")
+    old_mtime = time.time() - 40 * 3600  # 40h old — would fail on its own
+    os.utime(old_dump, (old_mtime, old_mtime))
+    # new_dump keeps its just-written (fresh) mtime.
+    report = health.check(db, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+    check = _by_name(report)["backup_age"]
+    assert check.ok is True  # the newest dump wins, not the oldest
+    assert new_dump.name in check.detail
+    assert old_dump.name not in check.detail
+
+
 # 8 · inventory_empty ---------------------------------------------------------------
 
 
@@ -437,6 +489,49 @@ def test_digest_unreviewed_passes_after_17_00_when_reviewed(db, tmp_path):
     assert _by_name(report)["digest_unreviewed"].ok is True
 
 
+@pytest.mark.db
+def test_digest_unreviewed_is_evaluated_at_exactly_17_00_local(db, tmp_path):
+    """N8, mutant M5 (`<` -> `<=`): at exactly local 17:00, `now_local.hour <
+    17` is False, so the check must run (not read as "not evaluated yet")."""
+    at_1700_sharp_utc = datetime(2026, 9, 29, 10, 0, 0, tzinfo=UTC)  # 17:00:00 local exactly
+    yesterday = at_1700_sharp_utc - timedelta(days=1)
+    _insert_alert(db, status="auto_closed", closed_at=yesterday, received_at=yesterday)
+    report = health.check(db, _cfg(), clock=_clock_at(at_1700_sharp_utc), backups_dir=tmp_path)
+    check = _by_name(report)["digest_unreviewed"]
+    assert check.ok is False  # evaluated, not gated off — the unreviewed alert fires
+    assert "not evaluated" not in check.detail
+
+
+@pytest.mark.db
+def test_digest_unreviewed_boundary_pins_the_local_day_edges(db, tmp_path):
+    """S6, mutant M1: judged at 18:00 local on day D, an alert auto-closed at
+    00:30 local on D must NOT count (it is in *today's* window, not
+    yesterday's), and one at 00:30 local on D-1 MUST count (just inside
+    yesterday's window) — pins both edges of the `>=`/`<` local-day bounds."""
+    at_1800_local_d = datetime(2026, 9, 29, 11, 0, 0, tzinfo=UTC)  # 18:00 local, day D (9/29)
+    at_0030_local_d = datetime(2026, 9, 28, 17, 30, 0, tzinfo=UTC)  # 00:30 local, day D
+    at_0030_local_d_minus_1 = datetime(2026, 9, 27, 17, 30, 0, tzinfo=UTC)  # 00:30 local, D-1
+
+    must_not_count = _insert_alert(
+        db, status="auto_closed", closed_at=at_0030_local_d, received_at=at_0030_local_d
+    )
+    must_count = _insert_alert(
+        db,
+        status="auto_closed",
+        closed_at=at_0030_local_d_minus_1,
+        received_at=at_0030_local_d_minus_1,
+    )
+
+    report = health.check(db, _cfg(), clock=_clock_at(at_1800_local_d), backups_dir=tmp_path)
+
+    check = _by_name(report)["digest_unreviewed"]
+    assert check.ok is False
+    assert check.value == 1  # only the D-1 00:30 alert counts, not D's own 00:30
+    assert (
+        must_not_count and must_count
+    )  # both rows exist — the count, not their absence, is the proof
+
+
 # 10 · disk_free -------------------------------------------------------------------
 
 
@@ -457,6 +552,19 @@ def test_disk_free_fires_when_free_fraction_is_low(db, tmp_path, monkeypatch):
     monkeypatch.setattr(health.shutil, "disk_usage", lambda path: fake_usage)
     report = health.check(db, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
     assert _by_name(report)["disk_free"].ok is False
+
+
+@pytest.mark.db
+def test_disk_free_at_exact_threshold_is_ok(db, tmp_path, monkeypatch):
+    """N8, mutant M14 (`>=` -> `>`): exactly 20% free must still be ok."""
+    import shutil as shutil_module
+
+    fake_usage = shutil_module.disk_usage("/")._make((100, 80, 20))  # exactly 20% free
+    monkeypatch.setattr(health.shutil, "disk_usage", lambda path: fake_usage)
+    report = health.check(db, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+    check = _by_name(report)["disk_free"]
+    assert check.value == 20.0
+    assert check.ok is True
 
 
 # ===========================================================================
@@ -550,6 +658,61 @@ def test_previous_state_is_read_from_the_table_not_from_process_memory(db, tmp_p
     assert sent == []  # already alarming per the table — a restart must not re-send
 
 
+@pytest.mark.db
+def test_alarm_set_change_tracks_multiple_failing_checks_independently(db, tmp_path, monkeypatch):
+    """Review round 1, S3's probe scenario: a check that stays failing (here
+    `backup_age`, an empty `backups_dir` from the start) no longer masks a
+    later, *different* check (`heartbeat`) starting to fail — and a
+    recovery-only change (heartbeat fixed, backup_age still failing) sends
+    but writes no second `health.alarm`."""
+    sent = _fake_notify(monkeypatch)
+    _seed_heartbeat(db, minutes_ago=1)  # starts fresh/ok
+    _seed_asset(db)
+    # `tmp_path` stays empty on purpose: backup_age fails from t0 onward.
+    cfg = _cfg()
+    t0 = _MORNING_UTC
+
+    def alarm_payloads():
+        rows = db.execute(
+            "SELECT payload FROM audit_events WHERE event_type = 'health.alarm' ORDER BY audit_id"
+        ).fetchall()
+        return [row[0] for row in rows]
+
+    r1 = health.check(db, cfg, clock=_clock_at(t0), backups_dir=tmp_path)
+    assert r1.ok is False
+    assert _by_name(r1)["backup_age"].ok is False
+    assert _levels(sent) == ["alarm"]
+    payloads = alarm_payloads()
+    assert len(payloads) == 1
+    assert sorted(payloads[0]["failing"]) == ["backup_age"]
+    assert sorted(payloads[0]["new"]) == ["backup_age"]
+
+    # heartbeat ALSO goes stale — backup_age is still failing throughout.
+    db.execute(
+        "UPDATE source_heartbeat SET last_seen_at = now() - interval '45 minutes' "
+        "WHERE manager_id = 'indexer'"
+    )
+    t1 = t0 + timedelta(minutes=5)
+    r2 = health.check(db, cfg, clock=_clock_at(t1), backups_dir=tmp_path)
+    assert r2.ok is False
+    assert _levels(sent) == ["alarm", "alarm"]  # a second send
+    payloads = alarm_payloads()
+    assert len(payloads) == 2  # a second health.alarm
+    assert sorted(payloads[1]["failing"]) == ["backup_age", "heartbeat"]
+    assert sorted(payloads[1]["new"]) == ["heartbeat"]
+
+    # heartbeat recovers; backup_age still failing — a recovery-only change.
+    db.execute(
+        "UPDATE source_heartbeat SET last_seen_at = now() - interval '1 minute' "
+        "WHERE manager_id = 'indexer'"
+    )
+    t2 = t1 + timedelta(minutes=5)
+    r3 = health.check(db, cfg, clock=_clock_at(t2), backups_dir=tmp_path)
+    assert r3.ok is False  # backup_age alone still fails
+    assert _levels(sent) == ["alarm", "alarm", "alarm"]  # a send (the set changed)
+    assert len(alarm_payloads()) == 2  # but no new health.alarm — nothing new joined
+
+
 # ===========================================================================
 # the daily 08:05 summary (design note 4)
 # ===========================================================================
@@ -585,6 +748,26 @@ def test_daily_summary_fires_once_at_08_05_and_not_again_that_day(db, tmp_path, 
     r2 = health.check(db, cfg, clock=_clock_at(at_1400), backups_dir=tmp_path)
     assert r2.ok is True
     assert _levels(sent) == ["ok"]  # not sent again the same day
+
+
+@pytest.mark.db
+def test_daily_summary_alone_never_writes_health_alarm(db, tmp_path, monkeypatch):
+    """N8, mutant M2: a daily summary with no state change must send through
+    `notify.send` but must never write `health.alarm` — that event is only
+    for a name newly joining the failing set (S3)."""
+    sent = _fake_notify(monkeypatch)
+    _seed_all_ok(db, tmp_path)
+    cfg = _cfg()
+    at_0805 = datetime(2026, 9, 29, 1, 5, 0, tzinfo=UTC)  # 08:05 local, first run, all ok
+
+    report = health.check(db, cfg, clock=_clock_at(at_0805), backups_dir=tmp_path)
+
+    assert report.ok is True
+    assert _levels(sent) == ["ok"]  # the summary did send
+    (count,) = db.execute(
+        "SELECT count(*) FROM audit_events WHERE event_type = 'health.alarm'"
+    ).fetchone()
+    assert count == 0
 
 
 # ===========================================================================
@@ -653,6 +836,43 @@ def test_gate_health_alarm_fires_with_the_indexer_unreachable(db, tmp_path, monk
     assert audit_count == 1
 
 
+@pytest.mark.db
+def test_token_never_reaches_a_persisted_row(db, tmp_path, monkeypatch):
+    """Review round 1, S4: even with Telegram configured and its send
+    failing, the token must never land in a persisted row — not
+    `system_health.checks`, not `audit_events.payload`. `notify._build_client`
+    is monkeypatched to a `MockTransport` (no real network) that always
+    fails, so the real `notify.send` runs its real Telegram branch end to
+    end, through the real `check()`."""
+    token = "123456:AA-super-secret-token-for-health-test"
+
+    def fail_handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("boom", request=request)
+
+    monkeypatch.setattr(
+        notify, "_build_client", lambda: httpx.Client(transport=httpx.MockTransport(fail_handler))
+    )
+    cfg = _cfg(NOTIFY_TELEGRAM_BOT_TOKEN=token, NOTIFY_TELEGRAM_CHAT_ID="-1")
+    db.execute(
+        "INSERT INTO source_heartbeat (manager_id, last_seen_at) "
+        "VALUES ('indexer', now() - interval '45 minutes')"
+    )
+
+    report = health.check(db, cfg, clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+    assert report.ok is False
+
+    (checks_text,) = db.execute(
+        "SELECT checks::text FROM system_health WHERE checked_at = %s", (report.checked_at,)
+    ).fetchone()
+    assert token not in checks_text
+
+    rows = db.execute(
+        "SELECT payload::text FROM audit_events WHERE event_type = 'health.alarm'"
+    ).fetchall()
+    assert rows  # the alarm row exists — this is a real assertion, not a vacuous pass
+    assert all(token not in row[0] for row in rows)
+
+
 # ===========================================================================
 # `health` is a registered job type (the card's explicit ask)
 # ===========================================================================
@@ -669,16 +889,29 @@ def test_health_is_in_job_types():
 
 
 def test_handler_exposes_job_type_and_reschedules_every_5_minutes(monkeypatch):
-    calls: list[tuple[object, object]] = []
-    monkeypatch.setattr(health_handler.health, "check", lambda conn, cfg: calls.append((conn, cfg)))
+    # B1 (review round 1): `handle()` now calls `_raise_idle_timeout(conn, cfg)`
+    # — a real `conn.execute(...)` — as its first statement, before
+    # `health.check`, so the fake `conn` here needs an `execute` and the
+    # order of the two calls is itself part of what this test pins.
+    order: list[str] = []
 
+    def fake_check(conn, cfg):
+        order.append("check")
+
+    class _FakeConn:
+        def execute(self, *args, **kwargs):
+            order.append("execute")
+
+    monkeypatch.setattr(health_handler.health, "check", fake_check)
+
+    conn = _FakeConn()
     job = Job(job_id=1, job_type="health", subject_id="system", attempts=1)
-    result = health_handler.handle("CONN", job, cfg=_cfg())
+    result = health_handler.handle(conn, job, cfg=_cfg())
 
     assert health_handler.JOB_TYPE == "health"
     assert not hasattr(health_handler, "STATEMENT_TIMEOUT")
     assert result.delay_s == 300
-    assert calls == [("CONN", _cfg())]
+    assert order == ["execute", "check"]  # the idle-timeout raise runs before check()
 
 
 # ===========================================================================
@@ -744,6 +977,47 @@ def _clear_overrides():
     main.app.dependency_overrides.pop(deps.get_config, None)
 
 
+# ===========================================================================
+# B1 (review round 1, blocker) — a slow `notify.send` must not kill the
+# worker's connection. `infra/db.py`'s `transaction()` (the real wrapper
+# `infra.worker._run_claimed_job` runs every handler inside) sets
+# `idle_in_transaction_session_timeout = '10s'`; this test compresses that to
+# 1s on a real, commit-capable connection (`sdb`) — mimicking the worker's
+# own wrapping transaction — then runs the real `handle()` with `notify.send`
+# faked to sleep 1.5s. If `handle()`'s own `_raise_idle_timeout` did not run
+# first, Postgres kills the idle session partway through that sleep and
+# either the later `_insert_report` or the final `commit()` raises
+# `psycopg.OperationalError` — the Reviewer's exact finding.
+# ===========================================================================
+
+
+@pytest.mark.db
+def test_slow_notify_does_not_kill_the_connection_b1(sdb, tmp_path, monkeypatch):
+    def slow_send(level: str, text: str, **kwargs) -> bool:
+        time.sleep(1.5)
+        return True
+
+    monkeypatch.setattr(notify, "send", slow_send)
+    # A stale heartbeat so `check()` has a state change to send on.
+    sdb.execute(
+        "INSERT INTO source_heartbeat (manager_id, last_seen_at) "
+        "VALUES ('indexer', now() - interval '45 minutes')"
+    )
+    # The wrapping transaction() a real job runs inside, compressed to 1s so
+    # the test is fast; `handle()`'s own SET LOCAL must override this before
+    # `slow_send`'s sleep, or the session dies mid-sleep.
+    sdb.execute("SET LOCAL idle_in_transaction_session_timeout = '1s'")
+
+    cfg = _cfg(JOB_LOCK_TIMEOUT_S=300)
+    job = Job(job_id=1, job_type="health", subject_id="system", attempts=1)
+
+    health_handler.handle(sdb, job, cfg=cfg)  # must not raise
+    sdb.commit()  # must succeed — proves the row is really committed, not just executed
+
+    (count,) = sdb.execute("SELECT count(*) FROM system_health").fetchone()
+    assert count == 1
+
+
 @pytest.mark.db
 def test_health_route_is_registered_in_openapi():
     assert "/health" in sorted(main.app.openapi()["paths"])
@@ -752,6 +1026,8 @@ def test_health_route_is_registered_in_openapi():
 @pytest.mark.db
 def test_get_health_from_loopback_without_a_session_is_200(sdb, tmp_path, monkeypatch):
     monkeypatch.setattr(notify, "send", lambda *a, **k: True)
+    # N10: each router test gets its own clock — a distinct `checked_at`, so
+    # this test's `system_health` row never collides with another's.
     health.check(sdb, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
     cfg = _cfg(JWT_SECRET="p5t11-test-secret")
     _override(sdb, cfg)
@@ -773,7 +1049,9 @@ def test_get_health_from_loopback_without_a_session_is_200(sdb, tmp_path, monkey
 @pytest.mark.db
 def test_get_health_from_non_loopback_without_a_session_is_403(sdb, tmp_path, monkeypatch):
     monkeypatch.setattr(notify, "send", lambda *a, **k: True)
-    health.check(sdb, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+    health.check(
+        sdb, _cfg(), clock=_clock_at(_MORNING_UTC + timedelta(minutes=1)), backups_dir=tmp_path
+    )
     cfg = _cfg(JWT_SECRET="p5t11-test-secret")
     _override(sdb, cfg)
     try:
@@ -789,7 +1067,9 @@ def test_get_health_from_non_loopback_without_a_session_is_403(sdb, tmp_path, mo
 @pytest.mark.db
 def test_get_health_from_non_loopback_with_a_non_admin_session_is_403(sdb, tmp_path, monkeypatch):
     monkeypatch.setattr(notify, "send", lambda *a, **k: True)
-    health.check(sdb, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+    health.check(
+        sdb, _cfg(), clock=_clock_at(_MORNING_UTC + timedelta(minutes=2)), backups_dir=tmp_path
+    )
     cfg = _cfg(JWT_SECRET="p5t11-test-secret")
     auth.create_user(sdb, username="p5t11-tier1", display_name="Tier1", role="tier1", password="x")
     claims = auth.login(sdb, "p5t11-tier1", "x", cfg)
@@ -808,7 +1088,9 @@ def test_get_health_from_non_loopback_with_a_non_admin_session_is_403(sdb, tmp_p
 @pytest.mark.db
 def test_get_health_from_non_loopback_with_an_admin_session_is_200(sdb, tmp_path, monkeypatch):
     monkeypatch.setattr(notify, "send", lambda *a, **k: True)
-    health.check(sdb, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+    health.check(
+        sdb, _cfg(), clock=_clock_at(_MORNING_UTC + timedelta(minutes=3)), backups_dir=tmp_path
+    )
     cfg = _cfg(JWT_SECRET="p5t11-test-secret")
     auth.create_user(sdb, username="p5t11-admin", display_name="Admin", role="admin", password="x")
     claims = auth.login(sdb, "p5t11-admin", "x", cfg)

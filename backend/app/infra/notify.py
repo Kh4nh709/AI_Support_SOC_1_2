@@ -21,7 +21,16 @@ below wraps the whole dispatch, not just the Telegram branch.
 
 The bot token is never logged: the URL that carries it is built only inside
 `_send_telegram`, used once, and never printed or included in any log line —
-only `level` and `text` are.
+only `level` and `text` are. Review round 1, S4: `httpx` itself logs every
+request's URL at INFO (`httpx/_client.py`), which would carry the token
+straight into the root logger regardless of anything this module does —
+raised to WARNING at import time, below, so nothing from `httpx`'s own
+logger reaches a handler by default.
+
+Review round 1, N7: the `except` in `send()` never logs `str(exc)` — an
+`httpx` exception's message can itself contain the request URL (and so the
+token) — only the exception's type name and, for an `HTTPStatusError`, the
+response status code.
 """
 
 from __future__ import annotations
@@ -37,8 +46,13 @@ from app.infra.config import Config
 
 logger = logging.getLogger(__name__)
 
+# S4: httpx's own per-request INFO log line includes the full URL — silence it
+# here so a bot token in that URL can never reach a handler through httpx's
+# logger, independent of whatever level this module's own `logger` is set to.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 _TELEGRAM_API = "https://api.telegram.org"
-_TELEGRAM_TIMEOUT_S = 10.0
+_TELEGRAM_TIMEOUT = httpx.Timeout(10.0, connect=5.0)  # B1: a tight connect bound too
 
 _counters: dict[str, int] = {}
 
@@ -54,7 +68,7 @@ def _count(key: str) -> None:
 
 
 def _build_client() -> httpx.Client:
-    return httpx.Client(timeout=_TELEGRAM_TIMEOUT_S)
+    return httpx.Client(timeout=_TELEGRAM_TIMEOUT)
 
 
 def _send_telegram(
@@ -98,9 +112,18 @@ def send(
         if cfg.NOTIFY_TELEGRAM_BOT_TOKEN and cfg.NOTIFY_TELEGRAM_CHAT_ID:
             return _send_telegram(cfg, level, text, client_factory or _build_client)
         return _send_log(level, text)
-    except Exception:  # noqa: BLE001 — deliberately broad: this is the whole
-        # "never raises into the caller" contract in one place (module
+    except Exception as exc:  # noqa: BLE001 — deliberately broad: this is the
+        # whole "never raises into the caller" contract in one place (module
         # docstring) — a timeout, a DNS failure, a 4xx, a bad Config, anything.
         _count("failed")
-        logger.warning("notify: send failed (level=%s)", level)
+        # N7: never `str(exc)` — an httpx exception's own message can carry
+        # the request URL, token included. Only the exception's type name,
+        # plus the response status for an HTTPStatusError.
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        logger.warning(
+            "notify: send failed (level=%s exc_type=%s status=%s)",
+            level,
+            type(exc).__name__,
+            status,
+        )
         return False
