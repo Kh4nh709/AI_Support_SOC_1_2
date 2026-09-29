@@ -9,7 +9,8 @@
      (`GET /cases/{id}/investigation`). That is the whole seam (P5-tasks.md planning
      decision 2): with this file absent, `case.html`'s `ignore missing` renders nothing.
    * STATE — rendered by `web/routers/case_analyze_pages.py`, which passes `investigation`
-     (`state` = idle | running | done | failed), `case_open`, `message`, `current`, `tz`.
+     (`state` = idle | running | stalled | done | failed), `case_open`, `message`,
+     `current`, `tz`.
 
    Everything the model wrote is untrusted and is autoescaped here. Nothing in this file
    marks text as trusted or switches escaping off; a test greps the file for each way of
@@ -27,6 +28,7 @@
 </section>
 {% else %}
 {% set running = investigation.state == "running" %}
+{% set stalled = investigation.state == "stalled" %}
 <section id="investigation" data-field="investigation" data-state="{{ investigation.state }}"
   {%- if running %} data-run-id="{{ investigation.run_id }}"
          hx-get="/cases/{{ case_id }}/investigation?run_id={{ investigation.run_id }}"
@@ -45,12 +47,22 @@
   {% elif running %}
   <p data-field="analysis_running">Đang phân tích…</p>
 
+  {# A job nobody has picked up for far longer than the worker's own lock timeout. No polling
+     (the section has no hx-trigger) and no Phân tích button (a second click would only meet
+     the single-flight 409); "Kiểm tra lại" is one more GET of the same state. The text does
+     not claim the worker is dead — a triage backlog can legitimately delay the job. #}
+  {% elif stalled %}
+  <p class="flash flash-warn" data-field="analysis_stalled">Chưa được xử lý sau {{ investigation.minutes }} phút — kiểm tra worker</p>
+  <button type="button" data-field="analysis_recheck"
+          hx-get="/cases/{{ case_id }}/investigation?run_id={{ investigation.run_id }}"
+          hx-target="#investigation" hx-swap="outerHTML">Kiểm tra lại</button>
+
   {% elif investigation.state == "failed" %}
   <p class="flash flash-error" data-field="analysis_failed">{% if case_open %}Phân tích thất bại — có thể thử lại{% else %}Phân tích thất bại{% endif %}</p>
   {% endif %}
 
   {% set run = investigation.run %}
-  {% if run and not running %}
+  {% if run and not running and not stalled %}
   {% if investigation.state == "failed" %}
   <h3>Kết quả của lượt phân tích trước</h3>
   {% endif %}
@@ -82,16 +94,28 @@
     {% for h in run.hypotheses %}
     <li data-field="hypothesis">
       <span data-field="hypothesis_text">{{ h.text }}</span>
+      {# Two labelled lists, each in its own container: counter-evidence must never be
+         readable as support. The against block is ALWAYS rendered — the output schema
+         requires at least one item (`evidence_against: minItems 1`), so an empty list is a
+         model that skipped the counter-argument, and the reader is told so. #}
       {% if h.evidence_for %}
-      <ul>
-        {% for line in h.evidence_for %}<li data-field="evidence_for">{{ line }}</li>{% endfor %}
-      </ul>
+      <div data-field="hypothesis_for">
+        <h4>Bằng chứng ủng hộ</h4>
+        <ul>
+          {% for line in h.evidence_for %}<li data-field="evidence_for">{{ line }}</li>{% endfor %}
+        </ul>
+      </div>
       {% endif %}
-      {% if h.evidence_against %}
-      <ul>
-        {% for line in h.evidence_against %}<li data-field="evidence_against">{{ line }}</li>{% endfor %}
-      </ul>
-      {% endif %}
+      <div data-field="hypothesis_against">
+        <h4>Bằng chứng phản bác</h4>
+        {% if h.evidence_against %}
+        <ul>
+          {% for line in h.evidence_against %}<li data-field="evidence_against">{{ line }}</li>{% endfor %}
+        </ul>
+        {% else %}
+        <p class="flash flash-warn" data-field="evidence_against_missing">Mô hình không nêu bằng chứng phản bác nào cho giả thuyết này — kết quả không đúng định dạng yêu cầu (mỗi giả thuyết phải có ít nhất một bằng chứng phản bác), hãy đọc giả thuyết này thận trọng.</p>
+        {% endif %}
+      </div>
     </li>
     {% endfor %}
   </ol>
@@ -143,7 +167,7 @@
   {% endif %}
   {% endif %}
 
-  {% if case_open and not running %}
+  {% if case_open and not running and not stalled %}
   <form id="analyze-form" hx-post="/cases/{{ case_id }}/analyze" hx-target="#investigation" hx-swap="outerHTML"
         method="post" action="/cases/{{ case_id }}/analyze">
     <button type="submit" data-field="analyze_button">Phân tích</button>

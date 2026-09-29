@@ -16,7 +16,12 @@ module is the other half of that seam; neither `case.html` nor `cases_pages.py` 
 * the case's newest `investigate` job has its FINAL row (`run_id_for_job(job_id)`) -> the
   result, whatever the job's status (a live job with a row is `done`, as `GET
   /api/tier2/runs/{id}` treats it);
-* no row and the job is `pending`/`running` -> `running`, and the fragment polls;
+* no row and the job is `pending`/`running` -> `running`, and the fragment polls — unless the
+  job is *stalled* (review round 1, S2): `pending` for more than 2 x `JOB_LOCK_TIMEOUT_S` since
+  `scheduled_at`, or `running` for more than that since `locked_at`, by the database's `now()`.
+  A stalled job renders "Chưa được xử lý sau N phút — kiểm tra worker" with a *Kiểm tra lại*
+  button (an `hx-get` of this same GET), no polling and no *Phân tích* button. The page does not
+  say the worker is dead: a triage backlog can legitimately delay the job;
 * no row and the job is `failed` -> `failed` (a last attempt that dies without an LLM error
   — a statement timeout while the dossier is built — leaves no row, so the API answers 404
   after the 202; here it is "Phân tích thất bại — có thể thử lại" and the polling stops);
@@ -119,8 +124,24 @@ OVERRULE_NO_EVIDENCE = "không có bằng chứng nào kiểm chứng được v
 
 _LIVE_JOB_STATUSES = ("pending", "running")
 
+#: A live job is *stalled* when it has waited longer than this many `JOB_LOCK_TIMEOUT_S`
+#: (review round 1, S2). The bound is the worker's own lock timeout, the one `reclaim_stale`
+#: already uses, doubled so a job that is merely being reclaimed is not called stalled; it needs
+#: no new config key and no schema change.
+STALL_TIMEOUT_FACTOR = 2
+
+#: `age_s` is measured by the database's `now()` (never the web host's clock): for a pending job
+#: since `scheduled_at` — not `created_at`, because a retry's backoff moves `scheduled_at` — and
+#: for a running job since `locked_at` (a running row with no lock stamp falls back to
+#: `scheduled_at`, which is only older). A pending job scheduled in the future (backoff) has a
+#: negative age and is never stalled.
 _LATEST_JOB_SQL = (
-    "SELECT job_id, status FROM jobs WHERE job_type = 'investigate' AND subject_id = %s "
+    "SELECT job_id, status, "
+    "CASE status "
+    "WHEN 'pending' THEN extract(epoch FROM (now() - scheduled_at)) "
+    "WHEN 'running' THEN extract(epoch FROM (now() - coalesce(locked_at, scheduled_at))) "
+    "END::float8 "
+    "FROM jobs WHERE job_type = 'investigate' AND subject_id = %s "
     "ORDER BY job_id DESC LIMIT 1"
 )
 _RUN_COLUMNS = "run_id, created_at, stopped_by, result, evidence_check, agent_trace"
@@ -175,18 +196,20 @@ def _current_values(conn: psycopg.Connection, case_id: str) -> dict[str, Any]:
 
 
 def _derive_view(
-    conn: psycopg.Connection, case_id: str, run_id_hint: uuid.UUID | None
+    conn: psycopg.Connection, cfg: Any, case_id: str, run_id_hint: uuid.UUID | None
 ) -> dict[str, Any]:
-    """`{"state": idle|running|done|failed, "run_id": ..., "run_row": ...}` — see the module
-    docstring for the rules."""
+    """`{"state": idle|running|stalled|done|failed, "run_id": ..., "run_row": ...}` — see the
+    module docstring for the rules."""
     job = conn.execute(_LATEST_JOB_SQL, (case_id,)).fetchone()
     if job is not None:
-        job_id, job_status = job
+        job_id, job_status, age_s = job
         final_id = run_id_for_job(job_id)
         row = conn.execute(_RUN_BY_ID_SQL, (str(final_id), case_id)).fetchone()
         if row is not None:
             return {"state": "done", "run_row": row}
         if job_status in _LIVE_JOB_STATUSES:
+            if age_s is not None and age_s > STALL_TIMEOUT_FACTOR * cfg.JOB_LOCK_TIMEOUT_S:
+                return {"state": "stalled", "run_id": str(final_id), "minutes": int(age_s // 60)}
             return {"state": "running", "run_id": str(final_id)}
         if job_status == "failed":
             return {"state": "failed", "run_row": _latest_final_row(conn, case_id)}
@@ -245,6 +268,15 @@ def _evidence_rows(result: dict[str, Any], check: dict[str, Any]) -> list[dict[s
     return rows
 
 
+def _labelled(code: Any) -> str:
+    """ "Không phải sự cố (false_positive)": the Vietnamese label beside the code (review round 1,
+    N3), so the reader who knows the codes and the reader who knows the words both find theirs. An
+    unknown value is shown as it is — the template escapes it."""
+    if isinstance(code, str) and code in CONCLUSION_LABELS:
+        return f"{CONCLUSION_LABELS[code]} ({code})"
+    return str(code)
+
+
 def _overrule_text(result: dict[str, Any], check: dict[str, Any]) -> str | None:
     """Said only when `_check_evidence`'s caller recorded `original_conclusion` — the model
     was overruled, not merely doubted."""
@@ -257,7 +289,10 @@ def _overrule_text(result: dict[str, Any], check: dict[str, Any]) -> str | None:
         cause = FORCED_BY_TEXT.get(forced_by, f"quy tắc {forced_by}")
     else:
         cause = OVERRULE_NO_EVIDENCE
-    return f"Mô hình đề xuất {original} nhưng kết luận đã bị hạ xuống {now}: {cause}."
+    return (
+        f"Mô hình đề xuất {_labelled(original)} nhưng kết luận đã bị hạ xuống "
+        f"{_labelled(now)}: {cause}."
+    )
 
 
 def _snapshot(agent_trace: Any) -> dict[str, Any] | None:
@@ -348,7 +383,7 @@ def _render_state(
     plain success, so `get_conn` has nothing to commit."""
     run = None
     current = None
-    if view["state"] != "running" and view.get("run_row") is not None:
+    if view["state"] not in ("running", "stalled") and view.get("run_row") is not None:
         run = _present_run(view["run_row"])
         if run.get("snapshot") is not None:
             current = _current_values(conn, case_id)
@@ -366,7 +401,12 @@ def _render_state(
         case_id=case_id,
         case_open=case_open,
         message=message,
-        investigation={"state": view["state"], "run_id": view.get("run_id"), "run": run},
+        investigation={
+            "state": view["state"],
+            "run_id": view.get("run_id"),
+            "minutes": view.get("minutes"),
+            "run": run,
+        },
         current=current,
     )
     page.status_code = status_code
@@ -408,7 +448,7 @@ def investigation_page(
     if status is None:
         conn.rollback()
         return _not_found_page(request, user)
-    view = _derive_view(conn, case_id_str, _parse_uuid(run_id))
+    view = _derive_view(conn, cfg, case_id_str, _parse_uuid(run_id))
     return _render_state(request, conn, cfg, case_id_str, status == OPEN_CASE_STATUS, view=view)
 
 
@@ -454,7 +494,7 @@ def _refusal(
         cfg,
         case_id,
         case_open,
-        view=_derive_view(conn, case_id, None),
+        view=_derive_view(conn, cfg, case_id, None),
         message=message,
         status_code=status_code,
         rollback=True,
