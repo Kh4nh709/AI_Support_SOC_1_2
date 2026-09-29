@@ -76,14 +76,18 @@
     {% endfor %}
   </ul>
 
-  {% if preview.clusters == 0 and tally %}
+  {% if preview.clusters == 0 %}
   <div id="empty-preview-tally">
-    <p>Rule không khớp cụm nào trong 30 ngày qua. Chặn cứng nào chiếm nhiều nhất trong cùng cửa sổ:</p>
+    {% if matched %}
+    <p>Rule khớp <strong data-field="tally_matched">{{ matched }}</strong> cụm, cả {{ matched }} bị chặn cứng:</p>
     <ul>
       {% for code, label, count in tally %}
       <li data-block="{{ code }}">{{ label }}: {{ count }}</li>
       {% endfor %}
     </ul>
+    {% else %}
+    <p data-field="tally_none">Rule không khớp cụm nào trong 30 ngày qua.</p>
+    {% endif %}
   </div>
   {% endif %}
 

@@ -16,10 +16,14 @@ exists and this card adds none) write `admin.autoclose_rule_toggled` with
 `before`/`after` both explicit, then call `reload_rules()` *after* the write
 so the 60 s cache never serves a state that no longer exists.
 
-`_hard_block_tally` reuses `autoclose._first_hard_block`/`_asset_ctx`/
-`_identity_ctx`/`_ioc_ctx` read-only (design note 2: an admin who cannot tell
-"my rule matches nothing" from "everything it matches is hard-blocked" will
-write a worse rule) — no G8' logic is reimplemented here.
+`_hard_block_tally` reuses `autoclose._parse_match`/`_rule_matches`/
+`_first_hard_block`/`_asset_ctx`/`_identity_ctx`/`_ioc_ctx` read-only (design
+note 2: an admin who cannot tell "my rule matches nothing" from "everything
+it matches is hard-blocked" will write a worse rule) — no G8' or whitelist
+logic is reimplemented here. Review round 1 (2026-09-29): it now counts a
+hard block only for a row the *candidate rule's own conditions* match — a
+hard-blocked row the rule would never have matched anyway is not this rule's
+business, and the original version counted the whole 30-day window instead.
 """
 
 from __future__ import annotations
@@ -49,14 +53,17 @@ Admin = Annotated[Claims, Depends(require_admin)]
 
 #: The six G8' hard blocks, in their fixed order (context pack §2) — shown
 #: next to every preview so "matches nothing" and "everything is blocked"
-#: are never confused (design note 2).
+#: are never confused (design note 2). Codes come from `autoclose`'s own
+#: constants, not spelled out again here, so a renamed code is an
+#: `AttributeError` at import — loud — rather than a `KeyError`/500 the
+#: first time `_first_hard_block` returns a code this dict doesn't have.
 _HARD_BLOCK_ORDER: tuple[tuple[str, str], ...] = (
-    ("critical", "Mức độ nghiêm trọng = critical"),
-    ("never_autoclose_agent", "Agent nằm trong NEVER_AUTOCLOSE_AGENTS"),
-    ("asset_high", "Asset trọng yếu (asset.criticality = high)"),
-    ("asset_not_in_inventory", "Asset không có trong kiểm kê (inventory)"),
-    ("identity_privileged", "Danh tính đặc quyền (identity_privileged)"),
-    ("ioc_bad", "IoC malicious hoặc suspicious"),
+    (autoclose._HARD_BLOCK_CRITICAL, "Mức độ nghiêm trọng = critical"),
+    (autoclose._HARD_BLOCK_NEVER_AGENT, "Agent nằm trong NEVER_AUTOCLOSE_AGENTS"),
+    (autoclose._HARD_BLOCK_ASSET_HIGH, "Asset trọng yếu (asset.criticality = high)"),
+    (autoclose._HARD_BLOCK_ASSET_ABSENT, "Asset không có trong kiểm kê (inventory)"),
+    (autoclose._HARD_BLOCK_IDENTITY, "Danh tính đặc quyền (identity_privileged)"),
+    (autoclose._HARD_BLOCK_IOC, "IoC malicious hoặc suspicious"),
 )
 
 
@@ -163,15 +170,35 @@ def _toggle_rule(conn: Any, *, rule_id: str, enabled: bool, actor_id: str) -> st
     return name
 
 
-def _hard_block_tally(conn: Any, cfg: Any) -> list[tuple[str, str, int]]:
-    """When a preview matches zero clusters, tell the admin *why*: which of
-    the six G8' hard blocks accounted for the most candidates over the same
-    30-day window `simulate()` reads — sorted, largest first (design note 2).
-    Reuses `simulate()`'s own hard-block predicate read-only; no G8' logic is
-    reimplemented here, so this display can never diverge from the real
-    decision."""
+def _hard_block_tally(
+    conn: Any, cfg: Any, match: list[dict[str, Any]]
+) -> tuple[int, list[tuple[str, str, int]]]:
+    """When a preview matches zero clusters, tell the admin *why*: of the
+    alerts THIS rule's own conditions match over the same 30-day window
+    `simulate()` reads (hard blocks aside), which G8' hard block accounted
+    for each one — sorted, largest first (design note 2). A row the rule
+    would never have matched anyway (its conditions fail) is not counted,
+    even if it happens to be hard-blocked for some other reason — counting
+    the whole window regardless of the rule's own conditions was review
+    round 1's finding.
+
+    `match` must already be validated — the caller's own `simulate()` call
+    (which raises `PermanentError` first) guarantees `_parse_match` here
+    cannot return `None`. Reuses `simulate()`'s own predicates
+    (`_parse_match`, `_rule_matches`, `_first_hard_block`) read-only; no G8'
+    or whitelist logic is reimplemented here, so this can never diverge from
+    the real decision.
+
+    Returns `(matched, tally)`: `matched` is how many alerts the rule's
+    conditions match at all (hard-blocked or not) — the "rule khớp N cụm"
+    count the screen states before it lists what blocked them.
+    """
+    conditions = autoclose._parse_match(match)
+    candidate = autoclose.Rule(rule_id="(tally)", name="(tally)", reason="", conditions=conditions)
     rows = conn.execute("""
-        SELECT severity, agent_name, asset_context, identity_context, ioc_context
+        SELECT alert_id, occurrence_count, severity, agent_name, rule_id, category,
+               srcip, dstip, agent_id, alert_user, decoder, dst_port, src_port, rule_level,
+               asset_context, identity_context, ioc_context
         FROM alerts
         WHERE duplicate_of IS NULL
           AND status <> 'duplicate'
@@ -179,10 +206,48 @@ def _hard_block_tally(conn: Any, cfg: Any) -> list[tuple[str, str, int]]:
           AND received_at >= now() - interval '30 days'
         """).fetchall()
     counts: dict[str, int] = {code: 0 for code, _ in _HARD_BLOCK_ORDER}
-    for severity, agent_name, asset_context, identity_context, ioc_context in rows:
+    matched = 0
+    for (
+        _alert_id,
+        _occurrence_count,
+        severity,
+        agent_name,
+        rule_id_val,
+        category,
+        srcip,
+        dstip,
+        agent_id,
+        alert_user,
+        decoder,
+        dst_port,
+        src_port,
+        rule_level,
+        asset_context,
+        identity_context,
+        ioc_context,
+    ) in rows:
         asset_present, asset_criticality = autoclose._asset_ctx(asset_context)
         identity_privileged = autoclose._identity_ctx(identity_context)
         ioc_reputation = autoclose._ioc_ctx(ioc_context)
+        field_values = {
+            "rule_id": rule_id_val,
+            "category": category,
+            "srcip": srcip,
+            "dstip": dstip,
+            "agent_name": agent_name,
+            "agent_id": agent_id,
+            "alert_user": alert_user,
+            "decoder": decoder,
+            "dst_port": dst_port,
+            "src_port": src_port,
+            "rule_level": rule_level,
+            "asset_criticality": asset_criticality,
+            "identity_privileged": identity_privileged,
+            "ioc_reputation": ioc_reputation,
+        }
+        if not autoclose._rule_matches(candidate, field_values):
+            continue
+        matched += 1
         blocked_by = autoclose._first_hard_block(
             severity=severity,
             agent_name=agent_name,
@@ -194,11 +259,12 @@ def _hard_block_tally(conn: Any, cfg: Any) -> list[tuple[str, str, int]]:
         )
         if blocked_by is not None:
             counts[blocked_by] += 1
-    return sorted(
+    tally = sorted(
         ((code, label, counts[code]) for code, label in _HARD_BLOCK_ORDER),
         key=lambda row: row[2],
         reverse=True,
     )
+    return matched, tally
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +283,9 @@ class RuleCreateIn(BaseModel):
 
 
 class RuleToggleIn(BaseModel):
-    rule_id: str
+    # uuid.UUID, not str: a malformed id is a 422 from Pydantic before this
+    # module ever sees it, not a 500 from the SQL layer (review round 1).
+    rule_id: uuid.UUID
     enabled: bool
 
 
@@ -239,10 +307,11 @@ def api_create_rule(conn: Conn, claims: Admin, body: RuleCreateIn) -> dict[str, 
 
 @router.patch("/api/admin/rules")
 def api_toggle_rule(conn: Conn, claims: Admin, body: RuleToggleIn) -> dict[str, Any]:
-    name = _toggle_rule(conn, rule_id=body.rule_id, enabled=body.enabled, actor_id=claims.user_id)
+    rule_id = str(body.rule_id)
+    name = _toggle_rule(conn, rule_id=rule_id, enabled=body.enabled, actor_id=claims.user_id)
     if name is None:
         raise HTTPException(status_code=404, detail="rule not found")
-    return {"rule_id": body.rule_id, "name": name, "enabled": body.enabled}
+    return {"rule_id": rule_id, "name": name, "enabled": body.enabled}
 
 
 @router.post("/api/admin/rules/simulate")
@@ -268,6 +337,7 @@ def _page(
     flash: dict[str, str] | None = None,
     status_code: int = 200,
     preview: autoclose.SimulateStats | None = None,
+    matched: int | None = None,
     tally: list[tuple[str, str, int]] | None = None,
     form: dict[str, str] | None = None,
 ) -> HTMLResponse:
@@ -281,8 +351,12 @@ def _page(
         width_pct_threshold=cfg.AUTOCLOSE_RULE_WIDTH_PCT,
         hard_blocks=_HARD_BLOCK_ORDER,
         preview=preview,
+        matched=matched,
         tally=tally,
-        form=form or {"name": "", "reason": "", "match_json": "[]"},
+        # Review round 1: "" not "[]" — the textarea is `required`, so an
+        # empty submit is a 422 flash (`json.loads("")` raises), never a
+        # silent "match everything" default.
+        form=form or {"name": "", "reason": "", "match_json": ""},
     )
     page.status_code = status_code
     return page
@@ -317,8 +391,10 @@ def rules_preview(
     except PermanentError as exc:
         flash = {"level": "error", "text": f"Match không hợp lệ — {exc}"}
         return _page(request, conn, cfg, user, flash=flash, status_code=422, form=form)
-    tally = _hard_block_tally(conn, cfg) if stats.clusters == 0 else None
-    return _page(request, conn, cfg, user, preview=stats, tally=tally, form=form)
+    matched, tally = (None, None)
+    if stats.clusters == 0:
+        matched, tally = _hard_block_tally(conn, cfg, match)
+    return _page(request, conn, cfg, user, preview=stats, matched=matched, tally=tally, form=form)
 
 
 @router.post("/admin/rules", response_class=HTMLResponse)
@@ -349,10 +425,12 @@ def rules_toggle(
     cfg: Cfg,
     user: Annotated[Claims, Depends(page_user)],
     _: Admin,
-    rule_id: str,
+    # uuid.UUID, not str: a malformed id is a 422 from FastAPI's own path
+    # converter, not a 500 from the SQL layer (review round 1).
+    rule_id: uuid.UUID,
     enabled: Annotated[bool, Form()],
 ):
-    name = _toggle_rule(conn, rule_id=rule_id, enabled=enabled, actor_id=user.user_id)
+    name = _toggle_rule(conn, rule_id=str(rule_id), enabled=enabled, actor_id=user.user_id)
     if name is None:
         flash = {"level": "error", "text": "Rule không tồn tại"}
         return _page(request, conn, cfg, user, flash=flash, status_code=404)

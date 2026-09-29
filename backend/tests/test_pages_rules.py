@@ -117,6 +117,16 @@ def _ctx(**overrides: Any) -> AlertContext:
     return AlertContext(**fields)
 
 
+def _scoped(html: str, marker: str, *, until: str = "</ul>") -> str:
+    """The substring of `html` from `marker` up to the next `until` — scopes
+    an assertion to one `data-field=`/`id=` block instead of the whole page
+    (review round 1: two adjacent breakdowns made a loose substring check
+    pass for reasons that had nothing to do with the thing under test)."""
+    start = html.index(marker)
+    end = html.index(until, start)
+    return html[start:end]
+
+
 # ---------------------------------------------------------------------------
 # Factories — plain SQL, minimal columns, the two CHECKs that bite here
 # satisfied explicitly: ck_alerts_hash_sha256_hex (64 hex chars) and
@@ -226,10 +236,13 @@ def test_preview_writes_nothing(client) -> None:
     """Also the card's own acceptance-1 name: renders every `SimulateStats`
     field and writes nothing (design note 6)."""
     tc, db, _ = client
+    # severity "low" (distinct from asset_criticality "medium") so each
+    # breakdown's own value is pinned inside its own data-field list, not
+    # found only because the other breakdown's text happens to match too.
     _insert_alert(
         db,
         alert_id="prev-1",
-        severity="medium",
+        severity="low",
         asset_context={"present": True, "criticality": "medium"},
         identity_context={"privileged": False},
         ioc_context={"reputation": "not_found"},
@@ -241,7 +254,8 @@ def test_preview_writes_nothing(client) -> None:
     assert resp.status_code == 200
     assert 'data-field="clusters">1<' in resp.text
     assert 'data-field="alerts">1<' in resp.text
-    assert "medium: 1" in resp.text  # by_severity
+    assert "low: 1" in _scoped(resp.text, 'data-field="by_severity"')
+    assert "medium: 1" in _scoped(resp.text, 'data-field="by_asset_criticality"')
     assert "prev-1" in resp.text  # samples, as a link to the alert page
     assert '/alerts/prev-1"' in resp.text
 
@@ -264,6 +278,68 @@ def test_whitelist_violation_renders_422_flash_naming_the_field(client) -> None:
     assert "risk_score" in resp.text
     count = db.execute("SELECT count(*) FROM autoclose_rules").fetchone()[0]
     assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# The empty-preview tally — review round 1: counts only rows the candidate
+# rule's own conditions match, never the whole 30-day window
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_empty_preview_tally_counts_only_rows_the_rule_matches(client) -> None:
+    tc, _db, _ = client
+    # Matches the rule (agent_name = some-agent) and is hard-blocked
+    # (asset absent) — counted.
+    _insert_alert(
+        _db,
+        alert_id="tally-blocked",
+        agent_name="some-agent",
+        severity="medium",
+        asset_context={"present": False, "criticality": "unknown"},
+        identity_context={"privileged": False},
+        ioc_context={"reputation": "not_found"},
+    )
+    # Also hard-blocked the same way, but the rule's own condition
+    # (agent_name) does not match it — must NOT be counted.
+    _insert_alert(
+        _db,
+        alert_id="tally-not-matched",
+        agent_name="other-agent",
+        severity="medium",
+        asset_context={"present": False, "criticality": "unknown"},
+        identity_context={"privileged": False},
+        ioc_context={"reputation": "not_found"},
+    )
+    match = '[{"field": "agent_name", "op": "eq", "value": "some-agent"}]'
+    resp = tc.post("/admin/rules/preview", data={"name": "n", "reason": "r", "match_json": match})
+    assert resp.status_code == 200
+    assert 'data-field="clusters">0<' in resp.text
+    assert 'data-field="tally_matched">1<' in resp.text
+    tally = _scoped(resp.text, 'id="empty-preview-tally"', until="</div>")
+    asset_row = _scoped(tally, 'data-block="asset_not_in_inventory"', until="</li>")
+    assert ": 1" in asset_row
+    assert "tally-not-matched" not in resp.text  # not a sample either — 0 clusters
+
+
+@pytest.mark.db
+def test_empty_preview_tally_says_no_match_when_the_rule_matches_nothing(client) -> None:
+    tc, _db, _ = client
+    # Closable by every predicate, but the rule below names a different agent.
+    _insert_alert(
+        _db,
+        alert_id="tally-none",
+        agent_name="some-agent",
+        severity="medium",
+        asset_context={"present": True, "criticality": "medium"},
+        identity_context={"privileged": False},
+        ioc_context={"reputation": "not_found"},
+    )
+    match = '[{"field": "agent_name", "op": "eq", "value": "nobody-matches-this"}]'
+    resp = tc.post("/admin/rules/preview", data={"name": "n", "reason": "r", "match_json": match})
+    assert resp.status_code == 200
+    assert 'data-field="clusters">0<' in resp.text
+    assert 'data-field="tally_none"' in resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +450,23 @@ def test_toggle_is_live_without_waiting_for_the_cache(client) -> None:
 
 
 # ---------------------------------------------------------------------------
+# A malformed rule id is a 422, not a 500 (review round 1) — both the HTML
+# path parameter and the JSON API body are `uuid.UUID`, not `str`.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_toggle_bad_rule_id_is_422(client) -> None:
+    tc, _db, _ = client
+
+    html_resp = tc.post("/admin/rules/not-a-uuid/toggle", data={"enabled": "false"})
+    assert html_resp.status_code == 422
+
+    api_resp = tc.patch("/api/admin/rules", json={"rule_id": "not-a-uuid", "enabled": False})
+    assert api_resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # The width warning — belongs here, and only for a rule above the threshold
 # ---------------------------------------------------------------------------
 
@@ -468,28 +561,61 @@ def _require_db_marker_for_scratch(request):
         pytest.fail(f"{request.node.nodeid} uses {sorted(uses)} without @pytest.mark.db")
 
 
+#: All 8 routes this router mounts — every one of them behind `Admin`
+#: (review round 1: parametrised, not just the one page GET). Each body is
+#: syntactically valid for its route so the 403 is never shadowed by an
+#: earlier 422 on the body/path, whichever FastAPI resolves first. The
+#: `toggle` path and the `PATCH` body use a well-formed, nonexistent rule id
+#: — the 404-vs-403 question never arises because `require_role` fires
+#: before the route body runs.
+_PLACEHOLDER_RULE_ID = "00000000-0000-0000-0000-0000000000aa"
+_ADMIN_ROUTES: tuple[tuple[str, str, dict[str, Any]], ...] = (
+    ("get", "/api/admin/rules", {}),
+    ("post", "/api/admin/rules", {"json": {"name": "n", "reason": "r", "match": []}}),
+    (
+        "patch",
+        "/api/admin/rules",
+        {"json": {"rule_id": _PLACEHOLDER_RULE_ID, "enabled": True}},
+    ),
+    ("post", "/api/admin/rules/simulate", {"json": {"match": []}}),
+    ("get", "/admin/rules", {}),
+    ("post", "/admin/rules/preview", {"data": {"name": "n", "reason": "r", "match_json": "[]"}}),
+    ("post", "/admin/rules", {"data": {"name": "n", "reason": "r", "match_json": "[]"}}),
+    (
+        "post",
+        f"/admin/rules/{_PLACEHOLDER_RULE_ID}/toggle",
+        {"data": {"enabled": "false"}},
+    ),
+)
+
+
+@pytest.mark.parametrize("method, path, kwargs", _ADMIN_ROUTES)
 @pytest.mark.db
-def test_non_admin_is_refused_and_authz_denied_row_present(sdb) -> None:
+def test_non_admin_is_refused_and_authz_denied_row_present(sdb, method, path, kwargs) -> None:
     tier1_claims = Claims(user_id=str(uuid.uuid4()), username="t1", role="tier1", iat=0.0, exp=0.0)
     main.app.dependency_overrides[deps.get_conn] = lambda: sdb
     main.app.dependency_overrides[deps.current_user] = lambda: tier1_claims
     main.app.dependency_overrides[pages.page_user] = lambda: tier1_claims
     try:
         tc = TestClient(main.app, follow_redirects=False)
-        resp = tc.get("/admin/rules")
+        resp = getattr(tc, method)(path, **kwargs)
     finally:
         main.app.dependency_overrides.pop(deps.get_conn, None)
         main.app.dependency_overrides.pop(deps.current_user, None)
         main.app.dependency_overrides.pop(pages.page_user, None)
 
-    assert resp.status_code == 403
+    assert resp.status_code == 403, f"{method.upper()} {path} -> {resp.status_code}: {resp.text}"
+    # subject_id is `request.url.path` (deps.require_role) — each route in
+    # the table is a distinct path, so this pins the row to THIS route even
+    # though the scratch database accumulates one real, committed row per
+    # parametrised case (require_role commits before it raises).
     row = sdb.execute(
-        "SELECT required, role FROM ("
-        "  SELECT payload->'required' AS required, payload->>'role' AS role"
-        "  FROM audit_events WHERE event_type = 'authz.denied'"
-        ") s"
+        "SELECT payload->'required' AS required, payload->>'role' AS role "
+        "FROM audit_events WHERE event_type = 'authz.denied' AND subject_id = %s "
+        "ORDER BY created_at DESC LIMIT 1",
+        (path,),
     ).fetchone()
-    assert row is not None
+    assert row is not None, f"no authz.denied row for {path}"
     required, role = row
     assert required == ["admin"]
     assert role == "tier1"
