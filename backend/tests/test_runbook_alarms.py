@@ -408,3 +408,59 @@ def test_two_circle_operations_defaults_match_config():
         "the defaults no longer satisfy 2 x LLM_TIMEOUT_S < JOB_LOCK_TIMEOUT_S, "
         "which the section states as a rule"
     )
+
+
+HANDLERS_DIR = REPO_ROOT / "backend" / "app" / "web" / "handlers"
+JOB_TYPE_RE = re.compile(r'^JOB_TYPE = "([a-z_]+)"$', re.MULTILINE)
+
+
+def _handler_job_types() -> list[str]:
+    """Every `JOB_TYPE = "..."` declared in `backend/app/web/handlers/`, read as text."""
+    found = []
+    for path in sorted(HANDLERS_DIR.glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        m = JOB_TYPE_RE.search(path.read_text(encoding="utf-8"))
+        if m:
+            found.append(m.group(1))
+    return found
+
+
+def test_start_and_stop_lists_every_worker_handler():
+    """Stale once P5-T04 merged (Director 1's follow-up to the ② addendum):
+    `## Start and stop` must name every `JOB_TYPE` in `backend/app/web/handlers/` and
+    must not say a handler is still to come."""
+    job_types = _handler_job_types()
+    assert "investigate" in job_types, f"no handler declares JOB_TYPE 'investigate': {job_types}"
+    start_and_stop = _section(_text(), "Start and stop")
+    # The list itself ("`worker` runs the `a`, `b` and `c` jobs"), not the parenthesis after
+    # it, which may mention a job type without listing it.
+    lists = re.findall(r"`worker` runs the (.*?) jobs", start_and_stop)
+    assert len(lists) == 1, "expected exactly one '`worker` runs the ... jobs' list"
+    missing = [j for j in job_types if f"`{j}`" not in lists[0]]
+    assert not missing, f"## Start and stop does not list the worker handlers: {missing}"
+    assert "joins once" not in start_and_stop, "## Start and stop still says a handler is to come"
+
+
+def test_environment_keys_rows_for_the_two_circle_settings_name_their_readers():
+    """The `CASE_PROMPT_BUDGET_TOKENS` and `ANALYZE_QUOTA_PER_USER_DAY` rows said "read by
+    nothing" until P5-T04 merged. They must now name the files that read them, and those
+    files must still mention the key (so the row cannot go stale a second time)."""
+    rows = {
+        row[0]: row[1] for row in _table_rows(_section(_text(), "Environment keys")) if len(row) > 1
+    }
+    readers_by_key = {
+        "CASE_PROMPT_BUDGET_TOKENS": ["tier2/dossier.py"],
+        "ANALYZE_QUOTA_PER_USER_DAY": [
+            "web/routers/tier2_runs.py",
+            "web/routers/case_analyze_pages.py",
+        ],
+    }
+    for key, readers in readers_by_key.items():
+        what = rows.get(f"`{key}`")
+        assert what is not None, f"## Environment keys has no row for {key}"
+        assert "read by nothing" not in what, f"{key}: still says 'read by nothing': {what}"
+        for reader in readers:
+            assert reader in what, f"{key}: the row does not name {reader}: {what}"
+            source = (REPO_ROOT / "backend" / "app" / reader).read_text(encoding="utf-8")
+            assert key in source, f"{reader} no longer reads {key} — the row is stale again"

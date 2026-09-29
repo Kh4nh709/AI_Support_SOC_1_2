@@ -5,7 +5,7 @@ Every command in those five sections runs **from the primary checkout**, in one 
 
 ## Start and stop
 
-`db` is PostgreSQL 16 on port `55432` (`DB_PORT`, volume `pgdata`), `app` is uvicorn on port `8000`, `worker` runs the `pull`, `pipeline`, `triage`, `health` and `digest` jobs (`backend/app/web/handlers/`, discovered by `iter_handlers()`; `investigate` joins once P5-T04 merges). **Every worker start re-arms three self-scheduling chains** — `pull` and `health` (`enqueue`, idempotent through the jobs table's partial unique index) and `digest` (`digest.ensure_scheduled`) — so a chain that died is repaired by `docker compose restart worker` alone, no other action (**Alarms**, below). The stack publishes both ports on every interface of the host (`docs/limitations.md` (xxxv)).
+`db` is PostgreSQL 16 on port `55432` (`DB_PORT`, volume `pgdata`), `app` is uvicorn on port `8000`, `worker` runs the `pull`, `pipeline`, `triage`, `health`, `digest` and `investigate` jobs (`backend/app/web/handlers/`, discovered by `iter_handlers()`; `investigate` is ②'s single-shot analysis, **② operations** below). **Every worker start re-arms three self-scheduling chains** — `pull` and `health` (`enqueue`, idempotent through the jobs table's partial unique index) and `digest` (`digest.ensure_scheduled`) — so a chain that died is repaired by `docker compose restart worker` alone, no other action (**Alarms**, below). The stack publishes both ports on every interface of the host (`docs/limitations.md` (xxxv)).
 
 | action | command | expected |
 |---|---|---|
@@ -63,8 +63,8 @@ The 62 keys of `.env.example`, one row each, no values. `.env.example` is genera
 | `LLM_PRICE_IN_PER_M` | USD per million input tokens (`llm_runs.cost_usd`) | default | no |
 | `LLM_PRICE_OUT_PER_M` | USD per million output tokens | default | no |
 | `PROMPT_TOTAL_BUDGET_TOKENS` | ①'s prompt budget | default | no |
-| `CASE_PROMPT_BUDGET_TOKENS` | read by nothing (②, cut — DEC-097/111) | default | no |
-| `ANALYZE_QUOTA_PER_USER_DAY` | read by nothing (②) | default | no |
+| `CASE_PROMPT_BUDGET_TOKENS` | ②'s dossier budget, in estimated tokens (`tier2/dossier.py`); over it the dossier is cut and each cut is recorded (**② operations**) | default | no |
+| `ANALYZE_QUOTA_PER_USER_DAY` | the analyses one user may start per day (`web/routers/tier2_runs.py` for the API, `web/routers/case_analyze_pages.py` for the page); over it the API answers 429 (**② operations**) | default | no |
 | `NEVER_AUTOCLOSE_AGENTS` | agents whose alerts are never auto-closed | default | no |
 | `AUTOCLOSE_RULE_WIDTH_PCT` | an auto-close rule that closes more than this share of a week's alerts is reported as too wide | default | no |
 | `REVIEW_DELTA_TOLERANCE` | a decision is refused (409) when the alert grew by more occurrences than this since it was seen | default | no |
