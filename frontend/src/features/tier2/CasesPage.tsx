@@ -30,10 +30,12 @@ export function CasesPage() {
 
       {error !== null ? (
         <ErrorNotice message={S.common.unknownError} onRetry={() => void reload()} />
-      ) : data === null ? (
+      ) : data === null || (loading && rows.length === 0) ? (
+        // An empty page still in hand belongs to the offset the reader just left, so it says nothing yet.
         <p role="status">{S.common.loading}</p>
       ) : rows.length === 0 ? (
-        <p>{S.case.empty}</p>
+        // Past the last page the list is not empty: only this page is, and "Trước" goes back.
+        <p>{offset > 0 ? S.case.pastEnd : S.case.empty}</p>
       ) : (
         <div className={`${PANEL} overflow-x-auto p-0`}>
           <table aria-labelledby={titleId} aria-busy={loading} className="w-full text-sm">

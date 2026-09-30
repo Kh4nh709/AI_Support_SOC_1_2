@@ -133,6 +133,9 @@ export function InvestigationColumn({ caseId, caseOpen }: { caseId: string; case
   // The page knows the case is concluded before the server's last answer does, and the server may know
   // it before the page does: either one closes the column.
   const open = caseOpen && (view?.case_open ?? true);
+  // A poll failed: the last view still says "running", but nothing polls it any more, so the error stands
+  // in for it rather than a line that promises an answer is on the way.
+  const pollFailed = error !== null && view?.state === "running";
 
   return (
     <section
@@ -146,19 +149,20 @@ export function InvestigationColumn({ caseId, caseOpen }: { caseId: string; case
       {error !== null && (
         <ErrorNotice
           message={statusOf(error) === 404 ? S.case.notFound : S.common.unknownError}
-          onRetry={() => void read(null)}
+          // Asked with the run of the 202: a job with nothing behind it then answers "failed", not "idle".
+          onRetry={() => void read(pollId)}
         />
       )}
 
       {view === null ? (
         error === null && <p role="status">{S.ai2.loading}</p>
-      ) : (
+      ) : pollFailed ? null : (
         <ViewBody
           view={view}
           open={open}
           posting={posting}
           onAnalyze={() => void analyze()}
-          onRecheck={() => void read(runId ?? view.run_id)}
+          onRecheck={() => void read(pollId)}
         />
       )}
 
@@ -211,7 +215,15 @@ function ViewBody({
         <div className="space-y-3">
           <p className={ERROR_TEXT}>{open ? S.ai2.failed : S.ai2.failedClosed}</p>
           {analyzeButton}
-          {hasResult && <RunResult run={run} current={view.current} title={S.ai2.lastResult} />}
+          {run !== null &&
+            (hasResult ? (
+              <RunResult run={run} current={view.current} title={S.ai2.lastResult} />
+            ) : (
+              <div className="space-y-2">
+                <h3 className="text-sm font-semibold">{S.ai2.lastResult}</h3>
+                <Stopped run={run} open={open} />
+              </div>
+            ))}
         </div>
       );
 
@@ -230,10 +242,7 @@ function ViewBody({
           {hasResult ? (
             <RunResult run={run} current={view.current} title={null} />
           ) : (
-            <p>
-              {S.ai2.stopped(asText(run.stopped_text))}
-              {open ? ` — ${S.ai2.retryable}` : ""}
-            </p>
+            <Stopped run={run} open={open} />
           )}
         </div>
       );
@@ -246,6 +255,16 @@ function ViewBody({
         </div>
       );
   }
+}
+
+/** Why a run has no result, in the server's words, and that the reader may try again while the case is open. */
+function Stopped({ run, open }: { run: RunView; open: boolean }) {
+  return (
+    <p>
+      {S.ai2.stopped(asText(run.stopped_text))}
+      {open ? ` — ${S.ai2.retryable}` : ""}
+    </p>
+  );
 }
 
 function Block({ title, children }: { title: string; children: React.ReactNode }) {
@@ -357,6 +376,12 @@ function RunResult({
           </ul>
         </Block>
       )}
+
+      {run.playbook_used !== null &&
+        run.playbook_used !== undefined &&
+        run.playbook_used !== "" && (
+          <p className="text-xs text-muted">{S.ai2.playbook(asText(run.playbook_used))}</p>
+        )}
 
       <p className="text-xs text-muted">{S.ai2.disclaimer}</p>
     </div>

@@ -692,9 +692,7 @@ describe("going from one case to another", () => {
         await late.opened;
         return HttpResponse.json(detail());
       }),
-      http.get(OTHER_URL, () =>
-        HttpResponse.json(second()),
-      ),
+      http.get(OTHER_URL, () => HttpResponse.json(second())),
       http.get(`${OTHER_URL}/investigation`, () => HttpResponse.json(IDLE)),
     );
     renderBoth();
@@ -717,9 +715,7 @@ describe("going from one case to another", () => {
         await late.opened;
         return HttpResponse.json(analysis("tóm tắt của case thứ nhất"));
       }),
-      http.get(OTHER_URL, () =>
-        HttpResponse.json(second()),
-      ),
+      http.get(OTHER_URL, () => HttpResponse.json(second())),
       http.get(`${OTHER_URL}/investigation`, () => HttpResponse.json(IDLE)),
     );
     renderBoth();

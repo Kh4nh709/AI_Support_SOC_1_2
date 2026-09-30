@@ -38,11 +38,7 @@ function CaseView({ caseId }: { caseId: string }) {
 
   if (data === null) {
     if (error === null) return <p role="status">{S.common.loading}</p>;
-    return statusOf(error) === 404 ? (
-      <ErrorNotice message={S.case.notFound} />
-    ) : (
-      <ErrorNotice message={S.common.unknownError} onRetry={() => void reload()} />
-    );
+    return <ReadFailed error={error} reload={reload} />;
   }
 
   const open = data.status === OPEN_CASE_STATUS;
@@ -51,12 +47,7 @@ function CaseView({ caseId }: { caseId: string }) {
       <h1 className="text-lg font-semibold">{asText(data.title)}</h1>
 
       {/* A read made again after the first one failed: the case on screen is the last one that loaded. */}
-      {error !== null && (
-        <ErrorNotice
-          message={statusOf(error) === 404 ? S.case.notFound : S.common.unknownError}
-          onRetry={() => void reload()}
-        />
-      )}
+      {error !== null && <ReadFailed error={error} reload={reload} />}
 
       <div className="flex items-start gap-6">
         <div className="min-w-0 flex-1 space-y-6">
@@ -73,6 +64,16 @@ function CaseView({ caseId }: { caseId: string }) {
       </div>
     </div>
   );
+}
+
+/**
+ * A read of the case that failed. A 404 (no such case) and a 422 (an id the server cannot read) are the
+ * same answer to the reader, and a retry of either can never succeed, so neither offers one.
+ */
+function ReadFailed({ error, reload }: { error: unknown; reload: () => Promise<unknown> }) {
+  const status = statusOf(error);
+  if (status === 404 || status === 422) return <ErrorNotice message={S.case.notFound} />;
+  return <ErrorNotice message={S.common.unknownError} onRetry={() => void reload()} />;
 }
 
 function Summary({ data }: { data: CaseDetail }) {

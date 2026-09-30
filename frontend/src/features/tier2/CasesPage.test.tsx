@@ -245,6 +245,36 @@ describe("paging", () => {
     expect(queries[1]).toEqual({ offset: "50", limit: "50" });
   });
 
+  it("says neither empty nor past the end while it goes back from a page past the end", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    server.use(
+      http.get(LIST_URL, async () => {
+        calls += 1;
+        if (calls === 1) return HttpResponse.json(full());
+        if (calls === 2) return HttpResponse.json([]);
+        await gate;
+        return HttpResponse.json(full());
+      }),
+    );
+    renderList();
+    const user = userEvent.setup();
+    await table();
+    await user.click(screen.getByRole("button", { name: S.common.next }));
+    await screen.findByText(S.case.pastEnd);
+    await user.click(screen.getByRole("button", { name: S.common.prev }));
+
+    // The empty page still in hand belongs to offset 50; the page asked for is not here yet.
+    expect(screen.getByText(S.common.loading)).toBeInTheDocument();
+    expect(screen.queryByText(S.case.empty)).not.toBeInTheDocument();
+    expect(screen.queryByText(S.case.pastEnd)).not.toBeInTheDocument();
+    release();
+    await table();
+  });
+
   it("goes back from a page past the end to the last page", async () => {
     const queries = serve(full(), [], full());
     renderList();

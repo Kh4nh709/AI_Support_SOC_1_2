@@ -199,6 +199,8 @@ export const S = {
   case: {
     listTitle: "Danh sách case",
     empty: "Chưa có case nào.",
+    // A page after the first with no row on it: the list is not empty, the reader went past its end.
+    pastEnd: "Không còn case ở trang này.",
     col: {
       title: "Tiêu đề",
       status: "Trạng thái",
@@ -303,6 +305,7 @@ export const S = {
       "Mô hình không nêu bằng chứng phản bác nào cho giả thuyết này — kết quả không đúng định dạng " +
       "yêu cầu (mỗi giả thuyết phải có ít nhất một bằng chứng phản bác), hãy đọc giả thuyết này thận trọng.",
     nextSteps: "Bước tiếp theo",
+    playbook: (name: string) => `Playbook: ${name}`,
     injection: "Cảnh báo tiêm lệnh (prompt injection)",
     model: "Mô hình",
     tokens: "Token",
