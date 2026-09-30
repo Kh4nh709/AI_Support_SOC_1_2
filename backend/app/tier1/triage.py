@@ -199,6 +199,45 @@ def _load(conn: psycopg.Connection, alert_id: str) -> _AlertRow | None:
     return _AlertRow(**values)
 
 
+#: DEC-165 / R22 — the occurrence a switch-off alert is judged on. The four key columns are
+#: `ingest/dedup.py`'s cluster key (`tier1/` may not import `ingest/`, so the key is
+#: restated here) and the window is its `MAX_CLUSTER_AGE_HOURS` age ceiling, measured from
+#: this alert's `first_seen_at`: what the largest cluster dedup would have built holds. No
+#: upper bound (counted when (1) runs) and no status filter: every alert with the key is
+#: an alert of the burst, sealed `duplicate` rows of a pre-switch cluster included. The
+#: alert is read by primary key and every other value is a bound parameter. `ix_alerts_dedup`
+#: cannot serve it — it is partial (open, non-duplicate alerts only) and ends in
+#: `last_seen_at` — so the plan is the primary key for `s` and a BitmapAnd of
+#: `ix_alerts_corr_srcip` and `ix_alerts_corr_agent` for `a`, the rest a filter. Measured
+#: on 200,000 alerts: about 1.5 ms for a 500-alert burst, 15 ms for a key whose srcip is
+#: empty on ~30 % of the table, never a sequential scan (P10-T16 report). Once per alert.
+BURST_COUNT_SQL = """\
+SELECT count(*)
+FROM alerts AS s
+JOIN alerts AS a
+  ON a.rule_id    = s.rule_id
+ AND a.srcip      = s.srcip
+ AND a.agent_name = s.agent_name
+ AND a.dstip      = s.dstip
+WHERE s.alert_id = %s
+  AND a.first_seen_at >= s.first_seen_at - (%s || ' hours')::interval"""
+
+
+def burst_count_query(alert_id: str, cfg: config.Config) -> tuple[str, tuple[object, ...]]:
+    """`BURST_COUNT_SQL` and its parameters, public so the plan test runs the query the job
+    runs and not a retyped copy (`ingest.dedup.find_open_cluster_query`'s reason)."""
+    return BURST_COUNT_SQL, (alert_id, cfg.MAX_CLUSTER_AGE_HOURS)
+
+
+def burst_count(conn: psycopg.Connection, alert_id: str, cfg: config.Config) -> int:
+    """How many alerts share `alert_id`'s rule, srcip, dstip and agent within
+    `MAX_CLUSTER_AGE_HOURS` of its `first_seen_at`, itself included (0 for a missing
+    alert). Only meaningful with `DEDUP_ENABLED=false`: with grouping on, the alert row's
+    own `occurrence_count` is the cluster size and this query is never run."""
+    statement, params = burst_count_query(alert_id, cfg)
+    return int(conn.execute(statement, params).fetchone()[0])
+
+
 def _set_triage_status(conn: psycopg.Connection, alert_id: str, status: str) -> None:
     """This module's only write to `alerts` (G2, acceptance 6's grep) — names
     `triage_status` and `triaged_count` and nothing else."""
@@ -555,6 +594,14 @@ def evaluate_alert(
     playbook_text = kb.get_playbook(row.category)
     table = kb.get_decision_table(row.category)
 
+    # DEC-165 / R22: with grouping off every row's `occurrence_count` is 1, which would
+    # silence `occurrence_lt` / `occurrence_gte`. The facts, the prompt and the verifier
+    # then carry the burst count under the same name; with grouping on, the row's own
+    # count, exactly as before.
+    occurrence_count = row.occurrence_count
+    if not cfg.DEDUP_ENABLED:
+        occurrence_count = burst_count(conn, alert_id, cfg)
+
     inp = TriageInput(
         alert_id=row.alert_id,
         rule_id=row.rule_id,
@@ -563,7 +610,7 @@ def evaluate_alert(
         severity=row.severity,
         category=row.category,
         categories=row.categories,
-        occurrence_count=row.occurrence_count,
+        occurrence_count=occurrence_count,
         risk_score=row.risk_score,
         description=row.description,
         raw_log=row.raw_log,

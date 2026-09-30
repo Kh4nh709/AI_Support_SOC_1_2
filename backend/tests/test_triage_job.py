@@ -11,23 +11,25 @@ the facts `build_facts` derives from the seed — see `_seed_alert`.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import hashlib
 import itertools
 import json
 import re
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 
 import pytest
-from app.infra import worker
+from app.infra import config, worker
 from app.infra.errors import TransientError
 from app.infra.jobs import Job
 from app.kb.lookup import DecisionTable, Rule
 from app.llm.adapter import LLMBudgetExceeded
 from app.security.linter import Violation
+from app.tier1 import triage as triage_module
 from app.tier1.triage import _make_rule_check, run_triage_job
 from app.web.worker import HANDLERS
 from psycopg.types.json import Jsonb
@@ -669,3 +671,290 @@ def test_user_message_is_the_prompt_sent(db, monkeypatch):
         (alert_id,),
     ).fetchone()[0]
     assert stored_user_message == fake.calls[0]["user"]
+
+
+# ---------------------------------------------------------------------------
+# P10-T16 / DEC-165 R22 — `DEDUP_ENABLED=false`: the gate's occurrence facts are the burst count
+# ---------------------------------------------------------------------------
+#
+# With the grouping switch off every alert row carries `occurrence_count` 1, which would
+# silently disable `occurrence_lt` / `occurrence_gte` (`sbf-1` would admit every alert of a
+# 500-attempt burst as a false positive). R22: with the switch off, the value the job puts
+# into the facts and into the prompt is the number of alerts with the same
+# rule_id/srcip/dstip/agent_name whose `first_seen_at` is at or after this alert's minus
+# `MAX_CLUSTER_AGE_HOURS`, this alert included. With the switch on nothing changes.
+
+#: `sbf-1`'s FP-only path (`kb/decision_tables/ssh_brute_force.yaml`): low severity, a clean
+#: ioc, a low-criticality asset, an unprivileged user.
+_FP_ALERT = {
+    "severity": "low",
+    "rule_level": 3,
+    "asset_context": {"present": True, "criticality": "low", "owner": "a", "role": "b"},
+    "identity_context": {"privileged": False},
+    "ioc_context": {"reputation": "clean"},
+    "lookup_status": {"asset": "found", "identity": "found", "ioc": "found"},
+}
+_VERIFIER_FP_AGREE = {
+    "agree": True,
+    "structured_only_verdict": "false_positive",
+    "reason": "Structured facts alone (low severity, clean ioc, sbf-1 rule condition) justify it.",
+}
+_VERIFIER_REVIEW_AGREE = {
+    "agree": True,
+    "structured_only_verdict": "needs_review",
+    "reason": "Structured facts alone (a burst of sixty, past sbf-1's ceiling) leave it for review.",
+}
+
+
+def _fp_proposal(occurrence: int, rule: str = "sbf-1") -> dict:
+    proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    proposal["structured_basis"]["occurrence_count"] = occurrence
+    proposal["structured_basis"]["playbook_rule_applied"] = rule
+    return proposal
+
+
+def _seed_burst(db, n: int, **overrides) -> list[str]:
+    """`n` alerts sharing one cluster key (the canonical rule, srcip, dstip '' and agent),
+    each `occurrence_count` 1 as the switch-off pipeline writes them, one second apart."""
+    return [
+        _seed_alert(
+            db,
+            first_seen_at=_ALERT_TIME + timedelta(seconds=i),
+            last_seen_at=_ALERT_TIME + timedelta(seconds=i),
+            **overrides,
+        )
+        for i in range(n)
+    ]
+
+
+def _proposer_gate_result(db, alert_id: str) -> dict:
+    return db.execute(
+        "SELECT gate_result FROM llm_runs WHERE subject_id = %s AND role = 'proposer'",
+        (alert_id,),
+    ).fetchone()[0]
+
+
+def _switch(monkeypatch, value: str) -> None:
+    _enable_llm(monkeypatch)
+    monkeypatch.setenv("DEDUP_ENABLED", value)
+
+
+@pytest.mark.db
+def test_switch_off_sixty_alert_burst_cannot_take_sbf_1(db, monkeypatch):
+    """The safety case: 60 identical alerts, each row at 1. The gate must see 60, so
+    `sbf-1` (`occurrence_lt: 50`) does not hold and the false positive is forced away."""
+    _switch(monkeypatch, "false")
+    ids = _seed_burst(db, 60, **_FP_ALERT)
+    fake = _RecordingLLM(responses=[_fp_proposal(60), _VERIFIER_REVIEW_AGREE])
+
+    run_triage_job(db, _job(ids[-1]), adapter=fake)
+
+    gate_result = _proposer_gate_result(db, ids[-1])
+    assert gate_result["facts"]["occurrence_count"] == 60
+    assert gate_result["steps"]["2"] == "ok"  # the model was shown 60, the gate holds 60
+    assert gate_result["proposed_verdict"] == "false_positive"
+    assert gate_result["final_verdict"] == "needs_review"  # never an accepted FP
+    assert gate_result["forced_by"] == ["step4"]
+    assert gate_result["missing"] == ["playbook_rule"]
+    assert "rule_does_not_hold" in gate_result["warnings"]
+    assert "occurrence_count: 60" in fake.calls[0]["user"]  # the prompt shows it too
+    row_count = db.execute(
+        "SELECT occurrence_count FROM alerts WHERE alert_id = %s", (ids[-1],)
+    ).fetchone()
+    assert row_count == (1,)  # the row itself is never rewritten
+
+
+@pytest.mark.db
+def test_switch_off_three_alerts_can_still_take_sbf_1(db, monkeypatch):
+    """The other side: a burst of 3 is under 50, so the guard lets `sbf-1` through."""
+    _switch(monkeypatch, "false")
+    ids = _seed_burst(db, 3, **_FP_ALERT)
+    fake = _RecordingLLM(responses=[_fp_proposal(3), _VERIFIER_FP_AGREE])
+
+    run_triage_job(db, _job(ids[0]), adapter=fake)
+
+    gate_result = _proposer_gate_result(db, ids[0])
+    assert gate_result["facts"]["occurrence_count"] == 3
+    assert gate_result["final_verdict"] == "false_positive"
+    assert gate_result["forced"] is False
+    assert gate_result["steps"]["4"] == "ok"
+    assert "occurrence_count: 3" in fake.calls[0]["user"]
+
+
+@pytest.mark.db
+def test_switch_off_burst_count_reaches_both_llm_runs_and_the_verifier_prompt(db, monkeypatch):
+    _switch(monkeypatch, "false")
+    ids = _seed_burst(db, 5, **_FP_ALERT)
+    fake = _RecordingLLM(responses=[_fp_proposal(5), _VERIFIER_FP_AGREE])
+
+    run_triage_job(db, _job(ids[0]), adapter=fake)
+
+    rows = db.execute(
+        "SELECT role, gate_result->'facts'->>'occurrence_count' FROM llm_runs "
+        "WHERE subject_id = %s ORDER BY role",
+        (ids[0],),
+    ).fetchall()
+    assert [r[0] for r in rows] == ["proposer", "verifier"]
+    assert rows[0][1] == "5"
+    assert "occurrence_count: 5" in fake.calls[1]["user"]  # the verifier prompt
+
+
+@pytest.mark.db
+def test_switch_on_keeps_the_rows_occurrence_count_and_never_counts_a_burst(db, monkeypatch):
+    """Byte-identical with the switch on: 60 same-key rows at 1 are still 1, a head at 7
+    is 7, and the burst query is not even run."""
+    _switch(monkeypatch, "true")
+
+    def _forbidden(*args, **kwargs):
+        raise AssertionError("burst_count was reached with DEDUP_ENABLED=true")
+
+    monkeypatch.setattr(triage_module, "burst_count", _forbidden)
+    ids = _seed_burst(db, 60, **_FP_ALERT)
+    head = _seed_alert(db, occurrence_count=7, **_FP_ALERT)
+    fake = _RecordingLLM(
+        responses=[_fp_proposal(1), _VERIFIER_FP_AGREE, _fp_proposal(7), _VERIFIER_FP_AGREE]
+    )
+
+    run_triage_job(db, _job(ids[-1]), adapter=fake)
+    run_triage_job(db, _job(head), adapter=fake)
+
+    assert _proposer_gate_result(db, ids[-1])["facts"]["occurrence_count"] == 1
+    assert _proposer_gate_result(db, ids[-1])["final_verdict"] == "false_positive"
+    assert _proposer_gate_result(db, head)["facts"]["occurrence_count"] == 7
+
+
+@pytest.mark.db
+def test_switch_unset_is_on_and_leaves_the_facts_alone(db, monkeypatch):
+    _enable_llm(monkeypatch)
+    monkeypatch.delenv("DEDUP_ENABLED", raising=False)
+    ids = _seed_burst(db, 60, **_FP_ALERT)
+    fake = _RecordingLLM(responses=[_fp_proposal(1), _VERIFIER_FP_AGREE])
+
+    run_triage_job(db, _job(ids[0]), adapter=fake)
+
+    assert _proposer_gate_result(db, ids[0])["facts"]["occurrence_count"] == 1
+
+
+def _gte_table() -> DecisionTable:
+    """A reviewed table with an `occurrence_gte` false-positive rule. No shipped table has
+    one, so the guard the format offers besides `occurrence_lt` is exercised on a synthetic
+    table."""
+    return DecisionTable(
+        category="ssh_brute_force",
+        playbook="ssh_brute_force_v1",
+        reviewed_by="owner",
+        reviewed_at="2026-09-30",
+        rules=(
+            Rule(
+                id="sbf-9",
+                condition={"severity": ("low", "medium"), "occurrence_gte": 10},
+                action="false_positive",
+            ),
+        ),
+    )
+
+
+@pytest.mark.db
+def test_switch_off_an_occurrence_gte_rule_fires_on_a_burst(db, monkeypatch):
+    """`occurrence_gte` is dead at 1 per row and live on the burst count."""
+    _switch(monkeypatch, "false")
+    monkeypatch.setattr(triage_module.kb, "get_decision_table", lambda category: _gte_table())
+    ids = _seed_burst(db, 12, **_FP_ALERT)
+    fake = _RecordingLLM(responses=[_fp_proposal(12, "sbf-9"), _VERIFIER_FP_AGREE])
+
+    run_triage_job(db, _job(ids[0]), adapter=fake)
+
+    gate_result = _proposer_gate_result(db, ids[0])
+    assert gate_result["facts"]["occurrence_count"] == 12
+    assert gate_result["steps"]["4"] == "ok"  # `sbf-9` holds: 12 >= 10
+    assert gate_result["final_verdict"] == "false_positive"
+
+
+@pytest.mark.db
+def test_switch_on_the_same_occurrence_gte_rule_does_not_fire_at_one(db, monkeypatch):
+    _switch(monkeypatch, "true")
+    monkeypatch.setattr(triage_module.kb, "get_decision_table", lambda category: _gte_table())
+    ids = _seed_burst(db, 12, **_FP_ALERT)
+    fake = _RecordingLLM(responses=[_fp_proposal(1, "sbf-9"), _VERIFIER_FP_AGREE])
+
+    run_triage_job(db, _job(ids[0]), adapter=fake)
+
+    gate_result = _proposer_gate_result(db, ids[0])
+    assert gate_result["facts"]["occurrence_count"] == 1
+    assert gate_result["final_verdict"] == "needs_review"
+    assert "rule_does_not_hold" in gate_result["warnings"]
+
+
+# --- the burst query itself --------------------------------------------------------------
+
+
+def _cfg(monkeypatch=None, **env: str) -> config.Config:
+    if monkeypatch is not None:
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+    return config.load(env_file="/dev/null")
+
+
+@pytest.mark.db
+def test_burst_count_counts_the_key_inside_the_window_this_alert_included(db):
+    cfg = _cfg()
+    base = _seed_alert(db, first_seen_at=_ALERT_TIME, last_seen_at=_ALERT_TIME)
+    assert triage_module.burst_count(db, base, cfg) == 1  # itself
+
+    edge = _ALERT_TIME - timedelta(hours=cfg.MAX_CLUSTER_AGE_HOURS)
+    on_edge = _seed_alert(db, first_seen_at=edge, last_seen_at=edge)
+    outside = edge - timedelta(seconds=1)
+    _seed_alert(db, first_seen_at=outside, last_seen_at=outside)
+    later_time = _ALERT_TIME + timedelta(minutes=30)
+    later = _seed_alert(db, first_seen_at=later_time, last_seen_at=later_time)
+
+    # `base`: itself, the row exactly on the window's edge ("at or after"), and the later
+    # one (counted when (1) runs, no upper bound) — not the row one second outside.
+    assert triage_module.burst_count(db, base, cfg) == 3
+    # `on_edge`'s own window starts 4 h earlier still: it sees all four.
+    assert triage_module.burst_count(db, on_edge, cfg) == 4
+    # `later`'s window starts at t0 + 30 min - 4 h: only itself and `base`.
+    assert triage_module.burst_count(db, later, cfg) == 2
+
+
+@pytest.mark.db
+def test_burst_count_is_keyed_on_all_four_columns(db):
+    base = _seed_alert(db, srcip="10.0.0.1", dstip="10.0.0.2")
+    _seed_alert(db, srcip="10.0.0.1", dstip="10.0.0.2")  # same key
+    _seed_alert(db, srcip="10.0.0.9", dstip="10.0.0.2")  # srcip differs
+    _seed_alert(db, srcip="10.0.0.1", dstip="10.0.0.9")  # dstip differs
+    _seed_alert(db, srcip="10.0.0.1", dstip="10.0.0.2", agent_name="other-agent")
+    _seed_alert(db, srcip="10.0.0.1", dstip="10.0.0.2", rule_id="99999")
+    assert triage_module.burst_count(db, base, _cfg()) == 2
+
+
+@pytest.mark.db
+def test_burst_count_counts_every_status_and_honours_the_configured_window(db, monkeypatch):
+    base = _seed_alert(db)
+    _seed_alert(db, status="closed_fp")
+    _seed_alert(db, status="auto_closed")
+    sibling = _seed_alert(db, status="queued_tier1")
+    _seed_alert(db, status="duplicate", duplicate_of=sibling, sealed_at=_ALERT_TIME)
+    assert triage_module.burst_count(db, base, _cfg()) == 5
+
+    old = _ALERT_TIME - timedelta(hours=3)
+    _seed_alert(db, first_seen_at=old, last_seen_at=old)
+    assert triage_module.burst_count(db, base, _cfg()) == 6  # 3 h < 4 h
+    assert triage_module.burst_count(db, base, _cfg(monkeypatch, MAX_CLUSTER_AGE_HOURS="2")) == 5
+
+
+@pytest.mark.db
+def test_burst_count_of_a_missing_alert_is_zero(db):
+    assert triage_module.burst_count(db, "no-such-alert", _cfg()) == 0
+
+
+@pytest.mark.db
+def test_burst_query_takes_bound_parameters_only_and_uses_an_index(db):
+    alert = _seed_alert(db)
+    statement, params = triage_module.burst_count_query(alert, _cfg())
+    assert statement.count("%s") == len(params) == 2
+    assert alert not in statement
+    db.execute("SET LOCAL enable_seqscan = off")
+    plan = "\n".join(r[0] for r in db.execute("EXPLAIN " + statement, params).fetchall())
+    assert "Seq Scan on alerts" not in plan, plan
+    assert "ix_alerts_" in plan, plan
