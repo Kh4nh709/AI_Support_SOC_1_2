@@ -9,7 +9,9 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
   filters and `counts_by_band` for the React queue; with none of them it is what it was.
   R17: `needs_retriage` leads the order only for a head whose `needs_retriage` the analyst may
   see (the visible arm, or a status in `visibility.SHOW_STATES`) — a blind, undecided head
-  sorts by risk and arrival alone, so its position cannot say "① ran" (DEC-101).
+  sorts by risk and arrival alone, so its position cannot say "① ran" (DEC-101). P10-T14
+  (DEC-164) adds `sort`/`direction`: `time`, `occurrences`, `agent` — a whitelist of literal
+  `ORDER BY` fragments (`QUEUE_ORDER_BY`), none of which reads anything ① writes.
 - `get_alert_view` — everything the detail page (P4-T05) and the labelling page (P6-T02)
   render: the head, its targeted accounts, the ±2 h correlation *now*, the playbook, the ①
   suggestion, the acknowledger's name.
@@ -271,9 +273,36 @@ _QUEUE_SQL = """
         LIMIT 1
     ) r ON true
     WHERE {where}
-    ORDER BY {retriage_sort} DESC, a.risk_score DESC NULLS LAST, a.first_seen_at ASC
+    ORDER BY {order_by}
     LIMIT %(limit)s OFFSET %(offset)s
 """
+
+# P10-T14 / DEC-164 — the sort. `QUEUE_ORDER_BY` is the whole whitelist: (sort, dir) -> the literal
+# `ORDER BY` body, and `list_queue` formats *only* a value of this table into the SQL. A request's
+# `sort`/`dir` are looked up here and never spliced, so an unknown one is a `ValueError` (a 422),
+# not a query. `risk` is today's order, verbatim, and takes no direction (its key in the table is
+# `("risk", None)`). The other keys end in one shared tie-break — risk DESC NULLS LAST, first_seen
+# ASC, alert_id ASC — that does not turn with `dir`, so OFFSET paging walks a total order.
+# R17 / DEC-101: the keys are exactly `risk|time|occurrences|agent`. Nothing ① writes or derives
+# (`triaged_count`, `needs_retriage`, `triage_status`, the suggestion, its confidence, the gate) is
+# a key, and `needs_retriage` is in the `risk` order only, through the visible-or-decided guard
+# above — so a row's position under any other key cannot say "① ran". `agent_name` is `NOT NULL`;
+# `NULLS LAST` is the contract's wording and costs nothing.
+_SORT_TIE_BREAK_SQL = "a.risk_score DESC NULLS LAST, a.first_seen_at ASC, a.alert_id ASC"
+QUEUE_ORDER_BY: dict[tuple[str, str | None], str] = {
+    ("risk", None): (
+        f"{_NEEDS_RETRIAGE_SORT_SQL} DESC, a.risk_score DESC NULLS LAST, a.first_seen_at ASC"
+    ),
+    ("time", "asc"): f"a.last_seen_at ASC NULLS LAST, {_SORT_TIE_BREAK_SQL}",
+    ("time", "desc"): f"a.last_seen_at DESC NULLS LAST, {_SORT_TIE_BREAK_SQL}",
+    ("occurrences", "asc"): f"a.occurrence_count ASC, {_SORT_TIE_BREAK_SQL}",
+    ("occurrences", "desc"): f"a.occurrence_count DESC, {_SORT_TIE_BREAK_SQL}",
+    ("agent", "asc"): f"a.agent_name ASC NULLS LAST, {_SORT_TIE_BREAK_SQL}",
+    ("agent", "desc"): f"a.agent_name DESC NULLS LAST, {_SORT_TIE_BREAK_SQL}",
+}
+#: The direction a key takes when the caller gives none: newest first, most first, A→Z.
+SORT_DEFAULT_DIR: dict[str, str] = {"time": "desc", "occurrences": "desc", "agent": "asc"}
+_SORT_KEYS: tuple[str, ...] = tuple(dict.fromkeys(sort for sort, _direction in QUEUE_ORDER_BY))
 _QUEUE_COUNT_SQL = "SELECT count(*) FROM alerts a WHERE {where}"
 _QUEUE_BAND_COUNTS_SQL = "SELECT {band_case}, count(*) FROM alerts a WHERE {where} GROUP BY 1"
 
@@ -329,6 +358,23 @@ def _filters(
     return " AND ".join(where), params
 
 
+def _order_by(sort: str, direction: str | None) -> str:
+    """The `ORDER BY` body for a request's `sort`/`dir`: a value of `QUEUE_ORDER_BY`, never a
+    string built from the arguments. `direction=None` takes the key's default; `risk` takes none
+    (a `dir` with it is refused, not ignored). Anything else → `ValueError`."""
+    if sort not in _SORT_KEYS:
+        raise ValueError(f"sort must be one of {'|'.join(_SORT_KEYS)}, got {sort!r}")
+    if sort == "risk":
+        if direction is not None:
+            raise ValueError(f"dir must not be given with sort=risk, got {direction!r}")
+        return QUEUE_ORDER_BY[("risk", None)]
+    if direction is None:
+        direction = SORT_DEFAULT_DIR[sort]
+    if (sort, direction) not in QUEUE_ORDER_BY:
+        raise ValueError(f"dir must be one of asc|desc, got {direction!r}")
+    return QUEUE_ORDER_BY[(sort, direction)]
+
+
 #: `r.gate_result->>'forced'` is jsonb text (`'true'`/`'false'`/NULL); the row carries a bool.
 _JSON_BOOL = {"true": True, "false": False}
 
@@ -343,8 +389,10 @@ def list_queue(
     agent: str | None = None,
     status: Literal["queued", "mine"] = "queued",
     actor_id: str | None = None,
+    sort: str = "risk",
+    direction: str | None = None,
 ) -> QueuePage:
-    """One page of the Tier-1 queue in the phase-6 order. Each row carries the queue
+    """One page of the Tier-1 queue, by default in the phase-6 order. Each row carries the queue
     columns plus `risk_band` and **minus** `risk_score`, already passed through
     `visibility.strip(mode="analyst")` — a blind, undecided head has no
     `suggested_action`/`confidence`/`gate_forced`/`triage_status`/`run_id` keys and no
@@ -358,23 +406,28 @@ def list_queue(
     `actor_id`). `total` counts the filtered set; `counts_by_band` counts under every filter
     except `band`.
 
-    `page < 1` or `page_size < 1`, an unknown `band` or `status`, `status="mine"` without an
-    `actor_id`, or a NUL byte in `category`/`agent` → `ValueError`; `page_size >
-    PAGE_SIZE_MAX` is clamped."""
+    Sort (P10-T14, DEC-164): `sort` is `risk` (the default: the order above — `needs_retriage` for
+    visible-or-decided heads, then risk, then arrival) or `time` (`last_seen_at`), `occurrences`
+    (`occurrence_count`) or `agent` (`agent_name`), each in `direction` `asc`/`desc` — omitted, the
+    key's own (`SORT_DEFAULT_DIR`). `risk` takes no direction. A non-risk order breaks its ties by
+    risk, first seen, then `alert_id`, so paging is stable; `needs_retriage` plays no part in it.
+    `total` and `counts_by_band` do not depend on the sort. The request's values only select a
+    fragment of `QUEUE_ORDER_BY`; none is formatted into the SQL.
+
+    `page < 1` or `page_size < 1`, an unknown `band`, `status`, `sort` or `direction`, a
+    `direction` with `sort="risk"`, `status="mine"` without an `actor_id`, or a NUL byte in
+    `category`/`agent` → `ValueError`; `page_size > PAGE_SIZE_MAX` is clamped."""
     if page < 1:
         raise ValueError(f"page must be >= 1, got {page}")
     if page_size < 1:
         raise ValueError(f"page_size must be >= 1, got {page_size}")
     page_size = min(page_size, PAGE_SIZE_MAX)
     offset = (page - 1) * page_size
+    order_by = _order_by(sort, direction)
 
     where, params = _filters(band, category, agent, status, actor_id, with_band=True)
     cur = conn.execute(
-        _QUEUE_SQL.format(
-            where=where,
-            needs_retriage=_NEEDS_RETRIAGE_SQL,
-            retriage_sort=_NEEDS_RETRIAGE_SORT_SQL,
-        ),
+        _QUEUE_SQL.format(where=where, needs_retriage=_NEEDS_RETRIAGE_SQL, order_by=order_by),
         {
             **params,
             "retriage_factor": RETRIAGE_FACTOR,
