@@ -8,6 +8,17 @@ export function isRole(value: unknown): value is Role {
   return typeof value === "string" && (ROLES as readonly string[]).includes(value);
 }
 
+/**
+ * The four risk bands, in the order the queue shows them: the codes the queue's `band` filter and its
+ * `counts_by_band` speak (P10-T02). A row's own `risk_band` is the Vietnamese label instead (ruling R8).
+ */
+export const BAND_CODES = ["critical", "high", "medium", "low"] as const;
+export type BandCode = (typeof BAND_CODES)[number];
+
+export function isBandCode(value: unknown): value is BandCode {
+  return typeof value === "string" && (BAND_CODES as readonly string[]).includes(value);
+}
+
 /** `POST /api/auth/login`. */
 export type LoginResponse = {
   token: string;

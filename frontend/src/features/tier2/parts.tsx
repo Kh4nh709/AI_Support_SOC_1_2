@@ -1,6 +1,7 @@
 // The small pieces the three Tier-2 files share: a text made of anything the server sent, the risk-band
 // badge, the error notice with its retry, and the class strings of the canvas.
-import { S, bandCodeOf, type BandCode } from "../../strings";
+import type { BandCode } from "../../api/types";
+import { S, bandCodeOfLabel } from "../../strings";
 
 export const BUTTON =
   "rounded border border-border bg-surface px-3 py-1 text-sm hover:bg-ground " +
@@ -28,7 +29,8 @@ export function asText(value: unknown): string {
 }
 
 // The colours are keyed by the band code, never by the label: the server's label is read through
-// `bandCodeOf` (ruling R8/R13). A label this UI does not know is neutral.
+// `bandCodeOfLabel`, the one table of `strings.ts` that the queue reads too (ruling R8/R13). A label this
+// UI does not know is neutral.
 const BAND_STYLE: Record<BandCode | "unknown", string> = {
   critical: "bg-critical-bg text-critical",
   high: "bg-high-bg text-high",
@@ -39,7 +41,7 @@ const BAND_STYLE: Record<BandCode | "unknown", string> = {
 
 /** The risk band of a head, by the label the server sent; an unknown label is shown as it came. */
 export function BandBadge({ label }: { label: unknown }) {
-  const code = bandCodeOf(label);
+  const code = typeof label === "string" ? bandCodeOfLabel(label) : null;
   const key = code ?? "unknown";
   return (
     <span

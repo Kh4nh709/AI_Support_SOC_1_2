@@ -11,6 +11,12 @@ import type { Session } from "./auth/session";
 import { AppRoutes } from "./routes";
 import { S } from "./strings";
 
+// The queue page needs a query cache and an API; this file tests which route opens for which role, not the
+// page (QueuePage.test.tsx does). Its heading is all the route test looks for.
+vi.mock("./features/tier1/QueuePage", () => ({
+  QueuePage: () => <h1>{S.queue.title}</h1>,
+}));
+
 // The case pages are real and read the backend; these tests are about the route table, so the backend
 // says "no cases" and "no case 3". A request nobody handled fails the test.
 const server = setupServer(

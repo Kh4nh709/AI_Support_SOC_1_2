@@ -34,6 +34,7 @@ from app.domain.transitions import (
 )
 from app.ingest.wazuh_parser import parse_wazuh_alert
 from app.kb.lookup import get_playbook
+from app.tier1 import visibility
 from app.tier1.queue import (
     PAGE_SIZE_DEFAULT,
     PAGE_SIZE_MAX,
@@ -307,6 +308,76 @@ def test_queue_order_needs_retriage_then_risk_desc_nulls_last_then_first_seen_as
     assert rows[0]["risk_band"] == "Cao"
 
 
+def _retriage_head(conn: psycopg.Connection, *, risk_score: int, suggestion_visible: bool) -> str:
+    """A head ① has triaged once (`triaged_count` 1) that has since grown to 12 occurrences:
+    12 >= 1 * RETRIAGE_FACTOR, so the queue would flag it `needs_retriage`."""
+    alert_id = _queued(conn, risk_score=risk_score, suggestion_visible=suggestion_visible)
+    _set(conn, alert_id, triaged_count=1, occurrence_count=12)
+    return alert_id
+
+
+def _order(conn: psycopg.Connection, *alert_ids: str) -> list[dict]:
+    """The queue rows for `alert_ids`, in queue order."""
+    return [row for row in _all_rows(conn) if row["alert_id"] in set(alert_ids)]
+
+
+@pytest.mark.db
+def test_queue_blind_retriage_head_has_neither_key_and_does_not_jump_the_queue(db):
+    """R17 / DEC-101: ① is the only first-time writer of `triaged_count`, so on a blind head a
+    `needs_retriage` that flips on — or a row that moves to the top — says "① ran". Neither key
+    reaches the analyst and the flag does not order the row: risk decides, as for any head."""
+    blind = _retriage_head(db, risk_score=5, suggestion_visible=False)
+    higher_risk = _queued(db, risk_score=90, suggestion_visible=False)
+
+    rows = _order(db, blind, higher_risk)
+
+    assert [row["alert_id"] for row in rows] == [higher_risk, blind]
+    for row in rows:
+        assert "triaged_count" not in row and "needs_retriage" not in row
+
+
+@pytest.mark.db
+def test_queue_visible_retriage_head_keeps_both_keys_and_sorts_first(db):
+    visible = _retriage_head(db, risk_score=5, suggestion_visible=True)
+    higher_risk = _queued(db, risk_score=90, suggestion_visible=True)
+
+    rows = _order(db, visible, higher_risk)
+
+    assert [row["alert_id"] for row in rows] == [visible, higher_risk]
+    assert rows[0]["needs_retriage"] is True and rows[0]["triaged_count"] == 1
+    assert rows[1]["needs_retriage"] is False and rows[1]["triaged_count"] == 0
+
+
+@pytest.mark.db
+def test_queue_blind_and_visible_retriage_heads_mixed(db):
+    """The visible arm's ⟳ rows lead; a blind ⟳ row falls among the rest by risk."""
+    visible = _retriage_head(db, risk_score=1, suggestion_visible=True)
+    top = _queued(db, risk_score=90, suggestion_visible=False)
+    blind = _retriage_head(db, risk_score=60, suggestion_visible=False)
+    low = _queued(db, risk_score=20, suggestion_visible=True)
+
+    rows = _order(db, visible, top, blind, low)
+
+    assert [row["alert_id"] for row in rows] == [visible, top, blind, low]
+    assert [("needs_retriage" in row) for row in rows] == [True, False, False, True]
+
+
+@pytest.mark.db
+def test_queue_sort_and_strip_share_one_notion_of_decided(db, monkeypatch):
+    """The SQL sort key and `visibility.strip` must agree on what a decided head is: both read
+    `visibility.SHOW_STATES` when the query runs, so widening it re-opens the keys and the
+    ⟳ ordering together (a literal list copied into the SQL would drift from `strip`)."""
+    blind = _retriage_head(db, risk_score=5, suggestion_visible=False)
+    higher_risk = _queued(db, risk_score=90, suggestion_visible=False)
+    assert [row["alert_id"] for row in _order(db, blind, higher_risk)] == [higher_risk, blind]
+
+    monkeypatch.setattr(visibility, "SHOW_STATES", visibility.SHOW_STATES | {"queued_tier1"})
+    rows = _order(db, blind, higher_risk)
+
+    assert [row["alert_id"] for row in rows] == [blind, higher_risk]
+    assert rows[0]["needs_retriage"] is True and rows[0]["triaged_count"] == 1
+
+
 @pytest.mark.db
 def test_queue_unavailable_alert_still_listed(db):
     """H6 / phase-6: `LEFT JOIN`, not `JOIN` — an alert ① could not process is
@@ -372,7 +443,9 @@ def test_queue_blind_row_has_no_suggestion_keys(db):
     assert "run_id" not in row  # a blind row does not even say "① ran" (DEC-101)
     assert "triage_status" not in row
     assert row["suggestion_visible"] is False  # the analyst may know they are on the blind arm
-    assert row["triaged_count"] == 0  # analyst mode hides the verdict, not the counts
+    # R17 / DEC-101: the counts say how often ① ran, so a blind row hides them too.
+    assert "triaged_count" not in row and "needs_retriage" not in row
+    assert row["occurrence_count"] == 1  # the cluster size itself is not ① metadata
     assert row["alert_id"] == alert_id
 
 
@@ -649,6 +722,48 @@ def test_view_blind_undecided_has_no_suggestion_then_decided_has_it(db):
     assert view["suggestion"]["correlated_at_analysis"] == 2
     assert view["triage_status"] == "pending"
     assert "risk_score" not in view
+
+
+@pytest.mark.db
+def test_view_blind_undecided_hides_triaged_count_and_a_decision_brings_it_back(db):
+    """R17 / DEC-101: the detail JSON carries `triaged_count` (the view never computes
+    `needs_retriage`), and on a blind head that number says "① ran"."""
+    _seed_user(db)
+    alert_id = _queued(db, suggestion_visible=False, risk_score=30)
+    _set(db, alert_id, triaged_count=1)  # ① has run once
+
+    view = get_alert_view(db, alert_id)
+    assert view is not None
+    assert "triaged_count" not in view and "needs_retriage" not in view
+    assert view["occurrence_count"] == 1
+
+    acknowledge(db, alert_id, USER_ID)  # tier1_active: still undecided, still blind
+    view = get_alert_view(db, alert_id)
+    assert "triaged_count" not in view and "needs_retriage" not in view
+
+    decide(
+        db,
+        alert_id,
+        USER_ID,
+        decision="closed_benign",
+        reason="benign",
+        seen_occurrence_count=1,
+        llm_suggestion=None,
+        llm_confidence=None,
+    )
+    view = get_alert_view(db, alert_id)
+    assert view["status"] == "closed_benign"
+    assert view["triaged_count"] == 1  # decide() sets it to the occurrence count it saw
+
+
+@pytest.mark.db
+def test_view_visible_arm_keeps_triaged_count(db):
+    alert_id = _queued(db, suggestion_visible=True)
+    _set(db, alert_id, triaged_count=1)
+
+    view = get_alert_view(db, alert_id)
+
+    assert view["triaged_count"] == 1
 
 
 @pytest.mark.db

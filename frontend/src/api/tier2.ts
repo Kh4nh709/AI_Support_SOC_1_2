@@ -37,7 +37,7 @@ export type CaseHead = {
   /** Up to about 1000 KB of log text; `raw_log_truncated` says the server cut it. */
   raw_log: string | null;
   raw_log_truncated: boolean;
-  /** The server's label of the band ("Thấp", "Vừa", "Cao", "Rất cao"), read through `bandCodeOf`. */
+  /** The server's label of the band ("Thấp", "Vừa", "Cao", "Rất cao"), read through `bandCodeOfLabel`. */
   risk_band: string | null;
   last_seen_at: string | null;
 };
