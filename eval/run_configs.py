@@ -41,6 +41,13 @@ only, never notes (planning decision 11).
 The DSN is ``--dsn``, else ``DATABASE_URL`` from ``--env-file``. It is never printed, and no
 ``Config`` in this process keeps it once read (DEC-122).
 
+**Grouping is always on here** (DEC-165). The gold sets are pre-switch data, built with the dedup
+path, and ``--env-file`` defaults to the live ``.env``. With ``DEDUP_ENABLED=false`` there,
+``evaluate_alert`` would feed ① a burst count instead of the row's ``occurrence_count`` (R22):
+B2-B4 would diverge from B1's facts, the prompt and so every cache key would change, and the run
+would re-spend. ``pin_dedup`` therefore sets the switch on in every ``Config`` this module builds,
+whatever the file or the environment says, and prints ``DEDUP_PIN_NOTICE`` when it overrode one.
+
 Exit codes: 0 done; 2 usage; 3 the gold, a lab window or the G3 manifest is not ready (the brief's
 stop conditions); 4 the DSN or the database is unusable; 5 the estimate is above $5 and needs the
 Owner's approval; 6 stopped by the monthly cap (refused by the estimate, or stopped mid-run).
@@ -439,7 +446,9 @@ def b1_facts(conn: psycopg.Connection, alert_id: str, cfg: config.Config) -> dic
     its private `_load` and `_Subject`, its correlation call, and `llm.triage.build_facts`, all
     reached through `tier1.triage` so they cannot drift from it (the equality is pinned by
     `test_b1_facts_equal_evaluate_alert_facts`). The facts do not depend on `cfg`; it is taken
-    so the call reads as `evaluate_alert`'s does."""
+    so the call reads as `evaluate_alert`'s does. They use the row's own `occurrence_count`, and
+    `evaluate_alert` does too only while `cfg.DEDUP_ENABLED` is on (DEC-165, R22): every `cfg`
+    of this module has passed `pin_dedup`, which is what keeps the two equal."""
     row = tier1._load(conn, alert_id)
     if row is None:
         raise AlertNotFound(alert_id)
@@ -840,9 +849,28 @@ def record_run(
 # --- configuration ------------------------------------------------------------------------------
 
 
+#: Printed, once and at the head of the run's output, when `pin_dedup` overrode a `false`. A constant
+#: text: no value read from the environment or the file is in it.
+DEDUP_PIN_NOTICE = (
+    "run_configs: DEDUP_ENABLED=false in the environment or --env-file is ignored: every "
+    "evaluation runs with DEDUP_ENABLED=true, because the gold sets are pre-switch data built "
+    "with grouping (DEC-165)"
+)
+
+
+def pin_dedup(cfg: config.Config) -> config.Config:
+    """`cfg` with `DEDUP_ENABLED` on (DEC-165; the module docstring says why). Says so, once, when
+    it changes a `false`; an unset or `true` switch passes through and prints nothing."""
+    if cfg.DEDUP_ENABLED:
+        return cfg
+    print(DEDUP_PIN_NOTICE)
+    return dataclasses.replace(cfg, DEDUP_ENABLED=True)
+
+
 def _load_config(env_file: str) -> config.Config:
+    """The one place this module builds a `Config` from the environment and `--env-file`."""
     try:
-        return config.load(env_file=env_file)
+        return pin_dedup(config.load(env_file=env_file))
     except ConfigError as exc:
         raise Exit(EXIT_DSN, f"cannot read the configuration: {exc}") from None
 

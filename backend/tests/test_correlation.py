@@ -579,6 +579,59 @@ def test_correlated_cluster_ids_gioi_han_max_alerts_per_case(db, monkeypatch):
     assert set(result) == {ids[4], ids[3], ids[2]}
 
 
+def test_correlated_cluster_ids_hoa_tie_break_chon_alert_moi_nhat_moi_lan_chay(db, monkeypatch):
+    """DEC-165 tie-break. Five identical heads (same occurrence_count = 1, the
+    shape every alert has with `DEDUP_ENABLED=false`), a cap of 2: the two
+    NEWEST by `alert_time` are kept, in that order, on every run. They are
+    inserted oldest-first so a physical-order pick (what an `ORDER BY
+    occurrence_count DESC` alone gives on ties) would choose the two oldest."""
+    monkeypatch.setenv("MAX_ALERTS_PER_CASE", "2")
+    subject = _make_alert(agent_name="agent-tb", alert_user=None, srcip="")
+    ids = [
+        _insert_alert(
+            db,
+            alert_id=f"tb-time-{n}",
+            agent_name="agent-tb",
+            status="queued_tier1",
+            occurrence_count=1,
+            alert_time=_ALERT_TIME + timedelta(minutes=n),
+        )
+        for n in range(5)
+    ]
+    expected = [ids[4], ids[3]]
+    for _ in range(5):
+        assert correlation.correlated_cluster_ids(db, subject) == expected
+
+
+def test_correlated_cluster_ids_hoa_tie_break_cuoi_cung_la_alert_id_tang_dan(db, monkeypatch):
+    """Same `occurrence_count` AND same `alert_time`: `alert_id ASC` decides, so
+    the choice never depends on heap order. Inserted in descending id order so
+    that physical order is the opposite of the expected answer."""
+    monkeypatch.setenv("MAX_ALERTS_PER_CASE", "2")
+    subject = _make_alert(agent_name="agent-tb2", alert_user=None, srcip="")
+    for n in (4, 3, 2, 1, 0):
+        _insert_alert(
+            db,
+            alert_id=f"tb-id-{n}",
+            agent_name="agent-tb2",
+            status="queued_tier1",
+            occurrence_count=1,
+            alert_time=_ALERT_TIME,
+        )
+    for _ in range(5):
+        assert correlation.correlated_cluster_ids(db, subject) == ["tb-id-0", "tb-id-1"]
+
+
+def test_cluster_ids_query_order_by_la_occurrence_time_roi_alert_id():
+    """The statement itself carries the full deterministic order (DEC-165) — a
+    text-level pin so a revert is caught even where a small seed happens to
+    return the right rows by luck."""
+    subject = _make_alert(agent_name="agent-tb3", alert_user=None, srcip="")
+    sql, _params = correlation.cluster_ids_query(subject, 2)
+    normalized = " ".join(sql.split())
+    assert "ORDER BY occurrence_count DESC, alert_time DESC, alert_id ASC LIMIT" in normalized
+
+
 # ---------------------------------------------------------------------------
 # 6 · E4 — read-only, enforced
 # ---------------------------------------------------------------------------

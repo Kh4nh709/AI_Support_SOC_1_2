@@ -119,14 +119,20 @@ def samples_query(alert: Any) -> tuple[str, dict[str, Any]]:
 
 
 def cluster_ids_query(alert: Any, limit: int) -> tuple[str, dict[str, Any]]:
-    """Phase-6 §Escalate's predicate, verbatim: `status IN (...)` is kept
-    literal rather than named so a reviewer can diff it against the doc."""
+    """Phase-6 §Escalate's predicate plus one tie-break (DEC-165). The WHERE
+    clause is the doc's, unchanged: `status IN (...)` is kept literal rather
+    than named so a reviewer can diff it against the doc. The doc orders by
+    `occurrence_count DESC` only; with `DEDUP_ENABLED=false` every head has
+    `occurrence_count` 1, so at `MAX_ALERTS_PER_CASE` that alone would leave the
+    choice of siblings to heap order. `alert_time DESC, alert_id ASC` after it
+    keeps the newest first and makes the order total, hence deterministic. The
+    ordering is the only difference from the doc."""
     sql = f"""
         SELECT alert_id
         FROM alerts
         WHERE {_WINDOW_PREDICATE}
           AND status IN ('queued_tier1', 'tier1_active')
-        ORDER BY occurrence_count DESC
+        ORDER BY occurrence_count DESC, alert_time DESC, alert_id ASC
         LIMIT %(limit)s
     """
     params = _params(alert)
