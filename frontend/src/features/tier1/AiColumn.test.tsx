@@ -117,14 +117,15 @@ describe("ready", () => {
     const reasons = within(within(column()).getByRole("region", { name: S.ai1.reasons }));
     const items = reasons.getAllByRole("listitem");
     expect(items).toHaveLength(2);
-    expect(items[0]).toHaveTextContent("37 lần xác thực thất bại từ cùng một IP ngoài");
-    expect(within(items[0]).getByText(/Failed password for invalid user admin/).tagName).toBe(
+    const [first, second] = items as [HTMLElement, HTMLElement];
+    expect(first).toHaveTextContent("37 lần xác thực thất bại từ cùng một IP ngoài");
+    expect(within(first).getByText(/Failed password for invalid user admin/).tagName).toBe(
       "BLOCKQUOTE",
     );
-    expect(items[0]).toHaveTextContent(`${S.ai1.source}: wazuh_raw_log`);
-    expect(items[1]).toHaveTextContent("Chưa thấy đăng nhập thành công");
-    expect(items[1].querySelector("blockquote")).toBeNull();
-    expect(items[1]).toHaveTextContent(`${S.ai1.source}: correlation`);
+    expect(first).toHaveTextContent(`${S.ai1.source}: wazuh_raw_log`);
+    expect(second).toHaveTextContent("Chưa thấy đăng nhập thành công");
+    expect(second.querySelector("blockquote")).toBeNull();
+    expect(second).toHaveTextContent(`${S.ai1.source}: correlation`);
   });
 
   it("shows the gate steps, the verifier, the facts ① used, and when it ran (+07)", () => {
