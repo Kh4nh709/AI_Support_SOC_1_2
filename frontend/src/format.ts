@@ -42,3 +42,10 @@ export function formatDateTime(iso: string | null | undefined): string {
   const p = partsOf(iso);
   return p ? `${p.day}/${p.month}/${p.year} ${p.hour}:${p.minute}:${p.second}` : iso;
 }
+
+/** "15:15" — the time of day alone, for a sentence that already says which day ("khoá đến 15:15"). */
+export function formatClock(iso: string | null | undefined): string {
+  if (!iso) return MISSING;
+  const p = partsOf(iso);
+  return p ? `${p.hour}:${p.minute}` : iso;
+}

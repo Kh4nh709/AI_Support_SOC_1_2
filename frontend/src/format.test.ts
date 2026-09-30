@@ -1,5 +1,5 @@
 // src/format.test.ts — `npm test` runs Vitest with TZ=UTC, so the +07 conversion is really exercised.
-import { DISPLAY_TZ, formatDateTime, formatTime } from "./format";
+import { DISPLAY_TZ, formatClock, formatDateTime, formatTime } from "./format";
 
 it("runs under a host zone that is not +07 (otherwise this file proves nothing)", () => {
   expect(new Date("2026-09-30T02:31:00Z").getTimezoneOffset()).toBe(0);
@@ -41,4 +41,11 @@ it("reads a timestamp with no zone as UTC, not in the host's zone", () => {
 it("shows an unparseable value as it came, never throws", () => {
   expect(formatTime("not a time")).toBe("not a time");
   expect(formatDateTime("not a time")).toBe("not a time");
+});
+
+it("formats the clock alone, in +07 (the login lock says 'until HH:MM')", () => {
+  expect(formatClock("2026-09-30T08:15:00+00:00")).toBe("15:15");
+  expect(formatClock("2026-09-30T17:05:00Z")).toBe("00:05");
+  expect(formatClock(null)).toBe("—");
+  expect(formatClock("not a time")).toBe("not a time");
 });
