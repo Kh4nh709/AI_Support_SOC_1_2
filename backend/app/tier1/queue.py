@@ -5,7 +5,8 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
 
 - `list_queue` — the phase-6 queue (`docs/phase-6-tier1.md` §Hàng đợi): `needs_retriage`
   computed at query time, `risk_score DESC NULLS LAST`, `first_seen_at ASC`, `NOT
-  is_synthetic`, OFFSET paging.
+  is_synthetic`, OFFSET paging. P10-T02 adds the optional `band`/`category`/`agent`/`status`
+  filters and `counts_by_band` for the React queue; with none of them it is what it was.
 - `get_alert_view` — everything the detail page (P4-T05) and the labelling page (P6-T02)
   render: the head, its targeted accounts, the ±2 h correlation *now*, the playbook, the ①
   suggestion, the acknowledger's name.
@@ -55,6 +56,61 @@ def risk_band(score: int | None) -> str | None:
         if clamped <= upper:
             return label
     raise AssertionError("unreachable: clamped to 0-100")  # pragma: no cover
+
+
+#: The four codes the API speaks for the risk band (P10-T02), in `_BANDS` order — `risk_band`'s
+#: label for the same range is the row's own `risk_band` value and does not change. The filter's
+#: SQL bounds and `counts_by_band`'s CASE are derived from `_BANDS`, never from a second copy.
+BAND_CODES: tuple[str, ...] = ("low", "medium", "high", "critical")
+if len(BAND_CODES) != len(_BANDS):  # pragma: no cover
+    raise AssertionError("BAND_CODES must name every band in _BANDS")
+
+
+def _band_bounds(band: str) -> tuple[int | None, int | None]:
+    """Inclusive `(lo, hi)` score bounds of `band` (`None` = unbounded on that side, because
+    `risk_band` clamps a score outside 0–100 into the end bands). An unknown `band` →
+    `ValueError`."""
+    try:
+        i = BAND_CODES.index(band)
+    except ValueError:
+        raise ValueError(f"band must be one of {'|'.join(BAND_CODES)}, got {band!r}") from None
+    lo = _BANDS[i - 1][0] + 1 if i > 0 else None
+    hi = _BANDS[i][0] if i < len(_BANDS) - 1 else None
+    return lo, hi
+
+
+def _band_sql(lo: int | None, hi: int | None) -> str:
+    """`WHERE` fragment for `_band_bounds`, built from fixed text and named parameters. A NULL
+    `risk_score` fails every comparison, so it is in no band (`risk_band(None)` is `None`)."""
+    parts = []
+    if lo is not None:
+        parts.append("a.risk_score >= %(band_lo)s")
+    if hi is not None:
+        parts.append("a.risk_score <= %(band_hi)s")
+    return " AND ".join(parts) or "a.risk_score IS NOT NULL"
+
+
+def _band_case() -> tuple[str, dict[str, Any]]:
+    """The SQL twin of `risk_band` for `counts_by_band`: a `CASE` over `_BANDS` yielding the
+    band code (NULL for a NULL score). Bounds and codes travel as parameters; the only text
+    formatted in is the index of a band."""
+    whens: list[str] = []
+    params: dict[str, Any] = {}
+    for i, (upper, _label) in enumerate(_BANDS[:-1]):
+        whens.append(f"WHEN a.risk_score <= %(band_upper_{i})s THEN %(band_code_{i})s::text")
+        params[f"band_upper_{i}"] = upper
+        params[f"band_code_{i}"] = BAND_CODES[i]
+    last = len(_BANDS) - 1
+    params[f"band_code_{last}"] = BAND_CODES[last]
+    sql = (
+        "CASE WHEN a.risk_score IS NULL THEN NULL "
+        + " ".join(whens)
+        + f" ELSE %(band_code_{last})s::text END"
+    )
+    return sql, params
+
+
+_BAND_CASE_SQL, _BAND_CASE_PARAMS = _band_case()
 
 
 # ---------------------------------------------------------------------------
@@ -135,10 +191,18 @@ def latest_suggestion(conn: psycopg.Connection, alert_id: str) -> Suggestion | N
 
 @dataclasses.dataclass(frozen=True)
 class QueuePage:
+    """`total` is the count under every filter; `counts_by_band` is the count per band code
+    under every filter **except** `band` (so the band chips still show the other bands), with
+    all four keys always present. The default lets a caller that builds a page by hand
+    (the Jinja page's tests) omit it."""
+
     rows: list[dict[str, Any]]
     total: int
     page: int
     page_size: int
+    counts_by_band: dict[str, int] = dataclasses.field(
+        default_factory=lambda: dict.fromkeys(reversed(BAND_CODES), 0)
+    )
 
 
 # The phase-6 SQL (docs/phase-6-tier1.md:24-39) with two changes:
@@ -180,8 +244,8 @@ _QUEUE_SQL = """
            r.result->>'confidence',
            r.gate_result->>'forced',
            (a.triaged_count > 0 AND
-            (a.occurrence_count >= a.triaged_count * %s
-             OR a.occurrence_count - a.triaged_count >= %s)) AS needs_retriage
+            (a.occurrence_count >= a.triaged_count * %(retriage_factor)s
+             OR a.occurrence_count - a.triaged_count >= %(retriage_abs_delta)s)) AS needs_retriage
     FROM alerts a
     LEFT JOIN LATERAL (
         SELECT run_id, result, gate_result
@@ -190,24 +254,96 @@ _QUEUE_SQL = """
         ORDER BY r.created_at DESC
         LIMIT 1
     ) r ON true
-    WHERE a.status = 'queued_tier1' AND NOT a.is_synthetic
+    WHERE {where}
     ORDER BY needs_retriage DESC, a.risk_score DESC NULLS LAST, a.first_seen_at ASC
-    LIMIT %s OFFSET %s
+    LIMIT %(limit)s OFFSET %(offset)s
 """
-_QUEUE_COUNT_SQL = "SELECT count(*) FROM alerts WHERE status = 'queued_tier1' AND NOT is_synthetic"
+_QUEUE_COUNT_SQL = "SELECT count(*) FROM alerts a WHERE {where}"
+_QUEUE_BAND_COUNTS_SQL = "SELECT {band_case}, count(*) FROM alerts a WHERE {where} GROUP BY 1"
+
+#: The two lists a caller may ask for. Only these fixed fragments — and `_band_sql`'s — are ever
+#: formatted into a `WHERE`; every user value travels as a named parameter.
+_STATUS_WHERE = {
+    "queued": "a.status = 'queued_tier1'",
+    "mine": "a.status = 'tier1_active' AND a.acknowledged_by = %(actor_id)s",
+}
+
+
+def _no_nul(name: str, value: str) -> str:
+    """A NUL byte cannot be sent as a `text` parameter (psycopg raises a driver-level error,
+    not a clean 422): refuse it here, as the request bodies' own validators do."""
+    if "\x00" in value:
+        raise ValueError(f"{name} must not contain a NUL byte")
+    return value
+
+
+def _filters(
+    band: str | None,
+    category: str | None,
+    agent: str | None,
+    status: str,
+    actor_id: str | None,
+    *,
+    with_band: bool,
+) -> tuple[str, dict[str, Any]]:
+    """The `WHERE` body and its named parameters. `with_band=False` is `counts_by_band`'s
+    variant: every filter except the band (an unknown band is still refused)."""
+    if status not in _STATUS_WHERE:
+        raise ValueError(f"status must be one of {'|'.join(_STATUS_WHERE)}, got {status!r}")
+    where = [_STATUS_WHERE[status], "NOT a.is_synthetic"]
+    params: dict[str, Any] = {}
+    if status == "mine":
+        if actor_id is None:
+            raise ValueError("status 'mine' needs actor_id")
+        params["actor_id"] = actor_id
+    if category is not None:
+        where.append("a.category = %(category)s")
+        params["category"] = _no_nul("category", category)
+    if agent is not None:
+        where.append("a.agent_name = %(agent)s")
+        params["agent"] = _no_nul("agent", agent)
+    if band is not None:
+        lo, hi = _band_bounds(band)  # ValueError on an unknown band
+        if with_band:
+            where.append(_band_sql(lo, hi))
+            if lo is not None:
+                params["band_lo"] = lo
+            if hi is not None:
+                params["band_hi"] = hi
+    return " AND ".join(where), params
+
 
 #: `r.gate_result->>'forced'` is jsonb text (`'true'`/`'false'`/NULL); the row carries a bool.
 _JSON_BOOL = {"true": True, "false": False}
 
 
 def list_queue(
-    conn: psycopg.Connection, *, page: int = 1, page_size: int = PAGE_SIZE_DEFAULT
+    conn: psycopg.Connection,
+    *,
+    page: int = 1,
+    page_size: int = PAGE_SIZE_DEFAULT,
+    band: str | None = None,
+    category: str | None = None,
+    agent: str | None = None,
+    status: Literal["queued", "mine"] = "queued",
+    actor_id: str | None = None,
 ) -> QueuePage:
     """One page of the Tier-1 queue in the phase-6 order. Each row carries the queue
     columns plus `risk_band` and **minus** `risk_score`, already passed through
     `visibility.strip(mode="analyst")` — a blind, undecided head has no
-    `suggested_action`/`confidence`/`gate_forced`/`triage_status` keys at all.
-    `page < 1` or `page_size < 1` → `ValueError`; `page_size > PAGE_SIZE_MAX` is clamped."""
+    `suggested_action`/`confidence`/`gate_forced`/`triage_status` keys at all, under every
+    filter.
+
+    Filters (P10-T02), all optional and ANDed: `band` — one of `BAND_CODES`
+    (`low|medium|high|critical`), the score range `risk_band` labels with the matching name;
+    `category`; `agent` (`agent_name`); `status` — `"queued"` (`queued_tier1`, the default and
+    what this function always returned) or `"mine"` (`tier1_active` acknowledged by
+    `actor_id`). `total` counts the filtered set; `counts_by_band` counts under every filter
+    except `band`.
+
+    `page < 1` or `page_size < 1`, an unknown `band` or `status`, `status="mine"` without an
+    `actor_id`, or a NUL byte in `category`/`agent` → `ValueError`; `page_size >
+    PAGE_SIZE_MAX` is clamped."""
     if page < 1:
         raise ValueError(f"page must be >= 1, got {page}")
     if page_size < 1:
@@ -215,7 +351,17 @@ def list_queue(
     page_size = min(page_size, PAGE_SIZE_MAX)
     offset = (page - 1) * page_size
 
-    cur = conn.execute(_QUEUE_SQL, (RETRIAGE_FACTOR, RETRIAGE_ABS_DELTA, page_size, offset))
+    where, params = _filters(band, category, agent, status, actor_id, with_band=True)
+    cur = conn.execute(
+        _QUEUE_SQL.format(where=where),
+        {
+            **params,
+            "retriage_factor": RETRIAGE_FACTOR,
+            "retriage_abs_delta": RETRIAGE_ABS_DELTA,
+            "limit": page_size,
+            "offset": offset,
+        },
+    )
     rows: list[dict[str, Any]] = []
     for record in cur.fetchall():
         row = dict(zip(_QUEUE_COLUMNS, record, strict=True))
@@ -231,8 +377,21 @@ def list_queue(
                 mode="analyst",
             )
         )
-    total = conn.execute(_QUEUE_COUNT_SQL).fetchone()[0]
-    return QueuePage(rows=rows, total=total, page=page, page_size=page_size)
+    total = conn.execute(_QUEUE_COUNT_SQL.format(where=where), params).fetchone()[0]
+
+    # One grouped query over every filter but the band. All four keys are always present;
+    # a NULL-score head groups under NULL and is in no band.
+    band_where, band_params = _filters(band, category, agent, status, actor_id, with_band=False)
+    counts_by_band = dict.fromkeys(reversed(BAND_CODES), 0)
+    for code, n in conn.execute(
+        _QUEUE_BAND_COUNTS_SQL.format(band_case=_BAND_CASE_SQL, where=band_where),
+        {**band_params, **_BAND_CASE_PARAMS},
+    ).fetchall():
+        if code is not None:
+            counts_by_band[code] = n
+    return QueuePage(
+        rows=rows, total=total, page=page, page_size=page_size, counts_by_band=counts_by_band
+    )
 
 
 # ---------------------------------------------------------------------------
