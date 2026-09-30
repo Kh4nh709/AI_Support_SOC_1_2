@@ -48,6 +48,16 @@ Tier-1 analysts, then Tier-2, use it for the human pilot, and it is tested again
   - `/api/ws` proxies the WebSocket upgrade: `proxy_http_version 1.1`, the `Upgrade`/`Connection` headers, and `proxy_read_timeout 1h`.
   - Security headers: `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`.
 - **Development.** `npm run dev`, with Vite proxying `/api` (WebSocket included) to `127.0.0.1:8000`.
+- **Target.** Desktop only, at 1280 px and wider, on current Chromium and Firefox. There is no mobile layout in v1.0.
+- **CSP compatibility.**
+  - No library that injects `<style>` or `<script>` at run time.
+  - The TanStack Query devtools are excluded from the production build.
+  - React's `style` props are set through the CSSOM, which `style-src 'self'` allows.
+- **Toolchain.**
+  - Node 22 is pinned (`engines` and `.nvmrc`), and the lockfile is committed.
+  - `npm ci` is used in Docker and in the merge script.
+  - `npm audit --omit=dev` is reported by `ui-lint`, as a report, not a gate.
+  - The scaffold card installs Playwright's Chromium (`npx playwright install chromium`) and records any system package it needs as an Owner action.
 - **Makefile targets.** They run inside `frontend/` and are also called by the Director's merge test script.
   - `ui-lint`: eslint, `tsc --noEmit`, `prettier --check`.
   - `ui-test`: Vitest.
@@ -70,6 +80,7 @@ Tier-1 analysts, then Tier-2, use it for the human pilot, and it is tested again
   - The session is `{token, role, username, expires_at}`, held in memory and mirrored to `sessionStorage` under one key. It is never put in `localStorage`.
   - At `expires_at` the session is cleared.
   - On load, the session is re-read from `GET /api/auth/me` (§5.1), not trusted from storage.
+  - **Several tabs.** `sessionStorage` is per tab, so an alert opened in a new tab would ask for a login again. A new tab therefore asks the open tabs for the session over a `BroadcastChannel`, and any tab answers with it. Logout is broadcast, so every tab closes its session. Nothing goes to `localStorage`.
 - `live/`: the WebSocket client (§3.2).
 - `features/tier1/`: the queue page, the alert page, the decision panel.
 - `features/tier2/`: the case list, the case page, the ② column.
@@ -114,10 +125,10 @@ Tier-1 analysts, then Tier-2, use it for the human pilot, and it is tested again
 
 Each page follows its canvas artboard. Copy is Vietnamese. Dates are shown in `DISPLAY_TZ` (Asia/Ho_Chi_Minh).
 
-**Queue** (`Queue` artboard): `GET /api/tier1/queue?page=&page_size=&severity=&category=&agent=&status=` (§5.2).
-- **Filters:** severity, category, agent, and status: waiting, or "mine" (`tier1_active` held by me). There is no free-text search.
-- **Counts by severity band** come from the response (§5.2).
-- **Row columns:** severity, description with rule id, category, agent, occurrence count, last seen, ①.
+**Queue** (`Queue` artboard): `GET /api/tier1/queue?page=&page_size=&band=&category=&agent=&status=` (§5.2).
+- **Filters:** the **risk band** ("Mức" is `risk_band`, the column the queue is sorted by, not the alert's `severity`), category, agent, and status: waiting, or "mine" (`tier1_active` held by me). There is no free-text search.
+- **Counts by risk band** come from the response (§5.2).
+- **Row columns:** risk band, description with rule id, category, agent, occurrence count, last seen, ①.
 - **The ① cell:**
   - `suggested_action (confidence)`, plus ⚑ when `gate_forced`;
   - "ẩn — nhánh mù" when the keys are stripped;
@@ -140,8 +151,13 @@ Each page follows its canvas artboard. Copy is Vietnamese. Dates are shown in `D
   - pending;
   - unavailable (`stopped_by`, for example schema);
   - decided: my decision beside ①'s.
-- **Decision panel.**
-  - `POST .../acknowledge`.
+- **Decision panel.** It follows the same order as the Jinja page and `tier1/decide.py`: "the first acknowledger wins", and `decided_by` is the acknowledger.
+  - A `queued_tier1` alert shows only **"Nhận xử lý"** (`POST .../acknowledge`).
+  - Decide and escalate are enabled only while the alert is `tier1_active` and acknowledged by me.
+  - An alert acknowledged by someone else is read-only and shows who holds it.
+  - This keeps the pilot's acknowledge → decide timing meaningful.
+  - After a decision, a toast shows what the response says: how many correlated alerts the fan-out closed with it, or the new case with a link to `/cases/:id`.
+  - An escalated alert's page shows a link to its case (`case_id`).
   - `POST .../decide` with `false_positive` or `benign`, a reason, and `seen_occurrence_count` equal to the count the page showed.
   - `POST .../escalate` with a title and a severity.
   - `POST .../reopen` with a reason.
@@ -155,7 +171,9 @@ Each page follows its canvas artboard. Copy is Vietnamese. Dates are shown in `D
 
 **Case page** (`Case` artboard): `GET /api/tier2/cases/{id}` (§5.4) and `GET /api/tier2/cases/{id}/investigation` (§5.3).
 - **Left column:**
-  - the heads table, each head linking to `/alerts/:id`;
+  - "Còn tiếp diễn" when `ongoing` is true, with `ongoing_last_seen` and a hint to re-run ②;
+  - the heads table, each head linking to `/alerts/:id`, with its risk band, status label (`HEAD_STATUS_LABELS`), last seen, and its raw log, marked truncated when `raw_log_truncated`;
+  - `CONFIRMED_INCIDENT_SCOPE_NOTE` beside the "Xác nhận sự cố" choice (moved into `strings.ts`);
   - the timeline;
   - notes with the author's name, and add note (`POST .../notes`);
   - the conclusion. `POST .../conclude` takes one of `concluded_fp` "Dương tính giả", `concluded_policy_violation` "Vi phạm chính sách" or `confirmed_incident` "Xác nhận sự cố", plus a reason. A `409` shows who concluded, and when.
@@ -177,8 +195,8 @@ Each item is a card: one Coder on Sonnet 5.5 xhigh and one Reviewer. Each is a f
    - Returns `{user_id, username, display_name, role, expires_at}` from the verified token and the `users` row.
    - `401` as `current_user`.
 2. **Queue filters and counts.**
-   - `queue.list_queue` and `GET /api/tier1/queue` accept optional `severity`, `category`, `agent` and `status ∈ {queued, mine}`. `mine` means `tier1_active` acknowledged by the caller.
-   - The response gains `counts_by_band`, `{critical, high, medium, low}` over the unpaged, filtered set.
+   - `queue.list_queue` and `GET /api/tier1/queue` accept optional `band` (the risk band), `category`, `agent` and `status ∈ {queued, mine}`. `mine` means `tier1_active` acknowledged by the caller.
+   - The response gains `counts_by_band`, `{critical, high, medium, low}` over the unpaged set with every filter except `band`, so the chips still show the other bands' counts.
    - Unfiltered calls return exactly what they return today.
    - The blind-arm strip is unchanged.
 3. **`GET /api/tier2/cases/{case_id}/investigation`** (tier2, admin).
@@ -186,10 +204,13 @@ Each item is a card: one Coder on Sonnet 5.5 xhigh and one Reviewer. Each is a f
    - It comes from one shared module, `tier2/investigation_view.py`, which the helpers in `web/routers/case_analyze_pages.py` move into: `_derive_view`, `_evidence_rows`, `_overrule_text`, `_snapshot`, `_present_run` and the stall rule.
    - The Jinja page calls the same module until §8 retires it.
    - Returns `404` for an unknown case.
-4. **Case detail names.** `GET /api/tier2/cases/{id}` gains:
+4. **Case detail names and page fields.** `GET /api/tier2/cases/{id}` gains:
    - `concluded_by_name`;
    - `author_name` on each note;
-   - the per-head supplement fields the Jinja page adds (`cases_pages._enrich_heads`).
+   - the per-head supplement fields the Jinja page adds (`cases_pages._enrich_heads`): `raw_log`, `raw_log_truncated`, `risk_band` (never the bare `risk_score`), `last_seen_at`;
+   - `ongoing` and `ongoing_last_seen`, computed by the same rule as `_enrich_heads` (a head still `escalated_tier2` with `last_seen_at` newer than `last_analyzed_at`, or `created_at` when the case was never analysed).
+
+   The rule moves into a shared function, used by both routes until §8.
 5. **Real-time channel (DEC-162).**
    - **Migration:** a trigger on `alerts`, `AFTER INSERT OR UPDATE` of the queue- and page-visible columns, runs `pg_notify('alerts_changed', json {alert_id, op})`.
    - **Route:** `GET /api/ws`, a WebSocket in an async router. It uses one LISTEN connection per app process and an in-process hub.
@@ -198,6 +219,21 @@ Each item is a card: one Coder on Sonnet 5.5 xhigh and one Reviewer. Each is a f
      - The token is never taken from the URL.
    - **Dependency:** `websockets` is added to `backend/requirements.txt`, because uvicorn is installed without `[standard]` today.
    - **Cases:** v1.0 keeps them on refetch-after-mutation. A `cases` trigger is v1.1.
+   - **Migration number and application.**
+     - It is `docs/Schema/018_*.sql`.
+     - The Owner applies it to the live database with `make migrate PY=.venv/bin/python`, as for every migration.
+     - Tests and checks that pin "17 migrations" are updated by the same card, such as the restore-drill guard of P8-T07.
+     - The signed P8-T02 drill record stays as history.
+6. **The pilot's metrics in `eval/ops_export.py`.** Today every §6 human-decision metric prints either "not measured" or "descriptive, n = …", with the stale reason "the Tier-1 console was deprioritized (DEC-116)". Nothing computes the pilot's figures, so a pilot run on React would produce no result. This card:
+   - reads the pilot window: its start is recorded by the Director in STATE when the Owner starts, and its end is the cut-off;
+   - computes, per arm (`suggestion_visible`) and per person:
+     - decisions by type;
+     - the median acknowledge → decide time;
+     - ①'s agreement with the human decision on the **blind arm only** (humans there did not see ①);
+   - splits each figure by `alerts.source`, so the lab attack days (`lab`) and live traffic (`wazuh`) stay distinguishable;
+   - prints every figure with its n and denominator;
+   - updates the stale reasons: ② was built and run (DEC-154), and the digest is live (P5). The ② usefulness rating stays "not measured", because v1.0 has no rating control.
+   - Its tests use a scratch database with seeded decisions.
 
 The cookie that `POST /api/auth/login` sets stays unchanged in v1.0; the Jinja admin pages still use their own cookie login. React ignores the cookie. Removing it belongs to v1.1, with the last Jinja pages.
 
@@ -245,6 +281,8 @@ The cookie that `POST /api/auth/login` sets stays unchanged in v1.0; the Jinja a
   - The Owner runs the lab attack scenarios and normal activity. Attack runs and container writes are the Owner's.
   - The Director watches read-only: queries and the UI.
   - Every defect goes into `docs/plan/ui-real-data-test.md`: steps, expected, actual, severity. Each becomes a fix card with a Coder and a Reviewer, and is re-tested the same day where possible.
+  - Attack windows are tagged the way the lab already does it (`lab_tag.py`, run by the Owner), so the pilot figures (§5.6) can separate attack-day decisions from live traffic.
+  - The admin still signs in separately on port 8000 for the Jinja admin pages. That is a known v1.0 seam and is not a defect.
 
 ## 8. Retiring the Jinja Tier-1/Tier-2 pages (day 4, 03/10)
 
@@ -267,8 +305,8 @@ The Owner's schedule: 4 days to build, then 3 days of real-log and real-attack t
 | When | Work |
 |---|---|
 | 30/09 afternoon | Plan and cards. Dispatch §5.1, §5.2, §5.5 and the frontend scaffold (build, lint, test, Docker, nginx, compose, Makefile). |
-| 01/10 | §5.3 and §5.4. Auth and login, the queue with its live client, the alert page with the decision panel. Owner: `up -d --build ui`, then rebuild `app` and `worker`. **The pilot starts on React Tier-1** once this flow is merged. |
-| 02/10 | The case list and case page with the ② column; the e2e suite. |
+| 01/10 | §5.3 and §5.4. Auth and login, the queue with its live client, the alert page with the decision panel. Owner: `make migrate`, then `up -d --build ui`, then rebuild `app` and `worker`. **The pilot starts on React Tier-1** once this flow is merged, and the Director records the start time in STATE. |
+| 02/10 | The case list and case page with the ② column; §5.6, the pilot metrics; the e2e suite. |
 | 03/10 | §8 retirement, the runbook section for `ui`, the full suite. Build complete. |
 | 04–06/10 | Real logs and real attacks, the defect log, fix cards, re-tests. |
 | 07/10 12:00 | Cut-off. P8-T06 close-out: operations export with pilot figures, `docs/limitations.md`, tag `v1.0`. |
