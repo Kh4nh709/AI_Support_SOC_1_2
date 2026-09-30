@@ -5,7 +5,7 @@ Every command in those five sections runs **from the primary checkout**, in one 
 
 ## Start and stop
 
-`db` is PostgreSQL 16 on port `55432` (`DB_PORT`, volume `pgdata`), `app` is uvicorn on port `8000`, `worker` runs the `pull`, `pipeline`, `triage`, `health`, `digest` and `investigate` jobs (`backend/app/web/handlers/`, discovered by `iter_handlers()`; `investigate` is ②'s single-shot analysis, **② operations** below). **Every worker start re-arms three self-scheduling chains** — `pull` and `health` (`enqueue`, idempotent through the jobs table's partial unique index) and `digest` (`digest.ensure_scheduled`) — so a chain that died is repaired by `docker compose restart worker` alone, no other action (**Alarms**, below). The stack publishes both ports on every interface of the host (`docs/limitations.md` (xxxv)).
+`db` is PostgreSQL 16 on port `55432` (`DB_PORT`, volume `pgdata`), `app` is uvicorn on port `8000`, `worker` runs the `pull`, `pipeline`, `triage`, `health`, `digest` and `investigate` jobs (`backend/app/web/handlers/`, discovered by `iter_handlers()`; `investigate` is ②'s single-shot analysis, **② operations** below). **Every worker start re-arms three self-scheduling chains** — `pull` and `health` (`enqueue`, idempotent through the jobs table's partial unique index) and `digest` (`digest.ensure_scheduled`) — so a chain that died is repaired by `docker compose restart worker` alone, no other action (**Alarms**, below). The stack publishes both ports on every interface of the host (`docs/limitations.md` (xxxv)). `ui` is the React UI on port `8080`, loopback only (**UI (service `ui`)** below); since P10-T13 port `8000` serves the sign-in page, the three admin pages and the JSON API, and no analyst page.
 
 | action | command | expected |
 |---|---|---|
@@ -18,6 +18,23 @@ Every command in those five sections runs **from the primary checkout**, in one 
 | **up?** `db` | `pg_isready -h 127.0.0.1 -p "${DB_PORT:-55432}"` | `127.0.0.1:55432 - accepting connections` |
 | **up?** `app` | `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/login` | `200` *(not run by the agent)* |
 | **up?** `worker` | `docker compose logs --tail=5 worker` | lines such as `{"job_id": …, "job_type": "pull", "outcome": "succeeded", "ms": …}`, a `pull` about once a minute; then **What to watch**, first row *(not run by the agent)* |
+
+## UI (service `ui`)
+
+`ui` (P10-T07) is nginx serving the built React single-page app and proxying `/api/` and the WebSocket `/api/ws` to `app` on the **same origin** — the browser only ever talks to port `8080`. It is where tier1 and tier2 work the queue, the alert page and the case page. P10-T13 retired the Jinja versions of those pages: on port `8000` a signed-in tier1 or tier2 user who opens `/` sees one page, *"Dùng giao diện mới tại cổng 8080"*, with a link to the **same host name the user came in on and port `8080`** (`127.0.0.1:8000` → `http://127.0.0.1:8080/`, a LAN address likewise; a `Host` header that is not a plain host with at most one port gets no link, only the sentence); admin lands on `/admin/rules`. `/queue`, `/alerts/…` and `/cases…` answer `404` on port `8000` for everyone. The three admin pages (`/admin/labels`, `/admin/rules`, `/admin/digest`), `/login` and every `/api/*` route are unchanged. Every command below runs from the primary checkout; *(not run by the agent)* — the agent runs no `docker` command.
+
+| what | command | expected |
+|---|---|---|
+| where it listens | `docker-compose.yml`, service `ui`: `ports: ["127.0.0.1:8080:80"]` | loopback only, **plain HTTP** (no TLS, so the session cookie is not `Secure`: **Pilot** §7). It is reached the way `app` is, through the Owner's tunnel. **Exposing it on a LAN interface is the Owner's decision, made by editing that `ports` line in `docker-compose.yml`**, then `docker compose up -d ui`. The link on port `8000`'s home page says `8080` (`NEW_UI_PORT` in `web/routers/pages.py`; `test_the_new_ui_port_is_the_one_compose_publishes` fails if the compose file stops publishing it) — publish another host port and that constant changes with it. |
+| **up?** `ui` | `docker compose ps ui` · `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/` · `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/api/auth/me` | `ui` `Up …` · `200` (the page) · `401` without a session (the proxy reached `app`; `502` means it did not, below). |
+| after a **frontend change** (anything under `frontend/`) | `docker compose up -d --build ui` | the image holds the build, it is **not** a mount: `restart ui` and a plain `up -d ui` keep serving the old build. Reload the page; `index.html` is served `no-cache`, and an old tab's hashed chunks are gone after the redeploy (a `404`, never `index.html`), so an open tab may need a reload. |
+| after a **compose change** (`ports`, `restart`, `depends_on` of `ui`) | `docker compose up -d ui` | the container is recreated with the new settings, no build. |
+| after a **backend-only change** | `docker compose restart app` | `ui` is not touched: it resolves `app` again at every request (`resolver 127.0.0.11 valid=10s` in `frontend/nginx.conf`), so a recreated `app` gets a new address without `ui` being restarted. `502` on `/api/` for a few seconds while `app` starts is that, not a fault; one that lasts: `docker compose ps app`. |
+| the WebSocket `/api/ws` | `location /api/ws` in `frontend/nginx.conf` passes `Upgrade` and `Connection: upgrade` (HTTP/1.1) and sets `proxy_read_timeout 1h` · a browser's Network tab, filter *WS*: `/api/ws` | status `101`, then the frames `ready` and `alerts.changed`. The token is the first frame, never the URL (`web/routers/live_ws.py`), so nothing to look for in an access log. Closed with `4401` → the UI sends the user to sign in again; anything else → it falls back to polling (`frontend/src/live/poll.ts`) and the queue still refreshes, only slower. Traffic that passes through another proxy in front of `ui` must forward the same two headers, or the socket never opens. |
+| the CSP | `curl -sI http://127.0.0.1:8080/ \| grep -i '^content-security-policy'` | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'` — set in `frontend/nginx.conf` on every response (`always`) and pinned verbatim by `frontend/src/deploy.test.ts`. No inline script, no CDN, no external font or API. A *"Refused to load …"* message in the browser console means the page tried to reach something else: fix the page, do not loosen the header. The Jinja pages on `8000` (login and the admin console) are a different origin and load HTMX from a pinned cdnjs URL (`web/templating.py`); they carry no such header. |
+| the logs | `docker compose logs --tail=50 ui` · `docker compose logs --tail=50 app` | nginx's access and error lines go to the container's own stdout and stderr — no log file in the repository, and the SPA writes none (an error in the page shows only in the browser's console). The API's side of any `/api/*` call is in the `app` log. |
+| the browser suite | `make ui-e2e` | named here only: it is P10-T12's Playwright run, set up and described in that card's report. `make ui-test` and `make ui-lint` run the unit tests and the checks with no stack. |
+| **rollback** of P10-T13 (the Jinja pages back on `8000`) | `git revert -m 1 <the merge commit of P10-T13>` on `main` (a fast-forwarded merge has no merge commit: `git revert` each `P10-T13:` commit, newest first), then `docker compose restart app` | the code is bind-mounted, so a restart is enough — no build, and `ui` is not touched: the React UI keeps working on `8080` beside the Jinja pages, as it did before P10-T13. Nothing in the database changed. |
 
 ## Environment keys
 
@@ -64,7 +81,7 @@ The 62 keys of `.env.example`, one row each, no values. `.env.example` is genera
 | `LLM_PRICE_OUT_PER_M` | USD per million output tokens | default | no |
 | `PROMPT_TOTAL_BUDGET_TOKENS` | ①'s prompt budget | default | no |
 | `CASE_PROMPT_BUDGET_TOKENS` | ②'s dossier budget, in estimated tokens (`tier2/dossier.py`); over it the dossier is cut and each cut is recorded (**② operations**) | default | no |
-| `ANALYZE_QUOTA_PER_USER_DAY` | the analyses one user may start per day (`web/routers/tier2_runs.py` for the API, `web/routers/case_analyze_pages.py` for the page); over it the API answers 429 (**② operations**) | default | no |
+| `ANALYZE_QUOTA_PER_USER_DAY` | the analyses one user may start per day (`web/routers/tier2_runs.py`, which the case page of the React UI calls); over it the API answers 429 (**② operations**) | default | no |
 | `NEVER_AUTOCLOSE_AGENTS` | agents whose alerts are never auto-closed | default | no |
 | `AUTOCLOSE_RULE_WIDTH_PCT` | an auto-close rule that closes more than this share of a week's alerts is reported as too wide | default | no |
 | `REVIEW_DELTA_TOLERANCE` | a decision is refused (409) when the alert grew by more occurrences than this since it was seen | default | no |
@@ -252,7 +269,7 @@ The ② assistant (P5-T04, DEC-151) reads one case and writes an investigation f
 
 ### Running an analysis
 
-On a case page, a **tier2** or **admin** session sees the ② panel (`Trợ lý điều tra ②`). The panel moves through four states:
+On a case page, a **tier2** or **admin** session sees the ② panel (`Trợ lý điều tra ②`). The case page is the React UI (`http://127.0.0.1:8080/`, **UI (service `ui`)** above); the Jinja case page this section was first written against retired in P10-T13, and the React panel uses the same state texts (`frontend/src/strings.ts`). The panel moves through four states:
 
 | state | what the page says | what you can do |
 |---|---|---|
@@ -331,6 +348,8 @@ psql "$DATABASE_URL" -Atc "select created_at, stopped_by, cost_usd, run_id from 
 ## Pilot
 
 > **26/09/2026 (P8-T03).** Not run. The Tier-1 console this procedure needs (P4-T03/T05/T06) was deprioritized and cut (DEC-116), so no human-decision pilot took place. The procedure is kept as designed. What ran instead is recorded in `docs/results/operations.md` (P8-T01/T06).
+
+> **30/09/2026 (P10-T13).** The Jinja queue and alert pages this procedure names (`/queue`, `/alerts/{id}`, P4-T05) are retired; the Tier-1 console is now the React UI on port `8080` (**UI (service `ui`)** above). Where a step below has the analyst open the queue, or an alert, in a browser on `127.0.0.1:8000`, read `http://127.0.0.1:8080/`. `http://127.0.0.1:8000/login` still answers `200` and `GET /` there points a signed-in analyst to port `8080`. The steps are otherwise kept as designed; this note is the only edit to this section.
 
 Addressed to the two people who run it — the Owner and the advisor (context pack §11: no agent starts the pilot, seeds an account, or tells the advisor the rule). Every command below is pasted **from the primary checkout** (`/project/project/AI_Support_SOC_1_2`, branch `main`, `.env` present); an agent's worktree has no `.env` and must never be the place these run. Commands, not prose: the seconds are the deliverable (`docs/lab-run-log.md`).
 
