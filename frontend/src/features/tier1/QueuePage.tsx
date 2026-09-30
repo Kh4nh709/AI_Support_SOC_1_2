@@ -43,7 +43,7 @@ const COLUMNS: readonly Column<QueueRow>[] = [
             title={S.queue.retriage}
             className="ml-2 text-medium"
           >
-            ⟳
+            {S.queue.retriageMark}
           </span>
         )}
       </>

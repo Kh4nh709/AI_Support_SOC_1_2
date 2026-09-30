@@ -98,6 +98,8 @@ export const S = {
     tableLabel: "Các cụm alert đang chờ",
     loadError: "Không tải được hàng đợi",
     retriage: "Số lần xuất hiện đã tăng mạnh — cần phân tích lại",
+    /** The sign beside a row that needs a new triage; its words are `retriage`. */
+    retriageMark: "⟳",
     rule: (id: string) => `rule ${id}`,
     bandCounts: "Số cụm theo mức",
     bandChip: (label: string, n: number) => `${label} ${n}`,

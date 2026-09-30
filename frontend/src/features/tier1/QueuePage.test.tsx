@@ -66,7 +66,10 @@ const row = (over: Partial<QueueRow> = {}): QueueRow => ({
   ...over,
 });
 
-/** What the server sends for a blind, undecided head: the ① keys are not there at all. */
+/**
+ * What the server sends for a blind, undecided head: the ① keys are not there at all, and (R17) neither are
+ * `triaged_count` and `needs_retriage`, which would say that ① ran.
+ */
 function blindRow(over: Partial<QueueRow> = {}): QueueRow {
   const stripped = row({ suggestion_visible: false });
   delete stripped.suggested_action;
@@ -74,6 +77,8 @@ function blindRow(over: Partial<QueueRow> = {}): QueueRow {
   delete stripped.gate_forced;
   delete stripped.triage_status;
   delete stripped.run_id;
+  delete stripped.triaged_count;
+  delete stripped.needs_retriage;
   return { ...stripped, ...over };
 }
 
@@ -184,7 +189,28 @@ describe("the rows", () => {
   it("marks a row that needs a new triage, for the screen reader too", async () => {
     respond = () => HttpResponse.json(answer([row({ needs_retriage: true })]));
     renderQueue();
-    expect(await screen.findByRole("img", { name: S.queue.retriage })).toBeInTheDocument();
+    const mark = await screen.findByRole("img", { name: S.queue.retriage });
+    expect(mark).toBeInTheDocument();
+    // The glyph is a string of strings.ts, like every other word or sign of the page.
+    expect(S.queue.retriageMark).toBe("⟳");
+    expect(mark).toHaveTextContent(S.queue.retriageMark);
+  });
+
+  it("shows no ⟳ for a row the server sent without needs_retriage (R17: a blind head), nor for false", async () => {
+    // A blind head is sent with neither `triaged_count` nor `needs_retriage`: even with a count of 12 that
+    // would have lit it, the page has nothing to show — and says nothing of ① having run.
+    respond = () =>
+      HttpResponse.json(
+        answer([
+          blindRow({ alert_id: "b1", description: "blind head", occurrence_count: 12 }),
+          row({ alert_id: "v1", description: "visible head", needs_retriage: false }),
+        ]),
+      );
+    renderQueue();
+    await screen.findByRole("row", { name: /blind head/ });
+    expect(screen.getByRole("row", { name: /visible head/ })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: S.queue.retriage })).toBeNull();
+    expect(screen.queryByText(S.queue.retriageMark)).toBeNull();
   });
 
   it("shows the title and how many clusters are waiting", async () => {

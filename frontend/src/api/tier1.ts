@@ -8,6 +8,8 @@ import type { BandCode } from "./types";
  * One row of the queue. The blind arm (DEC-101) is decided by the server: on a blind, undecided head the
  * keys of the ① suggestion are ABSENT (not null), with `suggestion_visible` false. So `suggested_action`
  * and its four neighbours are optional here, and `"suggested_action" in row` is the test for "stripped".
+ * R17: `triaged_count` and `needs_retriage` are absent on such a head too, for a count that ticks or a ⟳
+ * that lights up would say that ① ran. Absent means "nothing to show", never "zero" or "no".
  */
 export type QueueRow = {
   alert_id: string;
@@ -17,13 +19,13 @@ export type QueueRow = {
   severity: string;
   agent_name: string;
   occurrence_count: number;
-  triaged_count: number;
+  triaged_count?: number;
   first_seen_at: string;
   last_seen_at: string;
   alert_time: string;
   suggestion_visible: boolean;
   status: string;
-  needs_retriage: boolean;
+  needs_retriage?: boolean;
   /** The Vietnamese label (`Thấp`, `Vừa`, `Cao`, `Rất cao`) of ruling R8, or null with no score. */
   risk_band: string | null;
   triage_status?: string | null;
