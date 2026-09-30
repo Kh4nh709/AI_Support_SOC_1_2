@@ -3070,3 +3070,70 @@ Decision:
      - No response carries a password, a hash, a DSN or a key.
      - Tests follow the project's rules: red steps, and scratch databases never named `soc_test`.
 Supersedes: nothing
+
+## DEC-160 · 2026-09-30 · The Tier-2 chat becomes an investigation assistant agent: our own tool loop on DeepSeek function calling (inspired by Hermes, not the Hermes framework), free reads across the system, every write behind a Tier-2 "Cho phép" approval, agentic RAG through a separate DeepSeek knowledge agent, and memory per case plus approved long-term memory
+Scope: **architecture** (an agent with tools, a knowledge index, memory) · **security** (tool access over attacker-influenced data) · **plan** (the largest item inside DEC-157's 07/10 window)
+Decided by: **the Owner**, 30/09. Quoted:
+- *"Trợ lý này có tool toàn quyền truy cập hệ thống … Trợ lý ai sẽ có tool, hệ thống rag, memory và hermes"*
+- *"Toàn quyền thật … cần thêm 1 tính năng là nút access allow thông báo cho tier 2 để biết. Nếu tier 2 đồng ý mới được ghi và sửa. Còn lại chỉ đọc. Giống như chức năng của claude bạn"*
+
+In brainstorming the Owner chose:
+- **Hermes:** "Agent tự viết, học theo Hermes".
+- **RAG:** *"agentic rag. Dùng thêm 1 ai riêng của deepseek để truy vấn tài liệu và phản hồi về"*.
+- **Memory:** "Case + dài hạn có duyệt".
+Drafted by: Director (Opus 5.5)
+Propagated to:
+- The canvas: `CaseChat.dc.html` shows tool traces, knowledge-agent sources, an approval card and a memory proposal. The page-level tab bar placed by the Owner is kept.
+- The UI design spec and its implementation plan.
+Decision:
+  1. **Runtime.** The agent loop is written in the backend worker. It is not the Hermes Agent framework; its tool loop, memory and skills follow Hermes' ideas.
+     - **Model access.** It uses DeepSeek function calling through the existing adapter, which keeps the cost guard, attempt-scoped `llm_runs` rows and the monthly cap.
+     - **Processing.** Each user question is one worker job. The job runs the tool loop with a step budget and a per-question token/cost budget, writes every model call to `llm_runs` (new pipeline values), and writes each tool call and result to the conversation, so the UI can show the trace by polling.
+  2. **Access: read freely, write only on approval.** This is the Owner's "toàn quyền" with an approval gate, like Claude Code's permission prompts.
+     - **Read tools run without asking.** They cover cases, alerts, correlation, enrichment lookups, the indexer through the read-only `soc_ro` role (bounded queries), rules, audit, playbooks and decision tables, memory, and the knowledge agent. Reads never return secrets: no password hash, DSN, key or `.env` value.
+     - **Write tools** cover case notes, case severity or conclusion, auto-close rule changes, saving a memory, and other typed actions the spec lists. Each one **pauses the run** and shows the analyst a "Cho phép / Từ chối" card.
+       - The card is rendered from the exact tool call (name plus arguments), never from the model's description of it.
+       - An approved call runs **as the approving user**, through the same domain functions the API uses, so role checks and invariants hold. A Tier-2 approval cannot perform an admin-only action.
+       - Audit records "proposed by the assistant (run X), approved by user Y".
+       - A denial goes back to the agent as the tool result.
+     - **Excluded in v1.0, on the Director's recommendation.** The Owner can add these later by DEC:
+       - a shell/command tool;
+       - a raw-SQL write tool;
+       - any tool that sends data out of the system: HTTP fetch, e-mail, webhooks.
+
+       Without an outbound channel, a prompt injection that steers the reads cannot exfiltrate what it reads.
+  3. **Untrusted tool output.**
+     - Every tool result derived from alert or log data is wrapped as untrusted data (the nonce scheme of ① and ②) and passes the injection scanner. Flagged results are marked in the trace.
+     - The approval gate is the control that stops injected text from turning into a write. A red-team test must show an instruction planted in a log line producing, at most, an approval card with its real arguments, and never an unapproved write.
+  4. **Agentic RAG.**
+     - A separate DeepSeek **knowledge agent**, reachable by the main agent as the `ask_knowledge` tool, plans queries, searches, reads chunks and returns a synthesis with cited sources.
+     - Its index lives in Postgres: document and chunk tables, full-text search plus trigram, no new infrastructure. The corpus: playbooks, the signed decision tables, the runbook, concluded cases and their notes, Wazuh rule descriptions, MITRE ATT&CK (an imported public dataset), and approved memories.
+     - The search interface is shaped so a vector index can be added later.
+  5. **Memory.**
+     - **Per case:** the conversation, meaning the questions, tool calls, results and answers, stored with the case and visible to Tier-2/admin.
+     - **Long-term SOC memory:** entries the agent can only *propose*. A Tier-2 "Lưu ghi nhớ" approval stores one, recording who approved it and from which run. Admin can list, edit and delete entries. The agent reads them through `search_memory` and the knowledge agent.
+     - Nothing is remembered without a human approval, which guards against poisoned logs planting false memories.
+  6. **Contract changes.** Each becomes a card with a Coder and a Reviewer. The spec fixes the names.
+     - **Migrations:** conversation and tool-call tables; approvals; memories; knowledge documents and chunks; `llm_runs.pipeline` widened for the assistant and the knowledge agent.
+     - **Routes:**
+       - conversation GET/POST per case;
+       - approve/deny for a pending call;
+       - memory admin CRUD;
+       - knowledge re-index (admin).
+     - **Job types:** an assistant turn and a knowledge re-index.
+     - **Event types:** question, tool call, approval, denial, memory saved.
+     - **Config keys:** the step budget, the per-question budget and the assistant quota.
+  7. **Supersedes part of DEC-158.** These points are replaced:
+     - its case-only scope (item 1);
+     - its single-call job (item 2.3);
+     - its "no tool use" invariant (item 3).
+
+     Kept from DEC-158: per-case storage, verified citations, audit, the Tier-2/admin restriction, and "not measured".
+  8. **Capacity.** This is the largest single item in the 7-day window. The plan orders the work as follows:
+     - **First:** the React Tier-1 flow, so the pilot can start.
+     - **Next, in parallel:** the assistant backend.
+     - **Then:** the Tier-2 React pages with the assistant panel, then the admin console.
+     - **Last:** retiring the Jinja pages.
+
+     The plan names a cut order in case the window slips: the MITRE import first, then the memory admin page, then the knowledge re-index job, falling back to a CLI.
+Supersedes: DEC-158 items 1, 2.3 and 3 (see item 7)
