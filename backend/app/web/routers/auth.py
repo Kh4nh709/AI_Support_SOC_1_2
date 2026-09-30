@@ -1,4 +1,4 @@
-"""`POST /api/auth/login` and `POST /api/auth/logout` (context pack §6.4).
+"""`POST /api/auth/login`, `POST /api/auth/logout` (context pack §6.4) and `GET /api/auth/me`.
 
 Login answers with the token in the body *and* sets the `soc_session` cookie,
 so the HTML pages (P4-T04) and the API share one login. The three login
@@ -68,3 +68,20 @@ def logout(conn: Conn, claims: Annotated[Claims, Depends(current_user)]) -> Resp
     response = Response(status_code=204)
     clear_session_cookie(response)
     return response
+
+
+@router.get("/api/auth/me")
+def me(conn: Conn, claims: Annotated[Claims, Depends(current_user)]) -> dict:
+    """The signed-in user, as the React header needs it on reload (P10-T01). The name
+    comes from the row, and the role from the verified token (`verify` already re-reads
+    the row's role on every request)."""
+    row = conn.execute(
+        "SELECT display_name FROM users WHERE user_id = %s", (claims.user_id,)
+    ).fetchone()
+    return {
+        "user_id": claims.user_id,
+        "username": claims.username,
+        "display_name": row[0] if row else None,
+        "role": claims.role,
+        "expires_at": _iso(claims.exp),
+    }
