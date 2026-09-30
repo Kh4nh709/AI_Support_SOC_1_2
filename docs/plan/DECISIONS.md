@@ -2976,3 +2976,50 @@ Decision:
      - The pilot starts only when the React Tier-1 flow is live, so the UI does not change mid-measurement.
   5. **Process.** The DEC-151 process holds: brainstorming, then spec, then plan; then one Coder (Sonnet 5.5 xhigh) and one Reviewer per card. The Owner also asked that the new UI be **tested against real data and fixed**.
 Supersedes: DEC-151's cut-off time (its process stands); the 02/10 submission date
+
+## DEC-158 · 2026-09-30 · Tier-2 gets an "Hỏi AI" chat on the case page, next to ②; the backend gains a case-scoped chat pipeline, planned as its own cards in the React-UI plan
+Scope: **plan** (scope addition inside DEC-157's 07/10 window) · **architecture** (a third LLM pipeline) · **security** (a user-driven model call over untrusted case data)
+Decided by: **the Owner** (*"Vẽ thêm chổ Tier 2 1 chức năng như cửa sổ chat với AI hổ trợ điều tra. và ghi vào plan code dưới backend cập nhật thêm tính năng này"*, 30/09)
+Drafted by: Director (Opus 5.5)
+Propagated to:
+- The canvas mock-up: artboard `CaseChat.dc.html`, plus tabs "Phân tích ②" / "Hỏi AI" on `Case.dc.html`.
+- The UI design spec and its implementation plan: the backend cards below, each with a Coder and a Reviewer (DEC-151).
+Decision:
+  1. **What it is.** On the case page, the AI column gets two tabs, "Phân tích ②" and "Hỏi AI".
+     - A Tier-2 or admin user asks free-text questions about **this case only**. The model answers from the same case dossier ② reads.
+     - Each answer carries citations checked against the dossier: `đã xác minh` or `không tìm thấy trích dẫn`.
+     - The model may answer "không đủ dữ liệu" instead of guessing.
+     - The conversation is stored with the case and visible to every Tier-2/admin user.
+     - "Chép vào ghi chú" reuses the existing notes endpoint.
+     - The chat never changes a case's state or conclusion.
+  2. **Backend plan.** Each numbered item below is a frozen-contract change and becomes a card in the plan. The spec fixes the exact names.
+     1. **A migration: a `case_chat_messages` table.**
+        - Columns: id, `case_id` FK, role `user`/`assistant`, `author_id` (NULL for the model), body, `run_id` → `llm_runs`, status `pending`/`done`/`failed`, `created_at`.
+        - Append-only, like `case_notes`.
+        - The same migration widens `llm_runs`' `pipeline CHECK (pipeline IN ('triage','investigate'))` to admit `'chat'`.
+     2. **Routes:**
+        - `GET /api/tier2/cases/{case_id}/chat` returns the history.
+        - `POST /api/tier2/cases/{case_id}/chat` takes a question and answers `202` with the pending message.
+        - Polling goes through the GET, following the `tier2_runs` analyze/poll pattern.
+     3. **A worker job type `chat`,** built like `tier2/investigate.run_investigate_job`:
+        - build the dossier with `tier2/dossier.build`;
+        - add the last few turns and the question;
+        - apply the same nonce-wrapped untrusted blocks, the per-block injection scan and the quote check (`_check_evidence`'s rule);
+        - write one `llm_runs` row per attempt with `pipeline='chat'`, `cost_usd` recorded, attempt-scoped transient rows;
+        - write the assistant message.
+     4. **A prompt and an output schema** (`answer`, `citations[{alert_id, quote}]`, `insufficient_data`) in `backend/app/llm/templates/output_schemas.json`.
+     5. **Audit event types** for a question asked and an answer written.
+  3. **Invariants carried over:**
+     - No tool use and no access beyond the case dossier.
+     - Tests run on the fake adapter only.
+     - A prompt-injection string inside an alert's log must not change the answer's behaviour; this is tested.
+     - Each paid call is costed.
+     - Tier-2/admin only.
+     - Cases hold only decided heads, so the blind arm (DEC-101) is not reachable through the chat. The dossier's existing rule decides what correlated context it shows.
+  4. **Open for the spec** (the Owner decides during design review):
+     - whether the chat shares ②'s daily quota (`ANALYZE_QUOTA_PER_USER_DAY`) or gets its own key;
+     - how many past turns the model sees;
+     - whether a concluded case stays readable-only or can still be asked;
+     - whether a job-plus-poll design (as ②) or a synchronous call is used. The Director recommends job-plus-poll, for consistency with the worker's retry and cost rules.
+  5. **Not measured.** Like ② (DEC-154), the chat is built and live, not measured. `docs/limitations.md` says so.
+Supersedes: nothing
