@@ -216,6 +216,8 @@ _SUGGESTION_KEYS = (
     "gate_forced",
     "triage_status",
     "run_id",  # ANALYST_HIDE also drops the queue row's top-level run_id (DEC-101)
+    "triaged_count",  # ... and the two counts that say how often ① ran (R17 / DEC-101)
+    "needs_retriage",
 )
 
 
@@ -269,6 +271,7 @@ def test_api_after_decision_suggestion_appears_and_payload_joins(db, client) -> 
 
     view = client.http.get(f"/api/tier1/alerts/{alert_id}").json()
     assert view["suggestion"]["suggested_action"] == "false_positive"
+    assert view["triaged_count"] == 1  # the counts come back with the verdict (R17)
 
     payload = db.execute(
         "SELECT payload FROM audit_events WHERE event_type = 'tier1.decided' AND subject_id = %s",
@@ -291,6 +294,7 @@ def test_api_visible_alert_shows_suggestion_before_decision(db, client) -> None:
     body = resp.json()
     assert body["suggestion"]["suggested_action"] == "false_positive"
     assert body["status"] == "queued_tier1"  # not yet decided
+    assert body["triaged_count"] == 0  # the visible arm keeps the counts (R17)
 
 
 # ---------------------------------------------------------------------------

@@ -186,7 +186,16 @@ def _fixture_view(source: str = "replay") -> dict[str, Any]:
 # The literal survivor sets (not derived from the module's constants).
 _ALL_KEYS = frozenset(_fixture_view())
 _ANALYST_BLIND_SURVIVORS = _ALL_KEYS - frozenset(
-    {"suggestion", "suggested_action", "confidence", "gate_forced", "triage_status", "run_id"}
+    {
+        "suggestion",
+        "suggested_action",
+        "confidence",
+        "gate_forced",
+        "triage_status",
+        "run_id",
+        "triaged_count",  # R17 / DEC-101: ① is the only first-time writer of `triaged_count`,
+        "needs_retriage",  # and `needs_retriage` is computed from it — both say "① ran"
+    }
 )
 _LABELING_SURVIVORS = frozenset(
     {
@@ -264,6 +273,8 @@ def test_constant_sets_are_the_card_verbatim():
         "gate_forced",
         "triage_status",
         "run_id",  # DEC-101
+        "triaged_count",  # R17 / DEC-101
+        "needs_retriage",  # R17 / DEC-101
     }
     assert ANALYST_HIDE <= LABELING_DENYLIST
     assert {"triaged_count", "needs_retriage"} <= LABELING_DENYLIST  # DEC-101
@@ -397,10 +408,28 @@ def test_analyst_mode_keeps_other_clusters_status():
     assert "triage_status" not in out
     assert "suggestion" not in out
     assert "run_id" not in out  # a blind row does not even say "① ran" (DEC-101)
-    assert out["triaged_count"] == 1  # analyst mode hides the verdict, not the counts
+    # R17: the counts go too — ① is the only first-time writer of `triaged_count`.
+    assert "triaged_count" not in out and "needs_retriage" not in out
+    assert out["occurrence_count"] == 3  # the cluster size itself is not ① metadata
     assert [row["status"] for row in out["correlation"]["rows"]] == ["closed_fp", "escalated_tier2"]
     assert out["correlation"]["samples"][0]["status"] == "closed_fp"
     assert out["status"] == "queued_tier1"  # the head's own status is not a ① key
+
+
+@pytest.mark.parametrize(
+    ("status", "suggestion_visible"),
+    [("queued_tier1", True), *[(state, False) for state in sorted(_DECIDED)]],
+)
+def test_analyst_mode_keeps_the_retriage_counts_on_the_visible_arm_and_once_decided(
+    status: str, suggestion_visible: bool
+):
+    """R17's other half: only a blind, undecided head loses `triaged_count`/`needs_retriage`."""
+    out = strip(
+        _fixture_view(), status=status, suggestion_visible=suggestion_visible, mode="analyst"
+    )
+
+    assert out["triaged_count"] == 1
+    assert out["needs_retriage"] is False
 
 
 def test_is_decided():

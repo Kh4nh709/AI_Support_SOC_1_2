@@ -7,6 +7,9 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
   computed at query time, `risk_score DESC NULLS LAST`, `first_seen_at ASC`, `NOT
   is_synthetic`, OFFSET paging. P10-T02 adds the optional `band`/`category`/`agent`/`status`
   filters and `counts_by_band` for the React queue; with none of them it is what it was.
+  R17: `needs_retriage` leads the order only for a head whose `needs_retriage` the analyst may
+  see (the visible arm, or a status in `visibility.SHOW_STATES`) — a blind, undecided head
+  sorts by risk and arrival alone, so its position cannot say "① ran" (DEC-101).
 - `get_alert_view` — everything the detail page (P4-T05) and the labelling page (P6-T02)
   render: the head, its targeted accounts, the ±2 h correlation *now*, the playbook, the ①
   suggestion, the acknowledger's name.
@@ -235,6 +238,21 @@ _QUEUE_COLUMNS = (
     "gate_forced",
     "needs_retriage",
 )
+_NEEDS_RETRIAGE_SQL = """(a.triaged_count > 0 AND
+            (a.occurrence_count >= a.triaged_count * %(retriage_factor)s
+             OR a.occurrence_count - a.triaged_count >= %(retriage_abs_delta)s))"""
+# R17 / DEC-101: ① is the only first-time writer of `triaged_count`, so on a blind, undecided
+# head `needs_retriage` turning on — and the row jumping to the top with it — would say "①
+# just ran" (`visibility.strip` drops the two keys for the same rows). The sort key therefore
+# counts `needs_retriage` only where the analyst may see it: on the visible arm, or once the head
+# is in `visibility.SHOW_STATES`. That list travels as a bound parameter read from the module at
+# call time (`list_queue`), never as a literal copied into the SQL, so the ordering and `strip`
+# cannot disagree about what a decided head is. `COALESCE`: a NULL flag sorts as blind, as
+# `strip` treats a falsy one — `NULL` would otherwise sort first under `DESC`.
+_NEEDS_RETRIAGE_SORT_SQL = (
+    f"({_NEEDS_RETRIAGE_SQL}\n"
+    "            AND (COALESCE(a.suggestion_visible, false) OR a.status = ANY(%(show_states)s)))"
+)
 _QUEUE_SQL = """
     SELECT a.alert_id, a.rule_id, a.description, a.category, a.severity, a.agent_name,
            a.risk_score, a.occurrence_count, a.triaged_count, a.first_seen_at, a.last_seen_at,
@@ -243,9 +261,7 @@ _QUEUE_SQL = """
            r.result->>'suggested_action',
            r.result->>'confidence',
            r.gate_result->>'forced',
-           (a.triaged_count > 0 AND
-            (a.occurrence_count >= a.triaged_count * %(retriage_factor)s
-             OR a.occurrence_count - a.triaged_count >= %(retriage_abs_delta)s)) AS needs_retriage
+           {needs_retriage} AS needs_retriage
     FROM alerts a
     LEFT JOIN LATERAL (
         SELECT run_id, result, gate_result
@@ -255,7 +271,7 @@ _QUEUE_SQL = """
         LIMIT 1
     ) r ON true
     WHERE {where}
-    ORDER BY needs_retriage DESC, a.risk_score DESC NULLS LAST, a.first_seen_at ASC
+    ORDER BY {retriage_sort} DESC, a.risk_score DESC NULLS LAST, a.first_seen_at ASC
     LIMIT %(limit)s OFFSET %(offset)s
 """
 _QUEUE_COUNT_SQL = "SELECT count(*) FROM alerts a WHERE {where}"
@@ -331,8 +347,9 @@ def list_queue(
     """One page of the Tier-1 queue in the phase-6 order. Each row carries the queue
     columns plus `risk_band` and **minus** `risk_score`, already passed through
     `visibility.strip(mode="analyst")` — a blind, undecided head has no
-    `suggested_action`/`confidence`/`gate_forced`/`triage_status` keys at all, under every
-    filter.
+    `suggested_action`/`confidence`/`gate_forced`/`triage_status`/`run_id` keys and no
+    `triaged_count`/`needs_retriage` (R17) at all, under every filter, and its `needs_retriage`
+    does not affect where it sorts (see `_NEEDS_RETRIAGE_SORT_SQL`).
 
     Filters (P10-T02), all optional and ANDed: `band` — one of `BAND_CODES`
     (`low|medium|high|critical`), the score range `risk_band` labels with the matching name;
@@ -353,11 +370,16 @@ def list_queue(
 
     where, params = _filters(band, category, agent, status, actor_id, with_band=True)
     cur = conn.execute(
-        _QUEUE_SQL.format(where=where),
+        _QUEUE_SQL.format(
+            where=where,
+            needs_retriage=_NEEDS_RETRIAGE_SQL,
+            retriage_sort=_NEEDS_RETRIAGE_SORT_SQL,
+        ),
         {
             **params,
             "retriage_factor": RETRIAGE_FACTOR,
             "retriage_abs_delta": RETRIAGE_ABS_DELTA,
+            "show_states": sorted(visibility.SHOW_STATES),
             "limit": page_size,
             "offset": offset,
         },

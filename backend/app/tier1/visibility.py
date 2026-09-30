@@ -7,7 +7,7 @@ parameter here. `strip` rebuilds the dict it is given and never mutates it.
 
 | mode       | when                                                  | drops                                                   | why |
 |------------|-------------------------------------------------------|---------------------------------------------------------|-----|
-| `analyst`  | `suggestion_visible` is false **and** `status` is not in `SHOW_STATES` | `ANALYST_HIDE` at the **top level** only | the blind arm: the analyst may know they are on it (`suggestion_visible` stays) but not what the model said; `triage_status` goes too because "ready"/"unavailable" leaks whether ① produced a verdict, and so does the queue row's top-level `run_id` — a blind row must not even say "① ran" (DEC-101). Nested `correlation` rows keep their `status` — that is *other* clusters' history, which an analyst may see. |
+| `analyst`  | `suggestion_visible` is false **and** `status` is not in `SHOW_STATES` | `ANALYST_HIDE` at the **top level** only | the blind arm: the analyst may know they are on it (`suggestion_visible` stays) but not what the model said; `triage_status` goes too because "ready"/"unavailable" leaks whether ① produced a verdict, and so does the queue row's top-level `run_id` — a blind row must not even say "① ran" (DEC-101). `triaged_count` and `needs_retriage` go for the same reason (R17): ① is the only first-time writer of `triaged_count`, so a count that ticks or a ⟳ that lights up says "① just ran" — and the queue's sort key ignores `needs_retriage` for such a head, or the row's move to the top would say it. Nested `correlation` rows keep their `status` — that is *other* clusters' history, which an analyst may see. |
 | `analyst`  | otherwise (visible arm, or already decided)           | nothing — an equal copy                                 | once decided, the ① verdict is evaluation material (P8's agreement metric); `auto_closed` is in `SHOW_STATES` because D8's digest (P5) reviews auto-closed clusters *against* ①. A reopened alert (A17 → `queued_tier1`) is blind again. |
 | `labeling` | **always**, whatever the two flags say                | `LABELING_DENYLIST` and every key starting with one of `LABELING_PREFIXES`, **recursively** through nested dicts and lists | `source` — DEC-019: `replay` vs `wazuh` lets a labeller infer the storm day; `status` — a pilot decision (a correlated cluster's `closed_fp` too) is human context the labeller must reach on their own; the rest is LLM-derived (`suggestion`, `gate*`, `verifier*`, `llm_*`, `run_id`; `triaged_count`/`needs_retriage` say how often ① ran — DEC-101) or enrichment (`risk_*`, `*_context`, `lookup_status`) the labeller must not be primed with. |
 """
@@ -24,8 +24,22 @@ SHOW_STATES: frozenset[str] = frozenset(
 
 #: The keys a blind, undecided head loses in analyst mode — the ① verdict and everything
 #: that would let an analyst infer it, including that ① ran at all (`run_id`, DEC-101).
+#: R17: `triaged_count` and `needs_retriage` are on the list too — ① is the only first-time
+#: writer of `triaged_count` (`tier1/triage.py`, +1 per run) and `needs_retriage` is computed
+#: from it, so on a blind head a counter that ticks or a ⟳ that lights up says "① just ran",
+#: the very thing the alerts NOTIFY trigger (migration 018, R12) is silent about. The queue's
+#: sort key leaves `needs_retriage` out for such a head too (`queue._NEEDS_RETRIAGE_SORT_SQL`).
 ANALYST_HIDE: frozenset[str] = frozenset(
-    {"suggestion", "suggested_action", "confidence", "gate_forced", "triage_status", "run_id"}
+    {
+        "suggestion",
+        "suggested_action",
+        "confidence",
+        "gate_forced",
+        "triage_status",
+        "run_id",
+        "triaged_count",
+        "needs_retriage",
+    }
 )
 
 #: Everything a labeller must never receive, at any depth (module docstring, row 3).

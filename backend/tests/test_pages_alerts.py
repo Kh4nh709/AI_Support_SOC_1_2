@@ -266,8 +266,9 @@ def test_queue_page_lists_band_not_score(db, client) -> None:
 
 
 def test_queue_needs_retriage_first_with_marker(db, client) -> None:
-    normal_id = _queued(db, risk_score=90)
-    retriage_id = _queued(db, risk_score=5)
+    # Visible arm: on a blind head the marker and the order would say "① ran" (R17 / DEC-101).
+    normal_id = _queued(db, risk_score=90, suggestion_visible=True)
+    retriage_id = _queued(db, risk_score=5, suggestion_visible=True)
     # needs_retriage requires triaged_count > 0 AND a big enough occurrence_count
     # delta (RETRIAGE_FACTOR=10, RETRIAGE_ABS_DELTA=200) — a direct UPDATE of a
     # non-status column, in a test only (card's working rules).
@@ -285,6 +286,25 @@ def test_queue_needs_retriage_first_with_marker(db, client) -> None:
     row_start = resp.text.rfind("<tr", 0, retriage_pos)
     row_end = resp.text.index("</tr>", retriage_pos)
     assert "⟳" in resp.text[row_start:row_end]
+
+
+def test_queue_blind_retriage_head_has_no_marker_and_does_not_jump_the_queue(db, client) -> None:
+    """R17 / DEC-101 on the Jinja page: a blind head that ① has triaged and that then grew
+    shows no ⟳, no `data-needs-retriage`, and sorts by risk like any other head."""
+    normal_id = _queued(db, risk_score=90, suggestion_visible=False)
+    retriage_id = _queued(db, risk_score=5, suggestion_visible=False)
+    db.execute(
+        "UPDATE alerts SET triaged_count = 1, occurrence_count = 250 WHERE alert_id = %s",
+        (retriage_id,),
+    )
+
+    resp = client.http.get("/queue")
+    assert resp.status_code == 200, resp.text
+    assert resp.text.index(normal_id) < resp.text.index(retriage_id), "risk decides, not ①"
+    row_start = resp.text.rfind("<tr", 0, resp.text.index(retriage_id))
+    row_end = resp.text.index("</tr>", resp.text.index(retriage_id))
+    assert "⟳" not in resp.text[row_start:row_end]
+    assert "data-needs-retriage" not in resp.text[row_start:row_end]
 
 
 def test_queue_blind_row_shows_dash_and_no_verdict_text(db, client) -> None:
