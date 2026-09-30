@@ -261,6 +261,12 @@ def test_band_filter_agrees_with_risk_band_at_every_edge(db, code):
     assert null_id not in _ids(page)
     assert page.total == len(expected)
     assert {_CODE_OF_LABEL[r["risk_band"]] for r in page.rows} == {code}
+    # The chips must agree with the list: `counts_by_band`'s CASE puts every edge score in the
+    # same band as `risk_band()` and the band filter do — two per band, and the NULL in none.
+    assert page.counts_by_band == dict.fromkeys(_CODES, 2)
+    assert page.counts_by_band == {
+        c: sum(_CODE_OF_LABEL[risk_band(s)] == c for s in scores) for c in _CODES
+    }
 
 
 def test_band_filter_pages_over_the_filtered_set(db):
