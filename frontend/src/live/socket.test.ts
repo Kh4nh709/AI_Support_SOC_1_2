@@ -1,6 +1,6 @@
 // src/live/socket.test.ts — the /api/ws client with a fake WebSocket class: auth as the first frame, ready
 // makes it live, a close makes it offline and reconnects with a backoff, and the token is never in the URL.
-import { BACKOFF_BASE_MS, BACKOFF_MAX_MS, connectLive, liveUrl } from "./socket";
+import { BACKOFF_BASE_MS, BACKOFF_MAX_MS, STABLE_LIVE_MS, connectLive, liveUrl } from "./socket";
 
 /** The part of a browser WebSocket that socket.ts touches, driven from the test. */
 class FakeSocket extends EventTarget {
@@ -162,7 +162,7 @@ describe("the status", () => {
     expect(statuses).toEqual(["live", "offline"]);
   });
 
-  it("doubles the wait after each failure, up to a ceiling, and starts over after a ready", () => {
+  it("doubles the wait after each failure, up to a ceiling, and starts over once a socket has stayed live", () => {
     start();
     const waits: number[] = [];
     for (let i = 0; i < 8; i++) {
@@ -178,10 +178,48 @@ describe("the status", () => {
     expect(waits).toEqual([1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000]);
     last().open();
     last().say({ type: "ready" });
+    vi.advanceTimersByTime(STABLE_LIVE_MS);
     last().drop();
     const before = FakeSocket.all.length;
     vi.advanceTimersByTime(BACKOFF_BASE_MS);
     expect(FakeSocket.all.length).toBe(before + 1);
+  });
+
+  /** Drops the newest socket and says how long the next one took to come, in steps of 250 ms. */
+  const dropAndWait = (code = 1006): number => {
+    const before = FakeSocket.all.length;
+    last().drop(code);
+    let waited = 0;
+    while (FakeSocket.all.length === before) {
+      vi.advanceTimersByTime(250);
+      waited += 250;
+    }
+    return waited;
+  };
+
+  it("keeps backing off for a server that closes right after ready, and does not reconnect every second", () => {
+    start();
+    const waits: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      last().open();
+      last().say({ type: "ready" });
+      vi.advanceTimersByTime(100); // live, and gone before it could be called stable
+      waits.push(dropAndWait(1011));
+    }
+    expect(waits).toEqual([1000, 2000, 4000, 8000, 16000, 30000]);
+  });
+
+  it("starts the backoff over only for a socket that stayed live for STABLE_LIVE_MS, not for one ms less", () => {
+    start();
+    expect([dropAndWait(), dropAndWait()]).toEqual([1000, 2000]); // the next wait would be 4 s
+    last().open();
+    last().say({ type: "ready" });
+    vi.advanceTimersByTime(STABLE_LIVE_MS - 1);
+    expect(dropAndWait()).toBe(4000); // one ms short of stable: the count goes on
+    last().open();
+    last().say({ type: "ready" });
+    vi.advanceTimersByTime(STABLE_LIVE_MS);
+    expect(dropAndWait()).toBe(BACKOFF_BASE_MS); // stable: it starts over
   });
 
   it("treats a server outage (1011) like any other drop and reconnects", () => {

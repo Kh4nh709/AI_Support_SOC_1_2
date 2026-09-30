@@ -25,6 +25,11 @@ export type LiveOptions = {
 /** The first wait after a drop; each further failure doubles it, up to `BACKOFF_MAX_MS`. */
 export const BACKOFF_BASE_MS = 1_000;
 export const BACKOFF_MAX_MS = 30_000;
+/**
+ * A socket that has been live for this long was a good one, and a drop after it starts the backoff over.
+ * Resetting on `ready` alone would let a server that closes right after ready be called about once a second.
+ */
+export const STABLE_LIVE_MS = 10_000;
 
 const CLOSE_UNAUTHORIZED = 4401;
 const CLOSE_FORBIDDEN = 4403;
@@ -95,6 +100,7 @@ export function connectLive(opts: LiveOptions): () => void {
     socket = ws;
     let sentToken: string | null = null;
     let ready = false;
+    let readyAt = 0;
     const current = () => !stopped && socket === ws;
 
     ws.addEventListener("open", () => {
@@ -117,7 +123,7 @@ export function connectLive(opts: LiveOptions): () => void {
       if (frame === null) return;
       if (frame.type === "ready") {
         ready = true;
-        failures = 0;
+        readyAt = Date.now(); // `failures` is not reset here: see STABLE_LIVE_MS
         report("live");
       } else if (frame.type === "alerts.changed" && ready) {
         const change = changeOf(frame.body);
@@ -129,6 +135,8 @@ export function connectLive(opts: LiveOptions): () => void {
       if (!current()) return;
       socket = null;
       report("offline");
+      // Only a socket that stayed live for a while was a good one; the backoff starts over after it.
+      if (ready && Date.now() - readyAt >= STABLE_LIVE_MS) failures = 0;
       if (event.code === CLOSE_UNAUTHORIZED) {
         stopped = true;
         if (sentToken !== null) opts.onUnauthorized?.(sentToken);
