@@ -45,6 +45,7 @@ beforeEach(() => {
   invalidate = vi.spyOn(client, "invalidateQueries");
 });
 afterEach(() => {
+  vi.useRealTimers();
   setTokenSource(
     () => null,
     () => {},
@@ -154,17 +155,24 @@ describe("what a change does", () => {
     expect(invalidated()).toEqual(['["queue"]', '["alert"]']);
   });
 
-  it("does not fetch on the first live after mount: the fetch of the page that just opened is fresh", () => {
+  // The page's fetch starts before the socket does (child effects run before the parent's), and the server
+  // subscribes only after the auth frame and a check in the database: an alert committed in between is in
+  // neither the rows nor any message. So the first live after mount reads everything again, once.
+  it("fetches everything again on the first live after mount: what came before the server subscribed is in no message", () => {
     render(tree(session("tok-1")));
+    expect(invalidated()).toEqual([]); // nothing until the socket says live
     act(() => newest().onStatus("live"));
-    expect(invalidated()).toEqual([]);
+    expect(invalidated()).toEqual(['["queue"]', '["alert"]']);
   });
 
   it("fetches everything again when the socket is live again after a drop: what came meanwhile was missed", () => {
+    vi.useFakeTimers();
     render(tree(session("tok-1")));
     act(() => newest().onStatus("live"));
     act(() => newest().onStatus("offline"));
-    expect(invalidated()).toEqual([]); // the drop itself fetches nothing (the page polls)
+    expect(invalidated()).toEqual(['["queue"]', '["alert"]']); // the first live's: the drop itself adds none
+    act(() => vi.advanceTimersByTime(600)); // past the window of that first fetch
+    invalidate.mockClear();
     act(() => newest().onStatus("live"));
     expect(invalidated()).toEqual(['["queue"]', '["alert"]']);
   });
@@ -172,17 +180,19 @@ describe("what a change does", () => {
   it("fetches when the first live comes after a first attempt that failed: the page polled, or waited, meanwhile", () => {
     render(tree(session("tok-1")));
     act(() => newest().onStatus("offline")); // the socket never came up at all
+    expect(invalidated()).toEqual([]);
     act(() => newest().onStatus("live"));
     expect(invalidated()).toEqual(['["queue"]', '["alert"]']);
   });
 
-  it("tells a new session's first live from a reconnect: the new socket has not dropped yet", () => {
+  it("fetches on a new session's first live too: each socket subscribes after its own page's fetch", () => {
     const { rerender } = render(tree(session("tok-1")));
     act(() => newest().onStatus("live"));
-    act(() => newest().onStatus("offline"));
+    invalidate.mockClear();
     rerender(tree(session("tok-2")));
+    expect(invalidated()).toEqual([]); // the new socket is not live yet
     act(() => newest().onStatus("live"));
-    expect(invalidated()).toEqual([]);
+    expect(invalidated()).toEqual(['["queue"]', '["alert"]']);
   });
 
   it("does not fetch again when the socket goes offline (the page polls instead)", () => {

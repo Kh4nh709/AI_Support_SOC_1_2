@@ -534,24 +534,42 @@ describe("real time", () => {
     expect(await screen.findByRole("row", { name: /new arrival/ })).toBeInTheDocument();
   });
 
-  it("fetches nothing more when the socket first says live, and once when it is back after a drop", async () => {
+  // The fetch of the page starts before the socket does (child effects run before the parent's), and the server
+  // subscribes only after the auth frame and a check in the database (live_ws.py). An alert committed between
+  // the snapshot of the queue and the subscription is in neither the rows nor any message, and while the
+  // socket is live nothing polls: it would stay off the screen until some other alert changed.
+  it("shows an alert committed before the server subscribed once the socket is live, with no message", async () => {
     renderQueue();
     await screen.findByRole("row", { name: /sshd/ });
+    expect(screen.queryByRole("row", { name: /before the subscription/ })).toBeNull();
+    respond = () =>
+      HttpResponse.json(
+        answer([row(), row({ alert_id: "a2", description: "before the subscription" })]),
+      );
+    act(() => live().onStatus("live")); // ready: no alerts.changed was ever sent for a2
+    expect(await screen.findByRole("row", { name: /before the subscription/ })).toBeInTheDocument();
+  });
+
+  it("fetches once when the socket first says live, and once more when it is back after a drop", async () => {
+    renderQueue();
+    await screen.findByRole("row", { name: /sshd/ });
+    expect(requests).toHaveLength(1);
     act(() => live().onStatus("live"));
-    await new Promise((r) => setTimeout(r, 100));
-    expect(requests).toHaveLength(1); // the mount fetch is fresh
+    await waitFor(() => expect(requests).toHaveLength(2)); // the first live reads it all again
+    await new Promise((r) => setTimeout(r, 600)); // its window has closed
+    expect(requests).toHaveLength(2); // and once, not twice
     act(() => live().onStatus("offline"));
     act(() => live().onStatus("live")); // what came during the drop was not heard
-    await waitFor(() => expect(requests).toHaveLength(2));
+    await waitFor(() => expect(requests).toHaveLength(3));
   });
 
   // Review Focus 2: a pull of 500 alerts arrives as many messages; the queue is fetched about once per burst.
   it("fetches at most twice for a burst of 50 changes inside 100 ms", async () => {
     renderQueue();
     await screen.findByRole("row", { name: /sshd/ });
-    act(() => live().onStatus("live")); // the first live of the page: the fetch of its mount is fresh
-    await new Promise((r) => setTimeout(r, 100));
-    expect(requests).toHaveLength(1);
+    act(() => live().onStatus("live")); // the resync of a socket that just came up
+    await waitFor(() => expect(requests).toHaveLength(2));
+    await new Promise((r) => setTimeout(r, 600)); // its window has closed
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const started = Date.now();
     act(() => {
@@ -606,8 +624,7 @@ describe("real time", () => {
     await act(() => vi.advanceTimersByTimeAsync(30_000));
     expect(queueFetches(fetchSpy)).toBe(2);
 
-    act(() => live().onStatus("offline")); // the socket that failed to come up ...
-    act(() => live().onStatus("live")); // ... and then does: one resync, then no clock
+    act(() => live().onStatus("live")); // one resync, then no clock
     await act(() => vi.advanceTimersByTimeAsync(1_000));
     const afterResync = queueFetches(fetchSpy);
     await act(() => vi.advanceTimersByTimeAsync(120_000));

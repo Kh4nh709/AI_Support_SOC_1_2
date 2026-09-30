@@ -27,21 +27,17 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (token === null) return;
     const invalidator = createInvalidator(queryClient);
-    // Whether the socket has been down since it was last live (or since it was opened, if it never was).
-    let missed = false;
     const disconnect = connectLive({
       token: () => token,
       onChange: (change) => invalidator.push(change),
       onStatus: (status) => {
         setReport({ token, status });
-        if (status === "offline") {
-          missed = true;
-        } else {
-          // Changes that came while the socket was down were not heard: read it all again. The first live of a
-          // socket that never dropped needs none, for the fetch of the page that just opened is fresh.
-          if (missed) invalidator.push("many");
-          missed = false;
-        }
+        // Every live reads it all again, the first one after mount too. The fetch of the page starts before
+        // the socket does (child effects run before the parent's), and the server subscribes only after the
+        // auth frame and a check in the database (backend/app/web/routers/live_ws.py). An alert committed in
+        // between is in neither the rows nor any message, and while live nothing polls. The changes that came
+        // while the socket was down were not heard either. It goes through the throttle: one fetch.
+        if (status === "live") invalidator.push("many");
       },
       onUnauthorized: reportUnauthorized,
     });
