@@ -11,8 +11,13 @@ precondition, its DEC and the counted evidence, never as a zero.
 default the database's `now()`), section 6a computes the pilot's figures per arm (blind or
 visible, DEC-101) and per source (`wazuh`, `lab`, all): decisions by type, the median
 acknowledge → decide time on the database clock, and, on the blind arm only, ①'s agreement with
-the human decision. ① `needs_review` is no verdict: it is left out of the agreement's
-denominator and counted apart. The visible arm never gets an agreement figure. Without
+the human decision. ① is the suggestion as it was when the human decided: a `tier1.decided`
+event's own payload (`llm_suggestion`), and, for a `tier1.escalated` event, which records none,
+the latest proposer run created at or before it (a caveat line says a run in flight may be
+included). ① `needs_review` is no verdict: it is left out of the agreement's denominator and
+counted apart, and a small table crosses ①'s verdict with the human decision. The visible arm
+never gets an agreement figure. Section 6's ② usefulness row is "not measured" in v1.0 (no
+rating control, DEC-161), the `case.opened` count beside it being context. Without
 `--pilot-start` the section prints "not measured: pilot start not given" and no pilot query
 runs. The pilot has its own window: it is not the `--since`/`--until` window.
 
@@ -461,6 +466,8 @@ ORDER BY l.source""",
 _PILOT_END = "coalesce(%(pilot_end)s::timestamptz, now())"
 # One row per human decision: `tier1.decided` (payload `decision`: closed_fp, closed_benign) or
 # `tier1.escalated`, about a non-synthetic alert. The arm is `alerts.suggestion_visible` (DEC-101).
+# `recorded_suggestion` is what `transitions.decide` wrote into the event: ① as the console had it
+# when the analyst decided (NULL: no result then, or an escalation, whose payload has no ①).
 _PILOT_DECISIONS = f"""d AS (
   SELECT e.subject_id AS alert_id,
          e.actor_id,
@@ -470,7 +477,8 @@ _PILOT_DECISIONS = f"""d AS (
               WHEN e.payload->>'decision' = 'closed_benign' THEN 'benign'
          END AS decision,
          CASE WHEN a.suggestion_visible THEN 'visible' ELSE 'blind' END AS arm,
-         a.source
+         a.source,
+         e.payload->>'llm_suggestion' AS recorded_suggestion
   FROM audit_events e
   JOIN alerts a ON a.alert_id = e.subject_id AND NOT a.is_synthetic
   WHERE e.created_at >= %(pilot_start)s
@@ -493,6 +501,38 @@ _PILOT_TIMED = """t AS (
       AND x.created_at >= %(pilot_start)s
       AND x.created_at <= d.decided_at
   ) k ON true
+)"""
+# The blind arm's decisions, each with ① as it was when the human decided (`verdict`: escalate,
+# false_positive, needs_review, or no_result). A `tier1.decided` event recorded ① in its payload,
+# so that is what is read: a proposer row created before the decision but committed after it (a
+# triage job in flight) was never on the analyst's console, and `created_at` cannot tell. A
+# `tier1.escalated` event records none, so ① is the alert's latest proposer row created at or before
+# the decision, which may include a run in flight at that moment (the caveat printed in section 6a).
+# A latest row whose `result` is NULL, or a payload with no `llm_suggestion`, is `no_result`.
+_PILOT_VERDICT = """v AS (
+  SELECT x.source,
+         x.decision,
+         CASE WHEN x.suggested_action IN ('escalate', 'false_positive', 'needs_review')
+              THEN x.suggested_action
+              ELSE 'no_result'
+         END AS verdict
+  FROM (
+    SELECT d.source,
+           d.decision,
+           CASE WHEN d.decision = 'escalated'
+                THEN (SELECT r.result->>'suggested_action'
+                      FROM llm_runs r
+                      WHERE r.pipeline = 'triage'
+                        AND r.role = 'proposer'
+                        AND r.subject_id = d.alert_id
+                        AND r.created_at <= d.decided_at
+                      ORDER BY r.created_at DESC, r.run_id DESC
+                      LIMIT 1)
+                ELSE d.recorded_suggestion
+           END AS suggested_action
+    FROM d
+    WHERE d.arm = 'blind'
+  ) x
 )"""
 
 
@@ -539,29 +579,14 @@ Q_PILOT_AGREEMENT = Query(
     "Q31",
     "pilot: ① agreement with the human decision, blind arm only",
     f"""WITH {_PILOT_DECISIONS},
-v AS (
-  SELECT d.source, d.decision, s.suggested_action
-  FROM d
-  LEFT JOIN LATERAL (
-    SELECT r.result->>'suggested_action' AS suggested_action
-    FROM llm_runs r
-    WHERE r.pipeline = 'triage'
-      AND r.role = 'proposer'
-      AND r.subject_id = d.alert_id
-    ORDER BY r.created_at DESC, r.run_id DESC
-    LIMIT 1
-  ) s ON true
-  WHERE d.arm = 'blind'
-)
-SELECT CASE WHEN GROUPING(v.source) = 1 THEN 'all' ELSE v.source END AS source,
+{_PILOT_VERDICT}
+SELECT {_pilot_source('v')},
        count(*) AS decisions,
-       count(*) FILTER (WHERE v.suggested_action = 'needs_review') AS needs_review,
-       count(*) FILTER (WHERE v.suggested_action IS NULL
-                           OR v.suggested_action NOT IN ('escalate', 'false_positive',
-                                                         'needs_review')) AS no_result,
-       count(*) FILTER (WHERE v.suggested_action IN ('escalate', 'false_positive')) AS denominator,
-       count(*) FILTER (WHERE (v.suggested_action = 'escalate' AND v.decision = 'escalated')
-                           OR (v.suggested_action = 'false_positive'
+       count(*) FILTER (WHERE v.verdict = 'needs_review') AS needs_review,
+       count(*) FILTER (WHERE v.verdict = 'no_result') AS no_result,
+       count(*) FILTER (WHERE v.verdict IN ('escalate', 'false_positive')) AS denominator,
+       count(*) FILTER (WHERE (v.verdict = 'escalate' AND v.decision = 'escalated')
+                           OR (v.verdict = 'false_positive'
                                AND v.decision = 'false_positive')) AS agreed
 FROM v
 GROUP BY ROLLUP (v.source)
@@ -581,6 +606,18 @@ FROM t
 GROUP BY t.actor_id, t.arm, ROLLUP (t.source)
 ORDER BY t.actor_id, t.arm, GROUPING(t.source), t.source""",
 )
+Q_PILOT_CROSS = Query(
+    "Q33",
+    "pilot: ① verdict × human decision, blind arm only",
+    f"""WITH {_PILOT_DECISIONS},
+{_PILOT_VERDICT}
+SELECT {_pilot_source('v')},
+       v.verdict,
+       {_pilot_types('v')}
+FROM v
+GROUP BY ROLLUP (v.source), v.verdict
+ORDER BY GROUPING(v.source), v.source, v.verdict""",
+)
 
 #: The pilot's queries, run after `QUERIES`, and only when `--pilot-start` is given.
 PILOT_QUERIES: tuple[Query, ...] = (
@@ -588,6 +625,7 @@ PILOT_QUERIES: tuple[Query, ...] = (
     Q_PILOT_MEDIAN,
     Q_PILOT_AGREEMENT,
     Q_PILOT_PERSON,
+    Q_PILOT_CROSS,
 )
 
 #: Every query, in the order `collect` runs it and the document cites it.
@@ -629,12 +667,15 @@ QUERIES: tuple[Query, ...] = (
 @dataclass(frozen=True)
 class HumanMetric:
     """One architecture §6 online metric that only a human-decision pilot can produce. The first
-    evidence key is the metric's own n; every key's count is printed in the basis."""
+    evidence key is the metric's own n; every key's count is printed in the basis. `never` is the
+    value of a metric that cannot be measured in this release whatever its evidence counts: its
+    counts are context, printed in the basis and never as an n."""
 
     metric: str
     missing: str
     because: str
     evidence: tuple[str, ...]
+    never: str = ""
 
 
 #: Rows 0-2 without `--pilot-start`: what is missing, and where the figure comes from.
@@ -660,6 +701,7 @@ HUMAN_METRICS: tuple[HumanMetric, ...] = (
         "no ② rating recorded",
         "built and run, no rating control in v1.0 (DEC-154, DEC-161)",
         ("case",),
+        never="not measured: no rating control in v1.0 (DEC-161)",
     ),
 )
 GATE_FORCED_METRIC = "Gate-forced `needs_review` rate"
@@ -970,7 +1012,12 @@ def _autoclose_section(res: Mapping[str, list[tuple]]) -> list[str]:
 
 def _human_row(metric: HumanMetric, counts: Mapping[str, int]) -> list[str]:
     evidence = "; ".join(_EVIDENCE_LABEL[key].format(counts[key]) for key in metric.evidence)
-    if any(counts[key] for key in metric.evidence):
+    if metric.never:
+        # ②'s n is ratings, and v1.0 has no rating control (Director ruling R15): the evidence
+        # counted (`case.opened`) says a case was opened, not that anyone rated ②'s usefulness
+        value = metric.never
+        basis = f"{metric.missing}: {metric.because}; {evidence}, context only, not a rating count"
+    elif any(counts[key] for key in metric.evidence):
         value = f"descriptive, n = {counts[metric.evidence[0]]}"
         basis = f"descriptive only, not a pilot result: {metric.because}; {evidence}"
     else:
@@ -1006,18 +1053,19 @@ def _pilot_human_rows(res: Mapping[str, list[tuple]]) -> list[list[str]]:
             "",
         ),
         (
+            # n is what the agreement fraction is over, the denominator: the blind decisions
+            # whose ① had a verdict. The blind decisions themselves stay in the basis.
             HUMAN_METRICS[2],
             Q_PILOT_AGREEMENT,
-            blind,
-            "blind decisions",
+            denominator,
+            "agreement denominator",
             "no blind decision with a ① verdict in the pilot window",
-            f"; agreement denominator = {denominator}",
+            f"; blind decisions = {blind}",
         ),
     )
     rows = []
     for metric, query, n, label, empty, extra in specs:
-        measured = denominator > 0 if metric is HUMAN_METRICS[2] else n > 0
-        if measured:
+        if n > 0:
             value = f"measured, n = {n}"
             basis = (
                 f"measured over the pilot window: section 6a ({query.qid}); {label} = {n}{extra}"
@@ -1060,8 +1108,10 @@ def _architecture_section(
             "Three need the human pilot: with `--pilot-start` each is measured in section 6a "
             "over the pilot window, and without it each prints `not measured` beside the "
             "evidence counted over the export window, or `descriptive, n = k` when that "
-            "evidence is not zero. The digest and ② rows print the same beside their own "
-            "evidence."
+            "evidence is not zero. The digest row prints the same beside its own evidence. "
+            "The ② row is `not measured` in v1.0 whatever its evidence counts: there is no "
+            "rating control, so there is no rating to count (DEC-161), and the `case.opened` "
+            "count beside it is context."
         ),
         "",
         _table(["metric", "value", "basis"], rows),
@@ -1085,6 +1135,11 @@ def _architecture_section(
 
 ARMS = ("blind", "visible")
 _STANDARD_SOURCES = ("wazuh", "lab")
+#: A `tier1.escalated` event records no ①, so `Q31` and `Q33` read `llm_runs` for it.
+ESCALATION_CAVEAT = (
+    "escalations: ① taken as the latest run created at or before the decision; a run in flight "
+    "at that moment may be included"
+)
 
 
 def _source_order(present: set[str]) -> list[str]:
@@ -1154,6 +1209,22 @@ def _pilot_agreement_table(rows: Sequence[tuple]) -> str:
     return _table(headers, body)
 
 
+#: ①'s verdict as `Q31` and `Q33` classify it: `no_result` is no proposer row, a NULL `result`, or
+#: a recorded action that is none of the three. ① has no `benign` verdict.
+VERDICTS = ("escalate", "false_positive", "needs_review", "no_result")
+
+
+def _pilot_cross_table(rows: Sequence[tuple]) -> str:
+    by_key = {(source, verdict): counts for source, verdict, *counts in rows}
+    body = [
+        [source, verdict, *by_key.get((source, verdict), (0, 0, 0, 0))]
+        for source in _source_order({source for source, *_ in rows})
+        for verdict in VERDICTS
+    ]
+    headers = ["source", "① verdict", "false_positive", "benign", "escalated", "decisions"]
+    return _table(headers, body)
+
+
 def _pilot_person_table(rows: Sequence[tuple]) -> str:
     sources = _source_order({row[2] for row in rows})
 
@@ -1218,8 +1289,12 @@ def _pilot_section(res: Mapping[str, list[tuple]], pilot: PilotWindow | None) ->
             "two middle values when n is even."
         ),
         (
-            "- ① is the `suggested_action` of the alert's latest `proposer` `triage` row in "
-            "`llm_runs`, the gated verdict the queue shows."
+            "- ① is the gated verdict the queue shows (the `suggested_action` of the alert's "
+            "latest `proposer` `triage` row in `llm_runs`), as it was when the human decided. "
+            "A `tier1.decided` event recorded it in its payload (`llm_suggestion`, `llm_run_id`), "
+            "and that record is read, not `llm_runs` by time: the triage job still runs on an "
+            "escalated alert, and one still running at the decision has a `created_at` before "
+            "it although the analyst never saw its row."
         ),
         "",
         f"### Decisions by type ({Q_PILOT_DECISIONS.qid})",
@@ -1240,11 +1315,28 @@ def _pilot_section(res: Mapping[str, list[tuple]], pilot: PilotWindow | None) ->
         (
             "- ① `needs_review` is no verdict: it is left out of the denominator and counted in "
             "its own column. A decision with no ① result (no proposer row, or its `result` is "
-            "NULL) is counted in its own column too."
+            "NULL, at the decision) is counted in its own column too."
         ),
+        (
+            "- decisions (`tier1.decided`): ① is the event's `llm_suggestion`; a null "
+            "`llm_suggestion` (no `llm_run_id`) is no result at the decision, whatever run was "
+            "created since."
+        ),
+        f"- {ESCALATION_CAVEAT}",
         "- the visible arm has no agreement figure: its analyst saw ①.",
         "",
         _pilot_agreement_table(res[Q_PILOT_AGREEMENT.qid]),
+        "",
+        f"### ① verdict × human decision, blind arm only ({Q_PILOT_CROSS.qid})",
+        "",
+        (
+            "Every blind decision is in one row, by the ① it was taken against. ① has no "
+            "`benign` verdict: a human `benign` after ① `false_positive` is a disagreement in "
+            "the table above, and is a closure here. The counts are the agreement table's "
+            f"({Q_PILOT_AGREEMENT.qid}), split by the human decision."
+        ),
+        "",
+        _pilot_cross_table(res[Q_PILOT_CROSS.qid]),
         "",
         f"### Decisions per person ({Q_PILOT_PERSON.qid})",
         "",
