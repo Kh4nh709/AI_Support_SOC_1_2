@@ -3248,3 +3248,24 @@ Decision:
      - The cut-off stays at 07/10 12:00, followed by the P8-T06 close-out.
      - The pilot starts on React Tier-1 as soon as that flow is merged, planned for 01/10.
 Supersedes: nothing (it refines DEC-157 item 1)
+
+## DEC-164 · 2026-09-30 · The React queue can be sorted by last-seen time, occurrence count and agent, server-side; the default risk order and its blind-arm rule (R17) are unchanged, and no ①-derived field is ever a sort key
+Scope: **product** (the Tier-1 queue page and `GET /api/tier1/queue`) · **evaluation** (the blind arm, DEC-101)
+Decided by: **the Owner** (*"TRên UI cho phép sắp theo time, số lần, agent"*, 30/09). For the time key, the Owner chose "Lần cuối" (`last_seen_at`), the column the queue already shows.
+Drafted by: Director (Opus 5.5)
+Propagated to: plan card P10-T14 (`docs/plan/STATE.md`)
+Decision:
+  1. **API.**
+     - `GET /api/tier1/queue` takes `sort=risk|time|occurrences|agent` and `dir=asc|desc`.
+     - Each value maps to one fixed SQL fragment from a whitelist. Any other value gives a 422.
+     - `risk` is the default. It keeps today's order exactly: `needs_retriage` for visible-or-decided rows only (R17), then `risk_score DESC NULLS LAST`, then `first_seen_at ASC`.
+  2. **The other keys.**
+     - `time` sorts by `last_seen_at`, `occurrences` by `occurrence_count`, and `agent` by `agent_name` (NULLs last).
+     - Ties are broken by `risk_score DESC NULLS LAST`, then `first_seen_at ASC`, then `alert_id`, so paging is stable.
+     - `needs_retriage` plays no part in these orders.
+  3. **Blind arm.** No field that ① writes or derives (`triaged_count`, `needs_retriage`, `triage_status`, the suggestion, confidence, the gate) may ever be a sort key, so a row's position can never say "① ran" (DEC-101).
+  4. **UI.**
+     - The "Lần cuối", "Số lần" and "Agent" column headers sort on click and reverse on a second click, with an arrow and `aria-sort`.
+     - The first-click directions are: newest first, largest first, and A→Z.
+     - The sort lives in the URL next to the filters. Changing it returns to page 1, and live refresh keeps it.
+Supersedes: nothing (it extends DEC-162's queue; the P10-T02 filters are unchanged)
