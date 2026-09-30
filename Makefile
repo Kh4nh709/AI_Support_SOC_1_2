@@ -48,7 +48,7 @@ help:
 	@echo "  ui-install  npm ci in frontend/ (the React UI)"
 	@echo "  ui-lint     eslint + tsc --noEmit + prettier --check + npm audit (advisory) in frontend/"
 	@echo "  ui-test     the Vitest suite of frontend/ (TZ=UTC)"
-	@echo "  ui-e2e      the Playwright suite of frontend/ (needs: npx playwright install chromium)"
+	@echo "  ui-e2e      the Playwright suite of frontend/ on a scratch stack (needs: npx playwright install chromium, psql)"
 	@echo "  ui-build    the production build of frontend/ into frontend/dist"
 
 # pytest exits 5 when it collects nothing. backend/tests/ is empty until
@@ -205,8 +205,10 @@ ui-lint:
 ui-test:
 	cd frontend && npm test -- --run
 
+# Playwright starts scripts/ui_e2e_stack.sh (a scratch database, the API, the worker, an LLM stub and the
+# built UI, all on 127.0.0.1) and drops it all on exit. npm runs in frontend/, so a relative PY is made absolute.
 ui-e2e:
-	cd frontend && npm run e2e
+	cd frontend && PY="$(if $(findstring /,$(PY)),$(abspath $(PY)),$(PY))" npm run e2e
 
 ui-build:
 	cd frontend && npm run build
