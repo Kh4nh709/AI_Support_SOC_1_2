@@ -20,7 +20,7 @@
 #
 # It connects as DATABASE_URL_OWNER (else DATABASE_URL) with the database name swapped, creates
 # the target if absent, runs pg_restore --no-owner --exit-on-error, and prints the record P8's
-# drill log is made of: date, dump, target, pg_restore exit, schema_migrations (17 on this
+# drill log is made of: date, dump, target, pg_restore exit, schema_migrations (18 on this
 # code) and the five counts the 22/09 migration proved itself on.
 #
 # pg_restore is the one of the server's own major version when installed
