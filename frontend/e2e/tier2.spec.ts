@@ -2,10 +2,21 @@
 // (the worker runs the real investigate pipeline against the stub model), reads the marks on the evidence,
 // adds a note and concludes, and a second conclusion of the same case is refused with the name of the first.
 import { expect, test, type Page } from "@playwright/test";
-import { API, S, apiLogin, loginAs, postAlert, sql, waitForStatus } from "./fixtures";
+import {
+  S,
+  apiLogin,
+  apiPost,
+  loginAs,
+  postAlert,
+  sql,
+  userIdOf,
+  usernameOf,
+  waitForStatus,
+} from "./fixtures";
 
-/** How the API and the page name `e2e-t2` (the username: notes and conclusions carry it as `*_name`). */
-const T2_NAME = "e2e-t2";
+/** How the API and the page name the two Tier 2 users (the username: notes and conclusions carry it as `*_name`). */
+const T2_NAME = usernameOf("t2");
+const T2B_NAME = usernameOf("t2b");
 
 const toast = (page: Page, text: string) => page.getByRole("status").filter({ hasText: text });
 
@@ -81,11 +92,11 @@ test("Tier 1 escalates, Tier 2 analyses, notes and concludes, and a second concl
   await expect(page.getByText(note)).toBeVisible();
   await expect(page.getByText(T2_NAME, { exact: true }).first()).toBeVisible();
 
-  // ---- Two analysts have the case open, both with the conclusion written.
+  // ---- Two analysts (two users) have the case open, both with the conclusion written.
   const other = await browser.newContext({ baseURL });
   try {
     const second = await other.newPage();
-    await loginAs(second, "t2");
+    await loginAs(second, "t2b");
     await second.goto(`/cases/${id}`);
     const later = conclusionForm(second);
     await later.choose(S.conclusion.concluded_fp).check();
@@ -101,24 +112,26 @@ test("Tier 1 escalates, Tier 2 analyses, notes and concludes, and a second concl
     await expect(first.submit).toHaveCount(0);
     expect(sql(`SELECT status FROM cases WHERE case_id = '${id}'`)).toBe("concluded_fp");
 
-    // The other's form was drawn before: what it sends is refused, and the page says who got there first.
+    // The other user's form was drawn before: what it sends is refused, and the page names the user who got
+    // there first (e2e-t2, not the user who is looking at it, e2e-t2b).
     await later.submit.click();
     const refused = second.getByRole("alert").filter({ hasText: S.case.conflict });
     await expect(refused).toBeVisible();
     await expect(refused).toContainText(`Đã được ${T2_NAME} kết luận lúc`);
+    await expect(refused).not.toContainText(T2B_NAME);
   } finally {
     await other.close();
   }
 
-  // The same at the API, for the record of what the 409 carries.
-  const token = await apiLogin(request, "t2");
-  const again = await request.post(`${API}/api/tier2/cases/${id}/conclude`, {
-    headers: { Authorization: `Bearer ${token}` },
+  // The same at the API, for the record of what the 409 carries: a third conclusion, by the second user.
+  const token = await apiLogin(request, "t2b");
+  const again = await apiPost(request, `/api/tier2/cases/${id}/conclude`, {
+    token,
     data: { conclusion: "concluded_fp", reason: "A third try, after the case was concluded." },
   });
-  expect(again.status()).toBe(409);
-  const detail = ((await again.json()) as { detail: { status?: string; concluded_by?: string } })
-    .detail;
+  expect(again.status).toBe(409);
+  const detail = (again.body as { detail: { status?: string; concluded_by?: string } }).detail;
   expect(detail.status).toBe("concluded_fp");
-  expect(detail.concluded_by, "the 409 names who concluded").toBeTruthy();
+  expect(detail.concluded_by, "the 409 names the user who concluded first").toBe(userIdOf("t2"));
+  expect(detail.concluded_by).not.toBe(userIdOf("t2b"));
 });

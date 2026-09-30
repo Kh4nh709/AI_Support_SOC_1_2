@@ -25,7 +25,12 @@ export default defineConfig({
   reporter: "list",
   use: {
     baseURL: `http://127.0.0.1:${WEB_PORT}`,
-    trace: "retain-on-failure",
+    // A trace holds every request header and every value a test typed (the webhook key, a password, the
+    // session token) and a video shows the page: both stay off. A screenshot may stay, a password input is
+    // masked. `make ui-e2e` scans test-results/ and the run's output for the secrets of the run.
+    trace: "off",
+    video: "off",
+    screenshot: "only-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {

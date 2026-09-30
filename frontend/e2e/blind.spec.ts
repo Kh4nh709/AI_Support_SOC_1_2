@@ -62,6 +62,18 @@ function aboutHead(answer: Answer, id: string): unknown[] {
 }
 
 /**
+ * The answers that name the head (its alert id is in the body) but are not of a shape `aboutHead` reads: a row of
+ * a list, or the head's own answer. The key check looks only at what `aboutHead` returns, so a new answer that
+ * carries the head in another shape (a nested list, a wrapper) would skip it silently; this makes it fail here,
+ * and whoever adds the shape teaches `aboutHead` to read it.
+ */
+function unchecked(answers: Answer[], id: string): string[] {
+  return answers
+    .filter((answer) => answer.text.includes(id) && aboutHead(answer, id).length === 0)
+    .map((answer) => answer.path);
+}
+
+/**
  * What of ① is in what the browser received, by name: the hidden keys found in the head's own JSON, the
  * verdict as a value there, and the head's token anywhere at all (in an answer about another head, in a
  * frame). Names and counts only, never a body: a body carries the session's token.
@@ -146,6 +158,10 @@ test("a blind head shows nothing of ① until it is decided, then shows it", asy
     "the server says the head is blind",
   ).toBe(true);
   expect(traffic.frames().length, "the socket delivered frames").toBeGreaterThan(0);
+  expect(
+    unchecked(answers, head.id),
+    "every answer that names the head is of a shape the key check covers",
+  ).toEqual([]);
   expect(leaks(answers, traffic.frames(), head.id)).toEqual([]);
   const beforeDecision = answers.length;
 

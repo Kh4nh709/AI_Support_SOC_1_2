@@ -4,12 +4,16 @@
 // in through the real login page, and records what the browser received (API answers, socket frames).
 //
 // No secret is ever printed: the helpers return values to the specs, and the specs assert on names and
-// counts, not on bodies.
+// counts, not on bodies. Playwright prints the headers of an API request in the "Call log" of a network-level
+// failure, and a trace holds every value a test typed, so every call of a request context goes through
+// `guarded` (a failure is rethrown with the method, the path and the class of the failure, nothing else), a
+// password is typed by `fillSecret`, and the config keeps traces and videos off. `make ui-e2e` scans what a run
+// leaves behind (scripts/ui_e2e_scan.py) and fails if a secret of the run is in it.
 import { execFileSync } from "node:child_process";
 import { createHash, randomInt } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { S } from "../src/strings";
 
 export { S };
@@ -17,14 +21,18 @@ export { S };
 /** The API, and the webhook that lives at its root (the UI's own server proxies `/api` only). */
 export const API = "http://127.0.0.1:18000";
 
-/** The two users the script seeds. */
-export type Who = "t1" | "t2";
-const USERNAME: Record<Who, string> = { t1: "e2e-t1", t2: "e2e-t2" };
+/** The users the script seeds: one of Tier 1 and two of Tier 2 (two, so that two conclusions have two authors). */
+export type Who = "t1" | "t2" | "t2b";
+const USERNAME: Record<Who, string> = { t1: "e2e-t1", t2: "e2e-t2", t2b: "e2e-t2b" };
+
+/** How the API and the pages name a user: the username (a note or a conclusion carries it as `*_name`). */
+export const usernameOf = (who: Who): string => USERNAME[who];
 
 type Secrets = {
   webhook_key: string;
   t1_password: string;
   t2_password: string;
+  t2b_password: string;
   /** PGHOST, PGPORT, PGUSER, PGPASSWORD and PGDATABASE of the scratch database. */
   pg: Record<string, string>;
 };
@@ -46,6 +54,71 @@ function secrets(): Secrets {
 }
 
 const passwordOf = (who: Who): string => secrets()[`${who}_password`];
+
+// ---------------------------------------------------------------------------------------------------------
+// Failures that never carry a secret.
+
+/** The failures of the network a failing request can be told by (a fixed list: the class is the only thing kept). */
+const NETWORK_CODES = [
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EPIPE",
+  "ENOTFOUND",
+  "EHOSTUNREACH",
+];
+
+/** What kind of failure an error is, without its message: a message may carry a header, a body or a value. */
+function errorClass(error: unknown): string {
+  const text = error instanceof Error ? error.message : "";
+  const code = NETWORK_CODES.find((known) => text.includes(known));
+  if (code !== undefined) return code;
+  if (/Timeout \d+ms/.test(text)) return "timeout";
+  return error instanceof Error ? error.name : typeof error;
+}
+
+/**
+ * Runs one call of a request context. A failure is rethrown as a new error that names the call (`what`, a
+ * method and a path) and the class of the failure, never the original message or its call log: Playwright
+ * prints the request's headers there, and they hold the webhook key or a bearer token.
+ */
+export async function guarded<T>(what: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    // No `cause`: it would carry the original message and call log into the report.
+    // eslint-disable-next-line preserve-caught-error
+    throw new Error(`${what} failed: ${errorClass(error)}`);
+  }
+}
+
+export type ApiAnswer = { status: number; body: unknown };
+
+/** One POST to the API (or the webhook at its root): the status and the JSON body, `null` when there is none. */
+export async function apiPost(
+  request: APIRequestContext,
+  path: string,
+  options: { token?: string; headers?: Record<string, string>; data?: unknown },
+): Promise<ApiAnswer> {
+  const headers: Record<string, string> = { ...options.headers };
+  if (options.token !== undefined) headers.Authorization = `Bearer ${options.token}`;
+  return guarded(`POST ${path}`, async () => {
+    const res = await request.post(`${API}${path}`, { headers, data: options.data });
+    // a 204, or a body that is not JSON, has none: the status is what matters
+    const body: unknown = await res.json().catch(() => null);
+    return { status: res.status(), body };
+  });
+}
+
+/** Types a secret into a field. A failure says which field, not what was typed (a call log may quote it). */
+async function fillSecret(field: Locator, value: string, what: string): Promise<void> {
+  try {
+    await field.fill(value);
+  } catch (error) {
+    // eslint-disable-next-line preserve-caught-error -- no `cause`, see guarded()
+    throw new Error(`could not fill the ${what} field: ${errorClass(error)}`);
+  }
+}
 
 // ---------------------------------------------------------------------------------------------------------
 // The scratch database, for what only it can say: has the worker got to the alert, has the model run.
@@ -147,11 +220,11 @@ function wazuhBody(alert: Posted, id: string): Record<string, unknown> {
 }
 
 async function postWebhook(request: APIRequestContext, body: Record<string, unknown>) {
-  const res = await request.post(`${API}/webhook/alerts`, {
+  const answer = await apiPost(request, "/webhook/alerts", {
     headers: { "X-API-Key": secrets().webhook_key },
     data: body,
   });
-  expect(res.status(), "the webhook takes the alert").toBeLessThan(300);
+  expect(answer.status, "the webhook takes the alert").toBeLessThan(300);
 }
 
 /**
@@ -194,38 +267,43 @@ export async function postDuplicates(
 export const reasonBox = (page: Page) =>
   page.getByRole("textbox", { name: S.decision.reason, exact: true });
 
+/** Fills the login form and submits it. */
+async function submitLogin(page: Page, who: Who): Promise<void> {
+  await page.getByLabel(S.login.username).fill(USERNAME[who]);
+  await fillSecret(page.getByLabel(S.login.password), passwordOf(who), "password");
+  await page.getByRole("button", { name: S.login.submit }).click();
+}
+
 /** Logs in through the login page and waits for the role's home. */
 export async function loginAs(page: Page, who: Who): Promise<void> {
   await page.goto("/login");
-  await page.getByLabel(S.login.username).fill(USERNAME[who]);
-  await page.getByLabel(S.login.password).fill(passwordOf(who));
-  await page.getByRole("button", { name: S.login.submit }).click();
+  await submitLogin(page, who);
   await expect(page).toHaveURL(who === "t1" ? /\/queue$/ : /\/cases$/);
 }
 
 /** Logs in on the login page a session ended: the page returns to where the user was, so no URL is awaited. */
 export async function signIn(page: Page, who: Who): Promise<void> {
-  await page.getByLabel(S.login.username).fill(USERNAME[who]);
-  await page.getByLabel(S.login.password).fill(passwordOf(who));
-  await page.getByRole("button", { name: S.login.submit }).click();
+  await submitLogin(page, who);
 }
 
 /** A token for `who` from the API, in a context of its own (no page holds it). */
 export async function apiLogin(request: APIRequestContext, who: Who): Promise<string> {
-  const res = await request.post(`${API}/api/auth/login`, {
+  const answer = await apiPost(request, "/api/auth/login", {
     data: { username: USERNAME[who], password: passwordOf(who) },
   });
-  expect(res.status(), "the API takes the login").toBe(200);
-  return ((await res.json()) as { token: string }).token;
+  expect(answer.status, "the API takes the login").toBe(200);
+  return (answer.body as { token: string }).token;
 }
 
 /** Ends every session `who` holds, as the API's logout does (`sessions_invalid_before`), from outside the page. */
 export async function apiLogout(request: APIRequestContext, token: string): Promise<void> {
-  const res = await request.post(`${API}/api/auth/logout`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  expect(res.status(), "the API takes the logout").toBe(204);
+  const answer = await apiPost(request, "/api/auth/logout", { token });
+  expect(answer.status, "the API takes the logout").toBe(204);
 }
+
+/** The id the database holds for a seeded user: what `concluded_by` of a 409 is compared with. */
+export const userIdOf = (who: Who): string =>
+  sql(`SELECT user_id FROM users WHERE username = '${USERNAME[who]}'`);
 
 // ---------------------------------------------------------------------------------------------------------
 // What the browser received.
