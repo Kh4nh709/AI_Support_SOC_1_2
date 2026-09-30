@@ -94,14 +94,35 @@ def get_queue(
     claims: Annotated[Claims, Depends(require_role("tier1", "tier2", "admin"))],
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1)] = queue.PAGE_SIZE_DEFAULT,
+    band: str | None = None,
+    category: str | None = None,
+    agent: str | None = None,
+    status: str = "queued",
 ) -> dict:
-    del claims  # auth only — the role does not change what the page shows
-    result = queue.list_queue(conn, page=page, page_size=page_size)
+    """The queue, optionally filtered (P10-T02): `band` is `low|medium|high|critical` (the risk
+    band, not `severity`), `status` is `queued` (the default) or `mine` — `tier1_active` held by
+    the caller. `total` is the filtered count; `counts_by_band` counts under every filter but
+    `band`. An unknown `band` or `status`, or a NUL byte in a filter, is a 422. The role does not
+    change what the page shows; `claims` supplies the caller's id for `mine`."""
+    try:
+        result = queue.list_queue(
+            conn,
+            page=page,
+            page_size=page_size,
+            band=band,
+            category=category,
+            agent=agent,
+            status=status,  # type: ignore[arg-type]  # validated by list_queue → ValueError → 422
+            actor_id=claims.user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
         "rows": result.rows,
         "total": result.total,
         "page": result.page,
         "page_size": result.page_size,
+        "counts_by_band": result.counts_by_band,
     }
 
 
