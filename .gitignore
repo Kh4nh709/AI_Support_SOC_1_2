@@ -57,3 +57,10 @@ conf/ossec.conf.bak-*
 # Lab schedule run: scratch plan/progress state for the assistant-driven
 # §5 two-day run, not part of the repo's own deliverables.
 .lab_run_state/
+
+# P10-T07: the React UI (frontend/) — installed packages and build/test output.
+# package-lock.json stays tracked; `npm ci` rebuilds node_modules from it.
+frontend/node_modules
+frontend/dist
+frontend/test-results
+frontend/playwright-report

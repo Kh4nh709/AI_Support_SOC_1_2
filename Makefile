@@ -27,7 +27,7 @@ APP_PORT       ?= 8000
 LINT_PATHS := $(wildcard backend eval)
 
 .DEFAULT_GOAL := help
-.PHONY: help test test-db lint migrate run-app run-worker run-app-native run-worker-native backup up down db-up db-shell db-restore logs
+.PHONY: help test test-db lint migrate run-app run-worker run-app-native run-worker-native backup up down db-up db-shell db-restore logs ui-install ui-lint ui-test ui-e2e ui-build
 
 help:
 	@echo "AI Support SOC — make targets"
@@ -35,7 +35,7 @@ help:
 	@echo "  test-db     run the db-marked tests against TEST_DATABASE_URL (TESTS=<path> narrows the run)"
 	@echo "  lint        ruff check + black --check over $(LINT_PATHS)"
 	@echo "  migrate     apply docs/Schema migrations to DATABASE_URL_OWNER"
-	@echo "  up          docker compose up -d (db, app, worker); first db start restores backups/latest.dump"
+	@echo "  up          docker compose up -d (db, app, worker, and ui on 127.0.0.1:8080); first db start restores backups/latest.dump"
 	@echo "  down        docker compose down (the pgdata volume is kept)"
 	@echo "  db-up       start only the db container and wait until it is healthy"
 	@echo "  db-shell    psql on DATABASE_URL_OWNER from .env"
@@ -45,6 +45,11 @@ help:
 	@echo "  run-worker  the worker container (docker compose up -d db worker)"
 	@echo "  run-app-native / run-worker-native   the 05–20/09 way: plain processes on the host"
 	@echo "  backup      pg_dump --format=custom into backups/ and refresh backups/latest.dump"
+	@echo "  ui-install  npm ci in frontend/ (the React UI)"
+	@echo "  ui-lint     eslint + tsc --noEmit + prettier --check + npm audit (advisory) in frontend/"
+	@echo "  ui-test     the Vitest suite of frontend/ (TZ=UTC)"
+	@echo "  ui-e2e      the Playwright suite of frontend/ (needs: npx playwright install chromium)"
+	@echo "  ui-build    the production build of frontend/ into frontend/dist"
 
 # pytest exits 5 when it collects nothing. backend/tests/ is empty until
 # P0-T03 merges, so 5 is translated into success here and nowhere else.
@@ -182,3 +187,26 @@ run-worker-native:
 
 backup:
 	bash scripts/backup.sh
+
+# --- the React UI (frontend/, P10-T07) --------------------------------------
+# Node 22 and npm, not the Python toolchain: these targets ignore PY. Each step is its own
+# recipe line so the advisory `npm audit ... || true` cannot mask a failing lint step. The tools run
+# through the package scripts, never `npx`: without node_modules `npx tsc` would fetch the unrelated
+# `tsc` package, while `npm run typecheck` fails loudly.
+ui-install:
+	cd frontend && npm ci
+
+ui-lint:
+	cd frontend && npm run lint
+	cd frontend && npm run typecheck
+	cd frontend && npm run format:check
+	cd frontend && (npm audit --omit=dev || true)
+
+ui-test:
+	cd frontend && npm test -- --run
+
+ui-e2e:
+	cd frontend && npm run e2e
+
+ui-build:
+	cd frontend && npm run build
