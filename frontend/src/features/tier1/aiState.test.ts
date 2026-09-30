@@ -50,12 +50,18 @@ describe("aiStateOfRow", () => {
 
   it("is forced only when gate_forced is true", () => {
     expect(aiStateOfRow(row({ gate_forced: true }))).toMatchObject({ kind: "ready", forced: true });
-    expect(aiStateOfRow(row({ gate_forced: null }))).toMatchObject({ kind: "ready", forced: false });
+    expect(aiStateOfRow(row({ gate_forced: null }))).toMatchObject({
+      kind: "ready",
+      forced: false,
+    });
     expect(aiStateOfRow(row({ gate_forced: undefined }))).toMatchObject({ forced: false });
   });
 
   it("keeps a missing confidence as null", () => {
-    expect(aiStateOfRow(row({ confidence: null }))).toMatchObject({ kind: "ready", confidence: null });
+    expect(aiStateOfRow(row({ confidence: null }))).toMatchObject({
+      kind: "ready",
+      confidence: null,
+    });
   });
 
   it("is hidden for a blind row that says suggestion_visible false and has no keys", () => {

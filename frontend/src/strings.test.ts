@@ -55,7 +55,15 @@ describe("the risk band label <-> code table", () => {
   });
 
   it("knows no code for a label it does not have, or for a missing one", () => {
-    for (const other of ["Nghiêm trọng", "Trung bình", "rất cao", "", "constructor", null, undefined]) {
+    for (const other of [
+      "Nghiêm trọng",
+      "Trung bình",
+      "rất cao",
+      "",
+      "constructor",
+      null,
+      undefined,
+    ]) {
       expect(bandCodeOfLabel(other)).toBeNull();
     }
   });

@@ -112,7 +112,9 @@ describe("the URL", () => {
   });
 
   it("is on the page's own host, ws on http and wss on https", () => {
-    expect(liveUrl({ protocol: "http:", host: "127.0.0.1:8080" })).toBe("ws://127.0.0.1:8080/api/ws");
+    expect(liveUrl({ protocol: "http:", host: "127.0.0.1:8080" })).toBe(
+      "ws://127.0.0.1:8080/api/ws",
+    );
     expect(liveUrl({ protocol: "https:", host: "soc.example" })).toBe("wss://soc.example/api/ws");
   });
 

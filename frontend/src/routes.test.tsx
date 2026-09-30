@@ -11,6 +11,12 @@ import type { Session } from "./auth/session";
 import { AppRoutes } from "./routes";
 import { S } from "./strings";
 
+// The queue page needs a query cache and an API; this file tests which route opens for which role, not the
+// page (QueuePage.test.tsx does). Its heading is all the route test looks for.
+vi.mock("./features/tier1/QueuePage", () => ({
+  QueuePage: () => <h1>{S.queue.title}</h1>,
+}));
+
 const session = (role: Session["role"]): Session => ({
   token: "t",
   role,

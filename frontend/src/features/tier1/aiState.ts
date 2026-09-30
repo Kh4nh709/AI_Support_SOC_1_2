@@ -33,7 +33,11 @@ const UNAVAILABLE: AiState = { kind: "unavailable", stoppedBy: null };
  *  - Otherwise `pending`: the visible arm, no result yet.
  */
 export function aiStateOfRow(row: QueueRow): AiState {
-  if (!("suggested_action" in row) && row.suggestion_visible === false && !DECIDED.has(row.status)) {
+  if (
+    !("suggested_action" in row) &&
+    row.suggestion_visible === false &&
+    !DECIDED.has(row.status)
+  ) {
     return { kind: "hidden" };
   }
   if (typeof row.suggested_action === "string") {
