@@ -98,6 +98,23 @@ def _parse_enum(key: str, raw: str, allowed: tuple[str, ...]) -> str:
     return raw
 
 
+_TRUE_SPELLINGS = frozenset({"true", "1", "yes", "on"})
+_FALSE_SPELLINGS = frozenset({"false", "0", "no", "off"})
+
+
+def _parse_bool(key: str, raw: str) -> bool:
+    """A switch is on or off, never "whatever it was": a typo such as `flase` must not
+    leave grouping on (or off) without anyone noticing, so anything that is not one of
+    the eight spellings is a `ConfigError` naming `key` (an empty value never reaches
+    here — the caller has already treated it as unset)."""
+    spelled = raw.strip().lower()
+    if spelled in _TRUE_SPELLINGS:
+        return True
+    if spelled in _FALSE_SPELLINGS:
+        return False
+    raise ConfigError(f"{key}: must be true|false (also 1|0, yes|no, on|off), got {raw!r}")
+
+
 @dataclasses.dataclass(frozen=True, repr=False)
 class Config:
     DATABASE_URL: str = ""
@@ -110,6 +127,9 @@ class Config:
     MAX_CLUSTER_AGE_HOURS: int = 4
     MAX_CLUSTER_AGE_AUTOCLOSED_MINUTES: int = 30
     MAX_CLUSTER_SIZE: int = 1000
+    # DEC-165: false = every alert is its own queue row and its own triage job (no
+    # grouping into clusters). Default true keeps the phase-2 behaviour untouched.
+    DEDUP_ENABLED: bool = True
     INDEXER_URL: str = ""
     INDEXER_USER: str = ""
     INDEXER_PASSWORD: str = ""
@@ -208,6 +228,10 @@ def load(*, env_file: str | Path = ".env") -> Config:
         value = raw(key)
         return default if value is None else _parse_enum(key, value, allowed)
 
+    def as_bool(key: str, default: bool) -> bool:
+        value = raw(key)
+        return default if value is None else _parse_bool(key, value)
+
     llm_model_proposer = as_str("LLM_MODEL_PROPOSER", "")
     verifier_raw = raw("LLM_MODEL_VERIFIER")
     llm_model_verifier = llm_model_proposer if verifier_raw is None else verifier_raw
@@ -232,6 +256,7 @@ def load(*, env_file: str | Path = ".env") -> Config:
         MAX_CLUSTER_AGE_HOURS=as_int("MAX_CLUSTER_AGE_HOURS", 4),
         MAX_CLUSTER_AGE_AUTOCLOSED_MINUTES=as_int("MAX_CLUSTER_AGE_AUTOCLOSED_MINUTES", 30),
         MAX_CLUSTER_SIZE=as_int("MAX_CLUSTER_SIZE", 1000),
+        DEDUP_ENABLED=as_bool("DEDUP_ENABLED", True),
         INDEXER_URL=as_str("INDEXER_URL", ""),
         INDEXER_USER=as_str("INDEXER_USER", ""),
         INDEXER_PASSWORD=as_str("INDEXER_PASSWORD", ""),

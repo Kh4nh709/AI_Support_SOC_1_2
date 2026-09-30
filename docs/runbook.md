@@ -88,6 +88,28 @@ The 62 keys of `.env.example`, one row each, no values. `.env.example` is genera
 | `APP_RW_PASSWORD` | Compose: `app_rw`'s password, set by `01-roles.sh` on a first start | Owner | yes |
 | `INDEXER_HOST_IP` | Compose: the indexer's address as the containers see it; empty means `host-gateway`, this host | Owner | no |
 
+### Grouping switch (DEC-165)
+
+`DEDUP_ENABLED` is a §6.3 key and a `.env.example` line, and it is not a row of the table above. `true` (the default, and what a `.env` without the line gets) groups alerts into clusters as before: a repeat of an open head's rule, source IP, destination IP and agent is a `duplicate` that only bumps the head's `occurrence_count`. `false` (**the Owner's decision of 30/09**) stops grouping: every alert is its own queue row and its own `triage` job, with its own enrichment and `risk_score`. The queue then shows a **User** and an **IP nguồn** column, so each row says whose alert it is and where it came from. The value is read as `true|false` (also `1|0`, `yes|no`, `on|off`); anything else stops the worker at startup with a message naming `DEDUP_ENABLED`, never a silent default.
+
+To turn grouping off, from the primary checkout, in a shell that has sourced `.env` *(not run by the agent)*: put the line `DEDUP_ENABLED=false` in `.env` (edit it, do not paste the file anywhere), then
+
+```
+docker compose up -d --force-recreate app worker
+docker compose exec -T worker printenv DEDUP_ENABLED
+```
+
+The second command prints `false`. A plain `docker compose restart worker` is **not** enough: the container keeps the environment it was created with. To turn grouping back on, set `DEDUP_ENABLED=true` (or delete the line) and recreate the same way.
+
+What to expect once it is off:
+
+- Two identical alerts a second apart are two rows, each `occurrence_count` 1, neither a `duplicate`. An alert that matches an auto-close rule is auto-closed on its own, and no cluster lock is taken. **The queue is longer and ① runs once per alert** — the spend row of **What to watch** against `LLM_MONTHLY_USD_CAP` is the number to look at in the first days.
+- The same `alert_id` received twice is **still** refused (`409 duplicate` on the webhook, one `intake` row): that is receipt idempotency, upstream of grouping, and the switch does not touch it.
+- **The switch is forward-only.** Clusters already open are left exactly as they are: nothing is split, closed or re-counted, their `occurrence_count` stays where it was, and they keep their place in the queue until an analyst decides them — they just stop receiving new members. Nothing that arrived before the restart is regrouped or ungrouped.
+- Turning it back on is forward-only too: new alerts group again under any open head still inside `DEDUP_IDLE_GAP_MINUTES`, `MAX_CLUSTER_AGE_HOURS` and `MAX_CLUSTER_SIZE`, the rows made while it was off included. Rows that were already separate are not merged.
+
+To check it worked, an hour after the restart *(not run by the agent)*: `psql "$DATABASE_URL" -Atc "select count(*) from alerts where received_at > now() - interval '1 hour' and (status = 'duplicate' or duplicate_of is not null)"` prints `0`.
+
 ## Alarms
 
 `infra/health.py` runs ten checks every 5 minutes (the `health` job, re-armed by every worker start — see "Noticing a dead chain" below) and writes one `system_health` row per run. **The alarm state is the set of currently-failing check names, not a single ok/alarm flag.** A notification goes out whenever that set changes in either direction — a new failure, a recovery, or both together — but `audit_events.health.alarm` (payload `{"failing": […], "new": […]}`) is written only when a name is **new** to the failing set that tick; a tick that only recovers (the set shrinks, nothing new joins) still notifies but writes no `health.alarm` row. The daily 08:05 `DISPLAY_TZ` summary notifies the same way and never writes `health.alarm` either — it is a roll-up, not an event.

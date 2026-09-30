@@ -225,6 +225,10 @@ _QUEUE_COLUMNS = (
     "category",
     "severity",
     "agent_name",
+    # P10-T15 / DEC-165: with grouping off a row is one alert, so it says whose and from where.
+    # Neither is derived from ① (R12), so both stay on a blind row: `strip` is unchanged.
+    "alert_user",
+    "srcip",
     "risk_score",
     "occurrence_count",
     "triaged_count",
@@ -257,6 +261,7 @@ _NEEDS_RETRIAGE_SORT_SQL = (
 )
 _QUEUE_SQL = """
     SELECT a.alert_id, a.rule_id, a.description, a.category, a.severity, a.agent_name,
+           a.alert_user, a.srcip,
            a.risk_score, a.occurrence_count, a.triaged_count, a.first_seen_at, a.last_seen_at,
            a.alert_time, a.suggestion_visible, a.triage_status, a.status,
            r.run_id,

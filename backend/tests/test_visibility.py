@@ -416,6 +416,42 @@ def test_analyst_mode_keeps_other_clusters_status():
     assert out["status"] == "queued_tier1"  # the head's own status is not a ① key
 
 
+def test_queue_row_shape_keeps_user_and_srcip_on_the_blind_arm():
+    """P10-T15 / DEC-165: the queue now shows `alert_user` and `srcip`. Neither is derived from
+    ① (R12), so a blind, undecided queue row keeps both while it still loses every ①-derived
+    key — the queue row is shaped like `list_queue`'s dict, not like `get_alert_view`'s."""
+    row = {
+        "alert_id": "p10t15-row",
+        "status": "queued_tier1",
+        "agent_name": "user1-IA1803",
+        "alert_user": "user1",
+        "srcip": "203.0.113.9",
+        "occurrence_count": 1,
+        "risk_score": 60,
+        "risk_band": "high",
+        "suggestion": "close_fp",
+        "suggested_action": "close_fp",
+        "confidence": 0.9,
+        "gate_forced": False,
+        "triage_status": "done",
+        "run_id": "run-1",
+        "triaged_count": 1,
+        "needs_retriage": False,
+    }
+    blind = strip(row, status="queued_tier1", suggestion_visible=False, mode="analyst")
+    assert blind["alert_user"] == "user1"
+    assert blind["srcip"] == "203.0.113.9"
+    assert not (set(blind) & ANALYST_HIDE)
+    assert set(blind) == set(row) - ANALYST_HIDE
+
+    visible = strip(row, status="queued_tier1", suggestion_visible=True, mode="analyst")
+    assert visible == row
+
+    # The labeling arm is a separate, stricter contract and is unchanged by this card.
+    labeled = strip(row, status="queued_tier1", suggestion_visible=False, mode="labeling")
+    assert labeled["alert_user"] == "user1" and labeled["srcip"] == "203.0.113.9"
+
+
 @pytest.mark.parametrize(
     ("status", "suggestion_visible"),
     [("queued_tier1", True), *[(state, False) for state in sorted(_DECIDED)]],

@@ -413,6 +413,8 @@ def test_queue_row_has_band_not_score(db):
         "category",
         "severity",
         "agent_name",
+        "alert_user",  # P10-T15 / DEC-165: not derived from ①, so it is not `ANALYST_HIDE`
+        "srcip",
         "occurrence_count",
         "triaged_count",
         "first_seen_at",
@@ -463,6 +465,57 @@ def test_queue_visible_row_has_suggestion(db):
     assert row["gate_forced"] is False
     assert row["run_id"] == run_id
     assert row["triage_status"] == "pending"  # the test never ran ① — the column is untouched
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("suggestion_visible", [True, False], ids=["visible", "blind"])
+def test_queue_row_carries_alert_user_and_srcip_on_both_arms(db, suggestion_visible):
+    """P10-T15 / DEC-165: with every alert its own row, identical alerts are told apart by the
+    user and the source address. Neither is derived from ① (both come from the alert as
+    received), so a blind row carries them exactly as a visible one does (DEC-101, R17)."""
+    alert_id = _queued(
+        db, suggestion_visible=suggestion_visible, alert_user="alice", srcip="203.0.113.9"
+    )
+    _insert_run(db, alert_id)
+
+    row = _row(db, alert_id)
+
+    assert row["alert_user"] == "alice"
+    assert row["srcip"] == "203.0.113.9"
+    if not suggestion_visible:  # and the ① keys stay gone, so the new keys leak nothing new
+        for key in ANALYST_HIDE:
+            assert key not in row, key
+    assert "alert_user" not in ANALYST_HIDE and "srcip" not in ANALYST_HIDE
+
+
+@pytest.mark.db
+def test_queue_row_alert_user_may_be_null_and_srcip_empty(db):
+    """`alert_user` is nullable and `srcip` is `TEXT NOT NULL DEFAULT ''` (B1/D10): the API
+    passes both through as stored — the page shows "—" for either."""
+    alert_id = _queued(db, alert_user=None, srcip="")
+
+    row = _row(db, alert_id)
+
+    assert row["alert_user"] is None
+    assert row["srcip"] == ""
+
+
+@pytest.mark.db
+def test_queue_order_total_and_bands_ignore_the_two_new_columns(db):
+    """The two new columns are read-only display: the order is still risk desc, then arrival;
+    `total` and `counts_by_band` count the same rows. Users and addresses are chosen so that
+    sorting on either would reverse the risk order."""
+    before = list_queue(db, page_size=PAGE_SIZE_MAX)
+    low = _queued(db, risk_score=10, alert_user="aaa", srcip="1.1.1.1")
+    mid = _queued(db, risk_score=50, alert_user="mmm", srcip="5.5.5.5")
+    high = _queued(db, risk_score=90, alert_user="zzz", srcip="9.9.9.9")
+
+    page = list_queue(db, page_size=PAGE_SIZE_MAX)
+    ours = [row["alert_id"] for row in page.rows if row["alert_id"] in {low, mid, high}]
+
+    assert ours == [high, mid, low]
+    assert page.total == before.total + 3
+    assert sum(page.counts_by_band.values()) == sum(before.counts_by_band.values()) + 3
 
 
 @pytest.mark.db

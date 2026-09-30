@@ -18,6 +18,13 @@ export type QueueRow = {
   category: string;
   severity: string;
   agent_name: string;
+  /**
+   * P10-T15 (DEC-165): whose alert it is (`alert_user`, null when the log names nobody) and where it came
+   * from (`srcip`, '' when there is none). The server sends both raw, on blind and visible rows alike:
+   * neither comes from ① (R12). Optional here only so a page that meets an older server shows a dash.
+   */
+  alert_user?: string | null;
+  srcip?: string | null;
   occurrence_count: number;
   triaged_count?: number;
   first_seen_at: string;

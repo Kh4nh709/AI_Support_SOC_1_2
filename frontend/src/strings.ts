@@ -121,6 +121,8 @@ export const S = {
       description: "Mô tả",
       category: "Category",
       agent: "Agent",
+      user: "User",
+      srcip: "IP nguồn",
       occurrences: "Số lần",
       lastSeen: "Lần cuối",
       ai: "①",

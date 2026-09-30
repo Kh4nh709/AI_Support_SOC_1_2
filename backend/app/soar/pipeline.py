@@ -90,20 +90,28 @@ def _process(conn: psycopg.Connection, intake_id: int, raw_text: str, via: str) 
     # query runs inside the serialised region.
     rules = autoclose.load_rules(conn)
 
-    dedup.cluster_lock(conn, alert.rule_id, alert.srcip, alert.dstip, alert.agent_name)
-    head = dedup.find_open_cluster(conn, alert)
-    if head is not None:
-        dedup.bump_parent(conn, head.alert_id)
-        transitions.open_alert(
-            conn,
-            alert,
-            kind="duplicate",
-            source=source,
-            suggestion_visible=suggestion_visible,
-            duplicate_of=head.alert_id,
-        )
-        _finish_receipt(conn, intake_id, "duplicate")
-        return
+    # DEC-165: with DEDUP_ENABLED=false nothing is grouped. The advisory lock, the
+    # head lookup and the bump are all skipped, so no cluster lock is taken and no
+    # head's `occurrence_count` moves; the alert falls through to the non-duplicate
+    # path below and is its own head with its own enrichment and triage job. The
+    # switch is forward-only: heads that are already open are neither closed nor
+    # bumped, they simply stop receiving new members. Receipt-level idempotency
+    # (`intake`'s (manager_id, source_alert_id) key) is upstream of this and untouched.
+    if config.load().DEDUP_ENABLED:
+        dedup.cluster_lock(conn, alert.rule_id, alert.srcip, alert.dstip, alert.agent_name)
+        head = dedup.find_open_cluster(conn, alert)
+        if head is not None:
+            dedup.bump_parent(conn, head.alert_id)
+            transitions.open_alert(
+                conn,
+                alert,
+                kind="duplicate",
+                source=source,
+                suggestion_visible=suggestion_visible,
+                duplicate_of=head.alert_id,
+            )
+            _finish_receipt(conn, intake_id, "duplicate")
+            return
 
     # Internal enrichment — always, for every non-duplicate alert (E1, M1).
     ctx = _build_context(conn, alert)
