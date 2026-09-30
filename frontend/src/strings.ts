@@ -295,10 +295,12 @@ export const S = {
     severity: "Mức độ nghiêm trọng",
     submit: "Ghi quyết định",
     seenHint: (n: number) =>
-      `Bạn đang xem ${n} lần xuất hiện — nếu số này đổi, hệ thống sẽ yêu cầu xem lại`,
+      `Bạn đang xem ${n} lần xuất hiện — nếu số này đổi, hệ thống có thể yêu cầu xem lại`,
     // Beside the count the form holds, when the alert now has more: the analyst is told, and the count is not changed.
+    // "có thể", not "sẽ": the server asks for a review only past a tolerance (REVIEW_DELTA_TOLERANCE), and that
+    // number is not shown here.
     seenChanged: (held: number, now: number) =>
-      `${held} → ${now}: cụm đã tăng khi bạn đọc — khi bạn gửi, hệ thống sẽ yêu cầu xem lại`,
+      `${held} → ${now}: cụm đã tăng khi bạn đọc — khi bạn gửi, hệ thống có thể yêu cầu xem lại`,
     heldBy: (name: string) => `Đang được ${name} xử lý`,
     heldByOther: "Đang được người khác xử lý",
     decidedAs: (label: string) => `Đã quyết: ${label}`,

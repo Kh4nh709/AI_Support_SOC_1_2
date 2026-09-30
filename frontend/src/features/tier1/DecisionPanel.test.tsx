@@ -766,6 +766,22 @@ describe("the count the decision is made on (ruling R19)", () => {
     expect([seenOf(0), seenOf(1)]).toEqual([37, 37]);
   });
 
+  it("words the notice and the hint as a possibility: the server has a tolerance, so a small rise posts with no review", async () => {
+    // REVIEW_DELTA_TOLERANCE is 20 (backend infra/config.py): 37 → 40 is answered with no 409, so the page must
+    // not promise a review. It does not show the tolerance either: the number is the server's to change.
+    const { refetch } = livePanel();
+    await fill();
+    await refetch(40);
+    const notice = await screen.findByText(S.decision.seenChanged(37, 40));
+    expect(notice.textContent).toContain("có thể");
+    expect(notice.textContent).not.toContain("sẽ yêu cầu");
+    expect(notice.textContent?.match(/\d+/g)).toEqual(["37", "40"]);
+    const hint = screen.getByText(S.decision.seenHint(37));
+    expect(hint.textContent).toContain("có thể");
+    expect(hint.textContent).not.toContain("sẽ yêu cầu");
+    expect(hint.textContent?.match(/\d+/g)).toEqual(["37"]);
+  });
+
   it("says nothing while the count on the server is the count the form holds", async () => {
     const { refetch } = livePanel();
     await fill();
