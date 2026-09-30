@@ -13,12 +13,12 @@ import {
 import { useLocation, useNavigate } from "react-router";
 import { fetchMe, postLogin, postLogout } from "../api/auth";
 import { setTokenSource } from "../api/client";
-import { isRole } from "../api/types";
 import { landingAfterLogin } from "./redirect";
 import {
   clearSession,
   forgetSession,
   loadSession,
+  parseSession,
   requestSessionFromOtherTabs,
   saveSession,
   startSessionSharing,
@@ -116,17 +116,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const me = await fetchMe();
           if (abort.signal.aborted) return;
           if (sessionRef.current?.token === asked.token) {
-            if (isRole(me.role)) {
-              const confirmed: Session = {
-                token: asked.token,
-                role: me.role,
-                username: me.username,
-                expiresAt: me.expires_at,
-              };
+            const confirmed = parseSession({
+              token: asked.token,
+              role: me.role,
+              username: me.username,
+              expiresAt: me.expires_at,
+            });
+            if (confirmed === null) {
+              endHere(); // a role this UI has no page for, or no end date that parses
+            } else {
               saveSession(confirmed);
               apply(confirmed);
-            } else {
-              endHere(); // a role this UI has no page for
             }
           }
         } catch {
@@ -157,15 +157,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(
     async (username: string, password: string) => {
       const res = await postLogin(username, password);
-      if (!isRole(res.role) || typeof res.token !== "string" || res.token === "") {
-        throw new Error("the login answer has no usable token or role");
-      }
-      const next: Session = {
+      const next = parseSession({
         token: res.token,
         role: res.role,
         username,
         expiresAt: res.expires_at,
-      };
+      });
+      if (next === null) throw new Error("the login answer has no usable token, role or expiry");
       saveSession(next);
       apply(next);
       setSignedOut(false);

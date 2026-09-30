@@ -115,6 +115,30 @@ describe("on load", () => {
     expect(sessionStorage.getItem(KEY)).toBeNull();
   });
 
+  // A session with no usable end date would arm a timer of NaN milliseconds, which fires at once and
+  // re-arms itself for ever. It is not a session.
+  it.each<[string, Record<string, unknown>]>([
+    ["has no expires_at", { expires_at: undefined }],
+    ["has a null expires_at", { expires_at: null }],
+    ["has an expires_at that is not a date", { expires_at: "soon" }],
+    ["has an expires_at in the past", { expires_at: later(-60_000) }],
+  ])("ends the session, and arms no timer of NaN, when /me %s", async (_name, over) => {
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    try {
+      server.use(meOk(over));
+      stored();
+      renderProvider();
+      await waitFor(() => expect(state()).toBe("ready none"));
+      expect(sessionStorage.getItem(KEY)).toBeNull();
+      await new Promise((r) => setTimeout(r, 60)); // a loop would show in this time
+      expect(state()).toBe("ready none");
+      const nan = timers.mock.calls.filter(([, ms]) => typeof ms === "number" && Number.isNaN(ms));
+      expect(nan).toHaveLength(0);
+    } finally {
+      timers.mockRestore();
+    }
+  });
+
   it("keeps the session when /me cannot be answered (the backend is down, not the login)", async () => {
     server.use(http.get("/api/auth/me", () => HttpResponse.json({}, { status: 503 })));
     stored();
@@ -250,6 +274,44 @@ describe("login and logout", () => {
       role: "tier2",
     });
   });
+
+  it.each<[string, Record<string, unknown>]>([
+    ["has no expires_at", { expires_at: undefined }],
+    ["has an expires_at that is not a date", { expires_at: "soon" }],
+    ["has no token", { token: "" }],
+    ["has a role this UI does not know", { role: "auditor" }],
+  ])(
+    "login makes no session, and arms no timer of NaN, when the answer %s",
+    async (_name, over) => {
+      const timers = vi.spyOn(globalThis, "setTimeout");
+      try {
+        server.use(
+          http.post("/api/auth/login", () =>
+            HttpResponse.json({
+              token: "tok-7",
+              role: "tier2",
+              user_id: 4,
+              expires_at: later(3_600_000),
+              ...over,
+            }),
+          ),
+        );
+        renderProvider("/login");
+        await waitFor(() => expect(state()).toBe("ready none"), { timeout: 2000 });
+        await userEvent.setup().click(screen.getByText("do login"));
+        await new Promise((r) => setTimeout(r, 80));
+        expect(state()).toBe("ready none");
+        expect(where()).toBe("/login from -");
+        expect(sessionStorage.getItem(KEY)).toBeNull();
+        const nan = timers.mock.calls.filter(
+          ([, ms]) => typeof ms === "number" && Number.isNaN(ms),
+        );
+        expect(nan).toHaveLength(0);
+      } finally {
+        timers.mockRestore();
+      }
+    },
+  );
 
   it("login leaves the session empty when the backend refuses", async () => {
     server.use(
