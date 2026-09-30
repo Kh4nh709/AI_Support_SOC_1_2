@@ -809,7 +809,7 @@ def _assert_never_not_measured_beside_a_count(rows: dict[str, tuple[str, str]]) 
             assert value == NO_RATING, (metric, value, basis)
         else:
             assert (value == "not measured") is (not any(counts)), (metric, value, basis)
-        assert not re.search(r"\d\.\d", value), (metric, value)  # never a rate
+            assert not re.search(r"\d\.\d", value), (metric, value)  # never a rate
 
 
 @pytest.mark.db
