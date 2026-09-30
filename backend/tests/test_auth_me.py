@@ -33,8 +33,8 @@ def client(db):
             db.rollback()
             raise
 
-    # A non-empty JWT_SECRET, so the real `current_user` answers 401 (not 503, AuthDisabled)
-    # when no token is sent (Director ruling R4).
+    # A non-empty JWT_SECRET (Director ruling R4): with the default empty one, the real
+    # `current_user` answers 503 (AuthDisabled), not 401, for any request that carries a token.
     main.app.dependency_overrides[deps.get_conn] = get_conn
     main.app.dependency_overrides[deps.get_config] = lambda: dataclasses.replace(
         config.Config(), JWT_SECRET="test-secret"

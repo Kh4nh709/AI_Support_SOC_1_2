@@ -696,14 +696,20 @@ def test_routers_are_discovered_sorted_and_auth_routes_exist() -> None:
     by_name = [importlib.import_module(f"app.web.routers.{n}").router for n in sorted(names)]
     assert found == by_name  # sorted by module name, every module's `router`
     auth_paths = {route.path for route in found[sorted(names).index("auth")].routes}
-    assert auth_paths == {"/api/auth/login", "/api/auth/logout"}
+    assert auth_paths == {"/api/auth/login", "/api/auth/logout", "/api/auth/me"}  # me: P10-T01
 
     # FastAPI 0.141.1 keeps an included router as one lazy `_IncludedRouter`
     # node in `app.routes` (measured) — the mounted paths are read from the
     # OpenAPI table, which resolves them.
     app_paths = set(main.app.openapi()["paths"])
-    assert {"/api/auth/login", "/api/auth/logout", "/api/admin/reload-inventory"} <= app_paths
+    assert {
+        "/api/auth/login",
+        "/api/auth/logout",
+        "/api/auth/me",
+        "/api/admin/reload-inventory",
+    } <= app_paths
     assert main.app.openapi()["paths"]["/api/auth/logout"].keys() == {"post"}
+    assert main.app.openapi()["paths"]["/api/auth/me"].keys() == {"get"}
     assert main.get_conn is deps.get_conn
 
 
