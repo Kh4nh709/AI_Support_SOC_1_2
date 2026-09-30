@@ -35,7 +35,7 @@ The 63 keys of `.env.example`, one row each, no values. `.env.example` is genera
 | `MAX_CLUSTER_AGE_HOURS` | dedup: the oldest a cluster may grow | default | no |
 | `MAX_CLUSTER_AGE_AUTOCLOSED_MINUTES` | dedup: the same, for an auto-closed cluster | default | no |
 | `MAX_CLUSTER_SIZE` | dedup: the most occurrences one cluster takes | default | no |
-| `DEDUP_ENABLED` | dedup: `true` (default) groups alerts into clusters, `false` makes every alert its own queue row and its own `triage` job (DEC-165); forward-only, clusters already open are left as they are; after a change the Owner recreates the containers, `docker compose up -d --force-recreate app worker` (**Grouping switch (DEC-165)**, below) | default | no |
+| `DEDUP_ENABLED` | dedup: `true` (default) groups alerts into clusters, `false` makes every alert its own queue row and its own `triage` job (DEC-165); forward-only, clusters already open are left as they are; after a change the Owner recreates the containers, `docker compose up -d --force-recreate app worker` (**Grouping switch (DEC-165)**, below) | Owner | no |
 | `INDEXER_URL` | the indexer the puller reads; its host name must match the certificate | Owner | no |
 | `INDEXER_USER` | the read-only indexer account | Owner | no |
 | `INDEXER_PASSWORD` | that account's password | Owner | yes |

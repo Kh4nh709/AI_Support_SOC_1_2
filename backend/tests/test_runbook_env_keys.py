@@ -78,7 +78,9 @@ def test_the_count_sentence_is_the_number_of_rows():
 def test_the_dedup_enabled_row_says_default_true_forward_only_and_how_to_apply_it():
     row = _rows()["DEDUP_ENABLED"]
     what, who, secret = (cell.strip() for cell in row.rstrip("|").split(" | "))
-    assert who == "default" and secret == "no"
+    # By the table's own legend: *default* is `.env.example`'s value, changed only by a DEC; the
+    # live value here (false) differs from it and is the Owner's, set in `.env` (DEC-165).
+    assert who == "Owner" and secret == "no"
     assert "`true`" in what and "DEC-165" in what
     assert "forward-only" in what
     # the recreate command the Owner runs: a plain `restart` keeps the container's old environment
