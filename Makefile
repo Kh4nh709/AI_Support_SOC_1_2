@@ -48,7 +48,7 @@ help:
 	@echo "  ui-install  npm ci in frontend/ (the React UI)"
 	@echo "  ui-lint     eslint + tsc --noEmit + prettier --check + npm audit (advisory) in frontend/"
 	@echo "  ui-test     the Vitest suite of frontend/ (TZ=UTC)"
-	@echo "  ui-e2e      the Playwright suite of frontend/ on a scratch stack (needs: npx playwright install chromium, psql)"
+	@echo "  ui-e2e      the Playwright suite of frontend/ on a scratch stack, then a scan of its output for secrets (PW_ARGS narrows it; needs: npx playwright install chromium, psql)"
 	@echo "  ui-build    the production build of frontend/ into frontend/dist"
 
 # pytest exits 5 when it collects nothing. backend/tests/ is empty until
@@ -205,10 +205,14 @@ ui-lint:
 ui-test:
 	cd frontend && npm test -- --run
 
-# Playwright starts scripts/ui_e2e_stack.sh (a scratch database, the API, the worker, an LLM stub and the
-# built UI, all on 127.0.0.1) and drops it all on exit. npm runs in frontend/, so a relative PY is made absolute.
+# scripts/ui_e2e_run.sh runs the Playwright suite, which starts scripts/ui_e2e_stack.sh (a scratch database, the API,
+# the worker, an LLM stub and the built UI, all on 127.0.0.1) and drops it all on exit; then it scans the run's
+# output and test-results/ for the run's secrets and fails the target if one is there. PW_ARGS narrows the run
+# (PW_ARGS=e2e/blind.spec.ts). A relative PY is made absolute. E2E_BACKEND_DIR (the red steps: a scratch copy of
+# the backend) counts only when it is given on this make command line, never when it is inherited from the shell.
+E2E_BACKEND_ENV = $(if $(filter command line,$(origin E2E_BACKEND_DIR)),E2E_BACKEND_DIR="$(abspath $(E2E_BACKEND_DIR))",-u E2E_BACKEND_DIR)
 ui-e2e:
-	cd frontend && PY="$(if $(findstring /,$(PY)),$(abspath $(PY)),$(PY))" npm run e2e
+	env $(E2E_BACKEND_ENV) PY="$(if $(findstring /,$(PY)),$(abspath $(PY)),$(PY))" bash scripts/ui_e2e_run.sh $(PW_ARGS)
 
 ui-build:
 	cd frontend && npm run build
