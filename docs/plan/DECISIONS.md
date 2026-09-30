@@ -3269,3 +3269,29 @@ Decision:
      - The first-click directions are: newest first, largest first, and A→Z.
      - The sort lives in the URL next to the filters. Changing it returns to page 1, and live refresh keeps it.
 Supersedes: nothing (it extends DEC-162's queue; the P10-T02 filters are unchanged)
+
+## DEC-165 · 2026-09-30 · The live system stops grouping alerts into clusters: every alert is its own queue row, gets its own enrichment, auto-close check, ① run and human decision; grouping stays in the code behind DEDUP_ENABLED (default true) and is switched off in the live .env
+Scope: **product** (ingest pipeline, Tier-1 queue) · **evaluation** (① volume and cost, pilot unit, the dedup contribution)
+Decided by: **the Owner**, 30/09:
+- The complaint that started it: *"Sửa lại chổ bảng thống alert: unknown attt-m1-lab 10 26/09 12:22 Không có gợi ý ①. Là từng alert thay vì gộp thành 10 và tính lần cuối thấy"*.
+- Then chose "Mỗi alert một dòng", then "Mỗi alert là một việc riêng" over "Hiện từng alert, quyết theo cụm". The costs were shown first: ① and LLM spend × N, a busier queue, and a redefined pilot unit.
+- Declined an extra hourly ① cap ("Không giới hạn thêm").
+- Approved the design ("Duyệt").
+Drafted by: Director (Opus 5.5)
+Propagated to: plan card P10-T15 (`docs/plan/STATE.md`) · `docs/limitations.md` at the P8-T06 close-out · `docs/runbook.md` (the Owner's switch)
+Decision:
+  1. **The switch.**
+     - A new config key `DEDUP_ENABLED`, a bool, defaults to `true`. The default keeps the phase-2 behaviour and every existing test.
+     - When it is `false`, `soar/pipeline.py` does not look for an open cluster: no `cluster_lock`, `find_open_cluster` or `bump_parent`. Every alert goes down the non-duplicate path: enrichment, risk, auto-close evaluation, and a `received` alert queued for ① exactly as a new head is today.
+     - No schema change. No change to decide, escalate, fan-out, conclude or ②.
+  2. **Forward only.** Turning the switch off never reopens or splits an existing cluster. `duplicate` is a terminal, sealed state. Open clusters, such as the one that prompted this, stay one row until decided.
+  3. **① per alert, with no extra cap.** ① runs once per alert. The existing `LLM_MONTHLY_USD_CAP` ($30, shared by ① and ②) is the only guard. When it is reached, the adapter refuses before any socket opens, and ① and ② both show "unavailable" until the next month. This risk is accepted by the Owner for the 04–06/10 attack days and goes into `docs/limitations.md`.
+  4. **Queue.**
+     - Rows also carry `alert_user` and `srcip`, shown as "User" and "IP nguồn", so identical alerts can be told apart. Neither field is derived from ①.
+     - "Số lần" stays: 1 for new alerts, and still true for older clusters. The DEC-164 sort is unchanged.
+  5. **Pilot and evaluation.**
+     - The pilot unit becomes one alert, one decision. The pilot has not started, so no data is mixed.
+     - The blind arm is already per alert (a sha256 of `alert_id`).
+     - The dedup contribution of the thesis is evaluated on the data recorded before the switch. The code path stays tested with `DEDUP_ENABLED=true`.
+  6. **Owner action.** Set `DEDUP_ENABLED=false` in the live `.env`, then `docker compose up -d --force-recreate app worker`; `.env` is read when a container is created.
+Supersedes: phase-2's "every alert of an open cluster merges into its head", for the live system only (the code and its tests remain)
