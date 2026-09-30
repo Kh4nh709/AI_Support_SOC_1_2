@@ -6,6 +6,7 @@ import { ForbiddenNotice, RequireRole } from "./auth/RequireRole";
 import { roleHome } from "./auth/redirect";
 import type { Role } from "./api/types";
 import { AppHeader } from "./components/AppHeader";
+import { AlertPage } from "./features/tier1/AlertPage";
 import { QueuePage } from "./features/tier1/QueuePage";
 import { LiveIndicator } from "./live/LiveIndicator";
 import { LoginPage } from "./pages/LoginPage";
@@ -64,7 +65,7 @@ export function AppRoutes() {
           path="/alerts/:alertId"
           element={
             <RequireRole roles={EVERY_ROLE}>
-              <Placeholder title={S.alert.infoHeading} />
+              <AlertPage />
             </RequireRole>
           }
         />
