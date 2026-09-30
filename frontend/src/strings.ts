@@ -11,11 +11,22 @@ export const S = {
   },
 
   nav: {
+    label: "Điều hướng chính",
     queue: "Hàng đợi",
     cases: "Case",
     adminLegacy: "Quản trị (UI cũ)",
     logout: "Đăng xuất",
   },
+
+  // The chip beside the user name in the header, by `role`.
+  role: {
+    tier1: "Tier 1",
+    tier2: "Tier 2",
+    admin: "Admin",
+  },
+
+  // Shown on the queue after a route was refused to the signed-in role (RequireRole).
+  forbidden: "Bạn không có quyền vào trang đó",
 
   live: {
     on: "Trực tiếp",
