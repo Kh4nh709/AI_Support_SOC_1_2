@@ -1,11 +1,20 @@
 """P8-T01's operations export: what the system did online over one time window, read-only.
 
-The human pilot never ran, so this command replaces the brief's `pilot_export.py` (DEC-129,
-DEC-116). One read-only transaction produces one markdown file that describes the online
-operating period in numbers: intake and dedup, the pull loop, pipeline ①'s online figures (the
-gate-forced rate included), auto-close. Every figure names the query that produced it, and
-section 8 prints every query verbatim. Each human-decision metric of architecture §6 is printed
-"not measured" with its missing precondition, its DEC and the counted evidence, never as a zero.
+This command replaces the brief's `pilot_export.py` (DEC-129). One read-only transaction
+produces one markdown file that describes the online operating period in numbers: intake and
+dedup, the pull loop, pipeline ①'s online figures (the gate-forced rate included), auto-close.
+Every figure names the query that produced it, and section 8 prints every query verbatim. Each
+human-decision metric of architecture §6 is printed "not measured" with its missing
+precondition, its DEC and the counted evidence, never as a zero.
+
+**The human pilot (P10-T06).** With `--pilot-start` (and, to close the pilot, `--pilot-end`;
+default the database's `now()`), section 6a computes the pilot's figures per arm (blind or
+visible, DEC-101) and per source (`wazuh`, `lab`, all): decisions by type, the median
+acknowledge → decide time on the database clock, and, on the blind arm only, ①'s agreement with
+the human decision. ① `needs_review` is no verdict: it is left out of the agreement's
+denominator and counted apart. The visible arm never gets an agreement figure. Without
+`--pilot-start` the section prints "not measured: pilot start not given" and no pilot query
+runs. The pilot has its own window: it is not the `--since`/`--until` window.
 
 **Population (card design note 1).** Alert figures read `alerts` with `received_at` in the window
 and `NOT is_synthetic`. `source` is not a filter: the lab-window heads are retagged
@@ -29,11 +38,11 @@ the same rows are byte-identical. No network, no model call.
 Run from the repository root, with `PYTHONPATH=backend`::
 
     PYTHONPATH=backend python3 eval/ops_export.py --until 2026-10-01T00:00:00Z \\
-        --env-file .env --out docs/results/operations.md
+        --pilot-start 2026-09-30T08:00:00Z --env-file .env --out docs/results/operations.md
 
 Exit codes:
-    0 written; 2 usage (an unparsable or inverted window, or no `--until`);
-    4 the DSN is unreadable.
+    0 written; 2 usage (an unparsable or inverted window, `--pilot-end` without `--pilot-start`,
+    or no `--until`); 4 the DSN is unreadable.
 """
 
 from __future__ import annotations
@@ -80,6 +89,10 @@ R5_SENTENCE = (
 READ_ONLY_STATEMENT = "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
 
 NA = "n/a (0 rows)"
+#: What the pilot window's end reads as when `--pilot-end` is not given. Never a timestamp: the
+#: file carries no run clock (two runs over the same rows are byte-identical).
+PILOT_END_CLOCK = "the database clock at the run"
+NO_PILOT_START = "not measured: pilot start not given"
 
 
 class Exit(Exception):
@@ -113,6 +126,23 @@ class Window:
 
     def __str__(self) -> str:
         return f"[{_ts(self.since)}, {_ts(self.until)})"
+
+
+@dataclass(frozen=True)
+class PilotWindow:
+    """The half-open UTC window `[start, end)` the human pilot's figures are taken over. `end` is
+    None when `--pilot-end` is not given: the queries then read the database's `now()`, which is
+    the start of the read-only transaction, so every figure sees one instant."""
+
+    start: datetime
+    end: datetime | None = None
+
+    @property
+    def params(self) -> dict[str, datetime | None]:
+        return {"pilot_start": self.start, "pilot_end": self.end}
+
+    def __str__(self) -> str:
+        return f"[{_ts(self.start)}, {_ts(self.end) if self.end else PILOT_END_CLOCK})"
 
 
 # --- the queries: one constant each, in the order they run and the document cites them ---------
@@ -420,6 +450,146 @@ GROUP BY l.source
 ORDER BY l.source""",
 )
 
+# --- the pilot's queries (section 6a): they run only when `--pilot-start` is given ---------------
+#
+# The pilot has its own half-open window `[%(pilot_start)s, %(pilot_end)s)` on `audit_events.
+# created_at`, the database clock; a NULL end reads as the transaction's `now()`. Alerts are not
+# windowed by `received_at`: an alert received before the pilot and decided in it is a pilot
+# decision. Synthetic alerts are excluded, as everywhere in this file. The three CTEs below are
+# text pasted into each query that needs them, so every query stays self-contained in section 8.
+
+_PILOT_END = "coalesce(%(pilot_end)s::timestamptz, now())"
+# One row per human decision: `tier1.decided` (payload `decision`: closed_fp, closed_benign) or
+# `tier1.escalated`, about a non-synthetic alert. The arm is `alerts.suggestion_visible` (DEC-101).
+_PILOT_DECISIONS = f"""d AS (
+  SELECT e.subject_id AS alert_id,
+         e.actor_id,
+         e.created_at AS decided_at,
+         CASE WHEN e.event_type = 'tier1.escalated' THEN 'escalated'
+              WHEN e.payload->>'decision' = 'closed_fp' THEN 'false_positive'
+              WHEN e.payload->>'decision' = 'closed_benign' THEN 'benign'
+         END AS decision,
+         CASE WHEN a.suggestion_visible THEN 'visible' ELSE 'blind' END AS arm,
+         a.source
+  FROM audit_events e
+  JOIN alerts a ON a.alert_id = e.subject_id AND NOT a.is_synthetic
+  WHERE e.created_at >= %(pilot_start)s
+    AND e.created_at < {_PILOT_END}
+    AND (e.event_type = 'tier1.escalated'
+         OR (e.event_type = 'tier1.decided'
+             AND e.payload->>'decision' IN ('closed_fp', 'closed_benign')))
+)"""
+# Each decision with its alert's latest `alert.acknowledged` at or after the pilot start and not
+# after the decision, or NULL: a decision whose acknowledge is outside the window is counted, not
+# timed.
+_PILOT_TIMED = """t AS (
+  SELECT d.arm, d.source, d.actor_id, d.decision, d.decided_at, k.acked_at
+  FROM d
+  LEFT JOIN LATERAL (
+    SELECT max(x.created_at) AS acked_at
+    FROM audit_events x
+    WHERE x.event_type = 'alert.acknowledged'
+      AND x.subject_id = d.alert_id
+      AND x.created_at >= %(pilot_start)s
+      AND x.created_at <= d.decided_at
+  ) k ON true
+)"""
+
+
+def _pilot_source(alias: str) -> str:
+    return f"CASE WHEN GROUPING({alias}.source) = 1 THEN 'all' ELSE {alias}.source END AS source"
+
+
+def _pilot_types(alias: str) -> str:
+    return f"""count(*) FILTER (WHERE {alias}.decision = 'false_positive') AS false_positive,
+       count(*) FILTER (WHERE {alias}.decision = 'benign') AS benign,
+       count(*) FILTER (WHERE {alias}.decision = 'escalated') AS escalated,
+       count(*) AS decisions"""
+
+
+_PILOT_MEDIAN = """extract(epoch FROM percentile_cont(0.5)
+         WITHIN GROUP (ORDER BY t.decided_at - t.acked_at))::numeric AS median_seconds,
+       count(t.acked_at) AS acknowledged"""
+
+Q_PILOT_DECISIONS = Query(
+    "Q29",
+    "pilot: human decisions by type, per arm and source",
+    f"""WITH {_PILOT_DECISIONS}
+SELECT d.arm,
+       {_pilot_source('d')},
+       {_pilot_types('d')}
+FROM d
+GROUP BY d.arm, ROLLUP (d.source)
+ORDER BY d.arm, GROUPING(d.source), d.source""",
+)
+Q_PILOT_MEDIAN = Query(
+    "Q30",
+    "pilot: median acknowledge → decide, per arm and source",
+    f"""WITH {_PILOT_DECISIONS},
+{_PILOT_TIMED}
+SELECT t.arm,
+       {_pilot_source('t')},
+       {_PILOT_MEDIAN},
+       count(*) AS decisions
+FROM t
+GROUP BY t.arm, ROLLUP (t.source)
+ORDER BY t.arm, GROUPING(t.source), t.source""",
+)
+Q_PILOT_AGREEMENT = Query(
+    "Q31",
+    "pilot: ① agreement with the human decision, blind arm only",
+    f"""WITH {_PILOT_DECISIONS},
+v AS (
+  SELECT d.source, d.decision, s.suggested_action
+  FROM d
+  LEFT JOIN LATERAL (
+    SELECT r.result->>'suggested_action' AS suggested_action
+    FROM llm_runs r
+    WHERE r.pipeline = 'triage'
+      AND r.role = 'proposer'
+      AND r.subject_id = d.alert_id
+    ORDER BY r.created_at DESC, r.run_id DESC
+    LIMIT 1
+  ) s ON true
+  WHERE d.arm = 'blind'
+)
+SELECT CASE WHEN GROUPING(v.source) = 1 THEN 'all' ELSE v.source END AS source,
+       count(*) AS decisions,
+       count(*) FILTER (WHERE v.suggested_action = 'needs_review') AS needs_review,
+       count(*) FILTER (WHERE v.suggested_action IS NULL
+                           OR v.suggested_action NOT IN ('escalate', 'false_positive',
+                                                         'needs_review')) AS no_result,
+       count(*) FILTER (WHERE v.suggested_action IN ('escalate', 'false_positive')) AS denominator,
+       count(*) FILTER (WHERE (v.suggested_action = 'escalate' AND v.decision = 'escalated')
+                           OR (v.suggested_action = 'false_positive'
+                               AND v.decision = 'false_positive')) AS agreed
+FROM v
+GROUP BY ROLLUP (v.source)
+ORDER BY GROUPING(v.source), v.source""",
+)
+Q_PILOT_PERSON = Query(
+    "Q32",
+    "pilot: decisions and median acknowledge → decide, per person, arm and source",
+    f"""WITH {_PILOT_DECISIONS},
+{_PILOT_TIMED}
+SELECT t.actor_id,
+       t.arm,
+       {_pilot_source('t')},
+       {_pilot_types('t')},
+       {_PILOT_MEDIAN}
+FROM t
+GROUP BY t.actor_id, t.arm, ROLLUP (t.source)
+ORDER BY t.actor_id, t.arm, GROUPING(t.source), t.source""",
+)
+
+#: The pilot's queries, run after `QUERIES`, and only when `--pilot-start` is given.
+PILOT_QUERIES: tuple[Query, ...] = (
+    Q_PILOT_DECISIONS,
+    Q_PILOT_MEDIAN,
+    Q_PILOT_AGREEMENT,
+    Q_PILOT_PERSON,
+)
+
 #: Every query, in the order `collect` runs it and the document cites it.
 QUERIES: tuple[Query, ...] = (
     Q_SYNTHETIC,
@@ -467,25 +637,29 @@ class HumanMetric:
     evidence: tuple[str, ...]
 
 
-_NO_PILOT = "no human-decision pilot ran"
-_CONSOLE = "the Tier-1 console was deprioritized (DEC-116)"
+#: Rows 0-2 without `--pilot-start`: what is missing, and where the figure comes from.
+_NO_START = "pilot start not given"
+_PASS_START = "pass `--pilot-start` for the pilot's figures (section 6a)"
 
 HUMAN_METRICS: tuple[HumanMetric, ...] = (
     HumanMetric(
-        "Decisions by branch (blind / visible) and by person", _NO_PILOT, _CONSOLE, ("tier1",)
+        "Decisions by branch (blind / visible) and by person", _NO_START, _PASS_START, ("tier1",)
     ),
-    HumanMetric("Median acknowledge → decide, by branch", _NO_PILOT, _CONSOLE, ("tier1", "ack")),
+    HumanMetric("Median acknowledge → decide, by branch", _NO_START, _PASS_START, ("tier1", "ack")),
     HumanMetric(
-        "① agreement with human decisions, blind branch only", _NO_PILOT, _CONSOLE, ("tier1",)
+        "① agreement with human decisions, blind branch only", _NO_START, _PASS_START, ("tier1",)
     ),
     HumanMetric(
         "Auto-close wrong-close rate from the digest, with its Wilson CI",
         "no digest review ran",
-        "the digest (P5) was deprioritized (DEC-116)",
+        "live since P5 (DEC-154)",
         ("reviews", "reviewed"),
     ),
     HumanMetric(
-        "② usefulness, 1–5", "no ② run exists to rate", "② was cut (DEC-097, DEC-111)", ("case",)
+        "② usefulness, 1–5",
+        "no ② rating recorded",
+        "built and run, no rating control in v1.0 (DEC-154, DEC-161)",
+        ("case",),
     ),
 )
 GATE_FORCED_METRIC = "Gate-forced `needs_review` rate"
@@ -515,22 +689,27 @@ class _Runner:
 
     conn: object
     window: Window
+    pilot: PilotWindow | None = None
     ran: list[Query] = field(default_factory=list)
     results: dict[str, list[tuple]] = field(default_factory=dict)
 
-    def run(self, query: Query) -> list[tuple]:
+    def run(self, query: Query, params: Mapping[str, object] | None = None) -> list[tuple]:
         self.ran.append(query)
-        rows = _execute(self.conn, query.sql, self.window.params)
+        rows = _execute(self.conn, query.sql, self.window.params if params is None else params)
         self.results[query.qid] = rows
         return rows
 
 
-def collect(conn, window: Window) -> _Runner:
-    """Run every query once, in `QUERIES` order, on `conn`. Sets nothing on the connection: the
-    CLI's own connection is read-only (`_connect_readonly`); a test passes its own."""
-    runner = _Runner(conn, window)
+def collect(conn, window: Window, pilot: PilotWindow | None = None) -> _Runner:
+    """Run every query once, in `QUERIES` order, on `conn`, then, when `pilot` is given, the
+    `PILOT_QUERIES` on the pilot window. Sets nothing on the connection: the CLI's own
+    connection is read-only (`_connect_readonly`); a test passes its own."""
+    runner = _Runner(conn, window, pilot)
     for query in QUERIES:
         runner.run(query)
+    if pilot is not None:
+        for query in PILOT_QUERIES:
+            runner.run(query, pilot.params)
     return runner
 
 
@@ -557,6 +736,10 @@ def _rate(num: int, den: int) -> str:
 
 def _ms(value: object) -> str:
     return NA if value is None else f"{int(value)} ms"
+
+
+def _minutes(seconds: object) -> str:
+    return NA if seconds is None else f"{Decimal(seconds) / 60:.2f} min"
 
 
 def _usd(value: Decimal) -> str:
@@ -796,7 +979,57 @@ def _human_row(metric: HumanMetric, counts: Mapping[str, int]) -> list[str]:
     return [metric.metric, value, basis]
 
 
-def _architecture_section(res: Mapping[str, list[tuple]]) -> list[str]:
+def _pilot_human_rows(res: Mapping[str, list[tuple]]) -> list[list[str]]:
+    """Section 6's first three rows once a pilot window is given: each points at its section 6a
+    figure and carries its n. A row with no n is `not measured`, never a zero."""
+    decisions = sum(row[5] for row in res[Q_PILOT_DECISIONS.qid] if row[1] == "all")
+    timed = sum(row[3] for row in res[Q_PILOT_MEDIAN.qid] if row[1] == "all")
+    blind, denominator = 0, 0
+    for row in res[Q_PILOT_AGREEMENT.qid]:
+        if row[0] == "all":
+            blind, denominator = row[1], row[4]
+    specs = (
+        (
+            HUMAN_METRICS[0],
+            Q_PILOT_DECISIONS,
+            decisions,
+            "pilot decisions",
+            "no human decision in the pilot window",
+            "",
+        ),
+        (
+            HUMAN_METRICS[1],
+            Q_PILOT_MEDIAN,
+            timed,
+            "decisions with an acknowledge in the window",
+            "no decision with an acknowledge in the pilot window",
+            "",
+        ),
+        (
+            HUMAN_METRICS[2],
+            Q_PILOT_AGREEMENT,
+            blind,
+            "blind decisions",
+            "no blind decision with a ① verdict in the pilot window",
+            f"; agreement denominator = {denominator}",
+        ),
+    )
+    rows = []
+    for metric, query, n, label, empty, extra in specs:
+        measured = denominator > 0 if metric is HUMAN_METRICS[2] else n > 0
+        if measured:
+            value = f"measured, n = {n}"
+            basis = f"measured over the pilot window: section 6a ({query.qid}); {label} = {n}{extra}"
+        else:
+            value = "not measured"
+            basis = f"{empty}: section 6a ({query.qid}); {label} = {n}{extra}"
+        rows.append([metric.metric, value, basis])
+    return rows
+
+
+def _architecture_section(
+    res: Mapping[str, list[tuple]], pilot: PilotWindow | None = None
+) -> list[str]:
     tier1, ack, reviewed, case = res[Q_HUMAN_EVENTS.qid][0]
     counts = {
         "tier1": tier1,
@@ -813,16 +1046,20 @@ def _architecture_section(res: Mapping[str, list[tuple]]) -> list[str]:
     if _squeezed(forced, gate_ran):
         basis += f"; above 0.60: {SQUEEZE_SENTENCE} (architecture §6), R5 (architecture §9)"
     rows = [_human_row(m, counts) for m in HUMAN_METRICS]
+    if pilot is not None:
+        rows[:3] = _pilot_human_rows(res)
     rows.insert(3, [GATE_FORCED_METRIC, _rate(forced, gate_ran), basis])
     blind, visible = res[Q_BRANCHES.qid][0]
     return [
         "## 6 · Architecture §6's online metrics",
         "",
         (
-            "Architecture §6 names six online metrics. One is measured here. The other five "
-            "need a human-decision pilot, which never ran (DEC-129): each prints `not measured` "
-            "beside the evidence counted for it, or `descriptive, n = k` when that evidence is "
-            "not zero."
+            "Architecture §6 names six online metrics. One is measured here, from the gate. "
+            "Three need the human pilot: with `--pilot-start` each is measured in section 6a "
+            "over the pilot window, and without it each prints `not measured` beside the "
+            "evidence counted over the export window, or `descriptive, n = k` when that "
+            "evidence is not zero. The digest and ② rows print the same beside their own "
+            "evidence."
         ),
         "",
         _table(["metric", "value", "basis"], rows),
@@ -839,6 +1076,177 @@ def _architecture_section(res: Mapping[str, list[tuple]]) -> list[str]:
                 ["visible (`suggestion_visible = true`)", visible],
             ],
         ),
+    ]
+
+
+# --- section 6a: the human pilot ----------------------------------------------------------------
+
+ARMS = ("blind", "visible")
+_STANDARD_SOURCES = ("wazuh", "lab")
+
+
+def _source_order(present: set[str]) -> list[str]:
+    """`wazuh`, `lab`, any other source that has a row (sorted), then `all`: nothing that is in
+    `all` is left out of a table."""
+    others = sorted(present - {*_STANDARD_SOURCES, "all"})
+    return [*_STANDARD_SOURCES, *others, "all"]
+
+
+def _pilot_decisions_table(rows: Sequence[tuple]) -> str:
+    by_key = {(arm, source): counts for arm, source, *counts in rows}
+    sources = _source_order({source for _, source, *_ in rows})
+    body = [
+        [arm, source, *by_key.get((arm, source), (0, 0, 0, 0))] for arm in ARMS for source in sources
+    ]
+    headers = ["arm", "source", "false_positive", "benign", "escalated", "decisions"]
+    return _table(headers, body)
+
+
+def _pilot_median_table(rows: Sequence[tuple]) -> str:
+    by_key = {(arm, source): rest for arm, source, *rest in rows}
+    sources = _source_order({source for _, source, *_ in rows})
+    body = []
+    for arm in ARMS:
+        for source in sources:
+            median, acknowledged, decisions = by_key.get((arm, source), (None, 0, 0))
+            body.append([arm, source, _minutes(median), acknowledged, decisions])
+    headers = [
+        "arm",
+        "source",
+        "median acknowledge → decide",
+        "n (acknowledged in the window)",
+        "decisions",
+    ]
+    return _table(headers, body)
+
+
+def _pilot_agreement_table(rows: Sequence[tuple]) -> str:
+    by_source = {source: counts for source, *counts in rows}
+    body = []
+    for source in _source_order(set(by_source)):
+        decisions, needs_review, no_result, denominator, agreed = by_source.get(
+            source, (0, 0, 0, 0, 0)
+        )
+        body.append(
+            [
+                source,
+                decisions,
+                needs_review,
+                no_result,
+                denominator,
+                agreed,
+                _rate(agreed, denominator),
+            ]
+        )
+    headers = [
+        "source",
+        "decisions (n)",
+        "① needs_review (no verdict)",
+        "① no result",
+        "denominator",
+        "agreed",
+        "agreement",
+    ]
+    return _table(headers, body)
+
+
+def _pilot_person_table(rows: Sequence[tuple]) -> str:
+    sources = _source_order({row[2] for row in rows})
+
+    def order(row: tuple) -> tuple:
+        person = "" if row[0] is None else str(row[0])
+        return (person, ARMS.index(row[1]), sources.index(row[2]))
+
+    body = [
+        [person, arm, source, fp, benign, escalated, decisions, _minutes(median), acknowledged]
+        for person, arm, source, fp, benign, escalated, decisions, median, acknowledged in sorted(
+            rows, key=order
+        )
+    ]
+    headers = [
+        "person",
+        "arm",
+        "source",
+        "false_positive",
+        "benign",
+        "escalated",
+        "decisions",
+        "median acknowledge → decide",
+        "n (acknowledged in the window)",
+    ]
+    return _table(headers, body)
+
+
+def _pilot_section(res: Mapping[str, list[tuple]], pilot: PilotWindow | None) -> list[str]:
+    heading = ["## 6a · The human pilot, per arm and source", ""]
+    if pilot is None:
+        return [
+            *heading,
+            (
+                f"{NO_PILOT_START} (pass `--pilot-start ISO8601`, and `--pilot-end` to close the "
+                "pilot). No pilot query ran."
+            ),
+        ]
+    end_note = (
+        ""
+        if pilot.end
+        else " `--pilot-end` was not given: the end is the `now()` of the read-only transaction, "
+        "and no timestamp of it is printed."
+    )
+    return [
+        *heading,
+        (
+            f"- Pilot window: `{pilot}`, half-open, UTC, on `audit_events.created_at`, which is "
+            f"the database clock.{end_note} It is not the export window of section 1."
+        ),
+        (
+            "- Decisions: `audit_events` of type `tier1.decided` (payload `decision` `closed_fp` "
+            "= false_positive, `closed_benign` = benign) and `tier1.escalated` (= escalated), "
+            "created in the pilot window, about a non-synthetic alert, whenever the alert was "
+            "received. The arm is `alerts.suggestion_visible`: blind is `false` (DEC-101). The "
+            "source is `alerts.source`, and `all` is the sum of the sources."
+        ),
+        (
+            "- Acknowledge → decide: from the alert's latest `alert.acknowledged` event that is "
+            "at or after the pilot start and not after the decision, to the decision; both are "
+            "`audit_events.created_at`. A decision with no such acknowledge is counted in "
+            "`decisions` and not timed. The median is `percentile_cont(0.5)`: the mean of the "
+            "two middle values when n is even."
+        ),
+        (
+            "- ① is the `suggested_action` of the alert's latest `proposer` `triage` row in "
+            "`llm_runs`, the gated verdict the queue shows."
+        ),
+        "",
+        f"### Decisions by type ({Q_PILOT_DECISIONS.qid})",
+        "",
+        _pilot_decisions_table(res[Q_PILOT_DECISIONS.qid]),
+        "",
+        f"### Median acknowledge → decide ({Q_PILOT_MEDIAN.qid})",
+        "",
+        _pilot_median_table(res[Q_PILOT_MEDIAN.qid]),
+        "",
+        f"### ① agreement with the human, blind arm only ({Q_PILOT_AGREEMENT.qid})",
+        "",
+        (
+            "- ① `escalate` agrees with a human escalation. ① `false_positive` agrees with a "
+            "human `false_positive`. Any other pair is a disagreement, a human `benign` after ① "
+            "`false_positive` included."
+        ),
+        (
+            "- ① `needs_review` is no verdict: it is left out of the denominator and counted in "
+            "its own column. A decision with no ① result (no proposer row, or its `result` is "
+            "NULL) is counted in its own column too."
+        ),
+        "- the visible arm has no agreement figure: its analyst saw ①.",
+        "",
+        _pilot_agreement_table(res[Q_PILOT_AGREEMENT.qid]),
+        "",
+        f"### Decisions per person ({Q_PILOT_PERSON.qid})",
+        "",
+        "`person` is the acting user's id (`audit_events.actor_id`), not a name.",
+        "",
+        _pilot_person_table(res[Q_PILOT_PERSON.qid]),
     ]
 
 
@@ -860,7 +1268,9 @@ def _labelling_section(res: Mapping[str, list[tuple]]) -> list[str]:
     ]
 
 
-def _appendix(window: Window, ran: Sequence[Query]) -> list[str]:
+def _appendix(
+    window: Window, ran: Sequence[Query], pilot: PilotWindow | None = None
+) -> list[str]:
     lines = [
         "## 8 · Appendix: SQL",
         "",
@@ -870,6 +1280,20 @@ def _appendix(window: Window, ran: Sequence[Query]) -> list[str]:
             f"transaction opened with `{READ_ONLY_STATEMENT}`."
         ),
     ]
+    if pilot is not None:
+        end = (
+            f"`{_ts(pilot.end)}`"
+            if pilot.end
+            else "`NULL`, which the queries read as `now()`, the database clock"
+        )
+        lines += [
+            "",
+            (
+                f"The pilot queries ({PILOT_QUERIES[0].qid} to {PILOT_QUERIES[-1].qid}) bind "
+                f"`%(pilot_start)s` = `{_ts(pilot.start)}` and `%(pilot_end)s` = {end}, and not "
+                "`%(since)s` or `%(until)s`."
+            ),
+        ]
     for query in ran:
         lines += ["", f"### {query.qid} · {query.title}", "", "```sql", query.sql, "```"]
     return lines
@@ -884,16 +1308,17 @@ def render(window: Window, runner: _Runner) -> str:
         _pull_section(res),
         _online_section(res),
         _autoclose_section(res),
-        _architecture_section(res),
+        _architecture_section(res, runner.pilot),
+        _pilot_section(res, runner.pilot),
         _labelling_section(res),
-        _appendix(window, runner.ran),
+        _appendix(window, runner.ran, runner.pilot),
     ]
     return "\n\n".join("\n".join(part) for part in parts) + "\n"
 
 
-def build_report(conn, window: Window) -> str:
+def build_report(conn, window: Window, pilot: PilotWindow | None = None) -> str:
     """Run every query on `conn` and render the document."""
-    return render(window, collect(conn, window))
+    return render(window, collect(conn, window, pilot))
 
 
 # --- the CLI -----------------------------------------------------------------------------------
@@ -915,6 +1340,26 @@ def parse_window(since: str, until: str) -> Window:
     if window.since >= window.until:
         raise Exit(EXIT_USAGE, f"inverted or empty window: --since {since} is not before --until")
     return window
+
+
+def parse_pilot(start: str | None, end: str | None) -> PilotWindow | None:
+    """No `--pilot-start` and no `--pilot-end`: no pilot (section 6a prints `not measured`). An
+    end without a start is a usage error, and so is an end that is not after the start. A start
+    alone leaves the end open: the database's `now()`."""
+    if start is None:
+        if end is not None:
+            raise Exit(EXIT_USAGE, "--pilot-end needs --pilot-start")
+        return None
+    pilot = PilotWindow(
+        _instant(start, "--pilot-start"),
+        None if end is None else _instant(end, "--pilot-end"),
+    )
+    if pilot.end is not None and pilot.start >= pilot.end:
+        raise Exit(
+            EXIT_USAGE,
+            f"inverted or empty pilot window: --pilot-start {start} is not before --pilot-end",
+        )
+    return pilot
 
 
 def _resolve_dsn(dsn: str | None, env_file: str) -> str:
@@ -966,8 +1411,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="ops_export.py",
         description="Write one markdown file of what the system did online over [--since, "
         "--until), measured read-only, every figure beside the query that produced it.",
-        epilog="exit codes: 0 written; 2 usage (an unparsable or inverted window, or no "
-        "--until); 4 the DSN is unreadable.",
+        epilog="exit codes: 0 written; 2 usage (an unparsable or inverted window, "
+        "--pilot-end without --pilot-start, or no --until); 4 the DSN is unreadable.",
     )
     parser.add_argument(
         "--since",
@@ -980,6 +1425,19 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="ISO8601",
         help="UTC instant, exclusive; required, so two runs over one window are byte-identical",
+    )
+    parser.add_argument(
+        "--pilot-start",
+        default=None,
+        metavar="ISO8601",
+        help="UTC instant, inclusive: the human pilot's first moment. Without it section 6a "
+        "prints 'not measured: pilot start not given' and no pilot query runs",
+    )
+    parser.add_argument(
+        "--pilot-end",
+        default=None,
+        metavar="ISO8601",
+        help="UTC instant, exclusive; needs --pilot-start (default: the database's now())",
     )
     parser.add_argument("--out", default=DEFAULT_OUT, metavar="PATH")
     parser.add_argument("--env-file", default=".env", metavar="PATH")
@@ -994,9 +1452,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return int(exc.code or 0)
     try:
         window = parse_window(args.since, args.until)
+        pilot = parse_pilot(args.pilot_start, args.pilot_end)
         dsn = _resolve_dsn(args.dsn, args.env_file)
         with _readonly_connection(dsn) as conn:
-            runner = collect(conn, window)
+            runner = collect(conn, window, pilot)
         text = render(window, runner)
         out = Path(args.out)
         _write(out, text)

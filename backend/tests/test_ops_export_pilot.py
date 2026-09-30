@@ -372,7 +372,10 @@ def test_without_a_pilot_start_the_section_says_not_measured(db):
         "Median acknowledge → decide, by branch",
         "① agreement with human decisions, blind branch only",
     ):
-        assert "pilot start not given" in rows[metric][1], metric
+        # the export window's own evidence (Q24, 10 `tier1.decided`) is counted beside the pointer
+        assert rows[metric][0].startswith("descriptive, n = "), metric
+        assert "pass `--pilot-start` for the pilot's figures (section 6a)" in rows[metric][1], metric
+        assert "measured over the pilot window" not in rows[metric][1], metric
 
 
 def _section_rows(text: str, heading: str) -> dict[str, tuple[str, str]]:
