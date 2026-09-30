@@ -49,6 +49,8 @@ const row = (over: Partial<QueueRow> = {}): QueueRow => ({
   category: "ssh_brute_force",
   severity: "high",
   agent_name: "lab-ubuntu-01",
+  alert_user: "alice",
+  srcip: "203.0.113.9",
   occurrence_count: 7,
   triaged_count: 1,
   first_seen_at: "2026-09-30T01:00:00Z",
@@ -156,17 +158,66 @@ const queueFetches = (spy: { mock: { calls: unknown[][] } }) =>
   spy.mock.calls.filter(([input]) => String(input).includes("/tier1/queue")).length;
 
 describe("the rows", () => {
-  it("shows a row's band, description, rule, category, agent, count and last seen in +07", async () => {
+  it("shows a row's band, description, rule, category, agent, user, source IP, count and last seen in +07", async () => {
     renderQueue();
     const r = await screen.findByRole("row", { name: /sshd: authentication failed/ });
-    const [band, description, category, agent, count, lastSeen] = cells(r);
+    const [band, description, category, agent, user, srcip, count, lastSeen] = cells(r);
     expect(band).toHaveTextContent("Cao");
     expect(description).toHaveTextContent("sshd: authentication failed");
     expect(description).toHaveTextContent(S.queue.rule("5760"));
     expect(category).toHaveTextContent("ssh_brute_force");
     expect(agent).toHaveTextContent("lab-ubuntu-01");
+    expect(user).toHaveTextContent("alice");
+    expect(srcip).toHaveTextContent("203.0.113.9");
     expect(count).toHaveTextContent("7");
     expect(lastSeen).toHaveTextContent("30/09 09:15"); // 02:15Z, in Asia/Ho_Chi_Minh, under TZ=UTC
+  });
+
+  // P10-T15 (DEC-165): with grouping off every alert is its own row, so the row says whose alert it is and
+  // where it came from. The two columns sit right after Agent; neither is sortable; ① stays the last.
+  it("has the User and IP nguồn columns right after Agent, in Vietnamese, with no sort button", async () => {
+    renderQueue();
+    await screen.findByRole("row", { name: /sshd/ });
+    expect(S.queue.col.user).toBe("User");
+    expect(S.queue.col.srcip).toBe("IP nguồn");
+    const headers = screen.getAllByRole("columnheader").map((th) => th.textContent ?? "");
+    const at = (label: string) => headers.findIndex((text) => text.startsWith(label));
+    expect(at(S.queue.col.user)).toBe(at(S.queue.col.agent) + 1);
+    expect(at(S.queue.col.srcip)).toBe(at(S.queue.col.agent) + 2);
+    expect(at(S.queue.col.ai)).toBe(headers.length - 1);
+    for (const name of [S.queue.col.user, S.queue.col.srcip]) {
+      const th = screen.getByRole("columnheader", { name });
+      expect(within(th).queryByRole("button")).toBeNull();
+      expect(th).not.toHaveAttribute("aria-sort");
+    }
+  });
+
+  it("shows a dash for a null user and for a missing or empty source IP, on a visible and a blind row", async () => {
+    // `alert_user` is nullable and `srcip` is TEXT NOT NULL DEFAULT '' in the schema: the server sends both raw.
+    respond = () =>
+      HttpResponse.json(
+        answer([
+          row({
+            alert_id: "n1",
+            description: "null user",
+            alert_user: null,
+            srcip: "198.51.100.4",
+          }),
+          row({ alert_id: "n2", description: "empty ip", alert_user: "bob", srcip: "" }),
+          blindRow({ alert_id: "n3", description: "blind null", alert_user: null, srcip: "" }),
+          blindRow({ alert_id: "n4", description: "blind has both", alert_user: "eve" }),
+        ]),
+      );
+    renderQueue();
+    const userAndIp = async (name: RegExp) => {
+      const r = await screen.findByRole("row", { name });
+      return [cells(r)[4]?.textContent, cells(r)[5]?.textContent];
+    };
+    expect(await userAndIp(/null user/)).toEqual([S.common.missing, "198.51.100.4"]);
+    expect(await userAndIp(/empty ip/)).toEqual(["bob", S.common.missing]);
+    expect(await userAndIp(/blind null/)).toEqual([S.common.missing, S.common.missing]);
+    // A blind head keeps both: neither is derived from ① (DEC-101, R12).
+    expect(await userAndIp(/blind has both/)).toEqual(["eve", "203.0.113.9"]);
   });
 
   it("links the description to the alert page", async () => {
@@ -259,7 +310,7 @@ describe("the rows", () => {
     expect(cells(odd)[2]).toHaveTextContent("new_thing");
     const none = screen.getByRole("row", { name: /no score/ });
     expect(cells(none)[0]).toHaveTextContent(S.common.missing);
-    expect(cells(none)[6]).toHaveTextContent("quarantine");
+    expect(cells(none)[8]).toHaveTextContent("quarantine");
   });
 
   it("renders hostile text as text", async () => {
@@ -274,9 +325,9 @@ describe("the rows", () => {
 });
 
 describe("the ① cell", () => {
-  /** The ① cell (the seventh) of the row with this name. */
+  /** The ① cell (the ninth, after User and IP nguồn) of the row with this name. */
   const ai = async (name: RegExp): Promise<HTMLElement> => {
-    const cell = cells(await screen.findByRole("row", { name }))[6];
+    const cell = cells(await screen.findByRole("row", { name }))[8];
     if (!cell) throw new Error("the row has no ① cell");
     return cell;
   };

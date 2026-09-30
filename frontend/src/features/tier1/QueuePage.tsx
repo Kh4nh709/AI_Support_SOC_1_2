@@ -79,6 +79,15 @@ function columnsFor(
       ...sortable("agent", S.queue.col.agent),
       cell: (row) => row.agent_name,
     },
+    // DEC-165: with grouping off a row is one alert, so it says whose and from where. Not sortable, not from
+    // ①: a null user or an empty source IP is a dash, on a blind row too.
+    { id: "user", header: S.queue.col.user, cell: (row) => row.alert_user || S.common.missing },
+    {
+      id: "srcip",
+      header: S.queue.col.srcip,
+      className: "font-mono text-xs",
+      cell: (row) => row.srcip || S.common.missing,
+    },
     {
       id: "occurrences",
       ...sortable("occurrences", S.queue.col.occurrences),
