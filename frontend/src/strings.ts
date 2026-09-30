@@ -2,6 +2,9 @@
 // The tables keyed by a server code (`status`, `band`, `conclusion`, ...) are read through `labelOf`, so a
 // code this file has no label for is shown as the code itself.
 
+/** The shortest quote ② may cite, in characters (`MIN_QUOTE_CHARS` of backend/app/tier2/investigate.py). */
+export const MIN_QUOTE_CHARS = 8;
+
 export const S = {
   app: {
     name: "AI Support SOC",
@@ -106,6 +109,9 @@ export const S = {
     facts: "Dữ kiện đã dùng",
     quote: "Trích dẫn",
     source: "Nguồn",
+    model: "Mô hình",
+    latency: "Thời gian",
+    cost: "Chi phí",
   },
 
   alert: {
@@ -251,6 +257,9 @@ export const S = {
       "yêu cầu (mỗi giả thuyết phải có ít nhất một bằng chứng phản bác), hãy đọc giả thuyết này thận trọng.",
     nextSteps: "Bước tiếp theo",
     injection: "Cảnh báo tiêm lệnh (prompt injection)",
+    model: "Mô hình",
+    tokens: "Token",
+    cost: "Chi phí",
     quotaExhausted: (n: number) => `Đã dùng hết ${n} lượt phân tích hôm nay`,
     alreadyRunning: "Đang có một lượt phân tích chạy cho case này",
     concluded: "Case đã kết luận — không thể phân tích thêm",
@@ -259,13 +268,15 @@ export const S = {
       verified: "Đã kiểm chứng",
       quote_not_found: "Trích dẫn không có trong log hay mô tả của alert",
       not_in_case: "Alert này không thuộc case",
-      quote_too_short: "Trích dẫn quá ngắn nên không kiểm chứng được",
+      quote_too_short: `Trích dẫn ngắn hơn ${MIN_QUOTE_CHARS} ký tự nên không kiểm chứng được`,
     },
-    // `investigate_v2.suggested_conclusion`.
+    // `investigate_v2.suggested_conclusion`: the words of the backend's CONCLUSION_LABELS
+    // (case_analyze_pages.py), which the Jinja page used; strings.test.ts compares the two. They are
+    // not the three case-conclusion labels of `S.conclusion`, which name what Tier 2 decided.
     suggestedConclusion: {
-      false_positive: "Dương tính giả",
-      policy_violation: "Vi phạm chính sách",
-      confirmed_incident: "Xác nhận sự cố",
+      false_positive: "Không phải sự cố",
+      policy_violation: "Có vi phạm nội quy, không phải tấn công",
+      confirmed_incident: "Là sự cố thật",
       need_more_data: "Cần thêm dữ liệu",
     },
     // `llm_runs.stopped_by` of a run with no result.

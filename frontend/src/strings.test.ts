@@ -1,4 +1,6 @@
-import { S, labelOf } from "./strings";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { MIN_QUOTE_CHARS, S, labelOf } from "./strings";
 
 it("names the two Tier-1 closing decisions, escalate and reopen", () => {
   expect(S.decision.falsePositive).toBe("Đóng — dương tính giả");
@@ -75,6 +77,66 @@ it("names the four evidence marks of ②", () => {
     "quote_too_short",
     "verified",
   ]);
+});
+
+// The Jinja page and this UI must say the same thing about ②: the tables of the backend router are
+// the source, and a label edited on one side only would go unseen without this read.
+const BACKEND = readFileSync(
+  join("..", "backend", "app", "web", "routers", "case_analyze_pages.py"),
+  "utf8",
+);
+
+/** A module-level `NAME: dict[str, str] = {"key": "value", ...}` of the backend, as an object. */
+function pyDict(name: string): Record<string, string> {
+  const body = new RegExp(`^${name}: dict\\[str, str\\] = \\{([^}]*)\\}`, "m").exec(BACKEND)?.[1];
+  const pairs = [...(body ?? "").matchAll(/^\s*"([^"]+)":\s*"([^"]*)",?\s*$/gm)];
+  return Object.fromEntries(pairs.map((m) => [m[1], m[2]]));
+}
+
+describe("② labels follow the backend", () => {
+  it("reads the backend tables (a parse that finds nothing would compare nothing)", () => {
+    expect(Object.keys(pyDict("CONCLUSION_LABELS")).sort()).toEqual([
+      "confirmed_incident",
+      "false_positive",
+      "need_more_data",
+      "policy_violation",
+    ]);
+    expect(Object.keys(pyDict("STOPPED_TEXT")).length).toBe(5);
+  });
+
+  it("labels the suggested conclusion as the backend CONCLUSION_LABELS do", () => {
+    expect(S.ai2.suggestedConclusion).toEqual(pyDict("CONCLUSION_LABELS"));
+    expect(S.ai2.suggestedConclusion).toEqual({
+      false_positive: "Không phải sự cố",
+      policy_violation: "Có vi phạm nội quy, không phải tấn công",
+      confirmed_incident: "Là sự cố thật",
+      need_more_data: "Cần thêm dữ liệu",
+    });
+  });
+
+  it("keeps the three case-conclusion labels apart from the suggested ones", () => {
+    expect(S.conclusion.confirmed_incident).toBe("Xác nhận sự cố");
+    expect(S.ai2.suggestedConclusion.confirmed_incident).not.toBe(S.conclusion.confirmed_incident);
+  });
+
+  it("says why a run stopped as the backend STOPPED_TEXT does", () => {
+    expect(S.ai2.stoppedBy).toEqual(pyDict("STOPPED_TEXT"));
+  });
+
+  it("says a quote is too short in the words of MIN_QUOTE_CHARS", () => {
+    expect(MIN_QUOTE_CHARS).toBe(8);
+    expect(S.ai2.mark.quote_too_short).toContain("ngắn hơn 8 ký tự");
+    expect(BACKEND).toContain("ngắn hơn {MIN_QUOTE_CHARS} ký tự");
+  });
+});
+
+it("labels the model, time and cost of ① and the model, tokens and cost of ②", () => {
+  expect(S.ai1.model).toBe("Mô hình");
+  expect(S.ai1.latency).toBe("Thời gian");
+  expect(S.ai1.cost).toBe("Chi phí");
+  expect(S.ai2.model).toBe("Mô hình");
+  expect(S.ai2.tokens).toBe("Token");
+  expect(S.ai2.cost).toBe("Chi phí");
 });
 
 it("writes no English-only label where a Vietnamese one is named by the spec", () => {
