@@ -1,5 +1,5 @@
-"""P10-T13 — the source guard over `tier2/investigation_view.py`: model text leaves the view as
-plain values, never as markup.
+"""P10-T13 — the source guard over `tier2/investigation_view.py` and `tier2/case_view.py`: model
+text and raw logs leave the views as plain values, never as markup.
 
 The retired Jinja investigation page had its own guard (`test_pages_investigation.py`,
 `test_the_template_and_router_never_mark_model_text_safe`), which read the page's router and
@@ -21,6 +21,9 @@ import pytest
 
 BACKEND = Path(__file__).resolve().parents[1]
 INVESTIGATION_VIEW = BACKEND / "app" / "tier2" / "investigation_view.py"
+CASE_VIEW = BACKEND / "app" / "tier2" / "case_view.py"
+GUARDED = [INVESTIGATION_VIEW, CASE_VIEW]
+GUARDED_IDS = [path.stem for path in GUARDED]
 
 #: What may never appear in the module: the constructor and the two spellings of the filter
 #: (Jinja accepts both `|safe` and `| safe`), the helper Django-style code reaches for, and
@@ -34,11 +37,13 @@ def unsafe_markers(path: Path) -> list[str]:
     return [needle for needle in FORBIDDEN if needle in source]
 
 
-def test_the_investigation_view_never_marks_model_text_safe() -> None:
-    assert INVESTIGATION_VIEW.is_file()
-    assert unsafe_markers(INVESTIGATION_VIEW) == []
+@pytest.mark.parametrize("module", GUARDED, ids=GUARDED_IDS)
+def test_the_views_never_mark_model_text_safe(module: Path) -> None:
+    assert module.is_file()
+    assert unsafe_markers(module) == []
 
 
+@pytest.mark.parametrize("module", GUARDED, ids=GUARDED_IDS)
 @pytest.mark.parametrize(
     ("injected", "expected"),
     [
@@ -50,11 +55,11 @@ def test_the_investigation_view_never_marks_model_text_safe() -> None:
         ("TEMPLATE = '{{ summary | safe }}'\n", ["| safe"]),
     ],
 )
-def test_the_guard_goes_red_on_a_scratch_copy(tmp_path, injected, expected) -> None:
-    """The scan is live: the real module with one forbidden line added — on a scratch copy,
+def test_the_guard_goes_red_on_a_scratch_copy(tmp_path, module, injected, expected) -> None:
+    """The scan is live: each guarded module with one forbidden line added — on a scratch copy,
     never in the real file — is flagged, and only for the line that was added."""
-    scratch = tmp_path / "investigation_view.py"
-    scratch.write_text(injected + INVESTIGATION_VIEW.read_text(encoding="utf-8"), encoding="utf-8")
+    scratch = tmp_path / module.name
+    scratch.write_text(injected + module.read_text(encoding="utf-8"), encoding="utf-8")
 
     assert unsafe_markers(scratch) == expected
-    assert unsafe_markers(INVESTIGATION_VIEW) == []  # the real file is not the one touched
+    assert unsafe_markers(module) == []  # the real file is not the one touched

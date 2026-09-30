@@ -18,7 +18,7 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
   and this function is where to follow it.
 
 Both readers pass their dict through `visibility.strip` before returning it, so the blind
-branch (context pack §6.4) is enforced here, never in a template. `risk_score` never
+branch (context pack §6.4) is enforced here, never in the client. `risk_score` never
 leaves this module as a bare number — the four-band `risk_band` replaces it (phase-4
 constraint 5).
 """
@@ -197,7 +197,7 @@ class QueuePage:
     """`total` is the count under every filter; `counts_by_band` is the count per band code
     under every filter **except** `band` (so the band chips still show the other bands), with
     all four keys always present. The default lets a caller that builds a page by hand
-    (the Jinja page's tests) omit it."""
+    (a test) omit it."""
 
     rows: list[dict[str, Any]]
     total: int
@@ -505,7 +505,7 @@ def get_alert_view(
     trên N cụm liên quan tại thời điểm phân tích; hiện có M"* when they differ. The dict
     is passed through `visibility.strip(mode=mode)`; `risk_score` is dropped in both
     modes (the band replaces it). Timestamps are the database's `datetime`s — display
-    formatting is the template's job."""
+    formatting is the client's job."""
     view = _read_head(conn, alert_id)
     if view is None:
         return None

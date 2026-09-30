@@ -170,8 +170,8 @@ def api_investigation(
     conn: Conn, _: Tier2, cfg: Cfg, case_id: uuid.UUID, run_id: uuid.UUID | None = None
 ) -> dict[str, Any]:
     """`{state, run_id, minutes, run, current, case_open}` — the ② view the React case page
-    (P10-T11) renders and the Jinja page (`GET /cases/{id}/investigation`) renders from, both
-    built by `tier2.investigation_view.build_investigation` (P10-T03). `state` is `idle` |
+    (P10-T11) renders from, built by `tier2.investigation_view.build_investigation` (P10-T03;
+    the Jinja page that shared it retired in P10-T13). `state` is `idle` |
     `running` | `stalled` | `done` | `failed`; `run_id` (the query parameter) is the one the 202
     of `POST .../analyze` returned, so a poll that finds nothing behind it answers `failed`
     rather than `idle`; `case_open` is False once the case is concluded. **404** for an unknown

@@ -233,7 +233,7 @@ def evidence_rows(result: dict[str, Any], check: dict[str, Any]) -> list[dict[st
 def labelled(code: Any) -> str:
     """ "Không phải sự cố (false_positive)": the Vietnamese label beside the code (review round 1,
     N3), so the reader who knows the codes and the reader who knows the words both find theirs. An
-    unknown value is shown as it is — the template escapes it."""
+    unknown value is shown as it is — as data; the React UI renders it as text."""
     if isinstance(code, str) and code in CONCLUSION_LABELS:
         return f"{CONCLUSION_LABELS[code]} ({code})"
     return str(code)

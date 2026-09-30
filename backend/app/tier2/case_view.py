@@ -66,11 +66,11 @@ def enrich_heads(
     conn: psycopg.Connection, heads: list[dict[str, Any]], since: datetime
 ) -> datetime | None:
     """Merges `supplement`'s fields into each head in place — `raw_log`
-    (escaped by the template, never `|safe`) with `raw_log_truncated`,
+    (plain text in the JSON; the React UI renders it as text) with `raw_log_truncated`,
     `risk_band` (`risk_score` replaced by the band, never the bare number —
     P4's rule; `risk_score` itself is not stored on the dict, so it cannot
-    leak into the template by accident) and `last_seen_at` (shown per head,
-    `local_time`-formatted, design note 3).
+    leak into the response by accident) and `last_seen_at` (shown per head,
+    formatted by the client, design note 3).
 
     Returns the latest `last_seen_at` among heads that are both still
     `escalated_tier2` **and** newer than `since` — `None` when no head
