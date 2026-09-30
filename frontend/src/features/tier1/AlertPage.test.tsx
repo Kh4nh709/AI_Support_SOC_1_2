@@ -480,21 +480,36 @@ describe("a duplicate, and the case", () => {
     expect(screen.queryByText(/bản sao của/)).not.toBeInTheDocument();
   });
 
-  it("links an escalated alert to its case", async () => {
+  it.each(["tier2", "admin"] as const)(
+    "links an escalated alert to its case for %s, who can open it",
+    async (role) => {
+      views = { a1: full({ status: "escalated_tier2", case_id: 9 }) };
+      renderPage("/alerts/a1", role);
+      await loaded();
+      const link = within(summary()).getByRole("link", { name: `${S.decision.goToCase} #9` });
+      expect(link).toHaveAttribute("href", "/cases/9");
+    },
+  );
+
+  it("names the case in plain text for tier 1, who has no case pages to be sent to", async () => {
     views = { a1: full({ status: "escalated_tier2", case_id: 9 }) };
-    renderPage();
+    renderPage("/alerts/a1", "tier1");
     await loaded();
-    const link = screen.getByRole("link", { name: `${S.decision.goToCase} #9` });
-    expect(link).toHaveAttribute("href", "/cases/9");
+    expect(within(summary()).getByText(S.decision.caseNumber(9))).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /case/i })).not.toBeInTheDocument();
   });
 
-  it("shows no case link for an alert with no case", async () => {
-    renderPage();
-    await loaded();
-    expect(
-      screen.queryByRole("link", { name: new RegExp(S.decision.goToCase) }),
-    ).not.toBeInTheDocument();
-  });
+  it.each(["tier1", "tier2", "admin"] as const)(
+    "shows no case, link or text, for an alert with none (%s)",
+    async (role) => {
+      renderPage("/alerts/a1", role);
+      await loaded();
+      expect(
+        screen.queryByRole("link", { name: new RegExp(S.decision.goToCase) }),
+      ).not.toBeInTheDocument();
+      expect(summary().textContent).not.toMatch(/case #/);
+    },
+  );
 
   it("shows when it was acknowledged and by whom, and why and when it was closed", async () => {
     views = {

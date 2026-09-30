@@ -5,6 +5,7 @@ import { useAuth } from "./auth/AuthProvider";
 import { ForbiddenNotice, RequireRole } from "./auth/RequireRole";
 import { roleHome } from "./auth/redirect";
 import type { Role } from "./api/types";
+import { CASE_ROLES } from "./caseAccess";
 import { AppHeader } from "./components/AppHeader";
 import { AlertPage } from "./features/tier1/AlertPage";
 import { QueuePage } from "./features/tier1/QueuePage";
@@ -15,8 +16,8 @@ import { LoginPage } from "./pages/LoginPage";
 
 /** Read for all three roles, the same as the API. */
 const EVERY_ROLE: readonly Role[] = ["tier1", "tier2", "admin"];
-/** The cases are Tier 2's; the admin reads them too. */
-const TIER2_UP: readonly Role[] = ["tier2", "admin"];
+/** The cases are Tier 2's; the admin reads them too (the alert page links to a case by the same list). */
+const TIER2_UP = CASE_ROLES;
 
 /** The header, and the page under it. The login page shares it, so the banner and the main landmark are always there. */
 function Shell() {

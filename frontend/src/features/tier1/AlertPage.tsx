@@ -118,7 +118,7 @@ function AlertScreen({ alertId }: { alertId: string }) {
             </h2>
             <p className="text-xs text-muted">{S.alert.infoHint}</p>
           </div>
-          <Summary view={view} />
+          <Summary view={view} role={session?.role ?? null} />
           <EventDetails view={view} />
           <RawLog view={view} />
           <Accounts view={view} />

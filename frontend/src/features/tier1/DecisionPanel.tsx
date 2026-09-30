@@ -4,7 +4,6 @@
 // and on success the queue and the alert are marked stale so the page shows what the server now says.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useId, useRef, useState, type ReactNode } from "react";
-import { Link } from "react-router";
 import { ApiError } from "../../api/client";
 import {
   postAcknowledge,
@@ -57,19 +56,9 @@ function send(alertId: string, action: Action): Promise<DecisionResult> {
 const formOf = (action: Action): FormName | null =>
   action.kind === "acknowledge" ? null : action.kind;
 
-const caseLink = (id: number | string) => `/cases/${encodeURIComponent(String(id))}`;
-
-function CaseLink({ id }: { id: number | string }) {
-  return (
-    <p>
-      <Link
-        to={caseLink(id)}
-        className="underline focus-visible:outline-2 focus-visible:outline-text"
-      >
-        {S.decision.goToCase}
-      </Link>
-    </p>
-  );
+/** The case the server opened or used, named and not linked: only Tier 1 sees this panel, and the case pages are Tier 2's. */
+function CaseNumber({ id }: { id: number | string }) {
+  return <p>{S.decision.caseNumber(id)}</p>;
 }
 
 /** What the toast says of what was done. */
@@ -85,7 +74,7 @@ function toastOf(action: Action, result: DecisionResult): ReactNode {
         <>
           <p>{S.decision.recorded}</p>
           {typeof closed === "number" && closed > 0 && <p>{S.decision.fannedOut(closed)}</p>}
-          {caseId !== null && caseId !== undefined && <CaseLink id={caseId} />}
+          {caseId !== null && caseId !== undefined && <CaseNumber id={caseId} />}
         </>
       );
     }
@@ -94,7 +83,7 @@ function toastOf(action: Action, result: DecisionResult): ReactNode {
       return (
         <>
           <p>{S.decision.caseOpened}</p>
-          {caseId !== null && caseId !== undefined && <CaseLink id={caseId} />}
+          {caseId !== null && caseId !== undefined && <CaseNumber id={caseId} />}
         </>
       );
     }

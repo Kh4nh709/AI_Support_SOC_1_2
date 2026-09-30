@@ -380,6 +380,18 @@ describe("decide", () => {
     expect(sessionStorage.getItem("soc.draft.a1")).toBeNull();
   });
 
+  it("names the case a decision landed in, without a link (tier 1 has no case pages)", async () => {
+    answerPost("decide", () =>
+      HttpResponse.json({ alert_id: "a1", status: "closed_fp", closed_count: 0, case_id: 4 }),
+    );
+    renderPanel(mine());
+    const user = await fill();
+    await user.click(submit());
+    const toast = await screen.findByRole("status");
+    expect(toast).toHaveTextContent(S.decision.caseNumber(4));
+    expect(within(toast).queryByRole("link")).not.toBeInTheDocument();
+  });
+
   it("mentions no fan-out when nothing else was closed, and the toast can be dismissed", async () => {
     answerPost("decide", () =>
       HttpResponse.json({ alert_id: "a1", status: "closed_fp", closed_count: 0, case_id: null }),
@@ -415,7 +427,7 @@ describe("decide", () => {
 });
 
 describe("escalate", () => {
-  it("posts the title and the severity, and the toast links to the new case", async () => {
+  it("posts the title and the severity, and the toast names the new case", async () => {
     answerPost("escalate", () =>
       HttpResponse.json(
         { alert_id: "a1", case_id: 9, status: "escalated_tier2", head_count: 1, truncated: false },
@@ -432,10 +444,9 @@ describe("escalate", () => {
     await user.click(screen.getByRole("button", { name: S.decision.escalate }));
     const toast = await screen.findByRole("status");
     expect(toast).toHaveTextContent(S.decision.caseOpened);
-    expect(within(toast).getByRole("link", { name: S.decision.goToCase })).toHaveAttribute(
-      "href",
-      "/cases/9",
-    );
+    // Tier 1 has no case pages (they are Tier 2's): the case is named, not linked.
+    expect(toast).toHaveTextContent(S.decision.caseNumber(9));
+    expect(within(toast).queryByRole("link")).not.toBeInTheDocument();
     expect(posts("/escalate")).toEqual([
       {
         path: "/escalate",

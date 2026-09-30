@@ -316,6 +316,8 @@ export const S = {
     fannedOut: (n: number) => `Đã đóng thêm ${n} alert tương quan`,
     caseOpened: "Đã mở case",
     goToCase: "Xem case",
+    // For a reader who cannot open the case pages (Tier 1): the case is named, not linked.
+    caseNumber: (id: number | string) => `case #${id}`,
     timeout: "Hết thời gian xử lý, chưa ghi gì — thử lại",
   },
 

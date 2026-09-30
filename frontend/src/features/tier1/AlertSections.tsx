@@ -4,6 +4,8 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 import type { AlertView, CorrelationRow, CorrelationSample } from "../../api/tier1";
+import type { Role } from "../../api/types";
+import { canOpenCases } from "../../caseAccess";
 import { BandBadge } from "../../components/Badge";
 import { DataTable, type Column } from "../../components/DataTable";
 import { KeyValueGrid, visibleItems, type KeyValueItem } from "../../components/KeyValueGrid";
@@ -32,7 +34,7 @@ const timeOf = (iso: string | null | undefined, format: (iso: string) => string)
   iso ? format(iso) : null;
 
 /** The band, the category and the status, then the counters and the times. */
-export function Summary({ view }: { view: AlertView }) {
+export function Summary({ view, role }: { view: AlertView; role: Role | null }) {
   // The band is the server's own label (`risk_band`); with no score the alert's severity says it in words.
   const band = view.risk_band ?? (view.severity ? labelOf(S.band, view.severity) : null);
   const caseId = view.case_id;
@@ -49,11 +51,14 @@ export function Summary({ view }: { view: AlertView }) {
     { label: S.alert.summary.closeReason, value: view.close_reason },
     {
       label: S.alert.summary.case,
+      // Only a reader who may open the case pages is sent to them: Tier 1 is told which case, in text.
       value:
-        caseId === null || caseId === undefined || caseId === "" ? null : (
+        caseId === null || caseId === undefined || caseId === "" ? null : canOpenCases(role) ? (
           <Link to={`/cases/${encodeURIComponent(String(caseId))}`} className={LINK}>
             {`${S.decision.goToCase} #${caseId}`}
           </Link>
+        ) : (
+          S.decision.caseNumber(caseId)
         ),
     },
   ];
