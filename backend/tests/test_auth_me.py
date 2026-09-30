@@ -62,6 +62,13 @@ def test_me_without_a_session_is_401(client):
     assert client.get("/api/auth/me").status_code == 401
 
 
+def test_me_with_a_bad_token_is_401(client):
+    # Unlike the no-token case (`current_user` answers 401 before it reads the config), a token
+    # reaches `auth.verify`, which needs the fixture's JWT_SECRET: with it empty this is 503.
+    response = client.get("/api/auth/me", headers={"Authorization": "Bearer not-a-jwt"})
+    assert response.status_code == 401
+
+
 def test_me_never_returns_a_hash(db, client):
     uid = _make_user(db)
     main.app.dependency_overrides[deps.current_user] = lambda: Claims(
