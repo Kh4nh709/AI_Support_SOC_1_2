@@ -243,3 +243,42 @@ def test_no_secret_or_dsn_value():
     ), "a JWT_SECRET value is written"
     assert not re.search(r"postgres(ql)?://[^\s:/]+:[^@\s]+@", text), "a DSN with a password"
     assert not re.search(r"PGPASSWORD=\S+", text), "a PGPASSWORD value is written"
+
+
+# ----------------------------------------------------- P10-T13, fix round 1: the React UI
+
+
+def _precondition_row(label: str) -> list[str]:
+    body = _subsection_body(_pilot_section(_text()), "1")
+    rows = [row for row in _table_rows(body) if row and row[0] == label]
+    assert len(rows) == 1, f"expected one precondition row {label!r}, found {len(rows)}"
+    return rows[0]
+
+
+def test_the_pilot_can_start_on_the_react_ui():
+    """The Jinja queue and alert pages are gone (P10-T13): the app precondition must not wait for
+    them, and a `ui` row must prove the React UI answers and its proxy reaches the app."""
+    h = _precondition_row("h")
+    assert "cannot start without" not in " ".join(h), f"row h still waits for P4-T05: {h}"
+    assert "docker compose logs app" in h[3], "row h must say where the access log now is"
+
+    ui = _precondition_row("ui")
+    assert "docker compose up -d --build ui" in ui[2], ui
+    assert "http://127.0.0.1:8080/" in ui[2], ui
+    assert "http://127.0.0.1:8080/api/auth/me" in ui[2], ui
+    assert "200" in ui[3] and "401" in ui[3], ui
+
+
+def test_the_409_count_reads_the_containers_log_not_a_file_nothing_writes():
+    """`make run-app` is `docker compose up -d --wait db app`; nothing pipes it into a file."""
+    section = _pilot_section(_text())
+    commands = re.findall(r"`([^`\n]+)`", section)
+    for command in commands:
+        assert "tee -a" not in command, f"a tee into a log file nothing writes any more: {command}"
+        assert not re.search(r"grep\b.*pilot-app\.log", command), command
+    limitations = _subsection_body(section, "7")
+    assert re.search(r"docker compose logs[^`\n]*\bapp\b[^`\n]*\| grep -c [^`\n]*409", limitations)
+    assert (
+        "cookie is not `Secure`" not in limitations
+    ), "the React UI's credential is a Bearer token"
+    assert "Bearer token" in limitations
