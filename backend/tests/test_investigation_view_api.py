@@ -461,6 +461,28 @@ def test_overruled_run_has_the_overrule_sentence(client, db):
     )
 
 
+def test_a_forced_overrule_names_the_rule_not_the_missing_evidence(client, db):
+    case_id = _make_case(db, client.user_id)
+    check = {
+        "verified": [0],
+        "rejected": [],
+        "forced_by": "high_severity_injection_finding",
+        "original_conclusion": "false_positive",
+    }
+    _insert_run(
+        db, case_id, result=_result(suggested_conclusion="need_more_data"), evidence_check=check
+    )
+
+    overruled = _get(client, case_id).json()["run"]["overruled"]
+
+    assert overruled.startswith(
+        "Mô hình đề xuất Không phải sự cố (false_positive) nhưng kết luận đã bị hạ xuống "
+        "Cần thêm dữ liệu (need_more_data): "
+    )
+    assert "tiêm lệnh" in overruled
+    assert "không có bằng chứng nào" not in overruled
+
+
 def test_a_result_without_a_conclusion_is_labelled_unknown(client, db):
     """`llm_runs` only stores the four conclusions (`ck_llm_runs_suggested_conclusion`), so a
     value the label table lacks cannot be seeded; a result that carries none can. It is
