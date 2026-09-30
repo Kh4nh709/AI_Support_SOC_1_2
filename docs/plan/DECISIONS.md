@@ -3181,3 +3181,47 @@ Decision:
 Supersedes:
 - DEC-157 item 2's "all roles" and "retire every Jinja page" (narrowed to Tier-1/Tier-2 for v1.0).
 - The timing of DEC-158, DEC-159 and DEC-160 (now v1.1); their content stands.
+
+## DEC-162 · 2026-09-30 · The React queue updates in real time over a WebSocket fed by Postgres LISTEN/NOTIFY; messages carry ids only and the client refetches through the normal API, so role checks and the blind arm stay server-side
+Scope: **architecture** (a push channel) · **security** (WebSocket authentication with a Bearer JWT) · **plan** (v1.0, inside DEC-161's scope)
+Decided by: **the Owner**, 30/09:
+- the requirement: *"khi có bất kỳ alert nào được đưa vào backend và được cập nhật vào hàng đợi thì ngay lập tức phải xuất lên ui"*
+- the channel: *"WebSocket"*, chosen over SSE + NOTIFY (the Director's recommendation) and fast polling
+Drafted by: Director (Opus 5.5)
+Propagated to: the UI design spec and its implementation plan
+Decision:
+  1. **Source of change.**
+     - A migration adds a trigger on `alerts`, `AFTER INSERT OR UPDATE` of the columns the queue and alert page show (status, occurrence count, last seen, the ① fields). It calls `pg_notify` with `{alert_id, op}` only.
+     - NOTIFY is delivered at commit, so a rolled-back write never reaches a browser.
+     - Every writer is covered without touching its code: the pull and webhook ingest, dedup, auto-close, the Tier-1 decisions and the ① triage job.
+     - The spec decides whether `cases` gets the same trigger (case list and case page), or whether v1.0 keeps them on refetch-after-mutation.
+  2. **Server.**
+     - Route: `GET /api/ws` (WebSocket).
+     - Each app process holds **one** async LISTEN connection and fans out to its sockets through an in-process hub.
+     - Bursts are **coalesced**: at most one message per 500 ms per socket, `{type: "alerts.changed", ids: [...]}`, falling back to `{type: "alerts.changed", many: true}` past a cap.
+     - Messages never carry alert content, so the ① suggestion cannot leak through the socket.
+  3. **Authentication.**
+     - A browser cannot put `Authorization` on a WebSocket handshake. The client therefore sends `{type: "auth", token}` as its **first message**, and the server closes the socket if that does not arrive within 5 s.
+     - The token is checked with `infra/auth.verify`, so role, active and `sessions_invalid_before` are enforced exactly as for HTTP. The check is repeated every 60 s and at expiry, so logout or deactivation closes live sockets.
+     - The token is never sent in the URL, where it would land in access logs.
+     - Allowed roles: tier1, tier2, admin.
+  4. **Client.**
+     - On a message, it invalidates the TanStack Query entries: the queue, and the open alert page when its id is listed. The data is then refetched through `/api/tier1/*`.
+     - It reconnects with backoff and does a full refetch on reconnect. If the socket stays down, it falls back to 30 s polling.
+     - The header shows a live/offline indicator.
+  5. **Infrastructure.**
+     - The `ui` service's nginx proxies the upgrade for `/api/ws`: HTTP/1.1, `Upgrade`/`Connection` headers, a long read timeout.
+     - The backend gains a WebSocket implementation for uvicorn (`websockets` or `wsproto`) in `backend/requirements.txt`. The app image is rebuilt, and the Owner runs `docker compose build app worker` then `up -d`.
+  6. **End-to-end latency is bounded by ingest, not by the UI.**
+     - The worker pulls from the indexer every `PULL_INTERVAL_S` (60 s today).
+     - "Immediately" from a Wazuh event needs either a lower `PULL_INTERVAL_S` (a `.env` change and a worker restart, the Owner's call) or Wazuh posting to the existing `/webhook/alerts`.
+     - The UI's own share is under 1 s after the commit.
+  7. **Tests.**
+     - Server:
+       - the handshake refuses a missing, bad or expired token and a deactivated user;
+       - logout closes the socket;
+       - a committed insert produces a message and a rolled-back one does not;
+       - coalescing holds under a burst;
+       - no message field carries alert content.
+     - End to end: an alert posted through the webhook appears in an open queue page without a reload, within 2 s.
+Supersedes: DEC-161's "no backend contract change is expected" for this feature (a migration, a route and a dependency are added)
