@@ -214,6 +214,34 @@ def test_same_body_again_is_409_and_no_second_job(client, sdb) -> None:
     assert job_count == 1
 
 
+@pytest.mark.db
+def test_same_alert_id_again_is_409_with_dedup_disabled(client, sdb) -> None:
+    """P10-T15 (DEC-165): the grouping switch does not touch receipt-level
+    idempotency. With DEDUP_ENABLED=false the same alert_id posted twice is
+    still one intake row, one pipeline job and a 409 for the second copy."""
+    main.app.dependency_overrides[deps.get_config] = lambda: _cfg(DEDUP_ENABLED=False)
+    doc = _copy_with_id(ALERT_BARE, _uid("nodedup"))
+    body = _bytes(doc)
+    first = _post(client, body)
+    assert first.status_code == 201, first.text
+    intake_id = first.json()["intake_id"]
+
+    second = _post(client, body)
+    assert second.status_code == 409
+    assert second.json() == {"detail": "duplicate"}
+
+    (intake_rows,) = sdb.execute(
+        "SELECT count(*) FROM intake WHERE manager_id = 'IA1803' AND source_alert_id = %s",
+        (doc["id"],),
+    ).fetchone()
+    assert intake_rows == 1
+    (job_count,) = sdb.execute(
+        "SELECT count(*) FROM jobs WHERE job_type = 'pipeline' AND subject_id = %s",
+        (str(intake_id),),
+    ).fetchone()
+    assert job_count == 1
+
+
 # --------------------------------------------------------------------------
 # auth / allowlist / disabled — 401 / 403 / 503, writing nothing
 # --------------------------------------------------------------------------

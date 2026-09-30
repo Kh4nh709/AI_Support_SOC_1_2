@@ -22,6 +22,7 @@ test would otherwise leave non-empty.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -33,8 +34,11 @@ from pathlib import Path
 import psycopg
 import pytest
 from app.enrichment import inventory
+from app.infra import config
 from app.infra.errors import classify
+from app.infra.intake import Duplicate, receive
 from app.infra.jobs import Job, claim_job, enqueue, finish_job
+from app.soar import pipeline as pipeline_module
 from app.soar.pipeline import _suggestion_visible, _write_rejection_receipt, run_pipeline_job
 from psycopg.types.json import Jsonb
 
@@ -516,3 +520,245 @@ def test_receipt_error_is_never_rewritten_after_a_permanent_failure(pin_scratch_
     ).fetchone()[0]
     assert last_error == second_message
     assert last_error != first[1]
+
+
+# ---------------------------------------------------------------------------
+# P10-T15 / DEC-165 — `DEDUP_ENABLED`: the per-alert workflow
+#
+# One variable across the whole block: the flag. `pipeline._process` reads it with
+# `config.load()` (an environment variable wins, as for every key), so each test sets it with
+# `monkeypatch.setenv`. The default and `true` keep the phase-2 behaviour, which the
+# acceptance-4/5 tests above already pin unchanged; the controls here prove that the very same
+# inputs DO group when the flag is on, so a green "two separate alerts" cannot be an accident
+# of the fixtures.
+# ---------------------------------------------------------------------------
+
+_PAIR_SRCIP = "198.51.100.77"
+
+
+def _post_pair(db: psycopg.Connection, tag: str, *, base: str = RULE_5503) -> list[str]:
+    """Two alerts with the same rule, srcip, dstip and agent — one cluster key — received a
+    second apart (their `sort_key`s differ by 1); returns the alert ids, arrival order."""
+    ids = [f"p10t15-{tag}-a", f"p10t15-{tag}-b"]
+    for n, alert_id in enumerate(ids, start=1):
+        _insert_intake(
+            db,
+            source_alert_id=alert_id,
+            raw_text=_hit(base, id_=alert_id, srcip=_PAIR_SRCIP, sort=n),
+            sort_key=n,
+        )
+    return ids
+
+
+def _run_all(db: psycopg.Connection, ids: list[str]) -> None:
+    """Run the `pipeline` job of every alert id in `ids`, in the order given."""
+    for alert_id in ids:
+        intake_id = db.execute(
+            "SELECT intake_id FROM intake WHERE source_alert_id = %s", (alert_id,)
+        ).fetchone()[0]
+        run_pipeline_job(db, _job_for(intake_id))
+
+
+def _alert_rows(db: psycopg.Connection, ids: list[str]) -> dict[str, tuple]:
+    rows = db.execute(
+        "SELECT alert_id, status, duplicate_of, occurrence_count, risk_score, "
+        "risk_score_components, asset_context, closed_at, sealed_at, autoclose_rule_id "
+        "FROM alerts WHERE alert_id = ANY(%s)",
+        (ids,),
+    ).fetchall()
+    return {row[0]: row[1:] for row in rows}
+
+
+def _outcomes(db: psycopg.Connection, ids: list[str]) -> dict[str, str]:
+    return dict(
+        db.execute(
+            "SELECT source_alert_id, outcome FROM intake WHERE source_alert_id = ANY(%s)", (ids,)
+        ).fetchall()
+    )
+
+
+def _triage_jobs(db: psycopg.Connection, ids: list[str]) -> list[tuple]:
+    return db.execute(
+        "SELECT subject_id, status FROM jobs WHERE job_type = 'triage' AND subject_id = ANY(%s) "
+        "ORDER BY 1",
+        (ids,),
+    ).fetchall()
+
+
+def _advisory_locks_held(db: psycopg.Connection) -> int:
+    """Advisory locks this session holds right now. `cluster_lock` is `pg_advisory_xact_lock`,
+    so it stays in `pg_locks` until the `db` fixture's transaction ends — a real probe of
+    "a cluster lock was taken", independent of any Python-level spy."""
+    return db.execute(
+        "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid()"
+    ).fetchone()[0]
+
+
+def _match_everything_rule(db: psycopg.Connection) -> None:
+    _seed_admin_user(db)
+    inventory.load(db, paths=[str(REPO_ROOT / "conf" / "inventory.yaml.example")])
+    db.execute(
+        "INSERT INTO autoclose_rules "
+        "(autoclose_rule_id, name, enabled, match, reason, created_by, created_at) "
+        "VALUES (gen_random_uuid(), 'p10t15-match-everything', true, %s, 'test rule', %s, now())",
+        (Jsonb([]), ADMIN_USER_ID),
+    )
+
+
+@pytest.mark.db
+def test_switch_off_two_identical_alerts_become_two_alerts(db, monkeypatch):
+    monkeypatch.setenv("DEDUP_ENABLED", "false")
+    ids = _post_pair(db, "two")
+
+    _run_all(db, ids)
+
+    rows = _alert_rows(db, ids)
+    assert set(rows) == set(ids)
+    for alert_id in ids:
+        status, duplicate_of, occurrence, risk, components, asset_ctx, closed, sealed, rule = rows[
+            alert_id
+        ]
+        assert status == "queued_tier1", alert_id  # neither is `duplicate`
+        assert duplicate_of is None, alert_id
+        assert occurrence == 1, alert_id
+        assert risk is not None and components is not None, alert_id  # its own risk
+        assert asset_ctx is not None, alert_id  # its own enrichment (`finish_enrichment`)
+        assert closed is None and sealed is None and rule is None, alert_id
+    assert _outcomes(db, ids) == dict.fromkeys(ids, "alert")
+    # each queued alert has its own triage job — ① runs once per alert
+    assert _triage_jobs(db, ids) == [(ids[0], "pending"), (ids[1], "pending")]
+    merged = db.execute(
+        "SELECT count(*) FROM alerts WHERE status = 'duplicate' AND alert_id = ANY(%s)", (ids,)
+    ).fetchone()[0]
+    assert merged == 0
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("flag", [None, "true"], ids=["default", "explicit-true"])
+def test_switch_on_or_unset_still_groups_the_same_pair(db, monkeypatch, flag):
+    """The control for the test above: the same two alerts, flag unset or `true` — grouped
+    exactly as before, and the advisory cluster lock is held."""
+    if flag is None:
+        monkeypatch.delenv("DEDUP_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("DEDUP_ENABLED", flag)
+    ids = _post_pair(db, f"ctl-{flag}")
+
+    _run_all(db, ids)
+
+    rows = _alert_rows(db, ids)
+    assert rows[ids[0]][0] == "queued_tier1" and rows[ids[0]][2] == 2  # head, bumped once
+    assert rows[ids[1]][0] == "duplicate" and rows[ids[1]][1] == ids[0]
+    assert _outcomes(db, ids) == {ids[0]: "alert", ids[1]: "duplicate"}
+    assert _triage_jobs(db, ids) == [(ids[0], "pending")]
+    assert _advisory_locks_held(db) == 1  # the probe the switch-off test relies on does see it
+
+
+class _NoDedup:
+    """Stands in for the `dedup` module: any attribute read is a failure, so none of
+    `cluster_lock`, `find_open_cluster`, `bump_parent` (or anything else) can be reached."""
+
+    def __getattr__(self, name: str):
+        raise AssertionError(f"dedup.{name} was reached with DEDUP_ENABLED=false")
+
+
+@pytest.mark.db
+def test_switch_off_never_touches_dedup_and_takes_no_cluster_lock(db, monkeypatch):
+    monkeypatch.setenv("DEDUP_ENABLED", "false")
+    monkeypatch.setattr(pipeline_module, "dedup", _NoDedup())
+    ids = _post_pair(db, "nolock")
+
+    _run_all(db, ids)  # would raise AssertionError on any dedup.* access
+
+    assert _alert_rows(db, ids)[ids[1]][0] == "queued_tier1"
+    assert _advisory_locks_held(db) == 0  # nothing in the database took a lock either
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "flag, expected",
+    [
+        ("false", ["auto_closed", "auto_closed"]),
+        ("true", ["auto_closed", "duplicate"]),  # control: an auto-closed head absorbs the twin
+    ],
+)
+def test_switch_off_auto_closes_each_alert_on_its_own(db, monkeypatch, flag, expected):
+    monkeypatch.setenv("DEDUP_ENABLED", flag)
+    _match_everything_rule(db)
+    ids = _post_pair(db, f"ac-{flag}")
+
+    _run_all(db, ids)
+
+    rows = _alert_rows(db, ids)
+    assert [rows[i][0] for i in ids] == expected
+    if flag == "false":
+        for alert_id in ids:
+            _status, duplicate_of, occurrence, risk, _c, asset_ctx, closed, sealed, rule = rows[
+                alert_id
+            ]
+            assert duplicate_of is None and occurrence == 1, alert_id
+            assert closed is not None and sealed is None, alert_id  # auto-closed, not sealed
+            assert rule is not None and asset_ctx is not None and risk is not None, alert_id
+        assert _outcomes(db, ids) == dict.fromkeys(ids, "auto_closed")
+        # ① runs on auto-closed alerts too (D8): one triage job each
+        assert _triage_jobs(db, ids) == [(ids[0], "pending"), (ids[1], "pending")]
+
+
+@pytest.mark.db
+def test_switch_off_is_forward_only_an_open_cluster_is_not_bumped(db, monkeypatch):
+    """DEC-165 item 2: turning the switch off never reopens or splits a cluster. An alert that
+    WOULD have joined the open head does not bump it and is its own head."""
+    monkeypatch.setenv("DEDUP_ENABLED", "true")
+    head, merged = _post_pair(db, "fwd")
+    _run_all(db, [head, merged])
+    before = _alert_rows(db, [head, merged])
+    assert before[head][0] == "queued_tier1" and before[head][2] == 2  # the open cluster
+    assert before[merged][0] == "duplicate"
+
+    monkeypatch.setenv("DEDUP_ENABLED", "false")
+    newcomer = "p10t15-fwd-c"
+    _insert_intake(
+        db,
+        source_alert_id=newcomer,
+        raw_text=_hit(RULE_5503, id_=newcomer, srcip=_PAIR_SRCIP, sort=3),
+        sort_key=3,
+    )
+    _run_all(db, [newcomer])
+
+    after = _alert_rows(db, [head, merged, newcomer])
+    assert after[head] == before[head]  # occurrence_count still 2, status, everything unchanged
+    assert after[merged] == before[merged]  # the sealed duplicate stays sealed
+    status, duplicate_of, occurrence = after[newcomer][:3]
+    assert (status, duplicate_of, occurrence) == ("queued_tier1", None, 1)  # its own head
+    assert _outcomes(db, [newcomer]) == {newcomer: "alert"}
+    assert _triage_jobs(db, [newcomer]) == [(newcomer, "pending")]
+
+
+@pytest.mark.db
+def test_switch_off_leaves_receipt_level_idempotency_alone(db, monkeypatch):
+    """The same alert id posted twice is `intake`'s `(manager_id, source_alert_id)` conflict —
+    a receipt, not dedup — so it is refused with the switch off exactly as with it on."""
+    monkeypatch.setenv("DEDUP_ENABLED", "false")
+    cfg = dataclasses.replace(config.Config(), DEDUP_ENABLED=False)
+    alert_id = "p10t15-receipt"
+    body = _hit(RULE_5503, id_=alert_id, srcip=_PAIR_SRCIP).encode("utf-8")
+
+    first = receive(db, body, "127.0.0.1", cfg)
+    assert first.kind == "alert" and first.intake_id is not None
+    with pytest.raises(Duplicate):
+        receive(db, body, "127.0.0.1", cfg)
+
+    intake_rows = db.execute(
+        "SELECT count(*) FROM intake WHERE source_alert_id = %s", (alert_id,)
+    ).fetchone()[0]
+    pipeline_jobs = db.execute(
+        "SELECT count(*) FROM jobs WHERE job_type = 'pipeline' AND subject_id = %s",
+        (str(first.intake_id),),
+    ).fetchone()[0]
+    assert (intake_rows, pipeline_jobs) == (1, 1)
+
+    run_pipeline_job(db, _job_for(first.intake_id))
+    alerts = db.execute("SELECT count(*) FROM alerts WHERE alert_id = %s", (alert_id,)).fetchone()[
+        0
+    ]
+    assert alerts == 1
