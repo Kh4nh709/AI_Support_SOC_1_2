@@ -1,7 +1,7 @@
 // src/auth/AuthProvider.test.tsx — restore on load, /me confirmation, expiry, logout broadcasts, login, logout.
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
+import { delay, http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { StrictMode } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
@@ -300,6 +300,63 @@ describe("login and logout", () => {
     expect(sessionStorage.getItem(KEY)).toBeNull();
     expect(where()).toBe("/login from -");
     await waitFor(() => expect(heard).toContainEqual({ type: "logout" }));
+  });
+
+  it("logout does not wait for a stalled backend: it ends here at once, and the POST still carries the old token", async () => {
+    let bearer: string | null = null;
+    server.use(
+      meOk({ username: "stale", role: "tier1" }),
+      http.post("/api/auth/logout", async ({ request }) => {
+        bearer = request.headers.get("authorization");
+        await delay("infinite"); // the backend never answers
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    stored();
+    renderProvider("/alerts/5");
+    await waitFor(() => expect(state()).toBe("ready stale/tier1/tok-1"));
+    const other = new BroadcastChannel("soc-session");
+    tabs.push(other);
+    const heard: unknown[] = [];
+    other.onmessage = (e) => heard.push(e.data);
+    await userEvent.setup().click(screen.getByText("do logout"));
+    // Nothing below waits for the POST: the session, the storage, the other tabs and the page all
+    // moved on while it is still open.
+    await waitFor(() => expect(state()).toBe("ready none"), { timeout: 500 });
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+    expect(where()).toBe("/login from -");
+    await waitFor(() => expect(heard).toContainEqual({ type: "logout" }), { timeout: 500 });
+    // ... and the request was still sent, with the token that is no longer the session's.
+    await waitFor(() => expect(bearer).toBe("Bearer tok-1"));
+  });
+
+  it("gives up on the logout POST after about five seconds", async () => {
+    let aborted = false;
+    server.use(
+      meOk({ username: "stale", role: "tier1" }),
+      http.post("/api/auth/logout", async ({ request }) => {
+        request.signal.addEventListener("abort", () => {
+          aborted = true;
+        });
+        await delay("infinite");
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    stored();
+    renderProvider("/alerts/5");
+    await waitFor(() => expect(state()).toBe("ready stale/tier1/tok-1"));
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await userEvent.setup().click(screen.getByText("do logout"));
+      await waitFor(() => expect(state()).toBe("ready none"));
+      const fiveSeconds = timers.mock.calls.find(([, ms]) => ms === 5000);
+      expect(fiveSeconds).toBeDefined();
+      expect(aborted).toBe(false);
+      (fiveSeconds?.[0] as () => void)(); // the five seconds are up
+      await waitFor(() => expect(aborted).toBe(true));
+    } finally {
+      timers.mockRestore();
+    }
   });
 
   it("logout clears the session even when the request fails", async () => {

@@ -36,7 +36,10 @@ export type AuthState = {
   signedOut: boolean;
   /** Posts the credentials, saves the session, and opens the role's home. Throws the ApiError. */
   login(username: string, password: string): Promise<void>;
-  /** Posts /auth/logout (an error is ignored), clears the session in every tab, opens /login. */
+  /**
+   * Clears the session in every tab and opens /login at once, then posts /auth/logout with the old
+   * token (an error or a five-second silence is ignored). The promise settles when that post does.
+   */
   logout(): Promise<void>;
 };
 
@@ -50,6 +53,8 @@ export function useAuth(): AuthState {
 
 /** How long a new tab waits for an open tab to hand it the session. */
 const ASK_OTHER_TABS_MS = 300;
+/** How long the logout POST may take before it is abandoned; the session has ended without it. */
+const LOGOUT_TIMEOUT_MS = 5000;
 /** `setTimeout` keeps a 32-bit signed delay; a longer one fires at once. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
@@ -171,16 +176,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
+    const token = sessionRef.current?.token ?? null;
     // First, so the guard that sees the session go knows it went on purpose and keeps no return path.
     setSignedOut(true);
-    try {
-      await postLogout();
-    } catch {
-      // The session ends here whatever the server said; a 401 only means it had ended already.
-    }
+    // The session ends here, in every tab, and the page leaves at once: a backend that is slow or down
+    // must not leave the user looking at a screen they believe they have signed out of.
     clearSession();
     apply(null);
     navigate("/login", { replace: true });
+    if (token === null) return; // nothing left to invalidate on the server
+    // Then tell the server, with the token that was the session's (the client has none of its own now,
+    // and this call reads none: `apply(null)` above emptied its source before this line runs). A failure
+    // only means the token lives on until it expires; a stalled server is given up on after a while.
+    const abort = new AbortController();
+    const giveUp = setTimeout(() => abort.abort(), LOGOUT_TIMEOUT_MS);
+    try {
+      await postLogout(token, abort.signal);
+    } catch {
+      // Ignored on purpose (a refusal, a network error or the timeout).
+    } finally {
+      clearTimeout(giveUp);
+    }
   }, [apply, navigate]);
 
   const value = useMemo<AuthState>(

@@ -12,7 +12,14 @@ export function fetchMe(): Promise<MeResponse> {
   return api<MeResponse>("/auth/me");
 }
 
-/** `POST /api/auth/logout`: 204. It invalidates every token issued before it. */
-export function postLogout(): Promise<null> {
-  return api<null>("/auth/logout", { method: "POST" });
+/**
+ * `POST /api/auth/logout`: 204. It invalidates every token issued before it. The caller has already
+ * ended its own session, so the client has no token of its own to send: the token to invalidate is passed in.
+ */
+export function postLogout(token: string, signal?: AbortSignal): Promise<null> {
+  return api<null>("/auth/logout", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    signal,
+  });
 }
