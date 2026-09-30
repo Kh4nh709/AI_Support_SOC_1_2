@@ -61,12 +61,25 @@ describe("the risk band label <-> code table", () => {
       "rất cao",
       "",
       "constructor",
+      "toString",
+      "critical",
+      "high",
       null,
       undefined,
     ]) {
       expect(bandCodeOfLabel(other)).toBeNull();
     }
   });
+});
+
+it("keeps the words of `severity` apart from the words of the risk band", () => {
+  expect(S.severity).toEqual({
+    critical: "Nghiêm trọng",
+    high: "Cao",
+    medium: "Trung bình",
+    low: "Thấp",
+  });
+  expect(S.severity.critical).not.toBe(S.band.critical);
 });
 
 it("labels every alert status the Jinja page labelled", () => {
@@ -107,6 +120,16 @@ it("carries the 503 copy of a decision and the two ② dead ends", () => {
   expect(S.decision.timeout).toBe("Hết thời gian xử lý, chưa ghi gì — thử lại");
   expect(S.ai2.stalled(5)).toBe("Chưa được xử lý sau 5 phút — kiểm tra worker");
   expect(S.ai2.failed).toBe("Phân tích thất bại — có thể thử lại");
+});
+
+// The Jinja page prints "Playbook: <name>" under a run that used one.
+it("words the playbook line of a run as the Jinja page does", () => {
+  expect(S.ai2.playbook("ssh_brute_force")).toBe("Playbook: ssh_brute_force");
+});
+
+it("says a page past the last one of the case list is empty, not that there is no case", () => {
+  expect(S.case.pastEnd).toBe("Không còn case ở trang này.");
+  expect(S.case.pastEnd).not.toBe(S.case.empty);
 });
 
 it("names the four evidence marks of ②", () => {

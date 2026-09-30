@@ -1,5 +1,5 @@
-// The route table of the spec §3.1. The page cards fill in the placeholders: P10-T10 the alert page,
-// P10-T11 the case list and the case page. The queue is P10-T09's.
+// The route table of the spec §3.1. The page cards fill in the placeholders: P10-T10 the alert page
+// (still a placeholder here); the queue is P10-T09's, the case list and the case page are P10-T11's.
 import { Navigate, Outlet, Route, Routes } from "react-router";
 import { useAuth } from "./auth/AuthProvider";
 import { ForbiddenNotice, RequireRole } from "./auth/RequireRole";
@@ -7,6 +7,8 @@ import { roleHome } from "./auth/redirect";
 import type { Role } from "./api/types";
 import { AppHeader } from "./components/AppHeader";
 import { QueuePage } from "./features/tier1/QueuePage";
+import { CasePage } from "./features/tier2/CasePage";
+import { CasesPage } from "./features/tier2/CasesPage";
 import { LiveIndicator } from "./live/LiveIndicator";
 import { LoginPage } from "./pages/LoginPage";
 import { S } from "./strings";
@@ -72,7 +74,7 @@ export function AppRoutes() {
           path="/cases"
           element={
             <RequireRole roles={TIER2_UP}>
-              <Placeholder title={S.case.listTitle} />
+              <CasesPage />
             </RequireRole>
           }
         />
@@ -80,7 +82,7 @@ export function AppRoutes() {
           path="/cases/:caseId"
           element={
             <RequireRole roles={TIER2_UP}>
-              <Placeholder title={S.case.infoHeading} />
+              <CasePage />
             </RequireRole>
           }
         />

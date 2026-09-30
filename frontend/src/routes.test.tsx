@@ -1,4 +1,5 @@
 // src/routes.test.tsx — the route table of the spec §3.1, for each role.
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -17,12 +18,28 @@ vi.mock("./features/tier1/QueuePage", () => ({
   QueuePage: () => <h1>{S.queue.title}</h1>,
 }));
 
+// The case pages are real and read the backend; these tests are about the route table, so the backend
+// says "no cases" and "no case 3". A request nobody handled fails the test.
+const server = setupServer(
+  http.get("/api/tier2/cases", () => HttpResponse.json([])),
+  http.get("/api/tier2/cases/3", () =>
+    HttpResponse.json({ detail: "case not found" }, { status: 404 }),
+  ),
+);
+beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
+afterEach(() => server.resetHandlers());
+afterAll(() => server.close());
+
 const session = (role: Session["role"]): Session => ({
   token: "t",
   role,
   username: "an",
   expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
 });
+
+// The case pages read through TanStack Query, as they do under the app's provider; a fresh client per
+// render so no test reads what another cached, and `retry: false` so a failed read shows at once.
+const newClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
 function Where() {
   const { pathname } = useLocation();
@@ -38,12 +55,14 @@ function renderAt(path: string, s: Session | null, ready = true) {
     logout: async () => {},
   };
   return render(
-    <AuthContext.Provider value={auth}>
-      <MemoryRouter initialEntries={[path]}>
-        <AppRoutes />
-        <Where />
-      </MemoryRouter>
-    </AuthContext.Provider>,
+    <QueryClientProvider client={newClient()}>
+      <AuthContext.Provider value={auth}>
+        <MemoryRouter initialEntries={[path]}>
+          <AppRoutes />
+          <Where />
+        </MemoryRouter>
+      </AuthContext.Provider>
+    </QueryClientProvider>,
   );
 }
 
@@ -79,10 +98,18 @@ describe("the route table", () => {
     expect(where()).toBe("/alerts/12");
   });
 
-  it.each<Session["role"]>(["tier2", "admin"])("lets %s open /cases and /cases/:caseId", (role) => {
-    renderAt("/cases/3", session(role));
-    expect(where()).toBe("/cases/3");
-  });
+  it.each<Session["role"]>(["tier2", "admin"])(
+    "lets %s open /cases and /cases/:caseId",
+    async (role) => {
+      const cases = renderAt("/cases", session(role));
+      expect(where()).toBe("/cases");
+      expect(await screen.findByText(S.case.empty)).toBeInTheDocument();
+      cases.unmount();
+      renderAt("/cases/3", session(role));
+      expect(where()).toBe("/cases/3");
+      expect(await screen.findByText(S.case.notFound)).toBeInTheDocument();
+    },
+  );
 
   it.each(["/cases", "/cases/3"])(
     "turns tier1 away from %s to /queue, saying S.forbidden",
@@ -107,9 +134,10 @@ describe("the route table", () => {
     expect(screen.getByRole("status")).toHaveTextContent(S.common.loading);
   });
 
-  it("sends a signed-in visitor of /login to their home", () => {
+  it("sends a signed-in visitor of /login to their home", async () => {
     renderAt("/login", session("tier2"));
     expect(where()).toBe("/cases");
+    expect(await screen.findByText(S.case.empty)).toBeInTheDocument();
   });
 
   it("sends an unknown path to /", () => {
@@ -141,25 +169,23 @@ describe("the layout", () => {
 });
 
 describe("with the real AuthProvider", () => {
-  const server = setupServer();
-  beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
   afterEach(() => {
-    server.resetHandlers();
     sessionStorage.clear();
   });
-  afterAll(() => server.close());
 
   const later = (ms: number) => new Date(Date.now() + ms).toISOString();
 
   function renderApp(path: string) {
     return render(
       <StrictMode>
-        <MemoryRouter initialEntries={[path]}>
-          <AuthProvider>
-            <AppRoutes />
-            <Where />
-          </AuthProvider>
-        </MemoryRouter>
+        <QueryClientProvider client={newClient()}>
+          <MemoryRouter initialEntries={[path]}>
+            <AuthProvider>
+              <AppRoutes />
+              <Where />
+            </AuthProvider>
+          </MemoryRouter>
+        </QueryClientProvider>
       </StrictMode>,
     );
   }

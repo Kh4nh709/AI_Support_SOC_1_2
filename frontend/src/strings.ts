@@ -57,16 +57,25 @@ export const S = {
     disabled: "Đăng nhập đang tắt",
   },
 
-  // Risk bands, the one label <-> code table (rulings R8 and R13). The label is the text of the server's
-  // `risk_band` (queue.risk_band: Thấp/Vừa/Cao/Rất cao), which the Jinja page and the canvas show; the code
-  // is what the queue's `band` filter and `counts_by_band` speak. Read a code through `labelOf`, and a row's
-  // label through `bandCodeOfLabel`. The "Mức" of the queue is `risk_band`, never the alert's `severity`.
+  // Risk bands, the one label <-> code table (rulings R8 and R13), used by the queue and by the case pages.
+  // The label is the text of the server's `risk_band` (queue.risk_band: Thấp/Vừa/Cao/Rất cao), which the
+  // Jinja page and the canvas show; the code is what the queue's `band` filter and `counts_by_band` speak,
+  // and what the colours are keyed by. Read a code through `labelOf`, and a row's label through
+  // `bandCodeOfLabel`. The "Mức" of the queue is `risk_band`, never the alert's `severity`.
   band: {
     critical: "Rất cao",
     high: "Cao",
     medium: "Vừa",
     low: "Thấp",
   } satisfies Record<BandCode, string>,
+
+  // `severity` of a case and of an alert. It is a different word from the risk band, so it has its own table.
+  severity: {
+    critical: "Nghiêm trọng",
+    high: "Cao",
+    medium: "Trung bình",
+    low: "Thấp",
+  },
 
   // `confidence` of ① (`low|medium|high`), read through `labelOf`.
   confidence: {
@@ -219,6 +228,8 @@ export const S = {
   case: {
     listTitle: "Danh sách case",
     empty: "Chưa có case nào.",
+    // A page after the first with no row on it: the list is not empty, the reader went past its end.
+    pastEnd: "Không còn case ở trang này.",
     col: {
       title: "Tiêu đề",
       status: "Trạng thái",
@@ -242,13 +253,31 @@ export const S = {
       lastSeen: "Lần cuối thấy",
       rawLog: "Log gốc",
     },
-    truncated: "đã cắt",
+    truncated: "[đã cắt]",
+    showLog: "Xem log",
+    hideLog: "Ẩn log",
+    rawLogOf: (alertId: string) => `Log gốc — ${alertId}`,
+    notFound: "Không tìm thấy case",
+    summaryLabel: "Tóm tắt case",
+    neverAnalysed: "chưa phân tích",
+    clusterCount: (n: number) => `${n} cụm`,
     timeline: "Diễn biến",
+    // What the case detail itself records: its creation, each note, the last run of ② and the conclusion.
+    timelineCreated: "Case được tạo",
+    timelineNote: (who: string) => `${who} thêm ghi chú`,
+    timelineAnalysed: "Chạy phân tích AI ②",
+    timelineConcluded: (who: string, conclusion: string) => `${who} kết luận: ${conclusion}`,
     notes: "Ghi chú",
     noNotes: "Chưa có ghi chú.",
     addNote: "Thêm ghi chú",
     saveNote: "Lưu ghi chú",
+    noteInvalid: "Không lưu được ghi chú — nội dung trống hoặc quá dài",
     conclusionHeading: "Kết luận case",
+    pickConclusion: "Chọn kết luận",
+    // A 409 of the conclude: someone concluded the case first. `concludedBy` then says who and when.
+    conflict: "Case đã được kết luận trước đó — kết luận của bạn chưa được ghi.",
+    concludeInvalid: "Không ghi được kết luận — thiếu lý do hoặc lý do không hợp lệ",
+    reasonOfConclusion: "Lý do",
     // CONFIRMED_INCIDENT_SCOPE_NOTE (cases_pages.py), shown beside the "Xác nhận sự cố" choice.
     scopeNote:
       "Kết luận này chỉ ghi nhận sự cố — hệ thống dừng lại ở đây, không có bước cách ly, ứng cứu hay " +
@@ -299,19 +328,42 @@ export const S = {
     hypotheses: "Giả thuyết",
     supporting: "Bằng chứng ủng hộ",
     counter: "Bằng chứng phản bác",
+    evidence: "Bằng chứng",
     noEvidence: "Trợ lý không đưa ra bằng chứng nào.",
     noCounterEvidence:
       "Mô hình không nêu bằng chứng phản bác nào cho giả thuyết này — kết quả không đúng định dạng " +
       "yêu cầu (mỗi giả thuyết phải có ít nhất một bằng chứng phản bác), hãy đọc giả thuyết này thận trọng.",
     nextSteps: "Bước tiếp theo",
+    playbook: (name: string) => `Playbook: ${name}`,
     injection: "Cảnh báo tiêm lệnh (prompt injection)",
     model: "Mô hình",
     tokens: "Token",
     cost: "Chi phí",
-    quotaExhausted: (n: number) => `Đã dùng hết ${n} lượt phân tích hôm nay`,
+    // The 429 of `POST .../analyze` carries no count, so the sentence gives none.
+    quotaExhausted: "Đã dùng hết lượt phân tích hôm nay",
     alreadyRunning: "Đang có một lượt phân tích chạy cho case này",
     concluded: "Case đã kết luận — không thể phân tích thêm",
+    idle: "Chưa có phân tích nào cho case này.",
+    idleClosed: "Case đã kết luận và chưa có phân tích nào.",
+    reanalyze: "Phân tích lại",
+    failedClosed: "Phân tích thất bại",
+    stopped: (why: string) => `Phân tích không có kết quả: ${why}`,
+    retryable: "có thể thử lại",
+    resultAt: (when: string) => `Kết quả lúc ${when}`,
+    snapshot: (alerts: number, occurrences: number, lastSeen: string | null) =>
+      `Lúc phân tích: ${alerts} alert, ${occurrences} lần xuất hiện` +
+      (lastSeen === null ? "." : `, alert mới nhất ${lastSeen}.`),
+    current: (alerts: number, occurrences: number, lastSeen: string | null) =>
+      `Hiện tại: ${alerts} alert, ${occurrences} lần xuất hiện` +
+      (lastSeen === null ? "." : `, alert mới nhất ${lastSeen}.`),
+    // `investigate_v2.confidence`; an unknown value is shown as it came.
+    confidenceLevel: {
+      low: "thấp",
+      medium: "trung bình",
+      high: "cao",
+    },
     // Evidence marks (`evidence_check`): verified, or the reason the quote was rejected.
+    unverified: "Chưa kiểm chứng",
     mark: {
       verified: "Đã kiểm chứng",
       quote_not_found: "Trích dẫn không có trong log hay mô tả của alert",
