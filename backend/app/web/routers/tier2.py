@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from app.domain import transitions
 from app.infra.auth import Claims
-from app.tier2 import conclude
+from app.tier2 import case_view, conclude
 from app.web.deps import Conn, require_role
 
 router = APIRouter()
@@ -111,7 +111,12 @@ def list_cases(
 def case_detail(conn: psycopg.Connection, case_id: str) -> dict[str, Any] | None:
     """The case, its heads (G10 explicit column list, ordered `added_at,
     alert_id` — a total order) and its notes. `None` when `case_id` names no
-    row — the router answers 404 (design note 3)."""
+    row — the router answers 404 (design note 3).
+
+    P10-T04: also the fields the case pages used to recompute — `concluded_by_name` and each
+    note's `author_name` (one `case_view.usernames` read), each head's `raw_log`,
+    `raw_log_truncated`, `risk_band` and `last_seen_at` (never `risk_score`), and `ongoing` /
+    `ongoing_last_seen` (`case_view.enrich_heads`' rule). Every earlier key is unchanged."""
     row = conn.execute(
         f"SELECT {', '.join(_CASE_COLUMNS)} FROM cases WHERE case_id = %s",
         (case_id,),
@@ -127,6 +132,18 @@ def case_detail(conn: psycopg.Connection, case_id: str) -> dict[str, Any] | None
     ).fetchall()
     case["heads"] = [dict(zip(_HEAD_COLUMNS, head, strict=True)) for head in heads]
     case["notes"] = [dataclasses.asdict(note) for note in conclude.list_notes(conn, case_id)]
+    since = case["last_analyzed_at"] or case["created_at"]
+    ongoing_last_seen = case_view.enrich_heads(conn, case["heads"], since)
+    case["ongoing"] = ongoing_last_seen is not None
+    case["ongoing_last_seen"] = ongoing_last_seen
+    names = case_view.usernames(
+        conn, {case["concluded_by"]} | {note["author_id"] for note in case["notes"]}
+    )
+    case["concluded_by_name"] = (
+        names.get(str(case["concluded_by"])) if case["concluded_by"] is not None else None
+    )
+    for note in case["notes"]:
+        note["author_name"] = names.get(str(note["author_id"]))
     return case
 
 

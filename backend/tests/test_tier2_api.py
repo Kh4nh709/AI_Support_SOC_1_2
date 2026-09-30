@@ -276,7 +276,10 @@ def test_case_detail_returns_heads_and_notes(client, db):
     body = resp.json()
     assert body["case_id"] == case_id
     assert [h["alert_id"] for h in body["heads"]] == [head]
-    assert "raw_log" not in body["heads"][0]
+    # P10-T04: the heads now carry the supplement (`raw_log`, ...), so the P5-T06 assertion
+    # `"raw_log" not in head` is inverted; the bare score is still never exposed.
+    assert "raw_log" in body["heads"][0]
+    assert "risk_score" not in body["heads"][0]
     assert len(body["notes"]) == 1
     assert body["notes"][0]["body"] == "an analyst note"
 
