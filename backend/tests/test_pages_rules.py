@@ -256,11 +256,38 @@ def test_preview_writes_nothing(client) -> None:
     assert 'data-field="alerts">1<' in resp.text
     assert "low: 1" in _scoped(resp.text, 'data-field="by_severity"')
     assert "medium: 1" in _scoped(resp.text, 'data-field="by_asset_criticality"')
-    assert "prev-1" in resp.text  # samples, as a link to the alert page
-    assert '/alerts/prev-1"' in resp.text
+    # samples, as a link to the alert page of the new UI (P10-T13: the Jinja alert page is
+    # gone; the link keeps the host the admin came in on and changes only the port)
+    assert "prev-1" in resp.text
+    assert 'href="http://testserver:8080/alerts/prev-1"' in resp.text
+    assert 'href="/alerts/' not in resp.text
 
     count = db.execute("SELECT count(*) FROM autoclose_rules").fetchone()[0]
     assert count == 0
+
+
+@pytest.mark.db
+def test_preview_samples_are_plain_ids_when_the_host_header_is_not_a_plain_host(client) -> None:
+    """P10-T13: the sample links are built from the request's own host; a `Host` header with a
+    path in it gets no link at all (`pages.new_ui_url` refuses it), and the id is still shown."""
+    tc, db, _ = client
+    _insert_alert(
+        db,
+        alert_id="prev-2",
+        severity="low",
+        asset_context={"present": True, "criticality": "medium"},
+        identity_context={"privileged": False},
+        ioc_context={"reputation": "not_found"},
+    )
+    resp = tc.post(
+        "/admin/rules/preview",
+        data={"name": "n", "reason": "r", "match_json": REASON_MATCH_EVERYTHING},
+        headers={"host": "127.0.0.1:8000/evil"},
+    )
+    assert resp.status_code == 200
+    assert "prev-2" in resp.text
+    assert "<a href=" not in _scoped(resp.text, 'data-field="samples"')
+    assert "evil" not in resp.text
 
 
 @pytest.mark.db
