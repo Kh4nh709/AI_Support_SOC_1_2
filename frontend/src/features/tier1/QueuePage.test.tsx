@@ -534,13 +534,24 @@ describe("real time", () => {
     expect(await screen.findByRole("row", { name: /new arrival/ })).toBeInTheDocument();
   });
 
+  it("fetches nothing more when the socket first says live, and once when it is back after a drop", async () => {
+    renderQueue();
+    await screen.findByRole("row", { name: /sshd/ });
+    act(() => live().onStatus("live"));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(requests).toHaveLength(1); // the mount fetch is fresh
+    act(() => live().onStatus("offline"));
+    act(() => live().onStatus("live")); // what came during the drop was not heard
+    await waitFor(() => expect(requests).toHaveLength(2));
+  });
+
   // Review Focus 2: a pull of 500 alerts arrives as many messages; the queue is fetched about once per burst.
   it("fetches at most twice for a burst of 50 changes inside 100 ms", async () => {
     renderQueue();
     await screen.findByRole("row", { name: /sshd/ });
-    act(() => live().onStatus("live")); // the resync of a socket that just came up
-    await waitFor(() => expect(requests).toHaveLength(2));
-    await new Promise((r) => setTimeout(r, 600)); // its window has closed
+    act(() => live().onStatus("live")); // the first live of the page: the fetch of its mount is fresh
+    await new Promise((r) => setTimeout(r, 100));
+    expect(requests).toHaveLength(1);
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const started = Date.now();
     act(() => {
@@ -595,7 +606,8 @@ describe("real time", () => {
     await act(() => vi.advanceTimersByTimeAsync(30_000));
     expect(queueFetches(fetchSpy)).toBe(2);
 
-    act(() => live().onStatus("live")); // one resync, then no clock
+    act(() => live().onStatus("offline")); // the socket that failed to come up ...
+    act(() => live().onStatus("live")); // ... and then does: one resync, then no clock
     await act(() => vi.advanceTimersByTimeAsync(1_000));
     const afterResync = queueFetches(fetchSpy);
     await act(() => vi.advanceTimersByTimeAsync(120_000));

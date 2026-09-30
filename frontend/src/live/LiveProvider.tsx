@@ -27,13 +27,21 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (token === null) return;
     const invalidator = createInvalidator(queryClient);
+    // Whether the socket has been down since it was last live (or since it was opened, if it never was).
+    let missed = false;
     const disconnect = connectLive({
       token: () => token,
       onChange: (change) => invalidator.push(change),
       onStatus: (status) => {
         setReport({ token, status });
-        // Changes that came before `ready`, or while the socket was down, were not heard: read it all again.
-        if (status === "live") invalidator.push("many");
+        if (status === "offline") {
+          missed = true;
+        } else {
+          // Changes that came while the socket was down were not heard: read it all again. The first live of a
+          // socket that never dropped needs none, for the fetch of the page that just opened is fresh.
+          if (missed) invalidator.push("many");
+          missed = false;
+        }
       },
       onUnauthorized: reportUnauthorized,
     });
@@ -43,8 +51,10 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     };
   }, [token, queryClient]);
 
-  // What one session fetched is not shown to the next, and a blind or a visible arm is decided per person:
-  // the cache goes when the token does (sign-out, expiry, a new login), not when the same one is renewed.
+  // What one session fetched is not shown to the next: it was fetched under that session's own role, and
+  // whether ① is shown on an alert (the blind or the visible arm) is decided per alert, by a sha256 of its
+  // id (backend/app/soar/pipeline.py), until a decision is made on it. The cache goes when the token does
+  // (sign-out, expiry, a new login), not when the same one is renewed.
   useEffect(
     () => () => {
       queryClient.clear();

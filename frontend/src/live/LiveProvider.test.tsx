@@ -153,10 +153,35 @@ describe("what a change does", () => {
     expect(invalidated()).toEqual(['["queue"]', '["alert"]']);
   });
 
-  it("fetches everything again whenever the socket becomes live: what came before ready was missed", () => {
+  it("does not fetch on the first live after mount: the fetch of the page that just opened is fresh", () => {
     render(tree(session("tok-1")));
     act(() => newest().onStatus("live"));
+    expect(invalidated()).toEqual([]);
+  });
+
+  it("fetches everything again when the socket is live again after a drop: what came meanwhile was missed", () => {
+    render(tree(session("tok-1")));
+    act(() => newest().onStatus("live"));
+    act(() => newest().onStatus("offline"));
+    expect(invalidated()).toEqual([]); // the drop itself fetches nothing (the page polls)
+    act(() => newest().onStatus("live"));
     expect(invalidated()).toEqual(['["queue"]', '["alert"]']);
+  });
+
+  it("fetches when the first live comes after a first attempt that failed: the page polled, or waited, meanwhile", () => {
+    render(tree(session("tok-1")));
+    act(() => newest().onStatus("offline")); // the socket never came up at all
+    act(() => newest().onStatus("live"));
+    expect(invalidated()).toEqual(['["queue"]', '["alert"]']);
+  });
+
+  it("tells a new session's first live from a reconnect: the new socket has not dropped yet", () => {
+    const { rerender } = render(tree(session("tok-1")));
+    act(() => newest().onStatus("live"));
+    act(() => newest().onStatus("offline"));
+    rerender(tree(session("tok-2")));
+    act(() => newest().onStatus("live"));
+    expect(invalidated()).toEqual([]);
   });
 
   it("does not fetch again when the socket goes offline (the page polls instead)", () => {
