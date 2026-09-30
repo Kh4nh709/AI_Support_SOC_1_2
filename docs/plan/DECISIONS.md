@@ -3225,3 +3225,26 @@ Decision:
        - no message field carries alert content.
      - End to end: an alert posted through the webhook appears in an open queue page without a reload, within 2 s.
 Supersedes: DEC-161's "no backend contract change is expected" for this feature (a migration, a route and a dependency are added)
+
+## DEC-163 · 2026-09-30 · The 7-day window is split into 4 days of building (30/09–03/10) and 3 days of testing with real logs and real attacks plus fixes (04–06/10); the React UI v1.0 design spec is written
+Scope: **plan** (schedule inside DEC-157's window) · **evaluation** (real-attack testing on the final v1.0 configuration)
+Decided by: **the Owner** (*"Tôi gia hạn bạn lịch 7 ngày nhưng bạn chỉ cần làm trong 4 ngày. 3 ngày test với data log bắn thật và tấn công thật. và vá lỗi"*, 30/09). In brainstorming the Owner also approved:
+- design part 1 (architecture);
+- part 2 (structure, routes, authentication, real time);
+- the part-3 choice of basic server-side queue filters;
+- the part-4 plan, with this schedule change.
+Drafted by: Director (Opus 5.5)
+Propagated to: `docs/superpowers/specs/2026-09-30-react-ui-v1-design.md` §9 · the implementation plan
+Decision:
+  1. **Build: 30/09 afternoon to the end of 03/10.**
+     - It covers every §5 backend addition and every v1.0 page.
+     - The e2e suite is green.
+     - The Jinja Tier-1/Tier-2 pages are retired on 03/10, so the test days exercise the final v1.0 configuration.
+  2. **Test and fix: 04–06/10.**
+     - The Owner runs real log traffic and the lab attack scenarios. Attacks and container writes stay the Owner's.
+     - The Director watches read-only.
+     - Defects go to `docs/plan/ui-real-data-test.md`, and each becomes a fix card with a Coder and a Reviewer.
+  3. **Unchanged.**
+     - The cut-off stays at 07/10 12:00, followed by the P8-T06 close-out.
+     - The pilot starts on React Tier-1 as soon as that flow is merged, planned for 01/10.
+Supersedes: nothing (it refines DEC-157 item 1)
