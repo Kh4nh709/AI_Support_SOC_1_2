@@ -32,7 +32,8 @@ export function useLoad<T>(fetcher: () => Promise<T>): Load<T> {
       if (latest.current === mine) setState({ data, error: null, source: fetcher });
       return data;
     } catch (error) {
-      if (latest.current === mine) setState((last) => ({ data: last.data, error, source: fetcher }));
+      if (latest.current === mine)
+        setState((last) => ({ data: last.data, error, source: fetcher }));
       return null;
     }
   }, [fetcher]);

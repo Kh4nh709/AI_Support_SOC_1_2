@@ -88,11 +88,7 @@ describe("the rows", () => {
   });
 
   it("keeps the order the server sent: investigating first, then newest first", async () => {
-    serve([
-      row(3),
-      row(2, { status: "concluded_fp" }),
-      row(1, { status: "confirmed_incident" }),
-    ]);
+    serve([row(3), row(2, { status: "concluded_fp" }), row(1, { status: "confirmed_incident" })]);
     renderList();
     await table();
     const links = screen.getAllByRole("link").map((a) => a.textContent);
@@ -185,7 +181,9 @@ describe("the states", () => {
   it("titles the page", async () => {
     serve([row(1)]);
     renderList();
-    expect(await screen.findByRole("heading", { level: 1, name: S.case.listTitle })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { level: 1, name: S.case.listTitle }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -208,15 +206,21 @@ describe("paging", () => {
     const user = userEvent.setup();
     await table();
     await user.click(screen.getByRole("button", { name: S.common.next }));
-    expect(await screen.findByRole("link", { name: "Brute force vào máy chủ 51" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Brute force vào máy chủ 1" })).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole("link", { name: "Brute force vào máy chủ 51" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Brute force vào máy chủ 1" }),
+    ).not.toBeInTheDocument();
     expect(queries[1]).toEqual({ offset: "50", limit: "50" });
     // A short page is the last: there is nothing after it.
     expect(screen.getByRole("button", { name: S.common.next })).toBeDisabled();
     expect(screen.getByRole("button", { name: S.common.prev })).toBeEnabled();
 
     await user.click(screen.getByRole("button", { name: S.common.prev }));
-    expect(await screen.findByRole("link", { name: "Brute force vào máy chủ 1" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("link", { name: "Brute force vào máy chủ 1" }),
+    ).toBeInTheDocument();
     expect(queries[2]).toEqual({ offset: "0", limit: "50" });
   });
 
@@ -247,6 +251,8 @@ describe("accessibility", () => {
     await table();
     // jsdom computes no layout or colour, so the contrast rule cannot run here.
     const result = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
-    expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target).join(" ")}`)).toEqual([]);
+    expect(
+      result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target).join(" ")}`),
+    ).toEqual([]);
   });
 });

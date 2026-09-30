@@ -101,7 +101,9 @@ function serveViews(...views: JsonBodyType[]) {
 }
 
 const accept = () =>
-  server.use(http.post(ANALYZE_URL, () => HttpResponse.json({ run_id: RUN, job_id: 41 }, { status: 202 })));
+  server.use(
+    http.post(ANALYZE_URL, () => HttpResponse.json({ run_id: RUN, job_id: 41 }, { status: 202 })),
+  );
 
 const refuse = (status: number, detail: unknown) =>
   server.use(http.post(ANALYZE_URL, () => HttpResponse.json({ detail }, { status })));
@@ -175,7 +177,9 @@ describe("the state read from the server", () => {
     await act(() => vi.advanceTimersByTimeAsync(30_000));
     expect(seen).toEqual([null]);
 
-    await userEvent.setup({ delay: null }).click(screen.getByRole("button", { name: S.ai2.recheck }));
+    await userEvent
+      .setup({ delay: null })
+      .click(screen.getByRole("button", { name: S.ai2.recheck }));
     expect(await screen.findByText("Không phải sự cố")).toBeInTheDocument();
     expect(seen).toEqual([null, RUN]);
   });
@@ -197,7 +201,9 @@ describe("the state read from the server", () => {
 
   it("says why a finished run has no result, and that it can be retried while the case is open", async () => {
     serveViews(
-      done(run({ result: null, stopped_text: "mô hình trả lời sai định dạng, kể cả sau một lần sửa" })),
+      done(
+        run({ result: null, stopped_text: "mô hình trả lời sai định dạng, kể cả sau một lần sửa" }),
+      ),
     );
     renderColumn();
     const line = await screen.findByText(/Phân tích không có kết quả/);
@@ -231,7 +237,9 @@ describe("the state read from the server", () => {
   });
 
   it("says the case was not found for a 404", async () => {
-    server.use(http.get(VIEW_URL, () => HttpResponse.json({ detail: "case not found" }, { status: 404 })));
+    server.use(
+      http.get(VIEW_URL, () => HttpResponse.json({ detail: "case not found" }, { status: 404 })),
+    );
     renderColumn();
     expect(await screen.findByText(S.case.notFound)).toBeInTheDocument();
   });
@@ -306,11 +314,7 @@ describe("analyze and the poll", () => {
 
   it("stops polling on stalled, and 'Kiểm tra lại' asks once more", async () => {
     const user = fake();
-    const seen = serveViews(
-      idle(),
-      view({ state: "stalled", run_id: RUN, minutes: 6 }),
-      running(),
-    );
+    const seen = serveViews(idle(), view({ state: "stalled", run_id: RUN, minutes: 6 }), running());
     accept();
     renderColumn();
     await user.click(await analyzeButton());
@@ -466,7 +470,9 @@ describe("done", () => {
     renderColumn();
     expect(await screen.findByText("Không phải sự cố")).toBeInTheDocument();
     expect(screen.getByText("false_positive")).toBeInTheDocument();
-    expect(screen.getByText(`${S.ai2.confidence}: ${S.ai2.confidenceLevel.medium}`)).toBeInTheDocument();
+    expect(
+      screen.getByText(`${S.ai2.confidence}: ${S.ai2.confidenceLevel.medium}`),
+    ).toBeInTheDocument();
     expect(screen.getByText("Chuỗi đăng nhập thất bại đến từ chính máy lab.")).toBeInTheDocument();
     expect(screen.getByText(S.ai2.disclaimer)).toBeInTheDocument();
     expect(screen.getByText(S.ai2.resultAt("30/09/2026 08:19:00"))).toBeInTheDocument();
@@ -474,7 +480,13 @@ describe("done", () => {
 
   it("shows a conclusion label and a confidence it has no words for as they came", async () => {
     serveViews(
-      done(run({ conclusion: "other_thing", conclusion_label: "Chưa rõ kết luận", confidence: "certain" })),
+      done(
+        run({
+          conclusion: "other_thing",
+          conclusion_label: "Chưa rõ kết luận",
+          confidence: "certain",
+        }),
+      ),
     );
     renderColumn();
     expect(await screen.findByText("Chưa rõ kết luận")).toBeInTheDocument();
@@ -532,7 +544,9 @@ describe("done", () => {
     expect(within(first as HTMLElement).queryByText(S.ai2.unverified)).not.toBeInTheDocument();
     expect(within(first as HTMLElement).getByText("a-1")).toBeInTheDocument();
     expect(within(first as HTMLElement).getByText(/Failed password for root/)).toBeInTheDocument();
-    expect(within(first as HTMLElement).getByText("37 lần sai mật khẩu vào root")).toBeInTheDocument();
+    expect(
+      within(first as HTMLElement).getByText("37 lần sai mật khẩu vào root"),
+    ).toBeInTheDocument();
     const other = within(second as HTMLElement);
     expect(other.getByText(S.ai2.unverified)).toBeInTheDocument();
     expect(other.queryByText(S.ai2.mark.verified)).not.toBeInTheDocument();
@@ -584,7 +598,11 @@ describe("done", () => {
   it("says the case has changed since the run, beside the numbers then and now", async () => {
     serveViews(
       done(run({ changed: true }), {
-        current: { alert_count: 4, total_occurrences: 75, last_seen_at: "2026-09-30T02:30:00+00:00" },
+        current: {
+          alert_count: 4,
+          total_occurrences: 75,
+          last_seen_at: "2026-09-30T02:30:00+00:00",
+        },
       }),
     );
     renderColumn();

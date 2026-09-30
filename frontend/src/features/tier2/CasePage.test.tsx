@@ -230,7 +230,7 @@ describe("the heads", () => {
   });
 
   it("renders a hostile raw log as text and makes no element of it", async () => {
-    const hostile = '<img src=x onerror=alert(1)> </script> ‮ <b>bold</b> \u001b[31mred';
+    const hostile = "<img src=x onerror=alert(1)> </script> ‮ <b>bold</b> \u001b[31mred";
     serve(detail({ heads: [head({ raw_log: hostile })] }));
     const { container } = renderCase();
     await page();

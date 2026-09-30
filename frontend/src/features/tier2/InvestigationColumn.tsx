@@ -211,9 +211,7 @@ function ViewBody({
         <div className="space-y-3">
           <p className={ERROR_TEXT}>{open ? S.ai2.failed : S.ai2.failedClosed}</p>
           {analyzeButton}
-          {hasResult && (
-            <RunResult run={run} current={view.current} title={S.ai2.lastResult} />
-          )}
+          {hasResult && <RunResult run={run} current={view.current} title={S.ai2.lastResult} />}
         </div>
       );
 
@@ -275,9 +273,7 @@ function RunResult({
   return (
     <div className="space-y-4">
       {title !== null && <h3 className="text-sm font-semibold">{title}</h3>}
-      <p className="text-xs text-muted">
-        {S.ai2.resultAt(formatDateTime(run.created_at))}
-      </p>
+      <p className="text-xs text-muted">{S.ai2.resultAt(formatDateTime(run.created_at))}</p>
 
       {run.changed === true && (
         <div className="space-y-1 rounded border border-medium/40 bg-medium-bg p-3 text-sm text-medium">

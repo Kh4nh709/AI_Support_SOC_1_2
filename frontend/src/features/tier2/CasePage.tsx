@@ -60,7 +60,9 @@ function CaseView({ caseId }: { caseId: string }) {
 
       <div className="flex items-start gap-6">
         <div className="min-w-0 flex-1 space-y-6">
-          <h2 className="text-sm font-semibold tracking-wide text-ai-accent">{S.case.infoHeading}</h2>
+          <h2 className="text-sm font-semibold tracking-wide text-ai-accent">
+            {S.case.infoHeading}
+          </h2>
           <Summary data={data} />
           <Heads data={data} />
           <Timeline data={data} />
@@ -85,7 +87,9 @@ function Summary({ data }: { data: CaseDetail }) {
         <dd>{formatDateTime(data.created_at)}</dd>
         <dt className="text-muted">{S.case.col.lastAnalysed}</dt>
         <dd>
-          {data.last_analyzed_at === null ? S.case.neverAnalysed : formatDateTime(data.last_analyzed_at)}
+          {data.last_analyzed_at === null
+            ? S.case.neverAnalysed
+            : formatDateTime(data.last_analyzed_at)}
         </dd>
         <dt className="text-muted">{S.case.col.clusters}</dt>
         <dd>{S.case.clusterCount(data.heads.length)}</dd>
@@ -222,7 +226,10 @@ type TimelineEvent = { at: string; text: string };
 function timelineOf(data: CaseDetail): TimelineEvent[] {
   const events: TimelineEvent[] = [{ at: data.created_at, text: S.case.timelineCreated }];
   for (const note of data.notes) {
-    events.push({ at: note.created_at, text: S.case.timelineNote(note.author_name ?? note.author_id) });
+    events.push({
+      at: note.created_at,
+      text: S.case.timelineNote(note.author_name ?? note.author_id),
+    });
   }
   if (data.last_analyzed_at !== null) {
     events.push({ at: data.last_analyzed_at, text: S.case.timelineAnalysed });
@@ -348,7 +355,11 @@ function Notes({
 
 /** The 409 of a conclude carries who concluded the case first; anything else in it is ignored. */
 function conflictOf(failure: unknown): ConcludeConflict | null {
-  if (!(failure instanceof ApiError) || typeof failure.detail !== "object" || failure.detail === null) {
+  if (
+    !(failure instanceof ApiError) ||
+    typeof failure.detail !== "object" ||
+    failure.detail === null
+  ) {
     return null;
   }
   return failure.detail as ConcludeConflict;
@@ -392,7 +403,8 @@ function Conclusion({
         // Read the case again first, so the alert names the person the server now records.
         const fresh = await reload();
         const seen = conflictOf(failure);
-        const who = fresh?.concluded_by_name ?? fresh?.concluded_by ?? seen?.concluded_by ?? S.common.missing;
+        const who =
+          fresh?.concluded_by_name ?? fresh?.concluded_by ?? seen?.concluded_by ?? S.common.missing;
         const when = formatDateTime(fresh?.concluded_at ?? seen?.concluded_at ?? null);
         setConflict(`${S.case.conflict} ${S.case.concludedBy(who, when)}`);
       } else if (status === 503) {
@@ -481,7 +493,9 @@ function Conclusion({
               formatDateTime(data.concluded_at),
             )}
           </p>
-          {data.status === "confirmed_incident" && <p className="text-xs text-muted">{S.case.scopeNote}</p>}
+          {data.status === "confirmed_incident" && (
+            <p className="text-xs text-muted">{S.case.scopeNote}</p>
+          )}
         </div>
       )}
     </section>

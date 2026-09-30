@@ -15,7 +15,9 @@ import { S } from "./strings";
 // says "no cases" and "no case 3". A request nobody handled fails the test.
 const server = setupServer(
   http.get("/api/tier2/cases", () => HttpResponse.json([])),
-  http.get("/api/tier2/cases/3", () => HttpResponse.json({ detail: "case not found" }, { status: 404 })),
+  http.get("/api/tier2/cases/3", () =>
+    HttpResponse.json({ detail: "case not found" }, { status: 404 }),
+  ),
 );
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => server.resetHandlers());
