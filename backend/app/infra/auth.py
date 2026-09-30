@@ -173,9 +173,11 @@ def issue_token(claims: Claims, cfg: Config) -> str:
     return jwt.encode(payload, cfg.JWT_SECRET, algorithm="HS256")
 
 
-def verify(conn: psycopg.Connection, token: str, cfg: Config) -> Claims:
-    """Decode, then one `SELECT` by primary key: the returned `role` and the
-    active/logged-out state are the row's, on every request."""
+def decode(token: str, cfg: Config) -> tuple[str, float, float]:
+    """The half of `verify` that needs no database: the signature, the required claims and
+    the expiry. Returns `(user_id, iat, exp)`. A caller that would open a connection to
+    check the row (the WebSocket, P10-T05) runs this first, so a forged or stale token costs
+    no connection."""
     if cfg.JWT_SECRET == "":
         raise AuthDisabled()
     try:
@@ -187,11 +189,15 @@ def verify(conn: psycopg.Connection, token: str, cfg: Config) -> Claims:
     except jwt.InvalidTokenError as exc:
         raise Unauthorized("malformed") from exc
     try:
-        user_id = str(uuid.UUID(str(payload["sub"])))
-        iat = float(payload["iat"])
-        exp = float(payload["exp"])
+        return str(uuid.UUID(str(payload["sub"]))), float(payload["iat"]), float(payload["exp"])
     except (ValueError, TypeError) as exc:
         raise Unauthorized("malformed") from exc
+
+
+def verify(conn: psycopg.Connection, token: str, cfg: Config) -> Claims:
+    """Decode, then one `SELECT` by primary key: the returned `role` and the
+    active/logged-out state are the row's, on every request."""
+    user_id, iat, exp = decode(token, cfg)
     row = conn.execute(
         """
         SELECT username, role, is_active, sessions_invalid_before,

@@ -29,6 +29,7 @@ import threading
 import time
 import uuid
 
+import jwt
 import psycopg
 import pytest
 import yaml
@@ -196,6 +197,64 @@ def test_a_database_that_cannot_be_reached_closes_1011_not_4401(offline_client, 
     with offline_client.websocket_connect("/api/ws") as ws:
         ws.send_json({"type": "auth", "token": _token(str(uuid.uuid4()))})
         assert _close_code(ws) == 1011
+
+
+def _forged(**claims) -> str:
+    """A token signed with the right secret whose payload is `claims` as given."""
+    return jwt.encode(claims, SECRET, algorithm="HS256")
+
+
+def _payload(**overrides) -> dict:
+    now = time.time()
+    body = {"sub": str(uuid.uuid4()), "role": "tier1", "iat": now, "exp": now + 3600}
+    body.update(overrides)
+    return {key: value for key, value in body.items() if value is not None}
+
+
+@pytest.mark.parametrize(
+    "make_token",
+    [
+        pytest.param(lambda: "not-a-jwt", id="garbage"),
+        pytest.param(lambda: _token(str(uuid.uuid4()), secret="another-secret"), id="wrong-secret"),
+        pytest.param(lambda: _token(str(uuid.uuid4()), ttl=-30.0), id="expired"),
+        pytest.param(lambda: _forged(**_payload(sub=None)), id="no-sub"),
+        pytest.param(lambda: _forged(**_payload(sub="not-a-uuid")), id="sub-not-a-uuid"),
+        pytest.param(lambda: _forged(**_payload(role=None)), id="no-role"),
+    ],
+)
+def test_a_token_that_fails_its_signature_or_expiry_never_opens_a_connection(
+    offline_client, fast, monkeypatch, make_token
+):
+    """The check that needs no database runs first: a forged or stale token is refused with
+    4401 before the socket costs a connection. (Were the connection tried first, this DSN —
+    a port nothing listens on — would close 1011, not 4401.)"""
+    opened: list = []
+
+    def spy(*args, **kwargs):
+        opened.append(kwargs)
+        raise AssertionError("a connection was opened for a token that cannot be valid")
+
+    monkeypatch.setattr(live_ws.db, "connect", spy)
+    with offline_client.websocket_connect("/api/ws") as ws:
+        ws.send_json({"type": "auth", "token": make_token()})
+        assert _close_code(ws) == 4401
+    assert opened == []
+
+
+def test_the_row_check_connects_with_a_timeout(offline_client, fast, monkeypatch):
+    """A well-formed token does reach the database, on a connection that cannot hang for
+    libpq's default (minutes) when the host black-holes: `connect_timeout` is set."""
+    calls: list = []
+
+    def refuse(*args, **kwargs):
+        calls.append(kwargs)
+        raise psycopg.OperationalError("refused")
+
+    monkeypatch.setattr(live_ws.db, "connect", refuse)
+    with offline_client.websocket_connect("/api/ws") as ws:
+        ws.send_json({"type": "auth", "token": _token(str(uuid.uuid4()))})
+        assert _close_code(ws) == 1011
+    assert [call.get("connect_timeout") for call in calls] == [10]
 
 
 def test_no_secret_configured_closes_1011_never_lets_anyone_in(monkeypatch, fast):

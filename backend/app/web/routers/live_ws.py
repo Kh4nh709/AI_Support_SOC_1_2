@@ -9,7 +9,9 @@ The protocol, in the order the server speaks it:
    cookie) is ignored: this socket reads no request metadata for identity.
 2. A missing, malformed, invalid or expired token — an unknown, inactive or logged-out user
    — closes the socket with code **4401**. (Any other message, or none inside 5 s, is 4401
-   too.) The browser client treats 4401 as "sign in again" and never as "retry".
+   too.) The signature and expiry are checked FIRST, without the database (`auth.decode`):
+   a token that cannot be valid never costs a connection. The browser client treats 4401 as
+   "sign in again" and never as "retry".
 3. Otherwise `{"type": "ready"}`, then `{"type": "alerts.changed", "ids": [...]}` or
    `{"type": "alerts.changed", "many": true}` from the hub (`app.web.live`).
 4. The token is re-verified against the `users` row every `REVERIFY_INTERVAL_S` (60 s) and
@@ -52,6 +54,7 @@ log = logging.getLogger(__name__)
 AUTH_TIMEOUT_S = 5
 REVERIFY_INTERVAL_S = 60
 VERIFY_TIMEOUT_S = 10  # one lookup; a black-holed database must not hold a socket open
+CONNECT_TIMEOUT_S = 10  # libpq's connect_timeout for that lookup's connection (seconds)
 MAX_AUTH_MESSAGE_CHARS = 8192  # a signed token is a few hundred bytes
 ALLOWED_ROLES = frozenset({"tier1", "tier2", "admin"})
 
@@ -121,8 +124,18 @@ def _token_of(message: dict) -> str | None:
 
 
 def _verify_blocking(token: str, cfg: Config) -> Claims:
-    """The HTTP `current_user` check, on a connection of its own (thread-pool work)."""
-    conn = db.connect(cfg.DATABASE_URL)
+    """The HTTP `current_user` check, on a connection of its own (thread-pool work).
+
+    The signature and expiry come first (`auth.decode`, the very code `auth.verify` starts
+    with): a socket that has said nothing yet must not cost a connection to anyone who
+    cannot even forge a token, so a bad one is refused (`Unauthorized`, 4401) before the
+    database is touched. `verify` then decodes again and checks the row — the same single
+    implementation as HTTP, no copy of it here. `CONNECT_TIMEOUT_S` because this runs for
+    an unauthenticated peer, on a thread of the shared pool: a black-holed host must not
+    keep it for libpq's default.
+    """
+    auth.decode(token, cfg)
+    conn = db.connect(cfg.DATABASE_URL, connect_timeout=CONNECT_TIMEOUT_S)
     try:
         return auth.verify(conn, token, cfg)
     finally:
