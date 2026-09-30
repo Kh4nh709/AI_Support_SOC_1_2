@@ -1,7 +1,9 @@
 // `/cases/:caseId` (spec §4, the `Case` artboard): what is known of one case on the left (its heads,
-// what happened when, the notes, the conclusion) and the ② analysis on the right. The case is loaded
-// once and read again after a note; a conclusion answers with the case itself, so it is shown as it comes.
-import { useCallback, useId, useState, type FormEvent } from "react";
+// what happened when, the notes, the conclusion) and the ② analysis on the right. TanStack Query owns the
+// reads (`["case", caseId]`) and the writes: a note or a conclusion makes the case and the case list stale,
+// and a conclusion answers with the case itself, so it is shown as it comes and read again behind it.
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useId, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 import {
   CONCLUSIONS,
@@ -20,7 +22,7 @@ import { formatDateTime, formatTime } from "../../format";
 import { S, labelOf } from "../../strings";
 import { InvestigationColumn } from "./InvestigationColumn";
 import { BUTTON, ERROR_TEXT, ErrorNotice, FIELD, HEADING, PANEL, BandBadge, asText } from "./parts";
-import { useLoad } from "./useLoad";
+import { tier2Keys } from "./queryKeys";
 
 const TH = "px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted";
 const TD = "px-3 py-2 align-top";
@@ -33,8 +35,13 @@ export function CasePage() {
 }
 
 function CaseView({ caseId }: { caseId: string }) {
-  const fetcher = useCallback(() => getCase(caseId), [caseId]);
-  const { data, error, reload, replace } = useLoad(fetcher);
+  const query = useQuery({
+    queryKey: tier2Keys.case(caseId),
+    queryFn: () => getCase(caseId),
+  });
+  const data = query.data ?? null;
+  const error: unknown = query.isError ? query.error : null;
+  const reload = () => query.refetch();
 
   if (data === null) {
     if (error === null) return <p role="status">{S.common.loading}</p>;
@@ -57,8 +64,8 @@ function CaseView({ caseId }: { caseId: string }) {
           <Summary data={data} />
           <Heads data={data} />
           <Timeline data={data} />
-          <Notes caseId={caseId} data={data} open={open} reload={reload} />
-          <Conclusion caseId={caseId} data={data} open={open} reload={reload} replace={replace} />
+          <Notes caseId={caseId} data={data} open={open} />
+          <Conclusion caseId={caseId} data={data} open={open} />
         </div>
         <InvestigationColumn key={caseId} caseId={caseId} caseOpen={open} />
       </div>
@@ -271,39 +278,34 @@ function Timeline({ data }: { data: CaseDetail }) {
   );
 }
 
-function Notes({
-  caseId,
-  data,
-  open,
-  reload,
-}: {
-  caseId: string;
-  data: CaseDetail;
-  open: boolean;
-  reload: () => Promise<CaseDetail | null>;
-}) {
+function Notes({ caseId, data, open }: { caseId: string; data: CaseDetail; open: boolean }) {
   const titleId = useId();
   const boxId = useId();
+  const client = useQueryClient();
   const [body, setBody] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: (text: string) => addNote(caseId, text),
+    // The list is the server's, so the new note comes back with its id, its author and its time. The
+    // returned promise keeps the button busy until the case has been read again.
+    onSuccess: () => {
+      setBody("");
+      void client.invalidateQueries({ queryKey: tier2Keys.cases });
+      return client.invalidateQueries({ queryKey: tier2Keys.case(caseId) });
+    },
+  });
+  const saving = save.isPending;
+  // The last save's own answer, until the next one starts.
+  const notice = save.isError
+    ? statusOf(save.error) === 422
+      ? S.case.noteInvalid
+      : S.common.unknownError
+    : null;
 
-  async function submit(event: FormEvent): Promise<void> {
+  function submit(event: FormEvent): void {
     event.preventDefault();
     const text = body.trim();
     if (text === "" || saving) return;
-    setSaving(true);
-    setNotice(null);
-    try {
-      await addNote(caseId, text);
-      setBody("");
-      // The list is the server's, so the new note comes back with its id, its author and its time.
-      await reload();
-    } catch (failure) {
-      setNotice(statusOf(failure) === 422 ? S.case.noteInvalid : S.common.unknownError);
-    } finally {
-      setSaving(false);
-    }
+    save.mutate(text);
   }
 
   return (
@@ -329,7 +331,7 @@ function Notes({
         </ul>
       )}
       {open && (
-        <form onSubmit={(event) => void submit(event)} className="space-y-2">
+        <form onSubmit={submit} className="space-y-2">
           <label htmlFor={boxId} className="block text-sm">
             {S.case.addNote}
           </label>
@@ -366,58 +368,57 @@ function conflictOf(failure: unknown): ConcludeConflict | null {
   return failure.detail as ConcludeConflict;
 }
 
-function Conclusion({
-  caseId,
-  data,
-  open,
-  reload,
-  replace,
-}: {
-  caseId: string;
-  data: CaseDetail;
-  open: boolean;
-  reload: () => Promise<CaseDetail | null>;
-  replace: (data: CaseDetail) => void;
-}) {
+function Conclusion({ caseId, data, open }: { caseId: string; data: CaseDetail; open: boolean }) {
   const titleId = useId();
   const reasonId = useId();
   const scopeId = useId();
+  const client = useQueryClient();
   const [choice, setChoice] = useState<Conclusion | null>(null);
   const [reason, setReason] = useState("");
-  const [sending, setSending] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
   // Lives here, not in the form: the form goes away when the case turns out to be concluded.
   const [conflict, setConflict] = useState<string | null>(null);
+  const conclude = useMutation({
+    mutationFn: (sent: { choice: Conclusion; reason: string }) =>
+      concludeCase(caseId, sent.choice, sent.reason),
+    onSuccess: (concluded) => {
+      // The answer is the case as it now is, so it is shown as it comes; the read behind it and the
+      // list are made stale so both say the same.
+      client.setQueryData(tier2Keys.case(caseId), concluded);
+      void client.invalidateQueries({ queryKey: tier2Keys.case(caseId) });
+      void client.invalidateQueries({ queryKey: tier2Keys.cases });
+    },
+    onError: async (failure) => {
+      if (statusOf(failure) !== 409) return;
+      // Read the case again first, so the alert names the person the server now records. A read that
+      // fails leaves the case as it was, and the alert falls back on what the 409 itself carried.
+      await client.invalidateQueries({ queryKey: tier2Keys.case(caseId) });
+      const fresh = client.getQueryData<CaseDetail>(tier2Keys.case(caseId));
+      const seen = conflictOf(failure);
+      const who =
+        fresh?.concluded_by_name ?? fresh?.concluded_by ?? seen?.concluded_by ?? S.common.missing;
+      const when = formatDateTime(fresh?.concluded_at ?? seen?.concluded_at ?? null);
+      setConflict(`${S.case.conflict} ${S.case.concludedBy(who, when)}`);
+    },
+  });
+  const sending = conclude.isPending;
+  // The answer to the last try, until the next one starts. A 409 speaks through `conflict` instead.
+  const failure: unknown = conclude.isError ? conclude.error : null;
+  const failureStatus = failure === null ? null : statusOf(failure);
+  const notice =
+    failure === null || failureStatus === 409
+      ? null
+      : failureStatus === 503
+        ? S.decision.timeout
+        : failureStatus === 422
+          ? S.case.concludeInvalid
+          : S.common.unknownError;
 
-  async function submit(event: FormEvent): Promise<void> {
+  function submit(event: FormEvent): void {
     event.preventDefault();
     const text = reason.trim();
     if (choice === null || text === "" || sending) return;
-    setSending(true);
-    setNotice(null);
     setConflict(null);
-    try {
-      replace(await concludeCase(caseId, choice, text));
-    } catch (failure) {
-      const status = statusOf(failure);
-      if (status === 409) {
-        // Read the case again first, so the alert names the person the server now records.
-        const fresh = await reload();
-        const seen = conflictOf(failure);
-        const who =
-          fresh?.concluded_by_name ?? fresh?.concluded_by ?? seen?.concluded_by ?? S.common.missing;
-        const when = formatDateTime(fresh?.concluded_at ?? seen?.concluded_at ?? null);
-        setConflict(`${S.case.conflict} ${S.case.concludedBy(who, when)}`);
-      } else if (status === 503) {
-        setNotice(S.decision.timeout);
-      } else if (status === 422) {
-        setNotice(S.case.concludeInvalid);
-      } else {
-        setNotice(S.common.unknownError);
-      }
-    } finally {
-      setSending(false);
-    }
+    conclude.mutate({ choice, reason: text });
   }
 
   return (
@@ -433,7 +434,7 @@ function Conclusion({
       )}
 
       {open ? (
-        <form onSubmit={(event) => void submit(event)} className="space-y-3">
+        <form onSubmit={submit} className="space-y-3">
           <fieldset className="space-y-2">
             <legend className="text-sm">{S.case.pickConclusion}</legend>
             {CONCLUSIONS.map((code) => (

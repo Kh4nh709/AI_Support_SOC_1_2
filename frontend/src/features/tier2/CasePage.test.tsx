@@ -1,5 +1,6 @@
 // src/features/tier2/CasePage.test.tsx — the case page of the spec §4 (`Case` artboard): the left column
 // (heads, notes, conclusion) against a mocked backend. The ② column has its own file.
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
@@ -89,15 +90,21 @@ const concluded = (over: Record<string, unknown> = {}) =>
 const serve = (body: JsonBodyType, status = 200) =>
   server.use(http.get(CASE_URL, () => HttpResponse.json(body, { status })));
 
-function renderCase() {
+// A fresh client per render, so no test reads what another one cached; `retry: false` so a failed read
+// shows at once (T09's tests do the same).
+const newClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+function renderCase(client: QueryClient = newClient()) {
   return render(
-    <MemoryRouter initialEntries={[`/cases/${CASE}`]}>
-      <main>
-        <Routes>
-          <Route path="/cases/:caseId" element={<CasePage />} />
-        </Routes>
-      </main>
-    </MemoryRouter>,
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={[`/cases/${CASE}`]}>
+        <main>
+          <Routes>
+            <Route path="/cases/:caseId" element={<CasePage />} />
+          </Routes>
+        </main>
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -359,6 +366,25 @@ describe("the notes", () => {
     expect(box).toHaveValue("");
   });
 
+  it("makes the case list stale after a note, so the next look at it reads it again", async () => {
+    server.use(
+      http.get(CASE_URL, () => HttpResponse.json(detail())),
+      http.post(`${CASE_URL}/notes`, () =>
+        HttpResponse.json(note({ note_id: 2 }), { status: 201 }),
+      ),
+    );
+    const client = newClient();
+    // A page of the list, read earlier and no longer on screen.
+    client.setQueryData(["cases", 0], []);
+    renderCase(client);
+    await page();
+    expect(client.getQueryState(["cases", 0])?.isInvalidated).toBe(false);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(S.case.addNote), "ghi chú mới");
+    await user.click(screen.getByRole("button", { name: S.case.saveNote }));
+    await waitFor(() => expect(client.getQueryState(["cases", 0])?.isInvalidated).toBe(true));
+  });
+
   it("does not post an empty note", async () => {
     serve(detail());
     renderCase();
@@ -428,13 +454,17 @@ describe("the conclusion", () => {
 
   it("sends the choice and the reason only when both are given, then shows the conclusion", async () => {
     let posted: unknown = null;
+    // What the server holds: it is the answer of the POST once the POST has been made.
+    let held = detail();
     server.use(
-      http.get(CASE_URL, () => HttpResponse.json(detail())),
+      http.get(CASE_URL, () => HttpResponse.json(held)),
       http.post(`${CASE_URL}/conclude`, async ({ request }) => {
         posted = await request.json();
-        return HttpResponse.json(
-          concluded({ status: "concluded_policy_violation", conclusion_reason: "Vi phạm nội quy" }),
-        );
+        held = concluded({
+          status: "concluded_policy_violation",
+          conclusion_reason: "Vi phạm nội quy",
+        });
+        return HttpResponse.json(held);
       }),
     );
     renderCase();
@@ -451,6 +481,35 @@ describe("the conclusion", () => {
     expect(posted).toEqual({ conclusion: "concluded_policy_violation", reason: "Vi phạm nội quy" });
     expect(screen.queryByRole("button", { name: S.case.concludeSubmit })).not.toBeInTheDocument();
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+  });
+
+  it("reads the case again and makes the case list stale once it is concluded", async () => {
+    let gets = 0;
+    let held = detail();
+    server.use(
+      http.get(CASE_URL, () => {
+        gets += 1;
+        return HttpResponse.json(held);
+      }),
+      http.post(`${CASE_URL}/conclude`, () => {
+        held = concluded();
+        return HttpResponse.json(held);
+      }),
+    );
+    const client = newClient();
+    client.setQueryData(["cases", 0], []);
+    renderCase(client);
+    await page();
+    expect(gets).toBe(1);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("radio", { name: "Dương tính giả" }));
+    await user.type(screen.getByLabelText(S.case.reasonRequired), "lý do");
+    await user.click(screen.getByRole("button", { name: S.case.concludeSubmit }));
+    await screen.findByText("Script kiểm thử của nhóm hạ tầng");
+    await waitFor(() => expect(gets).toBe(2));
+    expect(client.getQueryState(["cases", 0])?.isInvalidated).toBe(true);
+    // The read behind the answer says what the answer said.
+    expect(screen.getByText("Script kiểm thử của nhóm hạ tầng")).toBeInTheDocument();
   });
 
   it("names who concluded it first, by name, when the server answers 409", async () => {
@@ -670,16 +729,18 @@ describe("going from one case to another", () => {
 
   function renderBoth() {
     return render(
-      <MemoryRouter initialEntries={[`/cases/${CASE}`]}>
-        <nav>
-          <Link to={`/cases/${OTHER}`}>{NEXT}</Link>
-        </nav>
-        <main>
-          <Routes>
-            <Route path="/cases/:caseId" element={<CasePage />} />
-          </Routes>
-        </main>
-      </MemoryRouter>,
+      <QueryClientProvider client={newClient()}>
+        <MemoryRouter initialEntries={[`/cases/${CASE}`]}>
+          <nav>
+            <Link to={`/cases/${OTHER}`}>{NEXT}</Link>
+          </nav>
+          <main>
+            <Routes>
+              <Route path="/cases/:caseId" element={<CasePage />} />
+            </Routes>
+          </main>
+        </MemoryRouter>
+      </QueryClientProvider>,
     );
   }
 
@@ -705,6 +766,27 @@ describe("going from one case to another", () => {
     expect(screen.queryByText(FIRST_TITLE)).not.toBeInTheDocument();
     expect(screen.getByText("Quét cổng từ 10.0.0.9")).toBeInTheDocument();
     expect(screen.queryByText("sshd: brute force trying to get access")).not.toBeInTheDocument();
+  });
+
+  it("never shows the first case's failure when it arrives after the second case is on screen", async () => {
+    const late = gate();
+    server.use(
+      http.get(CASE_URL, async () => {
+        await late.opened;
+        return HttpResponse.json({ detail: "boom" }, { status: 500 });
+      }),
+      http.get(OTHER_URL, () => HttpResponse.json(second())),
+      http.get(`${OTHER_URL}/investigation`, () => HttpResponse.json(IDLE)),
+    );
+    renderBoth();
+    await userEvent.setup().click(screen.getByRole("link", { name: NEXT }));
+    await secondTitle();
+
+    late.open();
+    await settle();
+    expect(screen.getByRole("heading", { level: 1, name: SECOND_TITLE })).toBeInTheDocument();
+    expect(screen.queryByText(S.common.unknownError)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("never shows the first case's analysis when its answer arrives after the second's", async () => {
@@ -760,6 +842,100 @@ describe("going from one case to another", () => {
     await secondTitle();
     expect(await screen.findByText(S.ai2.idle)).toBeInTheDocument();
     expect(screen.queryByText("tóm tắt của case thứ nhất")).not.toBeInTheDocument();
+  });
+});
+
+// Two reads of one case that answer out of order: only the newest counts, and an answer the page was handed
+// by a POST is not overwritten by a read that began before it. (These were the guarantees of `useLoad`.)
+describe("reads of one case that answer out of order", () => {
+  const NEWER = "Bản đọc mới";
+  const OLDER = "Bản đọc cũ";
+  const CONCLUDED_REASON = "Script kiểm thử của nhóm hạ tầng";
+
+  function gate() {
+    let open: () => void = () => {};
+    const opened = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return { opened, open };
+  }
+
+  // Real time: the wait is for an answer already released to travel through the network layer.
+  const settle = () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+  it("keeps the newer of two reads of the case when the older one answers last", async () => {
+    const older = gate();
+    let gets = 0;
+    server.use(
+      http.get(CASE_URL, async () => {
+        gets += 1;
+        if (gets === 1) return HttpResponse.json(detail());
+        if (gets === 2) {
+          await older.opened;
+          return HttpResponse.json(detail({ title: OLDER }));
+        }
+        return HttpResponse.json(detail({ title: NEWER }));
+      }),
+    );
+    const client = newClient();
+    renderCase(client);
+    await page();
+    // The case is read again (a window focus) and the answer is slow; then it is read again (a note) and
+    // that one answers first.
+    act(() => {
+      void client.invalidateQueries({ queryKey: ["case", CASE] });
+    });
+    await waitFor(() => expect(gets).toBe(2));
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["case", CASE] });
+    });
+    expect(await screen.findByRole("heading", { level: 1, name: NEWER })).toBeInTheDocument();
+
+    older.open();
+    await settle();
+    expect(screen.getByRole("heading", { level: 1, name: NEWER })).toBeInTheDocument();
+    expect(screen.queryByText(OLDER)).not.toBeInTheDocument();
+  });
+
+  it("keeps the conclusion a POST answered when a read that began before it answers after", async () => {
+    const slow = gate();
+    let gets = 0;
+    let held = detail();
+    server.use(
+      http.get(CASE_URL, async () => {
+        gets += 1;
+        // The second read begins before the conclusion and is slow: it carries the case still open.
+        if (gets === 2) {
+          await slow.opened;
+          return HttpResponse.json(detail());
+        }
+        return HttpResponse.json(held);
+      }),
+      http.post(`${CASE_URL}/conclude`, () => {
+        held = concluded();
+        return HttpResponse.json(held);
+      }),
+    );
+    const client = newClient();
+    renderCase(client);
+    await page();
+    act(() => {
+      void client.invalidateQueries({ queryKey: ["case", CASE] });
+    });
+    await waitFor(() => expect(gets).toBe(2));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("radio", { name: "Dương tính giả" }));
+    await user.type(screen.getByLabelText(S.case.reasonRequired), "lý do");
+    await user.click(screen.getByRole("button", { name: S.case.concludeSubmit }));
+    await screen.findByText(CONCLUDED_REASON);
+
+    slow.open();
+    await settle();
+    expect(screen.getByText(CONCLUDED_REASON)).toBeInTheDocument();
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
   });
 });
 

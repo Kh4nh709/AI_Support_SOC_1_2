@@ -1,4 +1,5 @@
 // src/routes.test.tsx — the route table of the spec §3.1, for each role.
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -36,6 +37,10 @@ const session = (role: Session["role"]): Session => ({
   expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
 });
 
+// The case pages read through TanStack Query, as they do under the app's provider; a fresh client per
+// render so no test reads what another cached, and `retry: false` so a failed read shows at once.
+const newClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
 function Where() {
   const { pathname } = useLocation();
   return <p data-testid="where">{pathname}</p>;
@@ -50,12 +55,14 @@ function renderAt(path: string, s: Session | null, ready = true) {
     logout: async () => {},
   };
   return render(
-    <AuthContext.Provider value={auth}>
-      <MemoryRouter initialEntries={[path]}>
-        <AppRoutes />
-        <Where />
-      </MemoryRouter>
-    </AuthContext.Provider>,
+    <QueryClientProvider client={newClient()}>
+      <AuthContext.Provider value={auth}>
+        <MemoryRouter initialEntries={[path]}>
+          <AppRoutes />
+          <Where />
+        </MemoryRouter>
+      </AuthContext.Provider>
+    </QueryClientProvider>,
   );
 }
 
@@ -171,12 +178,14 @@ describe("with the real AuthProvider", () => {
   function renderApp(path: string) {
     return render(
       <StrictMode>
-        <MemoryRouter initialEntries={[path]}>
-          <AuthProvider>
-            <AppRoutes />
-            <Where />
-          </AuthProvider>
-        </MemoryRouter>
+        <QueryClientProvider client={newClient()}>
+          <MemoryRouter initialEntries={[path]}>
+            <AuthProvider>
+              <AppRoutes />
+              <Where />
+            </AuthProvider>
+          </MemoryRouter>
+        </QueryClientProvider>
       </StrictMode>,
     );
   }

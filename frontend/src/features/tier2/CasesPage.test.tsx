@@ -1,6 +1,7 @@
 // src/features/tier2/CasesPage.test.tsx — the case list (spec §4): the rows the server sends, in the order
 // it sends them, paged by offset, and a code this UI has no label for shown as the code.
-import { render, screen, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { http, HttpResponse, type JsonBodyType } from "msw";
@@ -41,13 +42,20 @@ function serve(...pages: JsonBodyType[]) {
   return queries;
 }
 
-function renderList() {
+// A fresh client per render, so no test reads what another one cached; `retry: false` so a failed read
+// shows at once (T09's tests do the same). `gcTime: 0` is a client that keeps no page it has left.
+function renderList(options: { gcTime?: number } = {}) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, ...options } },
+  });
   return render(
-    <MemoryRouter initialEntries={["/cases"]}>
-      <main>
-        <CasesPage />
-      </main>
-    </MemoryRouter>,
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={["/cases"]}>
+        <main>
+          <CasesPage />
+        </main>
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -260,7 +268,8 @@ describe("paging", () => {
         return HttpResponse.json(full());
       }),
     );
-    renderList();
+    // No cache of the page just left, so the page asked for has nothing of its own to show yet.
+    renderList({ gcTime: 0 });
     const user = userEvent.setup();
     await table();
     await user.click(screen.getByRole("button", { name: S.common.next }));
@@ -273,6 +282,37 @@ describe("paging", () => {
     expect(screen.queryByText(S.case.pastEnd)).not.toBeInTheDocument();
     release();
     await table();
+  });
+
+  it("shows a page it has read before as its own rows, busy, while it reads it again", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    server.use(
+      http.get(LIST_URL, async () => {
+        calls += 1;
+        if (calls === 1) return HttpResponse.json(full());
+        if (calls === 2) return HttpResponse.json([]);
+        await gate;
+        return HttpResponse.json(full());
+      }),
+    );
+    renderList();
+    const user = userEvent.setup();
+    await table();
+    await user.click(screen.getByRole("button", { name: S.common.next }));
+    await screen.findByText(S.case.pastEnd);
+    await user.click(screen.getByRole("button", { name: S.common.prev }));
+
+    // Offset 0 is in the cache, so its rows are there at once; nothing says the list is empty or over.
+    expect(await table()).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByText(S.case.empty)).not.toBeInTheDocument();
+    expect(screen.queryByText(S.case.pastEnd)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: S.common.next })).toBeDisabled();
+    release();
+    await waitFor(() => expect(screen.getByRole("table")).toHaveAttribute("aria-busy", "false"));
   });
 
   it("goes back from a page past the end to the last page", async () => {

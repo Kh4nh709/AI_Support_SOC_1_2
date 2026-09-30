@@ -1,5 +1,6 @@
 // src/features/tier2/InvestigationColumn.test.tsx — the ② column of the case page (spec §4): its five
 // states, the poll after an analyze, the marks on the evidence, and every refusal of the analyze route.
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
@@ -110,12 +111,21 @@ const accept = () =>
 const refuse = (status: number, detail: unknown) =>
   server.use(http.post(ANALYZE_URL, () => HttpResponse.json({ detail }, { status })));
 
-function renderColumn(caseOpen = true) {
-  return render(
+// A fresh client per render, so no test reads what another one cached; `retry: false` so a failed read
+// shows at once (T09's tests do the same).
+const newClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+/** The column of `caseId` inside the app's provider, so a `rerender` can hand it another case. */
+const columnOf = (client: QueryClient, caseId: string, caseOpen = true) => (
+  <QueryClientProvider client={client}>
     <main>
-      <InvestigationColumn caseId={CASE} caseOpen={caseOpen} />
-    </main>,
-  );
+      <InvestigationColumn caseId={caseId} caseOpen={caseOpen} />
+    </main>
+  </QueryClientProvider>
+);
+
+function renderColumn(caseOpen = true) {
+  return render(columnOf(newClient(), CASE, caseOpen));
 }
 
 const analyzeButton = () => screen.findByRole("button", { name: S.ai2.analyze });
@@ -592,16 +602,9 @@ describe("another case", () => {
       }),
       http.get(OTHER_VIEW_URL, () => HttpResponse.json(idle())),
     );
-    const { rerender } = render(
-      <main>
-        <InvestigationColumn caseId={CASE} caseOpen />
-      </main>,
-    );
-    rerender(
-      <main>
-        <InvestigationColumn caseId={OTHER} caseOpen />
-      </main>,
-    );
+    const client = newClient();
+    const { rerender } = render(columnOf(client, CASE));
+    rerender(columnOf(client, OTHER));
     expect(await screen.findByText(S.ai2.idle)).toBeInTheDocument();
 
     release();
@@ -622,16 +625,9 @@ describe("another case", () => {
       }),
       http.get(OTHER_VIEW_URL, () => HttpResponse.json(idle())),
     );
-    const { rerender } = render(
-      <main>
-        <InvestigationColumn caseId={CASE} caseOpen />
-      </main>,
-    );
-    rerender(
-      <main>
-        <InvestigationColumn caseId={OTHER} caseOpen />
-      </main>,
-    );
+    const client = newClient();
+    const { rerender } = render(columnOf(client, CASE));
+    rerender(columnOf(client, OTHER));
     expect(await screen.findByText(S.ai2.idle)).toBeInTheDocument();
 
     release();

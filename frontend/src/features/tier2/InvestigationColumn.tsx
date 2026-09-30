@@ -1,9 +1,11 @@
 // The ② column of the case page (spec §4): what the case assistant made of the case. It reads the state
-// from the server, starts an analysis on Phân tích, and polls every 3 s while one is running. It stops on
-// done, failed or stalled; on a stalled job the reader decides whether to look again.
+// from the server (TanStack Query owns the read), starts an analysis on Phân tích, and polls every 3 s
+// while one is running. It stops on done, failed or stalled; on a stalled job the reader decides whether to
+// look again.
 //
 // Everything the model wrote (summary, narrative, hypotheses, quotes, next steps) is rendered as text.
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useId, useRef, useState } from "react";
 import {
   getInvestigation,
   isInvestigationState,
@@ -18,6 +20,7 @@ import { ApiError } from "../../api/client";
 import { formatDateTime, formatTime } from "../../format";
 import { S, labelOf } from "../../strings";
 import { BUTTON, ERROR_TEXT, ErrorNotice, HEADING, asText } from "./parts";
+import { tier2Keys } from "./queryKeys";
 
 /** How often a running analysis is asked about. */
 export const POLL_MS = 3000;
@@ -41,93 +44,84 @@ function refusal(error: unknown): string {
   return S.common.unknownError;
 }
 
+/** What a 202 says before the server has been asked: a live job, with nothing of it to show yet. */
+const runningView = (runId: string): InvestigationView => ({
+  state: "running",
+  run_id: runId,
+  minutes: null,
+  run: null,
+  current: null,
+  case_open: true,
+});
+
 export function InvestigationColumn({ caseId, caseOpen }: { caseId: string; caseOpen: boolean }) {
-  const [view, setView] = useState<InvestigationView | null>(null);
-  // The run of the 202, kept here: a `done` view carries no top-level run_id, and every poll names its run.
-  const [runId, setRunId] = useState<string | null>(null);
-  // The failure of the last read; the polling stops on it.
-  const [error, setError] = useState<unknown>(null);
-  // The reason Phân tích was refused.
-  const [notice, setNotice] = useState<string | null>(null);
-  const [posting, setPosting] = useState(false);
+  const client = useQueryClient();
+  // The run of the 202, kept here with the case it belongs to: a `done` view carries no top-level run_id, so
+  // the poll needs it, and it is part of the query key. Another case has no run of this one.
+  const [kept, setKept] = useState<{ caseId: string; runId: string } | null>(null);
+  const runId = kept !== null && kept.caseId === caseId ? kept.runId : null;
+  const key = tier2Keys.investigation(caseId, runId);
   const postingNow = useRef(false);
-  // Only the newest read counts: a read that answers after a newer one was made is dropped.
-  const latest = useRef(0);
   const headingId = useId();
 
-  const read = useCallback(
-    (id: string | null): Promise<void> => {
-      latest.current += 1;
-      const mine = latest.current;
-      return getInvestigation(caseId, id).then(
-        (next) => {
-          if (latest.current !== mine) return;
-          // A state this UI does not know cannot be polled or acted on: it is an error, not a guess.
-          if (!isInvestigationState(next.state)) {
-            setError(new Error("unknown state"));
-            return;
-          }
-          setView(next);
-          setError(null);
-          if (next.run_id !== null && next.run_id !== undefined) setRunId(next.run_id);
-        },
-        (failure: unknown) => {
-          if (latest.current === mine) setError(failure);
-        },
-      );
+  const query = useQuery({
+    queryKey: key,
+    queryFn: async (): Promise<InvestigationView> => {
+      // Every read names its run: the run of the 202, else the run the last answer named. A job with a run_id
+      // and nothing behind it then answers "failed", never "idle".
+      const named = runId ?? client.getQueryData<InvestigationView>(key)?.run_id ?? null;
+      const next = await getInvestigation(caseId, named);
+      // A state this UI does not know cannot be polled or acted on: it is an error, not a guess.
+      if (!isInvestigationState(next.state)) throw new Error("unknown state");
+      return next;
     },
-    [caseId],
-  );
+    // An answer is fresh for one poll: the view a 202 seeds is not read again the moment it is shown.
+    staleTime: POLL_MS,
+    // Asked every 3 s while the job runs; on done, failed, stalled or an error nothing is asked, so the
+    // reader's Kiểm tra lại and Thử lại are the only ways to ask again.
+    refetchInterval: (polled) =>
+      polled.state.status !== "error" && polled.state.data?.state === "running" ? POLL_MS : false,
+  });
+  const view = query.data ?? null;
+  // The failure of the last read; the last good view stays under it.
+  const error: unknown = query.isError ? query.error : null;
 
-  useEffect(() => {
-    void read(null);
-  }, [read]);
-
-  const polling = view?.state === "running" && error === null;
-  const pollId = runId ?? view?.run_id ?? null;
-
-  useEffect(() => {
-    if (!polling) return;
-    let asking = false;
-    const timer = setInterval(() => {
-      // A poll still unanswered is not asked again.
-      if (asking) return;
-      asking = true;
-      void read(pollId).finally(() => {
-        asking = false;
+  const analyzeRun = useMutation({
+    mutationFn: (id: string) => postAnalyze(id),
+    onSuccess: (accepted, id) => {
+      // What was read of this case before is stale now; none of it is read again here. The run of the 202
+      // then gets its own key, seeded with a live job, so the previous result is hidden at once.
+      void client.invalidateQueries({
+        queryKey: tier2Keys.investigations(id),
+        refetchType: "none",
       });
-    }, POLL_MS);
-    return () => clearInterval(timer);
-  }, [polling, pollId, read]);
+      client.setQueryData(
+        tier2Keys.investigation(id, accepted.run_id),
+        runningView(accepted.run_id),
+      );
+      setKept({ caseId: id, runId: accepted.run_id });
+      // The case's own reads (and the list's) may name the run too.
+      void client.invalidateQueries({ queryKey: tier2Keys.case(id) });
+      void client.invalidateQueries({ queryKey: tier2Keys.cases });
+    },
+    onError: (failure, id) => {
+      // Someone else's run is live: read it with no run named, so this column follows that one.
+      if (statusOf(failure) !== 409) return;
+      setKept((was) => (was !== null && was.caseId === id ? null : was));
+      void client.invalidateQueries({ queryKey: tier2Keys.investigation(id, null) });
+    },
+  });
+  // The reason Phân tích was refused; the next attempt clears it.
+  const notice = analyzeRun.isError ? refusal(analyzeRun.error) : null;
 
-  async function analyze(): Promise<void> {
+  function analyze(): void {
     if (postingNow.current) return;
     postingNow.current = true;
-    setPosting(true);
-    setNotice(null);
-    try {
-      const accepted = await postAnalyze(caseId);
-      // A read that was in flight predates this run.
-      latest.current += 1;
-      setRunId(accepted.run_id);
-      setError(null);
-      // A live job hides the previous result.
-      setView({
-        state: "running",
-        run_id: accepted.run_id,
-        minutes: null,
-        run: null,
-        current: null,
-        case_open: true,
-      });
-    } catch (failure) {
-      setNotice(refusal(failure));
-      // Someone else's run is live: read it, so this column follows that one.
-      if (statusOf(failure) === 409) void read(null);
-    } finally {
-      postingNow.current = false;
-      setPosting(false);
-    }
+    analyzeRun.mutate(caseId, {
+      onSettled: () => {
+        postingNow.current = false;
+      },
+    });
   }
 
   // The page knows the case is concluded before the server's last answer does, and the server may know
@@ -150,7 +144,7 @@ export function InvestigationColumn({ caseId, caseOpen }: { caseId: string; case
         <ErrorNotice
           message={statusOf(error) === 404 ? S.case.notFound : S.common.unknownError}
           // Asked with the run of the 202: a job with nothing behind it then answers "failed", not "idle".
-          onRetry={() => void read(pollId)}
+          onRetry={() => void query.refetch()}
         />
       )}
 
@@ -160,9 +154,9 @@ export function InvestigationColumn({ caseId, caseOpen }: { caseId: string; case
         <ViewBody
           view={view}
           open={open}
-          posting={posting}
-          onAnalyze={() => void analyze()}
-          onRecheck={() => void read(pollId)}
+          posting={analyzeRun.isPending}
+          onAnalyze={analyze}
+          onRecheck={() => void query.refetch()}
         />
       )}
 
