@@ -80,14 +80,23 @@ def scratch_database(suffix: str) -> Iterator[conftest.Dsn]:
 INSERT_ALERT = (
     "INSERT INTO alerts (alert_id, rule_id, rule_level, severity, description, agent_name,"
     " alert_time, category, resolved_by, mapping_version, event_bucket_hash, raw_payload,"
-    " raw_log) VALUES (%s, '5710', 5, 'medium', 'p10t05', 'p10t05-agent', now(), 'other',"
-    " 'none', 'v1', encode(sha256(%s::bytea), 'hex'), '{}'::jsonb, %s)"
+    " raw_log, suggestion_visible, status) VALUES (%s, '5710', 5, 'medium', 'p10t05',"
+    " 'p10t05-agent', now(), 'other', 'none', 'v1', encode(sha256(%s::bytea), 'hex'),"
+    " '{}'::jsonb, %s, %s, %s)"
 )
 
 
-def insert_alert(conn: psycopg.Connection, alert_id: str, raw_log: str = "") -> None:
-    """Insert one alert on `conn`; the caller commits or rolls back."""
-    conn.execute(INSERT_ALERT, (alert_id, alert_id, raw_log))
+def insert_alert(
+    conn: psycopg.Connection,
+    alert_id: str,
+    raw_log: str = "",
+    *,
+    suggestion_visible: bool = True,
+    status: str = "received",
+) -> None:
+    """Insert one alert on `conn`; the caller commits or rolls back. `suggestion_visible`
+    False is the blind arm (DEC-101)."""
+    conn.execute(INSERT_ALERT, (alert_id, alert_id, raw_log, suggestion_visible, status))
 
 
 def insert_user(conn: psycopg.Connection, role: str = "tier1") -> str:

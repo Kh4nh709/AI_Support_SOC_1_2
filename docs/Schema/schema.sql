@@ -1470,6 +1470,9 @@ INSERT INTO schema_migrations (version) VALUES ('017_append_only_and_roles');
 --   * A LISTENing connection that is down misses what was sent meanwhile — the
 --     application says "many" to every socket after it reconnects (live.run_listener).
 --
+-- The blind arm has one more silence (R12, in the function): a blind, undecided alert
+-- whose only change is `triage_status` — ① finishing — is not announced.
+--
 -- Only the columns the queue and the alert page render wake listeners
 -- (`UPDATE OF`): a write to any other column (the enrichment payload, the LLM columns,
 -- `updated_at` on its own) does not chatter on the channel. `UPDATE OF` fires when the
@@ -1483,6 +1486,26 @@ INSERT INTO schema_migrations (version) VALUES ('017_append_only_and_roles');
 CREATE OR REPLACE FUNCTION notify_alerts_changed() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
+  -- DEC-101, Director ruling R12: ① finishing on a blind, undecided alert must not wake
+  -- the sockets. ①'s only write to `alerts` names `triage_status` and `triaged_count`;
+  -- a message "alert X changed" right then would tell the analyst that ① ran on X, which
+  -- `tier1/visibility.py` forbids ("a blind row must not even say ① ran"). So an UPDATE
+  -- is silent when ALL of these hold: the alert is blind (`NOT suggestion_visible`), it is
+  -- not decided (the status is outside `visibility.SHOW_STATES` — keep the two lists in
+  -- step; test_schema_v3_018 compares them), and every other watched column is unchanged
+  -- (only `triage_status` moved). A blind alert still notifies on any other change.
+  IF TG_OP = 'UPDATE'
+     AND NOT NEW.suggestion_visible
+     AND NEW.status NOT IN ('closed_fp', 'closed_benign', 'closed_confirmed',
+                            'escalated_tier2', 'auto_closed')
+     AND (NEW.status, NEW.occurrence_count, NEW.last_seen_at, NEW.acknowledged_by,
+          NEW.closed_at, NEW.case_id, NEW.risk_score)
+         IS NOT DISTINCT FROM
+         (OLD.status, OLD.occurrence_count, OLD.last_seen_at, OLD.acknowledged_by,
+          OLD.closed_at, OLD.case_id, OLD.risk_score)
+  THEN
+    RETURN NULL;
+  END IF;
   PERFORM pg_notify('alerts_changed',
                     json_build_object('alert_id', NEW.alert_id, 'op', TG_OP)::text);
   RETURN NULL;  -- AFTER ROW: the return value is ignored
