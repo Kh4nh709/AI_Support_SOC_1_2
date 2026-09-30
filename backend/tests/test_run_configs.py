@@ -838,6 +838,141 @@ def test_b1_no_table_or_no_match_is_needs_review(lab, capsys):
 
 
 # ---------------------------------------------------------------------------
+# P10-T16 fix round 1 (DEC-165): the harness always evaluates with grouping on
+# ---------------------------------------------------------------------------
+#
+# `DEDUP_ENABLED=false` in the live `.env` makes `evaluate_alert` feed ① the burst count (R22)
+# instead of the row's `occurrence_count`. The gold sets are pre-switch data built with the dedup
+# path, and `--env-file` defaults to that same `.env`, so `run_configs` pins the switch on in the
+# `Config` it builds: B1's facts (`b1_facts`, the row's count) stay equal to `evaluate_alert`'s,
+# the prompt and so the cache key stay byte-identical, and a run does not re-spend.
+
+
+def _env_file(tmp: Path, **values) -> Path:
+    path = tmp / "pin.env"
+    merged = {**_LLM_ENV, **{key: str(value) for key, value in values.items()}}
+    path.write_text("".join(f"{key}={value}\n" for key, value in merged.items()), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def clean_env(monkeypatch):
+    """The keys a test's `--env-file` sets are taken out of the environment (it would win)."""
+    for key in (*_LLM_ENV, "LLM_BASE_URL", "LLM_API_KEY", "DATABASE_URL", "DEDUP_ENABLED"):
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_the_env_file_saying_false_is_overridden_and_the_override_is_announced(
+    tmp_path, capsys, clean_env
+):
+    loaded = rc._load_config(str(_env_file(tmp_path, DEDUP_ENABLED="false")))
+
+    assert loaded.DEDUP_ENABLED is True
+    out = capsys.readouterr().out
+    assert out.splitlines() == [rc.DEDUP_PIN_NOTICE]  # one line, and only that
+    assert "DEDUP_ENABLED=false" in rc.DEDUP_PIN_NOTICE and "DEC-165" in rc.DEDUP_PIN_NOTICE
+    assert "pre-switch" in rc.DEDUP_PIN_NOTICE
+
+
+@pytest.mark.parametrize("via", ["env_file", "process_environment"])
+def test_every_way_of_saying_false_is_pinned_and_a_true_or_unset_switch_is_silent(
+    tmp_path, capsys, clean_env, monkeypatch, via
+):
+    for value in ("false", "0", "no", "off"):
+        if via == "env_file":
+            path = _env_file(tmp_path, DEDUP_ENABLED=value)
+        else:  # the process environment wins over the file, so it is pinned too
+            path = _env_file(tmp_path, DEDUP_ENABLED="true")
+            monkeypatch.setenv("DEDUP_ENABLED", value)
+        assert rc._load_config(str(path)).DEDUP_ENABLED is True
+        assert capsys.readouterr().out.splitlines() == [rc.DEDUP_PIN_NOTICE]
+
+    monkeypatch.delenv("DEDUP_ENABLED", raising=False)
+    for values in ({"DEDUP_ENABLED": "true"}, {}):  # on, and unset (the default)
+        assert rc._load_config(str(_env_file(tmp_path, **values))).DEDUP_ENABLED is True
+        assert capsys.readouterr().out == ""  # nothing overridden, nothing said
+
+
+def test_the_override_keeps_every_other_key_of_the_config(tmp_path, capsys, clean_env):
+    off = rc._load_config(str(_env_file(tmp_path, DEDUP_ENABLED="false", MAX_CLUSTER_SIZE="77")))
+    on = rc._load_config(str(_env_file(tmp_path, DEDUP_ENABLED="true", MAX_CLUSTER_SIZE="77")))
+    capsys.readouterr()
+
+    # only the switch is touched; field names only, a `Config`'s repr carries its DSNs (DEC-122)
+    assert [
+        f.name for f in dataclasses.fields(off) if getattr(off, f.name) != getattr(on, f.name)
+    ] == []
+    assert off.MAX_CLUSTER_SIZE == 77
+    # the notice is a constant text: it carries no value read from the file
+    assert "pin.env" not in rc.DEDUP_PIN_NOTICE and "77" not in rc.DEDUP_PIN_NOTICE
+
+
+@pytest.mark.db
+def test_b1_facts_equal_evaluate_alert_facts_when_the_env_file_says_false(
+    db, tmp_path, capsys, clean_env
+):
+    loaded = rc._load_config(str(_env_file(tmp_path, DEDUP_ENABLED="false")))
+    pinned = dataclasses.replace(
+        loaded, DATABASE_URL="", DATABASE_URL_OWNER="", TEST_DATABASE_URL=""
+    )
+    capsys.readouterr()
+    # one key (rule, srcip, dstip, agent), four rows: each row's own count is 1, the burst is 4
+    ids = [_seed(db) for _ in range(4)]
+
+    for alert_id in ids:
+        measured = evaluate_alert(db, alert_id, adapter=SchemaFake(proposer=_ESCALATE), cfg=pinned)
+        assert measured.facts == rc.b1_facts(db, alert_id, pinned)
+        assert measured.facts["occurrence_count"] == 1
+
+    # not vacuous: the same alerts through the same cfg with the pin lifted see the burst, and then
+    # the equality the pin keeps is gone (what the Owner's `.env` would have done to B2-B4)
+    lifted = dataclasses.replace(pinned, DEDUP_ENABLED=False)
+    leaked = evaluate_alert(db, ids[0], adapter=SchemaFake(proposer=_ESCALATE), cfg=lifted)
+    assert leaked.facts["occurrence_count"] == 4
+    assert leaked.facts != rc.b1_facts(db, ids[0], lifted)
+
+
+@pytest.mark.db
+def test_a_switch_off_env_file_changes_neither_the_prompt_nor_the_cache_key_nor_the_spend(
+    lab, monkeypatch, capsys
+):
+    ids = lab.alerts(3, distinct=True)  # one key, three rows: the burst is 3, the row's count 1
+    lab.freeze([_gold_row(alert_id) for alert_id in ids])
+    client = FakeClient(SchemaFake(proposer=_ESCALATE))
+    monkeypatch.setattr(rc, "DeepSeekAdapter", functools.partial(DeepSeekAdapter, client=client))
+
+    lab.write_env(DEDUP_ENABLED="true")
+    assert lab.run("--config", "B4", "--thinking", "disabled", "--no-record") == rc.EXIT_OK
+    on_out = capsys.readouterr().out
+    on_id = _run_id(on_out)
+    sent_on = list(client.sent)
+    keys_on = sorted(path.name for path in lab.cache_dir.glob("*.json"))
+    assert rc.DEDUP_PIN_NOTICE not in on_out
+    assert len(sent_on) == 6 and len(keys_on) == 6  # three alerts, proposer + verifier each
+    users_on = [request["messages"][1]["content"] for request in sent_on]
+    assert all("occurrence_count: 1" in user for user in users_on)
+
+    lab.write_env(DEDUP_ENABLED="false")
+    assert lab.run("--config", "B4", "--thinking", "disabled", "--no-record") == rc.EXIT_OK
+    off_out = capsys.readouterr().out
+    off_id = _run_id(off_out)
+
+    # the override is said once, in the header: before the estimate line and the run's headline
+    assert off_out.count(rc.DEDUP_PIN_NOTICE) == 1
+    headline = off_out.index(f"run {off_id} ")
+    assert off_out.index(rc.DEDUP_PIN_NOTICE) < off_out.index("estimate:") < headline
+    # byte-identical prompts, so identical keys: nothing was sent, nothing was written, all hits
+    assert len(client.sent) == len(sent_on)
+    assert sorted(path.name for path in lab.cache_dir.glob("*.json")) == keys_on
+    off_rows = lab.results_for(off_id)["predictions"]
+    assert [row["cached"] for row in off_rows] == [True] * 3
+    assert [row["billed_usd"] for row in off_rows] == [0.0] * 3
+    on_rows = lab.results_for(on_id)["predictions"]
+    assert [row["verdict"] for row in off_rows] == [row["verdict"] for row in on_rows]
+    assert [row["verdict"] for row in off_rows] == ["escalate"] * 3
+
+
+# ---------------------------------------------------------------------------
 # B2-B4 through evaluate_alert behind the cache
 # ---------------------------------------------------------------------------
 
