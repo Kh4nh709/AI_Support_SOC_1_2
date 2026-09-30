@@ -152,7 +152,7 @@ class Subscription:
 
 
 class Hub:
-    def __init__(self, coalesce_ms: int = COALESCE_MS, many_cap: int = MANY_CAP) -> None:
+    def __init__(self, *, coalesce_ms: int = COALESCE_MS, many_cap: int = MANY_CAP) -> None:
         self._coalesce_s = coalesce_ms / 1000
         self._many_cap = many_cap
         self._lock = threading.Lock()

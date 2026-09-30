@@ -23,6 +23,15 @@ from app.web import live
 from app.web.live import Hub
 
 
+def test_the_hubs_tunables_are_keyword_only():
+    """`Hub(50)` would read as "50 what?" (ms of window, or a cap?): the interface names both."""
+    with pytest.raises(TypeError):
+        Hub(50)  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        Hub(50, 10)  # type: ignore[misc]
+    Hub(coalesce_ms=50, many_cap=10)  # the keyword form is the interface
+
+
 def test_burst_is_coalesced_into_one_message():
     """A reader that is READING (the socket loop always is) sees one message for the burst.
 
