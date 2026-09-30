@@ -598,6 +598,28 @@ describe("the ① column, from the state of the view", () => {
     expect(requests.length).toBeLessThanOrEqual(4); // at most the resync of the socket coming up
   });
 
+  it("does not poll a blind, undecided view: no answer to wait for, and the socket is live", async () => {
+    // A blind view has no `suggestion` and no `triage_status`, as a pending one has none. Only the server's
+    // word "pending" makes the page ask again every 10 s (R12); a blind view must never be taken for one.
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+      shouldAdvanceTime: true,
+    });
+    views = { a1: blind({ description: "d" }) };
+    renderPage();
+    await loaded();
+    expect(within(aiColumn()).getByText(S.ai1.hidden)).toBeInTheDocument();
+    act(() => live().onStatus("live")); // one resync of the socket coming up, then no clock
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    const afterResync = requests.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(65_000);
+    });
+    expect(requests).toHaveLength(afterResync);
+  });
+
   it("shows the unavailable state when ① gave up", async () => {
     views = { a1: sparse({ triage_status: "unavailable", description: "d" }) };
     renderPage();
