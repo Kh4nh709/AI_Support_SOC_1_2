@@ -16,7 +16,10 @@ event's own payload (`llm_suggestion`), and, for a `tier1.escalated` event, whic
 the latest proposer run created at or before it (a caveat line says a run in flight may be
 included). ① `needs_review` is no verdict: it is left out of the agreement's denominator and
 counted apart, and a small table crosses ①'s verdict with the human decision. The visible arm
-never gets an agreement figure. Section 6's ② usefulness row is "not measured" in v1.0 (no
+never gets an agreement figure. An escalation sweeps the other correlated heads into its case
+without a decision of their own (A11b): those alerts are recorded apart, per arm and source, as
+"kéo theo (không phải quyết định)" (Q34, DEC-165), and are in no decision count, denominator or
+agreement. Section 6's ② usefulness row is "not measured" in v1.0 (no
 rating control, DEC-161), the `case.opened` count beside it being context. Without
 `--pilot-start` the section prints "not measured: pilot start not given" and no pilot query
 runs. The pilot has its own window: it is not the `--since`/`--until` window.
@@ -618,6 +621,39 @@ FROM v
 GROUP BY ROLLUP (v.source), v.verdict
 ORDER BY GROUPING(v.source), v.source, v.verdict""",
 )
+# "Kéo theo" (Owner decision 30/09, DEC-165): the alerts an escalation swept into its case. The
+# escalate transition (A11b, `domain/transitions.escalate`) folds the trigger and every correlated
+# head into one case in one transaction and writes ONE `tier1.escalated` event, about the trigger.
+# A swept alert is therefore a `case_alerts` row whose alert is the subject of no `tier1.escalated`
+# event: nobody decided it, so it is never a row of `d`, and no query above reads it. `case_alerts`
+# has one writer (`escalate`), and `added_at` is that transaction's `now()`, the `created_at` of
+# its event. The arm and the source are the swept alert's own. A duplicate of a head (A12) gets a
+# `case_id` and no `case_alerts` row: it is a folded member of its head, not a swept head.
+_PILOT_SWEPT = f"""s AS (
+  SELECT CASE WHEN a.suggestion_visible THEN 'visible' ELSE 'blind' END AS arm,
+         a.source
+  FROM case_alerts ca
+  JOIN alerts a ON a.alert_id = ca.alert_id AND NOT a.is_synthetic
+  WHERE ca.added_at >= %(pilot_start)s
+    AND ca.added_at < {_PILOT_END}
+    AND NOT EXISTS (
+      SELECT 1
+      FROM audit_events e
+      WHERE e.event_type = 'tier1.escalated'
+        AND e.subject_id = ca.alert_id
+    )
+)"""
+Q_PILOT_SWEPT = Query(
+    "Q34",
+    "pilot: kéo theo, alerts swept into a case by an escalation (not decisions), per arm and source",
+    f"""WITH {_PILOT_SWEPT}
+SELECT s.arm,
+       {_pilot_source('s')},
+       count(*) AS swept
+FROM s
+GROUP BY s.arm, ROLLUP (s.source)
+ORDER BY s.arm, GROUPING(s.source), s.source""",
+)
 
 #: The pilot's queries, run after `QUERIES`, and only when `--pilot-start` is given.
 PILOT_QUERIES: tuple[Query, ...] = (
@@ -626,6 +662,7 @@ PILOT_QUERIES: tuple[Query, ...] = (
     Q_PILOT_AGREEMENT,
     Q_PILOT_PERSON,
     Q_PILOT_CROSS,
+    Q_PILOT_SWEPT,
 )
 
 #: Every query, in the order `collect` runs it and the document cites it.
@@ -1099,6 +1136,19 @@ def _architecture_section(
     if pilot is not None:
         rows[:3] = _pilot_human_rows(res)
     rows.insert(3, [GATE_FORCED_METRIC, _rate(forced, gate_ran), basis])
+    swept: list[str] = []
+    if pilot is not None:
+        swept = [
+            "",
+            (
+                "Recorded beside the decisions, and not among them (Owner decision, DEC-165): "
+                f"{SWEPT_LABEL}, per arm ({Q_PILOT_SWEPT.qid}), with its split by source in the "
+                "basis."
+            ),
+            "",
+            _table(["record", "value", "basis"], _pilot_swept_rows(res)),
+        ]
+    swept.append("")
     blind, visible = res[Q_BRANCHES.qid][0]
     return [
         "## 6 · Architecture §6's online metrics",
@@ -1115,7 +1165,7 @@ def _architecture_section(
         ),
         "",
         _table(["metric", "value", "basis"], rows),
-        "",
+        *swept,
         (
             f"Branch sizes over the heads ({Q_BRANCHES.qid}). The blind assignment happens at "
             "intake, whether or not anyone decides:"
@@ -1139,6 +1189,12 @@ _STANDARD_SOURCES = ("wazuh", "lab")
 ESCALATION_CAVEAT = (
     "escalations: ① taken as the latest run created at or before the decision; a run in flight "
     "at that moment may be included"
+)
+#: The row's label, as the Owner named it (30/09): swept alerts are recorded, never decided.
+SWEPT_LABEL = "kéo theo (không phải quyết định)"
+SWEPT_BASIS = (
+    "alerts that entered a case during the pilot window without a `tier1.escalated` event of "
+    "their own, the heads an escalation sweeps into its case (A11b)"
 )
 
 
@@ -1252,6 +1308,30 @@ def _pilot_person_table(rows: Sequence[tuple]) -> str:
     return _table(headers, body)
 
 
+def _pilot_swept_table(rows: Sequence[tuple]) -> str:
+    by_key = {(arm, source): swept for arm, source, swept in rows}
+    sources = _source_order({source for _, source, _ in rows})
+    body = [[arm, source, by_key.get((arm, source), 0)] for arm in ARMS for source in sources]
+    return _table(["arm", "source", SWEPT_LABEL], body)
+
+
+def _pilot_swept_rows(res: Mapping[str, list[tuple]]) -> list[list[str]]:
+    """Section 6's kéo theo rows, one per arm: the count over every source, and the split by source
+    in the basis. A count of alerts nobody decided: never a metric, never an n."""
+    swept_rows = res[Q_PILOT_SWEPT.qid]
+    by_key = {(arm, source): swept for arm, source, swept in swept_rows}
+    sources = [s for s in _source_order({source for _, source, _ in swept_rows}) if s != "all"]
+    body = []
+    for arm in ARMS:
+        split = ", ".join(f"{source} = {by_key.get((arm, source), 0)}" for source in sources)
+        basis = (
+            f"{SWEPT_BASIS}; {split}; section 6a ({Q_PILOT_SWEPT.qid}); not a decision, and in no "
+            "decision denominator or agreement figure"
+        )
+        body.append([f"{SWEPT_LABEL}, {arm} arm", by_key.get((arm, "all"), 0), basis])
+    return body
+
+
 def _pilot_section(res: Mapping[str, list[tuple]], pilot: PilotWindow | None) -> list[str]:
     heading = ["## 6a · The human pilot, per arm and source", ""]
     if pilot is None:
@@ -1300,6 +1380,25 @@ def _pilot_section(res: Mapping[str, list[tuple]], pilot: PilotWindow | None) ->
         f"### Decisions by type ({Q_PILOT_DECISIONS.qid})",
         "",
         _pilot_decisions_table(res[Q_PILOT_DECISIONS.qid]),
+        "",
+        f"### {SWEPT_LABEL} ({Q_PILOT_SWEPT.qid})",
+        "",
+        (
+            f"- Basis: {SWEPT_BASIS}. A `case_alerts` row added in the pilot window (`added_at`, "
+            "the database clock) for a non-synthetic alert that is the subject of no "
+            "`tier1.escalated` event. The arm and the source are the swept alert's own."
+        ),
+        (
+            "- It is not a decision: nobody decided these alerts one by one. It is in no "
+            "`decisions` figure of this section, in no denominator and in no agreement figure, "
+            "and no ① verdict is read for it."
+        ),
+        (
+            "- A duplicate of a head (A12) is a folded member of that head, not a swept head: it "
+            "is not counted here."
+        ),
+        "",
+        _pilot_swept_table(res[Q_PILOT_SWEPT.qid]),
         "",
         f"### Median acknowledge → decide ({Q_PILOT_MEDIAN.qid})",
         "",

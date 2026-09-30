@@ -696,6 +696,199 @@ def test_synthetic_alerts_are_not_pilot_decisions(db):
     assert "| all | 0 | 0 | 0 | 0 | 0 | n/a (0 rows) |" in section
 
 
+# --- kéo theo: the alerts an escalation sweeps in, recorded and never decided (DEC-165) -----------
+#
+# `transitions.escalate` folds the trigger and every correlated head into one case and writes ONE
+# `tier1.escalated` event, about the trigger. The swept heads have no decision of their own, so they
+# are counted apart ("kéo theo (không phải quyết định)", Q34) and never as a decision (Q29), in a
+# denominator or in an agreement figure (Q31, Q33).
+
+SWEPT_HEADING = "### kéo theo (không phải quyết định) (Q34)"
+
+
+def _block(section: str, heading: str) -> str:
+    """One `###` subsection of section 6a, from its heading to the next."""
+    return section[section.index(heading) :].split("\n### ")[0]
+
+
+def _sweep(db, actor: str, added: dict[str, datetime]) -> str:
+    """The `cases` and `case_alerts` rows one escalation leaves, each head added at its own time.
+    The trigger's `tier1.escalated` event is the caller's (`_handled`): this is the sweep only."""
+    case_id = str(uuid.uuid4())
+    db.execute(
+        "INSERT INTO cases (case_id, title, status, severity, created_by) "
+        "VALUES (%s, %s, 'investigating', 'medium', %s)",
+        (case_id, f"case {MARKER}", actor),
+    )
+    for alert_id, when in added.items():
+        db.execute(
+            "INSERT INTO case_alerts (case_id, alert_id, added_by, added_at) "
+            "VALUES (%s, %s, %s, %s)",
+            (case_id, alert_id, actor, when),
+        )
+    return case_id
+
+
+@pytest.mark.db
+def test_a_real_escalation_that_sweeps_two_siblings_is_one_decision_and_two_keo_theo(db):
+    # the real transition, not a seeded shape: three alerts of one agent inside +/-2 h of each
+    # other, the trigger escalated by an analyst, the other two swept in by A11b
+    from app.domain.transitions import escalate
+
+    actor = _user(db)
+    trigger = _open(db, received_at=at(10), agent_name="sweep-host", source="lab", visible=False)
+    sibling_one = _open(
+        db, received_at=at(10), agent_name="sweep-host", source="wazuh", visible=False
+    )
+    sibling_two = _open(db, received_at=at(10), agent_name="sweep-host", source="lab", visible=True)
+    db.execute("UPDATE alerts SET status = 'tier1_active' WHERE alert_id = %s", (trigger,))
+    db.execute(
+        "UPDATE alerts SET status = 'queued_tier1' WHERE alert_id = ANY(%s)",
+        ([sibling_one, sibling_two],),
+    )
+    escalate(db, trigger, actor, title="sweep", severity="high")
+    # the transition stamps the transaction's `now()` on the event and on each case_alerts row:
+    # a window of exactly that instant holds this escalation and nothing another test committed
+    now = db.execute("SELECT now()").fetchone()[0]
+
+    text = ops_export.build_report(db, _window(), ops_export.PilotWindow(now, now + TICK))
+    section = _section6a(text)
+
+    # one decision: the analyst's escalation of the trigger, blind, lab
+    decisions = _block(section, "### Decisions by type (Q29)")
+    assert "| blind | lab | 0 | 0 | 1 | 1 |" in decisions
+    assert "| blind | wazuh | 0 | 0 | 0 | 0 |" in decisions
+    assert "| blind | all | 0 | 0 | 1 | 1 |" in decisions
+    assert "| visible | all | 0 | 0 | 0 | 0 |" in decisions
+    # two kéo theo, each in its own arm and source; the trigger is a decision, not a kéo theo
+    swept = _block(section, SWEPT_HEADING)
+    assert "| blind | lab | 0 |" in swept
+    assert "| blind | wazuh | 1 |" in swept
+    assert "| blind | all | 1 |" in swept
+    assert "| visible | lab | 1 |" in swept
+    assert "| visible | all | 1 |" in swept
+    # section 6 carries the same two, beside the decision count of 1
+    rows = _section_rows(text, "6 · ")
+    assert rows["Decisions by branch (blind / visible) and by person"][0] == "measured, n = 1"
+    blind = rows["kéo theo (không phải quyết định), blind arm"]
+    visible = rows["kéo theo (không phải quyết định), visible arm"]
+    assert blind[0] == "1" and visible[0] == "1"
+    assert "wazuh = 1, lab = 0" in blind[1] and "wazuh = 0, lab = 1" in visible[1]
+    assert "Q34" in blind[1] and "not a decision" in blind[1]
+
+
+@pytest.mark.db
+def test_a_swept_alert_is_never_a_decision_a_denominator_or_an_agreement(db):
+    ids = _seed_pilot(db)
+    before = _section6a(_report(db))
+    # B1 escalated at 180 s (its `tier1.escalated` event); its escalation sweeps in two heads. The
+    # blind one carries a ① of `escalate`: were it counted as a decision it would enter Q31's
+    # denominator and agree, and Q33 would hold it
+    swept_blind = _open(db, received_at=at(10), source="lab", visible=False)
+    _suggest(db, swept_blind, "escalate", at(1))
+    swept_visible = _open(db, received_at=at(10), source="wazuh", visible=True)
+    _suggest(db, swept_visible, "false_positive", at(1))
+    _sweep(db, ids["A"], {ids["B1"]: _t(180), swept_blind: _t(180), swept_visible: _t(180)})
+
+    after = _section6a(_report(db))
+
+    for heading in (
+        "### Decisions by type (Q29)",
+        "### Median acknowledge → decide (Q30)",
+        "### ① agreement with the human, blind arm only (Q31)",
+        "### ① verdict × human decision, blind arm only (Q33)",
+        "### Decisions per person (Q32)",
+    ):
+        assert _block(after, heading) == _block(before, heading), heading
+    assert "| blind | all | 4 | 2 | 2 | 8 |" in after  # still 8 blind decisions, as in the seed
+    assert "| all | 8 | 1 | 2 | 5 | 3 | 0.600 (3 / 5) |" in after  # still 3 of 5
+    swept = _block(after, SWEPT_HEADING)
+    assert "| blind | lab | 1 |" in swept and "| blind | all | 1 |" in swept
+    assert "| visible | wazuh | 1 |" in swept and "| visible | all | 1 |" in swept
+    assert _block(before, SWEPT_HEADING) != swept
+
+
+@pytest.mark.db
+def test_keo_theo_window_is_half_open_and_excludes_the_trigger_and_synthetic_alerts(db):
+    actor = _user(db)
+    trigger = _handled(
+        db,
+        source="lab",
+        visible=False,
+        actor=actor,
+        ack_at=60,
+        took=60,
+        outcome="escalated",
+        suggested="escalate",
+    )
+    before = _open(db, received_at=at(10), source="lab", visible=False)
+    at_start = _open(db, received_at=at(10), source="lab", visible=False)
+    inside = _open(db, received_at=at(10), source="wazuh", visible=False)
+    at_end = _open(db, received_at=at(10), source="lab", visible=False)
+    synthetic = _open(db, received_at=at(10), source="lab", visible=True, synthetic=True)
+    _sweep(
+        db,
+        actor,
+        {
+            trigger: _t(120),  # the trigger: it has its own `tier1.escalated` event
+            before: PILOT_START - timedelta(seconds=1),  # excluded
+            at_start: PILOT_START,  # inclusive
+            inside: _t(600),
+            at_end: PILOT_END,  # exclusive
+            synthetic: _t(600),  # excluded, as everywhere in this file
+        },
+    )
+
+    swept = _block(_section6a(_report(db)), SWEPT_HEADING)
+
+    assert (
+        "| arm | source | kéo theo (không phải quyết định) |\n|---|---|---|\n"
+        "| blind | wazuh | 1 |\n"
+        "| blind | lab | 1 |\n"
+        "| blind | all | 2 |\n"
+        "| visible | wazuh | 0 |\n"
+        "| visible | lab | 0 |\n"
+        "| visible | all | 0 |\n"
+    ) in swept + "\n"
+
+
+@pytest.mark.db
+def test_keo_theo_is_labelled_with_its_basis_and_is_zero_not_missing_when_nothing_was_swept(db):
+    _seed_pilot(db)  # decisions and escalations, but no sweep
+    text = _report(db)
+    section = _section6a(text)
+
+    swept = _block(section, SWEPT_HEADING)
+    assert "| blind | all | 0 |" in swept and "| visible | all | 0 |" in swept
+    assert "without a `tier1.escalated` event of their own" in swept
+    assert "It is not a decision" in swept
+    assert "no denominator" in swept and "no agreement figure" in swept
+    rows = _section_rows(text, "6 · ")
+    assert rows["kéo theo (không phải quyết định), blind arm"][0] == "0"
+    assert rows["kéo theo (không phải quyết định), visible arm"][0] == "0"
+
+
+@pytest.mark.db
+def test_keo_theo_query_is_printed_in_section_8(db):
+    _seed_pilot(db)
+    appendix = _section(_report(db), "8 · ")
+
+    assert "### Q34 · pilot: kéo theo" in appendix
+    assert ops_export.Q_PILOT_SWEPT.sql in appendix
+    assert "case_alerts" in ops_export.Q_PILOT_SWEPT.sql
+    assert "NOT EXISTS" in ops_export.Q_PILOT_SWEPT.sql
+    assert ops_export.Q_PILOT_SWEPT in ops_export.PILOT_QUERIES
+    assert ops_export.Q_PILOT_SWEPT not in ops_export.QUERIES  # only with `--pilot-start`
+
+
+@pytest.mark.db
+def test_without_a_pilot_start_there_is_no_keo_theo_row(db):
+    text = ops_export.build_report(db, _window())
+
+    assert "kéo theo" not in text
+    assert "Q34" not in text
+
+
 # --- without --pilot-start ----------------------------------------------------------------------
 
 
@@ -786,7 +979,7 @@ def test_every_pilot_query_is_printed_verbatim_in_section_8(db, monkeypatch):
     assert _appendix_sql(text) == sent
     ids = re.findall(r"^### (Q\d\d) · ", _section(text, "8 · "), flags=re.MULTILINE)
     assert ids == [f"Q{i:02d}" for i in range(1, len(ids) + 1)]
-    assert {q.qid for q in ops_export.PILOT_QUERIES} == {"Q29", "Q30", "Q31", "Q32", "Q33"}
+    assert {q.qid for q in ops_export.PILOT_QUERIES} == {"Q29", "Q30", "Q31", "Q32", "Q33", "Q34"}
     body = text[: text.index("\n## 8 · ")]
     assert set(re.findall(r"\bQ\d\d\b", body)) <= set(ids)
     assert "`%(pilot_start)s`" in _section(text, "8 · ")
