@@ -1,7 +1,7 @@
 // src/auth/AuthProvider.test.tsx — restore on load, /me confirmation, expiry, logout broadcasts, login, logout.
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
+import { delay, http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { StrictMode } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
@@ -113,6 +113,30 @@ describe("on load", () => {
     renderProvider();
     await waitFor(() => expect(state()).toBe("ready none"));
     expect(sessionStorage.getItem(KEY)).toBeNull();
+  });
+
+  // A session with no usable end date would arm a timer of NaN milliseconds, which fires at once and
+  // re-arms itself for ever. It is not a session.
+  it.each<[string, Record<string, unknown>]>([
+    ["has no expires_at", { expires_at: undefined }],
+    ["has a null expires_at", { expires_at: null }],
+    ["has an expires_at that is not a date", { expires_at: "soon" }],
+    ["has an expires_at in the past", { expires_at: later(-60_000) }],
+  ])("ends the session, and arms no timer of NaN, when /me %s", async (_name, over) => {
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    try {
+      server.use(meOk(over));
+      stored();
+      renderProvider();
+      await waitFor(() => expect(state()).toBe("ready none"));
+      expect(sessionStorage.getItem(KEY)).toBeNull();
+      await new Promise((r) => setTimeout(r, 60)); // a loop would show in this time
+      expect(state()).toBe("ready none");
+      const nan = timers.mock.calls.filter(([, ms]) => typeof ms === "number" && Number.isNaN(ms));
+      expect(nan).toHaveLength(0);
+    } finally {
+      timers.mockRestore();
+    }
   });
 
   it("keeps the session when /me cannot be answered (the backend is down, not the login)", async () => {
@@ -251,6 +275,44 @@ describe("login and logout", () => {
     });
   });
 
+  it.each<[string, Record<string, unknown>]>([
+    ["has no expires_at", { expires_at: undefined }],
+    ["has an expires_at that is not a date", { expires_at: "soon" }],
+    ["has no token", { token: "" }],
+    ["has a role this UI does not know", { role: "auditor" }],
+  ])(
+    "login makes no session, and arms no timer of NaN, when the answer %s",
+    async (_name, over) => {
+      const timers = vi.spyOn(globalThis, "setTimeout");
+      try {
+        server.use(
+          http.post("/api/auth/login", () =>
+            HttpResponse.json({
+              token: "tok-7",
+              role: "tier2",
+              user_id: 4,
+              expires_at: later(3_600_000),
+              ...over,
+            }),
+          ),
+        );
+        renderProvider("/login");
+        await waitFor(() => expect(state()).toBe("ready none"), { timeout: 2000 });
+        await userEvent.setup().click(screen.getByText("do login"));
+        await new Promise((r) => setTimeout(r, 80));
+        expect(state()).toBe("ready none");
+        expect(where()).toBe("/login from -");
+        expect(sessionStorage.getItem(KEY)).toBeNull();
+        const nan = timers.mock.calls.filter(
+          ([, ms]) => typeof ms === "number" && Number.isNaN(ms),
+        );
+        expect(nan).toHaveLength(0);
+      } finally {
+        timers.mockRestore();
+      }
+    },
+  );
+
   it("login leaves the session empty when the backend refuses", async () => {
     server.use(
       http.post("/api/auth/login", () => HttpResponse.json({ detail: "x" }, { status: 401 })),
@@ -300,6 +362,63 @@ describe("login and logout", () => {
     expect(sessionStorage.getItem(KEY)).toBeNull();
     expect(where()).toBe("/login from -");
     await waitFor(() => expect(heard).toContainEqual({ type: "logout" }));
+  });
+
+  it("logout does not wait for a stalled backend: it ends here at once, and the POST still carries the old token", async () => {
+    let bearer: string | null = null;
+    server.use(
+      meOk({ username: "stale", role: "tier1" }),
+      http.post("/api/auth/logout", async ({ request }) => {
+        bearer = request.headers.get("authorization");
+        await delay("infinite"); // the backend never answers
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    stored();
+    renderProvider("/alerts/5");
+    await waitFor(() => expect(state()).toBe("ready stale/tier1/tok-1"));
+    const other = new BroadcastChannel("soc-session");
+    tabs.push(other);
+    const heard: unknown[] = [];
+    other.onmessage = (e) => heard.push(e.data);
+    await userEvent.setup().click(screen.getByText("do logout"));
+    // Nothing below waits for the POST: the session, the storage, the other tabs and the page all
+    // moved on while it is still open.
+    await waitFor(() => expect(state()).toBe("ready none"), { timeout: 500 });
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+    expect(where()).toBe("/login from -");
+    await waitFor(() => expect(heard).toContainEqual({ type: "logout" }), { timeout: 500 });
+    // ... and the request was still sent, with the token that is no longer the session's.
+    await waitFor(() => expect(bearer).toBe("Bearer tok-1"));
+  });
+
+  it("gives up on the logout POST after about five seconds", async () => {
+    let aborted = false;
+    server.use(
+      meOk({ username: "stale", role: "tier1" }),
+      http.post("/api/auth/logout", async ({ request }) => {
+        request.signal.addEventListener("abort", () => {
+          aborted = true;
+        });
+        await delay("infinite");
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    stored();
+    renderProvider("/alerts/5");
+    await waitFor(() => expect(state()).toBe("ready stale/tier1/tok-1"));
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await userEvent.setup().click(screen.getByText("do logout"));
+      await waitFor(() => expect(state()).toBe("ready none"));
+      const fiveSeconds = timers.mock.calls.find(([, ms]) => ms === 5000);
+      expect(fiveSeconds).toBeDefined();
+      expect(aborted).toBe(false);
+      (fiveSeconds?.[0] as () => void)(); // the five seconds are up
+      await waitFor(() => expect(aborted).toBe(true));
+    } finally {
+      timers.mockRestore();
+    }
   });
 
   it("logout clears the session even when the request fails", async () => {

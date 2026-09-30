@@ -118,6 +118,19 @@ it("shows the generic error when the backend cannot be reached or answers otherw
   expect(await screen.findByRole("alert")).toHaveTextContent(S.common.unknownError);
 });
 
+it("shows the generic error, and stays on the form, when the login answer has no usable expires_at", async () => {
+  server.use(
+    http.post("/api/auth/login", () =>
+      HttpResponse.json({ token: "tok-9", role: "tier1", user_id: 4 }),
+    ),
+  );
+  renderLogin();
+  await submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(S.common.unknownError);
+  expect(screen.getByTestId("where")).toHaveTextContent("/login");
+  expect(sessionStorage.getItem("soc.session")).toBeNull();
+});
+
 it("goes to /queue after a tier1 login, and saves the session in sessionStorage", async () => {
   let body: unknown = null;
   server.use(

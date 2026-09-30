@@ -22,8 +22,12 @@ const CHANNEL = "soc-session";
 type Message =
   { type: "session-request" } | { type: "session"; session: unknown } | { type: "logout" };
 
-/** A session that has the right shape and has not expired, or null. Never throws. */
-function parseSession(value: unknown): Session | null {
+/**
+ * A session that has the right shape and has not expired, or null. Never throws. Everything that becomes
+ * a session goes through it (the store, another tab, the login answer, /me), so a session always has a
+ * token, a role this UI knows, and an end date that parses.
+ */
+export function parseSession(value: unknown): Session | null {
   if (typeof value !== "object" || value === null) return null;
   const v = value as Record<string, unknown>;
   if (typeof v.token !== "string" || v.token === "") return null;
