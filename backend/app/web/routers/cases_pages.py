@@ -9,22 +9,20 @@ directly — the functions P5-T06 exposed at module level for exactly this use
 rather than re-deriving the SQL") — this module writes no second case or head
 query.
 
-**One deviation, named here and in the report.** `case_detail()`'s heads carry
-only the "case-overview grid" columns P5-T06 chose (its own report, §3) —
-`raw_log`, `risk_score` and `last_seen_at` are not among them, but this
-card's own design note 3 and its acceptance items need all three: escaped
-`raw_log`, the risk band (never the raw score — P4's rule), and the
-"đợt tấn công đang tiếp diễn" ongoing-cluster label (`docs/phase-7-tier2.md`
-§P7-2). `_supplement` below is one additional, read-only, G10-explicit-column
-`alert_id = ANY(...)` query for exactly those three fields — it does not
-re-derive `list_cases`/`case_detail`'s own case/head listing SQL, which this
-module still calls unchanged.
+**The head supplement (P5-T07, moved by P10-T04).** `case_detail()`'s heads once carried
+only the "case-overview grid" columns P5-T06 chose (its own report, §3) — `raw_log`,
+`risk_score` and `last_seen_at` were not among them, but this card's own design note 3 and
+its acceptance items need all three: escaped `raw_log`, the risk band (never the raw score
+— P4's rule), and the "đợt tấn công đang tiếp diễn" ongoing-cluster label
+(`docs/phase-7-tier2.md` §P7-2). Those helpers (`supplement`, `enrich_heads`) now live in
+`app.tier2.case_view`, because the JSON case detail serves the same fields to the React
+case page; `case_detail()` calls them, and `_case_page` below reads `ongoing`,
+`ongoing_last_seen` and `concluded_by_name` straight off its result instead of recomputing.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 from typing import Annotated, Any
 
 import psycopg
@@ -33,7 +31,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.domain import transitions
 from app.infra.auth import Claims
-from app.tier1.queue import risk_band
 from app.tier2 import conclude
 from app.web import templating
 from app.web.deps import Cfg, Conn, require_role
@@ -80,27 +77,6 @@ CONFIRMED_INCIDENT_SCOPE_NOTE = (
     "bước cách ly, ứng cứu hay khắc phục nào (hệ thống phát hiện và phân "
     "loại, không ứng cứu)."
 )
-
-_SUPPLEMENT_COLUMNS: tuple[str, ...] = (
-    "alert_id",
-    "raw_log",
-    "raw_log_truncated",
-    "risk_score",
-    "last_seen_at",
-)
-
-
-def _supplement(conn: psycopg.Connection, alert_ids: list[str]) -> dict[str, dict[str, Any]]:
-    """`raw_log`, `raw_log_truncated`, `risk_score` and `last_seen_at` for
-    `alert_ids` — the module docstring's deviation. One `alert_id = ANY(...)`
-    read, G10 explicit columns, `{}` for an empty case."""
-    if not alert_ids:
-        return {}
-    rows = conn.execute(
-        f"SELECT {', '.join(_SUPPLEMENT_COLUMNS)} FROM alerts WHERE alert_id = ANY(%s)",
-        (alert_ids,),
-    ).fetchall()
-    return {row[0]: dict(zip(_SUPPLEMENT_COLUMNS[1:], row[1:], strict=True)) for row in rows}
 
 
 def _username(conn: psycopg.Connection, user_id: Any) -> str | None:
@@ -150,49 +126,6 @@ def _note_error_text(exc: ValueError) -> str:
     return "Dữ liệu không hợp lệ."  # pragma: no cover — no other ValueError shape exists today
 
 
-def _enrich_heads(
-    conn: psycopg.Connection, heads: list[dict[str, Any]], since: datetime
-) -> datetime | None:
-    """Merges `_supplement`'s fields into each head in place — `raw_log`
-    (escaped by the template, never `|safe`) with `raw_log_truncated`,
-    `risk_band` (`risk_score` replaced by the band, never the bare number —
-    P4's rule; `risk_score` itself is not stored on the dict, so it cannot
-    leak into the template by accident) and `last_seen_at` (shown per head,
-    `local_time`-formatted, design note 3).
-
-    Returns the latest `last_seen_at` among heads that are both still
-    `escalated_tier2` **and** newer than `since` — `None` when no head
-    qualifies. Review round 1, blocker B1: `alerts.last_seen_at` is `NOT NULL
-    DEFAULT now()`, so `last_seen_at is not None` alone is always true and
-    the old rule reduced to "the case is open." `since` is
-    `case.last_analyzed_at or case.created_at`, matching
-    `docs/phase-7-tier2.md:452`'s "`last_seen_at` mới hơn `last_analyzed_at`"
-    once ② starts writing `last_analyzed_at`, and correct before that too:
-    `escalate` inserts the case and its heads in one transaction (`now()` is
-    the transaction start time), so an unbumped head's `last_seen_at` equals
-    `case.created_at` exactly — not "newer than" — and only `bump_parent`
-    (a duplicate arriving) ever moves it forward. Known limit, noted in the
-    report: a duplicate whose dedup transaction overlaps the `escalate`
-    transaction can be missed until the next duplicate arrives, since both
-    transactions read their own `now()` snapshot.
-    """
-    supplement = _supplement(conn, [h["alert_id"] for h in heads])
-    ongoing_last_seen = None
-    for head in heads:
-        extra = supplement.get(head["alert_id"], {})
-        head["raw_log"] = extra.get("raw_log", "")
-        head["raw_log_truncated"] = bool(extra.get("raw_log_truncated"))
-        head["risk_band"] = risk_band(extra.get("risk_score"))
-        last_seen = extra.get("last_seen_at")
-        head["last_seen_at"] = last_seen
-        is_growing = (
-            head["status"] == "escalated_tier2" and last_seen is not None and last_seen > since
-        )
-        if is_growing and (ongoing_last_seen is None or last_seen > ongoing_last_seen):
-            ongoing_last_seen = last_seen
-    return ongoing_last_seen
-
-
 # ---------------------------------------------------------------------------
 # GET /cases — the list
 # ---------------------------------------------------------------------------
@@ -239,9 +172,6 @@ def _case_page(
     case = tier2.case_detail(conn, case_id)
     if case is None:
         return _not_found_page(request, user)
-    since = case["last_analyzed_at"] or case["created_at"]
-    ongoing_last_seen = _enrich_heads(conn, case["heads"], since)
-    concluded_by_name = _username(conn, case["concluded_by"])
     page = templating.render(
         request,
         "case.html",
@@ -255,9 +185,9 @@ def _case_page(
         status_labels=STATUS_LABELS,
         head_status_labels=HEAD_STATUS_LABELS,
         scope_note=CONFIRMED_INCIDENT_SCOPE_NOTE,
-        ongoing=ongoing_last_seen is not None,
-        ongoing_last_seen=ongoing_last_seen,
-        concluded_by_name=concluded_by_name,
+        ongoing=case["ongoing"],
+        ongoing_last_seen=case["ongoing_last_seen"],
+        concluded_by_name=case["concluded_by_name"],
     )
     page.status_code = status_code
     return page
