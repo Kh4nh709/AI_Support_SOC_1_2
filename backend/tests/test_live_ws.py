@@ -282,6 +282,18 @@ def test_a_burst_of_publishes_reaches_the_socket_as_one_message(client, committe
 
 
 @pytest.mark.db
+def test_a_valid_token_in_the_url_does_not_authenticate(client, committed_user):
+    """A real user, a token that would verify, in the URL only: no first message, so 4401.
+
+    The offline test proves the URL is not read while nothing can be looked up; this one
+    proves it against a database where the lookup would succeed.
+    """
+    token = _token(committed_user())
+    with client.websocket_connect(f"/api/ws?token={token}") as ws:
+        assert _close_code(ws) == 4401
+
+
+@pytest.mark.db
 @pytest.mark.parametrize(
     "make_token",
     [
