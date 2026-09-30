@@ -2,6 +2,8 @@
 // The tables keyed by a server code (`status`, `band`, `conclusion`, ...) are read through `labelOf`, so a
 // code this file has no label for is shown as the code itself.
 
+import { BAND_CODES, type BandCode } from "./api/types";
+
 /** The shortest quote ② may cite, in characters (`MIN_QUOTE_CHARS` of backend/app/tier2/investigate.py). */
 export const MIN_QUOTE_CHARS = 8;
 
@@ -55,12 +57,22 @@ export const S = {
     disabled: "Đăng nhập đang tắt",
   },
 
-  // Risk bands: the "Mức" of the queue is `risk_band`, never the alert's `severity`.
+  // Risk bands, the one label <-> code table (rulings R8 and R13). The label is the text of the server's
+  // `risk_band` (queue.risk_band: Thấp/Vừa/Cao/Rất cao), which the Jinja page and the canvas show; the code
+  // is what the queue's `band` filter and `counts_by_band` speak. Read a code through `labelOf`, and a row's
+  // label through `bandCodeOfLabel`. The "Mức" of the queue is `risk_band`, never the alert's `severity`.
   band: {
-    critical: "Nghiêm trọng",
+    critical: "Rất cao",
     high: "Cao",
-    medium: "Trung bình",
+    medium: "Vừa",
     low: "Thấp",
+  } satisfies Record<BandCode, string>,
+
+  // `confidence` of ① (`low|medium|high`), read through `labelOf`.
+  confidence: {
+    low: "thấp",
+    medium: "trung bình",
+    high: "cao",
   },
 
   // `alerts.status`, as the Jinja page labelled them (alerts_pages.STATUS_LABELS).
@@ -81,6 +93,19 @@ export const S = {
     title: "Hàng đợi Tier-1",
     count: (n: number) => `${n} cụm đang chờ`,
     empty: "Không có cụm nào đang chờ.",
+    countMine: (n: number) => `${n} cụm bạn đang xử lý`,
+    emptyMine: "Bạn chưa nhận xử lý cụm nào.",
+    tableLabel: "Các cụm alert đang chờ",
+    loadError: "Không tải được hàng đợi",
+    retriage: "Số lần xuất hiện đã tăng mạnh — cần phân tích lại",
+    /** The sign beside a row that needs a new triage; its words are `retriage`. */
+    retriageMark: "⟳",
+    rule: (id: string) => `rule ${id}`,
+    bandCounts: "Số cụm theo mức",
+    bandChip: (label: string, n: number) => `${label} ${n}`,
+    filtersLabel: "Bộ lọc hàng đợi",
+    pagination: "Phân trang",
+    range: (from: number, to: number, total: number) => `Hiển thị ${from}–${to} trên ${total}`,
     col: {
       band: "Mức",
       description: "Mô tả",
@@ -98,7 +123,12 @@ export const S = {
       all: "Tất cả",
       waiting: "Chờ xử lý",
       mine: "Của tôi",
+      apply: "Lọc",
+      clear: "Xoá bộ lọc",
     },
+    noMatch: "Không có cụm nào khớp bộ lọc.",
+    pageEmpty: "Trang này không có cụm nào.",
+    page: (n: number) => `Trang ${n}`,
   },
 
   // The ① cell of the queue and the ① column of the alert page.
@@ -107,6 +137,13 @@ export const S = {
     hidden: "ẩn — nhánh mù",
     none: "chưa có",
     forced: "⚑",
+    forcedLabel: "Cổng kiểm soát đã ép kết quả",
+    // `suggested_action` of ① (output_guard.SUGGESTED_ACTIONS), read through `labelOf`.
+    action: {
+      false_positive: "Dương tính giả",
+      needs_review: "Cần xem xét",
+      escalate: "Chuyển tier 2",
+    },
     pending: "Đang phân tích…",
     unavailable: "Không có gợi ý ①",
     decidedMine: "Quyết định của bạn",
@@ -312,4 +349,10 @@ export function labelOf(labels: Labels, code: string | null | undefined): string
   if (code === null || code === undefined || code === "") return S.common.missing;
   const label = Object.hasOwn(labels, code) ? labels[code] : undefined;
   return typeof label === "string" ? label : code;
+}
+
+/** The code of a risk-band label (`Rất cao` is `critical`), or null for a label this table does not have. */
+export function bandCodeOfLabel(label: string | null | undefined): BandCode | null {
+  if (label === null || label === undefined) return null;
+  return BAND_CODES.find((code) => S.band[code] === label) ?? null;
 }
