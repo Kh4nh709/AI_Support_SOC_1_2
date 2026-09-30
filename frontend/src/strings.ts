@@ -147,8 +147,7 @@ export const S = {
     },
     pending: "Đang phân tích…",
     unavailable: "Không có gợi ý ①",
-    unavailableBody:
-      "① đã chạy nhưng không có đề xuất. Hãy quyết định dựa trên thông tin alert.",
+    unavailableBody: "① đã chạy nhưng không có đề xuất. Hãy quyết định dựa trên thông tin alert.",
     // `llm_runs.stopped_by` of a ① run with no result (backend/app/llm, tier1/triage_job.py), read through
     // `labelOf`: a code with no label here is shown as the code.
     stoppedBy: {
