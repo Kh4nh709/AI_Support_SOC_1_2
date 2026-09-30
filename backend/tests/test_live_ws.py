@@ -34,7 +34,7 @@ from app.infra import auth, config
 from app.web import deps, live, main
 from app.web.routers import live_ws
 from fastapi.testclient import TestClient
-from starlette.websockets import WebSocketDisconnect
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from tests.scratch_db import insert_alert, scratch_database
 
@@ -270,6 +270,29 @@ def test_ready_means_subscribed_a_publish_right_after_it_is_never_lost(
 
 
 @pytest.mark.db
+def test_the_subscription_exists_before_ready_is_sent(client, committed_user, fast, monkeypatch):
+    """A publish made at the very moment `ready` goes out reaches the socket.
+
+    The test above races the client against the server, so it would pass by luck if the
+    subscription were taken just AFTER `ready`. Here the publish is made from inside the
+    server's send of `ready`: only a subscription that already exists can receive it.
+    """
+    send_json = WebSocket.send_json
+
+    async def send_json_publishing_on_ready(self, data, mode="text"):
+        if data == {"type": "ready"}:
+            fast.publish("at-ready")
+        await send_json(self, data, mode)
+
+    monkeypatch.setattr(WebSocket, "send_json", send_json_publishing_on_ready)
+    token = _token(committed_user())
+    with client.websocket_connect("/api/ws") as ws:
+        ws.send_json({"type": "auth", "token": token})
+        assert _receive(ws) == {"type": "ready"}
+        assert _receive(ws) == {"type": "alerts.changed", "ids": ["at-ready"]}
+
+
+@pytest.mark.db
 def test_a_burst_of_publishes_reaches_the_socket_as_one_message(client, committed_user, fast):
     token = _token(committed_user())
     with client.websocket_connect("/api/ws") as ws:
@@ -403,13 +426,27 @@ def test_a_role_outside_the_allowed_set_closes_4403(client, committed_user, monk
 
 
 @pytest.mark.db
-def test_the_role_is_the_rows_not_the_tokens(client, sdb, committed_user):
-    """A tier1 token whose row was later demoted/changed is judged by the row."""
-    user_id = committed_user("tier1")
-    token = _token(user_id, role="admin")  # the claim lies; the row says tier1
+@pytest.mark.parametrize(
+    ("row_role", "claim_role", "close_code"),
+    [
+        pytest.param("tier1", "admin", 4403, id="row-tier1-claim-admin"),
+        pytest.param("admin", "tier1", None, id="row-admin-claim-tier1"),
+    ],
+)
+def test_the_role_is_the_rows_not_the_tokens(
+    client, committed_user, monkeypatch, row_role, claim_role, close_code
+):
+    """Only admin is allowed here, so the two roles differ in outcome: a token that claims
+    admin over a tier1 row is refused, and a token that claims tier1 over an admin row is
+    let in. (With all three roles allowed the test could not tell the row from the claim.)"""
+    monkeypatch.setattr(live_ws, "ALLOWED_ROLES", frozenset({"admin"}))
+    token = _token(committed_user(row_role), role=claim_role)
     with client.websocket_connect("/api/ws") as ws:
         ws.send_json({"type": "auth", "token": token})
-        assert _receive(ws) == {"type": "ready"}  # allowed because tier1 IS allowed
+        if close_code is None:
+            assert _receive(ws) == {"type": "ready"}
+        else:
+            assert _close_code(ws) == close_code
 
 
 @pytest.mark.db
