@@ -1,11 +1,11 @@
 // src/features/tier2/CasePage.test.tsx — the case page of the spec §4 (`Case` artboard): the left column
 // (heads, notes, conclusion) against a mocked backend. The ② column has its own file.
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { http, HttpResponse, type JsonBodyType } from "msw";
 import { setupServer } from "msw/node";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { Link, MemoryRouter, Route, Routes } from "react-router";
 import { S } from "../../strings";
 import { CasePage } from "./CasePage";
 
@@ -125,10 +125,19 @@ describe("the summary", () => {
     expect(screen.getByText(S.case.neverAnalysed)).toBeInTheDocument();
   });
 
-  it("says 'Không tìm thấy case' for a 404", async () => {
+  it("says 'Không tìm thấy case' for a 404, with no retry, since a retry cannot succeed", async () => {
     serve({ detail: "case not found" }, 404);
     renderCase();
     expect(await screen.findByText(S.case.notFound)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: S.common.retry })).not.toBeInTheDocument();
+  });
+
+  it("says 'Không tìm thấy case' for a case id the server cannot read (422), with no retry", async () => {
+    serve({ detail: [{ msg: "Input should be a valid UUID" }] }, 422);
+    renderCase();
+    expect(await screen.findByText(S.case.notFound)).toBeInTheDocument();
+    expect(screen.queryByText(S.common.unknownError)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: S.common.retry })).not.toBeInTheDocument();
   });
 
   it("offers a retry after any other failure, and loads again when it is pressed", async () => {
@@ -591,6 +600,170 @@ describe("codes the UI has no label for", () => {
     await page();
     const row = screen.getByRole("row", { name: /sshd: brute force/ });
     expect(within(row).getByText("constructor")).toBeInTheDocument();
+  });
+});
+
+// Going from one case to another (a link, the back button) while an answer for the first is still on the
+// way: the second page must never show a word of the first, for the case and for the ② column alike.
+describe("going from one case to another", () => {
+  const OTHER = "5c4d3e2f-1a0b-4c9d-8e7f-6a5b4c3d2e1f";
+  const OTHER_URL = `/api/tier2/cases/${OTHER}`;
+  const FIRST_TITLE = "SSH brute force vào lab-ubuntu-01";
+  const SECOND_TITLE = "Quét cổng vào máy chủ web";
+  const NEXT = "Sang case thứ hai";
+  const IDLE = {
+    state: "idle",
+    run_id: null,
+    minutes: null,
+    run: null,
+    current: null,
+    case_open: true,
+  };
+  const analysis = (summary: string) => ({
+    state: "done",
+    run_id: null,
+    minutes: null,
+    run: {
+      run_id: "6f1c7a52-98d4-5c0e-b3a1-2d4e6f8a0b1c",
+      created_at: "2026-09-30T01:19:00+00:00",
+      result: { suggested_conclusion: "false_positive" },
+      conclusion: "false_positive",
+      conclusion_label: "Không phải sự cố",
+      confidence: "medium",
+      summary,
+      narrative: "-",
+      hypotheses: [],
+      evidence: [],
+      next_steps: [],
+      playbook_used: null,
+      overruled: null,
+      snapshot: null,
+      changed: false,
+    },
+    current: null,
+    case_open: true,
+  });
+
+  // The second case shares nothing with the first: its own title, head and notes.
+  const second = () =>
+    detail({
+      case_id: OTHER,
+      title: SECOND_TITLE,
+      heads: [head({ alert_id: "b-1", description: "Quét cổng từ 10.0.0.9" })],
+      notes: [],
+    });
+
+  /** A promise the test settles when it decides the answer of a read should arrive. */
+  function gate() {
+    let open: () => void = () => {};
+    const opened = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return { opened, open };
+  }
+
+  // Real time: the wait is for an answer already released to travel through the network layer.
+  const settle = () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+  function renderBoth() {
+    return render(
+      <MemoryRouter initialEntries={[`/cases/${CASE}`]}>
+        <nav>
+          <Link to={`/cases/${OTHER}`}>{NEXT}</Link>
+        </nav>
+        <main>
+          <Routes>
+            <Route path="/cases/:caseId" element={<CasePage />} />
+          </Routes>
+        </main>
+      </MemoryRouter>,
+    );
+  }
+
+  const secondTitle = () => screen.findByRole("heading", { level: 1, name: SECOND_TITLE });
+
+  it("never shows the first case's detail when its answer arrives after the second's", async () => {
+    const late = gate();
+    server.use(
+      http.get(CASE_URL, async () => {
+        await late.opened;
+        return HttpResponse.json(detail());
+      }),
+      http.get(OTHER_URL, () =>
+        HttpResponse.json(second()),
+      ),
+      http.get(`${OTHER_URL}/investigation`, () => HttpResponse.json(IDLE)),
+    );
+    renderBoth();
+    await userEvent.setup().click(screen.getByRole("link", { name: NEXT }));
+    await secondTitle();
+
+    late.open();
+    await settle();
+    expect(screen.getByRole("heading", { level: 1, name: SECOND_TITLE })).toBeInTheDocument();
+    expect(screen.queryByText(FIRST_TITLE)).not.toBeInTheDocument();
+    expect(screen.getByText("Quét cổng từ 10.0.0.9")).toBeInTheDocument();
+    expect(screen.queryByText("sshd: brute force trying to get access")).not.toBeInTheDocument();
+  });
+
+  it("never shows the first case's analysis when its answer arrives after the second's", async () => {
+    const late = gate();
+    serve(detail());
+    server.use(
+      http.get(`${CASE_URL}/investigation`, async () => {
+        await late.opened;
+        return HttpResponse.json(analysis("tóm tắt của case thứ nhất"));
+      }),
+      http.get(OTHER_URL, () =>
+        HttpResponse.json(second()),
+      ),
+      http.get(`${OTHER_URL}/investigation`, () => HttpResponse.json(IDLE)),
+    );
+    renderBoth();
+    await page();
+    await userEvent.setup().click(screen.getByRole("link", { name: NEXT }));
+    await secondTitle();
+    expect(await screen.findByRole("button", { name: S.ai2.analyze })).toBeInTheDocument();
+
+    late.open();
+    await settle();
+    expect(screen.queryByText("tóm tắt của case thứ nhất")).not.toBeInTheDocument();
+    expect(screen.getByText(S.ai2.idle)).toBeInTheDocument();
+  });
+
+  it("shows nothing of the first case while the second is still loading", async () => {
+    const late = gate();
+    serve(detail());
+    server.use(
+      http.get(`${CASE_URL}/investigation`, () =>
+        HttpResponse.json(analysis("tóm tắt của case thứ nhất")),
+      ),
+      http.get(OTHER_URL, async () => {
+        await late.opened;
+        return HttpResponse.json(second());
+      }),
+      http.get(`${OTHER_URL}/investigation`, async () => {
+        await late.opened;
+        return HttpResponse.json(IDLE);
+      }),
+    );
+    renderBoth();
+    await page();
+    expect(await screen.findByText("tóm tắt của case thứ nhất")).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("link", { name: NEXT }));
+
+    expect(screen.getByText(S.common.loading)).toBeInTheDocument();
+    expect(screen.queryByText(FIRST_TITLE)).not.toBeInTheDocument();
+    expect(screen.queryByText("tóm tắt của case thứ nhất")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+
+    late.open();
+    await secondTitle();
+    expect(await screen.findByText(S.ai2.idle)).toBeInTheDocument();
+    expect(screen.queryByText("tóm tắt của case thứ nhất")).not.toBeInTheDocument();
   });
 });
 

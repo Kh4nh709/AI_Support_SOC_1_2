@@ -110,6 +110,16 @@ it("carries the 503 copy of a decision and the two ② dead ends", () => {
   expect(S.ai2.failed).toBe("Phân tích thất bại — có thể thử lại");
 });
 
+// The Jinja page prints "Playbook: <name>" under a run that used one.
+it("words the playbook line of a run as the Jinja page does", () => {
+  expect(S.ai2.playbook("ssh_brute_force")).toBe("Playbook: ssh_brute_force");
+});
+
+it("says a page past the last one of the case list is empty, not that there is no case", () => {
+  expect(S.case.pastEnd).toBe("Không còn case ở trang này.");
+  expect(S.case.pastEnd).not.toBe(S.case.empty);
+});
+
 it("names the four evidence marks of ②", () => {
   expect(Object.keys(S.ai2.mark).sort()).toEqual([
     "not_in_case",

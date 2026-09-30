@@ -232,15 +232,30 @@ describe("paging", () => {
     expect(screen.getByRole("button", { name: S.common.prev })).toBeDisabled();
   });
 
-  it("says the page is empty when paging past the end, and lets the reader go back", async () => {
+  it("says there is no case left on this page, not that there is none, when paging past the end", async () => {
     const queries = serve(full(), []);
     renderList();
     const user = userEvent.setup();
     await table();
     await user.click(screen.getByRole("button", { name: S.common.next }));
-    expect(await screen.findByText(S.case.empty)).toBeInTheDocument();
+    expect(await screen.findByText(S.case.pastEnd)).toBeInTheDocument();
+    expect(screen.queryByText(S.case.empty)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: S.common.prev })).toBeEnabled();
+    expect(screen.getByRole("button", { name: S.common.next })).toBeDisabled();
     expect(queries[1]).toEqual({ offset: "50", limit: "50" });
+  });
+
+  it("goes back from a page past the end to the last page", async () => {
+    const queries = serve(full(), [], full());
+    renderList();
+    const user = userEvent.setup();
+    await table();
+    await user.click(screen.getByRole("button", { name: S.common.next }));
+    await screen.findByText(S.case.pastEnd);
+    await user.click(screen.getByRole("button", { name: S.common.prev }));
+    await table();
+    expect(queries[2]).toEqual({ offset: "0", limit: "50" });
+    expect(screen.queryByText(S.case.pastEnd)).not.toBeInTheDocument();
   });
 });
 

@@ -12,6 +12,8 @@ const CASE = "0b30b853-1c2d-4e5f-8a9b-0c1d2e3f4a5b";
 const RUN = "6f1c7a52-98d4-5c0e-b3a1-2d4e6f8a0b1c";
 const VIEW_URL = `/api/tier2/cases/${CASE}/investigation`;
 const ANALYZE_URL = `/api/tier2/cases/${CASE}/analyze`;
+const OTHER = "5c4d3e2f-1a0b-4c9d-8e7f-6a5b4c3d2e1f";
+const OTHER_VIEW_URL = `/api/tier2/cases/${OTHER}/investigation`;
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -199,6 +201,43 @@ describe("the state read from the server", () => {
     expect(screen.getByText("Không phải sự cố")).toBeInTheDocument();
   });
 
+  // A run with no result carries `result: null` and `stopped_text` only (`present_run`).
+  const stoppedRun = (text: string) => ({
+    run_id: RUN,
+    created_at: "2026-09-30T01:19:00+00:00",
+    result: null,
+    stopped_text: text,
+  });
+
+  it("shows why the earlier run stopped, under a failed run, when that run has no result", async () => {
+    // `STOPPED_TEXT["cap"]`: the earlier run hit the LLM cost cap.
+    serveViews(view({ state: "failed", run: stoppedRun("đã chạm hạn mức chi phí LLM") }));
+    renderColumn();
+    expect(await screen.findByText(S.ai2.failed)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: S.ai2.lastResult })).toBeInTheDocument();
+    expect(screen.getByText(/Phân tích không có kết quả/)).toHaveTextContent(
+      `${S.ai2.stopped("đã chạm hạn mức chi phí LLM")} — ${S.ai2.retryable}`,
+    );
+    expect(screen.getByRole("button", { name: S.ai2.analyze })).toBeInTheDocument();
+  });
+
+  it("gives no retry with the stop reason of a failed run on a concluded case", async () => {
+    serveViews(
+      view({
+        state: "failed",
+        case_open: false,
+        run: stoppedRun("đã chạm hạn mức chi phí LLM"),
+      }),
+    );
+    renderColumn(false);
+    expect(await screen.findByText(S.ai2.failedClosed)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: S.ai2.lastResult })).toBeInTheDocument();
+    expect(screen.getByText(/Phân tích không có kết quả/)).toHaveTextContent(
+      S.ai2.stopped("đã chạm hạn mức chi phí LLM"),
+    );
+    expect(screen.getByText(/Phân tích không có kết quả/)).not.toHaveTextContent(S.ai2.retryable);
+  });
+
   it("says why a finished run has no result, and that it can be retried while the case is open", async () => {
     serveViews(
       done(
@@ -351,6 +390,76 @@ describe("analyze and the poll", () => {
     expect(screen.getByRole("button", { name: S.common.retry })).toBeInTheDocument();
   });
 
+  // The server, as `derive_view` has it: a poll with a run_id that finds nothing behind it is `failed`,
+  // and a read with no run_id finds `idle`. The first poll of the run breaks with a 500.
+  function pollBreaksOnce(afterwards: JsonBodyType) {
+    const seen: (string | null)[] = [];
+    let polls = 0;
+    server.use(
+      http.get(VIEW_URL, ({ request }) => {
+        const id = new URL(request.url).searchParams.get("run_id");
+        seen.push(id);
+        if (id === null) return HttpResponse.json(idle());
+        polls += 1;
+        return polls === 1
+          ? HttpResponse.json({ detail: "boom" }, { status: 500 })
+          : HttpResponse.json(afterwards);
+      }),
+    );
+    return seen;
+  }
+
+  it("says the error, not 'Đang phân tích…', while nothing polls after a poll failed", async () => {
+    const user = fake();
+    const seen = pollBreaksOnce(running());
+    accept();
+    renderColumn();
+    await user.click(await analyzeButton());
+    await screen.findByText(S.ai2.running);
+    await wait(3000);
+    expect(await screen.findByText(S.common.unknownError)).toBeInTheDocument();
+    expect(screen.queryByText(S.ai2.running)).not.toBeInTheDocument();
+    // Nothing is asked while the error stands.
+    await wait(30_000);
+    expect(seen).toEqual([null, RUN]);
+    expect(screen.queryByText(S.ai2.running)).not.toBeInTheDocument();
+  });
+
+  it("resumes polling the same run when Thử lại follows a failed poll", async () => {
+    const user = fake();
+    const seen = pollBreaksOnce(running());
+    accept();
+    renderColumn();
+    await user.click(await analyzeButton());
+    await screen.findByText(S.ai2.running);
+    await wait(3000);
+    await screen.findByText(S.common.unknownError);
+
+    await user.click(screen.getByRole("button", { name: S.common.retry }));
+    expect(await screen.findByText(S.ai2.running)).toBeInTheDocument();
+    expect(screen.queryByText(S.common.unknownError)).not.toBeInTheDocument();
+    expect(seen).toEqual([null, RUN, RUN]);
+    // And the poll runs again every 3 s, on the same run.
+    await wait(3000);
+    expect(seen).toEqual([null, RUN, RUN, RUN]);
+  });
+
+  it("shows a job with nothing behind it as failed, not idle, when Thử lại follows a failed poll", async () => {
+    const user = fake();
+    const seen = pollBreaksOnce(view({ state: "failed" }));
+    accept();
+    renderColumn();
+    await user.click(await analyzeButton());
+    await screen.findByText(S.ai2.running);
+    await wait(3000);
+    await screen.findByText(S.common.unknownError);
+
+    await user.click(screen.getByRole("button", { name: S.common.retry }));
+    expect(await screen.findByText(S.ai2.failed)).toBeInTheDocument();
+    expect(screen.queryByText(S.ai2.idle)).not.toBeInTheDocument();
+    expect(seen).toEqual([null, RUN, RUN]);
+  });
+
   it("stops polling when the column goes away", async () => {
     const user = fake();
     const seen = serveViews(idle(), running());
@@ -459,6 +568,75 @@ describe("the refusals of Phân tích", () => {
     await userEvent.setup().dblClick(await analyzeButton());
     await screen.findByText(S.ai2.running);
     expect(posts).toBe(1);
+  });
+});
+
+// ── another case ────────────────────────────────────────────────────────────────────────────────
+
+describe("another case", () => {
+  // Real time: the wait is for an answer already released to travel through the network layer.
+  const settle = () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+  it("drops the answer of the case it showed when it is given another while that read is pending", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get(VIEW_URL, async () => {
+        await gate;
+        return HttpResponse.json(done(run({ summary: "tóm tắt của case thứ nhất" })));
+      }),
+      http.get(OTHER_VIEW_URL, () => HttpResponse.json(idle())),
+    );
+    const { rerender } = render(
+      <main>
+        <InvestigationColumn caseId={CASE} caseOpen />
+      </main>,
+    );
+    rerender(
+      <main>
+        <InvestigationColumn caseId={OTHER} caseOpen />
+      </main>,
+    );
+    expect(await screen.findByText(S.ai2.idle)).toBeInTheDocument();
+
+    release();
+    await settle();
+    expect(screen.queryByText("tóm tắt của case thứ nhất")).not.toBeInTheDocument();
+    expect(screen.getByText(S.ai2.idle)).toBeInTheDocument();
+  });
+
+  it("drops the failure of the case it showed the same way", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get(VIEW_URL, async () => {
+        await gate;
+        return HttpResponse.json({ detail: "boom" }, { status: 500 });
+      }),
+      http.get(OTHER_VIEW_URL, () => HttpResponse.json(idle())),
+    );
+    const { rerender } = render(
+      <main>
+        <InvestigationColumn caseId={CASE} caseOpen />
+      </main>,
+    );
+    rerender(
+      <main>
+        <InvestigationColumn caseId={OTHER} caseOpen />
+      </main>,
+    );
+    expect(await screen.findByText(S.ai2.idle)).toBeInTheDocument();
+
+    release();
+    await settle();
+    expect(screen.queryByText(S.common.unknownError)).not.toBeInTheDocument();
   });
 });
 
@@ -580,6 +758,25 @@ describe("done", () => {
     expect(await screen.findByText(S.ai2.noEvidence)).toBeInTheDocument();
   });
 
+  it("names the playbook the run used, as the Jinja page does", async () => {
+    serveViews(done(run({ playbook_used: "ssh_brute_force" })));
+    renderColumn();
+    expect(await screen.findByText(S.ai2.playbook("ssh_brute_force"))).toBeInTheDocument();
+  });
+
+  it("names no playbook for a run that used none", async () => {
+    serveViews(done(run({ playbook_used: null })));
+    renderColumn();
+    await screen.findByText("Không phải sự cố");
+    expect(screen.queryByText(/Playbook/)).not.toBeInTheDocument();
+  });
+
+  it("names the playbook of the earlier run under a failed one too", async () => {
+    serveViews(view({ state: "failed", run: run({ playbook_used: "ssh_brute_force" }) }));
+    renderColumn();
+    expect(await screen.findByText(S.ai2.playbook("ssh_brute_force"))).toBeInTheDocument();
+  });
+
   it("says the model was overruled, in the server's sentence", async () => {
     const sentence =
       "Mô hình đề xuất Không phải sự cố (false_positive) nhưng kết luận đã bị hạ xuống Cần thêm dữ liệu (need_more_data): không có bằng chứng nào kiểm chứng được với log của case.";
@@ -666,6 +863,13 @@ describe("accessibility", () => {
     serveViews(idle());
     const { container } = renderColumn();
     await analyzeButton();
+    expect(await scan(container)).toEqual([]);
+  });
+
+  it("has no axe violation while an analysis is running", async () => {
+    serveViews(running());
+    const { container } = renderColumn();
+    await screen.findByText(S.ai2.running);
     expect(await scan(container)).toEqual([]);
   });
 
