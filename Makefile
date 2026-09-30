@@ -175,7 +175,7 @@ run-worker:
 
 # The 05–20/09 way, kept for the fallback cluster: plain processes on the host.
 run-app-native:
-	PYTHONPATH=backend $(PY) -m uvicorn app.web.main:app --host $(APP_HOST) --port $(APP_PORT)
+	PYTHONPATH=backend $(PY) -m uvicorn app.web.main:app --host $(APP_HOST) --port $(APP_PORT) --ws-max-size 65536
 
 run-worker-native:
 	PYTHONPATH=backend $(PY) -m app.web.worker

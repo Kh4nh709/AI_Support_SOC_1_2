@@ -72,7 +72,9 @@ services:
       # The indexer stays on IA1803 (:19200). On IA1803 itself `host-gateway` reaches it;
       # on any other server set INDEXER_HOST_IP=<IA1803's Tailscale IP> in .env (Compose-only).
       - "wazuh.indexer:${INDEXER_HOST_IP:-host-gateway}"
-    command: python -m uvicorn app.web.main:app --host 0.0.0.0 --port 8000
+    # --ws-max-size: /api/ws (P10-T05) reads its first frame before it knows who sent it;
+    # uvicorn's default cap is 16 MiB per frame. 64 KiB is far above a token and far below abuse.
+    command: python -m uvicorn app.web.main:app --host 0.0.0.0 --port 8000 --ws-max-size 65536
     ports:
       - "8000:8000"
     depends_on:

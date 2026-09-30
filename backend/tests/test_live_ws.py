@@ -24,18 +24,21 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import re
 import threading
 import time
 import uuid
 
 import psycopg
 import pytest
+import yaml
 from app.infra import auth, config
 from app.web import deps, live, main
 from app.web.routers import live_ws
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from tests import conftest
 from tests.scratch_db import insert_alert, scratch_database
 
 SECRET = "test-secret-p10t05"
@@ -118,6 +121,29 @@ def test_no_auth_message_closes_4401_after_timeout(offline_client, fast):
 def test_the_default_wait_for_the_auth_message_is_five_seconds():
     assert live_ws.AUTH_TIMEOUT_S == 5
     assert live_ws.REVERIFY_INTERVAL_S == 60
+
+
+def test_every_uvicorn_launch_of_the_app_caps_the_websocket_frame_size():
+    """`MAX_AUTH_MESSAGE_CHARS` is checked after uvicorn has read the whole frame, and
+    uvicorn's own default cap is 16 MiB: an unauthenticated peer could make the server buffer
+    that much per connection. Both launch sites — the compose `app` command and
+    `make run-app-native` (`make run-app` is the compose one) — pass a small `--ws-max-size`,
+    and it still fits the largest legal first frame (4 UTF-8 bytes per character)."""
+    root = conftest.REPO_ROOT
+    compose = yaml.safe_load((root / "docker-compose.yml").read_text())["services"]["app"]
+    make_launches = [
+        line
+        for line in (root / "Makefile").read_text().splitlines()
+        if "uvicorn app.web.main:app" in line
+    ]
+    assert len(make_launches) == 1, "Makefile: expected one uvicorn launch of the app"
+    for site, command in {
+        "docker-compose.yml": compose["command"],
+        "Makefile": make_launches[0],
+    }.items():
+        found = re.findall(r"--ws-max-size[ =](\d+)", command)
+        assert len(found) == 1, f"{site}: the uvicorn command has no --ws-max-size"
+        assert 4 * live_ws.MAX_AUTH_MESSAGE_CHARS <= int(found[0]) <= 1024 * 1024, site
 
 
 def test_token_in_query_string_is_ignored(offline_client, fast):
