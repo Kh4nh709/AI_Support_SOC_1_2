@@ -32,6 +32,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.parse
@@ -225,7 +226,7 @@ def test_check_live_passes_on_a_clean_table(live_db):
 def test_check_live_fails_below_want(live_db):
     _seed_healthy(live_db, 3)
     # A gate document with a cost of 0 is not a paid, gated run: it never counts toward `want`.
-    _run(live_db, _alert(live_db, "free-run"), cost_usd=Decimal("0"))
+    _run(live_db, _alert(live_db, "free-run"), cost_usd=Decimal(0))
     # Nor does a row without a gate document.
     _run(live_db, _alert(live_db, "no-gate"), gate_result=None)
 
@@ -359,7 +360,9 @@ def test_check_live_reports_the_facts_with_their_denominators(live_db):
         cost_usd=Decimal("0.002"),
         created_at=late,
     )
-    _run(live_db, "no-such-alert", cost_usd=Decimal("0.0005"))  # a run whose alert is gone
+    _run(  # a run whose alert is gone
+        live_db, "no-such-alert", cost_usd=Decimal("0.0005"), created_at="2026-09-01 12:00:00+00"
+    )
     _run(live_db, wazuh_head, role="verifier", cost_usd=Decimal("0.003"))
     _job(live_db, wazuh_head, status="succeeded")
     _job(live_db, lab_head, status="pending")
@@ -383,9 +386,11 @@ def test_check_live_reports_the_facts_with_their_denominators(live_db):
 
     # The printed summary carries each figure with its denominator, and the JSON line round-trips.
     table = triage_live.format_table(s)
-    assert "3 / 3 proposer rows" in table
-    assert "0 / 4 triage rows" in table
-    assert "1 / 3" in table  # forced
+    assert re.search(r"gate_result and cost_usd > 0:\s+3 / 3 proposer rows", table)
+    assert re.search(r"gate_result NULL:\s+0 / 4 triage rows", table)
+    assert re.search(r"cost_usd NULL:\s+0 / 4 triage rows", table)
+    assert re.search(r"forced by the gate:\s+1 / 3 proposer rows", table)
+    assert re.search(r"verifier rows:\s+1 / 4 triage rows", table)
     assert json.loads(s.as_json())["proposer_by_source"] == s.proposer_by_source
 
 
@@ -452,7 +457,9 @@ def test_cli_exit_codes_0_and_1(committed_live_db, _test_database, tmp_path):
     private = {"PGOPTIONS": f"-c search_path={_CLI_SCHEMA}"}
 
     def run(want: int):
-        return _cli("--dsn", str(_test_database), "--want", str(want), cwd=tmp_path, env_extra=private)
+        return _cli(
+            "--dsn", str(_test_database), "--want", str(want), cwd=tmp_path, env_extra=private
+        )
 
     passed = run(3)
     code, out, err = passed.returncode, passed.stdout, passed.stderr
@@ -576,6 +583,7 @@ def _live_test_in_a_bare_directory(cwd: Path, *, env_file_text: str | None):
             str(PYTEST_CONFIG),
             "-p",
             "no:cacheprovider",
+            "--color=no",
             "-m",
             "live",
             "-rs",
