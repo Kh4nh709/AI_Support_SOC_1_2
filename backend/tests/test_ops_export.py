@@ -824,9 +824,7 @@ def test_human_metrics_not_measured_when_zero_and_counted_when_not(db):
     assert "live since P5 (DEC-154)" in rows[HUMAN_ROWS[3]][1]
     assert "`autoclose.reviewed` = 0" in rows[HUMAN_ROWS[3]][1]
     assert "`autoclose_reviews` rows = 0" in rows[HUMAN_ROWS[3]][1]
-    assert (
-        "built and run, no rating control in v1.0 (DEC-154, DEC-161)" in rows[HUMAN_ROWS[4]][1]
-    )
+    assert "built and run, no rating control in v1.0 (DEC-154, DEC-161)" in rows[HUMAN_ROWS[4]][1]
     assert "`case.opened` = 0" in rows[HUMAN_ROWS[4]][1]
     assert rows[GATE_ROW] == (
         "n/a (0 rows)",

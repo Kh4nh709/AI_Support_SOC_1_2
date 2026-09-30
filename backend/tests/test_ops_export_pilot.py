@@ -39,6 +39,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
+
 from tests.test_ops_export import (
     MARKER,
     TICK,
@@ -90,7 +91,9 @@ def _close(db, alert_id: str, actor: str, when: datetime, decision: str) -> None
         "llm_suggestion": None,
         "suggestion_visible": None,
     }
-    _event(db, "tier1.decided", alert_id, when, actor_role="analyst", actor_id=actor, payload=payload)
+    _event(
+        db, "tier1.decided", alert_id, when, actor_role="analyst", actor_id=actor, payload=payload
+    )
 
 
 def _escalate(db, alert_id: str, actor: str, when: datetime) -> None:
@@ -128,7 +131,13 @@ def _handled(
     if outcome == "escalated":
         _escalate(db, alert_id, actor, done)
     else:
-        _close(db, alert_id, actor, done, "closed_fp" if outcome == "false_positive" else "closed_benign")
+        _close(
+            db,
+            alert_id,
+            actor,
+            done,
+            "closed_fp" if outcome == "false_positive" else "closed_benign",
+        )
     return alert_id
 
 
@@ -137,42 +146,147 @@ def _seed_pilot(db) -> dict:
     blind = {"visible": False}
     ids = {"A": a, "B": b}
 
-    ids["B1"] = _handled(db, source="lab", actor=a, ack_at=60, took=120, outcome="escalated",
-                         suggested="escalate", **blind)
-    ids["B2"] = _handled(db, source="lab", actor=a, ack_at=600, took=300, outcome="false_positive",
-                         suggested="false_positive", **blind)
+    ids["B1"] = _handled(
+        db,
+        source="lab",
+        actor=a,
+        ack_at=60,
+        took=120,
+        outcome="escalated",
+        suggested="escalate",
+        **blind,
+    )
+    ids["B2"] = _handled(
+        db,
+        source="lab",
+        actor=a,
+        ack_at=600,
+        took=300,
+        outcome="false_positive",
+        suggested="false_positive",
+        **blind,
+    )
     # a verifier row, later than the proposer's: it is not ①
-    _run(db, ids["B2"], at(3), role="verifier", gate={"error": "none"},
-         result={"suggested_action": "escalate"})
-    ids["B3"] = _handled(db, source="lab", actor=a, ack_at=1200, took=60, outcome="benign",
-                         suggested="false_positive", **blind)
-    ids["B4"] = _handled(db, source="lab", actor=a, ack_at=1800, took=30, outcome="false_positive",
-                         suggested="needs_review", **blind)
-    ids["B5"] = _handled(db, source="wazuh", actor=b, ack_at=2400, took=240,
-                         outcome="false_positive", suggested="escalate", **blind)
-    ids["B6"] = _handled(db, source="wazuh", actor=b, ack_at=3000, took=120,
-                         outcome="false_positive", suggested="needs_review", **blind)
+    _run(
+        db,
+        ids["B2"],
+        at(3),
+        role="verifier",
+        gate={"error": "none"},
+        result={"suggested_action": "escalate"},
+    )
+    ids["B3"] = _handled(
+        db,
+        source="lab",
+        actor=a,
+        ack_at=1200,
+        took=60,
+        outcome="benign",
+        suggested="false_positive",
+        **blind,
+    )
+    ids["B4"] = _handled(
+        db,
+        source="lab",
+        actor=a,
+        ack_at=1800,
+        took=30,
+        outcome="false_positive",
+        suggested="needs_review",
+        **blind,
+    )
+    ids["B5"] = _handled(
+        db,
+        source="wazuh",
+        actor=b,
+        ack_at=2400,
+        took=240,
+        outcome="false_positive",
+        suggested="escalate",
+        **blind,
+    )
+    ids["B6"] = _handled(
+        db,
+        source="wazuh",
+        actor=b,
+        ack_at=3000,
+        took=120,
+        outcome="false_positive",
+        suggested="needs_review",
+        **blind,
+    )
     _suggest(db, ids["B6"], "false_positive", at(2))  # the latest proposer row wins
-    ids["B7"] = _handled(db, source="wazuh", actor=b, ack_at=3600, took=60, outcome="benign",
-                         **blind)
+    ids["B7"] = _handled(
+        db, source="wazuh", actor=b, ack_at=3600, took=60, outcome="benign", **blind
+    )
     _run(db, ids["B7"], at(1), stopped_by="schema")  # a proposer row with no result
-    ids["B8"] = _handled(db, source="wazuh", actor=b, ack_at=6000, took=90, outcome="escalated",
-                         **blind)
+    ids["B8"] = _handled(
+        db, source="wazuh", actor=b, ack_at=6000, took=90, outcome="escalated", **blind
+    )
 
-    ids["V1"] = _handled(db, source="lab", visible=True, actor=a, ack_at=4200, took=150,
-                         outcome="false_positive", suggested="false_positive")
-    ids["V2"] = _handled(db, source="wazuh", visible=True, actor=b, ack_at=4800, took=180,
-                         outcome="escalated", suggested="escalate")
-    ids["V3"] = _handled(db, source="wazuh", visible=True, actor=b, ack_at=5400, took=240,
-                         outcome="benign", suggested="false_positive")
+    ids["V1"] = _handled(
+        db,
+        source="lab",
+        visible=True,
+        actor=a,
+        ack_at=4200,
+        took=150,
+        outcome="false_positive",
+        suggested="false_positive",
+    )
+    ids["V2"] = _handled(
+        db,
+        source="wazuh",
+        visible=True,
+        actor=b,
+        ack_at=4800,
+        took=180,
+        outcome="escalated",
+        suggested="escalate",
+    )
+    ids["V3"] = _handled(
+        db,
+        source="wazuh",
+        visible=True,
+        actor=b,
+        ack_at=5400,
+        took=240,
+        outcome="benign",
+        suggested="false_positive",
+    )
 
     # decoys, each of which would move a figure if it were counted
-    ids["X1"] = _handled(db, source="lab", actor=a, ack_at=-61, took=60,  # decided 1 s before
-                         outcome="false_positive", suggested="false_positive", **blind)
-    ids["X2"] = _handled(db, source="lab", actor=a, ack_at=7000, took=60, outcome="false_positive",
-                         suggested="false_positive", synthetic=True, **blind)
-    ids["X3"] = _handled(db, source="lab", actor=a, ack_at=17000, took=1200,  # decided at the end
-                         outcome="benign", suggested="escalate", **blind)
+    ids["X1"] = _handled(
+        db,
+        source="lab",
+        actor=a,
+        ack_at=-61,
+        took=60,  # decided 1 s before
+        outcome="false_positive",
+        suggested="false_positive",
+        **blind,
+    )
+    ids["X2"] = _handled(
+        db,
+        source="lab",
+        actor=a,
+        ack_at=7000,
+        took=60,
+        outcome="false_positive",
+        suggested="false_positive",
+        synthetic=True,
+        **blind,
+    )
+    ids["X3"] = _handled(
+        db,
+        source="lab",
+        actor=a,
+        ack_at=17000,
+        took=1200,  # decided at the end
+        outcome="benign",
+        suggested="escalate",
+        **blind,
+    )
     ids["X5"] = _open(db, received_at=at(10), source="lab", visible=False)
     _ack(db, ids["X5"], a, _t(7100))  # acknowledged, never decided
     _event(db, "tier2.concluded", ids["B2"], _t(8000), actor_role="analyst", actor_id=b)
@@ -243,10 +357,26 @@ def test_blind_agreement_counts_needs_review_apart_and_not_as_a_disagreement(db)
 def test_visible_arm_never_has_an_agreement_figure(db):
     # only visible-arm decisions, each one matching ①: there is nothing to agree on the blind arm
     a = _user(db)
-    _handled(db, source="lab", visible=True, actor=a, ack_at=60, took=60,
-             outcome="false_positive", suggested="false_positive")
-    _handled(db, source="wazuh", visible=True, actor=a, ack_at=300, took=60,
-             outcome="escalated", suggested="escalate")
+    _handled(
+        db,
+        source="lab",
+        visible=True,
+        actor=a,
+        ack_at=60,
+        took=60,
+        outcome="false_positive",
+        suggested="false_positive",
+    )
+    _handled(
+        db,
+        source="wazuh",
+        visible=True,
+        actor=a,
+        ack_at=300,
+        took=60,
+        outcome="escalated",
+        suggested="escalate",
+    )
     section = _section6a(_report(db))
 
     block = section[section.index("### ① agreement with the human, blind arm only") :]
@@ -262,13 +392,27 @@ def test_visible_arm_never_has_an_agreement_figure(db):
 @pytest.mark.db
 def test_the_latest_proposer_row_is_the_verdict_and_a_verifier_row_is_not(db):
     a = _user(db)
-    _handled(db, source="lab", visible=False, actor=a, ack_at=60, took=60,
-             outcome="false_positive", suggested="needs_review")
+    _handled(
+        db,
+        source="lab",
+        visible=False,
+        actor=a,
+        ack_at=60,
+        took=60,
+        outcome="false_positive",
+        suggested="needs_review",
+    )
     late = _open(db, received_at=at(10), source="lab", visible=False)
     _suggest(db, late, "escalate", at(1))
     _suggest(db, late, "false_positive", at(2))
-    _run(db, late, at(3), role="verifier", gate={"error": "none"},
-         result={"suggested_action": "escalate"})
+    _run(
+        db,
+        late,
+        at(3),
+        role="verifier",
+        gate={"error": "none"},
+        result={"suggested_action": "escalate"},
+    )
     _ack(db, late, a, _t(300))
     _close(db, late, a, _t(360), "closed_fp")
 
@@ -311,23 +455,40 @@ def test_the_pilot_window_is_half_open_and_pairs_acknowledges_inside_it(db):
     _handled(db, ack_at=60, took=60, outcome="false_positive", **blind)
     # decided 1 microsecond before the end (inclusive), 120 s
     end_offset = PILOT_END - PILOT_START
-    _handled(db, ack_at=end_offset - TICK - timedelta(seconds=120), took=120,
-             outcome="false_positive", **blind)
+    _handled(
+        db,
+        ack_at=end_offset - TICK - timedelta(seconds=120),
+        took=120,
+        outcome="false_positive",
+        **blind,
+    )
     # decided exactly at the end (exclusive)
-    _handled(db, ack_at=end_offset - timedelta(seconds=60), took=60, outcome="false_positive", **blind)
+    _handled(
+        db, ack_at=end_offset - timedelta(seconds=60), took=60, outcome="false_positive", **blind
+    )
 
     section = _section6a(_report(db))
 
     assert "| blind | lab | 3 | 0 | 0 | 3 |" in section
-    assert "| blind | lab | 1.50 min | 2 | 3 |" in section  # 60 s and 120 s; one not acknowledged in
+    assert (
+        "| blind | lab | 1.50 min | 2 | 3 |" in section
+    )  # 60 s and 120 s; one not acknowledged in
     assert "| lab | 3 | 0 | 0 | 3 | 3 | 1.000 (3 / 3) |" in section
 
 
 @pytest.mark.db
 def test_an_end_left_out_is_the_database_clock(db):
     a = _user(db)
-    _handled(db, source="lab", visible=False, actor=a, ack_at=60, took=60,
-             outcome="benign", suggested="false_positive")
+    _handled(
+        db,
+        source="lab",
+        visible=False,
+        actor=a,
+        ack_at=60,
+        took=60,
+        outcome="benign",
+        suggested="false_positive",
+    )
     future = _open(db, received_at=at(10), source="lab", visible=False)
     _ack(db, future, a, datetime.now(UTC) + timedelta(hours=1))
     _close(db, future, a, datetime.now(UTC) + timedelta(hours=2), "closed_fp")
@@ -343,8 +504,17 @@ def test_an_end_left_out_is_the_database_clock(db):
 @pytest.mark.db
 def test_synthetic_alerts_are_not_pilot_decisions(db):
     a = _user(db)
-    _handled(db, source="lab", visible=False, actor=a, ack_at=60, took=60,
-             outcome="false_positive", suggested="false_positive", synthetic=True)
+    _handled(
+        db,
+        source="lab",
+        visible=False,
+        actor=a,
+        ack_at=60,
+        took=60,
+        outcome="false_positive",
+        suggested="false_positive",
+        synthetic=True,
+    )
 
     section = _section6a(_report(db))
 
@@ -374,7 +544,9 @@ def test_without_a_pilot_start_the_section_says_not_measured(db):
     ):
         # the export window's own evidence (Q24, 10 `tier1.decided`) is counted beside the pointer
         assert rows[metric][0].startswith("descriptive, n = "), metric
-        assert "pass `--pilot-start` for the pilot's figures (section 6a)" in rows[metric][1], metric
+        assert (
+            "pass `--pilot-start` for the pilot's figures (section 6a)" in rows[metric][1]
+        ), metric
         assert "measured over the pilot window" not in rows[metric][1], metric
 
 

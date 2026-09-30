@@ -1019,7 +1019,9 @@ def _pilot_human_rows(res: Mapping[str, list[tuple]]) -> list[list[str]]:
         measured = denominator > 0 if metric is HUMAN_METRICS[2] else n > 0
         if measured:
             value = f"measured, n = {n}"
-            basis = f"measured over the pilot window: section 6a ({query.qid}); {label} = {n}{extra}"
+            basis = (
+                f"measured over the pilot window: section 6a ({query.qid}); {label} = {n}{extra}"
+            )
         else:
             value = "not measured"
             basis = f"{empty}: section 6a ({query.qid}); {label} = {n}{extra}"
@@ -1096,7 +1098,9 @@ def _pilot_decisions_table(rows: Sequence[tuple]) -> str:
     by_key = {(arm, source): counts for arm, source, *counts in rows}
     sources = _source_order({source for _, source, *_ in rows})
     body = [
-        [arm, source, *by_key.get((arm, source), (0, 0, 0, 0))] for arm in ARMS for source in sources
+        [arm, source, *by_key.get((arm, source), (0, 0, 0, 0))]
+        for arm in ARMS
+        for source in sources
     ]
     headers = ["arm", "source", "false_positive", "benign", "escalated", "decisions"]
     return _table(headers, body)
@@ -1268,9 +1272,7 @@ def _labelling_section(res: Mapping[str, list[tuple]]) -> list[str]:
     ]
 
 
-def _appendix(
-    window: Window, ran: Sequence[Query], pilot: PilotWindow | None = None
-) -> list[str]:
+def _appendix(window: Window, ran: Sequence[Query], pilot: PilotWindow | None = None) -> list[str]:
     lines = [
         "## 8 · Appendix: SQL",
         "",
