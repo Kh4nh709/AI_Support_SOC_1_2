@@ -495,13 +495,30 @@ def test_cli_exit_2_without_a_database_url_never_prints_a_dsn(tmp_path):
     result = _cli("--env-file", str(empty_env_file), cwd=tmp_path)
     code, out, err = result.returncode, result.stdout, result.stderr
     assert code == 2, out + err
-    assert "DATABASE_URL" in err
+    assert "DATABASE_URL: must be set" in err
     assert out == ""  # no summary: nothing was read
 
     # No --env-file and no .env in the working directory: the same exit, the same message.
     result = _cli(cwd=tmp_path)
     assert result.returncode == 2
-    assert "DATABASE_URL" in result.stderr
+    assert "DATABASE_URL: must be set" in result.stderr
+
+    # Other DSNs sit in the same file (the owner's, the test database's) while DATABASE_URL is
+    # empty. They are not the database this check was pointed at: it neither falls back to them
+    # (that would be a connection error, not "must be set") nor prints them.
+    owner = "postgresql://owner:0wnerpw9@127.0.0.1:1/owner_db"
+    tester = "postgresql://tester:t3sterpw9@127.0.0.1:1/test_db"
+    mixed_env_file = tmp_path / "mixed.env"
+    mixed_env_file.write_text(
+        f"DATABASE_URL=\nDATABASE_URL_OWNER={owner}\nTEST_DATABASE_URL={tester}\n",
+        encoding="utf-8",
+    )
+    result = _cli("--env-file", str(mixed_env_file), cwd=tmp_path)
+    code, out, err = result.returncode, result.stdout, result.stderr
+    assert code == 2, out + err
+    assert "DATABASE_URL: must be set" in err
+    leaked = [p for p in (owner, tester, "0wnerpw9", "t3sterpw9") if p in out + err]
+    assert leaked == []
 
 
 def test_cli_exit_2_on_a_refused_connection_never_prints_the_password(tmp_path):
