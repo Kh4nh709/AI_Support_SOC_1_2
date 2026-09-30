@@ -27,7 +27,11 @@ const server = setupServer(
   ),
 );
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
-afterEach(() => server.resetHandlers());
+afterEach(() => {
+  server.resetHandlers();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 afterAll(() => server.close());
 
 const head = (over: Record<string, unknown> = {}) => ({
@@ -936,6 +940,159 @@ describe("reads of one case that answer out of order", () => {
     await settle();
     expect(screen.getByText(CONCLUDED_REASON)).toBeInTheDocument();
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+  });
+});
+
+// `last_analyzed_at`, the timeline and "Còn tiếp diễn" are written when the ② job completes, not when it is
+// accepted, so the left column reads the case again when the poll sees the run end (and only then).
+describe("when the analysis ends", () => {
+  const RUN = "6f1c7a52-98d4-5c0e-b3a1-2d4e6f8a0b1c";
+  const ANALYSED_AT = "2026-09-30T03:30:00+00:00";
+  const ANALYSED_SHOWN = "30/09/2026 10:30:00";
+  const ended = (over: Record<string, unknown>) => ({
+    state: "done",
+    run_id: null,
+    minutes: null,
+    run: null,
+    current: null,
+    case_open: true,
+    ...over,
+  });
+  const DONE = ended({
+    run: {
+      run_id: RUN,
+      created_at: ANALYSED_AT,
+      result: { suggested_conclusion: "false_positive" },
+      conclusion: "false_positive",
+      conclusion_label: "Không phải sự cố",
+      confidence: "medium",
+      summary: "tóm tắt của lượt vừa xong",
+      narrative: "-",
+      hypotheses: [],
+      evidence: [],
+      next_steps: [],
+      playbook_used: null,
+      overruled: null,
+      snapshot: null,
+      changed: false,
+    },
+  });
+  const FAILED = ended({ state: "failed" });
+
+  // Fake time for the 3 s poll, as the column's own tests do.
+  const fake = () => {
+    vi.useFakeTimers();
+    // Testing Library waits with fake timers only when it finds a `jest` with advanceTimersByTime.
+    vi.stubGlobal("jest", { advanceTimersByTime: (ms: number) => vi.advanceTimersByTime(ms) });
+    return userEvent.setup({ delay: null });
+  };
+  const wait = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+  // Real time: the wait is for an answer already released to travel through the network layer.
+  const settle = () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+  /**
+   * A server that writes `last_analyzed_at` when the job completes, as `investigate.py` does: a poll that
+   * names a run finds it over (`end`), and the case then says so. Counts the reads of the case.
+   */
+  function serveRun(end: JsonBodyType) {
+    const state = { caseGets: 0, over: false };
+    server.use(
+      http.get(CASE_URL, () => {
+        state.caseGets += 1;
+        return HttpResponse.json(
+          state.over
+            ? detail({ last_analyzed_at: ANALYSED_AT, ongoing: false, ongoing_last_seen: null })
+            : detail({
+                last_analyzed_at: null,
+                ongoing: true,
+                ongoing_last_seen: "2026-09-30T02:59:00+00:00",
+              }),
+        );
+      }),
+      http.post(`${CASE_URL}/analyze`, () =>
+        HttpResponse.json({ run_id: RUN, job_id: 41 }, { status: 202 }),
+      ),
+      http.get(`${CASE_URL}/investigation`, ({ request }) => {
+        if (!new URL(request.url).searchParams.has("run_id"))
+          return HttpResponse.json(ended({ state: "idle" }));
+        state.over = true;
+        return HttpResponse.json(end);
+      }),
+    );
+    return state;
+  }
+
+  async function startRun(user: ReturnType<typeof userEvent.setup>, client: QueryClient) {
+    renderCase(client);
+    await page();
+    expect(screen.getByText(S.case.neverAnalysed)).toBeInTheDocument();
+    expect(screen.getByText(S.case.ongoing)).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: S.ai2.analyze }));
+    await screen.findByText(S.ai2.running);
+    // The 202 marked the list stale; make it fresh again, so what marks it next is the end of the run.
+    client.setQueryData(["cases", 0], []);
+    expect(client.getQueryState(["cases", 0])?.isInvalidated).toBe(false);
+  }
+
+  it("reads the case again when a running analysis is done, and shows the new time and timeline entry", async () => {
+    const user = fake();
+    const server = serveRun(DONE);
+    const client = newClient();
+    await startRun(user, client);
+    const before = server.caseGets;
+
+    await wait(3000);
+    expect(await screen.findByText("tóm tắt của lượt vừa xong")).toBeInTheDocument();
+    const summary = screen.getByRole("region", { name: S.case.summaryLabel });
+    await waitFor(() => expect(within(summary).getByText(ANALYSED_SHOWN)).toBeInTheDocument());
+    expect(screen.queryByText(S.case.neverAnalysed)).not.toBeInTheDocument();
+    expect(screen.queryByText(S.case.ongoing)).not.toBeInTheDocument();
+    const timeline = screen.getByRole("list", { name: S.case.timeline });
+    expect(within(timeline).getByText(S.case.timelineAnalysed)).toBeInTheDocument();
+    expect(server.caseGets).toBe(before + 1);
+    expect(client.getQueryState(["cases", 0])?.isInvalidated).toBe(true);
+
+    // Once per transition: a done run is not asked about again, and neither is the case.
+    await wait(30_000);
+    expect(server.caseGets).toBe(before + 1);
+  });
+
+  it("reads the case again when a running analysis has failed", async () => {
+    const user = fake();
+    const server = serveRun(FAILED);
+    const client = newClient();
+    await startRun(user, client);
+    const before = server.caseGets;
+
+    await wait(3000);
+    expect(await screen.findByText(S.ai2.failed)).toBeInTheDocument();
+    const summary = screen.getByRole("region", { name: S.case.summaryLabel });
+    await waitFor(() => expect(within(summary).getByText(ANALYSED_SHOWN)).toBeInTheDocument());
+    expect(server.caseGets).toBe(before + 1);
+    expect(client.getQueryState(["cases", 0])?.isInvalidated).toBe(true);
+
+    await wait(30_000);
+    expect(server.caseGets).toBe(before + 1);
+  });
+
+  it("reads the case once, and no more, when the page opens on a run that is already done", async () => {
+    const state = { caseGets: 0 };
+    server.use(
+      http.get(CASE_URL, () => {
+        state.caseGets += 1;
+        return HttpResponse.json(detail({ last_analyzed_at: ANALYSED_AT }));
+      }),
+      http.get(`${CASE_URL}/investigation`, () => HttpResponse.json(DONE)),
+    );
+    const client = newClient();
+    renderCase(client);
+    await page();
+    expect(await screen.findByText("tóm tắt của lượt vừa xong")).toBeInTheDocument();
+    await settle();
+    expect(state.caseGets).toBe(1);
   });
 });
 

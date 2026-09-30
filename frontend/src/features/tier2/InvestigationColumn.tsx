@@ -25,6 +25,9 @@ import { tier2Keys } from "./queryKeys";
 /** How often a running analysis is asked about. */
 export const POLL_MS = 3000;
 
+/** The states a running job can end in. */
+const ENDED: ReadonlySet<string> = new Set(["done", "failed", "stalled"]);
+
 // The 409 details of `POST .../analyze` (tier2_runs.py), which the UI says in its own words.
 const DETAIL_CONCLUDED = "case đã kết luận";
 const DETAIL_RUNNING = "an investigation is already running for this case";
@@ -69,10 +72,18 @@ export function InvestigationColumn({ caseId, caseOpen }: { caseId: string; case
     queryFn: async (): Promise<InvestigationView> => {
       // Every read names its run: the run of the 202, else the run the last answer named. A job with a run_id
       // and nothing behind it then answers "failed", never "idle".
-      const named = runId ?? client.getQueryData<InvestigationView>(key)?.run_id ?? null;
+      const before = client.getQueryData<InvestigationView>(key);
+      const named = runId ?? before?.run_id ?? null;
       const next = await getInvestigation(caseId, named);
       // A state this UI does not know cannot be polled or acted on: it is an error, not a guess.
       if (!isInvestigationState(next.state)) throw new Error("unknown state");
+      // The job writes last_analyzed_at and the timeline when it completes, so the case, and the list that
+      // shows it, are read again when a running job ends, and only then: the answer before this one was
+      // "running" once, and a page that opens on a finished run has no answer before it.
+      if (before?.state === "running" && ENDED.has(next.state)) {
+        void client.invalidateQueries({ queryKey: tier2Keys.case(caseId) });
+        void client.invalidateQueries({ queryKey: tier2Keys.cases });
+      }
       return next;
     },
     // An answer is fresh for one poll: the view a 202 seeds is not read again the moment it is shown.
