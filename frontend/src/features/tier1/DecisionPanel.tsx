@@ -115,14 +115,12 @@ function problemOf(action: Action, error: unknown): Problem {
 /** What a person with the alert in front of them may do about it, by its status and by who holds it. */
 function Actions({
   view,
-  me,
   busy,
   problem,
   adopted,
   run,
 }: {
   view: AlertView;
-  me: Session;
   busy: boolean;
   problem: Problem | null;
   adopted: AdoptedCount | null;
@@ -130,7 +128,7 @@ function Actions({
 }) {
   const holds = view.status === "tier1_active";
   // Who the user is, asked only for an alert somebody holds: the page is not told, and it does not guess.
-  const who = useMe(me, holds);
+  const who = useMe(holds);
   const fieldError = (form: FormName) => (problem?.at === form ? problem.text : null);
 
   if (view.status === "queued_tier1") {
@@ -222,18 +220,10 @@ export function DecisionPanel({
 }) {
   // Tier 1 acts; a reader of another role sees no panel, and the page does not ask who they are.
   if (me.role !== "tier1") return null;
-  return <Panel view={view} me={me} onDone={onDone} />;
+  return <Panel view={view} onDone={onDone} />;
 }
 
-function Panel({
-  view,
-  me,
-  onDone,
-}: {
-  view: AlertView;
-  me: Session;
-  onDone?: (result: DecisionResult) => void;
-}) {
+function Panel({ view, onDone }: { view: AlertView; onDone?: (result: DecisionResult) => void }) {
   const client = useQueryClient();
   const headingId = useId();
   const [toast, setToast] = useState<ReactNode>(null);
@@ -307,7 +297,7 @@ function Panel({
           {problem.text}
         </p>
       )}
-      <Actions view={view} me={me} busy={busy} problem={problem} adopted={adopted} run={run} />
+      <Actions view={view} busy={busy} problem={problem} adopted={adopted} run={run} />
     </section>
   );
 }

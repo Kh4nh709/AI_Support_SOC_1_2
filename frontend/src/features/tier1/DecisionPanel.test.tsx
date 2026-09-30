@@ -212,6 +212,13 @@ describe("who sees what", () => {
     expect(await findDecideForm()).toBeInTheDocument();
   });
 
+  it("keeps who the user is under the one key ['me']: the cache goes with the token, so the key need not carry it", async () => {
+    const { client } = renderPanel(mine());
+    await findDecideForm();
+    expect(client.getQueryData(["me"])).toEqual({ userId: ME_ID });
+    expect(client.getQueryData(["me", "tok-1"])).toBeUndefined();
+  });
+
   it.each(["tier2", "admin"] as const)(
     "shows nothing to %s, and does not ask who they are",
     async (role) => {
