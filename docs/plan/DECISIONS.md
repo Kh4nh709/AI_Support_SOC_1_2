@@ -3023,3 +3023,50 @@ Decision:
      - whether a job-plus-poll design (as ②) or a synchronous call is used. The Director recommends job-plus-poll, for consistency with the worker's retry and cost rules.
   5. **Not measured.** Like ② (DEC-154), the chat is built and live, not measured. `docs/limitations.md` says so.
 Supersedes: nothing
+
+## DEC-159 · 2026-09-30 · The admin console gains user management (create, role, password reset, unlock, deactivate), an LLM usage and quota page, and a system overview (alert counts, pipeline, health); the backend work is planned as cards in the React-UI plan
+Scope: **plan** (scope addition inside DEC-157's 07/10 window) · **security** (accounts and roles managed from the web, not only the CLI) · **architecture** (read-only aggregate APIs; possibly runtime-editable limits)
+Decided by: **the Owner** (*"Làm thêm trang admin quản trị tạo user, cấp quyền, quản trị thông tin về qouta llm, tool call, số alert, ..."*, 30/09)
+Drafted by: Director (Opus 5.5)
+Propagated to:
+- The canvas mock-up: artboards `AdminOverview.dc.html`, `AdminUsers.dc.html`, `AdminLlm.dc.html`, with an admin sidebar covering overview, users, LLM, auto-close rules, digest, labelling and audit.
+- The UI design spec and its implementation plan: the backend cards below, each with a Coder and a Reviewer (DEC-151).
+Decision:
+  1. **Users and roles.** "Cấp quyền" means assigning one of the three fixed roles (`tier1`, `tier2`, `admin`). There is no per-permission grant; the page shows the role-to-function matrix read-only. Backend:
+     - `GET /api/admin/users`, admin only. It lists username, display name, role, active, locked-until and failed logins. It never returns a hash.
+     - `POST /api/admin/users` creates a user through `infra/auth.create_user`, which already writes `admin.user_created`. The password travels in the request body only, is never logged or echoed, and must meet a minimum length the spec fixes.
+     - `PATCH /api/admin/users/{id}` changes role, display name or active. A role change or a deactivation sets `sessions_invalid_before = now()`, so old tokens die. Each change writes `admin.user_updated` (the event type exists) with before/after, and without any credential.
+     - `POST /api/admin/users/{id}/password` resets a password; `POST /api/admin/users/{id}/unlock` clears `failed_logins` and `locked_until`.
+     - **Guard:** the system never loses its last active admin. Demoting or deactivating it is a 409, and so is an admin demoting or deactivating themselves.
+     - The CLI (`python -m app.infra.auth`) stays as the break-glass path.
+     - "Last login" needs a new `users.last_login_at` column set by `login`. That is a migration, so the spec decides whether it is worth it.
+  2. **LLM usage and limits.** A read-only `GET /api/admin/llm/usage?range=` returns aggregates over `llm_runs`:
+     - calls, results and `stopped_by` by pipeline and role;
+     - tokens in/out;
+     - latency p50/p95;
+     - cost this month against `LLM_MONTHLY_USD_CAP`;
+     - per-user ② and chat use today against the daily quota;
+     - the last N calls.
+
+     It never returns prompts or model output. **"Tool call"** is shown as 0, with the reason: no pipeline lets the model call tools; each run is a single call. The Owner is asked whether the phrase meant something else.
+  3. **Editing the limits is an open decision for the spec.** Today `LLM_MONTHLY_USD_CAP`, `ANALYZE_QUOTA_PER_USER_DAY` and `LLM_TIMEOUT_S` come from `.env`, so a change needs a restart.
+     - **(a) Read-only page.** Edit `.env` and restart as now. Zero new contract.
+     - **(b) Admin-editable overrides.** A `settings` table (migration), `PUT /api/admin/llm/limits`, an `admin.settings_changed` event type, and every reader of those three keys going through one accessor that prefers the table.
+
+     The Director recommends (a) for v1.0 unless the Owner wants (b). (b) touches the cost guard, which must stay fail-closed.
+  4. **System overview.** A read-only `GET /api/admin/overview?range=` returns:
+     - alerts in by day, heads versus duplicates;
+     - by source and by agent;
+     - rejected intake;
+     - the status funnel (auto-closed, queued, active, closed by Tier-1, escalated);
+     - ① coverage;
+     - open cases;
+     - the health rows the `/health` job already writes: last pull, pending jobs, last digest.
+  5. **The existing admin pages** (auto-close rules, digest, labelling) move to React under the same sidebar. The digest has no JSON API yet, and the labelling page's undo has none either; each gets one, recorded by the plan as a contract change. The labelling page keeps its blind-labelling strip (`visibility.strip(mode="labeling")`).
+  6. **Invariants.**
+     - Every new route is admin-only through `require_role("admin")`, which writes `authz.denied` on refusal.
+     - Every write is audited.
+     - Every aggregate query is read-only with a statement timeout.
+     - No response carries a password, a hash, a DSN or a key.
+     - Tests follow the project's rules: red steps, and scratch databases never named `soc_test`.
+Supersedes: nothing
