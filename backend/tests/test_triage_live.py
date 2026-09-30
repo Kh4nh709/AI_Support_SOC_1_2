@@ -16,8 +16,9 @@ ALL)`, so the columns and CHECK constraints are the real ones) that shadow the r
 - the CLI tests need rows a subprocess can see, so they commit them into their own schema, reached
   through `PGOPTIONS`, and drop that schema in the fixture's teardown (a `DROP`, which the
   append-only triggers of the real tables do not touch). Nothing lands in `public`.
-The two tests that need the REAL tables (`check_live` inside a READ ONLY transaction, the CLI's
-read-only session) assert only that a statement is refused or that the query runs — never a count.
+The three tests that need the REAL database (`check_live` inside a READ ONLY transaction, the CLI's
+read-only session, and the session `main` opens) assert only that a statement is refused or that the
+query runs — never a count.
 
 `eval/` is a composition root outside `backend/` and not on `sys.path`, so `triage_live.py` is
 loaded by path (the pattern of test_lab_tag.py).
@@ -28,6 +29,7 @@ a green live test that checked nothing is the DEC-047 failure shape.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import json
@@ -143,7 +145,8 @@ def _alert(conn, alert_id: str, *, source: str = "wazuh", duplicate_of: str | No
 
 def _run(conn, subject_id: str, **overrides) -> None:
     """One triage `llm_runs` row. Defaults are a healthy proposer row (an `escalate` that the gate
-    left alone, with a gate document and a cost); any column can be overridden, `None` included."""
+    left alone, with a gate document, the usage the model returned and a cost); any column can be
+    overridden, `None` included."""
     row = {
         "role": "proposer",
         "pipeline": "triage",
@@ -151,13 +154,14 @@ def _run(conn, subject_id: str, **overrides) -> None:
         "result": {"suggested_action": "escalate"},
         "gate_result": _GOOD_GATE,
         "cost_usd": Decimal("0.00024"),
+        "input_tokens": 120,
         "stopped_by": None,
         "created_at": None,
     } | overrides
     conn.execute(
         "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, system_prompt, "
-        "user_message, result, role, gate_result, cost_usd, stopped_by, created_at) "
-        "VALUES (gen_random_uuid(), %s, %s, %s, 's', 'u', %s, %s, %s, %s, %s, "
+        "user_message, result, role, gate_result, cost_usd, input_tokens, stopped_by, created_at) "
+        "VALUES (gen_random_uuid(), %s, %s, %s, 's', 'u', %s, %s, %s, %s, %s, %s, "
         "COALESCE(%s::timestamptz, now()))",
         (
             row["pipeline"],
@@ -167,6 +171,7 @@ def _run(conn, subject_id: str, **overrides) -> None:
             row["role"],
             _json(row["gate_result"]),
             row["cost_usd"],
+            row["input_tokens"],
             row["stopped_by"],
             row["created_at"],
         ),
@@ -259,18 +264,87 @@ def test_check_live_fails_on_a_null_gate_result(live_db):
 
 @pytest.mark.db
 def test_check_live_fails_on_a_null_cost(live_db):
+    """Condition 3 (as amended in review round 1): a call that RETURNED usage (`input_tokens` set)
+    but has no `cost_usd` is a failure — the cost was there to record and was not."""
     _seed_healthy(live_db, 3)
     assert check_live(live_db, want=3).ok is True
 
-    _run(live_db, _alert(live_db, "cost-null-proposer"), cost_usd=None)
+    _run(live_db, _alert(live_db, "cost-null-proposer"), cost_usd=None)  # default: usage returned
     summary = check_live(live_db, want=3)
     assert summary.ok is False
+    assert summary.usage_without_cost_rows == 1
     assert summary.cost_null_rows == 1
     assert len(_failures_naming(summary, triage_live.COND_COST_NULL)) == 1
     assert len(summary.failures) == 1
 
     _run(live_db, _alert(live_db, "cost-null-verifier"), role="verifier", cost_usd=None)
-    assert check_live(live_db, want=3).cost_null_rows == 2
+    assert check_live(live_db, want=3).usage_without_cost_rows == 2
+
+
+@pytest.mark.db
+def test_check_live_accepts_a_null_cost_when_no_call_returned_usage(live_db):
+    """`backend/app/tier1/triage.py` writes `cost_usd=None` together with `input_tokens=None` on the
+    paths where no model call returned usage (a transient error, the cap, the linter). `llm_runs`
+    is append-only, so counting those as a failure would make the check exit 1 forever. They are
+    context — counted, broken down by `stopped_by` — and never a failure."""
+    _seed_healthy(live_db, 3)
+    for name, stopped_by in (("capped", "cap"), ("transient", "transient")):
+        _run(
+            live_db,
+            _alert(live_db, name),
+            result=None,
+            gate_result={"error": stopped_by},
+            cost_usd=None,
+            input_tokens=None,
+            stopped_by=stopped_by,
+        )
+    # a verifier row written after the cap: no usage, no cost either
+    _run(
+        live_db,
+        _alert(live_db, "verifier-after-cap"),
+        role="verifier",
+        result=None,
+        cost_usd=None,
+        input_tokens=None,
+        stopped_by="cap",
+    )
+
+    summary = check_live(live_db, want=3)
+    assert summary.ok is True, summary.failures
+    assert summary.failures == []
+    assert summary.usage_without_cost_rows == 0
+    assert summary.cost_null_rows == 3  # the context count still sees them
+    assert summary.cost_null_by_stopped_by == {"cap": 2, "transient": 1}
+    assert summary.proposer_with_gate_and_cost == 3  # a row without a cost is never a paid run
+
+    table = triage_live.format_table(summary)
+    assert re.search(r"cost_usd NULL \(context\):\s+3 / 9 triage rows", table)
+    assert re.search(r"usage but cost_usd NULL:\s+0 / 9 triage rows", table)
+    assert re.search(r"cost_usd NULL by stopped_by:\s+cap 2 / 3 .*transient 1 / 3 ", table)
+
+
+@pytest.mark.db
+def test_check_live_counts_a_row_without_a_role(live_db):
+    """`ck_llm_runs_role` admits a NULL `role` (a row written before migration 016). It is a
+    triage row: counted in the total and judged by the NULL conditions, and never a proposer or a
+    verifier."""
+    _seed_healthy(live_db, 3)
+    _run(live_db, _alert(live_db, "no-role-fine"), role=None)
+    summary = check_live(live_db, want=3)
+    assert summary.ok is True, summary.failures
+    assert summary.triage_rows == 7
+    assert (summary.proposer_rows, summary.verifier_rows) == (3, 3)
+
+    _run(live_db, _alert(live_db, "no-role-no-gate"), role=None, gate_result=None)
+    summary = check_live(live_db, want=3)
+    assert summary.gate_null_rows == 1
+    assert len(_failures_naming(summary, triage_live.COND_GATE_NULL)) == 1
+
+    _run(live_db, _alert(live_db, "no-role-no-cost"), role=None, cost_usd=None)
+    summary = check_live(live_db, want=3)
+    assert summary.usage_without_cost_rows == 1
+    assert len(_failures_naming(summary, triage_live.COND_COST_NULL)) == 1
+    assert (summary.triage_rows, summary.proposer_rows, summary.verifier_rows) == (9, 3, 3)
 
 
 @pytest.mark.db
@@ -374,7 +448,8 @@ def test_check_live_reports_the_facts_with_their_denominators(live_db):
     assert (s.triage_rows, s.proposer_rows, s.verifier_rows) == (4, 3, 1)
     assert s.proposer_with_result == 3
     assert s.proposer_with_gate_and_cost == 3
-    assert (s.gate_null_rows, s.cost_null_rows) == (0, 0)
+    assert (s.gate_null_rows, s.cost_null_rows, s.usage_without_cost_rows) == (0, 0, 0)
+    assert s.cost_null_by_stopped_by == {}
     assert s.forced_rows == 1
     assert s.suggested_action == {"escalate": 2, "needs_review": 1}
     assert s.stopped_by == {"(none)": 3}
@@ -388,7 +463,8 @@ def test_check_live_reports_the_facts_with_their_denominators(live_db):
     table = triage_live.format_table(s)
     assert re.search(r"gate_result and cost_usd > 0:\s+3 / 3 proposer rows", table)
     assert re.search(r"gate_result NULL:\s+0 / 4 triage rows", table)
-    assert re.search(r"cost_usd NULL:\s+0 / 4 triage rows", table)
+    assert re.search(r"cost_usd NULL \(context\):\s+0 / 4 triage rows", table)
+    assert re.search(r"usage but cost_usd NULL:\s+0 / 4 triage rows", table)
     assert re.search(r"forced by the gate:\s+1 / 3 proposer rows", table)
     assert re.search(r"verifier rows:\s+1 / 4 triage rows", table)
     assert json.loads(s.as_json())["proposer_by_source"] == s.proposer_by_source
@@ -423,6 +499,60 @@ def test_cli_session_is_read_only(_test_database):
     finally:
         conn.rollback()  # if a mutation let the write through, it never leaves this transaction
         conn.close()
+
+
+@pytest.mark.db
+def test_main_reads_through_a_read_only_session(_test_database, monkeypatch, capsys):
+    """The session `main` itself opens is READ ONLY — not just the helper it should be calling. A
+    stand-in for `check_live` tries a write through the connection `main` hands it; the server must
+    refuse it, and `main` must exit 2 rather than carry on. (Were `main` to open a plain
+    connection, the write would go through, the real `check_live` would run and `main` would exit
+    0 — and `main` rolls the transaction back either way, so nothing is left behind.)"""
+    real_check_live = triage_live.check_live
+
+    def writes_first(conn, *, want=triage_live.DEFAULT_WANT):
+        conn.execute("CREATE TEMP TABLE p3t11_main_probe (x int)")
+        return real_check_live(conn, want=want)
+
+    monkeypatch.setattr(triage_live, "check_live", writes_first)
+
+    code = triage_live.main(["--dsn", str(_test_database), "--want", "0"])
+    captured = capsys.readouterr()
+    assert code == triage_live.EXIT_NO_DATABASE, captured.out + captured.err
+    assert "read-only transaction" in captured.err
+    assert captured.out == ""  # no summary was printed
+
+
+def _called_names(function: ast.FunctionDef) -> set[str]:
+    """Every dotted name the function calls, e.g. `psycopg.connect`, `triage_live.connect_read_only`."""
+    names = set()
+    for node in ast.walk(function):
+        if isinstance(node, ast.Call):
+            parts = []
+            target = node.func
+            while isinstance(target, ast.Attribute):
+                parts.append(target.attr)
+                target = target.value
+            if isinstance(target, ast.Name):
+                parts.append(target.id)
+                names.add(".".join(reversed(parts)))
+    return names
+
+
+def test_the_live_test_connects_through_connect_read_only():
+    """The live test reads a database nobody may write to, so its connection must be the one that
+    is READ ONLY by construction and whose errors are scrubbed — not a `psycopg.connect` of its
+    own. Read from the source, because the live test cannot run from a worktree."""
+    tree = ast.parse(THIS_FILE.read_text(encoding="utf-8"))
+    (live_test,) = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "test_live_triage_gate_holds_on_the_live_database"
+    ]
+    called = _called_names(live_test)
+    assert "triage_live.connect_read_only" in called
+    assert "psycopg.connect" not in called and "connect" not in called
 
 
 def _cli(*args: str, cwd: Path, env_extra: dict[str, str] | None = None):
@@ -521,6 +651,23 @@ def test_cli_exit_2_without_a_database_url_never_prints_a_dsn(tmp_path):
     assert leaked == []
 
 
+def test_cli_exit_2_on_a_dsn_given_as_the_env_file_never_prints_it(tmp_path):
+    """`--env-file postgresql://user:pw@…` is a slip a person makes with a DSN in the clipboard
+    (argparse also accepts the prefix `--env`). The path names no file, so DATABASE_URL is empty and
+    the check says so — without quoting the path it was given."""
+    dsn = "postgresql://someone:s3cr3tpw@t0kenpiece@127.0.0.1:1/soc"
+    tokens = triage_live._secret_tokens(dsn)
+    assert dsn in tokens and "s3cr3tpw" in tokens  # the check below is not vacuous
+
+    for flag in ("--env-file", "--env"):
+        result = _cli(flag, dsn, cwd=tmp_path)
+        code, text = result.returncode, result.stdout + result.stderr
+        assert code == 2, text
+        assert "DATABASE_URL: must be set" in text
+        assert [t for t in tokens if t in text] == []
+        assert [p for p in _secret_pieces(dsn) if p in text] == []
+
+
 def test_cli_exit_2_on_a_refused_connection_never_prints_the_password(tmp_path):
     # Nothing listens on port 1. The password holds an `@`, so libpq's own message about the
     # host it could not resolve quotes a piece of it — the case a bare `print(exc)` would leak.
@@ -571,26 +718,43 @@ def test_live_triage_gate_holds_on_the_live_database():
     if reason:
         pytest.skip(reason)
 
+    # Its own connection, never the `db` fixture: READ ONLY by construction, with the connection
+    # error scrubbed. The failure is raised OUTSIDE the `except`, with `pytrace=False`: a traceback
+    # would show psycopg's `connect` frame, whose locals hold the connection string — password
+    # included — and nothing masks a password that only `.env` knows about.
+    dsn = cfg.DATABASE_URL
+    refusal = None
     try:
-        conn = psycopg.connect(cfg.DATABASE_URL)  # its own connection, never the `db` fixture
+        conn = triage_live.connect_read_only(dsn)
     except psycopg.Error as exc:
-        pytest.fail(f"cannot connect: {triage_live.describe_connect_error(exc, cfg.DATABASE_URL)}")
-    conn.read_only = True  # before the first statement: every transaction of it is READ ONLY
+        refusal = triage_live.describe_connect_error(exc, dsn)
+    if refusal is not None:
+        pytest.fail(f"cannot connect to the database: {refusal}", pytrace=False)
     try:
         summary = check_live(conn, want=50)
     finally:
+        conn.rollback()
         conn.close()
     print(triage_live.format_table(summary))
     assert summary.ok, "\n".join(summary.failures)
 
 
-def _live_test_in_a_bare_directory(cwd: Path, *, env_file_text: str | None):
+def _live_test_in_a_bare_directory(
+    cwd: Path,
+    *,
+    env_file_text: str | None,
+    pytest_args: tuple[str, ...] = ("-rs",),
+    env_extra: dict[str, str] | None = None,
+):
     """`pytest -m live` on this file with `cwd` as the working directory, i.e. as the Owner would
-    run it from a checkout that has no `.env` — or one whose `.env` is empty."""
+    run it from a checkout that has no `.env` — or one whose `.env` is empty, or names a database.
+    No database variable is passed on, so nothing masks a password the way the suite's own
+    conftest does for the passwords of the environment."""
     if env_file_text is not None:
         (cwd / ".env").write_text(env_file_text, encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if k not in _DATABASE_VARIABLES}
     env["PYTHONPATH"] = str(REPO_ROOT / "backend")
+    env.update(env_extra or {})
     return subprocess.run(
         [
             sys.executable,
@@ -603,7 +767,7 @@ def _live_test_in_a_bare_directory(cwd: Path, *, env_file_text: str | None):
             "--color=no",
             "-m",
             "live",
-            "-rs",
+            *pytest_args,
             str(THIS_FILE),
         ],
         cwd=cwd,
@@ -634,3 +798,68 @@ def test_live_test_skips_with_an_empty_database_url(tmp_path):
     skipped = [line for line in out.splitlines() if line.startswith("SKIPPED")]
     assert len(skipped) == 1
     assert "DATABASE_URL" in skipped[0] and "the Owner runs this" in skipped[0]
+
+
+# Nothing listens on port 1. The second password holds an `@`, so libpq's own message about the
+# host it could not resolve quotes a piece of it — the case a bare `print(exc)` would leak.
+_REFUSED_DSNS = (
+    "postgresql://someone:s3cr3tpw@127.0.0.1:1/soc",
+    "postgresql://someone:p4rt1al@t0kenpiece@127.0.0.1:1/soc",
+)
+
+
+@pytest.mark.parametrize("dsn", _REFUSED_DSNS, ids=["plain-password", "password-with-an-at-sign"])
+def test_live_test_fails_when_the_connection_is_refused_without_leaking_the_password(tmp_path, dsn):
+    """The Owner's command (`-m live -rs -vv`) against a `.env` whose DATABASE_URL cannot be
+    reached. The outcome is a FAILURE — never a pass, never a skip — and the report shows the
+    failure reason and none of the DSN: not the password, not the pieces of it a message could
+    quote. The environment holds no database variable, so the suite's own masking, which knows
+    only the passwords of the environment, cannot be what hides it. `--showlocals` is on: were the
+    failure raised with a traceback, psycopg's `connect` frame would print the connection string."""
+    tokens = triage_live._secret_tokens(dsn)
+    password = urllib.parse.urlsplit(dsn).password
+    assert dsn in tokens and password.split("@")[0] in tokens  # the checks below are not vacuous
+
+    result = _live_test_in_a_bare_directory(
+        tmp_path,
+        env_file_text=f"DATABASE_URL={dsn}\n",
+        pytest_args=("-rs", "-vv", "--showlocals"),
+    )
+    code, out = result.returncode, result.stdout + result.stderr
+    # (the assertion messages print test ids only: were the report to leak, they must not repeat it)
+    assert code == 1, [line for line in out.splitlines() if "::" in line]
+    assert "1 failed" in out
+    assert "passed" not in out and "skipped" not in out.lower()
+    assert "cannot connect to the database" in out
+    assert len([t for t in tokens if t in out]) == 0
+    assert len([p for p in _secret_pieces(dsn) if p in out]) == 0
+
+
+@pytest.mark.db
+def test_live_test_passes_and_shows_its_table_only_under_rP(
+    committed_live_db, _test_database, tmp_path
+):
+    """The live test end to end on a database that holds enough healthy rows (private schema,
+    reached through `PGOPTIONS`; the `.env` is in a temporary directory, never in the repository).
+    A pass hides what the test printed unless `-rP` asks for it — so the Owner's command carries
+    `-rsP`, and this proves that with it the table, with its denominators and its verdict, is
+    what the Owner reads."""
+    _seed_healthy(committed_live_db, 50)
+    private = {"PGOPTIONS": f"-c search_path={_CLI_SCHEMA}"}
+    env_file_text = f"DATABASE_URL={_test_database}\n"
+
+    plain = _live_test_in_a_bare_directory(
+        tmp_path, env_file_text=env_file_text, pytest_args=("-rs", "-vv"), env_extra=private
+    )
+    assert plain.returncode == 0, plain.stdout
+    assert "1 passed" in plain.stdout and "PASSED" in plain.stdout
+    assert "verdict:" not in plain.stdout  # captured: a pass shows only PASSED
+
+    shown = _live_test_in_a_bare_directory(
+        tmp_path, env_file_text=env_file_text, pytest_args=("-rsP", "-vv"), env_extra=private
+    )
+    assert shown.returncode == 0, shown.stdout
+    assert "1 passed" in shown.stdout
+    assert re.search(r"gate_result and cost_usd > 0:\s+50 / 50 proposer rows", shown.stdout)
+    assert re.search(r"triage rows with gate_result NULL:\s+0 / 100 triage rows", shown.stdout)
+    assert re.search(r"verdict:\s+ok", shown.stdout)
