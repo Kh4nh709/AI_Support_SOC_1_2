@@ -8,7 +8,7 @@
 //     opens the next window;
 //   - a window that closes with nothing waiting just ends.
 // So a burst costs two flushes (the first change, and the rest of it), and a steady stream at most one
-// per 500 ms.
+// per 500 ms. A flush never aborts a fetch that is under way: see `refresh`.
 import type { QueryClient } from "@tanstack/react-query";
 import type { LiveChange } from "./socket";
 
@@ -28,13 +28,28 @@ export function createInvalidator(client: QueryClient, windowMs = INVALIDATE_MS)
   let waiting: Waiting | null = null;
   let cancelled = false;
 
+  // Only the queries that are on screen refetch; the others are marked stale and refetch when opened.
+  //
+  // A fetch that is already under way is NOT aborted (`cancelRefetch: false`). Aborting it, TanStack's
+  // default, starves the list: with an answer slower than the window, a steady stream would abort each fetch
+  // before it landed, and nothing would show until the stream stopped. But the fetch under way started
+  // before this change, so it may not carry it: once it has landed, the query is fetched once more. That is
+  // the trailing fetch of the throttle, and it is never concurrent with the one it follows.
+  const refresh = (queryKey: readonly unknown[]) => {
+    const busy = client.isFetching({ queryKey }) > 0;
+    const settled = client.invalidateQueries({ queryKey }, { cancelRefetch: false });
+    if (!busy) return;
+    void settled.then(() => {
+      if (!cancelled) void client.invalidateQueries({ queryKey }, { cancelRefetch: false });
+    });
+  };
+
   const flush = (change: Waiting) => {
-    // Only the queries that are on screen refetch; the others are marked stale and refetch when opened.
-    void client.invalidateQueries({ queryKey: ["queue"] });
+    refresh(["queue"]);
     if (change === "many") {
-      void client.invalidateQueries({ queryKey: ["alert"] });
+      refresh(["alert"]);
     } else {
-      for (const id of change) void client.invalidateQueries({ queryKey: ["alert", id] });
+      for (const id of change) refresh(["alert", id]);
     }
   };
 

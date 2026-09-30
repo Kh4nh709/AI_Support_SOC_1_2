@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
-import { http, HttpResponse } from "msw";
+import { delay, http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { MemoryRouter, useLocation } from "react-router";
 import type { QueueResponse, QueueRow } from "../../api/tier1";
@@ -552,6 +552,33 @@ describe("real time", () => {
     expect(fetches).toBeGreaterThanOrEqual(1);
     expect(fetches).toBeLessThanOrEqual(2);
   });
+
+  // A flush used to abort the fetch under way, so with an answer slower than the 500 ms window a steady stream
+  // never let one land: the list stayed as it was until the stream stopped.
+  it("shows a slow answer while changes keep coming, and ends on the last change", async () => {
+    renderQueue();
+    await screen.findByRole("row", { name: /sshd/ });
+    let latest = -1; // the last change the server has: what a fetch that starts now will show
+    server.use(
+      http.get("/api/tier1/queue", async () => {
+        const seen = latest;
+        await delay(700); // slower than the window of the invalidator
+        return HttpResponse.json(answer([row({ description: `after change ${seen}` })]));
+      }),
+    );
+    let updatedInStream = false;
+    for (let i = 0; i < 15; i++) {
+      latest = i;
+      act(() => live().onChange([`a${i}`])); // 1.5 s of changes, 10 a second
+      await act(() => new Promise<void>((r) => setTimeout(r, 100)));
+      if (screen.queryByRole("row", { name: /after change/ })) updatedInStream = true;
+    }
+    expect(updatedInStream).toBe(true);
+    // the stream is over: the list catches up with its last change, and does not stay on an older one
+    expect(
+      await screen.findByRole("row", { name: /after change 14/ }, { timeout: 4000 }),
+    ).toBeInTheDocument();
+  }, 10_000);
 
   it("polls every 30 s while offline, and stops when the socket is live", async () => {
     vi.useFakeTimers({
