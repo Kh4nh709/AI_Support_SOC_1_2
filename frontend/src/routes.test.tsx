@@ -11,6 +11,16 @@ import type { Session } from "./auth/session";
 import { AppRoutes } from "./routes";
 import { S } from "./strings";
 
+// The case pages are real and read the backend; these tests are about the route table, so the backend
+// says "no cases" and "no case 3". A request nobody handled fails the test.
+const server = setupServer(
+  http.get("/api/tier2/cases", () => HttpResponse.json([])),
+  http.get("/api/tier2/cases/3", () => HttpResponse.json({ detail: "case not found" }, { status: 404 })),
+);
+beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
+afterEach(() => server.resetHandlers());
+afterAll(() => server.close());
+
 const session = (role: Session["role"]): Session => ({
   token: "t",
   role,
@@ -73,10 +83,18 @@ describe("the route table", () => {
     expect(where()).toBe("/alerts/12");
   });
 
-  it.each<Session["role"]>(["tier2", "admin"])("lets %s open /cases and /cases/:caseId", (role) => {
-    renderAt("/cases/3", session(role));
-    expect(where()).toBe("/cases/3");
-  });
+  it.each<Session["role"]>(["tier2", "admin"])(
+    "lets %s open /cases and /cases/:caseId",
+    async (role) => {
+      const cases = renderAt("/cases", session(role));
+      expect(where()).toBe("/cases");
+      expect(await screen.findByText(S.case.empty)).toBeInTheDocument();
+      cases.unmount();
+      renderAt("/cases/3", session(role));
+      expect(where()).toBe("/cases/3");
+      expect(await screen.findByText(S.case.notFound)).toBeInTheDocument();
+    },
+  );
 
   it.each(["/cases", "/cases/3"])(
     "turns tier1 away from %s to /queue, saying S.forbidden",
@@ -101,9 +119,10 @@ describe("the route table", () => {
     expect(screen.getByRole("status")).toHaveTextContent(S.common.loading);
   });
 
-  it("sends a signed-in visitor of /login to their home", () => {
+  it("sends a signed-in visitor of /login to their home", async () => {
     renderAt("/login", session("tier2"));
     expect(where()).toBe("/cases");
+    expect(await screen.findByText(S.case.empty)).toBeInTheDocument();
   });
 
   it("sends an unknown path to /", () => {
@@ -135,13 +154,9 @@ describe("the layout", () => {
 });
 
 describe("with the real AuthProvider", () => {
-  const server = setupServer();
-  beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
   afterEach(() => {
-    server.resetHandlers();
     sessionStorage.clear();
   });
-  afterAll(() => server.close());
 
   const later = (ms: number) => new Date(Date.now() + ms).toISOString();
 
