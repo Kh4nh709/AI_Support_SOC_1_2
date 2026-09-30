@@ -1024,3 +1024,102 @@ def test_a_concluded_case_without_a_result_is_idle_and_closed(client, db):
 
     assert body["state"] == "idle" and body["run"] is None
     assert body["case_open"] is False
+
+
+# ---------------------------------------------------------------------------
+# Rules the deleted page tests pinned that no JSON test did (P10-T13, fix round 1)
+#
+# Each was found by an in-memory mutant of `investigation_view.py` that every other test here
+# survived; each test below is red against its mutant (see the card report).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("check", [None, {}], ids=["no-check-row", "empty-check"])
+def test_without_an_evidence_check_nothing_is_presented_as_verified(client, db, check):
+    """`evidence_check` is NULL (or an empty object): the writer vouched for nothing, so no item
+    is `verified` and each says it was not cross-checked — a mark is never assumed."""
+    case_id = _make_case(db, client.user_id)
+    parsed = _result(
+        evidence=[
+            {"alert_id": "a-1", "quote": "SOME-QUOTE-HERE", "why": "w1"},
+            {"alert_id": "a-2", "quote": "OTHER-QUOTE-HERE", "why": "w2"},
+        ]
+    )
+    _insert_run(db, case_id, result=parsed, evidence_check=check)
+
+    items = _get(client, case_id).json()["run"]["evidence"]
+
+    assert [i["verified"] for i in items] == [False, False]
+    assert [i["reason_text"] for i in items] == [view.REJECT_TEXT_UNKNOWN] * 2
+
+
+@pytest.mark.parametrize(
+    ("original", "shown"),
+    [
+        ("<script>alert(1)</script>", "<script>alert(1)</script>"),
+        ("some_future_code", "some_future_code"),
+        (42, "42"),
+    ],
+    ids=["markup", "future-code", "not-a-string"],
+)
+def test_an_unknown_overruled_code_stays_verbatim_in_the_overrule_sentence(
+    client, db, original, shown
+):
+    """The label lookup has no entry for it, and the sentence still says what the model
+    proposed — the raw value, as data (the React page renders it as text). The known
+    conclusion it was lowered to keeps its label."""
+    case_id = _make_case(db, client.user_id)
+    check = {"verified": [], "rejected": [], "original_conclusion": original}
+    _insert_run(
+        db, case_id, result=_result(suggested_conclusion="need_more_data"), evidence_check=check
+    )
+
+    overruled = _get(client, case_id).json()["run"]["overruled"]
+
+    assert f"Mô hình đề xuất {shown} nhưng" in overruled
+    assert "Cần thêm dữ liệu (need_more_data)" in overruled
+    assert view.OVERRULE_NO_EVIDENCE in overruled
+
+
+@pytest.mark.parametrize(
+    ("hypothesis", "against"),
+    [
+        ({"noi_dung": "H"}, []),  # key missing
+        ({"noi_dung": "H", "evidence_against": "x"}, []),  # a string, not a list
+        ({"noi_dung": "H", "evidence_against": None}, []),
+        ({"noi_dung": "H", "evidence_against": []}, []),  # the model skipped it
+        ({"noi_dung": "H", "evidence_against": ["A1", "A2"]}, ["A1", "A2"]),
+    ],
+    ids=["missing", "string", "null", "empty", "given"],
+)
+def test_a_missing_or_malformed_evidence_against_is_an_empty_list(client, db, hypothesis, against):
+    """The React page flags an empty `evidence_against` ("không nêu bằng chứng phản bác") and
+    maps over it: the JSON always carries a list, never the raw value the model wrote."""
+    case_id = _make_case(db, client.user_id)
+    _insert_run(db, case_id, result=_result(gia_thuyet=[hypothesis]))
+
+    (hypothesis_out,) = _get(client, case_id).json()["run"]["hypotheses"]
+
+    assert hypothesis_out["evidence_against"] == against
+    assert isinstance(hypothesis_out["evidence_for"], list)
+
+
+def test_only_the_hypothesis_that_skipped_its_counter_argument_has_an_empty_list(client, db):
+    case_id = _make_case(db, client.user_id)
+    _insert_run(
+        db,
+        case_id,
+        result=_result(
+            gia_thuyet=[
+                {"noi_dung": "H-WITHOUT", "evidence_for": ["F1"], "evidence_against": []},
+                {"noi_dung": "H-WITH", "evidence_for": ["F2"], "evidence_against": ["A2"]},
+            ]
+        ),
+    )
+
+    hypotheses = _get(client, case_id).json()["run"]["hypotheses"]
+
+    assert [(h["text"], h["evidence_against"]) for h in hypotheses] == [
+        ("H-WITHOUT", []),
+        ("H-WITH", ["A2"]),
+    ]
