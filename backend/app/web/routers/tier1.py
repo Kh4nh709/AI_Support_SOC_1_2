@@ -98,12 +98,19 @@ def get_queue(
     category: str | None = None,
     agent: str | None = None,
     status: str = "queued",
+    sort: str = "risk",
+    sort_dir: Annotated[str | None, Query(alias="dir")] = None,
 ) -> dict:
     """The queue, optionally filtered (P10-T02): `band` is `low|medium|high|critical` (the risk
     band, not `severity`), `status` is `queued` (the default) or `mine` — `tier1_active` held by
     the caller. `total` is the filtered count; `counts_by_band` counts under every filter but
     `band`. An unknown `band` or `status`, or a NUL byte in a filter, is a 422. The role does not
-    change what the page shows; `claims` supplies the caller's id for `mine`."""
+    change what the page shows; `claims` supplies the caller's id for `mine`.
+
+    Sort (P10-T14, DEC-164): `sort` is `risk` (the default — the R17 order, which has no
+    direction), `time`, `occurrences` or `agent`; `dir` is `asc` or `desc` (omitted: newest, most,
+    A→Z). An unknown or empty `sort`/`dir`, or a `dir` with `risk`, is a 422; the values only
+    select a whitelisted SQL fragment in `queue.QUEUE_ORDER_BY`."""
     try:
         result = queue.list_queue(
             conn,
@@ -114,6 +121,8 @@ def get_queue(
             agent=agent,
             status=status,  # type: ignore[arg-type]  # validated by list_queue → ValueError → 422
             actor_id=claims.user_id,
+            sort=sort,
+            direction=sort_dir,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

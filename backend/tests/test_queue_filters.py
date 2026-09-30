@@ -582,3 +582,108 @@ def test_api_mine_uses_the_callers_id(db, client):
     # `status` omitted is `queued`: the waiting head, whoever asks.
     client.user_id = USER_A
     assert [r["alert_id"] for r in client.http.get("/api/tier1/queue").json()["rows"]] == [waiting]
+
+
+# ---------------------------------------------------------------------------
+# HTTP — the sort (P10-T14, DEC-164)
+# ---------------------------------------------------------------------------
+
+
+def _seed_sort_http(db) -> dict[str, str]:
+    """Three heads whose last-seen order (b, c, a), occurrence order (c, a, b) and agent order
+    (a, b, c) differ from each other; the risk order is (a, b, c)."""
+    ids = {
+        "a": _insert_alert(db, risk_score=90, agent_name="alpha"),
+        "b": _insert_alert(db, risk_score=60, agent_name="bravo"),
+        "c": _insert_alert(db, risk_score=30, agent_name="charlie"),
+    }
+    for name, hours, occ in (("a", 1, 5), ("b", 9, 1), ("c", 4, 20)):
+        _set(db, ids[name], last_seen_at=_T + timedelta(hours=hours), occurrence_count=occ)
+    return ids
+
+
+def _sorted_ids(client, **params: str) -> list[str]:
+    resp = client.http.get("/api/tier1/queue", params={"page_size": 200, **params})
+    assert resp.status_code == 200, resp.text
+    return [r["alert_id"] for r in resp.json()["rows"]]
+
+
+@pytest.mark.parametrize(
+    ("params", "expected"),
+    [
+        ({}, "abc"),
+        ({"sort": "risk"}, "abc"),
+        ({"sort": "time"}, "bca"),
+        ({"sort": "time", "dir": "desc"}, "bca"),
+        ({"sort": "time", "dir": "asc"}, "acb"),
+        ({"sort": "occurrences"}, "cab"),
+        ({"sort": "occurrences", "dir": "asc"}, "bac"),
+        ({"sort": "agent"}, "abc"),
+        ({"sort": "agent", "dir": "desc"}, "cba"),
+    ],
+)
+def test_api_sort_orders_the_rows(db, client, params, expected):
+    ids = _seed_sort_http(db)
+    assert _sorted_ids(client, **params) == [ids[name] for name in expected]
+
+
+def test_api_sort_pages_over_the_sorted_order_and_keeps_total_and_counts(db, client):
+    ids = _seed_sort_http(db)
+    first = client.http.get("/api/tier1/queue", params={"sort": "time", "page_size": 2}).json()
+    second = client.http.get(
+        "/api/tier1/queue", params={"sort": "time", "page_size": 2, "page": 2}
+    ).json()
+    assert [r["alert_id"] for r in first["rows"] + second["rows"]] == [
+        ids["b"],
+        ids["c"],
+        ids["a"],
+    ]
+    plain = client.http.get("/api/tier1/queue", params={"page_size": 2}).json()
+    for body in (first, second):
+        assert body["total"] == plain["total"] == 3
+        assert body["counts_by_band"] == plain["counts_by_band"]
+
+
+def test_api_sort_composes_with_a_filter(db, client):
+    ids = _seed_sort_http(db)
+    assert _sorted_ids(client, sort="time", agent="charlie") == [ids["c"]]
+    assert _sorted_ids(client, sort="occurrences", band="critical") == [ids["a"]]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"sort": "bogus"},
+        {"sort": ""},
+        {"sort": "TIME"},
+        {"dir": "asc"},  # `sort` omitted is `risk`, which takes no direction
+        {"dir": ""},
+        {"sort": "time", "dir": "sideways"},
+        {"sort": "time", "dir": ""},
+        {"sort": "time", "dir": "DESC"},
+        {"sort": "risk", "dir": "asc"},
+        {"sort": "risk", "dir": "desc"},
+        {"sort": "risk", "dir": ""},
+        {"sort": "triaged_count"},  # a ① column is never a key
+        {"sort": "needs_retriage"},
+        {"sort": "risk_score"},
+        {"sort": "risk; DROP TABLE alerts"},
+    ],
+)
+def test_api_sort_rejects_a_bad_value_with_422(db, client, params):
+    resp = client.http.get("/api/tier1/queue", params=params)
+    assert resp.status_code == 422, (params, resp.text)
+    detail = resp.json()["detail"]
+    assert "sort" in detail or "dir" in detail
+    assert client.http.get("/api/tier1/queue").status_code == 200  # the table is still there
+
+
+def test_api_sort_blind_rows_stay_stripped_under_every_sort(db, client):
+    blind = _insert_alert(db, risk_score=60, agent_name="alpha", suggestion_visible=False)
+    _insert_run(db, blind)
+    _set(db, blind, triaged_count=1, occurrence_count=12)
+    for params in ({}, {"sort": "time"}, {"sort": "occurrences"}, {"sort": "agent", "dir": "desc"}):
+        rows = client.http.get("/api/tier1/queue", params=params).json()["rows"]
+        row = next(r for r in rows if r["alert_id"] == blind)
+        for key in (*_HIDDEN, "triaged_count", "needs_retriage"):
+            assert key not in row, (params, key)

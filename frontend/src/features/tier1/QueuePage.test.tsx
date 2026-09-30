@@ -458,6 +458,331 @@ describe("the filters", () => {
   });
 });
 
+// P10-T14 (DEC-164): the queue sorts on the server by last seen, occurrences or agent. The three headers are
+// buttons; the sort is in the URL (`sort`, `dir`), and the default risk order is the absence of both.
+describe("the sort", () => {
+  const header = (name: string) => screen.getByRole("columnheader", { name });
+  const sortButton = (name: string) => screen.getByRole("button", { name });
+  const sortedHeaders = () =>
+    screen
+      .getAllByRole("columnheader")
+      .filter((th) => th.hasAttribute("aria-sort"))
+      .map((th) => [th.textContent, th.getAttribute("aria-sort")]);
+  const lastQuery = () => requests.at(-1)?.searchParams;
+
+  it("has a button in the header of last seen, occurrences and agent, and in no other", async () => {
+    renderQueue();
+    await screen.findByRole("row", { name: /sshd/ });
+    for (const name of [S.queue.col.lastSeen, S.queue.col.occurrences, S.queue.col.agent]) {
+      expect(within(header(name)).getByRole("button", { name })).toBeInTheDocument();
+    }
+    for (const name of [S.queue.col.band, S.queue.col.description, S.queue.col.category]) {
+      expect(within(header(name)).queryByRole("button")).toBeNull();
+    }
+    // The ① column is not a sort key: nothing derived from it can be sorted on (R17).
+    expect(within(header(S.queue.col.ai)).queryByRole("button")).toBeNull();
+  });
+
+  it("starts in the risk order: no sort or dir on the request, no aria-sort on any header", async () => {
+    renderQueue();
+    await screen.findByRole("row", { name: /sshd/ });
+    expect(lastQuery()?.has("sort")).toBe(false);
+    expect(lastQuery()?.has("dir")).toBe(false);
+    expect(sortedHeaders()).toEqual([]);
+    expect(within(screen.getByRole("table")).queryByText(S.queue.sort.asc)).toBeNull();
+    expect(within(screen.getByRole("table")).queryByText(S.queue.sort.desc)).toBeNull();
+    expect(sortButton(S.queue.sort.byRisk)).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("spells the two arrows in strings.ts", () => {
+    expect(S.queue.sort.asc).toBe("▲");
+    expect(S.queue.sort.desc).toBe("▼");
+    expect(S.queue.sort.byRisk).toBe("Sắp theo mức rủi ro");
+  });
+
+  it("sorts by last seen, newest first, on the first click: in the URL and on the request", async () => {
+    const user = userEvent.setup();
+    renderQueue();
+    await screen.findByRole("row", { name: /sshd/ });
+    await user.click(sortButton(S.queue.col.lastSeen));
+    await waitFor(() => expect(lastQuery()?.get("sort")).toBe("time"));
+    expect(lastQuery()?.get("dir")).toBe("desc");
+    expect(where()).toBe("/queue?sort=time&dir=desc");
+    await waitFor(() =>
+      expect(header(S.queue.col.lastSeen)).toHaveAttribute("aria-sort", "descending"),
+    );
+    expect(header(S.queue.col.lastSeen)).toHaveTextContent(S.queue.sort.desc);
+    expect(sortedHeaders()).toEqual([
+      [`${S.queue.col.lastSeen}${S.queue.sort.desc}`, "descending"],
+    ]);
+  });
+
+  it("sorts by occurrences, most first, and by agent, A to Z, on the first click", async () => {
+    const user = userEvent.setup();
+    renderQueue();
+    await screen.findByRole("row", { name: /sshd/ });
+    await user.click(sortButton(S.queue.col.occurrences));
+    await waitFor(() => expect(lastQuery()?.get("sort")).toBe("occurrences"));
+    expect(lastQuery()?.get("dir")).toBe("desc");
+    expect(where()).toBe("/queue?sort=occurrences&dir=desc");
+    await user.click(sortButton(S.queue.col.agent));
+    await waitFor(() => expect(lastQuery()?.get("sort")).toBe("agent"));
+    expect(lastQuery()?.get("dir")).toBe("asc");
+    expect(where()).toBe("/queue?sort=agent&dir=asc");
+    await waitFor(() =>
+      expect(header(S.queue.col.agent)).toHaveAttribute("aria-sort", "ascending"),
+    );
+    expect(header(S.queue.col.agent)).toHaveTextContent(S.queue.sort.asc);
+  });
+
+  it("reverses the direction on a second click on the same header, and back on a third", async () => {
+    const user = userEvent.setup();
+    renderQueue();
+    await screen.findByRole("row", { name: /sshd/ });
+    await user.click(sortButton(S.queue.col.lastSeen));
+    await waitFor(() => expect(lastQuery()?.get("dir")).toBe("desc"));
+    await user.click(sortButton(S.queue.col.lastSeen));
+    await waitFor(() => expect(lastQuery()?.get("dir")).toBe("asc"));
+    expect(lastQuery()?.get("sort")).toBe("time");
+    expect(where()).toBe("/queue?sort=time&dir=asc");
+    await waitFor(() =>
+      expect(header(S.queue.col.lastSeen)).toHaveAttribute("aria-sort", "ascending"),
+    );
+    expect(header(S.queue.col.lastSeen)).toHaveTextContent(S.queue.sort.asc);
+    await user.click(sortButton(S.queue.col.lastSeen));
+    await waitFor(() => expect(lastQuery()?.get("dir")).toBe("desc"));
+    expect(where()).toBe("/queue?sort=time&dir=desc");
+  });
+
+  it("marks one header at a time: another header takes the mark, in its own default direction", async () => {
+    const user = userEvent.setup();
+    renderQueue();
+    await screen.findByRole("row", { name: /sshd/ });
+    await user.click(sortButton(S.queue.col.lastSeen));
+    await user.click(sortButton(S.queue.col.lastSeen)); // ascending
+    await waitFor(() => expect(lastQuery()?.get("dir")).toBe("asc"));
+    await user.click(sortButton(S.queue.col.occurrences));
+    await waitFor(() => expect(lastQuery()?.get("sort")).toBe("occurrences"));
+    expect(lastQuery()?.get("dir")).toBe("desc"); // not the ascending of the header before
+    await waitFor(() =>
+      expect(sortedHeaders()).toEqual([
+        [`${S.queue.col.occurrences}${S.queue.sort.desc}`, "descending"],
+      ]),
+    );
+    expect(header(S.queue.col.lastSeen)).not.toHaveAttribute("aria-sort");
+  });
+
+  it("sorts from the keyboard: the header is a real button", async () => {
+    const user = userEvent.setup();
+    renderQueue();
+    await screen.findByRole("row", { name: /sshd/ });
+    sortButton(S.queue.col.agent).focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(lastQuery()?.get("sort")).toBe("agent"));
+    await user.keyboard(" ");
+    await waitFor(() => expect(lastQuery()?.get("dir")).toBe("desc"));
+  });
+
+  it("goes back to page 1 when the sort changes", async () => {
+    const user = userEvent.setup();
+    renderQueue("/queue?page=3");
+    await screen.findByRole("row", { name: /sshd/ });
+    expect(lastQuery()?.get("page")).toBe("3");
+    await user.click(sortButton(S.queue.col.lastSeen));
+    await waitFor(() => expect(lastQuery()?.get("sort")).toBe("time"));
+    expect(lastQuery()?.get("page")).toBe("1");
+    expect(where()).toBe("/queue?sort=time&dir=desc");
+  });
+
+  it("goes back to page 1 when the direction is reversed", async () => {
+    const user = userEvent.setup();
+    renderQueue("/queue?sort=agent&dir=asc&page=4");
+    await screen.findByRole("row", { name: /sshd/ });
+    expect(lastQuery()?.get("page")).toBe("4");
+    await user.click(sortButton(S.queue.col.agent));
+    await waitFor(() => expect(lastQuery()?.get("dir")).toBe("desc"));
+    expect(lastQuery()?.get("page")).toBe("1");
+    expect(where()).toBe("/queue?sort=agent&dir=desc");
+  });
+
+  it("is read from the URL on load, with the filters and the page, and the header shows it", async () => {
+    renderQueue("/queue?band=critical&agent=srv&status=mine&sort=occurrences&dir=asc&page=2");
+    await screen.findByRole("row", { name: /sshd/ });
+    expect(Object.fromEntries(requests[0]?.searchParams ?? [])).toEqual({
+      page: "2",
+      page_size: "50",
+      band: "critical",
+      agent: "srv",
+      status: "mine",
+      sort: "occurrences",
+      dir: "asc",
+    });
+    expect(header(S.queue.col.occurrences)).toHaveAttribute("aria-sort", "ascending");
+    expect(sortButton(S.queue.sort.byRisk)).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("takes a key with no direction as its default direction", async () => {
+    renderQueue("/queue?sort=time");
+    await screen.findByRole("row", { name: /sshd/ });
+    expect(requests[0]?.searchParams.get("sort")).toBe("time");
+    expect(requests[0]?.searchParams.get("dir")).toBe("desc");
+    expect(header(S.queue.col.lastSeen)).toHaveAttribute("aria-sort", "descending");
+  });
+
+  it("ignores a sort or a direction in the URL that the UI does not know: the server would say 422", async () => {
+    for (const search of [
+      "sort=risk_score&dir=up",
+      "sort=risk&dir=asc",
+      "sort=triaged_count",
+      "sort=&dir=",
+      "dir=asc",
+    ]) {
+      const { unmount } = renderQueue(`/queue?${search}`);
+      await screen.findByRole("row", { name: /sshd/ });
+      expect([...(requests.at(-1)?.searchParams.keys() ?? [])].sort()).toEqual([
+        "page",
+        "page_size",
+      ]);
+      expect(sortedHeaders()).toEqual([]);
+      unmount();
+    }
+  });
+
+  it("keeps the sort when a filter changes, and starts that filter from page 1", async () => {
+    const user = userEvent.setup();
+    renderQueue("/queue?sort=agent&dir=desc&page=3");
+    await screen.findByRole("row", { name: /sshd/ });
+    await user.click(screen.getByRole("button", { name: "Cao 2" }));
+    await waitFor(() => expect(lastQuery()?.get("band")).toBe("high"));
+    expect(lastQuery()?.get("sort")).toBe("agent");
+    expect(lastQuery()?.get("dir")).toBe("desc");
+    expect(lastQuery()?.get("page")).toBe("1");
+    expect(where()).toBe("/queue?band=high&sort=agent&dir=desc");
+    await user.click(screen.getByRole("button", { name: S.queue.filter.clear }));
+    await waitFor(() => expect(lastQuery()?.has("band")).toBe(false));
+    expect(where()).toBe("/queue?sort=agent&dir=desc"); // 'Xoá bộ lọc' clears filters, not the order
+  });
+
+  it("keeps the filters when the sort changes", async () => {
+    const user = userEvent.setup();
+    renderQueue("/queue?band=high&category=web&status=mine");
+    await screen.findByRole("row", { name: /sshd/ });
+    await user.click(sortButton(S.queue.col.lastSeen));
+    await waitFor(() => expect(lastQuery()?.get("sort")).toBe("time"));
+    expect(lastQuery()?.get("band")).toBe("high");
+    expect(lastQuery()?.get("category")).toBe("web");
+    expect(lastQuery()?.get("status")).toBe("mine");
+    expect(where()).toBe("/queue?band=high&category=web&status=mine&sort=time&dir=desc");
+  });
+
+  it("keeps the sort in the links of the pages", async () => {
+    respond = () => HttpResponse.json(answer([row()], { total: 120 }));
+    renderQueue("/queue?band=high&sort=time&dir=asc");
+    await screen.findByRole("row", { name: /sshd/ });
+    const nav = screen.getByRole("navigation", { name: S.queue.pagination });
+    expect(within(nav).getByRole("link", { name: S.common.next })).toHaveAttribute(
+      "href",
+      "/queue?band=high&sort=time&dir=asc&page=2",
+    );
+    expect(within(nav).getByRole("link", { name: S.queue.page(3) })).toHaveAttribute(
+      "href",
+      "/queue?band=high&sort=time&dir=asc&page=3",
+    );
+  });
+
+  it("goes back to the risk order from 'Sắp theo mức rủi ro': neither sort nor dir, page 1", async () => {
+    const user = userEvent.setup();
+    renderQueue("/queue?band=high&sort=agent&dir=desc&page=2");
+    await screen.findByRole("row", { name: /sshd/ });
+    expect(sortButton(S.queue.sort.byRisk)).toHaveAttribute("aria-pressed", "false");
+    await user.click(sortButton(S.queue.sort.byRisk));
+    await waitFor(() => expect(lastQuery()?.has("sort")).toBe(false));
+    expect(lastQuery()?.has("dir")).toBe(false);
+    expect(lastQuery()?.get("band")).toBe("high"); // the filters stay
+    expect(lastQuery()?.get("page")).toBe("1");
+    expect(where()).toBe("/queue?band=high");
+    await waitFor(() => expect(sortedHeaders()).toEqual([]));
+    expect(sortButton(S.queue.sort.byRisk)).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("does nothing when 'Sắp theo mức rủi ro' is pressed in the risk order", async () => {
+    const user = userEvent.setup();
+    renderQueue("/queue?page=3");
+    await screen.findByRole("row", { name: /sshd/ });
+    const before = requests.length;
+    await user.click(sortButton(S.queue.sort.byRisk));
+    expect(where()).toBe("/queue?page=3");
+    expect(requests).toHaveLength(before);
+  });
+
+  // The query key holds the sort, so the live layer's invalidation of ["queue"] fetches the sorted page again.
+  it("keeps the sort when a change arrives and the queue is fetched again", async () => {
+    const user = userEvent.setup();
+    renderQueue();
+    await screen.findByRole("row", { name: /sshd/ });
+    await user.click(sortButton(S.queue.col.lastSeen));
+    await waitFor(() => expect(lastQuery()?.get("sort")).toBe("time"));
+    const before = requests.length;
+    respond = () =>
+      HttpResponse.json(answer([row(), row({ alert_id: "a2", description: "new arrival" })]));
+    act(() => live().onChange(["a2"]));
+    expect(await screen.findByRole("row", { name: /new arrival/ })).toBeInTheDocument();
+    expect(requests.length).toBeGreaterThan(before);
+    for (const url of requests.slice(before)) {
+      expect(url.searchParams.get("sort")).toBe("time");
+      expect(url.searchParams.get("dir")).toBe("desc");
+    }
+    expect(where()).toBe("/queue?sort=time&dir=desc");
+    expect(header(S.queue.col.lastSeen)).toHaveAttribute("aria-sort", "descending");
+  });
+
+  it("keeps the sort in the resync of a socket that comes up", async () => {
+    const user = userEvent.setup();
+    renderQueue("/queue?sort=occurrences&dir=asc");
+    await screen.findByRole("row", { name: /sshd/ });
+    const before = requests.length;
+    act(() => live().onStatus("live"));
+    await waitFor(() => expect(requests.length).toBeGreaterThan(before));
+    for (const url of requests.slice(before)) {
+      expect(url.searchParams.get("sort")).toBe("occurrences");
+      expect(url.searchParams.get("dir")).toBe("asc");
+    }
+    // and a header click after a live refetch still reverses from what the URL says
+    await user.click(sortButton(S.queue.col.occurrences));
+    await waitFor(() => expect(lastQuery()?.get("dir")).toBe("desc"));
+    expect(where()).toBe("/queue?sort=occurrences&dir=desc");
+  });
+
+  it("shows the rows in the order the server sent them: the page does not sort them itself", async () => {
+    respond = (url) =>
+      HttpResponse.json(
+        answer(
+          url.searchParams.get("sort") === "agent"
+            ? [
+                row({ alert_id: "z", description: "second by risk", agent_name: "alpha" }),
+                row({ alert_id: "y", description: "first by risk", agent_name: "beta" }),
+              ]
+            : [
+                row({ alert_id: "y", description: "first by risk", agent_name: "beta" }),
+                row({ alert_id: "z", description: "second by risk", agent_name: "alpha" }),
+              ],
+        ),
+      );
+    const user = userEvent.setup();
+    renderQueue();
+    await screen.findByRole("row", { name: /first by risk/ });
+    const order = () =>
+      screen
+        .getAllByRole("row")
+        .slice(1)
+        .map((r) => cells(r)[3]?.textContent);
+    expect(order()).toEqual(["beta", "alpha"]);
+    await user.click(sortButton(S.queue.col.agent));
+    // the page does not sort the rows itself: what the server sent is the order
+    await waitFor(() => expect(order()).toEqual(["alpha", "beta"]));
+  });
+});
+
 describe("the pages", () => {
   const many = () => HttpResponse.json(answer([row()], { total: 120, page: 2, page_size: 50 }));
 
@@ -691,6 +1016,24 @@ describe("accessibility", () => {
     const narrowed = renderQueue("/queue?category=nothing");
     expect(await screen.findByText(S.queue.noMatch)).toBeInTheDocument();
     expect(await violationsIn(narrowed.container)).toEqual([]);
+  });
+
+  it("has none with a sort on: the header buttons, the mark, aria-sort and 'Sắp theo mức rủi ro'", async () => {
+    const user = userEvent.setup();
+    const { container } = renderQueue("/queue?sort=agent&dir=asc");
+    await screen.findByRole("row", { name: /sshd/ });
+    expect(await violationsIn(container)).toEqual([]);
+    await user.click(screen.getByRole("button", { name: S.queue.col.agent })); // now descending
+    await waitFor(() =>
+      expect(screen.getByRole("columnheader", { name: S.queue.col.agent })).toHaveAttribute(
+        "aria-sort",
+        "descending",
+      ),
+    );
+    expect(await violationsIn(container)).toEqual([]);
+    await user.click(screen.getByRole("button", { name: S.queue.sort.byRisk }));
+    await waitFor(() => expect(where()).toBe("/queue"));
+    expect(await violationsIn(container)).toEqual([]);
   });
 
   it("has none in the error state", async () => {

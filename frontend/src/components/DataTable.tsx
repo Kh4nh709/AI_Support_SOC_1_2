@@ -9,6 +9,8 @@ export type Column<T> = {
   cell: (row: T) => ReactNode;
   /** Extra classes of the column's cells, e.g. `text-right` for a number. */
   className?: string;
+  /** Set on the one column the rows are sorted by (its `<th>` gets `aria-sort`); left out on every other. */
+  ariaSort?: "ascending" | "descending";
 };
 
 export function DataTable<T>({
@@ -39,6 +41,7 @@ export function DataTable<T>({
               <th
                 key={column.id}
                 scope="col"
+                aria-sort={column.ariaSort}
                 className={`px-3 py-2 font-medium ${column.className ?? ""}`}
               >
                 {column.header}

@@ -51,4 +51,16 @@ describe("DataTable", () => {
     expect(container.querySelector("img")).toBeNull();
     expect(screen.getByText("<img src=x onerror=alert(1)>")).toBeInTheDocument();
   });
+
+  // P10-T14: a page that sorts marks its sorted column; a column that says nothing has no aria-sort at all.
+  it("puts aria-sort on the header of a column that names one, and on no other", () => {
+    const sorted: Column<Item>[] = [
+      { id: "name", header: "Tên", cell: (r) => r.name },
+      { id: "n", header: "Số", cell: (r) => r.n, ariaSort: "descending" },
+    ];
+    render(<DataTable label="x" columns={sorted} rows={rows} rowKey={(r) => r.id} />);
+    const [name, n] = screen.getAllByRole("columnheader");
+    expect(name).not.toHaveAttribute("aria-sort");
+    expect(n).toHaveAttribute("aria-sort", "descending");
+  });
 });

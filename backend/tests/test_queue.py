@@ -18,6 +18,7 @@ import dataclasses
 import hashlib
 import itertools
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -34,7 +35,7 @@ from app.domain.transitions import (
 )
 from app.ingest.wazuh_parser import parse_wazuh_alert
 from app.kb.lookup import get_playbook
-from app.tier1 import visibility
+from app.tier1 import queue, visibility
 from app.tier1.queue import (
     PAGE_SIZE_DEFAULT,
     PAGE_SIZE_MAX,
@@ -199,12 +200,13 @@ def _insert_run(
     return str(row[0])
 
 
-def _all_rows(conn: psycopg.Connection) -> list[dict]:
-    """Every queue row, paging through with the maximum page size."""
+def _all_rows(conn: psycopg.Connection, **kwargs: Any) -> list[dict]:
+    """Every queue row, paging through with the maximum page size (`kwargs` are `list_queue`'s:
+    the sort, P10-T14)."""
     rows: list[dict] = []
     page = 1
     while True:
-        result = list_queue(conn, page=page, page_size=PAGE_SIZE_MAX)
+        result = list_queue(conn, page=page, page_size=PAGE_SIZE_MAX, **kwargs)
         rows.extend(result.rows)
         if len(rows) >= result.total or not result.rows:
             return rows
@@ -316,9 +318,9 @@ def _retriage_head(conn: psycopg.Connection, *, risk_score: int, suggestion_visi
     return alert_id
 
 
-def _order(conn: psycopg.Connection, *alert_ids: str) -> list[dict]:
-    """The queue rows for `alert_ids`, in queue order."""
-    return [row for row in _all_rows(conn) if row["alert_id"] in set(alert_ids)]
+def _order(conn: psycopg.Connection, *alert_ids: str, **kwargs: Any) -> list[dict]:
+    """The queue rows for `alert_ids`, in queue order (`kwargs`: `list_queue`'s sort)."""
+    return [row for row in _all_rows(conn, **kwargs) if row["alert_id"] in set(alert_ids)]
 
 
 @pytest.mark.db
@@ -560,6 +562,289 @@ def test_queue_page_size_clamped_and_invalid_rejected(db):
     assert list_queue(db, page_size=10_000).page_size == PAGE_SIZE_MAX
     assert list_queue(db).page_size == PAGE_SIZE_DEFAULT
     assert list_queue(db, page_size=7).page_size == 7
+
+
+# ---------------------------------------------------------------------------
+# list_queue — the sort (P10-T14, DEC-164)
+# ---------------------------------------------------------------------------
+
+
+def _sort_head(
+    conn: psycopg.Connection,
+    alert_id: str,
+    *,
+    agent: str = "alpha",
+    last_seen_h: int = 1,
+    occ: int = 1,
+    risk: int | None = 50,
+    first_seen_min: int = 0,
+    triaged: int = 0,
+    visible: bool = True,
+) -> str:
+    """A queued head with every sort column set explicitly (hours/minutes after `_T`).
+    `last_seen_at` must not precede `first_seen_at` (`ck_alerts_last_seen_khong_lui`): keep
+    `last_seen_h * 60 >= first_seen_min`."""
+    _queued(conn, alert_id=alert_id, risk_score=risk, agent_name=agent, suggestion_visible=visible)
+    _set(
+        conn,
+        alert_id,
+        last_seen_at=_T + timedelta(hours=last_seen_h),
+        occurrence_count=occ,
+        first_seen_at=_T + timedelta(minutes=first_seen_min),
+        triaged_count=triaged,
+    )
+    return alert_id
+
+
+#: name: (agent, last_seen h, occurrences, risk, first_seen min). Every key has ties on purpose:
+#: n3/n4/n5/n6 share `last_seen`; n2/n4, n5/n6 and n1/n3 share `occurrences`; n5/n6 tie on
+#: everything but the agent, so only the final `alert_id` tie-breaker orders them under `time`
+#: and `occurrences`.
+_SORT_SEED = {
+    "n1": ("alpha", 5, 3, 10, 5),
+    "n2": ("bravo", 1, 30, 90, 4),
+    "n3": ("charlie", 3, 3, 50, 3),
+    "n4": ("charlie", 3, 30, 80, 2),
+    "n5": ("alpha", 3, 12, 50, 1),
+    "n6": ("bravo", 3, 12, 50, 1),
+}
+
+
+def _seed_sortable(conn: psycopg.Connection) -> dict[str, str]:
+    """`_SORT_SEED` inserted in an order unlike any expected one (n6 first), so a missing final
+    tie-breaker shows as arrival order. Returns name -> alert_id."""
+    ids: dict[str, str] = {}
+    for name in ("n6", "n2", "n4", "n1", "n5", "n3"):
+        agent, last_seen_h, occ, risk, first_seen_min = _SORT_SEED[name]
+        ids[name] = _sort_head(
+            conn,
+            f"p10t14-{name}",
+            agent=agent,
+            last_seen_h=last_seen_h,
+            occ=occ,
+            risk=risk,
+            first_seen_min=first_seen_min,
+        )
+    return ids
+
+
+# (sort, dir, expected order). A tie on the sort key falls to risk DESC, first_seen ASC, alert_id
+# ASC — in that direction whatever `dir` is (n3/n4/n5/n6 keep n4, n5, n6, n3 both ways).
+_SORT_CASES = [
+    ("time", None, ["n1", "n4", "n5", "n6", "n3", "n2"]),
+    ("time", "desc", ["n1", "n4", "n5", "n6", "n3", "n2"]),
+    ("time", "asc", ["n2", "n4", "n5", "n6", "n3", "n1"]),
+    ("occurrences", None, ["n2", "n4", "n5", "n6", "n3", "n1"]),
+    ("occurrences", "desc", ["n2", "n4", "n5", "n6", "n3", "n1"]),
+    ("occurrences", "asc", ["n3", "n1", "n5", "n6", "n2", "n4"]),
+    ("agent", None, ["n5", "n1", "n2", "n6", "n4", "n3"]),
+    ("agent", "asc", ["n5", "n1", "n2", "n6", "n4", "n3"]),
+    ("agent", "desc", ["n4", "n3", "n2", "n6", "n5", "n1"]),
+]
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(("sort", "direction", "expected"), _SORT_CASES)
+def test_queue_sort_orders_each_key_in_both_directions(db, sort, direction, expected):
+    ids = _seed_sortable(db)
+
+    rows = _order(db, *ids.values(), sort=sort, direction=direction)
+
+    assert [row["alert_id"] for row in rows] == [ids[name] for name in expected]
+
+
+@pytest.mark.db
+def test_queue_sort_ties_break_by_risk_then_first_seen_then_id_and_paging_is_stable(db):
+    """Nine heads equal on every column but the id, inserted in descending id order: whatever
+    the key, the only thing that can order them is `alert_id ASC`, and page 1 + 2 + 3 must be
+    that same order with no head twice or missing (OFFSET paging over a total order)."""
+    ids = [f"p10t14-tie{i}" for i in range(9)]
+    for alert_id in reversed(ids):
+        _sort_head(db, alert_id, agent="alpha", last_seen_h=2, occ=7, risk=40, first_seen_min=1)
+
+    for sort, direction in (("time", None), ("occurrences", "asc"), ("agent", "desc")):
+        pages = [
+            list_queue(db, page=n, page_size=4, sort=sort, direction=direction) for n in (1, 2, 3)
+        ]
+        listed = [row["alert_id"] for p in pages for row in p.rows]
+        assert [alert_id for alert_id in listed if alert_id in set(ids)] == ids, (sort, direction)
+        assert len(listed) == len(set(listed)), (sort, direction)  # no head on two pages
+        assert len(pages[0].rows) == len(pages[1].rows) == 4
+        assert pages[0].total == pages[1].total == pages[2].total
+
+
+@pytest.mark.db
+def test_queue_sort_risk_is_the_default_and_takes_no_direction(db):
+    """`sort` omitted, `sort="risk"` and today's call return the same order, and it is today's:
+    `needs_retriage` first (visible heads only), then risk DESC NULLS LAST, then first_seen ASC."""
+    retriage = _sort_head(db, "p10t14-r1", risk=5, occ=12, triaged=1)
+    high = _sort_head(db, "p10t14-r2", risk=90, first_seen_min=2)
+    high_later = _sort_head(db, "p10t14-r3", risk=90, first_seen_min=3)
+    low = _sort_head(db, "p10t14-r4", risk=20)
+    unscored = _sort_head(db, "p10t14-r5", risk=None)
+    mine = (retriage, high, high_later, low, unscored)
+
+    expected = [retriage, high, high_later, low, unscored]
+    assert [r["alert_id"] for r in _order(db, *mine)] == expected
+    assert [r["alert_id"] for r in _order(db, *mine, sort="risk")] == expected
+    assert [r["alert_id"] for r in _order(db, *mine, sort="risk", direction=None)] == expected
+
+
+@pytest.mark.db
+def test_queue_sort_risk_blind_retriage_head_still_does_not_jump(db):
+    """R17 under the explicit `sort="risk"` and the omitted one: a blind head ① has triaged once
+    (`triaged_count` 1) that grew to 12 occurrences stays where its risk puts it."""
+    blind = _sort_head(db, "p10t14-b1", risk=5, occ=12, triaged=1, visible=False)
+    higher_risk = _sort_head(db, "p10t14-b2", risk=90, visible=False)
+
+    for kwargs in ({}, {"sort": "risk"}):
+        assert [r["alert_id"] for r in _order(db, blind, higher_risk, **kwargs)] == [
+            higher_risk,
+            blind,
+        ], kwargs
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("sort", ["time", "occurrences", "agent"])
+def test_queue_sort_blind_head_does_not_move_when_triaged_count_changes(db, sort):
+    """DEC-101/R17: ① is the only first-time writer of `triaged_count`. On a blind head, ① running
+    (`triaged_count` 0 → 1, which makes 12 occurrences `needs_retriage`) must not change its
+    position under any key. x sits in the middle of every default order."""
+    top = _sort_head(db, "p10t14-y", agent="alpha", last_seen_h=3, occ=50, visible=False)
+    x = _sort_head(db, "p10t14-x", agent="bravo", last_seen_h=2, occ=12, visible=False)
+    bottom = _sort_head(db, "p10t14-z", agent="charlie", last_seen_h=1, occ=5, visible=False)
+
+    def positions() -> list[str]:
+        return [r["alert_id"] for r in _order(db, top, x, bottom, sort=sort)]
+
+    assert positions() == [top, x, bottom]
+    for triaged in (1, 2, 12):
+        _set(db, x, triaged_count=triaged)
+        assert positions() == [top, x, bottom], (sort, triaged)
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("sort", ["time", "occurrences", "agent"])
+def test_queue_sort_needs_retriage_plays_no_part_even_on_the_visible_arm(db, sort):
+    """`needs_retriage` leads the risk order only. Under another key a visible ⟳ head sorts where
+    the key puts it, not first."""
+    top = _sort_head(db, "p10t14-vy", agent="alpha", last_seen_h=3, occ=50)
+    x = _sort_head(db, "p10t14-vx", agent="bravo", last_seen_h=2, occ=12, triaged=1)
+    bottom = _sort_head(db, "p10t14-vz", agent="charlie", last_seen_h=1, occ=5)
+
+    rows = _order(db, top, x, bottom, sort=sort)
+
+    assert [r["alert_id"] for r in rows] == [top, x, bottom]
+    assert rows[1]["needs_retriage"] is True  # the flag is still shown; it just does not order
+
+
+@pytest.mark.db
+def test_queue_sort_leaves_total_and_counts_by_band_alone(db):
+    _sort_head(db, "p10t14-c1", risk=90, occ=3)
+    _sort_head(db, "p10t14-c2", risk=60, occ=9)
+    _sort_head(db, "p10t14-c3", risk=10, occ=1)
+
+    plain = list_queue(db, page_size=2)
+    for sort, direction in (("time", None), ("occurrences", "asc"), ("agent", "desc")):
+        sorted_page = list_queue(db, page_size=2, sort=sort, direction=direction)
+        assert sorted_page.total == plain.total
+        assert sorted_page.counts_by_band == plain.counts_by_band
+        assert (sorted_page.page, sorted_page.page_size) == (plain.page, plain.page_size)
+        assert len(sorted_page.rows) == len(plain.rows)
+
+
+@pytest.mark.db
+def test_queue_sort_composes_with_the_filters(db):
+    high_new = _sort_head(db, "p10t14-f1", risk=80, last_seen_h=4)
+    high_old = _sort_head(db, "p10t14-f2", risk=80, last_seen_h=1)
+    low = _sort_head(db, "p10t14-f3", risk=5, last_seen_h=9)
+
+    page = list_queue(db, band="critical", sort="time", direction="asc")
+
+    assert [r["alert_id"] for r in page.rows if r["alert_id"] in {high_new, high_old}] == [
+        high_old,
+        high_new,
+    ]
+    assert low not in [r["alert_id"] for r in page.rows]
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    ("sort", "direction"),
+    [
+        ("bogus", None),
+        ("", None),
+        ("Time", None),
+        ("time ", None),
+        ("risk; DROP TABLE alerts; --", None),
+        ("time", "sideways"),
+        ("time", ""),
+        ("time", "ASC"),
+        ("occurrences", "asc; --"),
+        ("risk", "asc"),
+        ("risk", "desc"),
+        ("risk", ""),
+    ],
+)
+def test_queue_sort_refuses_an_unknown_value_or_a_direction_on_risk(db, sort, direction):
+    with pytest.raises(ValueError, match="sort|dir"):
+        list_queue(db, sort=sort, direction=direction)
+    assert list_queue(db).total >= 0  # the table is still there and the connection usable
+
+
+# --- the whitelist (no database) --------------------------------------------------------------
+
+
+def test_queue_sort_whitelist_keys_are_exactly_the_four_and_none_reads_the_suggestion():
+    """DEC-164 / DEC-101: the sort keys are `{risk, time, occurrences, agent}` and nothing else.
+    A field ① writes or derives (`triaged_count`, `needs_retriage`, `triage_status`, the
+    suggestion, its confidence, the gate) is never a key, so a row's position never says ①
+    ran. `risk` is the one order that carries `needs_retriage`, and only through the
+    visible-or-decided guard (`_NEEDS_RETRIAGE_SORT_SQL`)."""
+    table = queue.QUEUE_ORDER_BY
+    assert {sort for sort, _direction in table} == {"risk", "time", "occurrences", "agent"}
+    assert set(table) == {
+        ("risk", None),
+        ("time", "asc"),
+        ("time", "desc"),
+        ("occurrences", "asc"),
+        ("occurrences", "desc"),
+        ("agent", "asc"),
+        ("agent", "desc"),
+    }
+
+    assert table[("risk", None)] == (
+        f"{queue._NEEDS_RETRIAGE_SORT_SQL} DESC, a.risk_score DESC NULLS LAST, a.first_seen_at ASC"
+    )
+    allowed = {
+        "last_seen_at",
+        "occurrence_count",
+        "agent_name",
+        "risk_score",
+        "first_seen_at",
+        "alert_id",
+    }
+    for (sort, direction), fragment in table.items():
+        if sort == "risk":
+            continue
+        columns = set(re.findall(r"\ba\.(\w+)", fragment))
+        assert columns <= allowed, (sort, direction, columns)
+        assert "%(" not in fragment and "{" not in fragment, (sort, direction)
+        assert not re.search(r"\br\.|llm_runs|triage|suggest|confidence|gate", fragment)
+        assert fragment.endswith(
+            "a.risk_score DESC NULLS LAST, a.first_seen_at ASC, a.alert_id ASC"
+        )
+
+
+def test_queue_sort_defaults_and_fragments_match_the_contract():
+    assert queue.SORT_DEFAULT_DIR == {"time": "desc", "occurrences": "desc", "agent": "asc"}
+    table = queue.QUEUE_ORDER_BY
+    assert table[("time", "desc")].startswith("a.last_seen_at DESC NULLS LAST, ")
+    assert table[("time", "asc")].startswith("a.last_seen_at ASC NULLS LAST, ")
+    assert table[("occurrences", "desc")].startswith("a.occurrence_count DESC, ")
+    assert table[("occurrences", "asc")].startswith("a.occurrence_count ASC, ")
+    assert table[("agent", "asc")].startswith("a.agent_name ASC NULLS LAST, ")
+    assert table[("agent", "desc")].startswith("a.agent_name DESC NULLS LAST, ")
 
 
 # ---------------------------------------------------------------------------
