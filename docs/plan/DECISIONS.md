@@ -2898,3 +2898,45 @@ Decision:
      - Persistence-style alerts currently resolve to another category or to `unknown`.
      - The signed choice (i) stands, to be implemented after submission, with its own table signing.
 Supersedes: nothing
+
+## DEC-156 · 2026-09-30 · P3-T11 is dispatched on the Owner's word, amended to fit the live system: the live proof becomes a read-only check of the rows the production worker already wrote, with no new model call; `llm/` is deleted as carded
+Scope: **plan** (a 20/09 card that no longer matches the database) · **evaluation validity** (the pilot's queue must not be touched)
+Decided by: **the Owner** (*"oke tiếp tục lm P3-T11"*, 30/09, after the Director offered cut or build) for the dispatch; **the Director** for the amendment
+Drafted by: Director (Opus 5.5)
+Propagated to: `STATE.md` (P3-T11 → `in-progress`, dispatch note) · the Coder's dispatch prompt (this entry is its amendment) · `docs/limitations.md` at P8-T06 (the schema-stop figure below)
+Decision:
+  1. **Why the card cannot run as written.** It was written on 20/09, when the worker was off and `soc_dev` held a replay corpus. The Director read the live database on 30/09 at 08:xx, read-only:
+     - `alerts` holds only `wazuh` 12,321 and `lab` 736. **There is no `replay` alert**, since the lab rebuild of 25/09.
+     - `jobs` holds **no pending `triage` job**: 851 succeeded, 0 failed.
+     - The compose worker is running and claims every new `triage` job. Design note 1's loop (`run_forever(once=True)` over the real queue) would race it. Each claim would also be paid, and would change what the pilot sees.
+  2. **The exit-gate fact is already on the table, written by production.**
+     - ① has run live on **851** alert heads: `wazuh` 721, `lab` 130. Every proposer row carries `gate_result` and `cost_usd > 0`.
+     - `llm_runs` has 0 rows with `gate_result IS NULL` (G11).
+     - 0 `false_positive` survives with a non-empty `gate_result->'missing'`.
+     - Total cost is ≈ $0.50.
+     - **122 of 851 proposer runs (14.3 %) stopped with `stopped_by = 'schema'`.** Those rows have a NULL `result` and no verifier row; the queue shows them as *chưa có*. This goes into `docs/limitations.md` at P8-T06.
+  3. **Amended scope**, replacing design notes 1, 4, 5 and 7 and acceptance items 1, 3 and 9. Notes 2, 3 and 6 stand where they still apply.
+     - **`eval/triage_live.py`: a read-only check.** `check_live(conn, *, want=50) -> LiveSummary` plus a CLI (`--env-file`, default `.env`; `--dsn`, never printed; `--want`, default 50).
+       - It opens its session **read-only** and makes **no model call**. It imports no LLM adapter.
+       - It prints the facts with their denominators: heads by source; proposer rows by alert source; rows carrying `gate_result` and `cost_usd`; `gate_result IS NULL` (any role); `cost_usd IS NULL`; FP-with-missing; triage jobs by status; `stopped_by` counts; `suggested_action` counts; forced count; verifier rows; the cost sum; the first and last run times.
+       - It prints one JSON line and a short table.
+       - **Exit codes.**
+         - `0` only when all of these hold: proposer rows with `gate_result IS NOT NULL AND cost_usd > 0` ≥ `want`; no triage row with `gate_result IS NULL`; no triage row with `cost_usd IS NULL`; FP-with-missing = 0; `failed` triage jobs = 0.
+         - `1` otherwise, naming each failed condition.
+         - `2` when there is no `DATABASE_URL` or the connection fails, with a message that never carries the DSN.
+     - **`backend/tests/test_triage_live.py`.**
+       - The `@pytest.mark.live` test reads `config.load(env_file=".env")` by explicit name (DEC-047).
+       - It **skips** when `.env` or `DATABASE_URL` is absent, with a reason containing `the Owner runs this`.
+       - It opens its own read-only connection, never the `db` fixture, and asserts `check_live(conn, want=50)` passes.
+       - The `@pytest.mark.db` tests on the Coder's own `_test` database cover each exit condition, each with a demonstrated red step, and the read-only session.
+       - The CLI's exit 2 is tested without a DSN in the output.
+       - The skip is proved by a subprocess run in a directory with no `.env`.
+       - If a database CHECK makes a failing state impossible to seed, the report says so and proves that branch by mutating the check instead.
+     - **`git rm -r llm/`, as carded.** Nothing imports it: the Director found only historical comments and one `superseded.yaml` pattern.
+     - **The Owner's procedure after merge** runs from the primary checkout:
+       - `PYTHONPATH=backend .venv/bin/python -m pytest -c backend/pyproject.toml -m live backend/tests/test_triage_live.py -rs -vv`
+       - `PYTHONPATH=backend .venv/bin/python eval/triage_live.py`
+
+       Both are read-only and cost nothing. The Director may run the CLI too, under the same read-only rule as its other live reads.
+  4. **What this does not claim.** It proves that the gate and cost fields are written on every live ① run, on real alerts. It does not re-measure ①'s quality, which is P7's frozen measurement.
+Supersedes: design notes 1, 4, 5 and 7 and acceptance items 1, 3 and 9 of `tasks/P3/P3-T11.prompt.md` (20/09)
