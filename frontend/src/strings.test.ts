@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MIN_QUOTE_CHARS, S, labelOf } from "./strings";
+import { MIN_QUOTE_CHARS, S, bandCodeOf, labelOf } from "./strings";
 
 it("names the two Tier-1 closing decisions, escalate and reopen", () => {
   expect(S.decision.falsePositive).toBe("Đóng — dương tính giả");
@@ -37,6 +37,37 @@ it("keeps the scope note of a confirmed incident beside the conclusion", () => {
 it("labels the four risk bands, the column 'Mức' is risk_band and not severity", () => {
   expect(Object.keys(S.band).sort()).toEqual(["critical", "high", "low", "medium"]);
   expect(S.queue.col.band).toBe("Mức");
+});
+
+// Ruling R8/R13: the server's `risk_band` is a Vietnamese label (`tier2.case_view._BAND_LABELS`), and
+// one table pairs it with the code the colours are keyed by.
+it("words the four risk bands as the server does: Thấp, Vừa, Cao, Rất cao", () => {
+  expect(S.band).toEqual({ critical: "Rất cao", high: "Cao", medium: "Vừa", low: "Thấp" });
+});
+
+it("reads the band code of a server label, and of nothing else", () => {
+  expect(bandCodeOf("Thấp")).toBe("low");
+  expect(bandCodeOf("Vừa")).toBe("medium");
+  expect(bandCodeOf("Cao")).toBe("high");
+  expect(bandCodeOf("Rất cao")).toBe("critical");
+  for (const code of Object.keys(S.band) as (keyof typeof S.band)[]) {
+    expect(bandCodeOf(S.band[code])).toBe(code);
+  }
+  // The old labels of the band table, the codes themselves, other words and non-strings are unknown.
+  for (const other of ["Nghiêm trọng", "Trung bình", "critical", "high", "", "cao", "toString"]) {
+    expect(bandCodeOf(other), other).toBeNull();
+  }
+  for (const nothing of [null, undefined, 3, {}, ["Cao"]]) expect(bandCodeOf(nothing)).toBeNull();
+});
+
+it("keeps the words of `severity` apart from the words of the risk band", () => {
+  expect(S.severity).toEqual({
+    critical: "Nghiêm trọng",
+    high: "Cao",
+    medium: "Trung bình",
+    low: "Thấp",
+  });
+  expect(S.severity.critical).not.toBe(S.band.critical);
 });
 
 it("labels every alert status the Jinja page labelled", () => {
