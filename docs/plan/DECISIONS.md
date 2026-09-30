@@ -2884,3 +2884,17 @@ Decision:
      - A crash between the last attempt's commit and `finish_job` can make one uncosted call.
      - The shell stays on "Đang tải…" if its load returns 403, 404 or 500.
 Supersedes: nothing
+
+## DEC-155 · 2026-09-30 · The `persistence` category (DEC-145 item 4, §13 option i) is deferred until after the 02/10 submission by the Owner's choice; no code, table or playbook changes before v1.0
+Scope: **plan** (the DEC-145 follow-up that was due "by a Director DEC after P7-T08") · **evaluation validity** (no new category after the measurement)
+Decided by: **the Owner** (*"à đồng ý thêm sau"*, 30/09), on the Director's recommendation
+Drafted by: Director (Opus 5.5)
+Propagated to: `docs/limitations.md` (future work) at P8-T06
+Decision:
+  1. **Deferred.** The Owner and the advisor chose option (i) on 28/09: add a `persistence` category. It is **not** added before v1.0.
+     - Doing it would need three things before the 01/10 12:00 code cut-off: the Owner and the advisor writing a playbook, an eleventh decision table signed by both, and a resolver mapping with tests.
+     - It would also re-classify live alerts after P7's frozen measurement, with no measured figure for the new category.
+  2. **Recorded as future work.** `docs/limitations.md` records the following:
+     - Persistence-style alerts currently resolve to another category or to `unknown`.
+     - The signed choice (i) stands, to be implemented after submission, with its own table signing.
+Supersedes: nothing
