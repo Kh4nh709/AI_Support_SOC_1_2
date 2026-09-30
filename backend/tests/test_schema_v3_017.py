@@ -149,7 +149,14 @@ def test_migration_017_records_itself_in_schema_migrations(db):
 @pytest.mark.db
 def test_the_seven_append_only_triggers_exist(db):
     with db.cursor() as cur:
-        cur.execute("SELECT tgname FROM pg_trigger WHERE NOT tgisinternal ORDER BY 1")
+        # Scoped to the two functions 017 built: a later migration's trigger (018's
+        # `trg_alerts_notify`) is not an append-only trigger and must not break this list.
+        cur.execute(
+            "SELECT tgname FROM pg_trigger "
+            "WHERE NOT tgisinternal AND tgfoid IN "
+            "(SELECT oid FROM pg_proc WHERE proname IN ('raise_immutable', 'intake_pin_receipt')) "
+            "ORDER BY 1"
+        )
         assert [r[0] for r in cur.fetchall()] == EXPECTED_TRIGGERS
 
 

@@ -494,7 +494,7 @@ def test_restore_refuses_a_non_empty_target_without_force(session_dsn, session_d
         assert rc == 0, out
         assert not _has_marker(target_dsn), "--force did not start from an empty database"
         printed = _printed_counts(out)
-        assert printed.get("schema_migrations") == 17, out
+        assert printed.get("schema_migrations") == 18, out
     finally:
         _drop(session_dsn, target)
 
@@ -521,7 +521,7 @@ def test_round_trip_restores_into_a_second_database(session_dsn, source_db, tmp_
         restored = _counts(target_dsn)
         assert printed == expected
         assert restored == expected
-        assert expected["schema_migrations"] == 17
+        assert expected["schema_migrations"] == 18
         seeded = {t: expected[t] for t in FIVE}
         assert seeded == {"alerts": 3, "intake": 4, "llm_runs": 2, "jobs": 5, "audit_events": 6}
         source_catalog = _catalog(source_db)

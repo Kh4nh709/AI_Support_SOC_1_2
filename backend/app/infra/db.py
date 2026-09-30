@@ -16,16 +16,20 @@ from app.infra import config
 from app.infra.errors import ConfigError
 
 
-def connect(dsn: str | None = None) -> psycopg.Connection:
+def connect(dsn: str | None = None, *, connect_timeout: int | None = None) -> psycopg.Connection:
     """A new connection with autocommit off. `dsn` defaults to `Config.DATABASE_URL`
     (env/`.env`, §6.3) — a worktree has no `.env` and no such key, so tests always
     pass a DSN explicitly (the `db` fixture's) rather than relying on this default.
+    `connect_timeout` (seconds) is for callers that must not hang on a black-holed host
+    (the WebSocket's per-connection check); left out, libpq's own default applies.
     """
     if dsn is None:
         dsn = config.load().DATABASE_URL
     if not dsn:
         raise ConfigError("DATABASE_URL: must be set to connect (no DSN was given)")
-    return psycopg.connect(dsn, autocommit=False)
+    if connect_timeout is None:
+        return psycopg.connect(dsn, autocommit=False)
+    return psycopg.connect(dsn, autocommit=False, connect_timeout=connect_timeout)
 
 
 @contextmanager

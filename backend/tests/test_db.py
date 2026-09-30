@@ -37,6 +37,16 @@ def test_connect_with_empty_explicit_dsn_raises_config_error():
         infra_db.connect("")
 
 
+def test_connect_passes_a_connect_timeout_only_when_asked_to(monkeypatch):
+    """P10-T05: the WebSocket's lookup asks for a bounded connect; everyone else keeps libpq's
+    behaviour (no `connect_timeout` key at all, not `None`)."""
+    seen: list[dict] = []
+    monkeypatch.setattr(psycopg, "connect", lambda dsn, **kwargs: seen.append(kwargs))
+    infra_db.connect("postgresql://x@127.0.0.1:9/x")
+    infra_db.connect("postgresql://x@127.0.0.1:9/x", connect_timeout=10)
+    assert seen == [{"autocommit": False}, {"autocommit": False, "connect_timeout": 10}]
+
+
 @pytest.mark.db
 def test_connect_with_explicit_dsn_returns_a_working_autocommit_off_connection(_test_database):
     conn = infra_db.connect(_test_database)

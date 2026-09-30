@@ -19,6 +19,7 @@ httpx==0.28.1
 openai==3.8.0
 pydantic==2.13.4
 python-multipart==0.0.32  # DEC-093 (INBOX 2026-09-19 P4-T04): FastAPI's Form() needs it
+websockets==17.1  # DEC-162 (P10-T05): plain uvicorn cannot serve /api/ws without a WebSocket library
 
 # --- dev -------------------------------------------------------------------
 pytest==9.1.1
