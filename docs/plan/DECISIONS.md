@@ -2947,3 +2947,32 @@ Decision:
      - **Condition 3 now reads:** no triage row with `input_tokens IS NOT NULL AND cost_usd IS NULL`, i.e. no call that returned usage without its cost recorded.
      - The plain NULL-cost count stays in the summary as context, broken down by `stopped_by`. It never fails the check.
 Supersedes: design notes 1, 4, 5 and 7 and acceptance items 1, 3 and 9 of `tasks/P3/P3-T11.prompt.md` (20/09)
+
+## DEC-157 · 2026-09-30 · The code cut-off moves from 01/10 12:00 to 07/10 12:00 and the submission to after 07/10, for a React UI that replaces the Jinja/htmx pages; the blind arm stays and the human pilot runs on the new UI
+Scope: **plan** (schedule, scope of v1.0) · **evaluation validity** (the pilot finally runs; the blind arm is kept) · **architecture** (a new `ui` service; the server-rendered pages are retired)
+Decided by: **the Owner**, 30/09, in answers to the Director's brainstorming questions:
+- *"Toàn bộ, lùi hạn code"*;
+- *"Tôi dời cho bạn 7 ngày nữa để dev. Test với data thật và fix"*;
+- *"Dời cả hạn code và ngày nộp"*;
+- *"Giữ, chạy pilot 7 ngày"*;
+- *"Luôn hiện, tách cột"*;
+- *"Gỡ bỏ UI cũ"*.
+Drafted by: Director (Opus 5.5)
+Propagated to:
+- `STATE.md`, via a Director note on the P8-T06 row: the close-out moves after 07/10 12:00.
+- The UI design spec, to be written under `docs/superpowers/specs/` once the Owner approves the design. The canvas mock-up is at a private claude.ai artifact.
+Decision:
+  1. **Schedule.**
+     - The DEC-151 code cut-off (01/10 12:00) is replaced by **07/10 12:00**.
+     - The P8-T06 close-out (operations export, limitations, final suite, tag `v1.0`) runs after that cut-off.
+     - The submission moves to after 07/10; the Owner names the day.
+  2. **Scope: a React UI for all roles, as its own service,** calling the backend's JSON API.
+     - The roles are Tier-1 (queue, alert detail, decisions), Tier-2 (cases, ② analysis) and admin (rules, digest, labelling).
+     - When it covers every page, the Jinja/htmx pages, their templates and their page-only tests are **removed**. The JSON API and its tests stay.
+     - Any JSON route the React pages need that does not exist yet is a frozen-contract change, recorded in its own DEC when the plan names it.
+  3. **Alert page layout.** Alert information and AI analysis sit in **two separate columns**. The AI column is open by default (the Owner's choice, over reveal-on-demand).
+  4. **The blind arm is kept, unchanged and enforced server-side** (`visibility.strip`, DEC-101).
+     - The Owner runs the human pilot on the React UI during the 7 days. This is the first run of the pilot DEC-129 recorded as never run.
+     - The pilot starts only when the React Tier-1 flow is live, so the UI does not change mid-measurement.
+  5. **Process.** The DEC-151 process holds: brainstorming, then spec, then plan; then one Coder (Sonnet 5.5 xhigh) and one Reviewer per card. The Owner also asked that the new UI be **tested against real data and fixed**.
+Supersedes: DEC-151's cut-off time (its process stands); the 02/10 submission date
