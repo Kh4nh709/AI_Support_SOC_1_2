@@ -127,6 +127,52 @@ describe("the ui service", () => {
   });
 });
 
+describe("the Makefile ui targets", () => {
+  const makefile = readFileSync(join("..", "Makefile"), "utf8");
+  const scripts = (
+    JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    }
+  ).scripts;
+
+  /** The recipe lines of one target, tab-indented up to the next blank line. */
+  const recipe = (target: string): string[] =>
+    (new RegExp(`^${target}:\\n((?:\\t.*\\n)+)`, "m").exec(makefile)?.[1] ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+  // Without node_modules, `npx tsc` downloads the unrelated `tsc` package and "passes"; `npm run`
+  // uses the project's own binaries or fails loudly.
+  it("runs eslint, tsc and prettier through the package scripts, never npx", () => {
+    const lint = recipe("ui-lint");
+    expect(lint).toContain("cd frontend && npm run lint");
+    expect(lint).toContain("cd frontend && npm run typecheck");
+    expect(lint).toContain("cd frontend && npm run format:check");
+    for (const target of ["ui-install", "ui-lint", "ui-test", "ui-e2e", "ui-build"]) {
+      expect(recipe(target), target).not.toEqual([]);
+      for (const line of recipe(target)) expect(line, target).not.toMatch(/\bnpx\b/);
+    }
+  });
+
+  it("maps those scripts to the project's eslint, tsc and prettier", () => {
+    expect(scripts["lint"]).toMatch(/^eslint\b/);
+    expect(scripts["typecheck"]).toMatch(/^tsc\b/);
+    expect(scripts["format:check"]).toMatch(/^prettier\b.*--check/);
+  });
+
+  it("keeps the advisory audit from masking a failing step", () => {
+    const lint = recipe("ui-lint");
+    const audit = lint.filter((line) => /npm audit/.test(line));
+    expect(audit).toEqual(["cd frontend && (npm audit --omit=dev || true)"]);
+    expect(lint.filter((line) => /\|\|/.test(line))).toEqual(audit);
+  });
+
+  it("says in `make help` that `up` also builds and starts ui", () => {
+    expect(makefile).toMatch(/@echo "\s+up\s[^"]*\bui\b[^"]*"/);
+  });
+});
+
 describe("Dockerfile", () => {
   it("builds with Node 22 from the lockfile and serves dist with nginx", () => {
     expect(dockerfile).toMatch(/FROM node:22-alpine AS build/);

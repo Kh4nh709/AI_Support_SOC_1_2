@@ -35,7 +35,7 @@ help:
 	@echo "  test-db     run the db-marked tests against TEST_DATABASE_URL (TESTS=<path> narrows the run)"
 	@echo "  lint        ruff check + black --check over $(LINT_PATHS)"
 	@echo "  migrate     apply docs/Schema migrations to DATABASE_URL_OWNER"
-	@echo "  up          docker compose up -d (db, app, worker); first db start restores backups/latest.dump"
+	@echo "  up          docker compose up -d (db, app, worker, and ui on 127.0.0.1:8080); first db start restores backups/latest.dump"
 	@echo "  down        docker compose down (the pgdata volume is kept)"
 	@echo "  db-up       start only the db container and wait until it is healthy"
 	@echo "  db-shell    psql on DATABASE_URL_OWNER from .env"
@@ -190,14 +190,16 @@ backup:
 
 # --- the React UI (frontend/, P10-T07) --------------------------------------
 # Node 22 and npm, not the Python toolchain: these targets ignore PY. Each step is its own
-# recipe line so the advisory `npm audit ... || true` cannot mask a failing lint step.
+# recipe line so the advisory `npm audit ... || true` cannot mask a failing lint step. The tools run
+# through the package scripts, never `npx`: without node_modules `npx tsc` would fetch the unrelated
+# `tsc` package, while `npm run typecheck` fails loudly.
 ui-install:
 	cd frontend && npm ci
 
 ui-lint:
-	cd frontend && npx eslint .
-	cd frontend && npx tsc --noEmit
-	cd frontend && npx prettier --check .
+	cd frontend && npm run lint
+	cd frontend && npm run typecheck
+	cd frontend && npm run format:check
 	cd frontend && (npm audit --omit=dev || true)
 
 ui-test:
