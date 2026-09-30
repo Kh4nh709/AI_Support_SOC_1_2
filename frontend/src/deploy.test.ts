@@ -12,13 +12,24 @@ const nginx = readFileSync("nginx.conf", "utf8");
 const dockerfile = readFileSync("Dockerfile", "utf8");
 const compose = readFileSync(join("..", "docker-compose.yml"), "utf8");
 
-/** The body of one `location` block of nginx.conf. */
-const location = (path: string): string => {
-  const start = nginx.search(new RegExp(`location\\s+${path.replace(/\//g, "\\/")}\\s*\\{`));
-  if (start < 0) return "";
-  const open = nginx.indexOf("{", start);
-  return nginx.slice(open + 1, nginx.indexOf("}", open));
-};
+/** Every `location` block of nginx.conf: what follows the keyword (`= /index.html`) and the body. */
+const locations = (): { match: string; body: string }[] =>
+  [...nginx.matchAll(/^\s*location\s+([^{\n]+?)\s*\{/gm)].map((m) => {
+    const open = (m.index ?? 0) + m[0].length;
+    return { match: m[1] ?? "", body: nginx.slice(open, nginx.indexOf("}", open)) };
+  });
+
+/** The body of one `location` block, named by its match text (`/api/ws`, `= /index.html`). */
+const location = (match: string): string => locations().find((l) => l.match === match)?.body ?? "";
+
+/** nginx.conf with every location block cut out: what the `server` block itself says. */
+const serverLevel = (): string => locations().reduce((text, l) => text.replace(l.body, ""), nginx);
+
+const HEADERS = [
+  /add_header\s+Content-Security-Policy\s+"[^"]*"\s+always;/,
+  /add_header\s+X-Content-Type-Options\s+nosniff\s+always;/,
+  /add_header\s+Referrer-Policy\s+no-referrer\s+always;/,
+];
 
 /** The block of the `ui` service, up to the next top-level key of `services:`. */
 const uiService = (): string => /^ {2}ui:\r?\n((?:(?: {4}.*)?\r?\n)*)/m.exec(compose)?.[1] ?? "";
@@ -30,36 +41,68 @@ const walk = (dir: string): string[] =>
   });
 
 describe("nginx.conf", () => {
-  it("sends the CSP of the spec, verbatim", () => {
-    const sent = /add_header\s+Content-Security-Policy\s+"([^"]*)"\s+always;/.exec(nginx)?.[1];
-    expect(sent).toBe(CSP);
+  it("sends the CSP of the spec, verbatim, wherever nginx.conf sends one", () => {
+    const sent = [...nginx.matchAll(/add_header\s+Content-Security-Policy\s+"([^"]*)"\s+always;/g)];
+    // The server block, and the `= /index.html` location that has headers of its own.
+    expect(sent.length).toBeGreaterThanOrEqual(2);
+    for (const m of sent) expect(m[1]).toBe(CSP);
   });
 
   it("sends nosniff and no-referrer, and every header on error pages too", () => {
-    expect(nginx).toMatch(/add_header\s+X-Content-Type-Options\s+nosniff\s+always;/);
-    expect(nginx).toMatch(/add_header\s+Referrer-Policy\s+no-referrer\s+always;/);
-    const headers = nginx.match(/^\s*add_header\s.*$/gm) ?? [];
-    expect(headers).toHaveLength(3);
-    for (const line of headers) expect(line).toMatch(/\balways;\s*$/);
+    const server = serverLevel();
+    for (const header of HEADERS) expect(server).toMatch(header);
+    const all = nginx.match(/^\s*add_header\s.*$/gm) ?? [];
+    for (const line of all) expect(line).toMatch(/\balways;\s*$/);
+  });
+
+  // nginx inherits `add_header` into a location only when that location has none of its own, so a
+  // location that adds one header silently drops the CSP unless it repeats all three.
+  it("repeats the three headers in every location that adds a header of its own", () => {
+    const own = locations().filter((l) => /\badd_header\b/.test(l.body));
+    expect(own.map((l) => l.match)).toContain("= /index.html");
+    for (const l of own) {
+      for (const header of HEADERS) expect(l.body, `location ${l.match}`).toMatch(header);
+    }
   });
 
   it("proxies the WebSocket upgrade on /api/ws to the app", () => {
     const ws = location("/api/ws");
-    expect(ws).toMatch(/proxy_pass\s+http:\/\/app:8000;/);
+    expect(ws).toMatch(/proxy_pass\s+\$app_upstream;/);
     expect(ws).toMatch(/proxy_http_version\s+1\.1;/);
+    expect(ws).toMatch(/proxy_set_header\s+Host\s+\$host;/);
     expect(ws).toMatch(/proxy_set_header\s+Upgrade\s+\$http_upgrade;/);
     expect(ws).toMatch(/proxy_set_header\s+Connection\s+"upgrade";/);
     expect(ws).toMatch(/proxy_read_timeout\s+1h;/);
   });
 
   it("proxies /api/ to the app on the same origin and leaves Authorization alone", () => {
-    expect(location("/api/")).toMatch(/proxy_pass\s+http:\/\/app:8000;/);
+    const api = location("/api/");
+    expect(api).toMatch(/proxy_pass\s+\$app_upstream;/);
+    expect(api).toMatch(/proxy_set_header\s+Host\s+\$host;/);
     expect(nginx).not.toMatch(/Authorization/i);
+  });
+
+  // `app` gets a new address when its container is recreated. A literal `proxy_pass http://app:8000`
+  // resolves the name once, at start, and answers 502 to every call afterwards: the address must come
+  // from a variable, asked of Docker's resolver again every few seconds.
+  it("asks Docker's resolver for the app again and again, never once at start", () => {
+    expect(serverLevel()).toMatch(/^\s*resolver\s+127\.0\.0\.11\s+valid=10s\s+ipv6=off;/m);
+    expect(serverLevel()).toMatch(/^\s*set\s+\$app_upstream\s+http:\/\/app:8000;/m);
+    expect(nginx).not.toMatch(/proxy_pass\s+https?:\/\//);
+    expect((nginx.match(/proxy_pass\s+\$app_upstream;/g) ?? []).length).toBe(2);
   });
 
   it("serves the SPA and falls back to index.html for an unknown path", () => {
     expect(nginx).toMatch(/root\s+\/usr\/share\/nginx\/html;/);
     expect(location("/")).toMatch(/try_files\s+\$uri\s+\/index\.html;/);
+  });
+
+  // After a redeploy the hashed chunks of the old build are gone. A request for one must be a 404,
+  // not the HTML of the SPA (which the browser would fail to parse as a script), and index.html
+  // itself must be revalidated so the page always points at the chunks that exist.
+  it("answers 404 for a missing asset and revalidates index.html", () => {
+    expect(location("/assets/")).toMatch(/try_files\s+\$uri\s+=404;/);
+    expect(location("= /index.html")).toMatch(/add_header\s+Cache-Control\s+"no-cache"\s+always;/);
   });
 });
 
