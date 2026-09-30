@@ -2,6 +2,7 @@
 // it, its status for the header, and what a change does to the cache. The socket itself is faked here.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen } from "@testing-library/react";
+import axe from "axe-core";
 import type { ReactNode } from "react";
 import type { MockInstance } from "vitest";
 import { setTokenSource } from "../api/client";
@@ -248,5 +249,19 @@ describe("LiveIndicator", () => {
     act(() => newest().onStatus("live"));
     expect(screen.getByRole("status")).toHaveTextContent(S.live.on);
     expect(screen.getByRole("status")).not.toHaveTextContent(S.live.off);
+  });
+
+  it("has no axe violation, live or offline (the word says it, not the colour)", async () => {
+    const { container } = render(tree(session("tok-1"), <LiveIndicator />));
+    // jsdom computes no colour, so the contrast rule cannot run here.
+    const scan = async () =>
+      (
+        await axe.run(container, { rules: { "color-contrast": { enabled: false } } })
+      ).violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.html).join(" | ")}`);
+    expect(screen.getByRole("status")).toHaveTextContent(S.live.off);
+    expect(await scan()).toEqual([]);
+    act(() => newest().onStatus("live"));
+    expect(screen.getByRole("status")).toHaveTextContent(S.live.on);
+    expect(await scan()).toEqual([]);
   });
 });

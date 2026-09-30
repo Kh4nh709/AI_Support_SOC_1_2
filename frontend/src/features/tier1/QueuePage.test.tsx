@@ -652,11 +652,34 @@ describe("accessibility", () => {
     ).toEqual([]);
   });
 
-  it("has none in the empty and in the error states either", async () => {
+  /** What axe finds in `container`, as text; jsdom computes no colour, so the contrast rule cannot run here. */
+  const violationsIn = async (container: HTMLElement): Promise<string[]> => {
+    const result = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
+    return result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.html).join(" | ")}`);
+  };
+
+  it("has none in the empty state, the waiting queue and the 'mine' one", async () => {
+    respond = () =>
+      HttpResponse.json(
+        answer([], { counts_by_band: { critical: 0, high: 0, medium: 0, low: 0 } }),
+      );
+    const first = renderQueue();
+    expect(await screen.findByText(S.queue.empty)).toBeInTheDocument();
+    expect(await violationsIn(first.container)).toEqual([]);
+    first.unmount();
+    const mine = renderQueue("/queue?status=mine");
+    expect(await screen.findByText(S.queue.emptyMine)).toBeInTheDocument();
+    expect(await violationsIn(mine.container)).toEqual([]);
+    mine.unmount();
+    const narrowed = renderQueue("/queue?category=nothing");
+    expect(await screen.findByText(S.queue.noMatch)).toBeInTheDocument();
+    expect(await violationsIn(narrowed.container)).toEqual([]);
+  });
+
+  it("has none in the error state", async () => {
     respond = () => HttpResponse.json({ detail: "x" }, { status: 500 });
     const { container } = renderQueue();
     await screen.findByRole("alert");
-    const result = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
-    expect(result.violations.map((v) => v.id)).toEqual([]);
+    expect(await violationsIn(container)).toEqual([]);
   });
 });
