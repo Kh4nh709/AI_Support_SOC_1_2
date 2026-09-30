@@ -2939,4 +2939,11 @@ Decision:
 
        Both are read-only and cost nothing. The Director may run the CLI too, under the same read-only rule as its other live reads.
   4. **What this does not claim.** It proves that the gate and cost fields are written on every live ① run, on real alerts. It does not re-measure ①'s quality, which is P7's frozen measurement.
+  5. **Amended at merge (30/09, review round 1, Director): condition 3 was wrong as worded.**
+     - `tier1/triage.py` writes `cost_usd = NULL` by design on four paths: transient :277, verifier-after-cap/transient :349, linter :754 and cap :785.
+       - On every one of them `input_tokens` is NULL too, because no call returned usage.
+       - Every one still writes `gate_result`, so condition 2 stands.
+     - `llm_runs` is append-only, so the first cap would have failed the check forever. The Reviewer found this; the live database has 0 such rows.
+     - **Condition 3 now reads:** no triage row with `input_tokens IS NOT NULL AND cost_usd IS NULL`, i.e. no call that returned usage without its cost recorded.
+     - The plain NULL-cost count stays in the summary as context, broken down by `stopped_by`. It never fails the check.
 Supersedes: design notes 1, 4, 5 and 7 and acceptance items 1, 3 and 9 of `tasks/P3/P3-T11.prompt.md` (20/09)
