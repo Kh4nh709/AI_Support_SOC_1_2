@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+/* The tokens of the canvas "SOC Console UI" (spec §2). Tailwind v4 turns each --color-* into the
+   utilities bg-*, text-*, border-*; src/tokens.test.ts pins the values. */
+@theme {
+  --color-ground: #0d1117;
+  --color-surface: #141a22;
+  --color-border: #263241;
+  --color-text: #e6ebf1;
+  --color-muted: #8593a3;
+
+  /* The AI columns: a violet surface apart from the alert column. */
+  --color-ai-surface: #17142a;
+  --color-ai-border: #3a3170;
+  --color-ai-accent: #a78bfa;
+
+  /* Risk bands: the text colour, and the badge background. */
+  --color-critical: #fb7185;
+  --color-critical-bg: #2b0710;
+  --color-high: #fb923c;
+  --color-high-bg: #2a1200;
+  --color-medium: #facc15;
+  --color-medium-bg: #262000;
+  --color-low: #93c5fd;
+  --color-low-bg: #0b1e3a;
+
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-ground text-text font-sans;
+    min-width: 1280px;
+  }
+}
