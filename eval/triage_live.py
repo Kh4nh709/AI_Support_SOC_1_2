@@ -12,7 +12,12 @@ CLI opens its session READ ONLY so that even a future edit cannot change a row b
 1. at least `want` proposer rows carry a `gate_result` and a `cost_usd > 0` — the gate ran and the
    model was paid for, `want` times over;
 2. no triage row (any role) has `gate_result IS NULL`;
-3. no triage row has `cost_usd IS NULL`;
+3. no triage row has usage but no cost: `input_tokens IS NOT NULL AND cost_usd IS NULL`, a call
+   that returned usage and whose cost was not recorded (review round 1: the triage worker writes
+   `cost_usd=None` together with `input_tokens=None` on the paths where no call returned usage — a
+   transient error, the cap, the linter — and `llm_runs` is append-only, so a plain NULL-cost
+   count would fail for ever after the first of them; that plain count stays in the summary as
+   context, by `stopped_by`, and never fails);
 4. no proposer row is still a `false_positive` while the gate's `missing` list is non-empty — the
    gate must have forced that proposal away from `false_positive`;
 5. no triage job is `failed`.
@@ -21,7 +26,8 @@ A proposer run stopped by the schema check (`stopped_by = 'schema'`) has no verd
 verifier row, but it does carry its gate document and its cost, so it is a count in the summary and
 never a failure. The rest of the summary is context for the reader: heads and proposer rows by alert
 source, jobs by status, `stopped_by` and `suggested_action` counts, the forced count, verifier rows,
-`sum(cost_usd)`, and the first and last proposer timestamps — each with its denominator.
+the rows with a NULL cost by `stopped_by`, `sum(cost_usd)`, and the first and last proposer
+timestamps — each with its denominator.
 
 **Run it** from the primary checkout, where `.env` holds `DATABASE_URL`::
 
@@ -58,7 +64,7 @@ DEFAULT_WANT = 50
 #: which condition fired without parsing prose.
 COND_WANT = "too few gated, paid proposer rows"
 COND_GATE_NULL = "triage rows with gate_result NULL"
-COND_COST_NULL = "triage rows with cost_usd NULL"
+COND_COST_NULL = "triage rows with usage but cost_usd NULL"
 COND_FP_MISSING = "false_positive proposals that kept a non-empty gate missing list"
 COND_FAILED_JOBS = "failed triage jobs"
 
@@ -68,10 +74,10 @@ NO_ALERT = "(no alert)"  # a proposer row whose subject is not in `alerts`
 # One statement, so every figure comes from the same snapshot even on a database the worker is
 # still writing to, and so "this module only reads" is a fact about one string. A NULL `role` (a
 # row written before migration 016) is a triage row of no role: counted in the row totals and in
-# the two NULL conditions, never as a proposer.
+# the NULL conditions, never as a proposer.
 _FACTS_SQL = """
 WITH runs AS (
-    SELECT role, result, gate_result, cost_usd, stopped_by, created_at, subject_id
+    SELECT role, result, gate_result, cost_usd, input_tokens, stopped_by, created_at, subject_id
     FROM llm_runs
     WHERE pipeline = 'triage'
 ), proposer AS (
@@ -96,6 +102,12 @@ SELECT jsonb_build_object(
         SELECT count(*) FROM proposer WHERE gate_result IS NOT NULL AND cost_usd > 0),
     'gate_null_rows', (SELECT count(*) FROM runs WHERE gate_result IS NULL),
     'cost_null_rows', (SELECT count(*) FROM runs WHERE cost_usd IS NULL),
+    'usage_without_cost_rows', (
+        SELECT count(*) FROM runs WHERE input_tokens IS NOT NULL AND cost_usd IS NULL),
+    'cost_null_by_stopped_by', (
+        SELECT COALESCE(jsonb_object_agg(k, n), '{}'::jsonb) FROM (
+            SELECT COALESCE(stopped_by, '(none)') AS k, count(*) AS n
+            FROM runs WHERE cost_usd IS NULL GROUP BY 1) t),
     'false_positive_rows', (SELECT count(*) FROM false_positive),
     'fp_with_missing', (
         SELECT count(*) FROM false_positive
@@ -138,6 +150,8 @@ class LiveSummary:
     proposer_with_gate_and_cost: int
     gate_null_rows: int
     cost_null_rows: int
+    usage_without_cost_rows: int
+    cost_null_by_stopped_by: dict[str, int]
     false_positive_rows: int
     fp_with_missing: int
     forced_rows: int
@@ -164,9 +178,10 @@ def _failed_conditions(facts: dict, want: int) -> list[str]:
         failures.append(
             f"{COND_GATE_NULL}: {facts['gate_null_rows']} of {facts['triage_rows']} triage rows"
         )
-    if facts["cost_null_rows"]:
+    if facts["usage_without_cost_rows"]:
         failures.append(
-            f"{COND_COST_NULL}: {facts['cost_null_rows']} of {facts['triage_rows']} triage rows"
+            f"{COND_COST_NULL}: {facts['usage_without_cost_rows']} of {facts['triage_rows']} "
+            "triage rows"
         )
     if facts["fp_with_missing"]:
         failures.append(
@@ -223,7 +238,20 @@ def format_table(summary: LiveSummary) -> str:
             f"{s.proposer_with_result} / {s.proposer_rows} proposer rows",
         ),
         ("triage rows with gate_result NULL", f"{s.gate_null_rows} / {s.triage_rows} triage rows"),
-        ("triage rows with cost_usd NULL", f"{s.cost_null_rows} / {s.triage_rows} triage rows"),
+        (
+            "triage rows with usage but cost_usd NULL",
+            f"{s.usage_without_cost_rows} / {s.triage_rows} triage rows",
+        ),
+        (
+            "triage rows with cost_usd NULL (context)",
+            f"{s.cost_null_rows} / {s.triage_rows} triage rows",
+        ),
+        (
+            "cost_usd NULL by stopped_by",
+            _fractions(
+                s.cost_null_by_stopped_by, s.cost_null_rows, "triage rows with cost_usd NULL"
+            ),
+        ),
         (
             "false_positive proposals with a non-empty gate missing",
             f"{s.fp_with_missing} / {s.false_positive_rows} false_positive proposals",
@@ -270,8 +298,10 @@ def database_url(*, env_file=".env") -> str:
     """
     dsn = config.load(env_file=env_file).DATABASE_URL
     if not dsn:
+        # The path is not quoted: `--env-file postgresql://user:pw@...` is a slip a person makes with
+        # a DSN in the clipboard, and the message would print it whole.
         raise ConfigError(
-            f"DATABASE_URL: must be set (it is empty in {env_file} and in the environment; "
+            "DATABASE_URL: must be set (it is empty in the env file and in the environment; "
             "pass --dsn to name a database)"
         )
     return dsn
