@@ -21,7 +21,7 @@ Every command in those five sections runs **from the primary checkout**, in one 
 
 ## Environment keys
 
-The 62 keys of `.env.example`, one row each, no values. `.env.example` is generated from context pack §6.3 (`scripts/gen_env_example.py`, checked by `make lint`) and frozen: a new key is a decision (DEC-003), never an edit. **Who sets it:** *Owner* — a private or host-specific value, in `.env` only; *default* — `.env.example`'s value, changed only by a DEC. **Secret:** *yes* — `.env` only, never `.env.example`, a commit, a chat or a command line. *Compose* keys are read by `docker-compose.yml` and `db/init/*.sh` only, never by the application; *read by nothing* is a §6.3 key whose reader was cut or never built.
+The 63 keys of `.env.example`, one row each, no values. `.env.example` is generated from context pack §6.3 (`scripts/gen_env_example.py`, checked by `make lint`) and frozen: a new key is a decision (DEC-003), never an edit. **Who sets it:** *Owner* — a private or host-specific value, in `.env` only; *default* — `.env.example`'s value, changed only by a DEC. **Secret:** *yes* — `.env` only, never `.env.example`, a commit, a chat or a command line. *Compose* keys are read by `docker-compose.yml` and `db/init/*.sh` only, never by the application; *read by nothing* is a §6.3 key whose reader was cut or never built.
 
 | key | what it controls | who sets it | secret |
 |---|---|---|---|
@@ -35,6 +35,7 @@ The 62 keys of `.env.example`, one row each, no values. `.env.example` is genera
 | `MAX_CLUSTER_AGE_HOURS` | dedup: the oldest a cluster may grow | default | no |
 | `MAX_CLUSTER_AGE_AUTOCLOSED_MINUTES` | dedup: the same, for an auto-closed cluster | default | no |
 | `MAX_CLUSTER_SIZE` | dedup: the most occurrences one cluster takes | default | no |
+| `DEDUP_ENABLED` | dedup: `true` (default) groups alerts into clusters, `false` makes every alert its own queue row and its own `triage` job (DEC-165); forward-only, clusters already open are left as they are; after a change the Owner recreates the containers, `docker compose up -d --force-recreate app worker` (**Grouping switch (DEC-165)**, below) | default | no |
 | `INDEXER_URL` | the indexer the puller reads; its host name must match the certificate | Owner | no |
 | `INDEXER_USER` | the read-only indexer account | Owner | no |
 | `INDEXER_PASSWORD` | that account's password | Owner | yes |
@@ -90,7 +91,7 @@ The 62 keys of `.env.example`, one row each, no values. `.env.example` is genera
 
 ### Grouping switch (DEC-165)
 
-`DEDUP_ENABLED` is a §6.3 key and a `.env.example` line, and it is not a row of the table above. `true` (the default, and what a `.env` without the line gets) groups alerts into clusters as before: a repeat of an open head's rule, source IP, destination IP and agent is a `duplicate` that only bumps the head's `occurrence_count`. `false` (**the Owner's decision of 30/09**) stops grouping: every alert is its own queue row and its own `triage` job, with its own enrichment and `risk_score`. The queue then shows a **User** and an **IP nguồn** column, so each row says whose alert it is and where it came from. The value is read as `true|false` (also `1|0`, `yes|no`, `on|off`); anything else stops the worker at startup with a message naming `DEDUP_ENABLED`, never a silent default.
+`DEDUP_ENABLED` is a §6.3 key, a `.env.example` line and a row of the table above. `true` (the default, and what a `.env` without the line gets) groups alerts into clusters as before: a repeat of an open head's rule, source IP, destination IP and agent is a `duplicate` that only bumps the head's `occurrence_count`. `false` (**the Owner's decision of 30/09**) stops grouping: every alert is its own queue row and its own `triage` job, with its own enrichment and `risk_score`. The queue then shows a **User** and an **IP nguồn** column, so each row says whose alert it is and where it came from. The value is read as `true|false` (also `1|0`, `yes|no`, `on|off`); anything else stops the worker at startup with a message naming `DEDUP_ENABLED`, never a silent default.
 
 To turn grouping off, from the primary checkout, in a shell that has sourced `.env` *(not run by the agent)*: put the line `DEDUP_ENABLED=false` in `.env` (edit it, do not paste the file anywhere), then
 
