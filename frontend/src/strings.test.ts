@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MIN_QUOTE_CHARS, S, labelOf } from "./strings";
+import { MIN_QUOTE_CHARS, S, bandCodeOfLabel, labelOf } from "./strings";
 
 it("names the two Tier-1 closing decisions, escalate and reopen", () => {
   expect(S.decision.falsePositive).toBe("Đóng — dương tính giả");
@@ -37,6 +37,28 @@ it("keeps the scope note of a confirmed incident beside the conclusion", () => {
 it("labels the four risk bands, the column 'Mức' is risk_band and not severity", () => {
   expect(Object.keys(S.band).sort()).toEqual(["critical", "high", "low", "medium"]);
   expect(S.queue.col.band).toBe("Mức");
+});
+
+// Rulings R8 and R13: the UI shows the server's risk_band text, and one table maps it to the code the
+// queue's filter and counts speak. The literal table is the backend's (queue.risk_band, BAND_CODES).
+describe("the risk band label <-> code table", () => {
+  const TABLE: [string, string][] = [
+    ["Thấp", "low"],
+    ["Vừa", "medium"],
+    ["Cao", "high"],
+    ["Rất cao", "critical"],
+  ];
+
+  it.each(TABLE)("%s is %s, both ways", (label, code) => {
+    expect(labelOf(S.band, code)).toBe(label);
+    expect(bandCodeOfLabel(label)).toBe(code);
+  });
+
+  it("knows no code for a label it does not have, or for a missing one", () => {
+    for (const other of ["Nghiêm trọng", "Trung bình", "rất cao", "", "constructor", null, undefined]) {
+      expect(bandCodeOfLabel(other)).toBeNull();
+    }
+  });
 });
 
 it("labels every alert status the Jinja page labelled", () => {
