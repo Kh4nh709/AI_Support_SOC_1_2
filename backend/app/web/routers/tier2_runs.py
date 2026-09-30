@@ -34,6 +34,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.audit.events import write_event
 from app.infra.auth import Claims
 from app.infra.jobs import enqueue
+from app.tier2 import investigation_view
 from app.tier2.investigate import run_id_for_job
 from app.web.deps import Cfg, Conn, require_role
 
@@ -162,3 +163,26 @@ def api_get_run(conn: Conn, claims: Tier2, run_id: uuid.UUID) -> dict[str, Any]:
 
     conn.rollback()
     raise HTTPException(status_code=404, detail="run not found")
+
+
+@router.get("/cases/{case_id}/investigation")
+def api_investigation(
+    conn: Conn, _: Tier2, cfg: Cfg, case_id: uuid.UUID, run_id: uuid.UUID | None = None
+) -> dict[str, Any]:
+    """`{state, run_id, minutes, run, current, case_open}` — the ② view the React case page
+    (P10-T11) renders and the Jinja page (`GET /cases/{id}/investigation`) renders from, both
+    built by `tier2.investigation_view.build_investigation` (P10-T03). `state` is `idle` |
+    `running` | `stalled` | `done` | `failed`; `run_id` (the query parameter) is the one the 202
+    of `POST .../analyze` returned, so a poll that finds nothing behind it answers `failed`
+    rather than `idle`; `case_open` is False once the case is concluded. **404** for an unknown
+    case.
+
+    Read-only, and it ends on `conn.rollback()` after the reads it answers from: a returned
+    dict is a success as far as `get_conn` is concerned, and would otherwise commit them."""
+    status = _case_status(conn, str(case_id))
+    if status is None:
+        conn.rollback()
+        raise HTTPException(status_code=404, detail="case not found")
+    body = investigation_view.build_investigation(conn, cfg, str(case_id), run_id)
+    conn.rollback()
+    return {**body, "case_open": status == OPEN_CASE_STATUS}
