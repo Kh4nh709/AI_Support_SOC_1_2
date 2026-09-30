@@ -23,7 +23,8 @@ export function isBandCode(value: unknown): value is BandCode {
 export type LoginResponse = {
   token: string;
   role: Role;
-  user_id: number;
+  /** The user's uuid, as text. */
+  user_id: string;
   /** ISO 8601 with an offset. */
   expires_at: string;
 };
@@ -36,7 +37,8 @@ export type LockedBody = {
 
 /** `GET /api/auth/me`. The role comes from the verified token, the name from the users row. */
 export type MeResponse = {
-  user_id: number;
+  /** The user's uuid, as text. */
+  user_id: string;
   username: string;
   display_name: string | null;
   role: Role;

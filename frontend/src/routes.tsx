@@ -1,22 +1,23 @@
-// The route table of the spec §3.1. The page cards fill in the placeholders: P10-T10 the alert page
-// (still a placeholder here); the queue is P10-T09's, the case list and the case page are P10-T11's.
+// The route table of the spec §3.1: the queue is P10-T09's, the alert page P10-T10's, the case list and the
+// case page P10-T11's.
 import { Navigate, Outlet, Route, Routes } from "react-router";
 import { useAuth } from "./auth/AuthProvider";
 import { ForbiddenNotice, RequireRole } from "./auth/RequireRole";
 import { roleHome } from "./auth/redirect";
 import type { Role } from "./api/types";
+import { CASE_ROLES } from "./caseAccess";
 import { AppHeader } from "./components/AppHeader";
+import { AlertPage } from "./features/tier1/AlertPage";
 import { QueuePage } from "./features/tier1/QueuePage";
 import { CasePage } from "./features/tier2/CasePage";
 import { CasesPage } from "./features/tier2/CasesPage";
 import { LiveIndicator } from "./live/LiveIndicator";
 import { LoginPage } from "./pages/LoginPage";
-import { S } from "./strings";
 
 /** Read for all three roles, the same as the API. */
 const EVERY_ROLE: readonly Role[] = ["tier1", "tier2", "admin"];
-/** The cases are Tier 2's; the admin reads them too. */
-const TIER2_UP: readonly Role[] = ["tier2", "admin"];
+/** The cases are Tier 2's; the admin reads them too (the alert page links to a case by the same list). */
+const TIER2_UP = CASE_ROLES;
 
 /** The header, and the page under it. The login page shares it, so the banner and the main landmark are always there. */
 function Shell() {
@@ -35,10 +36,6 @@ function Shell() {
 function Home() {
   const { session } = useAuth();
   return session === null ? null : <Navigate to={roleHome(session.role)} replace />;
-}
-
-function Placeholder({ title }: { title: string }) {
-  return <h1 className="text-lg font-semibold">{title}</h1>;
 }
 
 export function AppRoutes() {
@@ -66,7 +63,7 @@ export function AppRoutes() {
           path="/alerts/:alertId"
           element={
             <RequireRole roles={EVERY_ROLE}>
-              <Placeholder title={S.alert.infoHeading} />
+              <AlertPage />
             </RequireRole>
           }
         />

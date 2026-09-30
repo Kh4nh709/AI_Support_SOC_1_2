@@ -11,15 +11,13 @@ import { BandBadge } from "../../components/Badge";
 import { DataTable, type Column } from "../../components/DataTable";
 import { formatTime } from "../../format";
 import { useLiveStatus } from "../../live/LiveProvider";
+import { OFFLINE_POLL_MS } from "../../live/poll";
 import { S } from "../../strings";
 import { AiCell } from "./AiCell";
 import { aiStateOfRow } from "./aiState";
 import { BandChips, QueueFilterBar } from "./QueueFilterBar";
 import { QueuePagination } from "./QueuePagination";
 import { readView, viewToParams, type QueueView } from "./queueParams";
-
-/** With no live socket the page asks again this often (spec §3). */
-export const OFFLINE_POLL_MS = 30_000;
 
 const COLUMNS: readonly Column<QueueRow>[] = [
   { id: "band", header: S.queue.col.band, cell: (row) => <BandBadge label={row.risk_band} /> },

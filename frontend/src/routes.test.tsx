@@ -17,6 +17,10 @@ import { S } from "./strings";
 vi.mock("./features/tier1/QueuePage", () => ({
   QueuePage: () => <h1>{S.queue.title}</h1>,
 }));
+// The same for the alert page (AlertPage.test.tsx tests it): the route test looks for its place, not its content.
+vi.mock("./features/tier1/AlertPage", () => ({
+  AlertPage: () => <h1>{S.alert.infoHeading}</h1>,
+}));
 
 // The case pages are real and read the backend; these tests are about the route table, so the backend
 // says "no cases" and "no case 3". A request nobody handled fails the test.
