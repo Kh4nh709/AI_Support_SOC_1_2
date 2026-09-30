@@ -65,6 +65,9 @@ HUMAN_ROWS = (
     "Auto-close wrong-close rate from the digest, with its Wilson CI",
     "② usefulness, 1–5",
 )
+#: The ② row is `not measured` whatever `case.opened` counts: its n is ratings, and v1.0 has no
+#: rating control, so there can be none (Director ruling R15).
+NO_RATING = "not measured: no rating control in v1.0 (DEC-161)"
 GATE_ROW = "Gate-forced `needs_review` rate"
 
 
@@ -801,8 +804,12 @@ def _assert_never_not_measured_beside_a_count(rows: dict[str, tuple[str, str]]) 
         value, basis = rows[metric]
         counts = [int(n) for n in re.findall(r"= (\d+)", basis)]
         assert counts, (metric, basis)
-        assert (value == "not measured") is (not any(counts)), (metric, value, basis)
-        assert not re.search(r"\d\.\d", value), (metric, value)  # never a rate
+        if metric == HUMAN_ROWS[4]:
+            # its counts are context (`case.opened`), not ratings: never measured, never a zero
+            assert value == NO_RATING, (metric, value, basis)
+        else:
+            assert (value == "not measured") is (not any(counts)), (metric, value, basis)
+            assert not re.search(r"\d\.\d", value), (metric, value)  # never a rate
 
 
 @pytest.mark.db
@@ -812,19 +819,20 @@ def test_human_metrics_not_measured_when_zero_and_counted_when_not(db):
     # (a) no human evidence at all: five rows "not measured", each with its DEC and its zeros
     rows = _section6_rows(ops_export.build_report(db, _window()))
     assert set(rows) == {*HUMAN_ROWS, GATE_ROW}
-    for metric in HUMAN_ROWS:
+    for metric in HUMAN_ROWS[:4]:
         assert rows[metric][0] == "not measured", metric
+    assert rows[HUMAN_ROWS[4]][0] == NO_RATING
     decisions = rows[HUMAN_ROWS[0]][1]
     assert decisions.startswith(
-        "no human-decision pilot ran: the Tier-1 console was deprioritized (DEC-116); "
+        "pilot start not given: pass `--pilot-start` for the pilot's figures (section 6a); "
         "`tier1.decided` = 0"
     )
     assert "`alert.acknowledged` = 0" in rows[HUMAN_ROWS[1]][1]
-    assert "DEC-116" in rows[HUMAN_ROWS[2]][1]
-    assert "DEC-116" in rows[HUMAN_ROWS[3]][1]
+    assert "pilot start not given" in rows[HUMAN_ROWS[2]][1]
+    assert "live since P5 (DEC-154)" in rows[HUMAN_ROWS[3]][1]
     assert "`autoclose.reviewed` = 0" in rows[HUMAN_ROWS[3]][1]
     assert "`autoclose_reviews` rows = 0" in rows[HUMAN_ROWS[3]][1]
-    assert "DEC-097" in rows[HUMAN_ROWS[4]][1] and "DEC-111" in rows[HUMAN_ROWS[4]][1]
+    assert "built and run, no rating control in v1.0 (DEC-154, DEC-161)" in rows[HUMAN_ROWS[4]][1]
     assert "`case.opened` = 0" in rows[HUMAN_ROWS[4]][1]
     assert rows[GATE_ROW] == (
         "n/a (0 rows)",
@@ -860,7 +868,7 @@ def test_human_metrics_not_measured_when_zero_and_counted_when_not(db):
     assert rows[HUMAN_ROWS[1]][0] == "descriptive, n = 2"
     assert rows[HUMAN_ROWS[2]][0] == "descriptive, n = 2"
     assert rows[HUMAN_ROWS[3]][0] == "descriptive, n = 1"
-    assert rows[HUMAN_ROWS[4]][0] == "descriptive, n = 1"
+    assert rows[HUMAN_ROWS[4]][0] == NO_RATING  # `case.opened` = 1 is context, not a rating
     assert "`tier1.decided` = 2" in rows[HUMAN_ROWS[0]][1]
     assert "`autoclose_reviews` rows = 1" in rows[HUMAN_ROWS[3]][1]
     assert "`case.opened` = 1" in rows[HUMAN_ROWS[4]][1]
