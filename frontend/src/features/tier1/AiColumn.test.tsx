@@ -1,13 +1,13 @@
 // src/features/tier1/AiColumn.test.tsx — the ① column of the alert page, one test per state of `AiState`:
 // ready, hidden (the blind arm, DEC-101), pending, unavailable and decided. What the column says is decided
-// by `aiStateOfView`; these tests also inject a state, to pin what each state shows and, above all, what the
-// hidden one never does.
+// by `aiStateOfView` and by nothing else: the column takes no state, so every test here reaches a state the
+// only way the page does, with a view the server could have sent.
 import { render, screen, within } from "@testing-library/react";
 import axe from "axe-core";
 import type { AlertView, Suggestion } from "../../api/tier1";
 import { S } from "../../strings";
-import { AiColumn } from "./AiColumn";
-import { aiStateOfView, type AiState } from "./aiState";
+import { AiColumn, Unavailable } from "./AiColumn";
+import { aiStateOfView } from "./aiState";
 
 const suggestion = (over: Partial<Suggestion> = {}): Suggestion => ({
   run_id: "r1",
@@ -54,10 +54,10 @@ function blindView(over: Partial<AlertView> = {}): AlertView {
 }
 
 const column = () => screen.getByRole("region", { name: S.alert.aiHeading });
-const renderColumn = (v: AlertView, state?: AiState) =>
+const renderColumn = (v: AlertView) =>
   render(
     <main>
-      <AiColumn view={v} state={state} />
+      <AiColumn view={v} />
     </main>,
   );
 
@@ -219,13 +219,16 @@ describe("hidden (the blind arm)", () => {
     expect(col.textContent).not.toContain(S.ai1.none);
   });
 
-  it("shows no verdict text even when the state is hidden and the view holds a result", () => {
-    // The state is the server's word, read once by aiStateOfView; a column that is told `hidden` shows none of
-    // ①, whatever else the object it was handed happens to carry.
-    renderColumn(view(), { kind: "hidden" });
+  it("shows no verdict text for a blind view that still carries the other ① keys", () => {
+    // Hidden is the server's word (no `suggestion` key, `suggestion_visible` false), read once by aiStateOfView;
+    // the column shows none of ① whatever else the view happens to carry: a ready triage status, a fresh count.
+    const stray = blindView({ triage_status: "ready", correlated_now: 9, close_reason: null });
+    expect(aiStateOfView(stray).kind).toBe("hidden");
+    renderColumn(stray);
     const col = column();
     expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
     for (const word of VERDICT_WORDS) expect(col.textContent, word).not.toContain(word);
+    expect(col.textContent).not.toContain(S.ai1.correlatedThen);
     expect(within(col).queryByRole("img", { name: S.ai1.forcedLabel })).not.toBeInTheDocument();
   });
 
@@ -233,6 +236,26 @@ describe("hidden (the blind arm)", () => {
     expect(aiStateOfView(blindView()).kind).toBe("hidden");
     renderColumn(blindView());
     expect(within(column()).getByText(S.ai1.hidden)).toBeInTheDocument();
+  });
+
+  it("cannot be told a state: a view that holds a result is ready, whatever the caller would say", () => {
+    // The column read a `state` prop once, for tests. It takes none now, so a state cannot come from anywhere
+    // but the view: the type refuses the prop, and were it passed, it is not what the column shows.
+    function Told() {
+      return AiColumn({
+        view: view(),
+        // @ts-expect-error the column takes no state
+        state: { kind: "hidden" },
+      });
+    }
+    render(
+      <main>
+        <Told />
+      </main>,
+    );
+    const col = column();
+    expect(within(col).queryByText(S.ai1.hidden)).not.toBeInTheDocument();
+    expect(col.textContent).toContain(S.ai1.action.escalate);
   });
 });
 
@@ -248,28 +271,28 @@ describe("pending", () => {
 });
 
 describe("unavailable", () => {
-  it("shows stopped_by with its label, and the code beside it", () => {
-    renderColumn(view({ suggestion: null, triage_status: "unavailable" }), {
-      kind: "unavailable",
-      stoppedBy: "schema",
-    });
+  it("says ① gave up, from the view's own triage status, and says nothing of a reason it was not told", () => {
+    // Neither the queue nor the alert view carries `stopped_by`, so from a view the reason is never known.
+    const gaveUp = view({ suggestion: null, triage_status: "unavailable" });
+    expect(aiStateOfView(gaveUp)).toEqual({ kind: "unavailable", stoppedBy: null });
+    renderColumn(gaveUp);
     const col = within(column());
     expect(col.getByText(S.ai1.unavailable)).toBeInTheDocument();
-    expect(col.getByText(S.ai1.stoppedBy.schema)).toBeInTheDocument();
-    expect(col.getByText("schema").tagName).toBe("CODE");
+    expect(col.getByText(S.ai1.unavailableBody)).toBeInTheDocument();
+    expect(col.queryByText(S.ai1.stoppedByLabel)).not.toBeInTheDocument();
+  });
+
+  // The wording of a reason is kept for the day the view carries one: the part is drawn on its own.
+  it("shows stopped_by with its label, and the code beside it", () => {
+    render(<Unavailable stoppedBy="schema" />);
+    expect(screen.getByText(S.ai1.stoppedBy.schema)).toBeInTheDocument();
+    expect(screen.getByText("schema").tagName).toBe("CODE");
   });
 
   it("unknown enum renders raw code: a stopped_by without a label is shown as it came", () => {
-    renderColumn(view({ suggestion: null }), { kind: "unavailable", stoppedBy: "cosmic_ray" });
-    const col = within(column());
-    expect(col.getAllByText("cosmic_ray").length).toBeGreaterThan(0);
-  });
-
-  it("says nothing of a reason it was not told (the view carries none)", () => {
-    renderColumn(view({ suggestion: null, triage_status: "unavailable" }));
-    const col = within(column());
-    expect(col.getByText(S.ai1.unavailable)).toBeInTheDocument();
-    expect(col.queryByText(S.ai1.stoppedByLabel)).not.toBeInTheDocument();
+    render(<Unavailable stoppedBy="cosmic_ray" />);
+    expect(screen.getByText("cosmic_ray")).toBeInTheDocument();
+    expect(screen.queryByText("cosmic_ray", { selector: "code" })).not.toBeInTheDocument();
   });
 });
 
@@ -281,6 +304,9 @@ describe("decided", () => {
       acknowledged_by_name: "An",
       ...over,
     });
+  /** The row that says whether ① and the person agree: its label's own container. */
+  const match = () => within(column()).queryByText(S.ai1.match)?.parentElement ?? null;
+  const labelOfStatus = (status: string) => (S.status as Record<string, string>)[status] ?? status;
 
   it("puts the decision beside what ① said", () => {
     renderColumn(decided());
@@ -294,31 +320,83 @@ describe("decided", () => {
     expect(ai).toHaveTextContent(S.confidence.medium);
   });
 
-  it("says ① had nothing to say when the view carries no result", () => {
+  it("says ① had nothing to say when the view carries no result, and compares nothing", () => {
     renderColumn(decided({ suggestion: null }));
     const ai = within(column()).getByText(S.ai1.decidedAi).closest("div")!;
     expect(ai).toHaveTextContent(S.ai1.none);
+    expect(match()).toHaveTextContent(S.ai1.matchNoVerdict);
   });
 
-  it("unknown enum renders raw code: a status and an action without a label", () => {
-    // A status the UI does not know is not one of `DECIDED`, so the state is handed in: this pins how the
-    // comparison words a status and an action it has no label for.
-    renderColumn(
-      decided({
-        status: "closed_mystery",
-        suggestion: suggestion({ suggested_action: "quarantine_host" }),
-      }),
-      { kind: "decided", action: "quarantine_host", confidence: "medium" },
+  it("unknown enum renders raw code: an action without a label", () => {
+    // A status the UI does not know is not one of `DECIDED`, so it is not a decided view (the page tests
+    // word an unknown status); the action is what a decided view can carry that the UI has no label for.
+    renderColumn(decided({ suggestion: suggestion({ suggested_action: "quarantine_host" }) }));
+    expect(within(column()).getByText("quarantine_host")).toBeInTheDocument();
+    // the pilot report counts an action that is none of the three as no result: nothing is compared
+    expect(match()).toHaveTextContent(S.ai1.matchNoVerdict);
+  });
+
+  describe("the Khớp row, by the pilot report's mapping (P10-T06, eval/ops_export.py)", () => {
+    it.each([
+      // agreement: ① escalate with a human escalation, ① false_positive with a human closed_fp
+      ["escalated_tier2", "escalate", S.ai1.matchAgree],
+      ["closed_fp", "false_positive", S.ai1.matchAgree],
+      // any other pair of a verdict and a human decision disagrees
+      ["escalated_tier2", "false_positive", S.ai1.matchDisagree],
+      ["closed_fp", "escalate", S.ai1.matchDisagree],
+      ["closed_benign", "escalate", S.ai1.matchDisagree],
+      // ① has no benign verdict: a human closed_benign after ① false_positive is a disagreement
+      ["closed_benign", "false_positive", S.ai1.matchDisagree],
+      // ① needs_review is no verdict
+      ["escalated_tier2", "needs_review", S.ai1.matchNoVerdict],
+      ["closed_fp", "needs_review", S.ai1.matchNoVerdict],
+      ["closed_benign", "needs_review", S.ai1.matchNoVerdict],
+    ])("%s after ① %s says '%s'", (status, action, said) => {
+      renderColumn(decided({ status, suggestion: suggestion({ suggested_action: action }) }));
+      expect(match()).toHaveTextContent(said);
+      expect(match()).toHaveTextContent(S.ai1.match);
+    });
+
+    it("has no row when the view is not decided", () => {
+      renderColumn(view());
+      expect(within(column()).queryByText(S.ai1.match)).not.toBeInTheDocument();
+    });
+  });
+
+  describe("an alert that no Tier 1 person decided", () => {
+    it.each(["auto_closed", "closed_confirmed"])(
+      "%s names nobody as the decider and compares nothing",
+      (status) => {
+        renderColumn(decided({ status, acknowledged_by_name: "Nguyễn Văn Ân" }));
+        const col = within(column());
+        // the status is said; the person who once acknowledged the alert is not named as who decided it
+        expect(col.getByText(S.decision.heading).closest("div")).toHaveTextContent(
+          labelOfStatus(status),
+        );
+        expect(column().textContent).not.toContain("Nguyễn Văn Ân");
+        expect(col.getByText(S.ai1.notTier1Decision)).toBeInTheDocument();
+        expect(col.queryByText(S.ai1.match)).not.toBeInTheDocument();
+        // what ① said is still shown beside it
+        expect(col.getByText(S.ai1.decidedAi).closest("div")).toHaveTextContent(
+          S.ai1.action.escalate,
+        );
+      },
     );
-    const col = within(column());
-    expect(col.getByText("closed_mystery")).toBeInTheDocument();
-    expect(col.getByText("quarantine_host")).toBeInTheDocument();
+
+    it.each(["closed_fp", "closed_benign", "escalated_tier2"])(
+      "%s names who decided it, and says nothing of a Tier 2 or system close",
+      (status) => {
+        renderColumn(decided({ status, acknowledged_by_name: "Nguyễn Văn Ân" }));
+        expect(column().textContent).toContain("Nguyễn Văn Ân");
+        expect(within(column()).queryByText(S.ai1.notTier1Decision)).not.toBeInTheDocument();
+      },
+    );
   });
 });
 
 describe("accessibility", () => {
-  const states: [string, AlertView, AiState | undefined][] = [
-    ["ready", view(), undefined],
+  const states: [string, AlertView][] = [
+    ["ready", view()],
     [
       "ready and forced",
       view({
@@ -327,20 +405,16 @@ describe("accessibility", () => {
         }),
         correlated_now: 9,
       }),
-      undefined,
     ],
-    ["hidden", blindView(), undefined],
-    ["pending", view({ suggestion: null, triage_status: "pending" }), undefined],
-    [
-      "unavailable",
-      view({ suggestion: null, triage_status: "unavailable" }),
-      { kind: "unavailable", stoppedBy: "schema" },
-    ],
-    ["decided", view({ status: "closed_benign", acknowledged_by_name: "An" }), undefined],
+    ["hidden", blindView()],
+    ["pending", view({ suggestion: null, triage_status: "pending" })],
+    ["unavailable", view({ suggestion: null, triage_status: "unavailable" })],
+    ["decided, with the Khớp row", view({ status: "closed_benign", acknowledged_by_name: "An" })],
+    ["decided by the system", view({ status: "auto_closed" })],
   ];
 
-  it.each(states)("has no axe violation in the %s state", async (_name, v, state) => {
-    const { container } = renderColumn(v, state);
+  it.each(states)("has no axe violation in the %s state", async (_name, v) => {
+    const { container } = renderColumn(v);
     // jsdom computes no colour, so the contrast rule cannot run here.
     const result = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
     expect(

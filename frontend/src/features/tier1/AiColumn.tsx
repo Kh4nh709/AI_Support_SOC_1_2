@@ -2,11 +2,12 @@
 // and by nothing else: this file words the five states and reads no other key of the view to guess at one.
 // In particular the hidden state (the blind arm, DEC-101) shows `S.ai1.hidden` and nothing of ①: not the
 // verdict, not "pending", not "failed", not "no result". The server dropped the keys; this column does not
-// look for them, and a column that is told `hidden` never reads `view.suggestion` at all.
+// look for them, and it takes no state from a caller: the only way to a state is the view itself.
 import { useId, type ReactNode } from "react";
 import type { AlertView, Suggestion } from "../../api/tier1";
 import { formatDateTime } from "../../format";
 import { S, labelOf } from "../../strings";
+import { agreementOf } from "./agreement";
 import { aiStateOfView, type AiState } from "./aiState";
 
 const MUTED = "text-muted";
@@ -196,7 +197,11 @@ function Message({
   );
 }
 
-function Unavailable({ stoppedBy }: { stoppedBy: string | null }) {
+/**
+ * ① gave up. The reason is worded when one is given; no view carries one today (`stopped_by` is not in the
+ * queue or the alert view), so the column passes none. It is exported to be drawn on its own.
+ */
+export function Unavailable({ stoppedBy }: { stoppedBy: string | null }) {
   return (
     <div className="space-y-2">
       <Message title={S.ai1.unavailable} body={S.ai1.unavailableBody} />
@@ -213,7 +218,19 @@ function Unavailable({ stoppedBy }: { stoppedBy: string | null }) {
   );
 }
 
-/** The decision beside what ① said: evaluation material, shown only once a person has decided. */
+/** How ① and the person agree, in words; the mapping is agreement.ts's. */
+const AGREEMENT_WORDS = {
+  agree: S.ai1.matchAgree,
+  disagree: S.ai1.matchDisagree,
+  no_verdict: S.ai1.matchNoVerdict,
+} as const;
+
+/**
+ * The decision beside what ① said: evaluation material, shown only once the alert is closed or escalated.
+ * A Tier 1 decision (closed as a false positive or benign, or escalated) names the person who took it: the
+ * holder of an alert is the only one who can. A close by the system, or a Tier 2 conclusion, has no such
+ * person: the acknowledger is not named as its decider, and there is nothing to compare ① with.
+ */
 function Decided({
   view,
   state,
@@ -221,6 +238,9 @@ function Decided({
   view: AlertView;
   state: Extract<AiState, { kind: "decided" }>;
 }) {
+  // `null` is the mapping's word for a status that is not a Tier 1 decision (auto_closed, closed_confirmed).
+  const agreement = agreementOf(view.status, state.action);
+  const byTier1 = agreement !== null;
   return (
     <div className="space-y-3">
       <h3 className="text-sm font-medium">{S.ai1.decidedHeading}</h3>
@@ -229,7 +249,7 @@ function Decided({
           <span className="text-xs text-muted">{S.decision.heading}</span>
           <p className="text-sm">
             <span>{labelOf(S.status, view.status)}</span>
-            {view.acknowledged_by_name && (
+            {byTier1 && view.acknowledged_by_name && (
               <span className={MUTED}> · {view.acknowledged_by_name}</span>
             )}
           </p>
@@ -250,18 +270,20 @@ function Decided({
           </p>
         </div>
       </div>
+      {agreement === null ? (
+        <p className="text-xs text-muted">{S.ai1.notTier1Decision}</p>
+      ) : (
+        <p className="text-sm">
+          <span className={MUTED}>{S.ai1.match}</span> <strong>{AGREEMENT_WORDS[agreement]}</strong>
+        </p>
+      )}
     </div>
   );
 }
 
-export function AiColumn({
-  view,
-  state = aiStateOfView(view),
-}: {
-  view: AlertView;
-  /** Given only by a test: the page lets the column read the state of the view itself. */
-  state?: AiState;
-}) {
+export function AiColumn({ view }: { view: AlertView }) {
+  // The state is the view's own word, read by `aiStateOfView` and by nothing else.
+  const state = aiStateOfView(view);
   const heading = useId();
   return (
     <section

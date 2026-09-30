@@ -173,8 +173,15 @@ export const S = {
     pendingBody:
       "Alert đã vào hàng chờ phân tích. Trang tự cập nhật khi có kết quả; bạn vẫn có thể quyết định ngay.",
     decidedHeading: "Đã quyết — so sánh",
-    decidedMine: "Quyết định của bạn",
     decidedAi: "Gợi ý ①",
+    // Whether ① and the person who decided agree (the pilot report's mapping, see agreement.ts).
+    match: "Khớp",
+    matchAgree: "có",
+    matchDisagree: "không",
+    matchNoVerdict: "không có đề xuất để so",
+    // An alert closed by the system or by a Tier 2 conclusion: no Tier 1 person decided it, so there is
+    // nobody to name and nothing to compare ① with.
+    notTier1Decision: "Không phải quyết định của Tier 1 — không so với gợi ý ①",
     verdict: "Đề xuất",
     confidence: "Độ tin cậy",
     gate: "Cổng kiểm soát",
