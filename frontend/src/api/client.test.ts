@@ -1,7 +1,7 @@
 // src/api/client.test.ts — the one fetch wrapper: the Bearer header, the 401 hook, the server's `detail`.
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
-import { ApiError, api, setTokenSource } from "./client";
+import { ApiError, api, reportUnauthorized, setTokenSource } from "./client";
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -94,6 +94,24 @@ it("does not report a 401 for a token that is no longer the current one", async 
   );
   await expect(api("/ping")).rejects.toMatchObject({ status: 401 });
   expect(onUnauthorized).not.toHaveBeenCalled();
+});
+
+// The socket's 4401 is the same fact as a 401 (P10-T09): the same rule, through the same hook.
+describe("reportUnauthorized (a 4401 from the socket)", () => {
+  it("ends the session when the token the socket sent is still the current one", () => {
+    const onUnauthorized = withToken("t");
+    reportUnauthorized("t");
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it("does nothing for a token that is no longer current, or when nobody is signed in", () => {
+    const onUnauthorized = withToken("new");
+    reportUnauthorized("old");
+    expect(onUnauthorized).not.toHaveBeenCalled();
+    setTokenSource(() => null, onUnauthorized);
+    reportUnauthorized("old");
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
 });
 
 it("throws ApiError with the server's detail object intact on a 409", async () => {

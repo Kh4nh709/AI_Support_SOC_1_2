@@ -28,6 +28,14 @@ export function setTokenSource(get: () => string | null, onUnauthorized: () => v
   unauthorized = onUnauthorized;
 }
 
+/**
+ * The live socket was closed with 4401: the token it authenticated with is not (or no longer) good. The
+ * same rule as a 401 answer: it ends the session only when that token is still the current one.
+ */
+export function reportUnauthorized(sentToken: string): void {
+  if (getToken() === sentToken) unauthorized();
+}
+
 export async function api<T>(
   path: string,
   init: RequestInit & { json?: unknown } = {},
