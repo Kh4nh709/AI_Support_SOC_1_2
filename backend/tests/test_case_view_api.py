@@ -116,11 +116,20 @@ def _insert_alert(
     return alert_id
 
 
-def _add_head(conn: psycopg.Connection, case_id: str, alert_id: str, added_by: str) -> None:
+def _add_head(
+    conn: psycopg.Connection, case_id: str, alert_id: str, added_by: str, *, added_at=None
+) -> None:
+    """`added_at` fixes the head's place in `case_detail`'s order (`added_at, alert_id`); left
+    out it is `now()`, the same instant for every head of a test's one transaction."""
     conn.execute(
         "INSERT INTO case_alerts (case_id, alert_id, added_by) VALUES (%s, %s, %s)",
         (case_id, alert_id, added_by),
     )
+    if added_at is not None:
+        conn.execute(
+            "UPDATE case_alerts SET added_at = %s WHERE case_id = %s AND alert_id = %s",
+            (added_at, case_id, alert_id),
+        )
 
 
 class _Client:
@@ -278,23 +287,34 @@ def test_head_band_of_no_score_is_none():
 def test_ongoing_true_when_an_escalated_head_grew_after_creation(client, db):
     u = client.user_id
     case_id = _make_case(db, u, created_at=_T0)
-    grew = _insert_alert(
+    # Three heads whose `added_at` order (first, middle, last) is fixed, and whose newest
+    # `last_seen_at` is the MIDDLE one: a rule that keeps the first qualifying head answers
+    # +1h, one that keeps the last answers +1.5h, and only the max answers +2h.
+    first = _insert_alert(
         db,
         status="escalated_tier2",
         case_id=case_id,
         last_seen_at=_T0 + timedelta(hours=1),
     )
-    later = _insert_alert(
+    middle = _insert_alert(
         db,
         status="escalated_tier2",
         case_id=case_id,
         last_seen_at=_T0 + timedelta(hours=2),
     )
-    _add_head(db, case_id, grew, u)
-    _add_head(db, case_id, later, u)
+    last = _insert_alert(
+        db,
+        status="escalated_tier2",
+        case_id=case_id,
+        last_seen_at=_T0 + timedelta(hours=1, minutes=30),
+    )
+    _add_head(db, case_id, first, u, added_at=_T0)
+    _add_head(db, case_id, middle, u, added_at=_T0 + timedelta(minutes=1))
+    _add_head(db, case_id, last, u, added_at=_T0 + timedelta(minutes=2))
 
     body = client.http.get(f"/api/tier2/cases/{case_id}").json()
 
+    assert [h["alert_id"] for h in body["heads"]] == [first, middle, last]  # the fixed order
     assert body["ongoing"] is True
     assert _instant(body["ongoing_last_seen"]) == _T0 + timedelta(hours=2)  # the latest head
 
