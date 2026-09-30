@@ -89,5 +89,14 @@ services:
     command: python -m app.web.worker
     ports: []
 
+  # The React UI (P10-T07): nginx serves the built SPA and proxies /api/ and /api/ws to `app` on the
+  # same origin. Loopback only — the Owner reaches it through the same tunnel as the app. A change
+  # to frontend/ needs `docker compose up -d --build ui` (the image holds the build, not a mount).
+  ui:
+    build: ./frontend
+    ports: ["127.0.0.1:8080:80"]
+    depends_on: [app]
+    restart: unless-stopped
+
 volumes:
   pgdata:
