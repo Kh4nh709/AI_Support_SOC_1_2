@@ -3137,3 +3137,47 @@ Decision:
 
      The plan names a cut order in case the window slips: the MITRE import first, then the memory admin page, then the knowledge re-index job, falling back to a CLI.
 Supersedes: DEC-158 items 1, 2.3 and 3 (see item 7)
+
+## DEC-161 · 2026-09-30 · v1.0 is narrowed to the React Tier-1 and Tier-2 flows (① suggestions, ② analysis, decisions, cases); the Tier-2 assistant (DEC-160) and the admin console (DEC-159) move to v1.1, the assistant not before 15/10; React authenticates with the JWT as a Bearer header, not the cookie
+Scope: **plan** (v1.0 / v1.1 split inside DEC-157's window) · **security** (browser token handling)
+Decided by: **the Owner**, 30/09:
+- *"Chức năng chat với AI của tier 2 này trong v1.1 … Yêu cầu v1.0 chỉ cần xong tier 1 và tier 2 phân tích và gợi ý cơ bản. chức năng nặng nhất là chat với AI và các dependency của nó plan sẽ phát triển sau ngày 15/10"*
+- *"Admin sang v1.1"*, answering the Director's question
+- *"Ở chức năng đăng nhập thì đăng nhập qua jwt thay vì cookie"*
+Drafted by: Director (Opus 5.5)
+Propagated to: the UI design spec and its implementation plan
+Decision:
+  1. **v1.0**, code cut-off 07/10 12:00 (DEC-157).
+     - **What the React UI covers:**
+       - login;
+       - the Tier-1 queue;
+       - the alert detail page, with alert information and the ① column side by side;
+       - the Tier-1 decisions: acknowledge, close, escalate, reopen;
+       - the Tier-2 case list;
+       - the case page: heads, notes, conclusion, and the ② analysis column with its run, poll and evidence marks.
+     - **Retired in v1.0:** the Jinja/htmx Tier-1 and Tier-2 pages and their page-only tests, once React covers them.
+     - **Kept in v1.0 for admins:** the Jinja admin pages (auto-close rules, digest, labelling) and their own `/login` route.
+     - **No backend contract change is expected.** The existing `/api/tier1/*`, `/api/tier2/*` and `/api/auth/*` routes cover these flows. A gap found while planning is its own DEC.
+  2. **v1.1**, after v1.0. The plan dates it; the assistant starts no earlier than 15/10.
+     - The Tier-2 investigation assistant and all its dependencies, exactly as recorded in DEC-160: tools with approvals, the knowledge agent, the knowledge index, memory.
+     - The admin console of DEC-159: user management, LLM usage and limits, the overview.
+     - Porting the three Jinja admin pages to React, and retiring the last of the Jinja UI.
+
+     The canvas keeps the v1.1 artboards as the agreed design.
+  3. **Authentication in the React UI.**
+     - React sends the JWT from `POST /api/auth/login` as `Authorization: Bearer <token>`. `web/deps.read_token` already reads that header before the `soc_session` cookie, so no backend change is needed.
+     - React never relies on the cookie.
+     - The token is held in memory and mirrored to `sessionStorage`, so it survives a reload of the tab but not closing it. It is never put in `localStorage`.
+     - Logout calls `POST /api/auth/logout`, which kills every earlier token through `sessions_invalid_before`, then clears the storage.
+     - Any `401` returns to the login page.
+     - Expiry follows `JWT_TTL_HOURS`. There is no refresh token in v1.0.
+     - A script-readable token is exposed to XSS, so the UI:
+       - renders all alert and log text as text (no `dangerouslySetInnerHTML`);
+       - is served with a restrictive Content-Security-Policy;
+       - loads no third-party script at run time.
+     - The `ui` service serves the build and reverse-proxies `/api` to the app on the same origin, so no CORS is opened.
+     - **Open for the spec:** whether `POST /api/auth/login` stops setting the cookie, which is an API behaviour change pinned by `test_api_login_sets_cookie_and_returns_token`. The Jinja admin pages keep logging in through `/login` either way.
+  4. **Unchanged.** The blind arm stays, and the human pilot runs on the React Tier-1 flow once it is live (DEC-157 item 4). "Two columns, AI column open" stands.
+Supersedes:
+- DEC-157 item 2's "all roles" and "retire every Jinja page" (narrowed to Tier-1/Tier-2 for v1.0).
+- The timing of DEC-158, DEC-159 and DEC-160 (now v1.1); their content stands.
