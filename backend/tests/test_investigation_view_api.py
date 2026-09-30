@@ -120,17 +120,20 @@ def _insert_job(
     case_id: str,
     status: str,
     *,
+    attempts: int = 1,
     scheduled_ago: timedelta | None = None,
     locked_ago: timedelta | None = None,
+    created_ago: timedelta | None = None,
 ) -> int:
     """`*_ago` place the timestamps relative to the database's `now()` (the view measures a
-    job's age by the database clock too)."""
+    job's age by the database clock too); left out, `scheduled_at` and `created_at` keep
+    `now()` and `locked_at` stays NULL."""
     row = conn.execute(
-        "INSERT INTO jobs (job_type, subject_id, status, attempts, scheduled_at, locked_at) "
-        "VALUES ('investigate', %s, %s, 1, now() - COALESCE(%s, interval '0'), "
-        "CASE WHEN %s::interval IS NULL THEN NULL ELSE now() - %s::interval END) "
-        "RETURNING job_id",
-        (case_id, status, scheduled_ago, locked_ago, locked_ago),
+        "INSERT INTO jobs (job_type, subject_id, status, attempts, scheduled_at, locked_at, "
+        "created_at) VALUES ('investigate', %s, %s, %s, now() - COALESCE(%s, interval '0'), "
+        "CASE WHEN %s::interval IS NULL THEN NULL ELSE now() - %s::interval END, "
+        "now() - COALESCE(%s, interval '0')) RETURNING job_id",
+        (case_id, status, attempts, scheduled_ago, locked_ago, locked_ago, created_ago),
     ).fetchone()
     return row[0]
 
@@ -161,16 +164,20 @@ def _insert_run(
     case_id: str,
     *,
     job_id: int | None = None,
+    run_id: uuid.UUID | None = None,
     result: dict | None = None,
     evidence_check: dict | None = None,
     stopped_by: str | None = None,
     agent_trace: dict | None = None,
+    created_at: datetime | None = None,
 ) -> uuid.UUID:
-    run_id = tier2_investigate.run_id_for_job(job_id) if job_id is not None else uuid.uuid4()
+    if run_id is None:
+        run_id = tier2_investigate.run_id_for_job(job_id) if job_id is not None else uuid.uuid4()
     conn.execute(
         "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, role, "
-        "system_prompt, user_message, agent_trace, result, evidence_check, stopped_by) "
-        "VALUES (%s, 'investigate', 'case', %s, 'investigator', 's', 'u', %s, %s, %s, %s)",
+        "system_prompt, user_message, agent_trace, result, evidence_check, stopped_by, "
+        "created_at) VALUES (%s, 'investigate', 'case', %s, 'investigator', 's', 'u', "
+        "%s, %s, %s, %s, COALESCE(%s::timestamptz, now()))",
         (
             run_id,
             case_id,
@@ -178,6 +185,7 @@ def _insert_run(
             Jsonb(result) if result is not None else None,
             Jsonb(evidence_check) if evidence_check is not None else None,
             stopped_by,
+            created_at,
         ),
     )
     return run_id
@@ -744,3 +752,275 @@ def test_every_stopped_by_code_has_its_sentence(client, db, stopped_by, sentence
     assert body["run"]["result"] is None
     assert body["run"]["stopped_text"] == sentence
     assert set(view.STOPPED_TEXT) == {"cap", "permanent", "linter", "schema", "transient"}
+
+
+# ---------------------------------------------------------------------------
+# The view's own rules, kept from the retired page's tests (P10-T13)
+#
+# `test_pages_investigation.py` pinned these through the HTML page. The rules live in
+# `derive_view` / `build_investigation`, which the JSON route returns unchanged, so each one is
+# asserted here on the JSON the React page reads.
+# ---------------------------------------------------------------------------
+
+
+def test_a_transient_attempt_row_between_attempts_is_not_a_result(client, db):
+    """A non-final failed attempt writes `stopped_by='transient'` under an attempt-scoped id
+    while the job is still live. It is not an outcome: the view stays `running` and shows
+    nothing of it."""
+    case_id = _make_case(db, client.user_id)
+    job_id = _insert_job(db, case_id, "pending", attempts=1)
+    _insert_run(
+        db,
+        case_id,
+        run_id=tier2_investigate.attempt_run_id(job_id, 1),
+        stopped_by="transient",
+    )
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == "running"
+    assert body["run_id"] == str(tier2_investigate.run_id_for_job(job_id))
+    assert body["run"] is None
+
+
+@pytest.mark.parametrize(
+    ("minutes", "state"),
+    [(1, "running"), (9, "running"), (11, "stalled"), (25, "stalled")],
+)
+def test_a_pending_job_is_stalled_only_past_twice_the_lock_timeout(client, db, minutes, state):
+    """`JOB_LOCK_TIMEOUT_S` is 300 in the fixture's config: the bound is 2 x 300 s = 10 minutes,
+    and a stall reports the job's actual age, not the bound."""
+    case_id = _make_case(db, client.user_id)
+    _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=minutes))
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == state
+    assert body["minutes"] == (minutes if state == "stalled" else None)
+
+
+def test_a_running_job_locked_eleven_minutes_ago_is_stalled(client, db):
+    case_id = _make_case(db, client.user_id)
+    job_id = _insert_job(
+        db,
+        case_id,
+        "running",
+        scheduled_ago=timedelta(minutes=12),
+        locked_ago=timedelta(minutes=11),
+    )
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == "stalled"
+    assert body["minutes"] == 11  # from the lock, not from the 12 minutes it was scheduled
+    assert body["run_id"] == str(tier2_investigate.run_id_for_job(job_id))
+
+
+def test_a_running_job_is_measured_from_its_lock_not_from_how_long_it_queued(client, db):
+    """It waited 30 minutes in the queue but a worker locked it a minute ago: it is running."""
+    case_id = _make_case(db, client.user_id)
+    _insert_job(
+        db,
+        case_id,
+        "running",
+        scheduled_ago=timedelta(minutes=30),
+        locked_ago=timedelta(minutes=1),
+    )
+
+    assert _get(client, case_id).json()["state"] == "running"
+
+
+def test_a_pending_job_is_measured_from_scheduled_at_not_created_at(client, db):
+    """A retry's backoff moves `scheduled_at`: created an hour ago, due only now, is not
+    stalled. The same job scheduled into the future (a backoff still counting down) is not
+    stalled either."""
+    case_id = _make_case(db, client.user_id)
+    _insert_job(db, case_id, "pending", created_ago=timedelta(hours=1))
+    assert _get(client, case_id).json()["state"] == "running"
+
+    other = _make_case(db, client.user_id)
+    _insert_job(db, other, "pending", scheduled_ago=timedelta(minutes=-5))
+    assert _get(client, other).json()["state"] == "running"
+
+
+def test_the_stall_bound_follows_job_lock_timeout_s(client, db):
+    """Nothing is hard-coded to ten minutes: with a 60 s lock timeout, three minutes is a
+    stall."""
+    case_id = _make_case(db, client.user_id)
+    _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=3))
+    assert _get(client, case_id).json()["state"] == "running"  # 180 s < 2 x 300 s
+
+    main.app.dependency_overrides[deps.get_config] = lambda: config.Config(
+        ANALYZE_QUOTA_PER_USER_DAY=2, JOB_LOCK_TIMEOUT_S=60
+    )
+
+    body = _get(client, case_id).json()
+    assert body["state"] == "stalled"  # 180 s > 2 x 60 s
+    assert body["minutes"] == 3
+
+
+def test_a_stalled_job_that_did_write_its_row_is_done(client, db):
+    """The final row wins over the job's age, as it does over a live job's status."""
+    case_id = _make_case(db, client.user_id)
+    job_id = _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=30))
+    _insert_run(db, case_id, job_id=job_id, result=_result(summary="LATE-BUT-HERE"))
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == "done"
+    assert body["run"]["summary"] == "LATE-BUT-HERE"
+    assert body["minutes"] is None
+
+
+def test_a_stalled_job_hides_the_previous_result_like_a_running_one(client, db):
+    case_id = _make_case(db, client.user_id)
+    old_job = _insert_job(db, case_id, "succeeded")
+    _insert_run(db, case_id, job_id=old_job, result=_result(summary="PREVIOUS"), created_at=_PAST)
+    _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=11))
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == "stalled"
+    assert body["run"] is None and body["current"] is None
+    assert "PREVIOUS" not in repr(body)
+
+
+def test_the_recheck_gets_the_live_state_once_the_worker_has_finished(client, db):
+    """The React page's "Kiểm tra lại" is the same GET: once the job has finished the answer is
+    the result."""
+    case_id = _make_case(db, client.user_id)
+    job_id = _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=11))
+    run_id = str(tier2_investigate.run_id_for_job(job_id))
+    assert _get(client, case_id, run_id=run_id).json()["state"] == "stalled"
+
+    _insert_run(db, case_id, job_id=job_id, result=_result(summary="FINISHED-AFTER-ALL"))
+    db.execute("UPDATE jobs SET status = 'succeeded' WHERE job_id = %s", (job_id,))
+    body = _get(client, case_id, run_id=run_id).json()
+
+    assert body["state"] == "done"
+    assert body["run"]["summary"] == "FINISHED-AFTER-ALL"
+
+
+def test_the_newest_job_wins_and_older_runs_stay_out_of_the_way(client, db):
+    case_id = _make_case(db, client.user_id)
+    older = _insert_job(db, case_id, "succeeded")
+    _insert_run(
+        db, case_id, job_id=older, result=_result(summary="OLDER-SUMMARY"), created_at=_PAST
+    )
+    newer = _insert_job(db, case_id, "succeeded")
+    _insert_run(db, case_id, job_id=newer, result=_result(summary="NEWER-SUMMARY"))
+
+    body = _get(client, case_id).json()
+
+    assert body["run"]["summary"] == "NEWER-SUMMARY"
+    assert "OLDER-SUMMARY" not in repr(body)
+
+
+def test_a_run_of_another_case_is_never_shown(client, db):
+    """The request itself names case B's run (`?run_id=<B's run>`) on case A's view, and
+    nothing of B comes back — not its text, not its run id. The hint is not a lookup key: with
+    nothing of A's own behind it the answer is `failed`, as for any `run_id` this case has no
+    trace of."""
+    case_a = _make_case(db, client.user_id)
+    case_b = _make_case(db, client.user_id)
+    job_b = _insert_job(db, case_b, "succeeded")
+    run_b = _insert_run(
+        db,
+        case_b,
+        job_id=job_b,
+        result=_result(summary="CASE-B-SUMMARY", attack_narrative="CASE-B-NARRATIVE"),
+        agent_trace={"alert_count": 77, "total_occurrences": 777},
+    )
+
+    resp = _get(client, case_a, run_id=str(run_b))
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["state"] == "failed"
+    assert body["run"] is None and body["current"] is None
+    for b_only in ("CASE-B-SUMMARY", "CASE-B-NARRATIVE", str(run_b)):
+        assert b_only not in resp.text
+
+
+def test_a_run_of_another_case_never_replaces_this_cases_own_result(client, db):
+    case_a = _make_case(db, client.user_id)
+    case_b = _make_case(db, client.user_id)
+    job_a = _insert_job(db, case_a, "succeeded")
+    _insert_run(db, case_a, job_id=job_a, result=_result(summary="CASE-A-SUMMARY"))
+    job_b = _insert_job(db, case_b, "succeeded")
+    run_b = _insert_run(db, case_b, job_id=job_b, result=_result(summary="CASE-B-SUMMARY"))
+
+    resp = _get(client, case_a, run_id=str(run_b))
+
+    assert resp.json()["run"]["summary"] == "CASE-A-SUMMARY"
+    assert "CASE-B-SUMMARY" not in resp.text and str(run_b) not in resp.text
+
+
+def test_without_any_job_the_latest_final_row_is_shown(client, db):
+    """No `jobs` row left (a purged queue, an old run): the newest row that is not a transient
+    attempt is the answer."""
+    case_id = _make_case(db, client.user_id)
+    _insert_run(db, case_id, result=_result(summary="OLD-RUN"), created_at=_PAST)
+    _insert_run(
+        db, case_id, result=_result(summary="NEW-RUN"), created_at=_PAST + timedelta(days=1)
+    )
+    _insert_run(db, case_id, stopped_by="transient", created_at=_PAST + timedelta(days=2))
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == "done"
+    assert body["run"]["summary"] == "NEW-RUN"
+
+
+def test_the_failed_state_keeps_the_previous_good_result_and_ignores_attempt_rows(client, db):
+    case_id = _make_case(db, client.user_id)
+    good = _insert_job(db, case_id, "succeeded")
+    _insert_run(db, case_id, job_id=good, result=_result(summary="LAST-GOOD"), created_at=_PAST)
+    bad = _insert_job(db, case_id, "failed", attempts=3)
+    _insert_run(
+        db,
+        case_id,
+        run_id=tier2_investigate.attempt_run_id(bad, 1),
+        stopped_by="transient",
+        created_at=_PAST + timedelta(days=1),
+    )
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == "failed"
+    assert body["run"]["summary"] == "LAST-GOOD"
+    assert body["run"]["result"] is not None  # the attempt row is not an outcome
+
+
+@pytest.mark.parametrize(
+    "status", ["concluded_fp", "concluded_policy_violation", "confirmed_incident"]
+)
+def test_a_concluded_case_is_closed_and_still_shows_the_last_result(client, db, status):
+    case_id = _make_case(db, client.user_id, status=status)
+    job_id = _insert_job(db, case_id, "succeeded")
+    _insert_run(db, case_id, job_id=job_id, result=_result(summary="BEFORE-CONCLUSION"))
+
+    body = _get(client, case_id).json()
+
+    assert body["case_open"] is False
+    assert body["state"] == "done"
+    assert body["run"]["summary"] == "BEFORE-CONCLUSION"
+
+
+def test_a_failed_job_on_a_concluded_case_is_failed_and_closed(client, db):
+    case_id = _make_case(db, client.user_id, status="concluded_fp")
+    _insert_job(db, case_id, "failed", attempts=3)
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == "failed"
+    assert body["case_open"] is False
+
+
+def test_a_concluded_case_without_a_result_is_idle_and_closed(client, db):
+    case_id = _make_case(db, client.user_id, status="concluded_fp")
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == "idle" and body["run"] is None
+    assert body["case_open"] is False
