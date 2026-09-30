@@ -20,11 +20,27 @@ it("scans the non-test source (a guard over no files would pass for nothing)", (
   expect(scanned.some((p) => /\.test\./.test(p))).toBe(false);
 });
 
+// A call of `eval`, not any identifier that ends in it: `retrieval(` is not a call of eval.
+const EVAL_CALL = /\beval\s*\(/;
+
+it("matches a call of eval and nothing that merely ends in it", () => {
+  for (const call of ["eval(x)", "eval (x)", "window.eval('1')", "x = eval(\n)"]) {
+    expect(EVAL_CALL.test(call), call).toBe(true);
+  }
+  for (const other of ["retrieval(x)", "medieval(1)", "my_eval(x)", "evaluate(x)", "evalue"]) {
+    expect(EVAL_CALL.test(other), other).toBe(false);
+  }
+});
+
 // Ruling R5: `localStorage` never appears in non-test source, comments included. The token
 // lives in memory, sessionStorage and a BroadcastChannel only (spec §3).
-it.each(["dangerouslySetInnerHTML", "eval(", "new Function", "localStorage"])(
-  "no %s in src",
-  (needle) => {
-    expect(src.filter(([, t]) => t.includes(needle)).map(([p]) => p)).toEqual([]);
-  },
-);
+const NEEDLES: [string, (text: string) => boolean][] = [
+  ["dangerouslySetInnerHTML", (t) => t.includes("dangerouslySetInnerHTML")],
+  ["eval(", (t) => EVAL_CALL.test(t)],
+  ["new Function", (t) => t.includes("new Function")],
+  ["localStorage", (t) => t.includes("localStorage")],
+];
+
+it.each(NEEDLES)("no %s in src", (_name, found) => {
+  expect(src.filter(([, t]) => found(t)).map(([p]) => p)).toEqual([]);
+});
