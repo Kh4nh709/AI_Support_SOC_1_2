@@ -816,15 +816,17 @@ def test_human_metrics_not_measured_when_zero_and_counted_when_not(db):
         assert rows[metric][0] == "not measured", metric
     decisions = rows[HUMAN_ROWS[0]][1]
     assert decisions.startswith(
-        "no human-decision pilot ran: the Tier-1 console was deprioritized (DEC-116); "
+        "pilot start not given: pass `--pilot-start` for the pilot's figures (section 6a); "
         "`tier1.decided` = 0"
     )
     assert "`alert.acknowledged` = 0" in rows[HUMAN_ROWS[1]][1]
-    assert "DEC-116" in rows[HUMAN_ROWS[2]][1]
-    assert "DEC-116" in rows[HUMAN_ROWS[3]][1]
+    assert "pilot start not given" in rows[HUMAN_ROWS[2]][1]
+    assert "live since P5 (DEC-154)" in rows[HUMAN_ROWS[3]][1]
     assert "`autoclose.reviewed` = 0" in rows[HUMAN_ROWS[3]][1]
     assert "`autoclose_reviews` rows = 0" in rows[HUMAN_ROWS[3]][1]
-    assert "DEC-097" in rows[HUMAN_ROWS[4]][1] and "DEC-111" in rows[HUMAN_ROWS[4]][1]
+    assert (
+        "built and run, no rating control in v1.0 (DEC-154, DEC-161)" in rows[HUMAN_ROWS[4]][1]
+    )
     assert "`case.opened` = 0" in rows[HUMAN_ROWS[4]][1]
     assert rows[GATE_ROW] == (
         "n/a (0 rows)",
