@@ -121,7 +121,12 @@ export const S = {
       all: "Tất cả",
       waiting: "Chờ xử lý",
       mine: "Của tôi",
+      apply: "Lọc",
+      clear: "Xoá bộ lọc",
     },
+    noMatch: "Không có cụm nào khớp bộ lọc.",
+    pageEmpty: "Trang này không có cụm nào.",
+    page: (n: number) => `Trang ${n}`,
   },
 
   // The ① cell of the queue and the ① column of the alert page.
@@ -131,6 +136,12 @@ export const S = {
     none: "chưa có",
     forced: "⚑",
     forcedLabel: "Cổng kiểm soát đã ép kết quả",
+    // `suggested_action` of ① (output_guard.SUGGESTED_ACTIONS), read through `labelOf`.
+    action: {
+      false_positive: "Dương tính giả",
+      needs_review: "Cần xem xét",
+      escalate: "Chuyển tier 2",
+    },
     pending: "Đang phân tích…",
     unavailable: "Không có gợi ý ①",
     decidedMine: "Quyết định của bạn",
