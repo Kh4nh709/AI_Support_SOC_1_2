@@ -1,23 +1,47 @@
+import { randomBytes } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
-// The end-to-end suite runs against the production build served by `vite preview`, on 127.0.0.1 only.
-// P10-T12 adds the full-flow specs; this card's e2e/smoke.spec.ts proves the page loads under the CSP.
-const PORT = 4173;
+// The end-to-end suite runs against a scratch stack (scripts/ui_e2e_stack.sh): its own database, the API,
+// the worker, an LLM stub and `vite preview` of the production build, all on 127.0.0.1. Playwright starts
+// the script as its webServer and stops it with SIGTERM, so the script's trap can drop the database.
+const WEB_PORT = 18080;
+
+// The directory the script makes for the run's secrets (a mode-700 directory it removes on exit). It is
+// chosen once, in the main process: the workers inherit the variable, and fixtures.ts reads it.
+const STATE_DIR =
+  process.env.E2E_STATE_DIR ?? join(tmpdir(), `soc-ui-e2e-${randomBytes(6).toString("hex")}`);
+process.env.E2E_STATE_DIR = STATE_DIR;
 
 export default defineConfig({
   testDir: "./e2e",
-  fullyParallel: true,
+  // One worker, in file order: the specs share one database and one worker process of the stack, and a
+  // logout of e2e-t1 (spec "401") ends every token that user holds.
+  fullyParallel: false,
+  workers: 1,
   forbidOnly: true,
+  retries: 0,
   reporter: "list",
   use: {
-    baseURL: `http://127.0.0.1:${PORT}`,
-    trace: "retain-on-failure",
+    baseURL: `http://127.0.0.1:${WEB_PORT}`,
+    // A trace holds every request header and every value a test typed (the webhook key, a password, the
+    // session token) and a video shows the page: both stay off. A screenshot may stay, a password input is
+    // masked. `make ui-e2e` scans test-results/ and the run's output for the secrets of the run.
+    trace: "off",
+    video: "off",
+    screenshot: "only-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: `npm run build && npx vite preview --host 127.0.0.1 --port ${PORT} --strictPort`,
-    url: `http://127.0.0.1:${PORT}`,
+    command: "bash ../scripts/ui_e2e_stack.sh soc_ui_e2e_test",
+    url: `http://127.0.0.1:${WEB_PORT}`,
     reuseExistingServer: false,
-    timeout: 120_000,
+    // The build of the UI, the migration of the database and the seed of the users all happen first.
+    timeout: 240_000,
+    gracefulShutdown: { signal: "SIGTERM", timeout: 60_000 },
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { PY: process.env.PY ?? "python3", E2E_STATE_DIR: STATE_DIR },
   },
 });
