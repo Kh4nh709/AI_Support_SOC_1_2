@@ -17,6 +17,14 @@ function conflictBodyOf(error: ApiError): Partial<ConflictBody> {
   return isRecord(error.body) ? (error.body as Partial<ConflictBody>) : {};
 }
 
+/** The count of the cluster a `cluster_grew` answer reports, or null for a 409 of another kind. */
+export function grownCountOf(error: ApiError): number | null {
+  const body = conflictBodyOf(error);
+  return body.kind === "cluster_grew" && typeof body.occurrence_count === "number"
+    ? body.occurrence_count
+    : null;
+}
+
 export function conflictText(error: ApiError): string {
   const body = conflictBodyOf(error);
   switch (body.kind) {

@@ -105,20 +105,37 @@ const DECISIONS: readonly [Decision, string][] = [
   ["benign", S.decision.benign],
 ];
 
-/** Close the cluster as a false positive or as benign, with a reason. It sends the count the analyst was shown. */
+/** The count a `cluster_grew` answer made the analyst read: the form holds it from then on. */
+export type AdoptedCount = { count: number };
+
+/**
+ * Close the cluster as a false positive or as benign, with a reason. The count it sends is the one the form
+ * was first drawn with (ruling R19): what the analyst read when they began. A live refetch that brings a larger
+ * count does not change it, it only says so beside it; the count changes when the server answers `cluster_grew`,
+ * which is the analyst being shown the new one.
+ */
 export function DecideForm({
   view,
   userId,
   busy,
   error,
+  adopted,
   onRun,
-}: FormProps & { view: AlertView; userId: string }) {
+}: FormProps & { view: AlertView; userId: string; adopted: AdoptedCount | null }) {
   const [choice, setChoice] = useState<Decision | null>(null);
   // Restored once, when the form is first drawn: a draft this user left before the session ended.
   const [reason, setReason] = useState(() => readDraft(view.alert_id, userId));
-  // The count on screen is the count sent: a cluster that has grown since is the server's 409 to report.
-  const seen = view.occurrence_count;
-  const ready = choice !== null && reason.trim() !== "" && typeof seen === "number" && !busy;
+  const now = typeof view.occurrence_count === "number" ? view.occurrence_count : null;
+  const [seen, setSeen] = useState<number | null>(now);
+  const [adoptedThen, setAdoptedThen] = useState(adopted);
+  if (adopted !== adoptedThen) {
+    setAdoptedThen(adopted);
+    if (adopted !== null) setSeen(adopted.count);
+  } else if (seen === null && now !== null) {
+    // The view had no count when the form was drawn: the first one shown is the one read.
+    setSeen(now);
+  }
+  const ready = choice !== null && reason.trim() !== "" && seen !== null && !busy;
 
   function change(text: string) {
     setReason(text);
@@ -127,7 +144,7 @@ export function DecideForm({
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!ready || choice === null || typeof seen !== "number") return;
+    if (!ready || choice === null || seen === null) return;
     onRun({ kind: "decide", decision: choice, reason: reason.trim(), seen });
   }
 
@@ -155,8 +172,11 @@ export function DecideForm({
         error={error}
         disabled={busy}
       />
-      {typeof seen === "number" && (
-        <p className="text-xs text-muted">{S.decision.seenHint(seen)}</p>
+      {seen !== null && <p className="text-xs text-muted">{S.decision.seenHint(seen)}</p>}
+      {seen !== null && now !== null && now !== seen && (
+        <p aria-live="polite" className="text-xs text-high">
+          {S.decision.seenChanged(seen, now)}
+        </p>
       )}
       <button type="submit" disabled={!ready} className={BUTTON}>
         {S.decision.submit}

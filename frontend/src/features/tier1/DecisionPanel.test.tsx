@@ -2,7 +2,7 @@
 // escalate, reopen; who may act; the errors of a decision (409, 422, 503, 401); and the reason draft that
 // survives a lost session (Review Focus 4).
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { delay, http, HttpResponse } from "msw";
@@ -630,6 +630,134 @@ describe("errors", () => {
   });
 });
 
+describe("the count the decision is made on (ruling R19)", () => {
+  const clusterGrew = (now: number) =>
+    HttpResponse.json(
+      {
+        kind: "cluster_grew",
+        occurrence_count: now,
+        seen_occurrence_count: 37,
+        delta: now - 37,
+        tolerance: 2,
+        status: "tier1_active",
+        decided_by: null,
+        decision: null,
+        decided_at: null,
+        acknowledged_by: ME_ID,
+      },
+      { status: 409 },
+    );
+  const closedFp = () =>
+    HttpResponse.json({ alert_id: "a1", status: "closed_fp", closed_count: 0, case_id: null });
+  const seenOf = (n: number) =>
+    (posts("/decide")[n]?.body as { seen_occurrence_count: number }).seen_occurrence_count;
+
+  /** A page whose alert the server answers with `count.now`; a live refetch is `client.invalidateQueries`. */
+  function livePanel() {
+    const count = { now: 37 };
+    server.use(
+      http.get("/api/tier1/alerts/a1", () =>
+        HttpResponse.json(mine({ occurrence_count: count.now })),
+      ),
+    );
+    const utils = renderHosted();
+    const refetch = (n: number) => {
+      count.now = n;
+      return act(async () => {
+        await utils.client.invalidateQueries({ queryKey: ["alert", "a1"] });
+      });
+    };
+    return { ...utils, count, refetch };
+  }
+
+  it("keeps sending the count the form was drawn with when a live refetch brings a larger one", async () => {
+    answerPost("decide", closedFp);
+    const { refetch } = livePanel();
+    const user = await fill();
+    expect(screen.getByText(S.decision.seenHint(37))).toBeInTheDocument();
+    await refetch(120);
+    // the analyst has read 37: the form still says so, and the reason typed is still there
+    expect(await screen.findByText(S.decision.seenChanged(37, 120))).toBeInTheDocument();
+    expect(screen.getByText(S.decision.seenHint(37))).toBeInTheDocument();
+    expect(screen.queryByText(S.decision.seenHint(120))).not.toBeInTheDocument();
+    expect(reasonBox()).toHaveValue("không có dấu hiệu tấn công");
+    await user.click(submit());
+    await waitFor(() => expect(posts("/decide")).toHaveLength(1));
+    expect(seenOf(0)).toBe(37);
+  });
+
+  it("holds the new count only when the server answers cluster_grew, and sends it on the next submit", async () => {
+    let attempts = 0;
+    answerPost("decide", () => {
+      attempts += 1;
+      return attempts === 1 ? clusterGrew(120) : closedFp();
+    });
+    const { refetch } = livePanel();
+    const user = await fill();
+    await refetch(120);
+    expect(await screen.findByText(S.decision.seenChanged(37, 120))).toBeInTheDocument();
+    await user.click(submit());
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      S.decision.conflict.clusterGrew(37, 120, 83, 2),
+    );
+    // now the form holds what the 409 told the analyst: 120, and there is nothing left to warn about
+    expect(await screen.findByText(S.decision.seenHint(120))).toBeInTheDocument();
+    expect(screen.queryByText(S.decision.seenChanged(37, 120))).not.toBeInTheDocument();
+    expect(reasonBox()).toHaveValue("không có dấu hiệu tấn công");
+    await user.click(submit());
+    await waitFor(() => expect(posts("/decide")).toHaveLength(2));
+    expect([seenOf(0), seenOf(1)]).toEqual([37, 120]);
+  });
+
+  it("warns again when the cluster grows once more after the 409, and still does not adopt it silently", async () => {
+    let attempts = 0;
+    answerPost("decide", () => {
+      attempts += 1;
+      return attempts === 1 ? clusterGrew(120) : closedFp();
+    });
+    const { refetch } = livePanel();
+    const user = await fill();
+    await refetch(120);
+    await user.click(submit());
+    expect(await screen.findByText(S.decision.seenHint(120))).toBeInTheDocument();
+    await refetch(150);
+    expect(await screen.findByText(S.decision.seenChanged(120, 150))).toBeInTheDocument();
+    await user.click(submit());
+    await waitFor(() => expect(posts("/decide")).toHaveLength(2));
+    expect([seenOf(0), seenOf(1)]).toEqual([37, 120]);
+  });
+
+  it("does not adopt a count for a 409 that is not cluster_grew", async () => {
+    let attempts = 0;
+    answerPost("decide", () => {
+      attempts += 1;
+      return attempts === 1
+        ? HttpResponse.json({ kind: "not_active", status: "tier1_active" }, { status: 409 })
+        : closedFp();
+    });
+    const { refetch } = livePanel();
+    const user = await fill();
+    await refetch(120);
+    await user.click(submit());
+    expect(await screen.findByRole("alert")).toHaveTextContent(S.decision.conflict.notActive);
+    await waitFor(() => expect(submit()).toBeEnabled());
+    expect(screen.getByText(S.decision.seenHint(37))).toBeInTheDocument();
+    expect(screen.getByText(S.decision.seenChanged(37, 120))).toBeInTheDocument();
+    await user.click(submit());
+    await waitFor(() => expect(posts("/decide")).toHaveLength(2));
+    expect([seenOf(0), seenOf(1)]).toEqual([37, 37]);
+  });
+
+  it("says nothing while the count on the server is the count the form holds", async () => {
+    const { refetch } = livePanel();
+    await fill();
+    await refetch(37);
+    expect(screen.getByText(S.decision.seenHint(37))).toBeInTheDocument();
+    expect(screen.queryByText(S.decision.seenChanged(37, 37))).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("→");
+  });
+});
+
 describe("the reason draft (Review Focus 4)", () => {
   const key = "soc.draft.a1";
   const draft = () => JSON.parse(sessionStorage.getItem(key) ?? "null") as unknown;
@@ -746,6 +874,21 @@ describe("accessibility", () => {
 
     const auto = renderPanel(mine({ status: "auto_closed" }));
     expect(await violations(auto.container)).toEqual([]);
+  });
+
+  it("has none with the notice that the cluster grew since the form was drawn", async () => {
+    let now = 37;
+    server.use(
+      http.get("/api/tier1/alerts/a1", () => HttpResponse.json(mine({ occurrence_count: now }))),
+    );
+    const { container, client } = renderHosted();
+    await findDecideForm();
+    now = 120;
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["alert", "a1"] });
+    });
+    expect(await screen.findByText(S.decision.seenChanged(37, 120))).toBeInTheDocument();
+    expect(await violations(container)).toEqual([]);
   });
 
   it("has none while /me loads, after an error, and with a toast", async () => {

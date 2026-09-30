@@ -286,6 +286,9 @@ export const S = {
     submit: "Ghi quyết định",
     seenHint: (n: number) =>
       `Bạn đang xem ${n} lần xuất hiện — nếu số này đổi, hệ thống sẽ yêu cầu xem lại`,
+    // Beside the count the form holds, when the alert now has more: the analyst is told, and the count is not changed.
+    seenChanged: (held: number, now: number) =>
+      `${held} → ${now}: cụm đã tăng khi bạn đọc — khi bạn gửi, hệ thống sẽ yêu cầu xem lại`,
     heldBy: (name: string) => `Đang được ${name} xử lý`,
     heldByOther: "Đang được người khác xử lý",
     decidedAs: (label: string) => `Đã quyết: ${label}`,

@@ -701,6 +701,69 @@ describe("the decision panel on the page", () => {
   });
 });
 
+describe("the count a decision is made on, across a live refetch (ruling R19)", () => {
+  it("sends the count read when the form was drawn, then the count the 409 showed", async () => {
+    views = {
+      a1: full({ status: "tier1_active", acknowledged_by: ME_ID, acknowledged_by_name: "An" }),
+    };
+    const seen: number[] = [];
+    server.use(
+      http.post("/api/tier1/alerts/:id/decide", async ({ request }) => {
+        const body = (await request.json()) as { seen_occurrence_count: number };
+        seen.push(body.seen_occurrence_count);
+        if (seen.length === 1) {
+          return HttpResponse.json(
+            {
+              kind: "cluster_grew",
+              occurrence_count: 120,
+              seen_occurrence_count: body.seen_occurrence_count,
+              delta: 83,
+              tolerance: 2,
+              status: "tier1_active",
+              decided_by: null,
+              decision: null,
+              decided_at: null,
+              acknowledged_by: ME_ID,
+            },
+            { status: 409 },
+          );
+        }
+        return HttpResponse.json({
+          alert_id: "a1",
+          status: "closed_fp",
+          closed_count: 0,
+          case_id: null,
+        });
+      }),
+    );
+    renderPage();
+    await loaded();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("radio", { name: S.decision.falsePositive }));
+    await user.type(
+      screen.getByRole("textbox", { name: S.decision.reason }),
+      "không có dấu hiệu tấn công",
+    );
+    // the alert is refetched by the socket while the analyst types: the page shows 120, the form still holds 37
+    views = {
+      a1: full({
+        status: "tier1_active",
+        acknowledged_by: ME_ID,
+        acknowledged_by_name: "An",
+        occurrence_count: 120,
+      }),
+    };
+    act(() => live().onChange(["a1"]));
+    await waitFor(() => expect(valueOf(S.alert.summary.occurrences)).toHaveTextContent("120"));
+    expect(screen.getByText(S.decision.seenChanged(37, 120))).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: S.decision.submit }));
+    expect(await screen.findByText(S.decision.seenHint(120))).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: S.decision.submit }));
+    await waitFor(() => expect(seen).toHaveLength(2));
+    expect(seen).toEqual([37, 120]);
+  });
+});
+
 describe("hostile text (Review Focus 1)", () => {
   it("renders hostile raw_log as text", async () => {
     const hostile = '<img src=x onerror="window.__x=1">';

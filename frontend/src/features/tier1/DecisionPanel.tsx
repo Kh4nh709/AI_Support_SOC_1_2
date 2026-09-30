@@ -20,8 +20,15 @@ import type { Session } from "../../auth/session";
 import { Toast } from "../../components/Toast";
 import { S, labelOf } from "../../strings";
 import { DECIDED } from "./aiState";
-import { conflictText, invalidText } from "./conflict";
-import { BUTTON, DecideForm, EscalateForm, ReopenForm, type Action } from "./DecisionForms";
+import { conflictText, grownCountOf, invalidText } from "./conflict";
+import {
+  BUTTON,
+  DecideForm,
+  EscalateForm,
+  ReopenForm,
+  type Action,
+  type AdoptedCount,
+} from "./DecisionForms";
 import { clearDraft } from "./draft";
 import { sameUser, useMe } from "./useMe";
 
@@ -111,12 +118,14 @@ function Actions({
   me,
   busy,
   problem,
+  adopted,
   run,
 }: {
   view: AlertView;
   me: Session;
   busy: boolean;
   problem: Problem | null;
+  adopted: AdoptedCount | null;
   run: (action: Action) => void;
 }) {
   const holds = view.status === "tier1_active";
@@ -180,6 +189,7 @@ function Actions({
           userId={who.data.userId}
           busy={busy}
           error={fieldError("decide")}
+          adopted={adopted}
           onRun={run}
         />
         <EscalateForm view={view} busy={busy} error={fieldError("escalate")} onRun={run} />
@@ -229,6 +239,8 @@ function Panel({
   const [toast, setToast] = useState<ReactNode>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [busy, setBusy] = useState(false);
+  // The count the server made the analyst read (a `cluster_grew` answer): the decide form holds it (R19).
+  const [adopted, setAdopted] = useState<AdoptedCount | null>(null);
   // A second click can arrive before the first one has been drawn as a disabled button: this says so at once.
   const running = useRef(false);
 
@@ -253,7 +265,18 @@ function Panel({
     onError: async (error, action) => {
       setProblem(problemOf(action, error));
       // A 409 says the alert is not what the analyst saw: they are shown what it is before they answer again.
-      if (error instanceof ApiError && error.status === 409) await refresh();
+      if (error instanceof ApiError && error.status === 409) {
+        await refresh();
+        // Only `cluster_grew` moves the count the form sends, and to the count of the view just fetched.
+        const reported = grownCountOf(error);
+        if (action.kind === "decide" && reported !== null) {
+          const fetched = client.getQueryData<AlertView>([
+            "alert",
+            view.alert_id,
+          ])?.occurrence_count;
+          setAdopted({ count: typeof fetched === "number" ? fetched : reported });
+        }
+      }
     },
     onSettled: () => {
       running.current = false;
@@ -284,7 +307,7 @@ function Panel({
           {problem.text}
         </p>
       )}
-      <Actions view={view} me={me} busy={busy} problem={problem} run={run} />
+      <Actions view={view} me={me} busy={busy} problem={problem} adopted={adopted} run={run} />
     </section>
   );
 }
