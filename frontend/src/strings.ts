@@ -182,6 +182,9 @@ export const S = {
     // An alert closed by the system or by a Tier 2 conclusion: no Tier 1 person decided it, so there is
     // nobody to name and nothing to compare ① with.
     notTier1Decision: "Không phải quyết định của Tier 1 — không so với gợi ý ①",
+    // What Tier 2 concluded on an alert Tier 1 escalated: context beside the escalation, never the decision
+    // of the person who held the alert.
+    tier2Concluded: (label: string) => `Tier 2 đã kết luận: ${label}`,
     verdict: "Đề xuất",
     confidence: "Độ tin cậy",
     gate: "Cổng kiểm soát",

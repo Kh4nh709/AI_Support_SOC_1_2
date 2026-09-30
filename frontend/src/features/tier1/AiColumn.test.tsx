@@ -391,6 +391,84 @@ describe("decided", () => {
         expect(within(column()).queryByText(S.ai1.notTier1Decision)).not.toBeInTheDocument();
       },
     );
+
+    it("names nobody, and keeps the note, for a close with no case even when case_id is null", () => {
+      renderColumn(
+        decided({ status: "closed_confirmed", case_id: null, acknowledged_by_name: "Trần Bình" }),
+      );
+      expect(within(column()).getByText(S.ai1.notTier1Decision)).toBeInTheDocument();
+      expect(column().textContent).not.toContain("Trần Bình");
+    });
+  });
+
+  // A Tier 2 conclusion rewrites the status of an alert Tier 1 escalated (concluded_fp → closed_fp,
+  // concluded_policy_violation → closed_benign, confirmed_incident → closed_confirmed); the pilot report
+  // still counts the Tier 1 decision an escalation (the `tier1.escalated` event), and only an escalation
+  // writes the alert's `case_id`. The column follows the report, not the status.
+  describe("an alert Tier 1 escalated and Tier 2 then concluded", () => {
+    const CONCLUDED = ["closed_fp", "closed_benign", "closed_confirmed"] as const;
+    const concluded = (status: string, action: string, over: Partial<AlertView> = {}) =>
+      decided({
+        status,
+        case_id: 9,
+        acknowledged_by_name: "Nguyễn Văn Ân",
+        suggestion: suggestion({ suggested_action: action }),
+        ...over,
+      });
+
+    it.each([
+      ...CONCLUDED.map((status) => [status, "escalate", S.ai1.matchAgree] as const),
+      ...CONCLUDED.map((status) => [status, "false_positive", S.ai1.matchDisagree] as const),
+      ...CONCLUDED.map((status) => [status, "needs_review", S.ai1.matchNoVerdict] as const),
+    ])(
+      "%s with a case, after ① %s, says '%s' (the report counts an escalation)",
+      (status, action, said) => {
+        renderColumn(concluded(status, action));
+        expect(match()).toHaveTextContent(said);
+        expect(match()).toHaveTextContent(S.ai1.match);
+        // it is a Tier 1 decision: the column does not say it was none
+        expect(within(column()).queryByText(S.ai1.notTier1Decision)).not.toBeInTheDocument();
+      },
+    );
+
+    it.each(CONCLUDED)(
+      "%s: says Tier 1 escalated it, names the acknowledger there, and gives the conclusion as Tier 2's",
+      (status) => {
+        renderColumn(concluded(status, "escalate"));
+        const col = within(column());
+        // the decision is what Tier 1 did: the escalation, with the person who did it
+        const escalation = col.getByText(S.status.escalated_tier2).closest("p")!;
+        expect(escalation).toHaveTextContent("Nguyễn Văn Ân");
+        // and not the close: the acknowledger did not close it
+        expect(escalation).not.toHaveTextContent(labelOfStatus(status));
+        // the conclusion is context, worded as Tier 2's, and carries no name
+        const conclusion = col.getByText(S.ai1.tier2Concluded(labelOfStatus(status)));
+        expect(conclusion).not.toHaveTextContent("Nguyễn Văn Ân");
+        expect(col.getByText(S.decision.heading).closest("div")).toContainElement(conclusion);
+        // the name is said once, on the escalation
+        expect(column().textContent?.split("Nguyễn Văn Ân")).toHaveLength(2);
+      },
+    );
+
+    it("says the escalation and no Tier 2 conclusion while the case is still open (escalated_tier2)", () => {
+      renderColumn(concluded("escalated_tier2", "escalate"));
+      const col = within(column());
+      expect(col.getByText(S.status.escalated_tier2).closest("p")).toHaveTextContent(
+        "Nguyễn Văn Ân",
+      );
+      expect(
+        col.queryByText(S.ai1.tier2Concluded(labelOfStatus("closed_fp"))),
+      ).not.toBeInTheDocument();
+      expect(column().textContent).not.toContain(S.ai1.tier2Concluded(""));
+      expect(match()).toHaveTextContent(S.ai1.matchAgree);
+    });
+
+    it("keeps what ① said beside it", () => {
+      renderColumn(concluded("closed_fp", "false_positive"));
+      expect(within(column()).getByText(S.ai1.decidedAi).closest("div")).toHaveTextContent(
+        S.ai1.action.false_positive,
+      );
+    });
   });
 });
 
@@ -411,6 +489,10 @@ describe("accessibility", () => {
     ["unavailable", view({ suggestion: null, triage_status: "unavailable" })],
     ["decided, with the Khớp row", view({ status: "closed_benign", acknowledged_by_name: "An" })],
     ["decided by the system", view({ status: "auto_closed" })],
+    [
+      "escalated, then concluded by Tier 2",
+      view({ status: "closed_confirmed", case_id: 9, acknowledged_by_name: "An" }),
+    ],
   ];
 
   it.each(states)("has no axe violation in the %s state", async (_name, v) => {

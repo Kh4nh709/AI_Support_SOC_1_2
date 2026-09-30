@@ -7,7 +7,7 @@ import { useId, type ReactNode } from "react";
 import type { AlertView, Suggestion } from "../../api/tier1";
 import { formatDateTime } from "../../format";
 import { S, labelOf } from "../../strings";
-import { agreementOf } from "./agreement";
+import { agreementOf, humanDecisionOf } from "./agreement";
 import { aiStateOfView, type AiState } from "./aiState";
 
 const MUTED = "text-muted";
@@ -225,11 +225,20 @@ const AGREEMENT_WORDS = {
   no_verdict: S.ai1.matchNoVerdict,
 } as const;
 
+/** The statuses a Tier 2 conclusion leaves on the alerts of its case (transitions.py `_CONCLUSION_TO_ALERT_STATUS`). */
+const CONCLUSIONS: ReadonlySet<string> = new Set([
+  "closed_fp",
+  "closed_benign",
+  "closed_confirmed",
+]);
+
 /**
  * The decision beside what ① said: evaluation material, shown only once the alert is closed or escalated.
  * A Tier 1 decision (closed as a false positive or benign, or escalated) names the person who took it: the
- * holder of an alert is the only one who can. A close by the system, or a Tier 2 conclusion, has no such
- * person: the acknowledger is not named as its decider, and there is nothing to compare ① with.
+ * holder of an alert is the only one who can. An alert Tier 1 escalated stays an escalation when Tier 2 has
+ * concluded it: the decision says so, the conclusion is added as Tier 2's, and it is compared with ① as an
+ * escalation (the pilot report's count). A close by the system, or a Tier 2 conclusion with no escalation
+ * behind it, has no Tier 1 person: nobody is named as its decider, and there is nothing to compare ① with.
  */
 function Decided({
   view,
@@ -238,9 +247,16 @@ function Decided({
   view: AlertView;
   state: Extract<AiState, { kind: "decided" }>;
 }) {
-  // `null` is the mapping's word for a status that is not a Tier 1 decision (auto_closed, closed_confirmed).
-  const agreement = agreementOf(view.status, state.action);
-  const byTier1 = agreement !== null;
+  // What the pilot report counts as the human decision, read from the case as well as the status (agreement.ts):
+  // `null` is a status that is not a Tier 1 decision (auto_closed, or a closed_confirmed with no case).
+  const human = humanDecisionOf(view.status, view.case_id);
+  const agreement = agreementOf(view.status, state.action, view.case_id);
+  const byTier1 = human !== null;
+  // Tier 2 has concluded an alert Tier 1 escalated: the status is the conclusion's, the decision is still the
+  // escalation. The holder of the alert is named on the escalation, never on the conclusion.
+  const concluded = human === "escalated" && CONCLUSIONS.has(view.status);
+  const decision =
+    human === "escalated" ? S.status.escalated_tier2 : labelOf(S.status, view.status);
   return (
     <div className="space-y-3">
       <h3 className="text-sm font-medium">{S.ai1.decidedHeading}</h3>
@@ -248,11 +264,16 @@ function Decided({
         <div className="rounded border border-ai-border p-3">
           <span className="text-xs text-muted">{S.decision.heading}</span>
           <p className="text-sm">
-            <span>{labelOf(S.status, view.status)}</span>
+            <span>{decision}</span>
             {byTier1 && view.acknowledged_by_name && (
               <span className={MUTED}> · {view.acknowledged_by_name}</span>
             )}
           </p>
+          {concluded && (
+            <p className="text-xs text-muted">
+              {S.ai1.tier2Concluded(labelOf(S.status, view.status))}
+            </p>
+          )}
         </div>
         <div className="rounded border border-ai-border p-3">
           <span className="text-xs text-muted">{S.ai1.decidedAi}</span>
