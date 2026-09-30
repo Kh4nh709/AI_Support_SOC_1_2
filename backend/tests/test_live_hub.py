@@ -24,15 +24,30 @@ from app.web.live import Hub
 
 
 def test_burst_is_coalesced_into_one_message():
+    """A reader that is READING (the socket loop always is) sees one message for the burst.
+
+    The reader task matters: with nobody reading, the stalled-reader merge would fold an
+    un-coalesced burst into one message too, and this test would prove nothing about the
+    window.
+    """
+
     async def scenario():
         hub = Hub(coalesce_ms=50)
         sub = hub.subscribe()
+        received: list[dict] = []
+
+        async def reader():
+            while True:
+                received.append(await sub.next_message())
+
+        task = asyncio.create_task(reader())
         for i in range(50):
             hub.publish(f"a{i}")
-        msg = await asyncio.wait_for(sub.next_message(), 1)
-        assert msg["type"] == "alerts.changed" and len(msg["ids"]) == 50
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(sub.next_message(), 0.2)
+            await asyncio.sleep(0)  # let the reader run between two publishes
+        await asyncio.sleep(0.3)  # the window (50 ms) and then some
+        task.cancel()
+        assert len(received) == 1
+        assert received[0]["type"] == "alerts.changed" and len(received[0]["ids"]) == 50
 
     asyncio.run(scenario())
 
