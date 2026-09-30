@@ -11,6 +11,7 @@ import { fetchAlertView, type AlertView } from "../../api/tier1";
 import { useAuth } from "../../auth/AuthProvider";
 import { PageError } from "../../components/PageError";
 import { useLiveStatus } from "../../live/LiveProvider";
+import { OFFLINE_POLL_MS, PENDING_POLL_MS } from "../../live/poll";
 import type { LiveStatus } from "../../live/socket";
 import { S } from "../../strings";
 import { aiStateOfView } from "./aiState";
@@ -25,10 +26,7 @@ import {
   Summary,
 } from "./AlertSections";
 import { DecisionPanel } from "./DecisionPanel";
-import { OFFLINE_POLL_MS } from "./QueuePage";
 
-/** While ① has not answered (the server's word: pending) the page asks again this often. */
-const PENDING_POLL_MS = 10_000;
 /** A head fetched for a duplicate is fresh for this long after the view that named it. */
 const HEAD_FRESH_MS = 5_000;
 
