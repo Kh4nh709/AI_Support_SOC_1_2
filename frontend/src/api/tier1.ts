@@ -53,25 +53,64 @@ export type QueueFilters = {
   status: "queued" | "mine";
 };
 
+/**
+ * The orders the server offers besides the default risk order (P10-T14, DEC-164): last seen, occurrences,
+ * agent. These are the whole list — the server's whitelist has exactly these and `risk`, and no key derived
+ * from ① is one of them (R17): the ① column has no sort.
+ */
+export type QueueSortKey = "time" | "occurrences" | "agent";
+export type QueueSortDir = "asc" | "desc";
+/** A sort of the queue. The default risk order is the absence of a `QueueSort`, never a value of it. */
+export type QueueSort = { key: QueueSortKey; dir: QueueSortDir };
+
+/** The direction a key starts in on the first click: newest, most, A to Z (the server's default too). */
+export const SORT_DEFAULT_DIR: Record<QueueSortKey, QueueSortDir> = {
+  time: "desc",
+  occurrences: "desc",
+  agent: "asc",
+};
+
+export function isSortKey(value: string | null): value is QueueSortKey {
+  return value !== null && Object.hasOwn(SORT_DEFAULT_DIR, value);
+}
+
+export function isSortDir(value: string | null): value is QueueSortDir {
+  return value === "asc" || value === "desc";
+}
+
 /** The rows of a page the queue asks for. The server's own default is 50 and its ceiling 200. */
 export const QUEUE_PAGE_SIZE = 50;
 
-/** The request path of one page of the queue. Only the filters that are set appear in it. */
-export function queuePath(filters: QueueFilters, page: number, pageSize = QUEUE_PAGE_SIZE): string {
+/**
+ * The request path of one page of the queue. Only the filters that are set appear in it, and a sort is
+ * sent as `sort` and `dir` together: the risk order (no sort) sends neither, for the server refuses a `dir`
+ * that comes with `sort=risk`.
+ */
+export function queuePath(
+  filters: QueueFilters,
+  page: number,
+  sort?: QueueSort,
+  pageSize = QUEUE_PAGE_SIZE,
+): string {
   const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
   if (filters.band) query.set("band", filters.band);
   if (filters.category) query.set("category", filters.category);
   if (filters.agent) query.set("agent", filters.agent);
   if (filters.status === "mine") query.set("status", "mine");
+  if (sort) {
+    query.set("sort", sort.key);
+    query.set("dir", sort.dir);
+  }
   return `/tier1/queue?${query}`;
 }
 
 export function fetchQueue(
   filters: QueueFilters,
   page: number,
+  sort?: QueueSort,
   signal?: AbortSignal,
 ): Promise<QueueResponse> {
-  return api<QueueResponse>(queuePath(filters, page), { signal });
+  return api<QueueResponse>(queuePath(filters, page, sort), { signal });
 }
 
 /** One reason of ①: what it claims, the log text it quotes (none when it cites no log), and where from. */

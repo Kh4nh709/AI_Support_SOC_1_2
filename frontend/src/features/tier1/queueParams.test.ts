@@ -1,6 +1,6 @@
-// src/features/tier1/queueParams.test.ts — the filters and the page live in the URL search params, so a
-// reload or a shared link keeps them. A value the UI does not know is ignored, never sent to the server.
-import { pageList, readView, viewToParams } from "./queueParams";
+// src/features/tier1/queueParams.test.ts — the filters, the sort and the page live in the URL search params,
+// so a reload or a shared link keeps them. A value the UI does not know is ignored, never sent to the server.
+import { nextSort, pageList, readView, viewSearch, viewToParams } from "./queueParams";
 
 const read = (search: string) => readView(new URLSearchParams(search));
 
@@ -67,6 +67,121 @@ describe("viewToParams", () => {
       page: 4,
     };
     expect(readView(new URLSearchParams(viewToParams(view).toString()))).toEqual(view);
+  });
+});
+
+// P10-T14 (DEC-164): the sort is `sort` and `dir` beside the filters. The default risk order is the absence
+// of both; a sort is always written with its direction, so a link says what it shows.
+describe("the sort in the URL", () => {
+  it("is the risk order, with no sort, for an empty query", () => {
+    expect(read("").sort).toBeUndefined();
+    expect(read("band=high&page=2").sort).toBeUndefined();
+  });
+
+  it("reads each sort key with its direction", () => {
+    expect(read("sort=time&dir=asc").sort).toEqual({ key: "time", dir: "asc" });
+    expect(read("sort=time&dir=desc").sort).toEqual({ key: "time", dir: "desc" });
+    expect(read("sort=occurrences&dir=asc").sort).toEqual({ key: "occurrences", dir: "asc" });
+    expect(read("sort=agent&dir=desc").sort).toEqual({ key: "agent", dir: "desc" });
+  });
+
+  it("gives a key without a direction its default: newest, most, A to Z", () => {
+    expect(read("sort=time").sort).toEqual({ key: "time", dir: "desc" });
+    expect(read("sort=occurrences").sort).toEqual({ key: "occurrences", dir: "desc" });
+    expect(read("sort=agent").sort).toEqual({ key: "agent", dir: "asc" });
+  });
+
+  it("gives a direction it does not know the default of the key", () => {
+    for (const dir of ["up", "", "ASC", "descending", "constructor"]) {
+      expect(read(`sort=agent&dir=${dir}`).sort).toEqual({ key: "agent", dir: "asc" });
+      expect(read(`sort=time&dir=${dir}`).sort).toEqual({ key: "time", dir: "desc" });
+    }
+  });
+
+  it("takes a sort key it does not know, or the risk order named, as no sort", () => {
+    // The server refuses every one of these (422): the UI never sends them.
+    for (const sort of [
+      "risk",
+      "",
+      "Time",
+      "risk_score",
+      "triaged_count",
+      "needs_retriage",
+      "constructor",
+      "time;drop",
+    ]) {
+      expect(read(`sort=${encodeURIComponent(sort)}&dir=asc`).sort).toBeUndefined();
+    }
+  });
+
+  it("takes a direction with no sort as no sort", () => {
+    expect(read("dir=asc").sort).toBeUndefined();
+    expect(read("dir=desc&page=2").sort).toBeUndefined();
+  });
+
+  it("writes a sort with its direction, and the risk order as neither", () => {
+    const filters = { status: "queued" as const };
+    expect(
+      Object.fromEntries(viewToParams({ filters, page: 1, sort: { key: "time", dir: "desc" } })),
+    ).toEqual({ sort: "time", dir: "desc" });
+    expect(
+      Object.fromEntries(viewToParams({ filters, page: 1, sort: { key: "agent", dir: "desc" } })),
+    ).toEqual({ sort: "agent", dir: "desc" });
+    expect(viewToParams({ filters, page: 1 }).toString()).toBe("");
+    expect(viewToParams({ filters, page: 1, sort: undefined }).toString()).toBe("");
+  });
+
+  it("round-trips the filters, the sort and the page together", () => {
+    const view = {
+      filters: {
+        band: "high" as const,
+        category: "a b&c=d",
+        agent: "lab-01",
+        status: "mine" as const,
+      },
+      page: 3,
+      sort: { key: "occurrences" as const, dir: "asc" as const },
+    };
+    const search = viewToParams(view).toString();
+    expect(readView(new URLSearchParams(search))).toEqual(view);
+    expect(Object.fromEntries(new URLSearchParams(search))).toEqual({
+      band: "high",
+      category: "a b&c=d",
+      agent: "lab-01",
+      status: "mine",
+      sort: "occurrences",
+      dir: "asc",
+      page: "3",
+    });
+  });
+
+  it("keeps the sort in the search of a link to a view", () => {
+    const filters = { band: "low" as const, status: "queued" as const };
+    expect(viewSearch({ filters, page: 2, sort: { key: "time", dir: "asc" } })).toBe(
+      "?band=low&sort=time&dir=asc&page=2",
+    );
+    expect(viewSearch({ filters, page: 2 })).toBe("?band=low&page=2");
+  });
+});
+
+describe("nextSort (a click on a column header)", () => {
+  it("sorts by the key in its default direction on the first click", () => {
+    expect(nextSort(undefined, "time")).toEqual({ key: "time", dir: "desc" });
+    expect(nextSort(undefined, "occurrences")).toEqual({ key: "occurrences", dir: "desc" });
+    expect(nextSort(undefined, "agent")).toEqual({ key: "agent", dir: "asc" });
+  });
+
+  it("reverses the direction on a second click on the same key, and back on a third", () => {
+    const first = nextSort(undefined, "agent");
+    const second = nextSort(first, "agent");
+    expect(second).toEqual({ key: "agent", dir: "desc" });
+    expect(nextSort(second, "agent")).toEqual({ key: "agent", dir: "asc" });
+    expect(nextSort({ key: "time", dir: "desc" }, "time")).toEqual({ key: "time", dir: "asc" });
+  });
+
+  it("starts another key in its own default direction, whatever the last key was", () => {
+    expect(nextSort({ key: "time", dir: "asc" }, "agent")).toEqual({ key: "agent", dir: "asc" });
+    expect(nextSort({ key: "agent", dir: "desc" }, "time")).toEqual({ key: "time", dir: "desc" });
   });
 });
 

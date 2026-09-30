@@ -13,7 +13,7 @@ export function QueuePagination({
   pageSize,
   total,
 }: {
-  /** The filters of the view; its own page is not used (the links name theirs). */
+  /** The filters and the sort of the view, which every link keeps; its own page is not used (the links name theirs). */
   view: QueueView;
   /** The page the answer is for. */
   page: number;
@@ -22,7 +22,9 @@ export function QueuePagination({
 }) {
   const last = Math.max(1, Math.ceil(total / Math.max(pageSize, 1)));
   if (last <= 1 && page <= 1) return null;
-  const to = (n: number) => ({ search: viewSearch({ filters: view.filters, page: n }) });
+  const to = (n: number) => ({
+    search: viewSearch({ filters: view.filters, page: n, sort: view.sort }),
+  });
   const from = (page - 1) * pageSize + 1;
   return (
     <nav aria-label={S.queue.pagination} className="flex flex-wrap items-center gap-2">

@@ -136,6 +136,12 @@ export const S = {
       apply: "Lọc",
       clear: "Xoá bộ lọc",
     },
+    /** The sort of the queue (P10-T14, DEC-164): the arrows of the sorted header and the way back to the risk order. */
+    sort: {
+      asc: "▲",
+      desc: "▼",
+      byRisk: "Sắp theo mức rủi ro",
+    },
     noMatch: "Không có cụm nào khớp bộ lọc.",
     pageEmpty: "Trang này không có cụm nào.",
     page: (n: number) => `Trang ${n}`,
