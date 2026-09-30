@@ -187,6 +187,53 @@ class TestClosedSet:
         assert c.LLM_THINKING == "disabled"
 
 
+class TestDedupEnabled:
+    """P10-T15 / DEC-165: the one bool key. Default true (phase-2 grouping stays on
+    wherever nobody says otherwise); the Owner turns it off in the live `.env`."""
+
+    def test_default_is_true_when_unset(self, monkeypatch):
+        monkeypatch.delenv("DEDUP_ENABLED", raising=False)
+        c = load(env_file="/dev/null")
+        assert c.DEDUP_ENABLED is True
+
+    def test_empty_value_falls_back_to_the_default_true(self, monkeypatch):
+        monkeypatch.setenv("DEDUP_ENABLED", "")
+        assert load(env_file="/dev/null").DEDUP_ENABLED is True
+
+    @pytest.mark.parametrize("raw", ["false", "False", "FALSE", "0", "no", "off", " false "])
+    def test_false_spellings_turn_it_off(self, monkeypatch, raw):
+        monkeypatch.setenv("DEDUP_ENABLED", raw)
+        assert load(env_file="/dev/null").DEDUP_ENABLED is False
+
+    @pytest.mark.parametrize("raw", ["true", "True", "TRUE", "1", "yes", "on"])
+    def test_true_spellings_keep_it_on(self, monkeypatch, raw):
+        monkeypatch.setenv("DEDUP_ENABLED", raw)
+        assert load(env_file="/dev/null").DEDUP_ENABLED is True
+
+    @pytest.mark.parametrize("raw", ["flase", "2", "enabled", "nope"])
+    def test_anything_else_raises_naming_the_key_never_a_silent_default(self, monkeypatch, raw):
+        monkeypatch.setenv("DEDUP_ENABLED", raw)
+        with pytest.raises(ConfigError, match="DEDUP_ENABLED"):
+            load(env_file="/dev/null")
+
+    def test_dotenv_file_is_read_like_every_other_key(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("DEDUP_ENABLED", raising=False)
+        env_path = write_env(tmp_path, "DEDUP_ENABLED=false  # DEC-165, live\n")
+        assert load(env_file=env_path).DEDUP_ENABLED is False
+
+    def test_a_real_env_var_wins_over_the_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DEDUP_ENABLED", "true")
+        env_path = write_env(tmp_path, "DEDUP_ENABLED=false\n")
+        assert load(env_file=env_path).DEDUP_ENABLED is True
+
+    def test_it_is_a_pack_key_and_an_env_example_key(self):
+        assert "DEDUP_ENABLED" in gen_env_example.keys_from_pack()
+        example = (pathlib.Path(__file__).resolve().parents[2] / ".env.example").read_text(
+            encoding="utf-8"
+        )
+        assert "\nDEDUP_ENABLED=" in example
+
+
 class TestStartupAssertion:
     def test_max_payload_not_greater_than_raw_log_raises_naming_both_keys(self, monkeypatch):
         monkeypatch.setenv("MAX_PAYLOAD_BYTES", "1000")

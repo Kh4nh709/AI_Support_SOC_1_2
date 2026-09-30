@@ -103,7 +103,7 @@ Changing any of these requires a Decision Request in `docs/plan/INBOX.md` and Di
 ```
 DATABASE_URL(app runtime, role app_rw — a LOGIN role over TCP + scram-sha-256, DEC-023)  DATABASE_URL_OWNER(migrations and test setup, owner role)  TEST_DATABASE_URL(tests only; the database name must end in _test)
 MAX_PAYLOAD_BYTES=2_097_152  RAW_LOG_MAX_BYTES=1_024_000  PROMPT_LOG_MAX_BYTES=32_768
-DEDUP_IDLE_GAP_MINUTES=15  MAX_CLUSTER_AGE_HOURS=4  MAX_CLUSTER_AGE_AUTOCLOSED_MINUTES=30  MAX_CLUSTER_SIZE=1000
+DEDUP_IDLE_GAP_MINUTES=15  MAX_CLUSTER_AGE_HOURS=4  MAX_CLUSTER_AGE_AUTOCLOSED_MINUTES=30  MAX_CLUSTER_SIZE=1000  DEDUP_ENABLED=true(a bool; false = every alert is its own queue row and its own triage job, none is grouped into a cluster — forward-only, an open cluster is left as it is; the default keeps phase-2 grouping; DEC-165, Owner 30/09)
 INDEXER_URL  INDEXER_USER  INDEXER_PASSWORD  INDEXER_CA(required: path to the indexer root CA, on this host conf/root-ca.pem; no insecure mode)  INDEXER_INDEX="wazuh-alerts-*"
 PULL_INTERVAL_S=60  PULL_OVERLAP_S=60  PULL_PAGE=500  PULL_START="2026-08-01"
 HEARTBEAT_RULE_ID="100999"  HEARTBEAT_MAX_AGE_MIN=30  SILENCE_WARN_HOURS=3
