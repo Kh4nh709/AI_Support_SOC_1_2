@@ -126,7 +126,7 @@ Updated by the Planner (adds tasks), Coders (status of their task), Reviewer (re
 | P10-T11 | case list, case page, ② column | must | done | task/P10-T11 | P10-T08, P10-T03, P10-T04 | no | 2026-09-30 director | Plan card P10-T11; dispatched by wave (plan § Dependency waves). **DISPATCHED: 2026-09-30 15:16** — Coder Sonnet 5.5 xhigh, isolated worktree from `eb8b591`. Merged; review clean after fix rounds 1–3 + R16 (P10-T11.review.md).|
 | P10-T12 | Playwright e2e on a scratch stack (realtime, blind arm, 409, ②) | must | in-progress | task/P10-T12 | P10-T09, P10-T10, P10-T11 | no | 2026-09-30 director | Plan card P10-T12; dispatched by wave (plan § Dependency waves). **DISPATCHED: 2026-09-30 18:41** — Coder Sonnet 5.5 xhigh, isolated worktree from `175dfd8`.|
 | P10-T13 | retire the Jinja Tier-1/Tier-2 pages; runbook UI section | must | in-progress | task/P10-T13 | P10-T12 | yes — see the card report | 2026-09-30 director | Plan card P10-T13; dispatched by wave (plan § Dependency waves). **DISPATCHED: 2026-09-30 19:49** — Coder Sonnet 5.5 xhigh, isolated worktree from `9e51067`.|
-| P10-T14 | queue sort: last seen, occurrences, agent (server-side, whitelist; R17 kept) | must | in-progress | task/P10-T14 | P10-T09 | no | 2026-09-30 director | Owner request 30/09, DEC-164. **DISPATCHED: 2026-09-30 19:53** — Coder Sonnet 5.5 xhigh, isolated worktree from `661540e`.|
+| P10-T14 | queue sort: last seen, occurrences, agent (server-side, whitelist; R17 kept) | must | review | task/P10-T14 | P10-T09 | no | 2026-09-30 director | Owner request 30/09, DEC-164. **DISPATCHED: 2026-09-30 19:53** — Coder Sonnet 5.5 xhigh, isolated worktree from `661540e`.|
 
 ## Blockers (open)
 
