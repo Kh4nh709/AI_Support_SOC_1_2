@@ -231,6 +231,11 @@ export const S = {
     neverAnalysed: "chưa phân tích",
     clusterCount: (n: number) => `${n} cụm`,
     timeline: "Diễn biến",
+    // What the case detail itself records: its creation, each note, the last run of ② and the conclusion.
+    timelineCreated: "Case được tạo",
+    timelineNote: (who: string) => `${who} thêm ghi chú`,
+    timelineAnalysed: "Chạy phân tích AI ②",
+    timelineConcluded: (who: string, conclusion: string) => `${who} kết luận: ${conclusion}`,
     notes: "Ghi chú",
     noNotes: "Chưa có ghi chú.",
     addNote: "Thêm ghi chú",
