@@ -3,7 +3,7 @@
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
-import { http, HttpResponse } from "msw";
+import { http, HttpResponse, type JsonBodyType } from "msw";
 import { setupServer } from "msw/node";
 import { S } from "../../strings";
 import { InvestigationColumn } from "./InvestigationColumn";
@@ -88,7 +88,7 @@ const done = (r: Record<string, unknown> = run(), over: Record<string, unknown> 
   });
 
 /** Serves `views` one per GET, the last one for every GET after; records the `run_id` each GET carried. */
-function serveViews(...views: unknown[]) {
+function serveViews(...views: JsonBodyType[]) {
   const seen: (string | null)[] = [];
   server.use(
     http.get(VIEW_URL, ({ request }) => {

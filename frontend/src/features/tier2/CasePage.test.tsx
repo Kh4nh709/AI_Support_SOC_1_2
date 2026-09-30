@@ -3,7 +3,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
-import { http, HttpResponse } from "msw";
+import { http, HttpResponse, type JsonBodyType } from "msw";
 import { setupServer } from "msw/node";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { S } from "../../strings";
@@ -86,7 +86,7 @@ const concluded = (over: Record<string, unknown> = {}) =>
     ...over,
   });
 
-const serve = (body: unknown, status = 200) =>
+const serve = (body: JsonBodyType, status = 200) =>
   server.use(http.get(CASE_URL, () => HttpResponse.json(body, { status })));
 
 function renderCase() {
@@ -245,6 +245,8 @@ describe("the heads", () => {
     serve(detail({ heads: [head({ raw_log: big, raw_log_truncated: true })] }));
     const { container } = renderCase();
     await page();
+    // The ② column loads by itself; count only once it has settled.
+    await screen.findByRole("button", { name: S.ai2.analyze });
     const before = container.querySelectorAll("*").length;
     await userEvent.setup().click(screen.getByRole("button", { name: S.case.showLog }));
     expect(container.querySelector("pre")?.textContent).toHaveLength(1_000_000);
@@ -308,7 +310,8 @@ describe("the notes", () => {
     expect(within(list).getByText("nguyen")).toBeInTheDocument();
     expect(within(list).getByText("Nguồn là 127.0.0.x trên chính máy lab.")).toBeInTheDocument();
     expect(within(list).getByText("u-77")).toBeInTheDocument();
-    expect(within(list).getByText("30/09 08:12", { exact: false })).toBeInTheDocument();
+    // Both notes were written at the same minute.
+    expect(within(list).getAllByText("30/09 08:12", { exact: false })).toHaveLength(2);
   });
 
   it("says so when there is no note", async () => {

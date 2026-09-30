@@ -3,7 +3,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
-import { http, HttpResponse } from "msw";
+import { http, HttpResponse, type JsonBodyType } from "msw";
 import { setupServer } from "msw/node";
 import { MemoryRouter } from "react-router";
 import { S } from "../../strings";
@@ -29,7 +29,7 @@ const row = (n: number, over: Record<string, unknown> = {}) => ({
 });
 
 /** Serves `pages` one per GET (the last for every GET after) and records the query each GET carried. */
-function serve(...pages: unknown[]) {
+function serve(...pages: JsonBodyType[]) {
   const queries: { offset: string | null; limit: string | null }[] = [];
   server.use(
     http.get(LIST_URL, ({ request }) => {
@@ -71,7 +71,7 @@ describe("the rows", () => {
     expect(cells.getByText("30/09 08:19")).toBeInTheDocument();
   });
 
-  it("heads the table with the six columns of the Jinja page", async () => {
+  it("heads the table with the seven columns of the Jinja page", async () => {
     serve([row(1)]);
     renderList();
     await table();

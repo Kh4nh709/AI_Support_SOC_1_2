@@ -297,6 +297,7 @@ export const S = {
     hypotheses: "Giả thuyết",
     supporting: "Bằng chứng ủng hộ",
     counter: "Bằng chứng phản bác",
+    evidence: "Bằng chứng",
     noEvidence: "Trợ lý không đưa ra bằng chứng nào.",
     noCounterEvidence:
       "Mô hình không nêu bằng chứng phản bác nào cho giả thuyết này — kết quả không đúng định dạng " +
