@@ -81,14 +81,24 @@ def _ack(db, alert_id: str, actor: str, when: datetime) -> None:
     _event(db, "alert.acknowledged", alert_id, when, actor_role="analyst", actor_id=actor)
 
 
-def _close(db, alert_id: str, actor: str, when: datetime, decision: str) -> None:
+def _close(
+    db,
+    alert_id: str,
+    actor: str,
+    when: datetime,
+    decision: str,
+    seen: tuple[str, str] | None = None,
+) -> None:
     """A `tier1.decided` row shaped like `transitions.decide` writes it (`closed_fp`|`closed_benign`),
-    with the analyst's free-text reason carrying the marker."""
+    with the analyst's free-text reason carrying the marker. `seen` is `(run_id, suggested_action)`
+    of the proposer run `queue.latest_suggestion` returned at that moment, or None when it
+    returned nothing: the payload records both (`transitions.py`, `llm_run_id`/`llm_suggestion`)."""
     payload = {
         "decision": decision,
         "reason": f"reason {MARKER}",
         "occurrence_count": 1,
-        "llm_suggestion": None,
+        "llm_suggestion": None if seen is None else seen[1],
+        "llm_run_id": None if seen is None else seen[0],
         "suggestion_visible": None,
     }
     _event(
@@ -104,9 +114,15 @@ def _escalate(db, alert_id: str, actor: str, when: datetime) -> None:
     )
 
 
-def _suggest(db, alert_id: str, action: str, when: datetime) -> None:
-    """A proposer row whose `result->>'suggested_action'` is `action`."""
+def _suggest(db, alert_id: str, action: str, when: datetime) -> str:
+    """A proposer row whose `result->>'suggested_action'` is `action`; returns its run_id."""
     _gated(db, alert_id, when, action, forced=False)
+    row = db.execute(
+        "SELECT run_id FROM llm_runs WHERE subject_id = %s AND role = 'proposer' "
+        "AND created_at = %s",
+        (alert_id, when),
+    ).fetchone()
+    return str(row[0])
 
 
 def _handled(
@@ -119,13 +135,22 @@ def _handled(
     took: float | timedelta,
     outcome: str,
     suggested: str | None = None,
+    earlier: tuple[str, ...] = (),
+    failed_run: bool = False,
     synthetic: bool = False,
 ) -> str:
     """One alert acknowledged at `ack_at` s and decided `took` s later. `outcome` is
-    `false_positive`, `benign` or `escalated`; `suggested` is ①'s action, or None for no row."""
+    `false_positive`, `benign` or `escalated`. ① is what the analyst's console showed: the proposer
+    rows `earlier` (oldest first), then `suggested`, all before the pilot, the last one latest;
+    None and no `earlier` is no row, and `failed_run` is a latest proposer row with no result."""
     alert_id = _open(db, received_at=at(10), source=source, visible=visible, synthetic=synthetic)
-    if suggested is not None:
-        _suggest(db, alert_id, suggested, at(1))
+    seen = None  # what `latest_suggestion` returned when the decision was made
+    actions = (*earlier, *(() if suggested is None else (suggested,)))
+    for number, action in enumerate(actions, start=1):
+        seen = (_suggest(db, alert_id, action, at(number)), action)
+    if failed_run:
+        _run(db, alert_id, at(len(actions) + 1), stopped_by="schema")
+        seen = None
     _ack(db, alert_id, actor, _t(ack_at))
     done = _t(_secs(ack_at) + _secs(took))
     if outcome == "escalated":
@@ -137,6 +162,7 @@ def _handled(
             actor,
             done,
             "closed_fp" if outcome == "false_positive" else "closed_benign",
+            seen,
         )
     return alert_id
 
@@ -212,14 +238,20 @@ def _seed_pilot(db) -> dict:
         ack_at=3000,
         took=120,
         outcome="false_positive",
-        suggested="needs_review",
+        earlier=("needs_review",),
+        suggested="false_positive",  # the latest proposer row wins
         **blind,
     )
-    _suggest(db, ids["B6"], "false_positive", at(2))  # the latest proposer row wins
     ids["B7"] = _handled(
-        db, source="wazuh", actor=b, ack_at=3600, took=60, outcome="benign", **blind
+        db,
+        source="wazuh",
+        actor=b,
+        ack_at=3600,
+        took=60,
+        outcome="benign",
+        failed_run=True,  # a proposer row with no result
+        **blind,
     )
-    _run(db, ids["B7"], at(1), stopped_by="schema")  # a proposer row with no result
     ids["B8"] = _handled(
         db, source="wazuh", actor=b, ack_at=6000, took=90, outcome="escalated", **blind
     )
@@ -354,6 +386,35 @@ def test_blind_agreement_counts_needs_review_apart_and_not_as_a_disagreement(db)
 
 
 @pytest.mark.db
+def test_blind_cross_table_of_the_verdict_by_the_human_decision(db):
+    _seed_pilot(db)
+    section = _section6a(_report(db))
+
+    # every blind decision is in one row: 8 in all. ① has no `benign`, so B3 (① false_positive,
+    # human benign) is a disagreement above and is visible here as a closure, not a miss.
+    assert (
+        "| source | ① verdict | false_positive | benign | escalated | decisions |\n"
+        "|---|---|---|---|---|---|\n"
+        "| wazuh | escalate | 1 | 0 | 0 | 1 |\n"
+        "| wazuh | false_positive | 1 | 0 | 0 | 1 |\n"
+        "| wazuh | needs_review | 0 | 0 | 0 | 0 |\n"
+        "| wazuh | no_result | 0 | 1 | 1 | 2 |\n"
+        "| lab | escalate | 0 | 0 | 1 | 1 |\n"
+        "| lab | false_positive | 1 | 1 | 0 | 2 |\n"
+        "| lab | needs_review | 1 | 0 | 0 | 1 |\n"
+        "| lab | no_result | 0 | 0 | 0 | 0 |\n"
+        "| all | escalate | 1 | 0 | 1 | 2 |\n"
+        "| all | false_positive | 2 | 1 | 0 | 3 |\n"
+        "| all | needs_review | 1 | 0 | 0 | 1 |\n"
+        "| all | no_result | 0 | 1 | 1 | 2 |\n"
+    ) in section
+    heading = "### ① verdict × human decision, blind arm only (Q33)"
+    assert heading in section
+    block = section[section.index(heading) :].split("\n### ")[0]
+    assert "| visible |" not in block  # the visible arm saw ①: no cross-table for it
+
+
+@pytest.mark.db
 def test_visible_arm_never_has_an_agreement_figure(db):
     # only visible-arm decisions, each one matching ①: there is nothing to agree on the blind arm
     a = _user(db)
@@ -404,7 +465,7 @@ def test_the_latest_proposer_row_is_the_verdict_and_a_verifier_row_is_not(db):
     )
     late = _open(db, received_at=at(10), source="lab", visible=False)
     _suggest(db, late, "escalate", at(1))
-    _suggest(db, late, "false_positive", at(2))
+    latest = _suggest(db, late, "false_positive", at(2))
     _run(
         db,
         late,
@@ -414,12 +475,125 @@ def test_the_latest_proposer_row_is_the_verdict_and_a_verifier_row_is_not(db):
         result={"suggested_action": "escalate"},
     )
     _ack(db, late, a, _t(300))
-    _close(db, late, a, _t(360), "closed_fp")
+    _close(db, late, a, _t(360), "closed_fp", (latest, "false_positive"))
 
     section = _section6a(_report(db))
 
     # the first alert: needs_review (no verdict); the second: false_positive, agreed
     assert "| lab | 2 | 1 | 0 | 1 | 1 | 1.000 (1 / 1) |" in section
+
+
+# --- ① as it was when the human decided (the Reviewer's F1) --------------------------------------
+#
+# The triage job still runs on an alert that was escalated, and a job still running when the human
+# decides has a `created_at` (its transaction's start) before the decision, though nobody could
+# see its row. So `llm_runs` alone cannot say what ① was at that moment. A `tier1.decided` event
+# records it in its payload (`llm_run_id`, `llm_suggestion`); a `tier1.escalated` event does not,
+# and takes the latest proposer row created at or before it.
+
+CAVEAT = (
+    "escalations: ① taken as the latest run created at or before the decision; a run in flight "
+    "at that moment may be included"
+)
+
+
+def _blind_lab(db) -> tuple[str, str]:
+    """A blind lab alert and the analyst who will decide it."""
+    return _open(db, received_at=at(10), source="lab", visible=False), _user(db)
+
+
+def _lab_line(db) -> str:
+    """The agreement table's `lab` row, alone, for the alerts the test seeded."""
+    section = _section6a(_report(db))
+    lines = [line for line in section.splitlines() if line.startswith("| lab | ")]
+    agreement = [line for line in lines if line.count("|") == 8]  # 7 cells: the agreement table
+    assert len(agreement) == 1, lines
+    return agreement[0]
+
+
+@pytest.mark.db
+def test_an_escalation_takes_the_latest_proposer_row_at_or_before_it(db):
+    # E1: `false_positive` at 1 min, `escalate` created exactly at the decision (inclusive), and
+    # `false_positive` created after it: ① was `escalate`, and the escalation agrees.
+    e1, a = _blind_lab(db)
+    _suggest(db, e1, "false_positive", at(1))
+    _ack(db, e1, a, _t(60))
+    _escalate(db, e1, a, _t(120))
+    _suggest(db, e1, "escalate", _t(120))
+    _suggest(db, e1, "false_positive", _t(180))
+    # E2: a verifier row after the proposer's is not ①: it was `false_positive`, a disagreement.
+    e2, _ = _blind_lab(db)
+    _suggest(db, e2, "false_positive", at(1))
+    _run(
+        db,
+        e2,
+        at(3),
+        role="verifier",
+        gate={"error": "none"},
+        result={"suggested_action": "escalate"},
+    )
+    _ack(db, e2, a, _t(300))
+    _escalate(db, e2, a, _t(360))
+
+    assert _lab_line(db) == "| lab | 2 | 0 | 0 | 2 | 1 | 0.500 (1 / 2) |"
+
+
+@pytest.mark.db
+def test_a_run_created_after_an_escalation_is_not_the_verdict(db):
+    alert, a = _blind_lab(db)
+    _suggest(db, alert, "false_positive", at(1))
+    _ack(db, alert, a, _t(60))
+    _escalate(db, alert, a, _t(120))
+    _suggest(db, alert, "escalate", _t(180))  # the job ran on after the escalation
+
+    # ① was `false_positive` when the human escalated: a disagreement, not the later `escalate`
+    assert _lab_line(db) == "| lab | 1 | 0 | 0 | 1 | 0 | 0.000 (0 / 1) |"
+
+
+@pytest.mark.db
+def test_a_run_created_after_a_decision_is_not_the_verdict(db):
+    alert, a = _blind_lab(db)
+    seen = _suggest(db, alert, "escalate", at(1))
+    _ack(db, alert, a, _t(60))
+    _close(db, alert, a, _t(120), "closed_fp", (seen, "escalate"))
+    _suggest(db, alert, "false_positive", _t(180))  # a later run, which would "agree"
+
+    assert _lab_line(db) == "| lab | 1 | 0 | 0 | 1 | 0 | 0.000 (0 / 1) |"
+
+
+@pytest.mark.db
+def test_the_run_a_decision_names_is_the_verdict_even_when_a_run_is_in_flight(db):
+    alert, a = _blind_lab(db)
+    named = _suggest(db, alert, "false_positive", at(1))
+    _ack(db, alert, a, _t(60))
+    # a job that started before the decision and committed after it: its `created_at` (its
+    # transaction's start) is before the decision, but the analyst's console never had its row
+    _suggest(db, alert, "escalate", _t(90))
+    _close(db, alert, a, _t(120), "closed_fp", (named, "false_positive"))
+
+    # a time bound alone would take the in-flight `escalate` and disagree; the payload names A
+    assert _lab_line(db) == "| lab | 1 | 0 | 0 | 1 | 1 | 1.000 (1 / 1) |"
+
+
+@pytest.mark.db
+def test_a_decision_that_recorded_no_run_has_no_result_even_when_one_is_in_flight(db):
+    alert, a = _blind_lab(db)
+    _ack(db, alert, a, _t(60))
+    _suggest(db, alert, "false_positive", _t(90))  # in flight at the decision, not in the payload
+    _close(db, alert, a, _t(120), "closed_fp")  # `llm_run_id` is null: no result at that moment
+
+    assert _lab_line(db) == "| lab | 1 | 0 | 1 | 0 | 0 | n/a (0 rows) |"
+
+
+@pytest.mark.db
+def test_the_escalation_caveat_is_printed_with_the_agreement(db):
+    _seed_pilot(db)
+    section = _section6a(_report(db))
+    block = section[section.index("### ① agreement with the human, blind arm only") :]
+    block = block.split("\n### ")[0]
+
+    assert f"- {CAVEAT}" in block
+    assert "`llm_suggestion`" in block  # the decided events' own record
 
 
 @pytest.mark.db
@@ -569,8 +743,12 @@ def test_section_six_points_at_the_pilot_figures_when_a_start_is_given(db):
     assert "section 6a" in decisions[1] and "Q29" in decisions[1]
     median = rows["Median acknowledge → decide, by branch"]
     assert median[0] == "measured, n = 11" and "Q30" in median[1]
+    # n is what the fraction is over (the denominator, 5), not the blind decisions (8): those are
+    # in the basis, beside it
     agreement = rows["① agreement with human decisions, blind branch only"]
-    assert agreement[0] == "measured, n = 8" and "Q31" in agreement[1]
+    assert agreement[0] == "measured, n = 5" and "Q31" in agreement[1]
+    assert "agreement denominator = 5" in agreement[1]
+    assert "blind decisions = 8" in agreement[1]
 
 
 @pytest.mark.db
@@ -581,7 +759,7 @@ def test_the_stale_reasons_are_replaced(db):
     digest = rows["Auto-close wrong-close rate from the digest, with its Wilson CI"]
     assert "live since P5 (DEC-154)" in digest[1]
     usefulness = rows["② usefulness, 1–5"]
-    assert usefulness[0] == "not measured"
+    assert usefulness[0] == "not measured: no rating control in v1.0 (DEC-161)"
     assert "built and run, no rating control in v1.0 (DEC-154, DEC-161)" in usefulness[1]
     section = _section(text, "6 · ")
     assert "DEC-116" not in section and "deprioritized" not in section
@@ -608,7 +786,7 @@ def test_every_pilot_query_is_printed_verbatim_in_section_8(db, monkeypatch):
     assert _appendix_sql(text) == sent
     ids = re.findall(r"^### (Q\d\d) · ", _section(text, "8 · "), flags=re.MULTILINE)
     assert ids == [f"Q{i:02d}" for i in range(1, len(ids) + 1)]
-    assert {q.qid for q in ops_export.PILOT_QUERIES} == {"Q29", "Q30", "Q31", "Q32"}
+    assert {q.qid for q in ops_export.PILOT_QUERIES} == {"Q29", "Q30", "Q31", "Q32", "Q33"}
     body = text[: text.index("\n## 8 · ")]
     assert set(re.findall(r"\bQ\d\d\b", body)) <= set(ids)
     assert "`%(pilot_start)s`" in _section(text, "8 · ")
@@ -632,7 +810,7 @@ def test_the_pilot_runs_in_the_read_only_session(_test_database):
     conn = ops_export._connect_readonly(_test_database)
     try:
         text = ops_export.build_report(conn, _window(), _pilot(end=None))
-        assert "\n## 6a · " in text and "\n### Q32 · " in text
+        assert "\n## 6a · " in text and "\n### Q33 · " in text
     finally:
         conn.rollback()
         conn.close()
