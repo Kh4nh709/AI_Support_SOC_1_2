@@ -3,12 +3,12 @@ returns the same body) gain the fields the React case page reads instead of reco
 them: `concluded_by_name`, `author_name` on each note, the per-head supplement
 (`raw_log`, `raw_log_truncated`, `risk_band`, `last_seen_at` — never `risk_score`) and
 `ongoing` / `ongoing_last_seen`. The helpers under test live in `app.tier2.case_view`,
-moved out of the Jinja case page (`web/routers/cases_pages.py`).
+moved out of the Jinja case page's router (that page retired in P10-T13).
 
 Every db test runs inside the `db` fixture's transaction and is rolled back: the
 overridden `get_conn` yields that connection and never commits. Fixture helpers are
 copied from `test_tier2_api.py` (its lines 34-144), extended with the alert columns this
-card reads; `test_pages_cases.py`'s `_insert_alert` is the pattern for those.
+card reads.
 """
 
 from __future__ import annotations

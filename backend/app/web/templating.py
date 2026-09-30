@@ -29,13 +29,6 @@ HTMX_INTEGRITY: str | None = (
     "sha512-2kIcAizYXhIn8TzUvqzEDZNuDZ+aW7yE/+f1HJHXFjQcGNfv1kqzJSTBRBSlOgp6B/KZsz1K0a3ZTqP9dnxioQ=="
 )
 
-_BAND_CLASS = {
-    "Thấp": "band-low",
-    "Vừa": "band-mid",
-    "Cao": "band-high",
-    "Rất cao": "band-crit",
-}
-
 
 def local_time(value: datetime | None, tz_name: str) -> str:
     """`value` rendered in `tz_name` as `dd/mm HH:MM:SS`; `""` for `None`.
@@ -50,13 +43,7 @@ def local_time(value: datetime | None, tz_name: str) -> str:
     return value.astimezone(ZoneInfo(tz_name)).strftime("%d/%m %H:%M:%S")
 
 
-def band_class(value: str | None) -> str:
-    """P4-T05's row class for a risk band; `""` for `None` or anything unknown."""
-    return _BAND_CLASS.get(value, "")
-
-
 templates.env.filters["local_time"] = local_time
-templates.env.filters["band_class"] = band_class
 
 
 def render(request: Request, name: str, **ctx: object) -> HTMLResponse:

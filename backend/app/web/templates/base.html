@@ -20,15 +20,11 @@
   .flash-info { background: #dbeafe; color: #1e3a8a; }
   .flash-warn { background: #fef3c7; color: #92400e; }
   .flash-error { background: #fee2e2; color: #991b1b; }
-  .band-low { background: #dcfce7; }
-  .band-mid { background: #fef9c3; }
-  .band-high { background: #fed7aa; }
-  .band-crit { background: #fecaca; }
 </style>
 </head>
 <body>
 <header>
-  <a href="/queue"><strong>AI Support SOC</strong></a>
+  <a href="/"><strong>AI Support SOC</strong></a>
   {% if user %}
   <div>
     <span>{{ user.username }} ({{ user.role }})</span>
@@ -38,17 +34,13 @@
   </div>
   {% endif %}
 </header>
+{% if user and user.role == "admin" %}
 <nav>
-  <a href="/queue">Hàng đợi</a>
-  {% if user and user.role in ("tier2", "admin") %}
-  <a href="/cases">Case</a>
-  {% endif %}
-  {% if user and user.role == "admin" %}
   <a href="/admin/labels">Gán nhãn</a>
   <a href="/admin/rules">Rule tự đóng</a>
   <a href="/admin/digest">Duyệt digest</a>
-  {% endif %}
 </nav>
+{% endif %}
 <main>
   {% include "_flash.html" %}
   {% block content %}{% endblock %}

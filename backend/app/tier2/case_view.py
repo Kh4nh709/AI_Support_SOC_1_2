@@ -1,9 +1,9 @@
-"""tier2/case_view.py — the case page's read-side helpers, shared by the Jinja case page
-(`web/routers/cases_pages.py`) and the JSON case detail (`GET /api/tier2/cases/{id}`, which
-the React case page reads) — P10-T04.
+"""tier2/case_view.py — the case page's read-side helpers behind the JSON case detail
+(`GET /api/tier2/cases/{id}`, which the React case page reads) — P10-T04.
 
-`supplement` and `enrich_heads` moved here from `cases_pages` (`_supplement`,
-`_enrich_heads`) unchanged in rule and behaviour; the one difference is named below.
+`supplement` and `enrich_heads` moved here from the Jinja case page's router (`_supplement`,
+`_enrich_heads`; that page retired in P10-T13) unchanged in rule and behaviour; the one
+difference is named below.
 `usernames` is new: one read for the display names of a case's concluder and note authors.
 
 **Layering (G1).** `tier2` may not import `tier1` or `web`, and the head's `risk_band` is

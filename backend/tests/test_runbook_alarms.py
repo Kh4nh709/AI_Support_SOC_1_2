@@ -451,10 +451,7 @@ def test_environment_keys_rows_for_the_two_circle_settings_name_their_readers():
     }
     readers_by_key = {
         "CASE_PROMPT_BUDGET_TOKENS": ["tier2/dossier.py"],
-        "ANALYZE_QUOTA_PER_USER_DAY": [
-            "web/routers/tier2_runs.py",
-            "web/routers/case_analyze_pages.py",
-        ],
+        "ANALYZE_QUOTA_PER_USER_DAY": ["web/routers/tier2_runs.py"],
     }
     for key, readers in readers_by_key.items():
         what = rows.get(f"`{key}`")

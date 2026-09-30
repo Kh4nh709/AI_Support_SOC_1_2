@@ -1,15 +1,16 @@
 """tier2/investigation_view.py + `GET /api/tier2/cases/{id}/investigation` — the ② view as
 JSON (P10-T03), the route the React case page (P10-T11) reads.
 
-The view is the one `GET /cases/{id}/investigation` (the Jinja page, P5-T05) renders from:
-the code moved out of `web/routers/case_analyze_pages.py` into `app.tier2.investigation_view`
-unchanged, so this file pins what the JSON carries — the five states, the evidence marks and
-their reasons, the overrule sentence, the snapshot against the current values — and that the
-page and the JSON say the same thing (`test_json_and_html_agree`; the page retires with the
-Jinja UI in P10-T13, which converts or deletes that one test).
+The view is the code that P5-T05's Jinja investigation page rendered from, moved into
+`app.tier2.investigation_view` unchanged; the page retired in P10-T13 and this JSON is now
+its only reader. So this file pins what the JSON carries — the five states, the evidence marks
+and their reasons, the overrule sentence, the `stopped_by` sentences, the snapshot against the
+current values (`test_the_json_contract_of_a_done_run` and
+`test_every_stopped_by_code_has_its_sentence` are what remained of the page-versus-JSON
+comparison once the page was gone).
 
-Every run and job row is inserted directly — no test makes a model call. Two hazards, as in
-`test_pages_investigation.py`:
+Every run and job row is inserted directly — no test makes a model call. Two hazards, as the
+retired page's tests had them:
 
 * `require_role` commits its `authz.denied` row itself, before it raises; the 403 test spies
   `db.commit` and reads the row at that moment, so nothing is really committed.
@@ -25,7 +26,6 @@ file's own copies.
 from __future__ import annotations
 
 import hashlib
-import html
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -33,8 +33,8 @@ import pytest
 from app.infra import config
 from app.infra.auth import Claims
 from app.tier2 import investigate as tier2_investigate
+from app.tier2 import investigation_view as view
 from app.web import deps, main
-from app.web.routers import pages
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 
@@ -184,9 +184,7 @@ def _insert_run(
 
 
 class _Client:
-    """`TestClient` plus the user/role the overridden auth dependencies answer as.
-    `pages.page_user` is overridden too: the Jinja page `test_json_and_html_agree` reads
-    calls it inside its own body rather than through `Depends(current_user)`."""
+    """`TestClient` plus the user/role the overridden auth dependency answers as."""
 
     def __init__(self, user_id: str, events: list[str]) -> None:
         self.http = TestClient(main.app, follow_redirects=False)
@@ -220,11 +218,10 @@ def client(db, monkeypatch):
     main.app.dependency_overrides[deps.get_conn] = get_conn
     main.app.dependency_overrides[deps.get_config] = lambda: config.Config()
     main.app.dependency_overrides[deps.current_user] = c.claims
-    main.app.dependency_overrides[pages.page_user] = c.claims
     try:
         yield c
     finally:
-        for dep in (deps.get_conn, deps.get_config, deps.current_user, pages.page_user):
+        for dep in (deps.get_conn, deps.get_config, deps.current_user):
             main.app.dependency_overrides.pop(dep, None)
 
 
@@ -637,15 +634,35 @@ def test_the_route_is_read_only_and_ends_on_a_rollback(client, db, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# One view, two renderings
+# The JSON contract — what the React case page (P10-T11) reads. The Jinja page that used to
+# be compared with it (`test_json_and_html_agree`) retired in P10-T13; what that test pinned
+# about the view itself is asserted here on the JSON alone.
 # ---------------------------------------------------------------------------
 
+_BODY_KEYS = {"state", "run_id", "minutes", "run", "current", "case_open"}
+_DONE_RUN_KEYS = {
+    "run_id",
+    "created_at",
+    "result",
+    "conclusion",
+    "conclusion_label",
+    "confidence",
+    "summary",
+    "narrative",
+    "hypotheses",
+    "evidence",
+    "next_steps",
+    "playbook_used",
+    "overruled",
+    "snapshot",
+    "changed",
+}
 
-def test_json_and_html_agree(client, db):
-    """The JSON `run.evidence` and the Jinja page (`GET /cases/{id}/investigation`, retired
-    by P10-T13, which converts or deletes this test) are built by the same function: every
-    `reason_text` the JSON carries is on the page, the verified count is the same, and the
-    conclusion label, summary and overrule sentence are too."""
+
+def test_the_json_contract_of_a_done_run(client, db):
+    """`state`, `run_id`, the run's fields, the evidence marks and each rejected item's own
+    reason text, the conclusion label, the summary and the overrule sentence — for one run
+    whose evidence the writer's own `_check_evidence` marked."""
     case_id = _make_case(db, client.user_id)
     head = _add_head(db, case_id, client.user_id, raw_log="Failed password for root from 10.0.0.9")
     other = _make_case(db, client.user_id)
@@ -661,20 +678,69 @@ def test_json_and_html_agree(client, db):
     check = tier2_investigate._check_evidence(db, case_id, parsed)
     check["original_conclusion"] = "false_positive"
     job_id = _insert_job(db, case_id, "succeeded")
-    _insert_run(db, case_id, job_id=job_id, result=parsed, evidence_check=check)
+    run_id = _insert_run(db, case_id, job_id=job_id, result=parsed, evidence_check=check)
+
+    resp = _get(client, case_id)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == _BODY_KEYS
+    assert body["state"] == "done"
+    assert body["run_id"] is None  # `run_id` is the live job's; a finished run carries its own
+    assert body["minutes"] is None
+    assert body["case_open"] is True
+    run = body["run"]
+    assert set(run) == _DONE_RUN_KEYS
+    assert run["run_id"] == str(run_id)
+    assert run["result"] == parsed
+    assert run["conclusion"] == "need_more_data"
+    assert run["conclusion_label"] == view.CONCLUSION_LABELS["need_more_data"]
+    assert run["summary"] == "SUMMARY-TEXT"
+    assert run["narrative"] == "NARRATIVE-TEXT"
+
+    items = run["evidence"]
+    assert [i["verified"] for i in items] == [True, False, False, False]
+    assert [i["why"] for i in items] == [
+        "WHY-VERIFIED",
+        "WHY-NOT-FOUND",
+        "WHY-TOO-SHORT",
+        "WHY-FOREIGN",
+    ]
+    # not_found, too_short and not_in_case each say their own reason; a verified item says none.
+    assert [i["reason_text"] for i in items] == [
+        None,
+        view.REJECT_TEXT["quote_not_found"],
+        view.REJECT_TEXT["quote_too_short"],
+        view.REJECT_TEXT["not_in_case"],
+    ]
+    # The overrule sentence names both conclusions (label and code) and the cause.
+    overruled = run["overruled"]
+    assert overruled == view.overrule_text(parsed, check)
+    assert view.labelled("false_positive") in overruled
+    assert view.labelled("need_more_data") in overruled
+    assert view.OVERRULE_NO_EVIDENCE in overruled
+
+
+@pytest.mark.parametrize(
+    ("stopped_by", "sentence"),
+    [(code, text) for code, text in view.STOPPED_TEXT.items()]
+    + [
+        ("<b>weird</b>", "dừng ở bước <b>weird</b>"),  # unknown: its raw code, never dropped
+        (None, "không rõ lý do"),
+    ],
+)
+def test_every_stopped_by_code_has_its_sentence(client, db, stopped_by, sentence):
+    """A run without a result says why in `run.stopped_text`: `STOPPED_TEXT`'s sentence for
+    each of P5-T04's five codes, the raw code for one the view has no words for (verbatim: the
+    JSON is data, the React page renders it as text), and a fixed sentence for none at all."""
+    case_id = _make_case(db, client.user_id)
+    job_id = _insert_job(db, case_id, "failed" if stopped_by == "transient" else "succeeded")
+    _insert_run(db, case_id, job_id=job_id, stopped_by=stopped_by)
 
     body = _get(client, case_id).json()
-    page = client.http.get(f"/cases/{case_id}/investigation", headers={"HX-Request": "true"})
 
-    assert page.status_code == 200
-    items = body["run"]["evidence"]
-    assert [i["verified"] for i in items] == [True, False, False, False]
-    reasons = [i["reason_text"] for i in items if not i["verified"]]
-    assert len(set(reasons)) == 3  # not_found, too_short and not_in_case each say their own
-    for reason in reasons:
-        assert html.escape(reason) in page.text
-    assert page.text.count('data-verified="true"') == 1
-    assert page.text.count('data-verified="false"') == 3
-    assert html.escape(body["run"]["conclusion_label"]) in page.text
-    assert html.escape(body["run"]["summary"]) in page.text
-    assert html.escape(body["run"]["overruled"]) in page.text
+    assert body["state"] == "done"
+    assert set(body["run"]) == {"run_id", "created_at", "result", "stopped_text"}
+    assert body["run"]["result"] is None
+    assert body["run"]["stopped_text"] == sentence
+    assert set(view.STOPPED_TEXT) == {"cap", "permanent", "linter", "schema", "transient"}

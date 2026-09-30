@@ -1,6 +1,11 @@
 """P4-T04 — `web/templating.py`, `web/templates/{base,login,_flash}.html`,
 `web/routers/pages.py` (`GET`/`POST /login`, `POST /logout`, `GET /`).
 
+P10-T13 retired the Jinja Tier-1/Tier-2 pages: `GET /` is now the home a role lands on
+(tier1/tier2 → the page that points to the React UI on port 8080, admin → `/admin/rules`,
+no session → `/login`), the queue/alert/case routes answer 404 for everyone, and the
+navigation carries admin links only.
+
 A scratch database, not the shared `db` fixture (`test_auth.py`'s pattern,
 P4-T01): login and logout are separate, committed transactions, and
 `sessions_invalid_before` (set at logout) must be measured against the real
@@ -34,6 +39,24 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SECRET = "test-secret"
 PASSWORD = "correct horse battery staple"
 LOGIN_FAILED_TEXT = "Sai tên đăng nhập hoặc mật khẩu"
+NEW_UI_HEADING = "Dùng giao diện mới tại cổng 8080"
+
+#: Every route the Jinja Tier-1/Tier-2 pages had (the alert, case and case-analyze page
+#: routers), with a placeholder id: none may answer any more.
+RETIRED_ROUTES = [
+    ("GET", "/queue"),
+    ("GET", "/alerts/x"),
+    ("POST", "/alerts/x/acknowledge"),
+    ("POST", "/alerts/x/decide"),
+    ("POST", "/alerts/x/escalate"),
+    ("POST", "/alerts/x/reopen"),
+    ("GET", "/cases"),
+    ("GET", "/cases/x"),
+    ("POST", "/cases/x/notes"),
+    ("POST", "/cases/x/conclude"),
+    ("GET", "/cases/x/investigation"),
+    ("POST", "/cases/x/analyze"),
+]
 
 
 def _cfg(secret: str = SECRET, **overrides) -> config.Config:
@@ -131,11 +154,11 @@ def test_login_page_renders_with_pinned_htmx(client) -> None:
 
 
 @pytest.mark.db
-def test_login_sets_httponly_lax_cookie_and_redirects_to_queue(client, sdb) -> None:
+def test_login_sets_httponly_lax_cookie_and_redirects_home(client, sdb) -> None:
     username, _ = _seed(sdb)
     resp = client.post("/login", data={"username": username, "password": PASSWORD})
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/queue"
+    assert resp.headers["location"] == "/"
     set_cookie = resp.headers["set-cookie"]
     assert "soc_session=" in set_cookie
     assert "HttpOnly" in set_cookie
@@ -211,11 +234,189 @@ def test_logout_clears_cookie_and_kills_session(client, sdb) -> None:
     assert resp.status_code == 200
 
 
+def _sign_in(client, sdb, role: str) -> None:
+    username, _ = _seed(sdb, role=role, prefix=role)
+    resp = client.post("/login", data={"username": username, "password": PASSWORD})
+    assert resp.status_code == 303, resp.text
+
+
+def _assert_points_to_the_new_ui(resp, *, href: str) -> None:
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert NEW_UI_HEADING in resp.text
+    assert f'href="{href}"' in resp.text
+    # Nothing on it leads to a retired page, and the header keeps the sign-out form.
+    for retired in ("/queue", "/cases", "/alerts/"):
+        assert f'href="{retired}' not in resp.text
+    assert 'action="/logout"' in resp.text
+
+
 @pytest.mark.db
-def test_root_redirects_to_queue(client) -> None:
+def test_tier1_home_points_to_the_new_ui(client, sdb) -> None:
+    _sign_in(client, sdb, "tier1")
+    resp = client.get("/")
+    # `testserver` is the TestClient's own Host: only the port changes.
+    _assert_points_to_the_new_ui(resp, href="http://testserver:8080/")
+
+
+@pytest.mark.db
+def test_tier2_home_points_to_the_new_ui(client, sdb) -> None:
+    _sign_in(client, sdb, "tier2")
+    resp = client.get("/")
+    _assert_points_to_the_new_ui(resp, href="http://testserver:8080/")
+
+
+@pytest.mark.db
+def test_admin_home_is_admin_rules(client, sdb) -> None:
+    _sign_in(client, sdb, "admin")
     resp = client.get("/")
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/queue"
+    assert resp.headers["location"] == "/admin/rules"
+    # ... and the target is a real page for that session, not another redirect.
+    assert client.get("/admin/rules").status_code == 200
+
+
+@pytest.mark.db
+def test_home_without_a_session_goes_to_login(client) -> None:
+    resp = client.get("/")
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/login"
+
+
+@pytest.mark.db
+def test_login_lands_on_the_home_of_each_role(client, sdb) -> None:
+    """`POST /login` always answers 303 `/`; `/` then sends each role where it belongs
+    (the redirect chain, not just its first hop)."""
+    landing = {}
+    for role in ("tier1", "tier2", "admin"):
+        chain = TestClient(main.app, follow_redirects=True)
+        username, _ = _seed(sdb, role=role, prefix=f"land-{role}")
+        sdb.commit()
+        resp = chain.post("/login", data={"username": username, "password": PASSWORD})
+        landing[role] = (resp.status_code, resp.url.path, NEW_UI_HEADING in resp.text)
+    assert landing == {
+        "tier1": (200, "/", True),
+        "tier2": (200, "/", True),
+        "admin": (200, "/admin/rules", False),
+    }
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("role", ["tier1", "tier2", "admin", None])
+def test_retired_routes_are_gone(client, sdb, role) -> None:
+    """P10-T13: the Jinja queue, alert, case and investigation/analyze pages (and their
+    decision/notes/conclude fragments) are not routes any more — 404 for every role and
+    for no session at all (a redirect to /login would mean a route still exists)."""
+    if role is not None:
+        _sign_in(client, sdb, role)
+    seen = {route: client.request(*route).status_code for route in RETIRED_ROUTES}
+    assert seen == {route: 404 for route in RETIRED_ROUTES}
+
+
+@pytest.mark.db
+def test_the_json_api_beside_the_retired_pages_still_answers(client, sdb) -> None:
+    _sign_in(client, sdb, "tier1")
+    assert client.get("/api/tier1/queue").status_code == 200
+
+
+# --- the link to the new UI: the Host the user came in on, the port swapped -------------
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    ("host_header", "href"),
+    [
+        ("127.0.0.1:8000", "http://127.0.0.1:8080/"),
+        ("192.168.10.7:8000", "http://192.168.10.7:8080/"),
+        ("soc-box.lan", "http://soc-box.lan:8080/"),
+        ("[::1]:8000", "http://[::1]:8080/"),
+    ],
+)
+def test_the_new_ui_link_keeps_the_host_and_changes_only_the_port(
+    client, sdb, host_header, href
+) -> None:
+    _sign_in(client, sdb, "tier1")
+    resp = client.get("/", headers={"host": host_header})
+    _assert_points_to_the_new_ui(resp, href=href)
+    assert ":8000" not in resp.text.split("<main>", 1)[1]
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "host_header",
+    [
+        "127.0.0.1:8000/evil",
+        "evil.example:80@127.0.0.1",
+        '"><script>alert(1)</script>',
+    ],
+)
+def test_a_hostile_host_header_gets_no_link_and_is_not_echoed(client, sdb, host_header) -> None:
+    _sign_in(client, sdb, "tier1")
+    resp = client.get("/", headers={"host": host_header})
+    assert resp.status_code == 200
+    assert NEW_UI_HEADING in resp.text
+    body = resp.text.split("<main>", 1)[1]
+    assert "http://" not in body  # no link at all
+    assert "evil" not in resp.text
+    assert "<script>alert" not in resp.text
+
+
+@pytest.mark.parametrize(
+    ("host_header", "expected"),
+    [
+        ("127.0.0.1:8000", "http://127.0.0.1:8080/"),
+        ("127.0.0.1", "http://127.0.0.1:8080/"),
+        ("192.168.10.7:8000", "http://192.168.10.7:8080/"),
+        ("SOC-Box.Example.com:443", "http://SOC-Box.Example.com:8080/"),
+        ("[::1]:8000", "http://[::1]:8080/"),
+        ("[fe80::1]", "http://[fe80::1]:8080/"),
+    ],
+)
+def test_new_ui_url_swaps_only_the_port(host_header, expected) -> None:
+    assert pages.new_ui_url(host_header) == expected
+
+
+@pytest.mark.parametrize(
+    "host_header",
+    [
+        None,
+        "",
+        "   ",
+        "127.0.0.1:8000/evil",  # a path
+        "127.0.0.1:8000?x=1",  # a query
+        "127.0.0.1:8000#frag",  # a fragment
+        "evil.example:80@127.0.0.1",  # userinfo
+        "user@127.0.0.1",
+        "127.0.0.1:8000:9090",  # two ports
+        "127.0.0.1:",  # an empty port
+        ":8000",  # no host
+        "127.0.0.1:99999",  # not a port
+        "127.0.0.1:80 80",
+        "a b.example",
+        "-evil.example",
+        "evil-.example",
+        "evil..example",
+        ".example",
+        "example.",
+        '"><script>alert(1)</script>',
+        "evil.example\\@127.0.0.1",
+        "[::1",  # unclosed
+        "[evil]:8000",  # not an address
+        "[::1]x",
+        "127.0.0.1\r\nX-Injected: 1",
+        "é.example",  # not ASCII
+        "a" * 64 + ".example",  # a label over 63 characters
+    ],
+)
+def test_new_ui_url_rejects_a_port_or_path_trick(host_header) -> None:
+    assert pages.new_ui_url(host_header) is None
+
+
+def test_the_new_ui_port_is_the_one_compose_publishes() -> None:
+    """The link's port is a constant in `pages.py`; `docker-compose.yml`'s `ui` service is
+    where the port really lives (`127.0.0.1:8080:80`, P10-T01): the two cannot drift apart."""
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert f":{pages.NEW_UI_PORT}:80" in compose
 
 
 @pytest.mark.db
@@ -224,7 +425,7 @@ def test_login_page_when_signed_in_redirects(client, sdb) -> None:
     client.post("/login", data={"username": username, "password": PASSWORD})
     resp = client.get("/login")
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/queue"
+    assert resp.headers["location"] == "/"
 
 
 # --------------------------------------------------------------------------
@@ -256,9 +457,9 @@ def test_admin_nav_link_only_for_admin() -> None:
     assert "/admin/labels" not in html_tier1
 
 
-def test_cases_and_rules_nav_links_follow_the_role() -> None:
-    # Added by the Director at the P5-T07 merge: `/cases` (P5-T07) for tier2 and
-    # admin, `/admin/rules` (P5-T10) for admin only.
+def test_nav_carries_admin_links_only() -> None:
+    # P10-T13: the queue and case links went with the pages. What is left is the admin
+    # console (labels P4, rules P5-T10, digest P5-T09), for admin only.
     template = templating.templates.get_template("base.html")
     html = {
         role: template.render(
@@ -268,15 +469,17 @@ def test_cases_and_rules_nav_links_follow_the_role() -> None:
         )
         for role in ("tier1", "tier2", "admin")
     }
-    assert 'href="/cases"' not in html["tier1"]
-    assert 'href="/cases"' in html["tier2"]
-    assert 'href="/cases"' in html["admin"]
-    assert 'href="/admin/rules"' in html["admin"]
-    assert 'href="/admin/rules"' not in html["tier2"]
-    # Added at the P5-T09 merge: the digest review page, admin only.
-    assert 'href="/admin/digest"' in html["admin"]
-    assert 'href="/admin/digest"' not in html["tier2"]
-    assert 'href="/admin/digest"' not in html["tier1"]
+    for role, page in html.items():
+        for retired in ('href="/queue"', 'href="/cases"'):
+            assert retired not in page, f"{role}: {retired}"
+        assert 'href="/"' in page  # the brand link goes home, and home knows the role
+    for link in ('href="/admin/labels"', 'href="/admin/rules"', 'href="/admin/digest"'):
+        assert link in html["admin"]
+        assert link not in html["tier1"]
+        assert link not in html["tier2"]
+    # No admin link, no empty navigation bar either.
+    assert "<nav>" not in html["tier1"]
+    assert "<nav>" not in html["tier2"]
 
 
 # --------------------------------------------------------------------------
