@@ -249,13 +249,21 @@ describe("② labels follow the backend", () => {
   });
 });
 
-it("labels the model, time and cost of ① and the model, tokens and cost of ②", () => {
-  expect(S.ai1.model).toBe("Mô hình");
-  expect(S.ai1.latency).toBe("Thời gian");
-  expect(S.ai1.cost).toBe("Chi phí");
-  expect(S.ai2.model).toBe("Mô hình");
-  expect(S.ai2.tokens).toBe("Token");
-  expect(S.ai2.cost).toBe("Chi phí");
+// The columns show no model, latency, token or cost line (the evaluation reads those from `llm_runs`, not
+// the screen), so no label for one is kept: an entry nothing reads is a string that can drift unseen.
+it("keeps no label for a model, time, token or cost line, which no screen shows", () => {
+  expect(S.ai1).not.toHaveProperty("model");
+  expect(S.ai1).not.toHaveProperty("latency");
+  expect(S.ai1).not.toHaveProperty("cost");
+  expect(S.ai1).not.toHaveProperty("heading");
+  expect(S.ai1).not.toHaveProperty("quote");
+  expect(S.ai2).not.toHaveProperty("model");
+  expect(S.ai2).not.toHaveProperty("tokens");
+  expect(S.ai2).not.toHaveProperty("cost");
+  expect(S.ai2).not.toHaveProperty("heading");
+  expect(S.ai2).not.toHaveProperty("injection");
+  expect(S.case).not.toHaveProperty("reasonOfConclusion");
+  expect(S.common).not.toHaveProperty("none");
 });
 
 it("writes no English-only label where a Vietnamese one is named by the spec", () => {

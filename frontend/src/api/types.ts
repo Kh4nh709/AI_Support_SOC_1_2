@@ -29,12 +29,6 @@ export type LoginResponse = {
   expires_at: string;
 };
 
-/** The flat body of a locked login (423): `{"detail": "locked", "locked_until": ...}`. */
-export type LockedBody = {
-  detail: "locked";
-  locked_until?: string;
-};
-
 /** `GET /api/auth/me`. The role comes from the verified token, the name from the users row. */
 export type MeResponse = {
   /** The user's uuid, as text. */

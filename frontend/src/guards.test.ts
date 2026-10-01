@@ -44,3 +44,12 @@ const NEEDLES: [string, (text: string) => boolean][] = [
 it.each(NEEDLES)("no %s in src", (_name, found) => {
   expect(src.filter(([, t]) => found(t)).map(([p]) => p)).toEqual([]);
 });
+
+// P10-T13 deleted the Jinja pages. A comment that still cites one of their modules points a reader at a
+// file that is not there; the words they carried are the UI's own now (`strings.ts`), and the tables the
+// UI follows have their homes in `backend/app/tier1` and `backend/app/tier2`.
+const DELETED_MODULES = ["alerts_pages", "cases_pages", "case_analyze_pages"];
+
+it.each(DELETED_MODULES)("cites no %s, a Jinja module that no longer exists", (name) => {
+  expect(src.filter(([, t]) => t.includes(name)).map(([p]) => p)).toEqual([]);
+});

@@ -44,7 +44,6 @@ export const S = {
     close: "Đóng",
     prev: "« trang trước",
     next: "trang sau »",
-    none: "Không có",
     unknownError: "Có lỗi xảy ra",
   },
 
@@ -59,10 +58,10 @@ export const S = {
   },
 
   // Risk bands, the one label <-> code table (rulings R8 and R13), used by the queue and by the case pages.
-  // The label is the text of the server's `risk_band` (queue.risk_band: Thấp/Vừa/Cao/Rất cao), which the
-  // Jinja page and the canvas show; the code is what the queue's `band` filter and `counts_by_band` speak,
-  // and what the colours are keyed by. Read a code through `labelOf`, and a row's label through
-  // `bandCodeOfLabel`. The "Mức" of the queue is `risk_band`, never the alert's `severity`.
+  // The label is the text of the server's `risk_band` (queue.risk_band: Thấp/Vừa/Cao/Rất cao); the code is
+  // what the queue's `band` filter and `counts_by_band` speak, and what the colours are keyed by. Read a
+  // code through `labelOf`, and a row's label through `bandCodeOfLabel`. The "Mức" of the queue is
+  // `risk_band`, never the alert's `severity`.
   band: {
     critical: "Rất cao",
     high: "Cao",
@@ -85,7 +84,7 @@ export const S = {
     high: "cao",
   },
 
-  // `alerts.status`, as the Jinja page labelled them (alerts_pages.STATUS_LABELS).
+  // `alerts.status`, one label for each status the queue and the alert page can show.
   status: {
     received: "Đã nhận",
     duplicate: "Bản sao",
@@ -151,7 +150,6 @@ export const S = {
 
   // The ① cell of the queue and the ① column of the alert page.
   ai1: {
-    heading: "Gợi ý ①",
     hidden: "ẩn — nhánh mù",
     none: "chưa có",
     forced: "⚑",
@@ -210,11 +208,7 @@ export const S = {
     reasons: "Lý do",
     gateSteps: "Các bước của cổng",
     facts: "Dữ kiện đã dùng",
-    quote: "Trích dẫn",
     source: "Nguồn",
-    model: "Mô hình",
-    latency: "Thời gian",
-    cost: "Chi phí",
   },
 
   alert: {
@@ -321,7 +315,7 @@ export const S = {
     sessionEnded:
       "Phiên đã hết hạn — đăng nhập lại để gửi. Lý do bạn đã nhập được giữ lại trong tab này.",
     invalid: "Dữ liệu chưa hợp lệ",
-    // The 409 of a decision, worded as the Jinja page does (alerts_pages._conflict_text).
+    // The 409 of a decision (`decide.DecisionConflict`), one sentence for each kind: see conflict.ts.
     conflict: {
       clusterGrew: (seen: number, now: number, delta: number, tolerance: number) =>
         `Cụm đã tăng từ ${seen} lên ${now} bản sao trong lúc bạn đọc (chênh ${delta} > ${tolerance}) — xem lại rồi xác nhận`,
@@ -395,8 +389,7 @@ export const S = {
     // A 409 of the conclude: someone concluded the case first. `concludedBy` then says who and when.
     conflict: "Case đã được kết luận trước đó — kết luận của bạn chưa được ghi.",
     concludeInvalid: "Không ghi được kết luận — thiếu lý do hoặc lý do không hợp lệ",
-    reasonOfConclusion: "Lý do",
-    // CONFIRMED_INCIDENT_SCOPE_NOTE (cases_pages.py), shown beside the "Xác nhận sự cố" choice.
+    // What a "confirmed incident" conclusion does and does not mean, shown beside the "Xác nhận sự cố" choice.
     scopeNote:
       "Kết luận này chỉ ghi nhận sự cố — hệ thống dừng lại ở đây, không có bước cách ly, ứng cứu hay " +
       "khắc phục nào (hệ thống phát hiện và phân loại, không ứng cứu).",
@@ -420,7 +413,7 @@ export const S = {
     confirmed_incident: "Xác nhận sự cố",
   },
 
-  // A head's own `alerts.status` while it belongs to a case (cases_pages.HEAD_STATUS_LABELS).
+  // A head's own `alerts.status` while it belongs to a case.
   headStatus: {
     escalated_tier2: "Đang xử lý Tier 2",
     closed_fp: "Đã đóng — không phải sự cố",
@@ -429,7 +422,6 @@ export const S = {
   },
 
   ai2: {
-    heading: "Trợ lý điều tra ②",
     disclaimer: "Đây chỉ là gợi ý của trợ lý — kết luận do Tier 2 quyết định.",
     analyze: "Phân tích",
     running: "Đang phân tích…",
@@ -453,10 +445,6 @@ export const S = {
       "yêu cầu (mỗi giả thuyết phải có ít nhất một bằng chứng phản bác), hãy đọc giả thuyết này thận trọng.",
     nextSteps: "Bước tiếp theo",
     playbook: (name: string) => `Playbook: ${name}`,
-    injection: "Cảnh báo tiêm lệnh (prompt injection)",
-    model: "Mô hình",
-    tokens: "Token",
-    cost: "Chi phí",
     // The 429 of `POST .../analyze` carries no count, so the sentence gives none.
     quotaExhausted: "Đã dùng hết lượt phân tích hôm nay",
     alreadyRunning: "Đang có một lượt phân tích chạy cho case này",
@@ -489,7 +477,7 @@ export const S = {
       quote_too_short: `Trích dẫn ngắn hơn ${MIN_QUOTE_CHARS} ký tự nên không kiểm chứng được`,
     },
     // `investigate_v2.suggested_conclusion`: the words of the backend's CONCLUSION_LABELS
-    // (case_analyze_pages.py), which the Jinja page used; strings.test.ts compares the two. They are
+    // (backend/app/tier2/investigation_view.py); strings.test.ts compares the two. They are
     // not the three case-conclusion labels of `S.conclusion`, which name what Tier 2 decided.
     suggestedConclusion: {
       false_positive: "Không phải sự cố",

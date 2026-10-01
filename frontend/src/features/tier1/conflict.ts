@@ -1,5 +1,5 @@
 // What a failed decision says, in words. The 409 of a decision carries a flat body (`ConflictBody`, from
-// decide.DecisionConflict.body); the words are the Jinja page's (alerts_pages._conflict_text). A kind this
+// decide.DecisionConflict.body); the words are `S.decision.conflict`'s. A kind this
 // UI does not know is worded as "not actionable any more": the page refetches the alert either way, so what
 // it then shows is the truth, and the sentence only has to say that the decision did not go through.
 import { ApiError } from "../../api/client";
