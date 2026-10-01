@@ -25,10 +25,11 @@ Some things the unit tests (jsdom) and the e2e suite (`vite preview` on a scratc
 | C6 | Times in +07 | Compare a row's time with the Wazuh event time. | The same wall-clock time, in +07. | |
 | C7 | Large log | Open an alert with a very long `raw_log`. | The page stays responsive. The log scrolls inside its box and shows the truncation note when truncated. | |
 | C8 | Match to the canvas | Compare the queue, alert, case and login pages with the `Queue`, `Main`, `Case` and `Login` artboards. | Two columns, with the ① column about 520 px and the ② column about 560 px, the violet AI tokens, and legible contrast. | |
-| C9 | Count guard (R19) | Acknowledge a noisy alert, and type a reason while the cluster grows by more than 20. | "N → M" shows. Submitting gives the 409 message, and the second submit works. | |
+| C9 | Count guard (R19). **Only with `DEDUP_ENABLED=true`** (DEC-165): with the switch off, the live setting since 30/09, an alert never gains occurrences, so there is no "N → M" and no `cluster_grew` 409. Write `n/a, switch off` in Result, or run it on a scratch stack with the switch on. | Acknowledge a noisy alert, and type a reason while the cluster grows by more than 20. | "N → M" shows. Submitting gives the 409 message, and the second submit works. | |
 | C10 | Token expiry while typing | Let the session expire, or log out in another window, while typing a reason. Then submit, log in again, and return. | The draft is still in the box, and only one decision is recorded. | |
 | C11 | Tier-2 flow on a real escalation | Escalate a real alert, then open the case as tier2 and analyze it. | The case appears, and ② runs to done with evidence marks. The left column updates when ② ends. | |
 | C12 | Jinja retirement gate (spec §8) | The Owner uses the React Tier-1 flow end to end. | The Owner confirms. Only then does P10-T13 retire the Jinja Tier-1/Tier-2 pages. | |
+| C13 | Escalate leaves another analyst's alert alone (DEC-166, item 3) | Pick three open alerts within 2 h that share the agent, the user or the srcip. Analyst B presses Nhận xử lý on one of them. Analyst A acknowledges the second, then escalates it. The third stays in the queue, unclaimed. | The case holds A's alert and the unclaimed one (they are folded in, up to `MAX_ALERTS_PER_CASE`). B's alert is not in the case: it is still B's, `tier1_active` in B's queue, and B can still decide it. The pilot report counts the swept one as "kéo theo (không phải quyết định)", never as a decision. | |
 
 ## 2. Known v1.0 seams (not defects)
 
@@ -37,7 +38,15 @@ Some things the unit tests (jsdom) and the e2e suite (`vite preview` on a scratc
 - Escalating one alert sweeps its correlated open alerts into the case (A11b). A swept alert's page still shows a "Khớp" row, but the pilot report has no decision row for it. The report is the metric of record (P10-T10).
 - A slow logout POST that reaches the server after a re-login in the same window ends the new session once. It fails closed (P10-T08, R14).
 - For an escalation, the pilot report's ① may include a run that was in flight at the moment of the decision. The export prints this caveat (P10-T06).
-- When a stalled ② job later finishes, the case page's left column updates only after a reload (P10-T11). This is parked for the final fix batch.
+- When a stalled ② job later finishes, the case page's left column updates only after a reload (P10-T11). Fixed in the final fix batch (P10-T17, item 8a): the job's end now refreshes the case.
+
+With `DEDUP_ENABLED=false`, the live setting since 30/09 (DEC-165), these also hold. None is a defect:
+
+- The ⟳ mark ("Số lần xuất hiện đã tăng mạnh — cần phân tích lại") never lights. It needs a row's occurrence count to grow, and with the switch off every alert keeps 1.
+- The case's "Còn tiếp diễn" signal is dead for the same reason: only a duplicate arriving moves a head's `last_seen_at` forward (`bump_parent`), and none arrives.
+- ① runs once per alert, with no extra cap, against the one shared `LLM_MONTHLY_USD_CAP` of $30 that ② also spends from (DEC-165, item 3). A burst can use it up; ① and ② then both show "unavailable" until the next month.
+- A swept alert (A11b) is counted as "kéo theo (không phải quyết định)" in the pilot report, never as a decision or in agreement (DEC-166, item 4). Escalate never sweeps an alert another analyst holds (DEC-166, item 3).
+- The alert page's "Khớp" row compares the decision with the latest ① run, while the report uses the ① recorded at the decision (`llm_run_id`). They can differ when ① finishes after a fast blind decision. The report is the metric of record.
 
 ## 3. Defect log
 
