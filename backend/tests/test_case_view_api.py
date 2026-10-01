@@ -3,12 +3,12 @@ returns the same body) gain the fields the React case page reads instead of reco
 them: `concluded_by_name`, `author_name` on each note, the per-head supplement
 (`raw_log`, `raw_log_truncated`, `risk_band`, `last_seen_at` — never `risk_score`) and
 `ongoing` / `ongoing_last_seen`. The helpers under test live in `app.tier2.case_view`,
-moved out of the Jinja case page (`web/routers/cases_pages.py`).
+moved out of the Jinja case page's router (that page retired in P10-T13).
 
 Every db test runs inside the `db` fixture's transaction and is rolled back: the
 overridden `get_conn` yields that connection and never commits. Fixture helpers are
 copied from `test_tier2_api.py` (its lines 34-144), extended with the alert columns this
-card reads; `test_pages_cases.py`'s `_insert_alert` is the pattern for those.
+card reads.
 """
 
 from __future__ import annotations
@@ -355,6 +355,27 @@ def test_ongoing_false_when_analyzed_after_the_last_growth(client, db):
 
 
 @pytest.mark.db
+def test_ongoing_true_again_when_a_duplicate_arrives_after_the_last_analysis(client, db):
+    """The other side of the rule above (case 4 of the deleted page's `test_ongoing_label_matrix`):
+    once ② has run, `since` is `last_analyzed_at`, and a head that grew *after* it is ongoing
+    again — the label comes back with the newest growth, not the analysis time."""
+    u = client.user_id
+    case_id = _make_case(db, u, created_at=_T0, last_analyzed_at=_T0 + timedelta(hours=2))
+    head = _insert_alert(
+        db,
+        status="escalated_tier2",
+        case_id=case_id,
+        last_seen_at=_T0 + timedelta(hours=3),
+    )
+    _add_head(db, case_id, head, u)
+
+    body = client.http.get(f"/api/tier2/cases/{case_id}").json()
+
+    assert body["ongoing"] is True
+    assert _instant(body["ongoing_last_seen"]) == _T0 + timedelta(hours=3)
+
+
+@pytest.mark.db
 def test_ongoing_false_for_a_concluded_case_whose_head_grew(client, db):
     u = client.user_id
     case_id = _make_case(
@@ -431,6 +452,34 @@ def test_existing_keys_unchanged(client, db):
     assert {"concluded_by_name", "ongoing", "ongoing_last_seen"} <= set(body)
     assert {"raw_log", "raw_log_truncated", "risk_band", "last_seen_at"} <= set(body["heads"][0])
     assert "author_name" in body["notes"][0]
+
+
+@pytest.mark.db
+def test_a_head_carries_its_stored_duplicate_inclusive_occurrence_count(client, db):
+    """`ingest/dedup.py`'s `bump_parent` is what increments a head's `occurrence_count` as
+    duplicates arrive; the JSON carries that stored, already duplicate-inclusive column (the
+    value the deleted page test pinned as 7), not a per-cluster 1 and not a count of the
+    duplicate rows beside the head."""
+    u = client.user_id
+    case_id = _make_case(db, u, created_at=_T0)
+    head = _insert_alert(db, status="escalated_tier2", case_id=case_id, last_seen_at=_T0)
+    _add_head(db, case_id, head, u)
+    for _ in range(2):
+        _insert_alert(
+            db,
+            status="duplicate",
+            duplicate_of=head,
+            case_id=case_id,
+            closed_at=_T0,
+            sealed_at=_T0,
+        )
+    db.execute("UPDATE alerts SET occurrence_count = 7 WHERE alert_id = %s", (head,))
+
+    body = client.http.get(f"/api/tier2/cases/{case_id}").json()
+
+    (head_out,) = body["heads"]  # the duplicates are not heads
+    assert head_out["alert_id"] == head
+    assert head_out["occurrence_count"] == 7
 
 
 @pytest.mark.db

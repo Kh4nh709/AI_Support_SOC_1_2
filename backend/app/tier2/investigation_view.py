@@ -1,12 +1,11 @@
-"""tier2/investigation_view.py — the ② investigation view, shared by the Jinja page and the
-JSON API (P10-T03).
+"""tier2/investigation_view.py — the ② investigation view behind
+`GET /api/tier2/cases/{id}/investigation`, the JSON the React case page (P10-T11) reads (P10-T03).
 
-Moved here **verbatim** from `web/routers/case_analyze_pages.py` (P5-T05, DEC-151 wave 4) so that
-`GET /cases/{id}/investigation` (the page, retired with the Jinja UI in P10-T13) and
-`GET /api/tier2/cases/{id}/investigation` (the React case page, P10-T11) are built by one
-function, `build_investigation`. Nothing here imports `web`: the constants, the SQL and the
-functions are the ones the page has always used, with the leading underscore dropped from the
-functions.
+Moved here **verbatim** from the Jinja case-analyze page's router (P5-T05, DEC-151 wave 4) so
+that the page and the JSON API were built by one function, `build_investigation`. The Jinja
+page retired in P10-T13 and the JSON API is the only caller now. Nothing here imports `web`: the
+constants, the SQL and the functions are the ones the page had, with the leading underscore
+dropped from the functions.
 
 **The state is read from the database, not over HTTP.** It is derived from `jobs` and
 `llm_runs` directly:
@@ -34,8 +33,9 @@ only ever turns `idle` into `failed`: a real running or finished state wins.
 `agent_trace` nor `created_at` and does not check that the run belongs to a case), always
 filtered by `subject_id = <this case>`.
 
-Model output is untrusted. It leaves here as plain values (strings, lists, dicts); the page
-autoescapes it and the React UI renders it as text. This module builds no markup.
+Model output is untrusted. It leaves here as plain values (strings, lists, dicts) and the React
+UI renders it as text. This module builds no markup (`test_investigation_view_guard.py` scans
+its source for anything that would mark a string as safe).
 """
 
 from __future__ import annotations
@@ -49,8 +49,8 @@ import psycopg
 from app.tier2.investigate import MIN_QUOTE_CHARS, run_id_for_job
 
 #: `investigate_v2.suggested_conclusion` in Vietnamese — the three-conclusion table of
-#: `docs/phase-7-tier2.md` (the same wording `cases_pages.STATUS_LABELS` uses for the three
-#: conclusions) plus ②'s fourth value.
+#: `docs/phase-7-tier2.md` (the same wording the retired Jinja case page's status labels used for
+#: the three conclusions) plus ②'s fourth value.
 CONCLUSION_LABELS: dict[str, str] = {
     "false_positive": "Không phải sự cố",
     "policy_violation": "Có vi phạm nội quy, không phải tấn công",
@@ -233,7 +233,7 @@ def evidence_rows(result: dict[str, Any], check: dict[str, Any]) -> list[dict[st
 def labelled(code: Any) -> str:
     """ "Không phải sự cố (false_positive)": the Vietnamese label beside the code (review round 1,
     N3), so the reader who knows the codes and the reader who knows the words both find theirs. An
-    unknown value is shown as it is — the template escapes it."""
+    unknown value is shown as it is — as data; the React UI renders it as text."""
     if isinstance(code, str) and code in CONCLUSION_LABELS:
         return f"{CONCLUSION_LABELS[code]} ({code})"
     return str(code)

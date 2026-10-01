@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Giao diện mới — AI Support SOC{% endblock %}
+{% block content %}
+<h1>Dùng giao diện mới tại cổng {{ new_ui_port }}</h1>
+<p>Hàng đợi cảnh báo, chi tiết cảnh báo và các case nay nằm ở giao diện mới.
+  Trang này chỉ còn dẫn bạn sang đó.</p>
+{% if new_ui_url %}
+<p><a href="{{ new_ui_url }}">{{ new_ui_url }}</a></p>
+{% else %}
+<p>Mở cùng địa chỉ máy chủ bạn đang dùng, đổi cổng thành {{ new_ui_port }}.</p>
+{% endif %}
+<p>Vẫn đăng nhập bằng tài khoản hiện tại. Nếu giao diện mới không mở được, báo cho quản trị viên.</p>
+{% endblock %}

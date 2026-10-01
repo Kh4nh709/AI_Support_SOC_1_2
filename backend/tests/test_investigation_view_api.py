@@ -1,15 +1,16 @@
 """tier2/investigation_view.py + `GET /api/tier2/cases/{id}/investigation` — the ② view as
 JSON (P10-T03), the route the React case page (P10-T11) reads.
 
-The view is the one `GET /cases/{id}/investigation` (the Jinja page, P5-T05) renders from:
-the code moved out of `web/routers/case_analyze_pages.py` into `app.tier2.investigation_view`
-unchanged, so this file pins what the JSON carries — the five states, the evidence marks and
-their reasons, the overrule sentence, the snapshot against the current values — and that the
-page and the JSON say the same thing (`test_json_and_html_agree`; the page retires with the
-Jinja UI in P10-T13, which converts or deletes that one test).
+The view is the code that P5-T05's Jinja investigation page rendered from, moved into
+`app.tier2.investigation_view` unchanged; the page retired in P10-T13 and this JSON is now
+its only reader. So this file pins what the JSON carries — the five states, the evidence marks
+and their reasons, the overrule sentence, the `stopped_by` sentences, the snapshot against the
+current values (`test_the_json_contract_of_a_done_run` and
+`test_every_stopped_by_code_has_its_sentence` are what remained of the page-versus-JSON
+comparison once the page was gone).
 
-Every run and job row is inserted directly — no test makes a model call. Two hazards, as in
-`test_pages_investigation.py`:
+Every run and job row is inserted directly — no test makes a model call. Two hazards, as the
+retired page's tests had them:
 
 * `require_role` commits its `authz.denied` row itself, before it raises; the 403 test spies
   `db.commit` and reads the row at that moment, so nothing is really committed.
@@ -25,7 +26,6 @@ file's own copies.
 from __future__ import annotations
 
 import hashlib
-import html
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -33,8 +33,8 @@ import pytest
 from app.infra import config
 from app.infra.auth import Claims
 from app.tier2 import investigate as tier2_investigate
+from app.tier2 import investigation_view as view
 from app.web import deps, main
-from app.web.routers import pages
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 
@@ -120,17 +120,20 @@ def _insert_job(
     case_id: str,
     status: str,
     *,
+    attempts: int = 1,
     scheduled_ago: timedelta | None = None,
     locked_ago: timedelta | None = None,
+    created_ago: timedelta | None = None,
 ) -> int:
     """`*_ago` place the timestamps relative to the database's `now()` (the view measures a
-    job's age by the database clock too)."""
+    job's age by the database clock too); left out, `scheduled_at` and `created_at` keep
+    `now()` and `locked_at` stays NULL."""
     row = conn.execute(
-        "INSERT INTO jobs (job_type, subject_id, status, attempts, scheduled_at, locked_at) "
-        "VALUES ('investigate', %s, %s, 1, now() - COALESCE(%s, interval '0'), "
-        "CASE WHEN %s::interval IS NULL THEN NULL ELSE now() - %s::interval END) "
-        "RETURNING job_id",
-        (case_id, status, scheduled_ago, locked_ago, locked_ago),
+        "INSERT INTO jobs (job_type, subject_id, status, attempts, scheduled_at, locked_at, "
+        "created_at) VALUES ('investigate', %s, %s, %s, now() - COALESCE(%s, interval '0'), "
+        "CASE WHEN %s::interval IS NULL THEN NULL ELSE now() - %s::interval END, "
+        "now() - COALESCE(%s, interval '0')) RETURNING job_id",
+        (case_id, status, attempts, scheduled_ago, locked_ago, locked_ago, created_ago),
     ).fetchone()
     return row[0]
 
@@ -161,16 +164,20 @@ def _insert_run(
     case_id: str,
     *,
     job_id: int | None = None,
+    run_id: uuid.UUID | None = None,
     result: dict | None = None,
     evidence_check: dict | None = None,
     stopped_by: str | None = None,
     agent_trace: dict | None = None,
+    created_at: datetime | None = None,
 ) -> uuid.UUID:
-    run_id = tier2_investigate.run_id_for_job(job_id) if job_id is not None else uuid.uuid4()
+    if run_id is None:
+        run_id = tier2_investigate.run_id_for_job(job_id) if job_id is not None else uuid.uuid4()
     conn.execute(
         "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, role, "
-        "system_prompt, user_message, agent_trace, result, evidence_check, stopped_by) "
-        "VALUES (%s, 'investigate', 'case', %s, 'investigator', 's', 'u', %s, %s, %s, %s)",
+        "system_prompt, user_message, agent_trace, result, evidence_check, stopped_by, "
+        "created_at) VALUES (%s, 'investigate', 'case', %s, 'investigator', 's', 'u', "
+        "%s, %s, %s, %s, COALESCE(%s::timestamptz, now()))",
         (
             run_id,
             case_id,
@@ -178,15 +185,14 @@ def _insert_run(
             Jsonb(result) if result is not None else None,
             Jsonb(evidence_check) if evidence_check is not None else None,
             stopped_by,
+            created_at,
         ),
     )
     return run_id
 
 
 class _Client:
-    """`TestClient` plus the user/role the overridden auth dependencies answer as.
-    `pages.page_user` is overridden too: the Jinja page `test_json_and_html_agree` reads
-    calls it inside its own body rather than through `Depends(current_user)`."""
+    """`TestClient` plus the user/role the overridden auth dependency answers as."""
 
     def __init__(self, user_id: str, events: list[str]) -> None:
         self.http = TestClient(main.app, follow_redirects=False)
@@ -220,11 +226,10 @@ def client(db, monkeypatch):
     main.app.dependency_overrides[deps.get_conn] = get_conn
     main.app.dependency_overrides[deps.get_config] = lambda: config.Config()
     main.app.dependency_overrides[deps.current_user] = c.claims
-    main.app.dependency_overrides[pages.page_user] = c.claims
     try:
         yield c
     finally:
-        for dep in (deps.get_conn, deps.get_config, deps.current_user, pages.page_user):
+        for dep in (deps.get_conn, deps.get_config, deps.current_user):
             main.app.dependency_overrides.pop(dep, None)
 
 
@@ -637,15 +642,35 @@ def test_the_route_is_read_only_and_ends_on_a_rollback(client, db, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# One view, two renderings
+# The JSON contract — what the React case page (P10-T11) reads. The Jinja page that used to
+# be compared with it (`test_json_and_html_agree`) retired in P10-T13; what that test pinned
+# about the view itself is asserted here on the JSON alone.
 # ---------------------------------------------------------------------------
 
+_BODY_KEYS = {"state", "run_id", "minutes", "run", "current", "case_open"}
+_DONE_RUN_KEYS = {
+    "run_id",
+    "created_at",
+    "result",
+    "conclusion",
+    "conclusion_label",
+    "confidence",
+    "summary",
+    "narrative",
+    "hypotheses",
+    "evidence",
+    "next_steps",
+    "playbook_used",
+    "overruled",
+    "snapshot",
+    "changed",
+}
 
-def test_json_and_html_agree(client, db):
-    """The JSON `run.evidence` and the Jinja page (`GET /cases/{id}/investigation`, retired
-    by P10-T13, which converts or deletes this test) are built by the same function: every
-    `reason_text` the JSON carries is on the page, the verified count is the same, and the
-    conclusion label, summary and overrule sentence are too."""
+
+def test_the_json_contract_of_a_done_run(client, db):
+    """`state`, `run_id`, the run's fields, the evidence marks and each rejected item's own
+    reason text, the conclusion label, the summary and the overrule sentence — for one run
+    whose evidence the writer's own `_check_evidence` marked."""
     case_id = _make_case(db, client.user_id)
     head = _add_head(db, case_id, client.user_id, raw_log="Failed password for root from 10.0.0.9")
     other = _make_case(db, client.user_id)
@@ -661,20 +686,440 @@ def test_json_and_html_agree(client, db):
     check = tier2_investigate._check_evidence(db, case_id, parsed)
     check["original_conclusion"] = "false_positive"
     job_id = _insert_job(db, case_id, "succeeded")
-    _insert_run(db, case_id, job_id=job_id, result=parsed, evidence_check=check)
+    run_id = _insert_run(db, case_id, job_id=job_id, result=parsed, evidence_check=check)
+
+    resp = _get(client, case_id)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == _BODY_KEYS
+    assert body["state"] == "done"
+    assert body["run_id"] is None  # `run_id` is the live job's; a finished run carries its own
+    assert body["minutes"] is None
+    assert body["case_open"] is True
+    run = body["run"]
+    assert set(run) == _DONE_RUN_KEYS
+    assert run["run_id"] == str(run_id)
+    assert run["result"] == parsed
+    assert run["conclusion"] == "need_more_data"
+    assert run["conclusion_label"] == view.CONCLUSION_LABELS["need_more_data"]
+    assert run["summary"] == "SUMMARY-TEXT"
+    assert run["narrative"] == "NARRATIVE-TEXT"
+
+    items = run["evidence"]
+    assert [i["verified"] for i in items] == [True, False, False, False]
+    assert [i["why"] for i in items] == [
+        "WHY-VERIFIED",
+        "WHY-NOT-FOUND",
+        "WHY-TOO-SHORT",
+        "WHY-FOREIGN",
+    ]
+    # not_found, too_short and not_in_case each say their own reason; a verified item says none.
+    assert [i["reason_text"] for i in items] == [
+        None,
+        view.REJECT_TEXT["quote_not_found"],
+        view.REJECT_TEXT["quote_too_short"],
+        view.REJECT_TEXT["not_in_case"],
+    ]
+    # The overrule sentence names both conclusions (label and code) and the cause.
+    overruled = run["overruled"]
+    assert overruled == view.overrule_text(parsed, check)
+    assert view.labelled("false_positive") in overruled
+    assert view.labelled("need_more_data") in overruled
+    assert view.OVERRULE_NO_EVIDENCE in overruled
+
+
+@pytest.mark.parametrize(
+    ("stopped_by", "sentence"),
+    [(code, text) for code, text in view.STOPPED_TEXT.items()]
+    + [
+        ("<b>weird</b>", "dừng ở bước <b>weird</b>"),  # unknown: its raw code, never dropped
+        (None, "không rõ lý do"),
+    ],
+)
+def test_every_stopped_by_code_has_its_sentence(client, db, stopped_by, sentence):
+    """A run without a result says why in `run.stopped_text`: `STOPPED_TEXT`'s sentence for
+    each of P5-T04's five codes, the raw code for one the view has no words for (verbatim: the
+    JSON is data, the React page renders it as text), and a fixed sentence for none at all."""
+    case_id = _make_case(db, client.user_id)
+    job_id = _insert_job(db, case_id, "failed" if stopped_by == "transient" else "succeeded")
+    _insert_run(db, case_id, job_id=job_id, stopped_by=stopped_by)
 
     body = _get(client, case_id).json()
-    page = client.http.get(f"/cases/{case_id}/investigation", headers={"HX-Request": "true"})
 
-    assert page.status_code == 200
-    items = body["run"]["evidence"]
-    assert [i["verified"] for i in items] == [True, False, False, False]
-    reasons = [i["reason_text"] for i in items if not i["verified"]]
-    assert len(set(reasons)) == 3  # not_found, too_short and not_in_case each say their own
-    for reason in reasons:
-        assert html.escape(reason) in page.text
-    assert page.text.count('data-verified="true"') == 1
-    assert page.text.count('data-verified="false"') == 3
-    assert html.escape(body["run"]["conclusion_label"]) in page.text
-    assert html.escape(body["run"]["summary"]) in page.text
-    assert html.escape(body["run"]["overruled"]) in page.text
+    assert body["state"] == "done"
+    assert set(body["run"]) == {"run_id", "created_at", "result", "stopped_text"}
+    assert body["run"]["result"] is None
+    assert body["run"]["stopped_text"] == sentence
+    assert set(view.STOPPED_TEXT) == {"cap", "permanent", "linter", "schema", "transient"}
+
+
+# ---------------------------------------------------------------------------
+# The view's own rules, kept from the retired page's tests (P10-T13)
+#
+# `test_pages_investigation.py` pinned these through the HTML page. The rules live in
+# `derive_view` / `build_investigation`, which the JSON route returns unchanged, so each one is
+# asserted here on the JSON the React page reads.
+# ---------------------------------------------------------------------------
+
+
+def test_a_transient_attempt_row_between_attempts_is_not_a_result(client, db):
+    """A non-final failed attempt writes `stopped_by='transient'` under an attempt-scoped id
+    while the job is still live. It is not an outcome: the view stays `running` and shows
+    nothing of it."""
+    case_id = _make_case(db, client.user_id)
+    job_id = _insert_job(db, case_id, "pending", attempts=1)
+    _insert_run(
+        db,
+        case_id,
+        run_id=tier2_investigate.attempt_run_id(job_id, 1),
+        stopped_by="transient",
+    )
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == "running"
+    assert body["run_id"] == str(tier2_investigate.run_id_for_job(job_id))
+    assert body["run"] is None
+
+
+@pytest.mark.parametrize(
+    ("minutes", "state"),
+    [(1, "running"), (9, "running"), (11, "stalled"), (25, "stalled")],
+)
+def test_a_pending_job_is_stalled_only_past_twice_the_lock_timeout(client, db, minutes, state):
+    """`JOB_LOCK_TIMEOUT_S` is 300 in the fixture's config: the bound is 2 x 300 s = 10 minutes,
+    and a stall reports the job's actual age, not the bound."""
+    case_id = _make_case(db, client.user_id)
+    _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=minutes))
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == state
+    assert body["minutes"] == (minutes if state == "stalled" else None)
+
+
+def test_a_running_job_locked_eleven_minutes_ago_is_stalled(client, db):
+    case_id = _make_case(db, client.user_id)
+    job_id = _insert_job(
+        db,
+        case_id,
+        "running",
+        scheduled_ago=timedelta(minutes=12),
+        locked_ago=timedelta(minutes=11),
+    )
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == "stalled"
+    assert body["minutes"] == 11  # from the lock, not from the 12 minutes it was scheduled
+    assert body["run_id"] == str(tier2_investigate.run_id_for_job(job_id))
+
+
+def test_a_running_job_is_measured_from_its_lock_not_from_how_long_it_queued(client, db):
+    """It waited 30 minutes in the queue but a worker locked it a minute ago: it is running."""
+    case_id = _make_case(db, client.user_id)
+    _insert_job(
+        db,
+        case_id,
+        "running",
+        scheduled_ago=timedelta(minutes=30),
+        locked_ago=timedelta(minutes=1),
+    )
+
+    assert _get(client, case_id).json()["state"] == "running"
+
+
+def test_a_pending_job_is_measured_from_scheduled_at_not_created_at(client, db):
+    """A retry's backoff moves `scheduled_at`: created an hour ago, due only now, is not
+    stalled. The same job scheduled into the future (a backoff still counting down) is not
+    stalled either."""
+    case_id = _make_case(db, client.user_id)
+    _insert_job(db, case_id, "pending", created_ago=timedelta(hours=1))
+    assert _get(client, case_id).json()["state"] == "running"
+
+    other = _make_case(db, client.user_id)
+    _insert_job(db, other, "pending", scheduled_ago=timedelta(minutes=-5))
+    assert _get(client, other).json()["state"] == "running"
+
+
+def test_the_stall_bound_follows_job_lock_timeout_s(client, db):
+    """Nothing is hard-coded to ten minutes: with a 60 s lock timeout, three minutes is a
+    stall."""
+    case_id = _make_case(db, client.user_id)
+    _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=3))
+    assert _get(client, case_id).json()["state"] == "running"  # 180 s < 2 x 300 s
+
+    main.app.dependency_overrides[deps.get_config] = lambda: config.Config(
+        ANALYZE_QUOTA_PER_USER_DAY=2, JOB_LOCK_TIMEOUT_S=60
+    )
+
+    body = _get(client, case_id).json()
+    assert body["state"] == "stalled"  # 180 s > 2 x 60 s
+    assert body["minutes"] == 3
+
+
+def test_a_stalled_job_that_did_write_its_row_is_done(client, db):
+    """The final row wins over the job's age, as it does over a live job's status."""
+    case_id = _make_case(db, client.user_id)
+    job_id = _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=30))
+    _insert_run(db, case_id, job_id=job_id, result=_result(summary="LATE-BUT-HERE"))
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == "done"
+    assert body["run"]["summary"] == "LATE-BUT-HERE"
+    assert body["minutes"] is None
+
+
+def test_a_stalled_job_hides_the_previous_result_like_a_running_one(client, db):
+    case_id = _make_case(db, client.user_id)
+    old_job = _insert_job(db, case_id, "succeeded")
+    _insert_run(db, case_id, job_id=old_job, result=_result(summary="PREVIOUS"), created_at=_PAST)
+    _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=11))
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == "stalled"
+    assert body["run"] is None and body["current"] is None
+    assert "PREVIOUS" not in repr(body)
+
+
+def test_the_recheck_gets_the_live_state_once_the_worker_has_finished(client, db):
+    """The React page's "Kiểm tra lại" is the same GET: once the job has finished the answer is
+    the result."""
+    case_id = _make_case(db, client.user_id)
+    job_id = _insert_job(db, case_id, "pending", scheduled_ago=timedelta(minutes=11))
+    run_id = str(tier2_investigate.run_id_for_job(job_id))
+    assert _get(client, case_id, run_id=run_id).json()["state"] == "stalled"
+
+    _insert_run(db, case_id, job_id=job_id, result=_result(summary="FINISHED-AFTER-ALL"))
+    db.execute("UPDATE jobs SET status = 'succeeded' WHERE job_id = %s", (job_id,))
+    body = _get(client, case_id, run_id=run_id).json()
+
+    assert body["state"] == "done"
+    assert body["run"]["summary"] == "FINISHED-AFTER-ALL"
+
+
+def test_the_newest_job_wins_and_older_runs_stay_out_of_the_way(client, db):
+    case_id = _make_case(db, client.user_id)
+    older = _insert_job(db, case_id, "succeeded")
+    _insert_run(
+        db, case_id, job_id=older, result=_result(summary="OLDER-SUMMARY"), created_at=_PAST
+    )
+    newer = _insert_job(db, case_id, "succeeded")
+    _insert_run(db, case_id, job_id=newer, result=_result(summary="NEWER-SUMMARY"))
+
+    body = _get(client, case_id).json()
+
+    assert body["run"]["summary"] == "NEWER-SUMMARY"
+    assert "OLDER-SUMMARY" not in repr(body)
+
+
+def test_a_run_of_another_case_is_never_shown(client, db):
+    """The request itself names case B's run (`?run_id=<B's run>`) on case A's view, and
+    nothing of B comes back — not its text, not its run id. The hint is not a lookup key: with
+    nothing of A's own behind it the answer is `failed`, as for any `run_id` this case has no
+    trace of."""
+    case_a = _make_case(db, client.user_id)
+    case_b = _make_case(db, client.user_id)
+    job_b = _insert_job(db, case_b, "succeeded")
+    run_b = _insert_run(
+        db,
+        case_b,
+        job_id=job_b,
+        result=_result(summary="CASE-B-SUMMARY", attack_narrative="CASE-B-NARRATIVE"),
+        agent_trace={"alert_count": 77, "total_occurrences": 777},
+    )
+
+    resp = _get(client, case_a, run_id=str(run_b))
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["state"] == "failed"
+    assert body["run"] is None and body["current"] is None
+    for b_only in ("CASE-B-SUMMARY", "CASE-B-NARRATIVE", str(run_b)):
+        assert b_only not in resp.text
+
+
+def test_a_run_of_another_case_never_replaces_this_cases_own_result(client, db):
+    case_a = _make_case(db, client.user_id)
+    case_b = _make_case(db, client.user_id)
+    job_a = _insert_job(db, case_a, "succeeded")
+    _insert_run(db, case_a, job_id=job_a, result=_result(summary="CASE-A-SUMMARY"))
+    job_b = _insert_job(db, case_b, "succeeded")
+    run_b = _insert_run(db, case_b, job_id=job_b, result=_result(summary="CASE-B-SUMMARY"))
+
+    resp = _get(client, case_a, run_id=str(run_b))
+
+    assert resp.json()["run"]["summary"] == "CASE-A-SUMMARY"
+    assert "CASE-B-SUMMARY" not in resp.text and str(run_b) not in resp.text
+
+
+def test_without_any_job_the_latest_final_row_is_shown(client, db):
+    """No `jobs` row left (a purged queue, an old run): the newest row that is not a transient
+    attempt is the answer."""
+    case_id = _make_case(db, client.user_id)
+    _insert_run(db, case_id, result=_result(summary="OLD-RUN"), created_at=_PAST)
+    _insert_run(
+        db, case_id, result=_result(summary="NEW-RUN"), created_at=_PAST + timedelta(days=1)
+    )
+    _insert_run(db, case_id, stopped_by="transient", created_at=_PAST + timedelta(days=2))
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == "done"
+    assert body["run"]["summary"] == "NEW-RUN"
+
+
+def test_the_failed_state_keeps_the_previous_good_result_and_ignores_attempt_rows(client, db):
+    case_id = _make_case(db, client.user_id)
+    good = _insert_job(db, case_id, "succeeded")
+    _insert_run(db, case_id, job_id=good, result=_result(summary="LAST-GOOD"), created_at=_PAST)
+    bad = _insert_job(db, case_id, "failed", attempts=3)
+    _insert_run(
+        db,
+        case_id,
+        run_id=tier2_investigate.attempt_run_id(bad, 1),
+        stopped_by="transient",
+        created_at=_PAST + timedelta(days=1),
+    )
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == "failed"
+    assert body["run"]["summary"] == "LAST-GOOD"
+    assert body["run"]["result"] is not None  # the attempt row is not an outcome
+
+
+@pytest.mark.parametrize(
+    "status", ["concluded_fp", "concluded_policy_violation", "confirmed_incident"]
+)
+def test_a_concluded_case_is_closed_and_still_shows_the_last_result(client, db, status):
+    case_id = _make_case(db, client.user_id, status=status)
+    job_id = _insert_job(db, case_id, "succeeded")
+    _insert_run(db, case_id, job_id=job_id, result=_result(summary="BEFORE-CONCLUSION"))
+
+    body = _get(client, case_id).json()
+
+    assert body["case_open"] is False
+    assert body["state"] == "done"
+    assert body["run"]["summary"] == "BEFORE-CONCLUSION"
+
+
+def test_a_failed_job_on_a_concluded_case_is_failed_and_closed(client, db):
+    case_id = _make_case(db, client.user_id, status="concluded_fp")
+    _insert_job(db, case_id, "failed", attempts=3)
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == "failed"
+    assert body["case_open"] is False
+
+
+def test_a_concluded_case_without_a_result_is_idle_and_closed(client, db):
+    case_id = _make_case(db, client.user_id, status="concluded_fp")
+
+    body = _get(client, case_id).json()
+
+    assert body["state"] == "idle" and body["run"] is None
+    assert body["case_open"] is False
+
+
+# ---------------------------------------------------------------------------
+# Rules the deleted page tests pinned that no JSON test did (P10-T13, fix round 1)
+#
+# Each was found by an in-memory mutant of `investigation_view.py` that every other test here
+# survived; each test below is red against its mutant (see the card report).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("check", [None, {}], ids=["no-check-row", "empty-check"])
+def test_without_an_evidence_check_nothing_is_presented_as_verified(client, db, check):
+    """`evidence_check` is NULL (or an empty object): the writer vouched for nothing, so no item
+    is `verified` and each says it was not cross-checked — a mark is never assumed."""
+    case_id = _make_case(db, client.user_id)
+    parsed = _result(
+        evidence=[
+            {"alert_id": "a-1", "quote": "SOME-QUOTE-HERE", "why": "w1"},
+            {"alert_id": "a-2", "quote": "OTHER-QUOTE-HERE", "why": "w2"},
+        ]
+    )
+    _insert_run(db, case_id, result=parsed, evidence_check=check)
+
+    items = _get(client, case_id).json()["run"]["evidence"]
+
+    assert [i["verified"] for i in items] == [False, False]
+    assert [i["reason_text"] for i in items] == [view.REJECT_TEXT_UNKNOWN] * 2
+
+
+@pytest.mark.parametrize(
+    ("original", "shown"),
+    [
+        ("<script>alert(1)</script>", "<script>alert(1)</script>"),
+        ("some_future_code", "some_future_code"),
+        (42, "42"),
+    ],
+    ids=["markup", "future-code", "not-a-string"],
+)
+def test_an_unknown_overruled_code_stays_verbatim_in_the_overrule_sentence(
+    client, db, original, shown
+):
+    """The label lookup has no entry for it, and the sentence still says what the model
+    proposed — the raw value, as data (the React page renders it as text). The known
+    conclusion it was lowered to keeps its label."""
+    case_id = _make_case(db, client.user_id)
+    check = {"verified": [], "rejected": [], "original_conclusion": original}
+    _insert_run(
+        db, case_id, result=_result(suggested_conclusion="need_more_data"), evidence_check=check
+    )
+
+    overruled = _get(client, case_id).json()["run"]["overruled"]
+
+    assert f"Mô hình đề xuất {shown} nhưng" in overruled
+    assert "Cần thêm dữ liệu (need_more_data)" in overruled
+    assert view.OVERRULE_NO_EVIDENCE in overruled
+
+
+@pytest.mark.parametrize(
+    ("hypothesis", "against"),
+    [
+        ({"noi_dung": "H"}, []),  # key missing
+        ({"noi_dung": "H", "evidence_against": "x"}, []),  # a string, not a list
+        ({"noi_dung": "H", "evidence_against": None}, []),
+        ({"noi_dung": "H", "evidence_against": []}, []),  # the model skipped it
+        ({"noi_dung": "H", "evidence_against": ["A1", "A2"]}, ["A1", "A2"]),
+    ],
+    ids=["missing", "string", "null", "empty", "given"],
+)
+def test_a_missing_or_malformed_evidence_against_is_an_empty_list(client, db, hypothesis, against):
+    """The React page flags an empty `evidence_against` ("không nêu bằng chứng phản bác") and
+    maps over it: the JSON always carries a list, never the raw value the model wrote."""
+    case_id = _make_case(db, client.user_id)
+    _insert_run(db, case_id, result=_result(gia_thuyet=[hypothesis]))
+
+    (hypothesis_out,) = _get(client, case_id).json()["run"]["hypotheses"]
+
+    assert hypothesis_out["evidence_against"] == against
+    assert isinstance(hypothesis_out["evidence_for"], list)
+
+
+def test_only_the_hypothesis_that_skipped_its_counter_argument_has_an_empty_list(client, db):
+    case_id = _make_case(db, client.user_id)
+    _insert_run(
+        db,
+        case_id,
+        result=_result(
+            gia_thuyet=[
+                {"noi_dung": "H-WITHOUT", "evidence_for": ["F1"], "evidence_against": []},
+                {"noi_dung": "H-WITH", "evidence_for": ["F2"], "evidence_against": ["A2"]},
+            ]
+        ),
+    )
+
+    hypotheses = _get(client, case_id).json()["run"]["hypotheses"]
+
+    assert [(h["text"], h["evidence_against"]) for h in hypotheses] == [
+        ("H-WITHOUT", []),
+        ("H-WITH", ["A2"]),
+    ]

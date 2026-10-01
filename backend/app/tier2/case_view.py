@@ -1,9 +1,9 @@
-"""tier2/case_view.py — the case page's read-side helpers, shared by the Jinja case page
-(`web/routers/cases_pages.py`) and the JSON case detail (`GET /api/tier2/cases/{id}`, which
-the React case page reads) — P10-T04.
+"""tier2/case_view.py — the case page's read-side helpers behind the JSON case detail
+(`GET /api/tier2/cases/{id}`, which the React case page reads) — P10-T04.
 
-`supplement` and `enrich_heads` moved here from `cases_pages` (`_supplement`,
-`_enrich_heads`) unchanged in rule and behaviour; the one difference is named below.
+`supplement` and `enrich_heads` moved here from the Jinja case page's router (`_supplement`,
+`_enrich_heads`; that page retired in P10-T13) unchanged in rule and behaviour; the one
+difference is named below.
 `usernames` is new: one read for the display names of a case's concluder and note authors.
 
 **Layering (G1).** `tier2` may not import `tier1` or `web`, and the head's `risk_band` is
@@ -66,11 +66,11 @@ def enrich_heads(
     conn: psycopg.Connection, heads: list[dict[str, Any]], since: datetime
 ) -> datetime | None:
     """Merges `supplement`'s fields into each head in place — `raw_log`
-    (escaped by the template, never `|safe`) with `raw_log_truncated`,
+    (plain text in the JSON; the React UI renders it as text) with `raw_log_truncated`,
     `risk_band` (`risk_score` replaced by the band, never the bare number —
     P4's rule; `risk_score` itself is not stored on the dict, so it cannot
-    leak into the template by accident) and `last_seen_at` (shown per head,
-    `local_time`-formatted, design note 3).
+    leak into the response by accident) and `last_seen_at` (shown per head,
+    formatted by the client, design note 3).
 
     Returns the latest `last_seen_at` among heads that are both still
     `escalated_tier2` **and** newer than `since` — `None` when no head

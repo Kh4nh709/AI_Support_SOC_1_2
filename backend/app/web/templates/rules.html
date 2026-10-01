@@ -72,7 +72,7 @@
   <h4>Mẫu alert (tối đa 20)</h4>
   <ul data-field="samples">
     {% for alert_id in preview.samples %}
-    <li><a href="/alerts/{{ alert_id }}">{{ alert_id }}</a></li>
+    <li>{% if new_ui_url %}<a href="{{ new_ui_url }}alerts/{{ alert_id | urlencode }}">{{ alert_id }}</a>{% else %}{{ alert_id }}{% endif %}</li>
     {% endfor %}
   </ul>
 

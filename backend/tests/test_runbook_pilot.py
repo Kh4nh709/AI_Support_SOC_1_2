@@ -23,6 +23,7 @@ backend/tests/test_runbook_pilot.py` runs anywhere the repository is checked out
 
 import pathlib
 import re
+import unicodedata
 
 import pytest
 
@@ -49,7 +50,7 @@ REQUIRED_STRINGS = [
     "seed-users",
     "make run-app",
     "127.0.0.1:8000/login",
-    "Tiếp nhận",
+    "Nhận xử lý",
     "llm_runs",
     "source='lab'",
     "alert.reopened",
@@ -243,3 +244,113 @@ def test_no_secret_or_dsn_value():
     ), "a JWT_SECRET value is written"
     assert not re.search(r"postgres(ql)?://[^\s:/]+:[^@\s]+@", text), "a DSN with a password"
     assert not re.search(r"PGPASSWORD=\S+", text), "a PGPASSWORD value is written"
+
+
+# ----------------------------------------------------- P10-T13, fix round 1: the React UI
+
+
+def _precondition_row(label: str) -> list[str]:
+    body = _subsection_body(_pilot_section(_text()), "1")
+    rows = [row for row in _table_rows(body) if row and row[0] == label]
+    assert len(rows) == 1, f"expected one precondition row {label!r}, found {len(rows)}"
+    return rows[0]
+
+
+def test_the_pilot_can_start_on_the_react_ui():
+    """The Jinja queue and alert pages are gone (P10-T13): the app precondition must not wait for
+    them, and a `ui` row must prove the React UI answers and its proxy reaches the app."""
+    h = _precondition_row("h")
+    assert "cannot start without" not in " ".join(h), f"row h still waits for P4-T05: {h}"
+    assert "docker compose logs app" in h[3], "row h must say where the access log now is"
+
+    ui = _precondition_row("ui")
+    assert "docker compose up -d --build ui" in ui[2], ui
+    assert "http://127.0.0.1:8080/" in ui[2], ui
+    assert "http://127.0.0.1:8080/api/auth/me" in ui[2], ui
+    assert "200" in ui[3] and "401" in ui[3], ui
+
+
+def test_the_409_count_reads_the_containers_log_not_a_file_nothing_writes():
+    """`make run-app` is `docker compose up -d --wait db app`; nothing pipes it into a file."""
+    section = _pilot_section(_text())
+    commands = re.findall(r"`([^`\n]+)`", section)
+    for command in commands:
+        assert "tee -a" not in command, f"a tee into a log file nothing writes any more: {command}"
+        assert not re.search(r"grep\b.*pilot-app\.log", command), command
+    limitations = _subsection_body(section, "7")
+    assert re.search(r"docker compose logs[^`\n]*\bapp\b[^`\n]*\| grep -c [^`\n]*409", limitations)
+    assert (
+        "cookie is not `Secure`" not in limitations
+    ), "the React UI's credential is a Bearer token"
+    assert "Bearer token" in limitations
+
+
+# ---------------------------------------------- P10-T13, fix round 2: the labels the pilot names
+#
+# The pilot text names what is on the analyst's screen ("presses Tiếp nhận"). That was the Jinja
+# button; the React UI's is "Nhận xử lý", and no test went red. The React UI's words all live in
+# `frontend/src/strings.ts`, so a label the runbook quotes must be one of them, verbatim.
+
+STRINGS_TS = REPO_ROOT / "frontend" / "src" / "strings.ts"
+
+# A label is written in the runbook as `*"…"*` or `**"…"**` (the convention the section already
+# had). A code span is never one, so a `"` inside a command cannot match.
+QUOTED_LABEL_RE = re.compile(r"\*{1,2}\"([^\"`\n]+)\"\*{1,2}")
+
+# Quoted in the same way and on no screen: the advisor's rule (pinned verbatim by
+# `test_advisor_rule_in_both_languages`), a sentence quoted from the architecture, and the wording
+# the P8 report attaches to the visible-branch numbers.
+QUOTED_BUT_NOT_UI = [
+    ADVISOR_RULE_VI,
+    ADVISOR_RULE_EN,
+    "Thí điểm trực tuyến … là mô tả, không phải kiểm định",
+    "có thể thiên lệch",
+]
+
+# What the pilot text has to name, so that the extraction cannot pass by finding nothing.
+LABELS_THE_PILOT_NAMES = ["Nhận xử lý", "ẩn — nhánh mù", "chưa có", "Đang phân tích…"]
+
+
+def _nfc(text: str) -> str:
+    return unicodedata.normalize("NFC", text)
+
+
+def _strings_ts_literals() -> set[str]:
+    """Every double-quoted string literal of `strings.ts` outside a whole-line comment (a comment
+    that quotes a word, `// "có thể", not "sẽ"`, is not a label)."""
+    assert STRINGS_TS.is_file(), f"{STRINGS_TS} does not exist"
+    code = [
+        line
+        for line in STRINGS_TS.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith(("//", "/*", "*"))
+    ]
+    literal = re.compile(r"\"((?:[^\"\\\n]|\\.)*)\"")
+    return {_nfc(m.group(1)) for m in literal.finditer("\n".join(code))}
+
+
+def _pilot_ui_labels(text: str) -> list[str]:
+    """The labels the pilot section quotes: its `*"…"*` / `**"…"**` spans, minus the ones that are
+    not on a screen."""
+    not_ui = {_nfc(s) for s in QUOTED_BUT_NOT_UI}
+    found = (_nfc(m.group(1)) for m in QUOTED_LABEL_RE.finditer(_pilot_section(text)))
+    return [label for label in found if label not in not_ui]
+
+
+def _labels_missing_from_the_react_ui(text: str) -> list[str]:
+    known = _strings_ts_literals()
+    return [label for label in _pilot_ui_labels(text) if label not in known]
+
+
+def test_every_ui_label_the_pilot_names_is_a_string_the_react_ui_shows():
+    missing = _labels_missing_from_the_react_ui(_text())
+    assert (
+        not missing
+    ), f"the pilot section quotes labels that are not in frontend/src/strings.ts: {missing}"
+
+
+def test_the_pilot_names_the_labels_it_is_supposed_to_and_finds_them_in_strings_ts():
+    expected = {_nfc(label) for label in LABELS_THE_PILOT_NAMES}
+    named = set(_pilot_ui_labels(_text()))
+    assert expected <= named, f"no longer named in the pilot section: {sorted(expected - named)}"
+    assert expected <= _strings_ts_literals(), "not in strings.ts any more"
+    assert len(named) >= 10, f"the extraction found {len(named)} labels: {sorted(named)}"

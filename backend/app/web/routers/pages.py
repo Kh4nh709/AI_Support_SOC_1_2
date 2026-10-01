@@ -1,10 +1,17 @@
-"""`web/routers/pages.py` — `GET`/`POST /login`, `POST /logout`, `GET /` → `/queue`
-(P4-T04). `page_user`/`optional_user` are exported for P4-T05 and P6-T02:
+"""`web/routers/pages.py` — `GET`/`POST /login`, `POST /logout` and `GET /` (P4-T04).
+`page_user`/`optional_user` are what the admin pages (P4-T07, P5-T09, P5-T10) use:
 **pages redirect, APIs answer 401** — the one difference from `deps.current_user`.
+
+P10-T13: the Jinja Tier-1 and Tier-2 pages are gone (the React UI serves them on port 8080),
+so `GET /` is where a signed-in user lands and each role goes where it belongs: admin to
+`/admin/rules`, tier1 and tier2 to a small page that points them to the new UI, no session to
+`/login`. `POST /login` always answers `303 /` and lets `/` decide.
 """
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -23,6 +30,10 @@ from app.web.deps import (
 )
 
 router = APIRouter()
+
+#: The port the `ui` service publishes (`docker-compose.yml`: `127.0.0.1:8080:80`, P10-T01);
+#: `test_the_new_ui_port_is_the_one_compose_publishes` keeps the two in step.
+NEW_UI_PORT = 8080
 
 _LOGIN_FAILED_TEXT = "Sai tên đăng nhập hoặc mật khẩu"
 _AUTH_DISABLED_TEXT = "Đăng nhập chưa được bật (JWT_SECRET chưa đặt)"
@@ -67,6 +78,41 @@ def _install_error_handler() -> None:
 _install_error_handler()
 
 
+_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+#: A `Host` header this page will build a link from: a DNS name or an IPv4 address (letters,
+#: digits, hyphens and dots; no label that starts or ends with a hyphen, none over 63
+#: characters) or a bracketed IPv6 address, then at most one `:port`. Anything else (a path, a
+#: query, a fragment, userinfo, a second port, whitespace, control characters, non-ASCII) is
+#: refused as a whole, never trimmed down to a "safe" part.
+_HOST_HEADER = re.compile(
+    rf"(?P<host>{_LABEL}(?:\.{_LABEL})*|\[(?P<v6>[0-9A-Fa-f:.]+)\])(?::(?P<port>[0-9]{{1,5}}))?"
+)
+
+
+def new_ui_url(host_header: str | None) -> str | None:
+    """`http://<the host the request came in on>:8080/`: the request's own host name with only
+    the port swapped (`127.0.0.1:8000` gives `http://127.0.0.1:8080/`, a LAN address likewise),
+    or `None` when the `Host` header is absent or is not a plain host with an optional port.
+
+    The host is never a hard-coded address, and a header that carries a path or a port trick
+    gets no link at all (the page then names the port instead). `X-Forwarded-Host` is not read:
+    this app is reached directly on port 8000, and a client-chosen forwarding header must not
+    steer a link."""
+    if host_header is None:
+        return None
+    match = _HOST_HEADER.fullmatch(host_header)
+    if match is None:
+        return None
+    if match["port"] is not None and int(match["port"]) > 65535:
+        return None
+    if match["v6"] is not None:
+        try:
+            ipaddress.IPv6Address(match["v6"])
+        except ValueError:
+            return None
+    return f"http://{match['host']}:{NEW_UI_PORT}/"
+
+
 def optional_user(request: Request, conn: Conn, cfg: Cfg) -> Claims | None:
     """The signed-in user, or `None` — never raises (a page's "am I signed in?" check)."""
     token = read_token(request)
@@ -90,7 +136,7 @@ def page_user(request: Request, conn: Conn, cfg: Cfg) -> Claims:
 @router.get("/login")
 def login_page(request: Request, user: Annotated[Claims | None, Depends(optional_user)]):
     if user is not None:
-        return RedirectResponse("/queue", status_code=303)
+        return RedirectResponse("/", status_code=303)
     return templating.render(request, "login.html")
 
 
@@ -128,7 +174,7 @@ def login_submit(
         page.status_code = 423
         raise _RenderedPage(page) from None
     token = auth.issue_token(claims, cfg)
-    redirect = RedirectResponse("/queue", status_code=303)
+    redirect = RedirectResponse("/", status_code=303)
     set_session_cookie(redirect, token, cfg)
     return redirect
 
@@ -142,5 +188,13 @@ def logout_submit(conn: Conn, claims: Annotated[Claims, Depends(current_user)]):
 
 
 @router.get("/")
-def root_redirect():
-    return RedirectResponse("/queue", status_code=303)
+def home(request: Request, user: Annotated[Claims, Depends(page_user)]):
+    if user.role == "admin":
+        return RedirectResponse("/admin/rules", status_code=303)
+    return templating.render(
+        request,
+        "new_ui.html",
+        user=user,
+        new_ui_url=new_ui_url(request.headers.get("host")),
+        new_ui_port=NEW_UI_PORT,
+    )

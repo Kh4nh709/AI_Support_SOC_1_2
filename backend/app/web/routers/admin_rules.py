@@ -44,6 +44,7 @@ from app.infra.errors import PermanentError
 from app.ingest import autoclose
 from app.web import templating
 from app.web.deps import Cfg, Conn, require_role
+from app.web.routers import pages
 from app.web.routers.pages import page_user
 
 router = APIRouter()
@@ -353,6 +354,8 @@ def _page(
         preview=preview,
         matched=matched,
         tally=tally,
+        # P10-T13: the sample alerts open in the new UI, on the host this page was reached on.
+        new_ui_url=pages.new_ui_url(request.headers.get("host")),
         # Review round 1: "" not "[]" — the textarea is `required`, so an
         # empty submit is a 422 flash (`json.loads("")` raises), never a
         # silent "match everything" default.

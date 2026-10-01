@@ -10,6 +10,7 @@ tests exercise `pull_once`; `replay` is exercised on `tmp_path` files.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -178,11 +179,31 @@ def test_not_forbidden_for_home_archive(tmp_path):
     assert _is_forbidden_archive_path(str(target)) is False
 
 
-def test_forbidden_check_never_stats_the_path():
-    """Acceptance 3's `/var/ossec/...` no longer exists on this host at all —
-    the refusal must be by string prefix, not by asking the filesystem."""
-    assert Path("/var/ossec").exists() is False
-    assert _is_forbidden_archive_path("/var/ossec/logs/alerts/alerts.json") is True
+def _fs_call_is_a_failure(name: str):
+    def refuse(*args, **kwargs):
+        raise AssertionError(f"the forbidden-path check asked the filesystem: {name}")
+
+    return refuse
+
+
+def test_forbidden_check_never_stats_the_path(monkeypatch):
+    """The refusal is by string prefix, never by asking the filesystem — so it holds whether or
+    not `/var/ossec` exists on the host running the test (Acceptance 3's tree was gone once and
+    is installed again now). Proved rather than assumed: every call that would touch the
+    filesystem raises while the check runs."""
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "stat", _fs_call_is_a_failure("os.stat"))
+        patched.setattr(os, "lstat", _fs_call_is_a_failure("os.lstat"))
+        patched.setattr(Path, "exists", _fs_call_is_a_failure("Path.exists"))
+        patched.setattr(Path, "resolve", _fs_call_is_a_failure("Path.resolve"))
+        patched.setattr(os.path, "realpath", _fs_call_is_a_failure("os.path.realpath"))
+
+        assert _is_forbidden_archive_path("/var/ossec/logs/alerts/alerts.json") is True
+        assert _is_forbidden_archive_path("/var/ossec") is True
+        assert _is_forbidden_archive_path("/data/wazuh/logs/alerts/alerts.json") is True
+        assert _is_forbidden_archive_path("/var/ossec/../ossec/logs") is True  # normalised first
+        assert _is_forbidden_archive_path("/var/ossec-backup/alerts.jsonl") is False  # by component
+        assert _is_forbidden_archive_path("/home/user1/archive/alerts.jsonl") is False
 
 
 # ---------------------------------------------------------------------------
