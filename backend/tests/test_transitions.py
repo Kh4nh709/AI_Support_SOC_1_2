@@ -315,7 +315,7 @@ def _pending_job(conn: psycopg.Connection, job_type: str, subject_id: str) -> in
 
 def _no_correlation(monkeypatch):
     monkeypatch.setattr(
-        correlation, "correlated_cluster_ids", lambda conn, alert: [], raising=False
+        correlation, "correlated_cluster_ids", lambda conn, alert, **_: [], raising=False
     )
 
 
@@ -847,7 +847,7 @@ def test_A11b_ok(db, monkeypatch):
     trigger = _insert_alert(db, status="tier1_active")
     head2 = _insert_alert(db, status="queued_tier1")
     monkeypatch.setattr(
-        correlation, "correlated_cluster_ids", lambda conn, alert: [head2], raising=False
+        correlation, "correlated_cluster_ids", lambda conn, alert, **_: [head2], raising=False
     )
 
     case_id = escalate(db, trigger, user, title="t", severity="high")
@@ -876,7 +876,7 @@ def test_A11b_fail(db, monkeypatch):
     trigger = _insert_alert(db, status="tier1_active")
     head2 = _insert_alert(db, status="queued_tier1")
     monkeypatch.setattr(
-        correlation, "correlated_cluster_ids", lambda conn, alert: [head2], raising=False
+        correlation, "correlated_cluster_ids", lambda conn, alert, **_: [head2], raising=False
     )
 
     other_case_id = _make_case(db, user, title="other")
@@ -956,7 +956,7 @@ def test_escalate_truncates_at_max_alerts_per_case(db, monkeypatch):
     trigger = _insert_alert(db, status="tier1_active")
     extra = [_insert_alert(db, status="queued_tier1") for _ in range(3)]
     monkeypatch.setattr(
-        correlation, "correlated_cluster_ids", lambda conn, alert: extra, raising=False
+        correlation, "correlated_cluster_ids", lambda conn, alert, **_: extra, raising=False
     )
 
     case_id = escalate(db, trigger, user, title="t", severity="high")
@@ -973,6 +973,64 @@ def test_escalate_truncates_at_max_alerts_per_case(db, monkeypatch):
     truncated = [r for r in rows if r[0] == "case.truncated"]
     assert len(truncated) == 1
     assert truncated[0][3] == {"dropped": 2}
+
+
+def test_escalate_does_not_sweep_an_alert_another_analyst_holds(db):
+    """DEC-166, through the real transition: the escalating analyst's own held alert and every
+    queued one are folded into the case; one another analyst acknowledged is left exactly as it
+    was, still held by them and in no case."""
+    me, other = _make_user(db), _make_user(db)
+    trigger = _insert_alert(db, status="tier1_active", agent_name="held-agent", acknowledged_by=me)
+    queued = _insert_alert(db, status="queued_tier1", agent_name="held-agent")
+    mine = _insert_alert(db, status="tier1_active", agent_name="held-agent", acknowledged_by=me)
+    theirs = _insert_alert(
+        db, status="tier1_active", agent_name="held-agent", acknowledged_by=other
+    )
+
+    case_id = escalate(db, trigger, me, title="t", severity="high")
+
+    heads = {
+        r[0]
+        for r in db.execute(
+            "SELECT alert_id FROM case_alerts WHERE case_id = %s", (case_id,)
+        ).fetchall()
+    }
+    assert heads == {trigger, queued, mine}
+    status, holder, in_case = _fetch_alert(db, theirs, "status", "acknowledged_by", "case_id")
+    assert (status, str(holder), in_case) == ("tier1_active", other, None)
+    for swept in (queued, mine):
+        assert _fetch_alert(db, swept, "status", "case_id") == ("escalated_tier2", case_id)
+    opened = [r for r in _audit_rows(db, case_id) if r[0] == "case.opened"]
+    assert opened[0][3]["alert_count"] == 3
+
+
+def test_escalate_holds_back_another_analysts_alert_before_the_cap_counts(db, monkeypatch):
+    """The cap (`MAX_ALERTS_PER_CASE`) is applied to what is left: an alert another analyst holds
+    never takes a place a sweepable one would have had, and nothing is reported as dropped."""
+    monkeypatch.setenv("MAX_ALERTS_PER_CASE", "2")
+    me, other = _make_user(db), _make_user(db)
+    trigger = _insert_alert(
+        db, status="tier1_active", agent_name="held-cap-agent", acknowledged_by=me
+    )
+    _insert_alert(
+        db,
+        status="tier1_active",
+        agent_name="held-cap-agent",
+        acknowledged_by=other,
+        occurrence_count=50,
+    )
+    queued = _insert_alert(db, status="queued_tier1", agent_name="held-cap-agent")
+
+    case_id = escalate(db, trigger, me, title="t", severity="high")
+
+    heads = {
+        r[0]
+        for r in db.execute(
+            "SELECT alert_id FROM case_alerts WHERE case_id = %s", (case_id,)
+        ).fetchall()
+    }
+    assert heads == {trigger, queued}
+    assert [r for r in _audit_rows(db, case_id) if r[0] == "case.truncated"] == []
 
 
 # ---------------------------------------------------------------------------

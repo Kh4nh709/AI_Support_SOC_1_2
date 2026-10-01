@@ -118,25 +118,32 @@ def samples_query(alert: Any) -> tuple[str, dict[str, Any]]:
     return sql, _params(alert)
 
 
-def cluster_ids_query(alert: Any, limit: int) -> tuple[str, dict[str, Any]]:
-    """Phase-6 §Escalate's predicate plus one tie-break (DEC-165). The WHERE
-    clause is the doc's, unchanged: `status IN (...)` is kept literal rather
-    than named so a reviewer can diff it against the doc. The doc orders by
-    `occurrence_count DESC` only; with `DEDUP_ENABLED=false` every head has
-    `occurrence_count` 1, so at `MAX_ALERTS_PER_CASE` that alone would leave the
-    choice of siblings to heap order. `alert_time DESC, alert_id ASC` after it
-    keeps the newest first and makes the order total, hence deterministic. The
-    ordering is the only difference from the doc."""
+def cluster_ids_query(alert: Any, limit: int, *, actor_id: str) -> tuple[str, dict[str, Any]]:
+    """Phase-6 §Escalate's predicate plus a tie-break (DEC-165) and one exclusion (DEC-166).
+    The WHERE clause is the doc's: `status IN (...)` is kept literal rather than named so a
+    reviewer can diff it against the doc. The doc orders by `occurrence_count DESC` only; with
+    `DEDUP_ENABLED=false` every head has `occurrence_count` 1, so at `MAX_ALERTS_PER_CASE` that
+    alone would leave the choice of siblings to heap order. `alert_time DESC, alert_id ASC` after
+    it keeps the newest first and makes the order total, hence deterministic.
+
+    The exclusion: a `tier1_active` alert that someone other than `actor_id` acknowledged is not
+    swept. It is in another analyst's hands, and escalating a sibling must not take it from them.
+    The test is `IS DISTINCT FROM`, so a `tier1_active` row with no recorded holder is left alone
+    too (A7 always records one, the schema does not insist): only an alert the escalating analyst
+    holds, or one nobody holds yet (`queued_tier1`), is swept. It sits in the WHERE, ahead of the
+    LIMIT, so an alert left alone never uses up a place at the cap."""
     sql = f"""
         SELECT alert_id
         FROM alerts
         WHERE {_WINDOW_PREDICATE}
           AND status IN ('queued_tier1', 'tier1_active')
+          AND NOT (status = 'tier1_active' AND acknowledged_by IS DISTINCT FROM %(actor_id)s::uuid)
         ORDER BY occurrence_count DESC, alert_time DESC, alert_id ASC
         LIMIT %(limit)s
     """
     params = _params(alert)
     params["limit"] = limit
+    params["actor_id"] = actor_id
     return sql, params
 
 
@@ -166,11 +173,12 @@ def summarize_for_prompt(conn: psycopg.Connection, alert: Any) -> CorrelationSum
     return CorrelationSummary(rows=rows, samples=samples)
 
 
-def correlated_cluster_ids(conn: psycopg.Connection, alert: Any) -> list[str]:
+def correlated_cluster_ids(conn: psycopg.Connection, alert: Any, *, actor_id: str) -> list[str]:
     """The cluster ids `escalate` (P2-T06) folds into a case, capped at
     `Config.MAX_ALERTS_PER_CASE`. Do not quote 200 as a routinely-binding
     limit (phase-6): it is a guard rail against a pathological cluster, not a
-    cut analysts hit day to day. Read-only (E4)."""
+    cut analysts hit day to day. `actor_id` is the analyst who escalates: an alert
+    another analyst holds is not returned (`cluster_ids_query`, DEC-166). Read-only (E4)."""
     limit = config.load().MAX_ALERTS_PER_CASE
-    sql, params = cluster_ids_query(alert, limit)
+    sql, params = cluster_ids_query(alert, limit, actor_id=actor_id)
     return [row[0] for row in conn.execute(sql, params).fetchall()]

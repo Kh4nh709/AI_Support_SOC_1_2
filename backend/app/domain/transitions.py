@@ -462,7 +462,8 @@ def escalate(
     `case_id` only) — read design note 4 of the card before touching this.
 
     `case_alerts` holds **heads only**: the trigger plus
-    `correlated_cluster_ids(alert)` (already `duplicate_of IS NULL`), capped at
+    `correlated_cluster_ids(alert, actor_id=user_id)` (already `duplicate_of IS NULL`, and
+    without a `tier1_active` alert another analyst holds, DEC-166), capped at
     `MAX_ALERTS_PER_CASE` with a `case.truncated` audit row when the cap cuts.
     ③ is two statements, not one `OR`ed `UPDATE`: a duplicate always has
     `sealed_at` set and `escalated_tier2` forbids it, so one `UPDATE` touching
@@ -490,7 +491,9 @@ def escalate(
         alert_time=alert_time,
     )
     correlated_ids = [
-        cid for cid in correlation.correlated_cluster_ids(conn, subject) if cid != alert_id
+        cid
+        for cid in correlation.correlated_cluster_ids(conn, subject, actor_id=user_id)
+        if cid != alert_id
     ]
 
     head_ids = [alert_id, *correlated_ids]

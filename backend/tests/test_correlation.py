@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
@@ -44,6 +45,21 @@ _STATUS_SET = frozenset(
 _CATEGORY_SET = frozenset(CATEGORY_PRIORITY)
 
 _counter = itertools.count()
+
+# Who escalates, for the tests that do not care who holds what: no row is needed, because the
+# sweep only compares `acknowledged_by` with it, and only on a `tier1_active` alert.
+_ACTOR = "00000000-0000-4000-8000-0000000000a1"
+
+
+def _user(conn: psycopg.Connection) -> str:
+    """A `users` row: `alerts.acknowledged_by` is a foreign key, enforced on insert."""
+    user_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO users (user_id, username, display_name, role, password_hash) "
+        "VALUES (%s, %s, %s, 'tier1', 'x')",
+        (user_id, f"user-{user_id[:8]}", "Test Analyst"),
+    )
+    return user_id
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +118,7 @@ def _insert_alert(
     closed_at=None,
     sealed_at=None,
     close_reason: str | None = None,
+    acknowledged_by: str | None = None,
     **overrides,
 ) -> str:
     """A direct INSERT bypassing domain/transitions.py, for setting up an
@@ -146,6 +163,7 @@ def _insert_alert(
         "closed_at",
         "sealed_at",
         "close_reason",
+        "acknowledged_by",
     ]
     from psycopg.types.json import Jsonb
 
@@ -187,6 +205,7 @@ def _insert_alert(
         closed_at,
         sealed_at,
         close_reason,
+        acknowledged_by,
     ]
     assert len(columns) == len(values)
     placeholders = ", ".join(["%s"] * len(columns))
@@ -229,21 +248,21 @@ def test_correlation_theo_agent_name(db):
     other = _insert_alert(db, agent_name="shared-agent", alert_user="someone-else", srcip="9.9.9.9")
     summary = correlation.summarize_for_prompt(db, subject)
     assert [r.rule_id for r in summary.rows] == ["40112"]
-    ids = correlation.correlated_cluster_ids(db, subject)
+    ids = correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR)
     assert ids == [other]
 
 
 def test_correlation_theo_alert_user(db):
     subject = _make_alert(agent_name="agent-x", alert_user="alice", srcip="")
     other = _insert_alert(db, agent_name="agent-y", alert_user="alice", srcip="9.9.9.9")
-    ids = correlation.correlated_cluster_ids(db, subject)
+    ids = correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR)
     assert ids == [other]
 
 
 def test_correlation_theo_srcip(db):
     subject = _make_alert(agent_name="agent-x", alert_user=None, srcip="198.51.100.7")
     other = _insert_alert(db, agent_name="agent-y", alert_user="bob", srcip="198.51.100.7")
-    ids = correlation.correlated_cluster_ids(db, subject)
+    ids = correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR)
     assert ids == [other]
 
 
@@ -252,7 +271,7 @@ def test_srcip_rong_khong_tuong_quan_srcip_rong_khac(db):
     empty-srcip alert in the window — measured, phase-4 design note."""
     subject = _make_alert(agent_name="agent-x", alert_user=None, srcip="")
     _insert_alert(db, agent_name="agent-y", alert_user="nobody", srcip="")
-    ids = correlation.correlated_cluster_ids(db, subject)
+    ids = correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR)
     assert ids == []
     summary = correlation.summarize_for_prompt(db, subject)
     assert summary.rows == ()
@@ -262,7 +281,7 @@ def test_srcip_rong_khong_tuong_quan_srcip_rong_khac(db):
 def test_khong_khop_thi_khong_tuong_quan(db):
     subject = _make_alert(agent_name="agent-x", alert_user="alice", srcip="203.0.113.1")
     _insert_alert(db, agent_name="agent-z", alert_user="bob", srcip="203.0.113.99")
-    assert correlation.correlated_cluster_ids(db, subject) == []
+    assert correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR) == []
     assert correlation.summarize_for_prompt(db, subject).rows == ()
 
 
@@ -283,7 +302,7 @@ def test_cua_so_ngoai_2h_khong_duoc_tinh(db):
         agent_name="agent-w",
         alert_time=_ALERT_TIME + timedelta(hours=2, seconds=1),
     )
-    assert correlation.correlated_cluster_ids(db, subject) == []
+    assert correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR) == []
     assert correlation.summarize_for_prompt(db, subject).rows == ()
 
 
@@ -292,7 +311,7 @@ def test_cua_so_dung_bien_2h_duoc_tinh(db):
     subject = _make_alert(agent_name="agent-w", alert_user=None, srcip="")
     early = _insert_alert(db, agent_name="agent-w", alert_time=_ALERT_TIME - timedelta(hours=2))
     late = _insert_alert(db, agent_name="agent-w", alert_time=_ALERT_TIME + timedelta(hours=2))
-    ids = set(correlation.correlated_cluster_ids(db, subject))
+    ids = set(correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR))
     assert ids == {early, late}
 
 
@@ -307,7 +326,7 @@ def test_correlation_loai_chinh_alert_dang_xet(db):
     subject_id = _insert_alert(db, agent_name="agent-self", alert_id="self-1")
     subject = _make_alert(alert_id="self-1", agent_name="agent-self")
     assert subject_id == "self-1"
-    assert correlation.correlated_cluster_ids(db, subject) == []
+    assert correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR) == []
     summary = correlation.summarize_for_prompt(db, subject)
     assert summary.rows == ()
     assert summary.samples == ()
@@ -326,7 +345,7 @@ def test_correlation_loai_ban_sao(db):
         closed_at=_ALERT_TIME,
         sealed_at=_ALERT_TIME,
     )
-    ids = correlation.correlated_cluster_ids(db, subject)
+    ids = correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR)
     assert ids == [parent]
     summary = correlation.summarize_for_prompt(db, subject)
     assert {r.cluster_count for r in summary.rows} == {1}
@@ -350,7 +369,7 @@ def test_correlation_loai_duplicate_of_rieng_biet_voi_status(db):
         status="queued_tier1",  # deliberately NOT 'duplicate'
         duplicate_of=parent,
     )
-    assert correlation.correlated_cluster_ids(db, subject) == [parent]
+    assert correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR) == [parent]
     summary = correlation.summarize_for_prompt(db, subject)
     assert {r.cluster_count for r in summary.rows} == {1}
 
@@ -503,9 +522,10 @@ def test_tom_tat_mau_co_cot_ro_rang(db):
 
 def test_correlated_cluster_ids_tra_queued_tier1_va_tier1_active(db):
     subject = _make_alert(agent_name="agent-e", alert_user=None, srcip="")
+    me = _user(db)
     a = _insert_alert(db, agent_name="agent-e", status="queued_tier1")
-    b = _insert_alert(db, agent_name="agent-e", status="tier1_active")
-    ids = set(correlation.correlated_cluster_ids(db, subject))
+    b = _insert_alert(db, agent_name="agent-e", status="tier1_active", acknowledged_by=me)
+    ids = set(correlation.correlated_cluster_ids(db, subject, actor_id=me))
     assert ids == {a, b}
 
 
@@ -519,7 +539,7 @@ def test_correlated_cluster_ids_khong_tra_auto_closed(db):
         occurrence_count=5000,  # a busy scanner: must not out-rank real alerts
     )
     kept = _insert_alert(db, agent_name="agent-f", status="queued_tier1")
-    assert correlation.correlated_cluster_ids(db, subject) == [kept]
+    assert correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR) == [kept]
 
 
 def test_correlated_cluster_ids_khong_tra_alert_da_ket_luan(db):
@@ -534,8 +554,9 @@ def test_correlated_cluster_ids_khong_tra_alert_da_ket_luan(db):
             closed_at=_ALERT_TIME,
             sealed_at=_ALERT_TIME,
         )
-    kept = _insert_alert(db, agent_name="agent-g", status="tier1_active")
-    assert correlation.correlated_cluster_ids(db, subject) == [kept]
+    me = _user(db)
+    kept = _insert_alert(db, agent_name="agent-g", status="tier1_active", acknowledged_by=me)
+    assert correlation.correlated_cluster_ids(db, subject, actor_id=me) == [kept]
 
 
 def test_correlated_cluster_ids_khong_tra_alert_chua_enrich(db):
@@ -545,7 +566,7 @@ def test_correlated_cluster_ids_khong_tra_alert_chua_enrich(db):
     _insert_alert(db, agent_name="agent-h", status="received")
     _insert_alert(db, agent_name="agent-h", status="enriching")
     kept = _insert_alert(db, agent_name="agent-h", status="queued_tier1")
-    assert correlation.correlated_cluster_ids(db, subject) == [kept]
+    assert correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR) == [kept]
 
 
 def test_correlated_cluster_ids_khong_tra_alert_dang_o_case_khac(db):
@@ -554,14 +575,14 @@ def test_correlated_cluster_ids_khong_tra_alert_dang_o_case_khac(db):
     subject = _make_alert(agent_name="agent-i", alert_user=None, srcip="")
     _insert_alert(db, agent_name="agent-i", status="escalated_tier2")
     kept = _insert_alert(db, agent_name="agent-i", status="queued_tier1")
-    assert correlation.correlated_cluster_ids(db, subject) == [kept]
+    assert correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR) == [kept]
 
 
 def test_correlated_cluster_ids_thu_tu_giam_dan_theo_occurrence_count(db):
     subject = _make_alert(agent_name="agent-j", alert_user=None, srcip="")
     low = _insert_alert(db, agent_name="agent-j", status="queued_tier1", occurrence_count=1)
     high = _insert_alert(db, agent_name="agent-j", status="queued_tier1", occurrence_count=9)
-    assert correlation.correlated_cluster_ids(db, subject) == [high, low]
+    assert correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR) == [high, low]
 
 
 def test_correlated_cluster_ids_gioi_han_max_alerts_per_case(db, monkeypatch):
@@ -573,7 +594,7 @@ def test_correlated_cluster_ids_gioi_han_max_alerts_per_case(db, monkeypatch):
         _insert_alert(db, agent_name="agent-k", status="queued_tier1", occurrence_count=n)
         for n in range(1, 6)
     ]
-    result = correlation.correlated_cluster_ids(db, subject)
+    result = correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR)
     assert len(result) == 3
     # the cut keeps the highest occurrence_count heads, not an arbitrary three.
     assert set(result) == {ids[4], ids[3], ids[2]}
@@ -600,7 +621,7 @@ def test_correlated_cluster_ids_hoa_tie_break_chon_alert_moi_nhat_moi_lan_chay(d
     ]
     expected = [ids[4], ids[3]]
     for _ in range(5):
-        assert correlation.correlated_cluster_ids(db, subject) == expected
+        assert correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR) == expected
 
 
 def test_correlated_cluster_ids_hoa_tie_break_cuoi_cung_la_alert_id_tang_dan(db, monkeypatch):
@@ -619,7 +640,10 @@ def test_correlated_cluster_ids_hoa_tie_break_cuoi_cung_la_alert_id_tang_dan(db,
             alert_time=_ALERT_TIME,
         )
     for _ in range(5):
-        assert correlation.correlated_cluster_ids(db, subject) == ["tb-id-0", "tb-id-1"]
+        assert correlation.correlated_cluster_ids(db, subject, actor_id=_ACTOR) == [
+            "tb-id-0",
+            "tb-id-1",
+        ]
 
 
 def test_cluster_ids_query_order_by_la_occurrence_time_roi_alert_id():
@@ -627,9 +651,83 @@ def test_cluster_ids_query_order_by_la_occurrence_time_roi_alert_id():
     text-level pin so a revert is caught even where a small seed happens to
     return the right rows by luck."""
     subject = _make_alert(agent_name="agent-tb3", alert_user=None, srcip="")
-    sql, _params = correlation.cluster_ids_query(subject, 2)
+    sql, _params = correlation.cluster_ids_query(subject, 2, actor_id=_ACTOR)
     normalized = " ".join(sql.split())
     assert "ORDER BY occurrence_count DESC, alert_time DESC, alert_id ASC LIMIT" in normalized
+
+
+# ---------------------------------------------------------------------------
+# 5b · DEC-166 — a `tier1_active` alert another analyst holds is never swept
+# ---------------------------------------------------------------------------
+
+
+def test_correlated_cluster_ids_khong_tra_alert_nguoi_khac_dang_giu(db):
+    """The sweep folds `queued_tier1` and the alerts the escalating analyst holds, and leaves
+    alone an alert another analyst acknowledged: escalating must not take it out of their hands."""
+    subject = _make_alert(agent_name="agent-held", alert_user=None, srcip="")
+    me, other = _user(db), _user(db)
+    queued = _insert_alert(db, agent_name="agent-held", status="queued_tier1")
+    mine = _insert_alert(db, agent_name="agent-held", status="tier1_active", acknowledged_by=me)
+    _insert_alert(db, agent_name="agent-held", status="tier1_active", acknowledged_by=other)
+    assert set(correlation.correlated_cluster_ids(db, subject, actor_id=me)) == {queued, mine}
+
+
+def test_correlated_cluster_ids_nguoi_giu_la_nguoi_leo_thang_thi_van_quet(db):
+    """The exclusion is by holder, not by status: the same alert is swept for its own holder and
+    left alone for anyone else."""
+    subject = _make_alert(agent_name="agent-held2", alert_user=None, srcip="")
+    holder, stranger = _user(db), _user(db)
+    held = _insert_alert(
+        db, agent_name="agent-held2", status="tier1_active", acknowledged_by=holder
+    )
+    assert correlation.correlated_cluster_ids(db, subject, actor_id=holder) == [held]
+    assert correlation.correlated_cluster_ids(db, subject, actor_id=stranger) == []
+
+
+def test_correlated_cluster_ids_tier1_active_khong_ro_nguoi_giu_thi_khong_quet(db):
+    """A `tier1_active` row with no recorded holder (A7 always records one, the schema does not
+    insist) is not provably the escalating analyst's: it is left alone, the conservative side."""
+    subject = _make_alert(agent_name="agent-held3", alert_user=None, srcip="")
+    _insert_alert(db, agent_name="agent-held3", status="tier1_active", acknowledged_by=None)
+    assert correlation.correlated_cluster_ids(db, subject, actor_id=_user(db)) == []
+
+
+def test_alert_nguoi_khac_giu_khong_chiem_cho_trong_gioi_han(db, monkeypatch):
+    """The exclusion is in the SQL, before the cap: a held-by-other alert that would out-rank
+    every candidate does not use up a place at `MAX_ALERTS_PER_CASE`."""
+    monkeypatch.setenv("MAX_ALERTS_PER_CASE", "2")
+    subject = _make_alert(agent_name="agent-held4", alert_user=None, srcip="")
+    me, other = _user(db), _user(db)
+    _insert_alert(
+        db,
+        agent_name="agent-held4",
+        status="tier1_active",
+        acknowledged_by=other,
+        occurrence_count=50,
+    )
+    kept = [
+        _insert_alert(db, agent_name="agent-held4", status="queued_tier1", occurrence_count=n)
+        for n in (3, 2)
+    ]
+    assert correlation.correlated_cluster_ids(db, subject, actor_id=me) == kept
+
+
+def test_cluster_ids_query_loai_alert_nguoi_khac_giu_va_buoc_actor_id():
+    """A text-level pin, as for the order: the statement carries the exclusion and binds the
+    actor, and the actor is required (a caller that forgets it is a `TypeError`, never a sweep
+    that quietly takes another analyst's alert)."""
+    subject = _make_alert(agent_name="agent-tb4", alert_user=None, srcip="")
+    sql, params = correlation.cluster_ids_query(subject, 2, actor_id=_ACTOR)
+    normalized = " ".join(sql.split())
+    assert (
+        "AND NOT (status = 'tier1_active' AND acknowledged_by IS DISTINCT FROM "
+        "%(actor_id)s::uuid)" in normalized
+    )
+    assert params["actor_id"] == _ACTOR
+    with pytest.raises(TypeError):
+        correlation.cluster_ids_query(subject, 2)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        correlation.correlated_cluster_ids(None, subject)  # type: ignore[call-arg]
 
 
 # ---------------------------------------------------------------------------
@@ -645,7 +743,7 @@ def test_correlation_khong_ghi_xuong_bang_nao(_test_database):
         _test_database,
         [
             {"agent_name": "ro-agent", "status": "queued_tier1"},
-            {"agent_name": "ro-agent", "status": "tier1_active"},
+            {"agent_name": "ro-agent", "status": "queued_tier1", "occurrence_count": 2},
         ],
     ) as alert_ids:
         subject = _make_alert(agent_name="ro-agent", alert_user=None, srcip="")
@@ -653,7 +751,7 @@ def test_correlation_khong_ghi_xuong_bang_nao(_test_database):
         try:
             conn.execute("SET TRANSACTION READ ONLY")
             summary = correlation.summarize_for_prompt(conn, subject)
-            ids = correlation.correlated_cluster_ids(conn, subject)
+            ids = correlation.correlated_cluster_ids(conn, subject, actor_id=_ACTOR)
             conn.rollback()
         finally:
             conn.close()
@@ -735,7 +833,7 @@ def test_explain_dung_bitmapor_ba_index(_test_database):
     index-able at all."""
     with _seeded_correlation_table(_test_database, seed=42) as conn:
         subject = _make_alert(agent_name="agent-1", alert_user="user-1", srcip="10.0.1.5")
-        sql, params = correlation.cluster_ids_query(subject, 200)
+        sql, params = correlation.cluster_ids_query(subject, 200, actor_id=_ACTOR)
         plan = _explain(conn, sql, params)
         assert "BitmapOr" in plan, plan
         for name in _INDEX_NAMES:
@@ -751,7 +849,7 @@ def test_explain_bien_the_received_at_khong_dung_index(_test_database):
     artifact of the table's other indexes."""
     with _seeded_correlation_table(_test_database, seed=42) as conn:
         subject = _make_alert(agent_name="agent-1", alert_user="user-1", srcip="10.0.1.5")
-        sql, params = correlation.cluster_ids_query(subject, 200)
+        sql, params = correlation.cluster_ids_query(subject, 200, actor_id=_ACTOR)
         bad_sql = sql.replace("alert_time BETWEEN", "received_at BETWEEN")
         assert bad_sql != sql
         plan = _explain(conn, bad_sql, params)

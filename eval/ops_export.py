@@ -17,13 +17,14 @@ the latest proposer run created at or before it (a caveat line says a run in fli
 included). ① `needs_review` is no verdict: it is left out of the agreement's denominator and
 counted apart, and a small table crosses ①'s verdict with the human decision. The visible arm
 never gets an agreement figure. An escalation sweeps the other correlated heads into its case
-without a decision of their own (A11b): those alerts are recorded apart, per arm and source, as
-"kéo theo (không phải quyết định)" (Q34, DEC-165), and are in no decision count, denominator or
-agreement. A reopened alert (A17) is no pilot decision either: it is left out of every decision
-figure, on both arms, and counted apart as "đã mở lại (loại khỏi pilot)" (Q35, DEC-166). Section 6's ② usefulness row is "not measured" in v1.0 (no
-rating control, DEC-161), the `case.opened` count beside it being context. Without
-`--pilot-start` the section prints "not measured: pilot start not given" and no pilot query
-runs. The pilot has its own window: it is not the `--since`/`--until` window.
+without a decision of their own (A11b; never one that another analyst holds, DEC-166): those
+alerts are recorded apart, per arm and source, as "kéo theo (không phải quyết định)" (Q34,
+DEC-165, DEC-166), and are in no decision count, denominator or agreement. A reopened alert (A17)
+is no pilot decision either: it is left out of every decision figure, on both arms, and counted
+apart as "đã mở lại (loại khỏi pilot)" (Q35, DEC-166). Section 6's ② usefulness row is "not
+measured" in v1.0 (no rating control, DEC-161), the `case.opened` count beside it being context.
+Without `--pilot-start` the section prints "not measured: pilot start not given" and no pilot
+query runs. The pilot has its own window: it is not the `--since`/`--until` window.
 
 **Population (card design note 1).** Alert figures read `alerts` with `received_at` in the window
 and `NOT is_synthetic`. `source` is not a filter: the lab-window heads are retagged
