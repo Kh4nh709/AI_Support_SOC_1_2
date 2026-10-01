@@ -46,7 +46,7 @@ from datetime import date, datetime, timedelta
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
 
 from app.domain.transitions import StaleState
@@ -54,7 +54,7 @@ from app.infra.auth import Claims
 from app.ingest import autoclose
 from app.tier1 import digest
 from app.web import templating
-from app.web.deps import Cfg, Conn, require_role
+from app.web.deps import AlertId, Cfg, Conn, require_role
 from app.web.routers.pages import page_user
 
 router = APIRouter()
@@ -250,16 +250,16 @@ def review_submit(
     cfg: Cfg,
     user: Annotated[Claims, Depends(page_user)],
     _: Admin,
-    alert_id: str,
+    alert_id: AlertId,
     day: Annotated[str, Form()],
     verdict: Annotated[str, Form()],
 ) -> HTMLResponse:
     del request  # the fragment needs no page-level context (no `{% extends %}`)
-    if "\x00" in alert_id:
-        # review round 1, nit 7: a NUL byte can never name a real alert_id
-        # (Postgres text columns cannot hold one) — 404, matching P4-T05's
-        # merged pages, never a raw 500 from psycopg rejecting it later.
-        raise HTTPException(status_code=404)
+    # `alert_id: AlertId` (P10-T17 fix round 1): a control character in the path — NUL, which a
+    # Postgres text column cannot hold, and the rest of Unicode `Cc` — names no alert, so it is
+    # a 404 as the path is parsed (after the role check, before the form and any SQL), the same
+    # shared validator every id route under /api/tier1 and /api/tier2 uses (`deps.clean_path_id`).
+    # It replaces this route's own NUL-only test (review round 1, nit 7).
     tz = cfg.DISPLAY_TZ
 
     parsed_day = _parse_day(day)
