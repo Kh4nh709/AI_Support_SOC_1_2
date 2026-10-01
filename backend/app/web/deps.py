@@ -15,11 +15,14 @@ is `conn.commit()`ed explicitly before the exception is raised.
 
 from __future__ import annotations
 
+import unicodedata
+import uuid
 from collections.abc import Callable, Iterator
 from typing import Annotated
 
 import psycopg
 from fastapi import Depends, HTTPException, Request, Response
+from pydantic import BeforeValidator
 
 from app.audit.events import write_event
 from app.infra import auth, config, db
@@ -67,6 +70,27 @@ def get_config() -> Config:
 # verified. A route's exception still reaches the `except` above first.
 Conn = Annotated[psycopg.Connection, Depends(get_conn, scope="function")]
 Cfg = Annotated[Config, Depends(get_config)]
+
+
+def clean_path_id(value: object) -> object:
+    """The one check on an `alert_id` / `case_id` path parameter (P10-T17 item 8e, M1): a NUL byte,
+    or any other control character (Unicode category `Cc`: C0, DEL, C1), names nothing, so the
+    answer is 404. Without it a NUL reached `WHERE alert_id = %s` and the driver raised
+    `DataError`, a 500; no real id holds one, and a `text` column cannot.
+
+    It runs as the path value is parsed, which FastAPI does after the dependencies: the role check
+    still answers first (a wrong role is a 403 whatever the id), and the type check comes after
+    (a `CaseId` that is plain text without a control character is still the 422 it was)."""
+    if isinstance(value, str) and any(unicodedata.category(ch) == "Cc" for ch in value):
+        raise HTTPException(status_code=404, detail="not found")
+    return value
+
+
+# The two annotated types the routes under `/api/tier1` and `/api/tier2` take their ids as. A new
+# route with an `{alert_id}` or `{case_id}` must use them (`test_path_id_guard.py` pins every
+# existing one and the list of routes itself).
+AlertId = Annotated[str, BeforeValidator(clean_path_id)]
+CaseId = Annotated[uuid.UUID, BeforeValidator(clean_path_id)]
 
 
 def read_token(request: Request) -> str | None:

@@ -26,7 +26,7 @@ from pydantic import BaseModel, field_validator
 
 from app.infra.auth import Claims
 from app.tier1 import decide, queue
-from app.web.deps import Conn, require_role
+from app.web.deps import AlertId, Conn, require_role
 
 router = APIRouter(prefix="/api/tier1")
 
@@ -137,7 +137,7 @@ def get_queue(
 
 @router.get("/alerts/{alert_id}")
 def get_alert(
-    alert_id: str,
+    alert_id: AlertId,
     conn: Conn,
     claims: Annotated[Claims, Depends(require_role("tier1", "tier2", "admin"))],
 ) -> dict:
@@ -155,7 +155,7 @@ def get_alert(
 
 @router.post("/alerts/{alert_id}/acknowledge")
 def post_acknowledge(
-    alert_id: str, conn: Conn, claims: Annotated[Claims, Depends(require_role("tier1"))]
+    alert_id: AlertId, conn: Conn, claims: Annotated[Claims, Depends(require_role("tier1"))]
 ) -> dict:
     try:
         return decide.acknowledge(conn, alert_id, _actor(claims))
@@ -167,7 +167,7 @@ def post_acknowledge(
 
 @router.post("/alerts/{alert_id}/decide")
 def post_decide(
-    alert_id: str,
+    alert_id: AlertId,
     body: DecideIn,
     conn: Conn,
     claims: Annotated[Claims, Depends(require_role("tier1"))],
@@ -195,7 +195,7 @@ def post_decide(
 
 @router.post("/alerts/{alert_id}/escalate", status_code=201)
 def post_escalate(
-    alert_id: str,
+    alert_id: AlertId,
     body: EscalateIn,
     conn: Conn,
     claims: Annotated[Claims, Depends(require_role("tier1"))],
@@ -214,7 +214,7 @@ def post_escalate(
 
 @router.post("/alerts/{alert_id}/reopen")
 def post_reopen(
-    alert_id: str,
+    alert_id: AlertId,
     body: ReopenIn,
     conn: Conn,
     claims: Annotated[Claims, Depends(require_role("tier1"))],

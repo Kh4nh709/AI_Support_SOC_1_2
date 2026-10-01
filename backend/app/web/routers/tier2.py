@@ -14,7 +14,6 @@ straight from these two functions rather than re-deriving the SQL.
 from __future__ import annotations
 
 import dataclasses
-import uuid
 from typing import Annotated, Any
 
 import psycopg
@@ -24,7 +23,7 @@ from pydantic import BaseModel
 from app.domain import transitions
 from app.infra.auth import Claims
 from app.tier2 import case_view, conclude
-from app.web.deps import Conn, require_role
+from app.web.deps import CaseId, Conn, require_role
 
 router = APIRouter()
 
@@ -167,7 +166,7 @@ def api_list_cases(
 
 
 @router.get("/api/tier2/cases/{case_id}")
-def api_case_detail(conn: Conn, _: Tier2, case_id: uuid.UUID) -> dict[str, Any]:
+def api_case_detail(conn: Conn, _: Tier2, case_id: CaseId) -> dict[str, Any]:
     case = case_detail(conn, str(case_id))
     if case is None:
         raise HTTPException(status_code=404, detail="case not found")
@@ -175,7 +174,7 @@ def api_case_detail(conn: Conn, _: Tier2, case_id: uuid.UUID) -> dict[str, Any]:
 
 
 @router.post("/api/tier2/cases/{case_id}/notes", status_code=201)
-def api_add_note(conn: Conn, claims: Tier2, case_id: uuid.UUID, body: NoteIn) -> dict[str, Any]:
+def api_add_note(conn: Conn, claims: Tier2, case_id: CaseId, body: NoteIn) -> dict[str, Any]:
     try:
         note_id = conclude.add_note(conn, str(case_id), claims.user_id, body.body)
     except ValueError as exc:
@@ -191,7 +190,7 @@ def api_add_note(conn: Conn, claims: Tier2, case_id: uuid.UUID, body: NoteIn) ->
 
 
 @router.post("/api/tier2/cases/{case_id}/conclude")
-def api_conclude(conn: Conn, claims: Tier2, case_id: uuid.UUID, body: ConcludeIn) -> dict[str, Any]:
+def api_conclude(conn: Conn, claims: Tier2, case_id: CaseId, body: ConcludeIn) -> dict[str, Any]:
     case_id_str = str(case_id)
     try:
         conclude.submit(

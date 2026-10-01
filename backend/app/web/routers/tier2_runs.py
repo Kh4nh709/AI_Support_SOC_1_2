@@ -36,7 +36,7 @@ from app.infra.auth import Claims
 from app.infra.jobs import enqueue
 from app.tier2 import investigation_view
 from app.tier2.investigate import run_id_for_job
-from app.web.deps import Cfg, Conn, require_role
+from app.web.deps import CaseId, Cfg, Conn, require_role
 
 router = APIRouter(prefix="/api/tier2")
 
@@ -68,7 +68,7 @@ def _analyze_quota_count(conn: Any, actor_id: str) -> int:
 
 
 @router.post("/cases/{case_id}/analyze", status_code=202)
-def api_analyze(conn: Conn, claims: Tier2, cfg: Cfg, case_id: uuid.UUID) -> dict[str, Any]:
+def api_analyze(conn: Conn, claims: Tier2, cfg: Cfg, case_id: CaseId) -> dict[str, Any]:
     """404 if the case does not exist; **409 "case đã kết luận" when the case is already
     concluded** (review round 1, N15 — a conclusion is the end of the analysis, so a run
     on it would spend money on a case nobody can act on, and would be checked against the
@@ -167,7 +167,7 @@ def api_get_run(conn: Conn, claims: Tier2, run_id: uuid.UUID) -> dict[str, Any]:
 
 @router.get("/cases/{case_id}/investigation")
 def api_investigation(
-    conn: Conn, _: Tier2, cfg: Cfg, case_id: uuid.UUID, run_id: uuid.UUID | None = None
+    conn: Conn, _: Tier2, cfg: Cfg, case_id: CaseId, run_id: uuid.UUID | None = None
 ) -> dict[str, Any]:
     """`{state, run_id, minutes, run, current, case_open}` — the ② view the React case page
     (P10-T11) renders from, built by `tier2.investigation_view.build_investigation` (P10-T03;
