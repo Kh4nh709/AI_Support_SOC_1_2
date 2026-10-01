@@ -78,9 +78,15 @@ export function InvestigationColumn({ caseId, caseOpen }: { caseId: string; case
       // A state this UI does not know cannot be polled or acted on: it is an error, not a guess.
       if (!isInvestigationState(next.state)) throw new Error("unknown state");
       // The job writes last_analyzed_at and the timeline when it completes, so the case, and the list that
-      // shows it, are read again when a running job ends, and only then: the answer before this one was
-      // "running" once, and a page that opens on a finished run has no answer before it.
-      if (before?.state === "running" && ENDED.has(next.state)) {
+      // shows it, are read again when a live job ends, and only then: the answer before this one was
+      // "running" (or "stalled", which is late and not over: the worker may still finish it, and the
+      // reader's Kiểm tra lại then finds it done or failed), and a page that opens on a finished run has no
+      // answer before it. A stalled answer after "running" counts as an end (the case is read once, as it
+      // always was); one after "stalled" does not, it is the same wait.
+      if (
+        (before?.state === "running" && ENDED.has(next.state)) ||
+        (before?.state === "stalled" && (next.state === "done" || next.state === "failed"))
+      ) {
         void client.invalidateQueries({ queryKey: tier2Keys.case(caseId) });
         void client.invalidateQueries({ queryKey: tier2Keys.cases });
       }

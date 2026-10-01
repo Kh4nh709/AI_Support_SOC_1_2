@@ -978,6 +978,7 @@ describe("when the analysis ends", () => {
     },
   });
   const FAILED = ended({ state: "failed" });
+  const STALLED = ended({ state: "stalled", run_id: RUN, minutes: 6 });
 
   // Fake time for the 3 s poll, as the column's own tests do.
   const fake = () => {
@@ -994,11 +995,13 @@ describe("when the analysis ends", () => {
     });
 
   /**
-   * A server that writes `last_analyzed_at` when the job completes, as `investigate.py` does: a poll that
-   * names a run finds it over (`end`), and the case then says so. Counts the reads of the case.
+   * A server that writes `last_analyzed_at` when the job completes, as `investigate.py` does: the polls that
+   * name a run are answered by `ends` one by one (the last one for every poll after), and the case says the
+   * analysis is over once an answer that is not "stalled" has been served: a stalled job writes nothing.
+   * Counts the reads of the case.
    */
-  function serveRun(end: JsonBodyType) {
-    const state = { caseGets: 0, over: false };
+  function serveRun(...ends: JsonBodyType[]) {
+    const state = { caseGets: 0, over: false, polls: 0 };
     server.use(
       http.get(CASE_URL, () => {
         state.caseGets += 1;
@@ -1018,8 +1021,11 @@ describe("when the analysis ends", () => {
       http.get(`${CASE_URL}/investigation`, ({ request }) => {
         if (!new URL(request.url).searchParams.has("run_id"))
           return HttpResponse.json(ended({ state: "idle" }));
-        state.over = true;
-        return HttpResponse.json(end);
+        const at = Math.min(state.polls, ends.length - 1);
+        state.polls += 1;
+        const answer = ends[at] as { state?: string };
+        state.over = answer.state !== "stalled";
+        return HttpResponse.json(answer);
       }),
     );
     return state;
@@ -1075,6 +1081,60 @@ describe("when the analysis ends", () => {
     expect(client.getQueryState(["cases", 0])?.isInvalidated).toBe(true);
 
     await wait(30_000);
+    expect(server.caseGets).toBe(before + 1);
+  });
+
+  // A stalled job is only late: the worker may still finish it, and the reader's "Kiểm tra lại" then finds
+  // it done or failed. That is an end like any other: the job has written `last_analyzed_at` and the
+  // timeline by now, so the case and the list are read again, once.
+  it.each([
+    ["done", DONE, "tóm tắt của lượt vừa xong"],
+    ["failed", FAILED, S.ai2.failed],
+  ])(
+    "reads the case again when a stalled analysis is found %s on Kiểm tra lại",
+    async (_name, end, shown) => {
+      const user = fake();
+      const server = serveRun(STALLED, end);
+      const client = newClient();
+      await startRun(user, client);
+      const before = server.caseGets;
+
+      await wait(3000);
+      expect(await screen.findByText(S.ai2.stalled(6))).toBeInTheDocument();
+      // The run going stalled already read the case once, and found nothing written yet.
+      await waitFor(() => expect(server.caseGets).toBe(before + 1));
+      expect(screen.getByText(S.case.neverAnalysed)).toBeInTheDocument();
+      client.setQueryData(["cases", 0], []);
+      expect(client.getQueryState(["cases", 0])?.isInvalidated).toBe(false);
+
+      await user.click(screen.getByRole("button", { name: S.ai2.recheck }));
+      expect(await screen.findByText(shown)).toBeInTheDocument();
+      const summary = screen.getByRole("region", { name: S.case.summaryLabel });
+      await waitFor(() => expect(within(summary).getByText(ANALYSED_SHOWN)).toBeInTheDocument());
+      expect(screen.queryByText(S.case.neverAnalysed)).not.toBeInTheDocument();
+      expect(server.caseGets).toBe(before + 2);
+      expect(client.getQueryState(["cases", 0])?.isInvalidated).toBe(true);
+
+      // Once per transition: nothing more is asked of a finished run, nor of the case.
+      await wait(30_000);
+      expect(server.caseGets).toBe(before + 2);
+    },
+  );
+
+  it("does not read the case again when a stalled analysis is still stalled on Kiểm tra lại", async () => {
+    const user = fake();
+    const server = serveRun(STALLED);
+    const client = newClient();
+    await startRun(user, client);
+    const before = server.caseGets;
+
+    await wait(3000);
+    expect(await screen.findByText(S.ai2.stalled(6))).toBeInTheDocument();
+    await waitFor(() => expect(server.caseGets).toBe(before + 1));
+    await user.click(screen.getByRole("button", { name: S.ai2.recheck }));
+    await wait(100);
+    expect(server.polls).toBe(2);
+    expect(await screen.findByText(S.ai2.stalled(6))).toBeInTheDocument();
     expect(server.caseGets).toBe(before + 1);
   });
 
