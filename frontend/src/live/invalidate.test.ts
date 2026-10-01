@@ -1,6 +1,7 @@
 // src/live/invalidate.test.ts — Review Focus 2: a burst of changes is one refetch of the queue, not one
 // per alert. The rule: the first change flushes at once, the ones that follow within 500 ms are folded
-// into one flush at the end of that window, and a window opens after every flush.
+// into one flush at the end of that window, and a window opens after every flush. The case list (Tier 2)
+// is flushed with the queue, by the same rule: an escalation is an alert change, and it adds a case.
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import type { MockInstance } from "vitest";
 import { INVALIDATE_MS, createInvalidator } from "./invalidate";
@@ -19,12 +20,35 @@ afterEach(() => {
 /** The keys invalidated so far, as text, oldest first. */
 const keys = (): string[] => spy.mock.calls.map((call) => JSON.stringify(call[0]?.queryKey));
 const queueFlushes = () => keys().filter((k) => k === '["queue"]').length;
+const casesFlushes = () => keys().filter((k) => k === '["cases"]').length;
 
 describe("createInvalidator", () => {
-  it("flushes the first change at once: the queue and the alert it names", () => {
+  it("flushes the first change at once: the queue, the case list and the alert it names", () => {
     const inv = createInvalidator(client);
     inv.push(["a1"]);
-    expect(keys()).toEqual(['["queue"]', '["alert","a1"]']);
+    expect(keys()).toEqual(['["queue"]', '["cases"]', '["alert","a1"]']);
+  });
+
+  it("flushes the case list exactly as often as the queue: a burst is two flushes of each", () => {
+    const inv = createInvalidator(client);
+    for (let i = 0; i < 50; i++) {
+      inv.push([`a${i}`]);
+      vi.advanceTimersByTime(2);
+    }
+    expect(casesFlushes()).toBe(1); // the leading one
+    vi.advanceTimersByTime(INVALIDATE_MS * 10);
+    expect(casesFlushes()).toBe(2); // the trailing one, and nothing after
+    expect(casesFlushes()).toBe(queueFlushes());
+  });
+
+  it("flushes the case list for 'many' too, and not once it is cancelled", () => {
+    const inv = createInvalidator(client);
+    inv.push("many");
+    expect(casesFlushes()).toBe(1);
+    inv.push(["a1"]);
+    inv.cancel();
+    vi.advanceTimersByTime(INVALIDATE_MS * 4);
+    expect(casesFlushes()).toBe(1);
   });
 
   it("gives a burst of 50 changes inside 100 ms two queue flushes at most, one now and one at the end of the window", () => {
@@ -48,8 +72,10 @@ describe("createInvalidator", () => {
     vi.advanceTimersByTime(INVALIDATE_MS);
     expect(keys()).toEqual([
       '["queue"]',
+      '["cases"]',
       '["alert","a1"]',
       '["queue"]',
+      '["cases"]',
       '["alert","a2"]',
       '["alert","a3"]',
     ]);
@@ -93,12 +119,12 @@ describe("createInvalidator", () => {
   it("invalidates every alert when the server says 'many', and that wins over ids in the same window", () => {
     const inv = createInvalidator(client);
     inv.push("many");
-    expect(keys()).toEqual(['["queue"]', '["alert"]']);
+    expect(keys()).toEqual(['["queue"]', '["cases"]', '["alert"]']);
     inv.push(["a1"]);
     inv.push("many");
     inv.push(["a2"]);
     vi.advanceTimersByTime(INVALIDATE_MS);
-    expect(keys().slice(2)).toEqual(['["queue"]', '["alert"]']);
+    expect(keys().slice(3)).toEqual(['["queue"]', '["cases"]', '["alert"]']);
   });
 
   it("drops a waiting flush and everything after it once cancelled", () => {
@@ -118,11 +144,11 @@ describe("createInvalidator", () => {
 describe("with a fetch under way", () => {
   const SLOW_MS = INVALIDATE_MS + 200;
 
-  /** A queue query on screen whose fetch takes `ms`. `data()` is the number of the last fetch that landed. */
-  function queueOnScreen(ms: number) {
+  /** A query on screen whose fetch takes `ms`. `data()` is the number of the last fetch that landed. */
+  function onScreen(queryKey: readonly unknown[], ms: number) {
     const log = { started: 0, aborted: [] as number[] };
     const observer = new QueryObserver(client, {
-      queryKey: ["queue"],
+      queryKey,
       queryFn: ({ signal }) => {
         const n = ++log.started;
         signal.addEventListener("abort", () => log.aborted.push(n));
@@ -132,6 +158,8 @@ describe("with a fetch under way", () => {
     const stop = observer.subscribe(() => {});
     return { log, data: () => observer.getCurrentResult().data, stop };
   }
+  const queueOnScreen = (ms: number) => onScreen(["queue"], ms);
+  const casesOnScreen = (ms: number) => onScreen(["cases", 0], ms);
 
   it("lets a slow fetch land while a steady stream keeps flushing, and aborts none", async () => {
     const queue = queueOnScreen(SLOW_MS);
@@ -168,6 +196,29 @@ describe("with a fetch under way", () => {
     expect(queue.log.started).toBe(3); // and no fourth: nothing came in since
     inv.cancel();
     queue.stop();
+  });
+
+  it("fetches the case list once more when it has landed if a change came after it started", async () => {
+    // The same trailing fetch as the queue's, for the page of the case list that is on screen
+    // (`["cases", 0]`, found by the prefix `["cases"]`).
+    const cases = casesOnScreen(SLOW_MS);
+    await vi.advanceTimersByTimeAsync(SLOW_MS);
+    expect(cases.data()).toBe(1);
+    const inv = createInvalidator(client);
+    inv.push(["a1"]); // the second fetch starts now and lands at SLOW_MS
+    expect(cases.log.started).toBe(2);
+    await vi.advanceTimersByTimeAsync(100);
+    inv.push(["a2"]); // a change the second fetch may not have seen
+    await vi.advanceTimersByTimeAsync(SLOW_MS - 100 + 1);
+    expect(cases.data()).toBe(2);
+    expect(cases.log.started).toBe(3); // and the third is on its way
+    await vi.advanceTimersByTimeAsync(SLOW_MS);
+    expect(cases.data()).toBe(3);
+    expect(cases.log.aborted).toEqual([]);
+    await vi.advanceTimersByTimeAsync(INVALIDATE_MS * 4);
+    expect(cases.log.started).toBe(3); // and no fourth: nothing came in since
+    inv.cancel();
+    cases.stop();
   });
 
   it("does not fetch again after it has landed when the change came before it started", async () => {

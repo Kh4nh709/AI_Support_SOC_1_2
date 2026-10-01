@@ -1,6 +1,7 @@
 // What a live change does to the cache, and how often. A pull of 500 alerts is a storm of messages (the
 // server already coalesces it, P10-T05); this is the client's half of Review Focus 2: the queue is fetched
-// again about once per burst, never once per alert.
+// again about once per burst, never once per alert; the case list, which an escalation changes, rides on
+// the same flush.
 //
 // The rule is a leading-and-trailing throttle with a 500 ms window:
 //   - a change with no window open flushes at once, and opens a window;
@@ -10,6 +11,7 @@
 // So a burst costs two flushes (the first change, and the rest of it), and a steady stream at most one
 // per 500 ms. A flush never aborts a fetch that is under way: see `refresh`.
 import type { QueryClient } from "@tanstack/react-query";
+import { tier2Keys } from "../features/tier2/queryKeys";
 import type { LiveChange } from "./socket";
 
 export const INVALIDATE_MS = 500;
@@ -46,6 +48,9 @@ export function createInvalidator(client: QueryClient, windowMs = INVALIDATE_MS)
 
   const flush = (change: Waiting) => {
     refresh(["queue"]);
+    // The case list is as live as the queue: an escalation is an alert change that opens a case, so the
+    // page of cases on screen follows the same throttle.
+    refresh(tier2Keys.cases);
     if (change === "many") {
       refresh(["alert"]);
     } else {

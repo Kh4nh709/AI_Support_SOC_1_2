@@ -143,16 +143,16 @@ describe("the status", () => {
 });
 
 describe("what a change does", () => {
-  it("fetches the queue again, and the alerts it names", () => {
+  it("fetches the queue and the case list again, and the alerts it names", () => {
     render(tree(session("tok-1")));
     act(() => newest().onChange(["a1", "a2"]));
-    expect(invalidated()).toEqual(['["queue"]', '["alert","a1"]', '["alert","a2"]']);
+    expect(invalidated()).toEqual(['["queue"]', '["cases"]', '["alert","a1"]', '["alert","a2"]']);
   });
 
   it("fetches everything again when the server folded a burst into 'many'", () => {
     render(tree(session("tok-1")));
     act(() => newest().onChange("many"));
-    expect(invalidated()).toEqual(['["queue"]', '["alert"]']);
+    expect(invalidated()).toEqual(['["queue"]', '["cases"]', '["alert"]']);
   });
 
   // The page's fetch starts before the socket does (child effects run before the parent's), and the server
@@ -162,7 +162,7 @@ describe("what a change does", () => {
     render(tree(session("tok-1")));
     expect(invalidated()).toEqual([]); // nothing until the socket says live
     act(() => newest().onStatus("live"));
-    expect(invalidated()).toEqual(['["queue"]', '["alert"]']);
+    expect(invalidated()).toEqual(['["queue"]', '["cases"]', '["alert"]']);
   });
 
   it("fetches everything again when the socket is live again after a drop: what came meanwhile was missed", () => {
@@ -170,11 +170,11 @@ describe("what a change does", () => {
     render(tree(session("tok-1")));
     act(() => newest().onStatus("live"));
     act(() => newest().onStatus("offline"));
-    expect(invalidated()).toEqual(['["queue"]', '["alert"]']); // the first live's: the drop itself adds none
+    expect(invalidated()).toEqual(['["queue"]', '["cases"]', '["alert"]']); // the first live's: the drop itself adds none
     act(() => vi.advanceTimersByTime(600)); // past the window of that first fetch
     invalidate.mockClear();
     act(() => newest().onStatus("live"));
-    expect(invalidated()).toEqual(['["queue"]', '["alert"]']);
+    expect(invalidated()).toEqual(['["queue"]', '["cases"]', '["alert"]']);
   });
 
   it("fetches when the first live comes after a first attempt that failed: the page polled, or waited, meanwhile", () => {
@@ -182,7 +182,7 @@ describe("what a change does", () => {
     act(() => newest().onStatus("offline")); // the socket never came up at all
     expect(invalidated()).toEqual([]);
     act(() => newest().onStatus("live"));
-    expect(invalidated()).toEqual(['["queue"]', '["alert"]']);
+    expect(invalidated()).toEqual(['["queue"]', '["cases"]', '["alert"]']);
   });
 
   it("fetches on a new session's first live too: each socket subscribes after its own page's fetch", () => {
@@ -192,7 +192,7 @@ describe("what a change does", () => {
     rerender(tree(session("tok-2")));
     expect(invalidated()).toEqual([]); // the new socket is not live yet
     act(() => newest().onStatus("live"));
-    expect(invalidated()).toEqual(['["queue"]', '["alert"]']);
+    expect(invalidated()).toEqual(['["queue"]', '["cases"]', '["alert"]']);
   });
 
   it("does not fetch again when the socket goes offline (the page polls instead)", () => {
