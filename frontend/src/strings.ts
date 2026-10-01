@@ -333,7 +333,9 @@ export const S = {
       notActive: "Alert không còn ở trạng thái có thể thao tác — trang đã được tải lại",
     },
     autoClosed: "Alert này đã được tự động đóng.",
-    fannedOut: (n: number) => `Đã đóng thêm ${n} alert tương quan`,
+    // `closed_count` counts the head itself with its duplicates: 1 is the alert alone, never "1 more".
+    closedOne: "Đã đóng alert",
+    closedCluster: (n: number) => `Đã đóng cụm (${n} alert)`,
     caseOpened: "Đã mở case",
     goToCase: "Xem case",
     // For a reader who cannot open the case pages (Tier 1): the case is named, not linked.

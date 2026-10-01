@@ -265,7 +265,7 @@ export type AcknowledgeResult = {
   acknowledged_at?: string | null;
   first?: boolean;
 };
-/** `POST .../decide`: `closed_count` is the alerts the fan-out closed with the head. */
+/** `POST .../decide`: `closed_count` is every alert the decision closed, the head itself included (1 when it had no duplicates). */
 export type DecideResult = {
   alert_id: string;
   status: string;

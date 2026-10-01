@@ -299,7 +299,7 @@ describe("decide", () => {
       http.get("/api/tier1/alerts/a1", () => HttpResponse.json(mine({ occurrence_count: 40 }))),
     );
     answerPost("decide", () =>
-      HttpResponse.json({ alert_id: "a1", status: "closed_fp", closed_count: 0, case_id: null }),
+      HttpResponse.json({ alert_id: "a1", status: "closed_fp", closed_count: 1, case_id: null }),
     );
     renderPanel(mine({ occurrence_count: 37 }));
     expect(await findDecideForm()).toBeInTheDocument();
@@ -319,7 +319,7 @@ describe("decide", () => {
       HttpResponse.json({
         alert_id: "a1",
         status: "closed_benign",
-        closed_count: 0,
+        closed_count: 1,
         case_id: null,
       }),
     );
@@ -332,7 +332,7 @@ describe("decide", () => {
 
   it("posts to the head of a duplicate, and refreshes the page it was asked for as well", async () => {
     answerPost("decide", () =>
-      HttpResponse.json({ alert_id: "head1", status: "closed_fp", closed_count: 0, case_id: null }),
+      HttpResponse.json({ alert_id: "head1", status: "closed_fp", closed_count: 1, case_id: null }),
     );
     const client = clientOf();
     client.setQueryData(["alert", "dup9"], { alert_id: "head1" });
@@ -344,7 +344,7 @@ describe("decide", () => {
         return HttpResponse.json({
           alert_id: "head1",
           status: "closed_fp",
-          closed_count: 0,
+          closed_count: 1,
           case_id: null,
         });
       }),
@@ -360,9 +360,10 @@ describe("decide", () => {
     expect(client.getQueryState(["alert", "head1"])?.isInvalidated).toBe(true);
   });
 
-  it("shows the fan-out count in a toast, refreshes the queue and the alert, and clears the draft", async () => {
+  it("shows the cluster size in a toast, refreshes the queue and the alert, and clears the draft", async () => {
+    // The server counts the head with its duplicates: four closed alerts is a head and three more.
     answerPost("decide", () =>
-      HttpResponse.json({ alert_id: "a1", status: "closed_fp", closed_count: 3, case_id: null }),
+      HttpResponse.json({ alert_id: "a1", status: "closed_fp", closed_count: 4, case_id: null }),
     );
     const client = clientOf();
     client.setQueryData(["queue", "q"], { rows: [] });
@@ -373,8 +374,9 @@ describe("decide", () => {
     await user.click(submit());
     const toast = await screen.findByRole("status");
     expect(toast).toHaveTextContent(S.decision.recorded);
-    expect(toast).toHaveTextContent(S.decision.fannedOut(3));
-    expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ closed_count: 3 }));
+    expect(toast).toHaveTextContent("Đã đóng cụm (4 alert)");
+    expect(toast).not.toHaveTextContent("thêm");
+    expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ closed_count: 4 }));
     expect(client.getQueryState(["queue", "q"])?.isInvalidated).toBe(true);
     expect(client.getQueryState(["alert", "a1"])?.isInvalidated).toBe(true);
     expect(sessionStorage.getItem("soc.draft.a1")).toBeNull();
@@ -382,7 +384,7 @@ describe("decide", () => {
 
   it("names the case a decision landed in, without a link (tier 1 has no case pages)", async () => {
     answerPost("decide", () =>
-      HttpResponse.json({ alert_id: "a1", status: "closed_fp", closed_count: 0, case_id: 4 }),
+      HttpResponse.json({ alert_id: "a1", status: "closed_fp", closed_count: 1, case_id: 4 }),
     );
     renderPanel(mine());
     const user = await fill();
@@ -392,18 +394,42 @@ describe("decide", () => {
     expect(within(toast).queryByRole("link")).not.toBeInTheDocument();
   });
 
-  it("mentions no fan-out when nothing else was closed, and the toast can be dismissed", async () => {
+  it("says one alert was closed when the head had no duplicates, and the toast can be dismissed", async () => {
+    // `closed_count` counts the alert itself: a head with no duplicates closes 1, never 0.
     answerPost("decide", () =>
-      HttpResponse.json({ alert_id: "a1", status: "closed_fp", closed_count: 0, case_id: null }),
+      HttpResponse.json({ alert_id: "a1", status: "closed_fp", closed_count: 1, case_id: null }),
     );
     renderPanel(mine());
     const user = await fill();
     await user.click(submit());
     const toast = await screen.findByRole("status");
     expect(toast).toHaveTextContent(S.decision.recorded);
-    expect(toast).not.toHaveTextContent("Đã đóng thêm");
+    expect(toast).toHaveTextContent("Đã đóng alert");
+    expect(toast).not.toHaveTextContent("cụm");
+    expect(toast).not.toHaveTextContent("thêm");
     await user.click(within(toast).getByRole("button", { name: S.common.close }));
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("says nothing of a count the server did not send, or sent as zero", async () => {
+    // Not a case the server produces: the toast must not claim a close it was not told of.
+    for (const closed of [0, undefined]) {
+      answerPost("decide", () =>
+        HttpResponse.json({
+          alert_id: "a1",
+          status: "closed_fp",
+          closed_count: closed,
+          case_id: null,
+        }),
+      );
+      const { unmount } = renderPanel(mine());
+      const user = await fill();
+      await user.click(submit());
+      const toast = await screen.findByRole("status");
+      expect(toast).toHaveTextContent(S.decision.recorded);
+      expect(toast).not.toHaveTextContent("Đã đóng");
+      unmount();
+    }
   });
 
   it("disables the buttons while a request is in flight, and a double click posts once", async () => {
@@ -412,7 +438,7 @@ describe("decide", () => {
       return HttpResponse.json({
         alert_id: "a1",
         status: "closed_fp",
-        closed_count: 0,
+        closed_count: 1,
         case_id: null,
       });
     });
@@ -478,7 +504,7 @@ describe("errors", () => {
         return HttpResponse.json({
           alert_id: "a1",
           status: "closed_fp",
-          closed_count: 0,
+          closed_count: 1,
           case_id: null,
         });
       }
@@ -666,7 +692,7 @@ describe("the count the decision is made on (ruling R19)", () => {
       { status: 409 },
     );
   const closedFp = () =>
-    HttpResponse.json({ alert_id: "a1", status: "closed_fp", closed_count: 0, case_id: null });
+    HttpResponse.json({ alert_id: "a1", status: "closed_fp", closed_count: 1, case_id: null });
   const seenOf = (n: number) =>
     (posts("/decide")[n]?.body as { seen_occurrence_count: number }).seen_occurrence_count;
 
@@ -822,7 +848,7 @@ describe("the reason draft (Review Focus 4)", () => {
     // The session is gone, the page and the query cache with it; the user logs in again and comes back.
     first.unmount();
     answerPost("decide", () =>
-      HttpResponse.json({ alert_id: "a1", status: "closed_fp", closed_count: 0, case_id: null }),
+      HttpResponse.json({ alert_id: "a1", status: "closed_fp", closed_count: 1, case_id: null }),
     );
     renderPanel(mine());
     await findDecideForm();

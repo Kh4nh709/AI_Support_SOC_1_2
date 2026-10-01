@@ -73,7 +73,9 @@ function toastOf(action: Action, result: DecisionResult): ReactNode {
       return (
         <>
           <p>{S.decision.recorded}</p>
-          {typeof closed === "number" && closed > 0 && <p>{S.decision.fannedOut(closed)}</p>}
+          {typeof closed === "number" && closed > 0 && (
+            <p>{closed === 1 ? S.decision.closedOne : S.decision.closedCluster(closed)}</p>
+          )}
           {caseId !== null && caseId !== undefined && <CaseNumber id={caseId} />}
         </>
       );

@@ -669,7 +669,7 @@ describe("the ① column, from the state of the view", () => {
         return HttpResponse.json({
           alert_id: "a1",
           status: "closed_fp",
-          closed_count: 0,
+          closed_count: 1,
           case_id: null,
         });
       }),
@@ -768,7 +768,7 @@ describe("the count a decision is made on, across a live refetch (ruling R19)", 
         return HttpResponse.json({
           alert_id: "a1",
           status: "closed_fp",
-          closed_count: 0,
+          closed_count: 1,
           case_id: null,
         });
       }),
