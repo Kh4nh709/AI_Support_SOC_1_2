@@ -502,3 +502,83 @@ def test_a_quote_on_no_screen_is_listed_by_name_and_the_listing_is_not_dead():
     dead = [e for e in QUOTED_BUT_NOT_UI if _nfc(e) not in quoted]
     dead += [e for e in BOLD_NOT_UI if _nfc(e) not in bold]
     assert not dead, f"allow-listed, and not in the Pilot section as such: {dead}"
+
+
+# ---------------------------------------------- P10-T17 item 9: the runbook says what the stack does now
+#
+# Five statements went stale without a test going red: the export the pilot's numbers come from was
+# named after a file that does not exist, the sign-in was on the retired Jinja page, the migration
+# count was the one before 018, the 409 count was offered as evidence without its precondition, and
+# the ② panel was quoted by the Jinja title and a status the React UI never shows. Each now has a
+# check against the thing it describes (the CLI's own flags, the migrations directory, `strings.ts`).
+
+OPS_EXPORT_PATH = REPO_ROOT / "eval" / "ops_export.py"
+SCHEMA_DIR = REPO_ROOT / "docs" / "Schema"
+
+
+def _runbook_line_with(needle: str) -> str:
+    lines = [ln for ln in _text().splitlines() if needle in ln]
+    assert len(lines) == 1, f"expected one runbook line with {needle!r}, found {len(lines)}"
+    return lines[0]
+
+
+def test_section_6_names_the_export_that_exists_with_the_flags_it_has():
+    body = _subsection_body(_pilot_section(_text()), "6")
+    assert "eval/ops_export.py" in body
+    assert OPS_EXPORT_PATH.exists()
+    source = OPS_EXPORT_PATH.read_text(encoding="utf-8")
+    for flag in ("--pilot-start", "--pilot-end", "--until"):
+        assert f'"{flag}"' in source, f"{flag} is not a flag of eval/ops_export.py"
+        assert flag in body, f"section 6 does not name {flag}"
+    assert "pilot_export" not in _pilot_section(
+        _text()
+    ), "the file the first brief named never existed"
+
+
+def test_section_6_says_lab_is_split_not_dropped_and_reopened_is_dropped():
+    body = _subsection_body(_pilot_section(_text()), "6")
+    lab = next(p for p in body.split("\n- ") if "source='lab'" in p)
+    assert "split" in lab and "per source" in lab, lab[:300]
+    reopened = next(p for p in body.split("\n- ") if "alert.reopened" in p)
+    assert "excludes it" in reopened and "no decision figure on either arm" in reopened, reopened[
+        :300
+    ]
+    assert "đã mở lại (loại khỏi pilot)" in reopened  # the export's own counted-apart line
+    assert "kéo theo (không phải quyết định)" in body  # and the swept ones, which are no decision
+
+
+def test_the_pilot_signs_in_on_the_react_ui_not_on_the_retired_login_page():
+    body = _subsection_body(_pilot_section(_text()), "2")
+    assert "http://127.0.0.1:8080/" in body
+    assert "opens `http://127.0.0.1:8000/login`" not in body
+    assert "browser on `127.0.0.1:8000`" not in _subsection_body(_pilot_section(_text()), "0")
+
+
+def test_the_migration_count_the_runbook_expects_is_the_number_of_migration_files():
+    count = len(list(SCHEMA_DIR.glob("[0-9][0-9][0-9]_*.sql")))
+    row = _precondition_row("b")
+    assert row[3].startswith(f"`{count}`"), (count, row[3][:80])
+    start = _runbook_line_with("start everything")
+    assert f"to **{count}**" in start, start[:200]
+    assert f"{count} already present" in start
+    assert "restored — 17 migrations" not in start  # the dump predates 018; N is what it holds
+
+
+def test_the_409_count_is_evidence_only_with_the_grouping_switch_on():
+    body = _subsection_body(_pilot_section(_text()), "7")
+    bullet = next(p for p in body.split("\n- ") if "REVIEW_DELTA_TOLERANCE" in p)
+    assert "only with `DEDUP_ENABLED=true`" in bullet, bullet[:300]
+    assert "`cluster_grew`" in bullet and "`false`" in bullet
+
+
+def test_the_analysis_panel_is_quoted_as_the_react_ui_words_it():
+    strings = STRINGS_TS.read_text(encoding="utf-8")
+    heading = 'aiHeading: "PHÂN TÍCH AI ②"'
+    quota = 'quotaExhausted: "Đã dùng hết lượt phân tích hôm nay"'
+    assert heading in strings and quota in strings  # the sources of the two quotes below
+    text = _text()
+    assert "titled `PHÂN TÍCH AI ②`" in text
+    assert "`Trợ lý điều tra ②`" not in text, "the Jinja title of the ② panel"
+    row = _runbook_line_with("`429` `analyze quota exceeded for today`")
+    assert "`Đã dùng hết lượt phân tích hôm nay`" in row
+    assert "HTTP `200`" not in row and "hết N lượt" not in row, row
