@@ -293,18 +293,44 @@ def test_the_409_count_reads_the_containers_log_not_a_file_nothing_writes():
 
 STRINGS_TS = REPO_ROOT / "frontend" / "src" / "strings.ts"
 
-# A label is written in the runbook as `*"…"*` or `**"…"**` (the convention the section already
-# had). A code span is never one, so a `"` inside a command cannot match.
-QUOTED_LABEL_RE = re.compile(r"\*{1,2}\"([^\"`\n]+)\"\*{1,2}")
+# A label is written in the runbook in prose, in one of three ways: in quotes, plain "…" or curly “…”
+# (with or without `*` or `**` around the quotes: the convention the section already had), or unquoted
+# in bold, `**…**`. Code is never a label: a fenced block is dropped, and a span that holds an inline
+# code span is skipped, so a `"` or a `**` inside a command cannot match, and neither can the advisor's
+# rule, which quotes `llm_runs` (it is pinned verbatim by `test_advisor_rule_in_both_languages`).
+PLAIN_QUOTE_RE = re.compile(r'"([^"\n]+)"')
+CURLY_QUOTE_RE = re.compile("\u201c([^\u201d\n]+)\u201d")
+BOLD_RE = re.compile(r"\*\*([^*\n]+)\*\*")
+INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+CODE = "\x00"  # stands for an inline code span in the prose
 
-# Quoted in the same way and on no screen: the advisor's rule (pinned verbatim by
-# `test_advisor_rule_in_both_languages`), a sentence quoted from the architecture, and the wording
-# the P8 report attaches to the visible-branch numbers.
+# Quoted and on no screen: a sentence quoted from the architecture, the wording the P8 report attaches
+# to the visible-branch numbers, a line of STATE.md that the seed step names, and a scare quote.
 QUOTED_BUT_NOT_UI = [
-    ADVISOR_RULE_VI,
-    ADVISOR_RULE_EN,
     "Thí điểm trực tuyến … là mô tả, không phải kiểm định",
     "có thể thiên lệch",
+    "20/09 — KIỂM 2/2",
+    "fixes",
+]
+
+# An unquoted bold span is judged only when it is shaped like a label: at most this many words, no digit,
+# no sentence ending, no code, and not a step id (`d1`, `a–f′`, `ui`). Bold that is shaped like one and is
+# emphasis, not a label, is listed here by name (a new one is a one-line addition, and the test below
+# keeps the list from outliving the text).
+MAX_UNQUOTED_LABEL_WORDS = 4
+STEP_ID_RE = re.compile(r"^[a-z][0-9]?\u2032?(\u2013[a-z][0-9]?\u2032?)?$|^ui$")
+BOLD_NOT_UI = [
+    "no",
+    "blind branch",
+    "never the file",
+    "before",
+    "itself",
+    "Reopened alerts",
+    "not audited",
+    "from the primary checkout",
+    "restarted after that merge",
+    "(d) ⚑ beside a suggestion",
+    "Leave the worker running",
 ]
 
 # What the pilot text has to name, so that the extraction cannot pass by finding nothing.
@@ -328,17 +354,50 @@ def _strings_ts_literals() -> set[str]:
     return {_nfc(m.group(1)) for m in literal.finditer("\n".join(code))}
 
 
+def _pilot_prose(text: str) -> str:
+    """The Pilot section with every fenced block blanked and every inline code span replaced by `CODE`."""
+    return INLINE_CODE_RE.sub(CODE, _mask_fences(_pilot_section(text)))
+
+
+def _pilot_quoted_spans(text: str) -> list[str]:
+    """Every span the Pilot section's prose puts in quotes, plain or curly (so `*"…"*` and `**"…"**`
+    too), NFC, in reading order; one with code inside is not a label and is left out."""
+    prose = _pilot_prose(text)
+    spans = [m for rx in (PLAIN_QUOTE_RE, CURLY_QUOTE_RE) for m in rx.finditer(prose)]
+    spans.sort(key=lambda m: m.start())
+    return [_nfc(m.group(1).strip()) for m in spans if CODE not in m.group(1)]
+
+
+def _pilot_bold_candidates(text: str) -> list[str]:
+    """The unquoted bold spans of the Pilot section's prose that are shaped like a label."""
+    found = []
+    for m in BOLD_RE.finditer(_pilot_prose(text)):
+        span = _nfc(m.group(1).strip())
+        words = [w for w in span.split() if any(c.isalpha() for c in w)]
+        if not span or CODE in span or '"' in span or "\u201c" in span:
+            continue  # code is never a label; a quoted span is judged with the quotes
+        if STEP_ID_RE.match(span) or span[-1] in ".:;!?" or any(c.isdigit() for c in span):
+            continue
+        if 0 < len(words) <= MAX_UNQUOTED_LABEL_WORDS:
+            found.append(span)
+    return found
+
+
 def _pilot_ui_labels(text: str) -> list[str]:
-    """The labels the pilot section quotes: its `*"…"*` / `**"…"**` spans, minus the ones that are
-    not on a screen."""
+    """The labels the pilot section quotes, minus the ones that are not on a screen."""
     not_ui = {_nfc(s) for s in QUOTED_BUT_NOT_UI}
-    found = (_nfc(m.group(1)) for m in QUOTED_LABEL_RE.finditer(_pilot_section(text)))
-    return [label for label in found if label not in not_ui]
+    return [label for label in _pilot_quoted_spans(text) if label not in not_ui]
 
 
 def _labels_missing_from_the_react_ui(text: str) -> list[str]:
+    """What the Pilot section names as a label and `strings.ts` does not have: a quoted span, plain or
+    curly, or an unquoted bold one that is shaped like a label and not listed in `BOLD_NOT_UI`."""
     known = _strings_ts_literals()
-    return [label for label in _pilot_ui_labels(text) if label not in known]
+    emphasis = {_nfc(s) for s in BOLD_NOT_UI}
+    missing = [label for label in _pilot_ui_labels(text) if label not in known]
+    return missing + [
+        span for span in _pilot_bold_candidates(text) if span not in known and span not in emphasis
+    ]
 
 
 def test_every_ui_label_the_pilot_names_is_a_string_the_react_ui_shows():
@@ -354,3 +413,92 @@ def test_the_pilot_names_the_labels_it_is_supposed_to_and_finds_them_in_strings_
     assert expected <= named, f"no longer named in the pilot section: {sorted(expected - named)}"
     assert expected <= _strings_ts_literals(), "not in strings.ts any more"
     assert len(named) >= 10, f"the extraction found {len(named)} labels: {sorted(named)}"
+
+
+# ---------------------------------------------- P10-T17 item 8d: the guard sees every way to write a label
+#
+# The extraction above found `*"…"*` and `**"…"**` only: a stale label written as plain "…", as curly “…”
+# or as unquoted bold passed. These tests run the same guard on small runbooks of their own, one form at a
+# time, so that a form it cannot see goes red here and not on the day (the real runbook is judged above).
+
+
+def _pilot_runbook(body: str, after: str = "") -> str:
+    return f"# Runbook\n\n## Pilot\n\n{body}\n\n## Next\n\n{after}\n"
+
+
+STALE = "Tiếp nhận"  # the Jinja button; the React one is "Nhận xử lý"
+CURRENT = "Nhận xử lý"
+
+LABEL_FORMS = [
+    pytest.param('presses *"{}"* to take it', id="italic-quoted"),
+    pytest.param('presses **"{}"** to take it', id="bold-quoted"),
+    pytest.param('presses "{}" to take it', id="plain-quoted"),
+    pytest.param("presses \u201c{}\u201d to take it", id="curly-quoted"),
+    pytest.param("presses **{}** to take it", id="unquoted-bold"),
+    pytest.param("| row | presses **{}** | x |", id="unquoted-bold-in-a-table-cell"),
+]
+
+
+@pytest.mark.parametrize("form", LABEL_FORMS)
+def test_a_stale_label_is_caught_in_every_form(form):
+    text = _pilot_runbook(form.format(STALE))
+    assert _labels_missing_from_the_react_ui(text) == [_nfc(STALE)]
+
+
+@pytest.mark.parametrize("form", LABEL_FORMS)
+def test_a_current_label_passes_in_every_form(form):
+    assert _labels_missing_from_the_react_ui(_pilot_runbook(form.format(CURRENT))) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param('run `grep "{0}" file` first', id="in-a-code-span"),
+        pytest.param("run `echo **{0}**` first", id="bold-in-a-code-span"),
+        pytest.param('```bash\necho "{0}"\necho **{0}**\n```', id="in-a-fenced-block"),
+    ],
+)
+def test_a_label_in_code_is_not_a_label(body):
+    assert _labels_missing_from_the_react_ui(_pilot_runbook(body.format(STALE))) == []
+
+
+def test_a_stale_label_outside_the_pilot_section_is_not_judged():
+    text = _pilot_runbook("nothing here", after=f'presses "{STALE}" and **{STALE}**')
+    assert _labels_missing_from_the_react_ui(text) == []
+
+
+@pytest.mark.parametrize(
+    "emphasis",
+    [
+        "d1",  # a step id
+        "a\u2013f\u2032",  # a range of step ids
+        "ui",
+        "That first decision is the pilot start.",  # a sentence
+        "Pause or stop the pilot:",
+        "26/09/2026 (P8-T03)",  # a date, a card
+        "3,941",
+        "run block 1f below once",  # digits
+        "Restart the worker after every merge that touches the file",  # longer than a label
+        "UI (service `ui`)",  # code in it: never a label
+    ],
+)
+def test_bold_that_is_not_shaped_like_a_label_is_not_judged(emphasis):
+    assert _labels_missing_from_the_react_ui(_pilot_runbook(f"**{emphasis}** in prose")) == []
+
+
+def test_a_short_bold_phrase_that_is_not_a_ui_string_is_judged_unless_it_is_listed():
+    assert _labels_missing_from_the_react_ui(_pilot_runbook("**Quite new**")) == ["Quite new"]
+    listed = BOLD_NOT_UI[0]
+    assert _labels_missing_from_the_react_ui(_pilot_runbook(f"**{listed}**")) == []
+
+
+def test_a_quote_on_no_screen_is_listed_by_name_and_the_listing_is_not_dead():
+    """Every entry of the two allow-lists is quoted (or bold) in the real Pilot section, so an entry that
+    nothing uses any more (the advisor's rule had two, which the old pattern could never match) fails here.
+    """
+    text = _text()
+    quoted = set(_pilot_quoted_spans(text))
+    bold = set(_pilot_bold_candidates(text))
+    dead = [e for e in QUOTED_BUT_NOT_UI if _nfc(e) not in quoted]
+    dead += [e for e in BOLD_NOT_UI if _nfc(e) not in bold]
+    assert not dead, f"allow-listed, and not in the Pilot section as such: {dead}"
