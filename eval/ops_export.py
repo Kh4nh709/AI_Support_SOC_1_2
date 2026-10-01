@@ -19,7 +19,8 @@ counted apart, and a small table crosses ①'s verdict with the human decision. 
 never gets an agreement figure. An escalation sweeps the other correlated heads into its case
 without a decision of their own (A11b): those alerts are recorded apart, per arm and source, as
 "kéo theo (không phải quyết định)" (Q34, DEC-165), and are in no decision count, denominator or
-agreement. Section 6's ② usefulness row is "not measured" in v1.0 (no
+agreement. A reopened alert (A17) is no pilot decision either: it is left out of every decision
+figure, on both arms, and counted apart as "đã mở lại (loại khỏi pilot)" (Q35, DEC-166). Section 6's ② usefulness row is "not measured" in v1.0 (no
 rating control, DEC-161), the `case.opened` count beside it being context. Without
 `--pilot-start` the section prints "not measured: pilot start not given" and no pilot query
 runs. The pilot has its own window: it is not the `--since`/`--until` window.
@@ -471,6 +472,21 @@ _PILOT_END = "coalesce(%(pilot_end)s::timestamptz, now())"
 # `tier1.escalated`, about a non-synthetic alert. The arm is `alerts.suggestion_visible` (DEC-101).
 # `recorded_suggestion` is what `transitions.decide` wrote into the event: ① as the console had it
 # when the analyst decided (NULL: no result then, or an escalation, whose payload has no ①).
+# A reopened alert is no pilot decision (P4 planning decision 7, DEC-166): an `alert.reopened` event
+# about the alert, written whenever, takes every one of its decisions out of `d`, on both arms. The
+# analyst who decides it again may have seen ① on the page or in the digest, so it is neither a
+# blind decision nor a comparable one. `_PILOT_REOPENED` below counts what this leaves out.
+_PILOT_DECISION_ROWS = f"""FROM audit_events e
+  JOIN alerts a ON a.alert_id = e.subject_id AND NOT a.is_synthetic
+  WHERE e.created_at >= %(pilot_start)s
+    AND e.created_at < {_PILOT_END}
+    AND (e.event_type = 'tier1.escalated'
+         OR (e.event_type = 'tier1.decided'
+             AND e.payload->>'decision' IN ('closed_fp', 'closed_benign')))"""
+_PILOT_REOPENED_OF = """(SELECT 1
+      FROM audit_events r
+      WHERE r.event_type = 'alert.reopened'
+        AND r.subject_id = e.subject_id)"""
 _PILOT_DECISIONS = f"""d AS (
   SELECT e.subject_id AS alert_id,
          e.actor_id,
@@ -482,13 +498,17 @@ _PILOT_DECISIONS = f"""d AS (
          CASE WHEN a.suggestion_visible THEN 'visible' ELSE 'blind' END AS arm,
          a.source,
          e.payload->>'llm_suggestion' AS recorded_suggestion
-  FROM audit_events e
-  JOIN alerts a ON a.alert_id = e.subject_id AND NOT a.is_synthetic
-  WHERE e.created_at >= %(pilot_start)s
-    AND e.created_at < {_PILOT_END}
-    AND (e.event_type = 'tier1.escalated'
-         OR (e.event_type = 'tier1.decided'
-             AND e.payload->>'decision' IN ('closed_fp', 'closed_benign')))
+  {_PILOT_DECISION_ROWS}
+    AND NOT EXISTS {_PILOT_REOPENED_OF}
+)"""
+# The complement of `d`: the alerts with a decision in the pilot window that `d` leaves out because
+# they were reopened. One row per alert, so an alert decided twice is counted once.
+_PILOT_REOPENED = f"""o AS (
+  SELECT DISTINCT e.subject_id AS alert_id,
+         CASE WHEN a.suggestion_visible THEN 'visible' ELSE 'blind' END AS arm,
+         a.source
+  {_PILOT_DECISION_ROWS}
+    AND EXISTS {_PILOT_REOPENED_OF}
 )"""
 # Each decision with its alert's latest `alert.acknowledged` at or after the pilot start and not
 # after the decision, or NULL: a decision whose acknowledge is outside the window is counted, not
@@ -655,6 +675,18 @@ GROUP BY s.arm, ROLLUP (s.source)
 ORDER BY s.arm, GROUPING(s.source), s.source""",
 )
 
+Q_PILOT_REOPENED = Query(
+    "Q35",
+    "pilot: alerts reopened and so left out of the decisions, per arm and source",
+    f"""WITH {_PILOT_REOPENED}
+SELECT o.arm,
+       {_pilot_source('o')},
+       count(*) AS reopened
+FROM o
+GROUP BY o.arm, ROLLUP (o.source)
+ORDER BY o.arm, GROUPING(o.source), o.source""",
+)
+
 #: The pilot's queries, run after `QUERIES`, and only when `--pilot-start` is given.
 PILOT_QUERIES: tuple[Query, ...] = (
     Q_PILOT_DECISIONS,
@@ -663,6 +695,7 @@ PILOT_QUERIES: tuple[Query, ...] = (
     Q_PILOT_PERSON,
     Q_PILOT_CROSS,
     Q_PILOT_SWEPT,
+    Q_PILOT_REOPENED,
 )
 
 #: Every query, in the order `collect` runs it and the document cites it.
@@ -1141,12 +1174,14 @@ def _architecture_section(
         swept = [
             "",
             (
-                "Recorded beside the decisions, and not among them (Owner decision, DEC-165): "
-                f"{SWEPT_LABEL}, per arm ({Q_PILOT_SWEPT.qid}), with its split by source in the "
-                "basis."
+                "Recorded beside the decisions, and not among them (Owner decision, DEC-165, "
+                f"DEC-166): {SWEPT_LABEL}, per arm ({Q_PILOT_SWEPT.qid}), and {REOPENED_LABEL}, "
+                f"per arm ({Q_PILOT_REOPENED.qid}), each with its split by source in the basis."
             ),
             "",
-            _table(["record", "value", "basis"], _pilot_swept_rows(res)),
+            _table(
+                ["record", "value", "basis"], [*_pilot_swept_rows(res), *_pilot_reopened_rows(res)]
+            ),
         ]
     swept.append("")
     blind, visible = res[Q_BRANCHES.qid][0]
@@ -1195,6 +1230,13 @@ SWEPT_LABEL = "kéo theo (không phải quyết định)"
 SWEPT_BASIS = (
     "alerts that entered a case during the pilot window without a `tier1.escalated` event of "
     "their own, the heads an escalation sweeps into its case (A11b)"
+)
+
+#: A reopened alert is no pilot decision (DEC-166): counted apart under this label, never decided.
+REOPENED_LABEL = "đã mở lại (loại khỏi pilot)"
+REOPENED_BASIS = (
+    "alerts with a decision in the pilot window that carry an `alert.reopened` event (A17), "
+    "whenever it was written: they are left out of every decision figure"
 )
 
 
@@ -1332,6 +1374,29 @@ def _pilot_swept_rows(res: Mapping[str, list[tuple]]) -> list[list[str]]:
     return body
 
 
+def _pilot_reopened_table(rows: Sequence[tuple]) -> str:
+    by_key = {(arm, source): reopened for arm, source, reopened in rows}
+    sources = _source_order({source for _, source, _ in rows})
+    body = [[arm, source, by_key.get((arm, source), 0)] for arm in ARMS for source in sources]
+    return _table(["arm", "source", REOPENED_LABEL], body)
+
+
+def _pilot_reopened_rows(res: Mapping[str, list[tuple]]) -> list[list[str]]:
+    """Section 6's reopened rows, one per arm, in the shape of the kéo theo rows."""
+    reopened_rows = res[Q_PILOT_REOPENED.qid]
+    by_key = {(arm, source): reopened for arm, source, reopened in reopened_rows}
+    sources = [s for s in _source_order({source for _, source, _ in reopened_rows}) if s != "all"]
+    body = []
+    for arm in ARMS:
+        split = ", ".join(f"{source} = {by_key.get((arm, source), 0)}" for source in sources)
+        basis = (
+            f"{REOPENED_BASIS}; {split}; section 6a ({Q_PILOT_REOPENED.qid}); not a decision, and "
+            "in no decision denominator or agreement figure"
+        )
+        body.append([f"{REOPENED_LABEL}, {arm} arm", by_key.get((arm, "all"), 0), basis])
+    return body
+
+
 def _pilot_section(res: Mapping[str, list[tuple]], pilot: PilotWindow | None) -> list[str]:
     heading = ["## 6a · The human pilot, per arm and source", ""]
     if pilot is None:
@@ -1358,8 +1423,9 @@ def _pilot_section(res: Mapping[str, list[tuple]], pilot: PilotWindow | None) ->
             "- Decisions: `audit_events` of type `tier1.decided` (payload `decision` `closed_fp` "
             "= false_positive, `closed_benign` = benign) and `tier1.escalated` (= escalated), "
             "created in the pilot window, about a non-synthetic alert, whenever the alert was "
-            "received. The arm is `alerts.suggestion_visible`: blind is `false` (DEC-101). The "
-            "source is `alerts.source`, and `all` is the sum of the sources."
+            "received, and about an alert with no `alert.reopened` event (DEC-166). The arm is "
+            "`alerts.suggestion_visible`: blind is `false` (DEC-101). The source is "
+            "`alerts.source`, and `all` is the sum of the sources."
         ),
         (
             "- Acknowledge → decide: from the alert's latest `alert.acknowledged` event that is "
@@ -1399,6 +1465,21 @@ def _pilot_section(res: Mapping[str, list[tuple]], pilot: PilotWindow | None) ->
         ),
         "",
         _pilot_swept_table(res[Q_PILOT_SWEPT.qid]),
+        "",
+        f"### {REOPENED_LABEL} ({Q_PILOT_REOPENED.qid})",
+        "",
+        (
+            f"- Basis: {REOPENED_BASIS}. An alert counts once, however many decisions it has in "
+            "the window, and the arm and the source are its own."
+        ),
+        (
+            "- It is not a decision: an alert reopened (A17) is shown again with ① beside it, so "
+            "a second human decision on it is not a comparable one. It is in no `decisions` "
+            "figure of this section, in no denominator and in no agreement figure, on either "
+            "arm. A reopened alert that no one decided in the window is not counted here."
+        ),
+        "",
+        _pilot_reopened_table(res[Q_PILOT_REOPENED.qid]),
         "",
         f"### Median acknowledge → decide ({Q_PILOT_MEDIAN.qid})",
         "",

@@ -889,6 +889,229 @@ def test_without_a_pilot_start_there_is_no_keo_theo_row(db):
     assert "Q34" not in text
 
 
+# --- đã mở lại: a reopened alert is no pilot decision (P10-T17 item 1, P4 planning decision 7) ----
+#
+# A blind auto-closed alert shows ①'s verdict on its page and in the digest. Reopened (A17), it is
+# blind again, but its human decision was taken by someone who may have seen ①: it is left out of
+# every decision figure (Q29-Q33), on both arms, and counted apart in its own row (Q35).
+
+REOPENED_HEADING = "### đã mở lại (loại khỏi pilot) (Q35)"
+REOPENED_LABEL = "đã mở lại (loại khỏi pilot)"
+DECISION_HEADINGS = (
+    "### Decisions by type (Q29)",
+    "### Median acknowledge → decide (Q30)",
+    "### ① agreement with the human, blind arm only (Q31)",
+    "### ① verdict × human decision, blind arm only (Q33)",
+    "### Decisions per person (Q32)",
+)
+
+
+def _reopen(db, alert_id: str, actor: str, when: float | datetime) -> None:
+    """The `alert.reopened` row `transitions.reopen` writes (A17: payload `reason`)."""
+    when = when if isinstance(when, datetime) else _t(when)
+    _event(
+        db,
+        "alert.reopened",
+        alert_id,
+        when,
+        actor_role="analyst",
+        actor_id=actor,
+        payload={"reason": f"reason {MARKER}"},
+    )
+
+
+@pytest.mark.db
+def test_a_reopened_alert_is_no_decision_denominator_or_agreement_and_is_counted_apart(db):
+    ids = _seed_pilot(db)
+    before = _section6a(_report(db))
+    assert "| blind | all | 0 |" in _block(before, REOPENED_HEADING)
+
+    # a reopened BLIND alert whose ① said `escalate` and whom the human escalated: were it counted,
+    # it would enter Q31's denominator and agree, and Q33 and Q29 would hold it
+    blind = _handled(
+        db,
+        source="lab",
+        visible=False,
+        actor=ids["A"],
+        ack_at=700,
+        took=30,
+        outcome="escalated",
+        suggested="escalate",
+    )
+    _reopen(db, blind, ids["A"], 650)
+    # and a reopened VISIBLE one: the rule is not the blind arm's alone
+    visible = _handled(
+        db,
+        source="wazuh",
+        visible=True,
+        actor=ids["B"],
+        ack_at=700,
+        took=45,
+        outcome="benign",
+        suggested="false_positive",
+    )
+    _reopen(db, visible, ids["B"], 650)
+
+    after = _section6a(_report(db))
+
+    for heading in DECISION_HEADINGS:
+        assert _block(after, heading) == _block(before, heading), heading
+    assert "| blind | all | 4 | 2 | 2 | 8 |" in after  # still 8 blind decisions, as in the seed
+    assert "| visible | all | 1 | 1 | 1 | 3 |" in after  # still 3 visible ones
+    assert "| all | 8 | 1 | 2 | 5 | 3 | 0.600 (3 / 5) |" in after  # still 3 of 5
+    reopened = _block(after, REOPENED_HEADING)
+    assert (
+        f"| arm | source | {REOPENED_LABEL} |\n|---|---|---|\n"
+        "| blind | wazuh | 0 |\n"
+        "| blind | lab | 1 |\n"
+        "| blind | all | 1 |\n"
+        "| visible | wazuh | 1 |\n"
+        "| visible | lab | 0 |\n"
+        "| visible | all | 1 |\n"
+    ) in reopened + "\n"
+    assert _block(before, REOPENED_HEADING) != reopened
+
+
+@pytest.mark.db
+def test_any_alert_reopened_event_excludes_the_alert_whenever_it_was_written(db):
+    ids = _seed_pilot(db)
+    before = _section6a(_report(db))
+    early = _handled(
+        db,
+        source="lab",
+        visible=False,
+        actor=ids["A"],
+        ack_at=700,
+        took=30,
+        outcome="false_positive",
+        suggested="false_positive",
+    )
+    _reopen(db, early, ids["A"], PILOT_START - timedelta(hours=3))  # long before the pilot
+
+    after = _section6a(_report(db))
+
+    for heading in DECISION_HEADINGS:
+        assert _block(after, heading) == _block(before, heading), heading
+    assert "| blind | lab | 1 |" in _block(after, REOPENED_HEADING)
+
+
+@pytest.mark.db
+def test_the_reopened_row_counts_an_alert_once_and_only_a_decision_of_the_pilot(db):
+    ids = _seed_pilot(db)
+    # reopened twice and decided twice (a decision, then an escalation): one alert, so one
+    twice = _handled(
+        db,
+        source="lab",
+        visible=False,
+        actor=ids["A"],
+        ack_at=700,
+        took=30,
+        outcome="false_positive",
+        suggested="false_positive",
+    )
+    _reopen(db, twice, ids["A"], 650)
+    _reopen(db, twice, ids["A"], 660)
+    _escalate(db, twice, ids["A"], _t(800))
+    # reopened and never decided: nothing to leave out, so nothing to count
+    waiting = _open(db, received_at=at(10), source="lab", visible=False)
+    _reopen(db, waiting, ids["A"], 650)
+    # reopened, decided after the pilot's end (half-open): not a decision of the pilot
+    late = _handled(
+        db,
+        source="lab",
+        visible=False,
+        actor=ids["A"],
+        ack_at=20000,  # the pilot ends at 18000 s
+        took=30,
+        outcome="benign",
+    )
+    _reopen(db, late, ids["A"], 650)
+    # a synthetic one: excluded as everywhere in this file
+    synthetic = _handled(
+        db,
+        source="lab",
+        visible=False,
+        actor=ids["A"],
+        ack_at=700,
+        took=30,
+        outcome="benign",
+        synthetic=True,
+    )
+    _reopen(db, synthetic, ids["A"], 650)
+
+    reopened = _block(_section6a(_report(db)), REOPENED_HEADING)
+
+    assert "| blind | lab | 1 |" in reopened and "| blind | all | 1 |" in reopened
+    assert "| visible | all | 0 |" in reopened
+
+
+@pytest.mark.db
+def test_a_reopened_alert_is_still_keo_theo_when_an_escalation_swept_it(db):
+    # Q34 is unchanged by the rule: a swept alert was never decided, so there is no decision to leave
+    # out, and it is counted as kéo theo whether or not it was reopened
+    ids = _seed_pilot(db)
+    swept = _open(db, received_at=at(10), source="lab", visible=False)
+    _reopen(db, swept, ids["A"], 650)
+    _sweep(db, ids["A"], {ids["B1"]: _t(180), swept: _t(180)})
+
+    section = _section6a(_report(db))
+
+    assert "| blind | lab | 1 |" in _block(section, SWEPT_HEADING)
+    assert "| blind | all | 0 |" in _block(section, REOPENED_HEADING)
+
+
+@pytest.mark.db
+def test_the_reopened_row_is_labelled_and_carried_into_section_six(db):
+    ids = _seed_pilot(db)
+    blind = _handled(
+        db,
+        source="wazuh",
+        visible=False,
+        actor=ids["B"],
+        ack_at=700,
+        took=30,
+        outcome="false_positive",
+        suggested="escalate",
+    )
+    _reopen(db, blind, ids["B"], 650)
+    text = _report(db)
+
+    reopened = _block(_section6a(text), REOPENED_HEADING)
+    assert "alert.reopened" in reopened
+    assert "not a decision" in reopened and "no denominator" in reopened
+    rows = _section_rows(text, "6 · ")
+    blind_row = rows[f"{REOPENED_LABEL}, blind arm"]
+    visible_row = rows[f"{REOPENED_LABEL}, visible arm"]
+    assert blind_row[0] == "1" and visible_row[0] == "0"
+    assert "wazuh = 1, lab = 0" in blind_row[1] and "Q35" in blind_row[1]
+    # the decisions n of section 6 is still the 11 of the seed
+    assert rows["Decisions by branch (blind / visible) and by person"][0] == "measured, n = 11"
+
+
+@pytest.mark.db
+def test_the_reopened_query_is_printed_in_section_8_and_runs_only_with_a_pilot(db):
+    _seed_pilot(db)
+    appendix = _section(_report(db), "8 · ")
+
+    assert "### Q35 · pilot: alerts reopened" in appendix
+    assert ops_export.Q_PILOT_REOPENED.sql in appendix
+    assert ops_export.Q_PILOT_REOPENED in ops_export.PILOT_QUERIES
+    assert ops_export.Q_PILOT_REOPENED not in ops_export.QUERIES
+    # the exclusion is in the one CTE every decision query pastes, and the row reads its complement
+    for query in (
+        ops_export.Q_PILOT_DECISIONS,
+        ops_export.Q_PILOT_MEDIAN,
+        ops_export.Q_PILOT_AGREEMENT,
+        ops_export.Q_PILOT_PERSON,
+        ops_export.Q_PILOT_CROSS,
+    ):
+        assert "NOT EXISTS" in query.sql and "'alert.reopened'" in query.sql, query.qid
+    assert "'alert.reopened'" in ops_export.Q_PILOT_REOPENED.sql
+    assert "NOT EXISTS" not in ops_export.Q_PILOT_REOPENED.sql
+    plain = ops_export.build_report(db, _window())
+    assert "Q35" not in plain and "đã mở lại" not in plain
+
+
 # --- without --pilot-start ----------------------------------------------------------------------
 
 
@@ -979,7 +1202,15 @@ def test_every_pilot_query_is_printed_verbatim_in_section_8(db, monkeypatch):
     assert _appendix_sql(text) == sent
     ids = re.findall(r"^### (Q\d\d) · ", _section(text, "8 · "), flags=re.MULTILINE)
     assert ids == [f"Q{i:02d}" for i in range(1, len(ids) + 1)]
-    assert {q.qid for q in ops_export.PILOT_QUERIES} == {"Q29", "Q30", "Q31", "Q32", "Q33", "Q34"}
+    assert {q.qid for q in ops_export.PILOT_QUERIES} == {
+        "Q29",
+        "Q30",
+        "Q31",
+        "Q32",
+        "Q33",
+        "Q34",
+        "Q35",
+    }
     body = text[: text.index("\n## 8 · ")]
     assert set(re.findall(r"\bQ\d\d\b", body)) <= set(ids)
     assert "`%(pilot_start)s`" in _section(text, "8 · ")
