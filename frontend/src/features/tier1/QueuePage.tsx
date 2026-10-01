@@ -173,7 +173,7 @@ export function QueuePage() {
       />
 
       <div>
-        <RiskOrderButton pressed={sort === undefined} onPick={() => show({ filters, page: 1 })} />
+        <RiskOrderButton active={sort === undefined} onPick={() => show({ filters, page: 1 })} />
       </div>
 
       {query.isError && (

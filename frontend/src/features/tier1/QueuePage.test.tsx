@@ -514,6 +514,12 @@ describe("the filters", () => {
 describe("the sort", () => {
   const header = (name: string) => screen.getByRole("columnheader", { name });
   const sortButton = (name: string) => screen.getByRole("button", { name });
+  /** Whether "Sắp theo mức rủi ro" is a control the reader can use now. It is never `aria-pressed`. */
+  const riskOrderOffered = () => {
+    const byRisk = sortButton(S.queue.sort.byRisk);
+    expect(byRisk).not.toHaveAttribute("aria-pressed");
+    return byRisk.getAttribute("aria-disabled") !== "true";
+  };
   const sortedHeaders = () =>
     screen
       .getAllByRole("columnheader")
@@ -542,7 +548,7 @@ describe("the sort", () => {
     expect(sortedHeaders()).toEqual([]);
     expect(within(screen.getByRole("table")).queryByText(S.queue.sort.asc)).toBeNull();
     expect(within(screen.getByRole("table")).queryByText(S.queue.sort.desc)).toBeNull();
-    expect(sortButton(S.queue.sort.byRisk)).toHaveAttribute("aria-pressed", "true");
+    expect(riskOrderOffered()).toBe(false); // it is the order in use: nothing to switch to, so it is announced unavailable
   });
 
   it("spells the two arrows in strings.ts", () => {
@@ -669,7 +675,7 @@ describe("the sort", () => {
       dir: "asc",
     });
     expect(header(S.queue.col.occurrences)).toHaveAttribute("aria-sort", "ascending");
-    expect(sortButton(S.queue.sort.byRisk)).toHaveAttribute("aria-pressed", "false");
+    expect(riskOrderOffered()).toBe(true);
   });
 
   it("takes a key with no direction as its default direction", async () => {
@@ -745,7 +751,7 @@ describe("the sort", () => {
     const user = userEvent.setup();
     renderQueue("/queue?band=high&sort=agent&dir=desc&page=2");
     await screen.findByRole("row", { name: /sshd/ });
-    expect(sortButton(S.queue.sort.byRisk)).toHaveAttribute("aria-pressed", "false");
+    expect(riskOrderOffered()).toBe(true);
     await user.click(sortButton(S.queue.sort.byRisk));
     await waitFor(() => expect(lastQuery()?.has("sort")).toBe(false));
     expect(lastQuery()?.has("dir")).toBe(false);
@@ -753,7 +759,25 @@ describe("the sort", () => {
     expect(lastQuery()?.get("page")).toBe("1");
     expect(where()).toBe("/queue?band=high");
     await waitFor(() => expect(sortedHeaders()).toEqual([]));
-    expect(sortButton(S.queue.sort.byRisk)).toHaveAttribute("aria-pressed", "true");
+    expect(riskOrderOffered()).toBe(false);
+  });
+
+  // It is not a toggle: "pressed" would say the reader can un-press it, and a click does nothing. While the
+  // risk order is in use it is announced as unavailable (aria-disabled, which keeps it focusable and in
+  // the reading order), and it is never `aria-pressed`.
+  it("announces 'Sắp theo mức rủi ro' as unavailable in the risk order, never as a pressed toggle", async () => {
+    const user = userEvent.setup();
+    renderQueue("/queue?page=2&sort=agent&dir=asc");
+    await screen.findByRole("row", { name: /sshd/ });
+    const byRisk = sortButton(S.queue.sort.byRisk);
+    expect(byRisk).not.toHaveAttribute("aria-pressed");
+    expect(byRisk).not.toHaveAttribute("aria-disabled", "true");
+    await user.click(byRisk);
+    await waitFor(() => expect(where()).toBe("/queue"));
+    const now = sortButton(S.queue.sort.byRisk);
+    expect(now).toHaveAttribute("aria-disabled", "true");
+    expect(now).not.toHaveAttribute("aria-pressed");
+    expect(now).toBeEnabled(); // aria-disabled, not `disabled`: it stays focusable
   });
 
   it("does nothing when 'Sắp theo mức rủi ro' is pressed in the risk order", async () => {

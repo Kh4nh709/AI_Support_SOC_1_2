@@ -39,17 +39,21 @@ export function SortHeader({
   );
 }
 
-/** "Sắp theo mức rủi ro": pressed while the queue is in the default risk order, and then it changes nothing. */
-export function RiskOrderButton({ pressed, onPick }: { pressed: boolean; onPick: () => void }) {
+/**
+ * "Sắp theo mức rủi ro": goes back to the default risk order. It is not a toggle: while the queue is in that
+ * order (`active`) it changes nothing, so it is announced as unavailable (`aria-disabled`, which keeps it in
+ * the reading order and focusable, unlike `disabled`) and never as pressed, and a click does nothing.
+ */
+export function RiskOrderButton({ active, onPick }: { active: boolean; onPick: () => void }) {
   return (
     <button
       type="button"
-      aria-pressed={pressed}
+      aria-disabled={active ? "true" : undefined}
       onClick={() => {
-        if (!pressed) onPick();
+        if (!active) onPick();
       }}
       className={`rounded border px-3 py-1 text-sm focus-visible:outline-2 focus-visible:outline-text ${
-        pressed ? "border-text font-medium" : "border-border hover:bg-surface"
+        active ? "border-text font-medium" : "border-border hover:bg-surface"
       }`}
     >
       {S.queue.sort.byRisk}

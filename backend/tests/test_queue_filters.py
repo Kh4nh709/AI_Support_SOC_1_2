@@ -590,14 +590,21 @@ def test_api_mine_uses_the_callers_id(db, client):
 
 
 def _seed_sort_http(db) -> dict[str, str]:
-    """Three heads whose last-seen order (b, c, a), occurrence order (c, a, b) and agent order
-    (a, b, c) differ from each other; the risk order is (a, b, c)."""
+    """Four heads whose orders are all different, in both directions, so that a page sorted on the
+    wrong key (the risk order above all) is never taken for the right one:
+
+    - risk (the default): a, b, c, d
+    - last seen, newest first: b, c, d, a  (oldest first: a, d, c, b)
+    - occurrences, most first: c, a, d, b  (fewest first: b, d, a, c)
+    - agent, A to Z: d, a, c, b  (Z to A: b, c, a, d)
+    """
     ids = {
-        "a": _insert_alert(db, risk_score=90, agent_name="alpha"),
-        "b": _insert_alert(db, risk_score=60, agent_name="bravo"),
+        "a": _insert_alert(db, risk_score=90, agent_name="bravo"),
+        "b": _insert_alert(db, risk_score=60, agent_name="delta"),
         "c": _insert_alert(db, risk_score=30, agent_name="charlie"),
+        "d": _insert_alert(db, risk_score=10, agent_name="alpha"),
     }
-    for name, hours, occ in (("a", 1, 5), ("b", 9, 1), ("c", 4, 20)):
+    for name, hours, occ in (("a", 1, 5), ("b", 9, 1), ("c", 4, 20), ("d", 2, 3)):
         _set(db, ids[name], last_seen_at=_T + timedelta(hours=hours), occurrence_count=occ)
     return ids
 
@@ -608,23 +615,33 @@ def _sorted_ids(client, **params: str) -> list[str]:
     return [r["alert_id"] for r in resp.json()["rows"]]
 
 
-@pytest.mark.parametrize(
-    ("params", "expected"),
-    [
-        ({}, "abc"),
-        ({"sort": "risk"}, "abc"),
-        ({"sort": "time"}, "bca"),
-        ({"sort": "time", "dir": "desc"}, "bca"),
-        ({"sort": "time", "dir": "asc"}, "acb"),
-        ({"sort": "occurrences"}, "cab"),
-        ({"sort": "occurrences", "dir": "asc"}, "bac"),
-        ({"sort": "agent"}, "abc"),
-        ({"sort": "agent", "dir": "desc"}, "cba"),
-    ],
-)
+_RISK_ORDER = "abcd"
+_SORT_CASES = [
+    ({}, _RISK_ORDER),
+    ({"sort": "risk"}, _RISK_ORDER),
+    ({"sort": "time"}, "bcda"),
+    ({"sort": "time", "dir": "desc"}, "bcda"),
+    ({"sort": "time", "dir": "asc"}, "adcb"),
+    ({"sort": "occurrences"}, "cadb"),
+    ({"sort": "occurrences", "dir": "asc"}, "bdac"),
+    ({"sort": "agent"}, "dacb"),
+    ({"sort": "agent", "dir": "desc"}, "bcad"),
+]
+
+
+@pytest.mark.parametrize(("params", "expected"), _SORT_CASES)
 def test_api_sort_orders_the_rows(db, client, params, expected):
     ids = _seed_sort_http(db)
     assert _sorted_ids(client, **params) == [ids[name] for name in expected]
+
+
+def test_api_the_seed_gives_every_sort_its_own_order():
+    """The seed's point: the six (key, direction) orders of time, occurrences and agent are six
+    different orders, and none of them is the risk order. A page sorted on the wrong key (the risk
+    order above all) is therefore never taken for the right one."""
+    others = {order for params, order in _SORT_CASES if params.get("sort", "risk") != "risk"}
+    assert len(others) == 6  # time desc/asc, occurrences desc/asc, agent asc/desc
+    assert _RISK_ORDER not in others
 
 
 def test_api_sort_pages_over_the_sorted_order_and_keeps_total_and_counts(db, client):
@@ -633,14 +650,11 @@ def test_api_sort_pages_over_the_sorted_order_and_keeps_total_and_counts(db, cli
     second = client.http.get(
         "/api/tier1/queue", params={"sort": "time", "page_size": 2, "page": 2}
     ).json()
-    assert [r["alert_id"] for r in first["rows"] + second["rows"]] == [
-        ids["b"],
-        ids["c"],
-        ids["a"],
-    ]
+    assert [r["alert_id"] for r in first["rows"]] == [ids["b"], ids["c"]]
+    assert [r["alert_id"] for r in second["rows"]] == [ids["d"], ids["a"]]
     plain = client.http.get("/api/tier1/queue", params={"page_size": 2}).json()
     for body in (first, second):
-        assert body["total"] == plain["total"] == 3
+        assert body["total"] == plain["total"] == 4
         assert body["counts_by_band"] == plain["counts_by_band"]
 
 
