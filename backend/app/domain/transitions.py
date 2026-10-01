@@ -470,7 +470,9 @@ def escalate(
     both shapes would roll every cluster with a duplicate back on
     `ck_alerts_h3_escalate_khong_seal`. ③a's rowcount is checked against the
     number of `case_alerts` rows just inserted — a mismatch means a
-    concurrent escalate claimed a candidate first (N2) — and
+    concurrent escalate claimed a candidate first (N2), or another analyst acknowledged a
+    `queued_tier1` sibling after the cluster was read (the UPDATE re-applies DEC-166's
+    exclusion on the row, trigger exempt) — and
     `ux_case_alerts_mot_alert_mot_case` (UNIQUE on `alert_id`) is the second,
     DB-enforced layer of the same rule: an alert already in a case raises
     `psycopg.errors.UniqueViolation` here, converted to `StaleState`.
@@ -517,16 +519,28 @@ def escalate(
     except psycopg.errors.UniqueViolation as exc:
         raise StaleState(f"A11/A11b: {head_id!r} is already in another case") from exc
 
+    # The held-by-other exclusion is applied again here, on the row itself (DEC-166, P10-T17 fix
+    # round 1): `correlated_cluster_ids` above is a plain SELECT, so another analyst can
+    # acknowledge a `queued_tier1` sibling and commit between it and this UPDATE. A sibling
+    # that is now another analyst's (or no longer open) fails the WHERE, the rowcount check
+    # below raises `StaleState`, and the caller's savepoint undoes the case. READ COMMITTED
+    # re-evaluates the WHERE against the newest committed row, also when this UPDATE had to
+    # wait for the acknowledging transaction's lock. The trigger is exempt: the caller has it
+    # `FOR UPDATE` and may legitimately escalate an alert someone else holds (the API accepts
+    # `tier1_active` for it with no holder check); only the swept siblings are the actor's to take.
     touched = conn.execute(
         "UPDATE alerts SET status = 'escalated_tier2', case_id = %s "
         "WHERE alert_id IN (SELECT alert_id FROM case_alerts WHERE case_id = %s) "
-        "AND case_id IS NULL",
-        (case_id, case_id),
+        "AND case_id IS NULL "
+        "AND (alert_id = %s OR status = 'queued_tier1' "
+        "OR (status = 'tier1_active' AND acknowledged_by = %s::uuid))",
+        (case_id, case_id, alert_id, user_id),
     )
     if touched.rowcount != len(head_ids):
         raise StaleState(
             f"A11b: escalate rowcount mismatch ({touched.rowcount} of {len(head_ids)} "
-            "case_alerts rows touched) — a candidate was claimed by another case concurrently"
+            "case_alerts rows touched) — a candidate was claimed by another case, or "
+            "acknowledged by another analyst, after the cluster was read"
         )
 
     conn.execute(

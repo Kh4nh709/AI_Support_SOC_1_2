@@ -23,7 +23,7 @@ from typing import Any
 
 import psycopg
 import pytest
-from app.domain import transitions
+from app.domain import correlation, transitions
 from app.domain.alert import Alert, AlertContext
 from app.domain.transitions import AutocloseMatch, finish_enrichment, open_alert, start_enrichment
 from app.infra import config
@@ -38,6 +38,8 @@ from app.tier1.decide import (
     reopen,
 )
 from psycopg.types.json import Jsonb
+
+from tests.scratch_db import scratch_database
 
 pytestmark = pytest.mark.db
 
@@ -501,6 +503,73 @@ def test_escalate_rowcount_mismatch_is_conflict_and_nothing_half_written(db) -> 
         "SELECT status, case_id FROM alerts WHERE alert_id = %s", (trigger,)
     ).fetchone()
     assert (status, case_id) == ("tier1_active", None)
+
+
+def test_escalate_sibling_acknowledged_by_another_after_the_select_is_conflict_not_swept(
+    monkeypatch,
+) -> None:
+    """DEC-166 item 3, the race (P10-T17 fix round 1): `correlated_cluster_ids` is a plain
+    SELECT, so analyst B can acknowledge a `queued_tier1` sibling and commit between that
+    SELECT and `transitions.escalate`'s UPDATE. The UPDATE's own WHERE must then skip the
+    sibling (it is B's now), the rowcount check raises `StaleState` and the route answers
+    409; sweeping it would leave an alert held by B inside A's case and B's next decide on
+    it would 409. Two real connections and committed data — the `db` fixture's single open
+    transaction cannot show a commit landing in the middle of another connection's escalate.
+    After the 409 the retry succeeds and the sibling stays with B, outside the case."""
+    with scratch_database("esc_race") as dsn:
+        conn_a = psycopg.connect(dsn)
+        conn_b = psycopg.connect(dsn)
+        try:
+            _seed_user(conn_a, USER_ID, USER_NAME)
+            _seed_user(conn_a, OTHER_USER_ID, OTHER_USER_NAME)
+            agent = f"race-agent-{next(_counter)}"
+            trigger = _active(conn_a, agent_name=agent)
+            sibling = _queued(conn_a, agent_name=agent)
+            conn_a.commit()
+
+            real_select = correlation.correlated_cluster_ids
+            swept_by_the_select: list[list[str]] = []
+
+            def select_then_b_acknowledges(conn, subject, *, actor_id):
+                ids = real_select(conn, subject, actor_id=actor_id)
+                if not swept_by_the_select:
+                    swept_by_the_select.append(ids)
+                    acknowledge(conn_b, sibling, _actor(OTHER_USER_ID))
+                    conn_b.commit()
+                return ids
+
+            monkeypatch.setattr(correlation, "correlated_cluster_ids", select_then_b_acknowledges)
+
+            with pytest.raises(DecisionConflict) as excinfo:
+                escalate(conn_a, trigger, _actor(USER_ID), title="t", severity="high")
+            assert excinfo.value.body["kind"] == "already_in_case"
+            assert sibling in swept_by_the_select[0]  # the SELECT did see it as free
+            conn_a.rollback()  # what the route's 409 path does
+
+            def state(alert_id: str) -> tuple:
+                return conn_a.execute(
+                    "SELECT status, acknowledged_by::text, case_id FROM alerts WHERE alert_id = %s",
+                    (alert_id,),
+                ).fetchone()
+
+            assert state(sibling) == ("tier1_active", OTHER_USER_ID, None)
+            assert state(trigger) == ("tier1_active", USER_ID, None)
+            assert conn_a.execute("SELECT count(*) FROM cases").fetchone()[0] == 0
+            assert conn_a.execute("SELECT count(*) FROM case_alerts").fetchone()[0] == 0
+
+            # The retry: the SELECT now sees B holding it, so the case is the trigger alone.
+            result = escalate(conn_a, trigger, _actor(USER_ID), title="t", severity="high")
+            conn_a.commit()
+            assert result["head_count"] == 1
+            members = conn_a.execute(
+                "SELECT alert_id FROM case_alerts WHERE case_id = %s", (result["case_id"],)
+            ).fetchall()
+            assert members == [(trigger,)]
+            assert state(sibling) == ("tier1_active", OTHER_USER_ID, None)
+            assert state(trigger)[0] == "escalated_tier2"
+        finally:
+            conn_a.close()
+            conn_b.close()
 
 
 # ---------------------------------------------------------------------------
