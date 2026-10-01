@@ -11,7 +11,10 @@ export type AiState =
   | { kind: "unavailable"; stoppedBy: string | null }
   | { kind: "decided"; action: string | null; confidence: string | null };
 
-/** The statuses in which the server shows the ① verdict to everyone (visibility.SHOW_STATES). */
+/**
+ * The statuses in which the server shows the ① verdict to everyone (visibility.SHOW_STATES). A copy: the
+ * test of this file reads the Python source and compares the two sets, so a status added on one side fails.
+ */
 export const DECIDED: ReadonlySet<string> = new Set([
   "closed_fp",
   "closed_benign",

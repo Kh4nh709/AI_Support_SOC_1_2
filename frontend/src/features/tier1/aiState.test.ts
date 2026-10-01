@@ -1,4 +1,15 @@
 // src/features/tier1/aiState.test.ts — the one place the ① state is decided, for a queue row and for the alert view.
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AlertView, QueueRow } from "../../api/tier1";
 import { DECIDED, aiStateOfRow, aiStateOfView } from "./aiState";
 
@@ -186,4 +197,82 @@ it("lists exactly the five statuses the server shows the suggestion in", () => {
     "closed_fp",
     "escalated_tier2",
   ]);
+});
+
+// DECIDED is a copy of the backend's SHOW_STATES, and a copy drifts: a status the server shows and this file
+// does not know would draw "hidden" over a verdict the analyst may see, and the reverse would draw a verdict the
+// server has withheld. So the Python source is read and the two sets are compared (the parity pattern of
+// strings.test.ts: no file is named, the test finds the one that *defines* the set).
+const BACKEND_APP = join("..", "backend", "app");
+
+const pyFiles = (dir: string): string[] =>
+  readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    return statSync(path).isDirectory() ? pyFiles(path) : path.endsWith(".py") ? [path] : [];
+  });
+
+/**
+ * The strings of a module-level `SHOW_STATES: frozenset[str] = frozenset({...})` under `root`. A line that
+ * only imports the name, or a commented-out copy, is not a definition; none or two definitions are errors.
+ */
+function pyShowStates(root = BACKEND_APP): string[] {
+  const pattern = /^SHOW_STATES(?::\s*frozenset\[str\])?\s*=\s*frozenset\(\s*\{([^}]*)\}\s*\)/m;
+  const found = pyFiles(root).flatMap((path) => {
+    const body = pattern.exec(readFileSync(path, "utf8"))?.[1];
+    return body === undefined ? [] : [{ path, body }];
+  });
+  const [only] = found;
+  if (found.length !== 1 || !only) {
+    const where = found.map((f) => f.path).join(", ") || "no file";
+    throw new Error(
+      `expected exactly one definition of SHOW_STATES under ${root}, found ${found.length} (${where})`,
+    );
+  }
+  return [...only.body.matchAll(/"([^"]+)"/g)].map((m) => m[1] ?? "").sort();
+}
+
+describe("finding SHOW_STATES in the backend", () => {
+  const root = mkdtempSync(join(tmpdir(), "p10t17-py-"));
+  const put = (file: string, text: string): void => {
+    mkdirSync(join(root, file, ".."), { recursive: true });
+    writeFileSync(join(root, file), text);
+  };
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  it("reads the set from the one file that defines it, and ignores importers and comments", () => {
+    put(
+      "a/vis.py",
+      '#: doc\nSHOW_STATES: frozenset[str] = frozenset(\n    {"closed_fp", "auto_closed"}\n)\n',
+    );
+    put("b/user.py", 'from a.vis import SHOW_STATES\n# SHOW_STATES = frozenset({"nope"})\n');
+    expect(pyShowStates(root)).toEqual(["auto_closed", "closed_fp"]);
+  });
+
+  it("refuses a set defined twice or nowhere, so a stale copy cannot pass for the real one", () => {
+    put("c/again.py", 'SHOW_STATES = frozenset({"closed_fp"})\n');
+    expect(() => pyShowStates(root)).toThrow(/exactly one definition of SHOW_STATES.*found 2/);
+    expect(() => pyShowStates(join(root, "b"))).toThrow(/found 0/);
+  });
+
+  it("reports a status added on the Python side only", () => {
+    // What the parity test below would say if the backend grew a status and this file did not.
+    const backend = mkdtempSync(join(tmpdir(), "p10t17-py2-"));
+    try {
+      mkdirSync(join(backend, "tier1"), { recursive: true });
+      writeFileSync(
+        join(backend, "tier1", "visibility.py"),
+        `SHOW_STATES: frozenset[str] = frozenset(\n    {${[...DECIDED, "closed_dupe"].map((x) => `"${x}"`).join(", ")}}\n)\n`,
+      );
+      expect(pyShowStates(backend)).not.toEqual([...DECIDED].sort());
+      expect(pyShowStates(backend)).toContain("closed_dupe");
+    } finally {
+      rmSync(backend, { recursive: true, force: true });
+    }
+  });
+});
+
+it("DECIDED is the backend's visibility.SHOW_STATES, status for status", () => {
+  const backend = pyShowStates();
+  expect(backend.length).toBeGreaterThan(0); // a parse that finds nothing would compare nothing
+  expect([...DECIDED].sort()).toEqual(backend);
 });
