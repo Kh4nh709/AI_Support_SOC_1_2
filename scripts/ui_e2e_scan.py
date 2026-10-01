@@ -3,8 +3,10 @@
     ui_e2e_scan.py PATH...
 
 Looks in every file under the paths given (a directory is walked; a path that does not exist is skipped; a zip
-is opened and its members are read, since a Playwright trace is one) for what must never be in a test result
-or in the output of a run:
+is opened and its members are read, since a Playwright trace is one; so is every base64 `data:` URI in a
+file, decoded and scanned in turn, since the HTML reporter keeps the whole report, traces included, as
+`data:application/zip;base64,...` in `index.html`) for what must never be in a test result or in the output
+of a run:
 
   * the run's own secrets, read from the environment (E2E_JWT_SECRET, E2E_WEBHOOK_API_KEY, E2E_T1_PASSWORD,
     E2E_T2_PASSWORD, E2E_T2B_PASSWORD, and E2E_SCAN_PGPASSWORD, the password of the test cluster when it is
@@ -19,6 +21,8 @@ it found, nor which of the patterns matched, nor a line of the file. Exit 0 and 
 
 from __future__ import annotations
 
+import base64
+import binascii
 import io
 import os
 import re
@@ -43,6 +47,11 @@ SHAPES = (
     re.compile(rb"[Bb]earer\s+[A-Za-z0-9._~+/=-]{16,}"),
 )
 MAX_MEMBER = 256 * 1024 * 1024
+# A base64 payload of a `data:` URI, whatever its media type (the report's is a zip; an attachment may be text).
+DATA_URI = re.compile(rb"data:[A-Za-z0-9.+/-]*;base64,([A-Za-z0-9+/]{16,}={0,2})")
+# How many data URIs may hold one another, and how deep zips may hold zips (a report holds a trace, a zip).
+MAX_HOPS = 2
+MAX_DEPTH = 2
 
 
 def needles() -> list[bytes]:
@@ -62,16 +71,31 @@ def holds_secret(data: bytes, secrets: list[bytes]) -> bool:
     return any(shape.search(data) for shape in SHAPES)
 
 
-def scan_bytes(data: bytes, secrets: list[bytes], depth: int = 0) -> bool:
+def embedded_payloads(data: bytes) -> list[bytes]:
+    """The decoded payload of each base64 `data:` URI in `data`; one that is not valid base64 is skipped."""
+    found = []
+    for match in DATA_URI.finditer(data):
+        try:
+            found.append(base64.b64decode(match.group(1) + b"=" * (-len(match.group(1)) % 4)))
+        except (binascii.Error, ValueError):
+            continue
+    return found
+
+
+def scan_bytes(data: bytes, secrets: list[bytes], depth: int = 0, hops: int = 0) -> bool:
     if holds_secret(data, secrets):
         return True
-    if depth < 2 and data[:4] == b"PK\x03\x04":
+    if hops < MAX_HOPS and any(
+        scan_bytes(p, secrets, depth, hops + 1) for p in embedded_payloads(data)
+    ):
+        return True
+    if depth < MAX_DEPTH and data[:4] == b"PK\x03\x04":
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
                 for member in archive.infolist():
                     if member.is_dir() or member.file_size > MAX_MEMBER:
                         continue
-                    if scan_bytes(archive.read(member), secrets, depth + 1):
+                    if scan_bytes(archive.read(member), secrets, depth + 1, hops):
                         return True
         except (zipfile.BadZipFile, OSError, RuntimeError, NotImplementedError):
             return False

@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { S } from "../src/strings";
+import { clearingOnFailure } from "./loginFailure";
 
 export { S };
 
@@ -274,16 +275,21 @@ async function submitLogin(page: Page, who: Who): Promise<void> {
   await page.getByRole("button", { name: S.login.submit }).click();
 }
 
-/** Logs in through the login page and waits for the role's home. */
+/**
+ * Logs in through the login page and waits for the role's home. A login that does not get there empties the
+ * password field before the test fails, so that the failure's snapshot never holds the password (loginFailure.ts).
+ */
 export async function loginAs(page: Page, who: Who): Promise<void> {
   await page.goto("/login");
-  await submitLogin(page, who);
-  await expect(page).toHaveURL(who === "t1" ? /\/queue$/ : /\/cases$/);
+  await clearingOnFailure(page.getByLabel(S.login.password), async () => {
+    await submitLogin(page, who);
+    await expect(page).toHaveURL(who === "t1" ? /\/queue$/ : /\/cases$/);
+  });
 }
 
 /** Logs in on the login page a session ended: the page returns to where the user was, so no URL is awaited. */
 export async function signIn(page: Page, who: Who): Promise<void> {
-  await submitLogin(page, who);
+  await clearingOnFailure(page.getByLabel(S.login.password), () => submitLogin(page, who));
 }
 
 /** A token for `who` from the API, in a context of its own (no page holds it). */
