@@ -3295,3 +3295,22 @@ Decision:
      - The dedup contribution of the thesis is evaluated on the data recorded before the switch. The code path stays tested with `DEDUP_ENABLED=true`.
   6. **Owner action.** Set `DEDUP_ENABLED=false` in the live `.env`, then `docker compose up -d --force-recreate app worker`; `.env` is read when a container is created.
 Supersedes: phase-2's "every alert of an open cluster merges into its head", for the live system only (the code and its tests remain)
+
+## DEC-166 · 2026-10-01 · DEC-165's follow-ups: the gate counts the burst when grouping is off (R22), the evaluation harness always runs with grouping on (R23), the escalate sweep stays broad but never takes an alert another analyst holds, swept alerts are "kéo theo" in the pilot, and the sweep's cap has a deterministic tie-break
+Scope: **product** (triage gate, escalate) · **evaluation** (pilot export, the B1–B4 harness)
+Decided by:
+- **Director rulings R22 and R23**, 30/09: the P10-T15 and P10-T16 reviews.
+- **The Owner, on the sweep:**
+  - 30/09, "Giữ kéo vào cùng case": keep pulling related alerts into the same case;
+  - 01/10, after the whole-branch review showed the real reach of the rule (every open alert within ±2 h sharing the agent, the user or the srcip, of any rule, up to `MAX_ALERTS_PER_CASE`): "Giữ quy tắc rộng, chỉ bỏ alert người khác" — keep the broad rule, but leave out alerts another analyst holds.
+Drafted by: Director (Opus 5.5)
+Propagated to: `backend/app/llm/triage.py` (burst count) · `eval/run_configs.py` (pin) · `eval/ops_export.py` (Q34) · `backend/app/domain/correlation.py` (tie-break and held-by-other exclusion) · `docs/runbook.md` · card P10-T17
+Decision:
+  1. **R22.** With `DEDUP_ENABLED=false`, the gate's `occurrence_lt`/`occurrence_gte` facts, and the prompt's occurrence, use the burst count instead of the row's `occurrence_count`. The burst count is the number of alerts with the same `rule_id`, `srcip`, `dstip` and `agent_name` whose `first_seen_at` is at or after this alert's `first_seen_at − MAX_CLUSTER_AGE_HOURS`, counted when ① runs, this alert included. With the switch on, nothing changes.
+  2. **R23.** `eval/run_configs.py` always evaluates with `DEDUP_ENABLED=True`, whatever the environment says, and prints one notice line when it overrides a false. The thesis figures are pre-switch data under grouping semantics.
+  3. **The sweep.**
+     - Escalating an alert still folds every open alert within ±2 h that shares the agent, the user or the srcip into the case, up to `MAX_ALERTS_PER_CASE`, with the switch on or off.
+     - An alert in `tier1_active` that another analyst acknowledged is never swept. One the escalating analyst holds, and any `queued_tier1` alert, still are.
+     - At the cap, the order is `occurrence_count DESC, alert_time DESC, alert_id ASC`.
+  4. **The pilot.** A swept alert is counted as "kéo theo (không phải quyết định)" (Q34), never as a decision, and never in agreement.
+Supersedes: DEC-165's "no change to decide, escalate, fan-out" for escalate (items 3 above) and for the gate's occurrence facts (item 1)
