@@ -66,6 +66,9 @@ DISPLAY_NAME_MAX_CHARS = 100
 
 _USERNAME = re.compile(USERNAME_RE)
 
+#: Unicode general categories a display name may not hold (see `_display_name`).
+_REFUSED_NAME_CATEGORIES = frozenset({"Cc", "Cs", "Cf", "Zl", "Zp"})
+
 # The one column list every read and every `RETURNING` of this module shares: a `UserRow` is
 # exactly these, in the dict the database returns. Never `password_hash` (a test pins the keys).
 _COLUMNS = (
@@ -268,9 +271,13 @@ def _display_name(value: Any) -> str:
         raise _bad("display_name", "empty")
     if len(name) > DISPLAY_NAME_MAX_CHARS:
         raise _bad("display_name", "too_long", max=DISPLAY_NAME_MAX_CHARS)
-    # A control character, and a lone surrogate (legal JSON, illegal UTF-8), would be a 500 at the
-    # driver — a text column cannot hold NUL — or at least text no screen should show.
-    if any(unicodedata.category(char) in ("Cc", "Cs") for char in name):
+    # `Cc` (a control character) and `Cs` (a lone surrogate, legal JSON and illegal UTF-8) would be
+    # a 500 at the driver — a text column cannot hold NUL. `Cf`, `Zl` and `Zp` are the invisible
+    # ones (a bidi override, a zero-width space, a byte-order mark, a line or paragraph
+    # separator): they let one name pass for another in the users list and the audit page.
+    # The cost is that a zero-width joiner or non-joiner, which some emoji sequences and some
+    # scripts use, is refused too (review round 1, m2, the Director's ruling).
+    if any(unicodedata.category(char) in _REFUSED_NAME_CATEGORIES for char in name):
         raise _bad("display_name", "invalid")
     return name
 

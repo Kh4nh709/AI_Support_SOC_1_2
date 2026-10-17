@@ -343,6 +343,11 @@ AT_THE_BOUND = {
     "username-dot-underscore-dash": lambda: {"username": f"a.b_c-{uuid.uuid4().hex[:6]}"},
     "display-name-1-char": lambda: {"display_name": "x"},
     "display-name-100-chars": lambda: {"display_name": "\u01a0" * 100},
+    # combining marks (Mn) and an emoji are names, not disguises
+    "display-name-decomposed-vietnamese": lambda: {
+        "display_name": "Nguye\u0302\u0303n Va\u0306n A\u0323"
+    },
+    "display-name-emoji": lambda: {"display_name": "T\u00f4i \U0001f600"},
     "role-admin": lambda: {"role": "admin"},
     "password-12-chars": lambda: {"password": "twelve chars"},
     "password-256-chars": lambda: {"password": "p" * 256},
@@ -394,6 +399,12 @@ CREATE_BAD = [
     ({"display_name": "   "}, "display_name", "empty"),
     ({"display_name": "x" * 101}, "display_name", "too_long"),
     ({"display_name": "two\nlines"}, "display_name", "invalid"),
+    # characters that disguise a name in the users list and the audit page (review m2)
+    ({"display_name": "\u202eevil"}, "display_name", "invalid"),  # bidi override, Cf
+    ({"display_name": "x\u200bx"}, "display_name", "invalid"),  # zero-width space, Cf
+    ({"display_name": "\ufeffx"}, "display_name", "invalid"),  # byte-order mark, Cf
+    ({"display_name": "two\u2028lines"}, "display_name", "invalid"),  # line separator, Zl
+    ({"display_name": "two\u2029parts"}, "display_name", "invalid"),  # paragraph separator, Zp
     ({"display_name": MISSING}, "display_name", "empty"),
 ]
 
@@ -815,6 +826,8 @@ def test_an_admin_may_change_their_own_display_name(client, sdb):
         ({"display_name": ""}, {"field": "display_name", "reason": "empty"}),
         ({"display_name": "x" * 101}, {"field": "display_name", "reason": "too_long", "max": 100}),
         ({"display_name": 5}, {"field": "display_name", "reason": "invalid"}),
+        ({"display_name": "\u202eevil"}, {"field": "display_name", "reason": "invalid"}),
+        ({"display_name": "x\u200bx"}, {"field": "display_name", "reason": "invalid"}),
         ({"is_active": "false"}, {"field": "is_active", "reason": "invalid"}),
         ({"is_active": 0}, {"field": "is_active", "reason": "invalid"}),
         ({"username": "someone-else"}, {"field": "body", "reason": "invalid"}),
