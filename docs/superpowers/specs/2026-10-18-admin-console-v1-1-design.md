@@ -302,7 +302,7 @@ The changes to the frozen contracts are listed in §5.9 and recorded by DEC-200.
 
   A test greps for the three key names outside `infra/config.py` and `infra/settings.py` and expects none.
 - **`PUT /api/admin/llm/limits`**, with any of the three keys as integers.
-  - It validates the bounds of decision 2. In one transaction it upserts the changed keys and writes one `admin.settings_changed` row with `{changes: [{key, old, new}]}`.
+  - It validates the bounds of decision 2. The timeout's upper bound is derived from `JOB_LOCK_TIMEOUT_S` (DEC-202). In one transaction it upserts the changed keys and writes one `admin.settings_changed` row with `{changes: [{key, old, new}]}`.
   - `200 {effective, source}`. An unchanged body writes nothing.
   - `422 {field, reason}` per invalid key.
 - **Red steps:**
@@ -529,7 +529,7 @@ The Owner approved the proposals as written.
 2. **Bounds for the editable limits:**
    - cap: 1–1000 USD per month;
    - ② quota: 1–200 runs per person per 24 h;
-   - timeout: 10–600 s.
+   - timeout: 10 s up to `min(600, (JOB_LOCK_TIMEOUT_S − 60) ÷ 2)`, which is 120 s at the default `JOB_LOCK_TIMEOUT_S` of 300 (DEC-202, which amends the 10–600 first approved). A job makes at most two model sends and must finish inside the job lock. A stored value is clamped to the same bound when read.
 3. **A password reset also ends the user's sessions.**
 4. **"Tool call".** The page shows 0, with the sentence "mô hình không gọi công cụ nào". DEC-159's question about another meaning stays open.
 5. **The chat row** of the LLM page appears only when DEC-160's pipeline exists.

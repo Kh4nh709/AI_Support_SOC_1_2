@@ -3369,3 +3369,26 @@ Decision:
   4. **Every agent's test database** is its own `soc_p11tXX_<role>_test` on the Director's scratch PostgreSQL 16 (127.0.0.1:55611, trust, TCP only). Never the live cluster.
   5. **P11-T01**, already built by the Director before this ruling, gets the same independent review before it counts as done.
 Supersedes: DEC-200 item 7 (the Director builds alone)
+
+## DEC-202 · 2026-10-18 · The web may set the model timeout only as high as the job lock allows: at most min(600, (JOB_LOCK_TIMEOUT_S − 60) ÷ 2) seconds, 120 s at the default, and a stored value is clamped to that bound when read; the web limits govern ① and ② only, never `eval/`
+Scope: **product** (LLM limits, job safety) · **cost**
+Decided by: **the Director, 18/10**, on the independent review of P11-T03 (finding I1). This amends DEC-200 item 4's "timeout 10–600 s". That bound was the Director's own proposal, approved by the Owner without the Director having checked the job-lock invariant below. The Owner is told in the hand-over.
+Drafted by: Director (Opus 5.5)
+Propagated to: spec §5.2 and §10 item 2 · P11-T03 fix round 1 (`infra/settings.py`, `web/routers/admin_llm.py`, tests) · the runbook with P11-T19
+Decision:
+  1. **The invariant, already stated by `tier2/investigate.py:19-33`.**
+     - A job makes at most two logical model sends: ① proposer then verifier, ② first call then repair.
+     - Its model time, `2 × LLM_TIMEOUT_S`, must stay at least 60 s under `JOB_LOCK_TIMEOUT_S` (300 s by default).
+     - `JOB_LOCK_TIMEOUT_S` is both the job transaction's `idle_in_transaction_session_timeout` and the age at which `reclaim_stale` calls a job dead.
+  2. **The failure without the bound** (measured by the Reviewer on the real worker loop, scaled).
+     - A web timeout above that lets a slow but answered call outlive the job's session, so Postgres ends the worker's connection.
+     - The paid call is never written to `llm_runs`, so the monthly cap stops seeing that spend.
+     - The worker process dies, and the job stays `running` until `reclaim_stale` re-queues it, with no ceiling on attempts.
+  3. **The rule.**
+     - `PUT /api/admin/llm/limits` refuses a `timeout_s` above `min(600, (JOB_LOCK_TIMEOUT_S − 60) // 2)` with 422 `out_of_range` and that `max`. That is 120 s at the default 300 s: the web can lower the timeout, and raise it only as far as the Owner's `.env` `JOB_LOCK_TIMEOUT_S` allows.
+     - `effective_limits` clamps a stored web value to the same bound when it reads it, so a later lowering of `JOB_LOCK_TIMEOUT_S` cannot reopen the hole.
+     - The `.env` value itself is the Owner's and is not clamped.
+  4. **Scope of the web limits.**
+     - They govern ① and ② in `backend/app` only.
+     - The Owner-run evaluation tools in `eval/` keep the `.env` cap and their own `--approved-usd`, as before.
+Supersedes: DEC-200 item 4, the timeout bound only (the cap 1–1000 and quota 1–200 stand)
