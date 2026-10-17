@@ -3,8 +3,9 @@
 `POST /admin/digest/{alert_id}/review`, over P5-T08's `app.tier1.digest`.
 
 All logic is `app.tier1.digest` (`build`, `review`) and `app.ingest.autoclose`
-(`load_rules`, read-only, for the two-empty-states distinction); this module
-writes no SQL of its own (scope out — `tier1/digest.py` is not edited here).
+(`load_rules`, read-only, for the two-empty-states distinction); the page
+writes no SQL of its own (P5-T09 scoped `tier1/digest.py` out; the JSON half
+below adds `review_details` there and has two one-line reads of its own).
 
 **Days are local (P5-T08 review round 1 · S4).** `build`/`unreviewed_count`
 take `day` as a date string in `cfg.DISPLAY_TZ`. The default day is
@@ -37,17 +38,48 @@ it. When neither the re-read nor the pre-call snapshot has any cosmetic data
 left for the alert (review round 1, should-4), the row renders as one wide
 cell naming the id and the conflict — never a fake-looking row of blank
 cells and a "Số lần 0" that reads as real (but wrong) data.
+
+**The JSON API (P11-T07, spec §4.5 and §5.6)** is the second half of this module, below the
+page: `GET /api/admin/digest?day=` and `POST /api/admin/digest/{alert_id}/review`, the same
+`digest.build` and `digest.review`, for the React page. The Jinja routes above stay as they are
+until P11-T19 retires them. What differs from the page, and why:
+
+- **The default day is today** in `DISPLAY_TZ` (spec §5.6); the page defaults to yesterday, the
+  day the 08:00 job reviews. `today` is returned beside `day` so the UI can offer both.
+- **A day is `YYYY-MM-DD` and nothing else** (`_strict_day`): `date.fromisoformat` also takes
+  `20260930` and `2026-W40-3`, which the page tolerates and the API does not. A bad day is
+  `422 {"detail": {"reason": "bad_day"}}`, answered before any SQL; the UI falls back by itself.
+- **Errors are objects with a `reason`** (spec §3), never text from the driver: `bad_day`,
+  `{"field": "verdict", "reason": "invalid"}`, `not_in_digest` (404), `already_reviewed` (409,
+  with the row as it now stands) and `not_auto_closed` (409).
+- **A review needs the alert on that day's digest** (`build(day)`), so a stale or forged
+  `{day}` cannot review an alert of another day. An alert that exists but is no longer
+  `auto_closed` is not "not on the digest": it is the conflict the page maps to "no longer
+  auto-closed" (`not_auto_closed`), because a row reopened by Tier 1 or by a `wrong` review
+  leaves `build` the moment it is reopened and that is exactly the case a stale page hits.
+- **A conflict is raised, not returned.** `digest.review` is one savepoint, so a refused review
+  has written nothing, and `deps.get_conn` rolls the request back on the `HTTPException`. The
+  page `rollback()`s by hand only because it returns a response, which `get_conn` would commit.
+- **The body is a Pydantic model**, so FastAPI's strict content-type rule applies: a form or a
+  `text/plain` post (the requests a browser sends cross-site without a preflight) is not parsed
+  as JSON and is a 422. Its two fields are read as `Any` and judged by the route, so a missing or
+  mistyped `day` or `verdict` gets the same `reason` as a wrong one, not FastAPI's error list.
+- **The row after a `wrong` review** cannot come from `build` (the alert has left the digest):
+  it is the snapshot taken before the review, with the recorded verdict, reviewer and time.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import re
 from datetime import date, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Form, Request
+import psycopg
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 from app.domain.transitions import StaleState
 from app.infra.auth import Claims
@@ -358,3 +390,150 @@ def review_submit(
         blank=blank,
         status_code=200,
     )
+
+
+# ---------------------------------------------------------------------------
+# The JSON API (P11-T07) — see the module docstring for what differs from the page
+# ---------------------------------------------------------------------------
+
+#: `YYYY-MM-DD`, ASCII digits only; `fullmatch`, so a trailing newline is not a day.
+_DAY_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def _strict_day(raw: object) -> str | None:
+    """`raw` as a calendar day in exactly the form `YYYY-MM-DD`, or `None`: never raises. Unlike
+    `_parse_day` it refuses the other ISO 8601 spellings `date.fromisoformat` accepts."""
+    if not isinstance(raw, str) or _DAY_RE.fullmatch(raw) is None:
+        return None
+    try:
+        return date.fromisoformat(raw).isoformat()
+    except ValueError:  # 2026-02-30, month 13, year 0000
+        return None
+
+
+def _refuse(status_code: int, reason: str, **extra: Any) -> HTTPException:
+    """The body is `{"detail": {"reason": ..., **extra}}` (spec §3). Fixed codes only: nothing
+    from an exception, a query or the configuration goes into it."""
+    return HTTPException(status_code=status_code, detail={"reason": reason, **extra})
+
+
+class DigestRowOut(BaseModel):
+    """`digest.DigestRow`, field for field, plus the review on file: who (`users.display_name`,
+    else the username) and when. Both are `None` while the row is unreviewed."""
+
+    alert_id: str
+    rule_id: str
+    description: str
+    severity: str
+    category: str
+    agent_name: str
+    occurrence_count: int
+    first_seen_at: datetime
+    last_seen_at: datetime
+    autoclose_rule_id: str | None
+    autoclose_rule_name: str | None
+    suggested_action: str | None
+    disagreement: bool
+    reviewed_verdict: str | None
+    reviewed_by_name: str | None
+    reviewed_at: datetime | None
+
+    @classmethod
+    def of(cls, row: digest.DigestRow, info: digest.ReviewInfo | None) -> DigestRowOut:
+        return cls(
+            **dataclasses.asdict(row),
+            reviewed_by_name=None if info is None else info.reviewer_name,
+            reviewed_at=None if info is None else info.reviewed_at,
+        )
+
+
+class DigestOut(BaseModel):
+    day: str
+    today: str
+    rules_enabled: bool
+    rows: list[DigestRowOut]
+
+
+class ReviewIn(BaseModel):
+    """`day` and `verdict` are `Any` on purpose: the route judges them, so the answer for a
+    missing, mistyped or wrong value is one `reason`, whichever it is."""
+
+    day: Any = None
+    verdict: Any = None
+
+
+class ReviewOut(BaseModel):
+    row: DigestRowOut
+    reopened: bool
+
+
+def _rules_enabled(conn: psycopg.Connection) -> bool:
+    """Whether any `autoclose_rules` row is enabled: the page's "no rule yet" empty state."""
+    (enabled,) = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM autoclose_rules WHERE enabled)"
+    ).fetchone()
+    return enabled
+
+
+@router.get("/api/admin/digest")
+def api_digest(conn: Conn, cfg: Cfg, claims: Admin, day: str | None = None) -> DigestOut:
+    tz = cfg.DISPLAY_TZ
+    today = _today_local(tz)
+    # `?day=` present but empty is a bad day, not "the default": only an absent one defaults.
+    resolved = today if day is None else _strict_day(day)
+    if resolved is None:
+        raise _refuse(422, "bad_day")
+    rows = digest.build(conn, resolved, tz=tz)
+    infos = digest.review_details(conn, [r.alert_id for r in rows if r.reviewed_verdict])
+    return DigestOut(
+        day=resolved,
+        today=today,
+        rules_enabled=_rules_enabled(conn),
+        rows=[DigestRowOut.of(r, infos.get(r.alert_id)) for r in rows],
+    )
+
+
+def _row_now(
+    conn: psycopg.Connection, day: str, tz: str, alert_id: str, snapshot: digest.DigestRow
+) -> DigestRowOut:
+    """`alert_id`'s row as the database has it now, with its review. `build` lists only
+    `auto_closed` alerts, so an alert a `wrong` review has just reopened is not in it: the row
+    then comes from `snapshot` (read before the review) with the verdict on file."""
+    row = _find(digest.build(conn, day, tz=tz), alert_id) or snapshot
+    info = digest.review_details(conn, [alert_id]).get(alert_id)
+    if info is not None and row.reviewed_verdict != info.verdict:
+        row = dataclasses.replace(row, reviewed_verdict=info.verdict)
+    return DigestRowOut.of(row, info)
+
+
+@router.post("/api/admin/digest/{alert_id}/review")
+def api_review(conn: Conn, cfg: Cfg, claims: Admin, alert_id: AlertId, body: ReviewIn) -> ReviewOut:
+    tz = cfg.DISPLAY_TZ
+    day = _strict_day(body.day)
+    if day is None:
+        raise _refuse(422, "bad_day")
+    verdict = body.verdict
+    if not isinstance(verdict, str) or verdict not in _VERDICT_LABEL:
+        raise _refuse(422, "invalid", field="verdict")
+
+    before = _find(digest.build(conn, day, tz=tz), alert_id)
+    if before is None:
+        # Not on that day's digest. An alert that exists in another status is the stale-page
+        # conflict (module docstring); anything else — unknown, synthetic, closed on another
+        # day — is a 404.
+        current = conn.execute("SELECT status FROM alerts WHERE alert_id = %s", (alert_id,))
+        status = current.fetchone()
+        if status is not None and status[0] != "auto_closed":
+            raise _refuse(409, "not_auto_closed")
+        raise _refuse(404, "not_in_digest")
+
+    try:
+        digest.review(conn, alert_id, verdict, reviewer_id=claims.user_id)
+    except digest.AlreadyReviewed as exc:
+        # `review`'s savepoint is rolled back: nothing was written. The row is read again, so
+        # it carries the review that is on file, not the one this request tried to add.
+        row = _row_now(conn, day, tz, alert_id, before)
+        raise _refuse(409, "already_reviewed", row=row.model_dump(mode="json")) from exc
+    except StaleState as exc:
+        raise _refuse(409, "not_auto_closed") from exc
+    return ReviewOut(row=_row_now(conn, day, tz, alert_id, before), reopened=verdict == "wrong")

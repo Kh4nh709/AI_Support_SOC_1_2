@@ -184,6 +184,42 @@ def unreviewed_count(conn: psycopg.Connection, day: str, *, tz: str | None = Non
     return row[0]
 
 
+@dataclasses.dataclass(frozen=True)
+class ReviewInfo:
+    """What `autoclose_reviews` holds about one reviewed alert, with the reviewer's name
+    (P11-T07, the digest JSON API): `reviewer_name` is `users.display_name`, or the username
+    when the display name is blank; `None` only if the user row is gone, which the foreign key
+    forbids. `DigestRow` is unchanged: it is what the CSV and the Jinja page already carry."""
+
+    verdict: str
+    reviewer_name: str | None
+    reviewed_at: datetime
+
+
+_REVIEW_DETAILS_SQL = r"""
+    SELECT rev.alert_id, rev.verdict,
+           CASE WHEN btrim(u.display_name, E' \t\r\n') = '' THEN u.username
+                ELSE u.display_name END,
+           rev.reviewed_at
+    FROM autoclose_reviews rev
+    LEFT JOIN users u ON u.user_id = rev.reviewer_id
+    WHERE rev.alert_id = ANY(%s)
+"""
+
+
+def review_details(conn: psycopg.Connection, alert_ids: Sequence[str]) -> dict[str, ReviewInfo]:
+    """The review on file for each of `alert_ids` that has one, in one query (an alert with no
+    review is absent from the answer). Read-only; the digest JSON API calls it after `build`
+    and after `review`, so a row shows who reviewed it and when."""
+    if not alert_ids:
+        return {}
+    records = conn.execute(_REVIEW_DETAILS_SQL, (list(alert_ids),)).fetchall()
+    return {
+        alert_id: ReviewInfo(verdict=verdict, reviewer_name=name, reviewed_at=reviewed_at)
+        for alert_id, verdict, name, reviewed_at in records
+    }
+
+
 def review(
     conn: psycopg.Connection,
     alert_id: str,
