@@ -47,6 +47,7 @@ SECTIONS = (
     "by_source",
     "top_agents",
     "funnel",
+    "waiting",
     "cases_open",
     "health",
     "failed_jobs",
@@ -266,6 +267,7 @@ def test_empty_database_answers_every_section_with_its_empty_shape(client) -> No
         "by_status": {},
         "triage": {"ready": 0, "unavailable": 0, "pending": 0, "none": 0},
     }
+    assert body["waiting"] == {"count": 0, "oldest_received_at": None}
     assert body["cases_open"] == 0
     assert body["health"] is None
     assert body["failed_jobs"] == []
@@ -486,6 +488,60 @@ def test_funnel_counts_heads_by_status_and_by_triage_status(client) -> None:
 
 
 # ---------------------------------------------------------------------------
+# waiting — the KPI "clusters waiting for Tier 1, with the oldest" (spec §4.1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_waiting_counts_queued_tier1_heads_and_the_oldest_received(client) -> None:
+    tc, db, _ = client
+    oldest = _ago(hours=5)
+    _alert(db, "w-old", status="queued_tier1", received_at=oldest)
+    _alert(db, "w-mid", status="queued_tier1", received_at=_ago(hours=2))
+    _alert(db, "w-new", status="queued_tier1", received_at=_ago(minutes=5))
+    _alert(db, "other-1", status="tier1_active", received_at=_ago(days=1))  # not waiting
+    _alert(db, "other-2", status="escalated_tier2", received_at=_ago(days=2))
+    _alert(db, "other-3", status="auto_closed", received_at=_ago(days=3))
+    _alert(db, "syn-q", status="queued_tier1", is_synthetic=True, received_at=_ago(days=4))
+    # a row that points at a head is not a cluster, whatever its status says
+    _alert(db, "not-a-head", duplicate_of="w-old", received_at=_ago(days=5))
+    db.execute(
+        "UPDATE alerts SET status = 'queued_tier1', closed_at = NULL, sealed_at = NULL "
+        "WHERE alert_id = 'not-a-head'"
+    )
+
+    waiting = _get(tc).json()["waiting"]
+
+    assert set(waiting) == {"count", "oldest_received_at"}
+    assert waiting["count"] == 3
+    assert datetime.fromisoformat(waiting["oldest_received_at"]) == oldest
+
+
+@pytest.mark.db
+def test_nothing_waiting_is_a_zero_count_and_a_null_oldest(client) -> None:
+    tc, db, _ = client
+    _alert(db, "busy", status="tier1_active")
+    body = _get(tc).json()
+    assert body["waiting"] == {"count": 0, "oldest_received_at": None}
+    assert body["errors"] == []
+
+
+@pytest.mark.db
+def test_waiting_is_what_waits_now_not_what_arrived_in_the_range(client) -> None:
+    tc, db, _ = client
+    oldest = _ago(days=40)  # outside every range
+    _alert(db, "w-ancient", status="queued_tier1", received_at=oldest)
+    _alert(db, "w-recent", status="queued_tier1", received_at=_ago(hours=1))
+
+    for range_ in ("24h", "7d", "30d"):
+        waiting = _get(tc, range=range_).json()["waiting"]
+        assert waiting["count"] == 2, range_
+        assert datetime.fromisoformat(waiting["oldest_received_at"]) == oldest, range_
+    # the range does bound what the same alerts add to the funnel
+    assert _get(tc, range="30d").json()["funnel"]["by_status"] == {"queued_tier1": 1}
+
+
+# ---------------------------------------------------------------------------
 # cases_open, health, failed_jobs, inventory
 # ---------------------------------------------------------------------------
 
@@ -558,6 +614,33 @@ def test_failed_jobs_are_failed_only_newest_first_and_at_most_fifty(client) -> N
     assert jobs_out[0]["attempts"] == 3
     assert jobs_out[0]["last_error"] == "boom"
     assert jobs_out[0]["locked_at"] is None
+
+
+@pytest.mark.db
+def test_a_job_that_failed_again_is_listed_by_its_last_attempt_not_its_creation(client) -> None:
+    """A retried job keeps its old `created_at`, and `claim_job` stamps `locked_at` on each
+    attempt (`finish_job` keeps it): the last attempt is `COALESCE(locked_at, created_at)`. A job
+    created ten days ago that failed a minute ago must head the list, not fall off it behind
+    fifty newer-created failures."""
+    tc, db, _ = client
+    for i in range(50):
+        _job(db, subject_id=f"newer-{i:02d}", created_at=_ago(hours=i + 1))
+    old = _job(
+        db,
+        subject_id="retried-and-failed-again",
+        created_at=_ago(days=10),
+        locked_at=_ago(minutes=1),
+        last_error="failed again",
+    )
+
+    jobs_out = _get(tc).json()["failed_jobs"]
+
+    assert len(jobs_out) == 50
+    assert jobs_out[0]["job_id"] == old
+    assert jobs_out[0]["subject_id"] == "retried-and-failed-again"
+    # the rest follow by their own last attempt (here their creation), newest first
+    assert [j["subject_id"] for j in jobs_out[1:4]] == ["newer-00", "newer-01", "newer-02"]
+    assert "newer-49" not in {j["subject_id"] for j in jobs_out}  # the oldest last attempt is cut
 
 
 @pytest.mark.db
@@ -647,7 +730,7 @@ def _driver_error(conn: Any) -> None:
 
 @pytest.mark.db
 @pytest.mark.parametrize("fault", [_sql_error, _driver_error], ids=["sql-error", "driver-error"])
-@pytest.mark.parametrize("failing", ["top_agents", "cases_open"])
+@pytest.mark.parametrize("failing", ["top_agents", "waiting", "cases_open"])
 def test_a_failing_section_is_null_with_an_error_and_the_others_still_compute(
     client, monkeypatch, failing: str, fault
 ) -> None:
@@ -668,6 +751,10 @@ def test_a_failing_section_is_null_with_an_error_and_the_others_still_compute(
     # the sections AFTER the failing one ran on a usable transaction: real data, not nulls
     assert body["alerts_by_day"][0]["total"] == 1
     assert body["funnel"]["by_status"] == {"queued_tier1": 1}
+    if failing != "waiting":
+        assert body["waiting"]["count"] == 1
+    if failing != "cases_open":
+        assert body["cases_open"] == 1
     assert body["failed_jobs"][0]["subject_id"] == "seed-failed"
     assert body["health"]["ok"] is True
     assert body["inventory"]["assets"] == 1
@@ -703,6 +790,44 @@ def test_a_section_past_its_statement_timeout_is_reported_as_a_timeout(client, m
     assert body["cases_open"] is None
     assert body["failed_jobs"][0]["subject_id"] == "seed-failed"
     assert body["inventory"]["assets"] == 1
+
+
+class _CountingConnection:
+    """Forwards `execute` to a real connection and counts the statements."""
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+        self.statements = 0
+
+    def execute(self, *args: Any, **kwargs: Any) -> Any:
+        self.statements += 1
+        return self._conn.execute(*args, **kwargs)
+
+
+_DAY = timedelta(hours=24)
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "name, args, statements",
+    [
+        ("_alerts_by_day", ("UTC", _DAY), 1),
+        ("_by_source", (_DAY,), 2),  # alerts, then rejected_alerts
+        ("_top_agents", (_DAY,), 1),
+        ("_funnel", (_DAY,), 1),
+        ("_waiting", (), 1),
+        ("_cases_open", (), 1),
+        ("_health", (), 1),
+        ("_failed_jobs", (), 1),
+        ("_inventory", (), 1),
+    ],
+)
+def test_a_section_runs_one_statement_except_by_source(sdb, name, args, statements) -> None:
+    """`SECTION_TIMEOUT` is a limit per statement, not per section. The module says so and
+    names `by_source` as the one section that runs two; this pins both halves of that sentence."""
+    counting = _CountingConnection(sdb)
+    getattr(admin_overview, name)(counting, *args)
+    assert counting.statements == statements
 
 
 @pytest.mark.db
@@ -863,7 +988,8 @@ def test_retry_of_an_unknown_job_is_404(client) -> None:
         resp = _retry(tc, job_id)
         assert resp.status_code == 404
         assert resp.json() == {"detail": {"reason": "not_found"}}
-    assert _events(db, "admin.job_retried") == []
+        # by subject: the concurrency tests below commit `admin.job_retried` rows of their own
+        assert _events(db, "admin.job_retried", str(job_id)) == []
 
 
 @pytest.mark.db
@@ -906,10 +1032,13 @@ def _wait_for_a_backend_blocked_on_a_lock(dsn: Any, timeout: float = 10.0) -> No
     raise AssertionError("the retry request never blocked on the other connection's lock")
 
 
-def _retry_in_a_thread(dsn: Any, job_id: int) -> tuple[threading.Thread, dict[str, Any]]:
+def _retry_in_a_thread(
+    dsn: Any, job_id: int, start: threading.Barrier | None = None
+) -> tuple[threading.Thread, dict[str, Any]]:
     """`POST .../retry` as an admin on a connection of its own (committed on success, rolled
     back on error, exactly as `deps.get_conn` does it). `out` gets the `response`, or the
-    `error` an unhandled server exception raised."""
+    `error` an unhandled server exception raised. With `start`, the thread waits on that
+    barrier first, so several of them post at the same moment."""
     claims = Claims(user_id=str(uuid.uuid4()), username="a", role="admin", iat=0.0, exp=0.0)
     cfg = config.load()
 
@@ -932,6 +1061,8 @@ def _retry_in_a_thread(dsn: Any, job_id: int) -> tuple[threading.Thread, dict[st
 
     def run() -> None:
         try:
+            if start is not None:
+                start.wait(timeout=10)
             out["response"] = TestClient(main.app).post(f"/api/admin/jobs/{job_id}/retry")
         except Exception as exc:  # noqa: BLE001 - the test reports whatever the app raised
             out["error"] = exc
@@ -970,6 +1101,57 @@ def test_two_retries_of_one_job_cannot_both_pass_the_for_update_lock(scratch_dsn
     finally:
         _clear_overrides()
         holder.close()
+        with psycopg.connect(scratch_dsn, autocommit=True) as cleanup:
+            cleanup.execute("DELETE FROM jobs WHERE job_id = %s", (job_id,))
+
+
+@pytest.mark.db
+def test_two_simultaneous_retries_give_one_200_and_one_409_and_never_a_deadlock(
+    scratch_dsn, monkeypatch
+) -> None:
+    """Two admins press "Chạy lại" on the same failed job at the same moment, each request on
+    its own committed connection and started by a barrier. The lock must be exclusive:
+    `FOR UPDATE` parks the second request on the row until the first commits, and it then reads
+    `pending` and answers 409 `not_failed`. A weaker lock (`FOR SHARE`) lets both read `failed`;
+    both UPDATEs then wait on each other's share lock and PostgreSQL aborts one with
+    `DeadlockDetected`, a 500.
+
+    To make the weaker lock fail every time rather than when the scheduler is kind, the sibling
+    check, which runs after the read and before the UPDATE, waits (up to 2 s) for the other
+    request to arrive. Under `FOR UPDATE` the other request is parked on the row and never
+    arrives, so the wait ends by itself and costs two seconds; under `FOR SHARE` both arrive.
+    The one `admin.job_retried` row it commits cannot be deleted (`audit_events` is
+    append-only): the module's scratch database is dropped at the end."""
+    with psycopg.connect(scratch_dsn, autocommit=True) as setup:
+        job_id = _job(setup, subject_id="alert-simultaneous", last_error="old failure")
+    real_check = admin_overview._has_live_sibling
+    meeting = threading.Barrier(2)
+
+    def wait_for_the_other_request_then_check(*args: Any) -> bool:
+        try:
+            meeting.wait(timeout=2)
+        except threading.BrokenBarrierError:
+            pass
+        return real_check(*args)
+
+    monkeypatch.setattr(admin_overview, "_has_live_sibling", wait_for_the_other_request_then_check)
+    start = threading.Barrier(2)
+    try:
+        first, out_first = _retry_in_a_thread(scratch_dsn, job_id, start)
+        second, out_second = _retry_in_a_thread(scratch_dsn, job_id, start)
+        first.join(timeout=30)
+        second.join(timeout=30)
+        assert not first.is_alive() and not second.is_alive()
+        outs = [out_first, out_second]
+        assert [o["error"] for o in outs if "error" in o] == []  # no DeadlockDetected, no 500
+        assert sorted(o["response"].status_code for o in outs) == [200, 409]
+        loser = next(o["response"] for o in outs if o["response"].status_code == 409)
+        assert loser.json() == {"detail": {"reason": "not_failed"}}
+        with psycopg.connect(scratch_dsn, autocommit=True) as check:
+            assert len(_events(check, "admin.job_retried", str(job_id))) == 1
+            assert _job_row(check, job_id)[:2] == ("pending", 0)
+    finally:
+        _clear_overrides()
         with psycopg.connect(scratch_dsn, autocommit=True) as cleanup:
             cleanup.execute("DELETE FROM jobs WHERE job_id = %s", (job_id,))
 

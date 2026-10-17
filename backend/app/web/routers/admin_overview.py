@@ -2,7 +2,7 @@
 and §5.4): `GET /api/admin/overview?range=24h|7d|30d` and `POST /api/admin/jobs/{job_id}/retry`.
 Both are `Admin` only; `iter_routers()` discovers this module.
 
-**Each section fails alone.** The overview is eight independent reads. Each runs in its own
+**Each section fails alone.** The overview is nine independent reads. Each runs in its own
 savepoint (`conn.transaction()` inside the request's transaction), after its own
 `SET LOCAL statement_timeout`. A `psycopg.Error` rolls that savepoint back, so the request's
 transaction stays usable: the section answers `null`, `{section, error}` is added to `errors`,
@@ -11,6 +11,10 @@ it issues its own `BEGIN`/`COMMIT`, and inside a request that would commit (or w
 transaction `deps.Conn` owns. The `error` is a short code, `timeout` or `query_failed`: never
 the driver's message, which can carry SQL text, and never a DSN.
 
+**The 3 s is per statement, not per section.** `statement_timeout` limits each SQL statement on
+its own. Every section is one statement except `by_source`, which reads `alerts` and then
+`rejected_alerts`, so that one section can take up to twice `SECTION_TIMEOUT` before it is cut.
+
 `SET LOCAL` inside a savepoint lasts until the end of the request's transaction unless the
 savepoint is rolled back, so a section's `3s` is still set while the next one runs: each section
 sets its own anyway, and nothing runs after the last one but the commit.
@@ -18,13 +22,20 @@ sets its own anyway, and nothing runs after the last one but the commit.
 Read rules shared by the alert sections:
 - synthetic alerts (`is_synthetic`) are left out, as the queue, the digest and the health
   checks leave them out;
-- the window is `received_at >= now() - <range>`, on the database's clock;
+- the window is `received_at >= now() - <range>`, on the database's clock; `waiting` is the one
+  alert section the range does not bound (it is what waits for Tier 1 now);
 - a head is `duplicate_of IS NULL`.
+
+`failed_jobs` is ordered by the job's last attempt, `COALESCE(locked_at, created_at)` newest
+first: `claim_job` stamps `locked_at` on every attempt and `finish_job` keeps it, while a retried
+job keeps its old `created_at`, so ordering by creation would push a job that failed again
+behind newer-created ones.
 
 **Retry.** `POST /api/admin/jobs/{job_id}/retry` puts one `failed` job back to `pending` with
 `attempts=0` and `scheduled_at=now()`, which is exactly what `infra/jobs.claim_job` takes
 (`status='pending' AND scheduled_at <= now()`); `last_error` is kept. The job row is locked
-`FOR UPDATE` first. A live sibling (same `job_type` and `subject_id`, `pending` or `running`)
+`FOR UPDATE` first, and the lock must be exclusive: with `FOR SHARE` two simultaneous retries
+both read `failed`, then deadlock on their UPDATEs and one of them is a 500. A live sibling (same `job_type` and `subject_id`, `pending` or `running`)
 is a `409 already_queued`, checked before the UPDATE and again by catching the partial unique
 index `ux_jobs_mot_job_song_moi_subject` on a savepoint: `enqueue` can insert that sibling
 between the check and the UPDATE, and that race must be a 409, not a 500.
@@ -54,7 +65,8 @@ Admin = Annotated[Claims, Depends(require_admin)]
 
 logger = logging.getLogger(__name__)
 
-#: Every section's `SET LOCAL statement_timeout`, read when a section runs (a test shortens it).
+#: The `SET LOCAL statement_timeout` each section sets: a limit PER STATEMENT, not per section
+#: (`by_source` runs two statements). Read when a section runs, so a test can shorten it.
 SECTION_TIMEOUT = "3s"
 
 #: `?range=` -> the window. Anything else is a 422 from the `Literal` below.
@@ -141,31 +153,35 @@ def _top_agents(conn: Any, window: timedelta) -> list[dict[str, Any]]:
 
 
 def _funnel(conn: Any, window: timedelta) -> dict[str, Any]:
-    """Heads only: the status counts, then `triage_status` (`none` is a NULL one)."""
-    by_status = conn.execute(
+    """Heads only. One statement, grouped by `(status, triage_status)`: the status counts are the
+    sums over `triage_status`, the triage counts the sums over `status` (`none` is a NULL one)."""
+    rows = conn.execute(
         """
-        SELECT status, count(*)
+        SELECT status, triage_status, count(*)
         FROM alerts
         WHERE duplicate_of IS NULL AND NOT is_synthetic AND received_at >= now() - %s
-        GROUP BY status
+        GROUP BY status, triage_status
         """,
         (window,),
     ).fetchall()
-    ready, unavailable, pending, none = conn.execute(
-        """
-        SELECT count(*) FILTER (WHERE triage_status = 'ready'),
-               count(*) FILTER (WHERE triage_status = 'unavailable'),
-               count(*) FILTER (WHERE triage_status = 'pending'),
-               count(*) FILTER (WHERE triage_status IS NULL)
+    by_status: dict[str, int] = {}
+    triage = {"ready": 0, "unavailable": 0, "pending": 0, "none": 0}
+    for status, triage_status, n in rows:
+        by_status[status] = by_status.get(status, 0) + n
+        key = triage_status if triage_status is not None else "none"
+        triage[key] = triage.get(key, 0) + n
+    return {"by_status": by_status, "triage": triage}
+
+
+def _waiting(conn: Any) -> dict[str, Any]:
+    """Clusters waiting for Tier 1 now (spec §4.1 KPI): heads in `queued_tier1`, synthetic left
+    out, NOT bounded by the range. `oldest_received_at` is `None` when none waits."""
+    count, oldest = conn.execute("""
+        SELECT count(*), min(received_at)
         FROM alerts
-        WHERE duplicate_of IS NULL AND NOT is_synthetic AND received_at >= now() - %s
-        """,
-        (window,),
-    ).fetchone()
-    return {
-        "by_status": {status: n for status, n in by_status},
-        "triage": {"ready": ready, "unavailable": unavailable, "pending": pending, "none": none},
-    }
+        WHERE duplicate_of IS NULL AND status = 'queued_tier1' AND NOT is_synthetic
+        """).fetchone()
+    return {"count": count, "oldest_received_at": oldest}
 
 
 def _cases_open(conn: Any) -> int:
@@ -185,14 +201,14 @@ def _health(conn: Any) -> dict[str, Any] | None:
 
 
 def _failed_jobs(conn: Any) -> list[dict[str, Any]]:
-    """The newest 50 failed jobs. `left()` cuts `last_error` in the database, so a huge error
-    text never leaves it; NULL stays NULL."""
+    """The 50 failed jobs whose last attempt is newest (module docstring). `left()` cuts
+    `last_error` in the database, so a huge error text never leaves it; NULL stays NULL."""
     rows = conn.execute(
         """
         SELECT job_id, job_type, subject_id, attempts, left(last_error, %s), locked_at, created_at
         FROM jobs
         WHERE status = 'failed'
-        ORDER BY created_at DESC, job_id DESC
+        ORDER BY COALESCE(locked_at, created_at) DESC, job_id DESC
         LIMIT %s
         """,
         (_ERROR_CHARS, _FAILED_JOBS_LIMIT),
@@ -264,6 +280,7 @@ def api_overview(
         ("by_source", lambda: _by_source(conn, window)),
         ("top_agents", lambda: _top_agents(conn, window)),
         ("funnel", lambda: _funnel(conn, window)),
+        ("waiting", lambda: _waiting(conn)),
         ("cases_open", lambda: _cases_open(conn)),
         ("health", lambda: _health(conn)),
         ("failed_jobs", lambda: _failed_jobs(conn)),
