@@ -15,10 +15,12 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 import openai
 
+from app.infra import settings
 from app.infra.config import Config
 from app.infra.errors import PermanentError, TransientError
 
@@ -40,7 +42,9 @@ class LLMTimeout(TransientError):
 
 
 class LLMBudgetExceeded(PermanentError):
-    """`spent_usd() >= LLM_MONTHLY_USD_CAP`, checked before this attempt opened a socket."""
+    """`spent_usd() >= LLM_MONTHLY_USD_CAP`, checked before this attempt opened a socket — or
+    the limits could not be read (`settings.SettingsUnavailable`, DEC-200 item 3), which is
+    treated the same way: no socket, and ① and ② record `stopped_by='cap'`."""
 
 
 class LLMPermanent(PermanentError):
@@ -116,7 +120,14 @@ def _classify_attempt(exc: Exception) -> str:
 class DeepSeekAdapter:
     """One chat completion the §7.5 way: `json_object`, `LLM_THINKING` as `extra_body`,
     a wall-clock deadline around the SDK call, two retries on network/5xx, the monthly
-    cap checked before any socket opens."""
+    cap checked before any socket opens.
+
+    `limits` (P11-T03) is where the cap and the default deadline come from: a callable the
+    adapter calls once per attempt, before any socket. The two worker call sites pass
+    `partial(settings.effective_limits, conn, cfg)`, so an admin's change on the web is seen
+    on the next attempt and a read that fails stops the call (`SettingsUnavailable` →
+    `LLMBudgetExceeded`, fail closed). `None` means the `.env` view, `from_config(cfg)` — the
+    eval harness, which has no `settings` table."""
 
     def __init__(
         self,
@@ -124,6 +135,7 @@ class DeepSeekAdapter:
         *,
         client: Any | None = None,
         spent_usd: Callable[[], float] = lambda: 0.0,
+        limits: Callable[[], settings.Limits] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         log: Callable[[dict], None] | None = None,
@@ -135,11 +147,13 @@ class DeepSeekAdapter:
             else openai.OpenAI(
                 api_key=cfg.LLM_API_KEY,
                 base_url=cfg.LLM_BASE_URL,
-                timeout=cfg.LLM_TIMEOUT_S,
+                # the SDK's own default only: `_call_once` passes the per-call deadline
+                timeout=settings.from_config(cfg).timeout_s,
                 max_retries=0,
             )
         )
         self._spent_usd = spent_usd
+        self._limits = limits if limits is not None else partial(settings.from_config, cfg)
         self._sleep = sleep
         self._clock = clock
         self._log = log
@@ -159,14 +173,18 @@ class DeepSeekAdapter:
             )
 
         resolved_model = model or self._cfg.LLM_MODEL_PROPOSER
-        deadline_s = timeout_s or self._cfg.LLM_TIMEOUT_S
         attempts_allowed = 1 + self._cfg.LLM_RETRY
 
         for attempt in range(1, attempts_allowed + 1):
-            if self._spent_usd() >= self._cfg.LLM_MONTHLY_USD_CAP:
-                raise LLMBudgetExceeded(
-                    f"spent_usd() >= LLM_MONTHLY_USD_CAP={self._cfg.LLM_MONTHLY_USD_CAP}"
-                )
+            # Once per attempt, before any socket: an admin's change is seen by the next
+            # attempt, and limits that cannot be read stop it — nothing falls back to `.env`.
+            try:
+                limits = self._limits()
+            except settings.SettingsUnavailable as exc:
+                raise LLMBudgetExceeded("limits unreadable — fail closed") from exc
+            if self._spent_usd() >= limits.cap_usd:
+                raise LLMBudgetExceeded(f"spent_usd() >= LLM_MONTHLY_USD_CAP={limits.cap_usd}")
+            deadline_s = timeout_s or limits.timeout_s
             started = self._clock()
             try:
                 response = self._call_once(

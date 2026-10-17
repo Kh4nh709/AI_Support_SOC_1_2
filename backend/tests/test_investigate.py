@@ -22,13 +22,10 @@ import hashlib
 import itertools
 import json
 import re
-import shutil
-import subprocess
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from types import SimpleNamespace
 
 import psycopg
@@ -50,6 +47,7 @@ from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 
 from tests.fakes.llm import FakeLLM
+from tests.scratch_db import scratch_database
 
 pytestmark = []  # this file mixes db and non-db tests (test_dossier.py's precedent)
 
@@ -1269,6 +1267,109 @@ def test_llm_budget_exceeded_writes_row_and_completes_without_raising(db, monkey
     assert rows[0][1] is None
 
 
+class _NoSocketClient:
+    """An OpenAI-SDK-shaped client for the REAL `DeepSeekAdapter` that must never be called:
+    every `create` is recorded in `calls` and fails (which would show as a `permanent` row)."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    def _create(self, **kwargs):
+        self.calls.append(kwargs)
+        raise AssertionError("a model call was made")
+
+
+def _real_adapter_over(monkeypatch, client) -> None:
+    """`run_investigate_job(adapter=None)` builds a `DeepSeekAdapter` itself — this keeps that
+    construction (its `spent_usd=` and `limits=` wiring) and only swaps the SDK client."""
+    real = tier2_investigate.DeepSeekAdapter
+    monkeypatch.setattr(
+        tier2_investigate, "DeepSeekAdapter", lambda cfg, **kw: real(cfg, client=client, **kw)
+    )
+
+
+def _undo_on_a_fresh_connection(dsn, *statements: tuple[str, tuple]) -> None:
+    """The restore after a test that had to commit for real: the statements run on a connection
+    of their own, so they do not depend on the test's `db` connection still being alive (and,
+    having rolled `db` back first, nothing it holds blocks them). A `lock_timeout` makes a
+    blocked restore fail loudly instead of hanging the session."""
+    conn = psycopg.connect(dsn)
+    try:
+        conn.execute("SET lock_timeout = '10s'")
+        for statement, params in statements:
+            conn.execute(statement, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _release(db) -> None:
+    """Let go of what `db` holds before the restore — and survive a `db` that is already gone."""
+    try:
+        db.rollback()
+    except psycopg.Error:
+        pass
+
+
+@pytest.mark.db
+def test_unreadable_limits_stop_the_run_as_cap_with_no_model_call(db, _test_database, monkeypatch):
+    """P11-T03 / DEC-200 item 3: the `settings` table is missing (code deployed before
+    `make migrate`). The job runs under REPEATABLE READ, so the table is renamed away with a
+    real commit (and put back in `finally`, on a connection of its own) rather than dropped
+    inside the job's transaction. Nothing falls back to `.env`: ② is `stopped_by='cap'` with no
+    result, the real adapter opened no socket, and the row was still written after the failed
+    read (the savepoint)."""
+    _enable_llm(monkeypatch)
+    _user, case_id, _head = _build_case_with_head(db)
+    client = _NoSocketClient()
+    _real_adapter_over(monkeypatch, client)
+    db.execute("ALTER TABLE settings RENAME TO settings_p11t03_away")
+    db.commit()
+    try:
+        tier2_investigate.run_investigate_job(db, _job(case_id))  # adapter=None: production
+        rows = _rows(db, case_id)
+    finally:
+        _release(db)
+        _undo_on_a_fresh_connection(
+            _test_database, ("ALTER TABLE settings_p11t03_away RENAME TO settings", ())
+        )
+
+    assert client.calls == []
+    assert len(rows) == 1
+    assert rows[0][5] == "cap"
+    assert rows[0][1] is None
+
+
+@pytest.mark.db
+def test_a_web_cap_below_the_spend_stops_the_run_as_cap_with_no_model_call(
+    db, _test_database, monkeypatch
+):
+    """The cap the admin saved on the web, not the `.env` one, gates ②: 5 USD spent is under
+    the `.env` cap (30) and over the saved one (1)."""
+    _enable_llm(monkeypatch)
+    user_id, case_id, _head = _build_case_with_head(db)
+    client = _NoSocketClient()
+    _real_adapter_over(monkeypatch, client)
+    monkeypatch.setattr(tier2_investigate, "month_spend_usd", lambda conn: 5.0)
+    db.execute(
+        "INSERT INTO settings (key, value, updated_by) VALUES ('LLM_MONTHLY_USD_CAP', 1, %s)",
+        (user_id,),
+    )
+    db.commit()  # the job starts a fresh REPEATABLE READ transaction: the row must be committed
+    try:
+        tier2_investigate.run_investigate_job(db, _job(case_id))
+        rows = _rows(db, case_id)
+    finally:
+        _release(db)
+        _undo_on_a_fresh_connection(
+            _test_database, ("DELETE FROM settings WHERE updated_by = %s", (user_id,))
+        )
+
+    assert client.calls == []
+    assert len(rows) == 1 and rows[0][5] == "cap"
+
+
 @pytest.mark.db
 def test_llm_permanent_writes_row_and_completes_without_raising(db, monkeypatch):
     _enable_llm(monkeypatch)
@@ -1584,6 +1685,74 @@ def test_analyze_429_over_quota_and_commits_only_on_the_two_successes(client, db
     assert [r[0] for r in rows] == [case_a, case_b]
 
 
+def _spy_commit_and_rollback(db, monkeypatch) -> tuple[list[str], list[str]]:
+    """`db.commit`/`db.rollback` replaced by recorders (hard rule 5): nothing a route does
+    here is ever really committed, and a route's own `rollback()` cannot undo the test's
+    fixtures."""
+    commits: list[str] = []
+    rollbacks: list[str] = []
+    monkeypatch.setattr(db, "commit", lambda: commits.append("commit"))
+    monkeypatch.setattr(db, "rollback", lambda: rollbacks.append("rollback"))
+    return commits, rollbacks
+
+
+def _set_web_limit(db, key: str, value: int, user_id: str) -> None:
+    db.execute(
+        "INSERT INTO settings (key, value, updated_by) VALUES (%s, %s, %s)", (key, value, user_id)
+    )
+
+
+@pytest.mark.db
+def test_analyze_quota_follows_a_web_limit_lower_than_the_env_one(client, db, monkeypatch):
+    """P11-T03: the `.env` quota is 2 (this file's `client` fixture); the admin saved 1."""
+    _commits, _rollbacks = _spy_commit_and_rollback(db, monkeypatch)
+    case_a, case_b = _make_case(db, client.user_id), _make_case(db, client.user_id)
+    _set_web_limit(db, "ANALYZE_QUOTA_PER_USER_DAY", 1, client.user_id)
+
+    first = client.http.post(f"/api/tier2/cases/{case_a}/analyze")
+    second = client.http.post(f"/api/tier2/cases/{case_b}/analyze")
+
+    assert (first.status_code, second.status_code) == (202, 429)
+    assert second.json()["detail"] == "analyze quota exceeded for today"
+
+
+@pytest.mark.db
+def test_analyze_quota_follows_a_web_limit_higher_than_the_env_one(client, db, monkeypatch):
+    _spy_commit_and_rollback(db, monkeypatch)
+    cases = [_make_case(db, client.user_id) for _ in range(4)]
+    _set_web_limit(db, "ANALYZE_QUOTA_PER_USER_DAY", 3, client.user_id)  # `.env` says 2
+
+    statuses = [client.http.post(f"/api/tier2/cases/{case}/analyze").status_code for case in cases]
+
+    assert statuses == [202, 202, 202, 429]
+
+
+@pytest.mark.db
+def test_analyze_is_503_when_the_limits_cannot_be_read_and_enqueues_nothing(
+    client, db, monkeypatch
+):
+    """Fail closed (DEC-200 item 3): no `settings` table. The quota cannot be checked, so the
+    run is refused — not allowed on the `.env` quota — with a body the page can read, and
+    nothing is enqueued, written or committed."""
+    case_id = _make_case(db, client.user_id)
+    db.execute("DROP TABLE settings")  # rolled back with the test's transaction
+    commits, rollbacks = _spy_commit_and_rollback(db, monkeypatch)
+
+    resp = client.http.post(f"/api/tier2/cases/{case_id}/analyze")
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == {"reason": "limits_unavailable"}
+    assert commits == []
+    assert rollbacks
+    assert db.execute("SELECT 1").fetchone() == (1,)  # the savepoint kept the transaction usable
+    jobs = db.execute("SELECT count(*) FROM jobs WHERE subject_id = %s", (case_id,)).fetchone()[0]
+    quota_rows = db.execute(
+        "SELECT count(*) FROM audit_events WHERE event_type = 'case.analyzed' AND subject_id = %s",
+        (case_id,),
+    ).fetchone()[0]
+    assert (jobs, quota_rows) == (0, 0)
+
+
 @pytest.mark.db
 @pytest.mark.parametrize(
     "concluded_status", ["concluded_fp", "concluded_policy_violation", "confirmed_incident"]
@@ -1742,35 +1911,23 @@ def test_get_run_admin_role_is_also_allowed(client, db):
 # B1 through the real worker — POST, claim, handler, finish_job, retry, GET
 # ===========================================================================
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-_SCRATCH_DBNAME = "soc_p5t04_r1_scratch"
-
 
 @pytest.fixture
 def scratch_db():
     """A throwaway, freshly migrated database (`test_g7_llm_off.py`'s precedent): the
     real worker commits between claims, and `llm_runs` / `audit_events` / `jobs` are
     tables `test_schema_v3_017.py` assumes are empty in the shared session database, so a
-    test that must really commit them cannot use it."""
-    if shutil.which("psql") is None or shutil.which("createdb") is None:
-        pytest.skip("psql/createdb not on PATH — cannot build the scratch database")
-    subprocess.run(["dropdb", "--if-exists", _SCRATCH_DBNAME], check=True, capture_output=True)
-    subprocess.run(["createdb", _SCRATCH_DBNAME], check=True, capture_output=True)
-    dsn = f"postgresql:///{_SCRATCH_DBNAME}"
-    result = subprocess.run(
-        ["bash", "scripts/migrate.sh", dsn],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, f"scratch migrate failed:\n{result.stderr}"
-    conn = psycopg.connect(dsn)
-    try:
-        yield conn
-    finally:
-        conn.close()
-        subprocess.run(["dropdb", "--if-exists", _SCRATCH_DBNAME], check=False, capture_output=True)
+    test that must really commit them cannot use it.
+
+    Built by `tests/scratch_db.py`, which names it from TEST_DATABASE_URL's own name
+    (`<name>_p5t04_r1_test`), so two runs on one server — a Coder's and a Reviewer's, each on
+    its own DSN — cannot drop each other's database (it used to be one fixed name)."""
+    with scratch_database("p5t04_r1") as dsn:
+        conn = psycopg.connect(dsn)
+        try:
+            yield conn
+        finally:
+            conn.close()
 
 
 @pytest.fixture
