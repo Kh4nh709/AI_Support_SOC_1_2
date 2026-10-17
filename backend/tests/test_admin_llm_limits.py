@@ -13,6 +13,8 @@ Every test runs inside the `db` fixture's transaction and is rolled back: the ov
 
 from __future__ import annotations
 
+import threading
+import time
 import uuid
 from dataclasses import replace
 
@@ -374,6 +376,86 @@ def test_the_change_holds_a_lock_until_the_transaction_ends(client, db, _test_da
         other.close()
 
     assert got is False
+
+
+def test_a_second_put_waits_for_the_first_and_reads_the_limits_only_after_it(_test_database):
+    """Pins the ORDER of the lock and the read, which the test above (the lock is held at the
+    end) cannot: request A holds the lock and has upserted 50 without committing; request B asks
+    for 70, and must wait for the lock BEFORE it reads. When A commits, B's one event is
+    `{old: 50, new: 70}` — not `old: 30`, the value B would have read with the read first.
+
+    Real connections and real commits, on committed data (the `db` fixture's one open
+    transaction cannot show two requests). Request B writes nothing for good: its connection
+    is rolled back after its event has been read. Red step: move the lock after the read."""
+    dsn = _test_database
+    setup = psycopg.connect(dsn)
+    a_id, _ = _make_user(setup, display_name="A")
+    b_id, b_username = _make_user(setup, display_name="B")
+    setup.commit()
+    seen: dict = {}
+
+    def get_conn():
+        conn = psycopg.connect(dsn)
+        try:
+            yield conn
+            seen["events"] = conn.execute(
+                "SELECT payload FROM audit_events WHERE event_type = 'admin.settings_changed' "
+                "AND actor_id = %s",
+                (b_id,),
+            ).fetchall()
+        finally:
+            conn.rollback()  # B's rows and event are never committed
+            conn.close()
+
+    def waiting_on_an_advisory_lock() -> bool:
+        (count,) = setup.execute(
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted "
+            "AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
+        ).fetchone()
+        return count > 0
+
+    main.app.dependency_overrides[deps.get_conn] = get_conn
+    main.app.dependency_overrides[deps.get_config] = lambda: _CFG
+    main.app.dependency_overrides[deps.current_user] = lambda: Claims(
+        user_id=b_id, username=b_username, role="admin", iat=0.0, exp=0.0
+    )
+    a = psycopg.connect(dsn)
+    answer: dict = {}
+    try:
+        a.execute("SELECT pg_advisory_xact_lock(hashtext('admin.llm.limits'))")
+        a.execute(
+            "INSERT INTO settings (key, value, updated_by) VALUES ('LLM_MONTHLY_USD_CAP', 50, %s)",
+            (a_id,),
+        )
+
+        def request_b() -> None:
+            answer["resp"] = TestClient(main.app).put(URL, json={"cap_usd": 70})
+
+        thread = threading.Thread(target=request_b)
+        thread.start()
+        deadline = time.monotonic() + 15
+        while not waiting_on_an_advisory_lock() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert waiting_on_an_advisory_lock(), "request B never reached the lock"
+        a.commit()  # A is done: B may go on
+        thread.join(15)
+        assert not thread.is_alive()
+        setup.rollback()
+
+        assert answer["resp"].status_code == 200, answer["resp"].text
+        assert [row[0] for row in seen["events"]] == [
+            {"changes": [{"key": "LLM_MONTHLY_USD_CAP", "old": 50, "new": 70}]}
+        ]
+    finally:
+        a.rollback()
+        a.close()
+        for dep in (deps.get_conn, deps.get_config, deps.current_user):
+            main.app.dependency_overrides.pop(dep, None)
+        setup.rollback()
+        setup.execute("DELETE FROM settings WHERE updated_by IN (%s, %s)", (a_id, b_id))
+        setup.execute("DELETE FROM users WHERE user_id IN (%s, %s)", (a_id, b_id))
+        setup.commit()
+        setup.close()
 
 
 # ── validation ────────────────────────────────────────────────────────────────────────────
