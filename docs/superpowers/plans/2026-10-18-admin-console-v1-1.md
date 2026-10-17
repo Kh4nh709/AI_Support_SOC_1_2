@@ -255,9 +255,10 @@ def effective_limits(conn: psycopg.Connection, cfg: Config) -> Limits: ...  # ra
   - `by_source`: `{rows: [{source, alerts, heads}], rejected}`.
   - `top_agents`: `[{agent_name, alerts}]`, at most 5.
   - `funnel`: `{by_status: {status: n}, triage: {ready, unavailable, pending, none}}`.
+  - `waiting`: `{count, oldest_received_at}` — heads in `queued_tier1`, not synthetic, not limited by the range (added in P11-T05 fix round 1).
   - `cases_open`: `int`.
   - `health`: `{checked_at, ok, checks}`, or `null` when no row exists yet.
-  - `failed_jobs`: `[{job_id, job_type, subject_id, attempts, last_error, locked_at, created_at}]`, at most 50.
+  - `failed_jobs`: `[{job_id, job_type, subject_id, attempts, last_error, locked_at, created_at}]`, at most 50, ordered by the last attempt (`COALESCE(locked_at, created_at) DESC, job_id DESC`).
   - `inventory`: `{assets, identities, iocs, loaded_at}`.
 - `POST /api/admin/jobs/{job_id}/retry` (`job_id: int`):
   - `200 {job_id, status: "pending"}`;
@@ -408,7 +409,7 @@ Each page task has the same five steps:
 
 | Task | Page | Its states (AdminStates section) |
 |---|---|---|
-| P11-T11 | `OverviewPage.tsx`, `/admin/overview` | KPI tiles; by day; funnel; by source; top agents; health with failing first; failed jobs with retry dialog, `409 not_failed`/`already_queued`, empty; inventory with reload dialog, result counts and warnings, 422 file errors; one block failing alone; range selector; empty range |
+| P11-T11 | `OverviewPage.tsx`, `/admin/overview` | KPI tiles (the waiting tile reads `waiting`; the API lists only days and statuses that occur, so zero-fill; `errors[].error` is `timeout` or `query_failed`); by day; funnel; by source; top agents; health with failing first; failed jobs with retry dialog, `409 not_failed`/`already_queued`, empty; inventory with reload dialog, result counts and warnings, 422 file errors; one block failing alone; range selector; empty range |
 | P11-T12 | `UsersPage.tsx`, `/admin/users` | table with "chưa đăng nhập", locked until; row actions by state; role change dialog; deactivate dialog; reset password dialog (12 chars, repeat, own-account warning); unlock dialog; `409 last_active_admin` and `self_change` texts; own row's controls disabled; create form errors (409 taken, 422s); search with no result; role → function matrix |
 | P11-T13 | `LlmPage.tsx`, `/admin/llm` | tiles with ≥ 80 % amber and ≥ 100 % red stopped notice; by pipeline and role; quota "24 giờ gần nhất" with exhausted user; recent calls linking to alert or case; no calls; limits form with sources, 422 at the field, confirm dialog listing old → new only, the below-spent warning, fail-closed read-only panel; tool calls 0 sentence |
 | P11-T14 | `RulesPage.tsx`, `/admin/rules` | six hard blocks; table with chips and width warning against `width_threshold_pct`; toggle dialog; 404 on toggle; create in two steps with condition builder from the whitelist (`autoclose._WHITELIST`, copied as a typed table and pinned by a test against the backend list); preview, samples linking to `/alerts/:id`; tally when 0; 422 at the condition; "Tạo rule" only for the last previewed conditions |

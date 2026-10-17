@@ -333,9 +333,10 @@ The changes to the frozen contracts are listed in §5.9 and recorded by DEC-200.
   - `by_source`: alerts and heads per `source`; `rejected` from `rejected_alerts`.
   - `top_agents`: five.
   - `funnel`: counts by alert status, plus `triage_coverage` (`ready`, `unavailable`, `pending` over heads).
+  - `waiting`: `{count, oldest_received_at}`, heads in `queued_tier1`, not synthetic, NOT limited by the range (what waits now); `oldest_received_at` is `null` when none waits. It feeds the KPI "clusters waiting for Tier 1, with the oldest" (P11-T05 review, Minor 4).
   - `cases_open`.
   - `health`: the newest `system_health` row, `{checked_at, ok, checks}` (`infra/health.py`).
-  - `failed_jobs`: at most 50 rows with `status='failed'`, as `job_id, job_type, subject_id, attempts, last_error` (truncated to 200 characters) and `locked_at`, newest first.
+  - `failed_jobs`: at most 50 rows with `status='failed'`, as `job_id, job_type, subject_id, attempts, last_error` (truncated to 200 characters), `locked_at` and `created_at`, ordered by the last attempt (`COALESCE(locked_at, created_at) DESC`), so a job retried and failed again comes first.
   - `inventory`: active assets, identities and IoCs, and `max(loaded_at)`.
 - **`POST /api/admin/jobs/{job_id}/retry`** is already in §6.4, and v1.1 implements it.
   - Only a `failed` job is retried: `status='pending'`, `attempts=0`, `scheduled_at=now()`, `locked_at=NULL`.
