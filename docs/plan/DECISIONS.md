@@ -3347,3 +3347,25 @@ Decision:
   6. **Base.** v1.0 was not closed on 18/10: P10-T13 and P10-T17 had finished but were not merged, and Director 1 was offline. P10-T17's branch (`worktree-agent-a78f2124e8255304a`, tip `577ef18`) holds P10-T13's approved tip and P10-T17 with its fix round 1. The scoped re-review had said "ready to merge after P10-T13"; the Director re-read fix round 1 (`24ac3df`, `0b35556`, `bd80a2f`) on 18/10 and found it correct. `director/admin-v1-1` starts from `577ef18`, so fast-forwarding `main` to it lands P10-T13, P10-T17 and P11 together.
   7. **Process for P11.** The Director builds every task in its own worktree without subagents. Each task has its red steps and suites, and its diff is re-read before the next. A whole-branch review closes the build and is repeated on its own fixes until it finds nothing. The Owner fast-forwards `main`, runs `make migrate`, rebuilds `ui`, and restarts `app` and `worker`.
 Supersedes: DEC-161's "the Jinja admin pages stay" (they are retired by P11-T19) · DEC-151's one-Coder-one-Reviewer rule, for P11 only (item 7)
+
+## DEC-201 · 2026-10-18 · P11's code is written by Coder subagents (Sonnet 5.5 xhigh) and checked by independent Reviewer subagents, one pair per task; the Director only manages — it dispatches, merges, re-checks and keeps STATE and the DECs
+Scope: **process** (P11)
+Decided by: **the Owner, 18/10**, while P11-T02 was being started: "Task nào code nên đưa sub-agent code và sub-agent review độc lập. Bạn chỉ nên là người quản trị." — every coding task goes to a Coder subagent and an independent Reviewer subagent; the Director is the manager only.
+Drafted by: Director (Opus 5.5)
+Propagated to: spec §9 · plan header · STATE phase P11 · `docs/plan/tasks/P11/` (one report and one review per task)
+Decision:
+  1. **Per task:**
+     - one Coder subagent (`coder-sonnet55`: Sonnet 5.5, xhigh) in its own isolated worktree, which first fast-forwards to the director tip;
+     - then one Reviewer subagent that did not write the code. It reads the diff against the spec and the plan, re-runs the red steps and the suites on the Coder's tip in its own worktree, and gives APPROVE or CHANGES.
+     - CHANGES goes back to the same Coder, and the same Reviewer re-reviews.
+  2. **The Director:**
+     - writes the briefs;
+     - creates `task/P11-Txx` at dispatch;
+     - merges an approved branch into `director/admin-v1-1` with its own mutation check and the suites;
+     - commits the Reviewer's verdict as `P11-Txx.review.md`;
+     - keeps STATE.
+     - It writes no product code.
+  3. **At most four agents at once**, the session-limit rule.
+  4. **Every agent's test database** is its own `soc_p11tXX_<role>_test` on the Director's scratch PostgreSQL 16 (127.0.0.1:55611, trust, TCP only). Never the live cluster.
+  5. **P11-T01**, already built by the Director before this ruling, gets the same independent review before it counts as done.
+Supersedes: DEC-200 item 7 (the Director builds alone)

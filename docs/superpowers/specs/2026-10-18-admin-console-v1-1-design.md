@@ -506,10 +506,12 @@ Baseline on that tip (18/10, scratch PostgreSQL 16):
 | 3 (one task per page) | overview · users · LLM · rules · digest · labels · audit |
 | 4 | e2e suite · §8 retirement · runbook · whole-branch review |
 
-**Process (the Owner, 18/10: "tự làm và review liên tục").**
-- The Director builds every task in its own worktree, without subagents.
-- Each task has its red steps and its suites, and its diff is re-read before the next task starts.
-- A whole-branch review closes the build. Each finding is fixed and re-checked until none is left.
+**Process (DEC-201, the Owner, 18/10: "Task nào code nên đưa sub-agent code và sub-agent review độc lập. Bạn chỉ nên là người quản trị").**
+- Each coding task goes to a Coder subagent (Sonnet 5.5, xhigh) in its own worktree, then to an independent Reviewer subagent. CHANGES goes back to the same Coder.
+- The Director only manages: it writes the briefs, merges approved branches with its own mutation check and the suites, commits each verdict, and keeps STATE.
+- At most four agents run at once.
+- A whole-branch review by an independent Reviewer closes the build. Its findings go back to Coders until none is left.
+- P11-T01 was built by the Director before this ruling (it began as "tự làm và review liên tục", DEC-200 item 7), and it gets the same independent review.
 - The Owner fast-forwards `main` to `director/admin-v1-1`, runs `make migrate`, rebuilds `ui`, and restarts `app` and `worker`.
 - **Cut order if the build slips:**
   1. axe, kept as a report instead of a gate;

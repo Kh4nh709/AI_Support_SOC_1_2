@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **This build:** the Owner chose on 18/10 that the Director builds it alone and reviews continuously ("tự làm và review liên tục"). It runs natively in the Director's worktree `../AI_Support_SOC_1_2-admin-v1-1`, branch `director/admin-v1-1`, with no subagents.
+> **This build (DEC-201):** subagent-driven. One Coder subagent (Sonnet 5.5, xhigh, isolated worktree) and one independent Reviewer subagent per task. The Director manages from `../AI_Support_SOC_1_2-admin-v1-1`, branch `director/admin-v1-1`: it dispatches, merges and keeps STATE. P11-T01 was built by the Director before DEC-201 and is reviewed the same way.
 
 **Goal:** The admin does all of their work in the React UI on port 8080. This covers seven admin pages, their backend routes, and the retirement of the last Jinja pages and the session cookie.
 
