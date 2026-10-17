@@ -3,9 +3,10 @@
 `POST /admin/digest/{alert_id}/review`, over P5-T08's `app.tier1.digest`.
 
 All logic is `app.tier1.digest` (`build`, `review`) and `app.ingest.autoclose`
-(`load_rules`, read-only, for the two-empty-states distinction); the page
+(`load_rules`, read-only, for the two-empty-states distinction); this module
 writes no SQL of its own (P5-T09 scoped `tier1/digest.py` out; the JSON half
-below adds `review_details` there and has two one-line reads of its own).
+below needs three small reads that live there: `review_details`,
+`rules_enabled` and `alert_status`).
 
 **Days are local (P5-T08 review round 1 · S4).** `build`/`unreviewed_count`
 take `day` as a date string in `cfg.DISPLAY_TZ`. The default day is
@@ -467,14 +468,6 @@ class ReviewOut(BaseModel):
     reopened: bool
 
 
-def _rules_enabled(conn: psycopg.Connection) -> bool:
-    """Whether any `autoclose_rules` row is enabled: the page's "no rule yet" empty state."""
-    (enabled,) = conn.execute(
-        "SELECT EXISTS (SELECT 1 FROM autoclose_rules WHERE enabled)"
-    ).fetchone()
-    return enabled
-
-
 @router.get("/api/admin/digest")
 def api_digest(conn: Conn, cfg: Cfg, claims: Admin, day: str | None = None) -> DigestOut:
     tz = cfg.DISPLAY_TZ
@@ -488,7 +481,7 @@ def api_digest(conn: Conn, cfg: Cfg, claims: Admin, day: str | None = None) -> D
     return DigestOut(
         day=resolved,
         today=today,
-        rules_enabled=_rules_enabled(conn),
+        rules_enabled=digest.rules_enabled(conn),
         rows=[DigestRowOut.of(r, infos.get(r.alert_id)) for r in rows],
     )
 
@@ -521,9 +514,8 @@ def api_review(conn: Conn, cfg: Cfg, claims: Admin, alert_id: AlertId, body: Rev
         # Not on that day's digest. An alert that exists in another status is the stale-page
         # conflict (module docstring); anything else — unknown, synthetic, closed on another
         # day — is a 404.
-        current = conn.execute("SELECT status FROM alerts WHERE alert_id = %s", (alert_id,))
-        status = current.fetchone()
-        if status is not None and status[0] != "auto_closed":
+        status = digest.alert_status(conn, alert_id)
+        if status is not None and status != "auto_closed":
             raise _refuse(409, "not_auto_closed")
         raise _refuse(404, "not_in_digest")
 

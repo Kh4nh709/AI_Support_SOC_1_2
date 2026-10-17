@@ -220,6 +220,23 @@ def review_details(conn: psycopg.Connection, alert_ids: Sequence[str]) -> dict[s
     }
 
 
+def rules_enabled(conn: psycopg.Connection) -> bool:
+    """Whether any `autoclose_rules` row is enabled (the digest page's "no rule yet" empty
+    state, P11-T07). `ix_autoclose_rules_enabled` is a partial index on exactly this."""
+    (enabled,) = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM autoclose_rules WHERE enabled)"
+    ).fetchone()
+    return enabled
+
+
+def alert_status(conn: psycopg.Connection, alert_id: str) -> str | None:
+    """`alerts.status` of `alert_id`, or `None` when there is no such alert (P11-T07: it tells
+    "this alert is not on that day's digest" from "it is no longer auto-closed"). A plain read,
+    no lock: `review` takes the lock and judges the status again."""
+    row = conn.execute("SELECT status FROM alerts WHERE alert_id = %s", (alert_id,)).fetchone()
+    return None if row is None else row[0]
+
+
 def review(
     conn: psycopg.Connection,
     alert_id: str,
