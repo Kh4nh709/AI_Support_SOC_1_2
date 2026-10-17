@@ -51,10 +51,15 @@ def _insert(db, key: str, value: object, updated_by: object) -> None:
 
 
 def test_019_records_itself(db):
+    """The row is there in the shared test database. That is all this test can show: the
+    database is built from `schema.sql`, and `migrate.sh` records every version named in that
+    file's source banners, so the row exists even when the 019 FILE has no
+    `INSERT INTO schema_migrations`. Whether the file records itself is the upgrade test's job
+    (its third `migrate.sh` run)."""
     row = db.execute(
         "SELECT 1 FROM schema_migrations WHERE version = '019_admin_console'"
     ).fetchone()
-    assert row is not None, "019 did not record itself; migrate.sh would re-apply it"
+    assert row is not None, "019_admin_console is not in the test database's schema_migrations"
 
 
 def test_settings_has_the_four_columns_with_their_types(db):
@@ -153,6 +158,11 @@ def test_019_applies_on_a_database_at_018_the_way_make_migrate_runs_it(tmp_path)
         if not path.name.startswith("019_"):
             shutil.copy(path, at_018)
     shutil.copy(schema_dir / "build_schema.py", at_018)
+    # Counts come from the files, never a literal: the next migration must not turn this red.
+    stems = {path.stem for path in schema_dir.glob("[0-9][0-9][0-9]_*.sql")}
+    total = len(stems)  # 19 today
+    before = total - 1  # every migration before 019 (18 today)
+    assert len(list(at_018.glob("[0-9][0-9][0-9]_*.sql"))) == before
     built = subprocess.run(
         ["python3", str(at_018 / "build_schema.py")], capture_output=True, text=True, check=False
     )
@@ -165,7 +175,10 @@ def test_019_applies_on_a_database_at_018_the_way_make_migrate_runs_it(tmp_path)
         admin.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(dbname)))
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(dbname)))
         runs = []
-        for mig_dir in (at_018, schema_dir):
+        # Three runs: the base at 018; the real tree (applies 019); the real tree again, which
+        # is where a 019 that forgot its `INSERT INTO schema_migrations` shows (it would be
+        # re-applied and stop on "relation settings already exists").
+        for mig_dir in (at_018, schema_dir, schema_dir):
             run = subprocess.run(
                 ["bash", "scripts/migrate.sh", str(dsn)],
                 cwd=conftest.REPO_ROOT,
@@ -178,10 +191,14 @@ def test_019_applies_on_a_database_at_018_the_way_make_migrate_runs_it(tmp_path)
             assert run.returncode == 0, f"migrate.sh exit {run.returncode}:\n{run.stderr}"
             runs.append(run.stdout)
         assert "019_admin_console" not in runs[0]
-        assert "migrate: 0 applied, 18 already present" in runs[0]
+        assert f"migrate: 0 applied, {before} already present" in runs[0]
         assert "migrate: applying 019_admin_console" in runs[1]
-        assert "migrate: 1 applied, 18 already present" in runs[1]
+        assert f"migrate: 1 applied, {before} already present" in runs[1]
+        assert f"migrate: 0 applied, {total} already present" in runs[2]
+        assert "migrate: applying" not in runs[2]
         with psycopg.connect(dsn) as conn:
+            recorded = {r[0] for r in conn.execute("SELECT version FROM schema_migrations")}
+            assert recorded == stems
             user_id = conn.execute(
                 "INSERT INTO users (user_id, username, display_name, role, password_hash) "
                 "VALUES (gen_random_uuid(), 'p11t01-up', 'up', 'admin', 'x') RETURNING user_id"
