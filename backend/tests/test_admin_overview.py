@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import threading
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -880,6 +882,129 @@ def test_a_second_retry_of_the_same_job_is_409_not_failed(client) -> None:
     assert again.status_code == 409
     assert again.json() == {"detail": {"reason": "not_failed"}}
     assert len(_events(db, "admin.job_retried", str(job_id))) == 1
+
+
+# ---------------------------------------------------------------------------
+# Retry under concurrency — COMMITTED data, a request on its own connection in a thread,
+# and a second connection that holds an uncommitted write the request has to wait for
+# ---------------------------------------------------------------------------
+
+
+def _wait_for_a_backend_blocked_on_a_lock(dsn: Any, timeout: float = 10.0) -> None:
+    """Poll `pg_stat_activity` (autocommit: a fresh snapshot each time) until one backend of
+    this database waits for a lock: the request is then parked behind the other connection."""
+    deadline = time.monotonic() + timeout
+    with psycopg.connect(dsn, autocommit=True) as watcher:
+        while time.monotonic() < deadline:
+            (waiting,) = watcher.execute(
+                "SELECT count(*) FROM pg_stat_activity "
+                "WHERE wait_event_type = 'Lock' AND datname = current_database()"
+            ).fetchone()
+            if waiting:
+                return
+            time.sleep(0.02)
+    raise AssertionError("the retry request never blocked on the other connection's lock")
+
+
+def _retry_in_a_thread(dsn: Any, job_id: int) -> tuple[threading.Thread, dict[str, Any]]:
+    """`POST .../retry` as an admin on a connection of its own (committed on success, rolled
+    back on error, exactly as `deps.get_conn` does it). `out` gets the `response`, or the
+    `error` an unhandled server exception raised."""
+    claims = Claims(user_id=str(uuid.uuid4()), username="a", role="admin", iat=0.0, exp=0.0)
+    cfg = config.load()
+
+    def own_connection():
+        conn = psycopg.connect(dsn)
+        try:
+            yield conn
+        except BaseException:
+            conn.rollback()
+            raise
+        else:
+            conn.commit()
+        finally:
+            conn.close()
+
+    main.app.dependency_overrides[deps.get_conn] = own_connection
+    main.app.dependency_overrides[deps.current_user] = lambda: claims
+    main.app.dependency_overrides[deps.get_config] = lambda: cfg
+    out: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            out["response"] = TestClient(main.app).post(f"/api/admin/jobs/{job_id}/retry")
+        except Exception as exc:  # noqa: BLE001 - the test reports whatever the app raised
+            out["error"] = exc
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    return thread, out
+
+
+@pytest.mark.db
+def test_two_retries_of_one_job_cannot_both_pass_the_for_update_lock(scratch_dsn) -> None:
+    """Another admin's retry is mid-flight (its UPDATE is not committed yet). This request
+    must wait on the job row, then see `pending` and answer 409 `not_failed`: without
+    `FOR UPDATE` it would read the stale `failed` row, retry it a second time and write a
+    second `admin.job_retried`."""
+    with psycopg.connect(scratch_dsn, autocommit=True) as setup:
+        job_id = _job(setup, subject_id="alert-lock", last_error="old failure")
+    holder = psycopg.connect(scratch_dsn)
+    try:
+        holder.execute(
+            "UPDATE jobs SET status = 'pending', attempts = 0 WHERE job_id = %s", (job_id,)
+        )
+        thread, out = _retry_in_a_thread(scratch_dsn, job_id)
+        try:
+            _wait_for_a_backend_blocked_on_a_lock(scratch_dsn)
+        finally:
+            holder.commit()  # the other admin's retry lands; the request may go on
+            thread.join(timeout=15)
+        assert not thread.is_alive()
+        assert "error" not in out, out.get("error")
+        assert out["response"].status_code == 409
+        assert out["response"].json() == {"detail": {"reason": "not_failed"}}
+        with psycopg.connect(scratch_dsn, autocommit=True) as check:
+            assert _events(check, "admin.job_retried", str(job_id)) == []
+            assert _job_row(check, job_id)[:2] == ("pending", 0)
+    finally:
+        _clear_overrides()
+        holder.close()
+        with psycopg.connect(scratch_dsn, autocommit=True) as cleanup:
+            cleanup.execute("DELETE FROM jobs WHERE job_id = %s", (job_id,))
+
+
+@pytest.mark.db
+def test_a_sibling_enqueued_between_the_check_and_the_update_is_409_not_a_500(scratch_dsn) -> None:
+    """The real race, not a stub of it: `enqueue` has inserted the sibling but not committed,
+    so the sibling check cannot see it; the UPDATE waits on the unique index, and when the
+    sibling commits the index refuses it. The route turns that into a 409."""
+    with psycopg.connect(scratch_dsn, autocommit=True) as setup:
+        failed = _job(setup, job_type="triage", subject_id="alert-race-real", last_error="old")
+    holder = psycopg.connect(scratch_dsn)
+    sibling = None
+    try:
+        sibling = _job(holder, job_type="triage", subject_id="alert-race-real", status="pending")
+        thread, out = _retry_in_a_thread(scratch_dsn, failed)
+        try:
+            _wait_for_a_backend_blocked_on_a_lock(scratch_dsn)
+        finally:
+            holder.commit()  # the sibling is now live; the parked UPDATE is refused
+            thread.join(timeout=15)
+        assert not thread.is_alive()
+        assert "error" not in out, out.get("error")
+        assert out["response"].status_code == 409
+        assert out["response"].json() == {"detail": {"reason": "already_queued"}}
+        with psycopg.connect(scratch_dsn, autocommit=True) as check:
+            assert _job_row(check, failed)[:3] == ("failed", 3, "old")
+            assert _events(check, "admin.job_retried", str(failed)) == []
+    finally:
+        _clear_overrides()
+        holder.close()
+        with psycopg.connect(scratch_dsn, autocommit=True) as cleanup:
+            cleanup.execute(
+                "DELETE FROM jobs WHERE job_id = ANY(%s)", ([failed, sibling or failed],)
+            )
 
 
 # ---------------------------------------------------------------------------
