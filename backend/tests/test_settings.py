@@ -9,12 +9,15 @@ What is pinned here:
   silent `.env` fallback;
 - the read runs in a savepoint, so a failed read leaves the CALLER'S transaction usable,
   including when the `settings` table does not exist (code deployed before `make migrate`);
+- the timeout is bounded by the job lock and clamped on read (DEC-202);
 - no reader outside `infra/config.py` and `infra/settings.py` touches the three `Config`
-  attributes (the guard test at the bottom).
+  attributes, names the three keys as string literals in code, or reaches for `from_config`
+  (the `.env` view) beyond the adapter's constructor (the guard tests at the bottom).
 """
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import pathlib
 import re
@@ -368,9 +371,68 @@ def test_a_read_in_a_transaction_that_is_already_failed_is_settings_unavailable(
 
 _APP = pathlib.Path(__file__).resolve().parents[1] / "app"
 _ALLOWED = {_APP / "infra" / "config.py", _APP / "infra" / "settings.py"}
+_KEY_NAMES = frozenset(KEYS)
 _ATTRIBUTE_ACCESS = re.compile(
     r"\.(LLM_MONTHLY_USD_CAP|ANALYZE_QUOTA_PER_USER_DAY|LLM_TIMEOUT_S)\b"
 )
+#: `from_config` is the `.env` view of the limits: the one reader of it outside the accessor is
+#: the adapter's own constructor (the SDK client's default timeout, and the default `limits`
+#: callable when none is wired). The scope is `(file, enclosing class, enclosing function)`.
+_FROM_CONFIG_ALLOWED = {("llm/adapter.py", "DeepSeekAdapter", "__init__")}
+
+
+class _Scan(ast.NodeVisitor):
+    """Where, in code (never in a docstring or a comment), a module reaches for the limits other
+    than through `effective_limits`: a reference to `from_config`, or one of the three key names
+    as a string literal (`getattr(cfg, "LLM_TIMEOUT_S")`, `cfg.dump()["LLM_MONTHLY_USD_CAP"]`)."""
+
+    def __init__(self, tree: ast.AST) -> None:
+        # a bare string statement is documentation: every docstring is one
+        self._docs = {
+            id(n.value)
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Expr)
+            and isinstance(n.value, ast.Constant)
+            and isinstance(n.value.value, str)
+        }
+        self._classes: list[str] = []
+        self._functions: list[str] = []
+        self.hits: list[tuple[int, str]] = []  # (line, "from_config" | "key literal")
+        self.from_config_scopes: list[tuple[int, str, str]] = []
+
+    def _from_config(self, lineno: int) -> None:
+        cls = self._classes[-1] if self._classes else ""
+        fn = self._functions[-1] if self._functions else ""
+        self.from_config_scopes.append((lineno, cls, fn))
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._classes.append(node.name)
+        self.generic_visit(node)
+        self._classes.pop()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._functions.append(node.name)
+        self.generic_visit(node)
+        self._functions.pop()
+
+    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if node.id == "from_config":
+            self._from_config(node.lineno)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if node.attr == "from_config":
+            self._from_config(node.lineno)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if any(alias.name == "from_config" for alias in node.names):
+            self._from_config(node.lineno)
+
+    def visit_Constant(self, node: ast.Constant) -> None:
+        if isinstance(node.value, str) and node.value in _KEY_NAMES and id(node) not in self._docs:
+            self.hits.append((node.lineno, "key literal"))
 
 
 def _offenders(files: dict[pathlib.Path, str]) -> list[str]:
@@ -378,13 +440,27 @@ def _offenders(files: dict[pathlib.Path, str]) -> list[str]:
     for path, text in sorted(files.items()):
         if path in _ALLOWED:
             continue
-        for number, line in enumerate(text.splitlines(), start=1):
+        rel = path.relative_to(_APP).as_posix()
+        lines = text.splitlines()
+        for number, line in enumerate(lines, start=1):
             if _ATTRIBUTE_ACCESS.search(line):
-                found.append(f"{path.relative_to(_APP)}:{number}: {line.strip()}")
-    return found
+                found.append(f"{rel}:{number}: {line.strip()}")
+        tree = ast.parse(text)
+        scan = _Scan(tree)
+        scan.visit(tree)
+        for number, kind in scan.hits:
+            found.append(f"{rel}:{number}: {kind}: {lines[number - 1].strip()}")
+        for number, cls, fn in scan.from_config_scopes:
+            if (rel, cls, fn) not in _FROM_CONFIG_ALLOWED:
+                found.append(f"{rel}:{number}: from_config: {lines[number - 1].strip()}")
+    return sorted(found)
 
 
-def test_no_attribute_access_to_the_three_keys_outside_config_and_settings():
+def test_no_reader_of_the_three_limits_outside_config_and_settings():
+    """Every reader asks `effective_limits`. Flagged anywhere in `backend/app` but the config and
+    the accessor: the attribute access of a key (`cfg.LLM_TIMEOUT_S`), a key name as a string
+    literal in code, and a reference to `from_config` — the `.env` view, which bypasses the
+    web value and the fail-closed read — outside the adapter's constructor."""
     files = {p: p.read_text(encoding="utf-8") for p in _APP.rglob("*.py")}
 
     assert _offenders(files) == []
@@ -399,3 +475,55 @@ def test_the_guard_does_catch_an_attribute_access():
         "llm/some_new_reader.py:1: deadline = cfg.LLM_TIMEOUT_S",
         "llm/some_new_reader.py:2: other = cfg.LLM_MONTHLY_USD_CAP + 1",
     ]
+
+
+def test_the_guard_catches_from_config_outside_the_adapters_constructor():
+    """The Reviewer's M6: `settings.from_config(self._cfg).timeout_s` as the deadline reads the
+    `.env` value past the web limit, and no behaviour test notices when the two are equal."""
+    adapter = _APP / "llm" / "adapter.py"
+    source = (
+        "class DeepSeekAdapter:\n"
+        "    def __init__(self, cfg):\n"
+        "        self._limits = partial(settings.from_config, cfg)\n"  # allowed
+        "        self._timeout = settings.from_config(cfg).timeout_s\n"  # allowed
+        "    def complete(self):\n"
+        "        deadline = settings.from_config(self._cfg).timeout_s\n"  # M6
+    )
+    elsewhere = _APP / "web" / "routers" / "some_route.py"
+    elsewhere_source = "from app.infra.settings import from_config\nlimits = from_config(cfg)\n"
+
+    assert _offenders({adapter: source, elsewhere: elsewhere_source}) == [
+        "llm/adapter.py:6: from_config: deadline = settings.from_config(self._cfg).timeout_s",
+        "web/routers/some_route.py:1: from_config: from app.infra.settings import from_config",
+        "web/routers/some_route.py:2: from_config: limits = from_config(cfg)",
+    ]
+
+
+def test_the_guard_catches_a_key_name_as_a_string_literal_in_code():
+    fake = _APP / "web" / "routers" / "some_route.py"
+    source = (
+        "timeout = getattr(cfg, 'LLM_TIMEOUT_S')\n"
+        "cap = cfg.dump()['LLM_MONTHLY_USD_CAP']\n"
+        "row = {'ANALYZE_QUOTA_PER_USER_DAY': 3}\n"
+    )
+
+    assert _offenders({fake: source}) == [
+        "web/routers/some_route.py:1: key literal: timeout = getattr(cfg, 'LLM_TIMEOUT_S')",
+        "web/routers/some_route.py:2: key literal: cap = cfg.dump()['LLM_MONTHLY_USD_CAP']",
+        "web/routers/some_route.py:3: key literal: row = {'ANALYZE_QUOTA_PER_USER_DAY': 3}",
+    ]
+
+
+def test_the_guard_ignores_docstrings_comments_and_messages_that_merely_mention_a_key():
+    fake = _APP / "llm" / "some_module.py"
+    source = (
+        '"""The module reads LLM_TIMEOUT_S the right way."""\n'
+        "\n"
+        "\n"
+        "def f(limits):\n"
+        '    """Uses `LLM_MONTHLY_USD_CAP` from the limits."""\n'
+        "    # LLM_TIMEOUT_S is the accessor's business\n"
+        '    return f"spent_usd() >= LLM_MONTHLY_USD_CAP={limits.cap_usd}"\n'
+    )
+
+    assert _offenders({fake: source}) == []
