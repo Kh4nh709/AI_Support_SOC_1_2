@@ -266,7 +266,8 @@ def test_add_note_unknown_case_raises(db):
 
 def test_add_note_writes_no_audit_event(db):
     """Design note 2: a note is not a decision — `case.note_added` does not
-    exist in the 27 names, and this function writes none."""
+    exist in the 28 names (016's 27 and 019's `admin.settings_changed`), and this function
+    writes none."""
     user = _make_user(db)
     case_id = _make_case(db, user)
     before = db.execute(

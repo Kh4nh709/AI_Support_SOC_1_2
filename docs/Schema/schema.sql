@@ -1533,10 +1533,15 @@ INSERT INTO schema_migrations (version) VALUES ('018_alerts_notify');
 --      three keys, each a positive integer (all three are `int` in `infra/config.py`), and always
 --      who changed it. The application reads it through ONE accessor, `infra/settings.py`, which
 --      is fail-closed: a read that fails stops the model calls, it never falls back to `.env`.
---      `app_rw` reaches it through 017's `ALTER DEFAULT PRIVILEGES`, as every table created
---      after 017 by the migrator does. The bounds the web route enforces (cap 1–1000, quota
---      1–200, timeout 10–600) are the route's; the database only refuses what no value of any
---      bound could make sense of (zero, negative, an unknown key).
+--      019 grants `app_rw` SELECT, INSERT and UPDATE on it itself. The rights do not depend on
+--      017's `ALTER DEFAULT PRIVILEGES`: those bind only the role that ran 017 (`soc` on
+--      Compose), so a table created by any other applying role would leave `app_rw` with
+--      nothing, and the fail-closed accessor would then stop every model call (P11-T01 review,
+--      finding 5). No DELETE in the grant: nothing deletes a setting. (Where the applier is the
+--      role 017's defaults name, as on Compose, those defaults add DELETE as well; no code
+--      uses it.) The bounds the web route enforces (cap 1–1000, quota 1–200, timeout 10–600)
+--      are the route's; the database only refuses what no value of any bound could make sense
+--      of (zero, negative, an unknown key).
 --
 --   2. `users.last_login_at` — stamped by `infra/auth.login` on a successful login, in the same
 --      UPDATE that resets `failed_logins` (spec §5.1). NULL for an account that never signed in;
@@ -1560,6 +1565,7 @@ CREATE TABLE settings (
   )),
   CONSTRAINT ck_settings_value_duong CHECK (value > 0)
 );
+GRANT SELECT, INSERT, UPDATE ON settings TO app_rw;
 
 ALTER TABLE users ADD COLUMN last_login_at timestamptz;
 

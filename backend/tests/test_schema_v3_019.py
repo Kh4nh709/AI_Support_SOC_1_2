@@ -3,8 +3,9 @@
 Three changes, each on trial here against the migrated test database:
 
 * `settings`: the three LLM limits the admin may edit on the web. Only those three keys, only a
-  positive integer, and always who changed it. `app_rw` reads and writes it (migration 017's
-  default privileges cover a table created after it).
+  positive integer, and always who changed it. `app_rw` reads and writes it: 019 grants SELECT,
+  INSERT and UPDATE itself, whichever role applies it (017's default privileges bind only the
+  role that ran 017).
 * `users.last_login_at`: stamped by `infra/auth.login` on success (P11-T02), NULL until then.
 * `admin.settings_changed`: the 28th name of `ck_audit_event_type`.
 
@@ -15,9 +16,11 @@ fixture rolls everything back at the end.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import uuid
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -31,6 +34,8 @@ from tests.scratch_db import _with_db
 pytestmark = pytest.mark.db
 
 KEYS = ("LLM_MONTHLY_USD_CAP", "ANALYZE_QUOTA_PER_USER_DAY", "LLM_TIMEOUT_S")
+SCHEMA_DIR = conftest.REPO_ROOT / "docs" / "Schema"
+MIGRATION_FILES = "[0-9][0-9][0-9]_*.sql"
 
 
 def _user(db) -> str:
@@ -50,11 +55,50 @@ def _insert(db, key: str, value: object, updated_by: object) -> None:
     )
 
 
+def _schema_without_019(tmp_path: Path) -> Path:
+    """A copy of `docs/Schema` without 019, with a `schema.sql` that the real `build_schema.py`
+    builds from what is left: a tree as it stood at 018."""
+    at_018 = tmp_path / "Schema"
+    at_018.mkdir()
+    for path in SCHEMA_DIR.glob(MIGRATION_FILES):
+        if not path.name.startswith("019_"):
+            shutil.copy(path, at_018)
+    shutil.copy(SCHEMA_DIR / "build_schema.py", at_018)
+    built = subprocess.run(
+        ["python3", str(at_018 / "build_schema.py")], capture_output=True, text=True, check=False
+    )
+    if built.returncode != 0:
+        pytest.fail(f"build_schema.py exit {built.returncode}:\n{built.stderr}")
+    return at_018
+
+
+def _migrate(dsn, mig_dir, **env: str) -> str:
+    """`scripts/migrate.sh` against `dsn` over the tree `mig_dir`; its stdout. Plain values
+    only, and not `assert run.returncode == 0`: pytest explains that by printing `run` whole,
+    argument list and DSN included (P5-T12; conftest.py does the same)."""
+    run = subprocess.run(
+        ["bash", "scripts/migrate.sh", str(dsn)],
+        cwd=conftest.REPO_ROOT,
+        env={**os.environ, "MIGRATIONS_DIR": str(mig_dir), **env},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if run.returncode != 0:
+        pytest.fail(f"migrate.sh exit {run.returncode}:\n{run.stderr}")
+    return run.stdout
+
+
 def test_019_records_itself(db):
+    """The row is there in the shared test database. That is all this test can show: the
+    database is built from `schema.sql`, and `migrate.sh` records every version named in that
+    file's source banners, so the row exists even when the 019 FILE has no
+    `INSERT INTO schema_migrations`. Whether the file records itself is the upgrade test's job
+    (its third `migrate.sh` run)."""
     row = db.execute(
         "SELECT 1 FROM schema_migrations WHERE version = '019_admin_console'"
     ).fetchone()
-    assert row is not None, "019 did not record itself; migrate.sh would re-apply it"
+    assert row is not None, "019_admin_console is not in the test database's schema_migrations"
 
 
 def test_settings_has_the_four_columns_with_their_types(db):
@@ -77,6 +121,16 @@ def test_settings_accepts_each_of_the_three_keys(db, key):
     assert value == 30
 
 
+def test_ck_settings_key_admits_exactly_the_three_keys(db):
+    """The refused keys below are four samples; a fourth key admitted by the CHECK would leave
+    them all refused. The names are read from the constraint itself."""
+    (definition,) = db.execute(
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+        "WHERE conname = 'ck_settings_key' AND conrelid = 'settings'::regclass"
+    ).fetchone()
+    assert sorted(re.findall(r"'([^']*)'", definition)) == sorted(KEYS), definition
+
+
 @pytest.mark.parametrize("key", ["JWT_SECRET", "LLM_API_KEY", "llm_monthly_usd_cap", ""])
 def test_settings_refuses_any_other_key(db, key):
     user_id = _user(db)
@@ -92,6 +146,10 @@ def test_settings_refuses_a_value_that_is_not_positive(db, value):
 
 
 def test_settings_refuses_a_change_nobody_made(db):
+    # A statement first: it opens the fixture's outer transaction, so the two blocks below are
+    # savepoints. As the first statement, `db.transaction()` would be the outermost one and COMMIT
+    # a stray row into the session database whenever the schema stopped refusing it.
+    _user(db)
     with pytest.raises(psycopg.errors.NotNullViolation), db.transaction():
         _insert(db, "LLM_TIMEOUT_S", 90, None)
     with pytest.raises(psycopg.errors.ForeignKeyViolation), db.transaction():
@@ -146,17 +204,12 @@ def test_019_applies_on_a_database_at_018_the_way_make_migrate_runs_it(tmp_path)
     )
     if shutil.which("psql") is None:
         pytest.skip("psql is not installed")
-    schema_dir = conftest.REPO_ROOT / "docs" / "Schema"
-    at_018 = tmp_path / "Schema"
-    at_018.mkdir()
-    for path in schema_dir.glob("[0-9][0-9][0-9]_*.sql"):
-        if not path.name.startswith("019_"):
-            shutil.copy(path, at_018)
-    shutil.copy(schema_dir / "build_schema.py", at_018)
-    built = subprocess.run(
-        ["python3", str(at_018 / "build_schema.py")], capture_output=True, text=True, check=False
-    )
-    assert built.returncode == 0, built.stderr
+    at_018 = _schema_without_019(tmp_path)
+    # Counts come from the files, never a literal: the next migration must not turn this red.
+    stems = {path.stem for path in SCHEMA_DIR.glob(MIGRATION_FILES)}
+    total = len(stems)  # 19 today
+    before = total - 1  # every migration before 019 (18 today)
+    assert len(list(at_018.glob(MIGRATION_FILES))) == before
 
     dbname = f"{conftest._dbname(session)}_019up_test"
     dsn = _with_db(session, dbname)
@@ -164,24 +217,19 @@ def test_019_applies_on_a_database_at_018_the_way_make_migrate_runs_it(tmp_path)
     try:
         admin.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(dbname)))
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(dbname)))
-        runs = []
-        for mig_dir in (at_018, schema_dir):
-            run = subprocess.run(
-                ["bash", "scripts/migrate.sh", str(dsn)],
-                cwd=conftest.REPO_ROOT,
-                env={**os.environ, "MIGRATIONS_DIR": str(mig_dir)},
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            # Plain values only: never `result` whole, it carries the DSN (P5-T12).
-            assert run.returncode == 0, f"migrate.sh exit {run.returncode}:\n{run.stderr}"
-            runs.append(run.stdout)
+        # Three runs: the base at 018; the real tree (applies 019); the real tree again, which
+        # is where a 019 that forgot its `INSERT INTO schema_migrations` shows (it would be
+        # re-applied and stop on "relation settings already exists").
+        runs = [_migrate(dsn, mig_dir) for mig_dir in (at_018, SCHEMA_DIR, SCHEMA_DIR)]
         assert "019_admin_console" not in runs[0]
-        assert "migrate: 0 applied, 18 already present" in runs[0]
+        assert f"migrate: 0 applied, {before} already present" in runs[0]
         assert "migrate: applying 019_admin_console" in runs[1]
-        assert "migrate: 1 applied, 18 already present" in runs[1]
+        assert f"migrate: 1 applied, {before} already present" in runs[1]
+        assert f"migrate: 0 applied, {total} already present" in runs[2]
+        assert "migrate: applying" not in runs[2]
         with psycopg.connect(dsn) as conn:
+            recorded = {r[0] for r in conn.execute("SELECT version FROM schema_migrations")}
+            assert recorded == stems
             user_id = conn.execute(
                 "INSERT INTO users (user_id, username, display_name, role, password_hash) "
                 "VALUES (gen_random_uuid(), 'p11t01-up', 'up', 'admin', 'x') RETURNING user_id"
@@ -203,6 +251,99 @@ def test_019_applies_on_a_database_at_018_the_way_make_migrate_runs_it(tmp_path)
     finally:
         admin.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(dbname)))
         admin.close()
+
+
+def test_app_rw_holds_settings_when_019_is_applied_by_another_role(tmp_path):
+    """Review finding 5. 017's `ALTER DEFAULT PRIVILEGES` binds only the role that ran 017, so a
+    `settings` table created by any other role would give `app_rw` nothing, and the fail-closed
+    accessor (P11-T03) would then stop every model call. 019 therefore grants the rights itself.
+
+    The scenario, on a scratch database: 001-018 are applied as a scratch role (NOSUPERUSER, the
+    database's owner; `PGOPTIONS=-c role=...`), so 017's default privileges name that role; 019 is
+    applied as the session role, a superuser, which owns `settings` and has no default ACL here.
+    """
+    session = conftest.require_test_dsn(
+        os.environ.get("TEST_DATABASE_URL", conftest.DEFAULT_TEST_DATABASE_URL)
+    )
+    if shutil.which("psql") is None:
+        pytest.skip("psql is not installed")
+    try:
+        admin = psycopg.connect(conftest._maintenance_dsn(session), autocommit=True)
+    except psycopg.OperationalError:
+        pytest.skip(f"TEST_DATABASE_URL unreachable: {conftest.redact_dsn(session)}")
+    (superuser,) = admin.execute(
+        "SELECT rolsuper FROM pg_roles WHERE rolname = current_user"
+    ).fetchone()
+    if not superuser:
+        admin.close()
+        pytest.skip(
+            "TEST_DATABASE_URL's role is not a superuser: the test creates a scratch role and "
+            "applies 019 as the session role over tables that role does not own"
+        )
+
+    at_018 = _schema_without_019(tmp_path)
+    base = conftest._dbname(session)
+    dbname = f"{base}_019own_test"
+    owner = f"{base}_019own"  # roles are cluster-global: named from the session database's name
+    dsn = _with_db(session, dbname)
+    try:
+        admin.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(dbname)))
+        admin.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(owner)))
+        # `app_rw` is cluster-global and 017 creates it only when absent; the scratch owner may not.
+        admin.execute(
+            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_rw') "
+            "THEN CREATE ROLE app_rw NOLOGIN; END IF; END $$"
+        )
+        admin.execute(
+            sql.SQL("CREATE ROLE {} NOSUPERUSER NOCREATEDB NOCREATEROLE NOLOGIN").format(
+                sql.Identifier(owner)
+            )
+        )
+        admin.execute(
+            sql.SQL("CREATE DATABASE {} OWNER {}").format(
+                sql.Identifier(dbname), sql.Identifier(owner)
+            )
+        )
+        _migrate(dsn, at_018, PGOPTIONS=f"-c role={owner}")
+        assert "migrate: applying 019_admin_console" in _migrate(dsn, SCHEMA_DIR)
+        with psycopg.connect(dsn) as conn:
+            # The premise, so the test cannot pass through default privileges: `settings` belongs
+            # to the applier of 019, and 017's default ACL names the scratch role, not the applier.
+            (applier,) = conn.execute("SELECT current_user").fetchone()
+            (table_owner,) = conn.execute(
+                "SELECT tableowner FROM pg_tables WHERE tablename = 'settings'"
+            ).fetchone()
+            default_acl_roles = {
+                row[0]
+                for row in conn.execute("SELECT pg_get_userbyid(defaclrole) FROM pg_default_acl")
+            }
+            assert (table_owner, owner in default_acl_roles, applier in default_acl_roles) == (
+                applier,
+                True,
+                False,
+            )
+            held = {
+                privilege: conn.execute(
+                    "SELECT has_table_privilege('app_rw', 'settings', %s)", (privilege,)
+                ).fetchone()[0]
+                for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE")
+            }
+            # No DELETE, no TRUNCATE: nothing deletes a setting.
+            assert held == {
+                "SELECT": True,
+                "INSERT": True,
+                "UPDATE": True,
+                "DELETE": False,
+                "TRUNCATE": False,
+            }
+    finally:
+        try:
+            admin.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(dbname)))
+        finally:
+            try:
+                admin.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(owner)))
+            finally:
+                admin.close()
 
 
 def test_admin_settings_changed_is_the_28th_event_type(db):

@@ -39,6 +39,10 @@ REPO_ROOT = conftest.REPO_ROOT
 BACKUP = REPO_ROOT / "scripts" / "backup.sh"
 RESTORE = REPO_ROOT / "scripts" / "restore.sh"
 CRON = REPO_ROOT / "conf" / "soc-backup.cron"
+# One `schema_migrations` row per NNN_*.sql in docs/Schema — derived, never a literal, so the next
+# migration cannot leave a pin stale (test_conftest_helpers.py and test_credential_hygiene.py do
+# the same; P11-T01 review finding 1: two literals left at 18 went unseen behind the XML failures).
+MIGRATIONS = len(list((REPO_ROOT / "docs" / "Schema").glob("[0-9][0-9][0-9]_*.sql")))
 
 FIVE = ("alerts", "intake", "llm_runs", "jobs", "audit_events")
 # Port 9 (discard): nothing listens there, so a script that gets past a guard fails to connect.
@@ -494,7 +498,7 @@ def test_restore_refuses_a_non_empty_target_without_force(session_dsn, session_d
         assert rc == 0, out
         assert not _has_marker(target_dsn), "--force did not start from an empty database"
         printed = _printed_counts(out)
-        assert printed.get("schema_migrations") == 18, out
+        assert printed.get("schema_migrations") == MIGRATIONS, out
     finally:
         _drop(session_dsn, target)
 
@@ -521,7 +525,7 @@ def test_round_trip_restores_into_a_second_database(session_dsn, source_db, tmp_
         restored = _counts(target_dsn)
         assert printed == expected
         assert restored == expected
-        assert expected["schema_migrations"] == 18
+        assert expected["schema_migrations"] == MIGRATIONS
         seeded = {t: expected[t] for t in FIVE}
         assert seeded == {"alerts": 3, "intake": 4, "llm_runs": 2, "jobs": 5, "audit_events": 6}
         source_catalog = _catalog(source_db)
