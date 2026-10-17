@@ -15,6 +15,7 @@ fixture rolls everything back at the end.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -80,6 +81,16 @@ def test_settings_accepts_each_of_the_three_keys(db, key):
     _insert(db, key, 30, _user(db))
     (value,) = db.execute("SELECT value FROM settings WHERE key = %s", (key,)).fetchone()
     assert value == 30
+
+
+def test_ck_settings_key_admits_exactly_the_three_keys(db):
+    """The refused keys below are four samples; a fourth key admitted by the CHECK would leave
+    them all refused. The names are read from the constraint itself."""
+    (definition,) = db.execute(
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+        "WHERE conname = 'ck_settings_key' AND conrelid = 'settings'::regclass"
+    ).fetchone()
+    assert sorted(re.findall(r"'([^']*)'", definition)) == sorted(KEYS), definition
 
 
 @pytest.mark.parametrize("key", ["JWT_SECRET", "LLM_API_KEY", "llm_monthly_usd_cap", ""])
