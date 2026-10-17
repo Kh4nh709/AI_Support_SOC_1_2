@@ -804,7 +804,9 @@ def test_three_admins_demoting_in_a_ring_always_leave_one(dsn, sdb):
     assert _active_admins(sdb) == 1
 
 
-def test_the_last_active_admin_cannot_be_deactivated_by_the_same_race(dsn, sdb):
+def test_deactivating_the_last_active_admin_is_refused_once_the_other_one_is_gone(dsn, sdb):
+    """The `is_active` half of the guard, in sequence (the races above are on `role`): A has
+    deactivated B and committed; B's own call on A must then find A the last one."""
     _, a_id = _seed(sdb, "admin", prefix="race-c")
     _, b_id = _seed(sdb, "admin", prefix="race-d")
     _only_these_admins_active(sdb, {a_id, b_id})
