@@ -11,6 +11,10 @@ it issues its own `BEGIN`/`COMMIT`, and inside a request that would commit (or w
 transaction `deps.Conn` owns. The `error` is a short code, `timeout` or `query_failed`: never
 the driver's message, which can carry SQL text, and never a DSN.
 
+**The 3 s is per statement, not per section.** `statement_timeout` limits each SQL statement on
+its own. Every section is one statement except `by_source`, which reads `alerts` and then
+`rejected_alerts`, so that one section can take up to twice `SECTION_TIMEOUT` before it is cut.
+
 `SET LOCAL` inside a savepoint lasts until the end of the request's transaction unless the
 savepoint is rolled back, so a section's `3s` is still set while the next one runs: each section
 sets its own anyway, and nothing runs after the last one but the commit.
@@ -60,7 +64,8 @@ Admin = Annotated[Claims, Depends(require_admin)]
 
 logger = logging.getLogger(__name__)
 
-#: Every section's `SET LOCAL statement_timeout`, read when a section runs (a test shortens it).
+#: The `SET LOCAL statement_timeout` each section sets: a limit PER STATEMENT, not per section
+#: (`by_source` runs two statements). Read when a section runs, so a test can shorten it.
 SECTION_TIMEOUT = "3s"
 
 #: `?range=` -> the window. Anything else is a 422 from the `Literal` below.
@@ -147,31 +152,24 @@ def _top_agents(conn: Any, window: timedelta) -> list[dict[str, Any]]:
 
 
 def _funnel(conn: Any, window: timedelta) -> dict[str, Any]:
-    """Heads only: the status counts, then `triage_status` (`none` is a NULL one)."""
-    by_status = conn.execute(
+    """Heads only. One statement, grouped by `(status, triage_status)`: the status counts are the
+    sums over `triage_status`, the triage counts the sums over `status` (`none` is a NULL one)."""
+    rows = conn.execute(
         """
-        SELECT status, count(*)
+        SELECT status, triage_status, count(*)
         FROM alerts
         WHERE duplicate_of IS NULL AND NOT is_synthetic AND received_at >= now() - %s
-        GROUP BY status
+        GROUP BY status, triage_status
         """,
         (window,),
     ).fetchall()
-    ready, unavailable, pending, none = conn.execute(
-        """
-        SELECT count(*) FILTER (WHERE triage_status = 'ready'),
-               count(*) FILTER (WHERE triage_status = 'unavailable'),
-               count(*) FILTER (WHERE triage_status = 'pending'),
-               count(*) FILTER (WHERE triage_status IS NULL)
-        FROM alerts
-        WHERE duplicate_of IS NULL AND NOT is_synthetic AND received_at >= now() - %s
-        """,
-        (window,),
-    ).fetchone()
-    return {
-        "by_status": {status: n for status, n in by_status},
-        "triage": {"ready": ready, "unavailable": unavailable, "pending": pending, "none": none},
-    }
+    by_status: dict[str, int] = {}
+    triage = {"ready": 0, "unavailable": 0, "pending": 0, "none": 0}
+    for status, triage_status, n in rows:
+        by_status[status] = by_status.get(status, 0) + n
+        key = triage_status if triage_status is not None else "none"
+        triage[key] = triage.get(key, 0) + n
+    return {"by_status": by_status, "triage": triage}
 
 
 def _cases_open(conn: Any) -> int:

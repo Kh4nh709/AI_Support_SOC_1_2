@@ -732,6 +732,43 @@ def test_a_section_past_its_statement_timeout_is_reported_as_a_timeout(client, m
     assert body["inventory"]["assets"] == 1
 
 
+class _CountingConnection:
+    """Forwards `execute` to a real connection and counts the statements."""
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+        self.statements = 0
+
+    def execute(self, *args: Any, **kwargs: Any) -> Any:
+        self.statements += 1
+        return self._conn.execute(*args, **kwargs)
+
+
+_DAY = timedelta(hours=24)
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "name, args, statements",
+    [
+        ("_alerts_by_day", ("UTC", _DAY), 1),
+        ("_by_source", (_DAY,), 2),  # alerts, then rejected_alerts
+        ("_top_agents", (_DAY,), 1),
+        ("_funnel", (_DAY,), 1),
+        ("_cases_open", (), 1),
+        ("_health", (), 1),
+        ("_failed_jobs", (), 1),
+        ("_inventory", (), 1),
+    ],
+)
+def test_a_section_runs_one_statement_except_by_source(sdb, name, args, statements) -> None:
+    """`SECTION_TIMEOUT` is a limit per statement, not per section. The module says so and
+    names `by_source` as the one section that runs two; this pins both halves of that sentence."""
+    counting = _CountingConnection(sdb)
+    getattr(admin_overview, name)(counting, *args)
+    assert counting.statements == statements
+
+
 @pytest.mark.db
 def test_several_sections_can_fail_in_one_response(client, monkeypatch) -> None:
     tc, _db, _ = client
