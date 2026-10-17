@@ -263,12 +263,13 @@ def _password(value: Any) -> str:
 
 def _request_body(properties: dict[str, str], required: list[str]) -> dict[str, Any]:
     """OpenAPI text for a body this module reads itself (FastAPI cannot infer it)."""
-    schema = {
+    schema: dict[str, Any] = {
         "type": "object",
         "properties": {name: {"type": kind} for name, kind in properties.items()},
-        "required": required,
         "additionalProperties": False,
     }
+    if required:  # an empty `required` is not valid in every JSON Schema dialect
+        schema["required"] = required
     return {"requestBody": {"required": True, "content": {"application/json": {"schema": schema}}}}
 
 
@@ -298,16 +299,17 @@ def api_create_user(conn: Conn, claims: Admin, body: JsonObject) -> dict[str, st
     role = _role(body.get("role"))
     password = _password(body.get("password"))
     try:
-        with conn.transaction():  # a savepoint: the request's connection stays usable
-            user_id = auth.create_user(
-                conn,
-                username=username,
-                display_name=display_name,
-                role=role,
-                password=password,
-                actor_id=claims.user_id,
-            )
+        user_id = auth.create_user(
+            conn,
+            username=username,
+            display_name=display_name,
+            role=role,
+            password=password,
+            actor_id=claims.user_id,
+        )
     except errors.UniqueViolation as exc:
+        # The failed INSERT aborts the transaction; the raise below rolls the request back, and the
+        # user row, its audit row and nothing else were in it.
         if exc.diag.constraint_name != "users_username_key":
             raise
         raise HTTPException(status_code=409, detail={"reason": "username_taken"}) from exc

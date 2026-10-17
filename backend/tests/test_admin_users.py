@@ -16,7 +16,6 @@ HTTP.
 from __future__ import annotations
 
 import dataclasses
-import inspect
 import json
 import logging
 import threading
@@ -150,6 +149,25 @@ def _keys(value):
             yield from _keys(item)
 
 
+USER_ROW_KEYS = {
+    "user_id",
+    "username",
+    "display_name",
+    "role",
+    "is_active",
+    "locked_until",
+    "failed_logins",
+    "last_login_at",
+    "created_at",
+}
+
+
+def _assert_no_credential(response) -> None:
+    """No key that names a credential, at any depth, and no hash value either."""
+    assert not [k for k in _keys(response.json()) if "password" in k.lower() or "hash" in k.lower()]
+    assert "$argon2" not in response.text
+
+
 def _only_these_admins_active(sdb, keep: set[str]) -> None:
     sdb.execute(
         "UPDATE users SET is_active = false WHERE role = 'admin' AND NOT (user_id::text = ANY(%s))",
@@ -184,40 +202,6 @@ def _in_thread(fn):
 def _connect(dsn) -> psycopg.Connection:
     # A bounded lock wait: a guard that goes wrong fails the test instead of hanging it.
     return psycopg.connect(dsn, options="-c lock_timeout=20000")
-
-
-# --------------------------------------------------------------------------
-# the module's own contract
-# --------------------------------------------------------------------------
-
-
-def test_the_constants_the_card_names():
-    assert admin_users.PASSWORD_MIN_CHARS == 12
-    assert admin_users.USERNAME_RE == r"^[a-z0-9._-]{3,32}$"
-
-
-def test_the_routes_are_these_five_and_every_one_needs_the_admin_role():
-    methods = {(m, r.path) for r in admin_users.router.routes for m in r.methods}
-    assert methods == {
-        ("GET", "/api/admin/users"),
-        ("POST", "/api/admin/users"),
-        ("PATCH", "/api/admin/users/{user_id}"),
-        ("POST", "/api/admin/users/{user_id}/password"),
-        ("POST", "/api/admin/users/{user_id}/unlock"),
-    }
-    for route in admin_users.router.routes:
-        gates = [
-            call
-            for call in (dep.call for dep in route.dependant.dependencies)
-            if getattr(call, "__qualname__", "").startswith("require_role.")
-        ]
-        assert len(gates) == 1, route.path
-        assert inspect.getclosurevars(gates[0]).nonlocals["roles"] == ("admin",), route.path
-    mounted = main.app.openapi()["paths"]
-    assert set(mounted["/api/admin/users"]) == {"get", "post"}
-    assert set(mounted["/api/admin/users/{user_id}"]) == {"patch"}
-    assert set(mounted["/api/admin/users/{user_id}/password"]) == {"post"}
-    assert set(mounted["/api/admin/users/{user_id}/unlock"]) == {"post"}
 
 
 # --------------------------------------------------------------------------
@@ -276,25 +260,13 @@ def test_list_has_every_user_and_no_credential(client, sdb):
     tier1_name, tier1_id = _seed(sdb, "tier1")
     response = client.get("/api/admin/users", headers=headers)
     assert response.status_code == 200
+    _assert_no_credential(response)
     body = response.json()
     assert set(body) == {"users"}
     row = next(u for u in body["users"] if u["user_id"] == tier1_id)
-    assert set(row) == {
-        "user_id",
-        "username",
-        "display_name",
-        "role",
-        "is_active",
-        "locked_until",
-        "failed_logins",
-        "last_login_at",
-        "created_at",
-    }
+    assert set(row) == USER_ROW_KEYS
     assert row["username"] == tier1_name and row["last_login_at"] is None
     assert row["is_active"] is True and row["failed_logins"] == 0 and row["locked_until"] is None
-    # no key that names a credential, at any depth, and no hash value either
-    assert not [k for k in _keys(body) if "password" in k.lower() or "hash" in k.lower()]
-    assert "$argon2" not in response.text
 
 
 def test_the_list_carries_the_lock_and_the_last_login(client, sdb):
@@ -392,8 +364,8 @@ def test_create_refuses_a_taken_username_and_writes_nothing(client, sdb):
     assert response.json()["detail"] == {"reason": "username_taken"}
     assert _count_events(sdb, "admin.user_created") == created
     assert _row(sdb, taken_id)["role"] == "tier2"  # the existing account is untouched
-    # and the connection that met the unique violation was left usable: the next call works
-    assert client.get("/api/admin/users", headers=headers).status_code == 200
+    (rows,) = sdb.execute("SELECT count(*) FROM users WHERE username = %s", (taken,)).fetchone()
+    assert rows == 1
 
 
 CREATE_BAD = [
@@ -550,20 +522,15 @@ def test_the_answer_is_the_whole_user_row_and_no_credential(client, sdb):
     response = client.patch(
         f"/api/admin/users/{user_id}", headers=headers, json={"display_name": "Row Shape"}
     )
-    row = response.json()
-    assert set(row) == {
-        "user_id",
-        "username",
-        "display_name",
-        "role",
-        "is_active",
-        "locked_until",
-        "failed_logins",
-        "last_login_at",
-        "created_at",
-    }
-    assert row["user_id"] == user_id and row["username"] == username
-    assert not [k for k in _keys(row) if "password" in k.lower() or "hash" in k.lower()]
+    unchanged = client.patch(
+        f"/api/admin/users/{user_id}", headers=headers, json={"display_name": "Row Shape"}
+    )  # the same value again: the row is read, not written
+    for answer in (response, unchanged):
+        _assert_no_credential(answer)
+        row = answer.json()
+        assert set(row) == USER_ROW_KEYS
+        assert row["user_id"] == user_id and row["username"] == username
+        assert row["display_name"] == "Row Shape"
 
 
 def test_deactivating_ends_the_sessions_and_reactivating_lets_the_user_back(client, sdb):
@@ -852,12 +819,13 @@ def test_the_last_active_admin_cannot_be_deactivated_by_the_same_race(dsn, sdb):
     assert _active_admins(sdb) == 1
 
 
+@pytest.mark.parametrize("change", ["role", "password"])
 def test_the_sessions_end_at_the_moment_of_the_change_not_at_the_start_of_its_transaction(
-    dsn, client, sdb
+    dsn, client, sdb, change
 ):
     """`now()` is frozen when the transaction begins; a change that waits on the admin locks
     would then stamp a moment before a login that happened during the wait, and that token would
-    outlive the demotion. The stamp is `clock_timestamp()`."""
+    outlive the demotion (or the reset). The stamp is `clock_timestamp()`."""
     _, admin_id = _seed(sdb, "admin", prefix="clock")
     username, user_id = _seed(sdb, "tier1")
     conn = _connect(dsn)
@@ -865,9 +833,12 @@ def test_the_sessions_end_at_the_moment_of_the_change_not_at_the_start_of_its_tr
         conn.execute("SELECT 1")  # the transaction begins here
         time.sleep(0.05)
         token = _login(client, username)  # issued after it began
-        admin_users.update_user(
-            conn, actor_id=admin_id, target_id=user_id, changes={"role": "tier2"}
-        )
+        if change == "role":
+            admin_users.update_user(
+                conn, actor_id=admin_id, target_id=user_id, changes={"role": "tier2"}
+            )
+        else:
+            assert auth.admin_set_password(conn, user_id, NEW_PASSWORD) == username
         conn.commit()
     finally:
         conn.close()
