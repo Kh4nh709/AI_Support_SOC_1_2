@@ -181,7 +181,8 @@ def test_019_applies_on_a_database_at_018_the_way_make_migrate_runs_it(tmp_path)
     built = subprocess.run(
         ["python3", str(at_018 / "build_schema.py")], capture_output=True, text=True, check=False
     )
-    assert built.returncode == 0, built.stderr
+    if built.returncode != 0:
+        pytest.fail(f"build_schema.py exit {built.returncode}:\n{built.stderr}")
 
     dbname = f"{conftest._dbname(session)}_019up_test"
     dsn = _with_db(session, dbname)
@@ -202,8 +203,10 @@ def test_019_applies_on_a_database_at_018_the_way_make_migrate_runs_it(tmp_path)
                 text=True,
                 check=False,
             )
-            # Plain values only: never `result` whole, it carries the DSN (P5-T12).
-            assert run.returncode == 0, f"migrate.sh exit {run.returncode}:\n{run.stderr}"
+            # Plain values only, and not `assert run.returncode == 0`: pytest explains that by
+            # printing `run` whole, argument list and DSN included (P5-T12; conftest.py does the same).
+            if run.returncode != 0:
+                pytest.fail(f"migrate.sh exit {run.returncode}:\n{run.stderr}")
             runs.append(run.stdout)
         assert "019_admin_console" not in runs[0]
         assert f"migrate: 0 applied, {before} already present" in runs[0]
