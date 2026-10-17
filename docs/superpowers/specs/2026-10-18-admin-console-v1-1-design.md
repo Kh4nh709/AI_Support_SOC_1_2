@@ -282,7 +282,7 @@ The changes to the frozen contracts are listed in §5.9 and recorded by DEC-200.
     - `updated_at timestamptz NOT NULL DEFAULT now()`;
     - `updated_by uuid NOT NULL REFERENCES users(user_id)`.
 
-    All three keys are integers in `Config` today (`infra/config.py:156-164`). `app_rw` gets its rights from migration 017's default privileges; the card's test writes a setting as `app_rw` to prove it.
+    All three keys are integers in `Config` today (`infra/config.py:156-164`). 019 grants `SELECT, INSERT, UPDATE ON settings TO app_rw` explicitly. Migration 017's default privileges bind only the role that ran 017, so a different applying role would otherwise leave `app_rw` with nothing (P11-T01 review, finding 5). A test writes a setting as `app_rw` to prove it.
   - `ck_audit_event_type` gains `admin.settings_changed`. The set goes from 27 to 28 names. `audit/events.py`'s `EVENT_TYPES` and the context pack §6.1 list are updated together.
 - **Accessor `infra/settings.py`.**
   - `effective_limits(conn, cfg) -> Limits(cap_usd, quota_per_24h, timeout_s, source)`.
