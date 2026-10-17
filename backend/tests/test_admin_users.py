@@ -176,6 +176,11 @@ def _only_these_admins_active(sdb, keep: set[str]) -> None:
     sdb.commit()
 
 
+def _unlock(client, headers, user_id):
+    """`unlock` has no payload, but like every write of this module it needs the JSON type."""
+    return client.post(f"/api/admin/users/{user_id}/unlock", headers=headers, json={})
+
+
 def _active_admins(sdb) -> int:
     sdb.rollback()
     (count,) = sdb.execute(
@@ -454,17 +459,18 @@ def _create_text(**override) -> str:
         # a cross-site form post cannot say application/json: the cookie must not carry it
         (_create_text(password="leak-leak-leak-leak"), "text/plain"),
         (_create_text(password="leak-leak-leak-leak"), "application/x-www-form-urlencoded"),
+        # and a no-cors fetch with a Blob body sends no Content-Type at all
+        (_create_text(password="leak-leak-leak-leak"), None),
     ],
-    ids=["bad-json", "array", "null", "string", "empty", "text-plain", "form"],
+    ids=["bad-json", "array", "null", "string", "empty", "text-plain", "form", "no-content-type"],
 )
 def test_a_body_that_is_not_a_json_object_is_refused_and_never_echoed(
     client, sdb, content, content_type
 ):
     _, _, headers = _admin(client, sdb)
     created = _count_events(sdb, "admin.user_created")
-    response = client.post(
-        "/api/admin/users", headers={**headers, "Content-Type": content_type}, content=content
-    )
+    sent = dict(headers) if content_type is None else {**headers, "Content-Type": content_type}
+    response = client.post("/api/admin/users", headers=sent, content=content)
     assert response.status_code == 422
     assert response.json()["detail"] == {"field": "body", "reason": "invalid"}
     assert "leak" not in response.text
@@ -481,6 +487,137 @@ def test_a_field_the_route_does_not_take_is_refused_not_ignored(client, sdb):
     assert response.json()["detail"] == {"field": "body", "reason": "invalid"}
     assert "hunter2" not in response.text
     assert _count_events(sdb, "admin.user_created") == created
+
+
+BODY_INVALID = {"field": "body", "reason": "invalid"}
+
+
+def _cookie_session(client, sdb) -> str:
+    """Log an admin in so the client's jar holds `soc_session`, and return the admin's id. The
+    requests below carry that cookie and no `Authorization` header: the shape a browser sends."""
+    username, admin_id = _seed(sdb, "admin", prefix="cookie")
+    login = client.post("/api/auth/login", json={"username": username, "password": PASSWORD})
+    assert login.status_code == 200 and "soc_session" in client.cookies
+    return admin_id
+
+
+def _raw(client, method: str, path: str, content: str, content_type: str | None):
+    headers = {} if content_type is None else {"Content-Type": content_type}
+    request = client.build_request(method, path, content=content, headers=headers)
+    assert "authorization" not in request.headers  # the cookie alone signs this request in
+    assert "soc_session" in request.headers["cookie"]
+    assert ("content-type" in request.headers) is (content_type is not None)
+    return client.send(request)
+
+
+def _victim_calls(victim: str) -> dict[str, tuple[str, str, str]]:
+    return {
+        "create": ("POST", "/api/admin/users", _create_text()),
+        "update": ("PATCH", f"/api/admin/users/{victim}", '{"role": "admin"}'),
+        "reset": (
+            "POST",
+            f"/api/admin/users/{victim}/password",
+            json.dumps({"password": NEW_PASSWORD}),
+        ),
+        "unlock": ("POST", f"/api/admin/users/{victim}/unlock", "{}"),
+    }
+
+
+@pytest.mark.parametrize("call", ["create", "update", "reset", "unlock"])
+def test_a_request_with_no_content_type_is_refused_even_when_the_cookie_signs_it_in(
+    client, sdb, call
+):
+    """The `soc_session` cookie authenticates a request from any page on the same host, and a
+    no-cors `fetch` with a Blob body sends no Content-Type. FastAPI's own parsing refuses that
+    shape; this module reads bodies itself, so it must refuse it too — on every route that
+    changes something, `unlock` (which has no body to speak of) included."""
+    _cookie_session(client, sdb)
+    _, victim = _seed(sdb, "tier1")
+    sdb.execute("UPDATE users SET failed_logins = 4 WHERE user_id = %s", (victim,))
+    sdb.commit()
+    (hash_before,) = sdb.execute(
+        "SELECT password_hash FROM users WHERE user_id = %s", (victim,)
+    ).fetchone()
+    sdb.rollback()
+    created = _count_events(sdb, "admin.user_created")
+    updated = _count_events(sdb, "admin.user_updated")
+    method, path, content = _victim_calls(victim)[call]
+
+    refused = _raw(client, method, path, content, None)
+
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"] == BODY_INVALID
+    assert _count_events(sdb, "admin.user_created") == created
+    assert _count_events(sdb, "admin.user_updated") == updated
+    row = _row(sdb, victim)
+    assert (row["role"], row["failed_logins"], row["sessions_ended"]) == ("tier1", 4, False)
+    (hash_after,) = sdb.execute(
+        "SELECT password_hash FROM users WHERE user_id = %s", (victim,)
+    ).fetchone()
+    assert hash_after == hash_before
+    # the same request with the type is the one that goes through: the cookie did sign it in
+    accepted = _raw(client, method, path, content, "application/json")
+    assert accepted.status_code == {"create": 201, "update": 200}.get(call, 204), accepted.text
+
+
+@pytest.mark.parametrize("content_type", ["application/x-www-form-urlencoded", "text/plain", None])
+def test_unlock_refuses_a_form_post_and_a_post_with_no_type(client, sdb, content_type):
+    _cookie_session(client, sdb)
+    _, victim = _seed(sdb, "tier1")
+    sdb.execute("UPDATE users SET failed_logins = 4 WHERE user_id = %s", (victim,))
+    sdb.commit()
+    path = f"/api/admin/users/{victim}/unlock"
+    refused = _raw(client, "POST", path, "", content_type)
+    assert refused.status_code == 422 and refused.json()["detail"] == BODY_INVALID
+    assert _row(sdb, victim)["failed_logins"] == 4
+    assert _events(sdb, "admin.user_updated", victim) == []
+
+
+@pytest.mark.parametrize(
+    ("content", "status"),
+    [("", 204), ("{}", 204), ("  \n", 204), ('{"role": "admin"}', 422), ("[]", 422), ("null", 422)],
+    ids=["empty", "empty-object", "blank", "unknown-key", "array", "null"],
+)
+def test_unlock_takes_an_empty_body_or_an_empty_object_with_the_json_type(
+    client, sdb, content, status
+):
+    _, _, headers = _admin(client, sdb)
+    _, victim = _seed(sdb, "tier1")
+    response = client.post(
+        f"/api/admin/users/{victim}/unlock",
+        headers={**headers, "Content-Type": "application/json"},
+        content=content,
+    )
+    assert response.status_code == status, response.text
+    if status == 422:
+        assert response.json()["detail"] == BODY_INVALID
+
+
+@pytest.mark.parametrize(
+    ("content_type", "accepted"),
+    [
+        ("application/json", True),
+        ("application/json; charset=utf-8", True),
+        ("Application/JSON", True),
+        ("application/merge-patch+json", True),
+        ("application/vnd.api+json", True),
+        ("text/json", False),
+        ("application/jsonp", False),
+        ("application/x-json", False),
+        ("multipart/form-data; boundary=x", False),
+    ],
+)
+def test_only_application_json_and_application_plus_json_are_a_json_body(
+    client, sdb, content_type, accepted
+):
+    _, _, headers = _admin(client, sdb)
+    _, victim = _seed(sdb, "tier1")
+    response = client.patch(
+        f"/api/admin/users/{victim}",
+        headers={**headers, "Content-Type": content_type},
+        content='{"display_name": "P11-T02 u"}',  # the current name: nothing is written
+    )
+    assert response.status_code == (200 if accepted else 422), response.text
 
 
 # --------------------------------------------------------------------------
@@ -678,7 +815,7 @@ def test_unknown_and_malformed_ids(client, sdb):
     unknown = str(uuid.uuid4())
     patch = client.patch(f"/api/admin/users/{unknown}", headers=headers, json={"role": "tier1"})
     assert patch.status_code == 404 and patch.json()["detail"] == {"reason": "not_found"}
-    assert client.post(f"/api/admin/users/{unknown}/unlock", headers=headers).status_code == 404
+    assert _unlock(client, headers, unknown).status_code == 404
     reset = client.post(
         f"/api/admin/users/{unknown}/password", headers=headers, json={"password": NEW_PASSWORD}
     )
@@ -686,7 +823,7 @@ def test_unknown_and_malformed_ids(client, sdb):
     for path in ("not-a-uuid", "123", "00000000-0000-0000-0000-00000000000g"):
         call = client.patch(f"/api/admin/users/{path}", headers=headers, json={"role": "tier1"})
         assert call.status_code == 422, path
-        assert client.post(f"/api/admin/users/{path}/unlock", headers=headers).status_code == 422
+        assert _unlock(client, headers, path).status_code == 422
     assert _events(sdb, "admin.user_updated", unknown) == []
 
 
@@ -955,7 +1092,7 @@ def test_unlock_clears_the_counter_and_the_lock(client, sdb):
     sdb.commit()
     login = {"username": username, "password": PASSWORD}
     assert client.post("/api/auth/login", json=login).status_code == 423
-    response = client.post(f"/api/admin/users/{user_id}/unlock", headers=headers)
+    response = _unlock(client, headers, user_id)
     assert response.status_code == 204 and response.content == b""
     sdb.rollback()
     assert sdb.execute(
@@ -971,7 +1108,7 @@ def test_unlock_touches_only_the_lock_columns(client, sdb):
     _, _, headers = _admin(client, sdb)
     username, user_id = _seed(sdb, "tier2")
     user_headers = _login(client, username)
-    response = client.post(f"/api/admin/users/{user_id}/unlock", headers=headers)
+    response = _unlock(client, headers, user_id)
     assert response.status_code == 204
     assert _alive(client, user_headers)  # no session ended
     assert _row(sdb, user_id)["sessions_ended"] is False
@@ -988,7 +1125,7 @@ def _every_call(target: str) -> list[tuple[str, str, dict | None]]:
         ("post", "/api/admin/users", _new_body()),
         ("patch", f"/api/admin/users/{target}", {"role": "admin"}),
         ("post", f"/api/admin/users/{target}/password", {"password": NEW_PASSWORD}),
-        ("post", f"/api/admin/users/{target}/unlock", None),
+        ("post", f"/api/admin/users/{target}/unlock", {}),
     ]
 
 

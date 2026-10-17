@@ -20,7 +20,11 @@ Bodies are read by hand, not by a Pydantic model. FastAPI's own 422 for a model 
 rejected value in `input` — here that value may be a password — and its `detail` is a list, where
 this API's `detail` is an object (`{"field", "reason", ...}`). Only a malformed uuid in the path is
 left to FastAPI's own 422, as the card says. Nothing here logs a body, and no payload, response or
-error carries a password or a hash.
+error carries a password or a hash. Reading the body by hand also means doing by hand what FastAPI
+does for a model: every route that changes something (`unlock`, whose body is `{}` or empty, too)
+requires `Content-Type: application/json` or `application/*+json` — a missing header included —
+because the `soc_session` cookie, until it is retired (spec §8), would otherwise let a no-cors
+`fetch` from another page on the host create an admin or reset a password.
 
 `infra/db.transaction()` is not used: it issues its own BEGIN/COMMIT and would commit the
 request's transaction. The route's connection (`Conn`) commits on a 2xx and rolls back on any
@@ -179,13 +183,26 @@ def _bad(field: str | None, reason: str, **extra: Any) -> HTTPException:
     return HTTPException(status_code=422, detail={**detail, **extra})
 
 
-async def _json_object(request: Request) -> dict[str, Any]:
-    """The request body as a dict. A content type other than JSON is refused as FastAPI's own
-    parsing would (so a cross-site form post cannot carry an action), and nothing the client sent
-    is repeated in the answer."""
+def _require_json_type(request: Request) -> None:
+    """`application/json` or `application/*+json`, and nothing else — a missing Content-Type is
+    refused too, as FastAPI's own parsing (`strict_content_type`) refuses it. The session cookie
+    still authenticates a request from any page on the same host, and a no-cors `fetch` with a
+    Blob body sends no Content-Type: without this rule that request could create an admin or
+    reset a password. A cross-site form post (`text/plain`, urlencoded, multipart) is refused by
+    the same line. Every route of this module that changes something calls it, `unlock` too."""
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
-    if content_type and content_type != "application/json" and not content_type.endswith("+json"):
+    is_json = content_type == "application/json" or (
+        content_type.startswith("application/") and content_type.endswith("+json")
+    )
+    if not is_json:
         raise _bad("body", "invalid")
+
+
+async def _read_object(request: Request, *, allow_empty: bool) -> dict[str, Any]:
+    """The request body as a dict; nothing the client sent is repeated in the answer."""
+    _require_json_type(request)
+    if allow_empty and not (await request.body()).strip():
+        return {}
     try:
         value = await request.json()
     except ValueError:  # JSONDecodeError and UnicodeDecodeError both
@@ -195,7 +212,17 @@ async def _json_object(request: Request) -> dict[str, Any]:
     return value
 
 
+async def _json_object(request: Request) -> dict[str, Any]:
+    return await _read_object(request, allow_empty=False)
+
+
+async def _json_object_or_empty(request: Request) -> dict[str, Any]:
+    """For `unlock`: the JSON type is required, the body is `{}` or empty."""
+    return await _read_object(request, allow_empty=True)
+
+
 JsonObject = Annotated[dict[str, Any], Depends(_json_object)]
+JsonObjectOrEmpty = Annotated[dict[str, Any], Depends(_json_object_or_empty)]
 
 
 def _no_unknown_keys(body: dict[str, Any], allowed: tuple[str, ...]) -> None:
@@ -261,7 +288,9 @@ def _password(value: Any) -> str:
     return value
 
 
-def _request_body(properties: dict[str, str], required: list[str]) -> dict[str, Any]:
+def _request_body(
+    properties: dict[str, str], required: list[str], *, body_required: bool = True
+) -> dict[str, Any]:
     """OpenAPI text for a body this module reads itself (FastAPI cannot infer it)."""
     schema: dict[str, Any] = {
         "type": "object",
@@ -270,7 +299,8 @@ def _request_body(properties: dict[str, str], required: list[str]) -> dict[str, 
     }
     if required:  # an empty `required` is not valid in every JSON Schema dialect
         schema["required"] = required
-    return {"requestBody": {"required": True, "content": {"application/json": {"schema": schema}}}}
+    content = {"application/json": {"schema": schema}}
+    return {"requestBody": {"required": body_required, "content": content}}
 
 
 # --------------------------------------------------------------------------
@@ -360,8 +390,15 @@ def api_reset_password(user_id: uuid.UUID, conn: Conn, claims: Admin, body: Json
     return Response(status_code=204)
 
 
-@router.post("/api/admin/users/{user_id}/unlock", status_code=204)
-def api_unlock_user(user_id: uuid.UUID, conn: Conn, claims: Admin) -> Response:
+@router.post(
+    "/api/admin/users/{user_id}/unlock",
+    status_code=204,
+    openapi_extra=_request_body({}, [], body_required=False),
+)
+def api_unlock_user(
+    user_id: uuid.UUID, conn: Conn, claims: Admin, body: JsonObjectOrEmpty
+) -> Response:
+    _no_unknown_keys(body, ())
     username = auth.unlock(conn, str(user_id))
     if username is None:
         raise HTTPException(status_code=404, detail={"reason": "not_found"})
