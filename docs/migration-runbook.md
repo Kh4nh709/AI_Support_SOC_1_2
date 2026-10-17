@@ -138,8 +138,9 @@ make db-up                                  # tạo app_rw, restore dump, cấp 
 docker compose logs db | grep 'init:'       # "restored — N migrations recorded", N = what the dump holds:
                                             # 17 for the 26/09 dump (it predates 018_alerts_notify.sql)
 set -a; . ./.env; set +a                    # TRƯỚC make migrate — nếu không: "migrate: no DSN" (DEC-106)
-make migrate                                # 26/09 dump: "1 applied, 17 already present" (applies 018, now 18);
-                                            # a dump taken after 018: "0 applied, 18 already present"
+make migrate                                # 26/09 dump: "2 applied, 17 already present" (applies 018 and 019, now 19);
+                                            # a dump taken after 018: "1 applied, 18 already present" (applies 019);
+                                            # a dump taken after 019: "0 applied, 19 already present"
 psql "$DATABASE_URL" -Atc "select last_sort, last_pull_at from source_cursor; select count(*) from alerts; select count(*) from llm_runs"
 ```
 Ba số phải **bằng đúng** `db/counts-before.txt` của bộ backup (cùng snapshot).
@@ -208,8 +209,8 @@ Owner Assist: `The worker now runs on <server>; re-arm the watch on container ai
 1. `sha256sum -c SHA256SUMS` → 0 lỗi trên server mới.
 2. `git status -sb` → `## main...origin/main`, `git worktree list` đủ task đang mở (đối chiếu
    `$B/git/worktrees.txt`, từng dòng).
-3. `set -a; . ./.env; set +a` rồi `make migrate` → `1 applied, 17 already present` với dump 26/09 (nó áp
-   018), `0 applied, 18 already present` với dump lấy sau 018. Chạy trước khi
+3. `set -a; . ./.env; set +a` rồi `make migrate` → `2 applied, 17 already present` với dump 26/09 (nó áp
+   018 và 019), `1 applied, 18 already present` với dump lấy sau 018 (áp 019), `0 applied, 19 already present` với dump lấy sau 019. Chạy trước khi
    source `.env` thì được `migrate: no DSN` — đó là thứ tự sai, không phải hỏng (DEC-106).
 4. 3 số `source_cursor` / `alerts` / `llm_runs` = `counts-before.txt`.
 5. `last_pull_at` tiến, `last_error` rỗng, heartbeat < 10 phút.

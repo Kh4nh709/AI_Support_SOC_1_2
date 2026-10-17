@@ -1,7 +1,8 @@
 """Append an audit_events row for every human decision and lifecycle transition.
 
-`EVENT_TYPES` mirrors the 27-name set `ck_audit_event_type` fixes (context pack
-§6.1; migration 016 = 21 v1 names + 6 v3 names) — kept here so an unknown name is
+`EVENT_TYPES` mirrors the 28-name set `ck_audit_event_type` fixes (context pack
+§6.1; migration 016 = 21 v1 names + 6 v3 names; migration 019 adds
+`admin.settings_changed`, DEC-200) — kept here so an unknown name is
 a clear `PermanentError` before any SQL runs, rather than the DB CHECK's generic
 constraint-violation message. `audit_events` is append-only (017); this module
 never updates or deletes a row.
@@ -47,6 +48,8 @@ EVENT_TYPES = frozenset(
         "llm.builder_violation",
         "health.alarm",
         "label.created",
+        # 1 v1.1 addition (019_admin_console.sql, DEC-200)
+        "admin.settings_changed",
     }
 )
 

@@ -60,6 +60,9 @@ EVENT_TYPES_V3 = [
     "label.created",
 ]
 EVENT_TYPES = EVENT_TYPES_V1 + EVENT_TYPES_V3
+# Names a LATER migration adds to the same CHECK: the database these tests run on is migrated to
+# the end, so the live constraint holds 016's 27 plus these (019_admin_console.sql, DEC-200).
+EVENT_TYPES_LATER = ["admin.settings_changed"]
 
 JOB_TYPES = ["pipeline", "triage", "investigate", "digest", "health", "pull"]
 ALERT_SOURCES = ["wazuh", "lab", "replay"]
@@ -366,7 +369,7 @@ def test_failed_logins_is_not_null_and_defaults_to_zero(db):
 
 
 @pytest.mark.db
-def test_ck_audit_event_type_names_exactly_27_events(db):
+def test_ck_audit_event_type_names_016s_27_events_plus_the_later_ones(db):
     # The character class must be [a-z0-9_]: a plain [a-z] misses tier1.decided,
     # tier1.escalated and tier2.concluded and silently reports 18.
     with db.cursor() as cur:
@@ -377,7 +380,7 @@ def test_ck_audit_event_type_names_exactly_27_events(db):
         )
         (count,) = cur.fetchone()
 
-    assert count == 27
+    assert count == 27 + len(EVENT_TYPES_LATER)
 
 
 @pytest.mark.db
@@ -401,8 +404,10 @@ def test_the_six_new_event_types_are_the_six_named_in_section_6_1(db):
         )
         (named,) = cur.fetchone()
 
-    assert sorted(set(named) - set(EVENT_TYPES_V1)) == sorted(EVENT_TYPES_V3)
-    assert sorted(named) == sorted(EVENT_TYPES)
+    assert sorted(set(named) - set(EVENT_TYPES_V1) - set(EVENT_TYPES_LATER)) == sorted(
+        EVENT_TYPES_V3
+    )
+    assert sorted(named) == sorted(EVENT_TYPES + EVENT_TYPES_LATER)
 
 
 @pytest.mark.db

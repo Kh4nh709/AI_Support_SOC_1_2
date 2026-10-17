@@ -18,8 +18,8 @@ from app.audit import events
 from app.infra.errors import PermanentError
 
 
-def test_event_types_has_exactly_27_entries():
-    assert len(events.EVENT_TYPES) == 27
+def test_event_types_has_exactly_28_entries():
+    assert len(events.EVENT_TYPES) == 28
 
 
 def test_event_types_contains_the_v1_and_v3_spot_checks():
