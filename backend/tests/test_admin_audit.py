@@ -28,7 +28,9 @@ connection holding `ACCESS EXCLUSIVE` on the table: the actual statement waits a
 
 from __future__ import annotations
 
+import contextlib
 import json
+import threading
 import time
 import uuid
 from collections import Counter
@@ -368,6 +370,26 @@ def _event_with_json_text(conn: Any, text: str, subject: str = "raw-payload") ->
         (subject, text),
     ).fetchone()
     return audit_id
+
+
+@contextlib.contextmanager
+def _table_locked(dsn: Any, release_after: float = 8.0):
+    """Another connection holds `ACCESS EXCLUSIVE` on `audit_events`, so a SELECT on it waits.
+
+    The holder lets go by itself after `release_after` seconds, request or no request: a module
+    that sets no `statement_timeout` then fails an assertion (a 200 after 8 s, not a 503) and the
+    run never hangs on a lock nobody will release. Take it before the test writes anything of its
+    own to `audit_events` (the lock would wait for that transaction)."""
+    holder = psycopg.connect(dsn)
+    timer = threading.Timer(release_after, holder.rollback)
+    try:
+        holder.execute("LOCK TABLE audit_events IN ACCESS EXCLUSIVE MODE")
+        timer.start()
+        yield
+    finally:
+        timer.cancel()
+        holder.rollback()
+        holder.close()
 
 
 def _get(tc: TestClient, **params: Any):
@@ -1139,21 +1161,13 @@ def test_a_main_query_past_its_statement_timeout_is_503_timeout(
     page's SELECT waits on the lock and only the `SET LOCAL statement_timeout` ends the wait."""
     tc, db, _ = client
     monkeypatch.setattr(admin_audit, "QUERY_TIMEOUT", "150ms")
-    # A net under the test: if the module set no timeout at all, the request would wait for this
-    # (a statement_timeout the module's SET LOCAL replaces) and the elapsed-time check fails.
-    db.execute("SET statement_timeout = '20s'")
-    holder = psycopg.connect(scratch_dsn)
-    try:
-        holder.execute("LOCK TABLE audit_events IN ACCESS EXCLUSIVE MODE")
+    with _table_locked(scratch_dsn):
         started = time.monotonic()
         resp = _get(tc)
         elapsed = time.monotonic() - started
-    finally:
-        holder.rollback()
-        holder.close()
     assert resp.status_code == 503
     assert resp.json() == {"detail": {"reason": "timeout"}}
-    assert 0.1 <= elapsed < 5, elapsed  # it waited its 150 ms, not the 20 s net and not 0
+    assert 0.1 <= elapsed < 5, elapsed  # it waited its 150 ms: not 0, and not for the lock
     # the SAVEPOINT was rolled back, not the connection: it is still usable
     assert db.execute("SELECT 1").fetchone() == (1,)
 
@@ -1164,13 +1178,8 @@ def test_the_503_body_is_the_reason_only_never_sql_nor_a_dsn(
 ) -> None:
     tc, _db, _ = client
     monkeypatch.setattr(admin_audit, "QUERY_TIMEOUT", "100ms")
-    holder = psycopg.connect(scratch_dsn)
-    try:
-        holder.execute("LOCK TABLE audit_events IN ACCESS EXCLUSIVE MODE")
+    with _table_locked(scratch_dsn):
         resp = _get(tc, group="users", actor="ana", subject="secret-subject")
-    finally:
-        holder.rollback()
-        holder.close()
     assert resp.status_code == 503
     for leaked in ("SELECT", "audit_events", "statement", "postgres", "secret-subject", "57014"):
         assert leaked not in resp.text, leaked
@@ -1299,14 +1308,9 @@ def test_a_main_query_timeout_leaves_the_callers_transaction_alone(
     """Same property for the 503 path: the savepoint is rolled back, the caller's rows stay."""
     tc, db, _ = client
     monkeypatch.setattr(admin_audit, "QUERY_TIMEOUT", "100ms")
-    holder = psycopg.connect(scratch_dsn)
-    try:
-        holder.execute("LOCK TABLE audit_events IN ACCESS EXCLUSIVE MODE")
+    with _table_locked(scratch_dsn):
         user_rows = db.execute("SELECT count(*) FROM users").fetchone()
         assert _get(tc).status_code == 503
-    finally:
-        holder.rollback()
-        holder.close()
     assert db.execute("SELECT count(*) FROM users").fetchone() == user_rows  # the admin row stands
     assert _ids(_get(tc)) == []  # and the lock is gone: the same request now succeeds
 
