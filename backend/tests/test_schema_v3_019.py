@@ -108,6 +108,10 @@ def test_settings_refuses_a_value_that_is_not_positive(db, value):
 
 
 def test_settings_refuses_a_change_nobody_made(db):
+    # A statement first: it opens the fixture's outer transaction, so the two blocks below are
+    # savepoints. As the first statement, `db.transaction()` would be the outermost one and COMMIT
+    # a stray row into the session database whenever the schema stopped refusing it.
+    _user(db)
     with pytest.raises(psycopg.errors.NotNullViolation), db.transaction():
         _insert(db, "LLM_TIMEOUT_S", 90, None)
     with pytest.raises(psycopg.errors.ForeignKeyViolation), db.transaction():
