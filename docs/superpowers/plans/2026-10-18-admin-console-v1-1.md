@@ -241,7 +241,7 @@ def effective_limits(conn: psycopg.Connection, cfg: Config) -> Limits: ...  # ra
   - quota counts only the last 24 h of `case.analyzed` per user;
   - unreadable limits give `limits: null` plus `limits_error`, with the rest still served;
   - non-admin is 403.
-- [ ] **Step 2:** Red, then implement. Aggregates run in `db.transaction(conn, statement_timeout="5s")`.
+- [ ] **Step 2:** Red, then implement. Aggregates run in a savepoint (`conn.transaction()`) after `SET LOCAL statement_timeout = '5s'`; never `infra/db.transaction()` inside a request (it issues BEGIN/COMMIT).
 - [ ] **Step 3:** Green, then the red step: select `result` into `recent` and the key test fails.
 - [ ] **Step 4:** Suites, then commit.
 
@@ -274,7 +274,7 @@ def effective_limits(conn: psycopg.Connection, cfg: Config) -> Limits: ...  # ra
   - retry while a sibling is pending is `409 already_queued`, with no 500 and the job unchanged;
   - unknown id is 404;
   - non-admin is 403.
-- [ ] **Step 2:** Red, then implement. Each section runs in its own savepoint with `SET LOCAL statement_timeout`, through `db.transaction` when nested.
+- [ ] **Step 2:** Red, then implement. Each section runs in its own savepoint (`conn.transaction()`) with `SET LOCAL statement_timeout`; never `infra/db.transaction()` inside a request.
 - [ ] **Step 3:** Green, then the red step: drop the sibling check and the test sees a 500 (UniqueViolation).
 - [ ] **Step 4:** Suites, then commit.
 

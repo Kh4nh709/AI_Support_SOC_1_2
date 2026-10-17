@@ -52,7 +52,7 @@ After that, the last Jinja page is retired, and with it the session cookie.
   - No new runtime dependency. Charts are plain SVG or CSS bars like the canvas, not a charting library, so the CSP and bundle are unchanged.
 - **Backend.**
   - New routers under `backend/app/web/routers/admin_*.py`, each guarded by `require_role("admin")` (`web/deps.py:112`).
-  - Every aggregate read runs inside `infra/db.transaction(conn, statement_timeout=…)` (`infra/db.py:36`). The default is `3s`; a route that needs more says so in its card.
+  - Every aggregate read runs in a savepoint of the request's transaction (`conn.transaction()`) after `SET LOCAL statement_timeout`. The default is `3s`; a route that needs more says so in its task. `infra/db.transaction()` (`infra/db.py:36`) is not used inside a request: it issues its own `BEGIN`/`COMMIT` and would commit the request's transaction.
 - **Migration.** One new file, `docs/Schema/019_admin_console.sql`: the settings table, the new event type (§5.2) and `users.last_login_at` (§5.1). On 18/10, `018` is the last migration on every branch. The Owner applies it with `make migrate PY=.venv/bin/python`. Tests that pin a migration count are updated in the same task.
 - **After each backend merge**, the Owner runs `docker compose restart app worker`. The code is bind-mounted, and a compose change needs `up -d` instead.
 
@@ -282,7 +282,7 @@ The changes to the frozen contracts are listed in §5.9 and recorded by DEC-200.
     - `updated_at timestamptz NOT NULL DEFAULT now()`;
     - `updated_by uuid NOT NULL REFERENCES users(user_id)`.
 
-    All three keys are integers in `Config` today (`infra/config.py:156-164`). `app_rw` gets its rights from migration 017's default privileges; the card's test writes a setting as `app_rw` to prove it.
+    All three keys are integers in `Config` today (`infra/config.py:156-164`). 019 grants `SELECT, INSERT, UPDATE ON settings TO app_rw` explicitly. Migration 017's default privileges bind only the role that ran 017, so a different applying role would otherwise leave `app_rw` with nothing (P11-T01 review, finding 5). A test writes a setting as `app_rw` to prove it.
   - `ck_audit_event_type` gains `admin.settings_changed`. The set goes from 27 to 28 names. `audit/events.py`'s `EVENT_TYPES` and the context pack §6.1 list are updated together.
 - **Accessor `infra/settings.py`.**
   - `effective_limits(conn, cfg) -> Limits(cap_usd, quota_per_24h, timeout_s, source)`.
@@ -302,7 +302,7 @@ The changes to the frozen contracts are listed in §5.9 and recorded by DEC-200.
 
   A test greps for the three key names outside `infra/config.py` and `infra/settings.py` and expects none.
 - **`PUT /api/admin/llm/limits`**, with any of the three keys as integers.
-  - It validates the bounds of decision 2. In one transaction it upserts the changed keys and writes one `admin.settings_changed` row with `{changes: [{key, old, new}]}`.
+  - It validates the bounds of decision 2. The timeout's upper bound is derived from `JOB_LOCK_TIMEOUT_S` (DEC-202). In one transaction it upserts the changed keys and writes one `admin.settings_changed` row with `{changes: [{key, old, new}]}`.
   - `200 {effective, source}`. An unchanged body writes nothing.
   - `422 {field, reason}` per invalid key.
 - **Red steps:**
@@ -529,7 +529,7 @@ The Owner approved the proposals as written.
 2. **Bounds for the editable limits:**
    - cap: 1–1000 USD per month;
    - ② quota: 1–200 runs per person per 24 h;
-   - timeout: 10–600 s.
+   - timeout: 10 s up to `min(600, (JOB_LOCK_TIMEOUT_S − 60) ÷ 2)`, which is 120 s at the default `JOB_LOCK_TIMEOUT_S` of 300 (DEC-202, which amends the 10–600 first approved). A job makes at most two model sends and must finish inside the job lock. A stored value is clamped to the same bound when read.
 3. **A password reset also ends the user's sessions.**
 4. **"Tool call".** The page shows 0, with the sentence "mô hình không gọi công cụ nào". DEC-159's question about another meaning stays open.
 5. **The chat row** of the LLM page appears only when DEC-160's pipeline exists.
