@@ -3314,3 +3314,36 @@ Decision:
      - At the cap, the order is `occurrence_count DESC, alert_time DESC, alert_id ASC`.
   4. **The pilot.** A swept alert is counted as "kéo theo (không phải quyết định)" (Q34), never as a decision, and never in agreement.
 Supersedes: DEC-165's "no change to decide, escalate, fan-out" for escalate (items 3 above) and for the gate's occurrence facts (item 1)
+
+## DEC-200 · 2026-10-18 · The admin console v1.1 is built from the approved design spec: seven React admin pages, an editable and fail-closed set of three LLM limits, a read-only audit log, the last Jinja pages and the session cookie retired; the Director builds it alone on `director/admin-v1-1`, starting from P10-T17's tip
+Scope: **product** (admin console, auth, LLM limits, audit) · **process** (P11 is built by the Director alone)
+Decided by:
+- **The Owner, 18/10, four answers before the design was drawn:**
+  - LLM limits are editable on the web;
+  - the audit log is a page, read-only;
+  - failed-job retry and inventory reload live on the overview page;
+  - `users.last_login_at` is added.
+- **The Owner, 18/10, on the spec:** "Oke duyệt" — every proposal of the spec's §10 becomes the decision.
+- **The Owner, 18/10, on the process:** "Bạn tự làm và review liên tục tới khi nào bạn cảm thấy hài lòng về sản phẩm của bạn" — the Director builds it and reviews it continuously until satisfied.
+Drafted by: Director (Opus 5.5), the session holding DEC-200 and up (Director 1 holds 126–199)
+Propagated to: `docs/superpowers/specs/2026-10-18-admin-console-v1-1-design.md` · `docs/superpowers/plans/2026-10-18-admin-console-v1-1.md` · STATE phase P11 and tasks P11-T01…T20 · the canvas "SOC Console UI" (artboards `AdminRules`, `AdminDigest`, `AdminLabels`, `AdminAudit`, `AdminStates`; `AdminOverview`, `AdminUsers`, `AdminLlm` corrected)
+Decision:
+  1. **Scope.** The admin console of DEC-159 ships as v1.1 in the React UI: overview (with failed-job retry and inventory reload), users and roles, LLM usage and limits, auto-close rules, daily digest, blind labelling, and a read-only audit log. The visual reference is the canvas; the contract is the spec.
+  2. **Frozen-contract changes (spec §5.9).**
+     - Schema: migration `019_admin_console.sql` adds the `settings` table (three integer keys), `users.last_login_at`, and the event type `admin.settings_changed`, so `ck_audit_event_type` goes from 27 to 28 names.
+     - Config: `LLM_MONTHLY_USD_CAP`, `ANALYZE_QUOTA_PER_USER_DAY` and `LLM_TIMEOUT_S` may be overridden at run time by `settings`; `.env` stays the default. Every reader goes through one accessor, `infra/settings.py`.
+     - API: the admin routes of spec §5.1–§5.8 are added; `GET /api/admin/digest`, `POST /api/admin/digest/{alert_id}/review` and `POST /api/admin/jobs/{id}/retry`, listed in §6.4 since P5, are implemented; `simulate`, `GET /api/admin/rules` and `labels/next` gain additive fields.
+     - Removed: the HTML routes `/login`, `/logout`, `/`, `/admin/rules*`, `/admin/digest*`, `/admin/labels*`, and the `Set-Cookie` of `POST /api/auth/login`.
+  3. **Fail-closed limits.** If the stored limits cannot be read, no model call is made: ① is recorded `stopped_by='cap'`, ② answers 503, and the `monthly_cost` health check fails. Nothing falls back to `.env` on a read error. An absent row is not an error; it means "not overridden".
+  4. **The Owner's values (spec §10).**
+     - Password minimum 12 characters, on the web create and reset routes.
+     - Limit bounds: cap 1–1000 USD per month, ② quota 1–200 runs per person per 24 h, timeout 10–600 s.
+     - A password reset ends the user's sessions.
+     - "Tool call" shows 0 with the sentence that the model calls no tools.
+     - The chat row appears only when DEC-160's pipeline exists.
+     - The admin's home is `/admin/overview`.
+     - The ② quota stays a rolling 24 h; the UI says "24 giờ gần nhất".
+  5. **The last admin and self-changes.** Demoting or deactivating the last active admin, and an admin changing their own role or active flag, are refused with 409 under a row lock, so two concurrent requests cannot both pass.
+  6. **Base.** v1.0 was not closed on 18/10: P10-T13 and P10-T17 had finished but were not merged, and Director 1 was offline. P10-T17's branch (`worktree-agent-a78f2124e8255304a`, tip `577ef18`) holds P10-T13's approved tip and P10-T17 with its fix round 1. The scoped re-review had said "ready to merge after P10-T13"; the Director re-read fix round 1 (`24ac3df`, `0b35556`, `bd80a2f`) on 18/10 and found it correct. `director/admin-v1-1` starts from `577ef18`, so fast-forwarding `main` to it lands P10-T13, P10-T17 and P11 together.
+  7. **Process for P11.** The Director builds every task in its own worktree without subagents. Each task has its red steps and suites, and its diff is re-read before the next. A whole-branch review closes the build and is repeated on its own fixes until it finds nothing. The Owner fast-forwards `main`, runs `make migrate`, rebuilds `ui`, and restarts `app` and `worker`.
+Supersedes: DEC-161's "the Jinja admin pages stay" (they are retired by P11-T19) · DEC-151's one-Coder-one-Reviewer rule, for P11 only (item 7)
