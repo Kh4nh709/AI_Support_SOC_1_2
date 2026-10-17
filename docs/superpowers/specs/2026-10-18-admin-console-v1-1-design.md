@@ -52,7 +52,7 @@ After that, the last Jinja page is retired, and with it the session cookie.
   - No new runtime dependency. Charts are plain SVG or CSS bars like the canvas, not a charting library, so the CSP and bundle are unchanged.
 - **Backend.**
   - New routers under `backend/app/web/routers/admin_*.py`, each guarded by `require_role("admin")` (`web/deps.py:112`).
-  - Every aggregate read runs inside `infra/db.transaction(conn, statement_timeout=…)` (`infra/db.py:36`). The default is `3s`; a route that needs more says so in its card.
+  - Every aggregate read runs in a savepoint of the request's transaction (`conn.transaction()`) after `SET LOCAL statement_timeout`. The default is `3s`; a route that needs more says so in its task. `infra/db.transaction()` (`infra/db.py:36`) is not used inside a request: it issues its own `BEGIN`/`COMMIT` and would commit the request's transaction.
 - **Migration.** One new file, `docs/Schema/019_admin_console.sql`: the settings table, the new event type (§5.2) and `users.last_login_at` (§5.1). On 18/10, `018` is the last migration on every branch. The Owner applies it with `make migrate PY=.venv/bin/python`. Tests that pin a migration count are updated in the same task.
 - **After each backend merge**, the Owner runs `docker compose restart app worker`. The code is bind-mounted, and a compose change needs `up -d` instead.
 
