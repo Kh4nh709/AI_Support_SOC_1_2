@@ -52,7 +52,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 from psycopg.types.json import Jsonb
 
-from app.infra import notify
+from app.infra import notify, settings
 from app.infra.config import Config
 
 # ── thresholds §3.9 gives no §6.3 key for (module constants, not Config) ────
@@ -180,7 +180,20 @@ def _check_monthly_cost(conn: psycopg.Connection, cfg: Config) -> CheckResult:
         "WHERE date_trunc('month', created_at) = date_trunc('month', now())"
     ).fetchone()
     spend = float(spend)
-    cap = cfg.LLM_MONTHLY_USD_CAP
+    # The cap is the admin's saved one, else `.env`. Fail closed (DEC-200 item 3): if it
+    # cannot be read the check cannot say the spend is fine, so it fails — never a pass
+    # measured against the `.env` cap.
+    try:
+        cap = settings.effective_limits(conn, cfg).cap_usd
+    except settings.SettingsUnavailable:
+        return CheckResult(
+            "monthly_cost",
+            False,
+            None,
+            _MONTHLY_COST_MAX_PCT,
+            f"${spend:.2f} spent this month; không đọc được hạn mức (settings unreadable, "
+            "fail closed)",
+        )
     pct = (100.0 * spend / cap) if cap else 0.0
     ok = pct <= _MONTHLY_COST_MAX_PCT
     detail = f"${spend:.2f} of ${cap} monthly cap ({pct:.1f}%)"

@@ -1269,6 +1269,81 @@ def test_llm_budget_exceeded_writes_row_and_completes_without_raising(db, monkey
     assert rows[0][1] is None
 
 
+class _NoSocketClient:
+    """An OpenAI-SDK-shaped client for the REAL `DeepSeekAdapter` that must never be called:
+    every `create` is recorded in `calls` and fails (which would show as a `permanent` row)."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    def _create(self, **kwargs):
+        self.calls.append(kwargs)
+        raise AssertionError("a model call was made")
+
+
+def _real_adapter_over(monkeypatch, client) -> None:
+    """`run_investigate_job(adapter=None)` builds a `DeepSeekAdapter` itself — this keeps that
+    construction (its `spent_usd=` and `limits=` wiring) and only swaps the SDK client."""
+    real = tier2_investigate.DeepSeekAdapter
+    monkeypatch.setattr(
+        tier2_investigate, "DeepSeekAdapter", lambda cfg, **kw: real(cfg, client=client, **kw)
+    )
+
+
+@pytest.mark.db
+def test_unreadable_limits_stop_the_run_as_cap_with_no_model_call(db, monkeypatch):
+    """P11-T03 / DEC-200 item 3: the `settings` table is missing (code deployed before
+    `make migrate`). The job runs under REPEATABLE READ, so the table is renamed away with a
+    real commit (and put back in `finally`) rather than dropped inside the job's transaction.
+    Nothing falls back to `.env`: ② is `stopped_by='cap'` with no result, the real adapter
+    opened no socket, and the row was still written after the failed read (the savepoint)."""
+    _enable_llm(monkeypatch)
+    _user, case_id, _head = _build_case_with_head(db)
+    client = _NoSocketClient()
+    _real_adapter_over(monkeypatch, client)
+    db.execute("ALTER TABLE settings RENAME TO settings_p11t03_away")
+    db.commit()
+    try:
+        tier2_investigate.run_investigate_job(db, _job(case_id))  # adapter=None: production
+        rows = _rows(db, case_id)
+    finally:
+        db.rollback()
+        db.execute("ALTER TABLE settings_p11t03_away RENAME TO settings")
+        db.commit()
+
+    assert client.calls == []
+    assert len(rows) == 1
+    assert rows[0][5] == "cap"
+    assert rows[0][1] is None
+
+
+@pytest.mark.db
+def test_a_web_cap_below_the_spend_stops_the_run_as_cap_with_no_model_call(db, monkeypatch):
+    """The cap the admin saved on the web, not the `.env` one, gates ②: 5 USD spent is under
+    the `.env` cap (30) and over the saved one (1)."""
+    _enable_llm(monkeypatch)
+    user_id, case_id, _head = _build_case_with_head(db)
+    client = _NoSocketClient()
+    _real_adapter_over(monkeypatch, client)
+    monkeypatch.setattr(tier2_investigate, "month_spend_usd", lambda conn: 5.0)
+    db.execute(
+        "INSERT INTO settings (key, value, updated_by) VALUES ('LLM_MONTHLY_USD_CAP', 1, %s)",
+        (user_id,),
+    )
+    db.commit()  # the job starts a fresh REPEATABLE READ transaction: the row must be committed
+    try:
+        tier2_investigate.run_investigate_job(db, _job(case_id))
+        rows = _rows(db, case_id)
+    finally:
+        db.rollback()
+        db.execute("DELETE FROM settings WHERE updated_by = %s", (user_id,))
+        db.commit()
+
+    assert client.calls == []
+    assert len(rows) == 1 and rows[0][5] == "cap"
+
+
 @pytest.mark.db
 def test_llm_permanent_writes_row_and_completes_without_raising(db, monkeypatch):
     _enable_llm(monkeypatch)
@@ -1582,6 +1657,74 @@ def test_analyze_429_over_quota_and_commits_only_on_the_two_successes(client, db
         (client.user_id,),
     ).fetchall()
     assert [r[0] for r in rows] == [case_a, case_b]
+
+
+def _spy_commit_and_rollback(db, monkeypatch) -> tuple[list[str], list[str]]:
+    """`db.commit`/`db.rollback` replaced by recorders (hard rule 5): nothing a route does
+    here is ever really committed, and a route's own `rollback()` cannot undo the test's
+    fixtures."""
+    commits: list[str] = []
+    rollbacks: list[str] = []
+    monkeypatch.setattr(db, "commit", lambda: commits.append("commit"))
+    monkeypatch.setattr(db, "rollback", lambda: rollbacks.append("rollback"))
+    return commits, rollbacks
+
+
+def _set_web_limit(db, key: str, value: int, user_id: str) -> None:
+    db.execute(
+        "INSERT INTO settings (key, value, updated_by) VALUES (%s, %s, %s)", (key, value, user_id)
+    )
+
+
+@pytest.mark.db
+def test_analyze_quota_follows_a_web_limit_lower_than_the_env_one(client, db, monkeypatch):
+    """P11-T03: the `.env` quota is 2 (this file's `client` fixture); the admin saved 1."""
+    _commits, _rollbacks = _spy_commit_and_rollback(db, monkeypatch)
+    case_a, case_b = _make_case(db, client.user_id), _make_case(db, client.user_id)
+    _set_web_limit(db, "ANALYZE_QUOTA_PER_USER_DAY", 1, client.user_id)
+
+    first = client.http.post(f"/api/tier2/cases/{case_a}/analyze")
+    second = client.http.post(f"/api/tier2/cases/{case_b}/analyze")
+
+    assert (first.status_code, second.status_code) == (202, 429)
+    assert second.json()["detail"] == "analyze quota exceeded for today"
+
+
+@pytest.mark.db
+def test_analyze_quota_follows_a_web_limit_higher_than_the_env_one(client, db, monkeypatch):
+    _spy_commit_and_rollback(db, monkeypatch)
+    cases = [_make_case(db, client.user_id) for _ in range(4)]
+    _set_web_limit(db, "ANALYZE_QUOTA_PER_USER_DAY", 3, client.user_id)  # `.env` says 2
+
+    statuses = [client.http.post(f"/api/tier2/cases/{case}/analyze").status_code for case in cases]
+
+    assert statuses == [202, 202, 202, 429]
+
+
+@pytest.mark.db
+def test_analyze_is_503_when_the_limits_cannot_be_read_and_enqueues_nothing(
+    client, db, monkeypatch
+):
+    """Fail closed (DEC-200 item 3): no `settings` table. The quota cannot be checked, so the
+    run is refused — not allowed on the `.env` quota — with a body the page can read, and
+    nothing is enqueued, written or committed."""
+    case_id = _make_case(db, client.user_id)
+    db.execute("DROP TABLE settings")  # rolled back with the test's transaction
+    commits, rollbacks = _spy_commit_and_rollback(db, monkeypatch)
+
+    resp = client.http.post(f"/api/tier2/cases/{case_id}/analyze")
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == {"reason": "limits_unavailable"}
+    assert commits == []
+    assert rollbacks
+    assert db.execute("SELECT 1").fetchone() == (1,)  # the savepoint kept the transaction usable
+    jobs = db.execute("SELECT count(*) FROM jobs WHERE subject_id = %s", (case_id,)).fetchone()[0]
+    quota_rows = db.execute(
+        "SELECT count(*) FROM audit_events WHERE event_type = 'case.analyzed' AND subject_id = %s",
+        (case_id,),
+    ).fetchone()[0]
+    assert (jobs, quota_rows) == (0, 0)
 
 
 @pytest.mark.db

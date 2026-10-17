@@ -65,7 +65,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from app.audit.llm_runs import month_spend_usd
-from app.infra import config
+from app.infra import config, settings
 from app.infra.errors import PermanentError, TransientError
 from app.infra.jobs import Job
 from app.llm import investigate as llm_investigate
@@ -427,7 +427,13 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
     agent_trace = _snapshot_trace(dossier)
     spend = llm_investigate.Spend()
 
-    llm_adapter = adapter or DeepSeekAdapter(cfg, spent_usd=partial(month_spend_usd, conn))
+    llm_adapter = adapter or DeepSeekAdapter(
+        cfg,
+        spent_usd=partial(month_spend_usd, conn),
+        # the cap and the deadline are the admin's saved limits, read per attempt; a read that
+        # fails stops the call as `LLMBudgetExceeded`, so the row below is `stopped_by='cap'`
+        limits=partial(settings.effective_limits, conn, cfg),
+    )
 
     def write_row(row_id: uuid.UUID, stopped_by: str | None, **outcome: Any) -> None:
         """This attempt's one `llm_runs` row. The usage columns come from `spend` unless
