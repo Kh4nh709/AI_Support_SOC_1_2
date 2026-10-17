@@ -31,6 +31,9 @@ for non-timeout errors could in theory push a single send past 120 s across up t
 `docs/investigate-size-class.md`): real p95 latency at the 60 k-token synthetic class is
 14.65 s and at the 12.8 k real-corpus ceiling is 14.68 s — the practical number is under
 30 s even with a repair, far inside the 240 s theoretical bound and the 300 s job lock.
+(The admin may now change the timeout on the web, DEC-200; DEC-202 keeps this bound true:
+`infra.settings.timeout_max` is `(JOB_LOCK_TIMEOUT_S - 60) // 2`, the web may not set more,
+and a stored value above it is clamped when read.)
 
 **The isolation level (Director item 4).** `dossier.build()` runs under `REPEATABLE READ`
 (not `READ ONLY` — this handler still writes in the same transaction); see

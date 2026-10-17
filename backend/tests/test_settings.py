@@ -33,8 +33,10 @@ from app.infra.settings import (
     Limits,
     LimitSource,
     SettingsUnavailable,
+    bounds,
     effective_limits,
     from_config,
+    timeout_max,
 )
 
 _CFG = Config(LLM_MONTHLY_USD_CAP=30, ANALYZE_QUOTA_PER_USER_DAY=25, LLM_TIMEOUT_S=120)
@@ -95,11 +97,13 @@ def test_the_public_names_and_bounds_are_exactly_the_documented_ones():
         "quota_per_24h",
         "timeout_s",
         "sources",
+        "timeout_max",  # DEC-202: the bound the timeout was held to (defaulted)
     ]
     assert [f.name for f in dataclasses.fields(LimitSource)] == [
         "source",
         "updated_at",
         "updated_by",
+        "clamped",  # DEC-202 (defaulted False)
     ]
 
 
@@ -116,6 +120,60 @@ def test_from_config_is_the_env_view_with_every_source_env():
     assert set(limits.sources) == set(KEYS)
     for source in limits.sources.values():
         assert source == LimitSource(source="env", updated_at=None, updated_by=None)
+        assert source.clamped is False
+
+
+# ── DEC-202: the timeout is bounded by the job lock ───────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("job_lock_timeout_s", "expected"),
+    [
+        (300, 120),  # the default: two sends of 120 s and the 60 s margin
+        (200, 70),
+        (1000, 470),
+        (1260, 600),  # the Owner's static ceiling is reached exactly here
+        (5000, 600),  # ... and never passed
+        (140, 40),
+        (80, 10),  # the floor starts to hold
+        (60, 10),
+        (0, 10),
+    ],
+)
+def test_timeout_max_is_the_job_lock_less_the_margin_split_over_two_sends(
+    job_lock_timeout_s, expected
+):
+    assert timeout_max(replace(_CFG, JOB_LOCK_TIMEOUT_S=job_lock_timeout_s)) == expected
+
+
+def test_two_sends_at_the_timeout_max_always_fit_under_the_job_lock_with_the_margin():
+    """The invariant `tier2/investigate.py:19-33` states: 2 x LLM_TIMEOUT_S + 60 s <= the job
+    lock — for every job lock from the point the floor of 10 s stops mattering."""
+    for lock in range(80, 3000):
+        cfg = replace(_CFG, JOB_LOCK_TIMEOUT_S=lock)
+        assert 2 * timeout_max(cfg) + 60 <= lock, lock
+        assert 10 <= timeout_max(cfg) <= 600
+
+
+def test_bounds_is_the_static_envelope_with_the_timeout_ceiling_derived():
+    assert bounds(_CFG) == {
+        "LLM_MONTHLY_USD_CAP": (1, 1000),
+        "ANALYZE_QUOTA_PER_USER_DAY": (1, 200),
+        "LLM_TIMEOUT_S": (10, 120),
+    }
+    assert bounds(replace(_CFG, JOB_LOCK_TIMEOUT_S=200))["LLM_TIMEOUT_S"] == (10, 70)
+    assert bounds(replace(_CFG, JOB_LOCK_TIMEOUT_S=5000))["LLM_TIMEOUT_S"] == (10, 600)
+    assert BOUNDS["LLM_TIMEOUT_S"] == (10, 600)  # the envelope itself is untouched
+
+
+def test_from_config_carries_the_ceiling_and_never_clamps_the_env_value():
+    cfg = replace(_CFG, LLM_TIMEOUT_S=500, JOB_LOCK_TIMEOUT_S=300)  # an Owner's choice
+
+    limits = from_config(cfg)
+
+    assert limits.timeout_s == 500  # the `.env` value is the Owner's: not clamped
+    assert limits.timeout_max == 120
+    assert limits.sources["LLM_TIMEOUT_S"].clamped is False
 
 
 def test_a_read_error_is_settings_unavailable_and_never_a_env_fallback():
@@ -196,6 +254,57 @@ def test_the_env_value_follows_the_config_it_is_given_when_no_row_exists(db):
     other = replace(_CFG, LLM_MONTHLY_USD_CAP=99)
 
     assert effective_limits(db, other).cap_usd == 99
+
+
+@pytest.mark.db
+def test_a_stored_timeout_above_the_ceiling_is_clamped_on_read_and_says_so(db):
+    """DEC-202: a saved 600 s (stored before the bound, or under a larger `JOB_LOCK_TIMEOUT_S`
+    that was lowered later) would outlive the job's session. Read, it is held to the ceiling;
+    the stored row is untouched and the source still says `web`, with the clamp reported."""
+    admin = _make_user(db)
+    _set(db, "LLM_TIMEOUT_S", 600, admin)
+
+    limits = effective_limits(db, _CFG)  # JOB_LOCK_TIMEOUT_S 300: ceiling 120
+
+    assert limits.timeout_s == 120 and limits.timeout_max == 120
+    source = limits.sources["LLM_TIMEOUT_S"]
+    assert (source.source, source.clamped, source.updated_by) == ("web", True, admin)
+    assert db.execute("SELECT value FROM settings WHERE key = 'LLM_TIMEOUT_S'").fetchone() == (600,)
+
+
+@pytest.mark.db
+def test_a_stored_timeout_at_or_below_the_ceiling_is_not_clamped(db):
+    admin = _make_user(db)
+    for stored in (10, 119, 120):
+        _set(db, "LLM_TIMEOUT_S", stored, admin)
+        limits = effective_limits(db, _CFG)
+        assert limits.timeout_s == stored
+        assert limits.sources["LLM_TIMEOUT_S"].clamped is False
+
+
+@pytest.mark.db
+def test_the_ceiling_follows_the_configured_job_lock_on_every_read(db):
+    admin = _make_user(db)
+    _set(db, "LLM_TIMEOUT_S", 100, admin)
+
+    at_300 = effective_limits(db, _CFG)
+    at_200 = effective_limits(db, replace(_CFG, JOB_LOCK_TIMEOUT_S=200))  # ceiling 70
+
+    assert (at_300.timeout_s, at_300.sources["LLM_TIMEOUT_S"].clamped) == (100, False)
+    assert (at_200.timeout_s, at_200.sources["LLM_TIMEOUT_S"].clamped) == (70, True)
+    assert at_200.timeout_max == 70
+
+
+@pytest.mark.db
+def test_only_the_timeout_is_clamped_never_the_cap_or_the_quota(db):
+    admin = _make_user(db)
+    _set(db, "LLM_MONTHLY_USD_CAP", 1000, admin)
+    _set(db, "ANALYZE_QUOTA_PER_USER_DAY", 200, admin)
+
+    limits = effective_limits(db, replace(_CFG, JOB_LOCK_TIMEOUT_S=60))
+
+    assert (limits.cap_usd, limits.quota_per_24h) == (1000, 200)
+    assert {s.clamped for s in limits.sources.values()} == {False}
 
 
 @pytest.mark.db

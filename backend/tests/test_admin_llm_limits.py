@@ -1,7 +1,8 @@
 """`PUT /api/admin/llm/limits` (P11-T03, spec §5.2, DEC-200 item 3).
 
 Admin only; any of `cap_usd`, `quota_per_24h`, `timeout_s` as JSON integers inside the bounds
-of the Owner's decision 2 (cap 1-1000, quota 1-200, timeout 10-600). In the request's own
+of the Owner's decision 2 (cap 1-1000, quota 1-200, timeout 10-600, the timeout's top
+held to what the job lock allows, DEC-202). In the request's own
 transaction it reads the effective limits, upserts only the keys that change, and writes ONE
 `admin.settings_changed` event `{changes: [{key, old, new}]}`. An empty or unchanged body
 writes nothing. Limits that cannot be read answer `503 {reason: "limits_unavailable"}`.
@@ -19,7 +20,7 @@ import psycopg
 import pytest
 from app.infra import config
 from app.infra.auth import Claims
-from app.infra.settings import BOUNDS, KEYS, effective_limits, from_config
+from app.infra.settings import KEYS, bounds, effective_limits, from_config
 from app.web import deps, main
 from app.web.routers import admin_llm
 from fastapi.testclient import TestClient
@@ -212,6 +213,7 @@ def test_a_change_writes_the_row_one_event_and_answers_the_new_limits(client, db
         "source": "env",
         "updated_at": None,
         "updated_by_name": None,
+        "clamped": False,
     }
 
 
@@ -281,12 +283,12 @@ def test_updated_by_name_is_the_display_name_or_the_username_and_null_for_env(cl
 
 
 def test_the_answer_is_what_the_accessor_reads_back(client, db):
-    resp = client.put({"cap_usd": 12, "quota_per_24h": 3, "timeout_s": 600})
+    resp = client.put({"cap_usd": 12, "quota_per_24h": 3, "timeout_s": 100})
 
     limits = effective_limits(db, _CFG)
     body = resp.json()["limits"]
-    assert (body["cap_usd"], body["quota_per_24h"], body["timeout_s"]) == (12, 3, 600)
-    assert (limits.cap_usd, limits.quota_per_24h, limits.timeout_s) == (12, 3, 600)
+    assert (body["cap_usd"], body["quota_per_24h"], body["timeout_s"]) == (12, 3, 100)
+    assert (limits.cap_usd, limits.quota_per_24h, limits.timeout_s) == (12, 3, 100)
     assert {s["source"] for s in body["sources"].values()} == {"web"}
 
 
@@ -298,8 +300,50 @@ def test_limits_out_is_the_shape_the_usage_route_will_embed(db):
         "quota_per_24h": 25,
         "timeout_s": 120,
         "sources": {
-            key: {"source": "env", "updated_at": None, "updated_by_name": None} for key in KEYS
+            key: {"source": "env", "updated_at": None, "updated_by_name": None, "clamped": False}
+            for key in KEYS
         },
+        # what the page's form may offer: the timeout's top is the derived one (DEC-202)
+        "bounds": {
+            "cap_usd": {"min": 1, "max": 1000},
+            "quota_per_24h": {"min": 1, "max": 200},
+            "timeout_s": {"min": 10, "max": 120},
+        },
+    }
+
+
+def test_limits_out_reports_a_clamp_and_the_derived_maximum(db):
+    admin, _ = _make_user(db)
+    db.execute(
+        "INSERT INTO settings (key, value, updated_by) VALUES ('LLM_TIMEOUT_S', 600, %s)", (admin,)
+    )
+    cfg = replace(_CFG, JOB_LOCK_TIMEOUT_S=200)  # ceiling 70
+
+    out = admin_llm.limits_out(db, effective_limits(db, cfg))
+
+    assert out["timeout_s"] == 70
+    assert out["sources"]["LLM_TIMEOUT_S"]["source"] == "web"
+    assert out["sources"]["LLM_TIMEOUT_S"]["clamped"] is True
+    assert out["sources"]["LLM_MONTHLY_USD_CAP"]["clamped"] is False
+    assert out["bounds"]["timeout_s"] == {"min": 10, "max": 70}
+
+
+def test_a_put_over_a_clamped_timeout_answers_the_clamp_and_the_effective_old_value(client, db):
+    db.execute(
+        "INSERT INTO settings (key, value, updated_by) VALUES ('LLM_TIMEOUT_S', 600, %s)",
+        (client.user_id,),
+    )
+
+    seen = client.put({})
+    changed = client.put({"timeout_s": 90})
+
+    body = seen.json()["limits"]
+    assert body["timeout_s"] == 120 and body["sources"]["LLM_TIMEOUT_S"]["clamped"] is True
+    assert body["bounds"]["timeout_s"] == {"min": 10, "max": 120}
+    assert changed.json()["limits"]["sources"]["LLM_TIMEOUT_S"]["clamped"] is False
+    # the audit row names the value the system was really running with, not the stored 600
+    assert _events(db, client.user_id)[0][4] == {
+        "changes": [{"key": "LLM_TIMEOUT_S", "old": 120, "new": 90}]
     }
 
 
@@ -337,7 +381,7 @@ def test_the_change_holds_a_lock_until_the_transaction_ends(client, db, _test_da
 
 @pytest.mark.parametrize("field", _FIELD)
 def test_the_bounds_are_inclusive_at_both_ends(client, db, field):
-    low, high = BOUNDS[_FIELD[field]]
+    low, high = bounds(_CFG)[_FIELD[field]]
     for value in (low, high):
         resp = client.put({field: value})
         assert resp.status_code == 200, (field, value, resp.text)
@@ -346,7 +390,7 @@ def test_the_bounds_are_inclusive_at_both_ends(client, db, field):
 
 @pytest.mark.parametrize("field", _FIELD)
 def test_a_value_outside_the_bounds_is_422_out_of_range_and_writes_nothing(client, db, field):
-    low, high = BOUNDS[_FIELD[field]]
+    low, high = bounds(_CFG)[_FIELD[field]]
     for value in (low - 1, high + 1, 0, -5, 10**12):
         resp = client.put({field: value})
         assert resp.status_code == 422, (field, value)
@@ -358,6 +402,55 @@ def test_a_value_outside_the_bounds_is_422_out_of_range_and_writes_nothing(clien
         }
     assert _settings_rows(db) == {}
     assert _events(db, client.user_id) == []
+
+
+# DEC-202: the web's timeout tops out where two sends and the margin still fit under the job lock.
+# (job lock, derived ceiling): the default 300 gives 120; a configured 200 gives 70; a lock large
+# enough reaches the Owner's static 600 and no further. `.env`'s own timeout is set to 60 so that
+# every accepted value below is a real change that writes.
+_CEILINGS = [(300, 120), (200, 70), (5000, 600)]
+
+
+def _with_job_lock(job_lock_timeout_s: int) -> None:
+    cfg = replace(_CFG, JOB_LOCK_TIMEOUT_S=job_lock_timeout_s, LLM_TIMEOUT_S=60)
+    main.app.dependency_overrides[deps.get_config] = lambda: cfg
+
+
+@pytest.mark.parametrize(("job_lock_timeout_s", "ceiling"), _CEILINGS)
+def test_one_second_above_the_ceiling_is_refused_with_the_derived_max(
+    client, db, job_lock_timeout_s, ceiling
+):
+    """At 300 the ceiling is (300 - 60) // 2 = 120, so 121 is refused and the 422 says `max: 120`.
+    The Owner's static 600 would let one model call outlive the job's session (review finding
+    I1). Red step: put the static 600 back as the ceiling and 121 is accepted."""
+    _with_job_lock(job_lock_timeout_s)
+
+    refused = client.put({"timeout_s": ceiling + 1})
+
+    assert refused.status_code == 422
+    assert refused.json()["detail"] == {
+        "field": "timeout_s",
+        "reason": "out_of_range",
+        "min": 10,
+        "max": ceiling,
+    }
+    assert _settings_rows(db) == {}
+
+
+@pytest.mark.parametrize(("job_lock_timeout_s", "ceiling"), _CEILINGS)
+def test_the_ceiling_itself_is_accepted_and_the_answer_shows_it_as_the_maximum(
+    client, db, job_lock_timeout_s, ceiling
+):
+    _with_job_lock(job_lock_timeout_s)
+
+    accepted = client.put({"timeout_s": ceiling})
+
+    assert accepted.status_code == 200
+    body = accepted.json()["limits"]
+    assert body["timeout_s"] == ceiling
+    assert body["bounds"]["timeout_s"] == {"min": 10, "max": ceiling}
+    assert body["sources"]["LLM_TIMEOUT_S"]["clamped"] is False
+    assert _settings_rows(db) == {"LLM_TIMEOUT_S": ceiling}
 
 
 @pytest.mark.parametrize("field", _FIELD)
