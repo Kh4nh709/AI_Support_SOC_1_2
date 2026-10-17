@@ -561,6 +561,33 @@ def test_failed_jobs_are_failed_only_newest_first_and_at_most_fifty(client) -> N
 
 
 @pytest.mark.db
+def test_a_job_that_failed_again_is_listed_by_its_last_attempt_not_its_creation(client) -> None:
+    """A retried job keeps its old `created_at`, and `claim_job` stamps `locked_at` on each
+    attempt (`finish_job` keeps it): the last attempt is `COALESCE(locked_at, created_at)`. A job
+    created ten days ago that failed a minute ago must head the list, not fall off it behind
+    fifty newer-created failures."""
+    tc, db, _ = client
+    for i in range(50):
+        _job(db, subject_id=f"newer-{i:02d}", created_at=_ago(hours=i + 1))
+    old = _job(
+        db,
+        subject_id="retried-and-failed-again",
+        created_at=_ago(days=10),
+        locked_at=_ago(minutes=1),
+        last_error="failed again",
+    )
+
+    jobs_out = _get(tc).json()["failed_jobs"]
+
+    assert len(jobs_out) == 50
+    assert jobs_out[0]["job_id"] == old
+    assert jobs_out[0]["subject_id"] == "retried-and-failed-again"
+    # the rest follow by their own last attempt (here their creation), newest first
+    assert [j["subject_id"] for j in jobs_out[1:4]] == ["newer-00", "newer-01", "newer-02"]
+    assert "newer-49" not in {j["subject_id"] for j in jobs_out}  # the oldest last attempt is cut
+
+
+@pytest.mark.db
 def test_failed_job_last_error_is_cut_to_200_characters_and_null_stays_null(client) -> None:
     tc, db, _ = client
     _job(db, subject_id="long", last_error="é" * 450, created_at=_ago(minutes=1))

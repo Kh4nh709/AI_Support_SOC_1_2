@@ -21,6 +21,11 @@ Read rules shared by the alert sections:
 - the window is `received_at >= now() - <range>`, on the database's clock;
 - a head is `duplicate_of IS NULL`.
 
+`failed_jobs` is ordered by the job's last attempt, `COALESCE(locked_at, created_at)` newest
+first: `claim_job` stamps `locked_at` on every attempt and `finish_job` keeps it, while a retried
+job keeps its old `created_at`, so ordering by creation would push a job that failed again
+behind newer-created ones.
+
 **Retry.** `POST /api/admin/jobs/{job_id}/retry` puts one `failed` job back to `pending` with
 `attempts=0` and `scheduled_at=now()`, which is exactly what `infra/jobs.claim_job` takes
 (`status='pending' AND scheduled_at <= now()`); `last_error` is kept. The job row is locked
@@ -186,14 +191,14 @@ def _health(conn: Any) -> dict[str, Any] | None:
 
 
 def _failed_jobs(conn: Any) -> list[dict[str, Any]]:
-    """The newest 50 failed jobs. `left()` cuts `last_error` in the database, so a huge error
-    text never leaves it; NULL stays NULL."""
+    """The 50 failed jobs whose last attempt is newest (module docstring). `left()` cuts
+    `last_error` in the database, so a huge error text never leaves it; NULL stays NULL."""
     rows = conn.execute(
         """
         SELECT job_id, job_type, subject_id, attempts, left(last_error, %s), locked_at, created_at
         FROM jobs
         WHERE status = 'failed'
-        ORDER BY created_at DESC, job_id DESC
+        ORDER BY COALESCE(locked_at, created_at) DESC, job_id DESC
         LIMIT %s
         """,
         (_ERROR_CHARS, _FAILED_JOBS_LIMIT),
