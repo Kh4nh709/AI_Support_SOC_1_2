@@ -277,10 +277,17 @@ ADMIN_REVIEW = "/admin/digest/{alert_id}/review"
 REVIEW_FORM = {"day": "2026-09-30", "verdict": "correct"}
 
 
-def test_the_admin_digest_review_is_the_only_html_route_with_an_alert_id_and_takes_the_shared_type():
-    assert _id_paths_of(admin_digest) == {("post", ADMIN_REVIEW)}
-    hints = typing.get_type_hints(admin_digest.review_submit, include_extras=True)
-    assert hints["alert_id"] == deps.AlertId
+API_REVIEW = "/api/admin/digest/{alert_id}/review"
+API_REVIEW_BODY = {"day": "2026-09-30", "verdict": "correct"}
+
+
+def test_the_admin_digest_has_two_review_routes_with_an_alert_id_and_both_take_the_shared_type():
+    """The HTML route (P10-T17) and the JSON route (P11-T07) of the same module: each is listed
+    here, so a third cannot be added without a type and a test."""
+    assert _id_paths_of(admin_digest) == {("post", ADMIN_REVIEW), ("post", API_REVIEW)}
+    for endpoint in (admin_digest.review_submit, admin_digest.api_review):
+        hints = typing.get_type_hints(endpoint, include_extras=True)
+        assert hints["alert_id"] == deps.AlertId, endpoint.__name__
 
 
 def _admin_http(conn):
@@ -351,6 +358,66 @@ def test_a_wrong_role_is_still_a_403_on_the_admin_digest_review_with_a_control_c
 
 
 # ---------------------------------------------------------------------------
+# the JSON twin of that route: POST /api/admin/digest/{alert_id}/review (P11-T07)
+# ---------------------------------------------------------------------------
+
+
+def _post_api_review(http, raw_id: str, body, role: str):
+    http.role = role
+    url = API_REVIEW.replace("{alert_id}", quote(raw_id, safe=""))
+    return http.client.post(url, json=body)
+
+
+@pytest.mark.parametrize("char", CONTROL_CHARS)
+def test_a_control_character_in_the_id_is_a_404_on_the_json_digest_review(char):
+    http = _http(_NoSql())
+    try:
+        resp = _post_api_review(http, f"a{char}b", API_REVIEW_BODY, "admin")
+    finally:
+        _clear_overrides()
+    assert resp.status_code == 404, (resp.status_code, resp.text[:200])
+
+
+def test_a_control_character_wins_over_a_bad_body_on_the_json_digest_review():
+    http = _http(_NoSql())
+    try:
+        resp = _post_api_review(http, "a\x00b", {"day": "not a day", "verdict": "nope"}, "admin")
+    finally:
+        _clear_overrides()
+    assert resp.status_code == 404, (resp.status_code, resp.text[:200])
+
+
+@pytest.mark.parametrize("role", ["tier1", "tier2"])
+def test_a_wrong_role_is_still_a_403_on_the_json_digest_review_with_a_control_character(
+    monkeypatch, role
+):
+    class Conn:
+        def execute(self, *args, **kwargs):
+            return self
+
+        def fetchone(self):
+            return (1,)
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    http = _http(Conn())
+    written = []
+    monkeypatch.setattr(
+        "app.web.deps.write_event", lambda *a, **k: written.append((a, k)), raising=True
+    )
+    try:
+        resp = _post_api_review(http, "a\x00b", API_REVIEW_BODY, role)
+    finally:
+        _clear_overrides()
+    assert resp.status_code == 403, (resp.status_code, resp.text[:200])
+    assert len(written) == 1 and written[0][0][1] == "authz.denied"
+
+
+# ---------------------------------------------------------------------------
 # the case that was a 500: a real connection and a NUL byte
 # ---------------------------------------------------------------------------
 
@@ -367,6 +434,20 @@ def test_a_nul_byte_in_the_id_is_a_404_on_a_real_connection(db, method, template
     finally:
         for dep in (deps.get_conn, deps.get_config, deps.current_user):
             main.app.dependency_overrides.pop(dep, None)
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("char", ["\x00", "\x1b"])
+def test_a_control_character_in_the_id_is_a_404_on_the_json_digest_review_on_a_real_connection(
+    db, char
+):
+    http = _http(db)
+    try:
+        resp = _post_api_review(http, f"a{char}b", API_REVIEW_BODY, "admin")
+        assert resp.status_code == 404, (resp.status_code, resp.text[:200])
+        assert db.execute("SELECT 1").fetchone() == (1,)
+    finally:
+        _clear_overrides()
 
 
 @pytest.mark.db
