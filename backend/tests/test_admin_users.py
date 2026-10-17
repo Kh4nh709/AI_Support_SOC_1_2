@@ -895,9 +895,114 @@ def test_two_admins_demoting_each_other_at_once_leave_one_admin(dsn, sdb):
     assert _events(sdb, "admin.user_updated", a_id) == []
 
 
+def _three_admins(sdb, prefix: str) -> tuple[str, str, str]:
+    ids = tuple(_seed(sdb, "admin", prefix=f"{prefix}-{name}")[1] for name in "abc")
+    _only_these_admins_active(sdb, set(ids))
+    return ids
+
+
+@pytest.mark.parametrize(
+    "lost", [{"role": "tier1"}, {"is_active": False}], ids=["demoted", "deactivated"]
+)
+@pytest.mark.parametrize(
+    "attempt", [{"role": "tier2"}, {"is_active": False}], ids=["role", "active"]
+)
+def test_an_admin_who_has_stopped_being_one_cannot_change_a_role_or_the_active_flag(
+    dsn, sdb, lost, attempt
+):
+    """The actor passed `require_role` before A's change committed, so its token is still good.
+    With a third admin in place the last-admin count does not stop B: the actor check does."""
+    a_id, b_id, c_id = _three_admins(sdb, "stale")
+    with _connect(dsn) as conn_a, _connect(dsn) as conn_b:
+        admin_users.update_user(conn_a, actor_id=a_id, target_id=b_id, changes=lost)
+        conn_a.commit()
+        with pytest.raises(admin_users.ActorNotAdmin):
+            admin_users.update_user(conn_b, actor_id=b_id, target_id=c_id, changes=attempt)
+    row = _row(sdb, c_id)
+    assert (row["role"], row["is_active"], row["sessions_ended"]) == ("admin", True, False)
+    assert _events(sdb, "admin.user_updated", c_id) == []
+    assert _active_admins(sdb) == 2
+
+
+@pytest.mark.parametrize(
+    "target", ["c", "a"], ids=["third-admin", "the-demoter-with-a-third-present"]
+)
+def test_the_blocked_request_of_an_admin_demoted_meanwhile_is_refused_when_the_locks_go(
+    dsn, sdb, target
+):
+    """A demotes B and holds the locks; B's request (on C, or on A with C still there) waits;
+    A commits. B is no longer an admin, so its request is refused — the lock exists so that two
+    concurrent demotions cannot both pass, and this is the case where they would."""
+    a_id, b_id, c_id = _three_admins(sdb, f"blocked-{target}")
+    aimed = {"c": c_id, "a": a_id}[target]
+    conn_a, conn_b = _connect(dsn), _connect(dsn)
+    try:
+        admin_users.update_user(conn_a, actor_id=a_id, target_id=b_id, changes={"role": "tier1"})
+
+        def b_demotes_the_target():
+            try:
+                admin_users.update_user(
+                    conn_b, actor_id=b_id, target_id=aimed, changes={"role": "tier1"}
+                )
+                conn_b.commit()
+            except BaseException:
+                conn_b.rollback()
+                raise
+
+        thread, box = _in_thread(b_demotes_the_target)
+        thread.join(timeout=1.0)
+        assert thread.is_alive(), "B did not wait for A's locks"
+        conn_a.commit()
+        thread.join(timeout=15.0)
+        assert not thread.is_alive()
+    finally:
+        conn_a.close()
+        conn_b.close()
+    assert isinstance(box.get("error"), admin_users.ActorNotAdmin), box
+    assert _row(sdb, aimed)["role"] == "admin"
+    assert _events(sdb, "admin.user_updated", aimed) == []
+    assert _active_admins(sdb) == 2
+
+
+@pytest.mark.parametrize(
+    ("lost_sql", "actor_role", "role_in_payload"),
+    [
+        ("role = 'tier1'", "analyst", "tier1"),
+        ("is_active = false", "admin", "admin"),
+    ],
+    ids=["demoted", "deactivated"],
+)
+def test_a_stale_actor_gets_403_forbidden_with_authz_denied_and_nothing_changes(
+    client, sdb, lost_sql, actor_role, role_in_payload
+):
+    """Through HTTP. `current_user` is replaced by the claims B held when its request passed the
+    role check (a token from before A's change committed): what the race leaves behind."""
+    _, b_id, c_id = _three_admins(sdb, "route")
+    sdb.execute(f"UPDATE users SET {lost_sql} WHERE user_id = %s", (b_id,))  # A's change, committed
+    sdb.commit()
+    now = time.time()
+    stale = auth.Claims(user_id=b_id, username="stale", role="admin", iat=now, exp=now + 3600)
+    main.app.dependency_overrides[deps.current_user] = lambda: stale
+    path = f"/api/admin/users/{c_id}"
+    try:
+        response = client.patch(path, json={"role": "tier1"})
+    finally:
+        main.app.dependency_overrides.pop(deps.current_user, None)
+    assert response.status_code == 403
+    assert response.json() == {"detail": "forbidden"}
+    assert _row(sdb, c_id)["role"] == "admin"
+    assert _events(sdb, "admin.user_updated", c_id) == []
+    [(actor_id, denied_role, payload)] = _events(sdb, "authz.denied", path)  # committed
+    assert (actor_id, denied_role) == (b_id, actor_role)
+    assert payload["required"] == ["admin"] and payload["method"] == "PATCH"
+    assert payload["role"] == role_in_payload
+
+
 def test_three_admins_demoting_in_a_ring_always_leave_one(dsn, sdb):
-    """A demotes B, B demotes C, C demotes A — all at once. Whichever of the last two goes first
-    succeeds; the other finds one admin left. Either order, one admin remains."""
+    """A demotes B, B demotes C, C demotes A — all at once. A commits first. If B's request takes
+    the locks next, B is no longer an admin and is refused (and C then demotes A); if C's takes
+    them, C demotes A and B's request finds C the last admin. Either way exactly one of the two
+    is refused, exactly one goes through, and one admin remains."""
     _, a_id = _seed(sdb, "admin", prefix="ring-a")
     _, b_id = _seed(sdb, "admin", prefix="ring-b")
     _, c_id = _seed(sdb, "admin", prefix="ring-c")
@@ -935,8 +1040,12 @@ def test_three_admins_demoting_in_a_ring_always_leave_one(dsn, sdb):
         for conn in conns.values():
             conn.close()
     outcomes = [box.get("error") for box in (box_bc, box_ca)]
-    refused = [e for e in outcomes if isinstance(e, admin_users.UserConflict)]
-    assert len(refused) == 1 and refused[0].reason == "last_active_admin", outcomes
+    refused = [
+        e for e in outcomes if isinstance(e, (admin_users.UserConflict, admin_users.ActorNotAdmin))
+    ]
+    assert len(refused) == 1, outcomes
+    if isinstance(refused[0], admin_users.UserConflict):
+        assert refused[0].reason == "last_active_admin"
     assert outcomes.count(None) == 1  # the other one went through
     assert _active_admins(sdb) == 1
 

@@ -3,13 +3,20 @@
 `POST /api/admin/users/{user_id}/password` and `POST /api/admin/users/{user_id}/unlock`. Every
 route is `require_role("admin")`; a refusal writes `authz.denied` (`web/deps.py`).
 
-The last active admin. An actor is always an active admin, so a lone request can never remove the
-last one: the other admin, the actor, remains. Two admins acting at once can — A demotes B while B
-demotes A, each request alone leaving one admin. `update_user` therefore locks, for any change of
-`role` or `is_active`, every active admin row (`ORDER BY user_id FOR UPDATE`, one fixed order, so
-two admins acting on each other queue instead of deadlocking) and only then the target row. The
-second request waits for the first one's commit, re-reads who is still an active admin, and is
-refused with `last_active_admin` if the target is the only one left.
+The last active admin. A request is checked as an admin when it starts (`require_role`), and a lone
+request leaves its actor, an admin, in place: it can never remove the last one. Two admins acting at
+once can — A demotes B while B demotes A, each request alone leaving one admin — and with a third
+admin present the count alone does not stop the second: the actor that passed the role check on a
+token from before the first change committed is no longer an admin when its request gets to run.
+`update_user` therefore locks, for any change of `role` or `is_active`, every active admin row
+(`ORDER BY user_id FOR UPDATE`, one fixed order, so two admins acting on each other queue instead of
+deadlocking) and only then the target row. The second request waits for the first one's commit and
+re-reads who is an active admin *now*. Then, in this order:
+- the target is the only active admin left → `last_active_admin` (409);
+- the actor is not in that list → `ActorNotAdmin`, which the route turns into 403 `forbidden`
+  with `authz.denied` committed, exactly what `require_role` does for a wrong role.
+A change that touches neither field (a display name, a reset, an unlock, a create) takes no admin
+lock and keeps the read-then-act shape every admin route has.
 
 Sessions. A role change, a deactivation and a password reset set `sessions_invalid_before` in the
 same transaction. The stamp is `clock_timestamp()`, not `now()`: `now()` is the start of the
@@ -46,7 +53,7 @@ from psycopg.rows import dict_row
 from app.audit.events import write_event
 from app.infra import auth
 from app.infra.auth import ROLES, Claims
-from app.web.deps import Conn, require_role
+from app.web.deps import ROLE_TO_ACTOR, Conn, require_role
 
 router = APIRouter()
 
@@ -82,6 +89,12 @@ class UserNotFound(Exception):
     """No user has that id."""
 
 
+class ActorNotAdmin(Exception):
+    """The actor stopped being an active admin while this request waited on the locks: its role
+    check passed on a token from before another admin's change committed. The route answers 403
+    and writes `authz.denied`, as `require_role` does."""
+
+
 # --------------------------------------------------------------------------
 # the store
 # --------------------------------------------------------------------------
@@ -103,8 +116,9 @@ def update_user(
     """Apply `changes` (⊆ role, display_name, is_active; values already validated) to one user, in
     the caller's transaction, and return the new `UserRow`. The caller commits.
 
-    Raises `UserNotFound`, or `UserConflict` (`self_change`, `last_active_admin`). A value equal to
-    the current one is not a change: when nothing differs, nothing is written and the sessions
+    Raises `UserNotFound`, `UserConflict` (`self_change`, `last_active_admin`), or `ActorNotAdmin`
+    (a change of `role` or `is_active` by someone who is no longer an active admin). A value equal
+    to the current one is not a change: when nothing differs, nothing is written and the sessions
     stand. The audit row is `admin.user_updated` with `before`/`after` over the changed fields
     only, signed by the admin `actor_id`.
     """
@@ -148,6 +162,11 @@ def update_user(
     others = [admin for admin in active_admins if admin != target_id]
     if was_active_admin and not stays_active_admin and not others:
         raise UserConflict("last_active_admin")
+    # After the count, so the two-admin race still answers `last_active_admin`. The actor passed
+    # `require_role` on a token that may predate a change another admin has committed while this
+    # request waited on the locks; the locked list is who is an active admin *now*.
+    if ("role" in changed or "is_active" in changed) and actor_id not in active_admins:
+        raise ActorNotAdmin(actor_id)
 
     assignments = [sql.SQL("{} = %s").format(sql.Identifier(key)) for key in changed]
     if "role" in changed or changed.get("is_active") is False:
@@ -353,7 +372,7 @@ def api_create_user(conn: Conn, claims: Admin, body: JsonObject) -> dict[str, st
     ),
 )
 def api_update_user(
-    user_id: uuid.UUID, conn: Conn, claims: Admin, body: JsonObject
+    request: Request, user_id: uuid.UUID, conn: Conn, claims: Admin, body: JsonObject
 ) -> dict[str, Any]:
     _no_unknown_keys(body, _UPDATABLE)
     if not body:
@@ -366,6 +385,33 @@ def api_update_user(
         raise HTTPException(status_code=404, detail={"reason": "not_found"}) from exc
     except UserConflict as exc:
         raise HTTPException(status_code=409, detail={"reason": exc.reason}) from exc
+    except ActorNotAdmin as exc:
+        _deny_stale_actor(conn, request, claims)
+        raise HTTPException(status_code=403, detail="forbidden") from exc
+
+
+def _deny_stale_actor(conn: psycopg.Connection, request: Request, claims: Claims) -> None:
+    """What `require_role` does for a wrong role, for an admin whose role changed under the
+    request: roll back whatever `update_user` held, write `authz.denied`, commit it. The caller
+    raises the 403 after this, so the event survives it. The role in the payload is the row's
+    now, not the token's."""
+    conn.rollback()
+    row = conn.execute("SELECT role FROM users WHERE user_id = %s", (claims.user_id,)).fetchone()
+    role = row[0] if row else claims.role
+    write_event(
+        conn,
+        "authz.denied",
+        request.url.path,
+        ROLE_TO_ACTOR.get(role, "analyst"),
+        actor_id=claims.user_id,
+        payload={
+            "required": ["admin"],
+            "role": role,
+            "method": request.method,
+            "reason": "actor_no_longer_admin",
+        },
+    )
+    conn.commit()
 
 
 @router.post(
