@@ -863,7 +863,8 @@ def test_retry_of_an_unknown_job_is_404(client) -> None:
         resp = _retry(tc, job_id)
         assert resp.status_code == 404
         assert resp.json() == {"detail": {"reason": "not_found"}}
-    assert _events(db, "admin.job_retried") == []
+        # by subject: the concurrency tests below commit `admin.job_retried` rows of their own
+        assert _events(db, "admin.job_retried", str(job_id)) == []
 
 
 @pytest.mark.db
@@ -906,10 +907,13 @@ def _wait_for_a_backend_blocked_on_a_lock(dsn: Any, timeout: float = 10.0) -> No
     raise AssertionError("the retry request never blocked on the other connection's lock")
 
 
-def _retry_in_a_thread(dsn: Any, job_id: int) -> tuple[threading.Thread, dict[str, Any]]:
+def _retry_in_a_thread(
+    dsn: Any, job_id: int, start: threading.Barrier | None = None
+) -> tuple[threading.Thread, dict[str, Any]]:
     """`POST .../retry` as an admin on a connection of its own (committed on success, rolled
     back on error, exactly as `deps.get_conn` does it). `out` gets the `response`, or the
-    `error` an unhandled server exception raised."""
+    `error` an unhandled server exception raised. With `start`, the thread waits on that
+    barrier first, so several of them post at the same moment."""
     claims = Claims(user_id=str(uuid.uuid4()), username="a", role="admin", iat=0.0, exp=0.0)
     cfg = config.load()
 
@@ -932,6 +936,8 @@ def _retry_in_a_thread(dsn: Any, job_id: int) -> tuple[threading.Thread, dict[st
 
     def run() -> None:
         try:
+            if start is not None:
+                start.wait(timeout=10)
             out["response"] = TestClient(main.app).post(f"/api/admin/jobs/{job_id}/retry")
         except Exception as exc:  # noqa: BLE001 - the test reports whatever the app raised
             out["error"] = exc
@@ -970,6 +976,57 @@ def test_two_retries_of_one_job_cannot_both_pass_the_for_update_lock(scratch_dsn
     finally:
         _clear_overrides()
         holder.close()
+        with psycopg.connect(scratch_dsn, autocommit=True) as cleanup:
+            cleanup.execute("DELETE FROM jobs WHERE job_id = %s", (job_id,))
+
+
+@pytest.mark.db
+def test_two_simultaneous_retries_give_one_200_and_one_409_and_never_a_deadlock(
+    scratch_dsn, monkeypatch
+) -> None:
+    """Two admins press "Chạy lại" on the same failed job at the same moment, each request on
+    its own committed connection and started by a barrier. The lock must be exclusive:
+    `FOR UPDATE` parks the second request on the row until the first commits, and it then reads
+    `pending` and answers 409 `not_failed`. A weaker lock (`FOR SHARE`) lets both read `failed`;
+    both UPDATEs then wait on each other's share lock and PostgreSQL aborts one with
+    `DeadlockDetected`, a 500.
+
+    To make the weaker lock fail every time rather than when the scheduler is kind, the sibling
+    check, which runs after the read and before the UPDATE, waits (up to 2 s) for the other
+    request to arrive. Under `FOR UPDATE` the other request is parked on the row and never
+    arrives, so the wait ends by itself and costs two seconds; under `FOR SHARE` both arrive.
+    The one `admin.job_retried` row it commits cannot be deleted (`audit_events` is
+    append-only): the module's scratch database is dropped at the end."""
+    with psycopg.connect(scratch_dsn, autocommit=True) as setup:
+        job_id = _job(setup, subject_id="alert-simultaneous", last_error="old failure")
+    real_check = admin_overview._has_live_sibling
+    meeting = threading.Barrier(2)
+
+    def wait_for_the_other_request_then_check(*args: Any) -> bool:
+        try:
+            meeting.wait(timeout=2)
+        except threading.BrokenBarrierError:
+            pass
+        return real_check(*args)
+
+    monkeypatch.setattr(admin_overview, "_has_live_sibling", wait_for_the_other_request_then_check)
+    start = threading.Barrier(2)
+    try:
+        first, out_first = _retry_in_a_thread(scratch_dsn, job_id, start)
+        second, out_second = _retry_in_a_thread(scratch_dsn, job_id, start)
+        first.join(timeout=30)
+        second.join(timeout=30)
+        assert not first.is_alive() and not second.is_alive()
+        outs = [out_first, out_second]
+        assert [o["error"] for o in outs if "error" in o] == []  # no DeadlockDetected, no 500
+        assert sorted(o["response"].status_code for o in outs) == [200, 409]
+        loser = next(o["response"] for o in outs if o["response"].status_code == 409)
+        assert loser.json() == {"detail": {"reason": "not_failed"}}
+        with psycopg.connect(scratch_dsn, autocommit=True) as check:
+            assert len(_events(check, "admin.job_retried", str(job_id))) == 1
+            assert _job_row(check, job_id)[:2] == ("pending", 0)
+    finally:
+        _clear_overrides()
         with psycopg.connect(scratch_dsn, autocommit=True) as cleanup:
             cleanup.execute("DELETE FROM jobs WHERE job_id = %s", (job_id,))
 
