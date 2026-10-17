@@ -677,12 +677,16 @@ def test_deactivating_ends_the_sessions_and_reactivating_lets_the_user_back(clie
     off = client.patch(f"/api/admin/users/{user_id}", headers=headers, json={"is_active": False})
     assert off.status_code == 200 and off.json()["is_active"] is False
     assert not _alive(client, user_headers)
+    # the stamp itself, not only "the row is inactive": that alone would refuse the token
+    assert _row(sdb, user_id)["sessions_ended"]
     login = {"username": username, "password": PASSWORD}
     assert client.post("/api/auth/login", json=login).status_code == 401
     [(_, _, payload)] = _events(sdb, "admin.user_updated", user_id)
     assert payload["before"] == {"is_active": True} and payload["after"] == {"is_active": False}
     on = client.patch(f"/api/admin/users/{user_id}", headers=headers, json={"is_active": True})
     assert on.status_code == 200 and on.json()["is_active"] is True
+    # reactivation must not resurrect the session that was ended when the account was switched off
+    assert not _alive(client, user_headers)
     assert _alive(client, _login(client, username))
 
 
@@ -775,6 +779,24 @@ def test_an_admin_naming_their_own_current_values_is_not_a_self_change(client, s
     assert _alive(client, headers)  # and the sessions stand
 
 
+def test_an_admin_sending_their_own_whole_row_with_only_the_name_changed_is_not_refused(
+    client, sdb
+):
+    """What a row form sends: the new name beside the unchanged role and flag. Only the fields
+    that differ count, so this is a display-name change, not a self change."""
+    _, admin_id, headers = _admin(client, sdb)
+    response = client.patch(
+        f"/api/admin/users/{admin_id}",
+        headers=headers,
+        json={"display_name": "Tôi", "role": "admin", "is_active": True},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["display_name"] == "Tôi"
+    [(_, _, payload)] = _events(sdb, "admin.user_updated", admin_id)
+    assert payload["before"].keys() == {"display_name"} == payload["after"].keys()
+    assert _row(sdb, admin_id)["sessions_ended"] is False and _alive(client, headers)
+
+
 def test_an_admin_may_change_their_own_display_name(client, sdb):
     _, admin_id, headers = _admin(client, sdb)
     response = client.patch(
@@ -824,6 +846,9 @@ def test_unknown_and_malformed_ids(client, sdb):
         call = client.patch(f"/api/admin/users/{path}", headers=headers, json={"role": "tier1"})
         assert call.status_code == 422, path
         assert _unlock(client, headers, path).status_code == 422
+        reset_path = f"/api/admin/users/{path}/password"
+        reset_bad = client.post(reset_path, headers=headers, json={"password": NEW_PASSWORD})
+        assert reset_bad.status_code == 422, path
     assert _events(sdb, "admin.user_updated", unknown) == []
 
 
