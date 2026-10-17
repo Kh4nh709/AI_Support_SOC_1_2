@@ -47,6 +47,7 @@ SECTIONS = (
     "by_source",
     "top_agents",
     "funnel",
+    "waiting",
     "cases_open",
     "health",
     "failed_jobs",
@@ -266,6 +267,7 @@ def test_empty_database_answers_every_section_with_its_empty_shape(client) -> No
         "by_status": {},
         "triage": {"ready": 0, "unavailable": 0, "pending": 0, "none": 0},
     }
+    assert body["waiting"] == {"count": 0, "oldest_received_at": None}
     assert body["cases_open"] == 0
     assert body["health"] is None
     assert body["failed_jobs"] == []
@@ -486,6 +488,60 @@ def test_funnel_counts_heads_by_status_and_by_triage_status(client) -> None:
 
 
 # ---------------------------------------------------------------------------
+# waiting — the KPI "clusters waiting for Tier 1, with the oldest" (spec §4.1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_waiting_counts_queued_tier1_heads_and_the_oldest_received(client) -> None:
+    tc, db, _ = client
+    oldest = _ago(hours=5)
+    _alert(db, "w-old", status="queued_tier1", received_at=oldest)
+    _alert(db, "w-mid", status="queued_tier1", received_at=_ago(hours=2))
+    _alert(db, "w-new", status="queued_tier1", received_at=_ago(minutes=5))
+    _alert(db, "other-1", status="tier1_active", received_at=_ago(days=1))  # not waiting
+    _alert(db, "other-2", status="escalated_tier2", received_at=_ago(days=2))
+    _alert(db, "other-3", status="auto_closed", received_at=_ago(days=3))
+    _alert(db, "syn-q", status="queued_tier1", is_synthetic=True, received_at=_ago(days=4))
+    # a row that points at a head is not a cluster, whatever its status says
+    _alert(db, "not-a-head", duplicate_of="w-old", received_at=_ago(days=5))
+    db.execute(
+        "UPDATE alerts SET status = 'queued_tier1', closed_at = NULL, sealed_at = NULL "
+        "WHERE alert_id = 'not-a-head'"
+    )
+
+    waiting = _get(tc).json()["waiting"]
+
+    assert set(waiting) == {"count", "oldest_received_at"}
+    assert waiting["count"] == 3
+    assert datetime.fromisoformat(waiting["oldest_received_at"]) == oldest
+
+
+@pytest.mark.db
+def test_nothing_waiting_is_a_zero_count_and_a_null_oldest(client) -> None:
+    tc, db, _ = client
+    _alert(db, "busy", status="tier1_active")
+    body = _get(tc).json()
+    assert body["waiting"] == {"count": 0, "oldest_received_at": None}
+    assert body["errors"] == []
+
+
+@pytest.mark.db
+def test_waiting_is_what_waits_now_not_what_arrived_in_the_range(client) -> None:
+    tc, db, _ = client
+    oldest = _ago(days=40)  # outside every range
+    _alert(db, "w-ancient", status="queued_tier1", received_at=oldest)
+    _alert(db, "w-recent", status="queued_tier1", received_at=_ago(hours=1))
+
+    for range_ in ("24h", "7d", "30d"):
+        waiting = _get(tc, range=range_).json()["waiting"]
+        assert waiting["count"] == 2, range_
+        assert datetime.fromisoformat(waiting["oldest_received_at"]) == oldest, range_
+    # the range does bound what the same alerts add to the funnel
+    assert _get(tc, range="30d").json()["funnel"]["by_status"] == {"queued_tier1": 1}
+
+
+# ---------------------------------------------------------------------------
 # cases_open, health, failed_jobs, inventory
 # ---------------------------------------------------------------------------
 
@@ -674,7 +730,7 @@ def _driver_error(conn: Any) -> None:
 
 @pytest.mark.db
 @pytest.mark.parametrize("fault", [_sql_error, _driver_error], ids=["sql-error", "driver-error"])
-@pytest.mark.parametrize("failing", ["top_agents", "cases_open"])
+@pytest.mark.parametrize("failing", ["top_agents", "waiting", "cases_open"])
 def test_a_failing_section_is_null_with_an_error_and_the_others_still_compute(
     client, monkeypatch, failing: str, fault
 ) -> None:
@@ -695,6 +751,10 @@ def test_a_failing_section_is_null_with_an_error_and_the_others_still_compute(
     # the sections AFTER the failing one ran on a usable transaction: real data, not nulls
     assert body["alerts_by_day"][0]["total"] == 1
     assert body["funnel"]["by_status"] == {"queued_tier1": 1}
+    if failing != "waiting":
+        assert body["waiting"]["count"] == 1
+    if failing != "cases_open":
+        assert body["cases_open"] == 1
     assert body["failed_jobs"][0]["subject_id"] == "seed-failed"
     assert body["health"]["ok"] is True
     assert body["inventory"]["assets"] == 1
@@ -755,6 +815,7 @@ _DAY = timedelta(hours=24)
         ("_by_source", (_DAY,), 2),  # alerts, then rejected_alerts
         ("_top_agents", (_DAY,), 1),
         ("_funnel", (_DAY,), 1),
+        ("_waiting", (), 1),
         ("_cases_open", (), 1),
         ("_health", (), 1),
         ("_failed_jobs", (), 1),

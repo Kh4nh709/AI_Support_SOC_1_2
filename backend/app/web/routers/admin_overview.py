@@ -2,7 +2,7 @@
 and §5.4): `GET /api/admin/overview?range=24h|7d|30d` and `POST /api/admin/jobs/{job_id}/retry`.
 Both are `Admin` only; `iter_routers()` discovers this module.
 
-**Each section fails alone.** The overview is eight independent reads. Each runs in its own
+**Each section fails alone.** The overview is nine independent reads. Each runs in its own
 savepoint (`conn.transaction()` inside the request's transaction), after its own
 `SET LOCAL statement_timeout`. A `psycopg.Error` rolls that savepoint back, so the request's
 transaction stays usable: the section answers `null`, `{section, error}` is added to `errors`,
@@ -22,7 +22,8 @@ sets its own anyway, and nothing runs after the last one but the commit.
 Read rules shared by the alert sections:
 - synthetic alerts (`is_synthetic`) are left out, as the queue, the digest and the health
   checks leave them out;
-- the window is `received_at >= now() - <range>`, on the database's clock;
+- the window is `received_at >= now() - <range>`, on the database's clock; `waiting` is the one
+  alert section the range does not bound (it is what waits for Tier 1 now);
 - a head is `duplicate_of IS NULL`.
 
 `failed_jobs` is ordered by the job's last attempt, `COALESCE(locked_at, created_at)` newest
@@ -172,6 +173,17 @@ def _funnel(conn: Any, window: timedelta) -> dict[str, Any]:
     return {"by_status": by_status, "triage": triage}
 
 
+def _waiting(conn: Any) -> dict[str, Any]:
+    """Clusters waiting for Tier 1 now (spec §4.1 KPI): heads in `queued_tier1`, synthetic left
+    out, NOT bounded by the range. `oldest_received_at` is `None` when none waits."""
+    count, oldest = conn.execute("""
+        SELECT count(*), min(received_at)
+        FROM alerts
+        WHERE duplicate_of IS NULL AND status = 'queued_tier1' AND NOT is_synthetic
+        """).fetchone()
+    return {"count": count, "oldest_received_at": oldest}
+
+
 def _cases_open(conn: Any) -> int:
     (count,) = conn.execute("SELECT count(*) FROM cases WHERE status = 'investigating'").fetchone()
     return count
@@ -268,6 +280,7 @@ def api_overview(
         ("by_source", lambda: _by_source(conn, window)),
         ("top_agents", lambda: _top_agents(conn, window)),
         ("funnel", lambda: _funnel(conn, window)),
+        ("waiting", lambda: _waiting(conn)),
         ("cases_open", lambda: _cases_open(conn)),
         ("health", lambda: _health(conn)),
         ("failed_jobs", lambda: _failed_jobs(conn)),
