@@ -49,7 +49,8 @@ cp <backup>/secrets/env .env; cp <backup>/secrets/root-ca.pem conf/root-ca.pem; 
 cp <backup>/conf/{inventory.yaml,identities.yaml,iocs.csv} conf/        # git-ignored estate files
 # on a machine with no native cluster, set DB_PORT=5432 and the three DSNs to :5432 in .env
 make up          # db restores backups/latest.dump on its first start, then app + worker come up
-make migrate     # must print "0 applied, 17 already present"
+make migrate     # on the tracked dump (it holds 17 migrations) prints "2 applied, 17 already present"
+                 # (018 and 019); run again, "0 applied, 19 already present"
 make test && make test-db
 ```
 
@@ -88,7 +89,7 @@ two pullers on one `source_cursor` corrupt it.
 2. `make db-up` → `01-roles.sh` → `02-restore.sh`: every count matched; 21 tables, 40 indexes,
    81 constraints, 7 triggers, 75 grants to `app_rw` — identical to the native cluster; the two
    default ACLs re-issued for `soc`.
-3. `.env` DSNs switched to `127.0.0.1:55432`; `make migrate` → `0 applied, 17 already present`.
+3. `.env` DSNs switched to `127.0.0.1:55432`; `make migrate` → `0 applied, 17 already present` (17 was every migration on 20/09; on today's code `make migrate` ends at 19, see "Restore on a fresh machine").
 4. `make up`: the first worker start could not read the 0400 CA (image uid 10001) → containers now
    run as the host user; the next pull continued from the native cursor (`last_sort`
    `1789912039634` → `1789912812175`, 5 hits, 0 new, 5 duplicates — the 60 s overlap, no gap),
