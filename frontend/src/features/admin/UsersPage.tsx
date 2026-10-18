@@ -1,4 +1,4 @@
-// `/admin/users` (P11-T12, spec §4.2): the accounts of the console, the actions each state allows, the four
+// `/admin/users` (P11-T12, spec §4.2): the accounts of the console, the actions each state allows, the five
 // dialogs, the create panel and the read-only matrix of role to function. TanStack Query owns the one read
 // (`adminKeys.users`); every write is made inside a dialog or the create panel, goes through `api/admin.ts`, and
 // invalidates through `invalidateAfter`. There are no optimistic updates: a role select shows what the server
@@ -7,9 +7,13 @@
 // The caller's own row is told by the session's username (a username is unique and cannot be renamed, and the
 // login looks it up exactly). On it the role select and "Vô hiệu hoá" are disabled; the server still refuses
 // the change with `409 self_change`, and the page shows that text too if it ever comes.
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
-import { adminErrorOf, listUsers, updateUser, type UserRow } from "../../api/admin";
+//
+// Focus. A write that changes a row's state (deactivate, reactivate) replaces the controls the admin used, and a
+// removed element drops the focus on the page body. The page asks for the focus to go to that row's new main
+// button once the list has been read again, or to the table when the row is not in it any more.
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { adminErrorOf, listUsers, type UserRow } from "../../api/admin";
 import { ROLES, isRole, type Role } from "../../api/types";
 import { useAuth } from "../../auth/AuthProvider";
 import { DataTable, type Column } from "../../components/DataTable";
@@ -20,14 +24,15 @@ import { S } from "../../strings";
 import { RoleMatrix } from "./RoleMatrix";
 import { RowMenu } from "./RowMenu";
 import { UserCreatePanel } from "./UserCreatePanel";
-import { adminKeys, invalidateAfter } from "./adminKeys";
+import { adminKeys } from "./adminKeys";
 import {
   DeactivateDialog,
+  ReactivateDialog,
   ResetPasswordDialog,
   RoleChangeDialog,
   UnlockDialog,
 } from "./dialogs/UserDialogs";
-import { accountState, failureOf, matchesSearch, type AccountState } from "./usersModel";
+import { accountState, matchesSearch, type AccountState } from "./usersModel";
 
 const T = S.admin.usersPage;
 
@@ -58,6 +63,7 @@ const ACTION =
 type OpenDialog =
   | { kind: "role"; user: UserRow; to: Role }
   | { kind: "deactivate"; user: UserRow }
+  | { kind: "reactivate"; user: UserRow }
   | { kind: "reset"; user: UserRow }
   | { kind: "unlock"; user: UserRow };
 
@@ -78,27 +84,25 @@ function TableSkeleton() {
 
 export function UsersPage() {
   const { session } = useAuth();
-  const client = useQueryClient();
   const now = useNow();
   const query = useQuery({ queryKey: adminKeys.users, queryFn: listUsers });
   const [search, setSearch] = useState("");
   const [dialog, setDialog] = useState<OpenDialog | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
+  // The main button of each row, and the row that should get the focus when the list next renders.
+  const mainButtons = useRef(new Map<string, HTMLButtonElement>());
+  const focusRow = useRef<string | null>(null);
+  const tableBox = useRef<HTMLDivElement>(null);
 
-  // Reactivating needs no dialog (the canvas draws none): it is undone by deactivating, and nobody is signed out.
-  const reactivate = useMutation({
-    mutationFn: (user: UserRow) => updateUser(user.user_id, { is_active: true }),
-    onMutate: () => setProblem(null),
-    onSuccess: async (_row, user) => {
-      await invalidateAfter(client, "updateUser");
-      setNotice(T.done.reactivate(user.username));
-    },
-    onError: (error) => {
-      const failure = failureOf(adminErrorOf(error));
-      setProblem(failure.text);
-      if (failure.reload) void client.invalidateQueries({ queryKey: adminKeys.users });
-    },
+  // Runs after every render, and does nothing unless a row asked for the focus. The dialog's own cleanup (which
+  // gives the focus back to the element it was opened from) runs before this in the same commit, so it cannot
+  // undo it. The row is in the list that was read again before `done` is called, so its new main button is
+  // already on the page; a row that is not in the list any more sends the focus to the table.
+  useEffect(() => {
+    const id = focusRow.current;
+    if (id === null || query.data === undefined) return;
+    focusRow.current = null;
+    (mainButtons.current.get(id) ?? tableBox.current)?.focus();
   });
 
   if (query.data === undefined && query.isError) {
@@ -115,9 +119,15 @@ export function UsersPage() {
   const isOwn = (user: UserRow) => ownName !== null && user.username === ownName;
   const shown = users === null ? [] : users.filter((user) => matchesSearch(user, search));
 
-  const done = (message: string) => {
+  /** A dialog's write succeeded. `refocus`: the row it was about changed state, so its controls are new. */
+  const done = (message: string, refocus?: UserRow) => {
+    if (refocus !== undefined) focusRow.current = refocus.user_id;
     setDialog(null);
     setNotice(message);
+  };
+  const mainButtonRef = (id: string) => (element: HTMLButtonElement | null) => {
+    if (element === null) mainButtons.current.delete(id);
+    else mainButtons.current.set(id, element);
   };
 
   const columns: readonly Column<UserRow>[] = [
@@ -203,17 +213,14 @@ export function UsersPage() {
         // An inactive account has one action. An active or a locked one has its main action and, behind the
         // row's "more" button, "Vô hiệu hoá" (disabled on the caller's own row).
         if (state === "inactive") {
-          const reactivating =
-            reactivate.isPending && reactivate.variables?.user_id === user.user_id;
           return (
             <div className="flex justify-end">
               <button
+                ref={mainButtonRef(user.user_id)}
                 type="button"
                 aria-label={name(T.action.reactivate)}
-                disabled={reactivating}
-                aria-busy={reactivating || undefined}
                 className={ACTION}
-                onClick={() => reactivate.mutate(user)}
+                onClick={() => setDialog({ kind: "reactivate", user })}
               >
                 {T.action.reactivate}
               </button>
@@ -231,6 +238,7 @@ export function UsersPage() {
             title={S.admin.reason.self_change}
             leading={
               <button
+                ref={mainButtonRef(user.user_id)}
                 type="button"
                 aria-label={name(main)}
                 className={ACTION}
@@ -290,33 +298,20 @@ export function UsersPage() {
           </label>
         </div>
 
-        {problem !== null && (
-          <div
-            role="alert"
-            className="flex items-start justify-between gap-3 rounded-lg border border-[#5a2e36] bg-[#2a1016] px-3.5 py-3 text-[13.5px] leading-snug text-[#fda4af]"
-          >
-            <span>{problem}</span>
-            <button
-              type="button"
-              onClick={() => setProblem(null)}
-              className="shrink-0 rounded border border-[#5a2e36] px-2 py-0.5 text-xs hover:bg-ground focus-visible:outline-2 focus-visible:outline-text"
-            >
-              {S.common.close}
-            </button>
-          </div>
-        )}
-
         {users === null ? (
           <TableSkeleton />
         ) : (
-          <DataTable
-            label={T.tableLabel}
-            columns={columns}
-            rows={shown}
-            rowKey={(user) => user.user_id}
-            empty={empty}
-            busy={query.isFetching}
-          />
+          // The box can take the focus (not by Tab) for the case of a row that is not in the list any more.
+          <div ref={tableBox} tabIndex={-1} className="focus:outline-none">
+            <DataTable
+              label={T.tableLabel}
+              columns={columns}
+              rows={shown}
+              rowKey={(user) => user.user_id}
+              empty={empty}
+              busy={query.isFetching}
+            />
+          </div>
         )}
       </div>
 
@@ -345,7 +340,18 @@ export function UsersPage() {
         />
       )}
       {dialog?.kind === "deactivate" && (
-        <DeactivateDialog user={dialog.user} onClose={() => setDialog(null)} onDone={done} />
+        <DeactivateDialog
+          user={dialog.user}
+          onClose={() => setDialog(null)}
+          onDone={(message) => done(message, dialog.user)}
+        />
+      )}
+      {dialog?.kind === "reactivate" && (
+        <ReactivateDialog
+          user={dialog.user}
+          onClose={() => setDialog(null)}
+          onDone={(message) => done(message, dialog.user)}
+        />
       )}
       {dialog?.kind === "reset" && (
         <ResetPasswordDialog
@@ -356,7 +362,11 @@ export function UsersPage() {
         />
       )}
       {dialog?.kind === "unlock" && (
-        <UnlockDialog user={dialog.user} onClose={() => setDialog(null)} onDone={done} />
+        <UnlockDialog
+          user={dialog.user}
+          onClose={() => setDialog(null)}
+          onDone={(message) => done(message, dialog.user)}
+        />
       )}
     </div>
   );

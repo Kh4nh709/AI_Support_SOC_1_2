@@ -1,14 +1,19 @@
-// The four confirmation dialogs of the users page (P11-T12, the canvas's "NGƯỜI DÙNG & QUYỀN" cards): change a
-// role, deactivate, reset a password, unlock. Each owns its write, so a page mounts it while it is open and
-// unmounts it to close it (`ConfirmDialog`'s own rule). Each:
+// The confirmation dialogs of the users page (P11-T12, the canvas's "NGƯỜI DÙNG & QUYỀN" cards): change a
+// role, deactivate, reactivate, reset a password, unlock. Each owns its write, so a page mounts it while it is
+// open and unmounts it to close it (`ConfirmDialog`'s own rule). Each:
 //   - sends its write through `api/admin.ts` and, on success, invalidates through `invalidateAfter` and tells the
 //     page what to say (`onDone`); the dialog never closes by itself;
 //   - shows what went wrong inside the dialog (`failureOf`). A refusal no retry can change (the last active
 //     admin, a change to oneself, a stale actor, an account that is gone) keeps the title and the alert and only
 //     the button "Đóng" (`hideConfirm`); anything else leaves the buttons usable so the admin can try again;
-//   - holds nothing typed after it closes: it is unmounted.
+//   - holds nothing typed after it closes: it is unmounted, and its mutation is dropped from TanStack's cache
+//     (`useUserWrite`: `gcTime: 0` and a `reset` as soon as the write settles), so a password is not kept in
+//     the mutation cache's variables;
+//   - sends a write once: a ref latches it, because TanStack Query tells React a mutation is pending only on a
+//     timer, so two presses in one tick would both find the confirm button enabled (a Director ruling for every
+//     write of the console; a shared `useSubmitLatch` from P11-T14 is to replace the ref here).
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import {
   ADMIN_LIMITS,
   adminErrorOf,
@@ -34,7 +39,10 @@ type DialogProps = {
   onDone: (notice: string) => void;
 };
 
-/** One write of the dialog, its failure, and what a failure does to the list behind it. */
+/**
+ * One write of the dialog, its failure, and what a failure does to the list behind it. `submit` sends it once:
+ * the latch is released when the write settles (success or failure), so a failed write can be tried again.
+ */
 function useUserWrite<V>(
   write: (value: V) => Promise<unknown>,
   invalidates: AdminMutation,
@@ -42,8 +50,12 @@ function useUserWrite<V>(
 ) {
   const client = useQueryClient();
   const [failure, setFailure] = useState<Failure | null>(null);
+  const latch = useRef(false);
   const mutation = useMutation({
     mutationFn: write,
+    // A reset's variables are a password. TanStack keeps a mutation's variables for `gcTime` after its last
+    // observer is gone (5 minutes by default): nothing of this dialog is worth keeping.
+    gcTime: 0,
     onMutate: () => setFailure(null),
     onSuccess: async () => {
       await invalidateAfter(client, invalidates);
@@ -55,8 +67,19 @@ function useUserWrite<V>(
       // The list on screen may not be the truth any more (the account is gone, the admin count changed).
       if (read.reload) void client.invalidateQueries({ queryKey: adminKeys.users });
     },
+    onSettled: () => {
+      latch.current = false;
+    },
   });
-  return { mutation, failure, clearFailure: () => setFailure(null) };
+  const { reset } = mutation;
+  const submit = (value: V) => {
+    if (latch.current) return;
+    latch.current = true;
+    // `reset` once it has settled: a dialog that stays open after a failure would otherwise keep the mutation,
+    // and its variables, for as long as it is mounted. (After a success the dialog is unmounted instead.)
+    mutation.mutate(value, { onSettled: () => reset() });
+  };
+  return { submit, busy: mutation.isPending, failure, clearFailure: () => setFailure(null) };
 }
 
 /** The props every dialog hands `ConfirmDialog` for a failure: the alert, and the refusal's single button. */
@@ -83,11 +106,11 @@ export function RoleChangeDialog({ user, to, onClose, onDone }: DialogProps & { 
     <ConfirmDialog
       title={T.dialog.role.title(user.username)}
       confirmLabel={T.dialog.role.confirm}
-      busy={write.mutation.isPending}
+      busy={write.busy}
       error={view.error}
       hideConfirm={view.hideConfirm}
       cancelLabel={view.cancelLabel}
-      onConfirm={() => write.mutation.mutate(to)}
+      onConfirm={() => write.submit(to)}
       onCancel={onClose}
     >
       {!view.refused && (
@@ -114,14 +137,40 @@ export function DeactivateDialog({ user, onClose, onDone }: DialogProps) {
       title={T.dialog.deactivate.title(user.username)}
       confirmLabel={T.dialog.deactivate.confirm}
       tone="danger"
-      busy={write.mutation.isPending}
+      busy={write.busy}
       error={view.error}
       hideConfirm={view.hideConfirm}
       cancelLabel={view.cancelLabel}
-      onConfirm={() => write.mutation.mutate(undefined)}
+      onConfirm={() => write.submit(undefined)}
       onCancel={onClose}
     >
       {!view.refused && <p>{T.dialog.deactivate.body(user.display_name ?? user.username)}</p>}
+    </ConfirmDialog>
+  );
+}
+
+// --- reactivate ---------------------------------------------------------------------------------------------------
+
+/** A light confirmation (primary tone): it restores login with the old password, admin rights included. */
+export function ReactivateDialog({ user, onClose, onDone }: DialogProps) {
+  const write = useUserWrite(
+    () => updateUser(user.user_id, { is_active: true }),
+    "updateUser",
+    () => onDone(T.done.reactivate(user.username)),
+  );
+  const view = failureProps(write.failure);
+  return (
+    <ConfirmDialog
+      title={T.dialog.reactivate.title(user.username)}
+      confirmLabel={T.dialog.reactivate.confirm}
+      busy={write.busy}
+      error={view.error}
+      hideConfirm={view.hideConfirm}
+      cancelLabel={view.cancelLabel}
+      onConfirm={() => write.submit(undefined)}
+      onCancel={onClose}
+    >
+      {!view.refused && <p>{T.dialog.reactivate.body}</p>}
     </ConfirmDialog>
   );
 }
@@ -149,14 +198,19 @@ export function ResetPasswordDialog({
   );
   const passwordId = useId();
   const repeatId = useId();
-  const passwordErrorId = useId();
-  const repeatErrorId = useId();
+  const passwordLiveId = useId();
+  const passwordAlertId = useId();
+  const repeatLiveId = useId();
 
-  // What is said at the password field: the server's own answer about it, else the live check of the length.
+  // What is said at the password field: the server's own answer about it (an alert), else the live check of
+  // the length. The live check only describes the field: a screen reader reads it with the field and, as a
+  // polite live region, after a pause; it is never an alert that speaks on every key.
   const serverField = write.failure?.field === "password" ? write.failure.text : null;
   const problem = passwordProblem(password);
-  const live = password !== "" && problem !== null ? passwordProblemText(problem) : null;
-  const passwordError = serverField ?? live;
+  const live =
+    serverField === null && password !== "" && problem !== null
+      ? passwordProblemText(problem)
+      : null;
   const mismatch = repeat !== "" && repeat !== password;
   const valid = problem === null && repeat === password;
 
@@ -166,17 +220,17 @@ export function ResetPasswordDialog({
     setPassword(value);
     write.clearFailure();
   };
-  const busy = write.mutation.isPending;
+  const busy = write.busy;
   return (
     <ConfirmDialog
       title={T.dialog.reset.title(user.username)}
       confirmLabel={T.dialog.reset.confirm}
-      busy={write.mutation.isPending}
+      busy={write.busy}
       error={view.error}
       hideConfirm={view.hideConfirm}
       cancelLabel={view.cancelLabel}
       confirmDisabled={!valid}
-      onConfirm={() => write.mutation.mutate(password)}
+      onConfirm={() => write.submit(password)}
       onCancel={onClose}
     >
       {!view.refused && (
@@ -198,14 +252,21 @@ export function ResetPasswordDialog({
               autoFocus
               value={password}
               readOnly={busy}
-              aria-invalid={passwordError !== null ? true : undefined}
-              aria-describedby={passwordError !== null ? passwordErrorId : undefined}
+              aria-invalid={live !== null || serverField !== null ? true : undefined}
+              aria-describedby={
+                [live !== null && passwordLiveId, serverField !== null && passwordAlertId]
+                  .filter(Boolean)
+                  .join(" ") || undefined
+              }
               onChange={(event) => editPassword(event.target.value)}
               className={FIELD}
             />
-            {passwordError !== null && (
-              <p id={passwordErrorId} role="alert" className={FIELD_ERROR}>
-                {passwordError}
+            <p id={passwordLiveId} aria-live="polite" className={`${FIELD_ERROR} min-h-4`}>
+              {live}
+            </p>
+            {serverField !== null && (
+              <p id={passwordAlertId} role="alert" className={FIELD_ERROR}>
+                {serverField}
               </p>
             )}
           </div>
@@ -220,15 +281,13 @@ export function ResetPasswordDialog({
               value={repeat}
               readOnly={busy}
               aria-invalid={mismatch ? true : undefined}
-              aria-describedby={mismatch ? repeatErrorId : undefined}
+              aria-describedby={mismatch ? repeatLiveId : undefined}
               onChange={(event) => setRepeat(event.target.value)}
               className={FIELD}
             />
-            {mismatch && (
-              <p id={repeatErrorId} role="alert" className={FIELD_ERROR}>
-                {T.password.mismatch}
-              </p>
-            )}
+            <p id={repeatLiveId} aria-live="polite" className={`${FIELD_ERROR} min-h-4`}>
+              {mismatch ? T.password.mismatch : null}
+            </p>
           </div>
           <p className="text-xs leading-normal text-muted">
             {T.dialog.reset.hint(ADMIN_LIMITS.passwordMin)}
@@ -252,11 +311,11 @@ export function UnlockDialog({ user, onClose, onDone }: DialogProps) {
     <ConfirmDialog
       title={T.dialog.unlock.title(user.username)}
       confirmLabel={T.dialog.unlock.confirm}
-      busy={write.mutation.isPending}
+      busy={write.busy}
       error={view.error}
       hideConfirm={view.hideConfirm}
       cancelLabel={view.cancelLabel}
-      onConfirm={() => write.mutation.mutate(undefined)}
+      onConfirm={() => write.submit(undefined)}
       onCancel={onClose}
     >
       {!view.refused && (

@@ -57,8 +57,15 @@ export function UserCreatePanel({
   } satisfies Record<NewUserField, string>;
   const fields = useRef<Partial<Record<NewUserField, HTMLElement | null>>>({});
 
+  // A press of "Tạo tài khoản" sends one write: TanStack Query tells React a mutation is pending only on a timer, so
+  // two presses in one tick would both find `isPending` false. The latch is released when the write settles. (P11-T14's
+  // shared `useSubmitLatch` is to replace it.)
+  const latch = useRef(false);
   const mutation = useMutation({
     mutationFn: createUser,
+    // The variables of this mutation are a password. TanStack keeps them for `gcTime` (5 minutes by default), and
+    // this panel lives as long as the page: nothing of a create is worth keeping once it has settled.
+    gcTime: 0,
     onMutate: () => setFormError(null),
     onSuccess: async (_answer, body) => {
       await invalidateAfter(client, "createUser");
@@ -74,7 +81,11 @@ export function UserCreatePanel({
         setFormError(failure.text);
       }
     },
+    onSettled: () => {
+      latch.current = false;
+    },
   });
+  const { reset } = mutation;
 
   /** Sets one field, and drops the error that was about it (and, for the password, about the repeat). */
   const edit = (patch: Partial<NewUserValues>, ...cleared: NewUserField[]) => {
@@ -88,7 +99,7 @@ export function UserCreatePanel({
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (mutation.isPending) return;
+    if (latch.current) return;
     const found = checkNewUser(values);
     setErrors(found);
     setFormError(null);
@@ -98,12 +109,18 @@ export function UserCreatePanel({
       return;
     }
     if (values.role === null) return; // checked above; narrows the type
-    mutation.mutate({
-      username: values.username,
-      display_name: values.displayName,
-      role: values.role,
-      password: values.password,
-    });
+    latch.current = true;
+    // `reset` once it has settled, whether it worked or not: the mutation, and the password in its variables,
+    // are then dropped from the cache (this panel stays mounted, so it would otherwise hold them).
+    mutation.mutate(
+      {
+        username: values.username,
+        display_name: values.displayName,
+        role: values.role,
+        password: values.password,
+      },
+      { onSettled: () => reset() },
+    );
   };
 
   const invalid = (field: NewUserField) => (errors[field] !== undefined ? true : undefined);

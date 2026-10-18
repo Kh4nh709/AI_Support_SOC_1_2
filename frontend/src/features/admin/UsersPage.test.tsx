@@ -3,7 +3,7 @@
 // the five user routes can give, each shown where the canvas's AdminStates puts it. A small in-memory
 // backend stands in for the routes (MSW); it records every call so a test can say what was sent.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { delay, http, HttpResponse } from "msw";
@@ -165,7 +165,7 @@ function renderPage(username: string = ME) {
     logout: async () => {},
   };
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
       <AuthContext.Provider value={auth}>
         <MemoryRouter initialEntries={["/admin/users"]}>
@@ -181,6 +181,16 @@ function renderPage(username: string = ME) {
       </AuthContext.Provider>
     </QueryClientProvider>,
   );
+  return { ...view, client };
+}
+
+/** Does anything TanStack's mutation cache holds (variables, answer, context) contain `secret`? */
+function mutationCacheHolds(client: QueryClient, secret: string): boolean {
+  const held = client
+    .getMutationCache()
+    .getAll()
+    .map((m) => ({ variables: m.state.variables, data: m.state.data, context: m.state.context }));
+  return JSON.stringify(held).includes(secret);
 }
 
 const TABLE = "Danh sách tài khoản";
@@ -1078,13 +1088,36 @@ describe("deactivating", () => {
 });
 
 describe("reactivating", () => {
-  it("sends PATCH {is_active: true} at once, with no dialog, and says so", async () => {
-    const b = backend();
+  // It restores login with the old password, admin rights included: a light confirmation (a primary-tone
+  // dialog), not the red one of deactivating.
+  const open = async (username: string) => {
     const user = userEvent.setup();
+    const { q } = await rowOf(username);
+    await user.click(q.getByRole("button", { name: /^Kích hoạt lại/ }));
+    const box = within(await dialog(`Kích hoạt lại ${username}?`));
+    return { user, box };
+  };
+
+  it("opens a confirmation that says what it restores, and sends nothing yet", async () => {
+    const b = backend();
     renderPage();
-    await user.click((await rowOf("an.t2")).q.getByRole("button", { name: /^Kích hoạt lại/ }));
+    const { box } = await open("an.t2");
+    expect(
+      box.getByText("Tài khoản đăng nhập được ngay bằng mật khẩu hiện tại."),
+    ).toBeInTheDocument();
+    expect(box.getByRole("button", { name: "Huỷ" })).toBeInTheDocument();
+    // primary tone: the focus opens on the confirm button
+    expect(box.getByRole("button", { name: "Kích hoạt lại" })).toHaveFocus();
+    expect(b.writes()).toEqual([]);
+  });
+
+  it("sends PATCH {is_active: true} as JSON when confirmed, says so, and shows the account active", async () => {
+    const b = backend();
+    renderPage();
+    const { user, box } = await open("an.t2");
+    await user.click(box.getByRole("button", { name: "Kích hoạt lại" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(await screen.findByRole("status")).toHaveTextContent("Đã kích hoạt lại an.t2.");
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(b.writes()).toEqual([
       {
         method: "PATCH",
@@ -1096,51 +1129,77 @@ describe("reactivating", () => {
     await waitFor(async () =>
       expect((await rowOf("an.t2")).q.getByText("Hoạt động")).toBeInTheDocument(),
     );
+    expect(b.gets()).toBe(2);
   });
 
-  it("shows a refusal on the page, as an alert, when there is no dialog to show it in", async () => {
-    backend({ patch: () => refuse(403, "forbidden") });
-    const user = userEvent.setup();
+  it("sends nothing when cancelled, with Huỷ or Escape", async () => {
+    const b = backend();
     renderPage();
-    await user.click((await rowOf("an.t2")).q.getByRole("button", { name: /^Kích hoạt lại/ }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(S.admin.reason.forbidden);
+    const first = await open("an.t2");
+    await first.user.click(first.box.getByRole("button", { name: "Huỷ" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const second = await open("an.t2");
+    await second.user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(b.writes()).toEqual([]);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it("shows a 404 and a failed save on the page, and lets the alert be dismissed", async () => {
-    backend({ patch: () => refuse(404, { reason: "not_found" }) });
-    const user = userEvent.setup();
-    renderPage();
-    await user.click((await rowOf("an.t2")).q.getByRole("button", { name: /^Kích hoạt lại/ }));
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(S.admin.reason.not_found);
-    await user.click(within(alert).getByRole("button", { name: "Đóng" }));
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  it("answers 403 forbidden and 404 with their texts and only 'Đóng', inside the dialog", async () => {
+    for (const [reply, text] of [
+      [() => refuse(403, "forbidden"), S.admin.reason.forbidden],
+      [() => refuse(404, { reason: "not_found" }), S.admin.reason.not_found],
+    ] as const) {
+      backend({ patch: reply });
+      const view = renderPage();
+      const { user, box } = await open("an.t2");
+      await user.click(box.getByRole("button", { name: "Kích hoạt lại" }));
+      expect(await box.findByRole("alert")).toHaveTextContent(text);
+      expect(box.queryByRole("button", { name: "Kích hoạt lại" })).not.toBeInTheDocument();
+      await user.click(box.getByRole("button", { name: "Đóng" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      view.unmount();
+      server.resetHandlers();
+    }
   });
 
-  it("shows a 500 as a failed save", async () => {
-    backend({ patch: () => refuse(500, "boom") });
-    const user = userEvent.setup();
-    renderPage();
-    await user.click((await rowOf("an.t2")).q.getByRole("button", { name: /^Kích hoạt lại/ }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Không lưu được: máy chủ trả lỗi. Thử lại sau ít phút.",
-    );
+  it("answers a 422, a 500 and a lost connection with a text in the dialog, which can be retried", async () => {
+    for (const [reply, text] of [
+      [() => refuse(422, { field: "is_active", reason: "invalid" }), S.admin.reason.invalid],
+      [() => refuse(500, "boom"), "Không lưu được: máy chủ trả lỗi. Thử lại sau ít phút."],
+      [() => HttpResponse.error(), "Không lưu được: mất kết nối máy chủ. Thử lại."],
+    ] as const) {
+      backend({ patch: reply });
+      const view = renderPage();
+      const { user, box } = await open("an.t2");
+      await user.click(box.getByRole("button", { name: "Kích hoạt lại" }));
+      expect(await box.findByRole("alert")).toHaveTextContent(text);
+      expect(box.getByRole("button", { name: "Kích hoạt lại" })).toBeEnabled();
+      view.unmount();
+      server.resetHandlers();
+    }
   });
 
-  it("holds the row's button while the request is out, so one press sends one request", async () => {
+  it("sends one request when the confirm button is pressed twice with a pause between", async () => {
     const b = backend({
       patch: async () => {
         await delay(50);
         return HttpResponse.json({ ...AN, is_active: true });
       },
     });
-    const user = userEvent.setup();
     renderPage();
-    const button = (await rowOf("an.t2")).q.getByRole("button", { name: /^Kích hoạt lại/ });
-    await user.dblClick(button);
+    const { user, box } = await open("an.t2");
+    await user.dblClick(box.getByRole("button", { name: "Kích hoạt lại" }));
     await screen.findByRole("status");
     expect(b.writes()).toHaveLength(1);
+  });
+
+  it("has no axe violation with the dialog open", async () => {
+    backend();
+    const { container } = renderPage();
+    await open("an.t2");
+    const result = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
+    expect(result.violations.map((v) => v.id)).toEqual([]);
   });
 });
 
@@ -1827,6 +1886,345 @@ describe("the create form", () => {
 // the whole page
 // ============================================================================================================
 
+// ============================================================================================================
+// a password is never kept (fix round 1, I1)
+// ============================================================================================================
+
+describe("no password stays in the mutation cache", () => {
+  // TanStack Query keeps a mutation's variables while a component observes it and for `gcTime` after that
+  // (5 minutes by default). A password is in the variables of a create and of a reset, so neither may be
+  // there once the write has settled: not after it succeeded, and not after it failed.
+  const SECRET = "tr0ub4dor-and-3-horses";
+  type User = ReturnType<typeof userEvent.setup>;
+
+  async function submitCreate(user: User) {
+    await user.type(create().getByLabelText("Tên đăng nhập"), "an.t1");
+    await user.type(create().getByLabelText("Tên hiển thị"), "An");
+    await user.click(create().getByRole("radio", { name: /^tier1/ }));
+    await user.type(create().getByLabelText("Mật khẩu tạm"), SECRET);
+    await user.type(create().getByLabelText("Nhập lại mật khẩu"), SECRET);
+    await user.click(create().getByRole("button", { name: "Tạo tài khoản" }));
+  }
+
+  async function submitReset(user: User) {
+    await user.click((await rowOf("minh.t2")).q.getByRole("button", { name: /^Đặt lại mật khẩu/ }));
+    const box = within(await dialog("Đặt lại mật khẩu cho minh.t2"));
+    await user.type(box.getByLabelText("Mật khẩu tạm"), SECRET);
+    await user.type(box.getByLabelText("Nhập lại"), SECRET);
+    await user.click(box.getByRole("button", { name: "Đặt lại" }));
+    return box;
+  }
+
+  it("after an account is made", async () => {
+    backend();
+    const user = userEvent.setup();
+    const { client } = renderPage();
+    await table();
+    await submitCreate(user);
+    await screen.findByRole("status");
+    await waitFor(() => expect(mutationCacheHolds(client, SECRET)).toBe(false));
+  });
+
+  it.each<[string, () => Response]>([
+    ["a 409 username_taken", () => refuse(409, { reason: "username_taken" })],
+    ["a 422 at the password", () => refuse(422, { field: "password", reason: "invalid" })],
+    ["a 500", () => refuse(500, "boom")],
+  ])("after a create the server refused with %s", async (_name, reply) => {
+    backend({ create: reply });
+    const user = userEvent.setup();
+    const { client } = renderPage();
+    await table();
+    await submitCreate(user);
+    await create().findByText(/./, { selector: "[role=alert]" });
+    await waitFor(() => expect(mutationCacheHolds(client, SECRET)).toBe(false));
+  });
+
+  it("after a password is reset, and the dialog has closed", async () => {
+    backend();
+    const user = userEvent.setup();
+    const { client } = renderPage();
+    await submitReset(user);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(mutationCacheHolds(client, SECRET)).toBe(false));
+  });
+
+  it.each<[string, () => Response]>([
+    [
+      "a 422 at the password",
+      () => refuse(422, { field: "password", reason: "too_short", min: 12 }),
+    ],
+    ["a 404", () => refuse(404, { reason: "not_found" })],
+    ["a 500", () => refuse(500, "boom")],
+  ])(
+    "after a reset the server refused with %s, with the dialog still open",
+    async (_name, reply) => {
+      backend({ password: reply });
+      const user = userEvent.setup();
+      const { client } = renderPage();
+      const box = await submitReset(user);
+      await box.findByText(/./, { selector: "[role=alert]" });
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      await waitFor(() => expect(mutationCacheHolds(client, SECRET)).toBe(false));
+    },
+  );
+
+  it("holds nothing when a typed reset is cancelled before it is sent", async () => {
+    backend();
+    const user = userEvent.setup();
+    const { client } = renderPage();
+    await user.click((await rowOf("minh.t2")).q.getByRole("button", { name: /^Đặt lại mật khẩu/ }));
+    const box = within(await dialog("Đặt lại mật khẩu cho minh.t2"));
+    await user.type(box.getByLabelText("Mật khẩu tạm"), SECRET);
+    await user.click(box.getByRole("button", { name: "Huỷ" }));
+    expect(mutationCacheHolds(client, SECRET)).toBe(false);
+    expect(client.getMutationCache().getAll()).toHaveLength(0);
+  });
+});
+
+// ============================================================================================================
+// the focus when a row changes state (fix round 1, m1)
+// ============================================================================================================
+
+describe("the focus after a row changes state", () => {
+  it("goes to the row's new main button after Vô hiệu hoá (the old controls are gone)", async () => {
+    backend();
+    const user = userEvent.setup();
+    renderPage();
+    await chooseDeactivate(user, "lan.t1");
+    await user.click(
+      within(await dialog("Vô hiệu hoá lan.t1?")).getByRole("button", { name: "Vô hiệu hoá" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(async () =>
+      expect(
+        (await rowOf("lan.t1")).q.getByRole("button", { name: "Kích hoạt lại lan.t1" }),
+      ).toHaveFocus(),
+    );
+  });
+
+  it("goes to the row's new main button after Kích hoạt lại", async () => {
+    backend();
+    const user = userEvent.setup();
+    renderPage();
+    await user.click((await rowOf("an.t2")).q.getByRole("button", { name: /^Kích hoạt lại/ }));
+    await user.click(
+      within(await dialog("Kích hoạt lại an.t2?")).getByRole("button", { name: "Kích hoạt lại" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(async () =>
+      expect(
+        (await rowOf("an.t2")).q.getByRole("button", { name: "Đặt lại mật khẩu an.t2" }),
+      ).toHaveFocus(),
+    );
+  });
+
+  it("goes to the table when the row is gone from the list that was read again", async () => {
+    let reads = 0;
+    backend({
+      list: () => {
+        reads += 1;
+        return HttpResponse.json({
+          users: reads === 1 ? USERS : USERS.filter((u) => u.user_id !== LAN.user_id),
+        });
+      },
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await chooseDeactivate(user, "lan.t1");
+    await user.click(
+      within(await dialog("Vô hiệu hoá lan.t1?")).getByRole("button", { name: "Vô hiệu hoá" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const box = (await table()).closest('[tabindex="-1"]');
+    expect(box).not.toBeNull();
+    await waitFor(() => expect(box).toHaveFocus());
+  });
+
+  it("is left alone by a write that leaves the row as it was (the dialog gives it back to its opener)", async () => {
+    backend();
+    const user = userEvent.setup();
+    renderPage();
+    await user.click((await rowOf("minh.t2")).q.getByRole("button", { name: /^Đặt lại mật khẩu/ }));
+    const box = within(await dialog("Đặt lại mật khẩu cho minh.t2"));
+    await user.type(box.getByLabelText("Mật khẩu tạm"), GOOD);
+    await user.type(box.getByLabelText("Nhập lại"), GOOD);
+    await user.click(box.getByRole("button", { name: "Đặt lại" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(
+      (await rowOf("minh.t2")).q.getByRole("button", { name: "Đặt lại mật khẩu minh.t2" }),
+    ).toHaveFocus();
+  });
+});
+
+// ============================================================================================================
+// the reset dialog's live hints (fix round 1, m2)
+// ============================================================================================================
+
+describe("the reset dialog's live hints", () => {
+  const open = async (username: string) => {
+    const user = userEvent.setup();
+    await user.click((await rowOf(username)).q.getByRole("button", { name: /^Đặt lại mật khẩu/ }));
+    return { user, box: within(await dialog(`Đặt lại mật khẩu cho ${username}`)) };
+  };
+
+  it("are polite descriptions of the field, not alerts that speak on every key", async () => {
+    backend();
+    renderPage();
+    const { user, box } = await open("minh.t2");
+    await user.type(box.getByLabelText("Mật khẩu tạm"), "1234");
+    const hint = box.getByText("Cần tối thiểu 12 ký tự, đang có 4");
+    expect(hint).not.toHaveAttribute("role", "alert");
+    expect(hint).toHaveAttribute("aria-live", "polite");
+    expect(box.getByLabelText("Mật khẩu tạm")).toHaveAccessibleDescription(
+      "Cần tối thiểu 12 ký tự, đang có 4",
+    );
+    expect(box.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("describe the repeat field the same way when the two differ", async () => {
+    backend();
+    renderPage();
+    const { user, box } = await open("minh.t2");
+    await user.type(box.getByLabelText("Mật khẩu tạm"), GOOD);
+    await user.type(box.getByLabelText("Nhập lại"), "x");
+    const hint = box.getByText("Không khớp với mật khẩu");
+    expect(hint).not.toHaveAttribute("role", "alert");
+    expect(hint).toHaveAttribute("aria-live", "polite");
+    expect(box.getByLabelText("Nhập lại")).toHaveAccessibleDescription("Không khớp với mật khẩu");
+    expect(box.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keep their live region on the page when they are empty, so a change is announced", async () => {
+    backend();
+    renderPage();
+    const { box } = await open("minh.t2");
+    expect(
+      document.querySelectorAll('[role="dialog"] [aria-live="polite"]').length,
+    ).toBeGreaterThanOrEqual(2);
+    expect(box.getByLabelText("Mật khẩu tạm")).not.toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("leave role=alert to the server's answer about the password", async () => {
+    backend({ password: () => refuse(422, { field: "password", reason: "too_short", min: 12 }) });
+    renderPage();
+    const { user, box } = await open("minh.t2");
+    await user.type(box.getByLabelText("Mật khẩu tạm"), GOOD);
+    await user.type(box.getByLabelText("Nhập lại"), GOOD);
+    await user.click(box.getByRole("button", { name: "Đặt lại" }));
+    const alert = await box.findByRole("alert");
+    expect(alert).toHaveTextContent("Cần tối thiểu 12 ký tự");
+    expect(box.getByLabelText("Mật khẩu tạm")).toHaveAccessibleDescription(
+      "Cần tối thiểu 12 ký tự",
+    );
+  });
+});
+
+// ============================================================================================================
+// a second press in the same tick (the console's ruling for every write)
+// ============================================================================================================
+
+describe("a second press in the same tick", () => {
+  // TanStack Query 5 tells React that a mutation is pending only on a `setTimeout(0)`, so two presses before
+  // it fires both find the button enabled and `isPending` false. `fireEvent` with nothing awaited between
+  // the two is that case (`userEvent` waits between them, which hides it). A ref latches each write.
+  const twice = (element: HTMLElement) => {
+    fireEvent.click(element);
+    fireEvent.click(element);
+  };
+
+  it("sends one role change", async () => {
+    const b = backend();
+    const user = userEvent.setup();
+    renderPage();
+    const { q } = await rowOf("lan.t1");
+    await user.selectOptions(q.getByRole("combobox", { name: "Vai trò của lan.t1" }), "tier2");
+    twice(
+      within(await dialog("Đổi vai trò của lan.t1?")).getByRole("button", { name: "Đổi vai trò" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(b.writes()).toHaveLength(1);
+  });
+
+  it("sends one deactivation", async () => {
+    const b = backend();
+    const user = userEvent.setup();
+    renderPage();
+    await chooseDeactivate(user, "lan.t1");
+    twice(within(await dialog("Vô hiệu hoá lan.t1?")).getByRole("button", { name: "Vô hiệu hoá" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(b.writes()).toHaveLength(1);
+  });
+
+  it("sends one reactivation", async () => {
+    const b = backend();
+    const user = userEvent.setup();
+    renderPage();
+    await user.click((await rowOf("an.t2")).q.getByRole("button", { name: /^Kích hoạt lại/ }));
+    twice(
+      within(await dialog("Kích hoạt lại an.t2?")).getByRole("button", { name: "Kích hoạt lại" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(b.writes()).toHaveLength(1);
+  });
+
+  it("sends one password reset", async () => {
+    const b = backend();
+    const user = userEvent.setup();
+    renderPage();
+    await user.click((await rowOf("minh.t2")).q.getByRole("button", { name: /^Đặt lại mật khẩu/ }));
+    const box = within(await dialog("Đặt lại mật khẩu cho minh.t2"));
+    await user.type(box.getByLabelText("Mật khẩu tạm"), GOOD);
+    await user.type(box.getByLabelText("Nhập lại"), GOOD);
+    twice(box.getByRole("button", { name: "Đặt lại" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(b.writes()).toHaveLength(1);
+  });
+
+  it("sends one unlock", async () => {
+    const b = backend();
+    const user = userEvent.setup();
+    renderPage();
+    await user.click((await rowOf("tuan.t1")).q.getByRole("button", { name: /^Mở khoá/ }));
+    twice(within(await dialog("Mở khoá tuan.t1?")).getByRole("button", { name: "Mở khoá" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(b.writes()).toHaveLength(1);
+  });
+
+  it("sends one create", async () => {
+    const b = backend();
+    const user = userEvent.setup();
+    renderPage();
+    await table();
+    await user.type(create().getByLabelText("Tên đăng nhập"), "an.t1");
+    await user.type(create().getByLabelText("Tên hiển thị"), "An");
+    await user.click(create().getByRole("radio", { name: /^tier1/ }));
+    await user.type(create().getByLabelText("Mật khẩu tạm"), GOOD);
+    await user.type(create().getByLabelText("Nhập lại mật khẩu"), GOOD);
+    twice(create().getByRole("button", { name: "Tạo tài khoản" }));
+    await screen.findByRole("status");
+    expect(b.writes()).toHaveLength(1);
+  });
+
+  it("lets the button be pressed again after the write failed", async () => {
+    let fail = true;
+    const b = backend({
+      patch: () => (fail ? refuse(500, "boom") : HttpResponse.json({ ...LAN, role: "tier2" })),
+    });
+    const user = userEvent.setup();
+    renderPage();
+    const { q } = await rowOf("lan.t1");
+    await user.selectOptions(q.getByRole("combobox", { name: "Vai trò của lan.t1" }), "tier2");
+    const box = within(await dialog("Đổi vai trò của lan.t1?"));
+    twice(box.getByRole("button", { name: "Đổi vai trò" }));
+    await box.findByRole("alert");
+    expect(b.writes()).toHaveLength(1);
+    fail = false;
+    await user.click(box.getByRole("button", { name: "Đổi vai trò" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(b.writes()).toHaveLength(2);
+  });
+});
+
 describe("the whole page", () => {
   it("has no axe violation in its normal state", async () => {
     backend();
@@ -1858,6 +2256,9 @@ describe("the whole page", () => {
     expect(await create().findByRole("alert")).toHaveTextContent("Không lưu được");
     // ... and a row's reactivation fails ...
     await user.click((await rowOf("an.t2")).q.getByRole("button", { name: /^Kích hoạt lại/ }));
+    await user.click(
+      within(await dialog("Kích hoạt lại an.t2?")).getByRole("button", { name: "Kích hoạt lại" }),
+    );
     await waitFor(() => expect(screen.getAllByRole("alert").length).toBeGreaterThanOrEqual(2));
     // ... and the list, the matrix and both messages are all still on the page.
     expect(within(await table()).getAllByRole("row")).toHaveLength(1 + USERS.length);
@@ -1870,6 +2271,9 @@ describe("the whole page", () => {
     const user = userEvent.setup();
     renderPage();
     await user.click((await rowOf("an.t2")).q.getByRole("button", { name: /^Kích hoạt lại/ }));
+    await user.click(
+      within(await dialog("Kích hoạt lại an.t2?")).getByRole("button", { name: "Kích hoạt lại" }),
+    );
     const toast = await screen.findByRole("status");
     await user.click(within(toast).getByRole("button", { name: "Đóng" }));
     expect(screen.queryByRole("status")).not.toBeInTheDocument();

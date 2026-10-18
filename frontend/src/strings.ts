@@ -657,6 +657,12 @@ export const S = {
             `${name} bị đăng xuất ngay và không đăng nhập được nữa. Các quyết định đã ghi vẫn giữ nguyên. Có thể kích hoạt lại sau.`,
           confirm: "Vô hiệu hoá",
         },
+        // A light confirmation: it restores login with the old password, admin rights included.
+        reactivate: {
+          title: (username: string) => `Kích hoạt lại ${username}?`,
+          body: "Tài khoản đăng nhập được ngay bằng mật khẩu hiện tại.",
+          confirm: "Kích hoạt lại",
+        },
         reset: {
           title: (username: string) => `Đặt lại mật khẩu cho ${username}`,
           password: "Mật khẩu tạm",
