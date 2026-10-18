@@ -170,6 +170,11 @@ vi.mock("./features/admin/OverviewPage", () => ({
   OverviewPage: () => <h1>{S.admin.title.overview}</h1>,
 }));
 
+// The audit page reads the API (AuditPage.test.tsx tests it); here only its place in the route table matters.
+vi.mock("./features/admin/AuditPage", () => ({
+  AuditPage: () => <h1>{S.admin.title.audit}</h1>,
+}));
+
 const ADMIN_PAGES: [path: string, title: string][] = [
   ["/admin/overview", S.admin.title.overview],
   ["/admin/users", S.admin.title.users],

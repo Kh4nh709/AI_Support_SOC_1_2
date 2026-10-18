@@ -1089,6 +1089,178 @@ export const S = {
       "admin.settings_changed": "Sửa hạn mức LLM",
     },
 
+    // The audit page (P11-T17, spec §4.7): `/admin/audit`, the canvas's `AdminAudit` and the "AUDIT" cards of
+    // `AdminStates`. The texts of a 503 and a 403 it shows are `reason.timeout`, `reason.query_failed` and
+    // `reason.forbidden` above; the label of an event is `eventType`, of a group `auditGroup`.
+    auditPage: {
+      subtitle: "Chỉ đọc · mọi thao tác ghi của người, hệ thống và model đều có một dòng ở đây",
+
+      // The filter form: four filters, then the two buttons.
+      filtersLabel: "Lọc nhật ký",
+      rangeLabel: "Khoảng thời gian",
+      groupLabel: "Nhóm sự kiện",
+      groupAll: "Tất cả",
+      actorLabel: "Người thực hiện",
+      actorPlaceholder: "username, system, llm",
+      subjectLabel: "Đối tượng",
+      subjectPlaceholder: "mã alert, case, rule, user",
+      apply: "Lọc",
+      clear: "Xoá lọc",
+      // A 422 that names a filter, said under that filter; and the line above the table, which also stands for
+      // a 422 that names none of the four.
+      fieldFault: (label: string) => `“${label}” không hợp lệ. Sửa lại rồi bấm Lọc.`,
+      badFilter: "Bộ lọc không hợp lệ nên chưa có kết quả. Sửa bộ lọc, hoặc bấm Xoá lọc.",
+
+      // The table.
+      table: "Nhật ký audit",
+      colToggle: "Chi tiết",
+      colAt: "Thời điểm",
+      colEvent: "Sự kiện",
+      colActor: "Người thực hiện",
+      colSubject: "Đối tượng",
+      colSummary: "Tóm tắt",
+      show: (event: string, at: string) => `Xem payload: ${event}, ${at}`,
+      hide: (event: string, at: string) => `Ẩn payload: ${event}, ${at}`,
+      payload: "payload",
+      payloadNote:
+        "giá trị của khoá nhạy cảm (mật khẩu, token, DSN, key) đã được server thay bằng “[đã ẩn]”",
+      payloadLabel: (id: number) => `Payload của sự kiện ${id}`,
+      noPayload: "Sự kiện này không ghi payload.",
+      payloadTooBig: (bytes: string) =>
+        `Payload quá lớn (${bytes} byte) nên server không gửi nội dung của nó.`,
+      // The "Trước / Sau" of the cursor, and what is on screen: `from–to`, of `total` when the server counted.
+      pager: "Phân trang nhật ký",
+      prev: "Trước",
+      next: "Sau",
+      shown: (from: string, to: string) => `${from}–${to} · mới nhất trước`,
+      shownOf: (from: string, to: string, total: string) =>
+        `${from}–${to} trong ${total} sự kiện · mới nhất trước`,
+
+      // The states.
+      noMatchTitle: "Không có sự kiện khớp bộ lọc",
+      noMatchBody: (filters: string) => `Bộ lọc đang dùng: ${filters}.`,
+      filterGroup: (label: string) => `nhóm “${label}”`,
+      filterActor: (value: string) => `người thực hiện “${value}”`,
+      filterSubject: (value: string) => `đối tượng “${value}”`,
+      emptyTitle: "Nhật ký chưa có sự kiện nào",
+      emptyBody: (range: string) =>
+        `Không có sự kiện nào trong ${range}. Mọi thao tác ghi sẽ hiện ở đây.`,
+      // A page after the last one (the page before it was full, and nothing is older).
+      endOfLog: "Không còn sự kiện nào cũ hơn.",
+      timeoutNote:
+        "Mọi truy vấn của trang chạy chỉ đọc, có giới hạn thời gian; trang không tự thử lại.",
+      refreshFailed: "Không làm mới được nhật ký — đang hiển thị lần tải trước.",
+      loadErrorOffline:
+        "Mất kết nối tới máy chủ. Thử lại sau ít phút; nếu lặp lại, xem Tổng quan → Sức khoẻ hệ thống.",
+      loadErrorServer: (status: number) =>
+        `Máy chủ trả lỗi ${status}. Thử lại sau ít phút; nếu lặp lại, xem Tổng quan → Sức khoẻ hệ thống.`,
+      forbiddenTitle: "Trang này chỉ dành cho admin",
+      forbiddenBody:
+        "Vai trò của tài khoản này không còn quyền xem nhật ký. Lần truy cập này đã được ghi vào nhật ký audit.",
+      forbiddenBack: "Về hàng đợi",
+
+      // The one-line summary of an event, built from its payload (`auditSummary.ts`). Each is a clause with
+      // no capital and no full stop: a fact the payload holds. The summary joins the clauses with "; ".
+      summary: {
+        tooBig: (bytes: string) => `payload quá lớn (${bytes} byte), server không gửi nội dung`,
+        received: "alert vào hệ thống",
+        mergedInto: (parent: string) => `gộp vào alert ${parent}`,
+        mergedUnknown: "gộp vào alert đã có",
+        occurrence: (n: number) => `lần xuất hiện thứ ${n}`,
+        autoClosedBy: (rule: string) => `đóng theo rule “${rule}”`,
+        autoClosed: "đóng theo rule tự đóng",
+        blockedCritical: "mức critical chặn tự đóng",
+        blockedRule: (rule: string) => `rule ${rule} đã khớp`,
+        enrichStarted: "bắt đầu làm giàu dữ liệu",
+        enriched: "làm giàu dữ liệu xong",
+        riskScore: (score: number) => `điểm rủi ro ${score}`,
+        enrichExhausted: "hết lượt thử, không có dữ liệu bổ sung",
+        reopened: "mở lại về hàng đợi Tier 1",
+        reason: (text: string) => `lý do: ${text}`,
+        acknowledged: "Tier 1 nhận alert để xử lý",
+        decided: (status: string) => `quyết định: ${status}`,
+        decidedUnknown: "quyết định của Tier 1",
+        escalated: (caseId: string) => `chuyển lên Tier 2, case ${caseId}`,
+        escalatedUnknown: "chuyển lên Tier 2",
+        alertCount: (n: number) => `${n} alert`,
+        caseOpened: (alert: string) => `mở từ alert ${alert}`,
+        caseOpenedUnknown: "mở case",
+        caseSize: (alerts: number, correlated: number) =>
+          `${alerts} alert, ${correlated} liên quan`,
+        truncated: (n: number) => `cắt ${n} cụm vượt giới hạn của case`,
+        truncatedUnknown: "case bị cắt bớt cụm",
+        concluded: (conclusion: string) => `kết luận: ${conclusion}`,
+        concludedUnknown: "Tier 2 kết luận case",
+        analyzed: "chạy phân tích ②",
+        job: (id: number) => `job ${id}`,
+        suggested: (action: string) => `đề xuất ①: ${action}`,
+        suggestedUnknown: "đã có đề xuất ①",
+        confidence: (level: string) => `độ tin cậy ${level}`,
+        gateForced: "cổng kiểm soát đã ép kết quả",
+        gateForcedBy: (proposed: string, final: string) =>
+          `cổng kiểm soát ép ${proposed} → ${final}`,
+        gateForcedUnknown: "cổng kiểm soát ép kết quả ①",
+        forcedBy: (who: string) => `do ${who}`,
+        builderViolation: (n: number) => `${n} vi phạm khi dựng dữ liệu gửi model`,
+        builderViolationUnknown: "dữ liệu gửi model bị chặn",
+        exhausted: (attempts: number) => `hết ${attempts} lần thử`,
+        exhaustedUnknown: "hết số lần thử của worker",
+        // `job.exhausted` reasons the system writes, by code; a code not here is shown as it came.
+        exhaustedReason: { llm_transient: "model không phản hồi" } as Readonly<
+          Record<string, string>
+        >,
+        userCreated: (username: string) => `tạo tài khoản ${username}`,
+        userCreatedUnknown: "tạo tài khoản",
+        roleIs: (role: string) => `vai trò ${role}`,
+        userRole: (before: string, after: string) => `vai trò ${before} → ${after}`,
+        userActivated: "kích hoạt lại tài khoản",
+        userDeactivated: "vô hiệu hoá tài khoản",
+        userRenamed: "đổi tên hiển thị",
+        userPassword: "đặt lại mật khẩu",
+        userUnlock: "mở khoá tài khoản",
+        userSessionsEnded: "phiên cũ bị đăng xuất",
+        userUpdatedUnknown: "cập nhật tài khoản",
+        jobRetried: (type: string, id: string) => `chạy lại job ${type} #${id}`,
+        jobRetriedUnknown: "chạy lại job lỗi",
+        attemptsBefore: (n: number) => `trước đó đã thử ${n} lần`,
+        denied: (role: string) => `tài khoản là ${role}`,
+        deniedNeeds: (roles: string) => `cần vai trò ${roles}`,
+        deniedRoleChanged: "vai trò đã đổi giữa chừng",
+        deniedUnknown: "bị từ chối quyền",
+        ruleToggled: (name: string, before: string, after: string) =>
+          `“${name}”: ${before} → ${after}`,
+        ruleToggledUnknown: "bật/tắt rule tự đóng",
+        on: "bật",
+        off: "tắt",
+        reviewed: (verdict: string) => `duyệt: ${verdict}`,
+        reviewedUnknown: "duyệt digest",
+        suspectedWrong: (count: number, window: string) =>
+          `${count} cụm bị duyệt “Sai” trong ${window}`,
+        suspectedUnknown: "rule bị nghi đóng nhầm",
+        window: (days: number) => `${days} ngày`,
+        recently: "thời gian gần đây",
+        // `label.created` says only that someone labelled a cluster, or undid it, and which one: never what
+        // they chose. The verdict is not for the other labeller to read (DEC-204), so these words have no
+        // place for a label or a confidence.
+        labelled: (cluster: string) => `gán nhãn cụm ${cluster}`,
+        labelledUnknown: "gán nhãn tập vàng",
+        labelUndone: (cluster: string) => `hoàn tác nhãn cụm ${cluster}`,
+        labelUndoneUnknown: "hoàn tác nhãn",
+        goldSet: (name: string) => `tập ${name}`,
+        limitChange: (name: string, from: string, to: string) => `${name} ${from} → ${to}`,
+        limitUnknown: "đổi hạn mức LLM",
+        // The three limits, with the unit each is counted in.
+        limitName: {
+          LLM_MONTHLY_USD_CAP: "trần chi phí (USD mỗi tháng)",
+          ANALYZE_QUOTA_PER_USER_DAY: "hạn mức phân tích ② (lượt mỗi người trong 24 giờ)",
+          LLM_TIMEOUT_S: "thời gian chờ mỗi lượt gọi (giây)",
+        } as Readonly<Record<string, string>>,
+        alarmNew: (names: string) => `mới lỗi: ${names}`,
+        alarmFailing: (names: string) => `đang lỗi: ${names}`,
+        alarmUnknown: "cảnh báo sức khoẻ",
+      },
+    },
+
     // The six hard blocks (`_HARD_BLOCK_ORDER` of admin_rules.py), word for word, keyed by code. The order is
     // `HARD_BLOCK_CODES` of api/admin.ts. A test keeps both equal to the backend.
     hardBlock: {
