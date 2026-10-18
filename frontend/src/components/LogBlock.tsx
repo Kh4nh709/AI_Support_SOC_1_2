@@ -7,7 +7,16 @@ import { S } from "../strings";
 
 const COPIED_MS = 2000;
 
-export function LogBlock({ text, truncated = false }: { text: string; truncated?: boolean }) {
+export function LogBlock({
+  text,
+  truncated = false,
+  label = S.alert.rawLog,
+}: {
+  text: string;
+  truncated?: boolean;
+  /** What the block is, for the screen reader: the raw log by default, a payload where the audit page shows one. */
+  label?: string;
+}) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -29,7 +38,7 @@ export function LogBlock({ text, truncated = false }: { text: string; truncated?
       <pre
         tabIndex={0}
         role="region"
-        aria-label={S.alert.rawLog}
+        aria-label={label}
         className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded border border-border bg-ground p-3 font-mono text-xs focus-visible:outline-2 focus-visible:outline-text"
       >
         {text}
