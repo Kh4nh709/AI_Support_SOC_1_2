@@ -61,3 +61,4 @@ The independent reviews found these Minors and approved without them, so none of
 | 53 | P11-T16 r1 observation (DEC-204) | backend `admin_audit.py`: redact `label` and `confidence` in every `label.created` payload for every viewer, with a test through the real route (two labellers, A's label never in B's answer) |
 | 54 | P11-T16 r1 obs. | `tier1/labels.py` `_g1_samples` sends each sample's `raw_log` uncut (not capped at 32 KB): cap it like the representative's, a later change |
 | 55 | P11-T16 r1 obs. (for P11-T18) | the e2e "three paths only" check on `/admin/labels` must allow the shell's own `GET /api/auth/me` and the live socket; the T16 test mounts the page alone, the right scope for Review Focus 5 |
+| 56 | P11-T17 report | the main bundle is 506.64 kB (Vite's 500 kB warning) and every page adds to it: lazy-load the seven admin routes with `React.lazy`/route-level `lazy`, so the tier1/tier2 pages do not pay for the admin console |
