@@ -18,9 +18,11 @@ import itertools
 import json
 import re
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from app.infra import config, worker
@@ -384,6 +386,77 @@ def test_cap_is_unavailable_before_any_call(db, monkeypatch):
         "SELECT triage_status FROM alerts WHERE alert_id = %s", (alert_id,)
     ).fetchone()[0]
     assert triage_status == "unavailable"
+
+
+class _NoSocketClient:
+    """An OpenAI-SDK-shaped client for the REAL `DeepSeekAdapter` that must never be called:
+    every `create` is recorded in `calls` and fails, so a model call that should have been
+    refused shows up as a non-empty `calls` (and, failing, as a `permanent` row)."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    def _create(self, **kwargs):
+        self.calls.append(kwargs)
+        raise AssertionError("a model call was made")
+
+
+def _real_adapter_over(monkeypatch, client) -> None:
+    """`run_triage_job(adapter=None)` builds a `DeepSeekAdapter` itself — this keeps that
+    construction (its `spent_usd=` and `limits=` wiring) and only swaps the SDK client."""
+    real = triage_module.DeepSeekAdapter
+    monkeypatch.setattr(
+        triage_module, "DeepSeekAdapter", lambda cfg, **kw: real(cfg, client=client, **kw)
+    )
+
+
+@pytest.mark.db
+def test_unreadable_limits_stop_the_run_as_cap_with_no_model_call(db, monkeypatch):
+    """P11-T03 / DEC-200 item 3: the `settings` table is missing (code deployed before
+    `make migrate`). Nothing falls back to `.env`: ① is `stopped_by='cap'`, the real adapter
+    opened no socket, and the job's own transaction is still usable afterwards — it wrote its
+    `llm_runs` row and the alert's `triage_status` after the failed read (the savepoint)."""
+    _enable_llm(monkeypatch)
+    alert_id = _seed_alert(db)
+    client = _NoSocketClient()
+    _real_adapter_over(monkeypatch, client)
+    db.execute("DROP TABLE settings")  # rolled back with the test's transaction
+
+    run_triage_job(db, _job(alert_id))  # adapter=None: the production wiring
+
+    assert client.calls == []
+    assert [r[0] for r in _rows(db, alert_id, "stopped_by")] == ["cap"]
+    triage_status = db.execute(
+        "SELECT triage_status FROM alerts WHERE alert_id = %s", (alert_id,)
+    ).fetchone()[0]
+    assert triage_status == "unavailable"
+
+
+@pytest.mark.db
+def test_a_web_cap_below_the_spend_stops_the_run_as_cap_with_no_model_call(db, monkeypatch):
+    """The cap the admin saved on the web, not the `.env` one, gates ①: 5 USD spent is under
+    the `.env` cap (30) and over the saved one (1)."""
+    _enable_llm(monkeypatch)
+    alert_id = _seed_alert(db)
+    client = _NoSocketClient()
+    _real_adapter_over(monkeypatch, client)
+    monkeypatch.setattr(triage_module.llm_runs, "month_spend_usd", lambda conn: 5.0)
+    user_id = str(uuid.uuid4())
+    db.execute(
+        "INSERT INTO users (user_id, username, display_name, role, password_hash) "
+        "VALUES (%s, %s, 'Admin', 'admin', 'x')",
+        (user_id, f"user-{user_id[:8]}"),
+    )
+    db.execute(
+        "INSERT INTO settings (key, value, updated_by) VALUES ('LLM_MONTHLY_USD_CAP', 1, %s)",
+        (user_id,),
+    )
+
+    run_triage_job(db, _job(alert_id))
+
+    assert client.calls == []
+    assert [r[0] for r in _rows(db, alert_id, "stopped_by")] == ["cap"]
 
 
 @pytest.mark.db

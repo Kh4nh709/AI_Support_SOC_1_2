@@ -8,15 +8,28 @@ under test.
 from __future__ import annotations
 
 import dataclasses
+import json
 import math
 import time
+import uuid
+from contextlib import contextmanager
+from functools import partial
 from types import SimpleNamespace
 
 import httpx
 import openai
+import psycopg
 import pytest
 from app.infra.config import Config
 from app.infra.errors import TransientError, classify
+from app.infra.settings import (
+    KEYS,
+    Limits,
+    LimitSource,
+    SettingsUnavailable,
+    effective_limits,
+)
+from app.llm import investigate as llm_investigate
 from app.llm.adapter import (
     DeepSeekAdapter,
     LLMBudgetExceeded,
@@ -25,6 +38,8 @@ from app.llm.adapter import (
     cost_usd,
     estimate_tokens,
 )
+
+from tests.test_investigate import _fake_dossier, _investigate_v2
 
 VALID_SYSTEM = "Respond with a single JSON object and nothing else."
 _REQUEST = httpx.Request("POST", "https://api.deepseek.com/v1/chat/completions")
@@ -388,3 +403,296 @@ class TestStructuredLogging:
         adapter = DeepSeekAdapter(_cfg(), client=client, sleep=lambda s: None)
 
         adapter.complete(system=VALID_SYSTEM, user="x")
+
+
+# ── P11-T03 · the editable, fail-closed limits (DEC-200 item 3) ─────────────────────────────
+
+
+def _limits(*, cap_usd=30, quota_per_24h=30, timeout_s=5) -> Limits:
+    sources = {key: LimitSource("env", None, None) for key in KEYS}
+    return Limits(cap_usd, quota_per_24h, timeout_s, sources)
+
+
+class _CountingLimits:
+    """A `limits` callable that counts its calls and answers the current `value` — or raises
+    `SettingsUnavailable` while `unreadable` is set."""
+
+    def __init__(self, value: Limits | None = None) -> None:
+        self.value = value or _limits()
+        self.unreadable = False
+        self.calls = 0
+
+    def __call__(self) -> Limits:
+        self.calls += 1
+        if self.unreadable:
+            raise SettingsUnavailable("settings table unreadable")
+        return self.value
+
+
+class _UnreadableConn:
+    """A connection whose read of `settings` fails like a dropped one: the real
+    `effective_limits` over it must raise `SettingsUnavailable`."""
+
+    info = SimpleNamespace(transaction_status=psycopg.pq.TransactionStatus.INTRANS)
+
+    @contextmanager
+    def transaction(self):
+        yield self
+
+    def execute(self, *args, **kwargs):
+        raise psycopg.OperationalError("server closed the connection unexpectedly")
+
+
+def _complete_expecting_a_refusal_without_a_call(adapter, client) -> LLMBudgetExceeded:
+    """One `complete()` over limits that cannot be read: it must be refused as
+    `LLMBudgetExceeded` and the client must not have been touched. The client count is checked
+    first, so a silent fallback to `.env` shows up as the call it made."""
+    refusal = None
+    try:
+        adapter.complete(system=VALID_SYSTEM, user="x")
+    except LLMBudgetExceeded as exc:
+        refusal = exc
+    assert (
+        client.call_count == 0
+    ), f"{client.call_count} model call(s) went out although the limits could not be read"
+    assert refusal is not None, "complete() answered although the limits could not be read"
+    return refusal
+
+
+class TestEditableLimitsFailClosed:
+    def test_unreadable_limits_stop_the_call_before_any_socket(self):
+        client = FakeClient([_response(content="{}")])
+        limits = _CountingLimits()
+        limits.unreadable = True
+        adapter = DeepSeekAdapter(_cfg(), client=client, limits=limits, sleep=lambda s: None)
+
+        with pytest.raises(LLMBudgetExceeded, match="limits unreadable — fail closed"):
+            adapter.complete(system=VALID_SYSTEM, user="x")
+
+        assert client.call_count == 0
+
+    def test_the_real_accessor_on_a_failing_read_never_reaches_the_client(self):
+        """The fail-closed chain end to end, minus the SQL: a failing read inside the real
+        `effective_limits` — and `.env` carries a perfectly good cap and timeout. A silent
+        fallback to `.env` would send the request."""
+        client = FakeClient([_response(content="{}")])
+        cfg = _cfg()
+        adapter = DeepSeekAdapter(
+            cfg,
+            client=client,
+            limits=partial(effective_limits, _UnreadableConn(), cfg),
+            sleep=lambda s: None,
+        )
+
+        _complete_expecting_a_refusal_without_a_call(adapter, client)
+
+    def test_limits_are_read_once_per_attempt_and_before_any_socket(self):
+        order: list[str] = []
+
+        class _Client(FakeClient):
+            def _create(self, **kwargs):
+                order.append("socket")
+                return super()._create(**kwargs)
+
+        client = _Client([_connection_error(), _response(content="{}")])
+        limits = _CountingLimits()
+
+        def spying() -> Limits:
+            order.append("limits")
+            return limits()
+
+        adapter = DeepSeekAdapter(
+            _cfg(LLM_RETRY=2), client=client, limits=spying, sleep=lambda s: None
+        )
+
+        adapter.complete(system=VALID_SYSTEM, user="x")
+
+        assert order == ["limits", "socket", "limits", "socket"]
+        assert limits.calls == 2
+
+    def test_a_limits_read_that_fails_on_the_retry_stops_the_second_attempt(self):
+        client = FakeClient([_connection_error(), _response(content="{}")])
+        limits = _CountingLimits()
+        adapter = DeepSeekAdapter(
+            _cfg(LLM_RETRY=2),
+            client=client,
+            limits=limits,
+            sleep=lambda s: setattr(limits, "unreadable", True),
+        )
+
+        with pytest.raises(LLMBudgetExceeded, match="fail closed"):
+            adapter.complete(system=VALID_SYSTEM, user="x")
+
+        assert client.call_count == 1  # the first attempt only; the retry opened no socket
+
+    def test_the_cap_comes_from_limits_not_from_cfg(self):
+        refused = FakeClient([_response(content="{}")])
+        adapter_refused = DeepSeekAdapter(
+            _cfg(LLM_MONTHLY_USD_CAP=30),  # `.env` would let 12 USD through
+            client=refused,
+            limits=_CountingLimits(_limits(cap_usd=10)),
+            spent_usd=lambda: 12.0,
+            sleep=lambda s: None,
+        )
+        with pytest.raises(LLMBudgetExceeded, match="LLM_MONTHLY_USD_CAP=10"):
+            adapter_refused.complete(system=VALID_SYSTEM, user="x")
+        assert refused.call_count == 0
+
+        allowed = FakeClient([_response(content="{}")])
+        adapter_allowed = DeepSeekAdapter(
+            _cfg(LLM_MONTHLY_USD_CAP=5),  # `.env` would refuse 12 USD
+            client=allowed,
+            limits=_CountingLimits(_limits(cap_usd=100)),
+            spent_usd=lambda: 12.0,
+            sleep=lambda s: None,
+        )
+        adapter_allowed.complete(system=VALID_SYSTEM, user="x")
+        assert allowed.call_count == 1
+
+    def test_the_deadline_comes_from_limits_when_the_caller_passes_none(self):
+        client = FakeClient([_response(content="{}")])
+        adapter = DeepSeekAdapter(
+            _cfg(LLM_TIMEOUT_S=5),
+            client=client,
+            limits=_CountingLimits(_limits(timeout_s=77)),
+            sleep=lambda s: None,
+        )
+
+        adapter.complete(system=VALID_SYSTEM, user="x")
+
+        assert client.calls[0]["timeout"] == 77
+
+    def test_a_caller_supplied_deadline_still_wins_over_limits(self):
+        client = FakeClient([_response(content="{}")])
+        adapter = DeepSeekAdapter(
+            _cfg(),
+            client=client,
+            limits=_CountingLimits(_limits(timeout_s=77)),
+            sleep=lambda s: None,
+        )
+
+        adapter.complete(system=VALID_SYSTEM, user="x", timeout_s=9)
+
+        assert client.calls[0]["timeout"] == 9
+
+    def test_a_change_of_limits_is_seen_by_the_next_call(self):
+        client = FakeClient([_response(content="{}"), _response(content="{}")])
+        limits = _CountingLimits(_limits(cap_usd=30, timeout_s=20))
+        adapter = DeepSeekAdapter(
+            _cfg(), client=client, limits=limits, spent_usd=lambda: 15.0, sleep=lambda s: None
+        )
+
+        adapter.complete(system=VALID_SYSTEM, user="x")
+        limits.value = _limits(cap_usd=10, timeout_s=40)
+        with pytest.raises(LLMBudgetExceeded):
+            adapter.complete(system=VALID_SYSTEM, user="x")
+
+        assert client.call_count == 1
+        assert client.calls[0]["timeout"] == 20
+
+    def test_without_limits_the_adapter_behaves_exactly_as_on_cfg(self):
+        client = FakeClient([_response(content="{}")])
+        adapter = DeepSeekAdapter(
+            _cfg(LLM_TIMEOUT_S=13, LLM_MONTHLY_USD_CAP=30),
+            client=client,
+            spent_usd=lambda: 29.0,
+            sleep=lambda s: None,
+        )
+
+        adapter.complete(system=VALID_SYSTEM, user="x")
+
+        assert client.calls[0]["timeout"] == 13
+        capped = DeepSeekAdapter(
+            _cfg(LLM_MONTHLY_USD_CAP=30),
+            client=FakeClient([_response(content="{}")]),
+            spent_usd=lambda: 30.0,
+            sleep=lambda s: None,
+        )
+        with pytest.raises(LLMBudgetExceeded):
+            capped.complete(system=VALID_SYSTEM, user="x")
+
+
+class TestInvestigateTakesItsDeadlineFromTheLimits:
+    def test_the_call_and_its_repair_run_under_the_limits_deadline(self):
+        """`llm/investigate.py` no longer reads `LLM_TIMEOUT_S` off the config: both sends (the
+        call and its one repair) run under the deadline the limits say, as the real adapter
+        resolves it. Red step: put `timeout_s=cfg.LLM_TIMEOUT_S` back and the client sees 5."""
+        dossier = _fake_dossier()
+        bad = _investigate_v2()
+        del bad["confidence"]
+        client = FakeClient(
+            [
+                _response(content=json.dumps(bad)),
+                _response(content=json.dumps(_investigate_v2())),
+            ]
+        )
+        cfg = _cfg(LLM_TIMEOUT_S=5)
+        adapter = DeepSeekAdapter(
+            cfg, client=client, limits=_CountingLimits(_limits(timeout_s=77)), sleep=lambda s: None
+        )
+
+        result = llm_investigate.investigate(adapter, dossier, nonce=dossier.nonce, cfg=cfg)
+
+        assert result.calls == 2
+        assert [call["timeout"] for call in client.calls] == [77, 77]
+
+    def test_unreadable_limits_stop_the_investigation_before_any_socket(self):
+        dossier = _fake_dossier()
+        client = FakeClient([_response(content=json.dumps(_investigate_v2()))])
+        limits = _CountingLimits()
+        limits.unreadable = True
+        cfg = _cfg()
+        adapter = DeepSeekAdapter(cfg, client=client, limits=limits, sleep=lambda s: None)
+
+        with pytest.raises(LLMBudgetExceeded):
+            llm_investigate.investigate(adapter, dossier, nonce=dossier.nonce, cfg=cfg)
+
+        assert client.call_count == 0
+
+
+@pytest.mark.db
+class TestTheAdapterOverTheRealAccessor:
+    def test_a_missing_settings_table_stops_the_call_and_the_transaction_survives(self, db):
+        db.execute("DROP TABLE settings")  # rolled back with the test's transaction
+        client = FakeClient([_response(content="{}")])
+        cfg = _cfg()
+        adapter = DeepSeekAdapter(
+            cfg,
+            client=client,
+            limits=partial(effective_limits, db, cfg),
+            sleep=lambda s: None,
+        )
+
+        refusal = _complete_expecting_a_refusal_without_a_call(adapter, client)
+
+        assert "fail closed" in str(refusal)
+        assert db.execute("SELECT 1").fetchone() == (1,)  # the caller's transaction is usable
+
+    def test_a_saved_row_changes_the_cap_and_the_timeout_on_the_next_call(self, db):
+        user_id = str(uuid.uuid4())
+        db.execute(
+            "INSERT INTO users (user_id, username, display_name, role, password_hash) "
+            "VALUES (%s, %s, 'Admin', 'admin', 'x')",
+            (user_id, f"user-{user_id[:8]}"),
+        )
+        client = FakeClient([_response(content="{}"), _response(content="{}")])
+        cfg = _cfg(LLM_MONTHLY_USD_CAP=30, LLM_TIMEOUT_S=5)
+        adapter = DeepSeekAdapter(
+            cfg,
+            client=client,
+            limits=partial(effective_limits, db, cfg),
+            spent_usd=lambda: 20.0,
+            sleep=lambda s: None,
+        )
+
+        adapter.complete(system=VALID_SYSTEM, user="x")  # 20 < 30, no row yet
+        db.execute(
+            "INSERT INTO settings (key, value, updated_by) VALUES "
+            "('LLM_MONTHLY_USD_CAP', 15, %s), ('LLM_TIMEOUT_S', 90, %s)",
+            (user_id, user_id),
+        )
+        with pytest.raises(LLMBudgetExceeded):  # 20 >= 15 now
+            adapter.complete(system=VALID_SYSTEM, user="x")
+
+        assert client.call_count == 1
+        assert client.calls[0]["timeout"] == 5

@@ -155,8 +155,12 @@ def login(conn: psycopg.Connection, username: str, password: str, cfg: Config) -
         if locked:
             raise AccountLocked(locked_until)
         raise LoginFailed("bad_password")
+    # One UPDATE: the counter resets and the sign-in is stamped (spec §5.1). Only this success
+    # path stamps: a wrong password, a lock and an inactive account all leave before it.
     conn.execute(
-        "UPDATE users SET failed_logins = 0, locked_until = NULL WHERE user_id = %s", (user_id,)
+        "UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = now() "
+        "WHERE user_id = %s",
+        (user_id,),
     )
     iat = time.time()
     return Claims(
@@ -223,9 +227,19 @@ def logout(conn: psycopg.Connection, user_id: str) -> None:
 
 
 def create_user(
-    conn: psycopg.Connection, *, username: str, display_name: str, role: str, password: str
+    conn: psycopg.Connection,
+    *,
+    username: str,
+    display_name: str,
+    role: str,
+    password: str,
+    actor_id: str | None = None,
 ) -> str:
-    """Insert the user and its `admin.user_created` audit row; return the new `user_id`."""
+    """Insert the user and its `admin.user_created` audit row; return the new `user_id`.
+
+    `actor_id` is the admin who asked for the account through the web (P11-T02): the audit row is
+    then theirs, `actor_role='admin'`. Left out (the CLI), the row is the system's, with no actor.
+    """
     if role not in ROLES:
         raise ValueError(f"role: must be one of {'|'.join(ROLES)}, got {role!r}")
     (user_id,) = conn.execute(
@@ -243,9 +257,14 @@ def create_user(
     conn.execute(
         """
         INSERT INTO audit_events (event_type, subject_id, actor_id, actor_role, payload)
-        VALUES ('admin.user_created', %s, NULL, 'system', %s)
+        VALUES ('admin.user_created', %s, %s, %s, %s)
         """,
-        (str(user_id), Jsonb({"username": username, "role": role})),
+        (
+            str(user_id),
+            actor_id,
+            "system" if actor_id is None else "admin",
+            Jsonb({"username": username, "role": role}),
+        ),
     )
     return str(user_id)
 
@@ -257,6 +276,35 @@ def set_password(conn: psycopg.Connection, username: str, password: str) -> bool
         (hash_password(password), username),
     )
     return cursor.rowcount == 1
+
+
+def admin_set_password(conn: psycopg.Connection, user_id: str, password: str) -> str | None:
+    """An admin's reset (P11-T02): the new hash, and every token issued before this moment dead.
+    The old password's sessions must not outlive it (spec decision 3). Returns the username, or
+    `None` when no such user. Not `set_password`: that one is by username and keeps the sessions
+    (the CLI's break-glass path).
+
+    The stamp is `clock_timestamp()`, not `now()`: `now()` is the start of the caller's
+    transaction, and a login that finished after that start but before this row's lock would hold
+    a token newer than the stamp and survive the reset.
+    """
+    row = conn.execute(
+        "UPDATE users SET password_hash = %s, sessions_invalid_before = clock_timestamp() "
+        "WHERE user_id = %s RETURNING username",
+        (hash_password(password), user_id),
+    ).fetchone()
+    return None if row is None else row[0]
+
+
+def unlock(conn: psycopg.Connection, user_id: str) -> str | None:
+    """Clear the failed-login counter and the lock (P11-T02). Returns the username, or `None`
+    when no such user."""
+    row = conn.execute(
+        "UPDATE users SET failed_logins = 0, locked_until = NULL WHERE user_id = %s "
+        "RETURNING username",
+        (user_id,),
+    ).fetchone()
+    return None if row is None else row[0]
 
 
 def deactivate(conn: psycopg.Connection, username: str) -> bool:

@@ -3392,3 +3392,10 @@ Decision:
      - They govern ① and ② in `backend/app` only.
      - The Owner-run evaluation tools in `eval/` keep the `.env` cap and their own `--approved-usd`, as before.
 Supersedes: DEC-200 item 4, the timeout bound only (the cap 1–1000 and quota 1–200 stand)
+Amended 18/10 (P11-T03 review round 2, N1 and N2):
+- **Item 1 corrected.** The count of model sends was wrong:
+  - ① makes up to four sends: propose and verify, each with at most one repair;
+  - ② makes up to two.
+- **What the bound actually protects is each send.** The adapter runs SQL before every attempt, which resets the idle-in-transaction timer, so the per-send bound is what keeps a call inside the session.
+- **The total-time margin** (`2 × timeout + 60 ≤ JOB_LOCK_TIMEOUT_S`) holds for ②, and for ① only while one worker runs. `reclaim_stale` is called by the worker's own loop. ①'s four sends predate P11, with the `.env` timeout of 120.
+- **Precondition:** the invariant needs `JOB_LOCK_TIMEOUT_S ≥ 80`, because the web floor of 10 cannot keep it below that. Under that value the unclamped `.env` timeout is the larger risk anyway. A config-load guard on the `.env` pair would be a separate decision.

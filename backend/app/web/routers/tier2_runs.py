@@ -32,6 +32,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.audit.events import write_event
+from app.infra import settings
 from app.infra.auth import Claims
 from app.infra.jobs import enqueue
 from app.tier2 import investigation_view
@@ -72,8 +73,11 @@ def api_analyze(conn: Conn, claims: Tier2, cfg: Cfg, case_id: CaseId) -> dict[st
     """404 if the case does not exist; **409 "case đã kết luận" when the case is already
     concluded** (review round 1, N15 — a conclusion is the end of the analysis, so a run
     on it would spend money on a case nobody can act on, and would be checked against the
-    quota before it was refused; nothing is enqueued and no quota row is written); 429
-    over `ANALYZE_QUOTA_PER_USER_DAY`; 409 when `enqueue()` returns `None` (a run is
+    quota before it was refused; nothing is enqueued and no quota row is written); **503
+    `{"reason": "limits_unavailable"}` when the quota limit cannot be read** (fail closed,
+    DEC-200 item 3 — nothing falls back to `.env`); 429 over the per-person quota
+    (`ANALYZE_QUOTA_PER_USER_DAY`, or the admin's saved value, read through
+    `infra.settings`); 409 when `enqueue()` returns `None` (a run is
     already live for this case — the single-flight index, not a query); 202
     `{run_id, job_id}` otherwise.
 
@@ -97,7 +101,16 @@ def api_analyze(conn: Conn, claims: Tier2, cfg: Cfg, case_id: CaseId) -> dict[st
         conn.rollback()
         raise HTTPException(status_code=409, detail="case đã kết luận")
 
-    if _analyze_quota_count(conn, claims.user_id) >= cfg.ANALYZE_QUOTA_PER_USER_DAY:
+    # The per-person limit is the admin's saved one, else `.env`. Fail closed (DEC-200 item 3):
+    # if it cannot be read the quota cannot be checked, so nothing is enqueued — never a
+    # silent fall back to the `.env` value.
+    try:
+        quota = settings.effective_limits(conn, cfg).quota_per_24h
+    except settings.SettingsUnavailable as exc:
+        conn.rollback()
+        raise HTTPException(status_code=503, detail={"reason": "limits_unavailable"}) from exc
+
+    if _analyze_quota_count(conn, claims.user_id) >= quota:
         conn.rollback()
         raise HTTPException(status_code=429, detail="analyze quota exceeded for today")
 

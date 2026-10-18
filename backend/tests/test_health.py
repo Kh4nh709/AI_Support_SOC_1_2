@@ -369,6 +369,57 @@ def test_monthly_cost_passes_under_80_percent_of_the_cap(db, tmp_path):
     assert _by_name(report)["monthly_cost"].ok is True
 
 
+def _web_limit(conn, key: str, value: int) -> None:
+    """One `settings` row, as the admin's `PUT /api/admin/llm/limits` writes it."""
+    user_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO users (user_id, username, display_name, role, password_hash) "
+        "VALUES (%s, %s, 'Admin', 'admin', 'x')",
+        (user_id, f"user-{user_id[:8]}"),
+    )
+    conn.execute(
+        "INSERT INTO settings (key, value, updated_by) VALUES (%s, %s, %s)",
+        (key, value, user_id),
+    )
+
+
+@pytest.mark.db
+def test_monthly_cost_uses_the_cap_the_admin_saved_on_the_web(db, tmp_path):
+    """P11-T03: 27 USD is 90 % of the `.env` cap of 30 (fires) but 27 % of a web cap of 100."""
+    _insert_llm_run(db, created_at=datetime.now(UTC), result=None, cost_usd="27.00")
+    clock = _clock_at(_MORNING_UTC)
+    over = health.check(db, _cfg(LLM_MONTHLY_USD_CAP=30), clock=clock, backups_dir=tmp_path)
+    assert _by_name(over)["monthly_cost"].ok is False
+
+    _web_limit(db, "LLM_MONTHLY_USD_CAP", 100)
+    under = health.check(db, _cfg(LLM_MONTHLY_USD_CAP=30), clock=clock, backups_dir=tmp_path)
+
+    check = _by_name(under)["monthly_cost"]
+    assert check.ok is True
+    assert check.value == 27.0
+    assert "$100 monthly cap" in check.detail
+
+
+@pytest.mark.db
+def test_monthly_cost_fails_when_the_limits_cannot_be_read(db, tmp_path):
+    """Fail closed (DEC-200 item 3): no `settings` table — the code ran before `make migrate`.
+    The check fails with a detail that says why, never a pass on the `.env` cap, and the rest
+    of the run is unharmed (the savepoint keeps the transaction usable, so the report is still
+    written)."""
+    db.execute("DROP TABLE settings")  # rolled back with the test's transaction
+
+    report = health.check(
+        db, _cfg(LLM_MONTHLY_USD_CAP=30), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path
+    )
+
+    check = _by_name(report)["monthly_cost"]
+    assert check.ok is False
+    assert "không đọc được hạn mức" in check.detail
+    assert check.value is None
+    assert report.checked_at is not None  # the system_health row was inserted after the failure
+    assert _by_name(report)["intake_backlog"].ok is True  # the other checks still ran
+
+
 # 7 · backup_age -------------------------------------------------------------------
 
 

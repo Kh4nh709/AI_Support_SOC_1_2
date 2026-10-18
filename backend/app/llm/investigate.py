@@ -279,7 +279,13 @@ def investigate(
     caught here: they propagate to `tier2/investigate.py`, which is the module with a
     connection to record them against (design note 3(d)). `spend`, when given, receives
     every *answered* call as it is made — so the caller still sees what the first call
-    cost when the repair call (or the repair prompt's own lint) raises (S7)."""
+    cost when the repair call (or the repair prompt's own lint) raises (S7).
+
+    **The deadline is not passed** (P11-T03): `timeout_s` is left to the adapter, which takes
+    it from its `limits` (the admin's saved `LLM_TIMEOUT_S`, else `.env`, read per attempt and
+    fail-closed), so nothing here reads the config's timeout and the call and its one repair
+    run under the same limits. `cfg` stays in the signature for the caller's sake."""
+    del cfg
     system = _system_prompt()
     user = dossier.text
     _lint_or_raise(user, nonce=nonce, extra_constants=extra_constants)
@@ -288,7 +294,6 @@ def investigate(
         system=system,
         user=user,
         response_format={"type": "json_object"},
-        timeout_s=cfg.LLM_TIMEOUT_S,
     )
     if spend is not None:
         spend.record(result)
@@ -304,7 +309,6 @@ def investigate(
             system=system,
             user=repair_user,
             response_format={"type": "json_object"},
-            timeout_s=cfg.LLM_TIMEOUT_S,
         )
         if spend is not None:
             spend.record(result)

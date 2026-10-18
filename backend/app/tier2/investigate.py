@@ -31,6 +31,9 @@ for non-timeout errors could in theory push a single send past 120 s across up t
 `docs/investigate-size-class.md`): real p95 latency at the 60 k-token synthetic class is
 14.65 s and at the 12.8 k real-corpus ceiling is 14.68 s — the practical number is under
 30 s even with a repair, far inside the 240 s theoretical bound and the 300 s job lock.
+(The admin may now change the timeout on the web, DEC-200; DEC-202 keeps this bound true:
+`infra.settings.timeout_max` is `(JOB_LOCK_TIMEOUT_S - 60) // 2`, the web may not set more,
+and a stored value above it is clamped when read.)
 
 **The isolation level (Director item 4).** `dossier.build()` runs under `REPEATABLE READ`
 (not `READ ONLY` — this handler still writes in the same transaction); see
@@ -65,7 +68,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from app.audit.llm_runs import month_spend_usd
-from app.infra import config
+from app.infra import config, settings
 from app.infra.errors import PermanentError, TransientError
 from app.infra.jobs import Job
 from app.llm import investigate as llm_investigate
@@ -427,7 +430,13 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
     agent_trace = _snapshot_trace(dossier)
     spend = llm_investigate.Spend()
 
-    llm_adapter = adapter or DeepSeekAdapter(cfg, spent_usd=partial(month_spend_usd, conn))
+    llm_adapter = adapter or DeepSeekAdapter(
+        cfg,
+        spent_usd=partial(month_spend_usd, conn),
+        # the cap and the deadline are the admin's saved limits, read per attempt; a read that
+        # fails stops the call as `LLMBudgetExceeded`, so the row below is `stopped_by='cap'`
+        limits=partial(settings.effective_limits, conn, cfg),
+    )
 
     def write_row(row_id: uuid.UUID, stopped_by: str | None, **outcome: Any) -> None:
         """This attempt's one `llm_runs` row. The usage columns come from `spend` unless
