@@ -957,6 +957,115 @@ export const S = {
       wrong: "Sai",
       unsure: "Không chắc",
     } satisfies Record<DigestVerdict, string>,
+
+    // The blind labelling page (P11-T16, spec §4.6): `/admin/labels`. Its words are here and nowhere else.
+    // Nothing on it names the model, a suggestion, an alert page or a case: the page is blind (DEC-019, DEC-101).
+    labelsPage: {
+      subtitle:
+        "Gán nhãn mù và độc lập: trang chỉ hiện dữ kiện của alert, mỗi người một thứ tự riêng",
+      progress: {
+        label: "Đã gán",
+        bar: "Tiến độ gán nhãn",
+        of: (done: number, total: number) => `${done} / ${total}`,
+      },
+      // Why the page could not be read, under the shared title `S.admin.common.loadError`.
+      loadErrorOffline: "Mất kết nối tới máy chủ. Thử lại sau ít phút.",
+      loadErrorServer: (status: number) => `Máy chủ trả lỗi ${status}. Thử lại sau ít phút.`,
+      // The token holds no user id the page can read: it asks the server for nothing else, so it stops here.
+      sessionUnreadable:
+        "Không đọc được phiên đăng nhập của bạn. Đăng nhập lại rồi mở lại trang này.",
+      // The server says a cluster is next but sends none: never guessed, the page asks again.
+      clusterMissing: "Máy chủ báo còn cụm để gán nhưng không gửi nội dung cụm. Thử lại.",
+
+      // The current state of the gold set (`eval/gold_v1.sha256` exists): progress only.
+      frozen: {
+        title: "Tập vàng gold_v1 đã đóng băng",
+        badge: "Đã đóng băng — chỉ xem tiến độ",
+        body: (total: number) =>
+          `${total} cụm, đã ghi mã sha256. Không gán thêm hay hoàn tác được nữa. Nhãn mới chỉ vào một bộ mới (gold_v2), không ghi đè gold_v1.`,
+      },
+      finished: {
+        title: (total: number) => `Bạn đã gán nhãn toàn bộ ${total} cụm`,
+        body: "Nhãn của người gán còn lại không hiện ở đây. Đối chiếu bất đồng làm sau khi cả hai xong.",
+      },
+      noCandidates: {
+        title: "Chưa có cụm nào để gán nhãn",
+        before: "Chưa dựng tệp ứng viên",
+        file: "eval/gold_candidates.csv",
+      },
+
+      // The cluster on screen: only the fields `labels/next` sends (`VIEW_KEYS` of tier1/labels.py).
+      cluster: {
+        label: "Cụm đang gán nhãn",
+        rule: "rule",
+        level: (level: string) => `(level ${level})`,
+        clusterId: "cụm",
+        alertTitle: "Alert đại diện",
+        time: "Thời điểm",
+        agent: "Agent",
+        user: "User",
+        route: "Src → Dst",
+        description: "Mô tả",
+        rawLog: "raw_log",
+        rawLogCut: "raw_log dài hơn 32 KB: đã cắt ở 32 KB khi hiển thị.",
+        seen: (count: number, first: string, last: string) =>
+          `Xuất hiện ${count} lần · từ ${first} đến ${last}`,
+        playbook: "Playbook",
+      },
+      correlation: {
+        title: "Tương quan ±2 giờ",
+        table: "Cụm tương quan trong ±2 giờ",
+        colRule: "Rule",
+        colCategory: "Loại",
+        colClusters: "Số cụm",
+        colAlerts: "Số alert",
+        colFirst: "Đầu",
+        colLast: "Cuối",
+        empty: "Không có cụm tương quan trong ±2 giờ.",
+        samples: "Mẫu raw_log của các cụm tương quan",
+        sample: (rule: string, category: string, severity: string, count: number, time: string) =>
+          `${rule} · ${category} · ${severity} · ×${count} · ${time}`,
+      },
+
+      // The form. The three labels are `LABEL_CHOICES` of api/admin.ts and the three confidences
+      // `LABEL_CONFIDENCES`; a test keeps the keys equal.
+      form: {
+        title: "Nhãn cho cụm này",
+        label: "Nhãn",
+        choices: {
+          false_positive: "Báo động giả",
+          benign: "Thật nhưng vô hại",
+          escalate: "Cần chuyển Tier 2",
+        },
+        confidence: "Độ chắc chắn",
+        confidences: { 1: "1 thấp", 2: "2 vừa", 3: "3 cao" },
+        note: "Ghi chú (một dòng)",
+        noteCount: (used: number, max: number) => `${used} / ${max}`,
+        save: "Lưu nhãn và sang cụm tiếp",
+        undo: "Hoàn tác nhãn vừa gán",
+        undoing: "Đang hoàn tác…",
+        hint: "Chỉ hoàn tác được khi tập vàng chưa đóng băng. Nhãn của bạn không hiện với người gán nhãn còn lại.",
+        noLabel: "Chọn một nhãn trước khi lưu.",
+      },
+
+      // What the writes say. A refusal the server names (`frozen`, `already_labelled`, ...) is read from
+      // `S.admin.reason`; these are the ones it does not name.
+      notice: {
+        saved: (clusterId: string, done: number, total: number, next: string | null) =>
+          `Đã lưu nhãn cụm ${clusterId}. Đã gán ${done} / ${total}. ${
+            next === null ? "Bạn đã xong phần của mình." : `Cụm tiếp: ${next}.`
+          }`,
+        undone: (clusterId: string, done: number, total: number) =>
+          `Đã hoàn tác nhãn cụm ${clusterId}. Đã gán ${done} / ${total}.`,
+        invalid: "Nhãn không hợp lệ. Kiểm tra lại nhãn, độ chắc chắn và ghi chú.",
+        saveServer: (status: number) =>
+          `Máy chủ trả lỗi ${status}. Nhãn chưa được lưu — thử lại sau ít phút.`,
+        saveOffline: "Mất kết nối tới máy chủ. Nhãn chưa được lưu — thử lại khi có mạng.",
+        undoServer: (status: number) =>
+          `Máy chủ trả lỗi ${status}. Chưa hoàn tác được — thử lại sau ít phút.`,
+        undoOffline: "Mất kết nối tới máy chủ. Chưa hoàn tác được — thử lại khi có mạng.",
+      },
+    },
   },
 } as const;
 
