@@ -38,14 +38,24 @@ them.
 a payload whose `jsonb::text` is over `PAYLOAD_MAX_BYTES` (64 KiB, measured in bytes) never leaves
 it, and the row carries `{"truncated": true, "size": <bytes>}` instead. That way a 1 MB string
 is never read into this process and one event cannot blow up a page (100 rows at most, 64 KiB
-each). Every other payload is parsed and `redact`ed: a dict key that `is_secret_key` names has
-its value replaced by `"[đã ẩn]"`, at any depth, through lists and dicts, and nothing else is
-changed (no stringifying, no cutting). The key rule (spec §5.8 as amended at `b9fe528`): lower-case
-the key, drop `_` and `-` (camelCase needs no split of its own: lower-casing `apiKey` is
-`apikey`), and redact when the result equals or ends with one of `REDACT_SUFFIXES`. That catches
-`access_token`, `client_secret`, `apiKey`, `api-key`, `db_password`, `secret_key`, `privateKey`,
-`passphrase` and leaves `key`, `token_count`, `tokens_in`, `passwords`, `token_hash` visible. Payloads should never carry a credential
-(DEC-159 item 6); this is the second layer. One addition to the spec, for the same reason as the
+each). Every other payload is parsed and `redact`ed, at any depth, through lists and dicts, and
+nothing else is changed (no stringifying, no cutting). Three rules (spec §5.8, DEC-203 item 2):
+- **The key rule** (spec §5.8 as amended at `b9fe528`): a dict key that `is_secret_key` names has
+  its value replaced by `"[đã ẩn]"`. Lower-case the key, drop `_` and `-` (camelCase needs no
+  split of its own: lower-casing `apiKey` is `apikey`), and redact when the result equals or ends
+  with one of `REDACT_SUFFIXES` (DEC-203 adds `passwd` and `pwd`). That catches `access_token`,
+  `client_secret`, `apiKey`, `api-key`, `db_password`, `secret_key`, `privateKey`, `passphrase`,
+  `db_passwd` and leaves `key`, `token_count`, `tokens_in`, `passwords`, `token_hash` visible.
+- **The value rule**: a STRING that `is_secret_value` names, one that is a URL carrying a password
+  (`scheme://user:pass@`, `URL_WITH_PASSWORD`), is replaced whatever its key, or none (a list
+  item, a bare payload). That covers `DATABASE_URL*` and `conn_str`; the pattern is anchored at the
+  start, so it reads a DSN that begins the string, not one in the middle of a sentence.
+- **Flags are never redacted**: a `bool` or `null` value stays as it is even under a secret key
+  (`has_password`, `is_secret`, `"password": null`): a flag carries no secret, and hiding it
+  hides what the event says. A number, a text or a container under a secret key still goes whole.
+
+Payloads should never carry a credential (DEC-159 item 6); this is the second layer. One
+addition to the spec, for the same reason as the
 size cut: a payload nested in more than `MAX_PAYLOAD_DEPTH` (32) dicts and lists takes the
 truncated shape too (and so does one the JSON parser itself cannot read, a `RecursionError`
 from about 9,000 levels). Both fit well under 64 KiB, and FastAPI's serialiser fails on about
@@ -57,6 +67,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import timedelta
 from typing import Annotated, Any, Literal
 
@@ -95,7 +106,8 @@ REDACTED = "[đã ẩn]"
 #: A dict key is redacted when its normalised name (`normalise_key`) equals or ends with one of
 #: these. They are written in normalised form: no `_` or `-`, lower case. The first six are spec
 #: §5.8; `secretkey`, `privatekey` and `passphrase` were added by the Director's ruling on the fix
-#: round (a `token_hash` stays visible: it is a digest, not a credential).
+#: round (a `token_hash` stays visible: it is a digest, not a credential); `passwd` and `pwd` by
+#: DEC-203 item 2b.
 REDACT_SUFFIXES = (
     "password",
     "passwordhash",
@@ -106,7 +118,13 @@ REDACT_SUFFIXES = (
     "secretkey",
     "privatekey",
     "passphrase",
+    "passwd",
+    "pwd",
 )
+#: DEC-203 item 2a: a string that is a URL carrying a password (`scheme://user:pass@`). Redacted
+#: whatever its key. `[a-z]` is read case-insensitively: a scheme is not case-sensitive, so
+#: `POSTGRESQL://u:p@h` is as much a credential as the lower-case one.
+URL_WITH_PASSWORD = re.compile(r"^[a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s]+@", re.IGNORECASE)
 
 #: `?range=` -> the window. Anything else is a 422 from the `Literal` below.
 _WINDOWS: dict[str, timedelta] = {
@@ -199,24 +217,42 @@ def is_secret_key(key: Any) -> bool:
     return isinstance(key, str) and normalise_key(key).endswith(REDACT_SUFFIXES)
 
 
-def redact(value: Any, _level: int = 0) -> Any:
-    """A copy of a JSON value with every secret-named key's value replaced by `REDACTED`.
+def is_secret_value(value: Any) -> bool:
+    """True when `value` is a string that is a URL carrying a password (`URL_WITH_PASSWORD`).
+    Nothing but a string can be one."""
+    return isinstance(value, str) and URL_WITH_PASSWORD.match(value) is not None
 
-    A key matches when `is_secret_key` says so, at any depth, through lists
-    and nested dicts; the whole value under such a key goes, whatever it is. Everything else is
-    returned as it is: the same numbers, strings and `None`, in the same structure. The input
-    is never modified. `_level` is the number of containers already entered: a value nested in
-    more than `MAX_PAYLOAD_DEPTH` of them raises `PayloadTooDeep` rather than recursing on."""
+
+def _is_flag(value: Any) -> bool:
+    """A `bool` or `None`: a value that cannot carry a secret (checked by type, so `0` is not
+    `False` here)."""
+    return value is None or isinstance(value, bool)
+
+
+def redact(value: Any, _level: int = 0) -> Any:
+    """A copy of a JSON value with every secret replaced by `REDACTED`, by the three rules of the
+    module docstring.
+
+    A key matches when `is_secret_key` says so, at any depth, through lists and nested dicts; the
+    whole value under such a key goes, whatever it is, unless it is a `bool` or `None` (a flag is
+    never redacted). A string that `is_secret_value` names goes under any key. Everything else is
+    returned as it is: the same numbers, strings and `None`, in the same structure. The input is
+    never modified. `_level` is the number of containers already entered: a value nested in more
+    than `MAX_PAYLOAD_DEPTH` of them raises `PayloadTooDeep` rather than recursing on."""
     if isinstance(value, (dict, list)):
         if _level >= MAX_PAYLOAD_DEPTH:
             raise PayloadTooDeep(f"nested deeper than {MAX_PAYLOAD_DEPTH} levels")
         if isinstance(value, dict):
             return {
-                key: REDACTED if is_secret_key(key) else redact(item, _level + 1)
+                key: (
+                    REDACTED
+                    if is_secret_key(key) and not _is_flag(item)
+                    else redact(item, _level + 1)
+                )
                 for key, item in value.items()
             }
         return [redact(item, _level + 1) for item in value]
-    return value
+    return REDACTED if is_secret_value(value) else value
 
 
 def _payload(text: str | None, size: int | None) -> Any:

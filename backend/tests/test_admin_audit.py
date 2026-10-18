@@ -125,7 +125,8 @@ def test_every_alert_and_tier1_name_is_in_alerts_cases() -> None:
 
 def test_the_redaction_suffixes_and_the_placeholder_are_the_spec_ones() -> None:
     """Spec §5.8 as amended at `b9fe528`, plus `secretkey`, `privatekey` and `passphrase` (the
-    Director's ruling on the fix-round note): the normalised names a key must equal or end with."""
+    Director's ruling on the fix-round note), plus `passwd` and `pwd` (DEC-203 item 2b): the
+    normalised names a key must equal or end with."""
     assert set(admin_audit.REDACT_SUFFIXES) == {
         "password",
         "passwordhash",
@@ -136,8 +137,10 @@ def test_the_redaction_suffixes_and_the_placeholder_are_the_spec_ones() -> None:
         "secretkey",
         "privatekey",
         "passphrase",
+        "passwd",
+        "pwd",
     }
-    assert len(admin_audit.REDACT_SUFFIXES) == 9
+    assert len(admin_audit.REDACT_SUFFIXES) == 11
     assert admin_audit.REDACTED == PLACEHOLDER
     assert admin_audit.PAYLOAD_MAX_BYTES == 64 * 1024
     assert admin_audit.MAX_PAYLOAD_DEPTH == 32
@@ -212,6 +215,16 @@ CAUGHT_KEYS = [
     "passphrase",
     "Passphrase",
     "ssh_passphrase",
+    # DEC-203 item 2b: `passwd` and `pwd`
+    "passwd",
+    "pwd",
+    "Passwd",
+    "PWD",
+    "db_passwd",
+    "db-pwd",
+    "userPwd",
+    "old_pwd",
+    "root.passwd",
 ]
 # Keys it must leave alone: a plain substring rule would hide these (`key` would hide a setting's
 # name in `admin.settings_changed`'s `changes[].key`; `token` would hide a counter).
@@ -240,6 +253,13 @@ VISIBLE_KEYS = [
     "secret_keys",
     "passphrases",
     "passphrase_hint",
+    # `passwd` and `pwd` are suffixes, like the others: a longer word is not caught
+    "passwds",
+    "pwds",
+    "passwd_hint",
+    "pwd_changed_at",
+    "pw",
+    "cwd",
 ]
 
 
@@ -280,6 +300,112 @@ def test_a_settings_change_is_returned_whole_with_its_key_names() -> None:
         ]
     }
     assert admin_audit.redact(payload) == payload
+
+
+# DEC-203 item 2a: a string value that is a URL carrying a password is redacted whatever its key.
+URLS_WITH_A_PASSWORD = [
+    "postgresql://app_rw:hunter2@db:5432/soc",
+    "postgres://u:p@h/db",
+    "redis://default:s3cr3t@cache:6379/0",
+    "amqp+ssl://guest:guest@mq.internal",
+    "svn+https://deploy:tok-123@repo.example.com/trunk",
+    "postgresql://u:pw@h/db?sslmode=require",
+    "postgresql://u:p:q@h/db",  # a colon inside the password
+    "postgresql://u:p%40ss@h/db",
+    "HTTP://Admin:Pa55@host/",  # a URL scheme is not case-sensitive
+]
+# What the rule leaves alone: no password, no `@`, no scheme, or not a URL at all.
+STRINGS_THAT_ARE_NOT_A_URL_WITH_A_PASSWORD = [
+    "https://example.com/path",
+    "http://host:8080/path",  # host:port is not user:password, and there is no `@`
+    "postgresql://db:5432/soc",
+    "postgresql://app@db/soc",  # a user, no password
+    "ssh://deploy@example.com/org/repo",
+    "postgresql://app:@db/soc",  # an empty password
+    "postgresql://u:p w@h/db",  # whitespace ends the password before the `@`
+    "app:hunter2@db",  # no scheme
+    "://u:p@h",
+    "mailto:ana@example.com",
+    "not a url",
+    "",
+]
+# Keys that are NOT secret names: the value rule is what has to catch the URL under them.
+NON_SECRET_KEYS_FOR_URLS = [
+    "conn_str",
+    "DATABASE_URL",
+    "DATABASE_URL_OWNER",
+    "TEST_DATABASE_URL",
+    "error",
+    "note",
+    "url",
+    "k",
+]
+
+
+def test_the_url_password_pattern_is_the_one_dec_203_gives() -> None:
+    assert admin_audit.URL_WITH_PASSWORD.pattern == r"^[a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s]+@"
+    assert not any(admin_audit.is_secret_key(key) for key in NON_SECRET_KEYS_FOR_URLS)
+
+
+@pytest.mark.parametrize("key", NON_SECRET_KEYS_FOR_URLS)
+@pytest.mark.parametrize("url", URLS_WITH_A_PASSWORD)
+def test_a_url_carrying_a_password_is_redacted_under_any_key(key: str, url: str) -> None:
+    assert admin_audit.is_secret_value(url) is True
+    assert admin_audit.redact({key: url}) == {key: PLACEHOLDER}
+    deep = {"a": [{"b": {key: url, "keep": 1}}]}
+    assert admin_audit.redact(deep) == {"a": [{"b": {key: PLACEHOLDER, "keep": 1}}]}
+
+
+def test_a_url_carrying_a_password_is_redacted_in_a_list_and_as_a_bare_payload() -> None:
+    url = URLS_WITH_A_PASSWORD[0]
+    assert admin_audit.redact(url) == PLACEHOLDER
+    assert admin_audit.redact([url, "visible", [url, 1]]) == [
+        PLACEHOLDER,
+        "visible",
+        [PLACEHOLDER, 1],
+    ]
+    mixed = {"urls": [url, "https://example.com/ok"], "n": 2}
+    assert admin_audit.redact(mixed) == {"urls": [PLACEHOLDER, "https://example.com/ok"], "n": 2}
+    assert url not in json.dumps(admin_audit.redact(mixed))
+
+
+@pytest.mark.parametrize("text", STRINGS_THAT_ARE_NOT_A_URL_WITH_A_PASSWORD)
+def test_a_string_that_is_not_a_url_with_a_password_stays_visible(text: str) -> None:
+    assert admin_audit.is_secret_value(text) is False
+    assert admin_audit.redact({"conn_str": text}) == {"conn_str": text}
+    assert admin_audit.redact({"a": [text, {"b": text}]}) == {"a": [text, {"b": text}]}
+    assert admin_audit.redact(text) == text
+
+
+@pytest.mark.parametrize("value", [None, True, False, 0, 1.5, [], {}, b"x", ("a",)])
+def test_only_a_string_can_be_a_secret_value(value: Any) -> None:
+    assert admin_audit.is_secret_value(value) is False
+
+
+# DEC-203 item 2c: a boolean or null is never redacted, not even under a secret key.
+@pytest.mark.parametrize(
+    "key",
+    ["password", "token", "dsn", "secret", "api_key", "passwd", "pwd", "client_secret"]
+    + ["has_password", "is_secret", "hasToken", "db_pwd"],
+)
+@pytest.mark.parametrize("value", [None, True, False], ids=["null", "true", "false"])
+def test_a_boolean_or_null_is_never_redacted_even_under_a_secret_key(key: str, value: Any) -> None:
+    assert admin_audit.is_secret_key(key) is True  # the premise: the key rule alone would hide it
+    out = admin_audit.redact({key: value})
+    assert out == {key: value} and out[key] is value
+    deep = admin_audit.redact({"a": [{"b": {key: value}}]})
+    assert deep["a"][0]["b"][key] is value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [0, 1, -1, 1.5, "", "x", "true", "null", [], {}, [True, None], {"on": True}, {"a": None}],
+)
+def test_anything_else_under_a_secret_key_is_still_redacted_whole(value: Any) -> None:
+    """The exception is the bool and the null themselves: 0, "true" and a container holding a
+    flag are not flags, and a number or text can carry a secret."""
+    assert admin_audit.redact({"password": value}) == {"password": PLACEHOLDER}
+    assert admin_audit.redact({"x": {"api_key": value}}) == {"x": {"api_key": PLACEHOLDER}}
 
 
 def test_redaction_returns_everything_else_unchanged_and_unstringified() -> None:
@@ -1103,6 +1229,47 @@ def test_near_miss_secret_names_are_redacted_through_the_route_and_counters_are_
         "digest": {"token_hash": "abc123", "public_key": "ssh-ed25519 AAAA"},
     }
     for leaked in (f"leak-{n}" for n in range(1, 12)):
+        assert leaked not in resp.text, leaked
+
+
+@pytest.mark.db
+def test_the_dec_203_rules_hold_through_the_route(client) -> None:
+    """Row 31: a URL with a password under any key, `passwd` and `pwd`, and a flag that stays."""
+    tc, db, _ = client
+    _event(
+        db,
+        "admin.settings_changed",
+        "settings",
+        payload={
+            "conn_str": "postgresql://app_rw:leak-1@db:5432/soc",
+            "DATABASE_URL_OWNER": "postgresql://soc_owner:leak-2@db:5432/soc",
+            "attempts": [
+                {"db_passwd": "leak-3", "pwd": "leak-4", "ok": False},
+                {"urls": ["redis://default:leak-5@cache:6379/0", "https://example.com/ok"]},
+            ],
+            "has_password": True,
+            "is_secret": False,
+            "password": None,
+            "host_url": "https://example.com/docs",
+            "dsn_host": "db",
+        },
+    )
+    resp = _get(tc)
+    (event,) = resp.json()["events"]
+    assert event["payload"] == {
+        "conn_str": PLACEHOLDER,
+        "DATABASE_URL_OWNER": PLACEHOLDER,
+        "attempts": [
+            {"db_passwd": PLACEHOLDER, "pwd": PLACEHOLDER, "ok": False},
+            {"urls": [PLACEHOLDER, "https://example.com/ok"]},
+        ],
+        "has_password": True,
+        "is_secret": False,
+        "password": None,
+        "host_url": "https://example.com/docs",
+        "dsn_host": "db",
+    }
+    for leaked in (f"leak-{n}" for n in range(1, 6)):
         assert leaked not in resp.text, leaked
 
 
