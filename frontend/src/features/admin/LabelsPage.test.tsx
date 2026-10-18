@@ -1,7 +1,12 @@
 // src/features/admin/LabelsPage.test.tsx — `/admin/labels` (spec §4.6, P11-T16): blind labelling. MSW answers the
 // three label routes and nothing else: an unhandled request fails the test, and every request is also logged,
 // so "the page asks for nothing else while labelling" (plan Review Focus 5) is a list the tests compare.
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  focusManager,
+  onlineManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
@@ -1194,6 +1199,39 @@ describe("no candidates", () => {
     const { container } = renderPage();
     await screen.findByText(L.noCandidates.title);
     expect(await axeOf(container)).toEqual([]);
+  });
+});
+
+// The labeller is reading a cluster: the page must not read `labels/next` again behind their back (a cluster is
+// read on entry and after the page's own writes). A read on focus and on reconnect is TanStack Query's default.
+describe("a cluster is read on entry and after a write, never because the window came back", () => {
+  afterEach(() => {
+    focusManager.setFocused(undefined);
+    onlineManager.setOnline(true);
+  });
+
+  it("does not read again when the window gets the focus back", async () => {
+    serveNext(nextAnswer());
+    renderPage();
+    await ready();
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    await delay(60);
+    expect(log).toEqual([`GET ${NEXT}`]);
+  });
+
+  it("does not read again when the connection comes back", async () => {
+    serveNext(nextAnswer());
+    renderPage();
+    await ready();
+    act(() => {
+      onlineManager.setOnline(false);
+      onlineManager.setOnline(true);
+    });
+    await delay(60);
+    expect(log).toEqual([`GET ${NEXT}`]);
   });
 });
 
