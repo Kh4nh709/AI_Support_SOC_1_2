@@ -525,6 +525,148 @@ export const S = {
     // What a page that is not built yet says (the page tasks replace these pages).
     building: "Trang này đang xây dựng.",
 
+    // The overview page (P11-T11, spec §4.1): the canvas's `AdminOverview` and the Tổng quan section of
+    // `AdminStates`, in its words. A function takes what the server sent, already formatted by the page.
+    overviewPage: {
+      updated: (time: string) => `Cập nhật ${time}`,
+      // A refresh that failed while an earlier answer is still on screen: the page says whose data it shows.
+      refreshFailed: (time: string) => `Không làm mới được. Đang hiện dữ liệu lúc ${time}.`,
+      rangeLabel: "Khoảng thời gian",
+
+      // The range holds no alert: the cards say 0 and the chart is empty (AdminStates, "không có dữ liệu").
+      emptyRange: (range: string) => `Không có alert nào trong ${range}`,
+      emptyRangeHint:
+        'Các ô số hiện 0, biểu đồ để trống. Nếu chờ đợi có alert, xem dòng "Lần kéo alert gần nhất" ở khối Sức khoẻ.',
+
+      // A block or a card whose own section failed (`errors[]`); the others are served.
+      blockFailed: "Không tải được khối này",
+      tileFailed: "Không tải được",
+      sectionError: {
+        timeout: "Truy vấn quá thời gian cho phép.",
+        query_failed: "Truy vấn thất bại.",
+        unknown: "Máy chủ không trả khối này.",
+      },
+
+      kpi: {
+        received: "Alert nhận vào",
+        receivedSub: (range: string, heads: string) => `${range} · ${heads} head sau gộp`,
+        waiting: "Cụm chờ Tier-1",
+        waitingOldest: (time: string) => `cũ nhất: ${time}`,
+        waitingNone: "không có cụm nào chờ",
+        casesOpen: "Case đang mở",
+        casesOpenSub: "đang được điều tra",
+        llmCost: "Chi phí LLM tháng này",
+        llmCap: (cap: string, pct: string) => `trần ${cap} · ${pct}`,
+        llmCapUnknown: "không đọc được hạn mức",
+      },
+
+      byDay: {
+        title: "Alert nhận vào theo ngày",
+        legend: "cột đậm: head mới · cột nhạt: bản sao gộp lại",
+        chart: "Biểu đồ cột: alert nhận vào theo ngày",
+        day: "Ngày",
+        total: "Tổng",
+        heads: "Head",
+        duplicates: "Bản sao",
+        bar: (label: string, total: string, heads: string, duplicates: string) =>
+          `${label}: ${total} alert, ${heads} head, ${duplicates} bản sao`,
+      },
+
+      funnel: {
+        title: "Tình trạng xử lý",
+        auto_closed: "Tự động đóng (rules)",
+        waiting: "Chờ Tier-1",
+        active: "Tier-1 đang xử lý",
+        closed_by_tier1: "Đã đóng bởi Tier-1",
+        escalated: "Chuyển Tier-2",
+        coverage: "Có gợi ý AI ① sẵn",
+        ofHeads: (ready: string, heads: string) => `${ready} / ${heads}`,
+      },
+
+      bySource: {
+        title: "Theo nguồn",
+        source: "Nguồn",
+        alerts: "Alert",
+        heads: "Head",
+        rejected: "bị từ chối khi nạp",
+      },
+
+      topAgents: {
+        title: "Agent nhiều alert nhất",
+        agent: "Agent",
+        alerts: "Alert",
+        empty: "Chưa có alert nào.",
+      },
+
+      health: {
+        title: "Sức khoẻ hệ thống",
+        okOfTotal: (ok: number, total: number) => `${ok}/${total} ổn`,
+        none: "Chưa có lần kiểm tra sức khoẻ nào.",
+        checkedAt: (time: string) =>
+          `Lấy từ lần kiểm tra mới nhất (system_health), ${time}. Check lỗi đứng đầu danh sách.`,
+        ok: "Ổn",
+        failing: "Lỗi",
+        // The ten checks of `infra/health.py`, in the canvas's words; a name with no label is shown as it is.
+        check: {
+          heartbeat: "Lần kéo alert gần nhất",
+          intake_backlog: "Alert chờ nạp",
+          job_backlog: "Job đang chờ trong worker",
+          llm_null_ratio: "Lượt gọi model không có kết quả",
+          triage_unavailable: "Gợi ý AI ① không khả dụng",
+          monthly_cost: "Chi phí LLM so với trần",
+          backup_age: "Bản sao lưu gần nhất",
+          inventory_empty: "Kiểm kê tài sản",
+          digest_unreviewed: "Digest hôm qua chưa duyệt",
+          disk_free: "Dung lượng đĩa còn trống",
+        },
+      },
+
+      jobs: {
+        title: "Job lỗi",
+        count: (n: number) => `${n} job`,
+        // The server sends at most 50, the newest attempt first.
+        countCapped: (n: number) => `${n} job gần nhất`,
+        table: "Các job lỗi",
+        job: "Job",
+        type: "Loại",
+        subject: "Đối tượng",
+        attempts: "Đã thử",
+        lastError: "Lỗi cuối",
+        at: "Lúc",
+        // The header of the column of buttons, read by a screen reader only.
+        actions: "Thao tác",
+        retry: "Chạy lại",
+        retryJob: (id: number) => `Chạy lại job ${id}`,
+        note: "Job đã hết số lần thử của worker. Chạy lại đặt job về hàng chờ và ghi audit.",
+        empty: "Không có job lỗi nào.",
+        dialogTitle: (id: number) => `Chạy lại job ${id}?`,
+        times: (n: number) => `${n} lần`,
+        dialogNote: "Job về lại hàng chờ của worker. Thao tác được ghi audit.",
+        done: (id: number) => `Đã đặt job ${id} về hàng chờ.`,
+      },
+
+      inventory: {
+        title: "Kiểm kê tài sản",
+        assets: "Asset đang dùng",
+        identities: "Identity",
+        iocs: "IoC",
+        loadedAt: "Nạp lần cuối",
+        neverLoaded: "chưa nạp lần nào",
+        reload: "Nạp lại kiểm kê",
+        hint: "Đọc lại tệp kiểm kê trên máy chủ. Asset không có trong kiểm kê bị chặn cứng, không rule nào tự đóng được.",
+        dialogTitle: "Nạp lại kiểm kê?",
+        dialogRead: "Đọc lại",
+        dialogAnd: "và",
+        dialogRest:
+          ", rồi cập nhật cơ sở dữ liệu. Mục không còn trong tệp bị vô hiệu hoá. Alert đã nạp trước đó không được tính lại.",
+        confirm: "Nạp lại",
+        loaded: (assets: number, identities: number, iocs: number, deactivated: number) =>
+          `Đã nạp: ${assets} asset · ${identities} identity · ${iocs} IoC · ${deactivated} mục bị vô hiệu hoá`,
+        warnings: (n: number) => `${n} cảnh báo`,
+        refused: "Không nạp được — tệp kiểm kê không hợp lệ. Cơ sở dữ liệu không thay đổi.",
+      },
+    },
+
     common: {
       cancel: "Huỷ",
       confirm: "Xác nhận",
