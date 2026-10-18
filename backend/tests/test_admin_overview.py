@@ -876,7 +876,7 @@ def test_retry_puts_a_failed_job_back_to_pending_and_writes_the_event(client) ->
     assert (status, attempts, locked_at) == ("pending", 0, None)
     assert last_error == "x" * 450  # kept: it says why the job failed last time
     assert scheduled_at == now  # reset from a day ahead to now: the worker may claim it
-    ((actor_role, actor_id, subject_id, payload),) = _events(db, "admin.job_retried")
+    ((actor_role, actor_id, subject_id, payload),) = _events(db, "admin.job_retried", str(job_id))
     assert actor_role == "admin" and str(actor_id) == claims.user_id
     assert subject_id == str(job_id)
     assert payload == {
