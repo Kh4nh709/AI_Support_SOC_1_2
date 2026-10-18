@@ -2,6 +2,7 @@
 // state (which is spent >= cap, never `pct`), the sums of the pipeline table, the labels, the link of a
 // subject, and the reading of a limit field. The page test (LlmPage.test.tsx) shows them on screen.
 import type { LimitsOut, PipelineRoleRow } from "../../api/admin";
+import { S } from "../../strings";
 import {
   WARN_PCT,
   costState,
@@ -77,7 +78,8 @@ describe("the number texts", () => {
   it("writes milliseconds as seconds with one decimal, and a missing latency as a dash", () => {
     expect(formatSeconds(2300)).toBe("2,3 s");
     expect(formatSeconds(12500)).toBe("12,5 s");
-    expect(formatSeconds(0)).toBe("0 s");
+    expect(formatSeconds(1000)).toBe("1,0 s");
+    expect(formatSeconds(0)).toBe("0,0 s");
     expect(formatSeconds(null)).toBe("—");
   });
 
@@ -201,6 +203,15 @@ describe("stoppedEntries", () => {
   });
   it("is empty for none", () => {
     expect(stoppedEntries({})).toEqual([]);
+  });
+});
+
+describe("the words of a stop reason", () => {
+  it("has one for each reason the alert page and the case page already word, and for the server's `other`", () => {
+    const known = [...Object.keys(S.ai1.stoppedBy), ...Object.keys(S.ai2.stoppedBy), "other"];
+    for (const code of known) {
+      expect(Object.keys(S.admin.llmPage.stopped), code).toContain(code);
+    }
   });
 });
 

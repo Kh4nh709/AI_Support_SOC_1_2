@@ -22,7 +22,7 @@ const MONEY = number(4, 2);
 const WHOLE_MONEY = number(0);
 const PERCENT = number(1);
 const MILLIONS = number(2);
-const SECONDS = number(1);
+const SECONDS = number(1, 1);
 
 /** "1.589". */
 export function formatCount(value: number): string {
@@ -47,7 +47,7 @@ export function formatPercent(value: number): string {
   return `${PERCENT.format(value)}%`;
 }
 
-/** "2,3 s" from milliseconds; a missing latency is a dash. */
+/** "2,3 s", "1,0 s": milliseconds as seconds with one decimal, so a column lines up; a missing latency is a dash. */
 export function formatSeconds(milliseconds: number | null): string {
   return milliseconds === null ? MISSING : `${SECONDS.format(milliseconds / 1000)} s`;
 }
