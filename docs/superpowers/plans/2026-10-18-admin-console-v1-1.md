@@ -387,7 +387,7 @@ def effective_limits(conn: psycopg.Connection, cfg: Config) -> Limits: ...  # ra
   - `role="dialog"`, `aria-modal`, `aria-labelledby`.
   - Focus moves to the dialog on open and returns on close; Esc cancels; Tab is kept inside.
 - `adminKeys = { overview: (range) => ["admin", "overview", range], users: ["admin", "users"], llm: (range) => ["admin", "llm", range], rules: ["admin", "rules"], digest: (day) => ["admin", "digest", day], labels: ["admin", "labels"], audit: (filters) => ["admin", "audit", filters] }`.
-- `api/admin.ts`: one typed function per route of P11-T02…T09, plus `reloadInventory()`.
+- `api/admin.ts`: one typed function per route of P11-T02…T09, plus `reloadInventory()`. Every admin write sends a JSON body: `unlock` is `api(…/unlock, {method: "POST", json: {}})`, because the route refuses a bare POST with 422 (P11-T02 review, m3).
 - Routes: `/admin` redirects to `/admin/overview`, and the seven pages are guarded by `RequireRole roles={["admin"]}`.
 
 - [ ] **Step 1:** Tests:
@@ -410,7 +410,7 @@ Each page task has the same five steps:
 | Task | Page | Its states (AdminStates section) |
 |---|---|---|
 | P11-T11 | `OverviewPage.tsx`, `/admin/overview` | KPI tiles (the waiting tile reads `waiting`; the API lists only days and statuses that occur, so zero-fill; `errors[].error` is `timeout` or `query_failed`); by day; funnel; by source; top agents; health with failing first; failed jobs with retry dialog, `409 not_failed`/`already_queued`, empty; inventory with reload dialog, result counts and warnings, 422 file errors; one block failing alone; range selector; empty range |
-| P11-T12 | `UsersPage.tsx`, `/admin/users` | table with "chưa đăng nhập", locked until; row actions by state; role change dialog; deactivate dialog; reset password dialog (12 chars, repeat, own-account warning); unlock dialog; `409 last_active_admin` and `self_change` texts; own row's controls disabled; create form errors (409 taken, 422s); search with no result; role → function matrix |
+| P11-T12 | `UsersPage.tsx`, `/admin/users` | unlock sends `json: {}`; the stale-actor 403 and `409 self_change`/`last_active_admin` have texts; display names refuse format characters (Cf/Zl/Zp) server-side, 422 `invalid` at the field; table with "chưa đăng nhập", locked until; row actions by state; role change dialog; deactivate dialog; reset password dialog (12 chars, repeat, own-account warning); unlock dialog; `409 last_active_admin` and `self_change` texts; own row's controls disabled; create form errors (409 taken, 422s); search with no result; role → function matrix |
 | P11-T13 | `LlmPage.tsx`, `/admin/llm` | tiles with ≥ 80 % amber and ≥ 100 % red stopped notice; by pipeline and role; quota "24 giờ gần nhất" with exhausted user; recent calls linking to alert or case; no calls; limits form with sources, 422 at the field, confirm dialog listing old → new only, the below-spent warning, fail-closed read-only panel; tool calls 0 sentence |
 | P11-T14 | `RulesPage.tsx`, `/admin/rules` | six hard blocks; table with chips and width warning against `width_threshold_pct`; toggle dialog; 404 on toggle; create in two steps with condition builder from the whitelist (`autoclose._WHITELIST`, copied as a typed table and pinned by a test against the backend list); preview, samples linking to `/alerts/:id`; tally when 0; 422 at the condition; "Tạo rule" only for the last previewed conditions |
 | P11-T15 | `DigestPage.tsx`, `/admin/digest` | day picker and today; summary; rows with disagreement style; three verdict buttons; reviewed rows; "Sai" adds the reopened sentence; no rule enabled; no cluster; bad day fallback; the two 409s; 422 |
@@ -428,7 +428,7 @@ The whitelist pin (P11-T14):
 
 **Files:** create `frontend/e2e/admin.spec.ts`; modify `frontend/e2e/fixtures.ts` if a seed helper is needed.
 
-- [ ] **Step 1:** Write the scenarios of spec §7, on the existing scratch stack (`make ui-e2e`, which starts its own database, API, worker and the LLM stub). The cluster is the `TEST_DATABASE_URL` one (55611).
+- [ ] **Step 1:** Write the scenarios of spec §7 (unlock through the real client, which sends `json: {}`), on the existing scratch stack (`make ui-e2e`, which starts its own database, API, worker and the LLM stub). The cluster is the `TEST_DATABASE_URL` one (55611).
 - [ ] **Step 2:** Run them; fix what fails. `make ui-e2e` must pass whole, the v1.0 specs included.
 - [ ] **Step 3:** Commit.
 
