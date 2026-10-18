@@ -252,6 +252,23 @@ def test_create_user_rejects_a_bad_role_before_any_sql() -> None:
         auth.create_user(None, username="x", display_name="X", role="boss", password="pw")
 
 
+def test_the_reserved_usernames_are_system_and_llm_and_live_in_infra() -> None:
+    """P11-T20 row 36. `actor=system` and `actor=llm` are the audit page's actor keywords, so a
+    user called either could never be filtered by name. The set is `infra`'s (the CLI's own
+    module); the web create imports it from here (`test_admin_users.py` pins that)."""
+    assert auth.RESERVED_USERNAMES == frozenset({"system", "llm"})
+    assert isinstance(auth.RESERVED_USERNAMES, frozenset)
+
+
+@pytest.mark.parametrize("name", ["system", "llm"])
+@pytest.mark.parametrize("role", ["tier1", "tier2", "admin"])
+def test_create_user_refuses_a_reserved_username_before_any_sql(name: str, role: str) -> None:
+    # conn=None: reaching any SQL would be an AttributeError, not this ValueError.
+    with pytest.raises(ValueError, match="reserved") as excinfo:
+        auth.create_user(None, username=name, display_name="X", role=role, password="pw")
+    assert name in str(excinfo.value)
+
+
 # --------------------------------------------------------------------------
 # db — login, lockout, logout, deactivate, verify
 # --------------------------------------------------------------------------
@@ -878,6 +895,51 @@ def test_cli_bad_role_exits_1(capsys, monkeypatch) -> None:
     )
     assert rc == 1
     assert "boss" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["system", "llm"])
+def test_cli_seed_users_refuses_a_reserved_username_before_connecting(
+    capsys, monkeypatch, name
+) -> None:
+    """P11-T20 row 36: exit 1 with a message naming the username, before any connection (no
+    reachable DSN is needed), and before any OTHER `--user` of the same call is created."""
+    monkeypatch.setenv("SEED_PASSWORD_OK_USER", "pw")
+    monkeypatch.setenv(f"SEED_PASSWORD_{name.upper()}", "pw")
+    rc = auth.main(
+        [
+            "seed-users",
+            "--dsn",
+            "postgresql:///p4t01_unreachable",
+            "--user",
+            "ok-user",
+            "tier1",
+            "Ok",
+            "--user",
+            name,
+            "admin",
+            "Reserved",
+        ]
+    )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "reserved" in err and name in err
+    assert "cannot connect" not in err  # it never tried
+
+
+@pytest.mark.db
+def test_cli_seed_users_creates_nothing_for_a_reserved_username_and_a_near_miss_is_fine(
+    sdb, scratch_dsn, monkeypatch
+) -> None:
+    near = _name("system-ops")  # the web matches whole names: `system-ops` is not `system`
+    monkeypatch.setenv(_env_key(near), "pw")
+    monkeypatch.setenv("SEED_PASSWORD_LLM", "pw")
+    rc = auth.main(["seed-users", "--dsn", scratch_dsn, "--user", "llm", "tier1", "L"])
+    assert rc == 1
+    assert sdb.execute("SELECT count(*) FROM users WHERE username = 'llm'").fetchone() == (0,)
+    sdb.rollback()
+    assert auth.main(["seed-users", "--dsn", scratch_dsn, "--user", near, "tier1", "Near"]) == 0
+    assert sdb.execute("SELECT count(*) FROM users WHERE username = %s", (near,)).fetchone() == (1,)
+    sdb.rollback()
 
 
 @pytest.mark.db

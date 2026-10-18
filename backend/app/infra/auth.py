@@ -44,6 +44,15 @@ from app.infra.errors import ConfigError
 
 ROLES = ("tier1", "tier2", "admin")
 
+#: `actor=system` and `actor=llm` are the audit page's ACTOR KEYWORDS: they select the
+#: `actor_role` and win over a username (`web/routers/admin_audit.py`), so the rows of a user
+#: called `system` or `llm` could never be filtered by that user. `create_user` refuses them (the
+#: CLI's `seed-users` too, before it connects), and the web create answers 422 `reserved` from the
+#: SAME set, imported from here: `infra` imports nothing from the app, so the set lives here and
+#: the web reads it (P11-T20 rows 11 and 36). Matched whole and case-sensitively, as the audit
+#: page matches an actor.
+RESERVED_USERNAMES = frozenset({"system", "llm"})
+
 # Migration 011: argon2id, time_cost=3 · memory_cost=64 MiB · parallelism=4.
 HASHER = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4, hash_len=32, salt_len=16)
 
@@ -239,9 +248,14 @@ def create_user(
 
     `actor_id` is the admin who asked for the account through the web (P11-T02): the audit row is
     then theirs, `actor_role='admin'`. Left out (the CLI), the row is the system's, with no actor.
+
+    Raises `ValueError`, before any SQL, for a role outside `ROLES` and for a username in
+    `RESERVED_USERNAMES`.
     """
     if role not in ROLES:
         raise ValueError(f"role: must be one of {'|'.join(ROLES)}, got {role!r}")
+    if username in RESERVED_USERNAMES:
+        raise ValueError(f"username: {username!r} is reserved (an actor keyword of the audit log)")
     (user_id,) = conn.execute(
         """
         INSERT INTO users (user_id, username, display_name, role, password_hash)
@@ -456,6 +470,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(
                     f"error: role must be one of {'|'.join(ROLES)}, got {role!r}", file=sys.stderr
                 )
+                return _EXIT_INPUT
+            if username in RESERVED_USERNAMES:
+                print(f"error: username {username!r} is reserved", file=sys.stderr)
                 return _EXIT_INPUT
             # `alice-admin` and `alice_admin` (or a case pair) would silently
             # share one password: refuse before anything is created.
