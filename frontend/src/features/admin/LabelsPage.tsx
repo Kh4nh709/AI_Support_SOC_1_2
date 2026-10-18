@@ -241,11 +241,24 @@ function Skeleton() {
   );
 }
 
-/** The page could not be had: the shared title, why, and a retry where trying again can help. */
-function LoadFailure({ hint, onRetry }: { hint: string; onRetry?: () => void }) {
+/**
+ * The page could not be had: the shared title, why, and a retry where trying again can help. `saved` is what
+ * the last write said when it went through (the read after it is what failed): first line, so the page error is
+ * not read as if nothing had been written.
+ */
+function LoadFailure({
+  hint,
+  onRetry,
+  saved,
+}: {
+  hint: string;
+  onRetry?: () => void;
+  saved?: string;
+}) {
   return (
     <div className="space-y-3">
       <PageError title={S.admin.common.loadError} onRetry={onRetry} />
+      {saved !== undefined && <p className="text-[13.5px] leading-relaxed text-low">{saved}</p>}
       <p
         role={onRetry === undefined ? "alert" : undefined}
         className="text-[13.5px] leading-relaxed text-[#c9d3df]"
@@ -329,6 +342,7 @@ export function LabelsPage() {
     return (
       <LoadFailure
         hint={loadErrorHint(query.error)}
+        saved={notice?.tone === "ok" ? notice.text : undefined}
         onRetry={retryable ? () => void query.refetch() : undefined}
       />
     );

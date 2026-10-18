@@ -1328,6 +1328,49 @@ describe("loading and failing to load", () => {
     await waitFor(() => expect(headText()).toContain("port_scan"));
   });
 
+  // The write went through; only the read after it failed. The page error must not read as if nothing was saved.
+  it("still says the label was saved, first under the page error, when the read after the save fails", async () => {
+    serveNext(nextAnswer(), { status: 500, body: { detail: "boom" } });
+    servePost(posted({ cluster_id: A, done: 19, total: 60, next: B }));
+    renderPage();
+    await ready();
+    await save("benign");
+    const saved = await screen.findByText(L.notice.saved(A, 19, 60, B));
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(S.admin.common.loadError);
+    // First line under the page error, then why it failed.
+    expect(alert.parentElement?.children[1]).toBe(saved);
+    expect(alert.parentElement?.children[2]).toHaveTextContent(L.loadErrorServer(500));
+    // The retry reads the next cluster, and the note goes with the error.
+    serveNext(afterA());
+    await userEvent.click(screen.getByRole("button", { name: S.common.retry }));
+    await waitFor(() => expect(headText()).toContain("port_scan"));
+    expect(screen.queryByText(L.loadErrorServer(500))).not.toBeInTheDocument();
+  });
+
+  it("still says the label was taken back, under the page error, when the read after the undo fails", async () => {
+    serveNext(nextAnswer(), { status: 503, body: { detail: "down" } });
+    serveUndo(undone({ undone_cluster_id: A, done: 17, total: 60 }));
+    renderPage();
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: L.form.undo }));
+    expect(await screen.findByText(L.notice.undone(A, 17, 60))).toBeVisible();
+    expect(screen.getByText(L.loadErrorServer(503))).toBeVisible();
+  });
+
+  it("does not put a refusal under the page error: only a confirmation is carried over", async () => {
+    // A refused save that left the screen as it was cannot fail the read, but a refusal that rereads can.
+    serveNext(nextAnswer(), { status: 500, body: { detail: "boom" } });
+    servePost({ status: 409, body: { detail: "already labelled by this labeler" } });
+    renderPage();
+    await ready();
+    await save("benign");
+    await screen.findByText(L.loadErrorServer(500));
+    expect(
+      screen.queryByText(S.admin.reason.already_labelled, { exact: false }),
+    ).not.toBeInTheDocument();
+  });
+
   it("asks again, and does not guess a cluster, when the server names one and sends none", async () => {
     serveNext(nextAnswer({ cluster: null }));
     renderPage();
