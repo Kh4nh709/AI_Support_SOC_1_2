@@ -967,3 +967,100 @@ def test_rule_width_report_below_threshold_is_excluded(db):
         _insert_alert_row(db, alert_id=f"narrow-other-{i}", status="received", occurrence_count=1)
     report = autoclose.rule_width_report(db, days=7)
     assert all(r["autoclose_rule_id"] != rule_id for r in report)
+
+
+def _age(conn: psycopg.Connection, alert_id: str, days: int) -> None:
+    """Move one alert's `received_at` back, outside a 7-day window when `days` is over 7."""
+    conn.execute(
+        "UPDATE alerts SET received_at = now() - %s * interval '1 day' WHERE alert_id = %s",
+        (days, alert_id),
+    )
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    ("threshold", "closed", "others"), [(30, 30, 70), (50, 50, 50), (1, 1, 99)]
+)
+def test_rule_width_report_a_share_exactly_at_the_threshold_is_not_reported(
+    db, monkeypatch, threshold, closed, others
+):
+    """P11-T20 row 34 (P11-T20 review m3, mutant W3 `HAVING sum(...) >` -> `>=`). A rule that
+    closed exactly `threshold` % of the window's occurrences is not WIDER than the threshold: it is
+    not reported. One occurrence more is. (`>=` reports the first and not only the second.)"""
+    _seed_user(db)
+    rule_id = str(uuid.uuid4())
+    _insert_rule(db, rule_id=rule_id, match=[], name=f"exactly-{threshold}")
+    _insert_alert_row(
+        db,
+        alert_id=f"exact-head-{threshold}",
+        status="auto_closed",
+        occurrence_count=closed,
+        autoclose_rule_id=rule_id,
+    )
+    other = f"exact-other-{threshold}"
+    _insert_alert_row(db, alert_id=other, status="received", occurrence_count=others)
+    monkeypatch.setenv("AUTOCLOSE_RULE_WIDTH_PCT", str(threshold))
+
+    assert autoclose.rule_width_report(db, days=7) == []  # `closed` of 100: exactly `threshold` %
+
+    # one occurrence moves from the other head to the rule's: still 100 in all, and now over
+    db.execute(
+        "UPDATE alerts SET occurrence_count = occurrence_count + 1 WHERE alert_id = %s",
+        (f"exact-head-{threshold}",),
+    )
+    db.execute(
+        "UPDATE alerts SET occurrence_count = occurrence_count - 1 WHERE alert_id = %s", (other,)
+    )
+    (row,) = autoclose.rule_width_report(db, days=7)
+    assert (row["autoclose_rule_id"], row["alerts_closed"]) == (rule_id, closed + 1)
+    assert row["pct"] == float(closed + 1)
+
+
+@pytest.mark.db
+def test_rule_width_report_counts_only_the_window_in_both_the_share_and_the_total(db, monkeypatch):
+    """P11-T20 row 34 (mutant W4: the denominator's `received_at` window removed). A big head
+    received 8 days ago is not among the window's occurrences: the rule closed 30 of the 100 that
+    arrived inside 7 days, 30 %, over a 20 % threshold, whatever the old head holds. With the
+    window gone from the denominator the total would be 1,000 and the rule 3 %, not reported.
+    The numerator has the same window: a rule's old closures are not counted, and a rule whose
+    closures are all older than the window is not reported at all."""
+    _seed_user(db)
+    rule_id, old_rule_id = str(uuid.uuid4()), str(uuid.uuid4())
+    _insert_rule(db, rule_id=rule_id, match=[], name="in-window")
+    _insert_rule(db, rule_id=old_rule_id, match=[], name="all-old")
+    _insert_alert_row(
+        db,
+        alert_id="win-head",
+        status="auto_closed",
+        occurrence_count=30,
+        autoclose_rule_id=rule_id,
+    )
+    for i in range(70):
+        _insert_alert_row(db, alert_id=f"win-other-{i}", status="received", occurrence_count=1)
+    # received 8 days ago: a head of 900 occurrences nobody closed, and 5,000 closed by the old rule
+    _insert_alert_row(db, alert_id="win-old-big", status="received", occurrence_count=900)
+    _insert_alert_row(
+        db,
+        alert_id="win-old-closed",
+        status="auto_closed",
+        occurrence_count=5000,
+        autoclose_rule_id=old_rule_id,
+    )
+    _insert_alert_row(
+        db,
+        alert_id="win-old-closed-by-the-wide-rule",
+        status="auto_closed",
+        occurrence_count=4000,
+        autoclose_rule_id=rule_id,
+    )
+    for alert_id in ("win-old-big", "win-old-closed", "win-old-closed-by-the-wide-rule"):
+        _age(db, alert_id, 8)
+    monkeypatch.setenv("AUTOCLOSE_RULE_WIDTH_PCT", "20")
+
+    (row,) = autoclose.rule_width_report(db, days=7)  # the old rule is not reported
+
+    assert (row["autoclose_rule_id"], row["alerts_closed"], row["pct"]) == (rule_id, 30, 30.0)
+    # the same rows, a window that reaches back far enough to hold them: now they all count
+    wide, old = sorted(autoclose.rule_width_report(db, days=30), key=lambda r: r["alerts_closed"])
+    assert (old["autoclose_rule_id"], old["alerts_closed"]) == (old_rule_id, 5000)
+    assert (wide["autoclose_rule_id"], wide["alerts_closed"]) == (rule_id, 4030)
