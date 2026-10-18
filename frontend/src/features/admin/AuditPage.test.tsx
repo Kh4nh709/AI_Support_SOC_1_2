@@ -284,6 +284,7 @@ const rowCount = () => table().querySelectorAll("tr[data-audit-id]").length;
 /** The columns of a row, by position: the toggle, the time, the event, the actor, the subject, the summary. */
 const ACTOR = 3;
 const SUBJECT = 4;
+const SUMMARY = 5;
 const cellOf = (auditId: number, column: number) =>
   row(auditId).querySelectorAll("td")[column] as HTMLElement;
 const pager = () => screen.getByRole("navigation", { name: P.pager });
@@ -628,6 +629,84 @@ describe("the payload of an event", () => {
       await client.invalidateQueries({ queryKey: adminKeys.auditAll });
     });
     expect(screen.getByRole("region", { name: P.payloadLabel(10) })).toBeInTheDocument();
+  });
+});
+
+// DEC-204: both labellers are admins and can open this page, and labelling is blind between them. The server
+// redacts `label` and `confidence` of a `label.created` payload; the page must not depend on it. The line says
+// that someone labelled a cluster, and the payload, opened, is whatever the server sent, as text.
+describe("a label.created event (DEC-204)", () => {
+  const labelled = (id: number, payload: unknown) =>
+    ev(id, {
+      event_type: "label.created",
+      actor_role: "admin",
+      actor_username: "khanh-admin",
+      subject_id: ALERT,
+      payload,
+    });
+  const BASE = { alert_id: ALERT, labeler_id: "u-1", gold_set: "gold_v2" };
+  const LINE = `gán nhãn cụm ${ALERT}; tập gold_v2`;
+  const VERDICT =
+    /escalate|benign|false_positive|chuyển tier 2|lành tính|dương tính giả|độ tin cậy/;
+
+  it("says that a cluster was labelled, and never the verdict, though the payload still carries it", async () => {
+    serveList([
+      labelled(2, { ...BASE, label: "escalate", confidence: 3 }),
+      labelled(1, { ...BASE, label: "benign", confidence: 1 }),
+    ]);
+    renderPage();
+    await loaded();
+    for (const id of [2, 1]) {
+      expect(cellOf(id, SUMMARY).textContent).toBe(LINE);
+      expect(row(id).textContent).not.toMatch(VERDICT);
+    }
+    expect(within(row(2)).getByRole("link", { name: ALERT })).toHaveAttribute(
+      "href",
+      `/alerts/${ALERT}`,
+    );
+  });
+
+  it("shows the payload as the server sent it, as text, when the row is opened", async () => {
+    const payload = { ...BASE, label: "escalate", confidence: 3 };
+    serveList([labelled(1, payload)]);
+    const user = userEvent.setup();
+    renderPage();
+    await loaded();
+    await user.click(toggleOf(1));
+    expect(screen.getByRole("region", { name: P.payloadLabel(1) }).textContent).toBe(
+      JSON.stringify(payload, null, 2),
+    );
+    // The line above it still says no verdict.
+    expect(cellOf(1, SUMMARY).textContent).toBe(LINE);
+  });
+
+  it("renders an event whose payload the server redacted, with the marker in the payload and the same line", async () => {
+    const payload = { ...BASE, label: "[đã ẩn]", confidence: "[đã ẩn]" };
+    serveList([labelled(1, payload)]);
+    const user = userEvent.setup();
+    renderPage();
+    await loaded();
+    expect(cellOf(1, SUMMARY).textContent).toBe(LINE);
+    expect(row(1).textContent).not.toContain("[đã ẩn]");
+    await user.click(toggleOf(1));
+    const text = screen.getByRole("region", { name: P.payloadLabel(1) }).textContent ?? "";
+    expect(text).toContain('"label": "[đã ẩn]"');
+    expect(text).toContain('"confidence": "[đã ẩn]"');
+    expect(text).toContain('"gold_set": "gold_v2"');
+  });
+
+  it("renders an undo, and an event with no payload at all, without a word of verdict", async () => {
+    serveList([
+      labelled(3, { undo: true, alert_id: ALERT, labeler_id: "u-1", label: "escalate" }),
+      labelled(2, null),
+      labelled(1, { undo: true }),
+    ]);
+    renderPage();
+    await loaded();
+    expect(cellOf(3, SUMMARY).textContent).toBe(`hoàn tác nhãn cụm ${ALERT}`);
+    expect(cellOf(2, SUMMARY).textContent).toBe("gán nhãn tập vàng");
+    expect(cellOf(1, SUMMARY).textContent).toBe("hoàn tác nhãn");
+    expect(table().textContent).not.toMatch(VERDICT);
   });
 });
 

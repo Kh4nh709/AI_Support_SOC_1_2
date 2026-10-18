@@ -247,30 +247,26 @@ describe("summaryOf, one event type at a time", () => {
     ],
     ["rule.suspected_wrong", { wrong_count: 2 }, "2 cụm bị duyệt “Sai” trong thời gian gần đây"],
     ["rule.suspected_wrong", null, "rule bị nghi đóng nhầm"],
+    // DEC-204: that someone labelled a cluster or undid it, never what they chose.
     [
       "label.created",
       {
-        alert_id: "a",
+        alert_id: "1759012345.1662100",
         labeler_id: "u",
         label: "false_positive",
         confidence: 2,
         gold_set: "gold_v2",
       },
-      "gán nhãn dương tính giả; độ tin cậy 2/3; gold_v2",
+      "gán nhãn cụm 1759012345.1662100; tập gold_v2",
     ],
     [
       "label.created",
-      {
-        alert_id: "a",
-        labeler_id: "u",
-        label: "false_positive",
-        confidence: null,
-        gold_set: null,
-        source: "digest",
-      },
-      "gán nhãn dương tính giả; từ duyệt digest",
+      { alert_id: "a", labeler_id: "u", label: "benign", confidence: 1, gold_set: null },
+      "gán nhãn cụm a",
     ],
-    ["label.created", { undo: true, alert_id: "a", labeler_id: "u" }, "hoàn tác nhãn"],
+    ["label.created", { undo: true, alert_id: "a", labeler_id: "u" }, "hoàn tác nhãn cụm a"],
+    ["label.created", { undo: true }, "hoàn tác nhãn"],
+    ["label.created", { gold_set: "gold_v2" }, "gán nhãn tập vàng; tập gold_v2"],
     ["label.created", null, "gán nhãn tập vàng"],
     [
       "admin.settings_changed",
@@ -344,6 +340,80 @@ describe("summaryOf, one event type at a time", () => {
       ].sort(),
     );
     expect([...covered]).toEqual([...TYPES].sort());
+  });
+});
+
+// DEC-204: labelling is blind between the two labellers, and both are admins who can open this page. The audit
+// read hides `label` and `confidence` of a `label.created` event on the server; the line must not depend on
+// that. It states that someone labelled a cluster (or undid it), and never what they chose.
+describe("the summary of a label.created event never shows a verdict (DEC-204)", () => {
+  const LABELS = ["false_positive", "benign", "escalate"] as const;
+  const SHOWN = ["dương tính giả", "lành tính", "chuyển tier 2", "độ tin cậy"];
+  const base = { alert_id: "1759012345.1662100", labeler_id: "u-1", gold_set: "gold_v2" };
+  const bare = "gán nhãn cụm 1759012345.1662100; tập gold_v2";
+
+  it.each(LABELS.flatMap((label) => [1, 2, 3].map((confidence) => [label, confidence] as const)))(
+    "says the same for label %s with confidence %s as for a payload that has neither",
+    (label, confidence) => {
+      const line = sum("label.created", { ...base, label, confidence });
+      expect(line).toBe(bare);
+      expect(line).toBe(sum("label.created", base));
+      expect(line).not.toContain(label);
+      expect(line).not.toMatch(new RegExp(`${confidence}\\s*/\\s*3`)); // "2/3", how a confidence was said
+      for (const word of SHOWN) expect(line).not.toContain(word);
+    },
+  );
+
+  it("says the same when the payload is the digest's (source digest labels a false positive)", () => {
+    const line = sum("label.created", {
+      ...base,
+      gold_set: null,
+      label: "false_positive",
+      confidence: null,
+      source: "digest",
+    });
+    expect(line).toBe("gán nhãn cụm 1759012345.1662100");
+    expect(line).not.toMatch(/digest|dương tính giả|false_positive/);
+  });
+
+  it("says the same when the server redacted them: the marker is not read, and nothing fails", () => {
+    const redacted = { ...base, label: "[đã ẩn]", confidence: "[đã ẩn]" };
+    expect(sum("label.created", redacted)).toBe(bare);
+    expect(sum("label.created", redacted)).not.toContain("[đã ẩn]");
+    expect(sum("label.created", { ...base, label: "[đã ẩn]" })).toBe(bare);
+    expect(sum("label.created", { ...base, confidence: "[đã ẩn]" })).toBe(bare);
+  });
+
+  it("does not read `label` or `confidence` whatever kind of value they hold", () => {
+    const values = [null, 0, 3, "x", "", true, [], {}, { label: "benign" }, ["escalate"]];
+    for (const value of values) {
+      expect(sum("label.created", { ...base, label: value, confidence: value })).toBe(bare);
+    }
+  });
+
+  it("says an undo is an undo, with the cluster, and no verdict", () => {
+    const line = sum("label.created", {
+      undo: true,
+      alert_id: "a-1",
+      labeler_id: "u-1",
+      label: "escalate",
+      confidence: 3,
+    });
+    expect(line).toBe("hoàn tác nhãn cụm a-1");
+  });
+
+  it("reads only the cluster, the gold set and the undo flag of the payload", () => {
+    // Every other key set to a value that would show if it were read.
+    const line = sum("label.created", {
+      ...base,
+      labeler_id: "LABELER-ID",
+      label: "LABEL-VALUE",
+      confidence: 99,
+      source: "SOURCE-VALUE",
+      note: "NOTE-VALUE",
+      extra: { label: "NESTED-VALUE" },
+    });
+    expect(line).toBe(bare);
   });
 });
 

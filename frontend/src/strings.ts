@@ -1239,17 +1239,14 @@ export const S = {
         suspectedUnknown: "rule bị nghi đóng nhầm",
         window: (days: number) => `${days} ngày`,
         recently: "thời gian gần đây",
-        labelled: (label: string) => `gán nhãn ${label}`,
+        // `label.created` says only that someone labelled a cluster, or undid it, and which one: never what
+        // they chose. The verdict is not for the other labeller to read (DEC-204), so these words have no
+        // place for a label or a confidence.
+        labelled: (cluster: string) => `gán nhãn cụm ${cluster}`,
         labelledUnknown: "gán nhãn tập vàng",
-        labelUndone: "hoàn tác nhãn",
-        labelConfidence: (n: number) => `độ tin cậy ${n}/3`,
-        labelFromDigest: "từ duyệt digest",
-        // The label values of the gold set (`LabelIn` of labels.py).
-        labelValue: {
-          false_positive: "dương tính giả",
-          benign: "lành tính",
-          escalate: "chuyển tier 2",
-        } as Readonly<Record<string, string>>,
+        labelUndone: (cluster: string) => `hoàn tác nhãn cụm ${cluster}`,
+        labelUndoneUnknown: "hoàn tác nhãn",
+        goldSet: (name: string) => `tập ${name}`,
         limitChange: (name: string, from: string, to: string) => `${name} ${from} → ${to}`,
         limitUnknown: "đổi hạn mức LLM",
         // The three limits, with the unit each is counted in.

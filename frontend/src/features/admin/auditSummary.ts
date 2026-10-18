@@ -303,15 +303,19 @@ const BUILDERS: Readonly<Record<string, Builder>> = {
     return [A.suspectedWrong(count, span)];
   },
   "label.created": (p) => {
-    if (own(p, "undo") === true) return [A.labelUndone];
-    const label = str(p, "label");
-    if (label === null) return [A.labelledUnknown];
-    return [
-      A.labelled(free(labelOf(A.labelValue, label))),
-      ...when(num(p, "confidence"), A.labelConfidence),
-      ...when(str(p, "gold_set"), free),
-      ...(str(p, "source") === "digest" ? [A.labelFromDigest] : []),
-    ];
+    // That someone labelled a cluster, or undid it: the cluster, the gold set, the undo flag. Never the
+    // verdict (DEC-204): the line does not read `label` or `confidence`, whether the server redacted them or
+    // not, nor `source` (a digest review labels "false_positive", and saying it came from one would say so).
+    const cluster = str(p, "alert_id");
+    const base =
+      own(p, "undo") === true
+        ? cluster === null
+          ? A.labelUndoneUnknown
+          : A.labelUndone(free(cluster))
+        : cluster === null
+          ? A.labelledUnknown
+          : A.labelled(free(cluster));
+    return [base, ...when(str(p, "gold_set"), (name) => A.goldSet(free(name)))];
   },
   "admin.settings_changed": (p) => {
     const changes = (list(p, "changes") ?? []).flatMap((entry) => {
