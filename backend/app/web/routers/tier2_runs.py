@@ -59,10 +59,18 @@ def _case_status(conn: Any, case_id: str) -> str | None:
     return None if row is None else row[0]
 
 
+#: The ② quota's counting rule, written ONCE: an analysis is a `case.analyzed` audit row, and it
+#: counts for the rolling 24 hours after it was written (never "since midnight": decision 8 of
+#: the admin console spec). `_analyze_quota_count` below builds its query from this fragment, and
+#: so does `admin_llm`'s usage page (P11-T04), so the number the route enforces and the number the
+#: admin reads cannot drift apart. The fragment names `audit_events` columns without an alias:
+#: use it on a query over `audit_events` alone.
+ANALYZE_QUOTA_WHERE = "event_type = 'case.analyzed' AND created_at > now() - interval '1 day'"
+
+
 def _analyze_quota_count(conn: Any, actor_id: str) -> int:
     row = conn.execute(
-        "SELECT count(*) FROM audit_events WHERE event_type = 'case.analyzed' "
-        "AND actor_id = %s AND created_at > now() - interval '1 day'",
+        f"SELECT count(*) FROM audit_events WHERE {ANALYZE_QUOTA_WHERE} AND actor_id = %s",
         (actor_id,),
     ).fetchone()
     return row[0]

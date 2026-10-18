@@ -1,9 +1,11 @@
 """`web/routers/admin_llm.py` — the admin's LLM page (spec §4.3, §5.2, §5.3).
 
-Today one operation, `PUT /api/admin/llm/limits` (P11-T03): the admin changes any of the three
-limits the pipelines read through `infra.settings` — the monthly cost cap, the per-person ②
-quota in 24 h, the model-call timeout. P11-T04 adds `GET /api/admin/llm/usage` to this same
-module and embeds `limits_out()` in its answer.
+Two operations, both `Admin` only: `PUT /api/admin/llm/limits` (P11-T03) and `GET
+/api/admin/llm/usage` (P11-T04, below).
+
+`PUT /api/admin/llm/limits`: the admin changes any of the three limits the pipelines read
+through `infra.settings` — the monthly cost cap, the per-person ② quota in 24 h, the model-call
+timeout.
 
 The body is any of `cap_usd`, `quota_per_24h`, `timeout_s`, each a JSON integer inside
 `settings.bounds(cfg)`: the Owner's decision 2, with the timeout's top held to what the job
@@ -24,20 +26,73 @@ they are.
 
 **Fail closed** (DEC-200 item 3): limits that cannot be read answer `503 {reason:
 "limits_unavailable"}` and nothing is written.
+
+`GET /api/admin/llm/usage?range=24h|7d|30d|month` (default `month`; anything else is a 422):
+read-only, from `llm_runs` and `audit_events`, in five parts.
+
+- **`month`** is the CALENDAR month, whatever the range: `spent_usd` is `month_spend_usd` itself
+  (`created_at >= date_trunc('month', now())`, the query the adapter's cap check reads, so the
+  page and the cap cannot disagree); `cap_usd` the effective cap (`null` when the limits cannot
+  be read); `pct` = spent / cap x 100 to one decimal (`null` without a cap); `projected_usd` is
+  the linear projection `spent / elapsed_days x days_in_month`, where `elapsed_days` is the time
+  since the month began, fractional, with a FLOOR of one hour (so 00:05 on day 1 does not
+  multiply five minutes of spend by 8640) and `days_in_month` the length of this month, both in
+  days of 86400 s on the database's clock and time zone (the same `now()` the spend used).
+- **`by_pipeline_role`** is the only part the range filters: one row per `(pipeline, role)` that
+  has a run in the window (a rolling `now() - interval` for `24h`/`7d`/`30d`, and since the
+  month began for `month`), ordered by pipeline then role (a NULL role, which v1 rows have,
+  last): `calls`, `with_result` (`result IS NOT NULL`), `stopped` (`stopped_by` -> count, the
+  NULL ones left out), token sums, `latency_p50_ms` and `latency_p95_ms` (`percentile_cont`,
+  rounded half up to an integer, `null` when no row carries a latency) and `cost_usd`. There is
+  no chat row: `llm_runs.pipeline` admits `triage|investigate` only (spec decision 5).
+- **`quota`**, always the rolling 24 h: `case.analyzed` events per user, counted by the rule
+  `tier2_runs.ANALYZE_QUOTA_WHERE` that the analyze route enforces (one constant, two queries);
+  `limit` the effective per-person quota (`null` when unreadable), `remaining = max(0, limit -
+  used)` (`null` without a limit); only users with at least one event, most used first, then by
+  username, at most `_QUOTA_USERS_LIMIT`.
+- **`recent`**: the last 20 runs whatever the range, newest first. A prompt, a trace, a finding
+  or the `result` never reaches Python: `outcome` is built in SQL from the one verdict key of
+  the row (`suggested_action` for ① proposer, `structured_only_verdict` for ① verifier,
+  `suggested_conclusion` for ②), and only when that value is a JSON STRING of at most 40
+  characters; any other value, however it got there, is `null` (model output is untrusted, and
+  the database's own CHECKs are not relied on). A row with no verdict is `stopped:<stopped_by>`
+  when it has a (short) stop reason, else `null`.
+- **`limits`**: `limits_out(conn, effective_limits(conn, cfg))`; when they cannot be read, `null`
+  with `limits_error: "limits_unavailable"` and the rest is still served (the page shows the
+  fail-closed panel). `tool_calls` is always 0 (spec decision 4).
+
+Money is a JSON number with at most four decimals: `numeric` (a `Decimal` from psycopg) is
+rounded half up to 4 places and converted to `float`, whose shortest repr is what the JSON holds
+(`cost_usd` is `numeric(10,5)`, so the fifth decimal is the one dropped).
+
+**Each block fails alone, and then the whole answer fails.** `month`, `by_pipeline_role`,
+`quota` and `recent` each run in a savepoint (`conn.transaction()` inside the request's
+transaction) after their own `SET LOCAL statement_timeout` (`BLOCK_TIMEOUT`); a `psycopg.Error`
+rolls the savepoint back, so the transaction stays usable, and the answer is `503 {"detail":
+{"reason": "timeout" | "query_failed"}}` (the codes of the overview). The limits block is the one
+that degrades instead. `infra/db.transaction()` is NOT used: it issues its own BEGIN/COMMIT.
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+import logging
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+import psycopg
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from psycopg import sql
 
+from app.audit import llm_runs
 from app.audit.events import write_event
 from app.infra import settings
 from app.infra.auth import Claims
 from app.web.deps import Cfg, Conn, require_role
+from app.web.routers import tier2_runs
 
 router = APIRouter(prefix="/api/admin/llm")
+
+logger = logging.getLogger(__name__)
 
 #: One dependency object (the `admin_rules.py` / `tier2_runs.py` pattern) so `Depends`
 #: resolves it once per request, and a test can find it on every route of this module.
@@ -157,3 +212,298 @@ def api_put_limits(
             payload={"changes": changes},
         )
     return {"limits": limits_out(conn, _read_limits(conn, cfg))}
+
+
+# ---------------------------------------------------------------------------
+# GET /usage — P11-T04
+# ---------------------------------------------------------------------------
+
+#: The `SET LOCAL statement_timeout` each block sets: a limit per statement. Read when a block
+#: runs, so a test can shorten it.
+BLOCK_TIMEOUT = "5s"
+
+RangeName = Literal["24h", "7d", "30d", "month"]
+
+#: `?range=` -> the lower bound of `by_pipeline_role`, as SQL on the database's clock. Constants
+#: only (the `Literal` above is what a request can name), spliced with `sql.SQL`, never a request
+#: value. `month` is the calendar month, as `llm_runs.month_spend_usd` reads it.
+_SINCE_SQL = {
+    "24h": "now() - interval '24 hours'",
+    "7d": "now() - interval '7 days'",
+    "30d": "now() - interval '30 days'",
+    "month": "date_trunc('month', now())",
+}
+
+_RECENT_LIMIT = 20
+#: The usage page's row cap on the one block that grows with the number of people.
+_QUOTA_USERS_LIMIT = 200
+#: A verdict or a stop reason longer than this is not a short code, so it is not served.
+_OUTCOME_MAX_CHARS = 40
+_STOPPED_PREFIX = "stopped:"
+_STOPPED_MAX_CHARS = _OUTCOME_MAX_CHARS - len(_STOPPED_PREFIX)
+#: The floor of the projection's elapsed time: one hour (module docstring).
+_ELAPSED_FLOOR_S = 3600.0
+
+_BY_PIPELINE_ROLE_SQL = """
+WITH win AS (
+    SELECT pipeline, role, stopped_by, (result IS NOT NULL) AS has_result,
+           input_tokens, output_tokens, latency_ms, cost_usd
+    FROM llm_runs
+    WHERE created_at >= {since}
+), stopped AS (
+    SELECT pipeline, role, jsonb_object_agg(stopped_by, n) AS counts
+    FROM (SELECT pipeline, role, stopped_by, count(*) AS n
+          FROM win WHERE stopped_by IS NOT NULL
+          GROUP BY pipeline, role, stopped_by) g
+    GROUP BY pipeline, role
+)
+SELECT w.pipeline, w.role,
+       count(*) AS calls,
+       count(*) FILTER (WHERE w.has_result) AS with_result,
+       (SELECT s.counts FROM stopped s
+        WHERE s.pipeline = w.pipeline AND s.role IS NOT DISTINCT FROM w.role) AS stopped,
+       coalesce(sum(w.input_tokens), 0) AS input_tokens,
+       coalesce(sum(w.output_tokens), 0) AS output_tokens,
+       round((percentile_cont(0.5) WITHIN GROUP (ORDER BY w.latency_ms))::numeric)::int AS p50,
+       round((percentile_cont(0.95) WITHIN GROUP (ORDER BY w.latency_ms))::numeric)::int AS p95,
+       coalesce(sum(w.cost_usd), 0) AS cost_usd
+FROM win w
+GROUP BY w.pipeline, w.role
+ORDER BY w.pipeline, w.role NULLS LAST
+"""
+
+#: ② quota: the SAME rule as the analyze route (`tier2_runs.ANALYZE_QUOTA_WHERE`), grouped by
+#: actor. The grouping runs on `audit_events` alone, so the fragment's unqualified `created_at`
+#: is not ambiguous with `users.created_at`.
+_QUOTA_USED_SQL = f"""
+SELECT u.username, u.display_name, q.used
+FROM (SELECT actor_id, count(*) AS used
+      FROM audit_events
+      WHERE {tier2_runs.ANALYZE_QUOTA_WHERE} AND actor_id IS NOT NULL
+      GROUP BY actor_id) q
+JOIN users u ON u.user_id = q.actor_id
+ORDER BY q.used DESC, u.username
+LIMIT %s
+"""
+
+#: `recent` selects NO text the model saw or wrote: `outcome` is computed here, from the one
+#: verdict key of the row, and is a string of at most 40 characters or NULL. `result`,
+#: `system_prompt`, `user_message`, `agent_trace` and the findings are not in the select list,
+#: so nothing in Python can leak them.
+_RECENT_SQL = """
+SELECT r.run_id, r.created_at, r.pipeline, r.role, r.subject_type, r.subject_id,
+       r.input_tokens, r.output_tokens, r.latency_ms,
+       CASE
+         WHEN r.result IS NOT NULL AND r.result -> k.verdict_key IS NOT NULL THEN
+           CASE WHEN jsonb_typeof(r.result -> k.verdict_key) = 'string'
+                     AND length(r.result ->> k.verdict_key) <= %(outcome_max)s
+                THEN r.result ->> k.verdict_key END
+         WHEN r.stopped_by IS NOT NULL AND length(r.stopped_by) <= %(stopped_max)s
+           THEN %(prefix)s || r.stopped_by
+       END AS outcome,
+       r.cost_usd
+FROM llm_runs r
+CROSS JOIN LATERAL (
+    SELECT CASE WHEN r.pipeline = 'investigate' THEN 'suggested_conclusion'
+                WHEN r.role = 'verifier' THEN 'structured_only_verdict'
+                ELSE 'suggested_action' END AS verdict_key
+) k
+ORDER BY r.created_at DESC, r.run_id DESC
+LIMIT %(limit)s
+"""
+
+#: Seconds since this calendar month began, and its length in seconds: one statement on one
+#: `now()`, in the session's time zone, like `llm_runs.month_spend_usd`.
+_MONTH_CLOCK_SQL = """
+SELECT extract(epoch FROM now() - date_trunc('month', now())),
+       extract(epoch FROM (date_trunc('month', now()) + interval '1 month')
+                          - date_trunc('month', now()))
+"""
+
+
+def _round(value: Any, places: int) -> float | None:
+    """`value` (a `Decimal` from `numeric`, or a `float`) rounded HALF UP to `places` decimals,
+    as the `float` whose shortest repr is the JSON number; `None` stays `None`."""
+    if value is None:
+        return None
+    step = Decimal(1).scaleb(-places)
+    return float(Decimal(str(value)).quantize(step, rounding=ROUND_HALF_UP))
+
+
+def _projected_usd(spent: float, elapsed_s: float, month_s: float) -> float:
+    """The linear projection of the month's spend: `spent / elapsed_days x days_in_month`, in
+    seconds `spent x month_s / max(elapsed_s, 3600)` — `elapsed_s` floored at one hour so the
+    first minutes of a month do not blow a few cents up by a factor of thousands."""
+    return spent * month_s / max(elapsed_s, _ELAPSED_FLOOR_S)
+
+
+def _block(conn: Any, name: str, compute: Any) -> Any:
+    """`compute()` in a savepoint under its own `statement_timeout`. A database error rolls the
+    savepoint back (the request's transaction stays usable) and becomes the 503 of the whole
+    answer: `{"reason": "timeout"}` for a cancelled statement, `{"reason": "query_failed"}` for
+    anything else. Never the driver's message: it can hold SQL text."""
+    try:
+        with conn.transaction():
+            conn.execute(
+                sql.SQL("SET LOCAL statement_timeout = {}").format(sql.Literal(BLOCK_TIMEOUT))
+            )
+            return compute()
+    except psycopg.errors.QueryCanceled as exc:
+        raise HTTPException(status_code=503, detail={"reason": "timeout"}) from exc
+    except psycopg.Error as exc:
+        logger.warning("usage block %s failed: %s %s", name, type(exc).__name__, exc.sqlstate)
+        raise HTTPException(status_code=503, detail={"reason": "query_failed"}) from exc
+
+
+def _limits_block(conn: Any, cfg: Any) -> tuple[settings.Limits | None, dict[str, Any] | None]:
+    """`(limits, LimitsOut)`, or `(None, None)` when they cannot be read — the one block that
+    degrades instead of failing the answer, because the page's fail-closed panel needs the rest.
+    Same savepoint and timeout as the others; a failure of `limits_out`'s own read of the
+    users counts as unreadable too."""
+    try:
+        with conn.transaction():
+            conn.execute(
+                sql.SQL("SET LOCAL statement_timeout = {}").format(sql.Literal(BLOCK_TIMEOUT))
+            )
+            limits = settings.effective_limits(conn, cfg)
+            return limits, limits_out(conn, limits)
+    except settings.SettingsUnavailable:
+        return None, None
+    except psycopg.Error as exc:
+        logger.warning("usage limits failed: %s %s", type(exc).__name__, exc.sqlstate)
+        return None, None
+
+
+def _month(conn: Any, cap_usd: int | None) -> dict[str, Any]:
+    spent = llm_runs.month_spend_usd(conn)  # the adapter's own query, not a copy of it
+    elapsed_s, month_s = conn.execute(_MONTH_CLOCK_SQL).fetchone()
+    pct = None
+    if cap_usd is not None and cap_usd > 0:
+        pct = _round(spent / cap_usd * 100, 1)
+    return {
+        "spent_usd": _round(spent, 4),
+        "cap_usd": cap_usd,
+        "pct": pct,
+        "projected_usd": _round(_projected_usd(spent, float(elapsed_s), float(month_s)), 4),
+    }
+
+
+def _by_pipeline_role(conn: Any, range_: str) -> list[dict[str, Any]]:
+    query = sql.SQL(_BY_PIPELINE_ROLE_SQL).format(since=sql.SQL(_SINCE_SQL[range_]))
+    rows = conn.execute(query).fetchall()
+    return [
+        {
+            "pipeline": pipeline,
+            "role": role,
+            "calls": calls,
+            "with_result": with_result,
+            "stopped": dict(stopped or {}),
+            "input_tokens": int(input_tokens),
+            "output_tokens": int(output_tokens),
+            "latency_p50_ms": p50,
+            "latency_p95_ms": p95,
+            "cost_usd": _round(cost, 4),
+        }
+        for (
+            pipeline,
+            role,
+            calls,
+            with_result,
+            stopped,
+            input_tokens,
+            output_tokens,
+            p50,
+            p95,
+            cost,
+        ) in rows
+    ]
+
+
+def _quota_used(conn: Any) -> list[tuple[str, str, int]]:
+    """`(username, display_name, used)`, most used first: the rolling 24 h of `case.analyzed`."""
+    return conn.execute(_QUOTA_USED_SQL, (_QUOTA_USERS_LIMIT,)).fetchall()
+
+
+def _recent(conn: Any) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        _RECENT_SQL,
+        {
+            "outcome_max": _OUTCOME_MAX_CHARS,
+            "stopped_max": _STOPPED_MAX_CHARS,
+            "prefix": _STOPPED_PREFIX,
+            "limit": _RECENT_LIMIT,
+        },
+    ).fetchall()
+    return [
+        {
+            "run_id": run_id,
+            "created_at": created_at,
+            "pipeline": pipeline,
+            "role": role,
+            "subject_type": subject_type,
+            "subject_id": subject_id,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "latency_ms": latency_ms,
+            "outcome": outcome,
+            "cost_usd": _round(cost, 4),
+        }
+        for (
+            run_id,
+            created_at,
+            pipeline,
+            role,
+            subject_type,
+            subject_id,
+            input_tokens,
+            output_tokens,
+            latency_ms,
+            outcome,
+            cost,
+        ) in rows
+    ]
+
+
+@router.get("/usage")
+def api_usage(
+    conn: Conn,
+    cfg: Cfg,
+    claims: Admin,
+    range_: Annotated[RangeName, Query(alias="range")] = "month",
+) -> dict[str, Any]:
+    """The module docstring says what each part holds. 422 for a `range` outside the four; 503
+    `{reason: "timeout" | "query_failed"}` when a block fails; 200 otherwise, `limits` being
+    `null` (with `limits_error`) when they cannot be read."""
+    limits, limits_payload = _limits_block(conn, cfg)
+    cap_usd = None if limits is None else limits.cap_usd
+    quota_limit = None if limits is None else limits.quota_per_24h
+
+    # Looked up by name when the request runs (not captured at import), so a test can replace
+    # one block's function to make it fail.
+    month = _block(conn, "month", lambda: _month(conn, cap_usd))
+    by_pipeline_role = _block(conn, "by_pipeline_role", lambda: _by_pipeline_role(conn, range_))
+    used = _block(conn, "quota", lambda: _quota_used(conn))
+    recent = _block(conn, "recent", lambda: _recent(conn))
+
+    return {
+        "range": range_,
+        "month": month,
+        "by_pipeline_role": by_pipeline_role,
+        "quota": {
+            "limit": quota_limit,
+            "window": "24h",
+            "users": [
+                {
+                    "username": username,
+                    "display_name": display_name,
+                    "used": count,
+                    "remaining": None if quota_limit is None else max(0, quota_limit - count),
+                }
+                for username, display_name, count in used
+            ],
+        },
+        "recent": recent,
+        "limits": limits_payload,
+        "limits_error": None if limits is not None else "limits_unavailable",
+        "tool_calls": 0,
+    }
