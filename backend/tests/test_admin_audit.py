@@ -30,7 +30,9 @@ from __future__ import annotations
 
 import contextlib
 import csv
+import itertools
 import json
+import random
 import re
 import threading
 import time
@@ -345,8 +347,143 @@ NON_SECRET_KEYS_FOR_URLS = [
 
 
 def test_the_url_password_pattern_is_the_one_dec_203_gives() -> None:
-    assert admin_audit.URL_WITH_PASSWORD.pattern == r"^[a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s]+@"
+    """DEC-203 as amended 18/10: no `^` anchor, case-insensitive; the rule is `search`."""
+    assert admin_audit.URL_WITH_PASSWORD.pattern == r"[a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s]+@"
+    assert admin_audit.URL_WITH_PASSWORD.flags & re.IGNORECASE
     assert not any(admin_audit.is_secret_key(key) for key in NON_SECRET_KEYS_FOR_URLS)
+
+
+# DEC-203 as amended (18/10): the URL may sit ANYWHERE in the text, and the whole string goes.
+TEXTS_HOLDING_A_URL_WITH_A_PASSWORD = [
+    "could not connect to postgresql://app_rw:hunter2@db:5432/soc: connection timed out",
+    "(psycopg.OperationalError) DSN=postgres://u:hunter2@h/db sslmode=require",
+    "a postgresql://u:hunter2@h/db b",
+    "x" * 5000 + " redis://default:hunter2@cache:6379/0",  # far from the start, nothing before it
+    "https://example.com/ok then postgresql://u:hunter2@h/db",  # a harmless URL first
+    "retry\npostgresql://u:hunter2@h/db\nfailed",  # on its own line
+    "POSTGRESQL://U:hunter2@H and more",  # case variants
+    "Connection to Postgres://u:hunter2@h/db failed",
+    *(f"connection failed: {url} (retrying)" for url in URLS_WITH_A_PASSWORD),
+]
+HUNTER2 = "hunter2"
+
+
+@pytest.mark.parametrize("key", [*NON_SECRET_KEYS_FOR_URLS, "message"])
+@pytest.mark.parametrize("text", TEXTS_HOLDING_A_URL_WITH_A_PASSWORD)
+def test_a_url_carrying_a_password_anywhere_in_a_text_redacts_the_whole_string(
+    key: str, text: str
+) -> None:
+    assert admin_audit.is_secret_value(text) is True
+    assert admin_audit.redact({key: text}) == {key: PLACEHOLDER}
+    assert admin_audit.redact({"a": [{"b": [text, 1]}]}) == {"a": [{"b": [PLACEHOLDER, 1]}]}
+    assert admin_audit.redact(text) == PLACEHOLDER
+
+
+def test_a_dsn_in_the_middle_of_an_error_text_is_redacted_through_the_route_payload() -> None:
+    """The case DEC-203 names, an error text that carries a DSN: nothing of the password survives."""
+    text = '{"error": "could not connect to postgresql://app_rw:hunter2@db:5432/soc", "n": 3}'
+    out = admin_audit._payload(text, len(text), "job.exhausted")
+    assert out == {"error": PLACEHOLDER, "n": 3}
+    assert HUNTER2 not in json.dumps(out)
+
+
+def test_a_url_at_the_start_is_still_redacted() -> None:
+    assert admin_audit.redact({"k": "postgresql://u:hunter2@h/db"}) == {"k": PLACEHOLDER}
+    assert admin_audit.redact({"k": "postgresql://u:hunter2@h/db and then some"}) == {
+        "k": PLACEHOLDER
+    }
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "http://host/path",  # no password
+        "see https://example.com/docs for details",
+        "failed to connect to the database",  # plain text
+        "user app, password hunter2, host db",
+        "app:hunter2@db",  # no scheme
+        "could not connect to postgresql://app@db/soc",  # a user, no password
+        "see http://h:80/path then mail ana@example.com",  # a port, an `@` that is not in the URL
+        "x" * 5000,
+    ],
+)
+def test_a_text_with_no_url_password_stays_visible_however_long(text: str) -> None:
+    assert admin_audit.is_secret_value(text) is False
+    assert admin_audit.redact({"message": text}) == {"message": text}
+
+
+def test_the_linear_matcher_agrees_with_the_pattern() -> None:
+    """`is_secret_value` does not run `URL_WITH_PASSWORD.search` (see the next test: that regex is
+    quadratic); it must still give the pattern's answer. Every sequence of up to six tokens from a
+    set built to break a hand-written scan (scheme and non-scheme characters, `://`, the
+    separators, `@`, whitespace), then 60,000 random sequences of up to 24 tokens from a larger
+    one: whitespace of every kind `\\s` knows, and the two non-ASCII letters that
+    `re.IGNORECASE` folds onto `[a-z]`."""
+    reference = admin_audit.URL_WITH_PASSWORD
+    tokens = ["a", "1", "://", ":", "/", "@", " ", "u"]
+    for length in range(7):
+        for chosen in itertools.product(tokens, repeat=length):
+            text = "".join(chosen)
+            assert admin_audit.is_secret_value(text) is (reference.search(text) is not None), text
+    wider = [*tokens, "Z", "+", ".", "-", "\n", "\x1c", "\x85", "\u00a0", "\u2003", "\u017f"]
+    wider += ["\u212a", "\u00e9", "http://", "u:p@", "://u:p@h", "@@", "::", "//"]
+    rng = random.Random(203)
+    for _ in range(60_000):
+        text = "".join(rng.choice(wider) for _ in range(rng.randint(0, 24)))
+        assert admin_audit.is_secret_value(text) is (reference.search(text) is not None), text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "a" * 65_536,  # one long run of scheme characters: the regex retries from every position
+        "a" * 65_000 + "://",
+        "ab1." * 16_000,
+        "x://y:" * 10_000 + " ",  # dense `://`, each attempt scanning on to the same whitespace
+        "x://" * 16_000,
+        "x://y:" * 10_000,  # no whitespace and no `@` at all
+        ("a" * 60 + "://u:" + "p" * 60 + " ") * 500,
+        "@" * 65_536,
+        "://@" * 16_000,
+        "a@" * 32_000,
+        "x:///" * 12_000 + "@",  # dense `://`, one `@`, every attempt refused at once (no user)
+        "a" * 65_000 + "://@",
+    ],
+    ids=[
+        "letters",
+        "letters-then-sep",
+        "mixed-run",
+        "dense-ws",
+        "dense-sep",
+        "dense-no-end",
+        "many-attempts",
+        "ats",
+        "sep-ats",
+        "a-ats",
+        "dense-one-at",
+        "run-then-sep-at",
+    ],
+)
+def test_a_64_kib_string_is_judged_in_well_under_a_second(text: str) -> None:
+    """The unanchored pattern, searched as it stands, takes about 16 s on `"a" * 65536` (every start
+    position rescans the run). A payload is capped at 64 KiB and a page holds 100 of them, so the
+    judgement must be linear. The bound is 20 times the measured time, not a benchmark."""
+    started = time.perf_counter()
+    assert admin_audit.is_secret_value(text) is False
+    assert admin_audit.redact({"k": text}) == {"k": text}
+    assert time.perf_counter() - started < 1.0
+
+
+def test_a_harmless_text_that_looks_like_a_url_with_a_password_is_hidden_and_that_is_accepted() -> (
+    None
+):
+    """DEC-203 as amended 18/10 accepts this: `http://h:80/a@b` reads as `scheme://user:pass@` (the
+    "user" is `h`, the "password" is `80/a`), so a harmless text is hidden as a whole. Leaking a
+    database password into an audit view is the worse error. If the rule is ever narrowed, this
+    test is the one to change, with a decision."""
+    text = "see http://h:80/a@b"
+    assert admin_audit.is_secret_value(text) is True
+    assert admin_audit.redact({"message": text}) == {"message": PLACEHOLDER}
 
 
 @pytest.mark.parametrize("key", NON_SECRET_KEYS_FOR_URLS)

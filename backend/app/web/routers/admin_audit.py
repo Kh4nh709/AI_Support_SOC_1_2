@@ -46,10 +46,11 @@ nothing else is changed (no stringifying, no cutting). Three rules (spec §5.8, 
   with one of `REDACT_SUFFIXES` (DEC-203 adds `passwd` and `pwd`). That catches `access_token`,
   `client_secret`, `apiKey`, `api-key`, `db_password`, `secret_key`, `privateKey`, `passphrase`,
   `db_passwd` and leaves `key`, `token_count`, `tokens_in`, `passwords`, `token_hash` visible.
-- **The value rule**: a STRING that `is_secret_value` names, one that is a URL carrying a password
-  (`scheme://user:pass@`, `URL_WITH_PASSWORD`), is replaced whatever its key, or none (a list
-  item, a bare payload). That covers `DATABASE_URL*` and `conn_str`; the pattern is anchored at the
-  start, so it reads a DSN that begins the string, not one in the middle of a sentence.
+- **The value rule** (DEC-203 item 2a as amended 18/10): a STRING that `is_secret_value` names, one
+  that CONTAINS `scheme://user:pass@` anywhere (`URL_WITH_PASSWORD`, no `^` anchor), is replaced as
+  a whole, whatever its key, or none (a list item, a bare payload). That covers `DATABASE_URL*`,
+  `conn_str` and a DSN in the middle of an error text. The cost is accepted by the decision: a
+  harmless `see http://h:80/a@b` is hidden too (`h` reads as the user, `80/a` as the password).
 - **Flags are never redacted**: a `bool` or `null` value stays as it is even under a secret key
   (`has_password`, `is_secret`, `"password": null`): a flag carries no secret, and hiding it
   hides what the event says. A number, a text or a container under a secret key still goes whole.
@@ -130,10 +131,16 @@ REDACT_SUFFIXES = (
     "passwd",
     "pwd",
 )
-#: DEC-203 item 2a: a string that is a URL carrying a password (`scheme://user:pass@`). Redacted
-#: whatever its key. `[a-z]` is read case-insensitively: a scheme is not case-sensitive, so
-#: `POSTGRESQL://u:p@h` is as much a credential as the lower-case one.
-URL_WITH_PASSWORD = re.compile(r"^[a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s]+@", re.IGNORECASE)
+#: DEC-203 item 2a (as amended 18/10): a string that CONTAINS a URL carrying a password
+#: (`scheme://user:pass@`), anywhere in it, is redacted whatever its key. `[a-z]` is read
+#: case-insensitively: a scheme is not case-sensitive, so `POSTGRESQL://u:p@h` is as much a
+#: credential as the lower-case one. This is the DEFINITION of the rule, and what the tests hold
+#: `is_secret_value` to; the function does not run it with `search`, because searched as it stands
+#: it is quadratic (about 16 s on `"a" * 65536`: every start position rescans the run of scheme
+#: characters), and a payload may be 64 KiB.
+URL_WITH_PASSWORD = re.compile(r"[a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s]+@", re.IGNORECASE)
+_SCHEME_START = re.compile(r"[a-z]", re.IGNORECASE)
+_SCHEME_CHAR = re.compile(r"[a-z0-9+.-]", re.IGNORECASE)
 #: DEC-204: the keys of a labeller's verdict (`tier1/labels.py` writes both), in normalised form,
 #: and the event types whose payload they are hidden in, for every viewer.
 LABEL_KEYS = ("label", "confidence")
@@ -230,10 +237,48 @@ def is_secret_key(key: Any) -> bool:
     return isinstance(key, str) and normalise_key(key).endswith(REDACT_SUFFIXES)
 
 
+def _holds_url_password_before(text: str, start: int, at: int) -> bool:
+    """Whether `text[start:at]`, a stretch with no whitespace and no `@`, holds a
+    `scheme://user:password` that ends exactly at `at` (the `@` that follows it)."""
+    sep = text.find("://", start, at)
+    while sep != -1:
+        # the scheme: a run of scheme characters ending at `://` that holds a letter to begin at
+        run = sep
+        while run > start and _SCHEME_CHAR.match(text[run - 1]):
+            run -= 1
+        has_scheme = any(_SCHEME_START.match(ch) for ch in text[run:sep])
+        # the user: one or more characters up to a `:`, none of them `/` (a `:` ends it too)
+        after = sep + 3
+        end = after
+        while end < at and text[end] not in "/:":
+            end += 1
+        # the password: one or more characters up to the `@`
+        if has_scheme and end > after and end + 1 < at and text[end] == ":":
+            return True
+        sep = text.find("://", sep + 1, at)
+    return False
+
+
 def is_secret_value(value: Any) -> bool:
-    """True when `value` is a string that is a URL carrying a password (`URL_WITH_PASSWORD`).
-    Nothing but a string can be one."""
-    return isinstance(value, str) and URL_WITH_PASSWORD.match(value) is not None
+    """True when `value` is a string that contains a URL carrying a password: exactly the strings
+    `URL_WITH_PASSWORD.search` finds, in time linear in the length (a test compares the two).
+
+    A match is `scheme://user:password@` with no whitespace and no `@` before its own, so it lies
+    wholly between two such characters. The scan therefore takes each `@`, looks back to the
+    previous `@` or whitespace, and asks `_holds_url_password_before` about that stretch alone:
+    every character is read a bounded number of times. Nothing but a string can be a secret value.
+    """
+    if not isinstance(value, str) or "@" not in value or "://" not in value:
+        return False
+    at = value.find("@")
+    while at != -1:
+        start = at
+        while start > 0 and value[start - 1] != "@" and not value[start - 1].isspace():
+            start -= 1
+        if _holds_url_password_before(value, start, at):
+            return True
+        at = value.find("@", at + 1)
+    return False
 
 
 def _is_flag(value: Any) -> bool:
