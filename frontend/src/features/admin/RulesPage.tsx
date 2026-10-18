@@ -24,6 +24,7 @@ import { RuleCreate } from "./RuleCreate";
 import { adminKeys, invalidateAfter } from "./adminKeys";
 import { failureText } from "./ruleErrors";
 import { formatCondition } from "./ruleFields";
+import { useSubmitLatch } from "./useSubmitLatch";
 
 const R = S.admin.rulesPage;
 
@@ -37,17 +38,19 @@ type Target = { rule: RuleRow; enable: boolean };
 
 const fmtPct = (n: number) => n.toLocaleString("vi-VN", { maximumFractionDigits: 1 });
 
-/** The 7-day width of a rule: a warning when it is over the threshold the row carries, else the plain figure. */
+/**
+ * The 7-day width of a rule. A non-null `width_pct` IS the warning: `rule_width_report` returns only the rules
+ * whose UNROUNDED share is over `AUTOCLOSE_RULE_WIDTH_PCT`, and sends the share rounded to one decimal, so a
+ * rule at 30.04 % arrives as 30.0 against a threshold of 30 and must still warn. The figure is not compared
+ * with the threshold again here (spec §4.4; the Jinja page warns on non-null the same way).
+ */
 function Width({ rule }: { rule: RuleRow }) {
-  if (rule.width_pct === null) return <span className="text-[#5e6b7a]">{S.common.missing}</span>;
-  if (rule.width_pct > rule.width_threshold_pct) {
-    return (
-      <span className="font-semibold text-medium">
-        {R.table.widthWarning(fmtPct(rule.width_pct), fmtPct(rule.width_threshold_pct))}
-      </span>
-    );
-  }
-  return <span className="text-[#aeb9c6]">{fmtPct(rule.width_pct)}%</span>;
+  if (rule.width_pct === null) return <span className="text-muted">{S.common.missing}</span>;
+  return (
+    <span className="font-semibold text-medium">
+      {R.table.widthWarning(fmtPct(rule.width_pct), fmtPct(rule.width_threshold_pct))}
+    </span>
+  );
 }
 
 function Skeleton() {
@@ -56,13 +59,13 @@ function Skeleton() {
       <span className="sr-only">{S.common.loading}</span>
       <div
         aria-hidden="true"
-        className="h-5 w-1/2 animate-pulse rounded bg-[#1f2833] motion-reduce:animate-none"
+        className="h-5 w-1/2 animate-pulse rounded bg-border motion-reduce:animate-none"
       />
       {[0, 1, 2].map((i) => (
         <div
           key={i}
           aria-hidden="true"
-          className="h-10 animate-pulse rounded bg-[#1a222c] motion-reduce:animate-none"
+          className="h-10 animate-pulse rounded bg-border motion-reduce:animate-none"
         />
       ))}
     </div>
@@ -133,6 +136,10 @@ export function RulesPage() {
     },
   });
 
+  // The dialog's confirm button is `disabled` while `toggle.isPending`, which is one render late: the latch
+  // keeps two clicks of one tick to one PATCH.
+  const runToggle = useSubmitLatch(toggle);
+
   function ask(rule: RuleRow) {
     toggle.reset();
     setNotice(null);
@@ -168,7 +175,7 @@ export function RulesPage() {
             {rule.match.map((condition, i) => (
               <li
                 key={i}
-                className="break-all rounded border border-[#2e3a48] bg-[#1c2530] px-2 py-0.5 font-mono text-xs"
+                className="break-all rounded border border-border bg-surface px-2 py-0.5 font-mono text-xs"
               >
                 {formatCondition(condition)}
               </li>
@@ -197,7 +204,7 @@ export function RulesPage() {
       cell: (rule) => (
         <span
           className={`inline-block rounded px-2 py-0.5 text-xs font-semibold ${
-            rule.enabled ? "bg-[#133528] text-[#9ff0c5]" : "bg-[#1c2530] text-[#8fa0b3]"
+            rule.enabled ? "bg-[#133528] text-[#9ff0c5]" : "bg-surface text-muted"
           }`}
         >
           {rule.enabled ? R.table.on : R.table.off}
@@ -215,7 +222,7 @@ export function RulesPage() {
           aria-label={
             rule.enabled ? R.table.turnOffLabel(rule.name) : R.table.turnOnLabel(rule.name)
           }
-          className="h-[34px] rounded-md border border-[#2e3a48] px-3 text-[13px] text-[#c9d3df] hover:bg-ground focus-visible:outline-2 focus-visible:outline-text"
+          className="h-[34px] rounded-md border border-border px-3 text-[13px] text-text hover:bg-ground focus-visible:outline-2 focus-visible:outline-text"
         >
           {rule.enabled ? R.table.turnOff : R.table.turnOn}
         </button>
@@ -275,7 +282,7 @@ export function RulesPage() {
       ) : data !== undefined && data.length === 0 ? (
         <section className={`${PANEL} space-y-3 p-5`}>
           <h2 className="text-[17px] font-semibold">{R.empty.title}</h2>
-          <p className="text-[13.5px] leading-relaxed text-[#c9d3df]">{R.empty.body}</p>
+          <p className="text-[13.5px] leading-relaxed text-text">{R.empty.body}</p>
           <button
             type="button"
             onClick={focusName}
@@ -312,7 +319,7 @@ export function RulesPage() {
           confirmLabel={target.enable ? R.toggle.onConfirm : R.toggle.offConfirm}
           busy={toggle.isPending}
           error={toggle.isError ? failureText(toggle.error, R.toggle.failed) : undefined}
-          onConfirm={() => toggle.mutate(target)}
+          onConfirm={() => void runToggle(target)}
           onCancel={cancel}
         >
           {target.enable ? R.toggle.onBody : R.toggle.offBody}

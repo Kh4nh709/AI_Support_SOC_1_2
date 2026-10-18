@@ -2,7 +2,7 @@
 // table, the toggle dialog, the two-step create (a builder from the whitelist, then a preview), and every
 // state of the AdminStates section. The backend is MSW; the page is the real one.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { http, HttpResponse } from "msw";
@@ -210,6 +210,19 @@ const createButton = () => within(builder()).getByRole("button", { name: R.build
 const valueOf = (n: number) => within(group(n)).getByLabelText(R.builder.value);
 
 type User = ReturnType<typeof userEvent.setup>;
+
+/**
+ * Two clicks in ONE tick: both inside a single `act`, so React renders nothing between them and the second
+ * lands on the same enabled button the first did. (TanStack Query 5 also tells React that a write is pending
+ * only through a `setTimeout(0)`, so `disabled={mutation.isPending}` cannot stop the second by itself;
+ * `userEvent`, which awaits between clicks, never reproduces it.)
+ */
+function clickTwiceInOneTick(button: HTMLElement) {
+  act(() => {
+    fireEvent.click(button);
+    fireEvent.click(button);
+  });
+}
 
 /** Sets the pieces of condition `n` of the builder that are given. */
 async function condition(
@@ -457,17 +470,21 @@ describe("the width warning", () => {
     expect(within(await rowOf("A")).getByText("⚠ 26,5% > 25%")).toBeInTheDocument();
   });
 
-  it("has no warning at all for a rule under the threshold, or at it, or with no width", async () => {
-    backend([
-      rule(1, { name: "Dưới", width_pct: 4.1 }),
-      rule(2, { name: "Bằng", width_pct: 30 }),
-      rule(3, { name: "Không có", width_pct: null }),
-    ]);
+  it("warns for a rule whose width rounds to the threshold: a width the server sends is over it", async () => {
+    // `rule_width_report` keeps a rule when its UNROUNDED share is over the threshold and sends `pct` rounded
+    // to one decimal, so a share of 30.04 % arrives as 30.0 against 30. A non-null width is the warning
+    // (spec §4.4, the Jinja page): the page does not compare the rounded figure again.
+    backend([rule(1, { name: "Sát ngưỡng", width_pct: 30, width_threshold_pct: 30 })]);
     renderPage();
-    await tableOf();
+    expect(within(await rowOf("Sát ngưỡng")).getByText("⚠ 30% > 30%")).toBeInTheDocument();
+  });
+
+  it("shows a dash, and no warning, for a rule with no width", async () => {
+    backend([rule(1, { name: "Không có", width_pct: null })]);
+    renderPage();
+    const row = await rowOf("Không có");
+    expect(within(row).getByText(S.common.missing)).toBeInTheDocument();
     expect(screen.queryByText(/⚠/)).not.toBeInTheDocument();
-    expect(within(await rowOf("Dưới")).getByText("4,1%")).toBeInTheDocument();
-    expect(within(await rowOf("Không có")).getByText(S.common.missing)).toBeInTheDocument();
   });
 
   it("explains the width under the table, with the threshold of the rows", async () => {
@@ -641,6 +658,36 @@ describe("the toggle dialog", () => {
     release();
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(calls.toggle).toHaveLength(1);
+  });
+
+  it("sends one PATCH for two clicks of the confirm button in the same tick", async () => {
+    const calls = backend(THREE);
+    const user = userEvent.setup();
+    renderPage();
+    const dialog = await open(user, LAB.name, R.table.turnOffLabel(LAB.name));
+    clickTwiceInOneTick(within(dialog).getByRole("button", { name: R.toggle.offConfirm }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.toggle).toEqual([{ rule_id: LAB.rule_id, enabled: false }]);
+  });
+
+  it("can confirm again after a failed toggle: the latch is released", async () => {
+    let fail = true;
+    const calls = backend(THREE, {
+      toggle: (body) => {
+        if (fail) return detail("boom", 500);
+        const { rule_id } = body as { rule_id: string };
+        return HttpResponse.json({ rule_id, name: "x", enabled: false });
+      },
+    });
+    const user = userEvent.setup();
+    renderPage();
+    const dialog = await open(user, LAB.name, R.table.turnOffLabel(LAB.name));
+    await user.click(within(dialog).getByRole("button", { name: R.toggle.offConfirm }));
+    await within(dialog).findByRole("alert");
+    fail = false;
+    await user.click(within(dialog).getByRole("button", { name: R.toggle.offConfirm }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.toggle).toHaveLength(2);
   });
 
   it("on 404 rule_not_found closes the dialog, says the rule is gone, and reads the list again", async () => {
@@ -822,6 +869,7 @@ async function ready_with(rules: RuleRow[]) {
 describe("the preview", () => {
   const CASES: [label: string, field: RuleField, op: RuleOp, text: string, sent: unknown][] = [
     ["a string", "category", "eq", "recon", "recon"],
+    ["an eq string, trimmed of the spaces round it", "category", "eq", "  recon  ", "recon"],
     ["a port as a JSON number", "dst_port", "eq", "443", 443],
     ["rule_level eq as a JSON number", "rule_level", "eq", "12", 12],
     ["rule_level lte as a JSON number", "rule_level", "lte", "7", 7],
@@ -945,6 +993,28 @@ describe("the preview", () => {
     release();
     await within(previewBox()).findByText(R.preview.clusters);
     expect(within(previewBox()).queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("sends one preview for two clicks of the button in the same tick, before it is disabled", async () => {
+    const calls = backend(THREE);
+    await ready();
+    clickTwiceInOneTick(previewButton());
+    await within(previewBox()).findByText(R.preview.clusters);
+    expect(calls.simulate).toHaveLength(1);
+  });
+
+  it("can preview again after a failed preview: the latch is released", async () => {
+    let fail = true;
+    const calls = backend(THREE, {
+      simulate: () => (fail ? detail("boom", 500) : HttpResponse.json(PREVIEW)),
+    });
+    const user = await ready();
+    await user.click(previewButton());
+    await within(previewBox()).findByRole("alert");
+    fail = false;
+    await user.click(previewButton());
+    await within(previewBox()).findByText(R.preview.clusters);
+    expect(calls.simulate).toHaveLength(2);
   });
 
   it("shows the clusters and the alerts, with thousands separated the Vietnamese way", async () => {
@@ -1312,6 +1382,36 @@ describe("Tạo rule: only for the conditions last previewed", () => {
     release();
     await screen.findByRole("status");
     expect(calls.create).toHaveLength(1);
+  });
+
+  it("sends one create for two clicks of the button in the same tick, before it is disabled", async () => {
+    const calls = backend(THREE);
+    const user = await ready();
+    await fillNameAndReason(user);
+    await previewed(user);
+    clickTwiceInOneTick(createButton());
+    await screen.findByRole("status");
+    expect(calls.create).toHaveLength(1);
+  });
+
+  it("can create again after a failed create: the latch is released", async () => {
+    let fail = true;
+    const calls = backend(THREE, {
+      create: (body) => {
+        if (fail) return detail("boom", 500);
+        const { name } = body as { name: string };
+        return HttpResponse.json({ rule_id: uuid(8), name, enabled: true }, { status: 201 });
+      },
+    });
+    const user = await ready();
+    await fillNameAndReason(user);
+    await previewed(user);
+    await user.click(createButton());
+    await within(builder()).findByRole("alert");
+    fail = false;
+    await user.click(createButton());
+    await screen.findByRole("status");
+    expect(calls.create).toHaveLength(2);
   });
 
   it.each([

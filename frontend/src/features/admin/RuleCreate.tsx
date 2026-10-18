@@ -15,6 +15,7 @@ import { createRule, simulateRule, type RuleCondition, type SimulateResult } fro
 import { S, labelOf } from "../../strings";
 import { invalidateAfter } from "./adminKeys";
 import { conditionProblemOf, failureText } from "./ruleErrors";
+import { useSubmitLatch } from "./useSubmitLatch";
 import {
   OP_VALUE_KIND,
   RULE_FIELDS,
@@ -40,15 +41,15 @@ const PANEL = "rounded-[10px] border border-border bg-surface p-5";
 const HEADING = "text-[17px] font-semibold";
 const STEP = "text-xs text-muted";
 const INPUT =
-  "h-10 rounded-md border border-[#2e3a48] bg-[#0f141b] px-3 text-sm text-text focus-visible:outline-2 focus-visible:outline-text";
+  "h-10 rounded-md border border-border bg-ground px-3 text-sm text-text focus-visible:outline-2 focus-visible:outline-text";
 const CONTROL =
-  "h-[38px] min-w-0 rounded-md border bg-[#0f141b] px-2 font-mono text-[12.5px] text-text focus-visible:outline-2 focus-visible:outline-text";
+  "h-[38px] min-w-0 rounded-md border bg-ground px-2 font-mono text-[12.5px] text-text focus-visible:outline-2 focus-visible:outline-text";
 const GHOST =
-  "rounded-md border border-[#2e3a48] text-[#c9d3df] hover:bg-ground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-text";
+  "rounded-md border border-border text-text hover:bg-ground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-text";
 const PRIMARY =
   "h-11 rounded-lg px-5 text-[15px] font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text " +
   "bg-blue-600 text-white hover:bg-blue-500 " +
-  "disabled:cursor-not-allowed disabled:border disabled:border-[#2e3a48] disabled:bg-transparent disabled:text-[#5e6b7a]";
+  "disabled:cursor-not-allowed disabled:border disabled:border-border disabled:bg-transparent disabled:text-muted";
 
 /** The preview of the conditions last sent, with the key of what was sent. */
 type Previewed = { key: string; match: RuleCondition[]; result: SimulateResult };
@@ -96,7 +97,7 @@ function ConditionRow({
   const valueId = `${idBase}-value`;
   const noteId = `${idBase}-note`;
   const note = problem !== null ? R.builder.problem[problem] : hint;
-  const border = problem !== null ? "border-critical" : "border-[#2e3a48]";
+  const border = problem !== null ? "border-critical" : "border-border";
   return (
     <div role="group" aria-label={R.builder.group(index + 1)} className="space-y-1">
       <div className="grid grid-cols-[150px_84px_minmax(0,1fr)_36px] items-center gap-2">
@@ -104,7 +105,7 @@ function ConditionRow({
           aria-label={R.builder.field}
           value={row.field}
           onChange={(event) => onChange(withField(row, event.target.value as RuleField))}
-          className={`${CONTROL} border-[#2e3a48]`}
+          className={`${CONTROL} border-border`}
         >
           {RULE_FIELDS.map((field) => (
             <option key={field} value={field}>
@@ -116,7 +117,7 @@ function ConditionRow({
           aria-label={R.builder.op}
           value={row.op}
           onChange={(event) => onChange(withOp(row, event.target.value as RuleOp))}
-          className={`${CONTROL} border-[#2e3a48]`}
+          className={`${CONTROL} border-border`}
         >
           {opsOf(row.field).map((op) => (
             <option key={op} value={op}>
@@ -174,7 +175,7 @@ function ConditionRow({
         </button>
       </div>
       {note ? (
-        <p id={noteId} className={`text-xs ${problem !== null ? "text-[#fda4af]" : "text-medium"}`}>
+        <p id={noteId} className={`text-xs ${problem !== null ? "text-critical" : "text-medium"}`}>
           {note}
         </p>
       ) : null}
@@ -228,7 +229,7 @@ function Split({
                 viewBox="0 0 100 8"
                 preserveAspectRatio="none"
                 aria-hidden="true"
-                className={`h-2 w-full rounded-full bg-[#1f2833] ${toneOf(code)}`}
+                className={`h-2 w-full rounded-full bg-border ${toneOf(code)}`}
               >
                 <rect width={pct} height="8" fill="currentColor" />
               </svg>
@@ -263,7 +264,7 @@ function Tally({ result }: { result: SimulateResult }) {
       ) : (
         <p>{R.preview.tallyNone}</p>
       )}
-      <p className="text-xs text-[#c9d3df]">{R.preview.tallyNote}</p>
+      <p className="text-xs text-text">{R.preview.tallyNote}</p>
     </div>
   );
 }
@@ -275,11 +276,11 @@ function PreviewResult({ result, stale }: { result: SimulateResult; stale: boole
   return (
     <div className={stale ? "space-y-4 opacity-60" : "space-y-4"}>
       <dl className="grid grid-cols-2 gap-3">
-        <div className="space-y-1 rounded-lg border border-border bg-[#10151c] px-4 py-3.5">
+        <div className="space-y-1 rounded-lg border border-border bg-ground px-4 py-3.5">
           <dt className="text-[12.5px] text-muted">{R.preview.clusters}</dt>
           <dd className="text-[28px] font-bold leading-none">{fmtInt(result.clusters)}</dd>
         </div>
-        <div className="space-y-1 rounded-lg border border-border bg-[#10151c] px-4 py-3.5">
+        <div className="space-y-1 rounded-lg border border-border bg-ground px-4 py-3.5">
           <dt className="text-[12.5px] text-muted">{R.preview.alerts}</dt>
           <dd className="text-[28px] font-bold leading-none">{fmtInt(result.alerts)}</dd>
         </div>
@@ -309,7 +310,7 @@ function PreviewResult({ result, stale }: { result: SimulateResult; stale: boole
               <li key={id} className="min-w-0">
                 <Link
                   to={`/alerts/${encodeURIComponent(id)}`}
-                  className="block break-all rounded-md border border-border bg-[#10151c] px-2 py-1.5 font-mono text-xs text-ai-accent underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-text"
+                  className="block break-all rounded-md border border-border bg-ground px-2 py-1.5 font-mono text-xs text-ai-accent underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-text"
                 >
                   {id}
                 </Link>
@@ -364,6 +365,10 @@ export function RuleCreate({
     },
     onError: (error, body) => setFailure({ step: "create", error, key: matchKey(body.match) }),
   });
+  // `disabled={isPending}` is one render late (TanStack tells React through a setTimeout(0)): the latch is
+  // what keeps two clicks of one tick to one request.
+  const runPreview = useSubmitLatch(preview);
+  const runCreate = useSubmitLatch(create);
 
   const parsed = rows.map(toCondition);
   const match = matchOf(rows);
@@ -396,15 +401,16 @@ export function RuleCreate({
       if (bad) document.getElementById(`${uid}-${bad.id}-value`)?.focus();
       return;
     }
+    // A second click in the tick of the first finds the latch shut and sends nothing.
+    if (!runPreview(match)) return;
     setFailure(null);
     setPreviewed(null);
-    preview.mutate(match);
   }
 
   function onCreate() {
     if (previewed === null || !canCreate) return;
+    if (!runCreate({ name: name.trim(), reason: reason.trim(), match: previewed.match })) return;
     setFailure(null);
-    create.mutate({ name: name.trim(), reason: reason.trim(), match: previewed.match });
   }
 
   const hint = !fresh
@@ -424,9 +430,10 @@ export function RuleCreate({
         blocked.map((value) => formatValue(value)).join(", "),
       );
     }
-    if (typeOf(row.field) === "string" && row.text === "") {
-      if (row.op === "eq") return R.builder.emptyEq;
-      if (row.op === "prefix") return R.builder.emptyPrefix;
+    if (typeOf(row.field) === "string") {
+      // An `eq` string is trimmed (`parseValue`), a `prefix` is sent as typed.
+      if (row.op === "eq" && row.text.trim() === "") return R.builder.emptyEq;
+      if (row.op === "prefix" && row.text === "") return R.builder.emptyPrefix;
     }
     return null;
   };
@@ -489,7 +496,7 @@ export function RuleCreate({
           <button
             type="button"
             onClick={addRow}
-            className="h-[34px] rounded-md border border-dashed border-[#3a4757] px-3 text-[13px] text-[#aeb9c6] hover:bg-ground focus-visible:outline-2 focus-visible:outline-text"
+            className="h-[34px] rounded-md border border-dashed border-border px-3 text-[13px] text-[#aeb9c6] hover:bg-ground focus-visible:outline-2 focus-visible:outline-text"
           >
             {R.builder.add}
           </button>
@@ -498,11 +505,11 @@ export function RuleCreate({
           <div
             id={problemId}
             role="alert"
-            className="space-y-1.5 rounded-lg border border-[#5a2e36] bg-[#2a1016] px-3.5 py-3 text-[13px] leading-snug text-[#fda4af]"
+            className="space-y-1.5 rounded-lg border border-critical/40 bg-critical-bg px-3.5 py-3 text-[13px] leading-snug text-critical"
           >
             <p>{conditionProblem.sentence}</p>
             {conditionProblem.details.map((line, i) => (
-              <p key={i} className="break-words font-mono text-xs text-[#fecdd3]">
+              <p key={i} className="break-words font-mono text-xs text-text">
                 {line}
               </p>
             ))}
@@ -532,7 +539,7 @@ export function RuleCreate({
           {hint}
         </p>
         {generic !== null && generic.step === "create" ? (
-          <p role="alert" className="text-[13px] text-[#fda4af]">
+          <p role="alert" className="text-[13px] text-critical">
             {failureText(generic.error, R.builder.createFailed)}
           </p>
         ) : null}
@@ -550,7 +557,7 @@ export function RuleCreate({
           <span className={STEP}>{R.preview.step}</span>
         </div>
         {preview.isPending ? (
-          <div role="status" className="flex items-center gap-2.5 text-[13.5px] text-[#c9d3df]">
+          <div role="status" className="flex items-center gap-2.5 text-[13.5px] text-text">
             <svg
               width="18"
               height="18"
@@ -576,7 +583,7 @@ export function RuleCreate({
             <PreviewResult result={previewed.result} stale={stale} />
           </>
         ) : generic !== null && generic.step === "preview" ? (
-          <p role="alert" className="text-[13px] text-[#fda4af]">
+          <p role="alert" className="text-[13px] text-critical">
             {failureText(generic.error, R.builder.previewFailed)}
           </p>
         ) : (
