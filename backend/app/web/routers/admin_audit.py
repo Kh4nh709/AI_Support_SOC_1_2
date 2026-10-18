@@ -38,14 +38,34 @@ them.
 a payload whose `jsonb::text` is over `PAYLOAD_MAX_BYTES` (64 KiB, measured in bytes) never leaves
 it, and the row carries `{"truncated": true, "size": <bytes>}` instead. That way a 1 MB string
 is never read into this process and one event cannot blow up a page (100 rows at most, 64 KiB
-each). Every other payload is parsed and `redact`ed: a dict key that `is_secret_key` names has
-its value replaced by `"[đã ẩn]"`, at any depth, through lists and dicts, and nothing else is
-changed (no stringifying, no cutting). The key rule (spec §5.8 as amended at `b9fe528`): lower-case
-the key, drop `_` and `-` (camelCase needs no split of its own: lower-casing `apiKey` is
-`apikey`), and redact when the result equals or ends with one of `REDACT_SUFFIXES`. That catches
-`access_token`, `client_secret`, `apiKey`, `api-key`, `db_password`, `secret_key`, `privateKey`,
-`passphrase` and leaves `key`, `token_count`, `tokens_in`, `passwords`, `token_hash` visible. Payloads should never carry a credential
-(DEC-159 item 6); this is the second layer. One addition to the spec, for the same reason as the
+each). Every other payload is parsed and `redact`ed, at any depth, through lists and dicts, and
+nothing else is changed (no stringifying, no cutting). Three rules (spec §5.8, DEC-203 item 2):
+- **The key rule** (spec §5.8 as amended at `b9fe528`): a dict key that `is_secret_key` names has
+  its value replaced by `"[đã ẩn]"`. Lower-case the key, drop `_` and `-` (camelCase needs no
+  split of its own: lower-casing `apiKey` is `apikey`), and redact when the result equals or ends
+  with one of `REDACT_SUFFIXES` (DEC-203 adds `passwd` and `pwd`). That catches `access_token`,
+  `client_secret`, `apiKey`, `api-key`, `db_password`, `secret_key`, `privateKey`, `passphrase`,
+  `db_passwd` and leaves `key`, `token_count`, `tokens_in`, `passwords`, `token_hash` visible.
+- **The value rule** (DEC-203 item 2a as amended 18/10): a STRING that `is_secret_value` names, one
+  that CONTAINS `scheme://user:pass@` anywhere (`URL_WITH_PASSWORD`, no `^` anchor), is replaced as
+  a whole, whatever its key, or none (a list item, a bare payload). That covers `DATABASE_URL*`,
+  `conn_str` and a DSN in the middle of an error text. The cost is accepted by the decision: a
+  harmless `see http://h:80/a@b` is hidden too (`h` reads as the user, `80/a` as the password).
+- **Flags are never redacted**: a `bool` or `null` value stays as it is even under a secret key
+  (`has_password`, `is_secret`, `"password": null`): a flag carries no secret, and hiding it
+  hides what the event says. A number, a text or a container under a secret key still goes whole.
+- **A labeller's verdict is hidden** (DEC-204, spec §5.8): in the payload of every `label.created`
+  event (`BLIND_EVENT_TYPES`) the keys `label` and `confidence` (`LABEL_KEYS`, matched like the
+  secret keys: lower case, `_` and `-` dropped, the whole name) are replaced by `"[đã ẩn]"` at any
+  depth, whatever the value (a `null` `confidence`, as the digest's event has, goes too: the rule
+  is on the key), for EVERY viewer. Labelling is blind between the two labellers (DEC-019, DEC-101)
+  and both are admins, so the page's role guard cannot separate them. The event stays listed with
+  its time, `labeler_id`, `alert_id`, `gold_set` and `undo`; the Owner reads the verdicts from
+  `triage_labels` and the export tools. The model's `confidence` in `triage.suggested` is not a
+  labeller's, and no other event type is touched.
+
+Payloads should never carry a credential (DEC-159 item 6); this is the second layer. One
+addition to the spec, for the same reason as the
 size cut: a payload nested in more than `MAX_PAYLOAD_DEPTH` (32) dicts and lists takes the
 truncated shape too (and so does one the JSON parser itself cannot read, a `RecursionError`
 from about 9,000 levels). Both fit well under 64 KiB, and FastAPI's serialiser fails on about
@@ -57,6 +77,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import timedelta
 from typing import Annotated, Any, Literal
 
@@ -95,7 +116,8 @@ REDACTED = "[đã ẩn]"
 #: A dict key is redacted when its normalised name (`normalise_key`) equals or ends with one of
 #: these. They are written in normalised form: no `_` or `-`, lower case. The first six are spec
 #: §5.8; `secretkey`, `privatekey` and `passphrase` were added by the Director's ruling on the fix
-#: round (a `token_hash` stays visible: it is a digest, not a credential).
+#: round (a `token_hash` stays visible: it is a digest, not a credential); `passwd` and `pwd` by
+#: DEC-203 item 2b.
 REDACT_SUFFIXES = (
     "password",
     "passwordhash",
@@ -106,7 +128,23 @@ REDACT_SUFFIXES = (
     "secretkey",
     "privatekey",
     "passphrase",
+    "passwd",
+    "pwd",
 )
+#: DEC-203 item 2a (as amended 18/10): a string that CONTAINS a URL carrying a password
+#: (`scheme://user:pass@`), anywhere in it, is redacted whatever its key. `[a-z]` is read
+#: case-insensitively: a scheme is not case-sensitive, so `POSTGRESQL://u:p@h` is as much a
+#: credential as the lower-case one. This is the DEFINITION of the rule, and what the tests hold
+#: `is_secret_value` to; the function does not run it with `search`, because searched as it stands
+#: it is quadratic (about 16 s on `"a" * 65536`: every start position rescans the run of scheme
+#: characters), and a payload may be 64 KiB.
+URL_WITH_PASSWORD = re.compile(r"[a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s]+@", re.IGNORECASE)
+_SCHEME_START = re.compile(r"[a-z]", re.IGNORECASE)
+_SCHEME_CHAR = re.compile(r"[a-z0-9+.-]", re.IGNORECASE)
+#: DEC-204: the keys of a labeller's verdict (`tier1/labels.py` writes both), in normalised form,
+#: and the event types whose payload they are hidden in, for every viewer.
+LABEL_KEYS = ("label", "confidence")
+BLIND_EVENT_TYPES = frozenset({"label.created"})
 
 #: `?range=` -> the window. Anything else is a 422 from the `Literal` below.
 _WINDOWS: dict[str, timedelta] = {
@@ -199,32 +237,97 @@ def is_secret_key(key: Any) -> bool:
     return isinstance(key, str) and normalise_key(key).endswith(REDACT_SUFFIXES)
 
 
-def redact(value: Any, _level: int = 0) -> Any:
-    """A copy of a JSON value with every secret-named key's value replaced by `REDACTED`.
+def _holds_url_password_before(text: str, start: int, at: int) -> bool:
+    """Whether `text[start:at]`, a stretch with no whitespace and no `@`, holds a
+    `scheme://user:password` that ends exactly at `at` (the `@` that follows it)."""
+    sep = text.find("://", start, at)
+    while sep != -1:
+        # the scheme: a run of scheme characters ending at `://` that holds a letter to begin at
+        run = sep
+        while run > start and _SCHEME_CHAR.match(text[run - 1]):
+            run -= 1
+        has_scheme = any(_SCHEME_START.match(ch) for ch in text[run:sep])
+        # the user: one or more characters up to a `:`, none of them `/` (a `:` ends it too)
+        after = sep + 3
+        end = after
+        while end < at and text[end] not in "/:":
+            end += 1
+        # the password: one or more characters up to the `@`
+        if has_scheme and end > after and end + 1 < at and text[end] == ":":
+            return True
+        sep = text.find("://", sep + 1, at)
+    return False
 
-    A key matches when `is_secret_key` says so, at any depth, through lists
-    and nested dicts; the whole value under such a key goes, whatever it is. Everything else is
-    returned as it is: the same numbers, strings and `None`, in the same structure. The input
-    is never modified. `_level` is the number of containers already entered: a value nested in
-    more than `MAX_PAYLOAD_DEPTH` of them raises `PayloadTooDeep` rather than recursing on."""
+
+def is_secret_value(value: Any) -> bool:
+    """True when `value` is a string that contains a URL carrying a password: exactly the strings
+    `URL_WITH_PASSWORD.search` finds, in time linear in the length (a test compares the two).
+
+    A match is `scheme://user:password@` with no whitespace and no `@` before its own, so it lies
+    wholly between two such characters. The scan therefore takes each `@`, looks back to the
+    previous `@` or whitespace, and asks `_holds_url_password_before` about that stretch alone:
+    every character is read a bounded number of times. Nothing but a string can be a secret value.
+    """
+    if not isinstance(value, str) or "@" not in value or "://" not in value:
+        return False
+    at = value.find("@")
+    while at != -1:
+        start = at
+        while start > 0 and value[start - 1] != "@" and not value[start - 1].isspace():
+            start -= 1
+        if _holds_url_password_before(value, start, at):
+            return True
+        at = value.find("@", at + 1)
+    return False
+
+
+def _is_flag(value: Any) -> bool:
+    """A `bool` or `None`: a value that cannot carry a secret (checked by type, so `0` is not
+    `False` here)."""
+    return value is None or isinstance(value, bool)
+
+
+def _hidden(key: Any, item: Any, hide: frozenset[str]) -> bool:
+    """Whether the value `item` under `key` is replaced: the key is one of `hide` (normalised
+    names, DEC-204: whatever the value is), or a secret key and the value is not a flag."""
+    if isinstance(key, str) and normalise_key(key) in hide:
+        return True
+    return is_secret_key(key) and not _is_flag(item)
+
+
+def redact(value: Any, _level: int = 0, *, hide: frozenset[str] = frozenset()) -> Any:
+    """A copy of a JSON value with every secret replaced by `REDACTED`, by the rules of the
+    module docstring.
+
+    A key matches when `is_secret_key` says so, at any depth, through lists and nested dicts; the
+    whole value under such a key goes, whatever it is, unless it is a `bool` or `None` (a flag is
+    never redacted). A string that `is_secret_value` names goes under any key. `hide` is a set of
+    NORMALISED key names (`LABEL_KEYS` for a `label.created` event, DEC-204) whose value goes at
+    any depth whatever it is, flags included; it is empty unless the caller passes it. Everything
+    else is returned as it is: the same numbers, strings and `None`, in the same structure. The
+    input is never modified. `_level` is the number of containers already entered: a value
+    nested in more than `MAX_PAYLOAD_DEPTH` of them raises `PayloadTooDeep` rather than
+    recursing on."""
     if isinstance(value, (dict, list)):
         if _level >= MAX_PAYLOAD_DEPTH:
             raise PayloadTooDeep(f"nested deeper than {MAX_PAYLOAD_DEPTH} levels")
         if isinstance(value, dict):
             return {
-                key: REDACTED if is_secret_key(key) else redact(item, _level + 1)
+                key: REDACTED if _hidden(key, item, hide) else redact(item, _level + 1, hide=hide)
                 for key, item in value.items()
             }
-        return [redact(item, _level + 1) for item in value]
-    return value
+        return [redact(item, _level + 1, hide=hide) for item in value]
+    return REDACTED if is_secret_value(value) else value
 
 
-def _payload(text: str | None, size: int | None) -> Any:
+def _payload(text: str | None, size: int | None, event_type: str) -> Any:
     """The `payload` of one row from its two SQL columns: `text` is the jsonb as text, or NULL
-    when it was over the size limit; `size` is its byte length, or NULL for a SQL NULL payload.
-    A payload that cannot be returned whole (too big, too deep, too deep for the JSON parser
-    itself, or holding a number that parser refuses) is `{"truncated": true, "size": <bytes>}`;
-    one of those never leaks a secret, it is not sent at all.
+    when it was over the size limit; `size` is its byte length, or NULL for a SQL NULL payload;
+    `event_type` is the row's, and decides whether a labeller's verdict is hidden in it
+    (`BLIND_EVENT_TYPES`, DEC-204). A payload that cannot be returned whole (too big, too deep,
+    too deep for the JSON parser itself, or holding a number that parser refuses) is
+    `{"truncated": true, "size": <bytes>}`; one of those never leaks a secret or a verdict, it
+    is not sent at all.
 
     `ValueError` is the parser's own refusals (`JSONDecodeError`, and the integer-string limit
     of 4,300 digits, which jsonb does not have) and `PayloadTooDeep`; `RecursionError` is the
@@ -233,8 +336,9 @@ def _payload(text: str | None, size: int | None) -> Any:
         return None
     if text is None:
         return {"truncated": True, "size": size}
+    hide = frozenset(LABEL_KEYS) if event_type in BLIND_EVENT_TYPES else frozenset()
     try:
-        return redact(json.loads(text))
+        return redact(json.loads(text), hide=hide)
     except (ValueError, RecursionError):
         return {"truncated": True, "size": size}
 
@@ -384,7 +488,7 @@ def api_audit(
             "actor_role": actor_role,
             "actor_username": username,
             "subject_id": subject_id,
-            "payload": _payload(text, size),
+            "payload": _payload(text, size, event_type),
         }
         for audit_id, created_at, event_type, actor_role, username, subject_id, text, size in rows
     ]

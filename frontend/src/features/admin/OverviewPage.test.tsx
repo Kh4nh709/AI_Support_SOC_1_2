@@ -138,6 +138,7 @@ function overview(over: Partial<OverviewResponse> = {}): OverviewResponse {
     },
     failed_jobs: JOBS,
     inventory: { assets: 6, identities: 3, iocs: 0, loaded_at: "2026-09-29T07:20:00+00:00" },
+    llm_month: { spent_usd: 0.5123, cap_usd: 30, pct: 1.7 },
     ...over,
   };
 }
@@ -843,6 +844,10 @@ describe("one block failing alone (AdminStates)", () => {
     health: ["Sức khoẻ hệ thống"],
     failed_jobs: ["Job lỗi"],
     inventory: ["Kiểm kê tài sản"],
+    // The backend serves `llm_month` since P11-T20 part 2 (DEC-203), but the cost card still reads
+    // `llm/usage`: nothing is drawn from this section yet, so its failure shows nowhere. The frontend
+    // batch moves the card onto it, and this entry becomes the card's place.
+    llm_month: [],
   };
   const TILES = new Set(["Alert nhận vào", "Cụm chờ Tier-1", "Case đang mở"]);
   const container = (name: string): HTMLElement => (TILES.has(name) ? tile(name) : block(name));
@@ -858,16 +863,27 @@ describe("one block failing alone (AdminStates)", () => {
     health: () => expect(screen.getByText("10/10 ổn")).toBeInTheDocument(),
     failed_jobs: () => expect(screen.getByText("100412")).toBeInTheDocument(),
     inventory: () => expect(valueOf(block("Kiểm kê tài sản"), "Asset đang dùng")).toBe("6"),
+    llm_month: () => undefined, // not drawn yet: see WHERE
   };
 
-  it("has a place for each of the nine sections of the API", () => {
+  it("has a place for each of the ten sections of the API", () => {
     expect(Object.keys(WHERE).sort()).toEqual([...OVERVIEW_SECTIONS].sort());
     expect(Object.keys(PROBE).sort()).toEqual([...OVERVIEW_SECTIONS].sort());
   });
 
-  const cases = OVERVIEW_SECTIONS.flatMap((section) =>
-    (["timeout", "query_failed"] as const).map((error) => [section, error] as const),
+  // A section with no place on the page yet (`llm_month`) has no error to look for: its own test is below.
+  const cases = OVERVIEW_SECTIONS.filter((section) => WHERE[section].length > 0).flatMap(
+    (section) => (["timeout", "query_failed"] as const).map((error) => [section, error] as const),
   );
+
+  it("draws nothing for a failed llm_month yet, and the rest of the page as it is", async () => {
+    await renderLoaded({ overviews: [failing(["llm_month"], "query_failed")] });
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+    for (const other of OVERVIEW_SECTIONS) if (other !== "llm_month") PROBE[other]();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Tổng quan hệ thống" }),
+    ).toBeInTheDocument();
+  });
 
   it.each(cases)(
     "shows %s that failed (%s) as an error where it belongs, and the rest as it is",
@@ -893,7 +909,7 @@ describe("one block failing alone (AdminStates)", () => {
     },
   );
 
-  it("shows every block's own error when all nine failed, under the title and the range", async () => {
+  it("shows every block's own error when all ten failed, under the title and the range", async () => {
     await renderLoaded({ overviews: [failing(OVERVIEW_SECTIONS, "query_failed")] });
     // 3 cards + 7 blocks (the day chart is both a card's and a block's section)
     expect(screen.getAllByRole("alert")).toHaveLength(10);

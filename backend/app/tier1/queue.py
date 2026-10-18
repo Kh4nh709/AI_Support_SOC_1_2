@@ -147,7 +147,7 @@ _SUGGESTION_SQL = """
     SELECT run_id, result, gate_result, created_at
     FROM llm_runs
     WHERE subject_id = %s AND pipeline = 'triage' AND role = 'proposer'
-    ORDER BY created_at DESC
+    ORDER BY created_at DESC, run_id DESC
     LIMIT 1
 """
 
@@ -190,8 +190,10 @@ def _suggestion_of(
 
 def latest_suggestion(conn: psycopg.Connection, alert_id: str) -> Suggestion | None:
     """The latest `role = 'proposer'` triage run for `alert_id`, or `None` when there is
-    none or its `result` is NULL (① failed — `stopped_by` set). Every key is read with
-    `.get`: a key P3-T10 does not write becomes `None`, never a `KeyError`."""
+    none or its `result` is NULL (① failed — `stopped_by` set). Two runs at the same `created_at`
+    are ordered by `run_id DESC` (here, in `latest_suggestions` and in the queue's join: the three
+    readers name the same run). Every key is read with `.get`: a key P3-T10 does not write becomes `None`, never a
+    `KeyError`."""
     row = conn.execute(_SUGGESTION_SQL, (alert_id,)).fetchone()
     if row is None:
         return None
@@ -202,7 +204,7 @@ _SUGGESTIONS_SQL = """
     SELECT DISTINCT ON (subject_id) subject_id, run_id, result, gate_result, created_at
     FROM llm_runs
     WHERE subject_id = ANY(%s) AND pipeline = 'triage' AND role = 'proposer'
-    ORDER BY subject_id, created_at DESC
+    ORDER BY subject_id, created_at DESC, run_id DESC
 """
 
 
@@ -245,7 +247,9 @@ class QueuePage:
 # The phase-6 SQL (docs/phase-6-tier1.md:24-39) with two changes:
 #  1. the join is LATERAL on the latest `role = 'proposer'` row — ① writes a proposer
 #     *and* a verifier row per alert, and the doc's plain `LEFT JOIN … pipeline = 'triage'`
-#     would return every triaged head twice (planning decision 5);
+#     would return every triaged head twice (planning decision 5). Two runs at one `created_at`
+#     are ordered by `run_id DESC`, as in `latest_suggestion`: a queue row and the alert page
+#     never show different runs (P11-T20 row 32);
 #  2. the column list is explicit and wider (G10), and `status`/`suggestion_visible` are
 #     read so `visibility.strip` can be applied per row.
 # `LEFT JOIN`, not `JOIN` (H6): a `triage_status = 'unavailable'` head has no run and
@@ -306,7 +310,7 @@ _QUEUE_SQL = """
         SELECT run_id, result, gate_result
         FROM llm_runs r
         WHERE r.subject_id = a.alert_id AND r.pipeline = 'triage' AND r.role = 'proposer'
-        ORDER BY r.created_at DESC
+        ORDER BY r.created_at DESC, r.run_id DESC
         LIMIT 1
     ) r ON true
     WHERE {where}

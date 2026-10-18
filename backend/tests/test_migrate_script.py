@@ -123,3 +123,68 @@ def test_a_database_that_cannot_be_asked_stops_the_run_instead_of_applying_the_b
     assert "does not exist" in err  # psql's own error, passed through
     assert "migrate: cannot look up whether schema_migrations exists" in err, err
     assert "absent" not in out and "applying" not in out, out
+
+
+# A `psql` that behaves as the real one, except for ONE statement, the count of the base
+# migrations the script has just recorded (`scripts/migrate.sh` after the base schema, P11-T20
+# row 37): that one is refused, as a lost connection or a missing SELECT would refuse it.
+_PSQL_THAT_CANNOT_COUNT = """#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    *"count(*) FROM schema_migrations"*)
+      echo "psql: error: simulated failure of the count lookup" >&2
+      exit 2
+      ;;
+  esac
+done
+exec {real_psql} "$@"
+"""
+
+
+def test_a_failed_count_after_the_base_schema_stops_the_run_instead_of_printing_an_empty_count(
+    tmp_path,
+):
+    """Row 37 (P11-T20 review n3). The last lookup of the script was the one left unguarded: the
+    `$(psql ...)` sat inside an `echo`, so a failure printed `recorded  base migrations` (an empty
+    count) and the run went on as if nothing had happened. Now it is the same exit 3 as the other
+    lookups, with the base schema (applied and recorded by then) left as it is and a message that
+    says so: `nothing applied` would be false here. A second run, with the real psql, finishes."""
+    session = _session_dsn()
+    try:
+        admin = psycopg.connect(conftest._maintenance_dsn(session), autocommit=True)
+    except psycopg.OperationalError:
+        pytest.skip(f"TEST_DATABASE_URL unreachable: {conftest.redact_dsn(session)}")
+    name = f"{conftest._dbname(session)}_migcount_test"
+    dsn = _with_db(session, name)
+    real_psql = shutil.which("psql")
+    assert real_psql is not None  # `_session_dsn` skipped otherwise
+    shim = tmp_path / "psql"
+    shim.write_text(_PSQL_THAT_CANNOT_COUNT.format(real_psql=real_psql), encoding="utf-8")
+    shim.chmod(0o755)
+    try:
+        admin.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(name)))
+        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+
+        run = _run_migrate(dsn, PATH=f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+
+        code, out, err = run.returncode, run.stdout, run.stderr
+        if code != 3:
+            pytest.fail(f"migrate.sh exit {code}, expected 3:\n{out}\n{err}")
+        assert "simulated failure of the count lookup" in err  # psql's own error, passed through
+        assert "migrate: cannot count the base migrations" in err, err
+        assert "the base schema is applied and recorded" in err
+        assert "nothing applied" not in err  # it would be false: the base schema went in
+        assert "schema_migrations absent" in out  # the base schema was applied, then the stop
+        assert "recorded" not in out and "already present" not in out, out
+        with psycopg.connect(dsn) as conn:
+            (recorded,) = conn.execute("SELECT count(*) FROM schema_migrations").fetchone()
+        assert recorded > 0  # recorded before the lookup that failed
+
+        again = _run_migrate(dsn)  # the real psql: the loop finds everything present
+        code, out = again.returncode, again.stdout
+        if code != 0:
+            pytest.fail(f"migrate.sh exit {code}, expected 0:\n{again.stderr}")
+        assert f"migrate: 0 applied, {recorded} already present" in out, out
+    finally:
+        admin.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(name)))
+        admin.close()

@@ -1471,3 +1471,149 @@ def test_every_route_of_the_labels_router_carries_the_admin_dependency() -> None
     for route in labels_router.router.routes:
         calls = [d.call for d in route.dependant.dependencies]
         assert labels_router.require_admin in calls, route.path
+
+
+# ---------------------------------------------------------------------------
+# P11-T20 part 2, rows 28-30 (P11-T08 review F1-F3): three gaps in the undo's tests.
+#
+# Tests only: the code was right. Every path goes through `seeded`'s `tmp_path` and
+# `monkeypatch`; nothing here reads or writes anything under `eval/`.
+# ---------------------------------------------------------------------------
+
+
+def _label_with_source(conn: psycopg.Connection, user_id: str, alert_id: str, source: str) -> None:
+    conn.execute(
+        "INSERT INTO triage_labels (alert_id, labeler_id, source, label, confidence) "
+        "VALUES (%s, %s, %s, 'benign', '2')",
+        (alert_id, user_id, source),
+    )
+
+
+def _label_rows(conn: psycopg.Connection, user_id: str) -> list[tuple[str, str]]:
+    return conn.execute(
+        "SELECT alert_id, source FROM triage_labels WHERE labeler_id = %s ORDER BY 1, 2",
+        (user_id,),
+    ).fetchall()
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("other", ["digest", "disagreement", "lab"])
+def test_undo_takes_only_gold_offline_never_a_newer_label_of_another_source(
+    client, db, other
+) -> None:
+    """Row 28. The caller's newest row of ALL sources is not what undo deletes: the filter is
+    `source = 'gold_offline'`. Without it the caller's newer `digest` verdict (or the
+    `disagreement` row `label_export freeze` writes) would be deleted instead of the gold label."""
+    gold, newer = _A40112.alert_id, _A5503.alert_id
+    assert _post(client, gold).status_code == 201
+    _label_with_source(db, USER_A, newer, other)
+    _shift(db, USER_A, gold, -1)  # one now() per transaction: the other row is the newest
+    newest = db.execute(
+        "SELECT source FROM triage_labels WHERE labeler_id = %s ORDER BY created_at DESC LIMIT 1",
+        (USER_A,),
+    ).fetchone()
+    assert newest == (other,)  # the premise: the newest row is not a gold_offline one
+
+    resp = _undo(client)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["undone_cluster_id"] == gold
+    assert _label_rows(db, USER_A) == [(newer, other)]
+    ((subject, _, _, payload),) = _undo_events(db, USER_A)
+    assert subject == gold and payload["alert_id"] == gold
+
+    # nothing gold_offline is left, so the next undo is a 404 and the other row stays
+    again = _undo(client)
+    assert again.status_code == 404
+    assert again.json() == {"detail": {"reason": "nothing_to_undo"}}
+    assert _label_rows(db, USER_A) == [(newer, other)]
+    assert len(_undo_events(db, USER_A)) == 1
+
+
+@pytest.mark.db
+def test_undo_leaves_a_digest_and_a_disagreement_row_newer_than_the_gold_label(client, db) -> None:
+    """The same, with both of the other kinds present, one of them on the gold label's own alert."""
+    gold = _A40112.alert_id
+    assert _post(client, gold).status_code == 201
+    _label_with_source(db, USER_A, _A5503.alert_id, "digest")
+    _label_with_source(db, USER_A, gold, "disagreement")  # the same alert, another source
+    db.execute(
+        "UPDATE triage_labels SET created_at = created_at - interval '5 minutes' "
+        "WHERE labeler_id = %s AND source = 'gold_offline'",
+        (USER_A,),
+    )
+    assert _undo(client).status_code == 200
+    kept = [(gold, "disagreement"), (_A5503.alert_id, "digest")]
+    assert _label_rows(db, USER_A) == kept
+    assert _undo(client).status_code == 404
+    assert _label_rows(db, USER_A) == kept
+
+
+#: Each is a request an undo must never act on. The expected status is the one the request
+#: really gets: a well-formed string that is not the caller is the 403 `_bind` gives, a body
+#: that is not JSON, or has a key the model does not have, is the 422.
+_UNDO_HOSTILE_BODIES: dict[str, tuple[bytes, int]] = {
+    "escaped NUL in labeler": (b'{"labeler": "a\\u0000b"}', 403),
+    "escaped NUL alone": (b'{"labeler": "\\u0000"}', 403),
+    "raw NUL byte in the labeler": (b'{"labeler": "a\x00b"}', 422),
+    "raw NUL byte after the object": (b"{}\x00", 422),
+    "raw NUL byte alone": (b"\x00", 422),
+    "NUL in a key": (b'{"\\u0000": 1}', 422),
+    "raw NUL in a key": (b'{"a\x00b": 1}', 422),
+    "C0 control in labeler": (b'{"labeler": "a\\u0001b"}', 403),
+    "escaped newline and tab in labeler": (b'{"labeler": "a\\n\\tb"}', 403),
+    "DEL in labeler": (b'{"labeler": "a\\u007fb"}', 403),
+    "raw C0 control in the labeler": (b'{"labeler": "a\x01b"}', 422),
+    "C1 control in labeler": (b'{"labeler": "a\\u0085b"}', 403),
+    "NUL after the caller's id": (json.dumps({"labeler": USER_A + "\x00"}).encode(), 403),
+    "a control character in a key": (b'{"a\\u0001": 1}', 422),
+}
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    ("raw", "status"), list(_UNDO_HOSTILE_BODIES.values()), ids=list(_UNDO_HOSTILE_BODIES)
+)
+def test_undo_with_a_nul_or_control_character_in_the_body_is_refused_and_the_label_is_intact(
+    client, db, raw, status
+) -> None:
+    """Row 29. 403 or 422, never a 500 and never a deletion."""
+    assert _post(client, _my_order(client)[0]).status_code == 201
+    rows_before = _label_rows(db, USER_A)
+    events_before = db.execute("SELECT count(*) FROM audit_events").fetchone()[0]
+
+    resp = client.http.post(UNDO, content=raw, headers={"content-type": "application/json"})
+    assert resp.status_code in (403, 422), resp.text
+    assert resp.status_code == status, resp.text
+    assert _label_rows(db, USER_A) == rows_before
+    assert _undo_events(db, USER_A) == []
+    assert db.execute("SELECT count(*) FROM audit_events").fetchone()[0] == events_before
+
+
+@pytest.mark.db
+def test_the_jinja_undo_while_frozen_writes_nothing(client, db, seeded) -> None:
+    """Row 30. The 409 of `POST /admin/labels/undo` changes no row and writes no event: not an
+    undo event, and no audit event of any kind."""
+    first, second = _A40112.alert_id, _A5503.alert_id
+    assert _post(client, first).status_code == 201
+    assert _post(client, second).status_code == 201
+    _shift(db, USER_A, first, -1)
+    rows_sql = (
+        "SELECT alert_id, labeler_id::text, source, label, confidence, note, created_at "
+        "FROM triage_labels ORDER BY 1, 2, 3"
+    )
+    snapshot = db.execute(rows_sql).fetchall()
+    audit_before = db.execute("SELECT count(*), max(audit_id) FROM audit_events").fetchone()
+    assert len(snapshot) == 2 and _undo_events(db, USER_A) == []
+
+    (seeded / "gold_v1.sha256").write_text("frozen\n", encoding="utf-8")  # tmp_path, via `seeded`
+    assert labels.FREEZE_MARKER == seeded / "gold_v1.sha256"
+    resp = client.http.post("/admin/labels/undo")
+    assert resp.status_code == 409
+
+    assert _undo_events(db, USER_A) == []
+    assert db.execute("SELECT count(*), max(audit_id) FROM audit_events").fetchone() == audit_before
+    assert db.execute(rows_sql).fetchall() == snapshot
+    # the JSON route agrees, and a second frozen request still writes nothing
+    assert _undo(client).status_code == 409
+    assert db.execute("SELECT count(*), max(audit_id) FROM audit_events").fetchone() == audit_before
+    assert db.execute(rows_sql).fetchall() == snapshot

@@ -50,7 +50,15 @@ if [ -z "$regclass" ]; then
     psql "$DSN" -v ON_ERROR_STOP=1 -tAc \
       "INSERT INTO schema_migrations (version) VALUES ('$v') ON CONFLICT DO NOTHING" >/dev/null
   done
-  echo "migrate: applied schema.sql, recorded $(psql "$DSN" -tAc 'SELECT count(*) FROM schema_migrations') base migrations"
+  # The count is only for the message, but it is a lookup like the others: inside an `echo`'s own
+  # `$(...)` its failure was swallowed and the line printed an empty count. By now the base schema
+  # IS applied and recorded, so this stop does not say "nothing applied" (`lookup_failed` does).
+  base_count="$(psql "$DSN" -v ON_ERROR_STOP=1 -tAc 'SELECT count(*) FROM schema_migrations')" \
+    || {
+      echo "migrate: cannot count the base migrations just recorded — stopping (psql's own error is above; the base schema is applied and recorded, run migrate.sh again to apply the rest)" >&2
+      exit 3
+    }
+  echo "migrate: applied schema.sql, recorded $base_count base migrations"
 fi
 
 for f in "$MIG_DIR"/[0-9][0-9][0-9]_*.sql; do

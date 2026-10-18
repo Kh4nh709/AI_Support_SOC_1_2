@@ -29,7 +29,10 @@ connection holding `ACCESS EXCLUSIVE` on the table: the actual statement waits a
 from __future__ import annotations
 
 import contextlib
+import csv
+import itertools
 import json
+import random
 import re
 import threading
 import time
@@ -43,13 +46,14 @@ import pytest
 from app.audit.events import EVENT_TYPES
 from app.infra import config
 from app.infra.auth import Claims
+from app.tier1 import labels
 from app.web import deps, main
 from app.web.routers import admin_audit
 from fastapi.testclient import TestClient
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from tests.scratch_db import scratch_database
+from tests.scratch_db import insert_alert, scratch_database
 
 AUDIT = "/api/admin/audit"
 PLACEHOLDER = "[đã ẩn]"
@@ -125,7 +129,8 @@ def test_every_alert_and_tier1_name_is_in_alerts_cases() -> None:
 
 def test_the_redaction_suffixes_and_the_placeholder_are_the_spec_ones() -> None:
     """Spec §5.8 as amended at `b9fe528`, plus `secretkey`, `privatekey` and `passphrase` (the
-    Director's ruling on the fix-round note): the normalised names a key must equal or end with."""
+    Director's ruling on the fix-round note), plus `passwd` and `pwd` (DEC-203 item 2b): the
+    normalised names a key must equal or end with."""
     assert set(admin_audit.REDACT_SUFFIXES) == {
         "password",
         "passwordhash",
@@ -136,8 +141,10 @@ def test_the_redaction_suffixes_and_the_placeholder_are_the_spec_ones() -> None:
         "secretkey",
         "privatekey",
         "passphrase",
+        "passwd",
+        "pwd",
     }
-    assert len(admin_audit.REDACT_SUFFIXES) == 9
+    assert len(admin_audit.REDACT_SUFFIXES) == 11
     assert admin_audit.REDACTED == PLACEHOLDER
     assert admin_audit.PAYLOAD_MAX_BYTES == 64 * 1024
     assert admin_audit.MAX_PAYLOAD_DEPTH == 32
@@ -212,6 +219,16 @@ CAUGHT_KEYS = [
     "passphrase",
     "Passphrase",
     "ssh_passphrase",
+    # DEC-203 item 2b: `passwd` and `pwd`
+    "passwd",
+    "pwd",
+    "Passwd",
+    "PWD",
+    "db_passwd",
+    "db-pwd",
+    "userPwd",
+    "old_pwd",
+    "root.passwd",
 ]
 # Keys it must leave alone: a plain substring rule would hide these (`key` would hide a setting's
 # name in `admin.settings_changed`'s `changes[].key`; `token` would hide a counter).
@@ -240,6 +257,13 @@ VISIBLE_KEYS = [
     "secret_keys",
     "passphrases",
     "passphrase_hint",
+    # `passwd` and `pwd` are suffixes, like the others: a longer word is not caught
+    "passwds",
+    "pwds",
+    "passwd_hint",
+    "pwd_changed_at",
+    "pw",
+    "cwd",
 ]
 
 
@@ -280,6 +304,333 @@ def test_a_settings_change_is_returned_whole_with_its_key_names() -> None:
         ]
     }
     assert admin_audit.redact(payload) == payload
+
+
+# DEC-203 item 2a: a string value that is a URL carrying a password is redacted whatever its key.
+URLS_WITH_A_PASSWORD = [
+    "postgresql://app_rw:hunter2@db:5432/soc",
+    "postgres://u:p@h/db",
+    "redis://default:s3cr3t@cache:6379/0",
+    "amqp+ssl://guest:guest@mq.internal",
+    "svn+https://deploy:tok-123@repo.example.com/trunk",
+    "postgresql://u:pw@h/db?sslmode=require",
+    "postgresql://u:p:q@h/db",  # a colon inside the password
+    "postgresql://u:p%40ss@h/db",
+    "HTTP://Admin:Pa55@host/",  # a URL scheme is not case-sensitive
+]
+# What the rule leaves alone: no password, no `@`, no scheme, or not a URL at all.
+STRINGS_THAT_ARE_NOT_A_URL_WITH_A_PASSWORD = [
+    "https://example.com/path",
+    "http://host:8080/path",  # host:port is not user:password, and there is no `@`
+    "postgresql://db:5432/soc",
+    "postgresql://app@db/soc",  # a user, no password
+    "ssh://deploy@example.com/org/repo",
+    "postgresql://app:@db/soc",  # an empty password
+    "postgresql://u:p w@h/db",  # whitespace ends the password before the `@`
+    "app:hunter2@db",  # no scheme
+    "://u:p@h",
+    "mailto:ana@example.com",
+    "not a url",
+    "",
+]
+# Keys that are NOT secret names: the value rule is what has to catch the URL under them.
+NON_SECRET_KEYS_FOR_URLS = [
+    "conn_str",
+    "DATABASE_URL",
+    "DATABASE_URL_OWNER",
+    "TEST_DATABASE_URL",
+    "error",
+    "note",
+    "url",
+    "k",
+]
+
+
+def test_the_url_password_pattern_is_the_one_dec_203_gives() -> None:
+    """DEC-203 as amended 18/10: no `^` anchor, case-insensitive; the rule is `search`."""
+    assert admin_audit.URL_WITH_PASSWORD.pattern == r"[a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s]+@"
+    assert admin_audit.URL_WITH_PASSWORD.flags & re.IGNORECASE
+    assert not any(admin_audit.is_secret_key(key) for key in NON_SECRET_KEYS_FOR_URLS)
+
+
+# DEC-203 as amended (18/10): the URL may sit ANYWHERE in the text, and the whole string goes.
+TEXTS_HOLDING_A_URL_WITH_A_PASSWORD = [
+    "could not connect to postgresql://app_rw:hunter2@db:5432/soc: connection timed out",
+    "(psycopg.OperationalError) DSN=postgres://u:hunter2@h/db sslmode=require",
+    "a postgresql://u:hunter2@h/db b",
+    "x" * 5000 + " redis://default:hunter2@cache:6379/0",  # far from the start, nothing before it
+    "https://example.com/ok then postgresql://u:hunter2@h/db",  # a harmless URL first
+    "retry\npostgresql://u:hunter2@h/db\nfailed",  # on its own line
+    "POSTGRESQL://U:hunter2@H and more",  # case variants
+    "Connection to Postgres://u:hunter2@h/db failed",
+    *(f"connection failed: {url} (retrying)" for url in URLS_WITH_A_PASSWORD),
+]
+HUNTER2 = "hunter2"
+
+
+@pytest.mark.parametrize("key", [*NON_SECRET_KEYS_FOR_URLS, "message"])
+@pytest.mark.parametrize("text", TEXTS_HOLDING_A_URL_WITH_A_PASSWORD)
+def test_a_url_carrying_a_password_anywhere_in_a_text_redacts_the_whole_string(
+    key: str, text: str
+) -> None:
+    assert admin_audit.is_secret_value(text) is True
+    assert admin_audit.redact({key: text}) == {key: PLACEHOLDER}
+    assert admin_audit.redact({"a": [{"b": [text, 1]}]}) == {"a": [{"b": [PLACEHOLDER, 1]}]}
+    assert admin_audit.redact(text) == PLACEHOLDER
+
+
+def test_a_dsn_in_the_middle_of_an_error_text_is_redacted_through_the_route_payload() -> None:
+    """The case DEC-203 names, an error text that carries a DSN: nothing of the password survives."""
+    text = '{"error": "could not connect to postgresql://app_rw:hunter2@db:5432/soc", "n": 3}'
+    out = admin_audit._payload(text, len(text), "job.exhausted")
+    assert out == {"error": PLACEHOLDER, "n": 3}
+    assert HUNTER2 not in json.dumps(out)
+
+
+def test_a_url_at_the_start_is_still_redacted() -> None:
+    assert admin_audit.redact({"k": "postgresql://u:hunter2@h/db"}) == {"k": PLACEHOLDER}
+    assert admin_audit.redact({"k": "postgresql://u:hunter2@h/db and then some"}) == {
+        "k": PLACEHOLDER
+    }
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "http://host/path",  # no password
+        "see https://example.com/docs for details",
+        "failed to connect to the database",  # plain text
+        "user app, password hunter2, host db",
+        "app:hunter2@db",  # no scheme
+        "could not connect to postgresql://app@db/soc",  # a user, no password
+        "see http://h:80/path then mail ana@example.com",  # a port, an `@` that is not in the URL
+        "x" * 5000,
+    ],
+)
+def test_a_text_with_no_url_password_stays_visible_however_long(text: str) -> None:
+    assert admin_audit.is_secret_value(text) is False
+    assert admin_audit.redact({"message": text}) == {"message": text}
+
+
+def test_the_linear_matcher_agrees_with_the_pattern() -> None:
+    """`is_secret_value` does not run `URL_WITH_PASSWORD.search` (see the next test: that regex is
+    quadratic); it must still give the pattern's answer. Every sequence of up to six tokens from a
+    set built to break a hand-written scan (scheme and non-scheme characters, `://`, the
+    separators, `@`, whitespace), then 60,000 random sequences of up to 24 tokens from a larger
+    one: whitespace of every kind `\\s` knows, and the two non-ASCII letters that
+    `re.IGNORECASE` folds onto `[a-z]`."""
+    reference = admin_audit.URL_WITH_PASSWORD
+    tokens = ["a", "1", "://", ":", "/", "@", " ", "u"]
+    for length in range(7):
+        for chosen in itertools.product(tokens, repeat=length):
+            text = "".join(chosen)
+            assert admin_audit.is_secret_value(text) is (reference.search(text) is not None), text
+    wider = [*tokens, "Z", "+", ".", "-", "\n", "\x1c", "\x85", "\u00a0", "\u2003", "\u017f"]
+    wider += ["\u212a", "\u00e9", "http://", "u:p@", "://u:p@h", "@@", "::", "//"]
+    rng = random.Random(203)
+    for _ in range(60_000):
+        text = "".join(rng.choice(wider) for _ in range(rng.randint(0, 24)))
+        assert admin_audit.is_secret_value(text) is (reference.search(text) is not None), text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "a" * 65_536,  # one long run of scheme characters: the regex retries from every position
+        "a" * 65_000 + "://",
+        "ab1." * 16_000,
+        "x://y:" * 10_000 + " ",  # dense `://`, each attempt scanning on to the same whitespace
+        "x://" * 16_000,
+        "x://y:" * 10_000,  # no whitespace and no `@` at all
+        ("a" * 60 + "://u:" + "p" * 60 + " ") * 500,
+        "@" * 65_536,
+        "://@" * 16_000,
+        "a@" * 32_000,
+        "x:///" * 12_000 + "@",  # dense `://`, one `@`, every attempt refused at once (no user)
+        "a" * 65_000 + "://@",
+    ],
+    ids=[
+        "letters",
+        "letters-then-sep",
+        "mixed-run",
+        "dense-ws",
+        "dense-sep",
+        "dense-no-end",
+        "many-attempts",
+        "ats",
+        "sep-ats",
+        "a-ats",
+        "dense-one-at",
+        "run-then-sep-at",
+    ],
+)
+def test_a_64_kib_string_is_judged_in_well_under_a_second(text: str) -> None:
+    """The unanchored pattern, searched as it stands, takes about 16 s on `"a" * 65536` (every start
+    position rescans the run). A payload is capped at 64 KiB and a page holds 100 of them, so the
+    judgement must be linear. The bound is 20 times the measured time, not a benchmark."""
+    started = time.perf_counter()
+    assert admin_audit.is_secret_value(text) is False
+    assert admin_audit.redact({"k": text}) == {"k": text}
+    assert time.perf_counter() - started < 1.0
+
+
+def test_a_harmless_text_that_looks_like_a_url_with_a_password_is_hidden_and_that_is_accepted() -> (
+    None
+):
+    """DEC-203 as amended 18/10 accepts this: `http://h:80/a@b` reads as `scheme://user:pass@` (the
+    "user" is `h`, the "password" is `80/a`), so a harmless text is hidden as a whole. Leaking a
+    database password into an audit view is the worse error. If the rule is ever narrowed, this
+    test is the one to change, with a decision."""
+    text = "see http://h:80/a@b"
+    assert admin_audit.is_secret_value(text) is True
+    assert admin_audit.redact({"message": text}) == {"message": PLACEHOLDER}
+
+
+@pytest.mark.parametrize("key", NON_SECRET_KEYS_FOR_URLS)
+@pytest.mark.parametrize("url", URLS_WITH_A_PASSWORD)
+def test_a_url_carrying_a_password_is_redacted_under_any_key(key: str, url: str) -> None:
+    assert admin_audit.is_secret_value(url) is True
+    assert admin_audit.redact({key: url}) == {key: PLACEHOLDER}
+    deep = {"a": [{"b": {key: url, "keep": 1}}]}
+    assert admin_audit.redact(deep) == {"a": [{"b": {key: PLACEHOLDER, "keep": 1}}]}
+
+
+def test_a_url_carrying_a_password_is_redacted_in_a_list_and_as_a_bare_payload() -> None:
+    url = URLS_WITH_A_PASSWORD[0]
+    assert admin_audit.redact(url) == PLACEHOLDER
+    assert admin_audit.redact([url, "visible", [url, 1]]) == [
+        PLACEHOLDER,
+        "visible",
+        [PLACEHOLDER, 1],
+    ]
+    mixed = {"urls": [url, "https://example.com/ok"], "n": 2}
+    assert admin_audit.redact(mixed) == {"urls": [PLACEHOLDER, "https://example.com/ok"], "n": 2}
+    assert url not in json.dumps(admin_audit.redact(mixed))
+
+
+@pytest.mark.parametrize("text", STRINGS_THAT_ARE_NOT_A_URL_WITH_A_PASSWORD)
+def test_a_string_that_is_not_a_url_with_a_password_stays_visible(text: str) -> None:
+    assert admin_audit.is_secret_value(text) is False
+    assert admin_audit.redact({"conn_str": text}) == {"conn_str": text}
+    assert admin_audit.redact({"a": [text, {"b": text}]}) == {"a": [text, {"b": text}]}
+    assert admin_audit.redact(text) == text
+
+
+@pytest.mark.parametrize("value", [None, True, False, 0, 1.5, [], {}, b"x", ("a",)])
+def test_only_a_string_can_be_a_secret_value(value: Any) -> None:
+    assert admin_audit.is_secret_value(value) is False
+
+
+# DEC-203 item 2c: a boolean or null is never redacted, not even under a secret key.
+@pytest.mark.parametrize(
+    "key",
+    ["password", "token", "dsn", "secret", "api_key", "passwd", "pwd", "client_secret"]
+    + ["has_password", "is_secret", "hasToken", "db_pwd"],
+)
+@pytest.mark.parametrize("value", [None, True, False], ids=["null", "true", "false"])
+def test_a_boolean_or_null_is_never_redacted_even_under_a_secret_key(key: str, value: Any) -> None:
+    assert admin_audit.is_secret_key(key) is True  # the premise: the key rule alone would hide it
+    out = admin_audit.redact({key: value})
+    assert out == {key: value} and out[key] is value
+    deep = admin_audit.redact({"a": [{"b": {key: value}}]})
+    assert deep["a"][0]["b"][key] is value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [0, 1, -1, 1.5, "", "x", "true", "null", [], {}, [True, None], {"on": True}, {"a": None}],
+)
+def test_anything_else_under_a_secret_key_is_still_redacted_whole(value: Any) -> None:
+    """The exception is the bool and the null themselves: 0, "true" and a container holding a
+    flag are not flags, and a number or text can carry a secret."""
+    assert admin_audit.redact({"password": value}) == {"password": PLACEHOLDER}
+    assert admin_audit.redact({"x": {"api_key": value}}) == {"x": {"api_key": PLACEHOLDER}}
+
+
+# DEC-204 (row 53): the verdict of a `label.created` event, hidden from every viewer.
+LABEL_PAYLOAD = {
+    "alert_id": "p11t20-alert",
+    "labeler_id": "00000000-0000-0000-0000-00000000a001",
+    "label": "false_positive",
+    "confidence": 3,
+    "gold_set": "G1",
+}
+
+
+def test_the_label_keys_are_the_two_dec_204_names_and_the_event_type_is_label_created() -> None:
+    assert set(admin_audit.LABEL_KEYS) == {"label", "confidence"}
+    assert admin_audit.BLIND_EVENT_TYPES == frozenset({"label.created"})
+
+
+def test_a_label_created_payload_loses_label_and_confidence_and_keeps_the_rest() -> None:
+    out = admin_audit._payload(json.dumps(LABEL_PAYLOAD), 100, "label.created")
+    assert out == {**LABEL_PAYLOAD, "label": PLACEHOLDER, "confidence": PLACEHOLDER}
+    undo = {"undo": True, "alert_id": "a1", "labeler_id": "u1"}
+    assert admin_audit._payload(json.dumps(undo), 100, "label.created") == undo
+    digest = {**LABEL_PAYLOAD, "confidence": None, "gold_set": None, "source": "digest"}
+    assert admin_audit._payload(json.dumps(digest), 100, "label.created") == {
+        **digest,
+        "label": PLACEHOLDER,
+        "confidence": PLACEHOLDER,  # a null confidence too: the rule is on the key, not the value
+    }
+
+
+def test_label_and_confidence_are_hidden_at_any_depth_of_a_label_created_payload() -> None:
+    nested = {
+        "alert_id": "a1",
+        "history": [
+            {"label": "benign", "confidence": 2, "labeler_id": "u1"},
+            [{"detail": {"Label": "escalate", "CONFIDENCE": 1, "con_fidence": 3, "keep": "x"}}],
+        ],
+        "label": {"deeper": ["false_positive"]},
+    }
+    out = admin_audit._payload(json.dumps(nested), 100, "label.created")
+    assert out == {
+        "alert_id": "a1",
+        "history": [
+            {"label": PLACEHOLDER, "confidence": PLACEHOLDER, "labeler_id": "u1"},
+            [
+                {
+                    "detail": {
+                        "Label": PLACEHOLDER,
+                        "CONFIDENCE": PLACEHOLDER,
+                        "con_fidence": PLACEHOLDER,
+                        "keep": "x",
+                    }
+                }
+            ],
+        ],
+        "label": PLACEHOLDER,
+    }
+    dumped = json.dumps(out, ensure_ascii=False)
+    for verdict in ("benign", "escalate", "false_positive"):
+        assert verdict not in dumped
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["labeler_id", "labeler", "labels", "label_count", "confidence_level", "gold_set", "undo"],
+)
+def test_other_keys_of_a_label_created_payload_stay_visible(key: str) -> None:
+    out = admin_audit._payload(json.dumps({key: "visible"}), 100, "label.created")
+    assert out == {key: "visible"}
+
+
+@pytest.mark.parametrize(
+    "event_type", ["triage.suggested", "tier1.decided", "admin.settings_changed", "alert.received"]
+)
+def test_label_and_confidence_of_every_other_event_type_stay_visible(event_type: str) -> None:
+    """`triage.suggested` carries the model's own `confidence`: not a labeller's, and not hidden."""
+    payload = {"label": "x", "confidence": "high", "suggested_action": "escalate"}
+    assert admin_audit._payload(json.dumps(payload), 100, event_type) == payload
+
+
+def test_the_label_rule_does_not_change_what_a_plain_redact_does() -> None:
+    assert admin_audit.redact(LABEL_PAYLOAD) == LABEL_PAYLOAD  # no `hide` given: as before
+    both = admin_audit.redact(
+        {"label": "a", "password": "p", "n": 1}, hide=frozenset(admin_audit.LABEL_KEYS)
+    )
+    assert both == {"label": PLACEHOLDER, "password": PLACEHOLDER, "n": 1}
 
 
 def test_redaction_returns_everything_else_unchanged_and_unstringified() -> None:
@@ -1103,6 +1454,207 @@ def test_near_miss_secret_names_are_redacted_through_the_route_and_counters_are_
         "digest": {"token_hash": "abc123", "public_key": "ssh-ed25519 AAAA"},
     }
     for leaked in (f"leak-{n}" for n in range(1, 12)):
+        assert leaked not in resp.text, leaked
+
+
+def _write_candidates(path: Any, alert_ids: list[str]) -> Any:
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(
+            fh,
+            fieldnames=[
+                "cluster_id",
+                "gold_set",
+                "alert_id",
+                "category",
+                "severity",
+                "occurrence_count",
+                "first_seen",
+                "last_seen",
+            ],
+        )
+        writer.writeheader()
+        for alert_id in alert_ids:
+            when = datetime(2026, 9, 1, tzinfo=UTC).isoformat()
+            writer.writerow(
+                {
+                    "cluster_id": alert_id,
+                    "gold_set": "G1",
+                    "alert_id": alert_id,
+                    "category": "other",
+                    "severity": "medium",
+                    "occurrence_count": 1,
+                    "first_seen": when,
+                    "last_seen": when,
+                }
+            )
+    return path
+
+
+def _strings(value: Any) -> list[str]:
+    """Every string value (and key) in a JSON tree."""
+    if isinstance(value, dict):
+        return [s for k, v in value.items() for s in (k, *_strings(v))]
+    if isinstance(value, list):
+        return [s for item in value for s in _strings(item)]
+    return [value] if isinstance(value, str) else []
+
+
+@pytest.mark.db
+def test_the_audit_never_shows_one_labellers_label_or_confidence_to_the_other(
+    client, tmp_path, monkeypatch
+) -> None:
+    """Row 53 (DEC-204). Two labellers, both admins, label the same cluster differently through the
+    real `labels.submit_label` (which writes the real `label.created` payload) and one of them
+    undoes a label; the audit answer each of them gets lists all four events with who, when and
+    which alert, and carries neither verdict nor either confidence. The fixture's paths are
+    `tmp_path`: nothing under `eval/` is read."""
+    _, db, _ = client
+    uid = uuid.uuid4().hex[:8]
+    a, b = _user(db, f"p11t20-a-{uid}", "admin"), _user(db, f"p11t20-b-{uid}", "admin")
+    x, y = f"p11t20-x-{uid}", f"p11t20-y-{uid}"
+    for alert_id in (x, y):
+        insert_alert(db, alert_id)
+    candidates = _write_candidates(tmp_path / "gold_candidates.csv", [x, y])
+    monkeypatch.setattr(labels, "FREEZE_MARKER", tmp_path / "absent-marker")
+
+    def submit(who: str, cluster: str, label: str, confidence: int) -> None:
+        labels.submit_label(
+            db,
+            labeler_id=who,
+            cluster_id=cluster,
+            label=label,
+            confidence=confidence,
+            note=None,
+            candidates_path=candidates,
+        )
+
+    submit(a, x, "false_positive", 3)  # A's verdict on X ...
+    submit(b, x, "escalate", 1)  # ... and B's, different
+    submit(a, y, "benign", 2)
+    db.execute(  # one transaction has one now(): make Y the newest of A's labels
+        "UPDATE triage_labels SET created_at = created_at - interval '1 minute' "
+        "WHERE alert_id = %s AND labeler_id = %s",
+        (x, a),
+    )
+    assert labels.undo_last(db, a, freeze_marker=tmp_path / "absent-marker") == y  # a 4th event
+    stored = db.execute(
+        "SELECT payload FROM audit_events WHERE event_type = 'label.created' "
+        "AND subject_id IN (%s, %s)",
+        (x, y),
+    ).fetchall()
+    assert len(stored) == 4
+    assert {p["label"] for (p,) in stored if "label" in p} == {
+        "false_positive",
+        "escalate",
+        "benign",
+    }
+
+    for viewer, other in ((a, b), (b, a)):  # A's answer and B's: neither shows either verdict
+        claims = Claims(user_id=viewer, username=viewer, role="admin", iat=0.0, exp=0.0)
+        _override(db, claims)
+        resp = TestClient(main.app).get(AUDIT, params={"group": "configuration", "limit": 100})
+        assert resp.status_code == 200, resp.text
+        events = [
+            e
+            for e in resp.json()["events"]
+            if e["event_type"] == "label.created" and e["subject_id"] in (x, y)
+        ]
+        assert len(events) == 4  # still listed: that someone labelled is accountability
+        votes = [e for e in events if "undo" not in e["payload"]]
+        undo = [e for e in events if "undo" in e["payload"]]
+        assert sorted(e["payload"]["labeler_id"] for e in votes) == sorted([a, b, a])
+        for e in votes:  # who, which alert and which gold set are all still there
+            assert e["payload"]["label"] == PLACEHOLDER
+            assert e["payload"]["confidence"] == PLACEHOLDER
+            assert e["payload"]["gold_set"] == "G1"
+            assert e["payload"]["alert_id"] == e["subject_id"] and e["created_at"]
+        assert [e["payload"] for e in undo] == [{"undo": True, "alert_id": y, "labeler_id": a}]
+        seen = {s for e in events for s in _strings(e["payload"])}
+        assert seen.isdisjoint({"false_positive", "benign", "escalate"}), (viewer, other, seen)
+        for e in votes:  # `confidence` was an int: no number of the labellers' survives either
+            assert e["payload"]["confidence"] not in (1, 2, 3)
+
+
+@pytest.mark.db
+def test_a_label_created_event_is_redacted_at_any_depth_through_the_route(client) -> None:
+    """The writer's payload is flat today; the rule is not: a nested verdict goes too."""
+    tc, db, _ = client
+    _event(
+        db,
+        "label.created",
+        "p11t20-deep",
+        role="admin",
+        actor_id=_user(db, f"p11t20-deep-{uuid.uuid4().hex[:6]}", "admin"),
+        payload={
+            "alert_id": "p11t20-deep",
+            "gold_set": "G1",
+            "history": [{"label": "benign", "confidence": 2, "labeler_id": "u1"}],
+            "wrapper": {"inner": [[{"Label": "escalate", "confidence": None}]]},
+        },
+    )
+    resp = tc.get(AUDIT, params={"subject": "p11t20-deep"})
+    (event,) = resp.json()["events"]
+    assert event["payload"] == {
+        "alert_id": "p11t20-deep",
+        "gold_set": "G1",
+        "history": [{"label": PLACEHOLDER, "confidence": PLACEHOLDER, "labeler_id": "u1"}],
+        "wrapper": {"inner": [[{"Label": PLACEHOLDER, "confidence": PLACEHOLDER}]]},
+    }
+    assert "benign" not in resp.text and "escalate" not in resp.text
+
+
+@pytest.mark.db
+def test_the_model_confidence_of_triage_suggested_is_not_a_label_and_stays_visible(client) -> None:
+    tc, db, _ = client
+    _event(
+        db,
+        "triage.suggested",
+        "p11t20-model",
+        role="llm",
+        payload={"suggested_action": "benign", "confidence": "high", "forced": False},
+    )
+    (event,) = tc.get(AUDIT, params={"subject": "p11t20-model"}).json()["events"]
+    assert event["payload"]["confidence"] == "high"
+
+
+@pytest.mark.db
+def test_the_dec_203_rules_hold_through_the_route(client) -> None:
+    """Row 31: a URL with a password under any key, `passwd` and `pwd`, and a flag that stays."""
+    tc, db, _ = client
+    _event(
+        db,
+        "admin.settings_changed",
+        "settings",
+        payload={
+            "conn_str": "postgresql://app_rw:leak-1@db:5432/soc",
+            "DATABASE_URL_OWNER": "postgresql://soc_owner:leak-2@db:5432/soc",
+            "attempts": [
+                {"db_passwd": "leak-3", "pwd": "leak-4", "ok": False},
+                {"urls": ["redis://default:leak-5@cache:6379/0", "https://example.com/ok"]},
+            ],
+            "has_password": True,
+            "is_secret": False,
+            "password": None,
+            "host_url": "https://example.com/docs",
+            "dsn_host": "db",
+        },
+    )
+    resp = _get(tc)
+    (event,) = resp.json()["events"]
+    assert event["payload"] == {
+        "conn_str": PLACEHOLDER,
+        "DATABASE_URL_OWNER": PLACEHOLDER,
+        "attempts": [
+            {"db_passwd": PLACEHOLDER, "pwd": PLACEHOLDER, "ok": False},
+            {"urls": [PLACEHOLDER, "https://example.com/ok"]},
+        ],
+        "has_password": True,
+        "is_secret": False,
+        "password": None,
+        "host_url": "https://example.com/docs",
+        "dsn_host": "db",
+    }
+    for leaked in (f"leak-{n}" for n in range(1, 6)):
         assert leaked not in resp.text, leaked
 
 

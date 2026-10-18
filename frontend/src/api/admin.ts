@@ -405,7 +405,7 @@ export function putLlmLimits(body: LimitsChange): Promise<{ limits: LimitsOut }>
 
 // --- overview (admin_overview.py, web/main.py) ------------------------------------------------------------
 
-/** The nine sections of the overview; each fails alone (`errors[]`). */
+/** The ten sections of the overview; each fails alone (`errors[]`). `llm_month` is DEC-203's. */
 export const OVERVIEW_SECTIONS = [
   "alerts_by_day",
   "by_source",
@@ -416,6 +416,7 @@ export const OVERVIEW_SECTIONS = [
   "health",
   "failed_jobs",
   "inventory",
+  "llm_month",
 ] as const;
 export type OverviewSection = (typeof OVERVIEW_SECTIONS)[number];
 
@@ -467,6 +468,12 @@ export type OverviewResponse = {
     iocs: number;
     loaded_at: string | null;
   } | null;
+  /**
+   * The calendar month's LLM spend against the cap (DEC-203): the figures of `LlmUsage["month"]`, from the same
+   * code. `pct` is floored to one decimal; `cap_usd` and `pct` are null when the limits cannot be read (not an
+   * error). The section itself is null, with an `errors` entry, only when the spend query failed.
+   */
+  llm_month: { spent_usd: number; cap_usd: number | null; pct: number | null } | null;
 };
 
 export function getOverview(range: AdminRange): Promise<OverviewResponse> {

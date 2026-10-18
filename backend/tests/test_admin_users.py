@@ -459,6 +459,13 @@ def test_create_refuses_the_audit_actor_keywords_with_exactly_the_reserved_reaso
     assert rows == 0
 
 
+def test_the_web_and_the_cli_refuse_the_same_reserved_set() -> None:
+    """P11-T20 row 36. One set, defined in `infra/auth.py` (which the CLI's `create_user` reads),
+    and imported by the web create: the two cannot drift."""
+    assert admin_users.RESERVED_USERNAMES is auth.RESERVED_USERNAMES
+    assert auth.RESERVED_USERNAMES == frozenset({"system", "llm"})
+
+
 def test_the_first_bad_field_is_the_one_reported_in_the_form_order(client, sdb):
     _, _, headers = _admin(client, sdb)
     body = _new_body(username="x", display_name="", role="root", password="short")

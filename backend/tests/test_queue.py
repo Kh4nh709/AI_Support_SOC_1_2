@@ -1075,6 +1075,89 @@ def test_latest_suggestions_equals_latest_suggestion_for_each_alert_in_one_state
     assert latest_suggestions(counting, []) == {} and counting.n == 0
 
 
+def _insert_tied_run(
+    conn: psycopg.Connection, alert_id: str, run_id: str, action: str | None
+) -> None:
+    """A proposer run with a chosen `run_id`, at THIS transaction's `now()`: every call inside one
+    test has the same `created_at`, so the rows tie. `action=None` is a failed run (no `result`)."""
+    conn.execute(
+        "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, system_prompt, "
+        "user_message, result, role, gate_result, stopped_by, created_at) "
+        "VALUES (%s, 'triage', 'alert', %s, 's', 'u', %s::jsonb, 'proposer', %s::jsonb, %s, now())",
+        (
+            run_id,
+            alert_id,
+            None if action is None else json.dumps({**RESULT, "suggested_action": action}),
+            None if action is None else json.dumps(GATE),
+            "schema" if action is None else None,
+        ),
+    )
+
+
+def _tied_run_id(slot: int, rank: int) -> str:
+    """A uuid per (alert slot, rank): within one slot a higher `rank` is a higher `run_id`."""
+    return f"00000000-0000-0000-0000-{slot:08x}{rank:04x}"
+
+
+def _seed_tied_proposer_runs(db) -> dict[str, str]:
+    """Six queue alerts, each with three proposer runs at the same `created_at`, inserted in each of
+    the six orders of their ids, so that no rule of the form "the first / the last row met" can
+    pass. The highest id is `escalate`. Returns `{alert_id: that run's id}`."""
+    actions = {1: "false_positive", 2: "needs_review", 3: "escalate"}
+    expected: dict[str, str] = {}
+    for slot, order in enumerate(itertools.permutations(actions), start=1):
+        alert_id = _queued(db)
+        for rank in order:
+            _insert_tied_run(db, alert_id, _tied_run_id(slot, rank), actions[rank])
+        expected[alert_id] = _tied_run_id(slot, 3)
+    return expected
+
+
+@pytest.mark.db
+def test_proposer_runs_at_one_instant_are_broken_by_run_id_in_both_readers(db):
+    """P11-T20 row 32 (P11-T20 review m1). Two proposer runs with the same `created_at` have no
+    "latest": without a second sort key the database returns whichever it meets first, and the
+    two readers could name different runs (the digest and the alert page showing different ①
+    verdicts). The tie-break is `run_id DESC`, in `latest_suggestion` AND in `latest_suggestions`
+    (and in the queue's own join: the next test)."""
+    expected = _seed_tied_proposer_runs(db)
+    for alert_id, run_id in expected.items():
+        got = latest_suggestion(db, alert_id)
+        assert got is not None and got.run_id == run_id, alert_id
+        assert got.suggested_action == "escalate"
+    batched = latest_suggestions(db, list(expected))
+    assert {alert_id: s.run_id for alert_id, s in batched.items()} == expected
+
+    # The tie-break picks the run, and the run is judged after: the highest id FAILED, so there is
+    # no suggestion, as for any failed latest run (an older good run does not stand in).
+    failed_high = _queued(db)
+    _insert_tied_run(db, failed_high, _tied_run_id(9, 3), None)
+    _insert_tied_run(db, failed_high, _tied_run_id(9, 1), "escalate")
+    _insert_tied_run(db, failed_high, _tied_run_id(9, 2), "needs_review")
+    assert latest_suggestion(db, failed_high) is None
+    assert failed_high not in latest_suggestions(db, [failed_high, *expected])
+
+
+@pytest.mark.db
+def test_the_queue_row_shows_the_same_run_as_the_alert_page_when_runs_tie(db):
+    """P11-T20 row 32, the third reader (`_QUEUE_SQL`'s LATERAL join). The queue list picks "the
+    latest proposer run" too, and with a tie and no second sort key it named whichever run the
+    database met first, so a queue row and the alert page (`latest_suggestion`) could show different
+    runs. The same six tied alerts as the two readers' test: each queue row carries the run with
+    the highest `run_id`, which is the run `latest_suggestion` answers for it."""
+    expected = _seed_tied_proposer_runs(db)
+    failed_high = _queued(db)  # the highest id FAILED: the row shows that run, with no action
+    _insert_tied_run(db, failed_high, _tied_run_id(9, 3), None)
+    _insert_tied_run(db, failed_high, _tied_run_id(9, 1), "escalate")
+    for alert_id, run_id in expected.items():
+        row = _row(db, alert_id)
+        assert (row["run_id"], row["suggested_action"]) == (run_id, "escalate"), alert_id
+        assert row["run_id"] == latest_suggestion(db, alert_id).run_id
+    row = _row(db, failed_high)
+    assert (row["run_id"], row["suggested_action"]) == (_tied_run_id(9, 3), None)
+    assert latest_suggestion(db, failed_high) is None  # the alert page agrees: no suggestion
+
+
 # ---------------------------------------------------------------------------
 # get_alert_view
 # ---------------------------------------------------------------------------

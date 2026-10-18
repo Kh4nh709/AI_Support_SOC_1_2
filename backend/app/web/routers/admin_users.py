@@ -56,7 +56,7 @@ from psycopg.rows import dict_row
 
 from app.audit.events import write_event
 from app.infra import auth
-from app.infra.auth import ROLES, Claims
+from app.infra.auth import RESERVED_USERNAMES, ROLES, Claims
 from app.web.deps import ROLE_TO_ACTOR, Conn, require_role
 
 router = APIRouter()
@@ -66,10 +66,8 @@ Admin = Annotated[Claims, Depends(require_role("admin"))]
 PASSWORD_MIN_CHARS = 12  # spec decision 1: the web create and reset; the CLI keeps its own rule
 PASSWORD_MAX_CHARS = 256
 USERNAME_RE = r"^[a-z0-9._-]{3,32}$"
-#: `actor=system` and `actor=llm` are the audit page's ACTOR KEYWORDS: they select the
-#: `actor_role` and win over a username (`admin_audit.py`), so the rows of a user called `system`
-#: or `llm` could never be filtered by that user. Refused on create: 422 `reserved` (P11-T20 row 11).
-RESERVED_USERNAMES = frozenset({"system", "llm"})
+# `RESERVED_USERNAMES` (`system`, `llm`) is `infra.auth`'s, imported above: one set for this create
+# (422 `reserved`, P11-T20 row 11) and for the CLI's `create_user` (P11-T20 row 36).
 DISPLAY_NAME_MAX_CHARS = 100
 
 _USERNAME = re.compile(USERNAME_RE)

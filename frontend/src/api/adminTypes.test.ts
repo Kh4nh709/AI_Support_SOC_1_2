@@ -245,9 +245,14 @@ const ENTRIES: Entry[] = [
     backend: () => dictKeys(llm(), /return \{(?=\s*"range": range_)/),
   },
   {
+    // `_month` is `month_figures`' three keys spread, plus `projected_usd` (P11-T20 row 50 shared them with
+    // the overview's `llm_month`).
     path: "LlmUsage.month",
     keys: ["spent_usd", "cap_usd", "pct", "projected_usd"],
-    backend: () => dictKeys(llm(), /return \{(?=\s*"spent_usd")/),
+    backend: () => [
+      ...dictKeys(llm(), /return \{(?=\s*"spent_usd")/),
+      ...dictKeys(llm(), /return \{(?=\s*\*\*month_figures\()/),
+    ],
   },
   {
     path: "LlmUsage.quota",
@@ -363,6 +368,12 @@ const ENTRIES: Entry[] = [
     path: "OverviewResponse.inventory",
     keys: ["assets", "identities", "iocs", "loaded_at"],
     backend: () => dictKeys(overview(), /return \{(?=\s*"assets")/),
+  },
+  {
+    // DEC-203: the same three figures as `LlmUsage.month`, built by `admin_llm.month_figures`.
+    path: "OverviewResponse.llm_month",
+    keys: ["spent_usd", "cap_usd", "pct"],
+    backend: () => dictKeys(llm(), /return \{(?=\s*"spent_usd")/),
   },
   {
     path: "fn:retryJob",
