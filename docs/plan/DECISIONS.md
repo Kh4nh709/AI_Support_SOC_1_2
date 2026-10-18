@@ -3434,3 +3434,7 @@ Decision:
   3. The Owner reads the labels from `triage_labels` and the export tools, as before. The audit page is not a way to read them.
   4. The hint on the labelling page, "Nhãn của bạn không hiện với người gán nhãn còn lại", is then true on the audit page too.
 Supersedes: none. It narrows P11-T09's answers, which no page used yet.
+Amended 18/10 (P11-T20 part 2 Coder, deviation 2; the Director's ruling):
+- **Item 2(a) corrected.** The text said both "a string value matching `^…`" and "a DSN inside an error text". Those disagree, because the `^` anchor catches only a string that begins with the URL.
+- **The ruling: no anchor.** A string value is redacted, as a whole, when it contains `scheme://user:password@` anywhere. The pattern is `[a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s]+@`, case-insensitive.
+- **The cost, accepted.** A harmless text such as `see http://h:80/a@b` is hidden too. Leaking a database password into an audit view is the worse error, and the audit payload stays readable in the table it came from.

@@ -21,6 +21,11 @@ vi.mock("./features/tier1/QueuePage", () => ({
 vi.mock("./features/tier1/AlertPage", () => ({
   AlertPage: () => <h1>{S.alert.infoHeading}</h1>,
 }));
+// The labelling page reads the label routes with the labeller named in the session's token (LabelsPage.test.tsx
+// tests it); this file looks for its place and its title.
+vi.mock("./features/admin/LabelsPage", () => ({
+  LabelsPage: () => <h1>{S.admin.title.labels}</h1>,
+}));
 
 // The rules page (P11-T14) reads the backend too, and RulesPage.test.tsx tests it: the route test looks for its place.
 vi.mock("./features/admin/RulesPage", () => ({

@@ -107,10 +107,18 @@ const PAGES: [name: string, Page: () => ReactNode, title: string][] = [
 
 // The pages that are built are no placeholders: each has its own test file, and needs a query client, a
 // session and an API this file does not give (P11-T11: OverviewPage; P11-T12: UsersPage; P11-T13: LlmPage;
-// P11-T14: RulesPage; P11-T15: DigestPage; P11-T17: AuditPage; each test file covers its page, axe
-// included). A page task adds its page's name here when it replaces the placeholder. The title test below
-// still holds the seven titles.
-const BUILT = ["OverviewPage", "LlmPage", "UsersPage", "DigestPage", "RulesPage", "AuditPage"];
+// P11-T14: RulesPage; P11-T15: DigestPage; P11-T16: LabelsPage; P11-T17: AuditPage; each test file covers its
+// page, axe included). A page task adds its page's name here when it replaces the placeholder. The title test
+// below still holds the seven titles.
+const BUILT = [
+  "OverviewPage",
+  "LlmPage",
+  "UsersPage",
+  "DigestPage",
+  "RulesPage",
+  "LabelsPage",
+  "AuditPage",
+];
 const PLACEHOLDERS = PAGES.filter(([name]) => !BUILT.includes(name));
 
 describe("the placeholder pages", () => {
