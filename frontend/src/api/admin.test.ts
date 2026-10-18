@@ -31,6 +31,7 @@ import {
   unlockUser,
   updateUser,
   type AdminError,
+  type AdminReason,
 } from "./admin";
 
 const server = setupServer();
@@ -422,119 +423,162 @@ describe("ADMIN_LIMITS", () => {
     // `$` would admit a trailing newline; the server uses fullmatch.
     expect(ADMIN_LIMITS.username.test("abc\n")).toBe(false);
   });
+
+  // The two actor names of an audit row that is not a person (`system`, `llm`): the create route refuses
+  // them as usernames (P11-T20), because the audit page's actor filter reads them as roles, not as users.
+  it("lists the usernames the create form must refuse before it posts", () => {
+    expect([...ADMIN_LIMITS.reservedUsernames]).toEqual(["system", "llm"]);
+    for (const name of ADMIN_LIMITS.reservedUsernames) {
+      // They fit the username pattern: only the list keeps them out.
+      expect(ADMIN_LIMITS.username.test(name)).toBe(true);
+    }
+  });
 });
+
+/** A `detail` as the server answered it, at a status (a conflict unless a test says another). */
+const parse = (detail: unknown, status = 409): AdminError => parseAdminDetail(detail, status);
 
 describe("parseAdminDetail", () => {
   it.each(ADMIN_REASONS)("reads {reason: %s} as a reason", (reason) => {
-    expect(parseAdminDetail({ reason })).toEqual({ kind: "reason", reason, extra: {} });
+    expect(parse({ reason })).toEqual({ kind: "reason", status: 409, reason, extra: {} });
+  });
+
+  it("carries the status of the answer in every kind", () => {
+    expect(parse({ reason: "not_found" }, 404).status).toBe(404);
+    expect(parse({ field: "username", reason: "invalid" }, 422).status).toBe(422);
+    expect(parse("a text", 422).status).toBe(422);
+    expect(parse(["a text"], 422).status).toBe(422);
+    expect(parse(null, 500).status).toBe(500);
   });
 
   it("keeps the rest of the object as `extra`", () => {
     const row = { alert_id: "1661877" };
-    expect(parseAdminDetail({ reason: "already_reviewed", row })).toEqual({
+    expect(parse({ reason: "already_reviewed", row })).toEqual({
       kind: "reason",
+      status: 409,
       reason: "already_reviewed",
       extra: { row },
     });
   });
 
   it("reads {field, reason} as a field error", () => {
-    expect(parseAdminDetail({ field: "username", reason: "invalid" })).toEqual({
+    expect(parse({ field: "username", reason: "invalid" }, 422)).toEqual({
       kind: "field",
+      status: 422,
       field: "username",
       reason: "invalid",
     });
-    expect(parseAdminDetail({ field: "verdict", reason: "invalid" })).toEqual({
+    expect(parse({ field: "verdict", reason: "invalid" }, 422)).toEqual({
       kind: "field",
+      status: 422,
       field: "verdict",
       reason: "invalid",
     });
-    expect(parseAdminDetail({ field: "body", reason: "invalid" })).toEqual({
+    expect(parse({ field: "body", reason: "invalid" }, 422)).toEqual({
       kind: "field",
+      status: 422,
       field: "body",
       reason: "invalid",
     });
   });
 
-  it("carries min and max when the server sends numbers", () => {
-    expect(parseAdminDetail({ field: "password", reason: "too_short", min: 12 })).toEqual({
+  it("reads the username a create refuses as reserved", () => {
+    expect(parse({ field: "username", reason: "reserved" }, 422)).toEqual({
       kind: "field",
+      status: 422,
+      field: "username",
+      reason: "reserved",
+    });
+  });
+
+  it("carries min and max when the server sends numbers", () => {
+    expect(parse({ field: "password", reason: "too_short", min: 12 }, 422)).toEqual({
+      kind: "field",
+      status: 422,
       field: "password",
       reason: "too_short",
       min: 12,
     });
-    expect(parseAdminDetail({ field: "display_name", reason: "too_long", max: 100 })).toEqual({
+    expect(parse({ field: "display_name", reason: "too_long", max: 100 }, 422)).toEqual({
       kind: "field",
+      status: 422,
       field: "display_name",
       reason: "too_long",
       max: 100,
     });
-    expect(
-      parseAdminDetail({ field: "timeout_s", reason: "out_of_range", min: 10, max: 120 }),
-    ).toEqual({ kind: "field", field: "timeout_s", reason: "out_of_range", min: 10, max: 120 });
+    expect(parse({ field: "timeout_s", reason: "out_of_range", min: 10, max: 120 }, 422)).toEqual({
+      kind: "field",
+      status: 422,
+      field: "timeout_s",
+      reason: "out_of_range",
+      min: 10,
+      max: 120,
+    });
   });
 
   it("ignores a min or max that is not a finite number", () => {
+    expect(parse({ field: "cap_usd", reason: "out_of_range", min: "1", max: null }, 422)).toEqual({
+      kind: "field",
+      status: 422,
+      field: "cap_usd",
+      reason: "out_of_range",
+    });
     expect(
-      parseAdminDetail({ field: "cap_usd", reason: "out_of_range", min: "1", max: null }),
-    ).toEqual({ kind: "field", field: "cap_usd", reason: "out_of_range" });
-    expect(
-      parseAdminDetail({
-        field: "cap_usd",
-        reason: "out_of_range",
-        min: Number.NaN,
-        max: Infinity,
-      }),
-    ).toEqual({ kind: "field", field: "cap_usd", reason: "out_of_range" });
+      parse({ field: "cap_usd", reason: "out_of_range", min: Number.NaN, max: Infinity }, 422),
+    ).toEqual({ kind: "field", status: 422, field: "cap_usd", reason: "out_of_range" });
   });
 
-  it("reads the plain-text details of the legacy routes as the reason they stand for", () => {
-    expect(parseAdminDetail("forbidden")).toEqual({
-      kind: "reason",
-      reason: "forbidden",
-      extra: {},
-    });
-    expect(parseAdminDetail("rule not found")).toEqual({
-      kind: "reason",
-      reason: "rule_not_found",
-      extra: {},
-    });
-    expect(parseAdminDetail("cluster is not a gold candidate")).toEqual({
-      kind: "reason",
-      reason: "unknown_cluster",
-      extra: {},
-    });
-    expect(parseAdminDetail("already labelled by this labeler")).toEqual({
-      kind: "reason",
-      reason: "already_labelled",
-      extra: {},
-    });
-    expect(parseAdminDetail("the gold set is frozen")).toEqual({
-      kind: "reason",
-      reason: "frozen",
-      extra: {},
-    });
-    expect(parseAdminDetail("labeler must be the current user")).toEqual({
-      kind: "reason",
-      reason: "labeler_mismatch",
-      extra: {},
-    });
-  });
+  it.each<[text: string, status: number, reason: AdminReason]>([
+    ["forbidden", 403, "forbidden"],
+    ["rule not found", 404, "rule_not_found"],
+    ["cluster is not a gold candidate", 404, "unknown_cluster"],
+    ["already labelled by this labeler", 409, "already_labelled"],
+    ["the gold set is frozen", 409, "frozen"],
+    ["labeler must be the current user", 403, "labeler_mismatch"],
+    // `deps.clean_path_id`: a control character in an alert id on the digest review path.
+    ["not found", 404, "not_found"],
+  ])(
+    "reads the plain text %j of the older routes as the reason it stands for",
+    (text, status, reason) => {
+      expect(parse(text, status)).toEqual({ kind: "reason", status, reason, extra: {} });
+    },
+  );
 
-  it("reads any other text as a message, shown as the server wrote it", () => {
-    expect(parseAdminDetail("simulate: match is outside the whitelist or malformed: []")).toEqual({
-      kind: "message",
-      message: "simulate: match is outside the whitelist or malformed: []",
-    });
-  });
+  describe("a text is a message only on a 422", () => {
+    const TEXT = "simulate: match is outside the whitelist or malformed: []";
 
-  it("reads a list of texts (the 422 of the inventory reload) as messages", () => {
-    expect(parseAdminDetail(["inventory.yaml:14: bad criticality", "iocs.csv:3: bad row"])).toEqual(
-      {
-        kind: "messages",
-        messages: ["inventory.yaml:14: bad criticality", "iocs.csv:3: bad row"],
+    it("reads the 422 of a rule, which says what is wrong with it, as a message", () => {
+      expect(parse(TEXT, 422)).toEqual({ kind: "message", status: 422, message: TEXT });
+    });
+
+    it.each([400, 401, 403, 404, 405, 409, 500, 502, 503])(
+      "reads the same text at %i as other, not as English shown to the admin",
+      (status) => {
+        expect(parse(TEXT, status)).toEqual({ kind: "other", status });
       },
     );
+
+    it.each<[text: string, status: number]>([
+      ["Not Found", 404], // FastAPI's own, for a path that is not a route
+      ["Method Not Allowed", 405],
+      ["auth disabled: JWT_SECRET unset", 503], // `deps.current_user`
+      ["Internal Server Error", 500],
+    ])("reads %j (%i) as other", (text, status) => {
+      expect(parse(text, status)).toEqual({ kind: "other", status });
+    });
+
+    it("reads a list of texts (the 422 of the inventory reload) as messages", () => {
+      expect(parse(["inventory.yaml:14: bad criticality", "iocs.csv:3: bad row"], 422)).toEqual({
+        kind: "messages",
+        status: 422,
+        messages: ["inventory.yaml:14: bad criticality", "iocs.csv:3: bad row"],
+      });
+    });
+
+    it("reads a list of texts at any other status as other", () => {
+      expect(parse(["inventory.yaml:14: bad"], 500)).toEqual({ kind: "other", status: 500 });
+      expect(parse(["inventory.yaml:14: bad"], 409)).toEqual({ kind: "other", status: 409 });
+    });
   });
 
   it("reads FastAPI's own list-shaped 422 as other", () => {
@@ -542,7 +586,7 @@ describe("parseAdminDetail", () => {
       { type: "missing", loc: ["body", "name"], msg: "Field required", input: { reason: "x" } },
       { type: "bool_parsing", loc: ["body", "enabled"], msg: "bad", input: "maybe" },
     ];
-    expect(parseAdminDetail(fastapi)).toEqual({ kind: "other" });
+    expect(parse(fastapi, 422)).toEqual({ kind: "other", status: 422 });
   });
 
   it.each<[string, unknown]>([
@@ -559,40 +603,47 @@ describe("parseAdminDetail", () => {
     ["a field with a reason this client does not know", { field: "x", reason: "nope" }],
     ["a field that is not a text", { field: 3, reason: "invalid" }],
   ])("reads %s as other", (_name, detail) => {
-    expect(parseAdminDetail(detail)).toEqual({ kind: "other" });
+    expect(parse(detail, 422)).toEqual({ kind: "other", status: 422 });
   });
 
   it.each(["__proto__", "constructor", "toString", "hasOwnProperty", "length"])(
     "does not take the name %s for a reason",
     (name) => {
-      expect(parseAdminDetail({ reason: name })).toEqual({ kind: "other" });
-      expect(parseAdminDetail({ field: "x", reason: name })).toEqual({ kind: "other" });
-      expect(parseAdminDetail(name)).toEqual({ kind: "message", message: name });
+      expect(parse({ reason: name }, 422)).toEqual({ kind: "other", status: 422 });
+      expect(parse({ field: "x", reason: name }, 422)).toEqual({ kind: "other", status: 422 });
+      // As a plain text it is not one of the older routes' texts: a message at 422, other elsewhere.
+      expect(parse(name, 422)).toEqual({ kind: "message", status: 422, message: name });
+      expect(parse(name, 404)).toEqual({ kind: "other", status: 404 });
     },
   );
 
   it("lists each reason once", () => {
     expect(new Set(ADMIN_REASONS).size).toBe(ADMIN_REASONS.length);
   });
+
+  it("lists the reserved username reason, which P11-T20 adds to the create route", () => {
+    expect(ADMIN_REASONS).toContain("reserved");
+  });
 });
 
 describe("adminErrorOf", () => {
-  it("reads the detail of an ApiError", () => {
+  it("reads the detail and the status of an ApiError", () => {
     expect(adminErrorOf(new ApiError(409, { reason: "self_change" }))).toEqual({
       kind: "reason",
+      status: 409,
       reason: "self_change",
       extra: {},
     });
   });
 
-  it("reads anything that is not an ApiError as other", () => {
-    expect(adminErrorOf(new TypeError("Failed to fetch"))).toEqual({ kind: "other" });
-    expect(adminErrorOf("boom")).toEqual({ kind: "other" });
-    expect(adminErrorOf(null)).toEqual({ kind: "other" });
+  it("reads anything that is not an ApiError as other, with no status (0)", () => {
+    expect(adminErrorOf(new TypeError("Failed to fetch"))).toEqual({ kind: "other", status: 0 });
+    expect(adminErrorOf("boom")).toEqual({ kind: "other", status: 0 });
+    expect(adminErrorOf(null)).toEqual({ kind: "other", status: 0 });
   });
 
   it("reads a 401, which has no detail, as other", () => {
-    expect(adminErrorOf(new ApiError(401, null))).toEqual({ kind: "other" });
+    expect(adminErrorOf(new ApiError(401, null))).toEqual({ kind: "other", status: 401 });
   });
 
   it("reads a reason off a real 409 of the client", async () => {
@@ -602,7 +653,12 @@ describe("adminErrorOf", () => {
       ),
     );
     const error = await updateUser(UID, { role: "tier1" }).catch((e: unknown) => e);
-    expect(adminErrorOf(error)).toEqual({ kind: "reason", reason: "last_active_admin", extra: {} });
+    expect(adminErrorOf(error)).toEqual({
+      kind: "reason",
+      status: 409,
+      reason: "last_active_admin",
+      extra: {},
+    });
   });
 
   it("reads a field error off a real 422 of the client", async () => {
@@ -617,6 +673,7 @@ describe("adminErrorOf", () => {
     const error = await putLlmLimits({ timeout_s: 600 }).catch((e: unknown) => e);
     expect(adminErrorOf(error)).toEqual({
       kind: "field",
+      status: 422,
       field: "timeout_s",
       reason: "out_of_range",
       min: 10,
@@ -634,7 +691,7 @@ describe("adminErrorOf", () => {
       ),
     );
     const error = await createRule({ name: "", reason: "", match: [] }).catch((e: unknown) => e);
-    expect(adminErrorOf(error)).toEqual({ kind: "other" });
+    expect(adminErrorOf(error)).toEqual({ kind: "other", status: 422 });
   });
 
   it("reads the file errors off the real 422 of the inventory reload", async () => {
@@ -649,9 +706,51 @@ describe("adminErrorOf", () => {
     const error = await reloadInventory().catch((e: unknown) => e);
     expect(adminErrorOf(error)).toEqual({
       kind: "messages",
+      status: 422,
       messages: ["inventory.yaml:14: bad", "iocs.csv:2: bad"],
     });
   });
+
+  it("reads the 422 text of a refused rule as a message", async () => {
+    const text = "simulate: match is outside the whitelist or malformed: [{'field': 'x'}]";
+    server.use(
+      http.post("/api/admin/rules/simulate", () =>
+        HttpResponse.json({ detail: text }, { status: 422 }),
+      ),
+    );
+    const error = await simulateRule([]).catch((e: unknown) => e);
+    expect(adminErrorOf(error)).toEqual({ kind: "message", status: 422, message: text });
+  });
+
+  it("reads the 404 text of a bad alert id on the digest review path as not_found", async () => {
+    server.use(
+      http.post("/api/admin/digest/:id/review", () =>
+        HttpResponse.json({ detail: "not found" }, { status: 404 }),
+      ),
+    );
+    const error = await reviewDigest("x\u0000y", "2026-09-30", "correct").catch((e: unknown) => e);
+    expect(adminErrorOf(error)).toEqual({
+      kind: "reason",
+      status: 404,
+      reason: "not_found",
+      extra: {},
+    });
+  });
+
+  it.each<[text: string, status: number]>([
+    ["Not Found", 404],
+    ["Method Not Allowed", 405],
+    ["auth disabled: JWT_SECRET unset", 503],
+  ])(
+    "reads the English %j of %i off a real answer as other, never as text to show",
+    async (text, status) => {
+      server.use(
+        http.get("/api/admin/users", () => HttpResponse.json({ detail: text }, { status })),
+      );
+      const error = await listUsers().catch((e: unknown) => e);
+      expect(adminErrorOf(error)).toEqual({ kind: "other", status });
+    },
+  );
 });
 
 describe("conflictRow", () => {
@@ -676,19 +775,19 @@ describe("conflictRow", () => {
   };
 
   it("returns the row an already_reviewed 409 carries", () => {
-    const error = parseAdminDetail({ reason: "already_reviewed", row });
+    const error = parse({ reason: "already_reviewed", row });
     expect(conflictRow(error)?.alert_id).toBe("1661877");
     expect(conflictRow(error)?.reviewed_verdict).toBe("correct");
   });
 
   it("returns null for any other error, or a row that is not a row", () => {
     const none: AdminError[] = [
-      parseAdminDetail({ reason: "not_auto_closed" }),
-      parseAdminDetail({ reason: "already_reviewed" }),
-      parseAdminDetail({ reason: "already_reviewed", row: "text" }),
-      parseAdminDetail({ reason: "already_reviewed", row: { alert_id: 5 } }),
-      parseAdminDetail({ field: "verdict", reason: "invalid" }),
-      { kind: "other" },
+      parse({ reason: "not_auto_closed" }),
+      parse({ reason: "already_reviewed" }),
+      parse({ reason: "already_reviewed", row: "text" }),
+      parse({ reason: "already_reviewed", row: { alert_id: 5 } }),
+      parse({ field: "verdict", reason: "invalid" }, 422),
+      { kind: "other", status: 0 },
     ];
     for (const error of none) expect(conflictRow(error)).toBeNull();
   });

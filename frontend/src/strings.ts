@@ -2,7 +2,7 @@
 // The tables keyed by a server code (`status`, `band`, `conclusion`, ...) are read through `labelOf`, so a
 // code this file has no label for is shown as the code itself.
 
-import type { AdminReason, AuditGroup, DigestVerdict, HardBlockCode } from "./api/admin";
+import type { AdminReason, AuditGroup, DigestVerdict, HardBlockCode, LlmRange } from "./api/admin";
 import { BAND_CODES, type BandCode } from "./api/types";
 
 /** The shortest quote ② may cite, in characters (`MIN_QUOTE_CHARS` of backend/app/tier2/investigate.py). */
@@ -541,7 +541,7 @@ export const S = {
       "7d": "7 ngày qua",
       "30d": "30 ngày qua",
       month: "Tháng này",
-    },
+    } satisfies Record<LlmRange, string>,
 
     // One text for each code of `ADMIN_REASONS` (api/admin.ts), in the words of the canvas's AdminStates
     // where it has one. Read a reason through `adminReasonText`, which puts the server's bounds in the text.
@@ -556,6 +556,7 @@ export const S = {
       invalid: "Giá trị không hợp lệ",
       too_short: "Quá ngắn",
       too_long: "Quá dài",
+      reserved: "Tên đăng nhập này được dành riêng cho hệ thống (system, llm)",
       unknown: "Trường này không được hỗ trợ",
       not_integer: "Phải là số nguyên",
       out_of_range: "Ngoài khoảng cho phép",
@@ -573,7 +574,8 @@ export const S = {
         "Cụm này đã được duyệt trước đó. Dòng đã được cập nhật theo kết quả đã ghi.",
       not_auto_closed:
         "Cụm không còn ở trạng thái tự đóng (đã được mở lại), nên không duyệt được nữa.",
-      frozen: "Không hoàn tác được: tập vàng đã đóng băng.",
+      // The reason of a refused undo and of a refused label save alike: it names neither.
+      frozen: "Tập vàng đã đóng băng — không gán thêm hay hoàn tác được nữa.",
       nothing_to_undo: "Bạn chưa có nhãn nào để hoàn tác.",
       forbidden:
         "Bạn không còn quyền làm việc này. Vai trò của tài khoản có thể đã đổi — đăng nhập lại.",

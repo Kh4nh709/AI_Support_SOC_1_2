@@ -5,10 +5,18 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ADMIN_LIMITS,
+  ADMIN_RANGES,
   ADMIN_REASONS,
   AUDIT_GROUPS,
   DIGEST_VERDICTS,
   HARD_BLOCK_CODES,
+  LABEL_CHOICES,
+  LABEL_CONFIDENCES,
+  LIMIT_FIELDS,
+  LIMIT_KEYS,
+  LIMIT_KEY_OF_FIELD,
+  LLM_RANGES,
+  OVERVIEW_SECTIONS,
 } from "../../api/admin";
 import { S, adminReasonText, labelOf } from "../../strings";
 
@@ -140,7 +148,7 @@ describe("the reason codes", () => {
     expect(unknown).toEqual([]);
   });
 
-  it("lists, beyond the source of the routes, only the codes it reads from legacy text or from P11-T08", () => {
+  it("lists, beyond the source of the routes, only the codes it reads from legacy text or from P11-T20", () => {
     const text = [
       "admin_users.py",
       "admin_llm.py",
@@ -154,20 +162,40 @@ describe("the reason codes", () => {
     const written = (code: string) => new RegExp(`"${code}"`).test(text);
     const beyond = ADMIN_REASONS.filter((code) => !written(code));
     // The codes of a plain-text `detail` (the rules and labels routes: `rule_not_found`, `unknown_cluster`,
-    // `already_labelled`, `labeler_mismatch`) and the two of the undo route of P11-T08, which is built beside
-    // this card: until it is merged they are written nowhere, after it `frozen` and `nothing_to_undo` are.
+    // `already_labelled`, `labeler_mismatch`), and `reserved`, which P11-T20 adds to the create route
+    // (`_bad("username", "reserved")`; until it is merged nothing writes it, after it the test stays green
+    // because the code is then written and no longer listed here). `frozen` and `nothing_to_undo`, the undo
+    // route of P11-T08, are written in labels.py now and need no entry.
     const readFromElsewhere = new Set([
       "rule_not_found",
       "unknown_cluster",
       "already_labelled",
       "labeler_mismatch",
-      "frozen",
-      "nothing_to_undo",
+      "reserved", // P11-T20, until merged
     ]);
     expect(beyond.filter((code) => !readFromElsewhere.has(code))).toEqual([]);
     // And the ones the routes of this base do write really are written there: nothing is listed by guess.
     expect(beyond).toContain("rule_not_found");
     expect(ADMIN_REASONS.filter(written).length).toBeGreaterThan(15);
+  });
+
+  it("has a text for the username a create refuses as reserved, naming the two", () => {
+    expect(isText(S.admin.reason.reserved)).toBe(true);
+    expect(S.admin.reason.reserved).toContain("system");
+    expect(S.admin.reason.reserved).toContain("llm");
+  });
+
+  // `frozen` is the reason of a refused undo (P11-T08) and also of a refused label save (the labels route's
+  // plain "the gold set is frozen"), so its text cannot say only "cannot undo".
+  it("words `frozen` for a refused label save as well as for a refused undo", () => {
+    expect(S.admin.reason.frozen).toBe(
+      "Tập vàng đã đóng băng — không gán thêm hay hoàn tác được nữa.",
+    );
+    expect(S.admin.reason.frozen).not.toMatch(/^Không hoàn tác được/);
+  });
+
+  it("has a text for `not_found` that fits a bad id on the digest path, not only a list", () => {
+    expect(isText(S.admin.reason.not_found)).toBe(true);
   });
 });
 
@@ -255,6 +283,88 @@ describe("the limits of the forms", () => {
     expect(ADMIN_LIMITS.noteMax).toBe(num("NOTE_MAX_CHARS", ["tier1", "labels.py"]));
     const pattern = /^USERNAME_RE\s*=\s*r"([^"]+)"/m.exec(py(...users))?.[1];
     expect(ADMIN_LIMITS.username.source).toBe(pattern);
+  });
+
+  // `system` and `llm` are the two `actor_role`s of an audit row that is not a person: the audit page's actor
+  // filter reads them as roles (`_ROLE_ACTORS`), so a user of that name would be unreachable there (P11-T20).
+  it("lists as reserved the two actor names the audit filter reads as roles", () => {
+    const actors = /_ROLE_ACTORS\s*=\s*\(([^)]*)\)/.exec(
+      py("web", "routers", "admin_audit.py"),
+    )?.[1];
+    const names = [...(actors ?? "").matchAll(/"(\w+)"/g)].map((m) => m[1]);
+    expect(names).toEqual(["system", "llm"]);
+    expect([...ADMIN_LIMITS.reservedUsernames]).toEqual(names);
+  });
+});
+
+describe("the vocabulary of the client equals the one of the routes", () => {
+  const router = (name: string): string => py("web", "routers", name);
+  const quoted = (text: string | undefined): string[] =>
+    [...(text ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1] as string);
+  /** `NAME = Literal["a", "b"]`: the values, in order. */
+  const literalOf = (source: string, name: string): string[] =>
+    quoted(new RegExp(`${name}\\s*=\\s*Literal\\[([^\\]]*)\\]`).exec(source)?.[1]);
+  /** The keys of `NAME... = { "k": ..., }`, in order. */
+  const keysOf = (source: string, name: string): string[] =>
+    [
+      ...(new RegExp(`${name}[^=]*=\\s*\\{([^}]*)\\}`).exec(source)?.[1] ?? "").matchAll(
+        /^\s*"(\w+)":/gm,
+      ),
+    ].map((m) => m[1] as string);
+
+  it("OVERVIEW_SECTIONS is the sections of admin_overview.py, in its order", () => {
+    const body = /sections = \(([\s\S]*?)\n {4}\)/.exec(router("admin_overview.py"))?.[1];
+    const names = [...(body ?? "").matchAll(/\("(\w+)",\s*lambda/g)].map((m) => m[1]);
+    expect(names).toHaveLength(9);
+    expect([...OVERVIEW_SECTIONS]).toEqual(names);
+  });
+
+  it("ADMIN_RANGES is the window list of the overview and of the audit page", () => {
+    for (const file of ["admin_overview.py", "admin_audit.py"]) {
+      expect(literalOf(router(file), "RangeName"), file).toEqual([...ADMIN_RANGES]);
+      expect(keysOf(router(file), "_WINDOWS"), file).toEqual([...ADMIN_RANGES]);
+    }
+    expect([...ADMIN_RANGES]).toEqual(["24h", "7d", "30d"]);
+  });
+
+  it("LLM_RANGES is the range list of admin_llm.py: the three and the calendar month", () => {
+    expect(literalOf(router("admin_llm.py"), "RangeName")).toEqual([...LLM_RANGES]);
+    expect(keysOf(router("admin_llm.py"), "_SINCE_SQL")).toEqual([...LLM_RANGES]);
+    expect([...LLM_RANGES]).toEqual([...ADMIN_RANGES, "month"]);
+  });
+
+  it("the three limit settings, their request fields and the map between them are infra/settings.py's", () => {
+    const settings = py("infra", "settings.py");
+    const keys = quoted(/^KEYS\s*=\s*\(([^)]*)\)/m.exec(settings)?.[1]);
+    const map = Object.fromEntries(
+      [
+        ...(/FIELD_OF_KEY\s*=\s*\{([^}]*)\}/.exec(settings)?.[1] ?? "").matchAll(
+          /"(\w+)":\s*"(\w+)"/g,
+        ),
+      ].map((m) => [m[1], m[2]]),
+    );
+    expect(keys).toHaveLength(3);
+    expect([...LIMIT_KEYS]).toEqual(keys);
+    expect(LIMIT_KEY_OF_FIELD).toEqual(
+      Object.fromEntries(Object.entries(map).map(([key, field]) => [field, key])),
+    );
+    expect([...LIMIT_FIELDS]).toEqual(keys.map((key) => map[key]));
+  });
+
+  it("LABEL_CHOICES and LABEL_CONFIDENCES are the Literals of LabelIn in labels.py", () => {
+    const labels = router("labels.py");
+    const label = quoted(/^\s+label: Literal\[([^\]]*)\]/m.exec(labels)?.[1]);
+    const confidence = (/^\s+confidence: Literal\[([^\]]*)\]/m.exec(labels)?.[1] ?? "")
+      .split(",")
+      .map((n) => Number(n.trim()));
+    expect([...LABEL_CHOICES]).toEqual(label);
+    expect(label).toHaveLength(3);
+    expect([...LABEL_CONFIDENCES]).toEqual(confidence);
+    expect(confidence).toEqual([1, 2, 3]);
+  });
+
+  it("S.admin.range has a text for each range of the usage page, and no other", () => {
+    expect(Object.keys(S.admin.range)).toEqual([...LLM_RANGES]);
   });
 });
 

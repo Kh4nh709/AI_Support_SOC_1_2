@@ -12,8 +12,9 @@
 //   - An error is read by `adminErrorOf`, never by a status alone: the server's `detail` is an object with a
 //     machine-readable `reason` (spec §3), and the pages map it to text through `S.admin.reason`.
 //
-// P11-T06 (in review when this was written) adds `hard_block_tally` to the simulate answer and
-// `width_threshold_pct` to the rule rows: both are optional here, so a page copes with an older server.
+// The types follow the handlers as merged (P11-T06 and P11-T08 included): a key the handler always sends is
+// a required key here, and `adminTypes.test.ts` compares every type with the keys the backend builds, so
+// a field cannot go optional, or missing, without a test failing.
 import { ApiError, api } from "./client";
 import type { Role } from "./types";
 
@@ -65,6 +66,13 @@ export const ADMIN_LIMITS = {
   displayNameMax: 100,
   noteMax: 200,
   username: /^[a-z0-9._-]{3,32}$/,
+  /**
+   * Usernames the create route refuses with `{field: "username", reason: "reserved"}` (P11-T20): `system` and
+   * `llm` are the two `actor_role`s of an audit row that is not a person, which the audit page's actor filter
+   * reads as roles (`_ROLE_ACTORS` of admin_audit.py, which a test compares). They fit `username`, so the
+   * create form checks this list too, before it posts.
+   */
+  reservedUsernames: ["system", "llm"],
 } as const;
 
 // --- errors -----------------------------------------------------------------------------------------------
@@ -74,7 +82,8 @@ export const ADMIN_LIMITS = {
  * as `other`; `strings.ts` has a text for each (`S.admin.reason`), and a test pins both.
  *
  * - admin_users.py: `username_taken`, `last_active_admin`, `self_change` (409); `not_found` (404); the 422
- *   field reasons `empty`, `invalid`, `too_short`, `too_long`.
+ *   field reasons `empty`, `invalid`, `too_short`, `too_long`, and `reserved` (a username of `system` or
+ *   `llm`, P11-T20; see `ADMIN_LIMITS.reservedUsernames`).
  * - admin_llm.py: `unknown`, `not_integer`, `out_of_range` (422, with `field`); `limits_unavailable` (503);
  *   `timeout`, `query_failed` (503, the usage page).
  * - admin_overview.py: `not_found` (404), `not_failed`, `already_queued` (409); `timeout`, `query_failed`
@@ -96,6 +105,7 @@ export const ADMIN_REASONS = [
   "invalid",
   "too_short",
   "too_long",
+  "reserved",
   "unknown",
   "not_integer",
   "out_of_range",
@@ -119,21 +129,36 @@ export const ADMIN_REASONS = [
 export type AdminReason = (typeof ADMIN_REASONS)[number];
 
 /**
- * What a failed admin call said, as a discriminated value:
+ * What a failed admin call said, as a discriminated value. Every kind carries the HTTP `status` of the
+ * answer (`ApiError.status`), or 0 when there was no answer (a network failure):
  * - `reason`: `{reason}` or a known plain text. `extra` holds the rest of the object (the `row` of a digest
  *   `already_reviewed`; `conflictRow` reads it);
  * - `field`: `{field, reason, min?, max?}`, a 422 about one field, shown at the field;
- * - `message`: any other text, as the server wrote it (the 422 of a rule says what is wrong with it);
- * - `messages`: a list of texts (the file errors of a refused inventory reload);
+ * - `message`: any other text, as the server wrote it, and only on a 422: the 422 of a rule or of a label
+ *   says what is wrong with it. A text at any other status is English meant for a log (FastAPI's "Not
+ *   Found" and "Method Not Allowed", the 503 "auth disabled: ..."), never for the admin: it is `other`;
+ * - `messages`: a list of texts, again only on a 422 (the file errors of a refused inventory reload);
  * - `other`: anything else, FastAPI's own list-shaped 422 (`[{type, loc, msg, input}]`) included, a 401, a
  *   network failure, an object with a reason this client does not know. The page says `S.common.unknownError`.
  */
 export type AdminError =
-  | { kind: "reason"; reason: AdminReason; extra: Readonly<Record<string, unknown>> }
-  | { kind: "field"; field: string; reason: AdminReason; min?: number; max?: number }
-  | { kind: "message"; message: string }
-  | { kind: "messages"; messages: string[] }
-  | { kind: "other" };
+  | {
+      kind: "reason";
+      status: number;
+      reason: AdminReason;
+      extra: Readonly<Record<string, unknown>>;
+    }
+  | {
+      kind: "field";
+      status: number;
+      field: string;
+      reason: AdminReason;
+      min?: number;
+      max?: number;
+    }
+  | { kind: "message"; status: number; message: string }
+  | { kind: "messages"; status: number; messages: string[] }
+  | { kind: "other"; status: number };
 
 /** The plain-text `detail`s the older routes answer with, by the reason each one stands for. */
 const LEGACY_DETAIL: Readonly<Record<string, AdminReason>> = {
@@ -143,37 +168,46 @@ const LEGACY_DETAIL: Readonly<Record<string, AdminReason>> = {
   "already labelled by this labeler": "already_labelled", // POST /api/admin/labels: 409
   "the gold set is frozen": "frozen", // labels: 409
   "labeler must be the current user": "labeler_mismatch", // labels: 403
+  // `deps.clean_path_id`: a control character in an alert id, e.g. on the digest review path (lower case,
+  // unlike FastAPI's own "Not Found" for a path that is not a route, which stays `other`).
+  "not found": "not_found",
 };
 
 function isReason(value: unknown): value is AdminReason {
   return typeof value === "string" && (ADMIN_REASONS as readonly string[]).includes(value);
 }
 
-const other = (): AdminError => ({ kind: "other" });
+/** The status of the one answer a 422's text is for: a text or a list of texts is shown only at this one. */
+const UNPROCESSABLE = 422;
 
-/** Reads the `detail` of an error answer (`ApiError.detail`). Never throws, whatever it is handed. */
-export function parseAdminDetail(detail: unknown): AdminError {
+/**
+ * Reads the `detail` of an error answer (`ApiError.detail`) given at HTTP `status`. Never throws, whatever it
+ * is handed. A text is a `message`, and a list of texts `messages`, only at 422; at another status an
+ * unmapped text is `other` (see `AdminError`).
+ */
+export function parseAdminDetail(detail: unknown, status: number): AdminError {
+  const other: AdminError = { kind: "other", status };
   if (typeof detail === "string") {
-    if (detail === "") return other();
+    if (detail === "") return other;
     const reason = Object.hasOwn(LEGACY_DETAIL, detail) ? LEGACY_DETAIL[detail] : undefined;
-    return reason === undefined
-      ? { kind: "message", message: detail }
-      : { kind: "reason", reason, extra: {} };
+    if (reason !== undefined) return { kind: "reason", status, reason, extra: {} };
+    return status === UNPROCESSABLE ? { kind: "message", status, message: detail } : other;
   }
   if (Array.isArray(detail)) {
     const texts = detail.filter((item): item is string => typeof item === "string");
-    return texts.length > 0 && texts.length === detail.length
-      ? { kind: "messages", messages: texts }
-      : other();
+    return status === UNPROCESSABLE && texts.length > 0 && texts.length === detail.length
+      ? { kind: "messages", status, messages: texts }
+      : other;
   }
-  if (typeof detail !== "object" || detail === null) return other();
+  if (typeof detail !== "object" || detail === null) return other;
   const object = detail as Record<string, unknown>;
-  if (!isReason(object.reason)) return other();
+  if (!isReason(object.reason)) return other;
   const reason = object.reason;
   if ("field" in object) {
-    if (typeof object.field !== "string") return other();
+    if (typeof object.field !== "string") return other;
     const error: Extract<AdminError, { kind: "field" }> = {
       kind: "field",
+      status,
       field: object.field,
       reason,
     };
@@ -182,12 +216,17 @@ export function parseAdminDetail(detail: unknown): AdminError {
     return error;
   }
   const extra = Object.fromEntries(Object.entries(object).filter(([key]) => key !== "reason"));
-  return { kind: "reason", reason, extra };
+  return { kind: "reason", status, reason, extra };
 }
 
-/** Reads what a failed call threw: an `ApiError`'s `detail`; anything else (a network failure) is `other`. */
+/**
+ * Reads what a failed call threw: an `ApiError`'s `detail` and `status`; anything else (a network failure)
+ * is `other` with status 0.
+ */
 export function adminErrorOf(error: unknown): AdminError {
-  return error instanceof ApiError ? parseAdminDetail(error.detail) : other();
+  return error instanceof ApiError
+    ? parseAdminDetail(error.detail, error.status)
+    : { kind: "other", status: 0 };
 }
 
 /** The row an `already_reviewed` answer carries (the review on file), or null for any other error. */
@@ -259,6 +298,21 @@ export async function unlockUser(userId: string): Promise<void> {
 export const LIMIT_FIELDS = ["cap_usd", "quota_per_24h", "timeout_s"] as const;
 export type LimitField = (typeof LIMIT_FIELDS)[number];
 
+/** The same three as settings (`KEYS` of infra/settings.py): what `limits.sources` is keyed by. */
+export const LIMIT_KEYS = [
+  "LLM_MONTHLY_USD_CAP",
+  "ANALYZE_QUOTA_PER_USER_DAY",
+  "LLM_TIMEOUT_S",
+] as const;
+export type LimitKey = (typeof LIMIT_KEYS)[number];
+
+/** The setting each request/response field is, for reading `limits.sources[LIMIT_KEY_OF_FIELD[field]]`. */
+export const LIMIT_KEY_OF_FIELD = {
+  cap_usd: "LLM_MONTHLY_USD_CAP",
+  quota_per_24h: "ANALYZE_QUOTA_PER_USER_DAY",
+  timeout_s: "LLM_TIMEOUT_S",
+} as const satisfies Record<LimitField, LimitKey>;
+
 /** Where one limit came from: the `.env` (`env`) or a save on the web (`web`, with who and when). */
 export type LimitSource = {
   source: "env" | "web";
@@ -273,8 +327,8 @@ export type LimitsOut = {
   cap_usd: number;
   quota_per_24h: number;
   timeout_s: number;
-  /** Keyed by the setting's name: `LLM_MONTHLY_USD_CAP`, `ANALYZE_QUOTA_PER_USER_DAY`, `LLM_TIMEOUT_S`. */
-  sources: Record<string, LimitSource>;
+  /** Keyed by the setting's name (`LIMIT_KEYS`), not by the field: read it with `LIMIT_KEY_OF_FIELD`. */
+  sources: Record<LimitKey, LimitSource>;
   /** The form's min and max for each field; the timeout's max is derived from the job lock (DEC-202). */
   bounds: Record<LimitField, { min: number; max: number }>;
 };
@@ -459,11 +513,14 @@ export type RuleRow = {
   created_at: string;
   /** The rule's share of the 7-day volume when it is over the threshold, else null. */
   width_pct: number | null;
-  /** `AUTOCLOSE_RULE_WIDTH_PCT`, the threshold `width_pct` is measured against (P11-T06). */
-  width_threshold_pct?: number;
+  /** `AUTOCLOSE_RULE_WIDTH_PCT`, on every row: the threshold `width_pct` is measured against. */
+  width_threshold_pct: number;
 };
 
-/** When a preview closes no cluster, why: how many clusters the rule matches and which block stopped them. */
+/**
+ * When a preview closes no cluster, why: how many clusters the rule's conditions match, and for each hard
+ * block how many of them it stopped (the six blocks, the largest count first).
+ */
 export type HardBlockTally = { matched: number; blocks: { code: HardBlockCode; count: number }[] };
 
 /** `POST /api/admin/rules/simulate`: the last 30 days, hard blocks included. */
@@ -474,8 +531,8 @@ export type SimulateResult = {
   by_asset_criticality: Record<string, number>;
   /** Up to 20 alert ids, linking to `/alerts/:id`. */
   samples: string[];
-  /** Present when `clusters` is 0 (null otherwise); absent from a server older than P11-T06. */
-  hard_block_tally?: HardBlockTally | null;
+  /** Always sent: the tally when `clusters` is 0, `null` otherwise. */
+  hard_block_tally: HardBlockTally | null;
 };
 
 export function listRules(): Promise<RuleRow[]> {
@@ -616,7 +673,7 @@ export type LabelCluster = {
 
 /**
  * `GET /api/admin/labels/next`. `cluster` is null when the labeller is finished or there is no candidate
- * (`total` 0). `frozen` and `candidates_present` come with P11-T08 (spec §5.7); `frozen` is true while
+ * (`total` 0). `frozen` and `candidates_present` are on every answer (spec §5.7); `frozen` is true while
  * `eval/gold_v1.sha256` exists, which is the state of the gold set today.
  */
 export type LabelsNext = {
