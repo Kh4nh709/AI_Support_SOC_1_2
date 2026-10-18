@@ -33,6 +33,7 @@ function renderLogin(entry: string | { pathname: string; state: unknown } = "/lo
             <Route path="/login" element={<LoginPage />} />
             <Route path="/queue" element={<p>queue page</p>} />
             <Route path="/cases" element={<p>cases page</p>} />
+            <Route path="/admin/overview" element={<p>admin overview page</p>} />
             <Route path="/alerts/:id" element={<p>alert page</p>} />
           </Routes>
           <Where />
@@ -169,11 +170,12 @@ it("goes to /cases after a tier2 login", async () => {
   expect(screen.getByTestId("where")).toHaveTextContent("/cases");
 });
 
-it("goes to /cases after an admin login", async () => {
+it("goes to /admin/overview after an admin login", async () => {
   server.use(loginOk("admin"), meFor("admin"));
   renderLogin();
   await submit();
-  expect(await screen.findByText("cases page")).toBeInTheDocument();
+  expect(await screen.findByText("admin overview page")).toBeInTheDocument();
+  expect(screen.getByTestId("where")).toHaveTextContent("/admin/overview");
 });
 
 it("returns to the page a lost session came from, when the login page was reached from one", async () => {

@@ -268,7 +268,8 @@ it("keeps no label for a model, time, token or cost line, which no screen shows"
 
 it("writes no English-only label where a Vietnamese one is named by the spec", () => {
   expect(S.app.name).toBe("AI Support SOC");
-  expect(S.nav.adminLegacy).toBe("Quản trị (UI cũ)");
+  expect(S.nav.admin).toBe("Quản trị");
+  expect(S.nav).not.toHaveProperty("adminLegacy");
 });
 
 describe("labelOf", () => {

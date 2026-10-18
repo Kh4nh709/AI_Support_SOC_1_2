@@ -19,7 +19,6 @@ export const S = {
     cases: "Case",
     // The in-app link to the admin console (P11-T10), admin only; it replaced the link to the old console.
     admin: "Quản trị",
-    adminLegacy: "Quản trị (UI cũ)",
     logout: "Đăng xuất",
   },
 

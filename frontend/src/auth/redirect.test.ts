@@ -5,10 +5,10 @@ const land = (from: unknown, role: "tier1" | "tier2" | "admin" = "tier1") =>
   landingAfterLogin({ from }, role);
 
 describe("roleHome", () => {
-  it("opens tier1 at the queue, and tier2 and admin at the case list", () => {
+  it("opens tier1 at the queue, tier2 at the case list and admin at the console overview", () => {
     expect(roleHome("tier1")).toBe("/queue");
     expect(roleHome("tier2")).toBe("/cases");
-    expect(roleHome("admin")).toBe("/cases");
+    expect(roleHome("admin")).toBe("/admin/overview");
   });
 });
 
@@ -17,6 +17,8 @@ describe("landingAfterLogin honours a return path that stays in the app", () => 
     "/queue?band=high",
     "/alerts/12",
     "/cases/3?tab=notes#top",
+    "/admin/users",
+    "/admin/audit?range=30d&group=users",
     "/queue?next=//not-a-host", // a `//` after the path is only text
   ])("returns to %s", (from) => {
     expect(land(from)).toBe(from);
@@ -25,7 +27,7 @@ describe("landingAfterLogin honours a return path that stays in the app", () => 
   it("goes to the role home when there is no return path", () => {
     expect(landingAfterLogin(null, "tier2")).toBe("/cases");
     expect(landingAfterLogin(undefined, "tier1")).toBe("/queue");
-    expect(landingAfterLogin({}, "admin")).toBe("/cases");
+    expect(landingAfterLogin({}, "admin")).toBe("/admin/overview");
     expect(landingAfterLogin({ forbidden: true }, "tier1")).toBe("/queue");
   });
 });

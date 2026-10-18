@@ -20,6 +20,14 @@ it("scans the non-test source (a guard over no files would pass for nothing)", (
   expect(scanned.some((p) => /\.test\./.test(p))).toBe(false);
 });
 
+it("scans the admin console too, so its zero count of dangerouslySetInnerHTML is a count and not a gap", () => {
+  const scanned = src.map(([p]) => p);
+  for (const name of ["AdminLayout.tsx", "ConfirmDialog.tsx", "adminKeys.ts", "UsersPage.tsx"]) {
+    expect(scanned).toContain(join("src", "features", "admin", name));
+  }
+  expect(scanned).toContain(join("src", "api", "admin.ts"));
+});
+
 // A call of `eval`, not any identifier that ends in it: `retrieval(` is not a call of eval.
 const EVAL_CALL = /\beval\s*\(/;
 
@@ -39,6 +47,9 @@ const NEEDLES: [string, (text: string) => boolean][] = [
   ["eval(", (t) => EVAL_CALL.test(t)],
   ["new Function", (t) => t.includes("new Function")],
   ["localStorage", (t) => t.includes("localStorage")],
+  // P11-T10: the admin console is in the app; no link leaves for the API port (the old Jinja console).
+  [":8000", (t) => t.includes(":8000")],
+  ["adminLegacy", (t) => t.includes("adminLegacy")],
 ];
 
 it.each(NEEDLES)("no %s in src", (_name, found) => {

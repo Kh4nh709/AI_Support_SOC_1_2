@@ -14,7 +14,12 @@ const session = (role: Session["role"], username = "an"): Session => ({
   expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
 });
 
-function renderHeader(s: Session | null, over: Partial<AuthState> = {}, live?: React.ReactNode) {
+function renderHeader(
+  s: Session | null,
+  over: Partial<AuthState> = {},
+  live?: React.ReactNode,
+  at = "/queue",
+) {
   const auth: AuthState = {
     session: s,
     ready: true,
@@ -25,7 +30,7 @@ function renderHeader(s: Session | null, over: Partial<AuthState> = {}, live?: R
   };
   return render(
     <AuthContext.Provider value={auth}>
-      <MemoryRouter initialEntries={["/queue"]}>
+      <MemoryRouter initialEntries={[at]}>
         <AppHeader live={live} />
       </MemoryRouter>
     </AuthContext.Provider>,
@@ -39,29 +44,59 @@ it("shows the app name as a banner, and nothing else when nobody is signed in", 
   expect(screen.queryByRole("button", { name: S.nav.logout })).not.toBeInTheDocument();
 });
 
-it("gives tier1 the queue and no Case link, no legacy link", () => {
+it("gives tier1 the queue and no Case link, no Quản trị link", () => {
   renderHeader(session("tier1"));
   const nav = screen.getByRole("navigation", { name: S.nav.label });
   expect(nav).toHaveTextContent(S.nav.queue);
   expect(screen.getByRole("link", { name: S.nav.queue })).toHaveAttribute("href", "/queue");
   expect(screen.queryByRole("link", { name: S.nav.cases })).not.toBeInTheDocument();
-  expect(screen.queryByRole("link", { name: S.nav.adminLegacy })).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: S.nav.admin })).not.toBeInTheDocument();
 });
 
-it("gives tier2 the queue and Case, no legacy link", () => {
+it("gives tier2 the queue and Case, no Quản trị link", () => {
   renderHeader(session("tier2"));
   expect(screen.getByRole("link", { name: S.nav.queue })).toBeInTheDocument();
   expect(screen.getByRole("link", { name: S.nav.cases })).toHaveAttribute("href", "/cases");
-  expect(screen.queryByRole("link", { name: S.nav.adminLegacy })).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: S.nav.admin })).not.toBeInTheDocument();
 });
 
-it("gives admin the queue, Case and the legacy console on port 8000 of this host", () => {
+it("gives admin the queue, Case and an in-app Quản trị link to /admin", () => {
   renderHeader(session("admin"));
   expect(screen.getByRole("link", { name: S.nav.queue })).toBeInTheDocument();
   expect(screen.getByRole("link", { name: S.nav.cases })).toBeInTheDocument();
-  const legacy = screen.getByRole("link", { name: S.nav.adminLegacy });
-  expect(legacy).toHaveAttribute("href", `http://${window.location.hostname}:8000/admin/rules`);
-  expect(legacy).toHaveAttribute("rel", expect.stringContaining("noopener"));
+  const admin = screen.getByRole("link", { name: "Quản trị" });
+  expect(admin).toHaveTextContent("Quản trị");
+  expect(S.nav.admin).toBe("Quản trị");
+  expect(admin).toHaveAttribute("href", "/admin");
+  // In-app: no new tab, no other port or host.
+  expect(admin).not.toHaveAttribute("target");
+  expect(admin.getAttribute("href")).not.toMatch(/^[a-z]+:/i);
+});
+
+it("shows Quản trị to nobody who is not an admin, and to nobody signed out", () => {
+  for (const s of [session("tier1"), session("tier2"), null]) {
+    const view = renderHeader(s);
+    expect(screen.queryByRole("link", { name: "Quản trị" })).not.toBeInTheDocument();
+    view.unmount();
+  }
+});
+
+it("has no link to another port of this host, and no legacy console link, for any role", () => {
+  for (const role of ["tier1", "tier2", "admin"] as const) {
+    const view = renderHeader(session(role));
+    for (const a of screen.getAllByRole("link")) {
+      expect(a.getAttribute("href")).not.toContain(":8000");
+      expect(a).not.toHaveAttribute("target", "_blank");
+    }
+    expect(screen.queryByText(/UI cũ/)).not.toBeInTheDocument();
+    view.unmount();
+  }
+});
+
+it("marks Quản trị as the current page below /admin", () => {
+  renderHeader(session("admin"), {}, undefined, "/admin/users");
+  expect(screen.getByRole("link", { name: "Quản trị" })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("link", { name: S.nav.queue })).not.toHaveAttribute("aria-current");
 });
 
 it("marks the page you are on", () => {
