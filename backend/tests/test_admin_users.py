@@ -612,6 +612,7 @@ def test_unlock_takes_an_empty_body_or_an_empty_object_with_the_json_type(
         ("Application/JSON", True),
         ("application/merge-patch+json", True),
         ("application/vnd.api+json", True),
+        ("text/x+json", False),
         ("text/json", False),
         ("application/jsonp", False),
         ("application/x-json", False),
@@ -1033,6 +1034,7 @@ def test_a_stale_actor_gets_403_forbidden_with_authz_denied_and_nothing_changes(
     [(actor_id, denied_role, payload)] = _events(sdb, "authz.denied", path)  # committed
     assert (actor_id, denied_role) == (b_id, actor_role)
     assert payload["required"] == ["admin"] and payload["method"] == "PATCH"
+    assert payload["reason"] == "actor_no_longer_admin"
     assert payload["role"] == role_in_payload
 
 
