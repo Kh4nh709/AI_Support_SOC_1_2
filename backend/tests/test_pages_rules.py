@@ -28,6 +28,7 @@ pattern), so its one real commit never reaches a shared table.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import os
 import shutil
@@ -40,11 +41,11 @@ from typing import Any
 import psycopg
 import pytest
 from app.domain.alert import Alert, AlertContext
-from app.infra import auth
+from app.infra import auth, config
 from app.infra.auth import Claims
 from app.ingest import autoclose
 from app.web import deps, main
-from app.web.routers import pages
+from app.web.routers import admin_rules, pages
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 
@@ -688,3 +689,295 @@ def test_api_simulate_create_and_toggle(client) -> None:
     assert listed.status_code == 200
     row = next(r for r in listed.json() if r["rule_id"] == rule_id)
     assert row["enabled"] is False
+
+
+# ---------------------------------------------------------------------------
+# P11-T06 — the two additions of the admin console v1.1 spec §5.5:
+# `hard_block_tally` on `POST /api/admin/rules/simulate` and
+# `width_threshold_pct` on every row of `GET /api/admin/rules`. Both additive.
+# ---------------------------------------------------------------------------
+
+#: The six codes the UI will key its Vietnamese labels on (P11-T14), in
+#: `_HARD_BLOCK_ORDER` order. Spelled out here on purpose: the codes are an
+#: API contract, so renaming one must fail a test, not silently reach the UI.
+_SIX_CODES = [
+    "critical",
+    "never_autoclose_agent",
+    "asset_high",
+    "asset_not_in_inventory",
+    "identity_privileged",
+    "ioc_bad",
+]
+_WATCHED_AGENT = "blk-watched"
+_BLK_RULE = [{"field": "agent_name", "op": "prefix", "value": "blk-"}]
+_CLEAN_CONTEXTS: dict[str, dict] = {
+    "asset_context": {"present": True, "criticality": "medium"},
+    "identity_context": {"privileged": False},
+    "ioc_context": {"reputation": "not_found"},
+}
+
+
+def _blocked_alert_kwargs(code: str) -> dict[str, Any]:
+    """The `_insert_alert` arguments under which `autoclose._first_hard_block`
+    answers exactly `code` — one fault on an otherwise clean alert, so no
+    earlier block in the fixed order can claim it first."""
+    kwargs: dict[str, Any] = {"agent_name": f"blk-{code}", **_CLEAN_CONTEXTS}
+    if code == "critical":
+        kwargs["severity"] = "critical"
+    elif code == "never_autoclose_agent":
+        kwargs["agent_name"] = _WATCHED_AGENT
+    elif code == "asset_high":
+        kwargs["asset_context"] = {"present": True, "criticality": "high"}
+    elif code == "asset_not_in_inventory":
+        kwargs["asset_context"] = {"present": False, "criticality": "unknown"}
+    elif code == "identity_privileged":
+        kwargs["identity_context"] = {"privileged": True}
+    elif code == "ioc_bad":
+        kwargs["ioc_context"] = {"reputation": "malicious"}
+    else:  # pragma: no cover — a typo in this file, not a product path
+        raise AssertionError(code)
+    return kwargs
+
+
+def _seed_blocked(db: Any, counts: dict[str, int]) -> None:
+    for code, n in counts.items():
+        for i in range(n):
+            _insert_alert(db, alert_id=f"blk-{code}-{i}", **_blocked_alert_kwargs(code))
+
+
+def _post_simulate(tc: TestClient, match: Any) -> Any:
+    return tc.post("/api/admin/rules/simulate", json={"match": match})
+
+
+@pytest.fixture
+def tally_spy(monkeypatch):
+    """Wraps `_hard_block_tally`, recording each call, and runs the real one."""
+    calls: list[list[dict[str, Any]]] = []
+    real = admin_rules._hard_block_tally
+
+    def spy(conn, cfg, match):
+        calls.append(match)
+        return real(conn, cfg, match)
+
+    monkeypatch.setattr(admin_rules, "_hard_block_tally", spy)
+    return calls
+
+
+@pytest.mark.db
+def test_api_simulate_tally_counts_per_code_when_the_rule_matches_only_hard_blocked_rows(
+    client, monkeypatch, tally_spy
+) -> None:
+    tc, db, _ = client
+    monkeypatch.setenv("NEVER_AUTOCLOSE_AGENTS", f'["{_WATCHED_AGENT}"]')
+    counts = {
+        "ioc_bad": 5,
+        "never_autoclose_agent": 4,
+        "asset_not_in_inventory": 4,
+        "critical": 3,
+        "asset_high": 2,
+        "identity_privileged": 1,
+    }
+    _seed_blocked(db, counts)
+    # Hard-blocked too, but not this rule's business: its agent_name has no "blk-" prefix.
+    for i in range(2):
+        _insert_alert(db, alert_id=f"other-{i}", **{**_CLEAN_CONTEXTS, "severity": "critical"})
+
+    resp = _post_simulate(tc, _BLK_RULE)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["clusters"] == 0
+    tally = body["hard_block_tally"]
+    # `matched` is what the rule's own conditions match, hard-blocked or not.
+    own_matches = db.execute("SELECT count(*) FROM alerts WHERE agent_name LIKE 'blk-%'").fetchone()
+    assert own_matches[0] == sum(counts.values()) == 19
+    assert tally["matched"] == 19
+    assert set(tally) == {"matched", "blocks"}
+    assert {b["code"]: b["count"] for b in tally["blocks"]} == counts
+    assert len(tally["blocks"]) == 6
+    # The labels stay in the UI: a block is exactly `{code, count}`.
+    assert all(set(b) == {"code", "count"} for b in tally["blocks"])
+    assert all(isinstance(b["count"], int) for b in tally["blocks"])
+    assert len(tally_spy) == 1
+
+
+@pytest.mark.db
+def test_api_simulate_tally_order_is_the_order_hard_block_tally_returns(
+    client, monkeypatch
+) -> None:
+    tc, db, _ = client
+    monkeypatch.setenv("NEVER_AUTOCLOSE_AGENTS", f'["{_WATCHED_AGENT}"]')
+    # Largest first; the three empty codes keep their fixed relative order (ties).
+    _seed_blocked(db, {"ioc_bad": 3, "identity_privileged": 2, "asset_high": 1})
+
+    body = _post_simulate(tc, _BLK_RULE).json()
+    got = [(b["code"], b["count"]) for b in body["hard_block_tally"]["blocks"]]
+
+    _matched, tally = admin_rules._hard_block_tally(db, config.load(), _BLK_RULE)
+    assert got == [(code, count) for code, _label, count in tally]
+    # ...which is not just `_HARD_BLOCK_ORDER` again: the route must not renormalise.
+    assert [code for code, _ in got] != _SIX_CODES
+    assert [code for code, _ in got] == [
+        "ioc_bad",
+        "identity_privileged",
+        "asset_high",
+        "critical",
+        "never_autoclose_agent",
+        "asset_not_in_inventory",
+    ]
+
+
+@pytest.mark.db
+def test_api_simulate_tally_for_a_rule_matching_nothing_is_zero_across_all_six_codes(
+    client, tally_spy
+) -> None:
+    tc, db, _ = client
+    _insert_alert(db, alert_id="quiet-clean", agent_name="some-agent", **_CLEAN_CONTEXTS)
+    _insert_alert(
+        db,
+        alert_id="quiet-blocked",
+        agent_name="some-agent",
+        **{**_CLEAN_CONTEXTS, "severity": "critical"},
+    )
+    match = [{"field": "agent_name", "op": "eq", "value": "nobody-matches-this"}]
+
+    resp = _post_simulate(tc, match)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["clusters"] == 0
+    assert body["hard_block_tally"] == {
+        "matched": 0,
+        "blocks": [{"code": code, "count": 0} for code in _SIX_CODES],
+    }
+    assert len(tally_spy) == 1
+
+
+@pytest.mark.db
+def test_api_simulate_tally_is_null_when_the_rule_closes_rows(client, tally_spy) -> None:
+    tc, db, _ = client
+    _insert_alert(db, alert_id="closes-1", agent_name="ok-agent", **_CLEAN_CONTEXTS)
+    _insert_alert(
+        db, alert_id="closes-2", agent_name="ok-agent", occurrence_count=3, **_CLEAN_CONTEXTS
+    )
+    # A matched row that is hard-blocked changes nothing: the rule still closes the other two.
+    _insert_alert(
+        db,
+        alert_id="closes-blocked",
+        agent_name="ok-agent",
+        **{**_CLEAN_CONTEXTS, "severity": "critical"},
+    )
+    match = [{"field": "agent_name", "op": "eq", "value": "ok-agent"}]
+
+    resp = _post_simulate(tc, match)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["clusters"] == 2
+    assert body["alerts"] == 4
+    assert "hard_block_tally" in body  # present and null, not omitted
+    assert body["hard_block_tally"] is None
+    assert tally_spy == []  # not even computed: no second 30-day scan
+
+
+@pytest.mark.db
+def test_api_simulate_keeps_every_simulate_stats_field_unchanged(client) -> None:
+    tc, db, _ = client
+    _insert_alert(db, alert_id="keep-1", agent_name="ok-agent", **_CLEAN_CONTEXTS)
+    _insert_alert(db, alert_id="keep-2", agent_name="ok-agent", **_CLEAN_CONTEXTS)
+    fields = {f.name for f in dataclasses.fields(autoclose.SimulateStats)}
+    assert fields == {"clusters", "alerts", "by_severity", "by_asset_criticality", "samples"}
+
+    for match in (
+        [{"field": "agent_name", "op": "eq", "value": "ok-agent"}],  # closes rows
+        [{"field": "agent_name", "op": "eq", "value": "nobody"}],  # closes none
+    ):
+        body = _post_simulate(tc, match).json()
+        expected = dataclasses.asdict(autoclose.simulate(db, match))
+        assert set(body) == fields | {"hard_block_tally"}
+        assert {k: body[k] for k in fields} == expected
+
+
+_BAD_MATCHES: tuple[Any, ...] = (
+    [{"field": "risk_score", "op": "eq", "value": "1"}],  # field outside the whitelist
+    [{"field": "identity_privileged", "op": "in", "value": [True]}],  # op the field disallows
+    [{"field": "dst_port", "op": "eq", "value": "443"}],  # value of the wrong type
+    [{"field": "agent_name", "op": "eq"}],  # a condition without its value
+    "not-a-list",  # not even a body Pydantic accepts
+)
+
+
+@pytest.mark.parametrize("match", _BAD_MATCHES)
+@pytest.mark.db
+def test_api_simulate_bad_rule_is_422_and_the_tally_is_never_computed(
+    client, monkeypatch, match
+) -> None:
+    tc, db, _ = client
+    _insert_alert(db, alert_id="bad-1", agent_name="ok-agent", **_CLEAN_CONTEXTS)
+    calls: list[object] = []
+
+    def must_not_run(*args: Any, **kwargs: Any) -> None:
+        calls.append(args)
+        raise AssertionError("_hard_block_tally ran for a rule that failed validation")
+
+    monkeypatch.setattr(admin_rules, "_hard_block_tally", must_not_run)
+
+    resp = _post_simulate(tc, match)
+    assert resp.status_code == 422, resp.text
+    assert calls == []
+    assert "hard_block_tally" not in resp.json()
+
+
+@pytest.mark.db
+def test_api_list_rules_rows_carry_width_threshold_pct_from_the_config(client, monkeypatch) -> None:
+    tc, db, admin_id = client
+    ids = [str(uuid.uuid4()), str(uuid.uuid4())]
+    _insert_rule(db, rule_id=ids[0], created_by=admin_id, name="first")
+    _insert_rule(db, rule_id=ids[1], created_by=admin_id, name="second", enabled=False)
+
+    # The configured default, whatever the environment says.
+    default = config.load().AUTOCLOSE_RULE_WIDTH_PCT
+    rows = tc.get("/api/admin/rules").json()
+    assert {r["rule_id"] for r in rows} == set(ids)  # one transaction: created_at ties
+    assert [r["width_threshold_pct"] for r in rows] == [default, default]
+
+    # Overridden to a non-default value: the response follows the config, not a constant.
+    cfg = dataclasses.replace(config.load(), AUTOCLOSE_RULE_WIDTH_PCT=17)
+    monkeypatch.setitem(main.app.dependency_overrides, deps.get_config, lambda: cfg)
+    rows = tc.get("/api/admin/rules").json()
+    assert [r["width_threshold_pct"] for r in rows] == [17, 17]
+    assert all(type(r["width_threshold_pct"]) is int for r in rows)
+    # Additive: every field the row had before is still there.
+    assert set(rows[0]) == {
+        "rule_id",
+        "name",
+        "enabled",
+        "match",
+        "match_json",
+        "reason",
+        "created_by",
+        "created_at",
+        "width_pct",
+        "width_threshold_pct",
+    }
+
+
+@pytest.mark.db
+def test_api_list_rules_width_pct_and_its_threshold_come_from_the_same_setting(
+    client, monkeypatch
+) -> None:
+    tc, db, admin_id = client
+    rule_id = str(uuid.uuid4())
+    _insert_rule(db, rule_id=rule_id, created_by=admin_id, name="quarter")
+    # 20 of the 80 alert rows in the window: 25 %, over a threshold of 17 and under 30.
+    _insert_alert(
+        db,
+        alert_id="quarter-closed",
+        status="auto_closed",
+        occurrence_count=20,
+        autoclose_rule_id=rule_id,
+    )
+    for i in range(79):
+        _insert_alert(db, alert_id=f"quarter-other-{i}")
+    monkeypatch.setenv("AUTOCLOSE_RULE_WIDTH_PCT", "17")
+
+    (row,) = tc.get("/api/admin/rules").json()
+    assert row["width_threshold_pct"] == 17
+    assert row["width_pct"] == 25.0
