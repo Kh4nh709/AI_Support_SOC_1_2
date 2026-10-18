@@ -11,6 +11,11 @@ it runs `simulate()` — same predicates `evaluate()` does, hard blocks included
 — *before* anything is written, and only a second, explicit action writes the
 rule. Xem trước dùng đúng vị từ của bộ máy, đã tính cả sáu chặn cứng.
 
+P11-T06 (admin console v1.1 §5.5), both additive: `POST /api/admin/rules/simulate`
+also returns `hard_block_tally` (`{matched, blocks: [{code, count}]}` when the
+preview closes no cluster, else `null`), the `_hard_block_tally` below the Jinja
+preview uses; each row of `GET /api/admin/rules` also carries `width_threshold_pct`.
+
 Design note 3: toggle (and create — no dedicated "rule created" audit event
 exists and this card adds none) write `admin.autoclose_rule_toggled` with
 `before`/`after` both explicit, then call `reload_rules()` *after* the write
@@ -291,8 +296,12 @@ class RuleToggleIn(BaseModel):
 
 
 @router.get("/api/admin/rules")
-def api_list_rules(conn: Conn, claims: Admin) -> list[dict[str, Any]]:
-    return _list_rules(conn)
+def api_list_rules(conn: Conn, claims: Admin, cfg: Cfg) -> list[dict[str, Any]]:
+    # P11-T06: the threshold the 7-day width warning ("⚠ x% > ngưỡng%") is measured
+    # against travels with every row, so the UI never hard-codes it. Added here, not in
+    # `_list_rules`, which the Jinja page shares and which stays as it was.
+    threshold = cfg.AUTOCLOSE_RULE_WIDTH_PCT
+    return [{**row, "width_threshold_pct": threshold} for row in _list_rules(conn)]
 
 
 @router.post("/api/admin/rules", status_code=201)
@@ -316,12 +325,25 @@ def api_toggle_rule(conn: Conn, claims: Admin, body: RuleToggleIn) -> dict[str, 
 
 
 @router.post("/api/admin/rules/simulate")
-def api_simulate_rule(conn: Conn, claims: Admin, body: SimulateIn) -> dict[str, Any]:
+def api_simulate_rule(conn: Conn, claims: Admin, cfg: Cfg, body: SimulateIn) -> dict[str, Any]:
+    # `simulate()` validates first (`PermanentError` -> 422), so a rule that fails the
+    # whitelist never reaches the tally, which assumes `match` is already valid.
     try:
         stats = autoclose.simulate(conn, body.match)
     except PermanentError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return dataclasses.asdict(stats)
+    result: dict[str, Any] = dataclasses.asdict(stats)
+    # P11-T06 (§5.5): when the rule closes nothing, say why — the same tally the Jinja
+    # preview shows, as `{code, count}` in the order `_hard_block_tally` returns (largest
+    # first). The Vietnamese labels stay in the UI. Otherwise `null`, and nothing computed.
+    result["hard_block_tally"] = None
+    if stats.clusters == 0:
+        matched, tally = _hard_block_tally(conn, cfg, body.match)
+        result["hard_block_tally"] = {
+            "matched": matched,
+            "blocks": [{"code": code, "count": count} for code, _label, count in tally],
+        }
+    return result
 
 
 # ---------------------------------------------------------------------------
