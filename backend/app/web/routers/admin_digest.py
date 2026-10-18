@@ -5,8 +5,8 @@
 All logic is `app.tier1.digest` (`build`, `review`) and `app.ingest.autoclose`
 (`load_rules`, read-only, for the two-empty-states distinction); this module
 writes no SQL of its own (P5-T09 scoped `tier1/digest.py` out; the JSON half
-below needs three small reads that live there: `review_details`,
-`rules_enabled` and `alert_status`).
+below needs these small reads that live there: `review_details`, `rules_enabled`,
+`left_digest_on`, `reopened_by_review` and `build(alert_id=)`).
 
 **Days are local (P5-T08 review round 1 · S4).** `build`/`unreviewed_count`
 take `day` as a date string in `cfg.DISPLAY_TZ`. The default day is

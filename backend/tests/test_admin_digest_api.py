@@ -39,7 +39,7 @@ import pytest
 from app.domain import transitions
 from app.infra import config
 from app.infra.auth import Claims
-from app.tier1 import digest
+from app.tier1 import digest, queue
 from app.web import deps, main
 from app.web.routers import admin_digest
 from fastapi import Request
@@ -1167,6 +1167,153 @@ def test_a_post_costs_the_same_statements_for_a_day_of_3_rows_and_of_43(client) 
 
     assert small == big, (small, big)
     assert max(small.values()) <= 20, small
+
+
+@pytest.mark.db
+def test_build_and_reopened_by_review_cost_two_statements_however_big_the_day(client) -> None:
+    """P11-T20 row 20 (P11-T07 round 2, N1). `_rows_from` read ① with one `latest_suggestion`
+    query per row: 43 statements for 40 rows, 49 with five "Sai" rows. It now reads the whole
+    day's ① in one statement (`queue.latest_suggestions`): the rows, and ① for them, is two
+    statements for `build` and two for `reopened_by_review`, at 3 rows and at 43; an empty day
+    reads no ① at all. The whole GET is a constant too."""
+    tc, db, admin = client
+    counting = _Counting(db)
+
+    def seed(day: str, rows: int, sai: int) -> None:
+        rule_id = _rule(db, admin.user_id, name=f"rule-{day}")
+        at = datetime.fromisoformat(f"{day}T12:00:00+07:00")
+        for i in range(rows):
+            alert_id = _alert(db, closed_at=at, autoclose_rule_id=rule_id, occurrence_count=i + 1)
+            if i % 3 != 2:  # a third of the rows have no ① run yet
+                _run(db, alert_id, "false_positive" if i % 3 == 0 else "escalate")
+        for _ in range(sai):
+            alert_id = _alert(db, closed_at=at, autoclose_rule_id=rule_id)
+            digest.review(db, alert_id, "wrong", admin.user_id)
+
+    def costs(day: str) -> dict[str, int]:
+        out = {}
+        counting.n = 0
+        built = digest.build(counting, day, tz=TZ)
+        out["build"], rows = counting.n, len(built)
+        counting.n = 0
+        reopened = digest.reopened_by_review(counting, day, tz=TZ)
+        out["reopened_by_review"], sai = counting.n, len(reopened)
+        main.app.dependency_overrides[deps.get_conn] = lambda: counting
+        counting.n = 0
+        listed = tc.get(_DIGEST, params={"day": day})
+        assert listed.status_code == 200 and len(listed.json()["rows"]) == rows + sai
+        out["GET"] = counting.n
+        return out | {"rows": rows, "sai": sai}
+
+    seed("2026-09-22", 3, 1)
+    seed("2026-09-23", 43, 5)
+
+    small, big = costs("2026-09-22"), costs("2026-09-23")
+    empty = costs("2026-09-24")
+
+    assert (small["rows"], small["sai"], big["rows"], big["sai"]) == (3, 1, 43, 5)
+    assert (small["build"], small["reopened_by_review"]) == (2, 2)
+    assert (big["build"], big["reopened_by_review"]) == (2, 2)
+    assert small["GET"] == big["GET"], (small, big)
+    assert (empty["build"], empty["reopened_by_review"]) == (1, 1)  # no row, so no ① read
+
+
+@pytest.mark.db
+def test_the_digest_rows_read_the_suggestion_exactly_as_latest_suggestion_does(client) -> None:
+    """The batched read behind `build` and `reopened_by_review` gives each row the verdict the
+    one-alert reader gives it, in every state ① can leave an alert in: no run, a failed run, a
+    good one, a failed run after a good one (no verdict: the older run does not stand in)."""
+    tc, db, admin = client
+    rule_id = _rule(db, admin.user_id)
+    day_at = datetime.fromisoformat("2026-09-25T12:00:00+07:00")
+    no_run = _alert(db, closed_at=day_at, autoclose_rule_id=rule_id, occurrence_count=1)
+    good = _alert(db, closed_at=day_at, autoclose_rule_id=rule_id, occurrence_count=2)
+    _run(db, good, "escalate")
+    failed_last = _alert(db, closed_at=day_at, autoclose_rule_id=rule_id, occurrence_count=3)
+    _run(db, failed_last, "escalate")
+    db.execute(
+        "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, system_prompt,"
+        " user_message, result, role, gate_result, stopped_by, created_at)"
+        " VALUES (gen_random_uuid(), 'triage', 'alert', %s, 's', 'u', NULL, 'proposer', NULL,"
+        " 'linter', now() + interval '1 minute')",
+        (failed_last,),
+    )
+    sai = _alert(db, closed_at=day_at, autoclose_rule_id=rule_id, occurrence_count=4)
+    _run(db, sai, "needs_review")
+    digest.review(db, sai, "wrong", admin.user_id)
+
+    rows = digest.build(db, "2026-09-25", tz=TZ) + digest.reopened_by_review(
+        db, "2026-09-25", tz=TZ
+    )
+
+    assert {r.alert_id for r in rows} == {no_run, good, failed_last, sai}
+    for row in rows:
+        reference = queue.latest_suggestion(db, row.alert_id)
+        expected = reference.suggested_action if reference else None
+        assert row.suggested_action == expected, row.alert_id
+        assert row.disagreement == (reference is not None and expected != "false_positive")
+    by_id = {r.alert_id: r for r in rows}
+    assert by_id[good].suggested_action == "escalate" and by_id[good].disagreement is True
+    assert by_id[no_run].suggested_action is None and by_id[no_run].disagreement is False
+    assert by_id[failed_last].suggested_action is None  # not the older run's "escalate"
+    assert by_id[sai].suggested_action == "needs_review"
+
+
+# ---------------------------------------------------------------------------
+# The 200 after "Sai" is the list's own row (P11-T07 round 2, N2 and N3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_two_sai_rows_on_one_day_each_200_names_the_alert_it_reviewed(client) -> None:
+    """P11-T20 row 21 (round 2, N2; mutant n9: `reopened_by_review` ignores `alert_id`). Two
+    alerts of one day are both reviewed "Sai". The route reads the list's row for the alert it
+    just reviewed, so if that read ignored `alert_id` the second 200 would carry the first
+    alert's row, the biggest cluster being listed first (9 occurrences against 1)."""
+    tc, db, admin = client
+    rule_id = _rule(db, admin.user_id)
+    big = _alert(db, autoclose_rule_id=rule_id, occurrence_count=9)
+    small = _alert(db, autoclose_rule_id=rule_id, occurrence_count=1)
+
+    first = _post(tc, big, "wrong")
+    second = _post(tc, small, "wrong")
+
+    assert first.status_code == second.status_code == 200, (first.text[:200], second.text[:200])
+    assert first.json()["row"]["alert_id"] == big
+    assert second.json()["row"]["alert_id"] == small
+    assert second.json()["row"]["occurrence_count"] == 1
+    listed = {r["alert_id"]: r for r in _get(tc).json()["rows"]}
+    assert set(listed) == {big, small}
+    assert listed[big] == first.json()["row"] and listed[small] == second.json()["row"]
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("verdict", ["wrong", "unsure", "correct"])
+def test_a_run_that_lands_before_the_review_is_in_the_200s_row_not_only_the_snapshot(
+    client, monkeypatch, verdict
+) -> None:
+    """P11-T20 row 22 (round 2, N3; mutant n7: the 200 always from the snapshot). The route reads
+    the alert before the review (`before`) and answers with the row as the list has it after.
+    A ① run that lands in between is in the second and not in the first, so the 200 carries it
+    and equals the list's row. `digest.review` is wrapped so the run lands right before it."""
+    tc, db, admin = client
+    alert_id = _alert(db, autoclose_rule_id=_rule(db, admin.user_id))  # no ① run yet
+    assert digest.build(db, _DAY, tz=TZ, alert_id=alert_id)[0].suggested_action is None
+    real_review = digest.review
+
+    def review_after_a_run(conn, alert, verdict_, reviewer_id):
+        _run(conn, alert, "escalate")  # lands after the route's first read, before the review
+        return real_review(conn, alert, verdict_, reviewer_id)
+
+    monkeypatch.setattr(digest, "review", review_after_a_run)
+
+    resp = _post(tc, alert_id, verdict)
+
+    assert resp.status_code == 200, resp.text[:300]
+    row = resp.json()["row"]
+    assert row["suggested_action"] == "escalate" and row["disagreement"] is True
+    assert row["reviewed_verdict"] == verdict
+    assert _get(tc).json()["rows"] == [row]  # the 200 is the list's row
 
 
 # ---------------------------------------------------------------------------

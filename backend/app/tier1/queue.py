@@ -17,7 +17,9 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
   suggestion, the acknowledger's name.
 - `latest_suggestion` — **the one place in P4 that reads `llm_runs`** (planning decision
   5). The row shape is P3-T10's and may still move; every read here is `.get`-tolerant,
-  and this function is where to follow it.
+  and this function is where to follow it. `latest_suggestions` is the same read for many
+  alerts in ONE statement (P11-T20 row 20: the digest read one query per row), and shares
+  the row-to-`Suggestion` step, so the two cannot drift apart.
 
 Both readers pass their dict through `visibility.strip` before returning it, so the blind
 branch (context pack §6.4) is enforced here, never in the client. `risk_score` never
@@ -28,7 +30,7 @@ constraint 5).
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, Literal
 
@@ -156,14 +158,11 @@ def _reason(item: Any) -> dict[str, Any] | None:
     return {"claim": item.get("claim"), "quote": item.get("quote"), "source": item.get("source")}
 
 
-def latest_suggestion(conn: psycopg.Connection, alert_id: str) -> Suggestion | None:
-    """The latest `role = 'proposer'` triage run for `alert_id`, or `None` when there is
-    none or its `result` is NULL (① failed — `stopped_by` set). Every key is read with
-    `.get`: a key P3-T10 does not write becomes `None`, never a `KeyError`."""
-    row = conn.execute(_SUGGESTION_SQL, (alert_id,)).fetchone()
-    if row is None:
-        return None
-    run_id, result, gate_result, created_at = row
+def _suggestion_of(
+    run_id: Any, result: Any, gate_result: Any, created_at: datetime
+) -> Suggestion | None:
+    """The `Suggestion` of one `llm_runs` row (the LATEST proposer run of an alert), or `None`
+    when its `result` is NULL: ① failed, and an older run with a result does not stand in."""
     if result is None:
         return None
     gate_result = gate_result if isinstance(gate_result, Mapping) else {}
@@ -187,6 +186,39 @@ def latest_suggestion(conn: psycopg.Connection, alert_id: str) -> Suggestion | N
         correlated_at_analysis=facts.get("correlated_clusters"),
         created_at=created_at,
     )
+
+
+def latest_suggestion(conn: psycopg.Connection, alert_id: str) -> Suggestion | None:
+    """The latest `role = 'proposer'` triage run for `alert_id`, or `None` when there is
+    none or its `result` is NULL (① failed — `stopped_by` set). Every key is read with
+    `.get`: a key P3-T10 does not write becomes `None`, never a `KeyError`."""
+    row = conn.execute(_SUGGESTION_SQL, (alert_id,)).fetchone()
+    if row is None:
+        return None
+    return _suggestion_of(*row)
+
+
+_SUGGESTIONS_SQL = """
+    SELECT DISTINCT ON (subject_id) subject_id, run_id, result, gate_result, created_at
+    FROM llm_runs
+    WHERE subject_id = ANY(%s) AND pipeline = 'triage' AND role = 'proposer'
+    ORDER BY subject_id, created_at DESC
+"""
+
+
+def latest_suggestions(conn: psycopg.Connection, alert_ids: Sequence[str]) -> dict[str, Suggestion]:
+    """`latest_suggestion` for many alerts in ONE statement: `{alert_id: Suggestion}` for each
+    of `alert_ids` that has one. An alert with no proposer run, or whose latest one has a NULL
+    `result`, is absent from the answer, as `latest_suggestion` answers it `None`. The same row
+    and the same conversion per id: the latest run is picked first and judged after, so a
+    failed latest run is not replaced by an older good one. No statement at all for no ids.
+    Like `latest_suggestion` it applies no blind-branch rule: `visibility.strip`, in the
+    readers that serve an analyst, does."""
+    if not alert_ids:
+        return {}
+    rows = conn.execute(_SUGGESTIONS_SQL, (list(alert_ids),)).fetchall()
+    found = ((alert_id, _suggestion_of(*rest)) for alert_id, *rest in rows)
+    return {alert_id: suggestion for alert_id, suggestion in found if suggestion is not None}
 
 
 # ---------------------------------------------------------------------------
