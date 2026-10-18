@@ -734,6 +734,169 @@ export const S = {
       },
     },
 
+    // The LLM and limits page (P11-T13, spec §4.3): `/admin/llm`. Its words are here and nowhere else.
+    llmPage: {
+      subtitle: "Mọi lượt gọi model đều ghi vào llm_runs kèm token, thời gian và chi phí",
+      rangeLabel: "Khoảng thời gian",
+      // A background read failed while the page still shows the one before it.
+      refreshFailed: "Không làm mới được dữ liệu — đang hiển thị lần tải trước.",
+      loadErrorOffline:
+        "Mất kết nối tới máy chủ. Thử lại sau ít phút; nếu lặp lại, xem Tổng quan → Sức khoẻ hệ thống.",
+      loadErrorServer: (status: number) =>
+        `Máy chủ trả lỗi ${status}. Thử lại sau ít phút; nếu lặp lại, xem Tổng quan → Sức khoẻ hệ thống.`,
+
+      // The four tiles.
+      cost: {
+        title: "Chi phí tháng này",
+        barLabel: "Chi phí tháng này so với trần",
+        left: (usd: string) => `còn ${usd}`,
+        projected: (usd: string) => `dự báo tuyến tính cuối tháng ${usd}`,
+        // `warn` is at 80 % of the cap and below it; `stopped` is spent >= cap, whatever `pct` says.
+        warn: (pct: string) =>
+          `${pct} · sắp chạm trần. Khi chạm trần, mọi lượt gọi model dừng cho tới khi tăng trần hoặc sang tháng mới.`,
+        stopped:
+          "Model đã dừng gọi. Alert mới không có đề xuất ① (stopped_by = cap); ② báo hết hạn mức. Tăng trần ở khối Hạn mức hoặc chờ sang tháng.",
+        noCap: "Không có trần để so sánh: không đọc được hạn mức.",
+        // The canvas has no such note. `spent_usd` is the calendar month whatever the range says, and the
+        // month begins at the midnight of the database session's time zone (`date_trunc('month', now())`).
+        monthNote:
+          "Tính cả tháng dương lịch, dù khoảng thời gian đang chọn là gì. Tháng bắt đầu lúc 0 giờ ngày 1, theo múi giờ của phiên cơ sở dữ liệu.",
+      },
+      calls: { title: "Lượt gọi model" },
+      tokens: {
+        title: "Token vào / ra",
+        average: (parts: string) => `trung bình ${parts}`,
+        averageOf: (pipeline: string, tokens: string) => `${pipeline} ${tokens} vào`,
+      },
+      stoppedTile: {
+        title: "Lượt dừng không có kết quả",
+        none: "không có lượt nào dừng",
+        detail: (stopped: string, calls: string, main: string) =>
+          `${stopped} / ${calls} lượt · nhiều nhất: ${main}`,
+      },
+
+      // The pipelines of `llm_runs.pipeline` and, for ①, its two roles. There is no chat row: the column's
+      // CHECK admits `triage` and `investigate` only (spec decision 5). Anything else is shown as it came.
+      pipeline: {
+        triage: "①",
+        investigate: "②",
+        triageRole: {
+          proposer: "① triage · proposer",
+          verifier: "① triage · verifier",
+        },
+        triageNoRole: "① triage",
+        investigateRow: "② điều tra case",
+      },
+      // The short words of `llm_runs.stopped_by` for a table cell. `other` is the server's bucket for a reason
+      // longer than a short code. A code with no word here is shown as the code (`labelOf`).
+      stopped: {
+        cap: "chạm trần chi phí",
+        permanent: "bị từ chối, không thử lại",
+        linter: "không qua kiểm tra an toàn",
+        schema: "sai định dạng (schema)",
+        transient: "mô hình không phản hồi",
+        disabled: "① đang tắt",
+        other: "lý do khác",
+      },
+
+      byPipeline: {
+        title: "Theo pipeline",
+        label: "Lượt gọi theo pipeline và vai trò",
+        colPipeline: "Pipeline",
+        colCalls: "Lượt",
+        colWithResult: "Có kết quả",
+        colStopped: "Dừng vì",
+        colLatency: "Trễ p50 / p95",
+        colCost: "Chi phí",
+        // The server's tool-call count is always 0; the sentence is decision 4's.
+        toolCalls: (count: number) =>
+          count === 0 ? "Tool call: 0 — mô hình không gọi công cụ nào." : `Tool call: ${count}`,
+      },
+      noCalls: {
+        title: (range: string) => `Chưa có lượt gọi model nào trong ${range}`,
+        body: "Bảng theo pipeline để trống. Chọn khoảng thời gian dài hơn để xem.",
+      },
+
+      limits: {
+        title: "Hạn mức",
+        // The label of each editable field, and the shorter name the confirmation lists it by.
+        field: {
+          cap_usd: "Trần chi phí mỗi tháng (USD)",
+          quota_per_24h: "Lượt ② mỗi người trong 24 giờ",
+          timeout_s: "Thời gian chờ mỗi lượt gọi (giây)",
+        },
+        changeName: {
+          cap_usd: "Trần chi phí mỗi tháng",
+          quota_per_24h: "Lượt ② mỗi người trong 24 giờ",
+          timeout_s: "Thời gian chờ mỗi lượt",
+        },
+        rangeHint: (min: number, max: number) => `Từ ${min} đến ${max}`,
+        sourceEnv: "từ .env",
+        sourceWeb: (by: string | null, at: string) =>
+          by === null ? `sửa trên web lúc ${at}` : `sửa trên web bởi ${by} lúc ${at}`,
+        clamped:
+          "Giá trị đã lưu vượt mức tối đa hiện tại nên đang được giữ ở mức tối đa; lưu lại để ghi đúng giá trị.",
+        save: "Lưu hạn mức",
+        note: "Thay đổi có hiệu lực ngay và được ghi audit (người sửa, giá trị cũ → mới). Nếu không đọc được hạn mức đã lưu, model dừng gọi chứ không bỏ trần.",
+        saved: "Đã lưu hạn mức. Có hiệu lực ngay.",
+        // The two ways a save fails that no field or reason explains.
+        saveOffline: "Không lưu được: mất kết nối máy chủ. Thử lại.",
+        saveServer: "Không lưu được: máy chủ trả lỗi. Thử lại.",
+      },
+      confirm: {
+        title: "Lưu hạn mức mới?",
+        confirm: "Lưu",
+        confirmAnyway: "Vẫn lưu",
+        colLimit: "Hạn mức",
+        colOld: "Cũ",
+        colNew: "Mới",
+        tableLabel: "Giá trị thay đổi",
+        seconds: (value: number) => `${value} s`,
+        // Spent >= the new cap is when the adapter stops: it compares `spent >= cap`.
+        belowSpent: (cap: string, spent: string) =>
+          `Trần mới ${cap} không cao hơn chi phí tháng này ${spent}. Model sẽ dừng gọi ngay sau khi lưu.`,
+        note: "Chỉ liệt kê giá trị thay đổi. Có hiệu lực ngay cho lượt gọi tiếp theo và được ghi audit (người sửa, cũ → mới).",
+      },
+      // The read-only panel that replaces the form when the stored limits cannot be read (fail closed).
+      failClosed: {
+        title: "Không đọc được hạn mức đã lưu",
+        body: "Model đang dừng gọi để không vượt trần, chứ không phải được gọi mà không có trần. Khối Hạn mức chỉ đọc cho tới khi đọc lại được. Kiểm tra cơ sở dữ liệu ở Tổng quan → Sức khoẻ hệ thống.",
+      },
+
+      quota: {
+        title: "Dùng hạn mức ② · 24 giờ gần nhất",
+        label: "Lượt ② của từng người trong 24 giờ gần nhất",
+        limit: (count: number) => `Giới hạn ${count} lượt mỗi người`,
+        limitUnknown: "Không đọc được giới hạn",
+        colUser: "Người dùng",
+        colUsed: "Lượt ②",
+        colLeft: "Còn",
+        exhausted: "0 · hết lượt",
+        empty: "Chưa ai chạy ② trong 24 giờ gần nhất.",
+        note: "Đếm trên 24 giờ gần nhất, không theo ngày lịch. Người hết lượt không chạy thêm được ② cho tới khi lượt cũ nhất quá 24 giờ.",
+      },
+
+      recent: {
+        title: "Lượt gọi gần nhất",
+        note: "20 lượt mới nhất, không phụ thuộc khoảng thời gian đang chọn",
+        label: "Các lượt gọi model gần nhất",
+        colAt: "Lúc",
+        colPipeline: "Pipeline",
+        colSubject: "Đối tượng",
+        colTokens: "Token vào / ra",
+        colLatency: "Trễ",
+        colOutcome: "Kết quả",
+        colCost: "Chi phí",
+        empty: "Chưa có lượt gọi nào.",
+        subject: (type: string, id: string) => `${type} ${id}`,
+        // `outcome` is `stopped:<stopped_by>` for a run with no verdict.
+        stopped: (reason: string) => `dừng · ${reason}`,
+        // A verifier's `outcome` is its own `structured_only_verdict` (from the facts and the decision
+        // table alone), not whether it agreed with the proposer: the cell says so.
+        verifier: (verdict: string) => `kết luận riêng: ${verdict}`,
+      },
+    },
+
     // The groups of the audit page's filter (`GROUPS` of admin_audit.py), in the canvas's words.
     auditGroup: {
       users: "Người dùng và quyền",
