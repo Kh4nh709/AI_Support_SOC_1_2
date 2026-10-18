@@ -1584,6 +1584,20 @@ describe("a refused save", () => {
     expect(await within(dialog()).findByRole("alert")).toHaveTextContent(L.limits.saveServer);
   });
 
+  it.each([
+    [404, "Not Found", L.limits.saveServer],
+    [409, { reason: "already_queued" }, S.admin.reason.already_queued],
+  ])(
+    "reads a %s the route never sends: its reason's text if it has one, else 'the server failed'",
+    async (status, detail, text) => {
+      serveUsage(usage());
+      servePut(() => refuse(status, detail));
+      const { user } = await openConfirm({ cap: "40" });
+      await user.click(confirmButton("Lưu"));
+      expect(await within(dialog()).findByRole("alert")).toHaveTextContent(text);
+    },
+  );
+
   it("says the connection failed, inside the dialog, when there was no answer", async () => {
     serveUsage(usage());
     servePut(() => HttpResponse.error());
