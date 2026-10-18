@@ -45,3 +45,8 @@ The independent reviews found these Minors and approved without them, so none of
 | 37 | P11-T20 r1 n3 | `scripts/migrate.sh:53`: guard the base-migration count lookup like the others |
 | 38 | P11-T10 r2 n1 | `frontend/src/api/adminTypes.test.ts:113-118` `dictKeys`: throw on an unterminated string (`indexOf` −1 restarts the scan forever); optionally skip `\"` and add `\s*` to the nine anchors |
 | 39 | P11-T10 Director | `reserved` leaves `readFromElsewhere` in `adminStrings.test.ts` (P11-T20 part 1 is merged, the backend writes it) |
+| 40 | P11-T13 r1 m1 | LLM page stopped tile: sum over rows with `role !== "verifier"` (a ① verifier failure writes `stopped_by` on both rows) or show per pipeline; update `LlmPage.test.tsx:390` |
+| 41 | P11-T13 r1 m2 | LLM limits: after a successful save focus falls to `<body>` (the opener is disabled); focus the cap field or the toast, plus a test |
+| 42 | P11-T13 r1 m3 | `LlmPage.test.tsx:1491-1495`: drop or rename the two 422 fixtures the handler cannot send (`empty`, `unknown` on a real field) |
+| 43 | P11-T13 r1 n1 | unit words " tr" and " s" in `llmFigures.ts:42,52` move to `S.admin.llmPage` |
+| 44 | P11-T13 r1 n3 | `S.ai2.quotaExhausted` (`strings.ts:451`) says "hôm nay"; the ② quota is a rolling 24 h (decision 8) |
