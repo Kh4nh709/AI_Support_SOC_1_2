@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import threading
 import time
 import uuid
@@ -45,6 +46,7 @@ from app.infra.auth import Claims
 from app.web import deps, main
 from app.web.routers import admin_audit
 from fastapi.testclient import TestClient
+from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from tests.scratch_db import scratch_database
@@ -121,10 +123,21 @@ def test_every_alert_and_tier1_name_is_in_alerts_cases() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_redact_keys_and_the_placeholder_are_the_spec_ones() -> None:
-    assert admin_audit.REDACT_KEYS == frozenset(
-        {"password", "password_hash", "token", "secret", "dsn", "api_key"}
-    )
+def test_the_redaction_suffixes_and_the_placeholder_are_the_spec_ones() -> None:
+    """Spec §5.8 as amended at `b9fe528`, plus `secretkey`, `privatekey` and `passphrase` (the
+    Director's ruling on the fix-round note): the normalised names a key must equal or end with."""
+    assert set(admin_audit.REDACT_SUFFIXES) == {
+        "password",
+        "passwordhash",
+        "secret",
+        "token",
+        "dsn",
+        "apikey",
+        "secretkey",
+        "privatekey",
+        "passphrase",
+    }
+    assert len(admin_audit.REDACT_SUFFIXES) == 9
     assert admin_audit.REDACTED == PLACEHOLDER
     assert admin_audit.PAYLOAD_MAX_BYTES == 64 * 1024
     assert admin_audit.MAX_PAYLOAD_DEPTH == 32
@@ -155,11 +168,94 @@ def test_redaction_goes_through_dicts_and_lists_at_any_depth() -> None:
     }
 
 
-@pytest.mark.parametrize(
-    "key", ["Password", "PASSWORD", "API_KEY", "Api_Key", "Password_Hash", "DSN", "Token", "sEcReT"]
-)
-def test_redaction_ignores_the_case_of_the_key(key: str) -> None:
+# Keys the rule must catch: the spec's six, in any case or separator style, and the near-misses the
+# Reviewer named (`access_token`, `client_secret`, `apiKey`, `api-key`, `db_password`,
+# `refresh_token`).
+CAUGHT_KEYS = [
+    "password",
+    "password_hash",
+    "token",
+    "secret",
+    "dsn",
+    "api_key",
+    "Password",
+    "PASSWORD",
+    "API_KEY",
+    "Api_Key",
+    "Password_Hash",
+    "DSN",
+    "Token",
+    "sEcReT",
+    "access_token",
+    "client_secret",
+    "apiKey",
+    "api-key",
+    "db_password",
+    "refresh_token",
+    "passwordHash",
+    "Password-Hash",
+    "X-Api-Key",
+    "x_api_key",
+    "accessToken",
+    "userPassword",
+    "APIKEY",
+    "apikey",
+    "database.dsn",
+    "secret_key",
+    "secretKey",
+    "SECRET_KEY",
+    "Secret-Key",
+    "private_key",
+    "privateKey",
+    "PRIVATE-KEY",
+    "ssh_private_key",
+    "passphrase",
+    "Passphrase",
+    "ssh_passphrase",
+]
+# Keys it must leave alone: a plain substring rule would hide these (`key` would hide a setting's
+# name in `admin.settings_changed`'s `changes[].key`; `token` would hide a counter).
+VISIBLE_KEYS = [
+    "key",
+    "Key",
+    "token_count",
+    "tokens_in",
+    "tokens",
+    "passwords",
+    "secretary",
+    "token_type",
+    "dsn_host",
+    "apikeys",
+    "hash",
+    "keys",
+    "_",
+    "-",
+    "",
+    # a digest is not a credential, and a public key or an id of a key is not a secret
+    "token_hash",
+    "tokenHash",
+    "public_key",
+    "private_key_id",
+    "secret_id",
+    "secret_keys",
+    "passphrases",
+    "passphrase_hint",
+]
+
+
+@pytest.mark.parametrize("key", CAUGHT_KEYS)
+def test_redaction_catches_a_key_after_normalising_it(key: str) -> None:
+    assert admin_audit.is_secret_key(key) is True
     assert admin_audit.redact({"a": [{key: "x"}]}) == {"a": [{key: PLACEHOLDER}]}
+
+
+def test_the_rule_is_lowercase_drop_underscores_and_hyphens_then_equal_or_end_with() -> None:
+    assert admin_audit.normalise_key("apiKey") == "apikey"  # camelCase needs no split of its own
+    assert admin_audit.normalise_key("X-Api_KEY") == "xapikey"
+    assert admin_audit.normalise_key("a.b c") == "a.b c"  # only `_` and `-` are dropped
+    assert admin_audit.is_secret_key("my token") is True  # a suffix, not a whole word
+    assert admin_audit.is_secret_key("token in") is False  # not a suffix
+    assert admin_audit.is_secret_key(7) is False  # a JSON key is a string; nothing else matches
 
 
 def test_a_redacted_key_keeps_its_name_and_loses_a_structured_value_whole() -> None:
@@ -167,11 +263,23 @@ def test_a_redacted_key_keeps_its_name_and_loses_a_structured_value_whole() -> N
     assert out == {"secret": PLACEHOLDER, "token": PLACEHOLDER}
 
 
-@pytest.mark.parametrize(
-    "key", ["passwords", "tokens", "token_count", "my_password", "secretary", "api-key", "apikey"]
-)
-def test_only_the_exact_lowercased_name_is_redacted(key: str) -> None:
+@pytest.mark.parametrize("key", VISIBLE_KEYS)
+def test_a_near_miss_key_stays_visible(key: str) -> None:
+    assert admin_audit.is_secret_key(key) is False
     assert admin_audit.redact({key: "visible"}) == {key: "visible"}
+    assert admin_audit.redact({"a": [{key: [1, {"b": 2}]}]}) == {"a": [{key: [1, {"b": 2}]}]}
+
+
+def test_a_settings_change_is_returned_whole_with_its_key_names() -> None:
+    """`admin.settings_changed` (P11-T03) carries `changes: [{key, old, new}]`: the setting's name is
+    the value of a key called `key`, and neither it nor the numbers may be hidden."""
+    payload = {
+        "changes": [
+            {"key": "LLM_TIMEOUT_S", "old": 60, "new": 90},
+            {"key": "LLM_MONTHLY_USD_CAP", "old": 50, "new": 80},
+        ]
+    }
+    assert admin_audit.redact(payload) == payload
 
 
 def test_redaction_returns_everything_else_unchanged_and_unstringified() -> None:
@@ -723,6 +831,25 @@ def test_an_actor_without_a_user_row_is_not_matched_by_any_username(client) -> N
     assert len(_ids(_get(tc))) == 1  # but it is in the unfiltered list
 
 
+@pytest.mark.db
+def test_an_llm_row_with_an_actor_id_has_no_username_and_no_username_matches_it(client) -> None:
+    """F3 of the review. Spec §5.8: `actor_username` is null for system and llm. The CHECK
+    `ck_audit_actor_id_theo_role` lets an `llm` row carry an `actor_id`; no writer does it today,
+    but the answer must not name a user for it, nor let `actor=<that user>` find it."""
+    tc, db, claims = client
+    ana = _user(db, "ana", "tier1")
+    llm_row = _event(db, "triage.suggested", "l-1", role="llm", actor_id=ana)
+    human = _event(db, "tier1.decided", "a-1", role="analyst", actor_id=ana)
+    boss = _event(db, "admin.user_updated", "u-1", role="admin", actor_id=claims.user_id)
+    events = {e["audit_id"]: e for e in _get(tc).json()["events"]}
+    assert events[llm_row]["actor_role"] == "llm" and events[llm_row]["actor_username"] is None
+    assert events[human]["actor_username"] == "ana"  # an analyst and an admin keep theirs
+    assert events[boss]["actor_username"] == "p11t09-admin"
+    by_name = _get(tc, actor="ana").json()
+    assert [e["audit_id"] for e in by_name["events"]] == [human] and by_name["total"] == 1
+    assert _ids(_get(tc, actor="llm")) == [llm_row]  # the role still finds it
+
+
 # ---------------------------------------------------------------------------
 # filters together
 # ---------------------------------------------------------------------------
@@ -924,6 +1051,58 @@ def test_a_secret_nested_in_a_list_in_a_dict_is_redacted_and_never_leaves(client
         "password_hash": PLACEHOLDER,
     }
     for leaked in ("leak-one", "leak-two", "leak-three", "leak-four", "leak-five", "leak-six"):
+        assert leaked not in resp.text, leaked
+
+
+@pytest.mark.db
+def test_near_miss_secret_names_are_redacted_through_the_route_and_counters_are_not(client) -> None:
+    tc, db, _ = client
+    _event(
+        db,
+        "admin.settings_changed",
+        "settings",
+        payload={
+            "changes": [{"key": "LLM_TIMEOUT_S", "old": 60, "new": 90}],
+            "auth": [
+                {
+                    "access_token": "leak-1",
+                    "client_secret": "leak-2",
+                    "apiKey": "leak-3",
+                    "api-key": "leak-4",
+                    "db_password": "leak-5",
+                    "refresh_token": "leak-6",
+                    "nested": {"Password": "leak-7", "API_KEY": "leak-8"},
+                    "secret_key": "leak-9",
+                    "privateKey": "leak-10",
+                    "passphrase": "leak-11",
+                }
+            ],
+            "usage": {"token_count": 12, "tokens_in": 5, "passwords": 3, "key": "visible"},
+            "digest": {"token_hash": "abc123", "public_key": "ssh-ed25519 AAAA"},
+        },
+    )
+    resp = _get(tc)
+    (event,) = resp.json()["events"]
+    assert event["payload"] == {
+        "changes": [{"key": "LLM_TIMEOUT_S", "old": 60, "new": 90}],
+        "auth": [
+            {
+                "access_token": PLACEHOLDER,
+                "client_secret": PLACEHOLDER,
+                "apiKey": PLACEHOLDER,
+                "api-key": PLACEHOLDER,
+                "db_password": PLACEHOLDER,
+                "refresh_token": PLACEHOLDER,
+                "nested": {"Password": PLACEHOLDER, "API_KEY": PLACEHOLDER},
+                "secret_key": PLACEHOLDER,
+                "privateKey": PLACEHOLDER,
+                "passphrase": PLACEHOLDER,
+            }
+        ],
+        "usage": {"token_count": 12, "tokens_in": 5, "passwords": 3, "key": "visible"},
+        "digest": {"token_hash": "abc123", "public_key": "ssh-ed25519 AAAA"},
+    }
+    for leaked in (f"leak-{n}" for n in range(1, 12)):
         assert leaked not in resp.text, leaked
 
 
@@ -1143,6 +1322,141 @@ def test_a_payload_nested_to_hundreds_or_thousands_of_levels_is_cut_not_a_500(
     assert events[after]["payload"] == {"ok": 1}
 
 
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "shape", ['{"n": %s}', "[1, %s, 2]", '{"a": [{"b": %s}]}'], ids=["object", "array", "nested"]
+)
+def test_a_number_of_thousands_of_digits_cuts_that_payload_not_the_page(client, shape: str) -> None:
+    """jsonb stores it; Python's `json.loads` refuses an integer of more than 4,300 digits with a
+    `ValueError` (the interpreter's int-string limit), which is neither `RecursionError` nor
+    `PayloadTooDeep`. The row is cut, the page is 200 and the next row is intact."""
+    tc, db, _ = client
+    big = _event_with_json_text(db, shape % ("9" * 5000), "big-int")
+    after = _event(db, subject="after-big-int", payload={"ok": 1})
+    resp = _get(tc)
+    assert resp.status_code == 200
+    events = {e["audit_id"]: e for e in resp.json()["events"]}
+    (size,) = db.execute(
+        "SELECT octet_length(payload::text) FROM audit_events WHERE audit_id = %s", (big,)
+    ).fetchone()
+    assert size > 5000
+    assert events[big]["payload"] == {"truncated": True, "size": size}
+    assert events[after]["payload"] == {"ok": 1}
+
+
+@pytest.mark.db
+def test_a_number_of_a_few_thousand_digits_under_the_limit_is_returned_whole(client) -> None:
+    """The cut starts where the parser refuses (over 4,300 digits), not before."""
+    tc, db, _ = client
+    _event_with_json_text(db, '{"n": ' + "9" * 4000 + "}", "int-4000")
+    (event,) = _get(tc).json()["events"]
+    assert event["payload"] == {"n": int("9" * 4000)}
+
+
+# ---------------------------------------------------------------------------
+# the page's cost: the payload is turned into text once, and only for the page's rows
+# ---------------------------------------------------------------------------
+
+
+def _plan_nodes(node: dict[str, Any], at_or_below_limit: bool = False):
+    """Every node of an EXPLAIN (FORMAT JSON) tree, depth first, with whether it is a `Limit` or
+    sits under one."""
+    at_or_below_limit = at_or_below_limit or node["Node Type"] == "Limit"
+    yield node, at_or_below_limit
+    for child in node.get("Plans", []):
+        yield from _plan_nodes(child, at_or_below_limit)
+
+
+def _inline_payload_casts(output: str) -> int:
+    """How many times an EXPLAIN output expression computes `payload::text` itself.
+
+    A computed cast is spelled `(<alias>.payload)::text`. A READ of a column a lower node
+    computed is spelled the same way inside one more pair of parentheses, `((<alias>.payload)::text)`,
+    where the extra `(` is not a function call's (the character before it is not part of a name).
+    `octet_length((p.payload)::text)` is a call whose argument is a computed cast: inline."""
+    count = 0
+    for match in re.finditer(r"\(\w+\.payload\)::text", output):
+        start, end = match.span()
+        wrapped = start >= 1 and output[start - 1] == "(" and output[end : end + 1] == ")"
+        before = output[start - 2] if start >= 2 else " "
+        is_call_paren = before.isalnum() or before == "_"
+        count += 0 if wrapped and not is_call_paren else 1
+    return count
+
+
+@pytest.mark.parametrize(
+    "output, expected",
+    [
+        ("(a.payload)::text", 1),
+        ("(p.payload)::text", 1),
+        ("octet_length((p.payload)::text)", 1),
+        ("(octet_length((a.payload)::text) > 65536)", 1),
+        (
+            "CASE WHEN (octet_length((a.payload)::text) > 65536) THEN NULL::text ELSE (a.payload)::text END",
+            2,
+        ),
+        ("octet_length(((a.payload)::text))", 0),
+        (
+            "CASE WHEN (octet_length(((a.payload)::text)) > 65536) THEN NULL::text ELSE ((a.payload)::text) END",
+            0,
+        ),
+        (
+            "(CASE WHEN (octet_length(((p.payload)::text)) > 65536) THEN NULL::text ELSE ((p.payload)::text) END)",
+            0,
+        ),
+        ("u.username", 0),
+        ("a.payload", 0),
+    ],
+)
+def test_the_inline_cast_counter_reads_explains_spelling(output: str, expected: int) -> None:
+    """The one fragile helper of the plan test below, pinned on the spellings PostgreSQL 16 prints
+    (a computed cast, and a read of a computed column inside one more pair of parentheses)."""
+    assert _inline_payload_casts(output) == expected
+
+
+_PAGE_FILTERS = [
+    pytest.param({}, None, id="no filter"),
+    pytest.param({"subject": "BIG"}, None, id="subject"),
+    pytest.param({"group": "alerts_cases"}, None, id="group"),
+    pytest.param({"actor": "ana"}, None, id="username"),
+    pytest.param({"actor": "system"}, None, id="role"),
+    pytest.param({"group": "users", "subject": "x", "actor": "ana"}, 10**9, id="all + cursor"),
+]
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("filters, cursor", _PAGE_FILTERS)
+def test_the_page_selects_its_rows_first_and_converts_each_payload_to_text_once(
+    client, filters: dict[str, Any], cursor: int | None
+) -> None:
+    """F2 of the review. The size guard needs the payload as text; done three times per row, and
+    for every row a Sort plan had to order (a `subject` or `group` filter), a few hundred 1 MB
+    payloads took the page past its 3 s timeout. Pinned on PostgreSQL's own plan (16; EXPLAIN's
+    spelling is the one fragile part):
+
+    - there is exactly one `Limit` (the page's own `ORDER BY audit_id DESC LIMIT n`);
+    - no node at or below it touches `::text` (the cast is not evaluated for a row the page drops);
+    - the cast is SPELLED inline exactly once in the whole plan (`(<alias>.payload)::text`): in the
+      fenced LATERAL, which runs once per page row. Everything that reads it (the CASE test, its
+      ELSE branch, the size column) shows it as a reference, which EXPLAIN parenthesises a second
+      time (`((<alias>.payload)::text)`). A second conversion, for the size say, is a second
+      inline spelling."""
+    _tc, db, _ = client
+    clauses, params = admin_audit._filters(
+        timedelta(days=7), filters.get("group"), filters.get("actor"), filters.get("subject")
+    )
+    statement, bound = admin_audit._page_statement(clauses, params, cursor, 100)
+    (plan,) = db.execute(sql.SQL("EXPLAIN (VERBOSE, FORMAT JSON) ") + statement, bound).fetchone()
+    nodes = list(_plan_nodes(plan[0]["Plan"]))
+    assert sum(node["Node Type"] == "Limit" for node, _ in nodes) == 1
+    for node, at_or_below_limit in nodes:
+        if at_or_below_limit:
+            assert not any("::text" in out for out in node.get("Output", [])), node["Node Type"]
+    inline = sum(_inline_payload_casts(out) for node, _ in nodes for out in node.get("Output", []))
+    shape = [(node["Node Type"], node.get("Output")) for node, _ in nodes]
+    assert inline == 1, f"the payload is cast inline {inline} times: {shape}"
+
+
 # ---------------------------------------------------------------------------
 # the main query's timeout
 # ---------------------------------------------------------------------------
@@ -1183,6 +1497,42 @@ def test_the_503_body_is_the_reason_only_never_sql_nor_a_dsn(
     assert resp.status_code == 503
     for leaked in ("SELECT", "audit_events", "statement", "postgres", "secret-subject", "57014"):
         assert leaked not in resp.text, leaked
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "failing_select",
+    [
+        "SELECT 1/0 FROM audit_events a WHERE {where}",
+        "SELECT 'x'::int FROM audit_events a WHERE {where}",
+    ],
+    ids=["division-by-zero", "bad-cast"],
+)
+def test_a_page_error_that_is_not_a_timeout_stays_a_500_with_a_generic_body(
+    client, monkeypatch, failing_select: str
+) -> None:
+    """F4 of the review. Only a cancelled statement is the 503 `timeout`: any other database error
+    on the page is a fault, answered as the 500 it is, with no SQL, SQLSTATE or filter value in
+    the body (and not as a "narrow your filters" timeout the admin cannot act on)."""
+    _tc, db, _ = client
+    monkeypatch.setattr(admin_audit, "_PAGE", sql.SQL(failing_select))
+    quiet = TestClient(main.app, raise_server_exceptions=False)
+    resp = quiet.get(AUDIT, params={"subject": "secret-subject", "actor": "ana"})
+    assert resp.status_code == 500
+    assert resp.text == "Internal Server Error"
+    lowered = resp.text.lower()
+    for leaked in (
+        "select",
+        "division",
+        "zero",
+        "audit_events",
+        "secret-subject",
+        "22012",
+        "22p02",
+    ):
+        assert leaked not in lowered, leaked
+    # the savepoint was rolled back, not the connection: it is still usable
+    assert db.execute("SELECT 1").fetchone() == (1,)
 
 
 # ---------------------------------------------------------------------------

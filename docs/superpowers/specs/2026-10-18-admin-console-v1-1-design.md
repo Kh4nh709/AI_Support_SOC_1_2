@@ -384,7 +384,7 @@ Built on `tier1/digest.py` (`build`, `review`), which the Jinja page already use
   - Ordered by `audit_id` descending. That is insertion order, and the primary key serves it, so no new index is needed.
   - `cursor` is the last `audit_id` seen.
 - **Each event** is returned as `audit_id, created_at, event_type, actor_role, actor_username` (joined from `users`, `null` for system and llm), `subject_id`, and `payload`.
-- **Payload redaction.** A key is normalised: lower-cased, with `_` and `-` dropped and camelCase split. The key is redacted when the result equals or ends with `password`, `passwordhash`, `secret`, `token`, `dsn` or `apikey`, at any depth, and its value is replaced by `"[đã ẩn]"`. So `access_token`, `client_secret`, `apiKey` and `db_password` are caught, while `key`, `token_count` and `passwords` stay visible (P11-T09 review). Payloads should never carry a credential (DEC-159 item 6); this is the second layer.
+- **Payload redaction.** A key is normalised: lower-cased, with `_` and `-` dropped and camelCase split. The key is redacted when the result equals or ends with `password`, `passwordhash`, `secret`, `token`, `dsn`, `apikey`, `secretkey`, `privatekey` or `passphrase` (`token_hash`, a digest, stays visible), at any depth, and its value is replaced by `"[đã ẩn]"`. So `access_token`, `client_secret`, `apiKey` and `db_password` are caught, while `key`, `token_count` and `passwords` stay visible (P11-T09 review). Payloads should never carry a credential (DEC-159 item 6); this is the second layer.
 - **`total`** is a `count(*)` under its own short timeout, and `null` when it times out.
 - **A query timeout** answers `503 {reason: "timeout"}`.
 - **The groups**, defined in one table in the module and mirrored in `strings.ts`:
