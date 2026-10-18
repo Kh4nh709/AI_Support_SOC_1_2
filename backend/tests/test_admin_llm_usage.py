@@ -456,6 +456,50 @@ def test_stopped_counts_every_reason_and_leaves_out_the_null_ones(client):
     assert row["stopped"] == {"cap": 2, "linter": 1}
 
 
+def test_a_stop_reason_longer_than_32_characters_is_counted_under_other(client):
+    """P11-T20 row 15 (P11-T04 review m2). `stopped_by` has no CHECK, and `recent` already serves
+    no stop reason over 32 characters; the `stopped` map's KEY is held to the same limit, so a
+    long text never becomes a key of the answer. Exactly 32 is a reason; 33 is `other`."""
+    conn = client.conn
+    at_the_limit, one_over = "c" * 32, "d" * 33
+    hostile = "<script>marker</script>" + "x" * 500
+    for reason in (at_the_limit, at_the_limit, one_over, hostile, hostile + "2", "cap"):
+        _run(conn, role="proposer", ago=timedelta(hours=1), stopped_by=reason)
+
+    body = client.ok("24h")
+
+    row = _by_key(body)[("triage", "proposer")]
+    assert row["stopped"] == {at_the_limit: 2, "other": 3, "cap": 1}
+    assert max(len(key) for key in row["stopped"]) <= 32
+    assert "marker" not in json.dumps(body)  # not even the start of the long text is served
+
+
+def test_with_result_counts_the_result_and_not_the_stop_reason(client):
+    """P11-T20 row 17 (P11-T04 review m4, mutation m1: `with_result` read as `stopped_by IS NULL`).
+    Each group holds ONE row, so the two readings give different answers in each: a proposer row
+    with a result AND a stop reason (1 with a result; the mutation says 0), and a verifier row
+    with neither (0; the mutation says 1). One group holding both rows would give 1 either way."""
+    conn = client.conn
+    _run(
+        conn,
+        role="proposer",
+        ago=timedelta(hours=1),
+        result={"suggested_action": "needs_review"},
+        stopped_by="linter",
+    )
+    _run(conn, role="verifier", ago=timedelta(hours=1), result=None, stopped_by=None)
+
+    by = _by_key(client.ok("24h"))
+
+    proposer, verifier = by[("triage", "proposer")], by[("triage", "verifier")]
+    assert (proposer["calls"], proposer["with_result"], proposer["stopped"]) == (
+        1,
+        1,
+        {"linter": 1},
+    )
+    assert (verifier["calls"], verifier["with_result"], verifier["stopped"]) == (1, 0, {})
+
+
 def test_there_is_no_chat_row_and_no_tool_calls(client):
     _seed_matrix(client.conn)
 
@@ -564,16 +608,27 @@ def test_recent_shows_a_run_older_than_every_range(client):
 
 
 def test_month_is_the_calendar_month_not_a_rolling_thirty_days(client):
+    """P11-T20 row 18 (P11-T04 review m5). The seeds sit on the month's own edge, so the answer
+    does not depend on the day the test runs. Against a rolling 30 days:
+    - one second BEFORE the month began is inside the window on days 1-30 (that seed is the
+      one that tells the readings apart there);
+    - one second AFTER it began is outside the window on day 31 of a 31-day month (the one that
+      tells them apart there).
+    The old seed, a day before the month, is inside the window only up to day 29, so on days 30
+    and 31 it told nothing."""
     conn = client.conn
     _run(conn, ago=timedelta(0), cost="12.50000")  # this month, always
+    _run(conn, at="date_trunc('month', now()) + interval '1 second'", cost="0.25000")  # 1st second
+    _run(conn, at="date_trunc('month', now()) - interval '1 second'", cost="50.00000")  # last month
     _run(conn, at="date_trunc('month', now()) - interval '1 day'", cost="100.00000")  # last month
 
     body = client.ok("month")
 
-    assert body["month"]["spent_usd"] == 12.5
+    assert body["month"]["spent_usd"] == 12.75  # the first two, nothing from last month
     # the answer is exactly what the adapter's cap check reads
     assert body["month"]["spent_usd"] == round(llm_runs.month_spend_usd(conn), 4)
-    assert _by_key(body)[("triage", "proposer")]["calls"] == 1  # `month` the range, too
+    row = _by_key(body)[("triage", "proposer")]  # `month` the range, too: the same two rows
+    assert (row["calls"], row["cost_usd"]) == (2, 12.75)
 
 
 def test_month_spend_is_the_same_whatever_the_range(client):
@@ -590,16 +645,38 @@ def test_month_pct_and_projection_on_a_frozen_now(client):
     conn = client.conn
     _run(conn, ago=timedelta(0), cost="12.50000")
     now, month_start, next_month = _now_and_month(conn)
-    elapsed = max((now - month_start).total_seconds(), 3600.0)
+    elapsed = max((now - month_start).total_seconds(), 86400.0)  # the one-day floor (row 16)
     month_seconds = (next_month - month_start).total_seconds()
     expected_projection = 12.5 / (elapsed / 86400) * (month_seconds / 86400)
 
     month = client.ok("month")["month"]
 
     assert month["cap_usd"] == 30
-    assert month["pct"] == 41.7  # 12.5 / 30 * 100 = 41.666...
+    assert month["pct"] == 41.6  # 12.5 / 30 * 100 = 41.666..., floored (row 14), not 41.7
     assert month["projected_usd"] == pytest.approx(expected_projection, abs=6e-5)
     assert month["projected_usd"] == round(month["projected_usd"], 4)
+
+
+@pytest.mark.parametrize(
+    ("cost", "pct"),
+    [
+        ("29.99000", 99.9),  # the review's probe: half up read 100.0 while the model still ran
+        ("29.99999", 99.9),
+        ("30.00000", 100.0),  # the cap itself: the adapter stops here
+        ("30.00001", 100.0),
+        ("0.00000", 0.0),
+    ],
+)
+def test_pct_is_floored_so_it_reads_100_exactly_when_the_cap_is_reached(client, cost, pct):
+    """P11-T20 row 14 (P11-T04 review m1): `pct >= 100` exactly when `spent >= cap`, the adapter's
+    own comparison, so a red "stopped" notice driven by `pct` can never claim a stop early."""
+    conn = client.conn
+    _run(conn, ago=timedelta(0), cost=cost)
+
+    month = client.ok("month")["month"]
+
+    assert month["pct"] == pct
+    assert (month["pct"] >= 100) == (llm_runs.month_spend_usd(conn) >= month["cap_usd"])
 
 
 def test_month_over_the_cap_is_pct_above_100(client):
@@ -630,13 +707,15 @@ def test_the_cap_follows_a_value_saved_on_the_web(client):
     [
         (10.0, 15 * 86400, 30 * 86400, 20.0),  # half the month gone: double
         (10.0, 30 * 86400, 30 * 86400, 10.0),  # the last instant: what was spent
-        (1.0, 300, 30 * 86400, 720.0),  # 00:05 on day 1: the floor of one hour, not 5 minutes
-        (1.0, 3600, 30 * 86400, 720.0),  # exactly at the floor
-        (1.0, 7200, 31 * 86400, 372.0),  # past the floor: the real elapsed time, 31 days
+        (1.0, 300, 30 * 86400, 30.0),  # 00:05 on day 1: the floor of one day, not 5 minutes
+        (1.0, 12 * 3600, 30 * 86400, 30.0),  # noon on day 1: still the floor (it was 60.0)
+        (1.0, 86400 - 1, 31 * 86400, 31.0),  # a second under the floor
+        (1.0, 86400, 30 * 86400, 30.0),  # exactly at the floor: the real elapsed time is 1 day
+        (1.0, 2 * 86400, 31 * 86400, 15.5),  # past the floor: the real elapsed time, 31 days
         (0.0, 1, 30 * 86400, 0.0),
     ],
 )
-def test_the_projection_formula_and_its_one_hour_floor(spent, elapsed_s, month_s, expected):
+def test_the_projection_formula_and_its_one_day_floor(spent, elapsed_s, month_s, expected):
     assert admin_llm._projected_usd(spent, elapsed_s, month_s) == pytest.approx(expected)
 
 
@@ -741,6 +820,28 @@ def test_quota_users_with_the_same_count_are_ordered_by_username(client):
     users = client.ok()["quota"]["users"]
 
     assert [u["username"] for u in users] == sorted(u for _, u in ids)
+
+
+def test_quota_lists_at_most_200_users_when_more_have_an_event(client):
+    """P11-T20 row 17 (P11-T04 review m4, mutation m2: the `LIMIT` removed). 201 users with one
+    `case.analyzed` each: 200 are listed, in username order, and the 201st is not. The answer's
+    size is bounded by `_QUOTA_USERS_LIMIT` however many people use the analyze route."""
+    conn = client.conn
+    names = [f"t04-quota-{i:03d}" for i in range(201)]
+    for name in names:
+        user_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO users (user_id, username, display_name, role, password_hash) "
+            "VALUES (%s, %s, %s, 'tier2', 'x')",
+            (user_id, name, name),
+        )
+        _analyzed(conn, user_id, timedelta(hours=1))
+
+    quota = client.ok()["quota"]
+
+    assert [u["username"] for u in quota["users"]] == names[:200]
+    assert {u["used"] for u in quota["users"]} == {1}
+    assert admin_llm._QUOTA_USERS_LIMIT == 200
 
 
 # ---------------------------------------------------------------------------
@@ -1066,6 +1167,29 @@ def test_unreadable_limits_degrade_the_limits_and_serve_the_rest(client):
     assert body["recent"]
     assert body["tool_calls"] == 0
     assert conn.execute("SELECT 1").fetchone() == (1,)  # and the transaction is still usable
+
+
+def test_a_failure_of_limits_out_degrades_the_limits_like_an_unreadable_table(client, monkeypatch):
+    """P11-T20 row 17 (P11-T04 review m4, mutation m6: `limits_out`'s failure unguarded). The
+    settings read succeeds and the read of the users' names inside `limits_out` is cancelled:
+    the limits block is `null` with `limits_error`, and the rest of the page is still served."""
+    conn = client.conn
+    _seed_matrix(conn)
+
+    def _cancelled(_conn, _limits):
+        raise psycopg.errors.QueryCanceled("canceling statement due to statement timeout")
+
+    monkeypatch.setattr(admin_llm, "limits_out", _cancelled)
+
+    body = client.ok("24h")
+
+    assert body["limits"] is None
+    assert body["limits_error"] == "limits_unavailable"
+    assert body["month"]["cap_usd"] is None  # no limits were taken from the failed block
+    assert body["quota"]["limit"] is None
+    assert len(body["by_pipeline_role"]) == 4
+    assert body["recent"]
+    assert conn.execute("SELECT 1").fetchone() == (1,)  # the savepoint kept the transaction usable
 
 
 def test_readable_limits_carry_the_limits_out_object_and_no_error(client):
