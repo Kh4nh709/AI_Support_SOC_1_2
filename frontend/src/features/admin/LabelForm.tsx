@@ -156,7 +156,8 @@ export function LabelForm({
             id={`${titleId}-note`}
             ref={noteInput}
             type="text"
-            maxLength={ADMIN_LIMITS.noteMax}
+            // No `maxLength`: it counts UTF-16 units and the server counts code points (an emoji is two units),
+            // so it would stop a note the server takes. The counter and the error at the field are the limit.
             value={note}
             aria-invalid={noteError !== null}
             aria-describedby={noteError === null ? countId : `${countId} ${noteErrorId}`}

@@ -17,7 +17,6 @@ import { setupServer } from "msw/node";
 import { MemoryRouter } from "react-router";
 import ts from "typescript";
 import {
-  ADMIN_LIMITS,
   LABEL_CHOICES,
   LABEL_CONFIDENCES,
   type LabelChoice,
@@ -524,7 +523,9 @@ describe("the form", () => {
     renderPage();
     await ready();
     const note = within(form()).getByRole("textbox", { name: L.form.note });
-    expect(note).toHaveAttribute("maxlength", String(ADMIN_LIMITS.noteMax));
+    // No `maxlength`: it counts UTF-16 units (100 emoji would fill it, and the server counts 100 of them as 100).
+    // The counter and the error at the field are the limit, and they count as the server does.
+    expect(note).not.toHaveAttribute("maxlength");
     expect(within(form()).getByText("0 / 200")).toBeVisible();
     await userEvent.type(note, "Quét từ máy lab");
     expect(within(form()).getByText("15 / 200")).toBeVisible();
@@ -600,7 +601,7 @@ describe("the form", () => {
     await ready();
     await choose("benign");
     const note = within(form()).getByRole("textbox", { name: L.form.note });
-    // `maxlength` stops typing, not a paste or a script.
+    // Nothing stops the typing or the paste: the counter says it, and the save is refused at the field.
     fireEvent.change(note, { target: { value: "x".repeat(201) } });
     expect(within(form()).getByText("201 / 200")).toBeVisible();
     await userEvent.click(saveButton());
@@ -624,6 +625,38 @@ describe("the form", () => {
     expect(within(form()).getByText("200 / 200")).toBeVisible();
     await userEvent.click(saveButton());
     await waitFor(() => expect(posts).toHaveLength(1));
+  });
+
+  it("refuses a note of 201 characters outside the first plane before any post, and takes 200 of them", async () => {
+    serveNext(nextAnswer(), afterA());
+    servePost();
+    renderPage();
+    await ready();
+    await choose("benign");
+    const note = within(form()).getByRole("textbox", { name: L.form.note });
+    fireEvent.change(note, { target: { value: "😀".repeat(201) } });
+    expect(within(form()).getByText("201 / 200")).toBeVisible();
+    await userEvent.click(saveButton());
+    expect(within(form()).getByRole("alert")).toHaveTextContent(S.admin.bounds.tooLong(200));
+    expect(posts).toEqual([]);
+    fireEvent.change(note, { target: { value: "😀".repeat(200) } });
+    await userEvent.click(saveButton());
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect([...(posts[0] as { note: string }).note]).toHaveLength(200);
+  });
+
+  it("lets a paste of more than 200 characters in, to be counted and refused at the field", async () => {
+    serveNext(nextAnswer());
+    renderPage();
+    await ready();
+    await choose("benign");
+    const note = within(form()).getByRole("textbox", { name: L.form.note });
+    await userEvent.click(note);
+    await userEvent.paste("x".repeat(201));
+    expect(within(form()).getByText("201 / 200")).toBeVisible();
+    await userEvent.click(saveButton());
+    expect(within(form()).getByRole("alert")).toHaveTextContent(S.admin.bounds.tooLong(200));
+    expect(posts).toEqual([]);
   });
 
   it("says what was saved and who is next, reads the next cluster, and clears the form", async () => {
