@@ -37,3 +37,9 @@ The independent reviews found these Minors and approved without them, so none of
 | 29 | P11-T08 r1 F2 | test: NUL and control characters in the undo body → 403 or 422, label intact |
 | 30 | P11-T08 r1 F3 | test: the Jinja undo while frozen writes no event |
 | 31 | P11-T09 r2 N2 | redaction: a value rule (a string holding `scheme://user:pass@` is redacted under any key), `passwd`/`pwd` as suffixes, never redact a bool or null; spec §5.8 to match |
+| 32 | P11-T20 r1 m1 | `tier1/queue.py:150,205`: tie-break `run_id DESC` in `latest_suggestion` and `latest_suggestions`, plus a tie test |
+| 33 | P11-T20 r1 m2 | re-wrap `admin_llm.py:51` and `admin_users.py:71` at 100 characters |
+| 34 | P11-T20 r1 m3 | width tests: exactly at the threshold is not reported (`HAVING >`); a head older than the window is not in the denominator |
+| 35 | P11-T20 r1 n1 | `docs/phase-3-auto-close.md:277-288`: footnote that the denominator is the heads' `sum(occurrence_count)` (`rule_width_report`) |
+| 36 | P11-T20 r1 n2 | CLI `infra/auth.py:create_user` refuses `system`/`llm` too, same set as the web |
+| 37 | P11-T20 r1 n3 | `scripts/migrate.sh:53`: guard the base-migration count lookup like the others |
