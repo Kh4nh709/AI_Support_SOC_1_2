@@ -108,6 +108,11 @@ _BUILD_SQL = f"""
       AND a.closed_at <  {_DAY_UPPER}
 """
 
+# One alert instead of the day (P11-T07 fix round 1, F3): the JSON API's POST needs a single
+# row, and building the whole day to find it cost one `latest_suggestion` query per row, twice.
+# A constant string appended to the one above, so the day's own query is untouched.
+_ONLY_ALERT_SQL = "      AND a.alert_id = %(alert_id)s\n"
+
 _UNREVIEWED_COUNT_SQL = f"""
     SELECT count(*)
     FROM alerts a
@@ -120,7 +125,13 @@ _UNREVIEWED_COUNT_SQL = f"""
 """
 
 
-def build(conn: psycopg.Connection, day: str, *, tz: str | None = None) -> list[DigestRow]:
+def build(
+    conn: psycopg.Connection,
+    day: str,
+    *,
+    tz: str | None = None,
+    alert_id: str | None = None,
+) -> list[DigestRow]:
     """Every cluster auto-closed in `day`'s 24h **in the display zone**
     (`tz`, default `cfg.DISPLAY_TZ` — round 1 · S4), excluding synthetic
     alerts (round 1 · N8, matching `queue.py`'s `list_queue` and
@@ -131,9 +142,32 @@ def build(conn: psycopg.Connection, day: str, *, tz: str | None = None) -> list[
     CSV is diffable. A row with no ① run at all (the `triage` job D8
     enqueues on every auto-close has not finished yet) is left out of the
     disagreement group — there is no verdict to disagree with. Already
-    reviewed alerts carry their verdict; they are not excluded."""
+    reviewed alerts carry their verdict; they are not excluded.
+
+    `alert_id` (P11-T07 fix round 1) narrows the answer to that one alert: its row if it was
+    auto-closed on `day`, else `[]`. Without it the query is the day's, as it always was."""
     tz = tz or config.load().DISPLAY_TZ
-    records = conn.execute(_BUILD_SQL, {"day": day, "tz": tz}).fetchall()
+    if alert_id is None:
+        records = conn.execute(_BUILD_SQL, {"day": day, "tz": tz}).fetchall()
+    else:
+        records = conn.execute(
+            _BUILD_SQL + _ONLY_ALERT_SQL, {"day": day, "tz": tz, "alert_id": alert_id}
+        ).fetchall()
+    return _sorted_rows(_rows_from(conn, records))
+
+
+def _sort_key(row: DigestRow) -> tuple[bool, int, str]:
+    return (not row.disagreement, -row.occurrence_count, row.alert_id)
+
+
+def _sorted_rows(rows: list[DigestRow]) -> list[DigestRow]:
+    rows.sort(key=_sort_key)
+    return rows
+
+
+def _rows_from(conn: psycopg.Connection, records: Sequence[tuple]) -> list[DigestRow]:
+    """`DigestRow`s from the twelve columns `_BUILD_SQL` (and `_REOPENED_BY_REVIEW_SQL`) select,
+    ① read per row through `latest_suggestion`, unsorted."""
     rows: list[DigestRow] = []
     for (
         alert_id,
@@ -170,7 +204,6 @@ def build(conn: psycopg.Connection, day: str, *, tz: str | None = None) -> list[
                 reviewed_verdict=reviewed_verdict,
             )
         )
-    rows.sort(key=lambda r: (not r.disagreement, -r.occurrence_count, r.alert_id))
     return rows
 
 
@@ -229,12 +262,80 @@ def rules_enabled(conn: psycopg.Connection) -> bool:
     return enabled
 
 
-def alert_status(conn: psycopg.Connection, alert_id: str) -> str | None:
-    """`alerts.status` of `alert_id`, or `None` when there is no such alert (P11-T07: it tells
-    "this alert is not on that day's digest" from "it is no longer auto-closed"). A plain read,
-    no lock: `review` takes the lock and judges the status again."""
-    row = conn.execute("SELECT status FROM alerts WHERE alert_id = %s", (alert_id,)).fetchone()
-    return None if row is None else row[0]
+# The `alert.auto_closed` event `domain.transitions.open_alert` writes in the transaction that
+# sets `closed_at = now()` dates a closing for good: `reopen` clears `closed_at` but the event
+# stays. `ix_audit_subject (subject_id, created_at)` serves the lookup. Same day bounds as above.
+_AUTO_CLOSED_ON_DAY_SQL = f"""EXISTS (
+        SELECT 1 FROM audit_events e
+        WHERE e.subject_id = a.alert_id
+          AND e.event_type = 'alert.auto_closed'
+          AND e.created_at >= {_DAY_LOWER}
+          AND e.created_at <  {_DAY_UPPER})"""
+
+_REOPENED_BY_REVIEW_SQL = f"""
+    SELECT
+        a.alert_id, a.rule_id, a.description, a.severity, a.category,
+        a.agent_name, a.occurrence_count, a.first_seen_at, a.last_seen_at,
+        a.autoclose_rule_id, r.name, rev.verdict
+    FROM autoclose_reviews rev
+    JOIN alerts a ON a.alert_id = rev.alert_id
+    LEFT JOIN autoclose_rules r ON r.autoclose_rule_id = a.autoclose_rule_id
+    WHERE rev.verdict = 'wrong'
+      AND a.status <> 'auto_closed'
+      AND NOT a.is_synthetic
+      AND {_AUTO_CLOSED_ON_DAY_SQL}
+"""
+
+_LEFT_DIGEST_SQL = f"""
+    SELECT EXISTS (
+        SELECT 1 FROM alerts a
+        WHERE a.alert_id = %(alert_id)s
+          AND a.status <> 'auto_closed'
+          AND NOT a.is_synthetic
+          AND a.autoclose_rule_id IS NOT NULL
+          AND {_AUTO_CLOSED_ON_DAY_SQL})
+"""
+
+
+def reopened_by_review(
+    conn: psycopg.Connection,
+    day: str,
+    *,
+    tz: str | None = None,
+    alert_id: str | None = None,
+) -> list[DigestRow]:
+    """The alerts a digest review reopened (P11-T07 fix round 1, F4): an `autoclose_reviews`
+    row with verdict `wrong`, an alert no longer `auto_closed`, not synthetic, and an
+    `alert.auto_closed` event inside `day` in the display zone. `build` cannot list them (it
+    reads `status = 'auto_closed'`, and `reopen` has changed it), yet spec §4.5 has the row keep
+    its verdict, its reviewer and "đã mở lại về hàng đợi Tier 1" after the review; the JSON API
+    lists them beside `build`'s rows. Only a **`wrong` review** keeps a reopened alert on the
+    day: one that Tier 1 reopened, or one reviewed `correct`/`unsure` and then reopened,
+    leaves it as before. Same row shape and order as `build`; `alert_id` narrows it to one.
+    The Jinja page does not call this."""
+    tz = tz or config.load().DISPLAY_TZ
+    params = {"day": day, "tz": tz}
+    sql = _REOPENED_BY_REVIEW_SQL
+    if alert_id is not None:
+        sql += _ONLY_ALERT_SQL
+        params["alert_id"] = alert_id
+    return _sorted_rows(_rows_from(conn, conn.execute(sql, params).fetchall()))
+
+
+def left_digest_on(
+    conn: psycopg.Connection, alert_id: str, day: str, *, tz: str | None = None
+) -> bool:
+    """Whether `alert_id` was auto-closed by a rule on `day` (display zone) and is now in another
+    status: not synthetic, `autoclose_rule_id` set, an `alert.auto_closed` event inside the
+    day's bounds, `status <> 'auto_closed'` (P11-T07 fix round 1, F1). The digest JSON API
+    answers a review of such an alert with the conflict the page maps to "no longer
+    auto-closed"; any other alert off the digest is "not in the digest". A plain read, no
+    lock: `review` takes the lock and judges the status again."""
+    tz = tz or config.load().DISPLAY_TZ
+    (found,) = conn.execute(
+        _LEFT_DIGEST_SQL, {"alert_id": alert_id, "day": day, "tz": tz}
+    ).fetchone()
+    return found
 
 
 def review(

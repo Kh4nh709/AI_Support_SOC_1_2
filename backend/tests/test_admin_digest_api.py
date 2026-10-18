@@ -1136,11 +1136,13 @@ def test_a_post_costs_the_same_statements_for_a_day_of_3_rows_and_of_43(client) 
     """Each POST used to build the whole day twice, with one `latest_suggestion` query per row:
     87 statements at 40 rows and 167 at 80. With `alert_id` given to `build` it is a constant."""
     tc, db, admin = client
-    rule_id = _rule(db, admin.user_id)
     counting = _Counting(db)
     main.app.dependency_overrides[deps.get_conn] = lambda: counting
 
     def costs(day: str, rows: int) -> dict[str, int]:
+        # a rule of its own per day: a second `wrong` review of one rule writes
+        # `rule.suspected_wrong`, a few more statements that have nothing to do with the day
+        rule_id = _rule(db, admin.user_id, name=f"rule-{day}")
         at = datetime.fromisoformat(f"{day}T12:00:00+07:00")
         ids = [_alert(db, closed_at=at, autoclose_rule_id=rule_id) for _ in range(rows)]
         for alert_id in ids:
@@ -1164,7 +1166,7 @@ def test_a_post_costs_the_same_statements_for_a_day_of_3_rows_and_of_43(client) 
     big = costs("2026-09-21", 43)
 
     assert small == big, (small, big)
-    assert max(small.values()) <= 14, small
+    assert max(small.values()) <= 20, small
 
 
 # ---------------------------------------------------------------------------

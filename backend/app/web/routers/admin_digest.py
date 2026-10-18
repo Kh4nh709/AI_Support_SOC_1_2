@@ -54,10 +54,28 @@ until P11-T19 retires them. What differs from the page, and why:
   `{"field": "verdict", "reason": "invalid"}`, `not_in_digest` (404), `already_reviewed` (409,
   with the row as it now stands) and `not_auto_closed` (409).
 - **A review needs the alert on that day's digest** (`build(day)`), so a stale or forged
-  `{day}` cannot review an alert of another day. An alert that exists but is no longer
-  `auto_closed` is not "not on the digest": it is the conflict the page maps to "no longer
-  auto-closed" (`not_auto_closed`), because a row reopened by Tier 1 or by a `wrong` review
-  leaves `build` the moment it is reopened and that is exactly the case a stale page hits.
+  `{day}` cannot review an alert of another day. A row reopened by Tier 1 or by a `wrong`
+  review leaves `build` the moment it is reopened, and that is exactly what a stale page
+  sends, so one case off the digest is the conflict the page maps to "no longer auto-closed"
+  (`409 not_auto_closed`): an alert that is not synthetic, that a rule auto-closed
+  (`autoclose_rule_id` set), whose `alert.auto_closed` audit event falls inside the posted
+  day's bounds in `DISPLAY_TZ`, and that is now in another status (`digest.left_digest_on`).
+  Everything else off the digest (unknown, synthetic, never auto-closed, closed on another
+  day) is `404 not_in_digest`.
+- **The list keeps the alerts a digest review reopened.** `build` reads `status =
+  'auto_closed'`, so an alert reviewed "Sai" (reopened by `digest.review`) would leave the
+  next refetch with its verdict, its reviewer and the "đã mở lại về hàng đợi Tier 1" note, and
+  the day's counts would drop. The GET therefore also lists, beside `build`'s rows,
+  `digest.reopened_by_review(day)`: an `autoclose_reviews` row with verdict `wrong`, an alert
+  no longer `auto_closed`, not synthetic, whose `alert.auto_closed` event falls on that day.
+  Each row carries `reopened_by_review` (true for these, false for every other); the page
+  counts clusters, reviewed and waiting from the rows, so they are still counted. An alert
+  reopened by Tier 1 without a digest review, or reviewed `correct`/`unsure` and then reopened,
+  leaves the list as before. It lives here, not in `digest.build`, so the Jinja page is
+  unchanged.
+- **A POST reads one alert, not the day.** `digest.build` and `digest.reopened_by_review`
+  take `alert_id`, so the cost of a review does not grow with the day's rows (it was one
+  `latest_suggestion` query per row, twice).
 - **A conflict is raised, not returned.** `digest.review` is one savepoint, so a refused review
   has written nothing, and `deps.get_conn` rolls the request back on the `HTTPException`. The
   page `rollback()`s by hand only because it returns a response, which `get_conn` would commit.
@@ -65,8 +83,8 @@ until P11-T19 retires them. What differs from the page, and why:
   `text/plain` post (the requests a browser sends cross-site without a preflight) is not parsed
   as JSON and is a 422. Its two fields are read as `Any` and judged by the route, so a missing or
   mistyped `day` or `verdict` gets the same `reason` as a wrong one, not FastAPI's error list.
-- **The row after a `wrong` review** cannot come from `build` (the alert has left the digest):
-  it is the snapshot taken before the review, with the recorded verdict, reviewer and time.
+- **The row after a `wrong` review** is the row the list shows next (`reopened_by_review` true,
+  the recorded verdict, reviewer and time), read after the review with the same `alert_id` reads.
 """
 
 from __future__ import annotations
@@ -420,7 +438,9 @@ def _refuse(status_code: int, reason: str, **extra: Any) -> HTTPException:
 
 class DigestRowOut(BaseModel):
     """`digest.DigestRow`, field for field, plus the review on file: who (`users.display_name`,
-    else the username) and when. Both are `None` while the row is unreviewed."""
+    else the username) and when, both `None` while the row is unreviewed, and
+    `reopened_by_review`: true for an alert a digest review ("Sai") reopened, which the list
+    keeps (see `_day_rows`), false for every other row."""
 
     alert_id: str
     rule_id: str
@@ -438,13 +458,17 @@ class DigestRowOut(BaseModel):
     reviewed_verdict: str | None
     reviewed_by_name: str | None
     reviewed_at: datetime | None
+    reopened_by_review: bool
 
     @classmethod
-    def of(cls, row: digest.DigestRow, info: digest.ReviewInfo | None) -> DigestRowOut:
+    def of(
+        cls, row: digest.DigestRow, info: digest.ReviewInfo | None, *, reopened: bool = False
+    ) -> DigestRowOut:
         return cls(
             **dataclasses.asdict(row),
             reviewed_by_name=None if info is None else info.reviewer_name,
             reviewed_at=None if info is None else info.reviewed_at,
+            reopened_by_review=reopened,
         )
 
 
@@ -468,6 +492,23 @@ class ReviewOut(BaseModel):
     reopened: bool
 
 
+def _day_rows(
+    conn: psycopg.Connection, day: str, tz: str, alert_id: str | None = None
+) -> list[tuple[digest.DigestRow, bool]]:
+    """The day's rows with their `reopened_by_review` flag: `build`'s (auto-closed that day,
+    flag false) and the alerts a digest review reopened (`digest.reopened_by_review`, flag
+    true), in `build`'s order. Spec §4.5: after a review the row shows the verdict, the
+    reviewer and, for "Sai", that it was reopened; the row has to survive a refetch and a
+    reload, so it stays on the list. `alert_id` narrows both reads to one alert, so a POST
+    costs a constant number of statements however big the day is."""
+    rows = [(r, False) for r in digest.build(conn, day, tz=tz, alert_id=alert_id)]
+    rows += [(r, True) for r in digest.reopened_by_review(conn, day, tz=tz, alert_id=alert_id)]
+    rows.sort(
+        key=lambda pair: (not pair[0].disagreement, -pair[0].occurrence_count, pair[0].alert_id)
+    )
+    return rows
+
+
 @router.get("/api/admin/digest")
 def api_digest(conn: Conn, cfg: Cfg, claims: Admin, day: str | None = None) -> DigestOut:
     tz = cfg.DISPLAY_TZ
@@ -476,27 +517,32 @@ def api_digest(conn: Conn, cfg: Cfg, claims: Admin, day: str | None = None) -> D
     resolved = today if day is None else _strict_day(day)
     if resolved is None:
         raise _refuse(422, "bad_day")
-    rows = digest.build(conn, resolved, tz=tz)
-    infos = digest.review_details(conn, [r.alert_id for r in rows if r.reviewed_verdict])
+    rows = _day_rows(conn, resolved, tz)
+    infos = digest.review_details(conn, [r.alert_id for r, _ in rows if r.reviewed_verdict])
     return DigestOut(
         day=resolved,
         today=today,
         rules_enabled=digest.rules_enabled(conn),
-        rows=[DigestRowOut.of(r, infos.get(r.alert_id)) for r in rows],
+        rows=[DigestRowOut.of(r, infos.get(r.alert_id), reopened=flag) for r, flag in rows],
     )
 
 
 def _row_now(
     conn: psycopg.Connection, day: str, tz: str, alert_id: str, snapshot: digest.DigestRow
 ) -> DigestRowOut:
-    """`alert_id`'s row as the database has it now, with its review. `build` lists only
-    `auto_closed` alerts, so an alert a `wrong` review has just reopened is not in it: the row
-    then comes from `snapshot` (read before the review) with the verdict on file."""
-    row = _find(digest.build(conn, day, tz=tz), alert_id) or snapshot
+    """`alert_id`'s row as the database has it now, with its review: the row the list shows
+    (`_day_rows`, one alert), so after a `wrong` review that is the reopened row. Only when
+    neither read has it (an alert reviewed `correct` and since reopened by Tier 1, say) does it
+    come from `snapshot`, read before the review, with the verdict on file."""
     info = digest.review_details(conn, [alert_id]).get(alert_id)
+    listed = _day_rows(conn, day, tz, alert_id)
+    if listed:
+        row, reopened = listed[0]
+    else:
+        row, reopened = snapshot, info is not None and info.verdict == "wrong"
     if info is not None and row.reviewed_verdict != info.verdict:
         row = dataclasses.replace(row, reviewed_verdict=info.verdict)
-    return DigestRowOut.of(row, info)
+    return DigestRowOut.of(row, info, reopened=reopened)
 
 
 @router.post("/api/admin/digest/{alert_id}/review")
@@ -509,15 +555,15 @@ def api_review(conn: Conn, cfg: Cfg, claims: Admin, alert_id: AlertId, body: Rev
     if not isinstance(verdict, str) or verdict not in _VERDICT_LABEL:
         raise _refuse(422, "invalid", field="verdict")
 
-    before = _find(digest.build(conn, day, tz=tz), alert_id)
-    if before is None:
-        # Not on that day's digest. An alert that exists in another status is the stale-page
-        # conflict (module docstring); anything else — unknown, synthetic, closed on another
-        # day — is a 404.
-        status = digest.alert_status(conn, alert_id)
-        if status is not None and status != "auto_closed":
+    found = digest.build(conn, day, tz=tz, alert_id=alert_id)
+    if not found:
+        # Not on that day's digest. The stale-page conflict is exactly an alert a rule
+        # auto-closed on that day that has since left `auto_closed` (module docstring); anything
+        # else (unknown, synthetic, never auto-closed, closed on another day) is a 404.
+        if digest.left_digest_on(conn, alert_id, day, tz=tz):
             raise _refuse(409, "not_auto_closed")
         raise _refuse(404, "not_in_digest")
+    before = found[0]
 
     try:
         digest.review(conn, alert_id, verdict, reviewer_id=claims.user_id)
