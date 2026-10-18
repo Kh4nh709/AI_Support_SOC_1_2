@@ -107,7 +107,7 @@ const PAGES: [name: string, Page: () => ReactNode, title: string][] = [
 
 // A page that has been built (P11-T13: LlmPage) reads the API through a QueryClient, which this bare render
 // has none of; it is no placeholder, and its own test file covers it (LlmPage.test.tsx, axe included).
-const BUILT = ["LlmPage", "DigestPage"];
+const BUILT = ["OverviewPage", "LlmPage", "DigestPage"];
 const PLACEHOLDERS = PAGES.filter(([name]) => !BUILT.includes(name));
 
 describe("the placeholder pages", () => {
