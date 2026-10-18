@@ -516,20 +516,32 @@ def rule_width_report(conn: psycopg.Connection, days: int = 7) -> list[dict]:
     """Rows of `autoclose_rules` whose share of the window's alert volume
     exceeds `Config.AUTOCLOSE_RULE_WIDTH_PCT` — **sum** `occurrence_count`,
     never count rows (M4: after clustering, a rule that closed 5,000 alerts is
-    one row)."""
+    one row).
+
+    Both sides are that sum, over the same kind of row: `pct` is the occurrences the rule
+    closed (`sum(occurrence_count)` of its `auto_closed` clusters in the window) over ALL the
+    occurrences in the window (`sum(occurrence_count)` of every cluster, i.e. every alert
+    with `duplicate_of IS NULL`), so the numerator is part of the denominator and `pct` can
+    never pass 100. The denominator used to be `count(*)` of the rows: after M4 the 5,000
+    alerts of a noisy cluster are ONE head with `occurrence_count = 5000`, but the sum was
+    divided by a row count that did not include them (P11-T20 row 27: 5000 of 101 rows read
+    4950 %). A duplicate is a row of its own whose head's `occurrence_count` already counts
+    it, so duplicates are left out of the sum: adding them would count each twice."""
     cfg = config.load()
     rows = conn.execute(
         """
         WITH total AS (
-            SELECT count(*)::numeric AS n
+            SELECT sum(occurrence_count)::numeric AS n
             FROM alerts
-            WHERE received_at >= now() - (%(days)s * interval '1 day')
+            WHERE duplicate_of IS NULL
+              AND received_at >= now() - (%(days)s * interval '1 day')
         )
         SELECT autoclose_rule_id,
                sum(occurrence_count) AS alerts_closed,
                round(100.0 * sum(occurrence_count) / NULLIF(total.n, 0), 1) AS pct
         FROM alerts, total
         WHERE status = 'auto_closed'
+          AND duplicate_of IS NULL
           AND autoclose_rule_id IS NOT NULL
           AND received_at >= now() - (%(days)s * interval '1 day')
         GROUP BY autoclose_rule_id, total.n

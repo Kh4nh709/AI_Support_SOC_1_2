@@ -172,7 +172,7 @@ def _insert_alert_row(
             %(category)s, 'none', 'v1', %(event_bucket_hash)s, %(raw_payload)s,
             %(status)s, %(occurrence_count)s, %(is_synthetic)s, %(duplicate_of)s,
             CASE WHEN %(status)s = 'received' THEN NULL ELSE now() END,
-            NULL,
+            CASE WHEN %(status)s = 'duplicate' THEN now() ELSE NULL END,
             now(),
             %(srcip)s, %(dstip)s, %(dst_port)s, %(src_port)s, %(agent_id)s, %(alert_user)s,
             %(decoder)s, %(asset_context)s, %(identity_context)s, %(ioc_context)s,
@@ -870,6 +870,85 @@ def test_rule_width_report_sums_occurrence_count_not_rows(db):
     row = next(r for r in report if r["autoclose_rule_id"] == rule_id)
     assert row["alerts_closed"] == 5000
     assert row["pct"] > cfg.AUTOCLOSE_RULE_WIDTH_PCT
+    # 5000 of the window's 5100 occurrences (the head's 5000, the hundred others' 1 each): a
+    # share, never the 4950 % that dividing by the 101 ROWS gave (P11-T20 row 27)
+    assert row["pct"] == 98.0
+
+
+@pytest.mark.db
+def test_rule_width_report_is_a_share_of_occurrences_and_never_passes_100_percent(db):
+    """P11-T20 row 27 (P11-T06 review F4). A rule that closed everything in the window closed
+    100 % of it. Occurrences over rows read 5000 / 1 = 500000 %."""
+    _seed_user(db)
+    rule_id = str(uuid.uuid4())
+    _insert_rule(db, rule_id=rule_id, match=[], name="everything")
+    _insert_alert_row(
+        db,
+        alert_id="all-of-it",
+        status="auto_closed",
+        occurrence_count=5000,
+        autoclose_rule_id=rule_id,
+    )
+
+    (row,) = autoclose.rule_width_report(db, days=7)
+
+    assert (row["alerts_closed"], row["pct"]) == (5000, 100.0)
+
+
+@pytest.mark.db
+def test_rule_width_report_a_quarter_of_the_occurrences_is_not_wide_whatever_the_row_count(
+    db, monkeypatch
+):
+    """P11-T20 row 27. One head of 25 occurrences among 75 single alerts: 25 of 100 occurrences,
+    25 %, under the 30 % threshold, so not reported. Divided by the 76 ROWS it was 32.9 %, a
+    warning for a rule that is not wide."""
+    _seed_user(db)
+    rule_id = str(uuid.uuid4())
+    _insert_rule(db, rule_id=rule_id, match=[], name="a-quarter")
+    _insert_alert_row(
+        db,
+        alert_id="quarter-head",
+        status="auto_closed",
+        occurrence_count=25,
+        autoclose_rule_id=rule_id,
+    )
+    for i in range(75):
+        _insert_alert_row(db, alert_id=f"quarter-other-{i}", status="received", occurrence_count=1)
+
+    monkeypatch.setenv("AUTOCLOSE_RULE_WIDTH_PCT", "30")
+    assert autoclose.rule_width_report(db, days=7) == []
+    # and the same data, over a lower threshold, reports exactly 25.0
+    monkeypatch.setenv("AUTOCLOSE_RULE_WIDTH_PCT", "20")
+    (row,) = autoclose.rule_width_report(db, days=7)
+    assert (row["autoclose_rule_id"], row["alerts_closed"], row["pct"]) == (rule_id, 25, 25.0)
+
+
+@pytest.mark.db
+def test_rule_width_report_counts_a_duplicate_with_its_head_and_not_again(db):
+    """P11-T20 row 27. After M4 a cluster is its head (`occurrence_count` 4) plus the three
+    duplicate rows it absorbed, each a row of 1: four alerts. With six other alerts the window
+    holds 10, and the rule closed 4 of them, 40.0 %. Adding the duplicates' own 1s to a sum over
+    every row would give 4 of 13, 30.8 %."""
+    _seed_user(db)
+    rule_id = str(uuid.uuid4())
+    _insert_rule(db, rule_id=rule_id, match=[], name="with-duplicates")
+    _insert_alert_row(
+        db,
+        alert_id="dup-head",
+        status="auto_closed",
+        occurrence_count=4,
+        autoclose_rule_id=rule_id,
+    )
+    for i in range(3):
+        _insert_alert_row(
+            db, alert_id=f"dup-{i}", status="duplicate", duplicate_of="dup-head", occurrence_count=1
+        )
+    for i in range(6):
+        _insert_alert_row(db, alert_id=f"dup-other-{i}", status="received", occurrence_count=1)
+
+    (row,) = autoclose.rule_width_report(db, days=7)
+
+    assert (row["alerts_closed"], row["pct"]) == (4, 40.0)
 
 
 @pytest.mark.db
