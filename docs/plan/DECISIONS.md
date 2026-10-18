@@ -3418,3 +3418,19 @@ Decision:
      - (b) `passwd` and `pwd` join the key suffixes.
      - (c) A boolean or null value is never redacted. A flag cannot carry a secret, so `has_password`, `is_secret` and the like stay readable.
      - The key rule and the `token_hash` exception are unchanged.
+
+## DEC-204 · 2026-10-18 · The audit read hides the verdict of a `label.created` event (`label`, `confidence`) from every viewer, so the audit page cannot show one labeller's label to the other
+Scope: **product** (admin console API) · **security** (blind labelling, gold-set independence)
+Decided by: **the Director, 18/10**, on the independent review of P11-T16 (an observation outside that task). It narrows what P11-T09's audit answers return. It adds no field, and the gold set is unaffected.
+Drafted by: Director (Opus 5.5)
+Propagated to: spec §5.8 · P11-T20 part 2, backend (row 53) · the runbook with P11-T19
+Context:
+  - Labelling is blind between the two labellers (DEC-019, DEC-101): each labels without seeing the other's label. The labelling page and API honour that.
+  - `tier1/labels.py:546-558` writes `label.created` with `{alert_id, labeler_id, label, confidence, gold_set}`, and `admin_audit.py` lists it in the `configuration` group, returning the payload redacted only for secret keys.
+  - So the Audit page, which both labellers can open, would show labeller A's `label` and `confidence` to labeller B. Both labellers are admins, so the page's role guard does not separate them.
+Decision:
+  1. `GET /api/admin/audit` redacts `label` and `confidence` in the payload of every `label.created` event, for every viewer, at any depth, with the same redaction marker as the secret keys.
+  2. The event stays listed, with its time, `labeler_id`, `alert_id`, `gold_set` and the `undo` flag. It is accountability that someone labelled, never what they chose.
+  3. The Owner reads the labels from `triage_labels` and the export tools, as before. The audit page is not a way to read them.
+  4. The hint on the labelling page, "Nhãn của bạn không hiện với người gán nhãn còn lại", is then true on the audit page too.
+Supersedes: none. It narrows P11-T09's answers, which no page used yet.
