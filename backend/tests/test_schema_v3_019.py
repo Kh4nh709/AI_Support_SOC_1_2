@@ -56,12 +56,15 @@ def _insert(db, key: str, value: object, updated_by: object) -> None:
 
 
 def _schema_without_019(tmp_path: Path) -> Path:
-    """A copy of `docs/Schema` without 019, with a `schema.sql` that the real `build_schema.py`
-    builds from what is left: a tree as it stood at 018."""
+    """A copy of `docs/Schema` with only the migrations numbered below 019, and a `schema.sql`
+    that the real `build_schema.py` builds from them: a tree as it stood at 018. A migration
+    numbered after 019 (a future 020) is left out, as it did not exist yet at 018; copying
+    "everything but 019" would apply it before 019 and turn the upgrade tests red on a
+    `settings` table that does not exist yet (P11-T01 round 2, new finding 1)."""
     at_018 = tmp_path / "Schema"
     at_018.mkdir()
     for path in SCHEMA_DIR.glob(MIGRATION_FILES):
-        if not path.name.startswith("019_"):
+        if int(path.name[:3]) < 19:
             shutil.copy(path, at_018)
     shutil.copy(SCHEMA_DIR / "build_schema.py", at_018)
     built = subprocess.run(
@@ -206,10 +209,13 @@ def test_019_applies_on_a_database_at_018_the_way_make_migrate_runs_it(tmp_path)
         pytest.skip("psql is not installed")
     at_018 = _schema_without_019(tmp_path)
     # Counts come from the files, never a literal: the next migration must not turn this red.
+    # `before` is what the 018-tree holds (18 today: 001-018); run 2 applies everything else
+    # (019 today, and 019 plus a later 020 once there is one).
     stems = {path.stem for path in SCHEMA_DIR.glob(MIGRATION_FILES)}
     total = len(stems)  # 19 today
-    before = total - 1  # every migration before 019 (18 today)
-    assert len(list(at_018.glob(MIGRATION_FILES))) == before
+    before = len(list(at_018.glob(MIGRATION_FILES)))
+    assert before == len({stem for stem in stems if int(stem[:3]) < 19})
+    assert 0 < before < total
 
     dbname = f"{conftest._dbname(session)}_019up_test"
     dsn = _with_db(session, dbname)
@@ -224,7 +230,7 @@ def test_019_applies_on_a_database_at_018_the_way_make_migrate_runs_it(tmp_path)
         assert "019_admin_console" not in runs[0]
         assert f"migrate: 0 applied, {before} already present" in runs[0]
         assert "migrate: applying 019_admin_console" in runs[1]
-        assert f"migrate: 1 applied, {before} already present" in runs[1]
+        assert f"migrate: {total - before} applied, {before} already present" in runs[1]
         assert f"migrate: 0 applied, {total} already present" in runs[2]
         assert "migrate: applying" not in runs[2]
         with psycopg.connect(dsn) as conn:
