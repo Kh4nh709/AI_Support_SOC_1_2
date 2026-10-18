@@ -809,6 +809,67 @@ export const S = {
       ioc_bad: "IoC malicious hoặc suspicious",
     } satisfies Record<HardBlockCode, string>,
 
+    // The daily digest page (P11-T15, spec §4.5): `/admin/digest`. Its words are here and nowhere else; the
+    // texts of its refusals are the shared `S.admin.reason` ones, except the two the canvas words for a row.
+    digestPage: {
+      subtitle: "Duyệt từng cụm mà rule đã tự đóng trong ngày",
+      dayLabel: "Ngày",
+      today: "Hôm nay (đến giờ)",
+      // The day the server fell back to, `dd/mm/yyyy` (`formatDay`), after a day the server refused.
+      badDay: (day: string) => `Ngày không hợp lệ — đang hiển thị ${day}.`,
+      // A read after a review failed while the page still shows the list it had.
+      refreshFailed: "Không làm mới được danh sách — đang hiển thị lần tải trước.",
+      loadErrorOffline: "Không kết nối được máy chủ. Kiểm tra mạng rồi thử lại.",
+      loadErrorServer: (status: number) =>
+        `Máy chủ trả lỗi ${status}. Thử lại sau ít phút; nếu lặp lại, xem Tổng quan → Sức khoẻ hệ thống.`,
+      summary: {
+        clusters: (n: number) => `${n} cụm tự đóng`,
+        reviewed: (done: number, waiting: number) => `${done} đã duyệt · ${waiting} chờ duyệt`,
+        disagreements: (n: number) => `${n} cụm ① không đề xuất đóng`,
+      },
+      table: {
+        label: "Các cụm đã tự đóng trong ngày",
+        colRule: "Rule tự đóng",
+        colRuleDesc: "Rule · mô tả",
+        colSeverity: "Mức độ",
+        colAgent: "Agent",
+        colCount: "Số lần",
+        colSpan: "Khoảng thời gian",
+        colSuggestion: "Đề xuất ①",
+        colReview: "Duyệt",
+      },
+      // ① has no suggestion for the cluster yet.
+      noSuggestion: "(chưa có kết quả ①)",
+      disagreement: "⚠ ① không đề xuất đóng",
+      // The name of the group of the three buttons of a row (the buttons themselves are `S.admin.verdict`).
+      group: (ruleId: string, agent: string) => `Duyệt cụm ${ruleId} · ${agent}`,
+      reviewed: (verdict: string) => `Đã duyệt: ${verdict}`,
+      reopened: "đã mở lại về hàng đợi Tier 1",
+      // A refused review, said in the row it was for.
+      invalidVerdict: "Đánh giá không hợp lệ. Dòng giữ nguyên, chưa ghi gì.",
+      notAutoClosed: (cluster: string) =>
+        `Cụm ${cluster} không còn ở trạng thái tự đóng (đã được mở lại), nên không duyệt được nữa.`,
+      // A write that failed with no word of its own (a 5xx, the network): `status` 0 is no answer at all.
+      saveFailed: (status: number) =>
+        status === 0
+          ? "Không lưu được: mất kết nối máy chủ. Thử lại."
+          : `Không lưu được: máy chủ trả lỗi ${status}. Thử lại.`,
+      noRules: {
+        title: "Không có gì để duyệt",
+        body: "Chưa có rule tự đóng nào đang bật, nên không có cụm nào bị tự đóng.",
+        link: "Đến Rules tự đóng",
+      },
+      noClusters: {
+        title: (day: string) => `Không có cụm nào bị tự đóng ngày ${day}`,
+        body: "Chọn ngày khác hoặc xem hôm nay.",
+      },
+      legend: {
+        disagreement: "① không đồng ý với việc tự đóng: nên xem trước",
+        reviewed: "Đã duyệt (mờ đi)",
+        wrong: '"Sai" mở lại cụm về hàng đợi Tier 1 và đánh dấu rule có thể sai.',
+      },
+    },
+
     // The verdicts of a digest review (`_VERDICT_LABEL` of admin_digest.py).
     verdict: {
       correct: "Đúng",
