@@ -25,3 +25,7 @@ The independent reviews found these Minors and approved without them, so none of
 | 17 | P11-T04 r1 m4 | three tests: `with_result` against `stopped_by`, more than 200 quota users, and the `limits_out` failure degrading |
 | 18 | P11-T04 r1 m5 | the calendar-month test made independent of the day of the month |
 | 19 | P11-T04 r1 obs. | an index on `llm_runs (created_at)`: a later migration. It mainly helps `month_spend_usd` before every model attempt |
+| 20 | P11-T07 r2 N1 | `tier1/digest.py` `_rows_from` runs one `latest_suggestion` query per row; use one batched reader in `tier1/queue.py` (`DISTINCT ON (subject_id) … = ANY(%s)`), for `build` and `reopened_by_review` |
+| 21 | P11-T07 r2 N2 | test: two "Sai" rows on one day, and each 200 names the posted alert (`reopened_by_review` honours `alert_id`) |
+| 22 | P11-T07 r2 N3 | test: a ① run between the route's first read and the review appears in the 200's row (the 200 is the list's row, not the snapshot) |
+| 23 | P11-T07 r2 N4 | the `admin_digest.py` module docstring still names the removed `alert_status` |
