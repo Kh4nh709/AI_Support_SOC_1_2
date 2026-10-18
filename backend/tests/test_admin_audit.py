@@ -1269,6 +1269,37 @@ def test_a_payload_nested_to_hundreds_or_thousands_of_levels_is_cut_not_a_500(
     assert events[after]["payload"] == {"ok": 1}
 
 
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "shape", ['{"n": %s}', "[1, %s, 2]", '{"a": [{"b": %s}]}'], ids=["object", "array", "nested"]
+)
+def test_a_number_of_thousands_of_digits_cuts_that_payload_not_the_page(client, shape: str) -> None:
+    """jsonb stores it; Python's `json.loads` refuses an integer of more than 4,300 digits with a
+    `ValueError` (the interpreter's int-string limit), which is neither `RecursionError` nor
+    `PayloadTooDeep`. The row is cut, the page is 200 and the next row is intact."""
+    tc, db, _ = client
+    big = _event_with_json_text(db, shape % ("9" * 5000), "big-int")
+    after = _event(db, subject="after-big-int", payload={"ok": 1})
+    resp = _get(tc)
+    assert resp.status_code == 200
+    events = {e["audit_id"]: e for e in resp.json()["events"]}
+    (size,) = db.execute(
+        "SELECT octet_length(payload::text) FROM audit_events WHERE audit_id = %s", (big,)
+    ).fetchone()
+    assert size > 5000
+    assert events[big]["payload"] == {"truncated": True, "size": size}
+    assert events[after]["payload"] == {"ok": 1}
+
+
+@pytest.mark.db
+def test_a_number_of_a_few_thousand_digits_under_the_limit_is_returned_whole(client) -> None:
+    """The cut starts where the parser refuses (over 4,300 digits), not before."""
+    tc, db, _ = client
+    _event_with_json_text(db, '{"n": ' + "9" * 4000 + "}", "int-4000")
+    (event,) = _get(tc).json()["events"]
+    assert event["payload"] == {"n": int("9" * 4000)}
+
+
 # ---------------------------------------------------------------------------
 # the main query's timeout
 # ---------------------------------------------------------------------------

@@ -208,16 +208,20 @@ def redact(value: Any, _level: int = 0) -> Any:
 def _payload(text: str | None, size: int | None) -> Any:
     """The `payload` of one row from its two SQL columns: `text` is the jsonb as text, or NULL
     when it was over the size limit; `size` is its byte length, or NULL for a SQL NULL payload.
-    A payload that cannot be returned whole (too big, too deep, or too deep for the JSON parser
-    itself) is `{"truncated": true, "size": <bytes>}`; one of those never leaks a secret, it
-    is not sent at all."""
+    A payload that cannot be returned whole (too big, too deep, too deep for the JSON parser
+    itself, or holding a number that parser refuses) is `{"truncated": true, "size": <bytes>}`;
+    one of those never leaks a secret, it is not sent at all.
+
+    `ValueError` is the parser's own refusals (`JSONDecodeError`, and the integer-string limit
+    of 4,300 digits, which jsonb does not have) and `PayloadTooDeep`; `RecursionError` is the
+    parser running out of stack. None of them may take the whole page down."""
     if size is None:
         return None
     if text is None:
         return {"truncated": True, "size": size}
     try:
         return redact(json.loads(text))
-    except (PayloadTooDeep, RecursionError):
+    except (ValueError, RecursionError):
         return {"truncated": True, "size": size}
 
 
