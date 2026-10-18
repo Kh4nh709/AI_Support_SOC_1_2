@@ -413,11 +413,16 @@ export function DigestPage() {
 
   const pickDay = (day: string) => {
     if (day === "") return;
-    setParams((before) => {
-      const next = new URLSearchParams(before);
-      next.set("day", day);
-      return next;
-    });
+    // A replace, not a push: a date input fires a change on every keystroke of its fields, and Back should
+    // leave the page, not walk through each day passed.
+    setParams(
+      (before) => {
+        const next = new URLSearchParams(before);
+        next.set("day", day);
+        return next;
+      },
+      { replace: true },
+    );
   };
 
   let body: ReactNode;

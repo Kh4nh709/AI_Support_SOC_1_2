@@ -7,7 +7,7 @@ import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
-import { MemoryRouter, useLocation } from "react-router";
+import { MemoryRouter, useLocation, useNavigate } from "react-router";
 import type { DigestResponse, DigestRow } from "../../api/admin";
 import { S } from "../../strings";
 import { ADMIN_INVALIDATES } from "./adminKeys";
@@ -289,6 +289,37 @@ describe("the first read", () => {
     expect(where()).toBe("/admin/digest?day=2026-09-27");
     expect(await screen.findByText(D.noClusters.title("27/09/2026"))).toBeInTheDocument();
     expect(picker()).toHaveValue("2026-09-27");
+  });
+
+  it("replaces the history entry when a day is picked, so Back leaves the page and does not walk the days", async () => {
+    serveDigest((day) => HttpResponse.json(digest({ day: day ?? DAY, rows: [] })));
+    function Back() {
+      const navigate = useNavigate();
+      return (
+        <button type="button" onClick={() => void navigate(-1)}>
+          back
+        </button>
+      );
+    }
+    render(
+      <QueryClientProvider client={newClient()}>
+        <MemoryRouter initialEntries={["/elsewhere", "/admin/digest"]} initialIndex={1}>
+          <main>
+            <DigestPage />
+            <Where />
+            <Back />
+          </main>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByText(D.noClusters.title("29/09/2026"));
+    fireEvent.change(picker(), { target: { value: "2026-09-27" } });
+    await screen.findByText(D.noClusters.title("27/09/2026"));
+    fireEvent.change(picker(), { target: { value: "2026-09-26" } });
+    await screen.findByText(D.noClusters.title("26/09/2026"));
+    expect(where()).toBe("/admin/digest?day=2026-09-26");
+    fireEvent.click(screen.getByRole("button", { name: "back" }));
+    expect(where()).toBe("/elsewhere");
   });
 
   it("does not move when the picker is cleared", async () => {
@@ -1257,11 +1288,15 @@ describe("a failed read", () => {
     expect(screen.queryByText(S.admin.common.loadError)).not.toBeInTheDocument();
   });
 
-  it("says a 503 timeout in the reason's own text", async () => {
-    serveDigest(() => refuse(503, { reason: "timeout" }));
+  it("says a 503 in Vietnamese, not the server's English (the one the route can send: auth disabled)", async () => {
+    // `deps.py`: with no JWT secret the guard answers 503 with a plain English text; the digest routes send no
+    // reason of their own on a read.
+    serveDigest(() => refuse(503, "auth disabled: JWT_SECRET unset"));
     renderPage();
     await screen.findByRole("alert");
-    expect(screen.getByText(S.admin.reason.timeout)).toBeInTheDocument();
+    expect(screen.getByText(D.loadErrorServer(503))).toBeInTheDocument();
+    expect(screen.queryByText(/auth disabled/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/JWT_SECRET/)).not.toBeInTheDocument();
   });
 
   it("says the connection failed when there was no answer", async () => {
