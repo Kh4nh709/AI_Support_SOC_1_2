@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { delay, http, HttpResponse, type JsonBodyType } from "msw";
 import { setupServer } from "msw/node";
 import { MemoryRouter } from "react-router";
+import ts from "typescript";
 import {
   ADMIN_LIMITS,
   LABEL_CHOICES,
@@ -1515,34 +1516,116 @@ describe("the page stays blind", () => {
 });
 
 // The page's own source is read, like guards.test.ts reads the whole of src: the blind page must render each
-// field by name. A loop or a dump over the cluster would show any key the server added.
+// field by name. A loop or a dump over the cluster would show any key the server added. The behaviour tests above
+// (a planted key never reaches the DOM) are the real wall; this only keeps the obvious ways round it out.
+//
+// The source is read as TypeScript (a syntax tree), not as lines of text: a comment, a string that holds `//`,
+// or a name written across lines cannot hide a call from it, and a comment that names a forbidden call is not one.
 describe("the source of the page", () => {
   const FILES = ["LabelsPage.tsx", "LabelClusterView.tsx", "LabelForm.tsx", "labelerId.ts"];
   const source = (name: string) => readFileSync(join("src", "features", "admin", name), "utf8");
-  /** The code, without its comments: a comment may name what the code must not do. */
-  const code = (name: string) =>
-    source(name)
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/\/\/.*$/gm, "");
 
-  it.each(FILES)(
-    "%s renders no object whole: no JSON.stringify, no key loop, no spread of the cluster",
-    (name) => {
-      const text = code(name);
-      expect(text).not.toMatch(/JSON\.stringify/);
-      expect(text).not.toMatch(/Object\.(entries|keys|values|fromEntries|assign)\s*\(/);
-      expect(text).not.toMatch(/\.\.\.\s*(cluster|view|data|next|row|sample)\b/);
-      expect(text).not.toMatch(/dangerouslySetInnerHTML|<Link\b|<a\b|\bhref\b|navigate\(/);
-    },
-  );
+  /** Names the blind page must not use at all: ways to walk or copy the keys of an object, to navigate, to ask who. */
+  const BANNED = new Set([
+    "Object",
+    "Reflect",
+    "structuredClone",
+    "navigate",
+    "useNavigate",
+    "useMe",
+    "fetchMe",
+    "dangerouslySetInnerHTML",
+    "innerHTML",
+  ]);
+  /** The names the cluster and its parts go by in these files: spreading one would copy every key it carries. */
+  const WHOLE = new Set(["cluster", "view", "data", "next", "row", "sample", "answer", "saved"]);
+  const LINK_TAGS = new Set(["a", "Link", "NavLink", "Navigate"]);
+
+  /** What a file does that the blind page must not. `[]` for a file that does none of it. */
+  function violations(text: string, name = "scratch.tsx"): string[] {
+    const file = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const found: string[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isForInStatement(node)) found.push("for…in");
+      if (ts.isIdentifier(node)) {
+        if (BANNED.has(node.text)) found.push(`the name ${node.text}`);
+        // JSON is read (`JSON.parse` of the token); anything else of it can write the whole object out.
+        const isParse =
+          ts.isPropertyAccessExpression(node.parent) && node.parent.name.text === "parse";
+        if (node.text === "JSON" && !isParse) found.push("JSON other than JSON.parse");
+      }
+      if (
+        (ts.isSpreadAssignment(node) ||
+          ts.isSpreadElement(node) ||
+          ts.isJsxSpreadAttribute(node)) &&
+        ts.isIdentifier(node.expression) &&
+        WHOLE.has(node.expression.text)
+      ) {
+        found.push(`a spread of ${node.expression.text}`);
+      }
+      if (
+        ts.isBindingElement(node) &&
+        node.dotDotDotToken &&
+        ts.isObjectBindingPattern(node.parent)
+      ) {
+        found.push("an object rest");
+      }
+      if (
+        (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) &&
+        LINK_TAGS.has(node.tagName.getText(file))
+      ) {
+        found.push(`a link, <${node.tagName.getText(file)}>`);
+      }
+      if (ts.isJsxAttribute(node) && ["href", "to"].includes(node.name.getText(file))) {
+        found.push(`the attribute ${node.name.getText(file)}`);
+      }
+      if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+        const from = node.moduleSpecifier.text;
+        if (/\/api\/(?!admin$|types$)/.test(from)) found.push(`the module ${from}`);
+        if (/\/(tier1|tier2)\//.test(from)) found.push(`the module ${from}`);
+      }
+      if (
+        ts.isPropertyAccessExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === "adminKeys" &&
+        node.name.text !== "labels"
+      ) {
+        found.push(`the query key adminKeys.${node.name.text}`);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+    return found;
+  }
+
+  /** The names a file imports from api/admin. */
+  function importedFromAdminApi(text: string): string[] {
+    const file = ts.createSourceFile(
+      "scratch.tsx",
+      text,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX,
+    );
+    const names: string[] = [];
+    for (const statement of file.statements) {
+      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier))
+        continue;
+      if (!/\/api\/admin$/.test(statement.moduleSpecifier.text)) continue;
+      const bindings = statement.importClause?.namedBindings;
+      if (bindings !== undefined && ts.isNamedImports(bindings)) {
+        for (const element of bindings.elements) names.push(element.name.text);
+      }
+    }
+    return names;
+  }
+
+  it.each(FILES)("%s renders no object whole, links to nothing, asks for nothing else", (name) => {
+    expect(violations(source(name), name)).toEqual([]);
+  });
 
   it("calls three routes of api/admin.ts and no other", () => {
-    const imported = FILES.flatMap((name) => {
-      const text = source(name);
-      return [...text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"(?:\.\.\/)+api\/admin"/g)].flatMap(
-        (m) => (m[1] ?? "").split(",").map((s) => s.trim().replace(/^type\s+/, "")),
-      );
-    })
+    const imported = FILES.flatMap((name) => importedFromAdminApi(source(name)))
       .filter((name) => /^[a-z]/.test(name))
       .sort();
     expect([...new Set(imported)]).toEqual([
@@ -1553,10 +1636,56 @@ describe("the source of the page", () => {
     ]);
   });
 
-  it.each(FILES)("%s imports no other api module, and no query key but the labels one", (name) => {
-    const text = code(name);
-    expect(text).not.toMatch(/from\s*"(?:\.\.\/)+api\/(?!admin"|types")/);
-    expect(text).not.toMatch(/useMe|fetchMe|tier1\/|tier2\//);
-    expect(text).not.toMatch(/adminKeys\.(?!labels\b)\w+/);
+  // The checker is itself checked. Each of these is added to the real source of the page as a scratch copy in a
+  // string, never to the file: the real source has none, the copy has one.
+  describe("the checker", () => {
+    const real = source("LabelClusterView.tsx");
+
+    it("finds nothing in the real source it is given the scratch copies of", () => {
+      expect(violations(real, "LabelClusterView.tsx")).toEqual([]);
+    });
+
+    it.each([
+      ["a for…in loop", "for (const key in cluster) { void key; }"],
+      ["Object.getOwnPropertyNames", "void Object.getOwnPropertyNames(cluster);"],
+      ["Reflect.ownKeys", "void Reflect.ownKeys(cluster);"],
+      ["structuredClone", "void structuredClone(cluster);"],
+      ["Object.entries across two lines", "void Object\n  .entries(cluster);"],
+      ["a // inside a string before JSON.stringify", 'void ["//", JSON.stringify(cluster)];'],
+      ["JSON.stringify by another name", 'const j = JSON; void j["stringify"](cluster);'],
+      ["a spread of the cluster", "void { ...cluster };"],
+      ["a spread of the cluster in JSX", "void (<div {...cluster} />);"],
+      [
+        "an object rest of the cluster",
+        "const { category, ...others } = cluster; void [category, others];",
+      ],
+      ["a link", 'void (<a href="/alerts/1">x</a>);'],
+      ["a router link", 'void (<Link to="/cases/1">x</Link>);'],
+      ["a navigation", "const go = useNavigate(); void go;"],
+      [
+        "dangerouslySetInnerHTML",
+        "void (<div dangerouslySetInnerHTML={{ __html: cluster.raw_log }} />);",
+      ],
+      ["the caller's id from the server", "void useMe(true);"],
+      ["another api module", 'import { fetchQueue } from "../../api/queue";\nvoid fetchQueue;'],
+      ["another feature", 'import { x } from "../tier1/alertSections";\nvoid x;'],
+      ["another query key", "void adminKeys.overviewAll;"],
+    ])("finds %s", (_name, snippet) => {
+      expect(violations(`${real}\n${snippet}\n`, "scratch.tsx")).not.toEqual([]);
+    });
+
+    it.each([
+      [
+        "a comment naming a forbidden call",
+        "// Object.keys(cluster) and JSON.stringify(cluster) are not called here.",
+      ],
+      ["a block comment naming one", "/* for (const k in cluster) {} */"],
+      ["a string that names one", 'void "Object.keys(cluster)";'],
+      ["JSON.parse, which reads the token", 'void JSON.parse("{}");'],
+      ["the labels query key, spread into a longer one", "void [...adminKeys.labels, 1];"],
+      ["a spread of a name that is no whole object", "void { ...answerFields };"],
+    ])("does not find %s", (_name, snippet) => {
+      expect(violations(`${real}\n${snippet}\n`, "scratch.tsx")).toEqual([]);
+    });
   });
 });
