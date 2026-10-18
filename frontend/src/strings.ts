@@ -591,6 +591,149 @@ export const S = {
       outOfRange: (min: number, max: number) => `Phải từ ${min} đến ${max}`,
     },
 
+    // The users page (P11-T12, spec §4.2), in the words of the canvas's AdminUsers and of the
+    // "NGƯỜI DÙNG & QUYỀN" cards of AdminStates. The reasons the routes answer with are in `reason` above.
+    usersPage: {
+      // Under the h1: how many accounts there are.
+      count: (n: number) => `${n} tài khoản · quyền cấp theo vai trò`,
+      tableLabel: "Danh sách tài khoản",
+      search: { label: "Tìm", placeholder: "username, tên…" },
+      // The search found nothing (AdminStates "TÌM KHÔNG THẤY"), and the list that has no account at all.
+      noMatch: {
+        title: (query: string) => `Không có tài khoản khớp “${query}”`,
+        hint: "Tìm theo tên đăng nhập hoặc tên hiển thị.",
+        clear: "Xoá tìm kiếm",
+      },
+      empty: "Chưa có tài khoản nào.",
+      col: {
+        account: "Tài khoản",
+        role: "Vai trò",
+        status: "Trạng thái",
+        lastLogin: "Đăng nhập cuối",
+        actions: "Thao tác",
+      },
+      // The chip on the caller's own row.
+      you: "bạn",
+      neverLoggedIn: "chưa đăng nhập",
+      status: {
+        active: "Hoạt động",
+        locked: (until: string) => `Bị khoá đến ${until}`,
+        inactive: "Vô hiệu",
+      },
+      roleSelect: (username: string) => `Vai trò của ${username}`,
+      // The buttons of a row. Each is named with its account (`rowAction`), the visible text first.
+      action: {
+        reset: "Đặt lại mật khẩu",
+        unlock: "Mở khoá",
+        reactivate: "Kích hoạt lại",
+        deactivate: "Vô hiệu hoá",
+      },
+      rowAction: (action: string, username: string) => `${action} ${username}`,
+      // The button of a row that holds its less common actions (a row menu).
+      moreActions: (username: string) => `Thêm thao tác cho ${username}`,
+      // What a write failed with when the server said nothing a person can read: the connection, or a 5xx.
+      writeFailed: {
+        network: "Không lưu được: mất kết nối máy chủ. Thử lại.",
+        server: "Không lưu được: máy chủ trả lỗi. Thử lại sau ít phút.",
+      },
+      // The words a password form shares: the create form and the reset dialog.
+      password: {
+        short: (min: number, have: number) => `Cần tối thiểu ${min} ký tự, đang có ${have}`,
+        mismatch: "Không khớp với mật khẩu",
+        invalid: "Mật khẩu chứa ký tự không hợp lệ",
+      },
+      // The four dialogs (AdminStates). A refusal keeps the title and the alert and only the button "Đóng".
+      dialog: {
+        role: {
+          title: (username: string) => `Đổi vai trò của ${username}?`,
+          change: (from: string, to: string) => `${from} → ${to}`,
+          body: (username: string) =>
+            `Quyền đổi ngay. Mọi phiên đang mở của ${username} bị đăng xuất; lần đăng nhập sau sẽ có quyền mới.`,
+          confirm: "Đổi vai trò",
+        },
+        deactivate: {
+          title: (username: string) => `Vô hiệu hoá ${username}?`,
+          body: (name: string) =>
+            `${name} bị đăng xuất ngay và không đăng nhập được nữa. Các quyết định đã ghi vẫn giữ nguyên. Có thể kích hoạt lại sau.`,
+          confirm: "Vô hiệu hoá",
+        },
+        reset: {
+          title: (username: string) => `Đặt lại mật khẩu cho ${username}`,
+          password: "Mật khẩu tạm",
+          repeat: "Nhập lại",
+          hint: (min: number) =>
+            `Tối thiểu ${min} ký tự. Báo mật khẩu tạm cho người dùng qua kênh riêng; trang không hiển thị lại.`,
+          sessions: (username: string) => `Mọi phiên đang mở của ${username} bị đăng xuất.`,
+          own: "Đây là tài khoản của bạn: đặt lại mật khẩu cũng đăng xuất mọi phiên của bạn, kể cả phiên này. Bạn sẽ phải đăng nhập lại.",
+          confirm: "Đặt lại",
+        },
+        unlock: {
+          title: (username: string) => `Mở khoá ${username}?`,
+          body: (until: string, failed: number) =>
+            `Tài khoản bị khoá đến ${until} sau ${failed} lần nhập sai mật khẩu. Mở khoá xoá số lần sai và cho đăng nhập ngay.`,
+          confirm: "Mở khoá",
+        },
+      },
+      // The note after a write (the toast).
+      done: {
+        role: (username: string, from: string, to: string) =>
+          `Đã đổi vai trò của ${username} từ ${from} sang ${to}. Phiên cũ của người đó đã bị đăng xuất.`,
+        deactivate: (username: string) => `Đã vô hiệu hoá ${username}. Người đó đã bị đăng xuất.`,
+        reactivate: (username: string) => `Đã kích hoạt lại ${username}.`,
+        reset: (username: string) =>
+          `Đã đặt lại mật khẩu của ${username}. Báo mật khẩu tạm qua kênh riêng; trang không hiển thị lại.`,
+        unlock: (username: string) => `Đã mở khoá ${username}.`,
+        create: (username: string, role: string) =>
+          `Đã tạo tài khoản ${username} (${role}). Báo mật khẩu tạm qua kênh riêng; trang không hiển thị lại.`,
+      },
+      // The create panel (the canvas's "Tạo người dùng").
+      create: {
+        title: "Tạo người dùng",
+        username: "Tên đăng nhập",
+        usernamePlaceholder: "vd. an.t1",
+        displayName: "Tên hiển thị",
+        role: "Vai trò",
+        // The one line under each role (the canvas's).
+        roleHelp: {
+          tier1: "xử lý hàng đợi, quyết alert",
+          tier2: "điều tra case, chạy ②, hỏi AI",
+          admin: "mọi quyền, gồm quản trị người dùng và hạn mức",
+        },
+        password: "Mật khẩu tạm",
+        repeat: "Nhập lại mật khẩu",
+        hint: (min: number) =>
+          `Tối thiểu ${min} ký tự. Mật khẩu chỉ lưu dạng băm argon2id, không hiển thị lại.`,
+        submit: "Tạo tài khoản",
+        // What the form can say before it posts, and the plainer words for the server's `invalid`.
+        roleMissing: "Chưa chọn vai trò",
+        usernameInvalid:
+          "Chỉ dùng chữ thường a–z, số, dấu chấm, gạch dưới, gạch ngang; dài 3 đến 32 ký tự",
+        displayNameInvalid: "Tên hiển thị không được chứa ký tự điều khiển hay ký tự vô hình",
+      },
+      // The read-only matrix of role to function (the canvas's nine rows), static text.
+      matrix: {
+        title: "Quyền theo vai trò",
+        note: "đổi vai trò là đổi quyền; phiên cũ của người đó bị đăng xuất",
+        feature: "Chức năng",
+        yes: "có",
+        no: "—",
+        // What a screen reader says for the "—".
+        noSpoken: "không",
+        // [label, tier1, tier2, admin]
+        rows: [
+          ["Xem hàng đợi và chi tiết alert", true, true, true],
+          ["Quyết định alert (đóng, chuyển Tier-2)", true, false, false],
+          ["Xem và kết luận case", false, true, true],
+          ["Chạy phân tích ② và hỏi AI", false, true, true],
+          ["Quản trị rules tự đóng, digest", false, false, true],
+          ["Gán nhãn đánh giá", false, false, true],
+          ["Quản lý người dùng", false, false, true],
+          ["Xem và chỉnh hạn mức LLM", false, false, true],
+          ["Xem nhật ký audit, chạy lại job lỗi, nạp lại kiểm kê", false, false, true],
+        ] satisfies readonly (readonly [string, boolean, boolean, boolean])[],
+      },
+    },
+
     // The groups of the audit page's filter (`GROUPS` of admin_audit.py), in the canvas's words.
     auditGroup: {
       users: "Người dùng và quyền",
