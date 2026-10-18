@@ -4,16 +4,18 @@
 
 **What a row is.** `{audit_id, created_at, event_type, actor_role, actor_username, subject_id,
 payload}`, newest first by `audit_id` (insertion order, which the primary key serves: no new
-index). `actor_username` comes from a LEFT JOIN on `users` and is `null` for `system`, `llm` and
-for an actor with no `users` row (`audit_events.actor_id` has no FK on purpose: a deleted user's
-rows stay).
+index). `actor_username` comes from a LEFT JOIN on `users`, made only for an `analyst` or `admin`
+row: it is `null` for `system` and `llm` (even if an `llm` row carries an `actor_id`, which the
+CHECK allows) and for an actor with no `users` row (`audit_events.actor_id` has no FK on purpose:
+a deleted user's rows stay).
 
 **Filters**, all optional, all ANDed, every value a bound parameter (the WHERE is built from the
 fixed fragments in `_filters`, never from a request value):
 - `range`: `24h`, `7d` (default) or `30d`, on `created_at`, against the database's clock;
 - `group`: a key of `GROUPS`; an unknown one is a 422;
 - `actor`: `system` or `llm` is an `actor_role`; anything else is a username, matched exactly as
-  login matches it (case-sensitive), through `actor_id`. An unknown username matches nothing: an
+  login matches it (case-sensitive), through the `actor_id` of an `analyst` or `admin` row (the
+  join's own condition). An unknown username matches nothing: an
   empty list, not an error. A text value holding a NUL byte, or an empty one, is a 422 (the
   driver cannot send a NUL, and would answer a 500);
 - `subject`: an exact `subject_id`;
@@ -36,9 +38,13 @@ them.
 a payload whose `jsonb::text` is over `PAYLOAD_MAX_BYTES` (64 KiB, measured in bytes) never leaves
 it, and the row carries `{"truncated": true, "size": <bytes>}` instead. That way a 1 MB string
 is never read into this process and one event cannot blow up a page (100 rows at most, 64 KiB
-each). Every other payload is parsed and `redact`ed: a dict key whose lower-cased name is in
-`REDACT_KEYS` has its value replaced by `"[đã ẩn]"`, at any depth, through lists and dicts, and
-nothing else is changed (no stringifying, no cutting). Payloads should never carry those keys
+each). Every other payload is parsed and `redact`ed: a dict key that `is_secret_key` names has
+its value replaced by `"[đã ẩn]"`, at any depth, through lists and dicts, and nothing else is
+changed (no stringifying, no cutting). The key rule (spec §5.8 as amended at `b9fe528`): lower-case
+the key, drop `_` and `-` (camelCase needs no split of its own: lower-casing `apiKey` is
+`apikey`), and redact when the result equals or ends with one of `REDACT_SUFFIXES`. That catches
+`access_token`, `client_secret`, `apiKey`, `api-key`, `db_password`, `secret_key`, `privateKey`,
+`passphrase` and leaves `key`, `token_count`, `tokens_in`, `passwords`, `token_hash` visible. Payloads should never carry a credential
 (DEC-159 item 6); this is the second layer. One addition to the spec, for the same reason as the
 size cut: a payload nested in more than `MAX_PAYLOAD_DEPTH` (32) dicts and lists takes the
 truncated shape too (and so does one the JSON parser itself cannot read, a `RecursionError`
@@ -86,8 +92,21 @@ MAX_PAYLOAD_DEPTH = 32
 
 #: What a redacted value is replaced by.
 REDACTED = "[đã ẩn]"
-#: A dict key whose lower-cased name is one of these is redacted.
-REDACT_KEYS = frozenset({"password", "password_hash", "token", "secret", "dsn", "api_key"})
+#: A dict key is redacted when its normalised name (`normalise_key`) equals or ends with one of
+#: these. They are written in normalised form: no `_` or `-`, lower case. The first six are spec
+#: §5.8; `secretkey`, `privatekey` and `passphrase` were added by the Director's ruling on the fix
+#: round (a `token_hash` stays visible: it is a digest, not a credential).
+REDACT_SUFFIXES = (
+    "password",
+    "passwordhash",
+    "secret",
+    "token",
+    "dsn",
+    "apikey",
+    "secretkey",
+    "privatekey",
+    "passphrase",
+)
 
 #: `?range=` -> the window. Anything else is a 422 from the `Literal` below.
 _WINDOWS: dict[str, timedelta] = {
@@ -163,10 +182,27 @@ class PayloadTooDeep(ValueError):
     """A payload nested in more than `MAX_PAYLOAD_DEPTH` dicts and lists."""
 
 
+def normalise_key(key: str) -> str:
+    """Lower case, with `_` and `-` dropped: `apiKey`, `api-key`, `API_KEY` are all `apikey`.
+
+    The spec's "split camelCase" step has no effect of its own here: the split is undone as soon as
+    the separators are dropped and the letters lower-cased, so `apiKey` is `apikey` either way."""
+    return key.lower().replace("_", "").replace("-", "")
+
+
+def is_secret_key(key: Any) -> bool:
+    """True when the key's normalised name equals or ends with one of `REDACT_SUFFIXES`.
+
+    A suffix, not a substring: `access_token`, `client_secret` and `db_password` are caught, while
+    `key`, `token_count`, `tokens_in` and `passwords` are not. A JSON key is always a string; any
+    other type is never a secret name."""
+    return isinstance(key, str) and normalise_key(key).endswith(REDACT_SUFFIXES)
+
+
 def redact(value: Any, _level: int = 0) -> Any:
     """A copy of a JSON value with every secret-named key's value replaced by `REDACTED`.
 
-    A key matches when its lower-cased name is in `REDACT_KEYS`, at any depth, through lists
+    A key matches when `is_secret_key` says so, at any depth, through lists
     and nested dicts; the whole value under such a key goes, whatever it is. Everything else is
     returned as it is: the same numbers, strings and `None`, in the same structure. The input
     is never modified. `_level` is the number of containers already entered: a value nested in
@@ -176,11 +212,7 @@ def redact(value: Any, _level: int = 0) -> Any:
             raise PayloadTooDeep(f"nested deeper than {MAX_PAYLOAD_DEPTH} levels")
         if isinstance(value, dict):
             return {
-                key: (
-                    REDACTED
-                    if isinstance(key, str) and key.lower() in REDACT_KEYS
-                    else redact(item, _level + 1)
-                )
+                key: REDACTED if is_secret_key(key) else redact(item, _level + 1)
                 for key, item in value.items()
             }
         return [redact(item, _level + 1) for item in value]
@@ -190,16 +222,20 @@ def redact(value: Any, _level: int = 0) -> Any:
 def _payload(text: str | None, size: int | None) -> Any:
     """The `payload` of one row from its two SQL columns: `text` is the jsonb as text, or NULL
     when it was over the size limit; `size` is its byte length, or NULL for a SQL NULL payload.
-    A payload that cannot be returned whole (too big, too deep, or too deep for the JSON parser
-    itself) is `{"truncated": true, "size": <bytes>}`; one of those never leaks a secret, it
-    is not sent at all."""
+    A payload that cannot be returned whole (too big, too deep, too deep for the JSON parser
+    itself, or holding a number that parser refuses) is `{"truncated": true, "size": <bytes>}`;
+    one of those never leaks a secret, it is not sent at all.
+
+    `ValueError` is the parser's own refusals (`JSONDecodeError`, and the integer-string limit
+    of 4,300 digits, which jsonb does not have) and `PayloadTooDeep`; `RecursionError` is the
+    parser running out of stack. None of them may take the whole page down."""
     if size is None:
         return None
     if text is None:
         return {"truncated": True, "size": size}
     try:
         return redact(json.loads(text))
-    except (PayloadTooDeep, RecursionError):
+    except (ValueError, RecursionError):
         return {"truncated": True, "size": size}
 
 
@@ -209,16 +245,33 @@ def _payload(text: str | None, size: int | None) -> Any:
 
 _SET_TIMEOUT = sql.SQL("SET LOCAL statement_timeout = {}")
 
+# The page is selected FIRST (the inner `ORDER BY audit_id DESC LIMIT n`, which the primary key
+# serves, or a Sort over the filter's rows when a `subject` or `group` filter picks another index).
+# Only then is each of its (at most 100) rows' payload turned into text, ONCE, in the fenced
+# LATERAL: `OFFSET 0` keeps the planner from flattening `b` back into the select list, where the
+# CASE test, its ELSE branch and the size column would each repeat the conversion, and for every
+# row a Sort plan orders, not only the page's. Measured on the scratch server (payloads of 1.36 MB
+# of text, 15.6 KB stored): 600 of them under one subject took the old query 3.3 s (a 503), this
+# one 0.27 s. `size` is NULL for a SQL NULL payload; the outer ORDER BY restores the page's order
+# after the join (100 rows).
 _PAGE = sql.SQL("""
-    SELECT a.audit_id, a.created_at, a.event_type, a.actor_role, u.username, a.subject_id,
-           CASE WHEN octet_length(a.payload::text) > %(max_bytes)s THEN NULL
-                ELSE a.payload::text END,
-           octet_length(a.payload::text)
-    FROM audit_events a
-    LEFT JOIN users u ON u.user_id = a.actor_id
-    WHERE {where}
-    ORDER BY a.audit_id DESC
-    LIMIT %(limit)s
+    SELECT p.audit_id, p.created_at, p.event_type, p.actor_role, u.username, p.subject_id,
+           CASE WHEN t.size > %(max_bytes)s THEN NULL ELSE t.body END,
+           t.size
+    FROM (
+        SELECT a.audit_id, a.created_at, a.event_type, a.actor_role, a.actor_id, a.subject_id,
+               a.payload
+        FROM audit_events a
+        WHERE {where}
+        ORDER BY a.audit_id DESC
+        LIMIT %(limit)s
+    ) p
+    LEFT JOIN users u ON u.user_id = p.actor_id AND p.actor_role IN ('analyst', 'admin')
+    CROSS JOIN LATERAL (
+        SELECT b.body, octet_length(b.body) AS size
+        FROM (SELECT p.payload::text AS body OFFSET 0) b
+    ) t
+    ORDER BY p.audit_id DESC
     """)
 
 _COUNT = sql.SQL("SELECT count(*) FROM audit_events a WHERE {where}")
@@ -238,9 +291,14 @@ def _filters(
         clauses.append(sql.SQL("a.actor_role = %(actor_role)s"))
         params["actor_role"] = actor
     elif actor is not None:
-        # An unknown username makes the subquery NULL, and `actor_id = NULL` matches no row.
+        # Only an `analyst` or `admin` row has a user to name (spec §5.8: null for system and llm;
+        # the CHECK would let an `llm` row carry an `actor_id`), the same condition as the page's
+        # join. An unknown username makes the subquery NULL, and `actor_id = NULL` matches no row.
         clauses.append(
-            sql.SQL("a.actor_id = (SELECT u2.user_id FROM users u2 WHERE u2.username = %(actor)s)")
+            sql.SQL(
+                "a.actor_role IN ('analyst', 'admin') AND "
+                "a.actor_id = (SELECT u2.user_id FROM users u2 WHERE u2.username = %(actor)s)"
+            )
         )
         params["actor"] = actor
     if subject is not None:
@@ -253,20 +311,29 @@ def _where(clauses: list[sql.SQL]) -> sql.Composed:
     return sql.SQL(" AND ").join(clauses)
 
 
-def _fetch_page(
-    conn: Any, clauses: list[sql.SQL], params: dict[str, Any], cursor: int | None, limit: int
-) -> list[tuple[Any, ...]]:
-    """One page, in a savepoint under `QUERY_TIMEOUT`. A cancelled query is the 503; any other
-    database error is left to be the 500 it is."""
+def _page_statement(
+    clauses: list[sql.SQL], params: dict[str, Any], cursor: int | None, limit: int
+) -> tuple[sql.Composed, dict[str, Any]]:
+    """The page query and its parameters: the filter's fragments, plus the cursor's when given.
+    The inputs are not modified (the same `clauses` and `params` also feed the total)."""
     clauses = list(clauses)
     params = {**params, "max_bytes": PAYLOAD_MAX_BYTES, "limit": limit}
     if cursor is not None:
         clauses.append(sql.SQL("a.audit_id < %(cursor)s"))
         params["cursor"] = cursor
+    return _PAGE.format(where=_where(clauses)), params
+
+
+def _fetch_page(
+    conn: Any, clauses: list[sql.SQL], params: dict[str, Any], cursor: int | None, limit: int
+) -> list[tuple[Any, ...]]:
+    """One page, in a savepoint under `QUERY_TIMEOUT`. A cancelled query is the 503; any other
+    database error is left to be the 500 it is."""
+    statement, bound = _page_statement(clauses, params, cursor, limit)
     try:
         with conn.transaction():
             conn.execute(_SET_TIMEOUT.format(sql.Literal(QUERY_TIMEOUT)))
-            return conn.execute(_PAGE.format(where=_where(clauses)), params).fetchall()
+            return conn.execute(statement, bound).fetchall()
     except psycopg.errors.QueryCanceled as exc:
         # The log carries the fact, not the filter values (they are request text).
         logger.warning("audit page query cancelled by statement_timeout=%s", QUERY_TIMEOUT)
