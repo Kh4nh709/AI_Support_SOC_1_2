@@ -733,6 +733,21 @@ describe("a second click in the same tick", () => {
     expect(undos).toHaveLength(1);
   });
 
+  // The undo of the finished card is the one used most, and each undo deletes the labeller's most recent label:
+  // a double click that sent two would take two labels back and name only one of them.
+  it("undoes once from the finished card", async () => {
+    serveNext(finished(), nextAnswer({ cluster_id: A, done: 59, total: 60 }));
+    serveUndo(undone({ undone_cluster_id: A, done: 59, total: 60 }), 40);
+    renderPage();
+    await screen.findByText(L.finished.body);
+    clickTwice(screen.getByRole("button", { name: L.form.undo }));
+    await waitFor(() => expect(undos).toHaveLength(1));
+    await screen.findByText(L.notice.undone(A, 59, 60));
+    await delay(60);
+    expect(undos).toHaveLength(1);
+    expect(log.filter((l) => l === `POST ${UNDO}`)).toHaveLength(1);
+  });
+
   it("does not undo while a label is being saved, nor save while an undo is", async () => {
     serveNext(nextAnswer(), afterA());
     servePost(posted(), 40);
