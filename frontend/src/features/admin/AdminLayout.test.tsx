@@ -11,6 +11,7 @@ import { DigestPage } from "./DigestPage";
 import { LabelsPage } from "./LabelsPage";
 import { LlmPage } from "./LlmPage";
 import { OverviewPage } from "./OverviewPage";
+import { RulesPage } from "./RulesPage";
 import { UsersPage } from "./UsersPage";
 
 /** The sidebar, in the order and with the words of the canvas, and where each link goes. */
@@ -94,19 +95,20 @@ describe("the sidebar", () => {
   });
 });
 
-// RulesPage (P11-T14) is built: RulesPage.test.tsx covers it, and it needs a query client these renders lack.
 const PAGES: [name: string, Page: () => ReactNode, title: string][] = [
   ["OverviewPage", OverviewPage, "Tổng quan hệ thống"],
   ["UsersPage", UsersPage, "Người dùng và quyền"],
   ["LlmPage", LlmPage, "LLM và hạn mức"],
+  ["RulesPage", RulesPage, "Rules tự đóng"],
   ["DigestPage", DigestPage, "Digest hằng ngày"],
   ["LabelsPage", LabelsPage, "Gán nhãn tập vàng"],
   ["AuditPage", AuditPage, "Nhật ký audit"],
 ];
 
-// A page that has been built (P11-T13: LlmPage) reads the API through a QueryClient, which this bare render
-// has none of; it is no placeholder, and its own test file covers it (LlmPage.test.tsx, axe included).
-const BUILT = ["LlmPage"];
+// A page that has been built (P11-T13: LlmPage, P11-T14: RulesPage) reads the API through a QueryClient,
+// which this bare render has none of; it is no placeholder, and its own test file covers it
+// (LlmPage.test.tsx, RulesPage.test.tsx, axe included).
+const BUILT = ["LlmPage", "RulesPage"];
 const PLACEHOLDERS = PAGES.filter(([name]) => !BUILT.includes(name));
 
 describe("the placeholder pages", () => {
@@ -121,6 +123,7 @@ describe("the placeholder pages", () => {
       S.admin.title.overview,
       S.admin.title.users,
       S.admin.title.llm,
+      S.admin.title.rules,
       S.admin.title.digest,
       S.admin.title.labels,
       S.admin.title.audit,
