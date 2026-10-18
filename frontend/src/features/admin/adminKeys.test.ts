@@ -85,8 +85,10 @@ describe("what a write makes stale", () => {
     ["resetPassword", [adminKeys.users, adminKeys.auditAll]],
     ["unlockUser", [adminKeys.users, adminKeys.auditAll]],
     ["putLlmLimits", [adminKeys.llmAll, adminKeys.overviewAll, adminKeys.auditAll]],
-    ["createRule", [adminKeys.rules, adminKeys.auditAll]],
-    ["toggleRule", [adminKeys.rules, adminKeys.auditAll]],
+    // The digest page shows "no rule enabled" from `rules_enabled` (admin_digest.py), which a rule written or
+    // toggled changes.
+    ["createRule", [adminKeys.rules, adminKeys.digestAll, adminKeys.auditAll]],
+    ["toggleRule", [adminKeys.rules, adminKeys.digestAll, adminKeys.auditAll]],
     ["reviewDigest", [adminKeys.digestAll, adminKeys.overviewAll, adminKeys.auditAll]],
     ["postLabel", [adminKeys.labels, adminKeys.auditAll]],
     ["undoLabel", [adminKeys.labels, adminKeys.auditAll]],
@@ -113,6 +115,18 @@ describe("what a write makes stale", () => {
     expect(client.getQueryState(adminKeys.audit({ range: "7d" }))?.isInvalidated).toBe(true);
     expect(client.getQueryState(adminKeys.rules)?.isInvalidated).toBe(false);
   });
+
+  it.each(["createRule", "toggleRule"] as const)(
+    "%s refreshes the digest of every day, whose 'no rule enabled' state a rule changes",
+    async (mutation) => {
+      const client = new QueryClient();
+      client.setQueryData(adminKeys.digest(null), { rules_enabled: false, rows: [] });
+      client.setQueryData(adminKeys.digest("2026-09-30"), { rules_enabled: false, rows: [] });
+      await invalidateAfter(client, mutation);
+      expect(client.getQueryState(adminKeys.digest(null))?.isInvalidated).toBe(true);
+      expect(client.getQueryState(adminKeys.digest("2026-09-30"))?.isInvalidated).toBe(true);
+    },
+  );
 
   it("reaches the overview of every range with one prefix", async () => {
     const client = new QueryClient();

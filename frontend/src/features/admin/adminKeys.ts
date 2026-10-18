@@ -54,6 +54,8 @@ export const adminKeys = {
  * - Each also touches the audit page (`auditAll`), which shows the event it wrote.
  * - The overview shows counts that other pages change: the inventory (a reload), the failed jobs (a retry),
  *   the LLM cost against the cap (a limit change), the funnel (a digest review reopens an alert).
+ * - The digest shows "no rule enabled" from `rules_enabled`, which a rule created or toggled changes, so the
+ *   two rule writes touch the digest of every day (`digestAll`) too.
  */
 export const ADMIN_INVALIDATES = {
   retryJob: [adminKeys.overviewAll, adminKeys.auditAll],
@@ -63,8 +65,8 @@ export const ADMIN_INVALIDATES = {
   resetPassword: [adminKeys.users, adminKeys.auditAll],
   unlockUser: [adminKeys.users, adminKeys.auditAll],
   putLlmLimits: [adminKeys.llmAll, adminKeys.overviewAll, adminKeys.auditAll],
-  createRule: [adminKeys.rules, adminKeys.auditAll],
-  toggleRule: [adminKeys.rules, adminKeys.auditAll],
+  createRule: [adminKeys.rules, adminKeys.digestAll, adminKeys.auditAll],
+  toggleRule: [adminKeys.rules, adminKeys.digestAll, adminKeys.auditAll],
   reviewDigest: [adminKeys.digestAll, adminKeys.overviewAll, adminKeys.auditAll],
   postLabel: [adminKeys.labels, adminKeys.auditAll],
   undoLabel: [adminKeys.labels, adminKeys.auditAll],
