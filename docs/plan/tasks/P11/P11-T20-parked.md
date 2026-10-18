@@ -33,3 +33,7 @@ The independent reviews found these Minors and approved without them, so none of
 | 25 | P11-T06 r1 F2 | test: a rule closing exactly one row gives `hard_block_tally: null` (the boundary at 1) |
 | 26 | P11-T06 r1 F4 | `test_pages_rules.py:969-983` pins `width_pct == 25.0`, which holds only under the inconsistent formula (row 27) |
 | 27 | P11-T06 r1 F4 | **defect, pre-P11:** `autoclose.rule_width_report` divides `sum(occurrence_count)` by `count(*)` rows (`autoclose.py:524`), against its own docstring, so the width can exceed 100 %. Fix it to the docstring's definition and adjust `test_autoclose.py:854-872` |
+| 28 | P11-T08 r1 F1 | test: undo never takes the caller's newer `digest` or `disagreement` label, only `gold_offline` (the source filter in `undo_last`) |
+| 29 | P11-T08 r1 F2 | test: NUL and control characters in the undo body → 403 or 422, label intact |
+| 30 | P11-T08 r1 F3 | test: the Jinja undo while frozen writes no event |
+| 31 | P11-T09 r2 N2 | redaction: a value rule (a string holding `scheme://user:pass@` is redacted under any key), `passwd`/`pwd` as suffixes, never redact a bool or null; spec §5.8 to match |
