@@ -10,6 +10,7 @@ import { AuditPage } from "./AuditPage";
 import { DigestPage } from "./DigestPage";
 import { LabelsPage } from "./LabelsPage";
 import { LlmPage } from "./LlmPage";
+import { OverviewPage } from "./OverviewPage";
 import { RulesPage } from "./RulesPage";
 import { UsersPage } from "./UsersPage";
 
@@ -95,6 +96,7 @@ describe("the sidebar", () => {
 });
 
 const PAGES: [name: string, Page: () => ReactNode, title: string][] = [
+  ["OverviewPage", OverviewPage, "Tổng quan hệ thống"],
   ["UsersPage", UsersPage, "Người dùng và quyền"],
   ["LlmPage", LlmPage, "LLM và hạn mức"],
   ["RulesPage", RulesPage, "Rules tự đóng"],
@@ -105,7 +107,7 @@ const PAGES: [name: string, Page: () => ReactNode, title: string][] = [
 
 // A page that has been built (P11-T13: LlmPage) reads the API through a QueryClient, which this bare render
 // has none of; it is no placeholder, and its own test file covers it (LlmPage.test.tsx, axe included).
-const BUILT = ["LlmPage"];
+const BUILT = ["OverviewPage", "LlmPage"];
 const PLACEHOLDERS = PAGES.filter(([name]) => !BUILT.includes(name));
 
 describe("the placeholder pages", () => {
@@ -117,6 +119,7 @@ describe("the placeholder pages", () => {
 
   it("take their titles from strings.ts", () => {
     expect(PAGES.map(([, , title]) => title)).toEqual([
+      S.admin.title.overview,
       S.admin.title.users,
       S.admin.title.llm,
       S.admin.title.rules,
