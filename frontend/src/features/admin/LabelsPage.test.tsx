@@ -2,7 +2,7 @@
 // three label routes and nothing else: an unhandled request fails the test, and every request is also logged,
 // so "the page asks for nothing else while labelling" (plan Review Focus 5) is a list the tests compare.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { readFileSync } from "node:fs";
@@ -690,6 +690,18 @@ describe("the form", () => {
   });
 });
 
+/**
+ * Two `fireEvent.click` with no await between them, in one `act`: React renders nothing between the two, as
+ * it renders nothing between two clicks of one tick in a browser, so what the second click meets is the page
+ * as the first one left it.
+ */
+function clickTwice(button: HTMLElement) {
+  act(() => {
+    fireEvent.click(button);
+    fireEvent.click(button);
+  });
+}
+
 describe("a second click in the same tick", () => {
   // TanStack Query tells React a mutation is pending only after a timer, so a guard on `isPending` lets two
   // clicks of one tick through. These two clicks have no await between them.
@@ -700,8 +712,7 @@ describe("a second click in the same tick", () => {
     await ready();
     await choose("benign");
     const button = saveButton();
-    fireEvent.click(button);
-    fireEvent.click(button);
+    clickTwice(button);
     await waitFor(() => expect(posts).toHaveLength(1));
     await waitFor(() => expect(headText()).toContain("port_scan"));
     await delay(60);
@@ -715,8 +726,7 @@ describe("a second click in the same tick", () => {
     renderPage();
     await ready();
     const button = screen.getByRole("button", { name: L.form.undo });
-    fireEvent.click(button);
-    fireEvent.click(button);
+    clickTwice(button);
     await waitFor(() => expect(undos).toHaveLength(1));
     await screen.findByText(L.notice.undone(A, 17, 60));
     await delay(60);
@@ -730,8 +740,12 @@ describe("a second click in the same tick", () => {
     renderPage();
     await ready();
     await choose("benign");
-    fireEvent.click(saveButton());
-    fireEvent.click(screen.getByRole("button", { name: L.form.undo }));
+    const undoNow = screen.getByRole("button", { name: L.form.undo });
+    const saveNow = saveButton();
+    act(() => {
+      fireEvent.click(saveNow);
+      fireEvent.click(undoNow);
+    });
     await waitFor(() => expect(posts).toHaveLength(1));
     await waitFor(() => expect(headText()).toContain("port_scan"));
     expect(undos).toEqual([]);
