@@ -36,9 +36,13 @@ them.
 a payload whose `jsonb::text` is over `PAYLOAD_MAX_BYTES` (64 KiB, measured in bytes) never leaves
 it, and the row carries `{"truncated": true, "size": <bytes>}` instead. That way a 1 MB string
 is never read into this process and one event cannot blow up a page (100 rows at most, 64 KiB
-each). Every other payload is parsed and `redact`ed: a dict key whose lower-cased name is in
-`REDACT_KEYS` has its value replaced by `"[đã ẩn]"`, at any depth, through lists and dicts, and
-nothing else is changed (no stringifying, no cutting). Payloads should never carry those keys
+each). Every other payload is parsed and `redact`ed: a dict key that `is_secret_key` names has
+its value replaced by `"[đã ẩn]"`, at any depth, through lists and dicts, and nothing else is
+changed (no stringifying, no cutting). The key rule (spec §5.8 as amended at `b9fe528`): lower-case
+the key, drop `_` and `-` (camelCase needs no split of its own: lower-casing `apiKey` is
+`apikey`), and redact when the result equals or ends with one of `REDACT_SUFFIXES`. That catches
+`access_token`, `client_secret`, `apiKey`, `api-key`, `db_password` and leaves `key`,
+`token_count`, `tokens_in`, `passwords` visible. Payloads should never carry a credential
 (DEC-159 item 6); this is the second layer. One addition to the spec, for the same reason as the
 size cut: a payload nested in more than `MAX_PAYLOAD_DEPTH` (32) dicts and lists takes the
 truncated shape too (and so does one the JSON parser itself cannot read, a `RecursionError`
@@ -86,8 +90,9 @@ MAX_PAYLOAD_DEPTH = 32
 
 #: What a redacted value is replaced by.
 REDACTED = "[đã ẩn]"
-#: A dict key whose lower-cased name is one of these is redacted.
-REDACT_KEYS = frozenset({"password", "password_hash", "token", "secret", "dsn", "api_key"})
+#: A dict key is redacted when its normalised name (`normalise_key`) equals or ends with one of
+#: these. They are written in normalised form: no `_` or `-`, lower case.
+REDACT_SUFFIXES = ("password", "passwordhash", "secret", "token", "dsn", "apikey")
 
 #: `?range=` -> the window. Anything else is a 422 from the `Literal` below.
 _WINDOWS: dict[str, timedelta] = {
@@ -163,10 +168,27 @@ class PayloadTooDeep(ValueError):
     """A payload nested in more than `MAX_PAYLOAD_DEPTH` dicts and lists."""
 
 
+def normalise_key(key: str) -> str:
+    """Lower case, with `_` and `-` dropped: `apiKey`, `api-key`, `API_KEY` are all `apikey`.
+
+    The spec's "split camelCase" step has no effect of its own here: the split is undone as soon as
+    the separators are dropped and the letters lower-cased, so `apiKey` is `apikey` either way."""
+    return key.lower().replace("_", "").replace("-", "")
+
+
+def is_secret_key(key: Any) -> bool:
+    """True when the key's normalised name equals or ends with one of `REDACT_SUFFIXES`.
+
+    A suffix, not a substring: `access_token`, `client_secret` and `db_password` are caught, while
+    `key`, `token_count`, `tokens_in` and `passwords` are not. A JSON key is always a string; any
+    other type is never a secret name."""
+    return isinstance(key, str) and normalise_key(key).endswith(REDACT_SUFFIXES)
+
+
 def redact(value: Any, _level: int = 0) -> Any:
     """A copy of a JSON value with every secret-named key's value replaced by `REDACTED`.
 
-    A key matches when its lower-cased name is in `REDACT_KEYS`, at any depth, through lists
+    A key matches when `is_secret_key` says so, at any depth, through lists
     and nested dicts; the whole value under such a key goes, whatever it is. Everything else is
     returned as it is: the same numbers, strings and `None`, in the same structure. The input
     is never modified. `_level` is the number of containers already entered: a value nested in
@@ -176,11 +198,7 @@ def redact(value: Any, _level: int = 0) -> Any:
             raise PayloadTooDeep(f"nested deeper than {MAX_PAYLOAD_DEPTH} levels")
         if isinstance(value, dict):
             return {
-                key: (
-                    REDACTED
-                    if isinstance(key, str) and key.lower() in REDACT_KEYS
-                    else redact(item, _level + 1)
-                )
+                key: REDACTED if is_secret_key(key) else redact(item, _level + 1)
                 for key, item in value.items()
             }
         return [redact(item, _level + 1) for item in value]

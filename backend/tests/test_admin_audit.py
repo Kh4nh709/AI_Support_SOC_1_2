@@ -121,10 +121,17 @@ def test_every_alert_and_tier1_name_is_in_alerts_cases() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_redact_keys_and_the_placeholder_are_the_spec_ones() -> None:
-    assert admin_audit.REDACT_KEYS == frozenset(
-        {"password", "password_hash", "token", "secret", "dsn", "api_key"}
-    )
+def test_the_redaction_suffixes_and_the_placeholder_are_the_spec_ones() -> None:
+    """Spec §5.8 as amended at `b9fe528`: the six normalised names a key must equal or end with."""
+    assert set(admin_audit.REDACT_SUFFIXES) == {
+        "password",
+        "passwordhash",
+        "secret",
+        "token",
+        "dsn",
+        "apikey",
+    }
+    assert len(admin_audit.REDACT_SUFFIXES) == 6
     assert admin_audit.REDACTED == PLACEHOLDER
     assert admin_audit.PAYLOAD_MAX_BYTES == 64 * 1024
     assert admin_audit.MAX_PAYLOAD_DEPTH == 32
@@ -155,11 +162,74 @@ def test_redaction_goes_through_dicts_and_lists_at_any_depth() -> None:
     }
 
 
-@pytest.mark.parametrize(
-    "key", ["Password", "PASSWORD", "API_KEY", "Api_Key", "Password_Hash", "DSN", "Token", "sEcReT"]
-)
-def test_redaction_ignores_the_case_of_the_key(key: str) -> None:
+# Keys the rule must catch: the spec's six, in any case or separator style, and the near-misses the
+# Reviewer named (`access_token`, `client_secret`, `apiKey`, `api-key`, `db_password`,
+# `refresh_token`).
+CAUGHT_KEYS = [
+    "password",
+    "password_hash",
+    "token",
+    "secret",
+    "dsn",
+    "api_key",
+    "Password",
+    "PASSWORD",
+    "API_KEY",
+    "Api_Key",
+    "Password_Hash",
+    "DSN",
+    "Token",
+    "sEcReT",
+    "access_token",
+    "client_secret",
+    "apiKey",
+    "api-key",
+    "db_password",
+    "refresh_token",
+    "passwordHash",
+    "Password-Hash",
+    "X-Api-Key",
+    "x_api_key",
+    "accessToken",
+    "userPassword",
+    "APIKEY",
+    "apikey",
+    "database.dsn",
+]
+# Keys it must leave alone: a plain substring rule would hide these (`key` would hide a setting's
+# name in `admin.settings_changed`'s `changes[].key`; `token` would hide a counter).
+VISIBLE_KEYS = [
+    "key",
+    "Key",
+    "token_count",
+    "tokens_in",
+    "tokens",
+    "passwords",
+    "secretary",
+    "token_type",
+    "dsn_host",
+    "apikeys",
+    "hash",
+    "keys",
+    "_",
+    "-",
+    "",
+]
+
+
+@pytest.mark.parametrize("key", CAUGHT_KEYS)
+def test_redaction_catches_a_key_after_normalising_it(key: str) -> None:
+    assert admin_audit.is_secret_key(key) is True
     assert admin_audit.redact({"a": [{key: "x"}]}) == {"a": [{key: PLACEHOLDER}]}
+
+
+def test_the_rule_is_lowercase_drop_underscores_and_hyphens_then_equal_or_end_with() -> None:
+    assert admin_audit.normalise_key("apiKey") == "apikey"  # camelCase needs no split of its own
+    assert admin_audit.normalise_key("X-Api_KEY") == "xapikey"
+    assert admin_audit.normalise_key("a.b c") == "a.b c"  # only `_` and `-` are dropped
+    assert admin_audit.is_secret_key("my token") is True  # a suffix, not a whole word
+    assert admin_audit.is_secret_key("token in") is False  # not a suffix
+    assert admin_audit.is_secret_key(7) is False  # a JSON key is a string; nothing else matches
 
 
 def test_a_redacted_key_keeps_its_name_and_loses_a_structured_value_whole() -> None:
@@ -167,11 +237,23 @@ def test_a_redacted_key_keeps_its_name_and_loses_a_structured_value_whole() -> N
     assert out == {"secret": PLACEHOLDER, "token": PLACEHOLDER}
 
 
-@pytest.mark.parametrize(
-    "key", ["passwords", "tokens", "token_count", "my_password", "secretary", "api-key", "apikey"]
-)
-def test_only_the_exact_lowercased_name_is_redacted(key: str) -> None:
+@pytest.mark.parametrize("key", VISIBLE_KEYS)
+def test_a_near_miss_key_stays_visible(key: str) -> None:
+    assert admin_audit.is_secret_key(key) is False
     assert admin_audit.redact({key: "visible"}) == {key: "visible"}
+    assert admin_audit.redact({"a": [{key: [1, {"b": 2}]}]}) == {"a": [{key: [1, {"b": 2}]}]}
+
+
+def test_a_settings_change_is_returned_whole_with_its_key_names() -> None:
+    """`admin.settings_changed` (P11-T03) carries `changes: [{key, old, new}]`: the setting's name is
+    the value of a key called `key`, and neither it nor the numbers may be hidden."""
+    payload = {
+        "changes": [
+            {"key": "LLM_TIMEOUT_S", "old": 60, "new": 90},
+            {"key": "LLM_MONTHLY_USD_CAP", "old": 50, "new": 80},
+        ]
+    }
+    assert admin_audit.redact(payload) == payload
 
 
 def test_redaction_returns_everything_else_unchanged_and_unstringified() -> None:
@@ -924,6 +1006,50 @@ def test_a_secret_nested_in_a_list_in_a_dict_is_redacted_and_never_leaves(client
         "password_hash": PLACEHOLDER,
     }
     for leaked in ("leak-one", "leak-two", "leak-three", "leak-four", "leak-five", "leak-six"):
+        assert leaked not in resp.text, leaked
+
+
+@pytest.mark.db
+def test_near_miss_secret_names_are_redacted_through_the_route_and_counters_are_not(client) -> None:
+    tc, db, _ = client
+    _event(
+        db,
+        "admin.settings_changed",
+        "settings",
+        payload={
+            "changes": [{"key": "LLM_TIMEOUT_S", "old": 60, "new": 90}],
+            "auth": [
+                {
+                    "access_token": "leak-1",
+                    "client_secret": "leak-2",
+                    "apiKey": "leak-3",
+                    "api-key": "leak-4",
+                    "db_password": "leak-5",
+                    "refresh_token": "leak-6",
+                    "nested": {"Password": "leak-7", "API_KEY": "leak-8"},
+                }
+            ],
+            "usage": {"token_count": 12, "tokens_in": 5, "passwords": 3, "key": "visible"},
+        },
+    )
+    resp = _get(tc)
+    (event,) = resp.json()["events"]
+    assert event["payload"] == {
+        "changes": [{"key": "LLM_TIMEOUT_S", "old": 60, "new": 90}],
+        "auth": [
+            {
+                "access_token": PLACEHOLDER,
+                "client_secret": PLACEHOLDER,
+                "apiKey": PLACEHOLDER,
+                "api-key": PLACEHOLDER,
+                "db_password": PLACEHOLDER,
+                "refresh_token": PLACEHOLDER,
+                "nested": {"Password": PLACEHOLDER, "API_KEY": PLACEHOLDER},
+            }
+        ],
+        "usage": {"token_count": 12, "tokens_in": 5, "passwords": 3, "key": "visible"},
+    }
+    for leaked in (f"leak-{n}" for n in range(1, 9)):
         assert leaked not in resp.text, leaked
 
 
