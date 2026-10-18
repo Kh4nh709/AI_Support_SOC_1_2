@@ -1,9 +1,10 @@
 // Where a role starts, and where a login returns to (spec §3.1).
 import type { Role } from "../api/types";
 
-/** tier1 starts at the queue; tier2 and admin at the case list. */
+/** tier1 starts at the queue, tier2 at the case list, admin at the console's overview (admin spec, decision 7). */
 export function roleHome(role: Role): string {
-  return role === "tier1" ? "/queue" : "/cases";
+  if (role === "tier1") return "/queue";
+  return role === "admin" ? "/admin/overview" : "/cases";
 }
 
 /** The path, query and hash of a location: what `state.from` carries to the login page. */

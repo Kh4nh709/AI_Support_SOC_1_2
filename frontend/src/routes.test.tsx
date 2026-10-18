@@ -76,7 +76,7 @@ describe("the route table", () => {
   it.each<[Session["role"], string]>([
     ["tier1", "/queue"],
     ["tier2", "/cases"],
-    ["admin", "/cases"],
+    ["admin", "/admin/overview"],
   ])("sends %s from / to %s", (role, home) => {
     renderAt("/", session(role));
     expect(where()).toBe(home);
@@ -147,6 +147,96 @@ describe("the route table", () => {
   it("sends an unknown path to /", () => {
     renderAt("/nowhere/at/all", session("tier1"));
     expect(where()).toBe("/queue");
+  });
+});
+
+const ADMIN_PAGES: [path: string, title: string][] = [
+  ["/admin/overview", S.admin.title.overview],
+  ["/admin/users", S.admin.title.users],
+  ["/admin/llm", S.admin.title.llm],
+  ["/admin/rules", S.admin.title.rules],
+  ["/admin/digest", S.admin.title.digest],
+  ["/admin/labels", S.admin.title.labels],
+  ["/admin/audit", S.admin.title.audit],
+];
+
+describe("the admin console (spec §3)", () => {
+  it.each(ADMIN_PAGES)("lets admin open %s, under the sidebar", (path, title) => {
+    renderAt(path, session("admin"));
+    expect(where()).toBe(path);
+    expect(screen.getByRole("navigation", { name: S.admin.nav.label })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: title })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("sends admin from /admin to /admin/overview", () => {
+    renderAt("/admin", session("admin"));
+    expect(where()).toBe("/admin/overview");
+    expect(
+      screen.getByRole("heading", { level: 1, name: S.admin.title.overview }),
+    ).toBeInTheDocument();
+  });
+
+  it("sends an admin who opens / to /admin/overview", () => {
+    renderAt("/", session("admin"));
+    expect(where()).toBe("/admin/overview");
+    expect(
+      screen.getByRole("heading", { level: 1, name: S.admin.title.overview }),
+    ).toBeInTheDocument();
+  });
+
+  it.each<Session["role"]>(["tier1", "tier2"])(
+    "turns %s away from /admin/users to /queue, saying S.forbidden",
+    (role) => {
+      renderAt("/admin/users", session(role));
+      expect(where()).toBe("/queue");
+      expect(screen.getByRole("alert")).toHaveTextContent(S.forbidden);
+      expect(screen.queryByRole("navigation", { name: S.admin.nav.label })).not.toBeInTheDocument();
+    },
+  );
+
+  it.each<[Session["role"], string]>(
+    ADMIN_PAGES.flatMap(([path]) => [
+      ["tier1", path] as [Session["role"], string],
+      ["tier2", path] as [Session["role"], string],
+    ]),
+  )("turns %s away from %s", (role, path) => {
+    renderAt(path, session(role));
+    expect(where()).toBe("/queue");
+    expect(screen.getByRole("alert")).toHaveTextContent(S.forbidden);
+  });
+
+  it.each<Session["role"]>(["tier1", "tier2"])("turns %s away from /admin too", (role) => {
+    renderAt("/admin", session(role));
+    expect(where()).toBe("/queue");
+    expect(screen.getByRole("alert")).toHaveTextContent(S.forbidden);
+  });
+
+  it.each(["/admin", ...ADMIN_PAGES.map(([path]) => path)])(
+    "sends a visitor with no session from %s to /login",
+    (path) => {
+      renderAt(path, null);
+      expect(where()).toBe("/login");
+    },
+  );
+
+  it("waits, and redirects nobody, while the session is being restored", () => {
+    renderAt("/admin/users", null, false);
+    expect(where()).toBe("/admin/users");
+    expect(screen.getByRole("status")).toHaveTextContent(S.common.loading);
+  });
+
+  it("has one main landmark on an admin page, and the header above it", () => {
+    renderAt("/admin/rules", session("admin"));
+    expect(screen.getAllByRole("main")).toHaveLength(1);
+    expect(screen.getByRole("banner")).toHaveTextContent(S.app.name);
+    expect(screen.getByRole("navigation", { name: S.nav.label })).toBeInTheDocument();
+  });
+
+  it("keeps the header link and the sidebar apart: two navigations, two names", () => {
+    renderAt("/admin/audit", session("admin"));
+    const names = screen.getAllByRole("navigation").map((n) => n.getAttribute("aria-label"));
+    expect(names).toEqual([S.nav.label, S.admin.nav.label]);
   });
 });
 

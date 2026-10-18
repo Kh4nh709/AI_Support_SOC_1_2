@@ -9,11 +9,6 @@ const LINK =
   "rounded px-2 py-1 text-muted hover:text-text focus-visible:outline-2 focus-visible:outline-text";
 const LINK_ACTIVE = "text-text";
 
-/** The old console lives on the API port of the same host (DEC-159 keeps it for v1.0). */
-function legacyAdminUrl(): string {
-  return `http://${window.location.hostname}:8000/admin/rules`;
-}
-
 export function AppHeader({ live }: { live?: ReactNode }) {
   const { session, logout } = useAuth();
   const canSeeCases = session?.role === "tier2" || session?.role === "admin";
@@ -38,9 +33,12 @@ export function AppHeader({ live }: { live?: ReactNode }) {
               </NavLink>
             )}
             {session.role === "admin" && (
-              <a href={legacyAdminUrl()} target="_blank" rel="noopener noreferrer" className={LINK}>
-                {S.nav.adminLegacy}
-              </a>
+              <NavLink
+                to="/admin"
+                className={({ isActive }) => `${LINK} ${isActive ? LINK_ACTIVE : ""}`}
+              >
+                {S.nav.admin}
+              </NavLink>
             )}
           </nav>
           <div className="ml-auto flex items-center gap-4">
