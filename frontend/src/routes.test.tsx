@@ -150,6 +150,11 @@ describe("the route table", () => {
   });
 });
 
+// The overview page reads the API (OverviewPage.test.tsx tests it); this file looks for its place and its title.
+vi.mock("./features/admin/OverviewPage", () => ({
+  OverviewPage: () => <h1>{S.admin.title.overview}</h1>,
+}));
+
 const ADMIN_PAGES: [path: string, title: string][] = [
   ["/admin/overview", S.admin.title.overview],
   ["/admin/users", S.admin.title.users],

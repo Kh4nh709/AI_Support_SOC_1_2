@@ -10,7 +10,6 @@ import { AuditPage } from "./AuditPage";
 import { DigestPage } from "./DigestPage";
 import { LabelsPage } from "./LabelsPage";
 import { LlmPage } from "./LlmPage";
-import { OverviewPage } from "./OverviewPage";
 import { RulesPage } from "./RulesPage";
 import { UsersPage } from "./UsersPage";
 
@@ -96,7 +95,6 @@ describe("the sidebar", () => {
 });
 
 const PAGES: [name: string, Page: () => ReactNode, title: string][] = [
-  ["OverviewPage", OverviewPage, "Tổng quan hệ thống"],
   ["UsersPage", UsersPage, "Người dùng và quyền"],
   ["LlmPage", LlmPage, "LLM và hạn mức"],
   ["RulesPage", RulesPage, "Rules tự đóng"],
@@ -114,7 +112,6 @@ describe("the placeholder pages", () => {
 
   it("take their titles from strings.ts", () => {
     expect(PAGES.map(([, , title]) => title)).toEqual([
-      S.admin.title.overview,
       S.admin.title.users,
       S.admin.title.llm,
       S.admin.title.rules,
