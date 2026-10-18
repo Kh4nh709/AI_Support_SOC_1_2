@@ -22,6 +22,10 @@ vi.mock("./features/tier1/AlertPage", () => ({
   AlertPage: () => <h1>{S.alert.infoHeading}</h1>,
 }));
 
+// The rules page (P11-T14) reads the backend too, and RulesPage.test.tsx tests it: the route test looks for its place.
+vi.mock("./features/admin/RulesPage", () => ({
+  RulesPage: () => <h1>{S.admin.title.rules}</h1>,
+}));
 // The users page of the console reads the backend and its own file tests it (UsersPage.test.tsx); here only
 // its place in the route table matters.
 vi.mock("./features/admin/UsersPage", () => ({
