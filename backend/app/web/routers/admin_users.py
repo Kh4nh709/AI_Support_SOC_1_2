@@ -68,7 +68,8 @@ PASSWORD_MAX_CHARS = 256
 USERNAME_RE = r"^[a-z0-9._-]{3,32}$"
 #: `actor=system` and `actor=llm` are the audit page's ACTOR KEYWORDS: they select the
 #: `actor_role` and win over a username (`admin_audit.py`), so the rows of a user called `system`
-#: or `llm` could never be filtered by that user. Refused on create: 422 `reserved` (P11-T20 row 11).
+#: or `llm` could never be filtered by that user. Refused on create: 422 `reserved` (P11-T20
+#: row 11).
 RESERVED_USERNAMES = frozenset({"system", "llm"})
 DISPLAY_NAME_MAX_CHARS = 100
 

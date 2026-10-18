@@ -48,9 +48,10 @@ read-only, from `llm_runs` and `audit_events`, in five parts.
   month began for `month`), ordered by pipeline then role (a NULL role, which v1 rows have,
   last): `calls`, `with_result` (`result IS NOT NULL`), `stopped` (`stopped_by` -> count, the
   NULL ones left out; a reason longer than 32 characters, the limit `recent` applies, is counted
-  under `other`, so no key of the answer is longer than a short code), token sums, `latency_p50_ms` and `latency_p95_ms` (`percentile_cont`,
-  rounded half up to an integer, `null` when no row carries a latency) and `cost_usd`. There is
-  no chat row: `llm_runs.pipeline` admits `triage|investigate` only (spec decision 5).
+  under `other`, so no key of the answer is longer than a short code), token sums,
+  `latency_p50_ms` and `latency_p95_ms` (`percentile_cont`, rounded half up to an integer, `null`
+  when no row carries a latency) and `cost_usd`. There is no chat row: `llm_runs.pipeline` admits
+  `triage|investigate` only (spec decision 5).
 - **`quota`**, always the rolling 24 h: `case.analyzed` events per user, counted by the rule
   `tier2_runs.ANALYZE_QUOTA_WHERE` that the analyze route enforces (one constant, two queries);
   `limit` the effective per-person quota (`null` when unreadable), `remaining = max(0, limit -
