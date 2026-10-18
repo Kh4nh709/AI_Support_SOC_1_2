@@ -7,7 +7,7 @@
 // Why `disabled={mutation.isPending}` is not enough: TanStack Query 5 tells React that a mutation went pending
 // through a `setTimeout(0)`, so a second click that lands in the same tick (a double click of an automated
 // browser, two events before React has rendered) still sees the enabled button and its `isPending === false`,
-// and calls `mutate` again: two POSTs, two rules. The latch is a REF, set before `mutate` and cleared when
+// and calls `mutate` again: two POSTs, two rules. The latch is a REF, set before the call and cleared when
 // the call settles, so the second call returns at once whatever React has rendered.
 //
 // `run(variables, options?)` returns `true` when it sent the call and `false` when it turned it away (the
@@ -15,11 +15,15 @@
 // released first, then it runs, so it may send again. The mutation's own `onSuccess`/`onError`/`onSettled` of
 // `useMutation({...})` are untouched.
 //
-// Per-call callbacks of TanStack do not run when the mutation is reset while the call is out (`reset()` takes
-// the observer off it), which would leave the latch shut for good; the latch is therefore also released
-// whenever the mutation goes back to idle.
+// The latch is released by the REQUEST'S OWN promise (`mutateAsync`), and by `onSettled` too, which is
+// the same moment seen from the call's options. It does not watch the mutation's status: `reset()` takes the
+// observer off a call that is out, so TanStack drops that call's own `onSettled`, and the mutation's status
+// goes back to idle while the request is still on its way (a latch opened by "idle" would allow a second write
+// in flight), or never changes at all when `reset()` lands in the tick of `run()` (React never renders pending,
+// and a latch that waits for idle stays shut for good). Each call holds a token, so a late settle of an
+// abandoned call cannot free a newer one.
 import type { MutateOptions, UseMutationResult } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useRef } from "react";
 
 export function useSubmitLatch<TData, TError, TVariables, TContext>(
   mutation: UseMutationResult<TData, TError, TVariables, TContext>,
@@ -27,26 +31,28 @@ export function useSubmitLatch<TData, TError, TVariables, TContext>(
   variables: TVariables,
   options?: MutateOptions<TData, TError, TVariables, TContext>,
 ) => boolean {
-  const out = useRef(false);
-  const { mutate, isIdle } = mutation;
-
-  useEffect(() => {
-    if (isIdle) out.current = false;
-  }, [isIdle]);
+  const out = useRef<object | null>(null);
+  const { mutateAsync } = mutation;
 
   return useCallback(
     (variables, options) => {
-      if (out.current) return false;
-      out.current = true;
-      mutate(variables, {
+      if (out.current !== null) return false;
+      const token = {};
+      out.current = token;
+      const release = () => {
+        if (out.current === token) out.current = null;
+      };
+      mutateAsync(variables, {
         ...options,
         onSettled: (...settled) => {
-          out.current = false;
+          release();
           options?.onSettled?.(...settled);
         },
-      });
+      })
+        .catch(() => undefined)
+        .finally(release);
       return true;
     },
-    [mutate],
+    [mutateAsync],
   );
 }

@@ -690,6 +690,32 @@ describe("the toggle dialog", () => {
     expect(calls.toggle).toHaveLength(2);
   });
 
+  it("still confirms another rule after Confirm and Cancel were clicked in one tick", async () => {
+    // Cancel resets the mutation in the tick of the confirm: React never renders the write as pending, and
+    // TanStack drops the per-call callbacks of a reset call. The latch must follow the request itself, or
+    // every later confirm of the page does nothing until a remount.
+    const calls = backend(THREE);
+    const user = userEvent.setup();
+    renderPage();
+    const dialog = await open(user, LAB.name, R.table.turnOffLabel(LAB.name));
+    const confirm = within(dialog).getByRole("button", { name: R.toggle.offConfirm });
+    const cancel = within(dialog).getByRole("button", { name: S.admin.common.cancel });
+    act(() => {
+      fireEvent.click(confirm);
+      fireEvent.click(cancel);
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    // the abandoned write still goes out, once, and the page says so when it lands
+    expect(await screen.findByRole("status")).toHaveTextContent(R.toggle.doneOff(LAB.name));
+    expect(calls.toggle).toEqual([{ rule_id: LAB.rule_id, enabled: false }]);
+    // another rule's confirm is not swallowed by a latch left shut
+    const second = await open(user, SSH.name, R.table.turnOffLabel(SSH.name));
+    await user.click(within(second).getByRole("button", { name: R.toggle.offConfirm }));
+    await waitFor(() => expect(calls.toggle).toHaveLength(2));
+    expect(calls.toggle[1]).toEqual({ rule_id: SSH.rule_id, enabled: false });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
   it("on 404 rule_not_found closes the dialog, says the rule is gone, and reads the list again", async () => {
     const calls = backend(THREE, { toggle: () => detail("rule not found", 404) });
     const user = userEvent.setup();
