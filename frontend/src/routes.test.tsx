@@ -22,6 +22,11 @@ vi.mock("./features/tier1/AlertPage", () => ({
   AlertPage: () => <h1>{S.alert.infoHeading}</h1>,
 }));
 
+// The rules page (P11-T14) reads the backend too, and RulesPage.test.tsx tests it: the route test looks for its place.
+vi.mock("./features/admin/RulesPage", () => ({
+  RulesPage: () => <h1>{S.admin.title.rules}</h1>,
+}));
+
 // The case pages are real and read the backend; these tests are about the route table, so the backend
 // says "no cases" and "no case 3". A request nobody handled fails the test.
 const server = setupServer(

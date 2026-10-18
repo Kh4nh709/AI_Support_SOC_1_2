@@ -11,7 +11,6 @@ import { DigestPage } from "./DigestPage";
 import { LabelsPage } from "./LabelsPage";
 import { LlmPage } from "./LlmPage";
 import { OverviewPage } from "./OverviewPage";
-import { RulesPage } from "./RulesPage";
 import { UsersPage } from "./UsersPage";
 
 /** The sidebar, in the order and with the words of the canvas, and where each link goes. */
@@ -95,11 +94,11 @@ describe("the sidebar", () => {
   });
 });
 
+// RulesPage (P11-T14) is built: RulesPage.test.tsx covers it, and it needs a query client these renders lack.
 const PAGES: [name: string, Page: () => ReactNode, title: string][] = [
   ["OverviewPage", OverviewPage, "Tổng quan hệ thống"],
   ["UsersPage", UsersPage, "Người dùng và quyền"],
   ["LlmPage", LlmPage, "LLM và hạn mức"],
-  ["RulesPage", RulesPage, "Rules tự đóng"],
   ["DigestPage", DigestPage, "Digest hằng ngày"],
   ["LabelsPage", LabelsPage, "Gán nhãn tập vàng"],
   ["AuditPage", AuditPage, "Nhật ký audit"],
@@ -117,7 +116,6 @@ describe("the placeholder pages", () => {
       S.admin.title.overview,
       S.admin.title.users,
       S.admin.title.llm,
-      S.admin.title.rules,
       S.admin.title.digest,
       S.admin.title.labels,
       S.admin.title.audit,
