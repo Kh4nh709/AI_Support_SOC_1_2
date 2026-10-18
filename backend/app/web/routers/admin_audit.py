@@ -4,16 +4,18 @@
 
 **What a row is.** `{audit_id, created_at, event_type, actor_role, actor_username, subject_id,
 payload}`, newest first by `audit_id` (insertion order, which the primary key serves: no new
-index). `actor_username` comes from a LEFT JOIN on `users` and is `null` for `system`, `llm` and
-for an actor with no `users` row (`audit_events.actor_id` has no FK on purpose: a deleted user's
-rows stay).
+index). `actor_username` comes from a LEFT JOIN on `users`, made only for an `analyst` or `admin`
+row: it is `null` for `system` and `llm` (even if an `llm` row carries an `actor_id`, which the
+CHECK allows) and for an actor with no `users` row (`audit_events.actor_id` has no FK on purpose:
+a deleted user's rows stay).
 
 **Filters**, all optional, all ANDed, every value a bound parameter (the WHERE is built from the
 fixed fragments in `_filters`, never from a request value):
 - `range`: `24h`, `7d` (default) or `30d`, on `created_at`, against the database's clock;
 - `group`: a key of `GROUPS`; an unknown one is a 422;
 - `actor`: `system` or `llm` is an `actor_role`; anything else is a username, matched exactly as
-  login matches it (case-sensitive), through `actor_id`. An unknown username matches nothing: an
+  login matches it (case-sensitive), through the `actor_id` of an `analyst` or `admin` row (the
+  join's own condition). An unknown username matches nothing: an
   empty list, not an error. A text value holding a NUL byte, or an empty one, is a 422 (the
   driver cannot send a NUL, and would answer a 500);
 - `subject`: an exact `subject_id`;
@@ -252,7 +254,7 @@ _PAGE = sql.SQL("""
         ORDER BY a.audit_id DESC
         LIMIT %(limit)s
     ) p
-    LEFT JOIN users u ON u.user_id = p.actor_id
+    LEFT JOIN users u ON u.user_id = p.actor_id AND p.actor_role IN ('analyst', 'admin')
     CROSS JOIN LATERAL (
         SELECT b.body, octet_length(b.body) AS size
         FROM (SELECT p.payload::text AS body OFFSET 0) b
@@ -277,9 +279,14 @@ def _filters(
         clauses.append(sql.SQL("a.actor_role = %(actor_role)s"))
         params["actor_role"] = actor
     elif actor is not None:
-        # An unknown username makes the subquery NULL, and `actor_id = NULL` matches no row.
+        # Only an `analyst` or `admin` row has a user to name (spec §5.8: null for system and llm;
+        # the CHECK would let an `llm` row carry an `actor_id`), the same condition as the page's
+        # join. An unknown username makes the subquery NULL, and `actor_id = NULL` matches no row.
         clauses.append(
-            sql.SQL("a.actor_id = (SELECT u2.user_id FROM users u2 WHERE u2.username = %(actor)s)")
+            sql.SQL(
+                "a.actor_role IN ('analyst', 'admin') AND "
+                "a.actor_id = (SELECT u2.user_id FROM users u2 WHERE u2.username = %(actor)s)"
+            )
         )
         params["actor"] = actor
     if subject is not None:

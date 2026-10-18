@@ -807,6 +807,25 @@ def test_an_actor_without_a_user_row_is_not_matched_by_any_username(client) -> N
     assert len(_ids(_get(tc))) == 1  # but it is in the unfiltered list
 
 
+@pytest.mark.db
+def test_an_llm_row_with_an_actor_id_has_no_username_and_no_username_matches_it(client) -> None:
+    """F3 of the review. Spec §5.8: `actor_username` is null for system and llm. The CHECK
+    `ck_audit_actor_id_theo_role` lets an `llm` row carry an `actor_id`; no writer does it today,
+    but the answer must not name a user for it, nor let `actor=<that user>` find it."""
+    tc, db, claims = client
+    ana = _user(db, "ana", "tier1")
+    llm_row = _event(db, "triage.suggested", "l-1", role="llm", actor_id=ana)
+    human = _event(db, "tier1.decided", "a-1", role="analyst", actor_id=ana)
+    boss = _event(db, "admin.user_updated", "u-1", role="admin", actor_id=claims.user_id)
+    events = {e["audit_id"]: e for e in _get(tc).json()["events"]}
+    assert events[llm_row]["actor_role"] == "llm" and events[llm_row]["actor_username"] is None
+    assert events[human]["actor_username"] == "ana"  # an analyst and an admin keep theirs
+    assert events[boss]["actor_username"] == "p11t09-admin"
+    by_name = _get(tc, actor="ana").json()
+    assert [e["audit_id"] for e in by_name["events"]] == [human] and by_name["total"] == 1
+    assert _ids(_get(tc, actor="llm")) == [llm_row]  # the role still finds it
+
+
 # ---------------------------------------------------------------------------
 # filters together
 # ---------------------------------------------------------------------------
