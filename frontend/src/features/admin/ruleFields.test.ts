@@ -177,13 +177,18 @@ describe("parseInteger", () => {
 });
 
 describe("parseValue", () => {
-  it("sends an eq string as typed: the empty one and one with spaces are strings too", () => {
+  it("trims an eq string, as it trims a cidr and the items of a list: the space round a pasted value is never the value", () => {
     expect(parseValue(row("category", "eq", "recon"))).toEqual({ ok: true, value: "recon" });
-    expect(parseValue(row("category", "eq", ""))).toEqual({ ok: true, value: "" });
     expect(parseValue(row("agent_name", "eq", " web 01 "))).toEqual({
       ok: true,
-      value: " web 01 ",
+      value: "web 01", // the space inside stays
     });
+    expect(parseValue(row("alert_user", "eq", "\tops\n "))).toEqual({ ok: true, value: "ops" });
+  });
+
+  it("sends an empty eq string, and one of spaces only, as the empty string: the server accepts it", () => {
+    expect(parseValue(row("category", "eq", ""))).toEqual({ ok: true, value: "" });
+    expect(parseValue(row("category", "eq", "   "))).toEqual({ ok: true, value: "" });
   });
 
   it("sends an eq port, or rule_level, as a JSON number", () => {

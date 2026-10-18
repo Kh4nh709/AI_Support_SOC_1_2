@@ -144,15 +144,16 @@ function parseScalar(type: ScalarType, text: string): Parsed<string | number | b
 
 /**
  * The value of a row, in the shape its operator takes (`OP_VALUE_KIND`), or why there is none.
- * A string is sent as typed (the server accepts the empty one for `eq` and `prefix`); a `cidr` and the items
- * of a list are trimmed, since a space is never part of a network or of a list's separator. A list is
- * comma-separated and holds no blank item.
+ * An `eq` string, a `cidr` and the items of a list are trimmed: the space round a pasted value is never the
+ * value, and a space is never part of a network or of a list's separator. A `prefix` is sent as typed (the
+ * server accepts any string, the empty one too). The empty `eq` string is a value the server accepts, so a
+ * box of spaces only is sent as `""`. A list is comma-separated and holds no blank item.
  */
 export function parseValue(row: DraftRow): Parsed<string | number | boolean | (string | number)[]> {
   const type = typeOf(row.field);
   switch (OP_VALUE_KIND[row.op]) {
     case "scalar":
-      return parseScalar(type, row.text);
+      return parseScalar(type, type === "string" ? row.text.trim() : row.text);
     case "integer":
       return parseInteger(row.text);
     case "text":
