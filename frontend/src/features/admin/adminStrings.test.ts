@@ -194,8 +194,12 @@ describe("the reason codes", () => {
     expect(S.admin.reason.frozen).not.toMatch(/^Không hoàn tác được/);
   });
 
-  it("has a text for `not_found` that fits a bad id on the digest path, not only a list", () => {
+  // `not_found` is read from `{reason: "not_found"}` (a user or a job that is gone: the page reloads its list)
+  // and from the plain "not found" of a bad alert id on the digest review path (nothing is reloaded), so its
+  // text must not say that a list was reloaded.
+  it("has a text for `not_found` that does not claim a list was reloaded", () => {
     expect(isText(S.admin.reason.not_found)).toBe(true);
+    expect(S.admin.reason.not_found).not.toContain("Danh sách đã được tải lại");
   });
 });
 
