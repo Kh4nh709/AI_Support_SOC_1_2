@@ -50,3 +50,10 @@ The independent reviews found these Minors and approved without them, so none of
 | 42 | P11-T13 r1 m3 | `LlmPage.test.tsx:1491-1495`: drop or rename the two 422 fixtures the handler cannot send (`empty`, `unknown` on a real field) |
 | 43 | P11-T13 r1 n1 | unit words " tr" and " s" in `llmFigures.ts:42,52` move to `S.admin.llmPage` |
 | 44 | P11-T13 r1 n3 | `S.ai2.quotaExhausted` (`strings.ts:451`) says "hôm nay"; the ② quota is a rolling 24 h (decision 8) |
+| 45 | P11-T14 r1 (outside) | `format.test.ts` host-zone test fails under a plain `npx vitest --run` (only the npm script sets `TZ=UTC`; host is +07): set `process.env.TZ = "UTC"` in `vite.config.ts` or a vitest `globalSetup` |
+| 46 | P11-T14 r1 F1/F2 (Director ruling) | every console write latched against a same-tick double click with the shared `useSubmitLatch` (from P11-T14's fix round): adopt it in the T11, T12, T13 and T15 pages' writes, with a same-tick test each |
+| 47 | P11-T11 r1 M1 | Overview: focus falls to `<body>` after a successful retry and after `not_failed`/404; move it to the "Job lỗi" heading or the notice, plus a test |
+| 48 | P11-T11 r1 M2 | Overview: close the retry/reload dialog and show the toast/result before awaiting the overview refetch (up to ~30 s busy today), as `LlmLimits.tsx` does |
+| 49 | P11-T11 r1 M3 | `OverviewPage.test.tsx:963-993`: the LLM-card failure tests assert the single h1 (mutation 6 survived) |
+| 50 | P11-T11 r1 F1 | backend: `llm_month` section (`spent_usd`, `cap_usd`, `pct`) on `GET /api/admin/overview`, failing alone; the cost card reads it instead of `llm/usage?range=month` |
+| 51 | P11-T11 r1 N2–N4 | `routes.test.tsx:154` mock to the top; shell 404 text says "tải lại trang" after a reload; toast placement consistent with `LlmPage` |
