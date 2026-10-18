@@ -311,7 +311,9 @@ export function LabelsPage() {
   const finishedRef = useRef<HTMLHeadingElement>(null);
 
   const query = useQuery({
-    queryKey: adminKeys.labels,
+    // The labeller's own entry: each draws an order of their own, so one's cached cluster is never another's.
+    // `invalidateAfter` matches `adminKeys.labels` by prefix, so the writes still reach it.
+    queryKey: [...adminKeys.labels, labelerId],
     queryFn: (): Promise<LabelsNext> =>
       labelerId === null ? Promise.reject(new Error("no labeller")) : getLabelsNext(labelerId),
     enabled: labelerId !== null,

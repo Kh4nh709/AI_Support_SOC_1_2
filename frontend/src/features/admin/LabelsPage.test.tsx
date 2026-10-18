@@ -1270,6 +1270,51 @@ describe("a cluster is read on entry and after a write, never because the window
   });
 });
 
+// Each labeller draws a cluster order of their own, and a cached answer is one labeller's: a second labeller on the
+// same cache (a logout and another login in one tab; the cache is cleared then, but the page does not rely on it)
+// must not be shown the first one's cluster, not even for the moment before their own answer comes.
+describe("the cache is the labeller's own", () => {
+  const OTHER_ID = "9a8b7c6d-1111-4222-8333-444455556666";
+
+  it("does not show a labeller the cluster another labeller read into the same cache", async () => {
+    server.use(
+      http.get(NEXT, async ({ request }) => {
+        const labeler = new URL(request.url).searchParams.get("labeler");
+        if (labeler === OTHER_ID) await delay(150);
+        return HttpResponse.json(
+          labeler === OTHER_ID
+            ? nextAnswer({ cluster_id: B, cluster: clusterB() })
+            : nextAnswer({ cluster_id: A, cluster: cluster() }),
+        );
+      }),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const first = renderPage({ client });
+    await ready();
+    expect(headText()).toContain("ssh_brute_force");
+    first.unmount();
+
+    renderPage({ client, token: tokenOf(OTHER_ID) });
+    // Before the second labeller's own answer: the skeleton, not the first labeller's cluster.
+    expect(screen.getByRole("status")).toHaveTextContent(S.common.loading);
+    expect(screen.queryByRole("region", { name: L.cluster.label })).not.toBeInTheDocument();
+    await ready();
+    expect(headText()).toContain("port_scan");
+    expect(headText()).not.toContain("ssh_brute_force");
+  });
+
+  it("keeps one entry per labeller, under the labels key the writes invalidate by prefix", async () => {
+    serveNext(nextAnswer());
+    const { client } = renderPage();
+    await ready();
+    const keys = client
+      .getQueryCache()
+      .findAll({ queryKey: adminKeys.labels })
+      .map((query) => query.queryKey);
+    expect(keys).toEqual([[...adminKeys.labels, USER_ID]]);
+  });
+});
+
 describe("loading and failing to load", () => {
   it("shows the title and a skeleton while the first answer is on its way, and no form", async () => {
     server.use(
