@@ -1467,6 +1467,42 @@ def test_the_503_body_is_the_reason_only_never_sql_nor_a_dsn(
         assert leaked not in resp.text, leaked
 
 
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "failing_select",
+    [
+        "SELECT 1/0 FROM audit_events a WHERE {where}",
+        "SELECT 'x'::int FROM audit_events a WHERE {where}",
+    ],
+    ids=["division-by-zero", "bad-cast"],
+)
+def test_a_page_error_that_is_not_a_timeout_stays_a_500_with_a_generic_body(
+    client, monkeypatch, failing_select: str
+) -> None:
+    """F4 of the review. Only a cancelled statement is the 503 `timeout`: any other database error
+    on the page is a fault, answered as the 500 it is, with no SQL, SQLSTATE or filter value in
+    the body (and not as a "narrow your filters" timeout the admin cannot act on)."""
+    _tc, db, _ = client
+    monkeypatch.setattr(admin_audit, "_PAGE", sql.SQL(failing_select))
+    quiet = TestClient(main.app, raise_server_exceptions=False)
+    resp = quiet.get(AUDIT, params={"subject": "secret-subject", "actor": "ana"})
+    assert resp.status_code == 500
+    assert resp.text == "Internal Server Error"
+    lowered = resp.text.lower()
+    for leaked in (
+        "select",
+        "division",
+        "zero",
+        "audit_events",
+        "secret-subject",
+        "22012",
+        "22p02",
+    ):
+        assert leaked not in lowered, leaked
+    # the savepoint was rolled back, not the connection: it is still usable
+    assert db.execute("SELECT 1").fetchone() == (1,)
+
+
 # ---------------------------------------------------------------------------
 # the total
 # ---------------------------------------------------------------------------
