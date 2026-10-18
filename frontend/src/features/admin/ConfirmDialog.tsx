@@ -10,7 +10,8 @@
 //   )}
 //
 // What it does for the page:
-//   - `role="dialog"`, `aria-modal="true"`, named by its title through `aria-labelledby`;
+//   - `role="dialog"`, `aria-modal="true"`, named by its title through `aria-labelledby` and described by
+//     its body through `aria-describedby` (set only when there are children);
 //   - focus: on open it moves to the cancel button of a `danger` dialog (a destructive action is never one
 //     Enter away) and to the confirm button of a `primary` one, unless a field of the children already took
 //     it (an `autoFocus` input); on close it returns to the element that had it when the dialog mounted,
@@ -105,6 +106,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     onCancel,
   } = props;
   const titleId = useId();
+  const bodyId = useId();
   const boxRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
@@ -151,6 +153,10 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   }, []);
 
   const hasError = error !== undefined && error !== null && error !== false && error !== "";
+  // The body is what a screen reader should hear after the title ("what will happen"), so the dialog is
+  // described by it; with no children there is no body to point at.
+  const hasBody =
+    children !== undefined && children !== null && children !== false && children !== "";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
@@ -159,13 +165,18 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        aria-describedby={hasBody ? bodyId : undefined}
         tabIndex={-1}
         className="flex w-full max-w-md flex-col gap-3 rounded-xl border border-[#3a4757] bg-[#18202a] p-[18px] shadow-xl focus:outline-none"
       >
         <h2 id={titleId} className="text-[17px] font-semibold">
           {title}
         </h2>
-        <div className="space-y-2 text-[13.5px] leading-relaxed text-[#c9d3df]">{children}</div>
+        {hasBody && (
+          <div id={bodyId} className="space-y-2 text-[13.5px] leading-relaxed text-[#c9d3df]">
+            {children}
+          </div>
+        )}
         {hasError && (
           <div
             role="alert"

@@ -102,6 +102,76 @@ describe("the markup", () => {
   });
 });
 
+describe("the description", () => {
+  it("is described by its body, so a screen reader reads what will happen", () => {
+    renderPage({}, true);
+    const id = dialog().getAttribute("aria-describedby");
+    expect(id).toBeTruthy();
+    const body = document.getElementById(id ?? "");
+    expect(body).toContainElement(screen.getByText("Lê Tuấn bị đăng xuất ngay."));
+    expect(dialog()).toHaveAccessibleDescription("Lê Tuấn bị đăng xuất ngay.");
+  });
+
+  it("is described by the body of each of two dialogs, not by the other's", () => {
+    render(
+      <>
+        <ConfirmDialog title="Một" confirmLabel="OK" onConfirm={() => {}} onCancel={() => {}}>
+          nội dung một
+        </ConfirmDialog>
+        <ConfirmDialog title="Hai" confirmLabel="OK" onConfirm={() => {}} onCancel={() => {}}>
+          nội dung hai
+        </ConfirmDialog>
+      </>,
+    );
+    expect(screen.getByRole("dialog", { name: "Một" })).toHaveAccessibleDescription("nội dung một");
+    expect(screen.getByRole("dialog", { name: "Hai" })).toHaveAccessibleDescription("nội dung hai");
+  });
+
+  it("has no aria-describedby, and no empty body, when there are no children", () => {
+    render(
+      <ConfirmDialog
+        title="Chạy lại"
+        confirmLabel="Chạy lại"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(dialog()).not.toHaveAttribute("aria-describedby");
+    expect(dialog()).toHaveAccessibleDescription("");
+    expect(dialog().querySelector("[id]:not(h2)")).toBeNull();
+  });
+
+  it.each<[string, ReactNode]>([
+    ["null", null],
+    ["false", false],
+    ["an empty text", ""],
+  ])("has no aria-describedby for children that are %s", (_name, children) => {
+    render(
+      <ConfirmDialog
+        title="Chạy lại"
+        confirmLabel="Chạy lại"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      >
+        {children}
+      </ConfirmDialog>,
+    );
+    expect(dialog()).not.toHaveAttribute("aria-describedby");
+  });
+
+  it("points at an element that exists, so axe finds no dangling reference", async () => {
+    const { container } = render(
+      <main>
+        <Page startOpen />
+      </main>,
+    );
+    const id = dialog().getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(id)).not.toBeNull();
+    const result = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
+    expect(result.violations.map((v) => v.id)).toEqual([]);
+  });
+});
+
 describe("focus", () => {
   it("moves to the cancel button of a danger dialog on open", () => {
     renderPage({ tone: "danger" }, true);
