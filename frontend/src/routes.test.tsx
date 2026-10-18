@@ -21,6 +21,11 @@ vi.mock("./features/tier1/QueuePage", () => ({
 vi.mock("./features/tier1/AlertPage", () => ({
   AlertPage: () => <h1>{S.alert.infoHeading}</h1>,
 }));
+// The labelling page reads the label routes with the labeller named in the session's token (LabelsPage.test.tsx
+// tests it); this file looks for its place and its title.
+vi.mock("./features/admin/LabelsPage", () => ({
+  LabelsPage: () => <h1>{S.admin.title.labels}</h1>,
+}));
 
 // The case pages are real and read the backend; these tests are about the route table, so the backend
 // says "no cases" and "no case 3". A request nobody handled fails the test.
