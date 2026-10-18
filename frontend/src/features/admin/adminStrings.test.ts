@@ -148,7 +148,7 @@ describe("the reason codes", () => {
     expect(unknown).toEqual([]);
   });
 
-  it("lists, beyond the source of the routes, only the codes it reads from legacy text or from P11-T20", () => {
+  it("lists, beyond the source of the routes, only the codes it reads from legacy text", () => {
     const text = [
       "admin_users.py",
       "admin_llm.py",
@@ -162,20 +162,19 @@ describe("the reason codes", () => {
     const written = (code: string) => new RegExp(`"${code}"`).test(text);
     const beyond = ADMIN_REASONS.filter((code) => !written(code));
     // The codes of a plain-text `detail` (the rules and labels routes: `rule_not_found`, `unknown_cluster`,
-    // `already_labelled`, `labeler_mismatch`), and `reserved`, which P11-T20 adds to the create route
-    // (`_bad("username", "reserved")`; until it is merged nothing writes it, after it the test stays green
-    // because the code is then written and no longer listed here). `frozen` and `nothing_to_undo`, the undo
-    // route of P11-T08, are written in labels.py now and need no entry.
+    // `already_labelled`, `labeler_mismatch`). `reserved` is no longer one of them: P11-T20 part 1 is merged,
+    // and the create route writes it (`_bad("username", "reserved")`). `frozen` and `nothing_to_undo`, the undo
+    // route of P11-T08, are written in labels.py and need no entry either.
     const readFromElsewhere = new Set([
       "rule_not_found",
       "unknown_cluster",
       "already_labelled",
       "labeler_mismatch",
-      "reserved", // P11-T20, until merged
     ]);
     expect(beyond.filter((code) => !readFromElsewhere.has(code))).toEqual([]);
     // And the ones the routes of this base do write really are written there: nothing is listed by guess.
     expect(beyond).toContain("rule_not_found");
+    expect(written("reserved")).toBe(true);
     expect(ADMIN_REASONS.filter(written).length).toBeGreaterThan(15);
   });
 

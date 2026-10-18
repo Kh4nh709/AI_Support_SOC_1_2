@@ -23,7 +23,8 @@
 // never left on screen to be labelled twice.
 //
 // Two clicks in one tick: TanStack Query tells React a mutation is pending only on a timer, so a guard on
-// `isPending` lets both through. A ref latch (set on the click, cleared in `onSettled`) lets one write through.
+// `isPending` lets both through. The shared `useSubmitLatch` lets one write through. The save and the undo are
+// ONE mutation (`Write`, below), so one latch covers both: a save and an undo of the same tick send one POST.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
@@ -33,6 +34,7 @@ import {
   undoLabel,
   type AdminError,
   type LabelsNext,
+  type NewLabel,
 } from "../../api/admin";
 import { useAuth } from "../../auth/AuthProvider";
 import { PageError } from "../../components/PageError";
@@ -42,11 +44,22 @@ import { adminKeys, invalidateAfter } from "./adminKeys";
 import { ClusterDetails, ClusterHead } from "./LabelClusterView";
 import { LabelForm, type LabelValues } from "./LabelForm";
 import { labelerIdOf } from "./labelerId";
+import { useSubmitLatch } from "./useSubmitLatch";
 
 const L = S.admin.labelsPage;
 
 /** What the last write said: a confirmation (a toast) or a refusal (an alert). */
 type Notice = { tone: "ok" | "error"; text: string };
+
+/**
+ * The page's one write, as the variables of one mutation. A save and an undo are two routes but one kind of
+ * act on the labeller's own rows, and one latch (`useSubmitLatch`) wraps the mutation: so no two writes of this
+ * page are ever out at once, whichever buttons were pressed in the same tick.
+ */
+type Write = { kind: "save"; body: NewLabel } | { kind: "undo" };
+type Answer =
+  | { kind: "save"; saved: Awaited<ReturnType<typeof postLabel>> }
+  | { kind: "undo"; undone: Awaited<ReturnType<typeof undoLabel>> };
 
 /** The refusals after which the screen on view is out of date, so `labels/next` is read again. */
 const STALE_REASONS = new Set<string>([
@@ -255,7 +268,6 @@ export function LabelsPage() {
   const client = useQueryClient();
   const labelerId = session === null ? null : labelerIdOf(session.token);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const latch = useRef(false);
   const wantsFocus = useRef(false);
   const headRef = useRef<HTMLElement>(null);
 
@@ -270,52 +282,35 @@ export function LabelsPage() {
     refetchOnReconnect: false,
   });
 
-  const save = useMutation({
-    mutationFn: postLabel,
-    onSuccess: async (result) => {
+  const write = useMutation({
+    mutationFn: async (w: Write): Promise<Answer> =>
+      w.kind === "save"
+        ? { kind: "save", saved: await postLabel(w.body) }
+        : { kind: "undo", undone: await undoLabel() },
+    onSuccess: async (answer) => {
       wantsFocus.current = true;
-      setNotice({
-        tone: "ok",
-        text: L.notice.saved(result.cluster_id, result.done, result.total, result.next),
-      });
-      await invalidateAfter(client, "postLabel");
+      if (answer.kind === "save") {
+        const { cluster_id, done, total, next } = answer.saved;
+        setNotice({ tone: "ok", text: L.notice.saved(cluster_id, done, total, next) });
+        await invalidateAfter(client, "postLabel");
+      } else {
+        const { undone_cluster_id, done, total } = answer.undone;
+        setNotice({ tone: "ok", text: L.notice.undone(undone_cluster_id, done, total) });
+        await invalidateAfter(client, "undoLabel");
+      }
     },
-    onError: async (thrown) => {
+    onError: async (thrown, w) => {
       const error = adminErrorOf(thrown);
-      setNotice({ tone: "error", text: failureText(error, SAVE_WORDS) });
-      if (isStale(error)) await invalidateAfter(client, "postLabel");
-    },
-    onSettled: () => {
-      latch.current = false;
+      const saving = w.kind === "save";
+      setNotice({ tone: "error", text: failureText(error, saving ? SAVE_WORDS : UNDO_WORDS) });
+      if (isStale(error)) await invalidateAfter(client, saving ? "postLabel" : "undoLabel");
     },
   });
+  const run = useSubmitLatch(write);
 
-  const undo = useMutation({
-    mutationFn: undoLabel,
-    onSuccess: async (result) => {
-      wantsFocus.current = true;
-      setNotice({
-        tone: "ok",
-        text: L.notice.undone(result.undone_cluster_id, result.done, result.total),
-      });
-      await invalidateAfter(client, "undoLabel");
-    },
-    onError: async (thrown) => {
-      const error = adminErrorOf(thrown);
-      setNotice({ tone: "error", text: failureText(error, UNDO_WORDS) });
-      if (isStale(error)) await invalidateAfter(client, "undoLabel");
-    },
-    onSettled: () => {
-      latch.current = false;
-    },
-  });
-
-  /** One write at a time, and one click of it: see the note on two clicks in one tick, above. */
-  function once(run: () => void) {
-    if (latch.current) return;
-    latch.current = true;
-    setNotice(null);
-    run();
+  /** One write at a time, and one click of it: `run` says whether the call went, and the old notice goes with it. */
+  function send(w: Write) {
+    if (run(w)) setNotice(null);
   }
 
   // A write brought the next cluster: the button that had the focus is gone, so the focus goes to the cluster.
@@ -341,7 +336,7 @@ export function LabelsPage() {
   const data = query.data;
   if (data === undefined) return <Skeleton />;
 
-  const working = save.isPending ? "save" : undo.isPending ? "undo" : null;
+  const working = write.isPending ? (write.variables?.kind ?? null) : null;
   const toast =
     notice?.tone === "ok" ? <Toast onClose={() => setNotice(null)}>{notice.text}</Toast> : null;
   const refusal = notice?.tone === "error" ? notice.text : null;
@@ -352,7 +347,7 @@ export function LabelsPage() {
       type="button"
       disabled={working !== null}
       aria-busy={working === "undo"}
-      onClick={() => once(() => undo.mutate())}
+      onClick={() => send({ kind: "undo" })}
       className={OUTLINE_BUTTON}
     >
       {working === "undo" ? L.form.undoing : L.form.undo}
@@ -415,17 +410,18 @@ export function LabelsPage() {
           canUndo={data.done > 0}
           error={refusal}
           onSave={(values: LabelValues) =>
-            once(() =>
-              save.mutate({
+            send({
+              kind: "save",
+              body: {
                 labeler: labelerId,
                 cluster_id: cluster.gold_cluster_id,
                 label: values.label,
                 confidence: values.confidence,
                 ...(values.note === "" ? {} : { note: values.note }),
-              }),
-            )
+              },
+            })
           }
-          onUndo={() => once(() => undo.mutate())}
+          onUndo={() => send({ kind: "undo" })}
         />
       </div>
     </div>

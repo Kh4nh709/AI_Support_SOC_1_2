@@ -733,6 +733,155 @@ export const S = {
       outOfRange: (min: number, max: number) => `Phải từ ${min} đến ${max}`,
     },
 
+    // The users page (P11-T12, spec §4.2), in the words of the canvas's AdminUsers and of the
+    // "NGƯỜI DÙNG & QUYỀN" cards of AdminStates. The reasons the routes answer with are in `reason` above.
+    usersPage: {
+      // Under the h1: how many accounts there are.
+      count: (n: number) => `${n} tài khoản · quyền cấp theo vai trò`,
+      tableLabel: "Danh sách tài khoản",
+      search: { label: "Tìm", placeholder: "username, tên…" },
+      // The search found nothing (AdminStates "TÌM KHÔNG THẤY"), and the list that has no account at all.
+      noMatch: {
+        title: (query: string) => `Không có tài khoản khớp “${query}”`,
+        hint: "Tìm theo tên đăng nhập hoặc tên hiển thị.",
+        clear: "Xoá tìm kiếm",
+      },
+      empty: "Chưa có tài khoản nào.",
+      col: {
+        account: "Tài khoản",
+        role: "Vai trò",
+        status: "Trạng thái",
+        lastLogin: "Đăng nhập cuối",
+        actions: "Thao tác",
+      },
+      // The chip on the caller's own row.
+      you: "bạn",
+      neverLoggedIn: "chưa đăng nhập",
+      status: {
+        active: "Hoạt động",
+        locked: (until: string) => `Bị khoá đến ${until}`,
+        inactive: "Vô hiệu",
+      },
+      roleSelect: (username: string) => `Vai trò của ${username}`,
+      // The buttons of a row. Each is named with its account (`rowAction`), the visible text first.
+      action: {
+        reset: "Đặt lại mật khẩu",
+        unlock: "Mở khoá",
+        reactivate: "Kích hoạt lại",
+        deactivate: "Vô hiệu hoá",
+      },
+      rowAction: (action: string, username: string) => `${action} ${username}`,
+      // The button of a row that holds its less common actions (a row menu).
+      moreActions: (username: string) => `Thêm thao tác cho ${username}`,
+      // What a write failed with when the server said nothing a person can read: the connection, or a 5xx.
+      writeFailed: {
+        network: "Không lưu được: mất kết nối máy chủ. Thử lại.",
+        server: "Không lưu được: máy chủ trả lỗi. Thử lại sau ít phút.",
+      },
+      // The words a password form shares: the create form and the reset dialog.
+      password: {
+        short: (min: number, have: number) => `Cần tối thiểu ${min} ký tự, đang có ${have}`,
+        mismatch: "Không khớp với mật khẩu",
+        invalid: "Mật khẩu chứa ký tự không hợp lệ",
+      },
+      // The four dialogs (AdminStates). A refusal keeps the title and the alert and only the button "Đóng".
+      dialog: {
+        role: {
+          title: (username: string) => `Đổi vai trò của ${username}?`,
+          change: (from: string, to: string) => `${from} → ${to}`,
+          body: (username: string) =>
+            `Quyền đổi ngay. Mọi phiên đang mở của ${username} bị đăng xuất; lần đăng nhập sau sẽ có quyền mới.`,
+          confirm: "Đổi vai trò",
+        },
+        deactivate: {
+          title: (username: string) => `Vô hiệu hoá ${username}?`,
+          body: (name: string) =>
+            `${name} bị đăng xuất ngay và không đăng nhập được nữa. Các quyết định đã ghi vẫn giữ nguyên. Có thể kích hoạt lại sau.`,
+          confirm: "Vô hiệu hoá",
+        },
+        // A light confirmation: it restores login with the old password, admin rights included.
+        reactivate: {
+          title: (username: string) => `Kích hoạt lại ${username}?`,
+          body: "Tài khoản đăng nhập được ngay bằng mật khẩu hiện tại.",
+          confirm: "Kích hoạt lại",
+        },
+        reset: {
+          title: (username: string) => `Đặt lại mật khẩu cho ${username}`,
+          password: "Mật khẩu tạm",
+          repeat: "Nhập lại",
+          hint: (min: number) =>
+            `Tối thiểu ${min} ký tự. Báo mật khẩu tạm cho người dùng qua kênh riêng; trang không hiển thị lại.`,
+          sessions: (username: string) => `Mọi phiên đang mở của ${username} bị đăng xuất.`,
+          own: "Đây là tài khoản của bạn: đặt lại mật khẩu cũng đăng xuất mọi phiên của bạn, kể cả phiên này. Bạn sẽ phải đăng nhập lại.",
+          confirm: "Đặt lại",
+        },
+        unlock: {
+          title: (username: string) => `Mở khoá ${username}?`,
+          body: (until: string, failed: number) =>
+            `Tài khoản bị khoá đến ${until} sau ${failed} lần nhập sai mật khẩu. Mở khoá xoá số lần sai và cho đăng nhập ngay.`,
+          confirm: "Mở khoá",
+        },
+      },
+      // The note after a write (the toast).
+      done: {
+        role: (username: string, from: string, to: string) =>
+          `Đã đổi vai trò của ${username} từ ${from} sang ${to}. Phiên cũ của người đó đã bị đăng xuất.`,
+        deactivate: (username: string) => `Đã vô hiệu hoá ${username}. Người đó đã bị đăng xuất.`,
+        reactivate: (username: string) => `Đã kích hoạt lại ${username}.`,
+        reset: (username: string) =>
+          `Đã đặt lại mật khẩu của ${username}. Báo mật khẩu tạm qua kênh riêng; trang không hiển thị lại.`,
+        unlock: (username: string) => `Đã mở khoá ${username}.`,
+        create: (username: string, role: string) =>
+          `Đã tạo tài khoản ${username} (${role}). Báo mật khẩu tạm qua kênh riêng; trang không hiển thị lại.`,
+      },
+      // The create panel (the canvas's "Tạo người dùng").
+      create: {
+        title: "Tạo người dùng",
+        username: "Tên đăng nhập",
+        usernamePlaceholder: "vd. an.t1",
+        displayName: "Tên hiển thị",
+        role: "Vai trò",
+        // The one line under each role (the canvas's).
+        roleHelp: {
+          tier1: "xử lý hàng đợi, quyết alert",
+          tier2: "điều tra case, chạy ②, hỏi AI",
+          admin: "mọi quyền, gồm quản trị người dùng và hạn mức",
+        },
+        password: "Mật khẩu tạm",
+        repeat: "Nhập lại mật khẩu",
+        hint: (min: number) =>
+          `Tối thiểu ${min} ký tự. Mật khẩu chỉ lưu dạng băm argon2id, không hiển thị lại.`,
+        submit: "Tạo tài khoản",
+        // What the form can say before it posts, and the plainer words for the server's `invalid`.
+        roleMissing: "Chưa chọn vai trò",
+        usernameInvalid:
+          "Chỉ dùng chữ thường a–z, số, dấu chấm, gạch dưới, gạch ngang; dài 3 đến 32 ký tự",
+        displayNameInvalid: "Tên hiển thị không được chứa ký tự điều khiển hay ký tự vô hình",
+      },
+      // The read-only matrix of role to function (the canvas's nine rows), static text.
+      matrix: {
+        title: "Quyền theo vai trò",
+        note: "đổi vai trò là đổi quyền; phiên cũ của người đó bị đăng xuất",
+        feature: "Chức năng",
+        yes: "có",
+        no: "—",
+        // What a screen reader says for the "—".
+        noSpoken: "không",
+        // [label, tier1, tier2, admin]
+        rows: [
+          ["Xem hàng đợi và chi tiết alert", true, true, true],
+          ["Quyết định alert (đóng, chuyển Tier-2)", true, false, false],
+          ["Xem và kết luận case", false, true, true],
+          ["Chạy phân tích ② và hỏi AI", false, true, true],
+          ["Quản trị rules tự đóng, digest", false, false, true],
+          ["Gán nhãn đánh giá", false, false, true],
+          ["Quản lý người dùng", false, false, true],
+          ["Xem và chỉnh hạn mức LLM", false, false, true],
+          ["Xem nhật ký audit, chạy lại job lỗi, nạp lại kiểm kê", false, false, true],
+        ] satisfies readonly (readonly [string, boolean, boolean, boolean])[],
+      },
+    },
+
     // The LLM and limits page (P11-T13, spec §4.3): `/admin/llm`. Its words are here and nowhere else.
     llmPage: {
       subtitle: "Mọi lượt gọi model đều ghi vào llm_runs kèm token, thời gian và chi phí",
@@ -950,6 +1099,185 @@ export const S = {
       identity_privileged: "Danh tính đặc quyền (identity_privileged)",
       ioc_bad: "IoC malicious hoặc suspicious",
     } satisfies Record<HardBlockCode, string>,
+
+    // `/admin/rules` (P11-T14, spec §4.4): the words of the rules page. The six hard-block texts above are
+    // reused as they are; the reasons of a failed write come from `S.admin.reason` (`rule_not_found`,
+    // `forbidden`) and the rest from here.
+    rulesPage: {
+      subtitle: (total: number, enabled: number) =>
+        `Rule chỉ đóng cụm đã qua sáu chặn cứng · ${total} rule, ${enabled} đang bật`,
+      create: "Tạo rule mới",
+      loadFailed: "Không tải được danh sách rule",
+      hardBlocks: {
+        label: "Sáu chặn cứng",
+        title: "Sáu chặn cứng (G8′) — luôn chạy trước mọi rule",
+        note: "Một cụm dính bất kỳ chặn nào thì không rule nào đóng được nó, kể cả rule khớp mọi thứ",
+      },
+      empty: {
+        title: "Chưa có rule tự đóng nào",
+        body: "Mọi cụm đều vào hàng đợi Tier 1. Khối sáu chặn cứng vẫn hiện ở đầu trang.",
+      },
+      table: {
+        label: "Các rule tự đóng",
+        nameAndReason: "Tên và lý do",
+        conditions: "Điều kiện",
+        width: "Độ rộng 7 ngày",
+        created: "Tạo lúc",
+        state: "Trạng thái",
+        action: "Thao tác",
+        on: "bật",
+        off: "tắt",
+        turnOn: "Bật",
+        turnOff: "Tắt",
+        turnOnLabel: (name: string) => `Bật rule ${name}`,
+        turnOffLabel: (name: string) => `Tắt rule ${name}`,
+        noConditions: "Không có điều kiện: khớp mọi cụm",
+        widthWarning: (pct: string, threshold: string) => `⚠ ${pct}% > ${threshold}%`,
+        widthNote: (threshold: string) =>
+          `Độ rộng = tỉ lệ alert của 7 ngày qua (tính cả bản sao) mà rule đã đóng. Vượt ${threshold}% (AUTOCLOSE_RULE_WIDTH_PCT) thì cảnh báo: rule có thể đang đóng cả alert thật.`,
+      },
+      toggle: {
+        offTitle: (name: string) => `Tắt rule “${name}”?`,
+        offBody:
+          "Từ giờ các cụm khớp rule này vào hàng đợi Tier 1. Cụm đã bị đóng trước đó không tự mở lại. Thao tác được ghi audit.",
+        offConfirm: "Tắt rule",
+        onTitle: (name: string) => `Bật rule “${name}”?`,
+        onBody:
+          "Từ giờ các cụm khớp rule này, sau khi qua sáu chặn cứng, sẽ được tự đóng và không vào hàng đợi Tier 1. Thao tác được ghi audit.",
+        onConfirm: "Bật rule",
+        doneOff: (name: string) => `Đã tắt rule “${name}”.`,
+        doneOn: (name: string) => `Đã bật rule “${name}”.`,
+        failed: "Chưa đổi được trạng thái rule. Thử lại sau ít phút.",
+      },
+      builder: {
+        step: "Bước 1/2 · nhập điều kiện",
+        name: "Tên",
+        reason: "Lý do",
+        conditions: "Điều kiện — mọi điều kiện đều phải khớp",
+        group: (n: number) => `Điều kiện ${n}`,
+        field: "Trường",
+        op: "Phép so",
+        value: "Giá trị",
+        remove: "Xoá điều kiện",
+        add: "+ Thêm điều kiện",
+        none: "Chưa có điều kiện nào: rule này khớp mọi cụm đã qua sáu chặn cứng. Xem trước để biết nó sẽ đóng bao nhiêu cụm.",
+        help: "Chỉ các trường và phép so mà bộ máy cho phép mới chọn được. Phép in nhận nhiều giá trị, cách nhau bằng dấu phẩy.",
+        placeholder: {
+          text: "giá trị",
+          integer: "số nguyên, ví dụ 443",
+          list: "a, b, c",
+          integerList: "22, 443",
+          cidr: "10.0.0.0/8",
+          prefix: "tiền tố",
+        },
+        problem: {
+          not_integer: "Phải là số nguyên, ví dụ 443",
+          list_empty: "Nhập ít nhất một giá trị",
+          list_blank_item: "Danh sách có một giá trị rỗng giữa hai dấu phẩy",
+          not_boolean: "Chọn true hoặc false",
+        },
+        emptyEq: "Giá trị đang để trống: điều kiện này chỉ khớp chuỗi rỗng.",
+        emptyPrefix: "Tiền tố rỗng khớp mọi giá trị chuỗi.",
+        neverCloses: (field: string, values: string) =>
+          `Chặn cứng chạy trước mọi rule: cụm có ${field} = ${values} không bao giờ bị rule đóng.`,
+        preview: "Xem trước",
+        previewing: "Đang xem trước…",
+        submit: "Tạo rule",
+        submitting: "Đang tạo rule…",
+        hintIdle:
+          "Nút “Tạo rule” chỉ mở sau khi đã xem trước đúng bộ điều kiện đang nhập. Sửa điều kiện thì phải xem trước lại.",
+        hintStale:
+          "Điều kiện đã đổi sau lần xem trước gần nhất. Xem trước lại để mở nút “Tạo rule”.",
+        hintNeedText: "Nhập tên và lý do của rule.",
+        hintReady:
+          "Rule được tạo ở trạng thái bật và áp dụng ngay cho các alert nhận từ giờ. Xem trước đã tính cả sáu chặn cứng.",
+        created: (name: string) => `Đã tạo rule “${name}”. Rule đang bật.`,
+        conditionRejected:
+          "Máy chủ từ chối điều kiện: có trường hoặc phép so ngoài danh sách cho phép, hoặc giá trị sai dạng. Chưa tạo rule nào; phần đã nhập vẫn còn nguyên.",
+        conditionMalformed:
+          "Máy chủ không đọc được điều kiện vì sai dạng. Chưa tạo rule nào; phần đã nhập vẫn còn nguyên.",
+        previewFailed: "Chưa xem trước được. Điều kiện vẫn còn nguyên — thử lại sau ít phút.",
+        createFailed: "Chưa tạo được rule. Điều kiện vẫn còn nguyên — thử lại sau ít phút.",
+      },
+      preview: {
+        title: "Kết quả xem trước",
+        step: "Bước 2/2 · 30 ngày qua, đã tính sáu chặn cứng",
+        idle: "Chưa có kết quả. Bấm “Xem trước” để chạy thử các điều kiện trên 30 ngày dữ liệu; chưa có gì được ghi.",
+        running: "Đang chạy thử trên 30 ngày dữ liệu…",
+        stale:
+          "Kết quả bên dưới là của bộ điều kiện trước khi sửa. Xem trước lại để có kết quả mới.",
+        clusters: "Cụm sẽ bị đóng",
+        alerts: "Alert, gồm bản sao",
+        bySeverity: "Theo mức độ",
+        byAsset: "Theo asset criticality",
+        samples: "Alert mẫu (tối đa 20) — mở trong trang alert",
+        tallyMatched: (n: string) => `Rule khớp ${n} cụm nhưng cả ${n} bị chặn cứng:`,
+        tallyNone: "Rule không khớp cụm nào trong 30 ngày qua.",
+        tallyNote:
+          "Bạn vẫn tạo được rule này, nhưng với dữ liệu hiện tại nó sẽ không đóng được cụm nào.",
+      },
+    },
+
+    // The daily digest page (P11-T15, spec §4.5): `/admin/digest`. Its words are here and nowhere else; the
+    // texts of its refusals are the shared `S.admin.reason` ones, except the two the canvas words for a row.
+    digestPage: {
+      subtitle: "Duyệt từng cụm mà rule đã tự đóng trong ngày",
+      dayLabel: "Ngày",
+      today: "Hôm nay (đến giờ)",
+      // The day the server fell back to, `dd/mm/yyyy` (`formatDay`), after a day the server refused.
+      badDay: (day: string) => `Ngày không hợp lệ — đang hiển thị ${day}.`,
+      // A read after a review failed while the page still shows the list it had.
+      refreshFailed: "Không làm mới được danh sách — đang hiển thị lần tải trước.",
+      loadErrorOffline: "Không kết nối được máy chủ. Kiểm tra mạng rồi thử lại.",
+      loadErrorServer: (status: number) =>
+        `Máy chủ trả lỗi ${status}. Thử lại sau ít phút; nếu lặp lại, xem Tổng quan → Sức khoẻ hệ thống.`,
+      summary: {
+        clusters: (n: number) => `${n} cụm tự đóng`,
+        reviewed: (done: number, waiting: number) => `${done} đã duyệt · ${waiting} chờ duyệt`,
+        disagreements: (n: number) => `${n} cụm ① không đề xuất đóng`,
+      },
+      table: {
+        label: "Các cụm đã tự đóng trong ngày",
+        colRule: "Rule tự đóng",
+        colRuleDesc: "Rule · mô tả",
+        colSeverity: "Mức độ",
+        colAgent: "Agent",
+        colCount: "Số lần",
+        colSpan: "Khoảng thời gian",
+        colSuggestion: "Đề xuất ①",
+        colReview: "Duyệt",
+      },
+      // ① has no suggestion for the cluster yet.
+      noSuggestion: "(chưa có kết quả ①)",
+      disagreement: "⚠ ① không đề xuất đóng",
+      // The name of the group of the three buttons of a row (the buttons themselves are `S.admin.verdict`).
+      group: (ruleId: string, agent: string) => `Duyệt cụm ${ruleId} · ${agent}`,
+      reviewed: (verdict: string) => `Đã duyệt: ${verdict}`,
+      reopened: "đã mở lại về hàng đợi Tier 1",
+      // A refused review, said in the row it was for.
+      invalidVerdict: "Đánh giá không hợp lệ. Dòng giữ nguyên, chưa ghi gì.",
+      notAutoClosed: (cluster: string) =>
+        `Cụm ${cluster} không còn ở trạng thái tự đóng (đã được mở lại), nên không duyệt được nữa.`,
+      // A write that failed with no word of its own (a 5xx, the network): `status` 0 is no answer at all.
+      saveFailed: (status: number) =>
+        status === 0
+          ? "Không lưu được: mất kết nối máy chủ. Thử lại."
+          : `Không lưu được: máy chủ trả lỗi ${status}. Thử lại.`,
+      noRules: {
+        title: "Không có gì để duyệt",
+        body: "Chưa có rule tự đóng nào đang bật, nên không có cụm nào bị tự đóng.",
+        link: "Đến Rules tự đóng",
+      },
+      noClusters: {
+        title: (day: string) => `Không có cụm nào bị tự đóng ngày ${day}`,
+        body: "Chọn ngày khác hoặc xem hôm nay.",
+      },
+      legend: {
+        disagreement: "① không đồng ý với việc tự đóng: nên xem trước",
+        reviewed: "Đã duyệt (mờ đi)",
+        wrong: '"Sai" mở lại cụm về hàng đợi Tier 1 và đánh dấu rule có thể sai.',
+      },
+    },
 
     // The verdicts of a digest review (`_VERDICT_LABEL` of admin_digest.py).
     verdict: {

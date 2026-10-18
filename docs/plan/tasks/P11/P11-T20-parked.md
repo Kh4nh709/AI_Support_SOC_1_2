@@ -57,3 +57,4 @@ The independent reviews found these Minors and approved without them, so none of
 | 49 | P11-T11 r1 M3 | `OverviewPage.test.tsx:963-993`: the LLM-card failure tests assert the single h1 (mutation 6 survived) |
 | 50 | P11-T11 r1 F1 | backend: `llm_month` section (`spent_usd`, `cap_usd`, `pct`) on `GET /api/admin/overview`, failing alone; the cost card reads it instead of `llm/usage?range=month` |
 | 51 | P11-T11 r1 N2–N4 | `routes.test.tsx:154` mock to the top; shell 404 text says "tải lại trang" after a reload; toast placement consistent with `LlmPage` |
+| 52 | P11-T15 r1 nits | Digest: drop the bad-day notice from `history.state` after showing it; `DataTable` gains a `rowProps` hook so Digest (and `CasesPage`, `OverviewBlocks`) can use it |
