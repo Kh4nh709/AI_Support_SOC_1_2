@@ -1099,15 +1099,10 @@ def _tied_run_id(slot: int, rank: int) -> str:
     return f"00000000-0000-0000-0000-{slot:08x}{rank:04x}"
 
 
-@pytest.mark.db
-def test_proposer_runs_at_one_instant_are_broken_by_run_id_in_both_readers(db):
-    """P11-T20 row 32 (P11-T20 review m1). Two proposer runs with the same `created_at` have no
-    "latest": without a second sort key the database returns whichever it meets first, and the
-    two readers could name different runs (the digest and the alert page showing different ①
-    verdicts). The tie-break is `run_id DESC`, in `latest_suggestion` AND in `latest_suggestions`.
-
-    Six alerts, three tied runs each, inserted in each of the six orders of their ids, so that no
-    rule of the form "the first / the last row met" can pass. The highest id is `escalate`."""
+def _seed_tied_proposer_runs(db) -> dict[str, str]:
+    """Six queue alerts, each with three proposer runs at the same `created_at`, inserted in each of
+    the six orders of their ids, so that no rule of the form "the first / the last row met" can
+    pass. The highest id is `escalate`. Returns `{alert_id: that run's id}`."""
     actions = {1: "false_positive", 2: "needs_review", 3: "escalate"}
     expected: dict[str, str] = {}
     for slot, order in enumerate(itertools.permutations(actions), start=1):
@@ -1115,6 +1110,17 @@ def test_proposer_runs_at_one_instant_are_broken_by_run_id_in_both_readers(db):
         for rank in order:
             _insert_tied_run(db, alert_id, _tied_run_id(slot, rank), actions[rank])
         expected[alert_id] = _tied_run_id(slot, 3)
+    return expected
+
+
+@pytest.mark.db
+def test_proposer_runs_at_one_instant_are_broken_by_run_id_in_both_readers(db):
+    """P11-T20 row 32 (P11-T20 review m1). Two proposer runs with the same `created_at` have no
+    "latest": without a second sort key the database returns whichever it meets first, and the
+    two readers could name different runs (the digest and the alert page showing different ①
+    verdicts). The tie-break is `run_id DESC`, in `latest_suggestion` AND in `latest_suggestions`
+    (and in the queue's own join: the next test)."""
+    expected = _seed_tied_proposer_runs(db)
     for alert_id, run_id in expected.items():
         got = latest_suggestion(db, alert_id)
         assert got is not None and got.run_id == run_id, alert_id
@@ -1130,6 +1136,26 @@ def test_proposer_runs_at_one_instant_are_broken_by_run_id_in_both_readers(db):
     _insert_tied_run(db, failed_high, _tied_run_id(9, 2), "needs_review")
     assert latest_suggestion(db, failed_high) is None
     assert failed_high not in latest_suggestions(db, [failed_high, *expected])
+
+
+@pytest.mark.db
+def test_the_queue_row_shows_the_same_run_as_the_alert_page_when_runs_tie(db):
+    """P11-T20 row 32, the third reader (`_QUEUE_SQL`'s LATERAL join). The queue list picks "the
+    latest proposer run" too, and with a tie and no second sort key it named whichever run the
+    database met first, so a queue row and the alert page (`latest_suggestion`) could show different
+    runs. The same six tied alerts as the two readers' test: each queue row carries the run with
+    the highest `run_id`, which is the run `latest_suggestion` answers for it."""
+    expected = _seed_tied_proposer_runs(db)
+    failed_high = _queued(db)  # the highest id FAILED: the row shows that run, with no action
+    _insert_tied_run(db, failed_high, _tied_run_id(9, 3), None)
+    _insert_tied_run(db, failed_high, _tied_run_id(9, 1), "escalate")
+    for alert_id, run_id in expected.items():
+        row = _row(db, alert_id)
+        assert (row["run_id"], row["suggested_action"]) == (run_id, "escalate"), alert_id
+        assert row["run_id"] == latest_suggestion(db, alert_id).run_id
+    row = _row(db, failed_high)
+    assert (row["run_id"], row["suggested_action"]) == (_tied_run_id(9, 3), None)
+    assert latest_suggestion(db, failed_high) is None  # the alert page agrees: no suggestion
 
 
 # ---------------------------------------------------------------------------
