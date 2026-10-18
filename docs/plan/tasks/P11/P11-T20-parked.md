@@ -66,3 +66,4 @@ The independent reviews found these Minors and approved without them, so none of
 | 58 | P11-T20 part 2 dev. 6 | `admin_llm.py:164`, `admin_users.py:1`, `admin_audit.py:22` are 102 characters: re-wrap at 100 (with the frontend batch, if it touches them; otherwise leave) |
 | 59 | P11-T16 r2 new 1 | Labels: a test with a delayed second `labels/next` (150 ms) that pins the "wait until the screen changed" condition of the focus logic (removing it survives today) |
 | 60 | P11-T16 r2 new 2, note 4 | Labels source guard: allow-list the relative imports of the four label files so a new helper cannot slip in unscanned; ask for focus after the two stale refusals (409 already labelled, 404) |
+| 61 | P11-T17 r1 n4 + leftovers | the 403 text differs across pages (Audit has its own card, Users uses `PageError`): one text; delete the empty `it.each(PLACEHOLDERS)` in `AdminLayout.test.tsx` and the unused `S.admin.building` |
