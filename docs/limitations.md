@@ -638,6 +638,50 @@ the Measured paragraph of item (ix) in section B.
 - **Source.** DEC-111; DEC-105.
 - **Affects.** Any throughput or scalability claim for intake and dedup.
 
+### (xliii) · A request that passed the admin check can still finish a create, reset, unlock or display-name change after its admin is demoted
+
+- **Statement.** Every route of `web/routers/admin_users.py` checks that the caller is an admin when the
+  request starts (`require_role("admin")`). A `PATCH` that changes `role` or `is_active` checks the actor
+  again under the lock on the active admin rows, so an admin demoted or deactivated by a concurrent
+  request is refused with 403 `forbidden` and an `authz.denied` row (P11-T02). The other write routes,
+  create, password reset, unlock and a display-name-only `PATCH`, take no admin lock and keep the
+  read-then-act shape every admin route has. A request that passed the check just before another request
+  demoted or deactivated its admin can therefore still finish a create, a reset, an unlock or a
+  display-name change in the instant after that commit. A reset of an *active admin* target waits on a
+  concurrent role change's locks, so there the window is a lock wait. The demotion stamps
+  `sessions_invalid_before` in its own transaction, so every request that starts after the commit is
+  refused. The last-active-admin rule is not touched: none of these four changes a role or the active
+  flag.
+- **Measured.** Not measured for the four unguarded routes: the P11-T02 Reviewer found the shape by
+  reading the code (round 1, m4), and the Director parked it because closing it needs an actor lock and
+  a lock-order analysis. For role and active-flag changes the same race was measured and then closed
+  (18/10, scratch PostgreSQL 16.2): in 11 of 25 starts of the race, round 1's code let the stale actor
+  through; after the re-check under the lock, the stale-actor and ring tests pass (round 2).
+- **Source.** `docs/plan/tasks/P11/P11-T02.review.md` (round 1 Finding 1 and m4; round 2); DEC-200;
+  `docs/superpowers/specs/2026-10-18-admin-console-v1-1-design.md` §5.1.
+- **Affects.** The admin console's access-control claim. "An admin removed from the role makes no further
+  change" holds for role and active-flag changes; for create, reset, unlock and display name it holds from
+  the next request on, with at most one request in flight. Nothing in the evaluation.
+
+### (xliv) · A malformed JSON body gets 422 before the role check: no 403 and no `authz.denied` row
+
+- **Statement.** FastAPI 0.141.1 decodes a request's JSON body (`fastapi/routing.py:433-465`) before it
+  solves the route's dependencies, `require_role` among them (`:481`). A caller who may not use a route
+  and sends a malformed JSON body to it therefore gets 422, not 403, and no `authz.denied` row is
+  written; an anonymous caller gets 422, not 401. A well-formed body from the same caller gets the 403
+  with its row (or the 401), and a non-JSON content type (`text/plain`) gets the 403 with its row. Nothing
+  is read or written on the 422 and the answer does not depend on the path id, so it discloses nothing
+  about the data. It holds for every JSON-body route of the application, not only the admin ones.
+- **Measured.** P11-T07 Reviewer probes, 18/10, FastAPI 0.141.1 (status, `authz.denied` rows): a tier1
+  caller with malformed JSON → `422 0`; a tier1 caller with `text/plain` → `403 1`; an anonymous caller
+  with malformed JSON → `422`; an anonymous caller with good JSON → `401`. Round 2 re-ran the first and
+  it still held.
+- **Source.** `docs/plan/tasks/P11/P11-T07.review.md` (round 1 F5; round 2); FastAPI 0.141.1
+  `routing.py` as installed in the project's `.venv`.
+- **Affects.** The audit trail's completeness for refusals: a count of `authz.denied` rows is a count of
+  role refusals that reached the check, not of every refused attempt, so it understates a client that
+  sends broken JSON. No claim about access to data.
+
 ## F. What the thesis must not claim
 
 ### (xxxviii) · Only Wazuh, no detection; no "MTTD", no "ATT&CK coverage"
