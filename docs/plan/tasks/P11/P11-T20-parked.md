@@ -58,3 +58,6 @@ The independent reviews found these Minors and approved without them, so none of
 | 50 | P11-T11 r1 F1 | backend: `llm_month` section (`spent_usd`, `cap_usd`, `pct`) on `GET /api/admin/overview`, failing alone; the cost card reads it instead of `llm/usage?range=month` |
 | 51 | P11-T11 r1 N2–N4 | `routes.test.tsx:154` mock to the top; shell 404 text says "tải lại trang" after a reload; toast placement consistent with `LlmPage` |
 | 52 | P11-T15 r1 nits | Digest: drop the bad-day notice from `history.state` after showing it; `DataTable` gains a `rowProps` hook so Digest (and `CasesPage`, `OverviewBlocks`) can use it |
+| 53 | P11-T16 r1 observation (DEC-204) | backend `admin_audit.py`: redact `label` and `confidence` in every `label.created` payload for every viewer, with a test through the real route (two labellers, A's label never in B's answer) |
+| 54 | P11-T16 r1 obs. | `tier1/labels.py` `_g1_samples` sends each sample's `raw_log` uncut (not capped at 32 KB): cap it like the representative's, a later change |
+| 55 | P11-T16 r1 obs. (for P11-T18) | the e2e "three paths only" check on `/admin/labels` must allow the shell's own `GET /api/auth/me` and the live socket; the T16 test mounts the page alone, the right scope for Review Focus 5 |
