@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import threading
 import time
 import uuid
@@ -45,6 +46,7 @@ from app.infra.auth import Claims
 from app.web import deps, main
 from app.web.routers import admin_audit
 from fastapi.testclient import TestClient
+from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from tests.scratch_db import scratch_database
@@ -1298,6 +1300,64 @@ def test_a_number_of_a_few_thousand_digits_under_the_limit_is_returned_whole(cli
     _event_with_json_text(db, '{"n": ' + "9" * 4000 + "}", "int-4000")
     (event,) = _get(tc).json()["events"]
     assert event["payload"] == {"n": int("9" * 4000)}
+
+
+# ---------------------------------------------------------------------------
+# the page's cost: the payload is turned into text once, and only for the page's rows
+# ---------------------------------------------------------------------------
+
+
+def _plan_nodes(node: dict[str, Any], at_or_below_limit: bool = False):
+    """Every node of an EXPLAIN (FORMAT JSON) tree, depth first, with whether it is a `Limit` or
+    sits under one."""
+    at_or_below_limit = at_or_below_limit or node["Node Type"] == "Limit"
+    yield node, at_or_below_limit
+    for child in node.get("Plans", []):
+        yield from _plan_nodes(child, at_or_below_limit)
+
+
+_PAGE_FILTERS = [
+    pytest.param({}, None, id="no filter"),
+    pytest.param({"subject": "BIG"}, None, id="subject"),
+    pytest.param({"group": "alerts_cases"}, None, id="group"),
+    pytest.param({"actor": "ana"}, None, id="username"),
+    pytest.param({"actor": "system"}, None, id="role"),
+    pytest.param({"group": "users", "subject": "x", "actor": "ana"}, 10**9, id="all + cursor"),
+]
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("filters, cursor", _PAGE_FILTERS)
+def test_the_page_selects_its_rows_first_and_converts_each_payload_to_text_once(
+    client, filters: dict[str, Any], cursor: int | None
+) -> None:
+    """F2 of the review. The size guard needs the payload as text; done three times per row, and
+    for every row a Sort plan had to order (a `subject` or `group` filter), a few hundred 1 MB
+    payloads took the page past its 3 s timeout. Pinned on PostgreSQL's own plan (16; EXPLAIN's
+    spelling is the one fragile part):
+
+    - there is exactly one `Limit` (the page's own `ORDER BY audit_id DESC LIMIT n`);
+    - no node at or below it touches `::text` (the cast is not evaluated for a row the page drops);
+    - exactly one node outputs the bare `(<alias>.payload)::text`, above the Limit: the fenced LATERAL
+      computes it once per page row and the CASE and the size column read that column."""
+    _tc, db, _ = client
+    clauses, params = admin_audit._filters(
+        timedelta(days=7), filters.get("group"), filters.get("actor"), filters.get("subject")
+    )
+    statement, bound = admin_audit._page_statement(clauses, params, cursor, 100)
+    (plan,) = db.execute(sql.SQL("EXPLAIN (VERBOSE, FORMAT JSON) ") + statement, bound).fetchone()
+    nodes = list(_plan_nodes(plan[0]["Plan"]))
+    assert sum(node["Node Type"] == "Limit" for node, _ in nodes) == 1
+    for node, at_or_below_limit in nodes:
+        if at_or_below_limit:
+            assert not any("::text" in out for out in node.get("Output", [])), node["Node Type"]
+    bare = [
+        node["Node Type"]
+        for node, _ in nodes
+        if any(re.fullmatch(r"\(\w+\.payload\)::text", out) for out in node.get("Output", []))
+    ]
+    shape = [(node["Node Type"], node.get("Output")) for node, _ in nodes]
+    assert len(bare) == 1, f"the payload is cast in {bare or 'no node'}: {shape}"
 
 
 # ---------------------------------------------------------------------------

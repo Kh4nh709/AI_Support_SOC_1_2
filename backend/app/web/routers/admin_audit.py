@@ -231,16 +231,33 @@ def _payload(text: str | None, size: int | None) -> Any:
 
 _SET_TIMEOUT = sql.SQL("SET LOCAL statement_timeout = {}")
 
+# The page is selected FIRST (the inner `ORDER BY audit_id DESC LIMIT n`, which the primary key
+# serves, or a Sort over the filter's rows when a `subject` or `group` filter picks another index).
+# Only then is each of its (at most 100) rows' payload turned into text, ONCE, in the fenced
+# LATERAL: `OFFSET 0` keeps the planner from flattening `b` back into the select list, where the
+# CASE test, its ELSE branch and the size column would each repeat the conversion, and for every
+# row a Sort plan orders, not only the page's. Measured on the scratch server (payloads of 1.36 MB
+# of text, 15.6 KB stored): 600 of them under one subject took the old query 3.3 s (a 503), this
+# one 0.27 s. `size` is NULL for a SQL NULL payload; the outer ORDER BY restores the page's order
+# after the join (100 rows).
 _PAGE = sql.SQL("""
-    SELECT a.audit_id, a.created_at, a.event_type, a.actor_role, u.username, a.subject_id,
-           CASE WHEN octet_length(a.payload::text) > %(max_bytes)s THEN NULL
-                ELSE a.payload::text END,
-           octet_length(a.payload::text)
-    FROM audit_events a
-    LEFT JOIN users u ON u.user_id = a.actor_id
-    WHERE {where}
-    ORDER BY a.audit_id DESC
-    LIMIT %(limit)s
+    SELECT p.audit_id, p.created_at, p.event_type, p.actor_role, u.username, p.subject_id,
+           CASE WHEN t.size > %(max_bytes)s THEN NULL ELSE t.body END,
+           t.size
+    FROM (
+        SELECT a.audit_id, a.created_at, a.event_type, a.actor_role, a.actor_id, a.subject_id,
+               a.payload
+        FROM audit_events a
+        WHERE {where}
+        ORDER BY a.audit_id DESC
+        LIMIT %(limit)s
+    ) p
+    LEFT JOIN users u ON u.user_id = p.actor_id
+    CROSS JOIN LATERAL (
+        SELECT b.body, octet_length(b.body) AS size
+        FROM (SELECT p.payload::text AS body OFFSET 0) b
+    ) t
+    ORDER BY p.audit_id DESC
     """)
 
 _COUNT = sql.SQL("SELECT count(*) FROM audit_events a WHERE {where}")
@@ -275,20 +292,29 @@ def _where(clauses: list[sql.SQL]) -> sql.Composed:
     return sql.SQL(" AND ").join(clauses)
 
 
-def _fetch_page(
-    conn: Any, clauses: list[sql.SQL], params: dict[str, Any], cursor: int | None, limit: int
-) -> list[tuple[Any, ...]]:
-    """One page, in a savepoint under `QUERY_TIMEOUT`. A cancelled query is the 503; any other
-    database error is left to be the 500 it is."""
+def _page_statement(
+    clauses: list[sql.SQL], params: dict[str, Any], cursor: int | None, limit: int
+) -> tuple[sql.Composed, dict[str, Any]]:
+    """The page query and its parameters: the filter's fragments, plus the cursor's when given.
+    The inputs are not modified (the same `clauses` and `params` also feed the total)."""
     clauses = list(clauses)
     params = {**params, "max_bytes": PAYLOAD_MAX_BYTES, "limit": limit}
     if cursor is not None:
         clauses.append(sql.SQL("a.audit_id < %(cursor)s"))
         params["cursor"] = cursor
+    return _PAGE.format(where=_where(clauses)), params
+
+
+def _fetch_page(
+    conn: Any, clauses: list[sql.SQL], params: dict[str, Any], cursor: int | None, limit: int
+) -> list[tuple[Any, ...]]:
+    """One page, in a savepoint under `QUERY_TIMEOUT`. A cancelled query is the 503; any other
+    database error is left to be the 500 it is."""
+    statement, bound = _page_statement(clauses, params, cursor, limit)
     try:
         with conn.transaction():
             conn.execute(_SET_TIMEOUT.format(sql.Literal(QUERY_TIMEOUT)))
-            return conn.execute(_PAGE.format(where=_where(clauses)), params).fetchall()
+            return conn.execute(statement, bound).fetchall()
     except psycopg.errors.QueryCanceled as exc:
         # The log carries the fact, not the filter values (they are request text).
         logger.warning("audit page query cancelled by statement_timeout=%s", QUERY_TIMEOUT)
