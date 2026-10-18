@@ -1223,7 +1223,7 @@ def test_the_digest_rows_read_the_suggestion_exactly_as_latest_suggestion_does(c
     """The batched read behind `build` and `reopened_by_review` gives each row the verdict the
     one-alert reader gives it, in every state ① can leave an alert in: no run, a failed run, a
     good one, a failed run after a good one (no verdict: the older run does not stand in)."""
-    tc, db, admin = client
+    _tc, db, admin = client
     rule_id = _rule(db, admin.user_id)
     day_at = datetime.fromisoformat("2026-09-25T12:00:00+07:00")
     no_run = _alert(db, closed_at=day_at, autoclose_rule_id=rule_id, occurrence_count=1)
