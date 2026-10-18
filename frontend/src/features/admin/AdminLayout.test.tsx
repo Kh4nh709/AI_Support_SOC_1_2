@@ -105,8 +105,14 @@ const PAGES: [name: string, Page: () => ReactNode, title: string][] = [
   ["AuditPage", AuditPage, "Nhật ký audit"],
 ];
 
+// The pages that are built are no placeholders: each has its own test file, and needs a query client, a
+// session and an API this file does not give. A page task adds its page's name here when it replaces the
+// placeholder. The title test below still holds the seven titles.
+const BUILT = ["UsersPage"];
+const PLACEHOLDERS = PAGES.filter(([name]) => !BUILT.includes(name));
+
 describe("the placeholder pages", () => {
-  it.each(PAGES)("%s shows its title and says it is being built", (_name, Page, title) => {
+  it.each(PLACEHOLDERS)("%s shows its title and says it is being built", (_name, Page, title) => {
     render(<Page />);
     expect(screen.getByRole("heading", { level: 1, name: title })).toBeInTheDocument();
     expect(screen.getByText(/đang xây dựng/i)).toBeInTheDocument();
@@ -126,7 +132,7 @@ describe("the placeholder pages", () => {
 });
 
 describe("accessibility", () => {
-  it.each(PAGES)("has no axe violation around %s", async (_name, Page) => {
+  it.each(PLACEHOLDERS)("has no axe violation around %s", async (_name, Page) => {
     // The app shell gives the page its main landmark and the header its banner; both are here so the
     // landmark rules judge what the real page looks like.
     const { container } = render(
