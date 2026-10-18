@@ -29,6 +29,7 @@ connection holding `ACCESS EXCLUSIVE` on the table: the actual statement waits a
 from __future__ import annotations
 
 import contextlib
+import csv
 import json
 import re
 import threading
@@ -43,13 +44,14 @@ import pytest
 from app.audit.events import EVENT_TYPES
 from app.infra import config
 from app.infra.auth import Claims
+from app.tier1 import labels
 from app.web import deps, main
 from app.web.routers import admin_audit
 from fastapi.testclient import TestClient
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from tests.scratch_db import scratch_database
+from tests.scratch_db import insert_alert, scratch_database
 
 AUDIT = "/api/admin/audit"
 PLACEHOLDER = "[đã ẩn]"
@@ -406,6 +408,92 @@ def test_anything_else_under_a_secret_key_is_still_redacted_whole(value: Any) ->
     flag are not flags, and a number or text can carry a secret."""
     assert admin_audit.redact({"password": value}) == {"password": PLACEHOLDER}
     assert admin_audit.redact({"x": {"api_key": value}}) == {"x": {"api_key": PLACEHOLDER}}
+
+
+# DEC-204 (row 53): the verdict of a `label.created` event, hidden from every viewer.
+LABEL_PAYLOAD = {
+    "alert_id": "p11t20-alert",
+    "labeler_id": "00000000-0000-0000-0000-00000000a001",
+    "label": "false_positive",
+    "confidence": 3,
+    "gold_set": "G1",
+}
+
+
+def test_the_label_keys_are_the_two_dec_204_names_and_the_event_type_is_label_created() -> None:
+    assert set(admin_audit.LABEL_KEYS) == {"label", "confidence"}
+    assert admin_audit.BLIND_EVENT_TYPES == frozenset({"label.created"})
+
+
+def test_a_label_created_payload_loses_label_and_confidence_and_keeps_the_rest() -> None:
+    out = admin_audit._payload(json.dumps(LABEL_PAYLOAD), 100, "label.created")
+    assert out == {**LABEL_PAYLOAD, "label": PLACEHOLDER, "confidence": PLACEHOLDER}
+    undo = {"undo": True, "alert_id": "a1", "labeler_id": "u1"}
+    assert admin_audit._payload(json.dumps(undo), 100, "label.created") == undo
+    digest = {**LABEL_PAYLOAD, "confidence": None, "gold_set": None, "source": "digest"}
+    assert admin_audit._payload(json.dumps(digest), 100, "label.created") == {
+        **digest,
+        "label": PLACEHOLDER,
+        "confidence": PLACEHOLDER,  # a null confidence too: the rule is on the key, not the value
+    }
+
+
+def test_label_and_confidence_are_hidden_at_any_depth_of_a_label_created_payload() -> None:
+    nested = {
+        "alert_id": "a1",
+        "history": [
+            {"label": "benign", "confidence": 2, "labeler_id": "u1"},
+            [{"detail": {"Label": "escalate", "CONFIDENCE": 1, "con_fidence": 3, "keep": "x"}}],
+        ],
+        "label": {"deeper": ["false_positive"]},
+    }
+    out = admin_audit._payload(json.dumps(nested), 100, "label.created")
+    assert out == {
+        "alert_id": "a1",
+        "history": [
+            {"label": PLACEHOLDER, "confidence": PLACEHOLDER, "labeler_id": "u1"},
+            [
+                {
+                    "detail": {
+                        "Label": PLACEHOLDER,
+                        "CONFIDENCE": PLACEHOLDER,
+                        "con_fidence": PLACEHOLDER,
+                        "keep": "x",
+                    }
+                }
+            ],
+        ],
+        "label": PLACEHOLDER,
+    }
+    dumped = json.dumps(out, ensure_ascii=False)
+    for verdict in ("benign", "escalate", "false_positive"):
+        assert verdict not in dumped
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["labeler_id", "labeler", "labels", "label_count", "confidence_level", "gold_set", "undo"],
+)
+def test_other_keys_of_a_label_created_payload_stay_visible(key: str) -> None:
+    out = admin_audit._payload(json.dumps({key: "visible"}), 100, "label.created")
+    assert out == {key: "visible"}
+
+
+@pytest.mark.parametrize(
+    "event_type", ["triage.suggested", "tier1.decided", "admin.settings_changed", "alert.received"]
+)
+def test_label_and_confidence_of_every_other_event_type_stay_visible(event_type: str) -> None:
+    """`triage.suggested` carries the model's own `confidence`: not a labeller's, and not hidden."""
+    payload = {"label": "x", "confidence": "high", "suggested_action": "escalate"}
+    assert admin_audit._payload(json.dumps(payload), 100, event_type) == payload
+
+
+def test_the_label_rule_does_not_change_what_a_plain_redact_does() -> None:
+    assert admin_audit.redact(LABEL_PAYLOAD) == LABEL_PAYLOAD  # no `hide` given: as before
+    both = admin_audit.redact(
+        {"label": "a", "password": "p", "n": 1}, hide=frozenset(admin_audit.LABEL_KEYS)
+    )
+    assert both == {"label": PLACEHOLDER, "password": PLACEHOLDER, "n": 1}
 
 
 def test_redaction_returns_everything_else_unchanged_and_unstringified() -> None:
@@ -1230,6 +1318,166 @@ def test_near_miss_secret_names_are_redacted_through_the_route_and_counters_are_
     }
     for leaked in (f"leak-{n}" for n in range(1, 12)):
         assert leaked not in resp.text, leaked
+
+
+def _write_candidates(path: Any, alert_ids: list[str]) -> Any:
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(
+            fh,
+            fieldnames=[
+                "cluster_id",
+                "gold_set",
+                "alert_id",
+                "category",
+                "severity",
+                "occurrence_count",
+                "first_seen",
+                "last_seen",
+            ],
+        )
+        writer.writeheader()
+        for alert_id in alert_ids:
+            when = datetime(2026, 9, 1, tzinfo=UTC).isoformat()
+            writer.writerow(
+                {
+                    "cluster_id": alert_id,
+                    "gold_set": "G1",
+                    "alert_id": alert_id,
+                    "category": "other",
+                    "severity": "medium",
+                    "occurrence_count": 1,
+                    "first_seen": when,
+                    "last_seen": when,
+                }
+            )
+    return path
+
+
+def _strings(value: Any) -> list[str]:
+    """Every string value (and key) in a JSON tree."""
+    if isinstance(value, dict):
+        return [s for k, v in value.items() for s in (k, *_strings(v))]
+    if isinstance(value, list):
+        return [s for item in value for s in _strings(item)]
+    return [value] if isinstance(value, str) else []
+
+
+@pytest.mark.db
+def test_the_audit_never_shows_one_labellers_label_or_confidence_to_the_other(
+    client, tmp_path, monkeypatch
+) -> None:
+    """Row 53 (DEC-204). Two labellers, both admins, label the same cluster differently through the
+    real `labels.submit_label` (which writes the real `label.created` payload) and one of them
+    undoes a label; the audit answer each of them gets lists all four events with who, when and
+    which alert, and carries neither verdict nor either confidence. The fixture's paths are
+    `tmp_path`: nothing under `eval/` is read."""
+    _, db, _ = client
+    uid = uuid.uuid4().hex[:8]
+    a, b = _user(db, f"p11t20-a-{uid}", "admin"), _user(db, f"p11t20-b-{uid}", "admin")
+    x, y = f"p11t20-x-{uid}", f"p11t20-y-{uid}"
+    for alert_id in (x, y):
+        insert_alert(db, alert_id)
+    candidates = _write_candidates(tmp_path / "gold_candidates.csv", [x, y])
+    monkeypatch.setattr(labels, "FREEZE_MARKER", tmp_path / "absent-marker")
+
+    def submit(who: str, cluster: str, label: str, confidence: int) -> None:
+        labels.submit_label(
+            db,
+            labeler_id=who,
+            cluster_id=cluster,
+            label=label,
+            confidence=confidence,
+            note=None,
+            candidates_path=candidates,
+        )
+
+    submit(a, x, "false_positive", 3)  # A's verdict on X ...
+    submit(b, x, "escalate", 1)  # ... and B's, different
+    submit(a, y, "benign", 2)
+    db.execute(  # one transaction has one now(): make Y the newest of A's labels
+        "UPDATE triage_labels SET created_at = created_at - interval '1 minute' "
+        "WHERE alert_id = %s AND labeler_id = %s",
+        (x, a),
+    )
+    assert labels.undo_last(db, a, freeze_marker=tmp_path / "absent-marker") == y  # a 4th event
+    stored = db.execute(
+        "SELECT payload FROM audit_events WHERE event_type = 'label.created' "
+        "AND subject_id IN (%s, %s)",
+        (x, y),
+    ).fetchall()
+    assert len(stored) == 4
+    assert {p["label"] for (p,) in stored if "label" in p} == {
+        "false_positive",
+        "escalate",
+        "benign",
+    }
+
+    for viewer, other in ((a, b), (b, a)):  # A's answer and B's: neither shows either verdict
+        claims = Claims(user_id=viewer, username=viewer, role="admin", iat=0.0, exp=0.0)
+        _override(db, claims)
+        resp = TestClient(main.app).get(AUDIT, params={"group": "configuration", "limit": 100})
+        assert resp.status_code == 200, resp.text
+        events = [
+            e
+            for e in resp.json()["events"]
+            if e["event_type"] == "label.created" and e["subject_id"] in (x, y)
+        ]
+        assert len(events) == 4  # still listed: that someone labelled is accountability
+        votes = [e for e in events if "undo" not in e["payload"]]
+        undo = [e for e in events if "undo" in e["payload"]]
+        assert sorted(e["payload"]["labeler_id"] for e in votes) == sorted([a, b, a])
+        for e in votes:  # who, which alert and which gold set are all still there
+            assert e["payload"]["label"] == PLACEHOLDER
+            assert e["payload"]["confidence"] == PLACEHOLDER
+            assert e["payload"]["gold_set"] == "G1"
+            assert e["payload"]["alert_id"] == e["subject_id"] and e["created_at"]
+        assert [e["payload"] for e in undo] == [{"undo": True, "alert_id": y, "labeler_id": a}]
+        seen = {s for e in events for s in _strings(e["payload"])}
+        assert seen.isdisjoint({"false_positive", "benign", "escalate"}), (viewer, other, seen)
+        for e in votes:  # `confidence` was an int: no number of the labellers' survives either
+            assert e["payload"]["confidence"] not in (1, 2, 3)
+
+
+@pytest.mark.db
+def test_a_label_created_event_is_redacted_at_any_depth_through_the_route(client) -> None:
+    """The writer's payload is flat today; the rule is not: a nested verdict goes too."""
+    tc, db, _ = client
+    _event(
+        db,
+        "label.created",
+        "p11t20-deep",
+        role="admin",
+        actor_id=_user(db, f"p11t20-deep-{uuid.uuid4().hex[:6]}", "admin"),
+        payload={
+            "alert_id": "p11t20-deep",
+            "gold_set": "G1",
+            "history": [{"label": "benign", "confidence": 2, "labeler_id": "u1"}],
+            "wrapper": {"inner": [[{"Label": "escalate", "confidence": None}]]},
+        },
+    )
+    resp = tc.get(AUDIT, params={"subject": "p11t20-deep"})
+    (event,) = resp.json()["events"]
+    assert event["payload"] == {
+        "alert_id": "p11t20-deep",
+        "gold_set": "G1",
+        "history": [{"label": PLACEHOLDER, "confidence": PLACEHOLDER, "labeler_id": "u1"}],
+        "wrapper": {"inner": [[{"Label": PLACEHOLDER, "confidence": PLACEHOLDER}]]},
+    }
+    assert "benign" not in resp.text and "escalate" not in resp.text
+
+
+@pytest.mark.db
+def test_the_model_confidence_of_triage_suggested_is_not_a_label_and_stays_visible(client) -> None:
+    tc, db, _ = client
+    _event(
+        db,
+        "triage.suggested",
+        "p11t20-model",
+        role="llm",
+        payload={"suggested_action": "benign", "confidence": "high", "forced": False},
+    )
+    (event,) = tc.get(AUDIT, params={"subject": "p11t20-model"}).json()["events"]
+    assert event["payload"]["confidence"] == "high"
 
 
 @pytest.mark.db

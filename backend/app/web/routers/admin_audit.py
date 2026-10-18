@@ -53,6 +53,15 @@ nothing else is changed (no stringifying, no cutting). Three rules (spec §5.8, 
 - **Flags are never redacted**: a `bool` or `null` value stays as it is even under a secret key
   (`has_password`, `is_secret`, `"password": null`): a flag carries no secret, and hiding it
   hides what the event says. A number, a text or a container under a secret key still goes whole.
+- **A labeller's verdict is hidden** (DEC-204, spec §5.8): in the payload of every `label.created`
+  event (`BLIND_EVENT_TYPES`) the keys `label` and `confidence` (`LABEL_KEYS`, matched like the
+  secret keys: lower case, `_` and `-` dropped, the whole name) are replaced by `"[đã ẩn]"` at any
+  depth, whatever the value (a `null` `confidence`, as the digest's event has, goes too: the rule
+  is on the key), for EVERY viewer. Labelling is blind between the two labellers (DEC-019, DEC-101)
+  and both are admins, so the page's role guard cannot separate them. The event stays listed with
+  its time, `labeler_id`, `alert_id`, `gold_set` and `undo`; the Owner reads the verdicts from
+  `triage_labels` and the export tools. The model's `confidence` in `triage.suggested` is not a
+  labeller's, and no other event type is touched.
 
 Payloads should never carry a credential (DEC-159 item 6); this is the second layer. One
 addition to the spec, for the same reason as the
@@ -125,6 +134,10 @@ REDACT_SUFFIXES = (
 #: whatever its key. `[a-z]` is read case-insensitively: a scheme is not case-sensitive, so
 #: `POSTGRESQL://u:p@h` is as much a credential as the lower-case one.
 URL_WITH_PASSWORD = re.compile(r"^[a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s]+@", re.IGNORECASE)
+#: DEC-204: the keys of a labeller's verdict (`tier1/labels.py` writes both), in normalised form,
+#: and the event types whose payload they are hidden in, for every viewer.
+LABEL_KEYS = ("label", "confidence")
+BLIND_EVENT_TYPES = frozenset({"label.created"})
 
 #: `?range=` -> the window. Anything else is a 422 from the `Literal` below.
 _WINDOWS: dict[str, timedelta] = {
@@ -229,38 +242,47 @@ def _is_flag(value: Any) -> bool:
     return value is None or isinstance(value, bool)
 
 
-def redact(value: Any, _level: int = 0) -> Any:
-    """A copy of a JSON value with every secret replaced by `REDACTED`, by the three rules of the
+def _hidden(key: Any, item: Any, hide: frozenset[str]) -> bool:
+    """Whether the value `item` under `key` is replaced: the key is one of `hide` (normalised
+    names, DEC-204: whatever the value is), or a secret key and the value is not a flag."""
+    if isinstance(key, str) and normalise_key(key) in hide:
+        return True
+    return is_secret_key(key) and not _is_flag(item)
+
+
+def redact(value: Any, _level: int = 0, *, hide: frozenset[str] = frozenset()) -> Any:
+    """A copy of a JSON value with every secret replaced by `REDACTED`, by the rules of the
     module docstring.
 
     A key matches when `is_secret_key` says so, at any depth, through lists and nested dicts; the
     whole value under such a key goes, whatever it is, unless it is a `bool` or `None` (a flag is
-    never redacted). A string that `is_secret_value` names goes under any key. Everything else is
-    returned as it is: the same numbers, strings and `None`, in the same structure. The input is
-    never modified. `_level` is the number of containers already entered: a value nested in more
-    than `MAX_PAYLOAD_DEPTH` of them raises `PayloadTooDeep` rather than recursing on."""
+    never redacted). A string that `is_secret_value` names goes under any key. `hide` is a set of
+    NORMALISED key names (`LABEL_KEYS` for a `label.created` event, DEC-204) whose value goes at
+    any depth whatever it is, flags included; it is empty unless the caller passes it. Everything
+    else is returned as it is: the same numbers, strings and `None`, in the same structure. The
+    input is never modified. `_level` is the number of containers already entered: a value
+    nested in more than `MAX_PAYLOAD_DEPTH` of them raises `PayloadTooDeep` rather than
+    recursing on."""
     if isinstance(value, (dict, list)):
         if _level >= MAX_PAYLOAD_DEPTH:
             raise PayloadTooDeep(f"nested deeper than {MAX_PAYLOAD_DEPTH} levels")
         if isinstance(value, dict):
             return {
-                key: (
-                    REDACTED
-                    if is_secret_key(key) and not _is_flag(item)
-                    else redact(item, _level + 1)
-                )
+                key: REDACTED if _hidden(key, item, hide) else redact(item, _level + 1, hide=hide)
                 for key, item in value.items()
             }
-        return [redact(item, _level + 1) for item in value]
+        return [redact(item, _level + 1, hide=hide) for item in value]
     return REDACTED if is_secret_value(value) else value
 
 
-def _payload(text: str | None, size: int | None) -> Any:
+def _payload(text: str | None, size: int | None, event_type: str) -> Any:
     """The `payload` of one row from its two SQL columns: `text` is the jsonb as text, or NULL
-    when it was over the size limit; `size` is its byte length, or NULL for a SQL NULL payload.
-    A payload that cannot be returned whole (too big, too deep, too deep for the JSON parser
-    itself, or holding a number that parser refuses) is `{"truncated": true, "size": <bytes>}`;
-    one of those never leaks a secret, it is not sent at all.
+    when it was over the size limit; `size` is its byte length, or NULL for a SQL NULL payload;
+    `event_type` is the row's, and decides whether a labeller's verdict is hidden in it
+    (`BLIND_EVENT_TYPES`, DEC-204). A payload that cannot be returned whole (too big, too deep,
+    too deep for the JSON parser itself, or holding a number that parser refuses) is
+    `{"truncated": true, "size": <bytes>}`; one of those never leaks a secret or a verdict, it
+    is not sent at all.
 
     `ValueError` is the parser's own refusals (`JSONDecodeError`, and the integer-string limit
     of 4,300 digits, which jsonb does not have) and `PayloadTooDeep`; `RecursionError` is the
@@ -269,8 +291,9 @@ def _payload(text: str | None, size: int | None) -> Any:
         return None
     if text is None:
         return {"truncated": True, "size": size}
+    hide = frozenset(LABEL_KEYS) if event_type in BLIND_EVENT_TYPES else frozenset()
     try:
-        return redact(json.loads(text))
+        return redact(json.loads(text), hide=hide)
     except (ValueError, RecursionError):
         return {"truncated": True, "size": size}
 
@@ -420,7 +443,7 @@ def api_audit(
             "actor_role": actor_role,
             "actor_username": username,
             "subject_id": subject_id,
-            "payload": _payload(text, size),
+            "payload": _payload(text, size, event_type),
         }
         for audit_id, created_at, event_type, actor_role, username, subject_id, text, size in rows
     ]
