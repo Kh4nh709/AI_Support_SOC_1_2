@@ -225,8 +225,13 @@ const BUILDERS: Readonly<Record<string, Builder>> = {
     const clauses: string[] = [];
     if (action === "password_reset") clauses.push(A.userPassword);
     if (action === "unlock") clauses.push(A.userUnlock);
-    // `before` and `after` hold the fields that changed, and only those.
-    const role = str(after, "role");
+    // `before` and `after` hold the fields that changed, and only those; a field that is the same in both
+    // (a payload that lists more than it changed) is not a change.
+    const changed = (key: string) => {
+      const now = own(after, key);
+      return now !== undefined && own(before, key) !== now;
+    };
+    const role = changed("role") ? str(after, "role") : null;
     if (role !== null) {
       const was = str(before, "role");
       clauses.push(
@@ -235,10 +240,10 @@ const BUILDERS: Readonly<Record<string, Builder>> = {
           : A.userRole(free(labelOf(S.role, was)), free(labelOf(S.role, role))),
       );
     }
-    const active = own(after, "is_active");
+    const active = changed("is_active") ? own(after, "is_active") : undefined;
     if (active === true) clauses.push(A.userActivated);
     if (active === false) clauses.push(A.userDeactivated);
-    if (own(after, "display_name") !== undefined) clauses.push(A.userRenamed);
+    if (changed("display_name")) clauses.push(A.userRenamed);
     // What the server does to the sessions: a role change, a deactivation and a reset end them.
     if (action === "password_reset" || role !== null || active === false) {
       clauses.push(A.userSessionsEnded);

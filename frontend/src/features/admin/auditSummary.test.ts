@@ -163,6 +163,21 @@ describe("summaryOf, one event type at a time", () => {
     ],
     ["admin.user_updated", { username: "an.t2", action: "unlock" }, "an.t2: mở khoá tài khoản"],
     ["admin.user_updated", { username: "an.t2" }, "an.t2: cập nhật tài khoản"],
+    // A field that is the same before and after is not a change (the canvas's own sample lists is_active twice).
+    [
+      "admin.user_updated",
+      {
+        username: "an.t2",
+        before: { role: "tier1", is_active: true, display_name: "A" },
+        after: { role: "tier2", is_active: true, display_name: "A" },
+      },
+      "an.t2: vai trò Tier 1 → Tier 2; phiên cũ bị đăng xuất",
+    ],
+    [
+      "admin.user_updated",
+      { username: "an.t2", before: { role: "tier2" }, after: { role: "tier2" } },
+      "an.t2: cập nhật tài khoản",
+    ],
     ["admin.user_updated", null, "cập nhật tài khoản"],
     [
       "admin.job_retried",
