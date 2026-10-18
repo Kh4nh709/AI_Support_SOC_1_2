@@ -26,7 +26,7 @@
 // `isPending` lets both through. The shared `useSubmitLatch` lets one write through. The save and the undo are
 // ONE mutation (`Write`, below), so one latch covers both: a save and an undo of the same tick send one POST.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode, type Ref } from "react";
 import {
   adminErrorOf,
   getLabelsNext,
@@ -188,14 +188,27 @@ function FrozenCard({ done, total }: { done: number; total: number }) {
 }
 
 /** The labeller has labelled every cluster. The undo is theirs until the set is frozen. */
-function FinishedCard({ total, undo }: { total: number; undo: ReactNode }) {
+function FinishedCard({
+  total,
+  undo,
+  ref,
+}: {
+  total: number;
+  undo: ReactNode;
+  ref?: Ref<HTMLHeadingElement>;
+}) {
   const id = useId();
   return (
     <section aria-labelledby={id} className={`${CARD} border-border`}>
       <Icon stroke="#9ff0c5">
         <path d="M4 12l5 5L20 6" />
       </Icon>
-      <h2 id={id} className="text-[17px] font-semibold">
+      <h2
+        id={id}
+        ref={ref}
+        tabIndex={-1}
+        className="text-[17px] font-semibold focus-visible:outline-2 focus-visible:outline-text"
+      >
         {L.finished.title(total)}
       </h2>
       <p className="text-[13.5px] leading-relaxed text-[#c9d3df]">{L.finished.body}</p>
@@ -276,13 +289,26 @@ function loadErrorHint(error: unknown): string {
   return failure.status === 0 ? L.loadErrorOffline : L.loadErrorServer(failure.status);
 }
 
+/**
+ * Which screen a read shows, as a key. A write asks for the focus, and gets it when the screen is no longer the
+ * one the write was made on (the next cluster, the finished card): not before, on the stale one.
+ */
+function screenOf(data: LabelsNext | undefined): string | null {
+  if (data === undefined) return null;
+  if (data.frozen) return "frozen";
+  if (!data.candidates_present || data.total === 0) return "none";
+  return data.cluster_id === null ? "finished" : `cluster:${data.cluster_id}`;
+}
+
 export function LabelsPage() {
   const { session } = useAuth();
   const client = useQueryClient();
   const labelerId = session === null ? null : labelerIdOf(session.token);
   const [notice, setNotice] = useState<Notice | null>(null);
   const wantsFocus = useRef(false);
+  const screenAtWrite = useRef<string | null>(null);
   const headRef = useRef<HTMLElement>(null);
+  const finishedRef = useRef<HTMLHeadingElement>(null);
 
   const query = useQuery({
     queryKey: adminKeys.labels,
@@ -320,17 +346,22 @@ export function LabelsPage() {
     },
   });
   const run = useSubmitLatch(write);
+  const screenKey = screenOf(query.data);
 
   /** One write at a time, and one click of it: `run` says whether the call went, and the old notice goes with it. */
   function send(w: Write) {
-    if (run(w)) setNotice(null);
+    if (run(w)) {
+      setNotice(null);
+      screenAtWrite.current = screenKey;
+    }
   }
 
-  // A write brought the next cluster: the button that had the focus is gone, so the focus goes to the cluster.
+  // A write brought another screen: the button that had the focus is gone, so the focus goes to the cluster, or
+  // to the finished card after the last label. It does not go to the stale screen the write was made on.
   useEffect(() => {
-    if (wantsFocus.current && headRef.current !== null) {
-      headRef.current.focus();
+    if (wantsFocus.current && screenKey !== screenAtWrite.current) {
       wantsFocus.current = false;
+      (headRef.current ?? finishedRef.current)?.focus();
     }
   });
 
@@ -399,7 +430,7 @@ export function LabelsPage() {
         </Header>
         {toast}
         {refusal !== null && <ErrorNote>{refusal}</ErrorNote>}
-        <FinishedCard total={data.total} undo={data.done > 0 ? cardUndo : null} />
+        <FinishedCard ref={finishedRef} total={data.total} undo={data.done > 0 ? cardUndo : null} />
       </div>
     );
   }

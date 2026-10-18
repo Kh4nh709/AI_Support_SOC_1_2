@@ -656,6 +656,40 @@ describe("the form", () => {
     );
   });
 
+  it("moves the focus to the finished card after the last label, not to the page", async () => {
+    serveNext(nextAnswer({ done: 59 }), finished());
+    servePost(posted({ done: 60, next: null }));
+    renderPage();
+    await ready();
+    await save("benign");
+    const heading = await screen.findByRole("heading", { level: 2, name: L.finished.title(60) });
+    await waitFor(() => expect(heading).toHaveFocus());
+    expect(heading).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("moves the focus back to the cluster after an undo from the finished card", async () => {
+    serveNext(finished(), nextAnswer({ cluster_id: A, done: 59, total: 60 }));
+    serveUndo(undone({ undone_cluster_id: A, done: 59, total: 60 }));
+    renderPage();
+    await screen.findByText(L.finished.body);
+    await userEvent.click(screen.getByRole("button", { name: L.form.undo }));
+    await ready();
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: L.cluster.label })).toHaveFocus(),
+    );
+  });
+
+  it("does not move the focus when the page is opened, or when a save is refused", async () => {
+    serveNext(nextAnswer());
+    servePost({ status: 500, body: { detail: "boom" } });
+    renderPage();
+    await ready();
+    expect(screen.getByRole("region", { name: L.cluster.label })).not.toHaveFocus();
+    await save("benign");
+    await within(form()).findByRole("alert");
+    expect(screen.getByRole("region", { name: L.cluster.label })).not.toHaveFocus();
+  });
+
   it("closes the confirmation note with its button", async () => {
     serveNext(nextAnswer(), afterA());
     servePost();
