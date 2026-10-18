@@ -1338,8 +1338,11 @@ def test_the_page_selects_its_rows_first_and_converts_each_payload_to_text_once(
 
     - there is exactly one `Limit` (the page's own `ORDER BY audit_id DESC LIMIT n`);
     - no node at or below it touches `::text` (the cast is not evaluated for a row the page drops);
-    - exactly one node outputs the bare `(<alias>.payload)::text`, above the Limit: the fenced LATERAL
-      computes it once per page row and the CASE and the size column read that column."""
+    - the cast is SPELLED inline exactly once in the whole plan (`(<alias>.payload)::text`): in the
+      fenced LATERAL, which runs once per page row. Everything that reads it (the CASE test, its
+      ELSE branch, the size column) shows it as a reference, which EXPLAIN parenthesises a second
+      time (`((<alias>.payload)::text)`). A second conversion, for the size say, is a second
+      inline spelling."""
     _tc, db, _ = client
     clauses, params = admin_audit._filters(
         timedelta(days=7), filters.get("group"), filters.get("actor"), filters.get("subject")
@@ -1351,13 +1354,14 @@ def test_the_page_selects_its_rows_first_and_converts_each_payload_to_text_once(
     for node, at_or_below_limit in nodes:
         if at_or_below_limit:
             assert not any("::text" in out for out in node.get("Output", [])), node["Node Type"]
-    bare = [
-        node["Node Type"]
+    inline = [
+        (node["Node Type"], out)
         for node, _ in nodes
-        if any(re.fullmatch(r"\(\w+\.payload\)::text", out) for out in node.get("Output", []))
+        for out in node.get("Output", [])
+        for _ in re.findall(r"(?<!\()\(\w+\.payload\)::text", out)
     ]
     shape = [(node["Node Type"], node.get("Output")) for node, _ in nodes]
-    assert len(bare) == 1, f"the payload is cast in {bare or 'no node'}: {shape}"
+    assert len(inline) == 1, f"the payload is cast inline {len(inline)} times: {shape}"
 
 
 # ---------------------------------------------------------------------------
