@@ -124,7 +124,8 @@ def test_every_alert_and_tier1_name_is_in_alerts_cases() -> None:
 
 
 def test_the_redaction_suffixes_and_the_placeholder_are_the_spec_ones() -> None:
-    """Spec §5.8 as amended at `b9fe528`: the six normalised names a key must equal or end with."""
+    """Spec §5.8 as amended at `b9fe528`, plus `secretkey`, `privatekey` and `passphrase` (the
+    Director's ruling on the fix-round note): the normalised names a key must equal or end with."""
     assert set(admin_audit.REDACT_SUFFIXES) == {
         "password",
         "passwordhash",
@@ -132,8 +133,11 @@ def test_the_redaction_suffixes_and_the_placeholder_are_the_spec_ones() -> None:
         "token",
         "dsn",
         "apikey",
+        "secretkey",
+        "privatekey",
+        "passphrase",
     }
-    assert len(admin_audit.REDACT_SUFFIXES) == 6
+    assert len(admin_audit.REDACT_SUFFIXES) == 9
     assert admin_audit.REDACTED == PLACEHOLDER
     assert admin_audit.PAYLOAD_MAX_BYTES == 64 * 1024
     assert admin_audit.MAX_PAYLOAD_DEPTH == 32
@@ -197,6 +201,17 @@ CAUGHT_KEYS = [
     "APIKEY",
     "apikey",
     "database.dsn",
+    "secret_key",
+    "secretKey",
+    "SECRET_KEY",
+    "Secret-Key",
+    "private_key",
+    "privateKey",
+    "PRIVATE-KEY",
+    "ssh_private_key",
+    "passphrase",
+    "Passphrase",
+    "ssh_passphrase",
 ]
 # Keys it must leave alone: a plain substring rule would hide these (`key` would hide a setting's
 # name in `admin.settings_changed`'s `changes[].key`; `token` would hide a counter).
@@ -216,6 +231,15 @@ VISIBLE_KEYS = [
     "_",
     "-",
     "",
+    # a digest is not a credential, and a public key or an id of a key is not a secret
+    "token_hash",
+    "tokenHash",
+    "public_key",
+    "private_key_id",
+    "secret_id",
+    "secret_keys",
+    "passphrases",
+    "passphrase_hint",
 ]
 
 
@@ -1048,9 +1072,13 @@ def test_near_miss_secret_names_are_redacted_through_the_route_and_counters_are_
                     "db_password": "leak-5",
                     "refresh_token": "leak-6",
                     "nested": {"Password": "leak-7", "API_KEY": "leak-8"},
+                    "secret_key": "leak-9",
+                    "privateKey": "leak-10",
+                    "passphrase": "leak-11",
                 }
             ],
             "usage": {"token_count": 12, "tokens_in": 5, "passwords": 3, "key": "visible"},
+            "digest": {"token_hash": "abc123", "public_key": "ssh-ed25519 AAAA"},
         },
     )
     resp = _get(tc)
@@ -1066,11 +1094,15 @@ def test_near_miss_secret_names_are_redacted_through_the_route_and_counters_are_
                 "db_password": PLACEHOLDER,
                 "refresh_token": PLACEHOLDER,
                 "nested": {"Password": PLACEHOLDER, "API_KEY": PLACEHOLDER},
+                "secret_key": PLACEHOLDER,
+                "privateKey": PLACEHOLDER,
+                "passphrase": PLACEHOLDER,
             }
         ],
         "usage": {"token_count": 12, "tokens_in": 5, "passwords": 3, "key": "visible"},
+        "digest": {"token_hash": "abc123", "public_key": "ssh-ed25519 AAAA"},
     }
-    for leaked in (f"leak-{n}" for n in range(1, 9)):
+    for leaked in (f"leak-{n}" for n in range(1, 12)):
         assert leaked not in resp.text, leaked
 
 

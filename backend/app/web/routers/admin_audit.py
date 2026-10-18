@@ -43,8 +43,8 @@ its value replaced by `"[đã ẩn]"`, at any depth, through lists and dicts, an
 changed (no stringifying, no cutting). The key rule (spec §5.8 as amended at `b9fe528`): lower-case
 the key, drop `_` and `-` (camelCase needs no split of its own: lower-casing `apiKey` is
 `apikey`), and redact when the result equals or ends with one of `REDACT_SUFFIXES`. That catches
-`access_token`, `client_secret`, `apiKey`, `api-key`, `db_password` and leaves `key`,
-`token_count`, `tokens_in`, `passwords` visible. Payloads should never carry a credential
+`access_token`, `client_secret`, `apiKey`, `api-key`, `db_password`, `secret_key`, `privateKey`,
+`passphrase` and leaves `key`, `token_count`, `tokens_in`, `passwords`, `token_hash` visible. Payloads should never carry a credential
 (DEC-159 item 6); this is the second layer. One addition to the spec, for the same reason as the
 size cut: a payload nested in more than `MAX_PAYLOAD_DEPTH` (32) dicts and lists takes the
 truncated shape too (and so does one the JSON parser itself cannot read, a `RecursionError`
@@ -93,8 +93,20 @@ MAX_PAYLOAD_DEPTH = 32
 #: What a redacted value is replaced by.
 REDACTED = "[đã ẩn]"
 #: A dict key is redacted when its normalised name (`normalise_key`) equals or ends with one of
-#: these. They are written in normalised form: no `_` or `-`, lower case.
-REDACT_SUFFIXES = ("password", "passwordhash", "secret", "token", "dsn", "apikey")
+#: these. They are written in normalised form: no `_` or `-`, lower case. The first six are spec
+#: §5.8; `secretkey`, `privatekey` and `passphrase` were added by the Director's ruling on the fix
+#: round (a `token_hash` stays visible: it is a digest, not a credential).
+REDACT_SUFFIXES = (
+    "password",
+    "passwordhash",
+    "secret",
+    "token",
+    "dsn",
+    "apikey",
+    "secretkey",
+    "privatekey",
+    "passphrase",
+)
 
 #: `?range=` -> the window. Anything else is a 422 from the `Literal` below.
 _WINDOWS: dict[str, timedelta] = {
