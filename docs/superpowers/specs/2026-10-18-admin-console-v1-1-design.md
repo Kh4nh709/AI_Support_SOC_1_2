@@ -253,6 +253,7 @@ The changes to the frozen contracts are listed in §5.9 and recorded by DEC-200.
   - `201 {user_id}`.
   - `409 {reason: "username_taken"}`.
   - `422` for a role outside `tier1|tier2|admin`, a password under the minimum length, or a username outside `^[a-z0-9._-]{3,32}$`. That pattern admits every current account.
+  - `422 {field: "username", reason: "reserved"}` for `system` and `llm`, the audit page's actor keywords (P11-T20 row 11; `actor=system|llm` selects the `actor_role`, so a user with that name could not be filtered by name).
 - **`PATCH /api/admin/users/{user_id}`**, with any of `{role, display_name, is_active}`.
   - A change of role, or `is_active → false`, sets `sessions_invalid_before = now()` in the same transaction. Old tokens then die, and the WebSocket closes within 60 s (v1.0 §6).
   - **Guards**, under `SELECT … FOR UPDATE` over the active admin rows, so two concurrent demotions cannot both pass:

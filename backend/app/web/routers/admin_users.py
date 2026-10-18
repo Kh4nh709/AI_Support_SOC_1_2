@@ -18,6 +18,10 @@ re-reads who is an active admin *now*. Then, in this order:
 A change that touches neither field (a display name, a reset, an unlock, a create) takes no admin
 lock and keeps the read-then-act shape every admin route has.
 
+Usernames. `^[a-z0-9._-]{3,32}$`, and not `system` or `llm`: those two are the audit page's actor
+keywords (`actor=system|llm` selects the `actor_role`), so a user called that could not be
+filtered by name. The create answers 422 `{field: "username", reason: "reserved"}`.
+
 Sessions. A role change, a deactivation and a password reset set `sessions_invalid_before` in the
 same transaction. The stamp is `clock_timestamp()`, not `now()`: `now()` is the start of the
 request's transaction, which may have waited on those locks, and a login that completed after the
@@ -62,6 +66,10 @@ Admin = Annotated[Claims, Depends(require_role("admin"))]
 PASSWORD_MIN_CHARS = 12  # spec decision 1: the web create and reset; the CLI keeps its own rule
 PASSWORD_MAX_CHARS = 256
 USERNAME_RE = r"^[a-z0-9._-]{3,32}$"
+#: `actor=system` and `actor=llm` are the audit page's ACTOR KEYWORDS: they select the
+#: `actor_role` and win over a username (`admin_audit.py`), so the rows of a user called `system`
+#: or `llm` could never be filtered by that user. Refused on create: 422 `reserved` (P11-T20 row 11).
+RESERVED_USERNAMES = frozenset({"system", "llm"})
 DISPLAY_NAME_MAX_CHARS = 100
 
 _USERNAME = re.compile(USERNAME_RE)
@@ -258,6 +266,8 @@ def _username(value: Any) -> str:
         raise _bad("username", "empty")
     if not isinstance(value, str) or _USERNAME.fullmatch(value) is None:  # not `$`: it admits "\n"
         raise _bad("username", "invalid")
+    if value in RESERVED_USERNAMES:
+        raise _bad("username", "reserved")
     return value
 
 

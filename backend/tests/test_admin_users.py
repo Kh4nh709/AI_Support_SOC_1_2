@@ -341,6 +341,9 @@ AT_THE_BOUND = {
     "username-3-chars": lambda: {"username": uuid.uuid4().hex[:3]},
     "username-32-chars": lambda: {"username": "u" + uuid.uuid4().hex[:31]},
     "username-dot-underscore-dash": lambda: {"username": f"a.b_c-{uuid.uuid4().hex[:6]}"},
+    # the reserved names are matched whole: a name that merely starts with one is a name
+    "username-starts-with-system": lambda: {"username": f"system-{uuid.uuid4().hex[:6]}"},
+    "username-starts-with-llm": lambda: {"username": f"llm{uuid.uuid4().hex[:6]}"},
     "display-name-1-char": lambda: {"display_name": "x"},
     "display-name-100-chars": lambda: {"display_name": "\u01a0" * 100},
     # combining marks (Mn) and an emoji are names, not disguises
@@ -395,6 +398,9 @@ CREATE_BAD = [
     ({"username": "trailing\n"}, "username", "invalid"),  # `$` alone would let this through
     ({"username": "ngô-bình"}, "username", "invalid"),
     ({"username": 12345}, "username", "invalid"),
+    # the audit page's actor keywords (P11-T20 row 11): `actor=system|llm` filters by role
+    ({"username": "system"}, "username", "reserved"),
+    ({"username": "llm"}, "username", "reserved"),
     ({"username": MISSING}, "username", "empty"),
     ({"display_name": "   "}, "display_name", "empty"),
     ({"display_name": "x" * 101}, "display_name", "too_long"),
@@ -431,6 +437,26 @@ def test_create_validates_each_field(client, sdb, override, field, reason):
     if isinstance(sent, str) and len(sent) > 3:
         assert sent not in response.text
     assert _count_events(sdb, "admin.user_created") == created
+
+
+@pytest.mark.parametrize("name", ["system", "llm"])
+def test_create_refuses_the_audit_actor_keywords_with_exactly_the_reserved_reason(
+    client, sdb, name
+):
+    """P11-T20 row 11 (P11-T09 review, deviation 5). `actor=system|llm` on the audit page selects
+    the `actor_role`, so a user with that name would have rows no filter could reach. The 422 is
+    exactly `{field: "username", reason: "reserved"}` (the frontend reads it), and nothing is
+    created."""
+    _, _, headers = _admin(client, sdb)
+    created = _count_events(sdb, "admin.user_created")
+
+    response = client.post("/api/admin/users", headers=headers, json=_new_body(username=name))
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {"field": "username", "reason": "reserved"}
+    assert _count_events(sdb, "admin.user_created") == created
+    (rows,) = sdb.execute("SELECT count(*) FROM users WHERE username = %s", (name,)).fetchone()
+    assert rows == 0
 
 
 def test_the_first_bad_field_is_the_one_reported_in_the_form_order(client, sdb):
