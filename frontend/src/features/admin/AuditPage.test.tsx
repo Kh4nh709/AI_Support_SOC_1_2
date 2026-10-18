@@ -553,8 +553,11 @@ describe("the payload of an event", () => {
     expect(controlled).not.toBeNull();
     expect(controlled).toContainElement(region);
     expect(screen.getByText(P.payloadNote)).toBeInTheDocument();
+    // The copy button is named after the payload it copies (two may be open at once).
     expect(
-      within(controlled as HTMLElement).getByRole("button", { name: S.common.copy }),
+      within(controlled as HTMLElement).getByRole("button", {
+        name: `${S.common.copy}: ${P.payloadLabel(10)}`,
+      }),
     ).toBeInTheDocument();
 
     await user.click(toggleOf(10));
@@ -574,6 +577,14 @@ describe("the payload of an event", () => {
     expect(row(10).nextElementSibling?.querySelector("pre")).not.toBeNull();
     expect(row(8).nextElementSibling?.querySelector("pre")).not.toBeNull();
     expect(row(9).nextElementSibling).toBe(row(8));
+    // Each region has a copy button of its own, and the two are told apart by name.
+    expect(
+      screen.getByRole("button", { name: `${S.common.copy}: ${P.payloadLabel(10)}` }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: `${S.common.copy}: ${P.payloadLabel(8)}` }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: S.common.copy })).not.toBeInTheDocument();
   });
 
   it("says an event with no payload has none, and shows no block for it", async () => {
@@ -821,9 +832,10 @@ describe("the pages of the log (the cursor)", () => {
     renderPage();
     await loaded();
     expect(rowCount()).toBe(50);
-    expect(
-      within(pager()).getByText("1–50 trong 1.284 sự kiện · mới nhất trước"),
-    ).toBeInTheDocument();
+    const range = within(pager()).getByText("1–50 trong 1.284 sự kiện · mới nhất trước");
+    expect(range).toBeInTheDocument();
+    // A screen reader hears the new range when a page is read.
+    expect(range).toHaveAttribute("aria-live", "polite");
   });
 
   it("shows no total, and no 'trong', when the server did not count", async () => {
@@ -939,6 +951,122 @@ describe("the pages of the log (the cursor)", () => {
     });
     await waitFor(() => expect(within(pager()).getByText(/^1–50/)).toBeInTheDocument());
     expect(prevButton()).toBeDisabled();
+  });
+
+  // The cursors belong to the view that made them: a view that comes back is read from its first page, by the
+  // form, by Back, and by "Xoá lọc" (which can leave the URL as it was).
+  it("starts again at the first page when the same filters come back, typed in the form", async () => {
+    const served = serveList(MANY(120), 120);
+    const user = userEvent.setup();
+    renderPage("/admin/audit?group=model");
+    await loaded();
+    await user.click(nextButton());
+    await waitFor(() => expect(within(pager()).getByText(/^51–100/)).toBeInTheDocument());
+
+    await user.selectOptions(groupSelect(), "users");
+    await user.click(within(form()).getByRole("button", { name: P.apply }));
+    await waitFor(() => expect(where()).toBe("/admin/audit?group=users"));
+    await waitFor(() => expect(within(pager()).getByText(/^1–50/)).toBeInTheDocument());
+
+    await user.selectOptions(groupSelect(), "model");
+    await user.click(within(form()).getByRole("button", { name: P.apply }));
+    await waitFor(() => expect(where()).toBe("/admin/audit?group=model"));
+    await waitFor(() => expect(within(pager()).getByText(/^1–50 trong 120/)).toBeInTheDocument());
+    expect(prevButton()).toBeDisabled();
+    expect(served.gets[served.gets.length - 1]?.has("cursor")).toBe(false);
+  });
+
+  it("starts again at the first page when the same filters come back with the Back button", async () => {
+    const served = serveList(MANY(120), 120);
+    const user = userEvent.setup();
+    renderPage("/admin/audit?group=model");
+    await loaded();
+    await user.click(nextButton());
+    await waitFor(() => expect(within(pager()).getByText(/^51–100/)).toBeInTheDocument());
+    await user.selectOptions(groupSelect(), "users");
+    await user.click(within(form()).getByRole("button", { name: P.apply }));
+    await waitFor(() => expect(where()).toBe("/admin/audit?group=users"));
+    await user.click(screen.getByRole("button", { name: "back" }));
+    await waitFor(() => expect(where()).toBe("/admin/audit?group=model"));
+    await waitFor(() => expect(within(pager()).getByText(/^1–50 trong 120/)).toBeInTheDocument());
+    expect(prevButton()).toBeDisabled();
+    expect(served.gets[served.gets.length - 1]?.has("cursor")).toBe(false);
+  });
+
+  it("goes to the first page on Xoá lọc, whether or not the URL has a filter to lose", async () => {
+    const served = serveList(MANY(120), 120);
+    const user = userEvent.setup();
+    // No filter: the URL is the same before and after, and the page must still go back.
+    const bare = renderPage("/admin/audit");
+    await loaded();
+    await user.click(nextButton());
+    await waitFor(() => expect(within(pager()).getByText(/^51–100/)).toBeInTheDocument());
+    await user.click(within(form()).getByRole("button", { name: P.clear }));
+    await waitFor(() => expect(within(pager()).getByText(/^1–50/)).toBeInTheDocument());
+    expect(prevButton()).toBeDisabled();
+    expect(where()).toBe("/admin/audit");
+    expect(served.gets[served.gets.length - 1]?.has("cursor")).toBe(false);
+    bare.unmount();
+
+    // With a filter: the URL changes, and the page goes back as well.
+    renderPage("/admin/audit?actor=llm");
+    await loaded();
+    await user.click(nextButton());
+    await waitFor(() => expect(within(pager()).getByText(/^51–100/)).toBeInTheDocument());
+    await user.click(within(form()).getByRole("button", { name: P.clear }));
+    await waitFor(() => expect(where()).toBe("/admin/audit"));
+    await waitFor(() => expect(within(pager()).getByText(/^1–50/)).toBeInTheDocument());
+    expect(served.gets[served.gets.length - 1]?.has("cursor")).toBe(false);
+  });
+
+  it("goes to the first page when the form is sent with the filters it already has", async () => {
+    const served = serveList(MANY(120), 120);
+    const user = userEvent.setup();
+    renderPage("/admin/audit?group=users");
+    await loaded();
+    await user.click(nextButton());
+    await waitFor(() => expect(within(pager()).getByText(/^51–100/)).toBeInTheDocument());
+    await user.click(within(form()).getByRole("button", { name: P.apply }));
+    await waitFor(() => expect(within(pager()).getByText(/^1–50/)).toBeInTheDocument());
+    expect(prevButton()).toBeDisabled();
+    expect(served.gets[served.gets.length - 1]?.has("cursor")).toBe(false);
+  });
+
+  it("keeps the page it is on when the form is sent with the filters it has and the page is the first", async () => {
+    const served = serveList(MANY(120), 120);
+    const user = userEvent.setup();
+    renderPage("/admin/audit?group=users");
+    await loaded();
+    await user.click(within(form()).getByRole("button", { name: P.apply }));
+    await waitFor(() => expect(served.gets).toHaveLength(2));
+    expect(within(pager()).getByText(/^1–50/)).toBeInTheDocument();
+  });
+
+  it("keeps Trước in the error of a later page, so the admin can go back", async () => {
+    const served = serve((query) =>
+      query.has("cursor") ? reason(503, "timeout") : pageOf(MANY(120), query, 120),
+    );
+    const user = userEvent.setup();
+    renderPage();
+    await loaded();
+    await user.click(nextButton());
+    expect(await screen.findByRole("alert")).toHaveTextContent(S.admin.reason.timeout);
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(prevButton()).toBeEnabled();
+    expect(nextButton()).toBeDisabled();
+    await user.click(prevButton());
+    expect(await loaded()).toBeInTheDocument();
+    expect(within(pager()).getByText(/^1–50 trong 120/)).toBeInTheDocument();
+    expect(prevButton()).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(served.gets.some((query) => query.has("cursor"))).toBe(true);
+  });
+
+  it("shows no pager in the error of the first page: there is no page to go back to", async () => {
+    serve(() => reason(503, "timeout"));
+    renderPage();
+    await screen.findByRole("alert");
+    expect(screen.queryByRole("navigation", { name: P.pager })).not.toBeInTheDocument();
   });
 
   it("keeps the rows on screen while the next page is read, and the two buttons off", async () => {
@@ -1190,6 +1318,36 @@ describe("the states", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
+  it("does not show the rows of the filters just left under the filters just chosen", async () => {
+    // The page being left stays on screen while the next page of the SAME filters is read, and never across
+    // filters: here the answer for the new group is held back, and the old group's rows must be gone.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    serve(async (query) => {
+      if (query.get("group") === "users") {
+        await gate;
+        return pageOf(MANY(3), query, 3);
+      }
+      return pageOf(CANVAS, query);
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await loaded();
+    expect(rowCount()).toBe(10);
+    await user.selectOptions(groupSelect(), "users");
+    await user.click(within(form()).getByRole("button", { name: P.apply }));
+    expect(await screen.findByRole("status")).toHaveTextContent(S.common.loading);
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(document.querySelector("tr[data-audit-id]")).toBeNull();
+    expect(screen.queryByRole("navigation", { name: P.pager })).not.toBeInTheDocument();
+    release();
+    expect(await loaded()).toBeInTheDocument();
+    expect(rowCount()).toBe(3);
+    expect(table().querySelector('tr[data-audit-id="10"]')).toBeNull();
+  });
+
   describe("no match", () => {
     it("says which filters were on, and clears them with the button", async () => {
       const served = serve((query) =>
@@ -1309,6 +1467,9 @@ describe("the states", () => {
       });
     });
 
+    // This route never sends `query_failed` (admin_audit.py answers 503 only for `timeout`; any other database
+    // error is a 500, the page's own error below). The code is in the shell's reason table, so the page has a
+    // text for it, and this test keeps that text from going unseen.
     it("says a failed query in its own words too", async () => {
       serve(() => reason(503, "query_failed"));
       renderPage();
@@ -1466,7 +1627,9 @@ describe("the states", () => {
   });
 });
 
-describe("accessibility", () => {
+// axe runs over a whole page, and several of these render the page three times: more than the default 5 s on a
+// busy machine, so each test here gets 15 s.
+describe("accessibility", { timeout: 15_000 }, () => {
   /** jsdom computes no layout or colour, so the contrast rule cannot run here. */
   const axeOf = async (container: HTMLElement) =>
     (await axe.run(container, { rules: { "color-contrast": { enabled: false } } })).violations.map(

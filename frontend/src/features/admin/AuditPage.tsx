@@ -29,6 +29,7 @@ import { PageError } from "../../components/PageError";
 import { S, adminReasonText } from "../../strings";
 import { adminKeys } from "./adminKeys";
 import {
+  DEFAULT_RANGE,
   PAGE_SIZE,
   auditFaultOf,
   isFiltered,
@@ -309,7 +310,11 @@ function Forbidden() {
   );
 }
 
-/** The 503s: an alert in the words of the reason, and a button to ask again. Neither retries by itself. */
+/**
+ * The 503s: an alert in the words of the reason, and a button to ask again. Neither retries by itself.
+ * This route never sends `query_failed` (admin_audit.py answers 503 only for `timeout`; any other database
+ * error is a 500, the page's own error): the branch is for the code the shell's reason table has.
+ */
 function QueryFailure({
   kind,
   onRetry,
@@ -360,6 +365,9 @@ export function AuditPage() {
     key,
     cursors: NO_CURSORS,
   });
+  // A view that comes back (typed again, Back) is read from its first page: the cursors of the view left are
+  // dropped, as state adjusted while rendering (the render below already reads none).
+  if (paging.key !== key) setPaging({ key, cursors: NO_CURSORS });
   const cursors = paging.key === key ? paging.cursors : NO_CURSORS;
   const cursor = cursors[cursors.length - 1];
   const page = cursors.length;
@@ -403,11 +411,17 @@ export function AuditPage() {
     (first && !first.disabled ? first : second)?.focus();
   });
 
+  // Both start from the first page, which a URL that does not change cannot say for them: the same filters
+  // sent again, and "Xoá lọc" with no filter on.
   const apply = (next: AuditView) => {
-    if (viewKey(next) === key) void query.refetch();
-    else setParams(viewToParams(next));
+    if (viewKey(next) !== key) setParams(viewToParams(next));
+    else if (page > 0) setPaging({ key, cursors: NO_CURSORS });
+    else void query.refetch();
   };
-  const clear = () => setParams(new URLSearchParams());
+  const clear = () => {
+    setPaging({ key: viewKey({ range: DEFAULT_RANGE }), cursors: NO_CURSORS });
+    setParams(new URLSearchParams());
+  };
 
   if (fault?.kind === "forbidden") return <Forbidden />;
 
@@ -435,7 +449,8 @@ export function AuditPage() {
       aria-label={P.pager}
       className="flex items-center gap-3 border-t border-[#1f2833] px-4 py-2.5 text-[13px] text-[#aeb9c6]"
     >
-      <span className="grow">
+      {/* Polite, so a screen reader hears the new range when a page has been read. */}
+      <span aria-live="polite" className="grow">
         {events.length === 0
           ? ""
           : total === null
@@ -467,26 +482,41 @@ export function AuditPage() {
   if (data === undefined) {
     if (fault === null) {
       region = <Skeleton />;
-    } else if (fault.kind === "timeout" || fault.kind === "query_failed") {
-      region = <QueryFailure kind={fault.kind} onRetry={() => void query.refetch()} />;
-    } else if (fault.kind === "filter" || fault.kind === "filters") {
-      region = (
-        <div
-          role="alert"
-          className="rounded-lg border border-[#5a2e36] bg-[#2a1016] px-3.5 py-3 text-[13.5px] leading-snug text-[#fda4af]"
-        >
-          {P.badFilter}
-        </div>
-      );
     } else {
-      region = (
-        <div className="space-y-3">
-          <PageError title={S.admin.common.loadError} onRetry={() => void query.refetch()} />
-          <p className="text-[13.5px] leading-relaxed text-[#c9d3df]">
-            {loadHint(fault.kind === "load" ? fault.status : 0)}
-          </p>
-        </div>
-      );
+      let failure: ReactNode;
+      if (fault.kind === "timeout" || fault.kind === "query_failed") {
+        failure = <QueryFailure kind={fault.kind} onRetry={() => void query.refetch()} />;
+      } else if (fault.kind === "filter" || fault.kind === "filters") {
+        failure = (
+          <div
+            role="alert"
+            className="rounded-lg border border-[#5a2e36] bg-[#2a1016] px-3.5 py-3 text-[13.5px] leading-snug text-[#fda4af]"
+          >
+            {P.badFilter}
+          </div>
+        );
+      } else {
+        failure = (
+          <div className="space-y-3">
+            <PageError title={S.admin.common.loadError} onRetry={() => void query.refetch()} />
+            <p className="text-[13.5px] leading-relaxed text-[#c9d3df]">
+              {loadHint(fault.kind === "load" ? fault.status : 0)}
+            </p>
+          </div>
+        );
+      }
+      // A later page that failed keeps "Trước", so the admin is not stranded there.
+      region =
+        page === 0 ? (
+          failure
+        ) : (
+          <div className="flex flex-col gap-3">
+            {failure}
+            <section className="overflow-hidden rounded-[10px] border border-border bg-surface">
+              {pager}
+            </section>
+          </div>
+        );
     }
   } else if (events.length === 0 && offset === 0) {
     region = isFiltered(view) ? <NoMatch view={view} onClear={clear} /> : <EmptyLog view={view} />;
