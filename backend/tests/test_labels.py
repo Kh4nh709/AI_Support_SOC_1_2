@@ -23,6 +23,7 @@ import csv
 import dataclasses
 import hashlib
 import json
+import os
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -37,6 +38,7 @@ from app.infra.auth import Claims
 from app.ingest.wazuh_parser import parse_wazuh_alert
 from app.tier1 import labels
 from app.web import deps, main
+from app.web.routers import labels as labels_router
 from app.web.routers import pages
 from fastapi.testclient import TestClient
 
@@ -646,7 +648,15 @@ def test_next_returns_null_when_finished(client, db) -> None:
     for row in _candidate_rows():
         _label_directly(db, USER_A, row["cluster_id"])
     body = _next(client)
-    assert body == {"cluster_id": None, "done": 3, "total": 3, "cluster": None}
+    # P11-T08: the two flags ride along; the labelling fields are what they were.
+    assert body == {
+        "cluster_id": None,
+        "done": 3,
+        "total": 3,
+        "cluster": None,
+        "frozen": False,
+        "candidates_present": True,
+    }
     html = _page(client)
     assert 'id="finished"' in html
     assert 'id="label-form"' not in html
@@ -655,7 +665,14 @@ def test_next_returns_null_when_finished(client, db) -> None:
 @pytest.mark.db
 def test_missing_candidates_file_says_so(client, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(labels, "CANDIDATES_PATH", tmp_path / "absent.csv")
-    assert _next(client) == {"cluster_id": None, "done": 0, "total": 0, "cluster": None}
+    assert _next(client) == {
+        "cluster_id": None,
+        "done": 0,
+        "total": 0,
+        "cluster": None,
+        "frozen": False,
+        "candidates_present": False,
+    }
     html = _page(client)
     assert "eval/gold_candidates.csv</code> is not present" in html
     assert 'id="finished"' not in html
@@ -702,7 +719,15 @@ def test_json_response_keys_are_allowlisted(client, db) -> None:
         db.execute("DELETE FROM triage_labels WHERE labeler_id = %s", (USER_A,))
         _make_next(db, USER_A, cluster_id)
         body = _next(client, cluster_id)
-        assert set(body) == {"cluster_id", "done", "total", "cluster"}
+        # P11-T08: `frozen` and `candidates_present` are the only fields beside the four.
+        assert set(body) == {
+            "cluster_id",
+            "done",
+            "total",
+            "cluster",
+            "frozen",
+            "candidates_present",
+        }
         view = body["cluster"]
         assert set(view) == ALLOWED_VIEW_KEYS
         assert set(view["correlation"]) == {"rows", "samples"}
@@ -1102,3 +1127,347 @@ def test_undo_last_own_label_only_and_refused_after_freeze(client, db, seeded) -
     )
     with pytest.raises(labels.Frozen):
         labels.undo_last(db, USER_A, freeze_marker=labels.FREEZE_MARKER)
+
+
+# ---------------------------------------------------------------------------
+# P11-T08 — `POST /api/admin/labels/undo` and `next`'s two flags (spec §4.6, §5.7)
+#
+# A 409/404 body is `{"detail": {"reason": ...}}`, the shape `admin_overview` uses (spec §3).
+# The tier1 403s and the one-transaction proof need a connection that really commits: they are
+# in `test_admin_labels_api.py`, on a scratch database. Everything here runs inside the `db`
+# fixture's transaction, which the overridden `get_conn` never commits.
+# ---------------------------------------------------------------------------
+
+UNDO = "/api/admin/labels/undo"
+NEXT_KEYS = {"cluster_id", "done", "total", "cluster", "frozen", "candidates_present"}
+#: Keys that must appear nowhere in a labelling payload, at any depth (blind labelling,
+#: DEC-019, DEC-101): the stored `source`, the pilot's status, the suggestion and its risk,
+#: and the window truth the candidates file carries (DEC-117).
+FORBIDDEN_KEYS = {
+    "source",
+    "stratum",
+    "status",
+    "triage_status",
+    "suggestion_visible",
+    "suggested_action",
+    "gate_result",
+    "risk_score",
+    "scenario_id",
+    "kind",
+    "truth_label",
+}
+NO_CANDIDATES = {"cluster_id": None, "done": 0, "total": 0, "cluster": None}
+
+
+def _undo(client: _Client, body: Any = None):
+    return client.http.post(UNDO, json={} if body is None else body)
+
+
+def _undo_events(conn: psycopg.Connection, user_id: str) -> list[Any]:
+    return conn.execute(
+        "SELECT subject_id, actor_role, actor_id::text, payload FROM audit_events "
+        "WHERE event_type = 'label.created' AND actor_id = %s AND payload ? 'undo' "
+        "ORDER BY audit_id",
+        (user_id,),
+    ).fetchall()
+
+
+def _shift(conn: psycopg.Connection, user_id: str, alert_id: str, minutes: int) -> None:
+    """One transaction has one `now()`: give two rows an order by moving one."""
+    conn.execute(
+        "UPDATE triage_labels SET created_at = created_at + make_interval(mins => %s) "
+        "WHERE alert_id = %s AND labeler_id = %s",
+        (minutes, alert_id, user_id),
+    )
+
+
+def _all_keys(value: Any) -> set[str]:
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            found.add(key)
+            found |= _all_keys(item)
+    elif isinstance(value, list):
+        for item in value:
+            found |= _all_keys(item)
+    return found
+
+
+def _my_order(client: _Client) -> list[str]:
+    candidates = labels.load_candidates(path=labels.CANDIDATES_PATH)
+    return labels.labeler_order(candidates, client.user_id)
+
+
+@pytest.mark.db
+def test_api_undo_deletes_the_last_label_and_answers_cluster_and_progress(client, db) -> None:
+    order = _my_order(client)
+    assert _post(client, order[0]).status_code == 201
+    assert _post(client, order[1]).status_code == 201
+    _shift(db, USER_A, order[0], -1)  # order[1] is the last
+    assert _next(client, order[2])["done"] == 2
+
+    resp = _undo(client)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"undone_cluster_id": order[1], "done": 1, "total": 3}
+    assert db.execute(
+        "SELECT alert_id FROM triage_labels WHERE labeler_id = %s", (USER_A,)
+    ).fetchall() == [(order[0],)]
+    ((subject, role, actor, payload),) = _undo_events(db, USER_A)
+    assert (subject, role, actor) == (order[1], "admin", USER_A)
+    assert payload == {"undo": True, "alert_id": order[1], "labeler_id": USER_A}
+    # the undone cluster is the labeller's next again, and the progress agrees
+    again = _next(client)
+    assert (again["cluster_id"], again["done"], again["total"]) == (order[1], 1, 3)
+
+    # a second undo takes the one before it, a third finds nothing
+    second = _undo(client)
+    assert second.status_code == 200 and second.json() == {
+        "undone_cluster_id": order[0],
+        "done": 0,
+        "total": 3,
+    }
+    assert _undo(client).status_code == 404
+
+
+@pytest.mark.db
+def test_api_undo_with_nothing_to_undo_is_404(client, db) -> None:
+    resp = _undo(client)
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": {"reason": "nothing_to_undo"}}
+    assert _undo_events(db, USER_A) == []
+
+
+@pytest.mark.db
+def test_api_undo_is_409_frozen_while_the_marker_exists_and_deletes_nothing(
+    client, db, tmp_path, monkeypatch
+) -> None:
+    order = _my_order(client)
+    assert _post(client, order[0]).status_code == 201
+    marker = tmp_path / "gold-freeze-marker"
+    marker.write_text("frozen\n", encoding="utf-8")
+    monkeypatch.setattr(labels, "FREEZE_MARKER", marker)
+
+    resp = _undo(client)
+    assert resp.status_code == 409
+    assert resp.json() == {"detail": {"reason": "frozen"}}
+    assert _count_labels(db, USER_A) == 1
+    assert _undo_events(db, USER_A) == []
+    # frozen is answered before "nothing to undo": a labeller with no rows gets the 409 too
+    assert _undo(client.as_user(USER_B)).status_code == 409
+    assert _undo_events(db, USER_B) == []
+
+    marker.unlink()  # the marker is read per request: with it gone the undo works
+    assert _undo(client.as_user(USER_A)).status_code == 200
+    assert _count_labels(db, USER_A) == 0
+
+
+@pytest.mark.db
+def test_api_undo_takes_only_the_callers_own_last_label(client, db) -> None:
+    older, newer = _A40112.alert_id, _A5503.alert_id
+    assert _post(client, older).status_code == 201
+    assert _post(client, newer).status_code == 201
+    _shift(db, USER_A, older, -1)
+    client.as_user(USER_B)
+    assert _post(client, newer).status_code == 201
+    _shift(db, USER_B, newer, 1)  # B's row is the newest of all: A's undo must not reach it
+    mine = {(older, USER_A), (newer, USER_A)}
+    theirs = (newer, USER_B)
+
+    def rows() -> set[tuple[str, str]]:
+        return set(db.execute("SELECT alert_id, labeler_id::text FROM triage_labels").fetchall())
+
+    assert rows() == mine | {theirs}
+    client.as_user(USER_A)
+    first = _undo(client)
+    assert first.status_code == 200 and first.json()["undone_cluster_id"] == newer
+    assert rows() == {(older, USER_A), theirs}
+    second = _undo(client)
+    assert second.status_code == 200 and second.json()["undone_cluster_id"] == older
+    assert rows() == {theirs}
+    # A has nothing left; B's row is not A's to undo
+    assert _undo(client).status_code == 404
+    assert rows() == {theirs}
+    assert _undo_events(db, USER_B) == []
+
+    done = _undo(client.as_user(USER_B))
+    assert done.status_code == 200 and done.json()["undone_cluster_id"] == newer
+    assert rows() == set()
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("body", [{}, {"labeler": USER_A}, {"labeler": None}])
+def test_api_undo_accepts_an_empty_object_or_the_caller_as_labeler(client, db, body) -> None:
+    assert _post(client, _my_order(client)[0]).status_code == 201
+    resp = _undo(client, body)
+    assert resp.status_code == 200, resp.text
+    assert _count_labels(db, USER_A) == 0
+
+
+@pytest.mark.db
+def test_api_undo_with_another_labeler_is_403_like_next_and_post(client, db) -> None:
+    assert _post(client, _my_order(client)[0]).status_code == 201
+    resp = _undo(client, {"labeler": USER_B})
+    assert resp.status_code == 403
+    assert resp.json() == {"detail": "labeler must be the current user"}
+    assert _count_labels(db, USER_A) == 1
+    assert _undo_events(db, USER_A) == []
+
+
+#: Raw JSON text, so `null` can be sent (`json=None` sends nothing at all).
+_BAD_JSON_BODIES = [
+    '{"cluster_id": "x"}',
+    json.dumps({"labeler": USER_A, "extra": 1}),
+    "[]",
+    "null",
+    '"x"',
+    "{",
+]
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("text", _BAD_JSON_BODIES)
+def test_api_undo_refuses_a_body_that_is_not_an_empty_object_or_the_labeler(
+    client, db, text
+) -> None:
+    assert _post(client, _my_order(client)[0]).status_code == 201
+    resp = client.http.post(
+        UNDO, content=text.encode(), headers={"content-type": "application/json"}
+    )
+    assert resp.status_code == 422, resp.text
+    assert _count_labels(db, USER_A) == 1
+    assert _undo_events(db, USER_A) == []
+
+
+#: Each is a request the session cookie would carry from another page of the host (the cookie
+#: lives until P11-T19): a no-cors `fetch` with a Blob or text body, an HTML form, nothing at all.
+_NOT_JSON = {
+    "nothing at all": {},
+    "no content type": {"content": b"{}"},
+    "text/plain": {"content": b"{}", "headers": {"content-type": "text/plain"}},
+    "text/plain with a labeler": {
+        "content": json.dumps({"labeler": USER_A}).encode(),
+        "headers": {"content-type": "text/plain;charset=UTF-8"},
+    },
+    "urlencoded form": {"data": {"labeler": USER_A}},
+    "multipart form": {"files": {"labeler": (None, USER_A)}},
+    "json type, empty body": {"content": b"", "headers": {"content-type": "application/json"}},
+}
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("kwargs", list(_NOT_JSON.values()), ids=list(_NOT_JSON))
+def test_api_undo_without_a_json_body_is_422_and_deletes_nothing(client, db, kwargs) -> None:
+    assert _post(client, _my_order(client)[0]).status_code == 201
+    resp = client.http.post(UNDO, **kwargs)
+    assert resp.status_code == 422, resp.text
+    if "content" in kwargs and "headers" not in kwargs:
+        assert "content-type" not in resp.request.headers  # the case is what it says it is
+    assert _count_labels(db, USER_A) == 1
+    assert _undo_events(db, USER_A) == []
+
+
+@pytest.mark.db
+def test_api_undo_maps_the_alert_back_to_the_candidates_cluster_id(
+    client, db, tmp_path, monkeypatch
+) -> None:
+    """`triage_labels` holds the head's `alert_id`; the answer names the candidate's
+    `cluster_id`, found in `gold_candidates.csv` by that alert id."""
+    rows = _candidate_rows()
+    renamed = "gold-cluster-for-5503"
+    rows[1] = {**rows[1], "cluster_id": renamed}  # its alert_id is still _A5503's
+    path = _write_csv(tmp_path / "renamed.csv", CANDIDATE_HEADER, rows)
+    monkeypatch.setattr(labels, "CANDIDATES_PATH", path)
+    assert _post(client, renamed).status_code == 201
+    assert db.execute(
+        "SELECT alert_id FROM triage_labels WHERE labeler_id = %s", (USER_A,)
+    ).fetchall() == [(_A5503.alert_id,)]
+
+    resp = _undo(client)
+    assert resp.status_code == 200
+    assert resp.json()["undone_cluster_id"] == renamed != _A5503.alert_id
+
+
+@pytest.mark.db
+def test_api_undo_still_works_when_the_candidates_file_is_gone(
+    client, db, tmp_path, monkeypatch
+) -> None:
+    """Nothing to map the alert through: the answer is the alert id, which is the cluster id of
+    both gold sets (`next_unlabelled`), and the progress is the empty one."""
+    assert _post(client, _A40112.alert_id).status_code == 201
+    monkeypatch.setattr(labels, "CANDIDATES_PATH", tmp_path / "absent.csv")
+    resp = _undo(client)
+    assert resp.status_code == 200
+    assert resp.json() == {"undone_cluster_id": _A40112.alert_id, "done": 0, "total": 0}
+    assert _count_labels(db, USER_A) == 0
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("frozen", [False, True], ids=["unfrozen", "frozen"])
+@pytest.mark.parametrize("present", [True, False], ids=["candidates", "no candidates"])
+def test_next_carries_frozen_and_candidates_present(
+    client, tmp_path, monkeypatch, frozen, present
+) -> None:
+    marker = tmp_path / "gold-freeze-marker"
+    if frozen:
+        marker.write_text("frozen\n", encoding="utf-8")
+    monkeypatch.setattr(labels, "FREEZE_MARKER", marker)
+    if not present:
+        monkeypatch.setattr(labels, "CANDIDATES_PATH", tmp_path / "absent.csv")
+
+    body = _next(client)
+    assert set(body) == NEXT_KEYS
+    assert body["frozen"] is frozen
+    assert body["candidates_present"] is present
+    if present:
+        assert body["total"] == 3 and body["cluster"] is not None
+    else:  # the behaviour that was: 200, no cluster, 0 of 0
+        assert {k: body[k] for k in NO_CANDIDATES} == NO_CANDIDATES
+
+
+@pytest.mark.db
+def test_next_says_no_candidates_for_an_unreadable_file_or_a_directory(
+    client, tmp_path, monkeypatch
+) -> None:
+    unreadable = tmp_path / "unreadable.csv"
+    unreadable.write_text("cluster_id\n", encoding="utf-8")
+    unreadable.chmod(0)
+    for path in (unreadable, tmp_path):
+        if path is unreadable and os.access(path, os.R_OK):
+            continue  # root reads a mode-000 file: nothing to show for it
+        monkeypatch.setattr(labels, "CANDIDATES_PATH", path)
+        body = _next(client)
+        assert body == {**NO_CANDIDATES, "frozen": False, "candidates_present": False}
+
+
+@pytest.mark.db
+def test_next_payload_is_blind_top_level_and_cluster_keys_are_exactly_the_documented_set(
+    client, db
+) -> None:
+    g1 = labels.load_g1_clusters(path=labels.G1_CLUSTERS_PATH)
+    candidates = {c.cluster_id: c for c in labels.load_candidates(path=labels.CANDIDATES_PATH)}
+    for cluster_id in (_A40112.alert_id, _A5503.alert_id, _G2_HEAD.alert_id):
+        db.execute("DELETE FROM triage_labels WHERE labeler_id = %s", (USER_A,))
+        _make_next(db, USER_A, cluster_id)
+        body = _next(client, cluster_id)
+        assert set(body) == NEXT_KEYS
+        # `cluster` is `cluster_view`'s dict in labelling mode and nothing more, whatever the
+        # route adds around it
+        expected = labels.cluster_view(db, candidates[cluster_id], g1_clusters=g1)
+        assert set(body["cluster"]) == set(expected) == ALLOWED_VIEW_KEYS
+        keys = _all_keys(body)
+        assert keys.isdisjoint(FORBIDDEN_KEYS), keys & FORBIDDEN_KEYS
+        documented = NEXT_KEYS | ALLOWED_VIEW_KEYS | {"rows", "samples"}
+        assert keys <= documented | CORRELATION_ROW_KEYS | SAMPLE_KEYS, keys - documented
+    # a finished labeller still gets the same top level, and a null cluster
+    _label_directly(db, USER_A, _G2_HEAD.alert_id)  # the last of the three
+    finished = _next(client)
+    assert set(finished) == NEXT_KEYS and finished["cluster"] is None
+
+
+def test_every_route_of_the_labels_router_carries_the_admin_dependency() -> None:
+    routes = {(m, r.path) for r in labels_router.router.routes for m in r.methods}
+    assert ("POST", "/api/admin/labels/undo") in routes
+    assert ("GET", "/api/admin/labels/next") in routes
+    for route in labels_router.router.routes:
+        calls = [d.call for d in route.dependant.dependencies]
+        assert labels_router.require_admin in calls, route.path
