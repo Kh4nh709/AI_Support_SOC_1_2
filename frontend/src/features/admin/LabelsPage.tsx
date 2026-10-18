@@ -343,7 +343,17 @@ export function LabelsPage() {
     onError: async (thrown, w) => {
       const error = adminErrorOf(thrown);
       const saving = w.kind === "save";
-      setNotice({ tone: "error", text: failureText(error, saving ? SAVE_WORDS : UNDO_WORDS) });
+      let text = failureText(error, saving ? SAVE_WORDS : UNDO_WORDS);
+      // The page reads again after these two, so the refusal ends up beside the NEXT cluster's form: say which
+      // cluster it was about.
+      if (
+        w.kind === "save" &&
+        error.kind === "reason" &&
+        (error.reason === "already_labelled" || error.reason === "unknown_cluster")
+      ) {
+        text = L.notice.aboutCluster(w.body.cluster_id, text);
+      }
+      setNotice({ tone: "error", text });
       if (isStale(error)) await invalidateAfter(client, saving ? "postLabel" : "undoLabel");
     },
   });

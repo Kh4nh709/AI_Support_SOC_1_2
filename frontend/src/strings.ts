@@ -1385,6 +1385,9 @@ export const S = {
           }`,
         undone: (clusterId: string, done: number, total: number) =>
           `Đã hoàn tác nhãn cụm ${clusterId}. Đã gán ${done} / ${total}.`,
+        // A refusal that makes the page read again is said beside the NEXT cluster's form: it names the cluster it
+        // was about, so it is not read as about the one on screen.
+        aboutCluster: (clusterId: string, text: string) => `Cụm ${clusterId}: ${text}`,
         invalid: "Nhãn không hợp lệ. Kiểm tra lại nhãn, độ chắc chắn và ghi chú.",
         saveServer: (status: number) =>
           `Máy chủ trả lỗi ${status}. Nhãn chưa được lưu — thử lại sau ít phút.`,

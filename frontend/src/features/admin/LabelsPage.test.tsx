@@ -826,13 +826,14 @@ describe("a save the server refuses or cannot make", () => {
     [
       "409 already labelled (the labeller did it in another tab)",
       { status: 409, body: { detail: "already labelled by this labeler" } },
-      S.admin.reason.already_labelled,
+      // Said beside the NEXT cluster's form, so it names the cluster it was about.
+      L.notice.aboutCluster(A, S.admin.reason.already_labelled),
       true,
     ],
     [
       "404 not a candidate",
       { status: 404, body: { detail: "cluster is not a gold candidate" } },
-      S.admin.reason.unknown_cluster,
+      L.notice.aboutCluster(A, S.admin.reason.unknown_cluster),
       true,
     ],
     [
