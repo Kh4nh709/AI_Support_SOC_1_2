@@ -1316,6 +1316,53 @@ def _plan_nodes(node: dict[str, Any], at_or_below_limit: bool = False):
         yield from _plan_nodes(child, at_or_below_limit)
 
 
+def _inline_payload_casts(output: str) -> int:
+    """How many times an EXPLAIN output expression computes `payload::text` itself.
+
+    A computed cast is spelled `(<alias>.payload)::text`. A READ of a column a lower node
+    computed is spelled the same way inside one more pair of parentheses, `((<alias>.payload)::text)`,
+    where the extra `(` is not a function call's (the character before it is not part of a name).
+    `octet_length((p.payload)::text)` is a call whose argument is a computed cast: inline."""
+    count = 0
+    for match in re.finditer(r"\(\w+\.payload\)::text", output):
+        start, end = match.span()
+        wrapped = start >= 1 and output[start - 1] == "(" and output[end : end + 1] == ")"
+        before = output[start - 2] if start >= 2 else " "
+        is_call_paren = before.isalnum() or before == "_"
+        count += 0 if wrapped and not is_call_paren else 1
+    return count
+
+
+@pytest.mark.parametrize(
+    "output, expected",
+    [
+        ("(a.payload)::text", 1),
+        ("(p.payload)::text", 1),
+        ("octet_length((p.payload)::text)", 1),
+        ("(octet_length((a.payload)::text) > 65536)", 1),
+        (
+            "CASE WHEN (octet_length((a.payload)::text) > 65536) THEN NULL::text ELSE (a.payload)::text END",
+            2,
+        ),
+        ("octet_length(((a.payload)::text))", 0),
+        (
+            "CASE WHEN (octet_length(((a.payload)::text)) > 65536) THEN NULL::text ELSE ((a.payload)::text) END",
+            0,
+        ),
+        (
+            "(CASE WHEN (octet_length(((p.payload)::text)) > 65536) THEN NULL::text ELSE ((p.payload)::text) END)",
+            0,
+        ),
+        ("u.username", 0),
+        ("a.payload", 0),
+    ],
+)
+def test_the_inline_cast_counter_reads_explains_spelling(output: str, expected: int) -> None:
+    """The one fragile helper of the plan test below, pinned on the spellings PostgreSQL 16 prints
+    (a computed cast, and a read of a computed column inside one more pair of parentheses)."""
+    assert _inline_payload_casts(output) == expected
+
+
 _PAGE_FILTERS = [
     pytest.param({}, None, id="no filter"),
     pytest.param({"subject": "BIG"}, None, id="subject"),
@@ -1354,14 +1401,9 @@ def test_the_page_selects_its_rows_first_and_converts_each_payload_to_text_once(
     for node, at_or_below_limit in nodes:
         if at_or_below_limit:
             assert not any("::text" in out for out in node.get("Output", [])), node["Node Type"]
-    inline = [
-        (node["Node Type"], out)
-        for node, _ in nodes
-        for out in node.get("Output", [])
-        for _ in re.findall(r"(?<!\()\(\w+\.payload\)::text", out)
-    ]
+    inline = sum(_inline_payload_casts(out) for node, _ in nodes for out in node.get("Output", []))
     shape = [(node["Node Type"], node.get("Output")) for node, _ in nodes]
-    assert len(inline) == 1, f"the payload is cast inline {len(inline)} times: {shape}"
+    assert inline == 1, f"the payload is cast inline {inline} times: {shape}"
 
 
 # ---------------------------------------------------------------------------
