@@ -43,3 +43,5 @@ The independent reviews found these Minors and approved without them, so none of
 | 35 | P11-T20 r1 n1 | `docs/phase-3-auto-close.md:277-288`: footnote that the denominator is the heads' `sum(occurrence_count)` (`rule_width_report`) |
 | 36 | P11-T20 r1 n2 | CLI `infra/auth.py:create_user` refuses `system`/`llm` too, same set as the web |
 | 37 | P11-T20 r1 n3 | `scripts/migrate.sh:53`: guard the base-migration count lookup like the others |
+| 38 | P11-T10 r2 n1 | `frontend/src/api/adminTypes.test.ts:113-118` `dictKeys`: throw on an unterminated string (`indexOf` −1 restarts the scan forever); optionally skip `\"` and add `\s*` to the nine anchors |
+| 39 | P11-T10 Director | `reserved` leaves `readFromElsewhere` in `adminStrings.test.ts` (P11-T20 part 1 is merged, the backend writes it) |
