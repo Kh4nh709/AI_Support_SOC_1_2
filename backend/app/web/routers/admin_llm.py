@@ -392,18 +392,42 @@ def _limits_block(conn: Any, cfg: Any) -> tuple[settings.Limits | None, dict[str
         return None, None
 
 
-def _month(conn: Any, cap_usd: int | None) -> dict[str, Any]:
-    spent = llm_runs.month_spend_usd(conn)  # the adapter's own query, not a copy of it
-    elapsed_s, month_s = conn.execute(_MONTH_CLOCK_SQL).fetchone()
+def month_figures(spent: float, cap_usd: int | None) -> dict[str, Any]:
+    """`{spent_usd, cap_usd, pct}` of the calendar month: the three figures the usage page's
+    `month` and the overview's `llm_month` (DEC-203 item 1) both serve, from ONE definition.
+    `spent` is `llm_runs.month_spend_usd`; `cap_usd` the effective cap, `None` when the limits
+    cannot be read (then `pct` is `None`, as it is for a cap of 0)."""
     pct = None
     if cap_usd is not None and cap_usd > 0:
         # Floored, not rounded: `pct >= 100` exactly when `spent >= cap_usd`, the adapter's own
         # comparison. Half up read 29.99 of 30 as 100.0 while the model still ran (review m1).
         pct = _round(Decimal(str(spent)) * 100 / cap_usd, 1, ROUND_DOWN)
+    return {"spent_usd": _round(spent, 4), "cap_usd": cap_usd, "pct": pct}
+
+
+def month_cap_usd(conn: Any, cfg: Any) -> int | None:
+    """The effective monthly cap, or `None` when the limits cannot be read (`effective_limits`
+    raises `SettingsUnavailable` on any database error, inside a savepoint of its own, so the
+    caller's transaction stays usable)."""
+    try:
+        return settings.effective_limits(conn, cfg).cap_usd
+    except settings.SettingsUnavailable:
+        return None
+
+
+def llm_month(conn: Any, cfg: Any) -> dict[str, Any]:
+    """The overview's `llm_month` section (DEC-203): `month_figures` for the cap in force. A
+    failure of the spend query is the CALLER's to turn into the section's error; an unreadable
+    cap is not a failure (`cap_usd` and `pct` are `None`), as on the usage page."""
+    cap_usd = month_cap_usd(conn, cfg)
+    return month_figures(llm_runs.month_spend_usd(conn), cap_usd)
+
+
+def _month(conn: Any, cap_usd: int | None) -> dict[str, Any]:
+    spent = llm_runs.month_spend_usd(conn)  # the adapter's own query, not a copy of it
+    elapsed_s, month_s = conn.execute(_MONTH_CLOCK_SQL).fetchone()
     return {
-        "spent_usd": _round(spent, 4),
-        "cap_usd": cap_usd,
-        "pct": pct,
+        **month_figures(spent, cap_usd),
         "projected_usd": _round(_projected_usd(spent, float(elapsed_s), float(month_s)), 4),
     }
 

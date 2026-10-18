@@ -32,7 +32,8 @@ from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
-from app.infra import config, jobs
+from app.audit import llm_runs
+from app.infra import config, jobs, settings
 from app.infra.auth import Claims
 from app.web import deps, main
 from app.web.routers import admin_overview
@@ -52,6 +53,7 @@ SECTIONS = (
     "health",
     "failed_jobs",
     "inventory",
+    "llm_month",
 )
 HCM = ZoneInfo("Asia/Ho_Chi_Minh")
 
@@ -272,6 +274,13 @@ def test_empty_database_answers_every_section_with_its_empty_shape(client) -> No
     assert body["health"] is None
     assert body["failed_jobs"] == []
     assert body["inventory"] == {"assets": 0, "identities": 0, "iocs": 0, "loaded_at": None}
+    # P11-T20 row 50 (DEC-203): nothing spent this month, the cap in force (the environment's
+    # `LLM_MONTHLY_USD_CAP`: a fresh database has no `settings` row)
+    assert body["llm_month"] == {
+        "spent_usd": 0.0,
+        "cap_usd": config.load().LLM_MONTHLY_USD_CAP,
+        "pct": 0.0,
+    }
     assert admin_overview.SECTION_TIMEOUT == "3s"
 
 
@@ -730,7 +739,7 @@ def _driver_error(conn: Any) -> None:
 
 @pytest.mark.db
 @pytest.mark.parametrize("fault", [_sql_error, _driver_error], ids=["sql-error", "driver-error"])
-@pytest.mark.parametrize("failing", ["top_agents", "waiting", "cases_open"])
+@pytest.mark.parametrize("failing", ["top_agents", "waiting", "cases_open", "llm_month"])
 def test_a_failing_section_is_null_with_an_error_and_the_others_still_compute(
     client, monkeypatch, failing: str, fault
 ) -> None:
@@ -803,6 +812,9 @@ class _CountingConnection:
         self.statements += 1
         return self._conn.execute(*args, **kwargs)
 
+    def __getattr__(self, name: str) -> Any:  # `transaction()`, `info`: `llm_month` reads settings
+        return getattr(self._conn, name)
+
 
 _DAY = timedelta(hours=24)
 
@@ -820,11 +832,15 @@ _DAY = timedelta(hours=24)
         ("_health", (), 1),
         ("_failed_jobs", (), 1),
         ("_inventory", (), 1),
+        ("_llm_month", (config.load(),), 2),  # the settings read (the cap), then the month's spend
     ],
 )
-def test_a_section_runs_one_statement_except_by_source(sdb, name, args, statements) -> None:
+def test_a_section_runs_one_statement_except_by_source_and_llm_month(
+    sdb, name, args, statements
+) -> None:
     """`SECTION_TIMEOUT` is a limit per statement, not per section. The module says so and
-    names `by_source` as the one section that runs two; this pins both halves of that sentence."""
+    names `by_source` and `llm_month` as the two sections that run two; this pins both halves of
+    that sentence."""
     counting = _CountingConnection(sdb)
     getattr(admin_overview, name)(counting, *args)
     assert counting.statements == statements
@@ -841,6 +857,157 @@ def test_several_sections_can_fail_in_one_response(client, monkeypatch) -> None:
     assert [e["section"] for e in body["errors"]] == ["by_source", "funnel", "failed_jobs"]
     assert body["by_source"] is None and body["funnel"] is None and body["failed_jobs"] is None
     assert body["alerts_by_day"] == [] and body["cases_open"] == 0 and body["health"] is None
+
+
+# ---------------------------------------------------------------------------
+# llm_month — P11-T20 row 50 (DEC-203 item 1): the month's spend against the cap
+# ---------------------------------------------------------------------------
+
+USAGE = "/api/admin/llm/usage"
+MONTH_KEYS = {"spent_usd", "cap_usd", "pct"}
+
+
+def _with_cap(cap: int) -> None:
+    """The config the route reads, with a fixed `LLM_MONTHLY_USD_CAP` (no `settings` row)."""
+    cfg = dataclasses.replace(config.load(), DISPLAY_TZ="Asia/Ho_Chi_Minh", LLM_MONTHLY_USD_CAP=cap)
+    main.app.dependency_overrides[deps.get_config] = lambda: cfg
+
+
+def _spend(conn: Any, cost: str, *, last_month: bool = False) -> None:
+    """One `llm_runs` row costing `cost` USD, now (this calendar month) or the day before it began
+    (last month: the same query as the cap check leaves it out)."""
+    created = "date_trunc('month', now()) - interval '1 day'" if last_month else "now()"
+    conn.execute(
+        "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, system_prompt, "
+        "user_message, role, cost_usd, created_at) "
+        f"VALUES (gen_random_uuid(), 'triage', 'alert', %s, 's', 'u', 'proposer', %s, {created})",
+        (f"spend-{uuid.uuid4().hex[:8]}", cost),
+    )
+
+
+@pytest.mark.db
+def test_llm_month_is_the_spend_of_the_calendar_month_against_the_cap_with_pct_floored(
+    client,
+) -> None:
+    tc, db, _ = client
+    _with_cap(30)
+    _spend(db, "20.00")
+    _spend(db, "9.99")
+    _spend(db, "100.00", last_month=True)  # not this month's
+
+    body = _get(tc).json()
+
+    # 29.99 of 30: pct is FLOORED to one decimal, so 100.0 means the cap is reached (the adapter's
+    # own comparison) and 99.9 here does not
+    assert body["llm_month"] == {"spent_usd": 29.99, "cap_usd": 30, "pct": 99.9}
+    assert set(body["llm_month"]) == MONTH_KEYS  # no `projected_usd`: that is the usage page's
+    assert body["errors"] == []
+
+    _spend(db, "0.01")  # exactly the cap
+    assert _get(tc).json()["llm_month"] == {"spent_usd": 30.0, "cap_usd": 30, "pct": 100.0}
+    _spend(db, "15.00")
+    assert _get(tc).json()["llm_month"]["pct"] == 150.0  # over the cap: above 100, not clamped
+
+
+@pytest.mark.db
+def test_llm_month_has_the_same_figures_as_the_usage_pages_month(client) -> None:
+    """One definition, shared: the overview's section and `GET /api/admin/llm/usage`'s `month`
+    agree on `spent_usd`, `cap_usd` and `pct`, wherever the rounding falls."""
+    tc, db, _ = client
+    _with_cap(30)
+    for cost in ("12.34565", "0.00005", "4.99999", "0.1"):  # four decimals, half up
+        _spend(db, cost)
+    overview = _get(tc).json()["llm_month"]
+    usage = tc.get(USAGE, params={"range": "7d"})
+    assert usage.status_code == 200, usage.text
+    month = usage.json()["month"]
+    assert overview == {key: month[key] for key in MONTH_KEYS}
+    assert overview["spent_usd"] == 17.4457 and overview["pct"] == 58.1  # 17.44569; 58.15 floored
+    _with_cap(17)  # a cap the spend has passed
+    month = tc.get(USAGE).json()["month"]
+    assert _get(tc).json()["llm_month"] == {key: month[key] for key in MONTH_KEYS}
+    assert month["pct"] == 102.6
+
+
+@pytest.mark.db
+def test_llm_month_with_limits_that_cannot_be_read_has_a_null_cap_and_pct_not_an_error(
+    client, monkeypatch
+) -> None:
+    """DEC-203: `cap_usd` is null when the limits cannot be read, as on the usage page. That is
+    not the section failing: the spend is still the spend, and `errors` stays empty."""
+    tc, db, _ = client
+    _spend(db, "5.00")
+
+    def unreadable(conn: Any, cfg: Any) -> Any:
+        raise settings.SettingsUnavailable("settings unreadable: simulated")
+
+    monkeypatch.setattr(settings, "effective_limits", unreadable)
+    body = _get(tc).json()
+
+    assert body["llm_month"] == {"spent_usd": 5.0, "cap_usd": None, "pct": None}
+    assert body["errors"] == []
+    usage = tc.get(USAGE).json()
+    assert usage["limits"] is None and usage["month"]["cap_usd"] is None
+
+
+@pytest.mark.db
+def test_a_real_failure_reading_the_settings_leaves_the_transaction_usable_for_the_spend(
+    client,
+) -> None:
+    """The settings read fails for real (the table is gone, inside this test's transaction): the
+    savepoint in `effective_limits` is what keeps the request's transaction alive, so the spend
+    query and every other section still run."""
+    tc, db, claims = client
+    _seed_every_section(db, claims.user_id)
+    _spend(db, "2.50")
+    db.execute("ALTER TABLE settings RENAME TO settings_gone")
+
+    body = _get(tc).json()
+
+    assert body["llm_month"] == {"spent_usd": 2.5, "cap_usd": None, "pct": None}
+    assert body["errors"] == []
+    assert body["funnel"]["by_status"] == {"queued_tier1": 1} and body["inventory"]["assets"] == 1
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    ("fault", "error"),
+    [
+        (lambda conn: conn.execute("SELECT 1/0"), "query_failed"),
+        (lambda conn: conn.execute("SELECT pg_sleep(5)"), "timeout"),
+    ],
+    ids=["query-failure", "timeout"],
+)
+def test_llm_month_failing_for_real_fails_alone(client, monkeypatch, fault, error) -> None:
+    """The month's spend query fails, or runs past the statement timeout: `llm_month` is null with
+    its own `errors` entry, and the nine other sections are whole, before it and after."""
+    tc, db, claims = client
+    _seed_every_section(db, claims.user_id)
+    monkeypatch.setattr(admin_overview, "SECTION_TIMEOUT", "50ms")
+    monkeypatch.setattr(llm_runs, "month_spend_usd", fault)
+
+    body = _get(tc).json()
+
+    assert body["errors"] == [{"section": "llm_month", "error": error}]
+    assert body["llm_month"] is None
+    for section in SECTIONS:
+        if section != "llm_month":
+            assert body[section] is not None, f"{section} was lost with llm_month"
+    assert body["failed_jobs"][0]["subject_id"] == "seed-failed" and body["cases_open"] == 1
+    assert db.execute("SELECT 1").fetchone() == (1,)  # the connection is still good
+
+
+@pytest.mark.db
+def test_llm_month_does_not_fail_with_the_other_sections_and_they_do_not_fail_with_it(
+    client, monkeypatch
+) -> None:
+    tc, db, _ = client
+    _spend(db, "1.00")
+    for name in ("_by_source", "_funnel"):
+        monkeypatch.setattr(admin_overview, name, lambda conn, *args: _sql_error(conn))
+    body = _get(tc).json()
+    assert [e["section"] for e in body["errors"]] == ["by_source", "funnel"]
+    assert body["llm_month"]["spent_usd"] == 1.0  # computed after two failed sections
 
 
 # ---------------------------------------------------------------------------
