@@ -57,10 +57,12 @@ _OTHER_DAY = datetime(2026, 9, 28, 10, 0, tzinfo=UTC)  # 17:00 local on the 28th
 _DIGEST = "/api/admin/digest"
 _counter = itertools.count()
 
-# What `DigestRowOut` carries: every `DigestRow` field, plus who reviewed it and when.
+# What `DigestRowOut` carries: every `DigestRow` field, who reviewed it and when, and whether a
+# digest review reopened it (fix round 1, F4).
 ROW_KEYS = {f.name for f in dataclasses.fields(digest.DigestRow)} | {
     "reviewed_by_name",
     "reviewed_at",
+    "reopened_by_review",
 }
 
 
@@ -179,7 +181,11 @@ def _alert(
     severity: str = "high",
     description: str = "SSH brute force",
     is_synthetic: bool = False,
+    auto_closed_event: bool = True,
 ) -> str:
+    """One alert. An alert created `auto_closed` also gets the `alert.auto_closed` audit event
+    `transitions.open_alert` writes in the same transaction as `closed_at = now()`, at
+    `closed_at`: it is what dates the closing once a reopen has cleared `closed_at`."""
     alert_id = alert_id or f"p11t07-{next(_counter)}-{uuid.uuid4().hex[:6]}"
     conn.execute(
         """
@@ -207,6 +213,30 @@ def _alert(
             is_synthetic,
         ),
     )
+    if auto_closed_event and status == "auto_closed" and closed_at is not None:
+        conn.execute(
+            "INSERT INTO audit_events (event_type, subject_id, actor_role, payload, created_at)"
+            " VALUES ('alert.auto_closed', %s, 'system', %s, %s)",
+            (alert_id, Jsonb({"seeded": True}), closed_at),
+        )
+    return alert_id
+
+
+def _reopened(
+    conn: Any,
+    user_id: str,
+    rule_id: str | None,
+    *,
+    closed_at: datetime = _IN_DAY,
+    is_synthetic: bool = False,
+) -> str:
+    """An alert a rule auto-closed at `closed_at` and that Tier 1 then reopened (A17): status
+    `queued_tier1`, `closed_at` cleared, the `alert.auto_closed` event and `autoclose_rule_id`
+    kept, as in production."""
+    alert_id = _alert(
+        conn, autoclose_rule_id=rule_id, closed_at=closed_at, is_synthetic=is_synthetic
+    )
+    transitions.reopen(conn, alert_id, user_id, reason="tier1 looked again")
     return alert_id
 
 
@@ -230,10 +260,13 @@ def _events(conn: Any, event_type: str, subject_id: str) -> list[tuple]:
 
 
 def _all_event_types(conn: Any, alert_id: str) -> list[str]:
+    """Every audit event of the alert but the `alert.auto_closed` the factory seeds, so that
+    "nothing was written" still reads `[]`."""
     return [
         t
         for (t,) in conn.execute(
-            "SELECT event_type FROM audit_events WHERE subject_id = %s ORDER BY audit_id",
+            "SELECT event_type FROM audit_events"
+            " WHERE subject_id = %s AND event_type <> 'alert.auto_closed' ORDER BY audit_id",
             (alert_id,),
         ).fetchall()
     ]
@@ -265,6 +298,13 @@ def _nothing_written(conn: Any, alert_id: str) -> None:
     assert _review_rows(conn, alert_id) == []
     assert _labels(conn, alert_id) == []
     assert _all_event_types(conn, alert_id) == []
+
+
+def _at_utc(monkeypatch: pytest.MonkeyPatch, instant: datetime) -> None:
+    """The clock the route reads, fixed at one instant: `_now_local(tz)` is that instant seen in
+    `tz`, so a route that asked for the wrong zone gets another date (a fake that returned the
+    same wall-clock time in every zone would not notice)."""
+    monkeypatch.setattr(admin_digest, "_now_local", lambda tz: instant.astimezone(ZoneInfo(tz)))
 
 
 def _get(tc: TestClient, day: str | None = _DAY) -> Any:
@@ -318,9 +358,7 @@ BAD_DAYS = [
 @pytest.mark.db
 def test_get_answers_the_documented_shape_and_every_row_key(client, monkeypatch) -> None:
     tc, db, admin = client
-    monkeypatch.setattr(
-        admin_digest, "_now_local", lambda tz: datetime(2026, 9, 30, 9, 0, tzinfo=ZoneInfo(tz))
-    )
+    _at_utc(monkeypatch, datetime(2026, 9, 29, 17, 30, tzinfo=UTC))  # 00:30 local on the 30th
     rule_id = _rule(db, admin.user_id, name="known-scanner")
     agrees = _alert(db, autoclose_rule_id=rule_id, occurrence_count=9)
     disagrees = _alert(db, autoclose_rule_id=rule_id, occurrence_count=2, severity="low")
@@ -334,7 +372,7 @@ def test_get_answers_the_documented_shape_and_every_row_key(client, monkeypatch)
     body = resp.json()
     assert set(body) == {"day", "today", "rules_enabled", "rows"}
     assert body["day"] == _DAY
-    assert body["today"] == "2026-09-30"
+    assert body["today"] == "2026-09-30"  # it is still the 29th in UTC
     assert body["rules_enabled"] is True
     # `build`'s order: the disagreement first, then the larger cluster.
     assert [r["alert_id"] for r in body["rows"]] == [disagrees, agrees, no_run]
@@ -371,9 +409,7 @@ def test_the_default_day_is_today_in_the_display_zone(client, monkeypatch) -> No
     """The spec says today (the Jinja page defaults to yesterday: the 08:00 job reviews it). At
     00:30 local on the 30th it is still 17:30 UTC on the 29th: the zone, not UTC, names the day."""
     tc, db, _ = client
-    monkeypatch.setattr(
-        admin_digest, "_now_local", lambda tz: datetime(2026, 9, 30, 0, 30, tzinfo=ZoneInfo(tz))
-    )
+    _at_utc(monkeypatch, datetime(2026, 9, 29, 17, 30, tzinfo=UTC))  # 00:30 local on the 30th
     today_alert = _alert(db, closed_at=datetime(2026, 9, 30, 0, 10, tzinfo=HCM))
     yesterday_alert = _alert(db, closed_at=datetime(2026, 9, 29, 23, 50, tzinfo=HCM))
 
@@ -386,6 +422,28 @@ def test_the_default_day_is_today_in_the_display_zone(client, monkeypatch) -> No
     other = _get(tc, "2026-09-29").json()
     assert other["day"] == "2026-09-29" and other["today"] == "2026-09-30"
     assert [r["alert_id"] for r in other["rows"]] == [yesterday_alert]
+
+
+@pytest.mark.db
+def test_today_comes_from_the_clock_through_the_display_zone_at_local_midnight(
+    client, monkeypatch
+) -> None:
+    """The real `_now_local` runs, over a frozen `datetime.now`: one second before 17:00 UTC is
+    still the 29th at 23:59:59 local, 17:00:00 UTC is the 30th at 00:00:00 local."""
+    tc, _db, _ = client
+    for instant, today in (
+        (datetime(2026, 9, 29, 16, 59, 59, tzinfo=UTC), "2026-09-29"),
+        (datetime(2026, 9, 29, 17, 0, 0, tzinfo=UTC), "2026-09-30"),
+    ):
+
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None, _instant=instant):
+                return _instant.astimezone(tz) if tz else _instant.replace(tzinfo=None)
+
+        monkeypatch.setattr(admin_digest, "datetime", FrozenDateTime)
+        body = tc.get(_DIGEST).json()
+        assert body["today"] == today and body["day"] == today, instant
 
 
 @pytest.mark.db
@@ -684,7 +742,10 @@ def test_wrong_reopens_the_alert_and_the_row_still_describes_it(client) -> None:
     assert _alert_state(db, alert_id) == ("queued_tier1", True, "digest")
     assert _labels(db, alert_id) == []
     assert sorted(_all_event_types(db, alert_id)) == ["alert.reopened", "autoclose.reviewed"]
-    assert _get(tc).json()["rows"] == []  # and it has left the digest
+    # `reopened_by_review`: the page shows the verdict and "đã mở lại về hàng đợi Tier 1" again
+    # after a refetch, so the list keeps the row (module docstring; the F4 tests below).
+    assert row["reopened_by_review"] is True
+    assert _get(tc).json()["rows"] == [row]
 
 
 @pytest.mark.db
@@ -757,18 +818,91 @@ def test_the_same_verdict_twice_is_still_409_not_an_upsert(client) -> None:
 
 
 @pytest.mark.db
-def test_an_alert_that_is_no_longer_auto_closed_is_409_not_auto_closed(client) -> None:
-    """A stale page: the row was reopened (by Tier 1, or by a `wrong` review) after this admin
-    loaded it. The digest no longer lists it, but the answer is the conflict the page maps to
-    "no longer auto-closed", not a 404 that says the alert never was on that day."""
-    tc, db, _ = client
-    reopened = _alert(db, status="queued_tier1", closed_at=None)
-    escalated = _alert(db, status="escalated_tier2", closed_at=None)
-    for alert_id in (reopened, escalated):
-        resp = _post(tc, alert_id, "correct")
-        assert resp.status_code == 409, (alert_id, resp.status_code, resp.text[:300])
-        assert resp.json() == {"detail": {"reason": "not_auto_closed"}}
-        _nothing_written(db, alert_id)
+def test_an_alert_a_rule_closed_that_day_and_that_is_no_longer_auto_closed_is_409(client) -> None:
+    """A stale page: the row was reopened by Tier 1 after this admin loaded it. `build` no
+    longer lists it, but the answer is the conflict the page maps to "no longer auto-closed",
+    not a 404 that says the alert never was on that day."""
+    tc, db, admin = client
+    rule_id = _rule(db, admin.user_id)
+    alert_id = _reopened(db, admin.user_id, rule_id)
+    events_before = _all_event_types(db, alert_id)
+
+    resp = _post(tc, alert_id, "correct")
+
+    assert resp.status_code == 409, resp.text[:300]
+    assert resp.json() == {"detail": {"reason": "not_auto_closed"}}
+    assert _review_rows(db, alert_id) == [] and _labels(db, alert_id) == []
+    assert _all_event_types(db, alert_id) == events_before
+    assert _alert_state(db, alert_id)[0] == "queued_tier1"
+
+
+def _not_on_the_digest(db: Any, admin_id: str, case: str) -> str:
+    """Each case breaks exactly one of the four conditions of a 409 (not synthetic; closed by a
+    rule; an `alert.auto_closed` event on the posted day; now in another status)."""
+    rule_id = _rule(db, admin_id, name=f"rule-{case}")
+    if case == "synthetic_reopened":
+        return _reopened(db, admin_id, rule_id, is_synthetic=True)
+    if case == "never_auto_closed_queued":
+        return _alert(db, status="queued_tier1", closed_at=None, autoclose_rule_id=rule_id)
+    if case == "never_auto_closed_received":
+        return _alert(db, status="received", closed_at=None, autoclose_rule_id=rule_id)
+    if case == "other_day_reopened":
+        return _reopened(db, admin_id, rule_id, closed_at=_OTHER_DAY)
+    if case == "reopened_without_a_rule":
+        return _reopened(db, admin_id, None)
+    if case == "auto_closed_on_another_day":
+        return _alert(db, closed_at=_OTHER_DAY, autoclose_rule_id=rule_id)
+    if case == "synthetic_auto_closed":
+        return _alert(db, is_synthetic=True, autoclose_rule_id=rule_id)
+    assert case == "unknown", case
+    return "no-such-alert"
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "case",
+    [
+        "synthetic_reopened",
+        "never_auto_closed_queued",
+        "never_auto_closed_received",
+        "other_day_reopened",
+        "reopened_without_a_rule",
+        "auto_closed_on_another_day",
+        "synthetic_auto_closed",
+        "unknown",
+    ],
+)
+def test_every_other_alert_that_is_not_on_the_days_digest_is_404(client, case) -> None:
+    """The 409 is only for an alert a rule auto-closed on the posted day (DISPLAY_TZ) that is
+    now in another status; every other alert off the digest is a 404, whatever its status."""
+    tc, db, admin = client
+    alert_id = _not_on_the_digest(db, admin.user_id, case)
+    before = _all_event_types(db, alert_id)
+
+    resp = _post(tc, alert_id, "correct")
+
+    assert resp.status_code == 404, (case, resp.status_code, resp.text[:300])
+    assert resp.json() == {"detail": {"reason": "not_in_digest"}}
+    assert _review_rows(db, alert_id) == [] and _labels(db, alert_id) == []
+    assert _all_event_types(db, alert_id) == before
+
+
+@pytest.mark.db
+def test_the_conflict_follows_the_posted_day_not_the_alert(client) -> None:
+    """An alert reopened after a rule closed it on the 28th is a 409 for the 28th and a 404 for
+    the 29th; the day bounds are the display zone's, 23:59:59 local included."""
+    tc, db, admin = client
+    rule_id = _rule(db, admin.user_id)
+    late = _reopened(
+        db, admin.user_id, rule_id, closed_at=datetime(2026, 9, 28, 23, 59, 59, tzinfo=HCM)
+    )
+    midnight = _reopened(
+        db, admin.user_id, rule_id, closed_at=datetime(2026, 9, 29, 0, 0, 0, tzinfo=HCM)
+    )
+    assert _post(tc, late, "correct", day="2026-09-28").status_code == 409
+    assert _post(tc, late, "correct", day="2026-09-29").status_code == 404
+    assert _post(tc, midnight, "correct", day="2026-09-28").status_code == 404
+    assert _post(tc, midnight, "correct", day="2026-09-29").status_code == 409
 
 
 @pytest.mark.db
@@ -831,7 +965,7 @@ def test_the_alert_id_parameter_is_the_shared_validated_type() -> None:
 
 @pytest.mark.db
 def test_every_error_body_is_a_plain_reason_and_nothing_else(client) -> None:
-    tc, db, _ = client
+    tc, db, admin = client
     done = _alert(db)
     assert _post(tc, done, "correct").status_code == 200
     answers = [
@@ -839,12 +973,198 @@ def test_every_error_body_is_a_plain_reason_and_nothing_else(client) -> None:
         _post(tc, done, "correct", day="nope"),
         _post(tc, done, "maybe"),
         _post(tc, done, "correct"),  # 409 already_reviewed
-        _post(tc, _alert(db, status="queued_tier1", closed_at=None), "correct"),
+        _post(tc, _reopened(db, admin.user_id, _rule(db, admin.user_id)), "correct"),  # 409
         _post(tc, "missing", "correct"),
     ]
     assert [r.status_code for r in answers] == [422, 422, 422, 409, 409, 404]
     for resp in answers:
         _no_leak(resp)
+
+
+# ---------------------------------------------------------------------------
+# An alert a digest review reopened stays on its day's list (fix round 1, F4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_after_sai_the_next_get_still_lists_the_row_with_its_verdict_and_reviewer(client) -> None:
+    """Spec 4.5: after a review the row shows the verdict, the reviewer and, for "Sai", that it
+    was reopened. It must survive a refetch and a reload, which page state would not: the
+    alert is no longer `auto_closed`, so `build` has dropped it, and the API lists it again."""
+    tc, db, admin = client
+    rule_id = _rule(db, admin.user_id)
+    sai = _alert(db, autoclose_rule_id=rule_id, occurrence_count=5)
+    waiting = _alert(db, autoclose_rule_id=rule_id, occurrence_count=2)
+    posted = _post(tc, sai, "wrong")
+    assert posted.status_code == 200 and posted.json()["reopened"] is True
+    assert _alert_state(db, sai)[0] == "queued_tier1"
+
+    for _refetch in range(2):  # nothing consumes the row
+        rows = _get(tc).json()["rows"]
+        assert [r["alert_id"] for r in rows] == [sai, waiting]  # `build`'s order, 5 before 2
+        listed = rows[0]
+        assert listed == posted.json()["row"]  # the 200's row is what the list shows
+        assert listed["reviewed_verdict"] == "wrong"
+        assert listed["reviewed_by_name"] == "Alice Admin" and listed["reviewed_at"] is not None
+        assert listed["reopened_by_review"] is True
+        assert rows[1]["reopened_by_review"] is False and rows[1]["reviewed_verdict"] is None
+        # The page's summary is computed from the rows: the reopened cluster is still counted.
+        reviewed = [r for r in rows if r["reviewed_verdict"] is not None]
+        assert (len(rows), len(reviewed), len(rows) - len(reviewed)) == (2, 1, 1)
+
+
+@pytest.mark.db
+def test_a_row_reopened_by_a_digest_review_is_listed_whatever_became_of_it_since(client) -> None:
+    tc, db, admin = client
+    sai = _alert(db, autoclose_rule_id=_rule(db, admin.user_id))
+    assert _post(tc, sai, "wrong").status_code == 200
+    transitions.acknowledge(db, sai, admin.user_id)  # Tier 1 picks it up
+    assert _alert_state(db, sai)[0] == "tier1_active"
+
+    (row,) = _get(tc).json()["rows"]
+
+    assert row["alert_id"] == sai and row["reopened_by_review"] is True
+    assert row["reviewed_verdict"] == "wrong"
+
+
+@pytest.mark.db
+def test_an_alert_tier1_reopened_without_a_digest_review_is_not_listed(client) -> None:
+    """As before: it left the digest when it left `auto_closed`. So did an alert whose review
+    was `correct` or `unsure` and that Tier 1 then reopened: only a `wrong` review keeps it."""
+    tc, db, admin = client
+    rule_id = _rule(db, admin.user_id)
+    kept = _alert(db, autoclose_rule_id=rule_id)
+    _reopened(db, admin.user_id, rule_id)
+    for verdict in ("correct", "unsure"):
+        reviewed = _alert(db, autoclose_rule_id=rule_id)
+        assert _post(tc, reviewed, verdict).status_code == 200
+        transitions.reopen(db, reviewed, admin.user_id, reason="tier1 looked again")
+        assert _alert_state(db, reviewed)[0] == "queued_tier1"
+
+    rows = _get(tc).json()["rows"]
+
+    assert [r["alert_id"] for r in rows] == [kept]
+    assert rows[0]["reopened_by_review"] is False
+
+
+@pytest.mark.db
+def test_a_sai_row_is_listed_on_the_day_the_rule_closed_it_and_on_no_other(client) -> None:
+    tc, db, admin = client
+    rule_id = _rule(db, admin.user_id)
+    on_28th = _alert(db, closed_at=_OTHER_DAY, autoclose_rule_id=rule_id)
+    last_second = _alert(
+        db, closed_at=datetime(2026, 9, 29, 23, 59, 59, tzinfo=HCM), autoclose_rule_id=rule_id
+    )
+    first_second = _alert(
+        db, closed_at=datetime(2026, 9, 30, 0, 0, 0, tzinfo=HCM), autoclose_rule_id=rule_id
+    )
+    assert _post(tc, on_28th, "wrong", day="2026-09-28").status_code == 200
+    assert _post(tc, last_second, "wrong", day="2026-09-29").status_code == 200
+    assert _post(tc, first_second, "wrong", day="2026-09-30").status_code == 200
+
+    def listed(day: str) -> list[tuple[str, bool]]:
+        return [(r["alert_id"], r["reopened_by_review"]) for r in _get(tc, day).json()["rows"]]
+
+    assert listed("2026-09-28") == [(on_28th, True)]
+    assert listed("2026-09-29") == [(last_second, True)]  # not the 28th's, not 00:00:00 on the 30th
+    assert listed("2026-09-30") == [(first_second, True)]
+    assert listed("2026-10-01") == []
+
+
+@pytest.mark.db
+def test_a_sai_row_follows_the_display_zone_not_utc(client) -> None:
+    tc, db, admin = client
+    _override(db, admin, tz="UTC")
+    rule_id = _rule(db, admin.user_id)
+    sai = _alert(
+        db, closed_at=datetime(2026, 9, 29, 23, 59, 59, tzinfo=UTC), autoclose_rule_id=rule_id
+    )
+    assert _post(tc, sai, "wrong", day="2026-09-29").status_code == 200
+    assert [r["alert_id"] for r in _get(tc, "2026-09-29").json()["rows"]] == [sai]
+    assert _get(tc, "2026-09-30").json()["rows"] == []
+
+
+@pytest.mark.db
+def test_a_reopened_row_with_no_wrong_review_or_a_synthetic_one_is_not_listed(client) -> None:
+    """`autoclose_reviews` says `wrong` for the row to be listed: an `alert.auto_closed` event on
+    the day and a reopen are not enough, and a synthetic alert is never on the digest."""
+    tc, db, admin = client
+    rule_id = _rule(db, admin.user_id)
+    _reopened(db, admin.user_id, rule_id)
+    synthetic = _alert(db, autoclose_rule_id=rule_id, is_synthetic=True)
+    digest.review(db, synthetic, "wrong", admin.user_id)  # a review of a synthetic alert
+    assert _alert_state(db, synthetic)[0] == "queued_tier1"
+    assert _get(tc).json()["rows"] == []
+
+
+# ---------------------------------------------------------------------------
+# A POST costs the same however big the day is (fix round 1, F3)
+# ---------------------------------------------------------------------------
+
+
+class _Counting:
+    """The connection the route gets, counting its `execute` calls."""
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+        self.n = 0
+
+    def execute(self, *args: Any, **kwargs: Any) -> Any:
+        self.n += 1
+        return self._conn.execute(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+
+@pytest.mark.db
+def test_build_with_an_alert_id_reads_only_that_alert_and_without_one_reads_the_day(client) -> None:
+    _tc, db, _ = client
+    a, b, c = _alert(db), _alert(db), _alert(db, closed_at=_OTHER_DAY)
+    for alert_id in (a, b, c):
+        _run(db, alert_id, "escalate")
+    assert {r.alert_id for r in digest.build(db, _DAY, tz=TZ)} == {a, b}
+    assert [r.alert_id for r in digest.build(db, _DAY, tz=TZ, alert_id=a)] == [a]
+    assert digest.build(db, _DAY, tz=TZ, alert_id=c) == []  # not closed on that day
+    assert digest.build(db, _DAY, tz=TZ, alert_id="no-such-alert") == []
+    (one,) = digest.build(db, _DAY, tz=TZ, alert_id=b)
+    assert one.suggested_action == "escalate" and one.disagreement is True
+
+
+@pytest.mark.db
+def test_a_post_costs_the_same_statements_for_a_day_of_3_rows_and_of_43(client) -> None:
+    """Each POST used to build the whole day twice, with one `latest_suggestion` query per row:
+    87 statements at 40 rows and 167 at 80. With `alert_id` given to `build` it is a constant."""
+    tc, db, admin = client
+    rule_id = _rule(db, admin.user_id)
+    counting = _Counting(db)
+    main.app.dependency_overrides[deps.get_conn] = lambda: counting
+
+    def costs(day: str, rows: int) -> dict[str, int]:
+        at = datetime.fromisoformat(f"{day}T12:00:00+07:00")
+        ids = [_alert(db, closed_at=at, autoclose_rule_id=rule_id) for _ in range(rows)]
+        for alert_id in ids:
+            _run(db, alert_id, "false_positive")
+        reopened = _reopened(db, admin.user_id, rule_id, closed_at=at)
+        out = {}
+        for name, alert_id, verdict, expected in (
+            ("200 unsure", ids[0], "unsure", 200),
+            ("200 wrong", ids[1], "wrong", 200),
+            ("409 already_reviewed", ids[0], "unsure", 409),
+            ("409 not_auto_closed", reopened, "correct", 409),
+            ("404 not_in_digest", "no-such-alert", "correct", 404),
+        ):
+            counting.n = 0
+            resp = _post(tc, alert_id, verdict, day=day)
+            assert resp.status_code == expected, (name, resp.status_code, resp.text[:200])
+            out[name] = counting.n
+        return out
+
+    small = costs("2026-09-20", 3)
+    big = costs("2026-09-21", 43)
+
+    assert small == big, (small, big)
+    assert max(small.values()) <= 14, small
 
 
 # ---------------------------------------------------------------------------
