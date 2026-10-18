@@ -3399,3 +3399,38 @@ Amended 18/10 (P11-T03 review round 2, N1 and N2):
 - **What the bound actually protects is each send.** The adapter runs SQL before every attempt, which resets the idle-in-transaction timer, so the per-send bound is what keeps a call inside the session.
 - **The total-time margin** (`2 × timeout + 60 ≤ JOB_LOCK_TIMEOUT_S`) holds for ②, and for ① only while one worker runs. `reclaim_stale` is called by the worker's own loop. ①'s four sends predate P11, with the `.env` timeout of 120.
 - **Precondition:** the invariant needs `JOB_LOCK_TIMEOUT_S ≥ 80`, because the web floor of 10 cannot keep it below that. Under that value the unclamped `.env` timeout is the larger risk anyway. A config-load guard on the `.env` pair would be a separate decision.
+
+## DEC-203 · 2026-10-18 · Two P11 contract additions from the reviews: the overview answer gains an `llm_month` section that fails alone, and the audit redaction gains a value rule (a URL carrying a password is redacted under any key), adds `passwd`/`pwd`, and never redacts a boolean or null
+Scope: **product** (admin console API) · **security** (audit redaction)
+Decided by: **the Director, 18/10**, on the independent reviews of P11-T11 (finding F1) and P11-T09 (round 2, N2). Both are additions; no existing field changes.
+Drafted by: Director (Opus 5.5)
+Propagated to:
+- spec §5.3 (overview) and §5.8 (redaction);
+- P11-T20 part 2, backend (rows 31, 50);
+- P11-T20 part 2, frontend (the cost card reads `llm_month`).
+Decision:
+  1. **`GET /api/admin/overview` gains `llm_month`: `{spent_usd, cap_usd, pct}`.**
+     - It uses the same figures and rules as `GET /api/admin/llm/usage`'s `month`: `pct` floored, `cap_usd` null when the limits cannot be read.
+     - It fails alone, like the other nine sections: `errors[]` gets `{section: "llm_month", error: timeout|query_failed}`.
+     - The overview's cost card reads it instead of a second `llm/usage?range=month` read. That read 503s as a whole if any of its four blocks fails.
+  2. **The audit redaction (spec §5.8) gains three rules, applied at any depth.**
+     - (a) A string value matching `^[a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s]+@` (a URL carrying a password) is redacted whatever its key. That covers `DATABASE_URL*`, `conn_str`, and a DSN inside an error text.
+     - (b) `passwd` and `pwd` join the key suffixes.
+     - (c) A boolean or null value is never redacted. A flag cannot carry a secret, so `has_password`, `is_secret` and the like stay readable.
+     - The key rule and the `token_hash` exception are unchanged.
+
+## DEC-204 · 2026-10-18 · The audit read hides the verdict of a `label.created` event (`label`, `confidence`) from every viewer, so the audit page cannot show one labeller's label to the other
+Scope: **product** (admin console API) · **security** (blind labelling, gold-set independence)
+Decided by: **the Director, 18/10**, on the independent review of P11-T16 (an observation outside that task). It narrows what P11-T09's audit answers return. It adds no field, and the gold set is unaffected.
+Drafted by: Director (Opus 5.5)
+Propagated to: spec §5.8 · P11-T20 part 2, backend (row 53) · the runbook with P11-T19
+Context:
+  - Labelling is blind between the two labellers (DEC-019, DEC-101): each labels without seeing the other's label. The labelling page and API honour that.
+  - `tier1/labels.py:546-558` writes `label.created` with `{alert_id, labeler_id, label, confidence, gold_set}`, and `admin_audit.py` lists it in the `configuration` group, returning the payload redacted only for secret keys.
+  - So the Audit page, which both labellers can open, would show labeller A's `label` and `confidence` to labeller B. Both labellers are admins, so the page's role guard does not separate them.
+Decision:
+  1. `GET /api/admin/audit` redacts `label` and `confidence` in the payload of every `label.created` event, for every viewer, at any depth, with the same redaction marker as the secret keys.
+  2. The event stays listed, with its time, `labeler_id`, `alert_id`, `gold_set` and the `undo` flag. It is accountability that someone labelled, never what they chose.
+  3. The Owner reads the labels from `triage_labels` and the export tools, as before. The audit page is not a way to read them.
+  4. The hint on the labelling page, "Nhãn của bạn không hiện với người gán nhãn còn lại", is then true on the audit page too.
+Supersedes: none. It narrows P11-T09's answers, which no page used yet.
