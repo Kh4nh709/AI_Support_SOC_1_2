@@ -290,6 +290,8 @@ HAVING sum(occurrence_count) > 0.30 * tong.n;
 
 > ⚠️ **Đây là chỗ M4 dễ làm hỏng lớp bảo vệ 2 nếu quên sửa.** Đếm dòng sau M4 thì một rule đóng 5.000 alert chỉ hiện thành **1** — rule rộng nhất trở nên vô hình đúng lúc cần thấy nhất.
 
+> **Chú thích — mẫu số trong mã (P11-T20, hàng 35).** Truy vấn trên chia cho `count(*)` các dòng. Hàm chạy thật, `rule_width_report` (`backend/app/ingest/autoclose.py`), chia cho **`sum(occurrence_count)` của các alert đầu cụm** (`duplicate_of IS NULL`) trong cùng cửa sổ: cả tử số lẫn mẫu số đều là tổng số lần xuất hiện, nên tử số là một phần của mẫu số và tỉ lệ không bao giờ quá 100%. Dòng bản sao (`duplicate_of` khác NULL) bị bỏ khỏi tổng vì `occurrence_count` của alert đầu cụm đã tính chúng rồi. Ngưỡng là `AUTOCLOSE_RULE_WIDTH_PCT` (mặc định 30) và so sánh là lớn hơn hẳn (`>`): đóng đúng 30% thì chưa bị báo. Trên dữ liệu giống production hai cách tính cho cùng một con số; với một cụm nhiễu lớn (5.000 alert trong một dòng, trên 101 dòng) chia cho số dòng cho 4950% còn chia cho tổng `occurrence_count` cho tỉ lệ đúng.
+
 ---
 
 ## Tương tác với Phase 2 — điểm cần quyết
