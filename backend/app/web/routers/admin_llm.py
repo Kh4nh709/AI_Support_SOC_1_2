@@ -20,7 +20,9 @@ In the request's own transaction (`Conn` is `scope="function"`: a 2xx means comm
 takes a transaction-scoped advisory lock, reads the effective limits, upserts ONLY the keys
 whose value changes, and writes ONE `admin.settings_changed` event `{changes: [{key, old,
 new}]}` — so two admins saving at once are a chain (the second's `old` is the first's `new`),
-and the row and its audit trail are written together or not at all. A body that changes
+and the row and its audit trail are written together or not at all. When `old` is a clamped
+value (DEC-202: the stored timeout was above its ceiling and the ceiling was in force), that
+entry also carries `stored`, the row's own value, so the trail explains the drop. A body that changes
 nothing — empty, or equal to the effective values — writes nothing and answers the limits as
 they are.
 
@@ -196,7 +198,12 @@ def api_put_limits(
     for key in settings.KEYS:  # the same order every time, whatever order the body had
         field = settings.FIELD_OF_KEY[key]
         if field in wanted and wanted[field] != getattr(current, field):
-            changes.append({"key": key, "old": getattr(current, field), "new": wanted[field]})
+            change = {"key": key, "old": getattr(current, field), "new": wanted[field]}
+            if current.sources[key].clamped:
+                # `old` is the value in force (the ceiling); the row's own value would otherwise
+                # vanish from the trail with no event to explain the drop (P11-T03 review N3).
+                change["stored"] = current.sources[key].stored
+            changes.append(change)
     if not changes:
         return {"limits": limits_out(conn, current)}
 

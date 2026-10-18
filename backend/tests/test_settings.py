@@ -107,6 +107,7 @@ def test_the_public_names_and_bounds_are_exactly_the_documented_ones():
         "updated_at",
         "updated_by",
         "clamped",  # DEC-202 (defaulted False)
+        "stored",  # P11-T20 row 6: the row's own value, only when clamped (defaulted None)
     ]
 
 
@@ -272,6 +273,7 @@ def test_a_stored_timeout_above_the_ceiling_is_clamped_on_read_and_says_so(db):
     assert limits.timeout_s == 120 and limits.timeout_max == 120
     source = limits.sources["LLM_TIMEOUT_S"]
     assert (source.source, source.clamped, source.updated_by) == ("web", True, admin)
+    assert source.stored == 600  # the row's own value, for the audit entry of a change over it
     assert db.execute("SELECT value FROM settings WHERE key = 'LLM_TIMEOUT_S'").fetchone() == (600,)
 
 
@@ -283,6 +285,7 @@ def test_a_stored_timeout_at_or_below_the_ceiling_is_not_clamped(db):
         limits = effective_limits(db, _CFG)
         assert limits.timeout_s == stored
         assert limits.sources["LLM_TIMEOUT_S"].clamped is False
+        assert limits.sources["LLM_TIMEOUT_S"].stored is None  # only a clamp carries it
 
 
 @pytest.mark.db
