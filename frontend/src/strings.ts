@@ -2,6 +2,7 @@
 // The tables keyed by a server code (`status`, `band`, `conclusion`, ...) are read through `labelOf`, so a
 // code this file has no label for is shown as the code itself.
 
+import type { AdminReason, AuditGroup, DigestVerdict, HardBlockCode } from "./api/admin";
 import { BAND_CODES, type BandCode } from "./api/types";
 
 /** The shortest quote ② may cite, in characters (`MIN_QUOTE_CHARS` of backend/app/tier2/investigate.py). */
@@ -16,6 +17,8 @@ export const S = {
     label: "Điều hướng chính",
     queue: "Hàng đợi",
     cases: "Case",
+    // The in-app link to the admin console (P11-T10), admin only; it replaced the link to the old console.
+    admin: "Quản trị",
     adminLegacy: "Quản trị (UI cũ)",
     logout: "Đăng xuất",
   },
@@ -494,6 +497,161 @@ export const S = {
       transient: "mô hình không phản hồi sau nhiều lần thử",
     },
   },
+
+  // The admin console (P11-T10, spec §3): the sidebar, the page titles, the words every dialog shares, and
+  // a text for each code the admin routes answer with. The page tasks add their own page's words under their
+  // own key (`S.admin.users`, ...); what two pages share lives here.
+  admin: {
+    // The sidebar: the label of the navigation, then the seven links in the order of the canvas.
+    nav: {
+      label: "Quản trị",
+      overview: "Tổng quan",
+      users: "Người dùng & quyền",
+      llm: "LLM & hạn mức",
+      rules: "Rules tự đóng",
+      digest: "Digest hằng ngày",
+      labels: "Gán nhãn",
+      audit: "Nhật ký audit",
+    },
+    // The h1 of each page (the canvas's own). The sidebar says it shorter.
+    title: {
+      overview: "Tổng quan hệ thống",
+      users: "Người dùng và quyền",
+      llm: "LLM và hạn mức",
+      rules: "Rules tự đóng",
+      digest: "Digest hằng ngày",
+      labels: "Gán nhãn tập vàng",
+      audit: "Nhật ký audit",
+    },
+    // What a page that is not built yet says (the page tasks replace these pages).
+    building: "Trang này đang xây dựng.",
+
+    common: {
+      cancel: "Huỷ",
+      confirm: "Xác nhận",
+      save: "Lưu",
+      saving: "Đang lưu…",
+      // The confirm button of a dialog while its write is in flight, whatever the write is.
+      working: "Đang xử lý…",
+      loadError: "Không tải được trang",
+    },
+
+    // `?range=` of the overview, the LLM usage and the audit page.
+    range: {
+      "24h": "24 giờ qua",
+      "7d": "7 ngày qua",
+      "30d": "30 ngày qua",
+      month: "Tháng này",
+    },
+
+    // One text for each code of `ADMIN_REASONS` (api/admin.ts), in the words of the canvas's AdminStates
+    // where it has one. Read a reason through `adminReasonText`, which puts the server's bounds in the text.
+    reason: {
+      username_taken: "Tên đăng nhập đã tồn tại",
+      last_active_admin:
+        "Không thể hạ quyền hoặc vô hiệu hoá admin hoạt động cuối cùng. Tạo hoặc kích hoạt một admin khác trước.",
+      self_change:
+        "Bạn không thể tự hạ quyền hoặc tự vô hiệu hoá tài khoản của mình. Nhờ một admin khác làm việc này.",
+      not_found: "Không tìm thấy mục này. Danh sách đã được tải lại.",
+      empty: "Không được để trống",
+      invalid: "Giá trị không hợp lệ",
+      too_short: "Quá ngắn",
+      too_long: "Quá dài",
+      unknown: "Trường này không được hỗ trợ",
+      not_integer: "Phải là số nguyên",
+      out_of_range: "Ngoài khoảng cho phép",
+      limits_unavailable:
+        "Không đọc được hạn mức đã lưu. Model đang dừng gọi để không vượt trần; chưa lưu được hạn mức.",
+      timeout: "Truy vấn quá thời gian cho phép. Thu hẹp khoảng thời gian hoặc thêm bộ lọc.",
+      query_failed: "Truy vấn thất bại. Thử lại sau ít phút.",
+      not_failed:
+        "Job không còn ở trạng thái lỗi — đã được chạy lại hoặc đã xong. Danh sách đã được tải lại.",
+      already_queued:
+        "Đã có một job cùng loại và cùng đối tượng đang chờ hoặc đang chạy, nên chưa chạy lại được.",
+      bad_day: "Ngày không hợp lệ",
+      not_in_digest: "Cụm này không có trong digest của ngày đã chọn.",
+      already_reviewed:
+        "Cụm này đã được duyệt trước đó. Dòng đã được cập nhật theo kết quả đã ghi.",
+      not_auto_closed:
+        "Cụm không còn ở trạng thái tự đóng (đã được mở lại), nên không duyệt được nữa.",
+      frozen: "Không hoàn tác được: tập vàng đã đóng băng.",
+      nothing_to_undo: "Bạn chưa có nhãn nào để hoàn tác.",
+      forbidden:
+        "Bạn không còn quyền làm việc này. Vai trò của tài khoản có thể đã đổi — đăng nhập lại.",
+      rule_not_found: "Không tìm thấy rule này. Danh sách đã được tải lại.",
+      unknown_cluster: "Cụm này không nằm trong danh sách ứng viên",
+      already_labelled: "Bạn đã gán nhãn cụm này rồi",
+      labeler_mismatch: "Người gán nhãn phải là tài khoản đang đăng nhập",
+    } satisfies Record<AdminReason, string>,
+    // The same reasons with the server's bounds in them (`{field, reason, min?, max?}`).
+    bounds: {
+      tooShort: (min: number) => `Cần tối thiểu ${min} ký tự`,
+      tooLong: (max: number) => `Tối đa ${max} ký tự`,
+      outOfRange: (min: number, max: number) => `Phải từ ${min} đến ${max}`,
+    },
+
+    // The groups of the audit page's filter (`GROUPS` of admin_audit.py), in the canvas's words.
+    auditGroup: {
+      users: "Người dùng và quyền",
+      configuration: "Rules, digest, hạn mức",
+      alerts_cases: "Alert và case",
+      model: "Model và cổng kiểm soát",
+      system: "Hệ thống và job",
+    } satisfies Record<AuditGroup, string>,
+
+    // One label for each of the 28 names of `audit/events.py`'s EVENT_TYPES, read through `labelOf`. The
+    // canvas gives nine; the rest follow its wording. An event with more than one use says the common part
+    // (`admin.user_updated` is a role change, a deactivation, a reset and an unlock): the summary line of the
+    // audit page says which.
+    eventType: {
+      "alert.received": "Alert được nhận",
+      "alert.duplicate_merged": "Alert trùng được gộp",
+      "alert.auto_closed": "Alert tự động đóng",
+      "alert.autoclose_blocked_critical": "Chặn tự đóng alert nghiêm trọng",
+      "alert.enrich_started": "Bắt đầu làm giàu dữ liệu",
+      "alert.enriched": "Làm giàu dữ liệu xong",
+      "alert.reopened": "Alert được mở lại",
+      "job.exhausted": "Job hết số lần thử",
+      "triage.suggested": "Model đưa đề xuất ①",
+      "alert.acknowledged": "Tier 1 nhận xử lý",
+      "tier1.decided": "Tier 1 quyết định",
+      "tier1.escalated": "Tier 1 chuyển lên Tier 2",
+      "case.opened": "Mở case",
+      "case.truncated": "Case bị cắt bớt cụm",
+      "case.analyzed": "Model phân tích case ②",
+      "tier2.concluded": "Tier 2 kết luận case",
+      "authz.denied": "Bị từ chối quyền",
+      "admin.user_created": "Tạo người dùng",
+      "admin.user_updated": "Cập nhật người dùng",
+      "admin.job_retried": "Chạy lại job lỗi",
+      "admin.autoclose_rule_toggled": "Bật/tắt rule tự đóng",
+      "autoclose.reviewed": "Duyệt digest",
+      "rule.suspected_wrong": "Rule bị nghi đóng nhầm",
+      "llm.gate_forced": "Cổng kiểm soát ép kết quả ①",
+      "llm.builder_violation": "Bộ kiểm tra an toàn chặn dữ liệu gửi model",
+      "health.alarm": "Cảnh báo sức khoẻ",
+      "label.created": "Gán nhãn tập vàng",
+      "admin.settings_changed": "Sửa hạn mức LLM",
+    },
+
+    // The six hard blocks (`_HARD_BLOCK_ORDER` of admin_rules.py), word for word, keyed by code. The order is
+    // `HARD_BLOCK_CODES` of api/admin.ts. A test keeps both equal to the backend.
+    hardBlock: {
+      critical: "Mức độ nghiêm trọng = critical",
+      never_autoclose_agent: "Agent nằm trong NEVER_AUTOCLOSE_AGENTS",
+      asset_high: "Asset trọng yếu (asset.criticality = high)",
+      asset_not_in_inventory: "Asset không có trong kiểm kê (inventory)",
+      identity_privileged: "Danh tính đặc quyền (identity_privileged)",
+      ioc_bad: "IoC malicious hoặc suspicious",
+    } satisfies Record<HardBlockCode, string>,
+
+    // The verdicts of a digest review (`_VERDICT_LABEL` of admin_digest.py).
+    verdict: {
+      correct: "Đúng",
+      wrong: "Sai",
+      unsure: "Không chắc",
+    } satisfies Record<DigestVerdict, string>,
+  },
 } as const;
 
 type Labels = Readonly<Record<string, unknown>>;
@@ -513,4 +671,23 @@ export function labelOf(labels: Labels, code: string | null | undefined): string
 export function bandCodeOfLabel(label: string | null | undefined): BandCode | null {
   if (label === null || label === undefined) return null;
   return BAND_CODES.find((code) => S.band[code] === label) ?? null;
+}
+
+/**
+ * The text of a failed admin call's reason (`AdminError` of kind `reason` or `field`). The server's own
+ * bounds go in the text when it sent them (`too_short` with `min`, `too_long` with `max`, `out_of_range`
+ * with both); otherwise the plain text of the reason.
+ */
+export function adminReasonText(error: {
+  reason: AdminReason;
+  min?: number;
+  max?: number;
+}): string {
+  const { reason, min, max } = error;
+  if (reason === "too_short" && min !== undefined) return S.admin.bounds.tooShort(min);
+  if (reason === "too_long" && max !== undefined) return S.admin.bounds.tooLong(max);
+  if (reason === "out_of_range" && min !== undefined && max !== undefined) {
+    return S.admin.bounds.outOfRange(min, max);
+  }
+  return S.admin.reason[reason];
 }
