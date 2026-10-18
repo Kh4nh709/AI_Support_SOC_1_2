@@ -232,6 +232,35 @@ def test_submit_rejects_a_nul_byte_in_reason(db):
         conclude.submit(db, case_id, user, conclusion="concluded_fp", reason="x\x00y")
 
 
+def test_submit_caps_the_reason_at_500_characters_as_tier1_does(db):
+    """P11-T20 row 12: 501 characters is refused with Tier-1's message, before any SQL, and the
+    case stays `investigating`; 500 is stored; surrounding whitespace is not counted (the stored
+    reason is the stripped one, as in `tier1/decide.py`), so padding cannot get round the cap."""
+    user = _make_user(db)
+    refused = _make_case(db, user)
+    with pytest.raises(ValueError, match=r"^reason: must be 1-500 characters$"):
+        conclude.submit(db, refused, user, conclusion="concluded_fp", reason="x" * 501)
+    with pytest.raises(ValueError, match=r"^reason: must be 1-500 characters$"):
+        conclude.submit(db, refused, user, conclusion="concluded_fp", reason=" " + "é" * 501)
+    status, reason = db.execute(
+        "SELECT status, conclusion_reason FROM cases WHERE case_id = %s", (refused,)
+    ).fetchone()
+    assert (status, reason) == ("investigating", None)
+
+    at_the_cap = _make_case(db, user)
+    conclude.submit(db, at_the_cap, user, conclusion="concluded_fp", reason="x" * 500)
+    padded = _make_case(db, user)
+    conclude.submit(db, padded, user, conclusion="concluded_fp", reason="\n  " + "y" * 500 + " \t ")
+    stored = {
+        str(case_id): reason
+        for case_id, reason in db.execute(
+            "SELECT case_id, conclusion_reason FROM cases WHERE case_id = ANY(%s)",
+            ([at_the_cap, padded],),
+        ).fetchall()
+    }
+    assert stored == {at_the_cap: "x" * 500, padded: "y" * 500}
+
+
 # ---------------------------------------------------------------------------
 # add_note / list_notes
 # ---------------------------------------------------------------------------
