@@ -45,6 +45,7 @@ from app.tier1.queue import (
     Suggestion,
     get_alert_view,
     latest_suggestion,
+    latest_suggestions,
     list_queue,
     risk_band,
 )
@@ -1013,6 +1014,65 @@ def test_latest_suggestion_reads_p3_t10_shape_and_latest_proposer_wins(db):
     assert got.reasons[0] == {"claim": "c0", "quote": "q", "source": "kb_playbook"}
     assert got.gate["forced"] is True and got.gate["forced_by"] == ["rule_check"]
     assert got.gate["warnings"] == ["w"]
+
+
+class _CountingConn:
+    """The connection, counting `execute` calls (what a reader costs in statements)."""
+
+    def __init__(self, conn: psycopg.Connection) -> None:
+        self._conn = conn
+        self.n = 0
+
+    def execute(self, *args: Any, **kwargs: Any) -> Any:
+        self.n += 1
+        return self._conn.execute(*args, **kwargs)
+
+
+@pytest.mark.db
+def test_latest_suggestions_equals_latest_suggestion_for_each_alert_in_one_statement(db):
+    """P11-T20 row 20. The batched reader answers, for each id, exactly what `latest_suggestion`
+    answers for it, whatever ① left behind: no run, a failed run (`result` NULL), a verifier row
+    only, one run, several runs (the latest proposer wins, a later verifier row does not count),
+    a failed run AFTER a good one (the failed one is the latest, so there is no suggestion; the
+    older good run does not stand in), a blind-arm alert (neither reader hides anything:
+    `visibility.strip` does that, in the readers an analyst reaches) and a run with more than ten
+    reasons. It costs one statement however many ids, and none for no ids."""
+    no_run = _queued(db)
+    failed = _queued(db)
+    _insert_run(db, failed, result=None, gate_result={"error": "schema"}, stopped_by="schema")
+    verifier_only = _queued(db)
+    _insert_run(db, verifier_only, role="verifier", result=VERIFIER_RESULT, gate_result={})
+    one = _queued(db)
+    _insert_run(db, one)
+    several = _queued(db)
+    _insert_run(db, several, result={**RESULT, "suggested_action": "escalate"}, offset_s=0)
+    _insert_run(db, several, result={**RESULT, "suggested_action": "needs_review"}, offset_s=5)
+    _insert_run(db, several, role="verifier", result=VERIFIER_RESULT, gate_result={}, offset_s=9)
+    failed_last = _queued(db)
+    _insert_run(db, failed_last, offset_s=0)
+    _insert_run(db, failed_last, result=None, gate_result=None, stopped_by="linter", offset_s=3)
+    blind = _queued(db, suggestion_visible=False)
+    _insert_run(db, blind, result={**RESULT, "suggested_action": "escalate"})
+    twelve = _queued(db)
+    reasons = [{"claim": f"c{i}", "quote": "q", "source": "kb_playbook"} for i in range(12)]
+    _insert_run(db, twelve, result={**RESULT, "reasons": reasons})
+    ids = [no_run, failed, verifier_only, one, several, failed_last, blind, twelve]
+
+    batched = latest_suggestions(db, [*ids, "no-such-alert", one])  # a stranger and a repeat
+
+    per_id = {alert_id: latest_suggestion(db, alert_id) for alert_id in ids}
+    assert batched == {alert_id: got for alert_id, got in per_id.items() if got is not None}
+    # and the seeds are not all alike: the comparison above is not two empty answers
+    assert set(batched) == {one, several, blind, twelve}
+    assert batched[several].suggested_action == "needs_review"
+    assert failed_last not in batched and len(batched[twelve].reasons) == 10
+
+    counting = _CountingConn(db)
+    assert latest_suggestions(counting, ids) == batched and counting.n == 1
+    counting.n = 0
+    assert latest_suggestions(counting, ids[:2]) == {} and counting.n == 1
+    counting.n = 0
+    assert latest_suggestions(counting, []) == {} and counting.n == 0
 
 
 # ---------------------------------------------------------------------------

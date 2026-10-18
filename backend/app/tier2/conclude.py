@@ -50,6 +50,12 @@ CONCLUSIONS = frozenset({"concluded_fp", "concluded_policy_violation", "confirme
 #: column the schema leaves `text` with no length CHECK.
 NOTE_BODY_MAX_BYTES = 4000
 
+#: The conclusion's reason, stripped, is 1-500 characters: the bound Tier-1's decision reason
+#: has (`tier1/decide.py`, `decide`/`reopen`) and the same message, so the route's 422 is the
+#: one the Tier-1 routes give (a string `detail`). The column is `text` with no CHECK, and the
+#: reason is also copied into the `tier2.concluded` event's payload (P11-T20 row 12).
+REASON_MAX_CHARS = 500
+
 
 class ConcludeConflict(Exception):
     """The case exists but is not `investigating` — already concluded
@@ -107,6 +113,9 @@ def submit(
         raise ValueError("reason: must not be empty")
     if "\x00" in reason:
         raise ValueError("reason: must not contain a NUL byte")
+    reason = reason.strip()  # as Tier-1's `decide` does: the stored reason is the bounded one
+    if len(reason) > REASON_MAX_CHARS:
+        raise ValueError(f"reason: must be 1-{REASON_MAX_CHARS} characters")
 
     conn.execute(sql.SQL("SET LOCAL statement_timeout = {}").format(sql.Literal(STATEMENT_TIMEOUT)))
     try:

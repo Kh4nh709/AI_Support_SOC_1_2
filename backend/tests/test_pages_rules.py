@@ -521,6 +521,18 @@ def test_width_warning_appears_above_threshold_and_not_below(client) -> None:
         occurrence_count=1,
         autoclose_rule_id=narrow_id,
     )
+    # A third rule that closed 1500 occurrences: 1500 of the 6601 in the window, 22.7 %, under
+    # the 30 % threshold. Divided by the 103 ROWS it was over 1400 % and carried a warning
+    # (P11-T20 row 27), so this row is what tells the two formulas apart on the page.
+    middle_id = str(uuid.uuid4())
+    _insert_rule(db, rule_id=middle_id, created_by=admin_id, name="middle-rule")
+    _insert_alert(
+        db,
+        alert_id="width-middle",
+        status="auto_closed",
+        occurrence_count=1500,
+        autoclose_rule_id=middle_id,
+    )
     for i in range(100):
         _insert_alert(db, alert_id=f"width-other-{i}", status="received", occurrence_count=1)
 
@@ -529,13 +541,14 @@ def test_width_warning_appears_above_threshold_and_not_below(client) -> None:
     assert "wide-rule" in resp.text
     assert "narrow-rule" in resp.text
 
-    # The wide rule's row carries a width warning; the narrow rule's does not.
-    wide_pos = resp.text.index("wide-rule")
-    narrow_pos = resp.text.index("narrow-rule")
-    wide_row_end = resp.text.index("</tr>", wide_pos)
-    narrow_row_end = resp.text.index("</tr>", narrow_pos)
-    assert "⚠" in resp.text[wide_pos:wide_row_end]
-    assert "⚠" not in resp.text[narrow_pos:narrow_row_end]
+    # The wide rule's row carries a width warning; the narrow and the middle rule's do not.
+    def _row_of(name: str) -> str:
+        start = resp.text.index(name)
+        return resp.text[start : resp.text.index("</tr>", start)]
+
+    assert "⚠" in _row_of("wide-rule")
+    assert "⚠" not in _row_of("narrow-rule")
+    assert "⚠" not in _row_of("middle-rule")
 
 
 # ---------------------------------------------------------------------------
@@ -878,6 +891,93 @@ def test_api_simulate_tally_is_null_when_the_rule_closes_rows(client, tally_spy)
 
 
 @pytest.mark.db
+def test_api_simulate_tally_counts_a_row_hit_by_two_blocks_once_under_the_first(client) -> None:
+    """P11-T20 row 24 (P11-T06 review F1; mutant m1: every block that applies is counted). The
+    other tests seed one fault per row, so no row ever had two. Here each row has several, and
+    each is counted ONCE, under the first of `_HARD_BLOCK_ORDER`; the blocks therefore add up to
+    `matched`, the rule's own matches, none of which closes."""
+    tc, db, _ = client
+    clean = _CLEAN_CONTEXTS
+    # critical + high asset + malicious IoC  -> critical
+    _insert_alert(
+        db,
+        alert_id="blk-two-critical",
+        agent_name="blk-two-critical",
+        severity="critical",
+        **{
+            **clean,
+            "asset_context": {"present": True, "criticality": "high"},
+            "ioc_context": {"reputation": "malicious"},
+        },
+    )
+    # privileged identity + suspicious IoC    -> identity_privileged
+    _insert_alert(
+        db,
+        alert_id="blk-two-identity",
+        agent_name="blk-two-identity",
+        **{
+            **clean,
+            "identity_context": {"privileged": True},
+            "ioc_context": {"reputation": "suspicious"},
+        },
+    )
+    # not in the inventory + malicious IoC    -> asset_not_in_inventory
+    _insert_alert(
+        db,
+        alert_id="blk-two-inventory",
+        agent_name="blk-two-inventory",
+        **{
+            **clean,
+            "asset_context": {"present": False, "criticality": "unknown"},
+            "ioc_context": {"reputation": "malicious"},
+        },
+    )
+
+    body = _post_simulate(tc, _BLK_RULE).json()
+
+    assert body["clusters"] == 0
+    tally = body["hard_block_tally"]
+    counts = {b["code"]: b["count"] for b in tally["blocks"]}
+    assert counts == {
+        "critical": 1,
+        "never_autoclose_agent": 0,
+        "asset_high": 0,  # the first row has it too, but `critical` claimed that row
+        "asset_not_in_inventory": 1,
+        "identity_privileged": 1,
+        "ioc_bad": 0,  # two rows have it, claimed by `critical` and `asset_not_in_inventory`
+    }
+    assert tally["matched"] == 3
+    assert sum(counts.values()) == tally["matched"]
+
+
+@pytest.mark.db
+def test_api_simulate_tally_is_null_when_the_rule_closes_exactly_one_row(client, tally_spy) -> None:
+    """P11-T20 row 25 (P11-T06 review F2; mutant m4: `clusters <= 1`). The tally says why a rule
+    closes NOTHING; one closed row is a rule that closes something, even when every other row it
+    matches is hard-blocked. The boundary is 1 cluster, not 2."""
+    tc, db, _ = client
+    _insert_alert(db, alert_id="one-closes", agent_name="blk-one", **_CLEAN_CONTEXTS)
+    _insert_alert(
+        db,
+        alert_id="one-blocked-1",
+        agent_name="blk-one-b",
+        **{**_CLEAN_CONTEXTS, "severity": "critical"},
+    )
+    _insert_alert(
+        db,
+        alert_id="one-blocked-2",
+        agent_name="blk-one-c",
+        **{**_CLEAN_CONTEXTS, "ioc_context": {"reputation": "malicious"}},
+    )
+
+    body = _post_simulate(tc, _BLK_RULE).json()
+
+    assert body["clusters"] == 1
+    assert body["hard_block_tally"] is None
+    assert tally_spy == []
+
+
+@pytest.mark.db
 def test_api_simulate_keeps_every_simulate_stats_field_unchanged(client) -> None:
     tc, db, _ = client
     _insert_alert(db, alert_id="keep-1", agent_name="ok-agent", **_CLEAN_CONTEXTS)
@@ -966,7 +1066,9 @@ def test_api_list_rules_width_pct_and_its_threshold_come_from_the_same_setting(
     tc, db, admin_id = client
     rule_id = str(uuid.uuid4())
     _insert_rule(db, rule_id=rule_id, created_by=admin_id, name="quarter")
-    # 20 of the 80 alert rows in the window: 25 %, over a threshold of 17 and under 30.
+    # 20 of the window's 99 occurrences (the head's 20 and 79 single alerts): 20.2 %, over a
+    # threshold of 17 and under the default 30. Dividing by the 80 ROWS gave 25.0 (P11-T20
+    # row 27; the figure differs, so this pins the share of occurrences).
     _insert_alert(
         db,
         alert_id="quarter-closed",
@@ -980,4 +1082,4 @@ def test_api_list_rules_width_pct_and_its_threshold_come_from_the_same_setting(
 
     (row,) = tc.get("/api/admin/rules").json()
     assert row["width_threshold_pct"] == 17
-    assert row["width_pct"] == 25.0
+    assert row["width_pct"] == 20.2

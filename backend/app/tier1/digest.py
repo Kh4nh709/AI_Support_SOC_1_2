@@ -51,7 +51,7 @@ from app.domain.transitions import StaleState, reopen
 from app.infra import config, db
 from app.infra.errors import PermanentError
 from app.infra.jobs import Job, enqueue
-from app.tier1.queue import latest_suggestion
+from app.tier1.queue import latest_suggestion, latest_suggestions
 
 _SUSPECTED_WRONG_THRESHOLD = 2
 
@@ -167,7 +167,11 @@ def _sorted_rows(rows: list[DigestRow]) -> list[DigestRow]:
 
 def _rows_from(conn: psycopg.Connection, records: Sequence[tuple]) -> list[DigestRow]:
     """`DigestRow`s from the twelve columns `_BUILD_SQL` (and `_REOPENED_BY_REVIEW_SQL`) select,
-    ① read per row through `latest_suggestion`, unsorted."""
+    unsorted. ① is read for all of them in ONE statement (`queue.latest_suggestions`, the
+    batched form of `latest_suggestion`, P11-T20 row 20), so `build` and `reopened_by_review`
+    cost a constant number of statements however many rows the day has; it was one query per
+    row."""
+    suggestions = latest_suggestions(conn, [record[0] for record in records])
     rows: list[DigestRow] = []
     for (
         alert_id,
@@ -183,7 +187,7 @@ def _rows_from(conn: psycopg.Connection, records: Sequence[tuple]) -> list[Diges
         autoclose_rule_name,
         reviewed_verdict,
     ) in records:
-        suggestion = latest_suggestion(conn, alert_id)
+        suggestion = suggestions.get(alert_id)
         suggested_action = suggestion.suggested_action if suggestion else None
         disagreement = suggestion is not None and suggested_action != "false_positive"
         rows.append(

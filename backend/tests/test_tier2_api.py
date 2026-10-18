@@ -374,6 +374,34 @@ def test_conclude_route_422_on_empty_reason(client, db):
     assert resp.status_code == 422
 
 
+def test_conclude_route_422_on_a_reason_over_500_characters_with_tier1s_shape(client, db):
+    """P11-T20 row 12. The 422 is the one `POST /api/tier1/alerts/{id}/decide` gives for a long
+    reason: a string `detail`, `reason: must be 1-500 characters`. (The test's `get_conn` rolls
+    the whole transaction back on the 422, so what the refusal leaves behind is checked on
+    `conclude.submit` in `test_conclude.py`.)"""
+    case_id = _make_case(db, client.user_id)
+
+    resp = client.http.post(
+        f"/api/tier2/cases/{case_id}/conclude",
+        json={"conclusion": "concluded_fp", "reason": "x" * 501},
+    )
+
+    assert resp.status_code == 422
+    assert resp.json() == {"detail": "reason: must be 1-500 characters"}
+
+
+def test_conclude_route_accepts_a_reason_of_exactly_500_characters(client, db):
+    case_id = _make_case(db, client.user_id)
+
+    resp = client.http.post(
+        f"/api/tier2/cases/{case_id}/conclude",
+        json={"conclusion": "concluded_fp", "reason": "y" * 500},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["conclusion_reason"] == "y" * 500
+
+
 def test_conclude_route_422_on_unknown_conclusion(client, db):
     case_id = _make_case(db, client.user_id)
     resp = client.http.post(

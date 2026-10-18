@@ -4,7 +4,8 @@ Admin only; any of `cap_usd`, `quota_per_24h`, `timeout_s` as JSON integers insi
 of the Owner's decision 2 (cap 1-1000, quota 1-200, timeout 10-600, the timeout's top
 held to what the job lock allows, DEC-202). In the request's own
 transaction it reads the effective limits, upserts only the keys that change, and writes ONE
-`admin.settings_changed` event `{changes: [{key, old, new}]}`. An empty or unchanged body
+`admin.settings_changed` event `{changes: [{key, old, new}]}` (a change over a clamped timeout also
+carries `stored`). An empty or unchanged body
 writes nothing. Limits that cannot be read answer `503 {reason: "limits_unavailable"}`.
 
 Every test runs inside the `db` fixture's transaction and is rolled back: the overridden
@@ -343,9 +344,50 @@ def test_a_put_over_a_clamped_timeout_answers_the_clamp_and_the_effective_old_va
     assert body["timeout_s"] == 120 and body["sources"]["LLM_TIMEOUT_S"]["clamped"] is True
     assert body["bounds"]["timeout_s"] == {"min": 10, "max": 120}
     assert changed.json()["limits"]["sources"]["LLM_TIMEOUT_S"]["clamped"] is False
-    # the audit row names the value the system was really running with, not the stored 600
+    # the audit row names the value the system was really running with (`old`), and the stored
+    # 600 that the clamp hid (`stored`), so the drop from 600 to 120 is explained (P11-T20 row 6)
     assert _events(db, client.user_id)[0][4] == {
-        "changes": [{"key": "LLM_TIMEOUT_S", "old": 120, "new": 90}]
+        "changes": [{"key": "LLM_TIMEOUT_S", "old": 120, "new": 90, "stored": 600}]
+    }
+
+
+def test_only_a_clamped_key_carries_stored_in_the_change_entry(client, db):
+    """P11-T20 row 6 (P11-T03 review N3). The stored 600 is above the ceiling of 120, so the
+    timeout's effective value is a clamp; the cap's stored 40 is not. A PUT that changes both
+    gives each its own entry, and only the clamped one names `stored`. A PUT that leaves the
+    clamped key alone writes no `stored` at all."""
+    for key, value in (("LLM_TIMEOUT_S", 600), ("LLM_MONTHLY_USD_CAP", 40)):
+        db.execute(
+            "INSERT INTO settings (key, value, updated_by) VALUES (%s, %s, %s)",
+            (key, value, client.user_id),
+        )
+
+    both = client.put({"cap_usd": 50, "timeout_s": 90})
+    cap_only = client.put({"cap_usd": 60})  # the timeout is no longer clamped: 90 is stored now
+
+    assert both.status_code == 200 and cap_only.status_code == 200
+    first, second = (event[4] for event in _events(db, client.user_id))
+    assert first == {
+        "changes": [
+            {"key": "LLM_MONTHLY_USD_CAP", "old": 40, "new": 50},
+            {"key": "LLM_TIMEOUT_S", "old": 120, "new": 90, "stored": 600},
+        ]
+    }
+    assert second == {"changes": [{"key": "LLM_MONTHLY_USD_CAP", "old": 50, "new": 60}]}
+
+
+def test_a_change_that_leaves_the_clamped_timeout_alone_carries_no_stored(client, db):
+    db.execute(
+        "INSERT INTO settings (key, value, updated_by) VALUES ('LLM_TIMEOUT_S', 600, %s)",
+        (client.user_id,),
+    )
+
+    resp = client.put({"cap_usd": 55})
+
+    assert resp.status_code == 200
+    assert resp.json()["limits"]["sources"]["LLM_TIMEOUT_S"]["clamped"] is True  # still clamped
+    assert _events(db, client.user_id)[0][4] == {
+        "changes": [{"key": "LLM_MONTHLY_USD_CAP", "old": 30, "new": 55}]
     }
 
 

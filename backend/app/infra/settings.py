@@ -20,15 +20,27 @@ connection is already inside a transaction (every request, every job) — a fail
 back to it, so the CALLER'S transaction stays usable and whatever it wrote earlier is kept.
 (Not `infra.db.transaction()`: that one issues its own BEGIN and COMMIT.)
 
-**The timeout is bounded by the job lock** (DEC-202, review finding I1). A job holds one
-transaction open while it waits on the model, and makes at most two sends (① the proposer then
-the verifier, ② the call then its repair): `2 x LLM_TIMEOUT_S` plus a margin must stay under
-`JOB_LOCK_TIMEOUT_S`, which is the job transaction's idle-in-transaction timeout and the age at
-which `reclaim_stale` calls a job dead (`tier2/investigate.py:19-33`). So the web may set the
-timeout only up to `timeout_max(cfg)` = `(JOB_LOCK_TIMEOUT_S - 60) // 2` (120 s at the default
-300 s, never above the Owner's static 600), and `effective_limits` holds a STORED value to it
-when it reads it — a later lowering of `JOB_LOCK_TIMEOUT_S` in `.env` cannot reopen the hole.
-The `.env` value is the Owner's own and is not clamped.
+**The timeout is bounded by the job lock** (DEC-202, review finding I1, and the amendment of
+18/10 that followed the second review). A job holds one transaction open while it waits on the
+model. ① makes up to FOUR sends (the proposer and the verifier, each with at most one repair); ②
+makes up to TWO (the call, then its repair). `JOB_LOCK_TIMEOUT_S` is the job transaction's
+idle-in-transaction timeout and the age at which `reclaim_stale` calls a job dead
+(`tier2/investigate.py:19-33`).
+
+- The bound protects EACH SEND. The adapter runs SQL before every attempt, which resets the
+  idle-in-transaction timer, so a send held to `timeout_max(cfg)` = `(JOB_LOCK_TIMEOUT_S - 60)
+  // 2` (120 s at the default 300 s, never above the Owner's static 600) finishes inside the
+  session.
+- The TOTAL margin, `2 x LLM_TIMEOUT_S + 60 <= JOB_LOCK_TIMEOUT_S`, holds for ② and, for ①, only
+  while one worker runs: `reclaim_stale` is called by a worker's own loop, so with one worker it
+  cannot reclaim a job that is still running. ①'s four sends predate P11, with the `.env`
+  timeout of 120.
+- The invariant needs `JOB_LOCK_TIMEOUT_S >= 80`: below it the web floor of 10 cannot keep it,
+  and the unclamped `.env` timeout is the larger risk anyway.
+
+`effective_limits` holds a STORED value to the bound when it reads it — a later lowering of
+`JOB_LOCK_TIMEOUT_S` in `.env` cannot reopen the hole. The `.env` value is the Owner's own and
+is not clamped.
 
 `infra` imports nothing from the app outside `infra` (G1): this module needs only `psycopg`
 and `infra.config`.
@@ -80,6 +92,9 @@ class LimitSource:
     updated_at: datetime | None
     updated_by: str | None  # a user_id as text; None for `env`
     clamped: bool = False  # True: the stored web value was above its ceiling and was held to it
+    #: The row's own value, set only when `clamped` (the effective value is then the ceiling, not
+    #: this): the audit entry of a change over a clamped value carries it (P11-T20 row 6).
+    stored: int | None = None
 
 
 @dataclass(frozen=True)
@@ -94,9 +109,11 @@ class Limits:
 
 
 def timeout_max(cfg: Config) -> int:
-    """The highest model timeout the web may set: two sends and the margin fit under the job lock
-    (`(JOB_LOCK_TIMEOUT_S - 60) // 2`, 120 s at the default 300), never above the Owner's static
-    ceiling and never below the floor of the envelope."""
+    """The highest model timeout the web may set: `(JOB_LOCK_TIMEOUT_S - 60) // 2` (120 s at the
+    default 300), never above the Owner's static ceiling and never below the floor of the
+    envelope. The bound protects each send (① makes up to four, ② up to two). The total margin,
+    `2 x timeout + 60 <= JOB_LOCK_TIMEOUT_S`, holds for ② and, for ①, only while one worker runs;
+    the invariant needs `JOB_LOCK_TIMEOUT_S >= 80`, as the floor cannot keep it below that."""
     low, high = BOUNDS["LLM_TIMEOUT_S"]
     return max(low, min(high, (cfg.JOB_LOCK_TIMEOUT_S - JOB_MARGIN_S) // 2))
 
@@ -162,6 +179,10 @@ def effective_limits(conn: psycopg.Connection, cfg: Config) -> Limits:
         clamped = key == "LLM_TIMEOUT_S" and value > limits.timeout_max
         values[FIELD_OF_KEY[key]] = limits.timeout_max if clamped else value
         sources[key] = LimitSource(
-            "web", updated_at, None if updated_by is None else str(updated_by), clamped
+            "web",
+            updated_at,
+            None if updated_by is None else str(updated_by),
+            clamped,
+            value if clamped else None,
         )
     return Limits(sources=sources, timeout_max=limits.timeout_max, **values)

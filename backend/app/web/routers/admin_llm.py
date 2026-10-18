@@ -20,9 +20,11 @@ In the request's own transaction (`Conn` is `scope="function"`: a 2xx means comm
 takes a transaction-scoped advisory lock, reads the effective limits, upserts ONLY the keys
 whose value changes, and writes ONE `admin.settings_changed` event `{changes: [{key, old,
 new}]}` — so two admins saving at once are a chain (the second's `old` is the first's `new`),
-and the row and its audit trail are written together or not at all. A body that changes
-nothing — empty, or equal to the effective values — writes nothing and answers the limits as
-they are.
+and the row and its audit trail are written together or not at all. When `old` is a clamped
+value (DEC-202: the stored timeout was above its ceiling and the ceiling was in force), that
+entry also carries `stored`, the row's own value, so the trail explains the drop. A body that
+changes nothing — empty, or equal to the effective values — writes nothing and answers the
+limits as they are.
 
 **Fail closed** (DEC-200 item 3): limits that cannot be read answer `503 {reason:
 "limits_unavailable"}` and nothing is written.
@@ -33,16 +35,20 @@ read-only, from `llm_runs` and `audit_events`, in five parts.
 - **`month`** is the CALENDAR month, whatever the range: `spent_usd` is `month_spend_usd` itself
   (`created_at >= date_trunc('month', now())`, the query the adapter's cap check reads, so the
   page and the cap cannot disagree); `cap_usd` the effective cap (`null` when the limits cannot
-  be read); `pct` = spent / cap x 100 to one decimal (`null` without a cap); `projected_usd` is
-  the linear projection `spent / elapsed_days x days_in_month`, where `elapsed_days` is the time
-  since the month began, fractional, with a FLOOR of one hour (so 00:05 on day 1 does not
-  multiply five minutes of spend by 8640) and `days_in_month` the length of this month, both in
-  days of 86400 s on the database's clock and time zone (the same `now()` the spend used).
+  be read); `pct` = spent / cap x 100 FLOORED to one decimal (`null` without a cap), so that
+  `pct >= 100` exactly when `spent >= cap`, which is the adapter's own comparison (rounded half up,
+  29.99 of 30 would read 100.0 while the model still runs); `projected_usd` is the linear
+  projection `spent / elapsed_days x days_in_month`, where `elapsed_days` is the time since the
+  month began, fractional, with a FLOOR of one day (so a few minutes of spend on day 1 are not
+  multiplied by thousands: day 1 projects `spent x days_in_month`, and from day 2 on the
+  projection is the real linear one) and `days_in_month` the length of this month, both in days
+  of 86400 s on the database's clock and time zone (the same `now()` the spend used).
 - **`by_pipeline_role`** is the only part the range filters: one row per `(pipeline, role)` that
   has a run in the window (a rolling `now() - interval` for `24h`/`7d`/`30d`, and since the
   month began for `month`), ordered by pipeline then role (a NULL role, which v1 rows have,
   last): `calls`, `with_result` (`result IS NOT NULL`), `stopped` (`stopped_by` -> count, the
-  NULL ones left out), token sums, `latency_p50_ms` and `latency_p95_ms` (`percentile_cont`,
+  NULL ones left out; a reason longer than 32 characters, the limit `recent` applies, is counted
+  under `other`, so no key of the answer is longer than a short code), token sums, `latency_p50_ms` and `latency_p95_ms` (`percentile_cont`,
   rounded half up to an integer, `null` when no row carries a latency) and `cost_usd`. There is
   no chat row: `llm_runs.pipeline` admits `triage|investigate` only (spec decision 5).
 - **`quota`**, always the rolling 24 h: `case.analyzed` events per user, counted by the rule
@@ -76,7 +82,7 @@ that degrades instead. `infra/db.transaction()` is NOT used: it issues its own B
 from __future__ import annotations
 
 import logging
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from typing import Annotated, Any, Literal
 
 import psycopg
@@ -196,7 +202,12 @@ def api_put_limits(
     for key in settings.KEYS:  # the same order every time, whatever order the body had
         field = settings.FIELD_OF_KEY[key]
         if field in wanted and wanted[field] != getattr(current, field):
-            changes.append({"key": key, "old": getattr(current, field), "new": wanted[field]})
+            change = {"key": key, "old": getattr(current, field), "new": wanted[field]}
+            if current.sources[key].clamped:
+                # `old` is the value in force (the ceiling); the row's own value would otherwise
+                # vanish from the trail with no event to explain the drop (P11-T03 review N3).
+                change["stored"] = current.sources[key].stored
+            changes.append(change)
     if not changes:
         return {"limits": limits_out(conn, current)}
 
@@ -241,8 +252,9 @@ _QUOTA_USERS_LIMIT = 200
 _OUTCOME_MAX_CHARS = 40
 _STOPPED_PREFIX = "stopped:"
 _STOPPED_MAX_CHARS = _OUTCOME_MAX_CHARS - len(_STOPPED_PREFIX)
-#: The floor of the projection's elapsed time: one hour (module docstring).
-_ELAPSED_FLOOR_S = 3600.0
+#: The floor of the projection's elapsed time: one day (module docstring). A floor of one hour
+#: still multiplied the first day's spend by up to 744 (P11-T04 review m3).
+_ELAPSED_FLOOR_S = 86400.0
 
 _BY_PIPELINE_ROLE_SQL = """
 WITH win AS (
@@ -251,10 +263,13 @@ WITH win AS (
     FROM llm_runs
     WHERE created_at >= {since}
 ), stopped AS (
-    SELECT pipeline, role, jsonb_object_agg(stopped_by, n) AS counts
-    FROM (SELECT pipeline, role, stopped_by, count(*) AS n
+    SELECT pipeline, role, jsonb_object_agg(reason, n) AS counts
+    FROM (SELECT pipeline, role,
+                 CASE WHEN length(stopped_by) <= {stopped_max} THEN stopped_by
+                      ELSE 'other' END AS reason,
+                 count(*) AS n
           FROM win WHERE stopped_by IS NOT NULL
-          GROUP BY pipeline, role, stopped_by) g
+          GROUP BY pipeline, role, 3) g
     GROUP BY pipeline, role
 )
 SELECT w.pipeline, w.role,
@@ -321,19 +336,21 @@ SELECT extract(epoch FROM now() - date_trunc('month', now())),
 """
 
 
-def _round(value: Any, places: int) -> float | None:
-    """`value` (a `Decimal` from `numeric`, or a `float`) rounded HALF UP to `places` decimals,
-    as the `float` whose shortest repr is the JSON number; `None` stays `None`."""
+def _round(value: Any, places: int, rounding: str = ROUND_HALF_UP) -> float | None:
+    """`value` (a `Decimal` from `numeric`, or a `float`) rounded to `places` decimals, HALF UP
+    unless `rounding` says otherwise, as the `float` whose shortest repr is the JSON number;
+    `None` stays `None`."""
     if value is None:
         return None
     step = Decimal(1).scaleb(-places)
-    return float(Decimal(str(value)).quantize(step, rounding=ROUND_HALF_UP))
+    return float(Decimal(str(value)).quantize(step, rounding=rounding))
 
 
 def _projected_usd(spent: float, elapsed_s: float, month_s: float) -> float:
     """The linear projection of the month's spend: `spent / elapsed_days x days_in_month`, in
-    seconds `spent x month_s / max(elapsed_s, 3600)` — `elapsed_s` floored at one hour so the
-    first minutes of a month do not blow a few cents up by a factor of thousands."""
+    seconds `spent x month_s / max(elapsed_s, 86400)` — `elapsed_s` floored at one day, so the
+    first hours of a month do not blow a few cents up by a factor of hundreds: the whole of day 1
+    projects `spent x days_in_month`, and from day 2 on the projection is the real linear one."""
     return spent * month_s / max(elapsed_s, _ELAPSED_FLOOR_S)
 
 
@@ -379,7 +396,9 @@ def _month(conn: Any, cap_usd: int | None) -> dict[str, Any]:
     elapsed_s, month_s = conn.execute(_MONTH_CLOCK_SQL).fetchone()
     pct = None
     if cap_usd is not None and cap_usd > 0:
-        pct = _round(spent / cap_usd * 100, 1)
+        # Floored, not rounded: `pct >= 100` exactly when `spent >= cap_usd`, the adapter's own
+        # comparison. Half up read 29.99 of 30 as 100.0 while the model still ran (review m1).
+        pct = _round(Decimal(str(spent)) * 100 / cap_usd, 1, ROUND_DOWN)
     return {
         "spent_usd": _round(spent, 4),
         "cap_usd": cap_usd,
@@ -389,7 +408,9 @@ def _month(conn: Any, cap_usd: int | None) -> dict[str, Any]:
 
 
 def _by_pipeline_role(conn: Any, range_: str) -> list[dict[str, Any]]:
-    query = sql.SQL(_BY_PIPELINE_ROLE_SQL).format(since=sql.SQL(_SINCE_SQL[range_]))
+    query = sql.SQL(_BY_PIPELINE_ROLE_SQL).format(
+        since=sql.SQL(_SINCE_SQL[range_]), stopped_max=sql.Literal(_STOPPED_MAX_CHARS)
+    )
     rows = conn.execute(query).fetchall()
     return [
         {

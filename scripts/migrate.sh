@@ -25,8 +25,21 @@ fi
 applied=0
 present=0
 
+# A lookup that FAILS is not an answer. `psql` inside `$(...)` returning nothing could mean "no such
+# row" or "the query failed" (permission denied on schema_migrations, a lost connection); reading the
+# second as the first made this script treat every migration as not applied and re-apply 001. Each
+# lookup below is therefore taken apart: a failure stops the run, before anything is applied, with
+# exit 3 (the code `psql -v ON_ERROR_STOP=1 -f` already gives on a failed migration).
+lookup_failed() {
+  echo "migrate: cannot $1 — stopping, nothing applied (psql's own error is above; $2)" >&2
+  exit 3
+}
+
 # Empty result means the table is absent, so no migration has ever run here.
-if [ -z "$(psql "$DSN" -tAc "SELECT to_regclass('public.schema_migrations')")" ]; then
+regclass="$(psql "$DSN" -v ON_ERROR_STOP=1 -tAc "SELECT to_regclass('public.schema_migrations')")" \
+  || lookup_failed "look up whether schema_migrations exists" \
+       "is the database reachable?"
+if [ -z "$regclass" ]; then
   echo "migrate: schema_migrations absent — applying the base schema $MIG_DIR/schema.sql"
   psql "$DSN" -v ON_ERROR_STOP=1 -q -f "$MIG_DIR/schema.sql"
   # schema.sql IS migrations 001-012 concatenated, so each one it was built from is
@@ -43,8 +56,11 @@ fi
 for f in "$MIG_DIR"/[0-9][0-9][0-9]_*.sql; do
   [ -e "$f" ] || continue
   version="$(basename "$f" .sql)"
-  if [ -n "$(psql "$DSN" -tAc \
-      "SELECT 1 FROM schema_migrations WHERE version = '$version'")" ]; then
+  recorded="$(psql "$DSN" -v ON_ERROR_STOP=1 -tAc \
+      "SELECT 1 FROM schema_migrations WHERE version = '$version'")" \
+    || lookup_failed "read schema_migrations (looking up $version)" \
+       "the role in the DSN needs SELECT on it"
+  if [ -n "$recorded" ]; then
     present=$((present + 1))
     continue
   fi

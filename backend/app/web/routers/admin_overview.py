@@ -35,10 +35,11 @@ behind newer-created ones.
 `attempts=0` and `scheduled_at=now()`, which is exactly what `infra/jobs.claim_job` takes
 (`status='pending' AND scheduled_at <= now()`); `last_error` is kept. The job row is locked
 `FOR UPDATE` first, and the lock must be exclusive: with `FOR SHARE` two simultaneous retries
-both read `failed`, then deadlock on their UPDATEs and one of them is a 500. A live sibling (same `job_type` and `subject_id`, `pending` or `running`)
-is a `409 already_queued`, checked before the UPDATE and again by catching the partial unique
-index `ux_jobs_mot_job_song_moi_subject` on a savepoint: `enqueue` can insert that sibling
-between the check and the UPDATE, and that race must be a 409, not a 500.
+both read `failed`, then deadlock on their UPDATEs and one of them is a 500. A live sibling
+(same `job_type` and `subject_id`, `pending` or `running`) is a `409 already_queued`, checked
+before the UPDATE and again by catching the partial unique index `ux_jobs_mot_job_song_moi_subject`
+on a savepoint: `enqueue` can insert that sibling between the check and the UPDATE, and that
+race must be a 409, not a 500.
 
 A 404/409 body is `{"detail": {"reason": ...}}` (spec §3: a `detail` that is an object carries a
 machine-readable `reason`).
