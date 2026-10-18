@@ -147,7 +147,7 @@ _SUGGESTION_SQL = """
     SELECT run_id, result, gate_result, created_at
     FROM llm_runs
     WHERE subject_id = %s AND pipeline = 'triage' AND role = 'proposer'
-    ORDER BY created_at DESC
+    ORDER BY created_at DESC, run_id DESC
     LIMIT 1
 """
 
@@ -190,8 +190,10 @@ def _suggestion_of(
 
 def latest_suggestion(conn: psycopg.Connection, alert_id: str) -> Suggestion | None:
     """The latest `role = 'proposer'` triage run for `alert_id`, or `None` when there is
-    none or its `result` is NULL (① failed — `stopped_by` set). Every key is read with
-    `.get`: a key P3-T10 does not write becomes `None`, never a `KeyError`."""
+    none or its `result` is NULL (① failed — `stopped_by` set). Two runs at the same `created_at`
+    are ordered by `run_id DESC` (here and in `latest_suggestions`: the two readers name the same
+    run). Every key is read with `.get`: a key P3-T10 does not write becomes `None`, never a
+    `KeyError`."""
     row = conn.execute(_SUGGESTION_SQL, (alert_id,)).fetchone()
     if row is None:
         return None
@@ -202,7 +204,7 @@ _SUGGESTIONS_SQL = """
     SELECT DISTINCT ON (subject_id) subject_id, run_id, result, gate_result, created_at
     FROM llm_runs
     WHERE subject_id = ANY(%s) AND pipeline = 'triage' AND role = 'proposer'
-    ORDER BY subject_id, created_at DESC
+    ORDER BY subject_id, created_at DESC, run_id DESC
 """
 
 
