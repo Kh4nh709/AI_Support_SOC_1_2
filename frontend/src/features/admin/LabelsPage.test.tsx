@@ -1751,6 +1751,16 @@ describe("the page stays blind", () => {
 //
 // The source is read as TypeScript (a syntax tree), not as lines of text: a comment, a string that holds `//`,
 // or a name written across lines cannot hide a call from it, and a comment that names a forbidden call is not one.
+//
+// What it reads is the four files, and the relative modules they may import are an allow-list (`ALLOWED_IMPORTS`):
+// a new file next to them, imported, re-exported or imported on demand, fails until it is put on the list, and so
+// read by this guard (P11-T16 review round 2, P11-T20 row 60).
+//
+// Known gaps, left to the DOM tests above (a planted marker never reaches the page, before and after a save),
+// which are the real wall: the guard is name-based, so it does not see
+//   - `(cluster.constructor as ObjectConstructor).keys(cluster)` (the `.constructor` of a value is `Object`);
+//   - a renamed alias that is then spread, `const c = cluster; <i {...c} />` (the spread list is of names);
+//   - `globalThis["Obj" + "ect"].keys(cluster)` (a name built at run time).
 describe("the source of the page", () => {
   const FILES = ["LabelsPage.tsx", "LabelClusterView.tsx", "LabelForm.tsx", "labelerId.ts"];
   const source = (name: string) => readFileSync(join("src", "features", "admin", name), "utf8");
@@ -1770,6 +1780,32 @@ describe("the source of the page", () => {
   /** The names the cluster and its parts go by in these files: spreading one would copy every key it carries. */
   const WHOLE = new Set(["cluster", "view", "data", "next", "row", "sample", "answer", "saved"]);
   const LINK_TAGS = new Set(["a", "Link", "NavLink", "Navigate"]);
+  /**
+   * Every relative module the four files may import, exactly as they spell it: the API (its routes are checked by
+   * name below), the session, the shared components they draw with, the strings and the time module, the
+   * console's cache keys and write latch, and the four files themselves. A relative module that is not here is
+   * a new file this guard has never read (a helper of the same folder, a component), so it fails the guard until
+   * someone puts it on the list, and so reads it.
+   */
+  const ALLOWED_IMPORTS = new Set([
+    "../../api/admin",
+    "../../api/types",
+    "../../auth/AuthProvider",
+    "../../components/Badge",
+    "../../components/DataTable",
+    "../../components/LogBlock",
+    "../../components/PageError",
+    "../../components/Toast",
+    "../../format",
+    "../../strings",
+    "./adminKeys",
+    "./useSubmitLatch",
+    "./LabelsPage",
+    "./LabelForm",
+    "./LabelClusterView",
+    "./labelerId",
+  ]);
+  const ALLOWED_IMPORT_LINES = [...ALLOWED_IMPORTS].map((from) => `import "${from}";`).join("\n");
 
   /** What a file does that the blind page must not. `[]` for a file that does none of it. */
   function violations(text: string, name = "scratch.tsx"): string[] {
@@ -1809,10 +1845,22 @@ describe("the source of the page", () => {
       if (ts.isJsxAttribute(node) && ["href", "to"].includes(node.name.getText(file))) {
         found.push(`the attribute ${node.name.getText(file)}`);
       }
-      if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      if (
+        (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+        node.moduleSpecifier !== undefined &&
+        ts.isStringLiteral(node.moduleSpecifier)
+      ) {
         const from = node.moduleSpecifier.text;
         if (/\/api\/(?!admin$|types$)/.test(from)) found.push(`the module ${from}`);
         if (/\/(tier1|tier2)\//.test(from)) found.push(`the module ${from}`);
+        // A relative module off the list is a file this guard does not read: an import, a re-export of one.
+        if (from.startsWith(".") && !ALLOWED_IMPORTS.has(from)) {
+          found.push(`the module ${from}, which is not on the list`);
+        }
+      }
+      // `import("./x")` names a module without an import declaration.
+      if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        found.push("a dynamic import");
       }
       if (
         ts.isPropertyAccessExpression(node) &&
@@ -1900,6 +1948,17 @@ describe("the source of the page", () => {
       ["another api module", 'import { fetchQueue } from "../../api/queue";\nvoid fetchQueue;'],
       ["another feature", 'import { x } from "../tier1/alertSections";\nvoid x;'],
       ["another query key", "void adminKeys.overviewAll;"],
+      // The allow-list of relative imports: a new file next to these four would otherwise be read by nobody.
+      ["a new helper of the same folder", 'import { helper } from "./labelHelpers";\nvoid helper;'],
+      ["a helper of another admin page", 'import { rows } from "./digestFigures";\nvoid rows;'],
+      [
+        "a shared component that is not on the list",
+        'import { Chip } from "../../components/Chip";\nvoid Chip;',
+      ],
+      ["a side-effect import of a new file", 'import "./labelHelpers";'],
+      ["a re-export of a new file", 'export * from "./labelHelpers";'],
+      ["a named re-export of a new file", 'export { helper } from "./labelHelpers";'],
+      ["a dynamic import", 'void import("./labelHelpers");'],
     ])("finds %s", (_name, snippet) => {
       expect(violations(`${real}\n${snippet}\n`, "scratch.tsx")).not.toEqual([]);
     });
@@ -1914,6 +1973,9 @@ describe("the source of the page", () => {
       ["JSON.parse, which reads the token", 'void JSON.parse("{}");'],
       ["the labels query key, spread into a longer one", "void [...adminKeys.labels, 1];"],
       ["a spread of a name that is no whole object", "void { ...answerFields };"],
+      ["an import of each file on the list", ALLOWED_IMPORT_LINES],
+      ["a package import", 'import { useState } from "react";\nvoid useState;'],
+      ["an export of its own name", "export const own = 1;"],
     ])("does not find %s", (_name, snippet) => {
       expect(violations(`${real}\n${snippet}\n`, "scratch.tsx")).toEqual([]);
     });
