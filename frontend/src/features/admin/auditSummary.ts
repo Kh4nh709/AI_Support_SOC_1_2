@@ -13,6 +13,13 @@ const A = S.admin.auditPage.summary;
 
 type Obj = Readonly<Record<string, unknown>>;
 
+/**
+ * What the server puts in the place of a value it withholds: a secret (spec §5.8), a labeller's verdict (DEC-204)
+ * and, since P11-T20 part 4, ①'s suggestion on an alert that is blind and not yet decided (DEC-101, context pack
+ * §6.4). `REDACTED` of admin_audit.py, which adminTypes.test.ts compares.
+ */
+export const REDACTED = "[đã ẩn]";
+
 // --- the characters a person cannot see -------------------------------------------------------------------------
 
 // The C0 controls but tab, line feed and carriage return; DEL and the C1 controls; the soft hyphen; the
@@ -74,6 +81,10 @@ const asObject = (value: unknown): Obj | null =>
 /** A key of the object itself, never one the prototype chain would answer (`constructor`, `__proto__`). */
 const own = (object: Obj | null, key: string): unknown =>
   object !== null && Object.hasOwn(object, key) ? object[key] : undefined;
+
+/** True when the server withheld the value under `key`: any one of `keys` holds the marker. */
+const withheld = (object: Obj | null, ...keys: string[]): boolean =>
+  keys.some((key) => own(object, key) === REDACTED);
 
 const str = (object: Obj | null, key: string): string | null => {
   const value = own(object, key);
@@ -200,6 +211,10 @@ const BUILDERS: Readonly<Record<string, Builder>> = {
   },
   "case.analyzed": (p) => [A.analyzed, ...when(num(p, "job_id"), A.job)],
   "triage.suggested": (p) => {
+    // Withheld by the server: one line, whichever of the keys it took, and none of what is left is read.
+    // (The server leaves such a row out since DEC-206's amendment; this is for a row an older one masked.)
+    if (withheld(p, "suggested_action", "confidence", "forced", "run_id"))
+      return [A.suggestionHidden];
     const action = str(p, "suggested_action");
     if (action === null) return [A.suggestedUnknown];
     return [
@@ -209,6 +224,7 @@ const BUILDERS: Readonly<Record<string, Builder>> = {
     ];
   },
   "llm.gate_forced": (p) => {
+    if (withheld(p, "proposed", "final", "forced_by", "missing")) return [A.gateForcedHidden];
     const proposed = str(p, "proposed");
     const final = str(p, "final");
     return [
@@ -306,9 +322,11 @@ const BUILDERS: Readonly<Record<string, Builder>> = {
     ...(str(p, "verdict") === null
       ? [A.reviewedUnknown]
       : when(str(p, "verdict"), (v) => A.reviewed(free(labelOf(S.admin.verdict, v))))),
-    ...when(str(p, "suggested_action"), (action) =>
-      A.suggested(free(labelOf(S.ai1.action, action))),
-    ),
+    ...(withheld(p, "suggested_action", "run_id")
+      ? [A.suggestionHidden]
+      : when(str(p, "suggested_action"), (action) =>
+          A.suggested(free(labelOf(S.ai1.action, action))),
+        )),
   ],
   "rule.suspected_wrong": (p) => {
     const count = num(p, "wrong_count");

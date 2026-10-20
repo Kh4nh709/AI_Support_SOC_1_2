@@ -20,17 +20,26 @@
 #   * let a provider key reach a child: every child runs under `env -i` with the file's list only, from a
 #     neutral directory (so no .env is read either), and the LLM is the stub of scripts/e2e_llm_stub.py.
 #
+# The scratch repository (P11-T18). The API and the worker do not import the checkout's backend/ itself but a
+# copy of its app/ made in the state directory (repo/backend/app, with a copy of kb/ and an empty repo/eval/
+# beside it). The blind labelling page reads its candidates file and the gold set's freeze marker from the eval/
+# of the repository its code sits in (tier1/labels.py: parents[3]), so the copy reads the scratch eval/, never
+# the real one: the suite can write a candidates file and a freeze marker there and the real gold set is
+# neither read nor written. The trap removes the directory with the rest of the state.
+#
 # One run at a time: an exclusive flock on /tmp/ui-e2e-stack-<uid>.lock is held for the whole run (a second
 # run fails at once instead of dropping the first run's database).
 #
 # Environment: PY (the interpreter with the backend's dependencies; default python3),
 #              E2E_STATE_DIR (the directory to make for the run's secrets; required, must not exist,
 #              its name must start with soc-ui-e2e-), TEST_DATABASE_URL (optional, see above),
-#              E2E_JWT_SECRET, E2E_WEBHOOK_API_KEY, E2E_T1_PASSWORD, E2E_T2_PASSWORD, E2E_T2B_PASSWORD
+#              E2E_JWT_SECRET, E2E_WEBHOOK_API_KEY, E2E_T1_PASSWORD, E2E_T2_PASSWORD, E2E_T2B_PASSWORD,
+#              E2E_ADMIN_PASSWORD, E2E_ADMIN2_PASSWORD (the two seeded admins) and E2E_NEWUSER_PASSWORD (the
+#              password the admin suite types for the account it creates)
 #              (optional, at least 16 characters: scripts/ui_e2e_run.sh generates them so that it can scan the
 #              run's output for them; generated here when unset),
-#              E2E_BACKEND_DIR (optional: the backend directory to import; default is this checkout's;
-#              a red step of the suite points it at a scratch copy).
+#              E2E_BACKEND_DIR (optional: the backend directory whose app/ is copied into the scratch repository
+#              and imported; default is this checkout's; a red step of the suite points it at a scratch copy).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -51,13 +60,14 @@ PY="${PY:-python3}"
 if [[ "$PY" == */* ]]; then PY="$(cd "$(dirname "$PY")" && pwd)/$(basename "$PY")"; fi
 command -v "$PY" >/dev/null 2>&1 || die "PY is not runnable: $PY"
 
-# The backend the API and the worker import. It is this checkout's own; a red step of the suite points it at
-# a scratch copy with one guard weakened, so the real security code is never edited.
-BACKEND_DIR="${E2E_BACKEND_DIR:-$ROOT/backend}"
-[ -f "$BACKEND_DIR/app/web/main.py" ] || die "E2E_BACKEND_DIR is not a backend: $BACKEND_DIR"
-BACKEND_DIR="$(cd "$BACKEND_DIR" && pwd -P)"
-if [ "$BACKEND_DIR" != "$(cd "$ROOT/backend" && pwd -P)" ]; then
-  echo "ui_e2e_stack: WARNING: the API and the worker import $BACKEND_DIR, not this checkout's backend/" >&2
+# The backend whose app/ the API and the worker run. It is this checkout's own; a red step of the suite points it
+# at a scratch copy with one guard weakened, so the real security code is never edited. What runs is always a copy
+# of its app/ in the state directory (see the scratch repository above), made once the state directory exists.
+BACKEND_SRC="${E2E_BACKEND_DIR:-$ROOT/backend}"
+[ -f "$BACKEND_SRC/app/web/main.py" ] || die "E2E_BACKEND_DIR is not a backend: $BACKEND_SRC"
+BACKEND_SRC="$(cd "$BACKEND_SRC" && pwd -P)"
+if [ "$BACKEND_SRC" != "$(cd "$ROOT/backend" && pwd -P)" ]; then
+  echo "ui_e2e_stack: WARNING: the API and the worker run a copy of $BACKEND_SRC/app, not of this checkout's backend/app" >&2
 fi
 
 STATE_DIR="${E2E_STATE_DIR:-}"
@@ -96,6 +106,9 @@ WEBHOOK_API_KEY="$(given_or_generated "${E2E_WEBHOOK_API_KEY:-}" 24)"
 T1_PASSWORD="$(given_or_generated "${E2E_T1_PASSWORD:-}" 16)"
 T2_PASSWORD="$(given_or_generated "${E2E_T2_PASSWORD:-}" 16)"
 T2B_PASSWORD="$(given_or_generated "${E2E_T2B_PASSWORD:-}" 16)"
+ADMIN_PASSWORD="$(given_or_generated "${E2E_ADMIN_PASSWORD:-}" 16)"
+ADMIN2_PASSWORD="$(given_or_generated "${E2E_ADMIN2_PASSWORD:-}" 16)"
+NEWUSER_PASSWORD="$(given_or_generated "${E2E_NEWUSER_PASSWORD:-}" 16)"
 
 pids=()
 created_state=0
@@ -104,9 +117,10 @@ created_db=0
 redact_stream() {
   # stdin -> stdout with every secret of the run masked (a log tail may show one in an error line)
   E2E_R1="$JWT_SECRET" E2E_R2="$WEBHOOK_API_KEY" E2E_R3="$T1_PASSWORD" E2E_R4="$T2_PASSWORD" \
-    E2E_R5="${PGPASSWORD:-}" E2E_R6="$T2B_PASSWORD" "$PY" -c '
+    E2E_R5="${PGPASSWORD:-}" E2E_R6="$T2B_PASSWORD" E2E_R7="$ADMIN_PASSWORD" E2E_R8="$ADMIN2_PASSWORD" \
+    E2E_R9="$NEWUSER_PASSWORD" "$PY" -c '
 import os, sys
-secrets = [os.environ[k] for k in ("E2E_R1", "E2E_R2", "E2E_R3", "E2E_R4", "E2E_R5", "E2E_R6") if os.environ.get(k)]
+secrets = [os.environ[k] for k in ("E2E_R1", "E2E_R2", "E2E_R3", "E2E_R4", "E2E_R5", "E2E_R6", "E2E_R7", "E2E_R8", "E2E_R9") if os.environ.get(k)]
 for line in sys.stdin:
     for s in secrets:
         line = line.replace(s, "***")
@@ -186,6 +200,18 @@ mkdir -m 700 -- "$STATE_DIR"
 created_state=1
 mkdir -m 700 -- "$STATE_DIR/logs" "$STATE_DIR/home"
 
+# The scratch repository: a copy of the backend's app/ and of kb/, and an empty eval/ (see the header).
+REPO_DIR="$STATE_DIR/repo"
+mkdir -m 700 -- "$REPO_DIR" "$REPO_DIR/backend" "$REPO_DIR/eval"
+cp -R -- "$BACKEND_SRC/app" "$REPO_DIR/backend/app"
+find "$REPO_DIR/backend/app" -type d -name __pycache__ -prune -exec rm -rf -- {} +
+# What runs must be what was asked for: a copy that differs from its source (a file the copy missed, a symlink it
+# followed) would make every green of the suite a statement about some other code.
+diff -rq -x __pycache__ "$BACKEND_SRC/app" "$REPO_DIR/backend/app" >/dev/null \
+  || die "the scratch copy of app/ is not the same as $BACKEND_SRC/app: refusing to start the stack"
+cp -R -- "$ROOT/kb" "$REPO_DIR/kb"
+BACKEND_DIR="$REPO_DIR/backend"
+
 # ---------------------------------------------------------------- the scratch database
 PGOPTIONS='-c client_min_messages=warning' \
   psql -X -q -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$DB\" WITH (FORCE)" >/dev/null
@@ -225,7 +251,8 @@ write_env_file "$STATE_DIR/child.env" \
 (umask 077 && cp -- "$STATE_DIR/child.env" "$STATE_DIR/seed.env")
 write_env_file "$STATE_DIR/seed.env" \
   SEED_PASSWORD_E2E_T1="$T1_PASSWORD" SEED_PASSWORD_E2E_T2="$T2_PASSWORD" \
-  SEED_PASSWORD_E2E_T2B="$T2B_PASSWORD"
+  SEED_PASSWORD_E2E_T2B="$T2B_PASSWORD" SEED_PASSWORD_E2E_ADMIN="$ADMIN_PASSWORD" \
+  SEED_PASSWORD_E2E_ADMIN2="$ADMIN2_PASSWORD"
 # vite preview needs no secret and no database
 write_env_file "$STATE_DIR/web.env" PATH="$PATH" HOME="$HOME" LANG=C.UTF-8
 
@@ -259,7 +286,8 @@ wait_http() {
   env -i "$BASH" -c "$CLEAN_SHELL" _ "$STATE_DIR/seed.env" \
     "$PY" -m app.infra.auth seed-users --dsn "postgresql:///$DB" \
     --user e2e-t1 tier1 "E2E Tier 1" --user e2e-t2 tier2 "E2E Tier 2" \
-    --user e2e-t2b tier2 "E2E Tier 2 B"
+    --user e2e-t2b tier2 "E2E Tier 2 B" \
+    --user e2e-admin admin "E2E Admin" --user e2e-admin2 admin "E2E Admin 2"
 ) >"$STATE_DIR/logs/seed.log" 2>&1
 rm -f -- "$STATE_DIR/seed.env"
 
@@ -267,6 +295,7 @@ rm -f -- "$STATE_DIR/seed.env"
 (
   umask 077
   E2E_WH="$WEBHOOK_API_KEY" E2E_P1="$T1_PASSWORD" E2E_P2="$T2_PASSWORD" E2E_P3="$T2B_PASSWORD" \
+    E2E_P4="$ADMIN_PASSWORD" E2E_P5="$ADMIN2_PASSWORD" E2E_P6="$NEWUSER_PASSWORD" \
     E2E_PGH="${PGHOST:-}" E2E_PGP="${PGPORT:-}" E2E_PGU="${PGUSER:-}" E2E_PGW="${PGPASSWORD:-}" \
     E2E_DB="$DB" "$PY" -c '
 import json, os, sys
@@ -277,6 +306,9 @@ with open(sys.argv[1], "w") as f:
         "t1_password": e["E2E_P1"],
         "t2_password": e["E2E_P2"],
         "t2b_password": e["E2E_P3"],
+        "admin_password": e["E2E_P4"],
+        "admin2_password": e["E2E_P5"],
+        "new_password": e["E2E_P6"],
         "pg": {"PGHOST": e["E2E_PGH"], "PGPORT": e["E2E_PGP"], "PGUSER": e["E2E_PGU"],
                "PGPASSWORD": e["E2E_PGW"], "PGDATABASE": e["E2E_DB"]},
     }, f)
@@ -306,7 +338,7 @@ start web "$STATE_DIR/web.env" \
 web_pid="${pids[-1]}"
 wait_http "vite preview" "http://$HOST:$WEB_PORT/" "$web_pid"
 
-echo "ui_e2e_stack: ready on http://$HOST:$WEB_PORT (api $API_PORT, llm stub $LLM_PORT, backend $BACKEND_DIR, database $DB)"
+echo "ui_e2e_stack: ready on http://$HOST:$WEB_PORT (api $API_PORT, llm stub $LLM_PORT, backend $BACKEND_SRC, database $DB)"
 
 # stay up until Playwright stops us (SIGTERM), the runner is gone, or a child dies
 while true; do

@@ -15,9 +15,17 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { OVERVIEW_SECTIONS } from "./admin";
+import { REDACTED } from "../features/admin/auditSummary";
+import { dictKeys, wrapDictLiterals } from "./adminTypesSource";
 
 const BACKEND = join("..", "backend", "app");
-const py = (...path: string[]): string => readFileSync(join(BACKEND, ...path), "utf8");
+// The second comparison below reads the backend with every dict literal wrapped, as `ruff format` lays out one that
+// outgrows its line, so an anchor written for today's one-line layout fails here and not on the day of a wrap.
+let wrapped = false;
+const py = (...path: string[]): string => {
+  const text = readFileSync(join(BACKEND, ...path), "utf8");
+  return wrapped ? wrapDictLiterals(text) : text;
+};
 const router = (name: string): string => py("web", "routers", name);
 
 // --- reading the TypeScript ---------------------------------------------------------------------------------
@@ -96,34 +104,6 @@ function tsPropsOf(path: string): Prop[] {
 }
 
 // --- reading the Python -------------------------------------------------------------------------------------
-
-/**
- * The string keys of the dict literal whose `{` ends the match of `anchor`, at its top level: `"key":`.
- * Strings are skipped whole, so a brace in one does not count.
- */
-function dictKeys(source: string, anchor: RegExp): string[] {
-  const m = anchor.exec(source);
-  if (m === null) throw new Error(`anchor not found: ${String(anchor)}`);
-  const open = m.index + m[0].length - 1;
-  if (source[open] !== "{") throw new Error(`anchor does not end at a brace: ${String(anchor)}`);
-  const keys: string[] = [];
-  let depth = 0;
-  for (let i = open; i < source.length; i += 1) {
-    const ch = source.charAt(i);
-    if (ch === '"') {
-      const end = source.indexOf('"', i + 1);
-      if (depth === 1 && /^\s*:/.test(source.slice(end + 1, end + 6))) {
-        keys.push(source.slice(i + 1, end));
-      }
-      i = end;
-    } else if (ch === "{") depth += 1;
-    else if (ch === "}") {
-      depth -= 1;
-      if (depth === 0) return keys;
-    }
-  }
-  throw new Error(`unbalanced braces after: ${String(anchor)}`);
-}
 
 /** The annotated fields of a dataclass or pydantic class (not its methods, docstring or `model_config`). */
 function pyClassFields(source: string, cls: string): string[] {
@@ -223,12 +203,12 @@ const ENTRIES: Entry[] = [
   {
     path: "LimitsOut.bounds",
     keys: ["min", "max"],
-    backend: () => dictKeys(llm(), /\{(?="min": low)/),
+    backend: () => dictKeys(llm(), /\{(?=\s*"min": low)/),
   },
   {
     path: "fn:putLlmLimits",
     keys: ["limits"],
-    backend: () => dictKeys(llm(), /return \{(?="limits": limits_out)/),
+    backend: () => dictKeys(llm(), /return \{(?=\s*"limits": limits_out)/),
   },
   {
     path: "LlmUsage",
@@ -312,7 +292,7 @@ const ENTRIES: Entry[] = [
   {
     path: "OverviewResponse.errors",
     keys: ["section", "error"],
-    backend: () => dictKeys(overview(), /errors\.append\(\{/),
+    backend: () => dictKeys(overview(), /errors\.append\(\s*\{/),
   },
   {
     path: "OverviewResponse.alerts_by_day",
@@ -378,7 +358,7 @@ const ENTRIES: Entry[] = [
   {
     path: "fn:retryJob",
     keys: ["job_id", "status"],
-    backend: () => dictKeys(overview(), /return \{(?="job_id": job_id, "status")/),
+    backend: () => dictKeys(overview(), /return \{(?=\s*"job_id": job_id,\s*"status")/),
   },
   {
     path: "LoadReport",
@@ -404,7 +384,7 @@ const ENTRIES: Entry[] = [
     ],
     backend: () => [
       ...dictKeys(rules(), /result\.append\(\s*\{/),
-      ...dictKeys(rules(), /\{(?=\*\*row, "width_threshold_pct")/),
+      ...dictKeys(rules(), /\{(?=\s*\*\*row,\s*"width_threshold_pct")/),
     ],
   },
   {
@@ -436,17 +416,17 @@ const ENTRIES: Entry[] = [
   {
     path: "HardBlockTally.blocks",
     keys: ["code", "count"],
-    backend: () => dictKeys(rules(), /\{(?="code": code, "count": count)/),
+    backend: () => dictKeys(rules(), /\{(?=\s*"code": code,\s*"count": count)/),
   },
   {
     path: "fn:createRule",
     keys: ["rule_id", "name", "enabled"],
-    backend: () => dictKeys(rules(), /return \{(?="rule_id": rule_id, "name": body\.name)/),
+    backend: () => dictKeys(rules(), /return \{(?=\s*"rule_id": rule_id,\s*"name": body\.name)/),
   },
   {
     path: "fn:toggleRule",
     keys: ["rule_id", "name", "enabled"],
-    backend: () => dictKeys(rules(), /return \{(?="rule_id": rule_id, "name": name)/),
+    backend: () => dictKeys(rules(), /return \{(?=\s*"rule_id": rule_id,\s*"name": name)/),
   },
 
   // --- daily digest (admin_digest.py) ---
@@ -491,7 +471,7 @@ const ENTRIES: Entry[] = [
     keys: ["cluster_id", "done", "total", "cluster", "frozen", "candidates_present"],
     backend: () => [
       ...dictKeys(labels(), /return \{(?=\s*"cluster_id": progress\.cluster_id)/),
-      ...dictKeys(labels(), /\{(?=\*\*payload,)/),
+      ...dictKeys(labels(), /\{(?=\s*\*\*payload,)/),
     ],
   },
   {
@@ -557,7 +537,7 @@ const ENTRIES: Entry[] = [
   {
     path: "fn:undoLabel",
     keys: ["undone_cluster_id", "done", "total"],
-    backend: () => dictKeys(labels(), /return \{(?="undone_cluster_id")/),
+    backend: () => dictKeys(labels(), /return \{(?=\s*"undone_cluster_id")/),
   },
 
   // --- audit log (admin_audit.py) ---
@@ -631,6 +611,31 @@ describe("the response types of api/admin.ts equal the keys of their handlers", 
     const simulate = tsPropsOf("SimulateResult");
     expect(simulate.find((p) => p.name === "hard_block_tally")?.optional).toBe(false);
     expect(simulate.find((p) => p.name === "hard_block_tally")?.type).toBe("HardBlockTally | null");
+  });
+});
+
+describe("the marker of a withheld value", () => {
+  it("is the one admin_audit.py writes: `REDACTED` there, and the page reads it from here", () => {
+    const written = /^REDACTED = "([^"]*)"$/m.exec(py("web", "routers", "admin_audit.py"));
+    expect(written).not.toBeNull();
+    expect(REDACTED).toBe(written?.[1]);
+  });
+});
+
+describe("the keys of the backend are read the same when its dict literals are wrapped", () => {
+  beforeAll(() => {
+    wrapped = true;
+  });
+  afterAll(() => {
+    wrapped = false;
+  });
+  const withBackend = ENTRIES.flatMap((e) =>
+    e.backend === undefined ? [] : [[e.path, e] as const],
+  );
+  it.each(withBackend)("%s", (_path, entry) => {
+    expect(sorted(entry.backend?.() ?? []), `${entry.path}: keys in the wrapped backend`).toEqual(
+      sorted([...entry.keys, ...(entry.optional ?? [])]),
+    );
   });
 });
 

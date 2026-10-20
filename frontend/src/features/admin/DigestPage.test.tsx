@@ -479,6 +479,30 @@ describe("the rows", () => {
     expect(D.noSuggestion).toBe("(chưa có kết quả ①)");
   });
 
+  // DEC-101: a row a "Sai" review reopened is blind again while it is undecided, and the server leaves ①'s
+  // verdict off it (no suggestion, no disagreement). "No result" would be a wrong thing to say of it.
+  it("does not say ① has no result on a reopened row that carries no suggestion", async () => {
+    const withheld = digestRow({
+      alert_id: IDS.wrong,
+      agent_name: "lab-ubuntu-02",
+      suggested_action: null,
+      disagreement: false,
+      reviewed_verdict: "wrong",
+      reviewed_by_name: "khanh-admin",
+      reviewed_at: "2026-09-30T01:14:00+00:00",
+      reopened_by_review: true,
+    });
+    serveDigest(digest({ rows: [withheld] }));
+    renderPage();
+    await loaded();
+    const row = rowOf("lab-ubuntu-02");
+    expect(cellsOf(row)[6]).toBe(D.reopenedNoSuggestion);
+    expect(within(row).queryByText(D.noSuggestion)).not.toBeInTheDocument();
+    expect(within(row).queryByText(D.disagreement)).not.toBeInTheDocument();
+    expect(row).toHaveAttribute("data-disagreement", "false");
+    expect(within(row).getByText(D.reopened)).toBeInTheDocument();
+  });
+
   it("shows a suggestion this page has no label for as the server wrote it", async () => {
     serveDigest(digest({ rows: [digestRow({ suggested_action: "mới_lạ" })] }));
     renderPage();

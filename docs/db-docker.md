@@ -48,9 +48,11 @@ git clone <repo> /project/project/AI_Support_SOC_1_2 && cd /project/project/AI_S
 cp <backup>/secrets/env .env; cp <backup>/secrets/root-ca.pem conf/root-ca.pem; chmod 400 conf/root-ca.pem
 cp <backup>/conf/{inventory.yaml,identities.yaml,iocs.csv} conf/        # git-ignored estate files
 # on a machine with no native cluster, set DB_PORT=5432 and the three DSNs to :5432 in .env
-make up          # db restores backups/latest.dump on its first start, then app + worker come up
-make migrate     # on the tracked dump (it holds 17 migrations) prints "2 applied, 17 already present"
-                 # (018 and 019); run again, "0 applied, 19 already present"
+make db-up      # only db: it restores backups/latest.dump on its first start
+make migrate     # BEFORE app and worker start (the v1.1 code reads what 019 creates; docs/runbook.md,
+                 # "Admin console v1.1 — deploy"). On the tracked dump (it holds 17 migrations) it
+                 # prints "2 applied, 17 already present" (018 and 019); run again, "0 applied, 19 already present"
+make up          # app + worker (and ui) come up on a database already at 19
 make test && make test-db
 ```
 

@@ -304,7 +304,7 @@ The changes to the frozen contracts are listed in §5.9 and recorded by DEC-200.
   A test greps for the three key names outside `infra/config.py` and `infra/settings.py` and expects none.
 - **`PUT /api/admin/llm/limits`**, with any of the three keys as integers.
   - It validates the bounds of decision 2. The timeout's upper bound is derived from `JOB_LOCK_TIMEOUT_S` (DEC-202). In one transaction it upserts the changed keys and writes one `admin.settings_changed` row with `{changes: [{key, old, new}]}`.
-  - `200 {effective, source}`. An unchanged body writes nothing.
+  - `200 {limits: LimitsOut}`: the three effective values, `sources` per setting (with `clamped`) and `bounds` per field (DEC-202), the same shape as `usage`'s `limits`. An unchanged body writes nothing.
   - `422 {field, reason}` per invalid key.
 - **Red steps:**
   - make the accessor return the `.env` value on a read error: a run that should be refused opens a socket on the fake adapter;
@@ -326,6 +326,7 @@ The changes to the frozen contracts are listed in §5.9 and recorded by DEC-200.
     - It never includes `system_prompt`, `user_message`, `agent_trace` or `result`'s text fields. A test asserts that their keys are absent.
   - `limits`: the `effective_limits` value. `null` plus `limits_error` when unreadable.
   - `tool_calls: 0`.
+- **Blind arm (DEC-206).** In `recent`, a run on a blind, undecided alert has `outcome` and `subject_id` null.
 
 ### 5.4 Overview, failed jobs, retry
 
@@ -386,7 +387,7 @@ Built on `tier1/digest.py` (`build`, `review`), which the Jinja page already use
   - Ordered by `audit_id` descending. That is insertion order, and the primary key serves it, so no new index is needed.
   - `cursor` is the last `audit_id` seen.
 - **Each event** is returned as `audit_id, created_at, event_type, actor_role, actor_username` (joined from `users`, `null` for system and llm), `subject_id`, and `payload`.
-- **Payload redaction.** A key is normalised: lower-cased, with `_` and `-` dropped and camelCase split. The key is redacted when the result equals or ends with `password`, `passwordhash`, `secret`, `token`, `dsn`, `apikey`, `secretkey`, `privatekey` or `passphrase` (`token_hash`, a digest, stays visible), at any depth. DEC-203 adds three rules: a string value that contains a URL carrying a password (`scheme://user:pass@`, anywhere in the text, case-insensitive) is redacted, as a whole, under any key; `passwd` and `pwd` join the suffixes; a boolean or null value is never redacted. DEC-204: in a `label.created` event the keys `label` and `confidence` are redacted for every viewer, so the audit page never shows one labeller's verdict to the other, and its value is replaced by `"[đã ẩn]"`. So `access_token`, `client_secret`, `apiKey` and `db_password` are caught, while `key`, `token_count` and `passwords` stay visible (P11-T09 review). Payloads should never carry a credential (DEC-159 item 6); this is the second layer.
+- **Payload redaction.** A key is normalised: lower-cased, with `_` and `-` dropped and camelCase split. The key is redacted when the result equals or ends with `password`, `passwordhash`, `secret`, `token`, `dsn`, `apikey`, `secretkey`, `privatekey` or `passphrase` (`token_hash`, a digest, stays visible), at any depth. DEC-203 adds three rules: a string value that contains a URL carrying a password (`scheme://user:pass@`, anywhere in the text, case-insensitive) is redacted, as a whole, under any key; `passwd` and `pwd` join the suffixes; a boolean or null value is never redacted. DEC-204: in a `label.created` event the keys `label` and `confidence` are redacted for every viewer, so the audit page never shows one labeller's verdict to the other. DEC-206 (amended): about an alert that is blind and undecided (`tier1/visibility.py`'s rule), the rows of `triage.suggested`, `llm.gate_forced` and `llm.builder_violation` are left out of the page and the total until the alert is decided, and an `autoclose.reviewed` event stays listed with its suggestion-carrying keys redacted, and its value is replaced by `"[đã ẩn]"`. So `access_token`, `client_secret`, `apiKey` and `db_password` are caught, while `key`, `token_count` and `passwords` stay visible (P11-T09 review). Payloads should never carry a credential (DEC-159 item 6); this is the second layer.
 - **`total`** is a `count(*)` under its own short timeout, and `null` when it times out.
 - **A query timeout** answers `503 {reason: "timeout"}`.
 - **The groups**, defined in one table in the module and mirrored in `strings.ts`:

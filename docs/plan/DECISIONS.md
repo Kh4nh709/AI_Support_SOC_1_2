@@ -3455,3 +3455,26 @@ Decision:
   3. **The review covers both.** The whole-branch review of P11-T20 reads the v1.1 tip, and the retire branch gets its own independent Reviewer (DEC-201). Neither merges into `main` without that.
   4. **Spec §8's last sentence stands.** v1.1 does not end with two admin UIs: the retire branch is part of v1.1, merged later by the Owner's own decision.
 Supersedes: none. It sets the order the plan left open.
+
+## DEC-206 · 2026-10-20 · The admin console honours the blind arm: an audit event or a usage row about a blind, undecided alert shows no ① suggestion, for every role; the event or run itself stays listed
+Scope: **product** (admin console API) · **evaluation integrity** (DEC-101, context pack §6.4)
+Decided by: **the Director, 20/10**, on the whole-branch review of P11 (finding I1). It applies the existing rule to two answers that v1.1 added. It is not a new policy.
+Drafted by: Director (Opus 5.5)
+Propagated to: spec §5.3 and §5.8 · P11-T20 part 4 (`admin_audit.py`, `admin_llm.py`, `tier1/digest.py`, the pages) · `docs/limitations.md` with the retire branch (parked row 57, reframed)
+Decision:
+  1. **The rule.** It is `tier1/visibility.py`'s rule (`suggestion_visible = false` and the alert not in `SHOW_STATES`), read by the same code, never a second copy. It holds for the admin console's answers as it holds for the queue and alert pages, for every role.
+     - `GET /api/admin/audit`: in `triage.suggested`, `llm.gate_forced` and `autoclose.reviewed` events about such an alert, the suggestion-carrying keys are replaced by the redaction marker.
+     - `GET /api/admin/llm/usage` `recent`: such a run has `outcome` and `subject_id` null.
+     - The digest's `reopened_by_review` rows: such a row carries no `suggested_action` or `disagreement`.
+  2. **What stays visible, and why that is accepted.** The audit event (type, time, subject) and the usage run (pipeline, role, tokens, cost) stay listed. ① runs on every head in both arms, so "① ran on this alert" does not tell the arm. The verdict and its confidence are what DEC-101 hides, and they are hidden.
+  3. **Decided alerts.** After a Tier-1 decision the suggestion is shown, as on the alert page. The admin's view of decided alerts, used for gold labelling, is by design. Parked row 57's framing is limited to decided alerts.
+Supersedes: none. It closes a gap between DEC-101 and P11-T09/P11-T04's answers.
+Amended 20/10 (whole-branch review round 2, N1; the Director's ruling): **item 2 was half wrong.**
+- **What was wrong.** The gate only ever forces ①'s verdict to `needs_review` (`security/gate.py`), and `triage.py` writes `llm.gate_forced` only when it did. So the bare presence of that event under a blind, undecided alert tells the verdict. A listed `llm.builder_violation` likewise tells that ① produced none, which is the `triage_status` fact `ANALYST_HIDE` hides.
+- **Corrected item 2.** The rows of `triage.suggested`, `llm.gate_forced` and `llm.builder_violation` about a blind, undecided alert are **left out** of the audit page and its total. The alerts join is made inside the page query. These rows come back once the alert is decided.
+- **What stays.** `autoclose.reviewed` stays listed with its suggestion keys masked: it is a person's event, and its presence tells no verdict. The usage `recent` rule stands (`outcome` and `subject_id` null, so a listed run is tied to no alert).
+Amended again 20/10 (part 4 fix round 1, the Coder's open point; the Director's ruling): **"① produced nothing" stays visible where an admin must act on it.**
+- **What is still visible.** A failed triage job is visible to an admin about a blind, undecided alert: the overview's `failed_jobs` row and the audit's `job.exhausted` event.
+- **Why that is accepted.** The admin has to see that job to retry it. The fact says that ① failed, not which way it leaned, so it cannot bias the human decision that the blind arm measures.
+- **The difference from `llm.builder_violation`.** That event is left out, because it carries nothing an admin acts on.
+- **Where it is recorded.** `docs/limitations.md` records this with parked row 57, on the retire branch.

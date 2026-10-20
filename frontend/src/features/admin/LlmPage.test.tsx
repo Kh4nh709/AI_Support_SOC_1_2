@@ -853,8 +853,31 @@ describe("recent calls", () => {
     renderPage();
     const panel = within(await recentPanel());
     const cells = rowsOf(await table()).map((r) => r[2]);
-    expect(cells).toEqual(["rule 7", "—", "—"]);
+    expect(cells).toEqual(["rule 7", "—", L.recent.hidden]);
     expect(panel.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  // DEC-101, context pack §6.4: a run on an alert that is blind and not yet decided has no subject and no
+  // outcome. The row stays; its two cells say they are withheld, nothing links anywhere, nothing throws.
+  it("says a run on a blind undecided alert is withheld, in the subject and the outcome", async () => {
+    const run = recentRows()[0]!;
+    serveUsage(
+      usage({
+        recent: [
+          { ...run, run_id: "a", subject_type: "alert", subject_id: null, outcome: null },
+          { ...run, run_id: "b", subject_type: "alert", subject_id: "", outcome: "" },
+          { ...run, run_id: "c", subject_type: "case", subject_id: null, outcome: null },
+        ],
+      }),
+    );
+    renderPage();
+    const panel = within(await recentPanel());
+    const rows = rowsOf(await table());
+    expect(rows.map((r) => r[2])).toEqual([L.recent.hidden, L.recent.hidden, "—"]);
+    expect(rows.map((r) => r[5])).toEqual([L.recent.hidden, L.recent.hidden, "—"]);
+    expect(panel.queryByRole("link")).not.toBeInTheDocument();
+    // the row's other cells are read as ever
+    expect(rows[0]?.[1]).toBe("① triage · proposer");
   });
 
   it("renders what a hostile id, outcome and name say as text, never as markup", async () => {

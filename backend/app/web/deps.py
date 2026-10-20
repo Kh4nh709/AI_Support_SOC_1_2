@@ -114,6 +114,29 @@ def current_user(request: Request, conn: Conn, cfg: Cfg) -> Claims:
         raise HTTPException(status_code=401, detail=exc.reason) from exc
 
 
+def require_json_type(request: Request) -> None:
+    """`application/json` or `application/*+json`, and nothing else; a missing Content-Type is
+    refused too, as FastAPI's own parsing (`strict_content_type`) refuses it. A route that
+    changes something and reads no body of its own takes this as a parameter dependency, AFTER
+    `require_role`, so a non-admin is answered 403 first. A no-cors `fetch` with no body (or a
+    Blob) sends no Content-Type, and a cross-site form post is `text/plain`, urlencoded or
+    multipart: all are refused by the same line, as they are on a route with a Pydantic body.
+    Until P11-T19 the session cookie would have signed such a request in from any page on
+    the same host, and this rule was what kept it from changing state; the cookie is gone, and the
+    rule stays as the contract of every route that changes something. The
+    answer is `422 {"detail": {"field": "body", "reason": "invalid"}}`, the one `admin_users`
+    has always given (spec §3). The rule is on the type, not on a body: an empty one passes."""
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    is_json = content_type == "application/json" or (
+        content_type.startswith("application/") and content_type.endswith("+json")
+    )
+    if not is_json:
+        raise HTTPException(status_code=422, detail={"field": "body", "reason": "invalid"})
+
+
+JsonType = Annotated[None, Depends(require_json_type)]
+
+
 def require_role(*roles: str) -> Callable[..., Claims]:
     """A dependency factory: `Depends(require_role("admin"))` yields the `Claims`
     or answers `403` after writing — and committing — an `authz.denied` event."""

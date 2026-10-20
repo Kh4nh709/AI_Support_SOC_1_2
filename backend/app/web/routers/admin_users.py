@@ -59,7 +59,7 @@ from psycopg.rows import dict_row
 from app.audit.events import write_event
 from app.infra import auth
 from app.infra.auth import RESERVED_USERNAMES, ROLES, Claims
-from app.web.deps import ROLE_TO_ACTOR, Conn, require_role
+from app.web.deps import ROLE_TO_ACTOR, Conn, require_json_type, require_role
 
 router = APIRouter()
 
@@ -214,19 +214,10 @@ def _bad(field: str | None, reason: str, **extra: Any) -> HTTPException:
 
 
 def _require_json_type(request: Request) -> None:
-    """`application/json` or `application/*+json`, and nothing else — a missing Content-Type is
-    refused too, as FastAPI's own parsing (`strict_content_type`) refuses it. A no-cors `fetch`
-    with a Blob body sends no Content-Type, and a form post is `text/plain`, urlencoded or
-    multipart: all are refused by the same line, as they are on a route with a Pydantic body (this
-    module reads its bodies by hand). While the session cookie lived (until P11-T19) that refusal
-    was what kept a request from another page of the host from creating an admin or resetting a
-    password. Every route of this module that changes something calls it, `unlock` too."""
-    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
-    is_json = content_type == "application/json" or (
-        content_type.startswith("application/") and content_type.endswith("+json")
-    )
-    if not is_json:
-        raise _bad("body", "invalid")
+    """The shared rule, `deps.require_json_type` (P11-T20 part 4, M1: the jobs retry and the
+    inventory reload take it too). Every route of this module that changes something calls it,
+    `unlock` too."""
+    require_json_type(request)
 
 
 async def _read_object(request: Request, *, allow_empty: bool) -> dict[str, Any]:

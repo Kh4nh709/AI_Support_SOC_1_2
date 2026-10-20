@@ -21,7 +21,12 @@ from fastapi import Depends, FastAPI, HTTPException
 from app.enrichment.inventory import load
 from app.infra.auth import Claims
 from app.infra.errors import PermanentError
-from app.web.deps import Conn, get_conn, require_role  # re-export: tests override main.get_conn
+from app.web.deps import (  # re-export: tests override main.get_conn
+    Conn,
+    JsonType,
+    get_conn,
+    require_role,
+)
 from app.web.routers import iter_routers
 
 __all__ = ["app", "get_conn"]
@@ -33,9 +38,14 @@ for router in iter_routers():
 
 
 @app.post("/api/admin/reload-inventory")
-def reload_inventory(conn: Conn, _: Annotated[Claims, Depends(require_role("admin"))]) -> dict:
+def reload_inventory(
+    conn: Conn, _: Annotated[Claims, Depends(require_role("admin"))], _json_type: JsonType
+) -> dict:
     # DEC-058 / DEC-066: the block this route's data feeds (G8′ "asset not in
-    # inventory") is unchanged by the role dependency P4-T01 added.
+    # inventory") is unchanged by the role dependency P4-T01 added. It reads no body, so it
+    # asks for the JSON content type, after the role check (`deps.require_json_type`, P11-T20
+    # part 4, M1): a no-cors `fetch` or a form post would otherwise reload the inventory (until
+    # P11-T19 it needed nothing but the session cookie). The client sends `{}`.
     try:
         report = load(conn)
     except PermanentError as exc:

@@ -63,7 +63,10 @@ read-only, from `llm_runs` and `audit_events`, in five parts.
   `suggested_conclusion` for ②), and only when that value is a JSON STRING of at most 40
   characters; any other value, however it got there, is `null` (model output is untrusted, and
   the database's own CHECKs are not relied on). A row with no verdict is `stopped:<stopped_by>`
-  when it has a (short) stop reason, else `null`.
+  when it has a (short) stop reason, else `null`. **The blind arm** (DEC-101, context pack §6.4):
+  for a run on an alert that is blind and not yet decided (`tier1/visibility.py`'s rule) both
+  `outcome` and `subject_id` are `null`, because the verdict is the suggestion and the id would say
+  that ① ran on that alert; the run stays listed.
 - **`limits`**: `limits_out(conn, effective_limits(conn, cfg))`; when they cannot be read, `null`
   with `limits_error: "limits_unavailable"` and the rest is still served (the page shows the
   fail-closed panel). `tool_calls` is always 0 (spec decision 4).
@@ -94,6 +97,7 @@ from app.audit import llm_runs
 from app.audit.events import write_event
 from app.infra import settings
 from app.infra.auth import Claims
+from app.tier1 import visibility
 from app.web.deps import Cfg, Conn, require_role
 from app.web.routers import tier2_runs
 
@@ -306,26 +310,48 @@ LIMIT %s
 #: verdict key of the row, and is a string of at most 40 characters or NULL. `result`,
 #: `system_prompt`, `user_message`, `agent_trace` and the findings are not in the select list,
 #: so nothing in Python can leak them.
+#:
+#: **The blind arm** (DEC-101, context pack §6.4, P11-T20 part 4 finding I1). The 20 newest runs
+#: are cut first (`r`), then each run on an alert is LEFT JOINed to `alerts` by its primary key
+#: (`h`, `subject_type = 'alert'` only: a case id is not an alert id). When that alert is blind
+#: and undecided (`NOT suggestion_visible AND status <> ALL(visibility.SHOW_STATES)`, the rule of
+#: `tier1/visibility.py`, whose state list is passed in as `show_states`), `outcome` and
+#: `subject_id` are NULL: the verdict is the suggestion, and the id would tie the listed run to
+#: the alert and so say that ① ran on it. The run itself stays listed (its time, pipeline, role,
+#: tokens, latency and cost say nothing about which alert), and an alert with no row is shown.
 _RECENT_SQL = """
-SELECT r.run_id, r.created_at, r.pipeline, r.role, r.subject_type, r.subject_id,
+SELECT r.run_id, r.created_at, r.pipeline, r.role, r.subject_type,
+       CASE WHEN h.hidden THEN NULL ELSE r.subject_id END AS subject_id,
        r.input_tokens, r.output_tokens, r.latency_ms,
-       CASE
-         WHEN r.result IS NOT NULL AND r.result -> k.verdict_key IS NOT NULL THEN
-           CASE WHEN jsonb_typeof(r.result -> k.verdict_key) = 'string'
-                     AND length(r.result ->> k.verdict_key) <= %(outcome_max)s
-                THEN r.result ->> k.verdict_key END
-         WHEN r.stopped_by IS NOT NULL AND length(r.stopped_by) <= %(stopped_max)s
-           THEN %(prefix)s || r.stopped_by
+       CASE WHEN h.hidden THEN NULL ELSE
+         CASE
+           WHEN r.result IS NOT NULL AND r.result -> k.verdict_key IS NOT NULL THEN
+             CASE WHEN jsonb_typeof(r.result -> k.verdict_key) = 'string'
+                       AND length(r.result ->> k.verdict_key) <= %(outcome_max)s
+                  THEN r.result ->> k.verdict_key END
+           WHEN r.stopped_by IS NOT NULL AND length(r.stopped_by) <= %(stopped_max)s
+             THEN %(prefix)s || r.stopped_by
+         END
        END AS outcome,
        r.cost_usd
-FROM llm_runs r
+FROM (
+    SELECT run_id, created_at, pipeline, role, subject_type, subject_id, input_tokens,
+           output_tokens, latency_ms, result, stopped_by, cost_usd
+    FROM llm_runs
+    ORDER BY created_at DESC, run_id DESC
+    LIMIT %(limit)s
+) r
 CROSS JOIN LATERAL (
     SELECT CASE WHEN r.pipeline = 'investigate' THEN 'suggested_conclusion'
                 WHEN r.role = 'verifier' THEN 'structured_only_verdict'
                 ELSE 'suggested_action' END AS verdict_key
 ) k
+LEFT JOIN alerts al ON r.subject_type = 'alert' AND al.alert_id = r.subject_id
+CROSS JOIN LATERAL (
+    SELECT COALESCE(NOT al.suggestion_visible AND al.status <> ALL(%(show_states)s), false)
+           AS hidden
+) h
 ORDER BY r.created_at DESC, r.run_id DESC
-LIMIT %(limit)s
 """
 
 #: Seconds since this calendar month began, and its length in seconds: one statement on one
@@ -478,6 +504,7 @@ def _recent(conn: Any) -> list[dict[str, Any]]:
             "stopped_max": _STOPPED_MAX_CHARS,
             "prefix": _STOPPED_PREFIX,
             "limit": _RECENT_LIMIT,
+            "show_states": sorted(visibility.SHOW_STATES),
         },
     ).fetchall()
     return [

@@ -221,7 +221,11 @@ def _row_now(
     if listed:
         row, reopened = listed[0]
     else:
-        row, reopened = snapshot, info is not None and info.verdict == "wrong"
+        # The snapshot was read while the alert was auto-closed (decided, so ① shown); the alert
+        # may be blind and undecided again by now (a reopen landed between), and a response
+        # carries no suggestion for such an alert (DEC-101, P11-T20 part 4).
+        row = digest.withhold_if_blind(conn, snapshot)
+        reopened = info is not None and info.verdict == "wrong"
     if info is not None and row.reviewed_verdict != info.verdict:
         row = dataclasses.replace(row, reviewed_verdict=info.verdict)
     return DigestRowOut.of(row, info, reopened=reopened)

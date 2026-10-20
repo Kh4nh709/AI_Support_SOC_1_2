@@ -1,14 +1,17 @@
-"""P11-T19 (DEC-205) — `docs/runbook.md`, the `## Admin console` section: where the admin console is,
-and the Owner's two ordered steps (the v1.1 deploy, then the retire step).
+"""P11-T19 (DEC-205) — `docs/runbook.md`: the console's address, and the Owner's TWO steps as one
+procedure, in order.
 
-The order is the point. DEC-205 item 2: fast-forward `main` to `director/admin-v1-1`, then `make
-migrate`, then `docker compose up -d --build ui`, then `docker compose restart app worker`; migrate
-before the restart, or login breaks (`users.last_login_at`) and every model call stops (the limits
-accessor fails closed). Later, fast-forward `main` to `director/admin-v1-1-retire` and `docker
-compose restart app worker`: a code-only change, no migration and no UI rebuild. A runbook that
-swaps two of those would be followed to the letter by the one person who runs it.
+One story, not two. The deploy block (`## Admin console v1.1 — deploy (DEC-205)`, held row by row
+by `test_runbook_deploy.py`) is the first Owner step; the retire step of this branch is the
+second, in the same block, after the gate. This file pins the whole order across both:
+fast-forward `main` to `director/admin-v1-1`, `make migrate`, the check that 19 migrations are in,
+`docker compose up -d --build ui`, `docker compose restart app worker`; the Owner uses the React
+pages; then fast-forward `main` to `director/admin-v1-1-retire` and `docker compose restart app
+worker`: a code-only change, no migration and no UI rebuild. A runbook that swaps two of those
+would be followed to the letter by the one person who runs it.
 
-Also pinned: no liveness check of the stack uses a page that port 8000 no longer has.
+It also pins that the steps are written once (the `## Admin console` section points to the block
+and repeats none), and that no liveness check of the stack uses a page port 8000 no longer has.
 
 No database; reads the one file.
 """
@@ -21,65 +24,86 @@ from pathlib import Path
 import pytest
 
 RUNBOOK = Path(__file__).resolve().parents[2] / "docs" / "runbook.md"
+BLOCK = "## Admin console v1.1 — deploy (DEC-205)"
+CONSOLE = "## Admin console"
 
 
 def _text() -> str:
     return RUNBOOK.read_text(encoding="utf-8")
 
 
-def _section() -> str:
+def _section(heading: str) -> str:
+    """The body after the `heading` line, up to the next `## ` heading; the heading is there once."""
     text = _text()
-    start = text.index("\n## Admin console\n")
-    end = text.index("\n## ", start + 1)
-    return text[start:end]
+    starts = [m.end() for m in re.finditer(rf"^{re.escape(heading)}$", text, re.MULTILINE)]
+    assert len(starts) == 1, f"expected one {heading!r} heading, found {len(starts)}"
+    following = re.search(r"^## ", text[starts[0] :], re.MULTILINE)
+    return text[starts[0] :] if following is None else text[starts[0] :][: following.start()]
 
 
-def _row(first_cell: str) -> str:
-    rows = [ln for ln in _section().splitlines() if ln.startswith(f"| {first_cell}")]
-    assert len(rows) == 1, f"expected one row starting {first_cell!r}, found {len(rows)}"
+def _retire_row() -> str:
+    rows = [ln for ln in _section(BLOCK).splitlines() if ln.startswith("| **retire step**")]
+    assert len(rows) == 1, f"expected one retire-step row in the deploy block, found {len(rows)}"
     return rows[0]
 
 
 def test_the_admin_console_is_on_port_8080_under_admin() -> None:
-    section = _section()
+    section = _section(CONSOLE)
     assert "`http://<host>:8080/admin`" in section
     # and the section says what port 8000 serves now
     assert "`/api/*`, `POST /webhook/alerts` and `GET /health`" in section
     assert "renders no page" in section
 
 
-def test_the_v1_1_deploy_runs_in_the_order_of_dec_205_and_migrates_before_the_restart() -> None:
-    row = _row("**1. v1.1 deploy**")
-    order = [
-        "fast-forward `main` to `director/admin-v1-1`",
-        "`make migrate`",
-        "`docker compose up -d --build ui`",
-        "`docker compose restart app worker`",
+def test_the_two_owner_steps_are_one_procedure_in_dec_205s_order() -> None:
+    block = _section(BLOCK)
+    in_order = [
+        "git merge --ff-only director/admin-v1-1` (on `main`)",  # the v1.1 deploy, rows 1 to 5
+        "make migrate PY=.venv/bin/python",
+        'select count(*) from schema_migrations"',
+        "docker compose up -d --build ui",
+        "docker compose restart app worker",  # row 5
+        "the gate of spec §8",  # the Owner uses the React pages
+        "fast-forward `main` to `director/admin-v1-1-retire`",  # the retire step
     ]
-    positions = [row.index(step) for step in order]
-    assert positions == sorted(positions), dict(zip(order, positions))
-    assert "Migrate before the restart" in row
-    assert "last_login_at" in row and "fails closed" in row  # the two things the wrong order breaks
+    positions = [block.index(step) for step in in_order]
+    assert positions == sorted(positions), dict(zip(in_order, positions))
+    # the retire step's own restart comes after its fast-forward, in its own row
+    row = _retire_row()
+    assert row.index("director/admin-v1-1-retire") < row.index(
+        "`docker compose restart app worker`"
+    )
+    assert positions[-1] == block.index(row) + row.index("fast-forward")
 
 
 def test_the_retire_step_is_a_fast_forward_and_a_restart_and_nothing_else() -> None:
-    row = _row("**2. retire step**")
+    row = _retire_row()
     command = row.split("|")[2]
     assert "fast-forward `main` to `director/admin-v1-1-retire`" in command
-    assert command.index("director/admin-v1-1-retire") < command.index(
-        "`docker compose restart app worker`"
-    )
     for forbidden in ("make migrate", "--build", "docker compose up"):
         assert forbidden not in command, forbidden
     assert "no migration and no `ui` rebuild" in row
 
 
-def test_the_retire_step_comes_after_the_v1_1_deploy_and_the_use_of_the_react_pages() -> None:
-    section = _section()
-    deploy = section.index("**1. v1.1 deploy**")
-    use = section.index("*use the React pages*")
-    retire = section.index("**2. retire step**")
-    assert deploy < use < retire
+def test_the_retire_step_waits_for_the_deploy_and_the_migration_count() -> None:
+    block = _section(BLOCK)
+    paragraph = next(p for p in block.split("\n\n") if p.startswith("**The retire step"))
+    assert "only after the deploy above" in paragraph
+    assert "reads `19`" in paragraph  # stacked on v1.1: it carries all of v1.1's code
+
+
+def test_the_steps_are_written_once() -> None:
+    """The `## Admin console` section points to the block and carries no copy of the commands, and
+    each command of the release is in the block only (not in the `UI` or the `Admin console`
+    sections, which may name a branch but never give the command)."""
+    text = _text()
+    assert "git merge --ff-only director/admin-v1-1" in _section(BLOCK)
+    assert text.count("git merge --ff-only director/admin-v1-1") == 1
+    assert text.count("fast-forward `main` to `director/admin-v1-1-retire`") == 1
+    console = _section(CONSOLE)
+    for command in ("make migrate", "docker compose up -d --build ui", "docker compose restart"):
+        assert command not in console, f"the Admin console section repeats {command!r}"
+    assert BLOCK.removeprefix("## ") in console  # and it says where the steps are
 
 
 @pytest.mark.parametrize(

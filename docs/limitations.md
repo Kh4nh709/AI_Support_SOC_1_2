@@ -190,29 +190,50 @@ the Measured paragraph of item (ix) in section B.
 - **Affects.** The human-baseline rows beside ①'s figures in `docs/results/ablation.md`;
   `docs/gold-v1-report.md`.
 
-### (xlv) · Blind labelling is enforced at the labelling input boundary and on the audit verdict; for the rest it is the labellers' discipline
+### (xlv) · Blind labelling and the blind arm hold at the input boundary and in the admin console; what remains visible is accepted
 
-- **Statement.** The blindness of the two labellers (DEC-019, DEC-101) is enforced in two places. At the
-  labelling page's input boundary (P6-T10): what the labelling API and page give a labeller for a cluster is
-  an allowlist with no ① output, no pilot decision, no `source` and no other labeller's label. And, since
-  DEC-204, on the audit page for the verdict itself: `GET /api/admin/audit` redacts `label` and
-  `confidence` of every `label.created` event for every viewer. It is not enforced beyond those two. Both
-  labellers are admins, and an admin can still read the model's suggestion and the analysts' decisions for
-  the same alert ids on the alert pages and on the audit page (`triage.suggested`, `tier1.decided`,
-  `autoclose.reviewed`). That is by design for admins, so the labellers' discipline during the labelling
-  window is procedural: a labeller who opens an alert's page or its audit events before labelling the
-  cluster can see what ① suggested and what an analyst decided. The Owner is told this at hand-over.
-- **Measured.** Not measured: it is a property by construction, and no figure says what a labeller
+- **Statement.** Two kinds of blindness are enforced, and one is procedural.
+  - *Blind labelling* (DEC-019, DEC-101). The labelling page and API give a labeller, for a cluster, an
+    allowlist with no ① output, no pilot decision, no `source` and no other labeller's label (the input
+    boundary, P6-T10). On the audit page the verdict itself is hidden: `GET /api/admin/audit` redacts
+    `label` and `confidence` of every `label.created` event for every viewer (DEC-204).
+  - *The blind arm* (DEC-101, context pack §6.4) holds in the admin console too (DEC-206, with its two
+    amendments), by the rule of `tier1/visibility.py` read by the same code: while an alert is blind
+    (`suggestion_visible = false`) and not yet decided, for every role, (a) the audit page leaves out its
+    `triage.suggested`, `llm.gate_forced` and `llm.builder_violation` events, and the page's total with
+    them, and masks the suggestion keys of its `autoclose.reviewed` event; (b) the usage list
+    (`GET /api/admin/llm/usage`, `recent`) returns the run's `subject_id` and `outcome` as null, so a listed
+    run is tied to no alert; (c) the digest's reopened rows carry no `suggested_action` and no `disagreement`.
+    The left-out events and the dropped fields come back once the alert is decided.
+  - *What remains visible, and why it is accepted.* A failed triage job is visible to an admin about a
+    blind, undecided alert, in the overview's `failed_jobs` row and as the audit's `job.exhausted` event:
+    the admin has to see it to retry it, and it says that ① failed, never which way it leaned, so it cannot
+    bias the human decision the arm measures (DEC-206, second amendment). A deliberate reader of the raw API
+    could also infer an event was left out from the gaps in the `audit_id` sequence of the rows that remain;
+    that tells that something was omitted, not what it said. The usage run itself (pipeline, role, tokens,
+    cost) stays listed: ① runs on every head in both arms, so "① ran" does not tell the arm.
+  - *By design, and procedural.* Once an alert is decided the suggestion is shown, as on the alert page, and
+    an admin can read the model's suggestion and the analysts' decisions for those alert ids on the alert
+    pages and on the audit page (`triage.suggested`, `tier1.decided`, `autoclose.reviewed`). That view of
+    decided alerts, used for gold labelling, is by design for admins. Both labellers are admins, so the
+    labellers' discipline during the labelling window stays procedural: a labeller who opens a decided
+    alert's page or its audit events before labelling its cluster can see what ① suggested and what an
+    analyst decided. The Owner is told this at hand-over (parked row 57, reframed by DEC-206).
+- **Measured.** Not measured: these are properties by construction, and no figure says what a labeller
   opened. The application records no page view (none of the 28 event types of `ck_audit_event_type`,
   migration 019, is a read), so it cannot be read back from the system. The input boundary is tested
-  (P6-T10; the allowlist and forbidden-substring tests of `backend/tests/test_labels.py`), and the audit
-  redaction is DEC-204's.
-- **Source.** DEC-019, DEC-101, DEC-117, DEC-118 item 4 (the input-boundary test, P6-T10), DEC-204;
-  `docs/plan/tasks/P11/P11-T20-parked.md` row 57; architecture §6 (the labelling protocol).
+  (P6-T10; the allowlist and forbidden-substring tests of `backend/tests/test_labels.py`), the audit
+  redaction is DEC-204's, and the blind-arm rules of the audit page, the usage list and the digest are held
+  by `backend/tests/test_admin_blind_arm.py` (the audit page and the usage list) and `test_admin_digest_api.py`
+  (the digest's reopened rows).
+- **Source.** DEC-019, DEC-101, DEC-117, DEC-118 item 4 (the input-boundary test, P6-T10), DEC-204, DEC-206
+  and its two amendments (20/10); `docs/plan/tasks/P11/P11-T20-parked.md` row 57; context pack §6.4;
+  architecture §6 (the labelling protocol).
 - **Affects.** (xx): κ between the two labellers and each labeller's agreement with the window truth, which
-  are the human-baseline rows beside ①'s figures. "The labellers were blind to ① and to the analysts" holds
-  for the labelling page and for the verdict on the audit page, and is a procedural claim for everything
-  else an admin can read.
+  are the human-baseline rows beside ①'s figures, and any claim about the blind arm of the pilot.
+  "The labellers were blind to ① and to the analysts" holds for the labelling page and for the verdict on
+  the audit page, and "the blind arm was blind to ①" holds in the admin console for undecided alerts; for
+  decided alerts, and for the failure fact above, it is a procedural claim or an accepted exception.
 
 ### (xxi) · Misfired scenarios are excluded at adjudication
 

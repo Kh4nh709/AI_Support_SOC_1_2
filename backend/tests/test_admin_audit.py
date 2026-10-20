@@ -2003,7 +2003,10 @@ def test_the_page_selects_its_rows_first_and_converts_each_payload_to_text_once(
     assert sum(node["Node Type"] == "Limit" for node, _ in nodes) == 1
     for node, at_or_below_limit in nodes:
         if at_or_below_limit:
-            assert not any("::text" in out for out in node.get("Output", [])), node["Node Type"]
+            # `::text[]` is the array literal of the decided states in the blind-arm test (P11-T20
+            # part 4 fix round 1, N1), not a payload cast.
+            outputs = [out.replace("::text[]", "") for out in node.get("Output", [])]
+            assert not any("::text" in out for out in outputs), node["Node Type"]
     inline = sum(_inline_payload_casts(out) for node, _ in nodes for out in node.get("Output", []))
     shape = [(node["Node Type"], node.get("Output")) for node, _ in nodes]
     assert inline == 1, f"the payload is cast inline {inline} times: {shape}"
