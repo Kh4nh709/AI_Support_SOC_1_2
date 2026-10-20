@@ -448,7 +448,7 @@ export const S = {
     nextSteps: "Bước tiếp theo",
     playbook: (name: string) => `Playbook: ${name}`,
     // The 429 of `POST .../analyze` carries no count, so the sentence gives none.
-    quotaExhausted: "Đã dùng hết lượt phân tích hôm nay",
+    quotaExhausted: "Đã dùng hết lượt phân tích trong 24 giờ gần nhất",
     alreadyRunning: "Đang có một lượt phân tích chạy cho case này",
     concluded: "Case đã kết luận — không thể phân tích thêm",
     idle: "Chưa có phân tích nào cho case này.",
