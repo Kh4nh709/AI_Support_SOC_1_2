@@ -1016,7 +1016,7 @@ def test_llm_month_does_not_fail_with_the_other_sections_and_they_do_not_fail_wi
 
 
 def _retry(tc: TestClient, job_id: Any) -> Any:
-    return tc.post(f"/api/admin/jobs/{job_id}/retry")
+    return tc.post(f"/api/admin/jobs/{job_id}/retry", json={})  # the client's own request
 
 
 @pytest.mark.db
@@ -1053,6 +1053,79 @@ def test_retry_puts_a_failed_job_back_to_pending_and_writes_the_event(client) ->
         "attempts_before": 3,
         "last_error": "x" * 200,  # the event is cut; the row is not
     }
+
+
+# The session cookie authenticates a request from any page on the same host, and a no-cors `fetch`
+# with no body sends no Content-Type. The route reads no body, so without a rule on the type that
+# request re-queued a failed job (P11-T20 part 4, M1). `admin_users` closed the same shape for its
+# routes; the client already sends `{}`.
+NOT_JSON = [
+    pytest.param({}, id="no body, no content type"),
+    pytest.param({"data": {"a": "b"}}, id="a urlencoded form"),
+    pytest.param({"files": {"f": ("f.txt", b"x")}}, id="a multipart form"),
+    pytest.param({"content": b"{}", "headers": {"Content-Type": "text/plain"}}, id="text"),
+    pytest.param({"content": b"{}", "headers": {"Content-Type": "application/jsonx"}}, id="jsonx"),
+    pytest.param({"content": b"", "headers": {"Content-Type": "application/xml"}}, id="xml"),
+]
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("request_kwargs", NOT_JSON)
+def test_retry_needs_the_json_content_type_and_writes_nothing_without_it(
+    client, request_kwargs
+) -> None:
+    tc, db, _ = client
+    job_id = _job(db, subject_id="alert-csrf", attempts=3, last_error="boom")
+    before = _job_row(db, job_id)
+
+    resp = tc.post(f"/api/admin/jobs/{job_id}/retry", **request_kwargs)
+
+    assert resp.status_code == 422, resp.text
+    assert resp.json() == {"detail": {"field": "body", "reason": "invalid"}}
+    assert _job_row(db, job_id) == before  # still failed, attempts and schedule as they were
+    assert _events(db, "admin.job_retried", str(job_id)) == []
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "application/json",
+        "application/json; charset=utf-8",
+        "Application/JSON",
+        "application/vnd.x+json",
+    ],
+)
+def test_retry_takes_any_json_type_with_an_empty_or_a_json_body(client, content_type) -> None:
+    """The rule is on the type, not on a body: the route reads none."""
+    tc, db, _ = client
+    for body in (b"", b"{}"):
+        job_id = _job(db, subject_id=f"alert-{content_type}-{len(body)}")
+        resp = tc.post(
+            f"/api/admin/jobs/{job_id}/retry", content=body, headers={"Content-Type": content_type}
+        )
+        assert resp.status_code == 200, (content_type, resp.text)
+        assert _job_row(db, job_id)[0] == "pending"
+
+
+@pytest.mark.db
+def test_retry_without_json_by_tier1_is_403_not_422_and_writes_authz_denied(sdb) -> None:
+    """The role check answers first: a non-admin learns nothing about the body rule, and the
+    denial is recorded (it is committed, so the job is removed again below)."""
+    tier1 = _tier1()
+    job_id = _job(sdb, subject_id="alert-403-nobody")
+    path = f"/api/admin/jobs/{job_id}/retry"
+    _override(sdb, tier1)
+    try:
+        resp = TestClient(main.app).post(path)  # no body, no content type
+    finally:
+        _clear_overrides()
+        sdb.rollback()
+        sdb.execute("DELETE FROM jobs WHERE job_id = %s", (job_id,))
+        sdb.commit()
+    assert resp.status_code == 403
+    ((_, actor_id, _subject, payload),) = _events(sdb, "authz.denied", path)
+    assert str(actor_id) == tier1.user_id and payload["method"] == "POST"
 
 
 @pytest.mark.db
@@ -1230,7 +1303,7 @@ def _retry_in_a_thread(
         try:
             if start is not None:
                 start.wait(timeout=10)
-            out["response"] = TestClient(main.app).post(f"/api/admin/jobs/{job_id}/retry")
+            out["response"] = TestClient(main.app).post(f"/api/admin/jobs/{job_id}/retry", json={})
         except Exception as exc:  # noqa: BLE001 - the test reports whatever the app raised
             out["error"] = exc
 

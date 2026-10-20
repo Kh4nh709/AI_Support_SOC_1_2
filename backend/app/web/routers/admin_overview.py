@@ -66,7 +66,7 @@ from psycopg import sql
 
 from app.audit.events import write_event
 from app.infra.auth import Claims
-from app.web.deps import Cfg, Conn, require_role
+from app.web.deps import Cfg, Conn, JsonType, require_role
 from app.web.routers import admin_llm
 
 router = APIRouter()
@@ -338,7 +338,11 @@ def _has_live_sibling(conn: Any, job_id: int, job_type: str, subject_id: str) ->
 
 
 @router.post("/api/admin/jobs/{job_id}/retry")
-def api_retry_job(conn: Conn, claims: Admin, job_id: JobId) -> dict[str, Any]:
+def api_retry_job(conn: Conn, claims: Admin, job_id: JobId, _json_type: JsonType) -> dict[str, Any]:
+    """Re-queue one failed job. The route reads no body, so it asks for the JSON content type
+    (`deps.require_json_type`, after the role check): the session cookie authenticates a request
+    from any page on the same host, and a no-cors `fetch` with no body sends no Content-Type
+    (P11-T20 part 4, M1). The client sends `{}`."""
     row = conn.execute(
         "SELECT job_type, subject_id, status, attempts, left(last_error, %s) "
         "FROM jobs WHERE job_id = %s FOR UPDATE",

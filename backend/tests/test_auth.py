@@ -670,7 +670,7 @@ def test_reload_inventory_as_admin_is_not_403(
     monkeypatch.setenv("INVENTORY_PATHS", json.dumps([str(tmp_path / "missing.yaml")]))
     username, user_id = committed(role="admin", prefix="adm")
     token = _api_login(client, username).json()["token"]
-    response = client.post("/api/admin/reload-inventory", headers=_bearer(token))
+    response = client.post("/api/admin/reload-inventory", headers=_bearer(token), json={})
     # past both dependencies: P2-T08's own 422 for a file that is not there
     assert response.status_code == 422, response.text
     assert any("file not found" in problem for problem in response.json()["detail"])
