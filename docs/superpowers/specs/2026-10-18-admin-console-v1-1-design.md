@@ -477,6 +477,7 @@ This runs once the e2e suite is green and the Owner has used the React admin pag
   - `test_api_login_sets_cookie_and_returns_token` (`test_auth.py:482`) is rewritten to assert there is no `Set-Cookie`.
 - **Port 8000** then serves `/api/*`, `/webhook/alerts` and `/health` only.
 - **Runbook.** The runbook's admin section points to port 8080.
+- **Staging (DEC-205, Owner 20/10).** This section is built on its own branch, `director/admin-v1-1-retire`, stacked on the v1.1 tip. The Owner merges v1.1 first, uses the React pages, and merges the retire branch afterwards.
 - **The order.** The cookie goes only when no Jinja page is left. If a port slips, §8 waits; v1.1 never ships two admin UIs.
 
 ## 9. Order and process
