@@ -41,7 +41,7 @@ import psycopg
 import pytest
 from app.infra import auth, config
 from app.web import deps, main
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.testclient import TestClient
 
 from tests import conftest
@@ -495,8 +495,40 @@ def test_set_password(db) -> None:
 # --------------------------------------------------------------------------
 
 
+#: The session cookie P11-T19 retired (spec §8, DEC-205). Spelled out here on purpose: these tests
+#: prove that nothing sets it and nothing reads it, so the name must not come from the code.
+OLD_COOKIE_NAME = "soc_session"
+
+
+def _request(headers: dict[str, str]) -> Request:
+    """A bare `Request` carrying exactly these headers (no app, no database)."""
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
+    }
+    return Request(scope)
+
+
+def test_read_token_reads_only_the_authorization_header() -> None:
+    """P11-T19: the cookie is no longer a way to sign in. `read_token` answers from `Authorization:
+    Bearer` alone; a request that carries only the old cookie has no token."""
+    assert deps.read_token(_request({"Cookie": f"{OLD_COOKIE_NAME}=abc"})) is None
+    assert deps.read_token(_request({"Authorization": "Bearer abc"})) == "abc"
+    assert deps.read_token(_request({"Authorization": "bearer   abc  "})) == "abc"
+    # a bearer beats the cookie, and the cookie is never the fallback of a bad header
+    both = {"Authorization": "Bearer abc", "Cookie": f"{OLD_COOKIE_NAME}=zzz"}
+    assert deps.read_token(_request(both)) == "abc"
+    assert (
+        deps.read_token(_request({"Authorization": "Bearer ", "Cookie": "soc_session=zzz"})) is None
+    )
+    assert deps.read_token(_request({"Authorization": "Basic abc"})) is None
+    assert deps.read_token(_request({})) is None
+
+
 @pytest.mark.db
-def test_api_login_sets_cookie_and_returns_token(committed, client, sdb) -> None:
+def test_api_login_returns_the_token_and_sets_no_cookie(committed, client, sdb) -> None:
     username, user_id = committed(prefix="api")
     before = datetime.now(UTC)
     response = _api_login(client, username)
@@ -508,27 +540,32 @@ def test_api_login_sets_cookie_and_returns_token(committed, client, sdb) -> None
     assert timedelta(hours=8) <= expires_at - before < timedelta(hours=8, seconds=30)
     assert auth.verify(sdb, body["token"], _cfg()).user_id == user_id
 
-    cookie = response.headers["set-cookie"]
-    assert cookie.startswith(f"{deps.COOKIE_NAME}={body['token']};")
-    lowered = cookie.lower()
-    assert "httponly" in lowered and "samesite=lax" in lowered and "path=/" in lowered
-    assert "max-age=28800" in lowered
-    assert "secure" not in lowered
-    assert client.cookies[deps.COOKIE_NAME] == body["token"]
+    # P11-T19 (spec §8): the session is the token in the body, held by the caller. No cookie at all.
+    assert response.headers.get_list("set-cookie") == []
+    assert len(client.cookies) == 0
 
 
 @pytest.mark.db
-def test_api_cookie_alone_authenticates_and_bearer_wins_over_it(committed, client, sdb) -> None:
-    username, _ = committed(prefix="cookie")
+def test_api_a_request_with_only_the_old_session_cookie_is_401(committed, client, sdb) -> None:
+    username, user_id = committed(prefix="cookie")
     token = _api_login(client, username).json()["token"]
-    assert client.cookies[deps.COOKIE_NAME] == token
-    # a bad bearer is refused even though the cookie in the jar is good
-    refused = client.post("/api/auth/logout", headers=_bearer("garbage"))
+    client.cookies.clear()  # only what a request names travels: the retired cookie, below
+    cookie_only = {"Cookie": f"{OLD_COOKIE_NAME}={token}"}  # a valid token, in the retired place
+
+    # a read, and a write: neither is signed in by the cookie
+    me = client.get("/api/auth/me", headers=cookie_only)
+    assert me.status_code == 401 and me.json() == {"detail": "not authenticated"}
+    out = client.post("/api/auth/logout", headers=cookie_only)
+    assert out.status_code == 401 and out.json() == {"detail": "not authenticated"}
+    # ... and the refused logout ended nothing: the same token as a bearer still works
+    ok = client.get("/api/auth/me", headers=_bearer(token))
+    assert ok.status_code == 200 and ok.json()["user_id"] == user_id
+    # a bad bearer is refused whatever the cookie holds (the cookie is not a fallback)
+    refused = client.get("/api/auth/me", headers={**_bearer("garbage"), **cookie_only})
     assert refused.status_code == 401 and refused.json() == {"detail": "malformed"}
-    # the cookie alone authenticates
-    response = client.post("/api/auth/logout")
-    assert response.status_code == 204
-    assert deps.COOKIE_NAME not in client.cookies
+    # a good bearer wins over a bad cookie
+    both = client.get("/api/auth/me", headers={**_bearer(token), "Cookie": f"{OLD_COOKIE_NAME}=x"})
+    assert both.status_code == 200
 
 
 @pytest.mark.db
@@ -573,8 +610,7 @@ def test_api_logout_then_bearer_is_401(committed, client) -> None:
     response = client.post("/api/auth/logout", headers=_bearer(token))
     assert response.status_code == 204
     assert response.content == b""
-    cleared = response.headers["set-cookie"].lower()
-    assert cleared.startswith(f"{deps.COOKIE_NAME}=") and "max-age=0" in cleared
+    assert response.headers.get_list("set-cookie") == []  # P11-T19: no cookie to clear either
     again = client.post("/api/auth/logout", headers=_bearer(token))
     assert again.status_code == 401
     assert again.json() == {"detail": "logged_out"}
@@ -586,7 +622,7 @@ def test_api_logout_without_a_session_is_401(client) -> None:
     assert response.status_code == 401
     assert response.json() == {"detail": "not authenticated"}
     # a blank cookie or a blank bearer is "no token", not a malformed one
-    blank_cookie = client.post("/api/auth/logout", headers={"Cookie": f"{deps.COOKIE_NAME}="})
+    blank_cookie = client.post("/api/auth/logout", headers={"Cookie": f"{OLD_COOKIE_NAME}="})
     assert blank_cookie.json() == {"detail": "not authenticated"}
     blank_bearer = client.post("/api/auth/logout", headers={"Authorization": "Bearer "})
     assert blank_bearer.json() == {"detail": "not authenticated"}

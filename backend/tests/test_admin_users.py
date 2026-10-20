@@ -500,7 +500,7 @@ def _create_text(**override) -> str:
         ("null", "application/json"),
         ('"leak-leak-leak-leak"', "application/json"),
         ("", "application/json"),
-        # a cross-site form post cannot say application/json: the cookie must not carry it
+        # a form post cannot say application/json: a form's content type is refused
         (_create_text(password="leak-leak-leak-leak"), "text/plain"),
         (_create_text(password="leak-leak-leak-leak"), "application/x-www-form-urlencoded"),
         # and a no-cors fetch with a Blob body sends no Content-Type at all
@@ -536,20 +536,22 @@ def test_a_field_the_route_does_not_take_is_refused_not_ignored(client, sdb):
 BODY_INVALID = {"field": "body", "reason": "invalid"}
 
 
-def _cookie_session(client, sdb) -> str:
-    """Log an admin in so the client's jar holds `soc_session`, and return the admin's id. The
-    requests below carry that cookie and no `Authorization` header: the shape a browser sends."""
-    username, admin_id = _seed(sdb, "admin", prefix="cookie")
-    login = client.post("/api/auth/login", json={"username": username, "password": PASSWORD})
-    assert login.status_code == 200 and "soc_session" in client.cookies
-    return admin_id
+def _signed_in_admin(client, sdb) -> dict[str, str]:
+    """An admin, signed in, and the `Authorization` header that signs a request in as them. The
+    session is that header alone since P11-T19 (spec §8): the `soc_session` cookie it replaced is
+    gone, so the requests below can no longer be signed in by anything a page of another site could
+    attach. What is left for them to be refused on is their content type, and only that."""
+    username, _ = _seed(sdb, "admin", prefix="bearer")
+    return _login(client, username)
 
 
-def _raw(client, method: str, path: str, content: str, content_type: str | None):
-    headers = {} if content_type is None else {"Content-Type": content_type}
+def _raw(client, auth_headers: dict[str, str], method, path, content: str, content_type):
+    """The request a no-cors `fetch` with a Blob body or an HTML form would make: raw text, and
+    the content type exactly as given (`None`: none at all). It is signed in, so a refusal is the
+    content-type rule's."""
+    headers = {**auth_headers, **({} if content_type is None else {"Content-Type": content_type})}
     request = client.build_request(method, path, content=content, headers=headers)
-    assert "authorization" not in request.headers  # the cookie alone signs this request in
-    assert "soc_session" in request.headers["cookie"]
+    assert "authorization" in request.headers  # signed in by the header
     assert ("content-type" in request.headers) is (content_type is not None)
     return client.send(request)
 
@@ -568,14 +570,13 @@ def _victim_calls(victim: str) -> dict[str, tuple[str, str, str]]:
 
 
 @pytest.mark.parametrize("call", ["create", "update", "reset", "unlock"])
-def test_a_request_with_no_content_type_is_refused_even_when_the_cookie_signs_it_in(
-    client, sdb, call
-):
-    """The `soc_session` cookie authenticates a request from any page on the same host, and a
-    no-cors `fetch` with a Blob body sends no Content-Type. FastAPI's own parsing refuses that
+def test_a_request_with_no_content_type_is_refused_even_when_it_is_signed_in(client, sdb, call):
+    """A no-cors `fetch` with a Blob body sends no Content-Type. FastAPI's own parsing refuses that
     shape; this module reads bodies itself, so it must refuse it too — on every route that
-    changes something, `unlock` (which has no body to speak of) included."""
-    _cookie_session(client, sdb)
+    changes something, `unlock` (which has no body to speak of) included. Until P11-T19 the
+    `soc_session` cookie made this an attack from any page on the host; with the cookie gone the
+    rule is the route's contract on its own (the request here carries the admin's bearer)."""
+    auth_headers = _signed_in_admin(client, sdb)
     _, victim = _seed(sdb, "tier1")
     sdb.execute("UPDATE users SET failed_logins = 4 WHERE user_id = %s", (victim,))
     sdb.commit()
@@ -587,7 +588,7 @@ def test_a_request_with_no_content_type_is_refused_even_when_the_cookie_signs_it
     updated = _count_events(sdb, "admin.user_updated")
     method, path, content = _victim_calls(victim)[call]
 
-    refused = _raw(client, method, path, content, None)
+    refused = _raw(client, auth_headers, method, path, content, None)
 
     assert refused.status_code == 422, refused.text
     assert refused.json()["detail"] == BODY_INVALID
@@ -599,19 +600,19 @@ def test_a_request_with_no_content_type_is_refused_even_when_the_cookie_signs_it
         "SELECT password_hash FROM users WHERE user_id = %s", (victim,)
     ).fetchone()
     assert hash_after == hash_before
-    # the same request with the type is the one that goes through: the cookie did sign it in
-    accepted = _raw(client, method, path, content, "application/json")
+    # the same request with the type is the one that goes through: it was signed in all along
+    accepted = _raw(client, auth_headers, method, path, content, "application/json")
     assert accepted.status_code == {"create": 201, "update": 200}.get(call, 204), accepted.text
 
 
 @pytest.mark.parametrize("content_type", ["application/x-www-form-urlencoded", "text/plain", None])
 def test_unlock_refuses_a_form_post_and_a_post_with_no_type(client, sdb, content_type):
-    _cookie_session(client, sdb)
+    auth_headers = _signed_in_admin(client, sdb)
     _, victim = _seed(sdb, "tier1")
     sdb.execute("UPDATE users SET failed_logins = 4 WHERE user_id = %s", (victim,))
     sdb.commit()
     path = f"/api/admin/users/{victim}/unlock"
-    refused = _raw(client, "POST", path, "", content_type)
+    refused = _raw(client, auth_headers, "POST", path, "", content_type)
     assert refused.status_code == 422 and refused.json()["detail"] == BODY_INVALID
     assert _row(sdb, victim)["failed_logins"] == 4
     assert _events(sdb, "admin.user_updated", victim) == []

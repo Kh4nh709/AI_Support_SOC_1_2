@@ -1099,9 +1099,9 @@ def test_undo_last_own_label_only_and_refused_after_freeze(client, db, seeded) -
     )  # B's row is the newest of all — A's undo must still not reach it
 
     client.as_user(USER_A)
-    assert 'id="undo-form"' in _page(client)
-    resp = client.http.post("/admin/labels/undo")
-    assert resp.status_code == 303
+    resp = _undo(client)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["undone_cluster_id"] == newer
 
     remaining = set(
         db.execute("SELECT alert_id, labeler_id::text FROM triage_labels ORDER BY 1, 2").fetchall()
@@ -1116,8 +1116,8 @@ def test_undo_last_own_label_only_and_refused_after_freeze(client, db, seeded) -
     assert undo[0][0]["undo"] is True
 
     (seeded / "gold_v1.sha256").write_text("frozen\n", encoding="utf-8")
-    assert 'id="undo-form"' not in _page(client)
-    resp = client.http.post("/admin/labels/undo")
+    assert _next(client)["frozen"] is True
+    resp = _undo(client)
     assert resp.status_code == 409
     assert (
         db.execute(
@@ -1590,9 +1590,10 @@ def test_undo_with_a_nul_or_control_character_in_the_body_is_refused_and_the_lab
 
 
 @pytest.mark.db
-def test_the_jinja_undo_while_frozen_writes_nothing(client, db, seeded) -> None:
-    """Row 30. The 409 of `POST /admin/labels/undo` changes no row and writes no event: not an
-    undo event, and no audit event of any kind."""
+def test_the_undo_while_frozen_writes_nothing(client, db, seeded) -> None:
+    """Row 30. The 409 of `POST /api/admin/labels/undo` changes no row and writes no event: not an
+    undo event, and no audit event of any kind. (It was written against the Jinja undo, which
+    P11-T19 retired; the JSON route is the one left, and the one this runs on.)"""
     first, second = _A40112.alert_id, _A5503.alert_id
     assert _post(client, first).status_code == 201
     assert _post(client, second).status_code == 201
@@ -1607,13 +1608,13 @@ def test_the_jinja_undo_while_frozen_writes_nothing(client, db, seeded) -> None:
 
     (seeded / "gold_v1.sha256").write_text("frozen\n", encoding="utf-8")  # tmp_path, via `seeded`
     assert labels.FREEZE_MARKER == seeded / "gold_v1.sha256"
-    resp = client.http.post("/admin/labels/undo")
+    resp = _undo(client)
     assert resp.status_code == 409
 
     assert _undo_events(db, USER_A) == []
     assert db.execute("SELECT count(*), max(audit_id) FROM audit_events").fetchone() == audit_before
     assert db.execute(rows_sql).fetchall() == snapshot
-    # the JSON route agrees, and a second frozen request still writes nothing
+    # a second frozen request still writes nothing
     assert _undo(client).status_code == 409
     assert db.execute("SELECT count(*), max(audit_id) FROM audit_events").fetchone() == audit_before
     assert db.execute(rows_sql).fetchall() == snapshot

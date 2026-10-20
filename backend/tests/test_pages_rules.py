@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -702,6 +703,183 @@ def test_api_simulate_create_and_toggle(client) -> None:
     assert listed.status_code == 200
     row = next(r for r in listed.json() if r["rule_id"] == rule_id)
     assert row["enabled"] is False
+
+
+# ---------------------------------------------------------------------------
+# P11-T19 — what the Jinja page tests proved about logic the JSON API still runs, now through the
+# API: the preview writes nothing, a create is written, audited and live at once, a toggle is live
+# at once, a bad rule writes nothing, and the width figure that the warning is measured against.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_api_simulate_writes_nothing(client) -> None:
+    """Design note 6: the preview is the point of the screen, and it writes nothing."""
+    tc, db, _ = client
+    _insert_alert(
+        db,
+        alert_id="prev-1",
+        severity="low",
+        asset_context={"present": True, "criticality": "medium"},
+        identity_context={"privileged": False},
+        ioc_context={"reputation": "not_found"},
+    )
+    rules_before = db.execute("SELECT count(*) FROM autoclose_rules").fetchone()[0]
+    events_before = db.execute("SELECT count(*) FROM audit_events").fetchone()[0]
+
+    resp = tc.post("/api/admin/rules/simulate", json={"match": json.loads(REASON_MATCH_EVERYTHING)})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert (body["clusters"], body["alerts"]) == (1, 1)
+    assert body["by_severity"] == {"low": 1} and body["by_asset_criticality"] == {"medium": 1}
+    assert db.execute("SELECT count(*) FROM autoclose_rules").fetchone()[0] == rules_before == 0
+    assert db.execute("SELECT count(*) FROM audit_events").fetchone()[0] == events_before
+
+
+@pytest.mark.db
+def test_api_create_writes_row_audit_and_makes_load_rules_return_it_immediately(client) -> None:
+    tc, db, admin_id = client
+    alert, ctx = _alert(), _ctx()
+    # Warm the 60 s rule cache first, as "no rules" — evaluate()'s normal, cached path
+    # (`_cached_rules`). `load_rules()` alone never touches this cache (it always re-queries), so
+    # it cannot tell whether reload_rules() was called; evaluate() is what design note 6 needs.
+    assert autoclose.evaluate(db, alert, ctx).match is None
+
+    resp = tc.post(
+        "/api/admin/rules",
+        json={"name": "everything", "reason": "test rule", "match": []},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == "everything" and resp.json()["enabled"] is True
+
+    row = db.execute(
+        "SELECT autoclose_rule_id, name, enabled, created_by FROM autoclose_rules"
+    ).fetchone()
+    assert row is not None
+    rule_id, name, enabled, created_by = row
+    assert str(rule_id) == resp.json()["rule_id"]
+    assert name == "everything"
+    assert enabled is True
+    assert str(created_by) == admin_id
+
+    audit_row = db.execute(
+        "SELECT actor_id, payload FROM audit_events "
+        "WHERE event_type = 'admin.autoclose_rule_toggled' AND subject_id = %s",
+        (str(rule_id),),
+    ).fetchone()
+    assert audit_row is not None
+    actor_id, payload = audit_row
+    assert str(actor_id) == admin_id
+    assert payload == {"name": "everything", "before": False, "after": True}
+
+    # Live immediately, from the SAME still-warm cache window — no waiting for RULE_CACHE_TTL_S
+    # (design note 6; DEC-025 red case (a)).
+    after = autoclose.evaluate(db, alert, ctx)
+    assert after.match is not None
+    assert after.match.rule_id == str(rule_id)
+
+
+@pytest.mark.db
+def test_api_create_whitelist_violation_is_422_and_writes_nothing(client) -> None:
+    tc, db, _ = client
+    events_before = db.execute("SELECT count(*) FROM audit_events").fetchone()[0]
+    resp = tc.post(
+        "/api/admin/rules",
+        json={
+            "name": "n",
+            "reason": "r",
+            "match": [{"field": "risk_score", "op": "lte", "value": 10}],
+        },
+    )
+    assert resp.status_code == 422, resp.text
+    assert "risk_score" in resp.text
+    assert db.execute("SELECT count(*) FROM autoclose_rules").fetchone()[0] == 0
+    assert db.execute("SELECT count(*) FROM audit_events").fetchone()[0] == events_before
+
+
+@pytest.mark.db
+def test_api_toggle_is_live_without_waiting_for_the_cache(client) -> None:
+    """Writes before/after and flips the rule's effect without waiting for `RULE_CACHE_TTL_S`."""
+    tc, db, admin_id = client
+    rule_id = str(uuid.uuid4())
+    _insert_rule(db, rule_id=rule_id, created_by=admin_id, match=[], enabled=True)
+
+    alert, ctx = _alert(), _ctx()
+    # Warm the cache with the rule enabled first (the cached `evaluate()` path: `load_rules()`
+    # alone always re-queries and cannot tell whether reload_rules() was called).
+    before = autoclose.evaluate(db, alert, ctx)
+    assert before.match is not None
+    assert before.match.rule_id == rule_id
+
+    resp = tc.patch("/api/admin/rules", json={"rule_id": rule_id, "enabled": False})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"rule_id": rule_id, "name": "r", "enabled": False}
+
+    enabled = db.execute(
+        "SELECT enabled FROM autoclose_rules WHERE autoclose_rule_id = %s", (rule_id,)
+    ).fetchone()[0]
+    assert enabled is False
+
+    payload = db.execute(
+        "SELECT payload FROM audit_events "
+        "WHERE event_type = 'admin.autoclose_rule_toggled' AND subject_id = %s",
+        (rule_id,),
+    ).fetchone()[0]
+    assert payload == {"name": "r", "before": True, "after": False}
+
+    # Live immediately, from the SAME still-warm cache window (design note 6; DEC-025 red case (a)).
+    after = autoclose.evaluate(db, alert, ctx)
+    assert after.match is None
+
+
+@pytest.mark.db
+def test_api_toggle_of_an_unknown_rule_is_404_and_writes_nothing(client) -> None:
+    tc, db, _ = client
+    events_before = db.execute("SELECT count(*) FROM audit_events").fetchone()[0]
+    resp = tc.patch("/api/admin/rules", json={"rule_id": str(uuid.uuid4()), "enabled": False})
+    assert resp.status_code == 404, resp.text
+    assert db.execute("SELECT count(*) FROM audit_events").fetchone()[0] == events_before
+
+
+@pytest.mark.db
+def test_api_list_rules_carries_a_width_only_for_the_rule_over_the_threshold(
+    client, monkeypatch
+) -> None:
+    """What the page's warning ("⚠ x% > ngưỡng%") was keyed on, through the list. `width_pct` is
+    the share of the window's occurrences a rule closed, and it is there only for a rule over the
+    threshold (`rule_width_report`), `null` for the others. A rule that closed 5000 of the 6601 is
+    over (75.7); one that closed 1 is not, and neither is one that closed 1500 (22.7 %, under the
+    30 % default). Divided by the 103 ROWS the third was over 1400 % and carried a warning
+    (P11-T20 row 27), so it is what tells the two formulas apart."""
+    tc, db, admin_id = client
+    monkeypatch.setenv(
+        "AUTOCLOSE_RULE_WIDTH_PCT", "30"
+    )  # the default, whatever the environment says
+    wide_id, narrow_id, middle_id = (str(uuid.uuid4()) for _ in range(3))
+    _insert_rule(db, rule_id=wide_id, created_by=admin_id, name="wide-rule")
+    _insert_rule(db, rule_id=narrow_id, created_by=admin_id, name="narrow-rule")
+    _insert_rule(db, rule_id=middle_id, created_by=admin_id, name="middle-rule")
+    for alert_id, count, rule_id in (
+        ("width-big", 5000, wide_id),
+        ("width-small", 1, narrow_id),
+        ("width-middle", 1500, middle_id),
+    ):
+        _insert_alert(
+            db,
+            alert_id=alert_id,
+            status="auto_closed",
+            occurrence_count=count,
+            autoclose_rule_id=rule_id,
+        )
+    for i in range(100):
+        _insert_alert(db, alert_id=f"width-other-{i}", status="received", occurrence_count=1)
+
+    rows = {r["name"]: r for r in tc.get("/api/admin/rules").json()}
+    assert rows["wide-rule"]["width_threshold_pct"] == 30
+    assert rows["wide-rule"]["width_pct"] == 75.7
+    assert rows["narrow-rule"]["width_pct"] is None
+    assert rows["middle-rule"]["width_pct"] is None
 
 
 # ---------------------------------------------------------------------------

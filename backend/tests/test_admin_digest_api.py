@@ -25,11 +25,13 @@ import dataclasses
 import hashlib
 import itertools
 import json
+import re
 import threading
 import time
 import typing
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -1551,6 +1553,20 @@ def test_the_two_json_routes_are_mounted_and_each_carries_the_admin_dependency()
     for route in api_routes:
         calls = [d.call for d in route.dependant.dependencies]
         assert admin_digest.require_admin in calls, route.path
+
+
+def test_display_tz_is_utc_plus_7() -> None:
+    """A check on this environment's tzdata (P5-T09 review round 1, nit 6, kept with P11-T19): the
+    day-boundary tests above assume Asia/Ho_Chi_Minh is a fixed UTC+7 with no DST. If it went red,
+    every "today" and "local midnight" assertion would be testing the wrong boundary."""
+    assert admin_digest._now_local("Asia/Ho_Chi_Minh").utcoffset().total_seconds() == 7 * 3600
+
+
+def test_the_router_has_no_raw_sql() -> None:
+    """The module writes no SQL of its own: everything goes through `app.tier1.digest` (P5-T09's
+    check on the page, kept for the JSON routes that outlived it, P11-T19)."""
+    text = Path(admin_digest.__file__).read_text(encoding="utf-8")
+    assert re.search(r"SELECT |INSERT |UPDATE ", text) is None
 
 
 @pytest.mark.db
