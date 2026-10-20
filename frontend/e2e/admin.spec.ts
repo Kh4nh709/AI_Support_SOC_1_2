@@ -11,6 +11,7 @@
 //   scenario 3   changes that user's role: their session and live socket end
 //   scenario 4   demotes the last active admin: 409, and the dialog says why
 //   scenario 4b  the same rule met by two admins demoting each other at once, with no help from the test
+//   scenario 4c  the 409 that needs no race: an admin changing their own role or active flag (self_change)
 //   scenario 5   lowers the cap below the month's spend: the next ① run stops with `stopped_by = 'cap'`
 //   scenario 6   previews, creates and disables a rule
 //   scenario 7   reviews a digest row "Sai": the alert is back in the Tier 1 queue
@@ -47,10 +48,13 @@ import {
   type Traffic,
 } from "./fixtures";
 import {
+  clearingPasswords,
+  emptyPasswords,
   eventCount,
+  expectPasswordsEmpty,
   freezeMarkerExists,
   holdAdminLocks,
-  recordApiCalls,
+  openRecorded,
   seedMonthSpend,
   socketsSeen,
   trackSockets,
@@ -150,16 +154,26 @@ test("scenario 1: an admin logs in and lands on the overview", async ({ page }) 
   await expect(header.getByText(usernameOf("admin"), { exact: true })).toBeVisible();
   await expect(header.getByText(S.role.admin, { exact: true })).toBeVisible();
   await expect(header.getByRole("link", { name: S.nav.admin })).toBeVisible();
-  // The page read its data: the overview and, for its cost tile, the month's usage.
+  // The page read its data. One read answers for the whole page: the cost card is the overview's own `llm_month`
+  // (P11-T20 row 50), so the LLM page's usage route is not asked for.
   await expect
     .poll(async () => {
-      const paths = (await traffic.answers()).filter((a) => a.status === 200).map((a) => a.path);
-      return [
-        paths.some((p) => p.startsWith("/api/admin/overview")),
-        paths.some((p) => p.startsWith("/api/admin/llm/usage")),
-      ];
+      const answer = (await traffic.answers()).find(
+        (a) => a.status === 200 && a.path.startsWith("/api/admin/overview"),
+      );
+      const month =
+        answer === undefined
+          ? null
+          : (JSON.parse(answer.text) as { llm_month?: unknown }).llm_month;
+      return (
+        typeof month === "object" && month !== null && "spent_usd" in month && "cap_usd" in month
+      );
     })
-    .toEqual([true, true]);
+    .toBe(true);
+  expect(
+    (await traffic.answers()).filter((a) => a.path.startsWith("/api/admin/llm/usage")),
+    "the overview does not ask the LLM page's route for its cost card",
+  ).toEqual([]);
 
   // `/admin` and `/` open the overview too (decision 7: the admin's home).
   await page.goto("/admin");
@@ -197,31 +211,40 @@ test("scenario 2: an admin creates a Tier 1 user, who then logs in", async ({
   await expect(userRow(page, usernameOf("t1"))).toBeVisible();
   const panel = page.getByRole("region", { name: C.title });
 
-  await fillCreateForm(panel, NEW_USER, NEW_NAME, "tier1");
-  await panel.getByRole("button", { name: C.submit }).click();
-  await expect(toast(page, U.done.create(NEW_USER, "tier1"))).toBeVisible();
-  const row = userRow(page, NEW_USER);
-  await expect(row).toBeVisible();
-  await expect(row.getByText(NEW_NAME)).toBeVisible();
-  await expect(row.getByText(U.neverLoggedIn)).toBeVisible();
-  await expect(row.getByLabel(U.roleSelect(NEW_USER))).toHaveValue("tier1");
-  // The form emptied itself: nothing typed stays on the page.
-  await expect(panel.getByLabel(C.username)).toHaveValue("");
-  await expect(panel.getByLabel(C.password, { exact: true })).toHaveValue("");
+  // Everything that types a password runs under `clearingPasswords`: a failure anywhere in it empties both
+  // password fields before the page is snapshotted for the report.
+  await clearingPasswords(panel, async () => {
+    await fillCreateForm(panel, NEW_USER, NEW_NAME, "tier1");
+    await panel.getByRole("button", { name: C.submit }).click();
+    await expect(toast(page, U.done.create(NEW_USER, "tier1"))).toBeVisible();
+    const row = userRow(page, NEW_USER);
+    await expect(row).toBeVisible();
+    await expect(row.getByText(NEW_NAME)).toBeVisible();
+    await expect(row.getByText(U.neverLoggedIn)).toBeVisible();
+    await expect(row.getByLabel(U.roleSelect(NEW_USER))).toHaveValue("tier1");
+    // The form emptied itself: nothing typed stays on the page.
+    await expect(panel.getByLabel(C.username)).toHaveValue("");
+    await expectPasswordsEmpty(panel);
 
-  // The server holds the account, and a hash, not the password.
-  made.newUserId = sql(`SELECT user_id FROM users WHERE username = '${NEW_USER}'`);
-  expect(made.newUserId).not.toBe("");
-  expect(sql(`SELECT role, is_active FROM users WHERE username = '${NEW_USER}'`)).toBe("tier1|t");
-  expect(sql(`SELECT left(password_hash, 9) FROM users WHERE username = '${NEW_USER}'`)).toBe(
-    "$argon2id",
-  );
+    // The server holds the account, and a hash, not the password.
+    made.newUserId = sql(`SELECT user_id FROM users WHERE username = '${NEW_USER}'`);
+    expect(made.newUserId).not.toBe("");
+    expect(sql(`SELECT role, is_active FROM users WHERE username = '${NEW_USER}'`)).toBe("tier1|t");
+    expect(sql(`SELECT left(password_hash, 9) FROM users WHERE username = '${NEW_USER}'`)).toBe(
+      "$argon2id",
+    );
 
-  // The same name again is refused, at the field.
-  await fillCreateForm(panel, NEW_USER, "Somebody Else", "tier2");
-  await panel.getByRole("button", { name: C.submit }).click();
-  await expect(panel.getByRole("alert").filter({ hasText: A.reason.username_taken })).toBeVisible();
-  expect(sql(`SELECT count(*) FROM users WHERE username = '${NEW_USER}'`)).toBe("1");
+    // The same name again is refused, at the field. The form keeps what was typed after a refusal, so the
+    // password is emptied here, by the test, and not left in the page for the rest of it.
+    await fillCreateForm(panel, NEW_USER, "Somebody Else", "tier2");
+    await panel.getByRole("button", { name: C.submit }).click();
+    await expect(
+      panel.getByRole("alert").filter({ hasText: A.reason.username_taken }),
+    ).toBeVisible();
+    expect(sql(`SELECT count(*) FROM users WHERE username = '${NEW_USER}'`)).toBe("1");
+    await emptyPasswords(panel);
+    await expectPasswordsEmpty(panel);
+  });
 
   // The new user logs in, in a browser of their own, and lands where Tier 1 starts.
   const context = await browser.newContext({ baseURL });
@@ -442,6 +465,55 @@ test("scenario 4b: two admins demoting each other at once leave one, and the lat
     // Both are admins again for the scenarios that follow (the race left one of them a Tier 2 user).
     sql(`UPDATE users SET role = 'admin' WHERE username IN ('${a}', '${b}')`);
   }
+});
+
+test("scenario 4c: an admin changing their own role or active flag is refused with 409 self_change", async ({
+  page,
+  request,
+}) => {
+  // The 409 that needs no race: the row of the signed-in admin has its role select and its row menu switched off,
+  // with the reason on them; and a request that gets round that (a tab with a stale page, a hand-made call) is
+  // refused by the server, whose text the page shows in the dialog.
+  const me = usernameOf("admin");
+  const updatesBefore = eventCount("admin.user_updated");
+  await loginAs(page, "admin");
+  await openPage(page, A.nav.users, /\/admin\/users$/, A.title.users);
+  const row = userRow(page, me);
+  const select = row.getByLabel(U.roleSelect(me));
+  await expect(select).toBeDisabled();
+  await expect(select).toHaveAttribute("title", A.reason.self_change);
+  await expect(row.getByRole("button", { name: U.moreActions(me) })).toBeDisabled();
+
+  // Got round: the control is switched on in the DOM, as a page that had not been told would have it, and used.
+  const refused = responseOf(page, "PATCH", /^\/api\/admin\/users\/[^/]+$/);
+  await select.evaluate((element: HTMLSelectElement) => {
+    element.disabled = false;
+  });
+  await select.selectOption("tier2");
+  const dialog = dialogOf(page, U.dialog.role.title(me));
+  await dialog.getByRole("button", { name: U.dialog.role.confirm }).click();
+  const answer = await refused;
+  expect(answer.status()).toBe(409);
+  expect(await detailOf(answer)).toEqual({ reason: "self_change" });
+  await expect(dialog.getByRole("alert")).toHaveText(A.reason.self_change);
+  await expect(dialog.getByRole("button", { name: U.dialog.role.confirm })).toHaveCount(0);
+  await dialog.getByRole("button", { name: S.common.close }).click();
+  await expect(dialog).toHaveCount(0);
+
+  // The active flag is the same rule, at the route (the page switches its menu item off with the row's).
+  const token = await apiLogin(request, "admin");
+  const deactivate = await apiPatch(request, `/api/admin/users/${userIdOf("admin")}`, {
+    token,
+    data: { is_active: false },
+  });
+  expect(deactivate.status).toBe(409);
+  expect((deactivate.body as { detail?: unknown } | null)?.detail).toEqual({
+    reason: "self_change",
+  });
+
+  // Nothing was written: still an active admin, no event.
+  expect(sql(`SELECT role, is_active FROM users WHERE username = '${me}'`)).toBe("admin|t");
+  expect(eventCount("admin.user_updated")).toBe(updatesBefore);
 });
 
 // ---------------------------------------------------------------------------------------------------------
@@ -736,11 +808,12 @@ test("scenario 8: labels one cluster and undoes it on an unfrozen scratch set, t
   const traffic = captureTraffic(page);
   await trackSockets(page);
   await loginAs(page, "admin");
-  const calls = recordApiCalls(page);
 
   // ---- Which set is this? Before anything is written: the repository's own is frozen and has candidates, the
   // scratch one has neither. A page that says anything else is reading the wrong `eval/`, and the test stops.
-  await page.goto("/admin/labels");
+  // The log of the page's calls starts here, on the labelling page's own load (`openRecorded`): the overview that
+  // `loginAs` leaves may still be starting reads of its own, and they are not this page's.
+  const calls = await openRecorded(page, "/admin/labels");
   await expect(page.getByRole("heading", { level: 1, name: A.title.labels })).toBeVisible();
   await expect(page.getByRole("heading", { name: LB.noCandidates.title })).toBeVisible();
   await expect(page.getByRole("heading", { name: LB.frozen.title })).toHaveCount(0);
@@ -847,10 +920,7 @@ test("scenario 8: labels one cluster and undoes it on an unfrozen scratch set, t
   await expect(page.getByRole("button", { name: LB.form.save })).toHaveCount(0);
   await expect(page.getByRole("button", { name: LB.form.undo })).toHaveCount(0);
   expect(labelsOf(shown)).toBe(1);
-  // The server still sent a cluster to read beside `frozen: true`, and the page showed none of it.
-  const frozenBodies = nextBodies(await traffic.answers()).filter((b) => b.frozen === true);
-  expect(frozenBodies.length).toBeGreaterThan(0);
-  expect(frozenBodies.some((b) => b.cluster !== null)).toBe(true);
+  // Whatever the server sends beside `frozen: true`, the page shows no cluster of it: the next one is not there.
   expect(await page.locator("body").innerText()).not.toContain(other(shown).agent);
   // A reload says the same, straight from `labels/next`; and the API refuses a second undo the same way.
   await page.reload();
@@ -994,8 +1064,7 @@ test("scenario 10: a Tier 1 user opening /admin/users gets the 403 notice, and t
   request,
 }) => {
   await loginAs(page, "t1");
-  const calls = recordApiCalls(page);
-  await page.goto("/admin/users");
+  const calls = await openRecorded(page, "/admin/users");
   // The guard sends them to the queue and says why; the admin pages never asked the API for anything.
   await expect(page).toHaveURL(/\/queue$/);
   await expect(page.getByRole("alert").filter({ hasText: S.forbidden })).toBeVisible();

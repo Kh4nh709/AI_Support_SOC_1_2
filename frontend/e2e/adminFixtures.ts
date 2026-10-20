@@ -8,8 +8,9 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
-import { expect, type Page } from "@playwright/test";
-import { psqlEnv, sql, stateDir } from "./fixtures";
+import { expect, type Locator, type Page } from "@playwright/test";
+import { S, psqlEnv, sql, stateDir } from "./fixtures";
+import { clearingOnFailure } from "./loginFailure";
 
 // ---------------------------------------------------------------------------------------------------------
 // The scratch repository.
@@ -91,10 +92,12 @@ export function writeCandidates(candidates: readonly Candidate[]): void {
       c.hidden.truth,
     ].join(","),
   );
+  // `wx`: the file is made, never opened over one that was there, and a symlink in its place is not followed
+  // (the write fails): "nothing was there" is part of the write.
   writeFileSync(
     join(scratchEvalDir(), CANDIDATES_FILE),
     [CANDIDATE_COLUMNS.join(","), ...rows].join("\n") + "\n",
-    "utf8",
+    { encoding: "utf8", flag: "wx" },
   );
 }
 
@@ -109,7 +112,10 @@ export function writeFreezeMarker(): void {
   const digest = createHash("sha256")
     .update(readFileSync(join(dir, CANDIDATES_FILE)))
     .digest("hex");
-  writeFileSync(join(dir, FREEZE_FILE), `${digest}  ${CANDIDATES_FILE}\n`, "utf8");
+  writeFileSync(join(dir, FREEZE_FILE), `${digest}  ${CANDIDATES_FILE}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+  });
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -140,6 +146,9 @@ export async function holdAdminLocks(demoteUsername?: string): Promise<Held> {
     env: psqlEnv(),
     stdio: ["pipe", "pipe", "ignore"],
   });
+  // A psql that has died (no server, a refused login) makes the writes below fail with EPIPE on this stream,
+  // and an unhandled stream error would end the worker with that, not with the poll's own message.
+  child.stdin.on("error", () => {});
   let output = "";
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => {
@@ -244,6 +253,52 @@ export function recordApiCalls(page: Page): () => string[] {
     seen.push(`WS ${new URL(socket.url()).pathname}`);
   });
   return () => [...seen];
+}
+
+/**
+ * Opens `path` with the recorder on, from a page that holds nothing of the one before. `loginAs` returns as soon as
+ * the URL is the role's home, while that page may still be starting its own reads (the overview's); recorded from
+ * there, they would be in the log of the page under test and fail an exact-set assertion about it at random. A blank
+ * page first abandons them with their document, and the recorder is attached only then. (The session is the tab's
+ * `sessionStorage`, which a blank page in between does not clear.)
+ */
+export async function openRecorded(page: Page, path: string): Promise<() => string[]> {
+  await page.goto("about:blank");
+  const calls = recordApiCalls(page);
+  await page.goto(path);
+  return calls;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Passwords typed into the create panel.
+//
+// A failing test keeps a snapshot of the page, and a filled password input is in it with its value (the same
+// reason `loginFailure.ts` empties the login form). The create panel has two such fields, so a step that types in
+// them runs under `clearingPasswords`, and nothing here reads a password back in a way that prints it.
+
+const passwordFields = (panel: Locator): [Locator, Locator] => [
+  panel.getByLabel(S.admin.usersPage.create.password, { exact: true }),
+  panel.getByLabel(S.admin.usersPage.create.repeat, { exact: true }),
+];
+
+/** Runs `step`; when it fails, both password fields are emptied before the failure goes on to the test report. */
+export function clearingPasswords<T>(panel: Locator, step: () => Promise<T>): Promise<T> {
+  const [password, repeat] = passwordFields(panel);
+  return clearingOnFailure(password, () => clearingOnFailure(repeat, step));
+}
+
+/** Empties both password fields: a form that kept what was typed after a refusal keeps no password past its test. */
+export async function emptyPasswords(panel: Locator): Promise<void> {
+  for (const field of passwordFields(panel)) await field.fill("");
+}
+
+/** Both password fields are empty. The length is compared, never the value: a failure must not print it. */
+export async function expectPasswordsEmpty(panel: Locator): Promise<void> {
+  for (const field of passwordFields(panel)) {
+    expect((await field.inputValue()).length, "a password field still holds what was typed").toBe(
+      0,
+    );
+  }
 }
 
 type SocketWindow = Window & { __e2eSockets?: { opened: number; closed: number[] } };

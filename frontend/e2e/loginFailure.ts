@@ -13,9 +13,26 @@ export type Clearable = Pick<Locator, "fill">;
 const CLEAR_TIMEOUT_MS = 2000;
 
 /**
- * Runs `step` (the submit of a login form and the wait for what follows it). When it fails, empties `field`
- * and then rethrows that same error. A field that cannot be emptied (the page moved on or closed) is not a
- * second failure: the step's own is the one the test reports.
+ * Playwright's matchers (`expect(locator).toBeVisible()`, `expect(page).toHaveURL()`) put a snapshot of the page,
+ * taken at the instant they fail, on the error they throw (`matcherResult.ariaSnapshot`), and the report's
+ * `error-context.md` is made from that: a field emptied afterwards is in it still, with the value it had. The snapshot
+ * is taken off the error here, on the same error object (its message, its stack and its identity are as they were), and
+ * the report then takes the snapshot it takes when a test ends, which is after the field has been emptied. (Playwright
+ * 1.63 behaves so; before it, only that end-of-test snapshot existed and emptying the field was enough.)
+ */
+function withoutPageSnapshot(error: unknown): void {
+  const result =
+    error instanceof Error
+      ? (error as { matcherResult?: { ariaSnapshot?: unknown } }).matcherResult
+      : undefined;
+  if (typeof result === "object" && result !== null) delete result.ariaSnapshot;
+}
+
+/**
+ * Runs `step` (the submit of a login form and the wait for what follows it, or a create form that types a password).
+ * When it fails, empties `field`, takes the matcher's early page snapshot off the error, and then rethrows that same
+ * error. A field that cannot be emptied (the page moved on or closed) is not a second failure: the step's own is the
+ * one the test reports.
  */
 export async function clearingOnFailure<T>(field: Clearable, step: () => Promise<T>): Promise<T> {
   try {
@@ -26,6 +43,7 @@ export async function clearingOnFailure<T>(field: Clearable, step: () => Promise
     } catch {
       // nothing left to clear
     }
+    withoutPageSnapshot(error);
     throw error;
   }
 }

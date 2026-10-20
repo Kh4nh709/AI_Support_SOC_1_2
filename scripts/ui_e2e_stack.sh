@@ -205,6 +205,10 @@ REPO_DIR="$STATE_DIR/repo"
 mkdir -m 700 -- "$REPO_DIR" "$REPO_DIR/backend" "$REPO_DIR/eval"
 cp -R -- "$BACKEND_SRC/app" "$REPO_DIR/backend/app"
 find "$REPO_DIR/backend/app" -type d -name __pycache__ -prune -exec rm -rf -- {} +
+# What runs must be what was asked for: a copy that differs from its source (a file the copy missed, a symlink it
+# followed) would make every green of the suite a statement about some other code.
+diff -rq -x __pycache__ "$BACKEND_SRC/app" "$REPO_DIR/backend/app" >/dev/null \
+  || die "the scratch copy of app/ is not the same as $BACKEND_SRC/app: refusing to start the stack"
 cp -R -- "$ROOT/kb" "$REPO_DIR/kb"
 BACKEND_DIR="$REPO_DIR/backend"
 
