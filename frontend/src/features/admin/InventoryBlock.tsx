@@ -2,13 +2,18 @@
 // reads the three files again after a confirmation (`POST /api/admin/reload-inventory`, web/main.py).
 //
 // The answers, as AdminStates draws them:
-//   - 200 `LoadReport`: the dialog closes, the overview is read again (`invalidateAfter("reloadInventory")`),
-//     and the block keeps the result (the counts, and the warnings the loader raised) until it is dismissed or
-//     the next reload replaces it;
+//   - 200 `LoadReport`: the dialog closes and the block keeps the result (the counts, and the warnings the loader
+//     raised) until it is dismissed or the next reload replaces it; the overview is read again
+//     (`invalidateAfter("reloadInventory")`) and the counts follow when that read lands;
 //   - 422, a list of texts, one for each fault of the files: the dialog closes and the block keeps the list and
 //     says the database did not change (`load()` validates before it writes). Nothing is read again: nothing
 //     changed;
 //   - anything else (a 5xx, the network, a role that changed): the dialog stays and says it did not work.
+//
+// The files are loaded when the answer is in, so the dialog and the result never wait for the read that follows
+// (up to about 30 s in the worst case): the mutation does not await it. The button that opened the dialog stays on
+// the page, so the dialog gives the focus back to it. One latch (`useSubmitLatch`) keeps two clicks of one tick to
+// one POST: the confirm button is `disabled` a render late.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import {
@@ -23,6 +28,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { invalidateAfter } from "./adminKeys";
 import { BlockError, OUTLINE_BUTTON, Panel } from "./OverviewBlocks";
 import { writeErrorText, type SectionFailure } from "./overviewModel";
+import { useSubmitLatch } from "./useSubmitLatch";
 
 const P = S.admin.overviewPage;
 const I = P.inventory;
@@ -57,10 +63,11 @@ export function InventoryBlock({
 
   const reload = useMutation({
     mutationFn: () => reloadInventory(),
-    onSuccess: async (report) => {
-      await invalidateAfter(client, "reloadInventory");
+    onSuccess: (report) => {
       setOpen(false);
       setResult({ kind: "loaded", report });
+      // Not awaited: the files are loaded, and the dialog and the result must not wait for the read.
+      void invalidateAfter(client, "reloadInventory");
     },
     onError: (thrown) => {
       const error = adminErrorOf(thrown);
@@ -75,6 +82,7 @@ export function InventoryBlock({
       }
     },
   });
+  const runReload = useSubmitLatch(reload);
 
   return (
     <>
@@ -160,7 +168,7 @@ export function InventoryBlock({
           error={dialogError}
           onConfirm={() => {
             setDialogError(null);
-            reload.mutate();
+            runReload();
           }}
           onCancel={() => {
             setOpen(false);

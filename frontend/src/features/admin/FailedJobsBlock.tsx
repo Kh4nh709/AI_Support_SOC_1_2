@@ -2,13 +2,26 @@
 // in the worker's queue after a confirmation.
 //
 // What each answer of `POST /api/admin/jobs/{id}/retry` does (AdminStates):
-//   - 200: the dialog closes, the overview is read again (`invalidateAfter("retryJob")`), a toast says it;
+//   - 200: the dialog closes and a toast says it, in the block; the overview is read again
+//     (`invalidateAfter("retryJob")`) and the retried job leaves the list when that read lands;
 //   - 409 `not_failed` and 404 `not_found`: the list on screen is stale (another admin or the worker got there
-//     first), so the dialog closes, the list is read again, and the block says why, in the block;
+//     first), so the dialog closes, the block says why, and the list is read again;
 //   - 409 `already_queued`: the list is right and the job still failed, so the dialog stays and says why;
 //   - anything else (a 5xx, the network, a role that changed): the dialog stays and says it did not work.
+//
+// The write has committed when the answer is in, so the dialog and the notice never wait for the read that
+// follows (nine sections, up to about 30 s in the worst case): the mutation does not await it, which also frees
+// its busy state and its latch for the next job at once.
+//
+// Focus. The button that opened the dialog is in the row of the job, and on the three answers above that row
+// leaves the list when the new read lands, so the focus the dialog gives back would be lost to `<body>`. The
+// block sends the focus to its own heading when it closes the dialog (an effect after the commit that
+// unmounts it, so the dialog's give-back cannot undo it); the heading stays whatever the list does.
+//
+// One latch (`useSubmitLatch`) keeps two clicks of one tick to one POST: the confirm button is `disabled` a
+// render late.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { adminErrorOf, retryJob, type FailedJob } from "../../api/admin";
 import { type Column, DataTable } from "../../components/DataTable";
 import { Toast } from "../../components/Toast";
@@ -17,6 +30,7 @@ import { S } from "../../strings";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { invalidateAfter } from "./adminKeys";
 import { BlockError, Mark, OUTLINE_BUTTON, Panel } from "./OverviewBlocks";
+import { useSubmitLatch } from "./useSubmitLatch";
 import {
   FAILED_JOBS_CAP,
   lastAttemptAt,
@@ -77,28 +91,46 @@ export function FailedJobsBlock({
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // The block's heading, and the request to focus it when the next render has closed the dialog.
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const focusHeading = useRef(false);
+
+  // Runs after every render, and does nothing unless a write asked for the focus. The dialog's own cleanup
+  // (which gives the focus back to the button that opened it) runs before this in the same commit.
+  useEffect(() => {
+    if (!focusHeading.current) return;
+    focusHeading.current = false;
+    headingRef.current?.focus();
+  });
+
+  /** The write is over and the list on screen is about to change: close the dialog, then read the list again. */
+  function closeAndReload() {
+    focusHeading.current = true;
+    setPending(null);
+    // Not awaited: the write has committed, and the dialog and the notice must not wait for the read.
+    void invalidateAfter(client, "retryJob");
+  }
 
   const retry = useMutation({
     mutationFn: (jobId: number) => retryJob(jobId),
-    onSuccess: async (_answer, jobId) => {
-      await invalidateAfter(client, "retryJob");
-      setPending(null);
+    onSuccess: (_answer, jobId) => {
       setToast(J.done(jobId));
+      closeAndReload();
     },
-    onError: async (thrown) => {
+    onError: (thrown) => {
       const error = adminErrorOf(thrown);
       if (
         error.kind === "reason" &&
         (error.reason === "not_failed" || error.reason === "not_found")
       ) {
-        await invalidateAfter(client, "retryJob");
-        setPending(null);
         setNotice(S.admin.reason[error.reason]);
+        closeAndReload();
       } else {
         setDialogError(writeErrorText(error));
       }
     },
   });
+  const runRetry = useSubmitLatch(retry);
 
   function open(job: FailedJob) {
     setNotice(null);
@@ -137,8 +169,10 @@ export function FailedJobsBlock({
       <Panel
         title={J.title}
         className="col-span-2"
+        headingRef={headingRef}
         aside={count === null ? undefined : <Mark tone="warn">{count}</Mark>}
       >
+        {toast !== null && <Toast onClose={() => setToast(null)}>{toast}</Toast>}
         {notice !== null && (
           <div
             role="alert"
@@ -191,7 +225,7 @@ export function FailedJobsBlock({
           error={dialogError}
           onConfirm={() => {
             setDialogError(null);
-            retry.mutate(pending.job_id);
+            runRetry(pending.job_id);
           }}
           onCancel={() => {
             setPending(null);
@@ -214,12 +248,6 @@ export function FailedJobsBlock({
           </dl>
           <p className="text-[12.5px] leading-normal text-[#aeb9c6]">{J.dialogNote}</p>
         </ConfirmDialog>
-      )}
-
-      {toast !== null && (
-        <div className="fixed bottom-6 right-6 z-40 w-96">
-          <Toast onClose={() => setToast(null)}>{toast}</Toast>
-        </div>
       )}
     </>
   );

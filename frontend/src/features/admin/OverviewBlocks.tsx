@@ -6,7 +6,7 @@
 // Colours are the canvas's own: the tokens of `styles.css` where there is one, and the canvas's hex for the
 // few it has no token for. They are classes, never a `style` attribute (the CSP forbids it), so the bars of the
 // chart are SVG shapes whose size is an attribute.
-import { useId, type ReactNode } from "react";
+import { useId, type ReactNode, type Ref } from "react";
 import type { HealthCheck, OverviewResponse } from "../../api/admin";
 import { DataTable, type Column } from "../../components/DataTable";
 import { formatTime } from "../../format";
@@ -28,23 +28,34 @@ export const PANEL = "rounded-[10px] border border-border bg-surface px-5 py-[18
 export const OUTLINE_BUTTON =
   "rounded-md border border-[#2e3a48] px-3 py-1.5 text-[13px] text-text hover:bg-ground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-text";
 
-/** A block of the page: a section named by its heading, with an optional mark beside the heading. */
+/**
+ * A block of the page: a section named by its heading, with an optional mark beside the heading.
+ * `headingRef`: the block may send the focus to its heading (`tabIndex={-1}`: reachable by script, not by Tab),
+ * when the control the admin used has left the page and the focus would fall to `<body>`.
+ */
 export function Panel({
   title,
   aside,
   className = "",
+  headingRef,
   children,
 }: {
   title: string;
   aside?: ReactNode;
   className?: string;
+  headingRef?: Ref<HTMLHeadingElement>;
   children: ReactNode;
 }) {
   const id = useId();
   return (
     <section aria-labelledby={id} className={`flex flex-col gap-3 ${PANEL} ${className}`}>
       <div className="flex items-center gap-2.5">
-        <h2 id={id} className="grow text-[15px] font-semibold">
+        <h2
+          id={id}
+          ref={headingRef}
+          tabIndex={headingRef === undefined ? undefined : -1}
+          className="grow text-[15px] font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text"
+        >
           {title}
         </h2>
         {aside}

@@ -5,7 +5,7 @@
 // The cost card is the overview's own tenth section, `llm_month` (DEC-203, P11-T20 row 50): the page makes no
 // second read, and `serve()` keeps a handler on `llm/usage` only so that a test can say nobody called it.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { readFileSync } from "node:fs";
@@ -223,6 +223,19 @@ function deferred<T>() {
     resolve = r;
   });
   return { promise, resolve };
+}
+
+/**
+ * Two clicks in ONE tick: both inside a single `act`, so React renders nothing between them and the second lands
+ * on the same enabled button as the first. (TanStack Query 5 tells React a write is pending only through a
+ * `setTimeout(0)`, so `disabled={mutation.isPending}` cannot stop the second by itself; `userEvent`, which
+ * awaits between clicks, never reproduces it.)
+ */
+function clickTwiceInOneTick(button: HTMLElement) {
+  act(() => {
+    fireEvent.click(button);
+    fireEvent.click(button);
+  });
 }
 
 // --- rendering ------------------------------------------------------------------------------------------------
@@ -1328,6 +1341,145 @@ describe("failed jobs", () => {
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     });
 
+    // Row 46: the shared latch. The confirm button is `disabled` one render late (TanStack Query tells React
+    // a write is pending only through a `setTimeout(0)`), so two clicks of one tick both reach `mutate`.
+    it("sends one POST for two clicks of Chạy lại in the same tick, before the dialog is busy", async () => {
+      const user = userEvent.setup();
+      const gate = deferred<Response>();
+      const log = serve({ retry: [() => gate.promise] });
+      renderPage();
+      await updated();
+      const dialog = await open(user);
+      clickTwiceInOneTick(within(dialog).getByRole("button", { name: "Chạy lại" }));
+      await within(dialog).findByRole("button", { name: "Đang xử lý…" });
+      expect(log.posts).toHaveLength(1);
+      gate.resolve(HttpResponse.json({ job_id: 100412, status: "pending" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(log.posts).toHaveLength(1);
+    });
+
+    it("can retry another job once the first write has settled: the latch is released", async () => {
+      const user = userEvent.setup();
+      const log = serve({
+        retry: [
+          { job_id: 100412, status: "pending" },
+          { job_id: 100398, status: "pending" },
+        ],
+      });
+      renderPage();
+      await updated();
+      await user.click(within(await open(user)).getByRole("button", { name: "Chạy lại" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await user.click(within(await open(user, 100398)).getByRole("button", { name: "Chạy lại" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(log.posts.map((p) => p.path)).toEqual([
+        "/api/admin/jobs/100412/retry",
+        "/api/admin/jobs/100398/retry",
+      ]);
+    });
+
+    // Row 48: the write has committed, so the dialog and the toast do not wait for the overview to be read
+    // again (nine sections, up to about 30 s in the worst case).
+    it("closes the dialog and shows the toast at once, before the overview is read again", async () => {
+      const user = userEvent.setup();
+      const refetch = deferred<Response>();
+      const log = serve({
+        overviews: [overview(), () => refetch.promise],
+        retry: [{ job_id: 100412, status: "pending" }],
+      });
+      renderPage();
+      await updated();
+      await user.click(within(await open(user)).getByRole("button", { name: "Chạy lại" }));
+      await waitFor(() => expect(log.overview).toHaveLength(2));
+      // the second read is out and held: the write is done and the page says so
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(within(jobsBlock()).getByRole("status")).toHaveTextContent(
+        "Đã đặt job 100412 về hàng chờ.",
+      );
+      expect(
+        within(jobsBlock()).getByRole("button", { name: "Chạy lại job 100412" }),
+      ).toBeInTheDocument();
+      refetch.resolve(HttpResponse.json(overview({ failed_jobs: JOBS.slice(1) })));
+      await waitFor(() =>
+        expect(
+          within(jobsBlock()).queryByRole("button", { name: "Chạy lại job 100412" }),
+        ).not.toBeInTheDocument(),
+      );
+      expect(within(jobsBlock()).getByText("2 job")).toBeInTheDocument();
+    });
+
+    it("is free for another job while the overview is still being read: that dialog is not busy and sends", async () => {
+      const user = userEvent.setup();
+      // Two reads are held by one gate (each builds its own Response: a body can be read only once).
+      const gate = deferred<OverviewResponse>();
+      const held = () => gate.promise.then((body) => HttpResponse.json(body));
+      const log = serve({
+        overviews: [overview(), held],
+        retry: [
+          { job_id: 100412, status: "pending" },
+          { job_id: 100398, status: "pending" },
+        ],
+      });
+      renderPage();
+      await updated();
+      await user.click(within(await open(user)).getByRole("button", { name: "Chạy lại" }));
+      await waitFor(() => expect(log.overview).toHaveLength(2));
+      const second = await open(user, 100398);
+      const confirm = within(second).getByRole("button", { name: "Chạy lại" });
+      expect(confirm).toBeEnabled();
+      await user.click(confirm);
+      await waitFor(() => expect(log.posts).toHaveLength(2));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      gate.resolve(overview({ failed_jobs: JOBS.slice(2) }));
+      await waitFor(() => expect(within(jobsBlock()).getByText("1 job")).toBeInTheDocument());
+    });
+
+    // Row 51 (P11-T11 N4): the toast is in the block's own flow, as LlmPage's is in its page's, not a box
+    // floating over the page.
+    it("shows the toast inside the Job lỗi block, not floating over the page", async () => {
+      const user = userEvent.setup();
+      serve({ retry: [{ job_id: 100412, status: "pending" }] });
+      const { container } = renderPage();
+      await updated();
+      await user.click(within(await open(user)).getByRole("button", { name: "Chạy lại" }));
+      const toast = await within(jobsBlock()).findByRole("status");
+      expect(toast).toHaveTextContent("Đã đặt job 100412 về hàng chờ.");
+      expect(container.querySelector(".fixed")).toBeNull();
+    });
+
+    // Row 47: the row that opened the dialog leaves the list, so the focus the dialog gives back is lost.
+    it("moves the focus to the Job lỗi heading after a successful retry, when the row that opened the dialog is gone", async () => {
+      const user = userEvent.setup();
+      const log = serve({
+        overviews: [overview(), overview({ failed_jobs: JOBS.slice(1) })],
+        retry: [{ job_id: 100412, status: "pending" }],
+      });
+      renderPage();
+      await updated();
+      await user.click(within(await open(user)).getByRole("button", { name: "Chạy lại" }));
+      await waitFor(() => expect(log.overview).toHaveLength(2));
+      await waitFor(() =>
+        expect(
+          within(jobsBlock()).queryByRole("button", { name: "Chạy lại job 100412" }),
+        ).not.toBeInTheDocument(),
+      );
+      const heading = within(jobsBlock()).getByRole("heading", { name: "Job lỗi" });
+      expect(heading).toHaveFocus();
+      expect(heading).toHaveAttribute("tabindex", "-1");
+    });
+
+    it("does not take the focus to the heading when the retry is refused inside the dialog", async () => {
+      const user = userEvent.setup();
+      serve({ retry: [reason(409, "already_queued")] });
+      renderPage();
+      await updated();
+      const dialog = await open(user);
+      await user.click(within(dialog).getByRole("button", { name: "Chạy lại" }));
+      await within(dialog).findByRole("alert");
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(within(jobsBlock()).getByRole("heading", { name: "Job lỗi" })).not.toHaveFocus();
+    });
+
     it("reads the overview again, so the retried job leaves the list, and says it was done", async () => {
       const user = userEvent.setup();
       const log = serve({
@@ -1408,6 +1560,63 @@ describe("failed jobs", () => {
           expect(screen.queryByRole("status")).not.toBeInTheDocument();
         },
       );
+
+      // Row 48 for the two answers that reload the list: the dialog closes and the notice shows at once.
+      it.each([
+        ["409 not_failed", reason(409, "not_failed"), S.admin.reason.not_failed],
+        ["404 not_found", reason(404, "not_found"), S.admin.reason.not_found],
+      ])(
+        "on %s closes the dialog and shows the notice before the overview is read again",
+        async (_name, answer, text) => {
+          const user = userEvent.setup();
+          const refetch = deferred<Response>();
+          const log = serve({
+            overviews: [overview(), () => refetch.promise],
+            retry: [answer],
+          });
+          renderPage();
+          await updated();
+          await open(user);
+          await user.click(
+            within(screen.getByRole("dialog")).getByRole("button", { name: "Chạy lại" }),
+          );
+          await waitFor(() => expect(log.overview).toHaveLength(2));
+          expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+          expect(within(jobsBlock()).getByRole("alert")).toHaveTextContent(text);
+          refetch.resolve(HttpResponse.json(overview({ failed_jobs: JOBS.slice(1) })));
+          await waitFor(() =>
+            expect(
+              within(jobsBlock()).queryByRole("button", { name: "Chạy lại job 100412" }),
+            ).not.toBeInTheDocument(),
+          );
+        },
+      );
+
+      // Row 47 for the same two answers: the notice is on screen, and the row that opened the dialog is gone.
+      it.each([
+        ["409 not_failed", reason(409, "not_failed")],
+        ["404 not_found", reason(404, "not_found")],
+      ])("on %s moves the focus to the Job lỗi heading", async (_name, answer) => {
+        const user = userEvent.setup();
+        const log = serve({
+          overviews: [overview(), overview({ failed_jobs: JOBS.slice(1) })],
+          retry: [answer],
+        });
+        renderPage();
+        await updated();
+        await open(user);
+        await user.click(
+          within(screen.getByRole("dialog")).getByRole("button", { name: "Chạy lại" }),
+        );
+        await waitFor(() => expect(log.overview).toHaveLength(2));
+        await waitFor(() =>
+          expect(
+            within(jobsBlock()).queryByRole("button", { name: "Chạy lại job 100412" }),
+          ).not.toBeInTheDocument(),
+        );
+        expect(within(jobsBlock()).getByRole("alert")).toBeInTheDocument();
+        expect(within(jobsBlock()).getByRole("heading", { name: "Job lỗi" })).toHaveFocus();
+      });
 
       it("says the 409 not_failed in the canvas's words", () => {
         expect(S.admin.reason.not_failed).toBe(
@@ -1593,6 +1802,63 @@ describe("the inventory", () => {
     expect(log.posts).toEqual([{ path: RELOAD_URL, body: {}, contentType: "application/json" }]);
     gate.resolve(HttpResponse.json(report()));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  // Row 46: the shared latch (see the retry dialog's test for why `disabled` is not enough).
+  it("posts once for two clicks of Nạp lại in the same tick, before the dialog is busy", async () => {
+    const user = userEvent.setup();
+    const gate = deferred<Response>();
+    const log = serve({ reload: [() => gate.promise] });
+    renderPage();
+    await updated();
+    const dialog = await openReload(user);
+    clickTwiceInOneTick(within(dialog).getByRole("button", { name: "Nạp lại" }));
+    await within(dialog).findByRole("button", { name: "Đang xử lý…" });
+    expect(log.posts).toEqual([{ path: RELOAD_URL, body: {}, contentType: "application/json" }]);
+    gate.resolve(HttpResponse.json(report()));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(log.posts).toHaveLength(1);
+  });
+
+  it("can reload again once the first write has settled, after a failure too: the latch is released", async () => {
+    const user = userEvent.setup();
+    const log = serve({ reload: [status(500, { detail: "boom" }), report()] });
+    renderPage();
+    await updated();
+    const dialog = await openReload(user);
+    await user.click(within(dialog).getByRole("button", { name: "Nạp lại" }));
+    await within(dialog).findByRole("alert");
+    await user.click(within(dialog).getByRole("button", { name: "Nạp lại" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(log.posts).toHaveLength(2);
+  });
+
+  // Row 48: the files are loaded, so the dialog closes and the result shows before the overview is read again.
+  it("closes the dialog and shows the result at once, before the overview is read again", async () => {
+    const user = userEvent.setup();
+    const refetch = deferred<Response>();
+    const log = serve({
+      overviews: [overview(), () => refetch.promise],
+      reload: [report({ assets: 7, iocs: 2, deactivated: 1 })],
+    });
+    renderPage();
+    await updated();
+    await user.click(within(await openReload(user)).getByRole("button", { name: "Nạp lại" }));
+    await waitFor(() => expect(log.overview).toHaveLength(2));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(within(inventory()).getByRole("status")).toHaveTextContent(
+      "Đã nạp: 7 asset · 3 identity · 2 IoC · 1 mục bị vô hiệu hoá",
+    );
+    expect(valueOf(inventory(), "Asset đang dùng")).toBe("6");
+    refetch.resolve(
+      HttpResponse.json(
+        overview({
+          inventory: { assets: 7, identities: 3, iocs: 2, loaded_at: "2026-09-30T02:41:00+00:00" },
+        }),
+      ),
+    );
+    await waitFor(() => expect(valueOf(inventory(), "Asset đang dùng")).toBe("7"));
+    expect(within(inventory()).getByRole("button", { name: "Nạp lại kiểm kê" })).toHaveFocus();
   });
 
   it("shows the counts of what was loaded in the block, closes the dialog, and reads the overview again", async () => {
