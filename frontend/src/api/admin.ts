@@ -749,9 +749,11 @@ export type AuditEvent = {
   actor_username: string | null;
   subject_id: string;
   /**
-   * Parsed JSON with secret-named keys replaced by "[đã ẩn]", and so is ①'s suggestion in `triage.suggested`,
-   * `llm.gate_forced` and `autoclose.reviewed` while the alert is blind and not yet decided (DEC-101);
-   * `{truncated: true, size}` when too big. Render as text.
+   * Parsed JSON with secret-named keys replaced by "[đã ẩn]", and so is ①'s suggestion in an
+   * `autoclose.reviewed` event while its alert is blind and not yet decided (DEC-101). The rows of
+   * `triage.suggested`, `llm.gate_forced` and `llm.builder_violation` of such an alert are not listed at all, and
+   * not counted in `total`: their bare presence would tell ①'s verdict (DEC-206); they are listed once the alert
+   * is decided. `{truncated: true, size}` when too big. Render as text.
    */
   payload: unknown;
 };

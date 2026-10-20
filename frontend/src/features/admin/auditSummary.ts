@@ -212,6 +212,7 @@ const BUILDERS: Readonly<Record<string, Builder>> = {
   "case.analyzed": (p) => [A.analyzed, ...when(num(p, "job_id"), A.job)],
   "triage.suggested": (p) => {
     // Withheld by the server: one line, whichever of the keys it took, and none of what is left is read.
+    // (The server leaves such a row out since DEC-206's amendment; this is for a row an older one masked.)
     if (withheld(p, "suggested_action", "confidence", "forced", "run_id"))
       return [A.suggestionHidden];
     const action = str(p, "suggested_action");

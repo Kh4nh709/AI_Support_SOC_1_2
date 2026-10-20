@@ -1205,7 +1205,9 @@ export const S = {
         suggested: (action: string) => `đề xuất ①: ${action}`,
         suggestedUnknown: "đã có đề xuất ①",
         // The server withholds ①'s verdict of an alert that is blind and not yet decided (DEC-101, context
-        // pack §6.4): the event is listed, its verdict is the marker, and the line says so instead of a verdict.
+        // pack §6.4): a person's `autoclose.reviewed` is listed, its verdict is the marker, and the line says so
+        // instead of a verdict. (`triage.suggested` and `llm.gate_forced` of such an alert are not listed at all,
+        // DEC-206; their branches stay for a row an older server masked.)
         suggestionHidden: "đề xuất ① đã ẩn: alert chưa có quyết định",
         confidence: (level: string) => `độ tin cậy ${level}`,
         gateForced: "cổng kiểm soát đã ép kết quả",
