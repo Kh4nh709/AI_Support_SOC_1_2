@@ -1554,10 +1554,17 @@ describe("the states", () => {
     it("shows the card of a role that is not admin any more, with a way back, and no form", async () => {
       serve(status(403, { detail: "forbidden" }));
       renderPage();
-      expect(
-        await screen.findByRole("heading", { level: 1, name: P.forbiddenTitle }),
-      ).toBeInTheDocument();
-      expect(screen.getByText(P.forbiddenBody)).toBeInTheDocument();
+      // One text for a 403 on every admin page: `reason.forbidden`, which the Users page's PageError says too
+      // (P11-T17 review n4). The Audit page keeps its own card around it, and its way back to the queue.
+      const heading = await screen.findByRole("heading", {
+        level: 1,
+        name: S.admin.reason.forbidden,
+      });
+      expect(heading).toBeInTheDocument();
+      // The card holds that text and the way back, and no sentence of its own.
+      expect(heading.parentElement?.textContent).toBe(
+        `${S.admin.reason.forbidden}${P.forbiddenBack}`,
+      );
       expect(screen.getByRole("link", { name: P.forbiddenBack })).toHaveAttribute("href", "/queue");
       expect(screen.queryByRole("form")).not.toBeInTheDocument();
       expect(screen.queryByRole("table")).not.toBeInTheDocument();
@@ -1567,7 +1574,7 @@ describe("the states", () => {
     it("offers no retry: asking again says the same", async () => {
       serve(status(403, { detail: "forbidden" }));
       renderPage();
-      await screen.findByRole("heading", { level: 1, name: P.forbiddenTitle });
+      await screen.findByRole("heading", { level: 1, name: S.admin.reason.forbidden });
       expect(screen.queryByRole("button", { name: S.common.retry })).not.toBeInTheDocument();
     });
   });
@@ -1718,7 +1725,7 @@ describe("accessibility", { timeout: 15_000 }, () => {
   it("has none for the 403 card and for the page's error", async () => {
     serve(status(403, { detail: "forbidden" }));
     const forbidden = renderPage("/admin/audit", testClient(), { layout: true });
-    await screen.findByRole("heading", { level: 1, name: P.forbiddenTitle });
+    await screen.findByRole("heading", { level: 1, name: S.admin.reason.forbidden });
     expect(await axeOf(forbidden.container)).toEqual([]);
     forbidden.unmount();
 

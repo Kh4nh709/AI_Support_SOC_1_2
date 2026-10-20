@@ -522,8 +522,6 @@ export const S = {
       labels: "Gán nhãn tập vàng",
       audit: "Nhật ký audit",
     },
-    // What a page that is not built yet says (the page tasks replace these pages).
-    building: "Trang này đang xây dựng.",
 
     // The overview page (P11-T11, spec §4.1): the canvas's `AdminOverview` and the Tổng quan section of
     // `AdminStates`, in its words. A function takes what the server sent, already formatted by the page.
@@ -1160,9 +1158,7 @@ export const S = {
         "Mất kết nối tới máy chủ. Thử lại sau ít phút; nếu lặp lại, xem Tổng quan → Sức khoẻ hệ thống.",
       loadErrorServer: (status: number) =>
         `Máy chủ trả lỗi ${status}. Thử lại sau ít phút; nếu lặp lại, xem Tổng quan → Sức khoẻ hệ thống.`,
-      forbiddenTitle: "Trang này chỉ dành cho admin",
-      forbiddenBody:
-        "Vai trò của tài khoản này không còn quyền xem nhật ký. Lần truy cập này đã được ghi vào nhật ký audit.",
+      // A 403 says `reason.forbidden` (one text for every admin page); only the way back is this page's.
       forbiddenBack: "Về hàng đợi",
 
       // The one-line summary of an event, built from its payload (`auditSummary.ts`). Each is a clause with
