@@ -230,14 +230,18 @@ export function eventCount(type: string, subject?: string): number {
 // What the browser did.
 
 /**
- * The API calls a page makes from now on, as `METHOD /path` with the query left out (a query may name a user).
- * A websocket's handshake is not a request of the page for Playwright; the socket is `trackSockets`'s.
+ * The API calls a page makes from now on, as `METHOD /path` with the query left out (a query may name a user),
+ * and each socket it opens as `WS /path` (a websocket is not a request of the page for Playwright; its URL holds
+ * no token, which travels in the first frame).
  */
 export function recordApiCalls(page: Page): () => string[] {
   const seen: string[] = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
     if (url.pathname.startsWith("/api/")) seen.push(`${request.method()} ${url.pathname}`);
+  });
+  page.on("websocket", (socket) => {
+    seen.push(`WS ${new URL(socket.url()).pathname}`);
   });
   return () => [...seen];
 }

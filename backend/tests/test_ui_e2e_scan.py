@@ -88,7 +88,9 @@ def test_a_secret_in_a_file_is_found_and_not_printed(tmp_path, capsys):
 def test_the_admin_suites_passwords_are_searched_for(tmp_path, capsys, monkeypatch, name):
     """P11-T18: the two seeded admins and the account the admin suite creates have passwords of the run, and a run
     that printed one must fail like one that printed the Tier 1 password."""
-    admin_secret = "admin-run-secret-0123456789abcdef"
+    # Not the SECRET above, nor a string that contains it: the test must find THIS variable's needle.
+    admin_secret = "admin-pw-9f8e7d6c5b4a39281706"
+    assert SECRET not in admin_secret
     monkeypatch.setenv(name, admin_secret)
     code, out = _scan(tmp_path, capsys, {"run.log": f"typed {admin_secret}".encode()})
     assert code == 1

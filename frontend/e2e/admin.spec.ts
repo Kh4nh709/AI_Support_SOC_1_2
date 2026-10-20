@@ -1,9 +1,9 @@
 // The admin console on the real stack (P11-T18, admin console v1.1 spec §7): the ten scenarios, one after the
 // other, in a real browser, through the real client, against the real API, worker and database of the scratch
 // stack (scripts/ui_e2e_stack.sh). One file, one run: the scenarios share what the earlier ones made (the account
-// of scenario 2 is the one whose role scenario 4 changes, the alert a rule closes in scenario 7 is the one the
-// digest reopens in scenario 8, the alerts of scenario 9 are the ones the audit page names in scenario 10), so
-// the describe is serial and stops at the first that fails.
+// of scenario 2 is the one that is unlocked in 2b and whose role changes in 3, the alert the rule of scenario 6
+// closes is the one the digest reopens in scenario 7, and the events of all of them are what the audit page lists
+// in scenario 9), so the describe is serial and stops at the first that fails.
 //
 //   scenario 1   an admin logs in and lands on the overview
 //   scenario 2   creates a Tier 1 user, who then logs in
@@ -860,14 +860,19 @@ test("scenario 8: labels one cluster and undoes it on an unfrozen scratch set, t
   expect(again.status).toBe(409);
   expect((again.body as { detail: unknown }).detail).toEqual({ reason: "frozen" });
 
-  // ---- The page asked the API for these, and for nothing else (the shell's own session read apart; the live
-  // socket is a socket). It names no cluster anywhere but in the three label routes.
+  // ---- Review Focus 5, in the browser: from the first load of the page to here, the only calls to the API were
+  // the three label routes, the shell's own session read (`GET /api/auth/me`) and the live socket (`/api/ws`):
+  // the last two carry nothing about a cluster. No alert, case or queue route was ever asked for.
   expect([...new Set(calls())].sort()).toEqual([
     "GET /api/admin/labels/next",
     "GET /api/auth/me",
     "POST /api/admin/labels",
     "POST /api/admin/labels/undo",
+    "WS /api/ws",
   ]);
+  // Each write went once: two saves, and two undos (the one that worked and the one the freeze refused).
+  expect(calls().filter((call) => call === "POST /api/admin/labels")).toHaveLength(2);
+  expect(calls().filter((call) => call === "POST /api/admin/labels/undo")).toHaveLength(2);
   expect((await socketsSeen(page)).opened).toBeGreaterThan(0);
 });
 
