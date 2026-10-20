@@ -3455,3 +3455,17 @@ Decision:
   3. **The review covers both.** The whole-branch review of P11-T20 reads the v1.1 tip, and the retire branch gets its own independent Reviewer (DEC-201). Neither merges into `main` without that.
   4. **Spec §8's last sentence stands.** v1.1 does not end with two admin UIs: the retire branch is part of v1.1, merged later by the Owner's own decision.
 Supersedes: none. It sets the order the plan left open.
+
+## DEC-206 · 2026-10-20 · The admin console honours the blind arm: an audit event or a usage row about a blind, undecided alert shows no ① suggestion, for every role; the event or run itself stays listed
+Scope: **product** (admin console API) · **evaluation integrity** (DEC-101, context pack §6.4)
+Decided by: **the Director, 20/10**, on the whole-branch review of P11 (finding I1). It applies the existing rule to two answers that v1.1 added. It is not a new policy.
+Drafted by: Director (Opus 5.5)
+Propagated to: spec §5.3 and §5.8 · P11-T20 part 4 (`admin_audit.py`, `admin_llm.py`, `tier1/digest.py`, the pages) · `docs/limitations.md` with the retire branch (parked row 57, reframed)
+Decision:
+  1. **The rule.** It is `tier1/visibility.py`'s rule (`suggestion_visible = false` and the alert not in `SHOW_STATES`), read by the same code, never a second copy. It holds for the admin console's answers as it holds for the queue and alert pages, for every role.
+     - `GET /api/admin/audit`: in `triage.suggested`, `llm.gate_forced` and `autoclose.reviewed` events about such an alert, the suggestion-carrying keys are replaced by the redaction marker.
+     - `GET /api/admin/llm/usage` `recent`: such a run has `outcome` and `subject_id` null.
+     - The digest's `reopened_by_review` rows: such a row carries no `suggested_action` or `disagreement`.
+  2. **What stays visible, and why that is accepted.** The audit event (type, time, subject) and the usage run (pipeline, role, tokens, cost) stay listed. ① runs on every head in both arms, so "① ran on this alert" does not tell the arm. The verdict and its confidence are what DEC-101 hides, and they are hidden.
+  3. **Decided alerts.** After a Tier-1 decision the suggestion is shown, as on the alert page. The admin's view of decided alerts, used for gold labelling, is by design. Parked row 57's framing is limited to decided alerts.
+Supersedes: none. It closes a gap between DEC-101 and P11-T09/P11-T04's answers.
