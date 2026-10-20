@@ -219,7 +219,9 @@ function DigestRowView({
       <td className="px-2.5 py-3">
         <div>
           {row.suggested_action === null
-            ? D.noSuggestion
+            ? row.reopened_by_review
+              ? D.reopenedNoSuggestion
+              : D.noSuggestion
             : labelOf(S.ai1.action, row.suggested_action)}
         </div>
         {row.disagreement && (

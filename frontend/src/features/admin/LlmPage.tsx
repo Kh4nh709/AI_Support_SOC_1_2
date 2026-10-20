@@ -364,8 +364,16 @@ function Quota({ quota }: { quota: LlmUsage["quota"] }) {
 const LINK =
   "font-mono text-[#7fb0ff] underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-text";
 
+/**
+ * A run on an alert that is blind and not yet decided comes with no subject and no outcome (DEC-101, context pack
+ * §6.4): the one case in which an alert's run has no id. Both cells say it is withheld rather than missing.
+ */
+const isWithheld = (run: RecentRun): boolean =>
+  run.subject_type === "alert" && (run.subject_id === null || run.subject_id === "");
+
 function Subject({ run }: { run: RecentRun }) {
   const id = run.subject_id;
+  if (isWithheld(run)) return <span className={MUTED}>{L.recent.hidden}</span>;
   if (id === null || id === "") return <span className={MUTED}>{S.common.missing}</span>;
   const short = shortId(id);
   const text = run.subject_type === null ? short : L.recent.subject(run.subject_type, short);
@@ -388,6 +396,9 @@ function Subject({ run }: { run: RecentRun }) {
  */
 function Outcome({ run }: { run: RecentRun }) {
   const outcome = run.outcome;
+  if (isWithheld(run) && (outcome === null || outcome === "")) {
+    return <span className={MUTED}>{L.recent.hidden}</span>;
+  }
   if (outcome === null || outcome === "") return <span className={MUTED}>{S.common.missing}</span>;
   if (outcome.startsWith("stopped:")) {
     return (

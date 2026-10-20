@@ -356,11 +356,16 @@ export type RecentRun = {
   pipeline: string;
   role: string | null;
   subject_type: string | null;
+  /** Null for a run on an alert that is blind and not yet decided (DEC-101), and only then for an alert. */
   subject_id: string | null;
   input_tokens: number | null;
   output_tokens: number | null;
   latency_ms: number | null;
-  /** The verdict or conclusion, or `stopped:<stopped_by>`; null when the run has neither. */
+  /**
+   * The verdict or conclusion, or `stopped:<stopped_by>`; null when the run has neither, and null (with a null
+   * `subject_id`) for a run on an alert that is blind and not yet decided: the server withholds ① there
+   * (DEC-101, context pack §6.4).
+   */
   outcome: string | null;
   cost_usd: number | null;
 };
@@ -589,7 +594,11 @@ export type DigestRow = {
   last_seen_at: string;
   autoclose_rule_id: string | null;
   autoclose_rule_name: string | null;
-  /** The suggestion of ① (`false_positive`, `needs_review`, `escalate`), or null when it has none. */
+  /**
+   * The suggestion of ① (`false_positive`, `needs_review`, `escalate`), or null when it has none, and null on a
+   * row a "Sai" review reopened while the alert is blind and not yet decided (DEC-101: a reopened alert is blind
+   * again, and the server leaves ① off it, with `disagreement` false).
+   */
   suggested_action: string | null;
   /** ① did not suggest closing it. */
   disagreement: boolean;
@@ -739,7 +748,11 @@ export type AuditEvent = {
   /** Null for `system`, `llm` and an actor with no `users` row. */
   actor_username: string | null;
   subject_id: string;
-  /** Parsed JSON with secret-named keys replaced by "[đã ẩn]"; `{truncated: true, size}` when too big. Render as text. */
+  /**
+   * Parsed JSON with secret-named keys replaced by "[đã ẩn]", and so is ①'s suggestion in `triage.suggested`,
+   * `llm.gate_forced` and `autoclose.reviewed` while the alert is blind and not yet decided (DEC-101);
+   * `{truncated: true, size}` when too big. Render as text.
+   */
   payload: unknown;
 };
 
