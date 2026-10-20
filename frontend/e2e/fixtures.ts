@@ -22,9 +22,18 @@ export { S };
 /** The API, and the webhook that lives at its root (the UI's own server proxies `/api` only). */
 export const API = "http://127.0.0.1:18000";
 
-/** The users the script seeds: one of Tier 1 and two of Tier 2 (two, so that two conclusions have two authors). */
-export type Who = "t1" | "t2" | "t2b";
-const USERNAME: Record<Who, string> = { t1: "e2e-t1", t2: "e2e-t2", t2b: "e2e-t2b" };
+/**
+ * The users the script seeds: one of Tier 1, two of Tier 2 (two, so that two conclusions have two authors) and
+ * two admins (two, so that one can be the actor of a change of the other's role; P11-T18).
+ */
+export type Who = "t1" | "t2" | "t2b" | "admin" | "admin2";
+const USERNAME: Record<Who, string> = {
+  t1: "e2e-t1",
+  t2: "e2e-t2",
+  t2b: "e2e-t2b",
+  admin: "e2e-admin",
+  admin2: "e2e-admin2",
+};
 
 /** How the API and the pages name a user: the username (a note or a conclusion carries it as `*_name`). */
 export const usernameOf = (who: Who): string => USERNAME[who];
@@ -34,6 +43,10 @@ type Secrets = {
   t1_password: string;
   t2_password: string;
   t2b_password: string;
+  admin_password: string;
+  admin2_password: string;
+  /** The password the admin suite types for the account it creates (P11-T18). */
+  new_password: string;
   /** PGHOST, PGPORT, PGUSER, PGPASSWORD and PGDATABASE of the scratch database. */
   pg: Record<string, string>;
 };
@@ -55,6 +68,9 @@ function secrets(): Secrets {
 }
 
 const passwordOf = (who: Who): string => secrets()[`${who}_password`];
+
+/** The password the admin suite gives the account it creates. */
+export const newUserPassword = (): string => secrets().new_password;
 
 // ---------------------------------------------------------------------------------------------------------
 // Failures that never carry a secret.
@@ -95,24 +111,61 @@ export async function guarded<T>(what: string, run: () => Promise<T>): Promise<T
 
 export type ApiAnswer = { status: number; body: unknown };
 
-/** One POST to the API (or the webhook at its root): the status and the JSON body, `null` when there is none. */
-export async function apiPost(
+/** One call to the API (or the webhook at its root): the status and the JSON body, `null` when there is none. */
+async function apiSend(
   request: APIRequestContext,
+  method: "GET" | "POST" | "PUT" | "PATCH",
   path: string,
   options: { token?: string; headers?: Record<string, string>; data?: unknown },
 ): Promise<ApiAnswer> {
   const headers: Record<string, string> = { ...options.headers };
   if (options.token !== undefined) headers.Authorization = `Bearer ${options.token}`;
-  return guarded(`POST ${path}`, async () => {
-    const res = await request.post(`${API}${path}`, { headers, data: options.data });
+  return guarded(`${method} ${path}`, async () => {
+    const res = await request.fetch(`${API}${path}`, { method, headers, data: options.data });
     // a 204, or a body that is not JSON, has none: the status is what matters
     const body: unknown = await res.json().catch(() => null);
     return { status: res.status(), body };
   });
 }
 
+/** One POST to the API (or the webhook at its root): the status and the JSON body, `null` when there is none. */
+export function apiPost(
+  request: APIRequestContext,
+  path: string,
+  options: { token?: string; headers?: Record<string, string>; data?: unknown },
+): Promise<ApiAnswer> {
+  return apiSend(request, "POST", path, options);
+}
+
+/** One GET of the API. */
+export function apiGet(
+  request: APIRequestContext,
+  path: string,
+  options: { token?: string } = {},
+): Promise<ApiAnswer> {
+  return apiSend(request, "GET", path, options);
+}
+
+/** One PATCH of the API. */
+export function apiPatch(
+  request: APIRequestContext,
+  path: string,
+  options: { token?: string; data?: unknown },
+): Promise<ApiAnswer> {
+  return apiSend(request, "PATCH", path, options);
+}
+
+/** One PUT of the API. */
+export function apiPut(
+  request: APIRequestContext,
+  path: string,
+  options: { token?: string; data?: unknown },
+): Promise<ApiAnswer> {
+  return apiSend(request, "PUT", path, options);
+}
+
 /** Types a secret into a field. A failure says which field, not what was typed (a call log may quote it). */
-async function fillSecret(field: Locator, value: string, what: string): Promise<void> {
+export async function fillSecret(field: Locator, value: string, what: string): Promise<void> {
   try {
     await field.fill(value);
   } catch (error) {
@@ -131,11 +184,23 @@ function assertAlertId(id: string): string {
   return id;
 }
 
+/** The environment of a `psql` against the scratch database: credentials by PG* variables, never by argument. */
+export function psqlEnv(): Record<string, string> {
+  return { PATH: process.env.PATH ?? "", ...secrets().pg };
+}
+
+/** The directory the stack made for this run (it holds the scratch repository, see scripts/ui_e2e_stack.sh). */
+export function stateDir(): string {
+  const dir = process.env.E2E_STATE_DIR;
+  if (!dir) throw new Error("E2E_STATE_DIR is not set: run the suite through `make ui-e2e`");
+  return dir;
+}
+
 /** One statement against the scratch database (`psql`, credentials through the environment). */
 export function sql(statement: string): string {
   try {
     return execFileSync("psql", ["-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", statement], {
-      env: { PATH: process.env.PATH ?? "", ...secrets().pg },
+      env: psqlEnv(),
       encoding: "utf8",
       timeout: 15_000,
       stdio: ["ignore", "pipe", "ignore"],
@@ -159,6 +224,13 @@ export async function waitForTriage(id: string): Promise<void> {
   await expect
     .poll(() => Number(sql(query)), { message: `① ran on alert ${id}`, timeout: 30_000 })
     .toBeGreaterThanOrEqual(2);
+}
+
+const HOSTNAME = /^[a-z0-9._-]+$/i;
+
+function assertHostname(name: string): string {
+  if (!HOSTNAME.test(name)) throw new Error(`not a host name: ${name}`);
+  return name;
 }
 
 /** The count the database holds for a head: what the queue and the alert page are supposed to show. */
@@ -234,7 +306,7 @@ async function postWebhook(request: APIRequestContext, body: Record<string, unkn
  */
 export async function postAlert(
   request: APIRequestContext,
-  options: { tag: string; arm?: Arm },
+  options: { tag: string; arm?: Arm; rule?: string; inventory?: "low" | "medium" },
 ): Promise<Posted> {
   const id = newAlertId(options.arm);
   const suffix = randomInt(100_000, 999_999);
@@ -242,10 +314,17 @@ export async function postAlert(
     id,
     agent: `e2e-${options.tag}-${suffix}`,
     description: `E2E ${options.tag} ${suffix} routine event`,
-    rule: "99001",
+    rule: options.rule ?? "99001",
     srcip: `203.0.113.${randomInt(1, 250)}`,
     dstip: `10.9.${randomInt(1, 250)}.${randomInt(1, 250)}`,
   };
+  // An asset in the inventory is what the hard block "asset not in inventory" asks for: an alert of an agent
+  // that has one can be closed by a rule. It is put in before the webhook, so the worker finds it.
+  if (options.inventory !== undefined) {
+    sql(
+      `INSERT INTO assets (hostname, criticality) VALUES ('${assertHostname(alert.agent)}', '${options.inventory}')`,
+    );
+  }
   await postWebhook(request, wazuhBody(alert, id));
   return alert;
 }
@@ -268,37 +347,69 @@ export async function postDuplicates(
 export const reasonBox = (page: Page) =>
   page.getByRole("textbox", { name: S.decision.reason, exact: true });
 
+/**
+ * Who logs in: one of the users the stack seeds, or the account the admin suite creates (P11-T18; its password is
+ * the run's `new_password`, which the suite types into the create form).
+ */
+export type Account = Who | { username: string };
+
+function credentialsOf(account: Account): { username: string; password: string } {
+  return typeof account === "string"
+    ? { username: USERNAME[account], password: passwordOf(account) }
+    : { username: account.username, password: newUserPassword() };
+}
+
+/** Where a role starts (`roleHome` of src/auth/redirect.ts): the queue, the case list, the console's overview. */
+const HOME: Record<Who, RegExp> = {
+  t1: /\/queue$/,
+  t2: /\/cases$/,
+  t2b: /\/cases$/,
+  admin: /\/admin\/overview$/,
+  admin2: /\/admin\/overview$/,
+};
+
 /** Fills the login form and submits it. */
-async function submitLogin(page: Page, who: Who): Promise<void> {
-  await page.getByLabel(S.login.username).fill(USERNAME[who]);
-  await fillSecret(page.getByLabel(S.login.password), passwordOf(who), "password");
+async function submitLogin(page: Page, account: Account): Promise<void> {
+  const { username, password } = credentialsOf(account);
+  await page.getByLabel(S.login.username).fill(username);
+  await fillSecret(page.getByLabel(S.login.password), password, "password");
   await page.getByRole("button", { name: S.login.submit }).click();
 }
 
 /**
- * Logs in through the login page and waits for the role's home. A login that does not get there empties the
- * password field before the test fails, so that the failure's snapshot never holds the password (loginFailure.ts).
+ * Logs in through the login page and waits for the role's home (`landing` for the account the suite created,
+ * whose role the fixtures do not know). A login that does not get there empties the password field before the
+ * test fails, so that the failure's snapshot never holds the password (loginFailure.ts).
  */
-export async function loginAs(page: Page, who: Who): Promise<void> {
+export async function loginAs(page: Page, account: Account, landing?: RegExp): Promise<void> {
+  const home = landing ?? (typeof account === "string" ? HOME[account] : undefined);
+  if (home === undefined)
+    throw new Error("an account made by the suite needs the page it lands on");
   await page.goto("/login");
   await clearingOnFailure(page.getByLabel(S.login.password), async () => {
-    await submitLogin(page, who);
-    await expect(page).toHaveURL(who === "t1" ? /\/queue$/ : /\/cases$/);
+    await submitLogin(page, account);
+    await expect(page).toHaveURL(home);
   });
 }
 
 /** Logs in on the login page a session ended: the page returns to where the user was, so no URL is awaited. */
-export async function signIn(page: Page, who: Who): Promise<void> {
-  await clearingOnFailure(page.getByLabel(S.login.password), () => submitLogin(page, who));
+export async function signIn(page: Page, account: Account): Promise<void> {
+  await clearingOnFailure(page.getByLabel(S.login.password), () => submitLogin(page, account));
 }
 
-/** A token for `who` from the API, in a context of its own (no page holds it). */
-export async function apiLogin(request: APIRequestContext, who: Who): Promise<string> {
-  const answer = await apiPost(request, "/api/auth/login", {
-    data: { username: USERNAME[who], password: passwordOf(who) },
-  });
+/** A token for `account` from the API, in a context of its own (no page holds it). */
+export async function apiLogin(request: APIRequestContext, account: Account): Promise<string> {
+  const answer = await apiPost(request, "/api/auth/login", { data: credentialsOf(account) });
   expect(answer.status, "the API takes the login").toBe(200);
   return (answer.body as { token: string }).token;
+}
+
+/** A login with a password that is wrong on purpose: the status the API answers with (401, then 423 once locked). */
+export async function apiWrongLogin(request: APIRequestContext, username: string): Promise<number> {
+  const answer = await apiPost(request, "/api/auth/login", {
+    data: { username, password: "this-is-not-the-password" },
+  });
+  return answer.status;
 }
 
 /** Ends every session `who` holds, as the API's logout does (`sessions_invalid_before`), from outside the page. */

@@ -9,8 +9,9 @@ file, decoded and scanned in turn, since the HTML reporter keeps the whole repor
 of a run:
 
   * the run's own secrets, read from the environment (E2E_JWT_SECRET, E2E_WEBHOOK_API_KEY, E2E_T1_PASSWORD,
-    E2E_T2_PASSWORD, E2E_T2B_PASSWORD, and E2E_SCAN_PGPASSWORD, the password of the test cluster when it is
-    long enough to be told from ordinary text);
+    E2E_T2_PASSWORD, E2E_T2B_PASSWORD, E2E_ADMIN_PASSWORD, E2E_ADMIN2_PASSWORD, E2E_NEWUSER_PASSWORD (the account
+    the admin suite creates), and E2E_SCAN_PGPASSWORD, the password of the test cluster when it is long enough to
+    be told from ordinary text);
   * a DSN (`postgresql://`, `postgres://`);
   * something shaped like a session token (three dot-separated base64url parts starting `eyJ`) or a
     `Bearer` header.
@@ -36,6 +37,9 @@ NEEDLE_VARS = (
     "E2E_T1_PASSWORD",
     "E2E_T2_PASSWORD",
     "E2E_T2B_PASSWORD",
+    "E2E_ADMIN_PASSWORD",
+    "E2E_ADMIN2_PASSWORD",
+    "E2E_NEWUSER_PASSWORD",
     "E2E_SCAN_PGPASSWORD",
 )
 # A shorter needle would match ordinary text (a cluster password of "postgres" is in every log).
