@@ -1,7 +1,9 @@
 // src/features/admin/OverviewPage.test.tsx — `/admin/overview` (P11-T11, spec §4.1): the canvas's AdminOverview
 // and the Tổng quan section of AdminStates, over MSW. The page is read with the clock fixed at 30/09 09:40
 // (Ho Chi Minh) so the days the API leaves out can be zero-filled, and every answer the two write routes and
-// the two reads can give is shown where the spec puts it: in the dialog, in the block, or as the page's error.
+// the read can give is shown where the spec puts it: in the dialog, in the block, or as the page's error.
+// The cost card is the overview's own tenth section, `llm_month` (DEC-203, P11-T20 row 50): the page makes no
+// second read, and `serve()` keeps a handler on `llm/usage` only so that a test can say nobody called it.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -21,7 +23,7 @@ import {
   type OverviewSection,
 } from "../../api/admin";
 import { S } from "../../strings";
-import { adminKeys } from "./adminKeys";
+import { adminKeys, invalidateAfter } from "./adminKeys";
 import { OverviewPage } from "./OverviewPage";
 import { FAILED_JOBS_CAP, WINDOW_DAYS } from "./overviewModel";
 
@@ -138,7 +140,7 @@ function overview(over: Partial<OverviewResponse> = {}): OverviewResponse {
     },
     failed_jobs: JOBS,
     inventory: { assets: 6, identities: 3, iocs: 0, loaded_at: "2026-09-29T07:20:00+00:00" },
-    llm_month: { spent_usd: 0.5123, cap_usd: 30, pct: 1.7 },
+    llm_month: llmMonth(),
     ...over,
   };
 }
@@ -152,17 +154,14 @@ function failing(
   return overview({ ...nulls, errors: sections.map((section) => ({ section, error })) });
 }
 
-const llmUsage = (
-  month: Partial<{ spent_usd: number; cap_usd: number | null; pct: number | null }> = {},
-) => ({
-  range: "month",
-  month: { spent_usd: 0.5123, cap_usd: 30, pct: 1.7, projected_usd: 1.2, ...month },
-  by_pipeline_role: [],
-  quota: { limit: 20, window: "24h", users: [] },
-  recent: [],
-  limits: null,
-  limits_error: null,
-  tool_calls: 0,
+/** The `llm_month` section as the route serves it; `over` changes what the test is about. */
+const llmMonth = (
+  over: Partial<NonNullable<OverviewResponse["llm_month"]>> = {},
+): NonNullable<OverviewResponse["llm_month"]> => ({
+  spent_usd: 0.5123,
+  cap_usd: 30,
+  pct: 1.7,
+  ...over,
 });
 
 // --- the server -----------------------------------------------------------------------------------------------
@@ -186,9 +185,9 @@ type Served = {
 
 /** Each list is served one answer per request, the last one for every request after it. */
 function serve(
-  options: { overviews?: Answer[]; llm?: Answer[]; retry?: Answer[]; reload?: Answer[] } = {},
+  options: { overviews?: Answer[]; retry?: Answer[]; reload?: Answer[] } = {},
 ): Served {
-  const { overviews = [overview()], llm = [llmUsage()], retry, reload } = options;
+  const { overviews = [overview()], retry, reload } = options;
   const log: Served = { overview: [], llm: [], posts: [] };
   const nth = (list: Answer[], n: number): Answer => list[Math.min(n, list.length - 1)] as Answer;
   server.use(
@@ -196,9 +195,10 @@ function serve(
       log.overview.push(new URL(request.url).searchParams);
       return respond(nth(overviews, log.overview.length - 1));
     }),
+    // The overview does not read this any more (the cost card is `llm_month`): a call is recorded, and refused.
     http.get(LLM_URL, ({ request }) => {
       log.llm.push(new URL(request.url).searchParams);
-      return respond(nth(llm, log.llm.length - 1));
+      return HttpResponse.json({ detail: "the overview does not read llm/usage" }, { status: 500 });
     }),
   );
   const write = (path: string, list: Answer[]) => {
@@ -247,12 +247,11 @@ function renderPage(client: QueryClient = newClient()) {
 
 const updated = () => screen.findByText(/^Cập nhật \d\d\/\d\d \d\d:\d\d$/);
 
-/** The page, once the overview is in and the month's LLM cost too. */
+/** The page, once the overview is in (the month's LLM cost is one of its sections). */
 async function renderLoaded(options: Parameters<typeof serve>[0] = {}) {
   const log = serve(options);
   const view = renderPage();
   await updated();
-  await waitFor(() => expect(tile(P.kpi.llmCost)).not.toHaveTextContent("Đang tải…"));
   return { log, ...view };
 }
 
@@ -292,10 +291,10 @@ describe("the normal render", () => {
     expect(screen.getByText("Cập nhật 30/09 09:40")).toBeInTheDocument();
   });
 
-  it("reads the overview of 24h and the LLM usage of the month, once each", async () => {
+  it("reads the overview of 24h once, and never `llm/usage`: the cost card is the overview's `llm_month`", async () => {
     const { log } = await renderLoaded();
     expect(log.overview.map((p) => p.get("range"))).toEqual(["24h"]);
-    expect(log.llm.map((p) => p.get("range"))).toEqual(["month"]);
+    expect(log.llm).toEqual([]);
   });
 
   it("shows the four cards of the canvas", async () => {
@@ -582,12 +581,19 @@ describe("the range", () => {
     expect(tile("Alert nhận vào")).toHaveTextContent("7 ngày qua · 7 head sau gộp");
   });
 
-  it("does not read the month's LLM cost again when the range changes: it is the month's whatever the range", async () => {
+  it("keeps the month's LLM cost the month's whatever the range, and reads no `llm/usage` for it", async () => {
     const user = userEvent.setup();
-    const { log } = await renderLoaded({ overviews: [overview(), overview({ range: "30d" })] });
+    const { log } = await renderLoaded({
+      overviews: [overview(), overview({ range: "30d", llm_month: llmMonth({ spent_usd: 7 }) })],
+    });
+    expect(valueOf(tile("Chi phí LLM tháng này"), "Chi phí LLM tháng này")).toBe("$0,51");
     await user.selectOptions(select(), "30d");
     await waitFor(() => expect(log.overview).toHaveLength(2));
-    expect(log.llm).toHaveLength(1);
+    // the card comes with every answer of the overview, so it follows the answer, not a read of its own
+    await waitFor(() =>
+      expect(valueOf(tile("Chi phí LLM tháng này"), "Chi phí LLM tháng này")).toBe("$7,00"),
+    );
+    expect(log.llm).toEqual([]);
   });
 
   it("shows 31 days for 30d", async () => {
@@ -739,19 +745,17 @@ describe("loading", () => {
     expect(container.querySelectorAll("[data-skeleton]")).toHaveLength(0);
   });
 
-  it("shows the page before the month's LLM cost is in: that card waits alone", async () => {
+  it("draws the cost card with the other three, from the same answer: no card waits for a second read", async () => {
     const gate = deferred<Response>();
-    serve({ llm: [() => gate.promise] });
+    const log = serve({ overviews: [() => gate.promise] });
     renderPage();
+    expect(screen.queryByText("Chi phí LLM tháng này")).not.toBeInTheDocument();
+    gate.resolve(HttpResponse.json(overview()));
     await updated();
     expect(valueOf(tile("Alert nhận vào"), "Alert nhận vào")).toBe("7.040");
-    const cost = tile("Chi phí LLM tháng này");
-    expect(cost).toHaveTextContent("Đang tải…");
-    expect(within(cost).queryByRole("alert")).not.toBeInTheDocument();
-    gate.resolve(HttpResponse.json(llmUsage()));
-    // The card is drawn anew when its number arrives, so it is looked up again.
-    await waitFor(() => expect(tile("Chi phí LLM tháng này")).toHaveTextContent("$0,51"));
+    expect(valueOf(tile("Chi phí LLM tháng này"), "Chi phí LLM tháng này")).toBe("$0,51");
     expect(tile("Chi phí LLM tháng này")).not.toHaveTextContent("Đang tải…");
+    expect(log.llm).toEqual([]);
   });
 });
 
@@ -803,11 +807,12 @@ describe("the page cannot be read", () => {
     expect(log.overview.map((p) => p.get("range"))).toEqual(["24h", "30d"]);
   });
 
-  it("shows no page error when only the LLM cost cannot be read", async () => {
-    serve({ llm: [reason(503, "timeout")] });
+  it("shows no page error when only the month's LLM cost cannot be read", async () => {
+    serve({ overviews: [failing(["llm_month"], "timeout")] });
     renderPage();
     await updated();
     expect(screen.queryByRole("heading", { name: "Không tải được trang" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   });
 });
 
@@ -844,12 +849,15 @@ describe("one block failing alone (AdminStates)", () => {
     health: ["Sức khoẻ hệ thống"],
     failed_jobs: ["Job lỗi"],
     inventory: ["Kiểm kê tài sản"],
-    // The backend serves `llm_month` since P11-T20 part 2 (DEC-203), but the cost card still reads
-    // `llm/usage`: nothing is drawn from this section yet, so its failure shows nowhere. The frontend
-    // batch moves the card onto it, and this entry becomes the card's place.
-    llm_month: [],
+    // The cost card reads `llm_month` (DEC-203, P11-T20 row 50): its failure is drawn in the card.
+    llm_month: ["Chi phí LLM tháng này"],
   };
-  const TILES = new Set(["Alert nhận vào", "Cụm chờ Tier-1", "Case đang mở"]);
+  const TILES = new Set([
+    "Alert nhận vào",
+    "Cụm chờ Tier-1",
+    "Case đang mở",
+    "Chi phí LLM tháng này",
+  ]);
   const container = (name: string): HTMLElement => (TILES.has(name) ? tile(name) : block(name));
 
   /** What each section shows when it is served: the check that the others around a failure are drawn. */
@@ -863,7 +871,8 @@ describe("one block failing alone (AdminStates)", () => {
     health: () => expect(screen.getByText("10/10 ổn")).toBeInTheDocument(),
     failed_jobs: () => expect(screen.getByText("100412")).toBeInTheDocument(),
     inventory: () => expect(valueOf(block("Kiểm kê tài sản"), "Asset đang dùng")).toBe("6"),
-    llm_month: () => undefined, // not drawn yet: see WHERE
+    llm_month: () =>
+      expect(valueOf(tile("Chi phí LLM tháng này"), "Chi phí LLM tháng này")).toBe("$0,51"),
   };
 
   it("has a place for each of the ten sections of the API", () => {
@@ -871,19 +880,9 @@ describe("one block failing alone (AdminStates)", () => {
     expect(Object.keys(PROBE).sort()).toEqual([...OVERVIEW_SECTIONS].sort());
   });
 
-  // A section with no place on the page yet (`llm_month`) has no error to look for: its own test is below.
-  const cases = OVERVIEW_SECTIONS.filter((section) => WHERE[section].length > 0).flatMap(
-    (section) => (["timeout", "query_failed"] as const).map((error) => [section, error] as const),
+  const cases = OVERVIEW_SECTIONS.flatMap((section) =>
+    (["timeout", "query_failed"] as const).map((error) => [section, error] as const),
   );
-
-  it("draws nothing for a failed llm_month yet, and the rest of the page as it is", async () => {
-    await renderLoaded({ overviews: [failing(["llm_month"], "query_failed")] });
-    expect(screen.queryAllByRole("alert")).toHaveLength(0);
-    for (const other of OVERVIEW_SECTIONS) if (other !== "llm_month") PROBE[other]();
-    expect(
-      screen.getByRole("heading", { level: 1, name: "Tổng quan hệ thống" }),
-    ).toBeInTheDocument();
-  });
 
   it.each(cases)(
     "shows %s that failed (%s) as an error where it belongs, and the rest as it is",
@@ -900,6 +899,8 @@ describe("one block failing alone (AdminStates)", () => {
         );
       }
       for (const other of OVERVIEW_SECTIONS) if (other !== section) PROBE[other]();
+      // One h1, whichever section failed: a failed block never takes the page's title with it.
+      expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
       expect(
         screen.getByRole("heading", { level: 1, name: "Tổng quan hệ thống" }),
       ).toBeInTheDocument();
@@ -911,8 +912,9 @@ describe("one block failing alone (AdminStates)", () => {
 
   it("shows every block's own error when all ten failed, under the title and the range", async () => {
     await renderLoaded({ overviews: [failing(OVERVIEW_SECTIONS, "query_failed")] });
-    // 3 cards + 7 blocks (the day chart is both a card's and a block's section)
-    expect(screen.getAllByRole("alert")).toHaveLength(10);
+    // 4 cards + 7 blocks (the day chart is both a card's and a block's section)
+    expect(screen.getAllByRole("alert")).toHaveLength(11);
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(
       screen.getByRole("heading", { level: 1, name: "Tổng quan hệ thống" }),
     ).toBeInTheDocument();
@@ -976,44 +978,116 @@ describe("one block failing alone (AdminStates)", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows the LLM card's own error, and the rest of the page, when the month's usage cannot be read", async () => {
-    serve({ llm: [reason(503, "timeout")] });
-    renderPage();
-    await updated();
-    const cost = tile("Chi phí LLM tháng này");
-    expect(await within(cost).findByRole("alert")).toHaveTextContent("Không tải được");
-    expect(valueOf(tile("Alert nhận vào"), "Alert nhận vào")).toBe("7.040");
-    expect(screen.getAllByRole("alert")).toHaveLength(1);
-  });
+  // The cost card is the tenth section, `llm_month` (DEC-203): it fails alone, in the card, like the other nine.
+  describe("the cost card", () => {
+    const costCard = () => tile("Chi phí LLM tháng này");
 
-  it("shows the LLM card's error on a network failure too", async () => {
-    serve({ llm: [networkError] });
-    renderPage();
-    await updated();
-    expect(await within(tile("Chi phí LLM tháng này")).findByRole("alert")).toHaveTextContent(
-      "Không tải được",
+    it.each(["timeout", "query_failed"] as const)(
+      "shows its own error (%s), the other nine sections, and the page's single h1, when llm_month fails",
+      async (error) => {
+        await renderLoaded({ overviews: [failing(["llm_month"], error)] });
+        const alert = within(costCard()).getByRole("alert");
+        expect(alert).toHaveTextContent("Không tải được");
+        expect(alert).toHaveTextContent(
+          error === "timeout" ? "Truy vấn quá thời gian cho phép." : "Truy vấn thất bại.",
+        );
+        for (const other of OVERVIEW_SECTIONS) if (other !== "llm_month") PROBE[other]();
+        expect(screen.getAllByRole("alert")).toHaveLength(1);
+        expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+        expect(
+          screen.getByRole("heading", { level: 1, name: "Tổng quan hệ thống" }),
+        ).toBeInTheDocument();
+        expect(screen.getByRole("combobox", { name: "Khoảng thời gian" })).toBeInTheDocument();
+      },
     );
-  });
 
-  it("asks the month's usage again on the LLM card's Thử lại", async () => {
-    const user = userEvent.setup();
-    const log = serve({ llm: [reason(503, "query_failed"), llmUsage({ spent_usd: 2 })] });
-    renderPage();
-    await updated();
-    await user.click(
-      await within(tile("Chi phí LLM tháng này")).findByRole("button", { name: "Thử lại" }),
-    );
-    expect(await within(tile("Chi phí LLM tháng này")).findByText("$2,00")).toBeInTheDocument();
-    expect(log.llm).toHaveLength(2);
-    expect(log.overview).toHaveLength(1);
-  });
+    it("says the server did not send llm_month when it is null with no error listed", async () => {
+      await renderLoaded({ overviews: [overview({ llm_month: null })] });
+      expect(within(costCard()).getByRole("alert")).toHaveTextContent(
+        "Máy chủ không trả khối này.",
+      );
+      expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    });
 
-  it("says the cap cannot be read when the limits are unreadable, and still shows the spend", async () => {
-    await renderLoaded({ llm: [llmUsage({ cap_usd: null, pct: null })] });
-    const cost = tile("Chi phí LLM tháng này");
-    expect(valueOf(cost, "Chi phí LLM tháng này")).toBe("$0,51");
-    expect(cost).toHaveTextContent("không đọc được hạn mức");
-    expect(within(cost).queryByRole("alert")).not.toBeInTheDocument();
+    it("asks the overview again, not llm/usage, on the card's Thử lại, and draws the card when it answers", async () => {
+      const user = userEvent.setup();
+      const { log } = await renderLoaded({
+        overviews: [failing(["llm_month"]), overview({ llm_month: llmMonth({ spent_usd: 2 }) })],
+      });
+      await user.click(within(costCard()).getByRole("button", { name: "Thử lại" }));
+      await waitFor(() => expect(log.overview).toHaveLength(2));
+      expect(await within(costCard()).findByText("$2,00")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(log.llm).toEqual([]);
+    });
+
+    it("shows the spend and the cap with the share the server computed", async () => {
+      await renderLoaded({
+        overviews: [overview({ llm_month: llmMonth({ spent_usd: 24.6, cap_usd: 30, pct: 82 }) })],
+      });
+      expect(valueOf(costCard(), "Chi phí LLM tháng này")).toBe("$24,60");
+      expect(costCard()).toHaveTextContent("trần $30 · 82,0%");
+      expect(costCard()).not.toHaveTextContent("dừng gọi");
+    });
+
+    it("says the cap cannot be read when the limits are unreadable, read-only, and still shows the spend", async () => {
+      await renderLoaded({
+        overviews: [overview({ llm_month: llmMonth({ cap_usd: null, pct: null }) })],
+      });
+      expect(valueOf(costCard(), "Chi phí LLM tháng này")).toBe("$0,51");
+      expect(costCard()).toHaveTextContent("không đọc được hạn mức");
+      expect(costCard()).not.toHaveTextContent("dừng gọi");
+      expect(within(costCard()).queryByRole("alert")).not.toBeInTheDocument();
+      expect(within(costCard()).queryByRole("button")).not.toBeInTheDocument();
+    });
+
+    it("is stopped when the spend has reached the cap, whatever `pct` says", async () => {
+      // `pct` is rounded to one decimal by the route today, so it can still read 99,9 at the cap.
+      await renderLoaded({
+        overviews: [overview({ llm_month: llmMonth({ spent_usd: 30, cap_usd: 30, pct: 99.9 }) })],
+      });
+      expect(valueOf(costCard(), "Chi phí LLM tháng này")).toBe("$30,00");
+      expect(costCard()).toHaveTextContent("trần $30 · đã chạm trần, model dừng gọi");
+      expect(costCard()).not.toHaveTextContent("99,9%");
+    });
+
+    it("is stopped above the cap too", async () => {
+      await renderLoaded({
+        overviews: [overview({ llm_month: llmMonth({ spent_usd: 31.2, cap_usd: 30, pct: 104 }) })],
+      });
+      expect(costCard()).toHaveTextContent("đã chạm trần, model dừng gọi");
+    });
+
+    it("is not stopped under the cap even when `pct` reads 100", async () => {
+      await renderLoaded({
+        overviews: [overview({ llm_month: llmMonth({ spent_usd: 29.99, cap_usd: 30, pct: 100 }) })],
+      });
+      expect(costCard()).toHaveTextContent("trần $30 · 100,0%");
+      expect(costCard()).not.toHaveTextContent("dừng gọi");
+    });
+
+    it("is not stopped with nothing spent", async () => {
+      await renderLoaded({
+        overviews: [overview({ llm_month: llmMonth({ spent_usd: 0, cap_usd: 30, pct: 0 }) })],
+      });
+      expect(valueOf(costCard(), "Chi phí LLM tháng này")).toBe("$0,00");
+      expect(costCard()).toHaveTextContent("trần $30 · 0,0%");
+      expect(costCard()).not.toHaveTextContent("dừng gọi");
+    });
+
+    it("is refreshed by a limit change: `putLlmLimits` makes the overview stale, and the card follows", async () => {
+      const { client, log } = await renderLoaded({
+        overviews: [
+          overview(),
+          overview({ llm_month: llmMonth({ spent_usd: 0.5123, cap_usd: 50, pct: 1 }) }),
+        ],
+      });
+      expect(costCard()).toHaveTextContent("trần $30 · 1,7%");
+      await act(() => invalidateAfter(client, "putLlmLimits"));
+      await waitFor(() => expect(costCard()).toHaveTextContent("trần $50 · 1,0%"));
+      expect(log.overview).toHaveLength(2);
+      expect(log.llm).toEqual([]);
+    });
   });
 });
 
@@ -1744,7 +1818,7 @@ describe("the page renders nothing the server sent as markup", () => {
 
 // ==============================================================================================================
 describe("the refresh", () => {
-  it("reads the overview and the LLM cost again every 60 seconds, and not before", async () => {
+  it("reads the overview again every 60 seconds, and not before; the cost card is read with it", async () => {
     vi.useRealTimers();
     vi.useFakeTimers({
       toFake: ["Date", "setInterval", "clearInterval", "setTimeout", "clearTimeout"],
@@ -1759,12 +1833,13 @@ describe("the refresh", () => {
     expect(log.overview).toHaveLength(1);
     await act(() => vi.advanceTimersByTimeAsync(11_000));
     await waitFor(() => expect(log.overview).toHaveLength(2));
-    await waitFor(() => expect(log.llm).toHaveLength(2));
     await act(() => vi.advanceTimersByTimeAsync(60_000));
     await waitFor(() => expect(log.overview).toHaveLength(3));
+    // there is no second read, with its own timer, behind the cost card
+    expect(log.llm).toEqual([]);
   });
 
-  it("is set to 60 s on both reads, and not in the background (the tab must be visible)", async () => {
+  it("is set to 60 s on the one read, and not in the background (the tab must be visible)", async () => {
     serve();
     const { client } = renderPage();
     await updated();
@@ -1776,18 +1851,14 @@ describe("the refresh", () => {
         q.observers[0]?.options.refetchInterval,
         q.observers[0]?.options.refetchIntervalInBackground === true,
       ]);
-    expect(options).toEqual(
-      expect.arrayContaining([
-        [adminKeys.overview("24h"), 60_000, false],
-        [adminKeys.llmUsage("month"), 60_000, false],
-      ]),
-    );
+    expect(options).toEqual([[adminKeys.overview("24h"), 60_000, false]]);
+    expect(client.getQueryCache().findAll({ queryKey: adminKeys.llmAll })).toEqual([]);
   });
 });
 
 // ==============================================================================================================
 describe("what the page reads and writes", () => {
-  it("makes no request but the two reads, and only the two writes a dialog confirms", async () => {
+  it("makes no request but the one read, and only the two writes a dialog confirms", async () => {
     const user = userEvent.setup();
     const log = serve({
       retry: [{ job_id: 100412, status: "pending" }],
@@ -1805,6 +1876,7 @@ describe("what the page reads and writes", () => {
       ["/api/admin/jobs/100412/retry", "application/json", {}],
       [RELOAD_URL, "application/json", {}],
     ]);
+    expect(log.llm).toEqual([]);
   });
 });
 

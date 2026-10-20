@@ -168,6 +168,27 @@ export function sectionFailure(
   return entry.error === "timeout" || entry.error === "query_failed" ? entry.error : "unknown";
 }
 
+// --- the cost card -------------------------------------------------------------------------------------------
+
+/** The overview's `llm_month` when it was served (the section is `null` when its own query failed). */
+export type LlmMonth = NonNullable<OverviewResponse["llm_month"]>;
+
+/**
+ * What the cost card says about the month (DEC-203, P11-T20 row 50):
+ *   - `unknown`: the limits could not be read, so there is no cap to compare with (read-only, the LLM page's
+ *     "không đọc được hạn mức"); a cap with no `pct` is told the same way, as the card has no share to print;
+ *   - `stopped`: the spend has reached the cap, `spent_usd >= cap_usd`, the adapter's own comparison. Never
+ *     `pct`, which the route rounds to one decimal: it can read 99,9 at the cap and 100 a cent under it;
+ *   - `ok`: under the cap, with the share the route computed.
+ */
+export type LlmCardState = "ok" | "stopped" | "unknown";
+
+export function llmCardState(month: LlmMonth): LlmCardState {
+  if (month.cap_usd === null) return "unknown";
+  if (month.spent_usd >= month.cap_usd) return "stopped";
+  return month.pct === null ? "unknown" : "ok";
+}
+
 // --- a write that was refused -------------------------------------------------------------------------------
 
 /**

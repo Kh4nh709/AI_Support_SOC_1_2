@@ -117,22 +117,6 @@ export function TileError({
   );
 }
 
-/** A card still being read: a dash, and the words for a screen reader. */
-export function TileLoading({ label }: { label: string }) {
-  return (
-    <Tile
-      label={label}
-      value={
-        <span aria-busy="true">
-          {S.common.missing}
-          <span className="sr-only">{S.common.loading}</span>
-        </span>
-      }
-      sub={<span aria-hidden="true">&nbsp;</span>}
-    />
-  );
-}
-
 // --- the chart ----------------------------------------------------------------------------------------------
 
 const CHART = { width: 640, height: 240, axisY: 200, top: 30, side: 8, maxBar: 56 } as const;

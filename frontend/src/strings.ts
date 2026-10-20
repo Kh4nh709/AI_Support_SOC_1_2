@@ -558,6 +558,9 @@ export const S = {
         llmCost: "Chi phí LLM tháng này",
         llmCap: (cap: string, pct: string) => `trần ${cap} · ${pct}`,
         llmCapUnknown: "không đọc được hạn mức",
+        // P11-T20 row 50: the month's spend has reached the cap (`spent_usd >= cap_usd`); the share is left out,
+        // because the route rounds it. The same fact as the LLM page's red cost tile, in one line.
+        llmStopped: (cap: string) => `trần ${cap} · đã chạm trần, model dừng gọi`,
       },
 
       byDay: {
