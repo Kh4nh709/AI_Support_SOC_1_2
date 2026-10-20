@@ -23,7 +23,9 @@ const gate = vi.hoisted(() => {
   let release: () => void = () => {};
   let held: Promise<void> | null = null;
   return {
+    /** The page modules asked for (a factory runs when its module is first imported), and the pages rendered. */
     loads: [] as string[],
+    rendered: [] as string[],
     failAudit: false,
     /** From now on a page's module is not ready until `open()`. */
     hold() {
@@ -43,39 +45,74 @@ const gate = vi.hoisted(() => {
 vi.mock("./features/admin/OverviewPage", async () => {
   gate.loads.push("OverviewPage");
   await gate.ready();
-  return { OverviewPage: () => <h1>{S.admin.title.overview}</h1> };
+  return {
+    OverviewPage: () => {
+      gate.rendered.push("OverviewPage");
+      return <h1>{S.admin.title.overview}</h1>;
+    },
+  };
 });
 vi.mock("./features/admin/UsersPage", async () => {
   gate.loads.push("UsersPage");
   await gate.ready();
-  return { UsersPage: () => <h1>{S.admin.title.users}</h1> };
+  return {
+    UsersPage: () => {
+      gate.rendered.push("UsersPage");
+      return <h1>{S.admin.title.users}</h1>;
+    },
+  };
 });
 vi.mock("./features/admin/LlmPage", async () => {
   gate.loads.push("LlmPage");
   await gate.ready();
-  return { LlmPage: () => <h1>{S.admin.title.llm}</h1> };
+  return {
+    LlmPage: () => {
+      gate.rendered.push("LlmPage");
+      return <h1>{S.admin.title.llm}</h1>;
+    },
+  };
 });
 vi.mock("./features/admin/RulesPage", async () => {
   gate.loads.push("RulesPage");
   await gate.ready();
-  return { RulesPage: () => <h1>{S.admin.title.rules}</h1> };
+  return {
+    RulesPage: () => {
+      gate.rendered.push("RulesPage");
+      return <h1>{S.admin.title.rules}</h1>;
+    },
+  };
 });
 vi.mock("./features/admin/DigestPage", async () => {
   gate.loads.push("DigestPage");
   await gate.ready();
-  return { DigestPage: () => <h1>{S.admin.title.digest}</h1> };
+  return {
+    DigestPage: () => {
+      gate.rendered.push("DigestPage");
+      return <h1>{S.admin.title.digest}</h1>;
+    },
+  };
 });
 vi.mock("./features/admin/LabelsPage", async () => {
   gate.loads.push("LabelsPage");
   await gate.ready();
-  return { LabelsPage: () => <h1>{S.admin.title.labels}</h1> };
+  return {
+    LabelsPage: () => {
+      gate.rendered.push("LabelsPage");
+      return <h1>{S.admin.title.labels}</h1>;
+    },
+  };
 });
 vi.mock("./features/admin/AuditPage", async () => {
   gate.loads.push("AuditPage");
   // A chunk that cannot be fetched: the network, or a deploy that replaced the file this tab knows the name of.
   if (gate.failAudit) throw new Error("Failed to fetch dynamically imported module");
   await gate.ready();
-  return { AuditPage: () => <h1>{S.admin.title.audit}</h1> };
+  return {
+    AuditPage: () => {
+      gate.rendered.push("AuditPage");
+      return <h1>{S.admin.title.audit}</h1>;
+    },
+  };
 });
 
 const session = (role: Session["role"]): Session => ({
@@ -127,27 +164,40 @@ const ADMIN_PATHS = [
   "/admin/audit",
 ];
 
+/** Nothing asked for a page module, and no page rendered: said after the imports that a render started have settled. */
+async function expectNoPageFetched(): Promise<void> {
+  await vi.dynamicImportSettled();
+  expect(gate.loads).toEqual([]);
+  expect(gate.rendered).toEqual([]);
+}
+
 describe("who fetches an admin page", () => {
+  // A mock factory runs when its module is first imported, so what a test reads is what that test caused.
+  beforeEach(() => {
+    gate.loads.length = 0;
+    gate.rendered.length = 0;
+  });
+
   it.each(["tier1", "tier2"] as const)(
     "never asks for one when %s is turned away, whichever page it was",
-    (role) => {
+    async (role) => {
       for (const path of ADMIN_PATHS) {
         const view = renderAt(path, session(role));
         expect(where(), path).toBe("/queue");
         expect(screen.getByRole("alert")).toHaveTextContent(S.forbidden);
         view.unmount();
       }
-      expect(gate.loads).toEqual([]);
+      await expectNoPageFetched();
     },
   );
 
-  it("never asks for one when nobody is signed in", () => {
+  it("never asks for one when nobody is signed in", async () => {
     for (const path of ADMIN_PATHS) {
       const view = renderAt(path, null);
       expect(where(), path).toBe("/login");
       view.unmount();
     }
-    expect(gate.loads).toEqual([]);
+    await expectNoPageFetched();
   });
 
   it("asks for the page of the route, and only that one, when an admin opens it", async () => {
@@ -175,7 +225,7 @@ describe("who fetches an admin page", () => {
       await screen.findByRole("heading", { level: 1, name: S.admin.title.overview }),
     ).toBeInTheDocument();
     expect(where()).toBe("/admin/overview");
-    expect(gate.loads).toEqual(["UsersPage", "OverviewPage"]);
+    expect(gate.loads).toEqual(["OverviewPage"]);
   });
 });
 
