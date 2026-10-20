@@ -226,6 +226,9 @@ export function LlmLimits({
       setFaults({});
       setPending(null);
       setDialogError(null);
+      // The dialog hands the focus back to "Lưu hạn mức", which the cleared edits have just disabled: the focus
+      // would fall to the page. The first field is the form's own start.
+      setFocus({ field: "cap_usd" });
       onSaved();
       await invalidateAfter(client, "putLlmLimits");
     },

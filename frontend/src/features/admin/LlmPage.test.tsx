@@ -1396,6 +1396,26 @@ describe("a saved limit", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
+  it("puts the focus on the cap field after a save, since the button that opened the dialog is disabled by then", async () => {
+    serveUsage(usage());
+    servePut(() => saved({ cap_usd: 40 }));
+    const { user } = await openConfirm({ cap: "40" });
+    await user.click(confirmButton("Lưu"));
+    await screen.findByRole("status");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(saveButton()).toBeDisabled();
+    await waitFor(() => expect(capField()).toHaveFocus());
+  });
+
+  it("puts it on the cap field when another field was the one saved", async () => {
+    serveUsage(usage());
+    servePut(() => saved({ timeout_s: 90 }));
+    const { user } = await openConfirm({ timeout: "90" });
+    await user.click(confirmButton("Lưu"));
+    await screen.findByRole("status");
+    await waitFor(() => expect(capField()).toHaveFocus());
+  });
+
   it("shows what the PUT answered, at once and before the page is read again, not what was typed", async () => {
     const held = gate();
     // The server holds the cap at 41 although 40 was asked (the answer is what is in force).
