@@ -1009,6 +1009,69 @@ describe("a save the server refuses or cannot make", () => {
     );
   });
 
+  // After a stale refusal the page reads again and moves on to the next cluster: the form that had the focus is
+  // replaced by another, so the focus is asked for on the new cluster's head, as after a save. The refusal is a
+  // `role="alert"` beside the new form, so a screen reader hears it either way (P11-T16 review round 2, note 4).
+  describe("after a stale refusal, which replaces the screen", () => {
+    const stale: [string, Failure][] = [
+      [
+        "409 already labelled",
+        { status: 409, body: { detail: "already labelled by this labeler" } },
+      ],
+      ["404 not a candidate", { status: 404, body: { detail: "cluster is not a gold candidate" } }],
+    ];
+
+    it.each(stale)("%s: moves the focus to the next cluster's head", async (_name, failure) => {
+      serveNext(nextAnswer(), afterA());
+      servePost(failure);
+      renderPage();
+      await ready();
+      await save("escalate");
+      await waitFor(() => expect(headText()).toContain("port_scan"));
+      await waitFor(() =>
+        expect(screen.getByRole("region", { name: L.cluster.label })).toHaveFocus(),
+      );
+      expect(within(form()).getByRole("alert")).toBeInTheDocument();
+    });
+
+    it.each(stale)(
+      "%s: leaves the stale cluster's head alone while the re-read is on its way",
+      async (_name, failure) => {
+        const second = serveNextHeldAfterFirst(nextAnswer(), afterA());
+        servePost(failure);
+        renderPage();
+        await ready();
+        await save("escalate");
+        await within(form()).findByRole("alert");
+        expect(headText()).toContain("ssh_brute_force");
+        expect(screen.getByRole("region", { name: L.cluster.label })).not.toHaveFocus();
+        second.release();
+        await waitFor(() => expect(headText()).toContain("port_scan"));
+        await waitFor(() =>
+          expect(screen.getByRole("region", { name: L.cluster.label })).toHaveFocus(),
+        );
+      },
+    );
+
+    it.each<[string, Failure]>([
+      [
+        "403 not the signed-in labeller",
+        { status: 403, body: { detail: "labeler must be the current user" } },
+      ],
+      ["422", { status: 422, body: { detail: "note: at most 200 characters" } }],
+      ["503", { status: 503, body: { detail: "auth disabled: JWT_SECRET unset" } }],
+    ])("%s: asks for no focus, the screen is as it was", async (_name, failure) => {
+      serveNext(nextAnswer(), afterA());
+      servePost(failure);
+      renderPage();
+      await ready();
+      await save("escalate");
+      await within(form()).findByRole("alert");
+      expect(headText()).toContain("ssh_brute_force");
+      expect(screen.getByRole("region", { name: L.cluster.label })).not.toHaveFocus();
+    });
+  });
+
   it("409 frozen: says so in the neutral words, and the page becomes the frozen state", async () => {
     serveNext(nextAnswer(), forcedFrozen());
     servePost({ status: 409, body: { detail: "the gold set is frozen" } });
