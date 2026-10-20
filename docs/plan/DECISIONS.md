@@ -3473,3 +3473,8 @@ Amended 20/10 (whole-branch review round 2, N1; the Director's ruling): **item 2
 - **What was wrong.** The gate only ever forces ①'s verdict to `needs_review` (`security/gate.py`), and `triage.py` writes `llm.gate_forced` only when it did. So the bare presence of that event under a blind, undecided alert tells the verdict. A listed `llm.builder_violation` likewise tells that ① produced none, which is the `triage_status` fact `ANALYST_HIDE` hides.
 - **Corrected item 2.** The rows of `triage.suggested`, `llm.gate_forced` and `llm.builder_violation` about a blind, undecided alert are **left out** of the audit page and its total. The alerts join is made inside the page query. These rows come back once the alert is decided.
 - **What stays.** `autoclose.reviewed` stays listed with its suggestion keys masked: it is a person's event, and its presence tells no verdict. The usage `recent` rule stands (`outcome` and `subject_id` null, so a listed run is tied to no alert).
+Amended again 20/10 (part 4 fix round 1, the Coder's open point; the Director's ruling): **"① produced nothing" stays visible where an admin must act on it.**
+- **What is still visible.** A failed triage job is visible to an admin about a blind, undecided alert: the overview's `failed_jobs` row and the audit's `job.exhausted` event.
+- **Why that is accepted.** The admin has to see that job to retry it. The fact says that ① failed, not which way it leaned, so it cannot bias the human decision that the blind arm measures.
+- **The difference from `llm.builder_violation`.** That event is left out, because it carries nothing an admin acts on.
+- **Where it is recorded.** `docs/limitations.md` records this with parked row 57, on the retire branch.
