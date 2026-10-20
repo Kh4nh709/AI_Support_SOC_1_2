@@ -6,11 +6,13 @@
 
 /**
  * The text laid out as `ruff format` lays out a dict literal that no longer fits on one line: the `{` ends its
- * line and each pair has a line of its own. Only the white space changes. adminTypes.test.ts reads the backend
+ * line (and, for the argument of a call, starts one: `f(` then `{`), and each pair has a line of its own. Only the
+ * white space changes. adminTypes.test.ts reads the backend
  * through this as well, so an anchor that is written for today's one-line layout fails there, before a wrap does.
  */
 export function wrapDictLiterals(source: string): string {
   return source
+    .replace(/\((?=\s*\{)/g, "(\n        ")
     .replace(/\{(?=\s*(?:"|\*\*))/g, "{\n        ")
     .replace(/,[ \t]+(?="|\*\*)/g, ",\n        ");
 }

@@ -61,6 +61,13 @@ describe("wrapDictLiterals", () => {
     );
   });
 
+  it("puts a dict that is the argument of a call on a line of its own, as `ruff format` does at a short line length", () => {
+    const wrapped = wrapDictLiterals('errors.append({"section": s, "error": e})');
+    expect(wrapped).toBe('errors.append(\n        {\n        "section": s,\n        "error": e})');
+    expect(dictKeys(wrapped, /errors\.append\(\s*\{/)).toEqual(["section", "error"]);
+    expect(() => dictKeys(wrapped, /errors\.append\(\{/)).toThrow("anchor not found");
+  });
+
   it("leaves the keys of the literal as they were, so an anchor that survives it reads the same keys", () => {
     const source = 'return {"a": 1, "b": {"c": 2}, "d": [1, 2]}';
     expect(dictKeys(wrapDictLiterals(source), /return \{(?=\s*"a")/)).toEqual(

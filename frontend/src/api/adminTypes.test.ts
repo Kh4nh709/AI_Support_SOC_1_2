@@ -291,7 +291,7 @@ const ENTRIES: Entry[] = [
   {
     path: "OverviewResponse.errors",
     keys: ["section", "error"],
-    backend: () => dictKeys(overview(), /errors\.append\(\{/),
+    backend: () => dictKeys(overview(), /errors\.append\(\s*\{/),
   },
   {
     path: "OverviewResponse.alerts_by_day",
