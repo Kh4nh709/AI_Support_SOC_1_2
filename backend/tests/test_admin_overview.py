@@ -36,7 +36,7 @@ from app.audit import llm_runs
 from app.infra import config, jobs, settings
 from app.infra.auth import Claims
 from app.web import deps, main
-from app.web.routers import admin_overview
+from app.web.routers import admin_audit, admin_overview
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 
@@ -669,6 +669,69 @@ def test_failed_job_last_error_is_cut_to_200_characters_and_null_stays_null(clie
     assert len(by_subject["short"]["last_error"]) == 199
     assert by_subject["none"]["last_error"] is None
     assert by_subject["locked"]["locked_at"] is not None
+
+
+# P11-T20 part 4, M4: §6 says no answer carries a DSN, and the audit applies DEC-203's value rule
+# (`admin_audit.is_secret_value`) to this very text in `admin.job_retried`. The overview applies it
+# too: an error text holding `scheme://user:password@` is returned as the marker, whole.
+DSN = "postgresql://app_rw:Sup3rS3cretPassw0rd@db:5432/soc"
+
+
+@pytest.mark.db
+def test_a_failed_job_whose_error_holds_a_dsn_is_returned_as_the_marker(client) -> None:
+    tc, db, _ = client
+    _job(db, subject_id="leaky", last_error=f"connection to {DSN} refused")
+    _job(db, subject_id="at-the-start", last_error=f"{DSN}: refused", created_at=_ago(minutes=1))
+    _job(db, subject_id="plain", last_error="connection refused", created_at=_ago(minutes=2))
+
+    resp = _get(tc)
+    by_subject = {j["subject_id"]: j for j in resp.json()["failed_jobs"]}
+
+    assert by_subject["leaky"]["last_error"] == "[đã ẩn]"
+    assert by_subject["at-the-start"]["last_error"] == "[đã ẩn]"
+    assert by_subject["plain"]["last_error"] == "connection refused"
+    assert "Sup3rS3cret" not in resp.text and "app_rw" not in resp.text
+    # the rest of the row is untouched: it is the error that is withheld, not the job
+    assert by_subject["leaky"]["job_type"] == "triage" and by_subject["leaky"]["attempts"] == 3
+
+
+@pytest.mark.db
+def test_a_dsn_that_the_200_character_cut_would_split_is_still_caught(client) -> None:
+    """The text is cut to 200 characters in the database, and a cut inside the password leaves no
+    `@` for the rule to find: `...postgresql://app_rw:PPPP...` with the host beyond the cut. The
+    rule is applied to more of the text than is returned, and the whole error is withheld."""
+    tc, db, _ = client
+    split = "z" * 150 + " postgresql://app_rw:" + "P" * 60 + "@db:5432/soc"
+    assert split.index("@") > 200  # the cut at 200 ends inside the password
+    _job(db, subject_id="split", last_error=split)
+    _job(db, subject_id="beyond", last_error="y" * 300 + f" {DSN}", created_at=_ago(minutes=1))
+
+    resp = _get(tc)
+    by_subject = {j["subject_id"]: j for j in resp.json()["failed_jobs"]}
+
+    assert by_subject["split"]["last_error"] == "[đã ẩn]"
+    assert "PPPPP" not in resp.text
+    # a DSN past the 200 characters would never have been shown; the whole error goes anyway
+    assert by_subject["beyond"]["last_error"] == "[đã ẩn]"
+
+
+@pytest.mark.db
+def test_a_plain_error_is_still_cut_at_200_and_a_url_without_a_password_is_kept(client) -> None:
+    tc, db, _ = client
+    _job(db, subject_id="url", last_error="GET https://wazuh.indexer:19200/_search 503")
+    _job(db, subject_id="long", last_error="é" * 450, created_at=_ago(minutes=1))
+
+    by_subject = {j["subject_id"]: j for j in _get(tc).json()["failed_jobs"]}
+
+    assert by_subject["url"]["last_error"] == "GET https://wazuh.indexer:19200/_search 503"
+    assert by_subject["long"]["last_error"] == "é" * 200
+
+
+def test_the_overview_judges_the_error_with_the_audits_own_rule() -> None:
+    """One rule, one function: `_failed_jobs` calls `admin_audit.is_secret_value` and answers
+    `admin_audit.REDACTED`, so a change to the audit's rule changes the overview with it."""
+    assert admin_overview.admin_audit is admin_audit
+    assert admin_audit.is_secret_value(DSN) and admin_audit.REDACTED == "[đã ẩn]"
 
 
 @pytest.mark.db
