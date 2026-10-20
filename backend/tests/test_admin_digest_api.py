@@ -182,8 +182,9 @@ def _alert(
     description: str = "SSH brute force",
     is_synthetic: bool = False,
     auto_closed_event: bool = True,
+    suggestion_visible: bool = True,
 ) -> str:
-    """One alert. An alert created `auto_closed` also gets the `alert.auto_closed` audit event
+    """One alert (`suggestion_visible` false is the blind arm, DEC-101). An alert created `auto_closed` also gets the `alert.auto_closed` audit event
     `transitions.open_alert` writes in the same transaction as `closed_at = now()`, at
     `closed_at`: it is what dates the closing once a reopen has cleared `closed_at`."""
     alert_id = alert_id or f"p11t07-{next(_counter)}-{uuid.uuid4().hex[:6]}"
@@ -193,10 +194,10 @@ def _alert(
             alert_id, rule_id, rule_level, severity, description, agent_name,
             alert_time, category, resolved_by, mapping_version,
             event_bucket_hash, raw_payload, status, occurrence_count,
-            closed_at, autoclose_rule_id, close_reason, is_synthetic
+            closed_at, autoclose_rule_id, close_reason, is_synthetic, suggestion_visible
         ) VALUES (
             %s, '40112', 10, %s, %s, 'host-1', now(), 'brute_force', 'rule_groups', 'v1',
-            %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
         """,
         (
@@ -211,6 +212,7 @@ def _alert(
             autoclose_rule_id,
             "matched scanner" if closed_at is not None else None,
             is_synthetic,
+            suggestion_visible,
         ),
     )
     if auto_closed_event and status == "auto_closed" and closed_at is not None:
@@ -1025,6 +1027,177 @@ def test_a_row_reopened_by_a_digest_review_is_listed_whatever_became_of_it_since
 
     assert row["alert_id"] == sai and row["reopened_by_review"] is True
     assert row["reviewed_verdict"] == "wrong"
+
+
+# ---------------------------------------------------------------------------
+# The blind arm on a reopened row (P11-T20 part 4, finding I1's lesser case; DEC-101, §6.4)
+# ---------------------------------------------------------------------------
+
+
+def _blind_sai(
+    db: Any, admin_id: str, *, occurrence_count: int, suggested: str = "escalate"
+) -> str:
+    """A blind alert a rule auto-closed in `_DAY`, with ① run on it: not yet reviewed."""
+    alert_id = _alert(
+        db,
+        autoclose_rule_id=_rule(db, admin_id, name=f"blind-{next(_counter)}"),
+        occurrence_count=occurrence_count,
+        suggestion_visible=False,
+    )
+    _run(db, alert_id, suggested)
+    return alert_id
+
+
+@pytest.mark.db
+def test_a_blind_alert_shows_its_suggestion_while_it_is_auto_closed_and_not_after_sai(
+    client,
+) -> None:
+    """Auto-closed is a decided state (D8: the digest reviews it against ①), so the row shows ①.
+    "Sai" reopens it, which makes it blind and undecided again (A17): the 200's row and every
+    refetch then carry no suggestion and no disagreement flag."""
+    tc, db, admin = client
+    alert_id = _blind_sai(db, admin.user_id, occurrence_count=4)
+    (before,) = _get(tc).json()["rows"]
+    assert before["suggested_action"] == "escalate" and before["disagreement"] is True
+
+    posted = _post(tc, alert_id, "wrong")
+
+    assert posted.status_code == 200 and posted.json()["reopened"] is True
+    row = posted.json()["row"]
+    assert row["suggested_action"] is None and row["disagreement"] is False
+    assert row["reopened_by_review"] is True and row["reviewed_verdict"] == "wrong"
+    assert "escalate" not in posted.text
+    for _refetch in range(2):
+        resp = _get(tc)
+        assert resp.json()["rows"] == [row] and "escalate" not in resp.text
+
+
+@pytest.mark.db
+def test_a_reopened_row_on_the_visible_arm_keeps_its_suggestion(client) -> None:
+    tc, db, admin = client
+    alert_id = _alert(db, autoclose_rule_id=_rule(db, admin.user_id), suggestion_visible=True)
+    _run(db, alert_id, "escalate")
+    assert _post(tc, alert_id, "wrong").json()["row"]["suggested_action"] == "escalate"
+    (row,) = _get(tc).json()["rows"]
+    assert row["suggested_action"] == "escalate" and row["disagreement"] is True
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "decided", ["closed_fp", "closed_benign", "closed_confirmed", "escalated_tier2"]
+)
+def test_a_blind_reopened_row_shows_its_suggestion_again_once_it_is_decided(
+    client, decided: str
+) -> None:
+    tc, db, admin = client
+    alert_id = _blind_sai(db, admin.user_id, occurrence_count=3)
+    assert _post(tc, alert_id, "wrong").status_code == 200
+    assert _get(tc).json()["rows"][0]["suggested_action"] is None
+    sealed = ", sealed_at = now(), closed_at = now()" if decided != "escalated_tier2" else ""
+    db.execute(f"UPDATE alerts SET status = %s{sealed} WHERE alert_id = %s", (decided, alert_id))
+
+    (row,) = _get(tc).json()["rows"]
+
+    assert row["suggested_action"] == "escalate" and row["disagreement"] is True
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("status", ["queued_tier1", "tier1_active"])
+def test_a_blind_reopened_row_stays_withheld_while_tier1_works_on_it(client, status: str) -> None:
+    tc, db, admin = client
+    alert_id = _blind_sai(db, admin.user_id, occurrence_count=3)
+    assert _post(tc, alert_id, "wrong").status_code == 200
+    if status == "tier1_active":
+        transitions.acknowledge(db, alert_id, admin.user_id)
+    assert _alert_state(db, alert_id)[0] == status
+    (row,) = _get(tc).json()["rows"]
+    assert row["suggested_action"] is None and row["disagreement"] is False
+
+
+@pytest.mark.db
+def test_a_withheld_row_does_not_sort_as_a_disagreement(client) -> None:
+    """The order is `(not disagreement, -occurrence_count, alert_id)`. Were the withheld row's
+    flag set, 50 occurrences would put it ahead of the visible disagreement of 1; withheld, it
+    sorts among the rows with none, by its occurrences, ahead of the `false_positive` of 5."""
+    tc, db, admin = client
+    rule_id = _rule(db, admin.user_id)
+    visible = _alert(db, autoclose_rule_id=rule_id, occurrence_count=1)
+    _run(db, visible, "escalate")
+    agreeing = _alert(db, autoclose_rule_id=rule_id, occurrence_count=5)
+    _run(db, agreeing, "false_positive")
+    blind = _blind_sai(db, admin.user_id, occurrence_count=50)
+    assert _post(tc, blind, "wrong").status_code == 200
+
+    rows = _get(tc).json()["rows"]
+
+    assert [r["alert_id"] for r in rows] == [visible, blind, agreeing]
+    assert [r["disagreement"] for r in rows] == [True, False, False]
+
+
+@pytest.mark.db
+def test_the_suggestion_of_a_withheld_row_is_never_read(client, monkeypatch) -> None:
+    tc, db, admin = client
+    blind = _blind_sai(db, admin.user_id, occurrence_count=2)
+    assert _post(tc, blind, "wrong").status_code == 200
+    shown = _alert(db, autoclose_rule_id=_rule(db, admin.user_id), suggestion_visible=True)
+    _run(db, shown, "escalate")
+    assert _post(tc, shown, "wrong").status_code == 200
+    asked: list[list[str]] = []
+    real = digest.latest_suggestions
+
+    def spy(conn: Any, alert_ids: Any) -> Any:
+        asked.append(list(alert_ids))
+        return real(conn, alert_ids)
+
+    monkeypatch.setattr(digest, "latest_suggestions", spy)
+
+    rows = digest.reopened_by_review(db, _DAY, tz=TZ)
+
+    assert {r.alert_id for r in rows} == {blind, shown}
+    assert asked == [[shown]]  # one read, and the blind alert is not in it
+
+
+@pytest.mark.db
+def test_the_snapshot_row_of_a_post_is_withheld_when_the_alert_went_blind_in_between(
+    client, monkeypatch
+) -> None:
+    """`_row_now` falls back to the snapshot read before the review when neither list has the
+    alert any more (a reopen landed between). The snapshot was taken while it was auto-closed;
+    the response must not carry ① for an alert that is blind and undecided by now."""
+    tc, db, admin = client
+    alert_id = _blind_sai(db, admin.user_id, occurrence_count=2)
+
+    def reopened_meanwhile(*_a: Any, **_k: Any) -> list:
+        transitions.reopen(db, alert_id, admin.user_id, reason="a Tier 1 analyst, meanwhile")
+        return []
+
+    monkeypatch.setattr(admin_digest, "_day_rows", reopened_meanwhile)
+
+    resp = _post(tc, alert_id, "correct")
+
+    assert resp.status_code == 200, resp.text[:300]
+    row = resp.json()["row"]
+    assert row["suggested_action"] is None and row["disagreement"] is False
+    assert "escalate" not in resp.text
+
+
+@pytest.mark.db
+def test_the_snapshot_row_of_a_post_keeps_its_suggestion_on_the_visible_arm(
+    client, monkeypatch
+) -> None:
+    tc, db, admin = client
+    alert_id = _alert(db, autoclose_rule_id=_rule(db, admin.user_id), suggestion_visible=True)
+    _run(db, alert_id, "escalate")
+
+    def reopened_meanwhile(*_a: Any, **_k: Any) -> list:
+        transitions.reopen(db, alert_id, admin.user_id, reason="meanwhile")
+        return []
+
+    monkeypatch.setattr(admin_digest, "_day_rows", reopened_meanwhile)
+
+    row = _post(tc, alert_id, "correct").json()["row"]
+
+    assert row["suggested_action"] == "escalate" and row["disagreement"] is True
 
 
 @pytest.mark.db
