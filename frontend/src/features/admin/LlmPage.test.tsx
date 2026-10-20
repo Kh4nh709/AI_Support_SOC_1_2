@@ -1559,12 +1559,8 @@ describe("a saved limit", () => {
 // --- saving: what the server refuses ------------------------------------------------------------------------
 
 describe("a refused save", () => {
-  it.each([
-    ["not_integer", {}, "Phải là số nguyên"],
-    ["unknown", {}, "Trường này không được hỗ trợ"],
-    ["empty", {}, "Không được để trống"],
-    ["out_of_range", { min: 10, max: 90 }, "Phải từ 10 đến 90"],
-  ])("shows the 422 %s at the field it names, closing the dialog", async (reason, extra, text) => {
+  /** A 422 `{field: "timeout_s", reason, ...extra}`: the page shows it at that field and closes the dialog. */
+  async function refusedAtTimeout(reason: string, extra: object, text: string) {
     serveUsage(usage());
     servePut(() => refuse(422, { field: "timeout_s", reason, ...extra }));
     const { user } = await openConfirm({ cap: "40", timeout: "100" });
@@ -1575,7 +1571,24 @@ describe("a refused save", () => {
     expect(timeoutField()).toHaveFocus();
     expect(capField()).not.toHaveAttribute("aria-invalid", "true");
     expect(quotaField()).not.toHaveAttribute("aria-invalid", "true");
-  });
+  }
+
+  // The two reasons the route (`admin_llm.py` `_validate`) answers for a field of this form.
+  it.each([
+    ["not_integer", {}, "Phải là số nguyên"],
+    ["out_of_range", { min: 10, max: 90 }, "Phải từ 10 đến 90"],
+  ])("shows the 422 %s at the field it names, closing the dialog", refusedAtTimeout);
+
+  // Not shapes the route sends for `timeout_s`: `_validate` never answers `empty`, and answers `unknown` only for
+  // a field outside the form (the dialog test below). They pin the page's generic mapping of any
+  // `{field, reason}` of one of its fields to that reason's text, so a code the route starts to send is shown.
+  it.each([
+    ["unknown", {}, "Trường này không được hỗ trợ"],
+    ["empty", {}, "Không được để trống"],
+  ])(
+    "maps a 422 %s on a field of the form, which the route does not send, by its reason's text",
+    refusedAtTimeout,
+  );
 
   it("reads the page again after a 422 out_of_range, so the bounds on screen are the server's now", async () => {
     const narrower = usage({
