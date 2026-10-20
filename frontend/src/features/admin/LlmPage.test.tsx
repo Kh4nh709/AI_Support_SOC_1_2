@@ -2,7 +2,7 @@
 // month's cap, the table by pipeline and role, the ② quota of the last 24 hours, the last 20 calls, and the
 // form of the three limits with its confirmation. MSW answers the two routes; nothing is mocked above `fetch`.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { http, HttpResponse } from "msw";
@@ -1464,6 +1464,27 @@ describe("a saved limit", () => {
     expect(bodies.length).toBeLessThanOrEqual(1);
     held.release();
     await waitFor(() => expect(bodies).toHaveLength(1));
+  });
+
+  it("sends one PUT for two presses of the confirm button in the same tick", async () => {
+    // TanStack Query 5 tells React that a mutation is pending only on a `setTimeout(0)`, so `busy` has not
+    // reached the button when the second press lands: both find it enabled. Two `fireEvent.click` in one
+    // `act` is that case (`userEvent` waits between presses, which hides it). The shared latch stops the second.
+    serveUsage(usage());
+    const held = gate();
+    const bodies = servePut(async () => {
+      await held.opened;
+      return saved({ cap_usd: 40 });
+    });
+    await openConfirm({ cap: "40" });
+    const button = confirmButton("Lưu");
+    act(() => {
+      fireEvent.click(button);
+      fireEvent.click(button);
+    });
+    held.release();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodies).toEqual([{ cap_usd: 40 }]);
   });
 
   it("is busy while the save is out: both buttons are disabled and Esc does not cancel", async () => {

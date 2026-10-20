@@ -11,7 +11,8 @@
 //   - "Lưu hạn mức" opens the confirmation, which lists the changed fields only (old → new) and warns when
 //     the new cap is not above what the month has spent, because the adapter stops at `spent >= cap`;
 //   - the PUT answers `{limits}`: the page shows that at once (in every cached range) and then reads again
-//     through `invalidateAfter("putLlmLimits")`.
+//     through `invalidateAfter("putLlmLimits")`;
+//   - the confirm goes through `useSubmitLatch`: two presses in one tick send one PUT.
 // A failure that no field explains (a 503, a 403, the network) is shown inside the dialog, which stays open.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
@@ -33,6 +34,7 @@ import { S, adminReasonText } from "../../strings";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { adminKeys, invalidateAfter } from "./adminKeys";
 import { formatCount, formatUsd, limitChanges, type LimitFault } from "./llmFigures";
+import { useSubmitLatch } from "./useSubmitLatch";
 
 const L = S.admin.llmPage;
 
@@ -242,6 +244,8 @@ export function LlmLimits({
       if (failure.kind === "reason" && failure.reason === "limits_unavailable") onRefetch();
     },
   });
+  // One PUT for however many presses of "Lưu" land in one tick: `busy` reaches the dialog a tick late.
+  const run = useSubmitLatch(mutation);
 
   if (failClosed || limits === null) {
     return (
@@ -351,7 +355,7 @@ export function LlmLimits({
           tone={pending.belowSpent === null ? "primary" : "danger"}
           busy={mutation.isPending}
           error={dialogError}
-          onConfirm={() => mutation.mutate(pending.changes)}
+          onConfirm={() => void run(pending.changes)}
           onCancel={() => setPending(null)}
         >
           <DataTable
