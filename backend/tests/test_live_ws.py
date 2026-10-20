@@ -402,6 +402,17 @@ def test_a_valid_token_in_the_url_does_not_authenticate(client, committed_user):
 
 
 @pytest.mark.db
+def test_a_valid_token_in_the_session_cookie_alone_does_not_authenticate(client, committed_user):
+    """P11-T19 (spec §8): the `soc_session` cookie is gone, and the socket never read it. A real
+    user, a token that would verify, in the retired cookie only and no first message: 4401. (The
+    token travels in the first message and nowhere else; a socket that took it from the cookie
+    would answer `ready` here, and the close would never come.)"""
+    token = _token(committed_user())
+    with client.websocket_connect("/api/ws", headers={"Cookie": f"soc_session={token}"}) as ws:
+        assert _close_code(ws) == 4401
+
+
+@pytest.mark.db
 @pytest.mark.parametrize(
     "make_token",
     [

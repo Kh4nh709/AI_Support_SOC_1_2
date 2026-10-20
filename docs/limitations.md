@@ -630,9 +630,9 @@ the Measured paragraph of item (ix) in section B.
 ### (xxxv) · The database and the application answer on every interface of the lab host
 
 - **Statement.** The compose stack publishes PostgreSQL on `0.0.0.0:55432` and the application (plain
-  HTTP, session cookie not `Secure`) on `0.0.0.0:8000`, where `docs/db-docker.md` says `127.0.0.1`.
-  Docker's published ports bypass a host firewall (DEC-114). On the same host `/home/user1` has mode 777,
-  and the host has a second local account (DEC-113).
+  HTTP; until P11-T19 a session cookie without `Secure`) on `0.0.0.0:8000`, where `docs/db-docker.md`
+  says `127.0.0.1`. Docker's published ports bypass a host firewall (DEC-114). On the same host
+  `/home/user1` has mode 777, and the host has a second local account (DEC-113).
 - **Measured.** `docker ps` on 25/09 (DEC-114). `/home/user1` mode 777 (DEC-113), still 777 on 25/09
   (DEC-114). At close-out: ⟦G2: the host addresses the db and app ports are published on at P8-T06,
   127.0.0.1 or 0.0.0.0, from docker ps⟧.

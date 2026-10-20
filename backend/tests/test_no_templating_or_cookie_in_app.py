@@ -41,6 +41,7 @@ APP_WIDE_TERMS = {
     "a rendered template": r"TemplateResponse",
     "an HTML response": r"HTMLResponse",
     "a redirect response": r"RedirectResponse",
+    'an HTML media type, e.g. a plain Response(media_type="text/html")': r"text/html",
     "static files": r"StaticFiles",
 }
 

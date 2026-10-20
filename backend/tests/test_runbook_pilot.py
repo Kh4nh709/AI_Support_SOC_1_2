@@ -49,7 +49,7 @@ REQUIRED_STRINGS = [
     "source_cursor",
     "seed-users",
     "make run-app",
-    "127.0.0.1:8000/login",
+    "127.0.0.1:8000/api/auth/me",
     "Nhận xử lý",
     "llm_runs",
     "source='lab'",
