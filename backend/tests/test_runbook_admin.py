@@ -18,7 +18,9 @@ No database; reads the one file.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -64,7 +66,7 @@ def test_the_two_owner_steps_are_one_procedure_in_dec_205s_order() -> None:
         "docker compose up -d --build ui",
         "docker compose restart app worker",  # row 5
         "the gate of spec §8",  # the Owner uses the React pages
-        "fast-forward `main` to `director/admin-v1-1-retire`",  # the retire step
+        "git merge --ff-only director/admin-v1-1-retire",  # the retire step
     ]
     positions = [block.index(step) for step in in_order]
     assert positions == sorted(positions), dict(zip(in_order, positions))
@@ -73,13 +75,13 @@ def test_the_two_owner_steps_are_one_procedure_in_dec_205s_order() -> None:
     assert row.index("director/admin-v1-1-retire") < row.index(
         "`docker compose restart app worker`"
     )
-    assert positions[-1] == block.index(row) + row.index("fast-forward")
+    assert positions[-1] == block.index(row) + row.index("git merge --ff-only")
 
 
 def test_the_retire_step_is_a_fast_forward_and_a_restart_and_nothing_else() -> None:
     row = _retire_row()
     command = row.split("|")[2]
-    assert "fast-forward `main` to `director/admin-v1-1-retire`" in command
+    assert "`git merge --ff-only director/admin-v1-1-retire` (on `main`)" in command
     for forbidden in ("make migrate", "--build", "docker compose up"):
         assert forbidden not in command, forbidden
     assert "no migration and no `ui` rebuild" in row
@@ -97,13 +99,145 @@ def test_the_steps_are_written_once() -> None:
     each command of the release is in the block only (not in the `UI` or the `Admin console`
     sections, which may name a branch but never give the command)."""
     text = _text()
-    assert "git merge --ff-only director/admin-v1-1" in _section(BLOCK)
-    assert text.count("git merge --ff-only director/admin-v1-1") == 1
-    assert text.count("fast-forward `main` to `director/admin-v1-1-retire`") == 1
+    assert "git merge --ff-only director/admin-v1-1`" in _section(BLOCK)
+    # the v1.1 deploy's command ends at its branch name (a backtick), so the retire command, which
+    # begins the same way, is not counted as a second copy of it
+    assert len(re.findall(r"git merge --ff-only director/admin-v1-1`", text)) == 1
+    assert len(re.findall(r"git merge --ff-only director/admin-v1-1-retire`", text)) == 1
     console = _section(CONSOLE)
     for command in ("make migrate", "docker compose up -d --build ui", "docker compose restart"):
         assert command not in console, f"the Admin console section repeats {command!r}"
     assert BLOCK.removeprefix("## ") in console  # and it says where the steps are
+
+
+MERGE = "0c6d7b9"  # the merge commit of the retire branch (parents: P11-T19's side, the v1.1 tip)
+WHERE_ROW = "the UI section's rollback row"
+WHERE_PARAGRAPH = "the retire step's rollback paragraph"
+
+
+def _rollback_texts() -> dict[str, str]:
+    """The two places the rollback of the retire step is written: the row of the `UI (service
+    `ui`)` table and the paragraph after the retire step's own row."""
+    text = _text()
+    row = [ln for ln in text.splitlines() if ln.startswith("| **rollback** of P11-T19")]
+    assert len(row) == 1, f"expected one rollback row in the UI section, found {len(row)}"
+    paragraphs = _section(BLOCK).split("\n\n")
+    paragraph = [p for p in paragraphs if p.startswith("**Rollback of the retire")]
+    assert len(paragraph) == 1, "the retire step's rollback paragraph is gone"
+    return {WHERE_ROW: row[0], WHERE_PARAGRAPH: paragraph[0]}
+
+
+@pytest.mark.parametrize("where", [WHERE_ROW, WHERE_PARAGRAPH])
+def test_the_rollback_reverts_the_merge_commit_on_its_second_parent(where: str) -> None:
+    """The newest `P11-T19:` commit is a MERGE (`0c6d7b9`; parents: the retire branch's own side and
+    the v1.1 tip `17ae66c`). `git revert` refuses a merge without `-m`; `-m 1` would take out all of
+    v1.1 and keep the retire changes; reverting the older commits one by one conflicts. The mainline
+    is the v1.1 tip: `-m 2`. Commits after the merge (fix commits) are reverted first."""
+    text = _rollback_texts()[where]
+    assert f"`git revert --no-edit -m 2 {MERGE}`" in text
+    assert f"`git log --format=%h {MERGE}..`" in text  # how to list what came after it
+    assert f"every commit after `{MERGE}`, newest first" in text
+    assert "`docker compose restart app worker`" in text
+    order = [
+        f"every commit after `{MERGE}`, newest first",
+        f"git revert --no-edit -m 2 {MERGE}",
+        "docker compose restart app worker",
+    ]
+    positions = [text.index(step) for step in order]
+    assert positions == sorted(positions), dict(zip(order, positions))
+    # the wording that could not be followed is gone
+    assert "each `P11-T19:` commit" not in text
+    assert "`git revert` each" not in text
+    assert "-m 1" not in text
+
+
+def test_the_old_rollback_wording_is_gone_from_the_whole_runbook() -> None:
+    assert "each `P11-T19:` commit" not in _text()
+    assert "a fast-forwarded merge has no merge commit" not in _text()
+
+
+GIT_ENV = {
+    "GIT_AUTHOR_NAME": "t",
+    "GIT_AUTHOR_EMAIL": "t@example.invalid",
+    "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@example.invalid",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
+}
+
+
+def _git(repo: Path, *args: str, check: bool = True) -> str:
+    env = {**GIT_ENV, "PATH": os.environ["PATH"]}
+    done = subprocess.run(
+        ["git", *args], cwd=repo, env=env, capture_output=True, text=True, check=False
+    )
+    if check:
+        assert done.returncode == 0, f"git {' '.join(args)}: {done.stderr.strip()}"
+    return done.stdout.strip()
+
+
+def test_the_documented_revert_sequence_gives_back_the_v1_1_tree(tmp_path: Path) -> None:
+    """The shape of the real history, in a scratch repository (never this one): a base, a v1.1 tip
+    that changes a file the retire side changed too, a retire branch that deletes what the retire
+    step deletes, the merge of the v1.1 tip into it (parents: the retire side, then the v1.1 tip,
+    one conflict resolved by hand), and a fix commit after it. `main` is fast-forwarded to the
+    retire branch. The runbook's sequence (the commits after the merge, newest first, then the merge
+    with `-m 2`) leaves a tree equal to the v1.1 tip's, for every path."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "pages.py").write_text("page\n")
+    (repo / "api.py").write_text("api\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base")
+    _git(repo, "checkout", "-q", "-b", "retire")
+    (repo / "pages.py").unlink()  # P11-T19: the page goes
+    (repo / "api.py").write_text("api, cookie gone\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "P11-T19: removal")
+    _git(repo, "checkout", "-q", "-b", "v11", "main")
+    (repo / "api.py").write_text("api\nv1.1 route\n")
+    (repo / "new_page.tsx").write_text("react\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "v1.1")
+    v11_tip = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "retire")
+    retire_side = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "merge", "--no-edit", "v11", check=False)  # conflicts in api.py: both sides survive
+    (repo / "api.py").write_text("api, cookie gone\nv1.1 route\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "--no-edit")
+    merge = _git(repo, "rev-parse", "HEAD")
+    assert _git(repo, "rev-list", "--parents", "-n", "1", merge).split()[1:] == [
+        retire_side,
+        v11_tip,
+    ], "the merge's second parent is the v1.1 tip"
+    (repo / "NOTES.md").write_text("a fix after the merge\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "P11-T19: fix round")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--ff-only", "retire")
+
+    # a plain revert of the merge is refused (why the runbook gives -m)
+    refused = subprocess.run(
+        ["git", "revert", "--no-edit", merge],
+        cwd=repo,
+        env={**GIT_ENV, "PATH": os.environ["PATH"]},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert refused.returncode != 0 and "no -m option was given" in refused.stderr
+
+    # the runbook's rollback, on `main`
+    after = _git(repo, "log", "--format=%h", f"{merge}..").split()
+    assert len(after) == 1
+    for sha in after:  # newest first, as `git log` lists them
+        _git(repo, "revert", "--no-edit", sha)
+    _git(repo, "revert", "--no-edit", "-m", "2", merge)
+
+    assert _git(repo, "diff", "--stat", v11_tip) == ""
+    assert _git(repo, "rev-parse", "HEAD^{tree}") == _git(repo, "rev-parse", f"{v11_tip}^{{tree}}")
 
 
 @pytest.mark.parametrize(
