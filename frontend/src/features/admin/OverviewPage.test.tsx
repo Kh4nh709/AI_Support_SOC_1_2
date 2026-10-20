@@ -1861,6 +1861,25 @@ describe("the inventory", () => {
     expect(within(inventory()).getByRole("button", { name: "Nạp lại kiểm kê" })).toHaveFocus();
   });
 
+  it("can reload again while the overview is still being read: the next dialog is not busy and sends", async () => {
+    const user = userEvent.setup();
+    // Two reads are held by one gate (each builds its own Response: a body can be read only once).
+    const gate = deferred<OverviewResponse>();
+    const held = () => gate.promise.then((body) => HttpResponse.json(body));
+    const log = serve({ overviews: [overview(), held], reload: [report(), report({ assets: 8 })] });
+    renderPage();
+    await updated();
+    await user.click(within(await openReload(user)).getByRole("button", { name: "Nạp lại" }));
+    await waitFor(() => expect(log.overview).toHaveLength(2));
+    const confirm = within(await openReload(user)).getByRole("button", { name: "Nạp lại" });
+    expect(confirm).toBeEnabled();
+    await user.click(confirm);
+    await waitFor(() => expect(log.posts).toHaveLength(2));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    gate.resolve(overview());
+    await waitFor(() => expect(log.overview).toHaveLength(3));
+  });
+
   it("shows the counts of what was loaded in the block, closes the dialog, and reads the overview again", async () => {
     const user = userEvent.setup();
     const log = serve({
