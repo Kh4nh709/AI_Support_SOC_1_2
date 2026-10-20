@@ -26,15 +26,42 @@ describe("dictKeys", () => {
   });
 
   it("throws on a quote that is not paired, wherever it is in the literal", () => {
-    // A single-quoted Python string that holds a double quote: the odd quote opens a string that never closes.
+    // Each opens a string that never closes. (A `"` inside a single-quoted string or a comment is no longer one of
+    // them: the reader skips both, see below.)
     for (const source of [
-      'return {"a": \'say "hi\', "b": 2}',
       'return {"a": 1, "b": {"c": "x}}\n',
-      'return {"a": 1,  # say "hi\n "b": 2}',
       'return {"a',
+      'return {"a": \'never closed}',
+      'return {"a": "ends in a backslash\\',
     ]) {
       expect(() => dictKeys(source, RETURN), source).toThrow(/^unterminated string after: /);
     }
+  });
+
+  it("reads a key that has any amount of white space before its colon", () => {
+    expect(dictKeys('return {"a"      : 1, "b"\n   : 2, "c"\t: 3}', RETURN)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("reads past a string in single quotes that holds a double quote, which is how ruff writes one", () => {
+    const source = 'return {"a": \'say "hi\', "b": \'say "bye\', "c": 1}';
+    expect(dictKeys(source, RETURN)).toEqual(["a", "b", "c"]);
+  });
+
+  it('reads past a # comment: a brace or a quote in one is not code, and a `"k":` in one is not a key', () => {
+    const source = [
+      "return {",
+      '    "a": 1,  # closes } early, opens { too, and says "hi',
+      '    # "k": not a key',
+      '    "b": 2,',
+      "}",
+    ].join("\n");
+    expect(dictKeys(source, RETURN)).toEqual(["a", "b"]);
+    // A `#` inside a string is not a comment.
+    expect(dictKeys('return {"a": "x # y", "b": 1}', RETURN)).toEqual(["a", "b"]);
   });
 
   it("skips a quote that a backslash escapes, and still reads the key after it", () => {

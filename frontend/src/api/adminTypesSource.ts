@@ -17,21 +17,28 @@ export function wrapDictLiterals(source: string): string {
     .replace(/,[ \t]+(?="|\*\*)/g, ",\n        ");
 }
 
-/** The index of the `"` that closes the string whose first character is at `from`, or -1. A backslash skips the next character. */
-function closingQuote(source: string, from: number): number {
+/** The index of the `quote` that closes the string whose first character is at `from`, or -1. A backslash skips the next character. */
+function closingQuote(source: string, from: number, quote: string): number {
   for (let i = from; i < source.length; i += 1) {
     const ch = source.charAt(i);
     if (ch === "\\") i += 1;
-    else if (ch === '"') return i;
+    else if (ch === quote) return i;
   }
   return -1;
 }
 
+/** A colon after any white space, read where `lastIndex` is (it is sticky): what follows the closing quote of a key. */
+const COLON = /\s*:/y;
+
 /**
  * The string keys of the dict literal whose `{` ends the match of `anchor`, at its top level: `"key":`.
- * Strings are skipped whole, so a brace in one does not count, and so is a quote escaped inside one.
- * It throws, and never loops, when the anchor is not found or does not end at a brace, when a string has no
- * closing quote, or when the braces do not balance.
+ * Strings, in double or single quotes, are skipped whole, so a brace or a quote in one does not count, and so is a
+ * quote escaped inside one; a `#` comment is skipped to the end of its line. It throws, and never loops, when the
+ * anchor is not found or does not end at a brace, when a string has no closing quote, or when the braces do not balance.
+ *
+ * Known limits, because the backend's dicts do not need more: a triple-quoted string is read as three strings in a
+ * row (harmless for an empty or a plain one, wrong for one that holds a quote), a raw string that ends in a backslash
+ * is read as if the backslash escaped its quote, and only a key in double quotes is a key (ruff writes them so).
  */
 export function dictKeys(source: string, anchor: RegExp): string[] {
   const m = anchor.exec(source);
@@ -42,15 +49,17 @@ export function dictKeys(source: string, anchor: RegExp): string[] {
   let depth = 0;
   for (let i = open; i < source.length; i += 1) {
     const ch = source.charAt(i);
-    if (ch === '"') {
-      const end = closingQuote(source, i + 1);
+    if (ch === '"' || ch === "'") {
+      const end = closingQuote(source, i + 1, ch);
       // No closing quote: `end` would be -1, `i = end` would send the scan back to the start of the text, and it
       // would never leave it.
       if (end === -1) throw new Error(`unterminated string after: ${String(anchor)}`);
-      if (depth === 1 && /^\s*:/.test(source.slice(end + 1, end + 6))) {
-        keys.push(source.slice(i + 1, end));
-      }
+      COLON.lastIndex = end + 1;
+      if (ch === '"' && depth === 1 && COLON.test(source)) keys.push(source.slice(i + 1, end));
       i = end;
+    } else if (ch === "#") {
+      const eol = source.indexOf("\n", i);
+      i = eol === -1 ? source.length : eol;
     } else if (ch === "{") depth += 1;
     else if (ch === "}") {
       depth -= 1;
