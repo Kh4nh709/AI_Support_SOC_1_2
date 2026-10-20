@@ -1,18 +1,20 @@
-"""P5-T10 — the admin rules screen: `web/routers/admin_rules.py`,
-`web/templates/rules.html`. A screen over three functions `app.ingest.autoclose`
-already has and already tests (`simulate`, `rule_width_report`, `reload_rules`)
-— this file inserts alerts and rules directly with plain SQL and never imports
-from `test_autoclose.py` (a different card's test file, out of this card's
-scope), so it stays self-contained.
+"""P5-T10 — the admin rules API: `web/routers/admin_rules.py`. A screen's worth of operations over
+three functions `app.ingest.autoclose` already has and already tests (`simulate`,
+`rule_width_report`, `reload_rules`) — this file inserts alerts and rules directly with plain SQL
+and never imports from `test_autoclose.py` (a different card's test file), so it stays
+self-contained.
+
+P11-T19 retired the Jinja page this file was named for (`GET /admin/rules`, the preview, the
+create and the toggle forms) and its tests. What those tests proved about logic the JSON API keeps
+(the preview writes nothing, a create and a toggle are audited and live at once, a bad rule writes
+nothing, the width figure) is kept here through the four `/api/admin/rules*` routes, whose own
+tests were already in this file (P11-T06: the hard-block tally, the threshold).
 
 Every db-marked test uses the shared `db` fixture, overridden into the app as
 `deps.get_conn` directly (no commit/rollback shape — `test_reload_inventory.py`'s
 pattern): every write in a test is visible to that same test's own assertions
 because they share one uncommitted transaction, and the fixture's teardown
-rolls the whole thing back. `pages.page_user` and `deps.current_user` are both
-overridden (P5-T10's routes mix `page_user`-gated HTML routes and
-`require_role("admin")`-gated API routes, and `page_user` does not go through
-`deps.current_user` — it reads the cookie/token directly via `optional_user`).
+rolls the whole thing back. `deps.current_user` is overridden to a fixed admin.
 
 One exception: `deps.require_role`'s dependency commits *before* raising its
 403 (P4 planning decision 3 — the `authz.denied` row must survive), and that
@@ -22,7 +24,7 @@ this file into whichever test runs next in the same `make test-db` session —
 measured: `test_schema_v3_017.py` sorts after `test_pages_rules.py` and
 assumes `audit_events` starts empty, so it broke on exactly this leak the
 first time this test used the shared `db` fixture. `test_non_admin_is_refused`
-below therefore gets its own scratch database (`test_pages_login.py`'s
+below therefore gets its own scratch database (`test_auth.py`'s
 pattern), so its one real commit never reaches a shared table.
 """
 
@@ -46,7 +48,7 @@ from app.infra import auth, config
 from app.infra.auth import Claims
 from app.ingest import autoclose
 from app.web import deps, main
-from app.web.routers import admin_rules, pages
+from app.web.routers import admin_rules
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 
@@ -117,16 +119,6 @@ def _ctx(**overrides: Any) -> AlertContext:
     }
     fields.update(overrides)
     return AlertContext(**fields)
-
-
-def _scoped(html: str, marker: str, *, until: str = "</ul>") -> str:
-    """The substring of `html` from `marker` up to the next `until` — scopes
-    an assertion to one `data-field=`/`id=` block instead of the whole page
-    (review round 1: two adjacent breakdowns made a loose substring check
-    pass for reasons that had nothing to do with the thing under test)."""
-    start = html.index(marker)
-    end = html.index(until, start)
-    return html[start:end]
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +202,7 @@ def _seed_admin(conn: Any, *, prefix: str = "admin") -> tuple[str, Claims]:
 
 
 # ---------------------------------------------------------------------------
-# The client — get_conn -> db; page_user and current_user -> a fixed Claims
+# The client — get_conn -> db; current_user -> a fixed admin Claims
 # ---------------------------------------------------------------------------
 
 
@@ -219,337 +211,24 @@ def client(db):
     admin_id, claims = _seed_admin(db)
     main.app.dependency_overrides[deps.get_conn] = lambda: db
     main.app.dependency_overrides[deps.current_user] = lambda: claims
-    main.app.dependency_overrides[pages.page_user] = lambda: claims
     try:
         yield TestClient(main.app, follow_redirects=False), db, admin_id
     finally:
         main.app.dependency_overrides.pop(deps.get_conn, None)
         main.app.dependency_overrides.pop(deps.current_user, None)
-        main.app.dependency_overrides.pop(pages.page_user, None)
 
 
 # ---------------------------------------------------------------------------
-# The preview: renders every SimulateStats field, writes nothing
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.db
-def test_preview_writes_nothing(client) -> None:
-    """Also the card's own acceptance-1 name: renders every `SimulateStats`
-    field and writes nothing (design note 6)."""
-    tc, db, _ = client
-    # severity "low" (distinct from asset_criticality "medium") so each
-    # breakdown's own value is pinned inside its own data-field list, not
-    # found only because the other breakdown's text happens to match too.
-    _insert_alert(
-        db,
-        alert_id="prev-1",
-        severity="low",
-        asset_context={"present": True, "criticality": "medium"},
-        identity_context={"privileged": False},
-        ioc_context={"reputation": "not_found"},
-    )
-    resp = tc.post(
-        "/admin/rules/preview",
-        data={"name": "n", "reason": "r", "match_json": REASON_MATCH_EVERYTHING},
-    )
-    assert resp.status_code == 200
-    assert 'data-field="clusters">1<' in resp.text
-    assert 'data-field="alerts">1<' in resp.text
-    assert "low: 1" in _scoped(resp.text, 'data-field="by_severity"')
-    assert "medium: 1" in _scoped(resp.text, 'data-field="by_asset_criticality"')
-    # samples, as a link to the alert page of the new UI (P10-T13: the Jinja alert page is
-    # gone; the link keeps the host the admin came in on and changes only the port)
-    assert "prev-1" in resp.text
-    assert 'href="http://testserver:8080/alerts/prev-1"' in resp.text
-    assert 'href="/alerts/' not in resp.text
-
-    count = db.execute("SELECT count(*) FROM autoclose_rules").fetchone()[0]
-    assert count == 0
-
-
-@pytest.mark.db
-def test_preview_samples_are_plain_ids_when_the_host_header_is_not_a_plain_host(client) -> None:
-    """P10-T13: the sample links are built from the request's own host; a `Host` header with a
-    path in it gets no link at all (`pages.new_ui_url` refuses it), and the id is still shown."""
-    tc, db, _ = client
-    _insert_alert(
-        db,
-        alert_id="prev-2",
-        severity="low",
-        asset_context={"present": True, "criticality": "medium"},
-        identity_context={"privileged": False},
-        ioc_context={"reputation": "not_found"},
-    )
-    resp = tc.post(
-        "/admin/rules/preview",
-        data={"name": "n", "reason": "r", "match_json": REASON_MATCH_EVERYTHING},
-        headers={"host": "127.0.0.1:8000/evil"},
-    )
-    assert resp.status_code == 200
-    assert "prev-2" in resp.text
-    assert "<a href=" not in _scoped(resp.text, 'data-field="samples"')
-    assert "evil" not in resp.text
-
-
-@pytest.mark.db
-def test_whitelist_violation_renders_422_flash_naming_the_field(client) -> None:
-    tc, db, _ = client
-    resp = tc.post(
-        "/admin/rules/preview",
-        data={
-            "name": "n",
-            "reason": "r",
-            "match_json": '[{"field": "risk_score", "op": "lte", "value": 10}]',
-        },
-    )
-    assert resp.status_code == 422
-    assert "risk_score" in resp.text
-    count = db.execute("SELECT count(*) FROM autoclose_rules").fetchone()[0]
-    assert count == 0
-
-
-# ---------------------------------------------------------------------------
-# The empty-preview tally — review round 1: counts only rows the candidate
-# rule's own conditions match, never the whole 30-day window
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.db
-def test_empty_preview_tally_counts_only_rows_the_rule_matches(client) -> None:
-    tc, _db, _ = client
-    # Matches the rule (agent_name = some-agent) and is hard-blocked
-    # (asset absent) — counted.
-    _insert_alert(
-        _db,
-        alert_id="tally-blocked",
-        agent_name="some-agent",
-        severity="medium",
-        asset_context={"present": False, "criticality": "unknown"},
-        identity_context={"privileged": False},
-        ioc_context={"reputation": "not_found"},
-    )
-    # Also hard-blocked the same way, but the rule's own condition
-    # (agent_name) does not match it — must NOT be counted.
-    _insert_alert(
-        _db,
-        alert_id="tally-not-matched",
-        agent_name="other-agent",
-        severity="medium",
-        asset_context={"present": False, "criticality": "unknown"},
-        identity_context={"privileged": False},
-        ioc_context={"reputation": "not_found"},
-    )
-    match = '[{"field": "agent_name", "op": "eq", "value": "some-agent"}]'
-    resp = tc.post("/admin/rules/preview", data={"name": "n", "reason": "r", "match_json": match})
-    assert resp.status_code == 200
-    assert 'data-field="clusters">0<' in resp.text
-    assert 'data-field="tally_matched">1<' in resp.text
-    tally = _scoped(resp.text, 'id="empty-preview-tally"', until="</div>")
-    asset_row = _scoped(tally, 'data-block="asset_not_in_inventory"', until="</li>")
-    assert ": 1" in asset_row
-    assert "tally-not-matched" not in resp.text  # not a sample either — 0 clusters
-
-
-@pytest.mark.db
-def test_empty_preview_tally_says_no_match_when_the_rule_matches_nothing(client) -> None:
-    tc, _db, _ = client
-    # Closable by every predicate, but the rule below names a different agent.
-    _insert_alert(
-        _db,
-        alert_id="tally-none",
-        agent_name="some-agent",
-        severity="medium",
-        asset_context={"present": True, "criticality": "medium"},
-        identity_context={"privileged": False},
-        ioc_context={"reputation": "not_found"},
-    )
-    match = '[{"field": "agent_name", "op": "eq", "value": "nobody-matches-this"}]'
-    resp = tc.post("/admin/rules/preview", data={"name": "n", "reason": "r", "match_json": match})
-    assert resp.status_code == 200
-    assert 'data-field="clusters">0<' in resp.text
-    assert 'data-field="tally_none"' in resp.text
-
-
-# ---------------------------------------------------------------------------
-# Create: writes the row, the audit event, and is live without the cache TTL
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.db
-def test_create_writes_row_audit_and_makes_load_rules_return_it_immediately(client) -> None:
-    tc, db, admin_id = client
-    alert, ctx = _alert(), _ctx()
-    # Warm the 60 s rule cache first, as "no rules" — evaluate()'s normal,
-    # cached path (`_cached_rules`). `load_rules()` alone never touches this
-    # cache (it always re-queries), so it cannot discriminate reload_rules()
-    # being called or not — evaluate() is what design note 6 actually needs.
-    assert autoclose.evaluate(db, alert, ctx).match is None
-
-    resp = tc.post(
-        "/admin/rules",
-        data={"name": "everything", "reason": "test rule", "match_json": REASON_MATCH_EVERYTHING},
-    )
-    assert resp.status_code == 303
-    assert resp.headers["location"] == "/admin/rules"
-
-    row = db.execute(
-        "SELECT autoclose_rule_id, name, enabled, created_by FROM autoclose_rules"
-    ).fetchone()
-    assert row is not None
-    rule_id, name, enabled, created_by = row
-    assert name == "everything"
-    assert enabled is True
-    assert str(created_by) == admin_id
-
-    audit_row = db.execute(
-        "SELECT actor_id, payload FROM audit_events "
-        "WHERE event_type = 'admin.autoclose_rule_toggled' AND subject_id = %s",
-        (str(rule_id),),
-    ).fetchone()
-    assert audit_row is not None
-    actor_id, payload = audit_row
-    assert str(actor_id) == admin_id
-    assert payload == {"name": "everything", "before": False, "after": True}
-
-    # Live immediately, from the SAME still-warm cache window — no waiting
-    # for RULE_CACHE_TTL_S (design note 6; DEC-025 red case (a)).
-    after = autoclose.evaluate(db, alert, ctx)
-    assert after.match is not None
-    assert after.match.rule_id == str(rule_id)
-
-
-@pytest.mark.db
-def test_create_whitelist_violation_renders_422_and_writes_nothing(client) -> None:
-    tc, db, _ = client
-    resp = tc.post(
-        "/admin/rules",
-        data={
-            "name": "n",
-            "reason": "r",
-            "match_json": '[{"field": "risk_score", "op": "lte", "value": 10}]',
-        },
-    )
-    assert resp.status_code == 422
-    assert "risk_score" in resp.text
-    count = db.execute("SELECT count(*) FROM autoclose_rules").fetchone()[0]
-    assert count == 0
-
-
-# ---------------------------------------------------------------------------
-# Toggle: writes before/after, flips the rule's effect, live immediately
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.db
-def test_toggle_is_live_without_waiting_for_the_cache(client) -> None:
-    """The card's own acceptance-1 name: writes before/after and flips the
-    rule's effect without waiting for `RULE_CACHE_TTL_S` (design note 6)."""
-    tc, db, admin_id = client
-    rule_id = str(uuid.uuid4())
-    _insert_rule(db, rule_id=rule_id, created_by=admin_id, match=[], enabled=True)
-
-    alert, ctx = _alert(), _ctx()
-    # Warm the cache with the rule enabled first (the cached `evaluate()`
-    # path — `load_rules()` alone always re-queries and cannot discriminate
-    # reload_rules() being called or not, see the create test above).
-    before = autoclose.evaluate(db, alert, ctx)
-    assert before.match is not None
-    assert before.match.rule_id == rule_id
-
-    resp = tc.post(f"/admin/rules/{rule_id}/toggle", data={"enabled": "false"})
-    assert resp.status_code == 303
-
-    enabled = db.execute(
-        "SELECT enabled FROM autoclose_rules WHERE autoclose_rule_id = %s", (rule_id,)
-    ).fetchone()[0]
-    assert enabled is False
-
-    payload = db.execute(
-        "SELECT payload FROM audit_events "
-        "WHERE event_type = 'admin.autoclose_rule_toggled' AND subject_id = %s",
-        (rule_id,),
-    ).fetchone()[0]
-    assert payload == {"name": "r", "before": True, "after": False}
-
-    # Live immediately, from the SAME still-warm cache window — no waiting
-    # for RULE_CACHE_TTL_S (design note 6; DEC-025 red case (a)).
-    after = autoclose.evaluate(db, alert, ctx)
-    assert after.match is None
-
-
-# ---------------------------------------------------------------------------
-# A malformed rule id is a 422, not a 500 (review round 1) — both the HTML
-# path parameter and the JSON API body are `uuid.UUID`, not `str`.
+# A malformed rule id is a 422, not a 500 (review round 1) — the JSON API body is
+# `uuid.UUID`, not `str`.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.db
 def test_toggle_bad_rule_id_is_422(client) -> None:
     tc, _db, _ = client
-
-    html_resp = tc.post("/admin/rules/not-a-uuid/toggle", data={"enabled": "false"})
-    assert html_resp.status_code == 422
-
     api_resp = tc.patch("/api/admin/rules", json={"rule_id": "not-a-uuid", "enabled": False})
     assert api_resp.status_code == 422
-
-
-# ---------------------------------------------------------------------------
-# The width warning — belongs here, and only for a rule above the threshold
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.db
-def test_width_warning_appears_above_threshold_and_not_below(client) -> None:
-    tc, db, admin_id = client
-    wide_id = str(uuid.uuid4())
-    narrow_id = str(uuid.uuid4())
-    _insert_rule(db, rule_id=wide_id, created_by=admin_id, name="wide-rule")
-    _insert_rule(db, rule_id=narrow_id, created_by=admin_id, name="narrow-rule")
-
-    _insert_alert(
-        db,
-        alert_id="width-big",
-        status="auto_closed",
-        occurrence_count=5000,
-        autoclose_rule_id=wide_id,
-    )
-    _insert_alert(
-        db,
-        alert_id="width-small",
-        status="auto_closed",
-        occurrence_count=1,
-        autoclose_rule_id=narrow_id,
-    )
-    # A third rule that closed 1500 occurrences: 1500 of the 6601 in the window, 22.7 %, under
-    # the 30 % threshold. Divided by the 103 ROWS it was over 1400 % and carried a warning
-    # (P11-T20 row 27), so this row is what tells the two formulas apart on the page.
-    middle_id = str(uuid.uuid4())
-    _insert_rule(db, rule_id=middle_id, created_by=admin_id, name="middle-rule")
-    _insert_alert(
-        db,
-        alert_id="width-middle",
-        status="auto_closed",
-        occurrence_count=1500,
-        autoclose_rule_id=middle_id,
-    )
-    for i in range(100):
-        _insert_alert(db, alert_id=f"width-other-{i}", status="received", occurrence_count=1)
-
-    resp = tc.get("/admin/rules")
-    assert resp.status_code == 200
-    assert "wide-rule" in resp.text
-    assert "narrow-rule" in resp.text
-
-    # The wide rule's row carries a width warning; the narrow and the middle rule's do not.
-    def _row_of(name: str) -> str:
-        start = resp.text.index(name)
-        return resp.text[start : resp.text.index("</tr>", start)]
-
-    assert "⚠" in _row_of("wide-rule")
-    assert "⚠" not in _row_of("narrow-rule")
-    assert "⚠" not in _row_of("middle-rule")
 
 
 # ---------------------------------------------------------------------------
@@ -603,13 +282,12 @@ def _require_db_marker_for_scratch(request):
         pytest.fail(f"{request.node.nodeid} uses {sorted(uses)} without @pytest.mark.db")
 
 
-#: All 8 routes this router mounts — every one of them behind `Admin`
-#: (review round 1: parametrised, not just the one page GET). Each body is
+#: All 4 routes this router mounts — every one of them behind `Admin`
+#: (review round 1: parametrised, not just one GET). Each body is
 #: syntactically valid for its route so the 403 is never shadowed by an
-#: earlier 422 on the body/path, whichever FastAPI resolves first. The
-#: `toggle` path and the `PATCH` body use a well-formed, nonexistent rule id
-#: — the 404-vs-403 question never arises because `require_role` fires
-#: before the route body runs.
+#: earlier 422 on the body, whichever FastAPI resolves first. The `PATCH`
+#: body uses a well-formed, nonexistent rule id — the 404-vs-403 question
+#: never arises because `require_role` fires before the route body runs.
 _PLACEHOLDER_RULE_ID = "00000000-0000-0000-0000-0000000000aa"
 _ADMIN_ROUTES: tuple[tuple[str, str, dict[str, Any]], ...] = (
     ("get", "/api/admin/rules", {}),
@@ -620,14 +298,6 @@ _ADMIN_ROUTES: tuple[tuple[str, str, dict[str, Any]], ...] = (
         {"json": {"rule_id": _PLACEHOLDER_RULE_ID, "enabled": True}},
     ),
     ("post", "/api/admin/rules/simulate", {"json": {"match": []}}),
-    ("get", "/admin/rules", {}),
-    ("post", "/admin/rules/preview", {"data": {"name": "n", "reason": "r", "match_json": "[]"}}),
-    ("post", "/admin/rules", {"data": {"name": "n", "reason": "r", "match_json": "[]"}}),
-    (
-        "post",
-        f"/admin/rules/{_PLACEHOLDER_RULE_ID}/toggle",
-        {"data": {"enabled": "false"}},
-    ),
 )
 
 
@@ -637,14 +307,12 @@ def test_non_admin_is_refused_and_authz_denied_row_present(sdb, method, path, kw
     tier1_claims = Claims(user_id=str(uuid.uuid4()), username="t1", role="tier1", iat=0.0, exp=0.0)
     main.app.dependency_overrides[deps.get_conn] = lambda: sdb
     main.app.dependency_overrides[deps.current_user] = lambda: tier1_claims
-    main.app.dependency_overrides[pages.page_user] = lambda: tier1_claims
     try:
         tc = TestClient(main.app, follow_redirects=False)
         resp = getattr(tc, method)(path, **kwargs)
     finally:
         main.app.dependency_overrides.pop(deps.get_conn, None)
         main.app.dependency_overrides.pop(deps.current_user, None)
-        main.app.dependency_overrides.pop(pages.page_user, None)
 
     assert resp.status_code == 403, f"{method.upper()} {path} -> {resp.status_code}: {resp.text}"
     # subject_id is `request.url.path` (deps.require_role) — each route in
@@ -664,22 +332,32 @@ def test_non_admin_is_refused_and_authz_denied_row_present(sdb, method, path, kw
 
 
 # ---------------------------------------------------------------------------
-# The routes exist, and only these — sorted(app.openapi()["paths"]) (DEC-101 b)
+# The routes exist, and only these (DEC-101 b): the router's own routes, and the OpenAPI table
 # ---------------------------------------------------------------------------
 
+_RULES_ROUTES = {
+    ("GET", "/api/admin/rules"),
+    ("POST", "/api/admin/rules"),
+    ("PATCH", "/api/admin/rules"),
+    ("POST", "/api/admin/rules/simulate"),
+}
 
-def test_rules_routes_are_listed() -> None:
-    paths = set(main.app.openapi()["paths"])
-    assert "/admin/rules" in paths
-    assert "/admin/rules/preview" in paths
-    assert "/admin/rules/{rule_id}/toggle" in paths
-    assert "/api/admin/rules" in paths
-    assert "/api/admin/rules/simulate" in paths
+
+def test_rules_routes_are_the_four_api_ones_and_each_is_admin_only() -> None:
+    routes = {(m, r.path) for r in admin_rules.router.routes for m in r.methods}
+    assert routes == _RULES_ROUTES
+    for route in admin_rules.router.routes:
+        calls = [d.call for d in route.dependant.dependencies]
+        assert admin_rules.require_admin in calls, route.path
+    paths = main.app.openapi()["paths"]
+    for method, path in _RULES_ROUTES:
+        assert method.lower() in paths[path]
+    # no page under /admin/rules: the Jinja routes went in P11-T19
+    assert not [p for p in paths if p.startswith("/admin/")]
 
 
 # ---------------------------------------------------------------------------
-# The JSON API (§6.4) — a thin sanity check; the page tests above are the
-# card's real acceptance surface (design note 6)
+# The JSON API (§6.4) — a thin sanity check of the four operations together
 # ---------------------------------------------------------------------------
 
 
@@ -706,9 +384,10 @@ def test_api_simulate_create_and_toggle(client) -> None:
 
 
 # ---------------------------------------------------------------------------
-# P11-T19 — what the Jinja page tests proved about logic the JSON API still runs, now through the
-# API: the preview writes nothing, a create is written, audited and live at once, a toggle is live
-# at once, a bad rule writes nothing, and the width figure that the warning is measured against.
+# What the Jinja page tests proved about logic the JSON API still runs (P5-T10), kept through the
+# API when P11-T19 retired the page: the preview writes nothing, a create is written, audited and
+# live at once, a toggle is live at once, a bad rule writes nothing, and the width figure that the
+# warning is measured against.
 # ---------------------------------------------------------------------------
 
 

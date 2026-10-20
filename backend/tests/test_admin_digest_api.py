@@ -1545,7 +1545,7 @@ def test_the_two_json_routes_are_mounted_and_each_carries_the_admin_dependency()
     paths = main.app.openapi()["paths"]
     assert "get" in paths[_DIGEST]
     assert "post" in paths[f"{_DIGEST}/{{alert_id}}/review"]
-    api_routes = [r for r in admin_digest.router.routes if r.path.startswith("/api/")]
+    api_routes = list(admin_digest.router.routes)  # all of them: the Jinja page went in P11-T19
     assert {(m, r.path) for r in api_routes for m in r.methods} == {
         ("GET", _DIGEST),
         ("POST", f"{_DIGEST}/{{alert_id}}/review"),

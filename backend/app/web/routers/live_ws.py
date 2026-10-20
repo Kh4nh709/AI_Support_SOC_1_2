@@ -5,8 +5,8 @@ The protocol, in the order the server speaks it:
 1. The server accepts, then waits up to `AUTH_TIMEOUT_S` (5 s) for exactly one message,
    `{"type": "auth", "token": "<jwt>"}`. The token travels in that FIRST MESSAGE and
    nowhere else — never the URL. A URL lands in access logs, reverse-proxy logs and browser
-   history; a frame does not. A `?token=` (and an `Authorization` header or the session
-   cookie) is ignored: this socket reads no request metadata for identity.
+   history; a frame does not. A `?token=` (and an `Authorization` header) is ignored: this
+   socket reads no request metadata for identity.
 2. A missing, malformed, invalid or expired token — an unknown, inactive or logged-out user
    — closes the socket with code **4401**. (Any other message, or none inside 5 s, is 4401
    too.) The signature and expiry are checked FIRST, without the database (`auth.decode`):

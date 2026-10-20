@@ -1,7 +1,8 @@
-"""`web/routers/labels.py` — the blind labelling page (P6-T02): the two §6.4
-operations `GET /api/admin/labels/next` and `POST /api/admin/labels`, the undo
-`POST /api/admin/labels/undo` (P11-T08, spec §5.7), and the HTML routes
-`GET`/`POST /admin/labels` and `POST /admin/labels/undo` (P11-T19 retires those).
+"""`web/routers/labels.py` — the blind labelling API (P6-T02): the two §6.4
+operations `GET /api/admin/labels/next` and `POST /api/admin/labels`, and the undo
+`POST /api/admin/labels/undo` (P11-T08, spec §5.7), for the React labelling page. The Jinja page
+(`GET`/`POST /admin/labels` and `POST /admin/labels/undo`) was retired in P11-T19 (spec §8,
+DEC-205); nothing here renders HTML.
 
 All logic is `app.tier1.labels`; this module binds the labeller to the session
 (P6-tasks.md planning decision 7: a `labeler` that is not the caller's
@@ -21,9 +22,9 @@ read is answered the same way instead of as a 500, so the flag means what it say
 **Undo** (`POST /api/admin/labels/undo`, admin only). The labeller is the caller. The body is a
 JSON object, required: `{}` or `{"labeler": "<the caller's id>"}`, nothing else. It is a Pydantic
 model so FastAPI's own rule applies: only `application/json` (or `+json`) is parsed, and anything
-else, or no body, is a 422. The `soc_session` cookie still authenticates a request sent from
-another page of the host (until P11-T19 retires it), and a no-cors `fetch` or an HTML form cannot
-set that content type, so such a request cannot undo anyone's label.
+else, or no body, is a 422. A no-cors `fetch` or an HTML form cannot set that content type, so
+such a request cannot undo anyone's label (it could not sign in either, now that the session cookie
+is gone: P11-T19).
 - `200 {undone_cluster_id, done, total}`: `undone_cluster_id` is the `cluster_id` of the candidate
   whose `alert_id` `undo_last` returned (`triage_labels` holds the head's `alert_id`); when the
   file has no such row, the alert id itself, which is the cluster id in both gold sets
@@ -42,15 +43,12 @@ from __future__ import annotations
 import os
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from app.infra.auth import Claims
 from app.tier1 import labels
-from app.web import templating
-from app.web.deps import Cfg, Conn, require_role
-from app.web.routers.pages import page_user
+from app.web.deps import Conn, require_role
 
 router = APIRouter()
 
@@ -70,12 +68,6 @@ _DETAIL_FOR: dict[type[labels.LabelError], str] = {
     labels.UnknownCluster: "cluster is not a gold candidate",
     labels.AlreadyLabelled: "already labelled by this labeler",
     labels.Frozen: "the gold set is frozen",
-}
-_FLASH_FOR: dict[type[labels.LabelError], str] = {
-    labels.InvalidSubmission: "Nhãn không hợp lệ",
-    labels.UnknownCluster: "Cụm này không nằm trong danh sách ứng viên",
-    labels.AlreadyLabelled: "Bạn đã gán nhãn cụm này rồi",
-    labels.Frozen: "Tập vàng đã đóng băng — không hoàn tác được",
 }
 
 
@@ -203,84 +195,3 @@ def api_undo(conn: Conn, claims: Admin, body: UndoIn) -> dict[str, Any]:
     )
     cluster_id = next((c.cluster_id for c in candidates if c.alert_id == alert_id), alert_id)
     return {"undone_cluster_id": cluster_id, "done": progress.done, "total": progress.total}
-
-
-# ---------------------------------------------------------------------------
-# The page — the labeller is the session's user, never a form field
-# ---------------------------------------------------------------------------
-
-
-def _page(
-    request: Request,
-    conn: Any,
-    cfg: Any,
-    user: Claims,
-    *,
-    flash: dict[str, str] | None = None,
-    status_code: int = 200,
-) -> HTMLResponse:
-    payload = _next_payload(conn, user.user_id)
-    page = templating.render(
-        request,
-        "labels.html",
-        user=user,
-        flash=flash,
-        tz=cfg.DISPLAY_TZ,
-        progress=payload,
-        view=payload["cluster"],
-        candidates_present=labels.CANDIDATES_PATH.is_file(),
-        undo_allowed=not labels.FREEZE_MARKER.exists(),
-    )
-    page.status_code = status_code
-    return page
-
-
-@router.get("/admin/labels", response_class=HTMLResponse)
-def labels_page(
-    request: Request,
-    conn: Conn,
-    cfg: Cfg,
-    user: Annotated[Claims, Depends(page_user)],
-    _: Admin,
-) -> HTMLResponse:
-    return _page(request, conn, cfg, user)
-
-
-@router.post("/admin/labels", response_class=HTMLResponse)
-def labels_submit(
-    request: Request,
-    conn: Conn,
-    cfg: Cfg,
-    user: Annotated[Claims, Depends(page_user)],
-    _: Admin,
-    cluster_id: Annotated[str, Form()],
-    label: Annotated[str, Form()],
-    confidence: Annotated[int, Form()],
-    note: Annotated[str | None, Form()] = None,
-):
-    try:
-        _submit(
-            conn, user.user_id, cluster_id=cluster_id, label=label, confidence=confidence, note=note
-        )
-    except labels.LabelError as exc:
-        # Nothing was written (the INSERT sits in a savepoint), so redrawing
-        # the page from inside the request's transaction is safe.
-        flash = {"level": "error", "text": _FLASH_FOR[type(exc)]}
-        return _page(request, conn, cfg, user, flash=flash, status_code=_STATUS_FOR[type(exc)])
-    return RedirectResponse("/admin/labels", status_code=303)
-
-
-@router.post("/admin/labels/undo", response_class=HTMLResponse)
-def labels_undo(
-    request: Request,
-    conn: Conn,
-    cfg: Cfg,
-    user: Annotated[Claims, Depends(page_user)],
-    _: Admin,
-):
-    try:
-        labels.undo_last(conn, user.user_id, freeze_marker=labels.FREEZE_MARKER)
-    except labels.Frozen:
-        flash = {"level": "error", "text": _FLASH_FOR[labels.Frozen]}
-        return _page(request, conn, cfg, user, flash=flash, status_code=409)
-    return RedirectResponse("/admin/labels", status_code=303)

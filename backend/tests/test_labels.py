@@ -1,7 +1,9 @@
-"""P6-T02 — the blind labelling page: `app.tier1.labels`, `app.web.routers.labels`,
-`templates/labels.html`.
+"""P6-T02 — the blind labelling API: `app.tier1.labels`, `app.web.routers.labels`. (The Jinja page
+this file was first written against, `templates/labels.html`, was retired in P11-T19; what it
+had to hide is the same list as what the JSON must not carry, and the JSON half of each test
+is what is kept.)
 
-The page must show a labeller one cluster at a time, in their own seeded order,
+The API must give a labeller one cluster at a time, in their own seeded order,
 and never anything LLM-derived, any pilot decision, `alerts.source`, or the other
 labeller's label (architecture §6 "Giao thức gán nhãn", DEC-019). The fixture is
 built to leak if it can: the canonical alert 40112 is inserted with
@@ -13,8 +15,8 @@ free-text exemption of the token test is exercised rather than vacuous.
 
 Every test runs inside the `db` fixture's transaction and is rolled back: the
 overridden `get_conn` yields that connection and never commits. The auth
-dependencies (`deps.current_user`, `pages.page_user`) are overridden to run as
-user A or user B — `require_role("admin")` itself still runs on those claims.
+dependency (`deps.current_user`) is overridden to run as user A or user B —
+`require_role("admin")` itself still runs on those claims.
 """
 
 from __future__ import annotations
@@ -39,7 +41,6 @@ from app.ingest.wazuh_parser import parse_wazuh_alert
 from app.tier1 import labels
 from app.web import deps, main
 from app.web.routers import labels as labels_router
-from app.web.routers import pages
 from fastapi.testclient import TestClient
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -498,11 +499,10 @@ def client(db, seeded):
     main.app.dependency_overrides[deps.get_conn] = get_conn
     main.app.dependency_overrides[deps.get_config] = lambda: config.Config()
     main.app.dependency_overrides[deps.current_user] = c.claims
-    main.app.dependency_overrides[pages.page_user] = c.claims
     try:
         yield c
     finally:
-        for dep in (deps.get_conn, deps.get_config, deps.current_user, pages.page_user):
+        for dep in (deps.get_conn, deps.get_config, deps.current_user):
             main.app.dependency_overrides.pop(dep, None)
 
 
@@ -536,12 +536,6 @@ def _next(client: _Client, cluster_id: str | None = None) -> dict[str, Any]:
     return body
 
 
-def _page(client: _Client) -> str:
-    resp = client.http.get("/admin/labels")
-    assert resp.status_code == 200, resp.text
-    return resp.text
-
-
 def _string_values(value: Any, *, skip: set[str]) -> list[str]:
     """Every string value in a JSON tree, except under keys in `skip`."""
     found: list[str] = []
@@ -555,20 +549,6 @@ def _string_values(value: Any, *, skip: set[str]) -> list[str]:
     elif isinstance(value, str):
         found.append(value)
     return found
-
-
-def _without_elements(html: str, *patterns: str) -> str:
-    for pattern in patterns:
-        html = re.sub(pattern, "", html, flags=re.DOTALL)
-    return html
-
-
-_FREE_TEXT_ELEMENTS = (
-    r'<pre data-field="raw_log">.*?</pre>',
-    r'<span data-field="description">.*?</span>',
-)
-_PLAYBOOK_ELEMENT = r'<pre data-field="playbook">.*?</pre>'
-_LABEL_FORM = r'<form id="label-form".*?</form>'
 
 
 def _count_labels(conn: psycopg.Connection, user_id: str) -> int:
@@ -657,9 +637,6 @@ def test_next_returns_null_when_finished(client, db) -> None:
         "frozen": False,
         "candidates_present": True,
     }
-    html = _page(client)
-    assert 'id="finished"' in html
-    assert 'id="label-form"' not in html
 
 
 @pytest.mark.db
@@ -673,9 +650,6 @@ def test_missing_candidates_file_says_so(client, tmp_path, monkeypatch) -> None:
         "frozen": False,
         "candidates_present": False,
     }
-    html = _page(client)
-    assert "eval/gold_candidates.csv</code> is not present" in html
-    assert 'id="finished"' not in html
 
 
 def test_load_candidates_discards_source_and_friends(tmp_path) -> None:
@@ -800,62 +774,18 @@ def test_source_value_tokens_never_in_json_outside_free_text_and_free_text_has_t
 
 
 # ---------------------------------------------------------------------------
-# What reaches the rendered page
+# What else reaches a labeller (the page that rendered it was retired in P11-T19)
 # ---------------------------------------------------------------------------
 
-_ALLOWED_DATA_FIELDS = ALLOWED_VIEW_KEYS | {"progress"}
-
 
 @pytest.mark.db
-def test_html_data_fields_are_allowlisted(client, db) -> None:
-    for cluster_id in (_A40112.alert_id, _G2_HEAD.alert_id):
-        db.execute("DELETE FROM triage_labels WHERE labeler_id = %s", (USER_A,))
-        _make_next(db, USER_A, cluster_id)
-        html = _page(client)
-        fields = set(re.findall(r'data-field="([^"]+)"', html))
-        assert fields <= _ALLOWED_DATA_FIELDS, fields - _ALLOWED_DATA_FIELDS
-        # the page does render the representative alert, not an empty shell
-        assert {"raw_log", "description", "correlation", "playbook", "progress"} <= fields
-
-
-@pytest.mark.db
-def test_html_has_no_forbidden_substrings_outside_free_text(client, db) -> None:
-    _make_next(db, USER_A, _A40112.alert_id)
-    html = _page(client)
-    assert "ioc_context" in re.search(_PLAYBOOK_ELEMENT, html, re.DOTALL).group(0)
-    outside = _without_elements(html, _PLAYBOOK_ELEMENT)
-    for forbidden in FORBIDDEN_SUBSTRINGS:
-        assert forbidden not in outside, forbidden
-
-    outside_free_text = _without_elements(html, *_FREE_TEXT_ELEMENTS)
-    assert SOURCE_TOKENS.findall(outside_free_text) == []
-    # ... while the free text itself does carry them
-    free_text = "".join(
-        m.group(0) for p in _FREE_TEXT_ELEMENTS for m in re.finditer(p, html, re.DOTALL)
-    )
-    assert SOURCE_TOKENS.search(free_text)
-
-
-@pytest.mark.db
-def test_html_false_positive_only_inside_label_form(client, db) -> None:
-    _make_next(db, USER_A, _A40112.alert_id)
-    html = _page(client)
-    form = re.search(_LABEL_FORM, html, re.DOTALL)
-    assert form is not None
-    assert form.group(0).count("false_positive") == 1
-    assert 'value="false_positive"' in form.group(0)
-    assert _without_elements(html, _LABEL_FORM).count("false_positive") == 0
-
-
-@pytest.mark.db
-def test_html_marks_raw_log_cut_for_display(client, db) -> None:
+def test_raw_log_is_cut_for_display_and_flagged(client, db) -> None:
     long_log = "x" * (labels.RAW_LOG_DISPLAY_BYTES + 100)
     db.execute("UPDATE alerts SET raw_log = %s WHERE alert_id = %s", (long_log, _A40112.alert_id))
     _make_next(db, USER_A, _A40112.alert_id)
     view = _next(client, _A40112.alert_id)["cluster"]
     assert view["raw_log_truncated_for_display"] is True
     assert len(view["raw_log"]) == labels.RAW_LOG_DISPLAY_BYTES
-    assert "[cut for display at 32 KB]" in _page(client)
 
 
 @pytest.mark.db
@@ -868,10 +798,8 @@ def test_other_labelers_label_never_appears(client, db) -> None:
     _make_next(db, USER_A, _A40112.alert_id)
     resp = client.http.get("/api/admin/labels/next", params={"labeler": USER_A})
     assert resp.json()["cluster_id"] == _A40112.alert_id  # B's label does not skip it for A
-    html = _page(client)
-    for text in (resp.text, html):
-        assert secret not in text
-        assert USER_B not in text
+    assert secret not in resp.text
+    assert USER_B not in resp.text
     assert "escalate" not in resp.text
 
     # A's own POST: the event payload names A's label and nothing of B's
@@ -974,27 +902,6 @@ def test_labeler_mismatch_is_403(client, db) -> None:
 
     # labeler is required on GET
     assert client.http.get("/api/admin/labels/next").status_code == 422
-
-
-@pytest.mark.db
-def test_page_form_post_labels_as_session_user(client, db) -> None:
-    resp = client.http.post(
-        "/admin/labels",
-        data={"cluster_id": _A40112.alert_id, "label": "escalate", "confidence": "1", "note": "n"},
-    )
-    assert resp.status_code == 303
-    assert resp.headers["location"] == "/admin/labels"
-    owner = db.execute(
-        "SELECT labeler_id::text FROM triage_labels WHERE alert_id = %s", (_A40112.alert_id,)
-    ).fetchone()[0]
-    assert owner == USER_A
-
-    again = client.http.post(
-        "/admin/labels",
-        data={"cluster_id": _A40112.alert_id, "label": "benign", "confidence": "1"},
-    )
-    assert again.status_code == 409
-    assert 'id="flash"' in again.text
 
 
 # ---------------------------------------------------------------------------
@@ -1338,8 +1245,9 @@ def test_api_undo_refuses_a_body_that_is_not_an_empty_object_or_the_labeler(
     assert _undo_events(db, USER_A) == []
 
 
-#: Each is a request the session cookie would carry from another page of the host (the cookie
-#: lives until P11-T19): a no-cors `fetch` with a Blob or text body, an HTML form, nothing at all.
+#: Each is a request a page of another site could make with a no-cors `fetch` or an HTML form: a
+#: Blob or text body, a form, nothing at all. (Until P11-T19 the session cookie would have signed
+#: such a request in; now only this content-type rule is left, and it is still the route's.)
 _NOT_JSON = {
     "nothing at all": {},
     "no content type": {"content": b"{}"},

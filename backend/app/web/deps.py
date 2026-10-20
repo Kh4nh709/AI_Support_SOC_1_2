@@ -21,15 +21,13 @@ from collections.abc import Callable, Iterator
 from typing import Annotated
 
 import psycopg
-from fastapi import Depends, HTTPException, Request, Response
+from fastapi import Depends, HTTPException, Request
 from pydantic import BeforeValidator
 
 from app.audit.events import write_event
 from app.infra import auth, config, db
 from app.infra.auth import Claims
 from app.infra.config import Config
-
-COOKIE_NAME = "soc_session"
 
 # The two audit CHECKs (`ck_audit_actor_role`, `ck_audit_actor_id_theo_role`)
 # know four actor roles, not three user roles: both analyst tiers are 'analyst'.
@@ -94,30 +92,13 @@ CaseId = Annotated[uuid.UUID, BeforeValidator(clean_path_id)]
 
 
 def read_token(request: Request) -> str | None:
-    """`Authorization: Bearer <token>` first, else the `soc_session` cookie."""
+    """The `Authorization: Bearer <token>` header, and nothing else. The session is the token the
+    caller holds (the React UI keeps it in the tab's `sessionStorage`); since P11-T19 (spec §8) no
+    cookie carries or sets one, so a request that names only a cookie has no token and is a 401."""
     scheme, _, value = request.headers.get("authorization", "").partition(" ")
     if scheme.lower() == "bearer" and value.strip():
         return value.strip()
-    return request.cookies.get(COOKIE_NAME) or None
-
-
-def set_session_cookie(response: Response, token: str, cfg: Config) -> None:
-    """The one place the cookie's attributes are spelled (P4-T04's page login
-    calls this too). `secure=False` because the app binds `127.0.0.1:8000` with
-    no TLS (Makefile `run-app`) — a P8 limitation, stated, not hidden."""
-    response.set_cookie(
-        COOKIE_NAME,
-        token,
-        httponly=True,
-        samesite="lax",
-        secure=False,
-        max_age=cfg.JWT_TTL_HOURS * 3600,
-        path="/",
-    )
-
-
-def clear_session_cookie(response: Response) -> None:
-    response.delete_cookie(COOKIE_NAME, path="/", httponly=True, samesite="lax")
+    return None
 
 
 def current_user(request: Request, conn: Conn, cfg: Cfg) -> Claims:

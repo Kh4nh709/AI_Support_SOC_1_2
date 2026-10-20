@@ -33,9 +33,11 @@ this API's `detail` is an object (`{"field", "reason", ...}`). Only a malformed 
 left to FastAPI's own 422, as the card says. Nothing here logs a body, and no payload, response or
 error carries a password or a hash. Reading the body by hand also means doing by hand what FastAPI
 does for a model: every route that changes something (`unlock`, whose body is `{}` or empty, too)
-requires `Content-Type: application/json` or `application/*+json` — a missing header included —
-because the `soc_session` cookie, until it is retired (spec §8), would otherwise let a no-cors
-`fetch` from another page on the host create an admin or reset a password.
+requires `Content-Type: application/json` or `application/*+json` — a missing header included.
+It was the answer to the session cookie, which signed in a no-cors `fetch` from any other page on
+the host and so could create an admin or reset a password; the cookie is gone (P11-T19, spec §8),
+and the rule stays as the contract these routes share with every FastAPI model route: a form post
+or a body with no type is a 422, never read.
 
 `infra/db.transaction()` is not used: it issues its own BEGIN/COMMIT and would commit the
 request's transaction. The route's connection (`Conn`) commits on a 2xx and rolls back on any
@@ -213,11 +215,12 @@ def _bad(field: str | None, reason: str, **extra: Any) -> HTTPException:
 
 def _require_json_type(request: Request) -> None:
     """`application/json` or `application/*+json`, and nothing else — a missing Content-Type is
-    refused too, as FastAPI's own parsing (`strict_content_type`) refuses it. The session cookie
-    still authenticates a request from any page on the same host, and a no-cors `fetch` with a
-    Blob body sends no Content-Type: without this rule that request could create an admin or
-    reset a password. A cross-site form post (`text/plain`, urlencoded, multipart) is refused by
-    the same line. Every route of this module that changes something calls it, `unlock` too."""
+    refused too, as FastAPI's own parsing (`strict_content_type`) refuses it. A no-cors `fetch`
+    with a Blob body sends no Content-Type, and a form post is `text/plain`, urlencoded or
+    multipart: all are refused by the same line, as they are on a route with a Pydantic body (this
+    module reads its bodies by hand). While the session cookie lived (until P11-T19) that refusal
+    was what kept a request from another page of the host from creating an admin or resetting a
+    password. Every route of this module that changes something calls it, `unlock` too."""
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
     is_json = content_type == "application/json" or (
         content_type.startswith("application/") and content_type.endswith("+json")

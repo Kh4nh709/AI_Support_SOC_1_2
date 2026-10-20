@@ -226,7 +226,7 @@ class ReviewInfo:
     """What `autoclose_reviews` holds about one reviewed alert, with the reviewer's name
     (P11-T07, the digest JSON API): `reviewer_name` is `users.display_name`, or the username
     when the display name is blank; `None` only if the user row is gone, which the foreign key
-    forbids. `DigestRow` is unchanged: it is what the CSV and the Jinja page already carry."""
+    forbids. `DigestRow` is unchanged: it is what the CSV and `build` already carry."""
 
     verdict: str
     reviewer_name: str | None
@@ -315,8 +315,7 @@ def reopened_by_review(
     its verdict, its reviewer and "đã mở lại về hàng đợi Tier 1" after the review; the JSON API
     lists them beside `build`'s rows. Only a **`wrong` review** keeps a reopened alert on the
     day: one that Tier 1 reopened, or one reviewed `correct`/`unsure` and then reopened,
-    leaves it as before. Same row shape and order as `build`; `alert_id` narrows it to one.
-    The Jinja page does not call this."""
+    leaves it as before. Same row shape and order as `build`; `alert_id` narrows it to one."""
     tz = tz or config.load().DISPLAY_TZ
     params = {"day": day, "tz": tz}
     sql = _REOPENED_BY_REVIEW_SQL

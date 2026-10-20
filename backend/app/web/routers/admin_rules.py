@@ -1,10 +1,10 @@
-"""`web/routers/admin_rules.py` — the admin rules screen (P5-T10): a screen over
-three functions `app.ingest.autoclose` already has and already tests
+"""`web/routers/admin_rules.py` — the admin rules API (P5-T10, P11-T06): a screen's worth of
+operations over three functions `app.ingest.autoclose` already has and already tests
 (`simulate`, `rule_width_report`, `reload_rules`) — this module edits none of
-them. The two §6.4 operations `GET|POST|PATCH /api/admin/rules` and
-`POST /api/admin/rules/simulate`, plus the HTML routes `GET /admin/rules`, the
-two-step create (`POST /admin/rules/preview` then `POST /admin/rules`) and
-`POST /admin/rules/{rule_id}/toggle`.
+them. The four §6.4 operations `GET|POST|PATCH /api/admin/rules` and
+`POST /api/admin/rules/simulate`, for the React rules page (`frontend/`). The Jinja page that
+shared these helpers (`GET /admin/rules`, the two-step create and the toggle) was retired in
+P11-T19 (spec §8, DEC-205); nothing here renders HTML.
 
 Design note 1 (P5-T10.prompt.md): the preview is the point of the screen, so
 it runs `simulate()` — same predicates `evaluate()` does, hard blocks included
@@ -13,8 +13,8 @@ rule. Xem trước dùng đúng vị từ của bộ máy, đã tính cả sáu 
 
 P11-T06 (admin console v1.1 §5.5), both additive: `POST /api/admin/rules/simulate`
 also returns `hard_block_tally` (`{matched, blocks: [{code, count}]}` when the
-preview closes no cluster, else `null`), the `_hard_block_tally` below the Jinja
-preview uses; each row of `GET /api/admin/rules` also carries `width_threshold_pct`.
+preview closes no cluster, else `null`), from `_hard_block_tally` below; each row of
+`GET /api/admin/rules` also carries `width_threshold_pct`.
 
 Design note 3: toggle (and create — no dedicated "rule created" audit event
 exists and this card adds none) write `admin.autoclose_rule_toggled` with
@@ -38,8 +38,7 @@ import json
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel
 
@@ -47,18 +46,15 @@ from app.audit.events import write_event
 from app.infra.auth import Claims
 from app.infra.errors import PermanentError
 from app.ingest import autoclose
-from app.web import templating
 from app.web.deps import Cfg, Conn, require_role
-from app.web.routers import pages
-from app.web.routers.pages import page_user
 
 router = APIRouter()
 
 require_admin = require_role("admin")
 Admin = Annotated[Claims, Depends(require_admin)]
 
-#: The six G8' hard blocks, in their fixed order (context pack §2) — shown
-#: next to every preview so "matches nothing" and "everything is blocked"
+#: The six G8' hard blocks, in their fixed order (context pack §2) — the tally
+#: of an empty preview counts them, so "matches nothing" and "everything is blocked"
 #: are never confused (design note 2). Codes come from `autoclose`'s own
 #: constants, not spelled out again here, so a renamed code is an
 #: `AttributeError` at import — loud — rather than a `KeyError`/500 the
@@ -78,20 +74,6 @@ _HARD_BLOCK_ORDER: tuple[tuple[str, str], ...] = (
 # "list every rule" or "write a rule" function; the matching engine itself,
 # `evaluate`/`_parse_match`/the whitelist, stays untouched and unreimplemented)
 # ---------------------------------------------------------------------------
-
-
-def _parse_match_json(raw: str) -> list[dict[str, Any]]:
-    """The form's `match_json` textarea -> a list of condition dicts, or
-    `PermanentError` — the same exception `simulate()` raises for a whitelist
-    violation, so one `except PermanentError` covers both failure modes
-    (design note 1: a 422 flash naming the problem, never a 500)."""
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise PermanentError(f"match: JSON không hợp lệ — {exc}") from exc
-    if not isinstance(value, list):
-        raise PermanentError("match: phải là một JSON array các điều kiện")
-    return value
 
 
 def _list_rules(conn: Any) -> list[dict[str, Any]]:
@@ -299,7 +281,7 @@ class RuleToggleIn(BaseModel):
 def api_list_rules(conn: Conn, claims: Admin, cfg: Cfg) -> list[dict[str, Any]]:
     # P11-T06: the threshold the 7-day width warning ("⚠ x% > ngưỡng%") is measured
     # against travels with every row, so the UI never hard-codes it. Added here, not in
-    # `_list_rules`, which the Jinja page shares and which stays as it was.
+    # `_list_rules`, whose rows are the table's own.
     threshold = cfg.AUTOCLOSE_RULE_WIDTH_PCT
     return [{**row, "width_threshold_pct": threshold} for row in _list_rules(conn)]
 
@@ -333,9 +315,9 @@ def api_simulate_rule(conn: Conn, claims: Admin, cfg: Cfg, body: SimulateIn) -> 
     except PermanentError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     result: dict[str, Any] = dataclasses.asdict(stats)
-    # P11-T06 (§5.5): when the rule closes nothing, say why — the same tally the Jinja
-    # preview shows, as `{code, count}` in the order `_hard_block_tally` returns (largest
-    # first). The Vietnamese labels stay in the UI. Otherwise `null`, and nothing computed.
+    # P11-T06 (§5.5): when the rule closes nothing, say why: the tally as `{code, count}` in the
+    # order `_hard_block_tally` returns (largest first). The Vietnamese labels stay in the UI.
+    # Otherwise `null`, and nothing computed.
     result["hard_block_tally"] = None
     if stats.clusters == 0:
         matched, tally = _hard_block_tally(conn, cfg, body.match)
@@ -344,119 +326,3 @@ def api_simulate_rule(conn: Conn, claims: Admin, cfg: Cfg, body: SimulateIn) -> 
             "blocks": [{"code": code, "count": count} for code, _label, count in tally],
         }
     return result
-
-
-# ---------------------------------------------------------------------------
-# The page — a preview that writes nothing, then a second, explicit write
-# ---------------------------------------------------------------------------
-
-
-def _page(
-    request: Request,
-    conn: Any,
-    cfg: Any,
-    user: Claims,
-    *,
-    flash: dict[str, str] | None = None,
-    status_code: int = 200,
-    preview: autoclose.SimulateStats | None = None,
-    matched: int | None = None,
-    tally: list[tuple[str, str, int]] | None = None,
-    form: dict[str, str] | None = None,
-) -> HTMLResponse:
-    page = templating.render(
-        request,
-        "rules.html",
-        user=user,
-        flash=flash,
-        tz=cfg.DISPLAY_TZ,
-        rules=_list_rules(conn),
-        width_pct_threshold=cfg.AUTOCLOSE_RULE_WIDTH_PCT,
-        hard_blocks=_HARD_BLOCK_ORDER,
-        preview=preview,
-        matched=matched,
-        tally=tally,
-        # P10-T13: the sample alerts open in the new UI, on the host this page was reached on.
-        new_ui_url=pages.new_ui_url(request.headers.get("host")),
-        # Review round 1: "" not "[]" — the textarea is `required`, so an
-        # empty submit is a 422 flash (`json.loads("")` raises), never a
-        # silent "match everything" default.
-        form=form or {"name": "", "reason": "", "match_json": ""},
-    )
-    page.status_code = status_code
-    return page
-
-
-@router.get("/admin/rules", response_class=HTMLResponse)
-def rules_page(
-    request: Request,
-    conn: Conn,
-    cfg: Cfg,
-    user: Annotated[Claims, Depends(page_user)],
-    _: Admin,
-) -> HTMLResponse:
-    return _page(request, conn, cfg, user)
-
-
-@router.post("/admin/rules/preview", response_class=HTMLResponse)
-def rules_preview(
-    request: Request,
-    conn: Conn,
-    cfg: Cfg,
-    user: Annotated[Claims, Depends(page_user)],
-    _: Admin,
-    name: Annotated[str, Form()],
-    reason: Annotated[str, Form()],
-    match_json: Annotated[str, Form()],
-) -> HTMLResponse:
-    form = {"name": name, "reason": reason, "match_json": match_json}
-    try:
-        match = _parse_match_json(match_json)
-        stats = autoclose.simulate(conn, match)
-    except PermanentError as exc:
-        flash = {"level": "error", "text": f"Match không hợp lệ — {exc}"}
-        return _page(request, conn, cfg, user, flash=flash, status_code=422, form=form)
-    matched, tally = (None, None)
-    if stats.clusters == 0:
-        matched, tally = _hard_block_tally(conn, cfg, match)
-    return _page(request, conn, cfg, user, preview=stats, matched=matched, tally=tally, form=form)
-
-
-@router.post("/admin/rules", response_class=HTMLResponse)
-def rules_create(
-    request: Request,
-    conn: Conn,
-    cfg: Cfg,
-    user: Annotated[Claims, Depends(page_user)],
-    _: Admin,
-    name: Annotated[str, Form()],
-    reason: Annotated[str, Form()],
-    match_json: Annotated[str, Form()],
-):
-    form = {"name": name, "reason": reason, "match_json": match_json}
-    try:
-        match = _parse_match_json(match_json)
-        _create_rule(conn, name=name, reason=reason, match=match, actor_id=user.user_id)
-    except PermanentError as exc:
-        flash = {"level": "error", "text": f"Match không hợp lệ — {exc}"}
-        return _page(request, conn, cfg, user, flash=flash, status_code=422, form=form)
-    return RedirectResponse("/admin/rules", status_code=303)
-
-
-@router.post("/admin/rules/{rule_id}/toggle", response_class=HTMLResponse)
-def rules_toggle(
-    request: Request,
-    conn: Conn,
-    cfg: Cfg,
-    user: Annotated[Claims, Depends(page_user)],
-    _: Admin,
-    # uuid.UUID, not str: a malformed id is a 422 from FastAPI's own path
-    # converter, not a 500 from the SQL layer (review round 1).
-    rule_id: uuid.UUID,
-    enabled: Annotated[bool, Form()],
-):
-    name = _toggle_rule(conn, rule_id=str(rule_id), enabled=enabled, actor_id=user.user_id)
-    if name is None:
-        flash = {"level": "error", "text": "Rule không tồn tại"}
-        return _page(request, conn, cfg, user, flash=flash, status_code=404)
-    return RedirectResponse("/admin/rules", status_code=303)
