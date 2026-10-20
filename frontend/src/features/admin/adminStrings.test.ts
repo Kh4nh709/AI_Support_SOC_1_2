@@ -200,6 +200,13 @@ describe("the reason codes", () => {
     expect(isText(S.admin.reason.not_found)).toBe(true);
     expect(S.admin.reason.not_found).not.toContain("Danh sách đã được tải lại");
   });
+
+  // P11-T20 row 51 (P11-T11 N3): the pages that reload their list on a 404 (the users and the failed jobs) show this
+  // text after the list is already read again, so it must not tell the admin to reload the page.
+  it("words `not_found` neutrally: it does not tell the admin to reload a page that was reloaded", () => {
+    expect(S.admin.reason.not_found).toBe("Không tìm thấy mục này.");
+    expect(S.admin.reason.not_found).not.toMatch(/tải lại/);
+  });
 });
 
 describe("adminReasonText", () => {

@@ -1,27 +1,20 @@
 // `/admin/overview` (P11-T11, spec §4.1): the admin's first screen, the canvas's `AdminOverview`. One read,
-// `GET /api/admin/overview?range=`, feeds nine sections, and each fails alone: a section that came back
+// `GET /api/admin/overview?range=`, feeds ten sections, and each fails alone: a section that came back
 // `null` draws its own error (AdminStates, "một khối lỗi") while the others show. The fourth card, the LLM
-// cost of the month against its cap, is not in that answer: it is `GET /api/admin/llm/usage?range=month`
-// (the same read the LLM page shows), so it has its own loading and its own error too.
+// cost of the month against its cap, is the tenth section, `llm_month` (DEC-203, P11-T20 row 50): it comes
+// with the answer, fails alone in its card like the others, and no second read (`llm/usage`) stands behind it.
 //
-// TanStack Query owns both reads and refetches them every 60 seconds while the tab is visible (spec §3). The two
+// TanStack Query owns the read and refetches it every 60 seconds while the tab is visible (spec §3). A limit
+// change on the LLM page makes it stale through `invalidateAfter("putLlmLimits")`. The two
 // writes, the retry of a failed job and the reload of the inventory, live in `FailedJobsBlock` and
 // `InventoryBlock`, each with its dialog; this file composes the page and tells its states apart:
 //   - loading: a skeleton in the layout of the page;
 //   - the read failed: the page's error with a retry, and the range select, so another range can be tried;
 //   - a refresh failed while an earlier answer is on screen: that answer stays, with a note saying so;
 //   - a range with no alert: the cards say 0, the chart is empty, and a card says why.
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useId, useState } from "react";
-import {
-  ADMIN_RANGES,
-  adminErrorOf,
-  getLlmUsage,
-  getOverview,
-  type AdminRange,
-  type LlmUsage,
-  type OverviewResponse,
-} from "../../api/admin";
+import { ADMIN_RANGES, getOverview, type AdminRange, type OverviewResponse } from "../../api/admin";
 import { PageError } from "../../components/PageError";
 import { formatTime } from "../../format";
 import { S } from "../../strings";
@@ -42,21 +35,22 @@ import {
   SourceTable,
   Tile,
   TileError,
-  TileLoading,
 } from "./OverviewBlocks";
 import {
   formatCap,
   formatCount,
   formatPct,
   formatSpend,
+  llmCardState,
   sectionFailure,
   zeroFillDays,
+  type LlmMonth,
   type SectionFailure,
 } from "./overviewModel";
 
 const P = S.admin.overviewPage;
 
-/** Both reads are asked again this often, while the tab is visible (spec §3). */
+/** The read is asked again this often, while the tab is visible (spec §3). */
 const REFRESH_MS = 60_000;
 
 const isoOf = (ms: number): string => new Date(ms).toISOString();
@@ -67,11 +61,6 @@ export function OverviewPage() {
   const overview = useQuery({
     queryKey: adminKeys.overview(range),
     queryFn: () => getOverview(range),
-    refetchInterval: REFRESH_MS,
-  });
-  const usage = useQuery({
-    queryKey: adminKeys.llmUsage("month"),
-    queryFn: () => getLlmUsage("month"),
     refetchInterval: REFRESH_MS,
   });
   const data = overview.data;
@@ -137,7 +126,6 @@ export function OverviewPage() {
             data={data}
             range={range}
             nowMs={overview.dataUpdatedAt}
-            usage={usage}
             onRetryRead={readAgain}
           />
         </>
@@ -150,14 +138,12 @@ function OverviewBody({
   data,
   range,
   nowMs,
-  usage,
   onRetryRead,
 }: {
   data: OverviewResponse;
   range: AdminRange;
   /** When the answer arrived: the clock the days of the range are counted back from. */
   nowMs: number;
-  usage: UseQueryResult<LlmUsage>;
   onRetryRead: () => void;
 }) {
   const failure = (section: Parameters<typeof sectionFailure>[1]): SectionFailure =>
@@ -210,7 +196,11 @@ function OverviewBody({
             sub={P.kpi.casesOpenSub}
           />
         )}
-        <LlmTile usage={usage} />
+        {data.llm_month === null ? (
+          tileError("llm_month", P.kpi.llmCost)
+        ) : (
+          <LlmTile month={data.llm_month} />
+        )}
       </dl>
 
       {emptyRange && (
@@ -275,29 +265,23 @@ function OverviewBody({
   );
 }
 
-/** The fourth card: the month's LLM cost against the cap. It is read apart from the overview, so it waits and fails apart. */
-function LlmTile({ usage }: { usage: UseQueryResult<LlmUsage> }) {
-  if (usage.data !== undefined) {
-    const { spent_usd, cap_usd, pct } = usage.data.month;
-    return (
-      <Tile
-        label={P.kpi.llmCost}
-        value={formatSpend(spent_usd)}
-        sub={
-          cap_usd === null || pct === null
-            ? P.kpi.llmCapUnknown
-            : P.kpi.llmCap(formatCap(cap_usd), formatPct(pct))
-        }
-      />
-    );
-  }
-  if (usage.isError) {
-    const error = adminErrorOf(usage.error);
-    const text =
-      error.kind === "reason" && (error.reason === "timeout" || error.reason === "query_failed")
-        ? P.sectionError[error.reason]
-        : S.common.unknownError;
-    return <TileError label={P.kpi.llmCost} text={text} onRetry={() => void usage.refetch()} />;
-  }
-  return <TileLoading label={P.kpi.llmCost} />;
+/**
+ * The fourth card: the month's LLM cost against the cap, from the overview's `llm_month`. Under the cap it says
+ * "trần $30 · 1,7%"; with no cap to compare with (the limits could not be read) it says so and shows only the
+ * spend; at the cap (`spent_usd >= cap_usd`, never `pct`) it says the model has stopped.
+ */
+function LlmTile({ month }: { month: LlmMonth }) {
+  const state = llmCardState(month);
+  const { spent_usd, cap_usd, pct } = month;
+  const cap = cap_usd === null ? null : formatCap(cap_usd);
+  let sub: string = P.kpi.llmCapUnknown;
+  if (cap !== null && state === "stopped") sub = P.kpi.llmStopped(cap);
+  else if (cap !== null && pct !== null && state === "ok") sub = P.kpi.llmCap(cap, formatPct(pct));
+  return (
+    <Tile
+      label={P.kpi.llmCost}
+      value={formatSpend(spent_usd)}
+      sub={state === "stopped" ? <span className="text-[#fda4af]">{sub}</span> : sub}
+    />
+  );
 }

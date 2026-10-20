@@ -2,7 +2,7 @@
 // month's cap, the table by pipeline and role, the ② quota of the last 24 hours, the last 20 calls, and the
 // form of the three limits with its confirmation. MSW answers the two routes; nothing is mocked above `fetch`.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { http, HttpResponse } from "msw";
@@ -392,9 +392,39 @@ describe("the tiles", () => {
     renderPage();
     await costTile();
     const tile = within(await region(L.stoppedTile.title));
-    expect(tile.getByText("7,7%")).toBeInTheDocument();
+    // 122 of the 855 ① proposer runs and the one ② run: the verifier's 733 calls are not runs of their own.
+    expect(tile.getByText("14,3%")).toBeInTheDocument();
     expect(
-      tile.getByText("122 / 1.589 lượt · nhiều nhất: sai định dạng (schema)"),
+      tile.getByText(
+        "122 / 856 lượt (không tính lượt verifier) · nhiều nhất: sai định dạng (schema)",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("counts a ① verifier failure once, although the server writes its stopped_by on both rows", async () => {
+    const [proposer, verifier, investigator] = pipelineRows() as [
+      PipelineRoleRow,
+      PipelineRoleRow,
+      PipelineRoleRow,
+    ];
+    serveUsage(
+      usage({
+        by_pipeline_role: [
+          { ...proposer, stopped: { schema: 122, transient: 5 } },
+          { ...verifier, stopped: { transient: 5 } },
+          investigator,
+        ],
+      }),
+    );
+    renderPage();
+    await costTile();
+    const tile = within(await region(L.stoppedTile.title));
+    // 127 of 856 (14,8 %), not 132 of 1.589: the five alerts whose verifier failed are five, not ten.
+    expect(tile.getByText("14,8%")).toBeInTheDocument();
+    expect(
+      tile.getByText(
+        "127 / 856 lượt (không tính lượt verifier) · nhiều nhất: sai định dạng (schema)",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -1396,6 +1426,26 @@ describe("a saved limit", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
+  it("puts the focus on the cap field after a save, since the button that opened the dialog is disabled by then", async () => {
+    serveUsage(usage());
+    servePut(() => saved({ cap_usd: 40 }));
+    const { user } = await openConfirm({ cap: "40" });
+    await user.click(confirmButton("Lưu"));
+    await screen.findByRole("status");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(saveButton()).toBeDisabled();
+    await waitFor(() => expect(capField()).toHaveFocus());
+  });
+
+  it("puts it on the cap field when another field was the one saved", async () => {
+    serveUsage(usage());
+    servePut(() => saved({ timeout_s: 90 }));
+    const { user } = await openConfirm({ timeout: "90" });
+    await user.click(confirmButton("Lưu"));
+    await screen.findByRole("status");
+    await waitFor(() => expect(capField()).toHaveFocus());
+  });
+
   it("shows what the PUT answered, at once and before the page is read again, not what was typed", async () => {
     const held = gate();
     // The server holds the cap at 41 although 40 was asked (the answer is what is in force).
@@ -1466,6 +1516,27 @@ describe("a saved limit", () => {
     await waitFor(() => expect(bodies).toHaveLength(1));
   });
 
+  it("sends one PUT for two presses of the confirm button in the same tick", async () => {
+    // TanStack Query 5 tells React that a mutation is pending only on a `setTimeout(0)`, so `busy` has not
+    // reached the button when the second press lands: both find it enabled. Two `fireEvent.click` in one
+    // `act` is that case (`userEvent` waits between presses, which hides it). The shared latch stops the second.
+    serveUsage(usage());
+    const held = gate();
+    const bodies = servePut(async () => {
+      await held.opened;
+      return saved({ cap_usd: 40 });
+    });
+    await openConfirm({ cap: "40" });
+    const button = confirmButton("Lưu");
+    act(() => {
+      fireEvent.click(button);
+      fireEvent.click(button);
+    });
+    held.release();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodies).toEqual([{ cap_usd: 40 }]);
+  });
+
   it("is busy while the save is out: both buttons are disabled and Esc does not cancel", async () => {
     serveUsage(usage());
     const held = gate();
@@ -1488,12 +1559,8 @@ describe("a saved limit", () => {
 // --- saving: what the server refuses ------------------------------------------------------------------------
 
 describe("a refused save", () => {
-  it.each([
-    ["not_integer", {}, "Phải là số nguyên"],
-    ["unknown", {}, "Trường này không được hỗ trợ"],
-    ["empty", {}, "Không được để trống"],
-    ["out_of_range", { min: 10, max: 90 }, "Phải từ 10 đến 90"],
-  ])("shows the 422 %s at the field it names, closing the dialog", async (reason, extra, text) => {
+  /** A 422 `{field: "timeout_s", reason, ...extra}`: the page shows it at that field and closes the dialog. */
+  async function refusedAtTimeout(reason: string, extra: object, text: string) {
     serveUsage(usage());
     servePut(() => refuse(422, { field: "timeout_s", reason, ...extra }));
     const { user } = await openConfirm({ cap: "40", timeout: "100" });
@@ -1504,7 +1571,24 @@ describe("a refused save", () => {
     expect(timeoutField()).toHaveFocus();
     expect(capField()).not.toHaveAttribute("aria-invalid", "true");
     expect(quotaField()).not.toHaveAttribute("aria-invalid", "true");
-  });
+  }
+
+  // The two reasons the route (`admin_llm.py` `_validate`) answers for a field of this form.
+  it.each([
+    ["not_integer", {}, "Phải là số nguyên"],
+    ["out_of_range", { min: 10, max: 90 }, "Phải từ 10 đến 90"],
+  ])("shows the 422 %s at the field it names, closing the dialog", refusedAtTimeout);
+
+  // Not shapes the route sends for `timeout_s`: `_validate` never answers `empty`, and answers `unknown` only for
+  // a field outside the form (the dialog test below). They pin the page's generic mapping of any
+  // `{field, reason}` of one of its fields to that reason's text, so a code the route starts to send is shown.
+  it.each([
+    ["unknown", {}, "Trường này không được hỗ trợ"],
+    ["empty", {}, "Không được để trống"],
+  ])(
+    "maps a 422 %s on a field of the form, which the route does not send, by its reason's text",
+    refusedAtTimeout,
+  );
 
   it("reads the page again after a 422 out_of_range, so the bounds on screen are the server's now", async () => {
     const narrower = usage({

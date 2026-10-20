@@ -448,7 +448,7 @@ export const S = {
     nextSteps: "Bước tiếp theo",
     playbook: (name: string) => `Playbook: ${name}`,
     // The 429 of `POST .../analyze` carries no count, so the sentence gives none.
-    quotaExhausted: "Đã dùng hết lượt phân tích hôm nay",
+    quotaExhausted: "Đã dùng hết lượt phân tích trong 24 giờ gần nhất",
     alreadyRunning: "Đang có một lượt phân tích chạy cho case này",
     concluded: "Case đã kết luận — không thể phân tích thêm",
     idle: "Chưa có phân tích nào cho case này.",
@@ -522,8 +522,6 @@ export const S = {
       labels: "Gán nhãn tập vàng",
       audit: "Nhật ký audit",
     },
-    // What a page that is not built yet says (the page tasks replace these pages).
-    building: "Trang này đang xây dựng.",
 
     // The overview page (P11-T11, spec §4.1): the canvas's `AdminOverview` and the Tổng quan section of
     // `AdminStates`, in its words. A function takes what the server sent, already formatted by the page.
@@ -558,6 +556,9 @@ export const S = {
         llmCost: "Chi phí LLM tháng này",
         llmCap: (cap: string, pct: string) => `trần ${cap} · ${pct}`,
         llmCapUnknown: "không đọc được hạn mức",
+        // P11-T20 row 50: the month's spend has reached the cap (`spent_usd >= cap_usd`); the share is left out,
+        // because the route rounds it. The same fact as the LLM page's red cost tile, in one line.
+        llmStopped: (cap: string) => `trần ${cap} · đã chạm trần, model dừng gọi`,
       },
 
       byDay: {
@@ -675,6 +676,7 @@ export const S = {
       // The confirm button of a dialog while its write is in flight, whatever the write is.
       working: "Đang xử lý…",
       loadError: "Không tải được trang",
+      renderError: "Trang này gặp lỗi khi hiển thị.",
     },
 
     // `?range=` of the overview, the LLM usage and the audit page.
@@ -693,7 +695,7 @@ export const S = {
         "Không thể hạ quyền hoặc vô hiệu hoá admin hoạt động cuối cùng. Tạo hoặc kích hoạt một admin khác trước.",
       self_change:
         "Bạn không thể tự hạ quyền hoặc tự vô hiệu hoá tài khoản của mình. Nhờ một admin khác làm việc này.",
-      not_found: "Không tìm thấy mục này. Có thể nó đã bị xoá hoặc đã đổi — hãy tải lại trang.",
+      not_found: "Không tìm thấy mục này.",
       empty: "Không được để trống",
       invalid: "Giá trị không hợp lệ",
       too_short: "Quá ngắn",
@@ -911,6 +913,11 @@ export const S = {
           "Tính cả tháng dương lịch, dù khoảng thời gian đang chọn là gì. Tháng bắt đầu lúc 0 giờ ngày 1, theo múi giờ của phiên cơ sở dữ liệu.",
       },
       calls: { title: "Lượt gọi model" },
+      // The unit words after a figure (`llmFigures.ts`): millions of tokens ("2,44 tr") and seconds ("2,3 s").
+      units: {
+        million: (amount: string) => `${amount} tr`,
+        seconds: (amount: string) => `${amount} s`,
+      },
       tokens: {
         title: "Token vào / ra",
         average: (parts: string) => `trung bình ${parts}`,
@@ -919,8 +926,9 @@ export const S = {
       stoppedTile: {
         title: "Lượt dừng không có kết quả",
         none: "không có lượt nào dừng",
-        detail: (stopped: string, calls: string, main: string) =>
-          `${stopped} / ${calls} lượt · nhiều nhất: ${main}`,
+        // Over the runs of ① and ②, the verifier's calls left out: one failed alert is one stop.
+        detail: (stopped: string, runs: string, main: string) =>
+          `${stopped} / ${runs} lượt (không tính lượt verifier) · nhiều nhất: ${main}`,
       },
 
       // The pipelines of `llm_runs.pipeline` and, for ①, its two roles. There is no chat row: the column's
@@ -1154,9 +1162,7 @@ export const S = {
         "Mất kết nối tới máy chủ. Thử lại sau ít phút; nếu lặp lại, xem Tổng quan → Sức khoẻ hệ thống.",
       loadErrorServer: (status: number) =>
         `Máy chủ trả lỗi ${status}. Thử lại sau ít phút; nếu lặp lại, xem Tổng quan → Sức khoẻ hệ thống.`,
-      forbiddenTitle: "Trang này chỉ dành cho admin",
-      forbiddenBody:
-        "Vai trò của tài khoản này không còn quyền xem nhật ký. Lần truy cập này đã được ghi vào nhật ký audit.",
+      // A 403 says `reason.forbidden` (one text for every admin page); only the way back is this page's.
       forbiddenBack: "Về hàng đợi",
 
       // The one-line summary of an event, built from its payload (`auditSummary.ts`). Each is a clause with

@@ -309,7 +309,7 @@ The refusals, in the order the API checks them:
 |---|---|---|
 | `404` | no such case | — |
 | `409` `case đã kết luận` | the case is no longer `investigating` | the button is not drawn: `Case đã kết luận — không thể phân tích thêm` |
-| `429` `analyze quota exceeded for today` | the user already made `ANALYZE_QUOTA_PER_USER_DAY` (default 30) analyses in the last day | the panel says `Đã dùng hết lượt phân tích hôm nay` (the 429 carries no count, so the sentence gives none) |
+| `429` `analyze quota exceeded for today` | the user already made `ANALYZE_QUOTA_PER_USER_DAY` (default 30) analyses in the last day | the panel says `Đã dùng hết lượt phân tích trong 24 giờ gần nhất` (the 429 carries no count, so the sentence gives none) |
 | `409` `an investigation is already running for this case` | a job for this case is `pending` or `running` (one live job per case, by the jobs table's partial unique index) | `Đang có một lượt phân tích chạy cho case này` |
 
 The quota counts `case.analyzed` rows in `audit_events` for that user, at request time. The count and the insert are two steps, not one: two requests racing at the limit can both pass, so a user can end **one over** the limit (N14, accepted, P5-T04 review).

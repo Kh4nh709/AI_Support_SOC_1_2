@@ -12,6 +12,7 @@ import { ADMIN_LIMITS, adminErrorOf, createUser } from "../../api/admin";
 import { ROLES, type Role } from "../../api/types";
 import { S } from "../../strings";
 import { invalidateAfter } from "./adminKeys";
+import { useSubmitLatch } from "./useSubmitLatch";
 import {
   NEW_USER_FIELDS,
   checkNewUser,
@@ -57,10 +58,6 @@ export function UserCreatePanel({
   } satisfies Record<NewUserField, string>;
   const fields = useRef<Partial<Record<NewUserField, HTMLElement | null>>>({});
 
-  // A press of "Tạo tài khoản" sends one write: TanStack Query tells React a mutation is pending only on a timer, so
-  // two presses in one tick would both find `isPending` false. The latch is released when the write settles. (P11-T14's
-  // shared `useSubmitLatch` is to replace it.)
-  const latch = useRef(false);
   const mutation = useMutation({
     mutationFn: createUser,
     // The variables of this mutation are a password. TanStack keeps them for `gcTime` (5 minutes by default), and
@@ -81,10 +78,10 @@ export function UserCreatePanel({
         setFormError(failure.text);
       }
     },
-    onSettled: () => {
-      latch.current = false;
-    },
   });
+  // A press of "Tạo tài khoản" sends one write: TanStack Query tells React a mutation is pending only on a timer, so
+  // two presses in one tick would both find `isPending` false. The shared latch is released when the write settles.
+  const run = useSubmitLatch(mutation);
   const { reset } = mutation;
 
   /** Sets one field, and drops the error that was about it (and, for the password, about the repeat). */
@@ -99,7 +96,6 @@ export function UserCreatePanel({
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (latch.current) return;
     const found = checkNewUser(values);
     setErrors(found);
     setFormError(null);
@@ -109,10 +105,9 @@ export function UserCreatePanel({
       return;
     }
     if (values.role === null) return; // checked above; narrows the type
-    latch.current = true;
     // `reset` once it has settled, whether it worked or not: the mutation, and the password in its variables,
     // are then dropped from the cache (this panel stays mounted, so it would otherwise hold them).
-    mutation.mutate(
+    run(
       {
         username: values.username,
         display_name: values.displayName,
