@@ -47,7 +47,10 @@ behind newer-created ones.
 
 **Retry.** `POST /api/admin/jobs/{job_id}/retry` puts one `failed` job back to `pending` with
 `attempts=0` and `scheduled_at=now()`, which is exactly what `infra/jobs.claim_job` takes
-(`status='pending' AND scheduled_at <= now()`); `last_error` is kept. The job row is locked
+(`status='pending' AND scheduled_at <= now()`); `last_error` is kept on the row, and the
+`admin.job_retried` event carries it through the same rule as the overview (`_shown_error`: the
+marker when it holds a URL with a password, read on the first 4,000 characters, else cut to 200;
+the row is append-only, so a DSN is never written to it). The job row is locked
 `FOR UPDATE` first, and the lock must be exclusive: with `FOR SHARE` two simultaneous retries
 both read `failed`, then deadlock on their UPDATEs and one of them is a 500. A live sibling
 (same `job_type` and `subject_id`, `pending` or `running`) is a `409 already_queued`, checked
@@ -95,7 +98,8 @@ RangeName = Literal["24h", "7d", "30d"]
 
 _TOP_AGENTS = 5
 _FAILED_JOBS_LIMIT = 50
-#: `last_error` is cut to this many characters, in the response and in the audit payload.
+#: `last_error` is cut to this many characters, in the response and in the audit payload (both
+#: after `_shown_error` has judged it).
 _ERROR_CHARS = 200
 #: How much of `last_error` the failed-jobs read takes out of the database to judge: more than it
 #: returns, so a DSN that the cut to `_ERROR_CHARS` would split (the host after the `@` lies
@@ -368,11 +372,11 @@ def api_retry_job(conn: Conn, claims: Admin, job_id: JobId, _json_type: JsonType
     row = conn.execute(
         "SELECT job_type, subject_id, status, attempts, left(last_error, %s) "
         "FROM jobs WHERE job_id = %s FOR UPDATE",
-        (_ERROR_CHARS, job_id),
+        (_ERROR_JUDGED_CHARS, job_id),
     ).fetchone()
     if row is None:
         raise _refuse(404, "not_found")
-    job_type, subject_id, status, attempts_before, last_error = row
+    job_type, subject_id, status, attempts_before, judged_error = row
     if status != "failed":
         raise _refuse(409, "not_failed")
     if _has_live_sibling(conn, job_id, job_type, subject_id):
@@ -401,7 +405,10 @@ def api_retry_job(conn: Conn, claims: Admin, job_id: JobId, _json_type: JsonType
             "job_type": job_type,
             "subject_id": subject_id,
             "attempts_before": attempts_before,
-            "last_error": last_error,
+            # The audit row is append-only: the text is judged here, on more than the 200 kept
+            # (a DSN across character 200 has lost its `@`), and a DSN is never written
+            # (P11-T20 part 4 fix round 1, N2).
+            "last_error": _shown_error(judged_error),
         },
     )
     return {"job_id": job_id, "status": "pending"}

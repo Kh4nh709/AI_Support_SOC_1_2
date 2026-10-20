@@ -1191,6 +1191,51 @@ def test_retry_without_json_by_tier1_is_403_not_422_and_writes_authz_denied(sdb)
     assert str(actor_id) == tier1.user_id and payload["method"] == "POST"
 
 
+# P11-T20 part 4 fix round 1, N2: the retry copies `last_error` into the append-only
+# `admin.job_retried` payload. Cut to 200 characters first, a DSN that runs across character 200
+# loses its `@`, the read-time rule (`admin_audit.is_secret_value`) cannot find it, and the row is
+# permanent. The payload takes the same judged text as the overview: the marker, whole.
+@pytest.mark.db
+@pytest.mark.parametrize(
+    ("error", "where"),
+    [
+        pytest.param(
+            "z" * 150 + " postgresql://app_rw:" + "P" * 60 + "@db:5432/soc",
+            "split at 200",
+            id="split",
+        ),
+        pytest.param(f"connection to {DSN} refused", "inside the 200", id="whole"),
+        pytest.param("y" * 300 + f" {DSN}", "past the 200", id="beyond"),
+    ],
+)
+def test_retry_stores_the_marker_not_a_dsn_in_the_event(client, error, where) -> None:
+    tc, db, _ = client
+    job_id = _job(db, subject_id=f"alert-{where}", last_error=error)
+
+    assert _retry(tc, job_id).status_code == 200
+
+    ((_, _, _, payload),) = _events(db, "admin.job_retried", str(job_id))
+    assert payload["last_error"] == "[đã ẩn]", where
+    assert "PPPPP" not in str(payload) and "Sup3rS3cret" not in str(payload)
+    assert payload["job_type"] == "triage" and payload["attempts_before"] == 3
+    assert (
+        _job_row(db, job_id)[2] == error
+    )  # the job row keeps why it failed; only the event is cut
+
+
+@pytest.mark.db
+def test_the_stored_marker_is_what_the_audit_page_answers_for_the_retried_job(client) -> None:
+    """End to end: a DSN split at 200, retried, read back through `GET /api/admin/audit`."""
+    tc, db, _ = client
+    job_id = _job(db, last_error="z" * 150 + " postgresql://app_rw:" + "P" * 60 + "@db:5432/soc")
+    assert _retry(tc, job_id).status_code == 200
+    resp = tc.get("/api/admin/audit", params={"subject": str(job_id)})
+    assert resp.status_code == 200
+    (event,) = resp.json()["events"]
+    assert event["payload"]["last_error"] == "[đã ẩn]"
+    assert "PPPPP" not in resp.text
+
+
 @pytest.mark.db
 def test_a_null_last_error_stays_null_in_the_event(client) -> None:
     tc, db, _ = client
