@@ -13,6 +13,7 @@ import {
   formatSpend,
   funnelCounts,
   lastAttemptAt,
+  llmCardState,
   localDay,
   sectionFailure,
   shiftDay,
@@ -318,6 +319,32 @@ describe("sectionFailure", () => {
       ],
     };
     expect(sectionFailure(data, "waiting")).toBe("timeout");
+  });
+});
+
+// The cost card's state (P11-T20 row 50, DEC-203): `stopped` is the adapter's own comparison, spent >= cap, and
+// never `pct`, which the route rounds (so it can read 99,9 at the cap, or 100 a cent under it).
+describe("llmCardState", () => {
+  const month = (spent_usd: number, cap_usd: number | null, pct: number | null) => ({
+    spent_usd,
+    cap_usd,
+    pct,
+  });
+
+  it.each([
+    ["well under the cap", month(0.51, 30, 1.7), "ok"],
+    ["nothing spent", month(0, 30, 0), "ok"],
+    ["past 80 % of the cap, which this card does not colour", month(27, 30, 90), "ok"],
+    ["a cent under the cap, though pct reads 100", month(29.99, 30, 100), "ok"],
+    ["exactly at the cap, though pct reads 99,9", month(30, 30, 99.9), "stopped"],
+    ["exactly at the cap, with pct null", month(30, 30, null), "stopped"],
+    ["over the cap", month(31.2, 30, 104), "stopped"],
+    ["a cap of 0 with nothing spent", month(0, 0, null), "stopped"],
+    ["the limits unreadable (no cap, no pct)", month(0.51, null, null), "unknown"],
+    ["no cap, a large spend", month(500, null, null), "unknown"],
+    ["a cap and no pct, under the cap (not sent by the route)", month(1, 30, null), "unknown"],
+  ] as const)("is %s", (_name, data, state) => {
+    expect(llmCardState(data)).toBe(state);
   });
 });
 

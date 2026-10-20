@@ -213,6 +213,27 @@ function serveNext(...replies: Reply[]) {
   );
 }
 
+/**
+ * `labels/next`: the first reply at once, every later one only after `release()` (a slow re-read after a write,
+ * held shut by the test instead of a timer, so what is on screen meanwhile can be looked at without a race).
+ */
+function serveNextHeldAfterFirst(first: Reply, later: Reply) {
+  let reads = 0;
+  let release: () => void = () => {};
+  const opened = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.get(NEXT, async ({ request }) => {
+      nextQueries.push(new URL(request.url).searchParams.get("labeler"));
+      const read = reads++;
+      if (read > 0) await opened;
+      return answer(read === 0 ? first : later);
+    }),
+  );
+  return { release: () => release() };
+}
+
 function servePost(reply: Reply = posted(), ms = 0) {
   server.use(
     http.post(LABELS, async ({ request }) => {
@@ -700,6 +721,59 @@ describe("the form", () => {
     expect(heading).toHaveAttribute("tabindex", "-1");
   });
 
+  // The write answers, the notice is set, and the page renders once with the OLD screen still up: the re-read of
+  // `labels/next` is on its way. The focus is asked for at the write but given only when the screen has changed
+  // (`screenKey !== screenAtWrite`); an instant re-read (`serveNext`) never shows that render, so these two hold the
+  // second read shut until the test has looked at it. Without the condition the request is spent on the stale
+  // cluster's head at once, the next screen then replaces it, and the focus falls to <body> (P11-T16 review, round 2).
+  describe("when the re-read after a write is slow", () => {
+    it("moves the focus to the finished card after the last label, not to the stale cluster on the way", async () => {
+      const second = serveNextHeldAfterFirst(nextAnswer({ done: 59 }), finished());
+      servePost(posted({ done: 60, next: null }));
+      renderPage();
+      await ready();
+      await save("benign");
+      // The notice is up and the old cluster is still the screen: it must not take the focus.
+      await screen.findByRole("status");
+      expect(screen.getByRole("region", { name: L.cluster.label })).not.toHaveFocus();
+      second.release();
+      const heading = await screen.findByRole("heading", { level: 2, name: L.finished.title(60) });
+      await waitFor(() => expect(heading).toHaveFocus());
+    });
+
+    it("moves the focus to the new cluster's head, not to the stale one on the way", async () => {
+      const second = serveNextHeldAfterFirst(nextAnswer(), afterA());
+      servePost();
+      renderPage();
+      await ready();
+      await save("benign");
+      await screen.findByRole("status");
+      expect(headText()).toContain("ssh_brute_force");
+      expect(screen.getByRole("region", { name: L.cluster.label })).not.toHaveFocus();
+      second.release();
+      await waitFor(() => expect(headText()).toContain("port_scan"));
+      await waitFor(() =>
+        expect(screen.getByRole("region", { name: L.cluster.label })).toHaveFocus(),
+      );
+    });
+
+    it("gives the finished card the focus after a 150 ms re-read too (the timer the review used)", async () => {
+      server.use(
+        http.get(NEXT, async () => {
+          nextQueries.push(USER_ID);
+          if (nextQueries.length > 1) await delay(150);
+          return answer(nextQueries.length === 1 ? nextAnswer({ done: 59 }) : finished());
+        }),
+      );
+      servePost(posted({ done: 60, next: null }));
+      renderPage();
+      await ready();
+      await save("benign");
+      const heading = await screen.findByRole("heading", { level: 2, name: L.finished.title(60) });
+      await waitFor(() => expect(heading).toHaveFocus());
+    });
+  });
+
   it("moves the focus back to the cluster after an undo from the finished card", async () => {
     serveNext(finished(), nextAnswer({ cluster_id: A, done: 59, total: 60 }));
     serveUndo(undone({ undone_cluster_id: A, done: 59, total: 60 }));
@@ -933,6 +1007,69 @@ describe("a save the server refuses or cannot make", () => {
     expect(document.body.textContent).not.toMatch(
       /already labelled|not a gold candidate|labeler must|Internal Server Error|JWT_SECRET/,
     );
+  });
+
+  // After a stale refusal the page reads again and moves on to the next cluster: the form that had the focus is
+  // replaced by another, so the focus is asked for on the new cluster's head, as after a save. The refusal is a
+  // `role="alert"` beside the new form, so a screen reader hears it either way (P11-T16 review round 2, note 4).
+  describe("after a stale refusal, which replaces the screen", () => {
+    const stale: [string, Failure][] = [
+      [
+        "409 already labelled",
+        { status: 409, body: { detail: "already labelled by this labeler" } },
+      ],
+      ["404 not a candidate", { status: 404, body: { detail: "cluster is not a gold candidate" } }],
+    ];
+
+    it.each(stale)("%s: moves the focus to the next cluster's head", async (_name, failure) => {
+      serveNext(nextAnswer(), afterA());
+      servePost(failure);
+      renderPage();
+      await ready();
+      await save("escalate");
+      await waitFor(() => expect(headText()).toContain("port_scan"));
+      await waitFor(() =>
+        expect(screen.getByRole("region", { name: L.cluster.label })).toHaveFocus(),
+      );
+      expect(within(form()).getByRole("alert")).toBeInTheDocument();
+    });
+
+    it.each(stale)(
+      "%s: leaves the stale cluster's head alone while the re-read is on its way",
+      async (_name, failure) => {
+        const second = serveNextHeldAfterFirst(nextAnswer(), afterA());
+        servePost(failure);
+        renderPage();
+        await ready();
+        await save("escalate");
+        await within(form()).findByRole("alert");
+        expect(headText()).toContain("ssh_brute_force");
+        expect(screen.getByRole("region", { name: L.cluster.label })).not.toHaveFocus();
+        second.release();
+        await waitFor(() => expect(headText()).toContain("port_scan"));
+        await waitFor(() =>
+          expect(screen.getByRole("region", { name: L.cluster.label })).toHaveFocus(),
+        );
+      },
+    );
+
+    it.each<[string, Failure]>([
+      [
+        "403 not the signed-in labeller",
+        { status: 403, body: { detail: "labeler must be the current user" } },
+      ],
+      ["422", { status: 422, body: { detail: "note: at most 200 characters" } }],
+      ["503", { status: 503, body: { detail: "auth disabled: JWT_SECRET unset" } }],
+    ])("%s: asks for no focus, the screen is as it was", async (_name, failure) => {
+      serveNext(nextAnswer(), afterA());
+      servePost(failure);
+      renderPage();
+      await ready();
+      await save("escalate");
+      await within(form()).findByRole("alert");
+      expect(headText()).toContain("ssh_brute_force");
+      expect(screen.getByRole("region", { name: L.cluster.label })).not.toHaveFocus();
+    });
   });
 
   it("409 frozen: says so in the neutral words, and the page becomes the frozen state", async () => {
@@ -1677,6 +1814,16 @@ describe("the page stays blind", () => {
 //
 // The source is read as TypeScript (a syntax tree), not as lines of text: a comment, a string that holds `//`,
 // or a name written across lines cannot hide a call from it, and a comment that names a forbidden call is not one.
+//
+// What it reads is the four files, and the relative modules they may import are an allow-list (`ALLOWED_IMPORTS`):
+// a new file next to them, imported, re-exported or imported on demand, fails until it is put on the list, and so
+// read by this guard (P11-T16 review round 2, P11-T20 row 60).
+//
+// Known gaps, left to the DOM tests above (a planted marker never reaches the page, before and after a save),
+// which are the real wall: the guard is name-based, so it does not see
+//   - `(cluster.constructor as ObjectConstructor).keys(cluster)` (the `.constructor` of a value is `Object`);
+//   - a renamed alias that is then spread, `const c = cluster; <i {...c} />` (the spread list is of names);
+//   - `globalThis["Obj" + "ect"].keys(cluster)` (a name built at run time).
 describe("the source of the page", () => {
   const FILES = ["LabelsPage.tsx", "LabelClusterView.tsx", "LabelForm.tsx", "labelerId.ts"];
   const source = (name: string) => readFileSync(join("src", "features", "admin", name), "utf8");
@@ -1696,6 +1843,32 @@ describe("the source of the page", () => {
   /** The names the cluster and its parts go by in these files: spreading one would copy every key it carries. */
   const WHOLE = new Set(["cluster", "view", "data", "next", "row", "sample", "answer", "saved"]);
   const LINK_TAGS = new Set(["a", "Link", "NavLink", "Navigate"]);
+  /**
+   * Every relative module the four files may import, exactly as they spell it: the API (its routes are checked by
+   * name below), the session, the shared components they draw with, the strings and the time module, the
+   * console's cache keys and write latch, and the four files themselves. A relative module that is not here is
+   * a new file this guard has never read (a helper of the same folder, a component), so it fails the guard until
+   * someone puts it on the list, and so reads it.
+   */
+  const ALLOWED_IMPORTS = new Set([
+    "../../api/admin",
+    "../../api/types",
+    "../../auth/AuthProvider",
+    "../../components/Badge",
+    "../../components/DataTable",
+    "../../components/LogBlock",
+    "../../components/PageError",
+    "../../components/Toast",
+    "../../format",
+    "../../strings",
+    "./adminKeys",
+    "./useSubmitLatch",
+    "./LabelsPage",
+    "./LabelForm",
+    "./LabelClusterView",
+    "./labelerId",
+  ]);
+  const ALLOWED_IMPORT_LINES = [...ALLOWED_IMPORTS].map((from) => `import "${from}";`).join("\n");
 
   /** What a file does that the blind page must not. `[]` for a file that does none of it. */
   function violations(text: string, name = "scratch.tsx"): string[] {
@@ -1735,10 +1908,22 @@ describe("the source of the page", () => {
       if (ts.isJsxAttribute(node) && ["href", "to"].includes(node.name.getText(file))) {
         found.push(`the attribute ${node.name.getText(file)}`);
       }
-      if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      if (
+        (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+        node.moduleSpecifier !== undefined &&
+        ts.isStringLiteral(node.moduleSpecifier)
+      ) {
         const from = node.moduleSpecifier.text;
         if (/\/api\/(?!admin$|types$)/.test(from)) found.push(`the module ${from}`);
         if (/\/(tier1|tier2)\//.test(from)) found.push(`the module ${from}`);
+        // A relative module off the list is a file this guard does not read: an import, a re-export of one.
+        if (from.startsWith(".") && !ALLOWED_IMPORTS.has(from)) {
+          found.push(`the module ${from}, which is not on the list`);
+        }
+      }
+      // `import("./x")` names a module without an import declaration.
+      if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        found.push("a dynamic import");
       }
       if (
         ts.isPropertyAccessExpression(node) &&
@@ -1826,6 +2011,17 @@ describe("the source of the page", () => {
       ["another api module", 'import { fetchQueue } from "../../api/queue";\nvoid fetchQueue;'],
       ["another feature", 'import { x } from "../tier1/alertSections";\nvoid x;'],
       ["another query key", "void adminKeys.overviewAll;"],
+      // The allow-list of relative imports: a new file next to these four would otherwise be read by nobody.
+      ["a new helper of the same folder", 'import { helper } from "./labelHelpers";\nvoid helper;'],
+      ["a helper of another admin page", 'import { rows } from "./digestFigures";\nvoid rows;'],
+      [
+        "a shared component that is not on the list",
+        'import { Chip } from "../../components/Chip";\nvoid Chip;',
+      ],
+      ["a side-effect import of a new file", 'import "./labelHelpers";'],
+      ["a re-export of a new file", 'export * from "./labelHelpers";'],
+      ["a named re-export of a new file", 'export { helper } from "./labelHelpers";'],
+      ["a dynamic import", 'void import("./labelHelpers");'],
     ])("finds %s", (_name, snippet) => {
       expect(violations(`${real}\n${snippet}\n`, "scratch.tsx")).not.toEqual([]);
     });
@@ -1840,6 +2036,9 @@ describe("the source of the page", () => {
       ["JSON.parse, which reads the token", 'void JSON.parse("{}");'],
       ["the labels query key, spread into a longer one", "void [...adminKeys.labels, 1];"],
       ["a spread of a name that is no whole object", "void { ...answerFields };"],
+      ["an import of each file on the list", ALLOWED_IMPORT_LINES],
+      ["a package import", 'import { useState } from "react";\nvoid useState;'],
+      ["an export of its own name", "export const own = 1;"],
     ])("does not find %s", (_name, snippet) => {
       expect(violations(`${real}\n${snippet}\n`, "scratch.tsx")).toEqual([]);
     });

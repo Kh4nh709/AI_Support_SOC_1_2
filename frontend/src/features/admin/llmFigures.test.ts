@@ -68,6 +68,26 @@ describe("the number texts", () => {
     expect(formatTokens(0)).toBe("0");
   });
 
+  // The words "tr" and "s" are copy: they live in strings.ts (`S.admin.llmPage.units`), and the figures only
+  // put a number in front of them (P11-T13 review n1). Swapping the word there must change the text here.
+  describe("the unit words are strings.ts's", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it("says millions of tokens with units.million", () => {
+      expect(S.admin.llmPage.units.million("2,44")).toBe("2,44 tr");
+      vi.spyOn(S.admin.llmPage.units, "million").mockImplementation((n) => `${n} triệu`);
+      expect(formatTokens(2_437_000)).toBe("2,44 triệu");
+      expect(formatTokens(47_000)).toBe("47.000");
+    });
+
+    it("says seconds with units.seconds, in a single latency and in p50 / p95", () => {
+      expect(S.admin.llmPage.units.seconds("2,3")).toBe("2,3 s");
+      vi.spyOn(S.admin.llmPage.units, "seconds").mockImplementation((n) => `${n} giây`);
+      expect(formatSeconds(2300)).toBe("2,3 giây");
+      expect(formatLatency(2400, 9800)).toBe("2,4 giây / 9,8 giây");
+    });
+  });
+
   it("writes a percentage with one decimal at most", () => {
     expect(formatPercent(82)).toBe("82%");
     expect(formatPercent(82.4)).toBe("82,4%");
@@ -180,9 +200,48 @@ describe("summarise", () => {
     expect(sum.mainStopped).toBeNull();
   });
 
+  // A ① verifier failure (cap, transient) writes `stopped_by` on the verifier's row AND on the proposer's, so a
+  // sum over every row counts that one alert twice (P11-T13 review m1). The proposer's row alone carries the
+  // alert's outcome, so the stopped share is read over the rows that are not the verifier's.
+  describe("the stopped share counts a ① verifier failure once", () => {
+    const failed = [
+      row({ calls: 10, stopped: { transient: 2, schema: 1 } }),
+      row({ role: "verifier", calls: 8, stopped: { transient: 2 } }),
+      row({ pipeline: "investigate", role: "investigator", calls: 1, stopped: { other: 1 } }),
+    ];
+
+    it("sums the stops over the rows that are not the verifier's", () => {
+      expect(summarise(failed).stopped).toBe(4);
+    });
+
+    it("takes the denominator from the same rows: one run per ① alert and one per ② run", () => {
+      const sum = summarise(failed);
+      expect(sum.runs).toBe(11);
+      expect(sum.calls).toBe(19);
+    });
+
+    it("names the code most runs stopped on without the verifier's copy of it", () => {
+      expect(summarise(failed).mainStopped).toEqual({ code: "transient", count: 2 });
+      const onlyVerifier = summarise([
+        row({ calls: 10, stopped: { schema: 1 } }),
+        row({ role: "verifier", calls: 8, stopped: { transient: 5 } }),
+      ]);
+      expect(onlyVerifier.mainStopped).toEqual({ code: "schema", count: 1 });
+    });
+
+    it("still counts a row whose role is missing or is not the verifier's", () => {
+      const sum = summarise([
+        row({ role: null, calls: 3, stopped: { cap: 1 } }),
+        row({ pipeline: "chat", role: "assistant", calls: 2, stopped: { cap: 1 } }),
+      ]);
+      expect([sum.runs, sum.stopped]).toEqual([5, 2]);
+    });
+  });
+
   it("is all zeros for no rows", () => {
     expect(summarise([])).toEqual({
       calls: 0,
+      runs: 0,
       inputTokens: 0,
       outputTokens: 0,
       byPipeline: [],

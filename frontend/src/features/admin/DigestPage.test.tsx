@@ -209,13 +209,22 @@ function Where() {
 }
 const where = () => screen.getByTestId("where").textContent;
 
-function renderPage(entry = "/admin/digest", client = newClient()) {
+/** The state of the current history entry, as JSON ("null" for none): what a reload would find there. */
+function HistoryState() {
+  return <p data-testid="history-state">{JSON.stringify(useLocation().state ?? null)}</p>;
+}
+const historyState = () => screen.getByTestId("history-state").textContent;
+
+type Entry = string | { pathname: string; search?: string; state?: unknown };
+
+function renderPage(entry: Entry = "/admin/digest", client = newClient()) {
   const view = render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[entry]}>
         <main>
           <DigestPage />
           <Where />
+          <HistoryState />
         </main>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -744,6 +753,73 @@ describe("a bad day", () => {
     await screen.findByRole("alert");
     await user.click(screen.getByRole("link", { name: D.today }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
+  // The fallback carries its notice in the history entry (`<Navigate state>`), and a reload keeps an entry's
+  // state, so the notice would come back after every reload. The page copies the flag into its own state and
+  // clears the entry (P11-T15 review nit, P11-T20 row 52).
+  describe("is shown once", () => {
+    it("clears the flag from the history entry, and keeps the notice on screen", async () => {
+      serveDigest(strict);
+      renderPage("/admin/digest?day=2026-02-30");
+      const notice = await screen.findByRole("alert");
+      await waitFor(() => expect(historyState()).toBe("null"));
+      expect(notice).toHaveTextContent(D.badDay("29/09/2026"));
+      expect(screen.getByRole("alert")).toBe(notice);
+      expect(where()).toBe("/admin/digest");
+    });
+
+    it("keeps the other parameters of the URL when it clears the flag", async () => {
+      serveDigest(strict);
+      renderPage("/admin/digest?day=2026-02-30&keep=1");
+      await screen.findByRole("alert");
+      await waitFor(() => expect(historyState()).toBe("null"));
+      expect(where()).toBe("/admin/digest?keep=1");
+    });
+
+    it("does not show it again when the page is mounted on the entry it left (a reload)", async () => {
+      serveDigest(strict);
+      const first = renderPage("/admin/digest?day=2026-02-30");
+      await screen.findByRole("alert");
+      await waitFor(() => expect(historyState()).toBe("null"));
+      const left = {
+        pathname: "/admin/digest",
+        state: JSON.parse(historyState() ?? "null") as unknown,
+      };
+      first.unmount();
+      serveDigest(strict);
+      renderPage(left);
+      await loaded();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("shows it on a mount whose entry still carries the flag, then clears the entry", async () => {
+      // What a reload finds if the page did not clear it: the notice is shown this once, and not again.
+      serveDigest(strict);
+      renderPage({ pathname: "/admin/digest", state: { badDay: true } });
+      expect(await screen.findByRole("alert")).toHaveTextContent(D.badDay("29/09/2026"));
+      await waitFor(() => expect(historyState()).toBe("null"));
+      expect(screen.getByRole("alert")).toHaveTextContent(D.badDay("29/09/2026"));
+    });
+
+    it("clears nothing, and moves nowhere, on a page that had no flag", async () => {
+      serveDigest(strict);
+      renderPage("/admin/digest?day=2026-09-28");
+      await loaded();
+      expect(historyState()).toBe("null");
+      expect(where()).toBe("/admin/digest?day=2026-09-28");
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("still drops the notice when a day is picked after the entry was cleared", async () => {
+      serveDigest(strict);
+      renderPage("/admin/digest?day=2026-02-30");
+      await screen.findByRole("alert");
+      await waitFor(() => expect(historyState()).toBe("null"));
+      fireEvent.change(picker(), { target: { value: "2026-09-27" } });
+      await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+      expect(where()).toBe("/admin/digest?day=2026-09-27");
+    });
   });
 
   it("is a page error, not a loop, if the default day is itself refused", async () => {

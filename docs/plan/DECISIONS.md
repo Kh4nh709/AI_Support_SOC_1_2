@@ -3438,3 +3438,20 @@ Amended 18/10 (P11-T20 part 2 Coder, deviation 2; the Director's ruling):
 - **Item 2(a) corrected.** The text said both "a string value matching `^…`" and "a DSN inside an error text". Those disagree, because the `^` anchor catches only a string that begins with the URL.
 - **The ruling: no anchor.** A string value is redacted, as a whole, when it contains `scheme://user:password@` anywhere. The pattern is `[a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s]+@`, case-insensitive.
 - **The cost, accepted.** A harmless text such as `see http://h:80/a@b` is hidden too. Leaking a database password into an audit view is the worse error, and the audit payload stays readable in the table it came from.
+
+## DEC-205 · 2026-10-20 · The retirement of the Jinja admin pages and the session cookie (P11-T19) is built on its own branch, stacked on v1.1, so the Owner can use the React pages before the old ones go
+Scope: **product** (release order)
+Decided by: **the Owner, 20/10**, when asked about the gate in spec §8 ("this runs once the e2e suite is green and the Owner has used the React admin pages"). The Owner has not used the React pages yet, because nothing is deployed.
+Drafted by: Director (Sonnet 5.5)
+Propagated to: spec §8 ("The order") · the plan's P11-T19 · STATE (the P11 row and P11-T19) · the final hand-over
+Decision:
+  1. **Two branches, one stack.**
+     - `director/admin-v1-1` ends at P11-T18 and P11-T20, with the React pages, the new APIs and the Jinja pages and the cookie still in place.
+     - `director/admin-v1-1-retire` starts at that tip and adds P11-T19 only: the HTML routes, `pages.py`, the templates, the cookie, and the runbook change. It is cut by the Director once v1.1 is final.
+  2. **The Owner's order.**
+     - Fast-forward `main` to `director/admin-v1-1`, then `make migrate`, then `docker compose up -d --build ui`, then `docker compose restart app worker`. Migrate before restart.
+     - Use the React admin pages.
+     - When satisfied, fast-forward `main` to `director/admin-v1-1-retire`, then `docker compose restart app worker` (a code-only change on the live mount; no migration, no UI rebuild).
+  3. **The review covers both.** The whole-branch review of P11-T20 reads the v1.1 tip, and the retire branch gets its own independent Reviewer (DEC-201). Neither merges into `main` without that.
+  4. **Spec §8's last sentence stands.** v1.1 does not end with two admin UIs: the retire branch is part of v1.1, merged later by the Owner's own decision.
+Supersedes: none. It sets the order the plan left open.

@@ -16,7 +16,9 @@
 // The write answers (labels.py):
 //   save  201 {cluster_id, done, total, next}  the toast says what was saved and who is next; the next cluster is
 //                                              read from `labels/next` (a cluster is only ever sent by it);
-//         409 already labelled / frozen, 404 not a candidate   the screen was stale: read again, the refusal said;
+//         409 already labelled / frozen, 404 not a candidate   the screen was stale: read again, the refusal said
+//                                              (after already labelled and not a candidate a new cluster replaces the
+//                                              form, so the focus goes to its head, as after a save);
 //         403, 422, 5xx, the network           nothing changed: the form is kept and the refusal said at it;
 //   undo  200 {undone_cluster_id, done, total}; 409 `frozen`, 404 `nothing_to_undo` (in `detail.reason`).
 // A read that fails after a write replaces the screen with the page error: the cluster that was just labelled is
@@ -345,13 +347,15 @@ export function LabelsPage() {
       const saving = w.kind === "save";
       let text = failureText(error, saving ? SAVE_WORDS : UNDO_WORDS);
       // The page reads again after these two, so the refusal ends up beside the NEXT cluster's form: say which
-      // cluster it was about.
+      // cluster it was about. The form that had the focus is replaced by that one, so the focus is asked for on
+      // the new cluster's head, as after a save (the refusal is a `role="alert"`, announced either way).
       if (
         w.kind === "save" &&
         error.kind === "reason" &&
         (error.reason === "already_labelled" || error.reason === "unknown_cluster")
       ) {
         text = L.notice.aboutCluster(w.body.cluster_id, text);
+        wantsFocus.current = true;
       }
       setNotice({ tone: "error", text });
       if (isStale(error)) await invalidateAfter(client, saving ? "postLabel" : "undoLabel");
