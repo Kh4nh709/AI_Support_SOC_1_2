@@ -213,6 +213,27 @@ function serveNext(...replies: Reply[]) {
   );
 }
 
+/**
+ * `labels/next`: the first reply at once, every later one only after `release()` (a slow re-read after a write,
+ * held shut by the test instead of a timer, so what is on screen meanwhile can be looked at without a race).
+ */
+function serveNextHeldAfterFirst(first: Reply, later: Reply) {
+  let reads = 0;
+  let release: () => void = () => {};
+  const opened = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.get(NEXT, async ({ request }) => {
+      nextQueries.push(new URL(request.url).searchParams.get("labeler"));
+      const read = reads++;
+      if (read > 0) await opened;
+      return answer(read === 0 ? first : later);
+    }),
+  );
+  return { release: () => release() };
+}
+
 function servePost(reply: Reply = posted(), ms = 0) {
   server.use(
     http.post(LABELS, async ({ request }) => {
@@ -698,6 +719,59 @@ describe("the form", () => {
     const heading = await screen.findByRole("heading", { level: 2, name: L.finished.title(60) });
     await waitFor(() => expect(heading).toHaveFocus());
     expect(heading).toHaveAttribute("tabindex", "-1");
+  });
+
+  // The write answers, the notice is set, and the page renders once with the OLD screen still up: the re-read of
+  // `labels/next` is on its way. The focus is asked for at the write but given only when the screen has changed
+  // (`screenKey !== screenAtWrite`); an instant re-read (`serveNext`) never shows that render, so these two hold the
+  // second read shut until the test has looked at it. Without the condition the request is spent on the stale
+  // cluster's head at once, the next screen then replaces it, and the focus falls to <body> (P11-T16 review, round 2).
+  describe("when the re-read after a write is slow", () => {
+    it("moves the focus to the finished card after the last label, not to the stale cluster on the way", async () => {
+      const second = serveNextHeldAfterFirst(nextAnswer({ done: 59 }), finished());
+      servePost(posted({ done: 60, next: null }));
+      renderPage();
+      await ready();
+      await save("benign");
+      // The notice is up and the old cluster is still the screen: it must not take the focus.
+      await screen.findByRole("status");
+      expect(screen.getByRole("region", { name: L.cluster.label })).not.toHaveFocus();
+      second.release();
+      const heading = await screen.findByRole("heading", { level: 2, name: L.finished.title(60) });
+      await waitFor(() => expect(heading).toHaveFocus());
+    });
+
+    it("moves the focus to the new cluster's head, not to the stale one on the way", async () => {
+      const second = serveNextHeldAfterFirst(nextAnswer(), afterA());
+      servePost();
+      renderPage();
+      await ready();
+      await save("benign");
+      await screen.findByRole("status");
+      expect(headText()).toContain("ssh_brute_force");
+      expect(screen.getByRole("region", { name: L.cluster.label })).not.toHaveFocus();
+      second.release();
+      await waitFor(() => expect(headText()).toContain("port_scan"));
+      await waitFor(() =>
+        expect(screen.getByRole("region", { name: L.cluster.label })).toHaveFocus(),
+      );
+    });
+
+    it("gives the finished card the focus after a 150 ms re-read too (the timer the review used)", async () => {
+      server.use(
+        http.get(NEXT, async () => {
+          nextQueries.push(USER_ID);
+          if (nextQueries.length > 1) await delay(150);
+          return answer(nextQueries.length === 1 ? nextAnswer({ done: 59 }) : finished());
+        }),
+      );
+      servePost(posted({ done: 60, next: null }));
+      renderPage();
+      await ready();
+      await save("benign");
+      const heading = await screen.findByRole("heading", { level: 2, name: L.finished.title(60) });
+      await waitFor(() => expect(heading).toHaveFocus());
+    });
   });
 
   it("moves the focus back to the cluster after an undo from the finished card", async () => {
