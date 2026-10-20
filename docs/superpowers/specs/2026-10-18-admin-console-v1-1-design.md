@@ -304,7 +304,7 @@ The changes to the frozen contracts are listed in §5.9 and recorded by DEC-200.
   A test greps for the three key names outside `infra/config.py` and `infra/settings.py` and expects none.
 - **`PUT /api/admin/llm/limits`**, with any of the three keys as integers.
   - It validates the bounds of decision 2. The timeout's upper bound is derived from `JOB_LOCK_TIMEOUT_S` (DEC-202). In one transaction it upserts the changed keys and writes one `admin.settings_changed` row with `{changes: [{key, old, new}]}`.
-  - `200 {effective, source}`. An unchanged body writes nothing.
+  - `200 {limits: LimitsOut}`: the three effective values, `sources` per setting (with `clamped`) and `bounds` per field (DEC-202), the same shape as `usage`'s `limits`. An unchanged body writes nothing.
   - `422 {field, reason}` per invalid key.
 - **Red steps:**
   - make the accessor return the `.env` value on a read error: a run that should be refused opens a socket on the fake adapter;
