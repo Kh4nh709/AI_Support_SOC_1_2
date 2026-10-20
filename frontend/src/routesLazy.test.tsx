@@ -27,6 +27,7 @@ const gate = vi.hoisted(() => {
     loads: [] as string[],
     rendered: [] as string[],
     failAudit: false,
+    rulesBug: false,
     /** From now on a page's module is not ready until `open()`. */
     hold() {
       held = new Promise<void>((resolve) => {
@@ -78,6 +79,9 @@ vi.mock("./features/admin/RulesPage", async () => {
   return {
     RulesPage: () => {
       gate.rendered.push("RulesPage");
+      // A page with a bug in it, which is not a page that could not be fetched.
+      if (gate.rulesBug)
+        throw new TypeError("Cannot read properties of undefined (reading 'rows')");
       return <h1>{S.admin.title.rules}</h1>;
     },
   };
@@ -104,9 +108,16 @@ vi.mock("./features/admin/LabelsPage", async () => {
 });
 vi.mock("./features/admin/AuditPage", async () => {
   gate.loads.push("AuditPage");
-  // A chunk that cannot be fetched: the network, or a deploy that replaced the file this tab knows the name of.
-  if (gate.failAudit) throw new Error("Failed to fetch dynamically imported module");
   await gate.ready();
+  // A chunk that cannot be fetched: the network, or a deploy that replaced the file this tab knows the name of. A factory
+  // that throws would be wrapped by Vitest in an error of its own, so the page's export throws as the `import()` is read.
+  if (gate.failAudit) {
+    return Object.defineProperty({}, "AuditPage", {
+      get(): never {
+        throw new Error("Failed to fetch dynamically imported module");
+      },
+    });
+  }
   return {
     AuditPage: () => {
       gate.rendered.push("AuditPage");
@@ -252,6 +263,32 @@ describe("a page that cannot be fetched", () => {
     } finally {
       logged.mockRestore();
       gate.failAudit = false;
+    }
+  });
+});
+
+describe("a page that has a bug in it", () => {
+  it("says it could not be shown, with no reload to offer, under the sidebar; the other pages still open", async () => {
+    gate.rulesBug = true;
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      renderAt("/admin/rules", session("admin"));
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(S.admin.common.renderError);
+      expect(alert).not.toHaveTextContent(S.admin.common.loadError);
+      expect(screen.queryByRole("button", { name: S.common.retry })).not.toBeInTheDocument();
+      expect(screen.getByRole("navigation", { name: S.admin.nav.label })).toBeInTheDocument();
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("link", { name: S.admin.nav.users }));
+      expect(where()).toBe("/admin/users");
+      expect(
+        await screen.findByRole("heading", { level: 1, name: S.admin.title.users }),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    } finally {
+      logged.mockRestore();
+      gate.rulesBug = false;
     }
   });
 });
