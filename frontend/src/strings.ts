@@ -919,8 +919,9 @@ export const S = {
       stoppedTile: {
         title: "Lượt dừng không có kết quả",
         none: "không có lượt nào dừng",
-        detail: (stopped: string, calls: string, main: string) =>
-          `${stopped} / ${calls} lượt · nhiều nhất: ${main}`,
+        // Over the runs of ① and ②, the verifier's calls left out: one failed alert is one stop.
+        detail: (stopped: string, runs: string, main: string) =>
+          `${stopped} / ${runs} lượt (không tính lượt verifier) · nhiều nhất: ${main}`,
       },
 
       // The pipelines of `llm_runs.pipeline` and, for ①, its two roles. There is no chat row: the column's

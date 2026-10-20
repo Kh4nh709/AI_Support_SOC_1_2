@@ -392,9 +392,39 @@ describe("the tiles", () => {
     renderPage();
     await costTile();
     const tile = within(await region(L.stoppedTile.title));
-    expect(tile.getByText("7,7%")).toBeInTheDocument();
+    // 122 of the 855 ① proposer runs and the one ② run: the verifier's 733 calls are not runs of their own.
+    expect(tile.getByText("14,3%")).toBeInTheDocument();
     expect(
-      tile.getByText("122 / 1.589 lượt · nhiều nhất: sai định dạng (schema)"),
+      tile.getByText(
+        "122 / 856 lượt (không tính lượt verifier) · nhiều nhất: sai định dạng (schema)",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("counts a ① verifier failure once, although the server writes its stopped_by on both rows", async () => {
+    const [proposer, verifier, investigator] = pipelineRows() as [
+      PipelineRoleRow,
+      PipelineRoleRow,
+      PipelineRoleRow,
+    ];
+    serveUsage(
+      usage({
+        by_pipeline_role: [
+          { ...proposer, stopped: { schema: 122, transient: 5 } },
+          { ...verifier, stopped: { transient: 5 } },
+          investigator,
+        ],
+      }),
+    );
+    renderPage();
+    await costTile();
+    const tile = within(await region(L.stoppedTile.title));
+    // 127 of 856 (14,8 %), not 132 of 1.589: the five alerts whose verifier failed are five, not ten.
+    expect(tile.getByText("14,8%")).toBeInTheDocument();
+    expect(
+      tile.getByText(
+        "127 / 856 lượt (không tính lượt verifier) · nhiều nhất: sai định dạng (schema)",
+      ),
     ).toBeInTheDocument();
   });
 

@@ -88,13 +88,22 @@ export type PipelineSum = { pipeline: string; calls: number; inputTokens: number
 
 export type RangeSummary = {
   calls: number;
+  /**
+   * Calls of every row but the ① verifier's: one per ① alert run and one per ② run, the denominator of
+   * `stopped`. (`calls` is every call, the verifier's too.)
+   */
+  runs: number;
   inputTokens: number;
   outputTokens: number;
   /** ① (`triage`) first, ② (`investigate`) second, any other pipeline after, in the order they came. */
   byPipeline: PipelineSum[];
-  /** Runs with a `stopped_by`, all rows together. */
+  /**
+   * Runs with a `stopped_by`, over the rows `runs` counts. A ① verifier failure writes `stopped_by` on the
+   * verifier's row and on the proposer's, so the verifier's rows are left out: one failed alert is one stop
+   * (P11-T13 review m1).
+   */
   stopped: number;
-  /** The `stopped_by` most runs stopped on; null when none stopped. */
+  /** The `stopped_by` most runs stopped on, over the same rows; null when none stopped. */
   mainStopped: { code: string; count: number } | null;
 };
 
@@ -103,6 +112,7 @@ const PIPELINE_ORDER = ["triage", "investigate"];
 /** The sums the four tiles read, over the rows of `by_pipeline_role`. */
 export function summarise(rows: readonly PipelineRoleRow[]): RangeSummary {
   let calls = 0;
+  let runs = 0;
   let inputTokens = 0;
   let outputTokens = 0;
   let stopped = 0;
@@ -120,6 +130,9 @@ export function summarise(rows: readonly PipelineRoleRow[]): RangeSummary {
     sum.calls += row.calls;
     sum.inputTokens += row.input_tokens;
     perPipeline.set(row.pipeline, sum);
+    // The verifier's row repeats the stop its proposer's row already carries: it is not a run of its own.
+    if (row.role === "verifier") continue;
+    runs += row.calls;
     for (const [code, count] of Object.entries(row.stopped)) {
       stopped += count;
       perReason.set(code, (perReason.get(code) ?? 0) + count);
@@ -134,6 +147,7 @@ export function summarise(rows: readonly PipelineRoleRow[]): RangeSummary {
   const [main] = stoppedEntries(Object.fromEntries(perReason));
   return {
     calls,
+    runs,
     inputTokens,
     outputTokens,
     byPipeline,
