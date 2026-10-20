@@ -12,7 +12,7 @@
 //   - what a review recorded is put in the list at once (a server answer, not a guess) and the list is read
 //     again through `invalidateAfter("reviewDigest")`.
 // Two clicks in the same tick must send one POST, which a disabled button cannot promise (TanStack tells React a
-// mutation is pending a tick late), so each row holds a ref latch while its POST is out.
+// mutation is pending a tick late), so each row's review goes through the shared `useSubmitLatch`.
 // No element has a `style` attribute: the CSP forbids one.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -43,6 +43,7 @@ import {
   summarise,
   withRow,
 } from "./digestFigures";
+import { useSubmitLatch } from "./useSubmitLatch";
 
 const D = S.admin.digestPage;
 
@@ -137,9 +138,6 @@ function DigestRowView({
 }) {
   const client = useQueryClient();
   const [note, setNote] = useState<RowNote | null>(null);
-  // Held from the click to the settling of its POST. `mutation.isPending` reaches React a tick after the
-  // click, so two clicks in one tick would both pass `disabled`; a ref changes at once.
-  const latch = useRef(false);
   // The buttons the admin pressed disappear when the row is answered; the focus goes to the answer, so a
   // keyboard or a screen reader does not fall back to the top of the page.
   const answer = useRef<HTMLDivElement>(null);
@@ -169,16 +167,14 @@ function DigestRowView({
     },
   });
 
+  // One POST per row at a time, and one for however many presses land in one tick (`mutation.isPending`
+  // reaches React a tick after the click, so a disabled button cannot promise it): the shared latch.
+  const run = useSubmitLatch(mutation);
   const review = (verdict: DigestVerdict) => {
-    if (latch.current) return;
-    latch.current = true;
-    handoff.current = true;
-    setNote(null);
-    mutation.mutate(verdict, {
-      onSettled: () => {
-        latch.current = false;
-      },
-    });
+    if (run(verdict)) {
+      handoff.current = true;
+      setNote(null);
+    }
   };
 
   const reviewed = row.reviewed_verdict !== null;
