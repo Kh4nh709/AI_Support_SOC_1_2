@@ -3326,7 +3326,7 @@ Decided by:
 - **The Owner, 18/10, on the spec:** "Oke duyệt" — every proposal of the spec's §10 becomes the decision.
 - **The Owner, 18/10, on the process:** "Bạn tự làm và review liên tục tới khi nào bạn cảm thấy hài lòng về sản phẩm của bạn" — the Director builds it and reviews it continuously until satisfied.
 Drafted by: Director (Opus 5.5), the session holding DEC-200 and up (Director 1 holds 126–199)
-Propagated to: `docs/superpowers/specs/2026-10-18-admin-console-v1-1-design.md` · `docs/superpowers/plans/2026-10-18-admin-console-v1-1.md` · STATE phase P11 and tasks P11-T01…T20 · the canvas "SOC Console UI" (artboards `AdminRules`, `AdminDigest`, `AdminLabels`, `AdminAudit`, `AdminStates`; `AdminOverview`, `AdminUsers`, `AdminLlm` corrected)
+Propagated to: `docs/superpowers/specs/2026-10-18-admin-console-v1-1-design.md` · `docs/superpowers/plans/2026-10-18-admin-console-v1-1.md` · STATE phase P11 and tasks P11-T01…T20 · the canvas "SOC Console UI" (artboards `AdminRules`, `AdminDigest`, `AdminLabels`, `AdminAudit`, `AdminStates`; `AdminOverview`, `AdminUsers`, `AdminLlm` corrected) · **20/10, done:** the seven pages, the APIs and migration 019 on `director/admin-v1-1` (`17ae66c`); the retirement on `director/admin-v1-1-retire` (DEC-205); report `docs/plan/tasks/P11/P11-report.md`
 Decision:
   1. **Scope.** The admin console of DEC-159 ships as v1.1 in the React UI: overview (with failed-job retry and inventory reload), users and roles, LLM usage and limits, auto-close rules, daily digest, blind labelling, and a read-only audit log. The visual reference is the canvas; the contract is the spec.
   2. **Frozen-contract changes (spec §5.9).**
