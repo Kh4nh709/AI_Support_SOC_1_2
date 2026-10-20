@@ -676,6 +676,7 @@ export const S = {
       // The confirm button of a dialog while its write is in flight, whatever the write is.
       working: "Đang xử lý…",
       loadError: "Không tải được trang",
+      renderError: "Trang này gặp lỗi khi hiển thị.",
     },
 
     // `?range=` of the overview, the LLM usage and the audit page.

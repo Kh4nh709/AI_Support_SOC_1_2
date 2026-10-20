@@ -174,6 +174,16 @@ vi.mock("./features/admin/AuditPage", () => ({
   AuditPage: () => <h1>{S.admin.title.audit}</h1>,
 }));
 
+// The LLM page and the digest page read the API as well (LlmPage.test.tsx, DigestPage.test.tsx test them). The admin
+// pages are fetched with `import()` when their route opens (P11-T20 row 56), so a page that is not a stub would be
+// transformed from source inside the test, and `findBy` would wait for that: here too only the place matters.
+vi.mock("./features/admin/LlmPage", () => ({
+  LlmPage: () => <h1>{S.admin.title.llm}</h1>,
+}));
+vi.mock("./features/admin/DigestPage", () => ({
+  DigestPage: () => <h1>{S.admin.title.digest}</h1>,
+}));
+
 const ADMIN_PAGES: [path: string, title: string][] = [
   ["/admin/overview", S.admin.title.overview],
   ["/admin/users", S.admin.title.users],
@@ -185,27 +195,27 @@ const ADMIN_PAGES: [path: string, title: string][] = [
 ];
 
 describe("the admin console (spec §3)", () => {
-  it.each(ADMIN_PAGES)("lets admin open %s, under the sidebar", (path, title) => {
+  it.each(ADMIN_PAGES)("lets admin open %s, under the sidebar", async (path, title) => {
     renderAt(path, session("admin"));
     expect(where()).toBe(path);
     expect(screen.getByRole("navigation", { name: S.admin.nav.label })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 1, name: title })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: title })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("sends admin from /admin to /admin/overview", () => {
+  it("sends admin from /admin to /admin/overview", async () => {
     renderAt("/admin", session("admin"));
     expect(where()).toBe("/admin/overview");
     expect(
-      screen.getByRole("heading", { level: 1, name: S.admin.title.overview }),
+      await screen.findByRole("heading", { level: 1, name: S.admin.title.overview }),
     ).toBeInTheDocument();
   });
 
-  it("sends an admin who opens / to /admin/overview", () => {
+  it("sends an admin who opens / to /admin/overview", async () => {
     renderAt("/", session("admin"));
     expect(where()).toBe("/admin/overview");
     expect(
-      screen.getByRole("heading", { level: 1, name: S.admin.title.overview }),
+      await screen.findByRole("heading", { level: 1, name: S.admin.title.overview }),
     ).toBeInTheDocument();
   });
 
@@ -250,15 +260,17 @@ describe("the admin console (spec §3)", () => {
     expect(screen.getByRole("status")).toHaveTextContent(S.common.loading);
   });
 
-  it("has one main landmark on an admin page, and the header above it", () => {
+  it("has one main landmark on an admin page, and the header above it", async () => {
     renderAt("/admin/rules", session("admin"));
+    await screen.findByRole("heading", { level: 1, name: S.admin.title.rules });
     expect(screen.getAllByRole("main")).toHaveLength(1);
     expect(screen.getByRole("banner")).toHaveTextContent(S.app.name);
     expect(screen.getByRole("navigation", { name: S.nav.label })).toBeInTheDocument();
   });
 
-  it("keeps the header link and the sidebar apart: two navigations, two names", () => {
+  it("keeps the header link and the sidebar apart: two navigations, two names", async () => {
     renderAt("/admin/audit", session("admin"));
+    await screen.findByRole("heading", { level: 1, name: S.admin.title.audit });
     const names = screen.getAllByRole("navigation").map((n) => n.getAttribute("aria-label"));
     expect(names).toEqual([S.nav.label, S.admin.nav.label]);
   });
