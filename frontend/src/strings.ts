@@ -556,6 +556,9 @@ export const S = {
         llmCost: "Chi phí LLM tháng này",
         llmCap: (cap: string, pct: string) => `trần ${cap} · ${pct}`,
         llmCapUnknown: "không đọc được hạn mức",
+        // P11-T20 row 50: the month's spend has reached the cap (`spent_usd >= cap_usd`); the share is left out,
+        // because the route rounds it. The same fact as the LLM page's red cost tile, in one line.
+        llmStopped: (cap: string) => `trần ${cap} · đã chạm trần, model dừng gọi`,
       },
 
       byDay: {
@@ -691,7 +694,7 @@ export const S = {
         "Không thể hạ quyền hoặc vô hiệu hoá admin hoạt động cuối cùng. Tạo hoặc kích hoạt một admin khác trước.",
       self_change:
         "Bạn không thể tự hạ quyền hoặc tự vô hiệu hoá tài khoản của mình. Nhờ một admin khác làm việc này.",
-      not_found: "Không tìm thấy mục này. Có thể nó đã bị xoá hoặc đã đổi — hãy tải lại trang.",
+      not_found: "Không tìm thấy mục này.",
       empty: "Không được để trống",
       invalid: "Giá trị không hợp lệ",
       too_short: "Quá ngắn",
