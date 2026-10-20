@@ -91,21 +91,20 @@ export function FailedJobsBlock({
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  // The block's heading, and the request to focus it when the next render has closed the dialog.
+  // The block's heading, and a counter of the requests to focus it: each one is a new value, so each renders and
+  // runs the effect, even when nothing else on the screen changed.
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const focusHeading = useRef(false);
+  const [focusAsk, setFocusAsk] = useState(0);
 
-  // Runs after every render, and does nothing unless a write asked for the focus. The dialog's own cleanup
-  // (which gives the focus back to the button that opened it) runs before this in the same commit.
+  // Runs in the commit that closes the dialog, after the dialog's own cleanup (which gives the focus back to the
+  // button that opened it), so it cannot be undone by it.
   useEffect(() => {
-    if (!focusHeading.current) return;
-    focusHeading.current = false;
-    headingRef.current?.focus();
-  });
+    if (focusAsk > 0) headingRef.current?.focus();
+  }, [focusAsk]);
 
   /** The write is over and the list on screen is about to change: close the dialog, then read the list again. */
   function closeAndReload() {
-    focusHeading.current = true;
+    setFocusAsk((n) => n + 1);
     setPending(null);
     // Not awaited: the write has committed, and the dialog and the notice must not wait for the read.
     void invalidateAfter(client, "retryJob");
