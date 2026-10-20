@@ -347,11 +347,16 @@ export async function postDuplicates(
 export const reasonBox = (page: Page) =>
   page.getByRole("textbox", { name: S.decision.reason, exact: true });
 
-/** Fills the login form and submits it. */
-async function submitLogin(page: Page, username: string, password: string): Promise<void> {
-  await page.getByLabel(S.login.username).fill(username);
-  await fillSecret(page.getByLabel(S.login.password), password, "password");
-  await page.getByRole("button", { name: S.login.submit }).click();
+/**
+ * Who logs in: one of the users the stack seeds, or the account the admin suite creates (P11-T18; its password is
+ * the run's `new_password`, which the suite types into the create form).
+ */
+export type Account = Who | { username: string };
+
+function credentialsOf(account: Account): { username: string; password: string } {
+  return typeof account === "string"
+    ? { username: USERNAME[account], password: passwordOf(account) }
+    : { username: account.username, password: newUserPassword() };
 }
 
 /** Where a role starts (`roleHome` of src/auth/redirect.ts): the queue, the case list, the console's overview. */
@@ -363,65 +368,40 @@ const HOME: Record<Who, RegExp> = {
   admin2: /\/admin\/overview$/,
 };
 
+/** Fills the login form and submits it. */
+async function submitLogin(page: Page, account: Account): Promise<void> {
+  const { username, password } = credentialsOf(account);
+  await page.getByLabel(S.login.username).fill(username);
+  await fillSecret(page.getByLabel(S.login.password), password, "password");
+  await page.getByRole("button", { name: S.login.submit }).click();
+}
+
 /**
- * Logs in through the login page and waits for `landing`. A login that does not get there empties the password
- * field before the test fails, so that the failure's snapshot never holds the password (loginFailure.ts).
+ * Logs in through the login page and waits for the role's home (`landing` for the account the suite created,
+ * whose role the fixtures do not know). A login that does not get there empties the password field before the
+ * test fails, so that the failure's snapshot never holds the password (loginFailure.ts).
  */
-async function loginWithPassword(
-  page: Page,
-  username: string,
-  password: string,
-  landing: RegExp,
-): Promise<void> {
+export async function loginAs(page: Page, account: Account, landing?: RegExp): Promise<void> {
+  const home = landing ?? (typeof account === "string" ? HOME[account] : undefined);
+  if (home === undefined)
+    throw new Error("an account made by the suite needs the page it lands on");
   await page.goto("/login");
   await clearingOnFailure(page.getByLabel(S.login.password), async () => {
-    await submitLogin(page, username, password);
-    await expect(page).toHaveURL(landing);
+    await submitLogin(page, account);
+    await expect(page).toHaveURL(home);
   });
 }
 
-/** Logs in through the login page and waits for the role's home. */
-export async function loginAs(page: Page, who: Who): Promise<void> {
-  await loginWithPassword(page, USERNAME[who], passwordOf(who), HOME[who]);
-}
-
-/** Logs in as the account the admin suite created (P11-T18), and waits for `landing`. */
-export async function loginAsNewUser(page: Page, username: string, landing: RegExp): Promise<void> {
-  await loginWithPassword(page, username, newUserPassword(), landing);
-}
-
 /** Logs in on the login page a session ended: the page returns to where the user was, so no URL is awaited. */
-export async function signIn(page: Page, who: Who): Promise<void> {
-  await clearingOnFailure(page.getByLabel(S.login.password), () =>
-    submitLogin(page, USERNAME[who], passwordOf(who)),
-  );
+export async function signIn(page: Page, account: Account): Promise<void> {
+  await clearingOnFailure(page.getByLabel(S.login.password), () => submitLogin(page, account));
 }
 
-/** The same for the account the admin suite created. */
-export async function signInAsNewUser(page: Page, username: string): Promise<void> {
-  await clearingOnFailure(page.getByLabel(S.login.password), () =>
-    submitLogin(page, username, newUserPassword()),
-  );
-}
-
-async function apiLoginWith(
-  request: APIRequestContext,
-  username: string,
-  password: string,
-): Promise<string> {
-  const answer = await apiPost(request, "/api/auth/login", { data: { username, password } });
+/** A token for `account` from the API, in a context of its own (no page holds it). */
+export async function apiLogin(request: APIRequestContext, account: Account): Promise<string> {
+  const answer = await apiPost(request, "/api/auth/login", { data: credentialsOf(account) });
   expect(answer.status, "the API takes the login").toBe(200);
   return (answer.body as { token: string }).token;
-}
-
-/** A token for `who` from the API, in a context of its own (no page holds it). */
-export function apiLogin(request: APIRequestContext, who: Who): Promise<string> {
-  return apiLoginWith(request, USERNAME[who], passwordOf(who));
-}
-
-/** A token for the account the admin suite created. */
-export function apiLoginNewUser(request: APIRequestContext, username: string): Promise<string> {
-  return apiLoginWith(request, username, newUserPassword());
 }
 
 /** A login with a password that is wrong on purpose: the status the API answers with (401, then 423 once locked). */

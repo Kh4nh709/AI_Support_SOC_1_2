@@ -118,8 +118,10 @@ export function writeFreezeMarker(): void {
 // The last-admin rule has to be met by a request that started as an admin's and finds, when it gets the locks
 // (`update_user` locks every active admin row, then the target), that its actor is gone and the target is the
 // only admin left. Through the page that is a request held at the lock while the actor stops being an admin.
-// `holdAdminLocks` opens a transaction of its own, locks the active admin rows as `update_user` does, demotes
-// `username` in it without ending that user's sessions, and keeps it open until `commit`.
+// `holdAdminLocks` opens a transaction of its own, locks the active admin rows as `update_user` does, and keeps it
+// open until `commit`. Given a username it also demotes that user in it, without ending their sessions: the
+// page's request then finds its own actor gone. Given none it changes nothing, and the requests that wait on it
+// (two admins demoting each other) go on in the order the database gives them the lock.
 
 export type Held = {
   /** Commits the transaction: the held request goes on, and finds the admins as the transaction left them. */
@@ -130,8 +132,10 @@ export type Held = {
 
 const USERNAME = /^[a-z0-9._-]{3,32}$/;
 
-export async function holdAdminLocks(demoteUsername: string): Promise<Held> {
-  if (!USERNAME.test(demoteUsername)) throw new Error(`not a username: ${demoteUsername}`);
+export async function holdAdminLocks(demoteUsername?: string): Promise<Held> {
+  if (demoteUsername !== undefined && !USERNAME.test(demoteUsername)) {
+    throw new Error(`not a username: ${demoteUsername}`);
+  }
   const child = spawn("psql", ["-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1"], {
     env: psqlEnv(),
     stdio: ["pipe", "pipe", "ignore"],
@@ -157,7 +161,9 @@ export async function holdAdminLocks(demoteUsername: string): Promise<Held> {
   child.stdin.write(
     "BEGIN;\n" +
       "SELECT user_id FROM users WHERE role = 'admin' AND is_active ORDER BY user_id FOR UPDATE;\n" +
-      `UPDATE users SET role = 'tier2' WHERE username = '${demoteUsername}';\n` +
+      (demoteUsername === undefined
+        ? ""
+        : `UPDATE users SET role = 'tier2' WHERE username = '${demoteUsername}';\n`) +
       "SELECT 'held';\n",
   );
   try {
@@ -181,8 +187,8 @@ export async function holdAdminLocks(demoteUsername: string): Promise<Held> {
   };
 }
 
-/** Waits until a request of the API is waiting for a row lock (`FOR UPDATE`): it has started and is held. */
-export async function waitForLockWaiter(): Promise<void> {
+/** Waits until `count` requests of the API are waiting for a row lock (`FOR UPDATE`): they have started and are held. */
+export async function waitForLockWaiters(count = 1): Promise<void> {
   await expect
     .poll(
       () =>
@@ -192,9 +198,9 @@ export async function waitForLockWaiter(): Promise<void> {
               "AND wait_event_type = 'Lock' AND query LIKE '%FOR UPDATE%'",
           ),
         ),
-      { message: "a request waits for the admin rows", timeout: 15_000 },
+      { message: `${count} request(s) wait for the admin rows`, timeout: 15_000 },
     )
-    .toBeGreaterThan(0);
+    .toBeGreaterThanOrEqual(count);
 }
 
 // ---------------------------------------------------------------------------------------------------------

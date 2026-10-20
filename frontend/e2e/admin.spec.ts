@@ -10,6 +10,7 @@
 //   scenario 2b  unlock goes through the real client, which sends `json: {}`
 //   scenario 3   changes that user's role: their session and live socket end
 //   scenario 4   demotes the last active admin: 409, and the dialog says why
+//   scenario 4b  the same rule met by two admins demoting each other at once, with no help from the test
 //   scenario 5   lowers the cap below the month's spend: the next ① run stops with `stopped_by = 'cap'`
 //   scenario 6   previews, creates and disables a rule
 //   scenario 7   reviews a digest row "Sai": the alert is back in the Tier 1 queue
@@ -25,7 +26,6 @@ import {
   S,
   apiGet,
   apiLogin,
-  apiLoginNewUser,
   apiPatch,
   apiPost,
   apiPut,
@@ -34,10 +34,9 @@ import {
   claimToken,
   fillSecret,
   loginAs,
-  loginAsNewUser,
   newUserPassword,
   postAlert,
-  signInAsNewUser,
+  signIn,
   sql,
   userIdOf,
   usernameOf,
@@ -55,7 +54,7 @@ import {
   seedMonthSpend,
   socketsSeen,
   trackSockets,
-  waitForLockWaiter,
+  waitForLockWaiters,
   writeCandidates,
   writeFreezeMarker,
   type Held,
@@ -228,7 +227,7 @@ test("scenario 2: an admin creates a Tier 1 user, who then logs in", async ({
   const context = await browser.newContext({ baseURL });
   try {
     const own = await context.newPage();
-    await loginAsNewUser(own, NEW_USER, /\/queue$/);
+    await loginAs(own, { username: NEW_USER }, /\/queue$/);
     await expect(own.getByRole("heading", { name: S.queue.title })).toBeVisible();
     await expect(own.getByRole("banner").getByText(S.role.tier1, { exact: true })).toBeVisible();
     await expect(own.getByRole("link", { name: S.nav.admin })).toHaveCount(0);
@@ -286,7 +285,7 @@ test("scenario 2b: unlock goes through the real client, which sends an empty JSO
   expect(
     sql(`SELECT failed_logins, locked_until IS NULL FROM users WHERE username = '${NEW_USER}'`),
   ).toBe("0|t");
-  await apiLoginNewUser(request, NEW_USER);
+  await apiLogin(request, { username: NEW_USER });
   await expect(userRow(page, NEW_USER).getByText(U.status.locked("").trim())).toHaveCount(0);
 });
 
@@ -305,11 +304,11 @@ test("scenario 3: a role change ends the user's open session and live socket", a
   try {
     const own = await context.newPage();
     await trackSockets(own);
-    await loginAsNewUser(own, NEW_USER, /\/queue$/);
+    await loginAs(own, { username: NEW_USER }, /\/queue$/);
     await expect(own.getByRole("status").filter({ hasText: S.live.on })).toBeVisible();
     expect((await socketsSeen(own)).opened).toBeGreaterThan(0);
     expect((await socketsSeen(own)).closed).toEqual([]);
-    const token = await apiLoginNewUser(request, NEW_USER);
+    const token = await apiLogin(request, { username: NEW_USER });
     expect((await apiGet(request, "/api/auth/me", { token })).status).toBe(200);
 
     // The admin changes their role, in the dialog that says what it does.
@@ -347,7 +346,7 @@ test("scenario 3: a role change ends the user's open session and live socket", a
     await expect(own).toHaveURL(/\/login$/);
 
     // The next login has the new role.
-    await signInAsNewUser(own, NEW_USER);
+    await signIn(own, { username: NEW_USER });
     await expect(own.getByRole("banner").getByText(S.role.tier2, { exact: true })).toBeVisible();
     await own.goto("/");
     await expect(own).toHaveURL(/\/cases$/);
@@ -379,7 +378,7 @@ test("scenario 4: demoting the last active admin gives 409, and the dialog says 
     await userRow(page, other).getByLabel(U.roleSelect(other)).selectOption("tier2");
     const dialog = dialogOf(page, U.dialog.role.title(other));
     await dialog.getByRole("button", { name: U.dialog.role.confirm }).click();
-    await waitForLockWaiter();
+    await waitForLockWaiters();
     await held.commit();
     held = undefined;
 
@@ -402,6 +401,47 @@ test("scenario 4: demoting the last active admin gives 409, and the dialog says 
   expect(sql(`SELECT role FROM users WHERE username = '${other}'`)).toBe("admin");
   expect(eventCount("admin.user_updated")).toBe(updatesBefore);
   await expect(userRow(page, other).getByLabel(U.roleSelect(other))).toHaveValue("admin");
+});
+
+test("scenario 4b: two admins demoting each other at once leave one, and the later request gets the 409", async ({
+  request,
+}) => {
+  // The same rule met by two real requests and nothing else: each admin asks to demote the other, both are held
+  // on the locks of the active admins, and the database lets one of them through first. Whichever it is, the
+  // other finds one admin left and is refused. (Which of the two wins is not the test's to say.)
+  const a = usernameOf("admin");
+  const b = usernameOf("admin2");
+  const tokenA = await apiLogin(request, "admin");
+  const tokenB = await apiLogin(request, "admin2");
+  const updatesBefore = eventCount("admin.user_updated");
+  let held: Held | undefined = await holdAdminLocks();
+  try {
+    const race = Promise.all([
+      apiPatch(request, `/api/admin/users/${userIdOf("admin2")}`, {
+        token: tokenA,
+        data: { role: "tier2" },
+      }),
+      apiPatch(request, `/api/admin/users/${userIdOf("admin")}`, {
+        token: tokenB,
+        data: { role: "tier2" },
+      }),
+    ]);
+    await waitForLockWaiters(2);
+    await held.commit();
+    held = undefined;
+    const answers = await race;
+    expect(answers.map((answer) => answer.status).sort()).toEqual([200, 409]);
+    const refused = answers.find((answer) => answer.status === 409);
+    expect((refused?.body as { detail?: unknown } | null)?.detail).toEqual({
+      reason: "last_active_admin",
+    });
+    expect(sql("SELECT count(*) FROM users WHERE role = 'admin' AND is_active")).toBe("1");
+    expect(eventCount("admin.user_updated")).toBe(updatesBefore + 1);
+  } finally {
+    await held?.abandon();
+    // Both are admins again for the scenarios that follow (the race left one of them a Tier 2 user).
+    sql(`UPDATE users SET role = 'admin' WHERE username IN ('${a}', '${b}')`);
+  }
 });
 
 // ---------------------------------------------------------------------------------------------------------
