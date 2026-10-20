@@ -4,6 +4,12 @@ P8-T04 (DEC-129). A timed script for the Owner's demonstration of what was built
 through the pipeline, ① and its 7-step gate on that alert, the blind labelling page, and the evaluation
 tables. The Owner rehearses it (P8 exit gate: "demo rehearsed (Owner), or the demo cut and recorded").
 
+> **20/10/2026 (P11-T19).** The Jinja labelling page this script shows (`http://127.0.0.1:8000/login` and
+> `/admin/labels`: pre-flight 4 and 6, and step 1 of segment 4) is retired: port `8000` renders no page and
+> has no sign-in cookie. The labelling page is now the React `http://127.0.0.1:8080/admin/labels`, signed in
+> at `http://127.0.0.1:8080/`. The queries and tables below are unchanged; those three places need the React
+> page when the demo is rehearsed again.
+
 **Not shown, because it does not exist.** The brief's queue → decide → escalate → ② → conclude → digest path
 was not built: the Tier-1/Tier-2 console was deprioritized and cut (DEC-116), ② was cut (DEC-097, DEC-111),
 and the digest was not built (`docs/limitations.md` (xiii), (xxii), (xxiii)).

@@ -190,6 +190,30 @@ the Measured paragraph of item (ix) in section B.
 - **Affects.** The human-baseline rows beside ①'s figures in `docs/results/ablation.md`;
   `docs/gold-v1-report.md`.
 
+### (xlv) · Blind labelling is enforced at the labelling input boundary and on the audit verdict; for the rest it is the labellers' discipline
+
+- **Statement.** The blindness of the two labellers (DEC-019, DEC-101) is enforced in two places. At the
+  labelling page's input boundary (P6-T10): what the labelling API and page give a labeller for a cluster is
+  an allowlist with no ① output, no pilot decision, no `source` and no other labeller's label. And, since
+  DEC-204, on the audit page for the verdict itself: `GET /api/admin/audit` redacts `label` and
+  `confidence` of every `label.created` event for every viewer. It is not enforced beyond those two. Both
+  labellers are admins, and an admin can still read the model's suggestion and the analysts' decisions for
+  the same alert ids on the alert pages and on the audit page (`triage.suggested`, `tier1.decided`,
+  `autoclose.reviewed`). That is by design for admins, so the labellers' discipline during the labelling
+  window is procedural: a labeller who opens an alert's page or its audit events before labelling the
+  cluster can see what ① suggested and what an analyst decided. The Owner is told this at hand-over.
+- **Measured.** Not measured: it is a property by construction, and no figure says what a labeller
+  opened. The application records no page view (none of the 28 event types of `ck_audit_event_type`,
+  migration 019, is a read), so it cannot be read back from the system. The input boundary is tested
+  (P6-T10; the allowlist and forbidden-substring tests of `backend/tests/test_labels.py`), and the audit
+  redaction is DEC-204's.
+- **Source.** DEC-019, DEC-101, DEC-117, DEC-118 item 4 (the input-boundary test, P6-T10), DEC-204;
+  `docs/plan/tasks/P11/P11-T20-parked.md` row 57; architecture §6 (the labelling protocol).
+- **Affects.** (xx): κ between the two labellers and each labeller's agreement with the window truth, which
+  are the human-baseline rows beside ①'s figures. "The labellers were blind to ① and to the analysts" holds
+  for the labelling page and for the verdict on the audit page, and is a procedural claim for everything
+  else an admin can read.
+
 ### (xxi) · Misfired scenarios are excluded at adjudication
 
 - **Statement.** A scenario that misfired is excluded at the 28/09 adjudication through a committed
