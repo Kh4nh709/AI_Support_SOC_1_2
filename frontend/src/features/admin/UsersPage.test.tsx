@@ -3,7 +3,7 @@
 // the five user routes can give, each shown where the canvas's AdminStates puts it. A small in-memory
 // backend stands in for the routes (MSW); it records every call so a test can say what was sent.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { delay, http, HttpResponse } from "msw";
@@ -2201,6 +2201,44 @@ describe("a second press in the same tick", () => {
     await user.type(create().getByLabelText("Mật khẩu tạm"), GOOD);
     await user.type(create().getByLabelText("Nhập lại mật khẩu"), GOOD);
     twice(create().getByRole("button", { name: "Tạo tài khoản" }));
+    await screen.findByRole("status");
+    expect(b.writes()).toHaveLength(1);
+  });
+
+  // P11-T20 row 46: the same two presses, but inside ONE `act`, so React renders nothing between them. The six
+  // tests above put each press in an `act` of its own; measured with the latch taken out, the reset's and the
+  // create's of those pass anyway (a render happens between the two presses), so they say nothing about the
+  // latch. These two are red without it (two writes) and green with it.
+  const inOneTick = (element: HTMLElement) =>
+    act(() => {
+      fireEvent.click(element);
+      fireEvent.click(element);
+    });
+
+  it("sends one password reset when both presses land in one tick", async () => {
+    const b = backend();
+    const user = userEvent.setup();
+    renderPage();
+    await user.click((await rowOf("minh.t2")).q.getByRole("button", { name: /^Đặt lại mật khẩu/ }));
+    const box = within(await dialog("Đặt lại mật khẩu cho minh.t2"));
+    await user.type(box.getByLabelText("Mật khẩu tạm"), GOOD);
+    await user.type(box.getByLabelText("Nhập lại"), GOOD);
+    inOneTick(box.getByRole("button", { name: "Đặt lại" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(b.writes()).toHaveLength(1);
+  });
+
+  it("sends one create when both presses land in one tick", async () => {
+    const b = backend();
+    const user = userEvent.setup();
+    renderPage();
+    await table();
+    await user.type(create().getByLabelText("Tên đăng nhập"), "an.t1");
+    await user.type(create().getByLabelText("Tên hiển thị"), "An");
+    await user.click(create().getByRole("radio", { name: /^tier1/ }));
+    await user.type(create().getByLabelText("Mật khẩu tạm"), GOOD);
+    await user.type(create().getByLabelText("Nhập lại mật khẩu"), GOOD);
+    inOneTick(create().getByRole("button", { name: "Tạo tài khoản" }));
     await screen.findByRole("status");
     expect(b.writes()).toHaveLength(1);
   });

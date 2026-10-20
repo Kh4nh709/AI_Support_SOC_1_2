@@ -9,11 +9,11 @@
 //   - holds nothing typed after it closes: it is unmounted, and its mutation is dropped from TanStack's cache
 //     (`useUserWrite`: `gcTime: 0` and a `reset` as soon as the write settles), so a password is not kept in
 //     the mutation cache's variables;
-//   - sends a write once: a ref latches it, because TanStack Query tells React a mutation is pending only on a
-//     timer, so two presses in one tick would both find the confirm button enabled (a Director ruling for every
-//     write of the console; a shared `useSubmitLatch` from P11-T14 is to replace the ref here).
+//   - sends a write once: the shared `useSubmitLatch` wraps the mutation, because TanStack Query tells React a
+//     mutation is pending only on a timer, so two presses in one tick would both find the confirm button
+//     enabled (a Director ruling for every write of the console).
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useId, useRef, useState } from "react";
+import { useId, useState } from "react";
 import {
   ADMIN_LIMITS,
   adminErrorOf,
@@ -27,6 +27,7 @@ import { formatClock } from "../../../format";
 import { S } from "../../../strings";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { adminKeys, invalidateAfter, type AdminMutation } from "../adminKeys";
+import { useSubmitLatch } from "../useSubmitLatch";
 import { failureOf, passwordProblem, passwordProblemText, type Failure } from "../usersModel";
 
 const T = S.admin.usersPage;
@@ -40,8 +41,9 @@ type DialogProps = {
 };
 
 /**
- * One write of the dialog, its failure, and what a failure does to the list behind it. `submit` sends it once:
- * the latch is released when the write settles (success or failure), so a failed write can be tried again.
+ * One write of the dialog, its failure, and what a failure does to the list behind it. `submit` sends it once
+ * (`useSubmitLatch`): the latch is released when the write settles (success or failure), so a failed write can
+ * be tried again.
  */
 function useUserWrite<V>(
   write: (value: V) => Promise<unknown>,
@@ -50,7 +52,6 @@ function useUserWrite<V>(
 ) {
   const client = useQueryClient();
   const [failure, setFailure] = useState<Failure | null>(null);
-  const latch = useRef(false);
   const mutation = useMutation({
     mutationFn: write,
     // A reset's variables are a password. TanStack keeps a mutation's variables for `gcTime` after its last
@@ -67,17 +68,13 @@ function useUserWrite<V>(
       // The list on screen may not be the truth any more (the account is gone, the admin count changed).
       if (read.reload) void client.invalidateQueries({ queryKey: adminKeys.users });
     },
-    onSettled: () => {
-      latch.current = false;
-    },
   });
+  const run = useSubmitLatch(mutation);
   const { reset } = mutation;
   const submit = (value: V) => {
-    if (latch.current) return;
-    latch.current = true;
     // `reset` once it has settled: a dialog that stays open after a failure would otherwise keep the mutation,
     // and its variables, for as long as it is mounted. (After a success the dialog is unmounted instead.)
-    mutation.mutate(value, { onSettled: () => reset() });
+    run(value, { onSettled: () => reset() });
   };
   return { submit, busy: mutation.isPending, failure, clearFailure: () => setFailure(null) };
 }
