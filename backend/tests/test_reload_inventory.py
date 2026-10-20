@@ -87,7 +87,7 @@ def test_reload_inventory_returns_200_with_the_load_report(
     tmp_path: Path, monkeypatch, client: TestClient
 ) -> None:
     monkeypatch.setenv("INVENTORY_PATHS", json.dumps(_valid_files(tmp_path)))
-    response = client.post("/api/admin/reload-inventory")
+    response = client.post("/api/admin/reload-inventory", json={})
     assert response.status_code == 200
     assert response.json() == {
         "assets": 1,
@@ -96,6 +96,47 @@ def test_reload_inventory_returns_200_with_the_load_report(
         "deactivated": 0,
         "warnings": [],
     }
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [
+        pytest.param({}, id="no body, no content type"),
+        pytest.param({"data": {"a": "b"}}, id="a urlencoded form"),
+        pytest.param({"content": b"{}", "headers": {"Content-Type": "text/plain"}}, id="text"),
+    ],
+)
+def test_reload_inventory_needs_the_json_content_type_and_loads_nothing_without_it(
+    tmp_path: Path, monkeypatch, client: TestClient, request_kwargs
+) -> None:
+    """The session cookie authenticates a request from any page on the same host and a no-cors
+    `fetch` sends no Content-Type: the route reads no body, so it asks for the type (P11-T20
+    part 4, M1; the client already sends `{}`). A refused request reads no file and writes no row.
+    """
+    monkeypatch.setenv("INVENTORY_PATHS", json.dumps(_valid_files(tmp_path)))
+    loaded = []
+    monkeypatch.setattr(main, "load", lambda conn: loaded.append(conn))
+
+    response = client.post("/api/admin/reload-inventory", **request_kwargs)
+
+    assert response.status_code == 422, response.text
+    assert response.json() == {"detail": {"field": "body", "reason": "invalid"}}
+    assert loaded == []  # the loader was never reached
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "content_type", ["application/json", "application/json; charset=utf-8", "application/ld+json"]
+)
+def test_reload_inventory_takes_any_json_type_with_no_body(
+    tmp_path: Path, monkeypatch, client: TestClient, content_type: str
+) -> None:
+    monkeypatch.setenv("INVENTORY_PATHS", json.dumps(_valid_files(tmp_path)))
+    response = client.post(
+        "/api/admin/reload-inventory", content=b"", headers={"Content-Type": content_type}
+    )
+    assert response.status_code == 200, response.text
 
 
 @pytest.mark.db
@@ -114,7 +155,7 @@ def test_reload_inventory_returns_422_with_the_problem_list_on_a_broken_file(
         """,
     )
     monkeypatch.setenv("INVENTORY_PATHS", json.dumps(files))
-    response = client.post("/api/admin/reload-inventory")
+    response = client.post("/api/admin/reload-inventory", json={})
     assert response.status_code == 422
     problems = response.json()["detail"]
     assert isinstance(problems, list) and problems
@@ -137,7 +178,7 @@ def test_reload_inventory_writes_nothing_on_a_broken_file(
         """,
     )
     monkeypatch.setenv("INVENTORY_PATHS", json.dumps(files))
-    client.post("/api/admin/reload-inventory")
+    client.post("/api/admin/reload-inventory", json={})
     count = db.execute("SELECT count(*) FROM assets").fetchone()[0]
     assert count == 0
 
@@ -150,7 +191,7 @@ def test_reload_inventory_succeeds_as_app_rw(
     # PRIVILEGES — this is the proof the real application role can reload.
     db.execute("SET ROLE app_rw")
     monkeypatch.setenv("INVENTORY_PATHS", json.dumps(_valid_files(tmp_path)))
-    response = client.post("/api/admin/reload-inventory")
+    response = client.post("/api/admin/reload-inventory", json={})
     assert response.status_code == 200
     assert response.json()["assets"] == 1
 
@@ -161,7 +202,7 @@ def test_reload_inventory_without_session_is_401(
 ) -> None:
     main.app.dependency_overrides.pop(deps.current_user)
     monkeypatch.setenv("INVENTORY_PATHS", json.dumps(_valid_files(tmp_path)))
-    response = client.post("/api/admin/reload-inventory")
+    response = client.post("/api/admin/reload-inventory", json={})
     assert response.status_code == 401
     assert response.json() == {"detail": "not authenticated"}
 

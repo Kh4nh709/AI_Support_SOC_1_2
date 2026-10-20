@@ -1045,6 +1045,9 @@ export const S = {
         colCost: "Chi phí",
         empty: "Chưa có lượt gọi nào.",
         subject: (type: string, id: string) => `${type} ${id}`,
+        // A run on an alert that is blind and not yet decided: the server sends no subject and no outcome
+        // (DEC-101, context pack §6.4), and the cell says so, not "missing".
+        hidden: "đã ẩn: alert chưa có quyết định",
         // `outcome` is `stopped:<stopped_by>` for a run with no verdict.
         stopped: (reason: string) => `dừng · ${reason}`,
         // A verifier's `outcome` is its own `structured_only_verdict` (from the facts and the decision
@@ -1201,11 +1204,17 @@ export const S = {
         job: (id: number) => `job ${id}`,
         suggested: (action: string) => `đề xuất ①: ${action}`,
         suggestedUnknown: "đã có đề xuất ①",
+        // The server withholds ①'s verdict of an alert that is blind and not yet decided (DEC-101, context
+        // pack §6.4): a person's `autoclose.reviewed` is listed, its verdict is the marker, and the line says so
+        // instead of a verdict. (`triage.suggested` and `llm.gate_forced` of such an alert are not listed at all,
+        // DEC-206; their branches stay for a row an older server masked.)
+        suggestionHidden: "đề xuất ① đã ẩn: alert chưa có quyết định",
         confidence: (level: string) => `độ tin cậy ${level}`,
         gateForced: "cổng kiểm soát đã ép kết quả",
         gateForcedBy: (proposed: string, final: string) =>
           `cổng kiểm soát ép ${proposed} → ${final}`,
         gateForcedUnknown: "cổng kiểm soát ép kết quả ①",
+        gateForcedHidden: "kết quả của cổng kiểm soát ① đã ẩn: alert chưa có quyết định",
         forcedBy: (who: string) => `do ${who}`,
         builderViolation: (n: number) => `${n} vi phạm khi dựng dữ liệu gửi model`,
         builderViolationUnknown: "dữ liệu gửi model bị chặn",
@@ -1427,6 +1436,9 @@ export const S = {
       },
       // ① has no suggestion for the cluster yet.
       noSuggestion: "(chưa có kết quả ①)",
+      // A row a "Sai" review reopened is blind again while it is undecided (A17, DEC-101): the server leaves
+      // ①'s verdict off it, and "no result" would be a wrong thing to say.
+      reopenedNoSuggestion: "(không hiện sau khi mở lại về hàng đợi Tier 1)",
       disagreement: "⚠ ① không đề xuất đóng",
       // The name of the group of the three buttons of a row (the buttons themselves are `S.admin.verdict`).
       group: (ruleId: string, agent: string) => `Duyệt cụm ${ruleId} · ${agent}`,

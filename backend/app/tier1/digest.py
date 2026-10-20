@@ -51,9 +51,24 @@ from app.domain.transitions import StaleState, reopen
 from app.infra import config, db
 from app.infra.errors import PermanentError
 from app.infra.jobs import Job, enqueue
+from app.tier1 import visibility
 from app.tier1.queue import latest_suggestion, latest_suggestions
 
 _SUSPECTED_WRONG_THRESHOLD = 2
+
+#: One key that `visibility.ANALYST_HIDE` holds, to ask `visibility.strip` the blind question.
+_PROBE = {"suggested_action": None}
+
+
+def suggestion_withheld(status: str, suggestion_visible: bool) -> bool:
+    """Whether ①'s suggestion must be left off a response about an alert in `status` with this
+    `suggestion_visible`: the blind arm's own answer (`visibility.strip` in analyst mode takes
+    `suggested_action` off a blind, undecided head), not a copy of its rule. The digest lists
+    only auto-closed alerts, which are decided and so shown, except the ones a digest review
+    reopened (`reopened_by_review`): a reopened alert is blind again (A17), P11-T20 part 4."""
+    return "suggested_action" not in visibility.strip(
+        _PROBE, status=status, suggestion_visible=suggestion_visible, mode="analyst"
+    )
 
 
 class AlreadyReviewed(StaleState):
@@ -165,13 +180,19 @@ def _sorted_rows(rows: list[DigestRow]) -> list[DigestRow]:
     return rows
 
 
-def _rows_from(conn: psycopg.Connection, records: Sequence[tuple]) -> list[DigestRow]:
+def _rows_from(
+    conn: psycopg.Connection, records: Sequence[tuple], *, withheld: frozenset[str] = frozenset()
+) -> list[DigestRow]:
     """`DigestRow`s from the twelve columns `_BUILD_SQL` (and `_REOPENED_BY_REVIEW_SQL`) select,
     unsorted. ① is read for all of them in ONE statement (`queue.latest_suggestions`, the
     batched form of `latest_suggestion`, P11-T20 row 20), so `build` and `reopened_by_review`
     cost a constant number of statements however many rows the day has; it was one query per
-    row."""
-    suggestions = latest_suggestions(conn, [record[0] for record in records])
+    row. An alert in `withheld` (blind and undecided, `suggestion_withheld`) is never read:
+    its row has no suggestion and no disagreement, so neither its text nor the row's place in
+    the sort says what ① said."""
+    suggestions = latest_suggestions(
+        conn, [record[0] for record in records if record[0] not in withheld]
+    )
     rows: list[DigestRow] = []
     for (
         alert_id,
@@ -280,7 +301,7 @@ _REOPENED_BY_REVIEW_SQL = f"""
     SELECT
         a.alert_id, a.rule_id, a.description, a.severity, a.category,
         a.agent_name, a.occurrence_count, a.first_seen_at, a.last_seen_at,
-        a.autoclose_rule_id, r.name, rev.verdict
+        a.autoclose_rule_id, r.name, rev.verdict, a.status, a.suggestion_visible
     FROM autoclose_reviews rev
     JOIN alerts a ON a.alert_id = rev.alert_id
     LEFT JOIN autoclose_rules r ON r.autoclose_rule_id = a.autoclose_rule_id
@@ -316,14 +337,41 @@ def reopened_by_review(
     lists them beside `build`'s rows. Only a **`wrong` review** keeps a reopened alert on the
     day: one that Tier 1 reopened, or one reviewed `correct`/`unsure` and then reopened,
     leaves it as before. Same row shape and order as `build`; `alert_id` narrows it to one.
-    The Jinja page does not call this."""
+    The Jinja page does not call this.
+
+    **The blind arm** (DEC-101, context pack §6.4, P11-T20 part 4): the alert is no longer
+    auto-closed, and a reopened alert is blind again. When it is blind (`NOT suggestion_visible`)
+    and still undecided, its row has `suggested_action` `None` and `disagreement` `False`
+    (`suggestion_withheld`, which asks `visibility.strip`), and ① is not read for it. Once it is
+    decided, or on the visible arm, the row carries ① as before."""
     tz = tz or config.load().DISPLAY_TZ
     params = {"day": day, "tz": tz}
     sql = _REOPENED_BY_REVIEW_SQL
     if alert_id is not None:
         sql += _ONLY_ALERT_SQL
         params["alert_id"] = alert_id
-    return _sorted_rows(_rows_from(conn, conn.execute(sql, params).fetchall()))
+    records = conn.execute(sql, params).fetchall()
+    # A reopened alert is blind again (A17, `visibility.py`): one that is still undecided on a
+    # blind arm carries no suggestion and no disagreement, so it also sorts as one without.
+    withheld = frozenset(
+        record[0] for record in records if suggestion_withheld(record[12], record[13])
+    )
+    return _sorted_rows(_rows_from(conn, [record[:12] for record in records], withheld=withheld))
+
+
+def withhold_if_blind(conn: psycopg.Connection, row: DigestRow) -> DigestRow:
+    """`row` as it may be shown now: when its alert is blind and still undecided
+    (`suggestion_withheld`, on the alert as the database has it this moment) the row loses its
+    suggestion and its disagreement flag; otherwise it is returned as it is. For a row taken
+    from a snapshot read before a change (the digest API's fallback row, when an alert leaves
+    both lists between the snapshot and the answer): the snapshot's alert was auto-closed, and
+    may be blind again by now."""
+    state = conn.execute(
+        "SELECT status, suggestion_visible FROM alerts WHERE alert_id = %s", (row.alert_id,)
+    ).fetchone()
+    if state is not None and suggestion_withheld(*state):
+        return dataclasses.replace(row, suggested_action=None, disagreement=False)
+    return row
 
 
 def left_digest_on(

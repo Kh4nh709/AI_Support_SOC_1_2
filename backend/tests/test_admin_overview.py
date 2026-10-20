@@ -36,7 +36,7 @@ from app.audit import llm_runs
 from app.infra import config, jobs, settings
 from app.infra.auth import Claims
 from app.web import deps, main
-from app.web.routers import admin_overview
+from app.web.routers import admin_audit, admin_overview
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 
@@ -671,6 +671,69 @@ def test_failed_job_last_error_is_cut_to_200_characters_and_null_stays_null(clie
     assert by_subject["locked"]["locked_at"] is not None
 
 
+# P11-T20 part 4, M4: §6 says no answer carries a DSN, and the audit applies DEC-203's value rule
+# (`admin_audit.is_secret_value`) to this very text in `admin.job_retried`. The overview applies it
+# too: an error text holding `scheme://user:password@` is returned as the marker, whole.
+DSN = "postgresql://app_rw:Sup3rS3cretPassw0rd@db:5432/soc"
+
+
+@pytest.mark.db
+def test_a_failed_job_whose_error_holds_a_dsn_is_returned_as_the_marker(client) -> None:
+    tc, db, _ = client
+    _job(db, subject_id="leaky", last_error=f"connection to {DSN} refused")
+    _job(db, subject_id="at-the-start", last_error=f"{DSN}: refused", created_at=_ago(minutes=1))
+    _job(db, subject_id="plain", last_error="connection refused", created_at=_ago(minutes=2))
+
+    resp = _get(tc)
+    by_subject = {j["subject_id"]: j for j in resp.json()["failed_jobs"]}
+
+    assert by_subject["leaky"]["last_error"] == "[đã ẩn]"
+    assert by_subject["at-the-start"]["last_error"] == "[đã ẩn]"
+    assert by_subject["plain"]["last_error"] == "connection refused"
+    assert "Sup3rS3cret" not in resp.text and "app_rw" not in resp.text
+    # the rest of the row is untouched: it is the error that is withheld, not the job
+    assert by_subject["leaky"]["job_type"] == "triage" and by_subject["leaky"]["attempts"] == 3
+
+
+@pytest.mark.db
+def test_a_dsn_that_the_200_character_cut_would_split_is_still_caught(client) -> None:
+    """The text is cut to 200 characters in the database, and a cut inside the password leaves no
+    `@` for the rule to find: `...postgresql://app_rw:PPPP...` with the host beyond the cut. The
+    rule is applied to more of the text than is returned, and the whole error is withheld."""
+    tc, db, _ = client
+    split = "z" * 150 + " postgresql://app_rw:" + "P" * 60 + "@db:5432/soc"
+    assert split.index("@") > 200  # the cut at 200 ends inside the password
+    _job(db, subject_id="split", last_error=split)
+    _job(db, subject_id="beyond", last_error="y" * 300 + f" {DSN}", created_at=_ago(minutes=1))
+
+    resp = _get(tc)
+    by_subject = {j["subject_id"]: j for j in resp.json()["failed_jobs"]}
+
+    assert by_subject["split"]["last_error"] == "[đã ẩn]"
+    assert "PPPPP" not in resp.text
+    # a DSN past the 200 characters would never have been shown; the whole error goes anyway
+    assert by_subject["beyond"]["last_error"] == "[đã ẩn]"
+
+
+@pytest.mark.db
+def test_a_plain_error_is_still_cut_at_200_and_a_url_without_a_password_is_kept(client) -> None:
+    tc, db, _ = client
+    _job(db, subject_id="url", last_error="GET https://wazuh.indexer:19200/_search 503")
+    _job(db, subject_id="long", last_error="é" * 450, created_at=_ago(minutes=1))
+
+    by_subject = {j["subject_id"]: j for j in _get(tc).json()["failed_jobs"]}
+
+    assert by_subject["url"]["last_error"] == "GET https://wazuh.indexer:19200/_search 503"
+    assert by_subject["long"]["last_error"] == "é" * 200
+
+
+def test_the_overview_judges_the_error_with_the_audits_own_rule() -> None:
+    """One rule, one function: `_failed_jobs` calls `admin_audit.is_secret_value` and answers
+    `admin_audit.REDACTED`, so a change to the audit's rule changes the overview with it."""
+    assert admin_overview.admin_audit is admin_audit
+    assert admin_audit.is_secret_value(DSN) and admin_audit.REDACTED == "[đã ẩn]"
+
+
 @pytest.mark.db
 def test_inventory_counts_active_rows_and_reports_the_newest_active_load(client) -> None:
     """`loaded_at` is the newest of the three tables' ACTIVE rows: the inactive asset below
@@ -1016,7 +1079,7 @@ def test_llm_month_does_not_fail_with_the_other_sections_and_they_do_not_fail_wi
 
 
 def _retry(tc: TestClient, job_id: Any) -> Any:
-    return tc.post(f"/api/admin/jobs/{job_id}/retry")
+    return tc.post(f"/api/admin/jobs/{job_id}/retry", json={})  # the client's own request
 
 
 @pytest.mark.db
@@ -1053,6 +1116,124 @@ def test_retry_puts_a_failed_job_back_to_pending_and_writes_the_event(client) ->
         "attempts_before": 3,
         "last_error": "x" * 200,  # the event is cut; the row is not
     }
+
+
+# The session cookie authenticates a request from any page on the same host, and a no-cors `fetch`
+# with no body sends no Content-Type. The route reads no body, so without a rule on the type that
+# request re-queued a failed job (P11-T20 part 4, M1). `admin_users` closed the same shape for its
+# routes; the client already sends `{}`.
+NOT_JSON = [
+    pytest.param({}, id="no body, no content type"),
+    pytest.param({"data": {"a": "b"}}, id="a urlencoded form"),
+    pytest.param({"files": {"f": ("f.txt", b"x")}}, id="a multipart form"),
+    pytest.param({"content": b"{}", "headers": {"Content-Type": "text/plain"}}, id="text"),
+    pytest.param({"content": b"{}", "headers": {"Content-Type": "application/jsonx"}}, id="jsonx"),
+    pytest.param({"content": b"", "headers": {"Content-Type": "application/xml"}}, id="xml"),
+]
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("request_kwargs", NOT_JSON)
+def test_retry_needs_the_json_content_type_and_writes_nothing_without_it(
+    client, request_kwargs
+) -> None:
+    tc, db, _ = client
+    job_id = _job(db, subject_id="alert-csrf", attempts=3, last_error="boom")
+    before = _job_row(db, job_id)
+
+    resp = tc.post(f"/api/admin/jobs/{job_id}/retry", **request_kwargs)
+
+    assert resp.status_code == 422, resp.text
+    assert resp.json() == {"detail": {"field": "body", "reason": "invalid"}}
+    assert _job_row(db, job_id) == before  # still failed, attempts and schedule as they were
+    assert _events(db, "admin.job_retried", str(job_id)) == []
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "application/json",
+        "application/json; charset=utf-8",
+        "Application/JSON",
+        "application/vnd.x+json",
+    ],
+)
+def test_retry_takes_any_json_type_with_an_empty_or_a_json_body(client, content_type) -> None:
+    """The rule is on the type, not on a body: the route reads none."""
+    tc, db, _ = client
+    for body in (b"", b"{}"):
+        job_id = _job(db, subject_id=f"alert-{content_type}-{len(body)}")
+        resp = tc.post(
+            f"/api/admin/jobs/{job_id}/retry", content=body, headers={"Content-Type": content_type}
+        )
+        assert resp.status_code == 200, (content_type, resp.text)
+        assert _job_row(db, job_id)[0] == "pending"
+
+
+@pytest.mark.db
+def test_retry_without_json_by_tier1_is_403_not_422_and_writes_authz_denied(sdb) -> None:
+    """The role check answers first: a non-admin learns nothing about the body rule, and the
+    denial is recorded (it is committed, so the job is removed again below)."""
+    tier1 = _tier1()
+    job_id = _job(sdb, subject_id="alert-403-nobody")
+    path = f"/api/admin/jobs/{job_id}/retry"
+    _override(sdb, tier1)
+    try:
+        resp = TestClient(main.app).post(path)  # no body, no content type
+    finally:
+        _clear_overrides()
+        sdb.rollback()
+        sdb.execute("DELETE FROM jobs WHERE job_id = %s", (job_id,))
+        sdb.commit()
+    assert resp.status_code == 403
+    ((_, actor_id, _subject, payload),) = _events(sdb, "authz.denied", path)
+    assert str(actor_id) == tier1.user_id and payload["method"] == "POST"
+
+
+# P11-T20 part 4 fix round 1, N2: the retry copies `last_error` into the append-only
+# `admin.job_retried` payload. Cut to 200 characters first, a DSN that runs across character 200
+# loses its `@`, the read-time rule (`admin_audit.is_secret_value`) cannot find it, and the row is
+# permanent. The payload takes the same judged text as the overview: the marker, whole.
+@pytest.mark.db
+@pytest.mark.parametrize(
+    ("error", "where"),
+    [
+        pytest.param(
+            "z" * 150 + " postgresql://app_rw:" + "P" * 60 + "@db:5432/soc",
+            "split at 200",
+            id="split",
+        ),
+        pytest.param(f"connection to {DSN} refused", "inside the 200", id="whole"),
+        pytest.param("y" * 300 + f" {DSN}", "past the 200", id="beyond"),
+    ],
+)
+def test_retry_stores_the_marker_not_a_dsn_in_the_event(client, error, where) -> None:
+    tc, db, _ = client
+    job_id = _job(db, subject_id=f"alert-{where}", last_error=error)
+
+    assert _retry(tc, job_id).status_code == 200
+
+    ((_, _, _, payload),) = _events(db, "admin.job_retried", str(job_id))
+    assert payload["last_error"] == "[đã ẩn]", where
+    assert "PPPPP" not in str(payload) and "Sup3rS3cret" not in str(payload)
+    assert payload["job_type"] == "triage" and payload["attempts_before"] == 3
+    assert (
+        _job_row(db, job_id)[2] == error
+    )  # the job row keeps why it failed; only the event is cut
+
+
+@pytest.mark.db
+def test_the_stored_marker_is_what_the_audit_page_answers_for_the_retried_job(client) -> None:
+    """End to end: a DSN split at 200, retried, read back through `GET /api/admin/audit`."""
+    tc, db, _ = client
+    job_id = _job(db, last_error="z" * 150 + " postgresql://app_rw:" + "P" * 60 + "@db:5432/soc")
+    assert _retry(tc, job_id).status_code == 200
+    resp = tc.get("/api/admin/audit", params={"subject": str(job_id)})
+    assert resp.status_code == 200
+    (event,) = resp.json()["events"]
+    assert event["payload"]["last_error"] == "[đã ẩn]"
+    assert "PPPPP" not in resp.text
 
 
 @pytest.mark.db
@@ -1230,7 +1411,7 @@ def _retry_in_a_thread(
         try:
             if start is not None:
                 start.wait(timeout=10)
-            out["response"] = TestClient(main.app).post(f"/api/admin/jobs/{job_id}/retry")
+            out["response"] = TestClient(main.app).post(f"/api/admin/jobs/{job_id}/retry", json={})
         except Exception as exc:  # noqa: BLE001 - the test reports whatever the app raised
             out["error"] = exc
 

@@ -62,7 +62,31 @@ nothing else is changed (no stringifying, no cutting). Three rules (spec §5.8, 
   and both are admins, so the page's role guard cannot separate them. The event stays listed with
   its time, `labeler_id`, `alert_id`, `gold_set` and `undo`; the Owner reads the verdicts from
   `triage_labels` and the export tools. The model's `confidence` in `triage.suggested` is not a
-  labeller's, and no other event type is touched.
+  labeller's (on a blind head it goes by the next rule).
+- **The blind arm** (DEC-101, context pack §6.4; DEC-206 as amended, P11-T20 part 4 finding I1 and
+  round 2 N1): the suggestion of ① is removed from any response, for every role, while the alert
+  is blind (`NOT suggestion_visible`) and not yet decided (`status NOT IN visibility.SHOW_STATES`:
+  the rule of `tier1/visibility.py`, not a copy of it, its state list passed as a parameter).
+  - **Left out.** The rows of `BLIND_OMITTED_EVENT_TYPES` about such an alert are not on the
+    page and not in `total`: `triage.suggested`; `llm.gate_forced` (the gate only ever forces
+    `needs_review`, `security/gate.py`, and `triage.py` writes the event only when it did, so its
+    bare presence tells the verdict); `llm.builder_violation` (it tells that ① produced none,
+    the `triage_status` fact `ANALYST_HIDE` hides). The test is a fragment of the page's own WHERE
+    (`_BLIND_OMIT`, a primary-key lookup per candidate row), so it applies BEFORE the `LIMIT`:
+    pages stay full, the cursor chain stays whole, and `_total` counts the same rows because it
+    shares the clauses. They come back once the alert is decided.
+  - **Masked.** `autoclose.reviewed` stays listed, a person's event whose presence tells no
+    verdict, with the keys of `SUGGESTION_HIDE` (`suggested_action`, `run_id`, written while the
+    alert was auto-closed and so visible; a `wrong` verdict reopens it, blind again) replaced by
+    `"[đã ẩn]"` at any depth, whatever the value. The page LEFT JOINs `alerts` for the rows of
+    `SUGGESTION_EVENT_TYPES` after the page is cut and tells `_payload` which are blind;
+    `SUGGESTION_HIDE` is `visibility.ANALYST_HIDE` (so a key added there is hidden here too)
+    plus the events' own names. The two other suggestion events are masked the same way there,
+    which the first rule makes unreachable: a second line, not a second rule.
+  - A subject with no `alerts` row has nothing to say it is blind and is listed as written. No
+    other event type is touched (`tier1.decided` carries a suggestion, but an alert is decided
+    when it is written, and the only way back to `queued_tier1` is A17, from `auto_closed`,
+    which no analyst decided).
 
 Payloads should never carry a credential (DEC-159 item 6); this is the second layer. One
 addition to the spec, for the same reason as the
@@ -87,6 +111,7 @@ from psycopg import sql
 from pydantic import AfterValidator
 
 from app.infra.auth import Claims
+from app.tier1 import visibility
 from app.web.deps import Conn, require_role
 
 router = APIRouter()
@@ -145,6 +170,14 @@ _SCHEME_CHAR = re.compile(r"[a-z0-9+.-]", re.IGNORECASE)
 #: and the event types whose payload they are hidden in, for every viewer.
 LABEL_KEYS = ("label", "confidence")
 BLIND_EVENT_TYPES = frozenset({"label.created"})
+#: The events whose payload carries the suggestion of ①, and which the blind arm masks it in
+#: (module docstring). The page LEFT JOINs `alerts` for these and for no other.
+SUGGESTION_EVENT_TYPES = frozenset({"triage.suggested", "llm.gate_forced", "autoclose.reviewed"})
+#: DEC-206 as amended (round 2 N1): the events whose bare presence under a blind, undecided alert
+#: tells ①'s verdict, or that it produced none. They are left out of the page and of its total.
+BLIND_OMITTED_EVENT_TYPES = frozenset(
+    {"triage.suggested", "llm.gate_forced", "llm.builder_violation"}
+)
 
 #: `?range=` -> the window. Anything else is a 422 from the `Literal` below.
 _WINDOWS: dict[str, timedelta] = {
@@ -226,6 +259,15 @@ def normalise_key(key: str) -> str:
     The spec's "split camelCase" step has no effect of its own here: the split is undone as soon as
     the separators are dropped and the letters lower-cased, so `apiKey` is `apikey` either way."""
     return key.lower().replace("_", "").replace("-", "")
+
+
+#: The normalised key names hidden in the payload of a `SUGGESTION_EVENT_TYPES` event on a blind,
+#: undecided alert: everything `visibility` hides, plus the names `triage.py` gives the verdict in
+#: `llm.gate_forced` (`proposed`, `final`, `forced_by`, and `missing`, the gate conditions that
+#: were not met, which say what the model proposed) and `forced` of `triage.suggested`.
+SUGGESTION_HIDE = frozenset(normalise_key(key) for key in visibility.ANALYST_HIDE) | frozenset(
+    normalise_key(key) for key in ("forced", "proposed", "final", "forced_by", "missing")
+)
 
 
 def is_secret_key(key: Any) -> bool:
@@ -320,11 +362,13 @@ def redact(value: Any, _level: int = 0, *, hide: frozenset[str] = frozenset()) -
     return REDACTED if is_secret_value(value) else value
 
 
-def _payload(text: str | None, size: int | None, event_type: str) -> Any:
+def _payload(text: str | None, size: int | None, event_type: str, blind: bool = False) -> Any:
     """The `payload` of one row from its two SQL columns: `text` is the jsonb as text, or NULL
     when it was over the size limit; `size` is its byte length, or NULL for a SQL NULL payload;
     `event_type` is the row's, and decides whether a labeller's verdict is hidden in it
-    (`BLIND_EVENT_TYPES`, DEC-204). A payload that cannot be returned whole (too big, too deep,
+    (`BLIND_EVENT_TYPES`, DEC-204); `blind` is the page query's verdict on the row's alert (a
+    `SUGGESTION_EVENT_TYPES` event on a blind, undecided alert: the keys of `SUGGESTION_HIDE` go,
+    P11-T20 part 4 finding I1). A payload that cannot be returned whole (too big, too deep,
     too deep for the JSON parser itself, or holding a number that parser refuses) is
     `{"truncated": true, "size": <bytes>}`; one of those never leaks a secret or a verdict, it
     is not sent at all.
@@ -337,6 +381,8 @@ def _payload(text: str | None, size: int | None, event_type: str) -> Any:
     if text is None:
         return {"truncated": True, "size": size}
     hide = frozenset(LABEL_KEYS) if event_type in BLIND_EVENT_TYPES else frozenset()
+    if blind:
+        hide |= SUGGESTION_HIDE
     try:
         return redact(json.loads(text), hide=hide)
     except (ValueError, RecursionError):
@@ -357,11 +403,14 @@ _SET_TIMEOUT = sql.SQL("SET LOCAL statement_timeout = {}")
 # row a Sort plan orders, not only the page's. Measured on the scratch server (payloads of 1.36 MB
 # of text, 15.6 KB stored): 600 of them under one subject took the old query 3.3 s (a 503), this
 # one 0.27 s. `size` is NULL for a SQL NULL payload; the outer ORDER BY restores the page's order
-# after the join (100 rows).
+# after the join (100 rows). The last column is the blind arm's verdict on the row (module
+# docstring): the join to `alerts` is by its primary key, made only for the three suggestion
+# events, after the page is cut; the decided states are `visibility.SHOW_STATES`, a parameter.
 _PAGE = sql.SQL("""
     SELECT p.audit_id, p.created_at, p.event_type, p.actor_role, u.username, p.subject_id,
            CASE WHEN t.size > %(max_bytes)s THEN NULL ELSE t.body END,
-           t.size
+           t.size,
+           COALESCE(NOT al.suggestion_visible AND al.status <> ALL(%(show_states)s), false)
     FROM (
         SELECT a.audit_id, a.created_at, a.event_type, a.actor_role, a.actor_id, a.subject_id,
                a.payload
@@ -371,6 +420,8 @@ _PAGE = sql.SQL("""
         LIMIT %(limit)s
     ) p
     LEFT JOIN users u ON u.user_id = p.actor_id AND p.actor_role IN ('analyst', 'admin')
+    LEFT JOIN alerts al ON al.alert_id = p.subject_id
+                       AND p.event_type = ANY(%(suggestion_events)s)
     CROSS JOIN LATERAL (
         SELECT b.body, octet_length(b.body) AS size
         FROM (SELECT p.payload::text AS body OFFSET 0) b
@@ -380,14 +431,42 @@ _PAGE = sql.SQL("""
 
 _COUNT = sql.SQL("SELECT count(*) FROM audit_events a WHERE {where}")
 
+# The rows of `BLIND_OMITTED_EVENT_TYPES` whose alert is blind and undecided are not selected: a
+# fragment of the WHERE, so the inner page selection applies it before its `LIMIT` and the total
+# counts the same rows. A SCALAR subquery (a primary-key lookup, run only for a row whose type is
+# in the list: the type test is the cheap one and the planner puts it first), not NOT EXISTS,
+# which the planner may turn into an anti join that reads every alert. NULL (no `alerts` row)
+# is false: nothing says such a subject is blind.
+_BLIND_OMIT = sql.SQL(
+    "NOT (a.event_type = ANY(%(omitted_events)s) AND COALESCE("
+    "(SELECT NOT al.suggestion_visible AND al.status <> ALL(%(show_states)s) "
+    "FROM alerts al WHERE al.alert_id = a.subject_id), false))"
+)
+# The same predicate for the total, as an anti join. The total reads every row of the window, and
+# the planner runs this form as a parallel hash anti join over the blind alerts (measured on the
+# scratch server, 250,000 events and 60,000 alerts: 37 ms against 280 ms for the scalar form, a
+# lookup per row); the page reads a few dozen rows, where the scalar form is a handful of index
+# lookups (1.3 ms) and an anti join is not wanted. Two spellings, one meaning, held together by a
+# test that counts with both.
+_BLIND_OMIT_COUNT = sql.SQL(
+    "NOT EXISTS (SELECT 1 FROM alerts al WHERE al.alert_id = a.subject_id "
+    "AND a.event_type = ANY(%(omitted_events)s) AND NOT al.suggestion_visible "
+    "AND al.status <> ALL(%(show_states)s))"
+)
+
 
 def _filters(
     window: timedelta, group: str | None, actor: str | None, subject: str | None
 ) -> tuple[list[sql.SQL], dict[str, Any]]:
     """The WHERE's fixed fragments and the parameters they name. A request value only ever
-    reaches the parameter dict; a fragment is chosen by which filters were given."""
-    clauses = [sql.SQL("a.created_at >= now() - %(window)s")]
-    params: dict[str, Any] = {"window": window}
+    reaches the parameter dict; a fragment is chosen by which filters were given. `_BLIND_OMIT`
+    is always there (and so are its two parameters, `show_states` for the page's own join too)."""
+    clauses = [sql.SQL("a.created_at >= now() - %(window)s"), _BLIND_OMIT]
+    params: dict[str, Any] = {
+        "window": window,
+        "omitted_events": sorted(BLIND_OMITTED_EVENT_TYPES),
+        "show_states": sorted(visibility.SHOW_STATES),
+    }
     if group is not None:
         clauses.append(sql.SQL("a.event_type = ANY(%(types)s)"))
         params["types"] = list(GROUPS[group])
@@ -421,7 +500,12 @@ def _page_statement(
     """The page query and its parameters: the filter's fragments, plus the cursor's when given.
     The inputs are not modified (the same `clauses` and `params` also feed the total)."""
     clauses = list(clauses)
-    params = {**params, "max_bytes": PAYLOAD_MAX_BYTES, "limit": limit}
+    params = {
+        **params,
+        "max_bytes": PAYLOAD_MAX_BYTES,
+        "limit": limit,
+        "suggestion_events": sorted(SUGGESTION_EVENT_TYPES),
+    }
     if cursor is not None:
         clauses.append(sql.SQL("a.audit_id < %(cursor)s"))
         params["cursor"] = cursor
@@ -455,7 +539,8 @@ def _total(conn: Any, clauses: list[sql.SQL], params: dict[str, Any]) -> int | N
     try:
         with conn.transaction():
             conn.execute(_SET_TIMEOUT.format(sql.Literal(TOTAL_TIMEOUT)))
-            return _count_matching(conn, _where(clauses), params)
+            counted = [_BLIND_OMIT_COUNT if clause is _BLIND_OMIT else clause for clause in clauses]
+            return _count_matching(conn, _where(counted), params)
     except psycopg.Error as exc:
         # The class and SQLSTATE only: the message can hold SQL text.
         logger.warning("audit total unavailable: %s %s", type(exc).__name__, exc.sqlstate)
@@ -488,9 +573,19 @@ def api_audit(
             "actor_role": actor_role,
             "actor_username": username,
             "subject_id": subject_id,
-            "payload": _payload(text, size, event_type),
+            "payload": _payload(text, size, event_type, blind),
         }
-        for audit_id, created_at, event_type, actor_role, username, subject_id, text, size in rows
+        for (
+            audit_id,
+            created_at,
+            event_type,
+            actor_role,
+            username,
+            subject_id,
+            text,
+            size,
+            blind,
+        ) in rows
     ]
     return {
         "events": events,

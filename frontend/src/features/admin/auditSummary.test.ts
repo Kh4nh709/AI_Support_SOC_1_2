@@ -4,6 +4,7 @@
 // events put there, so every function here is also shown to survive a payload of the wrong shape.
 import { S } from "../../strings";
 import {
+  REDACTED,
   hasInvisible,
   payloadText,
   subjectPathOf,
@@ -414,6 +415,89 @@ describe("the summary of a label.created event never shows a verdict (DEC-204)",
       extra: { label: "NESTED-VALUE" },
     });
     expect(line).toBe(bare);
+  });
+});
+
+// DEC-101, context pack §6.4: the server leaves ①'s suggestion off an alert that is blind and not yet decided,
+// replacing every key that carries it with the marker, for every viewer. The line says it is withheld; it never
+// puts the marker where a verdict would be, and never reads what is left of a payload the server cut down.
+describe("the summary of an event whose suggestion the server withheld (DEC-101)", () => {
+  const H = REDACTED;
+  const A = S.admin.auditPage.summary;
+  const WORDS = ["Chuyển tier 2", "Dương tính giả", "Cần xem xét", "độ tin cậy", "đã ép", " ép "];
+  const notShown = (line: string) => {
+    expect(line).not.toContain(H);
+    for (const word of WORDS) expect(line).not.toContain(word);
+  };
+
+  it("says triage.suggested is withheld, with no marker, no action and no confidence", () => {
+    const line = sum("triage.suggested", {
+      suggested_action: H,
+      confidence: H,
+      forced: H,
+      run_id: H,
+    });
+    expect(line).toBe(A.suggestionHidden);
+    notShown(line);
+  });
+
+  it.each(["suggested_action", "confidence", "forced", "run_id"])(
+    "says it is withheld when only %s was withheld, and reads nothing else of the payload",
+    (key) => {
+      const payload = {
+        suggested_action: "escalate",
+        confidence: "high",
+        forced: true,
+        run_id: "x",
+      };
+      const line = sum("triage.suggested", { ...payload, [key]: H });
+      expect(line).toBe(A.suggestionHidden);
+      notShown(line);
+    },
+  );
+
+  it.each(["proposed", "final", "forced_by", "missing"])(
+    "says llm.gate_forced is withheld when only %s was withheld",
+    (key) => {
+      const payload = { proposed: "false_positive", final: "needs_review", forced_by: ["step4"] };
+      const line = sum("llm.gate_forced", { ...payload, [key]: H });
+      expect(line).toBe(A.gateForcedHidden);
+      notShown(line);
+    },
+  );
+
+  it("says llm.gate_forced is withheld when the server took every key", () => {
+    const line = sum("llm.gate_forced", { proposed: H, final: H, forced_by: H, missing: H });
+    expect(line).toBe(A.gateForcedHidden);
+    notShown(line);
+  });
+
+  it("keeps the verdict of a digest review and says its suggestion is withheld", () => {
+    const line = sum("autoclose.reviewed", {
+      verdict: "wrong",
+      autoclose_rule_id: "r",
+      suggested_action: H,
+      run_id: H,
+    });
+    expect(line).toBe(`duyệt: Sai; ${A.suggestionHidden}`);
+    notShown(line);
+  });
+
+  it("is unchanged when nothing was withheld (a visible head, or a decided one)", () => {
+    expect(
+      sum("triage.suggested", { suggested_action: "escalate", confidence: "high", forced: true }),
+    ).toBe("đề xuất ①: Chuyển tier 2; độ tin cậy cao; cổng kiểm soát đã ép kết quả");
+    expect(sum("llm.gate_forced", { proposed: "false_positive", final: "needs_review" })).toBe(
+      "cổng kiểm soát ép Dương tính giả → Cần xem xét",
+    );
+  });
+
+  it("does not fail on a withheld value of another kind, or on the marker as a whole payload", () => {
+    for (const type of ["triage.suggested", "llm.gate_forced", "autoclose.reviewed"]) {
+      expect(typeof sum(type, H)).toBe("string");
+      expect(typeof sum(type, [H])).toBe("string");
+      expect(typeof sum(type, { suggested_action: [H], proposed: { a: H } })).toBe("string");
+    }
   });
 });
 

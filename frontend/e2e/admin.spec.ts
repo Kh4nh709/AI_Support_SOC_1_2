@@ -544,14 +544,17 @@ test("scenario 5: a cap below the month's spend stops the next ① run with stop
     await expect(cost).toHaveAttribute("data-cost", "stopped");
     await expect(cost.getByRole("alert")).toHaveText(L.cost.stopped);
 
-    // The next ① run, on a new alert, is stopped by the cap: no model call, a row that says why.
-    const head = await postAlert(request, { tag: "cap" });
-    const stopped = (extra: string) =>
+    // The next ① run, on a new alert, is stopped by the cap: no model call, a row that says why. The alert is
+    // of the visible arm: on a blind one, still undecided, the usage list ties the run to no alert (DEC-206),
+    // and which arm an alert gets would otherwise be a coin the spec flips.
+    const head = await postAlert(request, { tag: "cap", arm: "visible" });
+    const stoppedOn = (id: string, extra: string) =>
       Number(
         sql(
-          `SELECT count(*) FROM llm_runs WHERE pipeline = 'triage' AND subject_id = '${head.id}' ${extra}`,
+          `SELECT count(*) FROM llm_runs WHERE pipeline = 'triage' AND subject_id = '${id}' ${extra}`,
         ),
       );
+    const stopped = (extra: string) => stoppedOn(head.id, extra);
     await expect
       .poll(() => stopped("AND stopped_by = 'cap'"), {
         message: "① stopped by the cap",
@@ -563,6 +566,21 @@ test("scenario 5: a cap below the month's spend stops the next ① run with stop
     await page.reload();
     const run = page.getByRole("row").filter({ has: page.locator(`a[href="/alerts/${head.id}"]`) });
     await expect(run.first()).toContainText(L.recent.stopped(L.stopped.cap));
+
+    // The same on a blind alert, still undecided (context pack §6.4, DEC-206): the run is stopped and listed, and
+    // the list says neither which alert it was nor how it ended: no link, no id anywhere in the page.
+    const blind = await postAlert(request, { tag: "cap-blind", arm: "blind" });
+    await expect
+      .poll(() => stoppedOn(blind.id, "AND stopped_by = 'cap'"), {
+        message: "① stopped by the cap on a blind alert",
+        timeout: 30_000,
+      })
+      .toBeGreaterThan(0);
+    await page.reload();
+    await expect(page.getByRole("row").filter({ hasText: L.recent.hidden }).first()).toBeVisible();
+    await expect(page.locator(`a[href="/alerts/${blind.id}"]`)).toHaveCount(0);
+    expect(await page.content(), "the usage page names a blind alert").not.toContain(blind.id);
+    await expect(run.first()).toContainText(L.recent.stopped(L.stopped.cap)); // the visible one still is
 
     // Raising the cap lifts it: the tile is back to ok, and a new alert gets both ① answers.
     await page.getByLabel(L.limits.field.cap_usd).fill("100");

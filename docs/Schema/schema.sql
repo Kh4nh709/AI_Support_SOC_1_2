@@ -1539,9 +1539,10 @@ INSERT INTO schema_migrations (version) VALUES ('018_alerts_notify');
 --      nothing, and the fail-closed accessor would then stop every model call (P11-T01 review,
 --      finding 5). No DELETE in the grant: nothing deletes a setting. (Where the applier is the
 --      role 017's defaults name, as on Compose, those defaults add DELETE as well; no code
---      uses it.) The bounds the web route enforces (cap 1–1000, quota 1–200, timeout 10–600)
---      are the route's; the database only refuses what no value of any bound could make sense
---      of (zero, negative, an unknown key).
+--      uses it.) The bounds the web route enforces (cap 1–1000, quota 1–200, timeout
+--      10–min(600, (JOB_LOCK_TIMEOUT_S − 60) // 2), DEC-202: 120 at the default 300) are the
+--      route's; the database only refuses what no value of any bound could make sense of
+--      (zero, negative, an unknown key).
 --
 --   2. `users.last_login_at` — stamped by `infra/auth.login` on a successful login, in the same
 --      UPDATE that resets `failed_logins` (spec §5.1). NULL for an account that never signed in;

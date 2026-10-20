@@ -15,6 +15,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { OVERVIEW_SECTIONS } from "./admin";
+import { REDACTED } from "../features/admin/auditSummary";
 import { dictKeys, wrapDictLiterals } from "./adminTypesSource";
 
 const BACKEND = join("..", "backend", "app");
@@ -610,6 +611,14 @@ describe("the response types of api/admin.ts equal the keys of their handlers", 
     const simulate = tsPropsOf("SimulateResult");
     expect(simulate.find((p) => p.name === "hard_block_tally")?.optional).toBe(false);
     expect(simulate.find((p) => p.name === "hard_block_tally")?.type).toBe("HardBlockTally | null");
+  });
+});
+
+describe("the marker of a withheld value", () => {
+  it("is the one admin_audit.py writes: `REDACTED` there, and the page reads it from here", () => {
+    const written = /^REDACTED = "([^"]*)"$/m.exec(py("web", "routers", "admin_audit.py"));
+    expect(written).not.toBeNull();
+    expect(REDACTED).toBe(written?.[1]);
   });
 });
 
