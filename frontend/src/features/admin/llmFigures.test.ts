@@ -68,6 +68,26 @@ describe("the number texts", () => {
     expect(formatTokens(0)).toBe("0");
   });
 
+  // The words "tr" and "s" are copy: they live in strings.ts (`S.admin.llmPage.units`), and the figures only
+  // put a number in front of them (P11-T13 review n1). Swapping the word there must change the text here.
+  describe("the unit words are strings.ts's", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it("says millions of tokens with units.million", () => {
+      expect(S.admin.llmPage.units.million("2,44")).toBe("2,44 tr");
+      vi.spyOn(S.admin.llmPage.units, "million").mockImplementation((n) => `${n} triệu`);
+      expect(formatTokens(2_437_000)).toBe("2,44 triệu");
+      expect(formatTokens(47_000)).toBe("47.000");
+    });
+
+    it("says seconds with units.seconds, in a single latency and in p50 / p95", () => {
+      expect(S.admin.llmPage.units.seconds("2,3")).toBe("2,3 s");
+      vi.spyOn(S.admin.llmPage.units, "seconds").mockImplementation((n) => `${n} giây`);
+      expect(formatSeconds(2300)).toBe("2,3 giây");
+      expect(formatLatency(2400, 9800)).toBe("2,4 giây / 9,8 giây");
+    });
+  });
+
   it("writes a percentage with one decimal at most", () => {
     expect(formatPercent(82)).toBe("82%");
     expect(formatPercent(82.4)).toBe("82,4%");

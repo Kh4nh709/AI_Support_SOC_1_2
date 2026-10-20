@@ -39,7 +39,9 @@ export function formatUsd(value: number, whole = false): string {
 
 /** "2,44 tr" from 100,000 tokens up, in millions with at most two decimals; "47.000" below. */
 export function formatTokens(value: number): string {
-  return value >= 100_000 ? `${MILLIONS.format(value / 1_000_000)} tr` : COUNT.format(value);
+  return value >= 100_000
+    ? S.admin.llmPage.units.million(MILLIONS.format(value / 1_000_000))
+    : COUNT.format(value);
 }
 
 /** "82%", "82,4%": one decimal at most (`pct` is floored to one by the route). */
@@ -49,7 +51,9 @@ export function formatPercent(value: number): string {
 
 /** "2,3 s", "1,0 s": milliseconds as seconds with one decimal, so a column lines up; a missing latency is a dash. */
 export function formatSeconds(milliseconds: number | null): string {
-  return milliseconds === null ? MISSING : `${SECONDS.format(milliseconds / 1000)} s`;
+  return milliseconds === null
+    ? MISSING
+    : S.admin.llmPage.units.seconds(SECONDS.format(milliseconds / 1000));
 }
 
 /** "2,4 s / 9,8 s": p50 over p95. Both missing is one dash. */

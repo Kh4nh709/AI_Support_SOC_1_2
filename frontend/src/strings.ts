@@ -911,6 +911,11 @@ export const S = {
           "Tính cả tháng dương lịch, dù khoảng thời gian đang chọn là gì. Tháng bắt đầu lúc 0 giờ ngày 1, theo múi giờ của phiên cơ sở dữ liệu.",
       },
       calls: { title: "Lượt gọi model" },
+      // The unit words after a figure (`llmFigures.ts`): millions of tokens ("2,44 tr") and seconds ("2,3 s").
+      units: {
+        million: (amount: string) => `${amount} tr`,
+        seconds: (amount: string) => `${amount} s`,
+      },
       tokens: {
         title: "Token vào / ra",
         average: (parts: string) => `trung bình ${parts}`,
