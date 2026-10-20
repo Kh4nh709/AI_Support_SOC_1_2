@@ -36,6 +36,10 @@ vi.mock("./features/admin/RulesPage", () => ({
 vi.mock("./features/admin/UsersPage", () => ({
   UsersPage: () => <h1>{S.admin.title.users}</h1>,
 }));
+// The overview page reads the API (OverviewPage.test.tsx tests it); this file looks for its place and its title.
+vi.mock("./features/admin/OverviewPage", () => ({
+  OverviewPage: () => <h1>{S.admin.title.overview}</h1>,
+}));
 
 // The case pages are real and read the backend; these tests are about the route table, so the backend
 // says "no cases" and "no case 3". A request nobody handled fails the test.
@@ -164,11 +168,6 @@ describe("the route table", () => {
     expect(where()).toBe("/queue");
   });
 });
-
-// The overview page reads the API (OverviewPage.test.tsx tests it); this file looks for its place and its title.
-vi.mock("./features/admin/OverviewPage", () => ({
-  OverviewPage: () => <h1>{S.admin.title.overview}</h1>,
-}));
 
 // The audit page reads the API (AuditPage.test.tsx tests it); here only its place in the route table matters.
 vi.mock("./features/admin/AuditPage", () => ({
