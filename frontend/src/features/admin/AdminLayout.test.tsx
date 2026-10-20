@@ -1,7 +1,6 @@
 // src/features/admin/AdminLayout.test.tsx — the sidebar of the admin console (spec §3): seven links in the
-// canvas order, the current one marked, and the placeholder pages the page tasks replace.
+// canvas order, the current one marked, and the page titles (all seven pages are built).
 import { render, screen, within } from "@testing-library/react";
-import axe from "axe-core";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 import { S } from "../../strings";
@@ -105,27 +104,18 @@ const PAGES: [name: string, Page: () => ReactNode, title: string][] = [
   ["AuditPage", AuditPage, "Nhật ký audit"],
 ];
 
-// The pages that are built are no placeholders: each has its own test file, and needs a query client, a
-// session and an API this file does not give (P11-T11: OverviewPage; P11-T12: UsersPage; P11-T13: LlmPage;
-// P11-T14: RulesPage; P11-T15: DigestPage; P11-T16: LabelsPage; P11-T17: AuditPage; each test file covers its
-// page, axe included). A page task adds its page's name here when it replaces the placeholder. The title test
-// below still holds the seven titles.
-const BUILT = [
-  "OverviewPage",
-  "LlmPage",
-  "UsersPage",
-  "DigestPage",
-  "RulesPage",
-  "LabelsPage",
-  "AuditPage",
-];
-const PLACEHOLDERS = PAGES.filter(([name]) => !BUILT.includes(name));
-
-describe("the placeholder pages", () => {
-  it.each(PLACEHOLDERS)("%s shows its title and says it is being built", (_name, Page, title) => {
-    render(<Page />);
-    expect(screen.getByRole("heading", { level: 1, name: title })).toBeInTheDocument();
-    expect(screen.getByText(/đang xây dựng/i)).toBeInTheDocument();
+// All seven pages are built (P11-T11 to T17): each has its own test file, which needs a query client, a session
+// and an API this file does not give, and covers its page, axe included. No placeholder is left to test here.
+describe("the pages", () => {
+  it("leave no placeholder text in strings.ts: no admin text says a page is being built", () => {
+    const texts: string[] = [];
+    const collect = (value: unknown): void => {
+      if (typeof value === "string") texts.push(value);
+      else if (typeof value === "object" && value !== null) Object.values(value).forEach(collect);
+    };
+    collect(S.admin);
+    expect(texts.length).toBeGreaterThan(100);
+    expect(texts.filter((text) => /đang xây dựng/i.test(text))).toEqual([]);
   });
 
   it("take their titles from strings.ts", () => {
@@ -138,30 +128,5 @@ describe("the placeholder pages", () => {
       S.admin.title.labels,
       S.admin.title.audit,
     ]);
-  });
-});
-
-// When every page is built, PLACEHOLDERS is empty and `it.each([])` makes no test: vitest fails a describe that
-// holds nothing else with "No test found in suite" (P11-T13 review m4). So a describe of placeholders only is
-// skipped when there are none. ("the placeholder pages" above also holds the title test, so it always has one.)
-describe.skipIf(PLACEHOLDERS.length === 0)("accessibility", () => {
-  it.each(PLACEHOLDERS)("has no axe violation around %s", async (_name, Page) => {
-    // The app shell gives the page its main landmark and the header its banner; both are here so the
-    // landmark rules judge what the real page looks like.
-    const { container } = render(
-      <MemoryRouter initialEntries={["/admin/users"]}>
-        <header>
-          <span>AI Support SOC</span>
-        </header>
-        <main>
-          <AdminLayout>
-            <Page />
-          </AdminLayout>
-        </main>
-      </MemoryRouter>,
-    );
-    // jsdom computes no layout or colour, so the contrast rule cannot run here.
-    const result = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
-    expect(result.violations.map((v) => v.id)).toEqual([]);
   });
 });

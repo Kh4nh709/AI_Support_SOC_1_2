@@ -12,7 +12,7 @@
 //   - 503 `timeout` and `query_failed`, each in its words, with the form open to narrow the filter, and no
 //     retry of its own (the query does not retry by itself; a button asks again);
 //   - 422: the text at the filter it names, and a line above the table;
-//   - 403: the card of a role that is not admin any more;
+//   - 403: the card of a role that is not admin any more, in `reason.forbidden`, the text of every admin page;
 //   - anything else: the page's own error (`PageError`).
 // A refresh that fails while rows are on screen leaves the rows, with a note.
 import { useQuery } from "@tanstack/react-query";
@@ -295,11 +295,11 @@ function EmptyLog({ view }: { view: AuditView }) {
   );
 }
 
+/** The 403 card: the one text every admin page says for it (`reason.forbidden`), and the way back to the queue. */
 function Forbidden() {
   return (
     <div className={CARD}>
-      <h1 className="text-[17px] font-semibold">{P.forbiddenTitle}</h1>
-      <p className="text-[13.5px] leading-relaxed text-[#c9d3df]">{P.forbiddenBody}</p>
+      <h1 className="text-[17px] font-semibold">{S.admin.reason.forbidden}</h1>
       <Link
         to="/queue"
         className="self-start text-sm text-[#7fb0ff] underline underline-offset-2 hover:text-[#a9cbff] focus-visible:outline-2 focus-visible:outline-text"

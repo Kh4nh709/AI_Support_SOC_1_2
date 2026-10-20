@@ -574,11 +574,11 @@ def test_the_409_count_is_evidence_only_with_the_grouping_switch_on():
 def test_the_analysis_panel_is_quoted_as_the_react_ui_words_it():
     strings = STRINGS_TS.read_text(encoding="utf-8")
     heading = 'aiHeading: "PHÂN TÍCH AI ②"'
-    quota = 'quotaExhausted: "Đã dùng hết lượt phân tích hôm nay"'
+    quota = 'quotaExhausted: "Đã dùng hết lượt phân tích trong 24 giờ gần nhất"'
     assert heading in strings and quota in strings  # the sources of the two quotes below
     text = _text()
     assert "titled `PHÂN TÍCH AI ②`" in text
     assert "`Trợ lý điều tra ②`" not in text, "the Jinja title of the ② panel"
     row = _runbook_line_with("`429` `analyze quota exceeded for today`")
-    assert "`Đã dùng hết lượt phân tích hôm nay`" in row
+    assert "`Đã dùng hết lượt phân tích trong 24 giờ gần nhất`" in row
     assert "HTTP `200`" not in row and "hết N lượt" not in row, row

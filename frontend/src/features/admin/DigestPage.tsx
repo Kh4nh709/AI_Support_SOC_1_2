@@ -5,18 +5,19 @@
 //     server's default (today) is read. The day and "today" shown are the server's answer, never the browser's
 //     date, and a review is posted with the day of the answer;
 //   - a day the server refuses (`422 bad_day`) is not a page error: the page replaces the URL by the default
-//     day (`<Navigate replace>`) and says so in a notice, carried in the location state;
+//     day (`<Navigate replace>`) and says so in a notice, carried in the location state, copied into the page's
+//     own state and cleared from the history entry, so a reload does not show it again;
 //   - a review (`POST .../{alert_id}/review`) answers for one row, so a refusal is said in that row: a 409
 //     `already_reviewed` replaces the row by the verdict on file (it carries it), and a 409 `not_auto_closed`,
 //     a 404 take the buttons away; a 422 or a failed write says so and leaves the buttons;
 //   - what a review recorded is put in the list at once (a server answer, not a guess) and the list is read
 //     again through `invalidateAfter("reviewDigest")`.
 // Two clicks in the same tick must send one POST, which a disabled button cannot promise (TanStack tells React a
-// mutation is pending a tick late), so each row holds a ref latch while its POST is out.
+// mutation is pending a tick late), so each row's review goes through the shared `useSubmitLatch`.
 // No element has a `style` attribute: the CSP forbids one.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, Navigate, useLocation, useSearchParams } from "react-router";
+import { Link, Navigate, useLocation, useNavigate, useSearchParams } from "react-router";
 import {
   DIGEST_VERDICTS,
   adminErrorOf,
@@ -43,6 +44,7 @@ import {
   summarise,
   withRow,
 } from "./digestFigures";
+import { useSubmitLatch } from "./useSubmitLatch";
 
 const D = S.admin.digestPage;
 
@@ -137,9 +139,6 @@ function DigestRowView({
 }) {
   const client = useQueryClient();
   const [note, setNote] = useState<RowNote | null>(null);
-  // Held from the click to the settling of its POST. `mutation.isPending` reaches React a tick after the
-  // click, so two clicks in one tick would both pass `disabled`; a ref changes at once.
-  const latch = useRef(false);
   // The buttons the admin pressed disappear when the row is answered; the focus goes to the answer, so a
   // keyboard or a screen reader does not fall back to the top of the page.
   const answer = useRef<HTMLDivElement>(null);
@@ -169,16 +168,14 @@ function DigestRowView({
     },
   });
 
+  // One POST per row at a time, and one for however many presses land in one tick (`mutation.isPending`
+  // reaches React a tick after the click, so a disabled button cannot promise it): the shared latch.
+  const run = useSubmitLatch(mutation);
   const review = (verdict: DigestVerdict) => {
-    if (latch.current) return;
-    latch.current = true;
-    handoff.current = true;
-    setNote(null);
-    mutation.mutate(verdict, {
-      onSettled: () => {
-        latch.current = false;
-      },
-    });
+    if (run(verdict)) {
+      handoff.current = true;
+      setNote(null);
+    }
   };
 
   const reviewed = row.reviewed_verdict !== null;
@@ -377,6 +374,7 @@ function fellBack(state: unknown): boolean {
 export function DigestPage() {
   const client = useQueryClient();
   const location = useLocation();
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   // `null`: no day in the URL, so the server's default. An empty `?day=` is a day, and a bad one.
   const dayParam = params.get("day");
@@ -386,6 +384,19 @@ export function DigestPage() {
     queryFn: () => getDigest(dayParam ?? undefined),
   });
   const data = query.data;
+
+  // The bad-day notice is shown once. The fallback leaves its flag in the history entry (`<Navigate state>`),
+  // and a reload keeps an entry's state, so the flag is copied into the page's own state and the entry is
+  // cleared. Two moments carry it in: a mount on an entry that has it (a reload), and the fallback itself,
+  // which does not remount the page. The notice is about the default day: it goes when a day is picked.
+  const flagged = fellBack(location.state);
+  const [badDay, setBadDay] = useState(flagged);
+  if (flagged && dayParam === null && !badDay) setBadDay(true);
+  if (badDay && dayParam !== null) setBadDay(false);
+  const { pathname, search, hash } = location;
+  useEffect(() => {
+    if (flagged) void navigate({ pathname, search, hash }, { replace: true, state: null });
+  }, [flagged, navigate, pathname, search, hash]);
 
   // A day the server refuses: the default day, in the URL too, with the notice. Not when the default day
   // itself is refused (that is a page error below, not a loop).
@@ -491,7 +502,7 @@ export function DigestPage() {
         </Link>
       </div>
 
-      {data !== undefined && fellBack(location.state) && (
+      {data !== undefined && badDay && (
         <div
           role="alert"
           className="rounded-lg border border-[#5a3a14] bg-[#2a1a0a] px-3.5 py-2.5 text-[13.5px] leading-snug text-[#fcd9a8]"

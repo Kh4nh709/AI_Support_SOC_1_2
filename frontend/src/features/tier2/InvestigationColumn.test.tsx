@@ -513,7 +513,11 @@ describe("the refusals of Phân tích", () => {
     refuse(429, "analyze quota exceeded for today");
     renderColumn();
     await userEvent.setup().click(await analyzeButton());
-    expect(await screen.findByRole("alert")).toHaveTextContent(S.ai2.quotaExhausted);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(S.ai2.quotaExhausted);
+    // The quota is a rolling 24 hours (decision 8), never the calendar day.
+    expect(alert).toHaveTextContent("24 giờ gần nhất");
+    expect(alert).not.toHaveTextContent("hôm nay");
     expect(screen.getByRole("button", { name: S.ai2.analyze })).toBeEnabled();
   });
 

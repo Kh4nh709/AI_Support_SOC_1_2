@@ -178,7 +178,8 @@ function Tiles({ data }: { data: LlmUsage }) {
         formatCount(Math.round(p.inputTokens / p.calls)),
       ),
     );
-  const stoppedPct = sum.calls === 0 ? null : Math.round((sum.stopped / sum.calls) * 1000) / 10;
+  // Over `runs`, not `calls`: a ① verifier failure is written on both of its rows (summarise).
+  const stoppedPct = sum.runs === 0 ? null : Math.round((sum.stopped / sum.runs) * 1000) / 10;
   return (
     <div className="grid grid-cols-4 gap-4">
       <CostTile month={data.month} />
@@ -208,7 +209,7 @@ function Tiles({ data }: { data: LlmUsage }) {
             ? L.stoppedTile.none
             : L.stoppedTile.detail(
                 formatCount(sum.stopped),
-                formatCount(sum.calls),
+                formatCount(sum.runs),
                 labelOf(L.stopped, sum.mainStopped.code),
               )}
         </p>
