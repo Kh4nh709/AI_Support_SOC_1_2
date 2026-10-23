@@ -262,19 +262,32 @@ def test_the_host_name_is_not_what_decides_presence() -> None:
 @pytest.mark.parametrize(
     "user, is_admin, privileged, identity",
     [
+        # an account named by `asset.user`: `user_is_admin` as given
         ("FPT\\hr01", False, False, "found"),
         ("FPT\\hr01", True, True, "found"),
         ("hr01", True, True, "found"),
         ("FPT\\hr01", None, None, "skipped"),
         ("FPT\\hr01", _MISSING, None, "skipped"),
-        (None, False, None, "skipped"),  # SC03: no account, so nothing was looked up
-        (None, True, None, "skipped"),
-        (_MISSING, True, None, "skipped"),
-        ("", True, None, "skipped"),
+        # no account (DEC-208, SC03): a `false` says nothing and is dropped...
+        (None, False, None, "skipped"),
+        (_MISSING, False, None, "skipped"),
+        ("", False, None, "skipped"),
         ("   ", False, None, "skipped"),
+        ("FPT\\", False, None, "skipped"),  # the parser and the pipeline agree: nobody is named
+        # ...but a `true` is never dropped (fix round 2, review finding 1): it blocks a
+        # `false_positive` at gate step 4 and adds to the risk score, and being wrong the other
+        # way is the worse mistake
+        (None, True, True, "found"),
+        (_MISSING, True, True, "found"),
+        ("", True, True, "found"),
+        ("   ", True, True, "found"),
+        ("FPT\\", True, True, "found"),
+        # no flag at all
+        (None, None, None, "skipped"),
+        (_MISSING, _MISSING, None, "skipped"),
     ],
 )
-def test_the_account_is_read_only_when_the_alert_names_one(
+def test_the_account_flag_is_read_for_an_alert_that_names_one_and_a_true_is_always_kept(
     user: object, is_admin: object, privileged: bool | None, identity: str
 ) -> None:
     doc = sc03()
@@ -288,6 +301,55 @@ def test_the_account_is_read_only_when_the_alert_names_one(
 
     assert ctx.identity_privileged is privileged
     assert dict(ctx.lookup_status)["identity"] == identity
+
+
+@pytest.mark.parametrize("is_admin, privileged", [(True, True), (False, False), (None, None)])
+@pytest.mark.parametrize("put", ["dstuser", "srcuser"])
+def test_an_account_the_parser_read_counts_when_asset_user_is_null(
+    put: str, is_admin: bool | None, privileged: bool | None
+) -> None:
+    """The review's finding 1: `names an account` is decided from the alert's own `alert_user`, which
+    already holds the parser's fallback, and not from `asset.user`. Here the parser read `data.dstuser`
+    / `data.srcuser` and SOAR left `asset.user` null, so `user_is_admin` is used as given, `false`
+    included."""
+    doc = edit(sc03(), f"data.{put}", "root")
+    edit(doc, "enrichment.asset.user", None)
+    edit(doc, "enrichment.asset.user_is_admin", is_admin)
+    assert parsed(doc).alert_user == "root"
+
+    ctx = context_of(doc)
+
+    assert ctx.identity_privileged is privileged
+    assert dict(ctx.lookup_status)["identity"] == ("skipped" if privileged is None else "found")
+
+
+@pytest.mark.parametrize("is_admin, privileged", [(True, True), (False, False), (None, None)])
+@pytest.mark.parametrize("field", ["targetUserName", "subjectUserName"])
+def test_a_windows_account_the_parser_read_counts_when_asset_user_is_null(
+    field: str, is_admin: bool | None, privileged: bool | None
+) -> None:
+    doc = mw03(user=None, user_is_admin=is_admin)
+    doc["data"]["win"]["eventdata"][field] = "alice"
+    assert parsed(doc).alert_user == "alice"
+
+    ctx = context_of(doc)
+
+    assert ctx.identity_privileged is privileged
+    assert dict(ctx.lookup_status)["identity"] == ("skipped" if privileged is None else "found")
+
+
+def test_the_pipeline_and_the_parser_agree_on_who_is_named() -> None:
+    """Review nit 2: `asset.user` of `FPT\\` is nobody for the parser, so it is nobody here too: a
+    `false` is dropped and a `true` still kept, exactly as for `null`."""
+    for user in ("FPT\\", "\\", "", "   ", None):
+        for is_admin, expected in ((False, None), (True, True)):
+            doc = edit(
+                edit(sc03(), "enrichment.asset.user", user),
+                "enrichment.asset.user_is_admin",
+                is_admin,
+            )
+            assert parsed(doc).alert_user is None, user
+            assert context_of(doc).identity_privileged is expected, (user, is_admin)
 
 
 @pytest.mark.parametrize("asset", [_MISSING, None, {}], ids=["absent", "null", "empty"])
@@ -372,6 +434,8 @@ _INVALID = [
     ("schema 1.x", "enrichment.schema_version", "1.x"),
     ("schema v1.0", "enrichment.schema_version", "v1.0"),
     ("schema padded", "enrichment.schema_version", " 1.0"),
+    ("schema Arabic-Indic digit", "enrichment.schema_version", "1.\u0660"),
+    ("schema fullwidth digit", "enrichment.schema_version", "1.\uff10"),
     ("schema a float", "enrichment.schema_version", 1.0),
     ("schema an int", "enrichment.schema_version", 1),
     ("schema null", "enrichment.schema_version", None),

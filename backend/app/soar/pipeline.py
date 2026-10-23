@@ -196,8 +196,10 @@ def _unknown_context() -> AlertContext:
 # in 1.x). Read with `ENRICHMENT_ENABLED=false`, in place of the internal lookups:
 #   asset_criticality    <- asset.criticality   high|medium|low|unknown   (absent: unknown)
 #   asset_present        <- asset.in_inventory  boolean                   (absent: false)
-#   identity_privileged  <- asset.user_is_admin boolean, once the alert names an account
-#                           (null, absent or no account: None, identity `skipped`)
+#   identity_privileged  <- asset.user_is_admin boolean: as given for an alert that names an
+#                           account (`alert.alert_user`, which holds the parser's own reading and
+#                           its `enrichment.asset.user` fallback); with no account a `true` is still
+#                           kept and a `false` is dropped; null or absent: None, identity `skipped`
 #   ioc_reputation       <- the worst of ti[].verdict and ioc.verdict, malicious > suspicious >
 #                           clean (no block: `skipped`)
 # `asset.critical` is SOAR's own scoring flag, not an inventory level, and is not read. A value
@@ -206,7 +208,7 @@ def _unknown_context() -> AlertContext:
 # value (it is attacker-controlled text).
 # ---------------------------------------------------------------------------------------------
 
-_SCHEMA_VERSION_RE = re.compile(r"1\.\d+")
+_SCHEMA_VERSION_RE = re.compile(r"1\.[0-9]+")  # ASCII digits: `\d` takes Arabic-Indic ones too
 _CRITICALITIES = frozenset({"high", "medium", "low", "unknown"})
 #: A verdict's rank; the reputation of the alert is the highest one found.
 _VERDICT_RANK = {"clean": 0, "suspicious": 1, "malicious": 2}
@@ -251,8 +253,9 @@ def _verdict(value: object, field: str) -> str:
     return value
 
 
-def _read_enrichment(document: object) -> AlertContext:
-    """The context of one payload, or `_InvalidField` naming the first field that cannot be read."""
+def _read_enrichment(document: object, *, names_account: bool) -> AlertContext:
+    """The context of one payload, or `_InvalidField` naming the first field that cannot be read.
+    `names_account`: the alert has an account (`alert.alert_user`), whoever supplied it."""
     enrichment = document.get("enrichment") if isinstance(document, dict) else None
     if enrichment is None:
         raise _InvalidField("enrichment", "missing")
@@ -282,9 +285,13 @@ def _read_enrichment(document: object) -> AlertContext:
     if user is not None and not isinstance(user, str):
         raise _InvalidField("enrichment.asset.user", "wrong type")
     user_is_admin = _optional_bool(asset, "user_is_admin", "enrichment.asset.user_is_admin")
-    # `user_is_admin` says something only about an account the alert names: SOAR writes `false` for
-    # an alert with none (the pfSense sample), and nothing was looked up for it.
-    privileged = user_is_admin if user is not None and user.strip() else None
+    # A `false` says something only about an account the alert names: SOAR writes `false` for an
+    # alert with none (the pfSense sample), and nothing was looked up for it. A `true` is never
+    # dropped, whoever the account is (review finding 1): it blocks a `false_positive` at gate step
+    # 4 and adds to the risk score, and a privileged flag lost is the worse mistake. "Names an
+    # account" is the alert's own `alert_user` (the parser's reading, or its fallback to
+    # `asset.user`), so the pipeline and the parser cannot disagree on who is named.
+    privileged = user_is_admin if names_account or user_is_admin is True else None
 
     verdicts: list[str] = []
     ti = enrichment.get("ti")
@@ -323,7 +330,9 @@ def _context_from_payload(alert: Alert) -> AlertContext:
     context when the block is absent, is not schema `1.x`, or holds any field `_read_enrichment`
     refuses. The refusal is logged by field name and fault, never by value."""
     try:
-        return _read_enrichment(alert.raw_payload)
+        return _read_enrichment(
+            alert.raw_payload, names_account=bool((alert.alert_user or "").strip())
+        )
     except _InvalidField as exc:
         logger.warning(
             "soar context unknown: alert=%r field=%s fault=%s", alert.alert_id, exc.field, exc.fault
