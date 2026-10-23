@@ -9,8 +9,10 @@ would count only the representatives that arrived. So the facts ① works from c
 2. **The prompt.** The proposer and verifier prompts say `occurrence_count: không rõ`, through the
    builder: `fact()` still refuses a free string, and the phrase is one `TEMPLATE_CONSTANTS` entry.
 3. **The gate.** A ① `false_positive` whose cited rule cannot hold is forced to `needs_review` by
-   step 4. (Step 2 compares the model's `structured_basis.occurrence_count` with the fact: see the
-   `xfail` below, which pins what the Director's ruling on `security/gate.py` has to change.)
+   step 4. Step 2 compares the model's integer `structured_basis.occurrence_count` only with a
+   known count (DEC-209 item 2): with the fact `None` it has nothing to compare, so the only thing
+   that forces such an answer is step 4 and the hallucination flag stays false; a known count that
+   the model gets wrong is still flagged.
 4. **Where `None` comes from.** From the alert's own document (`raw_payload` carries SOAR's
    `enrichment` block), read in `tier1/triage._load`, so `evaluate_alert`, the job and the evaluation
    harness's `b1_facts` (which shares `_load`) see the same value whatever the switches say. An alert
@@ -26,7 +28,6 @@ import copy
 import dataclasses
 import json
 import re
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -40,10 +41,18 @@ from app.security import linter as L
 from app.tier1 import triage as tier1
 
 from tests.fakes.llm import TRIAGE_V2_FALSE_POSITIVE, FakeLLM
-from tests.soar_payloads import edit, mw03, receive_and_run, stream_config, ti, with_wazuh_id
+from tests.soar_payloads import (
+    edit,
+    llm_cfg,
+    mw03,
+    receive_and_run,
+    stream_config,
+    ti,
+    triage_input,
+    with_wazuh_id,
+)
 
 NONCE = "0123456789abcdef"
-T0 = datetime(2026, 10, 16, 3, 25, 22, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -135,46 +144,8 @@ def test_on_no_point_of_the_fact_grid_does_a_false_positive_rule_hold_with_an_un
 # ---------------------------------------------------------------------------
 
 
-def _cfg() -> config.Config:
-    return dataclasses.replace(
-        config.Config(), LLM_MODEL_PROPOSER="proposer-model", LLM_MODEL_VERIFIER="verifier-model"
-    )
-
-
-def _input(**overrides) -> T.TriageInput:
-    """A medium malware alert whose context is known and which meets every condition of `mal-1`
-    but the occurrence one."""
-    base = {
-        "alert_id": "1789200000.300001",
-        "rule_id": "100140",
-        "rule_level": 5,
-        "alert_time": T0,
-        "severity": "medium",
-        "category": "malware",
-        "categories": ("malware",),
-        "occurrence_count": 3,
-        "risk_score": 38,
-        "description": "Microsoft Defender: Malware Detected",
-        "raw_log": "Defender detected Virus:DOS/EICAR_Test_File",
-        "raw_log_truncated": False,
-        "agent_name": "Windows_Endpoint",
-        "origin_host": "Windows_Endpoint",
-        "agent_id": "001",
-        "alert_user": "hr01",
-        "mitre_ids": (),
-        "asset_context": {"present": True, "criticality": "medium", "owner": None, "role": None},
-        "identity_context": {"privileged": False},
-        "ioc_context": {"reputation": "clean"},
-        "lookup_status": {"asset": "found", "identity": "found", "ioc": "found"},
-        "first_seen_at": T0,
-        "last_seen_at": T0,
-    }
-    base.update(overrides)
-    return T.TriageInput(**base)
-
-
 def test_the_facts_carry_none_and_stay_serialisable() -> None:
-    facts = T.build_facts(_input(occurrence_count=None), None)
+    facts = T.build_facts(triage_input(occurrence_count=None), None)
 
     assert facts["occurrence_count"] is None
     assert json.loads(json.dumps(facts))["occurrence_count"] is None  # `gate_result.facts` is jsonb
@@ -182,7 +153,7 @@ def test_the_facts_carry_none_and_stay_serialisable() -> None:
 
 @pytest.mark.parametrize("count", [0, 1, 3, 50, 1234])
 def test_a_known_count_is_an_int_as_before_and_zero_is_not_unknown(count: int) -> None:
-    facts = T.build_facts(_input(occurrence_count=count), None)
+    facts = T.build_facts(triage_input(occurrence_count=count), None)
 
     assert facts["occurrence_count"] == count and isinstance(facts["occurrence_count"], int)
 
@@ -191,7 +162,7 @@ def _proposer_user(inp: T.TriageInput) -> str:
     facts = T.build_facts(inp, None)
     table = kb.get_decision_table("malware")
     built = T.build_proposer_prompt(
-        inp, facts, None, kb.get_playbook("malware"), table, cfg=_cfg(), nonce=NONCE
+        inp, facts, None, kb.get_playbook("malware"), table, cfg=llm_cfg(), nonce=NONCE
     )
     assert (
         L.lint(built.prompt.user, nonce=NONCE, constants=B.TEMPLATE_CONSTANTS, enums=B.ENUM_VALUES)
@@ -201,7 +172,7 @@ def _proposer_user(inp: T.TriageInput) -> str:
 
 
 def test_the_proposer_prompt_says_unknown_in_the_place_of_the_count() -> None:
-    user = _proposer_user(_input(occurrence_count=None))
+    user = _proposer_user(triage_input(occurrence_count=None))
 
     line = next(row for row in user.splitlines() if row.startswith("severity:"))
     assert (
@@ -214,7 +185,7 @@ def test_the_proposer_prompt_says_unknown_in_the_place_of_the_count() -> None:
 @pytest.mark.parametrize("count", [0, 3, 50])
 def test_the_proposer_prompt_of_a_known_count_is_the_one_of_before(count: int) -> None:
     """`0` is a count too: only `None` is "không rõ"."""
-    user = _proposer_user(_input(occurrence_count=count))
+    user = _proposer_user(triage_input(occurrence_count=count))
 
     line = next(row for row in user.splitlines() if row.startswith("severity:"))
     expected = (
@@ -225,11 +196,11 @@ def test_the_proposer_prompt_of_a_known_count_is_the_one_of_before(count: int) -
 
 
 def test_the_verifier_prompt_says_unknown_too() -> None:
-    inp = _input(occurrence_count=None)
+    inp = triage_input(occurrence_count=None)
     facts = T.build_facts(inp, None)
 
     built = T.build_verifier_prompt(
-        facts, kb.get_decision_table("malware"), "needs_review", [], cfg=_cfg(), nonce=NONCE
+        facts, kb.get_decision_table("malware"), "needs_review", [], cfg=llm_cfg(), nonce=NONCE
     )
 
     assert "occurrence_count: không rõ" in built.prompt.user
@@ -239,11 +210,11 @@ def test_the_verifier_prompt_says_unknown_too() -> None:
         == []
     )
     known = T.build_verifier_prompt(
-        T.build_facts(_input(occurrence_count=7), None),
+        T.build_facts(triage_input(occurrence_count=7), None),
         kb.get_decision_table("malware"),
         "needs_review",
         [],
-        cfg=_cfg(),
+        cfg=llm_cfg(),
         nonce=NONCE,
     )
     assert "occurrence_count: 7" in known.prompt.user and "không rõ" not in known.prompt.user
@@ -272,7 +243,7 @@ def test_the_phrase_is_a_template_constant_and_nothing_wider_is() -> None:
 
 
 def test_a_look_alike_of_the_phrase_is_free_text_to_the_linter() -> None:
-    user = _proposer_user(_input(occurrence_count=None))
+    user = _proposer_user(triage_input(occurrence_count=None))
     tampered = user.replace("không rõ", "khoảng 3")
 
     violations = L.lint(tampered, nonce=NONCE, constants=B.TEMPLATE_CONSTANTS, enums=B.ENUM_VALUES)
@@ -302,7 +273,7 @@ def _false_positive(rule: str = "mal-1", *, occurrence: int = 1) -> dict:
 
 def _step_4(occurrence: int | None) -> gate.GateState:
     """Gate step 4 on `_false_positive()` and the facts of `_input`, with the rule check ① builds."""
-    facts = T.build_facts(_input(occurrence_count=occurrence), None)
+    facts = T.build_facts(triage_input(occurrence_count=occurrence), None)
     rule_check = tier1._make_rule_check(kb.get_decision_table("malware"), facts)
     state = gate.start(_false_positive(), facts, {}, repaired=False)
     gate.step4_fp_policy(state, rule_check)
@@ -326,18 +297,12 @@ def test_step_4_forces_the_false_positive_to_needs_review_when_the_count_is_unkn
     assert state.warnings == ["rule_does_not_hold"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEC-208 item 4 needs gate step 2 to skip the occurrence comparison when the fact is "
-    "None (security/gate.py is outside P12-T02's file list): see P12-T02.report.md section 4",
-)
 def test_step_2_does_not_flag_a_hallucination_for_an_unknown_count() -> None:
-    """Step 2 reads `int(basis["occurrence_count"]) != facts["occurrence_count"]`; with the fact
-    `None` that is true for any integer the model writes (the schema makes it an integer), so every
-    ① answer on a SOAR alert would be flagged `hallucination_flag` and forced at step 2, before
-    step 4 is ever reached. When the gate skips the comparison for `None`, this passes and the
-    marker has to go (the test is `strict`, so the suite says so)."""
-    facts = T.build_facts(_input(occurrence_count=None), None)
+    """Step 2 used to read `int(basis["occurrence_count"]) != facts["occurrence_count"]`; with the
+    fact `None` that is true for any integer the model writes (the schema makes it an integer), so
+    every ① answer on a SOAR alert was flagged `hallucination_flag` and forced at step 2, before
+    step 4 was reached. DEC-209 item 2: an unknown count is not compared."""
+    facts = T.build_facts(triage_input(occurrence_count=None), None)
     state = gate.start(_false_positive(occurrence=1), facts, {}, repaired=False)
 
     gate.step2_basis(state)
@@ -346,18 +311,69 @@ def test_step_2_does_not_flag_a_hallucination_for_an_unknown_count() -> None:
     assert state.mismatched_fields == [] and state.steps["2"] == "ok"
 
 
+def _step_2(fact_count: int | None, basis_count: int) -> gate.GateState:
+    facts = T.build_facts(triage_input(occurrence_count=fact_count), None)
+    state = gate.start(_false_positive(occurrence=basis_count), facts, {}, repaired=False)
+    gate.step2_basis(state)
+    return state
+
+
+@pytest.mark.parametrize(
+    "fact_count, basis_count",
+    [(None, 0), (None, 1), (None, 3), (None, 999), (None, -5)],
+)
+def test_step_2_takes_any_integer_when_the_count_is_unknown(
+    fact_count: None, basis_count: int
+) -> None:
+    state = _step_2(fact_count, basis_count)
+
+    assert state.steps["2"] == "ok" and state.forced_by == []
+    assert state.verdict == "false_positive" and state.hallucination_flag is False
+
+
+@pytest.mark.parametrize(
+    "fact_count, basis_count",
+    [(3, 3), (0, 0), (1, 1), (50, 50)],
+)
+def test_step_2_passes_a_known_count_the_model_got_right(fact_count: int, basis_count: int) -> None:
+    state = _step_2(fact_count, basis_count)
+
+    assert state.steps["2"] == "ok" and state.hallucination_flag is False
+
+
+@pytest.mark.parametrize(
+    "fact_count, basis_count",
+    [(3, 4), (3, 2), (1, 0), (0, 1), (0, 3), (50, 49), (1, 999)],
+)
+def test_step_2_still_flags_a_known_count_the_model_got_wrong(
+    fact_count: int, basis_count: int
+) -> None:
+    """The change skips an UNKNOWN count and nothing else. `0` is a count (`if expected:` would let
+    `(0, 1)` through), and a wrong one is the hallucination step 2 exists to catch."""
+    state = _step_2(fact_count, basis_count)
+
+    assert state.steps["2"] == "mismatch"
+    assert state.hallucination_flag is True
+    assert state.mismatched_fields == ["occurrence_count"]
+    assert state.forced_by == ["step2"] and state.verdict == "needs_review"
+
+
 # ---------------------------------------------------------------------------
 # 4 · on the database: where the `None` comes from
 # ---------------------------------------------------------------------------
 
-_FP_ID = "1789200000.300001"
+_FP_ID = mw03()["id"]  # the sample's own Graylog id (DEC-209): ① renders it as it is
+_WAZUH_ID = "1789200000.300001"
 
 
-def fp_candidate() -> dict:
+def fp_candidate(alert_id: str = _FP_ID) -> dict:
     """The Defender sample made into an alert ① may close: level 5 (medium), a `medium` asset in the
     inventory, a `clean` address, an account that is not an admin. It meets every condition of
-    `mal-1` but the occurrence one. Its id is Wazuh-shaped, which is the only form ① renders."""
-    doc = with_wazuh_id(mw03(criticality="medium", in_inventory=True), _FP_ID)
+    `mal-1` but the occurrence one. It keeps the sample's own `gl-…` id unless a test gives it the
+    Wazuh shape (`alert_id=`)."""
+    doc = mw03(criticality="medium", in_inventory=True)
+    if alert_id != doc["id"]:
+        with_wazuh_id(doc, alert_id)
     doc["rule"]["level"] = 5
     doc["enrichment"]["ti"] = [ti("clean")]
     return doc
@@ -526,7 +542,7 @@ def test_the_prompts_of_a_soar_alert_say_unknown_and_pass_the_linter(db, stream)
 def test_a_false_positive_on_a_soar_alert_is_forced_to_needs_review(db, stream) -> None:
     """End to end, the fake model saying `false_positive` under `mal-1` on an alert whose every fact
     but the count satisfies that rule: the rule cannot hold on an unknown count, and the final
-    verdict is `needs_review`. (Which step forces it is the xfail below.)"""
+    verdict is `needs_review`."""
     receive_and_run(db, stream, fp_candidate())
 
     ev = tier1.evaluate_alert(
@@ -541,11 +557,6 @@ def test_a_false_positive_on_a_soar_alert_is_forced_to_needs_review(db, stream) 
 
 
 @pytest.mark.db
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEC-208 item 4: step 2 must not compare an unknown count, so that step 4 is what "
-    "forces the verdict (security/gate.py is outside P12-T02's file list): see the report",
-)
 def test_step_4_is_what_forces_it_end_to_end(db, stream) -> None:
     receive_and_run(db, stream, fp_candidate())
 
@@ -558,6 +569,90 @@ def test_step_4_is_what_forces_it_end_to_end(db, stream) -> None:
     assert ev.gate_result["missing"] == ["playbook_rule"]
     assert ev.gate_result["hallucination_flag"] is False
     assert ev.gate_result["mismatched_fields"] == []
+
+
+@pytest.mark.db
+def test_the_same_alert_with_a_wazuh_shaped_id_is_forced_the_same(db, stream) -> None:
+    """The id's shape changes nothing about the gate: the Wazuh form still runs end to end."""
+    receive_and_run(db, stream, fp_candidate(_WAZUH_ID))
+
+    ev = tier1.evaluate_alert(
+        db, _WAZUH_ID, adapter=_FakeComplete(responses=[_false_positive(), _verifier()]), cfg=stream
+    )
+
+    assert ev is not None and ev.outcome == "ok"
+    assert f"alert_id: {_WAZUH_ID}" in ev.built.prompt.user
+    assert ev.facts["occurrence_count"] is None
+    assert ev.forced_by == ("step4",) and ev.final_verdict == "needs_review"
+    assert ev.gate_result["hallucination_flag"] is False
+
+
+@pytest.mark.db
+def test_the_real_gl_id_is_a_fact_of_both_prompts_and_the_run_reaches_the_end(db, stream) -> None:
+    """DEC-209 item 1, end to end: the alert keeps the `gl-…` id SOAR gave it, ①'s prompts say it
+    as a fact, the linter passes, the gate runs, and nothing raised on the way."""
+    receive_and_run(db, stream, fp_candidate())
+
+    ev = tier1.evaluate_alert(
+        db, _FP_ID, adapter=_FakeComplete(responses=[_false_positive(), _verifier()]), cfg=stream
+    )
+
+    assert ev is not None and ev.outcome == "ok" and ev.violations == []
+    assert _FP_ID.startswith("gl-")
+    assert f"alert_id: {_FP_ID} · rule_id: 100140" in ev.built.prompt.user
+    assert ev.state is not None and ev.verification is not None
+    assert ev.final_verdict == "needs_review"
+
+
+def _escalate() -> dict:
+    """① says `escalate`, its basis the facts of `fp_candidate` (any integer for the count)."""
+    answer = _false_positive()
+    answer["suggested_action"] = "escalate"
+    answer["structured_basis"]["playbook_rule_applied"] = None
+    return answer
+
+
+@pytest.mark.db
+def test_an_escalation_on_a_soar_alert_is_not_downgraded_by_the_unknown_count(db, stream) -> None:
+    """Before DEC-209 item 2 step 2 forced EVERY answer on such an alert, `escalate` included, to
+    `needs_review` as a hallucination. Now only the `false_positive` that needs a rule is held back.
+    """
+    receive_and_run(db, stream, fp_candidate())
+
+    ev = tier1.evaluate_alert(
+        db,
+        _FP_ID,
+        adapter=_FakeComplete(responses=[_escalate(), _verifier("escalate")]),
+        cfg=stream,
+    )
+
+    assert ev is not None and ev.outcome == "ok"
+    assert ev.final_verdict == "escalate" and ev.forced_by == ()
+    assert ev.gate_result["hallucination_flag"] is False
+
+
+@pytest.mark.db
+def test_a_known_count_the_model_gets_wrong_is_still_flagged_at_step_2(db, stream) -> None:
+    """The control of the tests above, on an alert with no block (a known count of 1): `99` is a
+    hallucination, as before, and `1` is not. (The other basis fields are `fp_candidate`'s, which
+    this Wazuh alert does not have, so they mismatch both times: only the count is compared.)"""
+    alert_id = _wazuh_alert(db, stream)
+
+    def flagged(answered: int):
+        ev = tier1.evaluate_alert(
+            db,
+            alert_id,
+            adapter=_FakeComplete(responses=[_false_positive(occurrence=answered), _verifier()]),
+            cfg=stream,
+        )
+        assert ev is not None and ev.outcome == "ok" and ev.facts["occurrence_count"] == 1
+        return ev
+
+    wrong, right = flagged(99), flagged(1)
+
+    assert "occurrence_count" in wrong.gate_result["mismatched_fields"]
+    assert "occurrence_count" not in right.gate_result["mismatched_fields"]
+    assert wrong.gate_result["hallucination_flag"] is True
 
 
 @pytest.mark.db

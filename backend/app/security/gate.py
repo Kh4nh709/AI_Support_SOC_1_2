@@ -91,13 +91,16 @@ def _force_needs_review(state: GateState, step_name: str) -> None:
 
 
 def step2_basis(state: GateState) -> None:
-    """structured_basis vs DB facts, field by field, lower-cased strings, integer count."""
+    """structured_basis vs DB facts, field by field, lower-cased strings, integer count. A count
+    that is `None` is not compared (DEC-209 item 2): SOAR sent one representative of the case, so
+    there is no number to check the model's against (DEC-208 item 4)."""
     basis = state.proposer_raw["structured_basis"]
     mismatched = []
     for field in _STEP2_STRING_FIELDS:
         if str(basis[field]).lower() != str(state.facts[field]).lower():
             mismatched.append(field)
-    if int(basis["occurrence_count"]) != state.facts["occurrence_count"]:
+    expected = state.facts["occurrence_count"]
+    if expected is not None and int(basis["occurrence_count"]) != expected:
         mismatched.append("occurrence_count")
     if mismatched:
         state.hallucination_flag = True
