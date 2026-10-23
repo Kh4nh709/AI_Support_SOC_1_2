@@ -130,6 +130,16 @@ class Config:
     # DEC-165: false = every alert is its own queue row and its own triage job (no
     # grouping into clusters). Default true keeps the phase-2 behaviour untouched.
     DEDUP_ENABLED: bool = True
+    # DEC-207: alerts may arrive already enriched, grouped and closed by an external SOAR
+    # stream (`POST /webhook/alerts`). Each flag below defaults to true, so a `.env` that
+    # names none of them behaves exactly as before; the Owner turns one off when SOAR owns
+    # that step. PULL_ENABLED=false: no `pull` job is seeded and a pending one is not re-armed.
+    # AUTOCLOSE_ENABLED=false: no rule is loaded or evaluated, every non-duplicate alert is
+    # queued for Tier 1. ENRICHMENT_ENABLED=false: no `assets`/`identities`/`iocs` lookup, every
+    # alert carries the "unknown" context.
+    PULL_ENABLED: bool = True
+    AUTOCLOSE_ENABLED: bool = True
+    ENRICHMENT_ENABLED: bool = True
     INDEXER_URL: str = ""
     INDEXER_USER: str = ""
     INDEXER_PASSWORD: str = ""
@@ -257,6 +267,9 @@ def load(*, env_file: str | Path = ".env") -> Config:
         MAX_CLUSTER_AGE_AUTOCLOSED_MINUTES=as_int("MAX_CLUSTER_AGE_AUTOCLOSED_MINUTES", 30),
         MAX_CLUSTER_SIZE=as_int("MAX_CLUSTER_SIZE", 1000),
         DEDUP_ENABLED=as_bool("DEDUP_ENABLED", True),
+        PULL_ENABLED=as_bool("PULL_ENABLED", True),
+        AUTOCLOSE_ENABLED=as_bool("AUTOCLOSE_ENABLED", True),
+        ENRICHMENT_ENABLED=as_bool("ENRICHMENT_ENABLED", True),
         INDEXER_URL=as_str("INDEXER_URL", ""),
         INDEXER_USER=as_str("INDEXER_USER", ""),
         INDEXER_PASSWORD=as_str("INDEXER_PASSWORD", ""),

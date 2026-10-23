@@ -34,12 +34,16 @@ TIMEOUTS = iter_timeouts()
 
 
 def main(argv: Sequence[str]) -> None:
-    config.load()  # fail fast on a bad environment before a connection is opened
+    cfg = config.load()  # fail fast on a bad environment before a connection is opened
     conn = db.connect()
     # Single-flight through the partial unique index (ux_jobs_mot_job_song_moi_subject)
     # — a no-op once one `pull` job is already pending/running, and a re-arm of
     # a dead chain on every restart otherwise.
-    enqueue(conn, "pull", "indexer")
+    # DEC-207: with PULL_ENABLED=false alerts arrive by the webhook only, so no `pull` row is
+    # seeded. A `pull` row already pending still finds its handler, which ends it after one
+    # run without re-arming (`puller.pull_job`).
+    if cfg.PULL_ENABLED:
+        enqueue(conn, "pull", "indexer")
     # P5-T11 review round 1 seeding ruling: `health`'s subject_id is the
     # constant "system" (no per-job data) — re-enqueuing it here on every
     # worker start re-arms a dead `health` chain exactly as `pull`'s own does.

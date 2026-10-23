@@ -225,7 +225,12 @@ def _check_backup_age(backups_dir: Path | None = None) -> CheckResult:
     return CheckResult("backup_age", ok, round(age_hours, 1), _BACKUP_MAX_AGE_HOURS, detail)
 
 
-def _check_inventory_empty(conn: psycopg.Connection) -> CheckResult:
+def _check_inventory_empty(conn: psycopg.Connection, cfg: Config) -> CheckResult:
+    """An empty `assets` table is an alarm because enrichment would read it. With
+    `ENRICHMENT_ENABLED=false` (DEC-207) nothing reads it, so the check is not applicable: it
+    is `ok`, runs no SQL, and says why."""
+    if not cfg.ENRICHMENT_ENABLED:
+        return CheckResult("inventory_empty", True, None, 1, "n/a — enrichment off")
     (count,) = conn.execute("SELECT count(*) FROM assets").fetchone()
     ok = count > 0
     detail = f"{count} asset(s) in inventory" if ok else "assets table is empty"
@@ -398,7 +403,7 @@ def check(
         _check_triage_unavailable(conn),
         _check_monthly_cost(conn, cfg),
         _check_backup_age(backups_dir),
-        _check_inventory_empty(conn),
+        _check_inventory_empty(conn, cfg),
         _check_digest_unreviewed(conn, now_local),
         _check_disk_free(),
     ]

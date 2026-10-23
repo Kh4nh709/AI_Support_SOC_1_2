@@ -29,7 +29,7 @@
   - `AUTOCLOSE_ENABLED=false`: do not call `autoclose.load_rules` (`:91`) or `autoclose.evaluate` (`:120`); the alert goes through the `received` branch (`:136-151`).
   - `ENRICHMENT_ENABLED=false`: `_build_context` (`:154`) issues no SQL and returns `AlertContext(False, "unknown", None, None, None, "skipped", {"asset": "skipped", "identity": "skipped", "ioc": "skipped"})`. Check the field order and the vocabulary against `domain/alert.py` and `llm/builder.py` before you write it.
   - Risk still runs (`compute_risk_score`, `:118`).
-- `backend/app/infra/intake.py`: after a non-heartbeat alert is inserted and enqueued (`:134-146`), call `_update_heartbeat(conn, saw_alert=True)`. A `Duplicate` (409) does not stamp.
+- `backend/app/infra/intake.py`: after a non-heartbeat alert is inserted and enqueued (`:134-146`), call `_update_heartbeat(conn, saw_alert=True)`. A `Duplicate` (409) does not stamp. **Amended (review round 1, DEC-207 item 2): only when `PULL_ENABLED=false`; with the pull on nothing is stamped, as before.**
 - `backend/app/infra/health.py`: `_check_inventory_empty` (`:228`) takes `cfg`; with `ENRICHMENT_ENABLED=false` it returns `ok=True` and the detail `"n/a — enrichment off"`.
 - `.env.example`, `docs/runbook.md` (the key table, the §6.3 count, a short "SOAR intake" section next to the DEDUP_ENABLED one at `:152-161`: how to switch, `up -d` not `restart`, how to check with `printenv`, the three rollback levels from DEC-207 item 6), `docs/limitations.md` (DEC-207 item 3's three consequences).
 - Tests: `test_config.py`, `test_runbook_env_keys.py`, `test_pipeline.py`, `test_puller.py`, `test_worker_handlers.py`, `test_webhook.py` or `test_intake*.py`, `test_health.py`.
@@ -42,7 +42,7 @@
   - Auto-close: flag off, a rule that would match does not close the alert, `status` ends `queued_tier1`, a `triage` job exists, no `autoclose_rules` query ran; flag on, unchanged. A `critical` alert and an `high` asset behave the same either way (nothing closes).
   - Enrichment: flag off, no statement mentioning `assets`, `identities` or `iocs` reaches the connection (record the SQL with a cursor wrapper or `psycopg` logging); `alerts.lookup_status` is all `skipped`, `asset_context.present` is false, `risk_score_components` carries no asset, identity or IoC addend; flag on, unchanged.
   - Dedup: with `DEDUP_ENABLED=false` and the three new flags off, two alerts with the same cluster key are two heads, each with its own `triage` job. (This pins the combination the Owner will run.)
-  - Heartbeat: a webhook alert stamps `source_heartbeat.last_seen_at` and `last_alert_at`; a 409 does not change them; the heartbeat branch still stamps with `last_alert_at` untouched.
+  - Heartbeat: a webhook alert stamps `source_heartbeat.last_seen_at` and `last_alert_at`; a 409 does not change them; the heartbeat branch still stamps with `last_alert_at` untouched. **Amended: with `PULL_ENABLED=false`; with the pull on or unset, `source_heartbeat` is untouched.**
   - Health: `inventory_empty` with an empty `assets` table is `ok` when enrichment is off and not ok when it is on.
   - Gate: with the "unknown" context, a ① `false_positive` is forced to `needs_review` at step 4 (this documents the consequence in DEC-207 item 3; use the fake adapter).
   - Blind arm: with all flags off, `tier1/visibility.py` and the admin audit, usage and digest answers still hide the ① suggestion on a blind, undecided alert (reuse the existing P11 fixtures); the overview and the digest answer 200 and render with no auto-closed alert and no inventory.

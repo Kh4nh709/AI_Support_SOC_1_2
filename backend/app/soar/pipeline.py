@@ -14,6 +14,12 @@ This is the one module G1 allowlists to import `ingest/` (`("soar.pipeline",
 `ingest/` tier code, and `soar/pipeline.py` is the orchestrator that owns the
 transaction they run inside.
 
+Three of its steps are switches (all default `true`, so a `.env` that names none of them is the
+pipeline of before; read with `config.load()` per alert): `DEDUP_ENABLED` (DEC-165), and, for a
+stream that arrives already enriched and closed by an external SOAR flow (DEC-207),
+`AUTOCLOSE_ENABLED` (no rule is loaded or evaluated) and `ENRICHMENT_ENABLED` (no
+`assets`/`identities`/`iocs` lookup; the "unknown" context). The risk score runs either way.
+
 Idempotency (design note 2 step 1): a re-claimed job whose `intake` row
 already carries `processed_at` returns immediately without touching anything
 else — the case that matters is a worker killed between the main
@@ -86,9 +92,13 @@ def _process(conn: psycopg.Connection, intake_id: int, raw_text: str, via: str) 
     source = _derive_source(via, result.envelope)
     suggestion_visible = _suggestion_visible(alert.alert_id)
 
+    cfg = config.load()
+
     # Cache rule (phase-3 §Cache): loaded before the advisory lock so no rule
-    # query runs inside the serialised region.
-    rules = autoclose.load_rules(conn)
+    # query runs inside the serialised region. DEC-207: with AUTOCLOSE_ENABLED=false
+    # no rule is loaded (nor evaluated below) — the external SOAR stream owns the
+    # decision to close.
+    rules = autoclose.load_rules(conn) if cfg.AUTOCLOSE_ENABLED else None
 
     # DEC-165: with DEDUP_ENABLED=false nothing is grouped. The advisory lock, the
     # head lookup and the bump are all skipped, so no cluster lock is taken and no
@@ -97,7 +107,7 @@ def _process(conn: psycopg.Connection, intake_id: int, raw_text: str, via: str) 
     # switch is forward-only: heads that are already open are neither closed nor
     # bumped, they simply stop receiving new members. Receipt-level idempotency
     # (`intake`'s (manager_id, source_alert_id) key) is upstream of this and untouched.
-    if config.load().DEDUP_ENABLED:
+    if cfg.DEDUP_ENABLED:
         dedup.cluster_lock(conn, alert.rule_id, alert.srcip, alert.dstip, alert.agent_name)
         head = dedup.find_open_cluster(conn, alert)
         if head is not None:
@@ -113,25 +123,28 @@ def _process(conn: psycopg.Connection, intake_id: int, raw_text: str, via: str) 
             _finish_receipt(conn, intake_id, "duplicate")
             return
 
-    # Internal enrichment — always, for every non-duplicate alert (E1, M1).
-    ctx = _build_context(conn, alert)
+    # Internal enrichment — for every non-duplicate alert (E1, M1), unless
+    # ENRICHMENT_ENABLED=false (DEC-207): then `_build_context` reads nothing and the
+    # alert carries the "unknown" context. The risk score runs either way.
+    ctx = _build_context(conn, alert, cfg=cfg)
     risk_score, risk_components = compute_risk_score(alert.severity, ctx, 1)
 
-    decision = autoclose.evaluate(conn, alert, ctx, rules=rules)
-    if decision.match is not None:
-        transitions.open_alert(
-            conn,
-            alert,
-            kind="auto_closed",
-            source=source,
-            suggestion_visible=suggestion_visible,
-            rule=decision.match,
-            context=ctx,
-            risk_score=risk_score,
-            risk_components=risk_components,
-        )
-        _finish_receipt(conn, intake_id, "auto_closed")
-        return
+    if cfg.AUTOCLOSE_ENABLED:
+        decision = autoclose.evaluate(conn, alert, ctx, rules=rules)
+        if decision.match is not None:
+            transitions.open_alert(
+                conn,
+                alert,
+                kind="auto_closed",
+                source=source,
+                suggestion_visible=suggestion_visible,
+                rule=decision.match,
+                context=ctx,
+                risk_score=risk_score,
+                risk_components=risk_components,
+            )
+            _finish_receipt(conn, intake_id, "auto_closed")
+            return
 
     transitions.open_alert(
         conn, alert, kind="received", source=source, suggestion_visible=suggestion_visible
@@ -151,7 +164,30 @@ def _process(conn: psycopg.Connection, intake_id: int, raw_text: str, via: str) 
     _finish_receipt(conn, intake_id, "alert")
 
 
-def _build_context(conn: psycopg.Connection, alert: Alert) -> AlertContext:
+def _unknown_context() -> AlertContext:
+    """DEC-207: what an alert knows about its asset, account and addresses when nothing is
+    looked up. Every field is the vocabulary's own "unknown": `asset_present` false and
+    criticality "unknown" (the gate treats both as a block, never as a pass), the account's
+    privilege `None`, the IoC reputation and all three lookup statuses `skipped` (not a
+    security signal, so the risk score adds nothing for them)."""
+    return AlertContext(
+        False,
+        "unknown",
+        None,
+        None,
+        None,
+        "skipped",
+        {"asset": "skipped", "identity": "skipped", "ioc": "skipped"},
+    )
+
+
+def _build_context(
+    conn: psycopg.Connection, alert: Alert, *, cfg: config.Config | None = None
+) -> AlertContext:
+    """`_process` passes the `cfg` it already holds, so the switches are read from one object per
+    alert; `None` (a caller outside the pipeline, `test_adversarial`'s) loads it."""
+    if not (cfg if cfg is not None else config.load()).ENRICHMENT_ENABLED:
+        return _unknown_context()
     asset = lookups.lookup_asset(conn, alert.agent_name, alert.origin_host)
     identity = lookups.lookup_identity(conn, alert.alert_user)
     ioc = lookups.lookup_ioc(

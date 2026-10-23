@@ -10,17 +10,22 @@ manager's own 600 s cadence, DEC-068).
 
 from __future__ import annotations
 
+import functools
 import json
 from pathlib import Path
 
 import httpx
 import psycopg
 import pytest
+from app.infra import jobs
 from app.infra import puller as puller_module
 from app.infra.config import Config
 from app.infra.errors import ConfigError, TransientError
 from app.infra.jobs import Job, Reschedule
 from app.infra.puller import PullResult, build_client, fetch_page, is_heartbeat, pull_job, pull_once
+from app.infra.worker import run_forever
+
+from tests.scratch_db import scratch_database
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -552,6 +557,123 @@ def test_pull_job_reschedules_using_pull_interval_s_env_override(db, monkeypatch
     job = Job(job_id=1, job_type="pull", subject_id="indexer", attempts=1)
     result = pull_job(db, job, client_factory=lambda _cfg: client)  # cfg=None -> config.load()
     assert result == Reschedule(5)
+
+
+# ---------------------------------------------------------------------------
+# P12-T01 / DEC-207 — `PULL_ENABLED=false`: the handler does nothing and re-arms nothing
+# ---------------------------------------------------------------------------
+
+
+class _Untouchable:
+    """Stands in for the connection: any attribute read fails the test."""
+
+    def __getattr__(self, name: str):
+        raise AssertionError(f"pull_job reached the connection ({name}) with PULL_ENABLED=false")
+
+
+def _no_client(_cfg):
+    raise AssertionError("pull_job built an indexer client with PULL_ENABLED=false")
+
+
+_PULL_JOB = Job(job_id=1, job_type="pull", subject_id="indexer", attempts=1)
+
+
+def test_pull_job_returns_none_and_touches_neither_client_nor_connection_when_off(capsys):
+    result = pull_job(
+        _Untouchable(), _PULL_JOB, cfg=_base_cfg(PULL_ENABLED=False), client_factory=_no_client
+    )
+    assert result is None  # not a Reschedule: the worker does not re-arm the chain
+    assert capsys.readouterr().out == ""  # and no result line either: nothing was pulled
+
+
+def test_pull_job_off_never_builds_the_default_client_either(monkeypatch):
+    """No `client_factory` injected: the default `build_client` is the one that must not run."""
+    monkeypatch.setattr(puller_module, "build_client", _no_client)
+    result = pull_job(_Untouchable(), _PULL_JOB, cfg=_base_cfg(PULL_ENABLED=False))
+    assert result is None
+
+
+def test_pull_job_reads_the_flag_from_the_environment_when_given_no_cfg(monkeypatch):
+    monkeypatch.setenv("PULL_ENABLED", "false")
+    result = pull_job(_Untouchable(), _PULL_JOB, client_factory=_no_client)  # cfg=None -> load()
+    assert result is None
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("flag", [None, True], ids=["unset", "explicit-true"])
+def test_pull_job_with_the_flag_on_or_unset_still_pulls_and_reschedules(db, monkeypatch, flag):
+    """The control: the same call with the flag on (or never named) is the pull of before
+    DEC-207 — it builds the client, reads the indexer and re-arms for `PULL_INTERVAL_S`."""
+    built: list[httpx.Client] = []
+
+    def factory(_cfg):
+        client = _mock_client(_paged_handler([(200, EMPTY_PAGE)]))
+        built.append(client)
+        return client
+
+    if flag is None:
+        monkeypatch.delenv("PULL_ENABLED", raising=False)
+        monkeypatch.setenv("INDEXER_URL", "https://mock-indexer")
+        result = pull_job(db, _PULL_JOB, client_factory=factory)
+    else:
+        result = pull_job(db, _PULL_JOB, cfg=_base_cfg(PULL_ENABLED=flag), client_factory=factory)
+    assert result == Reschedule(60)
+    assert len(built) == 1
+    row = db.execute(
+        "SELECT last_pull_at IS NOT NULL FROM source_cursor WHERE manager_id = 'indexer'"
+    ).fetchone()
+    assert row == (True,)  # `pull_once` ran: the cursor row was written
+
+
+@pytest.fixture(scope="module")
+def pull_scratch_dsn():
+    with scratch_database("pull_switch") as dsn:
+        yield dsn
+
+
+@pytest.fixture
+def pull_sdb(pull_scratch_dsn):
+    conn = psycopg.connect(pull_scratch_dsn)
+    try:
+        yield conn
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+def _run_the_pull_row_once(conn, **handler_kwargs) -> list[tuple]:
+    """Enqueue the `pull` row, let the real worker loop run it once, and return what the `jobs`
+    table holds for `pull` afterwards (oldest first)."""
+    conn.execute("DELETE FROM jobs WHERE job_type = 'pull'")  # the module's scratch database
+    jobs.enqueue(conn, "pull", "indexer")
+    conn.commit()
+    handlers = {"pull": functools.partial(pull_job, **handler_kwargs)}
+    run_forever(lambda: conn, handlers, once=True)
+    return conn.execute(
+        "SELECT status, scheduled_at > now() FROM jobs WHERE job_type = 'pull' ORDER BY job_id"
+    ).fetchall()
+
+
+@pytest.mark.db
+def test_a_pending_pull_row_ends_after_one_run_and_is_not_rearmed_when_off(pull_sdb, monkeypatch):
+    """The acceptance case of DEC-207 item 1: the worker was started with the switch on, so a
+    `pull` row is pending; the Owner turns it off and recreates the worker. The row is claimed,
+    ends `succeeded`, and no later `pull` row exists — the chain is over."""
+    monkeypatch.setenv("PULL_ENABLED", "false")
+    rows = _run_the_pull_row_once(pull_sdb, client_factory=_no_client)
+    assert rows == [("succeeded", False)]
+
+
+@pytest.mark.db
+def test_a_pending_pull_row_is_rearmed_when_on(pull_sdb, monkeypatch):
+    """The control for the test above (DEC-025): the same loop with the flag on leaves a
+    `succeeded` row and a new `pending` one scheduled `PULL_INTERVAL_S` ahead."""
+    monkeypatch.delenv("PULL_ENABLED", raising=False)
+    monkeypatch.setenv("INDEXER_URL", "https://mock-indexer")
+    rows = _run_the_pull_row_once(
+        pull_sdb, client_factory=lambda _cfg: _mock_client(_paged_handler([(200, EMPTY_PAGE)]))
+    )
+    assert rows == [("succeeded", False), ("pending", True)]
 
 
 # ---------------------------------------------------------------------------

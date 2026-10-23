@@ -319,13 +319,21 @@ def pull_job(
     *,
     cfg: Config | None = None,
     client_factory: Callable[[Config], httpx.Client] | None = None,
-) -> Reschedule:
+) -> Reschedule | None:
     """§6.5's `pull` handler: build the client from `Config` (or an injected
     `client_factory` — tests inject `httpx.MockTransport`), run one pull, log
     the result as one line, and re-arm for `PULL_INTERVAL_S` seconds. P2-T02's
-    worker loop re-enqueues it only after this run is marked `succeeded`."""
+    worker loop re-enqueues it only after this run is marked `succeeded`.
+
+    DEC-207: with `PULL_ENABLED=false` alerts arrive by the webhook only. The handler returns
+    `None` before it builds a client or touches the connection, so a `pull` row that was already
+    pending when the switch went off ends `succeeded` after one run and is not re-armed (the
+    worker re-arms only on a `Reschedule`). `backfill` and `replay` (below) do not read the flag:
+    they are the Owner's commands, not the chain."""
     del job  # the pull loop is single-flight by job_type/subject_id already
     cfg = cfg or config.load()
+    if not cfg.PULL_ENABLED:
+        return None
     factory = client_factory or build_client
     with factory(cfg) as client:
         result = pull_once(conn, client, cfg)

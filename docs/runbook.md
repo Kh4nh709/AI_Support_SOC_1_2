@@ -79,7 +79,7 @@ Then sign in at `http://127.0.0.1:8080/admin` as an admin and use the pages. Usi
 
 ## Environment keys
 
-The 63 keys of `.env.example`, one row each, no values. `.env.example` is generated from context pack §6.3 (`scripts/gen_env_example.py`, checked by `make lint`) and frozen: a new key is a decision (DEC-003), never an edit. **Who sets it:** *Owner* — a private or host-specific value, in `.env` only; *default* — `.env.example`'s value, changed only by a DEC. **Secret:** *yes* — `.env` only, never `.env.example`, a commit, a chat or a command line. *Compose* keys are read by `docker-compose.yml` and `db/init/*.sh` only, never by the application; *read by nothing* is a §6.3 key whose reader was cut or never built.
+The 66 keys of `.env.example`, one row each, no values. `.env.example` is generated from context pack §6.3 (`scripts/gen_env_example.py`, checked by `make lint`) and frozen: a new key is a decision (DEC-003), never an edit. **Who sets it:** *Owner* — a private or host-specific value, in `.env` only; *default* — `.env.example`'s value, changed only by a DEC. **Secret:** *yes* — `.env` only, never `.env.example`, a commit, a chat or a command line. *Compose* keys are read by `docker-compose.yml` and `db/init/*.sh` only, never by the application; *read by nothing* is a §6.3 key whose reader was cut or never built.
 
 | key | what it controls | who sets it | secret |
 |---|---|---|---|
@@ -94,6 +94,9 @@ The 63 keys of `.env.example`, one row each, no values. `.env.example` is genera
 | `MAX_CLUSTER_AGE_AUTOCLOSED_MINUTES` | dedup: the same, for an auto-closed cluster | default | no |
 | `MAX_CLUSTER_SIZE` | dedup: the most occurrences one cluster takes | default | no |
 | `DEDUP_ENABLED` | dedup: `true` (default) groups alerts into clusters, `false` makes every alert its own queue row and its own `triage` job (DEC-165); forward-only, clusters already open are left as they are; after a change the Owner recreates the containers, `docker compose up -d --force-recreate app worker` (**Grouping switch (DEC-165)**, below) | Owner | no |
+| `PULL_ENABLED` | the indexer pull: `true` (default) seeds and re-arms the `pull` job, `false` seeds none and a `pull` row already pending ends after one run (DEC-207); alerts then arrive by `POST /webhook/alerts` only; recreate the containers after a change, `docker compose up -d app worker` (**SOAR intake (DEC-207)**, below) | Owner | no |
+| `AUTOCLOSE_ENABLED` | auto-close: `true` (default) loads and evaluates the rules, `false` loads none and every non-duplicate alert is queued for Tier 1, the G8′ hard blocks with the rules (DEC-207); the rules page and the tables stay; recreate the containers after a change (**SOAR intake (DEC-207)**, below) | Owner | no |
+| `ENRICHMENT_ENABLED` | internal enrichment: `true` (default) looks the asset, account and addresses up, `false` reads no `assets`, `identities` or `iocs` row and every alert carries the "unknown" context, so the `inventory_empty` check reads `ok` (DEC-207); recreate the containers after a change (**SOAR intake (DEC-207)**, below) | Owner | no |
 | `INDEXER_URL` | the indexer the puller reads; its host name must match the certificate | Owner | no |
 | `INDEXER_USER` | the read-only indexer account | Owner | no |
 | `INDEXER_PASSWORD` | that account's password | Owner | yes |
@@ -168,6 +171,42 @@ What to expect once it is off:
 - Turning it back on is forward-only too: new alerts group again under any open head still inside `DEDUP_IDLE_GAP_MINUTES`, `MAX_CLUSTER_AGE_HOURS` and `MAX_CLUSTER_SIZE`, the rows made while it was off included. Rows that were already separate are not merged.
 
 To check it worked, an hour after the restart *(not run by the agent)*: `psql "$DATABASE_URL" -Atc "select count(*) from alerts where received_at > now() - interval '1 hour' and (status = 'duplicate' or duplicate_of is not null)"` prints `0`.
+
+### SOAR intake (DEC-207)
+
+When the alerts arrive from the team's SOAR stream (n8n), which has already enriched, grouped and closed them and posts each finished alert to `POST /webhook/alerts`, this system stops doing those four things. Four switches, **all `true` by default**: merging the change alters nothing, and behaviour changes only when the Owner edits `.env`. Each is a §6.3 key, a `.env.example` line and a row of the table above, read as `true|false` (also `1|0`, `yes|no`, `on|off`); anything else stops the worker at startup with a message naming the key.
+
+- `DEDUP_ENABLED=false`: no grouping; every alert is its own queue row and its own `triage` job (**Grouping switch (DEC-165)**, above).
+- `PULL_ENABLED=false`: the worker seeds no `pull` job; one already pending ends after one run and is not re-armed. The `backfill` and `replay` commands of `app.infra.puller` do not read the flag.
+- `AUTOCLOSE_ENABLED=false`: no rule is loaded or evaluated; every non-duplicate alert takes the `received` path to `queued_tier1`, with a `triage` job. The G8′ hard blocks go with the rules: SOAR owns the decision to close.
+- `ENRICHMENT_ENABLED=false`: no `SELECT` on `assets`, `identities` or `iocs`; the alert gets the "unknown" context (`asset_present` false, `criticality` `unknown`, privilege `null`, IoC reputation and all three `lookup_status` `skipped`). The risk score still runs.
+
+The code of all four, the `enrichment/` and auto-close modules and the tables `assets`, `identities`, `iocs` and `autoclose_rules` stay: Tier 2's dossier and the admin pages still read them, and removing any is a later, separate decision (DEC-207 item 5).
+
+**Before switching** *(not run by the agent)*: `make backup`, and copy `.env` and `docker-compose.yml` aside. The tag `checkpoint/pre-soar-intake` marks the commit before this change.
+
+**How to switch** *(not run by the agent)*: put the lines in `.env` (edit it, do not paste the file anywhere), e.g. `PULL_ENABLED=false`, `AUTOCLOSE_ENABLED=false`, `ENRICHMENT_ENABLED=false` and, as DEC-165, `DEDUP_ENABLED=false`; then recreate the containers. **`up -d`, not `restart`**: a restart keeps the environment the container was created with.
+
+```
+docker compose up -d app worker
+docker compose exec -T worker sh -c 'printenv | grep -E "^(DEDUP|PULL|AUTOCLOSE|ENRICHMENT)_ENABLED="'
+```
+
+The second command prints `KEY=value` for each switch the container has; the four you turned off read `false`. A switch that `.env` does not name is not in the container's environment and means `true`. If a value is still the old one, repeat the first command with `--force-recreate`. Merging this change itself is code-only and goes in with the usual `docker compose restart app worker` (the **restart** row, above); the switches do nothing until `.env` names them.
+
+What to expect with all four off:
+
+- **Alerts** reach the queue as the webhook receives them, each its own head, `queued_tier1`, with a `triage` job. Receipt idempotency still holds: the same `alert_id` twice is a `409`.
+- **Every alert carries the "unknown" context.** Three consequences, accepted until the payload's own context is read (`docs/limitations.md`, DEC-207 item 3): gate step 4 forces every ① `false_positive` to `needs_review`, because `asset_criticality = unknown` is one of its blocks; the risk score is the severity base alone (28 for `medium`), with no asset, account or IoC addend; and the auto-close digest is empty, while the rules page stays. An unknown or absent context never opens a path to a closed alert (DEC-207 item 4).
+- **The heartbeat**, only when `PULL_ENABLED=false`, is stamped by every alert the webhook accepts (not by a `409`, and not by a body that is refused), so the `heartbeat` alarm stays green on a flowing stream even though the pull no longer moves it. With the pull on, the default, the webhook stamps nothing, exactly as before: a pull that died still turns the `heartbeat` alarm red beside a webhook that keeps receiving. A stream that carries no alert and no heartbeat document for `HEARTBEAT_MAX_AGE_MIN` minutes still alarms. The `inventory_empty` alarm reads `ok`, detail `n/a — enrichment off`, whatever `assets` holds.
+- **The blind arm and the admin pages** are unchanged (DEC-101, DEC-206): no ① suggestion shows on a blind, undecided alert, in the queue, on the alert page, in the audit list or in the usage list; the overview and the digest answer and render with no auto-closed alert and no inventory.
+- **The spend** moves the other way from DEC-165: ① still runs once per alert, so the `LLM_MONTHLY_USD_CAP` row of **What to watch** is the number to look at in the first days.
+
+**Rollback**, three levels, each only as deep as needed *(not run by the agent)*:
+
+1. **The flags.** Restore the lines in `.env` (`true`, or delete them) and `docker compose up -d app worker`, then the same `printenv`. Nothing else was changed, and alerts already received stay as they are. **Turning `PULL_ENABLED` back on is not just "the behaviour of before": the pull catches up, and after SOAR mode it re-ingests every alert SOAR already posted.** `source_cursor.last_sort` did not move while the pull was off, so the first pull starts at `last_sort - PULL_OVERLAP_S × 1000` (`last_sort` is in milliseconds, `PULL_OVERLAP_S` in seconds) and reads every alert the indexer indexed during the whole off-window. The pull keys an alert on the indexer's own `(manager name, Wazuh id)`; the alerts SOAR posts carry other keys (the team's samples, `docs/plan/tasks/P12/soar-payload-sample*.json`, have `id` = `gl-…` and `manager.name` = `graylog`), so **none** of what SOAR already posted is recognised as received: every one comes in again as a new alert. Each one that is not grouped as a duplicate gets a ① run, the auto-closed ones included (D8), so every alert of the off-window gets a **second ① run**, and with auto-close on again the closed ones also fill the next 08:00 digest. After days in SOAR mode that is a flood in the Tier-1 queue, in the digest and in the model spend. **Unless the Owner wants that re-ingest, the cursor must be moved to the switch-back time before the pull is turned on.** Read it first *(not run by the agent)*: `psql "$DATABASE_URL" -Atc "select last_sort, last_pull_at from source_cursor"` (`last_sort` is the indexer's sort value in milliseconds since the epoch, `last_pull_at` the last pull that ran, from before SOAR mode). Moving the cursor is the Owner's decision, recorded, and never done silently by anyone else; this runbook gives no statement for it. While the pull is off the **What to watch** row "a pull in the last 5 min, no error" reads `f|…`, first column false, because `last_pull_at` goes stale: `f|t` if the last pull before the switch succeeded, `f|f` if it ended on an error. That is expected, and no alarm of its own (the `heartbeat` alarm reads `source_heartbeat`, which the webhook keeps moving with the pull off).
+2. **The code.** Revert the merge of this change, or, by the Owner only, `git reset --hard checkpoint/pre-soar-intake`; then `docker compose restart app worker`.
+3. **The data.** `make db-restore FILE=backups/soc-<timestamp>.dump`, **only if data was damaged**. There is no migration in this change, so levels 1 and 2 never need level 3.
 
 ## Alarms
 
