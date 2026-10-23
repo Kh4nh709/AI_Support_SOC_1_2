@@ -182,15 +182,30 @@ def test_the_soar_intake_section_says_the_heartbeat_is_stamped_only_with_the_pul
 
 
 def test_rollback_level_1_warns_of_the_pull_catch_up_and_the_cursor_check():
-    """Fix round 1 (review finding 1): turning the pull back on is not "the behaviour of before,
-    for alerts that arrive afterwards"; it pulls in the whole off-window."""
+    """Fix rounds 1 and 2 (review findings): turning the pull back on is not "the behaviour of
+    before, for alerts that arrive afterwards"; it pulls in the whole off-window, and after SOAR
+    mode that window holds every alert SOAR already posted, under keys the intake does not match."""
     section = _soar_section()
     level_1 = section.split("1. **The flags.**")[1].split("2. **The code.**")[0]
-    assert "catches up" in level_1 and "`last_sort - PULL_OVERLAP_S`" in level_1
-    assert "SOAR closed or grouped and never posted" in level_1  # what enters the pipeline
-    assert "① run" in level_1  # and what it costs
-    check = 'psql "$DATABASE_URL" -Atc "select last_sort, last_pull_at from source_cursor"'
-    assert check in level_1  # looked at before the pull is turned back on
+    # the window, in one unit (milliseconds; the overlap is in seconds)
+    assert "catches up" in level_1 and "`last_sort - PULL_OVERLAP_S × 1000`" in level_1
+    assert "`last_sort - PULL_OVERLAP_S`" not in level_1  # the mixed-unit spelling
+    # what the catch-up costs: a ① run on every alert not grouped as a duplicate, auto-closed
+    # ones included (D8), and those fill the next 08:00 digest
+    assert "not grouped as a duplicate" in level_1 and "① run" in level_1
+    assert "the auto-closed ones included (D8)" in level_1 and "08:00 digest" in level_1
+    # stated plainly: the alerts SOAR already posted come in again, under other keys
+    assert "re-ingests every alert SOAR already posted" in level_1
+    assert "`gl-…`" in level_1 and "`graylog`" in level_1 and "second ① run" in level_1
+    assert "dropped by the intake key" not in level_1  # the claim that is not true of SOAR's keys
+    # unless the Owner wants that: the cursor is moved BEFORE the pull is turned on, by the Owner
+    assert "moved to the switch-back time before the pull is turned on" in level_1
     assert "the Owner's decision" in level_1 and "never done silently" in level_1
-    assert "a pull in the last 5 min" in level_1 and "`f|t`" in level_1  # expected while off
+    check = 'psql "$DATABASE_URL" -Atc "select last_sort, last_pull_at from source_cursor"'
+    assert check in level_1  # the read-only check
+    assert "update source_cursor" not in level_1.lower()  # and no statement that changes it
+    # the row of What to watch while the pull is off: first column false, second says the last
+    # pull's outcome
+    assert "a pull in the last 5 min" in level_1 and "`f|…`" in level_1
+    assert "`f|t`" in level_1 and "`f|f`" in level_1
     assert "behaviour of before, for alerts that arrive afterwards" not in level_1
