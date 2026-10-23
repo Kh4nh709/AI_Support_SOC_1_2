@@ -3478,3 +3478,26 @@ Amended again 20/10 (part 4 fix round 1, the Coder's open point; the Director's 
 - **Why that is accepted.** The admin has to see that job to retry it. The fact says that ① failed, not which way it leaned, so it cannot bias the human decision that the blind arm measures.
 - **The difference from `llm.builder_violation`.** That event is left out, because it carries nothing an admin acts on.
 - **Where it is recorded.** `docs/limitations.md` records this with parked row 57, on the retire branch.
+
+## DEC-207 · 2026-10-23 · Alerts arrive from the external SOAR stream: dedup, the indexer pull, internal enrichment and auto-close are switched off by flags (all default on), and every webhook alert stamps the heartbeat
+Scope: **product** (intake, pipeline, worker, health) · **operations** (rollback checkpoint)
+Decided by: **the Owner, 23/10**: the team's new architecture runs SOAR/n8n first (enrichment, dedup, auto-close) and posts each finished alert to `POST /webhook/alerts` "with every designed attribute". The Owner chose: payload with missing or wrong context is still accepted and read as "unknown"; every webhook alert updates the heartbeat; auto-close is left to SOAR.
+Drafted by: the Director's fork session `soar-webhook-alert-intake` (Sonnet 5.5). The Director (`21aaf6`) confirmed DEC-207 and P12 free on every local branch.
+Propagated to: `backend/app/infra/config.py` · `backend/app/soar/pipeline.py` · `backend/app/web/worker.py` · `backend/app/infra/puller.py` · `backend/app/infra/intake.py` · `backend/app/infra/health.py` · `.env.example` · `docs/runbook.md` · `docs/limitations.md` · STATE phase P12, tasks P12-T01 and P12-T02 · `docs/plan/tasks/P12/`
+Decision:
+  1. **Four switches, all default `true`.** Merging the code changes no behaviour; behaviour changes only when the Owner edits `.env`.
+     - `DEDUP_ENABLED` already exists (DEC-165). It is not touched.
+     - `PULL_ENABLED=false`: the worker does not seed the `pull` job, and `pull_job` returns no `Reschedule`, so a `pull` row already pending ends after one run. `backfill` and `replay` (CLI) are untouched.
+     - `AUTOCLOSE_ENABLED=false`: the pipeline does not load or evaluate rules; every non-duplicate alert takes the `received` branch. The G8′ hard blocks go with the rules, because SOAR now owns the decision.
+     - `ENRICHMENT_ENABLED=false`: `_build_context` runs no `SELECT` on `assets`, `identities` or `iocs`. It returns the "unknown" context: `asset_present=False`, `criticality="unknown"`, owner and role `None`, `identity_privileged=None`, `ioc_reputation="skipped"`, `lookup_status` all `skipped`. The `inventory_empty` health check reports `ok` with "n/a".
+  2. **Heartbeat.** `infra/intake.receive` stamps `source_heartbeat` (`saw_alert=True`) for every alert it accepts, so the `heartbeat` health check does not report a lost source once the pull is off.
+  3. **Context from the payload is a separate task (P12-T02), blocked on the team's schema.** Until it ships, with the flags off, every alert carries the "unknown" context. Accepted consequences, recorded in `docs/limitations.md`:
+     - `asset_criticality="unknown"` is in the gate's `_FP_ASSET_BLOCKS`, so gate step 4 forces every ① `false_positive` to `needs_review`.
+     - The risk score is the severity base alone.
+     - The auto-close digest is empty; the rules page stays.
+  4. **Fail-safe stays.** An unknown or absent context never opens a path to a closed alert. It was already so: a missing asset blocked auto-close (G8′), and the gate treats `unknown` as a block.
+  5. **Not removed.** The code of dedup, the puller, `enrichment/` and the auto-close module, and the tables `assets`, `identities`, `iocs`, `autoclose_rules`, stay. Tier 2's dossier and the admin pages still read them. Removing them is a later, separate decision, after the new stream has run cleanly.
+  6. **Checkpoint and rollback.** The tag `checkpoint/pre-soar-intake` marks `a0398c2`. The Owner takes `make backup` and copies `.env` and `docker-compose.yml` before switching. Rollback, three levels: (L1) restore the flags in `.env` and `docker compose up -d app worker`; (L2) revert the merge, or `git reset --hard checkpoint/pre-soar-intake` by the Owner; (L3) `make db-restore FILE=…` only if data is damaged. There is no migration, so L1 and L2 need no L3. A flag change needs the container recreated (`up -d`); `restart` loads no new environment.
+  7. **Blind arm and admin pages.** The change must keep DEC-101 and DEC-206 intact: with the flags off, `visibility.py`, the audit page, the usage list and the digest still render, and no ① suggestion shows on a blind, undecided alert. P12-T01's suites include these pages.
+  8. **Process.** DEC-201: a Coder subagent (Sonnet 5.5 xhigh, own worktree) and an independent Reviewer subagent per task; the Director's session manages, runs one mutation of its own at the merge, and commits the review verbatim.
+Supersedes: none. It adds switches next to DEC-165's and leaves D8 ("① runs on every auto-closed alert") true for as long as auto-close is on.
