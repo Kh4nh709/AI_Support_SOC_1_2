@@ -3521,3 +3521,9 @@ Decision:
   7. **Risk score.** Ours stays the queue order; `triage.score` stays in `raw_payload`.
   8. **Deferred.** TheHive ids (`case.thehive_alert_id`, `case_number`, `case_id`) are already stored in `raw_payload`; showing a link from the alert and case pages is a later task (it needs a TheHive base URL key). `evidence.context_logs` stays out of every prompt until its own DEC: it is attacker-controlled raw log, and would be wrapped as untrusted data.
 Supersedes: DEC-207 item 3's "blocked on the schema" for P12-T02.
+Amended 23/10 (the SOAR team's second answer; the Owner): **item 3's asset mapping is replaced.**
+- `asset.critical` is SOAR's own scoring flag (true only for the hosts on its critical list, today AD-server), not an inventory level. It is no longer read.
+- SOAR adds two fields, still schema 1.0: `asset.in_inventory` (always `true`: SOAR sends nothing for a host outside its inventory) and `asset.criticality` (`high | medium | low | unknown`). `asset_criticality` = `asset.criticality`; `asset_present` = `asset.in_inventory`.
+- An absent `asset.criticality` gives `asset_criticality = unknown` for that field only. A value outside the four, or a non-boolean `in_inventory`, makes the whole context "unknown" (item 3, last rule).
+- Lab levels on the SOAR side: AD-server `high`, pfSense.home.arpa `high`, Windows_Endpoint `medium`. `conf/inventory.yaml` (the Owner's file, read by Tier 2's dossier) is to carry the same: pfSense.home.arpa `medium` → `high`, and AD-server added as `high`.
+- pfSense payloads now carry `full_log` (the raw filterlog line) and `decoder.name = pf`, `location = pfsense-filterlog` (they wrongly said `windows_eventchannel` before). `ingest/category.py` has no `pf` decoder entry and no pfSense group, so such an alert is classified by MITRE, then by destination port (22, 80, 443), else `unknown`. Checked on a real pfSense payload before P12-T02 is closed.

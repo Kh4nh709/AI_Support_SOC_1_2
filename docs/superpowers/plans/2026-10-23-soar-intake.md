@@ -61,11 +61,11 @@
 
 **Rules (DEC-208 item 3–5):**
 - `schema_version` must match `1.<n>`; else, or with no `enrichment`, the "unknown" context of P12-T01.
-- `asset.critical`: `true` → `high`, `false` → `unknown`; `asset_present` = `asset.host` non-empty.
+- Asset (DEC-208 amended 23/10): `asset_criticality` = `asset.criticality` (`high|medium|low|unknown`; absent → `unknown`); `asset_present` = `asset.in_inventory`; `asset.critical` is not read.
 - `asset.user_is_admin`: bool → `identity_privileged`; `null`/absent → `None`, identity status `skipped`.
 - IoC: worst of `ti[].verdict` and `ioc.verdict` (`malicious > suspicious > clean`); no block → `skipped`.
 - Any value outside its vocabulary, or a wrong type → the whole context "unknown"; log the field name only.
 - `occurrence_count` in the ① facts is `None` when the context comes from SOAR; the prompt renders it as "không rõ"; the risk occurrence addend is 0.
 - Parser: no user found → `enrichment.asset.user` with the domain dropped (`FPT\hr01` → `hr01`, `hr01` unchanged).
 
-**Tests (red first):** the sample maps to `high/unknown`, `False`, `skipped` as specified; each `ti` verdict and the C202 `ioc` block; two `ti` entries take the worst; a bad verdict, a string `critical`, a `2.0` schema and a missing block each give the whole "unknown" context; with `occurrence_count=None` none of the nine `occurrence_lt` rules matches and a ① `false_positive` is forced to `needs_review`; the parser fallback with and without a domain; no SQL reaches the inventory tables; the blind-arm pages still hide the suggestion. Suites as P12-T01.
+**Tests (red first):** the sample, with `asset.criticality: medium` and `in_inventory: true` added, maps to `medium`, `False`, `skipped`; a sample without `asset.criticality` maps to `unknown`; each `ti` verdict and the C202 `ioc` block; two `ti` entries take the worst; a bad verdict, a string `critical`, a `2.0` schema and a missing block each give the whole "unknown" context; with `occurrence_count=None` none of the nine `occurrence_lt` rules matches and a ① `false_positive` is forced to `needs_review`; the parser fallback with and without a domain; no SQL reaches the inventory tables; the blind-arm pages still hide the suggestion. Suites as P12-T01.
