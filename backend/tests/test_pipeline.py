@@ -22,6 +22,7 @@ test would otherwise leave non-empty.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
 import os
@@ -40,7 +41,10 @@ from app.infra.intake import Duplicate, receive
 from app.infra.jobs import Job, claim_job, enqueue, finish_job
 from app.soar import pipeline as pipeline_module
 from app.soar.pipeline import _suggestion_visible, _write_rejection_receipt, run_pipeline_job
+from app.tier1.triage import run_triage_job
 from psycopg.types.json import Jsonb
+
+from tests.fakes.llm import TRIAGE_V2_FALSE_POSITIVE, FakeLLM
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -762,3 +766,506 @@ def test_switch_off_leaves_receipt_level_idempotency_alone(db, monkeypatch):
         0
     ]
     assert alerts == 1
+
+
+# ---------------------------------------------------------------------------
+# P12-T01 / DEC-207 — `AUTOCLOSE_ENABLED`, `ENRICHMENT_ENABLED`, and the combination the Owner runs
+#
+# The alerts now arrive from an external SOAR stream that has already enriched, grouped and
+# closed them. Each switch turns one of this pipeline's own steps off and defaults to `true`, so a
+# `.env` that names none of them is the pipeline of before. `pipeline._process` reads them with
+# `config.load()` (an environment variable wins, as for every key), so each test sets them with
+# `monkeypatch.setenv`.
+#
+# Two proofs per switch, because "the alert ended up in the right state" does not say that the
+# step did not run: the module is replaced by one that fails on any attribute read, and the
+# statements that reached the connection are recorded (the `rec` fixture) and searched for the
+# tables the step reads. Every "off" test has an "on" twin that finds the same statements — the
+# control that shows the recorder can see them (DEC-025).
+# ---------------------------------------------------------------------------
+
+_SWITCHES = ("DEDUP_ENABLED", "PULL_ENABLED", "AUTOCLOSE_ENABLED", "ENRICHMENT_ENABLED")
+_LOOKUP_TABLES = re.compile(r"\b(assets|identities|iocs)\b", re.IGNORECASE)
+_RULES_TABLE = re.compile(r"\bautoclose_rules\b", re.IGNORECASE)
+#: A public address (the parser treats the documentation ranges as private, and a private
+#: address is not looked up), listed as malicious by `_seed_lookup_inventory`.
+_MALICIOUS_IP = "45.33.32.156"
+_IOCS_CSV = (
+    "value,reputation,expires_at,source\n"
+    + f"{_MALICIOUS_IP},malicious,2030-12-31T00:00:00Z,test\n"
+)
+_UNKNOWN_LOOKUPS = {"asset": "skipped", "identity": "skipped", "ioc": "skipped"}
+
+
+def _switches(monkeypatch, **values: str | None) -> None:
+    """Every switch unset, except the ones named: `"true"` / `"false"`, or `None` for unset."""
+    for name in _SWITCHES:
+        value = values.get(name)
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+
+
+class _Unreachable:
+    """Stands in for a module: any attribute read is a failure, so none of its functions can
+    be reached (`_NoDedup`, above, is the same thing for `dedup`)."""
+
+    def __init__(self, module: str, switch: str) -> None:
+        self._what = f"{module} was reached with {switch}=false"
+
+    def __getattr__(self, name: str):
+        raise AssertionError(f"{self._what} (.{name})")
+
+
+def _statement_text(query, conn) -> str:
+    if isinstance(query, bytes):
+        return query.decode("utf-8", "replace")
+    if hasattr(query, "as_string"):
+        return query.as_string(conn)
+    return str(query)
+
+
+@pytest.fixture
+def rec(_test_database):
+    """`(connection, statements)`: a connection to the test database that records the text of
+    every statement sent through it. `Connection.execute` and `Connection.cursor()` both build
+    their cursor with `cursor_factory`, so nothing a module sends can go round the record."""
+    statements: list[str] = []
+
+    class _RecordingCursor(psycopg.Cursor):
+        def execute(self, query, params=None, **kwargs):
+            statements.append(_statement_text(query, self.connection))
+            return super().execute(query, params, **kwargs)
+
+        def executemany(self, query, params_seq, **kwargs):
+            statements.append(_statement_text(query, self.connection))
+            return super().executemany(query, params_seq, **kwargs)
+
+    conn = psycopg.connect(_test_database, cursor_factory=_RecordingCursor)
+    try:
+        yield conn, statements
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+def _seed_lookup_inventory(
+    conn: psycopg.Connection,
+    tmp_path: Path,
+    *,
+    agent_criticality: str = "medium",
+    root_privileged: bool = True,
+) -> None:
+    """Everything the three lookups could find: the fixtures' agent `user1-IA1803` at
+    `agent_criticality`, a `high` domain controller, the account `root` (the 5503 fixture's
+    `dstuser`) and one malicious public address. With `root_privileged` and a `medium` agent
+    the three addends are 10 + 15 + 25 = 50, which `CONTEXT_CAP` holds to 25."""
+    inventory_file = tmp_path / "inventory.yaml"
+    inventory_file.write_text(
+        "version: 1\nassets:\n"
+        f"  - hostname: user1-IA1803\n    criticality: {agent_criticality}\n"
+        "  - hostname: example-dc-01\n    criticality: high\n",
+        encoding="utf-8",
+    )
+    identities_file = tmp_path / "identities.yaml"
+    identities_file.write_text(
+        f"version: 1\nidentities:\n  - username: root\n    is_privileged: {str(root_privileged).lower()}\n",
+        encoding="utf-8",
+    )
+    iocs_file = tmp_path / "iocs.csv"
+    iocs_file.write_text(_IOCS_CSV, encoding="utf-8")
+    inventory.load(conn, paths=[inventory_file, identities_file, iocs_file])
+
+
+def _insert_match_everything_rule(conn: psycopg.Connection) -> None:
+    """The rule `_match_everything_rule` inserts, without its inventory: a `[]` match holds for
+    every alert, so only the hard blocks (G8') keep one from closing."""
+    _seed_admin_user(conn)
+    conn.execute(
+        "INSERT INTO autoclose_rules "
+        "(autoclose_rule_id, name, enabled, match, reason, created_by, created_at) "
+        "VALUES (gen_random_uuid(), 'p12t01-match-everything', true, %s, 'test rule', %s, now())",
+        (Jsonb([]), ADMIN_USER_ID),
+    )
+
+
+def _post_alert(
+    conn: psycopg.Connection,
+    alert_id: str,
+    *,
+    base: str = RULE_5503,
+    srcip: str,
+    sort: int = 1,
+    agent: str | None = None,
+) -> None:
+    raw = _hit(base, id_=alert_id, srcip=srcip, sort=sort)
+    if agent is not None:
+        doc = json.loads(raw)
+        doc["_source"]["agent"] = {**doc["_source"]["agent"], "name": agent}
+        raw = json.dumps(doc)
+    _insert_intake(conn, source_alert_id=alert_id, raw_text=raw, sort_key=sort)
+
+
+_ROW_COLUMNS = (
+    "status",
+    "duplicate_of",
+    "occurrence_count",
+    "closed_at",
+    "autoclose_rule_id",
+    "risk_score",
+    "risk_score_components",
+    "asset_context",
+    "identity_context",
+    "ioc_context",
+    "lookup_status",
+)
+
+
+def _row(conn: psycopg.Connection, alert_id: str) -> dict:
+    record = conn.execute(
+        f"SELECT {', '.join(_ROW_COLUMNS)} FROM alerts WHERE alert_id = %s", (alert_id,)
+    ).fetchone()
+    assert record is not None, alert_id
+    return dict(zip(_ROW_COLUMNS, record, strict=True))
+
+
+# -- AUTOCLOSE_ENABLED ------------------------------------------------------
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "flag, status, outcome",
+    [
+        ("false", "queued_tier1", "alert"),
+        ("true", "auto_closed", "auto_closed"),
+        (None, "auto_closed", "auto_closed"),
+    ],
+    ids=["off", "on", "unset"],
+)
+def test_autoclose_switch_decides_whether_a_matching_rule_closes_the_alert(
+    rec, monkeypatch, tmp_path, flag, status, outcome
+):
+    conn, log = rec
+    _switches(monkeypatch, AUTOCLOSE_ENABLED=flag)
+    if flag == "false":
+        monkeypatch.setattr(
+            pipeline_module, "autoclose", _Unreachable("autoclose", "AUTOCLOSE_ENABLED")
+        )
+    _seed_lookup_inventory(conn, tmp_path, root_privileged=False)
+    _insert_match_everything_rule(conn)
+    log.clear()  # what is left is what the pipeline sends
+    alert_id = f"p12t01-ac-{flag}"
+    _post_alert(conn, alert_id, srcip="198.51.100.31")
+
+    _run_all(conn, [alert_id])
+
+    row = _row(conn, alert_id)
+    assert row["status"] == status
+    assert _outcomes(conn, [alert_id]) == {alert_id: outcome}
+    assert _triage_jobs(conn, [alert_id]) == [(alert_id, "pending")]  # ① runs either way (D8)
+    rule_reads = [s for s in log if _RULES_TABLE.search(s)]
+    if flag == "false":
+        assert row["closed_at"] is None and row["autoclose_rule_id"] is None
+        assert rule_reads == []  # the rules table was never read: no `load_rules`, no `evaluate`
+        assert row["risk_score"] is not None  # the alert was still enriched and scored
+    else:
+        assert row["closed_at"] is not None and row["autoclose_rule_id"] is not None
+        assert rule_reads  # the control: the recorder does see a rules query
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("flag", ["false", "true"])
+@pytest.mark.parametrize("kind", ["critical", "high_asset"])
+def test_a_critical_alert_and_a_high_asset_are_never_closed_whatever_the_switch(
+    db, monkeypatch, tmp_path, flag, kind
+):
+    """G8' on the way in and DEC-207 on the way out meet at the same place: nothing closes. With
+    the switch on the hard block holds the alert; with it off no rule is evaluated at all."""
+    _switches(monkeypatch, AUTOCLOSE_ENABLED=flag)
+    if flag == "false":
+        monkeypatch.setattr(
+            pipeline_module, "autoclose", _Unreachable("autoclose", "AUTOCLOSE_ENABLED")
+        )
+    _seed_lookup_inventory(db, tmp_path, root_privileged=False)  # only the alert itself blocks
+    _insert_match_everything_rule(db)
+    alert_id = f"p12t01-hard-{kind}-{flag}"
+    if kind == "critical":
+        _post_alert(db, alert_id, base=ALERT_40112, srcip="198.51.100.32")
+    else:
+        _post_alert(db, alert_id, srcip="198.51.100.33", agent="example-dc-01")
+
+    _run_all(db, [alert_id])
+
+    row = _row(db, alert_id)
+    assert row["status"] == "queued_tier1"
+    assert row["closed_at"] is None and row["autoclose_rule_id"] is None
+    assert _outcomes(db, [alert_id]) == {alert_id: "alert"}
+    assert _triage_jobs(db, [alert_id]) == [(alert_id, "pending")]
+
+
+# -- ENRICHMENT_ENABLED -----------------------------------------------------
+
+
+@pytest.mark.db
+def test_enrichment_off_sends_no_statement_on_assets_identities_or_iocs(rec, monkeypatch, tmp_path):
+    conn, log = rec
+    _switches(monkeypatch, ENRICHMENT_ENABLED="false")
+    monkeypatch.setattr(pipeline_module, "lookups", _Unreachable("lookups", "ENRICHMENT_ENABLED"))
+    _seed_lookup_inventory(conn, tmp_path)  # everything a lookup could find is there
+    log.clear()
+    alert_id = "p12t01-en-off"
+    _post_alert(conn, alert_id, srcip=_MALICIOUS_IP)
+
+    _run_all(conn, [alert_id])
+
+    assert [s for s in log if _LOOKUP_TABLES.search(s)] == []
+    row = _row(conn, alert_id)
+    assert row["status"] == "queued_tier1"
+    assert row["lookup_status"] == _UNKNOWN_LOOKUPS
+    assert row["asset_context"] == {
+        "present": False,
+        "criticality": "unknown",
+        "owner": None,
+        "role": None,
+    }
+    assert row["identity_context"] == {"privileged": None}
+    assert row["ioc_context"] == {"reputation": "skipped"}
+    components = row["risk_score_components"]
+    assert (components["asset"], components["identity"], components["ioc"]) == (0, 0, 0)
+    assert components["context_capped"] == 0
+    assert row["risk_score"] == components["base"] == 28  # medium: the severity base alone
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("flag", ["true", None], ids=["on", "unset"])
+def test_enrichment_on_or_unset_still_reads_the_inventory_and_scores_it(
+    rec, monkeypatch, tmp_path, flag
+):
+    """The twin of the test above, same alert and same inventory: the three lookups run, their
+    statements are on the record, and the addends are in the score."""
+    conn, log = rec
+    _switches(monkeypatch, ENRICHMENT_ENABLED=flag)
+    _seed_lookup_inventory(conn, tmp_path)
+    log.clear()
+    alert_id = f"p12t01-en-{flag}"
+    _post_alert(conn, alert_id, srcip=_MALICIOUS_IP)
+
+    _run_all(conn, [alert_id])
+
+    touched = {m.group(1).lower() for s in log for m in _LOOKUP_TABLES.finditer(s)}
+    assert touched == {"assets", "identities", "iocs"}
+    row = _row(conn, alert_id)
+    assert row["lookup_status"] == {"asset": "found", "identity": "found", "ioc": "found"}
+    assert row["asset_context"]["present"] is True
+    assert row["asset_context"]["criticality"] == "medium"
+    assert row["identity_context"] == {"privileged": True}
+    assert row["ioc_context"] == {"reputation": "malicious"}
+    components = row["risk_score_components"]
+    assert (components["asset"], components["identity"], components["ioc"]) == (10, 15, 25)
+    assert components["context_capped"] == 25
+    assert row["risk_score"] == 28 + 25
+
+
+# -- the defaults: a `.env` that names none of the switches is `a0398c2` ----------------
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("flag", [None, "true"], ids=["unset", "explicit-true"])
+def test_with_no_switch_named_the_outcomes_are_those_of_before_dec_207(
+    db, monkeypatch, tmp_path, flag
+):
+    """One scenario, run with every switch unset and with every switch `true`: a rule that
+    matches closes the first alert, the second alert of its cluster is a duplicate that bumps the
+    head, a critical alert is queued, and the closed head carries its enrichment and its risk."""
+    _switches(monkeypatch, **dict.fromkeys(_SWITCHES, flag))
+    _seed_lookup_inventory(db, tmp_path, root_privileged=False)
+    _insert_match_everything_rule(db)
+    head, twin, critical = (f"p12t01-def-{flag}-{n}" for n in "htc")
+    _post_alert(db, head, srcip="198.51.100.41", sort=1)
+    _post_alert(db, twin, srcip="198.51.100.41", sort=2)
+    _post_alert(db, critical, base=ALERT_40112, srcip="198.51.100.42", sort=3)
+
+    _run_all(db, [head, twin, critical])
+
+    rows = {alert_id: _row(db, alert_id) for alert_id in (head, twin, critical)}
+    assert [rows[a]["status"] for a in (head, twin, critical)] == [
+        "auto_closed",
+        "duplicate",
+        "queued_tier1",
+    ]
+    assert rows[twin]["duplicate_of"] == head
+    assert rows[head]["occurrence_count"] == 2  # the twin bumped it
+    assert rows[head]["autoclose_rule_id"] is not None
+    assert rows[head]["lookup_status"] == {"asset": "found", "identity": "found", "ioc": "skipped"}
+    assert rows[head]["asset_context"]["criticality"] == "medium"
+    assert rows[head]["identity_context"] == {"privileged": False}
+    assert rows[head]["risk_score_components"]["asset"] == 10  # and the addends are scored
+    assert _outcomes(db, [head, twin, critical]) == {
+        head: "auto_closed",
+        twin: "duplicate",
+        critical: "alert",
+    }
+    assert set(_triage_jobs(db, [head, twin, critical])) == {
+        (head, "pending"),
+        (critical, "pending"),
+    }  # the duplicate has none: its head carries the triage
+    assert _advisory_locks_held(db) == 2  # dedup ran: one cluster lock per cluster key
+
+
+# -- the combination the Owner will run --------------------------------------------------
+
+
+@pytest.mark.db
+def test_all_four_switches_off_two_alerts_with_one_cluster_key_are_two_heads(
+    rec, monkeypatch, tmp_path
+):
+    """`DEDUP_ENABLED=false` with the three new switches off (DEC-207, the stream the Owner will
+    run): no grouping, no inventory read, no rule read; each alert is its own head in the Tier-1
+    queue with its own `triage` job, the "unknown" context and the severity base as its score."""
+    conn, log = rec
+    _switches(
+        monkeypatch,
+        DEDUP_ENABLED="false",
+        PULL_ENABLED="false",
+        AUTOCLOSE_ENABLED="false",
+        ENRICHMENT_ENABLED="false",
+    )
+    monkeypatch.setattr(pipeline_module, "dedup", _NoDedup())
+    monkeypatch.setattr(
+        pipeline_module, "autoclose", _Unreachable("autoclose", "AUTOCLOSE_ENABLED")
+    )
+    monkeypatch.setattr(pipeline_module, "lookups", _Unreachable("lookups", "ENRICHMENT_ENABLED"))
+    _seed_lookup_inventory(conn, tmp_path)
+    _insert_match_everything_rule(conn)  # would close both, if anything read it
+    log.clear()
+    ids = _post_pair(conn, "all-off")
+
+    _run_all(conn, ids)
+
+    rows = {alert_id: _row(conn, alert_id) for alert_id in ids}
+    for alert_id in ids:
+        row = rows[alert_id]
+        assert row["status"] == "queued_tier1", alert_id  # neither a duplicate nor auto-closed
+        assert row["duplicate_of"] is None and row["occurrence_count"] == 1, alert_id
+        assert row["closed_at"] is None and row["autoclose_rule_id"] is None, alert_id
+        assert row["lookup_status"] == _UNKNOWN_LOOKUPS, alert_id
+        assert row["asset_context"]["present"] is False, alert_id
+        assert row["risk_score"] == row["risk_score_components"]["base"] == 28, alert_id
+    assert _outcomes(conn, ids) == dict.fromkeys(ids, "alert")
+    assert _triage_jobs(conn, ids) == [(ids[0], "pending"), (ids[1], "pending")]
+    assert [s for s in log if _LOOKUP_TABLES.search(s) or _RULES_TABLE.search(s)] == []
+    assert _advisory_locks_held(conn) == 0  # and no cluster lock either
+
+
+# -- the consequence DEC-207 item 3 records: the gate ------------------------------------
+#
+# With the "unknown" context every alert carries, gate step 4 cannot keep a `false_positive`:
+# `asset_criticality = unknown` is one of the conditions that force `needs_review` (and the
+# playbook rule cannot hold on `unknown` facts either). This documents that consequence end to
+# end, through the pipeline and then ①, with the fake adapter: the very same alert and the very
+# same answer from the model keep their `false_positive` when the switch is on and the inventory
+# knows the host.
+
+
+class _FakeComplete(FakeLLM):
+    """`FakeLLM` plus the `model` keyword the real adapter's `complete()` takes."""
+
+    def complete(self, *, system, user, response_format=None, timeout_s=None, model=None):
+        return super().complete(
+            system=system, user=user, response_format=response_format, timeout_s=timeout_s
+        )
+
+
+def _false_positive_answer(*, ioc: str, asset: str, identity: str) -> dict:
+    """① says `false_positive` under `sbf-1`; its `structured_basis` equals the facts of the alert
+    (a mismatch forces `needs_review` at step 2 by itself) and it quotes the rule description."""
+    answer = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    answer["structured_basis"] = {
+        "severity": "medium",
+        "ioc_reputation": ioc,
+        "asset_criticality": asset,
+        "identity_privileged": identity,
+        "occurrence_count": 1,
+        "playbook_rule_applied": "sbf-1",
+    }
+    answer["reasons"][0]["quote"] = "PAM: User login failed."
+    return answer
+
+
+def _verifier_agrees(verdict: str) -> dict:
+    return {
+        "agree": True,
+        "structured_only_verdict": verdict,
+        "reason": f"Structured facts alone give {verdict}.",
+    }
+
+
+def _gate_result_after_triage(conn: psycopg.Connection, alert_id: str, answers: list[dict]) -> dict:
+    job = Job(job_id=1, job_type="triage", subject_id=alert_id, attempts=1)
+    run_triage_job(conn, job, adapter=_FakeComplete(responses=answers))
+    return conn.execute(
+        "SELECT gate_result FROM llm_runs WHERE subject_id = %s AND role = 'proposer'",
+        (alert_id,),
+    ).fetchone()[0]
+
+
+@pytest.mark.db
+def test_the_unknown_context_forces_a_false_positive_to_needs_review_at_step_4(
+    db, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("LLM_MODEL_PROPOSER", "fake-deepseek")
+    _switches(monkeypatch, ENRICHMENT_ENABLED="false")
+    _seed_lookup_inventory(db, tmp_path, agent_criticality="low", root_privileged=False)
+    alert_id = "1789000001.100001"  # ① takes Wazuh-shaped ids only
+    _post_alert(db, alert_id, srcip="45.33.32.157")
+    _run_all(db, [alert_id])
+    assert _row(db, alert_id)["asset_context"]["criticality"] == "unknown"
+
+    gate_result = _gate_result_after_triage(
+        db,
+        alert_id,
+        [
+            _false_positive_answer(ioc="skipped", asset="unknown", identity="unknown"),
+            _verifier_agrees("needs_review"),
+        ],
+    )
+
+    assert gate_result["facts"]["asset_criticality"] == "unknown"
+    assert gate_result["proposed_verdict"] == "false_positive"
+    assert gate_result["final_verdict"] == "needs_review"
+    assert gate_result["forced"] is True
+    assert gate_result["forced_by"] == ["step4"]
+    assert "asset_criticality" in gate_result["missing"]
+    result = db.execute(
+        "SELECT result->>'suggested_action' FROM llm_runs "
+        "WHERE subject_id = %s AND role = 'proposer'",
+        (alert_id,),
+    ).fetchone()
+    assert result == ("needs_review",)  # and that is all an analyst can be shown (G11)
+
+
+@pytest.mark.db
+def test_the_same_alert_with_a_known_host_keeps_its_false_positive(db, monkeypatch, tmp_path):
+    """The control of the test above (DEC-025): nothing differs but the switch and what the
+    inventory says about the host, so the forcing is the context's doing."""
+    monkeypatch.setenv("LLM_MODEL_PROPOSER", "fake-deepseek")
+    _switches(monkeypatch)  # every switch unset: on
+    _seed_lookup_inventory(db, tmp_path, agent_criticality="low", root_privileged=False)
+    alert_id = "1789000002.100002"
+    _post_alert(db, alert_id, srcip="45.33.32.157")
+    _run_all(db, [alert_id])
+    assert _row(db, alert_id)["asset_context"]["criticality"] == "low"
+
+    gate_result = _gate_result_after_triage(
+        db,
+        alert_id,
+        [
+            _false_positive_answer(ioc="not_found", asset="low", identity="false"),
+            _verifier_agrees("false_positive"),
+        ],
+    )
+
+    assert gate_result["final_verdict"] == "false_positive"
+    assert gate_result["forced"] is False
+    assert gate_result["steps"]["4"] == "ok"

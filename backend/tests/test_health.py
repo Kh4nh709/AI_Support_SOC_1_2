@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import json
 import os
 import shutil
 import subprocess
@@ -28,7 +29,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import psycopg
 import pytest
-from app.infra import auth, health, notify
+from app.infra import auth, health, intake, notify
 from app.infra.config import Config
 from app.infra.jobs import JOB_TYPES, Job
 from app.tier1 import digest
@@ -496,6 +497,87 @@ def test_inventory_empty_passes_with_one_asset(db, tmp_path):
     _seed_asset(db)
     report = health.check(db, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
     assert _by_name(report)["inventory_empty"].ok is True
+
+
+# P12-T01 / DEC-207 — ENRICHMENT_ENABLED=false: the inventory is not read, so its being empty is
+# no alarm. The control is the test above (and the explicit `True` below): an empty `assets`
+# table with the flag on is still a failing check.
+
+
+class _Untouchable:
+    """Stands in for the connection: any attribute read fails the test."""
+
+    def __getattr__(self, name: str):
+        raise AssertionError(f"_check_inventory_empty reached the connection ({name})")
+
+
+def test_inventory_empty_with_enrichment_off_is_ok_not_applicable_and_runs_no_sql():
+    result = health._check_inventory_empty(_Untouchable(), _cfg(ENRICHMENT_ENABLED=False))
+    assert result.name == "inventory_empty"
+    assert result.ok is True
+    assert result.detail == "n/a — enrichment off"
+    assert result.value is None
+
+
+@pytest.mark.db
+def test_inventory_empty_is_ok_when_enrichment_is_off_and_the_table_is_empty(db, tmp_path):
+    report = health.check(
+        db,
+        _cfg(ENRICHMENT_ENABLED=False),
+        clock=_clock_at(_MORNING_UTC),
+        backups_dir=tmp_path,
+    )
+    check = _by_name(report)["inventory_empty"]
+    assert (check.ok, check.detail) == (True, "n/a — enrichment off")
+
+
+@pytest.mark.db
+def test_inventory_empty_still_fires_when_enrichment_is_explicitly_on(db, tmp_path):
+    report = health.check(
+        db, _cfg(ENRICHMENT_ENABLED=True), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path
+    )
+    check = _by_name(report)["inventory_empty"]
+    assert check.ok is False
+    assert check.detail == "assets table is empty"
+
+
+@pytest.mark.db
+def test_inventory_empty_with_enrichment_off_does_not_alarm_the_report(db, tmp_path):
+    """The whole report: with the inventory empty and enrichment off, the only thing that
+    can still fail the report is something else — here nothing does."""
+    _seed_heartbeat(db, minutes_ago=1)
+    _write_backup(tmp_path)
+    report = health.check(
+        db,
+        _cfg(ENRICHMENT_ENABLED=False),
+        clock=_clock_at(_MORNING_UTC),
+        backups_dir=tmp_path,
+    )
+    assert _by_name(report)["inventory_empty"].ok is True
+    failing = [c.name for c in report.checks if not c.ok]
+    assert "inventory_empty" not in failing
+
+
+# P12-T01 / DEC-207 item 2 — with the pull off, an accepted webhook alert is what keeps the
+# `heartbeat` check green.
+
+
+@pytest.mark.db
+def test_heartbeat_check_goes_from_stale_to_ok_on_a_webhook_alert_with_the_pull_off(db, tmp_path):
+    cfg = _cfg(PULL_ENABLED=False, WEBHOOK_API_KEY="k")
+    _seed_heartbeat(db, minutes_ago=45)
+    first = health.check(db, cfg, clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+    assert _by_name(first)["heartbeat"].ok is False  # the source looks lost
+
+    alert = json.loads((REPO_ROOT / "backend/tests/fixtures/alert_40112.json").read_text("utf-8"))
+    body = alert["_source"]
+    body["id"] = "p12t01-health-hb-1"
+    intake.receive(db, json.dumps(body).encode("utf-8"), "127.0.0.1", cfg)
+
+    second = health.check(
+        db, cfg, clock=_clock_at(_MORNING_UTC + timedelta(minutes=1)), backups_dir=tmp_path
+    )
+    assert _by_name(second)["heartbeat"].ok is True
 
 
 # 9 · digest_unreviewed ----------------------------------------------------------
