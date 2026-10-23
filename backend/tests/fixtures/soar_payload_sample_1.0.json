@@ -1,0 +1,64 @@
+{
+  "id": "gl-01M50KVJ7GEADQAETEAYQET8X5-8f7ff400-c8d6-11f1-ae13-9a661b530912",
+  "timestamp": "2026-10-16T03:25:22.355+0700",
+  "rule": {
+    "level": 12, "id": "100140",
+    "description": "Microsoft Defender: Malware Detected",
+    "groups": ["windows", "windows_defender", "virus"],
+    "firedtimes": 1, "mail": false
+  },
+  "agent":   { "id": "001", "name": "Windows_Endpoint", "ip": "192.168.102.20" },
+  "manager": { "name": "graylog" },
+  "decoder": { "name": "windows_eventchannel" },
+  "location": "EventChannel",
+  "input": { "type": "log" },
+  "data": {
+    "win": {
+      "system":    { "eventID": "1116", "channel": "Microsoft-Windows-Windows Defender/Operational", "computer": "HR-computer.fpt.com", "message": "..." },
+      "eventdata": { "threatName": "Virus:DOS/EICAR_Test_File", "severityName": "Severe", "categoryName": "Virus",
+                     "path": "file:_C:\\Users\\hr01\\Documents\\eicar.com", "sourceName": "Real-Time Protection",
+                     "processName": "C:\\Windows\\System32\\notepad.exe", "detectionUser": "FPT\\hr01" }
+    }
+  },
+  "graylog": {
+    "event_id": "01M50KVJ7GEADQAETEAYQET8X5",
+    "event_definition_id": "6ac0c65ff3b73f790e22791f",
+    "event_definition_title": "100140 - Microsoft Defender: Malware Detected",
+    "message_id": "8f7ff400-c8d6-11f1-ae13-9a661b530912"
+  },
+
+  "enrichment": {
+    "schema_version": "1.0",
+    "scenario": { "id": "MW03", "name": "Microsoft Defender malware detection", "mitre": [] },
+    "triage": {
+      "score": 60, "score_base": 40, "score_signal": 20, "score_ti": 0, "score_asset": 0, "score_user": 0,
+      "rule_confidence": "high",
+      "signal_codes": ["defender_detection", "defender_remediation_succeeded"],
+      "signal_text": "Defender detected Virus:DOS/EICAR_Test_File (Severe, Virus) via Real-Time Protection; remediation succeeded"
+    },
+    "case": {
+      "dedup_key": "MW03|Windows_Endpoint|Virus:DOS/EICAR_Test_File|20261016-03",
+      "thehive_alert_id": "~921656", "case_number": 50, "case_id": "~42700976"
+    },
+    "soar":  { "planned_action": { "type": "none", "target": "Windows_Endpoint", "tier": "approval", "mode": "act_first" } },
+    "asset": { "host": "Windows_Endpoint", "critical": false, "user": "FPT\\hr01", "user_is_admin": false,
+               "src_ip": null, "src_is_internal": null },
+    "history": { "rule_7d_total": 0, "rule_7d_host": 0, "rule_7d_hosts": 0,
+                 "last_seen": null, "first_seen_host": true, "truncated": false },
+    "evidence": {
+      "context_logs": [
+        { "ts": "2026-10-15T20:21:35.771Z", "eid": "1000", "user": "SYSTEM", "rule": "62107 Windows Defender: Antimalware scan started" },
+        { "ts": "2026-10-15T20:24:58.100Z", "eid": "11", "image": "c:\\windows\\system32\\notepad.exe",
+          "user": "FPT\\hr01", "file": "C:\\Users\\hr01\\Documents\\eicar.com" },
+        { "ts": "2026-10-15T20:25:40.152Z", "eid": "3008", "dns": "self.events.data.microsoft.com", "count": 3 }
+      ],"context_window": { "from": "2026-10-15T20:15:22.355Z", "to": "2026-10-15T20:27:22.355Z",
+                          "query": "agent_name:\"Windows_Endpoint\"", "found": 5, "unique": 3, "included": 3 }
+    }
+  },
+
+  "timing": {
+    "event_time": "2026-10-16T03:25:22.355+0700",
+    "playbooks_started": "2026-10-15T20:26:05.010Z",
+    "sent_at": "2026-10-15T20:27:54.420Z"
+  }
+}
