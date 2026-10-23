@@ -727,6 +727,50 @@ the Measured paragraph of item (ix) in section B.
   role refusals that reached the check, not of every refused attempt, so it understates a client that
   sends broken JSON. No claim about access to data.
 
+### (xlvi) · With the SOAR intake switches off, every alert carries the "unknown" context: ① cannot close an alert, the risk score is the severity alone, the auto-close digest is empty
+
+- **Statement.** DEC-207 (23/10/2026) adds three switches next to `DEDUP_ENABLED`, `PULL_ENABLED`,
+  `AUTOCLOSE_ENABLED` and `ENRICHMENT_ENABLED`, all `true` by default, for a stream in which an external
+  SOAR/n8n flow has already enriched, grouped and closed the alerts and posts each finished alert to
+  `POST /webhook/alerts`. With `ENRICHMENT_ENABLED=false` the pipeline reads no `assets`, `identities` or
+  `iocs` row and every alert is written with the vocabulary's "unknown" context: `asset_present` false,
+  `asset_criticality` `unknown`, account privilege `null`, IoC reputation and the three `lookup_status`
+  values `skipped`. The payload's own context is not read (P12-T02 is blocked on the team's schema, which
+  has not been delivered). Three consequences follow, and they stay until it is:
+  1. `asset_criticality = unknown` is in the gate's `_FP_ASSET_BLOCKS` (`security/gate.py`), so step 4
+     forces every ① `false_positive` to `needs_review`; and the `false_positive` rule of each decision
+     table that has one (`sbf-1`, `bf-1`, `c2b-1` and the others under `kb/decision_tables/`) lists
+     `asset_criticality: [low, medium]`, so no playbook rule can hold on "unknown" facts either. ① can
+     still say `escalate` or `needs_review`; it cannot suggest closing an alert as a false positive.
+  2. The risk score is the severity base alone (`critical` 70, `high` 50, `medium` 28, `low` 10): the asset,
+     account and IoC addends are 0, and the occurrence addend is 0 because the pipeline passes an
+     occurrence count of 1 (`soar/pipeline.py`). The Tier-1 queue's order, which is risk first, then
+     arrival, is therefore by severity and arrival.
+  3. With `AUTOCLOSE_ENABLED=false` no alert is auto-closed by this system, so the auto-close digest has no
+     row to review (the rules page and the `autoclose_rules` table stay), and the G8′ hard blocks, which
+     go with the rules, are not evaluated: the decision to close is the stream's.
+
+  A missing or unknown context never opens a path to a closed alert (DEC-207 item 4): it did not before
+  (a host absent from the inventory blocked auto-close, G8′), and the gate reads `unknown` as a block.
+- **Measured.** By construction, and pinned by tests rather than by a figure (P12-T01, 23/10, scratch
+  PostgreSQL 16.2): `backend/tests/test_pipeline.py` runs the same alert through the pipeline and ①'s gate
+  with the switch off and on, with the same fake answer, and the `false_positive` is forced to
+  `needs_review` at step 4 in one and kept in the other; it records the statements sent and finds none
+  that names `assets`, `identities` or `iocs` with the switch off, and the score equals the severity base
+  (28 for a `medium` alert). `backend/tests/test_soar_intake_switches.py` runs the stream with all four
+  switches off through the queue, the audit list, the usage list, the overview and the digest. No
+  evaluation figure was produced with a switch off.
+- **Source.** DEC-207 items 1–4 and 7; `docs/superpowers/plans/2026-10-23-soar-intake.md` (P12-T01, and
+  P12-T02 for what replaces the "unknown" context); `docs/plan/tasks/P12/P12-T01.report.md`;
+  `backend/app/security/gate.py` `_FP_ASSET_BLOCKS`; `backend/app/soar/risk.py`.
+- **Affects.** Every figure of this register's evaluation was measured before the three new switches
+  existed, with the pipeline's own pull, enrichment and auto-close always on (`DEDUP_ENABLED` aside,
+  DEC-165), and describes that configuration only: none of it is a claim about a stream run with the
+  switches off. In particular ①'s `false_positive` rate and precision of `close` (xvi), and the auto-close
+  control that was not built (xxii), say nothing about the SOAR configuration, where ① cannot suggest
+  closing and the system closes nothing. The risk-score ordering of the queue is, in that configuration, an
+  ordering by severity.
+
 ## F. What the thesis must not claim
 
 ### (xxxviii) · Only Wazuh, no detection; no "MTTD", no "ATT&CK coverage"

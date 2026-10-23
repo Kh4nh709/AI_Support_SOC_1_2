@@ -17,6 +17,9 @@ read it as `source='replay'` instead of `'wazuh'`. `is_heartbeat` is public
 and reused (P4-tasks.md planning decision 13); `_update_heartbeat` and
 `_replay_sort_key` are same-package private helpers, reused rather than
 duplicated (design note 1c/1d of the task card).
+
+DEC-207: an accepted alert stamps `source_heartbeat` (`saw_alert=True`), so the `heartbeat`
+health check stays green on a stream that arrives by the webhook only, with the pull off.
 """
 
 from __future__ import annotations

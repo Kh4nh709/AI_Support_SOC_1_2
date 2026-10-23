@@ -14,6 +14,12 @@ This is the one module G1 allowlists to import `ingest/` (`("soar.pipeline",
 `ingest/` tier code, and `soar/pipeline.py` is the orchestrator that owns the
 transaction they run inside.
 
+Three of its steps are switches (all default `true`, so a `.env` that names none of them is the
+pipeline of before; read with `config.load()` per alert): `DEDUP_ENABLED` (DEC-165), and, for a
+stream that arrives already enriched and closed by an external SOAR flow (DEC-207),
+`AUTOCLOSE_ENABLED` (no rule is loaded or evaluated) and `ENRICHMENT_ENABLED` (no
+`assets`/`identities`/`iocs` lookup; the "unknown" context). The risk score runs either way.
+
 Idempotency (design note 2 step 1): a re-claimed job whose `intake` row
 already carries `processed_at` returns immediately without touching anything
 else — the case that matters is a worker killed between the main
