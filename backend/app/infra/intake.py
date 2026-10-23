@@ -18,8 +18,9 @@ and reused (P4-tasks.md planning decision 13); `_update_heartbeat` and
 `_replay_sort_key` are same-package private helpers, reused rather than
 duplicated (design note 1c/1d of the task card).
 
-DEC-207: an accepted alert stamps `source_heartbeat` (`saw_alert=True`), so the `heartbeat`
-health check stays green on a stream that arrives by the webhook only, with the pull off.
+DEC-207 (item 2, amended in fix round 1): with `PULL_ENABLED=false` an accepted alert stamps
+`source_heartbeat` (`saw_alert=True`), so the `heartbeat` health check stays green on a stream
+that arrives by the webhook only. With the pull on nothing is stamped here, as before.
 """
 
 from __future__ import annotations
@@ -147,10 +148,13 @@ def receive(conn: psycopg.Connection, body: bytes, source_ip: str, cfg: Config) 
         raise Duplicate()
     intake_id = row[0]
     enqueue(conn, "pipeline", str(intake_id))
-    # DEC-207 item 2: an accepted alert is proof the source is alive. With `PULL_ENABLED=false`
-    # the puller no longer moves `source_heartbeat`, and without this stamp the `heartbeat`
-    # health check would report a lost source on a stream that is flowing. Same helper, same
-    # row, same two columns the puller writes for a pulled alert. After the conflict check
+    # DEC-207 item 2, as amended in fix round 1: with `PULL_ENABLED=false` an accepted alert is
+    # proof the source is alive. The puller no longer moves `source_heartbeat`, and without this
+    # stamp the `heartbeat` health check would report a lost source on a stream that is flowing.
+    # Same helper, same row, same two columns the puller writes for a pulled alert. With the
+    # pull on (the default) nothing is stamped here, exactly as before DEC-207: a pull that died
+    # still turns the alarm red beside a webhook that keeps receiving. After the conflict check
     # above, on purpose: a `Duplicate` (409) proves nothing new and stamps nothing.
-    _update_heartbeat(conn, saw_alert=True)
+    if not cfg.PULL_ENABLED:
+        _update_heartbeat(conn, saw_alert=True)
     return Receipt(kind="alert", intake_id=intake_id)

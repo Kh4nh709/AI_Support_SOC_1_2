@@ -161,4 +161,36 @@ def test_the_soar_intake_section_names_the_consequences_of_the_unknown_context()
     assert "severity base alone" in section
     assert "auto-close digest is empty" in section
     assert "`n/a — enrichment off`" in section  # the inventory_empty alarm
-    assert "stamped by every alert the webhook accepts" in section  # the heartbeat
+
+
+def test_the_soar_intake_section_says_the_heartbeat_is_stamped_only_with_the_pull_off():
+    """Fix round 1 (review finding 2, the Director's ruling): the stamp is a SOAR-mode thing."""
+    section = _soar_section()
+    bullet = [ln for ln in section.splitlines() if ln.startswith("- **The heartbeat**")]
+    assert len(bullet) == 1, "the heartbeat bullet is gone"
+    text = bullet[0]
+    assert "only when `PULL_ENABLED=false`" in text
+    assert "stamped by every alert the webhook accepts" in text
+    assert "(not by a `409`, and not by a body that is refused)" in text
+    # with the pull on, as before DEC-207: a dead pull still turns the alarm red
+    assert (
+        "With the pull on" in text
+        and "a pull that died still turns the `heartbeat` alarm red" in text
+    )
+    # and the intro's "merging the change alters nothing" is true again: the defaults stamp nothing
+    assert "merging the change alters nothing" in section
+
+
+def test_rollback_level_1_warns_of_the_pull_catch_up_and_the_cursor_check():
+    """Fix round 1 (review finding 1): turning the pull back on is not "the behaviour of before,
+    for alerts that arrive afterwards"; it pulls in the whole off-window."""
+    section = _soar_section()
+    level_1 = section.split("1. **The flags.**")[1].split("2. **The code.**")[0]
+    assert "catches up" in level_1 and "`last_sort - PULL_OVERLAP_S`" in level_1
+    assert "SOAR closed or grouped and never posted" in level_1  # what enters the pipeline
+    assert "① run" in level_1  # and what it costs
+    check = 'psql "$DATABASE_URL" -Atc "select last_sort, last_pull_at from source_cursor"'
+    assert check in level_1  # looked at before the pull is turned back on
+    assert "the Owner's decision" in level_1 and "never done silently" in level_1
+    assert "a pull in the last 5 min" in level_1 and "`f|t`" in level_1  # expected while off
+    assert "behaviour of before, for alerts that arrive afterwards" not in level_1

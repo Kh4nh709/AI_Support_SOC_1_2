@@ -126,7 +126,7 @@ def _process(conn: psycopg.Connection, intake_id: int, raw_text: str, via: str) 
     # Internal enrichment — for every non-duplicate alert (E1, M1), unless
     # ENRICHMENT_ENABLED=false (DEC-207): then `_build_context` reads nothing and the
     # alert carries the "unknown" context. The risk score runs either way.
-    ctx = _build_context(conn, alert)
+    ctx = _build_context(conn, alert, cfg=cfg)
     risk_score, risk_components = compute_risk_score(alert.severity, ctx, 1)
 
     if cfg.AUTOCLOSE_ENABLED:
@@ -181,8 +181,12 @@ def _unknown_context() -> AlertContext:
     )
 
 
-def _build_context(conn: psycopg.Connection, alert: Alert) -> AlertContext:
-    if not config.load().ENRICHMENT_ENABLED:
+def _build_context(
+    conn: psycopg.Connection, alert: Alert, *, cfg: config.Config | None = None
+) -> AlertContext:
+    """`_process` passes the `cfg` it already holds, so the switches are read from one object per
+    alert; `None` (a caller outside the pipeline, `test_adversarial`'s) loads it."""
+    if not (cfg if cfg is not None else config.load()).ENRICHMENT_ENABLED:
         return _unknown_context()
     asset = lookups.lookup_asset(conn, alert.agent_name, alert.origin_host)
     identity = lookups.lookup_identity(conn, alert.alert_user)

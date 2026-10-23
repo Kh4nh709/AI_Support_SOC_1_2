@@ -580,6 +580,22 @@ def test_heartbeat_check_goes_from_stale_to_ok_on_a_webhook_alert_with_the_pull_
     assert _by_name(second)["heartbeat"].ok is True
 
 
+@pytest.mark.db
+def test_heartbeat_check_stays_red_on_a_webhook_alert_with_the_pull_on(db, tmp_path):
+    """The control of the test above, and the behaviour of before DEC-207: with the pull on, a
+    pull that died still turns the alarm red beside a webhook that keeps receiving alerts."""
+    cfg = _cfg(WEBHOOK_API_KEY="k")  # PULL_ENABLED left at its default, true
+    _seed_heartbeat(db, minutes_ago=45)
+    alert = json.loads((REPO_ROOT / "backend/tests/fixtures/alert_40112.json").read_text("utf-8"))
+    body = alert["_source"]
+    body["id"] = "p12t01-health-hb-2"
+    intake.receive(db, json.dumps(body).encode("utf-8"), "127.0.0.1", cfg)
+
+    report = health.check(db, cfg, clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+
+    assert _by_name(report)["heartbeat"].ok is False
+
+
 # 9 · digest_unreviewed ----------------------------------------------------------
 
 

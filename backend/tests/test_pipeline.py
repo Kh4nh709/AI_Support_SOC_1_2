@@ -1067,6 +1067,85 @@ def test_enrichment_on_or_unset_still_reads_the_inventory_and_scores_it(
     assert row["risk_score"] == 28 + 25
 
 
+# -- `_build_context` takes the config `_process` already holds (fix round 1, finding 4) -----
+
+
+def _parsed_alert():
+    from app.ingest.wazuh_parser import parse_wazuh_alert
+
+    result = parse_wazuh_alert(json.loads(_hit(RULE_5503, id_="p12t01-ctx", srcip=_MALICIOUS_IP)))
+    assert result.alert is not None
+    return result.alert
+
+
+def test_build_context_with_a_given_config_does_not_read_the_environment(monkeypatch):
+    """No connection and no `config.load`: the given config says "off", so nothing is read."""
+
+    alert = _parsed_alert()  # the parser itself reads the configuration: before the patch
+
+    def _load_is_a_failure(*args, **kwargs):
+        raise AssertionError("config.load() was called although a cfg was given")
+
+    monkeypatch.setattr(pipeline_module.config, "load", _load_is_a_failure)
+    cfg = dataclasses.replace(config.Config(), ENRICHMENT_ENABLED=False)
+
+    ctx = pipeline_module._build_context(None, alert, cfg=cfg)
+
+    assert ctx.asset_criticality == "unknown" and ctx.asset_present is False
+    assert dict(ctx.lookup_status) == _UNKNOWN_LOOKUPS
+
+
+def test_build_context_without_a_config_loads_it_as_before(monkeypatch):
+    """`cfg=None` is `test_adversarial`'s call: the environment decides."""
+    monkeypatch.setenv("ENRICHMENT_ENABLED", "false")
+    ctx = pipeline_module._build_context(None, _parsed_alert())
+    assert dict(ctx.lookup_status) == _UNKNOWN_LOOKUPS
+
+
+@pytest.mark.db
+def test_build_context_given_a_config_follows_it_and_not_the_environment(
+    rec, monkeypatch, tmp_path
+):
+    """The environment says off, the given config says on: the lookups run (the other direction
+    of the test above, so the argument is what decides)."""
+    conn, log = rec
+    monkeypatch.setenv("ENRICHMENT_ENABLED", "false")
+    _seed_lookup_inventory(conn, tmp_path)
+    log.clear()
+
+    ctx = pipeline_module._build_context(conn, _parsed_alert(), cfg=config.Config())
+
+    assert ctx.asset_criticality == "medium"
+    assert {m.group(1).lower() for s in log for m in _LOOKUP_TABLES.finditer(s)} == {
+        "assets",
+        "identities",
+        "iocs",
+    }
+
+
+@pytest.mark.db
+def test_process_hands_its_own_config_to_build_context(db, monkeypatch):
+    """One read of the environment per alert for the switches: `_process` loads the config once and
+    passes that object down, so the context is built from the very config the rest of `_process`
+    used."""
+    _switches(monkeypatch, ENRICHMENT_ENABLED="false")
+    seen: list = []
+    real = pipeline_module._build_context
+
+    def spy(conn, alert, *, cfg=None):
+        seen.append(cfg)
+        return real(conn, alert, cfg=cfg)
+
+    monkeypatch.setattr(pipeline_module, "_build_context", spy)
+    alert_id = "p12t01-cfg-pass"
+    _post_alert(db, alert_id, srcip="198.51.100.61")
+
+    _run_all(db, [alert_id])
+
+    assert len(seen) == 1 and seen[0] is not None
+    assert seen[0].ENRICHMENT_ENABLED is False
+
+
 # -- the defaults: a `.env` that names none of the switches is `a0398c2` ----------------
 
 

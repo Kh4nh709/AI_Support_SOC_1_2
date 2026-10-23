@@ -407,12 +407,15 @@ def test_heartbeat_bare_and_hit_shapes_are_201_no_job_and_touch_source_heartbeat
 
 
 # --------------------------------------------------------------------------
-# P12-T01 / DEC-207 item 2 — every alert the webhook accepts stamps the heartbeat
+# P12-T01 / DEC-207 item 2 (amended in fix round 1) — with `PULL_ENABLED=false`, every alert the
+# webhook accepts stamps the heartbeat; with it on or unset, none does
 #
 # With `PULL_ENABLED=false` nothing else moves `source_heartbeat`, and the `heartbeat` health
 # check would call the source lost. The stamp is `(last_seen_at, last_alert_at) = now()`, the
 # puller's own `_update_heartbeat(saw_alert=True)`; the heartbeat branch keeps its own
-# (`saw_alert=False`: `last_alert_at` untouched).
+# (`saw_alert=False`: `last_alert_at` untouched). With the pull on (the default) the webhook
+# stamps nothing, exactly as before DEC-207: a pull that died still turns the alarm red beside
+# a webhook that keeps receiving.
 # --------------------------------------------------------------------------
 
 _DAY_S = 86_400
@@ -443,13 +446,31 @@ def _heartbeat_ages(sdb) -> tuple[float, float | None]:
     return float(row[0]), None if row[1] is None else float(row[1])
 
 
+def _no_heartbeat_row(sdb) -> bool:
+    sdb.commit()
+    return (
+        sdb.execute(
+            "SELECT count(*) FROM source_heartbeat WHERE manager_id = 'indexer'"
+        ).fetchone()[0]
+        == 0
+    )
+
+
+def _use_cfg(**overrides) -> None:
+    """The config the route sees (the `client` fixture removes the override at teardown)."""
+    main.app.dependency_overrides[deps.get_config] = lambda: _cfg(**overrides)
+
+
 @pytest.mark.db
 @pytest.mark.parametrize(
     "preset",
     [None, (_DAY_S, None), (_DAY_S, _DAY_S)],
     ids=["no-row", "old-seen-never-alerted", "old-seen-old-alert"],
 )
-def test_an_accepted_alert_stamps_last_seen_and_last_alert(client, sdb, preset) -> None:
+def test_with_the_pull_off_an_accepted_alert_stamps_last_seen_and_last_alert(
+    client, sdb, preset
+) -> None:
+    _use_cfg(PULL_ENABLED=False)
     if preset is None:
         sdb.execute("DELETE FROM source_heartbeat WHERE manager_id = 'indexer'")
         sdb.commit()
@@ -462,6 +483,37 @@ def test_an_accepted_alert_stamps_last_seen_and_last_alert(client, sdb, preset) 
     seen, alert = _heartbeat_ages(sdb)
     assert seen < _RECENT_S
     assert alert is not None and alert < _RECENT_S
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("cfg", [{}, {"PULL_ENABLED": True}], ids=["unset", "explicit-true"])
+@pytest.mark.parametrize(
+    "preset",
+    [None, (_DAY_S, None), (_DAY_S, _DAY_S)],
+    ids=["no-row", "old-seen-never-alerted", "old-seen-old-alert"],
+)
+def test_with_the_pull_on_or_unset_an_accepted_alert_leaves_the_heartbeat_untouched(
+    client, sdb, preset, cfg
+) -> None:
+    """The behaviour of before DEC-207, and the control of the test above (DEC-025): the same
+    alert, the same rows, the pull on. A pull that died then still turns the alarm red beside a
+    webhook that keeps receiving."""
+    _use_cfg(**cfg)
+    if preset is None:
+        sdb.execute("DELETE FROM source_heartbeat WHERE manager_id = 'indexer'")
+        sdb.commit()
+    else:
+        _set_heartbeat(sdb, seen_s=preset[0], alert_s=preset[1])
+
+    response = _post(client, _bytes(_copy_with_id(ALERT_BARE, _uid("hb-on"))))
+
+    assert response.status_code == 201, response.text
+    if preset is None:
+        assert _no_heartbeat_row(sdb)  # not even a row is made
+    else:
+        seen, alert = _heartbeat_ages(sdb)
+        assert seen == pytest.approx(_DAY_S, abs=60)
+        assert (alert is None) if preset[1] is None else alert == pytest.approx(_DAY_S, abs=60)
 
 
 @pytest.mark.db
@@ -484,7 +536,8 @@ def test_an_accepted_alert_stamps_with_every_switch_off(client, sdb) -> None:
 
 
 @pytest.mark.db
-def test_the_indexer_hit_shape_stamps_too(client, sdb) -> None:
+def test_with_the_pull_off_the_indexer_hit_shape_stamps_too(client, sdb) -> None:
+    _use_cfg(PULL_ENABLED=False)
     _set_heartbeat(sdb, seen_s=_DAY_S, alert_s=None)
     doc = json.loads(json.dumps(ALERT_HIT))
     doc["_source"] = _copy_with_id(doc["_source"], _uid("hb-hit-shape"))
@@ -496,18 +549,24 @@ def test_the_indexer_hit_shape_stamps_too(client, sdb) -> None:
 
 
 @pytest.mark.db
-def test_a_409_duplicate_does_not_stamp(sdb) -> None:
+@pytest.mark.parametrize("pull_enabled", [False, True], ids=["pull-off", "pull-on"])
+def test_a_409_duplicate_does_not_stamp(sdb, pull_enabled) -> None:
     """Called on `receive` itself, not through the route: the route's rollback on a 409 would
-    undo a stamp made before the conflict was found and hide the defect."""
-    cfg = _cfg()
+    undo a stamp made before the conflict was found and hide the defect. In both states: with
+    the pull off the first copy stamps (the positive control) and the 409 must not; with it on
+    nothing stamps at all."""
+    cfg = _cfg(PULL_ENABLED=pull_enabled)
     body = _bytes(_copy_with_id(ALERT_BARE, _uid("hb-dup")))
     _set_heartbeat(sdb, seen_s=_DAY_S, alert_s=_DAY_S)
-    intake.receive(sdb, body, ALLOWED_HOST, cfg)  # the first copy: accepted, and it stamps
+    intake.receive(sdb, body, ALLOWED_HOST, cfg)  # the first copy: accepted
     first = sdb.execute(
         "SELECT extract(epoch FROM now() - last_seen_at), extract(epoch FROM now() - last_alert_at)"
         " FROM source_heartbeat WHERE manager_id = 'indexer'"
     ).fetchone()
-    assert float(first[0]) < _RECENT_S and float(first[1]) < _RECENT_S  # the positive control
+    if pull_enabled:
+        assert float(first[0]) == pytest.approx(_DAY_S, abs=60)  # the pull on: no stamp
+    else:
+        assert float(first[0]) < _RECENT_S and float(first[1]) < _RECENT_S  # the positive control
     sdb.execute(  # as if nothing had been heard for a day
         "UPDATE source_heartbeat SET last_seen_at = now() - interval '1 day', "
         "last_alert_at = now() - interval '1 day' WHERE manager_id = 'indexer'"
@@ -525,17 +584,29 @@ def test_a_409_duplicate_does_not_stamp(sdb) -> None:
 
 
 @pytest.mark.db
+@pytest.mark.parametrize("pull_enabled", [False, True], ids=["pull-off", "pull-on"])
 @pytest.mark.parametrize(
     "body, reason",
-    [(b"not json at all", "not_json"), (b"[1, 2]", "not_an_object"), (b"{}", "id")],
+    [
+        (b"not json at all", "not_json"),
+        (b"[1, 2]", "not_an_object"),
+        (b"{}", "id"),
+        (b"x" * (config.Config().MAX_PAYLOAD_BYTES + 1), "too_large"),  # the 413
+    ],
+    ids=["not_json", "not_an_object", "id", "too_large"],
 )
-def test_a_rejected_body_does_not_stamp(sdb, body, reason) -> None:
+def test_a_rejected_body_does_not_stamp(sdb, body, reason, pull_enabled) -> None:
+    """The 400s and the 413, with the pull off so that a stamp would be visible (and on, where
+    none may appear either)."""
     _set_heartbeat(sdb, seen_s=_DAY_S, alert_s=_DAY_S)
 
-    with pytest.raises(intake.Rejected) as excinfo:
-        intake.receive(sdb, body, ALLOWED_HOST, _cfg())
-
-    assert excinfo.value.reason == reason
+    if reason == "too_large":
+        with pytest.raises(intake.PayloadTooLarge):
+            intake.receive(sdb, body, ALLOWED_HOST, _cfg(PULL_ENABLED=pull_enabled))
+    else:
+        with pytest.raises(intake.Rejected) as excinfo:
+            intake.receive(sdb, body, ALLOWED_HOST, _cfg(PULL_ENABLED=pull_enabled))
+        assert excinfo.value.reason == reason
     seen, alert = _heartbeat_ages(sdb)
     assert seen == pytest.approx(_DAY_S, abs=60) and alert == pytest.approx(_DAY_S, abs=60)
 
