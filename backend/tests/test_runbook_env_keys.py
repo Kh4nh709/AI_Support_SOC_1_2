@@ -209,3 +209,44 @@ def test_rollback_level_1_warns_of_the_pull_catch_up_and_the_cursor_check():
     assert "a pull in the last 5 min" in level_1 and "`f|…`" in level_1
     assert "`f|t`" in level_1 and "`f|f`" in level_1
     assert "behaviour of before, for alerts that arrive afterwards" not in level_1
+
+
+def test_no_file_still_says_every_alert_carries_the_unknown_context():
+    """P12-T02 fix round 1 (DEC-209 item 3): since DEC-208 the context of an alert comes from the
+    payload's `enrichment`, and only an alert without a valid block gets the unknown one. The runbook
+    key row, its switch bullet and its "what to expect" paragraph, the `.env.example` line, the context
+    pack's switch line and the comment in `infra/config.py` all say so, and none says "every alert".
+    """
+    pack = (REPO_ROOT / "docs" / "plan" / "00-context-pack.md").read_text(encoding="utf-8")
+    switch_line = next(ln for ln in pack.splitlines() if ln.startswith("PULL_ENABLED=true"))
+    env_line = next(
+        ln
+        for ln in ENV_EXAMPLE_PATH.read_text(encoding="utf-8").splitlines()
+        if ln.startswith("ENRICHMENT_ENABLED=")
+    )
+    config_py = (REPO_ROOT / "backend" / "app" / "infra" / "config.py").read_text(encoding="utf-8")
+    config_comment = config_py.split("ENRICHMENT_ENABLED=false:")[1].split("PULL_ENABLED: bool")[0]
+    row = _rows()["ENRICHMENT_ENABLED"]
+    section = _soar_section()
+    bullet = next(
+        ln for ln in section.splitlines() if ln.startswith("- `ENRICHMENT_ENABLED=false`:")
+    )
+    paragraph = next(
+        ln for ln in section.splitlines() if ln.startswith("- **The context comes from")
+    )
+
+    for name, text in (
+        ("runbook key row", row),
+        ("runbook switch bullet", bullet),
+        ("runbook paragraph", paragraph),
+        (".env.example", env_line),
+        ("context pack §6.3 line", switch_line),
+        ("config.py comment", config_comment),
+    ):
+        flat = " ".join(text.split())
+        assert "every alert carries the" not in flat, name
+        assert "DEC-208" in flat, name
+        assert "else the unknown context" in flat or "else the unknown" in flat, name
+    assert "payload's `enrichment`" in row and "payload's `enrichment`" in bullet
+    # the consequences stay, for an alert that has the unknown context
+    assert "for an alert with the unknown context" in paragraph
