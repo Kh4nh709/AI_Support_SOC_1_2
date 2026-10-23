@@ -12,7 +12,14 @@ from app.security import wrap
 
 # ─────────────────────────────────────────────────────────────── Id (§7.1)
 ID_PATTERNS: dict[str, re.Pattern[str]] = {
-    "alert_id": re.compile(r"^\d+\.\d+$"),
+    # DEC-209: two exact shapes. The Wazuh id `<epoch>.<n>`, and the SOAR (Graylog) id
+    # `gl-<event ULID>-<message UUID>`: a Crockford base32 ULID (upper case, no I, L, O or U) and a
+    # lower-case UUID. Exact on purpose: the linter passes any out-of-block token that fits an id
+    # pattern, so a loose second shape would let free text that looks like an id through.
+    "alert_id": re.compile(
+        r"^(?:\d+\.\d+|gl-[0-9A-HJKMNP-TV-Z]{26}"
+        r"-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+    ),
     "rule_id": re.compile(r"^\d+$"),
     "mitre": re.compile(r"^T\d{4}(\.\d{3})?$"),
     "agent_id": re.compile(r"^\d{3,}$"),

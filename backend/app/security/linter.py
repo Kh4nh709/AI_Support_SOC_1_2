@@ -10,7 +10,11 @@ from dataclasses import dataclass
 # import `llm` (context pack §4/G1). `test_ids_match_the_builders_patterns` is what
 # keeps this copy from drifting out of step with the builder's.
 _ID_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"^\d+\.\d+$"),  # alert_id
+    # alert_id: the Wazuh shape or the SOAR (Graylog) one, exactly (DEC-209)
+    re.compile(
+        r"^(?:\d+\.\d+|gl-[0-9A-HJKMNP-TV-Z]{26}"
+        r"-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+    ),
     re.compile(r"^\d+$"),  # rule_id
     re.compile(r"^T\d{4}(\.\d{3})?$"),  # mitre
     re.compile(r"^\d{3,}$"),  # agent_id

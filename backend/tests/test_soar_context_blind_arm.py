@@ -13,8 +13,8 @@ Two alerts, one on each arm (`pipeline._suggestion_visible` decides, from the al
 The visible alert is the control of every assertion about the blind one (DEC-025): the same route, the
 same kind of row, shown whole. The database is a scratch one (`tests/scratch_db.py`).
 
-The samples' own ids are the Graylog event ids (`gl-…`); ① renders an alert id only in the Wazuh form
-`\\d+.\\d+`, so each alert here is given one (`tests/soar_payloads.with_wazuh_id`).
+Each alert keeps the shape of the sample's own Graylog id (`gl-<ULID>-<UUID>`, DEC-209): the last group of
+the UUID is varied until one id of each arm is found, the rule being the pipeline's own.
 """
 
 from __future__ import annotations
@@ -36,19 +36,20 @@ from fastapi.testclient import TestClient
 
 from tests.fakes.llm import TRIAGE_V2_FALSE_POSITIVE, FakeLLM
 from tests.scratch_db import insert_user, scratch_database
-from tests.soar_payloads import receive_and_run, sc03, stream_config, with_wazuh_id
+from tests.soar_payloads import edit, receive_and_run, sc03, stream_config
 
 HIDDEN_KEYS = {"triage.suggested", "llm.gate_forced"}
+SC03_ID = sc03()["id"]
 
 
 def _arm_ids() -> tuple[str, str]:
-    """`(a blind alert id, a visible alert id)`, Wazuh-shaped, found by the pipeline's own rule so the
+    """`(a blind alert id, a visible alert id)`, of the SOAR shape, found by the pipeline's own rule so the
     test never assumes which arm an id falls on. Called from the fixture, not at import: the rule
     reads the configuration, and a module-level call would read it before the autouse fixture that
     keeps a test off the real `.env` (DEC-047)."""
     blind = visible = None
-    for n in range(200_000, 200_400):
-        alert_id = f"1789200000.{n}"
+    for n in range(400):
+        alert_id = f"{SC03_ID[:-12]}{n:012x}"
         if _suggestion_visible(alert_id):
             visible = visible or alert_id
         else:
@@ -121,7 +122,7 @@ def stream(sdb, monkeypatch):
     monkeypatch.setenv("LLM_MODEL_PROPOSER", "fake-deepseek")
     cfg = dataclasses.replace(cfg, LLM_MONTHLY_USD_CAP=30)
     for alert_id in (blind, visible):
-        receive_and_run(sdb, cfg, with_wazuh_id(sc03(), alert_id))
+        receive_and_run(sdb, cfg, edit(sc03(), "id", alert_id))
         run_triage_job(
             sdb,
             Job(job_id=-1, job_type="triage", subject_id=alert_id, attempts=1),

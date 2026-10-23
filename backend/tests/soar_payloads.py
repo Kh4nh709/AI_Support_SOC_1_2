@@ -14,16 +14,19 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import psycopg
 from app.infra import config, intake
 from app.infra.jobs import Job
+from app.llm import triage as T
 from app.soar import pipeline
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 SWITCHES = ("DEDUP_ENABLED", "PULL_ENABLED", "AUTOCLOSE_ENABLED", "ENRICHMENT_ENABLED")
 MISSING = object()
+T0 = datetime(2026, 10, 16, 3, 25, 22, tzinfo=UTC)
 
 
 def sample(name: str) -> dict:
@@ -91,3 +94,41 @@ def run(conn: psycopg.Connection, intake_id: int) -> None:
 
 def receive_and_run(conn: psycopg.Connection, cfg: config.Config, doc: dict) -> None:
     run(conn, receive(conn, cfg, doc))
+
+
+def llm_cfg() -> config.Config:
+    return dataclasses.replace(
+        config.Config(), LLM_MODEL_PROPOSER="proposer-model", LLM_MODEL_VERIFIER="verifier-model"
+    )
+
+
+def triage_input(**overrides) -> T.TriageInput:
+    """A medium malware alert whose context is known and which meets every condition of `mal-1`
+    but the occurrence one."""
+    base = {
+        "alert_id": "1789200000.300001",
+        "rule_id": "100140",
+        "rule_level": 5,
+        "alert_time": T0,
+        "severity": "medium",
+        "category": "malware",
+        "categories": ("malware",),
+        "occurrence_count": 3,
+        "risk_score": 38,
+        "description": "Microsoft Defender: Malware Detected",
+        "raw_log": "Defender detected Virus:DOS/EICAR_Test_File",
+        "raw_log_truncated": False,
+        "agent_name": "Windows_Endpoint",
+        "origin_host": "Windows_Endpoint",
+        "agent_id": "001",
+        "alert_user": "hr01",
+        "mitre_ids": (),
+        "asset_context": {"present": True, "criticality": "medium", "owner": None, "role": None},
+        "identity_context": {"privileged": False},
+        "ioc_context": {"reputation": "clean"},
+        "lookup_status": {"asset": "found", "identity": "found", "ioc": "found"},
+        "first_seen_at": T0,
+        "last_seen_at": T0,
+    }
+    base.update(overrides)
+    return T.TriageInput(**base)
