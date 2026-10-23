@@ -18,7 +18,9 @@ Three of its steps are switches (all default `true`, so a `.env` that names none
 pipeline of before; read with `config.load()` per alert): `DEDUP_ENABLED` (DEC-165), and, for a
 stream that arrives already enriched and closed by an external SOAR flow (DEC-207),
 `AUTOCLOSE_ENABLED` (no rule is loaded or evaluated) and `ENRICHMENT_ENABLED` (no
-`assets`/`identities`/`iocs` lookup; the "unknown" context). The risk score runs either way.
+`assets`/`identities`/`iocs` lookup; the context is the one SOAR put in the payload's `enrichment`
+block, DEC-208, or the "unknown" one when the payload has no valid block). The risk score runs
+either way.
 
 Idempotency (design note 2 step 1): a re-claimed job whose `intake` row
 already carries `processed_at` returns immediately without touching anything
@@ -35,7 +37,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
+import re
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -54,6 +58,8 @@ from app.soar.risk import compute_risk_score
 #: `finish_enrichment` returns and before the receipt write, to prove the two
 #: are one transaction (design note 5).
 _CRASH_AFTER_ENV = "SOC_CRASH_AFTER"
+
+logger = logging.getLogger(__name__)
 
 
 def run_pipeline_job(conn: psycopg.Connection, job: Job) -> None:
@@ -124,8 +130,9 @@ def _process(conn: psycopg.Connection, intake_id: int, raw_text: str, via: str) 
             return
 
     # Internal enrichment — for every non-duplicate alert (E1, M1), unless
-    # ENRICHMENT_ENABLED=false (DEC-207): then `_build_context` reads nothing and the
-    # alert carries the "unknown" context. The risk score runs either way.
+    # ENRICHMENT_ENABLED=false (DEC-207): then `_build_context` looks nothing up and the
+    # alert carries the context SOAR put in its payload (DEC-208), or the "unknown" one.
+    # The risk score runs either way, and its occurrence addend is 0 (a count of 1).
     ctx = _build_context(conn, alert, cfg=cfg)
     risk_score, risk_components = compute_risk_score(alert.severity, ctx, 1)
 
@@ -165,11 +172,12 @@ def _process(conn: psycopg.Connection, intake_id: int, raw_text: str, via: str) 
 
 
 def _unknown_context() -> AlertContext:
-    """DEC-207: what an alert knows about its asset, account and addresses when nothing is
-    looked up. Every field is the vocabulary's own "unknown": `asset_present` false and
-    criticality "unknown" (the gate treats both as a block, never as a pass), the account's
-    privilege `None`, the IoC reputation and all three lookup statuses `skipped` (not a
-    security signal, so the risk score adds nothing for them)."""
+    """DEC-207: what an alert knows about its asset, account and addresses when nothing is looked
+    up and the payload tells nothing usable (DEC-208: no valid `enrichment` block). Every field is
+    the vocabulary's own "unknown": `asset_present` false and criticality "unknown" (the gate treats
+    both as a block, never as a pass), the account's privilege `None`, the IoC reputation and all
+    three lookup statuses `skipped` (not a security signal, so the risk score adds nothing for them).
+    """
     return AlertContext(
         False,
         "unknown",
@@ -181,13 +189,158 @@ def _unknown_context() -> AlertContext:
     )
 
 
+# ---------------------------------------------------------------------------------------------
+# DEC-208 (as amended 23/10): the context an external SOAR flow put in the payload.
+#
+# The body is the Wazuh-shaped alert plus `enrichment`, schema `1.x` (the team only adds fields
+# in 1.x). Read with `ENRICHMENT_ENABLED=false`, in place of the internal lookups:
+#   asset_criticality    <- asset.criticality   high|medium|low|unknown   (absent: unknown)
+#   asset_present        <- asset.in_inventory  boolean                   (absent: false)
+#   identity_privileged  <- asset.user_is_admin boolean, once the alert names an account
+#                           (null, absent or no account: None, identity `skipped`)
+#   ioc_reputation       <- the worst of ti[].verdict and ioc.verdict, malicious > suspicious >
+#                           clean (no block: `skipped`)
+# `asset.critical` is SOAR's own scoring flag, not an inventory level, and is not read. A value
+# outside its vocabulary or of the wrong type anywhere makes the WHOLE context "unknown": a context
+# trusted in part is not built. What is logged is the field's name and the kind of fault, never the
+# value (it is attacker-controlled text).
+# ---------------------------------------------------------------------------------------------
+
+_SCHEMA_VERSION_RE = re.compile(r"1\.\d+")
+_CRITICALITIES = frozenset({"high", "medium", "low", "unknown"})
+#: A verdict's rank; the reputation of the alert is the highest one found.
+_VERDICT_RANK = {"clean": 0, "suspicious": 1, "malicious": 2}
+
+
+class _InvalidField(Exception):
+    """A payload field that cannot be read. Carries the field's dotted name and a fixed word for the
+    fault, and never the value."""
+
+    def __init__(self, field: str, fault: str) -> None:
+        super().__init__(field, fault)
+        self.field = field
+        self.fault = fault
+
+
+def _object(parent: dict, key: str, field: str) -> dict:
+    """The mapping under `parent[key]`; an absent key or a `null` is an empty one (no block)."""
+    value = parent.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise _InvalidField(field, "wrong type")
+    return value
+
+
+def _optional_bool(parent: dict, key: str, field: str) -> bool | None:
+    """A boolean, or `None` when the key is absent or `null`. Anything else (a string, a number: `1`
+    is not `true`) is a fault."""
+    value = parent.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise _InvalidField(field, "wrong type")
+    return value
+
+
+def _verdict(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise _InvalidField(field, "wrong type")
+    if value not in _VERDICT_RANK:
+        raise _InvalidField(field, "outside its vocabulary")
+    return value
+
+
+def _read_enrichment(document: object) -> AlertContext:
+    """The context of one payload, or `_InvalidField` naming the first field that cannot be read."""
+    enrichment = document.get("enrichment") if isinstance(document, dict) else None
+    if enrichment is None:
+        raise _InvalidField("enrichment", "missing")
+    if not isinstance(enrichment, dict):
+        raise _InvalidField("enrichment", "wrong type")
+    version = enrichment.get("schema_version")
+    if not isinstance(version, str) or _SCHEMA_VERSION_RE.fullmatch(version) is None:
+        raise _InvalidField("enrichment.schema_version", "missing or not 1.x")
+
+    asset = _object(enrichment, "asset", "enrichment.asset")
+    criticality = "unknown"
+    if "criticality" in asset:
+        value = asset["criticality"]
+        if not isinstance(value, str):
+            raise _InvalidField("enrichment.asset.criticality", "wrong type")
+        if value not in _CRITICALITIES:
+            raise _InvalidField("enrichment.asset.criticality", "outside its vocabulary")
+        criticality = value
+    in_inventory: bool | None = None
+    if "in_inventory" in asset:
+        value = asset["in_inventory"]
+        if not isinstance(value, bool):
+            raise _InvalidField("enrichment.asset.in_inventory", "wrong type")
+        in_inventory = value
+
+    user = asset.get("user")
+    if user is not None and not isinstance(user, str):
+        raise _InvalidField("enrichment.asset.user", "wrong type")
+    user_is_admin = _optional_bool(asset, "user_is_admin", "enrichment.asset.user_is_admin")
+    # `user_is_admin` says something only about an account the alert names: SOAR writes `false` for
+    # an alert with none (the pfSense sample), and nothing was looked up for it.
+    privileged = user_is_admin if user is not None and user.strip() else None
+
+    verdicts: list[str] = []
+    ti = enrichment.get("ti")
+    if ti is not None:
+        if not isinstance(ti, list):
+            raise _InvalidField("enrichment.ti", "wrong type")
+        for entry in ti:
+            if not isinstance(entry, dict):
+                raise _InvalidField("enrichment.ti[]", "wrong type")
+            verdicts.append(_verdict(entry.get("verdict"), "enrichment.ti[].verdict"))
+    ioc = enrichment.get("ioc")
+    if ioc is not None:  # a `null` is no block; `{}` is a block with no verdict, and a fault
+        if not isinstance(ioc, dict):
+            raise _InvalidField("enrichment.ioc", "wrong type")
+        verdicts.append(_verdict(ioc.get("verdict"), "enrichment.ioc.verdict"))
+
+    return AlertContext(
+        in_inventory is True,
+        criticality,
+        None,
+        None,
+        privileged,
+        max(verdicts, key=_VERDICT_RANK.__getitem__) if verdicts else "skipped",
+        {
+            "asset": (
+                "skipped" if in_inventory is None else "found" if in_inventory else "not_found"
+            ),
+            "identity": "skipped" if privileged is None else "found",
+            "ioc": "found" if verdicts else "skipped",
+        },
+    )
+
+
+def _context_from_payload(alert: Alert) -> AlertContext:
+    """`alert.raw_payload`'s `enrichment` block as the alert's context (DEC-208), or the "unknown"
+    context when the block is absent, is not schema `1.x`, or holds any field `_read_enrichment`
+    refuses. The refusal is logged by field name and fault, never by value."""
+    try:
+        return _read_enrichment(alert.raw_payload)
+    except _InvalidField as exc:
+        logger.warning(
+            "soar context unknown: alert=%r field=%s fault=%s", alert.alert_id, exc.field, exc.fault
+        )
+        return _unknown_context()
+
+
 def _build_context(
     conn: psycopg.Connection, alert: Alert, *, cfg: config.Config | None = None
 ) -> AlertContext:
     """`_process` passes the `cfg` it already holds, so the switches are read from one object per
-    alert; `None` (a caller outside the pipeline, `test_adversarial`'s) loads it."""
+    alert; `None` (a caller outside the pipeline, `test_adversarial`'s) loads it.
+
+    With `ENRICHMENT_ENABLED=false` no statement is sent: the context is the payload's own
+    (`_context_from_payload`, DEC-208). With it on, the internal lookups, exactly as before."""
     if not (cfg if cfg is not None else config.load()).ENRICHMENT_ENABLED:
-        return _unknown_context()
+        return _context_from_payload(alert)
     asset = lookups.lookup_asset(conn, alert.agent_name, alert.origin_host)
     identity = lookups.lookup_identity(conn, alert.alert_user)
     ioc = lookups.lookup_ioc(
