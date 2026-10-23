@@ -736,8 +736,8 @@ the Measured paragraph of item (ix) in section B.
   `iocs` row. What an alert then knows about its asset, account and addresses is what SOAR wrote in the
   payload's `enrichment` block, schema `1.x` (DEC-208, P12-T02, 23/10/2026): `asset_criticality` from
   `asset.criticality` (`high`, `medium`, `low` or `unknown`; absent is `unknown`), `asset_present` from
-  `asset.in_inventory`, the account's privilege from `asset.user_is_admin` (only for an alert that names an
-  account), the IoC reputation the worst of `ti[].verdict` and `ioc.verdict` (`malicious`, `suspicious`,
+  `asset.in_inventory`, the account's privilege from `asset.user_is_admin` (as given for an alert that names an
+  account; for one that names none a `true` is still kept and a `false` is dropped), the IoC reputation the worst of `ti[].verdict` and `ioc.verdict` (`malicious`, `suspicious`,
   `clean`; no block is `skipped`). SOAR's own scoring flag `asset.critical` is not read. The parser takes the
   account of an alert that names none from `enrichment.asset.user`, without its Windows domain.
 
