@@ -768,12 +768,12 @@ the Measured paragraph of item (ix) in section B.
      (`kb/lookup.py` `rule_matches`: a missing fact never matches). All nine `occurrence_lt: 50` rules are
      `false_positive` rules, one per table that has one, so ① cannot keep a `false_positive` on such an
      alert whatever its asset says: the rule it must cite cannot hold. It can still say `escalate` or
-     `needs_review`. Gate step 2 compares the model's integer `structured_basis.occurrence_count` with the
-     fact, and `null` equals no integer: unless that comparison skips an unknown count (a ruling on
-     `security/gate.py` that P12-T02's report puts to the Director), every ① answer on such an alert is
-     forced to `needs_review` at step 2 and carries `hallucination_flag`, whatever it said. The column
-     `alerts.occurrence_count` keeps its default of `1` for these alerts and the queue, the alert page and
-     the digest show it: it is not the number ① was given.
+     `needs_review`. Gate step 2 compares the model's integer `structured_basis.occurrence_count` only with
+     a known count (DEC-209 item 2): with the fact `null` there is nothing to compare, so a `false_positive`
+     is held back by step 4 alone and carries no `hallucination_flag`, an `escalate` is not downgraded, and
+     a known count the model gets wrong is still flagged. The column `alerts.occurrence_count` keeps its
+     default of `1` for these alerts and the queue, the alert page and the digest show it: it is not the
+     number ① was given.
 
   A missing or unknown context never opens a path to a closed alert (DEC-207 item 4): it did not before
   (a host absent from the inventory blocked auto-close, G8′), and the gate reads `unknown` as a block.
@@ -796,7 +796,7 @@ the Measured paragraph of item (ix) in section B.
 - **Source.** DEC-207 items 1–4 and 7; DEC-208 and its amendment of 23/10;
   `docs/superpowers/plans/2026-10-23-soar-intake.md` (P12-T01, P12-T02);
   `docs/plan/tasks/P12/P12-T01.report.md`, `docs/plan/tasks/P12/P12-T02.report.md`;
-  `backend/app/security/gate.py` `_FP_ASSET_BLOCKS`; `backend/app/soar/pipeline.py`;
+  `backend/app/security/gate.py` `_FP_ASSET_BLOCKS` and step 2; DEC-209; `backend/app/soar/pipeline.py`;
   `backend/app/soar/risk.py`; `backend/app/kb/lookup.py` `rule_matches`.
 - **Affects.** Every figure of this register's evaluation was measured before the three new switches
   existed, with the pipeline's own pull, enrichment and auto-close always on (`DEDUP_ENABLED` aside,
