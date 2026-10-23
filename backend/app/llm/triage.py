@@ -52,6 +52,7 @@ from app.llm.adapter import estimate_tokens
 from app.llm.builder import (
     BULLET,
     ENUM_VALUES,
+    FACT_OCCURRENCE_UNKNOWN,
     HEADING_ALERT,
     HEADING_CONTEXT,
     HEADING_CORRELATION,
@@ -153,7 +154,8 @@ class TriageInput:
     severity: str
     category: str
     categories: tuple[str, ...]
-    occurrence_count: int
+    # `None`: the alert is one representative SOAR sent for a case, so the count is unknown (DEC-208)
+    occurrence_count: int | None
     risk_score: int | None
     description: str
     raw_log: str
@@ -220,6 +222,13 @@ def _identity_privileged(identity_context: Mapping[str, Any]) -> str:
     return IdentityPrivileged(value).value
 
 
+def _occurrence_part(count: int | None) -> str:
+    """The occurrence fact as a `line()` part: `occurrence_count: <n>` through `fact()`, or, when the
+    count is unknown (`None`, DEC-208 item 4), the one template constant that says so. `0` is a count.
+    """
+    return FACT_OCCURRENCE_UNKNOWN if count is None else fact("occurrence_count", int(count))
+
+
 def build_facts(inp: TriageInput, correlation: CorrelationLike | None) -> dict[str, Any]:
     """The dict gate step 2, step 4, the verifier prompt and B1 all read (planning
     decision 7) — exactly these keys; every value closed-set, int or ISO datetime, so
@@ -232,7 +241,7 @@ def build_facts(inp: TriageInput, correlation: CorrelationLike | None) -> dict[s
         "severity": Severity(inp.severity).value,
         "category": Category(inp.category).value,
         "rule_level": int(inp.rule_level),
-        "occurrence_count": int(inp.occurrence_count),
+        "occurrence_count": None if inp.occurrence_count is None else int(inp.occurrence_count),
         "ioc_reputation": _ioc_reputation(inp.ioc_context),
         "asset_criticality": _asset_criticality(inp.asset_context),
         "identity_privileged": _identity_privileged(inp.identity_context),
@@ -292,7 +301,7 @@ def _alert_section(
     parts = [
         fact("severity", Severity(inp.severity)),
         fact("category", Category(inp.category)),
-        fact("occurrence_count", int(inp.occurrence_count)),
+        _occurrence_part(inp.occurrence_count),
     ]
     band = risk_band(inp.risk_score)
     if band is not None:
@@ -563,7 +572,7 @@ def build_verifier_prompt(
         fact("severity", Severity(facts["severity"])),
         fact("category", Category(facts["category"])),
         fact("rule_level", int(facts["rule_level"])),
-        fact("occurrence_count", int(facts["occurrence_count"])),
+        _occurrence_part(facts["occurrence_count"]),
         fact("ioc_reputation", IocReputation(facts["ioc_reputation"])),
         fact("asset_criticality", AssetCriticality(facts["asset_criticality"])),
         fact("identity_privileged", IdentityPrivileged(facts["identity_privileged"])),

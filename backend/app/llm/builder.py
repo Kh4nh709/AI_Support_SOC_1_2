@@ -12,7 +12,14 @@ from app.security import wrap
 
 # ─────────────────────────────────────────────────────────────── Id (§7.1)
 ID_PATTERNS: dict[str, re.Pattern[str]] = {
-    "alert_id": re.compile(r"^\d+\.\d+$"),
+    # DEC-209: two exact shapes. The Wazuh id `<epoch>.<n>`, and the SOAR (Graylog) id
+    # `gl-<event ULID>-<message UUID>`: a Crockford base32 ULID (upper case, no I, L, O or U) and a
+    # lower-case UUID. Exact on purpose: the linter passes any out-of-block token that fits an id
+    # pattern, so a loose second shape would let free text that looks like an id through.
+    "alert_id": re.compile(
+        r"^(?:\d+\.\d+|gl-[0-9A-HJKMNP-TV-Z]{26}"
+        r"-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+    ),
     "rule_id": re.compile(r"^\d+$"),
     "mitre": re.compile(r"^T\d{4}(\.\d{3})?$"),
     "agent_id": re.compile(r"^\d{3,}$"),
@@ -188,6 +195,11 @@ SENTENCES = (
     SENTENCE_REPAIR,
     SENTENCE_PROPOSER_IS_DATA,
 )
+#: DEC-208 item 4: an alert SOAR enriched carries no occurrence count (SOAR sends one representative
+#: per case), and the prompt says so in the place the count would be. It is one template constant,
+#: not a value `fact()` accepts: `fact()` still takes only an Enum, an int, a datetime or an Id, so no
+#: free string and no `None` can reach the outside of a block, and the phrase can say nothing else.
+FACT_OCCURRENCE_UNKNOWN = "occurrence_count: không rõ"
 LABEL_ABSENT = frozenset({"asset", "identity", "ioc"})
 FACT_NAMES = frozenset(
     {
@@ -229,6 +241,7 @@ TEMPLATE_CONSTANTS = frozenset(
     {
         *HEADINGS,
         *SENTENCES,
+        FACT_OCCURRENCE_UNKNOWN,
         *(f"{n}:" for n in FACT_NAMES),
         *(f"{label}:" for label in LABEL_ABSENT),
         SEPARATOR.strip(),

@@ -727,49 +727,86 @@ the Measured paragraph of item (ix) in section B.
   role refusals that reached the check, not of every refused attempt, so it understates a client that
   sends broken JSON. No claim about access to data.
 
-### (xlvi) · With the SOAR intake switches off, every alert carries the "unknown" context: ① cannot close an alert, the risk score is the severity alone, the auto-close digest is empty
+### (xlvi) · With the SOAR intake switches off, ① cannot suggest closing an alert on an unknown context or an unknown occurrence count, the risk score is only as good as SOAR's context, and the auto-close digest is empty
 
-- **Statement.** DEC-207 (23/10/2026) adds three switches next to `DEDUP_ENABLED`, `PULL_ENABLED`,
+- **Statement.** DEC-207 (23/10/2026) adds three switches next to `DEDUP_ENABLED`: `PULL_ENABLED`,
   `AUTOCLOSE_ENABLED` and `ENRICHMENT_ENABLED`, all `true` by default, for a stream in which an external
   SOAR/n8n flow has already enriched, grouped and closed the alerts and posts each finished alert to
   `POST /webhook/alerts`. With `ENRICHMENT_ENABLED=false` the pipeline reads no `assets`, `identities` or
-  `iocs` row and every alert is written with the vocabulary's "unknown" context: `asset_present` false,
-  `asset_criticality` `unknown`, account privilege `null`, IoC reputation and the three `lookup_status`
-  values `skipped`. The payload's own context is not read (P12-T02 is blocked on the team's schema, which
-  has not been delivered). Three consequences follow, and they stay until it is:
-  1. `asset_criticality = unknown` is in the gate's `_FP_ASSET_BLOCKS` (`security/gate.py`), so step 4
-     forces every ① `false_positive` to `needs_review`; and the `false_positive` rule of each decision
-     table that has one (`sbf-1`, `bf-1`, `c2b-1` and the others under `kb/decision_tables/`) lists
-     `asset_criticality: [low, medium]`, so no playbook rule can hold on "unknown" facts either. ① can
-     still say `escalate` or `needs_review`; it cannot suggest closing an alert as a false positive.
-  2. The risk score is the severity base alone (`critical` 70, `high` 50, `medium` 28, `low` 10): the asset,
-     account and IoC addends are 0, and the occurrence addend is 0 because the pipeline passes an
-     occurrence count of 1 (`soar/pipeline.py`). The Tier-1 queue's order, which is risk first, then
-     arrival, is therefore by severity and arrival.
+  `iocs` row. What an alert then knows about its asset, account and addresses is what SOAR wrote in the
+  payload's `enrichment` block, schema `1.x` (DEC-208, P12-T02, 23/10/2026): `asset_criticality` from
+  `asset.criticality` (`high`, `medium`, `low` or `unknown`; absent is `unknown`), `asset_present` from
+  `asset.in_inventory`, the account's privilege from `asset.user_is_admin` (as given for an alert that names an
+  account; for one that names none a `true` is still kept and a `false` is dropped), the IoC reputation the worst of `ti[].verdict` and `ioc.verdict` (`malicious`, `suspicious`,
+  `clean`; no block is `skipped`). SOAR's own scoring flag `asset.critical` is not read. The parser takes the
+  account of an alert that names none from `enrichment.asset.user`, without its Windows domain.
+
+  The **"unknown" context** is what an alert has when its payload has no valid block: `enrichment` absent, a
+  `schema_version` that is not `1.<n>`, or any field outside its vocabulary or of the wrong type. One such
+  field makes the whole context unknown, never part of it (a half-trusted context is not built, so a
+  `malicious` verdict next to a bad `criticality` is dropped too): `asset_present` false, `asset_criticality`
+  `unknown`, account privilege `null`, IoC reputation and the three `lookup_status` values `skipped`. The log
+  names the field and never its value, and the alert is accepted. Four consequences follow:
+  1. `asset_criticality` of `unknown` or `high` is in the gate's `_FP_ASSET_BLOCKS` (`security/gate.py`), so
+     step 4 forces every ① `false_positive` on such an alert to `needs_review`; and the `false_positive`
+     rule of each decision table that has one (`sbf-1`, `bf-1`, `c2b-1` and the others under
+     `kb/decision_tables/`) lists `asset_criticality: [low, medium]`, so no playbook rule can hold on
+     "unknown" facts either. An alert with a valid context of `medium` or `low` is no longer blocked by its
+     asset; in the lab SOAR rates AD-server and pfSense `high` and the Windows endpoint `medium`.
+  2. The risk score is the severity base alone (`critical` 70, `high` 50, `medium` 28, `low` 10) for an
+     alert with the "unknown" context. With a valid one the asset (`high` 30, `medium` 10), account
+     (privileged 15) and IoC (`malicious` 25, `suspicious` 10) addends are scored, capped at +25 as before.
+     The occurrence addend is 0 for every alert of this stream, because the pipeline passes a count of 1.
   3. With `AUTOCLOSE_ENABLED=false` no alert is auto-closed by this system, so the auto-close digest has no
      row to review (the rules page and the `autoclose_rules` table stay), and the G8′ hard blocks, which
      go with the rules, are not evaluated: the decision to close is the stream's.
+  4. **The occurrence count of an alert SOAR enriched is unknown** (DEC-208 item 4). SOAR posts one
+     representative per case (one payload per `dedup_key` per hour), so this system cannot count the alerts
+     a case holds, and neither a count of `1` nor the burst count (DEC-165) would be true. The facts ① works
+     from carry `occurrence_count = null`, the prompt says `occurrence_count: không rõ`, and no
+     `occurrence_lt` or `occurrence_gte` condition of the decision tables can hold on it
+     (`kb/lookup.py` `rule_matches`: a missing fact never matches). All nine `occurrence_lt: 50` rules are
+     `false_positive` rules, one per table that has one, so ① cannot keep a `false_positive` on such an
+     alert whatever its asset says: the rule it must cite cannot hold. It can still say `escalate` or
+     `needs_review`. Gate step 2 compares the model's integer `structured_basis.occurrence_count` only with
+     a known count (DEC-209 item 2): with the fact `null` there is nothing to compare, so a `false_positive`
+     is held back by step 4 alone and carries no `hallucination_flag`, an `escalate` is not downgraded, and
+     a known count the model gets wrong is still flagged. The column `alerts.occurrence_count` keeps its
+     default of `1` for these alerts and the queue, the alert page and the digest show it: it is not the
+     number ① was given.
 
   A missing or unknown context never opens a path to a closed alert (DEC-207 item 4): it did not before
   (a host absent from the inventory blocked auto-close, G8′), and the gate reads `unknown` as a block.
-- **Measured.** By construction, and pinned by tests rather than by a figure (P12-T01, 23/10, scratch
-  PostgreSQL 16.2): `backend/tests/test_pipeline.py` runs the same alert through the pipeline and ①'s gate
-  with the switch off and on, with the same fake answer, and the `false_positive` is forced to
-  `needs_review` at step 4 in one and kept in the other; it records the statements sent and finds none
-  that names `assets`, `identities` or `iocs` with the switch off, and the score equals the severity base
-  (28 for a `medium` alert). `backend/tests/test_soar_intake_switches.py` runs the stream with all four
-  switches off through the queue, the audit list, the usage list, the overview and the digest. No
-  evaluation figure was produced with a switch off.
-- **Source.** DEC-207 items 1–4 and 7; `docs/superpowers/plans/2026-10-23-soar-intake.md` (P12-T01, and
-  P12-T02 for what replaces the "unknown" context); `docs/plan/tasks/P12/P12-T01.report.md`;
-  `backend/app/security/gate.py` `_FP_ASSET_BLOCKS`; `backend/app/soar/risk.py`.
+- **Measured.** By construction, and pinned by tests rather than by a figure (P12-T01 and P12-T02, 23/10,
+  scratch PostgreSQL 16.2). `backend/tests/test_pipeline.py` runs the same alert through the pipeline and
+  ①'s gate with the switch off and on, with the same fake answer: the `false_positive` is forced to
+  `needs_review` at step 4 in one and kept in the other; it records the statements sent and finds none that
+  names `assets`, `identities` or `iocs` with the switch off. `backend/tests/test_soar_context.py` maps the
+  two real samples the SOAR team sent (a Defender alert, a pfSense port scan) and the variants derived
+  from them (130 cases, 5 of them on the database): every verdict, the worst of several, the C202 `ioc` block, and, for each field, a value outside its
+  vocabulary or of the wrong type, a `2.0` schema and a missing block, each of which gives the whole
+  "unknown" context, with the log naming the field and never the value; it also records that no statement
+  reaches the inventory tables. `backend/tests/test_soar_occurrence.py` shows that none of the nine
+  `occurrence_lt: 50` rules matches an unknown count (and that each matches a count of 49), that the prompts
+  say `không rõ` through the builder, that the burst count is not computed for such an alert, and that a
+  `false_positive` on one ends as `needs_review`. `backend/tests/test_soar_intake_switches.py` and
+  `test_soar_context_blind_arm.py` run the stream with all four switches off, with and without a payload
+  context, through the queue, the audit list, the usage list, the overview and the digest. No evaluation
+  figure was produced with a switch off.
+- **Source.** DEC-207 items 1–4 and 7; DEC-208 and its amendment of 23/10;
+  `docs/superpowers/plans/2026-10-23-soar-intake.md` (P12-T01, P12-T02);
+  `docs/plan/tasks/P12/P12-T01.report.md`, `docs/plan/tasks/P12/P12-T02.report.md`;
+  `backend/app/security/gate.py` `_FP_ASSET_BLOCKS` and step 2; DEC-209; `backend/app/soar/pipeline.py`;
+  `backend/app/soar/risk.py`; `backend/app/kb/lookup.py` `rule_matches`.
 - **Affects.** Every figure of this register's evaluation was measured before the three new switches
   existed, with the pipeline's own pull, enrichment and auto-close always on (`DEDUP_ENABLED` aside,
   DEC-165), and describes that configuration only: none of it is a claim about a stream run with the
   switches off. In particular ①'s `false_positive` rate and precision of `close` (xvi), and the auto-close
   control that was not built (xxii), say nothing about the SOAR configuration, where ① cannot suggest
   closing and the system closes nothing. The risk-score ordering of the queue is, in that configuration, an
-  ordering by severity.
+  ordering by severity for an alert whose payload gave no valid context, and by severity and SOAR's asset,
+  account and IoC context for one that did. The occurrence count the analyst sees for such an alert is 1,
+  and it is not ①'s.
 
 ## F. What the thesis must not claim
 

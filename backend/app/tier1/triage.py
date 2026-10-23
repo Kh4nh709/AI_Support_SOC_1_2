@@ -99,7 +99,16 @@ _ALERT_COLUMNS = (
     "first_seen_at",
     "last_seen_at",
 )
-_SELECT_ALERT_SQL = f"SELECT {', '.join(_ALERT_COLUMNS)} FROM alerts WHERE alert_id = %s"
+#: One value after the 26 columns: whether the alert's own document carries SOAR's `enrichment`
+#: block (DEC-208 item 4). Such an alert was one representative of a case SOAR grouped itself, so
+#: its occurrence count is unknown and `_load` says so (`None`). Read from the document, not from a
+#: switch, so that every reader of `_load` (`evaluate_alert`, the job, the evaluation harness's
+#: `b1_facts`) sees the same count whatever `.env` says, and a gold alert from before the SOAR
+#: stream keeps the count it was built with.
+_SOAR_ENRICHED_SQL = "raw_payload ? 'enrichment'"
+_SELECT_ALERT_SQL = (
+    f"SELECT {', '.join(_ALERT_COLUMNS)}, {_SOAR_ENRICHED_SQL} FROM alerts WHERE alert_id = %s"
+)
 
 _DEFAULT_ASSET_CONTEXT = {"criticality": "unknown"}
 _DEFAULT_LOOKUP_STATUS = {"asset": "skipped", "identity": "skipped", "ioc": "skipped"}
@@ -130,7 +139,8 @@ class _AlertRow:
     severity: str
     category: str
     categories: tuple[str, ...]
-    occurrence_count: int
+    # `None`: SOAR's `enrichment` block is in the alert's document (`_SOAR_ENRICHED_SQL`)
+    occurrence_count: int | None
     risk_score: int | None
     description: str
     raw_log: str
@@ -169,7 +179,9 @@ def _raise_idle_timeout(conn: psycopg.Connection, cfg: config.Config) -> None:
 
 
 def _load(conn: psycopg.Connection, alert_id: str) -> _AlertRow | None:
-    """The 26-column row job (1) needs, or `None` if the alert does not exist.
+    """The 26-column row job (1) needs, or `None` if the alert does not exist. The 27th value the
+    select returns is not a column of the row: it turns `occurrence_count` into `None` for an alert
+    whose document carries SOAR's `enrichment` block (`_SOAR_ENRICHED_SQL`).
 
     A `received` alert can never have a `triage` job (it has not reached
     `queued_tier1` yet), so the four `*_context`/`lookup_status` columns are never
@@ -179,7 +191,10 @@ def _load(conn: psycopg.Connection, alert_id: str) -> _AlertRow | None:
     row = conn.execute(_SELECT_ALERT_SQL, (alert_id,)).fetchone()
     if row is None:
         return None
-    values = dict(zip(_ALERT_COLUMNS, row, strict=True))
+    *columns, soar_enriched = row
+    values = dict(zip(_ALERT_COLUMNS, columns, strict=True))
+    if soar_enriched:
+        values["occurrence_count"] = None
     if values["asset_context"] is None:
         _log(
             {"triage": "defensive_default_context", "alert_id": alert_id, "column": "asset_context"}
@@ -598,8 +613,11 @@ def evaluate_alert(
     # silence `occurrence_lt` / `occurrence_gte`. The facts, the prompt and the verifier
     # then carry the burst count under the same name; with grouping on, the row's own
     # count, exactly as before.
+    # DEC-208 item 4: an alert SOAR enriched has no count (`_load` says `None`): not 1, and
+    # not the burst count either, which would count only the representatives that reached
+    # this system.
     occurrence_count = row.occurrence_count
-    if not cfg.DEDUP_ENABLED:
+    if occurrence_count is not None and not cfg.DEDUP_ENABLED:
         occurrence_count = burst_count(conn, alert_id, cfg)
 
     inp = TriageInput(

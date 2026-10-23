@@ -1,0 +1,739 @@
+{
+  "id": "gl-01M539BAX06VRSYZQ35BR1XJ1D-46b75f26-c9a7-11f1-ae13-9a661b530912",
+  "timestamp": "2026-10-17T04:19:30.692+0700",
+  "rule": {
+    "level": 10,
+    "description": "Port Scan: External Host Probing Many Ports (pfSense)",
+    "id": "100190",
+    "mitre": {
+      "id": [
+        "T1046"
+      ],
+      "tactic": [
+        "Discovery"
+      ],
+      "technique": [
+        "Network Service Discovery"
+      ]
+    },
+    "firedtimes": 1,
+    "mail": false,
+    "groups": [
+      "pfsense",
+      "firewall",
+      "recon",
+      "custom"
+    ],
+    "frequency": 30
+  },
+  "agent": {
+    "id": "000",
+    "name": "pfSense.home.arpa"
+  },
+  "manager": {
+    "name": "graylog"
+  },
+  "decoder": {
+    "name": "pf"
+  },
+  "location": "pfsense-filterlog",
+  "input": {
+    "type": "log"
+  },
+  "data": {
+    "srcip": "79.79.78.202",
+    "dstip": "79.79.78.75",
+    "srcport": "48509",
+    "dstport": "993",
+    "protocol": "tcp",
+    "action": "block",
+    "interface": "em1",
+    "direction": "in",
+    "tcp_flags": "S",
+    "rule_tracker": "1000000103"
+  },
+  "full_log": "<134>Oct 16 21:19:30 filterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,48,23087,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,993,0,S,91263131,,1024,,mss",
+  "previous_output": "filterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,42,57120,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,3306,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,49,19170,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,8080,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,39,49888,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,1723,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,49,45750,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,5900,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,58,45543,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,139,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,56,4027,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,1720,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,41,8906,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,80,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,40,33836,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,22,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,52,43649,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,8888,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,39,64947,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,445,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,52,43501,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48511,445,0,S,91394201,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,39,4852,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48511,139,0,S,91394201,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,43,21409,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48511,8888,0,S,91394201,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,37,10173,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48511,5900,0,S,91394201,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,49,64869,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48511,1720,0,S,91394201,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,57,9686,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48511,3306,0,S,91394201,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,38,49295,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48511,22,0,S,91394201,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,38,5154,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48511,8080,0,S,91394201,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,37,43913,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48511,80,0,S,91394201,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,37,168,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48511,1723,0,S,91394201,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,48,10933,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,199,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,42,36392,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,587,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,53,19938,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,53,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,45,56462,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,995,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,59,11236,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,1025,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,47,41783,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,3389,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,48,32366,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,25,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,49,61012,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,443,0,S,91263131,,1024,,mss\nfilterlog[21588]: 1,6,,1000000103,em1,match,block,in,4,0x0,,41,36800,0,none,6,tcp,44,79.79.78.202,79.79.78.75,48509,143,0,S,91263131,,1024,,mss",
+  "graylog": {
+    "event_id": "01M539BAX06VRSYZQ35BR1XJ1D",
+    "event_definition_id": "6ad20d2f8598ce1877612ebf",
+    "event_definition_title": "100190 - Port Scan: External Host Probing Many Ports (pfSense)",
+    "message_id": "46b75f26-c9a7-11f1-ae13-9a661b530912",
+    "index": "graylog_1",
+    "source_log": "backlog",
+    "event_fields": {
+      "rule_id": "100190",
+      "src_ip": "79.79.78.202",
+      "mitre_tactic": "Discovery",
+      "agent_name": "pfSense",
+      "mitre": "T1046",
+      "rule_level": "10",
+      "rule_groups": "pfsense,firewall,recon,custom",
+      "category": "Discovery",
+      "mitre_technique": "Network Service Discovery"
+    },
+    "aggregation": {
+      "card_dst_port": 20
+    }
+  },
+  "enrichment": {
+    "schema_version": "1.0",
+    "scenario": {
+      "id": "SC03",
+      "name": "External port scan (pfSense)",
+      "mitre": [
+        "T1046"
+      ]
+    },
+    "triage": {
+      "score": 50,
+      "score_base": 40,
+      "score_signal": 10,
+      "score_ti": 0,
+      "score_asset": 0,
+      "score_user": 0,
+      "rule_confidence": "medium",
+      "signal_codes": [
+        "external_port_scan"
+      ],
+      "signal_text": "79.79.78.202 sent TCP SYN to 20 distinct ports on the WAN within 1 minute (blocked by pfSense)"
+    },
+    "case": {
+      "dedup_key": "SC03|pfSense||79.79.78.202|20261017-04",
+      "thehive_alert_id": "~42799280",
+      "case_number": 55,
+      "case_id": "~82747640"
+    },
+    "soar": {
+      "planned_action": {
+        "type": "block_ip",
+        "target": "79.79.78.202",
+        "tier": "auto",
+        "mode": "act_first"
+      }
+    },
+    "asset": {
+      "host": "pfSense.home.arpa",
+      "in_inventory": true,
+      "criticality": "high",
+      "critical": false,
+      "user": null,
+      "user_is_admin": false,
+      "src_ip": "79.79.78.202",
+      "src_is_internal": false
+    },
+    "history": {
+      "rule_7d_total": 4,
+      "rule_7d_host": 4,
+      "rule_7d_hosts": 1,
+      "last_seen": "2026-10-16T18:13:31.570Z",
+      "first_seen_host": false,
+      "truncated": false
+    },
+    "evidence": {
+      "context_logs": [
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "9593",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "15003",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1049",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "9900",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "50636",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "2251",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1310",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "425",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1131",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1218",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "8099",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "2119",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1029",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "50006",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "14000",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "2399",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "8100",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "5001",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "3369",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1083",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "41511",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "5555",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1434",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "5033",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "901",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "5440",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "8011",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1033",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "687",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:45.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "458",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "88",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "7001",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "5678",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "3005",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "631",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1002",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1047",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "2160",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1034",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1023",
+          "proto": "tcp",
+          "pf_action": "block"
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "12345",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1580",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "3351",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "8400",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1052",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "30",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "311",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1043",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "19101",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1098",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "9100",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1054",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "1065",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "20005",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "6567",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "2038",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "306",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "2725",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "15742",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        },
+        {
+          "ts": "2026-10-16T21:19:46.000Z",
+          "src_ip": "79.79.78.202",
+          "dst_ip": "79.79.78.75",
+          "dst_port": "714",
+          "proto": "tcp",
+          "pf_action": "block",
+          "count": 2
+        }
+      ],
+      "context_window": {
+        "from": "2026-10-16T21:09:30.692Z",
+        "to": "2026-10-16T21:21:30.692Z",
+        "query": "src_ip:\"79.79.78.202\"",
+        "found": 300,
+        "unique": 180,
+        "included": 60
+      },
+      "scan": {
+        "sampled_packets": 300,
+        "distinct_dst_ports_sampled": 180,
+        "ports_sampled": [
+          "2010",
+          "10617",
+          "9917",
+          "3971",
+          "5560",
+          "5432",
+          "2500",
+          "19350",
+          "5190",
+          "1075",
+          "3211",
+          "5963",
+          "22939",
+          "32779",
+          "6565",
+          "49165",
+          "2126",
+          "2170",
+          "7938",
+          "7496",
+          "1048",
+          "49155",
+          "2382",
+          "6881",
+          "9929",
+          "4002",
+          "8002",
+          "3404",
+          "65129",
+          "6667",
+          "3283",
+          "10002",
+          "1035",
+          "5925",
+          "1085",
+          "1801",
+          "1037",
+          "5054",
+          "2607",
+          "3000",
+          "8031",
+          "11111",
+          "1984",
+          "7103",
+          "1104",
+          "8443",
+          "2381",
+          "500",
+          "8292",
+          "3690"
+        ],
+        "dst_ips": [
+          "79.79.78.75"
+        ],
+        "actions": [
+          "block"
+        ]
+      }
+    },
+    "ti": [
+      {
+        "type": "ip",
+        "value": "79.79.78.202",
+        "looked_up": true,
+        "verdict": "clean",
+        "misp_suspicious_or_malicious": false,
+        "abuseipdb_malicious": false
+      }
+    ]
+  },
+  "timing": {
+    "event_time": "2026-10-17T04:19:30.692+0700",
+    "playbooks_started": "2026-10-23T11:02:22.370Z",
+    "sent_at": "2026-10-23T11:02:23.681Z"
+  }
+}

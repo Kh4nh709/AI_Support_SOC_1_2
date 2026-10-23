@@ -135,8 +135,8 @@ class Config:
     # names none of them behaves exactly as before; the Owner turns one off when SOAR owns
     # that step. PULL_ENABLED=false: no `pull` job is seeded and a pending one is not re-armed.
     # AUTOCLOSE_ENABLED=false: no rule is loaded or evaluated, every non-duplicate alert is
-    # queued for Tier 1. ENRICHMENT_ENABLED=false: no `assets`/`identities`/`iocs` lookup, every
-    # alert carries the "unknown" context.
+    # queued for Tier 1. ENRICHMENT_ENABLED=false: no `assets`/`identities`/`iocs` lookup; the
+    # context comes from the payload's `enrichment` block (DEC-208), else the unknown context.
     PULL_ENABLED: bool = True
     AUTOCLOSE_ENABLED: bool = True
     ENRICHMENT_ENABLED: bool = True

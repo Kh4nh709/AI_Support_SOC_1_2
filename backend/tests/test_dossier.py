@@ -21,6 +21,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from app.llm import builder as B
 from app.security import linter
 from app.tier2 import dossier
 from psycopg.types.json import Jsonb
@@ -102,8 +103,9 @@ def _insert_alert(
     closed_at: datetime | None = None,
     sealed_at: datetime | None = None,
     raw_payload: dict | None = None,
+    alert_id: str | None = None,
 ) -> str:
-    alert_id = _next_alert_id()
+    alert_id = alert_id or _next_alert_id()
     alert_time = alert_time or _BASE_TIME
     conn.execute(
         "INSERT INTO alerts (alert_id, rule_id, rule_level, severity, description, agent_name, "
@@ -1570,6 +1572,60 @@ def test_id_fact_wraps_a_non_conforming_id_instead_of_raising():
     rendered = dossier._id_fact("alert_id", "alert_id", "not-a-valid-id", "h" * 16)
     assert "not-a-valid-id" in rendered
     assert "<untrusted_data" in rendered
+
+
+_GRAYLOG_ID = "gl-01M539BAX06VRSYZQ35BR1XJ1D-46b75f26-c9a7-11f1-ae13-9a661b530912"
+
+
+def test_id_fact_renders_a_graylog_alert_id_as_a_fact():
+    """DEC-209: the SOAR alert id fits the second shape of `alert_id`, so ②'s dossier says it as a
+    `fact()` instead of wrapping it as data (the non-conforming case above)."""
+    rendered = dossier._id_fact("alert_id", "alert_id", _GRAYLOG_ID, "h" * 16)
+
+    assert rendered == f"alert_id: {_GRAYLOG_ID}"
+    assert "<untrusted_data" not in rendered
+
+
+@pytest.mark.db
+def test_a_dossier_names_a_graylog_alert_id_as_a_fact_not_a_wrapped_block(db):
+    """The whole build, on a case whose head keeps the `gl-…` id SOAR gave it: the id is a bare
+    `alert_id:` fact in the cluster block and the correlation block, no wrapped block holds it as an
+    `alert_id:` line, and the linter passes the dossier. (The case header names the trigger alert only
+    when an escalation event exists, which this fixture does not write.)"""
+    user = _make_user(db)
+    case_id = _make_case(db, user)
+    _make_head(db, case_id, user, alert_id=_GRAYLOG_ID, raw_log="benign log line")
+    nonce = "gl" + "z" * 14
+
+    result = dossier.build(db, case_id, nonce=nonce)
+
+    fact_line = f"alert_id: {_GRAYLOG_ID}"
+    outside_blocks = re.sub(
+        r"<untrusted_data nonce=.*?</untrusted_data nonce=[^>]*>", "", result.text, flags=re.DOTALL
+    )
+    assert fact_line in outside_blocks
+    for heading, next_heading in (
+        (dossier.HEADING_CLUSTERS, dossier.HEADING_TIMELINE),
+        (dossier.HEADING_CORRELATION, dossier.HEADING_TIER1),
+    ):
+        part = re.sub(
+            r"<untrusted_data nonce=.*?</untrusted_data nonce=[^>]*>",
+            "",
+            _section(result.text, heading, next_heading),
+            flags=re.DOTALL,
+        )
+        assert fact_line in part, heading
+    for block in re.findall(
+        r"<untrusted_data nonce=.*?</untrusted_data nonce=[^>]*>", result.text, flags=re.DOTALL
+    ):
+        assert fact_line not in block
+    violations = linter.lint(
+        result.text,
+        nonce=nonce,
+        constants=B.TEMPLATE_CONSTANTS | dossier.DOSSIER_TEMPLATE_CONSTANTS,
+        enums=B.ENUM_VALUES,
+    )
+    assert violations == []
 
 
 @pytest.mark.db

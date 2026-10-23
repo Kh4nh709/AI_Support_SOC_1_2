@@ -18,6 +18,10 @@ instead of `data.*` / `full_log`. `_windows_fields()` reads them, and they fill
 only the fields the Linux shape left empty — a Linux alert has no `data.win`
 mapping and never reaches that code (P9-T01, DEC-149).
 
+A SOAR payload (DEC-208) is the same document with an `enrichment` block added. Its only reading
+here is `enrichment.asset.user`, the account's name when the parser found none (`_enrichment_user`);
+what the rest of the block means for the alert's context is `soar/pipeline.py`'s.
+
 Pure (R1): no clock, no DB, no network. `parse_wazuh_alert()` is total (R2) —
 it never raises on the classification path; it rejects only when the alert
 has no identity (`id`, `rule.id`, `rule.description` or a parseable
@@ -199,6 +203,22 @@ def _win_json(win: Mapping) -> str:
         return ""
 
 
+def _enrichment_user(alert_obj: Mapping) -> str | None:
+    """The account SOAR names in `enrichment.asset.user`, without its Windows domain
+    (`FPT\\hr01` -> `hr01`, `hr01` unchanged), or `None` (P12-T02, DEC-208 item 5).
+
+    A fallback for an alert in which the parser found no account of its own: SOAR already picks
+    the right field per scenario. Only when `enrichment` and `asset` are mappings and `user` is a
+    string with something left after the domain is dropped; anything else is "no account". The
+    schema version is not asked: whether to trust the block is the pipeline's decision, and an
+    account's name is not a verdict."""
+    asset = _dict(_dict(alert_obj.get("enrichment")).get("asset"))
+    user = asset.get("user")
+    if not isinstance(user, str):
+        return None
+    return user.strip().rpartition("\\")[2].strip() or None
+
+
 def _windows_fields(data: Mapping) -> _WindowsFields | None:
     """srcip/dstip/ports/user/raw_log from `data.win` (card P9-T01), or `None` when
     `data.win` is not a mapping — the case of every Linux alert.
@@ -290,6 +310,8 @@ def parse_wazuh_alert(doc: Mapping) -> ParseResult:
         src_port = src_port or windows.src_port
         dst_port = dst_port or windows.dst_port
         alert_user = alert_user or windows.user
+    # P12-T02: an alert SOAR enriched may name the account only there (DEC-208 item 5).
+    alert_user = alert_user or _enrichment_user(alert_obj)
 
     decoder_obj = _dict(alert_obj.get("decoder"))
     decoder = decoder_obj.get("name") or decoder_obj.get("parent") or None
