@@ -405,11 +405,8 @@ def test_a_soar_alert_is_loaded_with_an_unknown_count(db, stream) -> None:
 
     assert row is not None
     assert row.occurrence_count is None
-    assert db.execute(
-        "SELECT occurrence_count FROM alerts WHERE alert_id = %s", (_FP_ID,)
-    ).fetchone() == (
-        1,
-    )  # the column keeps its default; only ①'s reading of it changed
+    stored = db.execute("SELECT occurrence_count FROM alerts WHERE alert_id = %s", (_FP_ID,))
+    assert stored.fetchone() == (1,)  # the column keeps its default; only ①'s reading changed
 
 
 @pytest.mark.db
@@ -505,9 +502,8 @@ def test_an_alert_without_the_block_keeps_the_count_it_had(db, stream, monkeypat
     assert off.facts["occurrence_count"] == 1 and isinstance(off.facts["occurrence_count"], int)
     assert on.facts["occurrence_count"] == 1
     assert calls == [alert_id]  # once, for the switch-off run only
-    assert (
-        "không rõ" not in off.built.prompt.user and "occurrence_count: 1" in off.built.prompt.user
-    )
+    assert "occurrence_count: 1" in off.built.prompt.user
+    assert "không rõ" not in off.built.prompt.user
 
 
 @pytest.mark.db
