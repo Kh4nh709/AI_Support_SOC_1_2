@@ -144,4 +144,10 @@ def receive(conn: psycopg.Connection, body: bytes, source_ip: str, cfg: Config) 
         raise Duplicate()
     intake_id = row[0]
     enqueue(conn, "pipeline", str(intake_id))
+    # DEC-207 item 2: an accepted alert is proof the source is alive. With `PULL_ENABLED=false`
+    # the puller no longer moves `source_heartbeat`, and without this stamp the `heartbeat`
+    # health check would report a lost source on a stream that is flowing. Same helper, same
+    # row, same two columns the puller writes for a pulled alert. After the conflict check
+    # above, on purpose: a `Duplicate` (409) proves nothing new and stamps nothing.
+    _update_heartbeat(conn, saw_alert=True)
     return Receipt(kind="alert", intake_id=intake_id)

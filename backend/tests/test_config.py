@@ -234,6 +234,86 @@ class TestDedupEnabled:
         assert "\nDEDUP_ENABLED=" in example
 
 
+_SOAR_SWITCHES = ("PULL_ENABLED", "AUTOCLOSE_ENABLED", "ENRICHMENT_ENABLED")
+
+
+@pytest.mark.parametrize("key", _SOAR_SWITCHES)
+class TestSoarIntakeSwitches:
+    """P12-T01 / DEC-207: three bool keys next to `DEDUP_ENABLED`, every one defaulting to
+    `true`, so a `.env` that names none of them behaves exactly as before; the Owner turns one
+    off in the live `.env` when the SOAR stream owns that step. Parsed by the same `as_bool`
+    as `DEDUP_ENABLED`: anything but a recognised spelling stops the start-up naming the key."""
+
+    def test_the_key_is_a_bool_config_field_defaulting_to_true(self, key):
+        field = {f.name: f for f in dataclasses.fields(Config)}[key]
+        assert field.default is True
+        assert getattr(Config(), key) is True
+
+    def test_default_is_true_when_unset(self, monkeypatch, key):
+        monkeypatch.delenv(key, raising=False)
+        assert getattr(load(env_file="/dev/null"), key) is True
+
+    def test_empty_value_falls_back_to_the_default_true(self, monkeypatch, key):
+        monkeypatch.setenv(key, "")
+        assert getattr(load(env_file="/dev/null"), key) is True
+
+    @pytest.mark.parametrize("raw", ["false", "False", "FALSE", "0", "no", "off", " false "])
+    def test_false_spellings_turn_it_off(self, monkeypatch, key, raw):
+        monkeypatch.setenv(key, raw)
+        assert getattr(load(env_file="/dev/null"), key) is False
+
+    @pytest.mark.parametrize("raw", ["true", "True", "TRUE", "1", "yes", "on"])
+    def test_true_spellings_keep_it_on(self, monkeypatch, key, raw):
+        monkeypatch.setenv(key, raw)
+        assert getattr(load(env_file="/dev/null"), key) is True
+
+    @pytest.mark.parametrize("raw", ["flase", "2", "enabled", "nope"])
+    def test_anything_else_raises_naming_the_key_never_a_silent_default(
+        self, monkeypatch, key, raw
+    ):
+        monkeypatch.setenv(key, raw)
+        with pytest.raises(ConfigError, match=key):
+            load(env_file="/dev/null")
+
+    def test_dotenv_file_is_read_like_every_other_key(self, tmp_path, monkeypatch, key):
+        monkeypatch.delenv(key, raising=False)
+        env_path = write_env(tmp_path, f"{key}=false  # DEC-207, live\n")
+        assert getattr(load(env_file=env_path), key) is False
+
+    def test_a_real_env_var_wins_over_the_file(self, tmp_path, monkeypatch, key):
+        monkeypatch.setenv(key, "true")
+        env_path = write_env(tmp_path, f"{key}=false\n")
+        assert getattr(load(env_file=env_path), key) is True
+
+    def test_one_switch_does_not_move_the_others(self, tmp_path, monkeypatch, key):
+        for other in (*_SOAR_SWITCHES, "DEDUP_ENABLED"):
+            monkeypatch.delenv(other, raising=False)
+        env_path = write_env(tmp_path, f"{key}=false\n")
+        cfg = load(env_file=env_path)
+        for other in (*_SOAR_SWITCHES, "DEDUP_ENABLED"):
+            assert getattr(cfg, other) is (other != key), other
+
+    def test_it_is_a_pack_key_and_an_env_example_key(self, key):
+        assert key in gen_env_example.keys_from_pack()
+        example = (pathlib.Path(__file__).resolve().parents[2] / ".env.example").read_text(
+            encoding="utf-8"
+        )
+        assert f"\n{key}=true" in example
+
+
+def test_with_no_soar_switch_named_the_config_is_the_one_before_dec_207(monkeypatch):
+    """A `.env` that names none of the four flags: all of them on, which is `a0398c2`'s behaviour."""
+    for key in (*_SOAR_SWITCHES, "DEDUP_ENABLED"):
+        monkeypatch.delenv(key, raising=False)
+    cfg = load(env_file="/dev/null")
+    assert (cfg.DEDUP_ENABLED, cfg.PULL_ENABLED, cfg.AUTOCLOSE_ENABLED, cfg.ENRICHMENT_ENABLED) == (
+        True,
+        True,
+        True,
+        True,
+    )
+
+
 class TestStartupAssertion:
     def test_max_payload_not_greater_than_raw_log_raises_naming_both_keys(self, monkeypatch):
         monkeypatch.setenv("MAX_PAYLOAD_BYTES", "1000")

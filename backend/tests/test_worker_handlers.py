@@ -17,6 +17,7 @@ import sys
 
 import pytest
 from app.infra import puller
+from app.infra.config import Config
 from app.infra.errors import PermanentError
 from app.soar import pipeline
 from app.tier1 import digest, triage
@@ -97,7 +98,9 @@ def test_main_passes_timeouts_to_run_forever(monkeypatch):
         captured.setdefault("ensure_scheduled_calls", []).append(conn)
 
     monkeypatch.setattr(worker_module, "run_forever", fake_run_forever)
-    monkeypatch.setattr(worker_module.config, "load", lambda: None)
+    # P12-T01 (DEC-207): `main()` reads `PULL_ENABLED` from the loaded config, so the stub is
+    # the default `Config()` (every switch on), not `None`.
+    monkeypatch.setattr(worker_module.config, "load", lambda: Config())
     monkeypatch.setattr(worker_module.db, "connect", lambda: fake_conn)
     monkeypatch.setattr(worker_module, "enqueue", fake_enqueue)
     monkeypatch.setattr(worker_module.digest, "ensure_scheduled", fake_ensure_scheduled)
@@ -108,6 +111,78 @@ def test_main_passes_timeouts_to_run_forever(monkeypatch):
     assert captured["handlers"] is worker_module.HANDLERS
     assert enqueued == [("pull", "indexer"), ("health", "system")]
     assert captured["ensure_scheduled_calls"] == [fake_conn]
+
+
+# ---------------------------------------------------------------------------
+# P12-T01 / DEC-207 — `PULL_ENABLED`: the start-up seeds no `pull` row when it is off
+# ---------------------------------------------------------------------------
+
+
+class _SeedConn:
+    def commit(self) -> None:
+        pass
+
+
+def _run_main(monkeypatch, *, cfg) -> tuple[list[tuple[str, str]], dict[str, object]]:
+    """`worker.main(["--once"])` with the loop, the connection and the digest seed faked;
+    returns the `enqueue` calls it made and what the other seams saw. `cfg` is the loaded
+    config, or `None` to let the real `config.load()` read the environment."""
+    from app.web import worker as worker_module
+
+    enqueued: list[tuple[str, str]] = []
+    seen: dict[str, object] = {"loop": 0, "digest": 0}
+
+    def fake_run_forever(conn_factory, handlers, *, once, timeouts=None):
+        seen["loop"] += 1
+
+    def fake_ensure_scheduled(conn):
+        seen["digest"] += 1
+
+    monkeypatch.setattr(worker_module, "run_forever", fake_run_forever)
+    if cfg is not None:
+        monkeypatch.setattr(worker_module.config, "load", lambda: cfg)
+    monkeypatch.setattr(worker_module.db, "connect", lambda: _SeedConn())
+    monkeypatch.setattr(worker_module, "enqueue", lambda c, t, s: enqueued.append((t, s)))
+    monkeypatch.setattr(worker_module.digest, "ensure_scheduled", fake_ensure_scheduled)
+    worker_module.main(["--once"])
+    return enqueued, seen
+
+
+def test_main_seeds_no_pull_row_when_pull_is_off(monkeypatch):
+    enqueued, seen = _run_main(monkeypatch, cfg=Config(PULL_ENABLED=False))
+    assert enqueued == [("health", "system")]  # `health` is still seeded
+    assert seen == {"loop": 1, "digest": 1}  # and the loop and the digest chain still start
+
+
+def test_main_seeds_the_pull_row_when_pull_is_on(monkeypatch):
+    enqueued, _seen = _run_main(monkeypatch, cfg=Config(PULL_ENABLED=True))
+    assert enqueued == [("pull", "indexer"), ("health", "system")]
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        (None, [("pull", "indexer"), ("health", "system")]),  # unset: as before DEC-207
+        ("true", [("pull", "indexer"), ("health", "system")]),
+        ("false", [("health", "system")]),
+    ],
+)
+def test_main_reads_the_flag_from_the_environment(monkeypatch, raw, expected):
+    """No stub on `config.load`: the real loader, the real environment variable."""
+    if raw is None:
+        monkeypatch.delenv("PULL_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("PULL_ENABLED", raw)
+    enqueued, _seen = _run_main(monkeypatch, cfg=None)
+    assert enqueued == expected
+
+
+def test_the_pull_handler_stays_registered_when_pull_is_off(monkeypatch):
+    """A `pull` row already pending when the switch goes off must still find its handler, which
+    then ends it (`test_puller.py`): the table is built from the modules, not from the flag."""
+    monkeypatch.setenv("PULL_ENABLED", "false")
+    assert "pull" in handlers_pkg.iter_handlers()
+    assert HANDLERS["pull"] is puller.pull_job
 
 
 def _write(tmp_path, name: str, body: str) -> None:

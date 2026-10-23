@@ -23,7 +23,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from app.infra import config
+from app.infra import config, intake
 from app.infra.jobs import Job
 from app.soar.pipeline import run_pipeline_job
 from app.web import deps, main
@@ -404,6 +404,154 @@ def test_heartbeat_bare_and_hit_shapes_are_201_no_job_and_touch_source_heartbeat
     ).fetchone()
     assert after is not None
     assert before is None or after[0] >= before[0]
+
+
+# --------------------------------------------------------------------------
+# P12-T01 / DEC-207 item 2 — every alert the webhook accepts stamps the heartbeat
+#
+# With `PULL_ENABLED=false` nothing else moves `source_heartbeat`, and the `heartbeat` health
+# check would call the source lost. The stamp is `(last_seen_at, last_alert_at) = now()`, the
+# puller's own `_update_heartbeat(saw_alert=True)`; the heartbeat branch keeps its own
+# (`saw_alert=False`: `last_alert_at` untouched).
+# --------------------------------------------------------------------------
+
+_DAY_S = 86_400
+_HOUR_S = 3_600
+_RECENT_S = 120  # "just now", with room for a slow test host
+
+
+def _set_heartbeat(sdb, *, seen_s: int, alert_s: int | None) -> None:
+    """The `indexer` row as it was `seen_s` / `alert_s` seconds ago (`None`: never)."""
+    sdb.execute("DELETE FROM source_heartbeat WHERE manager_id = 'indexer'")
+    sdb.execute(
+        "INSERT INTO source_heartbeat (manager_id, last_seen_at, last_alert_at) VALUES "
+        "('indexer', now() - make_interval(secs => %s), "
+        " CASE WHEN %s::int IS NULL THEN NULL ELSE now() - make_interval(secs => %s) END)",
+        (seen_s, alert_s, alert_s),
+    )
+    sdb.commit()
+
+
+def _heartbeat_ages(sdb) -> tuple[float, float | None]:
+    """`(seconds since last_seen_at, seconds since last_alert_at or None)` of the `indexer` row."""
+    sdb.commit()  # a fresh transaction, so `now()` is the present
+    row = sdb.execute(
+        "SELECT extract(epoch FROM now() - last_seen_at), extract(epoch FROM now() - last_alert_at)"
+        " FROM source_heartbeat WHERE manager_id = 'indexer'"
+    ).fetchone()
+    assert row is not None, "source_heartbeat has no 'indexer' row"
+    return float(row[0]), None if row[1] is None else float(row[1])
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "preset",
+    [None, (_DAY_S, None), (_DAY_S, _DAY_S)],
+    ids=["no-row", "old-seen-never-alerted", "old-seen-old-alert"],
+)
+def test_an_accepted_alert_stamps_last_seen_and_last_alert(client, sdb, preset) -> None:
+    if preset is None:
+        sdb.execute("DELETE FROM source_heartbeat WHERE manager_id = 'indexer'")
+        sdb.commit()
+    else:
+        _set_heartbeat(sdb, seen_s=preset[0], alert_s=preset[1])
+
+    response = _post(client, _bytes(_copy_with_id(ALERT_BARE, _uid("hb-stamp"))))
+
+    assert response.status_code == 201, response.text
+    seen, alert = _heartbeat_ages(sdb)
+    assert seen < _RECENT_S
+    assert alert is not None and alert < _RECENT_S
+
+
+@pytest.mark.db
+def test_an_accepted_alert_stamps_with_every_switch_off(client, sdb) -> None:
+    """The point of the stamp: the pull is off, the other three steps are SOAR's, and the
+    alert still proves the source alive."""
+    main.app.dependency_overrides[deps.get_config] = lambda: _cfg(
+        PULL_ENABLED=False,
+        AUTOCLOSE_ENABLED=False,
+        ENRICHMENT_ENABLED=False,
+        DEDUP_ENABLED=False,
+    )
+    _set_heartbeat(sdb, seen_s=_DAY_S, alert_s=_DAY_S)
+
+    response = _post(client, _bytes(_copy_with_id(ALERT_BARE, _uid("hb-off"))))
+
+    assert response.status_code == 201, response.text
+    seen, alert = _heartbeat_ages(sdb)
+    assert seen < _RECENT_S and alert is not None and alert < _RECENT_S
+
+
+@pytest.mark.db
+def test_the_indexer_hit_shape_stamps_too(client, sdb) -> None:
+    _set_heartbeat(sdb, seen_s=_DAY_S, alert_s=None)
+    doc = json.loads(json.dumps(ALERT_HIT))
+    doc["_source"] = _copy_with_id(doc["_source"], _uid("hb-hit-shape"))
+
+    assert _post(client, _bytes(doc)).status_code == 201
+
+    seen, alert = _heartbeat_ages(sdb)
+    assert seen < _RECENT_S and alert is not None and alert < _RECENT_S
+
+
+@pytest.mark.db
+def test_a_409_duplicate_does_not_stamp(sdb) -> None:
+    """Called on `receive` itself, not through the route: the route's rollback on a 409 would
+    undo a stamp made before the conflict was found and hide the defect."""
+    cfg = _cfg()
+    body = _bytes(_copy_with_id(ALERT_BARE, _uid("hb-dup")))
+    _set_heartbeat(sdb, seen_s=_DAY_S, alert_s=_DAY_S)
+    intake.receive(sdb, body, ALLOWED_HOST, cfg)  # the first copy: accepted, and it stamps
+    first = sdb.execute(
+        "SELECT extract(epoch FROM now() - last_seen_at), extract(epoch FROM now() - last_alert_at)"
+        " FROM source_heartbeat WHERE manager_id = 'indexer'"
+    ).fetchone()
+    assert float(first[0]) < _RECENT_S and float(first[1]) < _RECENT_S  # the positive control
+    sdb.execute(  # as if nothing had been heard for a day
+        "UPDATE source_heartbeat SET last_seen_at = now() - interval '1 day', "
+        "last_alert_at = now() - interval '1 day' WHERE manager_id = 'indexer'"
+    )
+
+    with pytest.raises(intake.Duplicate):
+        intake.receive(sdb, body, ALLOWED_HOST, cfg)
+
+    seen, alert = sdb.execute(
+        "SELECT extract(epoch FROM now() - last_seen_at), extract(epoch FROM now() - last_alert_at)"
+        " FROM source_heartbeat WHERE manager_id = 'indexer'"
+    ).fetchone()
+    assert float(seen) == pytest.approx(_DAY_S, abs=5)  # still a day old
+    assert float(alert) == pytest.approx(_DAY_S, abs=5)
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "body, reason",
+    [(b"not json at all", "not_json"), (b"[1, 2]", "not_an_object"), (b"{}", "id")],
+)
+def test_a_rejected_body_does_not_stamp(sdb, body, reason) -> None:
+    _set_heartbeat(sdb, seen_s=_DAY_S, alert_s=_DAY_S)
+
+    with pytest.raises(intake.Rejected) as excinfo:
+        intake.receive(sdb, body, ALLOWED_HOST, _cfg())
+
+    assert excinfo.value.reason == reason
+    seen, alert = _heartbeat_ages(sdb)
+    assert seen == pytest.approx(_DAY_S, abs=60) and alert == pytest.approx(_DAY_S, abs=60)
+
+
+@pytest.mark.db
+def test_the_heartbeat_document_still_stamps_last_seen_and_leaves_last_alert_alone(
+    client, sdb
+) -> None:
+    _set_heartbeat(sdb, seen_s=_DAY_S, alert_s=_HOUR_S)
+
+    response = _post(client, _bytes(_heartbeat_from(ALERT_BARE, _uid("hb-doc"))))
+
+    assert response.status_code == 201 and response.json() == {"heartbeat": True}
+    seen, alert = _heartbeat_ages(sdb)
+    assert seen < _RECENT_S  # `last_seen_at` moved
+    assert alert == pytest.approx(_HOUR_S, abs=60)  # `last_alert_at` is the hour-old value
 
 
 # --------------------------------------------------------------------------
