@@ -188,6 +188,11 @@ SENTENCES = (
     SENTENCE_REPAIR,
     SENTENCE_PROPOSER_IS_DATA,
 )
+#: DEC-208 item 4: an alert SOAR enriched carries no occurrence count (SOAR sends one representative
+#: per case), and the prompt says so in the place the count would be. It is one template constant,
+#: not a value `fact()` accepts: `fact()` still takes only an Enum, an int, a datetime or an Id, so no
+#: free string and no `None` can reach the outside of a block, and the phrase can say nothing else.
+FACT_OCCURRENCE_UNKNOWN = "occurrence_count: không rõ"
 LABEL_ABSENT = frozenset({"asset", "identity", "ioc"})
 FACT_NAMES = frozenset(
     {
@@ -229,6 +234,7 @@ TEMPLATE_CONSTANTS = frozenset(
     {
         *HEADINGS,
         *SENTENCES,
+        FACT_OCCURRENCE_UNKNOWN,
         *(f"{n}:" for n in FACT_NAMES),
         *(f"{label}:" for label in LABEL_ABSENT),
         SEPARATOR.strip(),
