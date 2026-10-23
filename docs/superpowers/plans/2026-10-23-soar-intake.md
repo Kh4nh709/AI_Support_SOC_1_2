@@ -53,6 +53,19 @@
 
 **Do not:** read or write the live database; run anything with `docker`; edit `eval/`; change a migration; remove a module.
 
-## P12-T02: Context from the payload (blocked)
+## P12-T02: Context from the SOAR payload (DEC-208)
 
-Blocked: the team's payload schema has not been delivered. When it arrives: a DEC for the schema (key name, fields, closed vocabulary, `occurrence_count`), then `_build_context` reads it with each field validated against the enums in `llm/builder.py:81-106`; a missing or wrong field is "unknown", never a default that opens a path to closing. `soar/pipeline.py:118` passes `1` to the risk score today. This is the only place the "unknown" context of P12-T01 is replaced.
+**Starts after P12-T01 is merged** (both edit `_build_context`). Sample: `docs/plan/tasks/P12/soar-payload-sample-1.0.json`; copy it into `backend/tests/fixtures/` and derive the variants there.
+
+**Files — modify:** `backend/app/soar/pipeline.py` (`_build_context` reads `enrichment` when `ENRICHMENT_ENABLED=false`; with enrichment on, the internal lookups stay), `backend/app/ingest/wazuh_parser.py` (user fallback), `backend/app/tier1/triage.py` and `backend/app/llm/triage.py` (the occurrence fact may be `None`), tests, `docs/limitations.md`.
+
+**Rules (DEC-208 item 3–5):**
+- `schema_version` must match `1.<n>`; else, or with no `enrichment`, the "unknown" context of P12-T01.
+- `asset.critical`: `true` → `high`, `false` → `unknown`; `asset_present` = `asset.host` non-empty.
+- `asset.user_is_admin`: bool → `identity_privileged`; `null`/absent → `None`, identity status `skipped`.
+- IoC: worst of `ti[].verdict` and `ioc.verdict` (`malicious > suspicious > clean`); no block → `skipped`.
+- Any value outside its vocabulary, or a wrong type → the whole context "unknown"; log the field name only.
+- `occurrence_count` in the ① facts is `None` when the context comes from SOAR; the prompt renders it as "không rõ"; the risk occurrence addend is 0.
+- Parser: no user found → `enrichment.asset.user` with the domain dropped (`FPT\hr01` → `hr01`, `hr01` unchanged).
+
+**Tests (red first):** the sample maps to `high/unknown`, `False`, `skipped` as specified; each `ti` verdict and the C202 `ioc` block; two `ti` entries take the worst; a bad verdict, a string `critical`, a `2.0` schema and a missing block each give the whole "unknown" context; with `occurrence_count=None` none of the nine `occurrence_lt` rules matches and a ① `false_positive` is forced to `needs_review`; the parser fallback with and without a domain; no SQL reaches the inventory tables; the blind-arm pages still hide the suggestion. Suites as P12-T01.

@@ -3501,3 +3501,23 @@ Decision:
   7. **Blind arm and admin pages.** The change must keep DEC-101 and DEC-206 intact: with the flags off, `visibility.py`, the audit page, the usage list and the digest still render, and no ① suggestion shows on a blind, undecided alert. P12-T01's suites include these pages.
   8. **Process.** DEC-201: a Coder subagent (Sonnet 5.5 xhigh, own worktree) and an independent Reviewer subagent per task; the Director's session manages, runs one mutation of its own at the merge, and commits the review verbatim.
 Supersedes: none. It adds switches next to DEC-165's and leaves D8 ("① runs on every auto-closed alert") true for as long as auto-close is on.
+
+## DEC-208 · 2026-10-23 · The SOAR payload, schema 1.x: how `enrichment` becomes `AlertContext`; an unknown count is `None`, never 1; any invalid field makes the whole context "unknown"
+Scope: **product** (pipeline, parser, ① facts) · **security** (fail-safe on external context)
+Decided by: **the Owner and the SOAR team, 23/10**: the team's sample (`docs/plan/tasks/P12/soar-payload-sample-1.0.json`) and its answers to seven questions; the AI side's choices where the team left the decision to it (items 5 and 6).
+Drafted by: the Director's fork session `soar-webhook-alert-intake` (Opus 5.5)
+Propagated to: `backend/app/soar/pipeline.py` (`_build_context`) · `backend/app/ingest/wazuh_parser.py` (user fallback) · `backend/app/tier1/triage.py` and `backend/app/llm/triage.py` (the occurrence fact) · STATE P12-T02 · `docs/superpowers/plans/2026-10-23-soar-intake.md` §P12-T02
+Decision:
+  1. **Shape.** The body is the Wazuh-shaped alert (bare), plus `enrichment` (schema `1.x`), `graylog` and `timing`. The parser already accepts it (checked on the sample: `category=malware`, `severity=critical`, `+0700` offset read). Every key stays in `alerts.raw_payload`. Any `1.x` is compatible (the team only adds fields in 1.x); a missing `enrichment`, a missing or non-`1.x` `schema_version` gives the "unknown" context of DEC-207 item 1.
+  2. **One payload per `dedup_key`.** SOAR sends exactly one payload for the first TheHive alert of each key (hourly window), repeats go to the TheHive case only, and a resend keeps the same `id` (so 409). `DEDUP_ENABLED=false` therefore floods nothing.
+  3. **Mapping.**
+     - `asset_criticality`: `asset.critical = true` → `high`; `false` → `unknown`. **Open with the team:** whether `false` means "known asset, not critical"; until then `unknown` keeps gate step 4 blocking `false_positive`. `asset_present` = `asset.host` non-empty (read by nothing now that auto-close is off). Owner and role `None`.
+     - `identity_privileged`: `asset.user_is_admin` (`true`/`false`); `null` or absent → `None` and `lookup_status.identity = skipped`.
+     - `ioc_reputation`: the worst of `enrichment.ti[].verdict` and `enrichment.ioc.verdict` (C202), `malicious > suspicious > clean`. No `ti` block and no `ioc` block → `skipped` (not looked up). The team's `clean` means "looked up, nothing found"; it is mapped to `clean` as the team proposes.
+     - **Any field outside its vocabulary** (a verdict, a non-boolean `critical` or `user_is_admin`) makes the **whole** context "unknown", logged with the field name and never its value. A half-trusted context is not built.
+  4. **Occurrence.** SOAR sends one representative, so the count is unknown: the ① facts carry `occurrence_count = None` (rendered "không rõ"), never `1`. `kb/lookup.py:rule_matches` already makes a rule with an absent fact not match, so the nine `occurrence_lt: 50` `false_positive` rules cannot fire on a guessed count. The risk score's occurrence addend stays 0. `history.rule_7d_*` is not used as a proxy (seven-day volume, not a burst).
+  5. **User.** When the parser finds no user, `enrichment.asset.user` is the fallback, the domain part dropped (`FPT\hr01` → `hr01`). SOAR already picks the right field per scenario.
+  6. **Raw log.** Windows needs nothing: the parser reads `data.win.system.message` (`wazuh_parser.py:211-229`). For pfSense the parser finds no `full_log` and leaves `raw_log` empty, so **the AI side asks SOAR to add `full_log`** (the raw syslog line) to pfSense payloads.
+  7. **Risk score.** Ours stays the queue order; `triage.score` stays in `raw_payload`.
+  8. **Deferred.** TheHive ids (`case.thehive_alert_id`, `case_number`, `case_id`) are already stored in `raw_payload`; showing a link from the alert and case pages is a later task (it needs a TheHive base URL key). `evidence.context_logs` stays out of every prompt until its own DEC: it is attacker-controlled raw log, and would be wrapped as untrusted data.
+Supersedes: DEC-207 item 3's "blocked on the schema" for P12-T02.
