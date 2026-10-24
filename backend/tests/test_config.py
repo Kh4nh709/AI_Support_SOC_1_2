@@ -314,6 +314,158 @@ def test_with_no_soar_switch_named_the_config_is_the_one_before_dec_207(monkeypa
     )
 
 
+_RAG_SWITCHES = ("RAG_ENABLED", "KNOWLEDGE_DRAFT_ENABLED")
+_RAG_INTS = {
+    "RAG_TRIAGE_DELAY_S": 45,
+    "RAG_CASE_REFRESH_H": 24,
+    "RAG_HISTORY_DAYS": 90,
+    "RAG_MONTHLY_USD_CAP": 3,
+    "KNOWLEDGE_QUEUE_MAX": 200,
+}
+_RAG_KEYS = (*_RAG_SWITCHES, "RAG_MODEL", *_RAG_INTS)
+
+
+def _clear_rag_env(monkeypatch):
+    for key in _RAG_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+
+def _example_text():
+    return (pathlib.Path(__file__).resolve().parents[2] / ".env.example").read_text(
+        encoding="utf-8"
+    )
+
+
+class TestLearnedKnowledgeKeys:
+    """P13-T01 / DEC-210: eight `.env`-only keys. The two switches default to `false`, so merging
+    the feature changes nothing until the Owner turns one on; the five numbers are non-negative
+    (a negative delay, window or cap has no meaning and must stop the start-up, never be clamped
+    quietly); `RAG_MODEL` is empty, which the ranking agent reads as `LLM_MODEL_PROPOSER`."""
+
+    def test_the_eight_keys_are_config_fields_with_the_global_constraints_defaults(self):
+        fields = {f.name: f for f in dataclasses.fields(Config)}
+        assert fields["RAG_ENABLED"].default is False
+        assert fields["KNOWLEDGE_DRAFT_ENABLED"].default is False
+        assert fields["RAG_MODEL"].default == ""
+        for key, default in _RAG_INTS.items():
+            assert fields[key].default == default and type(fields[key].default) is int, key
+        assert len(_RAG_KEYS) == 8
+
+    def test_load_with_nothing_named_gives_the_defaults(self, monkeypatch):
+        _clear_rag_env(monkeypatch)
+        cfg = load(env_file="/dev/null")
+        assert (cfg.RAG_ENABLED, cfg.KNOWLEDGE_DRAFT_ENABLED) == (False, False)
+        assert cfg.RAG_MODEL == ""
+        assert {key: getattr(cfg, key) for key in _RAG_INTS} == _RAG_INTS
+
+    def test_empty_values_fall_through_to_the_defaults(self, monkeypatch):
+        for key in _RAG_KEYS:
+            monkeypatch.setenv(key, "")
+        cfg = load(env_file="/dev/null")
+        assert (cfg.RAG_ENABLED, cfg.KNOWLEDGE_DRAFT_ENABLED, cfg.RAG_MODEL) == (False, False, "")
+        assert {key: getattr(cfg, key) for key in _RAG_INTS} == _RAG_INTS
+
+    @pytest.mark.parametrize("key", _RAG_SWITCHES)
+    @pytest.mark.parametrize("raw", ["true", "True", "TRUE", "1", "yes", "on"])
+    def test_true_spellings_turn_a_switch_on(self, monkeypatch, key, raw):
+        _clear_rag_env(monkeypatch)
+        monkeypatch.setenv(key, raw)
+        assert getattr(load(env_file="/dev/null"), key) is True
+
+    @pytest.mark.parametrize("key", _RAG_SWITCHES)
+    @pytest.mark.parametrize("raw", ["false", "False", "FALSE", "0", "no", "off", " false "])
+    def test_false_spellings_keep_a_switch_off(self, monkeypatch, key, raw):
+        _clear_rag_env(monkeypatch)
+        monkeypatch.setenv(key, raw)
+        assert getattr(load(env_file="/dev/null"), key) is False
+
+    @pytest.mark.parametrize("key", _RAG_SWITCHES)
+    @pytest.mark.parametrize("raw", ["flase", "2", "enabled", "nope"])
+    def test_anything_else_raises_naming_the_switch(self, monkeypatch, key, raw):
+        _clear_rag_env(monkeypatch)
+        monkeypatch.setenv(key, raw)
+        with pytest.raises(ConfigError, match=key):
+            load(env_file="/dev/null")
+
+    @pytest.mark.parametrize("key", _RAG_SWITCHES)
+    def test_one_switch_does_not_move_the_other(self, tmp_path, monkeypatch, key):
+        _clear_rag_env(monkeypatch)
+        cfg = load(env_file=write_env(tmp_path, f"{key}=true\n"))
+        assert {k: getattr(cfg, k) for k in _RAG_SWITCHES} == {k: (k == key) for k in _RAG_SWITCHES}
+
+    @pytest.mark.parametrize("key", _RAG_INTS)
+    def test_an_int_key_reads_a_value_with_underscores(self, monkeypatch, key):
+        _clear_rag_env(monkeypatch)
+        monkeypatch.setenv(key, "1_000")
+        assert getattr(load(env_file="/dev/null"), key) == 1000
+
+    @pytest.mark.parametrize("key", _RAG_INTS)
+    def test_zero_is_a_value_not_a_refusal(self, monkeypatch, key):
+        _clear_rag_env(monkeypatch)
+        monkeypatch.setenv(key, "0")
+        assert getattr(load(env_file="/dev/null"), key) == 0
+
+    @pytest.mark.parametrize("key", _RAG_INTS)
+    @pytest.mark.parametrize("raw", ["-1", "-45", "-1_000"])
+    def test_a_negative_int_raises_naming_the_key(self, monkeypatch, key, raw):
+        _clear_rag_env(monkeypatch)
+        monkeypatch.setenv(key, raw)
+        with pytest.raises(ConfigError, match=key):
+            load(env_file="/dev/null")
+
+    @pytest.mark.parametrize("key", _RAG_INTS)
+    def test_a_negative_int_in_the_dotenv_file_is_refused_too(self, tmp_path, monkeypatch, key):
+        _clear_rag_env(monkeypatch)
+        with pytest.raises(ConfigError, match=key):
+            load(env_file=write_env(tmp_path, f"{key}=-3\n"))
+
+    @pytest.mark.parametrize("key", _RAG_INTS)
+    def test_not_a_number_raises_naming_the_key(self, monkeypatch, key):
+        _clear_rag_env(monkeypatch)
+        monkeypatch.setenv(key, "soon")
+        with pytest.raises(ConfigError, match=key):
+            load(env_file="/dev/null")
+
+    def test_rag_model_is_a_plain_string_and_may_name_a_model(self, tmp_path, monkeypatch):
+        _clear_rag_env(monkeypatch)
+        cfg = load(env_file=write_env(tmp_path, "RAG_MODEL=deepseek-v4-flash  # own model\n"))
+        assert cfg.RAG_MODEL == "deepseek-v4-flash"
+
+    def test_rag_model_does_not_follow_the_proposer_in_config(self, tmp_path, monkeypatch):
+        """Unlike `LLM_MODEL_VERIFIER`, the key stays empty when unset: the ranking agent
+        (T03) reads empty as the proposer's model, so `.env.example` can show the key bare."""
+        _clear_rag_env(monkeypatch)
+        monkeypatch.delenv("LLM_MODEL_PROPOSER", raising=False)
+        cfg = load(env_file=write_env(tmp_path, "LLM_MODEL_PROPOSER=deepseek-v4-flash\n"))
+        assert cfg.RAG_MODEL == ""
+
+    def test_a_real_env_var_wins_over_the_file(self, tmp_path, monkeypatch):
+        _clear_rag_env(monkeypatch)
+        monkeypatch.setenv("RAG_ENABLED", "true")
+        monkeypatch.setenv("RAG_HISTORY_DAYS", "30")
+        cfg = load(env_file=write_env(tmp_path, "RAG_ENABLED=false\nRAG_HISTORY_DAYS=7\n"))
+        assert (cfg.RAG_ENABLED, cfg.RAG_HISTORY_DAYS) == (True, 30)
+
+    def test_the_secret_redaction_does_not_touch_the_new_keys(self, monkeypatch):
+        _clear_rag_env(monkeypatch)
+        dumped = load(env_file="/dev/null").dump()
+        for key in _RAG_KEYS:
+            assert dumped[key] != "***", key
+
+    @pytest.mark.parametrize("key", _RAG_KEYS)
+    def test_each_key_is_a_pack_key_and_an_env_example_line(self, key):
+        assert key in gen_env_example.keys_from_pack()
+        assert f"\n{key}=" in _example_text()
+
+    @pytest.mark.parametrize("key", _RAG_SWITCHES)
+    def test_env_example_shows_a_switch_off(self, key):
+        assert f"\n{key}=false" in _example_text()
+
+    @pytest.mark.parametrize(("key", "default"), list(_RAG_INTS.items()))
+    def test_env_example_shows_each_number_at_its_default(self, key, default):
+        assert f"\n{key}={default}" in _example_text()
+
+
 class TestStartupAssertion:
     def test_max_payload_not_greater_than_raw_log_raises_naming_both_keys(self, monkeypatch):
         monkeypatch.setenv("MAX_PAYLOAD_BYTES", "1000")
