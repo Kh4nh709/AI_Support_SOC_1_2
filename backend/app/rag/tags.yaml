@@ -1,0 +1,63 @@
+# The closed tag vocabulary of learned knowledge (DEC-210, spec §7.4).
+#
+# This file is code: tracked in git and reviewed by the Owner. A draft's `tags` must be a subset of
+# `tags` below (V1); the admin picks from it; the fingerprint's tags are derived through
+# `rule_groups`. Keep it short. To add a tag, add it here with a one-line description, in the same
+# commit as whatever uses it. A tag is lower-case ASCII, words joined by `_`.
+#
+# The three kinds: what happened (behaviour), where (target and origin), how it ended (outcome).
+
+tags:
+  # behaviour: the resolver's categories (ingest/category.py) and the SOAR scenarios seen so far
+  port_scan: One host probes many ports of another (SC03, pfSense deny pattern).
+  reconnaissance: Network or web probing that maps a target, a port scan or not.
+  brute_force: Many failed logins in a short time against one service or account.
+  failed_login: A few failed logins, as from a mistyped or expired password.
+  successful_login: A successful logon that matters to the verdict.
+  malware_detection: An antivirus or EDR detection event (MW03, Defender).
+  ransomware: File encryption, shadow-copy deletion or a ransom note.
+  c2_beaconing: Regular calls to a command-and-control address.
+  data_exfiltration: Data leaving the network to an outside destination.
+  privilege_escalation: An account or process gaining rights it did not have.
+  web_attack: An attack on a web application, such as SQL injection.
+  policy_violation: Allowed by the system but against the organisation's rules.
+  test_activity: A known harmless test, such as the EICAR file or a lab exercise.
+  # target
+  windows_host: The event comes from a Windows endpoint or server.
+  linux_host: The event comes from a Linux or Unix host.
+  firewall: The event comes from a firewall.
+  web_server: The event comes from a web server.
+  privileged_account: The account involved is an administrator or service account.
+  # origin
+  external_source: The source address is outside the organisation.
+  internal_source: The source address is inside the organisation.
+  # outcome
+  blocked: A control blocked the activity before it reached its target.
+  remediated: The tool already cleaned or reversed the effect (Defender remediation).
+  no_impact_seen: Nothing in the evidence shows the activity changed anything.
+
+# Wazuh rule group -> tag. Only a group that means one thing is listed; every other group is
+# ignored. Groups are matched lower-case.
+rule_groups:
+  windows: windows_host
+  pfsense: firewall
+  firewall: firewall
+  recon: reconnaissance
+  web_scan: reconnaissance
+  nmap: port_scan
+  authentication_failed: failed_login
+  invalid_login: failed_login
+  authentication_failures: brute_force
+  authentication_success: successful_login
+  virus: malware_detection
+  malware: malware_detection
+  clamd: malware_detection
+  ransomware: ransomware
+  exfiltration: data_exfiltration
+  privilege_escalation: privilege_escalation
+  sql_injection: web_attack
+  sqlinjection: web_attack
+  web_attack: web_attack
+  apache: web_server
+  nginx: web_server
+  accesslog: web_server
