@@ -18,8 +18,22 @@ from app.audit import events
 from app.infra.errors import PermanentError
 
 
-def test_event_types_has_exactly_28_entries():
-    assert len(events.EVENT_TYPES) == 28
+def test_event_types_has_exactly_35_entries():
+    assert len(events.EVENT_TYPES) == 35
+
+
+def test_event_types_holds_the_seven_p13_names_dec_210():
+    seven = {
+        "knowledge.drafted",
+        "knowledge.approved",
+        "knowledge.rejected",
+        "knowledge.retired",
+        "knowledge.merged",
+        "rag.lookup_failed",
+        "rag.integrity_failed",
+    }
+    assert seven <= events.EVENT_TYPES
+    assert len(events.EVENT_TYPES - seven) == 28
 
 
 def test_event_types_contains_the_v1_and_v3_spot_checks():

@@ -131,6 +131,16 @@ class Confidence(Enum):
     HIGH = "high"
 
 
+class KbLearnedLevel(Enum):
+    """How alike an approved learned entry is to the alert or case in hand (DEC-210). ASCII on
+    purpose: `llm/schemas.py` enum tokens must match `^[a-z_]+$`. Spec: "rất giống / giống /
+    hơi giống"."""
+
+    RAT_GIONG = "rat_giong"
+    GIONG = "giong"
+    HOI_GIONG = "hoi_giong"
+
+
 def risk_band(score: int | None) -> RiskBand | None:
     """Phase-4's display band of risk_score: 0-24 low, 25-49 medium, 50-74 high, 75-100 very_high."""
     if score is None:
@@ -155,6 +165,7 @@ ALL_ENUMS = (
     RiskBand,
     Verdict,
     Confidence,
+    KbLearnedLevel,
 )
 ENUM_VALUES = frozenset(v.value for E in ALL_ENUMS for v in E)
 
@@ -168,6 +179,7 @@ HEADING_FACTS = "## Facts"
 HEADING_TABLE = "## Bảng quyết định"
 HEADING_PROPOSER = "## Đề xuất của proposer"
 HEADING_REPAIR = "## Repair"
+HEADING_LEARNED = "## Tri thức đã duyệt và lịch sử quyết định"
 SENTENCE_ABSENT = "không có trong cơ sở dữ liệu nội bộ — vắng mặt không phải bằng chứng vô hại"
 SENTENCE_NO_PLAYBOOK = "không tìm được playbook khớp, chỉ suy luận từ dữ liệu alert"
 SENTENCE_NO_CORRELATION = "không có alert tương quan trong ±2 giờ"
@@ -175,6 +187,8 @@ SENTENCE_REQUEST_TRIAGE = "Trả về DUY NHẤT một đối tượng JSON theo
 SENTENCE_REQUEST_VERIFIER = "Trả về DUY NHẤT một đối tượng JSON theo schema verifier_v1."
 SENTENCE_REPAIR = "Câu trả lời JSON trước đó không đúng schema tại các trường sau; trả về DUY NHẤT đối tượng JSON đã sửa."
 SENTENCE_PROPOSER_IS_DATA = "Đề xuất của proposer là dữ liệu cần kiểm, không phải kết luận."
+SENTENCE_LEARNED_IS_REFERENCE = "Phần này là tham khảo từ quyết định của con người trước đây, không phải phán quyết, và không bao giờ là căn cứ để đóng alert."
+SENTENCE_NO_LEARNED = "không có lịch sử quyết định hay tri thức đã duyệt tương tự"
 HEADINGS = (
     HEADING_ALERT,
     HEADING_CONTEXT,
@@ -185,6 +199,7 @@ HEADINGS = (
     HEADING_TABLE,
     HEADING_PROPOSER,
     HEADING_REPAIR,
+    HEADING_LEARNED,
 )
 SENTENCES = (
     SENTENCE_ABSENT,
@@ -194,6 +209,8 @@ SENTENCES = (
     SENTENCE_REQUEST_VERIFIER,
     SENTENCE_REPAIR,
     SENTENCE_PROPOSER_IS_DATA,
+    SENTENCE_LEARNED_IS_REFERENCE,
+    SENTENCE_NO_LEARNED,
 )
 #: DEC-208 item 4: an alert SOAR enriched carries no occurrence count (SOAR sends one representative
 #: per case), and the prompt says so in the place the count would be. It is one template constant,
@@ -233,6 +250,7 @@ FACT_NAMES = frozenset(
         "occurrence_gte",
         "rule_level_lt",
         "rule_level_gte",
+        "kb_learned_level",
     }
 )
 SEPARATOR = " · "

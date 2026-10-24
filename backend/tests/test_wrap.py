@@ -16,7 +16,8 @@ import pytest
 from app.security import wrap as W
 
 
-def test_block_sources_match_six_names():
+def test_block_sources_match_nine_names():
+    """The six of §7.1, plus the three DEC-210 added for the learned-knowledge section."""
     assert W.BLOCK_SOURCES == frozenset(
         {
             "wazuh_raw_log",
@@ -25,9 +26,12 @@ def test_block_sources_match_six_names():
             "kb_playbook",
             "context",
             "proposer",
+            "kb_learned",
+            "decision_history",
+            "analyst_note",
         }
     )
-    assert len(W.BLOCK_SOURCES) == 6
+    assert len(W.BLOCK_SOURCES) == 9
 
 
 def test_nonce_is_16_hex_and_fresh_per_call():
