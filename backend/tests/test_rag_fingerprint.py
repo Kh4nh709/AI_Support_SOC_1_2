@@ -207,7 +207,7 @@ def test_a_description_built_from_the_event_loses_its_address_account_and_host(d
     )
     fp = alert_fingerprint(db, "a-1")
     assert _text_after(fp.text, "rule: ") == (
-        r"Successful Remote Logon Detected - User: \FPT\<USER> - from ip:<IP_NGOAI> host <HOST>"
+        r"Successful Remote Logon Detected - User: <USER> - from ip:<IP_NGOAI> host <HOST>"
     )
     phrases = search_phrases(fp)
     assert phrases[1:] == [_text_after(fp.text, "rule: ")]

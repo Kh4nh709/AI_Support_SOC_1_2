@@ -5,7 +5,7 @@
 
     Graylog id `gl-…`                              <ALERT_ID>
     e-mail address                                 <EMAIL>
-    `DOMAIN\\user`                                 <USER>
+    `DOMAIN\\user`, `\\DOMAIN\\user`                <USER>
     IPv6, then IPv4 address                        <IP_NOI_BO> if `ipaddress.is_private`, else <IP_NGOAI>
     hex hash of 32 characters or more              <HASH>
     Wazuh id `<epoch>.<n>`                         <ALERT_ID>
@@ -57,6 +57,17 @@ _EMAIL = re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[
 # and `C:\Windows\System32` (a path, where each part follows a backslash) are not accounts.
 _ACCOUNT = re.compile(
     r"(?<![\w\\:/.$-])[A-Za-z][A-Za-z0-9_.-]{0,62}\\{1,2}[A-Za-z0-9][A-Za-z0-9._$-]{0,62}(?<![.-])"
+)
+# `\DOMAIN\user` with the backslash in front of the domain, as Wazuh fills it into a rule description
+# (`User: \FPT\administrator - NTLM`). `_ACCOUNT` starts after no backslash, so that a path is not an
+# account; this one starts at a backslash that follows no word character, drive colon, slash, dot,
+# `%`, `~`, `>` or hyphen, and never at a kernel object path (`\Device\HarddiskVolume3\...`), and it
+# ends where the user name ends: not at the first part of a longer path (`\FPT\hr02\x`). Every
+# quantifier is bounded, and the match starts only at a backslash.
+_LEADING_ACCOUNT = re.compile(
+    r"(?<![\w\\:/.$%~>-])\\(?!(?i:device|registry|basenamedobjects|sessions|knowndlls|driver"
+    r"|filesystem|pipe|systemroot|global\?\?)\\)"
+    r"[A-Za-z][A-Za-z0-9_.-]{0,62}\\[A-Za-z0-9][A-Za-z0-9._$-]{0,62}(?<![.-])(?![\w$\\]|[.-][\w$])"
 )
 _IPV4 = re.compile(r"(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?!\d|\.\d)")
 # A candidate IPv6 address; `ipaddress` decides whether it is one (a time, a MAC address and
@@ -121,6 +132,7 @@ def placeholderise(text: str, hostnames: Iterable[str], *, users: Iterable[str] 
     people = _name_pattern(list(users))
     out = _GL_ID.sub(ALERT_ID, text)
     out = _EMAIL.sub(EMAIL, out)
+    out = _LEADING_ACCOUNT.sub(USER, out)
     out = _ACCOUNT.sub(USER, out)
     out = _IPV6.sub(_ipv6_placeholder, out)
     out = _IPV4.sub(_ipv4_placeholder, out)
@@ -150,7 +162,7 @@ def literal_findings(text: str, hostnames: Iterable[str]) -> list[str]:
         "ipv4": _has_ipv4(text),
         "ipv6": _has_ipv6(text),
         "email": _EMAIL.search(text) is not None,
-        "account": _ACCOUNT.search(text) is not None,
+        "account": _LEADING_ACCOUNT.search(text) is not None or _ACCOUNT.search(text) is not None,
         "hostname": _has_name(text, hosts),
         "alert_id": _GL_ID.search(text) is not None or _WAZUH_ID.search(text) is not None,
         "hash": _HASH.search(text) is not None,

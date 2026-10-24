@@ -106,6 +106,17 @@ def test_calls_records_every_invocation():
     ]
 
 
+def test_complete_takes_and_records_the_model_the_rag_agents_pass():
+    # `rag.agent.call_json` passes `model=` on every call: the stock fake must accept it (P13-T04)
+    llm = FakeLLM(responses=[{"a": 1}, {"b": 2}])
+
+    llm.complete(system="s", user="u1", model="rag-model")
+    llm.complete(system="s", user="u2")
+
+    assert llm.models == ["rag-model", None]
+    assert all("model" not in call for call in llm.calls)  # the shape of `calls` is unchanged
+
+
 def test_complete_never_touches_network_or_sleeps():
     # implicit in every other test: FakeLLM has no socket/sleep dependency at all.
     # this test asserts the shape of the result instead, which is the observable proxy.

@@ -6,8 +6,7 @@ worker mounts whole. The discovery contract is `web.handlers`'s own (`JOB_TYPE`,
 `STATEMENT_TIMEOUT`, fail-fast on a mistake); `web.rag_worker.main` runs the same `run_forever` with
 those handlers only and seeds no job.
 
-Until P13-T04 adds `knowledge_draft`, the only RAG handler is `rag_lookup`: T04 updates
-`EXPECTED_TYPES` below.
+The RAG handlers are `rag_lookup` (P13-T03) and `knowledge_draft` (P13-T04).
 
 Pure tests, no database: discovery never opens a connection.
 """
@@ -21,14 +20,15 @@ import pytest
 from app.infra.config import Config
 from app.infra.errors import PermanentError
 from app.infra.jobs import JOB_TYPES
-from app.rag import lookup
+from app.rag import draft, lookup
 from app.web import handlers as main_handlers
 from app.web import rag_handlers, rag_worker
 from app.web import worker as main_worker
+from app.web.rag_handlers import draft as draft_handler
 from app.web.rag_handlers import lookup as lookup_handler
 
-#: What `rag_handlers.iter_handlers()` holds today. T04 adds `knowledge_draft`.
-EXPECTED_TYPES = {"rag_lookup"}
+#: What `rag_handlers.iter_handlers()` holds.
+EXPECTED_TYPES = {"rag_lookup", "knowledge_draft"}
 RAG_JOB_TYPES = {"rag_lookup", "knowledge_draft"}
 
 
@@ -47,10 +47,20 @@ def test_the_lookup_handler_module_follows_the_contract() -> None:
     assert lookup_handler.handle is lookup.run_lookup_job
 
 
+def test_the_draft_handler_module_follows_the_contract() -> None:
+    assert draft_handler.JOB_TYPE == "knowledge_draft"
+    assert draft_handler.handle is draft.run_draft_job  # not wrapped: tests pass its `adapter`
+    assert rag_handlers.iter_handlers()["knowledge_draft"] is draft.run_draft_job
+
+
 def test_the_lookup_declares_a_statement_timeout_for_its_searches() -> None:
     timeouts = rag_handlers.iter_timeouts()
     assert timeouts["rag_lookup"] == "10s"
     assert set(timeouts) <= set(rag_handlers.iter_handlers())
+
+
+def test_the_draft_declares_a_statement_timeout_for_its_candidate_search() -> None:
+    assert rag_handlers.iter_timeouts()["knowledge_draft"] == "10s"
 
 
 def test_the_main_worker_claims_neither_rag_job_type() -> None:
@@ -69,8 +79,9 @@ def test_the_rag_handler_files_are_not_under_the_main_workers_package() -> None:
     main_dir = Path(main_handlers.__file__).parent
     rag_dir = Path(rag_handlers.__file__).parent
     assert main_dir != rag_dir and rag_dir.name == "rag_handlers"
-    assert not (main_dir / "lookup.py").exists()
-    assert (rag_dir / "lookup.py").is_file()
+    for name in ("lookup.py", "draft.py"):
+        assert not (main_dir / name).exists()
+        assert (rag_dir / name).is_file()
 
 
 def test_the_worker_module_exposes_both_mappings() -> None:

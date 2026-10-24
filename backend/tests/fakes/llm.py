@@ -26,9 +26,16 @@ class FakeLLM:
         self.model = model
         self._raises = raises
         self.calls = []
+        self.models = []  # the `model=` of each call, in order (None when the caller passed none)
 
     def complete(
-        self, *, system: str, user: str, response_format=None, timeout_s=None
+        self,
+        *,
+        system: str,
+        user: str,
+        response_format=None,
+        timeout_s=None,
+        model: str | None = None,
     ) -> LLMResult:
         call_index = len(self.calls)
         self.calls.append(
@@ -39,6 +46,9 @@ class FakeLLM:
                 "timeout_s": timeout_s,
             }
         )
+        # not in `calls`: that shape is pinned (`test_fakes_llm`, and `test_investigate` asserts that
+        # ② passes no model); the model of each call is in `models`
+        self.models.append(model)
 
         if self._raises is not None and call_index == 0:
             raise self._raises

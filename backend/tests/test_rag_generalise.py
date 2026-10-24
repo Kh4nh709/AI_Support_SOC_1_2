@@ -106,6 +106,56 @@ def test_an_account_is_user_written_with_one_backslash_or_json_escaped_with_two(
     assert literal_findings(placeholderise(f"by {account} today", []), []) == []
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (r"Logon - User: \FPT\administrator - NTLM", "Logon - User: <USER> - NTLM"),
+        (r"User: \FPT\administrator - NTLM", "User: <USER> - NTLM"),
+        (r"for \FPT\hr02.", "for <USER>."),
+        (r"\FPT\hr02.", "<USER>."),
+        (r"(\FPT\hr02)", "(<USER>)"),
+    ],
+)
+def test_an_account_written_with_a_leading_backslash_is_user(text: str, expected: str) -> None:
+    """A rule description that Wazuh fills with `$(field)` can carry the account with a backslash in
+    front of its domain. `_ACCOUNT` does not start after a backslash (so a path is not an
+    account); the leading-backslash rule does."""
+    assert placeholderise(text, []) == expected
+    assert literal_findings(text, []) == ["account"]
+    assert literal_findings(placeholderise(text, []), []) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        r"\Device\HarddiskVolume3\Windows\System32\cmd.exe",
+        r"\DEVICE\HarddiskVolume3\x",
+        r"\Registry\Machine\Software\Microsoft",
+        r"\BaseNamedObjects\Global\x",
+        r"\Sessions\1\Windows\x",
+        r"\KnownDlls\ntdll.dll",
+        r"\Driver\Tcpip",
+        r"\FileSystem\Ntfs",
+        r"\Pipe\lsass",
+        r"\SystemRoot\System32\ntoskrnl.exe",
+        r"\GLOBAL??\C:",
+        r"C:\Users\hr01\x",
+        r"%TEMP%\a\b.exe",
+        r"\\srv\share",
+        r"\FPT\hr02\x",
+        r"C:\Users\hr<N>\Documents\eicar.com",
+    ],
+)
+def test_a_path_is_not_a_leading_backslash_account(text: str) -> None:
+    assert literal_findings(text, []) == []
+    out = placeholderise(text, [])
+    assert "<USER>" not in out
+
+
+def test_the_already_generalised_path_reports_no_account() -> None:
+    assert literal_findings(r"C:\Users\hr<N>\Documents\eicar.com", []) == []
+
+
 def test_the_json_dump_of_the_defender_event_loses_its_account_and_keeps_its_paths() -> None:
     dump = json.dumps(mw03()["data"]["win"]["eventdata"])
     assert r"FPT\\hr01" in dump  # the escaped form
@@ -350,3 +400,12 @@ def test_a_long_hex_run_that_is_not_a_hash_is_processed_in_linear_time() -> None
     literal_findings(text, [])
     assert time.perf_counter() - started < 5.0
     assert "<HASH>" not in out
+
+
+@pytest.mark.parametrize("unit", ["\\a", "\\a\\", "\\FPT\\", "\\aa\\a-", " \\a.b\\c."])
+def test_the_leading_backslash_account_is_found_in_linear_time(unit: str) -> None:
+    text = unit * (100_000 // len(unit))
+    started = time.perf_counter()
+    placeholderise(text, ["srv-01"], users=["hr01"])
+    literal_findings(text, ["srv-01"])
+    assert time.perf_counter() - started < 5.0
