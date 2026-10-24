@@ -8,6 +8,8 @@ column; §4 is narrower than G1 and wins where they seem to disagree).
 import ast
 import pathlib
 
+import pytest
+
 # context pack §4 — "May import" column. Keys and values are package names under backend/app/.
 ALL = frozenset(
     {
@@ -22,14 +24,18 @@ ALL = frozenset(
         "llm",
         "kb",
         "enrichment",
+        "rag",  # DEC-210 (P13-T01)
         "web",
     }
 )
 ALLOWED: dict[str, frozenset[str] | set[str]] = {
     "ingest": {"domain", "infra", "audit", "enrichment"},
     "soar": {"enrichment", "domain", "infra", "audit"},
-    "tier1": {"domain", "llm", "kb", "security", "infra", "audit"},
-    "tier2": {"domain", "llm", "kb", "security", "infra", "audit", "enrichment"},
+    "tier1": {"domain", "llm", "kb", "security", "infra", "audit", "rag"},
+    "tier2": {"domain", "llm", "kb", "security", "infra", "audit", "enrichment", "rag"},
+    # DEC-210: the learned-knowledge package. It imports no tier and no `web`; tier1, tier2 and
+    # `web` import it, and nothing else does.
+    "rag": {"infra", "audit", "security", "llm", "kb", "domain"},
     "domain": {"infra", "audit"},
     "infra": set(),
     "audit": {"infra"},
@@ -177,3 +183,68 @@ def test_same_package_import_is_never_judged():
 def test_allowlist_is_keyed_by_module_not_package():
     assert ("soar.pipeline", "ingest") in ALLOWLIST
     assert ("soar.risk", "ingest") not in ALLOWLIST
+
+
+# --- P13-T01 / DEC-210: the `rag` package ------------------------------------------------------
+
+
+def _package_names_on_disk() -> set[str]:
+    return {
+        path.name
+        for path in APP_ROOT.iterdir()
+        if path.is_dir() and (path / "__init__.py").is_file()
+    }
+
+
+def test_every_package_on_disk_is_in_the_table():
+    """A package missing from `ALL` is invisible to the scan: an import OF it is never judged
+    (`_absolute_target` returns None), so a tier could import it unchecked. `rag` arrived with
+    DEC-210; the next package must not slip in the same way."""
+    on_disk = _package_names_on_disk()
+    assert on_disk - ALL == set(), f"packages the scan cannot see: {sorted(on_disk - ALL)}"
+    assert (
+        on_disk - set(ALLOWED) == set()
+    ), f"packages with no row: {sorted(on_disk - set(ALLOWED))}"
+    assert set(ALLOWED) <= ALL
+
+
+def test_the_rag_package_exists_and_is_only_a_docstring():
+    init = APP_ROOT / "rag" / "__init__.py"
+    assert init.is_file(), "backend/app/rag/__init__.py"
+    tree = ast.parse(init.read_text(encoding="utf-8"))
+    assert ast.get_docstring(tree), "rag/__init__.py must open with a docstring"
+    assert len(tree.body) == 1, "rag/__init__.py holds a docstring and nothing else (T01)"
+
+
+@pytest.mark.parametrize("target", ["infra", "audit", "security", "llm", "kb", "domain"])
+def test_rag_may_import_its_six_packages(target):
+    assert violations_in(f"from app.{target} import x\n", "rag.lookup") == []
+
+
+@pytest.mark.parametrize("target", ["tier1", "tier2", "web", "ingest", "soar", "enrichment"])
+def test_rag_importing_a_tier_or_any_other_package_is_a_violation(target):
+    assert violations_in(f"from app.{target} import x\n", "rag.lookup") == [
+        f"rag.lookup imports {target} — not in ALLOWED[rag]"
+    ]
+
+
+@pytest.mark.parametrize("pkg", ["tier1", "tier2", "web"])
+def test_tier1_tier2_and_web_may_import_rag(pkg):
+    assert violations_in("from app.rag import lookup\n", f"{pkg}.mod") == []
+    assert violations_in("from ..rag import lookup\n", f"{pkg}.mod") == []
+
+
+@pytest.mark.parametrize(
+    "pkg", ["infra", "audit", "security", "llm", "kb", "domain", "ingest", "soar", "enrichment"]
+)
+def test_no_other_package_may_import_rag(pkg):
+    assert violations_in("from app.rag import lookup\n", f"{pkg}.mod") == [
+        f"{pkg}.mod imports rag — not in ALLOWED[{pkg}]"
+    ]
+
+
+def test_a_deferred_import_of_rag_inside_a_function_is_still_judged():
+    source = "def f():\n    from app.rag import lookup\n    return lookup\n"
+    assert violations_in(source, "domain.transitions") == [
+        "domain.transitions imports rag — not in ALLOWED[domain]"
+    ]

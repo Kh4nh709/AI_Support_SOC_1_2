@@ -184,8 +184,8 @@ def test_risk_band_thresholds():
 
 
 def test_template_constants_counts():
-    assert len(B.HEADINGS) == 9
-    assert len(B.SENTENCES) == 7
+    assert len(B.HEADINGS) == 10  # the nine of P3, plus HEADING_LEARNED (DEC-210)
+    assert len(B.SENTENCES) == 9  # the seven of P3, plus the two learned-knowledge sentences
     assert B.SENTENCE_ABSENT in B.TEMPLATE_CONSTANTS
     assert B.SENTENCE_NO_PLAYBOOK in B.TEMPLATE_CONSTANTS
     assert "severity:" in B.TEMPLATE_CONSTANTS

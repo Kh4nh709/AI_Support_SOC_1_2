@@ -37,11 +37,12 @@ HEADING = "## Admin console v1.1 — deploy (DEC-205)"
 #: what that row says to expect (None: nothing a test can hold the row to).
 STEPS: list[tuple[str, str, str | None]] = [
     ("1", "git merge --ff-only director/admin-v1-1", "Fast-forward"),
-    ("2", "make migrate PY=.venv/bin/python", "migrate: 1 applied, 18 already present"),
+    # 020 (P13-T01, DEC-210) is the newest migration: a database already at 019 applies one.
+    ("2", "make migrate PY=.venv/bin/python", "migrate: 1 applied, 19 already present"),
     (
         "3",
         'psql "$DATABASE_URL_OWNER" -Atc "select count(*) from schema_migrations"',
-        "`19`",
+        "`20`",
     ),
     ("4", "docker compose up -d --build ui", None),
     ("5", "docker compose restart app worker", None),

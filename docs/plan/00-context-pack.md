@@ -45,8 +45,9 @@ Owner: the thesis author (also Tier-1/Tier-2 analyst together with the advisor).
 |---|---|---|---|
 | `ingest/` | tier | domain, infra, audit, enrichment | `wazuh_parser.py`, `category.py`, `dedup.py`, `autoclose.py` |
 | `soar/` | tier | enrichment, domain, infra, audit, **ingest** (allowlisted exception) | `pipeline.py` (orchestrates one intake → alert), `risk.py` |
-| `tier1/` | tier | domain, llm, kb, security, infra, audit | `queue.py`, `decide.py`, `triage.py` (job ①), `digest.py` |
-| `tier2/` | tier | domain, llm, kb, security, infra, audit, enrichment | `dossier.py`, `investigate.py` (job ②), `conclude.py` |
+| `tier1/` | tier | domain, llm, kb, security, infra, audit, rag | `queue.py`, `decide.py`, `triage.py` (job ①), `digest.py` |
+| `tier2/` | tier | domain, llm, kb, security, infra, audit, enrichment, rag | `dossier.py`, `investigate.py` (job ②), `conclude.py` |
+| `rag/` | tier | infra, audit, security, llm, kb, domain (DEC-210) — no tier, no `web`; `tier1`, `tier2` and `web` may import it | learned knowledge and RAG: fingerprint, history, entries, candidates, the ranking and drafting agents, publishing (P13) |
 | `domain/` | infra | infra, audit | `alert.py`, `transitions.py`, `correlation.py` |
 | `infra/` | infra | — | `db.py`, `jobs.py`, `worker.py` (**the claim/lock/retry/reclaim loop only — it names no handler and imports no tier; DEC-037**), `auth.py`, `config.py`, `errors.py`, `puller.py`, `intake.py`, `health.py`, `notify.py` |
 | `audit/` | infra | infra | `events.py`, `llm_runs.py` |
@@ -118,6 +119,7 @@ NEVER_AUTOCLOSE_AGENTS=[]  AUTOCLOSE_RULE_WIDTH_PCT=30  REVIEW_DELTA_TOLERANCE=2
 JWT_SECRET  JWT_TTL_HOURS=8  LOGIN_MAX_FAILS=5  LOCKOUT_MINUTES=15  WEBHOOK_API_KEY(empty -> POST /webhook/alerts answers 503 webhook disabled; DEC-040, Owner)  WEBHOOK_IP_ALLOWLIST(JSON list of CIDRs, empty -> deny all; DEC-040, Owner)
 RETENTION_DAYS=365  BACKUP_HOUR=2  EVAL_BLIND_FRACTION=0.5  DISPLAY_TZ="Asia/Ho_Chi_Minh"
 NOTIFY_TELEGRAM_BOT_TOKEN  NOTIFY_TELEGRAM_CHAT_ID  (or NOTIFY_SMTP_*)
+RAG_ENABLED=false  KNOWLEDGE_DRAFT_ENABLED=false(bools, DEC-210, learned knowledge and RAG for ① and ②, .env keys only and not web settings: RAG_ENABLED=false enqueues no lookup, delays no triage and adds no block to a prompt, so ①'s prompt and ②'s dossier stay byte-identical; KNOWLEDGE_DRAFT_ENABLED=false enqueues no draft on a conclusion; each default false, so merging the feature changes nothing)  RAG_MODEL(empty means LLM_MODEL_PROPOSER, the model of the ranking and drafting calls; the rag package resolves the empty value, so the Config field stays empty)  RAG_TRIAGE_DELAY_S=45  RAG_CASE_REFRESH_H=24  RAG_HISTORY_DAYS=90  RAG_MONTHLY_USD_CAP=3  KNOWLEDGE_QUEUE_MAX=200
 ```
 
 **Database connection keys — added 05/09/2026 (DEC-003).** §6.1 already fixes *which* role does what — the application connects as `app_rw`, migrations run as the owner role — so the three keys above only operationalise that rule and nothing more. `TEST_DATABASE_URL` is separate so a test run can never be pointed at the production database by accident; `backend/tests/conftest.py` refuses any DSN whose database name does not end in `_test`. The four Compose variables `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `DB_PORT` are **deliberately not part of this contract**: they exist only inside `docker-compose.yml` and `.env.example`, and `backend/app/infra/config.py` never reads them.

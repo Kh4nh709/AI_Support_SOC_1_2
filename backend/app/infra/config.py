@@ -69,6 +69,15 @@ def _parse_int(key: str, raw: str) -> int:
         raise ConfigError(f"{key}: not a valid integer: {raw!r}") from exc
 
 
+def _parse_nonneg_int(key: str, raw: str) -> int:
+    """An integer that is zero or more (DEC-210): a delay, a window, a cap or a queue length below
+    zero has no meaning, so it stops the start-up naming `key` and is never clamped quietly."""
+    value = _parse_int(key, raw)
+    if value < 0:
+        raise ConfigError(f"{key}: must be an integer of 0 or more, got {raw!r}")
+    return value
+
+
 def _parse_float(key: str, raw: str) -> float:
     try:
         return float(raw)
@@ -188,6 +197,21 @@ class Config:
     DISPLAY_TZ: str = "Asia/Ho_Chi_Minh"
     NOTIFY_TELEGRAM_BOT_TOKEN: str = ""
     NOTIFY_TELEGRAM_CHAT_ID: str = ""
+    # DEC-210: learned knowledge and RAG for ① and ②. `.env` keys only, not web settings. Both
+    # switches default to false, so merging the feature changes nothing until the Owner turns one
+    # on: RAG_ENABLED=false enqueues no lookup, delays no triage and adds no block to a prompt;
+    # KNOWLEDGE_DRAFT_ENABLED=false enqueues no draft on a conclusion. RAG_MODEL empty means
+    # LLM_MODEL_PROPOSER, resolved by the ranking agent (it is not copied here, unlike the
+    # verifier's). RAG_MONTHLY_USD_CAP is the lookup's own sub-cap, counted inside
+    # LLM_MONTHLY_USD_CAP; KNOWLEDGE_QUEUE_MAX is the most pending drafts the queue takes.
+    RAG_ENABLED: bool = False
+    KNOWLEDGE_DRAFT_ENABLED: bool = False
+    RAG_MODEL: str = ""
+    RAG_TRIAGE_DELAY_S: int = 45
+    RAG_CASE_REFRESH_H: int = 24
+    RAG_HISTORY_DAYS: int = 90
+    RAG_MONTHLY_USD_CAP: int = 3
+    KNOWLEDGE_QUEUE_MAX: int = 200
 
     @property
     def llm_enabled(self) -> bool:
@@ -225,6 +249,10 @@ def load(*, env_file: str | Path = ".env") -> Config:
     def as_int(key: str, default: int) -> int:
         value = raw(key)
         return default if value is None else _parse_int(key, value)
+
+    def as_nonneg_int(key: str, default: int) -> int:
+        value = raw(key)
+        return default if value is None else _parse_nonneg_int(key, value)
 
     def as_float(key: str, default: float) -> float:
         value = raw(key)
@@ -320,4 +348,12 @@ def load(*, env_file: str | Path = ".env") -> Config:
         DISPLAY_TZ=as_str("DISPLAY_TZ", "Asia/Ho_Chi_Minh"),
         NOTIFY_TELEGRAM_BOT_TOKEN=as_str("NOTIFY_TELEGRAM_BOT_TOKEN", ""),
         NOTIFY_TELEGRAM_CHAT_ID=as_str("NOTIFY_TELEGRAM_CHAT_ID", ""),
+        RAG_ENABLED=as_bool("RAG_ENABLED", False),
+        KNOWLEDGE_DRAFT_ENABLED=as_bool("KNOWLEDGE_DRAFT_ENABLED", False),
+        RAG_MODEL=as_str("RAG_MODEL", ""),
+        RAG_TRIAGE_DELAY_S=as_nonneg_int("RAG_TRIAGE_DELAY_S", 45),
+        RAG_CASE_REFRESH_H=as_nonneg_int("RAG_CASE_REFRESH_H", 24),
+        RAG_HISTORY_DAYS=as_nonneg_int("RAG_HISTORY_DAYS", 90),
+        RAG_MONTHLY_USD_CAP=as_nonneg_int("RAG_MONTHLY_USD_CAP", 3),
+        KNOWLEDGE_QUEUE_MAX=as_nonneg_int("KNOWLEDGE_QUEUE_MAX", 200),
     )

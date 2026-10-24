@@ -61,8 +61,18 @@ EVENT_TYPES_V3 = [
 ]
 EVENT_TYPES = EVENT_TYPES_V1 + EVENT_TYPES_V3
 # Names a LATER migration adds to the same CHECK: the database these tests run on is migrated to
-# the end, so the live constraint holds 016's 27 plus these (019_admin_console.sql, DEC-200).
-EVENT_TYPES_LATER = ["admin.settings_changed"]
+# the end, so the live constraint holds 016's 27 plus these (019_admin_console.sql, DEC-200; the
+# seven of 020_learned_knowledge.sql, DEC-210).
+EVENT_TYPES_LATER = [
+    "admin.settings_changed",
+    "knowledge.drafted",
+    "knowledge.approved",
+    "knowledge.rejected",
+    "knowledge.retired",
+    "knowledge.merged",
+    "rag.lookup_failed",
+    "rag.integrity_failed",
+]
 
 JOB_TYPES = ["pipeline", "triage", "investigate", "digest", "health", "pull"]
 ALERT_SOURCES = ["wazuh", "lab", "replay"]

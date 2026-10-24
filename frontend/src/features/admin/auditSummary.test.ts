@@ -1,11 +1,12 @@
 // src/features/admin/auditSummary.test.ts — what the audit page makes of an event's payload: the one-line
-// summary of each of the 28 event types, the link of a subject that is an alert or a case, the payload as
+// summary of each of the 35 event types, the link of a subject that is an alert or a case, the payload as
 // text, and the escape of the characters a person cannot see. A payload is whatever the writers of the
 // events put there, so every function here is also shown to survive a payload of the wrong shape.
 import { S } from "../../strings";
 import {
   REDACTED,
   hasInvisible,
+  isAlarmEvent,
   payloadText,
   subjectPathOf,
   summaryOf,
@@ -18,8 +19,8 @@ const TYPES = Object.keys(S.admin.eventType);
 const sum = (event_type: string, payload: unknown) => summaryOf({ event_type, payload });
 
 describe("summaryOf, one event type at a time", () => {
-  it("covers all 28 event types of the backend, and each has a case below", () => {
-    expect(TYPES).toHaveLength(28);
+  it("covers all 35 event types of the backend, and each has a case below", () => {
+    expect(TYPES).toHaveLength(35);
   });
 
   it.each<[type: string, payload: unknown, summary: string]>([
@@ -302,11 +303,55 @@ describe("summaryOf, one event type at a time", () => {
       "mới lỗi: a_new_check; đang lỗi: a_new_check",
     ],
     ["health.alarm", null, "cảnh báo sức khoẻ"],
+    // P13-T01 (DEC-210): the learned-knowledge events. A line may name the draft or the entry by its id and
+    // carry the admin's reason; it never carries what the draft or the entry says (see the describe below).
+    [
+      "knowledge.drafted",
+      { draft_id: "d-1", conclusion: "closed_fp" },
+      "model đề xuất một bản nháp tri thức, chờ admin duyệt; bản nháp d-1",
+    ],
+    ["knowledge.drafted", null, "model đề xuất một bản nháp tri thức, chờ admin duyệt"],
+    [
+      "knowledge.approved",
+      { entry_id: "e-1" },
+      "admin duyệt bản nháp thành tri thức; tri thức e-1",
+    ],
+    ["knowledge.approved", {}, "admin duyệt bản nháp thành tri thức"],
+    [
+      "knowledge.rejected",
+      { draft_id: "d-2", reason: "Quá chung chung, không có căn cứ" },
+      "admin từ chối bản nháp; bản nháp d-2; lý do: Quá chung chung, không có căn cứ",
+    ],
+    ["knowledge.rejected", null, "admin từ chối bản nháp"],
+    [
+      "knowledge.retired",
+      { entry_id: "e-3", reason: "Rule đã đổi" },
+      "admin gỡ tri thức khỏi kho; tri thức e-3; lý do: Rule đã đổi",
+    ],
+    ["knowledge.retired", null, "admin gỡ tri thức khỏi kho"],
+    [
+      "knowledge.merged",
+      { entry_id: "e-4" },
+      "bản nháp gộp vào tri thức đã có, không tạo mục mới; tri thức e-4",
+    ],
+    ["knowledge.merged", null, "bản nháp gộp vào tri thức đã có, không tạo mục mới"],
+    ["rag.lookup_failed", null, "tra cứu tri thức thất bại sau lần thử cuối"],
+    ["rag.lookup_failed", { reason: "timeout" }, "tra cứu tri thức thất bại sau lần thử cuối"],
+    [
+      "rag.integrity_failed",
+      { entry_id: "e-5" },
+      "tệp tri thức không còn khớp mã băm lúc duyệt, mục bị loại khỏi tra cứu; tri thức e-5",
+    ],
+    [
+      "rag.integrity_failed",
+      null,
+      "tệp tri thức không còn khớp mã băm lúc duyệt, mục bị loại khỏi tra cứu",
+    ],
   ])("%s %j says %j", (type, payload, summary) => {
     expect(sum(type, payload)).toBe(summary);
   });
 
-  it("has a case for every one of the 28 types", () => {
+  it("has a case for every one of the 35 types", () => {
     // The cases above are the table; this is the other direction: no type of the backend is left without one.
     const covered = new Set(
       [
@@ -338,9 +383,100 @@ describe("summaryOf, one event type at a time", () => {
         "label.created",
         "admin.settings_changed",
         "health.alarm",
+        "knowledge.drafted",
+        "knowledge.approved",
+        "knowledge.rejected",
+        "knowledge.retired",
+        "knowledge.merged",
+        "rag.lookup_failed",
+        "rag.integrity_failed",
       ].sort(),
     );
     expect([...covered]).toEqual([...TYPES].sort());
+  });
+});
+
+// DEC-210: a learned-knowledge event is about a draft or an entry, and a draft is written by a model from an
+// analyst's own words. The audit page may say which draft or which entry, and an admin's reason for rejecting
+// or retiring one; it must not repeat what the draft or the entry says. The server keeps no such text in these
+// payloads, and the line must not depend on that: it reads `draft_id`, `entry_id` and `reason`, nothing else.
+describe("the summary of a learned-knowledge event never shows a draft or an entry's content (DEC-210)", () => {
+  const SECRET = "TEXT-OF-A-DRAFT-OR-ENTRY";
+  const KNOWLEDGE = [
+    "knowledge.drafted",
+    "knowledge.approved",
+    "knowledge.rejected",
+    "knowledge.retired",
+    "knowledge.merged",
+    "rag.lookup_failed",
+    "rag.integrity_failed",
+  ];
+  const CONTENT_KEYS = [
+    "draft",
+    "content",
+    "body",
+    "fingerprint",
+    "title",
+    "summary",
+    "text",
+    "note",
+    "match_notes",
+    "matches",
+    "history",
+    "evidence",
+    "warnings",
+    "review_note",
+    "conclusion",
+    "category",
+    "error",
+  ];
+
+  it.each(KNOWLEDGE)("%s repeats no field but the ids and the reason", (type) => {
+    const payload = Object.fromEntries([
+      ...CONTENT_KEYS.map((key) => [key, `${SECRET}-${key}`]),
+      ["draft", { title: SECRET, body: SECRET }],
+      ["entry", { content: SECRET }],
+    ]);
+    expect(sum(type, payload), type).not.toContain(SECRET);
+    // With the ids and a reason added, only those three show, and the content still does not.
+    const withIds = sum(type, { ...payload, draft_id: "d-9", entry_id: "e-9", reason: "vì sao" });
+    expect(withIds, type).not.toContain(SECRET);
+  });
+
+  it("shows the id of a draft and of an entry, and the admin's reason, where the event has them", () => {
+    expect(sum("knowledge.rejected", { draft_id: "d-9", reason: "vì sao" })).toContain("d-9");
+    expect(sum("knowledge.rejected", { draft_id: "d-9", reason: "vì sao" })).toContain(
+      "lý do: vì sao",
+    );
+    expect(sum("knowledge.retired", { entry_id: "e-9", reason: "vì sao" })).toContain("e-9");
+    expect(sum("knowledge.retired", { entry_id: "e-9", reason: "vì sao" })).toContain(
+      "lý do: vì sao",
+    );
+    expect(sum("knowledge.approved", { entry_id: "e-9" })).toContain("e-9");
+    expect(sum("knowledge.drafted", { draft_id: "d-9" })).toContain("d-9");
+  });
+
+  it("cuts a long reason to one short line, as every other free text is", () => {
+    const long = sum("knowledge.rejected", { reason: "x".repeat(5000) });
+    expect(long.length).toBeLessThan(200);
+    expect(long.endsWith("…")).toBe(true);
+  });
+
+  it("shows the invisible characters of an id or a reason as their escapes", () => {
+    const text = sum("knowledge.retired", { entry_id: "e\u202e1", reason: "a\u200bb" });
+    expect(text).toContain("e\\u202e1");
+    expect(text).toContain("a\\u200bb");
+    expect(hasInvisible(text)).toBe(false);
+  });
+
+  it("gives an audit row of a learned-knowledge event no link: its subject is a draft, an entry or a lookup", () => {
+    for (const type of KNOWLEDGE) {
+      expect(subjectPathOf({ event_type: type, subject_id: "abc" }), type).toBeNull();
+    }
+  });
+
+  it("is not an alarm row: a failed lookup is told in the summary, not tinted like a refusal", () => {
+    for (const type of KNOWLEDGE) expect(isAlarmEvent(type), type).toBe(false);
   });
 });
 
@@ -572,6 +708,8 @@ describe("summaryOf, on a payload that is not what the writer would write", () =
     "changes",
     "failing",
     "new",
+    "draft_id",
+    "entry_id",
   ];
   const WRONG: [string, unknown][] = [
     ["null", null],
@@ -696,6 +834,13 @@ describe("subjectPathOf", () => {
       "authz.denied",
       "health.alarm",
       "job.exhausted",
+      "knowledge.approved",
+      "knowledge.drafted",
+      "knowledge.merged",
+      "knowledge.rejected",
+      "knowledge.retired",
+      "rag.integrity_failed",
+      "rag.lookup_failed",
       "rule.suspected_wrong",
     ]);
     for (const event_type of rest) {

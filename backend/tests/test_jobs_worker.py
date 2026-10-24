@@ -18,6 +18,7 @@ up what it committed before returning.
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import time
 
 import psycopg
@@ -217,7 +218,7 @@ def test_reclaim_stale_reclaims_old_locks_but_not_recent_ones(db):
     )
     db.commit()
 
-    n = jobs.reclaim_stale(db)
+    n = jobs.reclaim_stale(db, ["pipeline"])
     db.commit()
 
     assert n == 1
@@ -232,6 +233,118 @@ def test_reclaim_stale_reclaims_old_locks_but_not_recent_ones(db):
     # so it cannot leak into a later test in this session.
     db.execute("DELETE FROM jobs WHERE subject_id IN ('stale-1', 'fresh-1')")
     db.commit()
+
+
+def test_reclaim_stale_requires_the_job_types():
+    """DEC-210: a worker reclaims only what it can run. The parameter has no default, so a caller
+    that forgets it is a `TypeError`, never a worker that quietly reclaims every type."""
+    parameter = inspect.signature(jobs.reclaim_stale).parameters["job_types"]
+    assert parameter.default is inspect.Parameter.empty
+    with pytest.raises(TypeError):
+        jobs.reclaim_stale(None)  # type: ignore[call-arg]
+
+
+@pytest.mark.db
+def test_reclaim_stale_takes_only_its_types(db):
+    """The `rag-worker` shares the `jobs` table with the main worker. Its reclaim must leave a
+    stale `triage` row alone: that job may still be running, inside its own long transaction, and
+    a second worker taking it would run ① twice (spec §6, "Lock timing")."""
+    db.execute(
+        "INSERT INTO jobs (job_type, subject_id, status, locked_at, attempts) "
+        "VALUES ('triage', 'typed-stale-1', 'running', now() - interval '301 seconds', 1)"
+    )
+    db.commit()
+
+    other = jobs.reclaim_stale(db, ["rag_lookup"])
+    db.commit()
+    untouched = db.execute(
+        "SELECT status, locked_at IS NOT NULL FROM jobs WHERE subject_id = 'typed-stale-1'"
+    ).fetchone()
+
+    own = jobs.reclaim_stale(db, ["triage"])
+    db.commit()
+    reclaimed = db.execute(
+        "SELECT status, locked_at FROM jobs WHERE subject_id = 'typed-stale-1'"
+    ).fetchone()
+
+    db.execute("DELETE FROM jobs WHERE subject_id = 'typed-stale-1'")
+    db.commit()
+
+    assert (other, untouched) == (0, ("running", True))
+    assert (own, reclaimed) == (1, ("pending", None))
+
+
+@pytest.mark.db
+def test_reclaim_stale_with_several_types_takes_each_and_only_those(db):
+    for job_type, subject in (
+        ("rag_lookup", "typed-many-1"),
+        ("knowledge_draft", "typed-many-2"),
+        ("triage", "typed-many-3"),
+    ):
+        db.execute(
+            "INSERT INTO jobs (job_type, subject_id, status, locked_at, attempts) "
+            "VALUES (%s, %s, 'running', now() - interval '301 seconds', 1)",
+            (job_type, subject),
+        )
+    db.commit()
+
+    n = jobs.reclaim_stale(db, ["rag_lookup", "knowledge_draft"])
+    db.commit()
+    statuses = dict(
+        db.execute(
+            "SELECT subject_id, status FROM jobs WHERE subject_id LIKE 'typed-many-%'"
+        ).fetchall()
+    )
+
+    db.execute("DELETE FROM jobs WHERE subject_id LIKE 'typed-many-%'")
+    db.commit()
+
+    assert n == 2
+    assert statuses == {
+        "typed-many-1": "pending",
+        "typed-many-2": "pending",
+        "typed-many-3": "running",
+    }
+
+
+@pytest.mark.db
+def test_reclaim_stale_with_no_types_reclaims_nothing(db):
+    db.execute(
+        "INSERT INTO jobs (job_type, subject_id, status, locked_at, attempts) "
+        "VALUES ('pipeline', 'typed-none-1', 'running', now() - interval '301 seconds', 1)"
+    )
+    db.commit()
+
+    n = jobs.reclaim_stale(db, [])
+    db.commit()
+    status = db.execute("SELECT status FROM jobs WHERE subject_id = 'typed-none-1'").fetchone()[0]
+
+    db.execute("DELETE FROM jobs WHERE subject_id = 'typed-none-1'")
+    db.commit()
+
+    assert (n, status) == (0, "running")
+
+
+# ---------------------------------------------------------------------------
+# The two P13 job types
+# ---------------------------------------------------------------------------
+
+
+def test_job_types_hold_the_two_rag_types_next_to_the_six():
+    assert {"rag_lookup", "knowledge_draft"} <= jobs.JOB_TYPES
+    assert {"pipeline", "triage", "investigate", "digest", "health", "pull"} <= jobs.JOB_TYPES
+    assert len(jobs.JOB_TYPES) == 8
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("job_type", ["rag_lookup", "knowledge_draft"])
+def test_enqueue_admits_each_rag_type_and_is_single_flight_per_subject(db, job_type):
+    first = jobs.enqueue(db, job_type, "alert:gl-x")
+    again = jobs.enqueue(db, job_type, "alert:gl-x")
+    other_type = "knowledge_draft" if job_type == "rag_lookup" else "rag_lookup"
+    sibling = jobs.enqueue(db, other_type, "alert:gl-x")
+    assert first is not None and again is None
+    assert sibling is not None  # single-flight is per (job_type, subject)
 
 
 # ---------------------------------------------------------------------------
@@ -397,3 +510,37 @@ def test_run_forever_uses_a_longer_timeout_when_given_one_for_the_job_type(db):
 
     db.execute("DELETE FROM jobs WHERE subject_id = 'wf-timeout-1'")
     db.commit()
+
+
+@pytest.mark.db
+def test_run_forever_reclaims_only_its_handlers(db):
+    """`run_forever` hands `reclaim_stale` its own handler keys. A `rag_lookup` worker meets a
+    stale `triage` row and a stale `rag_lookup` row: the second is reclaimed (and, being due, run),
+    the first is not reclaimed at all."""
+    for job_type, subject in (("triage", "wf-reclaim-triage"), ("rag_lookup", "wf-reclaim-rag")):
+        db.execute(
+            "INSERT INTO jobs (job_type, subject_id, status, locked_at, attempts) "
+            "VALUES (%s, %s, 'running', now() - interval '301 seconds', 1)",
+            (job_type, subject),
+        )
+    db.commit()
+    seen = []
+
+    def handler(conn, job):
+        seen.append((job.job_type, job.subject_id, job.attempts))
+
+    worker.run_forever(lambda: db, {"rag_lookup": handler}, once=True)
+
+    rows = {
+        row[0]: row[1:]
+        for row in db.execute(
+            "SELECT subject_id, status, locked_at IS NOT NULL FROM jobs "
+            "WHERE subject_id IN ('wf-reclaim-triage', 'wf-reclaim-rag')"
+        ).fetchall()
+    }
+    db.execute("DELETE FROM jobs WHERE subject_id IN ('wf-reclaim-triage', 'wf-reclaim-rag')")
+    db.commit()
+
+    assert seen == [("rag_lookup", "wf-reclaim-rag", 2)]
+    assert rows["wf-reclaim-rag"][0] == "succeeded"
+    assert rows["wf-reclaim-triage"] == ("running", True)
