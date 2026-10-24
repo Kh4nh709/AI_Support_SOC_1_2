@@ -19,15 +19,26 @@ When an analyst closes an alert (`transitions.decide`) or concludes a case (`tra
 notes are `analyst_note` blocks, always through `security/wrap.untrusted_block`; one request sentence
 follows, a template constant. The first message is held to `PROMPT_BUDGET_TOKENS` as the ranking prompt
 is: the longest analyst and AI blocks are cut first (halved down to a floor), and, were that not enough,
-the last ones dropped. The model fills six fields of `knowledge_draft_v1`
-(`title, tags, summary, distinguishing_signals, check_next_time, confidence_note`); the job adds the six
-closed ones from the source record.
+the last ones dropped.
+
+**Two shapes, one name.** Spec §7.4 calls the draft `knowledge_draft_v1`, a record of twelve fields.
+It is written by two hands, so it exists in two forms:
+
+* the model's ANSWER is six fields (`title, tags, summary, distinguishing_signals, check_next_time,
+  confidence_note`). That is `knowledge_draft_v1` in `rag/schemas.json`, the schema `agent.call_json`
+  validates the answer against; a model that writes a closed key is refused, which is safe but costs
+  the whole answer;
+* the STORED draft (`knowledge_drafts.draft`, what the admin edits and `validate_draft` checks) has
+  twelve: the model's six, tidied, plus the six closed ones (`conclusion, category, mitre_ids,
+  soar_scenario, rule_ids, log_source`) that the job copies from the source record (`DRAFT_FIELDS`).
 
 **V1-V5** (`validate_draft`) return fault NAMES, never a value (the names go into `warnings` an admin
 reads, and into the retry message, whose every word the linter must know):
 
-    v1_schema:<field>   the draft is not `knowledge_draft_v1` (a field missing or of the wrong type, a
-                        control character), `v1_schema:unexpected_key`, `v1_schema:root`;
+    v1_schema:<field>   the draft is not the stored shape (a field missing or of the wrong type, a
+                        control character, an invisible one: format, private-use or unassigned
+                        Unicode, e.g. tag characters, bidi controls, soft hyphen, word joiner, BOM),
+                        `v1_schema:unexpected_key`, `v1_schema:root`;
                         `v1_tags:unknown_tag` (a tag outside `tags.yaml`)
     v2_closed:<field>   a closed field is not the source's
     v3_<kind>:<field>   a literal of `generalise.FINDING_NAMES` kind in a free-text field
@@ -44,11 +55,15 @@ reads, and into the retry message, whose every word the linter must know):
    before it is sent exactly as the lookup does (V-R1, A4);
 3. the ranking agent (`rag.match.rank`) when there is a candidate; its call is a `knowledge_draft` /
    `drafter` run of its own, so it counts toward the RAG sub-cap;
-4. the merge rule: an active entry rated `rat_giong` whose conclusion is the source's -> the draft is
-   `merged`, `duplicate_of_entry` set, `{subject, at}` appended to the entry's `evidence` and the source
-   appended to its `source_alert_ids` / `source_case_ids` (so the entry cannot be retrieved for its own
-   source, A5), event `knowledge.merged`, and no draft call. Such an entry wins over a conflicting one;
-   otherwise the first `rat_giong` entry with another conclusion is `conflict_with_entry`;
+4. the merge rule, over the entries rated `rat_giong` (`conclusions_agree` says whether a conclusion is
+   the source's: by family, so Tier-1 `closed_fp` agrees with Tier-2 `concluded_fp`, and every other
+   pair is strict, `confirmed_incident` agreeing only with itself). A conflict comes first: if ANY
+   `rat_giong` entry disagrees, the draft goes on as `pending` with `conflict_with_entry` set to the
+   first that does, nothing is merged and no evidence is appended, even when another `rat_giong` entry
+   agrees; the admin must see the conflict. Otherwise the first agreeing `rat_giong` entry takes the
+   draft: `merged`, `duplicate_of_entry` set, `{subject, at}` appended to the entry's `evidence` and
+   the source appended to its `source_alert_ids` / `source_case_ids` (so the entry cannot be retrieved
+   for its own source, A5), event `knowledge.merged`, and no draft call;
 5. the draft call, validated by V1-V5; a failure is retried once with the fault names added to the
    message; 6. stored `pending`: a draft that passes with `knowledge.drafted`; two failures with
    `draft = {}` and the faults of the last attempt in `warnings`; no budget with `["budget"]`.
@@ -344,6 +359,27 @@ _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\ud800-\udfff]")
 _NONCE_SHAPED = re.compile(r"(?<![0-9A-Za-z])[0-9a-fA-F]{16}(?![0-9A-Za-z])")
 _BOUNDARY_TAG = re.compile(r"<\s*/?\s*untrusted_data")
 
+#: Unicode categories of code points a reader cannot see, or sees as something else: format (Cf: tag
+#: characters U+E0000-E007F, bidi controls U+202A-202E and U+2066-2069, soft hyphen, word joiner and the
+#: invisible operators U+2060-2064, zero-width characters, the BOM), private use (Co) and unassigned
+#: (Cn). Text that carries them can hold an instruction or a literal that the admin reviewing the draft
+#: does not see, and that `security.detector` (four code points) and V3 (a literal split by one) miss.
+_INVISIBLE_CATEGORIES = frozenset({"Cf", "Co", "Cn"})
+
+
+def _is_invisible(char: str) -> bool:
+    return unicodedata.category(char) in _INVISIBLE_CATEGORIES
+
+
+def strip_invisible(text: str) -> str:
+    """`text` without its invisible code points (`_INVISIBLE_CATEGORIES`), which are deleted, not
+    replaced: `79.79<U+2060>.78.202` becomes the address it displays as."""
+    return text if text.isascii() else "".join(ch for ch in text if not _is_invisible(ch))
+
+
+def _has_invisible(text: str) -> bool:
+    return not text.isascii() and any(_is_invisible(ch) for ch in text)
+
 
 def _is_text(value: Any) -> bool:
     return isinstance(value, str)
@@ -354,8 +390,9 @@ def _is_text_list(value: Any) -> bool:
 
 
 def _has_control(value: Any) -> bool:
+    """A control character, a lone surrogate or an invisible code point in a text or a list of texts."""
     items = [value] if _is_text(value) else value if _is_text_list(value) else []
-    return any(_CONTROL.search(item) for item in items)
+    return any(_CONTROL.search(item) or _has_invisible(item) for item in items)
 
 
 def _v1(draft: Mapping[str, Any], tags: frozenset[str]) -> list[str]:
@@ -414,7 +451,8 @@ def _free_texts(draft: Mapping[str, Any]) -> dict[str, str]:
 def _v3(texts: Mapping[str, str], source: SourceRecord) -> list[str]:
     faults = []
     for name, text in texts.items():
-        found = literal_findings(text[:MAX_SCAN_CHARS], source.hostnames)
+        # read as displayed: an address split by a word joiner is the address (V1 names the joiner)
+        found = literal_findings(strip_invisible(text[:MAX_SCAN_CHARS]), source.hostnames)
         faults.extend(f"v3_{kind}:{name}" for kind in found)
     return faults
 
@@ -423,12 +461,15 @@ def _v4(texts: Mapping[str, str]) -> list[str]:
     faults = []
     nonce = wrap.new_nonce()
     for name, text in texts.items():
-        scanned = text[:MAX_SCAN_CHARS]
+        raw = text[:MAX_SCAN_CHARS]
+        scanned = strip_invisible(raw)  # a tag or a phrase split by an invisible character is whole
         if _BOUNDARY_TAG.search(unicodedata.normalize("NFKC", scanned).lower()):
             faults.append(f"v4_delimiter:{name}")
         if _NONCE_SHAPED.search(scanned):
             faults.append(f"v4_nonce:{name}")
-        if detector.scan([wrap.untrusted_block(scanned, "kb_learned", nonce=nonce)]):
+        # the detector reads the text as written (it flags hidden characters) and as displayed
+        views = [raw] if scanned == raw else [raw, scanned]
+        if detector.scan([wrap.untrusted_block(view, "kb_learned", nonce=nonce) for view in views]):
             faults.append(f"v4_detector:{name}")
     return faults
 
@@ -580,9 +621,11 @@ def retry_user(user: str, faults: Sequence[str]) -> str:
 
 
 def _tidy(value: str) -> str:
-    """One printable line: control characters (and a NUL, and a lone surrogate) become spaces, runs
-    of whitespace one space. The entry's Markdown folds its text onto one line anyway."""
-    return " ".join(_CONTROL.sub(" ", value).split())
+    """One printable line: invisible code points (`strip_invisible`) are deleted, control characters
+    (and a NUL, and a lone surrogate) become spaces, runs of whitespace one space. The entry's Markdown
+    folds its text onto one line anyway. It runs before V1-V5, so the text validated is the text stored
+    and what the model hid in it, or split a literal with, is gone before the rules read it."""
+    return " ".join(_CONTROL.sub(" ", strip_invisible(value)).split())
 
 
 def _tidy_list(items: Sequence[str]) -> list[str]:
@@ -802,21 +845,38 @@ def _sendable(conn: psycopg.Connection, fp: Fingerprint) -> tuple[list[Entry], l
     return sendable, failed, len(intact) - len(sendable)
 
 
+#: A Tier-1 closure and a Tier-2 conclusion that say the same thing: `closed_fp` and `concluded_fp`.
+#: No other pair is one (`closed_benign` is not `concluded_policy_violation`, and `confirmed_incident`
+#: agrees only with itself).
+_SAME_FAMILY = frozenset({"closed_fp", "concluded_fp"})
+
+
+def conclusions_agree(first: str, second: str) -> bool:
+    """Whether two conclusions agree for the merge rule: the same one, or `closed_fp` with
+    `concluded_fp`. Every other pair is strict."""
+    return first == second or {first, second} == _SAME_FAMILY
+
+
 def _merge_and_conflict(
     matches: Sequence[Match], sent: Sequence[Entry], source: SourceRecord
 ) -> tuple[Entry | None, Entry | None]:
-    """The entry to merge into and the entry in conflict (module doc, step 4): among the matches rated
-    `rat_giong`, in the agent's order, the first with the source's conclusion, and the first without.
-    """
+    """The entry to merge into and the entry in conflict (module doc, step 4), among the matches rated
+    `rat_giong`, in the agent's order. A conflict takes precedence: if any of them disagrees with the
+    source, the first that does is the conflict and nothing is merged, even when another agrees;
+    otherwise the first that agrees is the one to merge into."""
     by_id = {entry.entry_id: entry for entry in sent}
     very_like = [
         by_id[m.entry_id]
         for m in matches
         if m.level is KbLearnedLevel.RAT_GIONG and m.entry_id in by_id
     ]
-    same = next((e for e in very_like if e.conclusion == source.conclusion), None)
-    other = next((e for e in very_like if e.conclusion != source.conclusion), None)
-    return same, other
+    other = next(
+        (e for e in very_like if not conclusions_agree(e.conclusion, source.conclusion)), None
+    )
+    if other is not None:
+        return None, other
+    same = next((e for e in very_like if conclusions_agree(e.conclusion, source.conclusion)), None)
+    return same, None
 
 
 def run_draft_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = None) -> None:

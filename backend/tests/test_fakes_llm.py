@@ -101,15 +101,8 @@ def test_calls_records_every_invocation():
             "user": "user-1",
             "response_format": {"type": "json_object"},
             "timeout_s": 5,
-            "model": None,
         },
-        {
-            "system": "sys-2",
-            "user": "user-2",
-            "response_format": None,
-            "timeout_s": None,
-            "model": None,
-        },
+        {"system": "sys-2", "user": "user-2", "response_format": None, "timeout_s": None},
     ]
 
 
@@ -121,7 +114,7 @@ def test_complete_takes_and_records_the_model_the_rag_agents_pass():
     llm.complete(system="s", user="u2")
 
     assert llm.models == ["rag-model", None]
-    assert [call["model"] for call in llm.calls] == ["rag-model", None]
+    assert all("model" not in call for call in llm.calls)  # the shape of `calls` is unchanged
 
 
 def test_complete_never_touches_network_or_sleeps():

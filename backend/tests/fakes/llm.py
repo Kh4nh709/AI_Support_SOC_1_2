@@ -44,9 +44,10 @@ class FakeLLM:
                 "user": user,
                 "response_format": response_format,
                 "timeout_s": timeout_s,
-                "model": model,
             }
         )
+        # not in `calls`: that shape is pinned (`test_fakes_llm`, and `test_investigate` asserts that
+        # ② passes no model); the model of each call is in `models`
         self.models.append(model)
 
         if self._raises is not None and call_index == 0:

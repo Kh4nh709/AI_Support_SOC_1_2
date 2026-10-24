@@ -1,4 +1,5 @@
 {
+  "_description": "Not a schema: the notes on the two below (P13-T04). rag_match_v1 is the ranking agent's answer. knowledge_draft_v1 is the MODEL'S ANSWER when it writes a draft: six fields (title, tags, summary, distinguishing_signals, check_next_time, confidence_note), the schema agent.call_json validates it against. The STORED draft (knowledge_drafts.draft; rag.draft.DRAFT_FIELDS; what rag.draft.validate_draft checks) has twelve fields: these six, tidied, and the six closed ones (conclusion, category, mitre_ids, soar_scenario, rule_ids, log_source) that the job copies from the source record and the model never writes. Spec section 7.4 names the twelve-field record knowledge_draft_v1 as well.",
   "rag_match_v1": {
     "matches": [
       {
