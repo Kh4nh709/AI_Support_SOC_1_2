@@ -52,10 +52,11 @@ _GL_ID = re.compile(r"(?<![\w-])gl-[0-9A-Za-z]{20,}(?:-[0-9A-Za-z]+)*(?![\w-])")
 # `<epoch>.<n>`: nine or more digits before the point, so a decimal like 3.14 is not an id.
 _WAZUH_ID = re.compile(r"(?<![\w.])\d{9,11}\.\d{1,9}(?!\w)")
 _EMAIL = re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
-# `DOMAIN\user`. Not after a backslash, a colon, a slash or a dot, so `C:\Users\hr01` and
-# `C:\Windows\System32` (a path, where each part follows a backslash) are not accounts.
+# `DOMAIN\user`, with one backslash or the two of a JSON dump (`data.win` is dumped when the
+# event has no message). Not after a backslash, a colon, a slash or a dot, so `C:\Users\hr01`
+# and `C:\Windows\System32` (a path, where each part follows a backslash) are not accounts.
 _ACCOUNT = re.compile(
-    r"(?<![\w\\:/.$-])[A-Za-z][A-Za-z0-9_.-]{0,62}\\[A-Za-z0-9][A-Za-z0-9._$-]{0,62}(?<![.-])"
+    r"(?<![\w\\:/.$-])[A-Za-z][A-Za-z0-9_.-]{0,62}\\{1,2}[A-Za-z0-9][A-Za-z0-9._$-]{0,62}(?<![.-])"
 )
 _IPV4 = re.compile(r"(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?!\d|\.\d)")
 # A candidate IPv6 address; `ipaddress` decides whether it is one (a time, a MAC address and

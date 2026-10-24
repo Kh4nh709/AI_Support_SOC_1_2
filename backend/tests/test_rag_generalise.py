@@ -13,6 +13,7 @@ under test. Pure: no database.
 
 from __future__ import annotations
 
+import json
 import time
 
 import pytest
@@ -91,6 +92,46 @@ def test_the_domain_account_of_the_defender_sample_is_user() -> None:
     assert mw03()["data"]["win"]["eventdata"]["detectionUser"] == "FPT\\hr01"
     assert placeholderise("detected for FPT\\hr01 today", []) == "detected for <USER> today"
     assert placeholderise("run as NT AUTHORITY\\SYSTEM", []) == "run as NT <USER>"
+
+
+@pytest.mark.parametrize(
+    "account", [r"FPT\admin02", r"FPT\\admin02", r"FPT\administrator", r"FPT\\administrator"]
+)
+def test_an_account_is_user_written_with_one_backslash_or_json_escaped_with_two(
+    account: str,
+) -> None:
+    # the second form is how an account reads in the JSON dump of `data.win` (wazuh_parser)
+    assert placeholderise(f"by {account} today", []) == "by <USER> today"
+    assert literal_findings(f"by {account} today", []) == ["account"]
+    assert literal_findings(placeholderise(f"by {account} today", []), []) == []
+
+
+def test_the_json_dump_of_the_defender_event_loses_its_account_and_keeps_its_paths() -> None:
+    dump = json.dumps(mw03()["data"]["win"]["eventdata"])
+    assert r"FPT\\hr01" in dump  # the escaped form
+    out = placeholderise(dump, [])
+    assert "FPT" not in out
+    assert out.count("<USER>") == 1
+    # the paths are paths: no `Users\\hr01` or `Windows\\System32` is read as an account
+    assert r"file:_C:\\Users\\hr<N>\\Documents\\eicar.com" in out
+    assert r"C:\\Windows\\System<N>\\notepad.exe" in out
+    assert literal_findings(dump, []) == ["account"]
+    assert literal_findings(out, []) == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        r"C:\Users\hr01\Documents\eicar.com",
+        r"C:\\Users\\hr01\\Documents\\eicar.com",
+        r"C:\Windows\System32\drivers\etc\hosts",
+        r"C:\\Windows\\System32\\drivers\\etc\\hosts",
+        r"\Device\HarddiskVolume3\Windows\System32\cmd.exe",
+    ],
+)
+def test_a_path_is_not_an_account_in_either_escaping(path: str) -> None:
+    assert "<USER>" not in placeholderise(path, [])
+    assert literal_findings(path, []) == []
 
 
 def test_a_path_is_not_an_account_but_a_given_user_is_replaced_inside_it() -> None:

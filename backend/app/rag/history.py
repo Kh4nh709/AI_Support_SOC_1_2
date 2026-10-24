@@ -55,7 +55,7 @@ LEVELS: tuple[tuple[int, str], ...] = (
     (4, "rule_source"),
     (5, "category_host"),
 )
-#: The keys of `History.by_conclusion`; a key that is missing means 0.
+#: The keys of `History.by_conclusion`: all six are always there, 0 where nothing happened.
 CONCLUSIONS: tuple[str, ...] = (
     "tier1_closed_fp",
     "tier1_closed_benign",
@@ -92,7 +92,7 @@ class Exclusion:
     case_ids: frozenset[str]
 
 
-_EMPTY = History(None, None, 0, {}, None, ())
+_EMPTY = History(None, None, 0, dict.fromkeys(CONCLUSIONS, 0), None, ())
 
 
 # ── self-exclusion ────────────────────────────────────────────────────────────────────────────
@@ -313,7 +313,7 @@ def decision_history(conn: psycopg.Connection, subject: Subject, cfg: Config) ->
             level=level,
             key_name=key_name,
             total=sum(counts.values()),
-            by_conclusion={name: counts[name] for name in CONCLUSIONS if name in counts},
+            by_conclusion={name: counts.get(name, 0) for name in CONCLUSIONS},
             last_seen=max(last_seen for _, _, last_seen in rows),
             examples=tuple(alert_id for (alert_id,) in examples),
         )
@@ -329,12 +329,10 @@ def _id_text(value: str) -> str:
 
 def render_history(h: History) -> str:
     """One `key: value` line per field, for the `decision_history` block."""
-    if h.by_conclusion:
-        known = [name for name in CONCLUSIONS if name in h.by_conclusion]
-        other = sorted(name for name in h.by_conclusion if name not in CONCLUSIONS)
-        conclusions = ", ".join(f"{name}={h.by_conclusion[name]}" for name in [*known, *other])
-    else:
-        conclusions = "none"
+    other = sorted(name for name in h.by_conclusion if name not in CONCLUSIONS)
+    conclusions = ", ".join(
+        f"{name}={h.by_conclusion.get(name, 0)}" for name in [*CONCLUSIONS, *other]
+    )
     last_seen = "none" if h.last_seen is None else h.last_seen.astimezone(UTC).date().isoformat()
     examples = ", ".join(_id_text(alert_id) for alert_id in h.examples) or "none"
     return "\n".join(

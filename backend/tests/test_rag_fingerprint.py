@@ -15,6 +15,7 @@ a Wazuh alert with no `enrichment`, a case of several heads, the refusals.
 from __future__ import annotations
 
 import dataclasses
+import json
 import uuid
 
 import pytest
@@ -26,6 +27,7 @@ from app.rag.fingerprint import (
     case_fingerprint,
     search_phrases,
 )
+from app.rag.generalise import literal_findings
 
 from tests.rag_data import add_alert, add_case, add_user, soar_payload
 from tests.soar_payloads import edit, mw03, receive_and_run, sc03, stream_config
@@ -169,6 +171,87 @@ def test_a_decoder_or_rule_id_that_is_not_a_token_is_dropped_from_the_closed_fie
 def test_no_decoder_is_an_empty_log_source(db) -> None:
     add_alert(db, "a-1", decoder=None)
     assert alert_fingerprint(db, "a-1").log_source == ""
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "description",
+    [
+        "Port Scan: External Host Probing Many Ports (pfSense)",
+        "Microsoft Defender: Malware Detected",
+        "sshd: attempt to login using a non-existent user",
+        "Windows: Logon failure - unknown user or bad password",
+        "Multiple Windows Defender malware detections on one host.",
+    ],
+)
+def test_a_description_that_names_nothing_of_the_event_is_written_as_it_is(
+    db, description: str
+) -> None:
+    add_alert(db, "a-1", agent_name="WS-07", alert_user="hr02", description=description)
+    assert f"\nrule: {description}\n" in alert_fingerprint(db, "a-1").text + "\n"
+
+
+@pytest.mark.db
+def test_a_description_built_from_the_event_loses_its_address_account_and_host(db) -> None:
+    """Wazuh fills `$(field)` into some descriptions (conf/local_rules.xml does), so the
+    description carries the event's own values and must be generalised like the log."""
+    add_alert(
+        db,
+        "a-1",
+        agent_name="WS-07",
+        alert_user="hr02",
+        description=(
+            r"Successful Remote Logon Detected - User: \FPT\hr02 - from ip:79.79.78.202 host WS-07"
+        ),
+        raw_log="logon of hr02 from 79.79.78.202 on WS-07",
+    )
+    fp = alert_fingerprint(db, "a-1")
+    assert _text_after(fp.text, "rule: ") == (
+        r"Successful Remote Logon Detected - User: \FPT\<USER> - from ip:<IP_NGOAI> host <HOST>"
+    )
+    phrases = search_phrases(fp)
+    assert phrases[1:] == [_text_after(fp.text, "rule: ")]
+    for where in (fp.text, *phrases):
+        for value in ("79.79.78.202", "hr02", "WS-07"):
+            assert value not in where, value
+    assert literal_findings(fp.text, ["WS-07"]) == []
+
+
+@pytest.mark.db
+def test_two_events_of_one_rule_give_the_same_description_line_and_the_same_phrase(db) -> None:
+    template = r"Remote Logon Detected - User: \FPT\{user} - from ip:{ip} host {host}"
+    for alert_id, user, ip, host in (
+        ("a-1", "hr02", "79.79.78.202", "WS-07"),
+        ("a-2", "sales9", "45.33.32.156", "WS-12"),
+    ):
+        add_alert(
+            db,
+            alert_id,
+            agent_name=host,
+            alert_user=user,
+            description=template.format(user=user, ip=ip, host=host),
+        )
+    first, second = alert_fingerprint(db, "a-1"), alert_fingerprint(db, "a-2")
+    assert search_phrases(first) == search_phrases(second)
+
+
+@pytest.mark.db
+def test_a_description_is_generalised_before_it_is_cut_so_no_half_placeholder_is_left(db) -> None:
+    add_alert(
+        db, "a-1", description="x" * 196 + " 79.79.78.202 and 45.33.32.156", alert_user="hr02"
+    )
+    description = _text_after(alert_fingerprint(db, "a-1").text, "rule: ")
+    assert len(description) <= 200
+    assert description.startswith("x" * 196)
+    assert not description.endswith(("<", "<I", "<IP", "<IP_NGOAI"))
+
+
+@pytest.mark.db
+def test_an_account_json_escaped_in_the_log_is_user_too(db) -> None:
+    dump = json.dumps({"eventdata": {"detectionUser": "FPT\\administrator", "pid": "4242"}})
+    add_alert(db, "a-1", raw_log=dump, alert_user=None)
+    log = _text_after(alert_fingerprint(db, "a-1").text, "log: ")
+    assert log == '{"eventdata": {"detectionUser": "<USER>", "pid": "<N>"}}'
 
 
 @pytest.mark.db

@@ -3,9 +3,11 @@
 A lookup searches the approved entries by this, and the ranking agent is shown it. It is built by
 code from closed fields only (spec §7.6): the category, the MITRE ids, the rule ids and descriptions,
 the SOAR scenario, the decoder, the tags the rule groups stand for, and the log with its addresses,
-accounts, hosts, ids and numbers replaced by placeholders (`rag.generalise`). Each closed value is
-checked against its own shape before it is written, so a value the SIEM or the payload filled with
-text cannot put a line of its own into the fingerprint.
+accounts, hosts, ids and numbers replaced by placeholders (`rag.generalise`). The rule descriptions
+go through the same replacement as the log: Wazuh fills `$(field)` of the event into some of them,
+and a fixed description has nothing to replace. Each closed value is checked against its own shape
+before it is written, so a value the SIEM or the payload filled with text cannot put a line of its
+own into the fingerprint.
 
 `soar_scenario` is `alerts.raw_payload -> enrichment.scenario.id` when that is a string of the shape
 of an id, else None. The name is `soar_scenario` and never `scenario_id`: that already means the lab's
@@ -42,6 +44,7 @@ from app.rag.tags import tags_from_rule_groups
 
 LOG_LIMIT = 2000  # characters of generalised log in `text`
 DESCRIPTION_LIMIT = 200
+DESCRIPTION_READ_LIMIT = 1000  # characters of a description read before it is generalised
 RAW_LOG_READ_LIMIT = 50_000  # characters of a raw log read; the generalised log is cut to LOG_LIMIT
 _LOG_SEPARATOR = " | "
 
@@ -129,17 +132,23 @@ def _build(rows: Sequence[_Row], inventory: Sequence[str]) -> Fingerprint:
     decoders = [token for row in rows if (token := _token(row.decoder))]
     log_source = _most_common(decoders) if decoders else ""
     tags = tags_from_rule_groups([group for row in rows for group in row.rule_groups])
-    descriptions = sorted(
-        {
-            _one_line(row.description)[:DESCRIPTION_LIMIT].strip()
-            for row in rows
-            if _one_line(row.description)
-        }
-    )
 
     hosts = {name for row in rows for name in (row.agent_name, row.asset_host) if name}
     hosts.update(inventory)
     users = sorted({row.alert_user for row in rows if row.alert_user})
+    # Wazuh fills `$(field)` into some descriptions, so a description can carry the event's own
+    # address, account or host: it is generalised like the log. A fixed description has none of
+    # those and comes out as it went in.
+    descriptions = sorted(
+        {
+            _cut(
+                _one_line(placeholderise(raw[:DESCRIPTION_READ_LIMIT], sorted(hosts), users=users)),
+                DESCRIPTION_LIMIT,
+            )
+            for raw in {row.description for row in rows if row.description}
+            if _one_line(raw)
+        }
+    )
     templates: list[str] = []
     size = 0
     for row in rows:

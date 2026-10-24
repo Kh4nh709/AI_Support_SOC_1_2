@@ -34,6 +34,14 @@ from tests import conftest
 from tests.rag_data import add_alert, add_case, add_user, soar_payload
 
 CFG = config.Config()  # RAG_HISTORY_DAYS = 90
+
+
+def counts(**decided: int) -> dict[str, int]:
+    """`by_conclusion` as the history gives it: all six keys, 0 where nothing happened."""
+    return {**dict.fromkeys(CONCLUSIONS, 0), **decided}
+
+
+EMPTY = History(None, None, 0, counts(), None, ())
 KEY = "SC03|pfSense||79.79.78.202|20261017-04"
 EARLIER_KEY = "SC03|pfSense||79.79.78.202|20261016-23"
 
@@ -76,7 +84,7 @@ def test_level_0_is_the_dedup_key_without_its_hour_bucket(db) -> None:
     )
     h = history_of(db, "s")
     assert (h.level, h.key_name, h.total) == (0, "soar_case", 1)
-    assert h.by_conclusion == {"tier1_closed_fp": 1}
+    assert h.by_conclusion == counts(tier1_closed_fp=1)
     assert h.examples == ("p1",)
 
 
@@ -202,7 +210,7 @@ def test_level_1_is_the_cluster_key_rule_source_destination_host(db) -> None:
     )
     h = history_of(db, "s")
     assert (h.level, h.key_name, h.total) == (1, "cluster", 1)
-    assert h.by_conclusion == {"tier1_closed_benign": 1}
+    assert h.by_conclusion == counts(tier1_closed_benign=1)
 
 
 @pytest.mark.db
@@ -518,10 +526,19 @@ def test_the_distribution_of_decisions(db) -> None:
 
 
 @pytest.mark.db
-def test_a_conclusion_that_did_not_happen_is_not_a_key(db) -> None:
+def test_a_conclusion_that_did_not_happen_is_a_key_with_0(db) -> None:
     add_alert(db, "s", rule_id="5710", agent_name="h1", srcip="1.1.1.1")
     add_alert(db, "p", status="closed_fp", rule_id="5710", agent_name="h1", srcip="2.2.2.2")
-    assert history_of(db, "s").by_conclusion == {"tier1_closed_fp": 1}
+    by_conclusion = history_of(db, "s").by_conclusion
+    assert by_conclusion == {
+        "tier1_closed_fp": 1,
+        "tier1_closed_benign": 0,
+        "escalated_open": 0,
+        "concluded_fp": 0,
+        "concluded_policy_violation": 0,
+        "confirmed_incident": 0,
+    }
+    assert list(by_conclusion) == list(CONCLUSIONS)
 
 
 def test_the_conclusions_are_the_six_this_module_names() -> None:
@@ -564,7 +581,7 @@ def test_only_head_alerts_are_counted(db) -> None:
     add_case(db, user, [], status="concluded_fp", duplicates=["dup-in-case"])
     h = history_of(db, "s")
     assert (h.total, h.examples) == (1, ("head",))
-    assert h.by_conclusion == {"tier1_closed_fp": 1}
+    assert h.by_conclusion == counts(tier1_closed_fp=1)
 
 
 @pytest.mark.db
@@ -663,7 +680,7 @@ def test_zero_days_is_an_empty_history(db) -> None:
     )
     assert history_of(db, "s").total == 1
     h = history_of(db, "s", dataclasses.replace(CFG, RAG_HISTORY_DAYS=0))
-    assert h == History(None, None, 0, {}, None, ())
+    assert h == EMPTY
 
 
 # ── the empty history ─────────────────────────────────────────────────────────────────────────
@@ -674,7 +691,19 @@ def test_nothing_before_is_total_0_and_no_level(db) -> None:
     add_alert(db, "s", rule_id="5710", agent_name="h1", srcip="1.1.1.1")
     h = history_of(db, "s")
     assert h == History(
-        level=None, key_name=None, total=0, by_conclusion={}, last_seen=None, examples=()
+        level=None,
+        key_name=None,
+        total=0,
+        by_conclusion={
+            "tier1_closed_fp": 0,
+            "tier1_closed_benign": 0,
+            "escalated_open": 0,
+            "concluded_fp": 0,
+            "concluded_policy_violation": 0,
+            "confirmed_incident": 0,
+        },
+        last_seen=None,
+        examples=(),
     )
 
 
@@ -736,7 +765,7 @@ def test_the_subjects_case_and_its_alerts_are_not_in_its_history(db) -> None:
 
     from_alert = history_of(db, "trigger")
     assert from_alert.examples == ("elsewhere",)
-    assert from_alert.by_conclusion == {"concluded_fp": 1}
+    assert from_alert.by_conclusion == counts(concluded_fp=1)
 
 
 @pytest.mark.db
@@ -754,7 +783,7 @@ def test_a_case_subject_excludes_the_case_and_reads_the_keys_of_every_head(db) -
     h = case_history_of(db, case)
 
     assert (h.level, h.key_name, h.total) == (3, "rule_host", 2)
-    assert h.by_conclusion == {"tier1_closed_fp": 1, "tier1_closed_benign": 1}
+    assert h.by_conclusion == counts(tier1_closed_fp=1, tier1_closed_benign=1)
     assert sorted(h.examples) == ["p-a", "p-b"]
 
 
@@ -903,15 +932,27 @@ def test_render_history_is_one_key_value_line_per_field() -> None:
     )
 
 
-def test_render_history_of_an_empty_history_says_none_everywhere_but_the_total() -> None:
-    assert render_history(History(None, None, 0, {}, None, ())) == (
+def test_render_history_of_an_empty_history_says_none_for_what_has_no_value_and_0_for_counts() -> (
+    None
+):
+    assert render_history(EMPTY) == (
         "level: none\n"
         "key_name: none\n"
         "total: 0\n"
-        "by_conclusion: none\n"
+        "by_conclusion: tier1_closed_fp=0, tier1_closed_benign=0, escalated_open=0, "
+        "concluded_fp=0, concluded_policy_violation=0, confirmed_incident=0\n"
         "last_seen: none\n"
         "examples: none"
     )
+
+
+def test_render_history_writes_all_six_conclusions_whatever_the_dict_holds() -> None:
+    sparse = History(0, "soar_case", 1, {"concluded_fp": 1}, None, ("a",))
+    assert render_history(sparse).split("\n")[3] == (
+        "by_conclusion: tier1_closed_fp=0, tier1_closed_benign=0, escalated_open=0, "
+        "concluded_fp=1, concluded_policy_violation=0, confirmed_incident=0"
+    )
+    assert render_history(History(None, None, 0, {}, None, ())).split("\n")[3].count("=0") == 6
 
 
 def test_render_history_writes_the_date_in_utc() -> None:
@@ -937,4 +978,7 @@ def test_render_history_cannot_be_made_to_break_a_line() -> None:
 
 def test_an_unknown_conclusion_key_is_still_rendered_after_the_known_ones() -> None:
     h = History(0, "soar_case", 2, {"zzz_other": 1, "concluded_fp": 1}, None, ())
-    assert "by_conclusion: concluded_fp=1, zzz_other=1\n" in render_history(h) + "\n"
+    assert (
+        "by_conclusion: tier1_closed_fp=0, tier1_closed_benign=0, escalated_open=0, "
+        "concluded_fp=1, concluded_policy_violation=0, confirmed_incident=0, zzz_other=1\n"
+    ) in render_history(h) + "\n"
