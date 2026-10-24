@@ -1,0 +1,441 @@
+"""The `rag_lookup` job, and what ① and ② read of its result (P13-T03, DEC-210, spec §7.6, §7.7, §7.9).
+
+`run_lookup_job(conn, job, adapter=None)`; `job.subject_id` is `alert:<id>` or `case:<uuid>`. It runs on
+the `rag-worker` and never blocks ① or ②: they read the newest stored row of their subject at prompt
+time and carry on without it when there is none. One lookup, in order:
+
+1. the idle timeout is raised (a model call is client-side idle time to PostgreSQL);
+2. the subject is parsed, its fingerprint built, its self-exclusion and its decision history computed
+   (no model: analysts' decisions need no approval);
+3. the budget: when the global cap or the RAG's own is reached, a `budget` row is written (the history
+   kept) and nothing else happens;
+4. the candidates (a database search): none -> `ok` when the history has data, else `empty`;
+5. otherwise the ranking agent (`rag.match.rank`) is asked, through `DeepSeekAdapter` limited to the RAG
+   budget; each kept match is held to V-R1's second half, the published file's hash
+   (`rag.entries.file_matches`): a mismatch drops the match and writes `rag.integrity_failed`;
+6. the `llm_runs` row (`rag_lookup` / `retriever`) and the `rag_results` row are written in the job's
+   one transaction.
+
+The outcomes (`rag_results.status`): `empty` (nothing to show, the first day); `ok` (a history, or
+matches that passed V-R1 and V-R2); `budget`; `failed` (the last attempt failed, the provider refused,
+or the answer was unusable after the one repair) with the event `rag.lookup_failed {lookup_id}`.
+A model failure that is worth another attempt writes its run row, commits it and re-raises until the
+last attempt (the pattern of `tier2/investigate.py`: the worker rolls the handler's transaction back,
+the paid call must not vanish with it).
+
+What is stored. `rag_results.history`: `{level, key_name, total, by_conclusion (all six keys),
+last_seen (isoformat or null), examples}`. `matches`: `[{entry_id, level, content_sha256}]`.
+`match_notes`: `{entry_id: reason}`, the model's words, for the admin's page only: nothing here ever
+puts them in a `Match`, a `LookupResult` or a `PromptMaterial`.
+
+`prompt_material` is the other half of V-R (spec §7.7, "At prompt time"): it is what ① and ② may put in
+a prompt, from the database alone (the `worker` does not mount `kb_learned/`). Each match is re-checked
+— the entry is active and `sha256(content)`, its stored `content_sha256` and the hash stored with the
+match are one value — and a match that fails is dropped, the rest rendered.
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
+from dataclasses import dataclass
+from datetime import datetime
+from functools import partial
+from typing import Any
+
+import psycopg
+from psycopg import sql
+from psycopg.types.json import Jsonb
+
+from app.audit.events import write_event
+from app.infra import config
+from app.infra.errors import PermanentError
+from app.infra.jobs import Job
+from app.llm.adapter import DeepSeekAdapter, LLMBudgetExceeded, LLMPermanent, cost_usd
+from app.llm.builder import KbLearnedLevel
+from app.llm.triage import prompt_version
+from app.rag import agent
+from app.rag.budget import global_exhausted, rag_limits, rag_spent_usd
+from app.rag.candidates import candidates
+from app.rag.entries import KB_LEARNED_ROOT, entry_by_id, file_matches, sha256_text
+from app.rag.fingerprint import Fingerprint, alert_fingerprint, case_fingerprint
+from app.rag.history import (
+    CONCLUSIONS,
+    History,
+    decision_history,
+    render_history,
+    self_exclusion,
+)
+from app.rag.match import (
+    MAX_MATCHES,
+    TEMPLATE_PATH,
+    Match,
+    injection_findings,
+    rank,
+    validate_matches,
+)
+from app.rag.runs import write_rag_run
+from app.rag.subject import Subject, parse_subject
+from app.security import detector
+
+
+@dataclass(frozen=True)
+class LookupResult:
+    """One stored lookup, as ① and ② read it. `history` is the decision history; `matches` the
+    kept matches, closed values only."""
+
+    lookup_id: uuid.UUID
+    status: str
+    history: History
+    matches: tuple[Match, ...]
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class PromptMaterial:
+    """What may reach a prompt: the history as `render_history` writes it (None when there is none)
+    and the approved content of each matched entry with its level, best first. The reasons of the
+    ranking agent are not here."""
+
+    lookup_id: uuid.UUID
+    history_text: str | None
+    entries: tuple[tuple[KbLearnedLevel, str], ...]
+
+
+def _log(payload: dict[str, Any]) -> None:
+    print(json.dumps(payload))
+
+
+def _raise_idle_timeout(conn: psycopg.Connection, cfg: config.Config) -> None:
+    """The handler's first statement, `tier1/triage.py`'s `_raise_idle_timeout` (duplicated: `rag`
+    imports no tier). `infra/db.py::transaction()` sets `idle_in_transaction_session_timeout` to 10 s;
+    the model call is idle time to PostgreSQL, so the job raises it to `JOB_LOCK_TIMEOUT_S`, the
+    bound `reclaim_stale` uses. `SET` takes no bind parameter, hence `sql.Literal`."""
+    conn.execute(
+        sql.SQL("SET LOCAL idle_in_transaction_session_timeout = {}").format(
+            sql.Literal(f"{cfg.JOB_LOCK_TIMEOUT_S}s")
+        )
+    )
+
+
+# ── what is stored ────────────────────────────────────────────────────────────────────────────
+
+
+def _history_json(history: History) -> dict[str, Any]:
+    return {
+        "level": history.level,
+        "key_name": history.key_name,
+        "total": history.total,
+        "by_conclusion": {name: history.by_conclusion.get(name, 0) for name in CONCLUSIONS},
+        "last_seen": None if history.last_seen is None else history.last_seen.isoformat(),
+        "examples": list(history.examples),
+    }
+
+
+def _is_count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _history_of(raw: Any) -> History:
+    """A `History` from its stored JSON; whatever is missing or ill-shaped reads as 'none'."""
+    counts = dict.fromkeys(CONCLUSIONS, 0)
+    if not isinstance(raw, dict):
+        return History(None, None, 0, counts, None, ())
+    by_conclusion = raw.get("by_conclusion")
+    if isinstance(by_conclusion, dict):
+        counts.update(
+            {k: v for k, v in by_conclusion.items() if isinstance(k, str) and _is_count(v)}
+        )
+    last_seen = None
+    if isinstance(raw.get("last_seen"), str):
+        try:
+            last_seen = datetime.fromisoformat(raw["last_seen"])
+        except ValueError:
+            last_seen = None
+    examples = raw.get("examples")
+    key_name = raw.get("key_name")
+    return History(
+        level=raw["level"] if _is_count(raw.get("level")) else None,
+        key_name=key_name if isinstance(key_name, str) else None,
+        total=raw["total"] if _is_count(raw.get("total")) else 0,
+        by_conclusion=counts,
+        last_seen=last_seen,
+        examples=(
+            tuple(e for e in examples if isinstance(e, str)) if isinstance(examples, list) else ()
+        ),
+    )
+
+
+def _matches_json(matches: list[Match]) -> list[dict[str, str]]:
+    return [
+        {"entry_id": m.entry_id, "level": m.level.value, "content_sha256": m.content_sha256}
+        for m in matches
+    ]
+
+
+def _matches_of(raw: Any) -> tuple[Match, ...]:
+    """The stored matches; an item that is not one is left out."""
+    if not isinstance(raw, list):
+        return ()
+    found = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        entry_id, level, digest = (item.get(k) for k in ("entry_id", "level", "content_sha256"))
+        if not all(isinstance(value, str) for value in (entry_id, level, digest)):
+            continue
+        try:
+            found.append(Match(entry_id, KbLearnedLevel(level), digest))
+        except ValueError:
+            continue
+    return tuple(found)
+
+
+def _store(
+    conn: psycopg.Connection,
+    lookup_id: uuid.UUID,
+    subject: Subject,
+    status: str,
+    history: History,
+    *,
+    matches: list[Match] | None = None,
+    notes: dict[str, str] | None = None,
+    llm_run_id: uuid.UUID | None = None,
+) -> None:
+    conn.execute(
+        "INSERT INTO rag_results (lookup_id, subject_kind, subject_id, status, history, matches,"
+        " match_notes, llm_run_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            lookup_id,
+            subject.kind,
+            subject.id,
+            status,
+            Jsonb(_history_json(history)),
+            Jsonb(_matches_json(matches or [])),
+            Jsonb(notes or {}),
+            llm_run_id,
+        ),
+    )
+    _log({"rag_lookup": status, "subject": subject.key})
+
+
+def _store_failed(
+    conn: psycopg.Connection,
+    lookup_id: uuid.UUID,
+    subject: Subject,
+    history: History,
+    run_id: uuid.UUID | None,
+) -> None:
+    """The last word on a lookup that did not work: a `failed` row (what was known is kept) and the
+    event the admin's audit page shows."""
+    _store(conn, lookup_id, subject, "failed", history, llm_run_id=run_id)
+    write_event(
+        conn,
+        "rag.lookup_failed",
+        subject.id,
+        "system",
+        payload={"lookup_id": str(lookup_id)},
+    )
+
+
+def _record_run(
+    conn: psycopg.Connection,
+    cfg: config.Config,
+    tape: agent.Tape,
+    subject: Subject,
+    findings: list[detector.Finding],
+    *,
+    stopped_by: str | None,
+    result: dict | None = None,
+    gate_result: dict | None = None,
+    rag_lookup_id: uuid.UUID | None = None,
+) -> uuid.UUID | None:
+    """This attempt's one `llm_runs` row: the prompt of the first call and whatever the answered calls
+    cost, so a failure still carries what was paid for. None when nothing was sent."""
+    if not tape.sent:
+        return None
+    system, user = tape.sent[0]
+    usage = tape.usage
+    priced = tape.calls > 0 and "prompt_tokens" in usage and "completion_tokens" in usage
+    return write_rag_run(
+        conn,
+        run_id=uuid.uuid4(),
+        pipeline="rag_lookup",
+        role="retriever",
+        subject=subject,
+        system_prompt=system,
+        user_message=user,
+        result=result,
+        gate_result=gate_result,
+        injection_findings=detector.as_json(findings),
+        input_tokens=usage.get("prompt_tokens"),
+        output_tokens=usage.get("completion_tokens"),
+        latency_ms=tape.latency_ms if tape.calls else None,
+        model_id=tape.model,
+        prompt_version=prompt_version(TEMPLATE_PATH),
+        cost_usd=cost_usd(usage, cfg) if priced else None,
+        stopped_by=stopped_by,
+        rag_lookup_id=rag_lookup_id,
+    )
+
+
+# ── the job ───────────────────────────────────────────────────────────────────────────────────
+
+
+def _fingerprint_of(conn: psycopg.Connection, subject: Subject) -> Fingerprint:
+    if subject.kind == "alert":
+        return alert_fingerprint(conn, subject.id)
+    return case_fingerprint(conn, subject.id)
+
+
+def _over_budget(conn: psycopg.Connection, cfg: config.Config) -> bool:
+    return global_exhausted(conn, cfg) or rag_spent_usd(conn) >= cfg.RAG_MONTHLY_USD_CAP
+
+
+def run_lookup_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = None) -> None:
+    """Run one lookup (module doc). `adapter` defaults to a `DeepSeekAdapter` limited to the RAG
+    budget; every test passes a fake."""
+    cfg = config.load()
+    _raise_idle_timeout(conn, cfg)
+
+    if not agent.rag_model(cfg):  # no model configured: the AI is off, as for ① and ② (G7)
+        _log({"rag_lookup": "skipped", "reason": "no_model"})
+        return
+
+    try:
+        subject = parse_subject(job.subject_id)
+    except ValueError:
+        raise PermanentError(
+            "rag_lookup: the job's subject is neither 'alert:<id>' nor 'case:<uuid>'"
+        ) from None
+
+    fp = _fingerprint_of(conn, subject)  # PermanentError when the subject is not there
+    exclusion = self_exclusion(conn, subject)
+    history = decision_history(conn, subject, cfg)
+    lookup_id = uuid.uuid4()
+
+    if _over_budget(conn, cfg):
+        _store(conn, lookup_id, subject, "budget", history)
+        return
+
+    cands = candidates(conn, fp, exclusion)
+    if not cands:
+        _store(conn, lookup_id, subject, "ok" if history.total > 0 else "empty", history)
+        return
+
+    findings = injection_findings(fp, cands)
+    tape = agent.Tape(
+        adapter
+        if adapter is not None
+        else DeepSeekAdapter(
+            cfg,
+            spent_usd=partial(rag_spent_usd, conn),
+            limits=partial(rag_limits, conn, cfg),
+        )
+    )
+
+    def record(stopped_by: str | None, **fields: Any) -> uuid.UUID | None:
+        return _record_run(conn, cfg, tape, subject, findings, stopped_by=stopped_by, **fields)
+
+    try:
+        matches, notes, result = rank(tape, fp, cands, cfg=cfg)
+    except LLMBudgetExceeded:
+        # a cap reached between the check above and the call: the same outcome as that check
+        run_id = record("cap", rag_lookup_id=lookup_id)
+        _store(conn, lookup_id, subject, "budget", history, llm_run_id=run_id)
+        return
+    except LLMPermanent:
+        _store_failed(
+            conn, lookup_id, subject, history, record("permanent", rag_lookup_id=lookup_id)
+        )
+        return
+    except PermanentError:
+        # the prompt failed the linter: a template defect, not a model outcome
+        _store_failed(conn, lookup_id, subject, history, record("linter", rag_lookup_id=lookup_id))
+        return
+    except Exception as exc:
+        if not agent.is_transient(exc):
+            raise  # a bug: the worker will classify it, and nothing here hides it
+        if job.attempts < cfg.JOB_MAX_ATTEMPTS:
+            # the paid call must outlive the handler's rolled-back transaction
+            record("transient")
+            conn.commit()
+            raise
+        _store_failed(
+            conn, lookup_id, subject, history, record("transient", rag_lookup_id=lookup_id)
+        )
+        return
+
+    if result.parsed is None:  # the schema refused the answer, and the repair too
+        gate = {"faults": [], "integrity_failed": [], "schema_errors": result.schema_errors}
+        run_id = record("schema", gate_result=gate, rag_lookup_id=lookup_id)
+        _store_failed(conn, lookup_id, subject, history, run_id)
+        return
+
+    _, faults = validate_matches(result.parsed, cands)
+    by_id = {cand.entry_id: cand for cand in cands}
+    kept: list[Match] = []
+    kept_notes: dict[str, str] = {}
+    integrity_failed: list[str] = []
+    for found in matches:
+        if file_matches(by_id[found.entry_id], KB_LEARNED_ROOT):
+            kept.append(found)
+            kept_notes[found.entry_id] = notes[found.entry_id]
+            continue
+        integrity_failed.append(found.entry_id)
+        write_event(
+            conn,
+            "rag.integrity_failed",
+            found.entry_id,
+            "system",
+            payload={"entry_id": found.entry_id},
+        )
+
+    run_id = record(
+        None,
+        result=result.parsed,
+        gate_result={"faults": faults, "integrity_failed": integrity_failed},
+        rag_lookup_id=lookup_id,
+    )
+    status = "ok" if kept or history.total > 0 else "empty"
+    _store(
+        conn, lookup_id, subject, status, history, matches=kept, notes=kept_notes, llm_run_id=run_id
+    )
+
+
+# ── what ① and ② read ─────────────────────────────────────────────────────────────────────────
+
+
+def latest_lookup(conn: psycopg.Connection, subject: Subject) -> LookupResult | None:
+    """The newest stored lookup of `subject`, whatever its status, or None."""
+    row = conn.execute(
+        "SELECT lookup_id, status, history, matches, created_at FROM rag_results"
+        " WHERE subject_kind = %s AND subject_id = %s ORDER BY created_at DESC, lookup_id LIMIT 1",
+        (subject.kind, subject.id),
+    ).fetchone()
+    if row is None:
+        return None
+    lookup_id, status, history, matches, created_at = row
+    return LookupResult(lookup_id, status, _history_of(history), _matches_of(matches), created_at)
+
+
+def prompt_material(conn: psycopg.Connection, result: LookupResult | None) -> PromptMaterial | None:
+    """What ① or ② may put in its prompt for `result`, or None when it may put nothing, not even the
+    sentence that says nothing was found: no lookup, or one that `failed` or ran out of `budget`.
+
+    For `empty`, and for an `ok` whose matches all fail the re-check and that has no history, the
+    material is empty (`history_text=None`, `entries=()`): the prompt says so in a fixed sentence
+    (Review Focus 1). A match is dropped unless its entry is active and `sha256(content)`, the
+    entry's `content_sha256` and the hash stored with the match are one value."""
+    if result is None or result.status not in ("ok", "empty"):
+        return None
+    entries: list[tuple[KbLearnedLevel, str]] = []
+    for found in result.matches[:MAX_MATCHES]:
+        entry = entry_by_id(conn, found.entry_id)
+        if entry is None or entry.status != "active":
+            continue
+        if not (sha256_text(entry.content) == entry.content_sha256 == found.content_sha256):
+            continue
+        entries.append((found.level, entry.content))
+    history_text = render_history(result.history) if result.history.total > 0 else None
+    return PromptMaterial(result.lookup_id, history_text, tuple(entries))
