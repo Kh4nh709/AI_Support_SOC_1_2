@@ -475,20 +475,34 @@ def test_the_conclusions_are_the_six_this_module_names() -> None:
 
 @pytest.mark.db
 def test_only_head_alerts_are_counted(db) -> None:
+    user = add_user(db)
     add_alert(db, "s", rule_id="5710", agent_name="h1", srcip="1.1.1.1")
     add_alert(db, "head", status="closed_fp", rule_id="5710", agent_name="h1", srcip="2.2.2.2")
+    # a decision closes the head's duplicates with it (A16): they carry the same status, and one
+    # sits in a concluded case. Neither is a decision of its own.
     for position in range(3):
         add_alert(
             db,
             f"dup{position}",
-            status="duplicate",
+            status="closed_fp",
             duplicate_of="head",
             rule_id="5710",
             agent_name="h1",
             srcip="2.2.2.2",
         )
+    add_alert(
+        db,
+        "dup-in-case",
+        status="closed_fp",
+        duplicate_of="head",
+        rule_id="5710",
+        agent_name="h1",
+        srcip="2.2.2.2",
+    )
+    add_case(db, user, [], status="concluded_fp", duplicates=["dup-in-case"])
     h = history_of(db, "s")
     assert (h.total, h.examples) == (1, ("head",))
+    assert h.by_conclusion == {"tier1_closed_fp": 1}
 
 
 @pytest.mark.db

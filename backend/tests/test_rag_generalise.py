@@ -58,6 +58,7 @@ def test_a_private_address_is_ip_noi_bo(address: str) -> None:
         ("loopback ::1 up", "loopback <IP_NOI_BO> up"),
         ("fd00:1234:5678::9 internal", "<IP_NOI_BO> internal"),
         ("mapped ::ffff:192.168.1.5 seen", "mapped <IP_NOI_BO> seen"),
+        ("mapped ::ffff:8.8.8.8 seen", "mapped <IP_NGOAI> seen"),
         ("full 2001:4860:4860:0:0:0:0:8888 end", "full <IP_NGOAI> end"),
     ],
 )

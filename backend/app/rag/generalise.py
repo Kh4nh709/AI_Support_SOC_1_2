@@ -91,9 +91,7 @@ def _ipv6_placeholder(match: re.Match[str]) -> str:
     address = _ipv6_address(match.group(0))
     if address is None:
         return match.group(0)
-    mapped = address.ipv4_mapped
-    private = mapped.is_private if mapped is not None else address.is_private
-    return IP_INTERNAL if private else IP_EXTERNAL
+    return IP_INTERNAL if address.is_private else IP_EXTERNAL
 
 
 def _name_pattern(names: Iterable[str]) -> re.Pattern[str] | None:
