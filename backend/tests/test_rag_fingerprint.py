@@ -19,6 +19,7 @@ import uuid
 
 import pytest
 from app.infra.errors import PermanentError
+from app.rag import fingerprint as fingerprint_module
 from app.rag.fingerprint import (
     Fingerprint,
     alert_fingerprint,
@@ -331,6 +332,25 @@ def test_a_case_is_the_union_over_its_heads(db) -> None:
         "rule: sshd: attempt to login using a non-existent user",
         "log: scan from <IP_NGOAI> | Failed password from <IP_NGOAI> port <N>",
     ]
+
+
+@pytest.mark.db
+def test_a_case_stops_reading_logs_once_the_text_is_full(db, monkeypatch) -> None:
+    calls: list[int] = []
+    real = fingerprint_module.placeholderise
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(fingerprint_module, "placeholderise", counting)
+    case_id = _case(
+        db,
+        [head(raw_log=f"{chr(97 + n // 26)}{chr(97 + n % 26)} " + "x" * 1500) for n in range(30)],
+    )
+    fp = case_fingerprint(db, case_id)
+    assert len(calls) <= 3  # 30 heads, but two logs already fill the 2000 characters
+    assert len(_text_after(fp.text, "log: ")) <= 2000
 
 
 @pytest.mark.db
