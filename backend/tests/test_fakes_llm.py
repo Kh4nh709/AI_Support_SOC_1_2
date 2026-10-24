@@ -101,9 +101,27 @@ def test_calls_records_every_invocation():
             "user": "user-1",
             "response_format": {"type": "json_object"},
             "timeout_s": 5,
+            "model": None,
         },
-        {"system": "sys-2", "user": "user-2", "response_format": None, "timeout_s": None},
+        {
+            "system": "sys-2",
+            "user": "user-2",
+            "response_format": None,
+            "timeout_s": None,
+            "model": None,
+        },
     ]
+
+
+def test_complete_takes_and_records_the_model_the_rag_agents_pass():
+    # `rag.agent.call_json` passes `model=` on every call: the stock fake must accept it (P13-T04)
+    llm = FakeLLM(responses=[{"a": 1}, {"b": 2}])
+
+    llm.complete(system="s", user="u1", model="rag-model")
+    llm.complete(system="s", user="u2")
+
+    assert llm.models == ["rag-model", None]
+    assert [call["model"] for call in llm.calls] == ["rag-model", None]
 
 
 def test_complete_never_touches_network_or_sleeps():

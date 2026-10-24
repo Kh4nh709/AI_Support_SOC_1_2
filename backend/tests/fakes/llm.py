@@ -26,9 +26,16 @@ class FakeLLM:
         self.model = model
         self._raises = raises
         self.calls = []
+        self.models = []  # the `model=` of each call, in order (None when the caller passed none)
 
     def complete(
-        self, *, system: str, user: str, response_format=None, timeout_s=None
+        self,
+        *,
+        system: str,
+        user: str,
+        response_format=None,
+        timeout_s=None,
+        model: str | None = None,
     ) -> LLMResult:
         call_index = len(self.calls)
         self.calls.append(
@@ -37,8 +44,10 @@ class FakeLLM:
                 "user": user,
                 "response_format": response_format,
                 "timeout_s": timeout_s,
+                "model": model,
             }
         )
+        self.models.append(model)
 
         if self._raises is not None and call_index == 0:
             raise self._raises
