@@ -5,9 +5,10 @@ code from closed fields only (spec §7.6): the category, the MITRE ids, the rule
 the SOAR scenario, the decoder, the tags the rule groups stand for, and the log with its addresses,
 accounts, hosts, ids and numbers replaced by placeholders (`rag.generalise`). The rule descriptions
 go through the same replacement as the log: Wazuh fills `$(field)` of the event into some of them,
-and a fixed description has nothing to replace. Each closed value is checked against its own shape
-before it is written, so a value the SIEM or the payload filled with text cannot put a line of its
-own into the fingerprint.
+and even a fixed description is changed by it where it holds a run of digits (`<N>`) or a word equal
+to a host or user name of the record or the inventory (`<HOST>`, `<USER>`). Each closed value is
+checked against its own shape before it is written, so a value the SIEM or the payload filled with
+text cannot put a line of its own into the fingerprint.
 
 `soar_scenario` is `alerts.raw_payload -> enrichment.scenario.id` when that is a string of the shape
 of an id, else None. The name is `soar_scenario` and never `scenario_id`: that already means the lab's
@@ -137,8 +138,8 @@ def _build(rows: Sequence[_Row], inventory: Sequence[str]) -> Fingerprint:
     hosts.update(inventory)
     users = sorted({row.alert_user for row in rows if row.alert_user})
     # Wazuh fills `$(field)` into some descriptions, so a description can carry the event's own
-    # address, account or host: it is generalised like the log. A fixed description has none of
-    # those and comes out as it went in.
+    # address, account or host: it is generalised like the log. A fixed description is not left as
+    # it is either: its digits become `<N>`, and a word equal to a host or user name a placeholder.
     descriptions = sorted(
         {
             _cut(
