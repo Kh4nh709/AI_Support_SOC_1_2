@@ -3539,3 +3539,20 @@ Decision:
   2. **Step 2 and an unknown count (R1).** DEC-208 item 4 makes the ① fact `occurrence_count = None` for a SOAR alert. Step 2 compared the model's integer with it, so every SOAR answer was forced at step 2 and flagged `hallucination_flag`. Step 2 now compares only a known count (`expected is not None and int(...) != expected`). The verdict is unchanged in safety: an unknown count makes no `occurrence_lt` rule match, so step 4 still forces a `false_positive` to `needs_review`; only the reason and the hallucination flag become true.
   3. **Wording.** The places that still say "every alert carries the unknown context" (runbook, `.env.example` and the §6.3 line it is generated from, the comment in `infra/config.py`) say instead: the context comes from the payload's `enrichment` (DEC-208), else the unknown context.
 Supersedes: none. It amends the frozen `alert_id` shape of context pack §7.1 by adding one shape.
+
+## DEC-210 · 2026-10-25 · Learned knowledge and RAG for ① and ②: analysts' conclusions become admin-approved entries in `kb_learned/`; a separate `rag-worker` looks up history and similar entries for every ① and ② run, DeepSeek only
+Scope: **product** (new package `rag`, admin page, ①/② prompts) · **frozen contracts** (job types, event types, `llm_runs` pipeline/role, block sources, template constants, import rules, §6.3 keys, `reclaim_stale`'s signature) · **security** (poisoning)
+Decided by: **the Owner, 24/10**. The intent and the flow: steps 1–5; approval before an entry is used; untrusted analyst text; a validation step before a prompt; no embedding model, DeepSeek only; the measurement is redesigned by the Owner. The rest was delegated: "Phần còn lại bạn quyết định giúp tôi", then "Xong thì duyệt và tất cả việc plan + code + review còn lại là của bạn". The Director's calls are listed in the spec's §8, revised after a builder check of the code.
+Drafted by: the Director's fork session `soar-webhook-alert-intake` (Opus 5.5)
+Propagated to: `docs/superpowers/specs/2026-10-24-learned-knowledge-rag-design.md` (the authority for this decision) · STATE phase P13 · the P13 plan
+Decision: the design document, as written. In short:
+  1. **Drafts.** Tier-1 closes and Tier-2 conclusions draft knowledge through a DeepSeek agent on a separate `rag-worker`. Admins approve, edit and approve, or reject at `/admin/knowledge`, with the analyst's full work shown. Approved entries are stored in the database and published as files under `kb_learned/`.
+  2. **Lookups.** Every ① run (`triage` delayed by `RAG_TRIAGE_DELAY_S`) and every ② run (a lookup made at escalation, refreshed after `RAG_CASE_REFRESH_H`) uses a stored lookup when it is ready. ① and ② never wait. A lookup holds the analyst-decision history (closed fields and counts) and up to three approved entries ranked by DeepSeek over database-searched candidates.
+  3. **Validation and limits.**
+     - Only closed fields and approved content reach a prompt, as untrusted blocks.
+     - Output schemas and the gate are unchanged, so a RAG match is never a basis for `false_positive`.
+     - `reclaim_stale` reclaims only its worker's job types.
+     - `RAG_ENABLED` and `KNOWLEDGE_DRAFT_ENABLED` default to off.
+     - The eval harness runs without RAG.
+     - One migration, `020_learned_knowledge.sql`.
+Supersedes: none. DEC-202's single-worker margin is kept by item 3's typed reclaim.
