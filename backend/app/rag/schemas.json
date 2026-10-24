@@ -1,0 +1,11 @@
+{
+  "rag_match_v1": {
+    "matches": [
+      {
+        "entry_id": "string",
+        "level": "rat_giong|giong|hoi_giong",
+        "reason": "string (max 160 chars)"
+      }
+    ]
+  }
+}
