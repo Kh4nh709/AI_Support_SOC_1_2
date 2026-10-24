@@ -7,8 +7,11 @@ the same transaction. Its outcomes:
 
     empty    no history and nothing to show            (the first day, Review Focus 1)
     ok       a history, or matches that passed V-R1 and V-R2
-    budget   the global or the RAG cap is reached      (the history is kept)
-    failed   the last attempt failed, or the answer was unusable (+ `rag.lookup_failed`)
+    budget   the global or the RAG cap is reached, before the call or before its repair
+             (the history is kept)
+    failed   the last attempt failed, the provider refused, our own prompt failed the linter
+             (+ `rag.lookup_failed`). An answer the schema refuses after the repair is not a
+             failure (V-R3): it is `ok` with the history, else `empty`, with no match.
 
 `latest_lookup` reads the newest row of a subject; `prompt_material` re-checks it for ① and ② and
 returns only what may reach a prompt (§7.7 "At prompt time"). Everything runs on the `db` fixture's
@@ -25,12 +28,13 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from app.infra import config
 from app.infra.errors import PermanentError, TransientError
 from app.infra.jobs import Job
-from app.llm.adapter import LLMBudgetExceeded, LLMPermanent, LLMTimeout, cost_usd
+from app.llm.adapter import DeepSeekAdapter, LLMBudgetExceeded, LLMPermanent, LLMTimeout, cost_usd
 from app.llm.builder import KbLearnedLevel
 from app.llm.triage import prompt_version
 from app.rag import budget, lookup, match
@@ -504,10 +508,67 @@ def test_the_real_adapter_is_wired_with_the_rag_budget(db, kb_root, monkeypatch)
     lookup.run_lookup_job(db, job_for("alert:ra-1"))  # no adapter given: the job makes its own
 
     spent, limits = seen["kwargs"]["spent_usd"], seen["kwargs"]["limits"]
-    assert isinstance(spent, partial) and spent.func is budget.rag_spent_usd and spent.args == (db,)
+    assert isinstance(spent, partial) and spent.func is budget.rag_spent_or_exhausted
+    assert spent.args == (db, seen["cfg"])
     assert isinstance(limits, partial) and limits.func is budget.rag_limits
     assert limits.args == (db, seen["cfg"])
     assert len(fake.calls) == 1
+
+
+class StubClient:
+    """The OpenAI client under a real `DeepSeekAdapter`: answers a schema-invalid object, so the
+    job makes a repair call, and counts how often it was reached."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    def _create(self, **kwargs):
+        self.calls += 1
+        message = SimpleNamespace(content='{"matches": "x"}')
+        usage = SimpleNamespace(
+            model_dump=lambda: {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+        )
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage, model="m")
+
+
+class CrossesTheGlobalCap:
+    """A real adapter that, once it has answered, has the month's spend cross the global cap — as
+    another pipeline (or this very call) can between a send and its repair."""
+
+    def __init__(self, inner: DeepSeekAdapter, db) -> None:
+        self._inner, self._db, self._crossed = inner, db, False
+
+    def complete(self, **kwargs):
+        result = self._inner.complete(**kwargs)
+        if not self._crossed:
+            self._crossed = True
+            spend(self._db, "triage", 5.0)
+        return result
+
+
+def test_the_global_cap_crossed_before_the_repair_stops_the_repair_as_a_cap(
+    db, kb_root, monkeypatch
+) -> None:
+    monkeypatch.setenv("LLM_MONTHLY_USD_CAP", "5")
+    monkeypatch.setenv("LLM_RETRY", "0")
+    failing_setup(db, kb_root)
+    client = StubClient()
+
+    def build(cfg, **kwargs):
+        return CrossesTheGlobalCap(DeepSeekAdapter(cfg, client=client, **kwargs), db)
+
+    monkeypatch.setattr(lookup, "DeepSeekAdapter", build)
+    lookup.run_lookup_job(db, job_for("alert:ra-1"))
+
+    assert client.calls == 1  # the repair was not sent
+    row = result_of(db)
+    assert row["status"] == "budget" and row["history"]["total"] == 1 and row["matches"] == []
+    (run_row,) = runs_of(db)
+    assert run_row["stopped_by"] == "cap" and run_row["result"] is None
+    assert run_row["input_tokens"] == 1  # the first call was paid for and is recorded
+    assert row["llm_run_id"] == run_row["run_id"] and run_row["rag_lookup_id"] == row["lookup_id"]
+    assert events_of(db, "rag.lookup_failed") == []
 
 
 # ── failures ──────────────────────────────────────────────────────────────────────────────────
@@ -615,17 +676,49 @@ def test_a_permanent_model_error_writes_a_failed_row_without_a_retry(db, kb_root
     assert runs_of(db)[0]["stopped_by"] == "permanent"
 
 
-def test_an_unusable_answer_after_the_repair_is_a_failed_row(db, kb_root) -> None:
+def test_an_unusable_answer_after_the_repair_degrades_to_no_match_and_keeps_the_history(
+    db, kb_root
+) -> None:
+    """V-R3: the lookup degrades, it never blocks. Not a failure: no event, and ① still gets the
+    history. The run keeps what happened."""
     failing_setup(db, kb_root)
     fake = RagFake(["not json", "still not json"])
     run(db, "alert:ra-1", fake)
     row = result_of(db)
-    assert row["status"] == "failed" and len(fake.calls) == 2  # one repair, no more
+    assert len(fake.calls) == 2  # one repair, no more
+    assert row["status"] == "ok" and row["matches"] == [] and row["match_notes"] == {}
+    assert row["history"]["total"] == 1
     (run_row,) = runs_of(db)
     assert run_row["stopped_by"] == "schema" and run_row["result"] is None
     assert run_row["gate_result"]["schema_errors"] == ["<root>: expected a JSON object"]
     assert run_row["input_tokens"] and run_row["cost_usd"] is not None
-    assert len(events_of(db, "rag.lookup_failed")) == 1
+    assert row["llm_run_id"] == run_row["run_id"] and run_row["rag_lookup_id"] == row["lookup_id"]
+    assert events_of(db, "rag.lookup_failed") == []
+    material = lookup.prompt_material(db, lookup.latest_lookup(db, Subject("alert", "ra-1")))
+    assert material.history_text and material.entries == ()
+
+
+def test_an_unusable_answer_with_no_history_degrades_to_an_empty_lookup(db, kb_root) -> None:
+    alert(db)
+    entry(db, kb_root)
+    run(db, "alert:ra-1", RagFake(["not json", "still not json"]))
+    row = result_of(db)
+    assert row["status"] == "empty" and row["matches"] == [] and row["history"] == NO_HISTORY
+    assert runs_of(db)[0]["stopped_by"] == "schema"
+    assert events_of(db, "rag.lookup_failed") == []
+
+
+def test_a_bad_level_the_repair_does_not_fix_degrades_the_same_way(db, kb_root) -> None:
+    failing_setup(db, kb_root)
+    entry_id = entry(db, kb_root)
+    bad = {"matches": [{"entry_id": entry_id, "level": "bogus", "reason": "r"}]}
+    run(db, "alert:ra-1", RagFake([bad, bad]))
+    row = result_of(db)
+    assert row["status"] == "ok" and row["matches"] == []
+    assert runs_of(db)[0]["gate_result"]["schema_errors"] == [
+        "matches[0].level: expected one of rat_giong|giong|hoi_giong"
+    ]
+    assert events_of(db, "rag.lookup_failed") == []
 
 
 def test_a_prompt_the_linter_refuses_is_a_failed_row_without_a_run(

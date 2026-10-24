@@ -8,12 +8,14 @@ admin may have changed on the web, read through `infra.settings` and failing clo
 * `rag_spent_usd`: this calendar month's `cost_usd` of the pipelines `rag_lookup` and `knowledge_draft`;
 * `global_exhausted`: the whole month's spend (every pipeline) has reached the effective global cap, or
   that cap cannot be read;
+* `rag_spent_or_exhausted`: the spend the adapter reads, `inf` when the global cap is reached or
+  unreadable and the RAG's month otherwise;
 * `rag_limits`: the limits the RAG's `DeepSeekAdapter` reads before each attempt, with the RAG cap as
-  `cap_usd`. The adapter compares `rag_spent_usd` to it, so it stops a call at the sub-cap and, when
-  `settings.effective_limits` raises `SettingsUnavailable`, stops it as `LLMBudgetExceeded`.
+  `cap_usd`. The adapter compares `rag_spent_or_exhausted` to it, so it stops a call at the sub-cap or
+  at the global cap, on every attempt, and, when `settings.effective_limits` raises
+  `SettingsUnavailable`, stops it as `LLMBudgetExceeded`.
 
-The global cap is checked by the job before it starts (`global_exhausted`); the adapter's per-attempt
-check is the RAG's own. One lookup costs a fraction of a cent, so the two never differ by more than that.
+The job asks the same question before it starts (`rag_spent_or_exhausted` against the RAG cap).
 """
 
 from __future__ import annotations
@@ -49,6 +51,19 @@ def global_exhausted(conn: psycopg.Connection, cfg: Config) -> bool:
     except settings.SettingsUnavailable:
         return True
     return month_spend_usd(conn) >= limits.cap_usd
+
+
+def rag_spent_or_exhausted(conn: psycopg.Connection, cfg: Config) -> float:
+    """What the RAG's `DeepSeekAdapter` reads as its spend before each attempt: `inf` when the global
+    cap is reached or cannot be read (`global_exhausted`), else the RAG's month (`rag_spent_usd`).
+
+    The adapter stops a call when this is at or over `rag_limits(...).cap_usd`, the RAG's own cap, so
+    `inf` stops it whatever that cap is. Both caps are therefore checked on every attempt, the repair
+    included: a cap crossed between a send and its repair (by ①, ② or this very call) stops the
+    repair, and `LLMBudgetExceeded` reaches the job as a cap."""
+    if global_exhausted(conn, cfg):
+        return float("inf")
+    return rag_spent_usd(conn)
 
 
 def rag_limits(conn: psycopg.Connection, cfg: Config) -> settings.Limits:

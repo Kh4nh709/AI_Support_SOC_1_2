@@ -6,8 +6,10 @@ The RAG has its own sub-cap (`RAG_MONTHLY_USD_CAP`) and spends inside the global
 * `rag_spent_usd`: this month's cost of the two RAG pipelines, and of nothing else;
 * `global_exhausted`: all pipelines together reach the effective global cap, or the cap cannot be
   read (fail closed, as the adapter does);
+* `rag_spent_or_exhausted`: the spend the adapter reads — `inf` when the global cap is reached or
+  unreadable, the RAG's month otherwise — so that both caps are checked on every attempt;
 * `rag_limits`: the limits the RAG adapter reads — the RAG cap, the effective timeout — so that the
-  adapter stops a call when the RAG spend reaches its own cap. Paired with `DeepSeekAdapter` below.
+  adapter stops a call when that spend reaches the RAG cap. Paired with `DeepSeekAdapter` below.
 
 The rows are `llm_runs` written on the `db` fixture's transaction, which rolls back.
 """
@@ -149,6 +151,33 @@ def test_an_aborted_transaction_counts_as_exhausted(db) -> None:
     db.rollback()
 
 
+# ── rag_spent_or_exhausted ────────────────────────────────────────────────────────────────────
+
+
+def test_the_spend_the_adapter_reads_is_the_rag_spend_below_the_global_cap(db) -> None:
+    spend(db, "rag_lookup", 0.5)
+    spend(db, "triage", 10.0)
+    value = budget.rag_spent_or_exhausted(db, CFG)
+    assert value == pytest.approx(0.5) and isinstance(value, float)
+
+
+def test_the_spend_the_adapter_reads_is_infinite_when_the_global_cap_is_reached(db) -> None:
+    spend(db, "triage", 30.0)
+    assert budget.rag_spent_or_exhausted(db, CFG) == float("inf")
+
+
+def test_the_spend_the_adapter_reads_is_infinite_when_the_settings_cannot_be_read(db) -> None:
+    db.execute("ALTER TABLE settings RENAME TO settings_unreachable")
+    assert budget.rag_spent_or_exhausted(db, CFG) == float("inf")
+
+
+def test_the_spend_the_adapter_reads_follows_the_effective_global_cap(db) -> None:
+    spend(db, "triage", 2.0)
+    assert budget.rag_spent_or_exhausted(db, CFG) == 0.0
+    set_limit(db, "LLM_MONTHLY_USD_CAP", 1)
+    assert budget.rag_spent_or_exhausted(db, CFG) == float("inf")
+
+
 # ── rag_limits ────────────────────────────────────────────────────────────────────────────────
 
 
@@ -201,7 +230,7 @@ def rag_adapter(db, client: StubClient, cfg: Config = CFG) -> DeepSeekAdapter:
     return DeepSeekAdapter(
         cfg,
         client=client,
-        spent_usd=partial(budget.rag_spent_usd, db),
+        spent_usd=partial(budget.rag_spent_or_exhausted, db, cfg),
         limits=partial(budget.rag_limits, db, cfg),
     )
 
@@ -227,6 +256,28 @@ def test_spend_by_the_other_pipelines_does_not_use_up_the_rag_cap(db) -> None:
     spend(db, "triage", 20.0)
     spend(db, "investigate", 9.0)
     call(rag_adapter(db, client))
+    assert client.calls == 1
+
+
+def test_the_adapter_stops_when_the_global_cap_is_reached_whatever_the_rag_spend(db) -> None:
+    client = StubClient()
+    spend(db, "triage", 30.0)  # the RAG's own month is untouched: 0 of 3
+    assert budget.rag_spent_usd(db) == 0.0
+    with pytest.raises(LLMBudgetExceeded):
+        call(rag_adapter(db, client))
+    assert client.calls == 0
+
+
+def test_the_global_cap_crossed_between_two_calls_stops_the_second(db) -> None:
+    """The first send is allowed; before the repair is sent the cap has been crossed (by ①, ② or
+    this very call), and the repair is not sent."""
+    client = StubClient()
+    adapter = rag_adapter(db, client)
+    call(adapter)
+    assert client.calls == 1
+    spend(db, "triage", 30.0)
+    with pytest.raises(LLMBudgetExceeded):
+        call(adapter)
     assert client.calls == 1
 
 

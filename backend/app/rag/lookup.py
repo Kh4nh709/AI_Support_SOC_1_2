@@ -17,9 +17,11 @@ time and carry on without it when there is none. One lookup, in order:
    one transaction.
 
 The outcomes (`rag_results.status`): `empty` (nothing to show, the first day); `ok` (a history, or
-matches that passed V-R1 and V-R2); `budget`; `failed` (the last attempt failed, the provider refused,
-or the answer was unusable after the one repair) with the event `rag.lookup_failed {lookup_id}`.
-A model failure that is worth another attempt writes its run row, commits it and re-raises until the
+matches that passed V-R1 and V-R2); `budget` (a cap reached, before the call or between a call and its
+repair); `failed` (the last attempt failed, the provider refused, or our own prompt failed the linter)
+with the event `rag.lookup_failed {lookup_id}`. An answer the schema refuses after the one repair is not
+a failure: V-R3, the lookup degrades and never blocks, so it is `ok` with the history, or `empty`, and
+no match; its run row keeps `stopped_by='schema'` and `gate_result.schema_errors`. A model failure that is worth another attempt writes its run row, commits it and re-raises until the
 last attempt (the pattern of `tier2/investigate.py`: the worker rolls the handler's transaction back,
 the paid call must not vanish with it).
 
@@ -55,7 +57,7 @@ from app.llm.adapter import DeepSeekAdapter, LLMBudgetExceeded, LLMPermanent, co
 from app.llm.builder import KbLearnedLevel
 from app.llm.triage import prompt_version
 from app.rag import agent
-from app.rag.budget import global_exhausted, rag_limits, rag_spent_usd
+from app.rag.budget import rag_limits, rag_spent_or_exhausted
 from app.rag.candidates import candidates
 from app.rag.entries import KB_LEARNED_ROOT, entry_by_id, file_matches, sha256_text
 from app.rag.fingerprint import Fingerprint, alert_fingerprint, case_fingerprint
@@ -289,7 +291,8 @@ def _fingerprint_of(conn: psycopg.Connection, subject: Subject) -> Fingerprint:
 
 
 def _over_budget(conn: psycopg.Connection, cfg: config.Config) -> bool:
-    return global_exhausted(conn, cfg) or rag_spent_usd(conn) >= cfg.RAG_MONTHLY_USD_CAP
+    """The question the adapter asks before each attempt, asked once before the job starts."""
+    return rag_spent_or_exhausted(conn, cfg) >= cfg.RAG_MONTHLY_USD_CAP
 
 
 def run_lookup_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = None) -> None:
@@ -329,7 +332,7 @@ def run_lookup_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
         if adapter is not None
         else DeepSeekAdapter(
             cfg,
-            spent_usd=partial(rag_spent_usd, conn),
+            spent_usd=partial(rag_spent_or_exhausted, conn, cfg),
             limits=partial(rag_limits, conn, cfg),
         )
     )
@@ -366,10 +369,13 @@ def run_lookup_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
         )
         return
 
-    if result.parsed is None:  # the schema refused the answer, and the repair too
+    if result.parsed is None:
+        # The schema refused the answer, and the repair too. V-R3: the lookup degrades, it never
+        # blocks — no match, the history as it is, and the run keeps what happened.
         gate = {"faults": [], "integrity_failed": [], "schema_errors": result.schema_errors}
         run_id = record("schema", gate_result=gate, rag_lookup_id=lookup_id)
-        _store_failed(conn, lookup_id, subject, history, run_id)
+        status = "ok" if history.total > 0 else "empty"
+        _store(conn, lookup_id, subject, status, history, llm_run_id=run_id)
         return
 
     _, faults = validate_matches(result.parsed, cands)
