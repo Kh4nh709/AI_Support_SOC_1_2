@@ -7,5 +7,13 @@
         "reason": "string (max 160 chars)"
       }
     ]
+  },
+  "knowledge_draft_v1": {
+    "title": "string (max 120 chars)",
+    "tags": ["string"],
+    "summary": "string (max 600 chars)",
+    "distinguishing_signals": ["string (max 160 chars)"],
+    "check_next_time": ["string (max 160 chars)"],
+    "confidence_note": "string (max 200 chars)"
   }
 }
