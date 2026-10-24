@@ -269,8 +269,9 @@ def test_the_adapter_stops_when_the_global_cap_is_reached_whatever_the_rag_spend
 
 
 def test_the_global_cap_crossed_between_two_calls_stops_the_second(db) -> None:
-    """The first send is allowed; before the repair is sent the cap has been crossed (by ①, ② or
-    this very call), and the repair is not sent."""
+    """The first send is allowed; before the repair is sent the cap has been crossed by what the
+    database holds (① or ②; a row stands in for them), and the repair is not sent. The cap is read
+    from the database before each attempt: a call's own cost counts once its run row is written."""
     client = StubClient()
     adapter = rag_adapter(db, client)
     call(adapter)

@@ -51,6 +51,7 @@ _JSON_OBJECT = {"type": "json_object"}
 _ROOT = "<root>"
 _ROOT_ERROR = f"{_ROOT}: expected a JSON object"
 _ARRAY_INDEX = re.compile(r"\[\d+\]")
+_UNEXPECTED_KEY = ": unexpected key"
 _ENUM_TOKEN = re.compile(r"^[a-z_]+$")
 
 #: `llm/schemas.py`'s value-free message vocabulary (its module docstring), as `llm/investigate.py`
@@ -151,11 +152,18 @@ def _object_prefix(path: str, paths: Mapping[str, str]) -> str:
 
 
 def _repair_line(error: str, paths: Mapping[str, str]) -> str:
+    """One validator message as one bullet that holds no word of the model's.
+
+    `<path>: <message>`. The path is the schema's own for every message but one: an
+    `unexpected key` carries the model's key as its path, and that key may itself contain `": "`
+    (`matches: missing`, `a: b`), so a split at the first `": "` would leave part of the key in the
+    bullet. The suffix is therefore taken off first, from the end; the key is then replaced by its
+    parent object and never appears."""
+    if error.endswith(_UNEXPECTED_KEY):
+        parent = _object_prefix(_ARRAY_INDEX.sub("[]", error[: -len(_UNEXPECTED_KEY)]), paths)
+        return f"{BULLET}{parent or _ROOT}{_UNEXPECTED_KEY}"
     path, _, message = error.partition(": ")
-    path = _ARRAY_INDEX.sub("[]", path)
-    if message == "unexpected key":
-        path = _object_prefix(path, paths)
-    return f"{BULLET}{path or _ROOT}: {message}"
+    return f"{BULLET}{_ARRAY_INDEX.sub('[]', path) or _ROOT}: {message}"
 
 
 # ── the call ──────────────────────────────────────────────────────────────────────────────────

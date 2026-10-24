@@ -9,19 +9,25 @@ time and carry on without it when there is none. One lookup, in order:
    (no model: analysts' decisions need no approval);
 3. the budget: when the global cap or the RAG's own is reached, a `budget` row is written (the history
    kept) and nothing else happens;
-4. the candidates (a database search): none -> `ok` when the history has data, else `empty`;
+4. the candidates (a database search), each checked before it can be sent (V-R1, A4: an entry
+   changed after approval reaches no prompt): `sha256(content)` is its `content_sha256` and its
+   published file matches (`rag.entries.file_matches`). A candidate that fails is dropped, never sent
+   and never matched, and writes `rag.integrity_failed`, once per entry per lookup. The rest are cut
+   to the prompt budget (`rag.match.select_candidates`); none left -> `ok` when the history has
+   data, else `empty`, and the model is not asked;
 5. otherwise the ranking agent (`rag.match.rank`) is asked, through `DeepSeekAdapter` limited to the RAG
-   budget; each kept match is held to V-R1's second half, the published file's hash
-   (`rag.entries.file_matches`): a mismatch drops the match and writes `rag.integrity_failed`;
+   budget; only a candidate that was sent can be matched;
 6. the `llm_runs` row (`rag_lookup` / `retriever`) and the `rag_results` row are written in the job's
-   one transaction.
+   one transaction. The row's `gate_result` holds `integrity_failed` (the entries dropped at 4),
+   `candidates_dropped_for_budget` and, once an answer came, `faults`.
 
 The outcomes (`rag_results.status`): `empty` (nothing to show, the first day); `ok` (a history, or
-matches that passed V-R1 and V-R2); `budget` (a cap reached, before the call or between a call and its
-repair); `failed` (the last attempt failed, the provider refused, or our own prompt failed the linter)
-with the event `rag.lookup_failed {lookup_id}`. An answer the schema refuses after the one repair is not
-a failure: V-R3, the lookup degrades and never blocks, so it is `ok` with the history, or `empty`, and
-no match; its run row keeps `stopped_by='schema'` and `gate_result.schema_errors`. A model failure that is worth another attempt writes its run row, commits it and re-raises until the
+matches that passed V-R1 and V-R2); `budget` (a cap reached, before the call or between a call and
+its repair); `failed` (the last attempt failed, the provider refused, or our own prompt failed the
+linter) with the event `rag.lookup_failed {lookup_id}`. An answer the schema refuses after the one
+repair is not a failure: V-R3, the lookup degrades and never blocks, so it is `ok` with the history,
+or `empty`, and no match; its run row keeps `stopped_by='schema'` and `gate_result.schema_errors`.
+A model failure that is worth another attempt writes its run row, commits it and re-raises until the
 last attempt (the pattern of `tier2/investigate.py`: the worker rolls the handler's transaction back,
 the paid call must not vanish with it).
 
@@ -59,7 +65,7 @@ from app.llm.triage import prompt_version
 from app.rag import agent
 from app.rag.budget import rag_limits, rag_spent_or_exhausted
 from app.rag.candidates import candidates
-from app.rag.entries import KB_LEARNED_ROOT, entry_by_id, file_matches, sha256_text
+from app.rag.entries import KB_LEARNED_ROOT, Entry, entry_by_id, file_matches, sha256_text
 from app.rag.fingerprint import Fingerprint, alert_fingerprint, case_fingerprint
 from app.rag.history import (
     CONCLUSIONS,
@@ -74,6 +80,7 @@ from app.rag.match import (
     Match,
     injection_findings,
     rank,
+    select_candidates,
     validate_matches,
 )
 from app.rag.runs import write_rag_run
@@ -321,12 +328,31 @@ def run_lookup_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
         _store(conn, lookup_id, subject, "budget", history)
         return
 
-    cands = candidates(conn, fp, exclusion)
-    if not cands:
+    intact: list[Entry] = []
+    integrity_failed: list[str] = []
+    for cand in candidates(conn, fp, exclusion):
+        # A4: nothing changed after approval reaches a prompt, the ranking prompt included
+        if sha256_text(cand.content) == cand.content_sha256 and file_matches(cand, KB_LEARNED_ROOT):
+            intact.append(cand)
+            continue
+        integrity_failed.append(cand.entry_id)
+        write_event(
+            conn,
+            "rag.integrity_failed",
+            cand.entry_id,
+            "system",
+            payload={"entry_id": cand.entry_id},
+        )
+    sendable = select_candidates(fp, intact)
+    if not sendable:
         _store(conn, lookup_id, subject, "ok" if history.total > 0 else "empty", history)
         return
+    gate_base = {
+        "integrity_failed": integrity_failed,
+        "candidates_dropped_for_budget": len(intact) - len(sendable),
+    }
 
-    findings = injection_findings(fp, cands)
+    findings = injection_findings(fp, sendable)
     tape = agent.Tape(
         adapter
         if adapter is not None
@@ -337,11 +363,16 @@ def run_lookup_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
         )
     )
 
-    def record(stopped_by: str | None, **fields: Any) -> uuid.UUID | None:
-        return _record_run(conn, cfg, tape, subject, findings, stopped_by=stopped_by, **fields)
+    def record(
+        stopped_by: str | None, *, gate_result: dict | None = None, **fields: Any
+    ) -> uuid.UUID | None:
+        gate = {**gate_base, **(gate_result or {})}
+        return _record_run(
+            conn, cfg, tape, subject, findings, stopped_by=stopped_by, gate_result=gate, **fields
+        )
 
     try:
-        matches, notes, result = rank(tape, fp, cands, cfg=cfg)
+        matches, notes, result = rank(tape, fp, sendable, cfg=cfg)
     except LLMBudgetExceeded:
         # a cap reached between the check above and the call: the same outcome as that check
         run_id = record("cap", rag_lookup_id=lookup_id)
@@ -372,40 +403,20 @@ def run_lookup_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
     if result.parsed is None:
         # The schema refused the answer, and the repair too. V-R3: the lookup degrades, it never
         # blocks — no match, the history as it is, and the run keeps what happened.
-        gate = {"faults": [], "integrity_failed": [], "schema_errors": result.schema_errors}
+        gate = {"faults": [], "schema_errors": result.schema_errors}
         run_id = record("schema", gate_result=gate, rag_lookup_id=lookup_id)
         status = "ok" if history.total > 0 else "empty"
         _store(conn, lookup_id, subject, status, history, llm_run_id=run_id)
         return
 
-    _, faults = validate_matches(result.parsed, cands)
-    by_id = {cand.entry_id: cand for cand in cands}
-    kept: list[Match] = []
-    kept_notes: dict[str, str] = {}
-    integrity_failed: list[str] = []
-    for found in matches:
-        if file_matches(by_id[found.entry_id], KB_LEARNED_ROOT):
-            kept.append(found)
-            kept_notes[found.entry_id] = notes[found.entry_id]
-            continue
-        integrity_failed.append(found.entry_id)
-        write_event(
-            conn,
-            "rag.integrity_failed",
-            found.entry_id,
-            "system",
-            payload={"entry_id": found.entry_id},
-        )
-
+    # every candidate sent was checked before the send: what the model matched is intact
+    _, faults = validate_matches(result.parsed, sendable)
     run_id = record(
-        None,
-        result=result.parsed,
-        gate_result={"faults": faults, "integrity_failed": integrity_failed},
-        rag_lookup_id=lookup_id,
+        None, result=result.parsed, gate_result={"faults": faults}, rag_lookup_id=lookup_id
     )
-    status = "ok" if kept or history.total > 0 else "empty"
+    status = "ok" if matches or history.total > 0 else "empty"
     _store(
-        conn, lookup_id, subject, status, history, matches=kept, notes=kept_notes, llm_run_id=run_id
+        conn, lookup_id, subject, status, history, matches=matches, notes=notes, llm_run_id=run_id
     )
 
 

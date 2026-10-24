@@ -58,9 +58,12 @@ def rag_spent_or_exhausted(conn: psycopg.Connection, cfg: Config) -> float:
     cap is reached or cannot be read (`global_exhausted`), else the RAG's month (`rag_spent_usd`).
 
     The adapter stops a call when this is at or over `rag_limits(...).cap_usd`, the RAG's own cap, so
-    `inf` stops it whatever that cap is. Both caps are therefore checked on every attempt, the repair
-    included: a cap crossed between a send and its repair (by ①, ② or this very call) stops the
-    repair, and `LLMBudgetExceeded` reaches the job as a cap."""
+    `inf` stops it whatever that cap is. Both caps are therefore read from the database before each
+    attempt, the repair included: a cap crossed by what is already recorded there between a send and
+    its repair (① or ②, another RAG job) stops the repair, and `LLMBudgetExceeded` reaches the job as
+    a cap. The cost of this lookup's own first call is not in the database yet — the job writes its run
+    row after `rank` returns — so it counts for the next attempt of the job, not for its own repair.
+    """
     if global_exhausted(conn, cfg):
         return float("inf")
     return rag_spent_usd(conn)
