@@ -206,16 +206,15 @@ def call_json(
     reach the job, which holds the connection to record them against. `extra_constants` is what the
     caller's own template adds to the vocabulary the linter accepts outside a block."""
     del cfg  # the signature of `llm.investigate.investigate`; the limits are the adapter's
-    schema = schema_name
-    paths, _ = _repair_vocabulary(schema)  # an unknown name stops here, before any call
-    _lint_or_raise(user, nonce=nonce, schema_name=schema, extra_constants=extra_constants)
+    paths, _ = _repair_vocabulary(schema_name)  # an unknown name stops here, before any call
+    _lint_or_raise(user, nonce=nonce, schema_name=schema_name, extra_constants=extra_constants)
 
     spend = Spend()
     result = adapter.complete(
         system=system, user=user, response_format=_JSON_OBJECT, model=model or None
     )
     spend.record(result)
-    parsed, errors = _parse(result.content, schema)
+    parsed, errors = _parse(result.content, schema_name)
 
     if errors:
         suffix = "\n".join(
@@ -223,13 +222,13 @@ def call_json(
         )
         repair_user = f"{user}\n\n{suffix}"
         _lint_or_raise(
-            repair_user, nonce=nonce, schema_name=schema, extra_constants=extra_constants
+            repair_user, nonce=nonce, schema_name=schema_name, extra_constants=extra_constants
         )
         result = adapter.complete(
             system=system, user=repair_user, response_format=_JSON_OBJECT, model=model or None
         )
         spend.record(result)
-        parsed, errors = _parse(result.content, schema)
+        parsed, errors = _parse(result.content, schema_name)
 
     return AgentResult(
         parsed=None if errors else parsed,

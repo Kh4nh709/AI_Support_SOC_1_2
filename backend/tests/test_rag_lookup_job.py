@@ -948,6 +948,26 @@ def test_the_material_is_read_from_the_database_not_from_the_file(db, kb_root) -
     assert len(lookup.prompt_material(db, found).entries) == 1
 
 
+def test_no_more_than_three_entries_are_rendered(db, kb_root) -> None:
+    """A stored row is not trusted to hold at most 3 matches: the prompt takes the first three."""
+    alert(db)
+    matches = []
+    for entry_id in [entry(db, kb_root) for _ in range(4)]:
+        (digest,) = db.execute(
+            "SELECT content_sha256 FROM knowledge_entries WHERE entry_id = %s", (entry_id,)
+        ).fetchone()
+        matches.append({"entry_id": entry_id, "level": "giong", "content_sha256": digest})
+    put_row(db, history=NO_HISTORY, matches=matches)
+    found = lookup.latest_lookup(db, Subject("alert", "ra-1"))
+    assert len(found.matches) == 4
+    assert [content for _, content in lookup.prompt_material(db, found).entries] == [
+        db.execute(
+            "SELECT content FROM knowledge_entries WHERE entry_id = %s", (m["entry_id"],)
+        ).fetchone()[0]
+        for m in matches[:3]
+    ]
+
+
 # ── write_rag_run ─────────────────────────────────────────────────────────────────────────────
 
 
