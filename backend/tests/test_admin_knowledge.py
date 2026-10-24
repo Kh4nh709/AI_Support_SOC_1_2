@@ -467,12 +467,19 @@ def test_the_draft_row_in_the_detail(api) -> None:
 @pytest.mark.db
 def test_the_soar_enrichment_block_of_an_alert(api) -> None:
     block = {"scenario": {"id": "SC03", "name": "x"}, "case": {"dedup_key": "k"}, "note": "văn bản"}
-    alert = decided_alert(api.conn, raw_payload={"enrichment": block, "other": "not this"})
+    secret = {"api_key": "hunter2-secret", "link": "postgresql://app:hunter2@db:5432/soc"}
+    alert = decided_alert(api.conn, raw_payload={"enrichment": {**block, **secret}, "other": "no"})
     draft_id = pending_draft(api.conn, f"alert:{alert}")
 
-    source = api.get(f"/drafts/{draft_id}").json()["source"]
+    response = api.get(f"/drafts/{draft_id}")
 
-    assert source["enrichment"] == block
+    # the block, as the audit page would show it: a secret key and a URL with a password are hidden
+    assert response.json()["source"]["enrichment"] == {
+        **block,
+        "api_key": "[đã ẩn]",
+        "link": "[đã ẩn]",
+    }
+    assert "hunter2" not in response.text
 
 
 @pytest.mark.db

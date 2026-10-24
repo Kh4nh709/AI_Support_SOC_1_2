@@ -14,7 +14,8 @@ db-restore`, which restores rows and not files).
 1. the draft is locked `FOR UPDATE`: a status other than `pending` is `StaleDraft` (two admins, or a
    double click: the second waits for the first, then finds the draft approved, so one entry, one file
    and one event); an unknown one is `UnknownDraft`; a source that is no longer a decided alert or a
-   concluded case is `StaleDraft` too;
+   concluded case is `StaleDraft` too. The UPDATE that marks the draft repeats `status = 'pending'`
+   in its WHERE: the lock and the condition each stop a second approval, so neither is the only guard;
 2. the fields are the stored draft's, with `edited` laid over the model fields (`MODEL_FIELDS`) and
    NOTHING else: a key of `edited` that is not a model field is refused (`v1_schema:unexpected_key`),
    and the six closed fields (`conclusion, category, mitre_ids, soar_scenario, rule_ids, log_source`)
@@ -39,7 +40,8 @@ effort) when the commit raises. `Published` and `Retired` are what it undoes.
 **Reject** and **retire** take a reason of 1-500 characters (`check_reason`). Retire locks the entry,
 refuses one that is not active (`StaleEntry`), sets it `retired` with its `file_path` the retired one,
 writes `knowledge.retired {entry_id, reason}` and moves the file; a file that is missing is nothing to
-move (the database is the truth), and one whose path leaves the root is never touched.
+move (the database is the truth), and one whose path leaves the root is never touched. An entry
+whose category is no directory name is still retired (its file goes to `retired/unknown/`).
 
 Audit payloads, exactly (the admin audit page reads these keys): `knowledge.approved {draft_id,
 entry_id}`, `knowledge.rejected {draft_id, reason}`, `knowledge.retired {entry_id, reason}`. The first two
@@ -433,11 +435,13 @@ def approve_published(
                 "admin": admin_id,
             },
         )
-        conn.execute(
+        marked = conn.execute(
             "UPDATE knowledge_drafts SET status = 'approved', draft = %s, reviewed_by = %s,"
-            " reviewed_at = now() WHERE draft_id = %s",
+            " reviewed_at = now() WHERE draft_id = %s AND status = 'pending' RETURNING draft_id",
             (Jsonb(final), admin_id, wanted),
-        )
+        ).fetchone()
+        if marked is None:  # the row lock above makes this unreachable: a second line of defence
+            raise StaleDraft("not_pending")
         write_event(
             conn,
             "knowledge.approved",
@@ -446,9 +450,8 @@ def approve_published(
             actor_id=admin_id,
             payload={"draft_id": str(wanted), "entry_id": str(entry_id)},
         )
-        path = write_file(
-            root, relative, content.encode("utf-8")
-        )  # last: a failure undoes the rest
+        # last: a file that cannot be written takes the rows above back (the savepoint)
+        path = write_file(root, relative, content.encode("utf-8"))
     return Published(entry_id, path)
 
 
@@ -486,11 +489,13 @@ def reject(conn: psycopg.Connection, draft_id: uuid.UUID, admin_id: str, reason:
     source_id, status = row
     if status != "pending":
         raise StaleDraft("not_pending")
-    conn.execute(
+    marked = conn.execute(
         "UPDATE knowledge_drafts SET status = 'rejected', reviewed_by = %s, reviewed_at = now(),"
-        " review_note = %s WHERE draft_id = %s",
+        " review_note = %s WHERE draft_id = %s AND status = 'pending' RETURNING draft_id",
         (admin_id, text, wanted),
-    )
+    ).fetchone()
+    if marked is None:  # the row lock above makes this unreachable: a second line of defence
+        raise StaleDraft("not_pending")
     write_event(
         conn,
         "knowledge.rejected",
@@ -536,10 +541,13 @@ def retire_published(
         target = retired_path("unknown", str(wanted))
 
     with conn.transaction():
-        conn.execute(
-            "UPDATE knowledge_entries SET status = 'retired', file_path = %s WHERE entry_id = %s",
+        marked = conn.execute(
+            "UPDATE knowledge_entries SET status = 'retired', file_path = %s"
+            " WHERE entry_id = %s AND status = 'active' RETURNING entry_id",
             (target, wanted),
-        )
+        ).fetchone()
+        if marked is None:  # the row lock above makes this unreachable: a second line of defence
+            raise StaleEntry("entry: not active")
         write_event(
             conn,
             "knowledge.retired",
