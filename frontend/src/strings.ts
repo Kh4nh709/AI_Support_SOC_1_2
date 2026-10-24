@@ -1065,7 +1065,7 @@ export const S = {
       system: "Hệ thống và job",
     } satisfies Record<AuditGroup, string>,
 
-    // One label for each of the 28 names of `audit/events.py`'s EVENT_TYPES, read through `labelOf`. The
+    // One label for each of the 35 names of `audit/events.py`'s EVENT_TYPES, read through `labelOf`. The
     // canvas gives nine; the rest follow its wording. An event with more than one use says the common part
     // (`admin.user_updated` is a role change, a deactivation, a reset and an unlock): the summary line of the
     // audit page says which.
@@ -1098,6 +1098,13 @@ export const S = {
       "health.alarm": "Cảnh báo sức khoẻ",
       "label.created": "Gán nhãn tập vàng",
       "admin.settings_changed": "Sửa hạn mức LLM",
+      "knowledge.drafted": "Model đề xuất tri thức",
+      "knowledge.approved": "Duyệt tri thức",
+      "knowledge.rejected": "Từ chối bản nháp tri thức",
+      "knowledge.retired": "Gỡ tri thức",
+      "knowledge.merged": "Gộp bản nháp vào tri thức",
+      "rag.lookup_failed": "Tra cứu tri thức lỗi",
+      "rag.integrity_failed": "Tệp tri thức không khớp bản gốc",
     },
 
     // The audit page (P11-T17, spec §4.7): `/admin/audit`, the canvas's `AdminAudit` and the "AUDIT" cards of
@@ -1273,6 +1280,18 @@ export const S = {
         alarmNew: (names: string) => `mới lỗi: ${names}`,
         alarmFailing: (names: string) => `đang lỗi: ${names}`,
         alarmUnknown: "cảnh báo sức khoẻ",
+        // The learned-knowledge events (DEC-210) name a draft or an entry by its id and carry an admin's
+        // reason, and say nothing of what a draft or an entry contains: that text comes from an analyst's
+        // own words, and the audit page is not where it is read.
+        knowledgeDrafted: "model đề xuất một bản nháp tri thức, chờ admin duyệt",
+        knowledgeApproved: "admin duyệt bản nháp thành tri thức",
+        knowledgeRejected: "admin từ chối bản nháp",
+        knowledgeRetired: "admin gỡ tri thức khỏi kho",
+        knowledgeMerged: "bản nháp gộp vào tri thức đã có, không tạo mục mới",
+        lookupFailed: "tra cứu tri thức thất bại sau lần thử cuối",
+        integrityFailed: "tệp tri thức không còn khớp mã băm lúc duyệt, mục bị loại khỏi tra cứu",
+        draftId: (id: string) => `bản nháp ${id}`,
+        entryId: (id: string) => `tri thức ${id}`,
       },
     },
 

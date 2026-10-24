@@ -205,6 +205,10 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "autoclose.reviewed",
         "rule.suspected_wrong",
         "label.created",
+        # P13-T01 (DEC-210): what an admin did to the learned knowledge.
+        "knowledge.approved",
+        "knowledge.rejected",
+        "knowledge.retired",
     ),
     "alerts_cases": (
         "alert.received",
@@ -226,11 +230,18 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "case.analyzed",
         "llm.gate_forced",
         "llm.builder_violation",
+        # P13-T01 (DEC-210): a draft the model wrote, and a draft the model merged into an entry
+        # (no admin acts on a merge).
+        "knowledge.drafted",
+        "knowledge.merged",
     ),
     "system": (
         "job.exhausted",
         "admin.job_retried",
         "health.alarm",
+        # P13-T01 (DEC-210): a lookup that failed, and an entry file that no longer matches its hash.
+        "rag.lookup_failed",
+        "rag.integrity_failed",
     ),
 }
 #: `?group=` is one of the table's keys (an enum in the OpenAPI schema); anything else is a 422.

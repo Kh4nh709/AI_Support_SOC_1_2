@@ -1,4 +1,4 @@
-// What the audit page makes of an event (spec §4.7): the one-line summary of each of the 28 event types, built
+// What the audit page makes of an event (spec §4.7): the one-line summary of each of the 35 event types, built
 // client-side from the payload; the link of a subject that is an alert or a case; the payload as text; and the
 // escape of the characters a person cannot see.
 //
@@ -142,6 +142,16 @@ type Builder = (payload: Obj | null) => string[];
 /** A clause for a text that may be missing: nothing when it is. */
 const when = <T>(value: T | null, clause: (value: T) => string): string[] =>
   value === null ? [] : [clause(value)];
+
+/** The clause naming a draft by its id, or nothing. */
+const draftClause = (p: Obj | null): string[] =>
+  when(str(p, "draft_id"), (id) => A.draftId(free(id)));
+/** The clause naming an entry by its id, or nothing. */
+const entryClause = (p: Obj | null): string[] =>
+  when(str(p, "entry_id"), (id) => A.entryId(free(id)));
+/** The admin's reason, on one line and cut, or nothing. */
+const reasonClause = (p: Obj | null): string[] =>
+  when(str(p, "reason"), (reason) => A.reason(free(reason)));
 
 /** The summary of an event type is its clauses, the first one standing alone when the payload says no more. */
 const BUILDERS: Readonly<Record<string, Builder>> = {
@@ -378,6 +388,15 @@ const BUILDERS: Readonly<Record<string, Builder>> = {
     ];
     return clauses.length === 0 ? [A.alarmUnknown] : clauses;
   },
+  // The learned-knowledge events (DEC-210). Each reads at most an id and the admin's reason; none reads what a
+  // draft or an entry says, whatever else the payload holds.
+  "knowledge.drafted": (p) => [A.knowledgeDrafted, ...draftClause(p)],
+  "knowledge.approved": (p) => [A.knowledgeApproved, ...entryClause(p)],
+  "knowledge.rejected": (p) => [A.knowledgeRejected, ...draftClause(p), ...reasonClause(p)],
+  "knowledge.retired": (p) => [A.knowledgeRetired, ...entryClause(p), ...reasonClause(p)],
+  "knowledge.merged": (p) => [A.knowledgeMerged, ...entryClause(p)],
+  "rag.lookup_failed": () => [A.lookupFailed],
+  "rag.integrity_failed": (p) => [A.integrityFailed, ...entryClause(p)],
 };
 
 /** A value of a limit change as text: a finite number or a text; anything else is not a value. */
