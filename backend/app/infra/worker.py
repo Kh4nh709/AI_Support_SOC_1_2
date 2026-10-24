@@ -42,8 +42,8 @@ def run_forever(
 ) -> None:
     """Claim-dispatch-finish, forever (or once).
 
-    Per iteration: `reclaim_stale`, committed on its own; `claim_job` restricted
-    to `handlers`' keys, committed on its own; if a job was claimed, run its
+    Per iteration: `reclaim_stale` and `claim_job`, each restricted to `handlers`' keys and
+    each committed on its own (a worker reclaims only the job types it can run, DEC-210); if a job was claimed, run its
     handler inside `transaction(conn, statement_timeout=...)` and finish it —
     on success inside that same transaction (so the handler's writes and the
     `succeeded` status land in one commit), on exception after a rollback, in a
@@ -56,11 +56,12 @@ def run_forever(
     """
     timeouts = timeouts or {}
     conn = conn_factory()
+    job_types = list(handlers.keys())
     while True:
-        reclaim_stale(conn)
+        reclaim_stale(conn, job_types)
         conn.commit()
 
-        job = claim_job(conn, list(handlers.keys()))
+        job = claim_job(conn, job_types)
         conn.commit()
 
         if job is None:

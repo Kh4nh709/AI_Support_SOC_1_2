@@ -24,9 +24,21 @@ from psycopg import sql
 from app.infra import config
 from app.infra.errors import PermanentError
 
-# §6.5 — the six v3 job types. A frozen contract, not a Config knob: mirrors
-# `ck_jobs_job_type` exactly.
-JOB_TYPES = frozenset({"pipeline", "triage", "investigate", "digest", "health", "pull"})
+# §6.5 — the six v3 job types, plus the two DEC-210 added (migration 020): `rag_lookup` and
+# `knowledge_draft`, claimed only by the `rag-worker`. A frozen contract, not a Config knob:
+# mirrors `ck_jobs_job_type` exactly.
+JOB_TYPES = frozenset(
+    {
+        "pipeline",
+        "triage",
+        "investigate",
+        "digest",
+        "health",
+        "pull",
+        "rag_lookup",
+        "knowledge_draft",
+    }
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -168,16 +180,24 @@ def finish_job(
     )
 
 
-def reclaim_stale(conn: psycopg.Connection) -> int:
-    """Return stale `running` jobs (worker died mid-job) to `pending`; return
-    the count reclaimed. Staleness threshold is `Config.JOB_LOCK_TIMEOUT_S`."""
+def reclaim_stale(conn: psycopg.Connection, job_types: Sequence[str]) -> int:
+    """Return stale `running` jobs of the given types (worker died mid-job) to `pending`; return
+    the count reclaimed. Staleness threshold is `Config.JOB_LOCK_TIMEOUT_S`.
+
+    `job_types` is required (DEC-210). Each worker passes the keys of its own handler table, as
+    it already does for `claim_job`: a worker may reclaim only a job it could run. Without the
+    filter the `rag-worker` would reclaim a `triage` job that the main worker is still running
+    inside its one long transaction, and ① would run twice. An empty `job_types` reclaims
+    nothing.
+    """
     cfg = config.load()
     cur = conn.execute(
         """
         UPDATE jobs
         SET status = 'pending', locked_at = NULL
         WHERE status = 'running' AND locked_at < now() - (%s * interval '1 second')
+          AND job_type = ANY(%s)
         """,
-        (cfg.JOB_LOCK_TIMEOUT_S,),
+        (cfg.JOB_LOCK_TIMEOUT_S, list(job_types)),
     )
     return cur.rowcount
