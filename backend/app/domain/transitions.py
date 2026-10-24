@@ -401,7 +401,8 @@ def decide(
             f"A08/A09: alert_id={alert_id!r} is in status {status!r}, expected 'tier1_active'"
         )
     delta = occurrence_count - seen_occurrence_count
-    tolerance = config.load().REVIEW_DELTA_TOLERANCE
+    cfg = config.load()
+    tolerance = cfg.REVIEW_DELTA_TOLERANCE
     if delta > tolerance:
         raise StaleState(
             f"A08/A09: occurrence_count is now {occurrence_count} (delta {delta} exceeds "
@@ -435,6 +436,11 @@ def decide(
             "llm_run_id": llm_run_id,
         },
     )
+    if cfg.KNOWLEDGE_DRAFT_ENABLED:
+        # DEC-210: an analyst's conclusion is what learned knowledge is drafted from. In this
+        # transaction, so the job exists exactly when the decision does; the cluster's head is the
+        # subject, its duplicates are not (a decision is made once).
+        enqueue(conn, "knowledge_draft", f"alert:{alert_id}")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -644,3 +650,9 @@ def conclude_case(
         actor_id=user_id,
         payload={"conclusion": conclusion, "reason": reason},
     )
+    if config.load().KNOWLEDGE_DRAFT_ENABLED:
+        # DEC-210: one draft per concluded case, not one per alert; the same transaction as the
+        # conclusion. `domain` may not import `rag`, so the subject is spelled as
+        # `rag.subject.Subject("case", id).key` spells it (`parse_subject` reads a case id in lower
+        # case).
+        enqueue(conn, "knowledge_draft", f"case:{str(case_id).lower()}")
