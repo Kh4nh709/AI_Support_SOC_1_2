@@ -12,6 +12,7 @@ local-time boundaries need to be deterministic on both sides).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import itertools
 import json
@@ -758,6 +759,241 @@ def test_disk_free_at_exact_threshold_is_ok(db, tmp_path, monkeypatch):
     check = _by_name(report)["disk_free"]
     assert check.value == 20.0
     assert check.ok is True
+
+
+# ===========================================================================
+# the three checks of the learned knowledge (P13-T05, DEC-210) — SQL only, `infra` imports no `rag`
+# ===========================================================================
+
+
+def _insert_draft(conn, *, status: str = "pending") -> None:
+    n = next(_alert_seq)
+    conn.execute(
+        "INSERT INTO knowledge_drafts (source_kind, source_id, conclusion, status)"
+        " VALUES ('alert', %s, 'closed_fp', %s)",
+        (f"health-draft-{n}", status),
+    )
+
+
+def _insert_integrity_failure(conn, *, entry_id: str, hours_ago: float) -> None:
+    conn.execute(
+        "INSERT INTO audit_events (event_type, subject_id, actor_role, payload, created_at)"
+        " VALUES ('rag.integrity_failed', %s, 'system', %s, now() - (%s * interval '1 hour'))",
+        (entry_id, Jsonb({"entry_id": entry_id}), hours_ago),
+    )
+
+
+def _insert_rag_run(conn, *, pipeline: str, cost_usd: str, days_ago: float = 0) -> None:
+    role = "retriever" if pipeline == "rag_lookup" else "drafter"
+    conn.execute(
+        "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, role, system_prompt,"
+        " user_message, cost_usd, created_at)"
+        " VALUES (%s, %s, 'alert', %s, %s, 's', 'u', %s, now() - (%s * interval '1 day'))",
+        (str(uuid.uuid4()), pipeline, f"rag-run-{next(_alert_seq)}", role, cost_usd, days_ago),
+    )
+
+
+def _run_check(db, tmp_path, cfg=None) -> dict[str, health.CheckResult]:
+    return _by_name(
+        health.check(db, cfg or _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+    )
+
+
+@pytest.mark.db
+def test_the_report_has_the_three_knowledge_checks_after_the_ten(db, tmp_path):
+    report = health.check(db, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+    names = [c.name for c in report.checks]
+    assert names[-3:] == ["knowledge_queue", "knowledge_integrity", "rag_budget"]
+    assert len(names) == 13
+
+
+@pytest.mark.db
+def test_a_store_with_nothing_in_it_is_green_on_all_three(db, tmp_path):
+    """The first day: no draft, no failed entry, no spend."""
+    checks = _run_check(db, tmp_path)
+    for name in ("knowledge_queue", "knowledge_integrity", "rag_budget"):
+        assert checks[name].ok is True, name
+
+
+# 11 · knowledge_queue ---------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_knowledge_queue_fires_above_the_maximum(db, tmp_path):
+    for _ in range(3):
+        _insert_draft(db)
+    check = _run_check(db, tmp_path, _cfg(KNOWLEDGE_QUEUE_MAX=2))["knowledge_queue"]
+    assert check.ok is False
+    assert (check.value, check.threshold) == (3, 2)
+
+
+@pytest.mark.db
+def test_knowledge_queue_at_the_maximum_is_ok(db, tmp_path):
+    """The alarm is "above" `KNOWLEDGE_QUEUE_MAX`, not "at" it."""
+    for _ in range(2):
+        _insert_draft(db)
+    check = _run_check(db, tmp_path, _cfg(KNOWLEDGE_QUEUE_MAX=2))["knowledge_queue"]
+    assert check.ok is True
+    assert check.value == 2
+
+
+@pytest.mark.db
+def test_knowledge_queue_counts_only_the_drafts_waiting_for_an_admin(db, tmp_path):
+    _insert_draft(db)
+    for status in ("approved", "rejected", "merged", "merged"):
+        _insert_draft(db, status=status)
+    check = _run_check(db, tmp_path, _cfg(KNOWLEDGE_QUEUE_MAX=1))["knowledge_queue"]
+    assert check.ok is True
+    assert check.value == 1
+
+
+# 12 · knowledge_integrity -----------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_knowledge_integrity_fires_on_a_failure_in_the_last_24_hours(db, tmp_path):
+    _insert_integrity_failure(db, entry_id=str(uuid.uuid4()), hours_ago=2)
+    check = _run_check(db, tmp_path)["knowledge_integrity"]
+    assert check.ok is False
+    assert (check.value, check.threshold) == (1, 0)
+
+
+@pytest.mark.db
+def test_knowledge_integrity_passes_when_the_failure_is_older_than_24_hours(db, tmp_path):
+    _insert_integrity_failure(db, entry_id=str(uuid.uuid4()), hours_ago=25)
+    assert _run_check(db, tmp_path)["knowledge_integrity"].ok is True
+
+
+@pytest.mark.db
+def test_knowledge_integrity_is_an_aggregate_duplicates_are_one_entry(db, tmp_path):
+    """Every lookup that meets a changed entry writes an event: five events for one entry are one
+    entry to repair, and the detail says how many events there were."""
+    bad = str(uuid.uuid4())
+    for hours in (1, 2, 3, 4, 5):
+        _insert_integrity_failure(db, entry_id=bad, hours_ago=hours)
+    _insert_integrity_failure(db, entry_id=str(uuid.uuid4()), hours_ago=1)
+    check = _run_check(db, tmp_path)["knowledge_integrity"]
+    assert check.ok is False
+    assert check.value == 2
+    assert "6" in check.detail and "2" in check.detail
+
+
+@pytest.mark.db
+def test_knowledge_integrity_ignores_other_events(db, tmp_path):
+    db.execute(
+        "INSERT INTO audit_events (event_type, subject_id, actor_role, payload)"
+        " VALUES ('rag.lookup_failed', 'x', 'system', '{}')"
+    )
+    assert _run_check(db, tmp_path)["knowledge_integrity"].ok is True
+
+
+# 13 · rag_budget --------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_rag_budget_fires_when_the_months_spend_reaches_the_cap(db, tmp_path):
+    _insert_rag_run(db, pipeline="rag_lookup", cost_usd="1.00")
+    _insert_rag_run(db, pipeline="knowledge_draft", cost_usd="2.00")
+    check = _run_check(db, tmp_path, _cfg(RAG_MONTHLY_USD_CAP=3))["rag_budget"]
+    assert check.ok is False  # exactly the cap is the cap: the adapter stops at it
+    assert (check.value, check.threshold) == (3.0, 3)
+
+
+@pytest.mark.db
+def test_rag_budget_passes_under_the_cap(db, tmp_path):
+    _insert_rag_run(db, pipeline="rag_lookup", cost_usd="1.00")
+    _insert_rag_run(db, pipeline="knowledge_draft", cost_usd="1.50")
+    check = _run_check(db, tmp_path, _cfg(RAG_MONTHLY_USD_CAP=3))["rag_budget"]
+    assert check.ok is True
+    assert check.value == 2.5
+
+
+@pytest.mark.db
+def test_rag_budget_counts_the_rag_pipelines_and_this_month_only(db, tmp_path):
+    _insert_llm_run(db, created_at=datetime.now(UTC), cost_usd="25.00")  # ①: not the RAG's
+    _insert_rag_run(db, pipeline="rag_lookup", cost_usd="1.00")
+    # `now() - 40 days` is never in the current month
+    _insert_rag_run(db, pipeline="rag_lookup", cost_usd="50.00", days_ago=40)
+    check = _run_check(db, tmp_path, _cfg(RAG_MONTHLY_USD_CAP=3))["rag_budget"]
+    assert check.ok is True
+    assert check.value == 1.0
+
+
+@pytest.mark.db
+def test_rag_budget_ignores_a_run_with_no_cost(db, tmp_path):
+    db.execute(
+        "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, role, system_prompt,"
+        " user_message) VALUES (%s, 'rag_lookup', 'alert', 'free', 'retriever', 's', 'u')",
+        (str(uuid.uuid4()),),
+    )
+    check = _run_check(db, tmp_path)["rag_budget"]
+    assert check.ok is True
+    assert check.value == 0.0
+
+
+@pytest.mark.db
+def test_a_table_the_queue_check_cannot_read_fails_that_check_alone(db, tmp_path):
+    """The code deployed before migration 020: the missing table fails its own check, closed, with
+    a detail that says why; the other checks are unharmed and the `system_health` row is written
+    (the savepoint keeps the run's transaction usable)."""
+    db.execute("ALTER TABLE knowledge_drafts RENAME TO knowledge_drafts_gone")  # rolled back
+
+    report = health.check(db, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+
+    checks = _by_name(report)
+    assert checks["knowledge_queue"].ok is False and checks["knowledge_queue"].value is None
+    assert "migration 020" in checks["knowledge_queue"].detail
+    assert report.checked_at is not None
+    assert checks["disk_free"].ok is True and checks["rag_budget"].ok is True
+
+
+class _Refusing:
+    """A connection whose every statement fails, as one without migration 020's tables does."""
+
+    def __init__(self) -> None:
+        self.savepoints = 0
+
+    def execute(self, *args, **kwargs):
+        raise psycopg.errors.UndefinedTable('relation "x" does not exist: SECRET-SQL-TEXT')
+
+    def transaction(self):
+        self.savepoints += 1
+        return contextlib.nullcontext()
+
+
+@pytest.mark.parametrize(
+    ("check", "name"),
+    [
+        (lambda c: health._check_knowledge_queue(c, _cfg()), "knowledge_queue"),
+        (lambda c: health._check_knowledge_integrity(c), "knowledge_integrity"),
+        (lambda c: health._check_rag_budget(c, _cfg()), "rag_budget"),
+    ],
+)
+def test_each_knowledge_check_fails_closed_without_the_driver_text(check, name):
+    conn = _Refusing()
+
+    result = check(conn)
+
+    assert (result.name, result.ok, result.value) == (name, False, None)
+    assert "migration 020" in result.detail and "SECRET-SQL-TEXT" not in result.detail
+    assert conn.savepoints == 1
+
+
+@pytest.mark.db
+def test_the_knowledge_checks_alarm_the_report_and_write_health_alarm(db, tmp_path, monkeypatch):
+    sent = _fake_notify(monkeypatch)
+    _seed_all_ok(db, tmp_path)
+    _insert_integrity_failure(db, entry_id=str(uuid.uuid4()), hours_ago=1)
+
+    report = health.check(db, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+
+    assert report.ok is False
+    assert _levels(sent) == ["alarm"]
+    assert "knowledge_integrity" in sent[0][1]
+    (payload,) = db.execute(
+        "SELECT payload FROM audit_events WHERE event_type = 'health.alarm'"
+    ).fetchone()
+    assert payload == {"failing": ["knowledge_integrity"], "new": ["knowledge_integrity"]}
 
 
 # ===========================================================================

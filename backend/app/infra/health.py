@@ -1,4 +1,5 @@
-"""`infra.health` — the ten §3.9 thresholds, one `system_health` row per run,
+"""`infra.health` — the ten §3.9 thresholds (and, since P13-T05, the three of the learned knowledge,
+below), one `system_health` row per run,
 `notify.send` only on a state change plus a daily 08:05 summary, and
 `health.alarm` written whenever a new check name joins the failing set.
 
@@ -21,6 +22,13 @@ window, `LEFT JOIN autoclose_reviews`, count the misses; (b) check 6
 `llm_runs.cost_usd` for the current month itself; (c) `health.alarm` is
 written with raw SQL, exactly as `infra/jobs.py:152` writes `job.exhausted`,
 never through `app.audit.events.write_event`.
+
+P13-T05 (DEC-210) adds three, after the ten, again as SQL only (`infra` imports no `rag`):
+`knowledge_queue` (more pending drafts than `KNOWLEDGE_QUEUE_MAX`), `knowledge_integrity` (a
+`rag.integrity_failed` event in the last 24 hours: an entry whose file or content no longer matches its
+hash, or whose file is gone after a restore; `python -m app.rag.publish --rebuild` repairs it) and
+`rag_budget` (this month's spend of the `rag_lookup` and `knowledge_draft` pipelines has reached
+`RAG_MONTHLY_USD_CAP`, the point at which the RAG's adapter stops a call).
 
 Each check is a small function returning the same shape (`CheckResult`):
 `{name, ok, value, threshold, detail}`, so the report, the `system_health`
@@ -285,6 +293,99 @@ def _check_disk_free() -> CheckResult:
     return CheckResult("disk_free", ok, pct, threshold_pct, detail)
 
 
+# ── the three checks of the learned knowledge (P13-T05, DEC-210) ─────────────
+
+
+_UNREADABLE_020 = "could not be read (is migration 020 applied?); failing closed"
+
+
+def _read_or_none(conn: psycopg.Connection, read: Callable[[], CheckResult]) -> CheckResult | None:
+    """`read()` in a savepoint, or None when the database refuses it. These three checks read tables
+    migration 020 made; on a database without them (code deployed before `make migrate`) a missing
+    table must fail ITS check, closed, and not the ten before it: the error aborts the transaction
+    the whole run shares, and without the savepoint no `system_health` row would be written at all.
+    The caller builds the failing result (the check names stay string literals, which
+    `test_runbook_alarms.py` reads by `ast`); it never carries the driver's message, which can hold
+    SQL text."""
+    try:
+        with conn.transaction():
+            return read()
+    except psycopg.Error:
+        return None
+
+
+def _check_knowledge_queue(conn: psycopg.Connection, cfg: Config) -> CheckResult:
+    """More drafts waiting for an admin than `KNOWLEDGE_QUEUE_MAX` (spec §7.10). At the maximum is
+    still ok."""
+
+    def read() -> CheckResult:
+        (pending,) = conn.execute(
+            "SELECT count(*) FROM knowledge_drafts WHERE status = 'pending'"
+        ).fetchone()
+        ok = pending <= cfg.KNOWLEDGE_QUEUE_MAX
+        detail = (
+            f"{pending} draft(s) waiting for review"
+            if ok
+            else f"{pending} draft(s) waiting for review, over {cfg.KNOWLEDGE_QUEUE_MAX}"
+        )
+        return CheckResult("knowledge_queue", ok, pending, cfg.KNOWLEDGE_QUEUE_MAX, detail)
+
+    return _read_or_none(conn, read) or CheckResult(
+        "knowledge_queue", False, None, cfg.KNOWLEDGE_QUEUE_MAX, _UNREADABLE_020
+    )
+
+
+def _check_knowledge_integrity(conn: psycopg.Connection) -> CheckResult:
+    """Any `rag.integrity_failed` in the last 24 hours (spec §7.9, V-R1). An aggregate: every lookup
+    that meets a changed entry writes an event, so the same entry repeats; the value is the number of
+    DISTINCT entries (the event's subject is the entry id) and the detail says how many events."""
+
+    def read() -> CheckResult:
+        entries, events = conn.execute(
+            "SELECT count(DISTINCT subject_id), count(*) FROM audit_events "
+            "WHERE event_type = 'rag.integrity_failed' AND created_at > now() - interval '24 hours'"
+        ).fetchone()
+        ok = entries == 0
+        detail = (
+            "no learned-knowledge entry failed its integrity check in the last 24 hours"
+            if ok
+            else f"{entries} entry(ies) failed the integrity check in the last 24 hours "
+            f"({events} event(s)); a file changed, or missing after a restore: "
+            "python -m app.rag.publish --rebuild"
+        )
+        return CheckResult("knowledge_integrity", ok, entries, 0, detail)
+
+    return _read_or_none(conn, read) or CheckResult(
+        "knowledge_integrity", False, None, 0, _UNREADABLE_020
+    )
+
+
+def _check_rag_budget(conn: psycopg.Connection, cfg: Config) -> CheckResult:
+    """This month's spend of the RAG pipelines at or over `RAG_MONTHLY_USD_CAP`. The RAG's adapter stops
+    a call at the same comparison (`>=`), so the alarm and the stop are one rule."""
+
+    def read() -> CheckResult:
+        (spend,) = conn.execute(
+            "SELECT coalesce(sum(cost_usd), 0) FROM llm_runs "
+            "WHERE pipeline IN ('rag_lookup', 'knowledge_draft') "
+            "AND created_at >= date_trunc('month', now())"
+        ).fetchone()
+        spend = float(spend)
+        ok = spend < cfg.RAG_MONTHLY_USD_CAP
+        cap = cfg.RAG_MONTHLY_USD_CAP
+        detail = (
+            f"${spend:.2f} of the ${cap} RAG monthly cap spent this month"
+            if ok
+            else f"${spend:.2f} spent on the RAG this month, at or over the ${cap} cap "
+            "— lookups and drafts are stopped until next month"
+        )
+        return CheckResult("rag_budget", ok, round(spend, 4), cap, detail)
+
+    return _read_or_none(conn, read) or CheckResult(
+        "rag_budget", False, None, cfg.RAG_MONTHLY_USD_CAP, _UNREADABLE_020
+    )
+
+
 # ── persistence and the state-change notification rule (design notes 3, 4) ──
 
 
@@ -383,7 +484,7 @@ def check(
     clock: Callable[[psycopg.Connection], datetime] | None = None,
     backups_dir: Path | None = None,
 ) -> HealthReport:
-    """Run all ten thresholds, write one `system_health` row, and
+    """Run all thirteen thresholds, write one `system_health` row, and
     `notify.send` only on a state change plus the daily 08:05 summary (design
     notes 2-4). `clock`/`backups_dir` are keyword-only test seams — production
     always reads the database's own clock (`_db_now`) and the real
@@ -406,6 +507,9 @@ def check(
         _check_inventory_empty(conn, cfg),
         _check_digest_unreviewed(conn, now_local),
         _check_disk_free(),
+        _check_knowledge_queue(conn, cfg),
+        _check_knowledge_integrity(conn),
+        _check_rag_budget(conn, cfg),
     ]
     ok = all(c.ok for c in checks)
 
