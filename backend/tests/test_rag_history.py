@@ -349,6 +349,68 @@ def test_level_5_is_the_category_and_the_host(db) -> None:
 
 
 @pytest.mark.db
+def test_level_5_is_skipped_for_an_unresolved_alert(db) -> None:
+    """`unknown` is no information: other unresolved alerts on the same host say nothing."""
+    add_alert(db, "s", rule_id="111", agent_name="h1", category="unknown", srcip="1.1.1.1")
+    add_alert(
+        db,
+        "p",
+        status="closed_fp",
+        rule_id="222",
+        agent_name="h1",
+        category="unknown",
+        srcip="2.2.2.2",
+    )
+    h = history_of(db, "s")
+    assert (h.level, h.total) == (None, 0)
+
+
+@pytest.mark.db
+def test_an_unresolved_alert_still_gets_the_levels_that_do_not_read_the_category(db) -> None:
+    add_alert(db, "s", rule_id="111", agent_name="h1", category="unknown", srcip="1.1.1.1")
+    add_alert(
+        db,
+        "same-rule",
+        status="closed_benign",
+        rule_id="111",
+        agent_name="h1",
+        category="unknown",
+        srcip="2.2.2.2",
+    )
+    h = history_of(db, "s")
+    assert (h.level, h.key_name, h.total) == (3, "rule_host", 1)
+
+
+@pytest.mark.db
+def test_a_case_skips_level_5_for_its_unresolved_heads_and_keeps_the_others(db) -> None:
+    user = add_user(db)
+    add_alert(db, "h0", rule_id="111", agent_name="hostA", category="unknown", srcip="1.1.1.1")
+    add_alert(db, "h1", rule_id="112", agent_name="hostB", category="recon", srcip="1.1.1.2")
+    case = add_case(db, user, ["h0", "h1"])
+    add_alert(
+        db,
+        "p-unknown",
+        status="closed_fp",
+        rule_id="900",
+        agent_name="hostA",
+        category="unknown",
+        srcip="2.2.2.2",
+    )
+    add_alert(
+        db,
+        "p-recon",
+        status="closed_benign",
+        rule_id="901",
+        agent_name="hostB",
+        category="recon",
+        srcip="2.2.2.3",
+    )
+    h = case_history_of(db, case)
+    assert (h.level, h.key_name, h.total) == (5, "category_host", 1)
+    assert h.examples == ("p-recon",)
+
+
+@pytest.mark.db
 def test_the_first_level_with_data_wins_and_counts_only_its_own_alerts(db) -> None:
     add_alert(db, "s", rule_id="5710", agent_name="h1", srcip="1.1.1.1", dstip="2.2.2.2")
     add_alert(  # level 1 and every level below

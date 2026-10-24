@@ -3,7 +3,8 @@
 At most `limit` (20) active entries, from two lists merged without repeats:
 
 * **closed-field overlap**: the entry's `category`, or one of its `mitre_ids`, or its `soar_scenario`
-  is the fingerprint's. Entries are ordered by how many of the three they share, then newest
+  is the fingerprint's (the category `unknown` is no overlap: an `unknown` entry is still a candidate
+  by MITRE id, scenario or full text). Entries are ordered by how many of the three they share, then newest
   approval first;
 * **full text**: the entries whose `fingerprint_tsv` (the `simple` configuration: no stemming, no
   stop words) holds a phrase of the fingerprint, ordered by `ts_rank_cd`. A phrase goes through
@@ -32,6 +33,8 @@ from app.rag.fingerprint import Fingerprint, search_phrases
 from app.rag.history import Exclusion, as_uuids
 
 DEFAULT_LIMIT = 20
+#: The category of an alert nothing resolved. Two of them share nothing, so it is no overlap.
+UNKNOWN = "unknown"
 
 _COLUMNS = ", ".join(f"e.{name}" for name in ENTRY_COLUMNS)
 _NOT_EXCLUDED = (
@@ -87,7 +90,7 @@ def candidates(
     if limit <= 0:
         return []
     arguments = {
-        "category": fp.category,
+        "category": None if fp.category == UNKNOWN else fp.category,
         "mitre": list(fp.mitre_ids),
         "scenario": fp.soar_scenario,
         "skip_alerts": sorted(exclusion.alert_ids),

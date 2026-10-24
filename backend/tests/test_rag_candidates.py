@@ -107,6 +107,22 @@ def test_no_mitre_id_in_the_fingerprint_matches_no_entry_by_mitre(db) -> None:
     )
 
 
+def test_a_shared_category_of_unknown_is_not_an_overlap(db) -> None:
+    add_entry(db, **about("unknown"))
+    unresolved = fp(category="unknown", mitre=(), scenario=None, rules=(), descriptions=())
+    assert candidates(db, unresolved, NONE) == []
+
+
+def test_an_unknown_entry_is_still_a_candidate_by_mitre_scenario_or_text(db) -> None:
+    by_mitre = add_entry(db, mitre_ids=["T1046"], **about("unknown"))
+    by_scenario = add_entry(db, soar_scenario="SC03", **about("unknown"))
+    by_text = add_entry(db, **about("unknown", rules="100190"))
+    nothing_else = add_entry(db, **about("unknown"))
+    found = ids(candidates(db, fp(category="unknown"), NONE))
+    assert sorted(found) == sorted([by_mitre, by_scenario, by_text])
+    assert nothing_else not in found
+
+
 def test_an_entry_that_overlaps_in_nothing_is_not_a_candidate(db) -> None:
     add_entry(
         db,

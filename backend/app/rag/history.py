@@ -9,7 +9,7 @@ first one with at least one decision wins:
     2  scenario_host  `soar_scenario` and host
     3  rule_host      rule and host
     4  rule_source    rule, and the same source address or the same user
-    5  category_host  category and host
+    5  category_host  category and host (skipped for the category `unknown`, which says nothing)
 
 What is counted: head alerts (`duplicate_of IS NULL`) first seen within `RAG_HISTORY_DAYS` that carry
 a decision, and the decision of a counted alert is
@@ -64,6 +64,8 @@ CONCLUSIONS: tuple[str, ...] = (
     "concluded_policy_violation",
     "confirmed_incident",
 )
+#: The category of an alert nothing resolved: not a signal at level 5.
+UNKNOWN = "unknown"
 EXAMPLES = 3
 
 DEDUP_KEY_EXPRESSION = "(a.raw_payload #>> '{enrichment,case,dedup_key}')"
@@ -268,7 +270,7 @@ def _level_query(level: int, heads: Sequence[_Head]) -> tuple[str, dict] | None:
     elif level == 3:
         rows = _distinct((h.rule_id, h.agent_name) for h in heads)
     elif level == 5:
-        rows = _distinct((h.category, h.agent_name) for h in heads)
+        rows = _distinct((h.category, h.agent_name) for h in heads if h.category != UNKNOWN)
     else:  # level 4: the rule with the same source address, or the rule with the same user
         by_source = _distinct((h.rule_id, h.srcip) for h in heads if h.srcip)
         by_user = _distinct((h.rule_id, h.alert_user) for h in heads if h.alert_user)
