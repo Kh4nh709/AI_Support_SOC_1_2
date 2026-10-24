@@ -13,6 +13,8 @@ under test. Pure: no database.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from app.rag.generalise import literal_findings, placeholderise
 
@@ -279,3 +281,30 @@ def test_a_one_letter_hostname_is_not_a_finding() -> None:
 def test_what_placeholderise_removes_literal_findings_no_longer_reports() -> None:
     for line in (SC03_LINE, mw03()["data"]["win"]["eventdata"]["path"], sc03()["id"]):
         assert literal_findings(placeholderise(line, HOSTS), HOSTS) == []
+
+
+# ── a hostile log line costs time in proportion to its length ─────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "unit",
+    ["a", "a.", "aa:", "0", "1.", "ab-", "A\\", "gl-", "\u00e9", "f", "1:", "::"],
+)
+def test_a_long_repetitive_log_is_processed_in_linear_time(unit: str) -> None:
+    """Each pattern starts only at the start of a run of its characters. Without that, a long
+    run of letters is read again from every letter on, which is quadratic: 100,000 characters
+    take minutes."""
+    text = unit * (100_000 // len(unit))
+    started = time.perf_counter()
+    placeholderise(text, ["srv-01"], users=["hr01"])
+    literal_findings(text, ["srv-01"])
+    assert time.perf_counter() - started < 5.0
+
+
+def test_a_long_hex_run_that_is_not_a_hash_is_processed_in_linear_time() -> None:
+    text = "f" * 100_000 + "g"
+    started = time.perf_counter()
+    out = placeholderise(text, [])
+    literal_findings(text, [])
+    assert time.perf_counter() - started < 5.0
+    assert "<HASH>" not in out

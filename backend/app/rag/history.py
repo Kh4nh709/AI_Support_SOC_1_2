@@ -209,7 +209,6 @@ _PREFIX = (
     " WHERE a.duplicate_of IS NULL"
     "  AND a.first_seen_at >= now() - make_interval(days => %(days)s)"
     "  AND a.alert_id <> ALL(%(skip_alerts)s::text[])"
-    "  AND (a.case_id IS NULL OR a.case_id <> ALL(%(skip_cases)s::uuid[]))"
     "  AND ("
 )
 _SUMMARY = (
@@ -295,7 +294,6 @@ def decision_history(conn: psycopg.Connection, subject: Subject, cfg: Config) ->
     common: dict[str, Any] = {
         "days": cfg.RAG_HISTORY_DAYS,
         "skip_alerts": sorted(skip.alert_ids),
-        "skip_cases": as_uuids(skip.case_ids),
         "examples": EXAMPLES,
     }
     for level, key_name in LEVELS:

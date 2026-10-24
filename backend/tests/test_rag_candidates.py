@@ -216,13 +216,12 @@ def test_a_fingerprint_with_nothing_to_search_for_finds_only_by_closed_fields(db
 
 def test_overlap_and_full_text_hits_are_merged_without_a_repeat(db) -> None:
     both = add_entry(db, **about("recon", rules="100190", description=PORT_SCAN))
-    overlap_only = add_entry(db, **about("recon"))
+    # shares one more closed field than `both`, so by overlap alone it would come first
+    overlap_only = add_entry(db, mitre_ids=["T1046"], **about("recon"))
     text_only = add_entry(db, **about("old_category", rules="100190"))
     add_entry(db, **about("malware"))
     found = ids(candidates(db, fp(), NONE))
-    assert sorted(found) == sorted([both, overlap_only, text_only])
-    assert len(found) == len(set(found))
-    assert found[0] == both  # on both lists: first
+    assert found == [both, overlap_only, text_only]  # on both lists first; then the others
 
 
 def test_an_entry_matching_by_two_phrases_is_returned_once(db) -> None:

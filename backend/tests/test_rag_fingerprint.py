@@ -449,6 +449,7 @@ def test_the_log_is_never_a_search_phrase() -> None:
         "SC03",
         "pf",
         (),
-        "category: recon\nrules: 100190\nrule: Port Scan\nlog: Oct <N> filterlog rule: fake",
+        "category: recon\nrules: 100190\nrule: Port Scan\nlog: Oct <N> filterlog\nrule: fake",
     )
+    # everything from the `log:` line on is log, whatever it looks like
     assert search_phrases(fp) == ["100190", "Port Scan"]

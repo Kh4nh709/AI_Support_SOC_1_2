@@ -13,6 +13,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import os
+import threading
 import uuid
 from pathlib import Path
 
@@ -363,6 +364,27 @@ def test_a_symlink_out_of_the_root_does_not_match(tmp_path: Path) -> None:
     link.parent.mkdir(parents=True)
     os.symlink(target, link)
     assert file_matches(entry, root) is False
+
+
+def test_a_named_pipe_in_place_of_the_file_does_not_block_and_does_not_match(
+    tmp_path: Path,
+) -> None:
+    """Reading a FIFO waits for a writer: a lookup must not hang on one."""
+    entry = _entry()
+    pipe = tmp_path / entry.file_path
+    pipe.parent.mkdir(parents=True)
+    os.mkfifo(pipe)
+    result: list[bool] = []
+    reader = threading.Thread(target=lambda: result.append(file_matches(entry, tmp_path)))
+    reader.daemon = True
+    reader.start()
+    reader.join(timeout=3)
+    stuck = reader.is_alive()
+    if stuck:  # let the blocked open finish so the thread does not outlive the test
+        os.close(os.open(pipe, os.O_WRONLY | os.O_NONBLOCK))
+        reader.join(timeout=3)
+    assert not stuck, "file_matches blocked on a named pipe"
+    assert result == [False]
 
 
 def test_a_null_byte_in_the_path_does_not_match_and_does_not_raise(tmp_path: Path) -> None:

@@ -113,8 +113,9 @@ def test_level_0_matches_the_whole_base_and_nothing_longer_or_shorter(db) -> Non
 
 
 @pytest.mark.db
-def test_level_0_treats_like_wildcards_in_a_key_as_text(db) -> None:
-    add_alert(db, "s", raw_payload=soar_payload(dedup_key="SC_3|h%|20261017-04"))
+def test_level_0_treats_like_wildcards_and_backslashes_in_a_key_as_text(db) -> None:
+    key = "CORP\\host|SC_3|h%|"
+    add_alert(db, "s", raw_payload=soar_payload(dedup_key=key + "20261017-04"))
     add_alert(
         db,
         "wild",
@@ -122,7 +123,7 @@ def test_level_0_treats_like_wildcards_in_a_key_as_text(db) -> None:
         rule_id="r1",
         agent_name="h1",
         category="c1",
-        raw_payload=soar_payload(dedup_key="SCX3|hYY|20261016-23"),
+        raw_payload=soar_payload(dedup_key="CORPXhost|SCX3|hYY|20261016-23"),
     )
     add_alert(
         db,
@@ -131,7 +132,7 @@ def test_level_0_treats_like_wildcards_in_a_key_as_text(db) -> None:
         rule_id="r2",
         agent_name="h2",
         category="c2",
-        raw_payload=soar_payload(dedup_key="SC_3|h%|20261016-23"),
+        raw_payload=soar_payload(dedup_key=key + "20261016-23"),
     )
     h = history_of(db, "s")
     assert (h.level, h.examples) == (0, ("exact",))
@@ -574,7 +575,17 @@ def test_the_window_is_the_key_rag_history_days(db) -> None:
 @pytest.mark.db
 def test_zero_days_is_an_empty_history(db) -> None:
     add_alert(db, "s", rule_id="5710", agent_name="h1", srcip="1.1.1.1")
-    add_alert(db, "p", status="closed_fp", rule_id="5710", agent_name="h1", srcip="2.2.2.2")
+    # first seen at the instant the transaction began: inside any window but an absent one
+    add_alert(
+        db,
+        "p",
+        status="closed_fp",
+        rule_id="5710",
+        agent_name="h1",
+        srcip="2.2.2.2",
+        days_ago=0,
+    )
+    assert history_of(db, "s").total == 1
     h = history_of(db, "s", dataclasses.replace(CFG, RAG_HISTORY_DAYS=0))
     assert h == History(None, None, 0, {}, None, ())
 
@@ -712,6 +723,27 @@ def test_the_exclusion_of_an_alert_in_a_case_adds_the_case_and_all_its_alerts(db
     case = add_case(db, user, ["h0", "h1"], duplicates=["d0"])
     got = self_exclusion(db, Subject("alert", "h0"))
     assert got == Exclusion(frozenset({"h0", "h1", "d0"}), frozenset({case}))
+
+
+@pytest.mark.db
+def test_a_duplicate_of_a_case_head_is_excluded_though_it_carries_no_case_id(db) -> None:
+    user = add_user(db)
+    add_alert(db, "h0")
+    add_alert(db, "late-dup", status="duplicate", duplicate_of="h0")
+    case = add_case(db, user, ["h0"])  # `late-dup` is not marked with the case
+    assert self_exclusion(db, Subject("case", case)).alert_ids == {"h0", "late-dup"}
+
+
+@pytest.mark.db
+def test_a_head_known_only_to_case_alerts_is_excluded(db) -> None:
+    user = add_user(db)
+    add_alert(db, "h0")
+    add_alert(db, "h1")
+    case = add_case(db, user, ["h0"])
+    db.execute(
+        "INSERT INTO case_alerts (case_id, alert_id, added_by) VALUES (%s, 'h1', %s)", (case, user)
+    )  # `alerts.case_id` of h1 stays NULL
+    assert self_exclusion(db, Subject("case", case)).alert_ids == {"h0", "h1"}
 
 
 @pytest.mark.db
