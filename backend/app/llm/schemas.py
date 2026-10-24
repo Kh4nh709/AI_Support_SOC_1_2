@@ -26,6 +26,9 @@ here and fail from a clean checkout. The interpreter below is written by hand.
                                                                  ("string (minItems 1)" -> a
                                                                  non-empty list of str)
 
+``validate_against(schema, obj) -> list[str]`` is the same validator over a node it is given
+(P13-T03: the RAG schemas live in ``backend/app/rag/schemas.json``, not in this module's file).
+
 ``validate(name, obj) -> list[str]``: each message is
 ``"<dotted.path>: expected <kind or vocabulary>"`` — e.g.
 ``structured_basis.asset_criticality: expected one of high|medium|low|unknown``,
@@ -51,6 +54,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -174,13 +178,22 @@ def _validate_string_spec(path: str, spec: str, value: Any) -> list[str]:
     return []
 
 
+def validate_against(schema: Mapping[str, Any], obj: Any) -> list[str]:
+    """``validate`` over a given node: every way ``obj`` departs from ``schema``, value-free.
+
+    ``schema`` is a node in the §6.2 notation above (an object node, as ``validate`` reads from
+    ``output_schemas.json``), taken from anywhere — ``rag/schemas.json`` holds the RAG ones. The
+    messages are the same as ``validate``'s, and an empty list means valid.
+    """
+    return _validate_node("", schema, obj)
+
+
 def validate(name: str, obj: Any) -> list[str]:
     """Every way ``obj`` departs from the ``name`` schema, value-free.
 
     An empty list means valid. ``name`` not in ``output_schemas.json`` → ``KeyError``.
     """
-    schema = _get_schema(name)
-    return _validate_node("", schema, obj)
+    return validate_against(_get_schema(name), obj)
 
 
 # ---------------------------------------------------------------------------
