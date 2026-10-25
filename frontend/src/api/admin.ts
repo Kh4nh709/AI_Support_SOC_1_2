@@ -410,7 +410,10 @@ export function putLlmLimits(body: LimitsChange): Promise<{ limits: LimitsOut }>
 
 // --- overview (admin_overview.py, web/main.py) ------------------------------------------------------------
 
-/** The ten sections of the overview; each fails alone (`errors[]`). `llm_month` is DEC-203's. */
+/**
+ * The eleven sections of the overview; each fails alone (`errors[]`). `llm_month` is DEC-203's, `knowledge` (the
+ * last) DEC-210's.
+ */
 export const OVERVIEW_SECTIONS = [
   "alerts_by_day",
   "by_source",
@@ -422,6 +425,7 @@ export const OVERVIEW_SECTIONS = [
   "failed_jobs",
   "inventory",
   "llm_month",
+  "knowledge",
 ] as const;
 export type OverviewSection = (typeof OVERVIEW_SECTIONS)[number];
 
@@ -479,6 +483,11 @@ export type OverviewResponse = {
    * error). The section itself is null, with an `errors` entry, only when the spend query failed.
    */
   llm_month: { spent_usd: number; cap_usd: number | null; pct: number | null } | null;
+  /**
+   * The learned-knowledge drafts waiting for an admin, and how many of them conflict with an active entry
+   * (DEC-210, P13-T05). What is there now: the range does not bound it.
+   */
+  knowledge: { pending: number; conflicts: number } | null;
 };
 
 export function getOverview(range: AdminRange): Promise<OverviewResponse> {

@@ -40,6 +40,7 @@ from app.web.routers import admin_audit, admin_overview
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 
+from tests.rag_data import add_entry
 from tests.scratch_db import insert_user, scratch_database
 
 OVERVIEW = "/api/admin/overview"
@@ -54,6 +55,7 @@ SECTIONS = (
     "failed_jobs",
     "inventory",
     "llm_month",
+    "knowledge",  # P13-T05 (DEC-210)
 )
 HCM = ZoneInfo("Asia/Ho_Chi_Minh")
 
@@ -281,6 +283,8 @@ def test_empty_database_answers_every_section_with_its_empty_shape(client) -> No
         "cap_usd": config.load().LLM_MONTHLY_USD_CAP,
         "pct": 0.0,
     }
+    # P13-T05 (DEC-210): no draft waiting, none in conflict
+    assert body["knowledge"] == {"pending": 0, "conflicts": 0}
     assert admin_overview.SECTION_TIMEOUT == "3s"
 
 
@@ -802,7 +806,9 @@ def _driver_error(conn: Any) -> None:
 
 @pytest.mark.db
 @pytest.mark.parametrize("fault", [_sql_error, _driver_error], ids=["sql-error", "driver-error"])
-@pytest.mark.parametrize("failing", ["top_agents", "waiting", "cases_open", "llm_month"])
+@pytest.mark.parametrize(
+    "failing", ["top_agents", "waiting", "cases_open", "llm_month", "knowledge"]
+)
 def test_a_failing_section_is_null_with_an_error_and_the_others_still_compute(
     client, monkeypatch, failing: str, fault
 ) -> None:
@@ -832,6 +838,34 @@ def test_a_failing_section_is_null_with_an_error_and_the_others_still_compute(
     assert body["inventory"]["assets"] == 1
     # the connection is still good for the caller's next statement
     assert db.execute("SELECT 1").fetchone() == (1,)
+
+
+def _draft(db: Any, n: int, status: str, conflict_with: str | None = None) -> None:
+    db.execute(
+        "INSERT INTO knowledge_drafts (source_kind, source_id, conclusion, status,"
+        " conflict_with_entry) VALUES ('alert', %s, 'closed_fp', %s, %s)",
+        (f"ov-draft-{n}", status, conflict_with),
+    )
+
+
+@pytest.mark.db
+def test_the_knowledge_section_counts_pending_drafts_and_those_in_conflict(client) -> None:
+    """The overview's queue length (spec §7.10): the drafts waiting for an admin, and how many of
+    them conflict with an active entry. A draft already reviewed or merged is neither, whether or not
+    it once conflicted; the range does not bound it."""
+    tc, db, _ = client
+    entry = add_entry(db)
+    _draft(db, 1, "pending")
+    _draft(db, 2, "pending")
+    _draft(db, 3, "pending", conflict_with=entry)
+    for n, status in enumerate(("approved", "rejected", "merged"), start=4):
+        _draft(db, n, status, conflict_with=entry)
+    db.execute("UPDATE knowledge_drafts SET created_at = now() - interval '200 days'")
+
+    body = _get(tc, range="24h").json()
+
+    assert body["knowledge"] == {"pending": 3, "conflicts": 1}
+    assert body["errors"] == []
 
 
 @pytest.mark.db

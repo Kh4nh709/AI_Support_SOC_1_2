@@ -1,5 +1,5 @@
 // `/admin/overview` (P11-T11, spec §4.1): the admin's first screen, the canvas's `AdminOverview`. One read,
-// `GET /api/admin/overview?range=`, feeds ten sections, and each fails alone: a section that came back
+// `GET /api/admin/overview?range=`, feeds eleven sections, and each fails alone: a section that came back
 // `null` draws its own error (AdminStates, "một khối lỗi") while the others show. The fourth card, the LLM
 // cost of the month against its cap, is the tenth section, `llm_month` (DEC-203, P11-T20 row 50): it comes
 // with the answer, fails alone in its card like the others, and no second read (`llm/usage`) stands behind it.
@@ -28,6 +28,7 @@ import {
   FunnelList,
   HealthList,
   HealthMark,
+  KnowledgeBlock,
   OUTLINE_BUTTON,
   OverviewSkeleton,
   PANEL,
@@ -259,6 +260,11 @@ function OverviewBody({
           inventory={data.inventory}
           failure={sectionFailure(data, "inventory")}
           onRetryRead={onRetryRead}
+        />
+        <KnowledgeBlock
+          knowledge={data.knowledge}
+          failure={sectionFailure(data, "knowledge")}
+          onRetry={onRetryRead}
         />
       </div>
     </>

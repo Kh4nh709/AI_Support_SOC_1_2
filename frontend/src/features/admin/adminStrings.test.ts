@@ -325,7 +325,7 @@ describe("the vocabulary of the client equals the one of the routes", () => {
   it("OVERVIEW_SECTIONS is the sections of admin_overview.py, in its order", () => {
     const body = /sections = \(([\s\S]*?)\n {4}\)/.exec(router("admin_overview.py"))?.[1];
     const names = [...(body ?? "").matchAll(/\("(\w+)",\s*lambda/g)].map((m) => m[1]);
-    expect(names).toHaveLength(10);
+    expect(names).toHaveLength(11);
     expect([...OVERVIEW_SECTIONS]).toEqual(names);
   });
 
