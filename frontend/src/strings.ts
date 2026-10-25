@@ -1834,6 +1834,7 @@ export const S = {
 
       // One approved (or retired) entry.
       entry: {
+        header: "Mục tri thức",
         loadFailed: "Không tải được mục tri thức",
         status: { active: "Đang dùng", retired: "Đã gỡ" },
         field: {
@@ -1852,6 +1853,7 @@ export const S = {
           sources: "Từ alert và case",
         },
         integrity: {
+          heading: "Toàn vẹn",
           ok: "Nội dung và tệp khớp bản gốc",
           contentBad: "Nội dung trong cơ sở dữ liệu không khớp mã băm của nó",
           fileBad: "Tệp đã xuất bản không khớp bản gốc",
