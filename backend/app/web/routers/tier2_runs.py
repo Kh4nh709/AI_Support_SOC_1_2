@@ -109,7 +109,10 @@ def api_analyze(conn: Conn, claims: Tier2, cfg: Cfg, case_id: CaseId) -> dict[st
     (`ANALYZE_QUOTA_PER_USER_DAY`, or the admin's saved value, read through
     `infra.settings`); 409 when `enqueue()` returns `None` (a run is
     already live for this case — the single-flight index, not a query); 202
-    `{run_id, job_id}` otherwise.
+    `{run_id, job_id}` otherwise. With `RAG_ENABLED` the 202 path also queues the case's
+    learned-knowledge lookup when it has none newer than `RAG_CASE_REFRESH_H` hours
+    (`_queue_case_lookup_if_stale`, P13-T08); the body, the `run_id` and the `investigate` job are
+    what they were, and the investigation does not wait for it.
 
     Every non-2xx path rolls back first (`web/routers/tier1.py`'s `_conflict_response`
     precedent — a returned `Response` is a success as far as `get_conn` is concerned and

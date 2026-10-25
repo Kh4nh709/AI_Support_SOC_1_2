@@ -4,7 +4,18 @@ P5-T03 (DEC-151 wave 2). `build(conn, case_id, *, nonce, cfg=None) -> Dossier` r
 nine blocks of context pack §7.6 / the card's design note 1 from the database only, inside
 `cfg.CASE_PROMPT_BUDGET_TOKENS`, and is deterministic: two builds of the same case at the
 same instant are byte-identical except the nonce (design note 3). This module sends
-nothing to a model and imports nothing from `app.llm.adapter` — P5-T04 does that.
+nothing to a model and imports nothing from `app.llm.adapter` itself — P5-T04 does that.
+
+**Block 10, the learned section (P13-T08, DEC-210, spec §7.8).** `build(..., learned=None)` is the
+nine-block dossier above, byte for byte. With `learned` (what `rag.lookup.prompt_material` returns:
+`llm.triage.LearnedLike`) a tenth block follows block 8 and precedes the scope sentence, which stays
+last: the heading, the decision history as a `decision_history` block, one `kb_learned_level: <level>` fact
+per entry (a closed `KbLearnedLevel`, checked), the entries as one numbered `kb_learned` block (at most
+`llm.triage.MAX_LEARNED_ENTRIES`, ①'s cap) and the fixed sentence that it is a reference and never a basis
+for the verdict; or, when the lookup found nothing, the heading and the one sentence that says so. It is
+reference material, not evidence about the case: `Dossier.learned_used` says whether it reached the prompt.
+Over `CASE_PROMPT_BUDGET_TOKENS` it is the first thing dropped (`STEP_LEARNED_DROPPED`), before every
+existing step.
 
 **The block boundary is where trust ends (design note 1).** Block 1's closed-set facts
 (severity, cluster/occurrence counts, the time span) are rendered through
@@ -46,8 +57,11 @@ from app.domain.correlation import _params as _correlation_params
 from app.infra import config
 from app.kb.lookup import get_playbook
 from app.llm.builder import (
+    HEADING_LEARNED,
     SENTENCE_ABSENT,
+    SENTENCE_LEARNED_IS_REFERENCE,
     SENTENCE_NO_CORRELATION,
+    SENTENCE_NO_LEARNED,
     SENTENCE_NO_PLAYBOOK,
     AlertStatus,
     AssetCriticality,
@@ -55,10 +69,12 @@ from app.llm.builder import (
     Id,
     IdentityPrivileged,
     IocReputation,
+    KbLearnedLevel,
     LookupStatus,
     Severity,
     fact,
 )
+from app.llm.triage import MAX_LEARNED_ENTRIES, LearnedLike
 from app.security import wrap
 
 # ─────────────────────────────────────────────────────── budget / truncation (design note 4)
@@ -90,6 +106,8 @@ STEP_TIMELINE_CAPPED = "timeline_cap_300"
 STEP_TIMELINE_DROPPED = "timeline_dropped"
 STEP_STILL_OVER_BUDGET = "budget_exceeded_after_cuts"
 STEP_ENTITIES_CAPPED = "entities_cap_50"
+#: P13-T08: block 10 dropped whole, the first of the budget-driven steps (before `STEP_RAW_LOG_CUT`).
+STEP_LEARNED_DROPPED = "learned_dropped"
 
 #: Should 8: the representatives cut's ranking, worst-first (design note 4 keeps the
 #: *biggest* clusters — the same instinct DEC-034 named for `risk_score`'s own weights).
@@ -144,6 +162,7 @@ DOSSIER_TEMPLATE_CONSTANTS = frozenset(
         HEADING_NOTES,
         HEADING_PREVIOUS_RUN,
         HEADING_SCOPE,
+        HEADING_LEARNED,
         SENTENCE_OUT_OF_SCOPE,
         SENTENCE_HISTORY_NOT_COMPUTED,
     }
@@ -315,7 +334,11 @@ class Dossier:
     `<untrusted_data ...>` wrapper. That is the shape `security.detector.scan` is
     documented to run over, so a consumer can scan block by block instead of scanning
     `text`, whose own wrapper tags are what `heuristic:delimiter_lookalike` flags.
-    Defaults to `()` so a hand-built `Dossier` (a test double) stays valid."""
+    Defaults to `()` so a hand-built `Dossier` (a test double) stays valid.
+
+    `learned_used` (P13-T08) is True when block 10 is in `text` - also in its "nothing found" form -
+    and False when `build` got no `learned`, or the budget dropped it: the run whose prompt this is
+    used the lookup only in the first case. Defaults to False for the same reason."""
 
     text: str
     nonce: str
@@ -323,6 +346,7 @@ class Dossier:
     truncations: tuple[dict[str, Any], ...]
     estimated_tokens: int
     blocks: tuple[tuple[str, str], ...] = ()
+    learned_used: bool = False
 
 
 class UnknownCase(Exception):
@@ -1204,6 +1228,50 @@ def _block9_scope() -> str:
     return f"{HEADING_SCOPE}\n{SENTENCE_OUT_OF_SCOPE}"
 
 
+def _learned_entries(learned: LearnedLike | None) -> tuple[tuple[KbLearnedLevel, str], ...]:
+    """The entries block 10 renders: the first `MAX_LEARNED_ENTRIES` of `learned.entries`, best first.
+    Each level must be a `KbLearnedLevel`: `fact()` renders any Enum, so a `Severity` would be written
+    as `kb_learned_level: high`, a value the section's vocabulary does not have. A defect of the
+    caller, not data: a `TypeError`, before anything is rendered or cut (the value is not echoed).
+    """
+    if learned is None:
+        return ()
+    entries = tuple(learned.entries)[:MAX_LEARNED_ENTRIES]
+    for level, _text in entries:
+        if not isinstance(level, KbLearnedLevel):
+            raise TypeError("learned entry level must be a KbLearnedLevel")
+    return entries
+
+
+def _block10_learned(
+    history_text: str | None,
+    entries: Sequence[tuple[KbLearnedLevel, str]],
+    *,
+    nothing_found: bool,
+    nonce: str,
+    sink: _BlockSink | None = None,
+) -> str:
+    """Block 10 (P13-T08, spec §7.8), ①'s section (`llm.triage._learned_section`) in this module's
+    layout. The heading; the history under its own source (its values, such as a SOAR scenario, are not
+    id-shaped, so it is a block, not facts); each entry's level as a typed fact, in the entries' order;
+    the entries' approved text as the one `kb_learned` block, numbered `[1]`.. in the same order so a level
+    and its entry can be matched; then the sentence that says what the section is. When the lookup found
+    nothing: the heading and the one sentence that says so. The text is approved content and a history
+    the system wrote, and still goes in blocks: the linter accepts no prose outside one."""
+    parts = [HEADING_LEARNED]
+    if nothing_found:
+        parts.append(SENTENCE_NO_LEARNED)
+        return "\n".join(parts)
+    if history_text:
+        parts.append(_wrapped(sink, history_text, "decision_history", nonce))
+    parts.extend(fact("kb_learned_level", level) for level, _text in entries)
+    if entries:
+        body = "\n\n".join(f"[{number}] {text}" for number, (_level, text) in enumerate(entries, 1))
+        parts.append(_wrapped(sink, body, "kb_learned", nonce))
+    parts.append(SENTENCE_LEARNED_IS_REFERENCE)
+    return "\n".join(parts)
+
+
 def _select_representatives(
     heads: Sequence[_Head], trigger_alert_id: str | None, limit: int
 ) -> frozenset[str]:
@@ -1241,7 +1309,10 @@ def build(
     *,
     nonce: str,
     cfg: config.Config | None = None,
+    learned: LearnedLike | None = None,
 ) -> Dossier:
+    """The dossier of `case_id`. `learned` (P13-T08): None - the nine blocks, byte for byte what this
+    function returned before the parameter existed. Else block 10 (see the module docstring)."""
     cfg = cfg or config.load()
 
     case_row = _fetch_case(conn, case_id)
@@ -1287,6 +1358,12 @@ def build(
     kept_ids: frozenset[str] | None = None
     timeline_dropped = False
 
+    # Block 10's material, checked once, before any render or cut (P13-T08).
+    history_text = (learned.history_text or None) if learned is not None else None
+    learned_entries = _learned_entries(learned)
+    nothing_found = learned is not None and history_text is None and not learned_entries
+    learned_dropped = False
+
     # `Dossier.blocks`: filled by the block functions as they wrap, and emptied at the start
     # of every render — the budget cascade below renders up to four times, and only the
     # last render is `text`.
@@ -1321,13 +1398,34 @@ def build(
             _block6_tier1(tier1_rows, nonce, blocks),
             _block7_playbooks(categories, nonce, blocks),
             _block8_notes_and_previous(notes, previous_run, nonce, blocks),
-            _block9_scope(),
         ]
+        if learned is not None and not learned_dropped:
+            sections.append(
+                _block10_learned(
+                    history_text,
+                    learned_entries,
+                    nothing_found=nothing_found,
+                    nonce=nonce,
+                    sink=blocks,
+                )
+            )
+        sections.append(_block9_scope())  # the instruction stays last
         return "\n\n".join(sections)
 
     text = render()
     estimated = _estimate_tokens(text)
     budget = cfg.CASE_PROMPT_BUDGET_TOKENS
+
+    if estimated > budget and learned is not None and not nothing_found:
+        # P13-T08, Review Focus 5: the learned section is a reference, never evidence, so it is the first
+        # thing to go - before any step that cuts what the case itself is made of. It goes whole. The
+        # two-line "nothing found" form is not cut: it costs a few tokens, says something true, and
+        # dropping it would be recorded as a saving it is not.
+        before = estimated
+        learned_dropped = True
+        text = render()
+        estimated = _estimate_tokens(text)
+        truncations.append({"step": STEP_LEARNED_DROPPED, "before": before, "after": estimated})
 
     if estimated > budget and raw_log_limit > RAW_LOG_CUT_BYTES:
         before = estimated
@@ -1368,4 +1466,5 @@ def build(
         truncations=tuple(truncations),
         estimated_tokens=estimated,
         blocks=tuple(blocks),
+        learned_used=learned is not None and not learned_dropped,
     )
