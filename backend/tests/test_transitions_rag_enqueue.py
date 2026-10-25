@@ -36,6 +36,7 @@ from app.domain.transitions import (
 )
 from app.ingest.wazuh_parser import parse_wazuh_alert
 from app.rag.subject import Subject, parse_subject
+from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from tests.rag_data import add_user
@@ -178,6 +179,23 @@ def test_the_delay_is_the_configured_one(db, switch_on, monkeypatch, queue) -> N
     alert_id = queue(db)
     _, triage = jobs(db, alert_id)
     assert triage[4] == pytest.approx(120, abs=1)
+
+
+@both_paths
+@pytest.mark.parametrize("delay", ["45", "120", "0"])
+def test_the_delay_is_the_databases_clock_not_the_applications(
+    db, switch_on, enqueued, monkeypatch, queue, delay
+) -> None:
+    """P13 fix wave, item 3 (T07 M1): the rows above would still read about 45 s if the expression were
+    built from the application's clock. The SQL text handed to `enqueue` is the database's `now()`.
+    """
+    monkeypatch.setenv("RAG_TRIAGE_DELAY_S", delay)
+    queue(db)
+    (_, _), (args, kwargs) = enqueued
+    assert args[0] == "triage"
+    scheduled_at = kwargs["scheduled_at"]
+    assert isinstance(scheduled_at, sql.Composable)  # an expression, not a timestamp computed here
+    assert scheduled_at.as_string(db) == f"now() + {delay} * interval '1 second'"
 
 
 @both_paths
