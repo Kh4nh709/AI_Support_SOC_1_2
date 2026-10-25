@@ -67,6 +67,10 @@ test("an admin edits and approves a pending draft, finds it under Đã duyệt, 
 
   // The draft opens on two columns: the analyst's work on the left, the draft on the right.
   await page.getByRole("button", { name: K.openDraft(title) }).click();
+  // The view is in the URL: a reload opens it again, on the same tab, with focus on its title.
+  await expect(page).toHaveURL(/\/admin\/knowledge\?tab=pending&draft=[0-9a-f-]{36}$/);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: title })).toBeFocused();
   const left = page.getByRole("region", { name: D.left.heading });
   const right = page.getByRole("region", { name: D.right.heading });
   await expect(left.getByRole("region", { name: S.alert.summaryLabel })).toContainText("99001");

@@ -1727,6 +1727,9 @@ export const S = {
         reasonRequired: "Cần nhập lý do.",
         reasonInvalid: (max: number) => `Lý do không hợp lệ: cần từ 1 đến ${max} ký tự.`,
         editedInvalid: "Nội dung sửa không hợp lệ.",
+        // A 409 that leaves the draft pending (`source_changed`, `unpublishable`): an approval would meet it again.
+        rejectOnly:
+          "Không duyệt được: bản nháp đã được xử lý hoặc nguồn của nó đã đổi, nên chỉ có thể từ chối bản nháp này. Danh sách đã được tải lại.",
         faults: (n: number) => `Không duyệt được: còn ${n} lỗi cần sửa trong bản nháp.`,
       },
 
@@ -1771,6 +1774,10 @@ export const S = {
           investigation: {
             heading: "Kết quả điều tra ②",
             none: "Case chưa có kết quả phân tích ②.",
+          },
+          suggestion: {
+            heading: "Cổng kiểm soát và lý do của ①",
+            none: "① không ghi cổng kiểm soát hay lý do nào cho alert này.",
           },
           conflict: {
             heading: {
@@ -1818,12 +1825,20 @@ export const S = {
           },
           warnings: "Cảnh báo của job soạn thảo",
         },
+        // Leaving a draft with text that was not sent.
+        leave: {
+          title: "Bỏ các chỉnh sửa chưa gửi?",
+          body: "Bản nháp có chỉnh sửa chưa gửi đi. Rời khỏi bản nháp này sẽ làm mất chúng.",
+          stay: "Ở lại",
+          confirm: "Bỏ chỉnh sửa",
+        },
         action: {
           approve: "Duyệt",
           editApprove: "Sửa rồi duyệt",
           reject: "Từ chối",
           // Why a button cannot be pressed now.
           approveEdited: "Bạn đã sửa nội dung: dùng Sửa rồi duyệt để gửi bản đã sửa.",
+          approveRejectOnly: "Chỉ có thể từ chối bản nháp này.",
           editApproveClean: "Chưa sửa gì. Sửa nội dung rồi bấm Sửa rồi duyệt.",
           approveNoText: "Bản nháp chưa có nội dung: hãy viết nội dung rồi chọn Sửa rồi duyệt.",
           approveTitle: "Duyệt bản nháp này?",

@@ -116,7 +116,8 @@ export function ReasonDialog(props: {
   const inputId = useId();
   const countId = useId();
   const errorId = useId();
-  const used = props.reason.trim().length;
+  // Code points, as the backend counts (Python `len`): an emoji is one, though JavaScript `length` says two.
+  const used = [...props.reason.trim()].length;
   const tooLong = used > KNOWLEDGE_LIMITS.reasonMax;
   const describedBy = [countId, props.reasonError === null ? null : errorId]
     .filter((id) => id !== null)

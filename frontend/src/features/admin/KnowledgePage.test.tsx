@@ -8,12 +8,13 @@ import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { HttpResponse } from "msw";
 import { setupServer } from "msw/node";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation, useNavigate } from "react-router";
 import { S } from "../../strings";
 import { KnowledgePage } from "./KnowledgePage";
 import {
   detail,
   draftDetail,
+  draftId,
   draftRow,
   entryFull,
   entryId,
@@ -31,14 +32,30 @@ beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 
-function renderPage() {
+/** What a test reads of the router: where it is, and a "Back" of the browser. */
+function Probe() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return (
+    <div>
+      <p data-testid="url">{location.pathname + location.search}</p>
+      <button type="button" data-testid="history-back" onClick={() => void navigate(-1)}>
+        history back
+      </button>
+    </div>
+  );
+}
+const url = () => screen.getByTestId("url").textContent;
+
+function renderPage(path = "/admin/knowledge") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/admin/knowledge"]}>
+      <MemoryRouter initialEntries={[path]}>
         <main>
           <KnowledgePage />
         </main>
+        <Probe />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -51,10 +68,10 @@ const rowsOf = async (name: Tab) =>
     .getAllByRole("row")
     .slice(1);
 
-async function start(init: FakeInit = {}) {
+async function start(init: FakeInit = {}, path?: string) {
   const fake = knowledgeBackend(server, init);
   const user = userEvent.setup();
-  const view = renderPage();
+  const view = renderPage(path);
   return { fake, user, view };
 }
 
@@ -509,5 +526,168 @@ describe("accessibility", () => {
     const { view } = await start({ list: () => HttpResponse.json({}, { status: 500 }) });
     await screen.findByRole("alert");
     expect(await axeOf(view.container)).toEqual([]);
+  });
+});
+
+// --- fix round 1 of the review (task-6-review-r1.md) -------------------------------------------------------------
+
+describe("the open view and the tab are in the URL (M5)", () => {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+  it("puts the tab in the URL, replacing the entry rather than adding one", async () => {
+    const { user } = await start(SOME);
+    await tableOf("pending");
+    await user.click(tab("active"));
+    await tableOf("active");
+    expect(url()).toBe("/admin/knowledge?tab=active");
+    await user.click(screen.getByTestId("history-back"));
+    // no entry was added by the tab: Back leaves the page's first entry as it is
+    expect(url()).toBe("/admin/knowledge?tab=active");
+  });
+
+  it("opens a draft with ?draft=<id>, and the browser's Back returns to the list on the same tab", async () => {
+    const { user } = await start(SOME);
+    await tableOf("pending");
+    await user.click(screen.getByRole("button", { name: K.openDraft("Bản nháp số 1") }));
+    await screen.findByRole("region", { name: K.draft.right.heading });
+    expect(url()).toBe(`/admin/knowledge?tab=pending&draft=${draftId(1)}`);
+    await user.click(screen.getByTestId("history-back"));
+    expect(await tableOf("pending")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: K.draft.right.heading })).not.toBeInTheDocument();
+    expect(url()).not.toContain("draft=");
+  });
+
+  it("opens an entry with ?entry=<id>", async () => {
+    const { user } = await start(SOME);
+    await user.click(tab("active"));
+    await tableOf("active");
+    await user.click(screen.getByRole("button", { name: K.openEntry("Mục tri thức số 1") }));
+    await screen.findByRole("region", { name: K.entry.header });
+    expect(url()).toBe(`/admin/knowledge?tab=active&entry=${entryId(1)}`);
+  });
+
+  it("reopens the draft when the page is loaded on its URL", async () => {
+    await start(SOME, `/admin/knowledge?tab=pending&draft=${draftId(1)}`);
+    expect(await screen.findByRole("region", { name: K.draft.right.heading })).toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+  });
+
+  it("reopens the entry when the page is loaded on its URL", async () => {
+    await start(SOME, `/admin/knowledge?tab=active&entry=${entryId(1)}`);
+    expect(await screen.findByRole("region", { name: K.entry.header })).toBeInTheDocument();
+  });
+
+  it("opens the tab the URL names, and the first one for a name it does not know", async () => {
+    await start(SOME, "/admin/knowledge?tab=rejected");
+    expect(await tableOf("rejected")).toBeInTheDocument();
+    expect(tab("rejected")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it.each(["?tab=nonsense", "?tab=__proto__", "?tab=", `?draft=not-an-id`, "?entry=../../etc"])(
+    "ignores %s and shows the first list",
+    async (search) => {
+      const { fake } = await start(SOME, `/admin/knowledge${search}`);
+      expect(await tableOf("pending")).toBeInTheDocument();
+      expect(tab("pending")).toHaveAttribute("aria-selected", "true");
+      expect(fake.reads.draft).toEqual({});
+      expect(fake.reads.entry).toEqual({});
+    },
+  );
+
+  it("a UUID is what an id in the URL must be", () => {
+    expect(draftId(1)).toMatch(UUID);
+    expect(entryId(1)).toMatch(UUID);
+  });
+
+  it("'← Danh sách' goes back through the history when the view was opened from the list", async () => {
+    const { user } = await start(SOME);
+    await tableOf("pending");
+    await user.click(screen.getByRole("button", { name: K.openDraft("Bản nháp số 1") }));
+    await screen.findByRole("region", { name: K.draft.right.heading });
+    await user.click(screen.getByRole("button", { name: K.back }));
+    expect(await tableOf("pending")).toBeInTheDocument();
+    expect(url()).toBe("/admin/knowledge");
+  });
+
+  it("'← Danh sách' replaces the URL when the page was loaded on the view's own URL", async () => {
+    const { user } = await start(
+      {
+        ...SOME,
+        details: [draftDetail(4, { draft: { status: "rejected", review_note: "trùng" } })],
+      },
+      `/admin/knowledge?tab=rejected&draft=${draftId(4)}`,
+    );
+    await screen.findByRole("region", { name: K.draft.right.heading });
+    await user.click(screen.getByRole("button", { name: K.back }));
+    expect(await tableOf("rejected")).toBeInTheDocument();
+    expect(url()).toBe("/admin/knowledge?tab=rejected");
+  });
+
+  it("a draft that is edited asks before '← Danh sách', and keeps the view when the admin stays", async () => {
+    const { user } = await start(SOME);
+    await tableOf("pending");
+    await user.click(screen.getByRole("button", { name: K.openDraft("Bản nháp số 1") }));
+    const right = await screen.findByRole("region", { name: K.draft.right.heading });
+    await user.type(within(right).getByLabelText(K.draft.right.field.title), " bổ sung");
+    await user.click(screen.getByRole("button", { name: K.back }));
+    const ask = screen.getByRole("dialog", { name: K.draft.leave.title });
+    await user.click(within(ask).getByRole("button", { name: K.draft.leave.stay }));
+    expect(screen.getByRole("region", { name: K.draft.right.heading })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: K.back }));
+    await user.click(
+      within(screen.getByRole("dialog", { name: K.draft.leave.title })).getByRole("button", {
+        name: K.draft.leave.confirm,
+      }),
+    );
+    expect(await tableOf("pending")).toBeInTheDocument();
+  });
+});
+
+describe("focus (M4)", () => {
+  it("moves to the title of a view when it opens, and back to the row's button when it closes", async () => {
+    const { user } = await start(SOME);
+    await tableOf("pending");
+    const opener = screen.getByRole("button", { name: K.openDraft("Bản nháp số 2") });
+    await user.click(opener);
+    const heading = await screen.findByRole("heading", {
+      name: "Quét cổng định kỳ từ máy giám sát nội bộ",
+    });
+    await waitFor(() => expect(heading).toHaveFocus());
+    await user.click(screen.getByRole("button", { name: K.back }));
+    await tableOf("pending");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: K.openDraft("Bản nháp số 2") })).toHaveFocus(),
+    );
+  });
+
+  it("returns to the entry's own button when an entry closes", async () => {
+    const { user } = await start(SOME);
+    await user.click(tab("active"));
+    await tableOf("active");
+    await user.click(screen.getByRole("button", { name: K.openEntry("Mục tri thức số 1") }));
+    await screen.findByRole("region", { name: K.entry.header });
+    await user.click(screen.getByRole("button", { name: K.back }));
+    await tableOf("active");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: K.openEntry("Mục tri thức số 1") })).toHaveFocus(),
+    );
+  });
+
+  it("lands on the tab when the row it came from is gone after the write", async () => {
+    const { user } = await start(SOME);
+    await tableOf("pending");
+    await user.click(screen.getByRole("button", { name: K.openDraft("Bản nháp số 1") }));
+    await screen.findByRole("region", { name: K.draft.right.heading });
+    await user.click(screen.getByRole("button", { name: K.draft.action.approve }));
+    await user.click(
+      within(screen.getByRole("dialog", { name: K.draft.action.approveTitle })).getByRole(
+        "button",
+        {
+          name: K.draft.action.approve,
+        },
+      ),
+    );
+    await screen.findByText(K.done.approved("Quét cổng định kỳ từ máy giám sát nội bộ"));
+    await waitFor(() => expect(tab("pending")).toHaveFocus());
   });
 });

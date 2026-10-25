@@ -15,7 +15,8 @@
 // was done. A tab with nothing in it says what it is for; it is not an error. A list that cannot be read says so
 // with a Thử lại, and the tabs stay. Everything a person or a model wrote is text.
 import { useQuery } from "@tanstack/react-query";
-import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { createSearchParams, useLocation, useNavigate, useSearchParams } from "react-router";
 import {
   KNOWLEDGE_LIMITS,
   listKnowledgeDrafts,
@@ -42,15 +43,70 @@ type Tab = (typeof TABS)[number];
 /** What a row opens. */
 type Open = { kind: "draft" | "entry"; id: string };
 
+/** The ids the routes take: a UUID. Anything else in the URL is not an id and opens nothing. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const isTab = (value: string | null): value is Tab =>
+  value !== null && (TABS as readonly string[]).includes(value);
+
+/** The view the URL names (`?draft=<id>` or `?entry=<id>`), if it names one with an id. */
+function openOf(params: URLSearchParams): Open | null {
+  const draft = params.get("draft");
+  if (draft !== null && UUID.test(draft)) return { kind: "draft", id: draft };
+  const entry = params.get("entry");
+  if (entry !== null && UUID.test(entry)) return { kind: "entry", id: entry };
+  return null;
+}
+
 const OPEN_BUTTON =
   "h-8 rounded-md border border-border px-3 text-[13px] hover:bg-ground focus-visible:outline-2 focus-visible:outline-text";
 
 export function KnowledgePage() {
   const base = useId();
-  const [tab, setTab] = useState<Tab>("pending");
-  const [open, setOpen] = useState<Open | null>(null);
+  // The tab and the open view are in the URL (`?tab=active&draft=<id>`): the browser's Back returns to the list, and
+  // a reload reopens the view. A tab is a replacement of the entry, a view is a new one.
+  const [params, setParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const requested = params.get("tab");
+  const tab: Tab = isTab(requested) ? requested : "pending";
+  const open = openOf(params);
+  const openKey = open === null ? null : `${open.kind}:${open.id}`;
   const [notice, setNotice] = useState<string | null>(null);
   const refs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
+  // The button a view was opened from: the focus goes back to it when the view closes.
+  const opener = useRef<HTMLElement | null>(null);
+  const wasOpen = useRef(false);
+
+  const setTab = (name: Tab) => setParams({ tab: name }, { replace: true });
+
+  function openView(kind: Open["kind"], id: string, from: HTMLElement): void {
+    opener.current = from;
+    void navigate(
+      { search: createSearchParams({ tab, [kind]: id }).toString() },
+      { state: { fromList: true } },
+    );
+  }
+
+  /** Back to the list: through the history when the view was opened from it, else by replacing the URL. */
+  function closeView(): void {
+    const fromList = (location.state as { fromList?: boolean } | null)?.fromList === true;
+    if (fromList) void navigate(-1);
+    else void navigate({ search: createSearchParams({ tab }).toString() }, { replace: true });
+  }
+
+  useEffect(() => {
+    if (openKey !== null) {
+      wasOpen.current = true;
+      return;
+    }
+    if (!wasOpen.current) return;
+    wasOpen.current = false;
+    const target = opener.current;
+    opener.current = null;
+    // The row it came from may be gone (the write moved it to another tab): the tab is where the focus lands then.
+    (target !== null && target.isConnected ? target : refs.current[tab])?.focus();
+  }, [openKey, tab]);
 
   function move(event: KeyboardEvent, from: Tab): void {
     const at = TABS.indexOf(from);
@@ -71,7 +127,7 @@ export function KnowledgePage() {
   }
 
   const done = (message: string) => {
-    setOpen(null);
+    closeView();
     setNotice(message);
   };
 
@@ -120,20 +176,20 @@ export function KnowledgePage() {
             <DraftList
               key={tab}
               status={tab}
-              onOpenDraft={(id) => setOpen({ kind: "draft", id })}
-              onOpenEntry={(id) => setOpen({ kind: "entry", id })}
+              onOpenDraft={(id, from) => openView("draft", id, from)}
+              onOpenEntry={(id, from) => openView("entry", id, from)}
             />
           ) : (
-            <EntryList key={tab} status={tab} onOpen={(id) => setOpen({ kind: "entry", id })} />
+            <EntryList key={tab} status={tab} onOpen={(id, from) => openView("entry", id, from)} />
           )}
         </div>
       </div>
 
       {open?.kind === "draft" && (
-        <KnowledgeDraftView draftId={open.id} onBack={() => setOpen(null)} onDone={done} />
+        <KnowledgeDraftView draftId={open.id} onBack={closeView} onDone={done} />
       )}
       {open?.kind === "entry" && (
-        <KnowledgeEntryView entryId={open.id} onBack={() => setOpen(null)} onDone={done} />
+        <KnowledgeEntryView entryId={open.id} onBack={closeView} onDone={done} />
       )}
     </div>
   );
@@ -190,8 +246,8 @@ function DraftList({
   onOpenEntry,
 }: {
   status: Extract<KnowledgeDraftStatus, "pending" | "merged" | "rejected">;
-  onOpenDraft: (id: string) => void;
-  onOpenEntry: (id: string) => void;
+  onOpenDraft: (id: string, from: HTMLElement) => void;
+  onOpenEntry: (id: string, from: HTMLElement) => void;
 }) {
   const query = useQuery({
     queryKey: adminKeys.knowledgeDrafts(status),
@@ -232,7 +288,7 @@ function DraftList({
       <button
         type="button"
         aria-label={K.openDraft(draftTitle(row))}
-        onClick={() => onOpenDraft(row.draft_id)}
+        onClick={(event) => onOpenDraft(row.draft_id, event.currentTarget)}
         className={OPEN_BUTTON}
       >
         {K.open}
@@ -264,7 +320,7 @@ function DraftList({
         <button
           type="button"
           aria-label={K.openEntry(row.duplicate_of_entry)}
-          onClick={() => onOpenEntry(row.duplicate_of_entry as string)}
+          onClick={(event) => onOpenEntry(row.duplicate_of_entry as string, event.currentTarget)}
           className="font-mono text-xs break-all underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-text"
         >
           {row.duplicate_of_entry}
@@ -328,7 +384,7 @@ function EntryList({
   onOpen,
 }: {
   status: KnowledgeEntryStatus;
-  onOpen: (id: string) => void;
+  onOpen: (id: string, from: HTMLElement) => void;
 }) {
   const query = useQuery({
     queryKey: adminKeys.knowledgeEntries(status),
@@ -374,7 +430,7 @@ function EntryList({
         <button
           type="button"
           aria-label={K.openEntry(row.title ?? K.noEntryTitle)}
-          onClick={() => onOpen(row.entry_id)}
+          onClick={(event) => onOpen(row.entry_id, event.currentTarget)}
           className={OPEN_BUTTON}
         >
           {K.open}

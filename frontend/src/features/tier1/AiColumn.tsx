@@ -43,7 +43,6 @@ function Verdict({
 }) {
   const action = labelOf(S.ai1.action, state.action);
   const gate = suggestion?.gate ?? null;
-  const forcedBy = gate ? forcedByOf(gate) : [];
   return (
     <div className="space-y-2">
       <div>
@@ -70,24 +69,36 @@ function Verdict({
           {S.ai1.confidence}: {labelOf(S.confidence, state.confidence)}
         </p>
       )}
-      {gate !== null && (
-        <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
-          <span className={MUTED}>{S.ai1.gate}</span>
-          <strong>{state.forced ? S.ai1.gateForced : S.ai1.gateNotForced}</strong>
-          {forcedBy.length > 0 && (
-            <>
-              <span className={MUTED}>{S.ai1.gateForcedBy}</span>
-              <code>{forcedBy.join(", ")}</code>
-            </>
-          )}
-        </div>
+      {gate !== null && <GateLine gate={gate} forced={state.forced} />}
+    </div>
+  );
+}
+
+/** The gate in one line: whether it forced the verdict, and by which rules. Exported to be drawn on its own. */
+export function GateLine({
+  gate,
+  forced,
+}: {
+  gate: NonNullable<Suggestion["gate"]>;
+  forced: boolean;
+}) {
+  const forcedBy = forcedByOf(gate);
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
+      <span className={MUTED}>{S.ai1.gate}</span>
+      <strong>{forced ? S.ai1.gateForced : S.ai1.gateNotForced}</strong>
+      {forcedBy.length > 0 && (
+        <>
+          <span className={MUTED}>{S.ai1.gateForcedBy}</span>
+          <code>{forcedBy.join(", ")}</code>
+        </>
       )}
     </div>
   );
 }
 
 /** What the gate did: the verdict ① proposed, the one it ended with, the verifier, and the gate's warnings. */
-function GateSteps({ gate }: { gate: NonNullable<Suggestion["gate"]> }) {
+export function GateSteps({ gate }: { gate: NonNullable<Suggestion["gate"]> }) {
   const warnings = gate.warnings ?? [];
   const rows: [string, string | null | undefined][] = [
     [S.ai1.gateProposed, gate.proposed_verdict],
@@ -120,7 +131,7 @@ function GateSteps({ gate }: { gate: NonNullable<Suggestion["gate"]> }) {
   );
 }
 
-function Reasons({ reasons }: { reasons: NonNullable<Suggestion["reasons"]> }) {
+export function Reasons({ reasons }: { reasons: NonNullable<Suggestion["reasons"]> }) {
   if (reasons.length === 0) return null;
   return (
     <Block title={S.ai1.reasons}>

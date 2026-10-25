@@ -10,7 +10,7 @@
 //     entry is no longer active and reads it again; 404 says it is gone; 503 `publish_failed` (the file could not be
 //     moved, nothing was stored) leaves the dialog open so the same button asks again.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import {
   getKnowledgeEntry,
@@ -107,7 +107,15 @@ function EntryScreen({
   const [reasonError, setReasonError] = useState<string | null>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // The route answered 404: the entry is gone, whatever the page still holds of it.
+  const [gone, setGone] = useState(false);
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const title = entry.title ?? K.noEntryTitle;
+
+  // The title takes the focus when the entry opens, so a keyboard or a screen reader lands on it.
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, []);
 
   const retire = useMutation({
     mutationFn: (text: string) => retireKnowledgeEntry(entry.entry_id, text),
@@ -124,6 +132,7 @@ function EntryScreen({
       case "stale":
       case "not_found":
         setNotice(error.kind === "stale" ? K.notice.entryHandled : K.notice.entryGone);
+        if (error.kind === "not_found") setGone(true);
         setAsked(false);
         void invalidateAfter(client, "retireKnowledgeEntry");
         return;
@@ -182,9 +191,15 @@ function EntryScreen({
           <button type="button" onClick={onBack} className={BUTTON_OUTLINE}>
             {K.back}
           </button>
-          <h2 className="min-w-0 flex-1 text-lg font-semibold break-words">{title}</h2>
+          <h2
+            ref={headingRef}
+            tabIndex={-1}
+            className="min-w-0 flex-1 text-lg font-semibold break-words focus:outline-none"
+          >
+            {title}
+          </h2>
           <Mark>{labelOf(E.status, entry.status)}</Mark>
-          {entry.status === "active" && (
+          {entry.status === "active" && !gone && (
             <button type="button" onClick={ask} className={BUTTON_DANGER}>
               {E.retire}
             </button>
@@ -265,8 +280,8 @@ function Integrity({ entry }: { entry: KnowledgeEntry }) {
 
 function Evidence({ entry }: { entry: KnowledgeEntry }) {
   const id = useId();
-  const alerts = entry.source_alert_ids.filter((a) => SAFE_ID.test(a));
-  const cases = entry.source_case_ids.filter((c) => SAFE_ID.test(c));
+  const alerts = entry.source_alert_ids;
+  const cases = entry.source_case_ids;
   return (
     <section aria-labelledby={id} className={`${PANEL} space-y-2 p-4`}>
       <h3 id={id} className="text-sm font-semibold">
@@ -299,25 +314,24 @@ function Evidence({ entry }: { entry: KnowledgeEntry }) {
         <p className="text-xs text-muted">
           {E.field.sources}:{" "}
           {alerts.map((alert) => (
-            <Link
-              key={alert}
-              to={`/alerts/${encodeURIComponent(alert)}`}
-              className={`${LINK} mr-2`}
-            >
-              {alert}
-            </Link>
+            <SourceId key={`a:${alert}`} id={alert} base="/alerts/" />
           ))}
           {cases.map((caseId) => (
-            <Link
-              key={caseId}
-              to={`/cases/${encodeURIComponent(caseId)}`}
-              className={`${LINK} mr-2`}
-            >
-              {caseId}
-            </Link>
+            <SourceId key={`c:${caseId}`} id={caseId} base="/cases/" />
           ))}
         </p>
       )}
     </section>
+  );
+}
+
+/** An id of an alert or a case: a link to its page when it is made of the characters ids are made of, else text. */
+function SourceId({ id, base }: { id: string; base: "/alerts/" | "/cases/" }) {
+  return SAFE_ID.test(id) ? (
+    <Link to={`${base}${encodeURIComponent(id)}`} className={`${LINK} mr-2`}>
+      {id}
+    </Link>
+  ) : (
+    <span className="mr-2 break-all">{id}</span>
   );
 }

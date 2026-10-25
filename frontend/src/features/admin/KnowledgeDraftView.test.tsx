@@ -9,17 +9,20 @@ import { HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { MemoryRouter } from "react-router";
 import { KNOWLEDGE_CLOSED_FIELDS, KNOWLEDGE_MODEL_FIELDS } from "../../api/admin";
+import type { Suggestion } from "../../api/tier1";
 import { S } from "../../strings";
 import { KnowledgeDraftView } from "./KnowledgeDraftView";
 import {
   CASE_ID,
   GOOD_FIELDS,
   TAGS,
+  alertView,
   detail,
   draftDetail,
   draftId,
   entryFull,
   entryId,
+  forcedSuggestion,
   knowledgeBackend,
   type FakeInit,
 } from "./knowledgeFixtures";
@@ -1097,5 +1100,360 @@ describe("accessibility", () => {
     const second = renderView(draftId(2));
     await loaded();
     expect(await axeOf(second.container)).toEqual([]);
+  });
+});
+
+// --- fix round 1 of the review (task-6-review-r1.md) -------------------------------------------------------------
+
+describe("①'s suggestion: its gate and its reasons, beside what ① decided (spec §7.5, I1)", () => {
+  const withSuggestion = (suggestion: Suggestion | null) =>
+    draftDetail(1, { source: { alert: alertView({ suggestion }) } });
+  const box = () => within(left()).getByRole("region", { name: D.left.suggestion.heading });
+
+  it("shows a forced gate: that it forced, by which rules, its steps and its warnings", async () => {
+    await open({ details: [withSuggestion(forcedSuggestion())] });
+    const gate = box();
+    expect(gate).toHaveTextContent(S.ai1.gate);
+    expect(gate).toHaveTextContent(S.ai1.gateForced);
+    expect(gate).toHaveTextContent(S.ai1.gateForcedBy);
+    expect(gate).toHaveTextContent("asset_high, ioc_bad");
+    // the steps: what ① proposed, what the gate ended with, what the verifier said
+    expect(gate).toHaveTextContent(S.ai1.gateSteps);
+    expect(gate).toHaveTextContent(S.ai1.gateProposed);
+    expect(gate).toHaveTextContent(S.ai1.action.false_positive);
+    expect(gate).toHaveTextContent(S.ai1.gateFinal);
+    expect(gate).toHaveTextContent(S.ai1.action.escalate);
+    expect(gate).toHaveTextContent(S.ai1.verifier);
+    expect(gate).toHaveTextContent("disagree");
+    expect(gate).toHaveTextContent(S.ai1.gateWarnings);
+  });
+
+  it("shows the reasons of ①, with the quote and the source of each", async () => {
+    await open({ details: [withSuggestion(forcedSuggestion())] });
+    const gate = box();
+    expect(gate).toHaveTextContent(S.ai1.reasons);
+    expect(gate).toHaveTextContent("Nguồn thuộc dải máy giám sát");
+    expect(gate).toHaveTextContent(S.ai1.source);
+    expect(within(gate).getAllByRole("listitem").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("is still the column of ① above it: the decision and the agreement are kept", async () => {
+    await open({ details: [withSuggestion(forcedSuggestion())] });
+    expect(within(left()).getByRole("heading", { name: S.alert.aiHeading })).toBeInTheDocument();
+    expect(within(left()).getByText(S.ai1.decidedHeading)).toBeInTheDocument();
+  });
+
+  it("renders hostile text in a claim, a quote, a source and a warning as literal characters", async () => {
+    const { view } = await open({ details: [withSuggestion(forcedSuggestion())] });
+    const gate = box();
+    expect(gate).toHaveTextContent("<script>alert(1)</script> máy này quét cổng đều đặn");
+    expect(gate).toHaveTextContent("[bấm vào đây](javascript:alert(1))");
+    expect(gate).toHaveTextContent("<img src=x onerror=alert(2)>");
+    expect(gate).toHaveTextContent("<script>alert('gate')</script>");
+    expect(view.container.querySelector("script")).toBeNull();
+    expect(view.container.querySelector("img")).toBeNull();
+    expect(view.container.querySelector("[onerror]")).toBeNull();
+    expect(view.container.querySelector('a[href^="javascript"]')).toBeNull();
+    expect(gate.querySelector("a")).toBeNull();
+  });
+
+  it("says a gate that did not force the verdict as such", async () => {
+    const calm = forcedSuggestion({
+      gate: {
+        forced: false,
+        forced_by: [],
+        proposed_verdict: "false_positive",
+        final_verdict: "false_positive",
+      },
+      reasons: [],
+    });
+    await open({ details: [withSuggestion(calm)] });
+    expect(box()).toHaveTextContent(S.ai1.gateNotForced);
+    expect(box()).not.toHaveTextContent(S.ai1.gateForcedBy);
+    expect(box()).not.toHaveTextContent(S.ai1.reasons);
+  });
+
+  it("says in a sentence that ① left neither a gate nor reasons", async () => {
+    await open();
+    expect(box()).toHaveTextContent(D.left.suggestion.none);
+  });
+
+  it("shows no section for an alert that carries no suggestion", async () => {
+    await open({ details: [withSuggestion(null)] });
+    expect(
+      within(left()).queryByRole("region", { name: D.left.suggestion.heading }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("has no button and no field in it", async () => {
+    await open({ details: [withSuggestion(forcedSuggestion())] });
+    expect(within(box()).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(box()).queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("has no axe violation", async () => {
+    const { view } = await open({ details: [withSuggestion(forcedSuggestion())] });
+    const result = await axe.run(view.container, {
+      rules: { "color-contrast": { enabled: false } },
+    });
+    expect(result.violations.map((v) => v.id)).toEqual([]);
+  });
+});
+
+describe("the tag picker marks 'ngoài danh sách' only once it knows the vocabulary (M1)", () => {
+  const drafted = () =>
+    draftDetail(1, { draft: { draft: { ...GOOD_FIELDS, tags: ["port_scan", "old_tag"] } } });
+
+  it("marks no tag while the vocabulary is loading, and marks the stranger once it is there", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    knowledgeBackend(server, {
+      details: [drafted()],
+      tagsAnswer: async () => {
+        await gate;
+        return HttpResponse.json(TAGS);
+      },
+    });
+    renderView();
+    const tags = await within(await loaded()).findByRole("group", { name: D.right.field.tags });
+    // loading: the draft's own tags are there, ticked, and none is called a stranger
+    expect(within(tags).getByRole("checkbox", { name: "port_scan" })).toBeChecked();
+    expect(within(tags).getByRole("checkbox", { name: "old_tag" })).toBeChecked();
+    expect(tags).not.toHaveTextContent(D.right.tags.outside);
+    release();
+    await waitFor(() => expect(tags).toHaveTextContent(D.right.tags.outside));
+    expect(within(tags).getByRole("checkbox", { name: "port_scan" })).toBeChecked();
+    expect(within(tags).getByRole("checkbox", { name: /old_tag/ })).toBeChecked();
+    expect(within(tags).getByText(D.right.tags.outside, { exact: false })).toBeInTheDocument();
+    // only the one that is outside is marked
+    expect(within(tags).getByRole("checkbox", { name: "port_scan" })).toBeInTheDocument();
+  });
+
+  it("marks no tag when the vocabulary could not be read", async () => {
+    knowledgeBackend(server, {
+      details: [drafted()],
+      tagsAnswer: () => HttpResponse.json({}, { status: 500 }),
+    });
+    renderView();
+    const tags = await within(await loaded()).findByRole("group", { name: D.right.field.tags });
+    expect(await within(tags).findByText(D.right.tags.loadFailed)).toBeInTheDocument();
+    expect(within(tags).getByRole("checkbox", { name: "old_tag" })).toBeChecked();
+    expect(within(tags).getByRole("checkbox", { name: "port_scan" })).toBeChecked();
+    expect(tags).not.toHaveTextContent(D.right.tags.outside);
+  });
+});
+
+describe("a 409 that leaves the draft pending says it can only be rejected now (M2)", () => {
+  async function approveFailing(reason: string) {
+    const fake = knowledgeBackend(server, {
+      details: [draftDetail()],
+      approve: () => detail({ reason }, 409),
+    });
+    const user = userEvent.setup();
+    const view = renderView();
+    await loaded();
+    await user.click(approveButton());
+    await user.click(
+      within(dialog(D.action.approveTitle)).getByRole("button", { name: D.action.approve }),
+    );
+    await waitFor(() => expect(fake.approves).toHaveLength(1));
+    return { fake, user, view };
+  }
+
+  it.each(["source_changed", "unpublishable"])(
+    "keeps 'bản nháp đã được xử lý' and adds that only a rejection is left, after %s",
+    async (reason) => {
+      await approveFailing(reason);
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("bản nháp đã được xử lý");
+      expect(alert).toHaveTextContent("chỉ có thể từ chối");
+      expect(alert).toHaveTextContent(K.notice.rejectOnly);
+    },
+  );
+
+  it("leaves Duyệt and Sửa rồi duyệt off, whatever is typed, and Từ chối on and working", async () => {
+    const { fake, user, view } = await approveFailing("source_changed");
+    await screen.findByRole("alert");
+    expect(approveButton()).toBeDisabled();
+    expect(editApproveButton()).toBeDisabled();
+    await user.type(box(D.right.field.title), "x");
+    expect(editApproveButton()).toBeDisabled();
+    expect(rejectButton()).toBeEnabled();
+    await user.click(rejectButton());
+    await user.type(
+      within(dialog(D.action.rejectTitle)).getByLabelText(D.action.reasonLabel),
+      "nguồn đã đổi",
+    );
+    await user.click(
+      within(dialog(D.action.rejectTitle)).getByRole("button", { name: D.action.reject }),
+    );
+    await waitFor(() => expect(view.onDone).toHaveBeenCalledTimes(1));
+    expect(fake.rejects).toHaveLength(1);
+  });
+
+  it("does not say it for a draft that was handled (not_pending)", async () => {
+    await approveFailing("not_pending");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("bản nháp đã được xử lý");
+    expect(alert).not.toHaveTextContent("chỉ có thể từ chối");
+  });
+});
+
+describe("a 404 leaves no action on stale data (M3)", () => {
+  async function failWith404(which: "approve" | "reject") {
+    const answer = () => detail({ reason: "not_found" }, 404);
+    const fake = knowledgeBackend(server, {
+      details: [draftDetail()],
+      ...(which === "approve" ? { approve: answer } : { reject: answer }),
+    });
+    const user = userEvent.setup();
+    const view = renderView();
+    await loaded();
+    if (which === "approve") {
+      await user.click(approveButton());
+      await user.click(
+        within(dialog(D.action.approveTitle)).getByRole("button", { name: D.action.approve }),
+      );
+    } else {
+      await user.click(rejectButton());
+      await user.type(
+        within(dialog(D.action.rejectTitle)).getByLabelText(D.action.reasonLabel),
+        "lý do",
+      );
+      await user.click(
+        within(dialog(D.action.rejectTitle)).getByRole("button", { name: D.action.reject }),
+      );
+    }
+    await waitFor(() => expect(fake.approves.length + fake.rejects.length).toBe(1));
+    return { fake, user, view };
+  }
+
+  it.each(["approve", "reject"] as const)(
+    "after a 404 on %s: says it is gone, hides all three actions and makes the form read-only",
+    async (which) => {
+      await failWith404(which);
+      expect(await screen.findByRole("alert")).toHaveTextContent(K.notice.gone);
+      expect(
+        within(right()).queryByRole("button", { name: D.action.approve }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(right()).queryByRole("button", { name: D.action.editApprove }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(right()).queryByRole("button", { name: D.action.reject }),
+      ).not.toBeInTheDocument();
+      expect(box(D.right.field.title).readOnly).toBe(true);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    },
+  );
+
+  it("still offers the way back", async () => {
+    const { user, view } = await failWith404("approve");
+    await screen.findByRole("alert");
+    await user.click(screen.getByRole("button", { name: K.back }));
+    expect(view.onBack).toHaveBeenCalled();
+  });
+});
+
+describe("focus (M4)", () => {
+  it("moves to the title of the draft when it opens", async () => {
+    await open();
+    expect(screen.getByRole("heading", { name: GOOD_FIELDS.title })).toHaveFocus();
+    expect(screen.getByRole("heading", { name: GOOD_FIELDS.title })).toHaveAttribute(
+      "tabindex",
+      "-1",
+    );
+  });
+});
+
+describe("edits that were not sent are not lost by accident (M5)", () => {
+  const leaveDialog = () => screen.getByRole("dialog", { name: D.leave.title });
+
+  it("asks before '← Danh sách' when the form is edited, and a confirm dialog is not window.confirm", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      const { user, view } = await open();
+      await user.type(box(D.right.field.title), " bổ sung");
+      await user.click(screen.getByRole("button", { name: K.back }));
+      expect(leaveDialog()).toHaveTextContent(D.leave.body);
+      expect(view.onBack).not.toHaveBeenCalled();
+      // staying keeps the view and what was typed
+      await user.click(within(leaveDialog()).getByRole("button", { name: D.leave.stay }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(view.onBack).not.toHaveBeenCalled();
+      expect(box(D.right.field.title).value).toBe(`${GOOD_FIELDS.title} bổ sung`);
+      // leaving goes back
+      await user.click(screen.getByRole("button", { name: K.back }));
+      await user.click(within(leaveDialog()).getByRole("button", { name: D.leave.confirm }));
+      expect(view.onBack).toHaveBeenCalledTimes(1);
+      expect(confirm).not.toHaveBeenCalled();
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it("does not ask when nothing was edited", async () => {
+    const { user, view } = await open();
+    await user.click(screen.getByRole("button", { name: K.back }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(view.onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not ask for a form that was edited and put back as it was", async () => {
+    const { user, view } = await open();
+    await user.type(box(D.right.field.title), "x");
+    await user.type(box(D.right.field.title), "{Backspace}");
+    await user.click(screen.getByRole("button", { name: K.back }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(view.onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it("guards a reload or a closed tab while the form is edited, and only then", async () => {
+    const attempt = () => {
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    const { user, view } = await open();
+    expect(attempt()).toBe(false);
+    await user.type(box(D.right.field.title), " bổ sung");
+    expect(attempt()).toBe(true);
+    await replace(user, box(D.right.field.title), GOOD_FIELDS.title);
+    expect(attempt()).toBe(false);
+    await user.type(box(D.right.field.title), "!");
+    expect(attempt()).toBe(true);
+    view.unmount();
+    expect(attempt()).toBe(false);
+  });
+
+  it("does not ask once the write went through", async () => {
+    const { user, view, fake } = await open();
+    await user.type(box(D.right.field.title), " bổ sung");
+    await user.click(editApproveButton());
+    await user.click(
+      within(dialog(D.action.editApproveTitle)).getByRole("button", { name: D.action.editApprove }),
+    );
+    await waitFor(() => expect(view.onDone).toHaveBeenCalledTimes(1));
+    expect(fake.approves).toHaveLength(1);
+    expect(screen.queryByRole("dialog", { name: D.leave.title })).not.toBeInTheDocument();
+  });
+});
+
+describe("the reason counts characters, as the backend does (nit)", () => {
+  it("counts 500 emoji as 500, and 501 as too long", async () => {
+    const { user } = await open();
+    await user.click(rejectButton());
+    const reasonBox = () =>
+      within(dialog(D.action.rejectTitle)).getByLabelText(D.action.reasonLabel);
+    const confirm = () =>
+      within(dialog(D.action.rejectTitle)).getByRole("button", { name: D.action.reject });
+    fireEvent.change(reasonBox(), { target: { value: "😀".repeat(500) } });
+    expect(dialog(D.action.rejectTitle)).toHaveTextContent(D.action.reasonCount(500, 500));
+    expect(confirm()).toBeEnabled();
+    fireEvent.change(reasonBox(), { target: { value: "😀".repeat(501) } });
+    expect(dialog(D.action.rejectTitle)).toHaveTextContent(D.action.reasonCount(501, 500));
+    expect(confirm()).toBeDisabled();
   });
 });

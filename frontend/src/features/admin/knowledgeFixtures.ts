@@ -17,7 +17,7 @@ import type {
   KnowledgeSource,
   KnowledgeTags,
 } from "../../api/admin";
-import type { AlertView } from "../../api/tier1";
+import type { AlertView, Suggestion } from "../../api/tier1";
 import type { CaseDetail, InvestigationView } from "../../api/tier2";
 
 export const BASE = "/api/admin/knowledge";
@@ -83,6 +83,34 @@ export function alertView(over: Partial<AlertView> = {}): AlertView {
     targeted_accounts: ["svc-monitor"],
     mitre_ids: ["T1046"],
     playbook: "Xác nhận nguồn quét với đội hạ tầng.",
+    ...over,
+  };
+}
+
+/**
+ * ①'s result with everything the gate and the reasons can carry: a forced gate with the rules that forced it, its
+ * steps and warnings, and reasons whose text is hostile (a script, a `javascript:` link, an image with a handler).
+ */
+export function forcedSuggestion(over: Partial<Suggestion> = {}): Suggestion {
+  return {
+    suggested_action: "false_positive",
+    confidence: "high",
+    gate: {
+      forced: true,
+      forced_by: ["asset_high", "ioc_bad"],
+      proposed_verdict: "false_positive",
+      final_verdict: "escalate",
+      verifier_verdict: "disagree",
+      warnings: ["<script>alert('gate')</script>"],
+    },
+    reasons: [
+      {
+        claim: "<script>alert(1)</script> máy này quét cổng đều đặn",
+        quote: "[bấm vào đây](javascript:alert(1))",
+        source: "<img src=x onerror=alert(2)>",
+      },
+      { claim: "Nguồn thuộc dải máy giám sát" },
+    ],
     ...over,
   };
 }

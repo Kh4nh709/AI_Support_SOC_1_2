@@ -399,3 +399,64 @@ describe("accessibility", () => {
     expect(await axeOf(view.container)).toEqual([]);
   });
 });
+
+// --- fix round 1 of the review (task-6-review-r1.md) -------------------------------------------------------------
+
+describe("source ids that are not safe to link are still shown (M6)", () => {
+  it("shows an id that fails the link pattern as plain text, and links the others", async () => {
+    const odd = "<img src=x onerror=alert(1)>";
+    const spaced = "id with spaces";
+    const { view } = await open(
+      entryFull(1, { source_alert_ids: [odd, ALERT_ID, spaced], source_case_ids: [CASE_ID] }),
+    );
+    const evidence = screen.getByRole("region", { name: E.evidence.heading });
+    expect(evidence).toHaveTextContent(odd);
+    expect(evidence).toHaveTextContent(spaced);
+    expect(evidence).toHaveTextContent(ALERT_ID);
+    expect(view.container.querySelector("img")).toBeNull();
+    expect(view.container.querySelector("[onerror]")).toBeNull();
+    const links = within(evidence)
+      .getAllByRole("link")
+      .map((a) => a.getAttribute("href"));
+    expect(links).toContain(`/alerts/${encodeURIComponent(ALERT_ID)}`);
+    expect(links).toContain(`/cases/${encodeURIComponent(CASE_ID)}`);
+    expect(links.some((href) => /onerror|%20/.test(href ?? ""))).toBe(false);
+  });
+});
+
+describe("a 404 leaves no action on stale data (M3)", () => {
+  it("hides Gỡ after a 404 on the retirement, and says the entry is gone", async () => {
+    const { user, view } = await open(entryFull(), {
+      retire: () => detail({ reason: "not_found" }, 404),
+    });
+    await user.click(retireButton());
+    await user.type(reasonBox(), "lý do");
+    await user.click(confirm());
+    expect(await screen.findByRole("alert")).toHaveTextContent(K.notice.entryGone);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: E.retire })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: K.back }));
+    expect(view.onBack).toHaveBeenCalled();
+  });
+});
+
+describe("focus (M4)", () => {
+  it("moves to the title of the entry when it opens", async () => {
+    await open();
+    const title = screen.getByRole("heading", { name: "Mục tri thức số 1" });
+    expect(title).toHaveFocus();
+    expect(title).toHaveAttribute("tabindex", "-1");
+  });
+});
+
+describe("the reason counts characters, as the backend does (nit)", () => {
+  it("counts 500 emoji as 500, and 501 as too long", async () => {
+    const { user } = await open();
+    await user.click(retireButton());
+    fireEvent.change(reasonBox(), { target: { value: "😀".repeat(500) } });
+    expect(dialog()).toHaveTextContent(S.admin.knowledgePage.draft.action.reasonCount(500, 500));
+    expect(confirm()).toBeEnabled();
+    fireEvent.change(reasonBox(), { target: { value: "😀".repeat(501) } });
+    expect(confirm()).toBeDisabled();
+  });
+});

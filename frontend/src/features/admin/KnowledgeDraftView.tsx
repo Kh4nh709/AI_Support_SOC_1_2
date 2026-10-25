@@ -21,7 +21,7 @@
 // Text from a model or an analyst (the draft, the notes, the reasons, an entry's Markdown) is React text and nothing
 // else: no raw-HTML escape hatch, no Markdown renderer.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   approveKnowledgeDraft,
   getKnowledgeDraft,
@@ -38,10 +38,11 @@ import {
   type KnowledgeFault,
   type KnowledgeSource,
 } from "../../api/admin";
+import type { Suggestion } from "../../api/tier1";
 import { ApiError } from "../../api/client";
 import { formatDateTime, formatTime } from "../../format";
 import { S, knowledgeFaultText, knowledgeWarningText, labelOf } from "../../strings";
-import { AiColumn } from "../tier1/AiColumn";
+import { AiColumn, GateLine, GateSteps, Reasons } from "../tier1/AiColumn";
 import {
   Accounts,
   Correlation,
@@ -153,10 +154,17 @@ function DraftScreen({
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [reasonError, setReasonError] = useState<string | null>(null);
+  // The route answered 404: the draft is gone, whatever the page still holds of it.
+  const [gone, setGone] = useState(false);
+  // A 409 that leaves the draft pending (its source changed, or it cannot be published): only a rejection is left.
+  const [rejectOnly, setRejectOnly] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const headingRef = useRef<HTMLHeadingElement>(null);
 
   // A draft that is not pending shows what is on file, not what was typed before it was handled.
   const shown = pending ? form : stored;
   const dirty = pending && isDirty(initial, form);
+  const unsent = dirty && !gone;
   const title =
     draft.draft.title !== undefined && draft.draft.title !== "" ? draft.draft.title : K.noTitle;
 
@@ -185,14 +193,20 @@ function DraftScreen({
         setNotice(null);
         setAsked(null);
         return;
-      case "stale":
-        setNotice(K.notice.handled);
+      case "stale": {
+        // `source_changed` and `unpublishable` leave the draft pending, and an approval would meet the same 409
+        // again: say that a rejection is all that is left, and take the approvals off.
+        const only = error.reason === "source_changed" || error.reason === "unpublishable";
+        setNotice(only ? K.notice.rejectOnly : K.notice.handled);
+        setRejectOnly(only);
         setFaults([]);
         setAsked(null);
         void invalidateAfter(client, mutation);
         return;
+      }
       case "not_found":
         setNotice(K.notice.gone);
+        setGone(true);
         setFaults([]);
         setAsked(null);
         void invalidateAfter(client, mutation);
@@ -237,19 +251,40 @@ function DraftScreen({
   }
 
   const byPlace = faultsByField(faults);
-  const hint = !hasText
-    ? D.action.approveNoText
-    : dirty
-      ? D.action.approveEdited
-      : D.action.editApproveClean;
+  const hint = rejectOnly
+    ? D.action.approveRejectOnly
+    : !hasText
+      ? D.action.approveNoText
+      : dirty
+        ? D.action.approveEdited
+        : D.action.editApproveClean;
   const hintId = useId();
   const rightHeading = useId();
-  const approveOff = !hasText || dirty;
-  const editOff = !dirty;
+  const approveOff = !hasText || dirty || rejectOnly;
+  const editOff = !dirty || rejectOnly;
+
+  // The title takes the focus when the draft opens, so a keyboard or a screen reader lands on it.
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, []);
+
+  // A reload or a closed tab would lose the text that was not sent. (The app's router is a declarative one, which
+  // has no blocker for its own navigation: the button below asks, and a link of the sidebar does not.)
+  useEffect(() => {
+    if (!unsent) return;
+    const guard = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, [unsent]);
+
+  const back = () => (unsent ? setLeaving(true) : onBack());
 
   return (
     <div className="space-y-4">
-      <Header draft={draft} source={source} title={title} onBack={onBack} />
+      <Header draft={draft} source={source} title={title} onBack={back} headingRef={headingRef} />
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <AnalystWork draft={draft} source={source} />
         <section aria-labelledby={rightHeading} className="min-w-0 space-y-4">
@@ -257,6 +292,7 @@ function DraftScreen({
             headingId={rightHeading}
             draft={draft}
             pending={pending}
+            gone={gone}
             hasText={hasText}
             form={shown}
             onEdit={edit}
@@ -264,7 +300,7 @@ function DraftScreen({
             faults={faults}
             places={byPlace}
           >
-            {pending && (
+            {pending && !gone && (
               <div className="space-y-2">
                 <div className="flex flex-wrap gap-2">
                   <button
@@ -346,6 +382,18 @@ function DraftScreen({
           onCancel={cancel}
         />
       )}
+      {leaving && (
+        <ConfirmDialog
+          title={D.leave.title}
+          confirmLabel={D.leave.confirm}
+          cancelLabel={D.leave.stay}
+          tone="danger"
+          onConfirm={onBack}
+          onCancel={() => setLeaving(false)}
+        >
+          {D.leave.body}
+        </ConfirmDialog>
+      )}
     </div>
   );
 }
@@ -357,11 +405,13 @@ function Header({
   source,
   title,
   onBack,
+  headingRef,
 }: {
   draft: KnowledgeDraft;
   source: KnowledgeSource;
   title: string;
   onBack: () => void;
+  headingRef: React.RefObject<HTMLHeadingElement | null>;
 }) {
   const conflicted = draft.conflict_with_entry !== null || source.conflict_entry !== null;
   const retired = source.conflict_entry?.status === "retired";
@@ -386,7 +436,13 @@ function Header({
         <button type="button" onClick={onBack} className={BUTTON_OUTLINE}>
           {K.back}
         </button>
-        <h2 className="min-w-0 flex-1 text-lg font-semibold break-words">{title}</h2>
+        <h2
+          ref={headingRef}
+          tabIndex={-1}
+          className="min-w-0 flex-1 text-lg font-semibold break-words focus:outline-none"
+        >
+          {title}
+        </h2>
         <Mark>{labelOf(D.status, draft.status)}</Mark>
         {conflicted && (
           <Mark tone="warn">{retired ? K.badge.conflictRetired : K.badge.conflict}</Mark>
@@ -526,7 +582,33 @@ function AlertWork({ source }: { source: KnowledgeSource }) {
       <Correlation view={alert} />
       <Playbook view={alert} />
       <AiColumn view={alert} />
+      {alert.suggestion != null && <SuggestionDetail suggestion={alert.suggestion} />}
     </div>
+  );
+}
+
+/**
+ * What the column of ① leaves out once an alert is decided: the gate (forced or not, by which rules, its steps and
+ * warnings) and ①'s reasons, with their quotes. Spec §7.5; the server sends them to an admin (DEC-206). The pieces are
+ * the ones of the alert page, drawn read-only: the text of a reason or a warning is a model's, and is text.
+ */
+function SuggestionDetail({ suggestion }: { suggestion: Suggestion }) {
+  const id = useId();
+  const gate = suggestion.gate ?? null;
+  const reasons = suggestion.reasons ?? [];
+  return (
+    <section
+      aria-labelledby={id}
+      className="space-y-3 rounded border border-ai-border bg-ai-surface p-4"
+    >
+      <h3 id={id} className="text-sm font-semibold tracking-wide text-ai-accent">
+        {D.left.suggestion.heading}
+      </h3>
+      {gate === null && reasons.length === 0 && <Sentence>{D.left.suggestion.none}</Sentence>}
+      {gate !== null && <GateLine gate={gate} forced={gate.forced === true} />}
+      {gate !== null && <GateSteps gate={gate} />}
+      {reasons.length > 0 && <Reasons reasons={reasons} />}
+    </section>
   );
 }
 
@@ -617,6 +699,7 @@ function RightColumn({
   headingId,
   draft,
   pending,
+  gone,
   hasText,
   form,
   onEdit,
@@ -628,6 +711,7 @@ function RightColumn({
   headingId: string;
   draft: KnowledgeDraft;
   pending: boolean;
+  gone: boolean;
   hasText: boolean;
   form: DraftForm;
   onEdit: (change: Partial<DraftForm>, field: string) => void;
@@ -636,7 +720,7 @@ function RightColumn({
   places: ReturnType<typeof faultsByField>;
   children: ReactNode;
 }) {
-  const readOnly = !pending;
+  const readOnly = !pending || gone;
   const fieldFaults = (field: string): string[] =>
     (places.byField[field] ?? []).map((fault) => knowledgeFaultText(fault));
   return (
@@ -644,8 +728,8 @@ function RightColumn({
       <h2 id={headingId} className="text-xs font-semibold tracking-wide text-muted">
         {D.right.heading}
       </h2>
-      {pending && !hasText && <Sentence>{D.right.noText}</Sentence>}
-      {readOnly && <Sentence>{D.right.readOnly}</Sentence>}
+      {pending && !gone && !hasText && <Sentence>{D.right.noText}</Sentence>}
+      {!pending && <Sentence>{D.right.readOnly}</Sentence>}
       {notice !== null && (
         <p
           role="alert"
@@ -810,9 +894,11 @@ function TagPicker({
     staleTime: 5 * 60_000,
   });
   const errorId = useId();
-  const names = vocabulary.data?.tags ?? [];
-  const outside = picked.filter((tag) => !names.includes(tag));
-  const all = [...names, ...outside];
+  // A tag is "outside the list" only once the list is known; until then (or when it could not be read) the draft's
+  // own tags are shown as they are, unmarked.
+  const known = vocabulary.data?.tags;
+  const outside = known === undefined ? [] : picked.filter((tag) => !known.includes(tag));
+  const all = known === undefined ? [...picked] : [...known, ...outside];
   const toggle = (tag: string) =>
     onChange(picked.includes(tag) ? picked.filter((t) => t !== tag) : [...picked, tag]);
   return (
