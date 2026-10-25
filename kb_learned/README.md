@@ -23,9 +23,9 @@ approval is left out of the lookup and raises the `knowledge_integrity` health a
   by approving a new version in the admin console.
 - **A backup does not contain these files** (`make backup` is `pg_dump` only). After `make db-restore`, or
   to repair a file that was changed or deleted, rewrite them from the database:
-  `python -m app.rag.publish --rebuild` (in the `app` container:
-  `docker compose exec -T app python -m app.rag.publish --rebuild`; `--root PATH` names another
-  directory).
+  `python -m app.rag.publish --rebuild`, run in `app`, the container that mounts this directory
+  read-write: `docker compose exec app python -m app.rag.publish --rebuild` (`--root PATH` names
+  another directory).
 - **The directory must exist on the host before the first `docker compose up -d`**, made by the user that
   runs Compose (otherwise Docker creates it as `root` and `app` cannot write in it).
 - **Mounts** (`docker-compose.rag.yml`): `app` read-write, `rag-worker` read-only, `worker` none.

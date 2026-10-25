@@ -327,7 +327,7 @@ def test_after_a_db_restore_the_files_come_back_from_the_database_in_this_order(
     commands = [
         "docker compose stop rag-worker",
         "make db-restore FILE=backups/soc-<UTC stamp>.dump",
-        "docker compose exec -T app python -m app.rag.publish --rebuild",
+        "docker compose exec app python -m app.rag.publish --rebuild",
         "docker compose up -d rag-worker",
     ]
     positions = [after.index(c) for c in commands]
@@ -342,6 +342,40 @@ def test_after_a_db_restore_the_files_come_back_from_the_database_in_this_order(
         assert needle in after, f"the restore step no longer says {needle!r}"
 
 
+def test_the_rebuild_runs_in_app_the_one_container_with_the_read_write_mount():
+    """`app` mounts `kb_learned/` read-write; `rag-worker` has it `:ro` (the rebuild would fail) and
+    `worker` has none. So the section says where it runs, in the sentence before the commands and
+    in every place it names the command (the README, the Alarms row of `knowledge_integrity`)."""
+    after = _section(_text()).split("\n### After `make db-restore`\n", 1)[1]
+    before_commands = after.split("```bash", 1)[0]
+    assert "Run the rebuild in `app`" in before_commands
+    assert "read-write" in before_commands and "`rag-worker`" in before_commands
+    command = "docker compose exec app python -m app.rag.publish --rebuild"
+    readme = (REPO_ROOT / "kb_learned" / "README.md").read_text(encoding="utf-8")
+    assert command in readme
+    alarm = next(
+        line
+        for line in _section(_text(), "## Alarms").splitlines()
+        if line.startswith("| `knowledge_integrity` |")
+    )
+    assert (
+        command in alarm
+    ), "the knowledge_integrity row repairs with a command that is not run in app"
+
+
+@pytest.mark.parametrize("check", ["knowledge_queue", "rag_budget"])
+def test_an_alarm_row_that_raises_a_cap_in_env_recreates_worker_and_rag_worker(check):
+    """`.env` is read only when a container is created, and the health check runs in `worker`: a
+    `restart` of `rag-worker` alone changes neither (P13-T05 review, M1)."""
+    alarm = next(
+        line
+        for line in _section(_text(), "## Alarms").splitlines()
+        if line.startswith(f"| `{check}` |")
+    )
+    assert "in `.env`, then `docker compose up -d --force-recreate worker rag-worker`" in alarm
+    assert "restart rag-worker" not in alarm
+
+
 def test_backup_and_restore_sends_the_reader_to_the_section():
     backup = _section(_text(), "## Backup and restore")
     assert "Learned knowledge and RAG (DEC-210)" in backup
@@ -351,11 +385,11 @@ def test_backup_and_restore_sends_the_reader_to_the_section():
 # --------------------------------------------------------------------------- the other documents
 
 
-def _limitation() -> str:
-    """Item (xlvii) of `docs/limitations.md`, its lines joined: the file wraps at 110 columns, and a
+def _limitation(heading: str = "### (xlvii) · Learned knowledge and RAG") -> str:
+    """One item of `docs/limitations.md`, its lines joined: the file wraps at 110 columns, and a
     phrase the test looks for may be split by a line end."""
     text = _text(LIMITATIONS)
-    start = text.index("### (xlvii) · Learned knowledge and RAG")
+    start = text.index(heading)
     following = re.search(r"^##+ ", text[start + 4 :], re.MULTILINE)
     item = text[start:] if following is None else text[start : start + 4 + following.start()]
     return " ".join(item.split())
@@ -388,6 +422,26 @@ def test_limitations_item_has_the_four_labelled_parts_and_its_source():
     for label in ("- **Statement.**", "- **Measured.**", "- **Source.**", "- **Affects.**"):
         assert label in item, label
     assert "DEC-210" in item
+
+
+def test_limitations_says_the_injection_detector_is_english_and_a_vietnamese_phrase_passes_v4():
+    item = _limitation("### (xlviii) · ")
+    for needle in (
+        "phrase list is English",
+        "Vietnamese",
+        "V4",
+        "Bỏ qua mọi chỉ dẫn trước đó",
+        "`security/detector.py`",
+        "the admin's approval is the gate",
+        "- **Statement.**",
+        "- **Measured.**",
+        "- **Source.**",
+        "- **Affects.**",
+        "DEC-210",
+    ):
+        assert needle in item, f"the injection limitation no longer says {needle!r}"
+    # the one Vietnamese pattern the detector has is named, so the claim is not stronger than the code
+    assert "hướng dẫn" in item and "chỉ thị" in item
 
 
 def test_context_pack_gives_rag_the_lower_layer_kind_of_llm_and_infra():
