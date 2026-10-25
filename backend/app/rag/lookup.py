@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
@@ -87,6 +88,9 @@ from app.rag.match import (
 from app.rag.runs import write_rag_run
 from app.rag.subject import Subject, parse_subject
 from app.security import detector
+
+#: The statuses of a lookup a prompt may use: a `failed` or `budget` row carries no material (`prompt_material`).
+USABLE_STATUSES = ("ok", "empty")
 
 
 @dataclass(frozen=True)
@@ -429,13 +433,22 @@ def run_lookup_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
 # ── what ① and ② read ─────────────────────────────────────────────────────────────────────────
 
 
-def latest_lookup(conn: psycopg.Connection, subject: Subject) -> LookupResult | None:
-    """The newest stored lookup of `subject`, whatever its status, or None."""
-    row = conn.execute(
+def latest_lookup(
+    conn: psycopg.Connection, subject: Subject, *, statuses: Sequence[str] | None = None
+) -> LookupResult | None:
+    """The newest stored lookup of `subject`, or None. By default whatever its status, which is how ①
+    reads it. With `statuses`, the newest row among those statuses: ② passes `USABLE_STATUSES` because
+    spec §7.6 says it uses "the newest `ok` row", and a `failed` or `budget` refresh written after one
+    must not hide it. An empty `statuses` matches nothing."""
+    query = (
         "SELECT lookup_id, status, history, matches, created_at FROM rag_results"
-        " WHERE subject_kind = %s AND subject_id = %s ORDER BY created_at DESC, lookup_id LIMIT 1",
-        (subject.kind, subject.id),
-    ).fetchone()
+        " WHERE subject_kind = %s AND subject_id = %s"
+    )
+    params: list[Any] = [subject.kind, subject.id]
+    if statuses is not None:
+        query += " AND status = ANY(%s)"
+        params.append(list(statuses))
+    row = conn.execute(query + " ORDER BY created_at DESC, lookup_id LIMIT 1", params).fetchone()
     if row is None:
         return None
     lookup_id, status, history, matches, created_at = row
@@ -450,7 +463,7 @@ def prompt_material(conn: psycopg.Connection, result: LookupResult | None) -> Pr
     material is empty (`history_text=None`, `entries=()`): the prompt says so in a fixed sentence
     (Review Focus 1). A match is dropped unless its entry is active and `sha256(content)`, the
     entry's `content_sha256` and the hash stored with the match are one value."""
-    if result is None or result.status not in ("ok", "empty"):
+    if result is None or result.status not in USABLE_STATUSES:
         return None
     entries: list[tuple[KbLearnedLevel, str]] = []
     for found in result.matches[:MAX_MATCHES]:

@@ -1023,6 +1023,36 @@ def test_the_latest_lookup_is_whatever_status_the_newest_row_has(db, kb_root) ->
     assert lookup.latest_lookup(db, Subject("alert", "ra-1")).status == "failed"
 
 
+def test_latest_lookup_can_be_asked_for_the_newest_row_of_some_statuses(db) -> None:
+    """P13 fix wave, item 14 (T08 M1): spec §7.6 says ② uses "the newest `ok` row". A `failed` or `budget`
+    row written after it must not hide it; the default (every status) is ① 's reading and does not move.
+    """
+    from tests.test_triage_rag import put_lookup
+
+    good = put_lookup(db, "ra-1", status="ok", minutes_ago=120)
+    put_lookup(db, "ra-1", status="failed", minutes_ago=60)
+    put_lookup(db, "ra-1", status="budget", minutes_ago=5)
+    subject = Subject("alert", "ra-1")
+
+    assert lookup.latest_lookup(db, subject).status == "budget"  # the default: whatever it is
+    assert lookup.latest_lookup(db, subject, statuses=None).status == "budget"
+    found = lookup.latest_lookup(db, subject, statuses=("ok", "empty"))
+    assert found is not None and found.lookup_id == good and found.status == "ok"
+    newer_empty = put_lookup(db, "ra-1", status="empty", minutes_ago=30)
+    assert lookup.latest_lookup(db, subject, statuses=("ok", "empty")).lookup_id == newer_empty
+
+
+def test_latest_lookup_by_status_is_none_when_no_row_has_one_of_them(db) -> None:
+    from tests.test_triage_rag import put_lookup
+
+    put_lookup(db, "ra-1", status="failed", minutes_ago=10)
+    put_lookup(db, "ra-1", status="budget", minutes_ago=5)
+    subject = Subject("alert", "ra-1")
+    assert lookup.latest_lookup(db, subject, statuses=("ok", "empty")) is None
+    assert lookup.latest_lookup(db, subject, statuses=()) is None
+    assert lookup.latest_lookup(db, subject, statuses=("failed",)).status == "failed"
+
+
 def put_row(db, *, status="ok", history=None, matches=None, subject_id="ra-1") -> uuid.UUID:
     lookup_id = uuid.uuid4()
     db.execute(

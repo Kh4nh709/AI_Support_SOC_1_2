@@ -11,8 +11,9 @@ The rulings these tests pin:
 * the switch off is today's behaviour byte for byte: the dossier (a fixed fixture built at the base commit),
   the ② message, the `llm_runs` INSERT (the column list of the base, so a host on schema 019 still writes
   ②'s rows), the jobs, and not one query to `rag_results` or `knowledge_entries`;
-* ② never waits: the investigation reads whatever `latest_lookup` holds when it runs - nothing, a `failed`
-  row or an `ok` one - and carries on; it enqueues nothing and sleeps never;
+* ② never waits: the investigation reads what `latest_lookup(..., statuses=("ok", "empty"))` holds when it
+  runs - the newest `ok` or `empty` row, so a newer `failed` or `budget` one does not hide it (item 14) -
+  and carries on; it enqueues nothing and sleeps never;
 * only closed fields and approved, integrity-checked content reach the prompt, each through
   `untrusted_block` with its own source (`decision_history`, `kb_learned`); the level of each entry is the
   closed fact `kb_learned_level`; the schema, the linter and the evidence check are unchanged;
@@ -1244,6 +1245,37 @@ def test_the_job_reads_the_lookup_by_the_lower_case_subject_the_lookup_job_store
     lookup_id = committed_lookup(db, case_id, matches=[])
     run(db, case_id.upper())
     assert run_row(db, case_id.upper())["rag_lookup_id"] == lookup_id
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("newer", ["failed", "budget"])
+def test_a_newer_failed_or_budget_lookup_does_not_hide_the_ok_one(
+    db, rag_on, fixed_nonce, newer
+) -> None:
+    """P13 fix wave, item 14 (T08 M1): spec §7.6, ② uses the newest `ok` row. A refresh that failed or ran
+    out of budget an hour ago is written after it, and the analyst's click must not lose the good one.
+    """
+    case_id, _ = committed_case(db)
+    entry = committed_entry(db, LONG_A, "giong")
+    good = committed_lookup(db, case_id, status="ok", matches=[entry], minutes_ago=600)
+    committed_lookup(db, case_id, status=newer, minutes_ago=30)
+    run(db, case_id)
+    row = run_row(db, case_id)
+    assert B.HEADING_LEARNED in row["user_message"] and LONG_A in row["user_message"]
+    assert row["rag_lookup_id"] == good
+
+
+@pytest.mark.db
+def test_a_newer_empty_lookup_is_the_one_used(db, rag_on, fixed_nonce) -> None:
+    case_id, _ = committed_case(db)
+    committed_lookup(
+        db, case_id, status="ok", matches=[committed_entry(db, LONG_A, "giong")], minutes_ago=600
+    )
+    empty = committed_lookup(db, case_id, status="empty", total=0, minutes_ago=30)
+    run(db, case_id)
+    row = run_row(db, case_id)
+    assert B.SENTENCE_NO_LEARNED in row["user_message"] and LONG_A not in row["user_message"]
+    assert row["rag_lookup_id"] == empty
 
 
 @pytest.mark.db
