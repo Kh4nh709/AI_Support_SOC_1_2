@@ -1693,6 +1693,8 @@ export const S = {
       badge: {
         conflict: "Mâu thuẫn",
         conflictHint: "Kết luận khác với một mục đã duyệt",
+        // The entry the draft conflicts with was retired after the draft was made: the detail view knows it (the list does not).
+        conflictRetired: "Mâu thuẫn với mục đã gỡ",
         noText: "Chưa có nội dung",
         warnings: (n: number) => `${n} cảnh báo`,
       },
@@ -1723,6 +1725,7 @@ export const S = {
 
       // The draft on screen: two columns, the analyst's work and the draft.
       draft: {
+        header: "Bản nháp",
         loadFailed: "Không tải được bản nháp",
         status: {
           pending: "Chờ duyệt",
@@ -1763,7 +1766,10 @@ export const S = {
             none: "Case chưa có kết quả phân tích ②.",
           },
           conflict: {
-            heading: "Mâu thuẫn với mục đã duyệt",
+            heading: {
+              active: "Mâu thuẫn với mục đã duyệt",
+              retired: "Mâu thuẫn với mục đã gỡ",
+            },
             hint: "Bản nháp kết luận khác mục này. Đối chiếu hai bên trước khi duyệt.",
             noData: "Mục mâu thuẫn không còn dữ liệu.",
             content: "Nội dung mục (Markdown)",
