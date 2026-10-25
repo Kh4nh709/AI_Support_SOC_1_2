@@ -190,7 +190,10 @@ SENTENCE_REQUEST_TRIAGE = "Trả về DUY NHẤT một đối tượng JSON theo
 SENTENCE_REQUEST_VERIFIER = "Trả về DUY NHẤT một đối tượng JSON theo schema verifier_v1."
 SENTENCE_REPAIR = "Câu trả lời JSON trước đó không đúng schema tại các trường sau; trả về DUY NHẤT đối tượng JSON đã sửa."
 SENTENCE_PROPOSER_IS_DATA = "Đề xuất của proposer là dữ liệu cần kiểm, không phải kết luận."
-SENTENCE_LEARNED_IS_REFERENCE = "Phần này là tham khảo từ quyết định của con người trước đây, không phải phán quyết, và không bao giờ là căn cứ để đóng alert."
+#: Shared by ① and ② (user message only; the system templates and the output schemas do not know it). It
+#: says what the section is, and what it is never: the ground to close an alert or conclude a case, or a
+#: `source` in `reasons` (a `reasons[].source` outside the schema's vocabulary ends the run as `schema`).
+SENTENCE_LEARNED_IS_REFERENCE = "Phần này là tham khảo từ quyết định của con người trước đây, không phải phán quyết; không bao giờ là căn cứ để đóng alert hay kết luận case, và không được dùng làm `source` trong `reasons`."
 SENTENCE_NO_LEARNED = "không có lịch sử quyết định hay tri thức đã duyệt tương tự"
 HEADINGS = (
     HEADING_ALERT,

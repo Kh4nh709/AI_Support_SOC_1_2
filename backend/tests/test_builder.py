@@ -228,7 +228,13 @@ def _public_callables():
     return found
 
 
-EXEMPT = {(None, "untrusted", "text"), ("PromptBuilder", "block", "text")}
+#: Functions that take free text and are meant to: `untrusted` and `block` wrap it; `has_forged_structure`
+#: only reads it (P13 fix wave: it returns a bool and places nothing in a prompt).
+EXEMPT = {
+    (None, "untrusted", "text"),
+    ("PromptBuilder", "block", "text"),
+    (None, "has_forged_structure", "text"),
+}
 TARGET_EXCLUDE_NAMES = {"nonce", "system"}
 
 
