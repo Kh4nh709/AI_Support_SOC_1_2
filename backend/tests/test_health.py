@@ -894,7 +894,7 @@ def test_knowledge_integrity_ignores_other_events(db, tmp_path):
 def test_rag_budget_fires_when_the_months_spend_reaches_the_cap(db, tmp_path):
     _insert_rag_run(db, pipeline="rag_lookup", cost_usd="1.00")
     _insert_rag_run(db, pipeline="knowledge_draft", cost_usd="2.00")
-    check = _run_check(db, tmp_path, _cfg(RAG_MONTHLY_USD_CAP=3))["rag_budget"]
+    check = _run_check(db, tmp_path, _cfg(RAG_ENABLED=True, RAG_MONTHLY_USD_CAP=3))["rag_budget"]
     assert check.ok is False  # exactly the cap is the cap: the adapter stops at it
     assert (check.value, check.threshold) == (3.0, 3)
 
@@ -903,7 +903,7 @@ def test_rag_budget_fires_when_the_months_spend_reaches_the_cap(db, tmp_path):
 def test_rag_budget_passes_under_the_cap(db, tmp_path):
     _insert_rag_run(db, pipeline="rag_lookup", cost_usd="1.00")
     _insert_rag_run(db, pipeline="knowledge_draft", cost_usd="1.50")
-    check = _run_check(db, tmp_path, _cfg(RAG_MONTHLY_USD_CAP=3))["rag_budget"]
+    check = _run_check(db, tmp_path, _cfg(RAG_ENABLED=True, RAG_MONTHLY_USD_CAP=3))["rag_budget"]
     assert check.ok is True
     assert check.value == 2.5
 
@@ -914,7 +914,7 @@ def test_rag_budget_counts_the_rag_pipelines_and_this_month_only(db, tmp_path):
     _insert_rag_run(db, pipeline="rag_lookup", cost_usd="1.00")
     # `now() - 40 days` is never in the current month
     _insert_rag_run(db, pipeline="rag_lookup", cost_usd="50.00", days_ago=40)
-    check = _run_check(db, tmp_path, _cfg(RAG_MONTHLY_USD_CAP=3))["rag_budget"]
+    check = _run_check(db, tmp_path, _cfg(RAG_ENABLED=True, RAG_MONTHLY_USD_CAP=3))["rag_budget"]
     assert check.ok is True
     assert check.value == 1.0
 
@@ -926,9 +926,46 @@ def test_rag_budget_ignores_a_run_with_no_cost(db, tmp_path):
         " user_message) VALUES (%s, 'rag_lookup', 'alert', 'free', 'retriever', 's', 'u')",
         (str(uuid.uuid4()),),
     )
-    check = _run_check(db, tmp_path)["rag_budget"]
+    check = _run_check(db, tmp_path, _cfg(RAG_ENABLED=True))["rag_budget"]
     assert check.ok is True
     assert check.value == 0.0
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("cap", [0, 3])
+def test_rag_budget_is_not_applicable_with_both_switches_off(db, tmp_path, cap):
+    """With `RAG_ENABLED` and `KNOWLEDGE_DRAFT_ENABLED` both false nothing spends on the RAG, so
+    nothing alarms, whatever the cap (a cap of 0 would otherwise read 0 >= 0 for ever) and whatever
+    was spent before the switches went off."""
+    _insert_rag_run(db, pipeline="rag_lookup", cost_usd="50.00")
+    check = _run_check(db, tmp_path, _cfg(RAG_MONTHLY_USD_CAP=cap))["rag_budget"]
+    assert check.ok is True
+    assert check.detail == "n/a — RAG off"
+    assert (check.value, check.threshold) == (None, cap)
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "switches",
+    [
+        {"RAG_ENABLED": True},
+        {"KNOWLEDGE_DRAFT_ENABLED": True},
+        {"RAG_ENABLED": True, "KNOWLEDGE_DRAFT_ENABLED": True},
+    ],
+    ids=["lookup-only", "draft-only", "both"],
+)
+def test_rag_budget_with_either_switch_on_and_a_cap_of_zero_is_an_alarm(db, tmp_path, switches):
+    """Cap 0 means nothing may be spent; with a RAG switch on the check says so (0 >= 0)."""
+    check = _run_check(db, tmp_path, _cfg(RAG_MONTHLY_USD_CAP=0, **switches))["rag_budget"]
+    assert check.ok is False
+    assert (check.value, check.threshold) == (0.0, 0)
+
+
+def test_rag_budget_off_runs_no_sql():
+    conn = _Refusing()  # every statement would raise, and a savepoint would be counted
+    result = health._check_rag_budget(conn, _cfg())
+    assert result.ok is True and result.detail == "n/a — RAG off"
+    assert conn.savepoints == 0
 
 
 @pytest.mark.db
@@ -966,7 +1003,7 @@ class _Refusing:
     [
         (lambda c: health._check_knowledge_queue(c, _cfg()), "knowledge_queue"),
         (lambda c: health._check_knowledge_integrity(c), "knowledge_integrity"),
-        (lambda c: health._check_rag_budget(c, _cfg()), "rag_budget"),
+        (lambda c: health._check_rag_budget(c, _cfg(RAG_ENABLED=True)), "rag_budget"),
     ],
 )
 def test_each_knowledge_check_fails_closed_without_the_driver_text(check, name):

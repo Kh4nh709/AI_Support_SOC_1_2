@@ -362,7 +362,12 @@ def _check_knowledge_integrity(conn: psycopg.Connection) -> CheckResult:
 
 def _check_rag_budget(conn: psycopg.Connection, cfg: Config) -> CheckResult:
     """This month's spend of the RAG pipelines at or over `RAG_MONTHLY_USD_CAP`. The RAG's adapter stops
-    a call at the same comparison (`>=`), so the alarm and the stop are one rule."""
+    a call at the same comparison (`>=`), so the alarm and the stop are one rule. With `RAG_ENABLED`
+    and `KNOWLEDGE_DRAFT_ENABLED` both false nothing spends on the RAG, so the check is not applicable:
+    it is `ok`, runs no SQL and says why (as `inventory_empty` does with enrichment off), whatever the
+    cap, so a cap of 0 does not read 0 >= 0 for ever on a deployment that has the feature off."""
+    if not (cfg.RAG_ENABLED or cfg.KNOWLEDGE_DRAFT_ENABLED):
+        return CheckResult("rag_budget", True, None, cfg.RAG_MONTHLY_USD_CAP, "n/a — RAG off")
 
     def read() -> CheckResult:
         (spend,) = conn.execute(
