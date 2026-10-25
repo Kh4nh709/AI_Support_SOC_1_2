@@ -424,6 +424,47 @@ describe("source ids that are not safe to link are still shown (M6)", () => {
   });
 });
 
+describe("an id that is a dot or two is no link (P13 fix wave, item 13)", () => {
+  it.each([".", ".."])("shows %j as text, not a link that climbs out of the page", async (dots) => {
+    const { view } = await open(
+      entryFull(1, {
+        source_alert_ids: [dots, ALERT_ID],
+        source_case_ids: [dots],
+        evidence: [
+          { subject: `alert:${dots}`, at: "2026-10-25T04:00:00+00:00" },
+          { subject: `case:${dots}`, at: "2026-10-25T04:00:00+00:00" },
+        ],
+      }),
+    );
+    const evidence = screen.getByRole("region", { name: E.evidence.heading });
+    expect(evidence).toHaveTextContent(dots);
+    const links = within(evidence)
+      .getAllByRole("link")
+      .map((a) => a.getAttribute("href"));
+    expect(links).toContain(`/alerts/${encodeURIComponent(ALERT_ID)}`);
+    // the router would resolve `/alerts/..` to `/`: the id must not be a link at all
+    for (const name of [dots, `alert:${dots}`, `case:${dots}`])
+      expect(within(evidence).queryByRole("link", { name })).toBeNull();
+    expect(links).not.toContain("/");
+    expect(links).not.toContain("/alerts");
+    expect(view.container.querySelector('a[href$="/."], a[href$="/.."]')).toBeNull();
+  });
+
+  it("still links the ids that merely contain dots", async () => {
+    const dotted = "1786903016.121311";
+    await open(
+      entryFull(1, { source_alert_ids: [dotted, "a..b", ".hidden"], source_case_ids: [] }),
+    );
+    const evidence = screen.getByRole("region", { name: E.evidence.heading });
+    const links = within(evidence)
+      .getAllByRole("link")
+      .map((a) => a.getAttribute("href"));
+    expect(links).toEqual(
+      expect.arrayContaining([`/alerts/${dotted}`, "/alerts/a..b", "/alerts/.hidden"]),
+    );
+  });
+});
+
 describe("a 404 leaves no action on stale data (M3)", () => {
   it("hides Gỡ after a 404 on the retirement, and says the entry is gone", async () => {
     const { user, view } = await open(entryFull(), {

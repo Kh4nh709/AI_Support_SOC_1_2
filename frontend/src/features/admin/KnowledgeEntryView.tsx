@@ -42,8 +42,11 @@ const K = S.admin.knowledgePage;
 const E = K.entry;
 
 const LINK = "underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-text";
-/** An id the page makes a link of: the ids of Wazuh, Graylog and the cases are made of these characters. */
-const SAFE_ID = /^[A-Za-z0-9._-]{1,128}$/;
+/**
+ * An id the page makes a link of: the ids of Wazuh, Graylog and the cases are made of these characters. Never `.`
+ * or `..` whole: `/alerts/..` is a path the router resolves to `/`, a link to another page, not to an alert.
+ */
+const SAFE_ID = /^(?!\.{1,2}$)[A-Za-z0-9._-]{1,128}$/;
 
 /** `alert:<id>` and `case:<id>` (the subject of an evidence row) as the page that shows it, or null. */
 function pathOfSubject(subject: string): string | null {
