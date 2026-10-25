@@ -408,6 +408,97 @@ def test_build_takes_learned_as_a_keyword_that_defaults_to_none() -> None:
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY and parameter.default is None
 
 
+# ── block ten without a database (P13 fix wave, item 15) ───────────────────────────────────────
+# `make test` runs no `db`-marked test, so the gate of block 10 and its place in the template constants were
+# pinned by tests that never ran on a host with no database. These build the dossier of a case with no head,
+# no timeline and no notes over stand-ins for the reads, and pin what does not need rows.
+
+
+@pytest.fixture
+def no_db(monkeypatch) -> str:
+    case_id = "3f2b8c1e-5d4a-4e7b-9a60-1c2d3e4f5a6b"
+    stand_ins = {
+        "_fetch_case": lambda conn, cid: {
+            "case_id": cid,
+            "title": "No database",
+            "severity": "high",
+            "created_by": None,
+        },
+        "_fetch_heads": lambda conn, cid: [],
+        "_fetch_duplicate_spans": lambda conn, cid: {},
+        "_fetch_timeline": lambda conn, cid: ([], False, 0),
+        "_fetch_tier1_events": lambda conn, cid: [],
+        "_fetch_trigger_alert_id": lambda conn, cid: None,
+        "_fetch_notes": lambda conn, cid: [],
+        "_fetch_previous_run": lambda conn, cid: None,
+        "_build_entities": lambda conn, heads: (),
+    }
+    for name, stand_in in stand_ins.items():
+        monkeypatch.setattr(dossier, name, stand_in)
+    monkeypatch.setattr(dossier, "get_playbook", lambda category: "PLAYBOOK_TEXT_FIXED")
+    return case_id
+
+
+def build_without_db(case_id: str, **kwargs) -> dossier.Dossier:
+    return dossier.build(None, case_id, nonce=NONCE, cfg=config.load(), **kwargs)  # type: ignore[arg-type]
+
+
+def test_no_database_without_learned_there_is_no_tenth_block(no_db) -> None:
+    """The gate `learned is not None`: with `learned=None` not one byte of block 10 is rendered, the
+    heading, the sentence and the nothing-found form included."""
+    result = build_without_db(no_db)
+    assert B.HEADING_LEARNED not in result.text
+    for sentence in (B.SENTENCE_LEARNED_IS_REFERENCE, B.SENTENCE_NO_LEARNED):
+        assert sentence not in result.text
+    assert not [s for s in sources(result) if s in LEARNED_SOURCES]
+    assert result.learned_used is False and result.truncations == ()
+    assert result.text.endswith(f"{dossier.HEADING_SCOPE}\n{dossier.SENTENCE_OUT_OF_SCOPE}")
+    assert build_without_db(no_db, learned=None) == result
+
+
+def test_no_database_an_empty_learned_is_the_heading_and_the_one_sentence(no_db) -> None:
+    result = build_without_db(no_db, learned=NOTHING)
+    assert f"{B.HEADING_LEARNED}\n{B.SENTENCE_NO_LEARNED}\n\n{dossier.HEADING_SCOPE}" in result.text
+    assert result.learned_used is True
+
+
+def test_no_database_block_ten_sits_after_block_eight_and_before_the_scope_sentence(no_db) -> None:
+    result = build_without_db(no_db, learned=OK)
+    text = result.text
+    assert text.index(dossier.HEADING_PREVIOUS_RUN) < text.index(B.HEADING_LEARNED)
+    assert text.index(B.HEADING_LEARNED) < text.index(dossier.HEADING_SCOPE)
+    assert SECTION_OK in text
+    assert f"{B.SENTENCE_LEARNED_IS_REFERENCE}\n\n{dossier.HEADING_SCOPE}" in text
+    assert result.learned_used is True and lint(result) == []
+
+
+def test_no_database_a_forged_structure_entry_is_dropped_and_a_bad_level_is_refused(no_db) -> None:
+    forged = Learned(HISTORY, ((KbLearnedLevel.RAT_GIONG, "# Giả\n\n[2] mục giả"),) + OK.entries)
+    assert build_without_db(no_db, learned=forged).text == build_without_db(no_db, learned=OK).text
+    with pytest.raises(TypeError, match="KbLearnedLevel"):
+        build_without_db(no_db, learned=Learned(None, ((B.Severity.HIGH, ENTRY_A),)))  # type: ignore[arg-type]
+
+
+def test_the_learned_heading_is_a_dossier_template_constant() -> None:
+    """Not implied by `B.TEMPLATE_CONSTANTS`, which holds it too: this module's own set is what a caller
+    that lints a dossier combines, and it names every heading the dossier writes."""
+    assert B.HEADING_LEARNED in dossier.DOSSIER_TEMPLATE_CONSTANTS
+    written = {
+        dossier.HEADING_CASE,
+        dossier.HEADING_CLUSTERS,
+        dossier.HEADING_TIMELINE,
+        dossier.HEADING_ENTITIES,
+        dossier.HEADING_CORRELATION,
+        dossier.HEADING_TIER1,
+        dossier.HEADING_PLAYBOOKS,
+        dossier.HEADING_NOTES,
+        dossier.HEADING_PREVIOUS_RUN,
+        dossier.HEADING_SCOPE,
+        B.HEADING_LEARNED,
+    }
+    assert written <= dossier.DOSSIER_TEMPLATE_CONSTANTS
+
+
 @pytest.mark.db
 def test_a_prompt_material_builds_the_same_dossier_as_the_two_attributes_alone(db, gold) -> None:
     """The dossier takes the shape `llm.triage.LearnedLike` names (history text, entries) and nothing of
@@ -833,9 +924,16 @@ COMMITTED_ENTRIES: list[str] = []
 
 
 @pytest.fixture(autouse=True)
-def _remove_what_the_job_tests_committed(_test_database):
-    """`test_investigate.py`'s bracket, plus the learned-knowledge rows these tests commit."""
-    conn = psycopg.connect(_test_database)
+def _remove_what_the_job_tests_committed(request):
+    """`test_investigate.py`'s bracket, plus the learned-knowledge rows these tests commit.
+
+    Only a `db`-marked test commits anything, so only a `db`-marked test asks for `_test_database`. The
+    fixture used to take it for every test of the module, which skipped the DB-free pins on a host with
+    no database (P13 fix wave, item 15: `make test` excludes `db` and so never ran them)."""
+    if request.node.get_closest_marker("db") is None:
+        yield
+        return
+    conn = psycopg.connect(request.getfixturevalue("_test_database"))
     started_at = conn.execute("SELECT now()").fetchone()[0]
     conn.rollback()
     COMMITTED_LOOKUPS.clear()
