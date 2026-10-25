@@ -965,6 +965,10 @@ export const S = {
         triageNoRole: "① triage",
         investigateRow: "② điều tra case",
         // DEC-210: the lookup of similar knowledge (role `retriever`) and the draft of a new entry (role `drafter`).
+        // These are the labels of the runs that spend on the RAG sub-cap. A ① or ② run that READ a lookup is not
+        // labelled here: it names the lookup (`llm_runs.rag_lookup_id`) only when the learned section reached its
+        // prompt. When the token budget cut the section whole, the run's warnings name the cut
+        // (`learned_entries_dropped`, `learned_history_dropped`, `learned_dropped`) and it has no lookup id.
         ragLookup: "Tra cứu tri thức",
         ragLookupRole: { retriever: "Tra cứu tri thức · retriever" },
         knowledgeDraft: "Soạn tri thức",

@@ -18,7 +18,8 @@ With `RAG_ENABLED` (P13-T07, DEC-210) the job runs `evaluate_alert` with `rag=Tr
 stored lookup of the alert is read at that moment (`rag.lookup.latest_lookup`, `prompt_material`) and
 its approved material becomes the learned section of the proposer's user message. The lookup is a
 separate job queued with ①, which is delayed to give it time (`domain.transitions`); ① never waits
-for it, and a lookup that is absent, `failed`, out of budget or stale gives today's prompt. The
+for it, and a lookup that is absent, `failed` or out of budget gives today's prompt. There is no age
+check: the newest stored lookup is used, whatever its age (a late one is simply not there yet). The
 proposer's `llm_runs` row records which lookup its prompt held (`rag_lookup_id`).
 
 `_set_triage_status` is this module's only write to `alerts` — it names

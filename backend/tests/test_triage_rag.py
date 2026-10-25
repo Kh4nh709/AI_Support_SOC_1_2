@@ -13,8 +13,8 @@ The rulings these tests pin:
   cache, `prompt_version` and the evaluation harness do not move;
 * only closed fields and approved content reach the prompt, each through `untrusted_block` with its
   own source (`decision_history`, `kb_learned`); the schemas, the linter and the gate are unchanged;
-* ① never waits for the lookup: it reads whatever exists, and a lookup that is absent, `failed`, out
-  of `budget` or stale gives the no-learned path, never an error;
+* ① never waits for the lookup: it reads whatever exists, and a lookup that is absent, `failed` or out
+  of `budget` gives the no-learned path, never an error (there is no age check: the newest row is used);
 * the evaluation harness (`EvalSwitches.rag=False`) never reads a live lookup.
 """
 

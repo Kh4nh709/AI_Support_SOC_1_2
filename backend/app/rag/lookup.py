@@ -69,6 +69,7 @@ from app.rag.entries import KB_LEARNED_ROOT, Entry, entry_by_id, file_matches, s
 from app.rag.fingerprint import Fingerprint, alert_fingerprint, case_fingerprint
 from app.rag.history import (
     CONCLUSIONS,
+    LEVELS,
     History,
     decision_history,
     render_history,
@@ -141,20 +142,23 @@ def _history_json(history: History) -> dict[str, Any]:
     }
 
 
+_KEY_NAMES = frozenset(name for _level, name in LEVELS)
+
+
 def _is_count(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _history_of(raw: Any) -> History:
-    """A `History` from its stored JSON; whatever is missing or ill-shaped reads as 'none'."""
+    """A `History` from its stored JSON; whatever is missing or ill-shaped reads as 'none'. Only the six
+    conclusions of `CONCLUSIONS` and the six names of `LEVELS` are kept: this is rendered into a prompt.
+    """
     counts = dict.fromkeys(CONCLUSIONS, 0)
     if not isinstance(raw, dict):
         return History(None, None, 0, counts, None, ())
     by_conclusion = raw.get("by_conclusion")
     if isinstance(by_conclusion, dict):
-        counts.update(
-            {k: v for k, v in by_conclusion.items() if isinstance(k, str) and _is_count(v)}
-        )
+        counts.update({k: v for k, v in by_conclusion.items() if k in counts and _is_count(v)})
     last_seen = None
     if isinstance(raw.get("last_seen"), str):
         try:
@@ -163,9 +167,11 @@ def _history_of(raw: Any) -> History:
             last_seen = None
     examples = raw.get("examples")
     key_name = raw.get("key_name")
+    if key_name not in _KEY_NAMES:  # the name of one of the six levels, or nothing
+        key_name = None
     return History(
         level=raw["level"] if _is_count(raw.get("level")) else None,
-        key_name=key_name if isinstance(key_name, str) else None,
+        key_name=key_name,
         total=raw["total"] if _is_count(raw.get("total")) else 0,
         by_conclusion=counts,
         last_seen=last_seen,
