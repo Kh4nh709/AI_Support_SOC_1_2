@@ -87,6 +87,42 @@ export function BlockError({ failure, onRetry }: { failure: SectionFailure; onRe
   );
 }
 
+/**
+ * "Tri thức" (DEC-210, P13-T05): the learned-knowledge drafts that wait for an admin, and how many of them conflict
+ * with an entry already approved. Counts only; the page that reviews them is not here. Like the other blocks it
+ * draws its own error, with a "Thử lại", when its section came back `null`.
+ */
+export function KnowledgeBlock({
+  knowledge,
+  failure,
+  onRetry,
+}: {
+  /** `null` when the section failed. */
+  knowledge: OverviewResponse["knowledge"];
+  failure: SectionFailure | null;
+  onRetry: () => void;
+}) {
+  const K = P.knowledge;
+  return (
+    <Panel title={K.title}>
+      {failure !== null || knowledge === null ? (
+        <BlockError failure={failure ?? "unknown"} onRetry={onRetry} />
+      ) : (
+        <dl className="flex flex-col gap-2 text-[13px]">
+          <div className="flex justify-between gap-2.5">
+            <dt className="text-[#aeb9c6]">{K.pending}</dt>
+            <dd>{formatCount(knowledge.pending)}</dd>
+          </div>
+          <div className="flex justify-between gap-2.5">
+            <dt className="text-[#aeb9c6]">{K.conflicts}</dt>
+            <dd>{formatCount(knowledge.conflicts)}</dd>
+          </div>
+        </dl>
+      )}
+    </Panel>
+  );
+}
+
 // --- the four cards -----------------------------------------------------------------------------------------
 
 /** A card of the row at the top. It is one `dl` item: the label, the number, and a line under it. */

@@ -141,6 +141,7 @@ function overview(over: Partial<OverviewResponse> = {}): OverviewResponse {
     failed_jobs: JOBS,
     inventory: { assets: 6, identities: 3, iocs: 0, loaded_at: "2026-09-29T07:20:00+00:00" },
     llm_month: llmMonth(),
+    knowledge: { pending: 4, conflicts: 1 },
     ...over,
   };
 }
@@ -472,6 +473,31 @@ describe("the normal render", () => {
     expect(
       within(inventory).getByText(/Asset không có trong kiểm kê bị chặn cứng/),
     ).toBeInTheDocument();
+  });
+
+  it("shows the learned-knowledge queue: the drafts waiting and those in conflict (DEC-210)", async () => {
+    await renderLoaded();
+    const knowledge = block("Tri thức");
+    expect(valueOf(knowledge, "Bản nháp chờ duyệt")).toBe("4");
+    expect(valueOf(knowledge, "Trong đó mâu thuẫn với tri thức đã duyệt")).toBe("1");
+    // counts only: no button, and no link to a page this card does not have
+    expect(within(knowledge).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(knowledge).queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("shows an empty queue as two zeros, not as an error", async () => {
+    await renderLoaded({ overviews: [overview({ knowledge: { pending: 0, conflicts: 0 } })] });
+    const knowledge = block("Tri thức");
+    expect(valueOf(knowledge, "Bản nháp chờ duyệt")).toBe("0");
+    expect(valueOf(knowledge, "Trong đó mâu thuẫn với tri thức đã duyệt")).toBe("0");
+    expect(within(knowledge).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("writes the queue with the thousands dot", async () => {
+    await renderLoaded({
+      overviews: [overview({ knowledge: { pending: 1234, conflicts: 56 } })],
+    });
+    expect(valueOf(block("Tri thức"), "Bản nháp chờ duyệt")).toBe("1.234");
   });
 
   it("says an inventory that was never loaded has not been", async () => {
@@ -864,6 +890,8 @@ describe("one block failing alone (AdminStates)", () => {
     inventory: ["Kiểm kê tài sản"],
     // The cost card reads `llm_month` (DEC-203, P11-T20 row 50): its failure is drawn in the card.
     llm_month: ["Chi phí LLM tháng này"],
+    // The learned-knowledge queue (DEC-210, P13-T05) is a block of its own in the last row.
+    knowledge: ["Tri thức"],
   };
   const TILES = new Set([
     "Alert nhận vào",
@@ -886,9 +914,10 @@ describe("one block failing alone (AdminStates)", () => {
     inventory: () => expect(valueOf(block("Kiểm kê tài sản"), "Asset đang dùng")).toBe("6"),
     llm_month: () =>
       expect(valueOf(tile("Chi phí LLM tháng này"), "Chi phí LLM tháng này")).toBe("$0,51"),
+    knowledge: () => expect(valueOf(block("Tri thức"), "Bản nháp chờ duyệt")).toBe("4"),
   };
 
-  it("has a place for each of the ten sections of the API", () => {
+  it("has a place for each of the eleven sections of the API", () => {
     expect(Object.keys(WHERE).sort()).toEqual([...OVERVIEW_SECTIONS].sort());
     expect(Object.keys(PROBE).sort()).toEqual([...OVERVIEW_SECTIONS].sort());
   });
@@ -923,10 +952,10 @@ describe("one block failing alone (AdminStates)", () => {
     },
   );
 
-  it("shows every block's own error when all ten failed, under the title and the range", async () => {
+  it("shows every block's own error when all eleven failed, under the title and the range", async () => {
     await renderLoaded({ overviews: [failing(OVERVIEW_SECTIONS, "query_failed")] });
-    // 4 cards + 7 blocks (the day chart is both a card's and a block's section)
-    expect(screen.getAllByRole("alert")).toHaveLength(11);
+    // 4 cards + 8 blocks (the day chart is both a card's and a block's section)
+    expect(screen.getAllByRole("alert")).toHaveLength(12);
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(
       screen.getByRole("heading", { level: 1, name: "Tổng quan hệ thống" }),
@@ -2191,11 +2220,11 @@ describe("what the page keeps equal to the backend", () => {
     expect(Object.keys(windows)).toEqual([...ADMIN_RANGES]);
   });
 
-  it("has a Vietnamese label for each of the ten health checks of the backend, and no other", () => {
+  it("has a Vietnamese label for each of the thirteen health checks of the backend, and no other", () => {
     const names = new Set(
       [...read("infra", "health.py").matchAll(/CheckResult\(\s*"([a-z_]+)"/g)].map((m) => m[1]),
     );
-    expect(names.size).toBe(10);
+    expect(names.size).toBe(13);
     expect(Object.keys(S.admin.overviewPage.health.check).sort()).toEqual([...names].sort());
   });
 
