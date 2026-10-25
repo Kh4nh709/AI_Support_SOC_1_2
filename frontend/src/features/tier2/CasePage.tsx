@@ -83,7 +83,7 @@ function ReadFailed({ error, reload }: { error: unknown; reload: () => Promise<u
   return <ErrorNotice message={S.common.unknownError} onRetry={() => void reload()} />;
 }
 
-function Summary({ data }: { data: CaseDetail }) {
+export function Summary({ data }: { data: CaseDetail }) {
   return (
     <section aria-label={S.case.summaryLabel} className={`${PANEL} space-y-3`}>
       <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1 text-sm">
@@ -116,7 +116,7 @@ function Summary({ data }: { data: CaseDetail }) {
   );
 }
 
-function Heads({ data }: { data: CaseDetail }) {
+export function Heads({ data }: { data: CaseDetail }) {
   const titleId = useId();
   return (
     <section aria-labelledby={titleId} className="space-y-2">
@@ -257,7 +257,7 @@ function timelineOf(data: CaseDetail): TimelineEvent[] {
   return events.sort((a, b) => when(a) - when(b));
 }
 
-function Timeline({ data }: { data: CaseDetail }) {
+export function Timeline({ data }: { data: CaseDetail }) {
   const titleId = useId();
   return (
     <section aria-labelledby={titleId} className="space-y-2">

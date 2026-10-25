@@ -2,7 +2,14 @@
 // The tables keyed by a server code (`status`, `band`, `conclusion`, ...) are read through `labelOf`, so a
 // code this file has no label for is shown as the code itself.
 
-import type { AdminReason, AuditGroup, DigestVerdict, HardBlockCode, LlmRange } from "./api/admin";
+import type {
+  AdminReason,
+  AuditGroup,
+  DigestVerdict,
+  HardBlockCode,
+  KnowledgeFault,
+  LlmRange,
+} from "./api/admin";
 import { BAND_CODES, type BandCode } from "./api/types";
 
 /** The shortest quote ② may cite, in characters (`MIN_QUOTE_CHARS` of backend/app/tier2/investigate.py). */
@@ -510,6 +517,7 @@ export const S = {
       rules: "Rules tự đóng",
       digest: "Digest hằng ngày",
       labels: "Gán nhãn",
+      knowledge: "Tri thức",
       audit: "Nhật ký audit",
     },
     // The h1 of each page (the canvas's own). The sidebar says it shorter.
@@ -520,6 +528,7 @@ export const S = {
       rules: "Rules tự đóng",
       digest: "Digest hằng ngày",
       labels: "Gán nhãn tập vàng",
+      knowledge: "Tri thức học được",
       audit: "Nhật ký audit",
     },
 
@@ -655,6 +664,7 @@ export const S = {
         title: "Tri thức",
         pending: "Bản nháp chờ duyệt",
         conflicts: "Trong đó mâu thuẫn với tri thức đã duyệt",
+        open: "Mở trang duyệt",
       },
 
       inventory: {
@@ -943,7 +953,8 @@ export const S = {
       },
 
       // The pipelines of `llm_runs.pipeline` and, for ①, its two roles. There is no chat row: the column's
-      // CHECK admits `triage` and `investigate` only (spec decision 5). Anything else is shown as it came.
+      // CHECK admits `triage`, `investigate` and, since migration 020 (DEC-210), `rag_lookup` and
+      // `knowledge_draft`. Anything else is shown as it came.
       pipeline: {
         triage: "①",
         investigate: "②",
@@ -953,6 +964,11 @@ export const S = {
         },
         triageNoRole: "① triage",
         investigateRow: "② điều tra case",
+        // DEC-210: the lookup of similar knowledge (role `retriever`) and the draft of a new entry (role `drafter`).
+        ragLookup: "Tra cứu tri thức",
+        ragLookupRole: { retriever: "Tra cứu tri thức · retriever" },
+        knowledgeDraft: "Soạn tri thức",
+        knowledgeDraftRole: { drafter: "Soạn tri thức · drafter" },
       },
       // The short words of `llm_runs.stopped_by` for a table cell. `other` is the server's bucket for a reason
       // longer than a short code. A code with no word here is shown as the code (`labelOf`).
@@ -1617,6 +1633,302 @@ export const S = {
         undoOffline: "Mất kết nối tới máy chủ. Chưa hoàn tác được — thử lại khi có mạng.",
       },
     },
+
+    // The learned-knowledge page (DEC-210, P13-T06, spec §7.5): the drafts the model wrote from the analysts'
+    // conclusions, for an admin to edit and approve, or reject; and the entries approved, to retire. The `409` and
+    // `503` of its writes are worded here (`notice`), the V1-V5 faults of a `422` in `fault`; the page never shows a
+    // server text. The words an admin needs to find are the spec's own: Duyệt, Sửa rồi duyệt, Từ chối, Gỡ.
+    knowledgePage: {
+      subtitle:
+        "Bản nháp do mô hình viết từ kết luận của analyst. Chỉ mục được admin duyệt mới được ① và ② tra cứu.",
+      tabsLabel: "Bản nháp và mục tri thức",
+      // The five tabs, in the order of the spec. The first, third and fourth list drafts, the others entries.
+      tab: {
+        pending: "Chờ duyệt",
+        active: "Đã duyệt",
+        merged: "Đã gộp",
+        rejected: "Từ chối",
+        retired: "Đã gỡ",
+      },
+      tableLabel: {
+        pending: "Bản nháp chờ duyệt",
+        active: "Mục tri thức đã duyệt",
+        merged: "Bản nháp đã gộp",
+        rejected: "Bản nháp bị từ chối",
+        retired: "Mục tri thức đã gỡ",
+      },
+      // A tab with nothing in it is not an error: it says what the tab is for.
+      empty: {
+        pending:
+          "Không có bản nháp nào chờ duyệt. Bản nháp mới đến sau khi analyst đóng alert hoặc kết luận case.",
+        active:
+          "Chưa có mục tri thức nào được duyệt. Duyệt một bản nháp để ① và ② bắt đầu tra cứu.",
+        merged:
+          "Chưa có bản nháp nào được gộp. Bản nháp giống một mục đã duyệt được gộp vào mục đó, không cần duyệt.",
+        rejected: "Chưa có bản nháp nào bị từ chối.",
+        retired: "Chưa có mục nào bị gỡ.",
+      },
+      loadFailed: "Không tải được danh sách",
+      // The route sends 200 rows at most.
+      listLimited: (n: number) => `Chỉ hiện ${n} mục đầu tiên của danh sách.`,
+      pendingCount: (total: number, conflicts: number) =>
+        conflicts === 0
+          ? `${total} bản nháp chờ duyệt`
+          : `${total} bản nháp chờ duyệt, ${conflicts} mâu thuẫn với tri thức đã duyệt (xếp lên đầu)`,
+      col: {
+        title: "Tiêu đề",
+        source: "Nguồn",
+        conclusion: "Kết luận",
+        created: "Tạo lúc",
+        flags: "Dấu hiệu",
+        reviewed: "Xử lý",
+        reason: "Lý do",
+        mergedInto: "Gộp vào mục",
+        category: "Danh mục",
+        tags: "Thẻ",
+        approvedBy: "Duyệt bởi",
+        evidence: "Bằng chứng",
+        action: "Thao tác",
+      },
+      sourceKind: { alert: "Alert", case: "Case" },
+      evidenceCount: (n: number) => `${n} nguồn`,
+      open: "Mở",
+      openDraft: (title: string) => `Mở bản nháp ${title}`,
+      openEntry: (title: string) => `Mở mục ${title}`,
+      noTitle: "Bản nháp chưa có nội dung",
+      noEntryTitle: "Mục không có tiêu đề",
+      badge: {
+        conflict: "Mâu thuẫn",
+        conflictHint: "Kết luận khác với một mục đã duyệt",
+        // The entry the draft conflicts with was retired after the draft was made: the detail view knows it (the list does not).
+        conflictRetired: "Mâu thuẫn với mục đã gỡ",
+        noText: "Chưa có nội dung",
+        warnings: (n: number) => `${n} cảnh báo`,
+      },
+      reviewedBy: (name: string, time: string) => `${name} · ${time}`,
+      back: "← Danh sách",
+      // A toast after a write that went through.
+      done: {
+        approved: (title: string) => `Đã duyệt: ${title}`,
+        rejected: (title: string) => `Đã từ chối: ${title}`,
+        retired: (title: string) => `Đã gỡ: ${title}`,
+      },
+
+      // What the writes say when the server refuses or fails. A 409 is one sentence whatever its reason.
+      notice: {
+        handled: "Không xử lý được: bản nháp đã được xử lý. Danh sách đã được tải lại.",
+        entryHandled:
+          "Không gỡ được: mục tri thức đã được gỡ hoặc không còn hoạt động. Danh sách đã được tải lại.",
+        publishFailed:
+          "Không ghi được tệp tri thức, nên chưa lưu gì. Bấm lại để thử lần nữa; nếu vẫn lỗi, báo người vận hành.",
+        gone: "Không tìm thấy bản nháp này nữa.",
+        entryGone: "Không tìm thấy mục này nữa.",
+        failed: "Chưa lưu được. Thử lại sau ít phút.",
+        reasonRequired: "Cần nhập lý do.",
+        reasonInvalid: (max: number) => `Lý do không hợp lệ: cần từ 1 đến ${max} ký tự.`,
+        editedInvalid: "Nội dung sửa không hợp lệ.",
+        // A 409 that leaves the draft pending (`source_changed`, `unpublishable`): an approval would meet it again.
+        rejectOnly:
+          "Không duyệt được: bản nháp đã được xử lý hoặc nguồn của nó đã đổi, nên chỉ có thể từ chối bản nháp này. Danh sách đã được tải lại.",
+        faults: (n: number) => `Không duyệt được: còn ${n} lỗi cần sửa trong bản nháp.`,
+      },
+
+      // The draft on screen: two columns, the analyst's work and the draft.
+      draft: {
+        header: "Bản nháp",
+        loadFailed: "Không tải được bản nháp",
+        status: {
+          pending: "Chờ duyệt",
+          approved: "Đã duyệt",
+          merged: "Đã gộp",
+          rejected: "Từ chối",
+        },
+        meta: {
+          source: "Nguồn",
+          conclusion: "Kết luận",
+          created: "Tạo lúc",
+          reviewed: "Xử lý bởi",
+          note: "Lý do từ chối",
+          mergedInto: "Gộp vào mục",
+        },
+        left: {
+          heading: "Công việc của analyst",
+          hint: "Chỉ đọc: đúng những gì analyst đã thấy, không có nút thao tác nào.",
+          // A part the source no longer has (the row is gone) is a sentence, not an error.
+          noData: {
+            alert: "Alert không còn dữ liệu.",
+            case: "Case không còn dữ liệu.",
+            investigation: "Kết quả điều tra ② không còn dữ liệu.",
+            decision: "Quyết định của analyst không còn dữ liệu.",
+          },
+          decision: {
+            heading: "Quyết định của analyst",
+            by: (name: string, time: string) => `${name} · ${time}`,
+            payload: "Chi tiết ghi lại",
+          },
+          notes: { heading: "Ghi chú của case", empty: "Case không có ghi chú." },
+          soar: {
+            heading: "Ngữ cảnh SOAR",
+            forHead: (id: string) => `Cụm ${id}`,
+          },
+          investigation: {
+            heading: "Kết quả điều tra ②",
+            none: "Case chưa có kết quả phân tích ②.",
+          },
+          suggestion: {
+            heading: "Cổng kiểm soát và lý do của ①",
+            none: "① không ghi cổng kiểm soát hay lý do nào cho alert này.",
+          },
+          conflict: {
+            heading: {
+              active: "Mâu thuẫn với mục đã duyệt",
+              retired: "Mâu thuẫn với mục đã gỡ",
+            },
+            hint: "Bản nháp kết luận khác mục này. Đối chiếu hai bên trước khi duyệt.",
+            noData: "Mục mâu thuẫn không còn dữ liệu.",
+            content: "Nội dung mục (Markdown)",
+          },
+        },
+        right: {
+          heading: "Bản nháp tri thức",
+          noText:
+            "Job không soạn được nội dung cho bản nháp này. Bạn có thể tự viết rồi chọn Sửa rồi duyệt, hoặc từ chối.",
+          readOnly: "Bản nháp đã được xử lý nên không sửa được nữa.",
+          field: {
+            title: "Tiêu đề",
+            summary: "Tóm tắt",
+            distinguishing_signals: "Dấu hiệu phân biệt",
+            check_next_time: "Cần kiểm tra lần sau",
+            confidence_note: "Ghi chú về độ tin cậy",
+            tags: "Thẻ",
+          },
+          hint: {
+            max: (n: number) => `Tối đa ${n} ký tự.`,
+            lines: (items: number, chars: number) =>
+              `Mỗi dòng một mục, tối đa ${items} mục, mỗi mục tối đa ${chars} ký tự.`,
+          },
+          tags: {
+            loading: "Đang tải danh sách thẻ…",
+            loadFailed: "Không tải được danh sách thẻ.",
+            outside: "ngoài danh sách",
+            none: "Chưa chọn thẻ nào.",
+          },
+          closedHeading: "Trường cố định",
+          closedHint: "Lấy từ nguồn, không sửa được.",
+          closed: {
+            conclusion: "Kết luận",
+            category: "Danh mục",
+            mitre_ids: "MITRE",
+            soar_scenario: "Kịch bản SOAR",
+            rule_ids: "Rule",
+            log_source: "Nguồn log",
+          },
+          warnings: "Cảnh báo của job soạn thảo",
+        },
+        // Leaving a draft with text that was not sent.
+        leave: {
+          title: "Bỏ các chỉnh sửa chưa gửi?",
+          body: "Bản nháp có chỉnh sửa chưa gửi đi. Rời khỏi bản nháp này sẽ làm mất chúng.",
+          stay: "Ở lại",
+          confirm: "Bỏ chỉnh sửa",
+        },
+        action: {
+          approve: "Duyệt",
+          editApprove: "Sửa rồi duyệt",
+          reject: "Từ chối",
+          // Why a button cannot be pressed now.
+          approveEdited: "Bạn đã sửa nội dung: dùng Sửa rồi duyệt để gửi bản đã sửa.",
+          approveRejectOnly: "Chỉ có thể từ chối bản nháp này.",
+          editApproveClean: "Chưa sửa gì. Sửa nội dung rồi bấm Sửa rồi duyệt.",
+          approveNoText: "Bản nháp chưa có nội dung: hãy viết nội dung rồi chọn Sửa rồi duyệt.",
+          approveTitle: "Duyệt bản nháp này?",
+          approveBody:
+            "Mục được ghi vào kho tri thức và tệp được xuất bản. ① và ② có thể tra cứu nó ngay.",
+          editApproveTitle: "Duyệt bản đã sửa?",
+          editApproveBody: (fields: string) =>
+            `Các trường đã sửa: ${fields}. Hệ thống kiểm tra lại toàn bộ nội dung trước khi ghi.`,
+          rejectTitle: "Từ chối bản nháp này?",
+          rejectBody: "Bản nháp không được xuất bản. Lý do được ghi lại.",
+          reasonLabel: "Lý do (bắt buộc)",
+          reasonCount: (used: number, max: number) => `${used} / ${max}`,
+        },
+      },
+
+      // One approved (or retired) entry.
+      entry: {
+        header: "Mục tri thức",
+        loadFailed: "Không tải được mục tri thức",
+        status: { active: "Đang dùng", retired: "Đã gỡ" },
+        field: {
+          version: "Phiên bản",
+          conclusion: "Kết luận",
+          category: "Danh mục",
+          mitre_ids: "MITRE",
+          tags: "Thẻ",
+          soar_scenario: "Kịch bản SOAR",
+          rule_ids: "Rule",
+          log_source: "Nguồn log",
+          file_path: "Tệp",
+          content_sha256: "SHA-256",
+          approved: "Duyệt bởi",
+          supersedes: "Thay thế mục",
+          sources: "Từ alert và case",
+        },
+        integrity: {
+          heading: "Toàn vẹn",
+          ok: "Nội dung và tệp khớp bản gốc",
+          contentBad: "Nội dung trong cơ sở dữ liệu không khớp mã băm của nó",
+          fileBad: "Tệp đã xuất bản không khớp bản gốc",
+        },
+        evidence: { heading: "Bằng chứng", empty: "Chưa ghi nguồn nào." },
+        content: "Nội dung (Markdown)",
+        retire: "Gỡ",
+        retireTitle: "Gỡ mục tri thức này?",
+        retireBody:
+          "Mục không còn được ① và ② tra cứu và tệp được chuyển sang thư mục đã gỡ. Lý do được ghi lại.",
+        reasonLabel: "Lý do (bắt buộc)",
+      },
+
+      // The faults of V1-V5 (spec §7.7), by the rule before the colon: the field they belong to is already the
+      // place they are shown. A rule this table has no word for gets `fallback`; a test reads the backend's list.
+      fault: {
+        rule: {
+          v1_schema: "Sai định dạng: thiếu, sai kiểu, hoặc có ký tự điều khiển hay ký tự ẩn.",
+          v1_tags: "Có thẻ không nằm trong danh sách cho phép.",
+          v2_closed: "Trường cố định không khớp với nguồn.",
+          v3_ipv4: "Có địa chỉ IPv4 cụ thể. Hãy viết tổng quát.",
+          v3_ipv6: "Có địa chỉ IPv6 cụ thể. Hãy viết tổng quát.",
+          v3_email: "Có địa chỉ email cụ thể. Hãy viết tổng quát.",
+          v3_account: "Có tên tài khoản cụ thể. Hãy viết tổng quát.",
+          v3_hostname: "Có tên máy cụ thể. Hãy viết tổng quát.",
+          v3_alert_id: "Có mã alert cụ thể. Hãy viết tổng quát.",
+          v3_hash: "Có mã băm cụ thể. Hãy viết tổng quát.",
+          v4_detector: "Nội dung giống một câu lệnh chèn vào mô hình (prompt injection).",
+          v4_delimiter: "Có dấu phân cách dữ liệu không tin cậy, không được dùng.",
+          v4_nonce: "Có chuỗi giống mã nonce (16 ký tự thập lục phân).",
+          v5_length: "Độ dài ngoài giới hạn.",
+          v5_count: "Số mục ngoài giới hạn.",
+          v5_empty: "Không được để trống.",
+        },
+        // A fault whose part after the colon is not a field: it is shown above the form, in its own words.
+        special: {
+          "v1_schema:root": "Bản nháp không đúng cấu trúc.",
+          "v1_schema:unexpected_key": "Có trường không được phép sửa.",
+          "v1_tags:unknown_tag": "Có thẻ không nằm trong danh sách cho phép.",
+        },
+        fallback: (rule: string) => `Không qua kiểm tra: ${rule}`,
+        // Above the form, a fault names its field when it has one the page knows.
+        named: (field: string, text: string) => `${field}: ${text}`,
+      },
+      // The `warnings` of a draft that are not V names.
+      warning: {
+        budget: "Hết ngân sách tra cứu và soạn tri thức của tháng nên chưa soạn được.",
+        llm_transient: "Mô hình không phản hồi kịp và job đã hết số lần thử.",
+        llm_permanent: "Mô hình từ chối yêu cầu, không thử lại.",
+        linter: "Lời nhắc không qua kiểm tra an toàn nên không được gửi đi.",
+        rank_unavailable: "Không xếp hạng được các mục tương tự nên chưa tìm mục trùng.",
+      },
+    },
   },
 } as const;
 
@@ -1656,4 +1968,46 @@ export function adminReasonText(error: {
     return S.admin.bounds.outOfRange(min, max);
   }
   return S.admin.reason[reason];
+}
+
+/** Whether `table` holds `key` itself (a hostile name such as `constructor` is not an answer). */
+const own = (table: object, key: string): boolean => Object.hasOwn(table, key);
+
+/**
+ * The text of one fault of V1-V5 (`KnowledgeFault`): the three names whose part after the colon is not a field
+ * have their own words, any other is worded by its rule, and a rule this file has no word for gets a generic
+ * sentence that names it. Never a value: the server sends none.
+ */
+export function knowledgeFaultText(fault: KnowledgeFault): string {
+  const words = S.admin.knowledgePage.fault;
+  const full = `${fault.rule}:${fault.field ?? ""}`;
+  if (fault.field !== null && own(words.special, full)) {
+    return words.special[full as keyof typeof words.special];
+  }
+  return own(words.rule, fault.rule)
+    ? words.rule[fault.rule as keyof typeof words.rule]
+    : words.fallback(fault.rule);
+}
+
+/** The label of a field of the draft, model's or source's, or null for a name that is no field. */
+export function knowledgeFieldLabel(field: string): string | null {
+  const right = S.admin.knowledgePage.draft.right;
+  if (own(right.field, field)) return right.field[field as keyof typeof right.field];
+  if (own(right.closed, field)) return right.closed[field as keyof typeof right.closed];
+  return null;
+}
+
+/**
+ * The text of one `warnings` entry of a draft: a code the job writes besides the V names, or a V name
+ * (`rule:field`) worded with the label of its field. A code this file does not know is shown as it came.
+ */
+export function knowledgeWarningText(code: string): string {
+  const words = S.admin.knowledgePage;
+  if (own(words.warning, code)) return words.warning[code as keyof typeof words.warning];
+  const colon = code.indexOf(":");
+  if (colon === -1) return code;
+  const fault: KnowledgeFault = { rule: code.slice(0, colon), field: code.slice(colon + 1) };
+  const text = knowledgeFaultText(fault);
+  const label = fault.field === null ? null : knowledgeFieldLabel(fault.field);
+  return label === null ? text : words.fault.named(label, text);
 }

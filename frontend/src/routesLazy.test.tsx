@@ -1,4 +1,4 @@
-// src/routesLazy.test.tsx — the seven admin pages are fetched when their route opens, and only for an admin
+// src/routesLazy.test.tsx — the eight admin pages are fetched when their route opens, and only for an admin
 // (P11-T20 row 56: the main bundle carried every page of the console, for tier1 and tier2 as well).
 //
 // routes.test.tsx tests which route opens for which role, with the pages as stubs that are ready at once. This file
@@ -106,6 +106,16 @@ vi.mock("./features/admin/LabelsPage", async () => {
     },
   };
 });
+vi.mock("./features/admin/KnowledgePage", async () => {
+  gate.loads.push("KnowledgePage");
+  await gate.ready();
+  return {
+    KnowledgePage: () => {
+      gate.rendered.push("KnowledgePage");
+      return <h1>{S.admin.title.knowledge}</h1>;
+    },
+  };
+});
 vi.mock("./features/admin/AuditPage", async () => {
   gate.loads.push("AuditPage");
   await gate.ready();
@@ -172,6 +182,7 @@ const ADMIN_PATHS = [
   "/admin/rules",
   "/admin/digest",
   "/admin/labels",
+  "/admin/knowledge",
   "/admin/audit",
 ];
 
@@ -298,7 +309,7 @@ describe("the route table in source", () => {
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/.*$/gm, "");
 
-  it.each(["Overview", "Users", "Llm", "Rules", "Digest", "Labels", "Audit"])(
+  it.each(["Overview", "Users", "Llm", "Rules", "Digest", "Labels", "Knowledge", "Audit"])(
     "has %sPage in a dynamic import() and in no static import, so the page stays out of the main bundle",
     (name) => {
       const path = `./features/admin/${name}Page`;

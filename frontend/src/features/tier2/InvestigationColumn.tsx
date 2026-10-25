@@ -287,7 +287,7 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
   );
 }
 
-function RunResult({
+export function RunResult({
   run,
   current,
   title,

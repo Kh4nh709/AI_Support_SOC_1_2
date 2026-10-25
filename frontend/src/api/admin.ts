@@ -1,7 +1,8 @@
 // The admin routes (P11-T10), one typed function each, written by hand against the handlers: the backend
 // answers with plain dicts, so there is no generated schema to import. The handlers are
 //   web/routers/admin_users.py, admin_llm.py, admin_overview.py, admin_rules.py, admin_digest.py,
-//   labels.py, admin_audit.py, and `POST /api/admin/reload-inventory` in web/main.py.
+//   labels.py, admin_audit.py, admin_knowledge.py (the learned knowledge, DEC-210), and
+//   `POST /api/admin/reload-inventory` in web/main.py.
 // Every string a person or the model wrote arrives as text and is rendered as text; nothing here is markup.
 //
 // Two rules of the client:
@@ -16,6 +17,8 @@
 // a required key here, and `adminTypes.test.ts` compares every type with the keys the backend builds, so
 // a field cannot go optional, or missing, without a test failing.
 import { ApiError, api } from "./client";
+import type { AlertView } from "./tier1";
+import type { CaseDetail, CaseNote, InvestigationView } from "./tier2";
 import type { Role } from "./types";
 
 const enc = encodeURIComponent;
@@ -796,4 +799,347 @@ export function getAudit(filters: AuditFilters): Promise<AuditResponse> {
   if (filters.cursor !== undefined) query.set("cursor", String(filters.cursor));
   if (filters.limit !== undefined) query.set("limit", String(filters.limit));
   return api<AuditResponse>(`/admin/audit?${query}`);
+}
+
+// --- learned knowledge (admin_knowledge.py, rag/draft.py, rag/publish.py; DEC-210, P13-T05) --------------------
+//
+// The drafts the model wrote from the analysts' conclusions, the entries an admin approved, and the closed tag
+// vocabulary. Every text in them (a title, a summary, an analyst's reason, an entry's Markdown) was written by a
+// person or a model: it is rendered as text and never as markup.
+
+/** `?status=` of the draft list. The page reads `pending`, `merged` and `rejected`; `approved` drafts are entries. */
+export const KNOWLEDGE_DRAFT_STATUSES = ["pending", "approved", "merged", "rejected"] as const;
+export type KnowledgeDraftStatus = (typeof KNOWLEDGE_DRAFT_STATUSES)[number];
+
+/** `?status=` of the entry list. */
+export const KNOWLEDGE_ENTRY_STATUSES = ["active", "retired"] as const;
+export type KnowledgeEntryStatus = (typeof KNOWLEDGE_ENTRY_STATUSES)[number];
+
+/** The six fields the model writes and an admin may edit (`MODEL_FIELDS` of rag/draft.py), in its order. */
+export const KNOWLEDGE_MODEL_FIELDS = [
+  "title",
+  "tags",
+  "summary",
+  "distinguishing_signals",
+  "check_next_time",
+  "confidence_note",
+] as const;
+export type KnowledgeModelField = (typeof KNOWLEDGE_MODEL_FIELDS)[number];
+
+/** The six fields the source owns (`CLOSED_FIELDS` of rag/draft.py): shown, never sent. */
+export const KNOWLEDGE_CLOSED_FIELDS = [
+  "conclusion",
+  "category",
+  "mitre_ids",
+  "soar_scenario",
+  "rule_ids",
+  "log_source",
+] as const;
+export type KnowledgeClosedField = (typeof KNOWLEDGE_CLOSED_FIELDS)[number];
+
+/**
+ * The bounds of spec §7.4 and of a reason, equal to the constants of the backend (a test reads them): `TITLE_MAX`,
+ * `SUMMARY_MAX`, `ITEM_MAX`, `MAX_ITEMS` and `NOTE_MAX` of rag/draft.py, `REASON_MAX` of rag/publish.py, and the
+ * `DEFAULT_LIMIT` of the lists. The form words them in its hints; the server still has the last word (V5).
+ */
+export const KNOWLEDGE_LIMITS = {
+  titleMax: 120,
+  summaryMax: 600,
+  itemMax: 160,
+  maxItems: 6,
+  noteMax: 200,
+  reasonMax: 500,
+  /** The rows a list route sends when the request names no `limit` (`DEFAULT_LIMIT` of admin_knowledge.py). */
+  listDefault: 200,
+} as const;
+
+/** The twelve fields of a stored draft (`DRAFT_FIELDS`): the model's six, tidied, and the source's six. */
+export type KnowledgeDraftFields = {
+  title: string;
+  conclusion: string;
+  category: string;
+  mitre_ids: string[];
+  soar_scenario: string | null;
+  rule_ids: string[];
+  log_source: string | null;
+  tags: string[];
+  summary: string;
+  distinguishing_signals: string[];
+  check_next_time: string[];
+  confidence_note: string;
+};
+
+/** One row of `GET /api/admin/knowledge/drafts`. `title` is null for a draft the job could not write. */
+export type KnowledgeDraftRow = {
+  draft_id: string;
+  source_kind: "alert" | "case";
+  /** The alert id, or the case's uuid. */
+  source_id: string;
+  conclusion: string;
+  status: KnowledgeDraftStatus;
+  title: string | null;
+  /** False for a draft with no text (the job wrote none); `warnings` says why. */
+  has_text: boolean;
+  /** What the job could not do or check: V1-V5 fault names, or `budget`, `llm_transient`, `llm_permanent`, `linter`, `rank_unavailable`. */
+  warnings: string[];
+  /** The active entry this draft disagrees with: the admin must see these first. */
+  conflict_with_entry: string | null;
+  /** The entry a `merged` draft was folded into. */
+  duplicate_of_entry: string | null;
+  created_at: string;
+  reviewed_by: string | null;
+  reviewed_by_name: string | null;
+  reviewed_at: string | null;
+  /** The reason of a rejection. */
+  review_note: string | null;
+};
+
+/** The `draft` of `GET /api/admin/knowledge/drafts/{id}`: the row, and the twelve fields (`{}` for a draft with no text). */
+export type KnowledgeDraft = {
+  draft_id: string;
+  source_kind: "alert" | "case";
+  source_id: string;
+  conclusion: string;
+  status: KnowledgeDraftStatus;
+  draft: Partial<KnowledgeDraftFields>;
+  warnings: string[];
+  llm_run_id: string | null;
+  duplicate_of_entry: string | null;
+  conflict_with_entry: string | null;
+  created_at: string;
+  reviewed_by: string | null;
+  reviewed_by_name: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+};
+
+/** The newest `tier1.decided` / `tier2.concluded` event of the source. `payload` went through the audit page's redaction. */
+export type KnowledgeDecision = {
+  event_type: string;
+  actor_id: string | null;
+  actor_name: string | null;
+  at: string;
+  payload: unknown;
+};
+
+/**
+ * What the admin judges a draft against, read-only. `alert` is exactly `GET /api/tier1/alerts/{id}` and `case` and
+ * `investigation` exactly `GET /api/tier2/cases/{id}` and `.../investigation`, so the pages of the analysts render
+ * them. A part whose row is gone is null. `enrichment` is the SOAR block of an alert (or null), or a map
+ * `{head alert id: block}` for a case. `conflict_entry` is the whole entry, Markdown included.
+ */
+export type KnowledgeSource = {
+  kind: "alert" | "case";
+  id: string;
+  alert: AlertView | null;
+  case: CaseDetail | null;
+  investigation: InvestigationView | null;
+  decision: KnowledgeDecision | null;
+  notes: CaseNote[];
+  enrichment: unknown;
+  conflict_entry: KnowledgeEntry | null;
+};
+
+/** `GET /api/admin/knowledge/drafts/{id}`. */
+export type KnowledgeDraftDetail = { draft: KnowledgeDraft; source: KnowledgeSource };
+
+/** One row of `GET /api/admin/knowledge/entries`: no Markdown, no fingerprint, no evidence list. */
+export type KnowledgeEntryRow = {
+  entry_id: string;
+  version: number;
+  status: KnowledgeEntryStatus;
+  title: string | null;
+  conclusion: string;
+  category: string;
+  mitre_ids: string[];
+  tags: string[];
+  soar_scenario: string | null;
+  rule_ids: string[];
+  log_source: string | null;
+  file_path: string;
+  content_sha256: string;
+  evidence_count: number;
+  approved_by: string | null;
+  approved_by_name: string | null;
+  approved_at: string | null;
+};
+
+/** `GET /api/admin/knowledge/entries/{id}`. `content` is the entry's Markdown, rendered as text. */
+export type KnowledgeEntry = {
+  entry_id: string;
+  version: number;
+  status: KnowledgeEntryStatus;
+  title: string | null;
+  conclusion: string;
+  category: string;
+  mitre_ids: string[];
+  tags: string[];
+  soar_scenario: string | null;
+  rule_ids: string[];
+  log_source: string | null;
+  fingerprint: string;
+  content: string;
+  content_sha256: string;
+  file_path: string;
+  source_alert_ids: string[];
+  source_case_ids: string[];
+  /** One `{subject, at}` for the draft's own source, and one for each draft merged into the entry later. */
+  evidence: { subject: string; at: string }[];
+  approved_by: string | null;
+  approved_by_name: string | null;
+  approved_at: string | null;
+  supersedes_entry: string | null;
+  /** `content_ok`: `content` hashes to `content_sha256`. `file_ok`: the published file is exactly that. */
+  integrity: { content_ok: boolean; file_ok: boolean };
+};
+
+/** `GET /api/admin/knowledge/tags`: the closed vocabulary (sorted) and a line about each tag. */
+export type KnowledgeTags = { tags: string[]; descriptions: Record<string, string> };
+
+/** The `edited` of an approval: only the model's six fields, each optional. A closed field is refused by the route. */
+export type KnowledgeEdit = {
+  title?: string;
+  tags?: string[];
+  summary?: string;
+  distinguishing_signals?: string[];
+  check_next_time?: string[];
+  confidence_note?: string;
+};
+
+/** The route lists `pending` conflicts first, then the oldest; the others newest review first. 200 rows by default. */
+export function listKnowledgeDrafts(status: KnowledgeDraftStatus): Promise<KnowledgeDraftRow[]> {
+  return api<KnowledgeDraftRow[]>(`/admin/knowledge/drafts?${new URLSearchParams({ status })}`);
+}
+
+/** `404 not_found`. */
+export function getKnowledgeDraft(draftId: string): Promise<KnowledgeDraftDetail> {
+  return api<KnowledgeDraftDetail>(`/admin/knowledge/drafts/${enc(draftId)}`);
+}
+
+/**
+ * Approves a draft as it is (`{}`) or with `edited`: the model's six fields only. Whatever else is in `edited` is
+ * not sent, so a closed field can never reach the route, which answers it with `422 {"faults":
+ * ["v1_schema:unexpected_key"]}`. `422 {faults}` (V1-V5 over the final text), `404 not_found`,
+ * `409 {reason: not_pending | source_changed | unpublishable}`, `503 publish_failed` (nothing was stored).
+ */
+export function approveKnowledgeDraft(
+  draftId: string,
+  edited?: KnowledgeEdit,
+): Promise<{ entry_id: string }> {
+  const fields: Record<string, unknown> = {};
+  for (const name of KNOWLEDGE_MODEL_FIELDS) {
+    if (edited !== undefined && Object.hasOwn(edited, name)) fields[name] = edited[name];
+  }
+  const json = Object.keys(fields).length === 0 ? {} : { edited: fields };
+  return api<{ entry_id: string }>(`/admin/knowledge/drafts/${enc(draftId)}/approve`, {
+    method: "POST",
+    json,
+  });
+}
+
+/** `reason` is 1 to 500 characters (`422 {field: reason, reason: required | invalid}`); `404`, `409`. */
+export function rejectKnowledgeDraft(
+  draftId: string,
+  reason: string,
+): Promise<{ draft_id: string; status: "rejected" }> {
+  return api<{ draft_id: string; status: "rejected" }>(
+    `/admin/knowledge/drafts/${enc(draftId)}/reject`,
+    { method: "POST", json: { reason } },
+  );
+}
+
+/** Newest approval first. */
+export function listKnowledgeEntries(status: KnowledgeEntryStatus): Promise<KnowledgeEntryRow[]> {
+  return api<KnowledgeEntryRow[]>(`/admin/knowledge/entries?${new URLSearchParams({ status })}`);
+}
+
+/** `404 not_found`. */
+export function getKnowledgeEntry(entryId: string): Promise<KnowledgeEntry> {
+  return api<KnowledgeEntry>(`/admin/knowledge/entries/${enc(entryId)}`);
+}
+
+/** Retires an active entry and moves its file. The same reason as a rejection; `409 not_active`, `404`, `503 publish_failed`. */
+export function retireKnowledgeEntry(
+  entryId: string,
+  reason: string,
+): Promise<{ entry_id: string; status: "retired" }> {
+  return api<{ entry_id: string; status: "retired" }>(
+    `/admin/knowledge/entries/${enc(entryId)}/retire`,
+    { method: "POST", json: { reason } },
+  );
+}
+
+export function getKnowledgeTags(): Promise<KnowledgeTags> {
+  return api<KnowledgeTags>("/admin/knowledge/tags");
+}
+
+/**
+ * One fault of a `422 {"faults": ["<rule>:<field>", ...]}`: V1-V5 over the final text of a draft (`FAULT_VOCABULARY`
+ * of rag/draft.py). The names carry no value. `field` is what follows the first colon: a field of the draft, or
+ * something that is not one (`root`, `unexpected_key`, `unknown_tag`); null when the name has no colon.
+ */
+export type KnowledgeFault = { rule: string; field: string | null };
+
+/**
+ * What a failed write of the knowledge page said, as a value; every kind carries the HTTP `status` of the answer
+ * (0 when there was none).
+ * - `faults`: a 422 with the fault list of V1-V5;
+ * - `field`: a 422 about one field of the request (`reason`, `edited`, `body`), shown at that field;
+ * - `stale`: a 409, whatever its reason: the draft was handled, or its source changed, or the entry is not active;
+ * - `publish_failed`: the 503 of a file that could not be written; nothing was stored, so asking again is fine;
+ * - `not_found`: the 404 of a draft or an entry that is gone;
+ * - `other`: everything else, FastAPI's own list-shaped 422 and a network failure included.
+ */
+export type KnowledgeError =
+  | { kind: "faults"; status: number; faults: KnowledgeFault[] }
+  | { kind: "field"; status: number; field: string; reason: string }
+  | { kind: "stale"; status: number; reason: string }
+  | { kind: "publish_failed"; status: number }
+  | { kind: "not_found"; status: number }
+  | { kind: "other"; status: number };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** The text under `key` of an object, only when the object itself holds it. */
+const ownText = (object: Record<string, unknown>, key: string): string | null => {
+  const value = Object.hasOwn(object, key) ? object[key] : undefined;
+  return typeof value === "string" ? value : null;
+};
+
+function faultsOf(body: unknown): KnowledgeFault[] | null {
+  if (!isRecord(body) || !Object.hasOwn(body, "faults")) return null;
+  const list = body.faults;
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const faults: KnowledgeFault[] = [];
+  for (const item of list) {
+    if (typeof item !== "string" || item === "") return null;
+    const colon = item.indexOf(":");
+    faults.push(
+      colon === -1
+        ? { rule: item, field: null }
+        : { rule: item.slice(0, colon), field: item.slice(colon + 1) },
+    );
+  }
+  return faults;
+}
+
+/** Reads what a failed call of the knowledge routes threw. Never throws, whatever it is handed. */
+export function knowledgeErrorOf(error: unknown): KnowledgeError {
+  if (!(error instanceof ApiError)) return { kind: "other", status: 0 };
+  const { status, detail, body } = error;
+  const reason = isRecord(detail) ? ownText(detail, "reason") : null;
+  if (status === 422) {
+    const faults = faultsOf(body);
+    if (faults !== null) return { kind: "faults", status, faults };
+    const field = isRecord(detail) ? ownText(detail, "field") : null;
+    if (field !== null && reason !== null) return { kind: "field", status, field, reason };
+  } else if (status === 409) {
+    return { kind: "stale", status, reason: reason ?? "unknown" };
+  } else if (status === 503 && reason === "publish_failed") {
+    return { kind: "publish_failed", status };
+  } else if (status === 404 && reason === "not_found") {
+    return { kind: "not_found", status };
+  }
+  return { kind: "other", status };
 }

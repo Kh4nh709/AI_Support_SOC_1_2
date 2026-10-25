@@ -11,11 +11,22 @@
 //   digest of one day            adminKeys.digest(day)                     getDigest (day null: today)
 //   blind labelling              adminKeys.labels                          getLabelsNext
 //   audit page                   adminKeys.audit(filters)                  getAudit
+//   knowledge: a draft tab       adminKeys.knowledgeDrafts(status)         listKnowledgeDrafts
+//   knowledge: an entry tab      adminKeys.knowledgeEntries(status)        listKnowledgeEntries
+//   knowledge: one draft         adminKeys.knowledgeDraft(id)              getKnowledgeDraft
+//   knowledge: one entry         adminKeys.knowledgeEntry(id)              getKnowledgeEntry
+//   knowledge: the tag list      adminKeys.knowledgeTags                   getKnowledgeTags
 //
 // What each write invalidates is `ADMIN_INVALIDATES`; a page calls `invalidateAfter(client, "toggleRule")`
 // in its mutation's `onSuccess`, and shows its toast. There are no optimistic updates.
 import type { QueryClient } from "@tanstack/react-query";
-import type { AdminRange, AuditFilters, LlmRange } from "../../api/admin";
+import type {
+  AdminRange,
+  AuditFilters,
+  KnowledgeDraftStatus,
+  KnowledgeEntryStatus,
+  LlmRange,
+} from "../../api/admin";
 
 export const adminKeys = {
   /** Every admin read. */
@@ -46,6 +57,21 @@ export const adminKeys = {
   audit: (filters: AuditFilters) => ["admin", "audit", filters] as const,
   /** Every audit page, whatever the filters. */
   auditAll: ["admin", "audit"] as const,
+
+  /** Everything of the learned-knowledge page: the lists of every tab, the details, the tags (DEC-210). */
+  knowledgeAll: ["admin", "knowledge"] as const,
+  /** The list of one draft tab (`pending`, `merged`, `rejected`). */
+  knowledgeDrafts: (status: KnowledgeDraftStatus) =>
+    ["admin", "knowledge", "drafts", status] as const,
+  /** One draft with the analyst's work beside it. */
+  knowledgeDraft: (draftId: string) => ["admin", "knowledge", "draft", draftId] as const,
+  /** The list of one entry tab (`active`, `retired`). */
+  knowledgeEntries: (status: KnowledgeEntryStatus) =>
+    ["admin", "knowledge", "entries", status] as const,
+  /** One entry with its Markdown. */
+  knowledgeEntry: (entryId: string) => ["admin", "knowledge", "entry", entryId] as const,
+  /** The closed tag vocabulary: it changes with a deploy, not with a write. */
+  knowledgeTags: ["admin", "knowledge", "tags"] as const,
 };
 
 /**
@@ -70,6 +96,11 @@ export const ADMIN_INVALIDATES = {
   reviewDigest: [adminKeys.digestAll, adminKeys.overviewAll, adminKeys.auditAll],
   postLabel: [adminKeys.labels, adminKeys.auditAll],
   undoLabel: [adminKeys.labels, adminKeys.auditAll],
+  // A draft leaves its tab (and an entry is born, or retired), the overview counts the drafts that wait, and the
+  // audit page shows the event; the tag list does not change, and is refetched with the rest, which costs nothing.
+  approveKnowledgeDraft: [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll],
+  rejectKnowledgeDraft: [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll],
+  retireKnowledgeEntry: [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll],
 } as const;
 
 export type AdminMutation = keyof typeof ADMIN_INVALIDATES;

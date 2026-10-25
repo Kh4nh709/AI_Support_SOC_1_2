@@ -1,5 +1,6 @@
-// src/features/admin/AdminLayout.test.tsx — the sidebar of the admin console (spec §3): seven links in the
-// canvas order, the current one marked, and the page titles (all seven pages are built).
+// src/features/admin/AdminLayout.test.tsx — the sidebar of the admin console (spec §3): eight links in the
+// canvas order (the knowledge page of DEC-210 before the audit log), the current one marked, and the page titles
+// (all eight pages are built).
 import { render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
@@ -7,13 +8,14 @@ import { S } from "../../strings";
 import { AdminLayout } from "./AdminLayout";
 import { AuditPage } from "./AuditPage";
 import { DigestPage } from "./DigestPage";
+import { KnowledgePage } from "./KnowledgePage";
 import { LabelsPage } from "./LabelsPage";
 import { LlmPage } from "./LlmPage";
 import { OverviewPage } from "./OverviewPage";
 import { RulesPage } from "./RulesPage";
 import { UsersPage } from "./UsersPage";
 
-/** The sidebar, in the order and with the words of the canvas, and where each link goes. */
+/** The sidebar, in the order and with the words of the canvas (and DEC-210's "Tri thức"), and where each link goes. */
 const SIDEBAR: [label: string, href: string][] = [
   ["Tổng quan", "/admin/overview"],
   ["Người dùng & quyền", "/admin/users"],
@@ -21,6 +23,7 @@ const SIDEBAR: [label: string, href: string][] = [
   ["Rules tự đóng", "/admin/rules"],
   ["Digest hằng ngày", "/admin/digest"],
   ["Gán nhãn", "/admin/labels"],
+  ["Tri thức", "/admin/knowledge"],
   ["Nhật ký audit", "/admin/audit"],
 ];
 
@@ -41,7 +44,7 @@ describe("the sidebar", () => {
     expect(S.admin.nav.label).toBe("Quản trị");
   });
 
-  it("has seven links, in the canvas order, with the canvas words, to the seven paths", () => {
+  it("has eight links, in the canvas order, with the canvas words, to the eight paths", () => {
     renderAt("/admin/overview");
     const links = within(sidebar()).getAllByRole("link");
     expect(links.map((a) => [a.textContent, a.getAttribute("href")])).toEqual(SIDEBAR);
@@ -57,6 +60,7 @@ describe("the sidebar", () => {
       S.admin.nav.rules,
       S.admin.nav.digest,
       S.admin.nav.labels,
+      S.admin.nav.knowledge,
       S.admin.nav.audit,
     ]);
   });
@@ -74,7 +78,7 @@ describe("the sidebar", () => {
     },
   );
 
-  it("marks nothing as current on a path that is not one of the seven", () => {
+  it("marks nothing as current on a path that is not one of the eight", () => {
     renderAt("/admin");
     for (const link of within(sidebar()).getAllByRole("link")) {
       expect(link).not.toHaveAttribute("aria-current");
@@ -101,10 +105,11 @@ const PAGES: [name: string, Page: () => ReactNode, title: string][] = [
   ["RulesPage", RulesPage, "Rules tự đóng"],
   ["DigestPage", DigestPage, "Digest hằng ngày"],
   ["LabelsPage", LabelsPage, "Gán nhãn tập vàng"],
+  ["KnowledgePage", KnowledgePage, "Tri thức học được"],
   ["AuditPage", AuditPage, "Nhật ký audit"],
 ];
 
-// All seven pages are built (P11-T11 to T17): each has its own test file, which needs a query client, a session
+// All eight pages are built (P11-T11 to T17, and the knowledge page of P13-T06): each has its own test file, which needs a query client, a session
 // and an API this file does not give, and covers its page, axe included. No placeholder is left to test here.
 describe("the pages", () => {
   it("leave no placeholder text in strings.ts: no admin text says a page is being built", () => {
@@ -126,6 +131,7 @@ describe("the pages", () => {
       S.admin.title.rules,
       S.admin.title.digest,
       S.admin.title.labels,
+      S.admin.title.knowledge,
       S.admin.title.audit,
     ]);
   });

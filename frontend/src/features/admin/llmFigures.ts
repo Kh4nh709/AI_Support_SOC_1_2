@@ -163,7 +163,8 @@ export function summarise(rows: readonly PipelineRoleRow[]): RangeSummary {
 const own = (table: object, key: string) => Object.hasOwn(table, key);
 
 /**
- * The name of a `(pipeline, role)` row: "① triage · proposer", "① triage · verifier", "② điều tra case". A
+ * The name of a `(pipeline, role)` row: "① triage · proposer", "① triage · verifier", "② điều tra case", and the two
+ * pipelines of the learned knowledge (DEC-210): "Tra cứu tri thức · retriever", "Soạn tri thức · drafter". A
  * pipeline or role this page has no word for is shown as it came ("chat · assistant").
  */
 export function pipelineLabel(pipeline: string, role: string | null): string {
@@ -175,14 +176,28 @@ export function pipelineLabel(pipeline: string, role: string | null): string {
       ? names.triageRole[role as keyof typeof names.triageRole]
       : `${names.triageNoRole} · ${role}`;
   }
+  if (pipeline === "rag_lookup") {
+    if (role === null) return names.ragLookup;
+    return own(names.ragLookupRole, role)
+      ? names.ragLookupRole[role as keyof typeof names.ragLookupRole]
+      : `${names.ragLookup} · ${role}`;
+  }
+  if (pipeline === "knowledge_draft") {
+    if (role === null) return names.knowledgeDraft;
+    return own(names.knowledgeDraftRole, role)
+      ? names.knowledgeDraftRole[role as keyof typeof names.knowledgeDraftRole]
+      : `${names.knowledgeDraft} · ${role}`;
+  }
   return role === null ? pipeline : `${pipeline} · ${role}`;
 }
 
-/** The short mark of a pipeline for a sentence ("①", "②"), or the pipeline as it came. */
+/** The short mark of a pipeline for a sentence ("①", "②", "Tra cứu tri thức"), or the pipeline as it came. */
 export function pipelineMark(pipeline: string): string {
   const names = S.admin.llmPage.pipeline;
   if (pipeline === "triage") return names.triage;
   if (pipeline === "investigate") return names.investigate;
+  if (pipeline === "rag_lookup") return names.ragLookup;
+  if (pipeline === "knowledge_draft") return names.knowledgeDraft;
   return pipeline;
 }
 

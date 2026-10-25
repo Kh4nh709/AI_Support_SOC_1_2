@@ -15,6 +15,7 @@ import {
   limitChanges,
   parseLimit,
   pipelineLabel,
+  pipelineMark,
   shortId,
   stoppedEntries,
   subjectLink,
@@ -281,6 +282,11 @@ describe("pipelineLabel", () => {
     ["triage", null, "① triage"],
     ["investigate", "investigator", "② điều tra case"],
     ["investigate", null, "② điều tra case"],
+    // DEC-210: the lookup and the draft of the learned knowledge
+    ["rag_lookup", "retriever", "Tra cứu tri thức · retriever"],
+    ["rag_lookup", null, "Tra cứu tri thức"],
+    ["knowledge_draft", "drafter", "Soạn tri thức · drafter"],
+    ["knowledge_draft", null, "Soạn tri thức"],
   ])("%s / %s is %s", (pipeline, role, label) => {
     expect(pipelineLabel(pipeline, role)).toBe(label);
   });
@@ -289,10 +295,24 @@ describe("pipelineLabel", () => {
     expect(pipelineLabel("chat", null)).toBe("chat");
     expect(pipelineLabel("chat", "assistant")).toBe("chat · assistant");
     expect(pipelineLabel("triage", "auditor")).toBe("① triage · auditor");
+    expect(pipelineLabel("rag_lookup", "auditor")).toBe("Tra cứu tri thức · auditor");
+    expect(pipelineLabel("knowledge_draft", "retriever")).toBe("Soạn tri thức · retriever");
   });
 
   it("does not answer from the prototype chain", () => {
     expect(pipelineLabel("constructor", "__proto__")).toBe("constructor · __proto__");
+  });
+});
+
+describe("pipelineMark", () => {
+  it.each([
+    ["triage", "①"],
+    ["investigate", "②"],
+    ["rag_lookup", "Tra cứu tri thức"],
+    ["knowledge_draft", "Soạn tri thức"],
+    ["chat", "chat"],
+  ])("%s is %s", (pipeline, mark) => {
+    expect(pipelineMark(pipeline)).toBe(mark);
   });
 });
 

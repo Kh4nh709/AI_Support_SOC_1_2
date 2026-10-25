@@ -10,6 +10,11 @@ import {
   AUDIT_GROUPS,
   DIGEST_VERDICTS,
   HARD_BLOCK_CODES,
+  KNOWLEDGE_CLOSED_FIELDS,
+  KNOWLEDGE_DRAFT_STATUSES,
+  KNOWLEDGE_ENTRY_STATUSES,
+  KNOWLEDGE_LIMITS,
+  KNOWLEDGE_MODEL_FIELDS,
   LABEL_CHOICES,
   LABEL_CONFIDENCES,
   LIMIT_FIELDS,
@@ -18,7 +23,13 @@ import {
   LLM_RANGES,
   OVERVIEW_SECTIONS,
 } from "../../api/admin";
-import { S, adminReasonText, labelOf } from "../../strings";
+import {
+  S,
+  adminReasonText,
+  knowledgeFaultText,
+  knowledgeWarningText,
+  labelOf,
+} from "../../strings";
 
 const BACKEND_APP = join("..", "backend", "app");
 const py = (...path: string[]): string => readFileSync(join(BACKEND_APP, ...path), "utf8");
@@ -394,6 +405,7 @@ describe("the common words and the page titles", () => {
       rules: "Rules tự đóng",
       digest: "Digest hằng ngày",
       labels: "Gán nhãn tập vàng",
+      knowledge: "Tri thức học được",
       audit: "Nhật ký audit",
     });
     expect(S.admin.nav).toEqual({
@@ -404,6 +416,7 @@ describe("the common words and the page titles", () => {
       rules: "Rules tự đóng",
       digest: "Digest hằng ngày",
       labels: "Gán nhãn",
+      knowledge: "Tri thức",
       audit: "Nhật ký audit",
     });
   });
@@ -414,6 +427,186 @@ describe("the common words and the page titles", () => {
       "7d": "7 ngày qua",
       "30d": "30 ngày qua",
       month: "Tháng này",
+    });
+  });
+});
+
+describe("the learned-knowledge words (DEC-210, P13-T06)", () => {
+  const K = S.admin.knowledgePage;
+  const quoted = (text: string | undefined): string[] =>
+    [...(text ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1] as string);
+  const draftPy = (): string => py("rag", "draft.py");
+  const number = (source: string, name: string): number =>
+    Number(new RegExp(`^${name}\\s*=\\s*(\\d+)`, "m").exec(source)?.[1]);
+
+  it("names the five tabs, and the four actions, in the words of the spec", () => {
+    expect(K.tab).toEqual({
+      pending: "Chờ duyệt",
+      active: "Đã duyệt",
+      merged: "Đã gộp",
+      rejected: "Từ chối",
+      retired: "Đã gỡ",
+    });
+    expect(K.draft.action.approve).toBe("Duyệt");
+    expect(K.draft.action.editApprove).toBe("Sửa rồi duyệt");
+    expect(K.draft.action.reject).toBe("Từ chối");
+    expect(K.entry.retire).toBe("Gỡ");
+    expect(S.admin.nav.knowledge).toBe("Tri thức");
+  });
+
+  it("has an empty-state sentence and a table name for each tab", () => {
+    for (const tab of Object.keys(K.tab)) {
+      expect(isText(K.empty[tab as keyof typeof K.empty]), tab).toBe(true);
+      expect(isText(K.tableLabel[tab as keyof typeof K.tableLabel]), tab).toBe(true);
+    }
+    expect(Object.keys(K.empty).sort()).toEqual(Object.keys(K.tab).sort());
+    expect(Object.keys(K.tableLabel).sort()).toEqual(Object.keys(K.tab).sort());
+  });
+
+  it("says a part the source no longer has as 'không còn dữ liệu'", () => {
+    for (const text of Object.values(K.draft.left.noData))
+      expect(text).toContain("không còn dữ liệu");
+  });
+
+  it("says a handled draft as 'bản nháp đã được xử lý'", () => {
+    expect(K.notice.handled).toContain("bản nháp đã được xử lý");
+  });
+
+  describe("the vocabulary of the client is the one of rag/draft.py and rag/publish.py", () => {
+    it("KNOWLEDGE_MODEL_FIELDS and KNOWLEDGE_CLOSED_FIELDS", () => {
+      expect([...KNOWLEDGE_MODEL_FIELDS]).toEqual(
+        quoted(/^MODEL_FIELDS = \(([^)]*)\)/m.exec(draftPy())?.[1]),
+      );
+      expect([...KNOWLEDGE_CLOSED_FIELDS]).toEqual(
+        quoted(/^CLOSED_FIELDS = \(([^)]*)\)/m.exec(draftPy())?.[1]),
+      );
+      expect(KNOWLEDGE_MODEL_FIELDS).toHaveLength(6);
+      expect(KNOWLEDGE_CLOSED_FIELDS).toHaveLength(6);
+    });
+
+    it("KNOWLEDGE_LIMITS", () => {
+      const draft = draftPy();
+      expect(KNOWLEDGE_LIMITS.titleMax).toBe(number(draft, "TITLE_MAX"));
+      expect(KNOWLEDGE_LIMITS.summaryMax).toBe(number(draft, "SUMMARY_MAX"));
+      expect(KNOWLEDGE_LIMITS.itemMax).toBe(number(draft, "ITEM_MAX"));
+      expect(KNOWLEDGE_LIMITS.maxItems).toBe(number(draft, "MAX_ITEMS"));
+      expect(KNOWLEDGE_LIMITS.noteMax).toBe(number(draft, "NOTE_MAX"));
+      expect(KNOWLEDGE_LIMITS.reasonMax).toBe(number(py("rag", "publish.py"), "REASON_MAX"));
+      expect(KNOWLEDGE_LIMITS.listDefault).toBe(
+        number(py("web", "routers", "admin_knowledge.py"), "DEFAULT_LIMIT"),
+      );
+    });
+
+    it("KNOWLEDGE_DRAFT_STATUSES and KNOWLEDGE_ENTRY_STATUSES are the Literals of the router", () => {
+      const router = py("web", "routers", "admin_knowledge.py");
+      const literal = (name: string) =>
+        quoted(new RegExp(`^${name} = Literal\\[([^\\]]*)\\]`, "m").exec(router)?.[1]);
+      expect([...KNOWLEDGE_DRAFT_STATUSES]).toEqual(literal("DraftStatus"));
+      expect([...KNOWLEDGE_ENTRY_STATUSES]).toEqual(literal("EntryStatus"));
+      expect(Object.keys(K.draft.status).sort()).toEqual([...KNOWLEDGE_DRAFT_STATUSES].sort());
+      expect(Object.keys(K.entry.status).sort()).toEqual([...KNOWLEDGE_ENTRY_STATUSES].sort());
+    });
+  });
+
+  describe("the faults of V1-V5", () => {
+    /** The rule of every name of `FAULT_VOCABULARY`: what is before the colon, `v3_<kind>` for each finding kind. */
+    function backendRules(): string[] {
+      const body = /def _fault_vocabulary\(\)[\s\S]*?return frozenset\(names\)/.exec(
+        draftPy(),
+      )?.[0];
+      if (body === undefined) throw new Error("_fault_vocabulary not found in rag/draft.py");
+      const kinds = quoted(/^FINDING_NAMES = \(([^)]*)\)/m.exec(py("rag", "generalise.py"))?.[1]);
+      const rules = new Set<string>();
+      for (const m of body.matchAll(/\bv\d_(?:\{kind\}|[a-z]+)/g)) {
+        const rule = m[0];
+        if (rule.endsWith("{kind}")) for (const kind of kinds) rules.add(`v3_${kind}`);
+        else rules.add(rule);
+      }
+      return [...rules];
+    }
+
+    it("reads the rules of the backend (a parse that finds nothing would compare nothing)", () => {
+      const rules = backendRules();
+      expect(rules).toContain("v1_schema");
+      expect(rules).toContain("v3_ipv4");
+      expect(rules).toContain("v4_nonce");
+      expect(rules).toContain("v5_empty");
+      expect(rules.length).toBeGreaterThan(12);
+    });
+
+    it("has a Vietnamese text for each rule of FAULT_VOCABULARY, and for no other", () => {
+      const rules = backendRules();
+      for (const rule of rules)
+        expect(isText(K.fault.rule[rule as keyof typeof K.fault.rule]), rule).toBe(true);
+      expect(Object.keys(K.fault.rule).sort()).toEqual([...rules].sort());
+    });
+
+    it("has its own words for the three names whose part after the colon is not a field, and they are the backend's", () => {
+      const body = /def _fault_vocabulary\(\)[\s\S]*?return frozenset\(names\)/.exec(
+        draftPy(),
+      )?.[0];
+      const names = /names = \{([^}]*)\}/.exec(body ?? "")?.[1];
+      expect(quoted(names).sort()).toEqual(Object.keys(K.fault.special).sort());
+      for (const text of Object.values(K.fault.special)) expect(isText(text)).toBe(true);
+    });
+
+    it("words a fault by its rule, and the three special ones in their own words", () => {
+      expect(knowledgeFaultText({ rule: "v3_ipv4", field: "summary" })).toBe(K.fault.rule.v3_ipv4);
+      expect(knowledgeFaultText({ rule: "v5_length", field: "title" })).toBe(
+        K.fault.rule.v5_length,
+      );
+      expect(knowledgeFaultText({ rule: "v1_schema", field: "root" })).toBe(
+        K.fault.special["v1_schema:root"],
+      );
+      expect(knowledgeFaultText({ rule: "v1_schema", field: "unexpected_key" })).toBe(
+        K.fault.special["v1_schema:unexpected_key"],
+      );
+      expect(knowledgeFaultText({ rule: "v1_tags", field: "unknown_tag" })).toBe(
+        K.fault.special["v1_tags:unknown_tag"],
+      );
+    });
+
+    it("gives an unknown rule a generic sentence that names the rule, and shows nothing else of it", () => {
+      expect(knowledgeFaultText({ rule: "v9_brand_new", field: "title" })).toBe(
+        K.fault.fallback("v9_brand_new"),
+      );
+      expect(knowledgeFaultText({ rule: "weird", field: null })).toBe(K.fault.fallback("weird"));
+    });
+
+    it("does not answer from the prototype chain", () => {
+      expect(knowledgeFaultText({ rule: "constructor", field: null })).toBe(
+        K.fault.fallback("constructor"),
+      );
+      expect(knowledgeFaultText({ rule: "v1_schema", field: "__proto__" })).toBe(
+        K.fault.rule.v1_schema,
+      );
+      expect(knowledgeFaultText({ rule: "toString", field: "root" })).toBe(
+        K.fault.fallback("toString"),
+      );
+    });
+  });
+
+  describe("the warnings of a draft", () => {
+    it("has a text for each warning the job writes besides the V names, and for no other", () => {
+      const draft = draftPy();
+      const codes = [...draft.matchAll(/^WARNING_[A-Z]+ = "([a-z_]+)"/gm)].map(
+        (m) => m[1] as string,
+      );
+      expect(codes).toHaveLength(5);
+      expect(Object.keys(K.warning).sort()).toEqual([...codes].sort());
+    });
+
+    it("words a known code, a V name with its field, and an unknown code as it came", () => {
+      expect(knowledgeWarningText("budget")).toBe(K.warning.budget);
+      expect(knowledgeWarningText("v3_ipv4:summary")).toBe(
+        K.fault.named(K.draft.right.field.summary, K.fault.rule.v3_ipv4),
+      );
+      expect(knowledgeWarningText("v1_schema:root")).toBe(K.fault.special["v1_schema:root"]);
+      expect(knowledgeWarningText("v2_closed:category")).toBe(
+        K.fault.named(K.draft.right.closed.category, K.fault.rule.v2_closed),
+      );
+      expect(knowledgeWarningText("something_new")).toBe("something_new");
+      expect(knowledgeWarningText("constructor")).toBe("constructor");
     });
   });
 });
