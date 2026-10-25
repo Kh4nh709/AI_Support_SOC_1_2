@@ -180,7 +180,7 @@ def test_kb_learned_has_a_readme_and_git_ignores_everything_else_in_it():
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
-def test_git_agrees_about_which_files_of_the_directory_are_ignored():
+def test_check_ignore_agrees_about_which_files_of_the_directory_are_ignored():
     def ignored(path: str) -> bool:
         # --no-index: judge the rules, not whether the file is already tracked.
         command = ["git", "check-ignore", "--no-index", "-q", path]

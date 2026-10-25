@@ -198,7 +198,10 @@ def test_the_section_says_what_a_restart_before_the_migration_breaks():
 def test_the_directory_is_made_before_up_d_and_by_the_host_user():
     section = _section(_text())
     rows = _step_rows(section)
-    assert section.index(rows[3][1]) < section.index(rows[5][1])
+    # the first `docker compose up -d` the section tells the reader to run is step 6's, and the
+    # directory is made before it, not in the same breath after it
+    assert section.index("mkdir kb_learned") < section.index("docker compose up -d")
+    assert "docker compose up" not in rows[3][1], "step 4 starts containers"
     assert "`root`" in rows[3][2] and "cannot write" in rows[3][2]
     assert "sudo" not in rows[3][1], "the directory must not be made with sudo"
 
@@ -366,7 +369,7 @@ def test_limitations_says_the_harness_b4_is_not_the_live_deployment():
 
 def test_limitations_says_full_text_search_is_simple_with_no_accent_folding():
     item = _limitation()
-    assert "`simple`" in item and "accent" in item
+    assert "`simple`" in item and "no accent folding" in item
 
 
 def test_limitations_says_the_queue_volume_is_an_expectation_not_measured():
