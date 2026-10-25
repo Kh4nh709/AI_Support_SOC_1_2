@@ -56,7 +56,14 @@ describe("formOf", () => {
   });
 
   it("makes an empty form of a draft with no text, and of fields of the wrong type", () => {
-    const empty: DraftForm = { title: "", summary: "", signals: "", checks: "", note: "", tags: [] };
+    const empty: DraftForm = {
+      title: "",
+      summary: "",
+      signals: "",
+      checks: "",
+      note: "",
+      tags: [],
+    };
     expect(formOf({})).toEqual(empty);
     const hostile = {
       title: 7,

@@ -839,8 +839,8 @@ export type KnowledgeClosedField = (typeof KNOWLEDGE_CLOSED_FIELDS)[number];
 
 /**
  * The bounds of spec §7.4 and of a reason, equal to the constants of the backend (a test reads them): `TITLE_MAX`,
- * `SUMMARY_MAX`, `ITEM_MAX`, `MAX_ITEMS` and `NOTE_MAX` of rag/draft.py, `REASON_MAX` of rag/publish.py. The form
- * words them in its hints; the server still has the last word (V5).
+ * `SUMMARY_MAX`, `ITEM_MAX`, `MAX_ITEMS` and `NOTE_MAX` of rag/draft.py, `REASON_MAX` of rag/publish.py, and the
+ * `DEFAULT_LIMIT` of the lists. The form words them in its hints; the server still has the last word (V5).
  */
 export const KNOWLEDGE_LIMITS = {
   titleMax: 120,
@@ -849,6 +849,8 @@ export const KNOWLEDGE_LIMITS = {
   maxItems: 6,
   noteMax: 200,
   reasonMax: 500,
+  /** The rows a list route sends when the request names no `limit` (`DEFAULT_LIMIT` of admin_knowledge.py). */
+  listDefault: 200,
 } as const;
 
 /** The twelve fields of a stored draft (`DRAFT_FIELDS`): the model's six, tidied, and the source's six. */

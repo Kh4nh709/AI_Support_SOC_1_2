@@ -480,9 +480,11 @@ describe("the normal render", () => {
     const knowledge = block("Tri thức");
     expect(valueOf(knowledge, "Bản nháp chờ duyệt")).toBe("4");
     expect(valueOf(knowledge, "Trong đó mâu thuẫn với tri thức đã duyệt")).toBe("1");
-    // counts only: no button, and no link to a page this card does not have
+    // the counts, and the way to the page that reviews them (P13-T06): one link, and no button
     expect(within(knowledge).queryByRole("button")).not.toBeInTheDocument();
-    expect(within(knowledge).queryByRole("link")).not.toBeInTheDocument();
+    const link = within(knowledge).getByRole("link", { name: "Mở trang duyệt" });
+    expect(link).toHaveAttribute("href", "/admin/knowledge");
+    expect(within(knowledge).getAllByRole("link")).toHaveLength(1);
   });
 
   it("shows an empty queue as two zeros, not as an error", async () => {
@@ -491,6 +493,8 @@ describe("the normal render", () => {
     expect(valueOf(knowledge, "Bản nháp chờ duyệt")).toBe("0");
     expect(valueOf(knowledge, "Trong đó mâu thuẫn với tri thức đã duyệt")).toBe("0");
     expect(within(knowledge).queryByRole("alert")).not.toBeInTheDocument();
+    // the link is there with nothing waiting: the approved entries are on the same page
+    expect(within(knowledge).getByRole("link", { name: "Mở trang duyệt" })).toBeInTheDocument();
   });
 
   it("writes the queue with the thousands dot", async () => {

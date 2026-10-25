@@ -7,6 +7,7 @@
 // few it has no token for. They are classes, never a `style` attribute (the CSP forbids it), so the bars of the
 // chart are SVG shapes whose size is an attribute.
 import { useId, type ReactNode, type Ref } from "react";
+import { Link } from "react-router";
 import type { HealthCheck, OverviewResponse } from "../../api/admin";
 import { DataTable, type Column } from "../../components/DataTable";
 import { formatTime } from "../../format";
@@ -89,8 +90,8 @@ export function BlockError({ failure, onRetry }: { failure: SectionFailure; onRe
 
 /**
  * "Tri thức" (DEC-210, P13-T05): the learned-knowledge drafts that wait for an admin, and how many of them conflict
- * with an entry already approved. Counts only; the page that reviews them is not here. Like the other blocks it
- * draws its own error, with a "Thử lại", when its section came back `null`.
+ * with an entry already approved, and the way to the page that reviews them (`/admin/knowledge`, P13-T06). Like the
+ * other blocks it draws its own error, with a "Thử lại", when its section came back `null`.
  */
 export function KnowledgeBlock({
   knowledge,
@@ -108,16 +109,24 @@ export function KnowledgeBlock({
       {failure !== null || knowledge === null ? (
         <BlockError failure={failure ?? "unknown"} onRetry={onRetry} />
       ) : (
-        <dl className="flex flex-col gap-2 text-[13px]">
-          <div className="flex justify-between gap-2.5">
-            <dt className="text-[#aeb9c6]">{K.pending}</dt>
-            <dd>{formatCount(knowledge.pending)}</dd>
-          </div>
-          <div className="flex justify-between gap-2.5">
-            <dt className="text-[#aeb9c6]">{K.conflicts}</dt>
-            <dd>{formatCount(knowledge.conflicts)}</dd>
-          </div>
-        </dl>
+        <div className="flex flex-col gap-3">
+          <dl className="flex flex-col gap-2 text-[13px]">
+            <div className="flex justify-between gap-2.5">
+              <dt className="text-[#aeb9c6]">{K.pending}</dt>
+              <dd>{formatCount(knowledge.pending)}</dd>
+            </div>
+            <div className="flex justify-between gap-2.5">
+              <dt className="text-[#aeb9c6]">{K.conflicts}</dt>
+              <dd>{formatCount(knowledge.conflicts)}</dd>
+            </div>
+          </dl>
+          <Link
+            to="/admin/knowledge"
+            className="self-start text-[13px] underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-text"
+          >
+            {K.open}
+          </Link>
+        </div>
       )}
     </Panel>
   );

@@ -549,6 +549,30 @@ describe("by pipeline and role", () => {
     ]);
   });
 
+  it("names the pipelines of the learned knowledge (DEC-210) in words, not as the codes", async () => {
+    const row = (pipeline: string, role: string): PipelineRoleRow => ({
+      ...pipelineRows()[2]!,
+      pipeline,
+      role,
+      calls: 4,
+    });
+    serveUsage(
+      usage({
+        by_pipeline_role: [
+          row("knowledge_draft", "drafter"),
+          row("rag_lookup", "retriever"),
+          ...pipelineRows(),
+        ],
+      }),
+    );
+    renderPage();
+    const labels = rowsOf(await table()).map((r) => r[0]);
+    expect(labels).toContain("Tra cứu tri thức · retriever");
+    expect(labels).toContain("Soạn tri thức · drafter");
+    expect(labels).not.toContain("rag_lookup · retriever");
+    expect(labels).not.toContain("knowledge_draft · drafter");
+  });
+
   it("labels the server's `other` stop bucket, ordering the reasons by count", async () => {
     serveUsage(
       usage({

@@ -664,6 +664,7 @@ export const S = {
         title: "Tri thức",
         pending: "Bản nháp chờ duyệt",
         conflicts: "Trong đó mâu thuẫn với tri thức đã duyệt",
+        open: "Mở trang duyệt",
       },
 
       inventory: {
@@ -952,7 +953,8 @@ export const S = {
       },
 
       // The pipelines of `llm_runs.pipeline` and, for ①, its two roles. There is no chat row: the column's
-      // CHECK admits `triage` and `investigate` only (spec decision 5). Anything else is shown as it came.
+      // CHECK admits `triage`, `investigate` and, since migration 020 (DEC-210), `rag_lookup` and
+      // `knowledge_draft`. Anything else is shown as it came.
       pipeline: {
         triage: "①",
         investigate: "②",
@@ -962,6 +964,11 @@ export const S = {
         },
         triageNoRole: "① triage",
         investigateRow: "② điều tra case",
+        // DEC-210: the lookup of similar knowledge (role `retriever`) and the draft of a new entry (role `drafter`).
+        ragLookup: "Tra cứu tri thức",
+        ragLookupRole: { retriever: "Tra cứu tri thức · retriever" },
+        knowledgeDraft: "Soạn tri thức",
+        knowledgeDraftRole: { drafter: "Soạn tri thức · drafter" },
       },
       // The short words of `llm_runs.stopped_by` for a table cell. `other` is the server's bucket for a reason
       // longer than a short code. A code with no word here is shown as the code (`labelOf`).

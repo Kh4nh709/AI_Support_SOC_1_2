@@ -492,6 +492,9 @@ describe("the learned-knowledge words (DEC-210, P13-T06)", () => {
       expect(KNOWLEDGE_LIMITS.maxItems).toBe(number(draft, "MAX_ITEMS"));
       expect(KNOWLEDGE_LIMITS.noteMax).toBe(number(draft, "NOTE_MAX"));
       expect(KNOWLEDGE_LIMITS.reasonMax).toBe(number(py("rag", "publish.py"), "REASON_MAX"));
+      expect(KNOWLEDGE_LIMITS.listDefault).toBe(
+        number(py("web", "routers", "admin_knowledge.py"), "DEFAULT_LIMIT"),
+      );
     });
 
     it("KNOWLEDGE_DRAFT_STATUSES and KNOWLEDGE_ENTRY_STATUSES are the Literals of the router", () => {
