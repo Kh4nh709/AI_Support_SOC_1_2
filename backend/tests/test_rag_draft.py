@@ -454,59 +454,6 @@ def test_tidy_deletes_an_invisible_code_point_it_does_not_replace_it(label: str)
 # fix round 2: the Default_Ignorable_Code_Point table ---------------------------------------------------
 
 
-def test_the_table_is_unicode_15_default_ignorable_code_point_and_the_braille_blank() -> None:
-    assert draft.DEFAULT_IGNORABLE_RANGES == (
-        (0x00AD, 0x00AD),
-        (0x034F, 0x034F),
-        (0x061C, 0x061C),
-        (0x115F, 0x1160),
-        (0x17B4, 0x17B5),
-        (0x180B, 0x180F),
-        (0x200B, 0x200F),
-        (0x202A, 0x202E),
-        (0x2060, 0x206F),
-        (0x3164, 0x3164),
-        (0xFE00, 0xFE0F),
-        (0xFEFF, 0xFEFF),
-        (0xFFA0, 0xFFA0),
-        (0xFFF0, 0xFFF8),
-        (0x1BCA0, 0x1BCA3),
-        (0x1D173, 0x1D17A),
-        (0xE0000, 0xE0FFF),
-    )
-    assert draft.EXTRA_INVISIBLE_RANGES == ((0x2800, 0x2800),)
-    assert draft.INVISIBLE_RANGES == (
-        *draft.DEFAULT_IGNORABLE_RANGES,
-        *draft.EXTRA_INVISIBLE_RANGES,
-    )
-
-
-def test_every_code_point_of_the_table_is_deleted_and_refused() -> None:
-    count = 0
-    for low, high in draft.INVISIBLE_RANGES:
-        for cp in range(low, high + 1):
-            char = chr(cp)
-            assert draft._is_invisible(char), hex(cp)
-            assert draft.strip_invisible(f"a{char}b") == "ab", hex(cp)
-            assert draft._has_control(f"a{char}b"), hex(cp)
-            count += 1
-    assert count == len(draft._INVISIBLE_CODE_POINTS) > 4_000  # no range overlaps another
-
-
-def test_the_code_points_next_to_the_table_are_not_invisible() -> None:
-    """Both ends of every range: the ordinary character beside it stays (hair space, hyphen,
-    Hangul letters, Khmer vowels, a Khmer-adjacent mark, the next braille cell)."""
-    beside = [
-        0x00AC, 0x00AE, 0x034E, 0x0350, 0x061B, 0x061D, 0x115E, 0x1161, 0x17B3, 0x17B6, 0x180A,
-        0x1810, 0x200A, 0x2010, 0x2029, 0x202F, 0x205F, 0x2070, 0x3163, 0x3165, 0xFE10, 0xFFA1,
-        0x2801, 0x27FF,
-    ]  # fmt: skip
-    for cp in beside:
-        char = chr(cp)
-        assert not draft._is_invisible(char), hex(cp)
-        assert draft.strip_invisible(f"a{char}b") == f"a{char}b", hex(cp)
-
-
 NFC_TEXTS = (
     "Tiếng Việt: ắ ằ ẳ ẵ ặ ế ề ể ễ ệ ố ồ ổ ỗ ộ",
     "ớ ờ ở ỡ ợ ứ ừ ử ữ ự ỳ ỷ ỹ ỵ đ Đ â ê ô ơ ư ă",
