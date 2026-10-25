@@ -276,16 +276,18 @@ describe("a draft that conflicts with an entry", () => {
     expect(panel).toHaveTextContent("entry_id:");
   });
 
-  it("marks the draft as in conflict", async () => {
+  it("marks the draft as in conflict in its header, with the plain badge for an active entry", async () => {
     await open({ details: [conflicting("active")] });
-    expect(within(screen.getByRole("main")).getAllByText(K.badge.conflict).length).toBeGreaterThan(
-      0,
-    );
+    const head = screen.getByRole("region", { name: D.header });
+    expect(within(head).getByText(K.badge.conflict)).toBeInTheDocument();
+    expect(within(head).queryByText(K.badge.conflictRetired)).not.toBeInTheDocument();
   });
 
   it("names a conflicting entry that has been retired since: the badge says 'mâu thuẫn với mục đã gỡ'", async () => {
     await open({ details: [conflicting("retired")] });
-    expect(screen.getAllByText(K.badge.conflictRetired).length).toBeGreaterThan(0);
+    const head = screen.getByRole("region", { name: D.header });
+    expect(within(head).getByText(K.badge.conflictRetired)).toBeInTheDocument();
+    expect(within(head).queryByText(K.badge.conflict)).not.toBeInTheDocument();
     expect(K.badge.conflictRetired).toMatch(/mâu thuẫn với mục đã gỡ/i);
     expect(
       within(left()).getByRole("region", { name: D.left.conflict.heading.retired }),
