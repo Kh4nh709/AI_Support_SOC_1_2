@@ -26,8 +26,10 @@ approval is left out of the lookup and raises the `knowledge_integrity` health a
   `python -m app.rag.publish --rebuild`, run in `app`, the container that mounts this directory
   read-write: `docker compose exec app python -m app.rag.publish --rebuild` (`--root PATH` names
   another directory).
-- **The directory must exist on the host before the first `docker compose up -d`**, made by the user that
-  runs Compose (otherwise Docker creates it as `root` and `app` cannot write in it).
+- **The directory comes with the checkout** (this file is tracked) and must be owned by the user the
+  containers run as, `HOST_UID`:`HOST_GID` of `.env` (1000:1000 by default): `ls -ldn kb_learned` shows its
+  owner. `app` cannot write an entry file in a directory it does not own (one that Docker created as `root`,
+  for example); `sudo chown "$(id -u):$(id -g)" kb_learned` fixes it.
 - **Mounts** (`docker-compose.rag.yml`): `app` read-write, `rag-worker` read-only, `worker` none.
 
 Steps, checks and rollback: `docs/runbook.md`, "Learned knowledge and RAG (DEC-210)". Design:

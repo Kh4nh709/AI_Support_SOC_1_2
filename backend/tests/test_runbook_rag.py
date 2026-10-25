@@ -43,9 +43,9 @@ STEPS: list[tuple[str, str, str | None]] = [
     ("1", "git merge --ff-only director/rag-knowledge", "Fast-forward"),
     ("2", "make migrate PY=.venv/bin/python", "migrate: 1 applied, 19 already present"),
     ("3", DSN, "`20`"),
-    ("4", "mkdir kb_learned", "HOST_UID"),
+    ("4", "mkdir -p kb_learned && ls -ldn kb_learned", "HOST_UID"),
     ("5", "COMPOSE_FILE=docker-compose.yml:docker-compose.rag.yml", "rag-worker"),
-    ("6", "docker compose up -d", None),
+    ("6", "docker compose up -d --build ui", "`200`"),
     ("7", "KNOWLEDGE_DRAFT_ENABLED=true", "n/a — RAG off"),
     ("8", "knowledge_entries where status = 'active'", None),
     ("9", "RAG_ENABLED=true", "RAG_TRIAGE_DELAY_S"),
@@ -168,6 +168,40 @@ def test_the_migration_counts_are_the_files_up_to_020_and_020_is_named():
     assert "2 applied, 18 already present" in rows[1][2]  # a database still at 018 applies two
 
 
+def test_the_020_intro_lists_the_three_indexes_the_migration_creates():
+    """The intro said "one index"; the migration creates three (T09 review, M6). The names are read
+    from the SQL, so an index added or renamed there fails here until the intro says so."""
+    sql = (SCHEMA_DIR / "020_learned_knowledge.sql").read_text(encoding="utf-8")
+    names = re.findall(r"^CREATE (?:UNIQUE )?INDEX (\w+)", sql, re.MULTILINE)
+    assert len(names) == 3, names
+    intro = _section(_text()).split("### Migration 020", 1)[1].split("| step |", 1)[0]
+    for name in names:
+        assert f"`{name}`" in intro, f"the 020 intro does not name the index {name}"
+    assert "adds one index" not in intro and "adds three indexes" in intro
+    assert "GIN" in intro
+
+
+def test_what_to_watch_counts_the_alarms_the_alarms_table_has():
+    """ "beyond the ten alarms" was true before the three RAG checks (P13-T05) joined the table."""
+    text = _text()
+    rows = [
+        line
+        for line in _section(text, "## Alarms").splitlines()
+        if re.match(r"^\| `[a-z_]+` \|", line)
+    ]
+    assert len(rows) == 13, [_cells(r)[0] for r in rows]
+    assert "## What to watch (manual checks, beyond the thirteen alarms)" in text
+    assert "beyond the ten alarms" not in text
+
+
+def test_the_config_comment_calls_the_queue_max_an_alarm_threshold_and_not_a_cap():
+    source = (REPO_ROOT / "backend" / "app" / "infra" / "config.py").read_text(encoding="utf-8")
+    comment = re.sub(r"\s*\n\s*#\s*", " ", source)  # a comment wrapped over lines, joined
+    assert "most pending drafts the queue takes" not in comment
+    assert "is the pending-draft count above which `knowledge_queue` alarms" in comment
+    assert "it caps nothing" in comment
+
+
 def test_step_3_stops_the_operator_until_the_count_holds():
     assert "Do not go on before this holds" in _step_rows(_section(_text()))[2][2]
 
@@ -195,12 +229,26 @@ def test_the_section_says_what_a_restart_before_the_migration_breaks():
 # --------------------------------------------------------------------------- the directory and the file
 
 
-def test_the_directory_is_made_before_up_d_and_by_the_host_user():
+def test_the_directory_step_does_not_fail_on_the_directory_the_merge_already_made():
+    """`kb_learned/README.md` is tracked, so step 1's merge creates `kb_learned/`: a plain `mkdir`
+    would exit 1 ("File exists") on every deploy and the owner would never be shown (T09 review, I1).
+    """
+    section = _section(_text())
+    rows = _step_rows(section)
+    assert not re.search(r"mkdir (?!-p)", section), "a plain mkdir is back in the section"
+    assert "mkdir -p kb_learned && ls -ldn kb_learned" in rows[3][1]
+    assert "git already made it" in rows[3][2] and "`kb_learned/README.md` is tracked" in rows[3][2]
+    assert "<uid> <gid>" in rows[3][2] and "`HOST_UID`" in rows[3][2] and "`HOST_GID`" in rows[3][2]
+    assert 'sudo chown "$(id -u):$(id -g)" kb_learned' in rows[3][2]
+    assert (REPO_ROOT / "kb_learned" / "README.md").exists(), "the premise: the README is tracked"
+
+
+def test_the_directory_is_checked_before_up_d_and_by_the_host_user():
     section = _section(_text())
     rows = _step_rows(section)
     # the first `docker compose up -d` the section tells the reader to run is step 6's, and the
-    # directory is made before it, not in the same breath after it
-    assert section.index("mkdir kb_learned") < section.index("docker compose up -d")
+    # directory is checked before it, not in the same breath after it
+    assert section.index("mkdir -p kb_learned") < section.index("docker compose up -d")
     assert "docker compose up" not in rows[3][1], "step 4 starts containers"
     assert "`root`" in rows[3][2] and "cannot write" in rows[3][2]
     assert "sudo" not in rows[3][1], "the directory must not be made with sudo"
@@ -216,10 +264,73 @@ def test_step_5_adds_the_compose_file_line_and_lists_services_without_printing_t
     assert "make up" in row[2] and "make down" in row[2]
 
 
+def test_step_5_writes_the_key_on_its_own_line_and_expects_exactly_one():
+    """`echo … >> .env` glues the key onto the last line when `.env` has no trailing newline (T09
+    review, M2): the leading `\\n` of `printf` ends that line first. The grep that follows reads `1`.
+    """
+    row = _step_rows(_section(_text()))[4]
+    printf = "printf '\\nCOMPOSE_FILE=docker-compose.yml:docker-compose.rag.yml\\n' >> .env"
+    assert printf in row[1]
+    assert "echo" not in row[1]
+    assert row[1].index(printf) < row[1].index("grep -c '^COMPOSE_FILE=' .env")
+    assert row[1].index("grep -c '^COMPOSE_FILE=' .env") < row[1].index("docker compose config")
+    assert "`1`" in row[2] and "`2`" in row[2], "the row no longer says what 1 and 2 mean"
+
+
 def test_step_6_creates_rag_worker_and_restarts_the_worker_on_the_new_code():
     row = _step_rows(_section(_text()))[5]
     assert "docker compose restart worker" in row[1]
     assert "`app` recreated" in row[2] and "`rag-worker`" in row[2]
+
+
+def test_step_6_rebuilds_the_ui_image_because_the_branch_changes_frontend():
+    """The Overview's `knowledge` block and the admin knowledge page are in `frontend/`, and the `ui`
+    image holds the build (it is not a mount, **UI (service `ui`)**): without `up -d --build ui` step 8
+    has no page to approve a draft on (T09 review, I2). Mirrors the v1.1 deploy's step 4."""
+    section = _section(_text())
+    row = _step_rows(section)[5]
+    plain_up = re.search(r"docker compose up -d(?! --)", row[1])
+    assert plain_up is not None, "the plain `docker compose up -d` (it creates rag-worker) is gone"
+    build = row[1].index("docker compose up -d --build ui")
+    assert plain_up.start() < build < row[1].index("docker compose restart worker")
+    assert (
+        "curl -s -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:8080/admin/overview" in row[1]
+    )
+    assert "`200`" in row[2] and "`frontend/`" in row[2] and "not a mount" in row[2]
+    # after the migration: the build must not come before step 3
+    assert section.index(DSN) < section.index("docker compose up -d --build ui")
+
+
+def test_the_section_says_how_to_keep_rag_worker_running():
+    paragraph = _paragraph(_section(_text()), "**Running `rag-worker`.**")
+    for needle in (
+        "docker compose restart rag-worker",
+        "`backend/app/rag/`",
+        "`job_backlog`",
+        "`rag_lookup`",
+        "`knowledge_draft`",
+        "the main `worker` claims neither",
+    ):
+        assert needle in paragraph, f"the paragraph on running rag-worker no longer says {needle!r}"
+
+
+def test_the_generic_operations_rows_name_rag_worker():
+    """A fourth long-running container needs a place in the rows an operator reads under pressure
+    (T09 review, M3): the restart rule, `job_backlog`, Worker stuck, Database container down."""
+    text = _text()
+    restart = next(line for line in text.splitlines() if line.startswith("| restart |"))
+    assert "`backend/app/rag/`" in restart and "docker compose restart rag-worker" in restart
+    assert "--force-recreate app worker rag-worker" in restart
+    backlog = next(line for line in text.splitlines() if line.startswith("| `job_backlog` |"))
+    assert (
+        "`rag-worker`" in backlog and "`rag_lookup`" in backlog and "`knowledge_draft`" in backlog
+    )
+    stuck = next(line for line in text.splitlines() if line.startswith("| **Worker stuck**"))
+    assert "docker compose restart rag-worker" in stuck and "`rag_lookup`" in stuck
+    down = next(
+        line for line in text.splitlines() if line.startswith("| **Database container down**")
+    )
+    assert "`rag-worker`" in down
 
 
 # --------------------------------------------------------------------------- the switches
@@ -285,6 +396,17 @@ def test_the_checks_prove_the_three_mount_modes_inside_the_containers():
     assert "/srv/kb_learned" in command
     assert "writable" in expected and "Read-only file system" in expected
     assert "No such file or directory" in expected
+    # M4: the `rag-worker` probe cleans up after itself, and the row says what a success means
+    probe = "touch /srv/kb_learned/.probe && rm /srv/kb_learned/.probe"
+    assert command.count(probe) == 2, "both probes must remove the file they create"
+    assert "if `touch` succeeds" in expected.lower() and "read-write" in expected
+
+
+def test_the_switch_check_says_what_a_missing_line_means():
+    """No line from `printenv` means the key is not in `.env`: the code's default, `false`, applies
+    (T09 review, M5)."""
+    row = _rows_named(_checks(_section(_text())), "switches")[0]
+    assert "absent from `.env`" in row[2] and "default" in row[2] and "`false`" in row[2]
 
 
 def test_the_checks_name_the_three_health_checks():
@@ -310,6 +432,10 @@ def test_the_rollback_turns_the_switches_off_recreates_and_removes_nothing():
         "no down-migration",
     ):
         assert needle in note, f"the rollback no longer says {needle!r}"
+    # M1: the shell that sourced `.env` still exports COMPOSE_FILE, so taking the line out of `.env`
+    # alone leaves the override in force for `docker compose up -d --remove-orphans`
+    assert "unset COMPOSE_FILE" in note and "fresh shell" in note
+    assert note.index("unset COMPOSE_FILE") < note.index("docker compose up -d --remove-orphans")
     # read-only means read-only: nothing in the section deletes, drops or truncates
     for forbidden in (
         r"delete from",

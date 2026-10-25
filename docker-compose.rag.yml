@@ -24,8 +24,10 @@
 # needs a recent Compose. So the keys below repeat the base `app`'s; backend/tests/test_compose_rag.py
 # fails if any of them drifts from it. A new mount of the base `app` goes here as well, or the test says so.
 #
-# `kb_learned/` must exist on the host, made by the user that runs Compose, BEFORE the first `up -d`
-# (runbook step 4): otherwise Docker creates it as root and `app`, running as HOST_UID, cannot write in it.
+# `kb_learned/` comes with the checkout (its README.md is tracked) and must be owned by HOST_UID:HOST_GID,
+# the user the containers run as (runbook step 4: `mkdir -p kb_learned && ls -ldn kb_learned`): `app` runs
+# as that user and cannot write an entry file in a directory it does not own, and a directory that is
+# missing when `up -d` runs is created by Docker as root.
 #
 # `rag-worker` claims only `rag_lookup` and `knowledge_draft` (web/rag_worker.py) and reclaims only those
 # types. Restart it after any merge that touches web/rag_worker.py, web/rag_handlers/ or rag/ (DEC-099):

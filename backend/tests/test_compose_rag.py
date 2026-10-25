@@ -122,10 +122,17 @@ def test_rag_worker_runs_the_rag_worker_module():
     assert (REPO_ROOT / "backend" / "app" / "web" / "rag_worker.py").exists()
 
 
-def test_rag_worker_is_the_base_apps_image_user_environment_and_host_entries():
+def test_rag_worker_is_the_base_app_in_every_key_but_command_ports_and_volumes():
+    """Every key, not a hand-picked list (T09 review, M7): a key added to the base `app` later (a
+    `healthcheck`, `stop_grace_period`, a new `environment` entry) must reach `rag-worker` too, or this
+    fails and names it. `command` differs by design, `ports` must be absent, and `volumes` has its own
+    tests (one extra read-only mount)."""
     app = _load(BASE)["services"]["app"]
     rag = _services()["rag-worker"]
-    for key in ("build", "image", "user", "env_file", "environment", "extra_hosts"):
+    exempt = {"command", "ports", "volumes"}
+    keys = (set(app) | set(rag)) - exempt
+    assert {"build", "image", "user", "env_file", "environment", "extra_hosts"} <= keys
+    for key in sorted(keys):
         assert rag.get(key) == app.get(key), f"rag-worker's {key} is not the base app's"
 
 
@@ -169,6 +176,16 @@ def test_the_override_says_how_it_is_switched_on_and_off():
     assert "docs/runbook.md" in text  # where the steps are, not restated here
 
 
+def test_the_override_says_the_directory_comes_with_the_checkout_and_must_be_owned_by_the_host_user():
+    """`kb_learned/README.md` is tracked, so the merge creates the directory (T09 review, I1)."""
+    text = OVERRIDE.read_text(encoding="utf-8")
+    assert "mkdir -p kb_learned && ls -ldn kb_learned" in text
+    assert "its README.md is tracked" in text and "HOST_UID:HOST_GID" in text
+    assert (
+        "BEFORE the first `up -d`" not in text
+    ), "the old instruction (make it before up -d) is back"
+
+
 # --------------------------------------------------------------------------- the directory on the host
 
 
@@ -200,5 +217,8 @@ def test_the_readme_says_what_the_directory_is():
         "the database is the source",
         "never edit a file here by hand",
         "docs/runbook.md",
+        "this file is tracked",
+        "ls -ldn kb_learned",
+        "`host_uid`:`host_gid`",
     ):
         assert needle in text, f"the README no longer says {needle!r}"
