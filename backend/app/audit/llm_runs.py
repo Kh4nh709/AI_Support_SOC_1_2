@@ -43,12 +43,22 @@ _COLUMNS = (
     "prompt_version",
     "cost_usd",
     "stopped_by",
-    "rag_lookup_id",
 )
 
 _INSERT_SQL = (
     f"INSERT INTO llm_runs ({', '.join(_COLUMNS)}) "
     f"VALUES ({', '.join(['%s'] * len(_COLUMNS))}) RETURNING run_id"
+)
+
+# P13-T07 (DEC-210): the one extra column, `rag_lookup_id` (migration 020), and the statement that
+# names it. It is used only for a row whose prompt held a lookup's material, which needs
+# `RAG_ENABLED`; every other row - the whole of today's behaviour - is written by `_INSERT_SQL`, whose
+# text is what it was before, so a host that runs this code before `make migrate` has applied 020
+# still writes ①'s rows.
+_LOOKUP_COLUMNS = (*_COLUMNS, "rag_lookup_id")
+_INSERT_WITH_LOOKUP_SQL = (
+    f"INSERT INTO llm_runs ({', '.join(_LOOKUP_COLUMNS)}) "
+    f"VALUES ({', '.join(['%s'] * len(_LOOKUP_COLUMNS))}) RETURNING run_id"
 )
 
 
@@ -82,37 +92,38 @@ def write_run(
     `rag_lookup_id` (P13-T07, DEC-210): the stored lookup whose approved material is in this
     row's prompt, so the admin can see which runs a lookup influenced. The proposer's row carries
     it when the prompt held the learned section; the verifier's never does (its prompt never gets
-    the section). None - today's row - otherwise.
+    the section). It is written only when given: None - today's row - is written by today's INSERT,
+    which does not name the column at all.
     """
     if role not in _ROLES:
         raise PermanentError(f"write_run: role must be one of {sorted(_ROLES)}, got {role!r}")
-    row = conn.execute(
-        _INSERT_SQL,
-        (
-            run_id,
-            "triage",
-            "alert",
-            subject_id,
-            role,
-            system_prompt,
-            user_message,
-            None,  # agent_trace — ②'s
-            Jsonb(result) if result is not None else None,
-            Jsonb(gate_result),
-            Jsonb(verifier_result) if verifier_result is not None else None,
-            None,  # evidence_check — ②'s
-            Jsonb(injection_findings) if injection_findings is not None else None,
-            Jsonb(citation_warnings) if citation_warnings is not None else None,
-            input_tokens,
-            output_tokens,
-            latency_ms,
-            model_id,
-            prompt_version,
-            cost_usd,
-            stopped_by,
-            rag_lookup_id,
-        ),
-    ).fetchone()
+    values = (
+        run_id,
+        "triage",
+        "alert",
+        subject_id,
+        role,
+        system_prompt,
+        user_message,
+        None,  # agent_trace — ②'s
+        Jsonb(result) if result is not None else None,
+        Jsonb(gate_result),
+        Jsonb(verifier_result) if verifier_result is not None else None,
+        None,  # evidence_check — ②'s
+        Jsonb(injection_findings) if injection_findings is not None else None,
+        Jsonb(citation_warnings) if citation_warnings is not None else None,
+        input_tokens,
+        output_tokens,
+        latency_ms,
+        model_id,
+        prompt_version,
+        cost_usd,
+        stopped_by,
+    )
+    if rag_lookup_id is None:
+        row = conn.execute(_INSERT_SQL, values).fetchone()
+    else:
+        row = conn.execute(_INSERT_WITH_LOOKUP_SQL, (*values, rag_lookup_id)).fetchone()
     return row[0]
 
 

@@ -577,6 +577,24 @@ def verifier_row(db, alert_id: str) -> dict:
     return dict(zip(columns, row, strict=True))
 
 
+#: `INSERT INTO llm_runs` as `audit/llm_runs.py` has had it since P3: 21 columns, no `rag_lookup_id`.
+BASE_INSERT = (
+    "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, role, system_prompt, "
+    "user_message, agent_trace, result, gate_result, verifier_result, evidence_check, "
+    "injection_findings, citation_warnings, input_tokens, output_tokens, latency_ms, model_id, "
+    "prompt_version, cost_usd, stopped_by) VALUES (" + ", ".join(["%s"] * 21) + ") RETURNING run_id"
+)
+#: The same with the one extra column, written only for a row whose prompt held a lookup.
+LOOKUP_INSERT = BASE_INSERT.replace("stopped_by)", "stopped_by, rag_lookup_id)").replace(
+    "%s) RETURNING", "%s, %s) RETURNING"
+)
+
+
+def llm_inserts(statements: list[str]) -> list[str]:
+    """The `INSERT INTO llm_runs` statements ① executed, in order."""
+    return [s for s in statements if s.startswith("INSERT INTO llm_runs")]
+
+
 def history_text_of(db, alert_id: str) -> str:
     return render_history(latest_lookup(db, Subject("alert", alert_id)).history)
 
@@ -605,6 +623,9 @@ def test_the_switch_off_reads_no_lookup_and_writes_todays_row(
 
     assert statements, "the recorder saw nothing - it is not recording"
     assert not [s for s in statements if "rag_results" in s or "knowledge_entries" in s]
+    # the statement, not only the row: both `llm_runs` INSERTs are the base commit's text, column
+    # list included - they do not name `rag_lookup_id`, so migration 020 is not needed for this path
+    assert llm_inserts(statements) == [BASE_INSERT, BASE_INSERT]
     row = proposer_row(db, alert_id)
     assert row["rag_lookup_id"] is None
     assert B.HEADING_LEARNED not in row["user_message"]
@@ -621,6 +642,26 @@ def test_the_switch_off_reads_no_lookup_and_writes_todays_row(
     off = evaluate_alert(db, alert_id, adapter=fake(), cfg=cfg, switches=DEPLOYED)
     assert off.built.prompt.user == row["user_message"] and off.built.learned_used is False
     assert off.prompt_version == T.prompt_version(T.TRIAGE_TEMPLATE)
+
+
+def test_the_insert_constant_is_the_base_commits_text() -> None:
+    """`audit/llm_runs.py`'s INSERT as it stood before P13-T07: 21 columns, `rag_lookup_id` not
+    among them. The switch off must write exactly this."""
+    assert llm_runs._INSERT_SQL == BASE_INSERT
+    assert "rag_lookup_id" not in llm_runs._INSERT_SQL
+
+
+@pytest.mark.db
+def test_the_switch_off_job_runs_on_a_schema_without_migration_020_in_llm_runs(db, rag_off) -> None:
+    """A host restarted on this code before `make migrate` still triages: with the switch off the
+    INSERT never names the column, so a table that does not have it is no obstacle."""
+    db.execute("ALTER TABLE llm_runs DROP COLUMN rag_lookup_id")  # rolled back with the test
+    alert_id = _seed_alert(db)
+
+    run_triage_job(db, _job(alert_id), adapter=fake())
+
+    rows = db.execute("SELECT role FROM llm_runs WHERE subject_id = %s", (alert_id,)).fetchall()
+    assert sorted(role for (role,) in rows) == ["proposer", "verifier"]
 
 
 @pytest.mark.db
@@ -694,6 +735,39 @@ kb_learned_level: hoi_giong
     assert row["system_prompt"] == T._system_prompt(
         T.TRIAGE_TEMPLATE, "triage_v2"
     )  # template as is
+
+
+@pytest.mark.db
+def test_the_insert_names_the_lookup_column_only_for_the_row_that_used_a_lookup(
+    db, rag_on, statements
+) -> None:
+    """With the switch on the column is written when a lookup's material is in the prompt, and then
+    only on the proposer's row; the verifier's INSERT is the base commit's."""
+    alert_id = _seed_alert(db)
+    put_lookup(db, alert_id, matches=[approved(db, LONG_A, "giong")])
+    statements.clear()
+
+    run_triage_job(db, _job(alert_id), adapter=fake())
+
+    assert llm_inserts(statements) == [LOOKUP_INSERT, BASE_INSERT]
+    assert LOOKUP_INSERT.count("rag_lookup_id") == 1 and LOOKUP_INSERT.count("%s") == 22
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("status", [None, "failed", "budget"])
+def test_the_switch_on_without_material_writes_the_base_insert_too(
+    db, rag_on, statements, status
+) -> None:
+    """RAG_ENABLED alone does not add the column: no lookup, or one with nothing usable, is today's
+    statement - the column appears only when material was actually used."""
+    alert_id = _seed_alert(db)
+    if status is not None:
+        put_lookup(db, alert_id, status=status)
+    statements.clear()
+
+    run_triage_job(db, _job(alert_id), adapter=fake())
+
+    assert llm_inserts(statements) == [BASE_INSERT, BASE_INSERT]
 
 
 @pytest.mark.db
