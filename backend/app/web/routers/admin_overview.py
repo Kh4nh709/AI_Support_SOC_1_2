@@ -2,7 +2,7 @@
 and §5.4): `GET /api/admin/overview?range=24h|7d|30d` and `POST /api/admin/jobs/{job_id}/retry`.
 Both are `Admin` only; `iter_routers()` discovers this module.
 
-**Each section fails alone.** The overview is ten independent reads. Each runs in its own
+**Each section fails alone.** The overview is eleven independent reads. Each runs in its own
 savepoint (`conn.transaction()` inside the request's transaction), after its own
 `SET LOCAL statement_timeout`. A `psycopg.Error` rolls that savepoint back, so the request's
 transaction stays usable: the section answers `null`, `{section, error}` is added to `errors`,
@@ -27,6 +27,12 @@ its four blocks fails.
 `SET LOCAL` inside a savepoint lasts until the end of the request's transaction unless the
 savepoint is rolled back, so a section's `3s` is still set while the next one runs: each section
 sets its own anyway, and nothing runs after the last one but the commit.
+
+**`knowledge`** (P13-T05, DEC-210, spec §7.10) is `{pending, conflicts}`: the learned-knowledge drafts
+waiting for an admin (`knowledge_drafts.status = 'pending'`), and how many of them conflict with an
+active entry (`conflict_with_entry IS NOT NULL`). Like `waiting`, it is what is there now: the range
+does not bound it. It is the last section, so the sections of `OVERVIEW_SECTIONS` that came before keep
+their place.
 
 Read rules shared by the alert sections:
 - synthetic alerts (`is_synthetic`) are left out, as the queue, the digest and the health
@@ -287,6 +293,16 @@ def _llm_month(conn: Any, cfg: Any) -> dict[str, Any]:
     return admin_llm.llm_month(conn, cfg)
 
 
+def _knowledge(conn: Any) -> dict[str, int]:
+    """The queue of learned-knowledge drafts: `{pending, conflicts}` (module docstring)."""
+    pending, conflicts = conn.execute("""
+        SELECT count(*) FILTER (WHERE status = 'pending'),
+               count(*) FILTER (WHERE status = 'pending' AND conflict_with_entry IS NOT NULL)
+        FROM knowledge_drafts
+        """).fetchone()
+    return {"pending": pending, "conflicts": conflicts}
+
+
 # ---------------------------------------------------------------------------
 # One section, alone
 # ---------------------------------------------------------------------------
@@ -332,6 +348,7 @@ def api_overview(
         ("failed_jobs", lambda: _failed_jobs(conn)),
         ("inventory", lambda: _inventory(conn)),
         ("llm_month", lambda: _llm_month(conn, cfg)),
+        ("knowledge", lambda: _knowledge(conn)),
     )
     body: dict[str, Any] = {"range": range_, "errors": errors}
     for name, compute in sections:
