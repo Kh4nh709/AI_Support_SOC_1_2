@@ -141,6 +141,7 @@ class Learned:
     entries: tuple[tuple[KbLearnedLevel, str], ...]
 
 
+T_CAP = B.MAX_LEARNED_ENTRIES
 OK = Learned(HISTORY, ((KbLearnedLevel.RAT_GIONG, ENTRY_A), (KbLearnedLevel.HOI_GIONG, ENTRY_B)))
 HISTORY_ONLY = Learned(HISTORY, ())
 ENTRIES_ONLY = Learned(None, OK.entries)
@@ -297,6 +298,32 @@ def test_at_most_three_entries_are_rendered() -> None:
     assert built.prompt.user.count("kb_learned_level:") == 3
 
 
+def test_a_level_that_is_not_a_closed_learned_level_is_refused_not_rendered() -> None:
+    """Item 18 (T07 N2, as T08 does): `fact()` renders any Enum, so a Severity would be written as
+    `kb_learned_level: high`, a value the section's vocabulary does not have. A caller's defect: a
+    TypeError before anything is rendered, and the value is not echoed."""
+    for level in (B.Severity.HIGH, "giong", 3, None):
+        with pytest.raises(TypeError) as raised:
+            build(Learned(None, ((level, ENTRY_A),)))  # type: ignore[arg-type]
+        assert "high" not in str(raised.value)
+
+
+def test_every_closed_learned_level_is_accepted() -> None:
+    for level in KbLearnedLevel:
+        assert (
+            f"kb_learned_level: {level.value}"
+            in build(Learned(None, ((level, ENTRY_A),))).prompt.user
+        )
+
+
+def test_a_bad_level_beyond_the_cap_is_never_rendered_and_is_not_an_error() -> None:
+    entries = tuple((KbLearnedLevel.GIONG, f"# entry {n}") for n in range(T_CAP))
+    built = build(Learned(None, (*entries, (B.Severity.HIGH, "# late"))))  # type: ignore[arg-type]
+    assert (
+        "# late" not in built.prompt.user and built.prompt.user.count("kb_learned_level:") == T_CAP
+    )
+
+
 @pytest.mark.parametrize("learned", [OK, HISTORY_ONLY, ENTRIES_ONLY, NOTHING])
 def test_the_whole_prompt_with_the_section_still_passes_the_linter(learned) -> None:
     assert lint(build(learned)) == []
@@ -346,7 +373,7 @@ def test_the_verifier_prompt_takes_no_learned_material() -> None:
 
 
 def test_learned_like_is_the_two_attributes_the_lookups_material_has() -> None:
-    assert {"history_text", "entries"} <= set(dir(T.LearnedLike))
+    assert {"history_text", "entries"} <= set(dir(B.LearnedLike))
     material = PromptMaterial(uuid.uuid4(), HISTORY, OK.entries)
     assert build(material).prompt.user == build(OK).prompt.user  # structurally the same input
 

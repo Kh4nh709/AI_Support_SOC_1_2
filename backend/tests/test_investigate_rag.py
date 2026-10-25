@@ -44,8 +44,7 @@ from app.infra import config
 from app.infra.jobs import enqueue
 from app.llm import builder as B
 from app.llm import investigate as llm_investigate
-from app.llm.builder import KbLearnedLevel
-from app.llm.triage import MAX_LEARNED_ENTRIES, LearnedLike
+from app.llm.builder import MAX_LEARNED_ENTRIES, KbLearnedLevel, LearnedLike
 from app.rag.lookup import PromptMaterial, latest_lookup, prompt_material
 from app.rag.subject import Subject
 from app.security import detector, linter, wrap

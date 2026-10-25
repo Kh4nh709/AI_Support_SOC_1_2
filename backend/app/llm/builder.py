@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from typing import Protocol
 
 from app.security import wrap
 
@@ -267,6 +268,43 @@ TEMPLATE_CONSTANTS = frozenset(
         "±2h",
     }
 )
+
+# ─────────────────────────────────────────── the learned section's contract (DEC-210, P13-T07/T08)
+#: The learned section (spec §7.8): at most three approved entries, numbered `[1]`..`[3]`. ① and ② share it.
+MAX_LEARNED_ENTRIES = 3
+
+
+class LearnedLike(Protocol):
+    """Structural twin of `app.rag.lookup.PromptMaterial` (`llm` may not import `rag`): the decision
+    history as `rag.history.render_history` writes it (None when there is none) and the approved
+    content of each matched entry with its level, best first. Nothing else of a lookup is here -
+    in particular not the ranking agent's reasons. ① (`llm.triage`) and ② (`tier2.dossier`) take it.
+    """
+
+    @property
+    def history_text(self) -> str | None: ...
+    @property
+    def entries(self) -> Sequence[tuple[KbLearnedLevel, str]]: ...
+
+
+def prompt_entries(learned: LearnedLike | None) -> tuple[tuple[KbLearnedLevel, str], ...]:
+    """The entries the learned section renders: the first `MAX_LEARNED_ENTRIES` of `learned.entries`, best
+    first. The one function ① and ② both call.
+
+    Each level must be a `KbLearnedLevel`: `fact()` renders any Enum, so a `Severity` would be written
+    as `kb_learned_level: high`, a value the section's vocabulary does not have. A defect of the
+    caller, not data: a `TypeError` before anything is rendered or cut (the value is not echoed)."""
+    if learned is None:
+        return ()
+    kept: list[tuple[KbLearnedLevel, str]] = []
+    for level, text in learned.entries:
+        if len(kept) == MAX_LEARNED_ENTRIES:
+            break
+        if not isinstance(level, KbLearnedLevel):
+            raise TypeError("learned entry level must be a KbLearnedLevel")
+        kept.append((level, text))
+    return tuple(kept)
+
 
 # ─────────────────────────────────────────────────────────────── fact()
 Fact = Enum | int | datetime | Id
