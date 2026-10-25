@@ -20,6 +20,14 @@ first_seen, last_seen, src_ip_count`) and the `samples` sequence of dicts that
 `app.domain.correlation.CorrelationRow` / `CorrelationSummary` carry. P3-T10 passes the
 real objects; the tests build them from `app.domain.correlation` directly.
 
+The learned section (P13-T07, DEC-210, spec §7.8): with `learned` the user message gains one
+section between the playbook and the request - the decision history as the block `decision_history`,
+the level of each approved entry as the typed fact `kb_learned_level`, the entries themselves as the
+one block `kb_learned`, and a fixed sentence that this is a reference and never a basis for closing.
+It is a user-message section only: the system template, the schemas and the gate do not know it, so
+`prompt_version` does not move and a reason cannot cite it. With `learned=None` the message is
+byte for byte what it was. It is the first thing the token budget cuts: the entries, then the history.
+
 The repair round (planning decision 9) is a fresh single-turn call: the same system
 prompt, the original user message plus `HEADING_REPAIR`, `SENTENCE_REPAIR` and one bullet
 per validation error. The validator's messages carry field paths and vocabularies, never
@@ -57,13 +65,16 @@ from app.llm.builder import (
     HEADING_CONTEXT,
     HEADING_CORRELATION,
     HEADING_FACTS,
+    HEADING_LEARNED,
     HEADING_PLAYBOOK,
     HEADING_PROPOSER,
     HEADING_REPAIR,
     HEADING_REQUEST,
     HEADING_TABLE,
     SENTENCE_ABSENT,
+    SENTENCE_LEARNED_IS_REFERENCE,
     SENTENCE_NO_CORRELATION,
+    SENTENCE_NO_LEARNED,
     SENTENCE_NO_PLAYBOOK,
     SENTENCE_PROPOSER_IS_DATA,
     SENTENCE_REPAIR,
@@ -77,6 +88,7 @@ from app.llm.builder import (
     Id,
     IdentityPrivileged,
     IocReputation,
+    KbLearnedLevel,
     LookupStatus,
     PromptBuilder,
     Severity,
@@ -99,6 +111,8 @@ SAMPLE_RAW_LOG_LIMIT_BYTES = 2_048
 RAW_LOG_CUT_BYTES = 8_192
 SAMPLES_CUT = 3
 ROWS_CUT = 10
+#: The learned section (spec §7.8): at most three approved entries, numbered `[1]`..`[3]`.
+MAX_LEARNED_ENTRIES = 3
 
 _LOOKUP_LABELS = ("asset", "identity", "ioc")
 _LIST_CONDITION_ENUMS: dict[str, type[Enum]] = {
@@ -142,6 +156,18 @@ class CorrelationLike(Protocol):
     def samples(self) -> Sequence[Mapping[str, Any]]: ...
 
 
+class LearnedLike(Protocol):
+    """Structural twin of `app.rag.lookup.PromptMaterial` (`llm` may not import `rag`): the decision
+    history as `rag.history.render_history` writes it (None when there is none) and the approved
+    content of each matched entry with its level, best first. Nothing else of a lookup is here -
+    in particular not the ranking agent's reasons."""
+
+    @property
+    def history_text(self) -> str | None: ...
+    @property
+    def entries(self) -> Sequence[tuple[KbLearnedLevel, str]]: ...
+
+
 @dataclass(frozen=True)
 class TriageInput:
     """One `alerts` row as plain values (P3-T10 fills this with an explicit column list,
@@ -179,6 +205,9 @@ class BuiltTriagePrompt:
     warnings: list[str]
     estimated_tokens: int
     playbook_used_effective: str | None
+    #: The learned section is in `prompt` (also the "nothing found" form). False when `learned` was
+    #: None, and when the budget cut everything the lookup had given - then the lookup was not used.
+    learned_used: bool = False
 
 
 @dataclass(frozen=True)
@@ -401,6 +430,36 @@ def _playbook_section(
     return inp.category
 
 
+def _learned_section(
+    pb: PromptBuilder,
+    history_text: str | None,
+    entries: Sequence[tuple[KbLearnedLevel, str]],
+    *,
+    nothing_found: bool,
+) -> None:
+    """Spec §7.8. The heading; the history under its own source (its values, such as a SOAR scenario,
+    are not id-shaped, so it is a block, not facts); each entry's level as a typed fact, then the
+    entries' approved text as the one `kb_learned` block (a build holds one block per source), in
+    the same order, numbered `[1]`.. so a level and its entry can be matched; then the sentence that
+    says what the section is. When the lookup found nothing: the heading and the one sentence that
+    says so. The text is approved content and a history the system wrote, and still goes in blocks:
+    the linter accepts no prose outside one."""
+    pb.heading(HEADING_LEARNED)
+    if nothing_found:
+        pb.sentence(SENTENCE_NO_LEARNED)
+        return
+    if history_text:
+        pb.block(history_text, "decision_history")
+    for level, _ in entries:
+        pb.line(fact("kb_learned_level", level))
+    if entries:
+        pb.block(
+            "\n\n".join(f"[{number}] {text}" for number, (_, text) in enumerate(entries, 1)),
+            "kb_learned",
+        )
+    pb.sentence(SENTENCE_LEARNED_IS_REFERENCE)
+
+
 def _render_proposer(
     inp: TriageInput,
     facts: Mapping[str, Any],
@@ -414,7 +473,9 @@ def _render_proposer(
     raw_log_limit: int,
     include_context: bool,
     include_correlation: bool,
+    learned: tuple[str | None, Sequence[tuple[KbLearnedLevel, str]], bool] | None = None,
 ) -> tuple[BuiltPrompt, list[str], str | None]:
+    """`learned`: None leaves the section out whole; else `(history_text, entries, nothing_found)`."""
     warnings: list[str] = []
     pb = PromptBuilder(system, nonce=nonce)
     alert_id = _alert_section(pb, inp, facts, warnings)
@@ -427,6 +488,9 @@ def _render_proposer(
     if include_correlation:
         _correlation_section(pb, rows, samples)
     effective = _playbook_section(pb, inp, playbook_text, table, warnings)
+    if learned is not None:
+        history_text, entries, nothing_found = learned
+        _learned_section(pb, history_text, entries, nothing_found=nothing_found)
     pb.heading(HEADING_REQUEST)
     pb.sentence(SENTENCE_REQUEST_TRIAGE)
     return pb.build(), warnings, effective
@@ -443,11 +507,20 @@ def build_proposer_prompt(
     include_context: bool = True,
     include_correlation: bool = True,
     nonce: str | None = None,
+    learned: LearnedLike | None = None,
 ) -> BuiltTriagePrompt:
     """The ① user message, section by section (architecture §4.1), through
     `PromptBuilder` only; then the budget check and phase-5's cut order (design note 3).
     `include_context` / `include_correlation` are P7's B2 switches: the section — its
-    heading, sentences and block — is omitted entirely."""
+    heading, sentences and block — is omitted entirely.
+
+    `learned` (P13-T07): None - the message is byte for byte what it was before this parameter
+    existed. Else the learned section is rendered after the playbook section and before the
+    request (`_learned_section`); a `learned` that holds nothing renders the "nothing found" form.
+    The token budget cuts it first, before every step above: the entries
+    (`learned_entries_dropped`), then the history (`learned_history_dropped`); when both are gone
+    the section is gone too (not the "nothing found" form, which would be untrue) and
+    `learned_used` is False."""
     system = _system_prompt(TRIAGE_TEMPLATE, "triage_v2")
     nonce = nonce if nonce is not None else wrap.new_nonce()
     rows: Sequence[CorrelationRowLike] = ()
@@ -457,7 +530,28 @@ def build_proposer_prompt(
         if rows:
             samples = tuple(correlation.samples)[:MAX_CORRELATION_SAMPLES]
 
-    limits = {"raw_log": cfg.PROMPT_LOG_MAX_BYTES, "samples": len(samples), "rows": len(rows)}
+    history_text = (learned.history_text or None) if learned is not None else None
+    entries = tuple(learned.entries)[:MAX_LEARNED_ENTRIES] if learned is not None else ()
+    nothing_found = learned is not None and history_text is None and not entries
+    limits = {
+        "raw_log": cfg.PROMPT_LOG_MAX_BYTES,
+        "samples": len(samples),
+        "rows": len(rows),
+        "entries": len(entries),
+        "history": 1 if history_text else 0,
+    }
+
+    def learned_view() -> tuple[str | None, Sequence[tuple[KbLearnedLevel, str]], bool] | None:
+        """What the section holds after the cuts so far; None when it is not in the prompt."""
+        if learned is None:
+            return None
+        if nothing_found:
+            return None, (), True
+        kept_entries = entries[: limits["entries"]]
+        kept_history = history_text if limits["history"] else None
+        if not kept_entries and kept_history is None:
+            return None  # the lookup had something and it was all cut: say nothing, claim nothing
+        return kept_history, kept_entries, False
 
     def render() -> tuple[BuiltPrompt, list[str], str | None]:
         return _render_proposer(
@@ -472,6 +566,7 @@ def build_proposer_prompt(
             raw_log_limit=limits["raw_log"],
             include_context=include_context,
             include_correlation=include_correlation,
+            learned=learned_view(),
         )
 
     prompt, warnings, effective = render()
@@ -482,6 +577,9 @@ def build_proposer_prompt(
         raw_log_bytes = len(inp.raw_log.encode("utf-8"))
         # (name, limit key, new value, whether the step changes anything) — a no-op is not a cut
         steps = (
+            # the learned section goes first (P13-T07): a reference, never a basis for the verdict
+            ("learned_entries_dropped", "entries", 0, len(entries) > 0),
+            ("learned_history_dropped", "history", 0, history_text is not None),
             (
                 "raw_log_cut_to_8192",
                 "raw_log",
@@ -508,6 +606,7 @@ def build_proposer_prompt(
         warnings=warnings + cut_warnings,
         estimated_tokens=estimated,
         playbook_used_effective=effective,
+        learned_used=learned_view() is not None,
     )
 
 
