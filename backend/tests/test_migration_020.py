@@ -889,7 +889,11 @@ def test_the_history_query_can_use_the_expression_index(db):
 # ── grants ──────────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("table", TABLES)
+#: `rag_results` is append-only (P13 fix wave, item 27): a lookup is stored once and read, nothing updates it.
+APPEND_ONLY = "rag_results"
+
+
+@pytest.mark.parametrize("table", [t for t in TABLES if t != APPEND_ONLY])
 def test_app_rw_holds_select_insert_update(db, table):
     held = {
         privilege: db.execute(
@@ -900,7 +904,60 @@ def test_app_rw_holds_select_insert_update(db, table):
     assert held == {"SELECT": True, "INSERT": True, "UPDATE": True}
 
 
-def test_app_rw_reads_writes_and_updates_all_three_tables(db):
+def test_app_rw_holds_select_and_insert_on_rag_results_and_nothing_that_changes_a_row(db):
+    held = {
+        privilege: db.execute(
+            "SELECT has_table_privilege('app_rw', %s, %s)", (APPEND_ONLY, privilege)
+        ).fetchone()[0]
+        for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE")
+    }
+    assert held == {
+        "SELECT": True,
+        "INSERT": True,
+        "UPDATE": False,
+        "DELETE": False,
+        "TRUNCATE": False,
+    }
+
+
+def test_app_rw_cannot_update_or_delete_a_stored_lookup(db):
+    lookup_id = str(uuid.uuid4())
+    _result(db, lookup_id=lookup_id)
+    for statement in (
+        "UPDATE rag_results SET status = 'failed' WHERE lookup_id = %s",
+        "DELETE FROM rag_results WHERE lookup_id = %s",
+    ):
+        with db.transaction(force_rollback=True):
+            db.execute("SET LOCAL ROLE app_rw")
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                db.execute(statement, (lookup_id,))
+    assert (
+        db.execute(
+            "SELECT count(*) FROM rag_results WHERE lookup_id = %s", (lookup_id,)
+        ).fetchone()[0]
+        == 1
+    )
+
+
+def test_020_says_what_rag_lookup_id_is_and_when_it_is_null():
+    """P13 fix wave, item 12 (T07): the comment said NULL for every run that is not a lookup's own, but
+    ① and ② rows carry the lookup their prompt held. The migration is unapplied on any live host, so its
+    comment is corrected where it stands."""
+    text = (SCHEMA_DIR / "020_learned_knowledge.sql").read_text(encoding="utf-8")
+    assert "NULL for every run that is not a lookup's own" not in text
+    comment = text[text.index("`llm_runs`: `rag_lookup_id`") :].split("\n--   3.", 1)[0]
+    comment = re.sub(r"\s*\n--\s*", " ", comment)  # the comment as one line
+    for phrase in (
+        "run's own lookup",  # a rag_lookup run
+        "on a ① or ② row",  # the proposer / investigator rows
+        "learned section reached the prompt",  # set only when the section was in the prompt
+        "token budget cut the whole section",  # and NULL when it was all cut
+        "RAG is off",
+    ):
+        assert phrase in comment, phrase
+
+
+def test_app_rw_reads_and_writes_all_three_tables_and_updates_two(db):
     user_id = _user(db)
     entry_id = str(uuid.uuid4())
     lookup_id = str(uuid.uuid4())
@@ -916,7 +973,6 @@ def test_app_rw_reads_writes_and_updates_all_three_tables(db):
         db.execute(
             "UPDATE knowledge_entries SET status = 'retired' WHERE entry_id = %s", (entry_id,)
         )
-        db.execute("UPDATE rag_results SET status = 'failed' WHERE lookup_id = %s", (lookup_id,))
         counts = [db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in TABLES]
     assert all(count >= 1 for count in counts)
 
@@ -1062,7 +1118,7 @@ def test_app_rw_holds_the_three_tables_when_020_is_applied_by_another_role(tmp_p
                 assert held == {
                     "SELECT": True,
                     "INSERT": True,
-                    "UPDATE": True,
+                    "UPDATE": table != APPEND_ONLY,
                     "DELETE": False,
                     "TRUNCATE": False,
                 }, table
