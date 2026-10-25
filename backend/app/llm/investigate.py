@@ -151,14 +151,26 @@ def _object_prefix(path: str) -> str:
     return path
 
 
+#: The suffix `llm.schemas.validate` gives a key the schema does not have: `<path of the key>: unexpected key`.
+_UNEXPECTED_KEY = ": unexpected key"
+
+
 def _repair_line(error: str) -> str:
     """One validator message -> one value-free bullet: array indices normalised to the
     schema's `[]` form; an `unexpected key` reported against its parent object, never
-    the key itself (which is the model's own text, not a template constant)."""
+    the key itself (which is the model's own text, not a template constant).
+
+    The key is the model's, so it may itself contain `": "` (`a: b`, `summary: missing`). A split at
+    the first `": "` then left part of it in the bullet, outside any block, where the linter refused
+    the repair (P13-T08, the same finding as `rag/agent.py`'s, fixed there in P13-T03). The suffix is
+    therefore taken off first, from the end; what is left is the key's path, of which only the longest
+    known object prefix is kept. Every other message has a path the schema owns, and splits where it
+    always did."""
+    if error.endswith(_UNEXPECTED_KEY):
+        parent = _object_prefix(_ARRAY_INDEX_RE.sub("[]", error[: -len(_UNEXPECTED_KEY)]))
+        return f"{BULLET}{parent or _ROOT}{_UNEXPECTED_KEY}"
     path, _, message = error.partition(": ")
     path = _ARRAY_INDEX_RE.sub("[]", path)
-    if message == "unexpected key":
-        path = _object_prefix(path)
     return f"{BULLET}{path or _ROOT}: {message}"
 
 

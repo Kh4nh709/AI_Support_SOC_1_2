@@ -52,6 +52,17 @@ evidence check accepts a quote copied from the dossier's escaped text (B3) and r
 quotes too short to prove anything (S4) — `_check_evidence`; every paid call is costed on
 whichever row its attempt writes (S7) — `llm.investigate.Spend`; and a concurrent
 `conclude` cannot cost the run its row (S5) — the end of `run_investigate_job`.
+
+**The learned section (P13-T08, DEC-210, spec §7.6 to §7.9).** With `RAG_ENABLED` the job reads the
+case's newest stored lookup (`rag.lookup.latest_lookup`) and the material it may put in a prompt
+(`prompt_material`: each entry re-checked - active, hash intact) and hands it to `dossier.build` as
+`learned`, which renders it as block 10. **② never waits**: whatever the lookup holds when the job
+runs is used - no row, a `failed` or `budget` one (no section), an `empty` one (the "nothing found"
+form) or an `ok` one - and nothing is queued or slept on. The `llm_runs` row names the lookup
+(`rag_lookup_id`) only when its material actually reached the prompt, after any budget cut. The
+output schema, the injection scan and `_check_evidence` are unchanged: an entry is reference
+material, and a quote taken from one is not in the alert's own text, so it is refused as any quote
+that is not. With the switch off nothing here runs and nothing differs, the INSERT included.
 """
 
 from __future__ import annotations
@@ -74,6 +85,8 @@ from app.infra.jobs import Job
 from app.llm import investigate as llm_investigate
 from app.llm.adapter import DeepSeekAdapter, LLMBudgetExceeded, LLMPermanent, cost_usd
 from app.llm.triage import prompt_version
+from app.rag.lookup import latest_lookup, prompt_material
+from app.rag.subject import Subject
 from app.security import detector, wrap
 from app.security.gate import _norm
 from app.tier2 import dossier as dossier_mod
@@ -200,6 +213,17 @@ _LLM_RUNS_INSERT_SQL = (
     f"VALUES ({', '.join(['%s'] * len(_LLM_RUNS_COLUMNS))})"
 )
 
+# P13-T08 (DEC-210): the one extra column, `rag_lookup_id` (migration 020), and the statement that names
+# it, as `audit/llm_runs.py` has had them since P13-T07. It is used only for a row whose prompt held a
+# lookup's material, which needs `RAG_ENABLED`; every other row - the whole of today's behaviour - is
+# written by `_LLM_RUNS_INSERT_SQL`, whose text is what it was before, so a host that runs this code
+# before `make migrate` has applied 020 still writes ②'s rows.
+_LLM_RUNS_LOOKUP_COLUMNS = (*_LLM_RUNS_COLUMNS, "rag_lookup_id")
+_LLM_RUNS_INSERT_WITH_LOOKUP_SQL = (
+    f"INSERT INTO llm_runs ({', '.join(_LLM_RUNS_LOOKUP_COLUMNS)}) "
+    f"VALUES ({', '.join(['%s'] * len(_LLM_RUNS_LOOKUP_COLUMNS))})"
+)
+
 
 def _write_llm_run(
     conn: psycopg.Connection,
@@ -219,33 +243,38 @@ def _write_llm_run(
     evidence_check: dict[str, Any] | None = None,
     citation_warnings: list[str] | None = None,
     injection_findings: list[dict[str, Any]] | None = None,
+    rag_lookup_id: uuid.UUID | None = None,
 ) -> None:
-    conn.execute(
-        _LLM_RUNS_INSERT_SQL,
-        (
-            run_id,
-            "investigate",
-            "case",
-            case_id,
-            "investigator",
-            system_prompt,
-            user_message,
-            Jsonb(agent_trace) if agent_trace is not None else None,
-            Jsonb(result) if result is not None else None,
-            None,  # gate_result — ①'s concept, not ②'s
-            None,  # verifier_result — ①'s concept, not ②'s
-            Jsonb(evidence_check) if evidence_check is not None else None,
-            Jsonb(injection_findings) if injection_findings is not None else None,
-            Jsonb(citation_warnings) if citation_warnings is not None else None,
-            input_tokens,
-            output_tokens,
-            latency_ms,
-            model_id,
-            prompt_version(llm_investigate.TEMPLATE_PATH),
-            cost_usd_value,
-            stopped_by,
-        ),
+    """`rag_lookup_id` (P13-T08): the stored lookup whose approved material is in this row's prompt, so
+    the admin can see which runs a lookup influenced. It is written only when given: None - today's row -
+    is written by today's INSERT, which does not name the column at all."""
+    values = (
+        run_id,
+        "investigate",
+        "case",
+        case_id,
+        "investigator",
+        system_prompt,
+        user_message,
+        Jsonb(agent_trace) if agent_trace is not None else None,
+        Jsonb(result) if result is not None else None,
+        None,  # gate_result — ①'s concept, not ②'s
+        None,  # verifier_result — ①'s concept, not ②'s
+        Jsonb(evidence_check) if evidence_check is not None else None,
+        Jsonb(injection_findings) if injection_findings is not None else None,
+        Jsonb(citation_warnings) if citation_warnings is not None else None,
+        input_tokens,
+        output_tokens,
+        latency_ms,
+        model_id,
+        prompt_version(llm_investigate.TEMPLATE_PATH),
+        cost_usd_value,
+        stopped_by,
     )
+    if rag_lookup_id is None:
+        conn.execute(_LLM_RUNS_INSERT_SQL, values)
+    else:
+        conn.execute(_LLM_RUNS_INSERT_WITH_LOOKUP_SQL, (*values, rag_lookup_id))
 
 
 def _usage_columns(
@@ -348,7 +377,12 @@ def _check_evidence(
     query shape) *and* `quote` must be at least `MIN_QUOTE_CHARS` long after
     normalisation *and* a substring of that alert's `raw_log` or `description`, plain or
     escaped (`_searchable`). Rejection reasons: `not_in_case`, `quote_too_short`,
-    `quote_not_found`."""
+    `quote_not_found`.
+
+    Nothing else is evidence (P13-T08): the dossier's learned section (an approved entry, the
+    decision history) is reference material about *other* cases, so a quote taken from it is in
+    none of this case's alerts' text and comes back `quote_not_found`, with the alert's own id on
+    it or not. The check reads alerts only, by design; a test pins it."""
     rows = conn.execute(_EVIDENCE_ALERTS_SQL, (case_id, case_id)).fetchall()
     texts = {
         alert_id: (*_searchable(raw_log or ""), *_searchable(description or ""))
@@ -420,10 +454,22 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
 
     nonce = wrap.new_nonce()  # design note 3(a): a new nonce per attempt, never cached
 
+    # P13-T08: the learned section. With the switch off, not one query and `learned=None`. With it on, the
+    # newest lookup of the case, whatever it holds (or nothing): ② never waits for the lookup job, never
+    # queues one and never sleeps. Read after `_set_repeatable_read`, so the lookup is part of the snapshot
+    # the dossier is read in. `parse_subject` stores a case's id in lower case.
+    material = None
+    if cfg.RAG_ENABLED:
+        material = prompt_material(conn, latest_lookup(conn, Subject("case", case_id.lower())))
+
     try:
-        dossier = dossier_mod.build(conn, case_id, nonce=nonce, cfg=cfg)
+        dossier = dossier_mod.build(conn, case_id, nonce=nonce, cfg=cfg, learned=material)
     except dossier_mod.UnknownCase as exc:
         raise PermanentError(str(exc)) from exc
+
+    # The lookup is named on the row only when its material reached the prompt - not when there was none,
+    # and not when the budget dropped block 10 (`Dossier.learned_used`).
+    rag_lookup_id = material.lookup_id if material is not None and dossier.learned_used else None
 
     system, user = llm_investigate.build(dossier, nonce=nonce, cfg=cfg)
     run_id = run_id_for_job(job.job_id)
@@ -450,6 +496,7 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
             user_message=user,
             agent_trace=agent_trace,
             stopped_by=stopped_by,
+            rag_lookup_id=rag_lookup_id,
             **{**_spend_columns(spend, cfg), **outcome},
         )
 
