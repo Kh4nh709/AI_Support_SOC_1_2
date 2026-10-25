@@ -14,6 +14,13 @@ followed by exactly the rows, events and `triage_status` this job has always wri
 The evaluation harness calls `evaluate_alert` with B2's or B3's `EvalSwitches`, so what
 is measured is what is deployed; no copy of the sequencing lives anywhere else.
 
+With `RAG_ENABLED` (P13-T07, DEC-210) the job runs `evaluate_alert` with `rag=True`: the newest
+stored lookup of the alert is read at that moment (`rag.lookup.latest_lookup`, `prompt_material`) and
+its approved material becomes the learned section of the proposer's user message. The lookup is a
+separate job queued with ①, which is delayed to give it time (`domain.transitions`); ① never waits
+for it, and a lookup that is absent, `failed`, out of budget or stale gives today's prompt. The
+proposer's `llm_runs` row records which lookup its prompt held (`rag_lookup_id`).
+
 `_set_triage_status` is this module's only write to `alerts` — it names
 `triage_status` and `triaged_count` and nothing else (G2). `domain/`, not `tier1/`,
 is the only package that may ever write `alerts.status`.
@@ -28,7 +35,7 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 from psycopg import sql
@@ -62,6 +69,8 @@ from app.llm.triage import (
     propose,
     verify,
 )
+from app.rag.lookup import latest_lookup, prompt_material
+from app.rag.subject import Subject
 from app.security import detector, gate, linter
 
 #: The four terminal alert statuses phase-5 says a triage job must never overwrite
@@ -297,6 +306,7 @@ def _last_attempt_or_raise(
     exc: Exception,
     built: BuiltTriagePrompt,
     facts: dict[str, Any],
+    rag_lookup_id: UUID | None = None,
 ) -> None:
     """Planning decision 3: the last attempt owns the outcome. Below
     `JOB_MAX_ATTEMPTS`, raise — the worker's transaction rolls back and the retry
@@ -330,6 +340,7 @@ def _last_attempt_or_raise(
         prompt_version=prompt_version(TRIAGE_TEMPLATE),
         cost_usd=None,
         stopped_by="transient",
+        rag_lookup_id=rag_lookup_id,
     )
     _set_triage_status(conn, alert_id, "unavailable")
     write_event(
@@ -352,6 +363,7 @@ def _verify_failed_last_attempt(
     exc: Exception,
     *,
     stopped_by: str,
+    rag_lookup_id: UUID | None = None,
 ) -> None:
     """The verifier call failed (`cap` or a `transient` exhaustion — the caller has
     already decided a retry is not coming). Design note 2: unlike a proposer-side
@@ -378,6 +390,7 @@ def _verify_failed_last_attempt(
         prompt_version=pv,
         cost_usd=cost_usd(proposal.usage, cfg),
         stopped_by=stopped_by,
+        rag_lookup_id=rag_lookup_id,
     )
     llm_runs.write_run(
         conn,
@@ -427,12 +440,19 @@ class EvalSwitches:
     left out whole, heading included. B3 is `gate_mode="steps_1_3"`.
     `proposer_template` replaces the proposer's system template
     (`llm/templates/triage_system.txt`; the rendered `triage_v2` schema is still
-    appended) and makes `prompt_version` `file:<sha256 of the template, 12 hex>`."""
+    appended) and makes `prompt_version` `file:<sha256 of the template, 12 hex>`.
+
+    `rag` (P13-T07) reads the alert's newest stored lookup and puts its approved material in the
+    proposer's user message (the learned section). `DEPLOYED` keeps it False: the job sets it from
+    `RAG_ENABLED` (`run_triage_job`), and the evaluation harness, which builds its switches without
+    it, therefore always runs without RAG - no live `rag_results` row can leak into a measurement.
+    """
 
     include_context: bool = True
     include_correlation: bool = True
     gate_mode: str = "full"
     proposer_template: Path | None = None
+    rag: bool = False
 
     def __post_init__(self) -> None:
         if self.gate_mode not in GATE_MODES:
@@ -463,6 +483,10 @@ class TriageEvaluation:
     back: a call that raised returned nothing to count or price. `model_id` is the
     proposer response's. The fields from `built` on are the intermediates
     `run_triage_job` writes its rows from.
+
+    `rag_lookup_id` is the lookup whose material is in the proposer's prompt: None unless
+    `switches.rag` and the learned section is in the prompt (`built.learned_used`) - so not for a
+    missing, `failed` or `budget` lookup, and not when the token budget cut all of it.
     """
 
     alert_id: str
@@ -492,6 +516,7 @@ class TriageEvaluation:
     verification: Verification | None
     result: dict | None
     exception: Exception | None
+    rag_lookup_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if self.outcome not in OUTCOMES:
@@ -532,6 +557,7 @@ def _evaluation(
     verification: Verification | None = None,
     result: dict | None = None,
     exception: Exception | None = None,
+    rag_lookup_id: UUID | None = None,
 ) -> TriageEvaluation:
     """The one place a `TriageEvaluation` is derived from what the run produced."""
     answered = [r for r in (proposal, verification) if r is not None]
@@ -570,6 +596,7 @@ def _evaluation(
         verification=verification,
         result=result,
         exception=exception,
+        rag_lookup_id=rag_lookup_id,
     )
 
 
@@ -592,6 +619,12 @@ def evaluate_alert(
     evaluation may run on a closed alert. `adapter=None` builds the real
     `DeepSeekAdapter` at the same point, with the same spend check, as the job always
     has.
+
+    With `switches.rag` (P13-T07) the alert's newest stored lookup is read - two `SELECT`s, no more
+    - and its approved material goes to the builder. There is no waiting and no retry: what exists
+    now is used, and none, a `failed` or a `budget` lookup is today's prompt. An entry that no
+    longer passes `prompt_material`'s check is dropped from it; nothing here can fail ① because of
+    the lookup.
     """
     row = _load(conn, alert_id)
     if row is None:
@@ -646,6 +679,11 @@ def evaluate_alert(
         last_seen_at=row.last_seen_at,
     )
     facts = build_facts(inp, corr)
+    material = (
+        prompt_material(conn, latest_lookup(conn, Subject("alert", alert_id)))
+        if switches.rag
+        else None
+    )
     built = build_proposer_prompt(
         inp,
         facts,
@@ -655,7 +693,9 @@ def evaluate_alert(
         cfg=cfg,
         include_context=switches.include_context,
         include_correlation=switches.include_correlation,
+        learned=material,
     )
+    rag_lookup_id = material.lookup_id if material is not None and built.learned_used else None
     if switches.proposer_template is None:
         pv = prompt_version(TRIAGE_TEMPLATE)
     else:
@@ -677,6 +717,7 @@ def evaluate_alert(
         facts=facts,
         built=built,
         findings=findings,
+        rag_lookup_id=rag_lookup_id,
     )
     if violations:
         return evaluation("builder_violation", violations=violations)
@@ -775,7 +816,8 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
     (design note 7) — production and P3-T11 are the only callers that leave it
     `None`.
 
-    The computation is `evaluate_alert(..., switches=DEPLOYED)` (P7-T01). What follows
+    The computation is `evaluate_alert(..., switches=DEPLOYED)` (P7-T01), with `rag=True` added when
+    `RAG_ENABLED` (P13-T07; the proposer rows then carry `rag_lookup_id`). What follows
     it performs, per outcome, exactly the writes, events, status changes and raises this
     job made before that split; `test_triage_job.py` pins them.
     """
@@ -796,7 +838,9 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
         _log({"triage": "unavailable", "alert_id": alert_id, "stopped_by": "disabled"})
         return
 
-    ev = evaluate_alert(conn, alert_id, adapter=adapter, cfg=cfg, switches=DEPLOYED)
+    # `RAG_ENABLED` off: the very object the job has always passed (P13-T07).
+    switches = replace(DEPLOYED, rag=True) if cfg.RAG_ENABLED else DEPLOYED
+    ev = evaluate_alert(conn, alert_id, adapter=adapter, cfg=cfg, switches=switches)
     if ev is None:  # gone between the `_load` above and the evaluation's own read
         raise PermanentError(f"alert not found: {alert_id}")
     built, facts, proposal = ev.built, ev.facts, ev.proposal
@@ -824,6 +868,7 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
             prompt_version=prompt_version(TRIAGE_TEMPLATE),
             cost_usd=None,
             stopped_by="linter",
+            rag_lookup_id=ev.rag_lookup_id,
         )
         write_event(
             conn,
@@ -855,12 +900,15 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
             prompt_version=prompt_version(TRIAGE_TEMPLATE),
             cost_usd=None,
             stopped_by="cap",
+            rag_lookup_id=ev.rag_lookup_id,
         )
         _set_triage_status(conn, alert_id, "unavailable")
         return
 
     if ev.outcome == "transient":
-        _last_attempt_or_raise(conn, job, cfg, ev.exception, built, facts)
+        _last_attempt_or_raise(
+            conn, job, cfg, ev.exception, built, facts, rag_lookup_id=ev.rag_lookup_id
+        )
         return
 
     if ev.outcome == "schema":
@@ -887,13 +935,23 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
             prompt_version=prompt_version(TRIAGE_TEMPLATE),
             cost_usd=cost_usd(proposal.usage, cfg),
             stopped_by="schema",
+            rag_lookup_id=ev.rag_lookup_id,
         )
         _set_triage_status(conn, alert_id, "unavailable")
         return
 
     if ev.outcome == "verifier_cap":
         _verify_failed_last_attempt(
-            conn, built, ev.vbuilt, facts, proposal, alert_id, cfg, ev.exception, stopped_by="cap"
+            conn,
+            built,
+            ev.vbuilt,
+            facts,
+            proposal,
+            alert_id,
+            cfg,
+            ev.exception,
+            stopped_by="cap",
+            rag_lookup_id=ev.rag_lookup_id,
         )
         return
 
@@ -910,6 +968,7 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
             cfg,
             ev.exception,
             stopped_by="transient",
+            rag_lookup_id=ev.rag_lookup_id,
         )
         write_event(
             conn,
@@ -943,6 +1002,7 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
         prompt_version=ev.prompt_version,
         cost_usd=cost_usd(proposal.usage, cfg),
         stopped_by=None,
+        rag_lookup_id=ev.rag_lookup_id,
     )
     llm_runs.write_run(
         conn,

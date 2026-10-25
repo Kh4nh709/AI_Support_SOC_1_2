@@ -43,6 +43,7 @@ _COLUMNS = (
     "prompt_version",
     "cost_usd",
     "stopped_by",
+    "rag_lookup_id",
 )
 
 _INSERT_SQL = (
@@ -71,11 +72,17 @@ def write_run(
     prompt_version: str,
     cost_usd: float | None,
     stopped_by: str | None,
+    rag_lookup_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     """Insert one `llm_runs` row for pipeline ①'s proposer or verifier call and return
     its `run_id`. `role` is checked in Python (the DB CHECK is the backstop, planning
     decision 2) before any SQL runs; `gate_result` is required, not optional — every
     row carries one (G11).
+
+    `rag_lookup_id` (P13-T07, DEC-210): the stored lookup whose approved material is in this
+    row's prompt, so the admin can see which runs a lookup influenced. The proposer's row carries
+    it when the prompt held the learned section; the verifier's never does (its prompt never gets
+    the section). None - today's row - otherwise.
     """
     if role not in _ROLES:
         raise PermanentError(f"write_run: role must be one of {sorted(_ROLES)}, got {role!r}")
@@ -103,6 +110,7 @@ def write_run(
             prompt_version,
             cost_usd,
             stopped_by,
+            rag_lookup_id,
         ),
     ).fetchone()
     return row[0]
