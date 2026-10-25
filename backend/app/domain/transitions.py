@@ -31,6 +31,7 @@ import uuid
 from typing import Literal
 
 import psycopg
+from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from app.audit.events import write_event
@@ -195,6 +196,31 @@ def _common_alert_values(alert: Alert, *, source: str, suggestion_visible: bool)
     )
 
 
+def _enqueue_triage(conn: psycopg.Connection, alert_id: str) -> None:
+    """Queue ① for an alert that is ready for it (the two places that do: `finish_enrichment` and the
+    `auto_closed` branch of `open_alert`). Today's call, exactly: `enqueue(conn, "triage", alert_id)`.
+
+    With `RAG_ENABLED` (DEC-210, spec §7.8) the learned-knowledge lookup is queued too, and ① is
+    delayed by `RAG_TRIAGE_DELAY_S` seconds of the database's clock so the lookup has had time to
+    land. ① never waits for it: at its time it reads whatever lookup exists and carries on without
+    one. Both jobs are written in the caller's transaction. `domain` imports no `rag`, so the
+    subject is spelled here as `rag.subject.Subject("alert", alert_id).key` spells it (a test pins
+    the two to each other)."""
+    cfg = config.load()
+    if not cfg.RAG_ENABLED:
+        enqueue(conn, "triage", alert_id)
+        return
+    enqueue(conn, "rag_lookup", f"alert:{alert_id}")
+    enqueue(
+        conn,
+        "triage",
+        alert_id,
+        scheduled_at=sql.SQL("now() + {} * interval '1 second'").format(
+            sql.Literal(cfg.RAG_TRIAGE_DELAY_S)
+        ),
+    )
+
+
 def open_alert(
     conn: psycopg.Connection,
     alert: Alert,
@@ -292,7 +318,7 @@ def open_alert(
         )
     else:  # auto_closed
         assert rule is not None
-        enqueue(conn, "triage", alert.alert_id)  # D8: ① runs on 100% of auto-closed alerts
+        _enqueue_triage(conn, alert.alert_id)  # D8: ① runs on 100% of auto-closed alerts
         write_event(
             conn,
             "alert.auto_closed",
@@ -318,9 +344,9 @@ def finish_enrichment(
     exhausted: bool = False,
 ) -> None:
     """A5 (and A6 when `exhausted`, with an empty `context`) — enriching -> queued_tier1.
-    `enqueue(conn, "triage", alert_id)` sits in the same transaction as the
-    status write: that pairing is E6 (phase-4), and it is what a worker-killed-
-    mid-job test relies on (P2-T10)."""
+    The `triage` job (`_enqueue_triage`; with `RAG_ENABLED`, a `rag_lookup` job before it and a
+    delayed `triage`) sits in the same transaction as the status write: that pairing is E6
+    (phase-4), and it is what a worker-killed-mid-job test relies on (P2-T10)."""
     asset_context = {
         "present": context.asset_present,
         "criticality": context.asset_criticality,
@@ -347,7 +373,7 @@ def finish_enrichment(
         ),
         payload={"risk_score": risk_score, "exhausted": exhausted},
     )
-    enqueue(conn, "triage", alert_id)
+    _enqueue_triage(conn, alert_id)
 
 
 def acknowledge(conn: psycopg.Connection, alert_id: str, user_id: str) -> None:
