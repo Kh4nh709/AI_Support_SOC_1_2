@@ -8,21 +8,30 @@ import {
   ADMIN_LIMITS,
   ADMIN_REASONS,
   adminErrorOf,
+  approveKnowledgeDraft,
   conflictRow,
   createRule,
   createUser,
   getAudit,
   getDigest,
+  getKnowledgeDraft,
+  getKnowledgeEntry,
+  getKnowledgeTags,
   getLabelsNext,
   getLlmUsage,
   getOverview,
+  knowledgeErrorOf,
+  listKnowledgeDrafts,
+  listKnowledgeEntries,
   listRules,
   listUsers,
   parseAdminDetail,
   postLabel,
   putLlmLimits,
+  rejectKnowledgeDraft,
   reloadInventory,
   resetPassword,
+  retireKnowledgeEntry,
   retryJob,
   reviewDigest,
   simulateRule,
@@ -81,6 +90,8 @@ function record(answer: JsonBodyType = {}, status = 200): Seen[] {
 
 const UID = "5f1c0a2e-3b4d-4e5f-8a9b-0123456789ab";
 const RULE_ID = "7c1d2e3f-4a5b-4c6d-8e9f-abcdef012345";
+const DRAFT_ID = "0b7e4f10-2c3d-4a5b-9c8d-111111111111";
+const ENTRY_ID = "3a9d5e20-4b6c-4d7e-8f90-222222222222";
 
 type Call = {
   name: string;
@@ -264,6 +275,67 @@ const CALLS: Call[] = [
     path: "/api/admin/audit",
     search: "?range=7d",
   },
+  // --- learned knowledge (admin_knowledge.py, P13-T05): the reads send no body, the writes send a JSON object ---
+  {
+    name: "listKnowledgeDrafts",
+    run: () => listKnowledgeDrafts("pending"),
+    method: "GET",
+    path: "/api/admin/knowledge/drafts",
+    search: "?status=pending",
+  },
+  {
+    name: "getKnowledgeDraft",
+    run: () => getKnowledgeDraft(DRAFT_ID),
+    method: "GET",
+    path: `/api/admin/knowledge/drafts/${DRAFT_ID}`,
+  },
+  {
+    name: "approveKnowledgeDraft (as it is)",
+    run: () => approveKnowledgeDraft(DRAFT_ID),
+    method: "POST",
+    path: `/api/admin/knowledge/drafts/${DRAFT_ID}/approve`,
+    body: {},
+  },
+  {
+    name: "approveKnowledgeDraft (edited)",
+    run: () => approveKnowledgeDraft(DRAFT_ID, { title: "Tiêu đề mới", tags: ["port_scan"] }),
+    method: "POST",
+    path: `/api/admin/knowledge/drafts/${DRAFT_ID}/approve`,
+    body: { edited: { title: "Tiêu đề mới", tags: ["port_scan"] } },
+  },
+  {
+    name: "rejectKnowledgeDraft",
+    run: () => rejectKnowledgeDraft(DRAFT_ID, "trùng với mục khác"),
+    method: "POST",
+    path: `/api/admin/knowledge/drafts/${DRAFT_ID}/reject`,
+    body: { reason: "trùng với mục khác" },
+  },
+  {
+    name: "listKnowledgeEntries",
+    run: () => listKnowledgeEntries("retired"),
+    method: "GET",
+    path: "/api/admin/knowledge/entries",
+    search: "?status=retired",
+  },
+  {
+    name: "getKnowledgeEntry",
+    run: () => getKnowledgeEntry(ENTRY_ID),
+    method: "GET",
+    path: `/api/admin/knowledge/entries/${ENTRY_ID}`,
+  },
+  {
+    name: "retireKnowledgeEntry",
+    run: () => retireKnowledgeEntry(ENTRY_ID, "không còn đúng"),
+    method: "POST",
+    path: `/api/admin/knowledge/entries/${ENTRY_ID}/retire`,
+    body: { reason: "không còn đúng" },
+  },
+  {
+    name: "getKnowledgeTags",
+    run: () => getKnowledgeTags(),
+    method: "GET",
+    path: "/api/admin/knowledge/tags",
+  },
 ];
 
 describe("each admin function sends the method, path and body of its route", () => {
@@ -322,6 +394,10 @@ describe("every admin write sends a JSON body", () => {
       "POST /api/admin/digest/1661877/review",
       "POST /api/admin/labels",
       "POST /api/admin/labels/undo",
+      `POST /api/admin/knowledge/drafts/${DRAFT_ID}/approve`,
+      `POST /api/admin/knowledge/drafts/${DRAFT_ID}/approve`,
+      `POST /api/admin/knowledge/drafts/${DRAFT_ID}/reject`,
+      `POST /api/admin/knowledge/entries/${ENTRY_ID}/retire`,
     ]);
   });
 
@@ -790,5 +866,201 @@ describe("conflictRow", () => {
       { kind: "other", status: 0 },
     ];
     for (const error of none) expect(conflictRow(error)).toBeNull();
+  });
+});
+
+// --- learned knowledge (P13-T06; the routes are admin_knowledge.py of P13-T05) -----------------------------------
+
+describe("approveKnowledgeDraft sends the six model fields and nothing else", () => {
+  it("sends {} for an approval as it is, and for an edit that changed nothing", async () => {
+    const seen = record({ entry_id: ENTRY_ID });
+    await approveKnowledgeDraft(DRAFT_ID);
+    await approveKnowledgeDraft(DRAFT_ID, {});
+    expect(seen.map((s) => [s.contentType, s.raw])).toEqual([
+      ["application/json", "{}"],
+      ["application/json", "{}"],
+    ]);
+  });
+
+  it("never sends a closed field: the route refuses one with 422 v1_schema:unexpected_key", async () => {
+    const seen = record({ entry_id: ENTRY_ID });
+    // The type does not allow a closed key; a value that got past the type system is still not sent.
+    const sneaky = {
+      title: "Tiêu đề",
+      category: "recon",
+      conclusion: "closed_benign",
+      mitre_ids: ["T1046"],
+      soar_scenario: "SC03",
+      rule_ids: ["100190"],
+      log_source: "wazuh",
+      draft_id: "x",
+    } as never;
+    await approveKnowledgeDraft(DRAFT_ID, sneaky);
+    expect(seen[0]?.body).toEqual({ edited: { title: "Tiêu đề" } });
+  });
+
+  it("sends each of the six model fields it is given, as they are", async () => {
+    const seen = record({ entry_id: ENTRY_ID });
+    const all = {
+      title: "T",
+      summary: "S",
+      distinguishing_signals: ["a", "b"],
+      check_next_time: ["c"],
+      confidence_note: "N",
+      tags: ["port_scan"],
+    };
+    await approveKnowledgeDraft(DRAFT_ID, all);
+    expect(seen[0]?.body).toEqual({ edited: all });
+  });
+
+  it("encodes the id in the path", async () => {
+    const seen = record({ entry_id: ENTRY_ID });
+    await approveKnowledgeDraft("a/b%c", {});
+    expect(seen[0]?.path).toBe("/api/admin/knowledge/drafts/a%2Fb%25c/approve");
+  });
+});
+
+describe("the knowledge lists ask for the status they are given", () => {
+  it.each(["pending", "approved", "merged", "rejected"] as const)(
+    "listKnowledgeDrafts(%s)",
+    async (status) => {
+      const seen = record([]);
+      await listKnowledgeDrafts(status);
+      expect(seen[0]?.search).toBe(`?status=${status}`);
+    },
+  );
+
+  it.each(["active", "retired"] as const)("listKnowledgeEntries(%s)", async (status) => {
+    const seen = record([]);
+    await listKnowledgeEntries(status);
+    expect(seen[0]?.search).toBe(`?status=${status}`);
+  });
+});
+
+describe("knowledgeErrorOf", () => {
+  const fail = (status: number, body: unknown) =>
+    new ApiError(status, (body as { detail?: unknown } | null)?.detail ?? body, body);
+
+  it("reads the faults of a 422 as rule and field, in the order the route sent them", () => {
+    const error = fail(422, { faults: ["v3_ipv4:summary", "v5_length:title", "v1_schema:root"] });
+    expect(knowledgeErrorOf(error)).toEqual({
+      kind: "faults",
+      status: 422,
+      faults: [
+        { rule: "v3_ipv4", field: "summary" },
+        { rule: "v5_length", field: "title" },
+        { rule: "v1_schema", field: "root" },
+      ],
+    });
+  });
+
+  it("splits a fault at the first colon only, and keeps one with no colon as a rule with no field", () => {
+    expect(knowledgeErrorOf(fail(422, { faults: ["v9_new:a:b", "weird"] }))).toEqual({
+      kind: "faults",
+      status: 422,
+      faults: [
+        { rule: "v9_new", field: "a:b" },
+        { rule: "weird", field: null },
+      ],
+    });
+  });
+
+  it("reads the faults off a real 422 of the client", async () => {
+    server.use(
+      http.post(`/api/admin/knowledge/drafts/${DRAFT_ID}/approve`, () =>
+        HttpResponse.json({ faults: ["v1_schema:unexpected_key"] }, { status: 422 }),
+      ),
+    );
+    const error = await approveKnowledgeDraft(DRAFT_ID, { title: "x" }).catch((e: unknown) => e);
+    expect(knowledgeErrorOf(error)).toEqual({
+      kind: "faults",
+      status: 422,
+      faults: [{ rule: "v1_schema", field: "unexpected_key" }],
+    });
+  });
+
+  it.each([
+    ["an empty list", { faults: [] }],
+    ["a list with a non-text item", { faults: ["v3_ipv4:summary", 7] }],
+    ["a faults key that is not a list", { faults: "v3_ipv4:summary" }],
+  ])("reads %s as other, not as a fault list", (_name, body) => {
+    expect(knowledgeErrorOf(fail(422, body))).toEqual({ kind: "other", status: 422 });
+  });
+
+  it("reads the 422 of a reason as a field error on the reason", () => {
+    expect(
+      knowledgeErrorOf(fail(422, { detail: { field: "reason", reason: "required" } })),
+    ).toEqual({ kind: "field", status: 422, field: "reason", reason: "required" });
+    expect(knowledgeErrorOf(fail(422, { detail: { field: "edited", reason: "invalid" } }))).toEqual(
+      { kind: "field", status: 422, field: "edited", reason: "invalid" },
+    );
+  });
+
+  it("reads FastAPI's own list-shaped 422 as other", () => {
+    expect(
+      knowledgeErrorOf(fail(422, { detail: [{ type: "missing", loc: ["body"], msg: "x" }] })),
+    ).toEqual({ kind: "other", status: 422 });
+  });
+
+  it.each(["not_pending", "source_changed", "unpublishable", "not_active", "anything_new"])(
+    "reads a 409 with the reason %s as a stale write, whatever the reason",
+    (reason) => {
+      expect(knowledgeErrorOf(fail(409, { detail: { reason } }))).toEqual({
+        kind: "stale",
+        status: 409,
+        reason,
+      });
+    },
+  );
+
+  it("reads a 409 with no reason as a stale write too", () => {
+    expect(knowledgeErrorOf(fail(409, { detail: "conflict" }))).toEqual({
+      kind: "stale",
+      status: 409,
+      reason: "unknown",
+    });
+  });
+
+  it("reads the 503 publish_failed as retryable, and any other 503 as other", () => {
+    expect(knowledgeErrorOf(fail(503, { detail: { reason: "publish_failed" } }))).toEqual({
+      kind: "publish_failed",
+      status: 503,
+    });
+    expect(knowledgeErrorOf(fail(503, { detail: { reason: "timeout" } }))).toEqual({
+      kind: "other",
+      status: 503,
+    });
+  });
+
+  it("reads the 404 not_found, and a 404 of FastAPI's own text as other", () => {
+    expect(knowledgeErrorOf(fail(404, { detail: { reason: "not_found" } }))).toEqual({
+      kind: "not_found",
+      status: 404,
+    });
+    expect(knowledgeErrorOf(fail(404, { detail: "Not Found" }))).toEqual({
+      kind: "other",
+      status: 404,
+    });
+  });
+
+  it("reads anything that is not an ApiError as other, with no status (0)", () => {
+    expect(knowledgeErrorOf(new TypeError("Failed to fetch"))).toEqual({
+      kind: "other",
+      status: 0,
+    });
+    expect(knowledgeErrorOf(null)).toEqual({ kind: "other", status: 0 });
+  });
+
+  it("does not answer from the prototype chain", () => {
+    expect(knowledgeErrorOf(fail(422, { detail: { field: "constructor" } }))).toEqual({
+      kind: "other",
+      status: 422,
+    });
+    const hostile: unknown = JSON.parse('{"detail":{"__proto__":{"reason":"x"}}}');
+    expect(knowledgeErrorOf(fail(409, hostile))).toEqual({
+      kind: "stale",
+      status: 409,
+      reason: "unknown",
+    });
   });
 });

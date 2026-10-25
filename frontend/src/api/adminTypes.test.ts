@@ -141,6 +141,8 @@ const rules = (): string => router("admin_rules.py");
 const digest = (): string => router("admin_digest.py");
 const labels = (): string => router("labels.py");
 const audit = (): string => router("admin_audit.py");
+const knowledge = (): string => router("admin_knowledge.py");
+const ragDraft = (): string => py("rag", "draft.py");
 const tier1Labels = (): string => py("tier1", "labels.py");
 
 const ENTRIES: Entry[] = [
@@ -559,11 +561,208 @@ const ENTRIES: Entry[] = [
     keys: ["events", "next_cursor", "total"],
     backend: () => dictKeys(audit(), /return \{(?=\s*"events": events)/),
   },
+
+  // --- learned knowledge (admin_knowledge.py, rag/draft.py; P13-T05) ---
+  {
+    path: "KnowledgeDraftRow",
+    keys: [
+      "draft_id",
+      "source_kind",
+      "source_id",
+      "conclusion",
+      "status",
+      "title",
+      "has_text",
+      "warnings",
+      "conflict_with_entry",
+      "duplicate_of_entry",
+      "created_at",
+      "reviewed_by",
+      "reviewed_by_name",
+      "reviewed_at",
+      "review_note",
+    ],
+    backend: () =>
+      dictKeys(
+        knowledge(),
+        /\{(?=\s*"draft_id": str\(draft_id\),\s*"source_kind": kind,\s*"source_id": source_id,\s*"conclusion": conclusion,\s*"status": row_status)/,
+      ),
+  },
+  {
+    // The twelve fields of a stored draft (`DRAFT_FIELDS`): the model's six and the source's six.
+    path: "KnowledgeDraftFields",
+    keys: [
+      "title",
+      "conclusion",
+      "category",
+      "mitre_ids",
+      "soar_scenario",
+      "rule_ids",
+      "log_source",
+      "tags",
+      "summary",
+      "distinguishing_signals",
+      "check_next_time",
+      "confidence_note",
+    ],
+    backend: () => pyNames(ragDraft(), /^DRAFT_FIELDS = \(([^)]*)\)/m),
+  },
+  {
+    path: "KnowledgeDraft",
+    keys: [
+      "draft_id",
+      "source_kind",
+      "source_id",
+      "conclusion",
+      "status",
+      "draft",
+      "warnings",
+      "llm_run_id",
+      "duplicate_of_entry",
+      "conflict_with_entry",
+      "created_at",
+      "reviewed_by",
+      "reviewed_by_name",
+      "reviewed_at",
+      "review_note",
+    ],
+    backend: () =>
+      dictKeys(
+        knowledge(),
+        /return \{(?=\s*"draft_id": str\(draft_id\),\s*"source_kind": kind,\s*"source_id": source_id,\s*"conclusion": conclusion,\s*"status": status)/,
+      ),
+  },
+  {
+    path: "KnowledgeDecision",
+    keys: ["event_type", "actor_id", "actor_name", "at", "payload"],
+    backend: () => dictKeys(knowledge(), /return \{(?=\s*"event_type": kind,)/),
+  },
+  {
+    // `kind` and `id`, then the six keys `_alert_source` and `_case_source` both build, then the conflicting entry.
+    path: "KnowledgeSource",
+    keys: [
+      "kind",
+      "id",
+      "alert",
+      "case",
+      "investigation",
+      "decision",
+      "notes",
+      "enrichment",
+      "conflict_entry",
+    ],
+    backend: () => [
+      ...dictKeys(knowledge(), /source: dict\[str, Any\] = \{/),
+      ...dictKeys(knowledge(), /return \{(?=\s*"alert": queue\.get_alert_view)/),
+      ...[...knowledge().matchAll(/^\s+source\["(\w+)"\] = /gm)].map((m) => m[1] as string),
+    ],
+  },
+  {
+    path: "KnowledgeDraftDetail",
+    keys: ["draft", "source"],
+    backend: () => dictKeys(knowledge(), /return \{(?=\s*"draft": draft)/),
+  },
+  {
+    path: "KnowledgeEntryRow",
+    keys: [
+      "entry_id",
+      "version",
+      "status",
+      "title",
+      "conclusion",
+      "category",
+      "mitre_ids",
+      "tags",
+      "soar_scenario",
+      "rule_ids",
+      "log_source",
+      "file_path",
+      "content_sha256",
+      "evidence_count",
+      "approved_by",
+      "approved_by_name",
+      "approved_at",
+    ],
+    backend: () =>
+      dictKeys(knowledge(), /\{(?=\s*"entry_id": str\(entry_id\),\s*"version": version)/),
+  },
+  {
+    path: "KnowledgeEntry",
+    keys: [
+      "entry_id",
+      "version",
+      "status",
+      "title",
+      "conclusion",
+      "category",
+      "mitre_ids",
+      "tags",
+      "soar_scenario",
+      "rule_ids",
+      "log_source",
+      "fingerprint",
+      "content",
+      "content_sha256",
+      "file_path",
+      "source_alert_ids",
+      "source_case_ids",
+      "evidence",
+      "approved_by",
+      "approved_by_name",
+      "approved_at",
+      "supersedes_entry",
+      "integrity",
+    ],
+    backend: () => dictKeys(knowledge(), /return \{(?=\s*"entry_id": entry\.entry_id)/),
+  },
+  {
+    path: "KnowledgeEntry.integrity",
+    keys: ["content_ok", "file_ok"],
+    backend: () => dictKeys(knowledge(), /"integrity": \{/),
+  },
+  {
+    path: "KnowledgeTags",
+    keys: ["tags", "descriptions"],
+    backend: () => dictKeys(knowledge(), /return \{(?=\s*"tags": names)/),
+  },
+  {
+    // The body of `approve`'s `edited`: the six model fields, each optional (`MODEL_FIELDS`).
+    path: "KnowledgeEdit",
+    keys: [],
+    optional: [
+      "title",
+      "tags",
+      "summary",
+      "distinguishing_signals",
+      "check_next_time",
+      "confidence_note",
+    ],
+    backend: () => pyNames(ragDraft(), /^MODEL_FIELDS = \(([^)]*)\)/m),
+  },
+  {
+    path: "fn:approveKnowledgeDraft",
+    keys: ["entry_id"],
+    backend: () => dictKeys(knowledge(), /return \{(?=\s*"entry_id": str\(published\.entry_id\))/),
+  },
+  {
+    path: "fn:rejectKnowledgeDraft",
+    keys: ["draft_id", "status"],
+    backend: () =>
+      dictKeys(knowledge(), /return \{(?=\s*"draft_id": str\(draft_id\),\s*"status": "rejected")/),
+  },
+  {
+    path: "fn:retireKnowledgeEntry",
+    keys: ["entry_id", "status"],
+    backend: () =>
+      dictKeys(knowledge(), /return \{(?=\s*"entry_id": str\(entry_id\),\s*"status": "retired")/),
+  },
 ];
 
 /** The object types of api/admin.ts that are not an answer of a handler, and why. */
 const NOT_AN_ANSWER: Record<string, string> = {
   AuditFilters: "the query string of getAudit, which admin.test.ts pins",
+  KnowledgeFault:
+    "the parsed form of a fault name `rule:field` (knowledgeErrorOf), which admin.test.ts pins",
 };
 
 const sorted = (names: readonly string[]): string[] => [...names].sort();

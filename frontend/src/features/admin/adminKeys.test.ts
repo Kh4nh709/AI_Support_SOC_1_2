@@ -22,6 +22,39 @@ describe("adminKeys", () => {
     expect(adminKeys.digest(null)).not.toEqual(adminKeys.digest("2026-09-30"));
   });
 
+  it("has the five keys of the learned-knowledge page, under one prefix", () => {
+    expect(adminKeys.knowledgeAll).toEqual(["admin", "knowledge"]);
+    expect(adminKeys.knowledgeDrafts("pending")).toEqual([
+      "admin",
+      "knowledge",
+      "drafts",
+      "pending",
+    ]);
+    expect(adminKeys.knowledgeDraft("d-1")).toEqual(["admin", "knowledge", "draft", "d-1"]);
+    expect(adminKeys.knowledgeEntries("active")).toEqual([
+      "admin",
+      "knowledge",
+      "entries",
+      "active",
+    ]);
+    expect(adminKeys.knowledgeEntry("e-1")).toEqual(["admin", "knowledge", "entry", "e-1"]);
+    expect(adminKeys.knowledgeTags).toEqual(["admin", "knowledge", "tags"]);
+    // two statuses, two lists: a tab never shows another tab's rows
+    expect(adminKeys.knowledgeDrafts("pending")).not.toEqual(adminKeys.knowledgeDrafts("merged"));
+    expect(adminKeys.knowledgeEntries("active")).not.toEqual(adminKeys.knowledgeEntries("retired"));
+    const starts = (key: readonly unknown[], prefix: readonly unknown[]) =>
+      prefix.every((part, i) => key[i] === part);
+    for (const key of [
+      adminKeys.knowledgeDrafts("rejected"),
+      adminKeys.knowledgeDraft("d-1"),
+      adminKeys.knowledgeEntries("retired"),
+      adminKeys.knowledgeEntry("e-1"),
+      adminKeys.knowledgeTags,
+    ]) {
+      expect(starts(key, adminKeys.knowledgeAll)).toBe(true);
+    }
+  });
+
   it("starts every key with admin, so one prefix reaches the whole console", () => {
     const all = [
       adminKeys.overview("24h"),
@@ -31,6 +64,8 @@ describe("adminKeys", () => {
       adminKeys.digest(null),
       adminKeys.labels,
       adminKeys.audit({ range: "24h" }),
+      adminKeys.knowledgeDrafts("pending"),
+      adminKeys.knowledgeEntry("e-1"),
     ];
     for (const key of all) expect(key[0]).toBe("admin");
     expect(adminKeys.all).toEqual(["admin"]);
@@ -59,12 +94,15 @@ describe("what a write makes stale", () => {
   it("names every write of the client, once", () => {
     expect([...ADMIN_MUTATIONS].sort()).toEqual(
       [
+        "approveKnowledgeDraft",
         "createRule",
         "createUser",
         "postLabel",
         "putLlmLimits",
+        "rejectKnowledgeDraft",
         "reloadInventory",
         "resetPassword",
+        "retireKnowledgeEntry",
         "retryJob",
         "reviewDigest",
         "toggleRule",
@@ -92,6 +130,11 @@ describe("what a write makes stale", () => {
     ["reviewDigest", [adminKeys.digestAll, adminKeys.overviewAll, adminKeys.auditAll]],
     ["postLabel", [adminKeys.labels, adminKeys.auditAll]],
     ["undoLabel", [adminKeys.labels, adminKeys.auditAll]],
+    // The knowledge page's every list and detail (a draft leaves one tab for another, an entry is born or retired),
+    // the overview's pending and conflict counts, and the audit page that shows the event.
+    ["approveKnowledgeDraft", [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll]],
+    ["rejectKnowledgeDraft", [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll]],
+    ["retireKnowledgeEntry", [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll]],
   ];
 
   it.each(EXPECTED)("%s invalidates its keys", async (mutation, keys) => {
@@ -125,6 +168,30 @@ describe("what a write makes stale", () => {
       await invalidateAfter(client, mutation);
       expect(client.getQueryState(adminKeys.digest(null))?.isInvalidated).toBe(true);
       expect(client.getQueryState(adminKeys.digest("2026-09-30"))?.isInvalidated).toBe(true);
+    },
+  );
+
+  it.each(["approveKnowledgeDraft", "rejectKnowledgeDraft", "retireKnowledgeEntry"] as const)(
+    "%s refreshes every tab and every open detail of the knowledge page, and the overview's counts",
+    async (mutation) => {
+      const client = new QueryClient();
+      client.setQueryData(adminKeys.knowledgeDrafts("pending"), []);
+      client.setQueryData(adminKeys.knowledgeEntries("active"), []);
+      client.setQueryData(adminKeys.knowledgeDraft("d-1"), {});
+      client.setQueryData(adminKeys.knowledgeEntry("e-1"), {});
+      client.setQueryData(adminKeys.overview("24h"), {});
+      client.setQueryData(adminKeys.rules, []);
+      await invalidateAfter(client, mutation);
+      for (const key of [
+        adminKeys.knowledgeDrafts("pending"),
+        adminKeys.knowledgeEntries("active"),
+        adminKeys.knowledgeDraft("d-1"),
+        adminKeys.knowledgeEntry("e-1"),
+        adminKeys.overview("24h"),
+      ]) {
+        expect(client.getQueryState(key)?.isInvalidated, JSON.stringify(key)).toBe(true);
+      }
+      expect(client.getQueryState(adminKeys.rules)?.isInvalidated).toBe(false);
     },
   );
 
