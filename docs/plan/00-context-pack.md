@@ -47,7 +47,7 @@ Owner: the thesis author (also Tier-1/Tier-2 analyst together with the advisor).
 | `soar/` | tier | enrichment, domain, infra, audit, **ingest** (allowlisted exception) | `pipeline.py` (orchestrates one intake → alert), `risk.py` |
 | `tier1/` | tier | domain, llm, kb, security, infra, audit, rag | `queue.py`, `decide.py`, `triage.py` (job ①), `digest.py` |
 | `tier2/` | tier | domain, llm, kb, security, infra, audit, enrichment, rag | `dossier.py`, `investigate.py` (job ②), `conclude.py` |
-| `rag/` | tier | infra, audit, security, llm, kb, domain (DEC-210) — no tier, no `web`; `tier1`, `tier2` and `web` may import it | learned knowledge and RAG: fingerprint, history, entries, candidates, the ranking and drafting agents, publishing (P13) |
+| `rag/` | infra | infra, audit, security, llm, kb, domain (DEC-210) — no tier, no `web`; `tier1`, `tier2` and `web` may import it | learned knowledge and RAG: fingerprint, history, entries, candidates, the ranking and drafting agents, publishing (P13) |
 | `domain/` | infra | infra, audit | `alert.py`, `transitions.py`, `correlation.py` |
 | `infra/` | infra | — | `db.py`, `jobs.py`, `worker.py` (**the claim/lock/retry/reclaim loop only — it names no handler and imports no tier; DEC-037**), `auth.py`, `config.py`, `errors.py`, `puller.py`, `intake.py`, `health.py`, `notify.py` |
 | `audit/` | infra | infra | `events.py`, `llm_runs.py` |
@@ -99,6 +99,8 @@ Changing any of these requires a Decision Request in `docs/plan/INBOX.md` and Di
   "evidence": [{"alert_id": "string", "quote": "verbatim substring of that alert's raw_log or description", "why": "string"}],
   "next_steps": ["string"], "playbook_used": "string|null"}}
 ```
+
+**RAG-only schemas (DEC-210, P13).** Two more output schemas exist, `rag_match_v1` (the ranking agent's matches: `entry_id`, `level` and a `reason` of at most 160 characters) and `knowledge_draft_v1` (the six fields the draft agent writes). They live in `backend/app/rag/schemas.json`, are read by `rag/agent.call_json` (and checked by `llm.schemas.validate_against`), and are **not** part of `output_schemas.json` or of the block above, which `scripts/check_output_schemas.py` compares with that file alone. ①'s and ②'s own schemas, and the closed `reasons[].source` enum of `triage_v2`, are unchanged by P13.
 
 ### 6.3 Config constants (`backend/app/infra/config.py`; all overridable by env)
 

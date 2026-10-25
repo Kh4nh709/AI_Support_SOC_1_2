@@ -37,12 +37,14 @@ HEADING = "## Admin console v1.1 — deploy (DEC-205)"
 #: what that row says to expect (None: nothing a test can hold the row to).
 STEPS: list[tuple[str, str, str | None]] = [
     ("1", "git merge --ff-only director/admin-v1-1", "Fast-forward"),
-    # 020 (P13-T01, DEC-210) is the newest migration: a database already at 019 applies one.
-    ("2", "make migrate PY=.venv/bin/python", "migrate: 1 applied, 19 already present"),
+    # Pinned to 019, the migration this release is about (P13-T09, the T01 review's M1): the
+    # `director/admin-v1-1` tip that step 1 merges has no 020, so its `make migrate` applies one
+    # file. Learned knowledge (020, DEC-210) has its own block, held by `test_runbook_rag.py`.
+    ("2", "make migrate PY=.venv/bin/python", "migrate: 1 applied, 18 already present"),
     (
         "3",
         'psql "$DATABASE_URL_OWNER" -Atc "select count(*) from schema_migrations"',
-        "`20`",
+        "`19`",
     ),
     ("4", "docker compose up -d --build ui", None),
     ("5", "docker compose restart app worker", None),
@@ -84,8 +86,11 @@ def _step_rows(section: str) -> list[list[str]]:
     return [r for r in _rows(section) if r[0][:1].isdigit()]
 
 
-def _migration_files() -> int:
-    return len(list(SCHEMA_DIR.glob("[0-9][0-9][0-9]_*.sql")))
+def _migration_files_up_to_019() -> int:
+    """The migrations the v1.1 release is made of: `docs/Schema` up to `019_admin_console.sql`."""
+    files = sorted(p.name for p in SCHEMA_DIR.glob("[0-9][0-9][0-9]_*.sql") if p.name[:3] <= "019")
+    assert files[-1].startswith("019_"), files[-3:]
+    return len(files)
 
 
 # --------------------------------------------------------------------------- the block
@@ -118,13 +123,24 @@ def test_a_step_says_what_to_expect(number, command, expected):
     assert expected in row[2], f"step {number} expects {row[2]!r}, not {expected!r}"
 
 
-def test_the_expected_counts_are_the_number_of_migration_files():
-    """`1 applied, 18 already present` and `19` are one count seen from two sides: the files in
-    `docs/Schema`. A migration 020 makes this fail until the block is updated."""
-    total = _migration_files()
+def test_the_expected_counts_are_the_migration_files_up_to_019():
+    """`1 applied, 18 already present` and `19` are one count seen from two sides: the files of
+    `docs/Schema` up to and including `019_admin_console.sql`, the migration the block is for. A
+    later migration does not move them: 020 (learned knowledge) has its own block, in **Learned
+    knowledge and RAG (DEC-210)**, which `test_runbook_rag.py` holds to the file count."""
+    total = _migration_files_up_to_019()
+    assert total == 19
     rows = _step_rows(_section(_text()))
     assert f"1 applied, {total - 1} already present" in rows[1][2]
     assert f"`{total}`" in rows[2][2]
+    for row in rows[1:3]:
+        assert "`020_" not in row[2], f"a v1.1 step names 020 as what it applies: {row[2]!r}"
+
+
+def test_the_block_sends_the_reader_to_the_020_block_for_learned_knowledge():
+    section = _section(_text())
+    assert "Learned knowledge and RAG (DEC-210)" in section
+    assert "`020_learned_knowledge.sql`" in section
 
 
 def test_step_3_stops_the_operator_until_the_count_holds():

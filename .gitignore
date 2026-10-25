@@ -64,3 +64,8 @@ frontend/node_modules
 frontend/dist
 frontend/test-results
 frontend/playwright-report
+
+# P13-T09: learned knowledge (DEC-210). The entry files are the published copy of database rows, written
+# by the application and rebuilt by `python -m app.rag.publish --rebuild`; only the README is tracked.
+kb_learned/*
+!kb_learned/README.md
