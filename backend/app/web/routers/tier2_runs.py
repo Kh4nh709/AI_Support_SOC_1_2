@@ -32,9 +32,11 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.audit.events import write_event
-from app.infra import settings
+from app.infra import config, settings
 from app.infra.auth import Claims
 from app.infra.jobs import enqueue
+from app.rag.lookup import latest_lookup
+from app.rag.subject import Subject
 from app.tier2 import investigation_view
 from app.tier2.investigate import run_id_for_job
 from app.web.deps import CaseId, Cfg, Conn, require_role
@@ -74,6 +76,26 @@ def _analyze_quota_count(conn: Any, actor_id: str) -> int:
         (actor_id,),
     ).fetchone()
     return row[0]
+
+
+def _queue_case_lookup_if_stale(conn: Any, cfg: config.Config, case_id: str) -> None:
+    """P13-T08 (DEC-210, spec §7.6): with `RAG_ENABLED`, queue a `rag_lookup` for the case when its newest
+    stored lookup (whatever its status) is older than `RAG_CASE_REFRESH_H` hours, or it has none. The age is
+    read against the database's clock, like every control timestamp. Single-flight (`enqueue`) keeps a
+    lookup that is already queued or running. Nothing here waits: ② reads whatever lookup exists when the
+    investigation job runs, and a lookup queued now serves the next analysis. Written in the request's
+    transaction, before its commit."""
+    if not cfg.RAG_ENABLED:
+        return
+    latest = latest_lookup(conn, Subject("case", case_id.lower()))
+    if latest is not None:
+        (stale,) = conn.execute(
+            "SELECT %s::timestamptz < now() - %s * interval '1 hour'",
+            (latest.created_at, cfg.RAG_CASE_REFRESH_H),
+        ).fetchone()
+        if not stale:
+            return
+    enqueue(conn, "rag_lookup", Subject("case", case_id.lower()).key)
 
 
 @router.post("/cases/{case_id}/analyze", status_code=202)
@@ -138,6 +160,9 @@ def api_analyze(conn: Conn, claims: Tier2, cfg: Cfg, case_id: CaseId) -> dict[st
         actor_id=claims.user_id,
         payload={"run_id": str(run_id), "job_id": job_id},
     )
+    # P13-T08: after the investigation is queued (its job id, the run id and the 202 body are what they
+    # were) and before the commit, so one commit makes both visible together.
+    _queue_case_lookup_if_stale(conn, cfg, case_id_str)
     conn.commit()
     return {"run_id": run_id, "job_id": job_id}
 

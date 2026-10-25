@@ -508,6 +508,9 @@ def escalate(
     `ux_case_alerts_mot_alert_mot_case` (UNIQUE on `alert_id`) is the second,
     DB-enforced layer of the same rule: an alert already in a case raises
     `psycopg.errors.UniqueViolation` here, converted to `StaleState`.
+
+    With `RAG_ENABLED` (P13-T08) the case's learned-knowledge lookup is queued last, in this same
+    transaction; with the switch off nothing else is queued, as before.
     """
     cfg = config.load()
     trigger = conn.execute(
@@ -610,6 +613,14 @@ def escalate(
             "correlated_count": len(head_ids) - 1,
         },
     )
+    if cfg.RAG_ENABLED:
+        # DEC-210, spec §7.6: the learned-knowledge lookup of the new case, in the case's own
+        # transaction (it lives and dies with the case). ② never waits for it - the investigation
+        # reads whatever `latest_lookup` holds when it runs - and `escalate` delays nothing.
+        # `domain` imports no `rag`, so the subject is spelled as `rag.subject.Subject("case", id).key`
+        # spells it (`parse_subject` reads a case id in lower case; `uuid4()` writes one) - a test
+        # pins the two to each other.
+        enqueue(conn, "rag_lookup", f"case:{case_id}")
     return case_id
 
 
