@@ -1323,8 +1323,10 @@ def test_the_last_transient_attempt_carries_the_lookup_id(db, rag_on, monkeypatc
 
 
 # ── what the model may cite: nothing new ────────────────────────────────────────────────────────
-KB_QUOTE = "máy quản trị quét cổng định kỳ và alert đã được đóng là lành tính"
-HISTORY_QUOTE = "by_conclusion: tier1_closed_fp=4"
+KB_QUOTE = (
+    "Máy quản trị quét cổng định kỳ và alert đã được đóng là lành tính"  # a sentence of LONG_A
+)
+HISTORY_QUOTE = "by_conclusion: tier1_closed_fp=4"  # a line of the history `put_lookup` stores
 
 
 def evidence_item(alert_id: str, quote: str) -> dict:
@@ -1333,16 +1335,24 @@ def evidence_item(alert_id: str, quote: str) -> dict:
 
 @pytest.mark.db
 @pytest.mark.parametrize("quote", [KB_QUOTE, HISTORY_QUOTE], ids=["kb_learned", "decision_history"])
-def test_check_evidence_refuses_a_quote_taken_from_a_learned_block(db, rag_on, quote) -> None:
+def test_check_evidence_refuses_a_quote_taken_from_a_learned_block(
+    db, rag_on, fixed_nonce, quote
+) -> None:
     """An entry, or the history, is reference material and not evidence about this case: a quote that is
-    in it and not in the alert's own text is refused, even with the alert's own id on it."""
+    in the prompt's learned block and not in the alert's own text is refused, even with the alert's own id
+    on it - while a quote from the alert's own text, in the same answer, is verified."""
     case_id, head = committed_case(db)
-    parsed = _investigate_v2(
+    committed_lookup(db, case_id, matches=[committed_entry(db, LONG_A, "rat_giong")])
+    answer = _investigate_v2(
         evidence=[evidence_item(head, RAW_LOG[7:40]), evidence_item(head, quote)]
     )
-    result = tier2_investigate._check_evidence(db, case_id, parsed)
-    assert result["verified"] == [0]  # the alert's own text is verified: the check is not vacuous
-    assert result["rejected"] == [{"index": 1, "alert_id": head, "reason": "quote_not_found"}]
+
+    llm = run(db, case_id, fake(answer))
+
+    assert quote in llm.calls[0]["user"]  # the model saw it where it quoted it from
+    check = run_row(db, case_id)["evidence_check"]
+    assert check["verified"] == [0]  # the alert's own text is verified: the check is not vacuous
+    assert check["rejected"] == [{"index": 1, "alert_id": head, "reason": "quote_not_found"}]
 
 
 @pytest.mark.db
