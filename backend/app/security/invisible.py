@@ -46,8 +46,12 @@ DEFAULT_IGNORABLE_RANGES: tuple[tuple[int, int], ...] = (
     (0x1D173, 0x1D17A),  # MUSICAL SYMBOL BEGIN BEAM .. END PHRASE
     (0xE0000, 0xE0FFF),  # tag characters, VARIATION SELECTOR-17..256, reserved
 )
-#: Invisible though not default-ignorable: BRAILLE PATTERN BLANK, which draws a blank cell.
-EXTRA_INVISIBLE_RANGES: tuple[tuple[int, int], ...] = ((0x2800, 0x2800),)
+#: Invisible though not default-ignorable: BRAILLE PATTERN BLANK, which draws a blank cell, and MUSICAL
+#: SYMBOL NULL NOTEHEAD (So), which draws nothing between the noteheads that do.
+EXTRA_INVISIBLE_RANGES: tuple[tuple[int, int], ...] = (
+    (0x2800, 0x2800),  # BRAILLE PATTERN BLANK
+    (0x1D159, 0x1D159),  # MUSICAL SYMBOL NULL NOTEHEAD
+)
 INVISIBLE_RANGES = (*DEFAULT_IGNORABLE_RANGES, *EXTRA_INVISIBLE_RANGES)
 INVISIBLE_CODE_POINTS = frozenset(
     code_point for low, high in INVISIBLE_RANGES for code_point in range(low, high + 1)

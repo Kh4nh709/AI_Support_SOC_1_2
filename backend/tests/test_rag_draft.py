@@ -392,6 +392,10 @@ INVISIBLE_SAMPLES = {
     "private-use-last": "\uf8ff",
     "unassigned": "\u0378",
     "noncharacter": "\uffff",
+    # Cf and not default-ignorable (P13 wave, item 9): only the category test catches these two, so only
+    # these pin it (every other Cf sample above is also in the Default_Ignorable table).
+    "cf-arabic-number-sign": "\u0600",
+    "cf-egyptian-hieroglyph-joiner": chr(0x13430),
 }
 
 
@@ -424,6 +428,7 @@ DEFAULT_IGNORABLE_SAMPLES = {
     "reserved-e0fff": chr(0xE0FFF),
     "variation-selector-instruction": VS_INSTRUCTION,
     "braille-blank": chr(0x2800),
+    "musical-null-notehead": chr(0x1D159),  # So, draws nothing; between two noteheads that do
 }
 ALL_INVISIBLE = {**INVISIBLE_SAMPLES, **DEFAULT_IGNORABLE_SAMPLES}
 

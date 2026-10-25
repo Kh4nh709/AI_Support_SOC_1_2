@@ -32,7 +32,7 @@ def test_the_table_is_unicode_15_default_ignorable_code_point_and_the_braille_bl
         (0x1D173, 0x1D17A),
         (0xE0000, 0xE0FFF),
     )
-    assert invisible.EXTRA_INVISIBLE_RANGES == ((0x2800, 0x2800),)
+    assert invisible.EXTRA_INVISIBLE_RANGES == ((0x2800, 0x2800), (0x1D159, 0x1D159))
     assert invisible.INVISIBLE_RANGES == (
         *invisible.DEFAULT_IGNORABLE_RANGES,
         *invisible.EXTRA_INVISIBLE_RANGES,
@@ -57,9 +57,30 @@ def test_the_code_points_next_to_the_table_are_not_invisible() -> None:
     beside = [
         0x00AC, 0x00AE, 0x034E, 0x0350, 0x061B, 0x061D, 0x115E, 0x1161, 0x17B3, 0x17B6, 0x180A,
         0x1810, 0x200A, 0x2010, 0x2029, 0x202F, 0x205F, 0x2070, 0x3163, 0x3165, 0xFE10, 0xFFA1,
-        0x2801, 0x27FF,
+        0x2801, 0x27FF, 0x1D158, 0x1D15A,
     ]  # fmt: skip
     for cp in beside:
         char = chr(cp)
         assert not invisible.is_invisible(char), hex(cp)
         assert invisible.strip_invisible(f"a{char}b") == f"a{char}b", hex(cp)
+
+
+def test_the_format_category_alone_catches_a_code_point_the_table_does_not_name() -> None:
+    """Item 9: every Cf sample the draft tests used was also in the table, so dropping the category
+    test went unseen. U+0600 and U+13430 are Cf and in no range: only the category makes them invisible.
+    """
+    import unicodedata
+
+    for cp in (0x0600, 0x13430):
+        char = chr(cp)
+        assert unicodedata.category(char) == "Cf", hex(cp)
+        assert cp not in invisible.INVISIBLE_CODE_POINTS, hex(cp)
+        assert invisible.is_invisible(char), hex(cp)
+        assert invisible.strip_invisible(f"a{char}b") == "ab", hex(cp)
+        assert invisible.has_invisible(f"a{char}b"), hex(cp)
+
+
+def test_the_musical_null_notehead_is_in_the_extra_ranges() -> None:
+    char = chr(0x1D159)
+    assert invisible.is_invisible(char) and invisible.strip_invisible(f"a{char}b") == "ab"
+    assert (0x1D159, 0x1D159) in invisible.EXTRA_INVISIBLE_RANGES
