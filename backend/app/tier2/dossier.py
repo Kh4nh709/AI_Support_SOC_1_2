@@ -1,4 +1,5 @@
-"""Assemble the nine-block case dossier (facts, logs, timeline, entities, playbooks).
+"""Assemble the case dossier: nine blocks (facts, logs, timeline, entities, playbooks), and a tenth, the
+learned section, only when `learned` is given (DEC-210, below).
 
 P5-T03 (DEC-151 wave 2). `build(conn, case_id, *, nonce, cfg=None) -> Dossier` reads the
 nine blocks of context pack §7.6 / the card's design note 1 from the database only, inside
@@ -1297,8 +1298,9 @@ def build(
     cfg: config.Config | None = None,
     learned: LearnedLike | None = None,
 ) -> Dossier:
-    """The dossier of `case_id`. `learned` (P13-T08): None - the nine blocks, byte for byte what this
-    function returned before the parameter existed. Else block 10 (see the module docstring)."""
+    """The dossier of `case_id`: nine blocks. `learned` (P13-T08): None - those nine blocks, byte for byte
+    what this function returned before the parameter existed. Else ten: block 10, the learned section (see
+    the module docstring), follows block 8 and the scope sentence stays last."""
     cfg = cfg or config.load()
 
     case_row = _fetch_case(conn, case_id)
