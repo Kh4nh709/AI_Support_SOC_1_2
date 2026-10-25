@@ -87,6 +87,10 @@ describe("the analyst's work, on the left, of an alert", () => {
   it("shows the alert with the sections of the alert page, and ①'s result", async () => {
     await open();
     const col = within(left());
+    // the title of the alert page, which the sections below it do not carry
+    expect(
+      col.getByRole("heading", { name: "Phát hiện quét cổng từ máy trong mạng nội bộ" }),
+    ).toBeInTheDocument();
     // the same sections the Tier-1 page draws from the same JSON
     expect(col.getByRole("region", { name: S.alert.summaryLabel })).toHaveTextContent("100190");
     expect(col.getByText("10.10.5.7")).toBeInTheDocument(); // the event details
@@ -169,6 +173,10 @@ describe("the analyst's work, on the left, of a case", () => {
   it("shows the case, its heads, its timeline, its notes and ②'s result with the evidence", async () => {
     await open({ details: [caseDraft()] });
     const col = within(left());
+    // the title of the case page, which the sections below it do not carry
+    expect(
+      col.getByRole("heading", { name: "Chuỗi quét cổng và đăng nhập lặp lại" }),
+    ).toBeInTheDocument();
     expect(col.getByRole("region", { name: S.case.summaryLabel })).toHaveTextContent(
       S.caseStatus.concluded_fp,
     );

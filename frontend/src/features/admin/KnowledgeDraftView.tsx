@@ -517,6 +517,7 @@ function AlertWork({ source }: { source: KnowledgeSource }) {
   if (alert === null) return <Sentence>{D.left.noData.alert}</Sentence>;
   return (
     <div className="space-y-5">
+      <h3 className="text-base font-semibold break-words">{alert.description || alert.alert_id}</h3>
       <AlertSummary view={alert} role="admin" />
       <EventDetails view={alert} />
       <RawLog view={alert} />
@@ -537,6 +538,7 @@ function CaseWork({ source }: { source: KnowledgeSource }) {
         <Sentence>{D.left.noData.case}</Sentence>
       ) : (
         <>
+          <h3 className="text-base font-semibold break-words">{asText(caseView.title)}</h3>
           <CaseSummary data={caseView} />
           <CaseHeads data={caseView} />
           <CaseTimeline data={caseView} />
