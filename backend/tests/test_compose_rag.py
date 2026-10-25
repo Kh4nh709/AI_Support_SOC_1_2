@@ -158,7 +158,9 @@ def test_the_app_entry_adds_only_the_mount():
 def test_the_base_compose_file_does_not_mention_the_feature():
     text = BASE.read_text(encoding="utf-8")
     for needle in ("kb_learned", "rag-worker", "rag_worker", "docker-compose.rag"):
-        assert needle not in text, f"docker-compose.yml names {needle!r}: the feature lives in the override"
+        assert (
+            needle not in text
+        ), f"docker-compose.yml names {needle!r}: the feature lives in the override"
 
 
 def test_the_override_says_how_it_is_switched_on_and_off():

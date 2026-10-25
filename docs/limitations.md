@@ -808,6 +808,46 @@ the Measured paragraph of item (ix) in section B.
   account and IoC context for one that did. The occurrence count the analyst sees for such an alert is 1,
   and it is not ①'s.
 
+### (xlvii) · Learned knowledge and RAG (DEC-210): the harness does not run it, the search does not fold accents, the queue volume is an expectation, and its spend shares the global cap
+
+- **Statement.** DEC-210 (25/10/2026) adds learned knowledge: admin-approved entries in `kb_learned/` and the
+  decision history of similar alerts and cases, looked up by a separate `rag-worker` with DeepSeek and put in
+  ①'s prompt and ②'s dossier as a reference, never as a rule and never as a basis for closing. Both switches
+  (`RAG_ENABLED`, `KNOWLEDGE_DRAFT_ENABLED`) default to `false`. Four limits, each real only once a switch is on:
+  1. **With `RAG_ENABLED=true`, the evaluation harness's B4 is not the live deployment.** ① then adds the section
+     "Tri thức đã duyệt và lịch sử quyết định" to its prompt and its `triage` starts `RAG_TRIAGE_DELAY_S`
+     seconds later. The harness does not run that: `EvalSwitches` gains `rag: bool = False`, `DEPLOYED` keeps
+     `False`, and the harness, unedited, always runs without the lookup, so that no live `rag_results` row leaks
+     into a measured run (spec §7.8, A5). B4, "as deployed" (xxviii), equals the live ① only while
+     `RAG_ENABLED=false`; with it `true`, no table of this register measures what the analysts' ① does. The
+     Owner's measurement redesign takes it over.
+  2. **Full-text search uses the `simple` configuration, with no accent folding.** The lookup's candidate search
+     (`knowledge_entries.fingerprint_tsv`, a GIN index) has no stemming, no stop words and no accent folding:
+     `đăng` and `dang` are two tokens, and a fingerprint spelled one way does not match an entry spelled the
+     other. The effect is a similar entry the search does not find, never a wrong entry in a prompt: the ranking
+     agent and the checks V-R1 and V-R2 decide what reaches a prompt, from the candidates found.
+  3. **The queue volume is an expectation, not measured.** Spec §7.10 expects the merge rule and per-case
+     drafting to bring the draft queue well under 100 a day, at about 100 conclusions a day, once the store has
+     some weeks of entries. No stream has run with `KNOWLEDGE_DRAFT_ENABLED=true`. `KNOWLEDGE_QUEUE_MAX` (200)
+     only raises the `knowledge_queue` health alarm above that length; it does not stop drafts.
+  4. **The RAG's spend is part of the global cap.** The RAG's DeepSeek spend is capped per month by
+     `RAG_MONTHLY_USD_CAP` (3, a tenth of the default global 30) and is also counted in the global cap
+     `LLM_MONTHLY_USD_CAP`, so the RAG can take at most its sub-cap from ① and ②. When either cap is reached the
+     lookup and draft calls stop (a `budget` row; ① and ② go on without the block). A monthly cost read from
+     `llm_runs` after a switch is on includes the `rag_lookup` and `knowledge_draft` pipelines unless it filters
+     on `pipeline`.
+- **Measured.** Not measured. (1) follows from a default and from the harness's code, by construction; (2) by
+  construction of `docs/Schema/020_learned_knowledge.sql`; (3) is the spec's expectation and no stream has run
+  with the drafts on; (4) by construction of the budget (`backend/app/rag/budget.py`), and no month has run with
+  a switch on, so the RAG's real spend per month is unknown.
+- **Source.** DEC-210; `docs/superpowers/specs/2026-10-24-learned-knowledge-rag-design.md` §7.1 (spend), §7.2
+  (the `simple` index), §7.8 (the evaluation, A5), §7.10 (volume); `docs/Schema/020_learned_knowledge.sql`;
+  `backend/app/rag/budget.py`; `docs/runbook.md`, **Learned knowledge and RAG (DEC-210)** (P13-T09).
+- **Affects.** Every B4 row of `docs/results/ablation.md`, `docs/results/per_category.md` and
+  `docs/results/adversarial.md`: they describe ① without learned knowledge, and say nothing about it with the
+  lookup on. Any online claim about ① or ② made after `RAG_ENABLED` is switched on. Every cost figure taken
+  over a month in which a switch was on.
+
 ## F. What the thesis must not claim
 
 ### (xxxviii) · Only Wazuh, no detection; no "MTTD", no "ATT&CK coverage"
