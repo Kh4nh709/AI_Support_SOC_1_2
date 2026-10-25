@@ -569,7 +569,13 @@ def test_a_draft_with_no_text_has_an_empty_draft_in_the_detail(api) -> None:
 @pytest.mark.db
 def test_a_draft_whose_source_is_gone_still_answers(api) -> None:
     """No row of `alerts` or `cases` behind the draft (nothing forbids it): no 500."""
-    for kind, source_id in (("alert", "no-such-alert"), ("case", str(uuid.uuid4()))):
+    # a case id that is not a UUID is one too (P13 fix wave, item 7: it was a 500 from `WHERE case_id = ...`)
+    for kind, source_id in (
+        ("alert", "no-such-alert"),
+        ("case", str(uuid.uuid4())),
+        ("case", "not-a-uuid"),
+        ("case", "123"),
+    ):
         (draft_id,) = api.conn.execute(
             "INSERT INTO knowledge_drafts (source_kind, source_id, conclusion, status)"
             " VALUES (%s, %s, 'closed_fp', 'pending') RETURNING draft_id",

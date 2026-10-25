@@ -331,7 +331,12 @@ def _alert_source(conn: psycopg.Connection, alert_id: str) -> dict[str, Any]:
 
 
 def _case_source(conn: psycopg.Connection, cfg: Any, case_id: str) -> dict[str, Any]:
-    case = tier2_routes.case_detail(conn, case_id)
+    try:
+        uuid.UUID(case_id)
+    except ValueError:
+        case = None  # no case has this id; `WHERE case_id = <not a uuid>` would be a 500
+    else:
+        case = tier2_routes.case_detail(conn, case_id)
     investigation = None
     if case is not None:
         investigation = {
