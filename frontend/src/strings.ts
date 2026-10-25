@@ -1906,6 +1906,8 @@ export const S = {
           v4_detector: "Nội dung giống một câu lệnh chèn vào mô hình (prompt injection).",
           v4_delimiter: "Có dấu phân cách dữ liệu không tin cậy, không được dùng.",
           v4_nonce: "Có chuỗi giống mã nonce (16 ký tự thập lục phân).",
+          v4_structure:
+            "Có dòng mở đầu như một dòng cấu trúc của hệ thống: số trong ngoặc vuông như [1], hoặc khóa như level:, total:, examples:. Hãy viết lại.",
           v5_length: "Độ dài ngoài giới hạn.",
           v5_count: "Số mục ngoài giới hạn.",
           v5_empty: "Không được để trống.",

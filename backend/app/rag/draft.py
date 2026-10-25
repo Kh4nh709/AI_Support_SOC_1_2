@@ -44,9 +44,14 @@ reads, and into the retry message, whose every word the linter must know):
                         `v1_tags:unknown_tag` (a tag outside `tags.yaml`)
     v2_closed:<field>   a closed field is not the source's
     v3_<kind>:<field>   a literal of `generalise.FINDING_NAMES` kind in a free-text field
-    v4_detector / v4_delimiter / v4_nonce : <field>
+    v4_detector / v4_delimiter / v4_nonce / v4_structure : <field>
                         `security.detector.scan` found something, a `<untrusted_data` tag in any
-                        spelling, a token of the shape of a nonce (16 hex characters)
+                        spelling, a token of the shape of a nonce (16 hex characters), a line (of the
+                        field, or of any item of a list field) that opens with `[<digits>]` or with
+                        a key of the decision history or `kb_learned_level` and a colon: inside the
+                        `kb_learned` block it would forge the numbering that pairs an entry with
+                        its level, or a line of the history (`llm.builder.has_forged_structure`;
+                        at prompt time `llm.builder.prompt_entries` drops an entry that has one)
     v5_length / v5_count / v5_empty : <field>   the bounds of spec §7.4
 
 **The job**, in order (`run_draft_job`):
@@ -107,7 +112,13 @@ from app.llm.adapter import (
     cost_usd,
     estimate_tokens,
 )
-from app.llm.builder import BULLET, HEADING_REPAIR, SENTENCE_REPAIR, KbLearnedLevel
+from app.llm.builder import (
+    BULLET,
+    HEADING_REPAIR,
+    SENTENCE_REPAIR,
+    KbLearnedLevel,
+    has_forged_structure,
+)
 from app.llm.triage import prompt_version
 from app.rag import agent
 from app.rag.budget import rag_limits, rag_spent_or_exhausted
@@ -192,7 +203,7 @@ def _fault_vocabulary() -> frozenset[str]:
     names.update(f"v1_schema:{field}" for field in DRAFT_FIELDS)
     names.update(f"v2_closed:{field}" for field in CLOSED_FIELDS)
     names.update(f"v3_{kind}:{field}" for kind in FINDING_NAMES for field in FREE_TEXT_FIELDS)
-    for rule in ("v4_detector", "v4_delimiter", "v4_nonce"):
+    for rule in ("v4_detector", "v4_delimiter", "v4_nonce", "v4_structure"):
         names.update(f"{rule}:{field}" for field in FREE_TEXT_FIELDS)
     names.update(f"v5_length:{field}" for field in FREE_TEXT_FIELDS)
     names.update(f"v5_count:{field}" for field in LIST_FIELDS)
@@ -452,6 +463,8 @@ def _v4(texts: Mapping[str, str]) -> list[str]:
             faults.append(f"v4_delimiter:{name}")
         if _NONCE_SHAPED.search(scanned):
             faults.append(f"v4_nonce:{name}")
+        if has_forged_structure(scanned):  # a list is its items joined by newlines: a line per item
+            faults.append(f"v4_structure:{name}")
         # the detector reads the text as written (it flags hidden characters) and as displayed
         views = [raw] if scanned == raw else [raw, scanned]
         if detector.scan([wrap.untrusted_block(view, "kb_learned", nonce=nonce) for view in views]):

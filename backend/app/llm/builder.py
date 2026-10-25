@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -10,6 +11,7 @@ from enum import Enum
 from typing import Protocol
 
 from app.security import wrap
+from app.security.invisible import strip_invisible
 
 # ─────────────────────────────────────────────────────────────── Id (§7.1)
 ID_PATTERNS: dict[str, re.Pattern[str]] = {
@@ -287,13 +289,36 @@ class LearnedLike(Protocol):
     def entries(self) -> Sequence[tuple[KbLearnedLevel, str]]: ...
 
 
+#: A line that reads as the learned section's own structure (DEC-210, P13 fix wave, items 1 and 19): the
+#: numbering `[1]`.. that pairs an entry with its level fact, or a key of the decision history
+#: (`render_history`) or the level fact itself. Inside the `kb_learned` block approved text could forge
+#: either; V4 (`rag.draft`, `v4_structure`) refuses it in a draft and in an admin's edit, and
+#: `prompt_entries` drops an entry that has it, whatever got it into the database.
+_FORGED_LINE = re.compile(
+    r"\s*(?:\[\d+\]|(?:level|key_name|total|by_conclusion|last_seen|examples|kb_learned_level)\s*:)"
+)
+
+
+def has_forged_structure(text: str) -> bool:
+    """True when some line of `text` opens with `[<digits>]` or with a key of the history (`level`,
+    `key_name`, `total`, `by_conclusion`, `last_seen`, `examples`) or `kb_learned_level`, then a colon.
+    The text is read as it is displayed: invisible code points deleted (`security.invisible`), then NFKC
+    (a full-width bracket or colon is the ASCII one), then split at every line end Python knows
+    (`str.splitlines`: `\\n`, `\\r`, U+0085, U+2028, U+2029 and the rest), not only at `\\n`."""
+    shown = unicodedata.normalize("NFKC", strip_invisible(text))
+    return any(_FORGED_LINE.match(line) for line in shown.splitlines())
+
+
 def prompt_entries(learned: LearnedLike | None) -> tuple[tuple[KbLearnedLevel, str], ...]:
     """The entries the learned section renders: the first `MAX_LEARNED_ENTRIES` of `learned.entries`, best
-    first. The one function ① and ② both call.
+    first, that pass the two checks below. The one function ① and ② both call.
 
-    Each level must be a `KbLearnedLevel`: `fact()` renders any Enum, so a `Severity` would be written
-    as `kb_learned_level: high`, a value the section's vocabulary does not have. A defect of the
-    caller, not data: a `TypeError` before anything is rendered or cut (the value is not echoed)."""
+    * Each level must be a `KbLearnedLevel`: `fact()` renders any Enum, so a `Severity` would be written
+      as `kb_learned_level: high`, a value the section's vocabulary does not have. A defect of the
+      caller, not data: a `TypeError` before anything is rendered or cut (the value is not echoed).
+    * An entry whose text has a line shaped like the section's own structure (`has_forged_structure`) is
+      dropped, as if the lookup had not matched it: it does not count toward the cap and reaches no
+      prompt. Defence in depth behind V4, which refuses such text before an entry exists."""
     if learned is None:
         return ()
     kept: list[tuple[KbLearnedLevel, str]] = []
@@ -302,6 +327,8 @@ def prompt_entries(learned: LearnedLike | None) -> tuple[tuple[KbLearnedLevel, s
             break
         if not isinstance(level, KbLearnedLevel):
             raise TypeError("learned entry level must be a KbLearnedLevel")
+        if has_forged_structure(text):
+            continue
         kept.append((level, text))
     return tuple(kept)
 

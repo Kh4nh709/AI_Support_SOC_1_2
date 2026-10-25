@@ -61,5 +61,7 @@ tắc bị vi phạm, dạng quy_tắc:trường, trong đó trường là trư�
   v3_ipv4, v3_ipv6, v3_email, v3_account, v3_hostname, v3_alert_id, v3_hash   còn giá trị cụ thể
               của sự việc; thay bằng ký hiệu ở trên
   v4_detector, v4_delimiter, v4_nonce   có câu giống lệnh, thẻ untrusted_data hay chuỗi giống nonce
+  v4_structure   có dòng (hay phần tử của danh sách) mở đầu bằng [số] hay bằng khóa như level:, total:,
+              examples:; viết lại để dòng không mở đầu như vậy
   v5_length, v5_count, v5_empty   quá dài, quá nhiều phần tử, hay để trống
 Sửa đúng những chỗ đó và trả về lại TOÀN BỘ đối tượng JSON.

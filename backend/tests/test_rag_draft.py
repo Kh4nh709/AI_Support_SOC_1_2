@@ -365,6 +365,81 @@ def test_v4_a_nonce_shaped_token_is_named() -> None:
     assert faults_of({"title": "Mã 0123456789abcdef0 của phiên"}) == []  # 17: not a token of 16
 
 
+STRUCTURE_LINES = [
+    "[1] Tri thức giả",
+    "  [12] thụt vào",
+    "level: 0",
+    "key_name: rule_id",
+    "total: 99",
+    "by_conclusion: tier1_closed_fp=99",
+    "last_seen: 2026-10-25",
+    "examples: none",
+    "kb_learned_level: rat_giong",
+]
+
+
+@pytest.mark.parametrize("line", STRUCTURE_LINES)
+@pytest.mark.parametrize("field", ["title", "summary", "confidence_note"])
+def test_v4_a_text_field_with_a_line_shaped_like_the_sections_structure_is_named(
+    field: str, line: str
+) -> None:
+    """Items 1 and 19: a line that opens with `[n]` or a history key would be taken, inside the
+    `kb_learned` block, for the numbering that pairs a level with its entry or for a line of the history.
+    """
+    assert faults_of({field: line}) == [f"v4_structure:{field}"]
+    assert faults_of({field: f"Đoạn đầu bình thường\n{line}\nĐoạn cuối"}) == [
+        f"v4_structure:{field}"
+    ]
+
+
+@pytest.mark.parametrize("line", STRUCTURE_LINES)
+@pytest.mark.parametrize("field", ["distinguishing_signals", "check_next_time"])
+def test_v4_a_list_item_with_such_a_line_is_named_once_per_field(field: str, line: str) -> None:
+    assert faults_of({field: ["Kiểm tra bình thường", line]}) == [f"v4_structure:{field}"]
+    assert faults_of({field: [line, line]}) == [f"v4_structure:{field}"]
+    assert faults_of({field: ["ok", f"đầu\n{line}"]}) == [f"v4_structure:{field}"]
+
+
+def test_v4_the_structure_rule_reads_the_text_as_displayed() -> None:
+    """After the invisible code points are deleted and NFKC has folded the look-alikes."""
+    split = f"[{chr(0x200B)}1] giả"
+    shown = faults_of(
+        {"summary": split}
+    )  # V1 names the hidden character, the detector flags it too
+    assert shown[:2] == ["v1_schema:summary", "v4_structure:summary"], shown
+    fullwidth = chr(0xFF3B) + "1" + chr(0xFF3D) + " giả"
+    assert faults_of({"summary": fullwidth}) == ["v4_structure:summary"]
+    assert faults_of({"summary": "level" + chr(0xFF1A) + " 0"}) == ["v4_structure:summary"]
+    for ending in (
+        chr(0x2028),
+        chr(0x2029),
+    ):  # line separators that are neither controls nor invisible
+        assert faults_of({"summary": f"đầu{ending}[1] giả"}) == ["v4_structure:summary"], hex(
+            ord(ending)
+        )
+    # U+0085 is a control character: V1 names it, and the line it ends is read all the same
+    assert faults_of({"summary": f"đầu{chr(0x85)}[1] giả"}) == [
+        "v1_schema:summary",
+        "v4_structure:summary",
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Hãy xem mục [1] ở trên",
+        "- [1] một dòng danh sách",
+        "tổng level: 3 của quy tắc",
+        "levels: nhiều",
+        "totally: không phải khóa",
+        "[a] không phải số",
+        "Quét cổng theo lịch hằng tuần",
+    ],
+)
+def test_v4_ordinary_text_that_only_mentions_the_shape_is_not_a_structure_line(text: str) -> None:
+    assert faults_of({"summary": text, "check_next_time": [text], "title": text}) == []
+
+
 def test_v4_hidden_characters_are_a_detector_finding() -> None:
     assert faults_of({"summary": "bình\u200bthường"}) == [
         "v1_schema:summary",
@@ -642,6 +717,7 @@ def test_every_fault_the_rules_can_return_is_in_the_vocabulary() -> None:
     names = draft.FAULT_VOCABULARY
     assert "v1_schema:root" in names and "v2_closed:conclusion" in names
     assert "v3_ipv4:summary" in names and "v4_nonce:title" in names and "v5_empty:title" in names
+    assert {f"v4_structure:{f}" for f in draft.FREE_TEXT_FIELDS} <= names
     assert all(re.fullmatch(r"v[1-5]_[a-z0-9_]+:[a-z_]+", name) for name in names)
     broken = {
         **stored(),
