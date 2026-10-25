@@ -1,0 +1,71 @@
+# Learned knowledge and RAG (DEC-210, P13): the override that adds the `rag-worker` service and the
+# `kb_learned/` mount. docker-compose.yml is not touched by it; the feature is opt-in at three levels:
+#
+#   * this file is read only when `.env` carries
+#       COMPOSE_FILE=docker-compose.yml:docker-compose.rag.yml
+#     (Compose reads COMPOSE_FILE from `.env` for every `docker compose` command and every `make`
+#     target run from the checkout; take the line out and this file is forgotten);
+#   * the two switches RAG_ENABLED and KNOWLEDGE_DRAFT_ENABLED default to false, so a stack that
+#     runs this file with the switches off behaves as before and `rag-worker` only idles;
+#   * migration 020 must be applied before any container runs the code.
+# The Owner's steps, in order, and their checks: docs/runbook.md, "Learned knowledge and RAG (DEC-210)".
+#
+# THE THREE MOUNTS (spec 7.1 and 7.2). The repository is mirrored under /srv in the containers, so
+# rag.entries.KB_LEARNED_ROOT is /srv/kb_learned there, and the directory exists only as a bind mount:
+#   app         ./kb_learned read-write: the admin approve route writes the entry files, `--rebuild`
+#               rewrites them after a restore;
+#   rag-worker  ./kb_learned read-only: it reads a file to check its sha256 (V-R1), never writes one;
+#   worker      none. The main worker answers ① from the database alone. It inherits the base `app`'s
+#               volume list through `<<: *backend`, and that list is the base file's, so adding the
+#               mount to `app` here does not reach it. Do not rewrite this override to share one list.
+#
+# WHY `rag-worker` IS WRITTEN OUT AND NOT `extends:`. An anchor does not cross files, and `extends` would
+# also copy `app`'s `ports` (8000 twice stops `up -d`) with no way to remove them short of `!reset`, which
+# needs a recent Compose. So the keys below repeat the base `app`'s; backend/tests/test_compose_rag.py
+# fails if any of them drifts from it. A new mount of the base `app` goes here as well, or the test says so.
+#
+# `kb_learned/` comes with the checkout (its README.md is tracked) and must be owned by HOST_UID:HOST_GID,
+# the user the containers run as (runbook step 4: `mkdir -p kb_learned && ls -ldn kb_learned`): `app` runs
+# as that user and cannot write an entry file in a directory it does not own, and a directory that is
+# missing when `up -d` runs is created by Docker as root.
+#
+# `rag-worker` claims only `rag_lookup` and `knowledge_draft` (web/rag_worker.py) and reclaims only those
+# types. Restart it after any merge that touches web/rag_worker.py, web/rag_handlers/ or rag/ (DEC-099):
+# `docker compose restart rag-worker`. `make db-restore` stops `app` and `worker` only: stop `rag-worker`
+# first and start it after the rebuild (runbook, "After `make db-restore`").
+#
+# No `version:` key: it is obsolete in Compose v2+.
+
+services:
+  app:
+    volumes:
+      - ./kb_learned:/srv/kb_learned           # read-write: the admin approve route writes entry files
+
+  rag-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: ai-support-soc/backend:local
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      DATABASE_URL: postgresql://app_rw:${APP_RW_PASSWORD}@db:5432/${POSTGRES_DB:-soc_dev}
+      DATABASE_URL_OWNER: postgresql://${POSTGRES_USER:-soc}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-soc_dev}
+      PYTHONUNBUFFERED: "1"
+      HOME: /tmp
+    volumes:
+      - ./backend/app:/srv/backend/app:ro     # live code: a merge needs `restart`, not `build`
+      - ./conf:/srv/conf:ro
+      - ./kb:/srv/kb:ro
+      - ./eval:/srv/eval:ro
+      - ./backups:/srv/backups:ro
+      - ./kb_learned:/srv/kb_learned:ro        # read-only: it checks a file's hash, it never writes one
+    extra_hosts:
+      - "wazuh.indexer:${INDEXER_HOST_IP:-host-gateway}"
+    command: python -m app.web.rag_worker
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped

@@ -259,6 +259,7 @@ describe("sectionFailure", () => {
     failed_jobs: [],
     inventory: { assets: 0, identities: 0, iocs: 0, loaded_at: null },
     llm_month: { spent_usd: 0, cap_usd: 30, pct: 0 },
+    knowledge: { pending: 0, conflicts: 0 },
   };
 
   it("is null for a section that answered, even an empty one or a zero", () => {

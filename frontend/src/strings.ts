@@ -607,7 +607,8 @@ export const S = {
           `Lấy từ lần kiểm tra mới nhất (system_health), ${time}. Check lỗi đứng đầu danh sách.`,
         ok: "Ổn",
         failing: "Lỗi",
-        // The ten checks of `infra/health.py`, in the canvas's words; a name with no label is shown as it is.
+        // The thirteen checks of `infra/health.py` (the last three are DEC-210's), in the canvas's words; a name
+        // with no label is shown as it is.
         check: {
           heartbeat: "Lần kéo alert gần nhất",
           intake_backlog: "Alert chờ nạp",
@@ -619,6 +620,9 @@ export const S = {
           inventory_empty: "Kiểm kê tài sản",
           digest_unreviewed: "Digest hôm qua chưa duyệt",
           disk_free: "Dung lượng đĩa còn trống",
+          knowledge_queue: "Hàng đợi tri thức chờ duyệt",
+          knowledge_integrity: "Tệp tri thức khớp bản gốc",
+          rag_budget: "Hạn mức chi phí RAG",
         },
       },
 
@@ -644,6 +648,13 @@ export const S = {
         times: (n: number) => `${n} lần`,
         dialogNote: "Job về lại hàng chờ của worker. Thao tác được ghi audit.",
         done: (id: number) => `Đã đặt job ${id} về hàng chờ.`,
+      },
+
+      // The learned knowledge (DEC-210, P13-T05): the queue of drafts, counts only. The review page is P13-T06's.
+      knowledge: {
+        title: "Tri thức",
+        pending: "Bản nháp chờ duyệt",
+        conflicts: "Trong đó mâu thuẫn với tri thức đã duyệt",
       },
 
       inventory: {

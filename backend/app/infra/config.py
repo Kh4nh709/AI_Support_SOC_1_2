@@ -203,7 +203,8 @@ class Config:
     # KNOWLEDGE_DRAFT_ENABLED=false enqueues no draft on a conclusion. RAG_MODEL empty means
     # LLM_MODEL_PROPOSER, resolved by the ranking agent (it is not copied here, unlike the
     # verifier's). RAG_MONTHLY_USD_CAP is the lookup's own sub-cap, counted inside
-    # LLM_MONTHLY_USD_CAP; KNOWLEDGE_QUEUE_MAX is the most pending drafts the queue takes.
+    # LLM_MONTHLY_USD_CAP; KNOWLEDGE_QUEUE_MAX is the pending-draft count above which
+    # `knowledge_queue` alarms (it caps nothing: drafts keep coming).
     RAG_ENABLED: bool = False
     KNOWLEDGE_DRAFT_ENABLED: bool = False
     RAG_MODEL: str = ""

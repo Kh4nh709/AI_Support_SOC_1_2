@@ -25,4 +25,14 @@ What is here (P13-T03), the DeepSeek part of a lookup and the job that runs it:
 * `runs`: the `llm_runs` row of a RAG call (`write_rag_run`);
 * `lookup`: the `rag_lookup` job (`run_lookup_job`), the newest stored lookup of a subject
   (`latest_lookup`) and what ① and ② may put in a prompt from it (`prompt_material`).
+
+What is here (P13-T04), the drafts that a conclusion proposes:
+
+* `draft`: the source record of a closed alert or a concluded case (`source_record`), the checks V1-V5 on
+  a draft (`validate_draft`) and the `knowledge_draft` job (`run_draft_job`), which writes a `pending`
+  `knowledge_drafts` row an admin reviews, merging or flagging a draft against the entries it matches.
+
+Operations (P13-T09): the second compose file `docker-compose.rag.yml` runs this package in the
+`rag-worker` service and mounts `kb_learned/`; the steps, checks and rollback are in `docs/runbook.md`,
+"Learned knowledge and RAG (DEC-210)".
 """
