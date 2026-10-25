@@ -85,9 +85,10 @@ test("the CSP is really in force: an inline script is refused", async ({ page, b
 // classes only (`style-src 'self'`, so a `style=` attribute or an inline `<style>` would be refused), and the
 // API is the page's own origin (`connect-src 'self'`). The whole-branch review found that no test opened an
 // admin page under the header: the unit tests have no CSP, and the e2e admin suite runs on `vite preview`, which
-// sends none. Sign in as an admin, then open the overview and the audit page (a full load each, as a link
-// followed from outside would be) and require no violation, no foreign request and the lazy chunks served 200.
-test("the admin console loads under the CSP: /admin/overview and /admin/audit raise no violation", async ({
+// sends none. Sign in as an admin, then open the overview, the knowledge page (DEC-210) and the audit page (a full
+// load each, as a link followed from outside would be) and require no violation, no foreign request and the lazy
+// chunks served 200.
+test("the admin console loads under the CSP: /admin/overview, /admin/knowledge and /admin/audit raise no violation", async ({
   page,
   baseURL,
 }) => {
@@ -98,6 +99,7 @@ test("the admin console loads under the CSP: /admin/overview and /admin/audit ra
 
   for (const [path, title] of [
     ["/admin/overview", S.admin.title.overview],
+    ["/admin/knowledge", S.admin.title.knowledge],
     ["/admin/audit", S.admin.title.audit],
   ] as const) {
     await page.goto(path);
