@@ -25,8 +25,8 @@ never through `app.audit.events.write_event`.
 
 P13-T05 (DEC-210) adds three, after the ten, again as SQL only (`infra` imports no `rag`):
 `knowledge_queue` (more pending drafts than `KNOWLEDGE_QUEUE_MAX`), `knowledge_integrity` (a
-`rag.integrity_failed` event in the last 24 hours: an entry whose file or content no longer matches its
-hash, or whose file is gone after a restore; `python -m app.rag.publish --rebuild` repairs it) and
+`rag.integrity_failed` event in the last 24 hours for an entry that is still active: an entry whose file or
+content no longer matches its hash, or whose file is gone after a restore; `python -m app.rag.publish --rebuild` repairs it) and
 `rag_budget` (this month's spend of the `rag_lookup` and `knowledge_draft` pipelines has reached
 `RAG_MONTHLY_USD_CAP`, the point at which the RAG's adapter stops a call).
 
@@ -336,14 +336,19 @@ def _check_knowledge_queue(conn: psycopg.Connection, cfg: Config) -> CheckResult
 
 
 def _check_knowledge_integrity(conn: psycopg.Connection) -> CheckResult:
-    """Any `rag.integrity_failed` in the last 24 hours (spec §7.9, V-R1). An aggregate: every lookup
-    that meets a changed entry writes an event, so the same entry repeats; the value is the number of
-    DISTINCT entries (the event's subject is the entry id) and the detail says how many events."""
+    """Any `rag.integrity_failed` in the last 24 hours for an entry that is still `active` (spec §7.9,
+    V-R1). An aggregate: every lookup that meets a changed entry writes an event, so the same entry
+    repeats; the value is the number of DISTINCT entries (the event's subject is the entry id) and the
+    detail says how many events. An entry retired since (or one that is no row any more) is not counted:
+    it is out of every lookup, `--rebuild` skips it, and nothing else would clear its alarm before the 24
+    hours were over (a retire that races a lookup is how an event outlives its entry's use)."""
 
     def read() -> CheckResult:
         entries, events = conn.execute(
-            "SELECT count(DISTINCT subject_id), count(*) FROM audit_events "
-            "WHERE event_type = 'rag.integrity_failed' AND created_at > now() - interval '24 hours'"
+            "SELECT count(DISTINCT e.subject_id), count(*) FROM audit_events e"
+            " JOIN knowledge_entries k ON k.entry_id::text = e.subject_id AND k.status = 'active'"
+            " WHERE e.event_type = 'rag.integrity_failed'"
+            " AND e.created_at > now() - interval '24 hours'"
         ).fetchone()
         ok = entries == 0
         detail = (
