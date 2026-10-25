@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import json
 import os
 import threading
 import time
@@ -1138,11 +1139,103 @@ def test_rebuild_never_writes_outside_the_root(db, root, tmp_path) -> None:
 
 @pytest.mark.db
 def test_rebuild_tolerates_the_old_kb_learned_prefix(db, root) -> None:
-    entry_id = add_entry(db, file_path="kb_learned/entries/recon/x.md", content="# x\n")
+    entry_id = str(uuid.uuid4())
+    add_entry(
+        db,
+        entry_id=entry_id,
+        file_path=f"kb_learned/entries/recon/{entry_id}.md",
+        content="# x\n",
+    )
 
     assert publish.rebuild(db, root) == 1
 
-    assert (root / "entries/recon/x.md").read_text(encoding="utf-8") == "# x\n" and entry_id
+    assert (root / f"entries/recon/{entry_id}.md").read_text(encoding="utf-8") == "# x\n"
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "where",
+    [
+        "entries/recon/someone-else.md",  # in the tree, but not this entry's file
+        "entries/web_attack/{id}.md",  # another category's directory
+        "retired/recon/{id}.md",  # the retired path of an active entry
+        "entries/recon/{id}.txt",
+        "entries/recon/sub/../{id}.md",
+        "elsewhere/{id}.md",
+    ],
+)
+def test_rebuild_writes_only_the_canonical_path_of_the_entry(db, root, where) -> None:
+    """P13 fix wave, item 6 (T05 N1): a row whose `file_path` is anywhere in the tree but
+    `entries/<category>/<entry_id>.md` could replace another entry's file; it is skipped and named.
+    """
+    entry_id = str(uuid.uuid4())
+    add_entry(db, entry_id=entry_id, file_path=where.format(id=entry_id), content="# x\n")
+
+    result = publish.rebuild_report(db, root)
+
+    assert (result.written, result.skipped) == (0, 1)
+    assert list(root.rglob("*.md")) == [] and leftovers(root) == []
+
+
+@pytest.mark.db
+def test_rebuild_does_not_replace_another_entrys_file(db, root) -> None:
+    _admin_id, victim, _ = approved_entry(db, root)
+    victim_path = root / entry_row(db, victim).file_path
+    before = victim_path.read_bytes()
+    add_entry(db, file_path=entry_row(db, victim).file_path, content="# a different entry\n")
+
+    result = publish.rebuild_report(db, root)
+
+    assert victim_path.read_bytes() == before  # the victim's own row wrote it, the stranger did not
+    assert (result.written, result.skipped) == (1, 1)
+
+
+@pytest.mark.db
+def test_rebuild_skips_and_warns_on_an_os_error_and_goes_on(db, root, capsys, monkeypatch) -> None:
+    ids = [
+        str(
+            publish.approve(
+                db, pending_draft(db, f"alert:{decided_alert(db)}"), admin(db), root=root
+            )
+        )
+        for _ in range(3)
+    ]
+    entries = {i: entry_row(db, i) for i in ids}
+    for entry in entries.values():
+        (root / entry.file_path).unlink()
+    real = publish.write_file
+    failing = entries[ids[0]].file_path
+
+    def flaky(root_, relative, data):
+        if relative == failing:
+            raise PermissionError(13, "Permission denied")
+        return real(root_, relative, data)
+
+    monkeypatch.setattr(publish, "write_file", flaky)
+
+    result = publish.rebuild_report(db, root)
+
+    assert (result.written, result.skipped) == (2, 1)
+    assert not (root / failing).exists()
+    assert all((root / entries[i].file_path).is_file() for i in ids[1:])  # the others were written
+    warning = json.loads(capsys.readouterr().err.strip())
+    assert warning == {"rebuild": "skipped", "entry_id": ids[0], "reason": "os_error"}
+    assert publish.rebuild(db, root) == 2  # rebuild() is still the count written
+
+
+@pytest.mark.db
+def test_the_command_line_exits_non_zero_when_it_skipped_an_entry(db, root, capsys) -> None:
+    entry_id = str(uuid.uuid4())
+    add_entry(db, entry_id=entry_id, file_path="entries/recon/not-mine.md", content="# x\n")
+    _admin_id, kept, _ = approved_entry(db, root)
+    (root / entry_row(db, kept).file_path).unlink()
+
+    code = publish.main(["--rebuild", "--root", str(root)], conn=db)
+
+    out = capsys.readouterr()
+    assert code == 1
+    assert json.loads(out.out) == {"rebuilt": 1, "skipped": 1, "root": str(root)}
+    assert '"reason": "path"' in out.err and entry_id in out.err
 
 
 @pytest.mark.db
