@@ -293,6 +293,34 @@ def test_job_backlog_passes_when_fresh_or_empty(db, tmp_path):
     assert _by_name(report)["job_backlog"].ok is True
 
 
+@pytest.mark.db
+def test_job_backlog_counts_only_due_jobs_a_month_ahead_is_not_a_backlog(db, tmp_path):
+    """P13 fix wave, item 20 (I1): a `knowledge_draft` job rescheduled to the start of next month is a
+    `pending` row whose time has not come. It is waiting, not stuck: the check reads `scheduled_at <= now()`.
+    """
+    db.execute(
+        "INSERT INTO jobs (job_type, subject_id, status, scheduled_at)"
+        " VALUES ('knowledge_draft', 'alert:backlog-future', 'pending', now() + interval '30 days')"
+    )
+    db.execute(
+        "INSERT INTO jobs (job_type, subject_id, status, scheduled_at)"
+        " VALUES ('knowledge_draft', 'alert:backlog-soon', 'pending', now() + interval '1 minute')"
+    )
+    report = health.check(db, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+    check = _by_name(report)["job_backlog"]
+    assert check.ok is True and "no due pending jobs" in check.detail
+
+
+@pytest.mark.db
+def test_job_backlog_alarms_once_the_rescheduled_job_is_due_and_nobody_claims_it(db, tmp_path):
+    db.execute(
+        "INSERT INTO jobs (job_type, subject_id, status, scheduled_at)"
+        " VALUES ('knowledge_draft', 'alert:backlog-due', 'pending', now() - interval '15 minutes')"
+    )
+    report = health.check(db, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+    assert _by_name(report)["job_backlog"].ok is False
+
+
 # 4 · llm_null_ratio -------------------------------------------------------------
 
 

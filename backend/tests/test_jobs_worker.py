@@ -491,6 +491,35 @@ def test_run_forever_reschedule_enqueues_only_after_finish_job_commits(db):
 
 
 @pytest.mark.db
+def test_a_knowledge_draft_rescheduled_to_next_month_is_a_pending_row_nobody_can_claim_yet(db):
+    """P13 fix wave, item 20 (I1): what `Reschedule` does to a `knowledge_draft` job. The old row is
+    `succeeded`, a new `pending` row for the same subject is due `delay_s` seconds after the database's
+    `now()` (31 days here), `claim_job` leaves it alone until then, and it is no job backlog."""
+    from app.infra import health
+
+    jobs.enqueue(db, "knowledge_draft", "alert:wf-month-1")
+    month = 31 * 24 * 3600
+
+    def handler(conn, job):
+        return jobs.Reschedule(month)
+
+    worker.run_forever(lambda: db, {"knowledge_draft": handler}, once=True)
+    try:
+        rows = db.execute(
+            "SELECT status, round(extract(epoch from scheduled_at - now())) FROM jobs"
+            " WHERE job_type = 'knowledge_draft' AND subject_id = 'alert:wf-month-1'"
+            " ORDER BY status"
+        ).fetchall()
+        assert [r[0] for r in rows] == ["pending", "succeeded"]
+        assert abs(rows[0][1] - month) <= 5
+        assert jobs.claim_job(db, ["knowledge_draft"]) is None
+        assert health._check_job_backlog(db).ok is True
+    finally:
+        db.execute("DELETE FROM jobs WHERE subject_id = 'alert:wf-month-1'")
+        db.commit()
+
+
+@pytest.mark.db
 def test_run_forever_uses_a_longer_timeout_when_given_one_for_the_job_type(db):
     """Design note 4's per-job-type timeout, option B (a second mapping)."""
     jobs.enqueue(db, "investigate", "wf-timeout-1")

@@ -2203,6 +2203,38 @@ def test_only_a_429_is_asked_again(db, kb_root) -> None:
 
 
 @db_marked
+def test_an_out_of_balance_account_402_is_stored_empty_at_once_and_can_be_redrafted_after_a_top_up(
+    db, kb_root
+) -> None:
+    """DeepSeek answers an account with no balance with HTTP 402 (Insufficient Balance). The balance does not
+    refill by itself, so a backoff would only spin: no reschedule. The draft is stored text-less with the
+    `llm_permanent` warning, which is one the admin's re-draft takes, so "Soạn lại" brings it back once the
+    account has been topped up."""
+    from app.rag import publish
+
+    decided_alert(db)
+    paying = LLMPermanent("DeepSeek call failed: Error code: 402 - Insufficient Balance")
+    paying.__cause__ = type("Http402", (Exception,), {"status_code": 402})("Insufficient Balance")
+    fake = FakeLLM(raises=paying)
+
+    assert run(db, "alert:da-1", fake) is None  # not a Reschedule
+    row = only_draft(db)
+    assert (
+        row["status"] == "pending" and row["draft"] == {} and row["warnings"] == ["llm_permanent"]
+    )
+    assert len(fake.calls) == 1 and runs_of(db)[0]["stopped_by"] == "permanent"
+
+    admin_id = add_user(db)
+    publish.redraft(db, row["draft_id"], admin_id)  # after the top-up
+    assert drafts(db) == []
+    assert db.execute(
+        "SELECT status FROM jobs WHERE job_type = 'knowledge_draft' AND subject_id = 'alert:da-1'"
+    ).fetchall() == [("pending",)]
+    assert run(db, "alert:da-1", FakeLLM([GOOD])) is None  # the job, with a balance again
+    assert only_draft(db)["draft"]["title"] == GOOD["title"]
+
+
+@db_marked
 def test_a_429_at_the_ranking_reschedules_before_a_draft_is_made_without_its_merge_check(
     db, kb_root
 ) -> None:

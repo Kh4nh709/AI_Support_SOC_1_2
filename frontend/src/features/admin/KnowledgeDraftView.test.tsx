@@ -84,6 +84,105 @@ function clickTwiceInOneTick(button: HTMLElement) {
   });
 }
 
+// --- the re-draft (P13 fix wave, item 20: the model could not be asked) ---------------------------------------
+
+const redraftButton = () => within(right()).queryByRole("button", { name: D.action.redraft });
+const textless = (warnings: string[], status: "pending" | "approved" = "pending") =>
+  draftDetail(1, { draft: { draft: {}, warnings, status } });
+
+describe("Soạn lại, for a draft the model could not be asked for", () => {
+  it.each([
+    ["the budget", ["budget"]],
+    ["a timeout", ["llm_transient"]],
+    ["a refusal", ["llm_permanent"]],
+    ["a ranking that gave no answer", ["rank_unavailable", "llm_permanent"]],
+  ])("is offered for a text-less draft whose warning is %s", async (_label, warnings) => {
+    await open({ details: [textless(warnings)] });
+    expect(redraftButton()).toBeEnabled();
+  });
+
+  it.each([
+    ["a draft with text", draftDetail(1, { draft: { warnings: ["budget"] } })],
+    ["no warning at all", textless([])],
+    ["a rule the model broke", textless(["v3_ipv4:summary"])],
+    ["one warning that is not the absence of the model", textless(["budget", "v4_nonce:title"])],
+    ["our own prompt failing the linter", textless(["linter"])],
+    ["a word nobody here knows", textless(["something_new"])],
+    ["a draft already handled", textless(["budget"], "approved")],
+  ])("is not offered for %s", async (_label, one) => {
+    await open({ details: [one] });
+    expect(redraftButton()).not.toBeInTheDocument();
+  });
+
+  it("asks first, then sends one body-less POST and leaves the screen with a toast", async () => {
+    const { fake, user, view } = await open({ details: [textless(["budget"])] });
+    await user.click(redraftButton()!);
+    expect(fake.redrafts).toHaveLength(0); // the click only asks
+    await user.click(
+      within(dialog(D.action.redraftTitle)).getByRole("button", { name: D.action.redraft }),
+    );
+    await waitFor(() => expect(view.onDone).toHaveBeenCalledTimes(1));
+    expect(fake.redrafts).toEqual([
+      { id: draftId(1), body: {}, contentType: expect.stringContaining("application/json") },
+    ]);
+    expect(view.onDone).toHaveBeenCalledWith(K.done.redrafted(K.noTitle));
+  });
+
+  it("sends nothing when the dialog is cancelled", async () => {
+    const { fake, user } = await open({ details: [textless(["budget"])] });
+    await user.click(redraftButton()!);
+    await user.click(
+      within(dialog(D.action.redraftTitle)).getByRole("button", { name: S.admin.common.cancel }),
+    );
+    expect(fake.redrafts).toHaveLength(0);
+  });
+
+  it("says the draft cannot be made again when the route answers 409 not_redraftable", async () => {
+    const { user } = await open({
+      details: [textless(["budget"])],
+      redraft: () => detail({ reason: "not_redraftable" }, 409),
+    });
+    await user.click(redraftButton()!);
+    await user.click(
+      within(dialog(D.action.redraftTitle)).getByRole("button", { name: D.action.redraft }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(K.notice.notRedraftable);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("says the drafts are switched off when the route answers 409 drafts_disabled", async () => {
+    const { user, view } = await open({
+      details: [textless(["budget"])],
+      redraft: () => detail({ reason: "drafts_disabled" }, 409),
+    });
+    await user.click(redraftButton()!);
+    await user.click(
+      within(dialog(D.action.redraftTitle)).getByRole("button", { name: D.action.redraft }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(K.notice.draftsDisabled);
+    expect(view.onDone).not.toHaveBeenCalled();
+  });
+
+  it("is not offered once the draft is gone (404)", async () => {
+    const { user } = await open({
+      details: [textless(["budget"])],
+      redraft: () => detail({ reason: "not_found" }, 404),
+    });
+    await user.click(redraftButton()!);
+    await user.click(
+      within(dialog(D.action.redraftTitle)).getByRole("button", { name: D.action.redraft }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(K.notice.gone);
+    expect(redraftButton()).not.toBeInTheDocument();
+  });
+
+  it("still lets the admin reject or write it by hand", async () => {
+    await open({ details: [textless(["budget"])] });
+    expect(rejectButton()).toBeEnabled();
+    expect(approveButton()).toBeDisabled(); // no text yet: Sửa rồi duyệt is the way, as before
+  });
+});
+
 // --- the left column ----------------------------------------------------------------------------------------
 
 describe("the analyst's work, on the left, of an alert", () => {

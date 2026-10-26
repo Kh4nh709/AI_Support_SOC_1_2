@@ -39,6 +39,7 @@ from app.rag.tags import load_tags
 from app.web import deps, main
 from app.web.routers import admin_knowledge
 from fastapi.testclient import TestClient
+from psycopg.types.json import Jsonb
 
 from tests.rag_data import add_entry
 from tests.scratch_db import insert_user, scratch_database
@@ -210,6 +211,7 @@ ROUTES = [
     ("get", f"{URL}/drafts/{FAKE_ID}", None),
     ("post", f"{URL}/drafts/{FAKE_ID}/approve", {}),
     ("post", f"{URL}/drafts/{FAKE_ID}/reject", {"reason": "x"}),
+    ("post", f"{URL}/drafts/{FAKE_ID}/redraft", {}),
     ("get", f"{URL}/entries", None),
     ("get", f"{URL}/entries/{FAKE_ID}", None),
     ("post", f"{URL}/entries/{FAKE_ID}/retire", {"reason": "x"}),
@@ -257,6 +259,7 @@ def test_every_route_needs_a_session(api, method, path, body) -> None:
     [
         (f"{URL}/drafts/{FAKE_ID}/approve", {}),
         (f"{URL}/drafts/{FAKE_ID}/reject", {"reason": "x"}),
+        (f"{URL}/drafts/{FAKE_ID}/redraft", {}),
         (f"{URL}/entries/{FAKE_ID}/retire", {"reason": "x"}),
     ],
 )
@@ -272,6 +275,123 @@ def test_a_post_that_is_not_json_is_refused_after_the_role_check(api, path, body
         api.client.post(path, content="x", headers={"content-type": "text/plain"}).status_code
         == 403
     )
+
+
+# ═══ the redraft ═════════════════════════════════════════════════════════════════════════════
+
+
+def textless(conn, warnings, *, status: str = "pending", draft=None) -> tuple[str, uuid.UUID]:
+    alert = decided_alert(conn)
+    (draft_id,) = conn.execute(
+        "INSERT INTO knowledge_drafts (source_kind, source_id, conclusion, status, draft, warnings)"
+        " VALUES ('alert', %s, 'closed_fp', %s, %s, %s) RETURNING draft_id",
+        (alert, status, Jsonb({} if draft is None else draft), Jsonb(list(warnings))),
+    ).fetchone()
+    return alert, draft_id
+
+
+def drafts_on(api: Api, enabled: bool = True) -> None:
+    cfg = dataclasses.replace(
+        config.load(), DISPLAY_TZ="Asia/Ho_Chi_Minh", KNOWLEDGE_DRAFT_ENABLED=enabled
+    )
+    main.app.dependency_overrides[deps.get_config] = lambda: cfg
+
+
+@pytest.mark.db
+def test_redraft_answers_200_removes_the_draft_and_queues_the_job(api) -> None:
+    drafts_on(api)
+    alert, draft_id = textless(api.conn, ["budget", "llm_permanent"])
+
+    response = api.post(f"/drafts/{draft_id}/redraft")
+
+    assert (response.status_code, response.json()) == (
+        200,
+        {"draft_id": str(draft_id), "queued": True},
+    )
+    assert api.conn.execute("SELECT count(*) FROM knowledge_drafts").fetchone()[0] == 0
+    assert api.conn.execute(
+        "SELECT status FROM jobs WHERE job_type = 'knowledge_draft' AND subject_id = %s",
+        (f"alert:{alert}",),
+    ).fetchall() == [("pending",)]
+    ((subject, actor_id, payload),) = events(api.conn, "knowledge.redraft_requested")
+    assert (subject, actor_id, payload) == (alert, api.admin_id, {"draft_id": str(draft_id)})
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    ("status", "draft", "warnings", "reason"),
+    [
+        ("approved", {}, ["budget"], "not_pending"),
+        ("pending", GOOD, ["budget"], "not_redraftable"),
+        ("pending", {}, ["v3_ipv4:summary"], "not_redraftable"),
+        ("pending", {}, [], "not_redraftable"),
+    ],
+)
+def test_redraft_of_a_draft_that_is_not_redraftable_is_409_and_changes_nothing(
+    api, status, draft, warnings, reason
+) -> None:
+    drafts_on(api)
+    _alert, draft_id = textless(api.conn, warnings, status=status, draft=draft)
+
+    response = api.post(f"/drafts/{draft_id}/redraft")
+
+    assert (response.status_code, response.json()) == (409, {"detail": {"reason": reason}})
+    assert api.conn.execute("SELECT count(*) FROM knowledge_drafts").fetchone()[0] == 1
+    assert events(api.conn, "knowledge.redraft_requested") == []
+    assert (
+        api.conn.execute("SELECT count(*) FROM jobs WHERE job_type = 'knowledge_draft'").fetchone()[
+            0
+        ]
+        == 0
+    )
+
+
+@pytest.mark.db
+def test_redraft_with_the_drafts_switch_off_is_409_and_spends_nothing(api) -> None:
+    """A re-draft is a model call: with `KNOWLEDGE_DRAFT_ENABLED` false (the Owner switched drafts off) the
+    page cannot start one."""
+    drafts_on(api, enabled=False)
+    _alert, draft_id = textless(api.conn, ["budget"])
+
+    response = api.post(f"/drafts/{draft_id}/redraft")
+
+    assert (response.status_code, response.json()) == (
+        409,
+        {"detail": {"reason": "drafts_disabled"}},
+    )
+    assert api.conn.execute("SELECT count(*) FROM knowledge_drafts").fetchone()[0] == 1
+    assert (
+        api.conn.execute("SELECT count(*) FROM jobs WHERE job_type = 'knowledge_draft'").fetchone()[
+            0
+        ]
+        == 0
+    )
+
+
+@pytest.mark.db
+def test_redraft_of_an_unknown_draft_is_404(api) -> None:
+    drafts_on(api)
+    assert api.post(f"/drafts/{uuid.uuid4()}/redraft").status_code == 404
+    assert api.post("/drafts/not-a-uuid/redraft").status_code == 422
+
+
+@pytest.mark.db
+def test_redraft_takes_no_body(api) -> None:
+    drafts_on(api)
+    _alert, draft_id = textless(api.conn, ["budget"])
+    response = api.post(f"/drafts/{draft_id}/redraft", {"reason": "x"})
+    assert (response.status_code, response.json()) == (
+        422,
+        {"detail": {"field": "body", "reason": "invalid"}},
+    )
+    assert api.conn.execute("SELECT count(*) FROM knowledge_drafts").fetchone()[0] == 1
+
+
+@pytest.mark.db
+def test_the_redraft_event_is_on_the_audit_page_under_configuration(api) -> None:
+    from app.web.routers import admin_audit
+
+    assert "knowledge.redraft_requested" in admin_audit.GROUPS["configuration"]
 
 
 # ═══ the drafts ══════════════════════════════════════════════════════════════════════════════

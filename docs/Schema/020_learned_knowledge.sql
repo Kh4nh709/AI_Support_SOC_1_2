@@ -47,14 +47,15 @@
 --      query ("the earlier alerts of this case"). A query uses it only when it writes the
 --      expression exactly as it is written here.
 --
---   6. Rights. 020 grants `app_rw` SELECT, INSERT and UPDATE on `knowledge_drafts` and
---      `knowledge_entries`, and SELECT and INSERT on `rag_results`, itself. The
+--   6. Rights. 020 grants `app_rw` SELECT, INSERT, UPDATE and DELETE on `knowledge_drafts` (an admin's
+--      re-draft of a text-less draft deletes it), SELECT, INSERT and UPDATE on `knowledge_entries`,
+--      and SELECT and INSERT on `rag_results`, itself. The
 --      rights do not depend on 017's `ALTER DEFAULT PRIVILEGES`: those bind only the role that
 --      ran 017 (`soc` on Compose), so a table created by any other applying role would leave
 --      `app_rw` with nothing, and the lookup and the draft job would then die on `permission
---      denied` (019's lesson, P11-T01 review finding 5). No DELETE in the grant: nothing deletes
---      a draft, an entry (it is retired) or a result. (Where the applier is the role 017's
---      defaults name, as on Compose, those defaults add DELETE as well; no code uses it.)
+--      denied` (019's lesson, P11-T01 review finding 5). No DELETE on an entry (it is retired) or a
+--      result, and none on a draft but the re-draft's. (Where the applier is the role 017's
+--      defaults name, as on Compose, those defaults add DELETE as well; no other code uses it.)
 --      `rag_results` is append-only: a lookup is stored once and read, nothing updates it (the
 --      newest row is the lookup), so UPDATE, DELETE and TRUNCATE are revoked from `app_rw` there,
 --      which also takes back what 017's defaults gave it.
@@ -155,7 +156,8 @@ CREATE TABLE rag_results (
 CREATE INDEX ix_rag_results_subject ON rag_results (subject_kind, subject_id, created_at DESC);
 
 -- Rights, granted here and not left to 017's default privileges (header, note 6).
-GRANT SELECT, INSERT, UPDATE ON knowledge_drafts, knowledge_entries TO app_rw;
+GRANT SELECT, INSERT, UPDATE, DELETE ON knowledge_drafts TO app_rw;
+GRANT SELECT, INSERT, UPDATE ON knowledge_entries TO app_rw;
 -- `rag_results` is append-only (header, note 6): the REVOKE also removes what 017's default
 -- privileges grant on a table created by the role that ran 017.
 GRANT SELECT, INSERT ON rag_results TO app_rw;

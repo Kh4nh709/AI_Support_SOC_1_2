@@ -72,10 +72,12 @@ from psycopg.types.json import Jsonb
 from app.audit.events import write_event
 from app.infra import db as infra_db
 from app.infra.errors import ConfigError, PermanentError
+from app.infra.jobs import enqueue
 from app.rag.draft import (
     DRAFT_FIELDS,
     LIST_FIELDS,
     MODEL_FIELDS,
+    REDRAFTABLE_WARNINGS,
     SourceRecord,
     _tidy,
     _tidy_list,
@@ -504,6 +506,55 @@ def reject(conn: psycopg.Connection, draft_id: uuid.UUID, admin_id: str, reason:
         actor_id=admin_id,
         payload={"draft_id": str(wanted), "reason": text},
     )
+
+
+# ── redraft ───────────────────────────────────────────────────────────────────────────────────
+
+
+def redraft(conn: psycopg.Connection, draft_id: uuid.UUID | str, admin_id: str) -> None:
+    """Ask for a text-less draft to be made again, in the caller's transaction (P13 fix wave, item 20, I1).
+
+    A `pending` draft with no text whose warnings are all of `rag.draft.REDRAFTABLE_WARNINGS` (the model
+    could not be asked: the budget, a refusal, a timeout, a ranking that gave no answer) is deleted, so the
+    `knowledge_draft` job's step 0 no longer finds it, and the job is queued for its subject. Anything
+    else - a draft that is not pending, one with text, one with no warning or with a V name (the model
+    answered and failed the rules), or with a name nobody here knows - is `StaleDraft` ("not_pending" or
+    "not_redraftable") and nothing has changed. `UnknownDraft` for an id that is not there. The event
+    `knowledge.redraft_requested {draft_id}` is filed under the draft's source, like `knowledge.rejected`.
+    The run rows of the earlier attempts stay (`llm_runs` is append-only)."""
+    wanted = _as_uuid(draft_id)
+    row = (
+        None
+        if wanted is None
+        else conn.execute(
+            "SELECT source_kind, source_id, status, draft, warnings FROM knowledge_drafts"
+            " WHERE draft_id = %s FOR UPDATE",
+            (wanted,),
+        ).fetchone()
+    )
+    if row is None:
+        raise UnknownDraft("draft: not found")
+    kind, source_id, status, body, warnings = row
+    if status != "pending":
+        raise StaleDraft("not_pending")
+    redraftable = (
+        body == {}
+        and isinstance(warnings, list)
+        and len(warnings) > 0
+        and all(isinstance(w, str) and w in REDRAFTABLE_WARNINGS for w in warnings)
+    )
+    if not redraftable:
+        raise StaleDraft("not_redraftable")
+    conn.execute("DELETE FROM knowledge_drafts WHERE draft_id = %s", (wanted,))
+    write_event(
+        conn,
+        "knowledge.redraft_requested",
+        source_id,
+        "admin",
+        actor_id=admin_id,
+        payload={"draft_id": str(wanted)},
+    )
+    enqueue(conn, "knowledge_draft", f"{kind}:{source_id}")
 
 
 # ── retire ────────────────────────────────────────────────────────────────────────────────────

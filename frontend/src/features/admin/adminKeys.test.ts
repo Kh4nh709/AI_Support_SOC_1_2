@@ -99,6 +99,7 @@ describe("what a write makes stale", () => {
         "createUser",
         "postLabel",
         "putLlmLimits",
+        "redraftKnowledgeDraft",
         "rejectKnowledgeDraft",
         "reloadInventory",
         "resetPassword",
@@ -134,6 +135,7 @@ describe("what a write makes stale", () => {
     // the overview's pending and conflict counts, and the audit page that shows the event.
     ["approveKnowledgeDraft", [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll]],
     ["rejectKnowledgeDraft", [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll]],
+    ["redraftKnowledgeDraft", [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll]],
     ["retireKnowledgeEntry", [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll]],
   ];
 
@@ -171,7 +173,12 @@ describe("what a write makes stale", () => {
     },
   );
 
-  it.each(["approveKnowledgeDraft", "rejectKnowledgeDraft", "retireKnowledgeEntry"] as const)(
+  it.each([
+    "approveKnowledgeDraft",
+    "rejectKnowledgeDraft",
+    "redraftKnowledgeDraft",
+    "retireKnowledgeEntry",
+  ] as const)(
     "%s refreshes every tab and every open detail of the knowledge page, and the overview's counts",
     async (mutation) => {
       const client = new QueryClient();

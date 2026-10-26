@@ -1717,6 +1717,7 @@ export const S = {
       done: {
         approved: (title: string) => `Đã duyệt: ${title}`,
         rejected: (title: string) => `Đã từ chối: ${title}`,
+        redrafted: (title: string) => `Đã yêu cầu soạn lại: ${title}`,
         retired: (title: string) => `Đã gỡ: ${title}`,
       },
 
@@ -1728,6 +1729,10 @@ export const S = {
         publishFailed:
           "Không ghi được tệp tri thức, nên chưa lưu gì. Bấm lại để thử lần nữa; nếu vẫn lỗi, báo người vận hành.",
         gone: "Không tìm thấy bản nháp này nữa.",
+        notRedraftable:
+          "Không soạn lại được: bản nháp đã có nội dung hoặc đã được xử lý. Danh sách đã được tải lại.",
+        draftsDisabled:
+          "Không soạn lại được: việc soạn bản nháp đang tắt (KNOWLEDGE_DRAFT_ENABLED).",
         entryGone: "Không tìm thấy mục này nữa.",
         failed: "Chưa lưu được. Thử lại sau ít phút.",
         reasonRequired: "Cần nhập lý do.",
@@ -1842,6 +1847,11 @@ export const S = {
           approve: "Duyệt",
           editApprove: "Sửa rồi duyệt",
           reject: "Từ chối",
+          // For a draft the model could not be asked for (the budget, a refusal, a timeout): make it again.
+          redraft: "Soạn lại",
+          redraftTitle: "Soạn lại bản nháp này?",
+          redraftBody:
+            "Bản nháp trống này bị xoá và hệ thống soạn lại từ đầu bằng một lần gọi model, tính vào hạn mức tri thức. Bản mới xuất hiện trong danh sách chờ duyệt sau ít phút.",
           // Why a button cannot be pressed now.
           approveEdited: "Bạn đã sửa nội dung: dùng Sửa rồi duyệt để gửi bản đã sửa.",
           approveRejectOnly: "Chỉ có thể từ chối bản nháp này.",

@@ -921,6 +921,18 @@ def test_app_rw_holds_select_and_insert_on_rag_results_and_nothing_that_changes_
     }
 
 
+def test_app_rw_may_delete_a_draft_for_the_redraft(db):
+    """P13 fix wave, item 20: `rag.publish.redraft` deletes a text-less draft. 020 grants that DELETE
+    itself (the other-role scenario below pins it), since 017's defaults give it only to the role that ran
+    017."""
+    draft_id = _draft(db)
+    with db.transaction(force_rollback=True):
+        db.execute("SET LOCAL ROLE app_rw")
+        db.execute("DELETE FROM knowledge_drafts WHERE draft_id = %s", (draft_id,))
+        gone = db.execute("SELECT count(*) FROM knowledge_drafts WHERE draft_id = %s", (draft_id,))
+        assert gone.fetchone()[0] == 0
+
+
 def test_app_rw_cannot_update_or_delete_a_stored_lookup(db):
     lookup_id = str(uuid.uuid4())
     _result(db, lookup_id=lookup_id)
@@ -1120,7 +1132,8 @@ def test_app_rw_holds_the_three_tables_when_020_is_applied_by_another_role(tmp_p
                     "SELECT": True,
                     "INSERT": True,
                     "UPDATE": table != APPEND_ONLY,
-                    "DELETE": False,
+                    "DELETE": table
+                    == "knowledge_drafts",  # the admin's re-draft deletes a text-less draft
                     "TRUNCATE": False,
                 }, table
     finally:

@@ -15,6 +15,7 @@ import {
   KNOWLEDGE_ENTRY_STATUSES,
   KNOWLEDGE_LIMITS,
   KNOWLEDGE_MODEL_FIELDS,
+  KNOWLEDGE_REDRAFTABLE_WARNINGS,
   LABEL_CHOICES,
   LABEL_CONFIDENCES,
   LIMIT_FIELDS,
@@ -482,6 +483,18 @@ describe("the learned-knowledge words (DEC-210, P13-T06)", () => {
       );
       expect(KNOWLEDGE_MODEL_FIELDS).toHaveLength(6);
       expect(KNOWLEDGE_CLOSED_FIELDS).toHaveLength(6);
+    });
+
+    it("KNOWLEDGE_REDRAFTABLE_WARNINGS are the warnings of REDRAFTABLE_WARNINGS", () => {
+      const draft = draftPy();
+      const named = new Map(
+        [...draft.matchAll(/^(WARNING_[A-Z]+) = "([a-z_]+)"$/gm)].map((m) => [m[1], m[2]]),
+      );
+      const body = /^REDRAFTABLE_WARNINGS = frozenset\(\s*\{([^}]*)\}\s*\)/m.exec(draft)?.[1];
+      expect(body).toBeDefined();
+      const backend = [...(body ?? "").matchAll(/WARNING_[A-Z]+/g)].map((m) => named.get(m[0]));
+      expect(backend).toHaveLength(4);
+      expect([...KNOWLEDGE_REDRAFTABLE_WARNINGS].sort()).toEqual(backend.sort());
     });
 
     it("KNOWLEDGE_LIMITS", () => {

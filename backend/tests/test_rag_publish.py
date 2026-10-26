@@ -1257,6 +1257,143 @@ def test_the_command_line_does_nothing_without_an_action(capsys) -> None:
     assert "--rebuild" in capsys.readouterr().err
 
 
+# ── redraft ───────────────────────────────────────────────────────────────────────────────────
+
+
+def textless_draft(db, subject: str, warnings, *, status: str = "pending", draft=None) -> uuid.UUID:
+    """A draft the job could not write: no text, the warnings it left."""
+    kind, _, source_id = subject.partition(":")
+    (draft_id,) = db.execute(
+        "INSERT INTO knowledge_drafts (source_kind, source_id, conclusion, status, draft, warnings)"
+        " VALUES (%s, %s, 'closed_fp', %s, %s, %s) RETURNING draft_id",
+        (kind, source_id, status, Jsonb({} if draft is None else draft), Jsonb(list(warnings))),
+    ).fetchone()
+    return draft_id
+
+
+def draft_jobs(db, subject: str) -> list[tuple[str, str]]:
+    return db.execute(
+        "SELECT status, scheduled_at <= now() FROM jobs"
+        " WHERE job_type = 'knowledge_draft' AND subject_id = %s",
+        (subject,),
+    ).fetchall()
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "warnings",
+    [
+        ["budget"],
+        ["llm_transient"],
+        ["llm_permanent"],
+        ["rank_unavailable", "llm_permanent"],
+        ["budget", "llm_transient", "llm_permanent", "rank_unavailable"],
+    ],
+)
+def test_redraft_removes_the_text_less_draft_queues_the_job_and_writes_the_event(
+    db, warnings
+) -> None:
+    """P13 fix wave, item 20 (I1): a draft the model could not be asked for is not a verdict. The row goes,
+    so the job's step 0 (`_exists`) lets it draft again, and the job is queued for the subject."""
+    admin_id = admin(db)
+    alert = decided_alert(db)
+    draft_id = textless_draft(db, f"alert:{alert}", warnings)
+
+    publish.redraft(db, draft_id, admin_id)
+
+    assert db.execute("SELECT count(*) FROM knowledge_drafts").fetchone()[0] == 0
+    assert draft_jobs(db, f"alert:{alert}") == [("pending", True)]
+    assert events(db, "knowledge.redraft_requested") == [
+        (alert, admin_id, {"draft_id": str(draft_id)})
+    ]
+
+
+@pytest.mark.db
+def test_redraft_of_a_case_draft_queues_the_case_subject(db) -> None:
+    admin_id = admin(db)
+    case_id = concluded_case(db)
+    draft_id = textless_draft(db, f"case:{case_id}", ["budget"])
+
+    publish.redraft(db, draft_id, admin_id)
+
+    assert draft_jobs(db, f"case:{case_id}") == [("pending", True)]
+    assert events(db, "knowledge.redraft_requested")[0][0] == case_id
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    ("status", "draft", "warnings"),
+    [
+        ("approved", {}, ["budget"]),
+        ("rejected", {}, ["budget"]),
+        ("merged", {}, ["budget"]),
+        ("pending", GOOD, ["budget"]),  # it has text: the admin edits it
+        ("pending", {}, []),  # nothing says why it is empty
+        ("pending", {}, ["v3_ipv4:summary"]),  # the model answered and failed the rules
+        (
+            "pending",
+            {},
+            ["budget", "v4_nonce:title"],
+        ),  # one warning that is not the model's absence
+        ("pending", {}, ["linter"]),  # our own prompt failed: the same prompt will fail again
+        ("pending", {}, ["something_new"]),
+    ],
+)
+def test_redraft_of_anything_else_is_refused_and_changes_nothing(
+    db, status, draft, warnings
+) -> None:
+    admin_id = admin(db)
+    alert = decided_alert(db)
+    draft_id = textless_draft(db, f"alert:{alert}", warnings, status=status, draft=draft)
+
+    with pytest.raises(publish.StaleDraft) as raised:
+        publish.redraft(db, draft_id, admin_id)
+
+    assert raised.value.reason == ("not_pending" if status != "pending" else "not_redraftable")
+    assert draft_status(db, draft_id) == status
+    assert draft_jobs(db, f"alert:{alert}") == []
+    assert events(db, "knowledge.redraft_requested") == []
+
+
+@pytest.mark.db
+def test_redraft_of_an_unknown_draft_is_unknown(db) -> None:
+    for wanted in (uuid.uuid4(), "not-a-uuid"):
+        with pytest.raises(publish.UnknownDraft):
+            publish.redraft(db, wanted, admin(db))
+
+
+@pytest.mark.db
+def test_the_redrafted_job_drafts_again_where_it_was_stored_empty(db, root, monkeypatch) -> None:
+    """The point of the action: with the row gone the job writes a draft with text."""
+    from app.rag import draft as draft_module
+
+    from tests.fakes.llm import FakeLLM
+
+    monkeypatch.setenv("LLM_MODEL_PROPOSER", "fake-proposer")
+    admin_id = admin(db)
+    alert = decided_alert(db)
+    draft_id = textless_draft(db, f"alert:{alert}", ["budget"])
+
+    publish.redraft(db, draft_id, admin_id)
+    job = draft_module.Job(
+        job_id=9_900_001, job_type="knowledge_draft", subject_id=f"alert:{alert}", attempts=1
+    )
+    answer = {
+        "title": "Quét cổng định kỳ",
+        "tags": [],
+        "summary": "Máy giám sát quét cổng theo lịch.",
+        "distinguishing_signals": ["Nguồn nội bộ"],
+        "check_next_time": ["Xem lịch quét"],
+        "confidence_note": "Một quyết định.",
+    }
+    assert draft_module.run_draft_job(db, job, adapter=FakeLLM([json.dumps(answer)])) is None
+
+    (row,) = db.execute(
+        "SELECT status, draft -> 'title', warnings FROM knowledge_drafts"
+    ).fetchall()
+    assert row == ("pending", "Quét cổng định kỳ", [])
+
+
 # ── two approves at once ──────────────────────────────────────────────────────────────────────
 
 
