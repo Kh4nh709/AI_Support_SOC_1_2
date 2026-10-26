@@ -1,6 +1,6 @@
 # P13 report: learned knowledge and agentic RAG (DEC-210)
 
-**Branch.** `director/rag-knowledge` at `70c9790`. It is built on `director/soar-intake` (P12) and is not merged to `main`. The Owner does that merge; nothing has been pushed.
+**Branch.** `director/rag-knowledge`. It is built on `director/soar-intake` (P12). P12 is already on `main` (`main` = `ba31def`), so this branch fast-forwards `main` and nothing else is pending. The Owner does that merge; nothing has been pushed.
 
 **Spec and plan.**
 - Spec: `docs/superpowers/specs/2026-10-24-learned-knowledge-rag-design.md` (rev 2).
@@ -84,7 +84,7 @@ Reports and reviews are in this folder: `P13-T0N.{report,review}.md` and `P13-wa
 
 The full steps are in `docs/runbook.md` → "Learned knowledge and RAG (DEC-210)". In order:
 
-1. **Merge.** Merge `director/soar-intake`, then `director/rag-knowledge`, into `main` (`--ff-only` where possible).
+1. **Merge.** Merge `director/rag-knowledge` into `main` with `git merge --ff-only director/rag-knowledge`. P12 (`director/soar-intake`) is already on `main`.
 2. **Migrate.** `set -a; . ./.env; set +a; make migrate PY=.venv/bin/python`. Then `select count(*) from schema_migrations` must return **20**. Do not go on before it does.
 3. **Directory.** `mkdir -p kb_learned && ls -ldn kb_learned`. The owner must be `HOST_UID:HOST_GID`; if not, `sudo chown`.
 4. **Second compose file.** `printf '\nCOMPOSE_FILE=docker-compose.yml:docker-compose.rag.yml\n' >> .env`. Then `grep -c '^COMPOSE_FILE=' .env` must print `1`, and `docker compose config --services` must list `rag-worker`.
