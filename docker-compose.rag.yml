@@ -30,9 +30,10 @@
 # missing when `up -d` runs is created by Docker as root.
 #
 # `rag-worker` claims only `rag_lookup` and `knowledge_draft` (web/rag_worker.py) and reclaims only those
-# types. Restart it after any merge that touches web/rag_worker.py, web/rag_handlers/ or rag/ (DEC-099):
-# `docker compose restart rag-worker`. `make db-restore` stops `app` and `worker` only: stop `rag-worker`
-# first and start it after the rebuild (runbook, "After `make db-restore`").
+# types. Restart it after any merge under backend/app (DEC-099), not only one that touches web/rag_worker.py,
+# web/rag_handlers/ or rag/: it imports llm/, security/, infra/, audit/ and domain/ as well, and a live mount
+# is not reloaded: `docker compose restart rag-worker`. `make db-restore` stops `app`, `worker` and `rag-worker` and
+# starts only the first two: start `rag-worker` after the rebuild (runbook, "After `make db-restore`").
 #
 # No `version:` key: it is obsolete in Compose v2+.
 

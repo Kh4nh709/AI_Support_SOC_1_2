@@ -7,7 +7,7 @@ this file is git-ignored: it is written by the application and is never committe
 kb_learned/
   README.md                          this file, the only tracked one
   entries/<category>/<entry_id>.md   an approved entry that is in force
-  retired/<entry_id>.md              an entry an admin retired (moved here, never deleted)
+  retired/<category>/<id>.md         an entry an admin retired (moved here, never deleted)
 ```
 
 An entry is an analyst's conclusion, generalised (no literal IP, user or host) and approved by an admin.
@@ -19,8 +19,9 @@ that `app` writes when an admin approves and moves when an admin retires; the lo
 file's sha256 against the database before an entry reaches a prompt, so a file changed or lost after
 approval is left out of the lookup and raises the `knowledge_integrity` health alarm.
 
-- **Never edit a file here by hand.** An edit is an integrity failure, not a correction: change an entry
-  by approving a new version in the admin console.
+- **Never edit a file here by hand.** An edit is an integrity failure, not a correction. There is no
+  versioning: an entry is never changed, only retired in the admin console; to replace one, retire it and
+  approve a new draft.
 - **A backup does not contain these files** (`make backup` is `pg_dump` only). After `make db-restore`, or
   to repair a file that was changed or deleted, rewrite them from the database:
   `python -m app.rag.publish --rebuild`, run in `app`, the container that mounts this directory

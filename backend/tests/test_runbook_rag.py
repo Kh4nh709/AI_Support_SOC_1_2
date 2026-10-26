@@ -609,3 +609,126 @@ def test_the_rag_package_docstring_names_the_draft_module():
         assert f"* `{module}`" in doc, module
     for module in ("agent", "match", "budget", "runs", "lookup"):
         assert f"* `{module}`" in doc, module
+
+
+# --------------------------------------------------------------------------- the P13 fix wave (items 11, 23-26, 28, 29)
+
+
+def _row(starts: str) -> str:
+    return next(line for line in _text().splitlines() if line.startswith(starts))
+
+
+def test_the_restart_rule_of_rag_worker_is_any_merge_under_backend_app():
+    """Item 25 (Minor 5): `rag-worker` imports `llm/`, `security/`, `infra/`, `audit/` and `domain/` too, so
+    a merge that touches none of `rag/`, `web/rag_worker.py` and `web/rag_handlers/` still needs the restart.
+    The runbook's restart row, its paragraph on running `rag-worker`, and the compose file say so.
+    """
+    compose = " ".join(
+        line.removeprefix("# ")
+        for line in (REPO_ROOT / "docker-compose.rag.yml").read_text(encoding="utf-8").splitlines()
+        if line.startswith("#")
+    )
+    places = {
+        "restart row": _row("| restart |"),
+        "paragraph": _paragraph(_section(_text()), "**Running `rag-worker`.**"),
+        "compose file": compose,
+    }
+    for where, text in places.items():
+        flat = " ".join(text.replace("`", "").split())
+        assert "merge under backend/app" in flat, where
+        assert "not only" in flat, where
+        for package in ("llm/", "security/", "infra/", "audit/", "domain/"):
+            assert package in flat, f"the {where} does not name {package}"
+
+
+def test_the_requirements_clause_also_rebuilds_and_recreates_rag_worker():
+    """Item 11: `rag-worker` runs `app`'s image, built from `backend/requirements.txt`."""
+    restart = _row("| restart |")
+    assert (
+        "docker compose build app worker rag-worker && docker compose up -d app worker rag-worker"
+        in restart
+    )
+
+
+def test_the_what_to_watch_paragraph_counts_thirteen_checks():
+    """Item 11: the file says thirteen alarms in its heading and its table; the paragraph said ten."""
+    text = _text()
+    paragraph = text.split("## What to watch (manual checks, beyond the thirteen alarms)", 1)[
+        1
+    ].split("\n\n", 2)[1]
+    assert "the thirteen checks of **Alarms**" in paragraph
+    assert "the thirteen checks do not cover" in paragraph
+    assert "ten checks" not in paragraph
+
+
+def test_the_runbook_says_the_triage_delay_is_paid_even_when_no_lookup_can_run():
+    """Item 11: `RAG_ENABLED` on and no working RAG model (or `rag-worker` stopped) still delays ①."""
+    section = _section(_text())
+    step9 = next(r for r in _step_rows(section) if r[0].startswith("9"))
+    assert "no working RAG model" in step9[1] + step9[2] and "RAG_TRIAGE_DELAY_S" in step9[2]
+    assert "still delayed" in step9[2]
+    assert "even when no lookup can run" in _row("| `RAG_TRIAGE_DELAY_S` |")
+
+
+def test_the_rollback_drains_the_rag_queue_before_anything_is_removed():
+    """Item 24 (Minor 4): the main worker claims neither RAG job type, so a job left `pending` after
+    `rag-worker` is gone is a `job_backlog` alarm for ever. The count must print 0 first."""
+    section = _section(_text())
+    note = _paragraph(section, "**Rollback.**")
+    count = (
+        "select count(*) from jobs where job_type in ('rag_lookup','knowledge_draft') "
+        "and status in ('pending','running')"
+    )
+    assert count in note and "prints `0`" in note
+    assert note.index(count) < note.index("unset COMPOSE_FILE")
+    assert note.index(count) < note.index("docker compose up -d --remove-orphans")
+    assert "Only when that count is `0`" in note
+    assert "never clears" in note
+
+
+def test_the_runbook_lists_exactly_what_breaks_on_a_019_host_with_the_switches_off():
+    """Item 28: the review found `runbook :98` claimed more than there is."""
+    breaks = _paragraph(_section(_text()), "**What a restart before step 2 breaks.**")
+    for needle in (
+        "`knowledge_queue` and `knowledge_integrity`",
+        "alarm",
+        "overview page shows an **error**",
+        "`/admin/knowledge`",
+        "**500**",
+        "`rag_budget` is `n/a — RAG off`",
+        "① and ② keep working",
+    ):
+        assert needle in breaks, f"the paragraph no longer says {needle!r}"
+
+
+def test_a_pre_020_dump_is_restored_with_both_switches_off():
+    """Item 23 (Minor 3)."""
+    after = _section(_text()).split("\n### After `make db-restore`\n", 1)[1]
+    assert (
+        "before restoring one, set `RAG_ENABLED=false` and `KNOWLEDGE_DRAFT_ENABLED=false`" in after
+    )
+
+
+def test_the_readme_of_kb_learned_gives_the_retired_path_and_says_there_is_no_versioning():
+    """Item 26 (Minor 6)."""
+    readme = _text(REPO_ROOT / "kb_learned" / "README.md")
+    assert "retired/<category>/<id>.md" in readme
+    assert "retired/<entry_id>.md" not in readme
+    assert "approving a new version" not in readme
+    assert "no\n  versioning" in readme or "There is no versioning" in " ".join(readme.split())
+
+
+def test_limitations_xlix_names_the_three_limits_of_the_wave():
+    """Item 29."""
+    item = _limitation("### (xlix) · Learned knowledge")
+    for needle in (
+        "reads log text an attacker can shape",
+        "force the auto-merge",
+        "force a conflict",
+        "Đã gộp",
+        "One `rag-worker` only",
+        "`JOB_LOCK_TIMEOUT_S`",
+        "pay for it twice",
+        "One `app_rw` role serves `app`, `worker` and `rag-worker`",
+    ):
+        assert needle in item, f"limitation xlix no longer says {needle!r}"
