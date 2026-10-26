@@ -307,6 +307,19 @@ def test_v3_the_hostnames_are_the_sources_not_a_fixed_list() -> None:
     assert faults_of({"summary": "trên windows_endpoint"}, src) == ["v3_hostname:summary"]
 
 
+def test_v3_a_bare_user_name_of_the_record_is_caught() -> None:
+    """P13 fix wave, item 22: "Tài khoản hr01" has no backslash and no @, so V3 could not tell it from a word;
+    the source record knows the alert's user and the identities its texts name."""
+    src = source(usernames=frozenset({"hr01"}))
+    assert faults_of({"summary": "Tài khoản hr01 đã quét cổng"}, src) == ["v3_account:summary"]
+    assert faults_of({"title": "hr01 quét cổng"}, src) == ["v3_account:title"]
+    assert faults_of({"check_next_time": ["ok", "kiểm tra HR01"]}, src) == [
+        "v3_account:check_next_time"
+    ]
+    assert faults_of({"summary": "Tài khoản <USER> đã quét cổng"}, src) == []
+    assert faults_of({"summary": "Tài khoản hr01 đã quét cổng"}) == []  # a record with no such user
+
+
 def test_v3_a_leading_backslash_account_is_caught() -> None:
     assert faults_of({"summary": r"User: \FPT\administrator - NTLM"}) == ["v3_account:summary"]
 
@@ -325,9 +338,9 @@ def test_v3_and_v4_read_the_start_of_a_field_and_no_more(monkeypatch) -> None:
     seen: dict[str, list[int]] = {"v3": [], "v4": []}
     real_findings, real_scan = draft.literal_findings, draft.detector.scan
 
-    def spy_findings(text, hostnames):
+    def spy_findings(text, hostnames, **names):
         seen["v3"].append(len(text))
-        return real_findings(text, hostnames)
+        return real_findings(text, hostnames, **names)
 
     def spy_scan(blocks):
         seen["v4"].extend(len(block.plain) for block in blocks)
@@ -1100,6 +1113,43 @@ def test_the_source_record_of_a_decided_alert(db) -> None:
     assert "conclusion: closed_fp" in src.facts_text and "category: recon" in src.facts_text
     for literal in ("79.79.78.202", "WS-07", "HR-computer"):
         assert literal not in src.facts_text
+
+
+@db_marked
+def test_the_source_record_knows_the_alerts_user_and_the_identities_its_texts_name(db) -> None:
+    db.execute("INSERT INTO identities (username) VALUES ('svc-backup'), ('somebody-else')")
+    decided_alert(
+        db,
+        alert_user="hr01",
+        reason="Tài khoản svc-backup chạy bản sao lưu theo lịch",
+    )
+    src = draft.source_record(db, Subject("alert", "da-1"))
+    assert src.usernames == frozenset({"hr01", "svc-backup"})  # not every identity of the inventory
+    assert "somebody-else" not in src.usernames
+
+
+@db_marked
+def test_the_source_record_of_a_case_has_the_users_of_its_heads(db) -> None:
+    for head, user in (("dc-1", "hr01"), ("dc-2", "hr02")):
+        add_alert(db, head, rule_id="100190", category="recon", status="closed_fp", alert_user=user)
+    case_id = add_case(db, add_user(db), ["dc-1", "dc-2"], status="concluded_fp")
+    db.execute("UPDATE cases SET conclusion_reason = 'x' WHERE case_id = %s", (case_id,))
+    src = draft.source_record(db, Subject("case", case_id))
+    assert src.usernames == frozenset({"hr01", "hr02"})
+    assert not src.usernames & src.hostnames  # a user is not a host
+
+
+@db_marked
+def test_a_draft_that_names_the_alerts_user_is_retried_and_then_stored_with_the_fault(
+    db, kb_root
+) -> None:
+    decided_alert(db, alert_user="hr01")
+    leaking = {**GOOD, "summary": "Tài khoản hr01 đã quét cổng theo lịch."}
+    fake = FakeLLM([leaking, leaking])
+    assert run(db, "alert:da-1", fake) is None
+    row = only_draft(db)
+    assert row["draft"] == {} and "v3_account:summary" in row["warnings"]
+    assert len(draft_calls(fake)) == 2  # the retry named the fault and the model did not mend it
 
 
 @db_marked

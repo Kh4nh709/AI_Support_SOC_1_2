@@ -36,6 +36,34 @@ SC03_TEMPLATE = (
 # ── each placeholder, with the values of the two samples ──────────────────────────────────────
 
 
+def test_a_bare_user_name_is_an_account_when_the_names_are_given() -> None:
+    """P13 fix wave, item 22: `placeholderise` could hide `hr01` (the fingerprint passes the alert's user)
+    but V3 had no way to name it, so "Tài khoản hr01 ..." in a draft passed."""
+    assert literal_findings("Tài khoản hr01 đã quét cổng", [], users=["hr01"]) == ["account"]
+    assert literal_findings("Tài khoản HR01 đã quét cổng", [], users=["hr01"]) == ["account"]
+    assert literal_findings("Tài khoản hr01 đã quét cổng", []) == []  # no names, as before
+
+
+def test_a_user_name_is_matched_whole_word_and_never_inside_a_placeholder() -> None:
+    names = ["hr01", "ab"]
+    for text in ("hr012 xong", "xhr01 xong", "hr01-b xong", "tab bar", "<USER> xong", "<HOST> hr0"):
+        assert literal_findings(text, [], users=names) == [], text
+    for text in ("hr01.", "(hr01)", "hr01, ab", "user=hr01"):
+        assert literal_findings(text, [], users=names) == ["account"], text
+
+
+def test_a_user_name_is_one_more_finding_in_the_order_of_the_kinds() -> None:
+    text = "tài khoản hr01 từ 79.79.78.202 trên WS-07"
+    assert literal_findings(text, ["WS-07"], users=["hr01"]) == ["ipv4", "account", "hostname"]
+
+
+def test_what_placeholderise_hides_literal_findings_no_longer_names() -> None:
+    text = "hr01 vào WS-07 từ 79.79.78.202"
+    hidden = placeholderise(text, ["WS-07"], users=["hr01"])
+    assert literal_findings(text, ["WS-07"], users=["hr01"]) == ["ipv4", "account", "hostname"]
+    assert literal_findings(hidden, ["WS-07"], users=["hr01"]) == []
+
+
 def test_the_external_address_of_the_port_scan_sample_is_ip_ngoai() -> None:
     assert sc03()["data"]["srcip"] == "79.79.78.202"
     assert placeholderise("79.79.78.202", []) == "<IP_NGOAI>"

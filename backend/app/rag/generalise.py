@@ -155,14 +155,24 @@ def _has_name(text: str, pattern: re.Pattern[str] | None) -> bool:
     return pattern is not None and any(m.group(1) is None for m in pattern.finditer(text))
 
 
-def literal_findings(text: str, hostnames: Iterable[str]) -> list[str]:
-    """The V3 fault names present in `text`, in `FINDING_NAMES` order. Never a matched value."""
+def literal_findings(
+    text: str, hostnames: Iterable[str], *, users: Iterable[str] = ()
+) -> list[str]:
+    """The V3 fault names present in `text`, in `FINDING_NAMES` order. Never a matched value.
+
+    `users` are bare user names (`hr01`), the inverse of what `placeholderise(..., users=...)` hides: a
+    name in the text, whole-word and case-insensitive, is an `account` finding, like `DOMAIN\\user` is.
+    Without them a name with no backslash and no @ cannot be told from a word (P13 fix wave, item 22).
+    """
     hosts = _name_pattern(list(hostnames))
+    people = _name_pattern(list(users))
     present = {
         "ipv4": _has_ipv4(text),
         "ipv6": _has_ipv6(text),
         "email": _EMAIL.search(text) is not None,
-        "account": _LEADING_ACCOUNT.search(text) is not None or _ACCOUNT.search(text) is not None,
+        "account": _LEADING_ACCOUNT.search(text) is not None
+        or _ACCOUNT.search(text) is not None
+        or _has_name(text, people),
         "hostname": _has_name(text, hosts),
         "alert_id": _GL_ID.search(text) is not None or _WAZUH_ID.search(text) is not None,
         "hash": _HASH.search(text) is not None,

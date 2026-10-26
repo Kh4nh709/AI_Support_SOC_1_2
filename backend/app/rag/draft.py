@@ -105,7 +105,7 @@ import json
 import re
 import unicodedata
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache, partial
 from pathlib import Path
@@ -268,6 +268,9 @@ class SourceRecord:
     soar_scenario: str | None
     log_source: str | None
     hostnames: frozenset[str] = frozenset()
+    #: Bare user names V3 refuses in the text: the alert's user (a case: its heads'), and the identities
+    #: of the inventory that the record's own texts name (`_usernames`).
+    usernames: frozenset[str] = frozenset()
     facts_text: str = ""
     analyst_texts: tuple[str, ...] = ()
     ai_texts: tuple[str, ...] = ()
@@ -300,15 +303,40 @@ def _texts(values: Sequence[Any]) -> tuple[str, ...]:
     return tuple(text.strip() for text in values if isinstance(text, str) and text.strip())
 
 
+_IDENTITY_LIMIT = 10_000
+
+
+def _usernames(
+    conn: psycopg.Connection, own: Iterable[str | None], texts: Sequence[str]
+) -> frozenset[str]:
+    """The user names V3 must find in a draft: the record's own (`alerts.alert_user`) and, from the
+    `identities` inventory, those the record's texts name (whole-word, case-insensitive). Not the whole
+    inventory: a common account such as `admin` would then refuse every draft that mentions the word, and the
+    model can only repeat a name it was shown."""
+    names = {name.strip() for name in own if isinstance(name, str) and len(name.strip()) >= 2}
+    haystack = "\n".join(texts)
+    if haystack:
+        for (username,) in conn.execute(
+            "SELECT username FROM identities LIMIT %s", (_IDENTITY_LIMIT,)
+        ):
+            if (
+                isinstance(username, str)
+                and len(username) >= 2
+                and re.search(rf"(?<![\w-]){re.escape(username)}(?![\w-])", haystack, re.IGNORECASE)
+            ):
+                names.add(username)
+    return frozenset(names)
+
+
 def _alert_source(conn: psycopg.Connection, subject: Subject) -> tuple[SourceRecord, Fingerprint]:
     row = conn.execute(
-        f"SELECT a.status, a.close_reason, a.occurrence_count, a.agent_name, {_ASSET_HOST}"
-        " FROM alerts a WHERE a.alert_id = %s",
+        f"SELECT a.status, a.close_reason, a.occurrence_count, a.agent_name, {_ASSET_HOST},"
+        " a.alert_user FROM alerts a WHERE a.alert_id = %s",
         (subject.id,),
     ).fetchone()
     if row is None:
         raise PermanentError("source_record: the alert does not exist")
-    status, close_reason, occurrences, agent_name, asset_host = row
+    status, close_reason, occurrences, agent_name, asset_host, alert_user = row
     if status not in _ALERT_CONCLUSIONS:
         raise PermanentError(
             f"source_record: the alert is {status!r}, not closed_fp or closed_benign by an analyst"
@@ -318,6 +346,8 @@ def _alert_source(conn: psycopg.Connection, subject: Subject) -> tuple[SourceRec
     facts = "\n".join(
         ["kind: alert", f"conclusion: {status}", f"occurrences: {occurrences}", fp.text]
     )
+    analyst_texts = _texts([close_reason])
+    ai_texts = tuple(_latest_result(conn, "triage", "alert", "proposer", subject.id))
     return (
         SourceRecord(
             subject=subject,
@@ -328,9 +358,10 @@ def _alert_source(conn: psycopg.Connection, subject: Subject) -> tuple[SourceRec
             soar_scenario=fp.soar_scenario,
             log_source=fp.log_source or None,
             hostnames=frozenset(hostnames),
+            usernames=_usernames(conn, [alert_user], [facts, *analyst_texts, *ai_texts]),
             facts_text=facts,
-            analyst_texts=_texts([close_reason]),
-            ai_texts=tuple(_latest_result(conn, "triage", "alert", "proposer", subject.id)),
+            analyst_texts=analyst_texts,
+            ai_texts=ai_texts,
         ),
         fp,
     )
@@ -351,17 +382,19 @@ def _case_source(conn: psycopg.Connection, subject: Subject) -> tuple[SourceReco
         raise PermanentError(f"source_record: the case is {status!r}, not concluded")
     fp = case_fingerprint(conn, case_id)
     heads = conn.execute(
-        f"SELECT a.agent_name, {_ASSET_HOST} FROM case_alerts ca"
+        f"SELECT a.agent_name, {_ASSET_HOST}, a.alert_user FROM case_alerts ca"
         " JOIN alerts a ON a.alert_id = ca.alert_id WHERE ca.case_id = %s",
         (case_id,),
     ).fetchall()
-    hostnames = _inventory_hostnames(conn) | {name for head in heads for name in head if name}
+    hostnames = _inventory_hostnames(conn) | {name for head in heads for name in head[:2] if name}
     notes = conn.execute(
         "SELECT body FROM (SELECT body, created_at, note_id FROM case_notes WHERE case_id = %s"
         " ORDER BY created_at DESC, note_id DESC LIMIT %s) newest ORDER BY created_at, note_id",
         (case_id, MAX_NOTES),
     ).fetchall()
     facts = "\n".join(["kind: case", f"conclusion: {status}", f"alerts: {len(heads)}", fp.text])
+    analyst_texts = _texts([conclusion_reason, *(body for (body,) in notes)])
+    ai_texts = tuple(_latest_result(conn, "investigate", "case", "investigator", case_id))
     return (
         SourceRecord(
             subject=Subject("case", case_id),
@@ -372,9 +405,12 @@ def _case_source(conn: psycopg.Connection, subject: Subject) -> tuple[SourceReco
             soar_scenario=fp.soar_scenario,
             log_source=fp.log_source or None,
             hostnames=frozenset(hostnames),
+            usernames=_usernames(
+                conn, [head[2] for head in heads], [facts, *analyst_texts, *ai_texts]
+            ),
             facts_text=facts,
-            analyst_texts=_texts([conclusion_reason, *(body for (body,) in notes)]),
-            ai_texts=tuple(_latest_result(conn, "investigate", "case", "investigator", case_id)),
+            analyst_texts=analyst_texts,
+            ai_texts=ai_texts,
         ),
         fp,
     )
@@ -474,7 +510,9 @@ def _v3(texts: Mapping[str, str], source: SourceRecord) -> list[str]:
     faults = []
     for name, text in texts.items():
         # read as displayed: an address split by a word joiner is the address (V1 names the joiner)
-        found = literal_findings(strip_invisible(text[:MAX_SCAN_CHARS]), source.hostnames)
+        found = literal_findings(
+            strip_invisible(text[:MAX_SCAN_CHARS]), source.hostnames, users=source.usernames
+        )
         faults.extend(f"v3_{kind}:{name}" for kind in found)
     return faults
 
