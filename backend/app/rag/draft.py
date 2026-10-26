@@ -75,10 +75,25 @@ reads, and into the retry message, whose every word the linter must know):
    message; 6. stored `pending`: a draft that passes with `knowledge.drafted`; two failures with
    `draft = {}` and the faults of the last attempt in `warnings`; no budget with `["budget"]`.
 
-A model that cannot be asked does not block the conclusion, which is already committed: the budget gives
-`["budget"]`, the provider's refusal `["llm_permanent"]`, an attempt that timed out on the job's last
-attempt `["llm_transient"]` (an earlier attempt writes its run row, commits it and re-raises, so the queue
-retries, as `tier2/investigate.py` and the lookup do), a prompt that fails our own linter `["linter"]`.
+A model that cannot be asked does not block the conclusion, which is already committed. What the draft
+becomes depends on whether asking again later could help (I1 of the whole-branch review: a text-less
+`pending` draft is never filled, because step 0 makes every later job a no-op, and the RAG sub-cap is shared
+with a lookup on every alert, so reaching it is normal):
+
+* the budget (the RAG's cap, the global cap, or a call the adapter stopped as `LLMBudgetExceeded`): nothing
+  is stored and the job is rescheduled (`Reschedule`) to the start of next month on the database's clock,
+  `date_trunc('month', now()) + interval '1 month'`, the point where the month's spend starts again;
+* a 429 (`LLMPermanent` raised from an error with `status_code == 429`, T03 M7: the adapter calls every 4xx
+  permanent): rescheduled in `RATE_LIMIT_BACKOFF_S` times the attempt seconds (15 minutes, 30, ...), at
+  most `RATE_LIMIT_MAX_ATTEMPTS` attempts (the attempt is the number of `knowledge_draft` jobs the subject
+  has had, a rescheduled run being a new job row), and then the draft is stored text-less as below;
+* settings that cannot be read (the adapter fails closed): the same backoff, then `["budget"]`;
+* the rest give a stored `pending` draft with no text, for an admin to write by hand, redo
+  (`POST .../drafts/{id}/redraft`, `rag.publish.redraft`) or reject: the provider's other refusals
+  `["llm_permanent"]`, an attempt that timed out on the job's last attempt `["llm_transient"]` (an
+  earlier attempt writes its run row, commits it and re-raises, so the queue retries, as
+  `tier2/investigate.py` and the lookup do), a prompt that fails our own linter `["linter"]`.
+
 A ranking that gave no answer does not stop the draft: it goes on, with the warning `rank_unavailable`
 (no duplicate was looked for). A subject that is not a decided alert or a concluded case is a
 `PermanentError`. No model configured: nothing is done, as for ① and ② (G7).
@@ -101,9 +116,9 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from app.audit.events import write_event
-from app.infra import config
+from app.infra import config, settings
 from app.infra.errors import PermanentError
-from app.infra.jobs import Job
+from app.infra.jobs import Job, Reschedule
 from app.llm import schemas
 from app.llm.adapter import (
     DeepSeekAdapter,
@@ -221,6 +236,17 @@ WARNING_TRANSIENT = "llm_transient"
 WARNING_PERMANENT = "llm_permanent"
 WARNING_LINTER = "linter"
 WARNING_RANK = "rank_unavailable"
+#: The warnings of a text-less draft that asking the model again may mend: the admin's re-draft
+#: (`rag.publish.redraft`) is offered for a draft whose warnings are all of these. A V name is not one:
+#: the model answered and the answer failed the rules, so another run is no better than the admin.
+REDRAFTABLE_WARNINGS = frozenset(
+    {WARNING_BUDGET, WARNING_TRANSIENT, WARNING_PERMANENT, WARNING_RANK}
+)
+
+#: A model that is rate limited (429) or whose settings cannot be read is asked again later: this many
+#: seconds times the attempt, and no more than this many attempts in all.
+RATE_LIMIT_BACKOFF_S = 15 * 60
+RATE_LIMIT_MAX_ATTEMPTS = 6
 
 _NO_EXCLUSION = Exclusion(frozenset(), frozenset())
 
@@ -821,6 +847,75 @@ def _over_budget(conn: psycopg.Connection, cfg: config.Config) -> bool:
     return rag_spent_or_exhausted(conn, cfg) >= cfg.RAG_MONTHLY_USD_CAP
 
 
+def _attempt(conn: psycopg.Connection, job: Job) -> int:
+    """Which attempt at this subject this job is: one more than the `knowledge_draft` jobs the subject has
+    had before it (a rescheduled run is a new job row, so the count only grows)."""
+    (before,) = conn.execute(
+        "SELECT count(*) FROM jobs WHERE job_type = 'knowledge_draft' AND subject_id = %s"
+        " AND job_id <> %s",
+        (job.subject_id, job.job_id),
+    ).fetchone()
+    return before + 1
+
+
+def _retry_later(conn: psycopg.Connection, job: Job) -> Reschedule | None:
+    """The backoff of a model that cannot be asked right now, or None once the attempts are spent."""
+    attempt = _attempt(conn, job)
+    if attempt >= RATE_LIMIT_MAX_ATTEMPTS:
+        return None
+    return Reschedule(RATE_LIMIT_BACKOFF_S * attempt)
+
+
+def _rate_limited(exc: BaseException) -> bool:
+    """Whether a refusal is the provider's 429: the status of the error the adapter raised `LLMPermanent`
+    from, or of the error itself (read from `.status_code`, or the response's, never from message text).
+    """
+    for candidate in (exc, exc.__cause__):
+        if candidate is None:
+            continue
+        status = getattr(candidate, "status_code", None)
+        if not isinstance(status, int):
+            status = getattr(getattr(candidate, "response", None), "status_code", None)
+        if status == 429:
+            return True
+    return False
+
+
+def _seconds_to_next_month(conn: psycopg.Connection) -> float:
+    """From the database's `now()` to the start of next month, plus a second so the run lands inside it.
+    The month is the one the budget sums (`rag.budget`, `date_trunc('month', now())`)."""
+    (seconds,) = conn.execute(
+        "SELECT extract(epoch FROM date_trunc('month', now()) + interval '1 month' - now())::float8"
+    ).fetchone()
+    return float(seconds) + 1.0
+
+
+def _wait_for_budget(
+    conn: psycopg.Connection,
+    cfg: config.Config,
+    job: Job,
+    source: SourceRecord,
+    run_id: uuid.UUID | None,
+    *,
+    warnings: Sequence[str] = (),
+    conflict_with: str | None = None,
+) -> Reschedule | None:
+    """The job could not be paid for (the pre-check, or the adapter stopping a call). A cap that is spent
+    is spent until next month: `Reschedule` to its start, nothing stored. Settings that cannot be read say
+    nothing about the money (the adapter fails closed): the backoff of a 429, and after its attempts the
+    text-less `["budget"]` draft. `run_id` is the run row of a call that was stopped, kept either way.
+    """
+    try:
+        settings.effective_limits(conn, cfg)
+    except settings.SettingsUnavailable:
+        later = _retry_later(conn, job)
+        if later is not None:
+            return later
+        _store_empty(conn, source, [*warnings, WARNING_BUDGET], run_id, conflict_with=conflict_with)
+        return None
+    return Reschedule(_seconds_to_next_month(conn))
+
+
 def _sendable(conn: psycopg.Connection, fp: Fingerprint) -> tuple[list[Entry], list[str], int]:
     """The candidates the ranking agent may see: each one checked before it is sent (V-R1, A4: an
     entry changed after approval reaches no prompt) and the rest cut to the prompt budget. Returns
@@ -877,15 +972,18 @@ def _merge_and_conflict(
     return same, None
 
 
-def run_draft_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = None) -> None:
+def run_draft_job(
+    conn: psycopg.Connection, job: Job, *, adapter: Any | None = None
+) -> Reschedule | None:
     """Run one `knowledge_draft` job (module doc). `adapter` defaults to a `DeepSeekAdapter` limited
-    to the RAG budget; every test passes a fake."""
+    to the RAG budget; every test passes a fake. Returns the `Reschedule` the worker is to queue when the
+    model cannot be asked now (the budget, a 429), else None."""
     cfg = config.load()
     _raise_idle_timeout(conn, cfg)
 
     if not agent.rag_model(cfg):  # no model configured: the AI is off, as for ① and ② (G7)
         _log({"knowledge_draft": "skipped", "reason": "no_model"})
-        return
+        return None
 
     try:
         subject = parse_subject(job.subject_id)
@@ -896,12 +994,12 @@ def run_draft_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = N
 
     if _exists(conn, subject):  # 0: a reclaimed job must not draft twice
         _log({"knowledge_draft": "exists", "subject": subject.key})
-        return
+        return None
 
     source, fp = _build_source(conn, subject)  # PermanentError when there is no conclusion
     if _over_budget(conn, cfg):
-        _store_empty(conn, source, [WARNING_BUDGET], None)
-        return
+        _log({"knowledge_draft": "rescheduled", "reason": "budget", "subject": subject.key})
+        return _wait_for_budget(conn, cfg, job, source, None)
 
     model = agent.rag_model(cfg)
     shared = (
@@ -947,10 +1045,17 @@ def run_draft_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = N
         try:
             matches, _notes, ranked = rank(rank_tape, fp, sendable, cfg=cfg)
         except LLMBudgetExceeded:
-            _store_empty(conn, source, [WARNING_BUDGET], record_rank("cap"))
-            return
-        except LLMPermanent:
+            _log({"knowledge_draft": "rescheduled", "reason": "budget", "subject": subject.key})
+            return _wait_for_budget(conn, cfg, job, source, record_rank("cap"))
+        except LLMPermanent as exc:
             rank_run_id = record_rank("permanent")
+            if _rate_limited(exc):
+                later = _retry_later(conn, job)
+                if later is not None:  # the draft call would be refused the same way
+                    _log(
+                        {"knowledge_draft": "rescheduled", "reason": "429", "subject": subject.key}
+                    )
+                    return later
             warnings.append(WARNING_RANK)
         except PermanentError:
             # our own prompt failed the linter: a template defect, not a model outcome
@@ -996,7 +1101,7 @@ def run_draft_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = N
                 "system",
                 payload={"draft_id": str(draft_id), "entry_id": same.entry_id},
             )
-        return
+        return None
     conflict_with = None if conflicting is None else conflicting.entry_id
 
     # ── 5: the draft call, validated, retried once ───────────────────────────────────────────
@@ -1049,15 +1154,31 @@ def run_draft_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = N
                 cfg=cfg,
             )
         except LLMBudgetExceeded:
-            give_up(WARNING_BUDGET, "cap")
-            return
-        except LLMPermanent:
+            _log({"knowledge_draft": "rescheduled", "reason": "budget", "subject": subject.key})
+            return _wait_for_budget(
+                conn,
+                cfg,
+                job,
+                source,
+                record_draft("cap"),
+                warnings=warnings,
+                conflict_with=conflict_with,
+            )
+        except LLMPermanent as exc:
+            if _rate_limited(exc):
+                later = _retry_later(conn, job)
+                if later is not None:
+                    record_draft("permanent")
+                    _log(
+                        {"knowledge_draft": "rescheduled", "reason": "429", "subject": subject.key}
+                    )
+                    return later
             give_up(WARNING_PERMANENT, "permanent")
-            return
+            return None
         except PermanentError:
             # our own prompt failed the linter: a template defect, not a model outcome
             give_up(WARNING_LINTER, "linter")
-            return
+            return None
         except Exception as exc:
             if not agent.is_transient(exc):
                 raise  # a bug: the worker will classify it, and nothing here hides it
@@ -1067,7 +1188,7 @@ def run_draft_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = N
                 conn.commit()
                 raise
             give_up(WARNING_TRANSIENT, "transient")
-            return
+            return None
 
         parsed = result.parsed
         if parsed is None:  # the schema refused the answer, and its repair
@@ -1083,7 +1204,7 @@ def run_draft_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = N
     run_id = record_draft(stopped_by)
     if final is None:
         _store_empty(conn, source, [*warnings, *faults], run_id, conflict_with=conflict_with)
-        return
+        return None
     draft_id = _store_draft(
         conn,
         source,
@@ -1101,3 +1222,4 @@ def run_draft_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = N
             "system",
             payload={"draft_id": str(draft_id)},
         )
+    return None

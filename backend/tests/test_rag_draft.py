@@ -13,7 +13,10 @@ word of it). The job (`pytest.mark.db`) runs on the `db` fixture's transaction w
     conflict     rat_giong with another conclusion -> `pending` with `conflict_with_entry`
     drafted      a draft that passes V1-V5 -> `pending` + `knowledge.drafted`
     failed       two drafts that fail -> `pending`, `draft = {}`, `warnings` = the faults
-    budget       no budget -> `pending`, `draft = {}`, `warnings = ["budget"]`
+    budget       no budget -> the job is rescheduled to the start of next month (nothing is stored: a
+                 text-less draft would never be filled, I1 of the whole-branch review)
+    rate limit   a 429 -> rescheduled with a bounded backoff, then `pending`, `draft = {}`,
+                 `warnings = ["llm_permanent"]` once the attempts are spent
 
 The closed fields of a stored draft are the source's, never the model's. The analyst's words reach the
 model only inside `analyst_note` blocks.
@@ -33,7 +36,7 @@ from pathlib import Path
 import pytest
 from app.infra import config
 from app.infra.errors import PermanentError, TransientError
-from app.infra.jobs import Job
+from app.infra.jobs import Job, Reschedule
 from app.llm.adapter import LLMBudgetExceeded, LLMPermanent, LLMTimeout, estimate_tokens
 from app.rag import agent, budget, draft, match
 from app.rag.draft import SourceRecord, validate_draft
@@ -894,8 +897,9 @@ def job_for(subject: str, attempts: int = 1) -> Job:
     )
 
 
-def run(db, subject: str, adapter, attempts: int = 1) -> None:
-    draft.run_draft_job(db, job_for(subject, attempts), adapter=adapter)
+def run(db, subject: str, adapter, attempts: int = 1):
+    """The job's result: None, or the `Reschedule` it asks for."""
+    return draft.run_draft_job(db, job_for(subject, attempts), adapter=adapter)
 
 
 def last_attempt() -> int:
@@ -1924,51 +1928,109 @@ def test_the_unique_key_is_a_backstop_when_two_runs_race(db, kb_root, monkeypatc
 # budget -----------------------------------------------------------------------------------------
 
 
-def assert_budget_draft(db, fake: FakeLLM) -> None:
-    row = only_draft(db)
-    assert row["status"] == "pending" and row["draft"] == {} and row["warnings"] == ["budget"]
-    assert row["conclusion"] == "closed_fp" and row["llm_run_id"] is None
-    assert fake.calls == [] and runs_of(db) == []
+class Http429(Exception):
+    """The provider's refusal, as the SDK's error carries it."""
+
+    status_code = 429
+
+
+def rate_limited() -> LLMPermanent:
+    """What the adapter raises for a 429: `LLMPermanent` raised `from` the provider's error."""
+    error = LLMPermanent("DeepSeek call failed: Error code: 429 - rate limit reached")
+    error.__cause__ = Http429("rate limit reached")
+    return error
+
+
+def earlier_jobs(db, subject: str, count: int) -> None:
+    """`count` finished `knowledge_draft` jobs of the subject: the rescheduled runs before this one."""
+    for _ in range(count):
+        db.execute(
+            "INSERT INTO jobs (job_type, subject_id, status)"
+            " VALUES ('knowledge_draft', %s, 'succeeded')",
+            (subject,),
+        )
+
+
+def seconds_to_next_month(db) -> float:
+    return db.execute(
+        "SELECT extract(epoch FROM date_trunc('month', now()) + interval '1 month' - now())::float8"
+    ).fetchone()[0]
+
+
+def assert_rescheduled_to_next_month(db, result, fake: FakeLLM) -> None:
+    """Nothing is stored and nothing is asked: the job comes back when the month's budget does."""
+    assert isinstance(result, Reschedule)
+    assert result.delay_s == pytest.approx(seconds_to_next_month(db) + 1, abs=120)
+    assert 0 < result.delay_s <= 31 * 24 * 3600 + 3600
+    assert drafts(db) == [] and fake.calls == [] and runs_of(db) == []
     assert events_of(db, "knowledge.drafted") == []
 
 
 @db_marked
-def test_the_rag_cap_reached_stores_a_budget_draft(db, kb_root, monkeypatch) -> None:
+def test_the_rag_cap_reached_reschedules_the_job_to_the_start_of_next_month(
+    db, kb_root, monkeypatch
+) -> None:
+    """P13 fix wave, item 20 (I1): a text-less `pending` draft is never filled (`_exists` makes every later
+    job a no-op), and the $3 sub-cap is shared with a lookup on every alert, so reaching it is normal.
+    """
     monkeypatch.setenv("RAG_MONTHLY_USD_CAP", "1")
     decided_alert(db)
     entry(db, kb_root)
     spend(db, "knowledge_draft", 1.0)  # the draft's spend counts toward the RAG sub-cap
     fake = FakeLLM([NO_MATCH, GOOD])
-    run(db, "alert:da-1", fake)
-    assert_budget_draft(db, fake)
+    assert_rescheduled_to_next_month(db, run(db, "alert:da-1", fake), fake)
 
 
 @db_marked
-def test_a_cap_of_zero_is_always_a_budget_draft(db, kb_root, monkeypatch) -> None:
+def test_a_cap_of_zero_always_reschedules(db, kb_root, monkeypatch) -> None:
     monkeypatch.setenv("RAG_MONTHLY_USD_CAP", "0")
     decided_alert(db)
     fake = FakeLLM([GOOD])
-    run(db, "alert:da-1", fake)
-    assert_budget_draft(db, fake)
+    assert_rescheduled_to_next_month(db, run(db, "alert:da-1", fake), fake)
 
 
 @db_marked
-def test_the_global_cap_reached_stores_a_budget_draft(db, kb_root, monkeypatch) -> None:
+def test_the_global_cap_reached_reschedules_too(db, kb_root, monkeypatch) -> None:
     monkeypatch.setenv("LLM_MONTHLY_USD_CAP", "5")
     decided_alert(db)
     spend(db, "triage", 5.0)
     fake = FakeLLM([GOOD])
-    run(db, "alert:da-1", fake)
-    assert_budget_draft(db, fake)
+    assert_rescheduled_to_next_month(db, run(db, "alert:da-1", fake), fake)
 
 
 @db_marked
-def test_unreadable_settings_store_a_budget_draft(db, kb_root) -> None:
+def test_the_job_rescheduled_for_the_budget_drafts_once_there_is_budget(
+    db, kb_root, monkeypatch
+) -> None:
+    """The run that comes back next month finds a draft to make, not a stored empty one."""
+    monkeypatch.setenv("RAG_MONTHLY_USD_CAP", "1")
+    decided_alert(db)
+    spend(db, "knowledge_draft", 1.0)
+    assert isinstance(run(db, "alert:da-1", FakeLLM([GOOD])), Reschedule)
+    monkeypatch.setenv(
+        "RAG_MONTHLY_USD_CAP", "10"
+    )  # next month's spend starts at zero: this stands for it
+    assert run(db, "alert:da-1", FakeLLM([GOOD])) is None
+    assert only_draft(db)["draft"]["title"] == GOOD["title"]
+
+
+@db_marked
+def test_unreadable_settings_wait_a_short_while_not_a_month(db, kb_root) -> None:
+    """Fail closed (DEC-200 item 3) still stops the call, but it says nothing about the month's money:
+    the job is asked again in 15 minutes times its attempt, and only after the attempts are spent does it
+    leave the budget draft it used to."""
     decided_alert(db)
     db.execute("ALTER TABLE settings RENAME TO settings_unreachable")
     fake = FakeLLM([GOOD])
-    run(db, "alert:da-1", fake)
-    assert_budget_draft(db, fake)
+    first = run(db, "alert:da-1", fake)
+    assert isinstance(first, Reschedule) and first.delay_s == 15 * 60
+    assert drafts(db) == [] and fake.calls == []
+    earlier_jobs(db, "alert:da-1", draft.RATE_LIMIT_MAX_ATTEMPTS - 1)  # this is the last attempt
+    assert run(db, "alert:da-1", fake) is None
+    row = only_draft(db)
+    assert row["status"] == "pending" and row["draft"] == {} and row["warnings"] == ["budget"]
+    assert row["conclusion"] == "closed_fp" and row["llm_run_id"] is None
+    assert fake.calls == [] and runs_of(db) == []
 
 
 @db_marked
@@ -1983,27 +2045,24 @@ def test_spend_below_both_caps_drafts(db, kb_root, monkeypatch) -> None:
 
 
 @db_marked
-def test_the_adapter_stopping_mid_job_is_a_budget_draft_with_a_cap_run(db, kb_root) -> None:
+def test_the_adapter_stopping_mid_job_reschedules_and_keeps_the_cap_run(db, kb_root) -> None:
     decided_alert(db)
-    run(db, "alert:da-1", FakeLLM(raises=LLMBudgetExceeded("cap")))
-    row = only_draft(db)
-    assert row["draft"] == {} and row["warnings"] == ["budget"] and row["status"] == "pending"
+    result = run(db, "alert:da-1", FakeLLM(raises=LLMBudgetExceeded("cap")))
+    assert isinstance(result, Reschedule) and result.delay_s > 3600  # the month, not a short wait
+    assert drafts(db) == []
     (run_row,) = runs_of(db)
     assert run_row["stopped_by"] == "cap" and run_row["result"] is None
-    assert row["llm_run_id"] == run_row["run_id"]
 
 
 @db_marked
-def test_the_adapter_stopping_at_the_ranking_is_a_budget_draft_with_a_cap_run(db, kb_root) -> None:
+def test_the_adapter_stopping_at_the_ranking_reschedules_and_keeps_the_cap_run(db, kb_root) -> None:
     decided_alert(db)
     entry(db, kb_root)
     fake = FakeLLM(raises=LLMBudgetExceeded("cap"))
-    run(db, "alert:da-1", fake)
-    row = only_draft(db)
-    assert row["status"] == "pending" and row["draft"] == {} and row["warnings"] == ["budget"]
+    result = run(db, "alert:da-1", fake)
+    assert isinstance(result, Reschedule) and drafts(db) == []
     (run_row,) = runs_of(db)
     assert run_row["stopped_by"] == "cap" and run_row["gate_result"]["stage"] == "rank"
-    assert row["llm_run_id"] == run_row["run_id"]
     assert len(fake.calls) == 1  # the cap was reached: the draft was not asked after it
     assert events_of(db, "knowledge.drafted") == []
 
@@ -2020,9 +2079,8 @@ def test_the_cap_reached_between_the_ranking_and_the_draft_stops_the_draft(db, k
                 raise LLMBudgetExceeded("cap")
             return super().complete(**kwargs)
 
-    run(db, "alert:da-1", StopsAfterTheRanking([answer((entry_id, "giong", "r"))]))
-    row = only_draft(db)
-    assert row["draft"] == {} and row["warnings"] == ["budget"]
+    result = run(db, "alert:da-1", StopsAfterTheRanking([answer((entry_id, "giong", "r"))]))
+    assert isinstance(result, Reschedule) and drafts(db) == []
     stages = [r["gate_result"]["stage"] for r in runs_of(db)]
     assert sorted(stages) == ["draft", "rank"]  # the ranking was paid for, and is recorded
 
@@ -2103,6 +2161,97 @@ def test_a_permanent_model_error_stores_an_empty_draft_without_a_retry(db, kb_ro
     row = only_draft(db)
     assert row["draft"] == {} and row["warnings"] == ["llm_permanent"]
     assert runs_of(db)[0]["stopped_by"] == "permanent"
+
+
+@db_marked
+def test_a_429_reschedules_the_draft_with_a_backoff_that_grows(db, kb_root) -> None:
+    """P13 fix wave, item 20 (I1): a 429 burst (T03 M7: the adapter calls every 4xx permanent) used to leave
+    a text-less draft that nothing would fill. Now the job is asked again: 15 minutes times its attempt.
+    """
+    decided_alert(db)
+    for done, minutes in enumerate((15, 30, 45, 60, 75)):
+        result = run(db, "alert:da-1", FakeLLM(raises=rate_limited()))
+        assert isinstance(result, Reschedule) and result.delay_s == minutes * 60, minutes
+        assert drafts(db) == []
+        earlier_jobs(db, "alert:da-1", 1)  # the worker finished this job and queued the next
+        assert len(runs_of(db)) == done + 1  # every refused attempt keeps its run row
+    assert {r["stopped_by"] for r in runs_of(db)} == {"permanent"}
+
+
+@db_marked
+def test_a_429_on_the_last_attempt_stores_the_text_less_draft_as_before(db, kb_root) -> None:
+    decided_alert(db)
+    earlier_jobs(db, "alert:da-1", draft.RATE_LIMIT_MAX_ATTEMPTS - 1)
+    assert run(db, "alert:da-1", FakeLLM(raises=rate_limited())) is None
+    row = only_draft(db)
+    assert (
+        row["status"] == "pending" and row["draft"] == {} and row["warnings"] == ["llm_permanent"]
+    )
+    assert runs_of(db)[0]["stopped_by"] == "permanent"
+
+
+@db_marked
+def test_only_a_429_is_asked_again(db, kb_root) -> None:
+    """A 400 (a prompt the provider refuses) will be refused again: it stores the empty draft at once."""
+    decided_alert(db)
+    for status in (400, 401, 402, 422):
+        refused = LLMPermanent(f"DeepSeek call failed: Error code: {status}")
+        refused.__cause__ = type("Http", (Exception,), {"status_code": status})()
+        db.execute("DELETE FROM knowledge_drafts")
+        assert run(db, "alert:da-1", FakeLLM(raises=refused)) is None, status
+        assert only_draft(db)["warnings"] == ["llm_permanent"], status
+
+
+@db_marked
+def test_a_429_at_the_ranking_reschedules_before_a_draft_is_made_without_its_merge_check(
+    db, kb_root
+) -> None:
+    decided_alert(db)
+    entry(db, kb_root)
+    fake = FakeLLM(raises=rate_limited())
+    result = run(db, "alert:da-1", fake)
+    assert isinstance(result, Reschedule) and result.delay_s == 15 * 60
+    assert (
+        drafts(db) == [] and len(fake.calls) == 1
+    )  # the draft was not asked: no rank_unavailable draft
+    (run_row,) = runs_of(db)
+    assert run_row["stopped_by"] == "permanent" and run_row["gate_result"]["stage"] == "rank"
+
+
+@db_marked
+def test_a_429_at_the_ranking_on_the_last_attempt_goes_on_without_a_ranking(db, kb_root) -> None:
+    decided_alert(db)
+    entry(db, kb_root)
+    earlier_jobs(db, "alert:da-1", draft.RATE_LIMIT_MAX_ATTEMPTS - 1)
+
+    class RankingRateLimited(FakeLLM):
+        def complete(self, **kwargs):
+            if "rag_match_v1" in kwargs["user"]:
+                self.calls.append({})
+                raise rate_limited()
+            return super().complete(**kwargs)
+
+    assert run(db, "alert:da-1", RankingRateLimited([GOOD])) is None
+    row = only_draft(db)
+    assert row["draft"]["title"] == GOOD["title"] and row["warnings"] == ["rank_unavailable"]
+
+
+@db_marked
+def test_a_429_is_read_from_the_cause_or_the_error_itself(db, kb_root) -> None:
+    class Direct(LLMPermanent):
+        status_code = 429
+
+    class WithResponse(Exception):
+        response = type("R", (), {"status_code": 429})()
+
+    decided_alert(db)
+    via_response = LLMPermanent("x")
+    via_response.__cause__ = WithResponse()
+    for error in (Direct("429"), via_response):
+        db.execute("DELETE FROM knowledge_drafts")
+        assert isinstance(run(db, "alert:da-1", FakeLLM(raises=error)), Reschedule)
+    assert not draft._rate_limited(LLMPermanent("DeepSeek call failed: 429 in the text only"))
+    assert not draft._rate_limited(LLMPermanent("x"))
 
 
 @db_marked
