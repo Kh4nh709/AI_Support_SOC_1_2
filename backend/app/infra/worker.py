@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 
 import psycopg
 from psycopg import sql
@@ -39,6 +39,7 @@ def run_forever(
     once: bool = False,
     sleep_s: float = 1.0,
     timeouts: Mapping[str, str] | None = None,
+    claim_order: Sequence[Sequence[str]] | None = None,
 ) -> None:
     """Claim-dispatch-finish, forever (or once).
 
@@ -53,16 +54,30 @@ def run_forever(
     (claim included) and returns, whether or not a job was found; this
     function never closes `conn` — the caller who built it via `conn_factory`
     owns its lifetime.
+
+    `claim_order` (P13 fix wave, item 21) is a list of job-type groups claimed one after the other: the first
+    group with a due job wins, however old the other groups' jobs are. `None` is the single claim over all the
+    handlers' types, oldest first, which is what the main worker does. The `rag-worker` passes
+    `[["rag_lookup"], ["knowledge_draft"]]` so a lookup never waits behind a draft. The groups must name
+    exactly the handlers' types, each once (`ValueError`): a type left out would never be claimed.
     """
     timeouts = timeouts or {}
     conn = conn_factory()
     job_types = list(handlers.keys())
+    groups = [job_types] if claim_order is None else [list(group) for group in claim_order]
+    named = [name for group in groups for name in group]
+    if sorted(named) != sorted(job_types):
+        raise ValueError("claim_order: the groups must name each of the handlers' job types once")
     while True:
         reclaim_stale(conn, job_types)
         conn.commit()
 
-        job = claim_job(conn, job_types)
-        conn.commit()
+        job = None
+        for group in groups:
+            job = claim_job(conn, group)
+            conn.commit()
+            if job is not None:
+                break
 
         if job is None:
             if once:

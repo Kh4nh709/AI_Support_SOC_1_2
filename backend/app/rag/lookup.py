@@ -5,6 +5,8 @@ the `rag-worker` and never blocks ① or ②: they read the newest stored row of
 time and carry on without it when there is none. One lookup, in order:
 
 1. the idle timeout is raised (a model call is client-side idle time to PostgreSQL);
+1b. an alert whose ① has finished (`alerts.triage_status` is not `pending`) is skipped: no call, nothing
+   stored (`rag_results.status` has no `skipped`), because the lookup arrived too late for any prompt;
 2. the subject is parsed, its fingerprint built, its self-exclusion and its decision history computed
    (no model: analysts' decisions need no approval);
 3. the budget: when the global cap or the RAG's own is reached, a `budget` row is written (the history
@@ -312,6 +314,18 @@ def _over_budget(conn: psycopg.Connection, cfg: config.Config) -> bool:
     return rag_spent_or_exhausted(conn, cfg) >= cfg.RAG_MONTHLY_USD_CAP
 
 
+def _triage_has_finished(conn: psycopg.Connection, subject: Subject) -> bool:
+    """Whether the alert's ① is done with it: `alerts.triage_status` is `ready` or `unavailable`, no longer
+    `pending`. A case is never late (② reads the lookup when its own job runs), and an alert that is not
+    there is not "finished": the fingerprint says so with the `PermanentError` it always did."""
+    if subject.kind != "alert":
+        return False
+    row = conn.execute(
+        "SELECT triage_status FROM alerts WHERE alert_id = %s", (subject.id,)
+    ).fetchone()
+    return row is not None and row[0] != "pending"
+
+
 def run_lookup_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = None) -> None:
     """Run one lookup (module doc). `adapter` defaults to a `DeepSeekAdapter` limited to the RAG
     budget; every test passes a fake."""
@@ -328,6 +342,12 @@ def run_lookup_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
         raise PermanentError(
             "rag_lookup: the job's subject is neither 'alert:<id>' nor 'case:<uuid>'"
         ) from None
+
+    if _triage_has_finished(conn, subject):
+        # ① read the newest lookup when it ran, and it has run: this one could reach no prompt, and a model
+        # call would be paid for nothing (a lookup queued behind other jobs is how it comes to be late)
+        _log({"rag_lookup": "skipped", "reason": "late", "subject": subject.key})
+        return
 
     fp = _fingerprint_of(conn, subject)  # PermanentError when the subject is not there
     exclusion = self_exclusion(conn, subject)

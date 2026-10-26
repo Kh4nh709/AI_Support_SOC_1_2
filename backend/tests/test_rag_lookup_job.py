@@ -963,6 +963,55 @@ def test_the_idle_timeout_is_raised_for_the_model_call(db) -> None:
     assert before != after and after == "5min"  # JOB_LOCK_TIMEOUT_S = 300
 
 
+# ── a lookup that came too late ────────────────────────────────────────────────────────────
+
+
+def triage_status(db, alert_id: str, status: str) -> None:
+    db.execute("UPDATE alerts SET triage_status = %s WHERE alert_id = %s", (status, alert_id))
+
+
+@pytest.mark.parametrize("status", ["ready", "unavailable"])
+def test_a_lookup_for_an_alert_that_triage_has_finished_is_not_paid_for(
+    db, kb_root, status
+) -> None:
+    """P13 fix wave, item 21 (Minor 1): ① read the newest lookup when it ran, 45 s after the alert; a
+    lookup that starts after ① has finished (`ready`) or gave up (`unavailable`) can reach no prompt. The job
+    returns before the history, the candidates and the model: no call, no row, no run."""
+    alert(db, "ra-late", status="queued_tier1")
+    triage_status(db, "ra-late", status)
+    fake = FakeLLM([])
+
+    assert run(db, "alert:ra-late", fake) is None
+
+    assert fake.calls == []
+    assert db.execute("SELECT count(*) FROM rag_results").fetchone()[0] == 0
+    assert (
+        db.execute("SELECT count(*) FROM llm_runs WHERE subject_id = 'ra-late'").fetchone()[0] == 0
+    )
+
+
+def test_a_lookup_for_an_alert_still_waiting_for_triage_runs(db, kb_root) -> None:
+    alert(db, "ra-wait", status="queued_tier1")
+    assert db.execute("SELECT triage_status FROM alerts WHERE alert_id = 'ra-wait'").fetchone() == (
+        "pending",
+    )
+    run(db, "alert:ra-wait", FakeLLM([]))
+    assert db.execute("SELECT count(*) FROM rag_results").fetchone()[0] == 1
+
+
+def test_the_triage_status_is_not_asked_of_a_case(db, kb_root) -> None:
+    """A case has no `triage_status`: ② reads the lookup when its job runs, never too late."""
+    alert(db, "ca-1")
+    case_id = add_case(db, add_user(db), ["ca-1"])
+    run(db, f"case:{case_id}", FakeLLM([]))
+    assert db.execute("SELECT count(*) FROM rag_results").fetchone()[0] == 1
+
+
+def test_an_alert_that_is_not_there_is_still_permanent(db, kb_root) -> None:
+    with pytest.raises(PermanentError):
+        run(db, "alert:ra-nowhere", FakeLLM([]))
+
+
 # ── latest_lookup ─────────────────────────────────────────────────────────────────────────────
 
 
