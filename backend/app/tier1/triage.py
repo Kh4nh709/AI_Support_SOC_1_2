@@ -15,7 +15,7 @@ The evaluation harness calls `evaluate_alert` with B2's or B3's `EvalSwitches`, 
 is measured is what is deployed; no copy of the sequencing lives anywhere else.
 
 With `RAG_ENABLED` (P13-T07, DEC-210) the job runs `evaluate_alert` with `rag=True`: the newest
-stored lookup of the alert is read at that moment (`rag.lookup.latest_lookup`, `prompt_material`) and
+stored lookup of the alert is read at that moment (`rag.lookup.lookup_material`, in a savepoint) and
 its approved material becomes the learned section of the proposer's user message. The lookup is a
 separate job queued with ①, which is delayed to give it time (`domain.transitions`); ① never waits
 for it, and a lookup that is absent, `failed` or out of budget gives today's prompt. There is no age
@@ -70,7 +70,7 @@ from app.llm.triage import (
     propose,
     verify,
 )
-from app.rag.lookup import latest_lookup, prompt_material
+from app.rag.lookup import lookup_material
 from app.rag.subject import Subject
 from app.security import detector, gate, linter
 
@@ -624,7 +624,8 @@ def evaluate_alert(
     With `switches.rag` (P13-T07) the alert's newest stored lookup is read - two `SELECT`s, no more
     - and its approved material goes to the builder. There is no waiting and no retry: what exists
     now is used, and none, a `failed` or a `budget` lookup is today's prompt. An entry that no
-    longer passes `prompt_material`'s check is dropped from it; nothing here can fail ① because of
+    longer passes `prompt_material`'s check is dropped from it, and a database error in the read is no
+    material (a savepoint); nothing here can fail ① because of
     the lookup.
     """
     row = _load(conn, alert_id)
@@ -680,11 +681,7 @@ def evaluate_alert(
         last_seen_at=row.last_seen_at,
     )
     facts = build_facts(inp, corr)
-    material = (
-        prompt_material(conn, latest_lookup(conn, Subject("alert", alert_id)))
-        if switches.rag
-        else None
-    )
+    material = lookup_material(conn, Subject("alert", alert_id)) if switches.rag else None
     built = build_proposer_prompt(
         inp,
         facts,

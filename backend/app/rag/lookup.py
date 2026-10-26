@@ -475,6 +475,24 @@ def latest_lookup(
     return LookupResult(lookup_id, status, _history_of(history), _matches_of(matches), created_at)
 
 
+def lookup_material(
+    conn: psycopg.Connection, subject: Subject, *, statuses: Sequence[str] | None = None
+) -> PromptMaterial | None:
+    """What ① or ② may put in a prompt for `subject`: `prompt_material` of `latest_lookup`, read inside a
+    savepoint (`conn.transaction()` joins the job's open transaction as a `SAVEPOINT`), None when the
+    database refuses (P13 fix wave, item 23, Minor 3). The lookup is an extra: ① and ② must run without
+    it. Without the savepoint the one error of a read (the table a dump restored from before 020 does not
+    have, a statement timeout) aborts the whole transaction of a job that only wanted a hint, and with
+    the switches on over such a dump ingestion, decisions and escalations fail with it. The caller reads
+    this only when its switch is on, so with the switch off not one statement is added."""
+    try:
+        with conn.transaction():
+            return prompt_material(conn, latest_lookup(conn, subject, statuses=statuses))
+    except psycopg.Error as exc:
+        _log({"rag_lookup": "unreadable", "subject": subject.key, "error": type(exc).__name__})
+        return None
+
+
 def prompt_material(conn: psycopg.Connection, result: LookupResult | None) -> PromptMaterial | None:
     """What ① or ② may put in its prompt for `result`, or None when it may put nothing, not even the
     sentence that says nothing was found: no lookup, or one that `failed` or ran out of `budget`.

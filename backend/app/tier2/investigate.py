@@ -54,7 +54,8 @@ whichever row its attempt writes (S7) — `llm.investigate.Spend`; and a concurr
 `conclude` cannot cost the run its row (S5) — the end of `run_investigate_job`.
 
 **The learned section (P13-T08, DEC-210, spec §7.6 to §7.9).** With `RAG_ENABLED` the job reads the
-case's newest stored lookup (`rag.lookup.latest_lookup`) and the material it may put in a prompt
+case's newest stored lookup (`rag.lookup.lookup_material`: `latest_lookup` in a savepoint, so a database
+error is no material and not a failed job) and the material it may put in a prompt
 (`prompt_material`: each entry re-checked - active, hash intact) and hands it to `dossier.build` as
 `learned`, which renders it as block 10. **② never waits**: whatever the lookup holds when the job
 runs is used - the newest `ok` or `empty` row (spec §7.6: a `failed` or `budget` refresh written after it
@@ -86,7 +87,7 @@ from app.infra.jobs import Job
 from app.llm import investigate as llm_investigate
 from app.llm.adapter import DeepSeekAdapter, LLMBudgetExceeded, LLMPermanent, cost_usd
 from app.llm.triage import prompt_version
-from app.rag.lookup import USABLE_STATUSES, latest_lookup, prompt_material
+from app.rag.lookup import USABLE_STATUSES, lookup_material
 from app.rag.subject import Subject
 from app.security import detector, wrap
 from app.security.gate import _norm
@@ -461,10 +462,7 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
     # the dossier is read in. `parse_subject` stores a case's id in lower case.
     material = None
     if cfg.RAG_ENABLED:
-        material = prompt_material(
-            conn,
-            latest_lookup(conn, Subject("case", case_id.lower()), statuses=USABLE_STATUSES),
-        )
+        material = lookup_material(conn, Subject("case", case_id.lower()), statuses=USABLE_STATUSES)
 
     try:
         dossier = dossier_mod.build(conn, case_id, nonce=nonce, cfg=cfg, learned=material)

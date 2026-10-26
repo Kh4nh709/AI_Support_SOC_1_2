@@ -31,6 +31,7 @@ from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
+import psycopg
 import pytest
 from app.infra import config
 from app.infra.errors import PermanentError, TransientError
@@ -961,6 +962,71 @@ def test_the_idle_timeout_is_raised_for_the_model_call(db) -> None:
     run(db, "alert:ra-1", FakeLLM([]))
     after = db.execute("SHOW idle_in_transaction_session_timeout").fetchone()[0]
     assert before != after and after == "5min"  # JOB_LOCK_TIMEOUT_S = 300
+
+
+# ── lookup_material: the read ① and ② make, in a savepoint ─────────────────────────────────
+
+
+def test_lookup_material_is_what_prompt_material_makes_of_the_latest_lookup(db, kb_root) -> None:
+    from tests.test_triage_rag import put_lookup
+
+    lookup_id = put_lookup(db, "ra-1", status="empty", total=0)
+    material = lookup.lookup_material(db, Subject("alert", "ra-1"))
+    assert material == lookup.prompt_material(
+        db, lookup.latest_lookup(db, Subject("alert", "ra-1"))
+    )
+    assert material is not None and material.lookup_id == lookup_id
+    assert lookup.lookup_material(db, Subject("alert", "never-seen")) is None
+    put_lookup(db, "ra-1", status="failed", minutes_ago=-5)
+    assert lookup.lookup_material(db, Subject("alert", "ra-1")) is None  # failed: nothing to show
+    kept = lookup.lookup_material(db, Subject("alert", "ra-1"), statuses=lookup.USABLE_STATUSES)
+    assert kept is not None and kept.lookup_id == lookup_id  # ② 's reading
+
+
+def test_a_database_error_in_the_read_is_no_material_and_leaves_the_transaction_usable(
+    db, kb_root, monkeypatch
+) -> None:
+    """P13 fix wave, item 23 (Minor 3): over a dump restored from before 020, `rag_results` is not there and
+    the SELECT fails. Without a savepoint that error aborts the transaction of the job that only wanted a
+    lookup: ① would lose its verdict, and the decisions and escalations after it their writes."""
+    db.execute("INSERT INTO jobs (job_type, subject_id) VALUES ('pull', 'sp-before')")
+    db.execute("ALTER TABLE rag_results RENAME TO rag_results_not_here")
+
+    assert lookup.lookup_material(db, Subject("alert", "ra-1")) is None
+
+    assert db.info.transaction_status == psycopg.pq.TransactionStatus.INTRANS  # not INERROR
+    db.execute("INSERT INTO jobs (job_type, subject_id) VALUES ('pull', 'sp-after')")
+    assert db.execute("SELECT count(*) FROM jobs WHERE subject_id LIKE 'sp-%'").fetchone()[0] == 2
+
+
+def test_a_database_error_after_the_lookup_was_read_is_no_material_too(
+    db, kb_root, monkeypatch
+) -> None:
+    from tests.test_triage_rag import put_lookup
+
+    put_lookup(
+        db,
+        "ra-1",
+        status="ok",
+        matches=[{"entry_id": str(uuid.uuid4()), "level": "giong", "content_sha256": "0" * 64}],
+    )
+    db.execute("ALTER TABLE knowledge_entries RENAME TO knowledge_entries_not_here")
+    assert lookup.lookup_material(db, Subject("alert", "ra-1")) is None
+    db.execute("SELECT 1")  # the transaction is usable
+
+
+def test_the_read_is_a_savepoint_and_only_when_it_is_asked_for(db, kb_root, monkeypatch) -> None:
+    """The savepoint is `conn.transaction()` inside the job's own transaction, entered once per read."""
+    opened: list[int] = []
+    real = db.transaction
+
+    def counting(*args, **kwargs):
+        opened.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(db, "transaction", counting)
+    lookup.lookup_material(db, Subject("alert", "ra-1"))
+    assert opened == [1]
 
 
 # ── a lookup that came too late ────────────────────────────────────────────────────────────

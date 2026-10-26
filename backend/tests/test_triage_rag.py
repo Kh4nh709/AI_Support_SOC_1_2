@@ -895,6 +895,45 @@ def test_the_gate_inputs_and_the_prompt_version_do_not_move(db, rag_on, cfg) -> 
     assert on.gate_result == off.gate_result
 
 
+def _broken_read(conn, *args, **kwargs):
+    """A lookup read the database refuses (a table a restored pre-020 dump does not have)."""
+    conn.execute("SELECT 1 FROM a_table_that_020_never_made")
+
+
+@pytest.mark.db
+def test_a_lookup_read_the_database_refuses_is_today_s_prompt_and_the_job_goes_on(
+    db, rag_on, fixed_nonce, cfg, monkeypatch
+) -> None:
+    """P13 fix wave, item 23 (Minor 3): the read sits in a savepoint, so its error does not abort the job's
+    transaction. ① still writes its rows and its verdict, and the prompt is the one without RAG."""
+    from app.rag import lookup as rag_lookup
+
+    alert_id = _seed_alert(db)
+    monkeypatch.setattr(rag_lookup, "latest_lookup", _broken_read)
+    llm = fake()
+
+    run_triage_job(db, _job(alert_id), adapter=llm)
+
+    row = proposer_row(db, alert_id)
+    assert row["rag_lookup_id"] is None and B.HEADING_LEARNED not in row["user_message"]
+    assert row["stopped_by"] is None and llm.calls
+    off = evaluate_alert(db, alert_id, adapter=fake(), cfg=cfg, switches=DEPLOYED)
+    assert row["user_message"] == off.built.prompt.user
+
+
+@pytest.mark.db
+def test_the_switch_off_opens_no_savepoint_for_a_lookup(db, rag_off, monkeypatch) -> None:
+    """Switch-off byte identity: the lookup read, and so its SAVEPOINT, is not even entered."""
+    alert_id = _seed_alert(db)
+
+    def refused(*args, **kwargs):
+        raise AssertionError("the lookup was read with RAG off")
+
+    monkeypatch.setattr(triage_module, "lookup_material", refused)
+    run_triage_job(db, _job(alert_id), adapter=fake())
+    assert proposer_row(db, alert_id)["rag_lookup_id"] is None
+
+
 @pytest.mark.db
 @pytest.mark.parametrize("status", [None, "failed", "budget"])
 def test_no_row_or_a_failed_or_budget_lookup_is_today_s_prompt_and_no_id(

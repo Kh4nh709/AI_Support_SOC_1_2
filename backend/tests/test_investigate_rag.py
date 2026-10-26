@@ -1248,6 +1248,41 @@ def test_the_job_reads_the_lookup_by_the_lower_case_subject_the_lookup_job_store
 
 
 @pytest.mark.db
+def test_a_lookup_read_the_database_refuses_is_today_s_dossier_and_the_job_goes_on(
+    db, rag_on, fixed_nonce, monkeypatch
+) -> None:
+    """P13 fix wave, item 23 (Minor 3): the read is a savepoint inside the job's REPEATABLE READ transaction,
+    so a database error in it neither aborts the transaction nor loses ②'s row."""
+    from app.rag import lookup as rag_lookup
+
+    case_id, _ = committed_case(db)
+    expected = dossier_text(db, case_id)
+
+    def broken(conn, *args, **kwargs):
+        conn.execute("SELECT 1 FROM a_table_that_020_never_made")
+
+    monkeypatch.setattr(rag_lookup, "latest_lookup", broken)
+    run(db, case_id)
+    row = run_row(db, case_id)
+    assert row["rag_lookup_id"] is None and B.HEADING_LEARNED not in row["user_message"]
+    assert row["user_message"] == expected
+
+
+@pytest.mark.db
+def test_the_switch_off_opens_no_savepoint_for_a_lookup(
+    db, rag_off, monkeypatch, fixed_nonce
+) -> None:
+    case_id, _ = committed_case(db)
+
+    def refused(*args, **kwargs):
+        raise AssertionError("the lookup was read with RAG off")
+
+    monkeypatch.setattr(tier2_investigate, "lookup_material", refused)
+    run(db, case_id)
+    assert run_row(db, case_id)["rag_lookup_id"] is None
+
+
+@pytest.mark.db
 @pytest.mark.parametrize("newer", ["failed", "budget"])
 def test_a_newer_failed_or_budget_lookup_does_not_hide_the_ok_one(
     db, rag_on, fixed_nonce, newer
