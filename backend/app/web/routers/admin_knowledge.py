@@ -7,6 +7,7 @@ The page that reads these shapes is `/admin/knowledge` (P13-T06).
     GET  /api/admin/knowledge/drafts/{draft_id}                 -> {draft, source}
     POST /api/admin/knowledge/drafts/{draft_id}/approve         {edited?}      -> {entry_id}
     POST /api/admin/knowledge/drafts/{draft_id}/reject          {reason}       -> {draft_id, status}
+    POST /api/admin/knowledge/drafts/{draft_id}/redraft                        -> {draft_id, queued}
     GET  /api/admin/knowledge/entries?status=active|retired&limit=&offset=
     GET  /api/admin/knowledge/entries/{entry_id}
     POST /api/admin/knowledge/entries/{entry_id}/retire         {reason}       -> {entry_id, status}
@@ -48,6 +49,17 @@ through `commit_publication`, which removes the file if the commit fails.
     422 {"faults": ["v3_ipv4:summary", ...]}        V1-V5 by rule and field (`rag.draft.FAULT_VOCABULARY`)
     422 {"detail": {"field": "body"|"edited", "reason": "invalid"}}    the request itself is malformed
     503 {"detail": {"reason": "publish_failed"}}    the file could not be written; nothing was stored
+
+**Redraft** takes no body. It is for a draft the model could not be asked for: `pending`, no text, and
+every warning one of `rag.draft.REDRAFTABLE_WARNINGS` (`budget`, `llm_transient`, `llm_permanent`,
+`rank_unavailable`). `rag.publish.redraft` deletes the draft and queues its `knowledge_draft` job, and writes
+`knowledge.redraft_requested {draft_id}`; the job drafts it again where the first run left nothing.
+
+    200 {draft_id, queued: true}
+    404 {"detail": {"reason": "not_found"}}
+    409 {"detail": {"reason": "not_pending" | "not_redraftable" | "drafts_disabled"}}
+
+`drafts_disabled`: `KNOWLEDGE_DRAFT_ENABLED` is false, and a re-draft is a model call the Owner switched off.
 
 **Reject** and **retire** take `{reason}` of 1-500 characters; a reason that is not is `422 {"detail":
 {"field": "reason", "reason": "required"|"invalid"}}`. Retire of an entry that is not active is `409
@@ -331,7 +343,12 @@ def _alert_source(conn: psycopg.Connection, alert_id: str) -> dict[str, Any]:
 
 
 def _case_source(conn: psycopg.Connection, cfg: Any, case_id: str) -> dict[str, Any]:
-    case = tier2_routes.case_detail(conn, case_id)
+    try:
+        uuid.UUID(case_id)
+    except ValueError:
+        case = None  # no case has this id; `WHERE case_id = <not a uuid>` would be a 500
+    else:
+        case = tier2_routes.case_detail(conn, case_id)
     investigation = None
     if case is not None:
         investigation = {
@@ -451,6 +468,22 @@ def api_reject(conn: Conn, claims: Admin, draft_id: uuid.UUID, body: JsonBody) -
     except publish.StaleDraft as exc:
         raise _refuse(409, exc.reason) from None
     return {"draft_id": str(draft_id), "status": "rejected"}
+
+
+@router.post("/api/admin/knowledge/drafts/{draft_id}/redraft")
+def api_redraft(
+    conn: Conn, cfg: Cfg, claims: Admin, draft_id: uuid.UUID, body: JsonBody
+) -> dict[str, Any]:
+    _only(body, ())
+    if not cfg.KNOWLEDGE_DRAFT_ENABLED:
+        raise _refuse(409, "drafts_disabled")
+    try:
+        publish.redraft(conn, draft_id, claims.user_id)
+    except publish.UnknownDraft:
+        raise _refuse(404, "not_found") from None
+    except publish.StaleDraft as exc:
+        raise _refuse(409, exc.reason) from None
+    return {"draft_id": str(draft_id), "queued": True}
 
 
 # ── the entries ───────────────────────────────────────────────────────────────────────────────

@@ -35,7 +35,7 @@ from app.audit.events import write_event
 from app.infra import config, settings
 from app.infra.auth import Claims
 from app.infra.jobs import enqueue
-from app.rag.lookup import latest_lookup
+from app.rag.lookup import USABLE_STATUSES, latest_lookup
 from app.rag.subject import Subject
 from app.tier2 import investigation_view
 from app.tier2.investigate import run_id_for_job
@@ -79,8 +79,10 @@ def _analyze_quota_count(conn: Any, actor_id: str) -> int:
 
 
 def _queue_case_lookup_if_stale(conn: Any, cfg: config.Config, case_id: str) -> None:
-    """P13-T08 (DEC-210, spec §7.6): with `RAG_ENABLED`, queue a `rag_lookup` for the case when its newest
-    stored lookup (whatever its status) is older than `RAG_CASE_REFRESH_H` hours, or it has none. The age is
+    """P13-T08 (DEC-210, spec §7.6): with `RAG_ENABLED`, queue a `rag_lookup` for the case when it has none,
+    when its newest stored lookup is older than `RAG_CASE_REFRESH_H` hours, or when that newest row is
+    `failed` or `budget` whatever its age (P13 fix wave, item 14: ② reads the newest `ok`/`empty` row, so a
+    `failed` or `budget` refresh is not a lookup and must not hold the next one off for hours). The age is
     read against the database's clock, like every control timestamp. Single-flight (`enqueue`) keeps a
     lookup that is already queued or running. Nothing here waits: ② reads whatever lookup exists when the
     investigation job runs, and a lookup queued now serves the next analysis. Written in the request's
@@ -88,7 +90,7 @@ def _queue_case_lookup_if_stale(conn: Any, cfg: config.Config, case_id: str) -> 
     if not cfg.RAG_ENABLED:
         return
     latest = latest_lookup(conn, Subject("case", case_id.lower()))
-    if latest is not None:
+    if latest is not None and latest.status in USABLE_STATUSES:
         (stale,) = conn.execute(
             "SELECT %s::timestamptz < now() - %s * interval '1 hour'",
             (latest.created_at, cfg.RAG_CASE_REFRESH_H),

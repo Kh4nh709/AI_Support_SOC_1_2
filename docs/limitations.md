@@ -875,6 +875,43 @@ the Measured paragraph of item (ix) in section B.
   means this detector and the admin's reading, and nothing more. It does not change the claims about ① and ②
   themselves, whose gate does not read the detector (xxviii).
 
+### (xlix) · Learned knowledge: the ranking agent reads attacker-shaped log text, there is one `rag-worker` only, one database role serves all three services, and V4's structure rule has residual bypasses
+
+- **Statement.** Four limits of the learned-knowledge feature (DEC-210), each real only once a switch is on:
+  1. **The ranking agent reads log text an attacker can shape.** The prompt of the lookup and of the draft's
+     ranking (`rag/match.py`) carries the subject's fingerprint, which is made of the alert's description and a
+     generalised raw log. A source that controls a log line can steer which approved entry the agent shows and
+     at which level, can force the auto-merge of a draft into an entry (which skips the admin and adds the
+     source to the entry's evidence and source ids), and can force a conflict (which puts the draft first in
+     the admin's queue). The text is inside an untrusted block and the agent's answer is a closed schema, so
+     none of this moves a verdict of ① or ②; it moves what is shown as reference and what the admin is asked
+     to review. **The "Đã gộp" tab of the admin console is where merges are audited**: read it.
+  2. **One `rag-worker` only.** The merge rule and the draft are not safe against two workers: two drafts of
+     the same entry can race the merge (T04), and a `knowledge_draft` job can make up to six model calls and
+     run past `JOB_LOCK_TIMEOUT_S`, so a second worker would reclaim it while the first still runs and pay for
+     it twice. Nothing prevents `docker compose up -d --scale rag-worker=2`: do not.
+  3. **One `app_rw` role serves `app`, `worker` and `rag-worker`.** The database has no role of its own for the
+     RAG: `rag-worker` has the rights of the main worker over `alerts`, `cases` and the rest, and `app` those
+     of the admin routes over `knowledge_entries`. A compromise of any of the three is a compromise of what
+     the role can write (the append-only tables stay append-only for it, `rag_results` included).
+  4. **The structure rule of V4 is a regular expression, and it has residual bypasses.** `v4_structure`
+     (`llm.builder.has_forged_structure`) refuses a line that opens with `[<digits>]` or with a key of the
+     decision history, after the invisible code points are deleted and NFKC has folded the look-alikes. A line
+     it does not fold still passes: a combining mark (U+0301) in front of `[1]`, the ideographic brackets
+     `【1】`, the superscript parentheses `⁽1⁾`, and the key in capitals (`LEVEL:`). Such a line can mislead
+     the reading of the `kb_learned` block (a numbering or a history line that is not the system's), never a
+     verdict, a level fact or a schema. **The admin's review is the gate**, as for V4's phrase list (xlviii).
+- **Measured.** Not measured. (1) follows from the prompt of `rag/match.py` and was exercised by hand with
+  crafted log text only in the unit tests of the injection checks; (2) by construction of `infra/jobs.py` and
+  `rag/draft.py`; (3) by `docker-compose.yml` and `docker-compose.rag.yml`, which give all three services the
+  same `DATABASE_URL`.
+- **Source.** DEC-210; spec `docs/superpowers/specs/2026-10-24-learned-knowledge-rag-design.md` §7.3, §7.7 and
+  §7.9; `backend/app/rag/match.py`; `backend/app/rag/draft.py`; `docker-compose.rag.yml`; the whole-branch
+  review of P13 (`whole-branch-review-r1.md`, Minor 7 and the wave items).
+- **Affects.** Any claim that a lookup or a merge shows only what an analyst's conclusions justify: the
+  approval of a draft and the audit of merges are the controls, not the agent. The supported deployment is
+  one `rag-worker` and the single role.
+
 ## F. What the thesis must not claim
 
 ### (xxxviii) · Only Wazuh, no detection; no "MTTD", no "ATT&CK coverage"

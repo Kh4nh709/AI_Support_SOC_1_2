@@ -127,8 +127,20 @@ def test_main_runs_the_loop_with_the_rag_handlers_only(monkeypatch) -> None:
     seen = run_main(monkeypatch, [])
     assert seen["handlers"] == rag_handlers.iter_handlers()
     assert set(seen["handlers"]) == EXPECTED_TYPES
-    assert seen["kwargs"] == {"once": False, "timeouts": rag_handlers.iter_timeouts()}
+    assert seen["kwargs"] == {
+        "once": False,
+        "timeouts": rag_handlers.iter_timeouts(),
+        "claim_order": [["rag_lookup"], ["knowledge_draft"]],
+    }
     assert seen["conn"] is seen["expected_conn"]
+
+
+def test_the_rag_worker_claims_every_lookup_before_any_draft() -> None:
+    """P13 fix wave, item 21 (Minor 1): `claim_job` takes the oldest due job, and a lookup is on every
+    alert while a draft is only on a conclusion, so lookups queued behind drafts arrive after ① has run.
+    """
+    assert rag_worker.CLAIM_ORDER == [["rag_lookup"], ["knowledge_draft"]]
+    assert {t for group in rag_worker.CLAIM_ORDER for t in group} == set(rag_worker.HANDLERS)
 
 
 def test_main_once_runs_one_cycle(monkeypatch) -> None:

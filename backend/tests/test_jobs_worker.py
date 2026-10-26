@@ -491,6 +491,97 @@ def test_run_forever_reschedule_enqueues_only_after_finish_job_commits(db):
 
 
 @pytest.mark.db
+def test_a_knowledge_draft_rescheduled_to_next_month_is_a_pending_row_nobody_can_claim_yet(db):
+    """P13 fix wave, item 20 (I1): what `Reschedule` does to a `knowledge_draft` job. The old row is
+    `succeeded`, a new `pending` row for the same subject is due `delay_s` seconds after the database's
+    `now()` (31 days here), `claim_job` leaves it alone until then, and it is no job backlog."""
+    from app.infra import health
+
+    jobs.enqueue(db, "knowledge_draft", "alert:wf-month-1")
+    month = 31 * 24 * 3600
+
+    def handler(conn, job):
+        return jobs.Reschedule(month)
+
+    worker.run_forever(lambda: db, {"knowledge_draft": handler}, once=True)
+    try:
+        rows = db.execute(
+            "SELECT status, round(extract(epoch from scheduled_at - now())) FROM jobs"
+            " WHERE job_type = 'knowledge_draft' AND subject_id = 'alert:wf-month-1'"
+            " ORDER BY status"
+        ).fetchall()
+        assert [r[0] for r in rows] == ["pending", "succeeded"]
+        assert abs(rows[0][1] - month) <= 5
+        assert jobs.claim_job(db, ["knowledge_draft"]) is None
+        assert health._check_job_backlog(db).ok is True
+    finally:
+        db.execute("DELETE FROM jobs WHERE subject_id = 'alert:wf-month-1'")
+        db.commit()
+
+
+@pytest.mark.db
+def test_claim_order_tries_each_group_in_turn_and_the_default_stays_the_oldest_first(db):
+    """P13 fix wave, item 21: `claim_order` is a list of job-type groups; the first group with a due job
+    wins, whatever the age of the other groups' jobs. Without it, `claim_job`'s oldest-first order over all
+    the handlers' types is exactly what it was (the main worker passes none)."""
+    ran: list[str] = []
+
+    def handler(conn, job):
+        ran.append(job.job_type)
+
+    handlers = {"rag_lookup": handler, "knowledge_draft": handler}
+    subjects = ("wf-order-draft", "wf-order-lookup")
+    try:
+        for order in (None, [["rag_lookup"], ["knowledge_draft"]]):
+            ran.clear()
+            db.execute("DELETE FROM jobs WHERE subject_id = ANY(%s)", (list(subjects),))
+            db.execute(
+                "INSERT INTO jobs (job_type, subject_id, scheduled_at)"
+                " VALUES ('knowledge_draft', 'wf-order-draft', now() - interval '10 minutes'),"
+                " ('rag_lookup', 'wf-order-lookup', now() - interval '1 minute')"
+            )
+            db.commit()
+            kwargs = {} if order is None else {"claim_order": order}
+            worker.run_forever(lambda: db, handlers, once=True, **kwargs)
+            worker.run_forever(lambda: db, handlers, once=True, **kwargs)
+            assert ran == (
+                ["knowledge_draft", "rag_lookup"]
+                if order is None
+                else ["rag_lookup", "knowledge_draft"]
+            )
+    finally:
+        db.execute("DELETE FROM jobs WHERE subject_id = ANY(%s)", (list(subjects),))
+        db.commit()
+
+
+@pytest.mark.db
+def test_a_group_with_no_due_job_falls_through_to_the_next(db):
+    ran: list[str] = []
+    try:
+        jobs.enqueue(db, "knowledge_draft", "wf-order-only-draft")
+        worker.run_forever(
+            lambda: db,
+            {
+                "rag_lookup": lambda c, j: ran.append("lookup"),
+                "knowledge_draft": lambda c, j: ran.append("draft"),
+            },
+            once=True,
+            claim_order=[["rag_lookup"], ["knowledge_draft"]],
+        )
+        assert ran == ["draft"]
+    finally:
+        db.execute("DELETE FROM jobs WHERE subject_id = 'wf-order-only-draft'")
+        db.commit()
+
+
+def test_claim_order_must_name_exactly_the_handlers_types():
+    handlers = {"rag_lookup": lambda c, j: None, "knowledge_draft": lambda c, j: None}
+    for order in ([["rag_lookup"]], [["rag_lookup"], ["knowledge_draft", "pull"]], [[]]):
+        with pytest.raises(ValueError, match="claim_order"):
+            worker.run_forever(lambda: None, handlers, once=True, claim_order=order)
+
+
+@pytest.mark.db
 def test_run_forever_uses_a_longer_timeout_when_given_one_for_the_job_type(db):
     """Design note 4's per-job-type timeout, option B (a second mapping)."""
     jobs.enqueue(db, "investigate", "wf-timeout-1")

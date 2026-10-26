@@ -9,7 +9,7 @@ against the migrated test database:
 * `llm_runs`: `rag_lookup_id`; the two new pipelines `rag_lookup` and `knowledge_draft`, each of
   which may run on an `alert` or a `case` (① stays on `alert`, ② on `case`); the two new roles
   `retriever` and `drafter`;
-* `jobs`: the two new job types; `audit_events`: the seven new event types (28 -> 35);
+* `jobs`: the two new job types; `audit_events`: the eight new event types (28 -> 36);
 * the expression index `ix_alerts_soar_dedup_key` the history query uses;
 * `app_rw`'s rights on the three tables, granted by 020 itself (the way 019 does it).
 
@@ -51,7 +51,7 @@ CONCLUSIONS = (
     "confirmed_incident",
 )
 
-# 019's 28 names, in 019's order, then the seven of 020 in DEC-210's order.
+# 019's 28 names, in 019's order, then the eight of 020 in DEC-210's order.
 EVENTS_BEFORE_020 = [
     "alert.received",
     "alert.duplicate_merged",
@@ -90,6 +90,7 @@ EVENTS_IN_020 = [
     "knowledge.merged",
     "rag.lookup_failed",
     "rag.integrity_failed",
+    "knowledge.redraft_requested",  # added in the P13 fix wave (item 20): 020 is applied nowhere yet
 ]
 
 TABLES = ("knowledge_drafts", "knowledge_entries", "rag_results")
@@ -833,9 +834,9 @@ def _event_names(db) -> list[str]:
     return _quoted(_constraint_def(db, "audit_events", "ck_audit_event_type"))
 
 
-def test_the_event_constraint_holds_35_names_the_28_first_in_order(db):
+def test_the_event_constraint_holds_36_names_the_28_first_in_order(db):
     names = _event_names(db)
-    assert len(names) == len(set(names)) == 35
+    assert len(names) == len(set(names)) == 36
     assert names[:28] == EVENTS_BEFORE_020
     assert names[28:] == EVENTS_IN_020
 
@@ -889,7 +890,11 @@ def test_the_history_query_can_use_the_expression_index(db):
 # ── grants ──────────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("table", TABLES)
+#: `rag_results` is append-only (P13 fix wave, item 27): a lookup is stored once and read, nothing updates it.
+APPEND_ONLY = "rag_results"
+
+
+@pytest.mark.parametrize("table", [t for t in TABLES if t != APPEND_ONLY])
 def test_app_rw_holds_select_insert_update(db, table):
     held = {
         privilege: db.execute(
@@ -900,7 +905,72 @@ def test_app_rw_holds_select_insert_update(db, table):
     assert held == {"SELECT": True, "INSERT": True, "UPDATE": True}
 
 
-def test_app_rw_reads_writes_and_updates_all_three_tables(db):
+def test_app_rw_holds_select_and_insert_on_rag_results_and_nothing_that_changes_a_row(db):
+    held = {
+        privilege: db.execute(
+            "SELECT has_table_privilege('app_rw', %s, %s)", (APPEND_ONLY, privilege)
+        ).fetchone()[0]
+        for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE")
+    }
+    assert held == {
+        "SELECT": True,
+        "INSERT": True,
+        "UPDATE": False,
+        "DELETE": False,
+        "TRUNCATE": False,
+    }
+
+
+def test_app_rw_may_delete_a_draft_for_the_redraft(db):
+    """P13 fix wave, item 20: `rag.publish.redraft` deletes a text-less draft. 020 grants that DELETE
+    itself (the other-role scenario below pins it), since 017's defaults give it only to the role that ran
+    017."""
+    draft_id = _draft(db)
+    with db.transaction(force_rollback=True):
+        db.execute("SET LOCAL ROLE app_rw")
+        db.execute("DELETE FROM knowledge_drafts WHERE draft_id = %s", (draft_id,))
+        gone = db.execute("SELECT count(*) FROM knowledge_drafts WHERE draft_id = %s", (draft_id,))
+        assert gone.fetchone()[0] == 0
+
+
+def test_app_rw_cannot_update_or_delete_a_stored_lookup(db):
+    lookup_id = str(uuid.uuid4())
+    _result(db, lookup_id=lookup_id)
+    for statement in (
+        "UPDATE rag_results SET status = 'failed' WHERE lookup_id = %s",
+        "DELETE FROM rag_results WHERE lookup_id = %s",
+    ):
+        with db.transaction(force_rollback=True):
+            db.execute("SET LOCAL ROLE app_rw")
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                db.execute(statement, (lookup_id,))
+    assert (
+        db.execute(
+            "SELECT count(*) FROM rag_results WHERE lookup_id = %s", (lookup_id,)
+        ).fetchone()[0]
+        == 1
+    )
+
+
+def test_020_says_what_rag_lookup_id_is_and_when_it_is_null():
+    """P13 fix wave, item 12 (T07): the comment said NULL for every run that is not a lookup's own, but
+    ① and ② rows carry the lookup their prompt held. The migration is unapplied on any live host, so its
+    comment is corrected where it stands."""
+    text = (SCHEMA_DIR / "020_learned_knowledge.sql").read_text(encoding="utf-8")
+    assert "NULL for every run that is not a lookup's own" not in text
+    comment = text[text.index("`llm_runs`: `rag_lookup_id`") :].split("\n--   3.", 1)[0]
+    comment = re.sub(r"\s*\n--\s*", " ", comment)  # the comment as one line
+    for phrase in (
+        "run's own lookup",  # a rag_lookup run
+        "on a ① or ② row",  # the proposer / investigator rows
+        "learned section reached the prompt",  # set only when the section was in the prompt
+        "token budget cut the whole section",  # and NULL when it was all cut
+        "RAG is off",
+    ):
+        assert phrase in comment, phrase
+
+
+def test_app_rw_reads_and_writes_all_three_tables_and_updates_two(db):
     user_id = _user(db)
     entry_id = str(uuid.uuid4())
     lookup_id = str(uuid.uuid4())
@@ -916,7 +986,6 @@ def test_app_rw_reads_writes_and_updates_all_three_tables(db):
         db.execute(
             "UPDATE knowledge_entries SET status = 'retired' WHERE entry_id = %s", (entry_id,)
         )
-        db.execute("UPDATE rag_results SET status = 'failed' WHERE lookup_id = %s", (lookup_id,))
         counts = [db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in TABLES]
     assert all(count >= 1 for count in counts)
 
@@ -1062,8 +1131,9 @@ def test_app_rw_holds_the_three_tables_when_020_is_applied_by_another_role(tmp_p
                 assert held == {
                     "SELECT": True,
                     "INSERT": True,
-                    "UPDATE": True,
-                    "DELETE": False,
+                    "UPDATE": table != APPEND_ONLY,
+                    "DELETE": table
+                    == "knowledge_drafts",  # the admin's re-draft deletes a text-less draft
                     "TRUNCATE": False,
                 }, table
     finally:

@@ -751,6 +751,12 @@ const ENTRIES: Entry[] = [
       dictKeys(knowledge(), /return \{(?=\s*"draft_id": str\(draft_id\),\s*"status": "rejected")/),
   },
   {
+    path: "fn:redraftKnowledgeDraft",
+    keys: ["draft_id", "queued"],
+    backend: () =>
+      dictKeys(knowledge(), /return \{(?=\s*"draft_id": str\(draft_id\),\s*"queued": True)/),
+  },
+  {
     path: "fn:retireKnowledgeEntry",
     keys: ["entry_id", "status"],
     backend: () =>

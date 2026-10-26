@@ -328,11 +328,10 @@ def _id_text(value: str) -> str:
 
 
 def render_history(h: History) -> str:
-    """One `key: value` line per field, for the `decision_history` block."""
-    other = sorted(name for name in h.by_conclusion if name not in CONCLUSIONS)
-    conclusions = ", ".join(
-        f"{name}={h.by_conclusion.get(name, 0)}" for name in [*CONCLUSIONS, *other]
-    )
+    """One `key: value` line per field, for the `decision_history` block. `by_conclusion` is the six
+    names of `CONCLUSIONS` and nothing else: a key outside them (a stored history is data) is not written.
+    """
+    conclusions = ", ".join(f"{name}={h.by_conclusion.get(name, 0)}" for name in CONCLUSIONS)
     last_seen = "none" if h.last_seen is None else h.last_seen.astimezone(UTC).date().isoformat()
     examples = ", ".join(_id_text(alert_id) for alert_id in h.examples) or "none"
     return "\n".join(

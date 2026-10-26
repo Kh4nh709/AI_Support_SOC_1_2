@@ -235,6 +235,25 @@ def test_a_paragraph_that_starts_with_a_hash_is_escaped() -> None:
     assert [line for line in text.splitlines() if line.startswith("## ")].count("## Giới hạn") == 1
 
 
+def test_a_list_item_that_starts_with_a_hash_is_escaped_as_a_paragraph_is() -> None:
+    """P13 fix wave, item 8 (T02): `- ## Giới hạn` is a heading inside a list item to a Markdown reader."""
+    text = render_entry_markdown(
+        {
+            **FIELDS,
+            "distinguishing_signals": ["## Giới hạn: giả", "#hashtag", "bình thường # ở giữa"],
+            "check_next_time": ["  # H1 sau khoảng trắng"],
+        }
+    )
+    assert "\n- \\## Giới hạn: giả\n" in text
+    assert "\n- \\#hashtag\n" in text
+    assert "\n- bình thường # ở giữa\n" in text  # only a leading hash is a heading
+    assert "\n- \\# H1 sau khoảng trắng\n" in text
+    assert [line for line in text.splitlines() if line.startswith("## ")].count("## Giới hạn") == 1
+    assert not [
+        line for line in text.splitlines() if line.startswith("- #")
+    ]  # no bullet is a heading
+
+
 def test_a_title_that_yaml_would_read_as_something_else_stays_text() -> None:
     for title in ("no", "true", "null", "123", "1e3", "a: b", "- x", "'q'", "#c", "@a", "`x`"):
         meta = _front_matter(render_entry_markdown({**FIELDS, "title": title}))

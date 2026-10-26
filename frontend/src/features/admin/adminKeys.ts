@@ -100,6 +100,7 @@ export const ADMIN_INVALIDATES = {
   // audit page shows the event; the tag list does not change, and is refetched with the rest, which costs nothing.
   approveKnowledgeDraft: [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll],
   rejectKnowledgeDraft: [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll],
+  redraftKnowledgeDraft: [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll],
   retireKnowledgeEntry: [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll],
 } as const;
 

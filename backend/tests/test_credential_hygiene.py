@@ -406,7 +406,12 @@ def standin(_test_database):
 
 
 def _make_db_restore(
-    tmp_path: Path, target_dsn: str, dump: Path, *make_vars: str, path_pg_restore: int = 0
+    tmp_path: Path,
+    target_dsn: str,
+    dump: Path,
+    *make_vars: str,
+    path_pg_restore: int = 0,
+    compose_fails_on: str | None = None,
 ):
     """`make db-restore` run from a scratch directory whose `.env` names `target_dsn`.
 
@@ -414,12 +419,16 @@ def _make_db_restore(
     tries to stop or start is written to `calls`, and nothing real is touched. With
     `path_pg_restore`, PATH's `pg_restore` also reports that major version and hands every
     other call to the real one: a host whose PATH client differs from the server, simulated
-    without installing anything. Returns (exit code, output, the recorded calls)."""
+    without installing anything. With `compose_fails_on`, a compose call whose arguments contain that
+    word is recorded and fails (exit 1): the RAG override is not in use, so `rag-worker` is no service.
+    Returns (exit code, output, the recorded calls)."""
     work = tmp_path / "work"
     fakebin = work / "bin"
     fakebin.mkdir(parents=True)
     calls = work / "calls"
     scripts = {tool: f'echo "$*" >> "{calls}"\n' for tool in ("compose", "docker")}
+    if compose_fails_on:
+        scripts["compose"] += f'case "$*" in *{compose_fails_on}*) exit 1;; esac\n'
     if path_pg_restore:
         scripts["pg_restore"] = (
             f'[ "$1" = --version ] && {{ echo "pg_restore (PostgreSQL) {path_pg_restore}.0"; '
@@ -551,12 +560,46 @@ def test_db_restore_replaces_the_database_from_a_readable_dump(_test_database, s
     rc, out, calls = _make_db_restore(tmp_path, dsn, dump)
 
     assert rc == 0, out
-    assert calls == ["stop app worker", "up -d app worker"], out
+    # P13 fix wave, item 10: rag-worker holds a connection to the database too, and a held connection
+    # fails the drop; it is stopped with the other two, after the dump was read and before the drop
+    assert calls == ["stop app worker", "stop rag-worker", "up -d app worker"], out
     assert f"db-restore: {dump} → {name} ({MIGRATIONS} migrations)\n" in out, out
     with psycopg.connect(dsn) as conn:
         assert conn.execute("SELECT to_regclass('public.restore_marker')").fetchone()[0] is None
         assert conn.execute("SELECT count(*) FROM schema_migrations").fetchone()[0] == MIGRATIONS
     assert "://" not in out, out
+
+
+@pytest.mark.db
+def test_db_restore_goes_on_when_rag_worker_is_not_a_service(_test_database, standin, tmp_path):
+    """Without the RAG override `docker compose stop rag-worker` fails ("no such service"). That is not
+    a reason to leave the database unrestored: the stop is tolerated and the restore is done."""
+    name, dsn = standin
+    dump = _readable_dump(tmp_path, _test_database)
+
+    rc, out, calls = _make_db_restore(tmp_path, dsn, dump, compose_fails_on="rag-worker")
+
+    assert rc == 0, out
+    assert calls == ["stop app worker", "stop rag-worker", "up -d app worker"], out
+    assert f"db-restore: {dump} → {name} ({MIGRATIONS} migrations)\n" in out, out
+    with psycopg.connect(dsn) as conn:
+        assert conn.execute("SELECT to_regclass('public.restore_marker')").fetchone()[0] is None
+
+
+@pytest.mark.db
+def test_db_restore_still_fails_when_app_and_worker_cannot_be_stopped(
+    _test_database, standin, tmp_path
+):
+    """Only the rag-worker stop is tolerated: if `stop app worker` fails, nothing is dropped."""
+    name, dsn = standin
+    oid = _database_oid(_test_database, name)
+    dump = _readable_dump(tmp_path, _test_database)
+
+    rc, out, calls = _make_db_restore(tmp_path, dsn, dump, compose_fails_on="app")
+
+    assert rc != 0 and "FAILED stopping app and worker" in out and "nothing was dropped" in out, out
+    assert "stop rag-worker" not in calls
+    assert _database_oid(_test_database, name) == oid and _marker_rows(dsn) == 3
 
 
 @pytest.mark.db

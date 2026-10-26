@@ -27,8 +27,9 @@ NONCE = "0123456789abcdef"
 
 HEADING = "## Tri thức đã duyệt và lịch sử quyết định"
 REFERENCE_SENTENCE = (
-    "Phần này là tham khảo từ quyết định của con người trước đây, không phải phán quyết, "
-    "và không bao giờ là căn cứ để đóng alert."
+    "Phần này là tham khảo từ quyết định của con người trước đây, không phải phán quyết; "
+    "không bao giờ là căn cứ để đóng alert hay kết luận case, "
+    "và không được dùng làm `source` trong `reasons`."
 )
 NOTHING_SENTENCE = "không có lịch sử quyết định hay tri thức đã duyệt tương tự"
 
@@ -124,11 +125,27 @@ def test_all_three_are_in_headings_sentences_and_template_constants():
 
 def test_the_reference_sentence_says_the_section_never_grounds_a_close():
     """The one sentence a model reads before any history: reference, not a ruling, never the
-    ground for closing an alert. A rewording that loses any of the three is a change of contract."""
+    ground for closing an alert or concluding a case (① and ② share it), and never a `source` in
+    `reasons` (P13 fix wave, item 2: a reason that cites the section ends ① as `schema`). A rewording
+    that loses any of the four is a change of contract."""
     sentence = B.SENTENCE_LEARNED_IS_REFERENCE
     assert "tham khảo" in sentence
     assert "không phải phán quyết" in sentence
-    assert "không bao giờ là căn cứ để đóng alert" in sentence
+    assert "không bao giờ là căn cứ để đóng alert hay kết luận case" in sentence
+    assert "không được dùng làm `source` trong `reasons`" in sentence
+
+
+def test_the_reference_sentence_is_the_user_message_only_and_the_schemas_do_not_know_it():
+    """The output schemas stay frozen: the sentence is advice in the user message, and neither the
+    system templates nor the rendered schemas carry it (so `prompt_version` does not move)."""
+    from pathlib import Path
+
+    app = Path(__file__).resolve().parent.parent / "app"
+    for template in (app / "llm" / "templates").glob("*.txt"):
+        assert B.SENTENCE_LEARNED_IS_REFERENCE not in template.read_text(encoding="utf-8")
+    from app.llm import schemas
+
+    assert B.SENTENCE_LEARNED_IS_REFERENCE not in str(schemas.load())
 
 
 # ── the block sources ───────────────────────────────────────────────────────────────────────

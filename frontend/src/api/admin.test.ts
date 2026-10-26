@@ -28,6 +28,7 @@ import {
   parseAdminDetail,
   postLabel,
   putLlmLimits,
+  redraftKnowledgeDraft,
   rejectKnowledgeDraft,
   reloadInventory,
   resetPassword,
@@ -311,6 +312,13 @@ const CALLS: Call[] = [
     body: { reason: "trùng với mục khác" },
   },
   {
+    name: "redraftKnowledgeDraft",
+    run: () => redraftKnowledgeDraft(DRAFT_ID),
+    method: "POST",
+    path: `/api/admin/knowledge/drafts/${DRAFT_ID}/redraft`,
+    body: {},
+  },
+  {
     name: "listKnowledgeEntries",
     run: () => listKnowledgeEntries("retired"),
     method: "GET",
@@ -397,6 +405,7 @@ describe("every admin write sends a JSON body", () => {
       `POST /api/admin/knowledge/drafts/${DRAFT_ID}/approve`,
       `POST /api/admin/knowledge/drafts/${DRAFT_ID}/approve`,
       `POST /api/admin/knowledge/drafts/${DRAFT_ID}/reject`,
+      `POST /api/admin/knowledge/drafts/${DRAFT_ID}/redraft`,
       `POST /api/admin/knowledge/entries/${ENTRY_ID}/retire`,
     ]);
   });

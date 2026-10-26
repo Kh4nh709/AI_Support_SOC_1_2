@@ -39,7 +39,7 @@ help:
 	@echo "  down        docker compose down (the pgdata volume is kept)"
 	@echo "  db-up       start only the db container and wait until it is healthy"
 	@echo "  db-shell    psql on DATABASE_URL_OWNER from .env"
-	@echo "  db-restore  FILE=backups/x.dump — replace the live database with a dump (stops app+worker)"
+	@echo "  db-restore  FILE=backups/x.dump — replace the live database with a dump (stops app+worker, and rag-worker when it is a service)"
 	@echo "  logs        docker compose logs -f --tail=100"
 	@echo "  run-app     the app container on :$(APP_PORT) (docker compose up -d db app)"
 	@echo "  run-worker  the worker container (docker compose up -d db worker)"
@@ -123,6 +123,10 @@ db-shell:
 # The real-recovery tool (a rehearsal is scripts/restore.sh): it stops app and worker
 # so no connection holds the database open, drops and recreates the database that
 # .env's DATABASE_URL_OWNER names, restores the dump into it and restarts them.
+# `rag-worker` (the RAG override, DEC-210) holds a connection too, so it is stopped with them, after
+# the dump was read and before the drop; without the override it is no service, the stop fails and
+# the failure is ignored (`|| true`: a leading `-` only reaches a whole recipe line). It is NOT
+# restarted here: after a restore its files are rebuilt first (docs/runbook.md, "After `make db-restore`").
 # Nothing is stopped or dropped before the dump has been read (pg_restore --list)
 # with the pg_restore of the SERVER's major version — PG_LIB/<major>/bin, as
 # backup.sh and restore.sh pick it, else PATH's with a warning. On ATTT-M1 PATH has
@@ -156,6 +160,7 @@ db-restore:
 	fi; \
 	role="$$(echo "$$dsn" | sed -E 's#^[a-z]+://([^:/@]+).*#\1#')"; \
 	stage=stop; $(COMPOSE) stop app worker \
+	  && { $(COMPOSE) stop rag-worker || true; } \
 	  && stage=drop && "$$psql" "$$maint" -X -v ON_ERROR_STOP=1 -c "drop database if exists \"$$db\"" -c "create database \"$$db\"" \
 	  && stage=restore && "$$pg_restore" --no-owner --role="$$role" --exit-on-error -d "$$dsn" "$$f"; \
 	rc=$$?; \

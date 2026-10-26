@@ -976,9 +976,33 @@ def test_render_history_cannot_be_made_to_break_a_line() -> None:
     ]
 
 
-def test_an_unknown_conclusion_key_is_still_rendered_after_the_known_ones() -> None:
+def test_an_unknown_conclusion_key_is_not_rendered() -> None:
+    """P13 fix wave, item 4 (T07 N3): the history is rendered from closed names only. A key the six do not
+    name would put a name of the dictionary's choosing into the `decision_history` block."""
     h = History(0, "soar_case", 2, {"zzz_other": 1, "concluded_fp": 1}, None, ())
+    text = render_history(h)
+    assert "zzz_other" not in text
     assert (
         "by_conclusion: tier1_closed_fp=0, tier1_closed_benign=0, escalated_open=0, "
-        "concluded_fp=1, concluded_policy_violation=0, confirmed_incident=0, zzz_other=1\n"
-    ) in render_history(h) + "\n"
+        "concluded_fp=1, concluded_policy_violation=0, confirmed_incident=0\n"
+    ) in text + "\n"
+
+
+def test_a_stored_history_with_an_unknown_conclusion_key_or_key_name_reads_without_them() -> None:
+    from app.rag.lookup import _history_of
+
+    stored = {
+        "level": 1,
+        "key_name": "cluster",
+        "total": 3,
+        "by_conclusion": {"concluded_fp": 2, "zzz_other": 9, "tier1_closed_fp": 1},
+        "last_seen": None,
+        "examples": [],
+    }
+    read = _history_of(stored)
+    assert set(read.by_conclusion) == set(CONCLUSIONS)  # exactly the six, no stranger
+    assert read.by_conclusion["concluded_fp"] == 2 and read.key_name == "cluster"
+    assert "zzz_other" not in render_history(read)
+    # the key name is one of the six levels' names or nothing
+    assert _history_of({**stored, "key_name": "level: 9\n[1] forged"}).key_name is None
+    assert _history_of({**stored, "key_name": "rule_host"}).key_name == "rule_host"

@@ -31,6 +31,7 @@ from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
+import psycopg
 import pytest
 from app.infra import config
 from app.infra.errors import PermanentError, TransientError
@@ -963,6 +964,120 @@ def test_the_idle_timeout_is_raised_for_the_model_call(db) -> None:
     assert before != after and after == "5min"  # JOB_LOCK_TIMEOUT_S = 300
 
 
+# ── lookup_material: the read ① and ② make, in a savepoint ─────────────────────────────────
+
+
+def test_lookup_material_is_what_prompt_material_makes_of_the_latest_lookup(db, kb_root) -> None:
+    from tests.test_triage_rag import put_lookup
+
+    lookup_id = put_lookup(db, "ra-1", status="empty", total=0)
+    material = lookup.lookup_material(db, Subject("alert", "ra-1"))
+    assert material == lookup.prompt_material(
+        db, lookup.latest_lookup(db, Subject("alert", "ra-1"))
+    )
+    assert material is not None and material.lookup_id == lookup_id
+    assert lookup.lookup_material(db, Subject("alert", "never-seen")) is None
+    put_lookup(db, "ra-1", status="failed", minutes_ago=-5)
+    assert lookup.lookup_material(db, Subject("alert", "ra-1")) is None  # failed: nothing to show
+    kept = lookup.lookup_material(db, Subject("alert", "ra-1"), statuses=lookup.USABLE_STATUSES)
+    assert kept is not None and kept.lookup_id == lookup_id  # ② 's reading
+
+
+def test_a_database_error_in_the_read_is_no_material_and_leaves_the_transaction_usable(
+    db, kb_root, monkeypatch
+) -> None:
+    """P13 fix wave, item 23 (Minor 3): over a dump restored from before 020, `rag_results` is not there and
+    the SELECT fails. Without a savepoint that error aborts the transaction of the job that only wanted a
+    lookup: ① would lose its verdict, and the decisions and escalations after it their writes."""
+    db.execute("INSERT INTO jobs (job_type, subject_id) VALUES ('pull', 'sp-before')")
+    db.execute("ALTER TABLE rag_results RENAME TO rag_results_not_here")
+
+    assert lookup.lookup_material(db, Subject("alert", "ra-1")) is None
+
+    assert db.info.transaction_status == psycopg.pq.TransactionStatus.INTRANS  # not INERROR
+    db.execute("INSERT INTO jobs (job_type, subject_id) VALUES ('pull', 'sp-after')")
+    assert db.execute("SELECT count(*) FROM jobs WHERE subject_id LIKE 'sp-%'").fetchone()[0] == 2
+
+
+def test_a_database_error_after_the_lookup_was_read_is_no_material_too(
+    db, kb_root, monkeypatch
+) -> None:
+    from tests.test_triage_rag import put_lookup
+
+    put_lookup(
+        db,
+        "ra-1",
+        status="ok",
+        matches=[{"entry_id": str(uuid.uuid4()), "level": "giong", "content_sha256": "0" * 64}],
+    )
+    db.execute("ALTER TABLE knowledge_entries RENAME TO knowledge_entries_not_here")
+    assert lookup.lookup_material(db, Subject("alert", "ra-1")) is None
+    db.execute("SELECT 1")  # the transaction is usable
+
+
+def test_the_read_is_a_savepoint_and_only_when_it_is_asked_for(db, kb_root, monkeypatch) -> None:
+    """The savepoint is `conn.transaction()` inside the job's own transaction, entered once per read."""
+    opened: list[int] = []
+    real = db.transaction
+
+    def counting(*args, **kwargs):
+        opened.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(db, "transaction", counting)
+    lookup.lookup_material(db, Subject("alert", "ra-1"))
+    assert opened == [1]
+
+
+# ── a lookup that came too late ────────────────────────────────────────────────────────────
+
+
+def triage_status(db, alert_id: str, status: str) -> None:
+    db.execute("UPDATE alerts SET triage_status = %s WHERE alert_id = %s", (status, alert_id))
+
+
+@pytest.mark.parametrize("status", ["ready", "unavailable"])
+def test_a_lookup_for_an_alert_that_triage_has_finished_is_not_paid_for(
+    db, kb_root, status
+) -> None:
+    """P13 fix wave, item 21 (Minor 1): ① read the newest lookup when it ran, 45 s after the alert; a
+    lookup that starts after ① has finished (`ready`) or gave up (`unavailable`) can reach no prompt. The job
+    returns before the history, the candidates and the model: no call, no row, no run."""
+    alert(db, "ra-late", status="queued_tier1")
+    triage_status(db, "ra-late", status)
+    fake = FakeLLM([])
+
+    assert run(db, "alert:ra-late", fake) is None
+
+    assert fake.calls == []
+    assert db.execute("SELECT count(*) FROM rag_results").fetchone()[0] == 0
+    assert (
+        db.execute("SELECT count(*) FROM llm_runs WHERE subject_id = 'ra-late'").fetchone()[0] == 0
+    )
+
+
+def test_a_lookup_for_an_alert_still_waiting_for_triage_runs(db, kb_root) -> None:
+    alert(db, "ra-wait", status="queued_tier1")
+    assert db.execute("SELECT triage_status FROM alerts WHERE alert_id = 'ra-wait'").fetchone() == (
+        "pending",
+    )
+    run(db, "alert:ra-wait", FakeLLM([]))
+    assert db.execute("SELECT count(*) FROM rag_results").fetchone()[0] == 1
+
+
+def test_the_triage_status_is_not_asked_of_a_case(db, kb_root) -> None:
+    """A case has no `triage_status`: ② reads the lookup when its job runs, never too late."""
+    alert(db, "ca-1")
+    case_id = add_case(db, add_user(db), ["ca-1"])
+    run(db, f"case:{case_id}", FakeLLM([]))
+    assert db.execute("SELECT count(*) FROM rag_results").fetchone()[0] == 1
+
+
+def test_an_alert_that_is_not_there_is_still_permanent(db, kb_root) -> None:
+    with pytest.raises(PermanentError):
+        run(db, "alert:ra-nowhere", FakeLLM([]))
+
+
 # ── latest_lookup ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -1021,6 +1136,36 @@ def test_the_latest_lookup_is_whatever_status_the_newest_row_has(db, kb_root) ->
     failing_setup(db, kb_root)
     run(db, "alert:ra-1", FakeLLM(raises=LLMTimeout("slow")), attempts=last_attempt())
     assert lookup.latest_lookup(db, Subject("alert", "ra-1")).status == "failed"
+
+
+def test_latest_lookup_can_be_asked_for_the_newest_row_of_some_statuses(db) -> None:
+    """P13 fix wave, item 14 (T08 M1): spec §7.6 says ② uses "the newest `ok` row". A `failed` or `budget`
+    row written after it must not hide it; the default (every status) is ① 's reading and does not move.
+    """
+    from tests.test_triage_rag import put_lookup
+
+    good = put_lookup(db, "ra-1", status="ok", minutes_ago=120)
+    put_lookup(db, "ra-1", status="failed", minutes_ago=60)
+    put_lookup(db, "ra-1", status="budget", minutes_ago=5)
+    subject = Subject("alert", "ra-1")
+
+    assert lookup.latest_lookup(db, subject).status == "budget"  # the default: whatever it is
+    assert lookup.latest_lookup(db, subject, statuses=None).status == "budget"
+    found = lookup.latest_lookup(db, subject, statuses=("ok", "empty"))
+    assert found is not None and found.lookup_id == good and found.status == "ok"
+    newer_empty = put_lookup(db, "ra-1", status="empty", minutes_ago=30)
+    assert lookup.latest_lookup(db, subject, statuses=("ok", "empty")).lookup_id == newer_empty
+
+
+def test_latest_lookup_by_status_is_none_when_no_row_has_one_of_them(db) -> None:
+    from tests.test_triage_rag import put_lookup
+
+    put_lookup(db, "ra-1", status="failed", minutes_ago=10)
+    put_lookup(db, "ra-1", status="budget", minutes_ago=5)
+    subject = Subject("alert", "ra-1")
+    assert lookup.latest_lookup(db, subject, statuses=("ok", "empty")) is None
+    assert lookup.latest_lookup(db, subject, statuses=()) is None
+    assert lookup.latest_lookup(db, subject, statuses=("failed",)).status == "failed"
 
 
 def put_row(db, *, status="ok", history=None, matches=None, subject_id="ra-1") -> uuid.UUID:

@@ -1,4 +1,5 @@
-"""Assemble the nine-block case dossier (facts, logs, timeline, entities, playbooks).
+"""Assemble the case dossier: nine blocks (facts, logs, timeline, entities, playbooks), and a tenth, the
+learned section, only when `learned` is given (DEC-210, below).
 
 P5-T03 (DEC-151 wave 2). `build(conn, case_id, *, nonce, cfg=None) -> Dossier` reads the
 nine blocks of context pack §7.6 / the card's design note 1 from the database only, inside
@@ -8,10 +9,10 @@ nothing to a model and imports nothing from `app.llm.adapter` itself — P5-T04 
 
 **Block 10, the learned section (P13-T08, DEC-210, spec §7.8).** `build(..., learned=None)` is the
 nine-block dossier above, byte for byte. With `learned` (what `rag.lookup.prompt_material` returns:
-`llm.triage.LearnedLike`) a tenth block follows block 8 and precedes the scope sentence, which stays
+`llm.builder.LearnedLike`) a tenth block follows block 8 and precedes the scope sentence, which stays
 last: the heading, the decision history as a `decision_history` block, one `kb_learned_level: <level>` fact
 per entry (a closed `KbLearnedLevel`, checked), the entries as one numbered `kb_learned` block (at most
-`llm.triage.MAX_LEARNED_ENTRIES`, ①'s cap) and the fixed sentence that it is a reference and never a basis
+`llm.builder.MAX_LEARNED_ENTRIES`, ①'s cap, through `llm.builder.prompt_entries`) and the fixed sentence that it is a reference and never a basis
 for the verdict; or, when the lookup found nothing, the heading and the one sentence that says so. It is
 reference material, not evidence about the case: `Dossier.learned_used` says whether it reached the prompt.
 Over `CASE_PROMPT_BUDGET_TOKENS` it is the first thing dropped (`STEP_LEARNED_DROPPED`), before every
@@ -70,11 +71,12 @@ from app.llm.builder import (
     IdentityPrivileged,
     IocReputation,
     KbLearnedLevel,
+    LearnedLike,
     LookupStatus,
     Severity,
     fact,
+    prompt_entries,
 )
-from app.llm.triage import MAX_LEARNED_ENTRIES, LearnedLike
 from app.security import wrap
 
 # ─────────────────────────────────────────────────────── budget / truncation (design note 4)
@@ -1228,21 +1230,6 @@ def _block9_scope() -> str:
     return f"{HEADING_SCOPE}\n{SENTENCE_OUT_OF_SCOPE}"
 
 
-def _learned_entries(learned: LearnedLike | None) -> tuple[tuple[KbLearnedLevel, str], ...]:
-    """The entries block 10 renders: the first `MAX_LEARNED_ENTRIES` of `learned.entries`, best first.
-    Each level must be a `KbLearnedLevel`: `fact()` renders any Enum, so a `Severity` would be written
-    as `kb_learned_level: high`, a value the section's vocabulary does not have. A defect of the
-    caller, not data: a `TypeError`, before anything is rendered or cut (the value is not echoed).
-    """
-    if learned is None:
-        return ()
-    entries = tuple(learned.entries)[:MAX_LEARNED_ENTRIES]
-    for level, _text in entries:
-        if not isinstance(level, KbLearnedLevel):
-            raise TypeError("learned entry level must be a KbLearnedLevel")
-    return entries
-
-
 def _block10_learned(
     history_text: str | None,
     entries: Sequence[tuple[KbLearnedLevel, str]],
@@ -1311,8 +1298,9 @@ def build(
     cfg: config.Config | None = None,
     learned: LearnedLike | None = None,
 ) -> Dossier:
-    """The dossier of `case_id`. `learned` (P13-T08): None - the nine blocks, byte for byte what this
-    function returned before the parameter existed. Else block 10 (see the module docstring)."""
+    """The dossier of `case_id`: nine blocks. `learned` (P13-T08): None - those nine blocks, byte for byte
+    what this function returned before the parameter existed. Else ten: block 10, the learned section (see
+    the module docstring), follows block 8 and the scope sentence stays last."""
     cfg = cfg or config.load()
 
     case_row = _fetch_case(conn, case_id)
@@ -1360,7 +1348,7 @@ def build(
 
     # Block 10's material, checked once, before any render or cut (P13-T08).
     history_text = (learned.history_text or None) if learned is not None else None
-    learned_entries = _learned_entries(learned)
+    learned_entries = prompt_entries(learned)
     nothing_found = learned is not None and history_text is None and not learned_entries
     learned_dropped = False
 

@@ -29,7 +29,9 @@ import {
   KNOWLEDGE_CLOSED_FIELDS,
   KNOWLEDGE_LIMITS,
   KNOWLEDGE_MODEL_FIELDS,
+  KNOWLEDGE_REDRAFTABLE_WARNINGS,
   knowledgeErrorOf,
+  redraftKnowledgeDraft,
   rejectKnowledgeDraft,
   type KnowledgeDraft,
   type KnowledgeDraftDetail,
@@ -127,8 +129,28 @@ export function KnowledgeDraftView({
 
 // --- the writes ------------------------------------------------------------------------------------------------
 
-type Job = { kind: "approve"; edited?: KnowledgeEdit } | { kind: "reject"; reason: string };
-type Asked = "approve" | "editApprove" | "reject";
+type Job =
+  | { kind: "approve"; edited?: KnowledgeEdit }
+  | { kind: "reject"; reason: string }
+  | { kind: "redraft" };
+type Asked = "approve" | "editApprove" | "reject" | "redraft";
+
+const MUTATION_OF = {
+  approve: "approveKnowledgeDraft",
+  reject: "rejectKnowledgeDraft",
+  redraft: "redraftKnowledgeDraft",
+} as const;
+
+/** A text-less draft the model could not be asked for: every warning is one of the backend's re-draftable ones. */
+function redraftable(draft: KnowledgeDraft): boolean {
+  const known: readonly string[] = KNOWLEDGE_REDRAFTABLE_WARNINGS;
+  return (
+    draft.status === "pending" &&
+    Object.keys(draft.draft).length === 0 &&
+    draft.warnings.length > 0 &&
+    draft.warnings.every((warning) => known.includes(warning))
+  );
+}
 
 function DraftScreen({
   detail,
@@ -172,13 +194,13 @@ function DraftScreen({
     mutationFn: (job: Job): Promise<unknown> =>
       job.kind === "reject"
         ? rejectKnowledgeDraft(draft.draft_id, job.reason)
-        : approveKnowledgeDraft(draft.draft_id, job.edited),
+        : job.kind === "redraft"
+          ? redraftKnowledgeDraft(draft.draft_id)
+          : approveKnowledgeDraft(draft.draft_id, job.edited),
     onSuccess: async (_done, job) => {
-      await invalidateAfter(
-        client,
-        job.kind === "reject" ? "rejectKnowledgeDraft" : "approveKnowledgeDraft",
-      );
+      await invalidateAfter(client, MUTATION_OF[job.kind]);
       if (job.kind === "reject") onDone(K.done.rejected(title));
+      else if (job.kind === "redraft") onDone(K.done.redrafted(title));
       else onDone(K.done.approved(job.edited?.title?.trim() || title));
     },
     onError: (error, job) => refused(knowledgeErrorOf(error), job),
@@ -186,7 +208,7 @@ function DraftScreen({
   const run = useSubmitLatch(write);
 
   function refused(error: KnowledgeError, job: Job): void {
-    const mutation = job.kind === "reject" ? "rejectKnowledgeDraft" : "approveKnowledgeDraft";
+    const mutation = MUTATION_OF[job.kind];
     switch (error.kind) {
       case "faults":
         setFaults(error.faults);
@@ -194,6 +216,16 @@ function DraftScreen({
         setAsked(null);
         return;
       case "stale": {
+        if (job.kind === "redraft") {
+          // Not a verdict on the draft's source: it is no longer a draft to make again (or the drafts are off).
+          setNotice(
+            error.reason === "drafts_disabled" ? K.notice.draftsDisabled : K.notice.notRedraftable,
+          );
+          setFaults([]);
+          setAsked(null);
+          void invalidateAfter(client, mutation);
+          return;
+        }
         // `source_changed` and `unpublishable` leave the draft pending, and an approval would meet the same 409
         // again: say that a rejection is all that is left, and take the approvals off.
         const only = error.reason === "source_changed" || error.reason === "unpublishable";
@@ -321,6 +353,11 @@ function DraftScreen({
                   >
                     {D.action.editApprove}
                   </button>
+                  {redraftable(draft) && (
+                    <button type="button" onClick={() => ask("redraft")} className={BUTTON_OUTLINE}>
+                      {D.action.redraft}
+                    </button>
+                  )}
                   <button type="button" onClick={() => ask("reject")} className={BUTTON_DANGER}>
                     {D.action.reject}
                   </button>
@@ -362,6 +399,18 @@ function DraftScreen({
               .map((field) => D.right.field[field])
               .join(", "),
           )}
+        </ConfirmDialog>
+      )}
+      {asked === "redraft" && (
+        <ConfirmDialog
+          title={D.action.redraftTitle}
+          confirmLabel={D.action.redraft}
+          busy={write.isPending}
+          error={dialogError ?? undefined}
+          onConfirm={() => void run({ kind: "redraft" })}
+          onCancel={cancel}
+        >
+          {D.action.redraftBody}
         </ConfirmDialog>
       )}
       {asked === "reject" && (

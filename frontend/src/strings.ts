@@ -965,6 +965,10 @@ export const S = {
         triageNoRole: "① triage",
         investigateRow: "② điều tra case",
         // DEC-210: the lookup of similar knowledge (role `retriever`) and the draft of a new entry (role `drafter`).
+        // These are the labels of the runs that spend on the RAG sub-cap. A ① or ② run that READ a lookup is not
+        // labelled here: it names the lookup (`llm_runs.rag_lookup_id`) only when the learned section reached its
+        // prompt. When the token budget cut the section whole, the run's warnings name the cut
+        // (`learned_entries_dropped`, `learned_history_dropped`, `learned_dropped`) and it has no lookup id.
         ragLookup: "Tra cứu tri thức",
         ragLookupRole: { retriever: "Tra cứu tri thức · retriever" },
         knowledgeDraft: "Soạn tri thức",
@@ -1092,7 +1096,7 @@ export const S = {
       system: "Hệ thống và job",
     } satisfies Record<AuditGroup, string>,
 
-    // One label for each of the 35 names of `audit/events.py`'s EVENT_TYPES, read through `labelOf`. The
+    // One label for each of the 36 names of `audit/events.py`'s EVENT_TYPES, read through `labelOf`. The
     // canvas gives nine; the rest follow its wording. An event with more than one use says the common part
     // (`admin.user_updated` is a role change, a deactivation, a reset and an unlock): the summary line of the
     // audit page says which.
@@ -1129,6 +1133,7 @@ export const S = {
       "knowledge.approved": "Duyệt tri thức",
       "knowledge.rejected": "Từ chối bản nháp tri thức",
       "knowledge.retired": "Gỡ tri thức",
+      "knowledge.redraft_requested": "Yêu cầu soạn lại bản nháp tri thức",
       "knowledge.merged": "Gộp bản nháp vào tri thức",
       "rag.lookup_failed": "Tra cứu tri thức lỗi",
       "rag.integrity_failed": "Tệp tri thức không khớp bản gốc",
@@ -1314,6 +1319,7 @@ export const S = {
         knowledgeApproved: "admin duyệt bản nháp thành tri thức",
         knowledgeRejected: "admin từ chối bản nháp",
         knowledgeRetired: "admin gỡ tri thức khỏi kho",
+        knowledgeRedraft: "admin yêu cầu soạn lại bản nháp không có nội dung",
         knowledgeMerged: "bản nháp gộp vào tri thức đã có, không tạo mục mới",
         lookupFailed: "tra cứu tri thức thất bại sau lần thử cuối",
         integrityFailed: "tệp tri thức không còn khớp mã băm lúc duyệt, mục bị loại khỏi tra cứu",
@@ -1711,6 +1717,7 @@ export const S = {
       done: {
         approved: (title: string) => `Đã duyệt: ${title}`,
         rejected: (title: string) => `Đã từ chối: ${title}`,
+        redrafted: (title: string) => `Đã yêu cầu soạn lại: ${title}`,
         retired: (title: string) => `Đã gỡ: ${title}`,
       },
 
@@ -1722,6 +1729,10 @@ export const S = {
         publishFailed:
           "Không ghi được tệp tri thức, nên chưa lưu gì. Bấm lại để thử lần nữa; nếu vẫn lỗi, báo người vận hành.",
         gone: "Không tìm thấy bản nháp này nữa.",
+        notRedraftable:
+          "Không soạn lại được: bản nháp đã có nội dung hoặc đã được xử lý. Danh sách đã được tải lại.",
+        draftsDisabled:
+          "Không soạn lại được: việc soạn bản nháp đang tắt (KNOWLEDGE_DRAFT_ENABLED).",
         entryGone: "Không tìm thấy mục này nữa.",
         failed: "Chưa lưu được. Thử lại sau ít phút.",
         reasonRequired: "Cần nhập lý do.",
@@ -1836,6 +1847,11 @@ export const S = {
           approve: "Duyệt",
           editApprove: "Sửa rồi duyệt",
           reject: "Từ chối",
+          // For a draft the model could not be asked for (the budget, a refusal, a timeout): make it again.
+          redraft: "Soạn lại",
+          redraftTitle: "Soạn lại bản nháp này?",
+          redraftBody:
+            "Bản nháp trống này bị xoá và hệ thống soạn lại từ đầu bằng một lần gọi model, tính vào hạn mức tri thức. Bản mới xuất hiện trong danh sách chờ duyệt sau ít phút.",
           // Why a button cannot be pressed now.
           approveEdited: "Bạn đã sửa nội dung: dùng Sửa rồi duyệt để gửi bản đã sửa.",
           approveRejectOnly: "Chỉ có thể từ chối bản nháp này.",
@@ -1906,6 +1922,8 @@ export const S = {
           v4_detector: "Nội dung giống một câu lệnh chèn vào mô hình (prompt injection).",
           v4_delimiter: "Có dấu phân cách dữ liệu không tin cậy, không được dùng.",
           v4_nonce: "Có chuỗi giống mã nonce (16 ký tự thập lục phân).",
+          v4_structure:
+            "Có dòng mở đầu như một dòng cấu trúc của hệ thống: số trong ngoặc vuông như [1], hoặc khóa như level:, total:, examples:. Hãy viết lại.",
           v5_length: "Độ dài ngoài giới hạn.",
           v5_count: "Số mục ngoài giới hạn.",
           v5_empty: "Không được để trống.",

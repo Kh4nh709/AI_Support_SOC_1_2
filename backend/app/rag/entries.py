@@ -221,14 +221,20 @@ def _one_line(value: str) -> str:
     return _WHITESPACE.sub(" ", value).strip()
 
 
-def _paragraph(value: str) -> str:
-    """One line; a leading `#` is escaped so the line cannot read as a heading."""
-    line = _one_line(value)
+def _escaped(line: str) -> str:
+    """A leading `#` is escaped so the line cannot read as a heading."""
     return "\\" + line if line.startswith("#") else line
 
 
+def _paragraph(value: str) -> str:
+    """One line; a leading `#` is escaped so the line cannot read as a heading."""
+    return _escaped(_one_line(value))
+
+
 def _bullets(items: Sequence[str]) -> str:
-    lines = [f"- {_one_line(item)}" for item in items if _one_line(item)]
+    """One `- item` line per non-empty item, each folded onto one line with a leading `#` escaped as a
+    paragraph's is (`- ## x` is a heading inside a list item)."""
+    lines = [f"- {_escaped(_one_line(item))}" for item in items if _one_line(item)]
     return "\n".join(lines) if lines else _NOTHING
 
 

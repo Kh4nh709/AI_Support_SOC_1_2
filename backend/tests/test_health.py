@@ -40,6 +40,7 @@ from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 
 from tests import conftest
+from tests.rag_data import add_entry
 
 # Review round 1, N9: no module-level `pytestmark` — every `db`/`sdb`-using
 # test below carries its own `@pytest.mark.db` explicitly; the three pure
@@ -290,6 +291,34 @@ def test_job_backlog_passes_when_fresh_or_empty(db, tmp_path):
     _insert_pending_job(db, minutes_ago=1)
     report = health.check(db, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
     assert _by_name(report)["job_backlog"].ok is True
+
+
+@pytest.mark.db
+def test_job_backlog_counts_only_due_jobs_a_month_ahead_is_not_a_backlog(db, tmp_path):
+    """P13 fix wave, item 20 (I1): a `knowledge_draft` job rescheduled to the start of next month is a
+    `pending` row whose time has not come. It is waiting, not stuck: the check reads `scheduled_at <= now()`.
+    """
+    db.execute(
+        "INSERT INTO jobs (job_type, subject_id, status, scheduled_at)"
+        " VALUES ('knowledge_draft', 'alert:backlog-future', 'pending', now() + interval '30 days')"
+    )
+    db.execute(
+        "INSERT INTO jobs (job_type, subject_id, status, scheduled_at)"
+        " VALUES ('knowledge_draft', 'alert:backlog-soon', 'pending', now() + interval '1 minute')"
+    )
+    report = health.check(db, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+    check = _by_name(report)["job_backlog"]
+    assert check.ok is True and "no due pending jobs" in check.detail
+
+
+@pytest.mark.db
+def test_job_backlog_alarms_once_the_rescheduled_job_is_due_and_nobody_claims_it(db, tmp_path):
+    db.execute(
+        "INSERT INTO jobs (job_type, subject_id, status, scheduled_at)"
+        " VALUES ('knowledge_draft', 'alert:backlog-due', 'pending', now() - interval '15 minutes')"
+    )
+    report = health.check(db, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+    assert _by_name(report)["job_backlog"].ok is False
 
 
 # 4 · llm_null_ratio -------------------------------------------------------------
@@ -775,7 +804,18 @@ def _insert_draft(conn, *, status: str = "pending") -> None:
     )
 
 
-def _insert_integrity_failure(conn, *, entry_id: str, hours_ago: float) -> None:
+def _insert_integrity_failure(
+    conn, *, entry_id: str, hours_ago: float, entry_status: str | None = "active"
+) -> None:
+    """A `rag.integrity_failed` event for `entry_id`, whose entry row is made with `entry_status` unless it
+    has one already (`None`: there is no such entry at all)."""
+    if (
+        entry_status is not None
+        and not conn.execute(
+            "SELECT 1 FROM knowledge_entries WHERE entry_id = %s", (entry_id,)
+        ).fetchone()
+    ):
+        add_entry(conn, entry_id=entry_id, status=entry_status)
     conn.execute(
         "INSERT INTO audit_events (event_type, subject_id, actor_role, payload, created_at)"
         " VALUES ('rag.integrity_failed', %s, 'system', %s, now() - (%s * interval '1 hour'))",
@@ -876,6 +916,34 @@ def test_knowledge_integrity_is_an_aggregate_duplicates_are_one_entry(db, tmp_pa
     assert check.ok is False
     assert check.value == 2
     assert "6" in check.detail and "2" in check.detail
+
+
+@pytest.mark.db
+def test_knowledge_integrity_counts_only_entries_that_are_still_active(db, tmp_path):
+    """P13 fix wave, item 5 (T05 M2): a retire that races a lookup leaves an event for an entry that is
+    gone from the lookups for good, and `--rebuild` skips retired entries, so nothing would clear the
+    alarm before 24 hours. Only an entry that can still be retrieved is an entry to repair."""
+    _insert_integrity_failure(db, entry_id=str(uuid.uuid4()), hours_ago=1, entry_status="retired")
+    _insert_integrity_failure(db, entry_id=str(uuid.uuid4()), hours_ago=1, entry_status=None)
+    assert _run_check(db, tmp_path)["knowledge_integrity"].ok is True
+    live, gone = str(uuid.uuid4()), str(uuid.uuid4())
+    _insert_integrity_failure(db, entry_id=live, hours_ago=2)
+    _insert_integrity_failure(db, entry_id=live, hours_ago=3)
+    _insert_integrity_failure(db, entry_id=gone, hours_ago=2, entry_status="retired")
+    check = _run_check(db, tmp_path)["knowledge_integrity"]
+    assert check.ok is False and check.value == 1
+    assert (
+        "1 entry" in check.detail and "(2 event" in check.detail
+    )  # the events of the live entry only
+
+
+@pytest.mark.db
+def test_knowledge_integrity_clears_when_the_failing_entry_is_retired(db, tmp_path):
+    entry = str(uuid.uuid4())
+    _insert_integrity_failure(db, entry_id=entry, hours_ago=1)
+    assert _run_check(db, tmp_path)["knowledge_integrity"].ok is False
+    db.execute("UPDATE knowledge_entries SET status = 'retired' WHERE entry_id = %s", (entry,))
+    assert _run_check(db, tmp_path)["knowledge_integrity"].ok is True
 
 
 @pytest.mark.db

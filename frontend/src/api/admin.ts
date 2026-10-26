@@ -1048,6 +1048,31 @@ export function rejectKnowledgeDraft(
   );
 }
 
+/**
+ * The warnings (`REDRAFTABLE_WARNINGS` of rag/draft.py; a test reads them) of a draft the model could not be asked
+ * for: its budget, a refusal, a timeout, a ranking that gave no answer. A text-less pending draft whose warnings
+ * are all of these can be made again.
+ */
+export const KNOWLEDGE_REDRAFTABLE_WARNINGS = [
+  "budget",
+  "llm_transient",
+  "llm_permanent",
+  "rank_unavailable",
+] as const;
+
+/**
+ * Asks for a text-less draft to be made again: the route deletes it and queues the job for its source.
+ * `404 not_found`, `409 {reason: not_pending | not_redraftable | drafts_disabled}`.
+ */
+export function redraftKnowledgeDraft(
+  draftId: string,
+): Promise<{ draft_id: string; queued: true }> {
+  return api<{ draft_id: string; queued: true }>(
+    `/admin/knowledge/drafts/${enc(draftId)}/redraft`,
+    { method: "POST", json: {} },
+  );
+}
+
 /** Newest approval first. */
 export function listKnowledgeEntries(status: KnowledgeEntryStatus): Promise<KnowledgeEntryRow[]> {
   return api<KnowledgeEntryRow[]>(`/admin/knowledge/entries?${new URLSearchParams({ status })}`);

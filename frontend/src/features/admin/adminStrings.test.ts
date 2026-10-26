@@ -15,6 +15,7 @@ import {
   KNOWLEDGE_ENTRY_STATUSES,
   KNOWLEDGE_LIMITS,
   KNOWLEDGE_MODEL_FIELDS,
+  KNOWLEDGE_REDRAFTABLE_WARNINGS,
   LABEL_CHOICES,
   LABEL_CONFIDENCES,
   LIMIT_FIELDS,
@@ -37,7 +38,7 @@ const py = (...path: string[]): string => readFileSync(join(BACKEND_APP, ...path
 const isText = (value: unknown): value is string =>
   typeof value === "string" && value.trim() !== "";
 
-/** `EVENT_TYPES` of `audit/events.py`: the 35 names the database CHECK admits. */
+/** `EVENT_TYPES` of `audit/events.py`: the 36 names the database CHECK admits. */
 function eventTypes(): string[] {
   const body = /EVENT_TYPES\s*=\s*frozenset\(\s*\{([\s\S]*?)\}\s*\)/.exec(
     py("audit", "events.py"),
@@ -64,9 +65,9 @@ function auditGroups(): Record<string, string[]> {
 describe("the audit event types", () => {
   const names = eventTypes();
 
-  it("reads the 35 names of the backend", () => {
-    expect(names).toHaveLength(35);
-    expect(new Set(names).size).toBe(35);
+  it("reads the 36 names of the backend", () => {
+    expect(names).toHaveLength(36);
+    expect(new Set(names).size).toBe(36);
   });
 
   it.each(names)("has a Vietnamese label for %s", (name) => {
@@ -482,6 +483,18 @@ describe("the learned-knowledge words (DEC-210, P13-T06)", () => {
       );
       expect(KNOWLEDGE_MODEL_FIELDS).toHaveLength(6);
       expect(KNOWLEDGE_CLOSED_FIELDS).toHaveLength(6);
+    });
+
+    it("KNOWLEDGE_REDRAFTABLE_WARNINGS are the warnings of REDRAFTABLE_WARNINGS", () => {
+      const draft = draftPy();
+      const named = new Map(
+        [...draft.matchAll(/^(WARNING_[A-Z]+) = "([a-z_]+)"$/gm)].map((m) => [m[1], m[2]]),
+      );
+      const body = /^REDRAFTABLE_WARNINGS = frozenset\(\s*\{([^}]*)\}\s*\)/m.exec(draft)?.[1];
+      expect(body).toBeDefined();
+      const backend = [...(body ?? "").matchAll(/WARNING_[A-Z]+/g)].map((m) => named.get(m[0]));
+      expect(backend).toHaveLength(4);
+      expect([...KNOWLEDGE_REDRAFTABLE_WARNINGS].sort()).toEqual(backend.sort());
     });
 
     it("KNOWLEDGE_LIMITS", () => {

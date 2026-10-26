@@ -89,11 +89,13 @@ from app.llm.builder import (
     IdentityPrivileged,
     IocReputation,
     KbLearnedLevel,
+    LearnedLike,
     LookupStatus,
     PromptBuilder,
     Severity,
     Verdict,
     fact,
+    prompt_entries,
     risk_band,
 )
 from app.security import linter, wrap
@@ -111,8 +113,6 @@ SAMPLE_RAW_LOG_LIMIT_BYTES = 2_048
 RAW_LOG_CUT_BYTES = 8_192
 SAMPLES_CUT = 3
 ROWS_CUT = 10
-#: The learned section (spec §7.8): at most three approved entries, numbered `[1]`..`[3]`.
-MAX_LEARNED_ENTRIES = 3
 
 _LOOKUP_LABELS = ("asset", "identity", "ioc")
 _LIST_CONDITION_ENUMS: dict[str, type[Enum]] = {
@@ -154,18 +154,6 @@ class CorrelationLike(Protocol):
     def rows(self) -> Sequence[CorrelationRowLike]: ...
     @property
     def samples(self) -> Sequence[Mapping[str, Any]]: ...
-
-
-class LearnedLike(Protocol):
-    """Structural twin of `app.rag.lookup.PromptMaterial` (`llm` may not import `rag`): the decision
-    history as `rag.history.render_history` writes it (None when there is none) and the approved
-    content of each matched entry with its level, best first. Nothing else of a lookup is here -
-    in particular not the ranking agent's reasons."""
-
-    @property
-    def history_text(self) -> str | None: ...
-    @property
-    def entries(self) -> Sequence[tuple[KbLearnedLevel, str]]: ...
 
 
 @dataclass(frozen=True)
@@ -531,7 +519,7 @@ def build_proposer_prompt(
             samples = tuple(correlation.samples)[:MAX_CORRELATION_SAMPLES]
 
     history_text = (learned.history_text or None) if learned is not None else None
-    entries = tuple(learned.entries)[:MAX_LEARNED_ENTRIES] if learned is not None else ()
+    entries = prompt_entries(learned)
     nothing_found = learned is not None and history_text is None and not entries
     limits = {
         "raw_log": cfg.PROMPT_LOG_MAX_BYTES,

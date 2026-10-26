@@ -25,7 +25,12 @@
 --      `entry_id` and `lookup_id` carry no DEFAULT: the application assigns them (the entry's id
 --      is its file name), the way it assigns `llm_runs.run_id`. `draft_id` does have one.
 --
---   2. `llm_runs`: `rag_lookup_id` (NULL for every run that is not a lookup's own); the pipelines
+--   2. `llm_runs`: `rag_lookup_id`, the lookup a run is tied to. On a `rag_lookup` run it is that
+--      run's own lookup (its id); on a ① or ② row it is the lookup whose material the prompt held, and
+--      it is set only when the learned section reached the prompt. So it is NULL when RAG is off,
+--      when no lookup was usable (none, `failed`, `budget`), and when the token budget cut the whole
+--      section (the row's warnings then name the cut but it has no id), and for every run of the
+--      other pipelines. Also new: the pipelines
 --      `rag_lookup` and `knowledge_draft`; the roles `retriever` and `drafter`. ① stays on
 --      `alert` and ② on `case`; the two new pipelines may run on either, because a lookup and a
 --      draft are made for an alert as well as for a case. Nothing else about the old pairing moves.
@@ -34,20 +39,26 @@
 --      `alert:<alert_id>` or `case:<case_uuid>`; single-flight is the existing partial unique
 --      index `ux_jobs_mot_job_song_moi_subject` on (job_type, subject_id).
 --
---   4. `ck_audit_event_type` gains seven names: 28 -> 35. The 28 before them are 019's, in 019's
---      order, so a diff against 019 shows seven additions and nothing else.
+--   4. `ck_audit_event_type` gains eight names: 28 -> 36. The 28 before them are 019's, in 019's
+--      order, so a diff against 019 shows eight additions and nothing else. The eighth,
+--      `knowledge.redraft_requested`, is an admin asking for a text-less draft to be made again.
 --
 --   5. `ix_alerts_soar_dedup_key`: an expression index on the SOAR case key, for the history
 --      query ("the earlier alerts of this case"). A query uses it only when it writes the
 --      expression exactly as it is written here.
 --
---   6. Rights. 020 grants `app_rw` SELECT, INSERT and UPDATE on the three tables itself. The
+--   6. Rights. 020 grants `app_rw` SELECT, INSERT, UPDATE and DELETE on `knowledge_drafts` (an admin's
+--      re-draft of a text-less draft deletes it), SELECT, INSERT and UPDATE on `knowledge_entries`,
+--      and SELECT and INSERT on `rag_results`, itself. The
 --      rights do not depend on 017's `ALTER DEFAULT PRIVILEGES`: those bind only the role that
 --      ran 017 (`soc` on Compose), so a table created by any other applying role would leave
 --      `app_rw` with nothing, and the lookup and the draft job would then die on `permission
---      denied` (019's lesson, P11-T01 review finding 5). No DELETE in the grant: nothing deletes
---      a draft, an entry (it is retired) or a result. (Where the applier is the role 017's
---      defaults name, as on Compose, those defaults add DELETE as well; no code uses it.)
+--      denied` (019's lesson, P11-T01 review finding 5). No DELETE on an entry (it is retired) or a
+--      result, and none on a draft but the re-draft's. (Where the applier is the role 017's
+--      defaults name, as on Compose, those defaults add DELETE as well; no other code uses it.)
+--      `rag_results` is append-only: a lookup is stored once and read, nothing updates it (the
+--      newest row is the lookup), so UPDATE, DELETE and TRUNCATE are revoked from `app_rw` there,
+--      which also takes back what 017's defaults gave it.
 -- ============================================================================
 
 BEGIN;
@@ -145,7 +156,12 @@ CREATE TABLE rag_results (
 CREATE INDEX ix_rag_results_subject ON rag_results (subject_kind, subject_id, created_at DESC);
 
 -- Rights, granted here and not left to 017's default privileges (header, note 6).
-GRANT SELECT, INSERT, UPDATE ON knowledge_drafts, knowledge_entries, rag_results TO app_rw;
+GRANT SELECT, INSERT, UPDATE, DELETE ON knowledge_drafts TO app_rw;
+GRANT SELECT, INSERT, UPDATE ON knowledge_entries TO app_rw;
+-- `rag_results` is append-only (header, note 6): the REVOKE also removes what 017's default
+-- privileges grant on a table created by the role that ran 017.
+GRANT SELECT, INSERT ON rag_results TO app_rw;
+REVOKE UPDATE, DELETE, TRUNCATE ON rag_results FROM app_rw;
 
 -- ---------------------------------------------------------------------------
 -- llm_runs — the lookup's id; two pipelines, two roles. The table is append-only (017): adding a
@@ -184,7 +200,7 @@ ALTER TABLE jobs ADD CONSTRAINT ck_jobs_job_type CHECK (job_type IN (
 ));
 
 -- ---------------------------------------------------------------------------
--- audit_events — 019's 28 names, in 019's order, then the seven of DEC-210.
+-- audit_events — 019's 28 names, in 019's order, then the eight of DEC-210.
 -- ---------------------------------------------------------------------------
 ALTER TABLE audit_events DROP CONSTRAINT ck_audit_event_type;
 ALTER TABLE audit_events ADD CONSTRAINT ck_audit_event_type CHECK (event_type IN (
@@ -222,7 +238,8 @@ ALTER TABLE audit_events ADD CONSTRAINT ck_audit_event_type CHECK (event_type IN
   'knowledge.retired',
   'knowledge.merged',
   'rag.lookup_failed',
-  'rag.integrity_failed'
+  'rag.integrity_failed',
+  'knowledge.redraft_requested'
 ));
 
 -- ---------------------------------------------------------------------------

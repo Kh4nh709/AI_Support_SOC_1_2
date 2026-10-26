@@ -1,8 +1,8 @@
 """Append an audit_events row for every human decision and lifecycle transition.
 
-`EVENT_TYPES` mirrors the 35-name set `ck_audit_event_type` fixes (context pack
+`EVENT_TYPES` mirrors the 36-name set `ck_audit_event_type` fixes (context pack
 §6.1; migration 016 = 21 v1 names + 6 v3 names; migration 019 adds
-`admin.settings_changed`, DEC-200; migration 020 adds the seven of the learned-knowledge
+`admin.settings_changed`, DEC-200; migration 020 adds the eight of the learned-knowledge
 feature, DEC-210) — kept here so an unknown name is
 a clear `PermanentError` before any SQL runs, rather than the DB CHECK's generic
 constraint-violation message. `audit_events` is append-only (017); this module
@@ -51,7 +51,7 @@ EVENT_TYPES = frozenset(
         "label.created",
         # 1 v1.1 addition (019_admin_console.sql, DEC-200)
         "admin.settings_changed",
-        # 7 learned-knowledge additions (020_learned_knowledge.sql, DEC-210)
+        # 8 learned-knowledge additions (020_learned_knowledge.sql, DEC-210)
         "knowledge.drafted",
         "knowledge.approved",
         "knowledge.rejected",
@@ -59,6 +59,7 @@ EVENT_TYPES = frozenset(
         "knowledge.merged",
         "rag.lookup_failed",
         "rag.integrity_failed",
+        "knowledge.redraft_requested",
     }
 )
 

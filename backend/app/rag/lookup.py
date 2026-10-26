@@ -5,6 +5,8 @@ the `rag-worker` and never blocks ① or ②: they read the newest stored row of
 time and carry on without it when there is none. One lookup, in order:
 
 1. the idle timeout is raised (a model call is client-side idle time to PostgreSQL);
+1b. an alert whose ① has finished (`alerts.triage_status` is not `pending`) is skipped: no call, nothing
+   stored (`rag_results.status` has no `skipped`), because the lookup arrived too late for any prompt;
 2. the subject is parsed, its fingerprint built, its self-exclusion and its decision history computed
    (no model: analysts' decisions need no approval);
 3. the budget: when the global cap or the RAG's own is reached, a `budget` row is written (the history
@@ -46,6 +48,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
@@ -69,6 +72,7 @@ from app.rag.entries import KB_LEARNED_ROOT, Entry, entry_by_id, file_matches, s
 from app.rag.fingerprint import Fingerprint, alert_fingerprint, case_fingerprint
 from app.rag.history import (
     CONCLUSIONS,
+    LEVELS,
     History,
     decision_history,
     render_history,
@@ -86,6 +90,9 @@ from app.rag.match import (
 from app.rag.runs import write_rag_run
 from app.rag.subject import Subject, parse_subject
 from app.security import detector
+
+#: The statuses of a lookup a prompt may use: a `failed` or `budget` row carries no material (`prompt_material`).
+USABLE_STATUSES = ("ok", "empty")
 
 
 @dataclass(frozen=True)
@@ -141,20 +148,23 @@ def _history_json(history: History) -> dict[str, Any]:
     }
 
 
+_KEY_NAMES = frozenset(name for _level, name in LEVELS)
+
+
 def _is_count(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _history_of(raw: Any) -> History:
-    """A `History` from its stored JSON; whatever is missing or ill-shaped reads as 'none'."""
+    """A `History` from its stored JSON; whatever is missing or ill-shaped reads as 'none'. Only the six
+    conclusions of `CONCLUSIONS` and the six names of `LEVELS` are kept: this is rendered into a prompt.
+    """
     counts = dict.fromkeys(CONCLUSIONS, 0)
     if not isinstance(raw, dict):
         return History(None, None, 0, counts, None, ())
     by_conclusion = raw.get("by_conclusion")
     if isinstance(by_conclusion, dict):
-        counts.update(
-            {k: v for k, v in by_conclusion.items() if isinstance(k, str) and _is_count(v)}
-        )
+        counts.update({k: v for k, v in by_conclusion.items() if k in counts and _is_count(v)})
     last_seen = None
     if isinstance(raw.get("last_seen"), str):
         try:
@@ -163,9 +173,11 @@ def _history_of(raw: Any) -> History:
             last_seen = None
     examples = raw.get("examples")
     key_name = raw.get("key_name")
+    if key_name not in _KEY_NAMES:  # the name of one of the six levels, or nothing
+        key_name = None
     return History(
         level=raw["level"] if _is_count(raw.get("level")) else None,
-        key_name=key_name if isinstance(key_name, str) else None,
+        key_name=key_name,
         total=raw["total"] if _is_count(raw.get("total")) else 0,
         by_conclusion=counts,
         last_seen=last_seen,
@@ -302,6 +314,18 @@ def _over_budget(conn: psycopg.Connection, cfg: config.Config) -> bool:
     return rag_spent_or_exhausted(conn, cfg) >= cfg.RAG_MONTHLY_USD_CAP
 
 
+def _triage_has_finished(conn: psycopg.Connection, subject: Subject) -> bool:
+    """Whether the alert's ① is done with it: `alerts.triage_status` is `ready` or `unavailable`, no longer
+    `pending`. A case is never late (② reads the lookup when its own job runs), and an alert that is not
+    there is not "finished": the fingerprint says so with the `PermanentError` it always did."""
+    if subject.kind != "alert":
+        return False
+    row = conn.execute(
+        "SELECT triage_status FROM alerts WHERE alert_id = %s", (subject.id,)
+    ).fetchone()
+    return row is not None and row[0] != "pending"
+
+
 def run_lookup_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = None) -> None:
     """Run one lookup (module doc). `adapter` defaults to a `DeepSeekAdapter` limited to the RAG
     budget; every test passes a fake."""
@@ -318,6 +342,12 @@ def run_lookup_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
         raise PermanentError(
             "rag_lookup: the job's subject is neither 'alert:<id>' nor 'case:<uuid>'"
         ) from None
+
+    if _triage_has_finished(conn, subject):
+        # ① read the newest lookup when it ran, and it has run: this one could reach no prompt, and a model
+        # call would be paid for nothing (a lookup queued behind other jobs is how it comes to be late)
+        _log({"rag_lookup": "skipped", "reason": "late", "subject": subject.key})
+        return
 
     fp = _fingerprint_of(conn, subject)  # PermanentError when the subject is not there
     exclusion = self_exclusion(conn, subject)
@@ -423,17 +453,44 @@ def run_lookup_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
 # ── what ① and ② read ─────────────────────────────────────────────────────────────────────────
 
 
-def latest_lookup(conn: psycopg.Connection, subject: Subject) -> LookupResult | None:
-    """The newest stored lookup of `subject`, whatever its status, or None."""
-    row = conn.execute(
+def latest_lookup(
+    conn: psycopg.Connection, subject: Subject, *, statuses: Sequence[str] | None = None
+) -> LookupResult | None:
+    """The newest stored lookup of `subject`, or None. By default whatever its status, which is how ①
+    reads it. With `statuses`, the newest row among those statuses: ② passes `USABLE_STATUSES` because
+    spec §7.6 says it uses "the newest `ok` row", and a `failed` or `budget` refresh written after one
+    must not hide it. An empty `statuses` matches nothing."""
+    query = (
         "SELECT lookup_id, status, history, matches, created_at FROM rag_results"
-        " WHERE subject_kind = %s AND subject_id = %s ORDER BY created_at DESC, lookup_id LIMIT 1",
-        (subject.kind, subject.id),
-    ).fetchone()
+        " WHERE subject_kind = %s AND subject_id = %s"
+    )
+    params: list[Any] = [subject.kind, subject.id]
+    if statuses is not None:
+        query += " AND status = ANY(%s)"
+        params.append(list(statuses))
+    row = conn.execute(query + " ORDER BY created_at DESC, lookup_id LIMIT 1", params).fetchone()
     if row is None:
         return None
     lookup_id, status, history, matches, created_at = row
     return LookupResult(lookup_id, status, _history_of(history), _matches_of(matches), created_at)
+
+
+def lookup_material(
+    conn: psycopg.Connection, subject: Subject, *, statuses: Sequence[str] | None = None
+) -> PromptMaterial | None:
+    """What ① or ② may put in a prompt for `subject`: `prompt_material` of `latest_lookup`, read inside a
+    savepoint (`conn.transaction()` joins the job's open transaction as a `SAVEPOINT`), None when the
+    database refuses (P13 fix wave, item 23, Minor 3). The lookup is an extra: ① and ② must run without
+    it. Without the savepoint the one error of a read (the table a dump restored from before 020 does not
+    have, a statement timeout) aborts the whole transaction of a job that only wanted a hint, and with
+    the switches on over such a dump ingestion, decisions and escalations fail with it. The caller reads
+    this only when its switch is on, so with the switch off not one statement is added."""
+    try:
+        with conn.transaction():
+            return prompt_material(conn, latest_lookup(conn, subject, statuses=statuses))
+    except psycopg.Error as exc:
+        _log({"rag_lookup": "unreadable", "subject": subject.key, "error": type(exc).__name__})
+        return None
 
 
 def prompt_material(conn: psycopg.Connection, result: LookupResult | None) -> PromptMaterial | None:
@@ -444,7 +501,7 @@ def prompt_material(conn: psycopg.Connection, result: LookupResult | None) -> Pr
     material is empty (`history_text=None`, `entries=()`): the prompt says so in a fixed sentence
     (Review Focus 1). A match is dropped unless its entry is active and `sha256(content)`, the
     entry's `content_sha256` and the hash stored with the match are one value."""
-    if result is None or result.status not in ("ok", "empty"):
+    if result is None or result.status not in USABLE_STATUSES:
         return None
     entries: list[tuple[KbLearnedLevel, str]] = []
     for found in result.matches[:MAX_MATCHES]:

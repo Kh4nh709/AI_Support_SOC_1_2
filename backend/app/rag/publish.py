@@ -72,10 +72,12 @@ from psycopg.types.json import Jsonb
 from app.audit.events import write_event
 from app.infra import db as infra_db
 from app.infra.errors import ConfigError, PermanentError
+from app.infra.jobs import enqueue
 from app.rag.draft import (
     DRAFT_FIELDS,
     LIST_FIELDS,
     MODEL_FIELDS,
+    REDRAFTABLE_WARNINGS,
     SourceRecord,
     _tidy,
     _tidy_list,
@@ -506,6 +508,55 @@ def reject(conn: psycopg.Connection, draft_id: uuid.UUID, admin_id: str, reason:
     )
 
 
+# ── redraft ───────────────────────────────────────────────────────────────────────────────────
+
+
+def redraft(conn: psycopg.Connection, draft_id: uuid.UUID | str, admin_id: str) -> None:
+    """Ask for a text-less draft to be made again, in the caller's transaction (P13 fix wave, item 20, I1).
+
+    A `pending` draft with no text whose warnings are all of `rag.draft.REDRAFTABLE_WARNINGS` (the model
+    could not be asked: the budget, a refusal, a timeout, a ranking that gave no answer) is deleted, so the
+    `knowledge_draft` job's step 0 no longer finds it, and the job is queued for its subject. Anything
+    else - a draft that is not pending, one with text, one with no warning or with a V name (the model
+    answered and failed the rules), or with a name nobody here knows - is `StaleDraft` ("not_pending" or
+    "not_redraftable") and nothing has changed. `UnknownDraft` for an id that is not there. The event
+    `knowledge.redraft_requested {draft_id}` is filed under the draft's source, like `knowledge.rejected`.
+    The run rows of the earlier attempts stay (`llm_runs` is append-only)."""
+    wanted = _as_uuid(draft_id)
+    row = (
+        None
+        if wanted is None
+        else conn.execute(
+            "SELECT source_kind, source_id, status, draft, warnings FROM knowledge_drafts"
+            " WHERE draft_id = %s FOR UPDATE",
+            (wanted,),
+        ).fetchone()
+    )
+    if row is None:
+        raise UnknownDraft("draft: not found")
+    kind, source_id, status, body, warnings = row
+    if status != "pending":
+        raise StaleDraft("not_pending")
+    redraftable = (
+        body == {}
+        and isinstance(warnings, list)
+        and len(warnings) > 0
+        and all(isinstance(w, str) and w in REDRAFTABLE_WARNINGS for w in warnings)
+    )
+    if not redraftable:
+        raise StaleDraft("not_redraftable")
+    conn.execute("DELETE FROM knowledge_drafts WHERE draft_id = %s", (wanted,))
+    write_event(
+        conn,
+        "knowledge.redraft_requested",
+        source_id,
+        "admin",
+        actor_id=admin_id,
+        payload={"draft_id": str(wanted)},
+    )
+    enqueue(conn, "knowledge_draft", f"{kind}:{source_id}")
+
+
 # ── retire ────────────────────────────────────────────────────────────────────────────────────
 
 
@@ -582,32 +633,68 @@ def _warn(payload: dict[str, Any]) -> None:
     print(json.dumps(payload), file=sys.stderr)
 
 
-def rebuild(conn: psycopg.Connection, root: Path = KB_LEARNED_ROOT) -> int:
-    """Rewrite the file of every active entry from its `content`; returns how many were written.
-    The restore step after `make db-restore` (rows come back, files do not) and the repair of a file
-    changed by hand. An entry whose `content` no longer hashes to its `content_sha256`, or whose
-    `file_path` leaves `root`, is skipped with a line on stderr: a file for it could never pass V-R1.
+@dataclass(frozen=True)
+class Rebuilt:
+    """What `rebuild_report` did: the files written, and the entries it would not write."""
+
+    written: int
+    skipped: int
+
+
+def rebuild_report(conn: psycopg.Connection, root: Path = KB_LEARNED_ROOT) -> Rebuilt:
+    """Rewrite the file of every active entry from its `content` and say how many were written and how
+    many skipped. The restore step after `make db-restore` (rows come back, files do not) and the repair
+    of a file changed by hand. An entry is skipped, with a line on stderr naming it and the reason, when
+
+    * its `content` no longer hashes to its `content_sha256` (reason `content_sha256`): a file for it
+      could never pass V-R1;
+    * its `file_path` is not `entries/<category>/<entry_id>.md` (reason `path`; a leading `kb_learned/` is
+      tolerated): only the canonical path is ever written, so a row cannot make this command replace
+      another entry's file, and a path that leaves `root` is just one more way not to be canonical;
+    * the file cannot be written (reason `os_error`: a read-only mount, a full disk, a wrong owner):
+      the entries after it are still written.
+
     Retired entries are left where they are."""
     rows = conn.execute(
-        "SELECT entry_id, file_path, content, content_sha256 FROM knowledge_entries"
+        "SELECT entry_id, category, file_path, content, content_sha256 FROM knowledge_entries"
         " WHERE status = 'active' ORDER BY approved_at NULLS LAST, entry_id"
     ).fetchall()
-    written = 0
-    for entry_id, file_path, content, expected in rows:
+    written = skipped = 0
+    for entry_id, category, file_path, content, expected in rows:
+        reason = None
         if sha256_text(content) != expected:
-            _warn({"rebuild": "skipped", "entry_id": str(entry_id), "reason": "content_sha256"})
-            continue
-        try:
-            write_file(root, _relative(file_path), content.encode("utf-8"))
-        except PublishError:
-            _warn({"rebuild": "skipped", "entry_id": str(entry_id), "reason": "path"})
+            reason = "content_sha256"
+        else:
+            try:
+                canonical = entry_path(category, str(entry_id))
+            except PublishError:
+                canonical = None
+            if canonical is None or _relative(file_path) != canonical:
+                reason = "path"
+        if reason is None:
+            try:
+                write_file(root, _relative(file_path), content.encode("utf-8"))
+            except PublishError:
+                reason = "path"
+            except OSError:
+                reason = "os_error"
+        if reason is not None:
+            _warn({"rebuild": "skipped", "entry_id": str(entry_id), "reason": reason})
+            skipped += 1
             continue
         written += 1
-    return written
+    return Rebuilt(written, skipped)
+
+
+def rebuild(conn: psycopg.Connection, root: Path = KB_LEARNED_ROOT) -> int:
+    """`rebuild_report`'s count of the files written."""
+    return rebuild_report(conn, root).written
 
 
 def main(argv: Sequence[str] | None = None, *, conn: psycopg.Connection | None = None) -> int:
-    """`python -m app.rag.publish --rebuild [--root PATH]`. `conn` is a test seam."""
+    """`python -m app.rag.publish --rebuild [--root PATH]`. `conn` is a test seam. Exit 1 when it could not
+    connect or skipped an entry (the JSON line on stdout says how many, the lines on stderr which).
+    """
     parser = argparse.ArgumentParser(
         prog="python -m app.rag.publish",
         description="Rewrite every active learned-knowledge entry's file from the database.",
@@ -627,13 +714,13 @@ def main(argv: Sequence[str] | None = None, *, conn: psycopg.Connection | None =
         print(f"publish: {exc}", file=sys.stderr)
         return 1
     try:
-        count = rebuild(connection, root)
+        report = rebuild_report(connection, root)
         connection.rollback()  # read-only: end the transaction
     finally:
         if owned:
             connection.close()
-    print(json.dumps({"rebuilt": count, "root": str(root)}))
-    return 0
+    print(json.dumps({"rebuilt": report.written, "skipped": report.skipped, "root": str(root)}))
+    return 1 if report.skipped else 0  # an entry left without its file is a failed rebuild
 
 
 if __name__ == "__main__":

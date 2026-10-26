@@ -361,6 +361,7 @@ export type Fake = {
   /** What each write was sent: its path id, its body and its Content-Type. */
   approves: { id: string; body: unknown; contentType: string | null }[];
   rejects: { id: string; body: unknown; contentType: string | null }[];
+  redrafts: { id: string; body: unknown; contentType: string | null }[];
   retires: { id: string; body: unknown; contentType: string | null }[];
 };
 
@@ -377,6 +378,7 @@ export type FakeInit = {
   entryAnswer?: (id: string) => Response | Promise<Response>;
   approve?: Answer;
   reject?: Answer;
+  redraft?: Answer;
   retire?: Answer;
 };
 
@@ -397,6 +399,7 @@ export function knowledgeBackend(server: SetupServer, init: FakeInit = {}): Fake
     reads: { drafts: {}, entries: {}, draft: {}, entry: {}, tags: 0 },
     approves: [],
     rejects: [],
+    redrafts: [],
     retires: [],
   };
   const bump = (table: Record<string, number>, key: string) => {
@@ -442,6 +445,14 @@ export function knowledgeBackend(server: SetupServer, init: FakeInit = {}): Fake
       const found = fake.details.get(sent.id);
       if (found) found.draft.status = "rejected";
       return HttpResponse.json({ draft_id: sent.id, status: "rejected" });
+    }),
+    http.post(`${BASE}/drafts/:id/redraft`, async ({ request, params }) => {
+      const sent = await recordWrite(request, String(params.id));
+      fake.redrafts.push(sent);
+      if (init.redraft) return init.redraft(sent.body);
+      take(fake.drafts.pending, sent.id);
+      fake.details.delete(sent.id);
+      return HttpResponse.json({ draft_id: sent.id, queued: true });
     }),
     http.get(`${BASE}/entries`, ({ request }) => {
       const status = new URL(request.url).searchParams.get("status") ?? "active";

@@ -259,12 +259,41 @@ def test_a_zero_window_always_refreshes(db, web) -> None:
     assert len(lookup_jobs(db, case_id)) == 1
 
 
-@pytest.mark.parametrize("status", ["ok", "empty", "failed", "budget"])
-def test_it_is_the_age_of_the_newest_lookup_not_its_status(db, web, status) -> None:
-    """Spec §7.6: "older than `RAG_CASE_REFRESH_H`, or none". A fresh `failed` row is not retried by a
-    click: ② would run on it exactly as it runs on no row, and the queue already retried the job."""
+@pytest.mark.parametrize("status", ["ok", "empty"])
+def test_a_fresh_ok_or_empty_lookup_is_not_refreshed_by_a_click(db, web, status) -> None:
+    """Spec §7.6: "older than `RAG_CASE_REFRESH_H`, or none"."""
     client, case_id = web(RAG_ENABLED=True)
     put_lookup(db, case_id, kind="case", status=status, minutes_ago=30)
+    assert analyze(client, case_id).status_code == 202
+    assert lookup_jobs(db, case_id) == []
+
+
+@pytest.mark.parametrize("status", ["failed", "budget"])
+def test_a_fresh_failed_or_budget_lookup_is_stale_whatever_its_age(db, web, status) -> None:
+    """P13 fix wave, item 14 (T08 M1): ② reads the newest `ok`/`empty` row, so a newer `failed` or `budget`
+    row is not a lookup at all. It would otherwise hide, for `RAG_CASE_REFRESH_H` hours, the refresh that
+    could replace it: the click retries it, once (single-flight)."""
+    client, case_id = web(RAG_ENABLED=True)
+    put_lookup(db, case_id, kind="case", status=status, minutes_ago=30)
+    assert analyze(client, case_id).status_code == 202
+    ((job_type, subject, jstatus, *_),) = lookup_jobs(db, case_id)
+    assert (job_type, subject, jstatus) == ("rag_lookup", f"case:{case_id}", "pending")
+
+
+@pytest.mark.parametrize("status", ["failed", "budget"])
+def test_a_newer_failed_row_over_a_fresh_ok_one_is_still_stale(db, web, status) -> None:
+    client, case_id = web(RAG_ENABLED=True)
+    put_lookup(db, case_id, kind="case", status="ok", minutes_ago=300)
+    put_lookup(db, case_id, kind="case", status=status, minutes_ago=2)
+    assert analyze(client, case_id).status_code == 202
+    assert len(lookup_jobs(db, case_id)) == 1
+
+
+def test_an_old_failed_row_over_a_fresh_ok_one_is_not(db, web) -> None:
+    """Only the newest row counts: a `failed` one that an `ok` one came after is history."""
+    client, case_id = web(RAG_ENABLED=True)
+    put_lookup(db, case_id, kind="case", status="failed", minutes_ago=300)
+    put_lookup(db, case_id, kind="case", status="ok", minutes_ago=20)
     assert analyze(client, case_id).status_code == 202
     assert lookup_jobs(db, case_id) == []
 
