@@ -1096,7 +1096,7 @@ export const S = {
       system: "Hệ thống và job",
     } satisfies Record<AuditGroup, string>,
 
-    // One label for each of the 35 names of `audit/events.py`'s EVENT_TYPES, read through `labelOf`. The
+    // One label for each of the 36 names of `audit/events.py`'s EVENT_TYPES, read through `labelOf`. The
     // canvas gives nine; the rest follow its wording. An event with more than one use says the common part
     // (`admin.user_updated` is a role change, a deactivation, a reset and an unlock): the summary line of the
     // audit page says which.

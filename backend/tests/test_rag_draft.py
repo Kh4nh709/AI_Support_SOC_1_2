@@ -320,6 +320,14 @@ def test_v3_a_bare_user_name_of_the_record_is_caught() -> None:
     assert faults_of({"summary": "Tài khoản hr01 đã quét cổng"}) == []  # a record with no such user
 
 
+def test_v3_a_common_account_of_the_record_is_not_a_literal() -> None:
+    """Re-review Minor 2(b): SYSTEM is the alert's user and a word of the draft; V3 does not refuse it."""
+    src = source(usernames=frozenset({"SYSTEM", "hr01"}))
+    assert faults_of({"summary": "Tiến trình chạy bằng SYSTEM lúc đêm"}, src) == []
+    assert faults_of({"summary": "Tiến trình chạy bằng system"}, src) == []
+    assert faults_of({"summary": "SYSTEM và hr01 cùng quét"}, src) == ["v3_account:summary"]
+
+
 def test_v3_a_leading_backslash_account_is_caught() -> None:
     assert faults_of({"summary": r"User: \FPT\administrator - NTLM"}) == ["v3_account:summary"]
 
@@ -1126,6 +1134,33 @@ def test_the_source_record_knows_the_alerts_user_and_the_identities_its_texts_na
     src = draft.source_record(db, Subject("alert", "da-1"))
     assert src.usernames == frozenset({"hr01", "svc-backup"})  # not every identity of the inventory
     assert "somebody-else" not in src.usernames
+
+
+@db_marked
+def test_identities_named_like_a_placeholder_do_not_match_the_placeholders_of_the_texts(db) -> None:
+    """Re-review Minor 2(a): the texts carry `<USER>`, `<HOST>`, `<EMAIL>` and `<HASH>`; an identity named
+    `user`, `host`, `email` or `hash` found itself in them and became a user name V3 refuses."""
+    db.execute(
+        "INSERT INTO identities (username) VALUES ('user'), ('host'), ('email'), ('hash'),"
+        " ('alert_id'), ('ip_ngoai')"
+    )
+    decided_alert(
+        db,
+        alert_user="hr01",
+        description="Quét nhiều cổng từ bên ngoài",  # no bare word `host`, which would be a real match
+        reason="Tài khoản <USER> trên <HOST> gửi <EMAIL> với <HASH> từ <IP_NGOAI> mã <ALERT_ID>",
+    )
+    src = draft.source_record(db, Subject("alert", "da-1"))
+    assert src.usernames == frozenset({"hr01"})
+
+
+@db_marked
+def test_an_alert_whose_user_is_system_drafts_a_summary_that_says_system(db, kb_root) -> None:
+    decided_alert(db, alert_user="SYSTEM")
+    said = {**GOOD, "summary": "Tiến trình chạy bằng SYSTEM quét cổng theo lịch."}
+    assert run(db, "alert:da-1", FakeLLM([said])) is None
+    row = only_draft(db)
+    assert row["warnings"] == [] and row["draft"]["summary"] == said["summary"]
 
 
 @db_marked

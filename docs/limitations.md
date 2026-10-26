@@ -875,9 +875,9 @@ the Measured paragraph of item (ix) in section B.
   means this detector and the admin's reading, and nothing more. It does not change the claims about ① and ②
   themselves, whose gate does not read the detector (xxviii).
 
-### (xlix) · Learned knowledge: the ranking agent reads attacker-shaped log text, there is one `rag-worker` only, and one database role serves all three services
+### (xlix) · Learned knowledge: the ranking agent reads attacker-shaped log text, there is one `rag-worker` only, one database role serves all three services, and V4's structure rule has residual bypasses
 
-- **Statement.** Three limits of the learned-knowledge feature (DEC-210), each real only once a switch is on:
+- **Statement.** Four limits of the learned-knowledge feature (DEC-210), each real only once a switch is on:
   1. **The ranking agent reads log text an attacker can shape.** The prompt of the lookup and of the draft's
      ranking (`rag/match.py`) carries the subject's fingerprint, which is made of the alert's description and a
      generalised raw log. A source that controls a log line can steer which approved entry the agent shows and
@@ -894,6 +894,13 @@ the Measured paragraph of item (ix) in section B.
      RAG: `rag-worker` has the rights of the main worker over `alerts`, `cases` and the rest, and `app` those
      of the admin routes over `knowledge_entries`. A compromise of any of the three is a compromise of what
      the role can write (the append-only tables stay append-only for it, `rag_results` included).
+  4. **The structure rule of V4 is a regular expression, and it has residual bypasses.** `v4_structure`
+     (`llm.builder.has_forged_structure`) refuses a line that opens with `[<digits>]` or with a key of the
+     decision history, after the invisible code points are deleted and NFKC has folded the look-alikes. A line
+     it does not fold still passes: a combining mark (U+0301) in front of `[1]`, the ideographic brackets
+     `【1】`, the superscript parentheses `⁽1⁾`, and the key in capitals (`LEVEL:`). Such a line can mislead
+     the reading of the `kb_learned` block (a numbering or a history line that is not the system's), never a
+     verdict, a level fact or a schema. **The admin's review is the gate**, as for V4's phrase list (xlviii).
 - **Measured.** Not measured. (1) follows from the prompt of `rag/match.py` and was exercised by hand with
   crafted log text only in the unit tests of the injection checks; (2) by construction of `infra/jobs.py` and
   `rag/draft.py`; (3) by `docker-compose.yml` and `docker-compose.rag.yml`, which give all three services the

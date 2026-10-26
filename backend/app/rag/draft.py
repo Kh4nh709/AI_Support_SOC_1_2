@@ -73,7 +73,8 @@ reads, and into the retry message, whose every word the linter must know):
    for its own source, A5), event `knowledge.merged`, and no draft call;
 5. the draft call, validated by V1-V5; a failure is retried once with the fault names added to the
    message; 6. stored `pending`: a draft that passes with `knowledge.drafted`; two failures with
-   `draft = {}` and the faults of the last attempt in `warnings`; no budget with `["budget"]`.
+   `draft = {}` and the faults of the last attempt in `warnings`; no budget: nothing is stored and the
+   job is rescheduled (below).
 
 A model that cannot be asked does not block the conclusion, which is already committed. What the draft
 becomes depends on whether asking again later could help (I1 of the whole-branch review: a text-less
@@ -140,7 +141,7 @@ from app.rag.budget import rag_limits, rag_spent_or_exhausted
 from app.rag.candidates import candidates
 from app.rag.entries import KB_LEARNED_ROOT, Entry, file_matches, sha256_text
 from app.rag.fingerprint import Fingerprint, alert_fingerprint, case_fingerprint
-from app.rag.generalise import FINDING_NAMES, literal_findings
+from app.rag.generalise import FINDING_NAMES, literal_findings, strip_placeholders
 from app.rag.history import Exclusion
 from app.rag.match import PROMPT_BUDGET_TOKENS, Match, injection_findings, rank, select_candidates
 from app.rag.match import TEMPLATE_PATH as MATCH_TEMPLATE_PATH
@@ -314,7 +315,7 @@ def _usernames(
     inventory: a common account such as `admin` would then refuse every draft that mentions the word, and the
     model can only repeat a name it was shown."""
     names = {name.strip() for name in own if isinstance(name, str) and len(name.strip()) >= 2}
-    haystack = "\n".join(texts)
+    haystack = strip_placeholders("\n".join(texts))  # `<USER>` is not a place to find `user`
     if haystack:
         for (username,) in conn.execute(
             "SELECT username FROM identities LIMIT %s", (_IDENTITY_LIMIT,)

@@ -80,6 +80,34 @@ _HASH = re.compile(r"(?<![0-9A-Za-z])[0-9A-Fa-f]{32,}(?![0-9A-Za-z])")
 _DIGITS = re.compile(r"\d+")
 _HEX_DIGIT = re.compile(r"[0-9A-Fa-f]")
 _PLACEHOLDER = r"<(?:IP_NGOAI|IP_NOI_BO|EMAIL|USER|HOST|ALERT_ID|HASH|N)>"
+_PLACEHOLDER_RE = re.compile(_PLACEHOLDER)
+
+#: Built-in and common account names that V3 never treats as a literal user (compared case-insensitively): a
+#: log says `SYSTEM` or `root` of one event after another, the word identifies none of them, and an alert
+#: whose user is `SYSTEM` would otherwise refuse every draft that says so. `literal_findings(users=...)`
+#: drops them from the names it is given; `placeholderise` is unchanged (it may still hide them).
+COMMON_ACCOUNTS = frozenset(
+    {
+        "system",
+        "root",
+        "admin",
+        "administrator",
+        "user",
+        "guest",
+        "nobody",
+        "local service",
+        "network service",
+        "ssh",
+        "test",
+    }
+)
+
+
+def strip_placeholders(text: str) -> str:
+    """`text` without the eight placeholders (`<USER>`, `<HOST>`, ...), so a word looked for in it is not
+    found inside one: an identity named `user` or `host` is not in a text that only says `<USER>`.
+    """
+    return _PLACEHOLDER_RE.sub("", text)
 
 
 def _ipv4_placeholder(match: re.Match[str]) -> str:
@@ -161,11 +189,14 @@ def literal_findings(
     """The V3 fault names present in `text`, in `FINDING_NAMES` order. Never a matched value.
 
     `users` are bare user names (`hr01`), the inverse of what `placeholderise(..., users=...)` hides: a
-    name in the text, whole-word and case-insensitive, is an `account` finding, like `DOMAIN\\user` is.
+    name in the text, whole-word and case-insensitive, is an `account` finding, like `DOMAIN\\user` is,
+    except the names of `COMMON_ACCOUNTS`, which are never one.
     Without them a name with no backslash and no @ cannot be told from a word (P13 fix wave, item 22).
     """
     hosts = _name_pattern(list(hostnames))
-    people = _name_pattern(list(users))
+    people = _name_pattern(
+        [name for name in users if name.strip().casefold() not in COMMON_ACCOUNTS]
+    )
     present = {
         "ipv4": _has_ipv4(text),
         "ipv6": _has_ipv6(text),

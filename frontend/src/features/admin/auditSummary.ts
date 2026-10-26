@@ -1,4 +1,4 @@
-// What the audit page makes of an event (spec §4.7): the one-line summary of each of the 35 event types, built
+// What the audit page makes of an event (spec §4.7): the one-line summary of each of the 36 event types, built
 // client-side from the payload; the link of a subject that is an alert or a case; the payload as text; and the
 // escape of the characters a person cannot see.
 //

@@ -17,7 +17,7 @@ import json
 import time
 
 import pytest
-from app.rag.generalise import literal_findings, placeholderise
+from app.rag.generalise import COMMON_ACCOUNTS, literal_findings, placeholderise
 
 from tests.soar_payloads import mw03, sc03
 
@@ -50,6 +50,54 @@ def test_a_user_name_is_matched_whole_word_and_never_inside_a_placeholder() -> N
         assert literal_findings(text, [], users=names) == [], text
     for text in ("hr01.", "(hr01)", "hr01, ab", "user=hr01"):
         assert literal_findings(text, [], users=names) == ["account"], text
+
+
+@pytest.mark.parametrize("name", sorted(COMMON_ACCOUNTS))
+def test_a_common_account_name_is_never_a_literal_user(name: str) -> None:
+    """Re-review Minor 2(b): the built-in and common accounts (`SYSTEM`, `root`, `admin`, ...) are words of a
+    log, not what identifies one event; an alert whose user is `SYSTEM` must not refuse every draft that says
+    `SYSTEM`. Compared case-insensitively, whatever the spelling in the record."""
+    for spelling in (name, name.upper(), name.title()):
+        assert literal_findings(f"chạy bằng {spelling} lúc đêm", [], users=[spelling]) == []
+        assert literal_findings(f"chạy bằng {spelling} lúc đêm", [], users=[name]) == []
+    assert literal_findings(f"chạy bằng {name} và hr01", [], users=[name, "hr01"]) == ["account"]
+
+
+def test_the_common_accounts_are_the_ones_the_re_review_named() -> None:
+    assert COMMON_ACCOUNTS == frozenset(
+        {
+            "system",
+            "root",
+            "admin",
+            "administrator",
+            "user",
+            "guest",
+            "nobody",
+            "local service",
+            "network service",
+            "ssh",
+            "test",
+        }
+    )
+
+
+def test_a_user_name_that_is_not_common_is_still_refused_next_to_one_that_is() -> None:
+    assert literal_findings("SYSTEM, hr01 và root", [], users=["SYSTEM", "hr01", "root"]) == [
+        "account"
+    ]
+    assert literal_findings("tài khoản hr01", [], users=["SYSTEM", "hr01", "root"]) == ["account"]
+
+
+def test_the_placeholders_are_stripped_from_a_text_before_names_are_looked_for() -> None:
+    from app.rag.generalise import strip_placeholders
+
+    text = (
+        "<USER> trên <HOST> gửi <EMAIL> từ <IP_NGOAI> và <IP_NOI_BO>, <ALERT_ID>, <HASH>, <N> lần"
+    )
+    stripped = strip_placeholders(text)
+    assert "<" not in stripped and ">" not in stripped
+    assert "trên" in stripped and "lần" in stripped
+    assert strip_placeholders("a < b > c") == "a < b > c"  # only the eight placeholders
 
 
 def test_a_user_name_is_one_more_finding_in_the_order_of_the_kinds() -> None:

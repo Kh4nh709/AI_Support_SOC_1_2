@@ -436,7 +436,9 @@ def test_the_rollback_turns_the_switches_off_recreates_and_removes_nothing():
     # alone leaves the override in force for `docker compose up -d --remove-orphans`
     assert "unset COMPOSE_FILE" in note and "fresh shell" in note
     assert note.index("unset COMPOSE_FILE") < note.index("docker compose up -d --remove-orphans")
-    # read-only means read-only: nothing in the section deletes, drops or truncates
+    # read-only means read-only: nothing in the section deletes, drops or truncates, but the one Owner command
+    # that releases the draft jobs waiting for next month (`ONLY_DELETE`), pinned apart below
+    without = section.replace(ONLY_DELETE, "")
     for forbidden in (
         r"delete from",
         r"truncate ",
@@ -445,7 +447,7 @@ def test_the_rollback_turns_the_switches_off_recreates_and_removes_nothing():
         r"down -v",
         r"rm -r",
     ):
-        assert not re.search(forbidden, section, re.IGNORECASE), f"the section says {forbidden!r}"
+        assert not re.search(forbidden, without, re.IGNORECASE), f"the section says {forbidden!r}"
 
 
 def test_after_a_db_restore_the_files_come_back_from_the_database_in_this_order():
@@ -613,6 +615,37 @@ def test_the_rag_package_docstring_names_the_draft_module():
 
 # --------------------------------------------------------------------------- the P13 fix wave (items 11, 23-26, 28, 29)
 
+#: The one statement the section may hold that deletes: the draft jobs that wait for a month's budget.
+ONLY_DELETE = (
+    'psql "$DATABASE_URL" -c "delete from jobs where job_type=\'knowledge_draft\' '
+    "and status='pending' and scheduled_at > now()\""
+)
+
+
+def test_the_rollback_releases_the_draft_jobs_waiting_for_next_month_with_one_owner_command():
+    """Re-review Minor 1: raising the cap releases nothing - a rescheduled job's `scheduled_at` is fixed, and
+    with a cap of 0 it reschedules for ever. Wait for the month to turn, or, rolling back, delete those
+    pending future jobs once the switches are off, then drain."""
+    section = _section(_text())
+    note = _paragraph(section, "**Rollback.**")
+    assert note.count(ONLY_DELETE) == 1 and section.count(ONLY_DELETE) == 1
+    assert "Owner command" in note and "once the switches are off" in note
+    # switches off first, then the delete, then the drain count again, and only then the override goes
+    assert (
+        note.index("RAG_ENABLED=false") < note.index(ONLY_DELETE) < note.index("unset COMPOSE_FILE")
+    )
+    assert "then run the drain count" in note.split(ONLY_DELETE, 1)[1][:60]
+    assert "Wait for the month to turn" in note
+    assert "does not release it" in note and "with a cap of 0" in note
+    assert "raise `RAG_MONTHLY_USD_CAP`" not in note
+
+
+def test_the_rag_budget_row_does_not_promise_that_a_raised_cap_releases_a_waiting_draft():
+    row = _row("| `rag_budget` |")
+    assert "sooner if the cap is raised" not in row
+    assert "does not release" in row or "fixed" in row
+    assert "**Rollback**" in row or "Rollback" in row
+
 
 def _row(starts: str) -> str:
     return next(line for line in _text().splitlines() if line.startswith(starts))
@@ -730,5 +763,7 @@ def test_limitations_xlix_names_the_three_limits_of_the_wave():
         "`JOB_LOCK_TIMEOUT_S`",
         "pay for it twice",
         "One `app_rw` role serves `app`, `worker` and `rag-worker`",
+        "residual bypasses",
+        "`LEVEL:`",
     ):
         assert needle in item, f"limitation xlix no longer says {needle!r}"
