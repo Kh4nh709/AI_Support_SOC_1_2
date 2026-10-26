@@ -209,6 +209,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "knowledge.approved",
         "knowledge.rejected",
         "knowledge.retired",
+        "knowledge.redraft_requested",
     ),
     "alerts_cases": (
         "alert.received",

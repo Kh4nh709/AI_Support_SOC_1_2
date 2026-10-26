@@ -1,5 +1,5 @@
 // src/features/admin/auditSummary.test.ts — what the audit page makes of an event's payload: the one-line
-// summary of each of the 35 event types, the link of a subject that is an alert or a case, the payload as
+// summary of each of the 36 event types, the link of a subject that is an alert or a case, the payload as
 // text, and the escape of the characters a person cannot see. A payload is whatever the writers of the
 // events put there, so every function here is also shown to survive a payload of the wrong shape.
 import { S } from "../../strings";
@@ -19,8 +19,8 @@ const TYPES = Object.keys(S.admin.eventType);
 const sum = (event_type: string, payload: unknown) => summaryOf({ event_type, payload });
 
 describe("summaryOf, one event type at a time", () => {
-  it("covers all 35 event types of the backend, and each has a case below", () => {
-    expect(TYPES).toHaveLength(35);
+  it("covers all 36 event types of the backend, and each has a case below", () => {
+    expect(TYPES).toHaveLength(36);
   });
 
   it.each<[type: string, payload: unknown, summary: string]>([
@@ -330,6 +330,12 @@ describe("summaryOf, one event type at a time", () => {
     ],
     ["knowledge.retired", null, "admin gỡ tri thức khỏi kho"],
     [
+      "knowledge.redraft_requested",
+      { draft_id: "d-5" },
+      "admin yêu cầu soạn lại bản nháp không có nội dung; bản nháp d-5",
+    ],
+    ["knowledge.redraft_requested", null, "admin yêu cầu soạn lại bản nháp không có nội dung"],
+    [
       "knowledge.merged",
       { entry_id: "e-4" },
       "bản nháp gộp vào tri thức đã có, không tạo mục mới; tri thức e-4",
@@ -351,7 +357,7 @@ describe("summaryOf, one event type at a time", () => {
     expect(sum(type, payload)).toBe(summary);
   });
 
-  it("has a case for every one of the 35 types", () => {
+  it("has a case for every one of the 36 types", () => {
     // The cases above are the table; this is the other direction: no type of the backend is left without one.
     const covered = new Set(
       [
@@ -388,6 +394,7 @@ describe("summaryOf, one event type at a time", () => {
         "knowledge.rejected",
         "knowledge.retired",
         "knowledge.merged",
+        "knowledge.redraft_requested",
         "rag.lookup_failed",
         "rag.integrity_failed",
       ].sort(),
@@ -408,6 +415,7 @@ describe("the summary of a learned-knowledge event never shows a draft or an ent
     "knowledge.rejected",
     "knowledge.retired",
     "knowledge.merged",
+    "knowledge.redraft_requested",
     "rag.lookup_failed",
     "rag.integrity_failed",
   ];
@@ -837,6 +845,7 @@ describe("subjectPathOf", () => {
       "knowledge.approved",
       "knowledge.drafted",
       "knowledge.merged",
+      "knowledge.redraft_requested",
       "knowledge.rejected",
       "knowledge.retired",
       "rag.integrity_failed",

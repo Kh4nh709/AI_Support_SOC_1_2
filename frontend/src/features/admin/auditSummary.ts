@@ -395,6 +395,7 @@ const BUILDERS: Readonly<Record<string, Builder>> = {
   "knowledge.rejected": (p) => [A.knowledgeRejected, ...draftClause(p), ...reasonClause(p)],
   "knowledge.retired": (p) => [A.knowledgeRetired, ...entryClause(p), ...reasonClause(p)],
   "knowledge.merged": (p) => [A.knowledgeMerged, ...entryClause(p)],
+  "knowledge.redraft_requested": (p) => [A.knowledgeRedraft, ...draftClause(p)],
   "rag.lookup_failed": () => [A.lookupFailed],
   "rag.integrity_failed": (p) => [A.integrityFailed, ...entryClause(p)],
 };

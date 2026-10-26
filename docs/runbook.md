@@ -87,7 +87,7 @@ Releasing it is **three blocks, in this order**, and the steps below number stra
 
 ### Migration 020 (the database moves first)
 
-`020_learned_knowledge.sql` (DEC-210) creates `knowledge_drafts`, `knowledge_entries` and `rag_results`, adds `llm_runs.rag_lookup_id` and the pipelines `rag_lookup` and `knowledge_draft`, widens the job types (6 → 8) and the audit event names (28 → 35), and adds three indexes: the GIN index `ix_knowledge_entries_fingerprint_tsv` on the full-text column of the entries, `ix_rag_results_subject` for the newest lookup of a subject, and `ix_alerts_soar_dedup_key` on `alerts` (the case key the history query reads). It runs before any container runs the new code, as 019 did for v1.1.
+`020_learned_knowledge.sql` (DEC-210) creates `knowledge_drafts`, `knowledge_entries` and `rag_results`, adds `llm_runs.rag_lookup_id` and the pipelines `rag_lookup` and `knowledge_draft`, widens the job types (6 → 8) and the audit event names (28 → 36), and adds three indexes: the GIN index `ix_knowledge_entries_fingerprint_tsv` on the full-text column of the entries, `ix_rag_results_subject` for the newest lookup of a subject, and `ix_alerts_soar_dedup_key` on `alerts` (the case key the history query reads). It runs before any container runs the new code, as 019 did for v1.1.
 
 | step | command | expected |
 |---|---|---|

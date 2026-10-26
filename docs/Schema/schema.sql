@@ -1648,8 +1648,9 @@ INSERT INTO schema_migrations (version) VALUES ('019_admin_console');
 --      `alert:<alert_id>` or `case:<case_uuid>`; single-flight is the existing partial unique
 --      index `ux_jobs_mot_job_song_moi_subject` on (job_type, subject_id).
 --
---   4. `ck_audit_event_type` gains seven names: 28 -> 35. The 28 before them are 019's, in 019's
---      order, so a diff against 019 shows seven additions and nothing else.
+--   4. `ck_audit_event_type` gains eight names: 28 -> 36. The 28 before them are 019's, in 019's
+--      order, so a diff against 019 shows eight additions and nothing else. The eighth,
+--      `knowledge.redraft_requested`, is an admin asking for a text-less draft to be made again.
 --
 --   5. `ix_alerts_soar_dedup_key`: an expression index on the SOAR case key, for the history
 --      query ("the earlier alerts of this case"). A query uses it only when it writes the
@@ -1805,7 +1806,7 @@ ALTER TABLE jobs ADD CONSTRAINT ck_jobs_job_type CHECK (job_type IN (
 ));
 
 -- ---------------------------------------------------------------------------
--- audit_events — 019's 28 names, in 019's order, then the seven of DEC-210.
+-- audit_events — 019's 28 names, in 019's order, then the eight of DEC-210.
 -- ---------------------------------------------------------------------------
 ALTER TABLE audit_events DROP CONSTRAINT ck_audit_event_type;
 ALTER TABLE audit_events ADD CONSTRAINT ck_audit_event_type CHECK (event_type IN (
@@ -1843,7 +1844,8 @@ ALTER TABLE audit_events ADD CONSTRAINT ck_audit_event_type CHECK (event_type IN
   'knowledge.retired',
   'knowledge.merged',
   'rag.lookup_failed',
-  'rag.integrity_failed'
+  'rag.integrity_failed',
+  'knowledge.redraft_requested'
 ));
 
 -- ---------------------------------------------------------------------------

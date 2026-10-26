@@ -9,7 +9,7 @@ against the migrated test database:
 * `llm_runs`: `rag_lookup_id`; the two new pipelines `rag_lookup` and `knowledge_draft`, each of
   which may run on an `alert` or a `case` (① stays on `alert`, ② on `case`); the two new roles
   `retriever` and `drafter`;
-* `jobs`: the two new job types; `audit_events`: the seven new event types (28 -> 35);
+* `jobs`: the two new job types; `audit_events`: the eight new event types (28 -> 36);
 * the expression index `ix_alerts_soar_dedup_key` the history query uses;
 * `app_rw`'s rights on the three tables, granted by 020 itself (the way 019 does it).
 
@@ -51,7 +51,7 @@ CONCLUSIONS = (
     "confirmed_incident",
 )
 
-# 019's 28 names, in 019's order, then the seven of 020 in DEC-210's order.
+# 019's 28 names, in 019's order, then the eight of 020 in DEC-210's order.
 EVENTS_BEFORE_020 = [
     "alert.received",
     "alert.duplicate_merged",
@@ -90,6 +90,7 @@ EVENTS_IN_020 = [
     "knowledge.merged",
     "rag.lookup_failed",
     "rag.integrity_failed",
+    "knowledge.redraft_requested",  # added in the P13 fix wave (item 20): 020 is applied nowhere yet
 ]
 
 TABLES = ("knowledge_drafts", "knowledge_entries", "rag_results")
@@ -833,9 +834,9 @@ def _event_names(db) -> list[str]:
     return _quoted(_constraint_def(db, "audit_events", "ck_audit_event_type"))
 
 
-def test_the_event_constraint_holds_35_names_the_28_first_in_order(db):
+def test_the_event_constraint_holds_36_names_the_28_first_in_order(db):
     names = _event_names(db)
-    assert len(names) == len(set(names)) == 35
+    assert len(names) == len(set(names)) == 36
     assert names[:28] == EVENTS_BEFORE_020
     assert names[28:] == EVENTS_IN_020
 
