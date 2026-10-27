@@ -14,7 +14,8 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
   `ORDER BY` fragments (`QUEUE_ORDER_BY`), none of which reads anything ① writes.
 - `get_alert_view` — everything the detail page (P4-T05) and the labelling page (P6-T02)
   render: the head, its targeted accounts, the ±2 h correlation *now*, the playbook, the ①
-  suggestion, the acknowledger's name.
+  suggestion, the acknowledger's name, and (S3) `soar` — the SIEM's SOAR enrichment as one
+  display blob (`tier1/soar_view.py`), `None` for an alert that carries none.
 - `latest_suggestion` — **the one place in P4 that reads `llm_runs`** (planning decision
   5). The row shape is P3-T10's and may still move; every read here is `.get`-tolerant,
   and this function is where to follow it. `latest_suggestions` is the same read for many
@@ -39,6 +40,7 @@ import psycopg
 from app.domain import correlation
 from app.kb.lookup import get_playbook
 from app.tier1 import visibility
+from app.tier1.soar_view import soar_view
 
 #: `needs_retriage` — phase-2's v1 constants, `docs/phase-2-chong-trung-lap.md:321`.
 #: Module constants on purpose, **not** `Config`: §6.3 is frozen and P2/P3 never needed
@@ -564,6 +566,12 @@ _TARGETED_ACCOUNTS_SQL = """
     ORDER BY 1
 """
 _DISPLAY_NAME_SQL = "SELECT display_name FROM users WHERE user_id = %s"
+# Only the two parts of the stored payload the SOAR blob reads (S3), not the whole document:
+# `raw_payload` can be large, and the view never returns it.
+_SOAR_SQL = """
+    SELECT raw_payload->'enrichment', raw_payload->'previous_output'
+    FROM alerts WHERE alert_id = %s
+"""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -598,7 +606,8 @@ def get_alert_view(
     `suggestion.correlated_at_analysis` (N) is what ① saw — the page says *"gợi ý dựa
     trên N cụm liên quan tại thời điểm phân tích; hiện có M"* when they differ. The dict
     is passed through `visibility.strip(mode=mode)`; `risk_score` is dropped in both
-    modes (the band replaces it). Timestamps are the database's `datetime`s — display
+    modes (the band replaces it). `soar` (S3) is SIEM context, not ① output: both arms of the
+    analyst view keep it, the labelling mode never gets it. Timestamps are the database's `datetime`s — display
     formatting is the client's job."""
     view = _read_head(conn, alert_id)
     if view is None:
@@ -641,6 +650,11 @@ def get_alert_view(
     if view["acknowledged_by"] is not None:
         record = conn.execute(_DISPLAY_NAME_SQL, (view["acknowledged_by"],)).fetchone()
         view["acknowledged_by_name"] = record[0] if record is not None else None
+
+    # The SIEM's SOAR enrichment (S3): one display blob under one key, added BEFORE the strip so
+    # `visibility` decides who gets it. Read side only — never a fact or a gate input.
+    soar_record = conn.execute(_SOAR_SQL, (head_id,)).fetchone()
+    view["soar"] = soar_view(*soar_record) if soar_record is not None else None
 
     return visibility.strip(
         view, status=view["status"], suggestion_visible=view["suggestion_visible"], mode=mode

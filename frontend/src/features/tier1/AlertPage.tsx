@@ -26,6 +26,15 @@ import {
   Summary,
 } from "./AlertSections";
 import { DecisionPanel } from "./DecisionPanel";
+import {
+  SoarAction,
+  SoarCase,
+  SoarGeo,
+  SoarHistory,
+  SoarScan,
+  SoarScenario,
+  SoarTi,
+} from "./SoarSections";
 
 /** A head fetched for a duplicate is fresh for this long after the view that named it. */
 const HEAD_FRESH_MS = 5_000;
@@ -120,6 +129,13 @@ function AlertScreen({ alertId }: { alertId: string }) {
           </div>
           <Summary view={view} role={session?.role ?? null} />
           <EventDetails view={view} />
+          <SoarCase view={view} />
+          <SoarAction view={view} />
+          <SoarScenario view={view} />
+          <SoarHistory view={view} />
+          <SoarGeo view={view} />
+          <SoarScan view={view} />
+          <SoarTi view={view} />
           <RawLog view={view} />
           <Accounts view={view} />
           <Enrichment view={view} />

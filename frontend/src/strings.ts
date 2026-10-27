@@ -86,6 +86,25 @@ export const S = {
     high: "cao",
   },
 
+  // `alerts.category`: every category the backend's mapper can emit (`PRIORITY` of ingest/category.py; a test
+  // reads the tuple, so a category added there without a label here goes red). Read through `labelOf`; a
+  // category with no label is shown as its code. The page keeps the code beside the label.
+  category: {
+    ransomware: "Mã độc tống tiền",
+    malware: "Mã độc",
+    c2_beacon: "Kết nối điều khiển C2",
+    data_exfiltration: "Rò rỉ dữ liệu",
+    privilege_escalation: "Leo thang đặc quyền",
+    credential_access: "Đánh cắp thông tin xác thực",
+    ssh_brute_force: "Dò mật khẩu SSH",
+    brute_force: "Dò mật khẩu",
+    web_attack: "Tấn công ứng dụng web",
+    suspicious_login: "Đăng nhập đáng ngờ",
+    recon: "Do thám",
+    policy_violation: "Vi phạm chính sách",
+    unknown: "Chưa phân loại",
+  },
+
   // `alerts.status`, one label for each status the queue and the alert page can show.
   status: {
     received: "Đã nhận",
@@ -282,6 +301,63 @@ export const S = {
     no: "không",
     playbook: "Playbook",
     noPlaybook: "Không có playbook cho category này.",
+    // The SOAR enrichment of the SIEM (S3, `view.soar`). All of it is the SIEM's own text and numbers, shown as
+    // they came: the page reads none of it into a decision.
+    soar: {
+      caseTitle: "Case TheHive",
+      caseNumber: (number: number | string) => `Case TheHive: #${number}`,
+      noCase: "chưa tạo case (điểm thấp)",
+      dedupKey: "Khoá gộp (dedup)",
+      thehiveAlertId: "Alert TheHive",
+      actionTitle: "Hành động SOAR dự kiến",
+      // "block_ip → 79.79.78.202 (auto, act_first)": what is missing is left out with its punctuation.
+      action: (type: string, target: string, detail: string) => {
+        const head = [type, target].filter((part) => part !== "").join(" → ");
+        return detail === "" ? head : `${head} (${detail})`;
+      },
+      scenarioTitle: "Kịch bản và điểm SOAR",
+      scenario: "Kịch bản",
+      // "SC03 — External port scan (pfSense)"
+      scenarioName: (id: string, name: string) =>
+        [id, name].filter((part) => part !== "").join(" — "),
+      score: "Điểm triage của SIEM",
+      scoreHint:
+        "Điểm và tín hiệu do SIEM tính — chỉ để tham khảo, không dùng để quyết định thay bạn.",
+      signal: "Tín hiệu",
+      signalCodes: "Mã tín hiệu",
+      historyTitle: "Lịch sử 7 ngày",
+      ruleTotal7d: "Số lần rule này xuất hiện (7 ngày)",
+      ruleHost7d: "Số lần trên máy này (7 ngày)",
+      ruleHosts7d: "Số máy có rule này (7 ngày)",
+      firstSeenHost: "Lần đầu rule này xuất hiện trên máy",
+      lastSeen: "Lần cuối thấy rule",
+      yes: "Có",
+      no: "Không",
+      geoTitle: "Địa lý nguồn (GEO01)",
+      country: "Quốc gia",
+      countrySimulated: "Quốc gia mô phỏng",
+      simulated: "mô phỏng",
+      countryWithMark: (country: string) => `${country} (mô phỏng)`,
+      srcIpType: "Loại IP nguồn",
+      firstSeenCountry30d: "Lần đầu thấy quốc gia này (30 ngày)",
+      seenCount30d: "Số lần thấy trong 30 ngày",
+      priorFailures30m: "Số lần thất bại trước đó (30 phút)",
+      impossibleTravel: "Di chuyển bất khả thi",
+      offHours: "Ngoài giờ làm việc",
+      scanTitle: "Quét cổng (SC03)",
+      sampledPackets: "Số gói lấy mẫu",
+      distinctPorts: "Số cổng đích khác nhau (trong mẫu)",
+      portsSample: "Mẫu cổng đích",
+      morePorts: (n: number) => `+${n} cổng khác`,
+      dstIps: "IP đích",
+      scanActions: "Hành động của tường lửa",
+      previousOutput: "Log tường lửa gốc (previous_output)",
+      previousOutputLines: (total: number) =>
+        `Log tường lửa gốc (previous_output) — ${total} dòng, chỉ hiển thị phần đầu`,
+      tiTitle: "Tra cứu TI của SOAR",
+      ti: (type: string, value: string, verdict: string) =>
+        [type, value, verdict].filter((part) => part !== "").join(" · "),
+    },
   },
 
   decision: {

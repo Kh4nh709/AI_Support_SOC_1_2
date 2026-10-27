@@ -16,6 +16,7 @@ import { LiveProvider } from "../../live/LiveProvider";
 import type { LiveOptions } from "../../live/socket";
 import { S } from "../../strings";
 import { AlertPage } from "./AlertPage";
+import { GEO, MW03, SC03 } from "./soarFixtures";
 
 // The socket is faked: the test is the server, and calls what the client handed to connectLive.
 const fake = vi.hoisted(() => ({ opened: [] as unknown[] }));
@@ -801,6 +802,115 @@ describe("the count a decision is made on, across a live refetch (ruling R19)", 
   });
 });
 
+describe("the SOAR enrichment (S3)", () => {
+  const SOAR_TITLES = [
+    S.alert.soar.caseTitle,
+    S.alert.soar.actionTitle,
+    S.alert.soar.scenarioTitle,
+    S.alert.soar.historyTitle,
+    S.alert.soar.geoTitle,
+    S.alert.soar.scanTitle,
+    S.alert.soar.tiTitle,
+  ];
+  const left = () => screen.getByRole("region", { name: S.alert.infoHeading });
+
+  it("shows the case, the action, the scenario, the history, the scan and the TI in the left column", async () => {
+    views = { a1: full({ soar: SC03 }) };
+    renderPage();
+    await loaded();
+    const column = within(left());
+    for (const title of [
+      S.alert.soar.caseTitle,
+      S.alert.soar.actionTitle,
+      S.alert.soar.scenarioTitle,
+      S.alert.soar.historyTitle,
+      S.alert.soar.scanTitle,
+      S.alert.soar.tiTitle,
+    ]) {
+      expect(column.getByRole("heading", { level: 3, name: title })).toBeInTheDocument();
+    }
+    expect(column.getByText("Case TheHive: #55")).toBeInTheDocument();
+    expect(column.getByText("block_ip → 79.79.78.202 (auto, act_first)")).toBeInTheDocument();
+    expect(column.getByText(SC03.triage!.signal_text!)).toBeInTheDocument();
+    expect(heading3(S.alert.soar.geoTitle)).toBeNull(); // SC03 has no geo
+    // none of it is in the ① column
+    expect(within(aiColumn()).queryByText("Case TheHive: #55")).toBeNull();
+  });
+
+  it("shows the GEO01 block when the view carries one", async () => {
+    views = { a1: full({ soar: { ...MW03, ...GEO } }) };
+    renderPage();
+    await loaded();
+    expect(heading3(S.alert.soar.geoTitle)).toBeInTheDocument();
+    expect(valueOf(S.alert.soar.country)).toHaveTextContent("VN (mô phỏng)");
+  });
+
+  it.each([
+    ["no soar key", full()],
+    ["soar null", full({ soar: null })],
+    ["soar empty", full({ soar: {} })],
+  ])("shows none of the SOAR sections for an alert with %s", async (_name, answer) => {
+    views = { a1: answer };
+    renderPage();
+    await loaded();
+    for (const title of SOAR_TITLES) expect(heading3(title)).toBeNull();
+    // and the rest of the page is as it was
+    expect(heading3(S.alert.eventDetails)).toBeInTheDocument();
+  });
+
+  it("keeps them on the blind arm, where nothing of ① is shown", async () => {
+    views = { a1: blind({ soar: SC03 }) };
+    renderPage();
+    await loaded();
+    expect(heading3(S.alert.soar.caseTitle)).toBeInTheDocument();
+    expect(screen.getByText("Case TheHive: #55")).toBeInTheDocument();
+    const column = aiColumn();
+    expect(within(column).queryByText("Case TheHive: #55")).toBeNull();
+    expect(within(column).getByText(S.ai1.hidden)).toBeInTheDocument();
+  });
+
+  it("shows the event time beside the alert time, in +07", async () => {
+    views = { a1: full({ soar: MW03 }) };
+    renderPage();
+    await loaded();
+    expect(valueOf(S.alert.field.alertTime)).toHaveTextContent("30/09/2026 09:31:02");
+    expect(valueOf(S.alert.field.eventTime)).toHaveTextContent("30/09/2026 09:31:00");
+  });
+
+  it("renders a hostile SOAR value as text on the page", async () => {
+    const hostile = '<img src=x onerror="window.__s3p=1"></script><script>window.__s3p=2</script>';
+    views = {
+      a1: full({
+        soar: {
+          ...SC03,
+          case: { case_number: 9, dedup_key: hostile },
+          triage: { score: 1, signal_text: hostile },
+          scan: { ports_sampled: [hostile], previous_output: hostile },
+        },
+      }),
+    };
+    renderPage();
+    await loaded();
+    expect(document.body.querySelector("img")).toBeNull();
+    expect(document.body.querySelector("script")).toBeNull();
+    expect((window as unknown as { __s3p?: number }).__s3p).toBeUndefined();
+    expect(valueOf(S.alert.soar.dedupKey)).toHaveTextContent(hostile);
+    expect(screen.getByText(hostile, { selector: "pre" })).toBeInTheDocument();
+  });
+});
+
+describe("the category in Vietnamese (S1 follow-up)", () => {
+  it("shows credential_access by its Vietnamese label and keeps the code beside it", async () => {
+    views = { a1: full({ category: "credential_access" }) };
+    renderPage();
+    await loaded();
+    const top = within(summary());
+    expect(S.category.credential_access).toBeTruthy();
+    expect(top.getByText(S.category.credential_access)).toBeInTheDocument();
+    expect(top.getByText("credential_access")).toBeInTheDocument();
+  });
+});
+
 describe("hostile text (Review Focus 1)", () => {
   it("renders hostile raw_log as text", async () => {
     const hostile = '<img src=x onerror="window.__x=1">';
@@ -997,6 +1107,14 @@ describe("accessibility", () => {
     ["a duplicate", { a1: full({ alert_id: "head1", requested_alert_id: "a1" }) }, "tier1"],
     ["read by tier2", { a1: full(held) }, "tier2"],
     ["with none of the optional data", { a1: sparse() }, "tier1"],
+    ["with the SOAR sections of an MW03 alert", { a1: full({ soar: MW03 }) }, "tier1"],
+    ["with the SOAR sections of an SC03 alert", { a1: full({ soar: SC03 }) }, "tier1"],
+    [
+      "with the SOAR sections and a GEO01 block",
+      { a1: full({ soar: { ...SC03, ...GEO } }) },
+      "tier1",
+    ],
+    ["blind, with the SOAR sections", { a1: blind({ soar: SC03 }) }, "tier1"],
   ];
 
   it.each(cases)("has no axe violation: %s", async (_name, answers, role) => {

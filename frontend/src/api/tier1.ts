@@ -176,6 +176,67 @@ export type CorrelationSample = {
 export type LookupStatus = Record<string, string>;
 
 /**
+ * `view.soar` (S3): the SIEM's SOAR enrichment of the alert, made by `tier1/soar_view.py` from the stored
+ * payload. Every key of every block is optional: the server leaves out what the SIEM did not send, and keeps
+ * `case_number: null` for an alert whose SOAR score was too low for a TheHive case. The values are the SIEM's
+ * free text (a signal text, a dedup key, filterlog lines) and are shown as text, never read as markup. The
+ * score and the signal are the SIEM's opinion, displayed only: nothing in ① or its gate reads them.
+ */
+export type SoarCase = {
+  /** Null (kept) when no TheHive case was made; a number otherwise. */
+  case_number?: number | string | null;
+  thehive_alert_id?: string;
+  dedup_key?: string;
+  case_id?: string;
+};
+export type SoarAction = { type?: string; target?: string; tier?: string; mode?: string };
+export type SoarScenario = { id?: string; name?: string };
+export type SoarTriage = { score?: number; signal_text?: string; signal_codes?: string[] };
+export type SoarHistory = {
+  rule_7d_total?: number;
+  rule_7d_host?: number;
+  rule_7d_hosts?: number;
+  last_seen?: string;
+  first_seen_host?: boolean;
+};
+/** The GEO01 fields: a text, a number or a flag each; the server sends only those the SIEM did. */
+export type SoarGeoValue = string | number | boolean;
+export type SoarGeo = {
+  country?: SoarGeoValue;
+  country_simulated?: SoarGeoValue;
+  src_ip_type?: SoarGeoValue;
+  first_seen_country_30d?: SoarGeoValue;
+  seen_count_30d?: SoarGeoValue;
+  prior_failures_30m?: SoarGeoValue;
+  impossible_travel?: SoarGeoValue;
+  off_hours?: SoarGeoValue;
+};
+export type SoarScan = {
+  sampled_packets?: number;
+  distinct_dst_ports_sampled?: number;
+  /** A bounded sample; `ports_total` is how many the SIEM sent. */
+  ports_sampled?: string[];
+  ports_total?: number;
+  dst_ips?: string[];
+  actions?: string[];
+  /** The filterlog lines, cut on a line boundary by the server (`previous_output_truncated`). */
+  previous_output?: string;
+  previous_output_truncated?: boolean;
+  previous_output_lines?: number;
+};
+export type SoarTi = { type?: string; value?: string; verdict?: string };
+export type SoarBlob = {
+  case?: SoarCase;
+  action?: SoarAction;
+  scenario?: SoarScenario;
+  triage?: SoarTriage;
+  history?: SoarHistory;
+  geo?: SoarGeo;
+  scan?: SoarScan;
+  ti?: SoarTi[];
+};
+
+/**
  * `GET /api/tier1/alerts/{id}`: the analyst view of one alert (`queue.get_alert_view(mode="analyst")`),
  * written by hand against the backend. The keys `aiStateOfView` reads and the ones every view carries are
  * required; the rest are optional because a section is shown only when the view carries its data, and a
@@ -245,6 +306,11 @@ export type AlertView = {
   correlated_now?: number | null;
   /** The playbook of the category: the text of its markdown file, or null. */
   playbook?: string | null;
+  /**
+   * The SIEM's SOAR enrichment (S3), or null for an alert that carries none. SIEM context, not ① output: the
+   * blind arm gets it too, and the labelling page never does (the server strips it there).
+   */
+  soar?: SoarBlob | null;
 };
 
 export function fetchAlertView(alertId: string, signal?: AbortSignal): Promise<AlertView> {
