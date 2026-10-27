@@ -605,6 +605,17 @@ def test_a_quote_of_the_block_survives_step_3() -> None:
     assert state.forced_by == []
 
 
+def test_a_kept_quote_of_the_block_goes_through_the_step_7_output_guard() -> None:
+    """Step 7 re-checks every kept reason against §6.2's closed sets and raises on a source it does not
+    know: a `siem_context` quote that survived step 3 must not crash the run there."""
+    state = _step3([_reason("siem_context", "type=block_ip target=79.79.78.202 tier=auto")])
+
+    result = gate.step7_output_guard(state)
+
+    assert [r["source"] for r in result["reasons"]] == ["siem_context"]
+    assert state.steps["7"] == "ok"
+
+
 def test_a_quote_with_odd_whitespace_survives_like_every_other_source() -> None:
     state = _step3([_reason("siem_context", "79.79.78.202   sent TCP SYN\nto 20 distinct ports")])
 
