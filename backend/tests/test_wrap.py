@@ -16,7 +16,8 @@ import pytest
 from app.security import wrap as W
 
 
-def test_block_sources_match_six_names():
+def test_block_sources_match_seven_names():
+    """The five `reasons[].source` values of §6.2, the verifier's `proposer`, and S2's `siem_context`."""
     assert W.BLOCK_SOURCES == frozenset(
         {
             "wazuh_raw_log",
@@ -24,10 +25,11 @@ def test_block_sources_match_six_names():
             "correlation_samples",
             "kb_playbook",
             "context",
+            "siem_context",
             "proposer",
         }
     )
-    assert len(W.BLOCK_SOURCES) == 6
+    assert len(W.BLOCK_SOURCES) == 7
 
 
 def test_nonce_is_16_hex_and_fresh_per_call():

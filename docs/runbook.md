@@ -79,7 +79,7 @@ Then sign in at `http://127.0.0.1:8080/admin` as an admin and use the pages. Usi
 
 ## Environment keys
 
-The 66 keys of `.env.example`, one row each, no values. `.env.example` is generated from context pack §6.3 (`scripts/gen_env_example.py`, checked by `make lint`) and frozen: a new key is a decision (DEC-003), never an edit. **Who sets it:** *Owner* — a private or host-specific value, in `.env` only; *default* — `.env.example`'s value, changed only by a DEC. **Secret:** *yes* — `.env` only, never `.env.example`, a commit, a chat or a command line. *Compose* keys are read by `docker-compose.yml` and `db/init/*.sh` only, never by the application; *read by nothing* is a §6.3 key whose reader was cut or never built.
+The 67 keys of `.env.example`, one row each, no values. `.env.example` is generated from context pack §6.3 (`scripts/gen_env_example.py`, checked by `make lint`) and frozen: a new key is a decision (DEC-003), never an edit. **Who sets it:** *Owner* — a private or host-specific value, in `.env` only; *default* — `.env.example`'s value, changed only by a DEC. **Secret:** *yes* — `.env` only, never `.env.example`, a commit, a chat or a command line. *Compose* keys are read by `docker-compose.yml` and `db/init/*.sh` only, never by the application; *read by nothing* is a §6.3 key whose reader was cut or never built.
 
 | key | what it controls | who sets it | secret |
 |---|---|---|---|
@@ -97,6 +97,7 @@ The 66 keys of `.env.example`, one row each, no values. `.env.example` is genera
 | `PULL_ENABLED` | the indexer pull: `true` (default) seeds and re-arms the `pull` job, `false` seeds none and a `pull` row already pending ends after one run (DEC-207); alerts then arrive by `POST /webhook/alerts` only; recreate the containers after a change, `docker compose up -d app worker` (**SOAR intake (DEC-207)**, below) | Owner | no |
 | `AUTOCLOSE_ENABLED` | auto-close: `true` (default) loads and evaluates the rules, `false` loads none and every non-duplicate alert is queued for Tier 1, the G8′ hard blocks with the rules (DEC-207); the rules page and the tables stay; recreate the containers after a change (**SOAR intake (DEC-207)**, below) | Owner | no |
 | `ENRICHMENT_ENABLED` | internal enrichment: `true` (default) looks the asset, account and addresses up, `false` reads no `assets`, `identities` or `iocs` row, the context comes from the payload's `enrichment` (DEC-208), else the unknown context, and the `inventory_empty` check reads `ok` (DEC-207); recreate the containers after a change (**SOAR intake (DEC-207)**, below) | Owner | no |
+| `PROMPT_INCLUDE_SIEM_CONTEXT` | ①'s `siem_context` block: `true` (default) sends the alert's SOAR `enrichment` (scenario, signal text and codes, TI, planned action, history, scan summary, the logs around it) as one more untrusted block of the prompt, at most 8 KB, the surrounding logs cut first; `false` leaves it out, for the no-SIEM-context experiment; no SIEM, TI or SOAR score reaches the facts, the verifier or `structured_basis` either way; recreate the containers after a change (`docker compose up -d app worker`) | Owner | no |
 | `INDEXER_URL` | the indexer the puller reads; its host name must match the certificate | Owner | no |
 | `INDEXER_USER` | the read-only indexer account | Owner | no |
 | `INDEXER_PASSWORD` | that account's password | Owner | yes |
