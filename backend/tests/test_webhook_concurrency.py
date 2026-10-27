@@ -280,19 +280,48 @@ def test_concurrent_webhook_burst_is_answered_and_a_wrong_key_stays_401(
 
 
 # --------------------------------------------------------------------------
-# defence in depth: a wait that does not end is bounded, and costs one request
+# defence in depth: a wait that does not end is bounded, and costs one request —
+# answered 503 "busy" + Retry-After (Director ruling R1: 500 is outside the frozen set)
 # --------------------------------------------------------------------------
 
 
+def _post_one(scratch_dsn: str, body: bytes, key: str, what: str) -> tuple[int, dict, dict]:
+    """One POST on its own loop thread: (status, lower-cased headers, JSON body or {})."""
+
+    async def go() -> tuple[int, dict, dict]:
+        async with httpx.AsyncClient(transport=_transport(), base_url="http://webhook") as client:
+            response = await client.post(
+                "/webhook/alerts", content=body, headers={"X-API-Key": key}
+            )
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {}
+            return response.status_code, dict(response.headers), payload
+
+    return _run_on_loop_thread(go, scratch_dsn, what)
+
+
+# Which of the two bounds fires: the other is made too long to matter.
+_WHICH_BOUND = [
+    pytest.param("400ms", "30s", id="lock_timeout"),
+    pytest.param("30s", "400ms", id="statement_timeout"),
+]
+
+
 @pytest.mark.db
-def test_a_held_heartbeat_lock_fails_one_request_and_the_loop_keeps_answering(
-    app_on_scratch, scratch_dsn, monkeypatch
+@pytest.mark.parametrize(("lock_timeout", "statement_timeout"), _WHICH_BOUND)
+def test_a_held_heartbeat_lock_is_a_503_busy_for_one_request_and_the_loop_keeps_answering(
+    app_on_scratch, scratch_dsn, monkeypatch, lock_timeout, statement_timeout
 ) -> None:
     """Someone else holds the `source_heartbeat` row (a long transaction, the worker, a stuck
-    session). The accepted-alert UPDATE must give up after `lock_timeout` instead of waiting for
-    ever; meanwhile the loop answers a wrong key at once, and the rolled-back request left no
-    half-written intake row behind — a retry of the same alert is a clean 201."""
-    monkeypatch.setattr(webhook, "_LOCK_TIMEOUT", "400ms")
+    session). The accepted-alert UPDATE must give up after `lock_timeout` (or `statement_timeout`)
+    instead of waiting for ever, and say so as `503 busy` with a `Retry-After` — not a 500, which
+    is outside the webhook's frozen status set. Meanwhile the loop answers a wrong key at once, the
+    timed-out request's transaction is gone (the holder is the only open one) and left no intake
+    row, and a retry of the same alert once the lock is released is a clean 201."""
+    monkeypatch.setattr(webhook, "_LOCK_TIMEOUT", lock_timeout)
+    monkeypatch.setattr(webhook, "_STATEMENT_TIMEOUT", statement_timeout)
     stuck_id = _uid("stuck")
 
     holder = psycopg.connect(scratch_dsn)
@@ -302,7 +331,7 @@ def test_a_held_heartbeat_lock_fails_one_request_and_the_loop_keeps_answering(
             "ON CONFLICT (manager_id) DO UPDATE SET last_seen_at = now()"
         )  # an open transaction now holds the row lock
 
-        async def while_held() -> tuple[tuple[int, float], tuple[int, float]]:
+        async def while_held() -> tuple[tuple[int, dict, dict, float], tuple[int, float]]:
             async with httpx.AsyncClient(
                 transport=_transport(), base_url="http://webhook"
             ) as client:
@@ -312,35 +341,88 @@ def test_a_held_heartbeat_lock_fails_one_request_and_the_loop_keeps_answering(
                     response = await client.post(
                         "/webhook/alerts", content=_alert(stuck_id), headers={"X-API-Key": key}
                     )
-                    return response.status_code, time.monotonic() - started
+                    try:
+                        payload = response.json()
+                    except ValueError:
+                        payload = {}
+                    elapsed = time.monotonic() - started
+                    return response.status_code, dict(response.headers), payload, elapsed
 
                 stuck, wrong = await asyncio.wait_for(
                     asyncio.gather(post(KEY), post("wrong")), timeout=ANSWER_WITHIN_S
                 )
-                return stuck, wrong
+                return stuck, (wrong[0], wrong[3])
 
-        (stuck_status, stuck_s), (wrong_status, wrong_s) = _run_on_loop_thread(
-            while_held, scratch_dsn, "POST while the heartbeat row is locked by another session"
+        (stuck_status, stuck_headers, stuck_body, stuck_s), (wrong_status, wrong_s) = (
+            _run_on_loop_thread(
+                while_held, scratch_dsn, "POST while the heartbeat row is locked by another session"
+            )
         )
+        with psycopg.connect(scratch_dsn) as check:
+            (open_transactions,) = check.execute(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+                "AND state = 'idle in transaction' AND pid <> pg_backend_pid()"
+            ).fetchone()
     finally:
         holder.rollback()
         holder.close()
 
     assert wrong_status == 401 and wrong_s < 2, "the loop stays responsive while a request waits"
-    assert stuck_status == 500, "a lock timeout is one failed request"
-    assert 0.3 <= stuck_s < 10, f"the wait is bounded by lock_timeout, took {stuck_s:.1f}s"
+    assert stuck_status == 503, "a bounded wait that timed out is 'busy', never a 500"
+    assert stuck_body == {"detail": "busy"}, "distinguishable from the disabled 503"
+    assert stuck_headers.get("retry-after") == "2"
+    assert 0.3 <= stuck_s < 10, f"the wait is bounded by the timeout, took {stuck_s:.1f}s"
+    assert open_transactions == 1, "only the holder is still in a transaction; the 503 rolled back"
 
     with psycopg.connect(scratch_dsn) as check:
         (left_behind,) = check.execute(
             "SELECT count(*) FROM intake WHERE source_alert_id = %s", (stuck_id,)
         ).fetchone()
-    assert left_behind == 0, "the failed request rolled back; it left no intake row"
+    assert left_behind == 0, "the timed-out request rolled back; it left no intake row"
 
-    async def retry() -> int:
-        async with httpx.AsyncClient(transport=_transport(), base_url="http://webhook") as client:
-            response = await client.post(
-                "/webhook/alerts", content=_alert(stuck_id), headers={"X-API-Key": KEY}
-            )
-            return response.status_code
+    retry_status, _, retry_body = _post_one(
+        scratch_dsn, _alert(stuck_id), KEY, "retry after the lock is released"
+    )
+    assert retry_status == 201 and "intake_id" in retry_body
 
-    assert _run_on_loop_thread(retry, scratch_dsn, "retry after the lock is released") == 201
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    ("raised", "expected"),
+    [
+        pytest.param(psycopg.errors.LockNotAvailable("lock_timeout"), 503, id="LockNotAvailable"),
+        pytest.param(psycopg.errors.QueryCanceled("statement_timeout"), 503, id="QueryCanceled"),
+        # The catch is exactly those two classes: a real bug, or any other database error, is
+        # still a 500.
+        pytest.param(psycopg.errors.DeadlockDetected("deadlock"), 500, id="DeadlockDetected"),
+        pytest.param(psycopg.OperationalError("connection lost"), 500, id="OperationalError"),
+        pytest.param(RuntimeError("a bug"), 500, id="RuntimeError"),
+    ],
+)
+def test_only_the_two_timeout_errors_map_to_503_busy(
+    app_on_scratch, scratch_dsn, monkeypatch, raised, expected
+) -> None:
+    def boom(*_args, **_kwargs):
+        raise raised
+
+    monkeypatch.setattr(webhook.intake, "receive", boom)
+    status, headers, body = _post_one(scratch_dsn, _alert(_uid("map")), KEY, "mapped error")
+
+    assert status == expected
+    if expected == 503:
+        assert body == {"detail": "busy"}
+        assert headers.get("retry-after") == "2"
+    else:
+        assert "retry-after" not in headers
+
+
+@pytest.mark.db
+def test_the_disabled_503_stays_distinguishable_from_the_busy_503(
+    app_on_scratch, scratch_dsn
+) -> None:
+    main.app.dependency_overrides[deps.get_config] = lambda: _cfg(WEBHOOK_API_KEY="")
+    status, headers, body = _post_one(scratch_dsn, _alert(_uid("off")), KEY, "disabled webhook")
+
+    assert status == 503
+    assert body == {"detail": "webhook disabled"}
+    assert "retry-after" not in headers
