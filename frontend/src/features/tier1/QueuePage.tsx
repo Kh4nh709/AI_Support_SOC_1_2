@@ -15,6 +15,7 @@ import {
   type QueueSortKey,
 } from "../../api/tier1";
 import { BandBadge } from "../../components/Badge";
+import { CategoryText } from "../../components/CategoryText";
 import { DataTable, type Column } from "../../components/DataTable";
 import { formatTime } from "../../format";
 import { useLiveStatus } from "../../live/LiveProvider";
@@ -73,7 +74,11 @@ function columnsFor(
         </>
       ),
     },
-    { id: "category", header: S.queue.col.category, cell: (row) => row.category },
+    {
+      id: "category",
+      header: S.queue.col.category,
+      cell: (row) => <CategoryText code={row.category} />,
+    },
     {
       id: "agent",
       ...sortable("agent", S.queue.col.agent),
