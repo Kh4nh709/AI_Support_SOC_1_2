@@ -92,6 +92,21 @@ def _db_now(conn: psycopg.Connection) -> datetime:
 
 
 def _check_heartbeat(conn: psycopg.Connection, cfg: Config) -> CheckResult:
+    """Two sources, two judgements (S7).
+
+    Pull on (the default): the puller stamps `last_seen_at` at the end of every successful
+    pull, so a 30-minute keepalive window (`HEARTBEAT_MAX_AGE_MIN`) is the right rule and
+    this branch is unchanged. Pull off: the SIEM no longer sends the keepalive document
+    (rule 100999) and the webhook is the only source; a few quiet minutes are normal there,
+    so the judgement is "a real alert within `WEBHOOK_SOURCE_MAX_AGE_H` hours" on
+    `last_alert_at`, and a system that has received no alert yet is `ok`, not an alarm.
+    """
+    if cfg.PULL_ENABLED:
+        return _check_pull_heartbeat(conn, cfg)
+    return _check_webhook_heartbeat(conn, cfg)
+
+
+def _check_pull_heartbeat(conn: psycopg.Connection, cfg: Config) -> CheckResult:
     (age_min,) = conn.execute(
         "SELECT extract(epoch FROM (now() - max(last_seen_at))) / 60 FROM source_heartbeat"
     ).fetchone()
@@ -110,6 +125,30 @@ def _check_heartbeat(conn: psycopg.Connection, cfg: Config) -> CheckResult:
         else f"last heartbeat {age_min:.1f} min ago, over {cfg.HEARTBEAT_MAX_AGE_MIN} — the source stopped sending"
     )
     return CheckResult("heartbeat", ok, round(float(age_min), 1), cfg.HEARTBEAT_MAX_AGE_MIN, detail)
+
+
+def _check_webhook_heartbeat(conn: psycopg.Connection, cfg: Config) -> CheckResult:
+    """Webhook-only: `value` and `threshold` are in HOURS here (minutes on the pull branch);
+    the detail names the unit."""
+    (age_h,) = conn.execute(
+        "SELECT extract(epoch FROM (now() - max(last_alert_at))) / 3600 FROM source_heartbeat"
+    ).fetchone()
+    limit_h = cfg.WEBHOOK_SOURCE_MAX_AGE_H
+    if age_h is None:
+        # No real alert yet (a fresh system, or one that has only had keepalives): not a
+        # dead source, and alarming here would be the continuous false alarm this fixes.
+        return CheckResult("heartbeat", True, None, limit_h, "no webhook alert yet")
+    age_h = float(age_h)
+    ok = age_h <= limit_h
+    if ok:
+        detail = f"last webhook alert {_fmt_age(age_h)} ago"
+    else:
+        detail = f"no webhook alert in over {limit_h} h — the source may have stopped"
+    return CheckResult("heartbeat", ok, round(age_h, 2), limit_h, detail)
+
+
+def _fmt_age(age_h: float) -> str:
+    return f"{age_h * 60:.0f} min" if age_h < 1 else f"{age_h:.1f} h"
 
 
 def _check_intake_backlog(conn: psycopg.Connection) -> CheckResult:

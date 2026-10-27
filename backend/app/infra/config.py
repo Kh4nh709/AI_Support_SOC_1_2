@@ -151,6 +151,7 @@ class Config:
     PULL_START: str = "2026-08-01"
     HEARTBEAT_RULE_ID: str = "100999"
     HEARTBEAT_MAX_AGE_MIN: int = 30
+    WEBHOOK_SOURCE_MAX_AGE_H: int = 24
     SILENCE_WARN_HOURS: int = 3
     JOB_MAX_ATTEMPTS: int = 3
     JOB_BACKOFF: list[int] = dataclasses.field(default_factory=lambda: [10, 60, 300])
@@ -281,6 +282,7 @@ def load(*, env_file: str | Path = ".env") -> Config:
         PULL_START=as_str("PULL_START", "2026-08-01"),
         HEARTBEAT_RULE_ID=as_str("HEARTBEAT_RULE_ID", "100999"),
         HEARTBEAT_MAX_AGE_MIN=as_int("HEARTBEAT_MAX_AGE_MIN", 30),
+        WEBHOOK_SOURCE_MAX_AGE_H=as_int("WEBHOOK_SOURCE_MAX_AGE_H", 24),
         SILENCE_WARN_HOURS=as_int("SILENCE_WARN_HOURS", 3),
         JOB_MAX_ATTEMPTS=as_int("JOB_MAX_ATTEMPTS", 3),
         JOB_BACKOFF=as_json_list("JOB_BACKOFF", [10, 60, 300], int),
