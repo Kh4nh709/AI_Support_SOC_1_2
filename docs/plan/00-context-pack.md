@@ -89,7 +89,7 @@ Changing any of these requires a Decision Request in `docs/plan/INBOX.md` and Di
   "structured_basis": {"severity": "critical|high|medium|low", "ioc_reputation": "malicious|suspicious|clean|not_found|skipped",
     "asset_criticality": "high|medium|low|unknown", "identity_privileged": "true|false|unknown",
     "occurrence_count": 0, "playbook_rule_applied": "string|null"},
-  "reasons": [{"claim": "string", "quote": "verbatim substring of one block", "source": "wazuh_raw_log|rule_description|correlation_samples|kb_playbook|context"}],
+  "reasons": [{"claim": "string", "quote": "verbatim substring of one block", "source": "wazuh_raw_log|rule_description|correlation_samples|kb_playbook|context|siem_context"}],
   "playbook_used": "string|null"},
  "verifier_v1": {"agree": true, "structured_only_verdict": "false_positive|needs_review|escalate", "reason": "string"},
  "investigate_v2": {"summary": "string", "attack_narrative": "string",
@@ -106,6 +106,7 @@ DATABASE_URL(app runtime, role app_rw — a LOGIN role over TCP + scram-sha-256,
 MAX_PAYLOAD_BYTES=2_097_152  RAW_LOG_MAX_BYTES=1_024_000  PROMPT_LOG_MAX_BYTES=32_768
 DEDUP_IDLE_GAP_MINUTES=15  MAX_CLUSTER_AGE_HOURS=4  MAX_CLUSTER_AGE_AUTOCLOSED_MINUTES=30  MAX_CLUSTER_SIZE=1000  DEDUP_ENABLED=true(a bool; false = every alert is its own queue row and its own triage job, none is grouped into a cluster — forward-only, an open cluster is left as it is; the default keeps phase-2 grouping; DEC-165, Owner 30/09)
 PULL_ENABLED=true  AUTOCLOSE_ENABLED=true  ENRICHMENT_ENABLED=true(bools, DEC-207, Owner 23/10: alerts may arrive already enriched, grouped and closed by an external SOAR stream on POST /webhook/alerts; PULL_ENABLED=false seeds no pull job and a pending one is not re-armed, AUTOCLOSE_ENABLED=false loads and evaluates no auto-close rule, ENRICHMENT_ENABLED=false reads no assets, identities or iocs row and the context comes from the payload enrichment block per DEC-208, else the unknown context; each default true keeps the behaviour of before, and DEDUP_ENABLED above is the fourth switch)
+PROMPT_INCLUDE_SIEM_CONTEXT=true(a bool, S2, Owner work order 2: the ① prompt carries the alert's SOAR enrichment object as one more untrusted block, source siem_context, nonce-wrapped like the context and the correlation samples and capped at 8 KB with the surrounding logs cut first; false leaves the block out, for the no-SIEM-context experiment; no SIEM, TI or SOAR score reaches the facts, the verifier or structured_basis either way)
 INDEXER_URL  INDEXER_USER  INDEXER_PASSWORD  INDEXER_CA(required: path to the indexer root CA, on this host conf/root-ca.pem; no insecure mode)  INDEXER_INDEX="wazuh-alerts-*"
 PULL_INTERVAL_S=60  PULL_OVERLAP_S=60  PULL_PAGE=500  PULL_START="2026-08-01"
 HEARTBEAT_RULE_ID="100999"  HEARTBEAT_MAX_AGE_MIN=30  SILENCE_WARN_HOURS=3  WEBHOOK_SOURCE_MAX_AGE_H=24(hours; the `heartbeat` health check's window when PULL_ENABLED=false — the webhook is then the only source and the check judges `source_heartbeat.last_alert_at`, "a real alert within N hours", instead of the 30-minute `last_seen_at` keepalive window HEARTBEAT_MAX_AGE_MIN, which stays the pull-on rule; no alert ever received is `ok`, not an alarm; S7, Owner work order item 7)

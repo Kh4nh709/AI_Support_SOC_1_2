@@ -14,7 +14,7 @@
       {
         "claim": "string",
         "quote": "verbatim substring of one block",
-        "source": "wazuh_raw_log|rule_description|correlation_samples|kb_playbook|context"
+        "source": "wazuh_raw_log|rule_description|correlation_samples|kb_playbook|context|siem_context"
       }
     ],
     "playbook_used": "string|null"

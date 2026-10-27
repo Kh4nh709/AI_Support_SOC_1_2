@@ -140,6 +140,10 @@ class Config:
     PULL_ENABLED: bool = True
     AUTOCLOSE_ENABLED: bool = True
     ENRICHMENT_ENABLED: bool = True
+    # S2: true = the ① prompt carries SOAR's `enrichment` object as one more untrusted block, `siem_context`
+    # (`llm/siem_context.py`); false leaves it out (the no-SIEM-context experiment). Only a prompt is
+    # affected: the facts, the gate and the verifier read none of it.
+    PROMPT_INCLUDE_SIEM_CONTEXT: bool = True
     INDEXER_URL: str = ""
     INDEXER_USER: str = ""
     INDEXER_PASSWORD: str = ""
@@ -271,6 +275,7 @@ def load(*, env_file: str | Path = ".env") -> Config:
         PULL_ENABLED=as_bool("PULL_ENABLED", True),
         AUTOCLOSE_ENABLED=as_bool("AUTOCLOSE_ENABLED", True),
         ENRICHMENT_ENABLED=as_bool("ENRICHMENT_ENABLED", True),
+        PROMPT_INCLUDE_SIEM_CONTEXT=as_bool("PROMPT_INCLUDE_SIEM_CONTEXT", True),
         INDEXER_URL=as_str("INDEXER_URL", ""),
         INDEXER_USER=as_str("INDEXER_USER", ""),
         INDEXER_PASSWORD=as_str("INDEXER_PASSWORD", ""),

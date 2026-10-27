@@ -8,7 +8,8 @@ import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-# context pack §7.1 — the five reasons[].source values plus the verifier's one block (P3-T09).
+# context pack §7.1 — the five reasons[].source values plus the verifier's one block (P3-T09),
+# and S2's `siem_context`: SOAR's `enrichment` object, one untrusted block of the ① prompt.
 BLOCK_SOURCES = frozenset(
     {
         "wazuh_raw_log",
@@ -16,6 +17,7 @@ BLOCK_SOURCES = frozenset(
         "correlation_samples",
         "kb_playbook",
         "context",
+        "siem_context",
         "proposer",
     }
 )

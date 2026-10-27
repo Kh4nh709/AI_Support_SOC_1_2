@@ -17,7 +17,14 @@ IOC_REPUTATIONS = frozenset({"malicious", "suspicious", "clean", "not_found", "s
 ASSET_CRITICALITIES = frozenset({"high", "medium", "low", "unknown"})
 IDENTITY_PRIVILEGED = frozenset({"true", "false", "unknown"})
 REASON_SOURCES = frozenset(
-    {"wazuh_raw_log", "rule_description", "correlation_samples", "kb_playbook", "context"}
+    {
+        "wazuh_raw_log",
+        "rule_description",
+        "correlation_samples",
+        "kb_playbook",
+        "context",
+        "siem_context",
+    }
 )
 
 STRUCTURED_BASIS_FIELDS = (

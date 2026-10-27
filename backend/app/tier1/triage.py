@@ -106,8 +106,12 @@ _ALERT_COLUMNS = (
 #: `b1_facts`) sees the same count whatever `.env` says, and a gold alert from before the SOAR
 #: stream keeps the count it was built with.
 _SOAR_ENRICHED_SQL = "raw_payload ? 'enrichment'"
+#: And one more after that (S2): the `enrichment` subtree itself, the source of ①'s `siem_context`
+#: block. SIEM text, untrusted; `_load` keeps it only when it is a JSON object.
+_SIEM_ENRICHMENT_SQL = "raw_payload->'enrichment'"
 _SELECT_ALERT_SQL = (
-    f"SELECT {', '.join(_ALERT_COLUMNS)}, {_SOAR_ENRICHED_SQL} FROM alerts WHERE alert_id = %s"
+    f"SELECT {', '.join(_ALERT_COLUMNS)}, {_SOAR_ENRICHED_SQL}, {_SIEM_ENRICHMENT_SQL} "
+    "FROM alerts WHERE alert_id = %s"
 )
 
 _DEFAULT_ASSET_CONTEXT = {"criticality": "unknown"}
@@ -157,6 +161,8 @@ class _AlertRow:
     lookup_status: dict[str, Any]
     first_seen_at: datetime
     last_seen_at: datetime
+    # SOAR's `enrichment` object as sent, or `None` (S2): the input of ①'s `siem_context` block
+    siem_enrichment: dict[str, Any] | None = None
 
 
 def _log(payload: dict[str, Any]) -> None:
@@ -181,7 +187,9 @@ def _raise_idle_timeout(conn: psycopg.Connection, cfg: config.Config) -> None:
 def _load(conn: psycopg.Connection, alert_id: str) -> _AlertRow | None:
     """The 26-column row job (1) needs, or `None` if the alert does not exist. The 27th value the
     select returns is not a column of the row: it turns `occurrence_count` into `None` for an alert
-    whose document carries SOAR's `enrichment` block (`_SOAR_ENRICHED_SQL`).
+    whose document carries SOAR's `enrichment` block (`_SOAR_ENRICHED_SQL`). The 28th is that block
+    itself, which becomes `siem_enrichment` when it is a JSON object and `None` when it is anything
+    else (S2).
 
     A `received` alert can never have a `triage` job (it has not reached
     `queued_tier1` yet), so the four `*_context`/`lookup_status` columns are never
@@ -191,10 +199,11 @@ def _load(conn: psycopg.Connection, alert_id: str) -> _AlertRow | None:
     row = conn.execute(_SELECT_ALERT_SQL, (alert_id,)).fetchone()
     if row is None:
         return None
-    *columns, soar_enriched = row
+    *columns, soar_enriched, enrichment = row
     values = dict(zip(_ALERT_COLUMNS, columns, strict=True))
     if soar_enriched:
         values["occurrence_count"] = None
+    values["siem_enrichment"] = enrichment if isinstance(enrichment, dict) else None
     if values["asset_context"] is None:
         _log(
             {"triage": "defensive_default_context", "alert_id": alert_id, "column": "asset_context"}
@@ -644,6 +653,7 @@ def evaluate_alert(
         lookup_status=row.lookup_status,
         first_seen_at=row.first_seen_at,
         last_seen_at=row.last_seen_at,
+        siem_enrichment=row.siem_enrichment,
     )
     facts = build_facts(inp, corr)
     built = build_proposer_prompt(

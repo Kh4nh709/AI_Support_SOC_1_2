@@ -129,9 +129,10 @@ def test_render_uses_nested_indentation_and_array_marker():
     assert "structured_basis:" in lines
     assert "  severity: critical|high|medium|low" in lines
     assert "reasons[]:" in lines
-    assert "  source: wazuh_raw_log|rule_description|correlation_samples|kb_playbook|context" in (
-        lines
-    )
+    assert (
+        "  source: wazuh_raw_log|rule_description|correlation_samples|kb_playbook|context"
+        "|siem_context"
+    ) in lines
 
 
 def test_unknown_schema_name_raises_key_error():
