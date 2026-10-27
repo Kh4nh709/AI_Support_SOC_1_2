@@ -449,5 +449,35 @@ def test_brute_force_table_is_unreviewed():
     assert table.reviewed_by is None
     assert table.reviewed_at is None
     assert table.reviewed is False
-    # Every category is one of the ten signed on 28/09 or this unsigned one — nothing else.
-    assert set(CATEGORIES) == set(SIGNED_CATEGORIES) | {"brute_force"}
+    # Every category is one of the ten signed on 28/09 or one of the two unsigned ones
+    # (`brute_force`, `credential_access`) — nothing else.
+    assert set(CATEGORIES) == set(SIGNED_CATEGORIES) | {"brute_force", "credential_access"}
+
+
+def test_credential_access_table_is_unreviewed():
+    """S1 (v3.4): agent-drafted, not signed. `reviewed_by` is left blank for a human to fill;
+    while it is blank the gate's step 4 answers `table_unreviewed`, so ① never auto-closes a
+    `credential_access` alert."""
+    from app.tier1.triage import _make_rule_check
+
+    table = lookup.get_decision_table("credential_access")
+    assert not table.reviewed_by
+    assert table.reviewed is False
+    assert lookup.check_consistency(table) == []
+    # No false_positive rule: a low alert is never auto-closed (nothing in the facts can tell a
+    # registered security product or an admin's diagnostic dump from a real LSASS dump).
+    assert {rule.action for rule in table.rules} == {"escalate", "needs_review"}
+    low_point = {
+        "severity": "low",
+        "rule_level": 3,
+        "ioc_reputation": "not_found",
+        "asset_criticality": "low",
+        "identity_privileged": "false",
+        "occurrence_count": 1,
+    }
+    assert lookup.apply_table(table, low_point) == ("needs_review", "cra-4")
+    high_point = {**low_point, "severity": "high", "rule_level": 10}
+    assert lookup.apply_table(table, high_point) == ("escalate", "cra-3")
+    # Even a point where a rule holds is refused while the table is unsigned.
+    for rule in table.rules:
+        assert _make_rule_check(table, low_point)(rule.id) == (False, "table_unreviewed")

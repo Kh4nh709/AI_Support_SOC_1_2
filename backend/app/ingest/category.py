@@ -30,8 +30,11 @@ They file Windows login attempts under `brute_force` rather than
 `authentication_failed`/`authentication_failures` groups, which the stock
 single-4625 rule carries with T1531 — and add the Windows-only technique ids the
 shared table has no key for. resolved_by stays inside the DB's
-`ck_alerts_resolved_by` set. The four shared tables are not edited and any other
-decoder skips W1-W3 and keeps tier 5, so its alerts cannot change category.
+`ck_alerts_resolved_by` set. The Windows tiers edit none of the four shared tables
+and any other decoder skips W1-W3 and keeps tier 5, so the Windows tiers alone
+cannot change another decoder's category. (S1, v3.4, did edit the shared technique
+table, on purpose: three discovery techniques reach `recon` and T1003 reaches
+`credential_access` for every decoder — see `MAPPING_VERSION`.)
 
 Within a tier, ALL matching signals are collected — never "first match wins":
 a real alert routinely carries two MITRE techniques that both resolve (the
@@ -61,17 +64,23 @@ from dataclasses import dataclass
 #: and the two Windows ones) — it is what tells a later reader which alerts need
 #: re-classifying. `test_category.py` hashes the tables and pins this value as a
 #: reminder to do so. v3.3: the Windows tiers (P9-T02); the shared tables are v3.2's.
-MAPPING_VERSION = "v3.3"
+#: v3.4 (S1): T1018/T1016/T1482 -> `recon` and T1003/T1003.001 -> the new
+#: `credential_access` in the shared technique table (T1003/T1003.001 also in the
+#: Windows one), `credential_access` in `PRIORITY` right after `privilege_escalation`.
+MAPPING_VERSION = "v3.4"
 
 #: phase-1 §Khối 5, verbatim — declared once, applied to every tier's
 #: candidate set (not only the MITRE tier). `brute_force` (P9-T02) sits directly
-#: after `ssh_brute_force`: the same attack, on Windows.
+#: after `ssh_brute_force`: the same attack, on Windows. `credential_access` (S1)
+#: sits directly after `privilege_escalation`: LSASS credential theft ranks with it,
+#: above the login, brute-force and recon categories.
 PRIORITY: tuple[str, ...] = (
     "ransomware",
     "malware",
     "c2_beacon",
     "data_exfiltration",
     "privilege_escalation",
+    "credential_access",
     "ssh_brute_force",
     "brute_force",
     "web_attack",
@@ -87,7 +96,9 @@ WINDOWS_DECODER = "windows_eventchannel"
 # Windows tiers W1-W2 (P9-T02, DEC-149), only for an alert whose decoder is
 # `windows_eventchannel`: the exact id, then the part before the first '.', as
 # tiers 1-2 do. T1110 is MITRE ATT&CK "Brute Force" — every sub-technique reaches
-# it through W2; the rest are Windows-only ids with no key in the shared table below.
+# it through W2; the rest are Windows-only ids with no key in the shared table below,
+# except T1003 (S1, v3.4: OS Credential Dumping, the LSASS dump), which — like T1110 —
+# is in both tables.
 WINDOWS_TECHNIQUE_TO_CATEGORY: dict[str, str] = {
     "T1110": "brute_force",
     "T1110.001": "brute_force",
@@ -99,6 +110,8 @@ WINDOWS_TECHNIQUE_TO_CATEGORY: dict[str, str] = {
     "T1048": "data_exfiltration",
     "T1567": "data_exfiltration",
     "T1059.001": "malware",
+    "T1003": "credential_access",
+    "T1003.001": "credential_access",
 }
 
 # Windows tier W3 — rule.groups. Wazuh's Windows logon rules carry these groups
@@ -128,7 +141,15 @@ TECHNIQUE_TO_CATEGORY: dict[str, str] = {
     "T1189": "web_attack",
     "T1505.003": "web_attack",
     "T1046": "recon",
+    # S1 (v3.4): discovery techniques — domain-controller / domain probing (rule 111438).
+    # Shared-table only: a Windows alert reaches them by the fall-through from W1-W3.
+    "T1018": "recon",
+    "T1016": "recon",
+    "T1482": "recon",
     "T1548": "privilege_escalation",
+    # S1 (v3.4): OS Credential Dumping / LSASS memory (rule 111923); also in the Windows table.
+    "T1003": "credential_access",
+    "T1003.001": "credential_access",
     "T1071": "c2_beacon",
     "T1071.004": "c2_beacon",
     "T1041": "data_exfiltration",

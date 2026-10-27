@@ -3,10 +3,11 @@
 Card: docs/plan/tasks/P9/P9-tasks.md §4, with the Director's follow-up (open items 1-3).
 For a `windows_eventchannel` alert three Windows tiers run before tier 1 — exact MITRE id,
 parent MITRE id, then `rule.groups`, on the Windows tables — and tier 5 (destination port)
-never runs. Any other decoder skips the Windows tiers and keeps tier 5, and the four shared
-tables are not edited (their v3.2 hash is still pinned in `test_category.py`), so an alert
-from any other decoder cannot change category. The parse-level cases use the synthetic
-fixtures under `fixtures/windows/` (P9-T01).
+never runs. Any other decoder skips the Windows tiers and keeps tier 5, and the Windows tiers
+edit none of the four shared tables, so they alone cannot change another decoder's category
+(S1, v3.4, later edited the shared technique table on purpose — its digest is pinned in
+`test_category.py`). The parse-level cases use the synthetic fixtures under
+`fixtures/windows/` (P9-T01).
 """
 
 from __future__ import annotations
@@ -75,6 +76,9 @@ def test_windows_table_is_exactly_the_cards():
         "T1048": "data_exfiltration",
         "T1567": "data_exfiltration",
         "T1059.001": "malware",
+        # S1 (v3.4): LSASS credential theft, mirroring T1110 — in the shared table too.
+        "T1003": "credential_access",
+        "T1003.001": "credential_access",
     }
 
 
@@ -88,9 +92,11 @@ def test_windows_group_table_is_exactly_the_directors():
 
 
 def test_windows_only_ids_have_no_key_in_the_shared_table():
-    """Besides the T1110 family it overrides, the Windows table adds only ids the shared
-    table has no key for — the shared table is never shadowed for them."""
-    windows_only = set(WINDOWS_TECHNIQUE_TO_CATEGORY) - {"T1110", "T1110.001", "T1110.003"}
+    """Besides the T1110 family it overrides and T1003 (S1, v3.4: in both tables, like T1110),
+    the Windows table adds only ids the shared table has no key for — the shared table is
+    never shadowed for them."""
+    both = {"T1110", "T1110.001", "T1110.003", "T1003", "T1003.001"}
+    windows_only = set(WINDOWS_TECHNIQUE_TO_CATEGORY) - both
     assert windows_only & set(TECHNIQUE_TO_CATEGORY) == set()
 
 
@@ -253,7 +259,7 @@ def test_windows_tier_never_raises(mitre_ids, groups, dst_port):
 
 def test_priority_places_brute_force_directly_after_ssh_brute_force():
     assert PRIORITY.index("brute_force") == PRIORITY.index("ssh_brute_force") + 1
-    assert tuple(c for c in PRIORITY if c != "brute_force") == (
+    assert tuple(c for c in PRIORITY if c not in ("brute_force", "credential_access")) == (
         "ransomware",
         "malware",
         "c2_beacon",
@@ -300,7 +306,7 @@ def test_windows_multiple_logon_failures_resolve_brute_force():
     """60204-shaped: T1110 + `authentication_failures` — W1."""
     alert = parse_wazuh_alert(_win("4625_multiple_logon_failures")).alert
     assert (alert.category, alert.resolved_by) == ("brute_force", "mitre")
-    assert alert.mapping_version == "v3.3"
+    assert alert.mapping_version == "v3.4"
 
 
 def test_windows_logon_success_resolves_suspicious_login():
