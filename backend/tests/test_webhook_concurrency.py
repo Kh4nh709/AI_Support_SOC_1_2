@@ -187,8 +187,9 @@ def _run_on_loop_thread(make_coro, scratch_dsn: str, what: str):
         _terminate_backends(_dbname_of(scratch_dsn))
         thread.join(10)
         pytest.fail(
-            f"{what}: the app answered nothing in {WATCHDOG_S}s — the event loop is wedged. "
-            f"Database sessions: {sessions}. The loop thread is parked at:\n{where}"
+            f"{what}: no answer in {WATCHDOG_S}s — the event loop is wedged, or a request sits in "
+            f"a database wait nothing bounds. Database sessions: {sessions}. "
+            f"The loop thread is parked at:\n{where}"
         )
     if "error" in box:
         raise box["error"]
@@ -255,7 +256,9 @@ def test_concurrent_webhook_burst_is_answered_and_a_wrong_key_stays_401(
     assert sorted(s for s, _, _ in by_kind["twin"]) == [201, 409]
     assert [s for s, _, _ in by_kind["wrong-key"]] == [401, 401]
     assert all(elapsed < 5 for _, elapsed, _ in by_kind["wrong-key"]), "a 401 must be prompt"
-    assert [(s, p) for s, _, p in by_kind["rejected"]] == [(400, {"detail": {"missing": "rule.id"}})]
+    assert [(s, p) for s, _, p in by_kind["rejected"]] == [
+        (400, {"detail": {"missing": "rule.id"}})
+    ]
 
     with psycopg.connect(scratch_dsn) as check:
         (intake_rows,) = check.execute(
