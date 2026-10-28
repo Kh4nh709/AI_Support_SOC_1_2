@@ -90,6 +90,40 @@ def test_mw03_with_the_two_new_asset_fields_is_medium_unprivileged_and_unchecked
     )
 
 
+def test_mw03_carries_the_siem_owner_and_role() -> None:
+    """DEC-210 S5 (Owner decision B): owner and role are local annotations the SIEM now adds to
+    `enrichment.asset`. They are read as text, display-only — rendered inside the untrusted
+    `context` block and never a fact, so they do not reach the gate. criticality/privilege/ioc
+    are unchanged."""
+    ctx = context_of(
+        mw03(
+            criticality="medium",
+            in_inventory=True,
+            owner="Thesis author",
+            role="HR employee workstation (Windows 10, Wazuh agent 001)",
+        )
+    )
+
+    assert ctx == AlertContext(
+        True,
+        "medium",
+        "Thesis author",
+        "HR employee workstation (Windows 10, Wazuh agent 001)",
+        False,
+        "skipped",
+        {"asset": "found", "identity": "found", "ioc": "skipped"},
+    )
+
+
+@pytest.mark.parametrize("field", ["owner", "role"])
+def test_an_owner_or_role_of_the_wrong_type_makes_the_context_unknown(field: str) -> None:
+    """DEC-208 item 3: a field outside its type makes the WHOLE context unknown — a half-trusted
+    context is not built. owner/role join that rule (a string, or absent)."""
+    ctx = context_of(mw03(criticality="medium", in_inventory=True, **{field: 123}))
+
+    assert ctx == UNKNOWN
+
+
 def test_mw03_as_first_sent_has_no_criticality_and_is_not_known_to_the_inventory() -> None:
     """The sample predates `in_inventory` and `criticality`: the asset is `unknown` and absent for
     that field only; the account is still read (`user_is_admin: false`) and so is the missing IoC.

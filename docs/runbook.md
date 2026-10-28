@@ -181,7 +181,7 @@ When the alerts arrive from the team's SOAR stream (n8n), which has already enri
 - `DEDUP_ENABLED=false`: no grouping; every alert is its own queue row and its own `triage` job (**Grouping switch (DEC-165)**, above).
 - `PULL_ENABLED=false`: the worker seeds no `pull` job; one already pending ends after one run and is not re-armed. The `backfill` and `replay` commands of `app.infra.puller` do not read the flag.
 - `AUTOCLOSE_ENABLED=false`: no rule is loaded or evaluated; every non-duplicate alert takes the `received` path to `queued_tier1`, with a `triage` job. The G8′ hard blocks go with the rules: SOAR owns the decision to close.
-- `ENRICHMENT_ENABLED=false`: no `SELECT` on `assets`, `identities` or `iocs`; the context comes from the payload's `enrichment` (DEC-208: `asset.criticality`, `asset.in_inventory`, `asset.user_is_admin`, the worst `ti` / `ioc` verdict), else the unknown context (`asset_present` false, `criticality` `unknown`, privilege `null`, IoC reputation and all three `lookup_status` `skipped`). The risk score still runs.
+- `ENRICHMENT_ENABLED=false`: no `SELECT` on `assets`, `identities` or `iocs`; the context comes from the payload's `enrichment` (DEC-208 / DEC-210 S5: `asset.criticality`, `asset.in_inventory`, `asset.user_is_admin`, `asset.owner`, `asset.role`, the worst `ti` / `ioc` verdict), else the unknown context (`asset_present` false, `criticality` `unknown`, privilege `null`, IoC reputation and all three `lookup_status` `skipped`). The risk score still runs.
 
 The code of all four, the `enrichment/` and auto-close modules and the tables `assets`, `identities`, `iocs` and `autoclose_rules` stay: Tier 2's dossier and the admin pages still read them, and removing any is a later, separate decision (DEC-207 item 5).
 
