@@ -63,3 +63,19 @@ Kết quả âm đó là dữ liệu nghiên cứu hợp lệ và sẽ được 
 
 - **Tiếng Việt** cho tài liệu và diễn giải; **tiếng Anh** cho toàn bộ code, tên định danh, comment và docstring.
 - TDD cho mọi code mới. Biên LLM luôn được stub trong test — không test nào gọi model thật.
+
+## Đổi nhà cung cấp LLM (provider)
+
+Biên LLM là một endpoint **tương thích OpenAI** (`backend/app/llm/adapter.py`). Đổi provider hoàn toàn qua `.env`, **không sửa code**:
+
+| Khóa `.env` | Ý nghĩa |
+|---|---|
+| `LLM_BASE_URL` | URL gốc của API (DeepSeek, OpenAI, hoặc một gateway nội bộ tương thích OpenAI) |
+| `LLM_API_KEY` | khóa API của provider — chỉ nằm trong `.env`, không commit, không in ra |
+| `LLM_MODEL_PROPOSER` | tên model cho ① đề xuất (proposer) |
+| `LLM_MODEL_VERIFIER` | tên model cho ① kiểm chứng (verifier) |
+| `LLM_TIMEOUT_S` · `LLM_RETRY` · `LLM_THINKING` | hạn thời gian mỗi lần gọi, số lần thử lại khi lỗi mạng/5xx, chế độ "thinking" |
+
+Yêu cầu provider: nhận `response_format={"type":"json_object"}` (prompt hệ thống phải chứa chuỗi `JSON` — adapter tự kiểm trước khi gọi). Sau khi đổi: `docker compose up -d --force-recreate worker app`.
+
+Khi provider **hết số dư / hết hạn mức (HTTP 402)**, ① đặt `triage_status='unavailable'`, ghi một dòng `llm_runs` với `stopped_by='unavailable'` kèm thông điệp của provider, và health check `triage_unavailable` **báo động** (không báo "ổn"). Job không "failed" treo lơ lửng. Alert mới được xử lý sau khi nạp lại số dư/đổi provider; alert cũ đang `unavailable` không tự chạy lại — xem `docs/runbook.md` mục *Common failures · Model API down*.

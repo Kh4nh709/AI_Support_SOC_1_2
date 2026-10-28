@@ -35,6 +35,7 @@ from app.llm.adapter import (
     LLMBudgetExceeded,
     LLMPermanent,
     LLMTimeout,
+    LLMUnavailable,
     cost_usd,
     estimate_tokens,
 )
@@ -305,6 +306,18 @@ class TestRetriesAndClassification:
         adapter = DeepSeekAdapter(_cfg(LLM_RETRY=2), client=client, sleep=lambda s: None)
 
         with pytest.raises(LLMPermanent):
+            adapter.complete(system=VALID_SYSTEM, user="x")
+
+        assert client.call_count == 1
+
+    def test_402_is_unavailable_not_permanent(self):
+        """A 402 (Payment Required: no balance / exhausted quota) raises LLMUnavailable, not
+        LLMPermanent, so ① records the alert `unavailable` with the provider's message instead of a
+        hard failure (S8, DEC-210). Still permanent: one call, no retry."""
+        client = FakeClient([_status_error(402)])
+        adapter = DeepSeekAdapter(_cfg(LLM_RETRY=2), client=client, sleep=lambda s: None)
+
+        with pytest.raises(LLMUnavailable):
             adapter.complete(system=VALID_SYSTEM, user="x")
 
         assert client.call_count == 1

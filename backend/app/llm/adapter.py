@@ -52,6 +52,15 @@ class LLMPermanent(PermanentError):
     would make DeepSeek reject `json_object` (no "JSON" in it)."""
 
 
+class LLMUnavailable(PermanentError):
+    """The provider refused for a billing/quota reason — HTTP 402 Payment Required, i.e. no balance
+    or an exhausted quota. Permanent (no retry) and distinct from `LLMBudgetExceeded`, which is our
+    own monthly cap: ① records the alert `triage_status='unavailable'`, `stopped_by='unavailable'`,
+    with the provider's message, so the health check reports it and an operator can tell a dead
+    provider from a cap hit (S8, DEC-210). A 402 is provider-neutral: OpenAI-compatible endpoints
+    use it too."""
+
+
 def estimate_tokens(text: str) -> int:
     """A conservative pre-send budget check (P3-T09, against `PROMPT_TOTAL_BUDGET_TOKENS`):
     character-based, 2.5 bytes/token against the measured 2.67
@@ -201,6 +210,11 @@ class DeepSeekAdapter:
                 outcome = _classify_attempt(exc)
                 self._emit(attempt, outcome, started)
                 if outcome == "permanent":
+                    if getattr(exc, "status_code", None) == 402:
+                        # Payment Required: no balance / exhausted quota. The provider will not
+                        # serve; not our monthly cap and not retryable. ① records `unavailable`
+                        # instead of failing the job and leaving the alert dangling (S8).
+                        raise LLMUnavailable(f"LLM provider unavailable (402): {exc}") from exc
                     raise LLMPermanent(f"DeepSeek call failed: {exc}") from exc
                 if attempt == attempts_allowed:
                     if isinstance(exc, (openai.APIConnectionError, openai.APITimeoutError)):

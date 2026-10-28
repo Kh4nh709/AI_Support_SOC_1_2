@@ -41,7 +41,13 @@ from app.infra.errors import PermanentError, TransientError
 from app.infra.jobs import Job
 from app.kb import lookup as kb
 from app.llm import builder
-from app.llm.adapter import DeepSeekAdapter, LLMBudgetExceeded, cost_usd, estimate_tokens
+from app.llm.adapter import (
+    DeepSeekAdapter,
+    LLMBudgetExceeded,
+    LLMUnavailable,
+    cost_usd,
+    estimate_tokens,
+)
 
 # `_system_prompt` and `_sum_usage` are reused, not copied: an override template is
 # composed exactly as the deployed one is, and an evaluation's usage is summed exactly
@@ -424,7 +430,17 @@ GATE_MODES = frozenset({"full", "steps_1_3"})
 
 #: `TriageEvaluation.outcome`'s closed set: one per way ① can end for an alert.
 OUTCOMES = frozenset(
-    {"ok", "builder_violation", "schema", "cap", "transient", "verifier_transient", "verifier_cap"}
+    {
+        "ok",
+        "builder_violation",
+        "schema",
+        "cap",
+        "unavailable",
+        "transient",
+        "verifier_transient",
+        "verifier_cap",
+        "verifier_unavailable",
+    }
 )
 
 
@@ -460,9 +476,10 @@ class TriageEvaluation:
 
     `outcome` (`OUTCOMES`): "ok" — the gate ran to step 7; "builder_violation" — the
     proposer prompt failed the linter and no call was made; "schema" — still invalid
-    after the repair round; "cap" / "transient" — the proposer call raised
-    `LLMBudgetExceeded` / `TransientError`; "verifier_cap" / "verifier_transient" — the
-    same from the verifier call, after a schema-valid proposal.
+    after the repair round; "cap" / "unavailable" / "transient" — the proposer call raised
+    `LLMBudgetExceeded` (our monthly cap) / `LLMUnavailable` (a provider 402) / `TransientError`;
+    "verifier_cap" / "verifier_unavailable" / "verifier_transient" — the same from the verifier
+    call, after a schema-valid proposal.
 
     `final_verdict` (the gated `suggested_action`) and `gate_result` exist only for
     "ok". `proposed_verdict`, `reasons_kept`, `reasons_dropped`, `forced_by` and
@@ -703,6 +720,8 @@ def evaluate_alert(
         proposal = propose(llm_adapter, built, cfg=cfg)
     except LLMBudgetExceeded as exc:
         return evaluation("cap", exception=exc)
+    except LLMUnavailable as exc:
+        return evaluation("unavailable", exception=exc)
     except TransientError as exc:
         return evaluation("transient", exception=exc)
 
@@ -749,6 +768,15 @@ def evaluate_alert(
     except LLMBudgetExceeded as exc:
         return evaluation(
             "verifier_cap",
+            proposal=proposal,
+            state=state,
+            verdict_for_verifier=verdict_for_verifier,
+            vbuilt=vbuilt,
+            exception=exc,
+        )
+    except LLMUnavailable as exc:
+        return evaluation(
+            "verifier_unavailable",
             proposal=proposal,
             state=state,
             verdict_for_verifier=verdict_for_verifier,
@@ -869,6 +897,37 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
         _set_triage_status(conn, alert_id, "unavailable")
         return
 
+    if ev.outcome == "unavailable":
+        # The provider refused (402: no balance / quota, S8). Like "cap" — one proposer row, no
+        # model usage, triage_status 'unavailable' — but a distinct stopped_by and the provider's
+        # own message, so the health check reports it and it is not mistaken for the monthly cap.
+        llm_runs.write_run(
+            conn,
+            run_id=uuid4(),
+            role="proposer",
+            subject_id=alert_id,
+            system_prompt=built.prompt.system,
+            user_message=built.prompt.user,
+            result=None,
+            gate_result={
+                "error": "unavailable",
+                "message": str(ev.exception)[:200],
+                "facts": facts,
+            },
+            verifier_result=None,
+            injection_findings=detector.as_json(ev.findings),
+            citation_warnings=built.warnings,
+            input_tokens=None,
+            output_tokens=None,
+            latency_ms=None,
+            model_id=None,
+            prompt_version=prompt_version(TRIAGE_TEMPLATE),
+            cost_usd=None,
+            stopped_by="unavailable",
+        )
+        _set_triage_status(conn, alert_id, "unavailable")
+        return
+
     if ev.outcome == "transient":
         _last_attempt_or_raise(conn, job, cfg, ev.exception, built, facts)
         return
@@ -904,6 +963,22 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
     if ev.outcome == "verifier_cap":
         _verify_failed_last_attempt(
             conn, built, ev.vbuilt, facts, proposal, alert_id, cfg, ev.exception, stopped_by="cap"
+        )
+        return
+
+    if ev.outcome == "verifier_unavailable":
+        # The verifier call hit a 402 after a schema-valid proposal (S8): both rows written with
+        # what exists, stopped_by='unavailable', triage_status 'unavailable'.
+        _verify_failed_last_attempt(
+            conn,
+            built,
+            ev.vbuilt,
+            facts,
+            proposal,
+            alert_id,
+            cfg,
+            ev.exception,
+            stopped_by="unavailable",
         )
         return
 
