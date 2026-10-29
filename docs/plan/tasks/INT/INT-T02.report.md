@@ -45,3 +45,38 @@ STATUS: DONE. All six items are built and every gate is green. Branch worktree-a
 - If ① is switched off (`disabled`), no new run is written, so `llm_stopped_by` can show the reason of an older run. It is accurate to the newest run, as specified.
 - The `\d` in the alert-id pattern matches Unicode digits. The pattern is exact as ruled, and builder and webhook agree, so I left it.
 - Existing bug, not touched: a webhook body with a valid id but no `timestamp` raises `KeyError` and returns a 500.
+
+## Fix rounds 1 and 2 (Coder) and the Director's check (30/10)
+- **Fix round 1** (on 368a4d7, tip 2753203):
+  - F1 `re.ASCII` on the one shared pattern, 2665e6a;
+  - F2 a missing or invalid `timestamp` gives a 400, a36805d (with N6);
+  - F3 "Tín hiệu gần nhất từ nguồn", 690cb15;
+  - N4 and N5, the case list's `last_run`, f6c0b29;
+  - the R6 addendum, 2753203.
+- **Fix round 2** (on c89a6e8, tip 004b23e):
+  - a body that is not strict UTF-8, or a NUL or lone surrogate in a string, is `not_json`, 168ffee;
+  - runbook and R6 clause, 004b23e.
+- **Re-reviews:** round 1 APPROVE (1 Minor + 1 Nit), round 2 APPROVE (1 Minor + 2 Nits). Both are appended to INT-T02.review.md.
+
+**The Director's mutations**, on detached copies, each restored after its run:
+- `re.ASCII` dropped: 6 red (test_alert_id_source, test_linter).
+- intake back to the empty-id check only: 22 red (test_webhook, db).
+- The timestamp check off: 16 red.
+- The NUL/surrogate walk off: 8 red.
+- Back to `json.loads(bytes)` with a lenient decode: 8 red.
+
+**`make test-db`** against a private PG 16.2 on 127.0.0.1:48231:
+- on 2753203: 3267 passed, 2 failed;
+- on 004b23e: 3287 passed, 2 failed.
+
+In both runs the 2 failures are the baseline libxml tests.
+
+**Rulings on the round-2 re-review:**
+- **R1, accepted as a follow-up, not fixed here.** `NaN`/`Infinity`, an integer over 4,300 digits and very deep nesting still give a 500 with no rejected row.
+  - This is pre-existing.
+  - The webhook is reached only by the allow-listed, keyed SOAR sender, and n8n's `JSON.stringify` never emits those constants.
+  - Follow-up: `parse_constant`, catch `ValueError`/`RecursionError` as `not_json`, and have the walk flag non-finite floats.
+- **R2:** `["a\u0000b"]` is now `not_json` rather than `not_an_object`. It is still a 400 with one rejected row, which is acceptable as is.
+- **R3** (the excerpt's U+FFFD for a NUL; a `cause` key): left.
+
+**Merge gate (the Owner, 30/10):** merge into `director/integration` only after the SIEM has published Playbooks 1e088d1f.

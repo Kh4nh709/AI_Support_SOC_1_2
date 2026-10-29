@@ -166,3 +166,73 @@ Every ruling is built as ruled. The UTF-16/32 issue the Coder raised is real (R1
 - UI tests: 65 files, 3178 passed.
 
 **Not run by me:** the DB-marked webhook and case-list tests. You ran the DB suite.
+
+## Re-review (fix round 2)
+
+VERDICT: APPROVE
+
+Scope: c89a6e8..004b23e. That is 168ffee (strict UTF-8, and the NUL/surrogate walk) and 004b23e (the runbook and the R6 clause). Read in my own detached worktree at 004b23e, now removed. Nothing was committed.
+
+Both rulings are built as ruled. The lone-surrogate addition should stay. There is one Minor (a neighbouring hole of the same class, pre-existing) and two Nits.
+
+### R1. Minor, pre-existing, same class: other JSON that Python parses but Postgres or the stack cannot take still gives a 500 with no row
+- Where: `backend/app/infra/intake.py`, the parse `try` (`json.loads(raw_text)`, which catches only `JSONDecodeError` and `UnicodeDecodeError`) and `_has_unstorable_text`. The other half is `intake.raw_payload GENERATED ALWAYS AS (raw_text::jsonb)` (`docs/Schema/schema.sql:1001`).
+- I checked each of these without a DB, by calling `intake.receive` with a recording fake connection:
+  - **`NaN`, `Infinity`, `-Infinity` as values.** Python's `json.loads` accepts them by default. The body passes every check and reaches `INSERT INTO intake` with `raw_text` intact. Postgres's JSON grammar has no `NaN`, so `raw_text::jsonb` fails there: a 500, no row. The Postgres step is reasoned; I did not run it.
+  - **The same body with a refused id** (or a refused rule or timestamp) is told `id`, but `_insert_rejected` writes `Jsonb(doc)`. psycopg dumps that with `json.dumps`, which writes `NaN`, and Postgres refuses it: a 500, no row.
+  - **`1e400` with a refused id.** It parses to `inf`, which is dumped as `Infinity`, with the same result. On the accepted path, `1e400` itself is a valid jsonb numeric.
+  - **An integer literal over 4,300 digits.** Python 3.12's int limit raises a plain `ValueError` (not a `JSONDecodeError`), uncaught: a 500 before any row.
+  - **Nesting deeper than about 1,000 levels** (`[[[…]]]` fits easily in 2 MB). `json.loads` raises `RecursionError`, uncaught: a 500 before any row.
+- All of these predate both rounds. They are the same bug class this round closes: a body the webhook neither stores nor refuses with a row.
+- Suggested fix (small; this round or the next, your call):
+  - `json.loads(raw_text, parse_constant=_refuse_constant)`, where `_refuse_constant` raises `ValueError`;
+  - widen the `except` to `(ValueError, RecursionError)` (`JSONDecodeError` and `UnicodeDecodeError` are `ValueError`s already), giving `not_json`;
+  - have the walk also flag a `float` that is not finite (`1e400`);
+  - tests for the five bodies.
+
+### R2. Nit: the walk runs before `not_an_object`, so one previously correct answer changed
+- Where: `backend/app/infra/intake.py`, `if _has_unstorable_text(doc)` sits before `if not isinstance(doc, dict)`. This behaviour is pinned by `test_a_nul_inside_a_json_value_that_is_not_an_object_is_not_json_too`.
+- `["a\u0000b"]` used to be a clean 400 `not_an_object`. Its row holds only the excerpt, where the NUL is six ASCII characters, so it was always storable. It is now 400 `not_json`.
+- The walk *must* precede `id`, `rule.id` and `timestamp`, because those rows store the document, and it does. I checked that a NUL together with a refused id gives exactly one row, `not_json`. Being before `not_an_object` is not needed.
+- Suggested fix: move the walk after the `not_an_object` check. That keeps the response unchanged and still runs before every refusal that stores the document. Or keep it and record the change in R6.
+
+### R3. Nit: the excerpt's U+FFFD for a NUL looks the same as the replacement for an invalid byte, and the row does not say why it is `not_json`
+- Where: `intake._body_excerpt`, with the reason `not_json` used for four different causes.
+- Nothing an admin needs is lost. The original body could not be stored anyway. A `\u0000` or `\ud800` *escape* appears in the excerpt verbatim, as text. Lengths are kept.
+- But a UTF-16 body reads as `{�"�i�d�…`, where `�` means "a NUL" and "an invalid byte" alike. And a NUL escape past character 4,096 of a large body leaves an excerpt that looks like valid JSON under `not_json`. The runbook's new paragraph explains the causes, which mostly answers this.
+- Suggested fix (optional):
+  - Replace NUL by U+2400 `␀`, also one character, so `{␀"␀i␀d␀` says UTF-16-LE at a glance.
+  - Add a `cause` key to the rejected row's payload only (`encoding` | `unstorable_text` | `syntax`). The 400 body stays as it is.
+
+### On the lone surrogate the Coder added: keep it
+- It is the same failure. A `\ud800` escape is valid JSON, Python turns it into a lone surrogate, and `raw_text::jsonb` refuses it: a 500, no row. On a refused path, `Jsonb(doc)` would write the escape back, and Postgres refuses that too.
+- The rule is exact:
+  - `[\ud800-\udfff]` on the parsed `str` matches only a lone half, because a surrogate *pair* escape is decoded into one astral character;
+  - a reversed pair (`\udc00\ud800`) is two lone halves and is refused;
+  - UTF-8-encoded surrogate *bytes* are already caught by the strict decode.
+
+### Checked and fine (fix round 2)
+- **Strict UTF-8 first.** `raw_text = body.decode("utf-8")` (strict), then `json.loads(raw_text)` inside the existing `try`. A `UnicodeDecodeError` or `JSONDecodeError` becomes the existing `not_json`: an excerpt row, then a 400.
+  - Probed: UTF-16 and UTF-32 with a BOM fail at the decode. UTF-16-LE/BE and UTF-32-LE without a BOM decode to text with NULs outside strings, so `JSONDecodeError`. A UTF-8 BOM gives `JSONDecodeError` ("Unexpected UTF-8 BOM"). Encoded surrogate bytes and a Latin-1 byte fail at the decode.
+- **Byte identity for valid bodies.** For each of these, the `raw_text` passed to `INSERT INTO intake` was exactly `body.decode("utf-8")` and the answer was 201 (recorded with a fake connection):
+  - indented Vietnamese plus emoji with a trailing newline;
+  - a surrogate-pair escape;
+  - an escaped backslash followed by `u0000`;
+  - `\u0001`;
+  - raw DEL and C1 characters.
+  - A raw control character *inside* a string (U+0000–U+001F) is refused by `json.loads`'s strict mode, exactly as `json.loads(bytes)` did before, so that is unchanged. The only parse that changed is the UTF-8 BOM, which `json.loads(bytes)` used to accept as `utf-8-sig`, as ruled.
+- **Order.** Decode, parse, walk, `not_an_object`, `id`, `rule.id`, `timestamp`. The `id`, `rule.id` and `timestamp` answers are unchanged (except R2's non-object case).
+- **One row, never the document.** A NUL plus a refused id gives exactly one rejected row, `not_json`, holding the excerpt, which is storable because NUL becomes U+FFFD. The heartbeat, the duplicate and the `not_an_object` excerpt paths are untouched.
+- **Performance.** The walk is iterative, and its own test holds 50,000 levels. Measured at about the 2 MB cap:
+  - one big string: parse 5.8 ms, walk 4.7 ms;
+  - 40,000 small objects: 16 ms and 17 ms;
+  - 400,000 tiny strings: 7.5 ms and 27 ms, the worst case.
+  - A real alert is a few KB, so microseconds. It runs in S0's worker thread, never on the event loop. No trap.
+- **Paperwork.** The runbook's "The body it takes" paragraph and the 400 query (now including `not_json`, with a note that the text is in `raw_payload->>'body'`) match the code. The R6 addendum's clause matches too.
+
+**Suites I ran on 004b23e:**
+- `make test`: 4786 passed, 20 skipped (the same unreachable default-DSN probes).
+- `make lint`: green.
+- The frontend was not touched in this round.
+
+**Process note:** one `pytest -k` I ran by hand selected DB-marked webhook tests by mistake. Their module fixture runs `dropdb`/`createdb` over the default local socket. On this machine there is no socket in `/var/run/postgresql` and no `PG*` variables, so the fixture failed at its first `dropdb` and every selected test errored at setup. No database was reached, dropped or created. All my other runs used `-m "not db and not live"`.
