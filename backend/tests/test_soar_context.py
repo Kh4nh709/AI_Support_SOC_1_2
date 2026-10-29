@@ -91,7 +91,7 @@ def test_mw03_with_the_two_new_asset_fields_is_medium_unprivileged_and_unchecked
 
 
 def test_mw03_carries_the_siem_owner_and_role() -> None:
-    """DEC-210 S5 (Owner decision B): owner and role are local annotations the SIEM now adds to
+    """DEC-211 S5 (Owner decision B): owner and role are local annotations the SIEM now adds to
     `enrichment.asset`. They are read as text, display-only — rendered inside the untrusted
     `context` block and never a fact, so they do not reach the gate. criticality/privilege/ioc
     are unchanged."""

@@ -57,7 +57,7 @@ class LLMUnavailable(PermanentError):
     or an exhausted quota. Permanent (no retry) and distinct from `LLMBudgetExceeded`, which is our
     own monthly cap: ① records the alert `triage_status='unavailable'`, `stopped_by='unavailable'`,
     with the provider's message, so the health check reports it and an operator can tell a dead
-    provider from a cap hit (S8, DEC-210). A 402 is provider-neutral: OpenAI-compatible endpoints
+    provider from a cap hit (S8, DEC-211). A 402 is provider-neutral: OpenAI-compatible endpoints
     use it too."""
 
 

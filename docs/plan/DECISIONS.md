@@ -3557,7 +3557,7 @@ Decision: the design document, as written. In short:
      - One migration, `020_learned_knowledge.sql`.
 Supersedes: none. DEC-202's single-worker margin is kept by item 3's typed reclaim.
 
-## DEC-210 · 2026-10-27 · The SOAR/SIEM follow-up work order: webhook-hang fix (503-busy), siem_context for ①, the SOAR display, credential_access + recon mappings, event_time, the webhook-only heartbeat, and two new config keys
+## DEC-211 · 2026-10-27 · The SOAR/SIEM follow-up work order: webhook-hang fix (503-busy), siem_context for ①, the SOAR display, credential_access + recon mappings, event_time, the webhook-only heartbeat, and two new config keys
 Scope: **product** (webhook intake, the ① triage prompt, the alert view + React alert page, the health check, `ingest/category.py`) · **frozen contract** (webhook status codes, context pack §6.2 output-schema enum, §6.3 keys, `MAPPING_VERSION`) · **evaluation** (the siem_context ablation flag; the test-alert pilot exclusion)
 Decided by: **the Owner's work order, 27/10** (items 0–8, to the fork session "Director 1"), built and tested in isolation on `director/soar-followup` before any merge to main (**the Owner chose to batch the whole set and test the branch first, not to fast-track S0 to main**). Plus Director rulings **R1** (the webhook timeout answers 503, below), **R2** (this consolidated DEC), **R3** (test-alert exclusion, below).
 Drafted by: Director 1 (Opus 4.8)

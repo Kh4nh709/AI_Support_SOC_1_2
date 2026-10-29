@@ -313,7 +313,7 @@ class TestRetriesAndClassification:
     def test_402_is_unavailable_not_permanent(self):
         """A 402 (Payment Required: no balance / exhausted quota) raises LLMUnavailable, not
         LLMPermanent, so ① records the alert `unavailable` with the provider's message instead of a
-        hard failure (S8, DEC-210). Still permanent: one call, no retry."""
+        hard failure (S8, DEC-211). Still permanent: one call, no retry."""
         client = FakeClient([_status_error(402)])
         adapter = DeepSeekAdapter(_cfg(LLM_RETRY=2), client=client, sleep=lambda s: None)
 

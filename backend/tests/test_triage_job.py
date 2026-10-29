@@ -405,7 +405,7 @@ def test_cap_is_unavailable_before_any_call(db, monkeypatch):
 def test_provider_402_is_unavailable_with_the_error_recorded(db, monkeypatch):
     """A provider 402 (no balance / quota) ends the alert `unavailable` with ONE proposer row whose
     stopped_by is 'unavailable' and whose gate_result records the provider's message — not a hard
-    job failure that leaves triage_status dangling with no row (S8, DEC-210). The job itself
+    job failure that leaves triage_status dangling with no row (S8, DEC-211). The job itself
     succeeds (it recorded an outcome), so the webhook/pipeline does not retry it forever."""
     _enable_llm(monkeypatch)
     alert_id = _seed_alert(db)
