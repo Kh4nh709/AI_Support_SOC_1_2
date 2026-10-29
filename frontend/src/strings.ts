@@ -624,7 +624,7 @@ export const S = {
       // The range holds no alert: the cards say 0 and the chart is empty (AdminStates, "không có dữ liệu").
       emptyRange: (range: string) => `Không có alert nào trong ${range}`,
       emptyRangeHint:
-        'Các ô số hiện 0, biểu đồ để trống. Nếu chờ đợi có alert, xem dòng "Alert gần nhất từ nguồn" ở khối Sức khoẻ.',
+        'Các ô số hiện 0, biểu đồ để trống. Nếu chờ đợi có alert, xem dòng "Tín hiệu gần nhất từ nguồn" ở khối Sức khoẻ.',
 
       // A block or a card whose own section failed (`errors[]`); the others are served.
       blockFailed: "Không tải được khối này",
@@ -700,8 +700,10 @@ export const S = {
         // The thirteen checks of `infra/health.py` (the last three are DEC-210's), in the canvas's words; a name
         // with no label is shown as it is.
         check: {
-          // Neutral on purpose (INT-T02): with the pull off the check judges the last alert the webhook took, not a pull.
-          heartbeat: "Alert gần nhất từ nguồn",
+          // True in both modes on purpose (INT-T02): with the pull on (the default) the check reads the last
+          // pull that succeeded, alert or not; with it off, the last alert the webhook took. Neither "pull"
+          // nor "alert" is in the words.
+          heartbeat: "Tín hiệu gần nhất từ nguồn",
           intake_backlog: "Alert chờ nạp",
           job_backlog: "Job đang chờ trong worker",
           llm_null_ratio: "Lượt gọi model không có kết quả",

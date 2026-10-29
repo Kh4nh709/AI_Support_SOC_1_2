@@ -711,7 +711,7 @@ describe("a range with no alert (AdminStates)", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        'Các ô số hiện 0, biểu đồ để trống. Nếu chờ đợi có alert, xem dòng "Alert gần nhất từ nguồn" ở khối Sức khoẻ.',
+        'Các ô số hiện 0, biểu đồ để trống. Nếu chờ đợi có alert, xem dòng "Tín hiệu gần nhất từ nguồn" ở khối Sức khoẻ.',
       ),
     ).toBeInTheDocument();
   });
@@ -1194,19 +1194,26 @@ describe("system health", () => {
     expect(within(health).getAllByText(S.admin.overviewPage.health.ok)).toHaveLength(1);
   });
 
-  it("words the heartbeat check so that it fits both modes: the source's last alert, not a pull (INT-T02)", async () => {
-    // With the pull off (S7) the check judges the last alert the webhook took; "Lần kéo alert gần nhất"
-    // (the last pull) was wrong there. Both places that name the row say the same words.
+  it("words the heartbeat check so that it is true in both modes: a signal from the source, not a pull and not only an alert (INT-T02)", async () => {
+    // With the pull on (the default) the check reads `last_seen_at`, which every successful pull stamps,
+    // alert or not ("last heartbeat N min ago"); with it off (S7) it judges the last alert the webhook took.
+    // "Lần kéo alert gần nhất" was wrong in the second mode and "Alert gần nhất từ nguồn" in the first: a
+    // pull-mode system with no alert for hours would read "an alert came 0.3 min ago". Both places that
+    // name the row say the same words.
     const label = S.admin.overviewPage.health.check.heartbeat;
-    expect(label).toBe("Alert gần nhất từ nguồn");
-    expect(label).not.toMatch(/kéo|pull/i);
+    expect(label).toBe("Tín hiệu gần nhất từ nguồn");
+    expect(label).not.toMatch(/kéo|pull|alert/i);
     expect(S.admin.overviewPage.emptyRangeHint).toContain(`"${label}"`);
-    await renderLoaded({
-      overviews: [withHealth([check("heartbeat", true, "last alert 3 h ago")])],
-    });
-    const health = block("Sức khoẻ hệ thống");
-    expect(valueOf(health, "Alert gần nhất từ nguồn")).toBe("last alert 3 h ago");
-    expect(within(health).queryByText("Lần kéo alert gần nhất")).not.toBeInTheDocument();
+    for (const detail of ["last heartbeat 0.3 min ago", "last alert 3 h ago"]) {
+      const { unmount } = await renderLoaded({
+        overviews: [withHealth([check("heartbeat", true, detail)])],
+      });
+      const health = block("Sức khoẻ hệ thống");
+      expect(valueOf(health, "Tín hiệu gần nhất từ nguồn")).toBe(detail);
+      expect(within(health).queryByText("Lần kéo alert gần nhất")).not.toBeInTheDocument();
+      expect(within(health).queryByText("Alert gần nhất từ nguồn")).not.toBeInTheDocument();
+      unmount();
+    }
   });
 
   it("shows the name of a failing check beside its label, the one health.alarm carries, and not that of a check that is fine", async () => {
