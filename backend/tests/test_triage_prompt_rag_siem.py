@@ -10,13 +10,20 @@ what the prompt looks like with both features on, so this file pins that, and on
 * each feature is independent of the other: take the learned section out of the combined message and it is
   what soar-followup built (RAG off); take the `siem_context` block out and it is what P13 built (flag off);
 * the token budget cuts the learned section first (P13's order), and nothing of S2's goes before it: S2 has no
-  cut of its own in the budget (its 8 KB cap is inside its block), so the block is whole whatever the budget.
+  cut of its own in the budget (its 8 KB cap is inside its block), so the block is whole whatever the budget;
+* with both features off, the USER message is byte for byte main's (and P13's). The SYSTEM message is not:
+  it carries DEC-211's `siem_context` in the `triage_v2` `reasons[].source` enum
+  (`llm/templates/output_schemas.json`, context pack 6.2), whatever the flag says, because the enum is a
+  contract and not a prompt option. That one value is the whole difference, and it adds 5 to the estimated
+  tokens (13 bytes). The criterion of INT-T01 is therefore "user message identical, system message differs
+  by that value" (F1 of the review, ruling a), not "the message main built".
 
 PURE. No database, no socket.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 
 import pytest
@@ -35,6 +42,11 @@ from tests.test_triage_rag import (
 )
 
 PLAYBOOK_TEXT = "PLAYBOOK_TEXT_FIXED"
+#: The one value S2 added to the `triage_v2` `reasons[].source` enum, and so to the ① system message.
+SIEM_ENUM_VALUE = "|siem_context"
+#: sha256 of the ① system message of main (ba31def; P13's, 923c6b2, is the same bytes): the integration's
+#: system message with `SIEM_ENUM_VALUE` taken out once. 2267 bytes against the integration's 2280.
+MAIN_SYSTEM_SHA256 = "b3c884fd1d9ab29466e07283d07d15fda6c9931b4b8a71d27a951b50996ca72c"
 #: One whole `siem_context` block, with the blank line after it.
 SIEM_BLOCK = re.compile(
     r'<untrusted_data nonce="\w+" source="siem_context">.*?</untrusted_data nonce="\w+">\n\n',
@@ -121,9 +133,10 @@ def test_each_feature_is_what_its_own_branch_built_when_the_other_is_off() -> No
     assert both.prompt.system == rag_off.prompt.system == siem_off.prompt.system
 
 
-def test_with_both_off_it_is_the_message_main_built() -> None:
-    """`GOLDEN_USER` of `test_triage_rag` is main's message; the enrichment present and the flag off, or the
-    enrichment absent, with no `learned`, is that message again."""
+def test_with_both_off_the_user_message_is_the_one_main_built() -> None:
+    """`GOLDEN_USER` of `test_triage_rag` is main's USER message; the enrichment present and the flag off, or
+    the enrichment absent, with no `learned`, is that message again. The system message is not main's (see
+    the next test), so this is the claim and not "the message main built"."""
     from tests.test_triage_rag import GOLDEN_USER
 
     present_but_off = build(learned=None, siem=False, inp=_inp(siem_enrichment=sc03_enrichment()))
@@ -132,6 +145,32 @@ def test_with_both_off_it_is_the_message_main_built() -> None:
         assert built.prompt.user == GOLDEN_USER
         assert built.warnings == GOLDEN_WARNINGS
         assert built.learned_used is False
+
+
+def test_the_system_message_differs_from_mains_by_exactly_the_siem_context_enum_value() -> None:
+    """F1 of the INT-T01 review, ruling (a): the `triage_v2` schema in the system message lists the
+    `reasons[].source` values, and S2 (DEC-211 item 4) added `siem_context` to it. Whatever the flag and
+    whatever `learned` holds, the system message is the same text, and taking that one value out of it once
+    gives main's system message, byte for byte (the hash is main's). It costs 5 estimated tokens."""
+    from app.llm.adapter import estimate_tokens
+
+    corr = _correlation()
+    systems = {
+        (flag, learned is not None): build(
+            learned=learned, siem=flag, correlation=corr
+        ).prompt.system
+        for flag in (True, False)
+        for learned in (None, OK)
+    }
+    system = systems[(True, False)]
+    assert set(systems.values()) == {system}  # not the flag, not the learned section
+
+    assert system.count(SIEM_ENUM_VALUE) == 1
+    assert "|kb_playbook|context|siem_context\n" in system  # in the reasons[].source enum, last
+    main_system = system.replace(SIEM_ENUM_VALUE, "", 1)
+    assert hashlib.sha256(main_system.encode()).hexdigest() == MAIN_SYSTEM_SHA256
+    assert len(system.encode()) - len(main_system.encode()) == len(SIEM_ENUM_VALUE) == 13
+    assert estimate_tokens(system) - estimate_tokens(main_system) == 5
 
 
 def test_the_budget_cuts_the_learned_section_first_and_never_the_siem_block_before_it() -> None:
