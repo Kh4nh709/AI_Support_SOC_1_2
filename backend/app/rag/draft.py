@@ -11,6 +11,9 @@ When an analyst closes an alert (`transitions.decide`) or concludes a case (`tra
   which checks each one's shape; the `conclusion` from the decision itself (`alerts.status`
   `closed_fp` / `closed_benign`, or `cases.status`). The model writes none of them (spec §7.4);
 * `hostnames`, which V3 forbids in the text: the record's own and the inventory's;
+* `usernames`, which V3 forbids too: the record's user, the identities its texts name, and the asset's
+  owner (`alerts.asset_context.owner`; a case: its heads'), which S5 (DEC-211) lets SOAR put in ①'s
+  `context` block and so in ①'s result, where the model can read it. The asset's `role` is not one;
 * `facts_text`: the conclusion and the fingerprint (generalised), so the model sees no literal address;
 * `analyst_texts`: the decision reason, or the case's `conclusion_reason` and its newest `MAX_NOTES`
   `case_notes`; `ai_texts`: ①'s latest proposer result for the alert, or ②'s latest result for the case.
@@ -269,8 +272,9 @@ class SourceRecord:
     soar_scenario: str | None
     log_source: str | None
     hostnames: frozenset[str] = frozenset()
-    #: Bare user names V3 refuses in the text: the alert's user (a case: its heads'), and the identities
-    #: of the inventory that the record's own texts name (`_usernames`).
+    #: Bare user names V3 refuses in the text: the alert's user (a case: its heads'), the asset's owner
+    #: (a case: its heads' owners; INT-T01 F4), and the identities of the inventory that the record's own
+    #: texts name (`_usernames`). All are matched by one rule (`generalise.literal_findings`).
     usernames: frozenset[str] = frozenset()
     facts_text: str = ""
     analyst_texts: tuple[str, ...] = ()
@@ -282,6 +286,13 @@ _CASE_CONCLUSIONS = frozenset({"concluded_fp", "concluded_policy_violation", "co
 _ASSET_HOST = (
     "CASE WHEN jsonb_typeof(a.raw_payload #> '{enrichment,asset,host}') = 'string'"
     " THEN a.raw_payload #>> '{enrichment,asset,host}' END"
+)
+#: The asset's owner as ①'s `context` block showed it (`owner=` in `llm/triage._context_section`): a string
+#: of `asset_context`, from the inventory or, for a SOAR alert, from `enrichment.asset.owner` (S5). Free
+#: text a person wrote, often a login or a name; anything that is not a string is no owner.
+_ASSET_OWNER = (
+    "CASE WHEN jsonb_typeof(a.asset_context -> 'owner') = 'string'"
+    " THEN a.asset_context ->> 'owner' END"
 )
 
 
@@ -310,10 +321,15 @@ _IDENTITY_LIMIT = 10_000
 def _usernames(
     conn: psycopg.Connection, own: Iterable[str | None], texts: Sequence[str]
 ) -> frozenset[str]:
-    """The user names V3 must find in a draft: the record's own (`alerts.alert_user`) and, from the
-    `identities` inventory, those the record's texts name (whole-word, case-insensitive). Not the whole
-    inventory: a common account such as `admin` would then refuse every draft that mentions the word, and the
-    model can only repeat a name it was shown."""
+    """The user names V3 must find in a draft: the record's own (`alerts.alert_user` and the asset's owner)
+    and, from the `identities` inventory, those the record's texts name (whole-word, case-insensitive). Not
+    the whole inventory: a common account such as `admin` would then refuse every draft that mentions the
+    word, and the model can only repeat a name it was shown.
+
+    An owner is a name like any other: V3 matches it whole-word and case-insensitively, never a name of
+    `COMMON_ACCOUNTS`, never one under two characters (`generalise._MIN_NAME`: a one-letter owner would
+    match every word of that letter, so it is no name; a two-letter one such as `IT` is, and refuses the
+    word)."""
     names = {name.strip() for name in own if isinstance(name, str) and len(name.strip()) >= 2}
     haystack = strip_placeholders("\n".join(texts))  # `<USER>` is not a place to find `user`
     if haystack:
@@ -332,12 +348,12 @@ def _usernames(
 def _alert_source(conn: psycopg.Connection, subject: Subject) -> tuple[SourceRecord, Fingerprint]:
     row = conn.execute(
         f"SELECT a.status, a.close_reason, a.occurrence_count, a.agent_name, {_ASSET_HOST},"
-        " a.alert_user FROM alerts a WHERE a.alert_id = %s",
+        f" a.alert_user, {_ASSET_OWNER} FROM alerts a WHERE a.alert_id = %s",
         (subject.id,),
     ).fetchone()
     if row is None:
         raise PermanentError("source_record: the alert does not exist")
-    status, close_reason, occurrences, agent_name, asset_host, alert_user = row
+    status, close_reason, occurrences, agent_name, asset_host, alert_user, asset_owner = row
     if status not in _ALERT_CONCLUSIONS:
         raise PermanentError(
             f"source_record: the alert is {status!r}, not closed_fp or closed_benign by an analyst"
@@ -359,7 +375,9 @@ def _alert_source(conn: psycopg.Connection, subject: Subject) -> tuple[SourceRec
             soar_scenario=fp.soar_scenario,
             log_source=fp.log_source or None,
             hostnames=frozenset(hostnames),
-            usernames=_usernames(conn, [alert_user], [facts, *analyst_texts, *ai_texts]),
+            usernames=_usernames(
+                conn, [alert_user, asset_owner], [facts, *analyst_texts, *ai_texts]
+            ),
             facts_text=facts,
             analyst_texts=analyst_texts,
             ai_texts=ai_texts,
@@ -383,7 +401,7 @@ def _case_source(conn: psycopg.Connection, subject: Subject) -> tuple[SourceReco
         raise PermanentError(f"source_record: the case is {status!r}, not concluded")
     fp = case_fingerprint(conn, case_id)
     heads = conn.execute(
-        f"SELECT a.agent_name, {_ASSET_HOST}, a.alert_user FROM case_alerts ca"
+        f"SELECT a.agent_name, {_ASSET_HOST}, a.alert_user, {_ASSET_OWNER} FROM case_alerts ca"
         " JOIN alerts a ON a.alert_id = ca.alert_id WHERE ca.case_id = %s",
         (case_id,),
     ).fetchall()
@@ -407,7 +425,9 @@ def _case_source(conn: psycopg.Connection, subject: Subject) -> tuple[SourceReco
             log_source=fp.log_source or None,
             hostnames=frozenset(hostnames),
             usernames=_usernames(
-                conn, [head[2] for head in heads], [facts, *analyst_texts, *ai_texts]
+                conn,
+                [name for head in heads for name in head[2:4]],  # the heads' users and owners
+                [facts, *analyst_texts, *ai_texts],
             ),
             facts_text=facts,
             analyst_texts=analyst_texts,

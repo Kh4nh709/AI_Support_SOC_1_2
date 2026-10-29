@@ -1180,6 +1180,96 @@ def test_the_source_record_of_a_case_has_the_users_of_its_heads(db) -> None:
     assert not src.usernames & src.hostnames  # a user is not a host
 
 
+def set_asset_context(db, alert_id: str, **context) -> None:
+    db.execute(
+        "UPDATE alerts SET asset_context = %s::jsonb WHERE alert_id = %s",
+        (json.dumps(context), alert_id),
+    )
+
+
+@db_marked
+def test_the_source_record_of_an_alert_has_its_assets_owner_and_not_its_role(db) -> None:
+    """INT-T01 F4: S5 puts `enrichment.asset.owner` (a person's login or name) in ①'s `context` block, so
+    ①'s result can repeat it and the model can write it into the draft. V3 refuses it like the alert's user;
+    `role` ("jump host") is a generalisation and stays allowed."""
+    decided_alert(db, alert_user="hr01")
+    set_asset_context(db, "da-1", owner="nguyen.van.a", role="jump host", asset_present=True)
+    src = draft.source_record(db, Subject("alert", "da-1"))
+    assert src.usernames == frozenset({"hr01", "nguyen.van.a"})
+    assert "jump host" not in src.usernames
+    assert faults_of({"summary": "Máy của nguyen.van.a quét cổng theo lịch"}, src) == [
+        "v3_account:summary"
+    ]
+    assert faults_of({"summary": "Máy của NGUYEN.VAN.A quét cổng theo lịch"}, src) == [
+        "v3_account:summary"
+    ]  # case-insensitive, as for every user name
+    assert faults_of({"summary": "Máy jump host quét cổng theo lịch"}, src) == []  # the role
+    assert faults_of({"summary": "Máy của <USER> quét cổng theo lịch"}, src) == []
+    # whole word, as for every user name: a longer word that holds it is not it
+    assert faults_of({"summary": "Máy của nguyen.van.ab quét cổng"}, src) == []
+
+
+@db_marked
+def test_an_owner_that_is_absent_null_or_not_a_string_is_no_name(db) -> None:
+    for index, context in enumerate(
+        ({}, {"owner": None}, {"owner": 12345}, {"owner": ["nguyen.van.a"]}, {"owner": "  "})
+    ):
+        alert_id = f"da-own-{index}"
+        decided_alert(db, alert_id, alert_user="hr01")
+        set_asset_context(db, alert_id, **context)
+        src = draft.source_record(db, Subject("alert", alert_id))
+        assert src.usernames == frozenset({"hr01"}), context
+
+
+@db_marked
+def test_an_owner_follows_the_rule_of_the_alerts_user_common_accounts_and_the_length_floor(
+    db,
+) -> None:
+    """No rule of its own: the owner joins `usernames`, so V3 applies to it exactly what it applies to
+    `alert_user` - `COMMON_ACCOUNTS` are never a literal, and a name under two characters is no name
+    (`_MIN_NAME`); two characters are refused, as a two-letter alert user is."""
+    decided_alert(db, "da-1")
+    set_asset_context(db, "da-1", owner="Admin")
+    src = draft.source_record(db, Subject("alert", "da-1"))
+    assert faults_of({"summary": "Máy do admin quản lý quét cổng"}, src) == []  # a common account
+    decided_alert(db, "da-2")
+    set_asset_context(db, "da-2", owner="x")
+    src = draft.source_record(db, Subject("alert", "da-2"))
+    assert faults_of({"summary": "Máy x quét cổng theo lịch"}, src) == []  # one character
+    decided_alert(db, "da-3")
+    set_asset_context(db, "da-3", owner="IT")
+    src = draft.source_record(db, Subject("alert", "da-3"))
+    assert faults_of({"summary": "Máy của it quét cổng theo lịch"}, src) == ["v3_account:summary"]
+
+
+@db_marked
+def test_the_source_record_of_a_case_has_the_owners_of_its_heads(db) -> None:
+    for head, user, owner in (("dc-1", "hr01", "nguyen.van.a"), ("dc-2", "hr02", "tran.thi.b")):
+        add_alert(db, head, rule_id="100190", category="recon", status="closed_fp", alert_user=user)
+        set_asset_context(db, head, owner=owner, role="jump host")
+    add_alert(db, "dc-3", rule_id="100190", category="recon", status="closed_fp")
+    case_id = add_case(db, add_user(db), ["dc-1", "dc-2", "dc-3"], status="concluded_fp")
+    db.execute("UPDATE cases SET conclusion_reason = 'x' WHERE case_id = %s", (case_id,))
+    src = draft.source_record(db, Subject("case", case_id))
+    assert src.usernames == frozenset({"hr01", "hr02", "nguyen.van.a", "tran.thi.b"})
+    assert faults_of({"summary": "Máy của tran.thi.b quét cổng"}, src) == ["v3_account:summary"]
+    assert faults_of({"summary": "Máy jump host quét cổng"}, src) == []
+
+
+@db_marked
+def test_a_draft_that_repeats_the_assets_owner_is_retried_and_then_stored_with_the_fault(
+    db, kb_root
+) -> None:
+    decided_alert(db)
+    set_asset_context(db, "da-1", owner="nguyen.van.a", role="jump host")
+    leaking = {**GOOD, "summary": "Máy của nguyen.van.a quét cổng theo lịch."}
+    fake = FakeLLM([leaking, leaking])
+    assert run(db, "alert:da-1", fake) is None
+    row = only_draft(db)
+    assert row["draft"] == {} and "v3_account:summary" in row["warnings"]
+    assert len(draft_calls(fake)) == 2  # the retry named the fault and the model did not mend it
+
+
 @db_marked
 def test_a_draft_that_names_the_alerts_user_is_retried_and_then_stored_with_the_fault(
     db, kb_root
