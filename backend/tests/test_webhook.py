@@ -383,7 +383,19 @@ def _counts(sdb) -> dict[str, int]:
     }
 
 
+def _digits_as(zero: int, text: str) -> str:
+    """`text` with each ASCII digit replaced by the decimal digit of another script, whose zero is
+    the code point `zero`: the look-alike of an id (INT-T02 review, F1)."""
+    return "".join(chr(zero + int(char)) if char.isdecimal() else char for char in text)
+
+
 _OFF_PATTERN_IDS = [
+    # the real Wazuh id `1790888852.28168897` written with other scripts' digits: `\d` without
+    # `re.ASCII` takes them, and the look-alike would be stored as a different alert, with no 409
+    pytest.param(_digits_as(0x1D7CE, "1790888852.28168897"), id="bold-digits"),
+    pytest.param(_digits_as(0xFF10, "1786903016.121311"), id="fullwidth-digits"),
+    pytest.param(_digits_as(0x0660, "1786.12"), id="arabic-indic-digits"),
+    pytest.param(_digits_as(0x0966, "1790888852") + ".28168897", id="devanagari-and-ascii-mixed"),
     pytest.param("not-a-soar-id", id="free-text"),
     pytest.param("gl-TEST-100191-1793289654049", id="the-n8n-test-generator"),
     # a real id with its ULID in lower case, with its uuid in upper case, and with an `I` in the ULID

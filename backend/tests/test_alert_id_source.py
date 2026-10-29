@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import re
+import unicodedata
 
 import pytest
 from app.infra import ids, intake
@@ -22,6 +24,22 @@ APP = pathlib.Path(__file__).resolve().parent.parent / "app"
 
 WAZUH = "1790888852.28168897"
 SOAR = "gl-01K7ZD2Q5T8YJ3VNQ4E6R9XWBM-6f1c2a4e-8d3b-4c7a-9e21-5b0a7d6c3f84"
+
+
+def _digits_as(zero: int, text: str) -> str:
+    """`text` with each ASCII digit written with another script's decimal digit (code point `zero` is
+    that script's 0)."""
+    return "".join(chr(zero + int(char)) if char.isdecimal() else char for char in text)
+
+
+def test_the_look_alike_digits_are_decimal_digits_to_python_and_so_to_a_plain_backslash_d() -> None:
+    """The premise of the refusals below: each is a Unicode `Nd` digit, which `\\d` takes without
+    `re.ASCII`; and the pattern is compiled with it now."""
+
+    for zero in (0x1D7CE, 0xFF10, 0x0660):
+        assert unicodedata.decimal(chr(zero + 7)) == 7 and chr(zero + 7) not in "0123456789"
+        assert re.fullmatch(r"\d", chr(zero + 7))  # a plain \d takes it
+    assert ids.ALERT_ID_PATTERN.flags & re.ASCII
 
 
 def test_the_builder_the_linter_and_the_webhook_share_one_pattern_object() -> None:
@@ -56,6 +74,12 @@ def test_a_wazuh_id_and_a_real_soar_id_are_alert_ids(value: str) -> None:
         "1790888852.",
         ".28168897",
         SOAR + "-extra",
+        # INT-T02 review F1: the same ids in another script's decimal digits (`\d` takes them unless the
+        # pattern is ASCII): mathematical bold, fullwidth, Arabic-Indic
+        _digits_as(0x1D7CE, WAZUH),
+        _digits_as(0xFF10, "1786903016.121311"),
+        _digits_as(0x0660, "1786.12"),
+        "1790888852." + _digits_as(0x0660, "28168897"),  # one half ASCII, the other not
     ],
 )
 def test_anything_else_is_not_an_alert_id_and_the_builder_refuses_it_too(value: str) -> None:

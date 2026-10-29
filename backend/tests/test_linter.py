@@ -175,6 +175,28 @@ def test_tokens_enum_int_datetime_id_are_allowed():
     assert _lint(built.user, nonce=built.nonce) == []
 
 
+def test_a_non_ascii_digit_lookalike_of_an_alert_id_is_not_passed_as_an_id():
+    """INT-T02 review F1. The linter lets an out-of-block token through when it fits an id pattern;
+    the alert-id pattern is ASCII (`infra.ids`), so an id written in mathematical-bold, fullwidth or
+    Arabic-Indic digits, which reads as the real one, is free text and a violation. The control is
+    the real id, on the same line, which passes."""
+    real = "1790888852.28168897"
+    assert _lint(f"alert_id: {real}") == []
+
+    def written_in(zero: int) -> str:
+        return "".join(chr(zero + int(c)) if c.isdecimal() else c for c in real)
+
+    for zero in (0x1D7CE, 0xFF10, 0x0660):
+        look_alike = written_in(zero)
+        assert look_alike != real
+        violations = _lint(f"alert_id: {look_alike}")
+        assert [v.kind for v in violations] == ["free_text"], zero
+        assert violations[0].token == look_alike
+    # the SOAR form was ASCII-only already (`[0-9A-HJKMNP-TV-Z]` and `[0-9a-f]`) and still passes
+    soar = "gl-01K7ZD2Q5T8YJ3VNQ4E6R9XWBM-6f1c2a4e-8d3b-4c7a-9e21-5b0a7d6c3f84"
+    assert _lint(f"alert_id: {soar}") == []
+
+
 def test_first_token_and_line_are_reported():
     message = "## Alert\nseverity: critical\nrule: 40112 · Multiple bad words here\n"
     violations = _lint(message)
