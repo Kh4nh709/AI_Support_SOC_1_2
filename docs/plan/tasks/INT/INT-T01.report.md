@@ -67,3 +67,26 @@ Mutations on a detached copy of 28ff21b, against a private PG 16.2 (127.0.0.1:48
 1. `class LLMUnavailable(PermanentError)` (the parent dropped): 5 red, namely ②'s 402 test, the lookup's 402 test, both draft 402 tests and test_adapter's issubclass test.
 2. `"siem_context"` dropped from `BLOCK_SOURCES`: 9 red (test_block_sources_match_ten_names and 8 in test_triage_prompt_rag_siem.py).
 3. `learned=material` dropped at the ① call site in `tier1/triage.py`: 19 red in test_triage_rag.py (db). The non-DB suite does not catch this one; `make test-db` does.
+
+## Fix round 1 (Coder, dd00af2) and the Director's check (29/10)
+The Coder's fix round, on top of 6e83124, one commit per finding:
+- F4 debcb9b
+- F2 d54f03a
+- F3 8818aef
+- F5 fa2ad0f
+- F6 5be4a2c
+- F1 4899e9e
+- F7 and R5 9d2e286
+- dd00af2, the type test's anchor after F5
+
+The re-review (APPROVE, 1 Minor + 2 Nits) is appended to INT-T01.review.md.
+
+The Director's check:
+4. The asset owner dropped from V3's names for an alert (`conn, [alert_user], [facts…` in `rag/draft.py:379`): 3 red in test_rag_draft.py (db).
+- `make test-db` on dd00af2 against a private PG 16.2 (127.0.0.1:48231): 3209 passed and 2 failed. The two failures are the baseline libxml tests in test_backup_restore.py, the same as at 28ff21b.
+
+Rulings on the re-review:
+- **R1** (an owner that is a short team name, such as "IT", "SOC" or "Kế toán", refuses that word in drafts): accepted for now.
+  - It fails safe: nothing leaks, and a draft is reworded or rejected.
+  - Whether a team owner may appear in a learned entry is a policy question for the Owner. If the answer is yes, the follow-up is a stricter rule for owners only (login-shaped, or at least 4 characters, or a team-word stop list), and the `IT` assertion is pinned again to match.
+- **R2** (the admin table label is long) and **R3** (two parentheses in DEC-211 item 7): left as they are.

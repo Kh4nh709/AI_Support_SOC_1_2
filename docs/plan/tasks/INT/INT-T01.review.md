@@ -128,3 +128,69 @@ I found no Critical or Important issue. The five conflicts keep both sides. The 
 **Not run by me** (they need a database): the DB tests that prove the behaviour above end to end. These include `test_triage_job`, `test_triage_rag`'s new 402 rows, `test_investigate`'s 402 test, `test_rag_lookup_job`, `test_rag_draft`'s two 402 tests, `test_health`, `test_webhook_concurrency` and the admin-knowledge tests. The Director should have `make test-db` evidence from a scratch test cluster on 28ff21b before merging.
 
 **Process note**: `make test` (the non-DB suite) is not entirely DB-free. 17 tests in `backend/tests/test_investigate.py` that are not marked `db` probe the default `TEST_DATABASE_URL`, which is `127.0.0.1:55432/soc_test`, the live port. Both of my runs found it unreachable and those tests skipped. No database was used.
+
+## Re-review (fix round 1)
+
+VERDICT: APPROVE
+
+Scope: 6e83124..dd00af2 (debcb9b F4, d54f03a F2, 8818aef F3, fa2ad0f F5, 5be4a2c F6, 4899e9e F1, 9d2e286 F7, dd00af2 the F5 follow-up). Read in my own detached worktree at dd00af2. Nothing was committed. The two mutations I made to check the tests were reverted with `git checkout`.
+
+All seven findings are addressed as ruled. I found one new Minor and two Nits. Neither Nit blocks.
+
+### R1. Minor: F4 also refuses short team names that are given as an owner ("IT", "HR", "SOC", "NOC", "ops"), and the admin cannot override it
+- Where: `backend/app/rag/draft.py:321-345` (`_usernames`: an owner joins `usernames` with the alert user's two-character floor) and `:378`, `:427-431`. The behaviour is pinned as intended by `backend/tests/test_rag_draft.py` (`test_an_owner_follows_the_rule_of_the_alerts_user_common_accounts_and_the_length_floor`: owner `IT` refuses "Máy của it …").
+- Why it matters: `asset.owner` is often a team rather than a person. The project's own `conf/inventory.yaml.example:16,24` uses `owner: "Doi Ha tang"`. V3 matches whole words and ignores case, so a two- or three-letter team acronym refuses every common use of that word.
+- Probed with `generalise.literal_findings(text, [], users=[owner])`:
+  - owner `IT`: "Máy chủ của phòng IT bị quét cổng theo lịch." gives `['account']`, and so does "… it is a scheduled job.";
+  - owner `SOC`: "Đội SOC đã xác nhận quét định kỳ." gives `['account']`;
+  - owner `Ops`: "Nhóm ops chạy quét." gives `['account']`;
+  - owner `Kế toán`: "phòng kế toán" gives `['account']`.
+- How it fails:
+  1. An alert's asset has `owner="IT"`, and the analyst closes it as FP.
+  2. The model writes "máy của phòng IT" (or English "it"). V3 answers `v3_account:summary`, and the retry message names only the field, so the model rarely finds the word.
+  3. The draft is stored with the fault.
+  4. `publish.approve_published` re-runs V3 on the admin's edit against the same source record, so the admin cannot approve any text containing the word either.
+  5. The label the admin sees, `frontend/src/strings.ts:1996` "Có tên tài khoản cụ thể…", gives no hint that "IT" is the culprit.
+  - The failure is on the safe side: nothing leaks, but a draft is lost or reworded by hand. That is why I rate it Minor.
+- Suggested fix (Director's call):
+  - Keep the alert user's rule for logins, but give owners a stricter floor: for example, refuse an owner only when it has at least 4 characters, or when it is login-shaped (holds `.`, `_`, `-`, `@` or a digit), or when it has two or more words. Or add a small stop list of team words (`it`, `hr`, `soc`, `noc`, `ops`, `qa`, `dev`) next to `COMMON_ACCOUNTS`, applied to owners only.
+  - Re-pin the `IT` assertion to whichever rule is chosen.
+  - Optionally, word the `v3_account` label "tên tài khoản hoặc chủ sở hữu tài sản".
+
+### R2. Nit: F6's admin-table label is long for its map
+- Where: `frontend/src/strings.ts:1059`. The map is documented as "The short words of `llm_runs.stopped_by` for a table cell", and its siblings are 2–4 words ("chạm trần chi phí"). The new entry is "nhà cung cấp LLM từ chối (hết số dư / hạn mức, 402)", the same as the ① label. `llmFigures.test.ts` pins the two labels to each other.
+- Suggested fix, optional: give the table a short form such as "hết số dư (402)", and drop the equality assertion.
+
+### R3. Nit: F7 reads "(count now 68) (76 with DEC-210's eight)"
+- Where: `docs/plan/DECISIONS.md:3572`. Two parentheses in a row; "(count now 68; 76 with DEC-210's eight)" reads better. Cosmetic.
+
+### Checked and fine (fix round 1)
+- **F1.** The module docstring and the renamed test now say "user message". The new pure test pins every part of the system-message difference:
+  - one system text for all four flag/learned combinations;
+  - `|siem_context` once, last in the `reasons[].source` enum;
+  - removing it gives a sha256 equal to main's (I checked `b3c884fd…ca72c` against the system message I had built independently in ba31def's worktree, and it is the same on 923c6b2);
+  - 13 bytes and +5 estimated tokens.
+  - Mutation: one more enum value in `output_schemas.json` makes it red.
+- **F2.** `credential_access` was added to `tags.yaml` (24 tags, inside 15–25). `test_every_category_of_the_resolver_has_a_behaviour_tag` now derives the categories from `llm.builder.Category` and checks them against an explicit map and against the vocabulary. Mutation: deleting the tag line makes it red.
+- **F3.** Both texts are correct:
+  - the runbook's **Model API down** row and the README name `rag-worker` (recreated because it reads `.env` when created) and `RAG_MODEL`;
+  - they give the R4 outcomes: ② `permanent`, lookup `failed`/`permanent`, draft empty `llm_permanent`, then **Soạn lại**;
+  - the 401 line names `rag-worker` too.
+- **F4, apart from R1:**
+  - `_ASSET_OWNER` reads only a JSON string (`jsonb_typeof = 'string'`), so null, numbers, lists and an absent key give no owner, and whitespace is stripped to nothing. The tests cover `{}`, `None`, `12345`, a list, and `"  "`.
+  - `hostnames` still reads `head[:2]`, so the new fourth column does not shift it.
+  - A case takes its heads' users and owners.
+  - `COMMON_ACCOUNTS` (`Admin`) is never refused. `role` is not added. Matching is whole-word ("nguyen.van.ab" is not refused) and placeholders are kept.
+  - The job test checks the end-to-end path: retry, then the fault stored.
+  - These tests need a DB, so I read them and did not run them. You ran the DB suite.
+- **F5.** `_alert_view` passes only `soar` through `_safe`. It keeps a `None` view and a `None` `soar` as they are, and the rest of the view is untouched. The DB test checks the TI URL with a password is hidden in both panels and that the scenario is intact.
+- **dd00af2.** The anchor in `adminTypes.test.ts` now matches `"alert": _alert_view(` in `_alert_source`. The keys it reads are unchanged, and the UI suite is green.
+- **F6.** Both maps have the label. `AiColumn.test.tsx` checks the label and the code shown beside it.
+- **F7 and R5.** Both appended to DEC-211, after R4. No DEC-210 text was touched.
+
+**Suites I ran on dd00af2:**
+- `make test`: 4746 passed (the new F1 test is the +1), 20 skipped (the same DSN-probe skips as before, found unreachable).
+- `make lint`: green.
+- UI typecheck: green.
+- UI tests: 65 files, 3156 passed.
+- Prettier on the touched frontend files: clean.
