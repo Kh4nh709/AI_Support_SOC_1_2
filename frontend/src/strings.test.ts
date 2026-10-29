@@ -272,6 +272,33 @@ it("writes no English-only label where a Vietnamese one is named by the spec", (
   expect(S.nav).not.toHaveProperty("adminLegacy");
 });
 
+// The category of an alert is shown by a Vietnamese label (the code stays beside it). The backend's PRIORITY
+// tuple (ingest/category.py) is every category the mapper can emit, so each one has a label here: S1 added
+// `credential_access` to it, and a category with no label would be shown as its raw code.
+describe("the category labels follow the backend PRIORITY", () => {
+  const priority = (): string[] => {
+    const pattern = /^PRIORITY(?::\s*tuple\[str,\s*\.\.\.\])?\s*=\s*\(([^)]*)\)/m;
+    const { body } = definition("PRIORITY", pattern, BACKEND_APP);
+    return [...body.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+  };
+
+  it("reads the tuple (a parse that finds nothing would compare nothing)", () => {
+    expect(priority()).toContain("ssh_brute_force");
+    expect(priority()).toContain("credential_access");
+    expect(priority().length).toBeGreaterThanOrEqual(13);
+  });
+
+  it("has a label for every category, and none for a category the backend does not have", () => {
+    expect(Object.keys(S.category).sort()).toEqual([...priority()].sort());
+  });
+
+  it("says credential_access in Vietnamese, and an unknown category as its code", () => {
+    expect(labelOf(S.category, "credential_access")).toBe("Đánh cắp thông tin xác thực");
+    expect(labelOf(S.category, "new_thing")).toBe("new_thing");
+    expect(labelOf(S.category, "constructor")).toBe("constructor");
+  });
+});
+
 describe("labelOf", () => {
   it("returns the label of a known code", () => {
     expect(labelOf(S.status, "queued_tier1")).toBe("Chờ xử lý");

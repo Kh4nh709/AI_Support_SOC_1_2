@@ -9,8 +9,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 # context pack §7.1 — the five reasons[].source values plus the verifier's one block (P3-T09),
-# and the three of the learned-knowledge section (DEC-210): an approved entry, the rationale of a
-# past decision, an analyst's note. All three are text a person wrote, so all three are untrusted.
+# the three of the learned-knowledge section (DEC-210): an approved entry, the rationale of a
+# past decision, an analyst's note — all three are text a person wrote, so all three are untrusted —
+# and S2's `siem_context`: SOAR's `enrichment` object, one untrusted block of the ① prompt.
 BLOCK_SOURCES = frozenset(
     {
         "wazuh_raw_log",
@@ -18,6 +19,7 @@ BLOCK_SOURCES = frozenset(
         "correlation_samples",
         "kb_playbook",
         "context",
+        "siem_context",
         "proposer",
         "kb_learned",
         "decision_history",

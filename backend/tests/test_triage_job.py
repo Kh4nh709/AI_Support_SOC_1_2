@@ -29,7 +29,7 @@ from app.infra import config, worker
 from app.infra.errors import TransientError
 from app.infra.jobs import Job
 from app.kb.lookup import DecisionTable, Rule
-from app.llm.adapter import LLMBudgetExceeded
+from app.llm.adapter import LLMBudgetExceeded, LLMUnavailable
 from app.security.linter import Violation
 from app.tier1 import triage as triage_module
 from app.tier1.triage import _make_rule_check, run_triage_job
@@ -187,6 +187,19 @@ class _AlwaysOverBudget:
 
     def complete(self, **kwargs):
         raise LLMBudgetExceeded("over the monthly cap")
+
+
+class _AlwaysUnavailable:
+    """The provider answers 402 (no balance / exhausted quota): the adapter raises LLMUnavailable
+    on the first call. Like `_AlwaysOverBudget`, but a distinct provider-side cause (S8)."""
+
+    def __init__(self) -> None:
+        self.calls: list = []
+
+    def complete(self, **kwargs):
+        raise LLMUnavailable(
+            "LLM provider unavailable (402): Error code: 402 - {'message': 'Insufficient Balance'}"
+        )
 
 
 class _FailVerifyCall(_RecordingLLM):
@@ -381,6 +394,55 @@ def test_cap_is_unavailable_before_any_call(db, monkeypatch):
     assert fake.calls == []
     rows = _rows(db, alert_id, "stopped_by")
     assert [r[0] for r in rows] == ["cap"]
+
+    triage_status = db.execute(
+        "SELECT triage_status FROM alerts WHERE alert_id = %s", (alert_id,)
+    ).fetchone()[0]
+    assert triage_status == "unavailable"
+
+
+@pytest.mark.db
+def test_provider_402_is_unavailable_with_the_error_recorded(db, monkeypatch):
+    """A provider 402 (no balance / quota) ends the alert `unavailable` with ONE proposer row whose
+    stopped_by is 'unavailable' and whose gate_result records the provider's message — not a hard
+    job failure that leaves triage_status dangling with no row (S8, DEC-210). The job itself
+    succeeds (it recorded an outcome), so the webhook/pipeline does not retry it forever."""
+    _enable_llm(monkeypatch)
+    alert_id = _seed_alert(db)
+    fake = _AlwaysUnavailable()
+
+    run_triage_job(db, _job(alert_id), adapter=fake)
+
+    rows = _rows(db, alert_id, "result", "stopped_by", "gate_result")
+    assert len(rows) == 1
+    result, stopped_by, gate_result = rows[0]
+    assert result is None
+    assert stopped_by == "unavailable"
+    assert gate_result["error"] == "unavailable"
+    assert "402" in gate_result["message"]  # the provider's own reason is kept
+
+    triage_status = db.execute(
+        "SELECT triage_status FROM alerts WHERE alert_id = %s", (alert_id,)
+    ).fetchone()[0]
+    assert triage_status == "unavailable"
+
+
+@pytest.mark.db
+def test_verifier_402_writes_both_rows_unavailable(db, monkeypatch):
+    """A 402 on the verifier call, after a schema-valid proposal, writes both rows stopped_by
+    'unavailable' and ends the alert 'unavailable' — mirroring the verifier-cap branch (S8)."""
+    _enable_llm(monkeypatch)
+    alert_id = _seed_alert(db)
+    fake = _FailVerifyCall(
+        responses=[TRIAGE_V2_ESCALATE],
+        raises=LLMUnavailable("LLM provider unavailable (402): Insufficient Balance"),
+    )
+
+    run_triage_job(db, _job(alert_id), adapter=fake)
+
+    rows = _rows(db, alert_id, "role", "stopped_by")
+    assert {r[0] for r in rows} == {"proposer", "verifier"}
+    assert all(stopped_by == "unavailable" for _role, stopped_by in rows)
 
     triage_status = db.execute(
         "SELECT triage_status FROM alerts WHERE alert_id = %s", (alert_id,)

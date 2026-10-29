@@ -7,6 +7,7 @@ import type { AlertView, CorrelationRow, CorrelationSample } from "../../api/tie
 import type { Role } from "../../api/types";
 import { canOpenCases } from "../../caseAccess";
 import { BandBadge } from "../../components/Badge";
+import { CategoryText } from "../../components/CategoryText";
 import { DataTable, type Column } from "../../components/DataTable";
 import { KeyValueGrid, visibleItems, type KeyValueItem } from "../../components/KeyValueGrid";
 import { LogBlock } from "../../components/LogBlock";
@@ -18,7 +19,7 @@ const LINK = "underline underline-offset-2 focus-visible:outline-2 focus-visible
 const alertPath = (id: string) => `/alerts/${encodeURIComponent(id)}`;
 
 /** A titled block of the column. It is not a landmark: the column is one. */
-function Block({ title, children }: { title: string; children: ReactNode }) {
+export function Block({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-2">
       <h3 className="text-sm font-semibold">{title}</h3>
@@ -69,7 +70,7 @@ export function Summary({ view, role }: { view: AlertView; role: Role | null }) 
     >
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <BandBadge label={band} />
-        {view.category && <span className="font-mono text-xs">{view.category}</span>}
+        <CategoryText code={view.category} />
         <span className="text-muted">{labelOf(S.status, view.status)}</span>
       </div>
       <KeyValueGrid items={items} columns={3} />

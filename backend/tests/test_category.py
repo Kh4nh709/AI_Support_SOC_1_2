@@ -24,9 +24,11 @@ from app.ingest.category import (
     PORT_TO_CATEGORY,
     PRIORITY,
     TECHNIQUE_TO_CATEGORY,
+    WINDOWS_TECHNIQUE_TO_CATEGORY,
     Resolution,
     resolve,
 )
+from app.kb import lookup
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PLAYBOOKS = {p.stem for p in (REPO_ROOT / "kb" / "playbooks").glob("*.md")}
@@ -202,9 +204,10 @@ def test_priority_table_is_covered_by_playbooks_plus_unknown():
 def test_ten_playbooks_exist_on_disk_matching_r5s_premise():
     # If this fails, kb/playbooks/ changed shape and the two tests above are
     # trivially vacuous (an empty PLAYBOOKS set would pass both for free).
-    # P9-T02 (DEC-149) adds an eleventh, `brute_force`; the ten are now named, not only counted.
-    assert len(PLAYBOOKS) == 11
-    assert PLAYBOOKS - {"brute_force"} == {
+    # P9-T02 (DEC-149) adds an eleventh, `brute_force`; S1 a twelfth, `credential_access`;
+    # the ten are named, not only counted.
+    assert len(PLAYBOOKS) == 12
+    assert PLAYBOOKS - {"brute_force", "credential_access"} == {
         "ransomware",
         "malware",
         "c2_beacon",
@@ -264,11 +267,15 @@ def test_mapping_version_is_pinned_to_a_hash_of_the_four_tables():
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     # If this assertion fails, you edited a mapping table: bump MAPPING_VERSION
     # in category.py in the same commit, then update this literal to match.
-    assert digest == "33ed2ec1be828c578f009b33b5e8ec27a746f7353238fa6b46551761bd720f2d"
-    # P9-T02 (DEC-149): the four shared tables above still hash to their v3.2 value, so
-    # no alert outside the Windows tiers can change category. The two Windows tables,
-    # with the decoder that guards them, are hashed as well; they are what moved
-    # v3.2 -> v3.3 (the group table joined before v3.3 was ever merged).
+    # v3.4 (S1): the shared technique table gained T1018/T1016/T1482 -> recon and
+    # T1003/T1003.001 -> credential_access. Its v3.2/v3.3 digest, kept through P9-T02 (DEC-149) so
+    # that no alert outside the Windows tiers could change category, was
+    # 33ed2ec1be828c578f009b33b5e8ec27a746f7353238fa6b46551761bd720f2d. The other three
+    # shared tables are untouched.
+    assert digest == "fb54929f189a30ff407a6d13a3d22bf0989ad062cb6f17940e18801c0fc10702"
+    # P9-T02 (DEC-149): the two Windows tables, with the decoder that guards them, are hashed as
+    # well; they moved v3.2 -> v3.3 (the group table joined before v3.3 was ever merged), and
+    # v3.3 -> v3.4 with T1003/T1003.001 -> credential_access (S1).
     from app.ingest.category import (
         WINDOWS_DECODER,
         WINDOWS_GROUP_TO_CATEGORY,
@@ -284,8 +291,8 @@ def test_mapping_version_is_pinned_to_a_hash_of_the_four_tables():
         sort_keys=True,
     )
     windows_digest = hashlib.sha256(windows.encode("utf-8")).hexdigest()
-    assert windows_digest == "06afb21cdcf65fd424b48fcb2012846667013336bdefbd8cc99df435f2bb9f88"
-    assert MAPPING_VERSION == "v3.3"
+    assert windows_digest == "c24dc7197618f6a972942ed8f182323ed9f3ba555136961f5784be4e6c392141"
+    assert MAPPING_VERSION == "v3.4"
 
 
 # --------------------------------------------------------------------------
@@ -526,6 +533,120 @@ def test_rule_40112_multiple_failures_then_success_ssh_brute_force_outranks_susp
     assert r.category == "ssh_brute_force"
     assert r.categories == ("ssh_brute_force", "suspicious_login")
     assert r.resolved_by == "mitre"
+
+
+# --------------------------------------------------------------------------
+# S1 (v3.4) — discovery techniques reach `recon`; LSASS credential theft gets its own
+# category, `credential_access`, ranked right after `privilege_escalation`
+# --------------------------------------------------------------------------
+
+WIN = "windows_eventchannel"
+
+
+@pytest.mark.parametrize("technique_id", ["T1018", "T1016", "T1482"])
+@pytest.mark.parametrize("decoder", [None, "sshd", "pam", WIN])
+def test_s1_discovery_techniques_resolve_to_recon_on_every_decoder(technique_id, decoder):
+    """Rule 111438 (DC / domain probing) carries these; they sit in the SHARED table only,
+    so a `windows_eventchannel` alert (no Windows-table key) reaches them by the fall-through
+    from W1-W3 to tier 1."""
+    r = resolve([technique_id], [], decoder, 0)
+    assert (r.category, r.categories, r.resolved_by) == ("recon", ("recon",), "mitre")
+
+
+@pytest.mark.parametrize("technique_id", ["T1018", "T1016", "T1482"])
+def test_s1_recon_additions_are_in_the_shared_table_only(technique_id):
+    assert TECHNIQUE_TO_CATEGORY[technique_id] == "recon"
+    assert technique_id not in WINDOWS_TECHNIQUE_TO_CATEGORY
+
+
+def test_s1_windows_t1018_falls_through_w1_w3_to_the_shared_tier():
+    # Windows alert, no W1/W2 key and a W3-silent group set: tier 1 answers.
+    r = resolve(["T1018"], ["windows", "windows_security"], WIN, 0)
+    assert (r.category, r.resolved_by) == ("recon", "mitre")
+
+
+def test_s1_non_windows_t1018_resolves_to_recon():
+    r = resolve(["T1018"], ["syslog"], "sshd", 0)
+    assert (r.category, r.categories, r.resolved_by) == ("recon", ("recon",), "mitre")
+
+
+def test_s1_rule_111438_shape_all_three_techniques_resolve_to_recon():
+    r = resolve(["T1018", "T1016", "T1482"], ["windows", "sysmon"], WIN, 0)
+    assert (r.category, r.categories, r.resolved_by) == ("recon", ("recon",), "mitre")
+
+
+@pytest.mark.parametrize("technique_id", ["T1003", "T1003.001"])
+def test_s1_t1003_is_in_both_technique_tables_like_t1110(technique_id):
+    assert TECHNIQUE_TO_CATEGORY[technique_id] == "credential_access"
+    assert WINDOWS_TECHNIQUE_TO_CATEGORY[technique_id] == "credential_access"
+
+
+def test_s1_rule_111923_lsass_dump_resolves_to_credential_access_by_mitre():
+    """Rule 111923 shape: a `windows_eventchannel` alert carrying T1003 + T1003.001."""
+    r = resolve(["T1003", "T1003.001"], ["windows", "sysmon"], WIN, 0)
+    assert (r.category, r.categories, r.resolved_by) == (
+        "credential_access",
+        ("credential_access",),
+        "mitre",
+    )
+
+
+@pytest.mark.parametrize("technique_id", ["T1003", "T1003.001"])
+def test_s1_each_t1003_id_alone_resolves_on_windows(technique_id):
+    r = resolve([technique_id], [], WIN, 0)
+    assert (r.category, r.resolved_by) == ("credential_access", "mitre")
+
+
+def test_s1_a_t1003_sub_technique_reaches_its_parent_on_windows():
+    r = resolve(["T1003.002"], [], WIN, 0)
+    assert (r.category, r.resolved_by) == ("credential_access", "mitre_parent")
+
+
+def test_s1_t1003_resolves_on_a_non_windows_decoder_through_the_shared_table():
+    r = resolve(["T1003.001"], [], "auditd", 0)
+    assert (r.category, r.resolved_by) == ("credential_access", "mitre")
+
+
+def test_s1_credential_access_is_ranked_right_after_privilege_escalation():
+    assert PRIORITY.index("credential_access") == PRIORITY.index("privilege_escalation") + 1
+    assert PRIORITY.index("credential_access") < PRIORITY.index("ssh_brute_force")
+    assert PRIORITY.index("credential_access") < PRIORITY.index("suspicious_login")
+    assert PRIORITY.index("credential_access") < PRIORITY.index("recon")
+
+
+@pytest.mark.parametrize(
+    "mitre_ids,expected",
+    [
+        (["T1003", "T1548"], ("privilege_escalation", "credential_access")),
+        (["T1548", "T1003"], ("privilege_escalation", "credential_access")),
+        (["T1078", "T1003"], ("credential_access", "suspicious_login")),
+        (["T1018", "T1003"], ("credential_access", "recon")),
+        (["T1003", "T1486"], ("ransomware", "credential_access")),
+    ],
+)
+def test_s1_priority_sorts_credential_access_among_its_neighbours(mitre_ids, expected):
+    r = resolve(mitre_ids, [], None, 0)
+    assert r.categories == expected
+    assert r.category == expected[0]
+
+
+def test_s1_credential_access_has_a_playbook_and_a_decision_table():
+    """R5 for the new value: the playbook exists, and the table loads (title line, rule shape,
+    `playbook` name) and is self-consistent."""
+    assert "credential_access" in PLAYBOOKS
+    assert lookup.get_playbook("credential_access") is not None
+    table = lookup.get_decision_table("credential_access")
+    assert table is not None
+    assert table.category == "credential_access"
+    assert table.playbook == "credential_access_v1"
+    assert table.rules
+    assert lookup.check_consistency(table) == []
+
+
+def test_s1_prompt_builder_closed_set_knows_credential_access():
+    from app.llm import builder
+
+    assert builder.Category("credential_access") is builder.Category.CREDENTIAL_ACCESS
 
 
 # --------------------------------------------------------------------------

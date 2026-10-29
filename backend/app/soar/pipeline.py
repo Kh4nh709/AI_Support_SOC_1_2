@@ -202,6 +202,9 @@ def _unknown_context() -> AlertContext:
 #                           kept and a `false` is dropped; null or absent: None, identity `skipped`
 #   ioc_reputation       <- the worst of ti[].verdict and ioc.verdict, malicious > suspicious >
 #                           clean (no block: `skipped`)
+#   asset_owner          <- asset.owner  string (absent/null: None) — a local annotation the SIEM
+#   asset_role           <- asset.role   string (absent/null: None)   adds (DEC-210 S5); display
+#                           only, rendered in the `context` block, never a fact
 # `asset.critical` is SOAR's own scoring flag, not an inventory level, and is not read. A value
 # outside its vocabulary or of the wrong type anywhere makes the WHOLE context "unknown": a context
 # trusted in part is not built. What is logged is the field's name and the kind of fault, never the
@@ -245,6 +248,18 @@ def _optional_bool(parent: dict, key: str, field: str) -> bool | None:
     return value
 
 
+def _optional_str(parent: dict, key: str, field: str) -> str | None:
+    """A string, or `None` when the key is absent or `null`. Anything else is a fault. The value is
+    free text that reaches the model only inside the `context` block (§7.1), so it is not inspected
+    further here."""
+    value = parent.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise _InvalidField(field, "wrong type")
+    return value
+
+
 def _verdict(value: object, field: str) -> str:
     if not isinstance(value, str):
         raise _InvalidField(field, "wrong type")
@@ -281,6 +296,12 @@ def _read_enrichment(document: object, *, names_account: bool) -> AlertContext:
             raise _InvalidField("enrichment.asset.in_inventory", "wrong type")
         in_inventory = value
 
+    # S5 (DEC-210, Owner decision B): owner and role are local annotations the SIEM adds to the
+    # enrichment. They are display-only text (the `context` block, §7.1) — never facts — so they do
+    # not reach the gate; a value of the wrong type still fails the whole context (DEC-208 item 3).
+    owner = _optional_str(asset, "owner", "enrichment.asset.owner")
+    role = _optional_str(asset, "role", "enrichment.asset.role")
+
     user = asset.get("user")
     if user is not None and not isinstance(user, str):
         raise _InvalidField("enrichment.asset.user", "wrong type")
@@ -311,8 +332,8 @@ def _read_enrichment(document: object, *, names_account: bool) -> AlertContext:
     return AlertContext(
         in_inventory is True,
         criticality,
-        None,
-        None,
+        owner,
+        role,
         privileged,
         max(verdicts, key=_VERDICT_RANK.__getitem__) if verdicts else "skipped",
         {

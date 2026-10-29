@@ -65,6 +65,7 @@ class Category(Enum):
     C2_BEACON = "c2_beacon"
     DATA_EXFILTRATION = "data_exfiltration"
     PRIVILEGE_ESCALATION = "privilege_escalation"
+    CREDENTIAL_ACCESS = "credential_access"  # LSASS / OS credential dumping, MITRE T1003 (S1)
     SSH_BRUTE_FORCE = "ssh_brute_force"
     BRUTE_FORCE = "brute_force"  # Windows credential attacks, MITRE T1110 (P9-T02)
     WEB_ATTACK = "web_attack"

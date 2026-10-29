@@ -103,6 +103,31 @@ def _seed_heartbeat(conn, *, minutes_ago: float, manager_id: str = "indexer") ->
     )
 
 
+def _seed_webhook_heartbeat(
+    conn,
+    *,
+    seen_minutes_ago: float | None,
+    alert_minutes_ago: float | None,
+    manager_id: str = "webhook",
+) -> None:
+    """A `source_heartbeat` row as DEC-207 leaves it with the pull off: every accepted
+    webhook alert stamps both columns, a rule-100999 document stamps `last_seen_at` only,
+    and a row with a null `last_alert_at` is a system that has heard no alert yet."""
+    conn.execute(
+        """
+        INSERT INTO source_heartbeat (manager_id, last_seen_at, last_alert_at)
+        VALUES (
+            %s,
+            now() - (%s * interval '1 minute'),
+            now() - (%s * interval '1 minute')
+        )
+        ON CONFLICT (manager_id) DO UPDATE SET
+            last_seen_at = EXCLUDED.last_seen_at, last_alert_at = EXCLUDED.last_alert_at
+        """,
+        (manager_id, seen_minutes_ago, alert_minutes_ago),
+    )
+
+
 def _write_backup(backups_dir: Path, *, name: str = "soc-20260929T000000Z.dump") -> Path:
     backups_dir.mkdir(parents=True, exist_ok=True)
     path = backups_dir / name
@@ -257,6 +282,132 @@ def test_heartbeat_at_exact_threshold_is_ok(db, tmp_path):
     check = _by_name(report)["heartbeat"]
     assert check.value == cfg.HEARTBEAT_MAX_AGE_MIN
     assert check.ok is True  # exactly at the threshold is still ok (`<=`)
+
+
+# 1b · heartbeat, the two branches of PULL_ENABLED (S7) --------------------------
+#
+# Pull on: the puller owns `last_seen_at`, a 30-minute keepalive window. Pull off: the
+# SIEM no longer sends rule 100999, the webhook is the only source, and "a real alert
+# within WEBHOOK_SOURCE_MAX_AGE_H hours" is the judgement — a quiet webhook-only system
+# must not alarm continuously.
+
+
+@pytest.mark.db
+def test_heartbeat_pull_on_stale_last_seen_alarms_even_with_a_recent_alert(db, tmp_path):
+    """Pull on is the old rule byte for byte: it reads `last_seen_at` against
+    HEARTBEAT_MAX_AGE_MIN and never looks at `last_alert_at`."""
+    _seed_webhook_heartbeat(db, seen_minutes_ago=45, alert_minutes_ago=1)
+    cfg = _cfg(PULL_ENABLED=True)
+    check = _by_name(health.check(db, cfg, clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path))[
+        "heartbeat"
+    ]
+    assert check.ok is False
+    assert check.threshold == cfg.HEARTBEAT_MAX_AGE_MIN
+    assert "the source stopped sending" in check.detail
+
+
+@pytest.mark.db
+def test_heartbeat_pull_on_recent_last_seen_is_ok_with_no_alert_ever(db, tmp_path):
+    _seed_webhook_heartbeat(db, seen_minutes_ago=1, alert_minutes_ago=None)
+    cfg = _cfg(PULL_ENABLED=True)
+    check = _by_name(health.check(db, cfg, clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path))[
+        "heartbeat"
+    ]
+    assert check.ok is True
+    assert check.threshold == cfg.HEARTBEAT_MAX_AGE_MIN
+    assert check.detail.startswith("last heartbeat ")
+
+
+@pytest.mark.db
+def test_heartbeat_pull_off_recent_alert_is_ok_beyond_the_old_30_minute_window(db, tmp_path):
+    """The point of the card: 5 h since the last real alert is a quiet night, not a dead
+    source. The old rule (HEARTBEAT_MAX_AGE_MIN = 30 min) would have alarmed on it, on
+    both columns (a webhook-only row has `last_seen_at` = `last_alert_at`)."""
+    _seed_webhook_heartbeat(db, seen_minutes_ago=300, alert_minutes_ago=300)
+    cfg = _cfg(PULL_ENABLED=False)
+    assert 300 > cfg.HEARTBEAT_MAX_AGE_MIN and 300 < cfg.WEBHOOK_SOURCE_MAX_AGE_H * 60
+    check = _by_name(health.check(db, cfg, clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path))[
+        "heartbeat"
+    ]
+    assert check.ok is True
+    assert check.detail.startswith("last webhook alert ")
+    assert check.threshold == cfg.WEBHOOK_SOURCE_MAX_AGE_H
+
+
+@pytest.mark.db
+def test_heartbeat_pull_off_five_minutes_ago_is_ok(db, tmp_path):
+    _seed_webhook_heartbeat(db, seen_minutes_ago=5, alert_minutes_ago=5)
+    check = _by_name(
+        health.check(
+            db, _cfg(PULL_ENABLED=False), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path
+        )
+    )["heartbeat"]
+    assert check.ok is True
+    assert "5 min ago" in check.detail
+
+
+@pytest.mark.db
+def test_heartbeat_pull_off_judges_the_last_alert_not_the_last_keepalive(db, tmp_path):
+    """A rule-100999 document (if one still arrives) stamps `last_seen_at` only; it is a
+    keepalive, not an alert, and must not hide a source whose alerts stopped."""
+    _seed_webhook_heartbeat(db, seen_minutes_ago=1, alert_minutes_ago=60 * 30)
+    cfg = _cfg(PULL_ENABLED=False)
+    check = _by_name(health.check(db, cfg, clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path))[
+        "heartbeat"
+    ]
+    assert check.ok is False
+
+
+@pytest.mark.db
+def test_heartbeat_pull_off_stale_alert_alarms_with_the_webhook_detail(db, tmp_path):
+    cfg = _cfg(PULL_ENABLED=False, WEBHOOK_SOURCE_MAX_AGE_H=24)
+    _seed_webhook_heartbeat(db, seen_minutes_ago=25 * 60, alert_minutes_ago=25 * 60)
+    check = _by_name(health.check(db, cfg, clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path))[
+        "heartbeat"
+    ]
+    assert check.ok is False
+    assert check.detail == "no webhook alert in over 24 h — the source may have stopped"
+    assert check.threshold == 24
+    assert check.value == 25.0
+
+
+@pytest.mark.db
+def test_heartbeat_pull_off_window_follows_the_config_key(db, tmp_path):
+    _seed_webhook_heartbeat(db, seen_minutes_ago=25 * 60, alert_minutes_ago=25 * 60)
+    check = _by_name(
+        health.check(
+            db,
+            _cfg(PULL_ENABLED=False, WEBHOOK_SOURCE_MAX_AGE_H=48),
+            clock=_clock_at(_MORNING_UTC),
+            backups_dir=tmp_path,
+        )
+    )["heartbeat"]
+    assert check.ok is True
+
+
+@pytest.mark.db
+def test_heartbeat_pull_off_no_row_is_ok_not_an_alarm(db, tmp_path):
+    check = _by_name(
+        health.check(
+            db, _cfg(PULL_ENABLED=False), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path
+        )
+    )["heartbeat"]
+    assert check.ok is True
+    assert check.value is None
+    assert check.detail == "no webhook alert yet"
+
+
+@pytest.mark.db
+def test_heartbeat_pull_off_null_last_alert_is_ok_not_an_alarm(db, tmp_path):
+    """Only keepalives so far (or a pull-era row): no real alert yet is not a dead source."""
+    _seed_webhook_heartbeat(db, seen_minutes_ago=2, alert_minutes_ago=None)
+    check = _by_name(
+        health.check(
+            db, _cfg(PULL_ENABLED=False), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path
+        )
+    )["heartbeat"]
+    assert check.ok is True
+    assert check.detail == "no webhook alert yet"
 
 
 # 2 · intake_backlog -----------------------------------------------------------
@@ -589,13 +740,14 @@ def test_inventory_empty_with_enrichment_off_does_not_alarm_the_report(db, tmp_p
 
 
 # P12-T01 / DEC-207 item 2 — with the pull off, an accepted webhook alert is what keeps the
-# `heartbeat` check green.
+# `heartbeat` check green. (S7: the window is `WEBHOOK_SOURCE_MAX_AGE_H` hours on `last_alert_at`,
+# no longer the 30-minute keepalive window, so "the source looks lost" is a 25-hour-old alert.)
 
 
 @pytest.mark.db
 def test_heartbeat_check_goes_from_stale_to_ok_on_a_webhook_alert_with_the_pull_off(db, tmp_path):
     cfg = _cfg(PULL_ENABLED=False, WEBHOOK_API_KEY="k")
-    _seed_heartbeat(db, minutes_ago=45)
+    _seed_webhook_heartbeat(db, seen_minutes_ago=25 * 60, alert_minutes_ago=25 * 60)
     first = health.check(db, cfg, clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
     assert _by_name(first)["heartbeat"].ok is False  # the source looks lost
 

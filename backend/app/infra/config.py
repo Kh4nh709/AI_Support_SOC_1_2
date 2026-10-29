@@ -149,6 +149,10 @@ class Config:
     PULL_ENABLED: bool = True
     AUTOCLOSE_ENABLED: bool = True
     ENRICHMENT_ENABLED: bool = True
+    # S2: true = the ① prompt carries SOAR's `enrichment` object as one more untrusted block, `siem_context`
+    # (`llm/siem_context.py`); false leaves it out (the no-SIEM-context experiment). Only a prompt is
+    # affected: the facts, the gate and the verifier read none of it.
+    PROMPT_INCLUDE_SIEM_CONTEXT: bool = True
     INDEXER_URL: str = ""
     INDEXER_USER: str = ""
     INDEXER_PASSWORD: str = ""
@@ -160,6 +164,7 @@ class Config:
     PULL_START: str = "2026-08-01"
     HEARTBEAT_RULE_ID: str = "100999"
     HEARTBEAT_MAX_AGE_MIN: int = 30
+    WEBHOOK_SOURCE_MAX_AGE_H: int = 24
     SILENCE_WARN_HOURS: int = 3
     JOB_MAX_ATTEMPTS: int = 3
     JOB_BACKOFF: list[int] = dataclasses.field(default_factory=lambda: [10, 60, 300])
@@ -299,6 +304,7 @@ def load(*, env_file: str | Path = ".env") -> Config:
         PULL_ENABLED=as_bool("PULL_ENABLED", True),
         AUTOCLOSE_ENABLED=as_bool("AUTOCLOSE_ENABLED", True),
         ENRICHMENT_ENABLED=as_bool("ENRICHMENT_ENABLED", True),
+        PROMPT_INCLUDE_SIEM_CONTEXT=as_bool("PROMPT_INCLUDE_SIEM_CONTEXT", True),
         INDEXER_URL=as_str("INDEXER_URL", ""),
         INDEXER_USER=as_str("INDEXER_USER", ""),
         INDEXER_PASSWORD=as_str("INDEXER_PASSWORD", ""),
@@ -310,6 +316,7 @@ def load(*, env_file: str | Path = ".env") -> Config:
         PULL_START=as_str("PULL_START", "2026-08-01"),
         HEARTBEAT_RULE_ID=as_str("HEARTBEAT_RULE_ID", "100999"),
         HEARTBEAT_MAX_AGE_MIN=as_int("HEARTBEAT_MAX_AGE_MIN", 30),
+        WEBHOOK_SOURCE_MAX_AGE_H=as_int("WEBHOOK_SOURCE_MAX_AGE_H", 24),
         SILENCE_WARN_HOURS=as_int("SILENCE_WARN_HOURS", 3),
         JOB_MAX_ATTEMPTS=as_int("JOB_MAX_ATTEMPTS", 3),
         JOB_BACKOFF=as_json_list("JOB_BACKOFF", [10, 60, 300], int),

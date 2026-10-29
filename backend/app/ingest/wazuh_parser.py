@@ -159,6 +159,35 @@ def _resolve_alert_time(doc: Mapping, alert_obj: Mapping, envelope: str) -> date
     return parsed
 
 
+def _utc_instant(value: object) -> datetime | None:
+    """`value` as an instant in UTC, or `None` when it is not one: not a string, not ISO-8601,
+    out of range, or written with no offset (a wall-clock time with no zone is not an instant, and
+    guessing the host's zone would make the result depend on where the parser runs)."""
+    parsed = _parse_iso(value)
+    if parsed is None or parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    try:
+        return parsed.astimezone(UTC)
+    except (OverflowError, ValueError):
+        # `0001-01-01T00:00:00+07:00` has no UTC representation.
+        return None
+
+
+def _resolve_event_time(doc: Mapping, alert_obj: Mapping) -> datetime | None:
+    """When the event happened, in UTC (S4): `timing.event_time` at the root of the document
+    (SOAR sends it beside the alert, with its offset), else the Windows event's own clock,
+    `systemTime` under `data.win.system` (UTC `Z`), else `None`.
+
+    Optional by design: a value that is present but is not an instant falls through to the
+    next source and ends as `None`. Unlike `alert_time`, nothing here rejects the alert or raises.
+    """
+    timing = _utc_instant(_dict(doc.get("timing")).get("event_time"))
+    if timing is not None:
+        return timing
+    system = _dict(_dict(_dict(alert_obj.get("data")).get("win")).get("system"))
+    return _utc_instant(system.get("systemTime"))
+
+
 def _win_text(value: object) -> str:
     """`value` stripped if it is a string, else `""`: every eventchannel field is a
     string, so anything else is treated as absent, never raised on (R2)."""
@@ -346,10 +375,11 @@ def parse_wazuh_alert(doc: Mapping) -> ParseResult:
         agent_ip=agent_ip,
         origin_host=origin_host,
         alert_time=alert_time,
-        # Always None in P2 (planning decision 5): the inventory has no
-        # per-agent timezone field, so `predecoder.timestamp` cannot be
-        # localised. It stays in raw_payload for a future reader.
-        event_time=None,
+        # From the payload's own instant (S4): `timing.event_time`, else the Windows
+        # `systemTime`, else None. `predecoder.timestamp` is still not read: it has no
+        # year and the inventory has no per-agent timezone to localise it with
+        # (P2 planning decision 5). It stays in raw_payload.
+        event_time=_resolve_event_time(doc, alert_obj),
         srcip=srcip,
         dstip=dstip,
         src_port=src_port,

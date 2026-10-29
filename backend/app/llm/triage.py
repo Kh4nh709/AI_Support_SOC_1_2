@@ -55,7 +55,7 @@ from typing import Any, Protocol
 from app.infra.config import Config
 from app.infra.errors import PermanentError
 from app.kb.lookup import DecisionTable
-from app.llm import schemas
+from app.llm import schemas, siem_context
 from app.llm.adapter import estimate_tokens
 from app.llm.builder import (
     BULLET,
@@ -113,6 +113,10 @@ SAMPLE_RAW_LOG_LIMIT_BYTES = 2_048
 RAW_LOG_CUT_BYTES = 8_192
 SAMPLES_CUT = 3
 ROWS_CUT = 10
+#: S2: the `siem_context` block's size limit; over it the surrounding logs go first (`llm/siem_context.py`).
+#: It is not a step of the budget cuts above: 8 KB is ~2 000 of the 40 000 tokens, and the cuts only run
+#: when the rest is already too big.
+SIEM_CONTEXT_MAX_BYTES = siem_context.MAX_BYTES
 
 _LOOKUP_LABELS = ("asset", "identity", "ioc")
 _LIST_CONDITION_ENUMS: dict[str, type[Enum]] = {
@@ -185,6 +189,10 @@ class TriageInput:
     lookup_status: Mapping[str, Any]
     first_seen_at: datetime
     last_seen_at: datetime
+    # S2: the alert's `raw_payload->'enrichment'` as SOAR sent it, or `None` (a Wazuh alert, or a payload
+    # whose `enrichment` is not an object). SIEM text, untrusted: it reaches the prompt only as the
+    # `siem_context` block and is not an input of `build_facts`.
+    siem_enrichment: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -372,6 +380,17 @@ def _context_section(pb: PromptBuilder, inp: TriageInput) -> None:
         pb.block("\n".join(lines), "context")
 
 
+def _siem_context_section(pb: PromptBuilder, inp: TriageInput, warnings: list[str]) -> None:
+    """SOAR's `enrichment` as ONE nonce-wrapped block, source `siem_context`, and nothing outside a block:
+    no heading, no sentence, no `fact()` — every word of it is SIEM text. Nothing is emitted when there is
+    no enrichment (no empty block); the cuts of an over-long one are warnings."""
+    rendered = siem_context.render(inp.siem_enrichment)
+    if rendered is None:
+        return
+    pb.block(rendered.text, "siem_context", limit_bytes=rendered.limit_bytes)
+    warnings.extend(rendered.warnings)
+
+
 def _correlation_section(
     pb: PromptBuilder, rows: Sequence[CorrelationRowLike], samples: Sequence[Mapping[str, Any]]
 ) -> None:
@@ -461,6 +480,7 @@ def _render_proposer(
     raw_log_limit: int,
     include_context: bool,
     include_correlation: bool,
+    include_siem_context: bool,
     learned: tuple[str | None, Sequence[tuple[KbLearnedLevel, str]], bool] | None = None,
 ) -> tuple[BuiltPrompt, list[str], str | None]:
     """`learned`: None leaves the section out whole; else `(history_text, entries, nothing_found)`."""
@@ -473,6 +493,8 @@ def _render_proposer(
         warnings.append("raw_log_truncated_at_ingest")
     if include_context:
         _context_section(pb, inp)
+    if include_siem_context:
+        _siem_context_section(pb, inp, warnings)
     if include_correlation:
         _correlation_section(pb, rows, samples)
     effective = _playbook_section(pb, inp, playbook_text, table, warnings)
@@ -494,13 +516,15 @@ def build_proposer_prompt(
     cfg: Config,
     include_context: bool = True,
     include_correlation: bool = True,
+    include_siem_context: bool | None = None,
     nonce: str | None = None,
     learned: LearnedLike | None = None,
 ) -> BuiltTriagePrompt:
     """The ① user message, section by section (architecture §4.1), through
     `PromptBuilder` only; then the budget check and phase-5's cut order (design note 3).
     `include_context` / `include_correlation` are P7's B2 switches: the section — its
-    heading, sentences and block — is omitted entirely.
+    heading, sentences and block — is omitted entirely. `include_siem_context` (S2) does the
+    same for the `siem_context` block; `None` follows `cfg.PROMPT_INCLUDE_SIEM_CONTEXT`.
 
     `learned` (P13-T07): None - the message is byte for byte what it was before this parameter
     existed. Else the learned section is rendered after the playbook section and before the
@@ -511,6 +535,8 @@ def build_proposer_prompt(
     `learned_used` is False."""
     system = _system_prompt(TRIAGE_TEMPLATE, "triage_v2")
     nonce = nonce if nonce is not None else wrap.new_nonce()
+    if include_siem_context is None:
+        include_siem_context = cfg.PROMPT_INCLUDE_SIEM_CONTEXT
     rows: Sequence[CorrelationRowLike] = ()
     samples: Sequence[Mapping[str, Any]] = ()
     if include_correlation and correlation is not None:
@@ -554,6 +580,7 @@ def build_proposer_prompt(
             raw_log_limit=limits["raw_log"],
             include_context=include_context,
             include_correlation=include_correlation,
+            include_siem_context=include_siem_context,
             learned=learned_view(),
         )
 
