@@ -622,6 +622,178 @@ def test_not_json_is_400_not_json(client, sdb) -> None:
 
 
 # --------------------------------------------------------------------------
+# INT-T02 fix round 2 (Director's ruling) — a body that is not strict UTF-8, and a string Postgres cannot
+# hold, are `not_json`
+#
+# `json.loads(bytes)` detects UTF-8, UTF-16 and UTF-32 and decodes them (and takes encoded surrogates),
+# and only then did `raw_text = body.decode("utf-8")` run: a UTF-16 or UTF-32 body with a BOM was a 500
+# (UnicodeDecodeError), one without a BOM stored NUL bytes (psycopg DataError, a 500), and a UTF-8 BOM
+# gave a 201 that the pipeline's `json.loads(raw_text)` could never read. And a `\u0000` inside a JSON
+# string is valid JSON that `intake.raw_payload` (jsonb) refuses (UntranslatableCharacter, a 500), as is a
+# lone surrogate escape: no `rejected_alerts` row in either case, the alert dropped without a trace.
+# The body is decoded strictly first, the text is parsed, and both failures are the existing `not_json`.
+# --------------------------------------------------------------------------
+
+
+def _valid_doc() -> dict:
+    """A document every other check passes, so that only the encoding or the NUL can refuse it."""
+    return _copy_with_id(ALERT_BARE, _wazuh_id())
+
+
+def _newest_rejected(sdb) -> tuple[str, str, object]:
+    return sdb.execute(
+        "SELECT reason, source_ip, raw_payload FROM rejected_alerts ORDER BY rejected_id DESC LIMIT 1"
+    ).fetchone()
+
+
+_NOT_UTF8_BODIES = [
+    pytest.param(lambda text: text.encode("utf-16"), id="utf-16-with-a-bom"),
+    pytest.param(lambda text: text.encode("utf-16-le"), id="utf-16-le-without-a-bom"),
+    pytest.param(lambda text: text.encode("utf-32"), id="utf-32-with-a-bom"),
+    pytest.param(lambda text: text.encode("utf-32-le"), id="utf-32-le-without-a-bom"),
+    pytest.param(lambda text: b"\xef\xbb\xbf" + text.encode("utf-8"), id="utf-8-with-a-bom"),
+    pytest.param(lambda text: text.encode("utf-16-be"), id="utf-16-be-without-a-bom"),
+    pytest.param(
+        lambda text: text.encode("utf-8").replace(b'"full_log": "', b'"full_log": "\xed\xa0\x80 '),
+        id="utf-8-encoded-surrogate",
+    ),
+    pytest.param(
+        lambda text: text.encode("utf-8").replace(b'"full_log": "', b'"full_log": "\xe9 '),
+        id="latin-1-byte",
+    ),
+]
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("encode", _NOT_UTF8_BODIES)
+def test_a_body_that_is_not_strict_utf_8_is_400_not_json_with_one_rejected_row(
+    client, sdb, encode
+) -> None:
+    doc = _valid_doc()
+    body = encode(json.dumps(doc))
+    before = _counts(sdb)
+
+    response = _post(client, body)
+
+    assert response.status_code == 400, response.text
+    assert response.json() == {"detail": {"missing": "not_json"}}
+    reason, source_ip, payload = _newest_rejected(sdb)
+    assert (reason, source_ip) == ("not_json", ALLOWED_HOST)
+    assert set(payload) == {"body"}  # the excerpt, as for any body that is not JSON
+    assert (
+        "\x00" not in payload["body"]
+    )  # it can itself be stored: no NUL reaches a text/jsonb column
+    assert len(payload["body"]) <= 4096
+    after = _counts(sdb)
+    assert after == {**before, "rejected_alerts": before["rejected_alerts"] + 1}
+    # the document is nowhere: no intake row, so no alert and no pipeline job
+    assert after["intake"] == before["intake"]
+    assert after["alerts"] == before["alerts"] and after["jobs"] == before["jobs"]
+    (kept,) = sdb.execute(
+        "SELECT count(*) FROM intake WHERE source_alert_id = %s", (doc["id"],)
+    ).fetchone()
+    assert kept == 0
+
+
+@pytest.mark.db
+def test_a_plain_utf_8_body_with_vietnamese_text_is_still_201_and_stored_byte_for_byte(
+    client, sdb
+) -> None:
+    doc = _valid_doc()
+    doc["full_log"] = "Đăng nhập thất bại: người dùng 'quản trị' từ máy chủ — 🛡 ✓"
+    doc["rule"] = {**doc["rule"], "description": "Cảnh báo: truy cập trái phép"}
+    body = json.dumps(doc, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
+    assert not body.isascii()
+
+    response = _post(client, body)
+
+    assert response.status_code == 201, response.text
+    (raw_text,) = sdb.execute(
+        "SELECT raw_text FROM intake WHERE intake_id = %s", (response.json()["intake_id"],)
+    ).fetchone()
+    assert raw_text.encode("utf-8") == body  # G9: the text received, not a re-encoding of it
+
+
+_NUL_BODIES = [
+    pytest.param(lambda doc: doc.update(full_log="a\u0000b"), id="in-a-value"),
+    pytest.param(lambda doc: doc.update({"x\u0000y": 1}), id="in-a-key"),
+    pytest.param(
+        lambda doc: doc.update(data={"srcip": "1.2.3.4", "extra": ["ok", {"deep": ["q\u0000"]}]}),
+        id="nested-in-a-list-in-an-object",
+    ),
+    pytest.param(lambda doc: doc["rule"].update({"description": "\u0000"}), id="in-the-rule"),
+    pytest.param(
+        lambda doc: (doc.update(id="gl-TEST-100191-1793289654049"), doc.update(full_log="a\u0000")),
+        id="with-an-id-that-is-refused-too",
+    ),
+    pytest.param(lambda doc: doc.update(full_log="lone \ud800 surrogate"), id="lone-surrogate"),
+    pytest.param(lambda doc: doc.update(full_log="low \udc00 surrogate"), id="lone-low-surrogate"),
+]
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("edit", _NUL_BODIES)
+def test_a_nul_or_a_lone_surrogate_inside_a_json_string_is_400_not_json_with_the_excerpt_stored(
+    client, sdb, edit
+) -> None:
+    doc = _valid_doc()
+    edit(doc)
+    body = json.dumps(doc).encode("utf-8")  # ASCII: the NUL is the six characters \u0000
+    assert body.isascii()
+    before = _counts(sdb)
+
+    response = _post(client, body)
+
+    assert response.status_code == 400, response.text
+    assert response.json() == {"detail": {"missing": "not_json"}}
+    reason, source_ip, payload = _newest_rejected(sdb)
+    assert (reason, source_ip) == ("not_json", ALLOWED_HOST)
+    assert payload == {"body": body.decode("utf-8")[:4096]}  # the excerpt, not the document
+    after = _counts(sdb)
+    assert after == {**before, "rejected_alerts": before["rejected_alerts"] + 1}
+    assert after["intake"] == before["intake"]
+    assert after["alerts"] == before["alerts"] and after["jobs"] == before["jobs"]
+
+
+@pytest.mark.db
+def test_a_nul_inside_a_json_value_that_is_not_an_object_is_not_json_too(client, sdb) -> None:
+    response = _post(client, b'["a\\u0000b"]')
+
+    assert response.status_code == 400 and response.json() == {"detail": {"missing": "not_json"}}
+    assert _newest_rejected(sdb)[0] == "not_json"
+
+
+@pytest.mark.db
+def test_text_that_only_looks_like_a_nul_or_a_surrogate_is_still_201(client, sdb) -> None:
+    """The control of the two tests above: an escaped backslash followed by `u0000`, a surrogate PAIR
+    (one astral character) and a raw control character that is not NUL are all storable."""
+    for text in ("a\\u0000b", "pair 😀 here", "tab\tand\x01control"):
+        doc = _valid_doc()
+        doc["full_log"] = text
+        response = _post(client, json.dumps(doc).encode("utf-8"))
+        assert response.status_code == 201, (text, response.text)
+
+
+def test_the_excerpt_of_a_body_is_decoded_leniently_and_holds_no_nul() -> None:
+    assert "\x00" not in intake._body_excerpt('{"a": 1}'.encode("utf-16-le"))
+    assert intake._body_excerpt(b"\x00ab\x00") == "�ab�"  # same length: nothing shifts
+    assert intake._body_excerpt(b"\xff\xfe{") == "��{"
+    assert len(intake._body_excerpt(b"x" * 10_000)) == 4096
+
+
+def test_the_nul_walk_finds_a_nul_anywhere_and_does_not_recurse() -> None:
+    assert intake._has_unstorable_text({"a": ["b", {"c": "d\x00"}]})
+    assert intake._has_unstorable_text({"a\x00": 1})
+    assert intake._has_unstorable_text(["\ud800"])
+    assert not intake._has_unstorable_text({"a": ["b", {"c": "d"}], "e": 1, "f": None, "g": 1.5})
+    assert not intake._has_unstorable_text("😀".encode("utf-16", "surrogatepass").decode("utf-16"))
+    deep: object = "x"
+    for _ in range(50_000):  # deeper than the interpreter would recurse
+        deep = [deep]
+    assert not intake._has_unstorable_text(deep)
+
+
+# --------------------------------------------------------------------------
 # heartbeat — 201, no job, source_heartbeat touched
 # --------------------------------------------------------------------------
 
@@ -848,12 +1020,13 @@ def test_a_409_duplicate_does_not_stamp(sdb, pull_enabled) -> None:
     [
         (b"not json at all", "not_json"),
         (b"[1, 2]", "not_an_object"),
+        (json.dumps({"id": "1.2"}).encode("utf-16"), "not_json"),
         (b"{}", "id"),
         (b'{"id": "gl-TEST-100191-1793289654049", "rule": {"id": "100191"}}', "id"),
         (b'{"id": "1790888852.28168897", "rule": {"id": "100191"}}', "timestamp"),
         (b"x" * (config.Config().MAX_PAYLOAD_BYTES + 1), "too_large"),  # the 413
     ],
-    ids=["not_json", "not_an_object", "id", "id-off-pattern", "timestamp", "too_large"],
+    ids=["not_json", "not_an_object", "utf-16", "id", "id-off-pattern", "timestamp", "too_large"],
 )
 def test_a_rejected_body_does_not_stamp(sdb, body, reason, pull_enabled) -> None:
     """The 400s and the 413, with the pull off so that a stamp would be visible (and on, where

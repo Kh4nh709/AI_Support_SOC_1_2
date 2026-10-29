@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from typing import Literal
 
 import psycopg
@@ -41,6 +42,9 @@ from app.infra.puller import _replay_sort_key, _update_heartbeat, is_heartbeat
 # be parsed as JSON (so there is no smaller structured thing to store instead).
 _REJECTED_BODY_EXCERPT_CHARS = 4096
 
+# A character no Postgres text or jsonb value can hold: NUL, or a surrogate code point on its own.
+_UNSTORABLE_RE = re.compile("[\x00\ud800-\udfff]")
+
 
 class PayloadTooLarge(Exception):
     """`body` exceeds `cfg.MAX_PAYLOAD_BYTES` — checked before any parse."""
@@ -52,7 +56,8 @@ class Rejected(Exception):
     that is present but not ①'s `alert_id` shape (DEC-211 R6): the answer is the same, so the
     response bytes did not change. `timestamp` (INT-T02 fix round 1) is the one new value: the
     body is the existing `{"missing": <reason>}`, and it covers a timestamp that is absent or that
-    no sort key can be made from."""
+    no sort key can be made from. `not_json` (fix round 2) also covers a body that is not strict UTF-8
+    (UTF-16/32, a BOM) and a JSON string or key holding a NUL or a lone surrogate."""
 
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
@@ -70,7 +75,34 @@ class Receipt:
 
 
 def _body_excerpt(body: bytes) -> str:
-    return body.decode("utf-8", errors="replace")[:_REJECTED_BODY_EXCERPT_CHARS]
+    """The first characters of a body that is not an alert, decoded leniently, to be stored as a
+    `jsonb` string in `rejected_alerts`. A NUL character is replaced (by U+FFFD, so nothing shifts):
+    a body in UTF-16-LE or UTF-32-LE without a BOM, or with a raw NUL byte, decodes to text full of
+    them, and neither a `text` nor a `jsonb` column can hold one (INT-T02 fix round 2)."""
+    text = body.decode("utf-8", errors="replace").replace("\x00", "�")
+    return text[:_REJECTED_BODY_EXCERPT_CHARS]
+
+
+def _has_unstorable_text(value: object) -> bool:
+    """Whether a string or an object key anywhere inside the parsed JSON `value` is one Postgres
+    cannot store: a NUL (`"\\u0000"` is valid JSON, but `intake.raw_payload` is `raw_text::jsonb` and
+    jsonb refuses it, as the text columns do) or a lone surrogate (`"\\ud800"`, which `jsonb` refuses
+    and UTF-8 cannot encode; a surrogate PAIR has already become one character). Iterative: the
+    parser took a document as deep as the interpreter allows, and a recursive walk would not."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            if _UNSTORABLE_RE.search(item):
+                return True
+        elif isinstance(item, dict):
+            for key, child in item.items():
+                if _UNSTORABLE_RE.search(key):
+                    return True
+                stack.append(child)
+        elif isinstance(item, list):
+            stack.extend(item)
+    return False
 
 
 def _manager_id(alert_obj: dict) -> str:
@@ -112,11 +144,25 @@ def receive(conn: psycopg.Connection, body: bytes, source_ip: str, cfg: Config) 
             f"body is {len(body)} bytes, exceeds MAX_PAYLOAD_BYTES={cfg.MAX_PAYLOAD_BYTES}"
         )
 
+    # INT-T02 fix round 2 (the Director's ruling): decode strictly as UTF-8 FIRST, then parse the text.
+    # `json.loads(bytes)` would guess UTF-8, UTF-16 or UTF-32 (and take encoded surrogates), so a UTF-16/32
+    # body parsed and failed later at `body.decode("utf-8")` (a 500), and a UTF-8 BOM gave a 201 the
+    # pipeline's `json.loads(raw_text)` could not read. RFC 8259 §8.1: JSON on a network is UTF-8. A body
+    # that is not strict UTF-8 (a BOM included: `json.loads(str)` refuses it) is `not_json`. The text
+    # decoded here is `raw_text` below, the very `body.decode("utf-8")` of G9, so a valid body is stored
+    # exactly as it was.
     try:
-        doc = json.loads(body)
+        raw_text = body.decode("utf-8")
+        doc = json.loads(raw_text)
     except (json.JSONDecodeError, UnicodeDecodeError):
         _insert_rejected(conn, source_ip, "not_json", {"body": _body_excerpt(body)})
         raise Rejected("not_json") from None
+    # A NUL, or a lone surrogate, inside a JSON string or key is valid JSON that `raw_text::jsonb` (the
+    # generated `intake.raw_payload`) refuses: a 500 and no `rejected_alerts` row. It is `not_json` too,
+    # and what is stored is the excerpt, never the document (which the jsonb column could not hold).
+    if _has_unstorable_text(doc):
+        _insert_rejected(conn, source_ip, "not_json", {"body": _body_excerpt(body)})
+        raise Rejected("not_json")
     if not isinstance(doc, dict):
         _insert_rejected(conn, source_ip, "not_an_object", {"body": _body_excerpt(body)})
         raise Rejected("not_an_object")
@@ -145,7 +191,6 @@ def receive(conn: psycopg.Connection, body: bytes, source_ip: str, cfg: Config) 
         _insert_rejected(conn, source_ip, "timestamp", doc)
         raise Rejected("timestamp")
 
-    raw_text = body.decode("utf-8")
     manager_id = _manager_id(alert_obj)
     source_alert_id = alert_obj["id"]
 
