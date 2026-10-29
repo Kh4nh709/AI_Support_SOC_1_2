@@ -25,6 +25,7 @@ against, read-only, by calling the functions of the routes the analysts use, so 
 * `kind`, `id`: `alert` or `case`, and the alert id or the case uuid;
 * an alert draft: `alert` = `tier1.queue.get_alert_view` (what `GET /api/tier1/alerts/{id}` answers,
   `mode="analyst"`: a decided alert shows ①'s suggestion, DEC-206), `case` and `investigation` null;
+  its `soar` blob (S3) goes through the redaction of `enrichment` below, the rest is the analyst's own;
 * a case draft: `case` = what `GET /api/tier2/cases/{id}` answers (`routers.tier2.case_detail`) and
   `investigation` = what `GET /api/tier2/cases/{id}/investigation` answers
   (`tier2.investigation_view.build_investigation` and `case_open`), `alert` null;
@@ -331,9 +332,20 @@ def _enrichment(conn: psycopg.Connection, alert_ids: list[str]) -> dict[str, Any
     return {alert_id: _safe(block) for alert_id, block in rows}
 
 
+def _alert_view(conn: psycopg.Connection, alert_id: str) -> Any:
+    """`get_alert_view` as the analyst route answers it, except `soar` (S3, DEC-211): that blob is the
+    same SIEM `enrichment` that `source.enrichment` carries redacted, so it goes through the same
+    redaction. The rest of the view is the analyst's, as the module doc says (`raw_log` was never hidden).
+    """
+    view = queue.get_alert_view(conn, alert_id, mode="analyst")
+    if isinstance(view, dict) and view.get("soar") is not None:
+        view = {**view, "soar": _safe(view["soar"])}
+    return view
+
+
 def _alert_source(conn: psycopg.Connection, alert_id: str) -> dict[str, Any]:
     return {
-        "alert": queue.get_alert_view(conn, alert_id, mode="analyst"),
+        "alert": _alert_view(conn, alert_id),
         "case": None,
         "investigation": None,
         "decision": _decision(conn, "tier1.decided", alert_id),

@@ -603,6 +603,31 @@ def test_the_soar_enrichment_block_of_an_alert(api) -> None:
 
 
 @pytest.mark.db
+def test_the_soar_view_of_the_alert_is_redacted_like_the_enrichment_block(api) -> None:
+    """INT-T01 F5: `source.alert` is `get_alert_view`, which carries S3's `soar` display blob - the same
+    enrichment, shown for the analyst unredacted. The admin page promises the audit page's redaction for
+    what it relays of the SIEM, so a credential-bearing TI value is hidden in `alert.soar` as it is in
+    `enrichment`."""
+    link = "http://svc:hunter2@ti.example/lookup?x=1"
+    enrichment = {
+        "scenario": {"id": "SC03", "name": "Quét cổng"},
+        "ti": [{"type": "url", "value": link, "verdict": "clean"}],
+    }
+    alert = decided_alert(api.conn, raw_payload={"enrichment": enrichment})
+    draft_id = pending_draft(api.conn, f"alert:{alert}")
+
+    response = api.get(f"/drafts/{draft_id}")
+
+    source = response.json()["source"]
+    assert source["enrichment"]["ti"][0]["value"] == "[đã ẩn]"  # the block, as before
+    assert source["alert"]["soar"]["ti"] == [
+        {"type": "url", "value": "[đã ẩn]", "verdict": "clean"}
+    ]
+    assert source["alert"]["soar"]["scenario"]["id"] == "SC03"  # the rest of the blob is intact
+    assert "hunter2" not in response.text
+
+
+@pytest.mark.db
 def test_an_alert_with_no_enrichment_has_none(api) -> None:
     alert = decided_alert(api.conn, raw_payload={})
     draft_id = pending_draft(api.conn, f"alert:{alert}")
