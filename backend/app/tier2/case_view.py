@@ -118,28 +118,38 @@ def usernames(conn: psycopg.Connection, user_ids: set[Any]) -> dict[str, str]:
     return {str(user_id): username for user_id, username in rows}
 
 
-_LAST_RUN_SQL = """
-    SELECT created_at, result IS NOT NULL
+_LAST_RUNS_SQL = """
+    SELECT DISTINCT ON (subject_id) subject_id, created_at, result IS NOT NULL
     FROM llm_runs
-    WHERE pipeline = 'investigate' AND subject_id = %s
-    ORDER BY created_at DESC, run_id DESC
-    LIMIT 1
+    WHERE pipeline = 'investigate' AND subject_id = ANY(%s)
+    ORDER BY subject_id, created_at DESC, run_id DESC
 """
 
 
-def last_run(conn: psycopg.Connection, case_id: str) -> dict[str, Any] | None:
-    """The newest ② run of the case, `{"created_at": datetime, "has_result": bool}`, or `None`
-    when ② has never run on it (INT-T02, DEC-211 R6).
+def last_runs(conn: psycopg.Connection, case_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """`{case_id: {"created_at": datetime, "has_result": bool}}` for each of `case_ids` that ② has
+    run on, in ONE statement (the case list asks for its whole page at once). A case ② never ran on is
+    absent. No statement at all for no ids.
 
-    The case page's "Phân tích gần nhất" used to read `cases.last_analyzed_at`, which only a run
-    *with a result* writes (`tier2/investigate.py`), so a run that stopped (a provider 402 is
-    `stopped_by='permanent'`) left it empty and the page said "chưa phân tích" about a case ② had
-    been run on. This is the field that follows the newest row of `llm_runs` instead, whatever
-    its `stopped_by`: a retry's `transient` row counts too, as it is a run that ended without a
-    result, and the next attempt's row replaces it once there is one. `last_analyzed_at` itself is
-    unchanged and still drives `ongoing` and the timeline: a run that stopped is no analysis, so
-    it does not make the case's growth "already analysed"."""
-    row = conn.execute(_LAST_RUN_SQL, (case_id,)).fetchone()
-    if row is None:
-        return None
-    return {"created_at": row[0], "has_result": bool(row[1])}
+    The newest ② run of a case, whatever it did (INT-T02, DEC-211 R6). The case page's "Phân tích
+    gần nhất" used to read `cases.last_analyzed_at`, which only a run *with a result* writes
+    (`tier2/investigate.py`), so a run that stopped (a provider 402 is `stopped_by='permanent'`) left
+    it empty and the page said "chưa phân tích" about a case ② had been run on. This is the field that
+    follows the newest row of `llm_runs` instead, whatever its `stopped_by`: a retry's `transient`
+    row counts too, as it is a run that ended without a result, and the next attempt's row replaces it
+    once there is one. `last_analyzed_at` itself is unchanged and still drives `ongoing` and the
+    timeline: a run that stopped is no analysis, so it does not make the case's growth "already
+    analysed"."""
+    if not case_ids:
+        return {}
+    rows = conn.execute(_LAST_RUNS_SQL, ([str(case_id) for case_id in case_ids],)).fetchall()
+    return {
+        str(subject_id): {"created_at": created_at, "has_result": bool(has_result)}
+        for subject_id, created_at, has_result in rows
+    }
+
+
+def last_run(conn: psycopg.Connection, case_id: str) -> dict[str, Any] | None:
+    """`last_runs` of one case: the newest ② run, or `None` when ② has never run on it. The case
+    detail and the case list read the same rule from the same statement, so they cannot disagree."""
+    return last_runs(conn, [case_id]).get(str(case_id))

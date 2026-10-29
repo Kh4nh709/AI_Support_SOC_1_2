@@ -6,6 +6,7 @@ import { Link } from "react-router";
 import { CASE_PAGE_SIZE, listCases } from "../../api/tier2";
 import { formatTime } from "../../format";
 import { S, labelOf } from "../../strings";
+import { lastAnalysedText } from "./lastAnalysed";
 import { BUTTON, ErrorNotice, PANEL } from "./parts";
 import { tier2Keys } from "./queryKeys";
 
@@ -91,11 +92,7 @@ export function CasesPage() {
                   <td className={TD}>{row.cluster_count}</td>
                   <td className={TD}>{row.occurrence_count}</td>
                   <td className={TD}>{formatTime(row.created_at)}</td>
-                  <td className={TD}>
-                    {row.last_analyzed_at === null
-                      ? S.case.neverAnalysed
-                      : formatTime(row.last_analyzed_at)}
-                  </td>
+                  <td className={TD}>{lastAnalysedText(row, formatTime)}</td>
                 </tr>
               ))}
             </tbody>

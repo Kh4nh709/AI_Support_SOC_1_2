@@ -534,6 +534,71 @@ def test_only_this_cases_investigate_runs_count(client, db):
 
 
 @pytest.mark.db
+def test_list_rows_carry_the_same_last_run_as_the_case_detail(client, db):
+    """INT-T02 fix round 1, N4: the case list's "Phân tích gần nhất" follows the same rule as the
+    case page, so one column title does not mean two things. One extra read for the page's ids; the
+    list's SQL, its order and its paging are not touched."""
+    u = client.user_id
+    never = _make_case(db, u, title="never")
+    stopped = _make_case(db, u, title="stopped")
+    good = _make_case(db, u, title="good", last_analyzed_at=_T0 + timedelta(hours=1))
+    newest_stopped = _make_case(db, u, title="newest-stopped", last_analyzed_at=_T0)
+    _insert_investigate_run(
+        db, stopped, created_at=_T0 + timedelta(hours=1), stopped_by="permanent"
+    )
+    _insert_investigate_run(db, good, created_at=_T0 + timedelta(hours=1), result={"s": 1})
+    _insert_investigate_run(
+        db, newest_stopped, created_at=_T0 + timedelta(hours=1), result={"s": 1}
+    )
+    _insert_investigate_run(
+        db, newest_stopped, created_at=_T0 + timedelta(hours=2), stopped_by="cap"
+    )
+    db.execute(  # a ① triage run whose subject_id is a case id is not ②
+        "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, role, system_prompt, "
+        "user_message, stopped_by, created_at) VALUES (gen_random_uuid(), 'triage', 'alert', %s, "
+        "'proposer', 's', 'u', 'cap', %s)",
+        (never, _T0 + timedelta(hours=9)),
+    )
+
+    rows = {row["case_id"]: row for row in client.http.get("/api/tier2/cases").json()}
+
+    assert rows[never]["last_run"] is None
+    assert _last_run(rows[stopped]) == (_T0 + timedelta(hours=1), False)
+    assert _last_run(rows[good]) == (_T0 + timedelta(hours=1), True)
+    assert _last_run(rows[newest_stopped]) == (_T0 + timedelta(hours=2), False)
+    for case_id, row in rows.items():  # the list and the detail answer the same
+        if case_id in {never, stopped, good, newest_stopped}:
+            detail = client.http.get(f"/api/tier2/cases/{case_id}").json()
+            assert row["last_run"] == detail["last_run"]
+            assert row["last_analyzed_at"] == detail["last_analyzed_at"]  # unchanged
+
+
+@pytest.mark.db
+def test_list_rows_keep_their_keys_their_order_and_their_paging_with_last_run(client, db):
+    u = client.user_id
+    ids = [_make_case(db, u, title=f"case-{i}") for i in range(3)]
+    _insert_investigate_run(db, ids[1], created_at=_T0, stopped_by="permanent")
+
+    every = client.http.get("/api/tier2/cases").json()
+    page = client.http.get("/api/tier2/cases", params={"offset": 1, "limit": 1}).json()
+    past_end = client.http.get("/api/tier2/cases", params={"offset": 10_000}).json()
+
+    assert set(every[0]) == {
+        "case_id",
+        "title",
+        "status",
+        "severity",
+        "created_at",
+        "last_analyzed_at",
+        "last_run",
+        "cluster_count",
+        "occurrence_count",
+    }
+    assert len(page) == 1 and page[0] == every[1]  # the same order, the same row
+    assert past_end == []  # an empty page asks for no runs
+
+
+@pytest.mark.db
 def test_ongoing_still_follows_last_analyzed_at_not_a_run_that_stopped(client, db):
     """The new key changes what the field shows and nothing that is computed from the case: a
     stopped run is no analysis, so growth after the case was created is still `ongoing`."""

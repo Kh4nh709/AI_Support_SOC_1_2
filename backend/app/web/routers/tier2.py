@@ -104,7 +104,14 @@ def list_cases(
         "cluster_count",
         "occurrence_count",
     )
-    return [dict(zip(columns, row, strict=True)) for row in rows]
+    cases = [dict(zip(columns, row, strict=True)) for row in rows]
+    # INT-T02 fix round 1 (N4): the newest ② run of each case on the page, so the list's "Phân tích
+    # gần nhất" follows the same rule as the case page. A second read for the page's ids; the query
+    # above, its order and its paging are as they were.
+    runs = case_view.last_runs(conn, [str(case["case_id"]) for case in cases])
+    for case in cases:
+        case["last_run"] = runs.get(str(case["case_id"]))
+    return cases
 
 
 def case_detail(conn: psycopg.Connection, case_id: str) -> dict[str, Any] | None:

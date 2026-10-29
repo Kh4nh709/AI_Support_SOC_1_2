@@ -17,6 +17,8 @@ export type CaseRow = {
   severity: string | null;
   created_at: string;
   last_analyzed_at: string | null;
+  /** The newest ② run, as on the case page (INT-T02 fix round 1): the list's "Phân tích gần nhất" reads it. */
+  last_run: CaseLastRun | null;
   cluster_count: number;
   /** Heads plus the duplicates merged into them. */
   occurrence_count: number;

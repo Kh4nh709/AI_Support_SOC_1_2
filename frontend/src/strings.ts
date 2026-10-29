@@ -458,9 +458,8 @@ export const S = {
     notFound: "Không tìm thấy case",
     summaryLabel: "Tóm tắt case",
     neverAnalysed: "chưa phân tích",
-    // The newest ② run ended without a result (INT-T02): its time, then this.
+    // The newest ② run ended without a result (INT-T02): its time, a dash, then this (lastAnalysed.ts).
     noResult: "không có kết quả",
-    analysedNoResult: (when: string) => `${when} — không có kết quả`,
     clusterCount: (n: number) => `${n} cụm`,
     timeline: "Diễn biến",
     // What the case detail itself records: its creation, each note, the last run of ② and the conclusion.

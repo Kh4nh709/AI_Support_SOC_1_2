@@ -24,6 +24,7 @@ const row = (n: number, over: Record<string, unknown> = {}) => ({
   severity: "high",
   created_at: "2026-09-26T04:14:00+00:00",
   last_analyzed_at: "2026-09-30T01:19:00+00:00",
+  last_run: { created_at: "2026-09-30T01:19:00+00:00", has_result: true },
   cluster_count: 2,
   occurrence_count: 61,
   ...over,
@@ -121,10 +122,52 @@ describe("the rows", () => {
   });
 
   it("says a case never analysed is so, not a blank or a dash", async () => {
-    serve([row(1, { last_analyzed_at: null })]);
+    serve([row(1, { last_analyzed_at: null, last_run: null })]);
     renderList();
     await table();
     expect(screen.getByText(S.case.neverAnalysed)).toBeInTheDocument();
+  });
+
+  // INT-T02 fix round 1 (N4): "Phân tích gần nhất" follows the newest ② run here as on the case page,
+  // so one column title does not mean two things (`last_analyzed_at` moves only for a run WITH a result).
+  describe("Phân tích gần nhất follows the newest ② run (last_run)", () => {
+    it("shows the time of a run that stopped, with 'không có kết quả', not 'chưa phân tích'", async () => {
+      serve([
+        row(1, {
+          last_analyzed_at: null,
+          last_run: { created_at: "2026-09-30T01:19:00+00:00", has_result: false },
+        }),
+      ]);
+      renderList();
+      await table();
+      expect(screen.getByText("30/09 08:19 — không có kết quả")).toBeInTheDocument();
+      expect(screen.queryByText(S.case.neverAnalysed)).not.toBeInTheDocument();
+    });
+
+    it("shows the time alone for a run with a result, and the newest run over an older good one", async () => {
+      serve([
+        row(1),
+        row(2, {
+          last_analyzed_at: "2026-09-29T01:19:00+00:00",
+          last_run: { created_at: "2026-09-30T03:30:00+00:00", has_result: false },
+        }),
+      ]);
+      renderList();
+      await table();
+      expect(screen.getByText("30/09 08:19")).toBeInTheDocument();
+      expect(screen.getByText("30/09 10:30 — không có kết quả")).toBeInTheDocument();
+      expect(screen.queryByText("29/09 08:19")).not.toBeInTheDocument();
+    });
+
+    it("reads an answer with no last_run as last_analyzed_at was read", async () => {
+      const old = row(1);
+      delete (old as Record<string, unknown>).last_run;
+      serve([old, row(2, { last_analyzed_at: null, last_run: undefined })]);
+      renderList();
+      await table();
+      expect(screen.getByText("30/09 08:19")).toBeInTheDocument();
+      expect(screen.getByText(S.case.neverAnalysed)).toBeInTheDocument();
+    });
   });
 
   it("shows a status and a severity it has no label for as the codes, and a missing one as a dash", async () => {
@@ -331,7 +374,7 @@ describe("paging", () => {
 
 describe("accessibility", () => {
   it("has no axe violation", async () => {
-    serve([row(1), row(2, { status: "concluded_fp", last_analyzed_at: null })]);
+    serve([row(1), row(2, { status: "concluded_fp", last_analyzed_at: null, last_run: null })]);
     const { container } = renderList();
     await table();
     // jsdom computes no layout or colour, so the contrast rule cannot run here.
