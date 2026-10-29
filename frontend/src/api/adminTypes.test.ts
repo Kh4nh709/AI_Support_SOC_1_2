@@ -653,7 +653,7 @@ const ENTRIES: Entry[] = [
     ],
     backend: () => [
       ...dictKeys(knowledge(), /source: dict\[str, Any\] = \{/),
-      ...dictKeys(knowledge(), /return \{(?=\s*"alert": queue\.get_alert_view)/),
+      ...dictKeys(knowledge(), /return \{(?=\s*"alert": _alert_view\()/),
       ...[...knowledge().matchAll(/^\s+source\["(\w+)"\] = /gm)].map((m) => m[1] as string),
     ],
   },
