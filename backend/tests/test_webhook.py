@@ -6,7 +6,8 @@ a `400` must leave its `rejected_alerts` row committed, surviving the
 like `test_auth.py` — this module builds its own scratch database
 (`sdb`/`scratch_dsn`) rather than using the shared `db` fixture, whose
 isolation depends on nothing ever being committed. Every alert/document id
-below carries a `uuid4` suffix so committed rows from one test never collide
+below is made fresh from a `uuid4` (a Wazuh-form `<epoch>.<n>`: the webhook
+refuses any other shape, INT-T02) so committed rows from one test never collide
 with another's assertions inside the scratch database's lifetime (one
 `dropdb`/`createdb` per test session, not per test).
 """
@@ -49,8 +50,11 @@ ARCHIVE_LINE = _load("archive_line_5503.json")
 ARCHIVE_BARE = json.loads(ARCHIVE_LINE["event"]["original"])  # the manager's own bare object
 
 
-def _uid(prefix: str) -> str:
-    return f"{prefix}-{uuid.uuid4().hex[:10]}"
+def _uid(_label: str) -> str:
+    """A fresh alert id of the Wazuh form `<epoch>.<n>`, the one a test can always post: the webhook
+    refuses any id off ①'s `alert_id` pattern (INT-T02, DEC-211 R6). `_label` only says, at the call
+    site, what the id is for."""
+    return _wazuh_id()
 
 
 def _copy_with_id(base: dict, new_id: str) -> dict:
@@ -348,6 +352,141 @@ def test_missing_id_is_400_naming_id_with_one_rejected_row(client, sdb) -> None:
     assert "id" not in raw_payload
 
 
+# --------------------------------------------------------------------------
+# INT-T02 / DEC-211 R6 item A — the webhook refuses an `id` that is not ①'s exact `alert_id` shape
+#
+# `builder.ID_PATTERNS["alert_id"]` (DEC-209): a Wazuh `<epoch>.<n>` or a SOAR `gl-<ULID>-<uuid>`.
+# Anything else (the n8n test generator's `gl-TEST-<rule>-<epoch ms>` included) could never be
+# rendered to ①, so it is refused at the door with the reason `id`, like an empty id: a rejected
+# row, a 400, and nothing in `intake`, `alerts` or `jobs`.
+# --------------------------------------------------------------------------
+
+_CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def _wazuh_id() -> str:
+    """A fresh id of the Wazuh form `<epoch>.<n>`."""
+    return f"{1_790_000_000 + uuid.uuid4().int % 10_000_000}.{uuid.uuid4().int % 10**9}"
+
+
+def _soar_id(*, ulid: str | None = None, uuid_text: str | None = None) -> str:
+    """A fresh id of the SOAR form `gl-<ULID>-<uuid>` (upper-case Crockford ULID, lower-case uuid)."""
+    entropy = uuid.uuid4().bytes + uuid.uuid4().bytes
+    ulid = ulid or "".join(_CROCKFORD[b % 32] for b in entropy)[:26]
+    return f"gl-{ulid}-{uuid_text or uuid.uuid4()}"
+
+
+def _counts(sdb) -> dict[str, int]:
+    return {
+        table: sdb.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+        for table in ("intake", "alerts", "jobs", "rejected_alerts")
+    }
+
+
+_OFF_PATTERN_IDS = [
+    pytest.param("not-a-soar-id", id="free-text"),
+    pytest.param("gl-TEST-100191-1793289654049", id="the-n8n-test-generator"),
+    # a real id with its ULID in lower case, with its uuid in upper case, and with an `I` in the ULID
+    # (Crockford's alphabet has no I, L, O or U)
+    pytest.param(
+        "gl-01k7zd2q5t8yj3vnq4e6r9xwbm-6f1c2a4e-8d3b-4c7a-9e21-5b0a7d6c3f84", id="lower-case-ulid"
+    ),
+    pytest.param(
+        "gl-01K7ZD2Q5T8YJ3VNQ4E6R9XWBM-6F1C2A4E-8D3B-4C7A-9E21-5B0A7D6C3F84", id="upper-case-uuid"
+    ),
+    pytest.param(
+        "gl-01K7ZD2Q5T8YJ3VNQ4E6R9XWBI-6f1c2a4e-8d3b-4c7a-9e21-5b0a7d6c3f84", id="ulid-with-an-i"
+    ),
+    pytest.param("1790888852.28168897\n", id="trailing-newline"),
+    pytest.param(" 1790888852.28168897", id="leading-space"),
+    pytest.param("1790888852", id="no-dot"),
+    pytest.param(123, id="int"),
+    pytest.param(1790888852.28168897, id="float"),
+    pytest.param(True, id="bool"),
+    pytest.param(["1790888852.28168897"], id="list"),
+    pytest.param({"id": "1790888852.28168897"}, id="object"),
+]
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("bad_id", _OFF_PATTERN_IDS)
+def test_an_id_off_the_alert_id_pattern_is_400_naming_id_with_one_rejected_row(
+    client, sdb, bad_id
+) -> None:
+    marker = _wazuh_id()  # the rule id of this document: finds its rejected row
+    doc = _copy_with_id(ALERT_BARE, bad_id)
+    doc["rule"] = {**doc["rule"], "id": marker}
+    before = _counts(sdb)
+
+    response = _post(client, _bytes(doc))
+
+    assert response.status_code == 400, response.text
+    assert response.json() == {"detail": {"missing": "id"}}  # the same body as an empty id
+    rows = sdb.execute(
+        "SELECT reason, source_ip, raw_payload FROM rejected_alerts "
+        "WHERE raw_payload->'rule'->>'id' = %s",
+        (marker,),
+    ).fetchall()
+    assert len(rows) == 1
+    reason, source_ip, raw_payload = rows[0]
+    assert (reason, source_ip) == ("id", ALLOWED_HOST)
+    assert raw_payload["id"] == bad_id  # the document as received, id and all
+    after = _counts(sdb)
+    assert after == {**before, "rejected_alerts": before["rejected_alerts"] + 1}
+    # nothing reached the pipeline: no intake row (so no `alerts` row and no `pipeline` job)
+    assert after["intake"] == before["intake"]
+    assert after["alerts"] == before["alerts"] and after["jobs"] == before["jobs"]
+
+
+@pytest.mark.db
+def test_a_refused_id_inside_an_indexer_hit_is_400_too(client, sdb) -> None:
+    doc = json.loads(json.dumps(ALERT_HIT))
+    doc["_source"] = _copy_with_id(doc["_source"], "gl-TEST-100191-1793289654049")
+    before = _counts(sdb)
+
+    response = _post(client, _bytes(doc))
+
+    assert response.status_code == 400 and response.json() == {"detail": {"missing": "id"}}
+    after = _counts(sdb)
+    assert after == {**before, "rejected_alerts": before["rejected_alerts"] + 1}
+
+
+@pytest.mark.db
+def test_a_wazuh_id_and_a_real_soar_id_are_still_201(client, sdb) -> None:
+    """The control of the tests above (DEC-025): the same body, an id that fits, accepted. The two
+    literals are the shapes DEC-209 names (a Wazuh id, and a Graylog `gl-<ULID>-<uuid>`); the
+    generated pair is there so the test can be run twice on one database."""
+    for given in (
+        "1790888852.28168897",
+        "gl-01K7ZD2Q5T8YJ3VNQ4E6R9XWBM-6f1c2a4e-8d3b-4c7a-9e21-5b0a7d6c3f84",
+        _wazuh_id(),
+        _soar_id(),
+    ):
+        # the literals may already be there from an earlier run of this module on a kept database
+        sdb.execute("DELETE FROM intake WHERE source_alert_id = %s", (given,))
+        sdb.commit()
+        response = _post(client, _bytes(_copy_with_id(ALERT_BARE, given)))
+        assert response.status_code == 201, (given, response.text)
+        (stored,) = sdb.execute(
+            "SELECT source_alert_id FROM intake WHERE intake_id = %s",
+            (response.json()["intake_id"],),
+        ).fetchone()
+        assert stored == given
+
+
+@pytest.mark.db
+def test_a_heartbeat_with_an_id_off_the_pattern_is_refused_like_any_other(client, sdb) -> None:
+    """The id is judged before the heartbeat branch, as the empty id always was: a real 100999
+    keepalive carries a Wazuh id, so nothing real is lost."""
+    bare = _heartbeat_from(ALERT_BARE, "gl-TEST-100999-1793289654049")
+    before = _counts(sdb)
+
+    response = _post(client, _bytes(bare))
+
+    assert response.status_code == 400 and response.json() == {"detail": {"missing": "id"}}
+    assert _counts(sdb)["intake"] == before["intake"]
+
+
 @pytest.mark.db
 def test_not_json_is_400_not_json(client, sdb) -> None:
     body = b"{not valid json at all"
@@ -591,9 +730,10 @@ def test_a_409_duplicate_does_not_stamp(sdb, pull_enabled) -> None:
         (b"not json at all", "not_json"),
         (b"[1, 2]", "not_an_object"),
         (b"{}", "id"),
+        (b'{"id": "gl-TEST-100191-1793289654049", "rule": {"id": "100191"}}', "id"),
         (b"x" * (config.Config().MAX_PAYLOAD_BYTES + 1), "too_large"),  # the 413
     ],
-    ids=["not_json", "not_an_object", "id", "too_large"],
+    ids=["not_json", "not_an_object", "id", "id-off-pattern", "too_large"],
 )
 def test_a_rejected_body_does_not_stamp(sdb, body, reason, pull_enabled) -> None:
     """The 400s and the 413, with the pull off so that a stamp would be visible (and on, where

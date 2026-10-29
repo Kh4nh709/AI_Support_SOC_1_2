@@ -6,15 +6,15 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from app.infra.ids import ALERT_ID_PATTERN
+
 # Duplicated from `app.llm.builder.ID_PATTERNS`, not imported: `security` may not
 # import `llm` (context pack §4/G1). `test_ids_match_the_builders_patterns` is what
-# keeps this copy from drifting out of step with the builder's.
+# keeps this copy from drifting out of step with the builder's. The `alert_id` pattern is the
+# exception (DEC-211 R6): `security` may import `infra`, so that one is the very object in
+# `app.infra.ids`, shared with the builder and the webhook, not a copy.
 _ID_PATTERNS: tuple[re.Pattern[str], ...] = (
-    # alert_id: the Wazuh shape or the SOAR (Graylog) one, exactly (DEC-209)
-    re.compile(
-        r"^(?:\d+\.\d+|gl-[0-9A-HJKMNP-TV-Z]{26}"
-        r"-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
-    ),
+    ALERT_ID_PATTERN,  # alert_id: the Wazuh shape or the SOAR (Graylog) one, exactly (DEC-209)
     re.compile(r"^\d+$"),  # rule_id
     re.compile(r"^T\d{4}(\.\d{3})?$"),  # mitre
     re.compile(r"^\d{3,}$"),  # agent_id

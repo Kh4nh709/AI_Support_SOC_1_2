@@ -60,8 +60,11 @@ ANSWER_WITHIN_S = 15  # the in-loop bound (`asyncio.wait_for`)
 WATCHDOG_S = 30  # the out-of-loop bound: a wedged loop cannot honour the first one
 
 
-def _uid(prefix: str) -> str:
-    return f"{prefix}-{uuid.uuid4().hex[:10]}"
+def _uid(_label: str) -> str:
+    """A fresh alert id of the Wazuh form `<epoch>.<n>`: the webhook refuses any id off ①'s
+    `alert_id` pattern (INT-T02, DEC-211 R6). `_label` only says, at the call site, what it is for.
+    """
+    return f"{1_790_000_000 + uuid.uuid4().int % 10_000_000}.{uuid.uuid4().int % 10**9}"
 
 
 def _alert(alert_id: str) -> bytes:

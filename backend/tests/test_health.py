@@ -753,7 +753,7 @@ def test_heartbeat_check_goes_from_stale_to_ok_on_a_webhook_alert_with_the_pull_
 
     alert = json.loads((REPO_ROOT / "backend/tests/fixtures/alert_40112.json").read_text("utf-8"))
     body = alert["_source"]
-    body["id"] = "p12t01-health-hb-1"
+    body["id"] = "1790120001.120001"  # the Wazuh form: the webhook refuses any other (INT-T02)
     intake.receive(db, json.dumps(body).encode("utf-8"), "127.0.0.1", cfg)
 
     second = health.check(
@@ -770,7 +770,7 @@ def test_heartbeat_check_stays_red_on_a_webhook_alert_with_the_pull_on(db, tmp_p
     _seed_heartbeat(db, minutes_ago=45)
     alert = json.loads((REPO_ROOT / "backend/tests/fixtures/alert_40112.json").read_text("utf-8"))
     body = alert["_source"]
-    body["id"] = "p12t01-health-hb-2"
+    body["id"] = "1790120002.120002"  # the Wazuh form: the webhook refuses any other (INT-T02)
     intake.receive(db, json.dumps(body).encode("utf-8"), "127.0.0.1", cfg)
 
     report = health.check(db, cfg, clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)

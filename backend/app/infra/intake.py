@@ -33,6 +33,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from app.infra.config import Config
+from app.infra.ids import is_alert_id
 from app.infra.jobs import enqueue
 from app.infra.puller import _replay_sort_key, _update_heartbeat, is_heartbeat
 
@@ -47,7 +48,9 @@ class PayloadTooLarge(Exception):
 
 class Rejected(Exception):
     """`reason` ∈ not_json | not_an_object | id | rule.id — the route names the
-    missing field, never an exception message (phase-1 §Xử lý lỗi, G-15)."""
+    missing field, never an exception message (phase-1 §Xử lý lỗi, G-15). `id` also covers an id
+    that is present but not ①'s `alert_id` shape (DEC-211 R6): the answer is the same, so the
+    response bytes did not change."""
 
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
@@ -105,7 +108,11 @@ def receive(conn: psycopg.Connection, body: bytes, source_ip: str, cfg: Config) 
     # Structural, not shape-counting (same rule as `wazuh_parser.parse_wazuh_alert`):
     # a `_source` key present means the alert is `_source`, else the object itself is.
     alert_obj = doc["_source"] if isinstance(doc.get("_source"), dict) else doc
-    if not alert_obj.get("id"):
+    # DEC-211 R6 item A (INT-T02): the id must be ①'s exact `alert_id` shape (`app.infra.ids`), the
+    # Wazuh `<epoch>.<n>` or the SOAR `gl-<ULID>-<uuid>`. An empty, absent, non-string or off-pattern
+    # id is one case with one answer (the reason `id`, a rejected row, the route's 400): an id ① could
+    # never render would otherwise be accepted, stored, and fail much later in the pipeline.
+    if not is_alert_id(alert_obj.get("id")):
         _insert_rejected(conn, source_ip, "id", doc)
         raise Rejected("id")
     rule = alert_obj.get("rule")

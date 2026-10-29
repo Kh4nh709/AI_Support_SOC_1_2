@@ -744,7 +744,7 @@ def test_switch_off_leaves_receipt_level_idempotency_alone(db, monkeypatch):
     a receipt, not dedup — so it is refused with the switch off exactly as with it on."""
     monkeypatch.setenv("DEDUP_ENABLED", "false")
     cfg = dataclasses.replace(config.Config(), DEDUP_ENABLED=False)
-    alert_id = "p10t15-receipt"
+    alert_id = "1790150001.150001"  # the Wazuh form: the webhook refuses any other (INT-T02)
     body = _hit(RULE_5503, id_=alert_id, srcip=_PAIR_SRCIP).encode("utf-8")
 
     first = receive(db, body, "127.0.0.1", cfg)
