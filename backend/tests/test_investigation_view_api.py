@@ -754,6 +754,21 @@ def test_every_stopped_by_code_has_its_sentence(client, db, stopped_by, sentence
     assert set(view.STOPPED_TEXT) == {"cap", "permanent", "linter", "schema", "transient"}
 
 
+def test_a_permanent_stop_is_worded_as_the_providers_or_the_models_refusal():
+    """INT-T02 / DEC-211 R6: a provider 402 is `permanent` for ② (R4, `LLMUnavailable` is an
+    `LLMPermanent`), so the sentence may not read as the model alone refusing. The React page shows
+    this text as the server sends it, and `strings.test.ts` holds `S.ai2.stoppedBy` equal to it."""
+    sentence = view.STOPPED_TEXT["permanent"]
+    assert sentence == (
+        "nhà cung cấp hoặc mô hình từ chối yêu cầu (ví dụ hết số dư, 402), không thử lại"
+    )
+    assert view.stopped_text("permanent") == sentence
+    assert "lỗi không thể thử lại" not in sentence
+    # the other four are what they were
+    assert view.STOPPED_TEXT["cap"] == "đã chạm hạn mức chi phí LLM"
+    assert view.STOPPED_TEXT["transient"] == "mô hình không phản hồi sau nhiều lần thử"
+
+
 # ---------------------------------------------------------------------------
 # The view's own rules, kept from the retired page's tests (P10-T13)
 #

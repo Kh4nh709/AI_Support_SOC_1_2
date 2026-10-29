@@ -571,10 +571,11 @@ export const S = {
       confirmed_incident: "Là sự cố thật",
       need_more_data: "Cần thêm dữ liệu",
     },
-    // `llm_runs.stopped_by` of a run with no result.
+    // `llm_runs.stopped_by` of a run with no result. `permanent` is the provider's refusal (a 402 since R4) as
+    // well as the model's, and says both (INT-T02); strings.test.ts holds this table equal to the backend's.
     stoppedBy: {
       cap: "đã chạm hạn mức chi phí LLM",
-      permanent: "mô hình từ chối yêu cầu, lỗi không thể thử lại",
+      permanent: "nhà cung cấp hoặc mô hình từ chối yêu cầu (ví dụ hết số dư, 402), không thử lại",
       linter: "dữ liệu của case không qua bộ kiểm tra an toàn trước khi gửi cho mô hình",
       schema: "mô hình trả lời sai định dạng, kể cả sau một lần sửa",
       transient: "mô hình không phản hồi sau nhiều lần thử",
@@ -2020,7 +2021,9 @@ export const S = {
       warning: {
         budget: "Hết ngân sách tra cứu và soạn tri thức của tháng nên chưa soạn được.",
         llm_transient: "Mô hình không phản hồi kịp và job đã hết số lần thử.",
-        llm_permanent: "Mô hình từ chối yêu cầu, không thử lại.",
+        // The provider's refusal (a 402, R4) as well as the model's (INT-T02).
+        llm_permanent:
+          "Nhà cung cấp hoặc mô hình từ chối yêu cầu (ví dụ hết số dư, 402), không thử lại.",
         linter: "Lời nhắc không qua kiểm tra an toàn nên không được gửi đi.",
         rank_unavailable: "Không xếp hạng được các mục tương tự nên chưa tìm mục trùng.",
       },

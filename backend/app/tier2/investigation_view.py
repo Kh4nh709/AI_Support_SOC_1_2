@@ -61,7 +61,9 @@ CONCLUSION_LABELS: dict[str, str] = {
 #: `llm_runs.stopped_by` for a row with no `result` (P5-T04's closed set).
 STOPPED_TEXT: dict[str, str] = {
     "cap": "đã chạm hạn mức chi phí LLM",
-    "permanent": "mô hình từ chối yêu cầu, lỗi không thể thử lại",
+    # R4/INT-T02: a provider 402 is `permanent` too (`LLMUnavailable` is an `LLMPermanent`), so the
+    # sentence names the provider as well as the model.
+    "permanent": "nhà cung cấp hoặc mô hình từ chối yêu cầu (ví dụ hết số dư, 402), không thử lại",
     "linter": "dữ liệu của case không qua bộ kiểm tra an toàn trước khi gửi cho mô hình",
     "schema": "mô hình trả lời sai định dạng, kể cả sau một lần sửa",
     "transient": "mô hình không phản hồi sau nhiều lần thử",

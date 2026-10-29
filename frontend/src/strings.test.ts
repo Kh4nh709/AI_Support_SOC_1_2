@@ -242,6 +242,30 @@ describe("② labels follow the backend", () => {
     expect(S.ai2.stoppedBy).toEqual(pyDict("STOPPED_TEXT"));
   });
 
+  // INT-T02 / DEC-211 R6: a provider 402 is `permanent` for ② and for the drafts (R4), so the word that
+  // used to say only "the model refused" names the provider as well. Both are the same sentence on purpose.
+  it("words `permanent` for ②, and `llm_permanent` for a draft, as a refusal of the provider or the model", () => {
+    const sentence =
+      "nhà cung cấp hoặc mô hình từ chối yêu cầu (ví dụ hết số dư, 402), không thử lại";
+    expect(S.ai2.stoppedBy.permanent).toBe(sentence);
+    expect(pyDict("STOPPED_TEXT").permanent).toBe(sentence); // the case page shows the server's own text
+    expect(S.admin.knowledgePage.warning.llm_permanent).toBe(
+      "Nhà cung cấp hoặc mô hình từ chối yêu cầu (ví dụ hết số dư, 402), không thử lại.",
+    );
+    for (const text of [S.ai2.stoppedBy.permanent, S.admin.knowledgePage.warning.llm_permanent]) {
+      expect(text.toLowerCase()).toContain("nhà cung cấp");
+      expect(text.toLowerCase()).toContain("mô hình");
+      expect(text).toContain("402");
+    }
+  });
+
+  it("keeps the short words of the admin LLM table short", () => {
+    // `admin.llmPage.stopped` is a table cell: the longer 402 sentence is `unavailable`'s, as it was, and
+    // `permanent` stays the short word.
+    expect(S.admin.llmPage.stopped.permanent).toBe("bị từ chối, không thử lại");
+    expect(S.admin.llmPage.stopped.permanent.length).toBeLessThan(40);
+  });
+
   it("says a quote is too short in the words of the backend's MIN_QUOTE_CHARS", () => {
     expect(pyInt("MIN_QUOTE_CHARS")).toBe(MIN_QUOTE_CHARS);
     expect(S.ai2.mark.quote_too_short).toContain(`ngắn hơn ${MIN_QUOTE_CHARS} ký tự`);

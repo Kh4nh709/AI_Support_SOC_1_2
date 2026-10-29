@@ -519,6 +519,14 @@ describe("the draft form, on the right", () => {
 describe("a draft that has no text", () => {
   const noText = () => draftDetail(1, { draft: { draft: {}, warnings: ["llm_permanent"] } });
 
+  it("words the refusal as the provider's or the model's, a 402 included (INT-T02)", async () => {
+    await open({ details: [noText()] });
+    const warnings = within(right()).getByRole("region", { name: D.right.warnings });
+    expect(warnings).toHaveTextContent(K.warning.llm_permanent);
+    expect(warnings).toHaveTextContent(/nhà cung cấp hoặc mô hình từ chối yêu cầu/i);
+    expect(warnings).toHaveTextContent(/hết số dư, 402/);
+  });
+
   it("says so, offers an empty form, and does not offer Duyệt", async () => {
     await open({ details: [noText()] });
     expect(within(right()).getByText(D.right.noText)).toBeInTheDocument();
