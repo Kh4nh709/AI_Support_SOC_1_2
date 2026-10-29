@@ -27,10 +27,14 @@ approval is left out of the lookup and raises the `knowledge_integrity` health a
   `python -m app.rag.publish --rebuild`, run in `app`, the container that mounts this directory
   read-write: `docker compose exec app python -m app.rag.publish --rebuild` (`--root PATH` names
   another directory).
-- **The directory comes with the checkout** (this file is tracked) and must be owned by the user the
+- **The directory comes with the checkout** (this file is tracked) and must be writable by the user the
   containers run as, `HOST_UID`:`HOST_GID` of `.env` (1000:1000 by default): `ls -ldn kb_learned` shows its
-  owner. `app` cannot write an entry file in a directory it does not own (one that Docker created as `root`,
-  for example); `sudo chown "$(id -u):$(id -g)" kb_learned` fixes it.
+  owner and mode. `app` cannot write an entry file in a directory it may not write to (one that Docker
+  created as `root`, or the checkout user's own when that is not `HOST_UID`: on ATTT-M1 the checkout user is
+  1001 and the containers run as 1000). When the checkout user is not `HOST_UID`, `chmod 777 kb_learned`
+  fixes it (as `kb/` already is on that host); do not `chown` it to `HOST_UID` instead, because git runs as
+  the checkout user and must still be able to update this tracked file. A directory owned by someone else:
+  `sudo chown "$(id -u):$(id -g)" kb_learned` first, then the rule above.
 - **Mounts** (`docker-compose.rag.yml`): `app` read-write, `rag-worker` read-only, `worker` none.
 
 Steps, checks and rollback: `docs/runbook.md`, "Learned knowledge and RAG (DEC-210)". Design:

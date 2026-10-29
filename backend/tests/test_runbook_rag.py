@@ -40,7 +40,7 @@ DSN = 'psql "$DATABASE_URL_OWNER" -Atc "select count(*) from schema_migrations"'
 #: The nine steps, in the order the section gives them: the text each row's command cell carries, and
 #: what the row says to expect (None: nothing a test can hold the row to).
 STEPS: list[tuple[str, str, str | None]] = [
-    ("1", "git merge --ff-only director/rag-knowledge", "Fast-forward"),
+    ("1", "git merge --ff-only director/integration", "Fast-forward"),
     ("2", "make migrate PY=.venv/bin/python", "migrate: 1 applied, 19 already present"),
     ("3", DSN, "`20`"),
     ("4", "mkdir -p kb_learned && ls -ldn kb_learned", "HOST_UID"),
@@ -239,8 +239,56 @@ def test_the_directory_step_does_not_fail_on_the_directory_the_merge_already_mad
     assert "mkdir -p kb_learned && ls -ldn kb_learned" in rows[3][1]
     assert "git already made it" in rows[3][2] and "`kb_learned/README.md` is tracked" in rows[3][2]
     assert "<uid> <gid>" in rows[3][2] and "`HOST_UID`" in rows[3][2] and "`HOST_GID`" in rows[3][2]
-    assert 'sudo chown "$(id -u):$(id -g)" kb_learned' in rows[3][2]
     assert (REPO_ROOT / "kb_learned" / "README.md").exists(), "the premise: the README is tracked"
+
+
+def test_step_1_fast_forwards_main_to_the_integration_branch_and_names_no_other_release_branch():
+    """INT-T02: the release is `director/integration` (DEC-210 together with DEC-211), not the
+    `director/rag-knowledge` branch the section was written against. Nothing else in the document
+    sends the Owner to the old one."""
+    text = _text()
+    section = _section(text)
+    row = _step_rows(section)[0]
+    assert "`git merge --ff-only director/integration` (on `main`)" in row[1]
+    assert "Fast-forward" in row[2]
+    assert section.count("--ff-only") == 1  # the section merges once
+    assert "director/rag-knowledge" not in text
+    assert "`director/integration`" in section.split("### Migration 020", 1)[0]  # the intro says so
+
+
+def test_step_4_asks_for_a_directory_the_host_uid_can_write_and_does_not_chown_it_away_from_git():
+    """INT-T02 (Owner's ruling, 29/10): on ATTT-M1 the containers run as `HOST_UID` 1000 and the
+    checkout user is 1001. The step used to say `sudo chown "$(id -u):$(id -g)" kb_learned`, which
+    makes the directory the checkout user's and leaves `app` unable to write an entry file. The
+    directory must be writable by `HOST_UID`; when the checkout user is not that user, `chmod 777`
+    (as `kb/` already is on this host); a `chown` to `HOST_UID` alone would stop git from updating
+    the tracked `kb_learned/README.md`. The check line is read after either."""
+    row = _step_rows(_section(_text()))[3]
+    command, expected = row[1], row[2]
+    assert "mkdir -p kb_learned && ls -ldn kb_learned" in command
+    assert "chmod 777 kb_learned" in command and "not `HOST_UID`" in command
+    assert "sudo" not in command, "the directory must not be made with sudo"
+    # what 'right' looks like, both ways
+    assert "drwxr-xr-x" in expected and "drwxrwxrwx" in expected
+    assert "writable by" in expected and "`HOST_UID`" in expected and "`HOST_GID`" in expected
+    assert "1001" in expected and "1000" in expected  # ATTT-M1: the two users
+    assert "as `kb/` already is" in expected
+    # the wrong fix is named as wrong, and the reason is given
+    assert "Do not `chown`" in expected and "`kb_learned/README.md`" in expected
+    assert "git" in expected
+    # the one chown left hands a foreign-owned (root) directory back to the checkout user, and is
+    # followed by the same rule, so it never ends a step on its own
+    assert 'sudo chown "$(id -u):$(id -g)" kb_learned` gives it back' in expected
+    assert "and do not go on before it holds" in expected or "do not go on before" in expected
+
+
+def test_the_readme_of_kb_learned_gives_the_same_fix_as_step_4():
+    """The README said the old fix too (T09's wording): one rule in both places."""
+    readme = " ".join(_text(REPO_ROOT / "kb_learned" / "README.md").split())
+    assert "writable by the user the containers run as" in readme
+    assert "chmod 777 kb_learned" in readme
+    assert "HOST_UID" in readme and "git" in readme
+    assert 'chown "$(id -u):$(id -g)" kb_learned` fixes it' not in readme, "the old fix is back"
 
 
 def test_the_directory_is_checked_before_up_d_and_by_the_host_user():
