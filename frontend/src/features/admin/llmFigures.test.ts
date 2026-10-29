@@ -273,6 +273,12 @@ describe("the words of a stop reason", () => {
       expect(Object.keys(S.admin.llmPage.stopped), code).toContain(code);
     }
   });
+  it("words a provider 402 (stopped_by unavailable, S8) in both maps, the same way", () => {
+    expect(S.admin.llmPage.stopped.unavailable).toBe(
+      "nhà cung cấp LLM từ chối (hết số dư / hạn mức, 402)",
+    );
+    expect(S.admin.llmPage.stopped.unavailable).toBe(S.ai1.stoppedBy.unavailable);
+  });
 });
 
 describe("pipelineLabel", () => {

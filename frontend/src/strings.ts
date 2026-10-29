@@ -200,6 +200,7 @@ export const S = {
       transient: "mô hình không phản hồi sau nhiều lần thử",
       disabled: "gợi ý ① đang tắt",
       permanent: "mô hình từ chối yêu cầu, lỗi không thể thử lại",
+      unavailable: "nhà cung cấp LLM từ chối (hết số dư / hạn mức, 402)",
     },
     stoppedByLabel: "Lý do dừng",
     hiddenBody:
@@ -1055,6 +1056,7 @@ export const S = {
       stopped: {
         cap: "chạm trần chi phí",
         permanent: "bị từ chối, không thử lại",
+        unavailable: "nhà cung cấp LLM từ chối (hết số dư / hạn mức, 402)",
         linter: "không qua kiểm tra an toàn",
         schema: "sai định dạng (schema)",
         transient: "mô hình không phản hồi",

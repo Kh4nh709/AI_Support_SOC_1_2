@@ -289,6 +289,13 @@ describe("unavailable", () => {
     expect(screen.getByText("schema").tagName).toBe("CODE");
   });
 
+  it("words a provider 402: stopped_by unavailable has a label, and the code beside it", () => {
+    render(<Unavailable stoppedBy="unavailable" />);
+    expect(screen.getByText(S.ai1.stoppedBy.unavailable)).toBeInTheDocument();
+    expect(S.ai1.stoppedBy.unavailable).toBe("nhà cung cấp LLM từ chối (hết số dư / hạn mức, 402)");
+    expect(screen.getByText("unavailable", { selector: "code" })).toBeInTheDocument();
+  });
+
   it("unknown enum renders raw code: a stopped_by without a label is shown as it came", () => {
     render(<Unavailable stoppedBy="cosmic_ray" />);
     expect(screen.getByText("cosmic_ray")).toBeInTheDocument();
