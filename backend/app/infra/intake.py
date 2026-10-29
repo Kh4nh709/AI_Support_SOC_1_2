@@ -47,10 +47,12 @@ class PayloadTooLarge(Exception):
 
 
 class Rejected(Exception):
-    """`reason` ∈ not_json | not_an_object | id | rule.id — the route names the
+    """`reason` ∈ not_json | not_an_object | id | rule.id | timestamp — the route names the
     missing field, never an exception message (phase-1 §Xử lý lỗi, G-15). `id` also covers an id
     that is present but not ①'s `alert_id` shape (DEC-211 R6): the answer is the same, so the
-    response bytes did not change."""
+    response bytes did not change. `timestamp` (INT-T02 fix round 1) is the one new value: the
+    body is the existing `{"missing": <reason>}`, and it covers a timestamp that is absent or that
+    no sort key can be made from."""
 
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
@@ -76,6 +78,20 @@ def _manager_id(alert_obj: dict) -> str:
     `'default'` when absent."""
     manager = alert_obj.get("manager")
     return (manager if isinstance(manager, dict) else {}).get("name") or "default"
+
+
+def _sort_key_of(timestamp: object) -> int | None:
+    """The epoch-millis sort key of an alert's `timestamp` (`puller._replay_sort_key`, the one the
+    pull and the replay use), or `None` when there is none to make: the key is absent or null, the
+    value is not text (a number, a list, an object: none is the ISO text Wazuh and the SOAR send), or
+    the text is not an ISO date-time the key can be taken from (including an offset or a year the
+    conversion cannot represent)."""
+    if not isinstance(timestamp, str):
+        return None
+    try:
+        return _replay_sort_key(timestamp)
+    except (ValueError, OverflowError, OSError):
+        return None
 
 
 def _insert_rejected(
@@ -120,10 +136,18 @@ def receive(conn: psycopg.Connection, body: bytes, source_ip: str, cfg: Config) 
         _insert_rejected(conn, source_ip, "rule.id", doc)
         raise Rejected("rule.id")
 
+    # INT-T02 fix round 1, F2 (the Director's ruling): the same for a `timestamp` the sort key cannot
+    # be made from. It used to raise (`KeyError`, `ValueError`) out of `_replay_sort_key`: a 500, with
+    # no `rejected_alerts` row, as `Conn` rolls back, so the alert was dropped without a trace. Judged
+    # after the id and the rule, in their style, before anything is written.
+    sort_key = _sort_key_of(alert_obj.get("timestamp"))
+    if sort_key is None:
+        _insert_rejected(conn, source_ip, "timestamp", doc)
+        raise Rejected("timestamp")
+
     raw_text = body.decode("utf-8")
     manager_id = _manager_id(alert_obj)
     source_alert_id = alert_obj["id"]
-    sort_key = _replay_sort_key(str(alert_obj["timestamp"]))
 
     # Normalised for the heartbeat check only (never for storage — G9):
     # `is_heartbeat` reads `doc["_source"]["rule"]["id"]`, and a webhook body

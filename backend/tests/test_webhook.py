@@ -486,6 +486,113 @@ def test_a_wazuh_id_and_a_real_soar_id_are_still_201(client, sdb) -> None:
         assert stored == given
 
 
+# --------------------------------------------------------------------------
+# INT-T02 fix round 1, F2 (Director's ruling) — a missing or invalid `timestamp` is refused like the
+# other malformed bodies: the reason `timestamp`, a rejected row, 400 {"detail": {"missing":
+# "timestamp"}}. It was a 500 (`KeyError` / `ValueError` in `_replay_sort_key`) that wrote no
+# `rejected_alerts` row, since `Conn` rolls everything back: a silent drop. Judged after `id` and
+# `rule.id`, and before anything is written.
+# --------------------------------------------------------------------------
+
+_NO_TIMESTAMP = object()  # the key is not in the document at all
+
+_BAD_TIMESTAMPS = [
+    pytest.param(_NO_TIMESTAMP, id="absent"),
+    pytest.param(None, id="null"),
+    pytest.param("", id="empty"),
+    pytest.param("yesterday", id="not-a-date"),
+    pytest.param("2026-13-45T99:00:00Z", id="impossible-date"),
+    pytest.param("2026-09-20T00:00:00+25:00", id="offset-out-of-range"),
+    pytest.param("2026-09-20T24:00:00", id="hour-24"),
+    pytest.param(1730000000, id="epoch-int"),
+    pytest.param(1730000000.5, id="epoch-float"),
+    pytest.param("1730000000", id="epoch-as-text"),
+    pytest.param(True, id="bool"),
+    pytest.param(["2026-09-20T00:00:00+0700"], id="list"),
+    pytest.param({"at": "2026-09-20T00:00:00+0700"}, id="object"),
+]
+
+
+def _with_timestamp(base: dict, value: object) -> dict:
+    doc = _copy_with_id(base, _wazuh_id())
+    if value is _NO_TIMESTAMP:
+        del doc["timestamp"]
+    else:
+        doc["timestamp"] = value
+    return doc
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("bad_timestamp", _BAD_TIMESTAMPS)
+def test_a_missing_or_invalid_timestamp_is_400_naming_timestamp_with_one_rejected_row(
+    client, sdb, bad_timestamp
+) -> None:
+    marker = _wazuh_id()  # the rule id of this document: finds its rejected row
+    doc = _with_timestamp(ALERT_BARE, bad_timestamp)
+    doc["rule"] = {**doc["rule"], "id": marker}
+    before = _counts(sdb)
+
+    response = _post(client, _bytes(doc))
+
+    assert response.status_code == 400, response.text
+    assert response.json() == {"detail": {"missing": "timestamp"}}
+    rows = sdb.execute(
+        "SELECT reason, source_ip, raw_payload FROM rejected_alerts "
+        "WHERE raw_payload->'rule'->>'id' = %s",
+        (marker,),
+    ).fetchall()
+    assert len(rows) == 1
+    reason, source_ip, raw_payload = rows[0]
+    assert (reason, source_ip) == ("timestamp", ALLOWED_HOST)
+    assert raw_payload == doc  # the document as received
+    after = _counts(sdb)
+    assert after == {**before, "rejected_alerts": before["rejected_alerts"] + 1}
+
+
+@pytest.mark.db
+def test_a_refused_timestamp_inside_an_indexer_hit_and_in_a_heartbeat_is_400_too(
+    client, sdb
+) -> None:
+    hit = json.loads(json.dumps(ALERT_HIT))
+    hit["_source"] = _with_timestamp(hit["_source"], "yesterday")
+    heartbeat = _heartbeat_from(ALERT_BARE, _wazuh_id())
+    del heartbeat["timestamp"]
+    before = _counts(sdb)
+
+    for body in (hit, heartbeat):
+        response = _post(client, _bytes(body))
+        assert response.status_code == 400, response.text
+        assert response.json() == {"detail": {"missing": "timestamp"}}
+
+    after = _counts(sdb)
+    assert after == {**before, "rejected_alerts": before["rejected_alerts"] + 2}
+
+
+@pytest.mark.db
+def test_the_id_and_the_rule_are_judged_before_the_timestamp(client, sdb) -> None:
+    """Same style, same order: a body with several faults is told the first one the route always told."""
+    no_id = _with_timestamp(ALERT_BARE, _NO_TIMESTAMP)
+    no_id["id"] = "gl-TEST-100191-1793289654049"
+    no_rule = _with_timestamp(ALERT_BARE, "yesterday")
+    del no_rule["rule"]
+
+    assert _post(client, _bytes(no_id)).json() == {"detail": {"missing": "id"}}
+    assert _post(client, _bytes(no_rule)).json() == {"detail": {"missing": "rule.id"}}
+
+
+@pytest.mark.db
+def test_the_timestamps_wazuh_and_soar_send_are_still_201(client, sdb) -> None:
+    """The control: the offset with and without a colon, `Z`, fractions, a naive time."""
+    for given in (
+        "2026-09-20T00:00:00.000+0700",
+        "2026-09-20T00:00:00.123456+07:00",
+        "2026-09-20T00:00:00Z",
+        "2026-09-20T00:00:00",
+    ):
+        response = _post(client, _bytes(_with_timestamp(ALERT_BARE, given)))
+        assert response.status_code == 201, (given, response.text)
+
+
 @pytest.mark.db
 def test_a_heartbeat_with_an_id_off_the_pattern_is_refused_like_any_other(client, sdb) -> None:
     """The id is judged before the heartbeat branch, as the empty id always was: a real 100999
@@ -743,9 +850,10 @@ def test_a_409_duplicate_does_not_stamp(sdb, pull_enabled) -> None:
         (b"[1, 2]", "not_an_object"),
         (b"{}", "id"),
         (b'{"id": "gl-TEST-100191-1793289654049", "rule": {"id": "100191"}}', "id"),
+        (b'{"id": "1790888852.28168897", "rule": {"id": "100191"}}', "timestamp"),
         (b"x" * (config.Config().MAX_PAYLOAD_BYTES + 1), "too_large"),  # the 413
     ],
-    ids=["not_json", "not_an_object", "id", "id-off-pattern", "too_large"],
+    ids=["not_json", "not_an_object", "id", "id-off-pattern", "timestamp", "too_large"],
 )
 def test_a_rejected_body_does_not_stamp(sdb, body, reason, pull_enabled) -> None:
     """The 400s and the 413, with the pull off so that a stamp would be visible (and on, where
