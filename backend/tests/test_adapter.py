@@ -310,16 +310,20 @@ class TestRetriesAndClassification:
 
         assert client.call_count == 1
 
-    def test_402_is_unavailable_not_permanent(self):
-        """A 402 (Payment Required: no balance / exhausted quota) raises LLMUnavailable, not
-        LLMPermanent, so ① records the alert `unavailable` with the provider's message instead of a
-        hard failure (S8, DEC-211). Still permanent: one call, no retry."""
+    def test_402_is_unavailable_a_kind_of_permanent(self):
+        """A 402 (Payment Required: no balance / exhausted quota) raises LLMUnavailable, so ① can
+        catch it first and record the alert `unavailable` with the provider's message instead of a
+        hard failure (S8, DEC-211). It is also an LLMPermanent (R4, INT-T01): every other caller that
+        catches LLMPermanent - ②, the RAG lookup, the knowledge draft - then sees a 402 as the
+        permanent model refusal it is, not as a linter fault. One call, no retry."""
         client = FakeClient([_status_error(402)])
         adapter = DeepSeekAdapter(_cfg(LLM_RETRY=2), client=client, sleep=lambda s: None)
 
-        with pytest.raises(LLMUnavailable):
+        with pytest.raises(LLMUnavailable) as excinfo:
             adapter.complete(system=VALID_SYSTEM, user="x")
 
+        assert issubclass(LLMUnavailable, LLMPermanent)
+        assert isinstance(excinfo.value, LLMPermanent)
         assert client.call_count == 1
 
 

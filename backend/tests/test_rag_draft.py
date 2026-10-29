@@ -37,7 +37,13 @@ import pytest
 from app.infra import config
 from app.infra.errors import PermanentError, TransientError
 from app.infra.jobs import Job, Reschedule
-from app.llm.adapter import LLMBudgetExceeded, LLMPermanent, LLMTimeout, estimate_tokens
+from app.llm.adapter import (
+    LLMBudgetExceeded,
+    LLMPermanent,
+    LLMTimeout,
+    LLMUnavailable,
+    estimate_tokens,
+)
 from app.rag import agent, budget, draft, match
 from app.rag.draft import SourceRecord, validate_draft
 from app.rag.entries import render_entry_markdown
@@ -2317,6 +2323,78 @@ def test_an_out_of_balance_account_402_is_stored_empty_at_once_and_can_be_redraf
     ).fetchall() == [("pending",)]
     assert run(db, "alert:da-1", FakeLLM([GOOD])) is None  # the job, with a balance again
     assert only_draft(db)["draft"]["title"] == GOOD["title"]
+
+
+def provider_402() -> LLMUnavailable:
+    """What the real adapter raises for a 402 (no balance): `LLMUnavailable`, raised `from` the provider's
+    error. R4 (INT-T01, DEC-211): it is an `LLMPermanent` too - the tests above spell a 402 as a plain
+    `LLMPermanent`, which is not what the adapter raises."""
+    error = LLMUnavailable("LLM provider unavailable (402): Insufficient Balance")
+    error.__cause__ = type("Http402", (Exception,), {"status_code": 402})("Insufficient Balance")
+    return error
+
+
+@db_marked
+def test_the_adapters_402_at_the_draft_call_is_the_empty_llm_permanent_draft_and_can_be_redrafted(
+    db, kb_root
+) -> None:
+    """The real 402 (`LLMUnavailable`) used to miss `except LLMPermanent` and take the linter path: an
+    empty draft warned `linter`, which "Soạn lại" refuses. Now it is P13's designed outcome: no
+    reschedule, one call, the empty draft with `llm_permanent`, the run recorded `permanent`, and the
+    admin's re-draft takes it."""
+    from app.rag import publish
+
+    decided_alert(db)
+    fake = FakeLLM(raises=provider_402())
+
+    assert run(db, "alert:da-1", fake) is None  # not a Reschedule
+    row = only_draft(db)
+    assert (
+        row["status"] == "pending" and row["draft"] == {} and row["warnings"] == ["llm_permanent"]
+    )
+    assert len(fake.calls) == 1 and [r["stopped_by"] for r in runs_of(db)] == ["permanent"]
+
+    publish.redraft(db, row["draft_id"], add_user(db))
+    assert drafts(db) == []
+    assert db.execute(
+        "SELECT status FROM jobs WHERE job_type = 'knowledge_draft' AND subject_id = 'alert:da-1'"
+    ).fetchall() == [("pending",)]
+    assert run(db, "alert:da-1", FakeLLM([GOOD])) is None  # the job, with a balance again
+    assert only_draft(db)["draft"]["title"] == GOOD["title"]
+
+
+@db_marked
+def test_the_adapters_402_at_the_ranking_and_at_the_draft_records_both_calls_permanent(
+    db, kb_root
+) -> None:
+    """With a candidate, the ranking call is made first. Its 402 goes the `LLMPermanent` way (the
+    duplicate check did not run: `rank_unavailable`, run `permanent`, not `linter`), the draft call's 402
+    after it too: the empty draft carries `llm_permanent`, and every warning on it is one the re-draft
+    takes, so "Soạn lại" is offered."""
+    from app.rag import publish
+
+    decided_alert(db)
+    entry(db, kb_root)
+
+    class OutOfBalance(FakeLLM):
+        """`FakeLLM(raises=...)` raises on its first call only; an account with no balance refuses them all."""
+
+        def complete(self, **kwargs):
+            self.calls.append({})
+            raise provider_402()
+
+    fake = OutOfBalance()
+
+    assert run(db, "alert:da-1", fake) is None
+    row = only_draft(db)
+    assert row["status"] == "pending" and row["draft"] == {}
+    assert row["warnings"] == ["rank_unavailable", "llm_permanent"]
+    assert len(fake.calls) == 2
+    assert sorted(r["stopped_by"] for r in runs_of(db)) == ["permanent", "permanent"]
+    assert sorted(r["gate_result"]["stage"] for r in runs_of(db)) == ["draft", "rank"]
+
+    publish.redraft(db, row["draft_id"], add_user(db))  # accepted: it raises StaleDraft otherwise
+    assert drafts(db) == []
 
 
 @db_marked

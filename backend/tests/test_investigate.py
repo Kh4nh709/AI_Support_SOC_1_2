@@ -36,7 +36,7 @@ from app.infra.errors import PermanentError
 from app.infra.jobs import Job, enqueue
 from app.infra.worker import run_forever
 from app.llm import investigate as llm_investigate
-from app.llm.adapter import LLMBudgetExceeded, LLMPermanent, LLMTimeout, cost_usd
+from app.llm.adapter import LLMBudgetExceeded, LLMPermanent, LLMTimeout, LLMUnavailable, cost_usd
 from app.security import detector, wrap
 from app.tier2 import dossier as dossier_mod
 from app.tier2 import investigate as tier2_investigate
@@ -1381,6 +1381,24 @@ def test_llm_permanent_writes_row_and_completes_without_raising(db, monkeypatch)
     rows = _rows(db, case_id)
     assert len(rows) == 1
     assert rows[0][5] == "permanent"
+
+
+@pytest.mark.db
+def test_a_provider_402_is_stopped_by_permanent_and_never_linter(db, monkeypatch):
+    """R4 (INT-T01, DEC-211): the adapter raises `LLMUnavailable` for a 402 (no balance). It used to be
+    a `PermanentError` that was not an `LLMPermanent`, so ② fell through to the linter branch and
+    recorded `stopped_by='linter'` - a template defect that never happened. It is the model's own
+    refusal: `permanent`, one row, no raise."""
+    _enable_llm(monkeypatch)
+    _user, case_id, _head = _build_case_with_head(db)
+    fake = _RaisingLLM(LLMUnavailable("LLM provider unavailable (402): Insufficient Balance"))
+
+    tier2_investigate.run_investigate_job(db, _job(case_id), adapter=fake)
+
+    rows = _rows(db, case_id)
+    assert len(rows) == 1
+    assert rows[0][5] == "permanent"
+    assert rows[0][1] is None  # no result
 
 
 @pytest.mark.db

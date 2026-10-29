@@ -41,6 +41,7 @@ from app.llm.adapter import (
     LLMBudgetExceeded,
     LLMPermanent,
     LLMTimeout,
+    LLMUnavailable,
     cost_usd,
     estimate_tokens,
 )
@@ -772,6 +773,25 @@ def test_a_permanent_model_error_writes_a_failed_row_without_a_retry(db, kb_root
         {"lookup_id": str(row["lookup_id"])}
     ]
     assert runs_of(db)[0]["stopped_by"] == "permanent"
+
+
+def test_a_provider_402_is_a_failed_lookup_recorded_permanent_never_linter(db, kb_root) -> None:
+    """R4 (INT-T01, DEC-211): the adapter's 402 is `LLMUnavailable`. It used to miss `except LLMPermanent`
+    and land in `except PermanentError`, the linter branch: a `failed` lookup recorded `linter`, as if
+    the prompt had been refused by our own check. It is the provider's refusal: the same `failed` row,
+    the same event, one call and no retry, recorded `permanent`."""
+    failing_setup(db, kb_root)
+    fake = FakeLLM(raises=LLMUnavailable("LLM provider unavailable (402): Insufficient Balance"))
+    run(db, "alert:ra-1", fake, attempts=1)
+    row = result_of(db)
+    assert row["status"] == "failed"
+    assert [e[2] for e in events_of(db, "rag.lookup_failed")] == [
+        {"lookup_id": str(row["lookup_id"])}
+    ]
+    (run_row,) = runs_of(db)
+    assert run_row["stopped_by"] == "permanent"
+    assert run_row["rag_lookup_id"] == row["lookup_id"]
+    assert len(fake.calls) == 1
 
 
 def test_an_unusable_answer_after_the_repair_degrades_to_no_match_and_keeps_the_history(

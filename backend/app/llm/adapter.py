@@ -52,13 +52,19 @@ class LLMPermanent(PermanentError):
     would make DeepSeek reject `json_object` (no "JSON" in it)."""
 
 
-class LLMUnavailable(PermanentError):
+class LLMUnavailable(LLMPermanent):
     """The provider refused for a billing/quota reason — HTTP 402 Payment Required, i.e. no balance
     or an exhausted quota. Permanent (no retry) and distinct from `LLMBudgetExceeded`, which is our
     own monthly cap: ① records the alert `triage_status='unavailable'`, `stopped_by='unavailable'`,
     with the provider's message, so the health check reports it and an operator can tell a dead
     provider from a cap hit (S8, DEC-211). A 402 is provider-neutral: OpenAI-compatible endpoints
-    use it too."""
+    use it too.
+
+    It is a kind of `LLMPermanent` (R4, INT-T01, DEC-211): a 4xx the provider refused. ① catches
+    `LLMUnavailable` explicitly, before anything else, and nothing on its path catches `LLMPermanent`;
+    every other caller that catches `LLMPermanent` — ② (`tier2/investigate.py`), the RAG lookup
+    (`rag/lookup.py`) and the knowledge draft (`rag/draft.py`) — thereby records a 402 as `permanent`.
+    Before, it was a bare `PermanentError` and those callers took it for a linter fault."""
 
 
 def estimate_tokens(text: str) -> int:
