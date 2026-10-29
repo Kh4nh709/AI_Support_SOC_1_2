@@ -110,3 +110,59 @@ All six card items are built as asked. I found no Critical or Important issue. T
 - UI tests: 65 files, 3175 passed.
 
 **Not run by me** (they need a database): the DB tests in `test_webhook`, `test_queue`, `test_tier1_api`, `test_case_view_api` and `test_investigation_view_api`. You said you ran the DB suite.
+
+## Re-review (fix round 1)
+
+VERDICT: APPROVE
+
+Scope: 368a4d7..2753203. That is 2665e6a (F1), a36805d (F2 + N6), 690cb15 (F3), f6c0b29 (N4 + N5) and 2753203 (the R6 addendum). Read in my own detached worktree at 2753203. Nothing was committed. One mutation check was reverted with `git checkout`, and the worktree has been removed.
+
+Every ruling is built as ruled. The UTF-16/32 issue the Coder raised is real (R1); it is non-blocking but fits this round. There is one Nit.
+
+### R1. Minor (new; the Coder's question): a JSON body that is not UTF-8 parses, and then gives a 500 or is lost after a 201
+- **Real: yes.** `json.loads(body)` on `bytes` (`backend/app/infra/intake.py:116`) detects UTF-8, UTF-16 and UTF-32 and decodes them. Only afterwards does `raw_text = body.decode("utf-8")` run (`:148`, G9). I reproduced it without a DB by calling `intake.receive(None, …)` with a body whose id, rule and timestamp are all valid:
+  - **UTF-16 or UTF-32 with a BOM:** every check passes, then `body.decode("utf-8")` raises `UnicodeDecodeError` (byte 0xff). The answer is a 500, and nothing is written, because `Conn` rolls back.
+  - **UTF-16-LE or UTF-32-LE without a BOM:** the decode *succeeds*, because the bytes are ASCII plus NULs. The `INSERT INTO intake (… raw_text …)` at `:171` then fails client-side in psycopg with `DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes` (I checked against the installed psycopg 3.3.4). Again a 500 and no row.
+  - **UTF-8 with a BOM:** accepted with a 201. `raw_text` keeps U+FEFF. The pipeline's `json.loads(raw_text)` (`soar/pipeline.py:91`) then raises `JSONDecodeError: Unexpected UTF-8 BOM`. So the sender was told 201 and the alert never becomes an alert. I am reasoning about the job's end state; it needs a DB to watch.
+- **Does it belong in this round?** Yes, I would take it. It is the same class as F2: an unclean body that becomes a 500 with no rejected row, or a silent loss. It is in the same function, the fix is a few lines, and it uses an existing reason (`not_json`), so no new response shape is needed. It does not block.
+- **Suggested fix:**
+  - Decode strictly first and parse the text, in the existing `try`: `text = body.decode("utf-8")` and then `doc = json.loads(text)`, with `UnicodeDecodeError` and `JSONDecodeError` giving the existing `not_json` row and 400.
+  - Then use `raw_text = text`. That is byte-for-byte G9's `body.decode("utf-8")`, so every valid UTF-8 body is unchanged.
+  - `json.loads(str)` also refuses a leading BOM and raw control characters, so all three cases above become `not_json`. RFC 8259 §8.1 requires UTF-8 for JSON sent over a network. Accepting a UTF-8 BOM through `utf-8-sig` would also be lawful, but that is a ruling; refusing it is the simple rule.
+  - Tests: the five bodies above, giving 400 `not_json` and one rejected row each.
+- **Left out of this fix:** a `\u0000` *escape* inside a JSON string still parses into a NUL. `jsonb` rejects that, so `_insert_rejected`'s `Jsonb(doc)` on a refused body, or the pipeline's jsonb write on an accepted one, would still fail. That is a separate, rarer follow-up, and it needs a DB to confirm the exact error.
+
+### R2. Nit: the timestamp rule is a little looser than the runbook says, and narrower for one exotic number
+- Where: `intake._sort_key_of` / `puller._replay_sort_key`, and `docs/runbook.md` "The `timestamp` it takes".
+- Python 3.12's `fromisoformat` (the same minor version as the `python:3.12-slim` image) also accepts `"20260920"`, `"2026-W38"` and `"0001-01-01T00:00:00+14:00"`. The last gives a negative sort key. So "not an ISO date-time is refused" means Python's ISO parser, not just the forms Wazuh and SOAR send.
+- The other way: a JSON *number* such as `20260920` used to pass through `str()` and give a 201, and is now a 400 (non-string). That is what you ruled, and no real sender sends it.
+- No action needed. Optionally, say "what Python's `datetime.fromisoformat` reads" in the runbook.
+
+### Checked and fine (fix round 1)
+- **F1:** `ALERT_ID_PATTERN` is compiled with `re.ASCII`. It is still the one object shared by the builder, the linter and intake. The regex text is unchanged, and there is no `\w`, `\s` or `\b` in it that the flag could also change.
+  - Tests at all three levels: the id source (bold, fullwidth, Arabic-Indic and mixed ids are refused, and the builder refuses them too), the linter (the look-alike is `free_text`; the real Wazuh and SOAR ids pass), and the webhook (four parametrized cases).
+  - Mutation: removing `re.ASCII` makes `test_alert_id_source` and `test_linter` red.
+- **F2:**
+  - `_sort_key_of` gives `None` for an absent or null timestamp, a non-`str`, and anything that raises `ValueError`, `OverflowError` or `OSError`. I probed the 13 bad values in the tests, plus extreme years.
+  - It is called after the `id` and `rule.id` checks and before any write or decode, so the order is `id` → `rule.id` → `timestamp`, which a test pins.
+  - It writes a rejected row with reason `timestamp` and raises `Rejected("timestamp")`. The route turns that into the existing `{"detail": {"missing": <reason>}}` shape with its new value.
+  - Valid bodies are unchanged. The same sort key comes from the same function, it is no longer passed through `str()`, and `raw_text`, `manager_id` and the heartbeat branch are unchanged.
+  - Every other response is byte-identical. A heartbeat or an indexer hit with a bad timestamp is now a 400 instead of a 500.
+  - The ISO forms Wazuh and SOAR send are 201 (the control test).
+- **N6:** the runbook query now reads `coalesce(raw_payload->>'id', raw_payload->'_source'->>'id')` and groups by both reasons.
+- **F3:** the label is "Tín hiệu gần nhất từ nguồn" in the row and in the hint. The test renders both modes' detail strings and forbids `kéo`, `pull` and `alert` in the label.
+- **N4:**
+  - `list_cases`'s own SQL, `ORDER BY` and `LIMIT`/`OFFSET` are untouched. The only addition is one `DISTINCT ON (subject_id)` read of `investigate` rows for the page's ids, and none when the page is empty.
+  - `last_run` is now `last_runs` of one id, so the page and the list cannot disagree. Ids are compared as lower-case `str(uuid)`.
+  - `lastAnalysedText` is shared, with each place keeping its own time format, and it falls back for an older server's answer.
+- **N5:** `analysedNoResult` is removed, and "không có kết quả" exists only as `S.case.noResult`.
+- **R6 addendum:** one line in DEC-211, after R6.
+- **Blind arm and visibility:** no visibility, queue or alert-view file changed in this round.
+
+**Suites I ran on 2753203:**
+- `make test`: 4784 passed, 20 skipped (the same unreachable default-DSN probes).
+- `make lint`: green.
+- `tsc`, `eslint`, `prettier`: clean.
+- UI tests: 65 files, 3178 passed.
+
+**Not run by me:** the DB-marked webhook and case-list tests. You ran the DB suite.
