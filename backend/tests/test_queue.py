@@ -1247,6 +1247,131 @@ def test_view_visible_arm_keeps_triaged_count(db):
     assert view["triaged_count"] == 1
 
 
+# --- INT-T02 item 2 / DEC-211 R6: why ① stopped, in the alert view -------------------------------------
+
+
+@pytest.mark.db
+def test_view_says_why_the_newest_proposer_run_stopped(db):
+    """A 402 leaves one proposer row with no result and `stopped_by='unavailable'`: `suggestion` is
+    `None` (an older good run does not stand in) and `llm_stopped_by` names the reason, so the
+    alert page can say more than "① đã chạy nhưng không có đề xuất"."""
+    alert_id = _queued(db, suggestion_visible=True)
+    _insert_run(db, alert_id, offset_s=0)  # an older run, with a result
+    _insert_run(db, alert_id, result=None, gate_result=None, stopped_by="unavailable", offset_s=5)
+
+    view = get_alert_view(db, alert_id)
+
+    assert view["suggestion"] is None
+    assert view["llm_stopped_by"] == "unavailable"
+
+
+@pytest.mark.db
+def test_view_stop_reason_is_none_when_the_newest_proposer_run_has_a_result(db):
+    alert_id = _queued(db, suggestion_visible=True)
+    _insert_run(db, alert_id, result=None, gate_result=None, stopped_by="cap", offset_s=0)
+    _insert_run(db, alert_id, offset_s=5)  # the newest run succeeded
+
+    view = get_alert_view(db, alert_id)
+
+    assert view["suggestion"]["suggested_action"] == "false_positive"
+    assert "llm_stopped_by" in view and view["llm_stopped_by"] is None
+
+
+@pytest.mark.db
+def test_view_stop_reason_is_none_with_no_run_and_ignores_the_verifier_row(db):
+    never_ran = _queued(db, suggestion_visible=True)
+    assert get_alert_view(db, never_ran)["llm_stopped_by"] is None
+
+    alert_id = _queued(db, suggestion_visible=True)
+    _insert_run(db, alert_id, offset_s=0)
+    _insert_run(  # a verifier failure is the proposer's row's business, not this key's
+        db, alert_id, role="verifier", result=None, stopped_by="schema", offset_s=5
+    )
+    assert get_alert_view(db, alert_id)["llm_stopped_by"] is None
+
+
+@pytest.mark.db
+def test_latest_stopped_by_reads_the_run_latest_suggestion_reads(db):
+    alert_id = _queued(db)
+    assert queue.latest_stopped_by(db, alert_id) is None  # no run
+    _insert_run(db, alert_id, result=None, gate_result=None, stopped_by="schema", offset_s=0)
+    assert queue.latest_stopped_by(db, alert_id) == "schema"
+    assert latest_suggestion(db, alert_id) is None  # the same newest run, judged the same way
+    _insert_run(db, alert_id, offset_s=5)
+    assert queue.latest_stopped_by(db, alert_id) is None
+    assert latest_suggestion(db, alert_id) is not None
+
+
+@pytest.mark.db
+def test_view_of_a_duplicate_carries_its_heads_stop_reason(db):
+    head = _queued(db, suggestion_visible=True)
+    duplicate = _duplicate(db, head)
+    _insert_run(db, head, result=None, gate_result=None, stopped_by="unavailable")
+
+    assert get_alert_view(db, duplicate)["llm_stopped_by"] == "unavailable"
+
+
+@pytest.mark.db
+def test_view_blind_undecided_does_not_say_why_the_model_stopped_and_a_decision_brings_it_back(db):
+    """DEC-101: on the blind arm, "① gave up, and for this reason" says as much as "① ran". The
+    key goes with the other ① keys; the control is the same head once it is decided."""
+    _seed_user(db)
+    alert_id = _queued(db, suggestion_visible=False, risk_score=30)
+    _insert_run(db, alert_id, result=None, gate_result=None, stopped_by="unavailable")
+    _set(db, alert_id, triage_status="unavailable")
+
+    view = get_alert_view(db, alert_id)
+    assert "llm_stopped_by" not in view and "triage_status" not in view
+    assert "suggestion" not in view
+    assert "unavailable" not in json.dumps(view, default=str)  # not as a value under any other key
+    assert view["suggestion_visible"] is False
+
+    acknowledge(db, alert_id, USER_ID)  # still undecided, still blind
+    assert "llm_stopped_by" not in get_alert_view(db, alert_id)
+
+    decide(
+        db,
+        alert_id,
+        USER_ID,
+        decision="closed_benign",
+        reason="benign",
+        seen_occurrence_count=1,
+        llm_suggestion=None,
+        llm_confidence=None,
+    )
+    decided = get_alert_view(db, alert_id)
+    assert decided["status"] == "closed_benign"
+    assert decided["llm_stopped_by"] == "unavailable"  # evaluation material once a person decided
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("suggestion_visible", [True, False], ids=["visible", "blind"])
+def test_view_labeling_mode_never_has_the_stop_reason(db, suggestion_visible):
+    alert_id = _queued(db, suggestion_visible=suggestion_visible)
+    _insert_run(db, alert_id, result=None, gate_result=None, stopped_by="unavailable")
+
+    labelling = get_alert_view(db, alert_id, mode="labeling")
+
+    assert "llm_stopped_by" not in set(_walk_keys(labelling))
+    assert "unavailable" not in json.dumps(labelling, default=str)
+    # the control: the analyst view of the same head has it on the visible arm
+    analyst = get_alert_view(db, alert_id)
+    assert ("llm_stopped_by" in analyst) is suggestion_visible
+
+
+def test_the_stop_reason_key_is_hidden_on_the_blind_arm_and_from_the_labeller_twice():
+    """By name in `ANALYST_HIDE` (so in `LABELING_DENYLIST`, which includes it), and by the `llm_`
+    prefix the labelling page drops at any depth: removing it from the set would still not give it
+    to a labeller."""
+    assert "llm_stopped_by" in ANALYST_HIDE and "llm_stopped_by" in LABELING_DENYLIST
+    assert "llm_stopped_by".startswith(LABELING_PREFIXES)
+    view = {"suggestion_visible": False, "status": "queued_tier1", "llm_stopped_by": "unavailable"}
+    blind = visibility.strip(view, status="queued_tier1", suggestion_visible=False, mode="analyst")
+    assert "llm_stopped_by" not in blind
+    labelled = visibility.strip(view, status="closed_fp", suggestion_visible=True, mode="labeling")
+    assert "llm_stopped_by" not in labelled
+
+
 @pytest.mark.db
 def test_view_duplicate_resolves_to_head(db):
     head = _queued(db)

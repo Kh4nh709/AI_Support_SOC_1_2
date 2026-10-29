@@ -154,14 +154,27 @@ def _auto_closed(conn: psycopg.Connection, *, created_by: str = TIER1_ID, **over
     return alert.alert_id
 
 
-def _insert_run(conn: psycopg.Connection, alert_id: str) -> str:
-    """One `llm_runs` proposer row in P3-T10's shape (P4-T02's fixture INSERT)."""
+def _insert_run(
+    conn: psycopg.Connection,
+    alert_id: str,
+    *,
+    result: dict | None = RESULT,
+    gate_result: dict | None = GATE,
+    stopped_by: str | None = None,
+) -> str:
+    """One `llm_runs` proposer row in P3-T10's shape (P4-T02's fixture INSERT); `result=None` and a
+    `stopped_by` make a run that gave up (a 402 is `stopped_by='unavailable'`)."""
     row = conn.execute(
         "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, system_prompt, "
-        "user_message, result, role, gate_result) "
+        "user_message, result, role, gate_result, stopped_by) "
         "VALUES (gen_random_uuid(), 'triage', 'alert', %s, 's', 'u', %s::jsonb, 'proposer', "
-        "%s::jsonb) RETURNING run_id",
-        (alert_id, json.dumps(RESULT), json.dumps(GATE)),
+        "%s::jsonb, %s) RETURNING run_id",
+        (
+            alert_id,
+            json.dumps(result) if result is not None else None,
+            json.dumps(gate_result) if gate_result is not None else None,
+            stopped_by,
+        ),
     ).fetchone()
     return str(row[0])
 
@@ -218,6 +231,7 @@ _SUGGESTION_KEYS = (
     "run_id",  # ANALYST_HIDE also drops the queue row's top-level run_id (DEC-101)
     "triaged_count",  # ... and the two counts that say how often ① ran (R17 / DEC-101)
     "needs_retriage",
+    "llm_stopped_by",  # INT-T02: why ① gave up is as telling as "① ran"
 )
 
 
@@ -238,6 +252,28 @@ def test_api_blind_alert_has_no_suggestion_for_tier1_tier2_admin(db, client) -> 
         for key in _SUGGESTION_KEYS:
             assert key not in body, (role, key)
         assert "false_positive" not in resp.text
+
+
+def test_api_blind_alert_whose_run_stopped_does_not_say_why_for_any_role(db, client) -> None:
+    """INT-T02 / DEC-211 R6: a 402 is a proposer row with no result and `stopped_by='unavailable'`.
+    On the blind arm the page must not learn that, or why: the key is gone for every role, and the
+    value is nowhere else in the body. The control is the visible arm, which carries it."""
+    blind = _queued(db, suggestion_visible=False)
+    visible = _queued(db, suggestion_visible=True)
+    for alert_id in (blind, visible):
+        _insert_run(db, alert_id, result=None, gate_result=None, stopped_by="unavailable")
+
+    for role, user_id in (("tier1", TIER1_ID), ("tier2", TIER2_ID), ("admin", ADMIN_ID)):
+        client.as_role(role, user_id)
+        resp = client.http.get(f"/api/tier1/alerts/{blind}")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        for key in _SUGGESTION_KEYS:
+            assert key not in body, (role, key)
+        assert "unavailable" not in resp.text, role
+        shown = client.http.get(f"/api/tier1/alerts/{visible}")
+        assert shown.json()["llm_stopped_by"] == "unavailable", role
+        assert shown.json()["suggestion"] is None
 
 
 def test_api_blind_queue_row_has_no_suggestion_keys(db, client) -> None:

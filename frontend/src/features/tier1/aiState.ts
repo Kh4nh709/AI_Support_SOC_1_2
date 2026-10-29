@@ -23,8 +23,9 @@ export const DECIDED: ReadonlySet<string> = new Set([
   "auto_closed",
 ]);
 
-// Neither the queue nor the alert view says why ① gave up (`llm_runs.stopped_by` is not in either answer),
-// so `unavailable` carries no reason from here; a caller that learns one may show it.
+// The alert view says why ① gave up (`llm_stopped_by`, the `stopped_by` of the newest ① run: INT-T02), and
+// `aiStateOfView` passes it on. The queue row does not: it carries no `stopped_by`, so a row's `unavailable`
+// names no reason, and the alert page is where it is worded.
 const UNAVAILABLE: AiState = { kind: "unavailable", stoppedBy: null };
 
 /**
@@ -58,7 +59,9 @@ export function aiStateOfRow(row: QueueRow): AiState {
 /**
  * The state of the ① column of the alert page, from `view.suggestion` the same way. A decided alert is
  * `decided` first (what ① said, if anything, is evaluation material once a person has decided); an
- * undecided one follows the row's rules, the key being `suggestion`.
+ * undecided one follows the row's rules, the key being `suggestion`. `unavailable` carries the view's
+ * `llm_stopped_by` (the reason, null when the view has none). It is read only after the blind check, and the
+ * server drops it from a blind head, so no reason ever reaches the hidden state.
  */
 export function aiStateOfView(view: AlertView): AiState {
   const suggestion = view.suggestion;
@@ -78,6 +81,9 @@ export function aiStateOfView(view: AlertView): AiState {
       forced: suggestion.gate?.forced === true,
     };
   }
-  if (view.triage_status === "unavailable") return UNAVAILABLE;
+  if (view.triage_status === "unavailable") {
+    const stoppedBy = view.llm_stopped_by;
+    return typeof stoppedBy === "string" ? { kind: "unavailable", stoppedBy } : UNAVAILABLE;
+  }
   return { kind: "pending" };
 }

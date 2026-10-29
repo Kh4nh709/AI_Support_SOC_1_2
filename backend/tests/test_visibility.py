@@ -110,6 +110,7 @@ def _fixture_view(source: str = "replay") -> dict[str, Any]:
         "confidence": "high",
         "gate_forced": False,
         "triage_status": "ready",
+        "llm_stopped_by": "unavailable",  # why ① gave up (INT-T02): "① stopped" is as telling as "① ran"
         # --- the rest of LABELING_DENYLIST: dropped in labeling mode only -------
         "suggestion_visible": False,
         "source": source,
@@ -195,6 +196,7 @@ _ANALYST_BLIND_SURVIVORS = _ALL_KEYS - frozenset(
         "run_id",
         "triaged_count",  # R17 / DEC-101: ① is the only first-time writer of `triaged_count`,
         "needs_retriage",  # and `needs_retriage` is computed from it — both say "① ran"
+        "llm_stopped_by",  # INT-T02: the reason ① gave up says that it ran
     }
 )
 _LABELING_SURVIVORS = frozenset(
@@ -275,6 +277,7 @@ def test_constant_sets_are_the_card_verbatim():
         "run_id",  # DEC-101
         "triaged_count",  # R17 / DEC-101
         "needs_retriage",  # R17 / DEC-101
+        "llm_stopped_by",  # INT-T02 / DEC-211 R6: why ① gave up
     }
     assert ANALYST_HIDE <= LABELING_DENYLIST
     assert {"triaged_count", "needs_retriage"} <= LABELING_DENYLIST  # DEC-101

@@ -243,7 +243,7 @@ export type SoarBlob = {
  * value the database may leave empty is `| null`.
  *
  * The blind arm (DEC-101) is decided by the server: on a blind, undecided head, `suggestion` (and with it
- * `triage_status`, `run_id`, `triaged_count`, `needs_retriage`) is ABSENT, not null, and
+ * `triage_status`, `run_id`, `triaged_count`, `needs_retriage`, `llm_stopped_by`) is ABSENT, not null, and
  * `suggestion_visible` is false. The page never infers anything about ① from any other key.
  *
  * A duplicate resolves to its head: `alert_id` is the head's id, and `requested_alert_id` the one asked for.
@@ -254,6 +254,12 @@ export type AlertView = {
   suggestion_visible: boolean;
   triage_status?: string | null;
   suggestion?: Suggestion | null;
+  /**
+   * `llm_runs.stopped_by` of the newest ① proposer run (INT-T02, DEC-211 R6): `unavailable` for a provider
+   * refusal (a 402), `cap`, `schema`, `transient`, `linter`; null when that run did not stop or there is none.
+   * It goes with `suggestion`: absent on a blind, undecided head. Only `aiStateOfView` reads it.
+   */
+  llm_stopped_by?: string | null;
 
   requested_alert_id?: string;
   duplicate_of?: string | null;

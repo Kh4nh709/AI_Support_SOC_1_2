@@ -209,8 +209,8 @@ function Message({
 }
 
 /**
- * ① gave up. The reason is worded when one is given; no view carries one today (`stopped_by` is not in the
- * queue or the alert view), so the column passes none. It is exported to be drawn on its own.
+ * ① gave up. The reason is worded when one is given: the alert view carries it (`llm_stopped_by`, INT-T02),
+ * so the column passes it on; a view with none names none. It is exported to be drawn on its own.
  */
 export function Unavailable({ stoppedBy }: { stoppedBy: string | null }) {
   return (

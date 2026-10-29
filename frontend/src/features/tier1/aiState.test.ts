@@ -99,7 +99,7 @@ describe("aiStateOfRow", () => {
     expect(aiStateOfRow(blindRow({ status: "closed_fp" })).kind).toBe("pending");
   });
 
-  it("is unavailable when ① gave up (triage_status unavailable, no action)", () => {
+  it("is unavailable when ① gave up (triage_status unavailable, no action), with no reason: the queue row carries none (INT-T02)", () => {
     expect(
       aiStateOfRow(row({ suggested_action: null, confidence: null, triage_status: "unavailable" })),
     ).toEqual({ kind: "unavailable", stoppedBy: null });
@@ -184,6 +184,57 @@ describe("aiStateOfView", () => {
   it("is pending on the visible arm with no result", () => {
     expect(aiStateOfView(view({ suggestion: null, triage_status: "pending" }))).toEqual({
       kind: "pending",
+    });
+  });
+
+  // INT-T02 / DEC-211 R6: the alert view carries `llm_stopped_by`, the `stopped_by` of the newest ① run.
+  describe("the reason ① stopped (llm_stopped_by)", () => {
+    const gaveUp = (over: Partial<AlertView> = {}) =>
+      view({ suggestion: null, triage_status: "unavailable", ...over });
+
+    it("is passed to unavailable, so a provider 402 can be worded", () => {
+      expect(aiStateOfView(gaveUp({ llm_stopped_by: "unavailable" }))).toEqual({
+        kind: "unavailable",
+        stoppedBy: "unavailable",
+      });
+      expect(aiStateOfView(gaveUp({ llm_stopped_by: "cap" }))).toEqual({
+        kind: "unavailable",
+        stoppedBy: "cap",
+      });
+    });
+
+    it("is null when the view says none, null, or not a string", () => {
+      expect(aiStateOfView(gaveUp())).toEqual({ kind: "unavailable", stoppedBy: null });
+      expect(aiStateOfView(gaveUp({ llm_stopped_by: null }))).toEqual({
+        kind: "unavailable",
+        stoppedBy: null,
+      });
+      const odd = gaveUp({ llm_stopped_by: 402 as unknown as string });
+      expect(aiStateOfView(odd)).toEqual({ kind: "unavailable", stoppedBy: null });
+    });
+
+    it("is read only where the state is unavailable: not by a pending, ready or decided view", () => {
+      expect(
+        aiStateOfView(view({ suggestion: null, triage_status: "pending", llm_stopped_by: "cap" })),
+      ).toEqual({ kind: "pending" });
+      expect(aiStateOfView(view({ llm_stopped_by: "cap" }))).toMatchObject({ kind: "ready" });
+      expect(aiStateOfView(view({ status: "closed_fp", llm_stopped_by: "cap" }))).toEqual({
+        kind: "decided",
+        action: "false_positive",
+        confidence: "high",
+      });
+    });
+
+    it("never turns a blind, undecided head into anything but hidden, whatever the view carries", () => {
+      // The server drops the key (visibility.ANALYST_HIDE) and the arm is read first: a view that did carry
+      // it, with a triage status of unavailable besides, is still hidden and shows no reason.
+      const blind = view({
+        suggestion_visible: false,
+        triage_status: "unavailable",
+        llm_stopped_by: "unavailable",
+      });
+      delete blind.suggestion;
+      expect(aiStateOfView(blind)).toEqual({ kind: "hidden" });
     });
   });
 });

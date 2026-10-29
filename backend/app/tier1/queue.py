@@ -15,7 +15,9 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
 - `get_alert_view` — everything the detail page (P4-T05) and the labelling page (P6-T02)
   render: the head, its targeted accounts, the ±2 h correlation *now*, the playbook, the ①
   suggestion, the acknowledger's name, and (S3) `soar` — the SIEM's SOAR enrichment as one
-  display blob (`tier1/soar_view.py`), `None` for an alert that carries none.
+  display blob (`tier1/soar_view.py`), `None` for an alert that carries none. INT-T02 adds
+  `llm_stopped_by`: why the newest ① run gave up, a `visibility.ANALYST_HIDE` key (`latest_stopped_by`
+  below, the one-column sibling of `latest_suggestion`).
 - `latest_suggestion` — **the one place in P4 that reads `llm_runs`** (planning decision
   5). The row shape is P3-T10's and may still move; every read here is `.get`-tolerant,
   and this function is where to follow it. `latest_suggestions` is the same read for many
@@ -200,6 +202,28 @@ def latest_suggestion(conn: psycopg.Connection, alert_id: str) -> Suggestion | N
     if row is None:
         return None
     return _suggestion_of(*row)
+
+
+_STOPPED_BY_SQL = """
+    SELECT stopped_by
+    FROM llm_runs
+    WHERE subject_id = %s AND pipeline = 'triage' AND role = 'proposer'
+    ORDER BY created_at DESC, run_id DESC
+    LIMIT 1
+"""
+
+
+def latest_stopped_by(conn: psycopg.Connection, alert_id: str) -> str | None:
+    """`llm_runs.stopped_by` of the **same** run `latest_suggestion` reads (the newest `proposer`
+    triage run, ties by `run_id DESC`), or `None` when there is no run or it did not stop (a run with
+    a result writes none). The alert view's `llm_stopped_by` (INT-T02, DEC-211 R6): without it the
+    page can say only that ① ran and produced nothing, not that the provider refused (`unavailable`,
+    a 402), the monthly cap was spent (`cap`), the answer was malformed (`schema`) and so on. Like
+    `latest_suggestion` it applies no blind-branch rule: `visibility.strip` does, in the reader that
+    serves an analyst. A verifier row never counts, and an older run does not stand in for a newer
+    one."""
+    row = conn.execute(_STOPPED_BY_SQL, (alert_id,)).fetchone()
+    return None if row is None else row[0]
 
 
 _SUGGESTIONS_SQL = """
@@ -643,6 +667,9 @@ def get_alert_view(
 
     suggestion = latest_suggestion(conn, head_id)
     view["suggestion"] = suggestion.to_dict() if suggestion is not None else None
+    # Why the newest ① run stopped (INT-T02): added BEFORE the strip, so a blind, undecided head
+    # loses it with the other ① keys (`visibility.ANALYST_HIDE`), and the labelling page never has it.
+    view["llm_stopped_by"] = latest_stopped_by(conn, head_id)
 
     view["risk_band"] = risk_band(view.pop("risk_score"))
 

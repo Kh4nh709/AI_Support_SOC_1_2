@@ -641,6 +641,42 @@ describe("the ① column, from the state of the view", () => {
     renderPage();
     await loaded();
     expect(within(aiColumn()).getByText(S.ai1.unavailable)).toBeInTheDocument();
+    expect(within(aiColumn()).queryByText(S.ai1.stoppedByLabel)).not.toBeInTheDocument();
+  });
+
+  it("says why ① gave up when the view carries it: a provider 402 reads as the F6 label (INT-T02)", async () => {
+    views = {
+      a1: sparse({
+        triage_status: "unavailable",
+        llm_stopped_by: "unavailable",
+        description: "d",
+      }),
+    };
+    renderPage();
+    await loaded();
+    const column = within(aiColumn());
+    expect(column.getByText(S.ai1.unavailable)).toBeInTheDocument();
+    expect(column.getByText(S.ai1.stoppedByLabel)).toBeInTheDocument();
+    expect(
+      column.getByText("nhà cung cấp LLM từ chối (hết số dư / hạn mức, 402)"),
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing of why on the blind arm, whatever a view carries (INT-T02, DEC-101)", async () => {
+    views = {
+      a1: blind({
+        triage_status: "unavailable",
+        llm_stopped_by: "unavailable",
+        description: "d",
+      }),
+    };
+    renderPage();
+    await loaded();
+    const column = within(aiColumn());
+    expect(column.getByText(S.ai1.hidden)).toBeInTheDocument();
+    expect(column.queryByText(S.ai1.unavailable)).not.toBeInTheDocument();
+    expect(column.queryByText(S.ai1.stoppedByLabel)).not.toBeInTheDocument();
+    expect(aiColumn().textContent).not.toContain("402");
   });
 
   it("shows the comparison once the alert is decided", async () => {

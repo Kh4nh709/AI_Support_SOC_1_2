@@ -219,6 +219,21 @@ describe("hidden (the blind arm)", () => {
     expect(col.textContent).not.toContain(S.ai1.none);
   });
 
+  it("shows no reason ① stopped for a blind view, even one that (wrongly) carries llm_stopped_by", () => {
+    // The server drops the key from a blind, undecided head (visibility.ANALYST_HIDE); the column reads the
+    // arm first, so a stray reason is neither worded nor named: "gave up, because the provider refused" says ① ran.
+    const stray = blindView({ triage_status: "unavailable", llm_stopped_by: "unavailable" });
+    expect(aiStateOfView(stray)).toEqual({ kind: "hidden" });
+    renderColumn(stray);
+    const col = column();
+    expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
+    expect(col.textContent).not.toContain(S.ai1.unavailable);
+    expect(col.textContent).not.toContain(S.ai1.stoppedByLabel);
+    expect(col.textContent).not.toContain(S.ai1.stoppedBy.unavailable);
+    expect(col.textContent).not.toContain("402");
+    expect(within(col).queryByText("unavailable", { selector: "code" })).not.toBeInTheDocument();
+  });
+
   it("shows no verdict text for a blind view that still carries the other ① keys", () => {
     // Hidden is the server's word (no `suggestion` key, `suggestion_visible` false), read once by aiStateOfView;
     // the column shows none of ① whatever else the view happens to carry: a ready triage status, a fresh count.
@@ -272,7 +287,7 @@ describe("pending", () => {
 
 describe("unavailable", () => {
   it("says ① gave up, from the view's own triage status, and says nothing of a reason it was not told", () => {
-    // Neither the queue nor the alert view carries `stopped_by`, so from a view the reason is never known.
+    // A view with no `llm_stopped_by` (the run left none, or there was no run) names no reason.
     const gaveUp = view({ suggestion: null, triage_status: "unavailable" });
     expect(aiStateOfView(gaveUp)).toEqual({ kind: "unavailable", stoppedBy: null });
     renderColumn(gaveUp);
@@ -282,7 +297,42 @@ describe("unavailable", () => {
     expect(col.queryByText(S.ai1.stoppedByLabel)).not.toBeInTheDocument();
   });
 
-  // The wording of a reason is kept for the day the view carries one: the part is drawn on its own.
+  // INT-T02: the alert view carries the reason (`llm_stopped_by`), so the column words it.
+  it("words a provider 402 on the alert page: the F6 label and the code, from the view", () => {
+    const refused = view({
+      suggestion: null,
+      triage_status: "unavailable",
+      llm_stopped_by: "unavailable",
+    });
+    expect(aiStateOfView(refused)).toEqual({ kind: "unavailable", stoppedBy: "unavailable" });
+    renderColumn(refused);
+    const col = within(column());
+    expect(col.getByText(S.ai1.unavailable)).toBeInTheDocument();
+    expect(col.getByText(S.ai1.stoppedByLabel)).toBeInTheDocument();
+    expect(
+      col.getByText("nhà cung cấp LLM từ chối (hết số dư / hạn mức, 402)"),
+    ).toBeInTheDocument();
+    expect(col.getByText("unavailable", { selector: "code" })).toBeInTheDocument();
+  });
+
+  it("words the other reasons a run stops on, from the view", () => {
+    for (const code of ["cap", "schema", "transient", "linter"] as const) {
+      const { unmount } = renderColumn(
+        view({ suggestion: null, triage_status: "unavailable", llm_stopped_by: code }),
+      );
+      expect(within(column()).getByText(S.ai1.stoppedBy[code])).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("shows a code with no label as it came", () => {
+    renderColumn(
+      view({ suggestion: null, triage_status: "unavailable", llm_stopped_by: "cosmic_ray" }),
+    );
+    expect(within(column()).getByText("cosmic_ray")).toBeInTheDocument();
+  });
+
+  // The wording of a reason, drawn on its own.
   it("shows stopped_by with its label, and the code beside it", () => {
     render(<Unavailable stoppedBy="schema" />);
     expect(screen.getByText(S.ai1.stoppedBy.schema)).toBeInTheDocument();
