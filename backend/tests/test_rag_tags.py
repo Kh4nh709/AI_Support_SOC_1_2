@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from app.llm.builder import Category
 from app.rag import tags as tags_module
 from app.rag.tags import load_tags, tags_from_rule_groups
 
@@ -39,20 +40,34 @@ def test_the_vocabulary_names_what_the_samples_need() -> None:
     assert {"external_source", "blocked", "remediated", "test_activity"} <= vocabulary
 
 
+#: The behaviour tag of each category the resolver (`ingest/category.py`, `llm.builder.Category`) can give an
+#: alert. A category is a code; a tag is what an admin reads and a draft is found by, so the map is explicit:
+#: two categories may share a tag (`ssh_brute_force` and `brute_force`), none may lack one.
+CATEGORY_TAG = {
+    "ransomware": "ransomware",
+    "malware": "malware_detection",
+    "c2_beacon": "c2_beaconing",
+    "data_exfiltration": "data_exfiltration",
+    "privilege_escalation": "privilege_escalation",
+    "credential_access": "credential_access",
+    "ssh_brute_force": "brute_force",
+    "brute_force": "brute_force",
+    "web_attack": "web_attack",
+    "suspicious_login": "successful_login",
+    "recon": "reconnaissance",
+    "policy_violation": "policy_violation",
+}
+
+
 def test_every_category_of_the_resolver_has_a_behaviour_tag() -> None:
-    behaviours = {
-        "ransomware",
-        "malware_detection",
-        "c2_beaconing",
-        "data_exfiltration",
-        "privilege_escalation",
-        "brute_force",
-        "web_attack",
-        "reconnaissance",
-        "policy_violation",
-        "successful_login",
-    }
-    assert behaviours <= load_tags()
+    """INT-T01 F2: the list used to be a literal, so S1's `credential_access` went by unseen. It is derived
+    from `llm.builder.Category` now: a category added there without a line in `CATEGORY_TAG` fails the first
+    assert, and a line without its tag in `tags.yaml` fails the second."""
+    categories = {category.value for category in Category} - {"unknown"}
+    assert categories == set(
+        CATEGORY_TAG
+    ), "a new category needs a tag in tags.yaml and a line here"
+    assert set(CATEGORY_TAG.values()) <= load_tags()
 
 
 def test_the_file_is_what_load_tags_reads_and_every_tag_has_a_description() -> None:

@@ -19,6 +19,7 @@ tags:
   c2_beaconing: Regular calls to a command-and-control address.
   data_exfiltration: Data leaving the network to an outside destination.
   privilege_escalation: An account or process gaining rights it did not have.
+  credential_access: Credentials read from memory or the OS store, such as LSASS dumping (T1003).
   web_attack: An attack on a web application, such as SQL injection.
   policy_violation: Allowed by the system but against the organisation's rules.
   test_activity: A known harmless test, such as the EICAR file or a lab exercise.
