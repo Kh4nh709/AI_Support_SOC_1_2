@@ -458,6 +458,9 @@ export const S = {
     notFound: "Không tìm thấy case",
     summaryLabel: "Tóm tắt case",
     neverAnalysed: "chưa phân tích",
+    // The newest ② run ended without a result (INT-T02): its time, then this.
+    noResult: "không có kết quả",
+    analysedNoResult: (when: string) => `${when} — không có kết quả`,
     clusterCount: (n: number) => `${n} cụm`,
     timeline: "Diễn biến",
     // What the case detail itself records: its creation, each note, the last run of ② and the conclusion.
@@ -621,7 +624,7 @@ export const S = {
       // The range holds no alert: the cards say 0 and the chart is empty (AdminStates, "không có dữ liệu").
       emptyRange: (range: string) => `Không có alert nào trong ${range}`,
       emptyRangeHint:
-        'Các ô số hiện 0, biểu đồ để trống. Nếu chờ đợi có alert, xem dòng "Lần kéo alert gần nhất" ở khối Sức khoẻ.',
+        'Các ô số hiện 0, biểu đồ để trống. Nếu chờ đợi có alert, xem dòng "Alert gần nhất từ nguồn" ở khối Sức khoẻ.',
 
       // A block or a card whose own section failed (`errors[]`); the others are served.
       blockFailed: "Không tải được khối này",
@@ -697,7 +700,8 @@ export const S = {
         // The thirteen checks of `infra/health.py` (the last three are DEC-210's), in the canvas's words; a name
         // with no label is shown as it is.
         check: {
-          heartbeat: "Lần kéo alert gần nhất",
+          // Neutral on purpose (INT-T02): with the pull off the check judges the last alert the webhook took, not a pull.
+          heartbeat: "Alert gần nhất từ nguồn",
           intake_backlog: "Alert chờ nạp",
           job_backlog: "Job đang chờ trong worker",
           llm_null_ratio: "Lượt gọi model không có kết quả",

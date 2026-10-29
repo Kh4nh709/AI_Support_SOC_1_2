@@ -14,6 +14,7 @@ card reads.
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -434,6 +435,122 @@ _HEAD_KEYS_BEFORE = {
     "status",
 }
 _NOTE_KEYS_BEFORE = {"note_id", "case_id", "author_id", "body", "created_at"}
+
+
+# ---------------------------------------------------------------------------
+# INT-T02 item 5a — `last_run`: the newest ② run, so "Phân tích gần nhất" is not "chưa phân tích"
+# after a run that stopped (`cases.last_analyzed_at` is written only by a run with a result)
+# ---------------------------------------------------------------------------
+
+
+def _last_run(body: dict) -> tuple[datetime, bool]:
+    """`(created_at, has_result)` of `body["last_run"]`, which has exactly these two keys."""
+    run = body["last_run"]
+    assert set(run) == {"created_at", "has_result"}
+    return _instant(run["created_at"]), run["has_result"]
+
+
+def _insert_investigate_run(
+    conn: psycopg.Connection,
+    case_id: str,
+    *,
+    created_at: datetime,
+    result: dict | None = None,
+    stopped_by: str | None = None,
+) -> None:
+    conn.execute(
+        "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, role, system_prompt, "
+        "user_message, result, stopped_by, created_at) VALUES (gen_random_uuid(), 'investigate', "
+        "'case', %s, 'investigator', 's', 'u', %s::jsonb, %s, %s)",
+        (case_id, json.dumps(result) if result is not None else None, stopped_by, created_at),
+    )
+
+
+@pytest.mark.db
+def test_a_case_never_analysed_has_no_last_run(client, db):
+    case_id = _make_case(db, client.user_id)
+
+    body = client.http.get(f"/api/tier2/cases/{case_id}").json()
+
+    assert body["last_run"] is None
+    assert body["last_analyzed_at"] is None
+
+
+@pytest.mark.db
+def test_a_run_that_stopped_is_the_last_run_though_last_analyzed_at_is_still_empty(client, db):
+    """The 402 of the owner's trial: ② ran, wrote a row with `stopped_by='permanent'` and no result,
+    and `cases.last_analyzed_at` stayed NULL. The field must not say the case was never analysed."""
+    case_id = _make_case(db, client.user_id)
+    _insert_investigate_run(
+        db, case_id, created_at=_T0 + timedelta(hours=1), stopped_by="permanent"
+    )
+
+    body = client.http.get(f"/api/tier2/cases/{case_id}").json()
+
+    assert body["last_analyzed_at"] is None  # unchanged: it still means "a run with a result"
+    assert _last_run(body) == (_T0 + timedelta(hours=1), False)
+
+
+@pytest.mark.db
+def test_a_run_with_a_result_is_the_last_run_with_a_result(client, db):
+    case_id = _make_case(db, client.user_id, last_analyzed_at=_T0 + timedelta(hours=1))
+    _insert_investigate_run(
+        db, case_id, created_at=_T0 + timedelta(hours=1), result={"summary": "s"}
+    )
+
+    body = client.http.get(f"/api/tier2/cases/{case_id}").json()
+
+    assert _last_run(body) == (_T0 + timedelta(hours=1), True)
+
+
+@pytest.mark.db
+def test_the_newest_run_wins_over_an_older_good_one_and_over_an_older_stopped_one(client, db):
+    case_id = _make_case(db, client.user_id, last_analyzed_at=_T0 + timedelta(hours=1))
+    _insert_investigate_run(db, case_id, created_at=_T0 + timedelta(hours=1), result={"s": 1})
+    _insert_investigate_run(db, case_id, created_at=_T0 + timedelta(hours=3), stopped_by="cap")
+    body = client.http.get(f"/api/tier2/cases/{case_id}").json()
+    assert _last_run(body) == (_T0 + timedelta(hours=3), False)
+
+    _insert_investigate_run(db, case_id, created_at=_T0 + timedelta(hours=5), result={"s": 2})
+    body = client.http.get(f"/api/tier2/cases/{case_id}").json()
+    assert _last_run(body) == (_T0 + timedelta(hours=5), True)
+
+
+@pytest.mark.db
+def test_only_this_cases_investigate_runs_count(client, db):
+    case_id = _make_case(db, client.user_id)
+    other = _make_case(db, client.user_id)
+    _insert_investigate_run(db, other, created_at=_T0 + timedelta(hours=9), stopped_by="permanent")
+    db.execute(  # a ① triage run whose subject_id happens to be this id is not ②
+        "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, role, system_prompt, "
+        "user_message, stopped_by, created_at) VALUES (gen_random_uuid(), 'triage', 'alert', %s, "
+        "'proposer', 's', 'u', 'cap', %s)",
+        (case_id, _T0 + timedelta(hours=9)),
+    )
+
+    body = client.http.get(f"/api/tier2/cases/{case_id}").json()
+
+    assert body["last_run"] is None
+
+
+@pytest.mark.db
+def test_ongoing_still_follows_last_analyzed_at_not_a_run_that_stopped(client, db):
+    """The new key changes what the field shows and nothing that is computed from the case: a
+    stopped run is no analysis, so growth after the case was created is still `ongoing`."""
+    u = client.user_id
+    case_id = _make_case(db, u, created_at=_T0)
+    head = _insert_alert(
+        db, status="escalated_tier2", case_id=case_id, last_seen_at=_T0 + timedelta(hours=1)
+    )
+    _add_head(db, case_id, head, u)
+    _insert_investigate_run(
+        db, case_id, created_at=_T0 + timedelta(hours=2), stopped_by="permanent"
+    )
+
+    body = client.http.get(f"/api/tier2/cases/{case_id}").json()
+
+    assert body["ongoing"] is True
+    assert body["last_run"]["has_result"] is False
 
 
 @pytest.mark.db

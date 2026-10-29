@@ -711,7 +711,7 @@ describe("a range with no alert (AdminStates)", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        'Các ô số hiện 0, biểu đồ để trống. Nếu chờ đợi có alert, xem dòng "Lần kéo alert gần nhất" ở khối Sức khoẻ.',
+        'Các ô số hiện 0, biểu đồ để trống. Nếu chờ đợi có alert, xem dòng "Alert gần nhất từ nguồn" ở khối Sức khoẻ.',
       ),
     ).toBeInTheDocument();
   });
@@ -1192,6 +1192,21 @@ describe("system health", () => {
     expect(valueOf(health, "Bản sao lưu gần nhất")).toBe("last backup 31.0 hours ago, over 36");
     expect(within(health).getAllByText(S.admin.overviewPage.health.failing)).toHaveLength(1);
     expect(within(health).getAllByText(S.admin.overviewPage.health.ok)).toHaveLength(1);
+  });
+
+  it("words the heartbeat check so that it fits both modes: the source's last alert, not a pull (INT-T02)", async () => {
+    // With the pull off (S7) the check judges the last alert the webhook took; "Lần kéo alert gần nhất"
+    // (the last pull) was wrong there. Both places that name the row say the same words.
+    const label = S.admin.overviewPage.health.check.heartbeat;
+    expect(label).toBe("Alert gần nhất từ nguồn");
+    expect(label).not.toMatch(/kéo|pull/i);
+    expect(S.admin.overviewPage.emptyRangeHint).toContain(`"${label}"`);
+    await renderLoaded({
+      overviews: [withHealth([check("heartbeat", true, "last alert 3 h ago")])],
+    });
+    const health = block("Sức khoẻ hệ thống");
+    expect(valueOf(health, "Alert gần nhất từ nguồn")).toBe("last alert 3 h ago");
+    expect(within(health).queryByText("Lần kéo alert gần nhất")).not.toBeInTheDocument();
   });
 
   it("shows the name of a failing check beside its label, the one health.alarm carries, and not that of a check that is fine", async () => {

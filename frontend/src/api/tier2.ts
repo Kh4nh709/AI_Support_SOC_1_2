@@ -51,6 +51,12 @@ export type CaseNote = {
   created_at: string;
 };
 
+/** The newest ② run of a case (`case_view.last_run`). */
+export type CaseLastRun = {
+  created_at: string;
+  has_result: boolean;
+};
+
 /** `GET /api/tier2/cases/{id}`; a conclusion (`POST .../conclude`) answers with the same shape. */
 export type CaseDetail = {
   case_id: string;
@@ -59,7 +65,14 @@ export type CaseDetail = {
   severity: string | null;
   created_by: string | null;
   created_at: string;
+  /** When a ② run WITH a result last finished; what `ongoing` and the timeline are counted from. */
   last_analyzed_at: string | null;
+  /**
+   * The newest ② run, whatever it did (INT-T02, DEC-211 R6): `has_result` is false for a run that stopped
+   * without one (a provider 402 is `permanent`), which leaves `last_analyzed_at` untouched. Null when ② has
+   * never run on the case. The summary's "Phân tích gần nhất" reads this.
+   */
+  last_run: CaseLastRun | null;
   concluded_by: string | null;
   concluded_at: string | null;
   conclusion_reason: string | null;

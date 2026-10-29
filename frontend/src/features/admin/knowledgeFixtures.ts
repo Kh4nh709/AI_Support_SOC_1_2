@@ -124,6 +124,7 @@ export function caseView(over: Partial<CaseDetail> = {}): CaseDetail {
     created_by: "u-1",
     created_at: "2026-10-25T01:00:00+00:00",
     last_analyzed_at: "2026-10-25T01:30:00+00:00",
+    last_run: { created_at: "2026-10-25T01:30:00+00:00", has_result: true },
     concluded_by: "u-2",
     concluded_at: "2026-10-25T02:00:00+00:00",
     conclusion_reason: "Hoạt động đã biết của đội giám sát",

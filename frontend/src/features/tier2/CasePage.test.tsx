@@ -70,6 +70,7 @@ const detail = (over: Record<string, unknown> = {}) => ({
   created_by: "u-1",
   created_at: "2026-09-26T04:14:00+00:00",
   last_analyzed_at: "2026-09-30T01:19:00+00:00",
+  last_run: { created_at: "2026-09-30T01:19:00+00:00", has_result: true },
   concluded_by: null,
   concluded_at: null,
   conclusion_reason: null,
@@ -130,10 +131,76 @@ describe("the summary", () => {
   });
 
   it("says 'chưa phân tích' for a case ② has not run on", async () => {
-    serve(detail({ last_analyzed_at: null }));
+    serve(detail({ last_analyzed_at: null, last_run: null }));
     renderCase();
     await page();
     expect(screen.getByText(S.case.neverAnalysed)).toBeInTheDocument();
+  });
+
+  // INT-T02: `last_analyzed_at` is written only by a run WITH a result, so a ② run that stopped (a provider
+  // 402 is `permanent`) left the field saying "chưa phân tích". `last_run` is the newest run, whatever it did.
+  describe("Phân tích gần nhất follows the newest ② run (last_run)", () => {
+    const summaryOf = () => screen.getByRole("region", { name: S.case.summaryLabel });
+
+    it("shows the time of a run that stopped, with 'không có kết quả', and not 'chưa phân tích'", async () => {
+      serve(
+        detail({
+          last_analyzed_at: null,
+          last_run: { created_at: "2026-09-30T01:19:00+00:00", has_result: false },
+        }),
+      );
+      renderCase();
+      await page();
+      expect(
+        within(summaryOf()).getByText("30/09/2026 08:19:00 — không có kết quả"),
+      ).toBeInTheDocument();
+      expect(S.case.noResult).toBe("không có kết quả");
+      expect(screen.queryByText(S.case.neverAnalysed)).not.toBeInTheDocument();
+    });
+
+    it("shows the time alone for a run with a result", async () => {
+      serve(detail({ last_run: { created_at: "2026-09-30T01:19:00+00:00", has_result: true } }));
+      renderCase();
+      await page();
+      expect(within(summaryOf()).getByText("30/09/2026 08:19:00")).toBeInTheDocument();
+      expect(summaryOf().textContent).not.toContain(S.case.noResult);
+    });
+
+    it("shows the NEWEST run when it stopped after an older one that had a result", async () => {
+      serve(
+        detail({
+          last_analyzed_at: "2026-09-29T01:19:00+00:00", // the older, good run
+          last_run: { created_at: "2026-09-30T03:30:00+00:00", has_result: false },
+        }),
+      );
+      renderCase();
+      await page();
+      const summary = within(summaryOf());
+      expect(summary.getByText("30/09/2026 10:30:00 — không có kết quả")).toBeInTheDocument();
+      expect(summary.queryByText("29/09/2026 08:19:00")).not.toBeInTheDocument();
+    });
+
+    it("falls back to last_analyzed_at for an answer that carries no last_run", async () => {
+      const old = detail();
+      delete (old as Record<string, unknown>).last_run;
+      serve(old);
+      renderCase();
+      await page();
+      expect(within(summaryOf()).getByText("30/09/2026 08:19:00")).toBeInTheDocument();
+    });
+
+    it("leaves the timeline to last_analyzed_at: a run that stopped is no analysis", async () => {
+      serve(
+        detail({
+          last_analyzed_at: null,
+          last_run: { created_at: "2026-09-30T01:19:00+00:00", has_result: false },
+        }),
+      );
+      renderCase();
+      await page();
+      const timeline = screen.getByRole("list", { name: S.case.timeline });
+      expect(within(timeline).queryByText(S.case.timelineAnalysed)).not.toBeInTheDocument();
+    });
   });
 
   it("says 'Không tìm thấy case' for a 404, with no retry, since a retry cannot succeed", async () => {
@@ -1007,9 +1074,15 @@ describe("when the analysis ends", () => {
         state.caseGets += 1;
         return HttpResponse.json(
           state.over
-            ? detail({ last_analyzed_at: ANALYSED_AT, ongoing: false, ongoing_last_seen: null })
+            ? detail({
+                last_analyzed_at: ANALYSED_AT,
+                last_run: { created_at: ANALYSED_AT, has_result: true },
+                ongoing: false,
+                ongoing_last_seen: null,
+              })
             : detail({
                 last_analyzed_at: null,
+                last_run: null,
                 ongoing: true,
                 ongoing_last_seen: "2026-09-30T02:59:00+00:00",
               }),
@@ -1143,7 +1216,12 @@ describe("when the analysis ends", () => {
     server.use(
       http.get(CASE_URL, () => {
         state.caseGets += 1;
-        return HttpResponse.json(detail({ last_analyzed_at: ANALYSED_AT }));
+        return HttpResponse.json(
+          detail({
+            last_analyzed_at: ANALYSED_AT,
+            last_run: { created_at: ANALYSED_AT, has_result: true },
+          }),
+        );
       }),
       http.get(`${CASE_URL}/investigation`, () => HttpResponse.json(DONE)),
     );

@@ -115,7 +115,8 @@ def case_detail(conn: psycopg.Connection, case_id: str) -> dict[str, Any] | None
     P10-T04: also the fields the case pages used to recompute — `concluded_by_name` and each
     note's `author_name` (one `case_view.usernames` read), each head's `raw_log`,
     `raw_log_truncated`, `risk_band` and `last_seen_at` (never `risk_score`), and `ongoing` /
-    `ongoing_last_seen` (`case_view.enrich_heads`' rule). Every earlier key is unchanged."""
+    `ongoing_last_seen` (`case_view.enrich_heads`' rule). Every earlier key is unchanged.
+    INT-T02 adds `last_run`: `{created_at, has_result}` of the newest ② run, or `None`."""
     row = conn.execute(
         f"SELECT {', '.join(_CASE_COLUMNS)} FROM cases WHERE case_id = %s",
         (case_id,),
@@ -133,6 +134,9 @@ def case_detail(conn: psycopg.Connection, case_id: str) -> dict[str, Any] | None
     case["notes"] = [dataclasses.asdict(note) for note in conclude.list_notes(conn, case_id)]
     since = case["last_analyzed_at"] or case["created_at"]
     ongoing_last_seen = case_view.enrich_heads(conn, case["heads"], since)
+    # INT-T02: the newest ② run, so the page can say a run ended without a result; `last_analyzed_at`
+    # (a run WITH a result) is unchanged and is what `since` and the timeline use.
+    case["last_run"] = case_view.last_run(conn, case_id)
     case["ongoing"] = ongoing_last_seen is not None
     case["ongoing_last_seen"] = ongoing_last_seen
     names = case_view.usernames(

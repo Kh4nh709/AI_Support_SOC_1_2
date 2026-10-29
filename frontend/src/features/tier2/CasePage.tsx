@@ -83,6 +83,23 @@ function ReadFailed({ error, reload }: { error: unknown; reload: () => Promise<u
   return <ErrorNotice message={S.common.unknownError} onRetry={() => void reload()} />;
 }
 
+/**
+ * The "Phân tích gần nhất" of the summary: the newest ② run's time, with "không có kết quả" when that run
+ * stopped without a result (INT-T02). `last_analyzed_at` only moves when a run has one, so reading it alone
+ * said "chưa phân tích" about a case ② had been run on. An answer with no `last_run` (an older server) is
+ * read as `last_analyzed_at` was.
+ */
+function lastAnalysedText(data: CaseDetail): string {
+  const run = data.last_run ?? null;
+  if (run !== null) {
+    const when = formatDateTime(run.created_at);
+    return run.has_result ? when : S.case.analysedNoResult(when);
+  }
+  return data.last_analyzed_at === null
+    ? S.case.neverAnalysed
+    : formatDateTime(data.last_analyzed_at);
+}
+
 export function Summary({ data }: { data: CaseDetail }) {
   return (
     <section aria-label={S.case.summaryLabel} className={`${PANEL} space-y-3`}>
@@ -94,11 +111,7 @@ export function Summary({ data }: { data: CaseDetail }) {
         <dt className="text-muted">{S.case.col.created}</dt>
         <dd>{formatDateTime(data.created_at)}</dd>
         <dt className="text-muted">{S.case.col.lastAnalysed}</dt>
-        <dd>
-          {data.last_analyzed_at === null
-            ? S.case.neverAnalysed
-            : formatDateTime(data.last_analyzed_at)}
-        </dd>
+        <dd>{lastAnalysedText(data)}</dd>
         <dt className="text-muted">{S.case.col.clusters}</dt>
         <dd>{S.case.clusterCount(data.heads.length)}</dd>
       </dl>
