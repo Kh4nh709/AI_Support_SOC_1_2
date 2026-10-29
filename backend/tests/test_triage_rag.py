@@ -35,7 +35,7 @@ from app.infra import config
 from app.infra.errors import TransientError
 from app.llm import builder as B
 from app.llm import triage as T
-from app.llm.adapter import LLMBudgetExceeded
+from app.llm.adapter import LLMBudgetExceeded, LLMUnavailable
 from app.llm.builder import KbLearnedLevel
 from app.rag.history import render_history
 from app.rag.lookup import PromptMaterial, latest_lookup
@@ -54,6 +54,7 @@ from tests.test_llm_triage import NONCE, _cfg, _inp
 from tests.test_triage_eval_switches import _snapshot
 from tests.test_triage_job import (
     _AlwaysOverBudget,
+    _AlwaysUnavailable,
     _enable_llm,
     _FailVerifyCall,
     _job,
@@ -1203,6 +1204,34 @@ def test_the_cap_row_carries_the_lookup_id(db, rag_on) -> None:
     run_triage_job(db, _job(alert_id), adapter=_AlwaysOverBudget())
     row = proposer_row(db, alert_id)
     assert row["stopped_by"] == "cap" and row["rag_lookup_id"] == lookup_id
+
+
+@pytest.mark.db
+def test_the_provider_402_row_carries_the_lookup_id(db, rag_on) -> None:
+    """INT-T01 (DEC-210 meets DEC-211 S8): every proposer row of a run whose prompt held the section names
+    the lookup, whatever stopped it. S8's `unavailable` branch was written beside P13's, on a branch that
+    never saw `rag_lookup_id`, and left it out."""
+    alert_id = _seed_alert(db)
+    lookup_id = put_lookup(db, alert_id, matches=[approved(db, LONG_A, "giong")])
+    run_triage_job(db, _job(alert_id), adapter=_AlwaysUnavailable())
+    row = proposer_row(db, alert_id)
+    assert row["stopped_by"] == "unavailable" and row["rag_lookup_id"] == lookup_id
+
+
+@pytest.mark.db
+def test_a_verifier_402_leaves_the_proposer_row_with_the_id_and_the_verifier_row_without(
+    db, rag_on
+) -> None:
+    alert_id = _seed_alert(db)
+    lookup_id = put_lookup(db, alert_id, matches=[approved(db, LONG_A, "giong")])
+    llm = _FailVerifyCall(
+        responses=[TRIAGE_V2_ESCALATE],
+        raises=LLMUnavailable("LLM provider unavailable (402): Insufficient Balance"),
+    )
+    run_triage_job(db, _job(alert_id), adapter=llm)
+    assert proposer_row(db, alert_id)["stopped_by"] == "unavailable"
+    assert proposer_row(db, alert_id)["rag_lookup_id"] == lookup_id
+    assert verifier_row(db, alert_id)["rag_lookup_id"] is None
 
 
 @pytest.mark.db

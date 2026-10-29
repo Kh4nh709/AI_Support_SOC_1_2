@@ -968,6 +968,7 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
             prompt_version=prompt_version(TRIAGE_TEMPLATE),
             cost_usd=None,
             stopped_by="unavailable",
+            rag_lookup_id=ev.rag_lookup_id,
         )
         _set_triage_status(conn, alert_id, "unavailable")
         return
@@ -1035,6 +1036,7 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
             cfg,
             ev.exception,
             stopped_by="unavailable",
+            rag_lookup_id=ev.rag_lookup_id,
         )
         return
 
