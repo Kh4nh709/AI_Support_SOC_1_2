@@ -1238,6 +1238,42 @@ def test_view_blind_undecided_hides_triaged_count_and_a_decision_brings_it_back(
 
 
 @pytest.mark.db
+def test_archiving_a_blind_head_does_not_reveal_what_the_model_said(db):
+    """INT-T03 / DEC-212, through the real `archive_before`: an archived head is no decision, so the
+    alert page still hides ① from it - the suggestion, the run, the triage state and the counts - on
+    the blind arm, whether it was queued or held (`tier1_active`). The visible arm keeps its view.
+    """
+    from datetime import UTC, timedelta
+
+    from app.domain.transitions import archive_before
+
+    _seed_user(db)
+    queued = _queued(db, suggestion_visible=False, risk_score=30)
+    held = _queued(db, suggestion_visible=False, risk_score=31)
+    acknowledge(db, held, USER_ID)
+    visible = _queued(db, suggestion_visible=True, risk_score=32)
+    for alert_id in (queued, held, visible):
+        _insert_run(db, alert_id)
+        _set(db, alert_id, triaged_count=1, triage_status="ready")
+
+    counts = archive_before(
+        db, before=datetime.now(UTC) + timedelta(hours=1), reason="DEC-212 test"
+    )
+    assert counts.by_status["queued_tier1"] >= 2 and counts.by_status["tier1_active"] >= 1
+
+    for alert_id in (queued, held):
+        view = get_alert_view(db, alert_id)
+        assert view is not None
+        assert view["status"] == "archived"
+        for key in ("suggestion", "triage_status", "triaged_count", "needs_retriage", "run_id"):
+            assert key not in view, (alert_id, key)
+        assert "false_positive" not in repr(view)  # what the stored ① run said
+    seen = get_alert_view(db, visible)
+    assert seen["status"] == "archived"
+    assert seen["suggestion"]["suggested_action"] == "false_positive"
+
+
+@pytest.mark.db
 def test_view_visible_arm_keeps_triaged_count(db):
     alert_id = _queued(db, suggestion_visible=True)
     _set(db, alert_id, triaged_count=1)

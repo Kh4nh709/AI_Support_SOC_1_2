@@ -35,11 +35,14 @@ from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
+from app.domain import transitions
 from app.domain.alert import Alert, compute_event_bucket_hash
 from app.infra.errors import PermanentError
 from app.ingest import dedup
 from psycopg import sql
 from psycopg.types.json import Json
+
+from tests.scratch_db import insert_user
 
 pytestmark = pytest.mark.db
 
@@ -58,9 +61,11 @@ KEY_AGENT = "web-01"
 #: the three human ones and `duplicate` also owe `sealed_at`
 #: (ck_alerts_h2_dong_boi_nguoi_phai_seal, ck_alerts_ban_sao_phai_seal_va_tro_goc).
 _TERMINAL = frozenset(
-    {"duplicate", "auto_closed", "closed_fp", "closed_benign", "closed_confirmed"}
+    {"duplicate", "auto_closed", "closed_fp", "closed_benign", "closed_confirmed", "archived"}
 )
-_SEALED_ON_INSERT = frozenset({"duplicate", "closed_fp", "closed_benign", "closed_confirmed"})
+_SEALED_ON_INSERT = frozenset(
+    {"duplicate", "closed_fp", "closed_benign", "closed_confirmed", "archived"}
+)
 
 
 def _insert_alert(conn, *, ts_sql=None, **overrides) -> str:
@@ -268,6 +273,61 @@ def test_goc_closed_fp_thi_khong_gop_mo_cum_moi(db):
 
 def test_goc_closed_confirmed_thi_khong_gop(db):
     _insert_alert(db, status="closed_confirmed", close_reason="analyst: confirmed")
+    assert dedup.find_open_cluster(db, _probe()) is None
+
+
+def test_goc_archived_thi_khong_gop(db):
+    """INT-T03 / DEC-212: an archived head is sealed (`archived` owes `closed_at` AND `sealed_at`), so it
+    is never an open cluster: the next alert of its key opens a fresh one, however recent the head was.
+    """
+    _insert_alert(db, status="archived", close_reason="DEC-212")
+    assert dedup.find_open_cluster(db, _probe()) is None
+
+
+@pytest.mark.parametrize("status", ["received", "queued_tier1", "tier1_active"])
+def test_a_head_archived_by_the_real_transition_stops_absorbing(db, status):
+    """The same through `archive_before`: each of these heads absorbs until it is archived."""
+    parent = _insert_alert(db, status=status)
+    found = dedup.find_open_cluster(db, _probe())
+    assert found is not None and found.alert_id == parent  # the control: it was open
+
+    transitions.archive_before(
+        db, before=datetime.now(UTC) + timedelta(hours=1), reason="DEC-212 test"
+    )
+
+    assert db.execute("SELECT status FROM alerts WHERE alert_id = %s", (parent,)).fetchone() == (
+        "archived",
+    )
+    assert dedup.find_open_cluster(db, _probe()) is None
+
+
+def test_a_head_of_an_archived_case_stops_absorbing(db):
+    """A head under Tier-2 investigation (`escalated_tier2`, unsealed by H3) keeps absorbing duplicates
+    (D-C5). Archiving its case seals it: the duplicates that keep coming must not be folded into a
+    case nobody reads."""
+    user = insert_user(db, "tier2")
+    parent = _insert_alert(db, status="escalated_tier2")
+    case_id = str(uuid.uuid4())
+    db.execute(
+        "INSERT INTO cases (case_id, title, status, severity, created_by) "
+        "VALUES (%s, 'int-t03', 'investigating', 'medium', %s)",
+        (case_id, user),
+    )
+    db.execute(
+        "INSERT INTO case_alerts (case_id, alert_id, added_by) VALUES (%s, %s, %s)",
+        (case_id, parent, user),
+    )
+    db.execute("UPDATE alerts SET case_id = %s WHERE alert_id = %s", (case_id, parent))
+    found = dedup.find_open_cluster(db, _probe())
+    assert found is not None and found.alert_id == parent  # the control: it was open
+
+    transitions.archive_before(
+        db, before=datetime.now(UTC) + timedelta(hours=1), reason="DEC-212 test"
+    )
+
+    assert db.execute("SELECT status FROM cases WHERE case_id = %s", (case_id,)).fetchone() == (
+        "archived",
+    )
     assert dedup.find_open_cluster(db, _probe()) is None
 
 

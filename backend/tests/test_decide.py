@@ -329,6 +329,48 @@ def test_decide_already_decided_names_decider(db) -> None:
     assert body["decided_at"] is not None
 
 
+def _archive_everything(db) -> None:
+    """The real `archive_before` over every row of the transaction (a cutoff in the future)."""
+    from datetime import UTC, datetime, timedelta
+
+    transitions.archive_before(
+        db, before=datetime.now(UTC) + timedelta(hours=1), reason="DEC-212 test"
+    )
+
+
+@pytest.mark.parametrize("held", [False, True])
+def test_an_archived_alert_is_not_active_and_nobody_decided_it(db, held) -> None:
+    """INT-T03 / DEC-212: acknowledge, decide, escalate and reopen on an archived alert are refused as
+    `not_active`, and the 409 body must not read the archive as a decision: no `decided_by` (the
+    holder, when it was held, did not decide it), no `decision`, no `decided_at`."""
+    _seed_user(db, USER_ID, USER_NAME)
+    alert_id = _active(db) if held else _queued(db)
+    _archive_everything(db)
+    assert _status(db, alert_id) == "archived"
+    cases = db.execute("SELECT count(*) FROM cases").fetchone()[0]
+
+    attempts = (
+        lambda: acknowledge(db, alert_id, _actor(OTHER_USER_ID)),
+        lambda: decide(
+            db, alert_id, _actor(USER_ID), decision="benign", reason="x", seen_occurrence_count=1
+        ),
+        lambda: escalate(db, alert_id, _actor(USER_ID), title="t", severity="high"),
+        lambda: reopen(db, alert_id, _actor(USER_ID), reason="x"),
+    )
+    expected_kind = ("not_active", "not_active", "not_active", "not_reopenable")
+    for attempt, kind in zip(attempts, expected_kind, strict=True):
+        with pytest.raises(DecisionConflict) as excinfo:
+            attempt()
+        body = excinfo.value.body
+        assert body["kind"] == kind
+        assert body["status"] == "archived"
+        assert body["decided_by"] is None
+        assert body["decision"] is None
+        assert body["decided_at"] is None
+    assert db.execute("SELECT count(*) FROM cases").fetchone()[0] == cases  # no case was opened
+    assert _status(db, alert_id) == "archived"
+
+
 def test_decide_payload_has_eight_keys(db) -> None:
     _seed_user(db, USER_ID, USER_NAME)
     head = _active(db)

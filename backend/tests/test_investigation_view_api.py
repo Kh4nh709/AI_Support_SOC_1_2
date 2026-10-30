@@ -559,6 +559,7 @@ def test_a_run_without_a_recorded_snapshot_has_no_comparison(client, db):
         ("concluded_fp", False),
         ("concluded_policy_violation", False),
         ("confirmed_incident", False),
+        ("archived", False),  # INT-T03 / DEC-212: set aside by the archive, never active
     ],
 )
 def test_case_open_follows_the_case_status(client, db, status, open_):

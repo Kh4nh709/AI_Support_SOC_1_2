@@ -106,7 +106,9 @@ def _conflict_body(
     if row is None:
         return body
     status, occurrence_count, acknowledged_by, closed_at, _close_reason, _case_id = row
-    decided = closed_at is not None
+    # `archived` (INT-T03, DEC-212) has a `closed_at` and may have an `acknowledged_by`, and is nobody's
+    # decision: the holder did not decide it. It is "not active", with no decider, decision or time.
+    decided = closed_at is not None and status != "archived"
     acknowledged_by_name = _display_name(conn, acknowledged_by)
     body["occurrence_count"] = occurrence_count
     if seen_occurrence_count is not None:
@@ -120,7 +122,7 @@ def _conflict_body(
     # bypasses `tier1/decide.py` entirely.
     body["decided_by"] = acknowledged_by_name if decided else None
     body["decision"] = status if decided else None
-    body["decided_at"] = closed_at.isoformat() if closed_at is not None else None
+    body["decided_at"] = closed_at.isoformat() if decided else None
     body["acknowledged_by"] = acknowledged_by_name
     return body
 
@@ -211,7 +213,11 @@ def decide(
             raise NotFound(f"alert_id={alert_id!r} does not exist") from None
         status, closed_at = row[0], row[3]
         if status != "tier1_active":
-            kind = "already_decided" if closed_at is not None else "not_active"
+            kind = (
+                "already_decided"
+                if closed_at is not None and status != "archived"
+                else "not_active"
+            )
         else:
             kind = "cluster_grew"
         raise DecisionConflict(

@@ -18,6 +18,9 @@ from collections.abc import Mapping
 from typing import Any, Literal
 
 #: Once an alert is here, the ① verdict may be shown to everyone (planning decision 7).
+#: `archived` (INT-T03, DEC-212: the old queue closed out without review) is deliberately NOT here:
+#: nobody decided that alert, so there is no decision for the verdict to be evaluation material of, and
+#: archiving a blind head must not reveal what ① said about it. It stays hidden like `queued_tier1`.
 SHOW_STATES: frozenset[str] = frozenset(
     {"closed_fp", "closed_benign", "closed_confirmed", "escalated_tier2", "auto_closed"}
 )

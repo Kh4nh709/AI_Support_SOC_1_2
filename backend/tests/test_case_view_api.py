@@ -404,6 +404,76 @@ def test_ongoing_false_for_a_concluded_case_whose_head_grew(client, db):
     assert body["ongoing_last_seen"] is None
 
 
+def _archived_case(db, user_id: str, *, title: str = "archived") -> tuple[str, str]:
+    """A case as `transitions.archive_before` leaves it (DEC-212): `archived`, a moment and a reason,
+    nobody who concluded it; its one head `archived` too, sealed. Returns `(case_id, head_id)`."""
+    case_id = _make_case(
+        db,
+        user_id,
+        title=title,
+        status="archived",
+        created_at=_T0,
+        concluded_at=_T0 + timedelta(hours=3),
+        conclusion_reason="DEC-212",
+    )
+    head = _insert_alert(
+        db,
+        status="archived",
+        case_id=case_id,
+        closed_at=_T0 + timedelta(hours=3),
+        sealed_at=_T0 + timedelta(hours=3),
+        last_seen_at=_T0 + timedelta(hours=1),
+    )
+    _add_head(db, case_id, head, user_id)
+    return case_id, head
+
+
+@pytest.mark.db
+def test_an_archived_case_is_shown_as_closed_with_nobody_who_concluded_it(client, db):
+    """INT-T03 / DEC-212: the case page of an archived case says `archived`, has no `concluded_by` and
+    no name for one, is not `ongoing` (its head is archived, and a head that grew after the archive is
+    a new alert in a new cluster), and its heads are `archived` too."""
+    case_id, head = _archived_case(db, client.user_id)
+
+    resp = client.http.get(f"/api/tier2/cases/{case_id}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "archived"
+    assert body["concluded_by"] is None and body["concluded_by_name"] is None
+    assert body["concluded_at"] is not None and body["conclusion_reason"] == "DEC-212"
+    assert body["ongoing"] is False and body["ongoing_last_seen"] is None
+    assert [(h["alert_id"], h["status"]) for h in body["heads"]] == [(head, "archived")]
+
+
+@pytest.mark.db
+def test_the_case_list_puts_an_archived_case_with_the_closed_ones_never_with_the_active(client, db):
+    u = client.user_id
+    older_active = _make_case(db, u, title="older active", created_at=_T0)
+    archived, _head = _archived_case(db, u)
+    concluded = _make_case(
+        db,
+        u,
+        title="concluded",
+        status="concluded_fp",
+        created_at=_T0 + timedelta(hours=2),
+        concluded_at=_T0 + timedelta(hours=3),
+        concluded_by=u,
+        conclusion_reason="r",
+    )
+    newer_active = _make_case(db, u, title="newer active", created_at=_T0 + timedelta(hours=4))
+
+    rows = client.http.get("/api/tier2/cases").json()
+
+    ids = [row["case_id"] for row in rows]
+    # `investigating` first, newest first; then everything else, newest first
+    assert ids.index(newer_active) < ids.index(older_active) < ids.index(concluded)
+    assert ids.index(older_active) < ids.index(archived)
+    by_id = {row["case_id"]: row for row in rows}
+    assert by_id[archived]["status"] == "archived"
+    assert by_id[archived]["cluster_count"] == 1
+
+
 # ---------------------------------------------------------------------------
 # existing keys are untouched; the conclude response carries the new ones too
 # ---------------------------------------------------------------------------

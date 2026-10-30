@@ -33,7 +33,8 @@ from app.tier1.visibility import (
 _T = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC)
 
 # docs/Schema/schema.sql ck_alerts_status, verbatim (the full closed set —
-# `test_is_decided` walks all ten; the matrix uses the six the card names).
+# `test_is_decided` walks all eleven, `archived` of 021 / DEC-212 last; the matrix uses the six the
+# card names).
 _ALL_STATUSES = (
     "received",
     "duplicate",
@@ -45,6 +46,7 @@ _ALL_STATUSES = (
     "closed_fp",
     "closed_benign",
     "closed_confirmed",
+    "archived",
 )
 _MATRIX_STATUSES = (
     "queued_tier1",
@@ -469,6 +471,42 @@ def test_analyst_mode_keeps_the_retriage_counts_on_the_visible_arm_and_once_deci
 
     assert out["triaged_count"] == 1
     assert out["needs_retriage"] is False
+
+
+def test_an_archived_head_is_not_decided_and_stays_blind():
+    """INT-T03 / DEC-212: archiving the old queue must not reveal ① on a head from the blind arm. An
+    archived alert is not "decided" - nobody decided it - so it is outside `SHOW_STATES`, and the
+    analyst's view of it loses exactly what a queued blind head loses."""
+    assert "archived" not in SHOW_STATES
+    assert is_decided("archived") is False
+    view = _fixture_view()
+    view["status"] = "archived"
+    view["suggestion_visible"] = False
+
+    out = strip(view, status="archived", suggestion_visible=False, mode="analyst")
+
+    assert frozenset(out) == _ANALYST_BLIND_SURVIVORS
+    for hidden in ANALYST_HIDE:
+        assert hidden not in out, hidden
+
+
+def test_an_archived_head_of_the_visible_arm_loses_nothing():
+    view = _fixture_view()
+    view["status"] = "archived"
+    view["suggestion_visible"] = True
+
+    out = strip(view, status="archived", suggestion_visible=True, mode="analyst")
+
+    assert out == view  # the visible arm saw ① while the alert was queued, and still does
+
+
+def test_the_labelling_page_scrubs_an_archived_alert_like_any_other():
+    view = _fixture_view()
+    view["status"] = "archived"
+
+    out = strip(view, status="archived", suggestion_visible=False, mode="labeling")
+
+    assert frozenset(out) == _LABELING_SURVIVORS
 
 
 def test_is_decided():

@@ -365,6 +365,28 @@ def test_conclude_route_409_when_already_concluded(client, db):
     assert detail["concluded_by"] == u
 
 
+def test_conclude_route_409_when_the_case_was_archived(client, db):
+    """INT-T03 / DEC-212: an archived case cannot be concluded - nothing moves it back. The 409 names
+    the status and, as nobody concluded it, no `concluded_by`."""
+    u = client.user_id
+    case_id = _make_case(
+        db,
+        u,
+        status="archived",
+        concluded_at=_PAST,
+        concluded_by=None,
+        conclusion_reason="DEC-212",
+    )
+
+    resp = client.http.post(
+        f"/api/tier2/cases/{case_id}/conclude",
+        json={"conclusion": "confirmed_incident", "reason": "x"},
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {"status": "archived"}
+
+
 def test_conclude_route_422_on_empty_reason(client, db):
     case_id = _make_case(db, client.user_id)
     resp = client.http.post(
