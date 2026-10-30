@@ -1,9 +1,9 @@
 """The single _apply() that changes alert/case status and writes its audit event atomically.
 
-The only module that writes `alerts.status` / `cases.status` (G2). Eight public
+The only module that writes `alerts.status` / `cases.status` (G2). Nine public
 functions, each one business event: `open_alert`, `start_enrichment`,
 `finish_enrichment`, `acknowledge`, `decide`, `escalate`, `reopen`,
-`conclude_case`. Every guard lives in an `UPDATE ... WHERE status = ANY(from)`
+`conclude_case` and, since DEC-212, `archive_before`. Every guard lives in an `UPDATE ... WHERE status = ANY(from)`
 (never a prior bare `SELECT`, so two concurrent callers cannot both pass a
 guard read from a stale row) and every write is followed by its audit event in
 the same transaction — the caller owns `BEGIN`/`COMMIT` (P2-T10, P4). The only
@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import dataclasses
 import uuid
+from datetime import datetime
 from typing import Literal
 
 import psycopg
@@ -693,3 +694,160 @@ def conclude_case(
         # `rag.subject.Subject("case", id).key` spells it (`parse_subject` reads a case id in lower
         # case).
         enqueue(conn, "knowledge_draft", f"case:{str(case_id).lower()}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DEC-212 · archive the old queue
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: The queue heads `archive_before` sets aside: the statuses an alert has before anyone has decided it.
+_ARCHIVE_HEAD_STATUSES: tuple[str, ...] = ("received", "enriching", "queued_tier1", "tier1_active")
+#: The audit payload's `decision`: the Owner ruling this transition carries out.
+ARCHIVE_DECISION = "DEC-212"
+_ARCHIVE_REASON_MAX = 500
+
+
+@dataclasses.dataclass(frozen=True)
+class ArchiveCounts:
+    """What one `archive_before` run archived: the alerts per status they had before (`received`,
+    `enriching`, `queued_tier1`, `tier1_active`, and `escalated_tier2` for the alerts of an archived case;
+    all five keys are always there, 0 where nothing was archived), the cases, and the oldest and newest
+    `received_at` among the archived alerts (None when there were none)."""
+
+    by_status: dict[str, int]
+    cases: int
+    oldest_received_at: datetime | None
+    newest_received_at: datetime | None
+
+    @property
+    def alerts(self) -> int:
+        return sum(self.by_status.values())
+
+
+def _archive_payload(before: datetime, reason: str, from_status: str, **extra: str) -> dict:
+    return {
+        "reason": reason,
+        "before": before.isoformat(),
+        "from_status": from_status,
+        "decision": ARCHIVE_DECISION,
+        **extra,
+    }
+
+
+def archive_before(conn: psycopg.Connection, *, before: datetime, reason: str) -> ArchiveCounts:
+    """DEC-212 - close out, without review, everything that arrived before `before`: the Owner's fresh
+    start. In the caller's transaction (it owns `BEGIN`/`COMMIT`, and a dry run is a rollback).
+
+    Three steps, in this order:
+
+    1. **Cases.** `investigating` and `created_at < before` become `archived` (`concluded_at = now()`,
+       `conclusion_reason = reason`, `concluded_by` NULL: nobody concluded them).
+    2. **Their alerts.** The `escalated_tier2` alerts of those cases become `archived`.
+    3. **The queue heads.** `duplicate_of IS NULL`, status `received`, `enriching`, `queued_tier1` or
+       `tier1_active`, and `received_at < before`, become `archived`.
+
+    An archived alert has `closed_at = now()`, `sealed_at = now()` and `close_reason = reason`; every other
+    column (`case_id`, `acknowledged_by`, `triage_status`, ...) stays. A `duplicate` row is already sealed
+    and is not touched; neither is anything closed by a person or a rule (`closed_*`, `auto_closed`), a
+    concluded case, or anything at or after `before`.
+
+    Not a decision. The status is `archived`, never `closed_benign`: `rag/history.py`, the blind arm's
+    reveal and the evaluation and agreement views read `closed_*` as an analyst's decision, and this is
+    not one. Hence no `tier1.decided`, no `tier2.concluded`, no `label.created`, and no job of any kind
+    (no `knowledge_draft`, no `rag_lookup`, no `triage`): one `alert.archived` per alert and one
+    `case.archived` per case, `actor_role='system'`, no actor.
+
+    Concurrency. Each step takes the rows `FOR UPDATE` and its `UPDATE` repeats the status condition. A
+    row an analyst changed meanwhile (the SELECT waits for the analyst's commit and then re-reads the
+    row) no longer matches and is skipped, never forced. Idempotent: a second run archives 0.
+
+    `before` must carry a UTC offset (a naive one would be read in the session's time zone), and `reason`
+    is 1-500 characters once stripped."""
+    if before.tzinfo is None or before.utcoffset() is None:
+        raise ValueError("before: needs a UTC offset (e.g. 2026-10-30T20:15:00+07:00)")
+    reason = reason.strip()
+    if not 1 <= len(reason) <= _ARCHIVE_REASON_MAX:
+        raise ValueError(f"reason: must be 1-{_ARCHIVE_REASON_MAX} characters")
+
+    # 1 · cases first. `FOR UPDATE` waits for a concurrent conclude and then re-checks the WHERE.
+    locked_cases = [
+        row[0]
+        for row in conn.execute(
+            "SELECT case_id FROM cases WHERE status = 'investigating' AND created_at < %s "
+            "ORDER BY case_id FOR UPDATE",
+            (before,),
+        ).fetchall()
+    ]
+    archived_cases: list[uuid.UUID] = []
+    if locked_cases:
+        archived_cases = [
+            row[0]
+            for row in conn.execute(
+                "UPDATE cases SET status = 'archived', concluded_at = now(), "
+                "conclusion_reason = %s, concluded_by = NULL "
+                "WHERE case_id = ANY(%s) AND status = 'investigating' RETURNING case_id",
+                (reason, locked_cases),
+            ).fetchall()
+        ]
+    for case_id in sorted(archived_cases, key=str):
+        write_event(
+            conn,
+            "case.archived",
+            str(case_id),
+            "system",
+            payload=_archive_payload(before, reason, "investigating"),
+        )
+
+    # 2 + 3 · the alerts: the archived cases' escalated alerts, then the queue heads.
+    by_status = dict.fromkeys((*_ARCHIVE_HEAD_STATUSES, "escalated_tier2"), 0)
+    received: list[datetime] = []
+
+    def archive_alerts(select_sql: str, params: tuple, statuses: tuple[str, ...]) -> None:
+        locked = conn.execute(select_sql, params).fetchall()
+        if not locked:
+            return
+        moved = {
+            row[0]
+            for row in conn.execute(
+                "UPDATE alerts SET status = 'archived', closed_at = now(), sealed_at = now(), "
+                "close_reason = %s WHERE alert_id = ANY(%s) AND status = ANY(%s) "
+                "AND duplicate_of IS NULL RETURNING alert_id",
+                (reason, [row[0] for row in locked], list(statuses)),
+            ).fetchall()
+        }
+        for alert_id, from_status, case_id, received_at in locked:
+            if alert_id not in moved:
+                continue
+            extra = {"case_id": str(case_id)} if case_id is not None else {}
+            write_event(
+                conn,
+                "alert.archived",
+                alert_id,
+                "system",
+                payload=_archive_payload(before, reason, from_status, **extra),
+            )
+            by_status[from_status] += 1
+            received.append(received_at)
+
+    if archived_cases:
+        archive_alerts(
+            "SELECT alert_id, status, case_id, received_at FROM alerts "
+            "WHERE case_id = ANY(%s) AND status = 'escalated_tier2' "
+            "ORDER BY alert_id FOR UPDATE",
+            (archived_cases,),
+            ("escalated_tier2",),
+        )
+    archive_alerts(
+        "SELECT alert_id, status, case_id, received_at FROM alerts "
+        "WHERE duplicate_of IS NULL AND status = ANY(%s) AND received_at < %s "
+        "ORDER BY alert_id FOR UPDATE",
+        (list(_ARCHIVE_HEAD_STATUSES), before),
+        _ARCHIVE_HEAD_STATUSES,
+    )
+
+    return ArchiveCounts(
+        by_status=by_status,
+        cases=len(archived_cases),
+        oldest_received_at=min(received) if received else None,
+        newest_received_at=max(received) if received else None,
+    )
