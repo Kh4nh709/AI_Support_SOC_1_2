@@ -49,9 +49,10 @@ require_tier2 = require_role("tier2", "admin")
 Tier2 = Annotated[Claims, Depends(require_tier2)]
 
 
-#: The only `cases.status` value that is not a conclusion (`ck_cases_status`: `investigating`
-#: | `concluded_fp` | `concluded_policy_violation` | `confirmed_incident`). Everything else
-#: is concluded — `confirmed_incident` included, though it does not start with `concluded_`.
+#: The only `cases.status` value that is still open (`ck_cases_status`, five values since DEC-212:
+#: `investigating` | `concluded_fp` | `concluded_policy_violation` | `confirmed_incident` |
+#: `archived`). Everything else is closed — `confirmed_incident` included, though it does not
+#: start with `concluded_`, and `archived`, which nobody concluded (`concluded_by` is NULL).
 OPEN_CASE_STATUS = "investigating"
 
 

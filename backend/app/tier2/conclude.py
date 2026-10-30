@@ -61,11 +61,14 @@ class ConcludeConflict(Exception):
     """The case exists but is not `investigating` — already concluded
     (`domain.transitions.StaleState`, translated with the extra read design
     note 1 asks for). `web/routers/tier2.py` maps this to 409. `status` is
-    always the case's real, current status; `concluded_by`/`concluded_at`
-    are set because a case this exception fires for is always concluded (the
-    only other way to leave `investigating` in the three-state
-    `ck_cases_status` CHECK). A `case_id` that names no row at all is
-    `UnknownCase`, not this — see below."""
+    always the case's real, current status. `concluded_at` is set because a
+    case this exception fires for has left `investigating` (the other four
+    `ck_cases_status` values, after DEC-212). `concluded_by` is set for the
+    three human conclusions and is None for an `archived` case: the archive
+    closed it out and nobody concluded it (`ck_cases_ket_luan_phai_co_moc`
+    lets `concluded_by` be NULL for `archived` only), so the 409 body then
+    names no person. A `case_id` that names no row at all is `UnknownCase`,
+    not this — see below."""
 
     def __init__(
         self,
