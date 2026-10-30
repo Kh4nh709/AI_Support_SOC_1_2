@@ -13,9 +13,13 @@ printed. Run the dry run first and read the numbers; there is no reopen, the way
 taken before `--apply` (runbook, "Archiving the old queue (DEC-212)").
 
 `--before` must carry a UTC offset (`+07:00`, `Z`): an ISO-8601 time without one is refused before the
-database is touched, because it would be read in the server's time zone. The DSN is read the way the
-other `python -m app...` commands read it (`infra.config.load`: `DATABASE_URL` from the environment,
-else `.env`) and is never printed; neither is a connection error's text (a query error's first line is).
+database is touched, because it would be read in the server's time zone. It must not be later than the
+database's own `now()` either: a typo such as next month would archive the live queue that arrived
+after the real cutoff, so such a `--before` exits 2 with a plain message and writes nothing, in a dry
+run and with `--apply` alike. The DSN is read the way the other `python -m app...` commands read it
+(`infra.config.load`: `DATABASE_URL` from the environment, else `.env`) and is never printed. Neither is
+the text of a connection error or of a failed rollback, whatever `psycopg.Error` it is (one generic
+line, exit 1); a query error's first line is shown.
 """
 
 from __future__ import annotations
@@ -110,6 +114,26 @@ def _report(
     return "\n".join(lines)
 
 
+def _rollback(conn: psycopg.Connection) -> bool:
+    """Roll back; False when the rollback itself failed (a connection the server dropped). Nothing
+    is lost then: the server discards a transaction whose connection ends without a commit."""
+    try:
+        conn.rollback()
+    except psycopg.Error:
+        return False
+    return True
+
+
+def _rollback_failed() -> int:
+    # libpq's text can quote the host and the user, so it is not shown; the operator has the DSN.
+    print(
+        "archive: the rollback failed and the connection was closed; the server discards a "
+        "transaction that was not committed. Run the dry run to see what the database holds",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
 
@@ -119,19 +143,36 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"archive: {exc}", file=sys.stderr)
         return 2
-    except psycopg.OperationalError:
-        # libpq's text can carry the host and the user; the operator has the DSN, the log need not.
+    except psycopg.Error:
+        # Not only `OperationalError`: a DSN libpq cannot parse is a `ProgrammingError`, and its text
+        # quotes the DSN, password included. The operator has the DSN, the log need not.
         print("archive: cannot connect to the database named by DATABASE_URL", file=sys.stderr)
         return 1
 
     try:
+        # The database's own clock, read in the transaction `archive_before` then runs in, so it is
+        # the `now()` that stamps every archived row.
+        clock = conn.execute("SELECT now()").fetchone()[0]
+        if args.before > clock:
+            # A typo such as next month would also archive the live queue that arrived after the
+            # cutoff, and only the backup brings it back. Nothing was written: it is a SELECT.
+            if not _rollback(conn):
+                return _rollback_failed()
+            print(
+                f"archive: --before {args.before.isoformat()} is later than the database's clock "
+                f"({clock.isoformat()}): everything that arrived up to now would be archived. "
+                "Check the cutoff; nothing was changed",
+                file=sys.stderr,
+            )
+            return 2
         counts = transitions.archive_before(conn, before=args.before, reason=args.reason)
         if args.apply:
             conn.commit()
-        else:
-            conn.rollback()
+        elif not _rollback(conn):
+            return _rollback_failed()
     except psycopg.Error as exc:
-        conn.rollback()
+        if not _rollback(conn):
+            return _rollback_failed()
         # a query error names no DSN: its first line (a lock, a deadlock, a right) is what the operator needs
         reason = str(exc).splitlines()[0] if str(exc) else ""
         print(f"archive: failed, nothing changed ({type(exc).__name__}: {reason})", file=sys.stderr)

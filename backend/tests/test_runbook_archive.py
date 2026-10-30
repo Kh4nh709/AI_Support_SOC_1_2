@@ -38,6 +38,16 @@ def test_step_1_restarts_rag_worker_as_well_as_app_and_worker_after_the_migratio
     assert migrate < restart_app_worker and migrate < restart_rag
 
 
+def test_the_section_says_a_cutoff_in_the_future_is_refused_and_a_failed_rollback_is_one_line():
+    """Fix round 1, rulings 3 and 4: what the command now refuses, and what it no longer prints."""
+    text = (conftest.REPO_ROOT / "docs" / "runbook.md").read_text(encoding="utf-8")
+    section = " ".join(text.split(SECTION, 1)[1].split("\n## ", 1)[0].replace("`", "").split())
+    assert "later than the database's clock" in section
+    assert "exit 2" in section[section.index("later than the database's clock") :][:200]
+    assert "dry run and with --apply alike" in section
+    assert "or a failed rollback" in section
+
+
 def test_step_1_names_the_second_compose_file_for_rag_worker_only():
     """`rag-worker` is no service without the override: its stop and its restart are conditional."""
     row = _step_1()
