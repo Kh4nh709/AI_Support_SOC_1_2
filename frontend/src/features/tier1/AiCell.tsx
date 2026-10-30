@@ -11,6 +11,7 @@ export function AiCell({ state }: { state: AiState }) {
     case "hidden":
       return <span className={`${MUTED} italic`}>{S.ai1.hidden}</span>;
     case "pending":
+    case "none":
       return <span className={MUTED}>{S.ai1.none}</span>;
     case "unavailable":
       return <span className={MUTED}>{S.ai1.unavailable}</span>;

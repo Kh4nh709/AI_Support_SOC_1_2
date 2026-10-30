@@ -8,6 +8,7 @@ export type AiState =
   | { kind: "ready"; action: string; confidence: string | null; forced: boolean }
   | { kind: "hidden" }
   | { kind: "pending" }
+  | { kind: "none" }
   | { kind: "unavailable"; stoppedBy: string | null }
   | { kind: "decided"; action: string | null; confidence: string | null };
 
@@ -23,6 +24,14 @@ export const DECIDED: ReadonlySet<string> = new Set([
   "auto_closed",
 ]);
 
+/**
+ * An archived alert (021, DEC-212) was closed out without review and its `triage` job is skipped when it runs, so
+ * a ① that had not answered by then never will: its `triage_status` stays `pending` for good. It is the one status
+ * that turns "no result yet" into `none` ("chưa có") instead of `pending` ("Đang phân tích…", and a page that polls
+ * for the answer every ten seconds). The blind-arm rule is read first and the other states are unchanged.
+ */
+const ARCHIVED = "archived";
+
 // The alert view says why ① gave up (`llm_stopped_by`, the `stopped_by` of the newest ① run: INT-T02), and
 // `aiStateOfView` passes it on. The queue row does not: it carries no `stopped_by`, so a row's `unavailable`
 // names no reason, and the alert page is where it is worded.
@@ -34,7 +43,7 @@ const UNAVAILABLE: AiState = { kind: "unavailable", stoppedBy: null };
  *    arm, `hidden`. A blind row is never `pending`: "pending" would say ① is still working.
  *  - A string `suggested_action`: `ready`, forced when `gate_forced === true`.
  *  - `triage_status === "unavailable"`: `unavailable`.
- *  - Otherwise `pending`: the visible arm, no result yet.
+ *  - Otherwise `pending`: the visible arm, no result yet; `none` when the alert is archived (see `ARCHIVED`).
  */
 export function aiStateOfRow(row: QueueRow): AiState {
   if (
@@ -53,7 +62,7 @@ export function aiStateOfRow(row: QueueRow): AiState {
     };
   }
   if (row.triage_status === "unavailable") return UNAVAILABLE;
-  return { kind: "pending" };
+  return row.status === ARCHIVED ? { kind: "none" } : { kind: "pending" };
 }
 
 /**
@@ -85,5 +94,5 @@ export function aiStateOfView(view: AlertView): AiState {
     const stoppedBy = view.llm_stopped_by;
     return typeof stoppedBy === "string" ? { kind: "unavailable", stoppedBy } : UNAVAILABLE;
   }
-  return { kind: "pending" };
+  return view.status === ARCHIVED ? { kind: "none" } : { kind: "pending" };
 }

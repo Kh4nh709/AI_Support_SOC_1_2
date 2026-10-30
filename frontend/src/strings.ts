@@ -209,6 +209,8 @@ export const S = {
       "Alert này thuộc nhánh mù của pilot: bạn quyết định mà không thấy gợi ý ①. Gợi ý sẽ hiện sau khi bạn gửi quyết định.",
     pendingBody:
       "Alert đã vào hàng chờ phân tích. Trang tự cập nhật khi có kết quả; bạn vẫn có thể quyết định ngay.",
+    // An archived alert (DEC-212) whose ① had not answered: no answer will come.
+    noneBody: "Alert đã được lưu trữ khi ① chưa phân tích xong, nên sẽ không có gợi ý ①.",
     decidedHeading: "Đã quyết — so sánh",
     decidedAi: "Gợi ý ①",
     // Whether ① and the person who decided agree (the pilot report's mapping, see agreement.ts).

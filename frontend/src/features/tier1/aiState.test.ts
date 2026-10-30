@@ -255,6 +255,60 @@ it("does not count an archived alert as decided: the blind arm stays hidden (DEC
   expect(aiStateOfView(blindView)).toEqual({ kind: "hidden" });
 });
 
+// Review of INT-T03, Nit 7. The `triage` job of an archived alert is skipped (DEC-212), so its triage_status stays
+// 'pending' for good, and "Đang phân tích…" would be a promise nobody keeps (the alert page polls while the state
+// is pending). An archived alert with no result and no failure has no ① to wait for: the state is `none`.
+describe("an archived alert never waits for a ① that will not come (DEC-212)", () => {
+  const waitingRow = (over: Partial<QueueRow> = {}): QueueRow =>
+    row({
+      status: "archived",
+      suggested_action: null,
+      confidence: null,
+      triage_status: "pending",
+      ...over,
+    });
+  const waitingView = (over: Partial<AlertView> = {}): AlertView =>
+    view({ status: "archived", suggestion: null, triage_status: "pending", ...over });
+
+  it("is none, not pending, in the queue row", () => {
+    expect(aiStateOfRow(waitingRow())).toEqual({ kind: "none" });
+  });
+
+  it("is none, not pending, in the alert view", () => {
+    expect(aiStateOfView(waitingView())).toEqual({ kind: "none" });
+  });
+
+  it("keeps the blind-arm rule first: a blind archived head is hidden, whatever its triage status", () => {
+    const blind = blindRow({ status: "archived", triage_status: "pending" });
+    expect("suggested_action" in blind).toBe(false);
+    expect(aiStateOfRow(blind)).toEqual({ kind: "hidden" });
+    const blindView = waitingView({ suggestion_visible: false });
+    delete blindView.suggestion;
+    expect(aiStateOfView(blindView)).toEqual({ kind: "hidden" });
+  });
+
+  it("still shows a ① result the visible arm has, and still says ① gave up when it did", () => {
+    expect(aiStateOfRow(row({ status: "archived" }))).toMatchObject({ kind: "ready" });
+    expect(aiStateOfView(view({ status: "archived" }))).toMatchObject({ kind: "ready" });
+    expect(aiStateOfRow(waitingRow({ triage_status: "unavailable" }))).toEqual({
+      kind: "unavailable",
+      stoppedBy: null,
+    });
+    expect(aiStateOfView(waitingView({ triage_status: "unavailable" }))).toEqual({
+      kind: "unavailable",
+      stoppedBy: null,
+    });
+  });
+
+  it("is never decided, and the status of no other alert turns pending into none", () => {
+    expect(aiStateOfView(waitingView()).kind).not.toBe("decided");
+    for (const status of ["received", "enriching", "queued_tier1", "tier1_active"]) {
+      expect(aiStateOfRow(waitingRow({ status })).kind, status).toBe("pending");
+      expect(aiStateOfView(waitingView({ status })).kind, status).toBe("pending");
+    }
+  });
+});
+
 it("lists exactly the five statuses the server shows the suggestion in", () => {
   // visibility.SHOW_STATES of the backend.
   expect([...DECIDED].sort()).toEqual([

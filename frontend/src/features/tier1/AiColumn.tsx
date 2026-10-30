@@ -1,5 +1,5 @@
 // The ① column of the alert page (spec §3.1, the violet column). WHAT it says is decided by `aiStateOfView`
-// and by nothing else: this file words the five states and reads no other key of the view to guess at one.
+// and by nothing else: this file words the six states and reads no other key of the view to guess at one.
 // In particular the hidden state (the blind arm, DEC-101) shows `S.ai1.hidden` and nothing of ①: not the
 // verdict, not "pending", not "failed", not "no result". The server dropped the keys; this column does not
 // look for them, and it takes no state from a caller: the only way to a state is the view itself.
@@ -331,6 +331,7 @@ export function AiColumn({ view }: { view: AlertView }) {
       {state.kind === "ready" && <Ready view={view} state={state} />}
       {state.kind === "hidden" && <Message title={S.ai1.hidden} body={S.ai1.hiddenBody} italic />}
       {state.kind === "pending" && <Message title={S.ai1.pending} body={S.ai1.pendingBody} />}
+      {state.kind === "none" && <Message title={S.ai1.none} body={S.ai1.noneBody} />}
       {state.kind === "unavailable" && <Unavailable stoppedBy={state.stoppedBy} />}
       {state.kind === "decided" && <Decided view={view} state={state} />}
     </section>

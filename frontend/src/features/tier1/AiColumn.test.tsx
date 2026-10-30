@@ -1,5 +1,5 @@
 // src/features/tier1/AiColumn.test.tsx — the ① column of the alert page, one test per state of `AiState`:
-// ready, hidden (the blind arm, DEC-101), pending, unavailable and decided. What the column says is decided
+// ready, hidden (the blind arm, DEC-101), pending, none (an archived alert), unavailable and decided. What the column says is decided
 // by `aiStateOfView` and by nothing else: the column takes no state, so every test here reaches a state the
 // only way the page does, with a view the server could have sent.
 import { render, screen, within } from "@testing-library/react";
@@ -285,6 +285,27 @@ describe("pending", () => {
   });
 });
 
+describe("none (an archived alert with no ①)", () => {
+  it("says there is no ① and never 'Đang phân tích…', and names no verdict", () => {
+    renderColumn(view({ status: "archived", suggestion: null, triage_status: "pending" }));
+    const col = column();
+    expect(within(col).getByText(S.ai1.none)).toBeInTheDocument();
+    expect(col.textContent).toContain(S.ai1.noneBody);
+    expect(col.textContent).not.toContain(S.ai1.pending);
+    expect(col.textContent).not.toContain(S.ai1.pendingBody);
+    expect(col.textContent).not.toContain(S.ai1.hidden);
+    for (const word of VERDICT_WORDS) expect(col.textContent, word).not.toContain(word);
+  });
+
+  it("is not what a blind archived head shows: that one stays 'ẩn — nhánh mù'", () => {
+    renderColumn(blindView({ status: "archived", triage_status: "pending" }));
+    const col = column();
+    expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
+    expect(col.textContent).not.toContain(S.ai1.none);
+    expect(col.textContent).not.toContain(S.ai1.pending);
+  });
+});
+
 describe("unavailable", () => {
   it("says ① gave up, from the view's own triage status, and says nothing of a reason it was not told", () => {
     // A view with no `llm_stopped_by` (the run left none, or there was no run) names no reason.
@@ -543,6 +564,10 @@ describe("accessibility", () => {
     ],
     ["hidden", blindView()],
     ["pending", view({ suggestion: null, triage_status: "pending" })],
+    [
+      "none, an archived alert",
+      view({ status: "archived", suggestion: null, triage_status: "pending" }),
+    ],
     ["unavailable", view({ suggestion: null, triage_status: "unavailable" })],
     ["decided, with the Khớp row", view({ status: "closed_benign", acknowledged_by_name: "An" })],
     ["decided by the system", view({ status: "auto_closed" })],

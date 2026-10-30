@@ -22,6 +22,12 @@ describe("AiCell", () => {
     expect(screen.getByText(S.ai1.unavailable)).toBeInTheDocument();
   });
 
+  it("says 'chưa có' for none (an archived alert no ① will ever answer), as it does for pending", () => {
+    show({ kind: "none" });
+    expect(screen.getByText(S.ai1.none)).toBeInTheDocument();
+    expect(screen.queryByText(S.ai1.hidden)).toBeNull();
+  });
+
   it("words the action and the confidence of a ready result", () => {
     show({ kind: "ready", action: "false_positive", confidence: "high", forced: false });
     expect(screen.getByText(/Dương tính giả/)).toHaveTextContent("Dương tính giả (cao)");
