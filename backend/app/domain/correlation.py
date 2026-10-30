@@ -37,6 +37,12 @@ _WINDOW_PREDICATE = """(agent_name = %(agent_name)s OR alert_user = %(alert_user
       AND duplicate_of IS NULL
       AND alert_id <> %(alert_id)s"""
 
+#: What the grouped rows and the samples leave out by status. A duplicate is counted in its head.
+#: An `archived` alert (INT-T03, DEC-212) is the Owner's fresh start: it is neither a decision nor in
+#: play, `AlertStatus` (the vocabulary of ①'s and ②'s prompts) has no such value, and a row carrying it
+#: would not render. `cluster_ids_query` needs no such term: it takes `queued_tier1` / `tier1_active` only.
+_STATUS_PREDICATE = "status NOT IN ('duplicate', 'archived')"
+
 
 @dataclass(frozen=True)
 class CorrelationRow:
@@ -95,7 +101,7 @@ def rows_query(alert: Any) -> tuple[str, dict[str, Any]]:
                count(DISTINCT srcip) AS src_ip_count
         FROM alerts
         WHERE {_WINDOW_PREDICATE}
-          AND status <> 'duplicate'
+          AND {_STATUS_PREDICATE}
         GROUP BY rule_id, category, status
         ORDER BY sum(occurrence_count) DESC
         LIMIT 20
@@ -111,7 +117,7 @@ def samples_query(alert: Any) -> tuple[str, dict[str, Any]]:
                alert_time, description, raw_log
         FROM alerts
         WHERE {_WINDOW_PREDICATE}
-          AND status <> 'duplicate'
+          AND {_STATUS_PREDICATE}
         ORDER BY occurrence_count DESC, alert_time DESC
         LIMIT 5
     """

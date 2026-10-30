@@ -525,6 +525,90 @@ def test_the_distribution_of_decisions(db) -> None:
     assert h.examples == ("esc", "b1", "f2")  # the three newest first sightings, newest first
 
 
+# ── INT-T03 / DEC-212: an archived alert or case is no decision ─────────────────────────────────
+
+
+@pytest.mark.db
+def test_an_archived_alert_with_no_case_counts_as_no_decision(db) -> None:
+    """The Owner's fresh start closes the old queue as `archived`, and nobody decided it: not as a
+    false positive, not as benign, not as anything. Beside a real `closed_fp` it adds nothing."""
+    add_alert(db, "s", rule_id="5710", agent_name="h1", srcip="1.1.1.1")
+    add_alert(db, "decided", status="closed_fp", rule_id="5710", agent_name="h1", srcip="2.2.2.2")
+    for position in range(3):
+        add_alert(
+            db,
+            f"arch{position}",
+            status="archived",
+            rule_id="5710",
+            agent_name="h1",
+            srcip=f"3.3.3.{position}",
+        )
+
+    h = history_of(db, "s")
+
+    assert h.total == 1
+    assert h.by_conclusion == counts(tier1_closed_fp=1)
+    assert h.examples == ("decided",)
+
+
+@pytest.mark.db
+def test_a_level_made_only_of_archived_alerts_has_no_data_and_the_next_level_is_tried(db) -> None:
+    """Level 1 (the cluster key) holds only archived alerts: no data, so level 3 (rule and host) answers
+    from the alert a person did decide."""
+    add_alert(db, "s", rule_id="5710", agent_name="h1", srcip="1.1.1.1", dstip="9.9.9.9")
+    add_alert(
+        db,
+        "arch",
+        status="archived",
+        rule_id="5710",
+        agent_name="h1",
+        srcip="1.1.1.1",
+        dstip="9.9.9.9",
+    )
+    add_alert(db, "decided", status="closed_benign", rule_id="5710", agent_name="h1")
+
+    h = history_of(db, "s")
+
+    assert (h.level, h.key_name, h.total) == (3, "rule_host", 1)
+    assert h.by_conclusion == counts(tier1_closed_benign=1)
+
+
+@pytest.mark.db
+def test_an_alert_in_an_archived_case_counts_as_no_decision(db) -> None:
+    user = add_user(db)
+    add_alert(db, "s", rule_id="5710", agent_name="h1", srcip="1.1.1.1")
+    add_alert(db, "decided", status="closed_fp", rule_id="5710", agent_name="h1", srcip="2.2.2.2")
+    add_alert(db, "in-arch", rule_id="5710", agent_name="h1", srcip="3.3.3.3")
+    add_alert(db, "in-open", rule_id="5710", agent_name="h1", srcip="4.4.4.4")
+    archived = add_case(db, user, ["in-arch"], status="archived")
+    add_case(db, user, ["in-open"], status="investigating")
+
+    h = history_of(db, "s")
+
+    # the open case's alert is still an escalation in progress; the archived case's is nothing
+    assert h.by_conclusion == counts(tier1_closed_fp=1, escalated_open=1)
+    assert h.total == 2
+    assert set(h.examples) == {"decided", "in-open"}
+    assert db.execute("SELECT status FROM cases WHERE case_id = %s", (archived,)).fetchone() == (
+        "archived",
+    )
+
+
+@pytest.mark.db
+def test_a_case_subject_does_not_count_an_archived_case_of_the_same_key(db) -> None:
+    user = add_user(db)
+    add_alert(db, "head", rule_id="5710", agent_name="h1", srcip="1.1.1.1")
+    case = add_case(db, user, ["head"], status="investigating")
+    add_alert(db, "old", rule_id="5710", agent_name="h1", srcip="2.2.2.2")
+    add_case(db, user, ["old"], status="archived")
+    add_alert(db, "decided", status="closed_fp", rule_id="5710", agent_name="h1", srcip="3.3.3.3")
+
+    h = case_history_of(db, case)
+
+    assert h.total == 1
+    assert h.by_conclusion == counts(tier1_closed_fp=1)
+
+
 @pytest.mark.db
 def test_a_conclusion_that_did_not_happen_is_a_key_with_0(db) -> None:
     add_alert(db, "s", rule_id="5710", agent_name="h1", srcip="1.1.1.1")

@@ -53,7 +53,7 @@ from typing import Any
 
 import psycopg
 
-from app.domain.correlation import _WINDOW_PREDICATE
+from app.domain.correlation import _STATUS_PREDICATE, _WINDOW_PREDICATE
 from app.domain.correlation import _params as _correlation_params
 from app.infra import config
 from app.kb.lookup import get_playbook
@@ -455,7 +455,7 @@ _CORRELATION_ROWS_SQL = f"""
            count(DISTINCT srcip) AS src_ip_count
     FROM alerts
     WHERE {_WINDOW_PREDICATE}
-      AND status <> 'duplicate'
+      AND {_STATUS_PREDICATE}
       AND alert_id NOT IN ({_CASE_ALERT_IDS_NAMED})
     GROUP BY rule_id, category, status
     ORDER BY sum(occurrence_count) DESC, rule_id, category, status
@@ -467,7 +467,7 @@ _CORRELATION_SAMPLES_SQL = f"""
            alert_time, description, raw_log
     FROM alerts
     WHERE {_WINDOW_PREDICATE}
-      AND status <> 'duplicate'
+      AND {_STATUS_PREDICATE}
       AND alert_id NOT IN ({_CASE_ALERT_IDS_NAMED})
     ORDER BY occurrence_count DESC, alert_time DESC, alert_id
     LIMIT {MAX_CORRELATION_SAMPLES}

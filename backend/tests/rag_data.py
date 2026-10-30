@@ -25,13 +25,15 @@ from tests.scratch_db import insert_user
 __all__ = ["add_alert", "add_case", "add_entry", "add_user", "soar_payload"]
 
 #: Statuses that end an alert's life (closed_at is mandatory) and those a person set (sealed too).
-_CLOSED = {"auto_closed", "closed_fp", "closed_benign", "closed_confirmed", "duplicate"}
-_SEALED = {"closed_fp", "closed_benign", "closed_confirmed", "duplicate"}
-#: What `transitions.conclude_case` sets on a concluded case's alerts.
+_CLOSED = {"auto_closed", "closed_fp", "closed_benign", "closed_confirmed", "duplicate", "archived"}
+_SEALED = {"closed_fp", "closed_benign", "closed_confirmed", "duplicate", "archived"}
+#: What `transitions.conclude_case` sets on a concluded case's alerts, and what
+#: `transitions.archive_before` (DEC-212) sets on the alerts of an archived case.
 ALERT_STATUS_OF_CASE = {
     "concluded_fp": "closed_fp",
     "concluded_policy_violation": "closed_benign",
     "confirmed_incident": "closed_confirmed",
+    "archived": "archived",
 }
 
 
@@ -130,12 +132,14 @@ def add_case(
     follows the case: open -> `escalated_tier2`, concluded -> what `conclude_case` writes."""
     case_id = str(uuid.uuid4())
     concluded = status != "investigating"
+    # an archived case was concluded by nobody (DEC-212): `concluded_by` stays NULL
+    by_a_person = concluded and status != "archived"
     conn.execute(
         "INSERT INTO cases (case_id, title, status, severity, created_by, concluded_at,"
         " concluded_by, conclusion_reason) VALUES (%s, 'p13t02', %s, 'medium', %s,"
         " CASE WHEN %s THEN now() END, CASE WHEN %s THEN %s::uuid END,"
         " CASE WHEN %s THEN 'p13t02 reason' END)",
-        (case_id, status, user_id, concluded, concluded, user_id, concluded),
+        (case_id, status, user_id, concluded, by_a_person, user_id, concluded),
     )
     alert_status = ALERT_STATUS_OF_CASE.get(status, "escalated_tier2")
     for alert_id in heads:

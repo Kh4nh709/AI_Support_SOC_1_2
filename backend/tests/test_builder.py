@@ -16,6 +16,29 @@ import pytest
 from app.llm import builder as B
 
 
+# ─────────────────────────────────────────────────────────────── AlertStatus
+def test_alert_status_never_meets_archived():
+    """INT-T03 / DEC-212: `AlertStatus` is the vocabulary of the `status` facts of ①'s and ②'s prompts
+    (the correlation rows). An `archived` alert is the Owner's fresh start, not a status either model is
+    told about: the readers leave archived alerts out (`domain.correlation`, `tier2.dossier`), and the
+    enum keeps the ten values it had before migration 021, so a row for one that slipped through would
+    be a loud `ValueError`, not a quiet "archived" in a prompt."""
+    assert {member.value for member in B.AlertStatus} == {
+        "received",
+        "duplicate",
+        "auto_closed",
+        "enriching",
+        "queued_tier1",
+        "tier1_active",
+        "escalated_tier2",
+        "closed_fp",
+        "closed_benign",
+        "closed_confirmed",
+    }
+    with pytest.raises(ValueError):
+        B.AlertStatus("archived")
+
+
 # ─────────────────────────────────────────────────────────────── Id
 def test_id_accepts_canonical_alert_id():
     assert B.Id("alert_id", "1786903016.121311").value == "1786903016.121311"

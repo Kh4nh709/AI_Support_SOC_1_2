@@ -19,7 +19,12 @@ a decision, and the decision of a counted alert is
     in a concluded case                              the case's status
 
 An alert with no decision (queued, being worked, auto-closed) is not a past decision and is not
-counted, so a level whose alerts are all undecided has no data and the next level is tried.
+counted, so a level whose alerts are all undecided has no data and the next level is tried. An
+`archived` alert or case (INT-T03, DEC-212: the old queue closed out without review) is no decision
+either: no analyst closed it, so it is in none of the three rows above (an `archived` alert has no
+`closed_fp` / `closed_benign` status, and an archived case is neither `investigating` nor one of
+the three conclusions), and the query has no branch that could count it - a new status must never
+get one by an `ELSE`.
 
 For a case subject the key of a level is the set of the keys of its heads: an earlier alert counts
 when it matches any head at that level (once, however many heads it matches).
@@ -197,6 +202,9 @@ def _heads(conn: psycopg.Connection, subject: Subject) -> list[_Head]:
 
 # ── the levels ────────────────────────────────────────────────────────────────────────────────
 
+# `conclusion` is NULL for everything this CASE does not name: an undecided alert, an `archived` alert
+# (with or without a case) and an alert in an `archived` case (DEC-212). The summary and the examples
+# keep `conclusion IS NOT NULL` only. Do not add an `ELSE`.
 _PREFIX = (
     "WITH hit AS ("
     " SELECT a.alert_id, a.first_seen_at, a.last_seen_at,"

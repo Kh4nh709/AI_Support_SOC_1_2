@@ -73,7 +73,11 @@ class Category(Enum):
 
 
 class AlertStatus(Enum):
-    # The ten ck_alerts_status values (docs/Schema/schema.sql).
+    # The ten ck_alerts_status values a prompt may name. `archived` (021, DEC-212: the old queue closed out
+    # without review) is the eleventh value of the column and is deliberately NOT here: no prompt is told
+    # about an archived alert. The readers that feed these facts leave archived alerts out
+    # (`domain.correlation._STATUS_PREDICATE`, shared with `tier2.dossier`), and `AlertStatus("archived")`
+    # raises, so a row that slipped through is loud (test_builder.py pins it).
     RECEIVED = "received"
     DUPLICATE = "duplicate"
     AUTO_CLOSED = "auto_closed"

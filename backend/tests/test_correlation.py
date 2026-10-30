@@ -353,6 +353,56 @@ def test_correlation_loai_ban_sao(db):
     assert sample_ids == {parent}
 
 
+def _insert_archived(db, **overrides) -> str:
+    """An alert the archive (INT-T03, DEC-212) closed out: sealed, with a reason, never a decision."""
+    return _insert_alert(
+        db,
+        status="archived",
+        closed_at=_ALERT_TIME,
+        sealed_at=_ALERT_TIME,
+        close_reason="DEC-212",
+        **overrides,
+    )
+
+
+def test_correlation_loai_alert_da_luu_tru(db):
+    """INT-T03 / DEC-212: an archived alert is neither in ①'s grouped rows nor among its samples.
+    `status` of a row is rendered as an `AlertStatus` fact, which has no `archived`; and an archived
+    alert is not "in play" for the analyst the prompt describes. It has the highest
+    `occurrence_count`, so it would head both lists if it were let in."""
+    subject = _make_alert(agent_name="agent-arch", alert_user=None, srcip="")
+    kept = _insert_alert(db, agent_name="agent-arch", status="queued_tier1")
+    _insert_archived(db, agent_name="agent-arch", occurrence_count=5000, rule_id="99999")
+    _insert_archived(db, agent_name="agent-arch", alert_user="someone")
+
+    summary = correlation.summarize_for_prompt(db, subject)
+
+    assert [(r.rule_id, r.status, r.cluster_count) for r in summary.rows] == [
+        ("40112", "queued_tier1", 1)
+    ]
+    assert {s["alert_id"] for s in summary.samples} == {kept}
+    assert all(s["status"] != "archived" for s in summary.samples)
+
+
+def test_correlation_ca_ba_dong_deu_luu_tru_thi_khong_con_gi(db):
+    """The window holds nothing but archived alerts: the summary is empty, as for a quiet agent."""
+    subject = _make_alert(agent_name="agent-arch2", alert_user=None, srcip="")
+    _insert_archived(db, agent_name="agent-arch2")
+    summary = correlation.summarize_for_prompt(db, subject)
+    assert summary.rows == () and summary.samples == ()
+
+
+def test_correlated_cluster_ids_khong_tra_alert_da_luu_tru(db):
+    """`escalate` folds only open heads into a case: an archived one is never swept in, however busy
+    (A11b already takes only `queued_tier1` / `tier1_active`; this pins that it stays so)."""
+    subject = _make_alert(agent_name="agent-arch3", alert_user=None, srcip="")
+    me = _user(db)
+    kept = _insert_alert(db, agent_name="agent-arch3", status="tier1_active", acknowledged_by=me)
+    _insert_archived(db, agent_name="agent-arch3", occurrence_count=5000)
+    _insert_archived(db, agent_name="agent-arch3", acknowledged_by=me)
+    assert correlation.correlated_cluster_ids(db, subject, actor_id=me) == [kept]
+
+
 def test_correlation_loai_duplicate_of_rieng_biet_voi_status(db):
     """`duplicate_of IS NULL` is its own clause, not just a restatement of
     `status <> 'duplicate'` — a row with `duplicate_of` set but a

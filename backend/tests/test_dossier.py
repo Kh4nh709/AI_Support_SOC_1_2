@@ -844,6 +844,47 @@ def test_correlation_finds_a_real_external_cluster(db):
 
 
 @pytest.mark.db
+def test_correlation_leaves_out_an_archived_alert_and_still_builds(db):
+    """INT-T03 / DEC-212: ② on a NEW case beside an archived alert (same agent, inside +-2 h) builds,
+    and block 5 does not mention it. `AlertStatus` has no `archived`: a row for it would raise
+    `ValueError` out of `dossier.build`. The positive control above shows the external alert beside it
+    is still found."""
+    user = _make_user(db)
+    case_id = _make_case(db, user)
+    _make_head(db, case_id, user, agent_name="arch-h", alert_time=_BASE_TIME, raw_log="h")
+    _insert_alert(
+        db,
+        agent_name="arch-h",
+        rule_id="99998",
+        description="ARCHIVED-NEIGHBOUR-MARKER",
+        status="archived",
+        occurrence_count=5000,
+        alert_time=_BASE_TIME + timedelta(minutes=20),
+        closed_at=_BASE_TIME,
+        sealed_at=_BASE_TIME,
+        raw_log="ARCHIVED-NEIGHBOUR-LOG",
+    )
+    _insert_alert(
+        db,
+        agent_name="arch-h",
+        rule_id="5721",
+        status="queued_tier1",
+        alert_time=_BASE_TIME + timedelta(minutes=30),
+        raw_log="external correlated alert",
+    )
+    from app.security.wrap import strip_nonce
+
+    result = dossier.build(db, case_id, nonce="v" * 16)
+    corr = strip_nonce(
+        _section(result.text, dossier.HEADING_CORRELATION, dossier.HEADING_TIER1), "v" * 16
+    )
+    assert "rule_id: 5721" in corr
+    assert "99998" not in corr
+    assert "ARCHIVED-NEIGHBOUR" not in corr
+    assert "archived" not in result.text
+
+
+@pytest.mark.db
 def test_correlation_sample_raw_log_is_capped(db):
     user = _make_user(db)
     case_id = _make_case(db, user)
