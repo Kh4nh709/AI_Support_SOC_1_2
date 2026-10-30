@@ -366,6 +366,8 @@ CHECK (status NOT IN ('duplicate','auto_closed','closed_fp',
        OR closed_at IS NOT NULL)
 ```
 
+> **Từ migration 021 (DEC-212)** danh sách có thêm `'archived'` — xem §11. Đoạn trên là bản 002.
+
 ### 3.2 · Chín ràng buộc thêm — đều là bất biến đã có trong đặc tả
 
 Đặc tả đã tuyên bố chúng là bất biến nhưng để phần kiểm chứng cho test. `CHECK` rẻ hơn test và không quên chạy:
@@ -799,6 +801,42 @@ S8 ghi *"bảng nhỏ, chưa có dữ liệu thử → validate ngay"*. Rà lạ
 
 Đã chạy thật sau khi sửa: nạp 500.229 dòng vào schema đủ 7 migration, **5/5 FK `convalidated`**,
 `VALIDATE fk_alerts_acknowledged_by` chạy được, `alert_user = ''`: **0 dòng**.
+
+---
+
+## 11 · Migration 021 — `archived`, trạng thái terminal thứ mười một (DEC-212)
+
+Chủ sở hữu chốt ngày 30/10/2026: mọi alert và case đến **trước 2026-10-30T20:15:00+07:00** được đóng
+**mà không ai xem xét**. Đó không phải quyết định của analyst, nên không dùng `closed_fp` /
+`closed_benign`: hệ thống đọc hai giá trị ấy là một quyết định — lịch sử quyết định của ① và ②
+(`rag/history.py`, 90 ngày), việc nhánh mù lộ gợi ý của ① khi đầu cụm đã quyết định, và các số
+liệu đồng thuận / đánh giá. Đóng 7.000 alert chưa ai xem bằng `closed_benign` là bịa ra 7.000 quyết
+định "lành tính". Vì vậy có **một trạng thái riêng, `archived`**, cho cả `alerts` và `cases`.
+
+| Ràng buộc | Thay đổi của 021 |
+|---|---|
+| `ck_alerts_status` | 10 → 11 giá trị, `archived` cuối |
+| `ck_alerts_g3_terminal_phai_co_closed_at` | `archived` là trạng thái terminal: phải có `closed_at` |
+| `ck_alerts_h2_dong_boi_nguoi_phai_seal` | `archived` phải có cả `sealed_at` — đầu cụm bị lưu trữ thôi hút bản sao (`ix_alerts_dedup`, `find_open_cluster` chỉ thấy `closed_at IS NULL OR sealed_at IS NULL`) |
+| `ck_alerts_h3_escalate_khong_seal` | **không đổi**: chỉ `escalated_tier2` được giữ không seal; alert của một case bị lưu trữ không còn là `escalated_tier2` |
+| `ck_cases_status` | 4 → 5 giá trị, `archived` cuối |
+| `ck_cases_ket_luan_phai_co_moc` | `archived` cần `concluded_at` và `conclusion_reason`; `concluded_by` **được NULL, và chỉ với `archived`** (không ai kết luận). Ba kết luận của người giữ nguyên luật: đủ cả ba cột |
+| `ck_audit_event_type` | 36 → 38 tên: `alert.archived`, `case.archived` |
+
+Không thêm bảng, cột, index hay quyền. Dữ liệu chỉ đổi khi chạy lệnh
+`python -m app.domain.archive` (qua `domain.transitions.archive_before`, nơi duy nhất ghi
+`alerts.status` / `cases.status`): cụm `received` / `enriching` / `queued_tier1` / `tier1_active` đến
+trước mốc, các case `investigating` tạo trước mốc cùng alert `escalated_tier2` của chúng. Dòng
+`duplicate` không bị chạm (đã seal sẵn). **Không có đường mở lại**; đường lui là bản sao lưu lấy ngay trước
+`--apply`.
+
+**Về mâu thuẫn M-A (§2):** `concluded_*` vẫn chỉ là giá trị của `cases.status`. `archived` là giá trị
+của **cả hai** bảng — ngoại lệ có chủ ý, vì nó không phải một kết luận. Ánh xạ B3 (kết luận case → `alerts.status`) không
+có dòng nào cho nó: không kết luận nào sinh ra nó.
+
+Thử vi phạm: `test_constraints.py` thêm 12 ca (9 âm, 3 dương) cho 5 ràng buộc trên;
+`backend/tests/test_migration_021.py` thử từng ràng buộc trên cơ sở dữ liệu thật và thử áp 021 lên một
+cơ sở dữ liệu đang ở 020 bằng `scripts/migrate.sh`.
 
 ---
 
