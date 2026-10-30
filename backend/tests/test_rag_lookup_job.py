@@ -1076,6 +1076,27 @@ def test_a_lookup_for_an_alert_that_triage_has_finished_is_not_paid_for(
     )
 
 
+def test_a_lookup_for_an_archived_alert_or_case_writes_nothing(db, kb_root) -> None:
+    """INT-T03 / DEC-212: a `rag_lookup` job queued before the archive and run after it has no prompt
+    to reach (the alert is archived, whatever its `triage_status`) and no one to read it (the case is
+    archived): no history, no candidates, no model call, no `rag_results` row, no `llm_runs` row."""
+    earlier_decision(db)  # a history and a candidate source exist: the job could have written
+    alert(db, "ra-arch", status="archived")
+    assert db.execute("SELECT triage_status FROM alerts WHERE alert_id = 'ra-arch'").fetchone() == (
+        "pending",
+    )
+    alert(db, "ca-arch", status="archived")
+    case_id = add_case(db, add_user(db), ["ca-arch"], status="archived")
+    fake = FakeLLM([])
+
+    assert run(db, "alert:ra-arch", fake) is None
+    assert run(db, f"case:{case_id}", fake) is None
+
+    assert fake.calls == []
+    assert db.execute("SELECT count(*) FROM rag_results").fetchone()[0] == 0
+    assert db.execute("SELECT count(*) FROM llm_runs").fetchone()[0] == 0
+
+
 def test_a_lookup_for_an_alert_still_waiting_for_triage_runs(db, kb_root) -> None:
     alert(db, "ra-wait", status="queued_tier1")
     assert db.execute("SELECT triage_status FROM alerts WHERE alert_id = 'ra-wait'").fetchone() == (

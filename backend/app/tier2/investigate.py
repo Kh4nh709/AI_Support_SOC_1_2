@@ -70,6 +70,7 @@ that is not. With the switch off nothing here runs and nothing differs, the INSE
 from __future__ import annotations
 
 import html
+import json
 import uuid
 from functools import partial
 from typing import Any
@@ -452,6 +453,15 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
         # G7: the case is untouched, no status moves, and no attempt was made — not
         # even a dossier read, so this never opens a connection to a case that might
         # since have been concluded.
+        return
+
+    # INT-T03 / DEC-212: the archive does not cancel the jobs it leaves behind. A case it set aside is
+    # nobody's to investigate (`POST /analyze` refuses it with the same 409 as a concluded one): a job
+    # queued before the archive makes no model call and writes no `llm_runs` row. Read after
+    # `_set_repeatable_read`, so it is also the first statement of the snapshot the dossier reads in.
+    archived = conn.execute("SELECT status FROM cases WHERE case_id = %s", (case_id,)).fetchone()
+    if archived is not None and archived[0] == "archived":
+        print(json.dumps({"investigate": "skipped", "reason": "archived", "case_id": case_id}))
         return
 
     nonce = wrap.new_nonce()  # design note 3(a): a new nonce per attempt, never cached

@@ -1809,6 +1809,91 @@ def test_analyze_409_on_a_concluded_case_enqueues_nothing_and_spends_no_quota(
     assert (jobs, quota_rows) == (0, 0)
 
 
+def _archive(conn: psycopg.Connection, case_id: str, *heads: str) -> None:
+    """The state `domain.transitions.archive_before` leaves a case and its alerts in (DEC-212): the
+    case `archived` with a moment and a reason and nobody who concluded it, its alerts `archived`,
+    closed and sealed."""
+    conn.execute(
+        "UPDATE cases SET status = 'archived', conclusion_reason = 'DEC-212', "
+        "concluded_by = NULL, concluded_at = now() WHERE case_id = %s",
+        (case_id,),
+    )
+    for head in heads:
+        conn.execute(
+            "UPDATE alerts SET status = 'archived', closed_at = now(), sealed_at = now(), "
+            "close_reason = 'DEC-212' WHERE alert_id = %s",
+            (head,),
+        )
+
+
+@pytest.mark.db
+def test_analyze_409_on_an_archived_case_enqueues_nothing_and_spends_no_quota(
+    client, db, monkeypatch
+):
+    """INT-T03 / DEC-212: an archived case is the end of the analysis, like a concluded one - the same
+    409 "case đã kết luận", no job, no `case.analyzed` row (so no quota), nothing committed.
+    Red step: make the route's test "is it `investigating`" one of the three conclusions instead
+    and this is a 202 with a job."""
+    case_id = _make_case(db, client.user_id)
+    _archive(db, case_id)
+    commits: list[str] = []
+    rollbacks: list[str] = []
+    monkeypatch.setattr(db, "commit", lambda: commits.append("commit"))
+    monkeypatch.setattr(db, "rollback", lambda: rollbacks.append("rollback"))
+
+    resp = client.http.post(f"/api/tier2/cases/{case_id}/analyze")
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "case đã kết luận"
+    assert commits == []
+    assert rollbacks
+    jobs = db.execute("SELECT count(*) FROM jobs WHERE subject_id = %s", (case_id,)).fetchone()[0]
+    quota_rows = db.execute(
+        "SELECT count(*) FROM audit_events WHERE event_type = 'case.analyzed' AND subject_id = %s",
+        (case_id,),
+    ).fetchone()[0]
+    assert (jobs, quota_rows) == (0, 0)
+
+
+@pytest.mark.db
+def test_a_stray_investigate_job_on_an_archived_case_writes_nothing(db, monkeypatch):
+    """INT-T03 / DEC-212: an `investigate` job queued before the archive and run after it makes no
+    model call and writes no `llm_runs` row, and leaves the case as the archive left it."""
+    _enable_llm(monkeypatch)
+    _user, case_id, head = _build_case_with_head(db)
+    _archive(db, case_id, head)
+    db.commit()  # the job's own transaction starts clean, as the worker's does
+    fake = FakeLLM(responses=[_investigate_v2()])
+
+    tier2_investigate.run_investigate_job(db, _job(case_id), adapter=fake)
+
+    assert fake.calls == []
+    assert _rows(db, case_id) == []
+    db.rollback()
+    status, analyzed_at = db.execute(
+        "SELECT status, last_analyzed_at FROM cases WHERE case_id = %s", (case_id,)
+    ).fetchone()
+    assert (status, analyzed_at) == ("archived", None)
+
+
+@pytest.mark.db
+def test_a_stray_investigate_job_on_an_open_case_still_runs(db, monkeypatch):
+    """The control of the test above: the same job on a case that is not archived is not skipped."""
+    _enable_llm(monkeypatch)
+    _user, case_id, head = _build_case_with_head(db, raw_log="the log line to cite")
+    fake = FakeLLM(
+        responses=[
+            _investigate_v2(
+                evidence=[{"alert_id": head, "quote": "the log line to cite", "why": "w"}]
+            )
+        ]
+    )
+
+    tier2_investigate.run_investigate_job(db, _job(case_id), adapter=fake)
+
+    assert len(fake.calls) == 1 and len(_rows(db, case_id)) == 1
+
+
 @pytest.mark.db
 def test_analyze_tier1_role_gets_403_and_writes_authz_denied(client, db, monkeypatch):
     """`db.commit` spy (hard rule 5's second option) — proves `require_role`'s own

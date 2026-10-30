@@ -55,9 +55,10 @@ _ALERT_TIME = datetime(2026, 8, 16, 17, 56, 56, tzinfo=UTC)
 _counter = itertools.count()
 
 _TERMINAL_STATUSES = frozenset(
-    {"duplicate", "auto_closed", "closed_fp", "closed_benign", "closed_confirmed"}
+    {"duplicate", "auto_closed", "closed_fp", "closed_benign", "closed_confirmed", "archived"}
 )
-_HUMAN_CLOSED_STATUSES = frozenset({"closed_fp", "closed_benign", "closed_confirmed"})
+# `archived` (021, DEC-212) is sealed like a person's close, though no person closed it.
+_HUMAN_CLOSED_STATUSES = frozenset({"closed_fp", "closed_benign", "closed_confirmed", "archived"})
 
 
 def _hash(seed: str) -> str:
@@ -639,6 +640,58 @@ def test_closed_alert_is_skipped_without_rows(db, monkeypatch):
         "SELECT status, triage_status FROM alerts WHERE alert_id = %s", (alert_id,)
     ).fetchone()
     assert row == ("closed_fp", "ready")  # phase-5: never overwrite a closed alert
+
+
+@pytest.mark.db
+def test_archived_alert_is_skipped_without_rows(db, monkeypatch):
+    """INT-T03 / DEC-212: a `triage` job queued before the archive and run after it must not run ①
+    on an alert nobody is going to read: no model call, no `llm_runs` row, no event, and
+    `triage_status` / `triaged_count` stay as the archive left them."""
+    _enable_llm(monkeypatch)
+    alert_id = _seed_alert(db, status="archived", triage_status="pending", triaged_count=0)
+    fake = _RecordingLLM()  # no responses: a call would fail the test
+
+    run_triage_job(db, _job(alert_id), adapter=fake)
+
+    assert fake.calls == []
+    assert db.execute(
+        "SELECT count(*) FROM llm_runs WHERE subject_id = %s", (alert_id,)
+    ).fetchone() == (0,)
+    assert _event_types(db, alert_id) == set()
+    row = db.execute(
+        "SELECT status, triage_status, triaged_count FROM alerts WHERE alert_id = %s", (alert_id,)
+    ).fetchone()
+    assert row == ("archived", "pending", 0)
+
+
+@pytest.mark.db
+def test_a_new_alert_beside_an_archived_one_is_triaged_and_does_not_see_it(db, monkeypatch):
+    """INT-T03 / DEC-212: ① on a NEW alert (same agent, inside the +-2 h window) of an archived one
+    runs, and the correlation section of its prompt does not mention the archived alert: its rule,
+    its description, its id. `AlertStatus` has no `archived`, so a row for it would be a crash."""
+    _enable_llm(monkeypatch)
+    archived = _seed_alert(
+        db,
+        status="archived",
+        rule_id="99999",
+        description="ARCHIVED-NEIGHBOUR-MARKER",
+        occurrence_count=5000,  # the busiest neighbour: it would head the correlation rows
+    )
+    alert_id = _seed_alert(db)
+    fake = _RecordingLLM(responses=[TRIAGE_V2_ESCALATE, VERIFIER_V1_AGREE])
+
+    run_triage_job(db, _job(alert_id), adapter=fake)
+
+    assert {r[0] for r in _rows(db, alert_id, "role")} == {"proposer", "verifier"}
+    assert db.execute(
+        "SELECT triage_status FROM alerts WHERE alert_id = %s", (alert_id,)
+    ).fetchone() == ("ready",)
+    for call in fake.calls:
+        sent = call["system"] + call["user"]
+        assert "99999" not in sent
+        assert "ARCHIVED-NEIGHBOUR-MARKER" not in sent
+        assert archived not in sent
+        assert "archived" not in sent
 
 
 @pytest.mark.db

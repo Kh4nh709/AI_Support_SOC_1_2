@@ -5,6 +5,7 @@ the `rag-worker` and never blocks ① or ②: they read the newest stored row of
 time and carry on without it when there is none. One lookup, in order:
 
 1. the idle timeout is raised (a model call is client-side idle time to PostgreSQL);
+1a. an `archived` alert or case (DEC-212) is skipped: no call, nothing stored, like 1b;
 1b. an alert whose ① has finished (`alerts.triage_status` is not `pending`) is skipped: no call, nothing
    stored (`rag_results.status` has no `skipped`), because the lookup arrived too late for any prompt;
 2. the subject is parsed, its fingerprint built, its self-exclusion and its decision history computed
@@ -326,6 +327,18 @@ def _triage_has_finished(conn: psycopg.Connection, subject: Subject) -> bool:
     return row is not None and row[0] != "pending"
 
 
+def _is_archived(conn: psycopg.Connection, subject: Subject) -> bool:
+    """Whether the subject was set aside by the archive (INT-T03, DEC-212): an `archived` alert or case.
+    One that is not there is not "archived": the fingerprint says so with its `PermanentError`."""
+    if subject.kind == "alert":
+        row = conn.execute(
+            "SELECT status FROM alerts WHERE alert_id = %s", (subject.id,)
+        ).fetchone()
+    else:
+        row = conn.execute("SELECT status FROM cases WHERE case_id = %s", (subject.id,)).fetchone()
+    return row is not None and row[0] == "archived"
+
+
 def run_lookup_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = None) -> None:
     """Run one lookup (module doc). `adapter` defaults to a `DeepSeekAdapter` limited to the RAG
     budget; every test passes a fake."""
@@ -342,6 +355,12 @@ def run_lookup_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
         raise PermanentError(
             "rag_lookup: the job's subject is neither 'alert:<id>' nor 'case:<uuid>'"
         ) from None
+
+    if _is_archived(conn, subject):
+        # DEC-212: the archive does not cancel the jobs it leaves behind. Nothing reads the lookup of an
+        # archived alert or case, so no history, no candidates, no model call and no row.
+        _log({"rag_lookup": "skipped", "reason": "archived", "subject": subject.key})
+        return
 
     if _triage_has_finished(conn, subject):
         # ① read the newest lookup when it ran, and it has run: this one could reach no prompt, and a model

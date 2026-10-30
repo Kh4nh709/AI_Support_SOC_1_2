@@ -1385,6 +1385,22 @@ def test_an_alert_no_analyst_decided_is_no_source(db) -> None:
 
 
 @db_marked
+def test_an_archived_alert_or_case_is_no_source(db) -> None:
+    """INT-T03 / DEC-212: learned knowledge is drafted from what a person concluded. The archive concluded
+    nothing, so a (stray) `knowledge_draft` job for an archived alert or case is refused, not drafted.
+    """
+    decided_alert(db, "da-archived", status="archived")
+    with pytest.raises(PermanentError, match="archived"):
+        draft.source_record(db, Subject("alert", "da-archived"))
+    case_id = concluded_case(db, status="archived", heads=("dc-archived",))
+    assert db.execute("SELECT status FROM cases WHERE case_id = %s", (case_id,)).fetchone() == (
+        "archived",
+    )
+    with pytest.raises(PermanentError, match="archived"):
+        draft.source_record(db, Subject("case", case_id))
+
+
+@db_marked
 def test_a_case_still_investigating_is_no_source(db) -> None:
     case_id = concluded_case(db)
     db.execute("ALTER TABLE cases DISABLE TRIGGER USER")

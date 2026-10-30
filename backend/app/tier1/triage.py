@@ -80,11 +80,15 @@ from app.rag.lookup import lookup_material
 from app.rag.subject import Subject
 from app.security import detector, gate, linter
 
-#: The four terminal alert statuses phase-5 says a triage job must never overwrite
+#: The terminal alert statuses phase-5 says a triage job must never overwrite
 #: (`duplicate` never reaches `queued_tier1` either, but a stray job for one must
 #: still be skipped, not error). `auto_closed` is deliberately absent: phase-5's M2
-#: sample runs the identical path on it (design note 8 / acceptance 11).
-_CLOSED_STATUSES = frozenset({"closed_fp", "closed_benign", "closed_confirmed", "duplicate"})
+#: sample runs the identical path on it (design note 8 / acceptance 11). `archived` (INT-T03,
+#: DEC-212) is here too: the archive does not cancel the `triage` jobs it leaves behind, and one that
+#: runs after it must not spend a model call on, or write a verdict for, an alert nobody will read.
+_CLOSED_STATUSES = frozenset(
+    {"closed_fp", "closed_benign", "closed_confirmed", "duplicate", "archived"}
+)
 
 #: G10 — the explicit 26-column select `_load` runs; never a wildcard select.
 _ALERT_COLUMNS = (
