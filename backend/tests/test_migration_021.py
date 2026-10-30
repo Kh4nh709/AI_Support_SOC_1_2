@@ -28,6 +28,7 @@ from psycopg import sql
 
 from tests import conftest
 from tests.scratch_db import INSERT_ALERT, _with_db, insert_user
+from tests.test_archive import _put_alert, _put_case
 from tests.test_migration_020 import EVENTS_BEFORE_020, EVENTS_IN_020
 
 pytestmark = pytest.mark.db
@@ -413,6 +414,96 @@ def test_021_applies_on_a_database_at_020_the_way_make_migrate_runs_it(tmp_path)
                 "encode(sha256('x'::bytea), 'hex'), '{}'::jsonb, 'archived', now(), now())"
             )
             conn.rollback()
+    finally:
+        admin.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(dbname)))
+        admin.close()
+
+
+# ── upgrade from 020, on rows of the live shapes ────────────────────────────────────────────
+
+#: What the live database holds when 021 is applied to it (30/10/2026): the heads of the queue, the
+#: closes of the three analyst decisions, an auto-closed head (closed, never sealed), a duplicate, a
+#: concluded case with the person who concluded it, and an investigating case whose alert is
+#: `escalated_tier2` (the one status kept unsealed, `ck_alerts_h3_escalate_khong_seal`).
+LIVE_SHAPE_STATUSES = {
+    "received",
+    "queued_tier1",
+    "tier1_active",
+    "escalated_tier2",
+    "auto_closed",
+    "duplicate",
+    "closed_fp",
+    "closed_benign",
+    "closed_confirmed",
+}
+
+
+def _seed_live_shapes(conn) -> None:
+    """One row of each shape above, built the way `test_archive` builds the same shapes, on a DB at 020."""
+    tier1 = insert_user(conn, "tier1")
+    tier2 = insert_user(conn, "tier2")
+    _put_alert(conn, "m21-received", status="received", triage_status="pending", triaged_count=0)
+    queued = _put_alert(conn, "m21-queued", status="queued_tier1")
+    _put_alert(conn, "m21-active", status="tier1_active", acknowledged_by=tier1)
+    _put_alert(conn, "m21-auto", status="auto_closed", close_reason="autoclose rule")
+    _put_alert(conn, "m21-dup", status="duplicate", duplicate_of=queued)
+    for status in ("closed_fp", "closed_benign", "closed_confirmed"):
+        _put_alert(
+            conn, f"m21-{status}", status=status, acknowledged_by=tier1, close_reason="analyst"
+        )
+    escalated = _put_alert(conn, "m21-escalated", status="escalated_tier2", acknowledged_by=tier1)
+    _put_case(conn, tier2, [escalated])  # investigating: no concluded_at, no concluded_by
+    concluded = _put_alert(conn, "m21-concluded", status="closed_fp", acknowledged_by=tier1)
+    _put_case(conn, tier2, [concluded], status="concluded_fp", head_status="closed_fp")
+
+
+def _everything(dsn) -> dict:
+    """Every row of the tables the seed wrote, whole, as JSON: the comparison names no column, it
+    compares all of them."""
+    with psycopg.connect(dsn) as conn:
+        return {
+            table: conn.execute(
+                f"SELECT to_jsonb(t) FROM {table} t ORDER BY to_jsonb(t)::text"
+            ).fetchall()
+            for table in ("alerts", "cases", "case_alerts", "users", "audit_events")
+        }
+
+
+def test_021_applies_cleanly_on_rows_of_the_live_shapes_and_leaves_every_one_unchanged(tmp_path):
+    """Review of INT-T03, Minor 2: the test above applies 021 to an EMPTY database at 020, so it does
+    not show that the five `ADD CONSTRAINT` validations pass on rows like the live ones (a new CHECK is
+    validated against every existing row, under an exclusive lock). Here the database is at 020, holds a
+    row of each live shape, and only then takes 021: it must apply, and nothing it seeded may move.
+    """
+    session = _session_dsn()
+    if shutil.which("psql") is None:
+        pytest.skip("psql is not installed")
+    at_020 = _schema_without_021(tmp_path)
+    dbname = f"{conftest._dbname(session)}_021seed_test"
+    dsn = _with_db(session, dbname)
+    admin = psycopg.connect(conftest._maintenance_dsn(session), autocommit=True)
+    try:
+        admin.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(dbname)))
+        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(dbname)))
+        assert "migrate: applying 021_archive" not in _migrate(dsn, at_020)
+        with psycopg.connect(dsn) as conn:
+            _seed_live_shapes(conn)
+            conn.commit()
+        seeded = _everything(dsn)
+        assert {row[0]["status"] for row in seeded["alerts"]} == LIVE_SHAPE_STATUSES
+        assert {row[0]["status"] for row in seeded["cases"]} == {"investigating", "concluded_fp"}
+        assert any(row[0]["concluded_by"] for row in seeded["cases"])  # the concluded case has one
+        assert len(seeded["alerts"]) == 10 and len(seeded["case_alerts"]) == 2
+
+        applied = _migrate(dsn, SCHEMA_DIR)
+
+        assert "migrate: applying 021_archive" in applied
+        assert _everything(dsn) == seeded
+        with psycopg.connect(dsn) as conn:
+            recorded = conn.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = '021_archive'"
+            ).fetchone()
+        assert recorded is not None
     finally:
         admin.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(dbname)))
         admin.close()
