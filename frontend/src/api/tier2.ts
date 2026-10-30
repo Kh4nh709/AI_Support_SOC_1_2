@@ -3,8 +3,24 @@
 // wrote arrives as `unknown`-tolerant text and is rendered as text; nothing here is markup.
 import { ApiError, api } from "./client";
 
-/** `cases.status` of a case that is still being worked; every other value is a conclusion. */
+/** `cases.status` of a case that is still being worked; every other value is closed. */
 export const OPEN_CASE_STATUS = "investigating";
+
+/**
+ * `cases.status` of a case the archive of the old queue set aside without review (INT-T03, DEC-212). It is
+ * closed, and nobody concluded it: no `concluded_by`, and it is none of the three conclusions.
+ */
+export const ARCHIVED_CASE_STATUS = "archived";
+
+/** `ck_cases_status`: the five values of `cases.status`, `archived` (021) last. A row may still carry a word the UI does not know. */
+export const CASE_STATUSES = [
+  OPEN_CASE_STATUS,
+  "concluded_fp",
+  "concluded_policy_violation",
+  "confirmed_incident",
+  ARCHIVED_CASE_STATUS,
+] as const;
+export type CaseStatus = (typeof CASE_STATUSES)[number];
 
 /** The case list is paged by offset, this many rows a page (the route allows up to 200). */
 export const CASE_PAGE_SIZE = 50;

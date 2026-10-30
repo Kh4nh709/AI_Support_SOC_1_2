@@ -124,6 +124,8 @@ export const S = {
     closed_fp: "Đã đóng — dương tính giả",
     closed_benign: "Đã đóng — lành tính",
     closed_confirmed: "Đã đóng — xác nhận sự cố",
+    // INT-T03 / DEC-212: the old queue closed out without review. Not "đóng": nobody closed it.
+    archived: "Đã lưu trữ",
   },
 
   queue: {
@@ -393,6 +395,8 @@ export const S = {
     heldByOther: "Đang được người khác xử lý",
     decidedAs: (label: string) => `Đã quyết: ${label}`,
     notActionable: (label: string) => `Trạng thái: ${label} — chưa thể quyết định`,
+    // INT-T03 / DEC-212: set aside by the archive of the old queue; nobody decided it, and nobody can now.
+    archived: "Alert đã được lưu trữ khi dọn hàng đợi — không ai quyết định và không thể xử lý.",
     acknowledged: "Đã nhận xử lý",
     recorded: "Đã ghi quyết định",
     reopened: "Đã mở lại alert",
@@ -467,6 +471,10 @@ export const S = {
     timelineNote: (who: string) => `${who} thêm ghi chú`,
     timelineAnalysed: "Chạy phân tích AI ②",
     timelineConcluded: (who: string, conclusion: string) => `${who} kết luận: ${conclusion}`,
+    // DEC-212: the archive is the system's, not a person's conclusion.
+    timelineArchived: "Case được lưu trữ (dọn hàng đợi)",
+    archivedAt: (when: string) => `Đã lưu trữ lúc ${when} — không ai kết luận`,
+    conflictArchived: "Case đã được lưu trữ — không thể kết luận nữa.",
     notes: "Ghi chú",
     noNotes: "Chưa có ghi chú.",
     addNote: "Thêm ghi chú",
@@ -486,12 +494,14 @@ export const S = {
     concludedBy: (name: string, when: string) => `Đã được ${name} kết luận lúc ${when}`,
   },
 
-  // `cases.status`: the case is investigating, or concluded with one of the three conclusions.
+  // `cases.status`: the case is investigating, concluded with one of the three conclusions, or archived
+  // (DEC-212: the old queue closed out without review, concluded by nobody).
   caseStatus: {
     investigating: "Đang điều tra",
     concluded_fp: "Dương tính giả",
     concluded_policy_violation: "Vi phạm chính sách",
     confirmed_incident: "Xác nhận sự cố",
+    archived: "Đã lưu trữ",
   },
 
   // The three conclusions of `POST /api/tier2/cases/{id}/conclude`.
@@ -507,6 +517,7 @@ export const S = {
     closed_fp: "Đã đóng — không phải sự cố",
     closed_benign: "Đã đóng — vi phạm nội quy",
     closed_confirmed: "Đã đóng — sự cố xác nhận",
+    archived: "Đã lưu trữ",
   },
 
   ai2: {
@@ -669,6 +680,8 @@ export const S = {
         active: "Tier-1 đang xử lý",
         closed_by_tier1: "Đã đóng bởi Tier-1",
         escalated: "Chuyển Tier-2",
+        // INT-T03 / DEC-212: shown only while something is archived; never part of "closed by Tier-1".
+        archived: "Đã lưu trữ (dọn hàng đợi)",
         coverage: "Có gợi ý AI ① sẵn",
         ofHeads: (ready: string, heads: string) => `${ready} / ${heads}`,
       },
@@ -1180,7 +1193,7 @@ export const S = {
       system: "Hệ thống và job",
     } satisfies Record<AuditGroup, string>,
 
-    // One label for each of the 36 names of `audit/events.py`'s EVENT_TYPES, read through `labelOf`. The
+    // One label for each of the 38 names of `audit/events.py`'s EVENT_TYPES, read through `labelOf`. The
     // canvas gives nine; the rest follow its wording. An event with more than one use says the common part
     // (`admin.user_updated` is a role change, a deactivation, a reset and an unlock): the summary line of the
     // audit page says which.
@@ -1221,6 +1234,8 @@ export const S = {
       "knowledge.merged": "Gộp bản nháp vào tri thức",
       "rag.lookup_failed": "Tra cứu tri thức lỗi",
       "rag.integrity_failed": "Tệp tri thức không khớp bản gốc",
+      "alert.archived": "Lưu trữ alert (dọn hàng đợi)",
+      "case.archived": "Lưu trữ case (dọn hàng đợi)",
     },
 
     // The audit page (P11-T17, spec §4.7): `/admin/audit`, the canvas's `AdminAudit` and the "AUDIT" cards of
@@ -1323,6 +1338,9 @@ export const S = {
         truncatedUnknown: "case bị cắt bớt cụm",
         concluded: (conclusion: string) => `kết luận: ${conclusion}`,
         concludedUnknown: "Tier 2 kết luận case",
+        archived: "lưu trữ khi dọn hàng đợi, không ai quyết định",
+        caseArchived: "lưu trữ khi dọn hàng đợi, không ai kết luận",
+        archivedFrom: (status: string) => `trạng thái trước đó: ${status}`,
         analyzed: "chạy phân tích ②",
         job: (id: number) => `job ${id}`,
         suggested: (action: string) => `đề xuất ①: ${action}`,

@@ -573,6 +573,30 @@ describe("zero-filling what the API leaves out", () => {
     expect(valueOf(funnel, "Có gợi ý AI ① sẵn")).toBe("0 / 5");
   });
 
+  it("shows the archived heads on a row of their own, never inside 'Đã đóng bởi Tier-1' (DEC-212)", async () => {
+    await renderLoaded({
+      overviews: [
+        overview({
+          funnel: {
+            by_status: { archived: 7084, queued_tier1: 30, closed_fp: 4, closed_benign: 3 },
+            triage: { ready: 7000, unavailable: 0, pending: 100, none: 21 },
+          },
+        }),
+      ],
+    });
+    const funnel = block("Tình trạng xử lý");
+    expect(valueOf(funnel, "Đã đóng bởi Tier-1")).toBe("7");
+    expect(valueOf(funnel, "Đã lưu trữ (dọn hàng đợi)")).toBe("7.084");
+    expect(valueOf(funnel, "Chờ Tier-1")).toBe("30");
+  });
+
+  it("shows no archived row while nothing is archived", async () => {
+    await renderLoaded();
+    expect(
+      within(block("Tình trạng xử lý")).queryByText("Đã lưu trữ (dọn hàng đợi)"),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows an empty funnel as zeros", async () => {
     await renderLoaded({
       overviews: [

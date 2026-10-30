@@ -193,6 +193,19 @@ describe("funnelCounts", () => {
     expect(counts.steps.every((s) => s.count === 0)).toBe(true);
     expect(counts.ready).toBe(0);
     expect(counts.heads).toBe(0);
+    expect(counts.archived).toBe(0);
+  });
+
+  it("keeps archived heads out of 'closed by Tier-1': a bucket of their own (DEC-212)", () => {
+    // The archive closed the old queue without review; a person did not close those heads.
+    const counts = funnelCounts({
+      by_status: { archived: 7084, queued_tier1: 30, closed_fp: 4, closed_benign: 3 },
+      triage: { ...triage, ready: 7000 },
+    });
+    expect(counts.archived).toBe(7084);
+    expect(counts.steps.find((s) => s.key === "closed_by_tier1")?.count).toBe(7);
+    expect(counts.steps.find((s) => s.key === "waiting")?.count).toBe(30);
+    expect(FUNNEL_STEPS.flatMap((s) => s.statuses)).not.toContain("archived");
   });
 
   it("does not read a status off the prototype", () => {

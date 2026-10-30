@@ -1,5 +1,5 @@
 // src/features/admin/auditSummary.test.ts — what the audit page makes of an event's payload: the one-line
-// summary of each of the 36 event types, the link of a subject that is an alert or a case, the payload as
+// summary of each of the 38 event types, the link of a subject that is an alert or a case, the payload as
 // text, and the escape of the characters a person cannot see. A payload is whatever the writers of the
 // events put there, so every function here is also shown to survive a payload of the wrong shape.
 import { S } from "../../strings";
@@ -19,8 +19,8 @@ const TYPES = Object.keys(S.admin.eventType);
 const sum = (event_type: string, payload: unknown) => summaryOf({ event_type, payload });
 
 describe("summaryOf, one event type at a time", () => {
-  it("covers all 36 event types of the backend, and each has a case below", () => {
-    expect(TYPES).toHaveLength(36);
+  it("covers all 38 event types of the backend, and each has a case below", () => {
+    expect(TYPES).toHaveLength(38);
   });
 
   it.each<[type: string, payload: unknown, summary: string]>([
@@ -90,6 +90,28 @@ describe("summaryOf, one event type at a time", () => {
       "kết luận: Xác nhận sự cố; lý do: có bằng chứng lateral movement",
     ],
     ["tier2.concluded", null, "Tier 2 kết luận case"],
+    [
+      "alert.archived",
+      {
+        reason: "DEC-212: dọn hàng đợi",
+        before: "2026-10-30T20:15:00+07:00",
+        from_status: "queued_tier1",
+        decision: "DEC-212",
+      },
+      "lưu trữ khi dọn hàng đợi, không ai quyết định; trạng thái trước đó: Chờ xử lý; lý do: DEC-212: dọn hàng đợi",
+    ],
+    [
+      "alert.archived",
+      { from_status: "escalated_tier2", case_id: "c-1" },
+      "lưu trữ khi dọn hàng đợi, không ai quyết định; trạng thái trước đó: Đã chuyển tier 2",
+    ],
+    ["alert.archived", null, "lưu trữ khi dọn hàng đợi, không ai quyết định"],
+    [
+      "case.archived",
+      { reason: "DEC-212: dọn hàng đợi", from_status: "investigating", decision: "DEC-212" },
+      "lưu trữ khi dọn hàng đợi, không ai kết luận; trạng thái trước đó: Đang điều tra; lý do: DEC-212: dọn hàng đợi",
+    ],
+    ["case.archived", null, "lưu trữ khi dọn hàng đợi, không ai kết luận"],
     ["case.analyzed", { run_id: "run-1", job_id: 77 }, "chạy phân tích ②; job 77"],
     ["case.analyzed", null, "chạy phân tích ②"],
     [
@@ -357,7 +379,7 @@ describe("summaryOf, one event type at a time", () => {
     expect(sum(type, payload)).toBe(summary);
   });
 
-  it("has a case for every one of the 36 types", () => {
+  it("has a case for every one of the 38 types", () => {
     // The cases above are the table; this is the other direction: no type of the backend is left without one.
     const covered = new Set(
       [
@@ -374,6 +396,8 @@ describe("summaryOf, one event type at a time", () => {
         "case.opened",
         "case.truncated",
         "tier2.concluded",
+        "alert.archived",
+        "case.archived",
         "case.analyzed",
         "triage.suggested",
         "llm.gate_forced",
@@ -815,8 +839,15 @@ describe("subjectPathOf", () => {
     "llm.builder_violation",
     "autoclose.reviewed",
     "label.created",
+    "alert.archived",
   ];
-  const CASE_TYPES = ["case.opened", "case.truncated", "case.analyzed", "tier2.concluded"];
+  const CASE_TYPES = [
+    "case.opened",
+    "case.truncated",
+    "case.analyzed",
+    "tier2.concluded",
+    "case.archived",
+  ];
 
   it.each(ALERT_TYPES)("links the subject of %s to the alert", (event_type) => {
     expect(subjectPathOf({ event_type, subject_id: "1759012345.1662100" })).toBe(

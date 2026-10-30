@@ -92,6 +92,18 @@ const concluded = (over: Record<string, unknown> = {}) =>
     ...over,
   });
 
+// A case as the archive (DEC-212) leaves it: set aside without review, concluded by nobody.
+const archived = (over: Record<string, unknown> = {}) =>
+  detail({
+    status: "archived",
+    concluded_by: null,
+    concluded_by_name: null,
+    concluded_at: "2026-10-30T13:30:00+00:00",
+    conclusion_reason: "DEC-212: dọn hàng đợi",
+    heads: [head({ status: "archived" })],
+    ...over,
+  });
+
 const serve = (body: JsonBodyType, status = 200) =>
   server.use(http.get(CASE_URL, () => HttpResponse.json(body, { status })));
 
@@ -616,6 +628,29 @@ describe("the conclusion", () => {
     await waitFor(() => expect(screen.queryByRole("radio")).not.toBeInTheDocument());
   });
 
+  it("says the case was archived, and names nobody, when the 409 is an archived case's", async () => {
+    let gets = 0;
+    server.use(
+      http.get(CASE_URL, () => {
+        gets += 1;
+        return HttpResponse.json(gets === 1 ? detail() : archived());
+      }),
+      http.post(`${CASE_URL}/conclude`, () =>
+        HttpResponse.json({ detail: { status: "archived" } }, { status: 409 }),
+      ),
+    );
+    renderCase();
+    await page();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("radio", { name: "Xác nhận sự cố" }));
+    await user.type(screen.getByLabelText(S.case.reasonRequired), "chắc chắn");
+    await user.click(screen.getByRole("button", { name: S.case.concludeSubmit }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(S.case.conflictArchived);
+    expect(alert).not.toHaveTextContent("kết luận lúc");
+    await waitFor(() => expect(screen.queryByRole("radio")).not.toBeInTheDocument());
+  });
+
   it("names who concluded it by the returned id when the case has no name for them", async () => {
     let gets = 0;
     server.use(
@@ -680,6 +715,38 @@ describe("the conclusion", () => {
     expect(screen.queryByRole("button", { name: S.case.saveNote })).not.toBeInTheDocument();
     // What was written before stays readable.
     expect(screen.getByText("Nguồn là 127.0.0.x trên chính máy lab.")).toBeInTheDocument();
+  });
+
+  it("shows an archived case as closed: archived, the reason, when, and nobody who concluded it", async () => {
+    serve(archived());
+    renderCase();
+    await page();
+    const section = screen.getByRole("region", { name: S.case.conclusionHeading });
+    expect(within(section).getByText("Đã lưu trữ", { selector: "strong" })).toBeInTheDocument();
+    expect(within(section).getByText("DEC-212: dọn hàng đợi")).toBeInTheDocument();
+    expect(within(section).getByText(S.case.archivedAt("30/10/2026 20:30:00"))).toBeInTheDocument();
+    // never "concluded by —" or by a name: nobody concluded it
+    expect(section.textContent).not.toMatch(/kết luận lúc/);
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: S.case.concludeSubmit })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: S.case.saveNote })).not.toBeInTheDocument();
+    const summary = screen.getByRole("region", { name: S.case.summaryLabel });
+    expect(within(summary).getByText("Đã lưu trữ")).toBeInTheDocument();
+    expect(within(summary).queryByText("Đang điều tra")).not.toBeInTheDocument();
+    // its heads are archived too
+    expect(screen.getAllByText("Đã lưu trữ").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("puts the archive in the timeline as the system's, not as a conclusion by someone", async () => {
+    serve(archived());
+    renderCase();
+    await page();
+    const items = within(screen.getByRole("list", { name: S.case.timeline })).getAllByRole(
+      "listitem",
+    );
+    const texts = items.map((li) => li.textContent ?? "");
+    expect(texts.some((t) => t.includes(S.case.timelineArchived))).toBe(true);
+    expect(texts.some((t) => t.includes("kết luận:"))).toBe(false);
   });
 
   it("repeats the scope note under a concluded confirmed incident", async () => {
@@ -1242,6 +1309,26 @@ describe("the page and the ② column", () => {
     expect(await screen.findByRole("button", { name: S.ai2.analyze })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: S.case.aiHeading })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: S.case.infoHeading })).toBeInTheDocument();
+  });
+
+  it("tells the ② column an archived case is closed", async () => {
+    serve(archived());
+    server.use(
+      http.get(`${CASE_URL}/investigation`, () =>
+        HttpResponse.json({
+          state: "idle",
+          run_id: null,
+          minutes: null,
+          run: null,
+          current: null,
+          case_open: false,
+        }),
+      ),
+    );
+    renderCase();
+    await page();
+    expect(await screen.findByText(S.ai2.idleClosed)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: S.ai2.analyze })).not.toBeInTheDocument();
   });
 
   it("tells the ② column a concluded case is closed", async () => {

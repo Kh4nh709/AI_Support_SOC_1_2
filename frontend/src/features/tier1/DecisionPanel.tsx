@@ -186,6 +186,17 @@ function Actions({
     );
   }
   const label = labelOf(S.status, view.status);
+  // DEC-212: the archive of the old queue is not a decision, even for an alert somebody held at the time.
+  if (view.status === "archived") {
+    return (
+      <div className="space-y-1 text-sm">
+        <p>{S.decision.archived}</p>
+        {view.close_reason && (
+          <p className="whitespace-pre-wrap break-words text-muted">{view.close_reason}</p>
+        )}
+      </div>
+    );
+  }
   if (DECIDED.has(view.status)) {
     return (
       <div className="space-y-1 text-sm">

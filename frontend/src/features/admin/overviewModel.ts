@@ -126,6 +126,11 @@ export function funnelCounts(funnel: Funnel): {
   ready: number;
   /** Every head of the range, in whatever status (a head being enriched has no row of its own). */
   heads: number;
+  /**
+   * The heads the archive set aside (INT-T03, DEC-212). A bucket of their own: not one of the five rows, and
+   * never part of "closed by Tier-1" - no person closed them.
+   */
+  archived: number;
 } {
   const steps = FUNNEL_STEPS.map((step) => ({
     key: step.key,
@@ -135,7 +140,12 @@ export function funnelCounts(funnel: Funnel): {
     (sum, status) => sum + countOf(funnel.by_status, status),
     0,
   );
-  return { steps, ready: countOf(funnel.triage, "ready"), heads };
+  return {
+    steps,
+    ready: countOf(funnel.triage, "ready"),
+    heads,
+    archived: countOf(funnel.by_status, "archived"),
+  };
 }
 
 // --- health, jobs, failed sections --------------------------------------------------------------------------

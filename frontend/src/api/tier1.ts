@@ -149,6 +149,26 @@ export type Suggestion = {
   created_at?: string | null;
 };
 
+/**
+ * `ck_alerts_status`: the eleven values of `alerts.status`, `archived` (021, DEC-212: the old queue closed out
+ * without review) last. A response may still carry a word the UI does not know (the fields below stay `string`
+ * and render it as it came); `archived` is a status no person decided, so it is in no group of decided ones.
+ */
+export const ALERT_STATUSES = [
+  "received",
+  "duplicate",
+  "auto_closed",
+  "enriching",
+  "queued_tier1",
+  "tier1_active",
+  "escalated_tier2",
+  "closed_fp",
+  "closed_benign",
+  "closed_confirmed",
+  "archived",
+] as const;
+export type AlertStatus = (typeof ALERT_STATUSES)[number];
+
 export type CorrelationRow = {
   rule_id: string;
   category: string | null;

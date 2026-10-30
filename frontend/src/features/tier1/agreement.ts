@@ -10,6 +10,7 @@
 // A decision that is not a Tier 1 person's (`auto_closed`, and a `closed_confirmed` with no case, which is
 // Tier 2's conclusion) is not in the report at all, so it has no comparison: `null`. An alert with a case was
 // escalated by Tier 1 whatever its status is now (see `humanDecisionOf`), and is compared as an escalation.
+// An `archived` alert (DEC-212, the old queue set aside without review) is not a decision at all: `null`.
 
 export type Agreement = "agree" | "disagree" | "no_verdict";
 
@@ -35,6 +36,10 @@ const HUMAN: Readonly<Record<string, HumanDecision>> = {
  * escalation, whatever the status is now. With no case, the status is the decision.
  */
 export function humanDecisionOf(status: string, caseId: CaseRef): HumanDecision | null {
+  // DEC-212: an archived alert (the old queue, set aside without review) is nobody's decision, with a case or
+  // without one - the case it may carry was archived with it. A person's earlier escalation of it stays in the
+  // audit log (`tier1.escalated`); this function says what the alert is now.
+  if (status === "archived") return null;
   if (caseId !== null && caseId !== undefined) return "escalated";
   return HUMAN[status] ?? null;
 }

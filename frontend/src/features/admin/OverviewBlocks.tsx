@@ -296,6 +296,10 @@ export function FunnelList({ funnel }: { funnel: NonNullable<OverviewResponse["f
       label: P.funnel[step.key],
       value: formatCount(step.count),
     })),
+    // DEC-212: a row of its own, only while something is archived, between the statuses and ① coverage.
+    ...(counts.archived > 0
+      ? [{ key: "archived", label: P.funnel.archived, value: formatCount(counts.archived) }]
+      : []),
     {
       key: "coverage",
       label: P.funnel.coverage,

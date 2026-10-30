@@ -1,4 +1,4 @@
-// What the audit page makes of an event (spec §4.7): the one-line summary of each of the 36 event types, built
+// What the audit page makes of an event (spec §4.7): the one-line summary of each of the 38 event types, built
 // client-side from the payload; the link of a subject that is an alert or a case; the payload as text; and the
 // escape of the characters a person cannot see.
 //
@@ -219,6 +219,17 @@ const BUILDERS: Readonly<Record<string, Builder>> = {
       ...when(str(p, "reason"), (reason) => A.reason(free(reason))),
     ];
   },
+  // DEC-212: the old queue closed out without review. A system act: no decision, no conclusion, no name.
+  "alert.archived": (p) => [
+    A.archived,
+    ...when(str(p, "from_status"), (status) => A.archivedFrom(free(labelOf(S.status, status)))),
+    ...when(str(p, "reason"), (reason) => A.reason(free(reason))),
+  ],
+  "case.archived": (p) => [
+    A.caseArchived,
+    ...when(str(p, "from_status"), (status) => A.archivedFrom(free(labelOf(S.caseStatus, status)))),
+    ...when(str(p, "reason"), (reason) => A.reason(free(reason))),
+  ],
   "case.analyzed": (p) => [A.analyzed, ...when(num(p, "job_id"), A.job)],
   "triage.suggested": (p) => {
     // Withheld by the server: one line, whichever of the keys it took, and none of what is left is read.
@@ -437,6 +448,7 @@ const ALERT_SUBJECT: ReadonlySet<string> = new Set([
   "llm.builder_violation",
   "autoclose.reviewed",
   "label.created",
+  "alert.archived",
 ]);
 
 /** The events whose subject is a case (`case_id`). */
@@ -445,6 +457,7 @@ const CASE_SUBJECT: ReadonlySet<string> = new Set([
   "case.truncated",
   "case.analyzed",
   "tier2.concluded",
+  "case.archived",
 ]);
 
 /**

@@ -110,3 +110,18 @@ describe("humanDecisionOf, the decision the report counts", () => {
     expect(humanDecisionOf(status, caseId)).toBe(expected);
   });
 });
+
+describe("an archived alert is no decision (DEC-212)", () => {
+  // The archive set the old queue aside without review: nobody decided it, so there is no human decision
+  // to compare ① with - not a close, and not an escalation either, though the alert may still carry the
+  // case of an escalation that happened before (that escalation stays in the audit log as `tier1.escalated`).
+  it.each([null, undefined, 9, "9"])("has no human decision, with case %s", (caseId) => {
+    expect(humanDecisionOf("archived", caseId)).toBeNull();
+  });
+
+  it.each([null, undefined, 9])("is not compared with ①, with case %s", (caseId) => {
+    for (const action of ["escalate", "false_positive", "needs_review", "quarantine_host", null]) {
+      expect(agreementOf("archived", action, caseId)).toBeNull();
+    }
+  });
+});

@@ -284,6 +284,15 @@ describe("who sees what", () => {
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
+  it("says an archived alert was set aside, not decided, and offers no action (DEC-212)", () => {
+    // It may even have been held by the signed-in user when the queue was archived: still nobody's decision.
+    renderPanel(mine({ status: "archived", close_reason: "DEC-212: dọn hàng đợi" }));
+    expect(screen.getByText(S.decision.archived)).toBeInTheDocument();
+    expect(screen.queryByText(S.decision.decidedAs(S.status.archived))).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+  });
+
   it("unknown enum renders raw code: a status the UI has no label for", () => {
     renderPanel(mine({ status: "quantum_pending" }));
     expect(screen.getByText(S.decision.notActionable("quantum_pending"))).toBeInTheDocument();

@@ -121,6 +121,18 @@ describe("the rows", () => {
     expect(screen.getByText("Xác nhận sự cố")).toBeInTheDocument();
   });
 
+  it("labels an archived case 'Đã lưu trữ' - closed by the archive, not concluded by anyone (DEC-212)", async () => {
+    serve([row(2), row(1, { status: "archived", last_analyzed_at: null, last_run: null })]);
+    renderList();
+    await table();
+    const archivedRow = screen.getByText("Brute force vào máy chủ 1").closest("tr") as HTMLElement;
+    expect(within(archivedRow).getByText("Đã lưu trữ")).toBeInTheDocument();
+    expect(within(archivedRow).queryByText("Đang điều tra")).not.toBeInTheDocument();
+    const openRow = screen.getByText("Brute force vào máy chủ 2").closest("tr") as HTMLElement;
+    expect(within(openRow).getByText("Đang điều tra")).toBeInTheDocument();
+    expect(screen.queryByText("Dương tính giả")).not.toBeInTheDocument();
+  });
+
   it("says a case never analysed is so, not a blank or a dash", async () => {
     serve([row(1, { last_analyzed_at: null, last_run: null })]);
     renderList();

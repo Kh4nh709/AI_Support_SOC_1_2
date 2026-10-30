@@ -7,6 +7,7 @@ import { useId, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 import {
   CONCLUSIONS,
+  ARCHIVED_CASE_STATUS,
   OPEN_CASE_STATUS,
   addNote,
   concludeCase,
@@ -239,7 +240,10 @@ function timelineOf(data: CaseDetail): TimelineEvent[] {
   if (data.last_analyzed_at !== null) {
     events.push({ at: data.last_analyzed_at, text: S.case.timelineAnalysed });
   }
-  if (data.status !== OPEN_CASE_STATUS && data.concluded_at !== null) {
+  if (data.status === ARCHIVED_CASE_STATUS && data.concluded_at !== null) {
+    // DEC-212: the archive of the old queue is the system's act, not a conclusion by anyone.
+    events.push({ at: data.concluded_at, text: S.case.timelineArchived });
+  } else if (data.status !== OPEN_CASE_STATUS && data.concluded_at !== null) {
     const who = data.concluded_by_name ?? data.concluded_by ?? S.common.missing;
     events.push({
       at: data.concluded_at,
@@ -391,6 +395,11 @@ function Conclusion({ caseId, data, open }: { caseId: string; data: CaseDetail; 
       await client.invalidateQueries({ queryKey: tier2Keys.case(caseId) });
       const fresh = client.getQueryData<CaseDetail>(tier2Keys.case(caseId));
       const seen = conflictOf(failure);
+      if (fresh?.status === ARCHIVED_CASE_STATUS || seen?.status === ARCHIVED_CASE_STATUS) {
+        // Archived (DEC-212), not concluded: there is no one to name.
+        setConflict(S.case.conflictArchived);
+        return;
+      }
       const who =
         fresh?.concluded_by_name ?? fresh?.concluded_by ?? seen?.concluded_by ?? S.common.missing;
       const when = formatDateTime(fresh?.concluded_at ?? seen?.concluded_at ?? null);
@@ -487,10 +496,12 @@ function Conclusion({ caseId, data, open }: { caseId: string; data: CaseDetail; 
             <p className="whitespace-pre-wrap">{asText(data.conclusion_reason)}</p>
           )}
           <p className="text-muted">
-            {S.case.concludedBy(
-              data.concluded_by_name ?? data.concluded_by ?? S.common.missing,
-              formatDateTime(data.concluded_at),
-            )}
+            {data.status === ARCHIVED_CASE_STATUS
+              ? S.case.archivedAt(formatDateTime(data.concluded_at))
+              : S.case.concludedBy(
+                  data.concluded_by_name ?? data.concluded_by ?? S.common.missing,
+                  formatDateTime(data.concluded_at),
+                )}
           </p>
           {data.status === "confirmed_incident" && (
             <p className="text-xs text-muted">{S.case.scopeNote}</p>

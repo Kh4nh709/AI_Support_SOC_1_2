@@ -239,6 +239,22 @@ describe("aiStateOfView", () => {
   });
 });
 
+it("does not count an archived alert as decided: the blind arm stays hidden (DEC-212)", () => {
+  expect(DECIDED.has("archived")).toBe(false);
+  const blindRow = {
+    alert_id: "a-1",
+    status: "archived",
+    suggestion_visible: false,
+  } as unknown as Parameters<typeof aiStateOfRow>[0];
+  expect(aiStateOfRow(blindRow)).toEqual({ kind: "hidden" });
+  const blindView = {
+    alert_id: "a-1",
+    status: "archived",
+    suggestion_visible: false,
+  } as unknown as Parameters<typeof aiStateOfView>[0];
+  expect(aiStateOfView(blindView)).toEqual({ kind: "hidden" });
+});
+
 it("lists exactly the five statuses the server shows the suggestion in", () => {
   // visibility.SHOW_STATES of the backend.
   expect([...DECIDED].sort()).toEqual([

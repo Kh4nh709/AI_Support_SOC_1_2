@@ -9,6 +9,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ALERT_STATUSES } from "./api/tier1";
+import { CASE_STATUSES } from "./api/tier2";
 import { MIN_QUOTE_CHARS, S, bandCodeOfLabel, labelOf } from "./strings";
 
 it("names the two Tier-1 closing decisions, escalate and reopen", () => {
@@ -95,6 +97,38 @@ it("labels every alert status the Jinja page labelled", () => {
     closed_benign: "Đã đóng — lành tính",
     closed_confirmed: "Đã đóng — xác nhận sự cố",
   });
+});
+
+it("has a label for every status of the two database CHECKs, and the lists are the database's", () => {
+  const schema = readFileSync(join("..", "docs", "Schema", "schema.sql"), "utf8");
+  const quoted = (name: string): string[] => {
+    // the LAST definition of the constraint in schema.sql is the one in force (a migration drops and re-adds it)
+    const all = [
+      ...schema.matchAll(new RegExp(`CONSTRAINT ${name} CHECK \\(([\\s\\S]*?)\\)\\)`, "g")),
+    ];
+    const last = all[all.length - 1]?.[1] ?? "";
+    return [...last.matchAll(/'([a-z_0-9]+)'/g)].map((m) => m[1] ?? "");
+  };
+  expect([...ALERT_STATUSES].sort()).toEqual(quoted("ck_alerts_status").sort());
+  expect([...CASE_STATUSES].sort()).toEqual(quoted("ck_cases_status").sort());
+  for (const status of ALERT_STATUSES) {
+    // `duplicate` and the enrichment states are shown only on the pages that have a label for them
+    expect(S.status, status).toHaveProperty(status);
+  }
+  for (const status of CASE_STATUSES) expect(S.caseStatus, status).toHaveProperty(status);
+});
+
+it("labels `archived`, the status of the old queue closed out without review (DEC-212)", () => {
+  expect(S.status.archived).toBe("Đã lưu trữ");
+  expect(S.caseStatus.archived).toBe("Đã lưu trữ");
+  expect(S.headStatus.archived).toBe("Đã lưu trữ");
+  expect(labelOf(S.status, "archived")).toBe("Đã lưu trữ");
+  expect(labelOf(S.caseStatus, "archived")).toBe("Đã lưu trữ");
+  // not worded as a person's close
+  expect(S.status.archived).not.toBe(S.status.closed_benign);
+  expect(S.status.archived).not.toMatch(/đóng/i);
+  expect(S.admin.eventType["alert.archived"]).toBe("Lưu trữ alert (dọn hàng đợi)");
+  expect(S.admin.eventType["case.archived"]).toBe("Lưu trữ case (dọn hàng đợi)");
 });
 
 it("says 'ẩn — nhánh mù' for the blind arm and 'chưa có' for no result yet", () => {
