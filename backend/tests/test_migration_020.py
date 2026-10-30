@@ -835,10 +835,13 @@ def _event_names(db) -> list[str]:
 
 
 def test_the_event_constraint_holds_36_names_the_28_first_in_order(db):
+    """020's 36 names, 019's 28 first. The shared database is migrated to the end, so a later migration's
+    names (021: `alert.archived`, `case.archived`, DEC-212) follow them: they only ever append."""
     names = _event_names(db)
-    assert len(names) == len(set(names)) == 36
+    assert len(names) == len(set(names)) >= 36
     assert names[:28] == EVENTS_BEFORE_020
-    assert names[28:] == EVENTS_IN_020
+    assert names[28:36] == EVENTS_IN_020
+    assert names[36:] == ["alert.archived", "case.archived"]
 
 
 def test_the_event_constraint_is_the_python_event_types(db):
@@ -1047,7 +1050,8 @@ def test_020_applies_on_a_database_at_019_the_way_make_migrate_runs_it(tmp_path)
                     "WHERE conname = 'ck_audit_event_type'"
                 ).fetchone()[0]
             )
-            assert names == EVENTS_BEFORE_020 + EVENTS_IN_020
+            # 020's 36, then 021's two: the real migrate.sh applied every file above 019
+            assert names == EVENTS_BEFORE_020 + EVENTS_IN_020 + ["alert.archived", "case.archived"]
             conn.rollback()
     finally:
         admin.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(dbname)))

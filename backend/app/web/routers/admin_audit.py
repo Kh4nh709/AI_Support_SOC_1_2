@@ -225,6 +225,9 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "case.opened",
         "case.truncated",
         "tier2.concluded",
+        # INT-T03 (DEC-212): the old queue closed out without review - a system act, not a decision
+        "alert.archived",
+        "case.archived",
     ),
     "model": (
         "triage.suggested",

@@ -51,6 +51,17 @@ for i, st in enumerate(["closed_fp","closed_benign","closed_confirmed"]):
          "ck_alerts_h2_dong_boi_nguoi_phai_seal",
          ins(20+i, status=f"'{st}'", closed_at="now()"))
 
+# ── 021 · DEC-212 · 'archived' là trạng thái terminal MỚI của alerts ─────────
+# Nó chịu G3 (phải có closed_at) VÀ H2 (phải có sealed_at): một đầu cụm bị lưu trữ thôi hút bản sao.
+case("021 · G3 · status='archived' mà closed_at NULL",
+     "ck_alerts_g3_terminal_phai_co_closed_at",
+     ins(15, status="'archived'", sealed_at="now()"))
+case("021 · H2 · status='archived' có closed_at nhưng sealed_at NULL",
+     "ck_alerts_h2_dong_boi_nguoi_phai_seal",
+     ins(23, status="'archived'", closed_at="now()"))
+case("021 · status = 'archive' (gõ thiếu một chữ)", "ck_alerts_status",
+     ins(24, status="'archive'", closed_at="now()", sealed_at="now()"))
+
 # ── H3 (P6:264) · escalate mà lại seal ──────────────────────────────────────
 case("H3 · escalated_tier2 có sealed_at", "ck_alerts_h3_escalate_khong_seal",
      ins(30, status="'escalated_tier2'", sealed_at="now()"))
@@ -93,12 +104,31 @@ case("cases · kết luận mà không có concluded_at",
      "'00000000-1111-4000-8000-000000000001');")
 # Phải cấp ĐỦ ba cột mốc, nếu không ck_cases_ket_luan_phai_co_moc nổ trước và
 # ck_cases_status không bao giờ được kiểm.
-case("cases · status ngoài 4 giá trị", "ck_cases_status",
+case("cases · status ngoài 5 giá trị", "ck_cases_status",
      "INSERT INTO cases (case_id,title,status,severity,created_by,"
      "concluded_at,concluded_by,conclusion_reason) VALUES "
      "('00000000-0000-4000-8000-00000000beef','t','closed_fp','high',"
      "'00000000-1111-4000-8000-000000000001',now(),"
      "'00000000-1111-4000-8000-000000000001','r');")
+
+# ── 021 · DEC-212 · cases.status = 'archived' ───────────────────────────────
+# Một case bị lưu trữ không do ai kết luận: concluded_by được phép NULL, và CHỈ nó. Mốc kết luận
+# và lý do thì vẫn bắt buộc; ba kết luận của người giữ nguyên luật cũ (đủ cả ba cột).
+CASE_U = "'00000000-1111-4000-8000-000000000001'"
+case("021 · case 'archived' mà không có concluded_at",
+     "ck_cases_ket_luan_phai_co_moc",
+     "INSERT INTO cases (case_id,title,status,severity,created_by,conclusion_reason) VALUES "
+     f"('00000000-0000-4000-8000-00000000d001','t','archived','high',{CASE_U},'DEC-212');")
+case("021 · case 'archived' mà không có conclusion_reason",
+     "ck_cases_ket_luan_phai_co_moc",
+     "INSERT INTO cases (case_id,title,status,severity,created_by,concluded_at) VALUES "
+     f"('00000000-0000-4000-8000-00000000d002','t','archived','high',{CASE_U},now());")
+for i, st in enumerate(["concluded_fp", "concluded_policy_violation", "confirmed_incident"]):
+    case(f"021 · case '{st}' mà concluded_by NULL (chỉ 'archived' được miễn)",
+         "ck_cases_ket_luan_phai_co_moc",
+         "INSERT INTO cases (case_id,title,status,severity,created_by,concluded_at,"
+         "conclusion_reason) VALUES "
+         f"('00000000-0000-4000-8000-00000000d01{i}','t','{st}','high',{CASE_U},now(),'r');")
 
 # ── llm_runs ────────────────────────────────────────────────────────────────
 def LR(rid, pipe, subt, res):
@@ -134,6 +164,10 @@ case("R-D5-1 · event_type gõ sai một ký tự vẫn vào được (lớp l�
      "ck_audit_event_type",
      "INSERT INTO audit_events (event_type,subject_id,actor_role) "
      "VALUES ('tier1.decidedd','y','system');")
+case("021 · event_type gõ thiếu một chữ ('alert.archive') không vào được",
+     "ck_audit_event_type",
+     "INSERT INTO audit_events (event_type,subject_id,actor_role) "
+     "VALUES ('alert.archive','y','system');")
 case("009 · actor_role='system' mà CÓ actor_id", "ck_audit_actor_id_theo_role",
      "INSERT INTO audit_events (event_type,subject_id,actor_role,actor_id) "
      "VALUES ('alert.auto_closed','y','system','00000000-1111-4000-8000-000000000001');")
@@ -179,6 +213,15 @@ POSITIVE = [
     ("R-D7-1 · job cũ ĐÃ XONG không cản job mới (partial, không unique toàn bảng)",
      "INSERT INTO jobs (job_type,subject_id,status) VALUES ('enrich','a2','succeeded');"
      "INSERT INTO jobs (job_type,subject_id,status) VALUES ('enrich','a2','pending');"),
+    ("021 · alert 'archived' có CẢ closed_at LẪN sealed_at",
+     ins(95, status="'archived'", closed_at="now()", sealed_at="now()")),
+    ("021 · case 'archived' có concluded_at + lý do, KHÔNG có concluded_by (không ai kết luận)",
+     "INSERT INTO cases (case_id,title,status,severity,created_by,concluded_at,"
+     "conclusion_reason) VALUES ('00000000-0000-4000-8000-00000000d0a1','t','archived','high',"
+     "'00000000-1111-4000-8000-000000000001',now(),'DEC-212');"),
+    ("021 · audit alert.archived và case.archived, actor_role='system', KHÔNG actor_id",
+     "INSERT INTO audit_events (event_type,subject_id,actor_role) VALUES "
+     "('alert.archived','a1','system'),('case.archived','c1','system');"),
     ("M4 · auto_closed có closed_at, sealed_at NULL (cụm còn hút)",
      ins(90, status="'auto_closed'", closed_at="now()")),
     ("D-C5 · escalated_tier2 không seal",
@@ -250,11 +293,12 @@ def tien_kiem():
         print(f"DỪNG · container '{CT}' nối được nhưng schema chưa nạp đủ "
               f"(thấy {n}/4 bảng nền). Nạp docs/Schema/schema.sql trước.")
         raise SystemExit(2)
-    # S8 · seed user cố định — cases.created_by có FK tới users từ migration 007.
+    # S8 · seed user cố định — cases.created_by có FK tới users từ migration 007; password_hash
+    # NOT NULL từ migration 011 (021 cần user thật cho ca đối chứng của case 'archived').
     # uuid lấy từ tập ANALYSTS của gen_data.py, không tự bịa.
     subprocess.run(["docker","exec","-i",CT,"psql","-U","postgres","-d","soc","-q"],
-        input="INSERT INTO users (user_id, username, display_name, role) VALUES "
-              "('00000000-1111-4000-8000-000000000001','soc.admin','SOC Admin','admin') "
+        input="INSERT INTO users (user_id, username, display_name, role, password_hash) VALUES "
+              "('00000000-1111-4000-8000-000000000001','soc.admin','SOC Admin','admin','x') "
               "ON CONFLICT (user_id) DO NOTHING;",
         capture_output=True, text=True)
     print(f"Tiền kiểm: container '{CT}' · 4/4 bảng nền có mặt · user fixture đã seed.\n")
