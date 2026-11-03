@@ -71,7 +71,7 @@ const rows = (): DigestRow[] => [
     occurrence_count: 9,
     first_seen_at: "2026-09-29T14:15:00+00:00",
     last_seen_at: "2026-09-29T14:16:00+00:00",
-    suggested_action: "escalate",
+    suggested_action: "true_positive",
     disagreement: true,
   }),
   digestRow({
@@ -427,6 +427,16 @@ describe("the rows", () => {
     expect(cells[4]).toBe("42");
     expect(cells[5]).toBe("08:02 – 17:40");
     expect(cells[6]).toBe(S.ai1.action.false_positive);
+    expect(cells[6]).toBe("FP");
+  });
+
+  it("shows a true_positive ① suggestion as TP (it was `escalate` before P14-T01, DEC-213)", async () => {
+    serveDigest(digest());
+    renderPage();
+    await loaded();
+    // ① would not have closed it, and the cell says so beside the verdict
+    expect(cellsOf(rowOf("srv-web-01"))[6]).toMatch(/^TP/);
+    expect(S.ai1.action).not.toHaveProperty("escalate");
   });
 
   it("shows a span in the display zone, whatever the browser's", async () => {
@@ -979,7 +989,7 @@ describe("a review", () => {
     fresh[0] = recorded(IDS.open, "correct");
     fresh[1] = recorded(IDS.disagree, "unsure", {
       disagreement: true,
-      suggested_action: "escalate",
+      suggested_action: "true_positive",
     });
     serveDigest(digest(), digest({ rows: fresh }));
     serveReview(({ alertId }) => ok(recorded(alertId, "correct")));

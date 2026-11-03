@@ -47,7 +47,7 @@ const sessionOf = (role: Session["role"]): Session => ({
 
 const suggestion = (over: Partial<Suggestion> = {}): Suggestion => ({
   run_id: "r1",
-  suggested_action: "escalate",
+  suggested_action: "true_positive",
   confidence: "medium",
   reasons: [
     {
@@ -58,8 +58,8 @@ const suggestion = (over: Partial<Suggestion> = {}): Suggestion => ({
   ],
   gate: {
     forced: false,
-    proposed_verdict: "escalate",
-    final_verdict: "escalate",
+    proposed_verdict: "true_positive",
+    final_verdict: "true_positive",
     verifier_verdict: "agree",
   },
   correlated_at_analysis: 4,
@@ -75,6 +75,8 @@ const full = (over: Partial<AlertView> = {}): AlertView => ({
   suggestion_visible: true,
   triage_status: "ready",
   suggestion: suggestion(),
+  proposed_action: "true_positive",
+  held_by: [],
   rule_id: "5760",
   rule_level: 5,
   description: "sshd: authentication failed",
@@ -156,6 +158,8 @@ function blind(over: Partial<AlertView> = {}): AlertView {
   const stripped = full({ suggestion_visible: false });
   delete stripped.suggestion;
   delete stripped.triage_status;
+  delete stripped.proposed_action; // P14-T03: the model's answer and why it was held go with the suggestion
+  delete stripped.held_by;
   return { ...stripped, ...over };
 }
 
@@ -549,8 +553,27 @@ describe("the ① column, from the state of the view", () => {
   it("shows ① for the visible arm", async () => {
     renderPage();
     await loaded();
-    expect(within(aiColumn()).getByText(S.ai1.verdict).parentElement).toHaveTextContent(
-      S.ai1.action.escalate,
+    expect(within(aiColumn()).getByText(/AI kết luận/)).toHaveTextContent(
+      "AI kết luận: TP (độ tin cậy trung bình)",
+    );
+  });
+
+  it("says why the system held a verdict for a person, from the view's own keys", async () => {
+    views = {
+      a1: full({
+        suggestion: suggestion({
+          suggested_action: "needs_review",
+          gate: { forced: true, forced_by: ["step4"], proposed_verdict: "false_positive" },
+        }),
+        proposed_action: "false_positive",
+        held_by: ["fp_policy:asset_criticality", "fp_policy:playbook_rule"],
+      }),
+    };
+    renderPage();
+    await loaded();
+    expect(within(aiColumn()).getByText(/AI kết luận/)).toHaveTextContent(
+      "AI kết luận: FP (độ tin cậy trung bình) — hệ thống giữ lại cho người xem vì: " +
+        "tài sản quan trọng hoặc chưa rõ, không khớp bảng quyết định đã duyệt",
     );
   });
 
@@ -563,8 +586,10 @@ describe("the ① column, from the state of the view", () => {
     const col = aiColumn();
     expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
     for (const word of [
-      "Chuyển tier 2",
-      "escalate",
+      "TP",
+      "true_positive",
+      "AI kết luận",
+      "giữ lại",
       "trung bình",
       "Failed password for invalid user admin from",
     ]) {
@@ -582,7 +607,8 @@ describe("the ① column, from the state of the view", () => {
     views = { a1: blind() };
     renderPage();
     await loaded();
-    expect(screen.queryByText(S.ai1.action.escalate)).not.toBeInTheDocument();
+    expect(screen.queryByText(S.ai1.action.true_positive)).not.toBeInTheDocument();
+    expect(screen.queryByText(/AI kết luận/)).not.toBeInTheDocument();
     expect(screen.queryByText(S.queue.retriageMark)).not.toBeInTheDocument();
   });
 
@@ -601,8 +627,8 @@ describe("the ① column, from the state of the view", () => {
       await vi.advanceTimersByTimeAsync(10_000);
     });
     await waitFor(() =>
-      expect(within(aiColumn()).getByText(S.ai1.verdict).parentElement).toHaveTextContent(
-        S.ai1.action.escalate,
+      expect(within(aiColumn()).getByText(/AI kết luận/)).toHaveTextContent(
+        `AI kết luận: ${S.ai1.action.true_positive}`,
       ),
     );
     expect(requests).toHaveLength(2);
@@ -720,7 +746,7 @@ describe("the ① column, from the state of the view", () => {
     await user.click(screen.getByRole("button", { name: S.decision.submit }));
     expect(await within(aiColumn()).findByText(S.ai1.decidedHeading)).toBeInTheDocument();
     expect(within(aiColumn()).getByText(S.ai1.decidedAi).closest("div")).toHaveTextContent(
-      S.ai1.action.escalate,
+      S.ai1.action.true_positive,
     );
     expect(within(aiColumn()).queryByText(S.ai1.hidden)).not.toBeInTheDocument();
     expect(screen.getByText(S.decision.decidedAs(S.status.closed_fp))).toBeInTheDocument();

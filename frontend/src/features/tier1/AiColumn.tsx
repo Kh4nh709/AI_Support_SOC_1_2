@@ -8,7 +8,7 @@ import type { AlertView, Suggestion } from "../../api/tier1";
 import { formatDateTime } from "../../format";
 import { S, labelOf } from "../../strings";
 import { agreementOf, humanDecisionOf } from "./agreement";
-import { aiStateOfView, type AiState } from "./aiState";
+import { aiStateOfView, conclusionOf, heldOf, type AiState } from "./aiState";
 
 const MUTED = "text-muted";
 
@@ -34,6 +34,40 @@ function forcedByOf(gate: NonNullable<Suggestion["gate"]>): string[] {
 
 const asText = (x: unknown): string => (typeof x === "string" ? x : JSON.stringify(x));
 
+/** The flag the gate raises on a verdict it forced. */
+function ForcedFlag() {
+  return (
+    <span role="img" aria-label={S.ai1.forcedLabel} title={S.ai1.forcedLabel} className="ml-2">
+      {S.ai1.forced}
+    </span>
+  );
+}
+
+/**
+ * What the AI concluded (P14-T03, DEC-213): "AI kết luận: TP (độ tin cậy cao)", and when the gate held the
+ * answer back for a person, "… — hệ thống giữ lại cho người xem vì: <reasons>". The conclusion is the model's own
+ * answer, not the `needs_review` the system stored in its place; a reason the UI has no label for is shown as its
+ * code. All of it is text.
+ */
+function Conclusion({
+  state,
+  conclusion,
+}: {
+  state: Extract<AiState, { kind: "ready" }>;
+  conclusion: string;
+}) {
+  const reasons = state.heldBy.map((code) => labelOf(S.ai1.heldReason, code));
+  return (
+    <p className="text-base text-ai-accent">
+      {S.ai1.conclusion}: <strong className="text-lg">{labelOf(S.ai1.action, conclusion)}</strong>
+      {state.confidence !== null &&
+        ` ${S.ai1.confidenceNote(labelOf(S.confidence, state.confidence))}`}
+      {heldOf(state) && ` ${S.ai1.heldLine(reasons)}`}
+      {state.forced && <ForcedFlag />}
+    </p>
+  );
+}
+
 function Verdict({
   state,
   suggestion,
@@ -41,33 +75,31 @@ function Verdict({
   state: Extract<AiState, { kind: "ready" }>;
   suggestion: Suggestion | null;
 }) {
+  const conclusion = conclusionOf(state);
   const action = labelOf(S.ai1.action, state.action);
   const gate = suggestion?.gate ?? null;
   return (
     <div className="space-y-2">
-      <div>
-        <span className="text-xs text-muted">{S.ai1.verdict}</span>
-        <p className="text-lg font-semibold text-ai-accent">
-          <span>{action}</span>
-          {action !== state.action && (
-            <code className="ml-2 text-xs font-normal text-muted">{state.action}</code>
+      {conclusion !== null ? (
+        <Conclusion state={state} conclusion={conclusion} />
+      ) : (
+        <>
+          <div>
+            <span className="text-xs text-muted">{S.ai1.verdict}</span>
+            <p className="text-lg font-semibold text-ai-accent">
+              <span>{action}</span>
+              {action !== state.action && (
+                <code className="ml-2 text-xs font-normal text-muted">{state.action}</code>
+              )}
+              {state.forced && <ForcedFlag />}
+            </p>
+          </div>
+          {state.confidence !== null && (
+            <p className="text-sm">
+              {S.ai1.confidence}: {labelOf(S.confidence, state.confidence)}
+            </p>
           )}
-          {state.forced && (
-            <span
-              role="img"
-              aria-label={S.ai1.forcedLabel}
-              title={S.ai1.forcedLabel}
-              className="ml-2"
-            >
-              {S.ai1.forced}
-            </span>
-          )}
-        </p>
-      </div>
-      {state.confidence !== null && (
-        <p className="text-sm">
-          {S.ai1.confidence}: {labelOf(S.confidence, state.confidence)}
-        </p>
+        </>
       )}
       {gate !== null && <GateLine gate={gate} forced={state.forced} />}
     </div>

@@ -5,12 +5,49 @@
 import type { AlertView, QueueRow } from "../../api/tier1";
 
 export type AiState =
-  | { kind: "ready"; action: string; confidence: string | null; forced: boolean }
+  | {
+      kind: "ready";
+      /** The verdict ① ends with: `suggested_action`, after the gate. */
+      action: string;
+      confidence: string | null;
+      forced: boolean;
+      /** What the model itself concluded (`proposed_action`, P14-T03), or null when the server sent none. */
+      proposed: string | null;
+      /** Why the system held it back (`held_by`): closed codes of `llm.verdicts.HELD_REASONS`, `[]` when it did not. */
+      heldBy: string[];
+    }
   | { kind: "hidden" }
   | { kind: "pending" }
   | { kind: "none" }
   | { kind: "unavailable"; stoppedBy: string | null }
   | { kind: "decided"; action: string | null; confidence: string | null };
+
+/** What the model may answer (`llm.verdicts.MODEL_ACTIONS`, P14-T01): ① always concludes one of the two. */
+const MODEL_ACTIONS: ReadonlySet<string> = new Set(["false_positive", "true_positive"]);
+
+/**
+ * What the AI concluded, for the line "AI kết luận: …": the model's own answer (`proposed`) when it is one of the two
+ * it may give, else the verdict ① ended with when that is one of them (a gate that kept the answer; a server that
+ * sent no `proposed_action`), else null: a `needs_review` nobody explained is the system's word, not a conclusion.
+ */
+export function conclusionOf(state: Extract<AiState, { kind: "ready" }>): string | null {
+  if (state.proposed !== null && MODEL_ACTIONS.has(state.proposed)) return state.proposed;
+  return MODEL_ACTIONS.has(state.action) ? state.action : null;
+}
+
+/** Whether the system held the model's answer back for a person: the gate ended on `needs_review`, or named a reason. */
+export function heldOf(state: Extract<AiState, { kind: "ready" }>): boolean {
+  return state.action === "needs_review" || state.heldBy.length > 0;
+}
+
+/** A list of reason codes as it arrives: only its non-empty strings; anything else is none. */
+function codes(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((x): x is string => typeof x === "string" && x !== "")
+    : [];
+}
+
+const textOrNull = (value: unknown): string | null => (typeof value === "string" ? value : null);
 
 /**
  * The statuses in which the server shows the ① verdict to everyone (visibility.SHOW_STATES). A copy: the
@@ -59,6 +96,8 @@ export function aiStateOfRow(row: QueueRow): AiState {
       action: row.suggested_action,
       confidence: row.confidence ?? null,
       forced: row.gate_forced === true,
+      proposed: textOrNull(row.proposed_action),
+      heldBy: codes(row.held_by),
     };
   }
   if (row.triage_status === "unavailable") return UNAVAILABLE;
@@ -88,6 +127,8 @@ export function aiStateOfView(view: AlertView): AiState {
       action: suggestion.suggested_action,
       confidence: suggestion.confidence ?? null,
       forced: suggestion.gate?.forced === true,
+      proposed: textOrNull(view.proposed_action),
+      heldBy: codes(view.held_by),
     };
   }
   if (view.triage_status === "unavailable") {

@@ -219,6 +219,21 @@ function pyInt(name: string, root = BACKEND_APP): number {
   return Number(definition(name, new RegExp(`^${name}\\s*=\\s*(\\d+)\\s*$`, "m"), root).body);
 }
 
+/** A module-level `NAME: tuple[str, ...] = ("a", "b", ...)` of the backend, as a list (a literal tuple only). */
+function pyTuple(name: string, root = BACKEND_APP): string[] {
+  const pattern = new RegExp(
+    `^${name}(?::\\s*tuple\\[str,\\s*\\.\\.\\.\\])?\\s*=\\s*\\(([^)]*)\\)`,
+    "m",
+  );
+  const { body } = definition(name, pattern, root);
+  return [...body.matchAll(/"([^"]*)"/g)].map((m) => m[1] as string);
+}
+
+/** A module-level `NAME = "text"` of the backend, as a string. */
+function pyString(name: string, root = BACKEND_APP): string {
+  return definition(name, new RegExp(`^${name}\\s*=\\s*"([^"]*)"\\s*$`, "m"), root).body;
+}
+
 describe("finding a backend definition", () => {
   const root = mkdtempSync(join(tmpdir(), "p10t07-py-"));
   const put = (file: string, text: string): void => {
@@ -304,6 +319,65 @@ describe("② labels follow the backend", () => {
     expect(pyInt("MIN_QUOTE_CHARS")).toBe(MIN_QUOTE_CHARS);
     expect(S.ai2.mark.quote_too_short).toContain(`ngắn hơn ${MIN_QUOTE_CHARS} ký tự`);
     expect(S.ai2.mark.quote_too_short).toContain("ngắn hơn 8 ký tự");
+  });
+});
+
+// P14-T03 (DEC-213): ① always concludes `false_positive | true_positive`; the system may hold that as
+// `needs_review`, and says why. The words are the UI's, the closed values are the backend's: a reason added
+// there without a label here would show as its code, so both sides are compared.
+describe("① verdict and held-reason labels follow the backend", () => {
+  it("reads the backend tuples (a parse that finds nothing would compare nothing)", () => {
+    expect(pyTuple("GATED_ACTIONS")).toEqual(["false_positive", "needs_review", "true_positive"]);
+    expect(pyTuple("HELD_REASONS")).toHaveLength(8);
+    expect(pyTuple("FP_POLICY_FIELDS")).toHaveLength(5);
+  });
+
+  it("labels the verdicts of ① as TP and FP, and the system's own as Cần xem xét", () => {
+    expect(S.ai1.action).toEqual({
+      false_positive: "FP",
+      needs_review: "Cần xem xét",
+      true_positive: "TP",
+    });
+    expect(Object.keys(S.ai1.action).sort()).toEqual([...pyTuple("GATED_ACTIONS")].sort());
+    expect(S.ai1.action).not.toHaveProperty("escalate");
+  });
+
+  it("words every reason the backend can return, in its order, and no other", () => {
+    expect(Object.keys(S.ai1.heldReason)).toEqual(pyTuple("HELD_REASONS"));
+    expect(S.ai1.heldReason).toEqual({
+      facts_mismatch: "AI khai dữ kiện lệch với hệ thống",
+      no_verified_quote: "không có dẫn chứng kiểm chứng được",
+      "fp_policy:severity": "alert mức critical",
+      "fp_policy:ioc_reputation": "IOC độc hại hoặc đáng ngờ",
+      "fp_policy:asset_criticality": "tài sản quan trọng hoặc chưa rõ",
+      "fp_policy:identity_privileged": "tài khoản đặc quyền",
+      "fp_policy:playbook_rule": "không khớp bảng quyết định đã duyệt",
+      verifier_disagrees: "bộ kiểm tra không đồng ý",
+    });
+  });
+
+  it("writes the conclusion line of the alert page as the spec has it", () => {
+    expect(S.ai1.conclusion).toBe("AI kết luận");
+    expect(S.ai1.confidenceNote("cao")).toBe("(độ tin cậy cao)");
+    expect(S.ai1.heldLine(["a", "b"])).toBe("— hệ thống giữ lại cho người xem vì: a, b");
+    expect(S.ai1.heldLine([])).toBe("— hệ thống giữ lại cho người xem");
+  });
+});
+
+describe("② held-reason labels follow the backend", () => {
+  it("words the two causes the backend names, and no other", () => {
+    const causes = [pyString("HELD_NO_VERIFIED_EVIDENCE"), pyString("HELD_HIGH_INJECTION")];
+    expect(causes).toEqual(["no_verified_evidence", "high_severity_injection_finding"]);
+    expect(Object.keys(S.ai2.heldReason)).toEqual(causes);
+    expect(S.ai2.heldReason).toEqual({
+      no_verified_evidence: "không có bằng chứng kiểm chứng được",
+      high_severity_injection_finding: "phát hiện dấu hiệu chèn lệnh mức cao",
+    });
+  });
+
+  it("writes the conclusion line of the case page as the spec has it", () => {
+    expect(S.ai2.conclusion).toBe("AI kết luận");
+    expect(S.ai2.heldLine(["x", "y"])).toBe("— hệ thống giữ lại vì: x, y");
   });
 });
 

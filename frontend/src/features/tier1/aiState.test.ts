@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AlertView, QueueRow } from "../../api/tier1";
-import { DECIDED, aiStateOfRow, aiStateOfView } from "./aiState";
+import { DECIDED, aiStateOfRow, aiStateOfView, conclusionOf, heldOf } from "./aiState";
 
 /** A visible-arm row of the queue with a ① result: every key the server sends. */
 const row = (over: Partial<QueueRow> = {}): QueueRow => ({
@@ -32,9 +32,11 @@ const row = (over: Partial<QueueRow> = {}): QueueRow => ({
   risk_band: "Cao",
   triage_status: "ready",
   run_id: "r1",
-  suggested_action: "escalate",
+  suggested_action: "true_positive",
   confidence: "medium",
   gate_forced: false,
+  proposed_action: "true_positive",
+  held_by: [],
   ...over,
 });
 
@@ -44,6 +46,8 @@ function blindRow(over: Partial<QueueRow> = {}): QueueRow {
   delete stripped.suggested_action;
   delete stripped.confidence;
   delete stripped.gate_forced;
+  delete stripped.proposed_action;
+  delete stripped.held_by;
   delete stripped.triage_status;
   delete stripped.run_id;
   return { ...stripped, ...over };
@@ -53,10 +57,45 @@ describe("aiStateOfRow", () => {
   it("is ready with the action and confidence when the row carries a suggestion", () => {
     expect(aiStateOfRow(row())).toEqual({
       kind: "ready",
-      action: "escalate",
+      action: "true_positive",
       confidence: "medium",
       forced: false,
+      proposed: "true_positive",
+      heldBy: [],
     });
+  });
+
+  // P14-T03 (DEC-213): the row carries the model's own answer and the reasons the system held it.
+  it("carries the model's own answer and the reasons the system held it back", () => {
+    const held = row({
+      suggested_action: "needs_review",
+      gate_forced: true,
+      proposed_action: "false_positive",
+      held_by: ["fp_policy:asset_criticality", "verifier_disagrees"],
+    });
+    expect(aiStateOfRow(held)).toEqual({
+      kind: "ready",
+      action: "needs_review",
+      confidence: "medium",
+      forced: true,
+      proposed: "false_positive",
+      heldBy: ["fp_policy:asset_criticality", "verifier_disagrees"],
+    });
+  });
+
+  it("reads a missing, null or garbled proposed_action and held_by as none", () => {
+    const bare = row();
+    delete bare.proposed_action;
+    delete bare.held_by;
+    expect(aiStateOfRow(bare)).toMatchObject({ proposed: null, heldBy: [] });
+    expect(aiStateOfRow(row({ proposed_action: null }))).toMatchObject({ proposed: null });
+    const odd = row({
+      proposed_action: 7 as unknown as string,
+      held_by: "verifier_disagrees" as unknown as string[],
+    });
+    expect(aiStateOfRow(odd)).toMatchObject({ proposed: null, heldBy: [] });
+    const mixed = row({ held_by: ["facts_mismatch", 3, null, ""] as unknown as string[] });
+    expect(aiStateOfRow(mixed)).toMatchObject({ heldBy: ["facts_mismatch"] });
   });
 
   it("is forced only when gate_forced is true", () => {
@@ -128,6 +167,8 @@ const view = (over: Partial<AlertView> = {}): AlertView => ({
   suggestion_visible: true,
   triage_status: "ready",
   suggestion: { suggested_action: "false_positive", confidence: "high", gate: { forced: false } },
+  proposed_action: "false_positive",
+  held_by: [],
   ...over,
 });
 
@@ -138,7 +179,47 @@ describe("aiStateOfView", () => {
       action: "false_positive",
       confidence: "high",
       forced: false,
+      proposed: "false_positive",
+      heldBy: [],
     });
+  });
+
+  it("carries the model's own answer and the reasons the system held it back", () => {
+    const held = view({
+      suggestion: {
+        suggested_action: "needs_review",
+        confidence: "medium",
+        gate: { forced: true },
+      },
+      proposed_action: "true_positive",
+      held_by: ["facts_mismatch", "no_verified_quote"],
+    });
+    expect(aiStateOfView(held)).toEqual({
+      kind: "ready",
+      action: "needs_review",
+      confidence: "medium",
+      forced: true,
+      proposed: "true_positive",
+      heldBy: ["facts_mismatch", "no_verified_quote"],
+    });
+  });
+
+  it("reads a view without proposed_action and held_by as none", () => {
+    const bare = view();
+    delete bare.proposed_action;
+    delete bare.held_by;
+    expect(aiStateOfView(bare)).toMatchObject({ kind: "ready", proposed: null, heldBy: [] });
+  });
+
+  it("is hidden on the blind arm even when the view carries the two keys: they are read after the arm", () => {
+    const blind = view({
+      suggestion_visible: false,
+      proposed_action: "false_positive",
+      held_by: ["verifier_disagrees"],
+    });
+    delete blind.suggestion;
+    delete blind.triage_status;
+    expect(aiStateOfView(blind)).toEqual({ kind: "hidden" });
   });
 
   it("reads the gate flag of the suggestion", () => {
@@ -396,4 +477,48 @@ it("DECIDED is the backend's visibility.SHOW_STATES, status for status", () => {
   const backend = pyShowStates();
   expect(backend.length).toBeGreaterThan(0); // a parse that finds nothing would compare nothing
   expect([...DECIDED].sort()).toEqual(backend);
+});
+
+// P14-T03 (DEC-213): what the model concluded, and whether the system held it back. Two readings of a `ready`
+// state, kept here so the column and the cell do not each decide them.
+describe("conclusionOf and heldOf", () => {
+  type Ready = Extract<ReturnType<typeof aiStateOfRow>, { kind: "ready" }>;
+  const ready = (over: Partial<Ready> = {}): Ready => ({
+    kind: "ready",
+    action: "true_positive",
+    confidence: "high",
+    forced: false,
+    proposed: "true_positive",
+    heldBy: [],
+    ...over,
+  });
+
+  it("takes the model's own answer first", () => {
+    expect(conclusionOf(ready({ action: "needs_review", proposed: "false_positive" }))).toBe(
+      "false_positive",
+    );
+    expect(conclusionOf(ready({ action: "true_positive", proposed: "true_positive" }))).toBe(
+      "true_positive",
+    );
+  });
+
+  it("falls back on the final action when the server sent no proposed_action and the action is the model's", () => {
+    expect(conclusionOf(ready({ proposed: null, action: "true_positive" }))).toBe("true_positive");
+    expect(conclusionOf(ready({ proposed: null, action: "false_positive" }))).toBe(
+      "false_positive",
+    );
+  });
+
+  it("is null when there is nothing to say the model concluded: needs_review alone, or a word it may not give", () => {
+    expect(conclusionOf(ready({ proposed: null, action: "needs_review" }))).toBeNull();
+    expect(conclusionOf(ready({ proposed: null, action: "escalate" }))).toBeNull();
+    expect(conclusionOf(ready({ proposed: "needs_review", action: "needs_review" }))).toBeNull();
+  });
+
+  it("holds when the system's action is needs_review or reasons are given, and not otherwise", () => {
+    expect(heldOf(ready())).toBe(false);
+    expect(heldOf(ready({ action: "needs_review", proposed: "false_positive" }))).toBe(true);
+    expect(heldOf(ready({ heldBy: ["verifier_disagrees"] }))).toBe(true);
+    expect(heldOf(ready({ action: "false_positive", proposed: "false_positive" }))).toBe(false);
+  });
 });

@@ -157,6 +157,13 @@ export type RunView = {
   playbook_used?: string | null;
   /** The sentence saying the model's conclusion was lowered, or null. */
   overruled?: string | null;
+  /**
+   * P14-T02/T03 (DEC-213): the model's own conclusion (`false_positive`, `policy_violation` or
+   * `confirmed_incident`), and why the system held it as `need_more_data` (`no_verified_evidence`,
+   * `high_severity_injection_finding`; `[]` when it did not). A run from before P14-T02 has `null` and `[]`.
+   */
+  model_conclusion?: string | null;
+  held_by?: string[];
   snapshot?: Snapshot | null;
   /** The case has changed since the run's snapshot. */
   changed?: boolean;

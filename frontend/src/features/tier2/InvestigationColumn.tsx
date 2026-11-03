@@ -287,6 +287,31 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
   );
 }
 
+/**
+ * What the AI concluded on the case (P14-T03, DEC-213): "AI kết luận: <the label of ②'s conclusion>", and when the
+ * system held it as `need_more_data`, "… — hệ thống giữ lại vì: <causes>". The conclusion is the model's own
+ * (`model_conclusion`), not the `need_more_data` the system stored in its place; a cause the UI has no label for
+ * is shown as its code. All of it is text.
+ */
+function ModelConclusion({
+  conclusion,
+  heldBy,
+}: {
+  conclusion: string;
+  heldBy: string[] | undefined;
+}) {
+  const causes = (Array.isArray(heldBy) ? heldBy : []).filter(
+    (cause): cause is string => typeof cause === "string" && cause !== "",
+  );
+  return (
+    <p className="text-base">
+      {S.ai2.conclusion}: <strong>{labelOf(S.ai2.suggestedConclusion, conclusion)}</strong>
+      {causes.length > 0 &&
+        ` ${S.ai2.heldLine(causes.map((cause) => labelOf(S.ai2.heldReason, cause)))}`}
+    </p>
+  );
+}
+
 export function RunResult({
   run,
   current,
@@ -297,6 +322,11 @@ export function RunResult({
   title: string | null;
 }) {
   const evidenceId = useId();
+  // A run from before P14-T02 carries no `model_conclusion`: it keeps the stored label and the overruled text.
+  const modelConclusion =
+    typeof run.model_conclusion === "string" && run.model_conclusion !== ""
+      ? run.model_conclusion
+      : null;
   const hypotheses = run.hypotheses ?? [];
   const evidence = run.evidence ?? [];
   const nextSteps = run.next_steps ?? [];
@@ -330,20 +360,27 @@ export function RunResult({
       )}
 
       <Block title={S.ai2.suggested}>
-        <p className="flex flex-wrap items-baseline gap-2">
-          <strong className="text-base">{asText(run.conclusion_label)}</strong>
-          <code className="text-xs text-muted">{asText(run.conclusion)}</code>
-        </p>
+        {modelConclusion !== null ? (
+          <ModelConclusion conclusion={modelConclusion} heldBy={run.held_by} />
+        ) : (
+          <p className="flex flex-wrap items-baseline gap-2">
+            <strong className="text-base">{asText(run.conclusion_label)}</strong>
+            <code className="text-xs text-muted">{asText(run.conclusion)}</code>
+          </p>
+        )}
         <p className="text-sm">
           {`${S.ai2.confidence}: ${labelOf(S.ai2.confidenceLevel, run.confidence)}`}
         </p>
       </Block>
 
-      {run.overruled !== null && run.overruled !== undefined && run.overruled !== "" && (
-        <p className="rounded border border-high/40 bg-high-bg p-3 text-sm text-high">
-          {run.overruled}
-        </p>
-      )}
+      {modelConclusion === null &&
+        run.overruled !== null &&
+        run.overruled !== undefined &&
+        run.overruled !== "" && (
+          <p className="rounded border border-high/40 bg-high-bg p-3 text-sm text-high">
+            {run.overruled}
+          </p>
+        )}
 
       <Block title={S.ai2.summary}>
         <p className="whitespace-pre-wrap text-sm">{asText(run.summary)}</p>

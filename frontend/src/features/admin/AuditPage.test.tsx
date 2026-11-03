@@ -485,9 +485,7 @@ describe("the page", () => {
     expect(
       within(row(8)).getByText("quyết định: Đã đóng — dương tính giả; lý do: Báo động giả"),
     ).toBeInTheDocument();
-    expect(
-      within(row(7)).getByText("đề xuất ①: Dương tính giả; độ tin cậy cao"),
-    ).toBeInTheDocument();
+    expect(within(row(7)).getByText("đề xuất ①: FP; độ tin cậy cao")).toBeInTheDocument();
     expect(within(row(6)).getByText("“Thử nghiệm: quét DNS”: bật → tắt")).toBeInTheDocument();
     expect(within(row(5)).getByText("duyệt: Không chắc")).toBeInTheDocument();
     expect(

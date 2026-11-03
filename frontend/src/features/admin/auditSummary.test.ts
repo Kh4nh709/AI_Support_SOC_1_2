@@ -116,19 +116,19 @@ describe("summaryOf, one event type at a time", () => {
     ["case.analyzed", null, "chạy phân tích ②"],
     [
       "triage.suggested",
-      { suggested_action: "escalate", confidence: "high", forced: true, run_id: "x" },
-      "đề xuất ①: Chuyển tier 2; độ tin cậy cao; cổng kiểm soát đã ép kết quả",
+      { suggested_action: "true_positive", confidence: "high", forced: true, run_id: "x" },
+      "đề xuất ①: TP; độ tin cậy cao; cổng kiểm soát đã ép kết quả",
     ],
     [
       "triage.suggested",
       { suggested_action: "false_positive", confidence: "low", forced: false },
-      "đề xuất ①: Dương tính giả; độ tin cậy thấp",
+      "đề xuất ①: FP; độ tin cậy thấp",
     ],
     ["triage.suggested", null, "đã có đề xuất ①"],
     [
       "llm.gate_forced",
       { proposed: "false_positive", final: "needs_review", forced_by: "critical", missing: [] },
-      "cổng kiểm soát ép Dương tính giả → Cần xem xét; do critical",
+      "cổng kiểm soát ép FP → Cần xem xét; do critical",
     ],
     ["llm.gate_forced", null, "cổng kiểm soát ép kết quả ①"],
     ["llm.builder_violation", { violations_count: 2 }, "2 vi phạm khi dựng dữ liệu gửi model"],
@@ -250,7 +250,7 @@ describe("summaryOf, one event type at a time", () => {
         suggested_action: "false_positive",
         run_id: "x",
       },
-      "duyệt: Không chắc; đề xuất ①: Dương tính giả",
+      "duyệt: Không chắc; đề xuất ①: FP",
     ],
     ["autoclose.reviewed", { verdict: "wrong", suggested_action: null }, "duyệt: Sai"],
     ["autoclose.reviewed", null, "duyệt digest"],
@@ -592,7 +592,7 @@ describe("the summary of a label.created event never shows a verdict (DEC-204)",
 describe("the summary of an event whose suggestion the server withheld (DEC-101)", () => {
   const H = REDACTED;
   const A = S.admin.auditPage.summary;
-  const WORDS = ["Chuyển tier 2", "Dương tính giả", "Cần xem xét", "độ tin cậy", "đã ép", " ép "];
+  const WORDS = ["TP", "FP", "Cần xem xét", "độ tin cậy", "đã ép", " ép "];
   const notShown = (line: string) => {
     expect(line).not.toContain(H);
     for (const word of WORDS) expect(line).not.toContain(word);
@@ -613,7 +613,7 @@ describe("the summary of an event whose suggestion the server withheld (DEC-101)
     "says it is withheld when only %s was withheld, and reads nothing else of the payload",
     (key) => {
       const payload = {
-        suggested_action: "escalate",
+        suggested_action: "true_positive",
         confidence: "high",
         forced: true,
         run_id: "x",
@@ -653,10 +653,14 @@ describe("the summary of an event whose suggestion the server withheld (DEC-101)
 
   it("is unchanged when nothing was withheld (a visible head, or a decided one)", () => {
     expect(
-      sum("triage.suggested", { suggested_action: "escalate", confidence: "high", forced: true }),
-    ).toBe("đề xuất ①: Chuyển tier 2; độ tin cậy cao; cổng kiểm soát đã ép kết quả");
+      sum("triage.suggested", {
+        suggested_action: "true_positive",
+        confidence: "high",
+        forced: true,
+      }),
+    ).toBe("đề xuất ①: TP; độ tin cậy cao; cổng kiểm soát đã ép kết quả");
     expect(sum("llm.gate_forced", { proposed: "false_positive", final: "needs_review" })).toBe(
-      "cổng kiểm soát ép Dương tính giả → Cần xem xét",
+      "cổng kiểm soát ép FP → Cần xem xét",
     );
   });
 
