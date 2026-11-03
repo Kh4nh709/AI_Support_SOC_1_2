@@ -1485,6 +1485,13 @@ def test_a_second_approve_after_the_first_rolled_back_succeeds(scratch_dsn, tmp_
     assert [p.name for p in root.rglob("*.md")] == [f"{published.entry_id}.md"]
 
 
+@pytest.fixture(autouse=True)
+def rag_on(monkeypatch):
+    """The embed job is enqueued only with the RAG on (Director ruling a), which is the state these
+    files test in: a test of the RAG off says so."""
+    monkeypatch.setenv("RAG_ENABLED", "true")
+
+
 # ═══ knowledge_embed (P14-T05, DEC-213): every write to an entry enqueues the vector job ═════════
 
 
@@ -1655,3 +1662,21 @@ def test_an_observer_sees_the_job_only_when_the_change_is_committed(scratch_dsn,
         publish.commit_publication(writer, retired)
         observer.rollback()
         assert jobs_of_entry(observer, entry_id) == ["succeeded", "pending"]
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("enabled", [True, False])
+def test_approve_and_retire_enqueue_the_embed_job_only_with_the_rag_on(
+    db, root, monkeypatch, enabled
+) -> None:
+    """Director ruling (a). With the RAG off nothing needs vectors, and a stack with no `rag-worker`
+    would keep a `job_backlog` alarm for jobs nobody claims."""
+    monkeypatch.setenv("RAG_ENABLED", "true" if enabled else "false")
+    admin_id, entry_id, _ = approved_entry(db, root)
+    assert embed_jobs(db) == ([(entry_id, "pending")] if enabled else [])
+
+    finish_embed_jobs(db)
+    publish.retire(db, entry_id, admin_id, "Không còn đúng", root=root)
+
+    assert embed_jobs(db) == ([(entry_id, "succeeded"), (entry_id, "pending")] if enabled else [])
+    assert entry_row(db, entry_id).status == "retired"  # the retirement itself is the same

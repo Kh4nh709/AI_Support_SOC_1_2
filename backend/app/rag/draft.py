@@ -122,7 +122,7 @@ from psycopg.types.json import Jsonb
 from app.audit.events import write_event
 from app.infra import config, settings
 from app.infra.errors import PermanentError
-from app.infra.jobs import Job, Reschedule, enqueue
+from app.infra.jobs import Job, Reschedule
 from app.llm import schemas
 from app.llm.adapter import (
     DeepSeekAdapter,
@@ -142,7 +142,7 @@ from app.llm.triage import prompt_version
 from app.rag import agent
 from app.rag.budget import rag_limits, rag_spent_or_exhausted
 from app.rag.candidates import candidates
-from app.rag.entries import KB_LEARNED_ROOT, Entry, file_matches, sha256_text
+from app.rag.entries import KB_LEARNED_ROOT, Entry, enqueue_embed, file_matches, sha256_text
 from app.rag.fingerprint import Fingerprint, alert_fingerprint, case_fingerprint
 from app.rag.generalise import FINDING_NAMES, literal_findings, strip_placeholders
 from app.rag.history import Exclusion
@@ -857,10 +857,10 @@ def _append_source(conn: psycopg.Connection, entry_id: str, source: SourceRecord
     ).fetchone()
     if row is None:
         return False
-    # DEC-213: every write to an entry enqueues the vector job, in this transaction. A merge leaves the
-    # content and the hash alone, so the job will find the row current and ask Voyage nothing; it is there so
-    # that no path changes an entry without the index being told.
-    enqueue(conn, "knowledge_embed", entry_id)
+    # DEC-213: every write to an entry enqueues the vector job (with the RAG on), in this transaction. A merge
+    # leaves the content and the hash alone, so the job will find the row current and ask Voyage nothing; it
+    # is there so that no path changes an entry without the index being told.
+    enqueue_embed(conn, entry_id)
     return True
 
 

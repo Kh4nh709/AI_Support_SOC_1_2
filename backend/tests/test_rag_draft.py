@@ -2685,6 +2685,12 @@ def test_the_evidence_is_stamped_by_the_databases_clock(db, kb_root) -> None:
 # knowledge_embed (P14-T05, DEC-213) -------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def rag_on(monkeypatch):
+    """The embed job is enqueued only with the RAG on (Director ruling a)."""
+    monkeypatch.setenv("RAG_ENABLED", "true")
+
+
 def embed_jobs(db) -> list[tuple[str, str]]:
     """(subject, status) of every `knowledge_embed` job."""
     return db.execute(
@@ -2756,3 +2762,16 @@ def test_a_draft_that_is_not_a_merge_enqueues_no_embed(db) -> None:
     run(db, "alert:da-1", FakeLLM([GOOD]))
     assert only_draft(db)["status"] == "pending"
     assert embed_jobs(db) == []
+
+
+@db_marked
+@pytest.mark.parametrize("enabled", [True, False])
+def test_a_merge_enqueues_the_embed_job_only_with_the_rag_on(
+    db, kb_root, monkeypatch, enabled
+) -> None:
+    """Director ruling (a): the merge is the same with the RAG off, and enqueues nothing."""
+    monkeypatch.setenv("RAG_ENABLED", "true" if enabled else "false")
+    entry_id, fake = merge_setup(db, kb_root)
+    run(db, "alert:da-1", fake)
+    assert only_draft(db)["status"] == "merged"
+    assert embed_jobs(db) == ([(entry_id, "pending")] if enabled else [])
