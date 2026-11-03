@@ -63,7 +63,12 @@ ALL_STATUSES = (
 
 # What the writers put there (`tier1/triage.py:957-980` and `:812`, `tier1/digest.py` review).
 RUN_ID = "5d1f0c2e-8f7b-4c43-9f43-0d2b0d1e9a11"
-SUGGESTED = {"suggested_action": "escalate", "confidence": "high", "forced": True, "run_id": RUN_ID}
+SUGGESTED = {
+    "suggested_action": "true_positive",
+    "confidence": "high",
+    "forced": True,
+    "run_id": RUN_ID,
+}
 GATE_FORCED = {
     "proposed": "false_positive",
     "final": "needs_review",
@@ -73,7 +78,7 @@ GATE_FORCED = {
 REVIEWED = {
     "verdict": "wrong",
     "autoclose_rule_id": "rule-7",
-    "suggested_action": "escalate",
+    "suggested_action": "true_positive",
     "run_id": RUN_ID,
 }
 BUILDER = {"violations_count": 2}
@@ -194,7 +199,7 @@ def _expect_masked(event: dict[str, Any], kind: str = "autoclose.reviewed") -> N
             assert payload[key] == value, (kind, key, payload)
     assert set(payload) == set(PAYLOADS[kind])  # same keys, only their values are gone
     text = json.dumps(event)
-    for secret in ("escalate", "false_positive", "needs_review", RUN_ID, "high"):
+    for secret in ("true_positive", "false_positive", "needs_review", RUN_ID, "high"):
         assert secret not in text, (kind, secret)
 
 
@@ -534,7 +539,7 @@ def test_audit_masks_a_suggestion_key_at_any_depth_of_a_listed_review(client) ->
     tc, db = client
     alert = _aid()
     _alert(db, alert, status="queued_tier1", visible=False)
-    _event(db, "autoclose.reviewed", alert, {"wrapped": [{"suggested_action": "escalate"}]})
+    _event(db, "autoclose.reviewed", alert, {"wrapped": [{"suggested_action": "true_positive"}]})
     payload = _audit(tc, alert)["autoclose.reviewed"]["payload"]
     assert payload == {"wrapped": [{"suggested_action": HIDDEN}]}
 
@@ -551,7 +556,7 @@ def test_audit_still_cuts_an_oversize_payload_of_a_listed_review(client) -> None
         {**REVIEWED, "pad": "x" * (admin_audit.PAYLOAD_MAX_BYTES + 10)},
     )
     payload = _audit(tc, alert)["autoclose.reviewed"]["payload"]
-    assert payload["truncated"] is True and "escalate" not in json.dumps(payload)
+    assert payload["truncated"] is True and "true_positive" not in json.dumps(payload)
 
 
 @pytest.mark.parametrize("kind", ["triage.suggested", "llm.gate_forced", "autoclose.reviewed"])
@@ -630,7 +635,7 @@ def _recent(tc: TestClient) -> dict[str, dict[str, Any]]:
     return {row["run_id"]: row for row in resp.json()["recent"]}
 
 
-PROPOSED = {"suggested_action": "escalate"}
+PROPOSED = {"suggested_action": "true_positive"}
 
 
 @pytest.mark.db
@@ -640,7 +645,10 @@ def test_usage_hides_outcome_and_subject_of_a_run_on_a_blind_undecided_head(clie
     _alert(db, alert, status="queued_tier1", visible=False)
     proposer = _run(db, alert, result=PROPOSED)
     verifier = _run(
-        db, alert, role="verifier", result={"agree": False, "structured_only_verdict": "escalate"}
+        db,
+        alert,
+        role="verifier",
+        result={"agree": False, "structured_only_verdict": "true_positive"},
     )
     stopped = _run(db, alert, stopped_by="cap")
     recent = _recent(tc)
@@ -648,7 +656,7 @@ def test_usage_hides_outcome_and_subject_of_a_run_on_a_blind_undecided_head(clie
         row = recent[run_id]  # the run stays listed
         assert row["outcome"] is None and row["subject_id"] is None, row
         assert row["subject_type"] == "alert" and row["pipeline"] == "triage"
-    assert alert not in json.dumps(recent) and "escalate" not in json.dumps(recent)
+    assert alert not in json.dumps(recent) and "true_positive" not in json.dumps(recent)
 
 
 @pytest.mark.db
@@ -659,7 +667,7 @@ def test_usage_shows_a_run_on_a_blind_decided_head(client, status: str) -> None:
     _alert(db, alert, status=status, visible=False)
     run = _run(db, alert, result=PROPOSED)
     row = _recent(tc)[run]
-    assert row["outcome"] == "escalate" and row["subject_id"] == alert
+    assert row["outcome"] == "true_positive" and row["subject_id"] == alert
 
 
 @pytest.mark.db
@@ -670,7 +678,7 @@ def test_usage_shows_a_run_on_a_visible_head(client) -> None:
     run = _run(db, alert, result=PROPOSED)
     stopped = _run(db, alert, stopped_by="schema")
     recent = _recent(tc)
-    assert recent[run]["outcome"] == "escalate" and recent[run]["subject_id"] == alert
+    assert recent[run]["outcome"] == "true_positive" and recent[run]["subject_id"] == alert
     assert recent[stopped]["outcome"] == "stopped:schema"
 
 
@@ -681,7 +689,7 @@ def test_usage_hides_a_run_again_when_a_blind_head_is_reopened(client) -> None:
     analyst = _user(db, "p11t20-analyst", "tier1")
     _alert(db, alert, status="auto_closed", visible=False)
     run = _run(db, alert, result=PROPOSED)
-    assert _recent(tc)[run]["outcome"] == "escalate"  # decided: shown
+    assert _recent(tc)[run]["outcome"] == "true_positive"  # decided: shown
     transitions.reopen(db, alert, analyst, reason="the digest said wrong")
     row = _recent(tc)[run]
     assert row["outcome"] is None and row["subject_id"] is None
@@ -709,7 +717,10 @@ def test_usage_follows_visibility_strip_for_every_status_and_arm(client) -> None
         if hides:
             assert row["outcome"] is None and row["subject_id"] is None, (status, visible)
         else:
-            assert row["outcome"] == "escalate" and row["subject_id"] == alert, (status, visible)
+            assert row["outcome"] == "true_positive" and row["subject_id"] == alert, (
+                status,
+                visible,
+            )
 
 
 @pytest.mark.db
@@ -725,7 +736,7 @@ def test_usage_a_run_on_a_case_and_a_run_on_an_unknown_alert_are_unchanged(clien
     orphan = _run(db, "9999.1", result=PROPOSED)
     recent = _recent(tc)
     assert recent[case]["subject_id"] == "CASE-1" and recent[case]["outcome"] == "need_more_data"
-    assert recent[orphan]["subject_id"] == "9999.1" and recent[orphan]["outcome"] == "escalate"
+    assert recent[orphan]["subject_id"] == "9999.1" and recent[orphan]["outcome"] == "true_positive"
 
 
 @pytest.mark.db

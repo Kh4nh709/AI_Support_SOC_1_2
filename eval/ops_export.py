@@ -533,10 +533,13 @@ _PILOT_TIMED = """t AS (
 # `tier1.escalated` event records none, so ① is the alert's latest proposer row created at or before
 # the decision, which may include a run in flight at that moment (the caveat printed in section 6a).
 # A latest row whose `result` is NULL, or a payload with no `llm_suggestion`, is `no_result`.
+# ① stores `true_positive` where it stored `escalate` before P14-T01 (DEC-213); the export keeps its own
+# label for it, `escalate`, so its figures and tables read as they always did.
 _PILOT_VERDICT = """v AS (
   SELECT x.source,
          x.decision,
-         CASE WHEN x.suggested_action IN ('escalate', 'false_positive', 'needs_review')
+         CASE WHEN x.suggested_action = 'true_positive' THEN 'escalate'
+              WHEN x.suggested_action IN ('escalate', 'false_positive', 'needs_review')
               THEN x.suggested_action
               ELSE 'no_result'
          END AS verdict

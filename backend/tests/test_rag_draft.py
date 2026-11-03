@@ -1298,7 +1298,7 @@ def test_the_ai_text_of_an_alert_is_the_latest_proposer_result_only(db) -> None:
     db.execute(
         "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, role, system_prompt,"
         " user_message, result) VALUES (%s, 'triage', 'alert', 'da-1', 'proposer', 's', 'u',"
-        ' \'{"suggested_action": "escalate", "confidence": "high"}\')',
+        ' \'{"suggested_action": "true_positive", "confidence": "high"}\')',
         (uuid.uuid4(),),
     )
     db.execute(
@@ -1308,7 +1308,7 @@ def test_the_ai_text_of_an_alert_is_the_latest_proposer_result_only(db) -> None:
         (uuid.uuid4(),),
     )
     (ai,) = draft.source_record(db, Subject("alert", "da-1")).ai_texts
-    assert json.loads(ai) == {"suggested_action": "escalate", "confidence": "high"}
+    assert json.loads(ai) == {"suggested_action": "true_positive", "confidence": "high"}
 
 
 @db_marked

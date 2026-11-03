@@ -45,9 +45,9 @@ from app.tier1 import triage as triage_module
 from app.tier1.triage import DEPLOYED, EvalSwitches, evaluate_alert, run_triage_job
 
 from tests.fakes.llm import (
-    TRIAGE_V2_ESCALATE,
     TRIAGE_V2_FALSE_POSITIVE,
-    VERIFIER_V1_AGREE,
+    TRIAGE_V3_TRUE_POSITIVE,
+    VERIFIER_V2_AGREE,
 )
 from tests.rag_data import add_entry
 from tests.test_llm_triage import NONCE, _cfg, _inp
@@ -65,7 +65,9 @@ from tests.test_triage_job import (
 # ─────────────────────────────────────────────────────── the base commit's ① message (a fixture)
 #: `build_proposer_prompt(_inp(), build_facts(_inp(), None), None, "PLAYBOOK_TEXT_FIXED", None,
 #: cfg=_cfg(), nonce=NONCE).prompt.user` as the code stood at the base of P13-T07 (`c9b971f`), before
-#: `learned` existed. Nothing below may change it with `learned=None`.
+#: `learned` existed. Nothing below may change it with `learned=None`. One line of it moved on purpose
+#: in P14-T01 (DEC-213), the request sentence's schema name: `triage_v2` -> `triage_v3`
+#: (`GOLDEN_SHA256` moved with it; the old digest was b33f275f...).
 GOLDEN_USER = """\
 ## Alert
 
@@ -110,13 +112,13 @@ PLAYBOOK_TEXT_FIXED
 
 ## Yêu cầu
 
-Trả về DUY NHẤT một đối tượng JSON theo schema triage_v2."""
-GOLDEN_SHA256 = "b33f275fd087dc5e53e38f5c6b64f73d77075210469d1560d53095cad78dcd2f"
+Trả về DUY NHẤT một đối tượng JSON theo schema triage_v3."""
+GOLDEN_SHA256 = "73dc7d71da4e19be7443ec84e67dbcc3e563ee70e9b779bda535fd944aa05507"
 GOLDEN_WARNINGS = ["no_table:ssh_brute_force"]
 #: One whole `<untrusted_data ...>...</untrusted_data nonce="...">` block.
 BLOCKS = re.compile(r"<untrusted_data .*?</untrusted_data nonce=\"[^\"]*\">", re.DOTALL)
 #: Where the learned section goes: between the playbook section and the request.
-REQUEST = "## Yêu cầu\n\nTrả về DUY NHẤT một đối tượng JSON theo schema triage_v2."
+REQUEST = "## Yêu cầu\n\nTrả về DUY NHẤT một đối tượng JSON theo schema triage_v3."
 BASE_SOURCES = {"rule_description", "wazuh_raw_log", "context", "kb_playbook"}
 
 # ─────────────────────────────────────────────────────── the material the section is built from
@@ -216,7 +218,7 @@ def test_without_learned_the_user_message_is_the_base_commits_byte_for_byte() ->
 
 
 def test_the_system_prompt_is_the_template_with_and_without_the_section() -> None:
-    template = T._system_prompt(T.TRIAGE_TEMPLATE, "triage_v2")
+    template = T._system_prompt(T.TRIAGE_TEMPLATE, "triage_v3")
     assert build(None).prompt.system == build(OK).prompt.system == template
     # the reference sentence and the heading live in the user message, never in the template
     for text in (B.SENTENCE_LEARNED_IS_REFERENCE, B.HEADING_LEARNED, B.SENTENCE_NO_LEARNED):
@@ -584,7 +586,7 @@ def statements(monkeypatch) -> list[str]:
 
 
 def fake(*answers) -> _RecordingLLM:
-    return _RecordingLLM(responses=list(answers) or [TRIAGE_V2_ESCALATE, VERIFIER_V1_AGREE])
+    return _RecordingLLM(responses=list(answers) or [TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE])
 
 
 def history_json(total: int = 4) -> dict:
@@ -722,7 +724,7 @@ def test_the_switch_off_reads_no_lookup_and_writes_todays_row(
     assert row["rag_lookup_id"] is None
     assert B.HEADING_LEARNED not in row["user_message"]
     assert row["user_message"] == llm.calls[0]["user"]
-    assert row["system_prompt"] == T._system_prompt(T.TRIAGE_TEMPLATE, "triage_v2")
+    assert row["system_prompt"] == T._system_prompt(T.TRIAGE_TEMPLATE, "triage_v3")
     assert verifier_row(db, alert_id)["rag_lookup_id"] is None
     assert row["citation_warnings"] == []  # nothing was cut, nothing is warned
     # the job's own sequence is untouched: no job was added or finished by it
@@ -825,7 +827,7 @@ kb_learned_level: hoi_giong
     assert row["citation_warnings"] == []
     assert llm.calls[0]["user"] == row["user_message"]  # what was stored is what was sent
     assert row["system_prompt"] == T._system_prompt(
-        T.TRIAGE_TEMPLATE, "triage_v2"
+        T.TRIAGE_TEMPLATE, "triage_v3"
     )  # template as is
 
 
@@ -1131,8 +1133,8 @@ def test_a_reason_cannot_cite_the_new_sources(db, rag_on, cfg, source) -> None:
     alert_id = _seed_alert(db)
     put_lookup(db, alert_id, matches=[approved(db, LONG_A, "giong")])
     citing = {
-        **TRIAGE_V2_ESCALATE,
-        "reasons": [{**TRIAGE_V2_ESCALATE["reasons"][0], "source": source}],
+        **TRIAGE_V3_TRUE_POSITIVE,
+        "reasons": [{**TRIAGE_V3_TRUE_POSITIVE["reasons"][0], "source": source}],
     }
     ev = evaluate_alert(
         db,
@@ -1225,7 +1227,7 @@ def test_a_verifier_402_leaves_the_proposer_row_with_the_id_and_the_verifier_row
     alert_id = _seed_alert(db)
     lookup_id = put_lookup(db, alert_id, matches=[approved(db, LONG_A, "giong")])
     llm = _FailVerifyCall(
-        responses=[TRIAGE_V2_ESCALATE],
+        responses=[TRIAGE_V3_TRUE_POSITIVE],
         raises=LLMUnavailable("LLM provider unavailable (402): Insufficient Balance"),
     )
     run_triage_job(db, _job(alert_id), adapter=llm)
@@ -1254,7 +1256,7 @@ def test_a_failed_verifier_leaves_the_proposer_row_with_the_id_and_the_verifier_
 ) -> None:
     alert_id = _seed_alert(db)
     lookup_id = put_lookup(db, alert_id, matches=[approved(db, LONG_A, "giong")])
-    llm = _FailVerifyCall(responses=[TRIAGE_V2_ESCALATE], raises=LLMBudgetExceeded("cap"))
+    llm = _FailVerifyCall(responses=[TRIAGE_V3_TRUE_POSITIVE], raises=LLMBudgetExceeded("cap"))
     run_triage_job(db, _job(alert_id), adapter=llm)
     assert proposer_row(db, alert_id)["rag_lookup_id"] == lookup_id
     assert verifier_row(db, alert_id)["rag_lookup_id"] is None

@@ -47,7 +47,7 @@ from app.tier1.triage import (
 )
 from psycopg import sql
 
-from tests.fakes.llm import VERIFIER_V1_AGREE, VERIFIER_V1_DISAGREE, FakeLLM
+from tests.fakes.llm import VERIFIER_V2_AGREE, VERIFIER_V2_DISAGREE, FakeLLM
 
 _DOC = json.loads((Path(__file__).parent / "fixtures" / "alert_40112.json").read_text("utf-8"))
 _CANONICAL = parse_wazuh_alert(_DOC).alert
@@ -110,7 +110,7 @@ def _proposal(
     basis: dict | None = None,
     reasons: list[dict] | None = None,
 ) -> dict:
-    """A schema-valid `triage_v2` answer whose `structured_basis` matches the seeded facts
+    """A schema-valid `triage_v3` answer whose `structured_basis` matches the seeded facts
     (gate step 2 passes) and whose reason quotes the raw log (step 3 keeps it)."""
     return {
         "suggested_action": action,
@@ -121,7 +121,7 @@ def _proposal(
     }
 
 
-_ESCALATE = _proposal("escalate", rule="sbf-3")
+_TRUE_POSITIVE = _proposal("true_positive", rule="sbf-3")
 #: Gate step 4 forbids this on the canonical alert (context pack §8): severity is
 #: critical, the asset is not in inventory, and no decision-table rule is cited.
 _POLICY_BLOCKED_FP = _proposal("false_positive")
@@ -262,7 +262,7 @@ def test_unknown_gate_mode_raises(mode):
 
 @pytest.mark.db
 def test_missing_alert_returns_none(db, cfg):
-    fake = _FakeLLM(responses=[_ESCALATE, VERIFIER_V1_AGREE])
+    fake = _FakeLLM(responses=[_TRUE_POSITIVE, VERIFIER_V2_AGREE])
 
     ev = evaluate_alert(db, "1786907101.999999", adapter=fake, cfg=cfg)
 
@@ -275,19 +275,19 @@ def test_missing_alert_returns_none(db, cfg):
 # ---------------------------------------------------------------------------
 
 _WRITES_NOTHING_CASES = {
-    "ok_b4": (lambda: _FakeLLM(responses=[_ESCALATE, VERIFIER_V1_AGREE]), DEPLOYED, "ok"),
-    "ok_b2": (lambda: _FakeLLM(responses=[_ESCALATE, VERIFIER_V1_AGREE]), _B2, "ok"),
-    "ok_b3": (lambda: _FakeLLM(responses=[_ESCALATE]), _B3, "ok"),
+    "ok_b4": (lambda: _FakeLLM(responses=[_TRUE_POSITIVE, VERIFIER_V2_AGREE]), DEPLOYED, "ok"),
+    "ok_b2": (lambda: _FakeLLM(responses=[_TRUE_POSITIVE, VERIFIER_V2_AGREE]), _B2, "ok"),
+    "ok_b3": (lambda: _FakeLLM(responses=[_TRUE_POSITIVE]), _B3, "ok"),
     "schema": (lambda: _FakeLLM(responses=["not json", "still not json"]), DEPLOYED, "schema"),
     "cap": (_AlwaysOverBudget, DEPLOYED, "cap"),
     "transient": (lambda: _FakeLLM(raises=TransientError("stalled")), DEPLOYED, "transient"),
     "verifier_cap": (
-        lambda: _FailAfterFirstCall(responses=[_ESCALATE], raises=LLMBudgetExceeded("cap")),
+        lambda: _FailAfterFirstCall(responses=[_TRUE_POSITIVE], raises=LLMBudgetExceeded("cap")),
         DEPLOYED,
         "verifier_cap",
     ),
     "verifier_transient": (
-        lambda: _FailAfterFirstCall(responses=[_ESCALATE], raises=TransientError("stalled")),
+        lambda: _FailAfterFirstCall(responses=[_TRUE_POSITIVE], raises=TransientError("stalled")),
         DEPLOYED,
         "verifier_transient",
     ),
@@ -357,23 +357,23 @@ def test_full_mode_calls_the_verifier_and_respects_disagreement(db, cfg):
     alert_id = _seed(db)
 
     agreed = evaluate_alert(
-        db, alert_id, adapter=_FakeLLM(responses=[_ESCALATE, VERIFIER_V1_AGREE]), cfg=cfg
+        db, alert_id, adapter=_FakeLLM(responses=[_TRUE_POSITIVE, VERIFIER_V2_AGREE]), cfg=cfg
     )
-    assert (agreed.final_verdict, agreed.forced_by) == ("escalate", ())
+    assert (agreed.final_verdict, agreed.forced_by) == ("true_positive", ())
     assert agreed.gate_result["steps"]["6"] == "agree"
 
-    llm = _FakeLLM(responses=[_ESCALATE, VERIFIER_V1_DISAGREE])
+    llm = _FakeLLM(responses=[_TRUE_POSITIVE, VERIFIER_V2_DISAGREE])
     ev = evaluate_alert(db, alert_id, adapter=llm, cfg=cfg)
 
     assert ev.outcome == "ok"
     assert len(llm.calls) == 2 and ev.calls == 2
-    assert "## Schema verifier_v1" in llm.calls[1]["system"]  # the second call is the verifier
+    assert "## Schema verifier_v2" in llm.calls[1]["system"]  # the second call is the verifier
     assert llm.calls[1]["user"] == ev.vbuilt.prompt.user
-    assert ev.verdict_for_verifier == "escalate"
+    assert ev.verdict_for_verifier == "true_positive"
     assert ev.verifier_verdict == "needs_review"
     assert ev.gate_result["steps"]["6"] == "disagree"
     assert ev.forced_by == ("step6",)
-    assert (ev.proposed_verdict, ev.final_verdict) == ("escalate", "needs_review")
+    assert (ev.proposed_verdict, ev.final_verdict) == ("true_positive", "needs_review")
     # the numbers are the two calls', summed
     p, v = ev.proposal, ev.verification
     assert ev.usage["prompt_tokens"] == p.usage["prompt_tokens"] + v.usage["prompt_tokens"]
@@ -392,12 +392,12 @@ def test_calls_are_counted_from_the_adapter_results(db, cfg):
     back, not assumed."""
     alert_id = _seed(db)
 
-    b3_llm = _FakeLLM(responses=["not json", _ESCALATE])
+    b3_llm = _FakeLLM(responses=["not json", _TRUE_POSITIVE])
     b3 = evaluate_alert(db, alert_id, adapter=b3_llm, cfg=cfg, switches=_B3)
     assert b3.gate_result["steps"]["1"] == "repaired"
     assert b3.calls == len(b3_llm.calls) == 2
 
-    full_llm = _FakeLLM(responses=["not json", _ESCALATE, VERIFIER_V1_AGREE])
+    full_llm = _FakeLLM(responses=["not json", _TRUE_POSITIVE, VERIFIER_V2_AGREE])
     full = evaluate_alert(db, alert_id, adapter=full_llm, cfg=cfg)
     assert full.calls == len(full_llm.calls) == 3
 
@@ -416,7 +416,7 @@ def test_calls_are_counted_from_the_adapter_results(db, cfg):
 def test_reasons_kept_and_dropped_are_counted_after_step_3(db, cfg):
     alert_id = _seed(db)
     two_reasons = _proposal(
-        "escalate",
+        "true_positive",
         rule="sbf-3",
         reasons=[
             dict(_GOOD_REASON),
@@ -424,13 +424,13 @@ def test_reasons_kept_and_dropped_are_counted_after_step_3(db, cfg):
         ],
     )
 
-    for switches, responses in ((DEPLOYED, [two_reasons, VERIFIER_V1_AGREE]), (_B3, [two_reasons])):
+    for switches, responses in ((DEPLOYED, [two_reasons, VERIFIER_V2_AGREE]), (_B3, [two_reasons])):
         ev = evaluate_alert(
             db, alert_id, adapter=_FakeLLM(responses=responses), cfg=cfg, switches=switches
         )
         assert (ev.reasons_kept, ev.reasons_dropped) == (1, 1), switches
         assert ev.gate_result["steps"]["3"] == "dropped:1"
-        assert ev.final_verdict == "escalate"
+        assert ev.final_verdict == "true_positive"
 
 
 # ---------------------------------------------------------------------------
@@ -442,12 +442,12 @@ def test_reasons_kept_and_dropped_are_counted_after_step_3(db, cfg):
 def test_b2_switches_remove_context_and_correlation_blocks(db, cfg):
     neighbour = _seed(db, context=_FOUND_CONTEXT)  # same agent, same minute: correlated
     alert_id = _seed(db, context=_FOUND_CONTEXT)
-    answer = _proposal("escalate", rule="sbf-3", basis=_FOUND_BASIS)
+    answer = _proposal("true_positive", rule="sbf-3", basis=_FOUND_BASIS)
 
     deployed = evaluate_alert(
-        db, alert_id, adapter=_FakeLLM(responses=[answer, VERIFIER_V1_AGREE]), cfg=cfg
+        db, alert_id, adapter=_FakeLLM(responses=[answer, VERIFIER_V2_AGREE]), cfg=cfg
     )
-    b2_llm = _FakeLLM(responses=[answer, VERIFIER_V1_AGREE])
+    b2_llm = _FakeLLM(responses=[answer, VERIFIER_V2_AGREE])
     b2 = evaluate_alert(db, alert_id, adapter=b2_llm, cfg=cfg, switches=_B2)
 
     # not vacuous: with the deployed switches both blocks are there
@@ -475,12 +475,12 @@ def test_override_template_changes_prompt_version_to_file_sha(db, cfg, tmp_path)
     template.write_text(deployed_text + "\nVÍ DỤ: một dòng few-shot để thử.\n", encoding="utf-8")
     file_version = "file:" + hashlib.sha256(template.read_bytes()).hexdigest()[:12]
 
-    llm = _FakeLLM(responses=[_ESCALATE, VERIFIER_V1_AGREE])
+    llm = _FakeLLM(responses=[_TRUE_POSITIVE, VERIFIER_V2_AGREE])
     ev = evaluate_alert(
         db, alert_id, adapter=llm, cfg=cfg, switches=EvalSwitches(proposer_template=template)
     )
     deployed = evaluate_alert(
-        db, alert_id, adapter=_FakeLLM(responses=[_ESCALATE, VERIFIER_V1_AGREE]), cfg=cfg
+        db, alert_id, adapter=_FakeLLM(responses=[_TRUE_POSITIVE, VERIFIER_V2_AGREE]), cfg=cfg
     )
 
     assert re.fullmatch(r"file:[0-9a-f]{12}", ev.prompt_version)
@@ -495,8 +495,8 @@ def test_override_template_changes_prompt_version_to_file_sha(db, cfg, tmp_path)
     assert system.removeprefix(template.read_text("utf-8")) == (
         deployed.built.prompt.system.removeprefix(deployed_text)
     )
-    assert "## Schema triage_v2" in system
-    assert "## Schema verifier_v1" in llm.calls[1]["system"]  # the verifier keeps its own
+    assert "## Schema triage_v3" in system
+    assert "## Schema verifier_v2" in llm.calls[1]["system"]  # the verifier keeps its own
     # and the user message is untouched (up to the per-build nonce)
     assert ev.built.prompt.user.replace(ev.built.prompt.nonce, "N") == (
         deployed.built.prompt.user.replace(deployed.built.prompt.nonce, "N")
@@ -511,12 +511,12 @@ _FAILURES = {
     "cap": (_AlwaysOverBudget, LLMBudgetExceeded, 0),
     "transient": (lambda: _FakeLLM(raises=TransientError("stalled")), TransientError, 0),
     "verifier_cap": (
-        lambda: _FailAfterFirstCall(responses=[_ESCALATE], raises=LLMBudgetExceeded("cap")),
+        lambda: _FailAfterFirstCall(responses=[_TRUE_POSITIVE], raises=LLMBudgetExceeded("cap")),
         LLMBudgetExceeded,
         1,
     ),
     "verifier_transient": (
-        lambda: _FailAfterFirstCall(responses=[_ESCALATE], raises=TransientError("stalled")),
+        lambda: _FailAfterFirstCall(responses=[_TRUE_POSITIVE], raises=TransientError("stalled")),
         TransientError,
         1,
     ),
@@ -536,7 +536,7 @@ def test_budget_and_transient_become_outcomes_not_raises(db, cfg, outcome):
     assert ev.calls == calls
     assert ev.final_verdict is None and ev.gate_result is None
     if calls:  # the proposal came back; only the verifier call failed
-        assert ev.proposed_verdict == "escalate" and ev.vbuilt is not None
+        assert ev.proposed_verdict == "true_positive" and ev.vbuilt is not None
         assert ev.usage == ev.proposal.usage
     else:
         assert ev.proposal is None and ev.usage == {} and ev.cost_usd == 0.0

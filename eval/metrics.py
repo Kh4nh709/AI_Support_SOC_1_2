@@ -82,6 +82,7 @@ TRUTH_CLASS: dict[str, str] = {"escalate": "escalate", "benign": "close"}
 #: Verdict -> outcome (DEC-121 Q1). No verdict (`None`) is `error`, which no verdict maps to.
 OUTCOME_OF: dict[str, str] = {
     "escalate": "escalate",
+    "true_positive": "escalate",
     "false_positive": "close",
     "benign": "close",
     "needs_review": "review",

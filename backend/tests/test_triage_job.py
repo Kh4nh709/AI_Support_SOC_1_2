@@ -4,7 +4,7 @@ Written against `docs/plan/tasks/P3/P3-T10.prompt.md`'s design notes and accepta
 list. Every model call goes through `backend/tests/fakes/llm.py`'s `FakeLLM` (or a
 tiny local double for the one branch `FakeLLM` cannot express — a budget check that
 must fire before any call is recorded); nothing here opens a socket. The seeded
-alert reuses the canonical fixture's values (context pack §8) so `TRIAGE_V2_ESCALATE`'s
+alert reuses the canonical fixture's values (context pack §8) so `TRIAGE_V3_TRUE_POSITIVE`'s
 quote is a real substring of the seeded `raw_log` and its `structured_basis` matches
 the facts `build_facts` derives from the seed — see `_seed_alert`.
 """
@@ -37,10 +37,10 @@ from app.web.worker import HANDLERS
 from psycopg.types.json import Jsonb
 
 from tests.fakes.llm import (
-    TRIAGE_V2_ESCALATE,
     TRIAGE_V2_FALSE_POSITIVE,
-    VERIFIER_V1_AGREE,
-    VERIFIER_V1_DISAGREE,
+    TRIAGE_V3_TRUE_POSITIVE,
+    VERIFIER_V2_AGREE,
+    VERIFIER_V2_DISAGREE,
     FakeLLM,
 )
 
@@ -70,7 +70,7 @@ def _seed_alert(conn, **overrides) -> str:
     twelve NOT NULL-without-default columns, `status`, the four `*_context`/
     `lookup_status` columns in `finish_enrichment`'s shape, `occurrence_count`. The
     defaults reuse the canonical alert (context pack §8) exactly — same `rule_level`
-    (12, critical), same `raw_log` (so `TRIAGE_V2_ESCALATE`'s quote is a real
+    (12, critical), same `raw_log` (so `TRIAGE_V3_TRUE_POSITIVE`'s quote is a real
     substring), same lookups (asset unknown, ioc skipped, identity unknown) — so a
     test that does not override anything reproduces the canonical facts.
     """
@@ -245,7 +245,7 @@ class _SlowFirstCallLLM(_RecordingLLM):
 def test_happy_path_writes_two_rows_ready_and_audit(db, monkeypatch):
     _enable_llm(monkeypatch)
     alert_id = _seed_alert(db)
-    fake = _RecordingLLM(responses=[TRIAGE_V2_ESCALATE, VERIFIER_V1_AGREE])
+    fake = _RecordingLLM(responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE])
 
     run_triage_job(db, _job(alert_id), adapter=fake)
 
@@ -287,7 +287,7 @@ def test_forced_path_writes_gate_forced(db, monkeypatch):
         ioc_context={"reputation": "clean"},
         lookup_status={"asset": "found", "identity": "found", "ioc": "found"},
     )
-    fake = _RecordingLLM(responses=[TRIAGE_V2_FALSE_POSITIVE, VERIFIER_V1_DISAGREE])
+    fake = _RecordingLLM(responses=[TRIAGE_V2_FALSE_POSITIVE, VERIFIER_V2_DISAGREE])
 
     run_triage_job(db, _job(alert_id), adapter=fake)
 
@@ -317,7 +317,7 @@ def test_result_column_never_carries_ungated_fp(db, monkeypatch):
         ioc_context={"reputation": "clean"},
         lookup_status={"asset": "found", "identity": "found", "ioc": "found"},
     )
-    fake = _RecordingLLM(responses=[TRIAGE_V2_FALSE_POSITIVE, VERIFIER_V1_DISAGREE])
+    fake = _RecordingLLM(responses=[TRIAGE_V2_FALSE_POSITIVE, VERIFIER_V2_DISAGREE])
 
     run_triage_job(db, _job(alert_id), adapter=fake)
 
@@ -361,6 +361,93 @@ def test_schema_failure_after_repair_is_unavailable(db, monkeypatch):
 
 
 @pytest.mark.db
+@pytest.mark.parametrize("refused", ["needs_review", "escalate"])
+def test_a_model_answer_outside_the_definite_pair_twice_is_stopped_by_schema(
+    db, monkeypatch, refused
+):
+    """P14-T01 (DEC-213): ①'s model answer is `false_positive | true_positive`. `needs_review` is
+    the system's alone, and the old `escalate` is gone: either, twice, ends exactly as invalid JSON
+    does today (the one repair round, then `stopped_by='schema'`, no result, `unavailable`)."""
+    _enable_llm(monkeypatch)
+    alert_id = _seed_alert(db)
+    bad = {**TRIAGE_V3_TRUE_POSITIVE, "suggested_action": refused}
+    fake = _RecordingLLM(responses=[bad, bad, VERIFIER_V2_AGREE])
+
+    run_triage_job(db, _job(alert_id), adapter=fake)
+
+    rows = _rows(db, alert_id, "result", "stopped_by", "role")
+    assert len(rows) == 1
+    result, stopped_by, role = rows[0]
+    assert (result, stopped_by, role) == (None, "schema", "proposer")
+    assert len(fake.calls) == 2  # the one repair round, never a third call, never the verifier
+    triage_status = db.execute(
+        "SELECT triage_status FROM alerts WHERE alert_id = %s", (alert_id,)
+    ).fetchone()[0]
+    assert triage_status == "unavailable"
+
+
+@pytest.mark.db
+def test_a_true_positive_answer_is_stored_as_the_suggested_action(db, monkeypatch):
+    _enable_llm(monkeypatch)
+    alert_id = _seed_alert(db)
+    fake = _RecordingLLM(responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE])
+
+    run_triage_job(db, _job(alert_id), adapter=fake)
+
+    result, gate_result = db.execute(
+        "SELECT result, gate_result FROM llm_runs WHERE subject_id = %s AND role = 'proposer'",
+        (alert_id,),
+    ).fetchone()
+    assert result["suggested_action"] == "true_positive"
+    assert gate_result["proposed_verdict"] == gate_result["final_verdict"] == "true_positive"
+    assert gate_result["forced"] is False and gate_result["forced_by"] == []
+    assert gate_result["proposer_raw"]["suggested_action"] == "true_positive"
+    assert gate_result["verifier_verdict"] == "true_positive"
+    assert db.execute(
+        "SELECT triage_status FROM alerts WHERE alert_id = %s", (alert_id,)
+    ).fetchone() == ("ready",)
+    assert "escalate" not in json.dumps(result)
+
+
+@pytest.mark.db
+def test_a_true_positive_the_gate_holds_keeps_the_models_answer_beside_the_held_one(
+    db, monkeypatch
+):
+    """The model concluded; the system held it (here, the verifier disagrees): `result` says
+    `needs_review`, `gate_result.proposed_verdict` still says what the model concluded."""
+    _enable_llm(monkeypatch)
+    alert_id = _seed_alert(db)
+    fake = _RecordingLLM(responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_DISAGREE])
+
+    run_triage_job(db, _job(alert_id), adapter=fake)
+
+    result, gate_result = db.execute(
+        "SELECT result, gate_result FROM llm_runs WHERE subject_id = %s AND role = 'proposer'",
+        (alert_id,),
+    ).fetchone()
+    assert result["suggested_action"] == "needs_review"
+    assert gate_result["proposed_verdict"] == "true_positive"
+    assert gate_result["final_verdict"] == "needs_review"
+    assert gate_result["forced_by"] == ["step6"]
+
+
+@pytest.mark.db
+def test_the_prompts_of_the_job_carry_the_v3_and_v2_schemas(db, monkeypatch):
+    _enable_llm(monkeypatch)
+    alert_id = _seed_alert(db)
+    fake = _RecordingLLM(responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE])
+
+    run_triage_job(db, _job(alert_id), adapter=fake)
+
+    proposer_system, verifier_system = fake.calls[0]["system"], fake.calls[1]["system"]
+    assert "## Schema triage_v3\n" in proposer_system
+    assert "suggested_action: false_positive|true_positive" in proposer_system
+    assert "needs_review" not in proposer_system
+    assert "## Schema verifier_v2\n" in verifier_system
+    assert "structured_only_verdict: false_positive|needs_review|true_positive" in verifier_system
+
+
+@pytest.mark.db
 def test_builder_violation_is_unavailable_with_event(db, monkeypatch):
     _enable_llm(monkeypatch)
     from app.security import linter as linter_module
@@ -369,7 +456,7 @@ def test_builder_violation_is_unavailable_with_event(db, monkeypatch):
         linter_module, "lint", lambda *a, **kw: [Violation(kind="free_text", token="x", line=1)]
     )
     alert_id = _seed_alert(db)
-    fake = _RecordingLLM(responses=[TRIAGE_V2_ESCALATE, VERIFIER_V1_AGREE])
+    fake = _RecordingLLM(responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE])
 
     run_triage_job(db, _job(alert_id), adapter=fake)
 
@@ -435,7 +522,7 @@ def test_verifier_402_writes_both_rows_unavailable(db, monkeypatch):
     _enable_llm(monkeypatch)
     alert_id = _seed_alert(db)
     fake = _FailVerifyCall(
-        responses=[TRIAGE_V2_ESCALATE],
+        responses=[TRIAGE_V3_TRUE_POSITIVE],
         raises=LLMUnavailable("LLM provider unavailable (402): Insufficient Balance"),
     )
 
@@ -566,7 +653,7 @@ def test_verify_transient_before_last_attempt_propagates_and_writes_nothing(db, 
     proposer row is not written on a retry (the whole transaction rolls back)."""
     _enable_llm(monkeypatch)
     alert_id = _seed_alert(db)
-    fake = _FailVerifyCall(responses=[TRIAGE_V2_ESCALATE], raises=TransientError("stalled"))
+    fake = _FailVerifyCall(responses=[TRIAGE_V3_TRUE_POSITIVE], raises=TransientError("stalled"))
 
     with pytest.raises(TransientError):
         run_triage_job(db, _job(alert_id, attempts=1), adapter=fake)
@@ -583,7 +670,7 @@ def test_verify_transient_on_last_attempt_writes_both_rows_unavailable(db, monke
     2): the proposer's real prompt/usage, the verifier's prompt with no result."""
     _enable_llm(monkeypatch)
     alert_id = _seed_alert(db)
-    fake = _FailVerifyCall(responses=[TRIAGE_V2_ESCALATE], raises=TransientError("stalled"))
+    fake = _FailVerifyCall(responses=[TRIAGE_V3_TRUE_POSITIVE], raises=TransientError("stalled"))
 
     run_triage_job(db, _job(alert_id, attempts=3), adapter=fake)
 
@@ -606,7 +693,9 @@ def test_verify_cap_writes_both_rows_unavailable(db, monkeypatch):
     applies (cap never retries), so both rows are written immediately."""
     _enable_llm(monkeypatch)
     alert_id = _seed_alert(db)
-    fake = _FailVerifyCall(responses=[TRIAGE_V2_ESCALATE], raises=LLMBudgetExceeded("over cap"))
+    fake = _FailVerifyCall(
+        responses=[TRIAGE_V3_TRUE_POSITIVE], raises=LLMBudgetExceeded("over cap")
+    )
 
     run_triage_job(db, _job(alert_id), adapter=fake)
 
@@ -678,7 +767,7 @@ def test_a_new_alert_beside_an_archived_one_is_triaged_and_does_not_see_it(db, m
         occurrence_count=5000,  # the busiest neighbour: it would head the correlation rows
     )
     alert_id = _seed_alert(db)
-    fake = _RecordingLLM(responses=[TRIAGE_V2_ESCALATE, VERIFIER_V1_AGREE])
+    fake = _RecordingLLM(responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE])
 
     run_triage_job(db, _job(alert_id), adapter=fake)
 
@@ -716,7 +805,7 @@ def test_disabled_llm_is_unavailable_without_rows(db):
 def test_auto_closed_alert_takes_the_same_path(db, monkeypatch):
     _enable_llm(monkeypatch)
     alert_id = _seed_alert(db, status="auto_closed")
-    fake = _RecordingLLM(responses=[TRIAGE_V2_ESCALATE, VERIFIER_V1_AGREE])
+    fake = _RecordingLLM(responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE])
 
     run_triage_job(db, _job(alert_id), adapter=fake)
 
@@ -737,9 +826,9 @@ def test_auto_closed_alert_takes_the_same_path(db, monkeypatch):
 def test_never_touches_alerts_status(db, monkeypatch):
     _enable_llm(monkeypatch)
     scenarios = (
-        ("queued_tier1", _RecordingLLM(responses=[TRIAGE_V2_ESCALATE, VERIFIER_V1_AGREE])),
+        ("queued_tier1", _RecordingLLM(responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE])),
         ("queued_tier1", _RecordingLLM(responses=["bad", "bad"])),
-        ("auto_closed", _RecordingLLM(responses=[TRIAGE_V2_ESCALATE, VERIFIER_V1_AGREE])),
+        ("auto_closed", _RecordingLLM(responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE])),
         ("closed_fp", _RecordingLLM()),
     )
     for status, fake in scenarios:
@@ -761,7 +850,7 @@ def test_idle_timeout_survives_an_eleven_second_call(db, monkeypatch):
     # 11 s on purpose — design note 3
     _enable_llm(monkeypatch)
     alert_id = _seed_alert(db)
-    slow = _SlowFirstCallLLM(responses=[TRIAGE_V2_ESCALATE, VERIFIER_V1_AGREE])
+    slow = _SlowFirstCallLLM(responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE])
 
     worker.run_forever(lambda: db, {"triage": partial(run_triage_job, adapter=slow)}, once=True)
 
@@ -797,7 +886,7 @@ def test_rule_check_six_reasons():
         reviewed_at="2026-09-19",
         rules=(
             Rule(id="sbf-1", condition={"severity": ("low", "medium")}, action="false_positive"),
-            Rule(id="sbf-3", condition={"rule_level_gte": 12}, action="escalate"),
+            Rule(id="sbf-3", condition={"rule_level_gte": 12}, action="true_positive"),
         ),
     )
     unreviewed = dataclasses.replace(reviewed, reviewed_by=None, reviewed_at=None)
@@ -830,7 +919,7 @@ def test_worker_handler_table_has_triage():
 def test_verifier_row_links_proposer_run_id(db, monkeypatch):
     _enable_llm(monkeypatch)
     alert_id = _seed_alert(db)
-    fake = _RecordingLLM(responses=[TRIAGE_V2_ESCALATE, VERIFIER_V1_AGREE])
+    fake = _RecordingLLM(responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE])
 
     run_triage_job(db, _job(alert_id), adapter=fake)
 
@@ -850,7 +939,7 @@ def test_user_message_is_the_prompt_sent(db, monkeypatch):
     """T7 (phase-5): `user_message` is the prompt actually sent, verbatim."""
     _enable_llm(monkeypatch)
     alert_id = _seed_alert(db)
-    fake = _RecordingLLM(responses=[TRIAGE_V2_ESCALATE, VERIFIER_V1_AGREE])
+    fake = _RecordingLLM(responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE])
 
     run_triage_job(db, _job(alert_id), adapter=fake)
 

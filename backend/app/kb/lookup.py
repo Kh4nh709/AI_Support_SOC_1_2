@@ -44,7 +44,19 @@ _INT_CONDITION_KEYS: dict[str, str] = {
     "rule_level_lt": "rule_level",
     "rule_level_gte": "rule_level",
 }
-_ACTIONS = ("false_positive", "needs_review", "escalate")
+#: The action a loaded rule carries: ①'s vocabulary after the gate (`llm/verdicts.py`'s
+#: `GATED_ACTIONS`; `kb` may import only `infra`, so it is transcribed here and
+#: `tests/test_verdicts.py` ties the two together). P14-T01, DEC-213: ①'s `escalate` is now
+#: `true_positive`.
+_ACTIONS = ("false_positive", "needs_review", "true_positive")
+#: The one spelling of a signed table that is not a verdict of ①: the files under
+#: `kb/decision_tables/` are policy the Owner and the advisor signed (`reviewed_by`), so they are not
+#: edited for the rename, and their `then: escalate` is read as ①'s verdict `true_positive` (spec 4.1).
+#: Only that spelling is mapped: `then: true_positive` is refused, as any `then` that is not one of these.
+_YAML_RENAMED = {"escalate": "true_positive"}
+#: What a signed decision table may SAY after `then:`, and the action each spelling loads as: the
+#: unchanged verdicts of `_ACTIONS` as themselves, and the renamed one under its signed spelling.
+_YAML_ACTION = {a: a for a in _ACTIONS if a not in _YAML_RENAMED.values()} | _YAML_RENAMED
 #: Design note 2 gives this as `^[a-z]{2,6}-\d{1,2}$`; widened to admit digits in the
 #: abbreviation (`[a-z0-9]`) because design note 5's own abbreviation list includes
 #: `c2b` (c2_beacon) — letters-only cannot match it. Deviation noted in the report;
@@ -56,7 +68,7 @@ _TITLE_TOKEN_RE = re.compile(r"`([^`]+)`")
 #: derived from it below, never generated on its own — `alerts.severity` is itself
 #: `rule_level`-banded (DEC-053), so a point like `severity=low, rule_level=12` cannot
 #: exist, and generating it would make every false-positive rule "contradict" every
-#: `rule_level_gte: 12` escalate rule at an impossible point.
+#: `rule_level_gte: 12` `true_positive` rule (`then: escalate` in the signed files) at an impossible point.
 _GRID_RULE_LEVELS = (0, 3, 5, 8, 12, 15)
 _GRID_OCCURRENCE_COUNTS = (1, 10, 49, 50, 100, 999, 1000)
 
@@ -248,9 +260,10 @@ def _validate_rule(path: Path, raw: Any, seen_ids: set[str]) -> Rule:
     if rule_id in seen_ids:
         _fail(path, rule_id, "duplicate rule id")
     seen_ids.add(rule_id)
-    action = raw.get("then")
-    if action not in _ACTIONS:
-        _fail(path, rule_id, f"then {action!r} must be one of {_ACTIONS}")
+    then = raw.get("then")
+    action = _YAML_ACTION.get(then) if isinstance(then, str) else None
+    if action not in _ACTIONS:  # the vocabulary a loaded rule may carry, whatever the spelling
+        _fail(path, rule_id, f"then {then!r} must be one of {tuple(_YAML_ACTION)}")
     condition = _validate_condition(path, rule_id, raw.get("if"))
     return Rule(id=rule_id, condition=condition, action=action)
 
@@ -261,7 +274,8 @@ def get_decision_table(category: str, *, root: Path = KB_ROOT) -> DecisionTable 
     the file, the rule id and the key for anything the format (design note 2) forbids:
     an unknown condition key, a value outside its vocabulary (including an unquoted
     YAML boolean where `identity_privileged` wants a string), a non-list where a list
-    is required, a `then` outside the three actions, a duplicate rule id, a bad rule id
+    is required, a `then` that is not `false_positive`, `needs_review` or `escalate` (the signed
+    spelling of `true_positive`), a duplicate rule id, a bad rule id
     shape, a `category` that does not match the file name, or a `playbook` name that is
     not the one in the playbook file's title line.
     """

@@ -1,16 +1,18 @@
 """Unconditionally enforce recommend-only output before a model result reaches an analyst.
 
-`security` may import only `infra` (G1), so the closed sets below are §6.2's `triage_v2`
+`security` may import only `infra` (G1), so the closed sets below are §6.2's `triage_v3`
 vocabulary transcribed here, not imported from `app.llm.schemas`. `enforce()` is the step-7
 re-check: it never adds an action and never rewrites text — ① has no actions to strip, and the
-legacy output_guard's "force `requires_human_approval`" has no counterpart in `triage_v2`.
+legacy output_guard's "force `requires_human_approval`" has no counterpart in `triage_v3`.
+`SUGGESTED_ACTIONS` is the vocabulary AFTER the gate (`llm/verdicts.py`'s `GATED_ACTIONS`): the
+model's `false_positive | true_positive`, and the `needs_review` that only the system sets.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-SUGGESTED_ACTIONS = frozenset({"false_positive", "needs_review", "escalate"})
+SUGGESTED_ACTIONS = frozenset({"false_positive", "needs_review", "true_positive"})
 CONFIDENCES = frozenset({"low", "medium", "high"})
 SEVERITIES = frozenset({"critical", "high", "medium", "low"})
 IOC_REPUTATIONS = frozenset({"malicious", "suspicious", "clean", "not_found", "skipped"})
@@ -46,7 +48,7 @@ TOP_LEVEL_FIELDS = (
 
 
 class OutputGuardError(ValueError):
-    """Raised when a `triage_v2`-shaped result violates §6.2's closed sets after the gate."""
+    """Raised when a `triage_v3`-shaped result violates §6.2's closed sets after the gate."""
 
 
 def _require(condition: bool, message: str) -> None:
@@ -92,7 +94,7 @@ def _enforce_reason(raw: Any) -> dict:
 
 
 def enforce(result: dict) -> dict:
-    """Re-check `result` (a `triage_v2`-shaped dict) against §6.2's closed sets, drop keys
+    """Re-check `result` (a `triage_v3`-shaped dict) against §6.2's closed sets, drop keys
     outside the schema, and return a fresh dict. Raises `OutputGuardError` on any violation —
     this should be impossible after step 1, and a test proves the guard is live by feeding it
     a crafted object directly."""

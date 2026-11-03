@@ -444,7 +444,9 @@ def _seed_operations(db) -> dict:
         latency_ms=1000,
         cost="0.00100",
     )
-    _gated(db, h2, at(101), "escalate", forced=False, reasons=2, latency_ms=2000, cost="0.00200")
+    _gated(
+        db, h2, at(101), "true_positive", forced=False, reasons=2, latency_ms=2000, cost="0.00200"
+    )
     _gated(
         db,
         h3,
@@ -631,7 +633,9 @@ def test_figures_match_a_seeded_fixture(db):
         "| NULL (the gate ran) | 4 |\n| cap | 1 |\n| linter | 1 |\n| schema | 1 |\n"
     ) in text
     assert "- proposer rows: 7" in text
-    assert "| final_verdict | rows |\n|---|---|\n| escalate | 1 |\n| needs_review | 3 |\n" in text
+    assert (
+        "| final_verdict | rows |\n|---|---|\n| needs_review | 3 |\n| true_positive | 1 |\n" in text
+    )
     for line in (
         "- rows where the gate ran: 4",
         "- `forced = true`: 3",
@@ -749,7 +753,7 @@ def test_window_bounds_are_half_open(db):
 def test_forced_rate_denominator_is_rows_where_the_gate_ran(db):
     alert_id = _open(db, received_at=at(1))
     _gated(db, alert_id, at(2), "needs_review", forced=True, forced_by=("step4",))
-    _gated(db, alert_id, at(3), "escalate", forced=False)
+    _gated(db, alert_id, at(3), "true_positive", forced=False)
     for minute, stopped_by in ((4, "schema"), (5, "cap"), (6, "transient")):
         _run(db, alert_id, at(minute), stopped_by=stopped_by)
     for minute in (2, 3):
@@ -781,7 +785,7 @@ def test_over_sixty_percent_prints_the_architecture_sentence(db, forced, gated, 
             db,
             alert_id,
             at(2 + i),
-            "needs_review" if is_forced else "escalate",
+            "needs_review" if is_forced else "true_positive",
             forced=is_forced,
             forced_by=("step4",) if is_forced else (),
         )

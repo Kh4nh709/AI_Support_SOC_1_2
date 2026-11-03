@@ -144,14 +144,14 @@ def _alert(conn, alert_id: str, *, source: str = "wazuh", duplicate_of: str | No
 
 
 def _run(conn, subject_id: str, **overrides) -> None:
-    """One triage `llm_runs` row. Defaults are a healthy proposer row (an `escalate` that the gate
+    """One triage `llm_runs` row. Defaults are a healthy proposer row (a `true_positive` that the gate
     left alone, with a gate document, the usage the model returned and a cost); any column can be
     overridden, `None` included."""
     row = {
         "role": "proposer",
         "pipeline": "triage",
         "subject_type": "alert",
-        "result": {"suggested_action": "escalate"},
+        "result": {"suggested_action": "true_positive"},
         "gate_result": _GOOD_GATE,
         "cost_usd": Decimal("0.00024"),
         "input_tokens": 120,
@@ -412,7 +412,7 @@ def test_check_live_counts_a_schema_stop_without_failing(live_db):
     assert summary.ok is True
     assert summary.failures == []
     assert summary.stopped_by == {"(none)": 3, "schema": 1}
-    assert summary.suggested_action == {"escalate": 3, "(none)": 1}
+    assert summary.suggested_action == {"true_positive": 3, "(none)": 1}
     assert (summary.proposer_rows, summary.proposer_with_result) == (4, 3)
     assert summary.verifier_rows == 3  # none for the stopped run
 
@@ -451,7 +451,7 @@ def test_check_live_reports_the_facts_with_their_denominators(live_db):
     assert (s.gate_null_rows, s.cost_null_rows, s.usage_without_cost_rows) == (0, 0, 0)
     assert s.cost_null_by_stopped_by == {}
     assert s.forced_rows == 1
-    assert s.suggested_action == {"escalate": 2, "needs_review": 1}
+    assert s.suggested_action == {"true_positive": 2, "needs_review": 1}
     assert s.stopped_by == {"(none)": 3}
     assert s.jobs_by_status == {"succeeded": 1, "pending": 1}
     assert s.cost_usd_sum == pytest.approx(0.0065)

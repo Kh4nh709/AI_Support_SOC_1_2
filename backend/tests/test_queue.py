@@ -952,11 +952,11 @@ def test_latest_suggestion_tolerates_missing_gate_keys(db):
 
     # `facts` present but without `correlated_clusters`; `gate_result` NULL altogether.
     later = _queued(db)
-    _insert_run(db, later, result={"suggested_action": "escalate"}, gate_result={"facts": {}})
+    _insert_run(db, later, result={"suggested_action": "true_positive"}, gate_result={"facts": {}})
     got = latest_suggestion(db, later)
     assert got is not None and got.correlated_at_analysis is None and got.confidence is None
     nul = _queued(db)
-    _insert_run(db, nul, result={"suggested_action": "escalate"}, gate_result=None)
+    _insert_run(db, nul, result={"suggested_action": "true_positive"}, gate_result=None)
     got = latest_suggestion(db, nul)
     assert got is not None and got.gate["forced"] is None and got.correlated_at_analysis is None
 
@@ -1045,14 +1045,14 @@ def test_latest_suggestions_equals_latest_suggestion_for_each_alert_in_one_state
     one = _queued(db)
     _insert_run(db, one)
     several = _queued(db)
-    _insert_run(db, several, result={**RESULT, "suggested_action": "escalate"}, offset_s=0)
+    _insert_run(db, several, result={**RESULT, "suggested_action": "true_positive"}, offset_s=0)
     _insert_run(db, several, result={**RESULT, "suggested_action": "needs_review"}, offset_s=5)
     _insert_run(db, several, role="verifier", result=VERIFIER_RESULT, gate_result={}, offset_s=9)
     failed_last = _queued(db)
     _insert_run(db, failed_last, offset_s=0)
     _insert_run(db, failed_last, result=None, gate_result=None, stopped_by="linter", offset_s=3)
     blind = _queued(db, suggestion_visible=False)
-    _insert_run(db, blind, result={**RESULT, "suggested_action": "escalate"})
+    _insert_run(db, blind, result={**RESULT, "suggested_action": "true_positive"})
     twelve = _queued(db)
     reasons = [{"claim": f"c{i}", "quote": "q", "source": "kb_playbook"} for i in range(12)]
     _insert_run(db, twelve, result={**RESULT, "reasons": reasons})
@@ -1102,8 +1102,8 @@ def _tied_run_id(slot: int, rank: int) -> str:
 def _seed_tied_proposer_runs(db) -> dict[str, str]:
     """Six queue alerts, each with three proposer runs at the same `created_at`, inserted in each of
     the six orders of their ids, so that no rule of the form "the first / the last row met" can
-    pass. The highest id is `escalate`. Returns `{alert_id: that run's id}`."""
-    actions = {1: "false_positive", 2: "needs_review", 3: "escalate"}
+    pass. The highest id is `true_positive`. Returns `{alert_id: that run's id}`."""
+    actions = {1: "false_positive", 2: "needs_review", 3: "true_positive"}
     expected: dict[str, str] = {}
     for slot, order in enumerate(itertools.permutations(actions), start=1):
         alert_id = _queued(db)
@@ -1124,7 +1124,7 @@ def test_proposer_runs_at_one_instant_are_broken_by_run_id_in_both_readers(db):
     for alert_id, run_id in expected.items():
         got = latest_suggestion(db, alert_id)
         assert got is not None and got.run_id == run_id, alert_id
-        assert got.suggested_action == "escalate"
+        assert got.suggested_action == "true_positive"
     batched = latest_suggestions(db, list(expected))
     assert {alert_id: s.run_id for alert_id, s in batched.items()} == expected
 
@@ -1132,7 +1132,7 @@ def test_proposer_runs_at_one_instant_are_broken_by_run_id_in_both_readers(db):
     # no suggestion, as for any failed latest run (an older good run does not stand in).
     failed_high = _queued(db)
     _insert_tied_run(db, failed_high, _tied_run_id(9, 3), None)
-    _insert_tied_run(db, failed_high, _tied_run_id(9, 1), "escalate")
+    _insert_tied_run(db, failed_high, _tied_run_id(9, 1), "true_positive")
     _insert_tied_run(db, failed_high, _tied_run_id(9, 2), "needs_review")
     assert latest_suggestion(db, failed_high) is None
     assert failed_high not in latest_suggestions(db, [failed_high, *expected])
@@ -1148,10 +1148,10 @@ def test_the_queue_row_shows_the_same_run_as_the_alert_page_when_runs_tie(db):
     expected = _seed_tied_proposer_runs(db)
     failed_high = _queued(db)  # the highest id FAILED: the row shows that run, with no action
     _insert_tied_run(db, failed_high, _tied_run_id(9, 3), None)
-    _insert_tied_run(db, failed_high, _tied_run_id(9, 1), "escalate")
+    _insert_tied_run(db, failed_high, _tied_run_id(9, 1), "true_positive")
     for alert_id, run_id in expected.items():
         row = _row(db, alert_id)
-        assert (row["run_id"], row["suggested_action"]) == (run_id, "escalate"), alert_id
+        assert (row["run_id"], row["suggested_action"]) == (run_id, "true_positive"), alert_id
         assert row["run_id"] == latest_suggestion(db, alert_id).run_id
     row = _row(db, failed_high)
     assert (row["run_id"], row["suggested_action"]) == (_tied_run_id(9, 3), None)

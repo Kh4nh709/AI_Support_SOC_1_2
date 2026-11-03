@@ -604,17 +604,18 @@ def test_the_real_gl_id_is_a_fact_of_both_prompts_and_the_run_reaches_the_end(db
     assert ev.final_verdict == "needs_review"
 
 
-def _escalate() -> dict:
-    """① says `escalate`, its basis the facts of `fp_candidate` (any integer for the count)."""
+def _true_positive() -> dict:
+    """① says `true_positive`, its basis the facts of `fp_candidate` (any integer for the count)."""
     answer = _false_positive()
-    answer["suggested_action"] = "escalate"
+    answer["suggested_action"] = "true_positive"
     answer["structured_basis"]["playbook_rule_applied"] = None
     return answer
 
 
 @pytest.mark.db
-def test_an_escalation_on_a_soar_alert_is_not_downgraded_by_the_unknown_count(db, stream) -> None:
-    """Before DEC-209 item 2 step 2 forced EVERY answer on such an alert, `escalate` included, to
+def test_a_true_positive_on_a_soar_alert_is_not_downgraded_by_the_unknown_count(db, stream) -> None:
+    """Before DEC-209 item 2 step 2 forced EVERY answer on such an alert, `escalate` (now
+    `true_positive`, P14-T01) included, to
     `needs_review` as a hallucination. Now only the `false_positive` that needs a rule is held back.
     """
     receive_and_run(db, stream, fp_candidate())
@@ -622,12 +623,12 @@ def test_an_escalation_on_a_soar_alert_is_not_downgraded_by_the_unknown_count(db
     ev = tier1.evaluate_alert(
         db,
         _FP_ID,
-        adapter=_FakeComplete(responses=[_escalate(), _verifier("escalate")]),
+        adapter=_FakeComplete(responses=[_true_positive(), _verifier("true_positive")]),
         cfg=stream,
     )
 
     assert ev is not None and ev.outcome == "ok"
-    assert ev.final_verdict == "escalate" and ev.forced_by == ()
+    assert ev.final_verdict == "true_positive" and ev.forced_by == ()
     assert ev.gate_result["hallucination_flag"] is False
 
 
