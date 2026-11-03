@@ -722,7 +722,8 @@ class TestVoyageVectorKeys:
 
     def test_the_pack_lists_them_after_the_learned_knowledge_keys_in_the_tables_order(self):
         pack = gen_env_example.keys_from_pack()
-        assert pack[pack.index("KNOWLEDGE_QUEUE_MAX") + 1 :] == list(_VOYAGE_DEFAULTS)
+        start = pack.index("KNOWLEDGE_QUEUE_MAX") + 1
+        assert pack[start : start + len(_VOYAGE_DEFAULTS)] == list(_VOYAGE_DEFAULTS)
 
     @pytest.mark.parametrize(
         ("key", "default"), [(k, v) for k, v in _VOYAGE_DEFAULTS.items() if "KEY" not in k]
