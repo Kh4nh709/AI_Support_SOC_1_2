@@ -49,7 +49,7 @@
 #   * The P14 branch that carries it runs on the trial only: it is never merged into `main`, and live is never
 #     deployed with it. Steps and checks: docs/runbook.md, "Voyage vector RAG (DEC-213)".
 #
-# `rag-worker` claims only `rag_lookup` and `knowledge_draft` (web/rag_worker.py) and reclaims only those
+# `rag-worker` claims only `rag_lookup`, `knowledge_embed` and `knowledge_draft` (web/rag_worker.py) and reclaims only those
 # types. Restart it after any merge under backend/app (DEC-099), not only one that touches web/rag_worker.py,
 # web/rag_handlers/ or rag/: it imports llm/, security/, infra/, audit/ and domain/ as well, and a live mount
 # is not reloaded: `docker compose restart rag-worker`. `make db-restore` stops `app`, `worker` and `rag-worker` and
