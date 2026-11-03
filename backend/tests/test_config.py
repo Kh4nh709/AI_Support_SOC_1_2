@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import pathlib
 import re
+import subprocess
 import sys
 
 import pytest
@@ -735,6 +736,16 @@ class TestVoyageVectorKeys:
     @pytest.mark.parametrize("key", ["VOYAGE_API_KEY", "VECTOR_DATABASE_URL"])
     def test_env_example_carries_no_secret(self, key):
         assert _env_example_value(key) == ""
+
+    def test_gen_env_example_check_exits_zero(self):
+        """`make lint` runs `scripts/gen_env_example.py --check`; here the same check is a test, so
+        `.env.example` drifting from §6.3 (a key added to one and not the other) is red under `make test`.
+        """
+        script = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "gen_env_example.py"
+        run = subprocess.run(
+            [sys.executable, str(script), "--check"], capture_output=True, text=True, check=False
+        )
+        assert run.returncode == 0, run.stderr[-400:]
 
     def test_an_empty_voyage_key_is_said_to_fail_the_lookup_with_kind_auth_in_all_four_places(self):
         """DEC-213, the Director's ruling (P14-T04 fix round 1, F3): with the RAG on, an empty
