@@ -14,17 +14,28 @@ from tests.fakes.llm import (
     INVESTIGATE_V2_OK,
     TRIAGE_V2_ESCALATE,
     TRIAGE_V2_FALSE_POSITIVE,
+    TRIAGE_V3_TRUE_POSITIVE,
     VERIFIER_V1_AGREE,
     VERIFIER_V1_DISAGREE,
+    VERIFIER_V2_AGREE,
+    VERIFIER_V2_DISAGREE,
 )
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = ROOT / "backend" / "app" / "llm" / "templates"
 
 
-def test_file_parses_and_has_three_schemas():
+def test_file_parses_and_has_five_schemas():
+    """`triage_v3` and `verifier_v2` (P14-T01) are the product's; `triage_v2` and `verifier_v1`
+    stay, unused by the product, because the evaluation reads them (DEC-213)."""
     loaded = schemas.load()
-    assert set(loaded) == {"triage_v2", "verifier_v1", "investigate_v2"}
+    assert set(loaded) == {
+        "triage_v2",
+        "triage_v3",
+        "verifier_v1",
+        "verifier_v2",
+        "investigate_v2",
+    }
 
 
 @pytest.mark.parametrize(
@@ -32,15 +43,23 @@ def test_file_parses_and_has_three_schemas():
     [
         ("triage_v2", TRIAGE_V2_ESCALATE),
         ("triage_v2", TRIAGE_V2_FALSE_POSITIVE),
+        ("triage_v3", TRIAGE_V3_TRUE_POSITIVE),
+        ("triage_v3", TRIAGE_V2_FALSE_POSITIVE),
         ("verifier_v1", VERIFIER_V1_AGREE),
         ("verifier_v1", VERIFIER_V1_DISAGREE),
+        ("verifier_v2", VERIFIER_V2_AGREE),
+        ("verifier_v2", VERIFIER_V2_DISAGREE),
         ("investigate_v2", INVESTIGATE_V2_OK),
     ],
     ids=[
         "TRIAGE_V2_ESCALATE",
         "TRIAGE_V2_FALSE_POSITIVE",
+        "TRIAGE_V3_TRUE_POSITIVE",
+        "TRIAGE_V3_FALSE_POSITIVE",
         "VERIFIER_V1_AGREE",
         "VERIFIER_V1_DISAGREE",
+        "VERIFIER_V2_AGREE",
+        "VERIFIER_V2_DISAGREE",
         "INVESTIGATE_V2_OK",
     ],
 )
@@ -117,8 +136,19 @@ def test_empty_reasons_is_valid():
 
 
 def test_render_is_deterministic():
-    for name in ("triage_v2", "verifier_v1", "investigate_v2"):
+    for name in ("triage_v2", "triage_v3", "verifier_v1", "verifier_v2", "investigate_v2"):
         assert schemas.render(name) == schemas.render(name)
+
+
+def test_render_of_the_product_schemas_names_the_new_vocabularies():
+    triage = schemas.render("triage_v3").splitlines()
+    assert "suggested_action: false_positive|true_positive" in triage
+    verifier = schemas.render("verifier_v2").splitlines()
+    assert "structured_only_verdict: false_positive|needs_review|true_positive" in verifier
+    # everything but that one line reads as the schema it renames
+    assert [ln for ln in triage if not ln.startswith("suggested_action:")] == [
+        ln for ln in schemas.render("triage_v2").splitlines() if not ln.startswith("suggested_")
+    ]
 
 
 def test_render_uses_nested_indentation_and_array_marker():
@@ -210,15 +240,19 @@ def test_normalise_leaves_every_other_mismatch_for_validate():
     [
         ("triage_v2", TRIAGE_V2_ESCALATE),
         ("triage_v2", TRIAGE_V2_FALSE_POSITIVE),
+        ("triage_v3", TRIAGE_V3_TRUE_POSITIVE),
         ("verifier_v1", VERIFIER_V1_AGREE),
         ("verifier_v1", VERIFIER_V1_DISAGREE),
+        ("verifier_v2", VERIFIER_V2_AGREE),
         ("investigate_v2", INVESTIGATE_V2_OK),
     ],
     ids=[
         "TRIAGE_V2_ESCALATE",
         "TRIAGE_V2_FALSE_POSITIVE",
+        "TRIAGE_V3_TRUE_POSITIVE",
         "VERIFIER_V1_AGREE",
         "VERIFIER_V1_DISAGREE",
+        "VERIFIER_V2_AGREE",
         "INVESTIGATE_V2_OK",
     ],
 )

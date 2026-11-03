@@ -92,13 +92,22 @@ Changing any of these requires a Decision Request in `docs/plan/INBOX.md` and Di
     "occurrence_count": 0, "playbook_rule_applied": "string|null"},
   "reasons": [{"claim": "string", "quote": "verbatim substring of one block", "source": "wazuh_raw_log|rule_description|correlation_samples|kb_playbook|context|siem_context"}],
   "playbook_used": "string|null"},
+ "triage_v3": {"suggested_action": "false_positive|true_positive", "confidence": "low|medium|high",
+  "structured_basis": {"severity": "critical|high|medium|low", "ioc_reputation": "malicious|suspicious|clean|not_found|skipped",
+    "asset_criticality": "high|medium|low|unknown", "identity_privileged": "true|false|unknown",
+    "occurrence_count": 0, "playbook_rule_applied": "string|null"},
+  "reasons": [{"claim": "string", "quote": "verbatim substring of one block", "source": "wazuh_raw_log|rule_description|correlation_samples|kb_playbook|context|siem_context"}],
+  "playbook_used": "string|null"},
  "verifier_v1": {"agree": true, "structured_only_verdict": "false_positive|needs_review|escalate", "reason": "string"},
+ "verifier_v2": {"agree": true, "structured_only_verdict": "false_positive|needs_review|true_positive", "reason": "string"},
  "investigate_v2": {"summary": "string", "attack_narrative": "string",
   "suggested_conclusion": "false_positive|policy_violation|confirmed_incident|need_more_data", "confidence": "low|medium|high",
   "gia_thuyet": [{"noi_dung": "string", "evidence_for": ["string"], "evidence_against": ["string (minItems 1)"]}],
   "evidence": [{"alert_id": "string", "quote": "verbatim substring of that alert's raw_log or description", "why": "string"}],
   "next_steps": ["string"], "playbook_used": "string|null"}}
 ```
+
+**Definite verdicts (DEC-213, P14-T01).** ① and its verifier use **`triage_v3`** and **`verifier_v2`**: the model answers `suggested_action` ∈ `false_positive | true_positive` (it may no longer answer `needs_review`, which only the gate sets), and the verifier's `structured_only_verdict` ∈ `false_positive | needs_review | true_positive`. ①'s `escalate` is renamed `true_positive`; the analyst's escalation (the route, `transitions.escalate`, `tier1.escalated`, `escalated_tier2`) and the gold labels keep their names. `triage_v2` and `verifier_v1` stay in the file, unused by the product, because `eval/` reads them.
 
 **RAG-only schemas (DEC-210, P13).** Two more output schemas exist, `rag_match_v1` (the ranking agent's matches: `entry_id`, `level` and a `reason` of at most 160 characters) and `knowledge_draft_v1` (the six fields the draft agent writes). They live in `backend/app/rag/schemas.json`, are read by `rag/agent.call_json` (and checked by `llm.schemas.validate_against`), and are **not** part of `output_schemas.json` or of the block above, which `scripts/check_output_schemas.py` compares with that file alone. ①'s and ②'s own schemas, and the closed `reasons[].source` enum of `triage_v2`, are unchanged by P13.
 
