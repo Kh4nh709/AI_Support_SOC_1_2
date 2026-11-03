@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import dataclasses
 import pathlib
+import re
+import subprocess
 import sys
 
 import pytest
@@ -464,6 +466,330 @@ class TestLearnedKnowledgeKeys:
     @pytest.mark.parametrize(("key", "default"), list(_RAG_INTS.items()))
     def test_env_example_shows_each_number_at_its_default(self, key, default):
         assert f"\n{key}={default}" in _example_text()
+
+
+#: P14-T04 / DEC-213: the eleven keys of Part B (Voyage embeddings and rerank, the independent
+#: pgvector), in context pack §6.3's order, with the default each one has when nothing names it.
+_VOYAGE_DEFAULTS = {
+    "VOYAGE_API_KEY": "",
+    "VOYAGE_BASE_URL": "https://api.voyageai.com/v1",
+    "RAG_EMBED_MODEL": "voyage-4",
+    "RAG_EMBED_DIMS": 1024,
+    "RAG_RERANK_MODEL": "rerank-2.5",
+    "RAG_MIN_SCORE": 0.50,
+    "RAG_LEVEL_GIONG": 0.65,
+    "RAG_LEVEL_RAT_GIONG": 0.80,
+    "VOYAGE_PRICE_EMBED_PER_M": 0.06,
+    "VOYAGE_PRICE_RERANK_PER_M": 0.05,
+    "VECTOR_DATABASE_URL": "",
+}
+_VOYAGE_THRESHOLDS = ("RAG_MIN_SCORE", "RAG_LEVEL_GIONG", "RAG_LEVEL_RAT_GIONG")
+_VOYAGE_DIMS = (256, 512, 1024, 2048)
+#: Planted values that must never reach a `repr`, a `dump()` or an error message.
+_VOYAGE_KEY_SENTINEL = "pa-VOYAGE-SENTINEL-4242"
+_VECTOR_DSN_SENTINEL = "postgresql://vector:VECTOR-PW-SENTINEL@vectordb:5432/vectors"
+
+
+def _clear_voyage_env(monkeypatch):
+    for key in _VOYAGE_DEFAULTS:
+        monkeypatch.delenv(key, raising=False)
+
+
+def _env_example_value(key):
+    """The value `.env.example` shows for `key`, a trailing ` # comment` stripped."""
+    for line in _example_text().splitlines():
+        if line.startswith(f"{key}="):
+            return line.partition("=")[2].split("  #")[0].strip()
+    raise AssertionError(f"{key} is not a line of .env.example")
+
+
+class TestVoyageVectorKeys:
+    """P14-T04 / DEC-213: eleven `.env`-only keys. Their defaults are the plan's key table, verbatim.
+    The three thresholds are provisional until calibration but must stay in order, and the embedding
+    size is one of the four Voyage serves; `VOYAGE_API_KEY` and `VECTOR_DATABASE_URL` are secrets
+    (the second carries the vector database's password)."""
+
+    def test_the_eleven_keys_are_config_fields_with_the_key_tables_defaults(self):
+        fields = {f.name: f for f in dataclasses.fields(Config)}
+        assert len(_VOYAGE_DEFAULTS) == 11
+        for key, default in _VOYAGE_DEFAULTS.items():
+            assert fields[key].default == default, key
+            assert type(fields[key].default) is type(default), key
+
+    def test_load_with_nothing_named_gives_the_defaults(self, monkeypatch):
+        _clear_voyage_env(monkeypatch)
+        cfg = load(env_file="/dev/null")
+        assert {key: getattr(cfg, key) for key in _VOYAGE_DEFAULTS} == _VOYAGE_DEFAULTS
+
+    def test_empty_values_fall_through_to_the_defaults(self, monkeypatch):
+        for key in _VOYAGE_DEFAULTS:
+            monkeypatch.setenv(key, "")
+        cfg = load(env_file="/dev/null")
+        assert {key: getattr(cfg, key) for key in _VOYAGE_DEFAULTS} == _VOYAGE_DEFAULTS
+
+    def test_each_key_is_read_from_the_dotenv_file(self, tmp_path, monkeypatch):
+        _clear_voyage_env(monkeypatch)
+        text = "\n".join(
+            [
+                f"VOYAGE_API_KEY={_VOYAGE_KEY_SENTINEL}",
+                "VOYAGE_BASE_URL=http://voyage.test/v1",
+                "RAG_EMBED_MODEL=voyage-4-lite",
+                "RAG_EMBED_DIMS=512",
+                "RAG_RERANK_MODEL=rerank-3",
+                "RAG_MIN_SCORE=0.40",
+                "RAG_LEVEL_GIONG=0.60",
+                "RAG_LEVEL_RAT_GIONG=0.90",
+                "VOYAGE_PRICE_EMBED_PER_M=0.12",
+                "VOYAGE_PRICE_RERANK_PER_M=0.08",
+                f"VECTOR_DATABASE_URL={_VECTOR_DSN_SENTINEL}",
+            ]
+        )
+        cfg = load(env_file=write_env(tmp_path, text + "\n"))
+        assert cfg.VOYAGE_API_KEY == _VOYAGE_KEY_SENTINEL
+        assert cfg.VOYAGE_BASE_URL == "http://voyage.test/v1"
+        assert (cfg.RAG_EMBED_MODEL, cfg.RAG_EMBED_DIMS, cfg.RAG_RERANK_MODEL) == (
+            "voyage-4-lite",
+            512,
+            "rerank-3",
+        )
+        assert (cfg.RAG_MIN_SCORE, cfg.RAG_LEVEL_GIONG, cfg.RAG_LEVEL_RAT_GIONG) == (
+            0.40,
+            0.60,
+            0.90,
+        )
+        assert (cfg.VOYAGE_PRICE_EMBED_PER_M, cfg.VOYAGE_PRICE_RERANK_PER_M) == (0.12, 0.08)
+        assert cfg.VECTOR_DATABASE_URL == _VECTOR_DSN_SENTINEL
+
+    def test_a_real_env_var_wins_over_the_file(self, tmp_path, monkeypatch):
+        _clear_voyage_env(monkeypatch)
+        monkeypatch.setenv("RAG_EMBED_DIMS", "256")
+        cfg = load(env_file=write_env(tmp_path, "RAG_EMBED_DIMS=2048\n"))
+        assert cfg.RAG_EMBED_DIMS == 256
+
+    # -- the embedding size ---------------------------------------------------------------------
+
+    @pytest.mark.parametrize("dims", _VOYAGE_DIMS)
+    def test_each_size_voyage_serves_is_accepted(self, monkeypatch, dims):
+        _clear_voyage_env(monkeypatch)
+        monkeypatch.setenv("RAG_EMBED_DIMS", str(dims))
+        assert load(env_file="/dev/null").RAG_EMBED_DIMS == dims
+
+    @pytest.mark.parametrize("raw", ["1000", "768", "0", "-1024", "4096", "128", "1_025"])
+    def test_any_other_size_raises_naming_the_key(self, monkeypatch, raw):
+        _clear_voyage_env(monkeypatch)
+        monkeypatch.setenv("RAG_EMBED_DIMS", raw)
+        with pytest.raises(ConfigError, match="RAG_EMBED_DIMS") as caught:
+            load(env_file="/dev/null")
+        assert "256" in str(caught.value) and "2048" in str(caught.value)
+
+    def test_a_size_in_the_dotenv_file_is_checked_too(self, tmp_path, monkeypatch):
+        _clear_voyage_env(monkeypatch)
+        with pytest.raises(ConfigError, match="RAG_EMBED_DIMS"):
+            load(env_file=write_env(tmp_path, "RAG_EMBED_DIMS=1000\n"))
+
+    def test_a_size_that_is_not_a_number_raises_naming_the_key(self, monkeypatch):
+        _clear_voyage_env(monkeypatch)
+        monkeypatch.setenv("RAG_EMBED_DIMS", "wide")
+        with pytest.raises(ConfigError, match="RAG_EMBED_DIMS"):
+            load(env_file="/dev/null")
+
+    # -- the three thresholds -------------------------------------------------------------------
+
+    def test_a_minimum_above_the_giong_level_raises_naming_all_three_keys(self, monkeypatch):
+        """The brief's case: `RAG_MIN_SCORE=0.9` against the default `RAG_LEVEL_GIONG` of 0.65."""
+        _clear_voyage_env(monkeypatch)
+        monkeypatch.setenv("RAG_MIN_SCORE", "0.9")
+        with pytest.raises(ConfigError) as caught:
+            load(env_file="/dev/null")
+        for key in _VOYAGE_THRESHOLDS:
+            assert key in str(caught.value), key
+
+    @pytest.mark.parametrize(
+        ("minimum", "giong", "rat_giong"),
+        [
+            ("0.70", "0.65", "0.80"),  # MIN above GIONG
+            ("0.50", "0.85", "0.80"),  # GIONG above RAT_GIONG
+            ("0.50", "0.65", "1.01"),  # RAT_GIONG above 1
+            ("-0.01", "0.65", "0.80"),  # MIN below 0
+            ("0.90", "0.70", "0.60"),  # fully reversed
+            ("nan", "0.65", "0.80"),  # no order at all
+            ("0.50", "0.65", "inf"),  # not a score
+        ],
+    )
+    def test_thresholds_out_of_order_or_out_of_range_raise(
+        self, monkeypatch, minimum, giong, rat_giong
+    ):
+        _clear_voyage_env(monkeypatch)
+        monkeypatch.setenv("RAG_MIN_SCORE", minimum)
+        monkeypatch.setenv("RAG_LEVEL_GIONG", giong)
+        monkeypatch.setenv("RAG_LEVEL_RAT_GIONG", rat_giong)
+        with pytest.raises(ConfigError, match="RAG_MIN_SCORE"):
+            load(env_file="/dev/null")
+
+    @pytest.mark.parametrize(
+        ("minimum", "giong", "rat_giong"),
+        [
+            ("0.50", "0.65", "0.80"),  # the defaults
+            ("0.70", "0.70", "0.70"),  # equal is in order
+            ("0", "0", "0"),  # the edge
+            ("1", "1", "1"),  # the other edge
+            ("0", "0.5", "1"),  # the widest spread
+            ("0.0", "0.30", "0.30"),
+        ],
+    )
+    def test_thresholds_in_order_inside_zero_to_one_are_accepted(
+        self, monkeypatch, minimum, giong, rat_giong
+    ):
+        _clear_voyage_env(monkeypatch)
+        monkeypatch.setenv("RAG_MIN_SCORE", minimum)
+        monkeypatch.setenv("RAG_LEVEL_GIONG", giong)
+        monkeypatch.setenv("RAG_LEVEL_RAT_GIONG", rat_giong)
+        cfg = load(env_file="/dev/null")
+        assert (cfg.RAG_MIN_SCORE, cfg.RAG_LEVEL_GIONG, cfg.RAG_LEVEL_RAT_GIONG) == (
+            float(minimum),
+            float(giong),
+            float(rat_giong),
+        )
+
+    def test_the_order_is_judged_across_tiers(self, tmp_path, monkeypatch):
+        """One threshold from the environment, the others from the file or the defaults."""
+        _clear_voyage_env(monkeypatch)
+        monkeypatch.setenv("RAG_LEVEL_RAT_GIONG", "0.55")
+        with pytest.raises(ConfigError, match="RAG_LEVEL_RAT_GIONG"):
+            load(env_file=write_env(tmp_path, "RAG_LEVEL_GIONG=0.70\n"))
+
+    @pytest.mark.parametrize("key", _VOYAGE_THRESHOLDS)
+    def test_a_threshold_that_is_not_a_number_raises_naming_the_key(self, monkeypatch, key):
+        _clear_voyage_env(monkeypatch)
+        monkeypatch.setenv(key, "high")
+        with pytest.raises(ConfigError, match=key):
+            load(env_file="/dev/null")
+
+    # -- the secrets ----------------------------------------------------------------------------
+
+    def test_repr_hides_the_voyage_key_and_the_vector_dsn(self, monkeypatch):
+        _clear_voyage_env(monkeypatch)
+        monkeypatch.setenv("VOYAGE_API_KEY", _VOYAGE_KEY_SENTINEL)
+        monkeypatch.setenv("VECTOR_DATABASE_URL", _VECTOR_DSN_SENTINEL)
+        cfg = load(env_file="/dev/null")
+        text = repr(cfg) + str(cfg) + repr(cfg.dump()) + str(cfg.dump())
+        for secret in (_VOYAGE_KEY_SENTINEL, "VOYAGE-SENTINEL", _VECTOR_DSN_SENTINEL):
+            assert secret not in text, secret
+        assert "VECTOR-PW-SENTINEL" not in text
+        assert "VOYAGE_API_KEY='***'" in repr(cfg)
+        assert "VECTOR_DATABASE_URL='***'" in repr(cfg)
+
+    def test_the_other_nine_keys_are_shown(self, monkeypatch):
+        _clear_voyage_env(monkeypatch)
+        monkeypatch.setenv("VOYAGE_API_KEY", _VOYAGE_KEY_SENTINEL)
+        monkeypatch.setenv("VECTOR_DATABASE_URL", _VECTOR_DSN_SENTINEL)
+        dumped = load(env_file="/dev/null").dump()
+        for key, default in _VOYAGE_DEFAULTS.items():
+            if key not in ("VOYAGE_API_KEY", "VECTOR_DATABASE_URL"):
+                assert dumped[key] == default, key
+
+    def test_an_empty_secret_is_not_masked_into_a_false_positive(self, monkeypatch):
+        _clear_voyage_env(monkeypatch)
+        dumped = load(env_file="/dev/null").dump()
+        assert dumped["VOYAGE_API_KEY"] == "" and dumped["VECTOR_DATABASE_URL"] == ""
+
+    def test_a_refusal_prints_no_secret(self, monkeypatch):
+        _clear_voyage_env(monkeypatch)
+        monkeypatch.setenv("VOYAGE_API_KEY", _VOYAGE_KEY_SENTINEL)
+        monkeypatch.setenv("VECTOR_DATABASE_URL", _VECTOR_DSN_SENTINEL)
+        monkeypatch.setenv("RAG_EMBED_DIMS", "1000")
+        with pytest.raises(ConfigError) as caught:
+            load(env_file="/dev/null")
+        assert "SENTINEL" not in str(caught.value)
+        monkeypatch.setenv("RAG_EMBED_DIMS", "1024")
+        monkeypatch.setenv("RAG_MIN_SCORE", "0.99")
+        with pytest.raises(ConfigError) as caught:
+            load(env_file="/dev/null")
+        assert "SENTINEL" not in str(caught.value)
+
+    # -- where the keys live --------------------------------------------------------------------
+
+    def test_they_are_env_keys_only_never_web_settings(self):
+        """`infra.settings.KEYS` is the whole list the admin may change on the web (DEC-200)."""
+        from app.infra import settings
+
+        assert set(_VOYAGE_DEFAULTS).isdisjoint(settings.KEYS)
+        assert set(_VOYAGE_DEFAULTS).isdisjoint(settings.BOUNDS)
+
+    @pytest.mark.parametrize("key", list(_VOYAGE_DEFAULTS))
+    def test_each_key_is_a_pack_key_and_an_env_example_line(self, key):
+        assert key in gen_env_example.keys_from_pack()
+        assert f"\n{key}=" in _example_text()
+
+    def test_the_pack_lists_them_after_the_learned_knowledge_keys_in_the_tables_order(self):
+        pack = gen_env_example.keys_from_pack()
+        start = pack.index("KNOWLEDGE_QUEUE_MAX") + 1
+        assert pack[start : start + len(_VOYAGE_DEFAULTS)] == list(_VOYAGE_DEFAULTS)
+
+    @pytest.mark.parametrize(
+        ("key", "default"), [(k, v) for k, v in _VOYAGE_DEFAULTS.items() if "KEY" not in k]
+    )
+    def test_env_example_shows_each_key_at_its_default(self, key, default):
+        shown = _env_example_value(key)
+        assert type(default)(shown) == default, (key, shown)
+
+    @pytest.mark.parametrize("key", ["VOYAGE_API_KEY", "VECTOR_DATABASE_URL"])
+    def test_env_example_carries_no_secret(self, key):
+        assert _env_example_value(key) == ""
+
+    def test_gen_env_example_check_exits_zero(self):
+        """`make lint` runs `scripts/gen_env_example.py --check`; here the same check is a test, so
+        `.env.example` drifting from §6.3 (a key added to one and not the other) is red under `make test`.
+        """
+        script = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "gen_env_example.py"
+        run = subprocess.run(
+            [sys.executable, str(script), "--check"], capture_output=True, text=True, check=False
+        )
+        assert run.returncode == 0, run.stderr[-400:]
+
+    def test_an_empty_voyage_key_is_said_to_fail_the_lookup_with_kind_auth_in_all_four_places(self):
+        """DEC-213, the Director's ruling (P14-T04 fix round 1, F3): with the RAG on, an empty
+        `VOYAGE_API_KEY` makes the lookup `failed` with `failure_kind='auth'`, sends no request and the UI
+        says so. It is not "skipped, as with no model". Words only: T05 and T06 implement it."""
+        root = pathlib.Path(__file__).resolve().parents[2]
+        config_py = (root / "backend" / "app" / "infra" / "config.py").read_text(encoding="utf-8")
+        places = {
+            "config.py": config_py.split("VOYAGE_API_KEY: str")[0].rsplit("DEC-213 (P14", 1)[1],
+            "context pack §6.3": next(
+                ln
+                for ln in (root / "docs" / "plan" / "00-context-pack.md")
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if ln.startswith("VOYAGE_API_KEY(")
+            ),
+            ".env.example": next(
+                ln for ln in _example_text().splitlines() if ln.startswith("VOYAGE_API_KEY=")
+            ),
+            "runbook key row": next(
+                ln
+                for ln in (root / "docs" / "runbook.md").read_text(encoding="utf-8").splitlines()
+                if ln.startswith("| `VOYAGE_API_KEY` |")
+            ),
+        }
+        for name, text in places.items():
+            flat = " ".join(text.split())
+            assert "skipped" not in flat and "as with no model" not in flat, name
+            assert "auth" in flat and ("failed" in flat or "fails" in flat), name
+            assert "no request" in flat, name
+
+    def test_env_example_has_87_keys_and_names_the_compose_only_password_in_a_comment(self):
+        lines = _example_text().splitlines()
+        keys = [
+            ln.partition("=")[0].strip() for ln in lines if re.match(r"^\s*[A-Z][A-Z0-9_]{2,}=", ln)
+        ]
+        assert len(keys) == len(set(keys)) == 87
+        assert (
+            "VECTOR_DB_PASSWORD" not in keys
+        )  # Compose-only, like APP_RW_PASSWORD, and a comment here
+        comment = [ln for ln in lines if ln.startswith("#") and "VECTOR_DB_PASSWORD" in ln]
+        assert comment, ".env.example does not say VECTOR_DB_PASSWORD is a Compose-only variable"
+        text = " ".join(comment)
+        assert "Compose" in text and "DEC-213" in text
 
 
 class TestStartupAssertion:

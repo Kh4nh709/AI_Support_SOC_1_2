@@ -83,26 +83,27 @@ def _constraint_names(db, name: str) -> list[str]:
     return re.findall(r"'([^']+)'::text", definition)
 
 
-def _schema_without_021(tmp_path: Path, below: int = 21) -> Path:
-    """A copy of `docs/Schema` with only the migrations numbered below `below` (021: the tree as it
-    stood at 020; 022: the tree through 021, since P14-T01 put 022 after it), and a `schema.sql` the
-    real `build_schema.py` builds from them."""
-    at_020 = tmp_path / "Schema"
-    at_020.mkdir()
+def _schema_below(tmp_path: Path, below: int) -> Path:
+    """A copy of `docs/Schema` with only the migrations numbered below `below`, and a `schema.sql` the
+    real `build_schema.py` builds from them: the tree as it stood just before migration `below`
+    (21: at 020; 22: through 021). The later migration tests build their own trees with it."""
+    tree = tmp_path / f"Schema_below_{below:03d}"
+    tree.mkdir()
     for path in SCHEMA_DIR.glob(MIGRATION_FILES):
         if int(path.name[:3]) < below:
-            shutil.copy(path, at_020)
-    shutil.copy(SCHEMA_DIR / "build_schema.py", at_020)
+            shutil.copy(path, tree)
+    shutil.copy(SCHEMA_DIR / "build_schema.py", tree)
     built = subprocess.run(
-        ["python3", str(at_020 / "build_schema.py")], capture_output=True, text=True, check=False
+        ["python3", str(tree / "build_schema.py")], capture_output=True, text=True, check=False
     )
     if built.returncode != 0:
         pytest.fail(f"build_schema.py exit {built.returncode}:\n{built.stderr}")
-    return at_020
+    return tree
 
 
-def _migrate(dsn, mig_dir) -> str:
-    run = subprocess.run(
+def _migrate_run(dsn, mig_dir) -> subprocess.CompletedProcess:
+    """`scripts/migrate.sh` over `mig_dir`, whatever it exits with (a refusal is a test's subject)."""
+    return subprocess.run(
         ["bash", "scripts/migrate.sh", str(dsn)],
         cwd=conftest.REPO_ROOT,
         env={**os.environ, "MIGRATIONS_DIR": str(mig_dir)},
@@ -110,6 +111,10 @@ def _migrate(dsn, mig_dir) -> str:
         text=True,
         check=False,
     )
+
+
+def _migrate(dsn, mig_dir) -> str:
+    run = _migrate_run(dsn, mig_dir)
     if run.returncode != 0:
         pytest.fail(f"migrate.sh exit {run.returncode}:\n{run.stderr}")
     return run.stdout
@@ -373,12 +378,14 @@ def test_021_applies_on_a_database_at_020_the_way_make_migrate_runs_it(tmp_path)
     session = _session_dsn()
     if shutil.which("psql") is None:
         pytest.skip("psql is not installed")
-    at_020 = _schema_without_021(tmp_path)
-    (tmp_path / "through_021").mkdir()
-    through_021 = _schema_without_021(tmp_path / "through_021", below=22)  # 022 comes after 021
+    at_020 = _schema_below(tmp_path, 21)
+    through_021 = _schema_below(tmp_path, 22)  # 022 comes after 021
     stems = {path.stem for path in SCHEMA_DIR.glob(MIGRATION_FILES) if int(path.name[:3]) <= 21}
     total = len(stems)
     before = len(list(at_020.glob(MIGRATION_FILES)))
+    # 021 is no longer the last migration (022 and 023 follow it): the tree at 020 is every file below
+    # 21, the tree through 021 every file below 22, and the real `migrate.sh` applies the second to the
+    # first, so this test pins 021 alone whatever comes after it.
     assert before == total - 1 == len({s for s in stems if int(s[:3]) < 21})
     assert len(list(through_021.glob(MIGRATION_FILES))) == total
 
@@ -482,7 +489,7 @@ def test_021_applies_cleanly_on_rows_of_the_live_shapes_and_leaves_every_one_unc
     session = _session_dsn()
     if shutil.which("psql") is None:
         pytest.skip("psql is not installed")
-    at_020 = _schema_without_021(tmp_path)
+    at_020 = _schema_below(tmp_path, 21)
     dbname = f"{conftest._dbname(session)}_021seed_test"
     dsn = _with_db(session, dbname)
     admin = psycopg.connect(conftest._maintenance_dsn(session), autocommit=True)
