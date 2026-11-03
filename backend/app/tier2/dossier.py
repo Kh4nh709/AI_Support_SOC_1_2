@@ -131,9 +131,16 @@ def _estimate_tokens(text: str) -> int:
 #: from alert data, so it is safe outside a wrapper on its own merits; it has no entry in
 #: `llm.builder.TEMPLATE_CONSTANTS` (that file is out of scope), so this module's own tests
 #: add it to the `constants` they pass `security.linter.lint()`.
+#:
+#: P14-T02 (DEC-213): the second sentence used to say *"Thiếu thì trả need_more_data"* (answer
+#: `need_more_data` when something is missing). ②'s model schema (`investigate_v3`) no longer has that
+#: value, so it now says what to do instead: name the best conclusion and write what is missing in
+#: `next_steps`. It is a member of `DOSSIER_TEMPLATE_CONSTANTS` below, so the linter and every caller
+#: that passes that set follow the new wording without a second list.
 SENTENCE_OUT_OF_SCOPE = (
     "Không có threat intel ngoài, dữ liệu gói tin, EDR. "
-    "Thiếu thì trả need_more_data, không suy đoán."
+    "Thiếu thì nêu kết luận tốt nhất từ những gì có và ghi phần còn thiếu vào next_steps, "
+    "không suy đoán."
 )
 #: Review round 2 nit 7 — block 4's "history not computed" state (md5/sha1/sha256/domain
 #: entities have no structured `alerts` column to count from), a fixed literal like

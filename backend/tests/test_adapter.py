@@ -40,7 +40,7 @@ from app.llm.adapter import (
     estimate_tokens,
 )
 
-from tests.test_investigate import _fake_dossier, _investigate_v2
+from tests.test_investigate import _fake_dossier, _investigate_v3
 
 VALID_SYSTEM = "Respond with a single JSON object and nothing else."
 _REQUEST = httpx.Request("POST", "https://api.deepseek.com/v1/chat/completions")
@@ -635,12 +635,12 @@ class TestInvestigateTakesItsDeadlineFromTheLimits:
         call and its one repair) run under the deadline the limits say, as the real adapter
         resolves it. Red step: put `timeout_s=cfg.LLM_TIMEOUT_S` back and the client sees 5."""
         dossier = _fake_dossier()
-        bad = _investigate_v2()
+        bad = _investigate_v3()
         del bad["confidence"]
         client = FakeClient(
             [
                 _response(content=json.dumps(bad)),
-                _response(content=json.dumps(_investigate_v2())),
+                _response(content=json.dumps(_investigate_v3())),
             ]
         )
         cfg = _cfg(LLM_TIMEOUT_S=5)
@@ -655,7 +655,7 @@ class TestInvestigateTakesItsDeadlineFromTheLimits:
 
     def test_unreadable_limits_stop_the_investigation_before_any_socket(self):
         dossier = _fake_dossier()
-        client = FakeClient([_response(content=json.dumps(_investigate_v2()))])
+        client = FakeClient([_response(content=json.dumps(_investigate_v3()))])
         limits = _CountingLimits()
         limits.unreadable = True
         cfg = _cfg()

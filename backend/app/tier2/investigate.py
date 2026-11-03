@@ -67,6 +67,14 @@ section and adds `rag_not_applied:<kind>` to the run's `citation_warnings`, so t
 output schema, the injection scan and `_check_evidence` are unchanged: an entry is reference
 material, and a quote taken from one is not in the alert's own text, so it is refused as any quote
 that is not. With the switch off nothing here runs and nothing differs, the INSERT included.
+
+**The definite conclusion (P14-T02, DEC-213, spec 4.2).** The model answers `investigate_v3`: one of
+`llm.verdicts.MODEL_CONCLUSIONS`, never `need_more_data` (a prompt that no longer offers it, and a schema
+that refuses it). The override is unchanged - zero verified evidence, or a high injection finding meeting a
+`false_positive`, makes the stored conclusion `need_more_data`, which `ck_llm_runs_suggested_conclusion`
+still admits - and `evidence_check.original_conclusion` is still written only when it fired. What is new is
+`evidence_check.model_conclusion`: the model's own answer, written on every run with a parsed result, so a
+reader can tell "the model concluded X and the system held it" from "the model concluded X".
 """
 
 from __future__ import annotations
@@ -331,7 +339,7 @@ def _is_transient(exc: BaseException) -> bool:
 def _snapshot_trace(dossier: llm_investigate.DossierLike) -> dict[str, Any]:
     """The P7-2 snapshot plus `Dossier.truncations`/`estimated_tokens`, together in
     `agent_trace` (this card's choice — see the report; `result` stays the pure
-    validated `investigate_v2` object, or `None`, never an envelope around it, so a
+    validated `investigate_v3` object, or `None`, never an envelope around it, so a
     reader does not have to know this module's storage convention to read a `result`
     that validates)."""
     snapshot = dossier.snapshot
@@ -361,6 +369,14 @@ _EVIDENCE_ALERTS_SQL = """
 #: keeps a `false_positive` from being overruled. Eight characters is the shortest span
 #: that still holds a real token (an address, a port, a short path, a verb + argument).
 MIN_QUOTE_CHARS = 8
+
+#: Why the system held the model's conclusion back as `need_more_data` (P14-T02, spec 4.2), in the
+#: words `investigation_view.held_by` uses. `HELD_HIGH_INJECTION` is also the value the job writes to
+#: `evidence_check.forced_by` (a name that existed before P14 and is unchanged); no verified evidence
+#: has no `forced_by` - it is read from `evidence_check.verified` being empty.
+HELD_NO_VERIFIED_EVIDENCE = "no_verified_evidence"
+HELD_HIGH_INJECTION = "high_severity_injection_finding"
+HELD_BY: tuple[str, ...] = (HELD_NO_VERIFIED_EVIDENCE, HELD_HIGH_INJECTION)
 
 
 def _searchable(text: str) -> tuple[str, str]:
@@ -581,22 +597,27 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
     injection_level = detector.level(findings)
 
     final_result = dict(result.parsed)
-    original_conclusion = final_result["suggested_conclusion"]
+    model_conclusion = final_result["suggested_conclusion"]
+    # P14-T02 (spec 4.2): the model's own answer is stored beside the final one on EVERY run with a
+    # parsed result, overruled or not - the reader (`investigation_view`) needs it to say what the
+    # system held. `original_conclusion` below is unchanged: only when the answer was overruled.
+    evidence_check["model_conclusion"] = model_conclusion
     overridden = False
 
     if not evidence_check["verified"]:
         # Zero verified evidence -> need_more_data; the model's answer is overruled,
-        # not deleted (design note 4).
+        # not deleted (design note 4). The override is unchanged by P14: ck_llm_runs_suggested_conclusion
+        # still admits the value, and the model can no longer answer it - only this line sets it.
         final_result["suggested_conclusion"] = "need_more_data"
         overridden = True
 
     if injection_level == "high" and final_result["suggested_conclusion"] == "false_positive":
         final_result["suggested_conclusion"] = "need_more_data"
-        evidence_check["forced_by"] = "high_severity_injection_finding"
+        evidence_check["forced_by"] = HELD_HIGH_INJECTION
         overridden = True
 
     if overridden:
-        evidence_check["original_conclusion"] = original_conclusion
+        evidence_check["original_conclusion"] = model_conclusion
 
     citation_warnings = [
         f"alert_id {item['alert_id']!r} rejected: {item['reason']}"
