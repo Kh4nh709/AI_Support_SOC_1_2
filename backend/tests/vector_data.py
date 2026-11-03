@@ -26,7 +26,7 @@ import os
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Self
 
 import httpx
 import psycopg
@@ -245,6 +245,7 @@ class VoyageRouter:
     ) -> None:
         self.replies = {"/embeddings": (embed, embed_status), "/rerank": (rerank, rerank_status)}
         self.requests: list[httpx.Request] = []
+        self._client: httpx.Client | None = None
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -260,7 +261,24 @@ class VoyageRouter:
 
     @property
     def client(self) -> httpx.Client:
-        return httpx.Client(transport=httpx.MockTransport(self))
+        """The router's one client, made the first time it is asked for (and again after `close()`): a
+        lookup that is given it uses and does not close it, so whoever asked closes it (`close()`, or
+        `with router:`). A client made on every access, as this used to, was never closed by anyone.
+        """
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.Client(transport=httpx.MockTransport(self))
+        return self._client
+
+    def close(self) -> None:
+        """Close the client this router made, if it made one."""
+        if self._client is not None:
+            self._client.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     @property
     def paths(self) -> list[str]:

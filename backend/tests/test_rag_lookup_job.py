@@ -116,7 +116,24 @@ def run(db, subject: str, router: VoyageRouter | None = None, *, attempts: int =
     """One lookup against `router` (default: one that embeds and scores nothing)."""
     router = router if router is not None else voyage_double()
     kw.setdefault("vconn", Ctx.store.conn)
-    return lookup.run_lookup_job(db, job_for(subject, attempts), client=router.client, **kw)
+    try:
+        return lookup.run_lookup_job(db, job_for(subject, attempts), client=router.client, **kw)
+    finally:
+        router.close()  # the router made the client; the job was only lent it
+
+
+def test_the_voyage_double_makes_one_client_per_router_and_run_closes_it(db) -> None:
+    alert(db)
+    router = voyage_double()
+    client = router.client
+    assert router.client is client  # one per router, not one per access
+    run(db, "alert:ra-1", router)
+    assert client.is_closed  # the job was lent it; whoever made it closes it
+    fresh = router.client  # asked again after the close: a new one
+    assert fresh is not client and not fresh.is_closed
+    with router:
+        pass
+    assert fresh.is_closed
 
 
 def last_attempt() -> int:
@@ -866,6 +883,9 @@ def assert_failed(db, kind: str, *, tokens: int = 0, sent: bool = True) -> dict 
     assert events_of(db, "rag.lookup_failed") == [
         ("ra-1", "system", {"lookup_id": str(row["lookup_id"]), "failure_kind": kind})
     ]
+    if not sent:
+        assert row["llm_run_id"] is None and runs_of(db) == []
+        return None
     (run_row,) = runs_of(db)
     assert run_row["stopped_by"] == kind and run_row["result"] is None
     assert row["llm_run_id"] == run_row["run_id"] and run_row["rag_lookup_id"] == row["lookup_id"]
@@ -884,8 +904,7 @@ def test_an_empty_key_is_failed_auth_sends_nothing_and_writes_no_run_row(
     router = voyage_double()
     run(db, "alert:ra-1", router)
     assert router.requests == []
-    run_row = assert_failed(db, "auth")
-    assert float(run_row["cost_usd"]) == 0
+    assert_failed(db, "auth", sent=False)
 
 
 def test_a_blank_key_is_the_same(db, kb_root, monkeypatch) -> None:
@@ -987,6 +1006,35 @@ def test_a_rate_limit_on_the_rerank_after_a_paid_embedding_keeps_the_run_and_ret
     assert events_of(db, "rag.lookup_failed") == []
     (run_row,) = runs_of(db)
     assert run_row["rag_lookup_id"] is None  # it points at no result
+
+
+@pytest.mark.db
+def test_a_paid_rate_limited_first_attempt_then_a_good_second_has_two_run_rows_and_one_result(
+    db, kb_root, monkeypatch
+) -> None:
+    """The replacement of P13's `test_every_attempt_has_its_own_run_row`: attempt 1 paid for its embedding and
+    was refused at the rerank (a `rate_limit`, retried); attempt 2 succeeds. Two run rows, and only the second
+    is linked from the `rag_results` row, the first one points at no result."""
+    entry_id = failing_setup(db, kb_root)
+    monkeypatch.setattr(
+        db, "commit", lambda: None
+    )  # the first attempt's real commit, not under test here
+    first = VoyageRouter(embed_ok(tokens=21), {}, rerank_status=429)
+    with pytest.raises(TransientError):
+        run(db, "alert:ra-1", first, attempts=1)
+    second = voyage_double(db, {entry_id: 0.9})
+    run(db, "alert:ra-1", second, attempts=2)
+
+    rows = runs_of(db)
+    assert len(rows) == 2 and len({r["run_id"] for r in rows}) == 2
+    by_stop = {r["stopped_by"]: r for r in rows}
+    assert set(by_stop) == {"rate_limit", None}
+    result = result_of(db)
+    assert results_count(db) == 1 and result["status"] == "ok"
+    assert result["llm_run_id"] == by_stop[None]["run_id"]
+    assert by_stop[None]["rag_lookup_id"] == result["lookup_id"]
+    assert by_stop["rate_limit"]["rag_lookup_id"] is None  # the retried attempt points at no result
+    assert by_stop["rate_limit"]["result"] is None and by_stop["rate_limit"]["input_tokens"] == 21
 
 
 @pytest.mark.parametrize("kind", ["timeout", "provider_error", "auth", "quota"])
