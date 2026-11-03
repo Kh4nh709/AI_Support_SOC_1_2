@@ -570,17 +570,39 @@ def test_the_migration_count_the_runbook_expects_is_the_number_of_migration_file
 _COPY_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f", "v": "\v", "\\": "\\"}
 
 
-def _tracked_dump_triage_runs() -> list[dict]:
-    """The `triage` rows of `backups/latest.dump` (`result`, `gate_result` as parsed JSON), read as a
-    script with the host's `pg_restore`: no server, nothing restored."""
-    dump = REPO_ROOT / "backups" / "latest.dump"
+def _committed_dump(tmp_path: pathlib.Path) -> pathlib.Path:
+    """`backups/latest.dump` as the checked-out commit tracks it, written to `tmp_path`.
+
+    NEVER the working-tree file: `scripts/backup.sh` refreshes `backups/latest.dump` in place every night
+    (the primary checkout's copy is an uncommitted ~94 MB with thousands of triage runs), and the runbook
+    row describes the tracked one. The test skips, with the reason, when it cannot read the blob."""
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed: the committed dump cannot be read")
+    show = subprocess.run(
+        ["git", "show", "HEAD:backups/latest.dump"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+    )
+    if show.returncode != 0 or not show.stdout:
+        pytest.skip("HEAD has no backups/latest.dump blob (or this is not a git checkout)")
+    dump = tmp_path / "latest.dump"
+    dump.write_bytes(show.stdout)
+    return dump
+
+
+def _tracked_dump_triage_runs(tmp_path: pathlib.Path) -> list[dict]:
+    """The `triage` rows of the COMMITTED `backups/latest.dump` (`result`, `gate_result` as parsed
+    JSON), read as a script with the host's `pg_restore`: no server, nothing restored."""
+    dump = _committed_dump(tmp_path)
     out = subprocess.run(
         ["pg_restore", "--data-only", "-t", "llm_runs", "-f", "-", str(dump)],
         capture_output=True,
         text=True,
         check=False,
     )
-    assert out.returncode == 0, out.stderr[:300]
+    if out.returncode != 0:  # e.g. a pg_restore older than the archive: not this test's subject
+        pytest.skip(f"pg_restore cannot read the committed dump: {out.stderr.strip()[:200]}")
     lines = out.stdout.split("\n")  # not splitlines(): a prompt may hold U+2028 or U+0085
     start = next(i for i, ln in enumerate(lines) if ln.startswith("COPY public.llm_runs ("))
     columns = [c.strip() for c in lines[start].split("(", 1)[1].split(")", 1)[0].split(",")]
@@ -603,13 +625,13 @@ def _tracked_dump_triage_runs() -> list[dict]:
     return [row for row in rows if row["pipeline"] == "triage"]
 
 
-def test_the_start_everything_row_tells_what_the_tracked_dump_does_to_migration_022():
+def test_the_start_everything_row_tells_what_the_tracked_dump_does_to_migration_022(tmp_path):
     """The tracked dump holds old ① runs, so 022 refuses on it (P14-T01 fix round 2, N1): `make migrate`
     applies 018-021 and stops, and the row must not promise the database reaches 23. The numbers and the
     message in the row are the dump's and the migration's own, not a copy that can drift."""
     if shutil.which("pg_restore") is None:
         pytest.skip("pg_restore is not installed")
-    triage = _tracked_dump_triage_runs()
+    triage = _tracked_dump_triage_runs(tmp_path)
     places = (
         lambda r: (r["result"] or {}).get("suggested_action"),
         lambda r: (r["result"] or {}).get("structured_only_verdict"),
