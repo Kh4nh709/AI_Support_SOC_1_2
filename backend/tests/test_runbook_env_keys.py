@@ -324,4 +324,5 @@ def test_the_migration_row_of_start_everything_names_the_trial_and_no_022_clause
     assert "on the trial database today (it applies `023_vector_rag.sql`" in row
     assert "on the live database today" not in row
     assert "there is no 022" not in row and "the number belongs to another card" not in row
-    assert "`migrate: 0 applied, 22 already present` after that." in row
+    assert "and `024_lab.sql`, the lab runs and labels" in row  # P14-T09: the trial takes both
+    assert "`migrate: 0 applied, 23 already present` after that." in row
