@@ -231,6 +231,21 @@ def test_stored_maps_an_entry_id_to_hash_model_and_dims() -> None:
     )
 
 
+def test_stored_one_reads_the_row_of_one_entry_and_nothing_else() -> None:
+    """M6: a one-entry job must not read the whole table."""
+    conn = FakeConn([(SHA, "voyage-4", 1024)])
+    assert vector_store.stored_one(conn, ENTRY_A) == (SHA, "voyage-4", 1024)
+    ((statement, params),) = conn.calls
+    assert statement == (
+        "SELECT content_sha256, model, dims FROM entry_vectors WHERE entry_id = %s::uuid"
+    )
+    assert tuple(params) == (ENTRY_A,)
+
+
+def test_stored_one_of_an_entry_with_no_row_is_none() -> None:
+    assert vector_store.stored_one(FakeConn([]), ENTRY_A) is None
+
+
 def test_nearest_filters_by_model_and_dims_before_it_orders_by_cosine_distance() -> None:
     """Review Focus 3. The filter and its parameters, in the brief's shape."""
     conn = FakeConn([(ENTRY_B,), (ENTRY_A,)])
@@ -276,6 +291,7 @@ def test_the_vector_goes_in_as_a_text_literal_never_as_a_python_list() -> None:
         ),
         lambda c: vector_store.delete(c, ENTRY_A),
         lambda c: vector_store.stored(c),
+        lambda c: vector_store.stored_one(c, ENTRY_A),
         lambda c: vector_store.nearest(c, [1.0], model="m"),
     ],
 )
@@ -461,6 +477,16 @@ def test_delete_removes_the_row_and_a_missing_one_is_nothing(vconn) -> None:
     vector_store.delete(vconn, ENTRY_C)
     assert list(vector_store.stored(vconn)) == [ENTRY_B]
     assert vector_store.nearest(vconn, [1.0, 0.0], model="voyage-4") == [ENTRY_B]
+
+
+@pytest.mark.db
+@needs_pgvector
+def test_stored_one_finds_its_row_by_id_in_either_spelling_and_no_other(vconn) -> None:
+    put(vconn, ENTRY_A, [1.0, 0.0, 0.0])
+    put(vconn, ENTRY_B, [0.0, 1.0], model="voyage-4-lite", sha="b" * 64)
+    assert vector_store.stored_one(vconn, ENTRY_A) == (SHA, "voyage-4", 3)
+    assert vector_store.stored_one(vconn, ENTRY_B.upper()) == ("b" * 64, "voyage-4-lite", 2)
+    assert vector_store.stored_one(vconn, ENTRY_C) is None
 
 
 @pytest.mark.db

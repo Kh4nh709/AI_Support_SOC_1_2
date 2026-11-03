@@ -23,10 +23,12 @@ vector it finds against the main database anyway (spec §5.1).
 **No `llm_runs` row** (spec §5.6, Director's call): about 300 tokens an approval is under $0.01 for the
 whole lab. The job logs the tokens, one JSON line.
 
-**A change that lands during the Voyage call.** `enqueue` is single-flight over pending AND running jobs, so
-a retirement committed while this job waits for Voyage enqueues nothing. The job therefore looks at the
-entry again after the call: if its status or hash is no longer what was embedded, nothing is stored and the
-job asks to run once more (`Reschedule`), which then sees the new state.
+**A change that lands while the job runs.** `enqueue` is single-flight over pending AND running jobs, so a
+retirement committed while this job waits for Voyage enqueues nothing. The job therefore reads the entry
+again under a share lock (`_state`, `FOR SHARE`) after the call, and on the unchanged path too, before it
+stores or skips anything: if its status or hash is no longer what was read, nothing is stored and the job
+asks to run once more (`Reschedule`), which then sees the new state. A retirement that starts after the lock
+waits for this transaction to commit, and its own `enqueue` then succeeds: no change is lost either way.
 
 **The transaction.** The worker runs the handler in one transaction of the main database; a Voyage call is
 idle time to it, so the first statement raises `idle_in_transaction_session_timeout` to `JOB_LOCK_TIMEOUT_S`
@@ -87,9 +89,16 @@ def _job_error(kind: str) -> Exception:
 
 
 def _state(conn: psycopg.Connection, entry_id: str) -> tuple[str, str] | None:
-    """(status, content_sha256) of the entry now, or None."""
+    """(status, content_sha256) of the entry now, or None, read `FOR SHARE`.
+
+    The share lock is the point. `retire_published` locks the row `FOR UPDATE`, so a retirement either
+    committed before this read (which then sees it) or waits for this transaction to commit, and its own
+    `enqueue` then finds no live job and succeeds. Without the lock a retirement could commit just after
+    the read, enqueue nothing (this job is still running) and be lost. The lock is taken after the Voyage
+    call, never before it, so it is held for milliseconds, not for the length of a call."""
     row = conn.execute(
-        "SELECT status, content_sha256 FROM knowledge_entries WHERE entry_id = %s", (entry_id,)
+        "SELECT status, content_sha256 FROM knowledge_entries WHERE entry_id = %s FOR SHARE",
+        (entry_id,),
     ).fetchone()
     return None if row is None else (row[0], row[1])
 
@@ -109,8 +118,11 @@ def _sync(
         _log({"knowledge_embed": "deleted", "entry_id": entry_id})
         return None
 
-    wanted = (entry.content_sha256, cfg.RAG_EMBED_MODEL, cfg.RAG_EMBED_DIMS)
-    if vector_store.stored(vconn).get(entry_id) == wanted:
+    current = (entry.content_sha256, cfg.RAG_EMBED_MODEL, cfg.RAG_EMBED_DIMS)
+    if vector_store.stored_one(vconn, entry_id) == current:
+        if _state(conn, entry_id) != ("active", entry.content_sha256):
+            _log({"knowledge_embed": "changed_before_the_check", "entry_id": entry_id})
+            return Reschedule(RESCHEDULE_S)
         _log({"knowledge_embed": "unchanged", "entry_id": entry_id})
         return None
 

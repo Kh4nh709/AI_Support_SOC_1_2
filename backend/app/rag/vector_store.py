@@ -73,6 +73,7 @@ _UPSERT = """
     """
 _DELETE = "DELETE FROM entry_vectors WHERE entry_id = %s::uuid"
 _STORED = "SELECT entry_id::text, content_sha256, model, dims FROM entry_vectors"
+_STORED_ONE = "SELECT content_sha256, model, dims FROM entry_vectors WHERE entry_id = %s::uuid"
 _NEAREST = """
     SELECT entry_id::text FROM entry_vectors
     WHERE model = %s AND dims = %s
@@ -176,6 +177,13 @@ def stored(vconn: Any) -> dict[str, tuple[str, str, int]]:
         entry_id: (content_sha256, model, dims)
         for entry_id, content_sha256, model, dims in _fetch(vconn, _STORED)
     }
+
+
+def stored_one(vconn: Any, entry_id: str) -> tuple[str, str, int] | None:
+    """What the index claims to hold for one entry, `(content_sha256, model, dims)`, or None when it has
+    no row for it. A job about one entry reads this, not the whole table."""
+    rows = _fetch(vconn, _STORED_ONE, (entry_id,))
+    return None if not rows else (rows[0][0], rows[0][1], rows[0][2])
 
 
 def nearest(vconn: Any, vector: Sequence[float], *, model: str, limit: int = 20) -> list[str]:

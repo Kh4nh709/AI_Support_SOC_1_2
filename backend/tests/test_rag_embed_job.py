@@ -24,26 +24,31 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import threading
+import time
 import uuid
 from contextlib import ExitStack
 
 import httpx
+import psycopg
 import pytest
 from app.infra import config
 from app.infra.config import Config
 from app.infra.errors import PermanentError, TransientError, classify
-from app.infra.jobs import Job, Reschedule, claim_job, finish_job
+from app.infra.jobs import Job, Reschedule, claim_job, enqueue, finish_job
+from app.infra.worker import run_forever
 from app.rag import match, publish, vector_store
-from app.rag.entries import entry_by_id, render_entry_markdown
+from app.rag.entries import enqueue_embed, entry_by_id, render_entry_markdown
 from app.rag.failures import RagUnavailable
 from app.web import rag_handlers
 from app.web.rag_handlers import embed as embed_handler
 
+from tests.scratch_db import insert_user, scratch_database
 from tests.test_rag_publish import admin, decided_alert, pending_draft, root  # noqa: F401
 from tests.test_rag_voyage import CFG, DIMS, KEY, PROVIDER_WORDS, Server, embed_reply
 from tests.vector_data import STORE_KINDS, entry, make_store
 
-JOB_CFG = dataclasses.replace(CFG, VECTOR_DATABASE_URL="")
+JOB_CFG = dataclasses.replace(CFG, VECTOR_DATABASE_URL="", RAG_ENABLED=True)
 
 
 @pytest.fixture(params=STORE_KINDS)
@@ -54,7 +59,8 @@ def store(request, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def job_config(monkeypatch):
-    """The job reads `config.load()`: a key that is not real, 256 numbers a vector."""
+    """The job reads `config.load()`: a key that is not real, 256 numbers a vector, the RAG on (the
+    approvals and retirements of the end-to-end test enqueue the job only then)."""
     monkeypatch.setattr(config, "load", lambda *a, **kw: JOB_CFG)
 
 
@@ -191,12 +197,34 @@ def test_the_subject_may_be_written_in_upper_case(db, store) -> None:
 
 
 @pytest.mark.db
-def test_the_schema_is_made_before_the_first_read(db, store) -> None:
-    """A fresh `vectordb` has no table: the first job makes it (spec §5.1, create-if-absent)."""
+def test_the_schema_is_made_when_the_vector_database_has_none(db, store) -> None:
+    """A fresh `vectordb` has no table: the first job makes it (spec §5.1, create-if-absent). M3: on the
+    real pgvector too. The table is dropped first, and the job leaves a table with the entry's row.
+    """
     entry_id = entry(db)
+    store.drop_schema()
+    assert not store.has_schema()
+
     run(db, store, entry_id)
-    if store.kind == "memory":
-        assert store.schema_calls == 1
+
+    assert store.has_schema() and list(store.rows()) == [entry_id]
+
+
+@pytest.mark.db
+def test_a_one_entry_job_reads_one_row_not_the_table(db, store, monkeypatch) -> None:
+    """M6."""
+    entry_id = entry(db)
+    other = entry(db)
+    store.put(other, "e" * 64, "voyage-4", [0.5] * DIMS)
+
+    def whole_table(vconn):
+        raise AssertionError("the job read every row of entry_vectors")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(vector_store, "stored", whole_table)
+        run(db, store, entry_id)
+        run(db, store, entry_id)  # the second finds its own row current
+    assert sorted(store.rows()) == sorted([entry_id, other])
 
 
 # ── not active, or not there: delete ──────────────────────────────────────────────────────────
@@ -534,3 +562,204 @@ def test_the_config_double_is_not_the_real_one() -> None:
     """The tests above run with a key that is not real; nothing here may reach a real network."""
     assert KEY.startswith("test-key-not-a-real")
     assert isinstance(JOB_CFG, Config) and JOB_CFG.VOYAGE_BASE_URL == "https://voyage.test/v1"
+
+
+# ── enqueueing is the RAG's: only with RAG_ENABLED (Director ruling a) ─────────────────────────
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("enabled", [True, False])
+def test_enqueue_embed_enqueues_only_with_the_rag_on(db, monkeypatch, enabled) -> None:
+    """With the RAG off nothing needs vectors, and a stack with no `rag-worker` would keep a backlog."""
+    monkeypatch.setattr(
+        config, "load", lambda *a, **kw: dataclasses.replace(JOB_CFG, RAG_ENABLED=enabled)
+    )
+    entry_id = entry(db)
+    enqueue_embed(db, entry_id)
+    enqueue_embed(db, uuid.UUID(entry_id))  # an id of either type; single-flight: still one job
+    assert jobs_of(db) == ([(entry_id, "pending")] if enabled else [])
+
+
+# ── a retirement that races the job: two real connections (M1, M4) ─────────────────────────────
+#
+# `enqueue` is single-flight over pending AND running jobs, so a retirement committed while the job
+# runs enqueues nothing. The job therefore re-reads the entry `FOR SHARE` (`retire_published` locks the
+# row `FOR UPDATE`): the retirement either committed before that read (the job sees it and asks to run
+# again) or waits until the job commits, and then its own enqueue succeeds. Neither loses the job.
+
+
+@pytest.fixture(scope="module")
+def scratch_dsn():
+    with scratch_database("p14t05embed") as dsn:
+        yield dsn
+
+
+def committed_entry(dsn, store) -> tuple[str, str]:
+    """An active entry in the scratch database, its embed job pending as the approval left it, and (when
+    `store` is given) a current row for it in the vector database. Returns (entry id, an admin's id).
+    """
+    with psycopg.connect(dsn) as setup:
+        entry_id = entry(setup)
+        admin_id = insert_user(setup, "admin")
+        enqueue(setup, "knowledge_embed", entry_id)
+        (sha,) = setup.execute(
+            "SELECT content_sha256 FROM knowledge_entries WHERE entry_id = %s", (entry_id,)
+        ).fetchone()
+        setup.commit()
+    if store is not None:
+        store.put(entry_id, sha, "voyage-4", [0.5] * DIMS)
+    return entry_id, admin_id
+
+
+def job_statuses(dsn, entry_id: str) -> list[str]:
+    with psycopg.connect(dsn) as observer:
+        return [
+            status
+            for (status,) in observer.execute(
+                "SELECT status FROM jobs WHERE job_type = 'knowledge_embed' AND subject_id = %s"
+                " ORDER BY job_id",
+                (entry_id,),
+            )
+        ]
+
+
+def cycle(dsn, store, client) -> None:
+    """One cycle of the real worker loop on a connection of its own: claim, run, finish, reschedule."""
+    handlers = {
+        "knowledge_embed": lambda conn, job: embed_handler.run_embed_job(
+            conn, job, client=client, vconn=store.conn
+        )
+    }
+    conn = psycopg.connect(dsn)
+    try:
+        run_forever(lambda: conn, handlers, once=True)
+    finally:
+        conn.close()
+
+
+def make_due(dsn, entry_id: str) -> None:
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            "UPDATE jobs SET scheduled_at = now() WHERE job_type = 'knowledge_embed'"
+            " AND subject_id = %s AND status = 'pending'",
+            (entry_id,),
+        )
+        conn.commit()
+
+
+def retire_committed(dsn, entry_id: str, admin_id: str, kb_dir) -> None:
+    """The admin's retirement, on a connection of its own, committed."""
+    with psycopg.connect(dsn, options="-c lock_timeout=15000") as admin_conn:
+        publish.retire_published(admin_conn, entry_id, admin_id, "lý do", root=kb_dir)
+        admin_conn.commit()
+
+
+@pytest.mark.db
+def test_a_retirement_committed_during_the_call_leaves_no_vector_and_loses_no_job(
+    scratch_dsn, store, tmp_path
+) -> None:
+    entry_id, admin_id = committed_entry(scratch_dsn, None)
+    retired: list[bool] = []
+
+    def voyage(request: httpx.Request) -> httpx.Response:
+        # commits while the job waits for Voyage
+        retire_committed(scratch_dsn, entry_id, admin_id, tmp_path)
+        retired.append(True)
+        return httpx.Response(200, json=embed_reply(1))
+
+    cycle(scratch_dsn, store, httpx.Client(transport=httpx.MockTransport(voyage)))
+
+    assert retired == [True]
+    assert store.rows() == {}  # the retired entry was not stored
+    # the retirement's own enqueue found the job running and did nothing; the job asked for the next run
+    assert job_statuses(scratch_dsn, entry_id) == ["succeeded", "pending"]
+
+    make_due(scratch_dsn, entry_id)
+    later = Server(embed_reply(1))
+    cycle(scratch_dsn, store, later.client)
+    assert later.requests == [] and store.rows() == {}  # a retired entry: a delete, no request
+    assert job_statuses(scratch_dsn, entry_id) == ["succeeded", "succeeded"]
+
+
+@pytest.mark.db
+def test_a_retirement_before_the_locked_read_of_an_unchanged_row_is_seen(
+    scratch_dsn, store, tmp_path, monkeypatch
+) -> None:
+    """The unchanged path (the row is current, no request) re-reads under the same lock."""
+    entry_id, admin_id = committed_entry(scratch_dsn, store)
+    read_one = vector_store.stored_one
+
+    def read_then_a_retirement(vconn, wanted):
+        found = read_one(vconn, wanted)
+        retire_committed(scratch_dsn, entry_id, admin_id, tmp_path)
+        return found
+
+    quiet = Server(embed_reply(1))
+    with monkeypatch.context() as patched:
+        patched.setattr(vector_store, "stored_one", read_then_a_retirement)
+        cycle(scratch_dsn, store, quiet.client)
+
+    assert quiet.requests == []
+    assert list(store.rows()) == [entry_id]  # still there: the next run deletes it
+    assert job_statuses(scratch_dsn, entry_id) == ["succeeded", "pending"]
+
+    make_due(scratch_dsn, entry_id)
+    cycle(scratch_dsn, store, quiet.client)
+    assert store.rows() == {} and job_statuses(scratch_dsn, entry_id) == ["succeeded", "succeeded"]
+
+
+def wait_for_a_lock_wait(dsn, timeout_s: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout_s
+    with psycopg.connect(dsn, autocommit=True) as watcher:
+        while time.monotonic() < deadline:
+            (waiting,) = watcher.execute(
+                "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'"
+                " AND datname = current_database()"
+            ).fetchone()
+            if waiting:
+                return True
+            time.sleep(0.05)
+    return False
+
+
+@pytest.mark.db
+def test_a_retirement_that_starts_under_the_jobs_share_lock_waits_and_then_enqueues(
+    scratch_dsn, store, tmp_path, monkeypatch
+) -> None:
+    entry_id, admin_id = committed_entry(scratch_dsn, store)
+    real_state = embed_handler._state
+    seen: dict = {"errors": []}
+
+    def retire_in_a_thread() -> None:
+        try:
+            retire_committed(scratch_dsn, entry_id, admin_id, tmp_path)
+        except Exception as exc:  # noqa: BLE001 - reported by the assertions below
+            seen["errors"].append(repr(exc))
+
+    thread = threading.Thread(target=retire_in_a_thread)
+
+    def locked_then_a_retirement_starts(conn, wanted):
+        state = real_state(conn, wanted)  # takes the share lock
+        thread.start()
+        seen["waited"] = wait_for_a_lock_wait(scratch_dsn)  # the retirement is blocked on it
+        return state
+
+    quiet = Server(embed_reply(1))
+    with monkeypatch.context() as patched:
+        patched.setattr(embed_handler, "_state", locked_then_a_retirement_starts)
+        cycle(scratch_dsn, store, quiet.client)
+    thread.join(timeout=20)
+
+    assert seen["waited"] is True and not thread.is_alive() and seen["errors"] == []
+    assert quiet.requests == []
+    # the retirement committed after the job did, so its enqueue found no live job: not lost
+    assert job_statuses(scratch_dsn, entry_id) == ["succeeded", "pending"]
+    with psycopg.connect(scratch_dsn) as observer:
+        (status,) = observer.execute(
+            "SELECT status FROM knowledge_entries WHERE entry_id = %s", (entry_id,)
+        ).fetchone()
+    assert status == "retired" and list(store.rows()) == [entry_id]
+
+    make_due(scratch_dsn, entry_id)
+    cycle(scratch_dsn, store, quiet.client)
+    assert store.rows() == {} and job_statuses(scratch_dsn, entry_id) == ["succeeded", "succeeded"]

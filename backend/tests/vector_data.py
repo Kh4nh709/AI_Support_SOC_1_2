@@ -51,29 +51,54 @@ class MemoryStore:
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self.conn = MemoryConn()
         self.schema_calls = 0
+        self._made = True  # like a database that has its table; `drop_schema()` takes it away
         self._rows: dict[str, tuple[str, str, int, list[float]]] = {}
         monkeypatch.setattr(vector_store, "ensure_schema", self._ensure_schema)
         monkeypatch.setattr(vector_store, "stored", self._stored)
+        monkeypatch.setattr(vector_store, "stored_one", self._stored_one)
         monkeypatch.setattr(vector_store, "upsert", self._upsert)
         monkeypatch.setattr(vector_store, "delete", self._delete)
+
+    def _need_table(self) -> None:
+        """What the real thing does without its table."""
+        if not self._made:
+            raise psycopg.errors.UndefinedTable('relation "entry_vectors" does not exist')
 
     def _ensure_schema(self, vconn) -> None:
         assert vconn is self.conn
         self.schema_calls += 1
+        self._made = True
 
     def _stored(self, vconn) -> dict[str, tuple[str, str, int]]:
         assert vconn is self.conn
+        self._need_table()
         return {k: (sha, model, dims) for k, (sha, model, dims, _) in self._rows.items()}
+
+    def _stored_one(self, vconn, entry_id: str) -> tuple[str, str, int] | None:
+        assert vconn is self.conn
+        self._need_table()
+        row = self._rows.get(entry_id)
+        return None if row is None else (row[0], row[1], row[2])
 
     def _upsert(
         self, vconn, *, entry_id: str, content_sha256: str, model: str, vector: Sequence[float]
     ) -> None:
         assert vconn is self.conn
+        self._need_table()
         self._rows[entry_id] = (content_sha256, model, len(vector), [float(x) for x in vector])
 
     def _delete(self, vconn, entry_id: str) -> None:
         assert vconn is self.conn
+        self._need_table()
         self._rows.pop(entry_id, None)
+
+    def drop_schema(self) -> None:
+        """The vector database as a fresh `vectordb` is: no table."""
+        self._made = False
+        self._rows.clear()
+
+    def has_schema(self) -> bool:
+        return self._made
 
     def put(self, entry_id: str, content_sha256: str, model: str, vector: Sequence[float]) -> None:
         """A row that is there before the test starts."""
@@ -105,6 +130,13 @@ class PgvectorStore:
 
     def rows(self) -> dict[str, tuple[str, str, int]]:
         return vector_store.stored(self.conn)
+
+    def drop_schema(self) -> None:
+        self.conn.execute("DROP TABLE IF EXISTS entry_vectors")
+
+    def has_schema(self) -> bool:
+        (found,) = self.conn.execute("SELECT to_regclass('entry_vectors') IS NOT NULL").fetchone()
+        return found
 
     def vector(self, entry_id: str) -> list[float] | None:
         row = self.conn.execute(
