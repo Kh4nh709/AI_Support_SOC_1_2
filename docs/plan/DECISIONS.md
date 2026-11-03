@@ -3595,3 +3595,36 @@ Decision:
   6. **No reopen.** An archived alert or case is not moved back by anything in the product (an archived alert is not `auto_closed`, so A17 does not apply to it). **The way back is the backup taken immediately before `--apply`** (runbook step 2) and `make db-restore`.
   7. **What reads `archived`.** `rag/history.py` counts no archived alert or case (pinned for an alert with no case and for an alert in an archived case). ①'s correlation rows and samples, and ②'s dossier block, leave archived alerts out. Two further readers share the same `_STATUS_PREDICATE` (`domain/correlation.py`) through `summarize_for_prompt` and so also leave archived neighbours out: the Tier-1 alert page's correlation table (`tier1/queue.py`) and the G2 labelling view (`tier1/labels.py`; it drops `status`, so it would not have crashed either way, and the gold set is frozen). A stray `triage` job for an archived alert is skipped like the closed statuses; a stray `investigate` job for an archived case and a stray `rag_lookup` job for an archived alert or case make no model call and write nothing. `POST /api/tier2/cases/{id}/analyze` refuses an archived case with the concluded case's 409. A blind-arm head stays hidden when archived. `find_open_cluster` never finds an archived head. The Tier 2 list and page show an archived case as closed ("Đã lưu trữ"), and the UI words the audit events "Lưu trữ alert (dọn hàng đợi)" and "Lưu trữ case (dọn hàng đợi)".
 Supersedes: none. Extends **DEC-210**'s history rule (what is a decision) and the schema contracts of migrations 002 and 001 (the statuses); keeps **DEC-101**'s blind arm (archiving reveals nothing).
+
+---
+
+## DEC-213 · 2026-11-03 · P14: Voyage AI embeddings in an independent pgvector, with Voyage rerank, replace the RAG lookup's LLM ranker; ① and ② always give a definite verdict (①'s `escalate` becomes `true_positive`); a lab labelling page and a RAG-off/on measurement; trial only, never merged into `main`
+Scope: **product** (①/② verdicts, the RAG lookup, a new service `vectordb`, an admin page, a measurement tool) · **frozen contracts** (output schemas `triage_v3`, `verifier_v2`, `investigate_v3`; `llm.builder.Verdict`; `ck_llm_runs_suggested_action`; job type `knowledge_embed`; `rag_results.failure_kind` and `ranked`; builder fact `trung_pct`; warning `rag_not_applied:<kind>`; events `lab.run_created`, `lab.labeled`; eleven `.env` keys; migrations 022–024) · **security** (data to a new third party; the blind arm) · **evaluation validity** (the lab measurement)
+Decided by: **the Owner, 03/11/2026**, in conversation. The design was approved with these changes:
+- the rename is allowed ("cho phép đổi luôn");
+- a Voyage failure turns the RAG off for that alert, with a notice and no LLM-ranker fallback;
+- the trial database is wiped first, so there is no compatibility with old data ("xóa db cũ để thuận lợi cho việc điều chỉnh kết luận AI");
+- "Ko merge vào main mà chỉ chạy trên trial".
+Drafted by: the Director (fork of Director 1, Opus 5.5)
+Propagated to: `docs/superpowers/specs/2026-11-03-voyage-vector-rag-definite-verdicts-design.md` (the authority) · `docs/superpowers/plans/2026-11-03-voyage-vector-rag-definite-verdicts.md` (P14-T01…T11) · STATE phase P14
+Decision:
+  1. **Why.** The thesis describes RAG with embeddings and a vector database for continuous self-improvement without fine-tuning: Tier-2 conclusions approved by an admin become knowledge, and later alerts at ① and ② are given the most similar approved cases with a similarity percentage.
+  2. **Retrieval.**
+     - Approved entries are embedded with Voyage (`voyage-4`, 1024 dimensions) into an independent pgvector, `vectordb`. It is reachable only from `rag-worker`, publishes no port, and is a derived index rebuilt from the main database.
+     - A lookup unions the vector hits with the existing database search, re-checks every candidate against the main database (active, hash, file), scores them with Voyage rerank (`rerank-2.5`), and keeps at most 3 above `RAG_MIN_SCORE`.
+     - Each kept match reaches ①'s and ②'s user message, in the untrusted block, with `trung_pct`.
+     - The LLM ranking agent is removed. The LLM still writes drafts.
+  3. **Failure.** Any Voyage or `vectordb` failure turns the RAG off for that alert or case. The UI says so with a closed error kind, and there is no LLM fallback.
+  4. **Definite verdicts.**
+     - **①:** the model answers `false_positive` or `true_positive`, which replaces `escalate` in ①'s verdict vocabulary only. The analyst's escalate action, `escalated_tier2` and the gold labels stay.
+     - **②:** the model answers `false_positive`, `policy_violation` or `confirmed_incident`.
+     - **The gate and ②'s override are unchanged.** A held verdict waits for human review. The model's own verdict is stored, shown and scored.
+  5. **No compatibility with old data.** The trial database is wiped, Owner-run, before the build is deployed. Migration 022 makes `ck_llm_runs_suggested_action` strict and refuses while any `triage` run still says `escalate`.
+  6. **The Voyage account is the free tier.** Training opt-out needs a payment method, so it is not available. The thesis states it, and retention is unverified.
+  7. **The lab.**
+     - Ground truth is labelled by hand on `/admin/lab`.
+     - The test runs are separate attack runs of the same scenarios as the knowledge-base runs. There is no unseen scenario.
+     - `eval/lab_measure.py` re-runs ① and ② compute-only, RAG off and on, using the lookup made when each subject arrived.
+     - The expected 60–70 % and 80–90 % are expectations, not acceptance criteria.
+  8. **Trial only.** The branch `director/voyage-rag` is cut from `main` `af56b13` and is never merged back. Live stays at `af56b13`.
+Supersedes: **DEC-210** in part: its "no embedding model, DeepSeek only" and the LLM ranking agent (spec 2026-10-24 §4 and §7.6). Everything else in DEC-210 stands: the drafts, the approval, the decision history, the integrity checks, and "a RAG match is not a citable basis for a kept FP".
