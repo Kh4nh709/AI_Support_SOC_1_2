@@ -136,6 +136,7 @@ def g3(alert_id: str, verdict: str | None, **fields) -> Prediction:
 def test_outcome_mapping_and_unknown_verdict_raises():
     assert metrics.OUTCOME_OF == {
         "escalate": "escalate",
+        "true_positive": "escalate",  # ① renamed its `escalate` (P14-T01, DEC-213)
         "false_positive": "close",
         "benign": "close",
         "needs_review": "review",
@@ -151,6 +152,17 @@ def test_outcome_mapping_and_unknown_verdict_raises():
     for unknown in ("suspicious", "Escalate", "", "close", "error"):
         with pytest.raises(ValueError, match=repr(unknown)):
             metrics.outcome(unknown)
+
+
+def test_true_positive_scores_as_escalate():
+    """P14-T01 (DEC-213): ① says `true_positive` where it said `escalate`, and the evaluation must
+    score the new name on the same scale as the old one, or its recall drops to zero on a rename."""
+    assert metrics.OUTCOME_OF["true_positive"] == "escalate"
+    assert metrics.outcome("true_positive") == metrics.outcome("escalate") == "escalate"
+    attacks = [pred(f"a{i}", "escalate", v) for i, v in enumerate(["true_positive"] * 4)]
+    result = metrics.score(attacks)
+    assert result["recall_escalate"] == 1.0
+    assert result["confusion"]["escalate"] == {"escalate": 4, "close": 0, "review": 0, "error": 0}
 
 
 def test_truth_false_positive_is_refused():

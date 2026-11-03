@@ -575,7 +575,7 @@ def test_the_levels_are_the_closed_values_and_nothing_else_is_a_fact(db, gold) -
 @pytest.mark.db
 @pytest.mark.parametrize(
     "level",
-    [B.Severity.HIGH, B.Verdict.ESCALATE, "giong", None],
+    [B.Severity.HIGH, B.Verdict.TRUE_POSITIVE, "giong", None],
     ids=["another_enum", "a_verdict", "a_plain_string", "none"],
 )
 def test_a_level_that_is_not_a_closed_learned_level_is_refused_not_rendered(

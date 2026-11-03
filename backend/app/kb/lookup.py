@@ -44,7 +44,21 @@ _INT_CONDITION_KEYS: dict[str, str] = {
     "rule_level_lt": "rule_level",
     "rule_level_gte": "rule_level",
 }
-_ACTIONS = ("false_positive", "needs_review", "escalate")
+#: The action a loaded rule carries: ①'s vocabulary after the gate (`llm/verdicts.py`'s
+#: `GATED_ACTIONS`; `kb` may import only `infra`, so it is transcribed here and
+#: `tests/test_verdicts.py` ties the two together). P14-T01, DEC-213: ①'s `escalate` is now
+#: `true_positive`.
+_ACTIONS = ("false_positive", "needs_review", "true_positive")
+#: What a signed decision table may SAY after `then:`. The files under `kb/decision_tables/` are
+#: policy the Owner and the advisor signed (`reviewed_by`), so they are not edited for a rename: their
+#: `then: escalate` is read as ①'s verdict `true_positive` (spec 4.1). The new spelling is accepted too,
+#: for a table written after the rename. Anything else is refused, as before.
+_YAML_ACTION = {
+    "false_positive": "false_positive",
+    "needs_review": "needs_review",
+    "escalate": "true_positive",
+    "true_positive": "true_positive",
+}
 #: Design note 2 gives this as `^[a-z]{2,6}-\d{1,2}$`; widened to admit digits in the
 #: abbreviation (`[a-z0-9]`) because design note 5's own abbreviation list includes
 #: `c2b` (c2_beacon) — letters-only cannot match it. Deviation noted in the report;
@@ -248,11 +262,11 @@ def _validate_rule(path: Path, raw: Any, seen_ids: set[str]) -> Rule:
     if rule_id in seen_ids:
         _fail(path, rule_id, "duplicate rule id")
     seen_ids.add(rule_id)
-    action = raw.get("then")
-    if action not in _ACTIONS:
-        _fail(path, rule_id, f"then {action!r} must be one of {_ACTIONS}")
+    then = raw.get("then")
+    if not isinstance(then, str) or then not in _YAML_ACTION:
+        _fail(path, rule_id, f"then {then!r} must be one of {tuple(_YAML_ACTION)}")
     condition = _validate_condition(path, rule_id, raw.get("if"))
-    return Rule(id=rule_id, condition=condition, action=action)
+    return Rule(id=rule_id, condition=condition, action=_YAML_ACTION[then])
 
 
 def get_decision_table(category: str, *, root: Path = KB_ROOT) -> DecisionTable | None:

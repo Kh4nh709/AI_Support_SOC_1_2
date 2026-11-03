@@ -44,4 +44,4 @@ SSH brute force: check occurrence_count and asset_criticality before escalating.
 
 ## Yêu cầu
 
-Trả về DUY NHẤT một đối tượng JSON theo schema triage_v2.
+Trả về DUY NHẤT một đối tượng JSON theo schema triage_v3.

@@ -272,7 +272,7 @@ def test_apply_table_first_match_wins():
             lookup.Rule(
                 id="wg-1", condition={"severity": ("low", "medium")}, action="false_positive"
             ),
-            lookup.Rule(id="wg-2", condition={"rule_level_gte": 0}, action="escalate"),
+            lookup.Rule(id="wg-2", condition={"rule_level_gte": 0}, action="true_positive"),
         ]
     )
     facts = {"severity": "low", "rule_level": 20}
@@ -281,7 +281,7 @@ def test_apply_table_first_match_wins():
 
 def test_apply_table_no_match_is_none():
     table = _table(
-        [lookup.Rule(id="wg-1", condition={"severity": ("critical",)}, action="escalate")]
+        [lookup.Rule(id="wg-1", condition={"severity": ("critical",)}, action="true_positive")]
     )
     assert lookup.apply_table(table, {"severity": "low"}) is None
 
@@ -360,7 +360,7 @@ def test_contradictory_table_is_named():
     table = _table(
         [
             lookup.Rule(id="x-1", condition={"severity": ("low",)}, action="false_positive"),
-            lookup.Rule(id="x-2", condition={"rule_level_lt": 5}, action="escalate"),
+            lookup.Rule(id="x-2", condition={"rule_level_lt": 5}, action="true_positive"),
         ]
     )
     problems = lookup.check_consistency(table)
@@ -372,8 +372,8 @@ def test_contradictory_table_is_named():
 def test_same_action_overlap_is_not_a_contradiction():
     table = _table(
         [
-            lookup.Rule(id="x-1", condition={"severity": ("low",)}, action="escalate"),
-            lookup.Rule(id="x-2", condition={"rule_level_lt": 5}, action="escalate"),
+            lookup.Rule(id="x-1", condition={"severity": ("low",)}, action="true_positive"),
+            lookup.Rule(id="x-2", condition={"rule_level_lt": 5}, action="true_positive"),
         ]
     )
     assert lookup.check_consistency(table) == []
@@ -394,7 +394,7 @@ def test_sbf_rules_from_architecture_3_10():
         "identity_privileged": "unknown",
         "occurrence_count": 1,
     }
-    assert lookup.apply_table(table, facts) == ("escalate", "sbf-3")
+    assert lookup.apply_table(table, facts) == ("true_positive", "sbf-3")
     assert lookup.rule_holds(table, "sbf-1", facts) is False
 
 
@@ -466,7 +466,7 @@ def test_credential_access_table_is_unreviewed():
     assert lookup.check_consistency(table) == []
     # No false_positive rule: a low alert is never auto-closed (nothing in the facts can tell a
     # registered security product or an admin's diagnostic dump from a real LSASS dump).
-    assert {rule.action for rule in table.rules} == {"escalate", "needs_review"}
+    assert {rule.action for rule in table.rules} == {"true_positive", "needs_review"}
     low_point = {
         "severity": "low",
         "rule_level": 3,
@@ -477,7 +477,7 @@ def test_credential_access_table_is_unreviewed():
     }
     assert lookup.apply_table(table, low_point) == ("needs_review", "cra-4")
     high_point = {**low_point, "severity": "high", "rule_level": 10}
-    assert lookup.apply_table(table, high_point) == ("escalate", "cra-3")
+    assert lookup.apply_table(table, high_point) == ("true_positive", "cra-3")
     # Even a point where a rule holds is refused while the table is unsigned.
     for rule in table.rules:
         assert _make_rule_check(table, low_point)(rule.id) == (False, "table_unreviewed")

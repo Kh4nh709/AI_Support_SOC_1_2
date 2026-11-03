@@ -44,9 +44,11 @@ from tests.test_triage_rag import (
 PLAYBOOK_TEXT = "PLAYBOOK_TEXT_FIXED"
 #: The one value S2 added to the `triage_v2` `reasons[].source` enum, and so to the ① system message.
 SIEM_ENUM_VALUE = "|siem_context"
-#: sha256 of the ① system message of main (ba31def; P13's, 923c6b2, is the same bytes): the integration's
-#: system message with `SIEM_ENUM_VALUE` taken out once. 2267 bytes against the integration's 2280.
-MAIN_SYSTEM_SHA256 = "b3c884fd1d9ab29466e07283d07d15fda6c9931b4b8a71d27a951b50996ca72c"
+#: sha256 of the ① system message without S2's value: the integration's system message with
+#: `SIEM_ENUM_VALUE` taken out once. 2531 bytes against the integration's 2544. It was main's
+#: (ba31def; P13's, 923c6b2, is the same bytes: b3c884fd1d9a...) until P14-T01 (DEC-213) moved the system
+#: message on purpose: the new opening, `false_positive | true_positive`, and `## Schema triage_v3`.
+MAIN_SYSTEM_SHA256 = "80c7a9b8c0461c4aa7b3ea8f661a23daae3da50dfa437e541dc2d55855a862d6"
 #: One whole `siem_context` block, with the blank line after it.
 SIEM_BLOCK = re.compile(
     r'<untrusted_data nonce="\w+" source="siem_context">.*?</untrusted_data nonce="\w+">\n\n',
@@ -148,10 +150,11 @@ def test_with_both_off_the_user_message_is_the_one_main_built() -> None:
 
 
 def test_the_system_message_differs_from_mains_by_exactly_the_siem_context_enum_value() -> None:
-    """F1 of the INT-T01 review, ruling (a): the `triage_v2` schema in the system message lists the
+    """F1 of the INT-T01 review, ruling (a): the `triage_v3` schema in the system message lists the
     `reasons[].source` values, and S2 (DEC-211 item 4) added `siem_context` to it. Whatever the flag and
     whatever `learned` holds, the system message is the same text, and taking that one value out of it once
-    gives main's system message, byte for byte (the hash is main's). It costs 5 estimated tokens."""
+    gives the system message without S2, byte for byte (the hash was main's until P14-T01 moved the
+    system message on purpose, see `MAIN_SYSTEM_SHA256`). It costs 5 estimated tokens."""
     from app.llm.adapter import estimate_tokens
 
     corr = _correlation()

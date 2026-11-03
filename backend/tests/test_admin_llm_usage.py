@@ -446,7 +446,7 @@ def test_stopped_counts_every_reason_and_leaves_out_the_null_ones(client):
             role="proposer",
             ago=timedelta(hours=1),
             stopped_by=reason,
-            result=None if reason else {"suggested_action": "escalate"},
+            result=None if reason else {"suggested_action": "true_positive"},
         )
 
     row = _by_key(client.ok("24h"))[("triage", "proposer")]
@@ -593,7 +593,7 @@ def test_recent_shows_a_run_older_than_every_range(client):
         role="proposer",
         ago=timedelta(days=40),
         subject_id="ancient",
-        result={"suggested_action": "escalate"},
+        result={"suggested_action": "true_positive"},
     )
 
     body = client.ok("24h")
@@ -951,7 +951,10 @@ def test_no_prompt_trace_finding_or_result_ever_leaves_the_server(client):
         ago=timedelta(minutes=2),
         system_prompt=f"SECRET-SYSTEM2-{marker}",
         user_message=f"SECRET-USER2-{marker}",
-        result={"suggested_action": "escalate", "reasons": [{"claim": f"SECRET-CLAIM-{marker}"}]},
+        result={
+            "suggested_action": "true_positive",
+            "reasons": [{"claim": f"SECRET-CLAIM-{marker}"}],
+        },
     )
 
     for range_ in RANGES:
@@ -962,7 +965,7 @@ def test_no_prompt_trace_finding_or_result_ever_leaves_the_server(client):
             assert word not in resp.text, (range_, word)
         assert not (_keys(resp.json()) & _FORBIDDEN_KEYS), range_
     # and the runs themselves ARE served, by their safe fields only
-    assert {r["outcome"] for r in client.ok()["recent"]} == {"confirmed_incident", "escalate"}
+    assert {r["outcome"] for r in client.ok()["recent"]} == {"confirmed_incident", "true_positive"}
 
 
 # ---------------------------------------------------------------------------
@@ -990,8 +993,12 @@ def _outcome_of(client: _Client, **run: Any) -> str | None:
     [
         # the verdict of the proposer (①) and of the investigator (②), by their real keys
         (
-            {"pipeline": "triage", "role": "proposer", "result": {"suggested_action": "escalate"}},
-            "escalate",
+            {
+                "pipeline": "triage",
+                "role": "proposer",
+                "result": {"suggested_action": "true_positive"},
+            },
+            "true_positive",
         ),
         (
             {
@@ -1022,9 +1029,13 @@ def _outcome_of(client: _Client, **run: Any) -> str | None:
             {
                 "pipeline": "triage",
                 "role": "verifier",
-                "result": {"agree": False, "structured_only_verdict": "escalate", "reason": "x"},
+                "result": {
+                    "agree": False,
+                    "structured_only_verdict": "true_positive",
+                    "reason": "x",
+                },
             },
-            "escalate",
+            "true_positive",
         ),
         # no result: stopped:<why>, or nothing
         (
@@ -1061,7 +1072,7 @@ def _outcome_of(client: _Client, **run: Any) -> str | None:
             {
                 "pipeline": "triage",
                 "role": "proposer",
-                "result": {"suggested_conclusion": "escalate"},
+                "result": {"suggested_conclusion": "true_positive"},
             },
             None,
         ),
@@ -1069,7 +1080,7 @@ def _outcome_of(client: _Client, **run: Any) -> str | None:
             {
                 "pipeline": "investigate",
                 "role": "investigator",
-                "result": {"suggested_action": "escalate"},
+                "result": {"suggested_action": "true_positive"},
             },
             None,
         ),
@@ -1102,8 +1113,8 @@ def test_outcome(client, run, expected):
         5,
         True,
         None,
-        ["escalate"],
-        {"a": "escalate"},
+        ["true_positive"],
+        {"a": "true_positive"},
     ],
     ids=["long", "padded", "markup-long", "number", "bool", "json-null", "list", "object"],
 )

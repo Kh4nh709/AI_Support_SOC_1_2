@@ -83,13 +83,14 @@ def _constraint_names(db, name: str) -> list[str]:
     return re.findall(r"'([^']+)'::text", definition)
 
 
-def _schema_without_021(tmp_path: Path) -> Path:
-    """A copy of `docs/Schema` with only the migrations numbered below 021, and a `schema.sql`
-    the real `build_schema.py` builds from them: the tree as it stood at 020."""
+def _schema_without_021(tmp_path: Path, below: int = 21) -> Path:
+    """A copy of `docs/Schema` with only the migrations numbered below `below` (021: the tree as it
+    stood at 020; 022: the tree through 021, since P14-T01 put 022 after it), and a `schema.sql` the
+    real `build_schema.py` builds from them."""
     at_020 = tmp_path / "Schema"
     at_020.mkdir()
     for path in SCHEMA_DIR.glob(MIGRATION_FILES):
-        if int(path.name[:3]) < 21:
+        if int(path.name[:3]) < below:
             shutil.copy(path, at_020)
     shutil.copy(SCHEMA_DIR / "build_schema.py", at_020)
     built = subprocess.run(
@@ -373,10 +374,13 @@ def test_021_applies_on_a_database_at_020_the_way_make_migrate_runs_it(tmp_path)
     if shutil.which("psql") is None:
         pytest.skip("psql is not installed")
     at_020 = _schema_without_021(tmp_path)
-    stems = {path.stem for path in SCHEMA_DIR.glob(MIGRATION_FILES)}
+    (tmp_path / "through_021").mkdir()
+    through_021 = _schema_without_021(tmp_path / "through_021", below=22)  # 022 comes after 021
+    stems = {path.stem for path in SCHEMA_DIR.glob(MIGRATION_FILES) if int(path.name[:3]) <= 21}
     total = len(stems)
     before = len(list(at_020.glob(MIGRATION_FILES)))
     assert before == total - 1 == len({s for s in stems if int(s[:3]) < 21})
+    assert len(list(through_021.glob(MIGRATION_FILES))) == total
 
     dbname = f"{conftest._dbname(session)}_021up_test"
     dsn = _with_db(session, dbname)
@@ -384,7 +388,7 @@ def test_021_applies_on_a_database_at_020_the_way_make_migrate_runs_it(tmp_path)
     try:
         admin.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(dbname)))
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(dbname)))
-        runs = [_migrate(dsn, mig_dir) for mig_dir in (at_020, SCHEMA_DIR, SCHEMA_DIR)]
+        runs = [_migrate(dsn, mig_dir) for mig_dir in (at_020, through_021, through_021)]
         assert "021_archive" not in runs[0]
         assert f"migrate: 0 applied, {before} already present" in runs[0]
         assert "migrate: applying 021_archive" in runs[1]
