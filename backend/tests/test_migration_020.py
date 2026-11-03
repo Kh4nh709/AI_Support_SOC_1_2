@@ -145,6 +145,10 @@ RESULT_COLUMNS = {
     "match_notes": ("jsonb", False),
     "llm_run_id": ("uuid", False),
     "created_at": ("timestamp with time zone", True),
+    # P14-T04 / DEC-213, migration 023: the closed failure kind of a `failed` lookup, and the rerank's
+    # list of {entry_id, score}. Both are NULL on every row 020 wrote.
+    "failure_kind": ("text", False),
+    "ranked": ("jsonb", False),
 }
 CONSTRAINTS = {
     "knowledge_drafts": {
@@ -170,6 +174,7 @@ CONSTRAINTS = {
         "rag_results_pkey": "p",
         "ck_rag_results_subject_kind": "c",
         "ck_rag_results_status": "c",
+        "ck_rag_results_failure_kind": "c",  # 023
     },
 }
 

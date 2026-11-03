@@ -333,7 +333,9 @@ def test_reclaim_stale_with_no_types_reclaims_nothing(db):
 def test_job_types_hold_the_two_rag_types_next_to_the_six():
     assert {"rag_lookup", "knowledge_draft"} <= jobs.JOB_TYPES
     assert {"pipeline", "triage", "investigate", "digest", "health", "pull"} <= jobs.JOB_TYPES
-    assert len(jobs.JOB_TYPES) == 8
+    # P14-T04 / DEC-213: the ninth, `knowledge_embed` (migration 023); it was 8 before.
+    assert "knowledge_embed" in jobs.JOB_TYPES
+    assert len(jobs.JOB_TYPES) == 9
 
 
 @pytest.mark.db

@@ -168,6 +168,20 @@ case("021 · event_type gõ thiếu một chữ ('alert.archive') không vào đ
      "ck_audit_event_type",
      "INSERT INTO audit_events (event_type,subject_id,actor_role) "
      "VALUES ('alert.archive','y','system');")
+# ── 023 · DEC-213 · job `knowledge_embed`, và `rag_results.failure_kind` ─────────────────────
+# failure_kind chỉ có nghĩa khi lookup `failed`, và chỉ là một trong sáu loại đóng.
+RR = ("INSERT INTO rag_results (lookup_id,subject_kind,subject_id,status,failure_kind) VALUES "
+      "('00000000-0000-4000-8000-00000000e0@N@','alert','a1',{st},{fk});")
+case("023 · failure_kind trên dòng 'ok' (chỉ 'failed' mới có lý do)",
+     "ck_rag_results_failure_kind", RR.format(st="'ok'", fk="'rate_limit'").replace("@N@", "a1"))
+case("023 · failure_kind trên dòng 'empty'",
+     "ck_rag_results_failure_kind", RR.format(st="'empty'", fk="'timeout'").replace("@N@", "a2"))
+case("023 · failure_kind trên dòng 'budget'",
+     "ck_rag_results_failure_kind", RR.format(st="'budget'", fk="'auth'").replace("@N@", "a3"))
+case("023 · failure_kind ngoài sáu loại đóng trên dòng 'failed'",
+     "ck_rag_results_failure_kind", RR.format(st="'failed'", fk="'network'").replace("@N@", "a4"))
+case("023 · job_type 'knowledge_embedd' (gõ thừa một chữ) không vào được", "ck_jobs_job_type",
+     "INSERT INTO jobs (job_type,subject_id) VALUES ('knowledge_embedd','x');")
 case("009 · actor_role='system' mà CÓ actor_id", "ck_audit_actor_id_theo_role",
      "INSERT INTO audit_events (event_type,subject_id,actor_role,actor_id) "
      "VALUES ('alert.auto_closed','y','system','00000000-1111-4000-8000-000000000001');")
@@ -222,6 +236,15 @@ POSITIVE = [
     ("021 · audit alert.archived và case.archived, actor_role='system', KHÔNG actor_id",
      "INSERT INTO audit_events (event_type,subject_id,actor_role) VALUES "
      "('alert.archived','a1','system'),('case.archived','c1','system');"),
+    ("023 · lookup 'failed' với failure_kind='rate_limit' (một trong sáu loại đóng)",
+     RR.format(st="'failed'", fk="'rate_limit'").replace("@N@", "b1")),
+    ("023 · lookup 'failed' không có failure_kind (dòng 020 đã viết trước khi cột có)",
+     RR.format(st="'failed'", fk="NULL").replace("@N@", "b2")),
+    ("023 · lookup 'ok' không có failure_kind",
+     RR.format(st="'ok'", fk="NULL").replace("@N@", "b3")),
+    ("023 · job 'knowledge_embed' (chủ thể là uuid của entry)",
+     "INSERT INTO jobs (job_type,subject_id) VALUES "
+     "('knowledge_embed','00000000-0000-4000-8000-00000000e0b4');"),
     ("M4 · auto_closed có closed_at, sealed_at NULL (cụm còn hút)",
      ins(90, status="'auto_closed'", closed_at="now()")),
     ("D-C5 · escalated_tier2 không seal",
