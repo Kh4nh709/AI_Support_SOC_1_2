@@ -469,7 +469,7 @@ class EvalSwitches:
     include_correlation=False` — `build_proposer_prompt`'s own switches, each section
     left out whole, heading included. B3 is `gate_mode="steps_1_3"`.
     `proposer_template` replaces the proposer's system template
-    (`llm/templates/triage_system.txt`; the rendered `triage_v2` schema is still
+    (`llm/templates/triage_system.txt`; the rendered `triage_v3` schema is still
     appended) and makes `prompt_version` `file:<sha256 of the template, 12 hex>`.
 
     `rag` (P13-T07) reads the alert's newest stored lookup and puts its approved material in the
@@ -558,13 +558,13 @@ def _with_proposer_template(
     built: BuiltTriagePrompt, template: Path
 ) -> tuple[BuiltTriagePrompt, str]:
     """`built` with its system prompt rendered from `template` instead of
-    `TRIAGE_TEMPLATE`, by the same `_system_prompt` (the template, then the `triage_v2`
+    `TRIAGE_TEMPLATE`, by the same `_system_prompt` (the template, then the `triage_v3`
     schema), plus the override's `prompt_version`. `build_proposer_prompt` takes no
     template, so the system prompt is swapped after the build: the user message is
     untouched, and phase-5's budget cuts were decided against the deployed system
     prompt's size (`estimated_tokens` is recomputed for the prompt actually sent)."""
     template = Path(template)
-    prompt = replace(built.prompt, system=_system_prompt(template, "triage_v2"))
+    prompt = replace(built.prompt, system=_system_prompt(template, "triage_v3"))
     estimated = estimate_tokens(prompt.system) + estimate_tokens(prompt.user)
     version = "file:" + hashlib.sha256(template.read_bytes()).hexdigest()[:12]
     return replace(built, prompt=prompt, estimated_tokens=estimated), version

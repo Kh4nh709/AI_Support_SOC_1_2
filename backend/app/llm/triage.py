@@ -218,7 +218,7 @@ class Proposal:
     calls: int  # 1 or 2 — never 3 (design note 5)
 
 
-Verification = Proposal  # same shape, schema "verifier_v1"
+Verification = Proposal  # same shape, schema "verifier_v2"
 
 
 class RepairPromptViolation(PermanentError):
@@ -533,7 +533,7 @@ def build_proposer_prompt(
     (`learned_entries_dropped`), then the history (`learned_history_dropped`); when both are gone
     the section is gone too (not the "nothing found" form, which would be untrue) and
     `learned_used` is False."""
-    system = _system_prompt(TRIAGE_TEMPLATE, "triage_v2")
+    system = _system_prompt(TRIAGE_TEMPLATE, "triage_v3")
     nonce = nonce if nonce is not None else wrap.new_nonce()
     if include_siem_context is None:
         include_siem_context = cfg.PROMPT_INCLUDE_SIEM_CONTEXT
@@ -678,7 +678,7 @@ def build_verifier_prompt(
     `{verdict, reasons}` inside the one `proposer` block. No hostnames, no usernames, no
     text — nothing of `TriageInput` is even passed in."""
     del cfg  # taken for symmetry with `build_proposer_prompt`; the verifier has no budget cuts
-    system = _system_prompt(VERIFIER_TEMPLATE, "verifier_v1")
+    system = _system_prompt(VERIFIER_TEMPLATE, "verifier_v2")
     warnings: list[str] = []
     pb = PromptBuilder(system, nonce=nonce)
     pb.heading(HEADING_FACTS)
@@ -765,7 +765,7 @@ def _repair_vocabulary(*names: str) -> tuple[dict[str, str], frozenset[str]]:
     return paths, frozenset(constants)
 
 
-_SCHEMA_PATHS, REPAIR_CONSTANTS = _repair_vocabulary("triage_v2", "verifier_v1")
+_SCHEMA_PATHS, REPAIR_CONSTANTS = _repair_vocabulary("triage_v3", "verifier_v2")
 
 
 def _object_prefix(path: str) -> str:
@@ -864,13 +864,13 @@ def _call(adapter: Any, built: BuiltTriagePrompt, *, schema_name: str, model: st
 
 
 def propose(adapter: Any, built: BuiltTriagePrompt, *, cfg: Config) -> Proposal:
-    """The ① proposer call against `triage_v2` with `cfg.LLM_MODEL_PROPOSER`."""
-    return _call(adapter, built, schema_name="triage_v2", model=cfg.LLM_MODEL_PROPOSER)
+    """The ① proposer call against `triage_v3` with `cfg.LLM_MODEL_PROPOSER`."""
+    return _call(adapter, built, schema_name="triage_v3", model=cfg.LLM_MODEL_PROPOSER)
 
 
 def verify(adapter: Any, built: BuiltTriagePrompt, *, cfg: Config) -> Verification:
-    """The verifier call (gate step 6) against `verifier_v1` with `cfg.LLM_MODEL_VERIFIER`."""
-    return _call(adapter, built, schema_name="verifier_v1", model=cfg.LLM_MODEL_VERIFIER)
+    """The verifier call (gate step 6) against `verifier_v2` with `cfg.LLM_MODEL_VERIFIER`."""
+    return _call(adapter, built, schema_name="verifier_v2", model=cfg.LLM_MODEL_VERIFIER)
 
 
 # ─────────────────────────────────────────────────────────── prompt_version (design note 6)

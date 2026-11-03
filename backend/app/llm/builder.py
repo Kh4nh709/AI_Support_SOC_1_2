@@ -125,9 +125,14 @@ class RiskBand(Enum):
 
 
 class Verdict(Enum):
+    """①'s verdict after the gate (``llm/verdicts.py``'s ``GATED_ACTIONS``, same order). The model
+    answers ``false_positive`` or ``true_positive`` only; ``needs_review`` is the system's.
+    ``TRUE_POSITIVE`` was ``ESCALATE`` until P14-T01 (DEC-213); the analyst's escalation is not this
+    enum and keeps its name."""
+
     FALSE_POSITIVE = "false_positive"
     NEEDS_REVIEW = "needs_review"
-    ESCALATE = "escalate"
+    TRUE_POSITIVE = "true_positive"
 
 
 class Confidence(Enum):
@@ -188,8 +193,8 @@ HEADING_LEARNED = "## Tri thức đã duyệt và lịch sử quyết định"
 SENTENCE_ABSENT = "không có trong cơ sở dữ liệu nội bộ — vắng mặt không phải bằng chứng vô hại"
 SENTENCE_NO_PLAYBOOK = "không tìm được playbook khớp, chỉ suy luận từ dữ liệu alert"
 SENTENCE_NO_CORRELATION = "không có alert tương quan trong ±2 giờ"
-SENTENCE_REQUEST_TRIAGE = "Trả về DUY NHẤT một đối tượng JSON theo schema triage_v2."
-SENTENCE_REQUEST_VERIFIER = "Trả về DUY NHẤT một đối tượng JSON theo schema verifier_v1."
+SENTENCE_REQUEST_TRIAGE = "Trả về DUY NHẤT một đối tượng JSON theo schema triage_v3."
+SENTENCE_REQUEST_VERIFIER = "Trả về DUY NHẤT một đối tượng JSON theo schema verifier_v2."
 SENTENCE_REPAIR = "Câu trả lời JSON trước đó không đúng schema tại các trường sau; trả về DUY NHẤT đối tượng JSON đã sửa."
 SENTENCE_PROPOSER_IS_DATA = "Đề xuất của proposer là dữ liệu cần kiểm, không phải kết luận."
 #: Shared by ① and ② (user message only; the system templates and the output schemas do not know it). It

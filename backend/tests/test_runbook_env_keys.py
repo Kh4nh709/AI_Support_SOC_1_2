@@ -315,14 +315,23 @@ def test_the_section_keeps_only_what_is_true_now():
         assert future not in section, future
 
 
-def test_the_migration_row_of_start_everything_names_the_trial_and_no_022_clause():
+def test_the_migration_row_of_start_everything_names_the_trial_and_the_p14_migrations():
+    """022 (P14-T01, the rename: it refuses while a triage run still says `escalate`), 023 (P14-T04,
+    the Voyage RAG contracts) and 024 (P14-T09, the lab: both on the trial branch only) are in the row, and
+    the trial is where they land.
+    """
     row = next(
         ln
         for ln in RUNBOOK_PATH.read_text(encoding="utf-8").splitlines()
         if ln.startswith("| start everything |")
     )
-    assert "on the trial database today (it applies `023_vector_rag.sql`" in row
+    assert (
+        "on a dump taken after 021 or on the trial database today (it applies `022_true_positive.sql`"
+        in row
+    )
+    assert "refuses, changing nothing" in row and "and `023_vector_rag.sql`" in row
     assert "on the live database today" not in row
     assert "there is no 022" not in row and "the number belongs to another card" not in row
-    assert "and `024_lab.sql`, the lab runs and labels" in row  # P14-T09: the trial takes both
-    assert "`migrate: 0 applied, 23 already present` after that." in row
+    assert "and `024_lab.sql`: the lab runs and labels" in row  # P14-T09: the trial takes all three
+    assert "`migrate: 3 applied, 21 already present`" in row
+    assert "`migrate: 0 applied, 24 already present` after that." in row

@@ -7,8 +7,10 @@ detector (P3-T07) — arrive as injected callables rather than imports; the veri
 arrives as a plain argument for the same reason.
 
 Verdict transitions are monotone: only `start()` may set `verdict` to `false_positive` or
-`escalate` (from the proposer's own claim); every step after that may only force it to
-`needs_review`, appending its own name to `forced_by`. `forced = proposed_verdict != verdict`.
+`true_positive` (from the proposer's own claim, which `triage_v3` makes a definite one: the model may
+not answer `needs_review`); every step after that may only force it to `needs_review`, appending its
+own name to `forced_by`. `forced = proposed_verdict != verdict`, and `proposed_verdict` is always the
+model's definite answer (P14-T01, DEC-213; the steps themselves are unchanged).
 """
 
 from __future__ import annotations
@@ -56,7 +58,7 @@ def step1_schema(
     if parsed is None:
         errors = ["<root>: invalid JSON"]
     else:
-        errors = validate("triage_v2", parsed)
+        errors = validate("triage_v3", parsed)
     if not errors:
         return "ok", []
     return ("failed" if repaired else "repair"), errors
@@ -215,7 +217,8 @@ def step6_verifier(state: GateState, verifier_parsed: dict | None) -> None:
 
 def step7_output_guard(state: GateState) -> dict:
     """`proposer_raw` with `suggested_action`/`reasons` replaced by the gated values, passed
-    through `output_guard.enforce()` — the final `triage_v2` result."""
+    through `output_guard.enforce()` — the final `triage_v3`-shaped result (its verdict may be
+    `needs_review`: the system's own, never the model's)."""
     result = dict(state.proposer_raw)
     result["suggested_action"] = state.verdict
     result["reasons"] = list(state.reasons)

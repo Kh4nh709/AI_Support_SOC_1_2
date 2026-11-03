@@ -8,7 +8,9 @@ the `db` fixture's transaction and never commits, as test_ops_export.py does; th
 The pilot's clock: `PILOT_START` 2011-03-14T10:00:00Z, `PILOT_END` 15:00:00Z, half-open. Every
 event is placed by its offset in seconds from `PILOT_START`.
 
-Blind arm (`suggestion_visible = false`), ① is the latest proposer row's `suggested_action`:
+Blind arm (`suggestion_visible = false`), ① is the latest proposer row's `suggested_action`. ① stores
+`true_positive` where it stored `escalate` before P14-T01 (DEC-213); the export labels it `escalate`
+as it always did, so the tables below read `escalate` and the rows are seeded `true_positive`:
 
     alert  source  ①               human        ack -> decide   person
     B1     lab     escalate        escalated    120 s           A
@@ -179,7 +181,7 @@ def _seed_pilot(db) -> dict:
         ack_at=60,
         took=120,
         outcome="escalated",
-        suggested="escalate",
+        suggested="true_positive",
         **blind,
     )
     ids["B2"] = _handled(
@@ -199,7 +201,7 @@ def _seed_pilot(db) -> dict:
         at(3),
         role="verifier",
         gate={"error": "none"},
-        result={"suggested_action": "escalate"},
+        result={"suggested_action": "true_positive"},
     )
     ids["B3"] = _handled(
         db,
@@ -228,7 +230,7 @@ def _seed_pilot(db) -> dict:
         ack_at=2400,
         took=240,
         outcome="false_positive",
-        suggested="escalate",
+        suggested="true_positive",
         **blind,
     )
     ids["B6"] = _handled(
@@ -274,7 +276,7 @@ def _seed_pilot(db) -> dict:
         ack_at=4800,
         took=180,
         outcome="escalated",
-        suggested="escalate",
+        suggested="true_positive",
     )
     ids["V3"] = _handled(
         db,
@@ -316,7 +318,7 @@ def _seed_pilot(db) -> dict:
         ack_at=17000,
         took=1200,  # decided at the end
         outcome="benign",
-        suggested="escalate",
+        suggested="true_positive",
         **blind,
     )
     ids["X5"] = _open(db, received_at=at(10), source="lab", visible=False)
@@ -436,7 +438,7 @@ def test_visible_arm_never_has_an_agreement_figure(db):
         ack_at=300,
         took=60,
         outcome="escalated",
-        suggested="escalate",
+        suggested="true_positive",
     )
     section = _section6a(_report(db))
 
@@ -464,7 +466,7 @@ def test_the_latest_proposer_row_is_the_verdict_and_a_verifier_row_is_not(db):
         suggested="needs_review",
     )
     late = _open(db, received_at=at(10), source="lab", visible=False)
-    _suggest(db, late, "escalate", at(1))
+    _suggest(db, late, "true_positive", at(1))
     latest = _suggest(db, late, "false_positive", at(2))
     _run(
         db,
@@ -472,7 +474,7 @@ def test_the_latest_proposer_row_is_the_verdict_and_a_verifier_row_is_not(db):
         at(3),
         role="verifier",
         gate={"error": "none"},
-        result={"suggested_action": "escalate"},
+        result={"suggested_action": "true_positive"},
     )
     _ack(db, late, a, _t(300))
     _close(db, late, a, _t(360), "closed_fp", (latest, "false_positive"))
@@ -519,7 +521,7 @@ def test_an_escalation_takes_the_latest_proposer_row_at_or_before_it(db):
     _suggest(db, e1, "false_positive", at(1))
     _ack(db, e1, a, _t(60))
     _escalate(db, e1, a, _t(120))
-    _suggest(db, e1, "escalate", _t(120))
+    _suggest(db, e1, "true_positive", _t(120))
     _suggest(db, e1, "false_positive", _t(180))
     # E2: a verifier row after the proposer's is not ①: it was `false_positive`, a disagreement.
     e2, _ = _blind_lab(db)
@@ -530,7 +532,7 @@ def test_an_escalation_takes_the_latest_proposer_row_at_or_before_it(db):
         at(3),
         role="verifier",
         gate={"error": "none"},
-        result={"suggested_action": "escalate"},
+        result={"suggested_action": "true_positive"},
     )
     _ack(db, e2, a, _t(300))
     _escalate(db, e2, a, _t(360))
@@ -544,7 +546,7 @@ def test_a_run_created_after_an_escalation_is_not_the_verdict(db):
     _suggest(db, alert, "false_positive", at(1))
     _ack(db, alert, a, _t(60))
     _escalate(db, alert, a, _t(120))
-    _suggest(db, alert, "escalate", _t(180))  # the job ran on after the escalation
+    _suggest(db, alert, "true_positive", _t(180))  # the job ran on after the escalation
 
     # ① was `false_positive` when the human escalated: a disagreement, not the later `escalate`
     assert _lab_line(db) == "| lab | 1 | 0 | 0 | 1 | 0 | 0.000 (0 / 1) |"
@@ -553,9 +555,9 @@ def test_a_run_created_after_an_escalation_is_not_the_verdict(db):
 @pytest.mark.db
 def test_a_run_created_after_a_decision_is_not_the_verdict(db):
     alert, a = _blind_lab(db)
-    seen = _suggest(db, alert, "escalate", at(1))
+    seen = _suggest(db, alert, "true_positive", at(1))
     _ack(db, alert, a, _t(60))
-    _close(db, alert, a, _t(120), "closed_fp", (seen, "escalate"))
+    _close(db, alert, a, _t(120), "closed_fp", (seen, "true_positive"))
     _suggest(db, alert, "false_positive", _t(180))  # a later run, which would "agree"
 
     assert _lab_line(db) == "| lab | 1 | 0 | 0 | 1 | 0 | 0.000 (0 / 1) |"
@@ -568,7 +570,7 @@ def test_the_run_a_decision_names_is_the_verdict_even_when_a_run_is_in_flight(db
     _ack(db, alert, a, _t(60))
     # a job that started before the decision and committed after it: its `created_at` (its
     # transaction's start) is before the decision, but the analyst's console never had its row
-    _suggest(db, alert, "escalate", _t(90))
+    _suggest(db, alert, "true_positive", _t(90))
     _close(db, alert, a, _t(120), "closed_fp", (named, "false_positive"))
 
     # a time bound alone would take the in-flight `escalate` and disagree; the payload names A
@@ -785,7 +787,7 @@ def test_a_swept_alert_is_never_a_decision_a_denominator_or_an_agreement(db):
     # blind one carries a ① of `escalate`: were it counted as a decision it would enter Q31's
     # denominator and agree, and Q33 would hold it
     swept_blind = _open(db, received_at=at(10), source="lab", visible=False)
-    _suggest(db, swept_blind, "escalate", at(1))
+    _suggest(db, swept_blind, "true_positive", at(1))
     swept_visible = _open(db, received_at=at(10), source="wazuh", visible=True)
     _suggest(db, swept_visible, "false_positive", at(1))
     _sweep(db, ids["A"], {ids["B1"]: _t(180), swept_blind: _t(180), swept_visible: _t(180)})
@@ -819,7 +821,7 @@ def test_keo_theo_window_is_half_open_and_excludes_the_trigger_and_synthetic_ale
         ack_at=60,
         took=60,
         outcome="escalated",
-        suggested="escalate",
+        suggested="true_positive",
     )
     before = _open(db, received_at=at(10), source="lab", visible=False)
     at_start = _open(db, received_at=at(10), source="lab", visible=False)
@@ -936,7 +938,7 @@ def test_a_reopened_alert_is_no_decision_denominator_or_agreement_and_is_counted
         ack_at=700,
         took=30,
         outcome="escalated",
-        suggested="escalate",
+        suggested="true_positive",
     )
     _reopen(db, blind, ids["A"], 650)
     # and a reopened VISIBLE one: the rule is not the blind arm's alone
@@ -1071,7 +1073,7 @@ def test_the_reopened_row_is_labelled_and_carried_into_section_six(db):
         ack_at=700,
         took=30,
         outcome="false_positive",
-        suggested="escalate",
+        suggested="true_positive",
     )
     _reopen(db, blind, ids["B"], 650)
     text = _report(db)

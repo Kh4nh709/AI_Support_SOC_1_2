@@ -142,6 +142,17 @@ case("P5-5 · suggested_action ngoài tập ba giá trị",
      "ck_llm_runs_suggested_action",
      LR("00000000-0000-4000-8000-00000000aa02","triage","alert",
         """'{\"suggested_action\":\"close\"}'::jsonb"""))
+# ── 022 · DEC-213 · ① đổi tên `escalate` thành `true_positive` ──────────────────────────────
+# Tập ba giá trị của ① là chặt: `false_positive | needs_review | true_positive`. Tên cũ không còn
+# vào được (CSDL cũ đã xóa; 022 từ chối chạy khi còn một run `triage` ghi `escalate`).
+case("022 · suggested_action = 'escalate' (tên cũ của ①) không còn vào được",
+     "ck_llm_runs_suggested_action",
+     LR("00000000-0000-4000-8000-00000000aa04","triage","alert",
+        """'{\"suggested_action\":\"escalate\"}'::jsonb"""))
+case("022 · suggested_action = 'true_positive ' (thừa một dấu cách) không vào được",
+     "ck_llm_runs_suggested_action",
+     LR("00000000-0000-4000-8000-00000000aa05","triage","alert",
+        """'{\"suggested_action\":\"true_positive \"}'::jsonb"""))
 case("P7 · suggested_conclusion ngoài tập bốn giá trị",
      "ck_llm_runs_suggested_conclusion",
      LR("00000000-0000-4000-8000-00000000aa03","investigate","case",
@@ -314,6 +325,12 @@ POSITIVE = [
     ("P5-5 · suggested_action='needs_review' (giá trị hợp lệ)",
      LR("00000000-0000-4000-8000-00000000bb01","triage","alert",
         """'{\"suggested_action\":\"needs_review\"}'::jsonb""")),
+    ("022 · suggested_action='true_positive' (tên mới của ①)",
+     LR("00000000-0000-4000-8000-00000000bb03","triage","alert",
+        """'{\"suggested_action\":\"true_positive\"}'::jsonb""")),
+    ("022 · suggested_action='false_positive' vẫn hợp lệ sau khi siết tập",
+     LR("00000000-0000-4000-8000-00000000bb04","triage","alert",
+        """'{\"suggested_action\":\"false_positive\"}'::jsonb""")),
     ("T6 · llm_runs ghi được cả ca model hỏng (result NULL)",
      LR("00000000-0000-4000-8000-00000000bb02","triage","alert","NULL")),
 ]

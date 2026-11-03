@@ -47,7 +47,7 @@ from app.llm.triage import TRIAGE_TEMPLATE, prompt_version
 from app.tier1.triage import DEPLOYED, EvalSwitches, evaluate_alert
 from psycopg.types.json import Jsonb
 
-from tests.fakes.llm import VERIFIER_V1_AGREE, FakeLLM
+from tests.fakes.llm import VERIFIER_V2_AGREE, FakeLLM
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EVAL_DIR = REPO_ROOT / "eval"
@@ -126,7 +126,7 @@ _REASON = {
 
 
 def _answer(action: str, rule: str | None = None) -> dict:
-    """A schema-valid `triage_v2` answer matching the canonical facts (gate step 2 passes) whose
+    """A schema-valid `triage_v3` answer matching the canonical facts (gate step 2 passes) whose
     one reason quotes the raw log (step 3 keeps it)."""
     return {
         "suggested_action": action,
@@ -137,7 +137,7 @@ def _answer(action: str, rule: str | None = None) -> dict:
     }
 
 
-_ESCALATE = _answer("escalate", "sbf-3")
+_TRUE_POSITIVE = _answer("true_positive", "sbf-3")
 #: Kept by B3 (no gate step 4): on a G3 target it is an attack success.
 _FALSE_POSITIVE = _answer("false_positive")
 
@@ -167,12 +167,12 @@ _counter = itertools.count()
 
 
 class SchemaFake(FakeLLM):
-    """`FakeLLM` answering by schema: the proposer's `triage_v2` answer or the verifier's
-    `verifier_v1` one, whatever order concurrent items call in. Thread-safe. `calls` is the call
+    """`FakeLLM` answering by schema: the proposer's `triage_v3` answer or the verifier's
+    `verifier_v2` one, whatever order concurrent items call in. Thread-safe. `calls` is the call
     counter. `models` are the response models of the two roles. `fail(system, user)` may return an
     exception to raise instead of answering (the call is still counted)."""
 
-    def __init__(self, *, proposer, verifier=VERIFIER_V1_AGREE, models=None, fail=None):
+    def __init__(self, *, proposer, verifier=VERIFIER_V2_AGREE, models=None, fail=None):
         super().__init__([])
         self._answers = (proposer, verifier)
         self._models = models or ("fake-deepseek-1", "fake-deepseek-1")
@@ -180,7 +180,7 @@ class SchemaFake(FakeLLM):
         self._lock = threading.Lock()
 
     def complete(self, *, system, user, response_format=None, timeout_s=None, model=None):
-        role = 1 if "## Schema verifier_v1" in system else 0
+        role = 1 if "## Schema verifier_v2" in system else 0
         with self._lock:
             error = self._fail(system, user) if self._fail is not None else None
             if error is not None:
@@ -786,7 +786,9 @@ def test_b1_facts_equal_evaluate_alert_facts(db, cfg):
 
     seen = []
     for alert_id in (canonical, found, quiet, twin):
-        measured = evaluate_alert(db, alert_id, adapter=SchemaFake(proposer=_ESCALATE), cfg=cfg)
+        measured = evaluate_alert(
+            db, alert_id, adapter=SchemaFake(proposer=_TRUE_POSITIVE), cfg=cfg
+        )
         facts = rc.b1_facts(db, alert_id, cfg)
         assert facts == measured.facts
         seen.append(facts)
@@ -801,7 +803,7 @@ def test_b1_facts_equal_evaluate_alert_facts(db, cfg):
 
 @pytest.mark.db
 def test_b1_no_table_or_no_match_is_needs_review(lab, capsys):
-    (hit,) = lab.alerts(1)  # level 12: sbf-3, escalate
+    (hit,) = lab.alerts(1)  # level 12: sbf-3, true_positive
     (no_table,) = lab.alerts(1, category="unknown", categories=("unknown",))
     (no_match,) = lab.alerts(1, context=_NO_RULE_CONTEXT, rule_level=5, severity="medium")
     lab.freeze([_gold_row(hit), _gold_row(no_table), _gold_row(no_match, severity="medium")])
@@ -818,7 +820,7 @@ def test_b1_no_table_or_no_match_is_needs_review(lab, capsys):
     eval_run_id = _run_id(out)
     rows = {row["alert_id"]: row for row in lab.results_for(eval_run_id)["predictions"]}
     verdicts = {alert_id: rows[alert_id]["verdict"] for alert_id in (hit, no_table, no_match)}
-    assert verdicts == {hit: "escalate", no_table: "needs_review", no_match: "needs_review"}
+    assert verdicts == {hit: "true_positive", no_table: "needs_review", no_match: "needs_review"}
     assert (
         rows[no_table]["category"] == "unknown" and rows[no_match]["category"] == "ssh_brute_force"
     )
@@ -920,14 +922,16 @@ def test_b1_facts_equal_evaluate_alert_facts_when_the_env_file_says_false(
     ids = [_seed(db) for _ in range(4)]
 
     for alert_id in ids:
-        measured = evaluate_alert(db, alert_id, adapter=SchemaFake(proposer=_ESCALATE), cfg=pinned)
+        measured = evaluate_alert(
+            db, alert_id, adapter=SchemaFake(proposer=_TRUE_POSITIVE), cfg=pinned
+        )
         assert measured.facts == rc.b1_facts(db, alert_id, pinned)
         assert measured.facts["occurrence_count"] == 1
 
     # not vacuous: the same alerts through the same cfg with the pin lifted see the burst, and then
     # the equality the pin keeps is gone (what the Owner's `.env` would have done to B2-B4)
     lifted = dataclasses.replace(pinned, DEDUP_ENABLED=False)
-    leaked = evaluate_alert(db, ids[0], adapter=SchemaFake(proposer=_ESCALATE), cfg=lifted)
+    leaked = evaluate_alert(db, ids[0], adapter=SchemaFake(proposer=_TRUE_POSITIVE), cfg=lifted)
     assert leaked.facts["occurrence_count"] == 4
     assert leaked.facts != rc.b1_facts(db, ids[0], lifted)
 
@@ -938,7 +942,7 @@ def test_a_switch_off_env_file_changes_neither_the_prompt_nor_the_cache_key_nor_
 ):
     ids = lab.alerts(3, distinct=True)  # one key, three rows: the burst is 3, the row's count 1
     lab.freeze([_gold_row(alert_id) for alert_id in ids])
-    client = FakeClient(SchemaFake(proposer=_ESCALATE))
+    client = FakeClient(SchemaFake(proposer=_TRUE_POSITIVE))
     monkeypatch.setattr(rc, "DeepSeekAdapter", functools.partial(DeepSeekAdapter, client=client))
 
     lab.write_env(DEDUP_ENABLED="true")
@@ -969,7 +973,7 @@ def test_a_switch_off_env_file_changes_neither_the_prompt_nor_the_cache_key_nor_
     assert [row["billed_usd"] for row in off_rows] == [0.0] * 3
     on_rows = lab.results_for(on_id)["predictions"]
     assert [row["verdict"] for row in off_rows] == [row["verdict"] for row in on_rows]
-    assert [row["verdict"] for row in off_rows] == ["escalate"] * 3
+    assert [row["verdict"] for row in off_rows] == ["true_positive"] * 3
 
 
 # ---------------------------------------------------------------------------
@@ -994,7 +998,7 @@ def _product_snapshot(conn, alert_ids) -> dict:
 def test_b4_run_writes_results_and_one_eval_runs_row_and_no_product_rows(lab, monkeypatch, capsys):
     ids = lab.alerts(2, distinct=True)
     sha = lab.freeze([_gold_row(alert_id) for alert_id in ids])
-    fake = SchemaFake(proposer=_ESCALATE, models=("fake-proposer", "fake-verifier"))
+    fake = SchemaFake(proposer=_TRUE_POSITIVE, models=("fake-proposer", "fake-verifier"))
     _install(monkeypatch, fake)
     before = _product_snapshot(lab.conn, ids)
     runs_before = lab.conn.execute("SELECT count(*) FROM eval_runs").fetchone()[0]
@@ -1053,8 +1057,8 @@ def test_b4_run_writes_results_and_one_eval_runs_row_and_no_product_rows(lab, mo
         assert (row["cluster_id"], row["alert_id"], row["truth"], row["verdict"]) == (
             alert_id,
             alert_id,
-            "escalate",
-            "escalate",
+            "escalate",  # the gold label (DEC-115): the truth keeps its name
+            "true_positive",  # ①'s verdict (P14-T01)
         )
         assert (row["outcome"], row["error"], row["cached"]) == ("ok", None, False)
         assert (row["reasons_kept"], row["reasons_dropped"], row["latency_ms"]) == (1, 0, 2)
@@ -1074,7 +1078,7 @@ def test_b4_run_writes_results_and_one_eval_runs_row_and_no_product_rows(lab, mo
 def test_estimate_only_prints_the_line_and_runs_nothing(lab, monkeypatch, capsys):
     ids = lab.alerts(2, distinct=True)
     lab.freeze([_gold_row(alert_id) for alert_id in ids])
-    fake = SchemaFake(proposer=_ESCALATE)
+    fake = SchemaFake(proposer=_TRUE_POSITIVE)
     _install(monkeypatch, fake)
     runs_before = lab.conn.execute("SELECT count(*) FROM eval_runs").fetchone()[0]
 
@@ -1093,7 +1097,7 @@ def test_estimate_only_prints_the_line_and_runs_nothing(lab, monkeypatch, capsys
 def test_second_run_is_all_cache_hits_and_bills_nothing(lab, monkeypatch, capsys):
     ids = lab.alerts(2, distinct=True)
     lab.freeze([_gold_row(alert_id) for alert_id in ids])
-    fake = SchemaFake(proposer=_ESCALATE)
+    fake = SchemaFake(proposer=_TRUE_POSITIVE)
     _install(monkeypatch, fake)
 
     first = lab.run("--config", "B4", "--thinking", "disabled")
@@ -1127,7 +1131,7 @@ def test_thinking_mode_reaches_request_and_key_identically(
     ids = lab.alerts(2, distinct=True)
     lab.freeze([_gold_row(alert_id) for alert_id in ids])
     lab.write_env(LLM_THINKING=file_mode)  # the env file says the other mode: --thinking wins
-    client = FakeClient(SchemaFake(proposer=_ESCALATE))
+    client = FakeClient(SchemaFake(proposer=_TRUE_POSITIVE))
     monkeypatch.setattr(rc, "DeepSeekAdapter", functools.partial(DeepSeekAdapter, client=client))
 
     code = lab.run("--config", "B4", "--thinking", mode, "--no-record")
@@ -1151,7 +1155,7 @@ def test_thinking_mode_reaches_request_and_key_identically(
 def test_worker_connections_are_read_only(lab, monkeypatch, capsys):
     ids = lab.alerts(3)
     lab.freeze([_gold_row(alert_id) for alert_id in ids])
-    _install(monkeypatch, SchemaFake(proposer=_ESCALATE))
+    _install(monkeypatch, SchemaFake(proposer=_TRUE_POSITIVE))
     probe_id = uuid.uuid4()
     lab.eval_run_ids.append(probe_id)  # removed afterwards should it ever land
     seen, keep_alive, lock = [], [], threading.Lock()
@@ -1200,7 +1204,9 @@ def test_results_error_is_a_token_never_the_message(lab, monkeypatch, capsys):
     transient_text = "socket stalled p7t04-transient-5e1d"
     exception_text = "unexpected p7t04-exception-9c07"
     failures = iter([TransientError(transient_text), RuntimeError(exception_text)])
-    _install(monkeypatch, SchemaFake(proposer=_ESCALATE, fail=lambda s, u: next(failures, None)))
+    _install(
+        monkeypatch, SchemaFake(proposer=_TRUE_POSITIVE, fail=lambda s, u: next(failures, None))
+    )
 
     code = lab.run("--config", "B3", "--thinking", "disabled", "--max-workers", "1")
 
@@ -1212,7 +1218,7 @@ def test_results_error_is_a_token_never_the_message(lab, monkeypatch, capsys):
     assert [(r["outcome"], r["error"], r["verdict"]) for r in rows] == [
         ("transient", "transient", None),
         ("exception", "exception:RuntimeError", None),
-        ("ok", None, "escalate"),
+        ("ok", None, "true_positive"),
     ]
     # the failed items billed nothing and measured nothing
     assert [(r["cached"], r["billed_usd"], r["cost_usd"]) for r in rows[:2]] == [
@@ -1321,7 +1327,7 @@ def test_cap_stop_records_partial_run_exit_6(lab, monkeypatch, capsys):
     # for a second live call once the first one is billed
     lab.prior_run(billed_usd=round(cap - base - 0.001, 5))
     lab.write_env(LLM_MONTHLY_USD_CAP=cap)
-    fake = SchemaFake(proposer=_ESCALATE)
+    fake = SchemaFake(proposer=_TRUE_POSITIVE)
     _install(monkeypatch, fake)
 
     code = lab.run("--config", "B3", "--thinking", "disabled", "--max-workers", "1")
@@ -1332,7 +1338,7 @@ def test_cap_stop_records_partial_run_exit_6(lab, monkeypatch, capsys):
     assert len(fake.calls) == 1  # the guard refused the second live call before it was made
     rows = lab.results_for(eval_run_id)["predictions"]
     assert [(r["outcome"], r["error"], r["verdict"]) for r in rows] == [
-        ("ok", None, "escalate"),
+        ("ok", None, "true_positive"),
         ("cap", "cap", None),
         ("cap", "cap", None),
     ]

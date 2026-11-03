@@ -8,8 +8,11 @@ from tests.fakes.llm import (
     INVESTIGATE_V2_OK,
     TRIAGE_V2_ESCALATE,
     TRIAGE_V2_FALSE_POSITIVE,
+    TRIAGE_V3_TRUE_POSITIVE,
     VERIFIER_V1_AGREE,
     VERIFIER_V1_DISAGREE,
+    VERIFIER_V2_AGREE,
+    VERIFIER_V2_DISAGREE,
     FakeLLM,
 )
 
@@ -135,8 +138,11 @@ def test_complete_never_touches_network_or_sleeps():
     [
         (TRIAGE_V2_ESCALATE, TRIAGE_V2_KEYS),
         (TRIAGE_V2_FALSE_POSITIVE, TRIAGE_V2_KEYS),
+        (TRIAGE_V3_TRUE_POSITIVE, TRIAGE_V2_KEYS),
         (VERIFIER_V1_AGREE, VERIFIER_V1_KEYS),
         (VERIFIER_V1_DISAGREE, VERIFIER_V1_KEYS),
+        (VERIFIER_V2_AGREE, VERIFIER_V1_KEYS),
+        (VERIFIER_V2_DISAGREE, VERIFIER_V1_KEYS),
         (INVESTIGATE_V2_OK, INVESTIGATE_V2_KEYS),
     ],
 )
@@ -173,3 +179,21 @@ def test_triage_v2_escalate_quote_is_substring_of_fixture_full_log():
     quote = TRIAGE_V2_ESCALATE["reasons"][0]["quote"]
 
     assert quote in full_log
+
+
+def test_triage_v3_true_positive_is_the_escalate_payload_under_its_new_name():
+    """P14-T01 (DEC-213): ① renamed its `escalate` to `true_positive`; nothing else about the
+    canonical answer moved, so every test that ran on the old payload runs on the same alert."""
+    assert TRIAGE_V3_TRUE_POSITIVE["suggested_action"] == "true_positive"
+    assert {k: v for k, v in TRIAGE_V3_TRUE_POSITIVE.items() if k != "suggested_action"} == {
+        k: v for k, v in TRIAGE_V2_ESCALATE.items() if k != "suggested_action"
+    }
+    assert TRIAGE_V2_ESCALATE["suggested_action"] == "escalate"  # the `triage_v2` payload stays
+
+
+def test_verifier_v2_payloads_use_the_gated_vocabulary():
+    assert VERIFIER_V2_AGREE["agree"] is True
+    assert VERIFIER_V2_AGREE["structured_only_verdict"] == "true_positive"
+    assert VERIFIER_V2_DISAGREE["agree"] is False
+    assert VERIFIER_V2_DISAGREE["structured_only_verdict"] == "needs_review"
+    assert VERIFIER_V1_AGREE["structured_only_verdict"] == "escalate"  # `verifier_v1` stays

@@ -4,6 +4,7 @@ Do not import backend/app/** here: this is a test double, not an implementation.
 Canned payloads match context pack §6.2 (LLM output schemas) key-for-key.
 """
 
+import copy
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -133,6 +134,19 @@ VERIFIER_V1_DISAGREE = {
     "structured_only_verdict": "needs_review",
     "reason": "Structured facts do not satisfy any decision-table rule condition for the proposed verdict.",
 }
+
+# P14-T01 (DEC-213): ①'s model answer is `false_positive | true_positive` (`triage_v3`) and the
+# verifier's is `false_positive | needs_review | true_positive` (`verifier_v2`). The payloads above
+# stay: `triage_v2` and `verifier_v1` are still in `output_schemas.json` for `eval/`.
+TRIAGE_V3_TRUE_POSITIVE = {**copy.deepcopy(TRIAGE_V2_ESCALATE), "suggested_action": "true_positive"}
+
+VERIFIER_V2_AGREE = {
+    "agree": True,
+    "structured_only_verdict": "true_positive",
+    "reason": "Structured facts alone (critical severity, sbf-3 rule condition) already justify true_positive.",
+}
+
+VERIFIER_V2_DISAGREE = copy.deepcopy(VERIFIER_V1_DISAGREE)
 
 INVESTIGATE_V2_OK = {
     "summary": "Repeated SSH authentication failures from 127.0.0.1 against user1 culminated in a successful login.",

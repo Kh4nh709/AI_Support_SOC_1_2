@@ -19,9 +19,34 @@
     ],
     "playbook_used": "string|null"
   },
+  "triage_v3": {
+    "suggested_action": "false_positive|true_positive",
+    "confidence": "low|medium|high",
+    "structured_basis": {
+      "severity": "critical|high|medium|low",
+      "ioc_reputation": "malicious|suspicious|clean|not_found|skipped",
+      "asset_criticality": "high|medium|low|unknown",
+      "identity_privileged": "true|false|unknown",
+      "occurrence_count": 0,
+      "playbook_rule_applied": "string|null"
+    },
+    "reasons": [
+      {
+        "claim": "string",
+        "quote": "verbatim substring of one block",
+        "source": "wazuh_raw_log|rule_description|correlation_samples|kb_playbook|context|siem_context"
+      }
+    ],
+    "playbook_used": "string|null"
+  },
   "verifier_v1": {
     "agree": true,
     "structured_only_verdict": "false_positive|needs_review|escalate",
+    "reason": "string"
+  },
+  "verifier_v2": {
+    "agree": true,
+    "structured_only_verdict": "false_positive|needs_review|true_positive",
     "reason": "string"
   },
   "investigate_v2": {

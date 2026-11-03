@@ -82,8 +82,9 @@ def _constraint_names(db, name: str) -> list[str]:
     return re.findall(r"'([^']+)'::text", definition)
 
 
-def _migrate(dsn, mig_dir) -> str:
-    run = subprocess.run(
+def _migrate_run(dsn, mig_dir) -> subprocess.CompletedProcess:
+    """`scripts/migrate.sh` over `mig_dir`, whatever it exits with (a refusal is a test's subject)."""
+    return subprocess.run(
         ["bash", "scripts/migrate.sh", str(dsn)],
         cwd=conftest.REPO_ROOT,
         env={**os.environ, "MIGRATIONS_DIR": str(mig_dir)},
@@ -91,6 +92,10 @@ def _migrate(dsn, mig_dir) -> str:
         text=True,
         check=False,
     )
+
+
+def _migrate(dsn, mig_dir) -> str:
+    run = _migrate_run(dsn, mig_dir)
     if run.returncode != 0:
         pytest.fail(f"migrate.sh exit {run.returncode}:\n{run.stderr}")
     return run.stdout
@@ -357,13 +362,15 @@ def test_021_applies_on_a_database_at_020_the_way_make_migrate_runs_it(tmp_path)
     if shutil.which("psql") is None:
         pytest.skip("psql is not installed")
     at_020 = _schema_tree_through(20, tmp_path)
-    stems = {path.stem for path in SCHEMA_DIR.glob(MIGRATION_FILES)}
+    through_021 = _schema_tree_through(21, tmp_path)  # 022 comes after 021
+    stems = {path.stem for path in SCHEMA_DIR.glob(MIGRATION_FILES) if int(path.name[:3]) <= 21}
     total = len(stems)
     before = len(list(at_020.glob(MIGRATION_FILES)))
-    # 021 is no longer the last migration (023, P14-T04, follows it): the tree at 020 is every file
-    # below 21, and the real `migrate.sh` applies 021 and whatever comes after it.
-    after = total - before
-    assert before == len({s for s in stems if int(s[:3]) < 21}) and after >= 1
+    # 021 is no longer the last migration (022 and 023 follow it): the tree at 020 is every file below
+    # 21, the tree through 021 every file below 22, and the real `migrate.sh` applies the second to the
+    # first, so this test pins 021 alone whatever comes after it.
+    assert before == total - 1 == len({s for s in stems if int(s[:3]) < 21})
+    assert len(list(through_021.glob(MIGRATION_FILES))) == total
 
     dbname = f"{conftest._dbname(session)}_021up_test"
     dsn = _with_db(session, dbname)
@@ -371,11 +378,11 @@ def test_021_applies_on_a_database_at_020_the_way_make_migrate_runs_it(tmp_path)
     try:
         admin.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(dbname)))
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(dbname)))
-        runs = [_migrate(dsn, mig_dir) for mig_dir in (at_020, SCHEMA_DIR, SCHEMA_DIR)]
+        runs = [_migrate(dsn, mig_dir) for mig_dir in (at_020, through_021, through_021)]
         assert "021_archive" not in runs[0]
         assert f"migrate: 0 applied, {before} already present" in runs[0]
         assert "migrate: applying 021_archive" in runs[1]
-        assert f"migrate: {after} applied, {before} already present" in runs[1]
+        assert f"migrate: 1 applied, {before} already present" in runs[1]
         assert f"migrate: 0 applied, {total} already present" in runs[2]
         assert "migrate: applying" not in runs[2]
         with psycopg.connect(dsn) as conn:
@@ -388,8 +395,7 @@ def test_021_applies_on_a_database_at_020_the_way_make_migrate_runs_it(tmp_path)
                     "WHERE conname = 'ck_audit_event_type'"
                 ).fetchone()[0],
             )
-            # the real migrate.sh applied every file above 020: 024's two names follow 021's
-            assert names == EVENTS_BEFORE_021 + EVENTS_IN_021 + ["lab.run_created", "lab.labeled"]
+            assert names == EVENTS_BEFORE_021 + EVENTS_IN_021
             conn.execute(
                 "INSERT INTO audit_events (event_type, subject_id, actor_role) "
                 "VALUES ('alert.archived', 'mig21-up', 'system')"

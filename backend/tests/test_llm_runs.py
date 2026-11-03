@@ -27,8 +27,8 @@ def _write(conn, **overrides) -> uuid.UUID:
         "subject_id": "write-run-1",
         "system_prompt": "System prompt names JSON.",
         "user_message": "User message.",
-        "result": {"suggested_action": "escalate", "confidence": "high"},
-        "gate_result": {"version": 1, "final_verdict": "escalate"},
+        "result": {"suggested_action": "true_positive", "confidence": "high"},
+        "gate_result": {"version": 1, "final_verdict": "true_positive"},
         "verifier_result": {"agree": True},
         "injection_findings": [{"category": "instruction_override"}],
         "citation_warnings": ["no_playbook"],
@@ -70,8 +70,8 @@ def test_write_run_reads_back_every_column(db):
     assert row["system_prompt"] == "System prompt names JSON."
     assert row["user_message"] == "User message."
     assert row["agent_trace"] is None
-    assert row["result"] == {"suggested_action": "escalate", "confidence": "high"}
-    assert row["gate_result"] == {"version": 1, "final_verdict": "escalate"}
+    assert row["result"] == {"suggested_action": "true_positive", "confidence": "high"}
+    assert row["gate_result"] == {"version": 1, "final_verdict": "true_positive"}
     assert row["verifier_result"] == {"agree": True}
     assert row["evidence_check"] is None
     assert row["injection_findings"] == [{"category": "instruction_override"}]

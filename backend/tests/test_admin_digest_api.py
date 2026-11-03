@@ -368,7 +368,7 @@ def test_get_answers_the_documented_shape_and_every_row_key(client, monkeypatch)
     disagrees = _alert(db, autoclose_rule_id=rule_id, occurrence_count=2, severity="low")
     no_run = _alert(db, autoclose_rule_id=rule_id, occurrence_count=5)
     _run(db, agrees, "false_positive")
-    _run(db, disagrees, "escalate")
+    _run(db, disagrees, "true_positive")
 
     resp = _get(tc)
 
@@ -389,7 +389,7 @@ def test_get_answers_the_documented_shape_and_every_row_key(client, monkeypatch)
     assert first["description"] == "SSH brute force" and first["category"] == "brute_force"
     assert first["agent_name"] == "host-1" and first["occurrence_count"] == 2
     assert first["autoclose_rule_id"] == rule_id and first["autoclose_rule_name"] == "known-scanner"
-    assert first["suggested_action"] == "escalate" and first["disagreement"] is True
+    assert first["suggested_action"] == "true_positive" and first["disagreement"] is True
     assert body["rows"][1]["suggested_action"] == "false_positive"
     assert body["rows"][1]["disagreement"] is False
     assert body["rows"][2]["suggested_action"] is None and body["rows"][2]["disagreement"] is False
@@ -726,7 +726,7 @@ def test_wrong_reopens_the_alert_and_the_row_still_describes_it(client) -> None:
     tc, db, admin = client
     rule_id = _rule(db, admin.user_id)
     alert_id = _alert(db, autoclose_rule_id=rule_id, occurrence_count=7, severity="critical")
-    _run(db, alert_id, "escalate")
+    _run(db, alert_id, "true_positive")
 
     resp = _post(tc, alert_id, "wrong")
 
@@ -737,7 +737,7 @@ def test_wrong_reopens_the_alert_and_the_row_still_describes_it(client) -> None:
     assert set(row) == ROW_KEYS
     assert row["alert_id"] == alert_id and row["occurrence_count"] == 7
     assert row["severity"] == "critical" and row["autoclose_rule_name"] == "known-scanner"
-    assert row["suggested_action"] == "escalate" and row["disagreement"] is True
+    assert row["suggested_action"] == "true_positive" and row["disagreement"] is True
     assert row["reviewed_verdict"] == "wrong" and row["reviewed_by_name"] == "Alice Admin"
     ((_, _, reviewed_at),) = _review_rows(db, alert_id)
     assert datetime.fromisoformat(row["reviewed_at"]) == reviewed_at
@@ -1037,7 +1037,7 @@ def test_a_row_reopened_by_a_digest_review_is_listed_whatever_became_of_it_since
 
 
 def _blind_sai(
-    db: Any, admin_id: str, *, occurrence_count: int, suggested: str = "escalate"
+    db: Any, admin_id: str, *, occurrence_count: int, suggested: str = "true_positive"
 ) -> str:
     """A blind alert a rule auto-closed in `_DAY`, with ① run on it: not yet reviewed."""
     alert_id = _alert(
@@ -1060,7 +1060,7 @@ def test_a_blind_alert_shows_its_suggestion_while_it_is_auto_closed_and_not_afte
     tc, db, admin = client
     alert_id = _blind_sai(db, admin.user_id, occurrence_count=4)
     (before,) = _get(tc).json()["rows"]
-    assert before["suggested_action"] == "escalate" and before["disagreement"] is True
+    assert before["suggested_action"] == "true_positive" and before["disagreement"] is True
 
     posted = _post(tc, alert_id, "wrong")
 
@@ -1068,20 +1068,20 @@ def test_a_blind_alert_shows_its_suggestion_while_it_is_auto_closed_and_not_afte
     row = posted.json()["row"]
     assert row["suggested_action"] is None and row["disagreement"] is False
     assert row["reopened_by_review"] is True and row["reviewed_verdict"] == "wrong"
-    assert "escalate" not in posted.text
+    assert "true_positive" not in posted.text
     for _refetch in range(2):
         resp = _get(tc)
-        assert resp.json()["rows"] == [row] and "escalate" not in resp.text
+        assert resp.json()["rows"] == [row] and "true_positive" not in resp.text
 
 
 @pytest.mark.db
 def test_a_reopened_row_on_the_visible_arm_keeps_its_suggestion(client) -> None:
     tc, db, admin = client
     alert_id = _alert(db, autoclose_rule_id=_rule(db, admin.user_id), suggestion_visible=True)
-    _run(db, alert_id, "escalate")
-    assert _post(tc, alert_id, "wrong").json()["row"]["suggested_action"] == "escalate"
+    _run(db, alert_id, "true_positive")
+    assert _post(tc, alert_id, "wrong").json()["row"]["suggested_action"] == "true_positive"
     (row,) = _get(tc).json()["rows"]
-    assert row["suggested_action"] == "escalate" and row["disagreement"] is True
+    assert row["suggested_action"] == "true_positive" and row["disagreement"] is True
 
 
 @pytest.mark.db
@@ -1100,7 +1100,7 @@ def test_a_blind_reopened_row_shows_its_suggestion_again_once_it_is_decided(
 
     (row,) = _get(tc).json()["rows"]
 
-    assert row["suggested_action"] == "escalate" and row["disagreement"] is True
+    assert row["suggested_action"] == "true_positive" and row["disagreement"] is True
 
 
 @pytest.mark.db
@@ -1124,7 +1124,7 @@ def test_a_withheld_row_does_not_sort_as_a_disagreement(client) -> None:
     tc, db, admin = client
     rule_id = _rule(db, admin.user_id)
     visible = _alert(db, autoclose_rule_id=rule_id, occurrence_count=1)
-    _run(db, visible, "escalate")
+    _run(db, visible, "true_positive")
     agreeing = _alert(db, autoclose_rule_id=rule_id, occurrence_count=5)
     _run(db, agreeing, "false_positive")
     blind = _blind_sai(db, admin.user_id, occurrence_count=50)
@@ -1142,7 +1142,7 @@ def test_the_suggestion_of_a_withheld_row_is_never_read(client, monkeypatch) -> 
     blind = _blind_sai(db, admin.user_id, occurrence_count=2)
     assert _post(tc, blind, "wrong").status_code == 200
     shown = _alert(db, autoclose_rule_id=_rule(db, admin.user_id), suggestion_visible=True)
-    _run(db, shown, "escalate")
+    _run(db, shown, "true_positive")
     assert _post(tc, shown, "wrong").status_code == 200
     asked: list[list[str]] = []
     real = digest.latest_suggestions
@@ -1180,7 +1180,7 @@ def test_the_snapshot_row_of_a_post_is_withheld_when_the_alert_went_blind_in_bet
     assert resp.status_code == 200, resp.text[:300]
     row = resp.json()["row"]
     assert row["suggested_action"] is None and row["disagreement"] is False
-    assert "escalate" not in resp.text
+    assert "true_positive" not in resp.text
 
 
 @pytest.mark.db
@@ -1189,7 +1189,7 @@ def test_the_snapshot_row_of_a_post_keeps_its_suggestion_on_the_visible_arm(
 ) -> None:
     tc, db, admin = client
     alert_id = _alert(db, autoclose_rule_id=_rule(db, admin.user_id), suggestion_visible=True)
-    _run(db, alert_id, "escalate")
+    _run(db, alert_id, "true_positive")
 
     def reopened_meanwhile(*_a: Any, **_k: Any) -> list:
         transitions.reopen(db, alert_id, admin.user_id, reason="meanwhile")
@@ -1199,7 +1199,7 @@ def test_the_snapshot_row_of_a_post_keeps_its_suggestion_on_the_visible_arm(
 
     row = _post(tc, alert_id, "correct").json()["row"]
 
-    assert row["suggested_action"] == "escalate" and row["disagreement"] is True
+    assert row["suggested_action"] == "true_positive" and row["disagreement"] is True
 
 
 @pytest.mark.db
@@ -1297,13 +1297,13 @@ def test_build_with_an_alert_id_reads_only_that_alert_and_without_one_reads_the_
     _tc, db, _ = client
     a, b, c = _alert(db), _alert(db), _alert(db, closed_at=_OTHER_DAY)
     for alert_id in (a, b, c):
-        _run(db, alert_id, "escalate")
+        _run(db, alert_id, "true_positive")
     assert {r.alert_id for r in digest.build(db, _DAY, tz=TZ)} == {a, b}
     assert [r.alert_id for r in digest.build(db, _DAY, tz=TZ, alert_id=a)] == [a]
     assert digest.build(db, _DAY, tz=TZ, alert_id=c) == []  # not closed on that day
     assert digest.build(db, _DAY, tz=TZ, alert_id="no-such-alert") == []
     (one,) = digest.build(db, _DAY, tz=TZ, alert_id=b)
-    assert one.suggested_action == "escalate" and one.disagreement is True
+    assert one.suggested_action == "true_positive" and one.disagreement is True
 
 
 @pytest.mark.db
@@ -1360,7 +1360,7 @@ def test_build_and_reopened_by_review_cost_two_statements_however_big_the_day(cl
         for i in range(rows):
             alert_id = _alert(db, closed_at=at, autoclose_rule_id=rule_id, occurrence_count=i + 1)
             if i % 3 != 2:  # a third of the rows have no ① run yet
-                _run(db, alert_id, "false_positive" if i % 3 == 0 else "escalate")
+                _run(db, alert_id, "false_positive" if i % 3 == 0 else "true_positive")
         for _ in range(sai):
             alert_id = _alert(db, closed_at=at, autoclose_rule_id=rule_id)
             digest.review(db, alert_id, "wrong", admin.user_id)
@@ -1403,9 +1403,9 @@ def test_the_digest_rows_read_the_suggestion_exactly_as_latest_suggestion_does(c
     day_at = datetime.fromisoformat("2026-09-25T12:00:00+07:00")
     no_run = _alert(db, closed_at=day_at, autoclose_rule_id=rule_id, occurrence_count=1)
     good = _alert(db, closed_at=day_at, autoclose_rule_id=rule_id, occurrence_count=2)
-    _run(db, good, "escalate")
+    _run(db, good, "true_positive")
     failed_last = _alert(db, closed_at=day_at, autoclose_rule_id=rule_id, occurrence_count=3)
-    _run(db, failed_last, "escalate")
+    _run(db, failed_last, "true_positive")
     db.execute(
         "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, system_prompt,"
         " user_message, result, role, gate_result, stopped_by, created_at)"
@@ -1428,9 +1428,9 @@ def test_the_digest_rows_read_the_suggestion_exactly_as_latest_suggestion_does(c
         assert row.suggested_action == expected, row.alert_id
         assert row.disagreement == (reference is not None and expected != "false_positive")
     by_id = {r.alert_id: r for r in rows}
-    assert by_id[good].suggested_action == "escalate" and by_id[good].disagreement is True
+    assert by_id[good].suggested_action == "true_positive" and by_id[good].disagreement is True
     assert by_id[no_run].suggested_action is None and by_id[no_run].disagreement is False
-    assert by_id[failed_last].suggested_action is None  # not the older run's "escalate"
+    assert by_id[failed_last].suggested_action is None  # not the older run's "true_positive"
     assert by_id[sai].suggested_action == "needs_review"
 
 
@@ -1477,7 +1477,7 @@ def test_a_run_that_lands_before_the_review_is_in_the_200s_row_not_only_the_snap
     real_review = digest.review
 
     def review_after_a_run(conn, alert, verdict_, reviewer_id):
-        _run(conn, alert, "escalate")  # lands after the route's first read, before the review
+        _run(conn, alert, "true_positive")  # lands after the route's first read, before the review
         return real_review(conn, alert, verdict_, reviewer_id)
 
     monkeypatch.setattr(digest, "review", review_after_a_run)
@@ -1486,7 +1486,7 @@ def test_a_run_that_lands_before_the_review_is_in_the_200s_row_not_only_the_snap
 
     assert resp.status_code == 200, resp.text[:300]
     row = resp.json()["row"]
-    assert row["suggested_action"] == "escalate" and row["disagreement"] is True
+    assert row["suggested_action"] == "true_positive" and row["disagreement"] is True
     assert row["reviewed_verdict"] == verdict
     assert _get(tc).json()["rows"] == [row]  # the 200 is the list's row
 
