@@ -262,7 +262,7 @@ This replaces `candidates()` + `rank()`. Everything before it (archived, late, b
 
 | Key | Default | Meaning |
 |---|---|---|
-| `VOYAGE_API_KEY` | empty | Empty means the lookup is skipped, as with no model (G7). |
+| `VOYAGE_API_KEY` | empty | Empty with the RAG on means the lookup is `failed` / `auth`, sending no request, and the UI says so (5.3). *Ruled 04/11 after the T04 review:* this follows the Owner's "báo thông báo lỗi". It was "skipped, as with no model". |
 | `VOYAGE_BASE_URL` | `https://api.voyageai.com/v1` | |
 | `RAG_EMBED_MODEL` | `voyage-4` | Documented multilingual. Entries are Vietnamese; fingerprints are mostly English. |
 | `RAG_EMBED_DIMS` | `1024` | |
