@@ -34,7 +34,8 @@ ranker (Owner, 03/11). One lookup, in order:
    `result={"ranked": [...]}`, `model_id` `"<embedding model>+<rerank model>"`, both calls' tokens as
    `input_tokens` and `output_tokens=0`, and `cost_usd` at Voyage's prices, so `rag.budget` counts it. Its
    `gate_result` holds `integrity_failed` (the entries dropped at 4), `vector_hits` and `candidates` (the
-   number sent to the rerank). Every lookup that called Voyage has one run row, whatever its outcome.
+   number sent to the rerank). Every lookup that sent a request has one run row, whatever its outcome; one
+   that sent none (an empty `VOYAGE_API_KEY`) has none, its `failed` row and event are its record.
 
 The outcomes (`rag_results.status`): `empty` (nothing to show, the first day); `ok` (a history, or matches);
 `budget` (a cap reached, before any call); `failed` with a closed `failure_kind` and the event
@@ -308,9 +309,11 @@ def _write_integrity_events(conn: psycopg.Connection, entry_ids: Sequence[str]) 
 
 @dataclass
 class _Attempt:
-    """What this attempt has paid for and found, kept outside the `try` so that a failure still has it: a
-    Voyage call that answered reports its tokens, one that failed reports none."""
+    """What this attempt has sent, paid for and found, kept outside the `try` so that a failure still has it: a
+    Voyage call that answered reports its tokens, one that failed reports none, and with no key there is no
+    request at all (`requested` False: nothing to record)."""
 
+    requested: bool = False
     embed_tokens: int = 0
     rerank_tokens: int = 0
     latency_ms: int = 0
@@ -417,6 +420,7 @@ def _candidates_of(
     main database, and merged with the database search. The schema is made when `vectordb` has none (a fresh
     volume, before the first approval): a search of a table that is not there would be a bug, not an
     unreachable server."""
+    attempt.requested = voyage.has_key(cfg)
     vectors, usage = voyage.embed([fp.text], input_type="query", cfg=cfg, client=client)
     attempt.embed_tokens = usage.total_tokens
     attempt.latency_ms += usage.latency_ms
@@ -532,15 +536,21 @@ def run_lookup_job(
                 conn.commit()
             raise TransientError(exc.kind) from None
         _write_integrity_events(conn, attempt.integrity_failed)
-        run_id = _record_run(
-            conn,
-            cfg,
-            subject,
-            fp,
-            attempt,
-            stopped_by=exc.kind,
-            ranked=None,
-            rag_lookup_id=lookup_id,
+        # No request, no run: an empty key is `failed` / `auth` in `rag_results` and its event, and not a
+        # null-result `llm_runs` row for a call that never happened (review I1)
+        run_id = (
+            _record_run(
+                conn,
+                cfg,
+                subject,
+                fp,
+                attempt,
+                stopped_by=exc.kind,
+                ranked=None,
+                rag_lookup_id=lookup_id,
+            )
+            if attempt.requested
+            else None
         )
         _store_failed(conn, lookup_id, subject, history, exc.kind, run_id)
         return

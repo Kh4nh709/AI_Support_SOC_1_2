@@ -503,6 +503,37 @@ def test_llm_null_ratio_zero_rows_is_ok_not_a_division_by_zero(db, tmp_path):
     assert check.value == 0.0
 
 
+@pytest.mark.db
+def test_llm_null_ratio_leaves_out_the_rag_lookups_runs_whatever_their_result(db, tmp_path):
+    """Review I1 (P14-T06): a failed lookup writes a `rag_lookup` run with a NULL result (Voyage or `vectordb`
+    was down), and DeepSeek is not. `rag_lookup_failures` owns that signal, so the "Model API down" ratio
+    neither counts those runs as nulls nor lets the good ones dilute the real failures."""
+    for _ in range(8):
+        _insert_rag_run(db, pipeline="rag_lookup", cost_usd="0.00001", result=None)
+    check = _run_check(db, tmp_path)["llm_null_ratio"]
+    assert check.ok is True and check.detail == "no llm_runs in the last hour"
+
+
+@pytest.mark.db
+def test_llm_null_ratio_is_not_diluted_by_good_rag_lookups(db, tmp_path):
+    recent = datetime.now(UTC) - timedelta(minutes=5)
+    _insert_llm_run(db, created_at=recent, result=None)  # the only run that counts, and it failed
+    for _ in range(20):
+        _insert_rag_run(db, pipeline="rag_lookup", cost_usd="0.00001", result={"ranked": []})
+    check = _run_check(db, tmp_path)["llm_null_ratio"]
+    assert check.ok is False and check.value == 100.0
+    assert check.detail == "1/1 llm_runs with a null result in the last hour"
+
+
+@pytest.mark.db
+def test_llm_null_ratio_still_counts_the_other_pipelines_runs_with_no_result(db, tmp_path):
+    recent = datetime.now(UTC) - timedelta(minutes=5)
+    _insert_rag_run(db, pipeline="knowledge_draft", cost_usd="0.001", result=None)
+    _insert_llm_run(db, created_at=recent, result=None)
+    check = _run_check(db, tmp_path)["llm_null_ratio"]
+    assert check.ok is False and check.detail == "2/2 llm_runs with a null result in the last hour"
+
+
 # 5 · triage_unavailable ---------------------------------------------------------
 
 
@@ -975,13 +1006,23 @@ def _insert_integrity_failure(
     )
 
 
-def _insert_rag_run(conn, *, pipeline: str, cost_usd: str, days_ago: float = 0) -> None:
+def _insert_rag_run(
+    conn, *, pipeline: str, cost_usd: str, days_ago: float = 0, result: dict | None = None
+) -> None:
     role = "retriever" if pipeline == "rag_lookup" else "drafter"
     conn.execute(
         "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, role, system_prompt,"
-        " user_message, cost_usd, created_at)"
-        " VALUES (%s, %s, 'alert', %s, %s, 's', 'u', %s, now() - (%s * interval '1 day'))",
-        (str(uuid.uuid4()), pipeline, f"rag-run-{next(_alert_seq)}", role, cost_usd, days_ago),
+        " user_message, cost_usd, result, created_at)"
+        " VALUES (%s, %s, 'alert', %s, %s, 's', 'u', %s, %s, now() - (%s * interval '1 day'))",
+        (
+            str(uuid.uuid4()),
+            pipeline,
+            f"rag-run-{next(_alert_seq)}",
+            role,
+            cost_usd,
+            None if result is None else Jsonb(result),
+            days_ago,
+        ),
     )
 
 

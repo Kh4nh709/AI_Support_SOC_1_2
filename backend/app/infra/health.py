@@ -194,9 +194,15 @@ def _check_job_backlog(conn: psycopg.Connection) -> CheckResult:
 
 
 def _check_llm_null_ratio(conn: psycopg.Connection) -> CheckResult:
+    """The share of the last hour's model runs with no result: "Model API down". `rag_lookup` runs are left
+    out (P14-T06, review I1): a lookup talks to Voyage and `vectordb`, not to the model, its failed runs have
+    a NULL result, and `rag_lookup_failures` owns that signal. Counted, they would raise this alarm in a
+    Voyage outage while DeepSeek is healthy, and its good runs would dilute a real DeepSeek outage.
+    """
     null_count, total = conn.execute(
         "SELECT count(*) FILTER (WHERE result IS NULL), count(*) "
-        "FROM llm_runs WHERE created_at > now() - interval '1 hour'"
+        "FROM llm_runs WHERE created_at > now() - interval '1 hour' "
+        "AND pipeline <> 'rag_lookup'"
     ).fetchone()
     if total == 0:
         return CheckResult(

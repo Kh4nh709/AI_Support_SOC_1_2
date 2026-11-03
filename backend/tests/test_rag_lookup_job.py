@@ -855,8 +855,10 @@ def failing_setup(db, kb_root) -> str:
     return entry(db, kb_root)
 
 
-def assert_failed(db, kind: str, *, tokens: int = 0) -> dict:
-    """The one `failed` lookup: the row, its kind, the event with its kind, and the run row."""
+def assert_failed(db, kind: str, *, tokens: int = 0, sent: bool = True) -> dict | None:
+    """The one `failed` lookup: the row, its kind, the event with its kind, and the run row. A lookup that
+    sent no request (an empty key) has no run row: `llm_run_id` is NULL and the table has nothing for it.
+    """
     row = result_of(db)
     assert row["status"] == "failed" and row["failure_kind"] == kind
     assert row["matches"] == [] and row["match_notes"] == {} and row["ranked"] is None
@@ -872,7 +874,11 @@ def assert_failed(db, kind: str, *, tokens: int = 0) -> dict:
     return run_row
 
 
-def test_an_empty_key_is_failed_auth_and_sends_nothing(db, kb_root, monkeypatch) -> None:
+def test_an_empty_key_is_failed_auth_sends_nothing_and_writes_no_run_row(
+    db, kb_root, monkeypatch
+) -> None:
+    """Nothing was sent, so there is nothing to record: the `failed` row and its event are the record, and
+    no `llm_runs` row (a null-result run of a pipeline that never ran) is added."""
     use_config(monkeypatch, VOYAGE_API_KEY="")
     failing_setup(db, kb_root)
     router = voyage_double()
@@ -888,6 +894,14 @@ def test_a_blank_key_is_the_same(db, kb_root, monkeypatch) -> None:
     router = voyage_double()
     run(db, "alert:ra-1", router)
     assert router.requests == []
+    assert_failed(db, "auth", sent=False)
+
+
+def test_a_key_that_is_refused_did_send_a_request_so_the_run_is_recorded(db, kb_root) -> None:
+    failing_setup(db, kb_root)
+    router = VoyageRouter({}, {}, embed_status=401)
+    run(db, "alert:ra-1", router)
+    assert len(router.requests) == 1
     assert_failed(db, "auth")
 
 
@@ -1068,6 +1082,35 @@ def test_one_lookup_is_one_embedding_and_one_rerank_and_no_retry_inside(db, kb_r
     router = voyage_double(db, {entry_id: 0.9})
     run(db, "alert:ra-1", router)
     assert router.paths == ["/embeddings", "/rerank"]
+
+
+def test_a_voyage_outage_alarms_rag_lookup_failures_and_leaves_llm_null_ratio_green(
+    db, kb_root, monkeypatch, tmp_path
+) -> None:
+    """Review I1: a failed lookup writes a `rag_lookup` run with a NULL result. `llm_null_ratio` is the
+    "Model API down" alarm for DeepSeek, so those rows must not feed it: a Voyage or `vectordb` outage with a
+    healthy DeepSeek alarms `rag_lookup_failures` and nothing else. Real failed lookups, run rows included,
+    go through `health.check`."""
+    from app.infra import health
+
+    from tests.test_health import _MORNING_UTC, _by_name, _clock_at, _fake_notify
+
+    _fake_notify(monkeypatch)
+    failing_setup(db, kb_root)
+    for number in range(2, 8):  # six more alerts, each one's lookup fails at the embedding
+        alert(db, f"ra-{number}")
+    for number in range(1, 7):
+        run(db, f"alert:ra-{number}", VoyageRouter({}, {}, embed_status=500))
+    assert db.execute(
+        "SELECT count(*) FROM llm_runs WHERE pipeline = 'rag_lookup' AND result IS NULL"
+    ).fetchone() == (6,)
+
+    report = health.check(db, JOB_CFG, clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
+
+    checks = _by_name(report)
+    assert checks["rag_lookup_failures"].ok is False and checks["rag_lookup_failures"].value == 6
+    assert checks["llm_null_ratio"].ok is True
+    assert checks["llm_null_ratio"].detail == "no llm_runs in the last hour"
 
 
 # ── what the job refuses ──────────────────────────────────────────────────────────────────────
