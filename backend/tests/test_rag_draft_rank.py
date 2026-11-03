@@ -1006,3 +1006,12 @@ def test_the_rag_package_holds_exactly_the_two_remaining_prompt_templates() -> N
 
 def test_schemas_json_holds_the_notes_the_draft_ranker_and_the_draft() -> None:
     assert set(agent.load_schemas()) == {"_description", "draft_rank_v1", "knowledge_draft_v1"}
+
+
+def test_the_draft_job_names_the_rank_template_for_what_it_is() -> None:
+    """P14-T06 review M9: the alias of `draft_rank.TEMPLATE_PATH` in `rag.draft` said `MATCH_...`, the name of
+    the lookup's ranker that no longer exists."""
+    from app.rag import draft
+
+    assert draft.DRAFT_RANK_TEMPLATE_PATH is draft_rank.TEMPLATE_PATH
+    assert not hasattr(draft, "MATCH_TEMPLATE_PATH")

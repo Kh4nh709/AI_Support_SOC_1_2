@@ -149,7 +149,7 @@ from app.rag.draft_rank import (
     rank,
     select_candidates,
 )
-from app.rag.draft_rank import TEMPLATE_PATH as MATCH_TEMPLATE_PATH
+from app.rag.draft_rank import TEMPLATE_PATH as DRAFT_RANK_TEMPLATE_PATH
 from app.rag.entries import KB_LEARNED_ROOT, Entry, enqueue_embed, file_matches, sha256_text
 from app.rag.fingerprint import Fingerprint, alert_fingerprint, case_fingerprint
 from app.rag.generalise import FINDING_NAMES, literal_findings, strip_placeholders
@@ -1096,7 +1096,7 @@ def run_draft_job(
                 rank_tape,
                 subject,
                 rank_findings,
-                MATCH_TEMPLATE_PATH,
+                DRAFT_RANK_TEMPLATE_PATH,
                 stopped_by=stopped_by,
                 gate_result=gate,
                 result=fields.pop("result", None),
