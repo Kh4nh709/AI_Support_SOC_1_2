@@ -22,13 +22,15 @@
 -- could not be rewritten here anyway.
 --
 -- THE REFUSAL. Nothing reads a stored ① `escalate` (Director ruling, DEC-213), so the `DO` block below
--- counts the `triage` runs that hold the old name ANYWHERE ①'s verdict is kept, and if there are any,
--- raises and stops: the wipe was skipped, or an alert arrived between the wipe and the deploy (Review
--- Focus 4). The four places are `result.suggested_action` (the stored answer, the only one the CHECK
--- judges), `result.structured_only_verdict` (the verifier's), `gate_result.proposed_verdict` (the
+-- counts the `triage` runs that hold the old name in the four places the ruling names, and if there are
+-- any, raises and stops: the wipe was skipped, or an alert arrived between the wipe and the deploy
+-- (Review Focus 4). The four places are `result.suggested_action` (the stored answer, the only one the
+-- CHECK judges), `result.structured_only_verdict` (the verifier's), `gate_result.proposed_verdict` (the
 -- model's own claim, which the gate may have held as `needs_review`: the tracked `backups/latest.dump`
 -- has six such rows) and `gate_result.final_verdict`. A run is counted once, however many of them say
--- `escalate`. The block runs BEFORE the constraint is touched, and the whole file is ONE transaction
+-- `escalate`. Other copies of the name (`gate_result.proposer_raw`, `gate_result.compared_to`,
+-- `verifier_result`, `gate_result.verifier_verdict`) are not read: the check is not wider than the
+-- ruling. The block runs BEFORE the constraint is touched, and the whole file is ONE transaction
 -- (BEGIN ... COMMIT; `psql -v ON_ERROR_STOP=1` ends the session on the error, which rolls the
 -- transaction back), so a refusal changes nothing: the old constraint stays, no row moves, and
 -- `schema_migrations` does not record 022. Wipe the trial database per spec §11 (the Owner-run wipe),

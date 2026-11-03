@@ -4,11 +4,14 @@ One constraint changes: `ck_llm_runs_suggested_action` goes from `false_positive
 escalate` to `false_positive | needs_review | true_positive`. ①'s `escalate` is renamed
 `true_positive`; the database that held the old name is wiped before the build is deployed
 (spec 4.1, Owner 03/11), so nothing is rewritten and nothing reads a stored `escalate`. The migration
-REFUSES, changing nothing, while a `triage` run still holds the old name anywhere ①'s verdict is
-kept: the stored answer (`result.suggested_action`), the verifier's (`result.structured_only_verdict`),
-the model's own claim (`gate_result.proposed_verdict`) or the gated verdict (`gate_result.final_verdict`).
-The wipe was skipped, or an alert arrived between the wipe and the deploy (Review Focus 4); the tracked
-`backups/latest.dump` has six rows that hold it only in `gate_result.proposed_verdict`.
+REFUSES, changing nothing, while a `triage` run still holds the old name in the four places the
+Director's ruling names: the stored answer (`result.suggested_action`), the verifier's
+(`result.structured_only_verdict`), the model's own claim (`gate_result.proposed_verdict`) or the gated
+verdict (`gate_result.final_verdict`). Other copies (`gate_result.proposer_raw`,
+`gate_result.compared_to`, `verifier_result`, `gate_result.verifier_verdict`) are not read. The wipe was
+skipped, or an alert arrived between the wipe and the deploy (Review Focus 4); the tracked
+`backups/latest.dump` has six rows that hold it, of the four places, only in
+`gate_result.proposed_verdict`.
 
 Three layers, each on trial here:
 
@@ -53,7 +56,8 @@ MIGRATION_FILE = SCHEMA_DIR / "022_true_positive.sql"
 MIGRATION_FILES = "[0-9][0-9][0-9]_*.sql"
 CONSTRAINT = "ck_llm_runs_suggested_action"
 
-#: The four places a `triage` run keeps ①'s verdict (DEC-213: nothing reads a stored `escalate`).
+#: The four places the Director's ruling names (DEC-213: nothing reads a stored `escalate`). The name
+#: also sits in other copies of a run, which are not read and are not tested for.
 PATHS = (
     "result->>'suggested_action'",
     "result->>'structured_only_verdict'",
@@ -187,7 +191,7 @@ def test_the_file_is_one_transaction_that_refuses_before_it_touches_the_constrai
     assert code.index("RAISE EXCEPTION") < code.index(f"DROP CONSTRAINT {CONSTRAINT}")
     assert code.index(f"DROP CONSTRAINT {CONSTRAINT}") < code.index("ADD CONSTRAINT")
     assert "INSERT INTO schema_migrations (version) VALUES ('022_true_positive');" in code
-    # The refusal reads `triage` runs only, and the four places ①'s verdict is kept.
+    # The refusal reads `triage` runs only, and the four places the ruling names.
     assert "pipeline = 'triage'" in code
     for path in PATHS:
         assert path in code, path

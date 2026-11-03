@@ -857,11 +857,13 @@ Không thêm bảng, cột, index hay quyền, và **không dòng nào bị sử
 017). Cơ sở dữ liệu thử nghiệm được **xóa trước khi triển khai** (spec §4.1 và §11), nên không có lớp
 tương thích với dữ liệu cũ. Nếu bước xóa bị bỏ qua, hoặc có alert đến giữa lúc xóa và lúc triển khai,
 khối `DO` đầu file **từ chối chạy**. Không có gì đọc một `escalate` đã lưu của ① (phán quyết của Giám đốc,
-DEC-213), nên khối này đếm các run `triage` còn giữ tên cũ **ở bất kỳ chỗ nào ① lưu phán quyết**:
+DEC-213), nên khối này đếm các run `triage` còn giữ tên cũ **ở bốn chỗ mà phán quyết nêu tên**:
 `result->>'suggested_action'` (giá trị đã lưu, chỗ duy nhất ràng buộc xét), `result->>'structured_only_verdict'`
 (của verifier), `gate_result->>'proposed_verdict'` (lời kết luận của chính model, có thể đã bị cổng giữ lại
 thành `needs_review`; `backups/latest.dump` có sáu dòng như vậy) và `gate_result->>'final_verdict'`. Mỗi run
-chỉ đếm một lần dù nhiều chỗ cùng ghi `escalate`. Khi còn bất kỳ run nào thì `RAISE EXCEPTION '022: <n> triage
+chỉ đếm một lần dù nhiều chỗ cùng ghi `escalate`. Các bản sao khác của tên cũ (`gate_result.proposer_raw`,
+`gate_result.compared_to`, `verifier_result`, `gate_result.verifier_verdict`) không được đọc: phép kiểm không rộng hơn
+phán quyết. Khi còn bất kỳ run nào thì `RAISE EXCEPTION '022: <n> triage
 runs still say escalate — wipe the trial database first (spec §11); nothing changed'`. Khối này chạy **trước**
 khi đụng tới ràng buộc, và cả file là **một transaction** (`BEGIN … COMMIT`, `psql -v ON_ERROR_STOP=1`):
 từ chối thì ràng buộc cũ còn nguyên, không dòng nào đổi, `schema_migrations` không ghi 022. Cách gỡ là xóa cơ

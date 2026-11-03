@@ -21,8 +21,11 @@ PURE. No database, no socket, no fixture: `python3 -m pytest -c backend/pyprojec
 backend/tests/test_runbook_pilot.py` runs anywhere the repository is checked out.
 """
 
+import json
 import pathlib
 import re
+import shutil
+import subprocess
 import unicodedata
 
 import pytest
@@ -562,6 +565,77 @@ def test_the_migration_count_the_runbook_expects_is_the_number_of_migration_file
     assert f"to **{count}**" in start, start[:200]
     assert f"{count} already present" in start
     assert "restored — 17 migrations" not in start  # the dump predates 018; N is what it holds
+
+
+_COPY_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f", "v": "\v", "\\": "\\"}
+
+
+def _tracked_dump_triage_runs() -> list[dict]:
+    """The `triage` rows of `backups/latest.dump` (`result`, `gate_result` as parsed JSON), read as a
+    script with the host's `pg_restore`: no server, nothing restored."""
+    dump = REPO_ROOT / "backups" / "latest.dump"
+    out = subprocess.run(
+        ["pg_restore", "--data-only", "-t", "llm_runs", "-f", "-", str(dump)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert out.returncode == 0, out.stderr[:300]
+    lines = out.stdout.split("\n")  # not splitlines(): a prompt may hold U+2028 or U+0085
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("COPY public.llm_runs ("))
+    columns = [c.strip() for c in lines[start].split("(", 1)[1].split(")", 1)[0].split(",")]
+    rows = []
+    for line in lines[start + 1 :]:
+        if line == "\\.":
+            break
+        cells = [
+            (
+                None
+                if cell == "\\N"
+                else re.sub(r"\\(.)", lambda m: _COPY_ESCAPES.get(m.group(1), m.group(1)), cell)
+            )
+            for cell in line.split("\t")
+        ]
+        row = dict(zip(columns, cells, strict=True))
+        for key in ("result", "gate_result"):
+            row[key] = None if row[key] is None else json.loads(row[key])
+        rows.append(row)
+    return [row for row in rows if row["pipeline"] == "triage"]
+
+
+def test_the_start_everything_row_tells_what_the_tracked_dump_does_to_migration_022():
+    """The tracked dump holds old ① runs, so 022 refuses on it (P14-T01 fix round 2, N1): `make migrate`
+    applies 018-021 and stops, and the row must not promise the database reaches 23. The numbers and the
+    message in the row are the dump's and the migration's own, not a copy that can drift."""
+    if shutil.which("pg_restore") is None:
+        pytest.skip("pg_restore is not installed")
+    triage = _tracked_dump_triage_runs()
+    places = (
+        lambda r: (r["result"] or {}).get("suggested_action"),
+        lambda r: (r["result"] or {}).get("structured_only_verdict"),
+        lambda r: (r["gate_result"] or {}).get("proposed_verdict"),
+        lambda r: (r["gate_result"] or {}).get("final_verdict"),
+    )
+    held = [r for r in triage if any(place(r) == "escalate" for place in places)]
+    claimed = [r for r in triage if places[2](r) == "escalate"]
+    assert held, "the tracked dump no longer holds an ① escalate: the row's account of it is stale"
+
+    start = _runbook_line_with("start everything")
+    count = len(list(SCHEMA_DIR.glob("[0-9][0-9][0-9]_*.sql")))
+    assert f"The tracked dump does not reach {count}." in start
+    assert f"{len(triage)} `triage` runs, {len(claimed)} of them with `escalate` in" in start
+    assert "`gate_result.proposed_verdict`" in start
+    message = f"022: {len(held)} triage runs still say escalate"
+    assert f"`{message} — wipe the trial database first (spec §11); nothing changed`" in start
+    assert "applies and records 018, 019, 020 and 021" in start
+    assert "`022_true_positive.sql` **refuses**" in start
+    assert "022 itself changes nothing" in start and "the tracked dump is not edited" in start
+    assert "wiped per spec §11 (the Owner-run wipe) before `make migrate`" in start
+    assert f"only then reaches {count}" in start
+    assert "on that dump (it applies 018 to" not in start  # the claim that was false
+    # the message the row quotes is the one the migration raises
+    sql = (SCHEMA_DIR / "022_true_positive.sql").read_text(encoding="utf-8")
+    assert "'022: % triage runs still say escalate — wipe the trial database first" in sql
 
 
 def test_the_409_count_is_evidence_only_with_the_grouping_switch_on():
