@@ -12,15 +12,23 @@ pgvector. So each of them runs every test twice through one fixture:
 
 Both give the test the same three things: `conn` (what it passes as `vconn`), `rows()` (entry id ->
 (hash, model, dims)) and `vector(entry_id)` (the stored numbers, or None).
+
+P14-T06 adds `nearest` to the dictionary store (cosine distance, this model and this size only, like the
+real query) and `VoyageRouter`, one `httpx.MockTransport` handler for both Voyage endpoints that the lookup
+job calls (`/embeddings` and `/rerank`).
 """
 
 from __future__ import annotations
 
+import json
+import math
 import os
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
+from typing import Any
 
+import httpx
 import psycopg
 import pytest
 from app.rag import vector_store
@@ -58,6 +66,7 @@ class MemoryStore:
         monkeypatch.setattr(vector_store, "stored_one", self._stored_one)
         monkeypatch.setattr(vector_store, "upsert", self._upsert)
         monkeypatch.setattr(vector_store, "delete", self._delete)
+        monkeypatch.setattr(vector_store, "nearest", self._nearest)
 
     def _need_table(self) -> None:
         """What the real thing does without its table."""
@@ -91,6 +100,27 @@ class MemoryStore:
         assert vconn is self.conn
         self._need_table()
         self._rows.pop(entry_id, None)
+
+    def _nearest(self, vconn, vector: Sequence[float], *, model: str, limit: int = 20) -> list[str]:
+        """`vector_store.nearest` over the dictionary: this model and this size only, cosine distance
+        ascending, ties in the order the rows were stored."""
+        assert vconn is self.conn
+        self._need_table()
+        vector_store.vector_literal(vector)  # the same refusals as the real one
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit: must be an integer of at least 1")
+
+        def distance(other: Sequence[float]) -> float:
+            dot = sum(a * b for a, b in zip(vector, other, strict=True))
+            norms = math.sqrt(sum(a * a for a in vector)) * math.sqrt(sum(b * b for b in other))
+            return 1.0 - dot / norms
+
+        rows = [
+            (distance(row[3]), entry_id)
+            for entry_id, row in self._rows.items()
+            if row[1] == model and row[2] == len(vector)
+        ]
+        return [entry_id for _, entry_id in sorted(rows, key=lambda pair: pair[0])[:limit]]
 
     def drop_schema(self) -> None:
         """The vector database as a fresh `vectordb` is: no table."""
@@ -192,3 +222,54 @@ def entry(
         }
     )
     return add_entry(db, entry_id=entry_id, content=content, **kw)
+
+
+# ── Voyage: both endpoints of the lookup ──────────────────────────────────────────────────────
+
+Reply = dict | Exception | bytes | str | Callable[[dict], Any]
+
+
+class VoyageRouter:
+    """A `MockTransport` handler that answers `/embeddings` with `embed` and `/rerank` with `rerank`, and
+    keeps every request. A reply is a JSON object, an `Exception` to raise (a transport error), raw
+    bytes or text, or a function of the request's JSON body that returns one of those. `embed_status` and
+    `rerank_status` are the HTTP status of each endpoint's answer."""
+
+    def __init__(
+        self,
+        embed: Reply | None = None,
+        rerank: Reply | None = None,
+        *,
+        embed_status: int = 200,
+        rerank_status: int = 200,
+    ) -> None:
+        self.replies = {"/embeddings": (embed, embed_status), "/rerank": (rerank, rerank_status)}
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        path = "/" + request.url.path.rsplit("/", 1)[-1]
+        reply, status = self.replies.get(path, (None, 404))
+        if callable(reply) and not isinstance(reply, Exception):
+            reply = reply(json.loads(request.content))
+        if isinstance(reply, Exception):
+            raise reply
+        if isinstance(reply, (bytes, str)):
+            return httpx.Response(status, content=reply)
+        return httpx.Response(status, json=reply)
+
+    @property
+    def client(self) -> httpx.Client:
+        return httpx.Client(transport=httpx.MockTransport(self))
+
+    @property
+    def paths(self) -> list[str]:
+        """The endpoints called, in order: `["/embeddings", "/rerank"]` for a whole lookup."""
+        return ["/" + request.url.path.rsplit("/", 1)[-1] for request in self.requests]
+
+    def bodies(self, path: str) -> list[dict]:
+        return [
+            json.loads(request.content)
+            for request in self.requests
+            if request.url.path.endswith(path)
+        ]

@@ -25,7 +25,7 @@ giống thì đừng chọn. `reason` là MỘT câu ngắn (tối đa 160 ký t
 quản trị đọc.
 
 ĐẦU RA
-Trả về DUY NHẤT một đối tượng JSON, không kèm văn bản nào khác, theo đúng schema rag_match_v1:
+Trả về DUY NHẤT một đối tượng JSON, không kèm văn bản nào khác, theo đúng schema draft_rank_v1:
 matches[]: danh sách có tối đa 3 phần tử, mỗi phần tử gồm
   entry_id: string, mã của một khối kb_learned
   level: rat_giong|giong|hoi_giong
