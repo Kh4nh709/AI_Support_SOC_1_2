@@ -114,7 +114,9 @@ def test_knowledge_embed_is_a_job_type_so_that_enqueue_and_the_constraint_know_i
     assert len(JOB_TYPES) == 9
 
 
-def test_only_the_rag_worker_has_a_handler_and_a_timeout_table_entry_for_knowledge_embed() -> None:
+def test_knowledge_embed_has_a_handler_in_the_rag_workers_table_and_none_in_the_main_workers() -> (
+    None
+):
     """P14-T04 pinned that nobody had one; P14-T05 registers it in `rag_handlers` and nowhere else."""
     for table in (
         main_handlers.iter_handlers(),

@@ -58,7 +58,8 @@ def run_forever(
     `claim_order` (P13 fix wave, item 21) is a list of job-type groups claimed one after the other: the first
     group with a due job wins, however old the other groups' jobs are. `None` is the single claim over all the
     handlers' types, oldest first, which is what the main worker does. The `rag-worker` passes
-    `[["rag_lookup"], ["knowledge_draft"]]` so a lookup never waits behind a draft. The groups must name
+    `[["rag_lookup"], ["knowledge_embed"], ["knowledge_draft"]]` (`web/rag_worker.py::CLAIM_ORDER`) so a
+    lookup never waits behind an embedding or a draft. The groups must name
     exactly the handlers' types, each once (`ValueError`): a type left out would never be claimed.
     """
     timeouts = timeouts or {}
