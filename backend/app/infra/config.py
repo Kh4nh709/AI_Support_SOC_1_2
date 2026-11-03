@@ -37,10 +37,17 @@ _SECRET_FIELDS = frozenset(
         "WEBHOOK_API_KEY",
         "NOTIFY_TELEGRAM_BOT_TOKEN",
         "NOTIFY_TELEGRAM_CHAT_ID",
+        # P14-T04 / DEC-213: the Voyage key, and the vector database's DSN (it carries `vectordb`'s password).
+        "VOYAGE_API_KEY",
+        "VECTOR_DATABASE_URL",
     }
 )
 
 _LLM_THINKING_VALUES = ("enabled", "disabled")
+
+# P14-T04 / DEC-213: the sizes Voyage serves for a `voyage-4` embedding (Matryoshka). The vector column
+# of `vectordb` is created at the configured size, so any other number must stop the start-up.
+_RAG_EMBED_DIMS_VALUES = (256, 512, 1024, 2048)
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -218,6 +225,23 @@ class Config:
     RAG_HISTORY_DAYS: int = 90
     RAG_MONTHLY_USD_CAP: int = 3
     KNOWLEDGE_QUEUE_MAX: int = 200
+    # DEC-213 (P14, Part B): Voyage embeddings and rerank in an independent pgvector. `.env` keys only, not
+    # web settings. VOYAGE_API_KEY empty means the lookup is skipped, as with no model. The three
+    # thresholds are provisional until calibration and must satisfy 0 <= MIN <= GIONG <= RAT_GIONG <= 1;
+    # RAG_EMBED_DIMS is one of 256 / 512 / 1024 / 2048 (`ConfigError` otherwise). VECTOR_DATABASE_URL is
+    # empty in `.env`: Compose sets it, for `rag-worker` only (docker-compose.rag.yml). Both it and
+    # VOYAGE_API_KEY are redacted by `dump()` and `__repr__`.
+    VOYAGE_API_KEY: str = ""
+    VOYAGE_BASE_URL: str = "https://api.voyageai.com/v1"
+    RAG_EMBED_MODEL: str = "voyage-4"
+    RAG_EMBED_DIMS: int = 1024
+    RAG_RERANK_MODEL: str = "rerank-2.5"
+    RAG_MIN_SCORE: float = 0.50
+    RAG_LEVEL_GIONG: float = 0.65
+    RAG_LEVEL_RAT_GIONG: float = 0.80
+    VOYAGE_PRICE_EMBED_PER_M: float = 0.06
+    VOYAGE_PRICE_RERANK_PER_M: float = 0.05
+    VECTOR_DATABASE_URL: str = ""
 
     @property
     def llm_enabled(self) -> bool:
@@ -287,6 +311,21 @@ def load(*, env_file: str | Path = ".env") -> Config:
         raise ConfigError(
             f"{max_key} ({max_payload_bytes}) must be greater than "
             f"{raw_key} ({raw_log_max_bytes})"
+        )
+
+    rag_embed_dims = as_int("RAG_EMBED_DIMS", 1024)
+    if rag_embed_dims not in _RAG_EMBED_DIMS_VALUES:
+        allowed = "|".join(str(n) for n in _RAG_EMBED_DIMS_VALUES)
+        raise ConfigError(f"RAG_EMBED_DIMS: must be one of {allowed}, got {rag_embed_dims}")
+
+    rag_min_score = as_float("RAG_MIN_SCORE", 0.50)
+    rag_level_giong = as_float("RAG_LEVEL_GIONG", 0.65)
+    rag_level_rat_giong = as_float("RAG_LEVEL_RAT_GIONG", 0.80)
+    # Written so that a NaN fails it too: every comparison with NaN is false.
+    if not (0.0 <= rag_min_score <= rag_level_giong <= rag_level_rat_giong <= 1.0):
+        raise ConfigError(
+            f"0 <= RAG_MIN_SCORE ({rag_min_score}) <= RAG_LEVEL_GIONG ({rag_level_giong}) <= "
+            f"RAG_LEVEL_RAT_GIONG ({rag_level_rat_giong}) <= 1 does not hold"
         )
 
     return Config(
@@ -364,4 +403,15 @@ def load(*, env_file: str | Path = ".env") -> Config:
         RAG_HISTORY_DAYS=as_nonneg_int("RAG_HISTORY_DAYS", 90),
         RAG_MONTHLY_USD_CAP=as_nonneg_int("RAG_MONTHLY_USD_CAP", 3),
         KNOWLEDGE_QUEUE_MAX=as_nonneg_int("KNOWLEDGE_QUEUE_MAX", 200),
+        VOYAGE_API_KEY=as_str("VOYAGE_API_KEY", ""),
+        VOYAGE_BASE_URL=as_str("VOYAGE_BASE_URL", "https://api.voyageai.com/v1"),
+        RAG_EMBED_MODEL=as_str("RAG_EMBED_MODEL", "voyage-4"),
+        RAG_EMBED_DIMS=rag_embed_dims,
+        RAG_RERANK_MODEL=as_str("RAG_RERANK_MODEL", "rerank-2.5"),
+        RAG_MIN_SCORE=rag_min_score,
+        RAG_LEVEL_GIONG=rag_level_giong,
+        RAG_LEVEL_RAT_GIONG=rag_level_rat_giong,
+        VOYAGE_PRICE_EMBED_PER_M=as_float("VOYAGE_PRICE_EMBED_PER_M", 0.06),
+        VOYAGE_PRICE_RERANK_PER_M=as_float("VOYAGE_PRICE_RERANK_PER_M", 0.05),
+        VECTOR_DATABASE_URL=as_str("VECTOR_DATABASE_URL", ""),
     )

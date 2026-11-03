@@ -174,7 +174,7 @@ An archived alert keeps its `case_id`, `acknowledged_by`, `triage_status` and ev
 
 ## Environment keys
 
-The 76 keys of `.env.example`, one row each, no values. `.env.example` is generated from context pack §6.3 (`scripts/gen_env_example.py`, checked by `make lint`) and frozen: a new key is a decision (DEC-003), never an edit. **Who sets it:** *Owner* — a private or host-specific value, in `.env` only; *default* — `.env.example`'s value, changed only by a DEC. **Secret:** *yes* — `.env` only, never `.env.example`, a commit, a chat or a command line. *Compose* keys are read by `docker-compose.yml` and `db/init/*.sh` only, never by the application; *read by nothing* is a §6.3 key whose reader was cut or never built.
+The 87 keys of `.env.example`, one row each, no values. `.env.example` is generated from context pack §6.3 (`scripts/gen_env_example.py`, checked by `make lint`) and frozen: a new key is a decision (DEC-003), never an edit. **Who sets it:** *Owner* — a private or host-specific value, in `.env` only; *default* — `.env.example`'s value, changed only by a DEC. **Secret:** *yes* — `.env` only, never `.env.example`, a commit, a chat or a command line. *Compose* keys are read by `docker-compose.yml` and `db/init/*.sh` only, never by the application; *read by nothing* is a §6.3 key whose reader was cut or never built.
 
 | key | what it controls | who sets it | secret |
 |---|---|---|---|
@@ -248,12 +248,32 @@ The 76 keys of `.env.example`, one row each, no values. `.env.example` is genera
 | `RAG_HISTORY_DAYS` | how far back the decision history looks, days (DEC-210) | default | no |
 | `RAG_MONTHLY_USD_CAP` | the month's spend at which the lookup and draft calls stop; counted inside `LLM_MONTHLY_USD_CAP`, so it can take at most this much from ① and ② (DEC-210) | default | no |
 | `KNOWLEDGE_QUEUE_MAX` | the number of pending drafts above which the `knowledge_queue` health check alarms (DEC-210) | default | no |
+| `VOYAGE_API_KEY` | Voyage AI's key for the embeddings and the rerank of the lookup (DEC-213, the trial's Voyage RAG); empty (the default) means the lookup is skipped, as with no model; `.env` only, not a web setting; recreate the containers after a change | Owner | yes |
+| `VOYAGE_BASE_URL` | the address of Voyage AI's REST API (DEC-213) | default | no |
+| `RAG_EMBED_MODEL` | the model that embeds an approved entry's digest and a lookup's fingerprint (DEC-213); `vectordb` holds vectors of this model only, so a change needs the index rebuilt | default | no |
+| `RAG_EMBED_DIMS` | the size of an embedding: 256, 512, 1024 or 2048, and nothing else (any other number stops the start-up with a `ConfigError`); `vectordb`'s vector column is created at this size, so a change needs the index rebuilt (DEC-213) | default | no |
+| `RAG_RERANK_MODEL` | the model that scores each candidate from 0 to 1 against the fingerprint (DEC-213) | default | no |
+| `RAG_MIN_SCORE` | the lowest rerank score a match may have to reach a prompt; provisional until calibration; `0 <= RAG_MIN_SCORE <= RAG_LEVEL_GIONG <= RAG_LEVEL_RAT_GIONG <= 1` or the start-up stops (DEC-213) | default | no |
+| `RAG_LEVEL_GIONG` | the rerank score from which a match is `giong`, the closed level fact of the prompt; provisional (DEC-213) | default | no |
+| `RAG_LEVEL_RAT_GIONG` | the rerank score from which a match is `rat_giong`; provisional (DEC-213) | default | no |
+| `VOYAGE_PRICE_EMBED_PER_M` | USD per 1M embedded tokens, the price the lookup's embedding is costed at, inside `RAG_MONTHLY_USD_CAP` (DEC-213) | default | no |
+| `VOYAGE_PRICE_RERANK_PER_M` | USD per 1M reranked tokens, the price the lookup's rerank is costed at, inside `RAG_MONTHLY_USD_CAP` (DEC-213) | default | no |
+| `VECTOR_DATABASE_URL` | the vector database's address with its password: leave it empty in `.env`; `docker-compose.rag.yml` sets it for `rag-worker` only, from `VECTOR_DB_PASSWORD`, and `app`, `worker` and `ui` have none (DEC-213; see **Vector database** below) | default | yes |
 | `POSTGRES_USER` | Compose: the `db` superuser, owner of every object | default | no |
 | `POSTGRES_PASSWORD` | Compose: its password; `docker compose` refuses to start without it | Owner | yes |
 | `POSTGRES_DB` | Compose: the database name | default | no |
 | `DB_PORT` | Compose: `db`'s port on the host | default | no |
 | `APP_RW_PASSWORD` | Compose: `app_rw`'s password, set by `01-roles.sh` on a first start | Owner | yes |
 | `INDEXER_HOST_IP` | Compose: the indexer's address as the containers see it; empty means `host-gateway`, this host | Owner | no |
+
+### Vector database (DEC-213)
+
+The Voyage RAG of P14 adds one container, `vectordb` (`pgvector/pgvector:0.8.0-pg16`), to `docker-compose.rag.yml`. It is **trial only**: the branch that holds it is never merged into `main`, and live is never deployed with it. Read the header of `docker-compose.rag.yml` first.
+
+- **What it holds.** One table of embeddings, a **derived index** of the approved knowledge entries. The main database stays the only source of an entry's text, status and hash, so `vectordb` needs no backup of its own.
+- **Who reaches it.** Only `rag-worker`: it has `VECTOR_DATABASE_URL`, and `vectordb` has **no `ports:`** (nothing is published to the host or the LAN). `app`, `worker` and `ui` have no address for it. `rag-worker` does not wait for it, so a `vectordb` that is down is a failed lookup, never a worker that will not start.
+- **`VECTOR_DB_PASSWORD` is a Compose-only variable**, like `APP_RW_PASSWORD`: it is read by `docker-compose.rag.yml` and never by `backend/app/infra/config.py`, so it is **not** a row of the table above and not one of the 87 keys; `.env.example` names it in a comment. Put `VECTOR_DB_PASSWORD=<letters and digits only>` in the trial's `.env` (edit the file, never paste it anywhere): the value also sits inside `VECTOR_DATABASE_URL`, where a `@`, `:` or `/` would break the address. Once `.env` has `COMPOSE_FILE=docker-compose.yml:docker-compose.rag.yml`, **every** `docker compose` command stops with `set VECTOR_DB_PASSWORD in .env (runbook, DEC-213)` until the line is there, and it names no secret.
+- **The new variables are `.env` only, never web settings.** After adding `VOYAGE_API_KEY` and the rest, create the container and recreate the worker: `docker compose up -d` (a compose change needs `up -d`, not `restart`), and check with `docker compose exec -T rag-worker printenv VECTOR_DATABASE_URL | wc -c` (a count, so the value is not printed) and the same with `app`, which must say `0`.
 
 ### Grouping switch (DEC-165)
 
