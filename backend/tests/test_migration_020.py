@@ -25,7 +25,6 @@ import re
 import shutil
 import subprocess
 import uuid
-from pathlib import Path
 
 import psycopg
 import pytest
@@ -35,7 +34,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from tests import conftest
-from tests.scratch_db import _with_db
+from tests.scratch_db import _schema_tree_through, _with_db
 
 pytestmark = pytest.mark.db
 
@@ -289,23 +288,6 @@ def _refused(db, error, statement) -> psycopg.Error:
     with pytest.raises(error) as caught, db.transaction():
         statement()
     return caught.value
-
-
-def _schema_without_020(tmp_path: Path) -> Path:
-    """A copy of `docs/Schema` with only the migrations numbered below 020, and a `schema.sql`
-    the real `build_schema.py` builds from them: the tree as it stood at 019."""
-    at_019 = tmp_path / "Schema"
-    at_019.mkdir()
-    for path in SCHEMA_DIR.glob(MIGRATION_FILES):
-        if int(path.name[:3]) < 20:
-            shutil.copy(path, at_019)
-    shutil.copy(SCHEMA_DIR / "build_schema.py", at_019)
-    built = subprocess.run(
-        ["python3", str(at_019 / "build_schema.py")], capture_output=True, text=True, check=False
-    )
-    if built.returncode != 0:
-        pytest.fail(f"build_schema.py exit {built.returncode}:\n{built.stderr}")
-    return at_019
 
 
 def _migrate(dsn, mig_dir, **env: str) -> str:
@@ -1010,7 +992,7 @@ def test_020_applies_on_a_database_at_019_the_way_make_migrate_runs_it(tmp_path)
     session = _session_dsn()
     if shutil.which("psql") is None:
         pytest.skip("psql is not installed")
-    at_019 = _schema_without_020(tmp_path)
+    at_019 = _schema_tree_through(19, tmp_path)
     stems = {path.stem for path in SCHEMA_DIR.glob(MIGRATION_FILES)}
     total = len(stems)
     before = len(list(at_019.glob(MIGRATION_FILES)))
@@ -1087,7 +1069,7 @@ def test_app_rw_holds_the_three_tables_when_020_is_applied_by_another_role(tmp_p
         admin.close()
         pytest.skip("TEST_DATABASE_URL's role is not a superuser: the test creates a scratch role")
 
-    at_019 = _schema_without_020(tmp_path)
+    at_019 = _schema_tree_through(19, tmp_path)
     base = conftest._dbname(session)
     dbname = f"{base}_020own_test"
     owner = f"{base}_020own"  # roles are cluster-global: named from the session database's name
