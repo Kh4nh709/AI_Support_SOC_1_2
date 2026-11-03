@@ -176,3 +176,8 @@ INVESTIGATE_V2_OK = {
     ],
     "playbook_used": "ssh_brute_force",
 }
+
+# P14-T02 (DEC-213): ②'s model answer is `false_positive | policy_violation | confirmed_incident`
+# (`investigate_v3`). The payload above stays, valid under both: `investigate_v2` is still in
+# `output_schemas.json` for `eval/`, and its conclusion is a definite one.
+INVESTIGATE_V3_OK = copy.deepcopy(INVESTIGATE_V2_OK)
