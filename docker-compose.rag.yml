@@ -29,6 +29,20 @@
 # as that user and cannot write an entry file in a directory it does not own, and a directory that is
 # missing when `up -d` runs is created by Docker as root.
 #
+# THE VECTOR DATABASE (DEC-213, P14, Part B). `vectordb` is `pgvector/pgvector` on PostgreSQL 16, its tag
+# pinned (0.8.0-pg16), with its own volume `vectordata` and its own user, database and password. The
+# password is VECTOR_DB_PASSWORD, a Compose-only variable of `.env` like APP_RW_PASSWORD (never read by
+# infra/config.py): once this file is read, `docker compose` stops without it and names no secret.
+#   * It holds the embeddings of the approved knowledge entries and nothing else. It is a derived index: the
+#     main database stays the only source of an entry's text, status and hash, so `vectordb` has no backup of
+#     its own and is rebuilt from the entries after a lost volume or a `make db-restore`.
+#   * It has no `ports`: nothing is published to the host or the LAN. `rag-worker` alone is given its address
+#     (VECTOR_DATABASE_URL), so only `rag-worker` reaches it; `app`, `worker` and `ui` have none.
+#   * `rag-worker` has no `depends_on` on it: a `vectordb` that is down is the failure kind
+#     `vectordb_unreachable` and the lookup is skipped, not a worker that will not start.
+#   * The P14 branch that carries it runs on the trial only: it is never merged into `main`, and live is never
+#     deployed with it. Steps and checks: docs/runbook.md, "Vector database (DEC-213)".
+#
 # `rag-worker` claims only `rag_lookup` and `knowledge_draft` (web/rag_worker.py) and reclaims only those
 # types. Restart it after any merge under backend/app (DEC-099), not only one that touches web/rag_worker.py,
 # web/rag_handlers/ or rag/: it imports llm/, security/, infra/, audit/ and domain/ as well, and a live mount
@@ -56,6 +70,8 @@ services:
       DATABASE_URL_OWNER: postgresql://${POSTGRES_USER:-soc}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-soc_dev}
       PYTHONUNBUFFERED: "1"
       HOME: /tmp
+      # The one variable `rag-worker` has beyond the base `app`'s (test_compose_rag.py): the only address of `vectordb`.
+      VECTOR_DATABASE_URL: postgresql://vector:${VECTOR_DB_PASSWORD}@vectordb:5432/vectors
     volumes:
       - ./backend/app:/srv/backend/app:ro     # live code: a merge needs `restart`, not `build`
       - ./conf:/srv/conf:ro
@@ -70,3 +86,25 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+
+  # The independent vector database (header, "THE VECTOR DATABASE"). No `ports`, no `env_file` (the main
+  # `.env` with its keys and passwords must not reach it), no `depends_on`: it is a plain pgvector server and
+  # `rag-worker` finds it by the name `vectordb` on the Compose network.
+  vectordb:
+    image: pgvector/pgvector:0.8.0-pg16
+    environment:
+      POSTGRES_USER: vector
+      POSTGRES_PASSWORD: ${VECTOR_DB_PASSWORD:?set VECTOR_DB_PASSWORD in .env (runbook, DEC-213)}
+      POSTGRES_DB: vectors
+    volumes:
+      - vectordata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vector -d vectors"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  vectordata:
