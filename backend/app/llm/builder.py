@@ -264,6 +264,7 @@ FACT_NAMES = frozenset(
         "rule_level_lt",
         "rule_level_gte",
         "kb_learned_level",
+        "trung_pct",
     }
 )
 SEPARATOR = " · "
@@ -284,19 +285,24 @@ TEMPLATE_CONSTANTS = frozenset(
 # ─────────────────────────────────────────── the learned section's contract (DEC-210, P13-T07/T08)
 #: The learned section (spec §7.8): at most three approved entries, numbered `[1]`..`[3]`. ① and ② share it.
 MAX_LEARNED_ENTRIES = 3
+#: The fact `trung_pct` (DEC-213, spec §5.4): how alike the entry is, as a whole percentage. `fact()` takes
+#: nothing outside it for that name.
+TRUNG_PCT_MIN = 0
+TRUNG_PCT_MAX = 100
 
 
 class LearnedLike(Protocol):
     """Structural twin of `app.rag.lookup.PromptMaterial` (`llm` may not import `rag`): the decision
     history as `rag.history.render_history` writes it (None when there is none) and the approved
-    content of each matched entry with its level, best first. Nothing else of a lookup is here -
-    in particular not the ranking agent's reasons. ① (`llm.triage`) and ② (`tier2.dossier`) take it.
+    content of each matched entry with its level and its percentage (an integer from 0 to 100), best
+    first. Nothing else of a lookup is here - in particular not Voyage's own words (there are none: a
+    score is a number). ① (`llm.triage`) and ② (`tier2.dossier`) take it.
     """
 
     @property
     def history_text(self) -> str | None: ...
     @property
-    def entries(self) -> Sequence[tuple[KbLearnedLevel, str]]: ...
+    def entries(self) -> Sequence[tuple[KbLearnedLevel, int, str]]: ...
 
 
 #: A line that reads as the learned section's own structure (DEC-210, P13 fix wave, items 1 and 19): the
@@ -305,13 +311,14 @@ class LearnedLike(Protocol):
 #: either; V4 (`rag.draft`, `v4_structure`) refuses it in a draft and in an admin's edit, and
 #: `prompt_entries` drops an entry that has it, whatever got it into the database.
 _FORGED_LINE = re.compile(
-    r"\s*(?:\[\d+\]|(?:level|key_name|total|by_conclusion|last_seen|examples|kb_learned_level)\s*:)"
+    r"\s*(?:\[\d+\]|(?:level|key_name|total|by_conclusion|last_seen|examples|kb_learned_level|trung_pct)\s*:)"
 )
 
 
 def has_forged_structure(text: str) -> bool:
     """True when some line of `text` opens with `[<digits>]` or with a key of the history (`level`,
-    `key_name`, `total`, `by_conclusion`, `last_seen`, `examples`) or `kb_learned_level`, then a colon.
+    `key_name`, `total`, `by_conclusion`, `last_seen`, `examples`), `kb_learned_level` or `trung_pct`, then a
+    colon.
     The text is read as it is displayed: invisible code points deleted (`security.invisible`), then NFKC
     (a full-width bracket or colon is the ASCII one), then split at every line end Python knows
     (`str.splitlines`: `\\n`, `\\r`, U+0085, U+2028, U+2029 and the rest), not only at `\\n`."""
@@ -319,28 +326,52 @@ def has_forged_structure(text: str) -> bool:
     return any(_FORGED_LINE.match(line) for line in shown.splitlines())
 
 
-def prompt_entries(learned: LearnedLike | None) -> tuple[tuple[KbLearnedLevel, str], ...]:
+def prompt_entries(learned: LearnedLike | None) -> tuple[tuple[KbLearnedLevel, int, str], ...]:
     """The entries the learned section renders: the first `MAX_LEARNED_ENTRIES` of `learned.entries`, best
-    first, that pass the two checks below. The one function ① and ② both call.
+    first, that pass the checks below, each as `(level, percentage, text)`. The one function ① and ② both call.
 
     * Each level must be a `KbLearnedLevel`: `fact()` renders any Enum, so a `Severity` would be written
       as `kb_learned_level: high`, a value the section's vocabulary does not have. A defect of the
       caller, not data: a `TypeError` before anything is rendered or cut (the value is not echoed).
+    * Each percentage must be an `int` (not a bool) from 0 to 100, the range of the fact `trung_pct`
+      (`fact()` is the backstop): a `TypeError` or `ValueError` for the caller's defect, likewise.
     * An entry whose text has a line shaped like the section's own structure (`has_forged_structure`) is
       dropped, as if the lookup had not matched it: it does not count toward the cap and reaches no
       prompt. Defence in depth behind V4, which refuses such text before an entry exists."""
     if learned is None:
         return ()
-    kept: list[tuple[KbLearnedLevel, str]] = []
-    for level, text in learned.entries:
+    kept: list[tuple[KbLearnedLevel, int, str]] = []
+    for level, pct, text in learned.entries:
         if len(kept) == MAX_LEARNED_ENTRIES:
             break
         if not isinstance(level, KbLearnedLevel):
             raise TypeError("learned entry level must be a KbLearnedLevel")
+        if isinstance(pct, bool) or not isinstance(pct, int):
+            raise TypeError("learned entry percentage must be an int")
+        if not TRUNG_PCT_MIN <= pct <= TRUNG_PCT_MAX:
+            raise ValueError("learned entry percentage must be from 0 to 100")
         if has_forged_structure(text):
             continue
-        kept.append((level, text))
+        kept.append((level, pct, text))
     return tuple(kept)
+
+
+# ───────────────────────────────────── the warning when the RAG was not applied (DEC-213, spec §5.3)
+RAG_NOT_APPLIED_PREFIX = "rag_not_applied:"
+#: The shape of a failure kind (`rag.failures.FAILURE_KINDS`: `rate_limit`, `timeout`, `auth`, `quota`,
+#: `provider_error`, `vectordb_unreachable`); `llm` may not import `rag`, so the shape stands in for the list
+#: and `test_builder_trung_pct.py` holds every kind of the list to it.
+_FAILURE_KIND_SHAPE = re.compile(r"[a-z][a-z_]{0,31}")
+
+
+def rag_not_applied_warning(kind: str) -> str:
+    """`rag_not_applied:<kind>`, the builder warning ① and ② put in `citation_warnings` when the newest
+    lookup of their subject failed and the learned section was therefore left out (the UI says "RAG not
+    applied" from it). `kind` is a closed failure kind; anything else is a `ValueError`, so a warning can
+    never carry free text."""
+    if not isinstance(kind, str) or _FAILURE_KIND_SHAPE.fullmatch(kind) is None:
+        raise ValueError("rag_not_applied_warning(): kind must be a closed failure kind")
+    return f"{RAG_NOT_APPLIED_PREFIX}{kind}"
 
 
 # ─────────────────────────────────────────────────────────────── fact()
@@ -373,6 +404,8 @@ def fact(name: str, value: Fact) -> str:
             raise TypeError("fact(): datetime must be timezone-aware")
         rendered = value.isoformat(timespec="seconds")
     elif isinstance(value, int):
+        if name == "trung_pct" and not TRUNG_PCT_MIN <= value <= TRUNG_PCT_MAX:
+            raise ValueError("fact(): trung_pct must be an integer from 0 to 100")
         rendered = str(value)
     else:
         raise TypeError(f"fact(): unsupported value type {type(value).__name__}")

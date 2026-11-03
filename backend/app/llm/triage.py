@@ -22,8 +22,12 @@ real objects; the tests build them from `app.domain.correlation` directly.
 
 The learned section (P13-T07, DEC-210, spec §7.8): with `learned` the user message gains one
 section between the playbook and the request - the decision history as the block `decision_history`,
-the level of each approved entry as the typed fact `kb_learned_level`, the entries themselves as the
-one block `kb_learned`, and a fixed sentence that this is a reference and never a basis for closing.
+the level of each approved entry as the typed fact `kb_learned_level` followed on the same line by its
+percentage as the typed fact `trung_pct` (P14-T06, DEC-213: an integer from 0 to 100, best first), the
+entries themselves as the one block `kb_learned`, and a fixed sentence that this is a reference and never a
+basis for closing. When the subject's newest lookup failed (`rag_not_applied=<kind>`), the section is not
+rendered at all and the builder warning `rag_not_applied:<kind>` goes in the warnings (and so in
+`citation_warnings`): the UI says "RAG not applied" from it.
 It is a user-message section only: the system template, the schemas and the gate do not know it, so
 `prompt_version` does not move and a reason cannot cite it. With `learned=None` the message is
 byte for byte what it was. It is the first thing the token budget cuts: the entries, then the history.
@@ -96,6 +100,7 @@ from app.llm.builder import (
     Verdict,
     fact,
     prompt_entries,
+    rag_not_applied_warning,
     risk_band,
 )
 from app.security import linter, wrap
@@ -440,28 +445,28 @@ def _playbook_section(
 def _learned_section(
     pb: PromptBuilder,
     history_text: str | None,
-    entries: Sequence[tuple[KbLearnedLevel, str]],
+    entries: Sequence[tuple[KbLearnedLevel, int, str]],
     *,
     nothing_found: bool,
 ) -> None:
-    """Spec §7.8. The heading; the history under its own source (its values, such as a SOAR scenario,
-    are not id-shaped, so it is a block, not facts); each entry's level as a typed fact, then the
-    entries' approved text as the one `kb_learned` block (a build holds one block per source), in
-    the same order, numbered `[1]`.. so a level and its entry can be matched; then the sentence that
-    says what the section is. When the lookup found nothing: the heading and the one sentence that
-    says so. The text is approved content and a history the system wrote, and still goes in blocks:
-    the linter accepts no prose outside one."""
+    """Spec §7.8, §5.4. The heading; the history under its own source (its values, such as a SOAR scenario,
+    are not id-shaped, so it is a block, not facts); each entry's level as a typed fact with its percentage
+    as another (`kb_learned_level: giong · trung_pct: 87`, best first), then the entries' approved text as
+    the one `kb_learned` block (a build holds one block per source), in the same order, numbered `[1]`.. so a
+    level and its entry can be matched; then the sentence that says what the section is. When the lookup
+    found nothing: the heading and the one sentence that says so. The text is approved content and a
+    history the system wrote, and still goes in blocks: the linter accepts no prose outside one."""
     pb.heading(HEADING_LEARNED)
     if nothing_found:
         pb.sentence(SENTENCE_NO_LEARNED)
         return
     if history_text:
         pb.block(history_text, "decision_history")
-    for level, _ in entries:
-        pb.line(fact("kb_learned_level", level))
+    for level, pct, _ in entries:
+        pb.line(fact("kb_learned_level", level), fact("trung_pct", pct))
     if entries:
         pb.block(
-            "\n\n".join(f"[{number}] {text}" for number, (_, text) in enumerate(entries, 1)),
+            "\n\n".join(f"[{number}] {text}" for number, (_, _, text) in enumerate(entries, 1)),
             "kb_learned",
         )
     pb.sentence(SENTENCE_LEARNED_IS_REFERENCE)
@@ -481,7 +486,7 @@ def _render_proposer(
     include_context: bool,
     include_correlation: bool,
     include_siem_context: bool,
-    learned: tuple[str | None, Sequence[tuple[KbLearnedLevel, str]], bool] | None = None,
+    learned: tuple[str | None, Sequence[tuple[KbLearnedLevel, int, str]], bool] | None = None,
 ) -> tuple[BuiltPrompt, list[str], str | None]:
     """`learned`: None leaves the section out whole; else `(history_text, entries, nothing_found)`."""
     warnings: list[str] = []
@@ -519,6 +524,7 @@ def build_proposer_prompt(
     include_siem_context: bool | None = None,
     nonce: str | None = None,
     learned: LearnedLike | None = None,
+    rag_not_applied: str | None = None,
 ) -> BuiltTriagePrompt:
     """The ① user message, section by section (architecture §4.1), through
     `PromptBuilder` only; then the budget check and phase-5's cut order (design note 3).
@@ -532,8 +538,17 @@ def build_proposer_prompt(
     The token budget cuts it first, before every step above: the entries
     (`learned_entries_dropped`), then the history (`learned_history_dropped`); when both are gone
     the section is gone too (not the "nothing found" form, which would be untrue) and
-    `learned_used` is False."""
+    `learned_used` is False.
+
+    `rag_not_applied` (P14-T06, DEC-213): the closed failure kind of the subject's newest lookup when it
+    `failed`. The learned section is then not rendered, whatever `learned` holds (the message is what it is
+    with `learned=None`), `learned_used` is False, and the warning `rag_not_applied:<kind>`
+    (`builder.rag_not_applied_warning`) is added after the section warnings and before the budget cuts.
+    """
     system = _system_prompt(TRIAGE_TEMPLATE, "triage_v3")
+    notice = [rag_not_applied_warning(rag_not_applied)] if rag_not_applied is not None else []
+    if notice:
+        learned = None
     nonce = nonce if nonce is not None else wrap.new_nonce()
     if include_siem_context is None:
         include_siem_context = cfg.PROMPT_INCLUDE_SIEM_CONTEXT
@@ -555,7 +570,7 @@ def build_proposer_prompt(
         "history": 1 if history_text else 0,
     }
 
-    def learned_view() -> tuple[str | None, Sequence[tuple[KbLearnedLevel, str]], bool] | None:
+    def learned_view() -> tuple[str | None, Sequence[tuple[KbLearnedLevel, int, str]], bool] | None:
         """What the section holds after the cuts so far; None when it is not in the prompt."""
         if learned is None:
             return None
@@ -618,7 +633,7 @@ def build_proposer_prompt(
             cut_warnings.append("budget_exceeded_after_cuts")  # phase-5: "vẫn gửi"
     return BuiltTriagePrompt(
         prompt=prompt,
-        warnings=warnings + cut_warnings,
+        warnings=warnings + notice + cut_warnings,
         estimated_tokens=estimated,
         playbook_used_effective=effective,
         learned_used=learned_view() is not None,

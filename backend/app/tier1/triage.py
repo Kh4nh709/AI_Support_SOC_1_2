@@ -18,8 +18,10 @@ With `RAG_ENABLED` (P13-T07, DEC-210) the job runs `evaluate_alert` with `rag=Tr
 stored lookup of the alert is read at that moment (`rag.lookup.lookup_material`, in a savepoint) and
 its approved material becomes the learned section of the proposer's user message. The lookup is a
 separate job queued with ①, which is delayed to give it time (`domain.transitions`); ① never waits
-for it, and a lookup that is absent, `failed` or out of budget gives today's prompt. There is no age
-check: the newest stored lookup is used, whatever its age (a late one is simply not there yet). The
+for it, and a lookup that is absent, `failed` or out of budget gives today's prompt. A `failed` one (a
+Voyage or `vectordb` failure, DEC-213) also adds the warning `rag_not_applied:<kind>` to the proposer's
+`citation_warnings` (`rag.lookup.lookup_failure`), which is how the UI says "RAG not applied". There is no
+age check: the newest stored lookup is used, whatever its age (a late one is simply not there yet). The
 proposer's `llm_runs` row records which lookup its prompt held (`rag_lookup_id`).
 
 `_set_triage_status` is this module's only write to `alerts` — it names
@@ -76,7 +78,7 @@ from app.llm.triage import (
     propose,
     verify,
 )
-from app.rag.lookup import lookup_material
+from app.rag.lookup import lookup_failure, lookup_material
 from app.rag.subject import Subject
 from app.security import detector, gate, linter
 
@@ -651,12 +653,12 @@ def evaluate_alert(
     `DeepSeekAdapter` at the same point, with the same spend check, as the job always
     has.
 
-    With `switches.rag` (P13-T07) the alert's newest stored lookup is read - two `SELECT`s, no more
-    - and its approved material goes to the builder. There is no waiting and no retry: what exists
-    now is used, and none, a `failed` or a `budget` lookup is today's prompt. An entry that no
-    longer passes `prompt_material`'s check is dropped from it, and a database error in the read is no
-    material (a savepoint); nothing here can fail ① because of
-    the lookup.
+    With `switches.rag` (P13-T07) the alert's newest stored lookup is read - its status first (one
+    `SELECT`, P14-T06), then its approved material (two) - and the material goes to the builder. There is no
+    waiting and no retry: what exists now is used, and none or a `budget` lookup is today's prompt. A `failed`
+    one is today's prompt too, plus the warning `rag_not_applied:<kind>` (DEC-213). An entry that no
+    longer passes `prompt_material`'s check is dropped from it, and a database error in either read is no
+    material and no notice (a savepoint each); nothing here can fail ① because of the lookup.
     """
     row = _load(conn, alert_id)
     if row is None:
@@ -712,7 +714,15 @@ def evaluate_alert(
         siem_enrichment=row.siem_enrichment,
     )
     facts = build_facts(inp, corr)
-    material = lookup_material(conn, Subject("alert", alert_id)) if switches.rag else None
+    # DEC-213: a lookup that `failed` is told to the reader (`rag_not_applied:<kind>`) and renders no section.
+    # The failure is read first, so a newer failed row can only mean "no section, no notice", never a section
+    # beside a notice; with the switch off neither read is made.
+    not_applied = lookup_failure(conn, Subject("alert", alert_id)) if switches.rag else None
+    material = (
+        lookup_material(conn, Subject("alert", alert_id))
+        if switches.rag and not_applied is None
+        else None
+    )
     built = build_proposer_prompt(
         inp,
         facts,
@@ -723,6 +733,7 @@ def evaluate_alert(
         include_context=switches.include_context,
         include_correlation=switches.include_correlation,
         learned=material,
+        rag_not_applied=not_applied,
     )
     rag_lookup_id = material.lookup_id if material is not None and built.learned_used else None
     if switches.proposer_template is None:
