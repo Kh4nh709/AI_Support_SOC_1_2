@@ -36,12 +36,16 @@
 #   * It holds the embeddings of the approved knowledge entries and nothing else. It is a derived index: the
 #     main database stays the only source of an entry's text, status and hash, so `vectordb` has no backup of
 #     its own and is rebuilt from the entries after a lost volume or a `make db-restore`.
-#   * It has no `ports`: nothing is published to the host or the LAN. `rag-worker` alone is given its address
-#     (VECTOR_DATABASE_URL), so only `rag-worker` reaches it; `app`, `worker` and `ui` have none.
+#   * So that only `rag-worker` can reach it, two things hold together. It has no `ports`: nothing is
+#     published to the host or the LAN. And it sits alone on a dedicated internal network, `vector`
+#     (`internal: true`: no gateway), which only `rag-worker` joins, besides `default` (the main database
+#     and Voyage). `app`, `worker` and `ui` are not on `vector`, so they have no route to `vectordb`; and
+#     `rag-worker` alone is given its address (VECTOR_DATABASE_URL). `default` is not declared here: the
+#     trial stack configures it in its own override, which leaves `rag-worker`'s `networks` alone.
 #   * `rag-worker` has no `depends_on` on it: a `vectordb` that is down is the failure kind
 #     `vectordb_unreachable` and the lookup is skipped, not a worker that will not start.
 #   * The P14 branch that carries it runs on the trial only: it is never merged into `main`, and live is never
-#     deployed with it. Steps and checks: docs/runbook.md, "Vector database (DEC-213)".
+#     deployed with it. Steps and checks: docs/runbook.md, "Voyage vector RAG (DEC-213)".
 #
 # `rag-worker` claims only `rag_lookup` and `knowledge_draft` (web/rag_worker.py) and reclaims only those
 # types. Restart it after any merge under backend/app (DEC-099), not only one that touches web/rag_worker.py,
@@ -72,6 +76,11 @@ services:
       HOME: /tmp
       # The one variable `rag-worker` has beyond the base `app`'s (test_compose_rag.py): the only address of `vectordb`.
       VECTOR_DATABASE_URL: postgresql://vector:${VECTOR_DB_PASSWORD}@vectordb:5432/vectors
+    # `default` for the main database and the way out to Voyage, `vector` for `vectordb`. Naming `networks`
+    # drops the implicit default, so it is listed: the one service of this file that is on both.
+    networks:
+      - default
+      - vector
     volumes:
       - ./backend/app:/srv/backend/app:ro     # live code: a merge needs `restart`, not `build`
       - ./conf:/srv/conf:ro
@@ -89,9 +98,11 @@ services:
 
   # The independent vector database (header, "THE VECTOR DATABASE"). No `ports`, no `env_file` (the main
   # `.env` with its keys and passwords must not reach it), no `depends_on`: it is a plain pgvector server and
-  # `rag-worker` finds it by the name `vectordb` on the Compose network.
+  # `rag-worker` finds it by the name `vectordb` on the `vector` network, the only network it is on.
   vectordb:
     image: pgvector/pgvector:0.8.0-pg16
+    networks:
+      - vector
     environment:
       POSTGRES_USER: vector
       POSTGRES_PASSWORD: ${VECTOR_DB_PASSWORD:?set VECTOR_DB_PASSWORD in .env (runbook, DEC-213)}
@@ -108,3 +119,8 @@ services:
 
 volumes:
   vectordata:
+
+# Only `vectordb` and `rag-worker` join it. `default` is deliberately not declared in this file.
+networks:
+  vector:
+    internal: true

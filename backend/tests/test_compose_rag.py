@@ -75,8 +75,13 @@ def test_the_override_defines_only_app_rag_worker_and_vectordb():
     """No other service is redefined: `worker`, `db` and `ui` are exactly the base file's. `vectordb` is
     the one service P14-T04 (DEC-213) adds, and its named volume the one top-level key."""
     assert set(_services()) == {"app", "rag-worker", "vectordb"}
-    assert set(_load(OVERRIDE)) <= {"services", "volumes"}, "the override adds a top-level key"
+    assert set(_load(OVERRIDE)) <= {
+        "services",
+        "volumes",
+        "networks",
+    }, "the override adds a top-level key"
     assert set(_load(OVERRIDE)["volumes"]) == {"vectordata"}
+    assert set(_load(OVERRIDE)["networks"]) == {"vector"}
 
 
 # --------------------------------------------------------------------------- the three mounts
@@ -133,10 +138,11 @@ def test_rag_worker_is_the_base_app_in_every_key_but_command_ports_volumes_and_o
     fails and names it. `command` differs by design, `ports` must be absent, and `volumes` has its own
     tests (one extra read-only mount). `environment` is the base app's plus exactly one variable,
     `VECTOR_DATABASE_URL` (P14-T04, DEC-213): the vector database's address, given to this service only.
+    `networks` is the base app's implicit `default` plus `vector`, pinned below.
     """
     app = _load(BASE)["services"]["app"]
     rag = _services()["rag-worker"]
-    exempt = {"command", "ports", "volumes", "environment"}
+    exempt = {"command", "ports", "volumes", "environment", "networks"}
     keys = (set(app) | set(rag)) - exempt
     assert {"build", "image", "user", "env_file", "extra_hosts"} <= keys
     for key in sorted(keys):
@@ -248,6 +254,51 @@ def test_no_other_service_depends_on_vectordb():
         assert "vectordb" not in depends, name
 
 
+def _networks_of(service: dict) -> list[str]:
+    """A service's `networks`, as a list of names whether Compose is given a list or a mapping."""
+    return list(service.get("networks") or [])
+
+
+def test_vector_is_a_dedicated_internal_network_and_the_only_one_the_override_declares():
+    """P14-T04 fix round 1 (F1, DEC-213 item 2): "reachable only from rag-worker" is enforced by the
+    network and not by a convention. `internal: true` gives it no gateway; `default` is never declared here
+    (it is implicit, and the trial's own override configures it)."""
+    networks = _load(OVERRIDE)["networks"]
+    assert set(networks) == {"vector"}
+    assert networks["vector"] == {"internal": True}
+
+
+def test_vectordb_is_on_the_vector_network_and_on_no_other():
+    assert _networks_of(_vectordb()) == ["vector"]
+
+
+def test_rag_worker_is_on_default_for_the_database_and_voyage_plus_vector():
+    names = _networks_of(_services()["rag-worker"])
+    assert len(names) == len(set(names)) == 2
+    assert set(names) == {"default", "vector"}
+
+
+def test_no_other_service_of_either_file_is_on_vector():
+    """`app`, `worker` and `ui` keep the implicit `default`; nothing but `rag-worker` and `vectordb` joins
+    `vector`, in the base file or the override."""
+    base = _load(BASE)["services"]
+    assert {"app", "worker", "ui", "db"} <= set(base)
+    for name, service in {**base, **_services()}.items():
+        if name in ("rag-worker", "vectordb"):
+            continue
+        assert "vector" not in _networks_of(service), name
+    for name in ("app", "worker", "ui", "db"):
+        assert "vector" not in _networks_of(base[name]), name
+    assert "networks" not in _load(BASE), "the base file declares a network"
+    assert "vector" not in BASE.read_text(encoding="utf-8").replace("vectordb", "")
+
+
+def test_the_override_does_not_name_default_so_the_trials_own_override_may_configure_it():
+    """The trial stack adds an untracked override that sets `networks: default: ipam: ...`. Declaring
+    `default` here too would make two files fight over it; `rag-worker` only lists it by name."""
+    assert "default" not in _load(OVERRIDE)["networks"]
+
+
 def test_the_header_says_what_vectordb_is_and_that_this_branch_is_trial_only():
     text = OVERRIDE.read_text(encoding="utf-8")
     header = text.split("\nservices:")[0]
@@ -256,7 +307,8 @@ def test_the_header_says_what_vectordb_is_and_that_this_branch_is_trial_only():
         "vectordb",
         "pgvector",
         "derived index",  # it holds nothing the main database does not: rebuilt, never backed up
-        "only `rag-worker` reaches it",
+        "only `rag-worker` can reach it",
+        "internal network",
         "no `ports`",
         "never merged into `main`",
         "trial",
