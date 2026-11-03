@@ -856,18 +856,21 @@ kết luận của ①**. Hành động của analyst giữ nguyên tên: route 
 Không thêm bảng, cột, index hay quyền, và **không dòng nào bị sửa hay xóa** (`llm_runs` là append-only,
 017). Cơ sở dữ liệu thử nghiệm được **xóa trước khi triển khai** (spec §4.1 và §11), nên không có lớp
 tương thích với dữ liệu cũ. Nếu bước xóa bị bỏ qua, hoặc có alert đến giữa lúc xóa và lúc triển khai,
-khối `DO` đầu file **từ chối chạy**: đếm các run `triage` có `result->>'suggested_action' = 'escalate'`,
-và khi còn bất kỳ run nào thì `RAISE EXCEPTION '022: <n> triage runs still say escalate — wipe the trial
-database first (spec §11); nothing changed'`. Khối này chạy **trước** khi đụng tới ràng buộc, và cả file
-là **một transaction** (`BEGIN … COMMIT`, `psql -v ON_ERROR_STOP=1`): từ chối thì ràng buộc cũ còn
-nguyên, không dòng nào đổi, `schema_migrations` không ghi 022. Một run `triage` có `result` lưu
-`needs_review` còn lời đề xuất `escalate` của model nằm trong `gate_result.proposed_verdict` thì **không**
-bị đếm: ràng buộc chỉ xét giá trị đã lưu.
+khối `DO` đầu file **từ chối chạy**. Không có gì đọc một `escalate` đã lưu của ① (phán quyết của Giám đốc,
+DEC-213), nên khối này đếm các run `triage` còn giữ tên cũ **ở bất kỳ chỗ nào ① lưu phán quyết**:
+`result->>'suggested_action'` (giá trị đã lưu, chỗ duy nhất ràng buộc xét), `result->>'structured_only_verdict'`
+(của verifier), `gate_result->>'proposed_verdict'` (lời kết luận của chính model, có thể đã bị cổng giữ lại
+thành `needs_review`; `backups/latest.dump` có sáu dòng như vậy) và `gate_result->>'final_verdict'`. Mỗi run
+chỉ đếm một lần dù nhiều chỗ cùng ghi `escalate`. Khi còn bất kỳ run nào thì `RAISE EXCEPTION '022: <n> triage
+runs still say escalate — wipe the trial database first (spec §11); nothing changed'`. Khối này chạy **trước**
+khi đụng tới ràng buộc, và cả file là **một transaction** (`BEGIN … COMMIT`, `psql -v ON_ERROR_STOP=1`):
+từ chối thì ràng buộc cũ còn nguyên, không dòng nào đổi, `schema_migrations` không ghi 022. Cách gỡ là xóa cơ
+sở dữ liệu thử nghiệm theo spec §11 (việc của Chủ sở hữu), rồi chạy lại `make migrate`.
 
 Thử vi phạm: `test_constraints.py` thêm 2 ca âm (`escalate`, `true_positive ` thừa dấu cách) và 2 ca
 dương (`true_positive`, `false_positive`); `backend/tests/test_migration_022.py` thử ràng buộc trên cơ sở
 dữ liệu thật, thử áp 022 lên một cơ sở dữ liệu đang ở 021 bằng `scripts/migrate.sh` (các dòng không đổi),
-và thử từ chối khi còn một run `escalate`.
+và thử từ chối khi còn một run `escalate`, mỗi chỗ trong bốn chỗ một ca (cùng ca đếm một lần).
 
 ---
 

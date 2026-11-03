@@ -2013,15 +2013,18 @@ INSERT INTO schema_migrations (version) VALUES ('021_archive');
 -- lợi cho việc điều chỉnh kết luận AI"). `llm_runs` is append-only (017), so a row saying `escalate`
 -- could not be rewritten here anyway.
 --
--- THE REFUSAL. The `DO` block below counts the `triage` runs whose stored answer is `escalate` and, if
--- there are any, raises and stops: the wipe was skipped, or an alert arrived between the wipe and the
--- deploy (Review Focus 4). It runs BEFORE the constraint is touched, and the whole file is ONE
--- transaction (BEGIN ... COMMIT; `psql -v ON_ERROR_STOP=1` ends the session on the error, which rolls
--- the transaction back), so a refusal changes nothing: the old constraint stays, no row moves, and
--- `schema_migrations` does not record 022. Wipe the database (runbook), then run `make migrate` again.
--- A `triage` run whose stored `result` says `needs_review` while the model's own claim, kept in
--- `gate_result.proposed_verdict`, says `escalate`, is NOT counted: the stored answer is what the
--- constraint judges, and `needs_review` is in the new set.
+-- THE REFUSAL. Nothing reads a stored ① `escalate` (Director ruling, DEC-213), so the `DO` block below
+-- counts the `triage` runs that hold the old name ANYWHERE ①'s verdict is kept, and if there are any,
+-- raises and stops: the wipe was skipped, or an alert arrived between the wipe and the deploy (Review
+-- Focus 4). The four places are `result.suggested_action` (the stored answer, the only one the CHECK
+-- judges), `result.structured_only_verdict` (the verifier's), `gate_result.proposed_verdict` (the
+-- model's own claim, which the gate may have held as `needs_review`: the tracked `backups/latest.dump`
+-- has six such rows) and `gate_result.final_verdict`. A run is counted once, however many of them say
+-- `escalate`. The block runs BEFORE the constraint is touched, and the whole file is ONE transaction
+-- (BEGIN ... COMMIT; `psql -v ON_ERROR_STOP=1` ends the session on the error, which rolls the
+-- transaction back), so a refusal changes nothing: the old constraint stays, no row moves, and
+-- `schema_migrations` does not record 022. Wipe the trial database per spec §11 (the Owner-run wipe),
+-- then run `make migrate` again.
 -- ============================================================================
 
 
@@ -2035,7 +2038,10 @@ BEGIN
   SELECT count(*) INTO still_escalate
     FROM llm_runs
    WHERE pipeline = 'triage'
-     AND result->>'suggested_action' = 'escalate';
+     AND 'escalate' IN (result->>'suggested_action',
+                        result->>'structured_only_verdict',
+                        gate_result->>'proposed_verdict',
+                        gate_result->>'final_verdict');
   IF still_escalate > 0 THEN
     RAISE EXCEPTION '022: % triage runs still say escalate — wipe the trial database first (spec §11); nothing changed', still_escalate;
   END IF;
