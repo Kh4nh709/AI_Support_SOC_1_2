@@ -1021,6 +1021,22 @@ describe("accessibility", () => {
     expect(await scan(container)).toEqual([]);
   });
 
+  it("has no axe violation with the AI's conclusion held by the system (P14-T03)", async () => {
+    serveViews(
+      done(
+        run({
+          conclusion: "need_more_data",
+          conclusion_label: "Cần thêm dữ liệu",
+          model_conclusion: "false_positive",
+          held_by: ["no_verified_evidence", "high_severity_injection_finding"],
+        }),
+      ),
+    );
+    const { container } = renderColumn();
+    await screen.findByText(/AI kết luận/);
+    expect(await scan(container)).toEqual([]);
+  });
+
   it("has no axe violation when stalled or failed", async () => {
     serveViews(view({ state: "stalled", run_id: RUN, minutes: 9 }));
     const stalled = renderColumn();

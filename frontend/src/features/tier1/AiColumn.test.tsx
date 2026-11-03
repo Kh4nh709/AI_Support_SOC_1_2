@@ -718,6 +718,17 @@ describe("accessibility", () => {
         correlated_now: 9,
       }),
     ],
+    [
+      "ready and held for a person (P14-T03)",
+      view({
+        suggestion: suggestion({
+          suggested_action: "needs_review",
+          gate: { forced: true, forced_by: ["step4"], proposed_verdict: "false_positive" },
+        }),
+        proposed_action: "false_positive",
+        held_by: ["fp_policy:asset_criticality", "verifier_disagrees"],
+      }),
+    ],
     ["hidden", blindView()],
     ["pending", view({ suggestion: null, triage_status: "pending" })],
     [
