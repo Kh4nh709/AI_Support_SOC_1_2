@@ -33,6 +33,7 @@ from app.tier1 import labels
 from app.web import deps, main
 from fastapi.testclient import TestClient
 
+from tests import conftest
 from tests.scratch_db import insert_alert, insert_user, scratch_database
 
 UNDO = "/api/admin/labels/undo"
@@ -62,7 +63,7 @@ def _require_db_marker_for_scratch(request):
 
 
 class World(NamedTuple):
-    dsn: str
+    dsn: conftest.Dsn  # not str: a plain str prints a password in a failing test's report
     admin_id: str
     tier1_id: str
     alert_id: str
@@ -100,7 +101,7 @@ def world(scratch_dsn, tmp_path, monkeypatch) -> World:
     monkeypatch.setattr(labels, "CANDIDATES_PATH", candidates)
     monkeypatch.setattr(labels, "G1_CLUSTERS_PATH", tmp_path / "g1_clusters.csv")
     monkeypatch.setattr(labels, "FREEZE_MARKER", tmp_path / "gold_v1.sha256")
-    return World(str(scratch_dsn), admin_id, tier1_id, alert_id)
+    return World(scratch_dsn, admin_id, tier1_id, alert_id)
 
 
 def _label(world: World, user_id: str) -> None:
@@ -150,6 +151,15 @@ def real_connection(world, monkeypatch) -> Callable[[Claims], TestClient]:
         yield client_for
     finally:
         main.app.dependency_overrides.pop(deps.current_user, None)
+
+
+@pytest.mark.db
+def test_the_world_keeps_the_redacted_dsn_so_a_failing_test_prints_no_password(world) -> None:
+    """`World` holds the `conftest.Dsn` itself, not `str(dsn)`: pytest prints a failing test's arguments
+    with `repr`, and only a `Dsn` redacts the password there."""
+    assert type(world.dsn) is conftest.Dsn
+    assert repr(world.dsn) == repr(conftest.redact_dsn(world.dsn))
+    assert repr(world.dsn) in repr(world)
 
 
 # ---------------------------------------------------------------------------

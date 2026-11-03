@@ -32,6 +32,7 @@ from app.web.routers import admin_lab
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 
+from tests import conftest
 from tests.lab_data import at
 from tests.scratch_db import insert_user, scratch_database
 from tests.test_archive import _put_alert
@@ -50,7 +51,7 @@ def scratch_dsn():
 
 
 class World(NamedTuple):
-    dsn: str
+    dsn: conftest.Dsn  # not str: a plain str prints a password in a failing test's report
     admin_id: str
     tier1_id: str
     tier2_id: str
@@ -71,7 +72,7 @@ def world(scratch_dsn) -> World:
         )
         setup.execute("DELETE FROM alerts WHERE alert_id LIKE 'p14t09-%'")
         return World(
-            str(scratch_dsn),
+            scratch_dsn,
             insert_user(setup, "admin"),
             insert_user(setup, "tier1"),
             insert_user(setup, "tier2"),
@@ -148,6 +149,14 @@ def _run(client: TestClient, **over) -> dict[str, Any]:
 
 def _when(text: str) -> datetime:
     return datetime.fromisoformat(text)
+
+
+def test_the_world_keeps_the_redacted_dsn_so_a_failing_test_prints_no_password(world):
+    """`World` holds the `conftest.Dsn` itself, not `str(dsn)`: pytest prints a failing test's arguments
+    with `repr`, and only a `Dsn` redacts the password there."""
+    assert type(world.dsn) is conftest.Dsn
+    assert repr(world.dsn) == repr(conftest.redact_dsn(world.dsn))
+    assert repr(world.dsn) in repr(world)
 
 
 # ── the routes, exactly ─────────────────────────────────────────────────────────────────────
