@@ -210,6 +210,11 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "knowledge.rejected",
         "knowledge.retired",
         "knowledge.redraft_requested",
+        # P14-T09 (DEC-213): what an admin did to the lab: a run recorded, an alert labelled by hand
+        # (the label of `lab.labeled` is the admin's own ground truth, not a gold labeller's blind
+        # verdict: it is shown, unlike `label.created`'s).
+        "lab.run_created",
+        "lab.labeled",
     ),
     "alerts_cases": (
         "alert.received",

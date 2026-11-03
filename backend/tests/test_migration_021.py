@@ -309,10 +309,12 @@ def test_a_case_status_outside_the_five_is_still_refused(db):
 
 
 def test_the_event_constraint_holds_38_names_the_36_first_in_order(db):
+    """The shared database is migrated to the end, so a later migration's names (024: `lab.run_created`,
+    `lab.labeled`, DEC-213) follow the 38: they only ever append."""
     names = _constraint_names(db, "ck_audit_event_type")
-    assert len(names) == len(set(names)) == 38
+    assert len(names) == len(set(names)) >= 38
     assert names[:36] == EVENTS_BEFORE_021
-    assert names[36:] == EVENTS_IN_021
+    assert names[36:38] == EVENTS_IN_021
 
 
 @pytest.mark.parametrize("name", EVENTS_IN_021)
@@ -386,7 +388,8 @@ def test_021_applies_on_a_database_at_020_the_way_make_migrate_runs_it(tmp_path)
                     "WHERE conname = 'ck_audit_event_type'"
                 ).fetchone()[0],
             )
-            assert names == EVENTS_BEFORE_021 + EVENTS_IN_021
+            # the real migrate.sh applied every file above 020: 024's two names follow 021's
+            assert names == EVENTS_BEFORE_021 + EVENTS_IN_021 + ["lab.run_created", "lab.labeled"]
             conn.execute(
                 "INSERT INTO audit_events (event_type, subject_id, actor_role) "
                 "VALUES ('alert.archived', 'mig21-up', 'system')"

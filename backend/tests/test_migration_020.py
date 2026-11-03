@@ -828,7 +828,7 @@ def test_the_event_constraint_holds_36_names_the_28_first_in_order(db):
     assert len(names) == len(set(names)) >= 36
     assert names[:28] == EVENTS_BEFORE_020
     assert names[28:36] == EVENTS_IN_020
-    assert names[36:] == ["alert.archived", "case.archived"]
+    assert names[36:38] == ["alert.archived", "case.archived"]
 
 
 def test_the_event_constraint_is_the_python_event_types(db):
@@ -1037,8 +1037,12 @@ def test_020_applies_on_a_database_at_019_the_way_make_migrate_runs_it(tmp_path)
                     "WHERE conname = 'ck_audit_event_type'"
                 ).fetchone()[0]
             )
-            # 020's 36, then 021's two: the real migrate.sh applied every file above 019
-            assert names == EVENTS_BEFORE_020 + EVENTS_IN_020 + ["alert.archived", "case.archived"]
+            # 020's 36, then 021's two, then 024's two: the real migrate.sh applied every file above 019
+            assert names == (
+                EVENTS_BEFORE_020
+                + EVENTS_IN_020
+                + ["alert.archived", "case.archived", "lab.run_created", "lab.labeled"]
+            )
             conn.rollback()
     finally:
         admin.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(dbname)))

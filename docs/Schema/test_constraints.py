@@ -182,6 +182,50 @@ case("023 · failure_kind ngoài sáu loại đóng trên dòng 'failed'",
      "ck_rag_results_failure_kind", RR.format(st="'failed'", fk="'network'").replace("@N@", "a4"))
 case("023 · job_type 'knowledge_embedd' (gõ thừa một chữ) không vào được", "ck_jobs_job_type",
      "INSERT INTO jobs (job_type,subject_id) VALUES ('knowledge_embedd','x');")
+# ── 024 · DEC-213 · lab_runs, lab_labels, và hai event `lab.*` ───────────────────────────────
+# Một run của lab là cửa sổ [starts_at, ends_at): kết thúc phải SAU bắt đầu, và hai cửa sổ không bao giờ
+# chồng nhau (EXCLUDE trên tstzrange '[)'). Mỗi alert có tối đa một nhãn TP/FP.
+LAB_U = "'00000000-1111-4000-8000-000000000001'"
+def LRUN(sfx, name="'r'", purpose="'test'", st="'2026-11-05 09:00+00'", en="'2026-11-05 11:00+00'"):
+    return ("INSERT INTO lab_runs (run_id,name,purpose,starts_at,ends_at,created_by) VALUES "
+            f"('00000000-0000-4000-8000-00000000f0{sfx}',{name},{purpose},{st},{en},{LAB_U});")
+case("024 · run lab có ends_at = starts_at", "ck_lab_runs_ends_after_starts",
+     LRUN("01", st="'2026-11-05 09:00+00'", en="'2026-11-05 09:00+00'"))
+case("024 · run lab có ends_at < starts_at", "ck_lab_runs_ends_after_starts",
+     LRUN("02", st="'2026-11-05 11:00+00'", en="'2026-11-05 09:00+00'"))
+case("024 · run lab có purpose ngoài {kb,test}", "ck_lab_runs_purpose",
+     LRUN("03", purpose="'train'"))
+case("024 · run lab có tên rỗng", "ck_lab_runs_name_length", LRUN("04", name="''"))
+case("024 · run lab có tên 81 ký tự", "ck_lab_runs_name_length", LRUN("05", name="repeat('x',81)"))
+case("024 · hai run lab trùng tên", "lab_runs_name_key",
+     LRUN("06", name="'dup'") +
+     LRUN("07", name="'dup'", st="'2026-11-06 09:00+00'", en="'2026-11-06 11:00+00'"))
+case("024 · hai run lab có cửa sổ chồng nhau", "ex_lab_runs_no_overlap",
+     LRUN("08", name="'a'") +
+     LRUN("09", name="'b'", st="'2026-11-05 10:59+00'", en="'2026-11-05 12:00+00'"))
+case("024 · run lab nằm trọn trong cửa sổ của run khác", "ex_lab_runs_no_overlap",
+     LRUN("0a", name="'a'") +
+     LRUN("0b", name="'b'", st="'2026-11-05 09:30+00'", en="'2026-11-05 10:00+00'"))
+case("024 · nhãn lab ngoài {true_positive,false_positive}", "ck_lab_labels_label",
+     ins(70) + LRUN("0c") +
+     "INSERT INTO lab_labels (alert_id,run_id,label,labeled_by) VALUES "
+     f"('T-70','00000000-0000-4000-8000-00000000f00c','benign',{LAB_U});")
+case("024 · một alert hai nhãn lab", "lab_labels_pkey",
+     ins(71) + LRUN("0d") +
+     "INSERT INTO lab_labels (alert_id,run_id,label,labeled_by) VALUES "
+     f"('T-71','00000000-0000-4000-8000-00000000f00d','true_positive',{LAB_U}),"
+     f"('T-71','00000000-0000-4000-8000-00000000f00d','false_positive',{LAB_U});")
+case("024 · nhãn lab cho alert không có", "lab_labels_alert_id_fkey",
+     LRUN("0e") +
+     "INSERT INTO lab_labels (alert_id,run_id,label,labeled_by) VALUES "
+     f"('khong-co-alert','00000000-0000-4000-8000-00000000f00e','true_positive',{LAB_U});")
+case("024 · nhãn lab cho run không có", "lab_labels_run_id_fkey",
+     ins(72) +
+     "INSERT INTO lab_labels (alert_id,run_id,label,labeled_by) VALUES "
+     f"('T-72','00000000-0000-4000-8000-00000000ffff','true_positive',{LAB_U});")
+case("024 · event_type 'lab.labelled' (gõ thừa một chữ) không vào được", "ck_audit_event_type",
+     "INSERT INTO audit_events (event_type,subject_id,actor_role) "
+     "VALUES ('lab.labelled','y','system');")
 case("009 · actor_role='system' mà CÓ actor_id", "ck_audit_actor_id_theo_role",
      "INSERT INTO audit_events (event_type,subject_id,actor_role,actor_id) "
      "VALUES ('alert.auto_closed','y','system','00000000-1111-4000-8000-000000000001');")
@@ -245,6 +289,19 @@ POSITIVE = [
     ("023 · job 'knowledge_embed' (chủ thể là uuid của entry)",
      "INSERT INTO jobs (job_type,subject_id) VALUES "
      "('knowledge_embed','00000000-0000-4000-8000-00000000e0b4');"),
+    ("024 · hai run lab liền kề: cái sau bắt đầu đúng lúc cái trước kết thúc (cửa sổ nửa mở)",
+     LRUN("a1", name="'a'", st="'2026-11-05 09:00+00'", en="'2026-11-05 11:00+00'") +
+     LRUN("a2", name="'b'", st="'2026-11-05 11:00+00'", en="'2026-11-05 13:00+00'")),
+    ("024 · run lab purpose='kb' và purpose='test', tên 80 ký tự",
+     LRUN("a3", name="repeat('x',80)", purpose="'kb'") +
+     LRUN("a4", name="'t'", st="'2026-11-07 09:00+00'", en="'2026-11-07 11:00+00'")),
+    ("024 · nhãn lab true_positive cho một alert có thật, trong một run",
+     ins(96) + LRUN("a5") +
+     "INSERT INTO lab_labels (alert_id,run_id,label,labeled_by) VALUES "
+     f"('T-96','00000000-0000-4000-8000-00000000f0a5','true_positive',{LAB_U});"),
+    ("024 · audit lab.run_created và lab.labeled, actor_role='admin' CÓ actor_id",
+     "INSERT INTO audit_events (event_type,subject_id,actor_role,actor_id) VALUES "
+     f"('lab.run_created','r1','admin',{LAB_U}),('lab.labeled','a1','admin',{LAB_U});"),
     ("M4 · auto_closed có closed_at, sealed_at NULL (cụm còn hút)",
      ins(90, status="'auto_closed'", closed_at="now()")),
     ("D-C5 · escalated_tier2 không seal",

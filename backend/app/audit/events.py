@@ -1,9 +1,10 @@
 """Append an audit_events row for every human decision and lifecycle transition.
 
-`EVENT_TYPES` mirrors the 38-name set `ck_audit_event_type` fixes (context pack
+`EVENT_TYPES` mirrors the 40-name set `ck_audit_event_type` fixes (context pack
 §6.1; migration 016 = 21 v1 names + 6 v3 names; migration 019 adds
 `admin.settings_changed`, DEC-200; migration 020 adds the eight of the learned-knowledge
-feature, DEC-210; migration 021 adds `alert.archived` and `case.archived`, DEC-212) — kept
+feature, DEC-210; migration 021 adds `alert.archived` and `case.archived`, DEC-212; migration 024
+adds `lab.run_created` and `lab.labeled`, DEC-213) — kept
 here so an unknown name is
 a clear `PermanentError` before any SQL runs, rather than the DB CHECK's generic
 constraint-violation message. `audit_events` is append-only (017); this module
@@ -64,6 +65,9 @@ EVENT_TYPES = frozenset(
         # 2 archive additions (021_archive.sql, DEC-212): the old queue closed out without review
         "alert.archived",
         "case.archived",
+        # 2 lab additions (024_lab.sql, DEC-213): a lab run recorded, an alert labelled by hand
+        "lab.run_created",
+        "lab.labeled",
     }
 )
 
