@@ -376,7 +376,10 @@ def test_021_applies_on_a_database_at_020_the_way_make_migrate_runs_it(tmp_path)
     stems = {path.stem for path in SCHEMA_DIR.glob(MIGRATION_FILES)}
     total = len(stems)
     before = len(list(at_020.glob(MIGRATION_FILES)))
-    assert before == total - 1 == len({s for s in stems if int(s[:3]) < 21})
+    # 021 is no longer the last migration (023, P14-T04, follows it): the tree at 020 is every file
+    # below 21, and the real `migrate.sh` applies 021 and whatever comes after it.
+    after = total - before
+    assert before == len({s for s in stems if int(s[:3]) < 21}) and after >= 1
 
     dbname = f"{conftest._dbname(session)}_021up_test"
     dsn = _with_db(session, dbname)
@@ -388,7 +391,7 @@ def test_021_applies_on_a_database_at_020_the_way_make_migrate_runs_it(tmp_path)
         assert "021_archive" not in runs[0]
         assert f"migrate: 0 applied, {before} already present" in runs[0]
         assert "migrate: applying 021_archive" in runs[1]
-        assert f"migrate: 1 applied, {before} already present" in runs[1]
+        assert f"migrate: {after} applied, {before} already present" in runs[1]
         assert f"migrate: 0 applied, {total} already present" in runs[2]
         assert "migrate: applying" not in runs[2]
         with psycopg.connect(dsn) as conn:

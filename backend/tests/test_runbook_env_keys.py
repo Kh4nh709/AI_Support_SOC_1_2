@@ -250,3 +250,78 @@ def test_no_file_still_says_every_alert_carries_the_unknown_context():
     assert "payload's `enrichment`" in row and "payload's `enrichment`" in bullet
     # the consequences stay, for an alert that has the unknown context
     assert "for an alert with the unknown context" in paragraph
+
+
+# --- P14-T04 / DEC-213: the one runbook section of the Voyage vector RAG --------------------------
+
+VOYAGE_TITLE = "Voyage vector RAG (DEC-213)"
+VOYAGE_HEADING = f"\n### {VOYAGE_TITLE}\n"
+OLD_TITLE = "Vector database (DEC-213)"
+COMPOSE_RAG_PATH = REPO_ROOT / "docker-compose.rag.yml"
+
+
+def _voyage_section() -> str:
+    assert (
+        VOYAGE_HEADING in _keys_section() + "\n"
+    ), "the runbook has no 'Voyage vector RAG' section"
+    return (_keys_section() + "\n").split(VOYAGE_HEADING)[1].split("\n### ")[0]
+
+
+def test_the_voyage_section_comes_first_with_trial_only_never_on_live():
+    section = _voyage_section()
+    first = next(line for line in section.splitlines() if line.strip())
+    assert first.startswith("**Trial only, never on live.**"), first
+    assert "never merged into `main`" in first
+    assert not [ln for ln in section.splitlines() if KEY_ROW_RE.match(ln)]  # no second key row
+
+
+def test_the_old_title_is_gone_and_the_three_references_name_the_new_one():
+    for path in (RUNBOOK_PATH, COMPOSE_RAG_PATH, ENV_EXAMPLE_PATH):
+        assert OLD_TITLE not in path.read_text(encoding="utf-8"), path.name
+    assert f'docs/runbook.md, "{VOYAGE_TITLE}"' in COMPOSE_RAG_PATH.read_text(encoding="utf-8")
+    env_line = next(
+        ln
+        for ln in ENV_EXAMPLE_PATH.read_text(encoding="utf-8").splitlines()
+        if ln.startswith("VOYAGE_API_KEY=")
+    )
+    assert VOYAGE_TITLE in env_line
+    assert f"**{VOYAGE_TITLE.rsplit(' (', 1)[0]}**" in _rows()["VECTOR_DATABASE_URL"]
+
+
+def test_the_section_says_only_rag_worker_can_reach_vectordb_because_of_the_internal_network():
+    section = " ".join(_voyage_section().split())
+    assert "only `rag-worker` can reach `vectordb`" in section
+    assert "`vector`" in section and "`internal: true`" in section
+    assert "no `ports:`" in section
+    assert "`app`, `worker` and `ui` are not on `vector`" in section
+    assert "by address" not in section and "no address for it" not in section
+
+
+def test_the_check_is_the_test_z_one_for_app_and_worker_and_prints_no_value():
+    section = _voyage_section()
+    for service in ("app", "worker"):
+        check = f"docker compose exec -T {service} sh -c 'test -z \"$VECTOR_DATABASE_URL\" && echo none'"
+        assert check in section, service
+    assert "wc -c" not in section and "printenv" not in section
+
+
+def test_the_section_keeps_only_what_is_true_now():
+    """P14-T04 adds contracts, a container and a network: no Voyage call is made, `vectordb` has no table, and
+    no lookup fails or succeeds because of it yet. The section must not describe a behaviour that is not there.
+    """
+    section = " ".join(_voyage_section().split())
+    assert "no Voyage call" in section and "empty pgvector server" in section
+    for future in ("a failed lookup", "is rebuilt", "--rebuild", "vector_index"):
+        assert future not in section, future
+
+
+def test_the_migration_row_of_start_everything_names_the_trial_and_no_022_clause():
+    row = next(
+        ln
+        for ln in RUNBOOK_PATH.read_text(encoding="utf-8").splitlines()
+        if ln.startswith("| start everything |")
+    )
+    assert "on the trial database today (it applies `023_vector_rag.sql`" in row
+    assert "on the live database today" not in row
+    assert "there is no 022" not in row and "the number belongs to another card" not in row
+    assert "`migrate: 0 applied, 22 already present` after that." in row

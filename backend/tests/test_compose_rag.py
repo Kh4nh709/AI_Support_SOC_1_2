@@ -32,6 +32,9 @@ BASE = REPO_ROOT / "docker-compose.yml"
 OVERRIDE = REPO_ROOT / "docker-compose.rag.yml"
 CONTAINER_ROOT = PurePosixPath("/srv")
 MOUNT = "/srv/kb_learned"
+VECTOR_URL_KEY = "VECTOR_DATABASE_URL"
+VECTOR_URL = "postgresql://vector:${VECTOR_DB_PASSWORD}@vectordb:5432/vectors"
+VECTOR_PASSWORD = "${VECTOR_DB_PASSWORD:?set VECTOR_DB_PASSWORD in .env (runbook, DEC-213)}"
 
 
 def _load(path: Path) -> dict:
@@ -68,10 +71,17 @@ def test_the_mount_is_where_the_code_looks_for_the_directory():
     assert str(CONTAINER_ROOT / "kb_learned") == MOUNT
 
 
-def test_the_override_defines_only_app_and_rag_worker():
-    """No other service is redefined: `worker`, `db` and `ui` are exactly the base file's."""
-    assert set(_services()) == {"app", "rag-worker"}
-    assert set(_load(OVERRIDE)) <= {"services"}, "the override adds a top-level key"
+def test_the_override_defines_only_app_rag_worker_and_vectordb():
+    """No other service is redefined: `worker`, `db` and `ui` are exactly the base file's. `vectordb` is
+    the one service P14-T04 (DEC-213) adds, and its named volume the one top-level key."""
+    assert set(_services()) == {"app", "rag-worker", "vectordb"}
+    assert set(_load(OVERRIDE)) <= {
+        "services",
+        "volumes",
+        "networks",
+    }, "the override adds a top-level key"
+    assert set(_load(OVERRIDE)["volumes"]) == {"vectordata"}
+    assert set(_load(OVERRIDE)["networks"]) == {"vector"}
 
 
 # --------------------------------------------------------------------------- the three mounts
@@ -122,18 +132,26 @@ def test_rag_worker_runs_the_rag_worker_module():
     assert (REPO_ROOT / "backend" / "app" / "web" / "rag_worker.py").exists()
 
 
-def test_rag_worker_is_the_base_app_in_every_key_but_command_ports_and_volumes():
+def test_rag_worker_is_the_base_app_in_every_key_but_command_ports_volumes_and_one_variable():
     """Every key, not a hand-picked list (T09 review, M7): a key added to the base `app` later (a
     `healthcheck`, `stop_grace_period`, a new `environment` entry) must reach `rag-worker` too, or this
     fails and names it. `command` differs by design, `ports` must be absent, and `volumes` has its own
-    tests (one extra read-only mount)."""
+    tests (one extra read-only mount). `environment` is the base app's plus exactly one variable,
+    `VECTOR_DATABASE_URL` (P14-T04, DEC-213): the vector database's address, given to this service only.
+    `networks` is the base app's implicit `default` plus `vector`, pinned below.
+    """
     app = _load(BASE)["services"]["app"]
     rag = _services()["rag-worker"]
-    exempt = {"command", "ports", "volumes"}
+    exempt = {"command", "ports", "volumes", "environment", "networks"}
     keys = (set(app) | set(rag)) - exempt
-    assert {"build", "image", "user", "env_file", "environment", "extra_hosts"} <= keys
+    assert {"build", "image", "user", "env_file", "extra_hosts"} <= keys
     for key in sorted(keys):
         assert rag.get(key) == app.get(key), f"rag-worker's {key} is not the base app's"
+    extra = {k: v for k, v in rag["environment"].items() if k not in app["environment"]}
+    assert set(extra) == {VECTOR_URL_KEY}, f"rag-worker's extra environment keys: {sorted(extra)}"
+    assert {k: v for k, v in rag["environment"].items() if k != VECTOR_URL_KEY} == app[
+        "environment"
+    ]
 
 
 def test_rag_worker_has_the_base_apps_other_mounts_in_the_same_order():
@@ -159,12 +177,163 @@ def test_the_app_entry_adds_only_the_mount():
     assert _services()["app"]["volumes"] == ["./kb_learned:/srv/kb_learned"]
 
 
+# --------------------------------------------------------------------------- the vectordb service (P14-T04, DEC-213)
+
+
+def _vectordb() -> dict:
+    return _services()["vectordb"]
+
+
+def test_vectordb_is_the_pinned_pgvector_image_for_postgres_16():
+    assert _vectordb()["image"] == "pgvector/pgvector:0.8.0-pg16"
+
+
+def test_vectordb_publishes_nothing_to_the_host_or_the_lan():
+    """No `ports`, and no `expose` either: only a service on the Compose network reaches it."""
+    vectordb = _vectordb()
+    assert "ports" not in vectordb, "vectordb publishes a port: nothing may reach it from the host"
+    assert not vectordb.get("ports")
+    assert "expose" not in vectordb
+    assert "network_mode" not in vectordb
+
+
+def test_vectordb_password_is_the_required_compose_variable_with_the_runbook_message():
+    environment = _vectordb()["environment"]
+    assert environment["POSTGRES_PASSWORD"] == VECTOR_PASSWORD
+    assert environment["POSTGRES_USER"] == "vector"
+    assert environment["POSTGRES_DB"] == "vectors"
+    assert set(environment) == {"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"}
+
+
+def test_vectordb_holds_its_data_in_its_own_named_volume_and_mounts_nothing_else():
+    assert _vectordb()["volumes"] == ["vectordata:/var/lib/postgresql/data"]
+    assert "vectordata" in _load(OVERRIDE)["volumes"]
+    assert "vectordata" not in (_load(BASE).get("volumes") or {})
+    assert _load(BASE)["volumes"].keys() == {"pgdata"}, "the base file's volumes changed"
+
+
+def test_vectordb_has_a_pg_isready_healthcheck_and_restarts_like_the_others():
+    vectordb = _vectordb()
+    assert vectordb["healthcheck"]["test"] == ["CMD-SHELL", "pg_isready -U vector -d vectors"]
+    for key in ("interval", "timeout", "retries"):
+        assert key in vectordb["healthcheck"], key
+    assert vectordb["restart"] == "unless-stopped"
+
+
+def test_vectordb_gets_no_env_file_and_depends_on_nothing():
+    """The main `.env` (LLM key, JWT secret, database passwords) must not reach this container; and it
+    waits for nothing: `rag-worker` does not wait for it either."""
+    vectordb = _vectordb()
+    assert "env_file" not in vectordb
+    assert "depends_on" not in vectordb
+    assert "build" not in vectordb and "user" not in vectordb
+
+
+def test_only_rag_worker_is_given_the_vector_database_url():
+    rag = _services()["rag-worker"]
+    assert rag["environment"][VECTOR_URL_KEY] == VECTOR_URL
+    base = _load(BASE)["services"]
+    for name, service in {**base, **_services()}.items():
+        if name == "rag-worker":
+            continue
+        assert VECTOR_URL_KEY not in (service.get("environment") or {}), name
+    # nor does the `app` entry of the override, nor `worker` through it
+    assert set(_services()["app"]) == {"volumes"}
+    assert "worker" not in _services()
+
+
+def test_rag_worker_does_not_depend_on_vectordb_so_that_a_dead_one_is_a_failure_kind_not_a_start_failure():
+    depends = _services()["rag-worker"]["depends_on"]
+    assert "vectordb" not in depends
+    assert set(depends) == set(_load(BASE)["services"]["app"]["depends_on"]) == {"db"}
+
+
+def test_no_other_service_depends_on_vectordb():
+    for name, service in {**_load(BASE)["services"], **_services()}.items():
+        depends = service.get("depends_on") or {}
+        assert "vectordb" not in depends, name
+
+
+def _networks_of(service: dict) -> list[str]:
+    """A service's `networks`, as a list of names whether Compose is given a list or a mapping."""
+    return list(service.get("networks") or [])
+
+
+def test_vector_is_a_dedicated_internal_network_and_the_only_one_the_override_declares():
+    """P14-T04 fix round 1 (F1, DEC-213 item 2): "reachable only from rag-worker" is enforced by the
+    network and not by a convention. `internal: true` gives it no gateway; `default` is never declared here
+    (it is implicit, and the trial's own override configures it)."""
+    networks = _load(OVERRIDE)["networks"]
+    assert set(networks) == {"vector"}
+    assert networks["vector"] == {"internal": True}
+
+
+def test_vectordb_is_on_the_vector_network_and_on_no_other():
+    assert _networks_of(_vectordb()) == ["vector"]
+
+
+def test_rag_worker_is_on_default_for_the_database_and_voyage_plus_vector():
+    names = _networks_of(_services()["rag-worker"])
+    assert len(names) == len(set(names)) == 2
+    assert set(names) == {"default", "vector"}
+
+
+def test_no_other_service_of_either_file_is_on_vector():
+    """`app`, `worker` and `ui` keep the implicit `default`; nothing but `rag-worker` and `vectordb` joins
+    `vector`, in the base file or the override."""
+    base = _load(BASE)["services"]
+    assert {"app", "worker", "ui", "db"} <= set(base)
+    for name, service in {**base, **_services()}.items():
+        if name in ("rag-worker", "vectordb"):
+            continue
+        assert "vector" not in _networks_of(service), name
+    for name in ("app", "worker", "ui", "db"):
+        assert "vector" not in _networks_of(base[name]), name
+    assert "networks" not in _load(BASE), "the base file declares a network"
+    assert "vector" not in BASE.read_text(encoding="utf-8").replace("vectordb", "")
+
+
+def test_the_override_does_not_name_default_so_the_trials_own_override_may_configure_it():
+    """The trial stack adds an untracked override that sets `networks: default: ipam: ...`. Declaring
+    `default` here too would make two files fight over it; `rag-worker` only lists it by name."""
+    assert "default" not in _load(OVERRIDE)["networks"]
+
+
+def test_the_header_says_what_vectordb_is_and_that_this_branch_is_trial_only():
+    text = OVERRIDE.read_text(encoding="utf-8")
+    header = text.split("\nservices:")[0]
+    flat = " ".join(line.lstrip("# ").strip() for line in header.splitlines())
+    for phrase in (
+        "vectordb",
+        "pgvector",
+        "derived index",  # it holds nothing the main database does not: rebuilt, never backed up
+        "only `rag-worker` can reach it",
+        "internal network",
+        "no `ports`",
+        "never merged into `main`",
+        "trial",
+        "VECTOR_DB_PASSWORD",
+        "DEC-213",
+    ):
+        assert phrase in flat, f"the header no longer says {phrase!r}"
+
+
 # --------------------------------------------------------------------------- the base file is left alone
 
 
 def test_the_base_compose_file_does_not_mention_the_feature():
     text = BASE.read_text(encoding="utf-8")
-    for needle in ("kb_learned", "rag-worker", "rag_worker", "docker-compose.rag"):
+    for needle in (
+        "kb_learned",
+        "rag-worker",
+        "rag_worker",
+        "docker-compose.rag",
+        "vectordb",
+        "pgvector",
+        "vectordata",
+        "VECTOR_DATABASE_URL",
+        "VECTOR_DB_PASSWORD",
+    ):
         assert (
             needle not in text
         ), f"docker-compose.yml names {needle!r}: the feature lives in the override"

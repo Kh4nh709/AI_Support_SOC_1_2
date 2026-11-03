@@ -75,6 +75,70 @@ def test_the_rag_worker_claims_none_of_the_main_workers_job_types() -> None:
     assert set(rag_worker.HANDLERS).isdisjoint(main_worker.HANDLERS)
 
 
+# ── knowledge_embed: a job type that exists and that nobody claims yet (P14-T04, DEC-213) ──────
+
+
+class _IdleConn:
+    """Enough connection for one idle `run_forever` cycle: it only commits."""
+
+    def commit(self) -> None:
+        pass
+
+
+def _types_a_worker_asks_for(monkeypatch, handlers, claim_order=None) -> tuple[list, list]:
+    """Run one cycle of the real `run_forever` over `handlers`, with `reclaim_stale` and `claim_job`
+    recording the job types they are asked for. Returns (types reclaimed, groups claimed)."""
+    from app.infra import worker as infra_worker
+
+    reclaimed: list = []
+    claimed: list = []
+    monkeypatch.setattr(infra_worker, "reclaim_stale", lambda conn, types: reclaimed.append(types))
+    monkeypatch.setattr(infra_worker, "claim_job", lambda conn, types: claimed.append(types))
+    infra_worker.run_forever(_IdleConn, handlers, once=True, claim_order=claim_order)
+    return reclaimed, claimed
+
+
+def test_knowledge_embed_is_a_job_type_so_that_enqueue_and_the_constraint_know_it() -> None:
+    assert "knowledge_embed" in JOB_TYPES
+    assert len(JOB_TYPES) == 9
+
+
+def test_neither_worker_has_a_handler_or_a_timeout_for_knowledge_embed_yet() -> None:
+    """The handler and the claim come with P14-T05; until then a `knowledge_embed` row would sit."""
+    for table in (
+        main_handlers.iter_handlers(),
+        main_handlers.iter_timeouts(),
+        main_worker.HANDLERS,
+        main_worker.TIMEOUTS,
+        rag_handlers.iter_handlers(),
+        rag_handlers.iter_timeouts(),
+        rag_worker.HANDLERS,
+        rag_worker.TIMEOUTS,
+    ):
+        assert "knowledge_embed" not in table
+
+
+def test_the_rag_workers_claim_order_does_not_name_knowledge_embed() -> None:
+    assert "knowledge_embed" not in {t for group in rag_worker.CLAIM_ORDER for t in group}
+
+
+def test_the_main_worker_neither_claims_nor_reclaims_knowledge_embed(monkeypatch) -> None:
+    reclaimed, claimed = _types_a_worker_asks_for(monkeypatch, main_worker.HANDLERS)
+    assert reclaimed and claimed
+    for types in reclaimed + claimed:
+        assert "knowledge_embed" not in types
+
+
+def test_the_rag_worker_neither_claims_nor_reclaims_knowledge_embed(monkeypatch) -> None:
+    reclaimed, claimed = _types_a_worker_asks_for(
+        monkeypatch, rag_worker.HANDLERS, claim_order=rag_worker.CLAIM_ORDER
+    )
+    assert [sorted(types) for types in reclaimed] == [sorted(EXPECTED_TYPES)]
+    assert claimed == [["rag_lookup"], ["knowledge_draft"]]
+    for types in reclaimed + claimed:
+        assert "knowledge_embed" not in types
+
+
 def test_the_rag_handler_files_are_not_under_the_main_workers_package() -> None:
     main_dir = Path(main_handlers.__file__).parent
     rag_dir = Path(rag_handlers.__file__).parent
