@@ -1,8 +1,8 @@
 """P13 whole-branch fix wave, items 16 and 18: the entries ① and ② may put in the learned section.
 
 `llm.builder` owns the contract both prompts share (`LearnedLike`, `MAX_LEARNED_ENTRIES`) and the one
-function that turns a lookup's material into the entries a prompt renders (`prompt_entries`): the cap and
-the closed level. ① (`llm.triage`) and ② (`tier2.dossier`) call it and nothing else; neither defines the
+function that turns a lookup's material into the entries a prompt renders (`prompt_entries`): the cap, the
+closed level and (P14-T06) the percentage, as `(level, pct, text)`. ① (`llm.triage`) and ② (`tier2.dossier`) call it and nothing else; neither defines the
 contract again. The drop of an entry with a forged line is `test_learned_structure.py`.
 
 PURE. No database, no network.
@@ -30,7 +30,7 @@ class Material:
 
 
 def entries_of(*texts: str, level: KbLearnedLevel = KbLearnedLevel.GIONG) -> Material:
-    return Material(None, tuple((level, text) for text in texts))
+    return Material(None, tuple((level, 72, text) for text in texts))
 
 
 # ── item 16: where the contract lives ─────────────────────────────────────────────────────────
@@ -77,11 +77,12 @@ def test_no_material_has_no_entries() -> None:
 def test_at_most_the_cap_is_kept_best_first() -> None:
     texts = [f"# entry {n}" for n in range(B.MAX_LEARNED_ENTRIES + 2)]
     kept = B.prompt_entries(entries_of(*texts))
-    assert [text for _, text in kept] == texts[: B.MAX_LEARNED_ENTRIES]
+    assert [text for _, _, text in kept] == texts[: B.MAX_LEARNED_ENTRIES]
+    assert {pct for _, pct, _ in kept} == {72}
 
 
 def test_a_level_that_is_not_a_closed_learned_level_is_a_type_error_that_does_not_echo_it() -> None:
-    bad = Material(None, ((B.Severity.HIGH, "# entry"),))
+    bad = Material(None, ((B.Severity.HIGH, 72, "# entry"),))
     with pytest.raises(TypeError) as raised:
         B.prompt_entries(bad)
     assert "high" not in str(raised.value) and "HIGH" not in str(raised.value)
@@ -89,9 +90,42 @@ def test_a_level_that_is_not_a_closed_learned_level_is_a_type_error_that_does_no
 
 def test_a_string_level_is_a_type_error_too() -> None:
     with pytest.raises(TypeError):
-        B.prompt_entries(Material(None, (("giong", "# entry"),)))
+        B.prompt_entries(Material(None, (("giong", 72, "# entry"),)))
 
 
 def test_a_bad_level_beyond_the_cap_is_never_looked_at() -> None:
-    entries = tuple((KbLearnedLevel.GIONG, f"# entry {n}") for n in range(B.MAX_LEARNED_ENTRIES))
-    assert len(B.prompt_entries(Material(None, (*entries, (B.Severity.HIGH, "# late"))))) == 3
+    entries = tuple(
+        (KbLearnedLevel.GIONG, 72, f"# entry {n}") for n in range(B.MAX_LEARNED_ENTRIES)
+    )
+    late = (B.Severity.HIGH, 72, "# late")
+    assert len(B.prompt_entries(Material(None, (*entries, late)))) == 3
+
+
+# ── the percentage (P14-T06, DEC-213) ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("pct", [-1, 101])
+def test_a_percentage_out_of_range_is_a_value_error(pct) -> None:
+    with pytest.raises(ValueError):
+        B.prompt_entries(Material(None, ((KbLearnedLevel.GIONG, pct, "# entry"),)))
+
+
+@pytest.mark.parametrize("pct", ["72", 72.0, None, True])
+def test_a_percentage_that_is_not_an_int_is_a_type_error(pct) -> None:
+    with pytest.raises(TypeError):
+        B.prompt_entries(Material(None, ((KbLearnedLevel.GIONG, pct, "# entry"),)))
+
+
+def test_a_bad_percentage_beyond_the_cap_is_never_looked_at() -> None:
+    entries = tuple(
+        (KbLearnedLevel.GIONG, 72, f"# entry {n}") for n in range(B.MAX_LEARNED_ENTRIES)
+    )
+    late = (KbLearnedLevel.GIONG, 1000, "# late")
+    assert len(B.prompt_entries(Material(None, (*entries, late)))) == 3
+
+
+def test_the_edges_of_the_percentage_are_entries() -> None:
+    kept = B.prompt_entries(
+        Material(None, ((KbLearnedLevel.GIONG, 0, "# a"), (KbLearnedLevel.GIONG, 100, "# b")))
+    )
+    assert [pct for _, pct, _ in kept] == [0, 100]

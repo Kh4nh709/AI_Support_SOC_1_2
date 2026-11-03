@@ -55,3 +55,17 @@ def transaction(
         raise
     else:
         conn.commit()
+
+
+def raise_idle_timeout(conn: psycopg.Connection, cfg: config.Config) -> None:
+    """A job handler's first statement when it waits on something outside PostgreSQL inside its transaction
+    (a model, Voyage). `transaction()` allows 10 s idle in the transaction; a call that long is client-side
+    idle time to the server, so the job raises the limit to `JOB_LOCK_TIMEOUT_S`, the bound `reclaim_stale`
+    uses to take a dead worker's job back. `SET LOCAL`: it dies with the transaction. `SET` takes no bind
+    parameter, hence `sql.Literal`. The RAG jobs (`rag.lookup`, `rag.draft`, `web/rag_handlers/embed.py`)
+    share this one statement (P14-T05 review, item 7)."""
+    conn.execute(
+        sql.SQL("SET LOCAL idle_in_transaction_session_timeout = {}").format(
+            sql.Literal(f"{cfg.JOB_LOCK_TIMEOUT_S}s")
+        )
+    )

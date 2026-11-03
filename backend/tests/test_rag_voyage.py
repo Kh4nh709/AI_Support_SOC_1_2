@@ -624,3 +624,16 @@ def test_cost_reads_the_prices_from_the_config() -> None:
     cfg = dataclasses.replace(CFG, VOYAGE_PRICE_EMBED_PER_M=2.0, VOYAGE_PRICE_RERANK_PER_M=10.0)
     assert voyage.cost_usd(500_000, 100_000, cfg) == 2.0
     assert isinstance(voyage.cost_usd(1, 1, cfg), float)
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"), [("", False), ("   ", False), ("\t\n", False), (KEY, True)]
+)
+def test_has_key_says_whether_a_call_can_be_made_at_all(key, expected):
+    """P14-T06 review I1: the lookup records no run for a call that was never made (an empty key)."""
+    assert voyage.has_key(dataclasses.replace(CFG, VOYAGE_API_KEY=key)) is expected
+    if not expected:
+        server = Server(embed_reply(1))
+        with pytest.raises(RagUnavailable) as caught:
+            embed(server, ["a"], cfg=dataclasses.replace(CFG, VOYAGE_API_KEY=key))
+        assert caught.value.kind == "auth" and server.requests == []

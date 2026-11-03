@@ -1,5 +1,5 @@
 """`infra.health` — the ten §3.9 thresholds (and, since P13-T05, the three of the learned knowledge,
-below), one `system_health` row per run,
+and, since P14-T06, a fourteenth for the lookup's failures, below), one `system_health` row per run,
 `notify.send` only on a state change plus a daily 08:05 summary, and
 `health.alarm` written whenever a new check name joins the failing set.
 
@@ -29,6 +29,10 @@ P13-T05 (DEC-210) adds three, after the ten, again as SQL only (`infra` imports 
 content no longer matches its hash, or whose file is gone after a restore; `python -m app.rag.publish --rebuild` repairs it) and
 `rag_budget` (this month's spend of the `rag_lookup` and `knowledge_draft` pipelines has reached
 `RAG_MONTHLY_USD_CAP`, the point at which the RAG's adapter stops a call).
+
+P14-T06 (DEC-213) adds `rag_lookup_failures`, the fourteenth, again as SQL only: 5 or more `rag_results` rows
+that `failed` in the last 60 minutes (a dead or missing `VOYAGE_API_KEY`, a rate limit, a `vectordb` that is
+down) alarm, so the admin sees it without opening alerts one by one; it is n/a while `RAG_ENABLED` is false.
 
 Each check is a small function returning the same shape (`CheckResult`):
 `{name, ok, value, threshold, detail}`, so the report, the `system_health`
@@ -71,6 +75,8 @@ _TRIAGE_UNAVAILABLE_MAX_PCT = 10
 _MONTHLY_COST_MAX_PCT = 80
 _BACKUP_MAX_AGE_HOURS = 36
 _DISK_FREE_MIN_FRACTION = 0.20
+_RAG_LOOKUP_FAILURES_MAX = 5  # alarms AT this many (>=), in the window below
+_RAG_LOOKUP_FAILURES_WINDOW_MIN = 60
 _DIGEST_GATE_HOUR = 17
 _SUMMARY_HOUR = 8
 _SUMMARY_MINUTE = 5
@@ -188,9 +194,15 @@ def _check_job_backlog(conn: psycopg.Connection) -> CheckResult:
 
 
 def _check_llm_null_ratio(conn: psycopg.Connection) -> CheckResult:
+    """The share of the last hour's model runs with no result: "Model API down". `rag_lookup` runs are left
+    out (P14-T06, review I1): a lookup talks to Voyage and `vectordb`, not to the model, its failed runs have
+    a NULL result, and `rag_lookup_failures` owns that signal. Counted, they would raise this alarm in a
+    Voyage outage while DeepSeek is healthy, and its good runs would dilute a real DeepSeek outage.
+    """
     null_count, total = conn.execute(
         "SELECT count(*) FILTER (WHERE result IS NULL), count(*) "
-        "FROM llm_runs WHERE created_at > now() - interval '1 hour'"
+        "FROM llm_runs WHERE created_at > now() - interval '1 hour' "
+        "AND pipeline <> 'rag_lookup'"
     ).fetchone()
     if total == 0:
         return CheckResult(
@@ -336,6 +348,8 @@ def _check_disk_free() -> CheckResult:
 
 
 _UNREADABLE_020 = "could not be read (is migration 020 applied?); failing closed"
+#: `rag_lookup_failures` reads `rag_results.failure_kind`, which migration 023 (DEC-213) adds.
+_UNREADABLE_023 = "could not be read (is migration 023 applied?); failing closed"
 
 
 def _read_or_none(conn: psycopg.Connection, read: Callable[[], CheckResult]) -> CheckResult | None:
@@ -432,6 +446,46 @@ def _check_rag_budget(conn: psycopg.Connection, cfg: Config) -> CheckResult:
 
     return _read_or_none(conn, read) or CheckResult(
         "rag_budget", False, None, cfg.RAG_MONTHLY_USD_CAP, _UNREADABLE_020
+    )
+
+
+def _check_rag_lookup_failures(conn: psycopg.Connection, cfg: Config) -> CheckResult:
+    """5 or more lookups that `failed` in the last 60 minutes (DEC-213, spec §5.3). A lookup fails with a
+    closed kind (`rag_results.failure_kind`): one failure is a bad minute, five in an hour is a dead key, a
+    rate limit or a `vectordb` that is down, and every one of them lowers the RAG-on score of the lab for a
+    reason that has nothing to do with retrieval. The detail says which kinds, most first. With `RAG_ENABLED`
+    false no lookup runs, so the check is not applicable: it is `ok`, runs no SQL and says why, however many
+    failures the last hour of the time before the switch went off holds."""
+    if not cfg.RAG_ENABLED:
+        return CheckResult(
+            "rag_lookup_failures", True, None, _RAG_LOOKUP_FAILURES_MAX, "n/a — RAG off"
+        )
+
+    def read() -> CheckResult:
+        rows = conn.execute(
+            "SELECT coalesce(failure_kind, 'unknown'), count(*) FROM rag_results"
+            " WHERE status = 'failed'"
+            " AND created_at > now() - make_interval(mins => %s)"
+            " GROUP BY 1 ORDER BY 2 DESC, 1",
+            (_RAG_LOOKUP_FAILURES_WINDOW_MIN,),
+        ).fetchall()
+        failed = sum(count for _kind, count in rows)
+        ok = failed < _RAG_LOOKUP_FAILURES_MAX
+        kinds = ", ".join(f"{kind} {count}" for kind, count in rows)
+        detail = (
+            f"{failed} lookup(s) failed in the last {_RAG_LOOKUP_FAILURES_WINDOW_MIN} minutes"
+            + (f" ({kinds})" if rows else "")
+            + (
+                ""
+                if ok
+                else " — ① and ② are running without the RAG: check VOYAGE_API_KEY, the "
+                "Voyage account and vectordb"
+            )
+        )
+        return CheckResult("rag_lookup_failures", ok, failed, _RAG_LOOKUP_FAILURES_MAX, detail)
+
+    return _read_or_none(conn, read) or CheckResult(
+        "rag_lookup_failures", False, None, _RAG_LOOKUP_FAILURES_MAX, _UNREADABLE_023
     )
 
 
@@ -533,7 +587,7 @@ def check(
     clock: Callable[[psycopg.Connection], datetime] | None = None,
     backups_dir: Path | None = None,
 ) -> HealthReport:
-    """Run all thirteen thresholds, write one `system_health` row, and
+    """Run all fourteen thresholds, write one `system_health` row, and
     `notify.send` only on a state change plus the daily 08:05 summary (design
     notes 2-4). `clock`/`backups_dir` are keyword-only test seams — production
     always reads the database's own clock (`_db_now`) and the real
@@ -559,6 +613,7 @@ def check(
         _check_knowledge_queue(conn, cfg),
         _check_knowledge_integrity(conn),
         _check_rag_budget(conn, cfg),
+        _check_rag_lookup_failures(conn, cfg),
     ]
     ok = all(c.ok for c in checks)
 

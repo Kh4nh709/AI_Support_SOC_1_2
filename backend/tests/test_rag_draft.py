@@ -44,7 +44,7 @@ from app.llm.adapter import (
     LLMUnavailable,
     estimate_tokens,
 )
-from app.rag import agent, budget, draft, match
+from app.rag import agent, budget, draft, draft_rank
 from app.rag.draft import SourceRecord, validate_draft
 from app.rag.entries import render_entry_markdown
 from app.rag.generalise import FINDING_NAMES
@@ -140,7 +140,7 @@ def test_the_two_shapes_of_knowledge_draft_v1_are_documented() -> None:
         12,
     )
     schemas_in_file = agent.load_schemas()
-    assert set(schemas_in_file) == {"_description", "rag_match_v1", "knowledge_draft_v1"}
+    assert set(schemas_in_file) == {"_description", "draft_rank_v1", "knowledge_draft_v1"}
     note = schemas_in_file["_description"]
     assert isinstance(note, str)
     for word in ("knowledge_draft_v1", "six", "twelve", "DRAFT_FIELDS", "validate_draft", "closed"):
@@ -849,7 +849,10 @@ def test_a_prompt_over_the_budget_is_cut_at_its_longest_block_first() -> None:
     assert uncut > 30_000
     blocks, user = draft.build_prompt(src, nonce)
     assert (
-        estimate_tokens(user) <= draft.PROMPT_BUDGET_TOKENS == match.PROMPT_BUDGET_TOKENS == 12_000
+        estimate_tokens(user)
+        <= draft.PROMPT_BUDGET_TOKENS
+        == draft_rank.PROMPT_BUDGET_TOKENS
+        == 12_000
     )
     facts, ai, *notes = blocks
     assert not facts.truncated and facts.plain.startswith("kind: alert")
@@ -1089,12 +1092,12 @@ def spend(db, pipeline: str, cost: float) -> None:
 
 
 def draft_calls(fake: FakeLLM) -> list[dict]:
-    """The calls that asked for a draft (the ranking calls name the schema rag_match_v1)."""
+    """The calls that asked for a draft (the ranking calls name the schema draft_rank_v1)."""
     return [c for c in fake.calls if "knowledge_draft_v1" in c["user"]]
 
 
 def rank_calls(fake: FakeLLM) -> list[dict]:
-    return [c for c in fake.calls if "rag_match_v1" in c["user"]]
+    return [c for c in fake.calls if "draft_rank_v1" in c["user"]]
 
 
 # ── source_record ─────────────────────────────────────────────────────────────────────────────
@@ -2527,7 +2530,7 @@ def test_a_429_at_the_ranking_on_the_last_attempt_goes_on_without_a_ranking(db, 
 
     class RankingRateLimited(FakeLLM):
         def complete(self, **kwargs):
-            if "rag_match_v1" in kwargs["user"]:
+            if "draft_rank_v1" in kwargs["user"]:
                 self.calls.append({})
                 raise rate_limited()
             return super().complete(**kwargs)
@@ -2562,7 +2565,7 @@ def test_a_ranking_that_fails_does_not_stop_the_draft(db, kb_root) -> None:
 
     class RankingRefused(FakeLLM):
         def complete(self, **kwargs):
-            if "rag_match_v1" in kwargs["user"]:
+            if "draft_rank_v1" in kwargs["user"]:
                 self.calls.append({})
                 raise LLMPermanent("400")
             return super().complete(**kwargs)

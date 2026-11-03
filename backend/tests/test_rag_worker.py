@@ -43,7 +43,8 @@ EXPECTED_CLAIM_ORDER = [["rag_lookup"], ["knowledge_embed"], ["knowledge_draft"]
 def test_the_rag_handlers_are_the_ones_discovered_in_their_own_package() -> None:
     found = rag_handlers.iter_handlers()
     assert set(found) == EXPECTED_TYPES
-    assert found["rag_lookup"] is lookup.run_lookup_job  # not wrapped: tests patch its `adapter`
+    # not wrapped: tests pass its `client` and `vconn`
+    assert found["rag_lookup"] is lookup.run_lookup_job
     assert EXPECTED_TYPES <= RAG_JOB_TYPES <= JOB_TYPES
 
 

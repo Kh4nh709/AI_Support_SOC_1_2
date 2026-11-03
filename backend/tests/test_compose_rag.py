@@ -391,3 +391,22 @@ def test_the_readme_says_what_the_directory_is():
         "`host_uid`:`host_gid`",
     ):
         assert needle in text, f"the README no longer says {needle!r}"
+
+
+def test_the_header_names_every_job_type_rag_worker_claims_and_the_vectordb_failure():
+    """P14-T06 review M7 and the T05 item: the header said `rag-worker` claims only `rag_lookup` and
+    `knowledge_draft` (stale since `knowledge_embed`), and that a down `vectordb` skips the lookup.
+    """
+    from app.web.rag_worker import CLAIM_ORDER
+
+    header = "\n".join(
+        line for line in OVERRIDE.read_text(encoding="utf-8").splitlines() if line.startswith("#")
+    )
+    flat = " ".join(header.replace("#", " ").split())
+    claimed = [job_type for group in CLAIM_ORDER for job_type in group]
+    assert sorted(claimed) == ["knowledge_draft", "knowledge_embed", "rag_lookup"]
+    sentence = flat.split("`rag-worker` claims only", 1)[1].split("(web/rag_worker.py)", 1)[0]
+    for job_type in claimed:
+        assert f"`{job_type}`" in sentence, job_type
+    assert "is skipped" not in flat
+    assert "`vectordb_unreachable`" in flat and "recorded `failed`" in flat
