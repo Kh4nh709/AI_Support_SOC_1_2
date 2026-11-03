@@ -219,6 +219,30 @@ def test_a_client_that_was_given_is_left_open() -> None:
     client.close()
 
 
+@pytest.mark.parametrize("bare", ["abc", "một đoạn", "", b"abc"])
+def test_embed_refuses_a_bare_string_for_the_texts(bare) -> None:
+    """A `str` is a `Sequence[str]`: unchecked, "abc" would be sent as three one-letter inputs."""
+    server = Server(embed_reply(3))
+    with pytest.raises(TypeError, match="texts"):
+        voyage.embed(bare, input_type="document", cfg=CFG, client=server.client)
+    assert server.requests == []
+
+
+@pytest.mark.parametrize("bare", ["abc", "một đoạn", "", b"abc"])
+def test_rerank_refuses_a_bare_string_for_the_documents(bare) -> None:
+    server = Server(rerank_reply([(0, 0.5)]))
+    with pytest.raises(TypeError, match="documents"):
+        voyage.rerank("the fingerprint", bare, cfg=CFG, client=server.client)
+    assert server.requests == []
+
+
+def test_a_tuple_or_a_generator_of_texts_is_still_fine() -> None:
+    vectors, _ = voyage.embed(
+        (t for t in ("a", "b")), input_type="query", cfg=CFG, client=Server(embed_reply(2)).client
+    )
+    assert len(vectors) == 2
+
+
 # ── embed: the answer (Review Focus 1) ────────────────────────────────────────────────────────
 
 

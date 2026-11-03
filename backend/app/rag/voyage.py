@@ -73,6 +73,14 @@ def _is_index(value: Any, size: int) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and 0 <= value < size
 
 
+def _refuse_a_bare_string(value: Any, name: str) -> None:
+    """A `str` is a `Sequence[str]`, so `embed("abc")` would be sent as three one-letter inputs and come
+    back with three vectors that look right. Only a list (or tuple, or any iterable) of texts is taken.
+    """
+    if isinstance(value, (str, bytes)):
+        raise TypeError(f"{name}: must be a sequence of strings, not a single string")
+
+
 def _require_key(cfg: Config) -> str:
     key = cfg.VOYAGE_API_KEY.strip()
     if not key:
@@ -164,6 +172,7 @@ def embed(
     request (but an empty key is still `auth`)."""
     if input_type not in INPUT_TYPES:
         raise ValueError(f"input_type: must be one of {'|'.join(INPUT_TYPES)}, got {input_type!r}")
+    _refuse_a_bare_string(texts, "texts")
     inputs = list(texts)
     if not all(isinstance(text, str) for text in inputs):
         raise ValueError("texts: every text must be a string")
@@ -195,6 +204,7 @@ def rerank(
     """`{index of a document: relevance score in [0, 1]}` for the documents the reply scored properly,
     and what the call cost. An item with an index that was not sent, a repeated index, or a score that is
     not a number in [0, 1] is dropped and counted in the log. No documents is no request."""
+    _refuse_a_bare_string(documents, "documents")
     docs = list(documents)
     if not isinstance(query, str) or not all(isinstance(doc, str) for doc in docs):
         raise ValueError("query and documents: every text must be a string")
