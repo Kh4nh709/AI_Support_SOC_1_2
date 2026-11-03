@@ -61,13 +61,18 @@ _VERIFIER_DISAGREES = "verifier_disagrees"
 _FP_POLICY_PREFIX = "fp_policy:"
 
 #: Every reason ``held_reasons`` can return, in the gate's step order: step 2, step 3, step 4 (one per
-#: field, in ``FP_POLICY_FIELDS`` order) and step 6. The UI words each one (``strings.ts``, ``ai1.heldReason``,
-#: whose test compares its keys with this tuple), and the blind arm hides the list with ``held_by``.
+#: field, in ``FP_POLICY_FIELDS`` order) and step 6. A literal on purpose: the UI words each one
+#: (``strings.ts``, ``ai1.heldReason``) and its test reads this tuple from the source; the blind arm
+#: hides the list with ``held_by``. ``tests/test_held_reasons.py`` ties it to ``FP_POLICY_FIELDS``.
 HELD_REASONS: tuple[str, ...] = (
-    _FACTS_MISMATCH,
-    _NO_VERIFIED_QUOTE,
-    *(_FP_POLICY_PREFIX + field for field in FP_POLICY_FIELDS),
-    _VERIFIER_DISAGREES,
+    "facts_mismatch",
+    "no_verified_quote",
+    "fp_policy:severity",
+    "fp_policy:ioc_reputation",
+    "fp_policy:asset_criticality",
+    "fp_policy:identity_privileged",
+    "fp_policy:playbook_rule",
+    "verifier_disagrees",
 )
 
 

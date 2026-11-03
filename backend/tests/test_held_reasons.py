@@ -33,6 +33,13 @@ CLOSED = (
 
 def test_the_closed_reasons_are_the_eight_of_the_spec_in_step_order():
     assert verdicts.HELD_REASONS == CLOSED
+    # The literal tuple and the fields step 4 can name cannot drift apart.
+    assert verdicts.HELD_REASONS == (
+        "facts_mismatch",
+        "no_verified_quote",
+        *(f"fp_policy:{field}" for field in verdicts.FP_POLICY_FIELDS),
+        "verifier_disagrees",
+    )
     assert verdicts.FP_POLICY_FIELDS == (
         "severity",
         "ioc_reputation",
