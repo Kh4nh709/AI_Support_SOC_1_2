@@ -222,10 +222,11 @@ def test_a_client_that_was_given_is_left_open() -> None:
 # ── embed: the answer (Review Focus 1) ────────────────────────────────────────────────────────
 
 
-def test_vectors_are_mapped_by_index_not_by_position() -> None:
-    server = Server(embed_reply(4, order=[2, 0, 3, 1]))
+@pytest.mark.parametrize("order", [[2, 0, 3, 1], [3, 2, 1, 0], [1, 0, 2, 3], [0, 1, 3, 2]])
+def test_vectors_are_mapped_by_index_not_by_position(order) -> None:
+    server = Server(embed_reply(4, order=order))
     vectors, usage = embed(server, ("a", "b", "c", "d"))
-    assert [v[0] for v in vectors] == [0.0, 1.0, 2.0, 3.0]
+    assert [v[0] for v in vectors] == [0.0, 1.0, 2.0, 3.0]  # vec(i) starts with i
     assert all(len(v) == DIMS for v in vectors)
     assert usage.total_tokens == 21
 
@@ -360,6 +361,16 @@ def test_an_http_status_is_its_kind(call, status, kind) -> None:
         CALLS[call](server)
     assert caught.value.kind == kind
     assert len(server.requests) == 1  # no retry inside the client: the job and the lookup decide
+
+
+@pytest.mark.parametrize("call", CALLS)
+@pytest.mark.parametrize("status", [500, 502, 400, 404, 301])
+def test_a_failure_status_is_a_failure_even_with_a_good_looking_body(call, status) -> None:
+    """The status decides first: a gateway that answers 502 with a cached good body is not an answer."""
+    reply = embed_reply(3) if call == "embed" else rerank_reply([(0, 0.9), (1, 0.5), (2, 0.1)])
+    with pytest.raises(RagUnavailable) as caught:
+        CALLS[call](Server(reply, status=status))
+    assert caught.value.kind == "provider_error"
 
 
 @pytest.mark.parametrize("call", CALLS)
