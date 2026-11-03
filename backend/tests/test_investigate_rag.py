@@ -1700,6 +1700,91 @@ def test_the_last_transient_attempt_carries_the_lookup_id(db, rag_on, monkeypatc
     assert (row["stopped_by"], row["rag_lookup_id"]) == ("transient", lookup_id)
 
 
+# ── the notice is on every row ② writes whose prompt was built without block 10 because the lookup failed ──
+def _stop_with(kind: str, db, case_id: str, monkeypatch) -> None:
+    """Run the job so that it writes the row of `kind` (the `stopped_by` of `llm_runs`), the way ① 's
+    `test_triage_job` and the tests above do."""
+    from app.infra.errors import PermanentError, TransientError
+    from app.llm.adapter import LLMBudgetExceeded, LLMPermanent
+
+    if kind == "schema":
+        run(db, case_id, FakeLLM(responses=["not json", "still not json"]))
+        return
+    if kind == "linter":
+
+        def refuse(*args, **kwargs):
+            raise PermanentError("the prompt failed the linter")
+
+        monkeypatch.setattr(llm_investigate, "investigate", refuse)
+        run(db, case_id)
+        return
+    raises = {
+        "cap": LLMBudgetExceeded("over the cap"),
+        "permanent": LLMPermanent("400"),
+        "transient": TransientError("timeout"),
+        "transient_not_last": TransientError("timeout"),
+    }[kind]
+    monkeypatch.setattr(db, "commit", lambda: None)  # the handler commits its row before re-raising
+    attempts = 1 if kind == "transient_not_last" else config.load().JOB_MAX_ATTEMPTS
+    llm = FakeLLM(responses=[], raises=raises)
+    if kind.startswith("transient"):
+        with pytest.raises(TransientError):
+            tier2_investigate.run_investigate_job(db, _job(case_id, attempts=attempts), adapter=llm)
+    else:
+        tier2_investigate.run_investigate_job(db, _job(case_id, attempts=attempts), adapter=llm)
+
+
+STOPS = ["cap", "permanent", "linter", "schema", "transient", "transient_not_last"]
+
+
+def _all_rows(db, case_id: str) -> list[tuple[str | None, object]]:
+    return db.execute(
+        "SELECT stopped_by, citation_warnings FROM llm_runs WHERE subject_id = %s"
+        " AND pipeline = 'investigate' ORDER BY created_at",
+        (case_id,),
+    ).fetchall()
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("kind", STOPS)
+def test_every_row_that_stopped_carries_the_notice_when_the_lookup_failed(
+    db, rag_on, fixed_nonce, monkeypatch, kind
+) -> None:
+    """Review Spec 1 / M1: the UI says "RAG not applied" from `citation_warnings`; a `cap`, `permanent`,
+    `linter`, `schema` or `transient` row was built from the same dossier without block 10, and says so as
+    well as the row that has a verdict does (① does it on every row)."""
+    case_id, _ = committed_case(db)
+    committed_lookup(db, case_id, status="failed", failure_kind="rate_limit")
+    _stop_with(kind, db, case_id, monkeypatch)
+    (row,) = _all_rows(db, case_id)
+    assert row[0] == {"transient_not_last": "transient"}.get(kind, kind)
+    assert row[1] == ["rag_not_applied:rate_limit"], row
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("kind", STOPS)
+def test_a_row_that_stopped_has_no_notice_when_the_lookup_did_not_fail(
+    db, rag_on, fixed_nonce, monkeypatch, kind
+) -> None:
+    case_id, _ = committed_case(db)
+    committed_lookup(db, case_id, matches=[committed_entry(db, LONG_A, "giong")])
+    _stop_with(kind, db, case_id, monkeypatch)
+    (row,) = _all_rows(db, case_id)
+    assert row[1] is None, row
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("kind", ["cap", "schema"])
+def test_a_row_that_stopped_has_no_notice_with_the_switch_off(
+    db, rag_off, fixed_nonce, monkeypatch, kind
+) -> None:
+    case_id, _ = committed_case(db)
+    committed_lookup(db, case_id, status="failed", failure_kind="auth")
+    _stop_with(kind, db, case_id, monkeypatch)
+    (row,) = _all_rows(db, case_id)
+    assert row[1] is None, row
+
+
 # ── what the model may cite: nothing new ────────────────────────────────────────────────────────
 KB_QUOTE = (
     "Máy quản trị quét cổng định kỳ và alert đã được đóng là lành tính"  # a sentence of LONG_A

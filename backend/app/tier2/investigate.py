@@ -521,10 +521,17 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
         limits=partial(settings.effective_limits, conn, cfg),
     )
 
+    # DEC-213: every row of a run whose lookup failed says so, not only the one with a verdict - a `cap`,
+    # `permanent`, `linter`, `schema` or `transient` row was built from the same dossier without block 10
+    # (the way ① puts `built.warnings` on every row it writes). The success row below passes its own list,
+    # which already ends with it.
+    notice = [rag_not_applied_warning(not_applied)] if not_applied is not None else []
+
     def write_row(row_id: uuid.UUID, stopped_by: str | None, **outcome: Any) -> None:
         """This attempt's one `llm_runs` row. The usage columns come from `spend` unless
         the caller passes its own (`**outcome`) — so a failure row still carries whatever
-        was already paid for (S7)."""
+        was already paid for (S7). `citation_warnings` is the notice unless the caller passes its own.
+        """
         _write_llm_run(
             conn,
             run_id=row_id,
@@ -534,7 +541,7 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
             agent_trace=agent_trace,
             stopped_by=stopped_by,
             rag_lookup_id=rag_lookup_id,
-            **{**_spend_columns(spend, cfg), **outcome},
+            **{"citation_warnings": notice or None, **_spend_columns(spend, cfg), **outcome},
         )
 
     try:
@@ -623,8 +630,7 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
         f"alert_id {item['alert_id']!r} rejected: {item['reason']}"
         for item in evidence_check["rejected"]
     ]
-    if not_applied is not None:
-        citation_warnings.append(rag_not_applied_warning(not_applied))
+    citation_warnings.extend(notice)
 
     write_row(
         run_id,
