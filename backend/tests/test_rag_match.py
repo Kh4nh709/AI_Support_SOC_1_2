@@ -150,8 +150,11 @@ def test_level_for_equal_thresholds_give_the_better_level() -> None:
     assert match.level_for(0.4999, cfg) is None
 
 
-def test_level_for_is_none_for_a_score_that_is_not_a_number() -> None:
+def test_level_for_is_none_for_nan_and_raises_for_what_is_not_a_number_at_all() -> None:
     assert match.level_for(float("nan"), Config()) is None
+    for not_a_number in ("0.9", None, [0.9]):
+        with pytest.raises(TypeError):
+            match.level_for(not_a_number, Config())  # type: ignore[arg-type]
 
 
 # ── Match ─────────────────────────────────────────────────────────────────────────────────────

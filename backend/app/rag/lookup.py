@@ -53,7 +53,7 @@ back, the spend must not vanish with it).
 What is stored. `rag_results.history`: `{level, key_name, total, by_conclusion (all six keys),
 last_seen (isoformat or null), examples}`. `matches`: `[{entry_id, level, content_sha256, score}]`, the
 `score` being Voyage's relevance score in [0, 1]. `ranked`: `[{entry_id, score}]`, every candidate that was
-scored, best first (NULL when nothing was asked). `match_notes`: `{}`, a reranker writes no text. `failure_kind`
+scored, best first (`[]` for a lookup with no candidate left to rerank; NULL only on a `budget` or a `failed` row). `match_notes`: `{}`, a reranker writes no text. `failure_kind`
 on a `failed` row.
 
 `prompt_material` is the other half of V-R (spec §7.7, "At prompt time"): it is what ① and ② may put in

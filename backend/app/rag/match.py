@@ -108,8 +108,10 @@ def entry_digest(entry: Entry) -> str:
 
 def level_for(score: float, cfg: Config) -> KbLearnedLevel | None:
     """The level a score earns: `rat_giong` from `RAG_LEVEL_RAT_GIONG`, `giong` from `RAG_LEVEL_GIONG`,
-    `hoi_giong` from `RAG_MIN_SCORE`, and None below that (not a match). The thresholds are inclusive;
-    a score that is not a number earns none."""
+    `hoi_giong` from `RAG_MIN_SCORE`, and None below that (not a match). The thresholds are inclusive. NaN
+    earns none (every comparison with it is false); a value that is not a number at all (a string, None)
+    raises `TypeError` — `voyage.rerank` hands over only numbers in [0, 1], so a caller that gets there has a
+    bug and should hear of it."""
     if score >= cfg.RAG_LEVEL_RAT_GIONG:
         return KbLearnedLevel.RAT_GIONG
     if score >= cfg.RAG_LEVEL_GIONG:
