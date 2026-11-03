@@ -400,6 +400,8 @@ def test_done_run_has_evidence_marks_and_labels(client, db):
         "next_steps",
         "playbook_used",
         "overruled",
+        "model_conclusion",  # P14-T02
+        "held_by",  # P14-T02
         "snapshot",
         "changed",
     }
@@ -486,6 +488,160 @@ def test_a_forced_overrule_names_the_rule_not_the_missing_evidence(client, db):
     )
     assert "tiêm lệnh" in overruled
     assert "không có bằng chứng nào" not in overruled
+
+
+# ---------------------------------------------------------------------------
+# P14-T02 (DEC-213): the model's own conclusion, and why the system held it
+# ---------------------------------------------------------------------------
+
+
+def test_a_run_nothing_overruled_shows_the_models_conclusion_and_no_hold(client, db):
+    case_id = _make_case(db, client.user_id)
+    check = {"verified": [0], "rejected": [], "model_conclusion": "policy_violation"}
+    _insert_run(
+        db, case_id, result=_result(suggested_conclusion="policy_violation"), evidence_check=check
+    )
+
+    run = _get(client, case_id).json()["run"]
+
+    assert run["conclusion"] == "policy_violation"
+    assert run["model_conclusion"] == "policy_violation"
+    assert run["held_by"] == []
+    assert run["overruled"] is None
+
+
+def test_zero_verified_evidence_is_held_by_no_verified_evidence(client, db):
+    case_id = _make_case(db, client.user_id)
+    check = {
+        "verified": [],
+        "rejected": [],
+        "model_conclusion": "confirmed_incident",
+        "original_conclusion": "confirmed_incident",
+    }
+    _insert_run(
+        db, case_id, result=_result(suggested_conclusion="need_more_data"), evidence_check=check
+    )
+
+    run = _get(client, case_id).json()["run"]
+
+    assert run["conclusion"] == "need_more_data"  # the final one, as before
+    assert run["model_conclusion"] == "confirmed_incident"  # what the model itself said
+    assert run["held_by"] == ["no_verified_evidence"]
+
+
+def test_a_high_injection_finding_with_a_false_positive_is_held_by_it(client, db):
+    case_id = _make_case(db, client.user_id)
+    check = {
+        "verified": [0],
+        "rejected": [],
+        "forced_by": "high_severity_injection_finding",
+        "model_conclusion": "false_positive",
+        "original_conclusion": "false_positive",
+    }
+    _insert_run(
+        db, case_id, result=_result(suggested_conclusion="need_more_data"), evidence_check=check
+    )
+
+    run = _get(client, case_id).json()["run"]
+
+    assert run["model_conclusion"] == "false_positive"
+    assert run["held_by"] == ["high_severity_injection_finding"]
+
+
+def test_a_check_carrying_both_causes_lists_both_in_a_fixed_order(client, db):
+    case_id = _make_case(db, client.user_id)
+    check = {
+        "verified": [],
+        "rejected": [],
+        "forced_by": "high_severity_injection_finding",
+        "model_conclusion": "false_positive",
+        "original_conclusion": "false_positive",
+    }
+    _insert_run(
+        db, case_id, result=_result(suggested_conclusion="need_more_data"), evidence_check=check
+    )
+
+    run = _get(client, case_id).json()["run"]
+
+    assert run["held_by"] == ["no_verified_evidence", "high_severity_injection_finding"]
+
+
+def test_held_by_holds_only_the_two_closed_values(client, db):
+    assert view.HELD_BY == ("no_verified_evidence", "high_severity_injection_finding")
+    case_id = _make_case(db, client.user_id)
+    check = {
+        "verified": [0],
+        "rejected": [],
+        "forced_by": "some_future_rule",  # unknown to the view: never passed through as a cause
+        "model_conclusion": "false_positive",
+        "original_conclusion": "false_positive",
+    }
+    _insert_run(
+        db, case_id, result=_result(suggested_conclusion="need_more_data"), evidence_check=check
+    )
+
+    run = _get(client, case_id).json()["run"]
+
+    assert run["held_by"] == []
+
+
+def test_an_old_run_without_a_model_conclusion_gives_none_and_no_hold_and_no_error(client, db):
+    """A run written before P14-T02 has `original_conclusion` (when it was overruled) and no
+    `model_conclusion`. The view answers `None` and `[]` for it - it does not guess - and still
+    says the overrule sentence it always said."""
+    case_id = _make_case(db, client.user_id)
+    check = {"verified": [], "rejected": [], "original_conclusion": "false_positive"}
+    _insert_run(
+        db, case_id, result=_result(suggested_conclusion="need_more_data"), evidence_check=check
+    )
+
+    resp = _get(client, case_id)
+
+    assert resp.status_code == 200
+    run = resp.json()["run"]
+    assert run["model_conclusion"] is None
+    assert run["held_by"] == []
+    assert run["overruled"] == (
+        "Mô hình đề xuất Không phải sự cố (false_positive) nhưng kết luận đã bị hạ xuống "
+        "Cần thêm dữ liệu (need_more_data): "
+        "không có bằng chứng nào kiểm chứng được với log của case."
+    )
+
+
+@pytest.mark.parametrize("evidence_check", [None, [], "x", {}, {"verified": []}])
+def test_a_run_with_no_usable_check_gives_none_and_no_hold(client, db, evidence_check):
+    case_id = _make_case(db, client.user_id)
+    _insert_run(db, case_id, result=_result(), evidence_check=evidence_check)
+
+    run = _get(client, case_id).json()["run"]
+
+    assert run["model_conclusion"] is None
+    assert run["held_by"] == []
+
+
+@pytest.mark.parametrize(
+    "stored", [7, True, ["false_positive"], {"a": 1}, "", "true_positive", "need_more_data"]
+)
+def test_a_model_conclusion_outside_the_closed_vocabulary_is_not_passed_through(client, db, stored):
+    case_id = _make_case(db, client.user_id)
+    check = {"verified": [], "rejected": [], "model_conclusion": stored}
+    _insert_run(
+        db, case_id, result=_result(suggested_conclusion="need_more_data"), evidence_check=check
+    )
+
+    run = _get(client, case_id).json()["run"]
+
+    assert run["model_conclusion"] is None
+    assert run["held_by"] == []  # no valid model conclusion, no claim about holding it
+
+
+def test_a_run_that_stopped_has_neither_field(client, db):
+    case_id = _make_case(db, client.user_id)
+    _insert_run(db, case_id, result=None, stopped_by="schema")
+
+    run = _get(client, case_id).json()["run"]
+
+    assert "model_conclusion" not in run and "held_by" not in run  # no result, no conclusion
 
 
 def test_a_result_without_a_conclusion_is_labelled_unknown(client, db):
@@ -663,6 +819,8 @@ _DONE_RUN_KEYS = {
     "next_steps",
     "playbook_used",
     "overruled",
+    "model_conclusion",
+    "held_by",
     "snapshot",
     "changed",
 }
@@ -706,6 +864,9 @@ def test_the_json_contract_of_a_done_run(client, db):
     assert run["conclusion_label"] == view.CONCLUSION_LABELS["need_more_data"]
     assert run["summary"] == "SUMMARY-TEXT"
     assert run["narrative"] == "NARRATIVE-TEXT"
+    # this check carries no `model_conclusion` (a run from before P14-T02): both are empty, no error
+    assert run["model_conclusion"] is None
+    assert run["held_by"] == []
 
     items = run["evidence"]
     assert [i["verified"] for i in items] == [True, False, False, False]

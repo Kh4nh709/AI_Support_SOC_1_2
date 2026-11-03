@@ -13,7 +13,7 @@ are canned, but each one is built from the prompt it answers, so the product's o
   (`claim_token`), which the blind spec looks for: it is in no other place.
 * verifier_v2: echoes the verdict out of the `proposer` block (the gate's, after step 4), `agree: true`
   (step 6 agrees).
-* investigate_v2 (Tier 2): two evidence items about the dossier's first alert, one quoted from its raw log
+* investigate_v3 (Tier 2, P14-T02): two evidence items about the dossier's first alert, one quoted from its raw log
   (verified by the server) and one that is in no log (rejected as `quote_not_found`), so the case page shows
   both marks; the conclusion `false_positive` stands because one item verified.
 
@@ -197,7 +197,7 @@ def investigate_answer(user: str) -> dict:
 def answer_for(system: str, user: str) -> dict:
     if "## Schema verifier_v2" in system:
         return verifier_answer(user)
-    if "## Schema investigate_v2" in system:
+    if "## Schema investigate_v3" in system:
         return investigate_answer(user)
     return triage_answer(user)
 

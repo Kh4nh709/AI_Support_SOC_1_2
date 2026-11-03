@@ -104,10 +104,17 @@ Changing any of these requires a Decision Request in `docs/plan/INBOX.md` and Di
   "suggested_conclusion": "false_positive|policy_violation|confirmed_incident|need_more_data", "confidence": "low|medium|high",
   "gia_thuyet": [{"noi_dung": "string", "evidence_for": ["string"], "evidence_against": ["string (minItems 1)"]}],
   "evidence": [{"alert_id": "string", "quote": "verbatim substring of that alert's raw_log or description", "why": "string"}],
+  "next_steps": ["string"], "playbook_used": "string|null"},
+ "investigate_v3": {"summary": "string", "attack_narrative": "string",
+  "suggested_conclusion": "false_positive|policy_violation|confirmed_incident", "confidence": "low|medium|high",
+  "gia_thuyet": [{"noi_dung": "string", "evidence_for": ["string"], "evidence_against": ["string (minItems 1)"]}],
+  "evidence": [{"alert_id": "string", "quote": "verbatim substring of that alert's raw_log or description", "why": "string"}],
   "next_steps": ["string"], "playbook_used": "string|null"}}
 ```
 
 **Definite verdicts (DEC-213, P14-T01).** ① and its verifier use **`triage_v3`** and **`verifier_v2`**: the model answers `suggested_action` ∈ `false_positive | true_positive` (it may no longer answer `needs_review`, which only the gate sets), and the verifier's `structured_only_verdict` ∈ `false_positive | needs_review | true_positive`. ①'s `escalate` is renamed `true_positive`; the analyst's escalation (the route, `transitions.escalate`, `tier1.escalated`, `escalated_tier2`) and the gold labels keep their names. `triage_v2` and `verifier_v1` stay in the file, unused by the product, because `eval/` reads them.
+
+**Definite conclusion for ② (DEC-213, P14-T02).** ② uses **`investigate_v3`**: the model answers `suggested_conclusion` ∈ `false_positive | policy_violation | confirmed_incident` and may no longer answer `need_more_data`; it names its best conclusion and lists what is missing in `next_steps`. `need_more_data` is still a stored value, set only by the system: zero verified evidence, or a high injection finding meeting a `false_positive` (§7.6; `ck_llm_runs_suggested_conclusion` is unchanged). Every run with a parsed result stores the model's own answer as `evidence_check.model_conclusion` (`original_conclusion` is still written only when the answer was overruled); `tier2.investigation_view` shows it with `held_by` ∈ `no_verified_evidence | high_severity_injection_finding`. `investigate_v2` stays in the file, unused by the product, because `eval/` reads it.
 
 **RAG-only schemas (DEC-210, P13).** Two more output schemas exist, `rag_match_v1` (the ranking agent's matches: `entry_id`, `level` and a `reason` of at most 160 characters) and `knowledge_draft_v1` (the six fields the draft agent writes). They live in `backend/app/rag/schemas.json`, are read by `rag/agent.call_json` (and checked by `llm.schemas.validate_against`), and are **not** part of `output_schemas.json` or of the block above, which `scripts/check_output_schemas.py` compares with that file alone. ①'s and ②'s own schemas, and the closed `reasons[].source` enum of `triage_v2`, are unchanged by P13.
 
