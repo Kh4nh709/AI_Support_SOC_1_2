@@ -348,6 +348,8 @@ def _check_disk_free() -> CheckResult:
 
 
 _UNREADABLE_020 = "could not be read (is migration 020 applied?); failing closed"
+#: `rag_lookup_failures` reads `rag_results.failure_kind`, which migration 023 (DEC-213) adds.
+_UNREADABLE_023 = "could not be read (is migration 023 applied?); failing closed"
 
 
 def _read_or_none(conn: psycopg.Connection, read: Callable[[], CheckResult]) -> CheckResult | None:
@@ -483,7 +485,7 @@ def _check_rag_lookup_failures(conn: psycopg.Connection, cfg: Config) -> CheckRe
         return CheckResult("rag_lookup_failures", ok, failed, _RAG_LOOKUP_FAILURES_MAX, detail)
 
     return _read_or_none(conn, read) or CheckResult(
-        "rag_lookup_failures", False, None, _RAG_LOOKUP_FAILURES_MAX, _UNREADABLE_020
+        "rag_lookup_failures", False, None, _RAG_LOOKUP_FAILURES_MAX, _UNREADABLE_023
     )
 
 

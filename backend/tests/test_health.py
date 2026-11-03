@@ -1397,25 +1397,42 @@ class _Refusing:
 
 
 @pytest.mark.parametrize(
-    ("check", "name"),
+    ("check", "name", "migration"),
     [
-        (lambda c: health._check_knowledge_queue(c, _cfg()), "knowledge_queue"),
-        (lambda c: health._check_knowledge_integrity(c), "knowledge_integrity"),
-        (lambda c: health._check_rag_budget(c, _cfg(RAG_ENABLED=True)), "rag_budget"),
+        (lambda c: health._check_knowledge_queue(c, _cfg()), "knowledge_queue", "020"),
+        (lambda c: health._check_knowledge_integrity(c), "knowledge_integrity", "020"),
+        (lambda c: health._check_rag_budget(c, _cfg(RAG_ENABLED=True)), "rag_budget", "020"),
+        # it reads 023's `rag_results.failure_kind`: the detail must name the migration that adds it
         (
             lambda c: health._check_rag_lookup_failures(c, _cfg(RAG_ENABLED=True)),
             "rag_lookup_failures",
+            "023",
         ),
     ],
 )
-def test_each_knowledge_check_fails_closed_without_the_driver_text(check, name):
+def test_each_knowledge_check_fails_closed_without_the_driver_text(check, name, migration):
     conn = _Refusing()
 
     result = check(conn)
 
     assert (result.name, result.ok, result.value) == (name, False, None)
-    assert "migration 020" in result.detail and "SECRET-SQL-TEXT" not in result.detail
+    assert f"is migration {migration} applied?" in result.detail
+    assert "SECRET-SQL-TEXT" not in result.detail
     assert conn.savepoints == 1
+
+
+@pytest.mark.db
+def test_rag_lookup_failures_on_a_schema_without_023_fails_that_check_alone_and_names_023(
+    db, tmp_path
+):
+    """Code deployed before `make migrate` 023: `rag_results.failure_kind` is not there."""
+    db.execute("ALTER TABLE rag_results DROP COLUMN ranked")
+    db.execute("ALTER TABLE rag_results DROP CONSTRAINT ck_rag_results_failure_kind")
+    db.execute("ALTER TABLE rag_results DROP COLUMN failure_kind")  # rolled back with the test
+    check = _run_check(db, tmp_path, _cfg(RAG_ENABLED=True))["rag_lookup_failures"]
+    assert check.ok is False and check.value is None
+    assert "is migration 023 applied?" in check.detail
+    assert _run_check(db, tmp_path, _cfg(RAG_ENABLED=True))["rag_budget"].ok is True
 
 
 @pytest.mark.db
