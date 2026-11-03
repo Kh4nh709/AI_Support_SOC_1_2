@@ -209,19 +209,15 @@ def test_check_follows_a_change_of_the_configured_model_or_dims(
 
 
 @pytest.mark.db
-def test_check_with_no_table_yet_says_everything_is_missing(db, capsys) -> None:
+def test_check_with_no_table_yet_says_everything_is_missing_and_creates_nothing(
+    db, store, capsys
+) -> None:
     """A fresh `vectordb` has no table: `--check` reports it, and `--rebuild` makes it."""
-    from tests.vector_data import pgvector_connection
-
     entry(db)
-    with pgvector_connection() as vconn:
-        vconn.execute("DROP TABLE entry_vectors")
-        code = vector_index.main(["--check"], conn=db, vconn=vconn)
-        found = counts(capsys.readouterr().out)
-        assert code == 1 and found["missing"] == 1 and found["active"] == 1
-        assert (
-            vconn.execute("SELECT to_regclass('entry_vectors')").fetchone()[0] is None
-        )  # read-only
+    store.drop_schema()
+    code, found = check(db, store, capsys)
+    assert code == 1 and found["missing"] == 1 and found["active"] == 1
+    assert not store.has_schema()  # read-only
 
 
 # ── --rebuild ─────────────────────────────────────────────────────────────────────────────────
@@ -305,24 +301,18 @@ def test_rebuild_of_an_index_that_is_whole_asks_voyage_nothing(db, store, capsys
 
 
 @pytest.mark.db
-def test_rebuild_makes_the_schema_first(db, store, capsys) -> None:
-    entry(db)
-    rebuild(db, store, capsys)
-    if store.kind == "memory":
-        assert store.schema_calls == 1
-
-
-@pytest.mark.db
-def test_rebuild_makes_the_table_when_there_is_none(db, capsys) -> None:
-    from tests.vector_data import pgvector_connection
-
+def test_rebuild_makes_the_schema_first_on_a_vector_database_that_has_none(
+    db, store, capsys
+) -> None:
+    """M3: on the real pgvector too, not only in the dictionary: no table, then a table with the row."""
     entry_id = entry(db)
-    with pgvector_connection() as vconn:
-        vconn.execute("DROP TABLE entry_vectors")
-        batches = Batches()
-        code = vector_index.main(["--rebuild"], conn=db, vconn=vconn, client=batches.client)
-        assert code == 0
-        assert list(vector_store.stored(vconn)) == [entry_id]
+    store.drop_schema()
+    assert not store.has_schema()
+
+    code, found, _, _ = rebuild(db, store, capsys)
+
+    assert code == 0 and found["embedded"] == 1
+    assert store.has_schema() and list(store.rows()) == [entry_id]
 
 
 @pytest.mark.db
@@ -337,6 +327,35 @@ def test_rebuild_fixes_a_change_of_model_by_embedding_again(db, store, capsys, m
     code, found, _, batches = rebuild(db, store, capsys)
     assert code == 0 and batches.sizes == [1] and found["embedded"] == 1
     assert store.rows() == {entry_id: (sha_of(db, entry_id), "voyage-4-lite", DIMS)}
+
+
+@pytest.mark.db
+def test_rebuild_reads_the_index_before_the_entries_like_check_does(
+    db, store, capsys, monkeypatch
+) -> None:
+    """M2. Read in this order, a rebuild cannot make an orphan: an entry retired after the index was read
+    is not in the entries read next, so its vector is deleted. Read the other way round the entry would
+    still be listed active, look current, and keep its vector. (An entry approved and embedded in between
+    is only seen as missing and embedded again, which is harmless.)"""
+    keep = entry(db, title="Còn hiệu lực")
+    make_current(db, store, keep)
+    retired_meanwhile = entry(db, title="Bị gỡ giữa chừng")
+    make_current(db, store, retired_meanwhile)
+    read_stored = vector_store.stored
+
+    def stored_then_a_retirement(vconn):
+        found = read_stored(vconn)
+        db.execute(
+            "UPDATE knowledge_entries SET status = 'retired' WHERE entry_id = %s",
+            (retired_meanwhile,),
+        )
+        return found
+
+    monkeypatch.setattr(vector_store, "stored", stored_then_a_retirement)
+    code, found, _, batches = rebuild(db, store, capsys)
+
+    assert code == 0 and found == {"embedded": 0, "deleted": 1, "tokens": 0}
+    assert list(store.rows()) == [keep] and batches.inputs == []
 
 
 @pytest.mark.db
@@ -401,6 +420,77 @@ def test_rebuild_prints_no_key_and_no_address(db, store, capsys) -> None:
     assert KEY not in out.out + out.err and "postgresql://" not in out.out + out.err
 
 
+# ── --rebuild --force (Director ruling b) ────────────────────────────────────────────────────
+
+
+def force(db, store, capsys, batches: Batches | None = None):
+    batches = batches if batches is not None else Batches()
+    code = vector_index.main(
+        ["--rebuild", "--force"], conn=db, vconn=store.conn, client=batches.client
+    )
+    out = capsys.readouterr()
+    return code, counts(out.out), out, batches
+
+
+@pytest.mark.db
+def test_force_embeds_every_active_entry_whether_current_or_not(db, store, capsys) -> None:
+    current = entry(db, title="Hiện hành")
+    make_current(db, store, current)
+    old_vector = store.vector(current)
+    missing = entry(db, title="Thiếu")
+    stale = entry(db, title="Cũ")
+    store.put(stale, "f" * 64, "voyage-4", [0.5] * 3)
+    orphan = str(uuid.uuid4())
+    store.put(orphan, "e" * 64, "voyage-4", [0.5] * DIMS)
+
+    code, found, _, batches = force(db, store, capsys, Batches(tokens_each=4))
+
+    assert code == 0 and found == {"embedded": 3, "deleted": 1, "tokens": 12}
+    assert batches.sizes == [3] and set(batches.input_types) == {"document"}
+    assert store.rows() == {i: (sha_of(db, i), "voyage-4", DIMS) for i in (current, missing, stale)}
+    assert store.vector(current) != old_vector  # the current row was replaced, not skipped
+    assert check(db, store, capsys)[0] == 0
+
+
+@pytest.mark.db
+def test_plain_rebuild_still_leaves_a_current_entry_alone(db, store, capsys) -> None:
+    current = entry(db)
+    make_current(db, store, current)
+    before = store.vector(current)
+    code, found, _, batches = rebuild(db, store, capsys)
+    assert code == 0 and found["embedded"] == 0 and batches.inputs == []
+    assert store.vector(current) == before
+
+
+@pytest.mark.db
+def test_force_sends_batches_of_thirty_two_too(db, store, capsys) -> None:
+    for n in range(40):
+        make_current(db, store, entry(db, title=f"Mục {n}"))
+    _, found, _, batches = force(db, store, capsys)
+    assert batches.sizes == [32, 8] and found["embedded"] == 40
+
+
+@pytest.mark.db
+def test_force_with_no_key_is_auth_and_changes_no_row(db, store, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(
+        config, "load", lambda *a, **kw: dataclasses.replace(INDEX_CFG, VOYAGE_API_KEY="")
+    )
+    current = entry(db)
+    make_current(db, store, current)
+    before = store.rows()
+    code, _, out, batches = force(db, store, capsys)
+    assert code == 1 and "auth" in out.err and batches.inputs == []
+    assert store.rows() == before
+
+
+@pytest.mark.parametrize("argv", [["--check", "--force"], ["--force"]])
+def test_force_belongs_to_rebuild_alone(argv, capsys) -> None:
+    with pytest.raises(SystemExit) as caught:
+        vector_index.main(argv)
+    assert caught.value.code == 2
+    assert "--force" in capsys.readouterr().err
+
+
 # ── main ──────────────────────────────────────────────────────────────────────────────────────
 
 
@@ -452,5 +542,51 @@ def test_a_main_database_that_cannot_be_reached_is_named_without_the_librarys_wo
     monkeypatch.setattr(vector_index.infra_db, "connect", refused)
     code = vector_index.main(["--check"], vconn=object())
     seen = capsys.readouterr()
-    assert code == 1 and "main database" in seen.err
+    assert code == 1 and "OperationalError" in seen.err
     assert "secret-host" not in seen.out + seen.err and "Traceback" not in seen.err
+
+
+@pytest.mark.parametrize(
+    "dsn",
+    [
+        "postgresql://app:SENTINELpw%zz@host/db",  # an unescaped % in the password
+        "postgresq://app:SENTINELpw@host/db",  # a mistyped scheme
+        "postgres:/app:SENTINELpw@host/db",  # a scheme missing a slash
+    ],
+)
+def test_a_malformed_main_database_address_leaks_no_password_and_exits_one(
+    capsys, monkeypatch, dsn
+) -> None:
+    """I1. libpq's parse error for such an address quotes the address, password included, and psycopg
+    raises it as a `ProgrammingError` (not an `OperationalError`): uncaught, the traceback prints it.
+    The real `infra.db.connect` raises it here; nothing is patched but the config."""
+    monkeypatch.setattr(
+        config, "load", lambda *a, **kw: dataclasses.replace(INDEX_CFG, DATABASE_URL=dsn)
+    )
+    with pytest.raises(psycopg.ProgrammingError) as raw:  # the premise: the library does leak
+        psycopg.connect(dsn)
+    assert "SENTINELpw" in str(raw.value)
+
+    code = vector_index.main(["--check"], vconn=object())
+
+    seen = capsys.readouterr()
+    assert code == 1 and "database" in seen.err
+    assert "SENTINELpw" not in seen.out + seen.err and "Traceback" not in seen.out + seen.err
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("flag", ["--check", "--rebuild"])
+def test_any_database_error_is_named_by_its_class_only(
+    db, store, capsys, monkeypatch, flag
+) -> None:
+    """The same rule for what a statement raises: the class of the error, never its text."""
+
+    def refused(vconn):
+        raise psycopg.errors.InsufficientPrivilege("permission denied for user SENTINELpw")
+
+    monkeypatch.setattr(vector_store, "ensure_schema", refused)
+    monkeypatch.setattr(vector_store, "stored", refused)
+    code = vector_index.main([flag], conn=db, vconn=store.conn, client=Batches().client)
+    seen = capsys.readouterr()
+    assert code == 1 and "InsufficientPrivilege" in seen.err
+    assert "SENTINELpw" not in seen.out + seen.err and "Traceback" not in seen.out + seen.err

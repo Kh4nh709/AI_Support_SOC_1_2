@@ -23,10 +23,17 @@ all `missing`, and `--check` does not create one.
 stale in batches of 32 as `document`s (their digests, `match.entry_digest`), upserts each batch as it
 arrives, and prints `embedded`, `deleted` and `tokens`. An entry that is current is not sent again, so it can
 be run again after a failure and only does the rest. It exits 0 when it is done, and 1 with the failure kind
-on standard error when Voyage or the vector database failed (the counts so far are printed first).
+on standard error when Voyage or the vector database failed (the counts so far are printed first). The index
+is read before the entries, as `--check` reads it, so that an entry retired in between cannot keep a vector.
+
+**--rebuild --force** (Director ruling, fix round 1) embeds EVERY active entry, current or not: the index
+from scratch (spec §5.1), for when the model's behaviour changed under the same name or a vector is in doubt.
+The orphans are deleted as before. `--force` without `--rebuild` is a command-line error.
 
 Neither prints an address or the key, and a provider's words are never kept (`rag.failures`): the only text
-about a failure is its kind. Exit 2 is a bad command line or a main database with no address.
+about a failure is its kind. A database error is named by its class alone, one line, no traceback: libpq
+quotes a malformed address, password included, in the text of the error. Exit 2 is a bad command line or a
+main database with no address.
 """
 
 from __future__ import annotations
@@ -60,6 +67,7 @@ class Comparison:
     missing: list[Entry]
     stale: list[Entry]
     orphan: list[str]
+    entries: list[Entry] = field(default_factory=list)
 
     @property
     def whole(self) -> bool:
@@ -99,7 +107,7 @@ def compare(
             stale.append(entry)
     live = {entry.entry_id for entry in entries}
     orphan = sorted(entry_id for entry_id in stored if entry_id not in live)
-    return Comparison(len(entries), current, missing, stale, orphan)
+    return Comparison(len(entries), current, missing, stale, orphan, list(entries))
 
 
 def check(conn: psycopg.Connection, vconn: Any, cfg: config.Config) -> Comparison:
@@ -117,17 +125,26 @@ def rebuild(
     cfg: config.Config,
     *,
     client: httpx.Client | None = None,
+    force: bool = False,
 ) -> Rebuilt:
     """Make the index what the main database says (module doc). A `RagUnavailable` stops it and is
-    returned as `failed`; what was done before it stays done."""
+    returned as `failed`; what was done before it stays done. `force` embeds every active entry, current
+    or not.
+
+    The index is read BEFORE the entries, as `check` reads them: an entry retired in between is then not
+    active when the entries are read, so its vector is an orphan and is deleted; read the other way round
+    it would still be listed active, look current and keep its vector. (An entry approved and embedded in
+    between only looks missing and is embedded again.)"""
     done = Rebuilt()
     try:
         vector_store.ensure_schema(vconn)
-        found = compare(active_entries(conn), vector_store.stored(vconn), cfg)
+        stored = vector_store.stored(vconn)
+        found = compare(active_entries(conn), stored, cfg)
         for entry_id in found.orphan:
             vector_store.delete(vconn, entry_id)
             done.deleted += 1
-        todo = sorted([*found.missing, *found.stale], key=lambda entry: entry.entry_id)
+        wanted = found.entries if force else [*found.missing, *found.stale]
+        todo = sorted(wanted, key=lambda entry: entry.entry_id)
         for start in range(0, len(todo), BATCH_SIZE):
             batch = todo[start : start + BATCH_SIZE]
             vectors, usage = voyage.embed(
@@ -171,6 +188,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="embed the entries that are missing or stale, delete the orphans, print the counts",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="with --rebuild: embed every active entry again, current or not (from scratch)",
+    )
     return parser
 
 
@@ -184,16 +206,15 @@ def main(
     """The command (module doc). `conn`, `vconn` and `client` default to a connection of the main database,
     one of the vector database and a Voyage client of their own; every test passes its own. What the
     command opens it closes."""
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.force and not args.rebuild:
+        parser.error("--force belongs to --rebuild")
     opened: list[Any] = []
     try:
         cfg = config.load()
         if conn is None:
-            try:
-                conn = infra_db.connect()
-            except psycopg.OperationalError:
-                _fail("the main database cannot be reached")
-                return 1
+            conn = infra_db.connect()
             opened.append(conn)
         if vconn is None:
             vconn = vector_store.connect(cfg)
@@ -208,7 +229,7 @@ def main(
             print(f"orphan: {len(found.orphan)}")
             return 0 if found.whole else 1
 
-        done = rebuild(conn, vconn, cfg, client=client)
+        done = rebuild(conn, vconn, cfg, client=client, force=args.force)
         print(f"embedded: {done.embedded}")
         print(f"deleted: {done.deleted}")
         print(f"tokens: {done.tokens}")
@@ -221,6 +242,15 @@ def main(
         return 2
     except RagUnavailable as exc:
         _fail(exc.kind)
+        return 1
+    except psycopg.Error as exc:
+        # Never the text: libpq quotes the address, password included, in the error for a malformed one
+        # (a `ProgrammingError`, not an `OperationalError`), and a traceback would print it. The class
+        # says what kind of failure it was.
+        _fail(
+            f"a database call failed ({type(exc).__name__}); the text of the error is not shown, "
+            "it can carry the address"
+        )
         return 1
     finally:
         for resource in opened:
