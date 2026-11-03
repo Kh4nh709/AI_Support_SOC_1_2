@@ -42,8 +42,10 @@
 #     and Voyage). `app`, `worker` and `ui` are not on `vector`, so they have no route to `vectordb`; and
 #     `rag-worker` alone is given its address (VECTOR_DATABASE_URL). `default` is not declared here: the
 #     trial stack configures it in its own override, which leaves `rag-worker`'s `networks` alone.
-#   * `rag-worker` has no `depends_on` on it: a `vectordb` that is down is the failure kind
-#     `vectordb_unreachable` and the lookup is skipped, not a worker that will not start.
+#   * `rag-worker` has no `depends_on` on it: a `vectordb` that is down is not a worker that will not start. A
+#     lookup that cannot reach it is recorded `failed` with the failure kind `vectordb_unreachable`; ① and ② then
+#     run without the RAG and say so (`rag_not_applied:vectordb_unreachable`, the "RAG not applied" notice), and
+#     the health check `rag_lookup_failures` alarms at five in an hour. It is not skipped, and drafts go on.
 #   * The P14 branch that carries it runs on the trial only: it is never merged into `main`, and live is never
 #     deployed with it. Steps and checks: docs/runbook.md, "Voyage vector RAG (DEC-213)".
 #
