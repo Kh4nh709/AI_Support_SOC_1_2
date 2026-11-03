@@ -736,6 +736,36 @@ class TestVoyageVectorKeys:
     def test_env_example_carries_no_secret(self, key):
         assert _env_example_value(key) == ""
 
+    def test_an_empty_voyage_key_is_said_to_fail_the_lookup_with_kind_auth_in_all_four_places(self):
+        """DEC-213, the Director's ruling (P14-T04 fix round 1, F3): with the RAG on, an empty
+        `VOYAGE_API_KEY` makes the lookup `failed` with `failure_kind='auth'`, sends no request and the UI
+        says so. It is not "skipped, as with no model". Words only: T05 and T06 implement it."""
+        root = pathlib.Path(__file__).resolve().parents[2]
+        config_py = (root / "backend" / "app" / "infra" / "config.py").read_text(encoding="utf-8")
+        places = {
+            "config.py": config_py.split("VOYAGE_API_KEY: str")[0].rsplit("DEC-213 (P14", 1)[1],
+            "context pack §6.3": next(
+                ln
+                for ln in (root / "docs" / "plan" / "00-context-pack.md")
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if ln.startswith("VOYAGE_API_KEY(")
+            ),
+            ".env.example": next(
+                ln for ln in _example_text().splitlines() if ln.startswith("VOYAGE_API_KEY=")
+            ),
+            "runbook key row": next(
+                ln
+                for ln in (root / "docs" / "runbook.md").read_text(encoding="utf-8").splitlines()
+                if ln.startswith("| `VOYAGE_API_KEY` |")
+            ),
+        }
+        for name, text in places.items():
+            flat = " ".join(text.split())
+            assert "skipped" not in flat and "as with no model" not in flat, name
+            assert "auth" in flat and ("failed" in flat or "fails" in flat), name
+            assert "no request" in flat, name
+
     def test_env_example_has_87_keys_and_names_the_compose_only_password_in_a_comment(self):
         lines = _example_text().splitlines()
         keys = [

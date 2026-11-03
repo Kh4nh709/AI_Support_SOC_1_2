@@ -248,7 +248,7 @@ The 87 keys of `.env.example`, one row each, no values. `.env.example` is genera
 | `RAG_HISTORY_DAYS` | how far back the decision history looks, days (DEC-210) | default | no |
 | `RAG_MONTHLY_USD_CAP` | the month's spend at which the lookup and draft calls stop; counted inside `LLM_MONTHLY_USD_CAP`, so it can take at most this much from ① and ② (DEC-210) | default | no |
 | `KNOWLEDGE_QUEUE_MAX` | the number of pending drafts above which the `knowledge_queue` health check alarms (DEC-210) | default | no |
-| `VOYAGE_API_KEY` | Voyage AI's key for the embeddings and the rerank of the lookup (DEC-213, the trial's Voyage RAG); empty (the default) means the lookup is skipped, as with no model; `.env` only, not a web setting; recreate the containers after a change | Owner | yes |
+| `VOYAGE_API_KEY` | Voyage AI's key for the embeddings and the rerank of the lookup (DEC-213, the trial's Voyage RAG); empty (the default): with `RAG_ENABLED` on, the lookup is `failed` with `failure_kind` `auth`, no request is sent and the UI says so; `.env` only, not a web setting; recreate the containers after a change | Owner | yes |
 | `VOYAGE_BASE_URL` | the address of Voyage AI's REST API (DEC-213) | default | no |
 | `RAG_EMBED_MODEL` | the model that embeds an approved entry's digest and a lookup's fingerprint (DEC-213); `vectordb` holds vectors of this model only, so a change needs the index rebuilt | default | no |
 | `RAG_EMBED_DIMS` | the size of an embedding: 256, 512, 1024 or 2048, and nothing else (any other number stops the start-up with a `ConfigError`); `vectordb`'s vector column is created at this size, so a change needs the index rebuilt (DEC-213) | default | no |

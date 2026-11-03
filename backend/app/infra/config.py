@@ -226,7 +226,8 @@ class Config:
     RAG_MONTHLY_USD_CAP: int = 3
     KNOWLEDGE_QUEUE_MAX: int = 200
     # DEC-213 (P14, Part B): Voyage embeddings and rerank in an independent pgvector. `.env` keys only, not
-    # web settings. VOYAGE_API_KEY empty means the lookup is skipped, as with no model. The three
+    # web settings. With RAG_ENABLED on, an empty VOYAGE_API_KEY makes the lookup `failed` with
+    # failure_kind 'auth', sends no request, and the UI says so (words only here: P14-T05 and T06 do it). The three
     # thresholds are provisional until calibration and must satisfy 0 <= MIN <= GIONG <= RAT_GIONG <= 1;
     # RAG_EMBED_DIMS is one of 256 / 512 / 1024 / 2048 (`ConfigError` otherwise). VECTOR_DATABASE_URL is
     # empty in `.env`: Compose sets it, for `rag-worker` only (docker-compose.rag.yml). Both it and
