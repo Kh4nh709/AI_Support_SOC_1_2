@@ -43,9 +43,25 @@ ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES = ROOT / "backend" / "app" / "llm" / "templates"
 KB_TABLES = ROOT / "kb" / "decision_tables"
 
-#: The bytes of the signed policy file the loader reads `then: escalate` from. The file is never
-#: edited (spec 4.1: `reviewed_by: "NCK + MNN"`); a change to it moves this digest.
-RECON_YAML_SHA256 = "a23296b596934905fc20bdba279a799a39350cadeebb917dcce88272f9304d5b"
+#: The bytes of every signed decision table under `kb/decision_tables/`, as P14-T01 found them
+#: (`1e2c4f5`). The files are policy the Owner and the advisor signed (`reviewed_by`) and are never
+#: edited for the rename (spec 4.1): the loader reads their `then: escalate` as `true_positive`. A
+#: change to any of them moves its digest, so this proves `kb/` was not touched; a table edited on
+#: purpose, at the Owner's sitting, updates its digest here with it.
+SIGNED_TABLES_SHA256 = {
+    "brute_force": "227a678ed0076a88c55325b5d34f4ce08aca1efef5097c10bd5736ee0edf8914",
+    "c2_beacon": "dbe9fb1672cc0611326d1aa0a5d27fbd73a479673e74821aa590285cd06bd4d5",
+    "credential_access": "aa4da9641b0d12fb9102a17f01196e866fe1c537c810c608003f9c32b6e3f85f",
+    "data_exfiltration": "821b2b0f49b0f6fb52541df67e059de7b7f1c237238726df32e9ae6787fc3585",
+    "malware": "c401bad5c6233d5578f5e69c12c01447d629373bfd7ebdd12076ddb3f26c13b1",
+    "policy_violation": "a531b87c884aba4f27bf62ce0e5a1e4842d7d4a17c65f2b1428a30e2b8adc623",
+    "privilege_escalation": "3d17b09eef6dc9acb561f4a690271323e850b5d35578e5d3dc69907bf8c79a8a",
+    "ransomware": "bb70e35272c098d00fe2c46d3803f038567c27de12bd7c2bae00befb74e4d533",
+    "recon": "a23296b596934905fc20bdba279a799a39350cadeebb917dcce88272f9304d5b",
+    "ssh_brute_force": "d9de975796f340293c9cb24ee69ef334a79cf0e862100bf744863cd111c3006a",
+    "suspicious_login": "a686d266286be81c12061b51f0c5f48cb9ee5363a9ca5276c8861ea0db287652",
+    "web_attack": "707bf1a09671fc2129ff25fbdd3447d01088d1e460be12554f314d6a49106f2d",
+}
 
 
 # ── the two vocabularies ────────────────────────────────────────────────────────────────────
@@ -85,6 +101,9 @@ def test_the_decision_table_loader_holds_the_gated_vocabulary():
     # whatever a table may say after `then:`, the loaded action is one of them, and each is reachable
     assert set(lookup._YAML_ACTION.values()) == set(verdicts.GATED_ACTIONS)
     assert lookup._YAML_ACTION["escalate"] == "true_positive"  # the signed spelling
+    # only that spelling is mapped: `then: true_positive` is not something a signed table says
+    assert lookup._YAML_RENAMED == {"escalate": "true_positive"}
+    assert set(lookup._YAML_ACTION) == {"false_positive", "needs_review", "escalate"}
 
 
 # ── the schemas ─────────────────────────────────────────────────────────────────────────────
@@ -284,17 +303,12 @@ def test_the_output_guard_lets_true_positive_through_and_refuses_escalate():
 # ── the decision tables: signed policy, read as the new verdict ─────────────────────────────
 
 
-def test_recon_yaml_bytes_are_unchanged():
-    path = KB_TABLES / "recon.yaml"
-    assert hashlib.sha256(path.read_bytes()).hexdigest() == RECON_YAML_SHA256
-    assert path.read_text("utf-8").count("then: escalate") == 3
-
-
-def test_no_decision_table_file_was_edited_to_the_new_name():
-    for path in sorted(KB_TABLES.glob("*.yaml")):
-        text = path.read_text("utf-8")
-        assert "true_positive" not in text, path.name
-        assert "then: escalate" in text, path.name
+def test_every_signed_decision_table_is_byte_for_byte_what_was_signed():
+    on_disk = {path.stem: path for path in sorted(KB_TABLES.glob("*.yaml"))}
+    assert set(on_disk) == set(SIGNED_TABLES_SHA256)  # none added, none removed
+    for category, path in on_disk.items():
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        assert digest == SIGNED_TABLES_SHA256[category], path.name
 
 
 def test_recon_then_escalate_rules_load_with_action_true_positive():
@@ -352,18 +366,17 @@ def _write(root: Path, then: str) -> None:
     "then, action",
     [
         ("escalate", "true_positive"),
-        ("true_positive", "true_positive"),
         ("false_positive", "false_positive"),
         ("needs_review", "needs_review"),
     ],
 )
-def test_the_loader_maps_the_signed_spelling_and_takes_the_new_one(tmp_path, then, action):
+def test_the_loader_maps_the_signed_spelling_of_the_renamed_verdict_only(tmp_path, then, action):
     _write(tmp_path, then)
     (rule,) = lookup.get_decision_table("widget", root=tmp_path).rules
     assert rule.action == action
 
 
-@pytest.mark.parametrize("then", ["maybe", "Escalate", "tp", "close"])
+@pytest.mark.parametrize("then", ["maybe", "Escalate", "tp", "close", "true_positive"])
 def test_the_loader_still_refuses_an_unknown_action(tmp_path, then):
     _write(tmp_path, then)
     with pytest.raises(lookup.DecisionTableError, match="wg-1"):
