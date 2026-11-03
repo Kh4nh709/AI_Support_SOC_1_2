@@ -2680,3 +2680,79 @@ def test_the_evidence_is_stamped_by_the_databases_clock(db, kb_root) -> None:
     (now,) = db.execute("SELECT now()").fetchone()
     assert at == now  # one transaction: now() is the transaction's
     assert at.astimezone(UTC).tzinfo is not None
+
+
+# knowledge_embed (P14-T05, DEC-213) -------------------------------------------------------------
+
+
+def embed_jobs(db) -> list[tuple[str, str]]:
+    """(subject, status) of every `knowledge_embed` job."""
+    return db.execute(
+        "SELECT subject_id, status FROM jobs WHERE job_type = 'knowledge_embed' ORDER BY job_id"
+    ).fetchall()
+
+
+@db_marked
+def test_a_merge_enqueues_one_knowledge_embed_for_the_entry_it_changed(db, kb_root) -> None:
+    """The one `UPDATE knowledge_entries` of `rag/draft.py` is `_append_source`. The merge leaves the
+    content and the hash alone (the job will find the row current and ask Voyage nothing), but the ruling
+    is that every write to an entry enqueues the job, in the same transaction."""
+    entry_id, fake = merge_setup(db, kb_root)
+    assert embed_jobs(db) == []
+    run(db, "alert:da-1", fake)
+    assert only_draft(db)["status"] == "merged"
+    assert embed_jobs(db) == [(entry_id, "pending")]
+
+
+@db_marked
+def test_the_embed_job_of_a_merge_is_in_the_merges_transaction(db, kb_root) -> None:
+    entry_id, fake = merge_setup(db, kb_root)
+    run(db, "alert:da-1", fake)
+    assert embed_jobs(db) == [(entry_id, "pending")]
+    db.rollback()
+    assert embed_jobs(db) == []
+    assert db.execute("SELECT count(*) FROM knowledge_drafts").fetchone()[0] == 0
+
+
+@db_marked
+def test_append_source_enqueues_exactly_when_it_changes_the_entry(db, kb_root) -> None:
+    decided_alert(db)
+    entry_id = entry(db, kb_root)
+    src = draft.source_record(db, Subject("alert", "da-1"))
+
+    assert draft._append_source(db, entry_id, src) is True
+    assert embed_jobs(db) == [(entry_id, "pending")]
+
+    db.execute("UPDATE jobs SET status = 'succeeded' WHERE job_type = 'knowledge_embed'")
+    assert draft._append_source(db, entry_id, src) is False  # already holds this source
+    assert embed_jobs(db) == [(entry_id, "succeeded")]  # nothing new
+
+
+@db_marked
+def test_two_merges_into_one_entry_before_the_job_runs_are_one_job(db, kb_root) -> None:
+    """`enqueue` is single-flight: the job reads the entry's state when it runs."""
+    decided_alert(db)
+    decided_alert(db, "da-2")
+    entry_id = entry(db, kb_root)
+    for alert_id in ("da-1", "da-2"):
+        src = draft.source_record(db, Subject("alert", alert_id))
+        assert draft._append_source(db, entry_id, src) is True
+    assert embed_jobs(db) == [(entry_id, "pending")]
+
+
+@db_marked
+def test_a_retired_entry_is_not_merged_into_and_enqueues_nothing(db, kb_root) -> None:
+    decided_alert(db)
+    entry_id = entry(db, kb_root)
+    db.execute("UPDATE knowledge_entries SET status = 'retired' WHERE entry_id = %s", (entry_id,))
+    src = draft.source_record(db, Subject("alert", "da-1"))
+    assert draft._append_source(db, entry_id, src) is False
+    assert embed_jobs(db) == []
+
+
+@db_marked
+def test_a_draft_that_is_not_a_merge_enqueues_no_embed(db) -> None:
+    decided_alert(db)
+    run(db, "alert:da-1", FakeLLM([GOOD]))
+    assert only_draft(db)["status"] == "pending"
+    assert embed_jobs(db) == []

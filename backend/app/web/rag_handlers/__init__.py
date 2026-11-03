@@ -2,9 +2,9 @@
 
 The contract is `app.web.handlers`'s own, over a package of its own: every module here exposes
 `JOB_TYPE: str` and `handle`, and optionally `STATEMENT_TIMEOUT: str`. Spec §7.1: the RAG handlers are
-**not** under `web/handlers/`, which the main worker mounts entirely — `rag-worker` claims `rag_lookup`
-and `knowledge_draft`, and the main worker claims neither, so a later card adds a module here and the
-main worker's table is untouched.
+**not** under `web/handlers/`, which the main worker mounts entirely — `rag-worker` claims `rag_lookup`,
+`knowledge_draft` and (P14-T05, DEC-213) `knowledge_embed`, and the main worker claims none of them, so a
+later card adds a module here and the main worker's table is untouched.
 
 Fail-fast, as there: no `getattr` default for `JOB_TYPE`/`handle` (a module that forgets either is an
 `AttributeError` at import), a `JOB_TYPE` that is not in `app.infra.jobs.JOB_TYPES` is a

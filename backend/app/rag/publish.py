@@ -29,8 +29,10 @@ db-restore`, which restores rows and not files).
    `case_fingerprint`; the full-text search matches its `rules:` and `rule:` lines), `source_alert_ids` the
    alert (or the case's head alerts), `source_case_ids` the case;
 5. in ONE savepoint: the row, the draft set to `approved` (its text is what was published), the event
-   `knowledge.approved {draft_id, entry_id}`, and last the file (a temporary name in the same directory,
-   `fsync`, `rename`). A file that cannot be written raises, the savepoint rolls the rows back, and no
+   `knowledge.approved {draft_id, entry_id}`, a `knowledge_embed` job for the entry (DEC-213: `rag-worker`
+   puts its vector in the vector database; `enqueue` is single-flight, so one pending job covers any number
+   of changes before it runs), and last the file (a temporary name in the same directory, `fsync`,
+   `rename`). A file that cannot be written raises, the savepoint rolls the rows and the job back, and no
    entry survives, even if the caller goes on in the same transaction.
 
 The commit is the caller's. A file that was renamed into place and a commit that then fails would leave a
@@ -39,7 +41,8 @@ effort) when the commit raises. `Published` and `Retired` are what it undoes.
 
 **Reject** and **retire** take a reason of 1-500 characters (`check_reason`). Retire locks the entry,
 refuses one that is not active (`StaleEntry`), sets it `retired` with its `file_path` the retired one,
-writes `knowledge.retired {entry_id, reason}` and moves the file; a file that is missing is nothing to
+writes `knowledge.retired {entry_id, reason}`, enqueues the entry's `knowledge_embed` job (the job deletes
+its vector) and moves the file; a file that is missing is nothing to
 move (the database is the truth), and one whose path leaves the root is never touched. An entry
 whose category is no directory name is still retired (its file goes to `retired/unknown/`).
 
@@ -452,6 +455,9 @@ def approve_published(
             actor_id=admin_id,
             payload={"draft_id": str(wanted), "entry_id": str(entry_id)},
         )
+        # DEC-213: the vector index follows the entry. The job is in this transaction and this savepoint, so
+        # it is committed with the entry and a file that cannot be written takes it back with the rows
+        enqueue(conn, "knowledge_embed", str(entry_id))
         # last: a file that cannot be written takes the rows above back (the savepoint)
         path = write_file(root, relative, content.encode("utf-8"))
     return Published(entry_id, path)
@@ -607,6 +613,8 @@ def retire_published(
             actor_id=admin_id,
             payload={"entry_id": str(wanted), "reason": text},
         )
+        # DEC-213: a retired entry loses its vector. Same transaction and savepoint as the row (see approve)
+        enqueue(conn, "knowledge_embed", str(wanted))
         try:
             moved = move_file(root, _relative(file_path), target)
         except PublishError:  # a path that leaves the tree is not ours to move

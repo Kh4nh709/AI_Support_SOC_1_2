@@ -122,7 +122,7 @@ from psycopg.types.json import Jsonb
 from app.audit.events import write_event
 from app.infra import config, settings
 from app.infra.errors import PermanentError
-from app.infra.jobs import Job, Reschedule
+from app.infra.jobs import Job, Reschedule, enqueue
 from app.llm import schemas
 from app.llm.adapter import (
     DeepSeekAdapter,
@@ -855,7 +855,13 @@ def _append_source(conn: psycopg.Connection, entry_id: str, source: SourceRecord
             "entry": entry_id,
         },
     ).fetchone()
-    return row is not None
+    if row is None:
+        return False
+    # DEC-213: every write to an entry enqueues the vector job, in this transaction. A merge leaves the
+    # content and the hash alone, so the job will find the row current and ask Voyage nothing; it is there so
+    # that no path changes an entry without the index being told.
+    enqueue(conn, "knowledge_embed", entry_id)
+    return True
 
 
 def _record_run(

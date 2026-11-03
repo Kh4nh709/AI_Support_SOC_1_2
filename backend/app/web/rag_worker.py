@@ -1,11 +1,13 @@
 """The `rag-worker`'s composition root (P13-T03, DEC-210, spec §7.1): `python -m app.web.rag_worker`.
 
 The same `infra.worker.run_forever` as `web/worker.py`, with the handlers of `app.web.rag_handlers`
-only. It claims `rag_lookup` and `knowledge_draft` and nothing else, and it reclaims only those types
-too (`run_forever` passes its handler keys to `reclaim_stale`, so it can never take back a `triage` or
-an `investigate` job the main worker is still running).
+only. It claims `rag_lookup`, `knowledge_draft` and `knowledge_embed` (P14-T05, DEC-213) and nothing else,
+and it reclaims only those types too (`run_forever` passes its handler keys to `reclaim_stale`, so it can
+never take back a `triage` or an `investigate` job the main worker is still running, and a
+`knowledge_embed` job whose worker died is taken back by this worker alone).
 
-It claims every due `rag_lookup` before any `knowledge_draft` (`CLAIM_ORDER`).
+It claims every due `rag_lookup` first, then every due `knowledge_embed`, then a `knowledge_draft`
+(`CLAIM_ORDER`).
 
 It seeds nothing. The main worker re-arms its chains (`pull`, `health`, `digest`) at every start;
 a RAG job has no chain: a lookup is enqueued by the alert or the case that needs it, a draft by the
@@ -25,8 +27,10 @@ HANDLERS = iter_handlers()
 TIMEOUTS = iter_timeouts()
 #: A lookup is on every alert and ① reads it 45 s later, a draft is on a conclusion and waits as long as it
 #: must: `claim_job` takes the oldest due job, so a burst of drafts would hold lookups until ① had run (P13 fix
-#: wave, item 21). The worker claims a lookup first and a draft only when no lookup is due.
-CLAIM_ORDER = [["rag_lookup"], ["knowledge_draft"]]
+#: wave, item 21). The worker claims a lookup first and a draft only when no lookup is due. An embedding is
+#: one short call that makes a new entry searchable and costs no model budget, so it comes between them: a
+#: burst of drafts must not keep an approved entry out of the index.
+CLAIM_ORDER = [["rag_lookup"], ["knowledge_embed"], ["knowledge_draft"]]
 
 
 def main(argv: Sequence[str]) -> None:

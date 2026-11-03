@@ -1,12 +1,13 @@
 """P13-T03 / DEC-210, spec §7.1 — the `rag-worker`: its own handler package and its entry point.
 
-`rag-worker` claims `rag_lookup` and `knowledge_draft` and nothing else; the main worker claims
-neither. Their handlers therefore live in `web/rag_handlers/`, not in `web/handlers/`, which the main
+`rag-worker` claims `rag_lookup`, `knowledge_draft` and `knowledge_embed` and nothing else; the main
+worker claims none of them. Their handlers therefore live in `web/rag_handlers/`, not in `web/handlers/`, which the main
 worker mounts whole. The discovery contract is `web.handlers`'s own (`JOB_TYPE`, `handle`, optional
 `STATEMENT_TIMEOUT`, fail-fast on a mistake); `web.rag_worker.main` runs the same `run_forever` with
 those handlers only and seeds no job.
 
-The RAG handlers are `rag_lookup` (P13-T03) and `knowledge_draft` (P13-T04).
+The RAG handlers are `rag_lookup` (P13-T03), `knowledge_draft` (P13-T04) and `knowledge_embed` (P14-T05,
+DEC-213).
 
 Pure tests, no database: discovery never opens a connection.
 """
@@ -25,11 +26,15 @@ from app.web import handlers as main_handlers
 from app.web import rag_handlers, rag_worker
 from app.web import worker as main_worker
 from app.web.rag_handlers import draft as draft_handler
+from app.web.rag_handlers import embed as embed_handler
 from app.web.rag_handlers import lookup as lookup_handler
 
 #: What `rag_handlers.iter_handlers()` holds.
-EXPECTED_TYPES = {"rag_lookup", "knowledge_draft"}
-RAG_JOB_TYPES = {"rag_lookup", "knowledge_draft"}
+EXPECTED_TYPES = {"rag_lookup", "knowledge_draft", "knowledge_embed"}
+RAG_JOB_TYPES = {"rag_lookup", "knowledge_draft", "knowledge_embed"}
+#: What the `rag-worker` claims, one group after the other: a lookup is on every alert, so it goes first; an
+#: embedding is one short call; a draft waits as long as it must.
+EXPECTED_CLAIM_ORDER = [["rag_lookup"], ["knowledge_embed"], ["knowledge_draft"]]
 
 
 # ── the table ─────────────────────────────────────────────────────────────────────────────────
@@ -51,6 +56,12 @@ def test_the_draft_handler_module_follows_the_contract() -> None:
     assert draft_handler.JOB_TYPE == "knowledge_draft"
     assert draft_handler.handle is draft.run_draft_job  # not wrapped: tests pass its `adapter`
     assert rag_handlers.iter_handlers()["knowledge_draft"] is draft.run_draft_job
+
+
+def test_the_embed_handler_module_follows_the_contract() -> None:
+    assert embed_handler.JOB_TYPE == "knowledge_embed"
+    assert embed_handler.handle is embed_handler.run_embed_job  # not wrapped: tests pass `client`
+    assert rag_handlers.iter_handlers()["knowledge_embed"] is embed_handler.run_embed_job
 
 
 def test_the_lookup_declares_a_statement_timeout_for_its_searches() -> None:
@@ -75,7 +86,7 @@ def test_the_rag_worker_claims_none_of_the_main_workers_job_types() -> None:
     assert set(rag_worker.HANDLERS).isdisjoint(main_worker.HANDLERS)
 
 
-# ── knowledge_embed: a job type that exists and that nobody claims yet (P14-T04, DEC-213) ──────
+# ── knowledge_embed: a job type only the rag-worker claims and reclaims (P14-T04, T05, DEC-213) ─
 
 
 class _IdleConn:
@@ -103,23 +114,24 @@ def test_knowledge_embed_is_a_job_type_so_that_enqueue_and_the_constraint_know_i
     assert len(JOB_TYPES) == 9
 
 
-def test_neither_worker_has_a_handler_or_a_timeout_for_knowledge_embed_yet() -> None:
-    """The handler and the claim come with P14-T05; until then a `knowledge_embed` row would sit."""
+def test_only_the_rag_worker_has_a_handler_and_a_timeout_table_entry_for_knowledge_embed() -> None:
+    """P14-T04 pinned that nobody had one; P14-T05 registers it in `rag_handlers` and nowhere else."""
     for table in (
         main_handlers.iter_handlers(),
         main_handlers.iter_timeouts(),
         main_worker.HANDLERS,
         main_worker.TIMEOUTS,
-        rag_handlers.iter_handlers(),
-        rag_handlers.iter_timeouts(),
-        rag_worker.HANDLERS,
-        rag_worker.TIMEOUTS,
     ):
         assert "knowledge_embed" not in table
+    assert "knowledge_embed" in rag_handlers.iter_handlers()
+    assert "knowledge_embed" in rag_worker.HANDLERS
+    assert rag_worker.HANDLERS["knowledge_embed"] is embed_handler.run_embed_job
 
 
-def test_the_rag_workers_claim_order_does_not_name_knowledge_embed() -> None:
-    assert "knowledge_embed" not in {t for group in rag_worker.CLAIM_ORDER for t in group}
+def test_the_rag_workers_claim_order_names_knowledge_embed_once_between_lookup_and_draft() -> None:
+    assert rag_worker.CLAIM_ORDER == EXPECTED_CLAIM_ORDER
+    named = [t for group in rag_worker.CLAIM_ORDER for t in group]
+    assert named.count("knowledge_embed") == 1
 
 
 def test_the_main_worker_neither_claims_nor_reclaims_knowledge_embed(monkeypatch) -> None:
@@ -129,21 +141,22 @@ def test_the_main_worker_neither_claims_nor_reclaims_knowledge_embed(monkeypatch
         assert "knowledge_embed" not in types
 
 
-def test_the_rag_worker_neither_claims_nor_reclaims_knowledge_embed(monkeypatch) -> None:
+def test_the_rag_worker_claims_and_reclaims_knowledge_embed(monkeypatch) -> None:
+    """Only `rag-worker` claims and reclaims it: the reclaim names it (so a job whose worker died is
+    taken back), the claim has its own group, after the lookups and before the drafts."""
     reclaimed, claimed = _types_a_worker_asks_for(
         monkeypatch, rag_worker.HANDLERS, claim_order=rag_worker.CLAIM_ORDER
     )
     assert [sorted(types) for types in reclaimed] == [sorted(EXPECTED_TYPES)]
-    assert claimed == [["rag_lookup"], ["knowledge_draft"]]
-    for types in reclaimed + claimed:
-        assert "knowledge_embed" not in types
+    assert claimed == EXPECTED_CLAIM_ORDER
+    assert "knowledge_embed" in reclaimed[0]
 
 
 def test_the_rag_handler_files_are_not_under_the_main_workers_package() -> None:
     main_dir = Path(main_handlers.__file__).parent
     rag_dir = Path(rag_handlers.__file__).parent
     assert main_dir != rag_dir and rag_dir.name == "rag_handlers"
-    for name in ("lookup.py", "draft.py"):
+    for name in ("lookup.py", "draft.py", "embed.py"):
         assert not (main_dir / name).exists()
         assert (rag_dir / name).is_file()
 
@@ -194,7 +207,7 @@ def test_main_runs_the_loop_with_the_rag_handlers_only(monkeypatch) -> None:
     assert seen["kwargs"] == {
         "once": False,
         "timeouts": rag_handlers.iter_timeouts(),
-        "claim_order": [["rag_lookup"], ["knowledge_draft"]],
+        "claim_order": EXPECTED_CLAIM_ORDER,
     }
     assert seen["conn"] is seen["expected_conn"]
 
@@ -203,7 +216,8 @@ def test_the_rag_worker_claims_every_lookup_before_any_draft() -> None:
     """P13 fix wave, item 21 (Minor 1): `claim_job` takes the oldest due job, and a lookup is on every
     alert while a draft is only on a conclusion, so lookups queued behind drafts arrive after ① has run.
     """
-    assert rag_worker.CLAIM_ORDER == [["rag_lookup"], ["knowledge_draft"]]
+    assert rag_worker.CLAIM_ORDER == EXPECTED_CLAIM_ORDER
+    assert rag_worker.CLAIM_ORDER[0] == ["rag_lookup"]
     assert {t for group in rag_worker.CLAIM_ORDER for t in group} == set(rag_worker.HANDLERS)
 
 
