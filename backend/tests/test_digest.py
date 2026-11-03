@@ -315,6 +315,43 @@ def test_disagreements_sort_first(db):
     assert rows[1].disagreement is False
 
 
+def test_a_true_positive_run_is_listed_as_true_positive_and_is_a_disagreement(db):
+    """P14-T03 (DEC-213): ①'s verdict is `true_positive` (it was `escalate`). The digest reviews
+    auto-closed clusters against it: the rule closed the cluster, the model would have raised it,
+    so it sorts first, is flagged, and the CSV carries the word as ① wrote it."""
+    user = _make_user(db)
+    rule = _make_autoclose_rule(db, user)
+    agree = _insert_alert(db, autoclose_rule_id=rule, occurrence_count=10)
+    _insert_run(db, agree, suggested_action="false_positive")
+    raised = _insert_alert(db, autoclose_rule_id=rule, occurrence_count=1)
+    _insert_run(db, raised, suggested_action="true_positive")
+
+    rows = build(db, _DAY)
+
+    assert [r.alert_id for r in rows] == [raised, agree]
+    assert rows[0].suggested_action == "true_positive" and rows[0].disagreement is True
+    assert rows[1].suggested_action == "false_positive" and rows[1].disagreement is False
+    csv_rows = list(csv.DictReader(io.StringIO(to_csv(rows))))
+    assert [(r["suggested_action"], r["disagreement"]) for r in csv_rows] == [
+        ("true_positive", "true"),
+        ("false_positive", "false"),
+    ]
+
+
+def test_a_verdict_the_gate_held_is_still_a_disagreement_with_the_rule(db):
+    """The model said `false_positive` and gate step 4 held it as `needs_review` (the reader sees the
+    gated verdict, `result.suggested_action`, never `gate_result.proposed_verdict`): the system did not
+    close it, so the digest still asks a person whether the rule was right to."""
+    user = _make_user(db)
+    rule = _make_autoclose_rule(db, user)
+    alert_id = _insert_alert(db, autoclose_rule_id=rule)
+    _insert_run(db, alert_id, suggested_action="needs_review")
+
+    (row,) = build(db, _DAY)
+
+    assert row.suggested_action == "needs_review" and row.disagreement is True
+
+
 def test_build_ties_break_on_occurrence_count_then_alert_id(db):
     user = _make_user(db)
     rule = _make_autoclose_rule(db, user)

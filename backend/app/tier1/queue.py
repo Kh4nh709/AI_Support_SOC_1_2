@@ -17,7 +17,10 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
   suggestion, the acknowledger's name, and (S3) `soar` — the SIEM's SOAR enrichment as one
   display blob (`tier1/soar_view.py`), `None` for an alert that carries none. INT-T02 adds
   `llm_stopped_by`: why the newest ① run gave up, a `visibility.ANALYST_HIDE` key (`latest_stopped_by`
-  below, the one-column sibling of `latest_suggestion`).
+  below, the one-column sibling of `latest_suggestion`). P14-T03 (DEC-213) adds `proposed_action`
+  and `held_by`: the model's own conclusion and why the system held it back (`latest_held` below, another
+  sibling read of the same run; the queue rows carry them from their own statement). All of these are
+  `visibility.ANALYST_HIDE` keys.
 - `latest_suggestion` — **the one place in P4 that reads `llm_runs`** (planning decision
   5). The row shape is P3-T10's and may still move; every read here is `.get`-tolerant,
   and this function is where to follow it. `latest_suggestions` is the same read for many
@@ -41,6 +44,7 @@ import psycopg
 
 from app.domain import correlation
 from app.kb.lookup import get_playbook
+from app.llm import verdicts
 from app.tier1 import visibility
 from app.tier1.soar_view import soar_view
 
@@ -226,6 +230,29 @@ def latest_stopped_by(conn: psycopg.Connection, alert_id: str) -> str | None:
     return None if row is None else row[0]
 
 
+_HELD_SQL = """
+    SELECT result IS NOT NULL, gate_result
+    FROM llm_runs
+    WHERE subject_id = %s AND pipeline = 'triage' AND role = 'proposer'
+    ORDER BY created_at DESC, run_id DESC
+    LIMIT 1
+"""
+
+
+def latest_held(conn: psycopg.Connection, alert_id: str) -> tuple[str | None, list[str]]:
+    """`(proposed_action, held_by)` of the **same** run `latest_suggestion` reads (the newest `proposer`
+    triage run, ties by `run_id DESC`): the model's own definite answer (`gate_result.proposed_verdict`,
+    `verdicts.proposed_action`) and the closed reasons the gate held it back (`verdicts.held_reasons`).
+    `(None, [])` when there is no run, when the run has no `result` (① failed: an older run does not
+    stand in, as in `latest_suggestion`), and for a `gate_result` that is missing or garbled. The alert
+    view's `proposed_action` and `held_by` (P14-T03, DEC-213). Like `latest_suggestion` it applies no
+    blind-branch rule: `visibility.strip` does, in the reader that serves an analyst."""
+    row = conn.execute(_HELD_SQL, (alert_id,)).fetchone()
+    if row is None or not row[0]:
+        return None, []
+    return verdicts.proposed_action(row[1]), verdicts.held_reasons(row[1])
+
+
 _SUGGESTIONS_SQL = """
     SELECT DISTINCT ON (subject_id) subject_id, run_id, result, gate_result, created_at
     FROM llm_runs
@@ -304,6 +331,7 @@ _QUEUE_COLUMNS = (
     "suggested_action",
     "confidence",
     "gate_forced",
+    "gate_held",
     "needs_retriage",
 )
 _NEEDS_RETRIAGE_SQL = """(a.triaged_count > 0 AND
@@ -330,6 +358,10 @@ _QUEUE_SQL = """
            r.result->>'suggested_action',
            r.result->>'confidence',
            r.gate_result->>'forced',
+           CASE WHEN r.result IS NULL THEN NULL ELSE jsonb_build_object(
+               'proposed_verdict', r.gate_result->'proposed_verdict',
+               'forced_by', r.gate_result->'forced_by',
+               'missing', r.gate_result->'missing') END AS gate_held,
            {needs_retriage} AS needs_retriage
     FROM alerts a
     LEFT JOIN LATERAL (
@@ -462,7 +494,7 @@ def list_queue(
     """One page of the Tier-1 queue, by default in the phase-6 order. Each row carries the queue
     columns plus `risk_band` and **minus** `risk_score`, already passed through
     `visibility.strip(mode="analyst")` — a blind, undecided head has no
-    `suggested_action`/`confidence`/`gate_forced`/`triage_status`/`run_id` keys and no
+    `suggested_action`/`confidence`/`gate_forced`/`proposed_action`/`held_by`/`triage_status`/`run_id` keys and no
     `triaged_count`/`needs_retriage` (R17) at all, under every filter, and its `needs_retriage`
     does not affect where it sorts (see `_NEEDS_RETRIAGE_SORT_SQL`).
 
@@ -511,6 +543,11 @@ def list_queue(
         if row["run_id"] is not None:
             row["run_id"] = str(row["run_id"])
         row["gate_forced"] = _JSON_BOOL.get(row["gate_forced"])
+        # P14-T03: only the three gate keys the readers need (never the whole `gate_result`); `strip`
+        # drops both results for a blind, undecided head.
+        gate_held = row.pop("gate_held")
+        row["proposed_action"] = verdicts.proposed_action(gate_held)
+        row["held_by"] = verdicts.held_reasons(gate_held)
         rows.append(
             visibility.strip(
                 row,
@@ -670,6 +707,11 @@ def get_alert_view(
     # Why the newest ① run stopped (INT-T02): added BEFORE the strip, so a blind, undecided head
     # loses it with the other ① keys (`visibility.ANALYST_HIDE`), and the labelling page never has it.
     view["llm_stopped_by"] = latest_stopped_by(conn, head_id)
+    # The model's own conclusion and why the system held it (P14-T03): the same run, and the same rule —
+    # added BEFORE the strip, so the blind arm and the labelling page never get them.
+    view["proposed_action"], view["held_by"] = (
+        latest_held(conn, head_id) if suggestion is not None else (None, [])
+    )
 
     view["risk_band"] = risk_band(view.pop("risk_score"))
 
