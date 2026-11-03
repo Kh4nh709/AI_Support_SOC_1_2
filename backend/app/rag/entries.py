@@ -29,6 +29,9 @@ from typing import Any
 import psycopg
 import yaml
 
+from app.infra import config
+from app.infra.jobs import enqueue
+
 #: `backend/app/rag/entries.py` -> `rag` -> `app` -> `backend` -> repo root, then `kb_learned`.
 KB_LEARNED_ROOT = Path(__file__).resolve().parents[3] / "kb_learned"
 
@@ -137,6 +140,19 @@ class Entry:
 
 
 SELECT_ENTRY = "SELECT " + ", ".join(ENTRY_COLUMNS) + " FROM knowledge_entries"
+
+
+def enqueue_embed(conn: psycopg.Connection, entry_id: str | uuid.UUID) -> None:
+    """Tell the vector index that an entry was written (P14-T05, DEC-213, spec §5.2): a `knowledge_embed`
+    job for it, on `conn`, so it is committed (or rolled back) with the write that called this.
+
+    Only with `RAG_ENABLED` (Director ruling, fix round 1): with the RAG off nothing reads a vector, and a
+    stack that has no `rag-worker` would keep a `job_backlog` alarm for jobs nobody claims. Entries written
+    while it was off are embedded by `python -m app.rag.vector_index --rebuild` when it is turned on.
+    `enqueue` is single-flight over pending and running jobs, so any number of writes before the job runs
+    are one job: the job reads the entry's state when it runs."""
+    if config.load().RAG_ENABLED:
+        enqueue(conn, "knowledge_embed", str(entry_id))
 
 
 def sha256_text(s: str) -> str:

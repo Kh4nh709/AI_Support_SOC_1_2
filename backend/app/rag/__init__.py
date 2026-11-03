@@ -32,6 +32,19 @@ What is here (P13-T04), the drafts that a conclusion proposes:
   a draft (`validate_draft`) and the `knowledge_draft` job (`run_draft_job`), which writes a `pending`
   `knowledge_drafts` row an admin reviews, merging or flagging a draft against the entries it matches.
 
+What is here (P14-T05, DEC-213), Voyage embeddings in an independent pgvector, replacing the LLM ranker on the
+read path (P14-T06) and keeping the index true on the write path:
+
+* `failures`: the six closed failure kinds, `TRANSIENT_KINDS` and `RagUnavailable` (its text is its kind);
+* `voyage`: the REST client over `httpx` (`embed`, `rerank`, `cost_usd`), one failure kind for every way a
+  call can fail and nothing the provider wrote kept;
+* `vector_store`: the one table `entry_vectors` of `vectordb` (`connect`, `ensure_schema`, `upsert`,
+  `delete`, `stored`, `nearest`), a derived index of the approved entries;
+* `vector_index`: `python -m app.rag.vector_index --check | --rebuild`.
+
+The `knowledge_embed` job that keeps the index current is `web/rag_handlers/embed.py`; `publish` (approve,
+retire) and `draft` (the merge) enqueue it in the same transaction as the write that changed an entry.
+
 Operations (P13-T09): the second compose file `docker-compose.rag.yml` runs this package in the
 `rag-worker` service and mounts `kb_learned/`; the steps, checks and rollback are in `docs/runbook.md`,
 "Learned knowledge and RAG (DEC-210)".

@@ -1483,3 +1483,200 @@ def test_a_second_approve_after_the_first_rolled_back_succeeds(scratch_dsn, tmp_
         publish.commit_publication(second, published)
 
     assert [p.name for p in root.rglob("*.md")] == [f"{published.entry_id}.md"]
+
+
+@pytest.fixture(autouse=True)
+def rag_on(monkeypatch):
+    """The embed job is enqueued only with the RAG on (Director ruling a), which is the state these
+    files test in: a test of the RAG off says so."""
+    monkeypatch.setenv("RAG_ENABLED", "true")
+
+
+# ═══ knowledge_embed (P14-T05, DEC-213): every write to an entry enqueues the vector job ═════════
+
+
+def embed_jobs(conn) -> list[tuple[str, str]]:
+    """(subject, status) of every `knowledge_embed` job."""
+    return conn.execute(
+        "SELECT subject_id, status FROM jobs WHERE job_type = 'knowledge_embed' ORDER BY job_id"
+    ).fetchall()
+
+
+def finish_embed_jobs(conn) -> None:
+    """The worker has run what is queued: a change from here on is a new job, not a single-flight one."""
+    conn.execute("UPDATE jobs SET status = 'succeeded' WHERE job_type = 'knowledge_embed'")
+
+
+@pytest.mark.db
+def test_approve_enqueues_one_knowledge_embed_for_the_new_entry(db, root) -> None:
+    _, entry_id, _ = approved_entry(db, root)
+    assert embed_jobs(db) == [(entry_id, "pending")]
+
+
+@pytest.mark.db
+def test_the_embed_job_is_in_the_approvals_transaction(db, root) -> None:
+    _, entry_id, _ = approved_entry(db, root)
+    assert embed_jobs(db) == [(entry_id, "pending")] and entry_count(db) == 1
+    db.rollback()
+    assert embed_jobs(db) == [] and entry_count(db) == 0
+
+
+@pytest.mark.db
+def test_a_refused_approval_enqueues_nothing(db, root) -> None:
+    admin_id = admin(db)
+    draft_id = pending_draft(db, f"alert:{decided_alert(db)}", draft={})
+    with pytest.raises(publish.DraftInvalid):
+        publish.approve(db, draft_id, admin_id, root=root)
+    assert embed_jobs(db) == []
+
+
+@pytest.mark.db
+def test_approving_twice_enqueues_one_job(db, root) -> None:
+    admin_id = admin(db)
+    draft_id = pending_draft(db, f"alert:{decided_alert(db)}")
+    entry_id = publish.approve(db, draft_id, admin_id, root=root)
+    with pytest.raises(publish.StaleDraft):
+        publish.approve(db, draft_id, admin_id, root=root)
+    assert embed_jobs(db) == [(str(entry_id), "pending")]
+
+
+@pytest.mark.db
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_a_file_write_failure_takes_the_embed_job_back_with_the_entry(db, tmp_path) -> None:
+    """The job is enqueued inside the savepoint that holds the entry row: when the file cannot be written
+    both go, and a caller that carries on in the same transaction does not leave a job for no entry.
+    """
+    locked = tmp_path / "kb_learned"
+    locked.mkdir()
+    locked.chmod(0o555)
+    admin_id = admin(db)
+    draft_id = pending_draft(db, f"alert:{decided_alert(db)}")
+    try:
+        with pytest.raises(OSError):
+            publish.approve(db, draft_id, admin_id, root=locked)
+    finally:
+        locked.chmod(0o755)
+
+    assert entry_count(db) == 0 and embed_jobs(db) == []
+    entry_id = publish.approve(db, draft_id, admin_id, root=locked)
+    assert embed_jobs(db) == [(str(entry_id), "pending")]
+
+
+@pytest.mark.db
+def test_retire_enqueues_one_knowledge_embed(db, root) -> None:
+    admin_id, entry_id, _ = approved_entry(db, root)
+    finish_embed_jobs(db)
+
+    publish.retire(db, entry_id, admin_id, "Không còn đúng", root=root)
+
+    assert embed_jobs(db) == [(entry_id, "succeeded"), (entry_id, "pending")]
+
+
+@pytest.mark.db
+def test_retire_before_the_approvals_job_has_run_is_still_one_pending_job(db, root) -> None:
+    """Single-flight: the job reads the entry when it runs, so one pending job covers both changes."""
+    admin_id, entry_id, _ = approved_entry(db, root)
+    publish.retire(db, entry_id, admin_id, "Không còn đúng", root=root)
+    assert embed_jobs(db) == [(entry_id, "pending")]
+
+
+@pytest.mark.db
+def test_a_retire_whose_move_fails_enqueues_no_job(db, root, monkeypatch) -> None:
+    admin_id, entry_id, _ = approved_entry(db, root)
+    finish_embed_jobs(db)
+
+    def refuse(a, b):
+        raise OSError("the move failed")
+
+    monkeypatch.setattr(os, "replace", refuse)
+    with pytest.raises(OSError):
+        publish.retire(db, entry_id, admin_id, "lý do", root=root)
+    monkeypatch.undo()
+
+    assert entry_row(db, entry_id).status == "active"
+    assert embed_jobs(db) == [(entry_id, "succeeded")]  # none added
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("case", ["reason", "unknown", "stale"])
+def test_a_retire_that_is_refused_enqueues_nothing(db, root, case) -> None:
+    admin_id, entry_id, _ = approved_entry(db, root)
+    finish_embed_jobs(db)
+    if case == "stale":
+        publish.retire(db, entry_id, admin_id, "lý do", root=root)
+        finish_embed_jobs(db)
+    expected = embed_jobs(db)
+
+    if case == "reason":
+        with pytest.raises(publish.InvalidReason):
+            publish.retire(db, entry_id, admin_id, "", root=root)
+    elif case == "unknown":
+        with pytest.raises(publish.UnknownEntry):
+            publish.retire(db, uuid.uuid4(), admin_id, "lý do", root=root)
+    else:
+        with pytest.raises(publish.StaleEntry):
+            publish.retire(db, entry_id, admin_id, "lý do", root=root)
+
+    assert embed_jobs(db) == expected
+
+
+@pytest.mark.db
+def test_nothing_enqueues_on_a_reject_or_a_rebuild(db, root) -> None:
+    admin_id = admin(db)
+    draft_id = pending_draft(db, f"alert:{decided_alert(db)}")
+    publish.reject(db, draft_id, admin_id, "lý do")
+    publish.rebuild(db, root)
+    assert embed_jobs(db) == []
+
+
+def jobs_of_entry(conn, entry_id: str) -> list[str]:
+    return [status for subject, status in embed_jobs(conn) if subject == entry_id]
+
+
+@pytest.mark.db
+def test_an_observer_sees_the_job_only_when_the_change_is_committed(scratch_dsn, tmp_path) -> None:
+    """Through real connections: for an approval and for a retirement, the job becomes visible with the
+    change, at the commit, never before it and never on its own."""
+    root = tmp_path / "kb_learned"
+    root.mkdir()
+    with psycopg.connect(scratch_dsn) as setup:
+        admin_id = admin(setup)
+        draft_id = pending_draft(setup, f"alert:{decided_alert(setup)}")
+        setup.commit()
+
+    with psycopg.connect(scratch_dsn) as writer, psycopg.connect(scratch_dsn) as observer:
+        published = publish.approve_published(writer, draft_id, admin_id, root=root)
+        entry_id = str(published.entry_id)
+        assert jobs_of_entry(writer, entry_id) == ["pending"]
+        assert jobs_of_entry(observer, entry_id) == []  # the entry is not committed, nor is the job
+        publish.commit_publication(writer, published)
+        observer.rollback()  # a fresh snapshot
+        assert jobs_of_entry(observer, entry_id) == ["pending"]
+
+        writer.execute("UPDATE jobs SET status = 'succeeded' WHERE subject_id = %s", (entry_id,))
+        writer.commit()
+        retired = publish.retire_published(writer, entry_id, admin_id, "Không còn đúng", root=root)
+        assert jobs_of_entry(writer, entry_id) == ["succeeded", "pending"]
+        observer.rollback()
+        assert jobs_of_entry(observer, entry_id) == ["succeeded"]  # the retire is not committed
+        publish.commit_publication(writer, retired)
+        observer.rollback()
+        assert jobs_of_entry(observer, entry_id) == ["succeeded", "pending"]
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("enabled", [True, False])
+def test_approve_and_retire_enqueue_the_embed_job_only_with_the_rag_on(
+    db, root, monkeypatch, enabled
+) -> None:
+    """Director ruling (a). With the RAG off nothing needs vectors, and a stack with no `rag-worker`
+    would keep a `job_backlog` alarm for jobs nobody claims."""
+    monkeypatch.setenv("RAG_ENABLED", "true" if enabled else "false")
+    admin_id, entry_id, _ = approved_entry(db, root)
+    assert embed_jobs(db) == ([(entry_id, "pending")] if enabled else [])
+
+    finish_embed_jobs(db)
+    publish.retire(db, entry_id, admin_id, "Không còn đúng", root=root)
+
+    assert embed_jobs(db) == ([(entry_id, "succeeded"), (entry_id, "pending")] if enabled else [])
+    assert entry_row(db, entry_id).status == "retired"  # the retirement itself is the same
