@@ -992,18 +992,25 @@ def _run_check(db, tmp_path, cfg=None) -> dict[str, health.CheckResult]:
 
 
 @pytest.mark.db
-def test_the_report_has_the_three_knowledge_checks_after_the_ten(db, tmp_path):
+def test_the_report_has_the_three_knowledge_checks_after_the_ten_and_the_lookup_failures_last(
+    db, tmp_path
+):
     report = health.check(db, _cfg(), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path)
     names = [c.name for c in report.checks]
-    assert names[-3:] == ["knowledge_queue", "knowledge_integrity", "rag_budget"]
-    assert len(names) == 13
+    assert names[-4:] == [
+        "knowledge_queue",
+        "knowledge_integrity",
+        "rag_budget",
+        "rag_lookup_failures",
+    ]
+    assert len(names) == 14
 
 
 @pytest.mark.db
-def test_a_store_with_nothing_in_it_is_green_on_all_three(db, tmp_path):
-    """The first day: no draft, no failed entry, no spend."""
+def test_a_store_with_nothing_in_it_is_green_on_all_four(db, tmp_path):
+    """The first day: no draft, no failed entry, no spend, no failed lookup."""
     checks = _run_check(db, tmp_path)
-    for name in ("knowledge_queue", "knowledge_integrity", "rag_budget"):
+    for name in ("knowledge_queue", "knowledge_integrity", "rag_budget", "rag_lookup_failures"):
         assert checks[name].ok is True, name
 
 
@@ -1181,6 +1188,136 @@ def test_rag_budget_with_either_switch_on_and_a_cap_of_zero_is_an_alarm(db, tmp_
     assert (check.value, check.threshold) == (0.0, 0)
 
 
+# 14 · rag_lookup_failures -----------------------------------------------------------------
+
+
+def _insert_lookup(conn, *, status="failed", kind="timeout", minutes_ago: float = 0) -> None:
+    conn.execute(
+        "INSERT INTO rag_results (lookup_id, subject_kind, subject_id, status, failure_kind,"
+        " created_at) VALUES (%s, 'alert', %s, %s, %s, now() - (%s * interval '1 minute'))",
+        (str(uuid.uuid4()), f"lookup-{next(_alert_seq)}", status, kind, minutes_ago),
+    )
+
+
+def _failures(db, tmp_path, **switches) -> health.CheckResult:
+    cfg = _cfg(**({"RAG_ENABLED": True} | switches))
+    return _run_check(db, tmp_path, cfg)["rag_lookup_failures"]
+
+
+@pytest.mark.db
+def test_rag_lookup_failures_is_red_at_five_failed_lookups_in_the_last_hour(db, tmp_path):
+    for _ in range(5):
+        _insert_lookup(db, minutes_ago=10)
+    check = _failures(db, tmp_path)
+    assert check.ok is False
+    assert (check.value, check.threshold) == (5, 5)
+
+
+@pytest.mark.db
+def test_rag_lookup_failures_is_green_at_four(db, tmp_path):
+    for _ in range(4):
+        _insert_lookup(db, minutes_ago=10)
+    check = _failures(db, tmp_path)
+    assert check.ok is True
+    assert (check.value, check.threshold) == (4, 5)
+
+
+@pytest.mark.db
+def test_rag_lookup_failures_counts_only_the_last_sixty_minutes(db, tmp_path):
+    for minutes in (1, 30, 59):
+        _insert_lookup(db, minutes_ago=minutes)
+    for minutes in (61, 120, 60 * 24):  # outside the hour: not counted, however many
+        _insert_lookup(db, minutes_ago=minutes)
+    check = _failures(db, tmp_path)
+    assert check.ok is True and check.value == 3
+
+
+@pytest.mark.db
+def test_rag_lookup_failures_ignores_every_status_but_failed(db, tmp_path):
+    for status in ("ok", "empty", "budget"):
+        for _ in range(4):
+            _insert_lookup(db, status=status, kind=None, minutes_ago=5)
+    for _ in range(4):
+        _insert_lookup(db, minutes_ago=5)
+    check = _failures(db, tmp_path)
+    assert check.ok is True and check.value == 4
+
+
+@pytest.mark.db
+def test_rag_lookup_failures_says_which_kinds_failed(db, tmp_path):
+    for kind, n in (("auth", 3), ("rate_limit", 2), ("timeout", 1)):
+        for _ in range(n):
+            _insert_lookup(db, kind=kind, minutes_ago=2)
+    _insert_lookup(db, kind=None, minutes_ago=2)  # a failed row older than migration 023 has none
+    check = _failures(db, tmp_path)
+    assert check.ok is False and check.value == 7
+    assert (
+        "auth 3" in check.detail and "rate_limit 2" in check.detail and "timeout 1" in check.detail
+    )
+    assert "unknown 1" in check.detail
+    assert check.detail.index("auth 3") < check.detail.index("rate_limit 2")  # the most first
+
+
+@pytest.mark.db
+def test_rag_lookup_failures_clears_when_the_failures_age_out(db, tmp_path):
+    for _ in range(6):
+        _insert_lookup(db, minutes_ago=59.9)
+    assert _failures(db, tmp_path).ok is False
+    db.execute("UPDATE rag_results SET created_at = created_at - interval '1 hour'")
+    assert _failures(db, tmp_path).ok is True
+
+
+@pytest.mark.db
+def test_rag_lookup_failures_is_not_applicable_with_the_rag_off(db, tmp_path):
+    """With `RAG_ENABLED` false no lookup runs, so a failure left from before the switch went off must not
+    alarm for an hour after it."""
+    for _ in range(9):
+        _insert_lookup(db, minutes_ago=1)
+    check = _run_check(db, tmp_path, _cfg(RAG_ENABLED=False))["rag_lookup_failures"]
+    assert check.ok is True
+    assert check.detail == "n/a — RAG off"
+    assert (check.value, check.threshold) == (None, 5)
+
+
+@pytest.mark.db
+def test_rag_lookup_failures_does_not_follow_the_draft_switch(db, tmp_path):
+    """Only the lookup can fail a lookup: `KNOWLEDGE_DRAFT_ENABLED` alone does not make the check live."""
+    for _ in range(9):
+        _insert_lookup(db, minutes_ago=1)
+    check = _run_check(db, tmp_path, _cfg(RAG_ENABLED=False, KNOWLEDGE_DRAFT_ENABLED=True))[
+        "rag_lookup_failures"
+    ]
+    assert check.ok is True and check.detail == "n/a — RAG off"
+
+
+def test_rag_lookup_failures_off_runs_no_sql():
+    conn = _Refusing()
+    result = health._check_rag_lookup_failures(conn, _cfg())
+    assert result.ok is True and result.detail == "n/a — RAG off"
+    assert conn.savepoints == 0
+
+
+@pytest.mark.db
+def test_a_burst_of_failed_lookups_alarms_the_report_and_writes_health_alarm(
+    db, tmp_path, monkeypatch
+):
+    sent = _fake_notify(monkeypatch)
+    _seed_all_ok(db, tmp_path)
+    for _ in range(5):
+        _insert_lookup(db, kind="auth", minutes_ago=3)
+
+    report = health.check(
+        db, _cfg(RAG_ENABLED=True), clock=_clock_at(_MORNING_UTC), backups_dir=tmp_path
+    )
+
+    assert report.ok is False
+    assert _levels(sent) == ["alarm"] and "rag_lookup_failures" in sent[0][1]
+    (payload,) = db.execute(
+        "SELECT payload FROM audit_events WHERE event_type = 'health.alarm'"
+    ).fetchone()
+    assert payload == {"failing": ["rag_lookup_failures"], "new": ["rag_lookup_failures"]}
+
+
 def test_rag_budget_off_runs_no_sql():
     conn = _Refusing()  # every statement would raise, and a savepoint would be counted
     result = health._check_rag_budget(conn, _cfg())
@@ -1224,6 +1361,10 @@ class _Refusing:
         (lambda c: health._check_knowledge_queue(c, _cfg()), "knowledge_queue"),
         (lambda c: health._check_knowledge_integrity(c), "knowledge_integrity"),
         (lambda c: health._check_rag_budget(c, _cfg(RAG_ENABLED=True)), "rag_budget"),
+        (
+            lambda c: health._check_rag_lookup_failures(c, _cfg(RAG_ENABLED=True)),
+            "rag_lookup_failures",
+        ),
     ],
 )
 def test_each_knowledge_check_fails_closed_without_the_driver_text(check, name):
