@@ -60,6 +60,14 @@ report marked PARTIAL.
 5 print the neighbours' CURRENT status, so a prompt may show an analyst decision made after the subject arrived
 (①: the alert's ``received_at``; ②: ``as_of``). It is the same in both arms, so the RAG difference is not biased by
 it and the absolute accuracy may be flattered; the report counts and lists the subjects it can have touched.
+That count is an estimate, not a bound. A neighbour counts when it is in the +-2 h window, in a decided status
+(``closed_fp``, ``closed_benign``, ``closed_confirmed``, ``escalated_tier2``), and its decision is dated after
+the subject arrived: a closed one by ``sealed_at``, an escalated one by the ``tier1.escalated`` event whose
+``payload.alert_ids`` lists it (``transitions.escalate`` writes one event per case, keyed on the trigger, so a
+swept sibling has none of its own). It OVER-counts because the section's caps (20 groups, 5 samples) are not
+replayed: a neighbour the section cut is counted. It UNDER-counts a neighbour in a decided status with no record
+that dates the decision (an escalation no event lists, as in hand-made data), and a decision the section shows
+under a status outside the four above (none today).
 The RAG-on arm alone also reads the stored decision history, which may hold same-run decisions
 (``history_same_run``): those subjects make the RAG difference unreliable. Coverage, the mean best percentage and
 the leak flags describe what reached each PROMPT (decided from the evaluation, with ``prompt_material``'s own
@@ -96,7 +104,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import llm_cache  # P7-T02: the spend guard
 from app.audit import llm_runs
-from app.domain.correlation import _STATUS_PREDICATE, _WINDOW_PREDICATE, _params
+from app.domain.correlation import STATUS_PREDICATE, WINDOW_PREDICATE, window_params
 from app.infra import config, db
 from app.infra.errors import ConfigError
 from app.llm import verdicts
@@ -231,7 +239,7 @@ class Seen:
     row). `status`: `ok` / `empty` (the lookup's material reached the prompt), `failed` (with its closed
     `failure_kind`), `budget` (the newest lookup hit a cap: no material), `none` (no lookup at all) or
     `not_in_prompt` (a usable lookup exists but its section did not reach the prompt: the token budget cut it,
-    or its read failed). `matches` are `(entry_id, percentage)` of the matches the prompt kept, best first
+    or its read failed) or `error` (the evaluation raised, so nothing is known of its prompt). `matches` are `(entry_id, percentage)` of the matches the prompt kept, best first
     (the active, hash-intact ones: `prompt_material`'s own filter). The history fields are the stored
     decision history that came with the lookup: how many decisions, the newest activity, the example alerts.
     """
@@ -314,11 +322,12 @@ class ArmRow:
         return row
 
 
-def summarise(rows: Sequence[ArmRow]) -> dict[str, Any]:
+def summarise(rows: Sequence[ArmRow], *, leaks_computed: bool = True) -> dict[str, Any]:
     """The numbers of one arm of one tier. `n` is every subject of the arm; the rates are over the subjects
     the model answered (`answered`), and `no_answer` says by outcome why the others were not scored. A rate
     with nothing to divide is None, never 0. Held is split by whether the model's own conclusion was right.
-    `rag` is None for an arm that read no lookup."""
+    `rag` is None for an arm that read no lookup. With `leaks_computed` False (a PARTIAL report whose leak pass
+    did not run) the leak and history-flag numbers are None: they are not zero, they are unknown."""
     scored = [row for row in rows if row.model_tp is not None]
     no_answer = Counter(row.outcome for row in rows if row.model_tp is None)
     correct = sum(1 for row in scored if row.correct)
@@ -345,11 +354,11 @@ def summarise(rows: Sequence[ArmRow]) -> dict[str, Any]:
             "model_right": sum(1 for row in held if row.correct),
         },
         "cost_usd": round(math.fsum(row.cost_usd for row in rows), 5),
-        "rag": _rag_summary(rows),
+        "rag": _rag_summary(rows, leaks_computed),
     }
 
 
-def _rag_summary(rows: Sequence[ArmRow]) -> dict[str, Any] | None:
+def _rag_summary(rows: Sequence[ArmRow], leaks_computed: bool = True) -> dict[str, Any] | None:
     """Coverage, the mean best percentage, the leaks and the history describe what reached the PROMPT of each
     RAG-on subject (`Seen`), not what the stored lookup held."""
     seen_rows = [row for row in rows if row.seen is not None]
@@ -387,15 +396,20 @@ def _rag_summary(rows: Sequence[ArmRow]) -> dict[str, Any] | None:
             "no_lookup": sum(1 for row in seen_rows if row.seen.status == "none"),
             "budget": sum(1 for row in seen_rows if row.seen.status == "budget"),
             "not_in_prompt": sum(1 for row in seen_rows if row.seen.status == "not_in_prompt"),
+            "evaluation_error": sum(1 for row in seen_rows if row.seen.status == "error"),
         },
         "history": {
             "in_prompt": sum(1 for row in seen_rows if row.seen.history_in_prompt),
-            "same_run": {
-                "count": sum(1 for row in seen_rows if row.history_same_run),
-                "subjects": sorted(row.subject for row in seen_rows if row.history_same_run),
-            },
+            "same_run": (
+                {
+                    "count": sum(1 for row in seen_rows if row.history_same_run),
+                    "subjects": sorted(row.subject for row in seen_rows if row.history_same_run),
+                }
+                if leaks_computed
+                else None
+            ),
         },
-        "leaks": leaks,
+        "leaks": leaks if leaks_computed else None,
     }
 
 
@@ -681,13 +695,16 @@ def seen_for(
     applied: uuid.UUID | None,
     failed_kind: str | None = None,
     before: datetime | None = None,
+    skips_budget: bool = False,
 ) -> Seen:
     """What the RAG-on prompt of `subject` held of its lookup. Whether the material reached the prompt is
     decided by the evaluation: `applied` is its `rag_lookup_id` (set only when the section is in the prompt,
     after any budget cut), `failed_kind` its `rag_not_applied` (②). When `applied`, that lookup is read back
     (it is the newest usable one created before `before`) and only the matches the prompt kept are counted,
     with the stored history. When not, the newest row before `before` says why: none, `failed`, `budget`, or a
-    usable one that did not reach the prompt (`not_in_prompt`)."""
+    usable one that did not reach the prompt (`not_in_prompt`). ② looks past a newer `budget` row to the usable
+    row before it (`skips_budget`, spec §7.6; ① reads the newest row whatever it is), so for ② a usable row
+    behind a `budget` one makes it `not_in_prompt`: its section was cut."""
     if applied is not None:
         used = latest_lookup(conn, subject, statuses=USABLE_STATUSES, before=before)
         if used is None or used.lookup_id != applied:
@@ -709,7 +726,11 @@ def seen_for(
     if newest.status == "failed":
         return Seen("failed", newest.failure_kind or UNKNOWN_FAILURE_KIND, ())
     if newest.status == "budget":
-        return Seen("budget", None, ())
+        behind = (
+            skips_budget
+            and latest_lookup(conn, subject, statuses=USABLE_STATUSES, before=before) is not None
+        )
+        return Seen("not_in_prompt" if behind else "budget", None, ())
     return Seen("not_in_prompt", None, ())
 
 
@@ -764,15 +785,21 @@ def leak_context(
 _DECIDED_STATUSES = ("closed_fp", "closed_benign", "closed_confirmed", "escalated_tier2")
 
 #: The neighbours ① and ② print in their correlation section, narrowed to the decided ones: the same window
-#: and status predicates (`domain.correlation`, which `tier2.dossier` imports in the same way), with when each
-#: was decided: a closed one when it was sealed, an escalated one at its `tier1.escalated` event.
+#: and status predicates (`domain.correlation`, which `tier2.dossier` uses in the same way), with when each was
+#: decided. A closed one: `sealed_at`, which a human close must set (`ck_alerts_h2`). An escalated one: the
+#: `tier1.escalated` event whose `payload.alert_ids` lists it. `transitions.escalate` (the only writer of that
+#: event) writes ONE event, keyed on the trigger, with every head it swept into the case in `alert_ids`, so a
+#: swept sibling has no event of its own and only this lookup dates it. Read from `audit_events` by the event
+#: type and the payload, not by `cases.created_at`: the event is the record of the decision itself, and it
+#: needs no join on `alerts.case_id`, which a duplicate also carries.
 _DECISIONS_SQL = f"""
     SELECT n.status, n.sealed_at,
            (SELECT min(e.created_at) FROM audit_events e
-             WHERE e.subject_id = n.alert_id AND e.event_type = 'tier1.escalated')
+             WHERE e.event_type = 'tier1.escalated'
+               AND e.payload -> 'alert_ids' @> to_jsonb(n.alert_id::text))
       FROM alerts n
-     WHERE {_WINDOW_PREDICATE}
-       AND {_STATUS_PREDICATE}
+     WHERE {WINDOW_PREDICATE}
+       AND {STATUS_PREDICATE}
        AND n.status = ANY(%(decided)s)
 """
 #: ②'s block 5 leaves out the case's own alerts.
@@ -794,7 +821,7 @@ def _decided_after(
 
 def _window(alert_id: str, row: Sequence[Any]) -> dict[str, Any]:
     agent_name, alert_user, srcip, alert_time = row
-    return _params(
+    return window_params(
         SimpleNamespace(
             alert_id=alert_id,
             agent_name=agent_name,
@@ -851,6 +878,11 @@ class _Metered:
         self._inner = inner
         self._guard = guard
 
+    @property
+    def spent(self) -> float:
+        """What this process has spent so far, in USD (every answered call, whichever row it lands in)."""
+        return self._guard.live_spent_usd
+
     def complete(self, **kwargs: Any) -> Any:
         self._guard.check()
         result = self._inner.complete(**kwargs)
@@ -859,10 +891,17 @@ class _Metered:
 
 
 def _alert_row(
-    subject: AlertSubject, truth: str, arm: str, evaluation: Any | None, seen: Seen | None
+    subject: AlertSubject,
+    truth: str,
+    arm: str,
+    evaluation: Any | None,
+    seen: Seen | None,
+    error_cost: float = 0.0,
 ) -> ArmRow:
     if evaluation is None:
-        return ArmRow(1, subject.alert_id, truth, arm, "error", None, None, None, False, 0.0, seen)
+        return ArmRow(
+            1, subject.alert_id, truth, arm, "error", None, None, None, False, error_cost, seen
+        )
     answered = evaluation.outcome == "ok" and evaluation.proposed_verdict is not None
     return ArmRow(
         tier=1,
@@ -880,10 +919,15 @@ def _alert_row(
 
 
 def _case_row(
-    case_id: str, truth: str, arm: str, evaluation: Any | None, seen: Seen | None
+    case_id: str,
+    truth: str,
+    arm: str,
+    evaluation: Any | None,
+    seen: Seen | None,
+    error_cost: float = 0.0,
 ) -> ArmRow:
     if evaluation is None:
-        return ArmRow(2, case_id, truth, arm, "error", None, None, None, False, 0.0, seen)
+        return ArmRow(2, case_id, truth, arm, "error", None, None, None, False, error_cost, seen)
     answered = (
         evaluation.outcome == "ok" and evaluation.model_conclusion in verdicts.MODEL_CONCLUSIONS
     )
@@ -902,6 +946,10 @@ def _case_row(
         seen=seen,
         held_by=tuple(evaluation.held_by),
     )
+
+
+def _spent(adapter: Any) -> float:
+    return float(getattr(adapter, "spent", 0.0))
 
 
 def _attempt(subject: str, arm: str, call: Callable[[], Any]) -> Any | None:
@@ -935,6 +983,7 @@ def run_alert(
     for arm in ARMS:
         _begin(conn)
         switches = dataclasses.replace(DEPLOYED, rag=arm == "on")
+        spent_before = _spent(adapter)
         evaluation = _attempt(
             subject.alert_id,
             arm,
@@ -944,10 +993,16 @@ def run_alert(
         )
         seen = None
         if arm == "on":
-            applied = None if evaluation is None else evaluation.rag_lookup_id
-            seen = seen_for(conn, Subject("alert", subject.alert_id), applied=applied)
+            seen = (
+                Seen("error", None, ())
+                if evaluation is None
+                else seen_for(
+                    conn, Subject("alert", subject.alert_id), applied=evaluation.rag_lookup_id
+                )
+            )
         conn.rollback()
-        rows.append(_alert_row(subject, truth, arm, evaluation, seen))
+        error_cost = max(_spent(adapter) - spent_before, 0.0) if evaluation is None else 0.0
+        rows.append(_alert_row(subject, truth, arm, evaluation, seen, error_cost))
     return rows
 
 
@@ -965,6 +1020,7 @@ def run_case(
     for arm in ARMS:
         _begin(conn)
         rag = arm == "on"
+        spent_before = _spent(adapter)
         evaluation = _attempt(
             subject.case_id,
             arm,
@@ -974,15 +1030,21 @@ def run_case(
         )
         seen = None
         if arm == "on":
-            seen = seen_for(
-                conn,
-                Subject("case", subject.case_id.lower()),
-                applied=None if evaluation is None else evaluation.rag_lookup_id,
-                failed_kind=None if evaluation is None else evaluation.rag_not_applied,
-                before=as_of,
+            seen = (
+                Seen("error", None, ())
+                if evaluation is None
+                else seen_for(
+                    conn,
+                    Subject("case", subject.case_id.lower()),
+                    applied=evaluation.rag_lookup_id,
+                    failed_kind=evaluation.rag_not_applied,
+                    before=as_of,
+                    skips_budget=True,
+                )
             )
         conn.rollback()
-        rows.append(_case_row(subject.case_id, truth, arm, evaluation, seen))
+        error_cost = max(_spent(adapter) - spent_before, 0.0) if evaluation is None else 0.0
+        rows.append(_case_row(subject.case_id, truth, arm, evaluation, seen, error_cost))
     return rows
 
 
@@ -1001,8 +1063,8 @@ def with_leaks(
     examples = sorted(
         {a for row in seen_rows if row.seen.history_in_prompt for a in row.seen.history_examples}
     )
-    if not matched and not examples:
-        return list(rows)
+    if not matched and not any(row.seen.history_in_prompt for row in seen_rows):
+        return list(rows)  # nothing to look up and no history to test
     _begin(conn)
     entries, alert_run, case_runs = leak_context(conn, sorted(matched), examples)
     conn.rollback()
@@ -1114,7 +1176,11 @@ def build_measure_report(
     tiers: dict[int, dict[str, Any]],
     rows: Sequence[ArmRow],
     partial: Mapping[str, Any] | None = None,
+    spent_usd: float | None = None,
 ) -> dict[str, Any]:
+    leaks_computed = partial is None or bool(partial["leaks_computed"])
+    in_rows_usd = round(math.fsum(row.cost_usd for row in rows), 5)
+    total_usd = in_rows_usd if spent_usd is None else round(max(spent_usd, in_rows_usd), 5)
     by_arm = {
         tier: {arm: [r for r in rows if r.tier == tier and r.arm == arm] for arm in ARMS}
         for tier in tiers
@@ -1124,7 +1190,9 @@ def build_measure_report(
         report_tiers[str(tier)] = {
             **facts,
             "tier": tier,
-            "arms": {arm: summarise(by_arm[tier][arm]) for arm in ARMS},
+            "arms": {
+                arm: summarise(by_arm[tier][arm], leaks_computed=leaks_computed) for arm in ARMS
+            },
             "paired": paired(by_arm[tier]["off"], by_arm[tier]["on"]),
         }
     return {
@@ -1152,7 +1220,11 @@ def build_measure_report(
         },
         "model": cfg.LLM_MODEL_PROPOSER,
         "tiers": report_tiers,
-        "cost_usd": round(math.fsum(row.cost_usd for row in rows), 5),
+        # what this run spent: the spend guard's total, which also holds the calls of a subject the run was
+        # stopped in the middle of (they land in no row). The rows' own sum is beside it.
+        "cost_usd": total_usd,
+        "cost_in_rows_usd": in_rows_usd,
+        "cost_unattributed_usd": round(max(total_usd - in_rows_usd, 0.0), 5),
         "rows": [row.to_json() for row in rows],
     }
 
@@ -1248,7 +1320,11 @@ def render_measure_md(report: Mapping[str, Any]) -> str:
         ),
         f"- Test runs: {runs}",
         f"- KB cut-off: {report['kb_cutoff']} ({report['kb_cutoff_source']})",
-        f"- Cost: ${report['cost_usd']:.5f}",
+        (
+            f"- Cost: ${report['cost_usd']:.5f} (the spend guard's total for this run: "
+            f"${report['cost_in_rows_usd']:.5f} is in the rows below, "
+            f"${report['cost_unattributed_usd']:.5f} in no row)"
+        ),
         "",
         (
             "The model's own conclusion is scored against the hand labels. Rates are over the subjects "
@@ -1290,6 +1366,16 @@ def render_measure_md(report: Mapping[str, Any]) -> str:
         rag = tier["arms"]["on"]["rag"]
         if rag is not None:
             leaks, history = rag["leaks"], rag["history"]
+            if leaks is None:
+                lines += [
+                    "",
+                    (
+                        "Leaks and history (RAG on): not computed - the run stopped before the leak pass, "
+                        "so `same_run`, `after_cutoff`, `history_same_run` and `unplaceable` are unknown, "
+                        f"not zero. {history['in_prompt']} prompt(s) carried a decision history."
+                    ),
+                ]
+                continue
             lines += [
                 "",
                 (
@@ -1455,6 +1541,7 @@ def cmd_measure(args: argparse.Namespace) -> int:
     dsn, cfg = _dsn_and_config(args.dsn, cfg)
 
     rows: list[ArmRow] = []
+    guard: llm_cache.SpendGuard | None = None
     done = {"tier1": 0, "tier2": 0}
     interrupted: BaseException | None = None
     leaks_computed = True
@@ -1560,8 +1647,8 @@ def cmd_measure(args: argparse.Namespace) -> int:
             interrupted = exc
         try:
             rows = with_leaks(conn, rows, runs_of, cutoff, run_starts)
-        except psycopg.Error as exc:
-            leaks_computed = False
+        except (psycopg.Error, KeyboardInterrupt) as exc:
+            leaks_computed = False  # the report says "not computed", never "0 flagged"
             interrupted = interrupted or exc
     finally:
         with contextlib.suppress(psycopg.Error):
@@ -1584,6 +1671,7 @@ def cmd_measure(args: argparse.Namespace) -> int:
         tiers=facts,
         rows=rows,
         partial=partial,
+        spent_usd=None if guard is None else guard.live_spent_usd,
     )
     stamp = _stamp() + ("_PARTIAL" if partial is not None else "")
     out = Path(args.out)

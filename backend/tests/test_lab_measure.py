@@ -200,12 +200,24 @@ def _put_run(conn: psycopg.Connection, case_id: str, created_at: datetime, summa
     )
 
 
-def _put_event(conn: psycopg.Connection, event_type: str, alert_id: str, user: str, when) -> None:
+def _put_event(
+    conn: psycopg.Connection,
+    event_type: str,
+    alert_id: str,
+    user: str,
+    when,
+    payload: dict | None = None,
+) -> None:
     conn.execute(
-        "INSERT INTO audit_events (event_type, subject_id, actor_id, actor_role, created_at)"
-        " VALUES (%s, %s, %s, 'analyst', %s)",
-        (event_type, alert_id, user, when),
+        "INSERT INTO audit_events (event_type, subject_id, actor_id, actor_role, payload, created_at)"
+        " VALUES (%s, %s, %s, 'analyst', %s, %s)",
+        (event_type, alert_id, user, Jsonb(payload or {}), when),
     )
+
+
+def _escalated(conn: psycopg.Connection, alert_id: str, user: str, when) -> None:
+    """The event `transitions.escalate` writes, for a cluster of one: keyed on the trigger, listing its heads."""
+    _put_event(conn, "tier1.escalated", alert_id, user, when, {"alert_ids": [alert_id]})
 
 
 def _put_note(conn: psycopg.Connection, case_id: str, user: str, body: str, when) -> None:
@@ -583,6 +595,7 @@ def test_the_rag_statistics_count_coverage_failures_and_leaks():
         "no_lookup": 1,
         "budget": 1,
         "not_in_prompt": 0,
+        "evaluation_error": 0,
     }
     assert rag["leaks"]["same_run"] == {"count": 2, "subjects": ["h", "i"]}
     assert rag["leaks"]["after_cutoff"] == {"count": 1, "subjects": ["i"]}
@@ -944,11 +957,11 @@ def seed_lab(dsn) -> Lab:
         _put_run(conn, cases["c1"], at(9.1), "PREVIOUS-RUN-AFTER-AS-OF")
         _put_note(conn, cases["c1"], tier2, "NOTE-BEFORE-AS-OF", at(8.9))
         _put_note(conn, cases["c1"], tier2, "NOTE-AFTER-AS-OF", at(9.2))
-        _put_event(conn, "tier1.escalated", ids["t1"], tier2, at(8.8))
+        _escalated(conn, ids["t1"], tier2, at(8.8))
         _put_event(conn, "tier1.decided", ids["t1"], tier2, at(9.3))
         # analyst decisions on neighbours, after the neighbour's subject arrived (t1 at 6.5, t2 at 7.0, t3 at 7.5)
-        _put_event(conn, "tier1.escalated", ids["t2"], tier2, at(7.4))
-        _put_event(conn, "tier1.escalated", ids["t5"], tier2, at(9.6))
+        _escalated(conn, ids["t2"], tier2, at(7.4))
+        _escalated(conn, ids["t5"], tier2, at(9.6))
         _put_run(conn, cases["c2"], at(8.8), "FIRST-RUN-OF-C2")
         _put_run(conn, cases["c3"], at(9.3), "FIRST-RUN-OF-C3")
 
@@ -1204,6 +1217,7 @@ def test_measure_counts_a_failed_lookup_under_its_kind_and_scores_it_without_rag
         "no_lookup": 0,
         "budget": 0,
         "not_in_prompt": 0,
+        "evaluation_error": 0,
     }
     rag2 = _arm(measured, 2, "on")["rag"]
     assert rag2["failed_lookups"] == {
@@ -1211,6 +1225,7 @@ def test_measure_counts_a_failed_lookup_under_its_kind_and_scores_it_without_rag
         "no_lookup": 0,
         "budget": 0,
         "not_in_prompt": 0,
+        "evaluation_error": 0,
     }
     # the failed subject is scored: t3's RAG-on answer is its RAG-off answer, so it is still wrong
     rows = {(r["subject"], r["arm"]): r for r in measured.report["rows"] if r["tier"] == 1}
@@ -2262,3 +2277,342 @@ def test_the_job_has_no_assert_in_its_control_flow():
         n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "run_investigate_job"
     )
     assert not [n for n in ast.walk(job) if isinstance(n, ast.Assert)]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════
+# Fix round 2
+# ═══════════════════════════════════════════════════════════════════════════════════════════
+
+# ── R1: an escalated neighbour is dated by the event that lists it ──────────────────────────
+
+
+def _swept_alert(conn: psycopg.Connection, n: int, agent: str, srcip: str) -> str:
+    """A `queued_tier1` alert with a user of its own: what `transitions.escalate` sweeps in when it shares the
+    trigger's agent (or address)."""
+    alert_id = _alert_id(n)
+    _seed_alert(conn, alert_id=alert_id, agent_name=agent, alert_user=f"esc-user-{n}", srcip=srcip)
+    return alert_id
+
+
+def _escalate(dsn, trigger: str, user: str) -> str:
+    """The real `transitions.escalate`, committed; the id of the case it opened."""
+    from app.domain import transitions
+
+    with _connect(dsn) as conn:
+        case_id = transitions.escalate(
+            conn, trigger, user, title="t11 escalation", severity="medium"
+        )
+        conn.commit()
+    return case_id
+
+
+@pytest.mark.db
+def test_a_sibling_swept_into_a_case_is_dated_by_the_event_that_lists_it(scratch_dsn):
+    """`transitions.escalate` writes ONE `tier1.escalated`, keyed on the trigger, with every swept head in
+    `payload.alert_ids`: the siblings have no event of their own. The trigger's correlation section prints
+    them as `escalated_tier2`, decided after the trigger arrived, so the trigger must be counted."""
+    n = 700 + 10 * next(_seq)
+    agent = f"esc-agent-{n}"
+    with _connect(scratch_dsn) as conn:
+        user = insert_user(conn, "tier1")
+        trigger = _swept_alert(conn, n, agent, f"10.96.{n % 200}.1")
+        sibling_a = _swept_alert(conn, n + 1, agent, f"10.96.{n % 200}.2")
+        sibling_b = _swept_alert(conn, n + 2, agent, f"10.96.{n % 200}.3")
+        conn.commit()
+    _escalate(scratch_dsn, trigger, user)
+
+    with _connect(scratch_dsn) as conn:
+        # the premise: one event, on the trigger, listing the three heads; none on a sibling
+        events = conn.execute(
+            "SELECT subject_id, payload FROM audit_events WHERE event_type = 'tier1.escalated'"
+            " AND payload -> 'alert_ids' ? %s",
+            (sibling_a,),
+        ).fetchall()
+        assert [e[0] for e in events] == [trigger]
+        assert sorted(events[0][1]["alert_ids"]) == sorted([trigger, sibling_a, sibling_b])
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM audit_events WHERE event_type = 'tier1.escalated'"
+                " AND subject_id = ANY(%s)",
+                ([sibling_a, sibling_b],),
+            ).fetchone()[0]
+            == 0
+        )
+        long_ago = datetime.now(UTC) - timedelta(hours=1)
+        assert lm.alert_correlation_after(conn, trigger, long_ago) is True
+        # a sibling's neighbours are the trigger and the other sibling, dated by the same event
+        assert lm.alert_correlation_after(conn, sibling_a, long_ago) is True
+        # nothing was decided after a later arrival
+        assert (
+            lm.alert_correlation_after(conn, trigger, datetime.now(UTC) + timedelta(hours=1))
+            is False
+        )
+
+
+@pytest.mark.db
+def test_a_case_next_to_a_swept_sibling_of_another_case_is_counted(scratch_dsn):
+    """Case 1 = {A, B, C} (agent X). F also has agent X but was swept into case 2 = {E, F} by E's escalation
+    (E has another agent and F's address, so E is in nobody's window of case 1): F is the only neighbour of
+    case 1, it has no event of its own, and the event that lists it was written after the case's cut.
+    """
+    n = 760 + 10 * next(_seq)
+    agent_x, agent_y = f"esc-agent-x{n}", f"esc-agent-y{n}"
+    shared_ip = f"10.95.{n % 200}.9"
+    with _connect(scratch_dsn) as conn:
+        user = insert_user(conn, "tier1")
+        a = _swept_alert(conn, n, agent_x, f"10.95.{n % 200}.1")
+        _swept_alert(conn, n + 1, agent_x, f"10.95.{n % 200}.2")
+        _swept_alert(conn, n + 2, agent_x, f"10.95.{n % 200}.3")
+        f = _swept_alert(conn, n + 3, agent_x, shared_ip)
+        e = _swept_alert(conn, n + 4, agent_y, shared_ip)
+        conn.commit()
+    _escalate(scratch_dsn, e, user)  # sweeps F through the shared address
+    case_one = _escalate(scratch_dsn, a, user)  # sweeps B and C; F is already in a case
+
+    with _connect(scratch_dsn) as conn:
+        assert (
+            conn.execute("SELECT case_id::text FROM alerts WHERE alert_id = %s", (a,)).fetchone()[0]
+            == case_one
+        )
+        assert (
+            conn.execute("SELECT status FROM alerts WHERE alert_id = %s", (f,)).fetchone()[0]
+            == "escalated_tier2"
+        )
+        long_ago = datetime.now(UTC) - timedelta(hours=1)
+        assert lm.case_correlation_after(conn, case_one, long_ago) is True
+        assert (
+            lm.case_correlation_after(conn, case_one, datetime.now(UTC) + timedelta(hours=1))
+            is False
+        )
+
+
+@pytest.mark.db
+def test_a_closed_neighbour_is_dated_by_when_it_was_sealed(scratch_dsn):
+    n = 840 + next(_seq)
+    agent = f"esc-agent-c{n}"
+    sealed = datetime.now(UTC) - timedelta(minutes=30)
+    with _connect(scratch_dsn) as conn:
+        subject = _swept_alert(conn, n, agent, f"10.94.{n % 200}.1")
+        _seed_alert(
+            conn,
+            alert_id=_alert_id(n + 1),
+            agent_name=agent,
+            alert_user=f"esc-user-{n + 1}",
+            srcip=f"10.94.{n % 200}.2",
+            status="closed_fp",
+            closed_at=sealed,
+            sealed_at=sealed,
+        )
+        conn.commit()
+        assert lm.alert_correlation_after(conn, subject, sealed - timedelta(minutes=1)) is True
+        assert lm.alert_correlation_after(conn, subject, sealed) is False  # strictly after
+        assert lm.alert_correlation_after(conn, subject, sealed + timedelta(minutes=1)) is False
+
+
+# ── M3 of round 2: the correlation predicates have public names ─────────────────────────────
+
+
+def test_the_correlation_predicates_have_public_names_and_eval_uses_them():
+    from app.domain import correlation
+
+    assert correlation.WINDOW_PREDICATE is correlation._WINDOW_PREDICATE
+    assert correlation.STATUS_PREDICATE is correlation._STATUS_PREDICATE
+    assert correlation.window_params is correlation._params
+    source = (EVAL_DIR / "lab_measure.py").read_text(encoding="utf-8")
+    assert not re.search(r"from app\.domain\.correlation import[^\n]*\b_\w", source)
+    assert "correlation._" not in source
+
+
+# ── m1: a PARTIAL report never says "0 flagged" for what it did not compute ─────────────────
+
+
+def test_summary_without_the_leak_pass_has_no_leak_numbers():
+    rows = [
+        _row("a", TP, True, arm="on", seen=lm.Seen("ok", None, (("e1", 80),), 2, at(7), ("x",)))
+    ]
+    rag = lm.summarise(rows, leaks_computed=False)["rag"]
+    assert rag["leaks"] is None
+    assert rag["history"] == {"in_prompt": 1, "same_run": None}
+    assert rag["coverage"]["with_match"] == 1  # what does not need the pass is still there
+
+
+@pytest.mark.db
+def test_a_partial_report_says_the_leaks_were_not_computed(lab, tmp_path, monkeypatch, capsys):
+    def dead(*args, **kwargs):
+        raise psycopg.errors.OperationalError("server said: password=hunter2-4711")
+
+    monkeypatch.setattr(lm, "with_leaks", dead)
+    code, out = _run_tool(
+        lab, tmp_path, monkeypatch, _lab_fake(lab), "measure", "--tiers", "1", "--yes"
+    )
+    seen = capsys.readouterr()
+    report = _report(out)
+    assert code == lm.EXIT_PARTIAL
+    assert report["partial"]["leaks_computed"] is False
+    assert report["partial"]["done"] == {"tier1": 4, "tier2": 0}
+    assert report["tiers"]["1"]["arms"]["on"]["rag"]["leaks"] is None
+    (md_path,) = out.glob("lab_measure_*.md")
+    md = md_path.read_text(encoding="utf-8")
+    assert "not computed" in md
+    assert "`same_run` (0)" not in md and "0 subject(s) flagged" not in md
+    assert "hunter2-4711" not in seen.out + seen.err + md
+
+
+@pytest.mark.db
+def test_ctrl_c_during_the_leak_pass_still_writes_the_partial_report(
+    lab, tmp_path, monkeypatch, capsys
+):
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(lm, "with_leaks", interrupted)
+    code, out = _run_tool(
+        lab, tmp_path, monkeypatch, _lab_fake(lab), "measure", "--tiers", "1", "--yes"
+    )
+    report = _report(out)
+    assert code == lm.EXIT_PARTIAL
+    assert report["partial"]["reason"] == "KeyboardInterrupt"
+    assert report["partial"]["leaks_computed"] is False
+    assert "interrupted" in capsys.readouterr().err
+    (md_path,) = out.glob("lab_measure_*.md")
+    assert "not computed" in md_path.read_text(encoding="utf-8")
+
+
+# ── m2: the cost is the guard's true total ──────────────────────────────────────────────────
+
+
+class _InterruptedVerifier(LabFake):
+    """Ctrl-C arrives during the n-th verifier call: that subject's proposer call was answered and paid for,
+    and lands in no row."""
+
+    def __init__(self, *args, nth: int, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.nth, self.verifiers = nth, 0
+
+    def complete(self, *, system, user, **kwargs):
+        if "## Schema verifier_v2" in system:
+            self.verifiers += 1
+            if self.verifiers == self.nth:
+                raise KeyboardInterrupt
+        return super().complete(system=system, user=user, **kwargs)
+
+
+@pytest.mark.db
+def test_the_cost_is_what_the_guard_saw_not_only_the_sum_of_the_rows(lab, tmp_path, monkeypatch):
+    base = _lab_fake(lab)
+    fake = _InterruptedVerifier(base.triage, base.cases, nth=3)
+    code, out = _run_tool(lab, tmp_path, monkeypatch, fake, "measure", "--tiers", "1", "--yes")
+    report = _report(out)
+    assert code == lm.EXIT_PARTIAL and report["partial"]["done"] == {"tier1": 1, "tier2": 0}
+    paid = sum(cost_usd(usage, _cfg()) for _tier, _rag, usage in fake.calls)
+    assert report["cost_usd"] == pytest.approx(
+        paid, abs=1e-5
+    )  # the third alert's proposer call is in it
+    in_rows = sum(row["cost_usd"] for row in report["rows"])
+    assert report["cost_in_rows_usd"] == pytest.approx(in_rows, abs=1e-5)
+    assert report["cost_unattributed_usd"] == pytest.approx(paid - in_rows, abs=1e-5)
+    assert report["cost_unattributed_usd"] > 0
+    (md_path,) = out.glob("lab_measure_*.md")
+    assert "in no row" in md_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.db
+def test_a_complete_run_has_nothing_unattributed(measured):
+    assert measured.report["cost_unattributed_usd"] == pytest.approx(0, abs=1e-5)
+    assert measured.report["cost_usd"] == pytest.approx(
+        measured.report["cost_in_rows_usd"], abs=1e-5
+    )
+
+
+# ── m4: the cause of a RAG-on subject without material ──────────────────────────────────────
+
+
+@pytest.mark.db
+def test_a_budget_row_beside_a_usable_one_is_not_in_prompt_for_tier_2_and_budget_for_tier_1(lab):
+    """① reads the newest row whatever it is: a newer `budget` row means no material. ② looks past it to the
+    usable row before it, so when ② has no material the usable row's section was cut."""
+    alert, only_budget = _stray_alert(lab.dsn), _stray_alert(lab.dsn)
+    subject = Subject("alert", alert)
+    with _connect(lab.dsn) as conn:
+        _put_lookup(conn, "alert", alert, at(1))
+        _put_lookup(conn, "alert", alert, at(2), status="budget")
+        _put_lookup(conn, "alert", only_budget, at(2), status="budget")
+        conn.commit()
+        assert lm.seen_for(conn, subject, applied=None).status == "budget"
+        assert lm.seen_for(conn, subject, applied=None, skips_budget=True).status == "not_in_prompt"
+        # cut at 1.5 h the budget row did not exist yet; cut at 0.5 h nothing did
+        cut = lm.seen_for(conn, subject, applied=None, skips_budget=True, before=at(1.5))
+        assert cut.status == "not_in_prompt"
+        assert (
+            lm.seen_for(conn, subject, applied=None, skips_budget=True, before=at(0.5)).status
+            == "none"
+        )
+        # a budget row with no usable row behind it is `budget` for both
+        lonely = Subject("alert", only_budget)
+        assert lm.seen_for(conn, lonely, applied=None).status == "budget"
+        assert lm.seen_for(conn, lonely, applied=None, skips_budget=True).status == "budget"
+
+
+def test_an_evaluation_that_raised_has_its_own_cause():
+    assert "error" in lm.Seen.__doc__
+    rows = [_row("a", FP, None, outcome="error", arm="on", seen=lm.Seen("error", None, ()))]
+    assert lm.summarise(rows)["rag"]["failed_lookups"]["evaluation_error"] == 1
+
+
+class _VerifierRaises(LabFake):
+    """The verifier call of one alert raises something unknown, after the proposer was answered and paid."""
+
+    def __init__(self, *args, bad_alert: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.bad_alert = bad_alert
+
+    def complete(self, *, system, user, **kwargs):
+        if "## Schema verifier_v2" in system and self._last[0] == self.bad_alert:
+            raise RuntimeError("the-verifier-went-wrong-4711")
+        return super().complete(system=system, user=user, **kwargs)
+
+
+@pytest.mark.db
+def test_an_error_row_records_the_cost_of_the_calls_answered_before_it(
+    lab, tmp_path, monkeypatch, capsys
+):
+    base = _lab_fake(lab)
+    fake = _VerifierRaises(base.triage, base.cases, bad_alert=lab.ids["t2"])
+    code, out = _run_tool(lab, tmp_path, monkeypatch, fake, "measure", "--tiers", "1", "--yes")
+    capsys.readouterr()
+    report = _report(out)
+    assert code == 0
+    errors = [r for r in report["rows"] if r["outcome"] == "error"]
+    assert {(r["subject"], r["arm"]) for r in errors} == {
+        (lab.ids["t2"], "off"),
+        (lab.ids["t2"], "on"),
+    }
+    assert all(r["cost_usd"] > 0 for r in errors)  # the proposer call was paid for
+    assert report["cost_unattributed_usd"] == pytest.approx(0, abs=1e-5)
+    on_row = next(r for r in errors if r["arm"] == "on")
+    assert on_row["lookup"]["status"] == "error"
+    assert report["tiers"]["1"]["arms"]["on"]["rag"]["failed_lookups"]["evaluation_error"] == 1
+
+
+# ── m5: the last_seen rule runs even when there is nothing else to look up ──────────────────
+
+
+@pytest.mark.db
+def test_with_leaks_applies_the_last_seen_rule_with_no_match_and_no_example(lab):
+    seen = lm.Seen("ok", None, (), 2, at(7), ())
+    row = lm.ArmRow(
+        tier=1,
+        subject="x",
+        truth=TP,
+        arm="on",
+        outcome="ok",
+        model_verdict=TP,
+        final_verdict=TP,
+        model_tp=True,
+        held=False,
+        cost_usd=0.0,
+        seen=seen,
+    )
+    with _connect(lab.dsn) as conn:
+        done = lm.with_leaks(conn, [row], {(1, "x"): frozenset({"run-t"})}, at(6), {"run-t": at(6)})
+    assert done[0].history_same_run is True

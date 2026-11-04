@@ -31,17 +31,21 @@ from app.infra import config
 #: Windows on `alert_time` — event-time semantics, "when did this happen" —
 #: never on the column P4-3 warns against (that one answers "when did we
 #: hear about it", the wrong question for correlation).
-_WINDOW_PREDICATE = """(agent_name = %(agent_name)s OR alert_user = %(alert_user)s OR srcip = ANY(%(srcips)s::text[]))
+WINDOW_PREDICATE = """(agent_name = %(agent_name)s OR alert_user = %(alert_user)s OR srcip = ANY(%(srcips)s::text[]))
       AND alert_time BETWEEN %(alert_time)s - interval '2 hours'
                          AND %(alert_time)s + interval '2 hours'
       AND duplicate_of IS NULL
       AND alert_id <> %(alert_id)s"""
+_WINDOW_PREDICATE = (
+    WINDOW_PREDICATE  # the name `tier2.dossier` and the queries below import and use
+)
 
 #: What the grouped rows and the samples leave out by status. A duplicate is counted in its head.
 #: An `archived` alert (INT-T03, DEC-212) is the Owner's fresh start: it is neither a decision nor in
 #: play, `AlertStatus` (the vocabulary of ①'s and ②'s prompts) has no such value, and a row carrying it
 #: would not render. `cluster_ids_query` needs no such term: it takes `queued_tier1` / `tier1_active` only.
-_STATUS_PREDICATE = "status NOT IN ('duplicate', 'archived')"
+STATUS_PREDICATE = "status NOT IN ('duplicate', 'archived')"
+_STATUS_PREDICATE = STATUS_PREDICATE
 
 
 @dataclass(frozen=True)
@@ -78,7 +82,7 @@ def _srcips(srcip: str) -> list[str]:
     return [srcip] if srcip else []
 
 
-def _params(alert: Any) -> dict[str, Any]:
+def window_params(alert: Any) -> dict[str, Any]:
     return {
         "agent_name": alert.agent_name,
         "alert_user": alert.alert_user,
@@ -86,6 +90,9 @@ def _params(alert: Any) -> dict[str, Any]:
         "alert_time": alert.alert_time,
         "alert_id": alert.alert_id,
     }
+
+
+_params = window_params  # the private name `tier2.dossier` and the queries below use
 
 
 def rows_query(alert: Any) -> tuple[str, dict[str, Any]]:
