@@ -103,3 +103,54 @@
   - `make lint`, `make test`, `make ui-lint`, `make ui-test` and `make ui-build`.
   - `make ui-e2e`, if this host can run it. If it cannot, say why; the Director runs it at the merge.
 - [ ] **Step 8: Commit.** Make small commits with the prefix `P15-T01:`.
+
+---
+
+### Task 2: P15-T02 — carry the removal onto the trial branch `director/voyage-rag`
+
+Added 04/11 by the Director's ruling, after a probe merge. The Owner chose "Cả live và trial".
+
+**Context.**
+- `director/voyage-rag` holds P14 (DEC-213):
+  - the Voyage vector RAG;
+  - the definite verdicts of ① and ② (`true_positive`);
+  - the admin page "Gán nhãn lab" (`/admin/lab`).
+- It runs on the trial stack only and is never merged into `main`.
+- It branched from `main` at `af56b13`, the same commit P15 started from.
+- A probe merge of P15 into it conflicts in ten files:
+  - `docs/plan/DECISIONS.md`, `docs/plan/STATE.md`, `docs/runbook.md`;
+  - `frontend/src/api/admin.ts`, `frontend/src/routes.tsx`, `frontend/src/routesLazy.test.tsx`;
+  - `frontend/src/features/admin/AdminLayout.tsx`, `AdminLayout.test.tsx`, `adminKeys.test.ts`;
+  - `frontend/src/features/admin/DigestPage.test.tsx`, which P15 deleted and P14 modified.
+
+**Files:** every conflicted file, and any file whose gate fails on the merged tree. Do not change P14's files beyond the merge and the test adaptations of Step 2.
+
+**Interfaces:** this task consumes P15-T01 as reviewed (the tip of `director/remove-autoclose-ui` given at dispatch) and P14 as it is.
+
+- [ ] **Step 1: Merge.** In your worktree, run `git merge --ff-only director/voyage-rag`, then `git merge --no-ff <P15 tip>`. Resolve every conflict by these rules:
+  - **Everything P14 added stays:**
+    - the page "Gán nhãn lab", with its sidebar entry at P14's position, its route, API client, query keys, strings and tests;
+    - the runbook section "Voyage vector RAG (DEC-213)", and P14's other edits to the runbook and to limitations;
+    - DEC-213 and P14's STATE rows;
+    - the definite verdicts of ① and ②.
+  - **Everything DEC-214 removes goes, also where P14 changed it.**
+    - A file P15 deleted stays deleted, whatever P14 changed in it (`DigestPage.test.tsx`).
+    - P14's edits inside a removed block go with the block.
+  - **Both records stay whole.**
+    - `DECISIONS.md` holds DEC-213, then DEC-214.
+    - `STATE.md` holds the P14 phase row, then the P15 phase row.
+    - It also holds P14-T01…T11, then P15-T01 and P15-T02.
+  - **Where both sides changed the same runbook sentence, write one sentence that carries both changes.** For example, the admin console's page list names "Gán nhãn lab", and names neither Rules nor Digest.
+  - **The merge commit's message lists every conflicted file** and how it was resolved.
+- [ ] **Step 2: Adapt the P15 tests to the trial tree.**
+  - The sidebar test expects the trial's list, with `/admin/lab` at P14's position.
+  - The guard (`removedAutoclosePages.test.ts`) and the runbook pins must hold on the trial tree.
+  - Any P14 test or file that names a removed key, route or string follows DEC-214.
+  - Make these separate commits, after the merge commit.
+- [ ] **Step 3: Gates on the merged tree, all green.**
+  - Run `make lint`, `make test`, `make ui-lint`, `make ui-test`, `make ui-build` and `make ui-e2e`.
+  - `make test-db` is not needed, because neither side of the merge changes `backend/app/` or the schema. Say so in the report.
+- [ ] **Step 4: Report** in `docs/plan/tasks/P15/P15-T02.report.md`:
+  - the conflicts and how each was resolved;
+  - the test adaptations;
+  - the verbatim summary line of every gate.
