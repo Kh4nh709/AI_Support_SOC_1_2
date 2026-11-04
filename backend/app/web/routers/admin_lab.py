@@ -29,7 +29,8 @@ the page is full, else null. `404 {"detail": {"reason": "not_found"}}` for a run
 
 **Label.** The run is the one the alert's `received_at` falls in; the admin does not choose it. The
 `alert_id` is `deps.AlertId`, as on the tier1 routes. `PUT` sets or changes the label: `404 not_found` for an
-alert that does not exist, `409 outside_every_run` for one received outside every window, `422` for a label
+alert that does not exist, `409 not_a_queue_head` for a duplicate under a head (only heads are listed and
+counted, so only heads are labelled), `409 outside_every_run` for one received outside every window, `422` for a label
 other than `true_positive | false_positive`. `DELETE` clears it; clearing what is not there is a `204` too,
 and writes nothing.
 
@@ -47,7 +48,7 @@ from __future__ import annotations
 
 import json
 import unicodedata
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -123,8 +124,9 @@ def _required(body: dict[str, Any], field: str) -> Any:
 
 
 def _instant(body: dict[str, Any], field: str) -> datetime:
-    """ISO 8601 text with a zone. A date alone, a time with no zone, a number and anything else is
-    `invalid`: the zone is the admin's to state."""
+    """ISO 8601 text with a zone, in UTC. A date alone, a time with no zone, a number, anything else, and a
+    time that has no UTC form (year 0001 at +14:00) is `invalid`: the zone is the admin's to state.
+    """
     value = _required(body, field)
     if not isinstance(value, str):
         raise _bad(field, "invalid")
@@ -134,7 +136,10 @@ def _instant(body: dict[str, Any], field: str) -> datetime:
         raise _bad(field, "invalid") from None
     if moment.tzinfo is None or moment.utcoffset() is None:
         raise _bad(field, "invalid")
-    return moment
+    try:
+        return moment.astimezone(UTC)
+    except (OverflowError, ValueError):  # an offset that takes it before year 1 or past year 9999
+        raise _bad(field, "invalid") from None
 
 
 def _request_body(properties: dict[str, str], required: list[str]) -> dict[str, Any]:
@@ -239,6 +244,8 @@ def api_put_label(conn: Conn, claims: Admin, alert_id: AlertId, body: JsonBody) 
         raise _bad("label", "invalid") from None
     except lab_labels.UnknownAlert:
         raise _refuse(404, "not_found") from None
+    except lab_labels.NotAQueueHead:
+        raise _refuse(409, "not_a_queue_head") from None
     except lab_labels.OutsideEveryRun:
         raise _refuse(409, "outside_every_run") from None
     return {"alert_id": alert_id, "run_id": run_id, "label": label}

@@ -20,7 +20,7 @@ import json
 import typing
 import uuid
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
 
 import psycopg
@@ -565,6 +565,30 @@ def test_an_alert_outside_every_run_is_409_outside_every_run_and_writes_nothing(
     assert _events(world, "lab.labeled", alert_id) == []
 
 
+def test_a_duplicate_is_409_not_a_queue_head_and_writes_nothing(world, as_user):
+    client = as_user("admin")
+    _run(client)
+    head = _alert(world, 1)
+    duplicate = _alert(world, 1.5, status="duplicate", duplicate_of=head)
+    resp = client.put(f"{LABELS}/{duplicate}", json={"label": "true_positive"})
+    assert resp.status_code == 409
+    assert resp.json() == {"detail": {"reason": "not_a_queue_head"}}
+    assert _label_in_db(world, duplicate) is None
+    assert _events(world, "lab.labeled", duplicate) == []
+    # its head is labelled as before
+    assert client.put(f"{LABELS}/{head}", json={"label": "true_positive"}).status_code == 200
+
+
+def test_a_duplicate_outside_every_run_is_still_not_a_queue_head(world, as_user):
+    client = as_user("admin")
+    _run(client, starts_at=at(0).isoformat(), ends_at=at(4).isoformat())
+    head = _alert(world, 8)
+    duplicate = _alert(world, 8.5, status="duplicate", duplicate_of=head)
+    resp = client.put(f"{LABELS}/{duplicate}", json={"label": "true_positive"})
+    assert resp.status_code == 409
+    assert resp.json() == {"detail": {"reason": "not_a_queue_head"}}
+
+
 def test_with_no_run_at_all_every_alert_is_outside_every_run(world, as_user):
     alert_id = _alert(world, 1)
     resp = as_user("admin").put(f"{LABELS}/{alert_id}", json={"label": "false_positive"})
@@ -641,6 +665,54 @@ def test_a_failure_after_the_label_is_written_leaves_neither_label_nor_event(
     assert resp.status_code == 500
     assert _label_in_db(world, alert_id) is None
     assert _events(world, "lab.labeled", alert_id) == []
+
+
+def test_a_failure_after_the_run_is_written_leaves_neither_run_nor_event(
+    world, as_user, monkeypatch
+):
+    """The POST twin of the PUT test above. The signed-in user is overridden here, so the run's INSERT is the
+    first statement on an IDLE connection: with the event written after the savepoint closed, the savepoint
+    would be the outermost transaction and commit the run before the event failed."""
+    from app.lab import runs as lab_runs
+
+    client = as_user("admin")
+    events_before = len(_events(world, "lab.run_created"))
+
+    def boom(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("injected failure")
+
+    monkeypatch.setattr(lab_runs, "write_event", boom)
+    resp = client.post(RUNS, json=_valid(name="boom"))
+    assert resp.status_code == 500
+    assert _runs_in_db(world) == []
+    assert len(_events(world, "lab.run_created")) == events_before
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("starts_at", "0001-01-01T00:00:00+14:00"),  # before year 1 once it is UTC
+        ("ends_at", "9999-12-31T23:00:00-14:00"),  # after year 9999 once it is UTC
+    ],
+)
+def test_a_time_that_cannot_be_written_in_utc_is_422_invalid_not_a_500(
+    world, as_user, field, value
+):
+    body = _valid(**{field: value})
+    if field == "starts_at":
+        body["ends_at"] = at(4).isoformat()
+    else:
+        body["starts_at"] = at(0).isoformat()
+    resp = as_user("admin").post(RUNS, json=body)
+    assert resp.status_code == 422, resp.text
+    assert resp.json() == {"detail": {"field": field, "reason": "invalid"}}
+    assert _runs_in_db(world) == []
+
+
+def test_a_time_with_an_offset_is_taken_in_utc():
+    moment = admin_lab._instant({"t": "2026-11-05T16:00:00+07:00"}, "t")
+    assert moment == datetime(2026, 11, 5, 9, 0, tzinfo=UTC)
+    assert moment.utcoffset() == timedelta(0)
 
 
 # ── DELETE /labels/{alert_id} ───────────────────────────────────────────────────────────────
