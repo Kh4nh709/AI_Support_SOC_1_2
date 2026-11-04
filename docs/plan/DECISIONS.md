@@ -3607,6 +3607,7 @@ Drafted by: the Director: this entry, the plan `docs/superpowers/plans/2026-11-0
 Propagated to:
   - `frontend/` (P15-T01);
   - `backend/tests/test_rules_whitelist_pin.py`, removed, because it pins the removed `ruleFields.ts`;
+  - `backend/tests/test_runbook_admin.py`, `test_runbook_alarms.py`, `test_runbook_deploy.py` and `test_runbook_env_keys.py`, which pin the runbook and limitations sentences that changed;
   - `docs/runbook.md` and `docs/limitations.md`;
   - STATE phase P15, task P15-T01, and `docs/plan/tasks/P15/`.
 Decision:
@@ -3624,7 +3625,7 @@ Decision:
   3. **The backend is not changed.**
      - These all stay: `AUTOCLOSE_ENABLED` (DEC-207), `ingest/autoclose.py`, `tier1/digest.py`, the `digest` job, the `digest_unreviewed` health check, `/api/admin/rules`, `/api/admin/digest`, the tables `autoclose_rules` and `autoclose_reviews`, and the status `auto_closed`.
      - There is no migration and no row is deleted.
-     - The only backend file touched is a test that read a removed frontend file.
+     - Only backend tests change. `test_rules_whitelist_pin.py` is removed, because it read a removed frontend file. Four `test_runbook_*.py` files follow the runbook and limitations sentences that changed.
   4. **Switching auto-close on again now needs the pages back first.** With `AUTOCLOSE_ENABLED=true`, an alert could be closed by a rule that no page shows and that no person can review in the UI. The runbook says so on the key's row.
   5. **Where it lands.**
      - It is built once, on `director/remove-autoclose-ui` from `main` (`af56b13`).
