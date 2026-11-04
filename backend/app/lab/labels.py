@@ -1,7 +1,8 @@
 """The lab labels (P14-T09, DEC-213, spec §6): the admin's hand label of an alert, and the blind list a run's
 alerts are labelled from.
 
-**A label** is `true_positive` (a real attack) or `false_positive` (not an attack), one per alert, in the run
+**A label** is `true_positive` (a real attack) or `false_positive` (not an attack), one per queue head (a
+duplicate under a head is refused: the page lists heads only), in the run
 the alert's `received_at` falls in. `set_label` derives that run (`runs.run_of`); the admin never chooses it,
 so a label cannot say the alert belongs to a run it was not received in. Setting a label that exists
 changes it (the same row; `labeled_by` and `labeled_at` move to the latest admin), and every call writes one
@@ -85,6 +86,11 @@ class UnknownAlert(LabError):
     """No alert has this id (404)."""
 
 
+class NotAQueueHead(LabError):
+    """The alert is a duplicate under a queue head (`duplicate_of IS NOT NULL`): the page lists heads only,
+    so a label on it would be neither shown nor counted (409)."""
+
+
 class OutsideEveryRun(LabError):
     """The alert was received outside every run's window, so it belongs to no run (409)."""
 
@@ -96,13 +102,19 @@ class InvalidLabel(LabError):
 def set_label(conn: psycopg.Connection, alert_id: str, label: str, admin_id: str) -> str:
     """Label `alert_id` `label` for `admin_id`, in the run its `received_at` falls in; returns that run's id.
     A label that exists is changed. `InvalidLabel` is checked first (the request is malformed), then
-    `UnknownAlert`, then `OutsideEveryRun`; nothing is written for any of them."""
+    `UnknownAlert`, then `NotAQueueHead` (a duplicate under a head: the alert is the wrong one, whatever
+    the time), then `OutsideEveryRun`; nothing is written for any of them."""
     if not isinstance(label, str) or label not in LABELS:
         raise InvalidLabel(f"label: must be one of {'|'.join(LABELS)}")
-    row = conn.execute("SELECT received_at FROM alerts WHERE alert_id = %s", (alert_id,)).fetchone()
+    row = conn.execute(
+        "SELECT received_at, duplicate_of FROM alerts WHERE alert_id = %s", (alert_id,)
+    ).fetchone()
     if row is None:
         raise UnknownAlert(alert_id)
-    run = run_of(conn, row[0])
+    received_at, duplicate_of = row
+    if duplicate_of is not None:
+        raise NotAQueueHead(alert_id)
+    run = run_of(conn, received_at)
     if run is None:
         raise OutsideEveryRun(alert_id)
     conn.execute(

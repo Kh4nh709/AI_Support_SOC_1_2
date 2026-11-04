@@ -2,7 +2,8 @@
 
 * `set_label` finds the run from the alert's `received_at`, stores the label (one per alert), and writes one
   `lab.labeled {alert_id, run_id, label}` event for the admin each time it is called; an alert that does not
-  exist is `UnknownAlert`, one received outside every window is `OutsideEveryRun`, a label other than
+  exist is `UnknownAlert`, one that is not a queue head (a duplicate under one) is `NotAQueueHead`, one
+  received outside every window is `OutsideEveryRun`, a label other than
   `true_positive | false_positive` is `InvalidLabel`.
 * `clear_label` removes the label and writes the same event with `label: null`; clearing what is not there
   is a no-op with no event.
@@ -173,7 +174,12 @@ def test_the_label_is_checked_before_the_alert_is_looked_up(db):
 
 
 def test_every_refusal_is_a_lab_error():
-    for error in (labels.UnknownAlert, labels.OutsideEveryRun, labels.InvalidLabel):
+    for error in (
+        labels.UnknownAlert,
+        labels.NotAQueueHead,
+        labels.OutsideEveryRun,
+        labels.InvalidLabel,
+    ):
         assert issubclass(error, lab_runs.LabError)
 
 
@@ -183,6 +189,53 @@ def test_a_refusal_leaves_the_transaction_usable(db):
         labels.set_label(db, "nope", "true_positive", admin)
     _put_alert(db, "l-10", received_at=at(1))
     labels.set_label(db, "l-10", "true_positive", admin)
+
+
+# ── only a queue head is labelled ───────────────────────────────────────────────────────────
+
+
+def test_a_duplicate_is_refused_as_not_a_queue_head_and_nothing_is_written(db):
+    admin, run = _world(db)
+    head = _put_alert(db, "q-head", received_at=at(1))
+    _put_alert(db, "q-dup", status="duplicate", duplicate_of=head, received_at=at(1.5))
+    with pytest.raises(labels.NotAQueueHead):
+        labels.set_label(db, "q-dup", "true_positive", admin)
+    assert _label_row(db, "q-dup") is None
+    assert _events(db) == []
+    # the head it hangs under is labelled as before, and the refusal left the transaction usable
+    assert labels.set_label(db, head, "true_positive", admin) == run
+
+
+def test_the_head_check_comes_before_the_window(db):
+    """A duplicate received outside every run is a duplicate first: the refusal names the alert, not the
+    time."""
+    admin, _ = _world(db)
+    head = _put_alert(db, "q-head2", received_at=at(9))
+    _put_alert(db, "q-dup2", status="duplicate", duplicate_of=head, received_at=at(9.5))
+    with pytest.raises(labels.NotAQueueHead):
+        labels.set_label(db, "q-dup2", "true_positive", admin)
+
+
+def test_an_unknown_alert_is_still_unknown_not_a_non_head(db):
+    admin, _ = _world(db)
+    with pytest.raises(labels.UnknownAlert):
+        labels.set_label(db, "q-nobody", "true_positive", admin)
+
+
+def test_a_duplicates_stale_label_can_still_be_cleared(db):
+    """No route writes one now, but a row that exists (written before the rule, or by the owner) is cleared
+    like any other: `clear_label` does not ask whether the alert is a head."""
+    admin, run = _world(db)
+    head = _put_alert(db, "q-head3", received_at=at(1))
+    _put_alert(db, "q-dup3", status="duplicate", duplicate_of=head, received_at=at(1.5))
+    db.execute(
+        "INSERT INTO lab_labels (alert_id, run_id, label, labeled_by) VALUES ('q-dup3', %s, "
+        "'false_positive', %s)",
+        (run, admin),
+    )
+    labels.clear_label(db, "q-dup3", admin)
+    assert _label_row(db, "q-dup3") is None
+    assert [e[3]["label"] for e in _events(db, "q-dup3")] == [None]
 
 
 # ── relabelling ─────────────────────────────────────────────────────────────────────────────
