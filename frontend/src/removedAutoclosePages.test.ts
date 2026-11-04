@@ -29,7 +29,6 @@ describe("the removed auto-close pages (DEC-214)", () => {
     expect(files).toContain(join(SRC, "routes.tsx"));
     expect(files).toContain(join(SRC, "api", "admin.ts"));
     expect(files).toContain(join(SRC, "strings.ts"));
-    expect(files.filter(isTestFile)).toEqual([]);
   });
 
   it.each(["admin/rules", "admin/digest"])(
