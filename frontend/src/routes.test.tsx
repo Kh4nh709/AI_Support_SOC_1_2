@@ -36,6 +36,13 @@ vi.mock("./features/admin/RulesPage", () => ({
 vi.mock("./features/admin/UsersPage", () => ({
   UsersPage: () => <h1>{S.admin.title.users}</h1>,
 }));
+// The two lab pages (P14-T10) read the API (LabRunsPage.test.tsx, LabRunPage.test.tsx test them); here only their places matter.
+vi.mock("./features/admin/LabRunsPage", () => ({
+  LabRunsPage: () => <h1>{S.admin.lab.title.runs}</h1>,
+}));
+vi.mock("./features/admin/LabRunPage", () => ({
+  LabRunPage: () => <h1>{S.admin.lab.title.run}</h1>,
+}));
 // The knowledge page (P13-T06) reads the API too (KnowledgePage.test.tsx tests it); here only its place matters.
 vi.mock("./features/admin/KnowledgePage", () => ({
   KnowledgePage: () => <h1>{S.admin.title.knowledge}</h1>,
@@ -195,6 +202,8 @@ const ADMIN_PAGES: [path: string, title: string][] = [
   ["/admin/rules", S.admin.title.rules],
   ["/admin/digest", S.admin.title.digest],
   ["/admin/labels", S.admin.title.labels],
+  ["/admin/lab", S.admin.lab.title.runs],
+  ["/admin/lab/5f1c0a2e-3b4d-4e5f-8a9b-0123456789ab", S.admin.lab.title.run],
   ["/admin/knowledge", S.admin.title.knowledge],
   ["/admin/audit", S.admin.title.audit],
 ];
