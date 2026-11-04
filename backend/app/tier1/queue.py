@@ -20,7 +20,10 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
   below, the one-column sibling of `latest_suggestion`). P14-T03 (DEC-213) adds `proposed_action`
   and `held_by`: the model's own conclusion and why the system held it back (`latest_suggestion_held` below, the
   same one read of the newest run that builds `suggestion`; the queue rows carry them from their own statement). All of these are
-  `visibility.ANALYST_HIDE` keys.
+  `visibility.ANALYST_HIDE` keys. P14-T07 (DEC-213) adds `rag`, `{best_pct, not_applied}` (`llm.rag_view`): how
+  strongly the lookup the newest run's prompt held matched approved knowledge, and the closed kind of its
+  `rag_not_applied:<kind>` warning - from the same read of the newest run (`latest_suggestion_rag`), one more
+  column and one scalar subquery of the statement that builds `suggestion`; the queue rows do not carry it.
 - `latest_suggestion` — **the one place in P4 that reads `llm_runs`** (planning decision
   5). The row shape is P3-T10's and may still move; every read here is `.get`-tolerant,
   and this function is where to follow it. `latest_suggestions` is the same read for many
@@ -44,7 +47,8 @@ import psycopg
 
 from app.domain import correlation
 from app.kb.lookup import get_playbook
-from app.llm import verdicts
+from app.llm import rag_view, verdicts
+from app.rag.failures import FAILURE_KINDS
 from app.tier1 import visibility
 from app.tier1.soar_view import soar_view
 
@@ -151,11 +155,15 @@ class Suggestion:
         return dataclasses.asdict(self)
 
 
+# P14-T07: the run's `citation_warnings` (the `rag_not_applied:<kind>` notice) and the `matches` of the lookup
+# its prompt held (`rag_lookup_id`; NULL when it held none) ride on the same row, so the suggestion, the held
+# reasons and the RAG pair are one run by construction. `lookup_id` is `rag_results`' primary key: at most one row.
 _SUGGESTION_SQL = """
-    SELECT run_id, result, gate_result, created_at
-    FROM llm_runs
-    WHERE subject_id = %s AND pipeline = 'triage' AND role = 'proposer'
-    ORDER BY created_at DESC, run_id DESC
+    SELECT r.run_id, r.result, r.gate_result, r.created_at, r.citation_warnings,
+           (SELECT g.matches FROM rag_results g WHERE g.lookup_id = r.rag_lookup_id)
+    FROM llm_runs r
+    WHERE r.subject_id = %s AND r.pipeline = 'triage' AND r.role = 'proposer'
+    ORDER BY r.created_at DESC, r.run_id DESC
     LIMIT 1
 """
 
@@ -216,14 +224,34 @@ def latest_suggestion_held(
     [])` when there is no run or its `result` is NULL (① failed: an older run does not stand in), and
     `(suggestion, None, [])` for a `gate_result` that is missing or garbled. Like `latest_suggestion` it
     applies no blind-branch rule: `visibility.strip` does, in the reader that serves an analyst."""
+    return latest_suggestion_rag(conn, alert_id)[:3]
+
+
+def latest_suggestion_rag(
+    conn: psycopg.Connection, alert_id: str
+) -> tuple[Suggestion | None, str | None, list[str], dict[str, Any]]:
+    """`latest_suggestion_held`'s three values and a fourth, `rag` - `{"best_pct", "not_applied"}`
+    (`llm.rag_view`, P14-T07) - from the very same row. `best_pct` is the best match of the lookup the run's
+    prompt held (`llm_runs.rag_lookup_id`), `not_applied` the closed kind of its `rag_not_applied:<kind>`
+    warning, only a kind of `rag.failures.FAILURE_KINDS`. Unlike the first three it is given for a run whose
+    `result` is NULL too (① gave up with the RAG already off): the pair is the run's, not the suggestion's;
+    the page words it only beside a conclusion. No run gives the empty pair. Like its sibling it applies no
+    blind-branch rule: `rag` is a `visibility.ANALYST_HIDE` key."""
     row = conn.execute(_SUGGESTION_SQL, (alert_id,)).fetchone()
     if row is None:
-        return None, None, []
-    suggestion = _suggestion_of(*row)
+        return None, None, [], rag_view.rag_view(None, None, FAILURE_KINDS)
+    *run, warnings, lookup_matches = row
+    rag = rag_view.rag_view(lookup_matches, warnings, FAILURE_KINDS)
+    suggestion = _suggestion_of(*run)
     if suggestion is None:
-        return None, None, []
-    gate_result = row[2]
-    return suggestion, verdicts.proposed_action(gate_result), verdicts.held_reasons(gate_result)
+        return None, None, [], rag
+    gate_result = run[2]
+    return (
+        suggestion,
+        verdicts.proposed_action(gate_result),
+        verdicts.held_reasons(gate_result),
+        rag,
+    )
 
 
 _STOPPED_BY_SQL = """
@@ -699,7 +727,7 @@ def get_alert_view(
 
     view["playbook"] = get_playbook(view["category"])
 
-    suggestion, proposed_action, held_by = latest_suggestion_held(conn, head_id)
+    suggestion, proposed_action, held_by, rag = latest_suggestion_rag(conn, head_id)
     view["suggestion"] = suggestion.to_dict() if suggestion is not None else None
     # Why the newest ① run stopped (INT-T02): added BEFORE the strip, so a blind, undecided head
     # loses it with the other ① keys (`visibility.ANALYST_HIDE`), and the labelling page never has it.
@@ -707,6 +735,9 @@ def get_alert_view(
     # The model's own conclusion and why the system held it (P14-T03): from the very row the suggestion
     # came from, and added BEFORE the strip, so the blind arm and the labelling page never get them.
     view["proposed_action"], view["held_by"] = proposed_action, held_by
+    # How strongly the lookup matched and whether the RAG was not applied (P14-T07): the same row again, added
+    # BEFORE the strip for the same reason - the blind arm and the labelling page never get it.
+    view["rag"] = rag
 
     view["risk_band"] = risk_band(view.pop("risk_score"))
 

@@ -40,6 +40,13 @@ filtered by `subject_id = <this case>`.
 `model_conclusion`; it gives `None` and `[]` and is not guessed at. Both are derived from what the job
 already stores, so the view adds no column and no new stored key beyond `model_conclusion` itself.
 
+**The RAG beside the conclusion (P14-T07, DEC-213).** A done or stopped run carries `rag`, `{"best_pct",
+"not_applied"}` (`llm.rag_view`): `best_pct`, the best match of the lookup the run's prompt held
+(`llm_runs.rag_lookup_id`), and `not_applied`, the closed kind of the run's `rag_not_applied:<kind>` warning
+(`citation_warnings`; a stopped run carries it too). Both come out of the statement that reads the run (a
+scalar subquery for the lookup's `matches`), so there is no second read; a run from before T06 gives the empty
+pair. The case page has no blind arm, so the key is always there.
+
 Model output is untrusted. It leaves here as plain values (strings, lists, dicts) and the React
 UI renders it as text. This module builds no markup (`test_investigation_view_guard.py` scans
 its source for anything that would mark a string as safe).
@@ -53,7 +60,8 @@ from typing import Any
 
 import psycopg
 
-from app.llm import verdicts
+from app.llm import rag_view, verdicts
+from app.rag.failures import FAILURE_KINDS
 from app.tier2.investigate import (
     HELD_BY,
     HELD_HIGH_INJECTION,
@@ -123,7 +131,13 @@ _LATEST_JOB_SQL = (
     "FROM jobs WHERE job_type = 'investigate' AND subject_id = %s "
     "ORDER BY job_id DESC LIMIT 1"
 )
-_RUN_COLUMNS = "run_id, created_at, stopped_by, result, evidence_check, agent_trace"
+# P14-T07: `citation_warnings` and the `matches` of the lookup the run's prompt held (`rag_lookup_id`, NULL when
+# it held none) are the last two columns; `present_run` makes `rag` of them. `lookup_id` is the primary key of
+# `rag_results`, so the subquery answers at most one row.
+_RUN_COLUMNS = (
+    "run_id, created_at, stopped_by, result, evidence_check, agent_trace, citation_warnings, "
+    "(SELECT g.matches FROM rag_results g WHERE g.lookup_id = llm_runs.rag_lookup_id)"
+)
 _RUN_BY_ID_SQL = (
     f"SELECT {_RUN_COLUMNS} FROM llm_runs "
     "WHERE run_id = %s AND pipeline = 'investigate' AND subject_id = %s"
@@ -324,8 +338,18 @@ def snapshot(agent_trace: Any) -> dict[str, Any] | None:
 
 
 def present_run(row: tuple) -> dict[str, Any]:
-    run_id, created_at, stopped_by, result, evidence_check, agent_trace = row
-    base: dict[str, Any] = {"run_id": str(run_id), "created_at": created_at}
+    (
+        run_id,
+        created_at,
+        stopped_by,
+        result,
+        evidence_check,
+        agent_trace,
+        citation_warnings,
+        lookup_matches,
+    ) = row
+    rag = rag_view.rag_view(lookup_matches, citation_warnings, FAILURE_KINDS)
+    base: dict[str, Any] = {"run_id": str(run_id), "created_at": created_at, "rag": rag}
     if not isinstance(result, dict):
         return {**base, "result": None, "stopped_text": stopped_text(stopped_by)}
 

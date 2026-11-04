@@ -35,6 +35,14 @@ against, read-only, by calling the functions of the routes the analysts use, so 
 * `enrichment`: the SOAR `enrichment` block of the payload (`alerts.raw_payload -> enrichment`), redacted
   as the audit payloads are: for an alert the block or null, for a case a map `{head alert id: block}`
   of the heads that have one;
+* `lookup` (P14-T07, DEC-213): the newest stored lookup of the source (`rag_results`, the row ① and ② read at
+  prompt time), `{lookup_id, status, failure_kind, ranked, created_at}`, or null when the source has none.
+  `ranked` lists every candidate the Voyage rerank scored, best first, as `{entry_id, pct}` (`pct` is
+  `round(score * 100)`, `llm.rag_view.percent`, the number the prompt and the pages say), where the P13 ranking
+  agent's reasons used to be; it is null for a row from before migration 023 and for a `failed` or `budget`
+  lookup, `[]` for a lookup with nothing left to rerank. `failure_kind` is the closed kind a `failed` lookup
+  recorded (null for any other status and for a `failed` row older than the column). The agent's old
+  `match_notes` are not sent;
 * `conflict_entry`: the active entry the draft was found to conflict with, rendered (`entry_json`, with
   its Markdown `content`), or null.
 
@@ -89,8 +97,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from app.infra.auth import Claims
+from app.llm import rag_view
 from app.rag import publish
 from app.rag.entries import KB_LEARNED_ROOT, Entry, entry_by_id, file_matches, sha256_text
+from app.rag.failures import FAILURE_KINDS
 from app.rag.tags import TAGS_FILE, load_tags, read_tags_file
 from app.tier1 import queue
 from app.tier2 import investigation_view
@@ -343,6 +353,47 @@ def _alert_view(conn: psycopg.Connection, alert_id: str) -> Any:
     return view
 
 
+def _ranked(raw: Any) -> list[dict[str, Any]] | None:
+    """`rag_results.ranked` (`[{entry_id, score}]`, best first) as `[{entry_id, pct}]`; None when it is not a
+    list (NULL: a row from before migration 023, or a lookup that never reached the rerank). An item that is not
+    an entry id with a score in [0, 1] is left out."""
+    if not isinstance(raw, list):
+        return None
+    rows: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict) or not isinstance(item.get("entry_id"), str):
+            continue
+        score = item.get("score")
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
+            continue
+        if not 0 <= score <= 1:  # also false for NaN
+            continue
+        rows.append({"entry_id": item["entry_id"], "pct": rag_view.percent(score)})
+    return rows
+
+
+def _lookup(conn: psycopg.Connection, kind: str, subject_id: str) -> dict[str, Any] | None:
+    """The newest `rag_results` row of the source (P14-T07): the one ① and ② read (`rag.lookup.latest_lookup`
+    orders by `created_at DESC, lookup_id`), with the rerank's list as percentages and the closed failure kind. A
+    case id is read in lower case, as `rag.subject` keeps it. `match_notes`, the old agent's text, is not read.
+    """
+    row = conn.execute(
+        "SELECT lookup_id, status, failure_kind, ranked, created_at FROM rag_results"
+        " WHERE subject_kind = %s AND subject_id = %s ORDER BY created_at DESC, lookup_id LIMIT 1",
+        (kind, subject_id.lower() if kind == "case" else subject_id),
+    ).fetchone()
+    if row is None:
+        return None
+    lookup_id, status, failure_kind, ranked, created_at = row
+    return {
+        "lookup_id": str(lookup_id),
+        "status": status,
+        "failure_kind": failure_kind if failure_kind in FAILURE_KINDS else None,
+        "ranked": _ranked(ranked),
+        "created_at": created_at,
+    }
+
+
 def _alert_source(conn: psycopg.Connection, alert_id: str) -> dict[str, Any]:
     return {
         "alert": _alert_view(conn, alert_id),
@@ -391,6 +442,7 @@ def api_draft(conn: Conn, cfg: Cfg, claims: Admin, draft_id: uuid.UUID) -> dict[
     source.update(
         _alert_source(conn, source_id) if kind == "alert" else _case_source(conn, cfg, source_id)
     )
+    source["lookup"] = _lookup(conn, kind, source_id)
     conflict = None
     if draft["conflict_with_entry"] is not None:
         found = entry_by_id(conn, draft["conflict_with_entry"])
