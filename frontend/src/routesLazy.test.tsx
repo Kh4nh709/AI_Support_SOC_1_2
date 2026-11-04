@@ -1,4 +1,4 @@
-// src/routesLazy.test.tsx — the eight admin pages are fetched when their route opens, and only for an admin
+// src/routesLazy.test.tsx — the admin pages (the ten of the console, the lab's two included) are fetched when their route opens, and only for an admin
 // (P11-T20 row 56: the main bundle carried every page of the console, for tier1 and tier2 as well).
 //
 // routes.test.tsx tests which route opens for which role, with the pages as stubs that are ready at once. This file
@@ -106,6 +106,26 @@ vi.mock("./features/admin/LabelsPage", async () => {
     },
   };
 });
+vi.mock("./features/admin/LabRunsPage", async () => {
+  gate.loads.push("LabRunsPage");
+  await gate.ready();
+  return {
+    LabRunsPage: () => {
+      gate.rendered.push("LabRunsPage");
+      return <h1>{S.admin.lab.title.runs}</h1>;
+    },
+  };
+});
+vi.mock("./features/admin/LabRunPage", async () => {
+  gate.loads.push("LabRunPage");
+  await gate.ready();
+  return {
+    LabRunPage: () => {
+      gate.rendered.push("LabRunPage");
+      return <h1>{S.admin.lab.title.run}</h1>;
+    },
+  };
+});
 vi.mock("./features/admin/KnowledgePage", async () => {
   gate.loads.push("KnowledgePage");
   await gate.ready();
@@ -182,6 +202,8 @@ const ADMIN_PATHS = [
   "/admin/rules",
   "/admin/digest",
   "/admin/labels",
+  "/admin/lab",
+  "/admin/lab/5f1c0a2e-3b4d-4e5f-8a9b-0123456789ab",
   "/admin/knowledge",
   "/admin/audit",
 ];
@@ -239,6 +261,14 @@ describe("who fetches an admin page", () => {
     ).toBeInTheDocument();
     expect(inMain().queryByRole("status")).not.toBeInTheDocument();
     expect(gate.loads).toEqual(["UsersPage"]);
+  });
+
+  it("asks for the page of the lab run, and not the list of runs, when an admin opens one run", async () => {
+    renderAt("/admin/lab/5f1c0a2e-3b4d-4e5f-8a9b-0123456789ab", session("admin"));
+    expect(
+      await screen.findByRole("heading", { level: 1, name: S.admin.lab.title.run }),
+    ).toBeInTheDocument();
+    expect(gate.loads).toEqual(["LabRunPage"]);
   });
 
   it("sends /admin to the overview and fetches that page", async () => {
@@ -309,7 +339,18 @@ describe("the route table in source", () => {
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/.*$/gm, "");
 
-  it.each(["Overview", "Users", "Llm", "Rules", "Digest", "Labels", "Knowledge", "Audit"])(
+  it.each([
+    "Overview",
+    "Users",
+    "Llm",
+    "Rules",
+    "Digest",
+    "Labels",
+    "LabRuns",
+    "LabRun",
+    "Knowledge",
+    "Audit",
+  ])(
     "has %sPage in a dynamic import() and in no static import, so the page stays out of the main bundle",
     (name) => {
       const path = `./features/admin/${name}Page`;

@@ -1796,6 +1796,111 @@ export const S = {
       },
     },
 
+    // The lab labelling pages (DEC-213, P14-T10, spec §6): the lab runs the measurement is made on, and the hand
+    // labels (TP, FP) that are its ground truth. This block holds its own sidebar link and titles too, so the
+    // sidebar reads `lab.nav` (a test pins both). The run page is BLIND: its words name the alert's own fields and
+    // the two labels, nothing of ① or ② (LabRunPage.test.tsx reads this block and its page for that). A refusal
+    // is worded here, by the field the server names or by the kind `labErrorOf` reads: the page never shows a code.
+    lab: {
+      nav: "Gán nhãn lab",
+      title: { runs: "Gán nhãn lab", run: "Lần chạy lab" },
+      // `PURPOSES` of lab/runs.py; a test keeps the keys equal.
+      purpose: { kb: "Xây kho", test: "Chấm điểm" },
+      // The state of an alert's label: `LABELS` of lab/labels.py, and none.
+      label: { true_positive: "TP", false_positive: "FP", none: "chưa gán" },
+      progress: (labelled: number, total: number) => `Đã gán ${labelled}/${total}`,
+      // The window of a run: the time it starts, an arrow, the time it ends.
+      window: (starts: string, ends: string) => `${starts} → ${ends}`,
+
+      // The words of a 422 beside its field, by reason; a few depend on the field (`labFieldText`).
+      fieldReason: {
+        required: "Phải điền trường này",
+        requiredPurpose: "Chọn một mục đích",
+        empty: "Không được để trống",
+        tooLong: (max: number) => `Quá dài: tối đa ${max} ký tự`,
+        invalidName: "Tên có ký tự không được dùng (ký tự điều khiển hoặc ký tự vô hình)",
+        invalidPurpose: "Chọn Xây kho hoặc Chấm điểm",
+        invalidTime: (yearMin: number, yearMax: number) =>
+          `Thời điểm không hợp lệ. Chỉ nhận các năm từ ${yearMin} đến ${yearMax} (theo giờ UTC).`,
+        invalidLabel: "Nhãn không hợp lệ",
+        taken: "Tên này đã được dùng cho lần chạy khác",
+        not_after_starts: "Giờ kết thúc phải sau giờ bắt đầu",
+      },
+
+      // `/admin/lab`: the runs, and the form that makes one.
+      runsPage: {
+        subtitle:
+          "Mỗi lần chạy lab là một khung giờ. Alert nhận vào trong khung giờ đó thuộc lần chạy; bạn gán TP hoặc FP cho từng alert để làm đáp án của phép đo.",
+        count: (n: number) => `${n} lần chạy`,
+        tableLabel: "Các lần chạy lab",
+        col: { name: "Tên", purpose: "Mục đích", window: "Khung giờ", labelled: "Tiến độ gán" },
+        empty: "Chưa có lần chạy nào. Tạo lần chạy đầu tiên ở khung bên cạnh.",
+        create: {
+          title: "Tạo lần chạy",
+          name: "Tên lần chạy",
+          namePlaceholder: "Ví dụ: Lần chạy chấm điểm 1",
+          nameHint: (max: number) => `Tối đa ${max} ký tự, không trùng tên lần chạy khác.`,
+          purpose: "Mục đích",
+          purposeHelp: {
+            kb: "Alert của lần chạy này dùng để xây kho tri thức.",
+            test: "Alert của lần chạy này được chấm điểm.",
+          },
+          starts: "Bắt đầu",
+          ends: "Kết thúc",
+          timeHint:
+            "Giờ Việt Nam (UTC+7). Alert nhận vào từ giờ bắt đầu đến trước giờ kết thúc thuộc lần chạy. Hai lần chạy không được trùng khung giờ; lần sau có thể bắt đầu đúng lúc lần trước kết thúc.",
+          overlap: "Khung giờ trùng với lần chạy khác",
+          submit: "Tạo lần chạy",
+          done: (name: string) => `Đã tạo lần chạy “${name}”.`,
+        },
+      },
+
+      // `/admin/lab/:runId`: the alerts of one run, oldest first, and the buttons that label them.
+      runPage: {
+        back: "← Các lần chạy lab",
+        subtitle:
+          "Gán nhãn mù: trang chỉ hiện dữ kiện của alert, không hiện kết quả phân tích nào. Gán TP nếu là tấn công thật, FP nếu không phải.",
+        windowLabel: "Khung giờ",
+        listLabel: "Các alert của lần chạy",
+        alertLabel: (id: string) => `Alert ${id}`,
+        received: "Nhận lúc",
+        rule: "rule",
+        level: (level: number) => `(level ${level})`,
+        agent: "Máy",
+        details: "Chi tiết",
+        detail: {
+          alertTime: "Giờ SIEM phát hiện",
+          user: "User",
+          category: "Loại",
+          mitre: "MITRE",
+          count: "Số lần gặp",
+          rawLog: "raw_log",
+          rawLogCut: "raw_log dài hơn 32 KB: đã cắt ở 32 KB khi hiển thị.",
+        },
+        action: {
+          true_positive: "TP — tấn công thật",
+          false_positive: "FP — không phải tấn công",
+          clear: "Bỏ nhãn",
+        },
+        actionsLabel: "Nhãn của alert này",
+        empty: "Chưa có alert nào nhận vào trong khung giờ này.",
+        shown: (n: number) => `Đang hiện ${n} alert`,
+        loadMore: "Tải thêm",
+        loadingMore: "Đang tải…",
+        loadMoreFailed: "Không tải thêm được. Thử lại.",
+        // The run is not there (a 404, or an id in the address that is no uuid): not an error to retry.
+        notFound: "Không tìm thấy lần chạy này",
+        backToRuns: "Về danh sách lần chạy",
+        // What a label that was refused says, on the row.
+        rowError: {
+          not_a_queue_head:
+            "Alert này là bản sao của một alert khác nên không gán nhãn được. Gán nhãn cho alert gốc.",
+          outside_every_run: "Alert này nằm ngoài mọi lần chạy nên không gán nhãn được.",
+          not_found: "Không tìm thấy alert này nữa.",
+        },
+      },
+    },
+
     // The learned-knowledge page (DEC-210, P13-T06, spec §7.5): the drafts the model wrote from the analysts'
     // conclusions, for an admin to edit and approve, or reject; and the entries approved, to retire. The `409` and
     // `503` of its writes are worded here (`notice`), the V1-V5 faults of a `422` in `fault`; the page never shows a

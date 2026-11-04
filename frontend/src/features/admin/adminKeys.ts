@@ -16,6 +16,8 @@
 //   knowledge: one draft         adminKeys.knowledgeDraft(id)              getKnowledgeDraft
 //   knowledge: one entry         adminKeys.knowledgeEntry(id)              getKnowledgeEntry
 //   knowledge: the tag list      adminKeys.knowledgeTags                   getKnowledgeTags
+//   lab: the runs                adminKeys.labRuns                         listLabRuns
+//   lab: the alerts of one run   adminKeys.labRun(id)                      getLabRunAlerts (an infinite query)
 //
 // What each write invalidates is `ADMIN_INVALIDATES`; a page calls `invalidateAfter(client, "toggleRule")`
 // in its mutation's `onSuccess`, and shows its toast. There are no optimistic updates.
@@ -72,6 +74,16 @@ export const adminKeys = {
   knowledgeEntry: (entryId: string) => ["admin", "knowledge", "entry", entryId] as const,
   /** The closed tag vocabulary: it changes with a deploy, not with a write. */
   knowledgeTags: ["admin", "knowledge", "tags"] as const,
+
+  /** Everything of the lab pages (DEC-213, P14-T10). */
+  labAll: ["admin", "lab"] as const,
+  /** The lab runs, with the counter of each. */
+  labRuns: ["admin", "lab", "runs"] as const,
+  /**
+   * The alerts of one run, as an infinite query: one entry holds every page loaded. The key is not under `labRuns`
+   * (`run`, not `runs`), so marking the list stale never reads the pages of a run again.
+   */
+  labRun: (runId: string) => ["admin", "lab", "run", runId] as const,
 };
 
 /**
@@ -102,6 +114,12 @@ export const ADMIN_INVALIDATES = {
   rejectKnowledgeDraft: [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll],
   redraftKnowledgeDraft: [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll],
   retireKnowledgeEntry: [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll],
+  // The lab (P14-T10): a run is a new row of the list; a label moves the counter of the list. The run page does not
+  // invalidate its own alerts: it sets the label and the counter in its cache from the answer (`withLabel`), because a
+  // refetch of an infinite query reads every page it has loaded again.
+  createLabRun: [adminKeys.labRuns, adminKeys.auditAll],
+  putLabLabel: [adminKeys.labRuns, adminKeys.auditAll],
+  deleteLabLabel: [adminKeys.labRuns, adminKeys.auditAll],
 } as const;
 
 export type AdminMutation = keyof typeof ADMIN_INVALIDATES;
