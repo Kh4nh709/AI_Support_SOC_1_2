@@ -709,6 +709,49 @@ def test_a_time_that_cannot_be_written_in_utc_is_422_invalid_not_a_500(
     assert _runs_in_db(world) == []
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("starts_at", "1999-12-31T23:59:59Z"),
+        ("starts_at", "2100-01-01T00:00:00Z"),
+        ("ends_at", "1999-12-31T23:59:59Z"),
+        ("ends_at", "2100-01-01T00:00:00Z"),
+        ("starts_at", "2000-01-01T00:00:00+07:00"),  # 1999-12-31T17:00:00Z
+        ("ends_at", "2100-01-01T07:00:00+07:00"),  # 2100-01-01T00:00:00Z
+        ("starts_at", "0001-01-01T00:00:00Z"),
+        ("ends_at", "9999-12-31T23:59:59Z"),
+    ],
+)
+def test_a_time_outside_the_years_2000_to_2099_in_utc_is_422_invalid(world, as_user, field, value):
+    body = _valid(**{field: value})
+    if field == "starts_at":
+        body["ends_at"] = at(4).isoformat()
+    else:
+        body["starts_at"] = at(0).isoformat()
+    resp = as_user("admin").post(RUNS, json=body)
+    assert resp.status_code == 422, resp.text
+    assert resp.json() == {"detail": {"field": field, "reason": "invalid"}}
+    assert _runs_in_db(world) == []
+
+
+@pytest.mark.parametrize(
+    "starts,ends",
+    [
+        ("2000-01-01T00:00:00Z", "2000-01-01T01:00:00Z"),
+        ("2099-12-31T22:00:00Z", "2099-12-31T23:59:59Z"),
+        ("2000-01-01T07:00:00+07:00", "2000-01-01T08:00:00+07:00"),
+        ("2100-01-01T05:00:00+07:00", "2100-01-01T06:59:59+07:00"),
+    ],
+)
+def test_the_first_and_last_second_the_years_allow_are_201_and_listed(world, as_user, starts, ends):
+    client = as_user("admin")
+    run = _run(client, starts_at=starts, ends_at=ends)
+    assert (_when(run["starts_at"]), _when(run["ends_at"])) == (_when(starts), _when(ends))
+    listed = client.get(RUNS)
+    assert listed.status_code == 200
+    assert [r["run_id"] for r in listed.json()["runs"]] == [run["run_id"]]
+
+
 def test_a_time_with_an_offset_is_taken_in_utc():
     moment = admin_lab._instant({"t": "2026-11-05T16:00:00+07:00"}, "t")
     assert moment == datetime(2026, 11, 5, 9, 0, tzinfo=UTC)

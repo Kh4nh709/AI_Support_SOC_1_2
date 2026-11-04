@@ -29,6 +29,13 @@ from app.audit.events import write_event
 PURPOSES: tuple[str, ...] = ("kb", "test")
 NAME_MAX_CHARS = 80
 
+#: The years an instant of a run may have, in UTC, both ends included. A lab run is a few hours of this
+#: decade; the bound is not about meaning but about the driver: an instant valid in UTC near year 1 or 9999 was
+#: stored, and then could not be read in a session whose zone moved it out of those years (`DataError`, and so a
+#: 500 for the list, for good). No zone moves a time inside 2000..2099 out of the driver's range.
+YEAR_MIN = 2000
+YEAR_MAX = 2099
+
 #: A name may not hold a control character (`Cc`), a lone surrogate (`Cs`: legal in a Python string,
 #: not in UTF-8), or an invisible one that lets one name pass for another in the list and the audit page
 #: (`Cf` format characters such as a bidi override, `Zl`, `Zp`). The rule `admin_users` holds a display
@@ -95,16 +102,21 @@ def _clean_name(value: Any) -> str:
     return name
 
 
-def _check_time(field: str, value: Any) -> datetime:
+def utc_instant(field: str, value: Any) -> datetime:
     """A moment is a datetime that says its zone: a naive one would be read in the session's, which is not
-    what the admin meant. It is returned in UTC; one that has no UTC form (year 0001 at +14:00, year 9999 at
-    -14:00) is `invalid`, where it would otherwise be an overflow the driver turns into a 500."""
+    what the admin meant. It is returned in UTC. `InvalidRun(field, "invalid")` for a value that is not a
+    zone-aware datetime, for one that has no UTC form (year 0001 at +14:00, year 9999 at -14:00: an overflow
+    the driver would turn into a 500), and for one whose UTC year is outside `YEAR_MIN..YEAR_MAX`.
+    """
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         raise InvalidRun(field, "invalid")
     try:
-        return value.astimezone(UTC)
+        moment = value.astimezone(UTC)
     except (OverflowError, ValueError):  # an offset that takes it before year 1 or past year 9999
         raise InvalidRun(field, "invalid") from None
+    if not YEAR_MIN <= moment.year <= YEAR_MAX:
+        raise InvalidRun(field, "invalid")
+    return moment
 
 
 def create_run(
@@ -121,8 +133,8 @@ def create_run(
     name = _clean_name(name)
     if not isinstance(purpose, str) or purpose not in PURPOSES:
         raise InvalidRun("purpose", "invalid")
-    starts_at = _check_time("starts_at", starts_at)
-    ends_at = _check_time("ends_at", ends_at)
+    starts_at = utc_instant("starts_at", starts_at)
+    ends_at = utc_instant("ends_at", ends_at)
     if ends_at <= starts_at:
         raise InvalidRun("ends_at", "not_after_starts")
 

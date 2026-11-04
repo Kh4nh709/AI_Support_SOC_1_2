@@ -14,7 +14,7 @@ received in the window and `labelled` how many of them carry a label (an unlabel
 is counted as such). Runs come latest window first.
 
 **Create.** `purpose` is `kb` or `test`; `starts_at` and `ends_at` are ISO 8601 with a zone (`Z` or an
-offset; a time with none is ambiguous and refused). The window is half-open, `[starts_at, ends_at)`, and
+offset; a time with none is ambiguous and refused, and so is one whose UTC year is not in 2000..2099). The window is half-open, `[starts_at, ends_at)`, and
 may not overlap another run's. A run starts where another ends. `409 {"detail": {"reason": "overlap"}}`
 when it does. `422 {"detail": {"field", "reason"}}` otherwise: `field` is `name`, `purpose`, `starts_at`,
 `ends_at` or `body`, and `reason` is `required`, `empty`, `too_long`, `invalid`, `taken` (the name is in
@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import json
 import unicodedata
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -124,8 +124,9 @@ def _required(body: dict[str, Any], field: str) -> Any:
 
 
 def _instant(body: dict[str, Any], field: str) -> datetime:
-    """ISO 8601 text with a zone, in UTC. A date alone, a time with no zone, a number, anything else, and a
-    time that has no UTC form (year 0001 at +14:00) is `invalid`: the zone is the admin's to state.
+    """ISO 8601 text with a zone, in UTC. A date alone, a time with no zone, a number, anything else, a time
+    that has no UTC form (year 0001 at +14:00) and a time whose UTC year is outside 2000..2099
+    (`lab.runs.YEAR_MIN`, `YEAR_MAX`) is `invalid`: the zone is the admin's to state.
     """
     value = _required(body, field)
     if not isinstance(value, str):
@@ -134,12 +135,10 @@ def _instant(body: dict[str, Any], field: str) -> datetime:
         moment = datetime.fromisoformat(value)
     except ValueError:
         raise _bad(field, "invalid") from None
-    if moment.tzinfo is None or moment.utcoffset() is None:
-        raise _bad(field, "invalid")
     try:
-        return moment.astimezone(UTC)
-    except (OverflowError, ValueError):  # an offset that takes it before year 1 or past year 9999
-        raise _bad(field, "invalid") from None
+        return lab_runs.utc_instant(field, moment)  # a zone, in UTC, and a year `lab.runs` allows
+    except lab_runs.InvalidRun as exc:
+        raise _bad(exc.field, exc.reason) from None
 
 
 def _request_body(properties: dict[str, str], required: list[str]) -> dict[str, Any]:

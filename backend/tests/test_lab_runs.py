@@ -180,8 +180,101 @@ def test_a_time_that_has_no_utc_form_is_invalid_not_an_overflow(db, field, momen
     assert (caught.value.field, caught.value.reason) == (field, "invalid")
 
 
+PLUS7 = timezone(timedelta(hours=7))
+
+
+def test_the_years_a_run_may_use_are_2000_to_2099():
+    assert (runs.YEAR_MIN, runs.YEAR_MAX) == (2000, 2099)
+
+
+@pytest.mark.parametrize(
+    "field,moment",
+    [
+        ("starts_at", datetime(1999, 12, 31, 23, 59, 59, tzinfo=UTC)),
+        ("starts_at", datetime(2100, 1, 1, 0, 0, 0, tzinfo=UTC)),
+        ("ends_at", datetime(1999, 12, 31, 23, 59, 59, tzinfo=UTC)),
+        ("ends_at", datetime(2100, 1, 1, 0, 0, 0, tzinfo=UTC)),
+        # the year is the UTC year: 2000-01-01 at +07:00 is still 1999 in UTC, 2100-01-01 07:00 is 2100
+        ("starts_at", datetime(2000, 1, 1, 0, 0, 0, tzinfo=PLUS7)),
+        ("ends_at", datetime(2100, 1, 1, 7, 0, 0, tzinfo=PLUS7)),
+        ("starts_at", datetime(1, 1, 1, 0, 0, 0, tzinfo=UTC)),
+        ("ends_at", datetime(9999, 12, 31, 23, 59, 59, tzinfo=UTC)),
+    ],
+    ids=[
+        "starts-1999",
+        "starts-2100",
+        "ends-1999",
+        "ends-2100",
+        "starts-2000-at-plus7-is-1999",
+        "ends-2100-at-plus7-is-2100",
+        "starts-year-1",
+        "ends-year-9999",
+    ],
+)
+def test_a_time_outside_the_years_2000_to_2099_in_utc_is_invalid(db, field, moment):
+    over = {field: moment}
+    over["ends_at" if field == "starts_at" else "starts_at"] = at(4 if field == "starts_at" else 0)
+    with pytest.raises(runs.InvalidRun) as caught:
+        _create(db, insert_user(db, "admin"), **over)
+    assert (caught.value.field, caught.value.reason) == (field, "invalid")
+    assert db.execute("SELECT count(*) FROM lab_runs").fetchone() == (0,)
+
+
+@pytest.mark.parametrize(
+    "starts,ends",
+    [
+        (datetime(2000, 1, 1, 0, 0, 0, tzinfo=UTC), datetime(2000, 1, 1, 1, 0, 0, tzinfo=UTC)),
+        (
+            datetime(2099, 12, 31, 22, 0, 0, tzinfo=UTC),
+            datetime(2099, 12, 31, 23, 59, 59, tzinfo=UTC),
+        ),
+        # 2100-01-01 05:00 at +07:00 is 2099-12-31 22:00 in UTC; 2000-01-01 07:00 is 2000-01-01 00:00
+        (
+            datetime(2000, 1, 1, 7, 0, 0, tzinfo=PLUS7),
+            datetime(2000, 1, 1, 8, 0, 0, tzinfo=PLUS7),
+        ),
+        (
+            datetime(2100, 1, 1, 5, 0, 0, tzinfo=PLUS7),
+            datetime(2100, 1, 1, 6, 59, 59, tzinfo=PLUS7),
+        ),
+    ],
+    ids=["first-second-of-2000", "last-second-of-2099", "2000-at-plus7", "2099-at-plus7"],
+)
+def test_the_first_and_last_second_the_years_allow_are_accepted(db, starts, ends):
+    run = _create(db, insert_user(db, "admin"), starts_at=starts, ends_at=ends)
+    assert (run.starts_at, run.ends_at) == (starts, ends)
+
+
+@pytest.mark.parametrize(
+    "zone", ["Pacific/Kiritimati", "Pacific/Pago_Pago", "Asia/Ho_Chi_Minh", "UTC"]
+)
+def test_a_run_at_either_edge_reads_back_in_a_session_of_any_zone(db, zone):
+    """The reason for the bound: a window valid in UTC near year 1 or 9999 was stored and then failed to read
+    in a session whose zone moved it out of those years (`DataError`). Inside 2000..2099 no zone does.
+    """
+    admin = insert_user(db, "admin")
+    first = _create(
+        db,
+        admin,
+        name="edge-first",
+        starts_at=datetime(2000, 1, 1, 0, 0, 0, tzinfo=UTC),
+        ends_at=datetime(2000, 1, 1, 1, 0, 0, tzinfo=UTC),
+    )
+    last = _create(
+        db,
+        admin,
+        name="edge-last",
+        starts_at=datetime(2099, 12, 31, 22, 0, 0, tzinfo=UTC),
+        ends_at=datetime(2099, 12, 31, 23, 59, 59, tzinfo=UTC),
+    )
+    db.execute(f"SET LOCAL TIME ZONE '{zone}'")
+    assert {run.run_id for run in runs.list_runs(db)} == {first.run_id, last.run_id}
+    assert runs.get_run(db, last.run_id) == last
+    assert runs.run_of(db, datetime(2000, 1, 1, 0, 30, 0, tzinfo=UTC)) == first
+
+
 def test_a_time_is_normalised_to_utc():
-    moment = runs._check_time(
+    moment = runs.utc_instant(
         "starts_at", datetime(2026, 11, 5, 16, 0, tzinfo=timezone(timedelta(hours=7)))
     )
     assert moment == datetime(2026, 11, 5, 9, 0, tzinfo=UTC)
