@@ -44,7 +44,8 @@ def _schema_tree_through(n: int, tmp_path: Path, *, skip: Collection[int] = ()) 
 
     `skip` leaves a number out even though it is below `n`: a migration that stands on an older one
     alone (023 does not read 022) is shown to apply on a tree without the one written in parallel.
-    It is the one copy of the tree-builder that `test_migration_020`, `_021`, `_023` and `_024` share
+    It is the one copy of the tree-builder that `test_migration_020`, `_021`, `_022`, `_023` and `_024`
+    share
     (the P14-T04 review's note: three copies of the same twelve lines)."""
     name = f"Schema_through_{n}" + "".join(f"_without_{k}" for k in sorted(skip))
     tree = tmp_path / name

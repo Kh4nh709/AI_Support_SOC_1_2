@@ -366,7 +366,7 @@ def test_021_applies_on_a_database_at_020_the_way_make_migrate_runs_it(tmp_path)
     stems = {path.stem for path in SCHEMA_DIR.glob(MIGRATION_FILES) if int(path.name[:3]) <= 21}
     total = len(stems)
     before = len(list(at_020.glob(MIGRATION_FILES)))
-    # 021 is no longer the last migration (022 and 023 follow it): the tree at 020 is every file below
+    # 021 is no longer the last migration (022, 023 and 024 follow it): the tree at 020 is every file below
     # 21, the tree through 021 every file below 22, and the real `migrate.sh` applies the second to the
     # first, so this test pins 021 alone whatever comes after it.
     assert before == total - 1 == len({s for s in stems if int(s[:3]) < 21})

@@ -7,9 +7,13 @@ that instant is in the later one only. The database refuses two overlapping wind
 time (`ex_lab_runs_no_overlap`, `ck_lab_runs_ends_after_starts`); this module checks the same things first
 so the admin gets the field and the reason, and maps what the database still refuses.
 
-Every function runs in the caller's transaction: it commits nothing. `create_run` takes a savepoint around
-its INSERT and the event, so a refusal leaves the caller's transaction usable, and writes `lab.run_created`
-`{run_id, name, purpose}` for the admin after the row is in, in the same savepoint: both land or neither.
+Every function runs in the caller's transaction and issues no COMMIT of its own. One case still commits:
+`create_run` takes a savepoint around its INSERT and the event, so a refusal leaves
+the caller's transaction usable, and writes `lab.run_created` `{run_id, name, purpose}` for the admin after the
+row is in, in the same savepoint: both land or neither. On a connection with no transaction open (idle) that
+savepoint is the outermost transaction, and it commits the run and its event together when the block ends; in
+a request the connection is already inside one (the signed-in user was read on it), so the savepoint is a
+savepoint and the request's own commit decides.
 """
 
 from __future__ import annotations
