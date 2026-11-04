@@ -991,10 +991,27 @@ describe("the RAG beside the conclusion", () => {
       expect(notice()).toHaveTextContent("thiếu hoặc sai API key Voyage");
     });
 
-    it("shows a kind it has no words for as the code, as text", () => {
+    it("draws nothing for a kind it has no words for, and never the code", () => {
       renderColumn(view({ ...withRag(null, "<b>cosmic_ray</b>") }));
-      expect(notice()?.textContent).toContain("<b>cosmic_ray</b>");
-      expect(notice()?.querySelector("b")).toBeNull();
+      expect(notice()).not.toBeInTheDocument();
+      expect(column().textContent).not.toContain("cosmic_ray");
+      expect(column().querySelector("b")).toBeNull();
+      // the conclusion beside it is untouched
+      expect(line()).toHaveTextContent(/^AI kết luận: TP \(độ tin cậy trung bình\)$/);
+    });
+
+    it("draws nothing for a kind it has no words for on a decided page either", () => {
+      renderColumn(
+        view({
+          status: "closed_fp",
+          acknowledged_by_name: "An",
+          ...withRag(64, "cosmic_ray"),
+        }),
+      );
+      expect(notice()).not.toBeInTheDocument();
+      expect(column().textContent).not.toContain("cosmic_ray");
+      // the percentage is a different fact and still stands
+      expect(line()).toHaveTextContent("— trùng 64% với tri thức đã duyệt");
     });
 
     it("can stand beside the percentage", () => {

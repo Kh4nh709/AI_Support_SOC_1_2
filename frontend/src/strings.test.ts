@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ALERT_STATUSES } from "./api/tier1";
 import { CASE_STATUSES, HELD_CONCLUSION, MODEL_CONCLUSIONS } from "./api/tier2";
-import { MIN_QUOTE_CHARS, S, bandCodeOfLabel, labelOf } from "./strings";
+import { MIN_QUOTE_CHARS, S, bandCodeOfLabel, failureKindLabel, labelOf } from "./strings";
 
 it("names the two Tier-1 closing decisions, escalate and reopen", () => {
   expect(S.decision.falsePositive).toBe("Đóng — dương tính giả");
@@ -481,6 +481,26 @@ describe("RAG percentage and notice follow the backend", () => {
     expect(S.rag.notApplied("case", "lỗi phía Voyage")).toBe(
       "⚠ Không áp dụng RAG cho case này: lỗi phía Voyage — AI đã phân tích không có tri thức tham khảo.",
     );
+  });
+
+  it("gives the words of a kind the table has, and nothing for any other name", () => {
+    for (const [kind, label] of Object.entries(S.rag.failureKind)) {
+      expect(failureKindLabel(kind)).toBe(label);
+    }
+    // never the code itself, never a name from the prototype chain, never a blank
+    for (const other of [
+      "cosmic_ray",
+      "<b>x</b>",
+      "",
+      "constructor",
+      "toString",
+      "__proto__",
+      "hasOwnProperty",
+    ]) {
+      expect(failureKindLabel(other), other).toBeNull();
+    }
+    expect(failureKindLabel(null)).toBeNull();
+    expect(failureKindLabel(undefined)).toBeNull();
   });
 
   it("words the lookup of the admin page", () => {

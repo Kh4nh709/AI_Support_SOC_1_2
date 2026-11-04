@@ -45,11 +45,18 @@ describe("RagNotice", () => {
     );
   });
 
-  it("shows a kind it has no words for as the code, as text", () => {
-    render(<RagNotice kind="<img src=x onerror=alert(1)>" subject="alert" />);
-    const note = screen.getByRole("note");
-    expect(note.textContent).toContain("<img src=x onerror=alert(1)>");
-    expect(note.querySelector("img")).toBeNull();
+  // The client never shows a raw code: a kind it has no words for is a kind this UI cannot vouch for.
+  it.each([
+    "<img src=x onerror=alert(1)>",
+    "cosmic_ray",
+    "",
+    "constructor",
+    "toString",
+    "__proto__",
+  ])("draws nothing for a kind it has no words for (%j)", (kind) => {
+    const { container } = render(<RagNotice kind={kind} subject="alert" />);
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("is a warning mark and words, not colour alone", () => {

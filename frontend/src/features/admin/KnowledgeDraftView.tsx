@@ -43,7 +43,13 @@ import {
 import type { Suggestion } from "../../api/tier1";
 import { ApiError } from "../../api/client";
 import { formatDateTime, formatTime } from "../../format";
-import { S, knowledgeFaultText, knowledgeWarningText, labelOf } from "../../strings";
+import {
+  S,
+  failureKindLabel,
+  knowledgeFaultText,
+  knowledgeWarningText,
+  labelOf,
+} from "../../strings";
 import { AiColumn, GateLine, GateSteps, Reasons } from "../tier1/AiColumn";
 import {
   Accounts,
@@ -753,7 +759,8 @@ function LookupBlock({ source }: { source: KnowledgeSource }) {
   const lookup = source.lookup;
   if (lookup === null || lookup === undefined) return null;
   const L = D.left.lookup;
-  const kind = lookup.failure_kind;
+  // The reason is a kind this UI can word, or nothing: never the code.
+  const reason = failureKindLabel(lookup.failure_kind);
   return (
     <Block title={L.heading}>
       <Sentence>{L.hint}</Sentence>
@@ -765,9 +772,7 @@ function LookupBlock({ source }: { source: KnowledgeSource }) {
             {L.at(formatDateTime(lookup.created_at))}
           </span>
         </p>
-        {kind !== null && kind !== undefined && kind !== "" && (
-          <p>{L.reason(labelOf(S.rag.failureKind, kind))}</p>
-        )}
+        {reason !== null && <p>{L.reason(reason)}</p>}
         {Array.isArray(lookup.ranked) &&
           (lookup.ranked.length === 0 ? (
             <Sentence>{L.rankedNone}</Sentence>

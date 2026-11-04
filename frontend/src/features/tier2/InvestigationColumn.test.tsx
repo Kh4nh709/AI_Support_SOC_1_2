@@ -1064,11 +1064,12 @@ describe("done", () => {
       expect(await screen.findByRole("note")).toHaveTextContent("Voyage hết hạn mức");
     });
 
-    it("shows a kind it has no words for as the code, as text", async () => {
+    it("draws nothing for a kind it has no words for, and never the code", async () => {
       serveViews(concluded({ best_pct: null, not_applied: "<b>cosmic_ray</b>" }));
       const { container } = renderColumn();
       await line();
-      expect(screen.getByRole("note").textContent).toContain("<b>cosmic_ray</b>");
+      expect(screen.queryByRole("note")).not.toBeInTheDocument();
+      expect(container.textContent).not.toContain("cosmic_ray");
       expect(container.querySelector("b")).toBeNull();
     });
 

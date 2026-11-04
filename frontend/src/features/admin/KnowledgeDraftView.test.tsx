@@ -327,13 +327,25 @@ describe("the lookup of the source, on the left", () => {
     expect(block().textContent).not.toContain("Voyage");
   });
 
-  it("shows a kind it has no words for as text", async () => {
+  it("draws no reason for a kind it has no words for, and never the code", async () => {
     await open({
       details: [withLookup({ status: "failed", failure_kind: "<b>weird</b>", ranked: null })],
     });
-    expect(block().textContent).toContain("<b>weird</b>");
+    // the status line stays; the reason line does not
+    expect(block()).toHaveTextContent(D.left.lookup.status.failed);
+    expect(block().textContent).not.toContain("weird");
+    expect(block().textContent).not.toContain(D.left.lookup.reason("").trim());
     expect(block().querySelector("b")).toBeNull();
   });
+
+  it.each(["constructor", "toString", "__proto__"])(
+    "draws no reason for the name %s: only the table's own kinds are words",
+    async (kind) => {
+      await open({ details: [withLookup({ status: "failed", failure_kind: kind, ranked: null })] });
+      expect(block().textContent).not.toContain(kind);
+      expect(block().textContent).not.toContain(D.left.lookup.reason("").trim());
+    },
+  );
 
   it("shows an entry id as text", async () => {
     await open({
