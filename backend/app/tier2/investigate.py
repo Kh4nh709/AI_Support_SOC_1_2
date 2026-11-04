@@ -58,13 +58,23 @@ case's newest stored lookup (`rag.lookup.lookup_material`: `latest_lookup` in a 
 error is no material and not a failed job) and the material it may put in a prompt
 (`prompt_material`: each entry re-checked - active, hash intact) and hands it to `dossier.build` as
 `learned`, which renders it as block 10. **② never waits**: whatever the lookup holds when the job
-runs is used - the newest `ok` or `empty` row (spec §7.6: a `failed` or `budget` refresh written after it
-does not hide it; `rag.lookup.USABLE_STATUSES`), the "nothing found" form for an `empty` one, no section when there
-is none of the two - and nothing is queued or slept on. The `llm_runs` row names the lookup
+runs is used - the newest `ok` or `empty` row (spec §7.6: a `budget` refresh written after it does not hide
+it; `rag.lookup.USABLE_STATUSES`), the "nothing found" form for an `empty` one, no section when there
+is none of the two - and nothing is queued or slept on. A refresh that `failed` (DEC-213, P14-T06) does hide
+it: the job reads `rag.lookup.lookup_failure` first and, when the newest lookup of the case failed, renders no
+section and adds `rag_not_applied:<kind>` to the run's `citation_warnings`, so the notice the UI shows is true. The `llm_runs` row names the lookup
 (`rag_lookup_id`) only when its material actually reached the prompt, after any budget cut. The
 output schema, the injection scan and `_check_evidence` are unchanged: an entry is reference
 material, and a quote taken from one is not in the alert's own text, so it is refused as any quote
 that is not. With the switch off nothing here runs and nothing differs, the INSERT included.
+
+**The definite conclusion (P14-T02, DEC-213, spec 4.2).** The model answers `investigate_v3`: one of
+`llm.verdicts.MODEL_CONCLUSIONS`, never `need_more_data` (a prompt that no longer offers it, and a schema
+that refuses it). The override is unchanged - zero verified evidence, or a high injection finding meeting a
+`false_positive`, makes the stored conclusion `need_more_data`, which `ck_llm_runs_suggested_conclusion`
+still admits - and `evidence_check.original_conclusion` is still written only when it fired. What is new is
+`evidence_check.model_conclusion`: the model's own answer, written on every run with a parsed result, so a
+reader can tell "the model concluded X and the system held it" from "the model concluded X".
 """
 
 from __future__ import annotations
@@ -87,8 +97,9 @@ from app.infra.errors import PermanentError, TransientError
 from app.infra.jobs import Job
 from app.llm import investigate as llm_investigate
 from app.llm.adapter import DeepSeekAdapter, LLMBudgetExceeded, LLMPermanent, cost_usd
+from app.llm.builder import rag_not_applied_warning
 from app.llm.triage import prompt_version
-from app.rag.lookup import USABLE_STATUSES, lookup_material
+from app.rag.lookup import USABLE_STATUSES, lookup_failure, lookup_material
 from app.rag.subject import Subject
 from app.security import detector, wrap
 from app.security.gate import _norm
@@ -328,7 +339,7 @@ def _is_transient(exc: BaseException) -> bool:
 def _snapshot_trace(dossier: llm_investigate.DossierLike) -> dict[str, Any]:
     """The P7-2 snapshot plus `Dossier.truncations`/`estimated_tokens`, together in
     `agent_trace` (this card's choice — see the report; `result` stays the pure
-    validated `investigate_v2` object, or `None`, never an envelope around it, so a
+    validated `investigate_v3` object, or `None`, never an envelope around it, so a
     reader does not have to know this module's storage convention to read a `result`
     that validates)."""
     snapshot = dossier.snapshot
@@ -358,6 +369,14 @@ _EVIDENCE_ALERTS_SQL = """
 #: keeps a `false_positive` from being overruled. Eight characters is the shortest span
 #: that still holds a real token (an address, a port, a short path, a verb + argument).
 MIN_QUOTE_CHARS = 8
+
+#: Why the system held the model's conclusion back as `need_more_data` (P14-T02, spec 4.2), in the
+#: words `investigation_view.held_by` uses. `HELD_HIGH_INJECTION` is also the value the job writes to
+#: `evidence_check.forced_by` (a name that existed before P14 and is unchanged); no verified evidence
+#: has no `forced_by` - it is read from `evidence_check.verified` being empty.
+HELD_NO_VERIFIED_EVIDENCE = "no_verified_evidence"
+HELD_HIGH_INJECTION = "high_severity_injection_finding"
+HELD_BY: tuple[str, ...] = (HELD_NO_VERIFIED_EVIDENCE, HELD_HIGH_INJECTION)
 
 
 def _searchable(text: str) -> tuple[str, str]:
@@ -471,8 +490,14 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
     # queues one and never sleeps. Read after `_set_repeatable_read`, so the lookup is part of the snapshot
     # the dossier is read in. `parse_subject` stores a case's id in lower case.
     material = None
+    not_applied = None
     if cfg.RAG_ENABLED:
-        material = lookup_material(conn, Subject("case", case_id.lower()), statuses=USABLE_STATUSES)
+        # DEC-213: a newest lookup that `failed` is a notice and no section, whatever an older one held.
+        not_applied = lookup_failure(conn, Subject("case", case_id.lower()))
+        if not_applied is None:
+            material = lookup_material(
+                conn, Subject("case", case_id.lower()), statuses=USABLE_STATUSES
+            )
 
     try:
         dossier = dossier_mod.build(conn, case_id, nonce=nonce, cfg=cfg, learned=material)
@@ -496,10 +521,17 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
         limits=partial(settings.effective_limits, conn, cfg),
     )
 
+    # DEC-213: every row of a run whose lookup failed says so, not only the one with a verdict - a `cap`,
+    # `permanent`, `linter`, `schema` or `transient` row was built from the same dossier without block 10
+    # (the way ① puts `built.warnings` on every row it writes). The success row below passes its own list,
+    # which already ends with it.
+    notice = [rag_not_applied_warning(not_applied)] if not_applied is not None else []
+
     def write_row(row_id: uuid.UUID, stopped_by: str | None, **outcome: Any) -> None:
         """This attempt's one `llm_runs` row. The usage columns come from `spend` unless
         the caller passes its own (`**outcome`) — so a failure row still carries whatever
-        was already paid for (S7)."""
+        was already paid for (S7). `citation_warnings` is the notice unless the caller passes its own.
+        """
         _write_llm_run(
             conn,
             run_id=row_id,
@@ -509,7 +541,7 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
             agent_trace=agent_trace,
             stopped_by=stopped_by,
             rag_lookup_id=rag_lookup_id,
-            **{**_spend_columns(spend, cfg), **outcome},
+            **{"citation_warnings": notice or None, **_spend_columns(spend, cfg), **outcome},
         )
 
     try:
@@ -572,27 +604,33 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
     injection_level = detector.level(findings)
 
     final_result = dict(result.parsed)
-    original_conclusion = final_result["suggested_conclusion"]
+    model_conclusion = final_result["suggested_conclusion"]
+    # P14-T02 (spec 4.2): the model's own answer is stored beside the final one on EVERY run with a
+    # parsed result, overruled or not - the reader (`investigation_view`) needs it to say what the
+    # system held. `original_conclusion` below is unchanged: only when the answer was overruled.
+    evidence_check["model_conclusion"] = model_conclusion
     overridden = False
 
     if not evidence_check["verified"]:
         # Zero verified evidence -> need_more_data; the model's answer is overruled,
-        # not deleted (design note 4).
+        # not deleted (design note 4). The override is unchanged by P14: ck_llm_runs_suggested_conclusion
+        # still admits the value, and the model can no longer answer it - only this line sets it.
         final_result["suggested_conclusion"] = "need_more_data"
         overridden = True
 
     if injection_level == "high" and final_result["suggested_conclusion"] == "false_positive":
         final_result["suggested_conclusion"] = "need_more_data"
-        evidence_check["forced_by"] = "high_severity_injection_finding"
+        evidence_check["forced_by"] = HELD_HIGH_INJECTION
         overridden = True
 
     if overridden:
-        evidence_check["original_conclusion"] = original_conclusion
+        evidence_check["original_conclusion"] = model_conclusion
 
     citation_warnings = [
         f"alert_id {item['alert_id']!r} rejected: {item['reason']}"
         for item in evidence_check["rejected"]
     ]
+    citation_warnings.extend(notice)
 
     write_row(
         run_id,

@@ -63,7 +63,7 @@ reads, and into the retry message, whose every word the linter must know):
    backstop (`ON CONFLICT DO NOTHING`): a reclaimed job, or two that race, draft once;
 1. the source record; 2. the candidates, with an empty exclusion (the source is new), each checked
    before it is sent exactly as the lookup does (V-R1, A4);
-3. the ranking agent (`rag.match.rank`) when there is a candidate; its call is a `knowledge_draft` /
+3. the ranking agent (`rag.draft_rank.rank`; the lookup no longer uses a model to rank, P14-T06) when there is a candidate; its call is a `knowledge_draft` /
    `drafter` run of its own, so it counts toward the RAG sub-cap;
 4. the merge rule, over the entries rated `rat_giong` (`conclusions_agree` says whether a conclusion is
    the source's: by family, so Tier-1 `closed_fp` agrees with Tier-2 `concluded_fp`, and every other
@@ -116,11 +116,11 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
-from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from app.audit.events import write_event
 from app.infra import config, settings
+from app.infra.db import raise_idle_timeout
 from app.infra.errors import PermanentError
 from app.infra.jobs import Job, Reschedule
 from app.llm import schemas
@@ -142,12 +142,18 @@ from app.llm.triage import prompt_version
 from app.rag import agent
 from app.rag.budget import rag_limits, rag_spent_or_exhausted
 from app.rag.candidates import candidates
-from app.rag.entries import KB_LEARNED_ROOT, Entry, file_matches, sha256_text
+from app.rag.draft_rank import (
+    PROMPT_BUDGET_TOKENS,
+    Pick,
+    injection_findings,
+    rank,
+    select_candidates,
+)
+from app.rag.draft_rank import TEMPLATE_PATH as DRAFT_RANK_TEMPLATE_PATH
+from app.rag.entries import KB_LEARNED_ROOT, Entry, enqueue_embed, file_matches, sha256_text
 from app.rag.fingerprint import Fingerprint, alert_fingerprint, case_fingerprint
 from app.rag.generalise import FINDING_NAMES, literal_findings, strip_placeholders
 from app.rag.history import Exclusion
-from app.rag.match import PROMPT_BUDGET_TOKENS, Match, injection_findings, rank, select_candidates
-from app.rag.match import TEMPLATE_PATH as MATCH_TEMPLATE_PATH
 from app.rag.runs import write_rag_run
 from app.rag.subject import Subject, parse_subject
 from app.rag.tags import TAGS_FILE, load_tags, read_tags_file
@@ -758,17 +764,6 @@ def _log(payload: dict[str, Any]) -> None:
     print(json.dumps(payload))
 
 
-def _raise_idle_timeout(conn: psycopg.Connection, cfg: config.Config) -> None:
-    """The handler's first statement, `rag.lookup`'s (duplicated: that one is not this card's to
-    change). `infra/db.py::transaction()` sets `idle_in_transaction_session_timeout` to 10 s; a model
-    call is idle time to PostgreSQL, so the job raises it to `JOB_LOCK_TIMEOUT_S`."""
-    conn.execute(
-        sql.SQL("SET LOCAL idle_in_transaction_session_timeout = {}").format(
-            sql.Literal(f"{cfg.JOB_LOCK_TIMEOUT_S}s")
-        )
-    )
-
-
 def _exists(conn: psycopg.Connection, subject: Subject) -> bool:
     row = conn.execute(
         "SELECT 1 FROM knowledge_drafts WHERE source_kind = %s AND source_id = %s",
@@ -855,7 +850,13 @@ def _append_source(conn: psycopg.Connection, entry_id: str, source: SourceRecord
             "entry": entry_id,
         },
     ).fetchone()
-    return row is not None
+    if row is None:
+        return False
+    # DEC-213: every write to an entry enqueues the vector job (with the RAG on), in this transaction. A merge
+    # leaves the content and the hash alone, so the job will find the row current and ask Voyage nothing; it
+    # is there so that no path changes an entry without the index being told.
+    enqueue_embed(conn, entry_id)
+    return True
 
 
 def _record_run(
@@ -1010,7 +1011,7 @@ def conclusions_agree(first: str, second: str) -> bool:
 
 
 def _merge_and_conflict(
-    matches: Sequence[Match], sent: Sequence[Entry], source: SourceRecord
+    matches: Sequence[Pick], sent: Sequence[Entry], source: SourceRecord
 ) -> tuple[Entry | None, Entry | None]:
     """The entry to merge into and the entry in conflict (module doc, step 4), among the matches rated
     `rat_giong`, in the agent's order. A conflict takes precedence: if any of them disagrees with the
@@ -1038,7 +1039,7 @@ def run_draft_job(
     to the RAG budget; every test passes a fake. Returns the `Reschedule` the worker is to queue when the
     model cannot be asked now (the budget, a 429), else None."""
     cfg = config.load()
-    _raise_idle_timeout(conn, cfg)
+    raise_idle_timeout(conn, cfg)
 
     if not agent.rag_model(cfg):  # no model configured: the AI is off, as for ① and ② (G7)
         _log({"knowledge_draft": "skipped", "reason": "no_model"})
@@ -1095,7 +1096,7 @@ def run_draft_job(
                 rank_tape,
                 subject,
                 rank_findings,
-                MATCH_TEMPLATE_PATH,
+                DRAFT_RANK_TEMPLATE_PATH,
                 stopped_by=stopped_by,
                 gate_result=gate,
                 result=fields.pop("result", None),

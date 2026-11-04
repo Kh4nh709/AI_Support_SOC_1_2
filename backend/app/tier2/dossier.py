@@ -10,8 +10,9 @@ nothing to a model and imports nothing from `app.llm.adapter` itself — P5-T04 
 **Block 10, the learned section (P13-T08, DEC-210, spec §7.8).** `build(..., learned=None)` is the
 nine-block dossier above, byte for byte. With `learned` (what `rag.lookup.prompt_material` returns:
 `llm.builder.LearnedLike`) a tenth block follows block 8 and precedes the scope sentence, which stays
-last: the heading, the decision history as a `decision_history` block, one `kb_learned_level: <level>` fact
-per entry (a closed `KbLearnedLevel`, checked), the entries as one numbered `kb_learned` block (at most
+last: the heading, the decision history as a `decision_history` block, one line per entry with its
+`kb_learned_level: <level>` fact (a closed `KbLearnedLevel`, checked) and its `trung_pct: <pct>` fact (an
+integer from 0 to 100, P14-T06, DEC-213), best first, the entries as one numbered `kb_learned` block (at most
 `llm.builder.MAX_LEARNED_ENTRIES`, ①'s cap, through `llm.builder.prompt_entries`) and the fixed sentence that it is a reference and never a basis
 for the verdict; or, when the lookup found nothing, the heading and the one sentence that says so. It is
 reference material, not evidence about the case: `Dossier.learned_used` says whether it reached the prompt.
@@ -130,9 +131,16 @@ def _estimate_tokens(text: str) -> int:
 #: from alert data, so it is safe outside a wrapper on its own merits; it has no entry in
 #: `llm.builder.TEMPLATE_CONSTANTS` (that file is out of scope), so this module's own tests
 #: add it to the `constants` they pass `security.linter.lint()`.
+#:
+#: P14-T02 (DEC-213): the second sentence used to say *"Thiếu thì trả need_more_data"* (answer
+#: `need_more_data` when something is missing). ②'s model schema (`investigate_v3`) no longer has that
+#: value, so it now says what to do instead: name the best conclusion and write what is missing in
+#: `next_steps`. It is a member of `DOSSIER_TEMPLATE_CONSTANTS` below, so the linter and every caller
+#: that passes that set follow the new wording without a second list.
 SENTENCE_OUT_OF_SCOPE = (
     "Không có threat intel ngoài, dữ liệu gói tin, EDR. "
-    "Thiếu thì trả need_more_data, không suy đoán."
+    "Thiếu thì nêu kết luận tốt nhất từ những gì có và ghi phần còn thiếu vào next_steps, "
+    "không suy đoán."
 )
 #: Review round 2 nit 7 — block 4's "history not computed" state (md5/sha1/sha256/domain
 #: entities have no structured `alerts` column to count from), a fixed literal like
@@ -1232,7 +1240,7 @@ def _block9_scope() -> str:
 
 def _block10_learned(
     history_text: str | None,
-    entries: Sequence[tuple[KbLearnedLevel, str]],
+    entries: Sequence[tuple[KbLearnedLevel, int, str]],
     *,
     nothing_found: bool,
     nonce: str,
@@ -1240,9 +1248,10 @@ def _block10_learned(
 ) -> str:
     """Block 10 (P13-T08, spec §7.8), ①'s section (`llm.triage._learned_section`) in this module's
     layout. The heading; the history under its own source (its values, such as a SOAR scenario, are not
-    id-shaped, so it is a block, not facts); each entry's level as a typed fact, in the entries' order;
-    the entries' approved text as the one `kb_learned` block, numbered `[1]`.. in the same order so a level
-    and its entry can be matched; then the sentence that says what the section is. When the lookup found
+    id-shaped, so it is a block, not facts); each entry's level as a typed fact followed on its line by its
+    percentage as another (`kb_learned_level: giong · trung_pct: 87`), in the entries' order; the entries'
+    approved text as the one `kb_learned` block, numbered `[1]`.. in the same order so a level and its entry
+    can be matched; then the sentence that says what the section is. When the lookup found
     nothing: the heading and the one sentence that says so. The text is approved content and a history
     the system wrote, and still goes in blocks: the linter accepts no prose outside one."""
     parts = [HEADING_LEARNED]
@@ -1251,9 +1260,14 @@ def _block10_learned(
         return "\n".join(parts)
     if history_text:
         parts.append(_wrapped(sink, history_text, "decision_history", nonce))
-    parts.extend(fact("kb_learned_level", level) for level, _text in entries)
+    parts.extend(
+        " · ".join((fact("kb_learned_level", level), fact("trung_pct", pct)))
+        for level, pct, _text in entries
+    )
     if entries:
-        body = "\n\n".join(f"[{number}] {text}" for number, (_level, text) in enumerate(entries, 1))
+        body = "\n\n".join(
+            f"[{number}] {text}" for number, (_level, _pct, text) in enumerate(entries, 1)
+        )
         parts.append(_wrapped(sink, body, "kb_learned", nonce))
     parts.append(SENTENCE_LEARNED_IS_REFERENCE)
     return "\n".join(parts)

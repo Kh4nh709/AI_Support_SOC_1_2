@@ -580,6 +580,22 @@ def test_out_of_scope_sentence_is_present_verbatim(db):
 
 
 @pytest.mark.db
+def test_the_scope_block_tells_the_model_to_conclude_and_list_what_is_missing(db):
+    """P14-T02: the closing instruction no longer says to answer `need_more_data` (the model's schema
+    has no such value); it says to name the best conclusion and write what is missing in
+    `next_steps`. Only the closing block is read: a previous ② run in the dossier is data."""
+    case_id, _user, _heads = _build_basic_case(db, n_heads=1)
+    result = dossier.build(db, case_id, nonce="m" * 16)
+
+    scope = result.text.split(dossier.HEADING_SCOPE + "\n")[-1]
+
+    assert scope == dossier.SENTENCE_OUT_OF_SCOPE
+    assert "need_more_data" not in scope
+    assert "next_steps" in scope
+    assert "kết luận" in scope
+
+
+@pytest.mark.db
 def test_missing_playbook_renders_sentence_no_playbook_never_silence(db):
     from app.llm.builder import SENTENCE_NO_PLAYBOOK
 

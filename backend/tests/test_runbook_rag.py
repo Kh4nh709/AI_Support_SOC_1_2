@@ -182,15 +182,17 @@ def test_the_020_intro_lists_the_three_indexes_the_migration_creates():
 
 
 def test_what_to_watch_counts_the_alarms_the_alarms_table_has():
-    """ "beyond the ten alarms" was true before the three RAG checks (P13-T05) joined the table."""
+    """ "beyond the ten alarms" was true before the three RAG checks (P13-T05) joined the table, and the
+    thirteen before `rag_lookup_failures` (P14-T06, DEC-213) did."""
     text = _text()
     rows = [
         line
         for line in _section(text, "## Alarms").splitlines()
         if re.match(r"^\| `[a-z_]+` \|", line)
     ]
-    assert len(rows) == 13, [_cells(r)[0] for r in rows]
-    assert "## What to watch (manual checks, beyond the thirteen alarms)" in text
+    assert len(rows) == 14, [_cells(r)[0] for r in rows]
+    assert "## What to watch (manual checks, beyond the fourteen alarms)" in text
+    assert "beyond the thirteen alarms" not in text
     assert "beyond the ten alarms" not in text
 
 
@@ -636,12 +638,12 @@ def test_context_pack_6_2_names_the_two_rag_only_schemas_beside_output_schemas()
     text = _text(PACK)
     section = text.split("### 6.2", 1)[1].split("### 6.3", 1)[0]
     after_block = section.split("```", 2)[2]  # what follows the §6.2 JSON block
-    for needle in ("`rag_match_v1`", "`knowledge_draft_v1`", "`backend/app/rag/schemas.json`"):
+    for needle in ("`draft_rank_v1`", "`knowledge_draft_v1`", "`backend/app/rag/schemas.json`"):
         assert needle in after_block, f"§6.2 no longer says {needle!r} after its block"
     assert "output_schemas.json" in after_block
     # the block itself is the three schemas of output_schemas.json and nothing else
     block = section.split("```json", 1)[1].split("```", 1)[0]
-    assert "rag_match_v1" not in block and "knowledge_draft_v1" not in block
+    assert "draft_rank_v1" not in block and "knowledge_draft_v1" not in block
 
 
 def test_the_rag_package_docstring_names_the_draft_module():
@@ -731,15 +733,16 @@ def test_the_requirements_clause_also_rebuilds_and_recreates_rag_worker():
     )
 
 
-def test_the_what_to_watch_paragraph_counts_thirteen_checks():
-    """Item 11: the file says thirteen alarms in its heading and its table; the paragraph said ten."""
+def test_the_what_to_watch_paragraph_counts_fourteen_checks():
+    """Item 11: the file says fourteen alarms (thirteen before `rag_lookup_failures`, P14-T06) in its heading
+    and its table; the paragraph said ten."""
     text = _text()
-    paragraph = text.split("## What to watch (manual checks, beyond the thirteen alarms)", 1)[
+    paragraph = text.split("## What to watch (manual checks, beyond the fourteen alarms)", 1)[
         1
     ].split("\n\n", 2)[1]
-    assert "the thirteen checks of **Alarms**" in paragraph
-    assert "the thirteen checks do not cover" in paragraph
-    assert "ten checks" not in paragraph
+    assert "the fourteen checks of **Alarms**" in paragraph
+    assert "the fourteen checks do not cover" in paragraph
+    assert "ten checks" not in paragraph and "thirteen" not in paragraph
 
 
 def test_the_runbook_says_the_triage_delay_is_paid_even_when_no_lookup_can_run():

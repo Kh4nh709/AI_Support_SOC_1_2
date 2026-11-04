@@ -33,6 +33,13 @@ only ever turns `idle` into `failed`: a real running or finished state wins.
 `agent_trace` nor `created_at` and does not check that the run belongs to a case), always
 filtered by `subject_id = <this case>`.
 
+**The model's own conclusion and why it was held (P14-T02, DEC-213).** A done run carries
+`model_conclusion` - what the model itself answered, from `evidence_check.model_conclusion` - and
+`held_by`, the closed causes the system had for storing `need_more_data` instead
+(`no_verified_evidence`, `high_severity_injection_finding`). A run written before P14-T02 has no
+`model_conclusion`; it gives `None` and `[]` and is not guessed at. Both are derived from what the job
+already stores, so the view adds no column and no new stored key beyond `model_conclusion` itself.
+
 Model output is untrusted. It leaves here as plain values (strings, lists, dicts) and the React
 UI renders it as text. This module builds no markup (`test_investigation_view_guard.py` scans
 its source for anything that would mark a string as safe).
@@ -46,11 +53,19 @@ from typing import Any
 
 import psycopg
 
-from app.tier2.investigate import MIN_QUOTE_CHARS, run_id_for_job
+from app.llm import verdicts
+from app.tier2.investigate import (
+    HELD_BY,
+    HELD_HIGH_INJECTION,
+    HELD_NO_VERIFIED_EVIDENCE,
+    MIN_QUOTE_CHARS,
+    run_id_for_job,
+)
 
-#: `investigate_v2.suggested_conclusion` in Vietnamese — the three-conclusion table of
-#: `docs/phase-7-tier2.md` (the same wording the retired Jinja case page's status labels used for
-#: the three conclusions) plus ②'s fourth value.
+#: `llm_runs.result.suggested_conclusion` in Vietnamese: the keys are `verdicts.GATED_CONCLUSIONS` - the
+#: three conclusions of `docs/phase-7-tier2.md` the model may give (`investigate_v3`, the same wording
+#: the retired Jinja case page's status labels used for them) plus the value only the system sets,
+#: `need_more_data` (P14-T02). `tests/test_conclusions.py` ties the keys to the tuple.
 CONCLUSION_LABELS: dict[str, str] = {
     "false_positive": "Không phải sự cố",
     "policy_violation": "Có vi phạm nội quy, không phải tấn công",
@@ -259,6 +274,31 @@ def overrule_text(result: dict[str, Any], check: dict[str, Any]) -> str | None:
     )
 
 
+def model_conclusion(check: dict[str, Any]) -> str | None:
+    """What the model itself concluded (`evidence_check.model_conclusion`, written by every run since
+    P14-T02), or `None` for a run that carries none - one from before P14-T02 - and for a value that is
+    not one of `verdicts.MODEL_CONCLUSIONS`: a closed vocabulary leaves here, nothing else. The model can
+    no longer answer `need_more_data`, so it is not a value the model's own conclusion can have."""
+    value = check.get("model_conclusion")
+    return value if isinstance(value, str) and value in verdicts.MODEL_CONCLUSIONS else None
+
+
+def held_by(check: dict[str, Any]) -> list[str]:
+    """Why the system held the model's conclusion back as `need_more_data`: `[]` when it did not, or
+    when the run carries no `model_conclusion` (an old run is not guessed at); otherwise the causes the
+    check records, in `HELD_BY`'s order - `no_verified_evidence` (no cited evidence verified) and
+    `high_severity_injection_finding` (`evidence_check.forced_by`). Only the two closed values leave.
+    """
+    if model_conclusion(check) is None:
+        return []
+    verified = check.get("verified")
+    found = {
+        HELD_NO_VERIFIED_EVIDENCE: isinstance(verified, list) and not verified,
+        HELD_HIGH_INJECTION: check.get("forced_by") == HELD_HIGH_INJECTION,
+    }
+    return [cause for cause in HELD_BY if found[cause]]
+
+
 def snapshot(agent_trace: Any) -> dict[str, Any] | None:
     """`{alert_count, total_occurrences, last_seen_at}` from `llm_runs.agent_trace` (P5-T04
     `_snapshot_trace`), or `None` when the row carries none."""
@@ -312,6 +352,8 @@ def present_run(row: tuple) -> dict[str, Any]:
         "next_steps": as_list(result.get("next_steps")),
         "playbook_used": result.get("playbook_used"),
         "overruled": overrule_text(result, check),
+        "model_conclusion": model_conclusion(check),
+        "held_by": held_by(check),
         "snapshot": snapshot(agent_trace),
         "changed": False,
     }

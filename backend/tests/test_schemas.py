@@ -12,6 +12,7 @@ from app.llm import schemas
 
 from tests.fakes.llm import (
     INVESTIGATE_V2_OK,
+    INVESTIGATE_V3_OK,
     TRIAGE_V2_ESCALATE,
     TRIAGE_V2_FALSE_POSITIVE,
     TRIAGE_V3_TRUE_POSITIVE,
@@ -25,9 +26,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = ROOT / "backend" / "app" / "llm" / "templates"
 
 
-def test_file_parses_and_has_five_schemas():
-    """`triage_v3` and `verifier_v2` (P14-T01) are the product's; `triage_v2` and `verifier_v1`
-    stay, unused by the product, because the evaluation reads them (DEC-213)."""
+def test_file_parses_and_has_six_schemas():
+    """`triage_v3` and `verifier_v2` (P14-T01) and `investigate_v3` (P14-T02) are the product's;
+    `triage_v2`, `verifier_v1` and `investigate_v2` stay, unused by the product, because the
+    evaluation reads them (DEC-213)."""
     loaded = schemas.load()
     assert set(loaded) == {
         "triage_v2",
@@ -35,6 +37,7 @@ def test_file_parses_and_has_five_schemas():
         "verifier_v1",
         "verifier_v2",
         "investigate_v2",
+        "investigate_v3",
     }
 
 
@@ -50,6 +53,7 @@ def test_file_parses_and_has_five_schemas():
         ("verifier_v2", VERIFIER_V2_AGREE),
         ("verifier_v2", VERIFIER_V2_DISAGREE),
         ("investigate_v2", INVESTIGATE_V2_OK),
+        ("investigate_v3", INVESTIGATE_V3_OK),
     ],
     ids=[
         "TRIAGE_V2_ESCALATE",
@@ -61,6 +65,7 @@ def test_file_parses_and_has_five_schemas():
         "VERIFIER_V2_AGREE",
         "VERIFIER_V2_DISAGREE",
         "INVESTIGATE_V2_OK",
+        "INVESTIGATE_V3_OK",
     ],
 )
 def test_fake_payloads_validate_clean(name, payload):
@@ -136,7 +141,14 @@ def test_empty_reasons_is_valid():
 
 
 def test_render_is_deterministic():
-    for name in ("triage_v2", "triage_v3", "verifier_v1", "verifier_v2", "investigate_v2"):
+    for name in (
+        "triage_v2",
+        "triage_v3",
+        "verifier_v1",
+        "verifier_v2",
+        "investigate_v2",
+        "investigate_v3",
+    ):
         assert schemas.render(name) == schemas.render(name)
 
 
@@ -245,6 +257,7 @@ def test_normalise_leaves_every_other_mismatch_for_validate():
         ("verifier_v1", VERIFIER_V1_DISAGREE),
         ("verifier_v2", VERIFIER_V2_AGREE),
         ("investigate_v2", INVESTIGATE_V2_OK),
+        ("investigate_v3", INVESTIGATE_V3_OK),
     ],
     ids=[
         "TRIAGE_V2_ESCALATE",
@@ -254,6 +267,7 @@ def test_normalise_leaves_every_other_mismatch_for_validate():
         "VERIFIER_V1_DISAGREE",
         "VERIFIER_V2_AGREE",
         "INVESTIGATE_V2_OK",
+        "INVESTIGATE_V3_OK",
     ],
 )
 def test_normalise_is_the_identity_on_valid_payloads(name, payload):

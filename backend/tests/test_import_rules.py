@@ -319,3 +319,14 @@ def test_a_deferred_import_of_lab_inside_a_function_is_still_judged():
     assert violations_in(source, "tier1.queue") == [
         "tier1.queue imports lab — not in ALLOWED[tier1]"
     ]
+
+
+# --- P14-T05 / DEC-213: `rag.voyage` calls Voyage's REST API with `httpx` -------------------------
+
+
+def test_rag_may_use_httpx_and_its_list_of_app_packages_is_unchanged():
+    """The scan judges `app.*` imports only; `httpx` is a third-party package it ignores. The rag row
+    keeps its six packages (nothing was added for the Voyage client or the vector store)."""
+    assert violations_in("import httpx\nfrom httpx import Client\n", "rag.voyage") == []
+    assert violations_in("import psycopg\n", "rag.vector_store") == []
+    assert ALLOWED["rag"] == {"infra", "audit", "security", "llm", "kb", "domain"}
