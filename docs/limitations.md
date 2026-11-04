@@ -773,7 +773,7 @@ the Measured paragraph of item (ix) in section B.
      a known count (DEC-209 item 2): with the fact `null` there is nothing to compare, so a `false_positive`
      is held back by step 4 alone and carries no `hallucination_flag`, an `escalate` is not downgraded, and
      a known count the model gets wrong is still flagged. The column `alerts.occurrence_count` keeps its
-     default of `1` for these alerts and the queue, the alert page and the digest show it: it is not the
+     default of `1` for these alerts, and the queue and the alert page show it: it is not the
      number ① was given.
 
   A missing or unknown context never opens a path to a closed alert (DEC-207 item 4): it did not before

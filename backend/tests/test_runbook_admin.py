@@ -77,10 +77,11 @@ def test_the_console_section_lists_the_pages_that_stay_and_says_two_went() -> No
 
 def test_no_sentence_sends_the_operator_to_a_page_the_ui_no_longer_has() -> None:
     """P15-T01 (DEC-214): `/admin/rules` and `/admin/digest` are named only in the sentences about the Jinja pages
-    that port 8000 stopped serving (P11-T19); no row, no alarm and no step sends anyone to them."""
+    that port 8000 stopped serving (P11-T19); no row, no alarm and no step sends anyone to them. The API routes
+    (`/api/admin/rules`, `/api/admin/digest`) are not pages and stay nameable."""
     for number, line in enumerate(_text().splitlines(), start=1):
         for page in ("/admin/rules", "/admin/digest"):
-            if page in line:
+            if re.search(rf"(?<!/api){re.escape(page)}", line):
                 assert (
                     "8000" in line
                 ), f"line {number} sends the operator to {page}, a page the UI no longer has"

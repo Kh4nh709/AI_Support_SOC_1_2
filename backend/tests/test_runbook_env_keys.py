@@ -116,11 +116,37 @@ def test_the_autoclose_switch_row_warns_that_the_pages_to_review_its_rules_are_g
     """P15-T01 (DEC-214): with `true`, an alert is closed by a rule; the UI has no page that shows the rules or
     reviews the digest any more, so the row says it is not switched on again before the pages come back.
     """
-    what = _rows()["AUTOCLOSE_ENABLED"]
+    what, who, secret = (
+        cell.strip() for cell in _rows()["AUTOCLOSE_ENABLED"].rstrip("|").split(" | ")
+    )
+    assert who == "Owner" and secret == "no"
     assert "DEC-214" in what
     assert "no rules page and no digest page" in what
     assert "no page shows" in what and "nobody can review" in what
     assert "unless the two pages come back first" in what
+
+
+def test_the_rule_width_row_says_only_the_api_reports_it_now():
+    """P15-T01 fix round 1 (D2): the rules page that showed the width and its warning is gone (DEC-214); the
+    threshold is still read by `GET /api/admin/rules` (`width_threshold_pct`), and the row says so.
+    """
+    what, who, secret = (
+        cell.strip() for cell in _rows()["AUTOCLOSE_RULE_WIDTH_PCT"].rstrip("|").split(" | ")
+    )
+    assert who == "default" and secret == "no"
+    assert "reported as too wide" not in what
+    assert "DEC-214" in what and "GET /api/admin/rules" in what and "`width_threshold_pct`" in what
+
+
+def test_the_dec_207_limitation_says_the_pages_are_gone_and_no_page_shows_the_digest():
+    """P15-T01 (DEC-214; fix round 1, D1): item 3 says the table and the backend stay and the two pages are gone;
+    item 5's sentence on the default count of 1 names only the pages that still show it."""
+    text = (REPO_ROOT / "docs" / "limitations.md").read_text(encoding="utf-8")
+    item = " ".join(text.split("### (xlvi) ")[1].split("\n### ")[0].split())
+    assert "the `autoclose_rules` table and the backend stay" in item
+    assert "the rules page and the digest page are gone from the UI, DEC-214" in item
+    assert "the queue and the alert page show it" in item
+    assert "the alert page and the digest show it" not in item
 
 
 @pytest.mark.parametrize("key", _SOAR_KEYS)

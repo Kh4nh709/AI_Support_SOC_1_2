@@ -225,7 +225,7 @@ The 76 keys of `.env.example`, one row each, no values. `.env.example` is genera
 | `CASE_PROMPT_BUDGET_TOKENS` | ②'s dossier budget, in estimated tokens (`tier2/dossier.py`); over it the dossier is cut and each cut is recorded (**② operations**) | default | no |
 | `ANALYZE_QUOTA_PER_USER_DAY` | the analyses one user may start per day (`web/routers/tier2_runs.py`, which the case page of the React UI calls); over it the API answers 429 (**② operations**) | default | no |
 | `NEVER_AUTOCLOSE_AGENTS` | agents whose alerts are never auto-closed | default | no |
-| `AUTOCLOSE_RULE_WIDTH_PCT` | an auto-close rule that closes more than this share of a week's alerts is reported as too wide | default | no |
+| `AUTOCLOSE_RULE_WIDTH_PCT` | the share of a week's alerts above which an auto-close rule counts as too wide; since DEC-214 only `GET /api/admin/rules` reports it (`width_threshold_pct`), the rules page that showed it is gone | default | no |
 | `REVIEW_DELTA_TOLERANCE` | a decision is refused (409) when the alert grew by more occurrences than this since it was seen | default | no |
 | `MAX_ALERTS_PER_CASE` | the most alerts one case or one correlation takes | default | no |
 | `JWT_SECRET` | signs login sessions; empty → the login answers 503 | Owner | yes |
