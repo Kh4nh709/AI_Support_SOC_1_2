@@ -1,4 +1,4 @@
-// The frame of every admin page (spec §3): the left sidebar of the canvas, with the eight pages in its
+// The frame of every admin page (spec §3): the left sidebar of the canvas, with the nine links in its
 // order, and the page beside it. The app shell (`Shell` in routes.tsx) already gives the header and the one
 // `main` landmark; this adds only a navigation, so a page task renders its `h1` and its content and nothing else.
 //
@@ -8,7 +8,10 @@ import type { ReactNode } from "react";
 import { NavLink } from "react-router";
 import { S } from "../../strings";
 
-/** The pages, in the order of the canvas, with DEC-210's knowledge page before the audit log. */
+/**
+ * The pages, in the order of the canvas, with the lab labelling (DEC-213) after the gold-set labelling and DEC-210's
+ * knowledge page before the audit log.
+ */
 const PAGES = [
   { to: "/admin/overview", label: S.admin.nav.overview },
   { to: "/admin/users", label: S.admin.nav.users },
@@ -16,6 +19,7 @@ const PAGES = [
   { to: "/admin/rules", label: S.admin.nav.rules },
   { to: "/admin/digest", label: S.admin.nav.digest },
   { to: "/admin/labels", label: S.admin.nav.labels },
+  { to: "/admin/lab", label: S.admin.lab.nav },
   { to: "/admin/knowledge", label: S.admin.nav.knowledge },
   { to: "/admin/audit", label: S.admin.nav.audit },
 ] as const;
