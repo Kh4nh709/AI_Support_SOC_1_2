@@ -9,6 +9,11 @@
 // by the row; once the server has said yes, the row's alert and the counter "Đã gán x/y" are set in that cache
 // (`withLabel`), and nothing is read again: a refetch of an infinite query reads every page loaded, which is a reload
 // of the page. The counter is the run's `labelled` and `total` of the first page, moved by the one label.
+//
+// Two things keep that cache true to the server (P14-T10 fix round 1). A read of the run that is already out when a
+// write lands would bring back the labels it took before the write (a refetch reads every page loaded, one after
+// the other): `labelled` cancels it before it sets the cache. And a focus of the window does not start such a read
+// (`refetchOnWindowFocus: false`): it would re-read up to a hundred alerts, raw logs included, for every page loaded.
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { Link, useParams } from "react-router";
 import {
@@ -65,10 +70,16 @@ export function LabRunPage() {
     queryFn: ({ pageParam }) => getLabRunAlerts(runId, { after: pageParam }),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next_after,
+    refetchOnWindowFocus: false,
   });
 
-  /** The server set (or cleared) a label: the row and the counter change in the cache, and nothing is read again. */
-  const labelled = (alertId: string, label: LabLabel | null) => {
+  /**
+   * The server set (or cleared) a label: the row and the counter change in the cache, and nothing is read again. A
+   * read of the run that is out is cancelled first, and what it had read is discarded: it took its snapshot before this
+   * write, and would bring the old label and the old counter back (a cancelled "Tải thêm" is pressed again).
+   */
+  const labelled = async (alertId: string, label: LabLabel | null) => {
+    await client.cancelQueries({ queryKey: key });
     client.setQueryData<Pages>(key, (data) =>
       data === undefined ? data : withLabel(data, alertId, label),
     );

@@ -8,8 +8,10 @@
 //
 // A write goes to the server first, and the row changes when the server has said yes: no optimistic update, so the
 // row never shows a label the server does not hold. The row is told through `onLabelled`, which moves the counter of
-// the page. A button the click would change nothing with (the label the alert already has, `Bỏ nhãn` of an alert with
-// none) is `aria-disabled` and sends nothing; it is not `disabled`, so the focus stays where the admin put it.
+// the page (and, as the write's last step, makes sure no read of the run that was already out can undo it: the row's
+// write is not over until `onLabelled` has answered). A button the click would change nothing with (the label the alert
+// already has, `Bỏ nhãn` of an alert with none) is `aria-disabled` and sends nothing; it is not `disabled`, so the
+// focus stays where the admin put it.
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import {
@@ -52,8 +54,11 @@ export function LabAlertRow({
   onLabelled,
 }: {
   alert: LabAlert;
-  /** The server has set (or, with null, cleared) the label of this alert: the page moves its counter. */
-  onLabelled: (alertId: string, label: LabLabel | null) => void;
+  /**
+   * The server has set (or, with null, cleared) the label of this alert: the page moves its counter. The row's write
+   * lasts until it has answered.
+   */
+  onLabelled: (alertId: string, label: LabLabel | null) => void | Promise<void>;
 }) {
   const [error, setError] = useState<string | null>(null);
   // The details are rendered when they are opened: a raw log is up to 32 KB, and a run holds a hundred rows a page.
@@ -65,7 +70,9 @@ export function LabAlertRow({
       else await putLabLabel(alert.alert_id, label);
     },
     onMutate: () => setError(null),
-    onSuccess: (_answer, label) => onLabelled(alert.alert_id, label),
+    onSuccess: async (_answer, label) => {
+      await onLabelled(alert.alert_id, label);
+    },
     onError: (failure) => setError(labRowErrorText(labErrorOf(failure))),
   });
   // One write at a time on a row, even for two presses in one tick (see useSubmitLatch.ts).
