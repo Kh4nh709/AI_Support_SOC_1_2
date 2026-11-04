@@ -934,7 +934,11 @@ the Measured paragraph of item (ix) in section B.
      starts); the alert's ① and ② then run without the RAG and say so, and for the lab such an alert is scored
      "RAG on" with no RAG in it. It is counted, not hidden: the measurement reports the failed lookups by kind and
      the health check `rag_lookup_failures` alarms at five in an hour. A failed lookup lowers the RAG-on score for
-     a reason that has nothing to do with retrieval.
+     a reason that has nothing to do with retrieval. One 429 is not counted: a lookup rate-limited on its first
+     attempt is retried 10 seconds later, and a retry that finds ① already finished writes nothing (no `failed`
+     row, no `rag.lookup_failed` event), so neither `rag_lookup_failures` nor the report's failed-lookup count by
+     kind sees it, and "no lookup" in the report can hide a 429 (the report says so under its table). It needs ①
+     to start inside the 10 seconds, which `RAG_TRIAGE_DELAY_S` (45) makes rare unless the queue is backed up.
   4. **The approval-time embeddings are outside the budget.** `knowledge_embed` (the embedding of an entry when it
      is approved, edited, merged or retired, and of `python -m app.rag.vector_index --rebuild`) writes no
      `llm_runs` row, so `RAG_MONTHLY_USD_CAP`, the global cap and the admin's cost views do not count it; its
@@ -963,12 +967,21 @@ the Measured paragraph of item (ix) in section B.
      `RAG_LEVEL_RAT_GIONG` (0.80) are the builder's first values, and `rerank-2.5` is used without a comparison
      with `rerank-3`. `lab_measure.py calibrate`, on the `kb` runs, is where they are chosen; until it has run,
      the percentage the analyst sees and the level in the prompt rest on values nobody has measured.
-  3. **The absolute accuracy may be flattered.** ①'s correlation section and ②'s block 5 show the neighbours'
-     current status, so a prompt may show an analyst decision made after the subject arrived. It is the same in
-     both arms, so the RAG difference is not biased by it, but the absolute accuracy may be flattered. The RAG-on
-     arm alone also reads the stored decision history, which may hold same-run decisions (`history_same_run`):
-     those subjects make the RAG difference unreliable. The report lists the subjects it can have touched; the
-     advice is to run ①'s measurement before analysts work the test runs' alerts.
+  3. **The absolute accuracy may be flattered by the neighbours' status.** The inputs of ① and ② are bounded at
+     the subject's first look (P14 final fix wave, C1): ① is evaluated as of the `created_at` of its first
+     proposer run (else `received_at` plus `RAG_TRIAGE_DELAY_S`; the report counts which), ② as of its first run,
+     and then the burst count (with grouping off), the correlation section and ②'s block 5 hold only the alerts
+     received before that instant, and the RAG-on arm reads only a lookup created before it. A later stage of the
+     attack is not in a prompt. What is not bounded is the neighbours' current status: the section prints the
+     status a neighbour has now, so a prompt may still show an analyst decision made after the subject's first
+     look. It is the same in both arms, so the RAG difference is not biased by it, but the absolute accuracy may
+     be flattered. The report lists the subjects it can have touched, and that count is an estimate: it
+     over-counts because the section's caps (20 groups, 5 samples) are not replayed, and under-counts where a
+     decision has no date (an escalation no event lists). The RAG-on arm alone also reads the stored decision
+     history, which may hold same-run decisions (`history_same_run`): those subjects make the RAG difference
+     unreliable. With `DEDUP_ENABLED=true` (the trial runs it off) an alert's own `occurrence_count` and the
+     correlated heads' counts are the ones stored now, not bounded. Running ①'s measurement before analysts work
+     the test runs' alerts leaves ① no decision to be shown.
   4. **With grouping on, an alert grouped under a head received in another run is neither listed nor labelled.**
      Only queue heads (`duplicate_of IS NULL`) are listed on "Gán nhãn lab", and only they take a label (`409
      not_a_queue_head`). With `DEDUP_ENABLED=true`, an alert that repeats a head received in another run is a
@@ -984,7 +997,8 @@ the Measured paragraph of item (ix) in section B.
      neither the old ② nor the new one.
 - **Measured.** Not measured. (1) is the Owner's ruling of 03/11 (spec §8 item 3 and §10); (2) is
   `.env.example`'s provisional values; (3) is the caveat the report prints in its header, with the subjects it can
-  have touched listed, not a figure; (4) follows from `lab/labels.py` (heads only) and from the grouping rule; (5)
+  have touched listed, not a figure (the bounded inputs are `tier1.triage.evaluate_alert(as_of=)` and
+  `tier2.dossier.build(as_of=)`, tested in `backend/tests/test_received_bound_as_of.py`); (4) follows from `lab/labels.py` (heads only) and from the grouping rule; (5)
   from `lab/runs.py` (`YEAR_MIN`, `YEAR_MAX`); (6) from reading `eval/investigate_measure.py` at the P14-T08 tip
   (the schema block is added by `schemas.render('investigate_v2')`).
 - **Source.** DEC-213; the spec's §6, §8 and §10; `eval/lab_measure.py` (P14-T11); `backend/app/lab/`;

@@ -937,7 +937,14 @@ def test_the_measuring_subsection_gives_the_caveats_and_what_calibrate_decides()
         "RAG-on arm",
         "`--tiers 1`",
         "before analysts work",
-        "first-look",
+        # P14 final fix wave, C1 (the old needle "first-look" claimed first-look accuracy that running early
+        # could not deliver; the inputs are now bounded at the first look, and the status exposure remains)
+        "bounded at the subject's first look",
+        "hold only the alerts received before that instant",
+        "What is not bounded",
+        "That count is an estimate",
+        "over-counts",
+        "under-counts",
         "not written to `llm_runs`",
         "monthly cap",
         "`.env`",

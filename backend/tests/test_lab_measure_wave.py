@@ -453,6 +453,16 @@ def test_each_tier_reports_the_paired_line_where_the_rag_could_act(lab, measured
     assert "same 3 subjects" in md and "same 1 subjects" in md
 
 
+@pytest.mark.db
+def test_the_no_lookup_line_says_it_may_hide_a_429(measured_wave):
+    """Deferred item 28, documented and not changed in `rag/lookup.py`: a 429 whose retry came too late stores
+    nothing, so the report's count of failed lookups by kind cannot see it. Said once under each RAG-on table.
+    """
+    md = measured_wave.markdown
+    assert md.count("may hide a 429") == 2  # one per tier
+    assert lm.NO_LOOKUP_NOTE in md
+
+
 # ── M2: the budget cut that drops the entries and keeps the history ─────────────────────────
 
 

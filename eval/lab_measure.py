@@ -172,6 +172,14 @@ CAVEAT = (
     "analyst decisions (the subjects listed under history_same_run make the RAG difference unreliable)."
 )
 
+#: Under the table of every tier that read a lookup (deferred item 28): what the "no lookup" count cannot say.
+#: A lookup rate-limited (429) on its first attempt is retried; a retry that finds ① finished writes nothing,
+#: not even a `failed` row (`rag.lookup.run_lookup_job`, 1b), so the subject has no lookup and no failure kind.
+NO_LOOKUP_NOTE = (
+    '"No lookup" may hide a 429: a rate-limited lookup whose retry came after ① had finished is stored '
+    "nowhere, so no failed-lookup count, in this report or in `rag_lookup_failures`, sees it."
+)
+
 #: Where a subject's `as_of` came from. ①: its first proposer run in `llm_runs`, else `received_at` plus the
 #: triage delay. ②: its first investigation run.
 AS_OF_FIRST_LOOK = "first_look"
@@ -1518,6 +1526,8 @@ def render_measure_md(report: Mapping[str, Any]) -> str:
                 f"{sources['delay']} by received_at + RAG_TRIAGE_DELAY_S ({tier['triage_delay_s']} s)"
             )
         lines += ["", *_tier_table(tier)]
+        if tier["arms"]["on"]["rag"] is not None:
+            lines += ["", NO_LOOKUP_NOTE]
         pair, pair_hit = tier["paired"], tier["paired_with_matches"]
         lines += [
             "",
