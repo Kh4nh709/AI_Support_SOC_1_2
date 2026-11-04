@@ -63,12 +63,14 @@ def test_the_console_section_lists_the_pages_that_stay_and_says_two_went() -> No
     found = re.search(r"has (\w+) pages: (.*?)\. Each calls", section, re.DOTALL)
     assert found, "the console section no longer says how many pages the admin has"
     count, pages = found.groups()
-    assert count == "six"
+    assert count == "seven"
+    # On the trial branch the lab labelling page of DEC-213 (P14-T10) stays, straight after the gold-set labelling.
     assert re.findall(r"`/admin/([a-z]+)`", pages) == [
         "overview",
         "users",
         "llm",
         "labels",
+        "lab",
         "knowledge",
         "audit",
     ]

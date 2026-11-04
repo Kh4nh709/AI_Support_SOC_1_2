@@ -189,17 +189,18 @@ def test_the_runbook_header_says_how_p14_t08_was_checked():
     assert line.count("**") % 2 == 0, "the bold of the header paragraph is not balanced"
 
 
-def test_the_admin_console_lists_the_nine_pages_the_ui_has():
-    """M2: the runbook said seven pages; `AdminLayout.tsx` lists nine (the knowledge page of DEC-210 and the
-    lab page of DEC-213). The sentence names exactly the routes the layout has."""
+def test_the_admin_console_lists_the_seven_pages_the_ui_has():
+    """M2: the runbook said seven pages; `AdminLayout.tsx` listed nine (the knowledge page of DEC-210 and the
+    lab page of DEC-213). DEC-214 (P15) took the rules page and the digest page out, so it lists seven again. The
+    sentence names exactly the routes the layout has."""
     layout = _text(REPO_ROOT / "frontend" / "src" / "features" / "admin" / "AdminLayout.tsx")
     pages = re.findall(r'\{ to: "(/admin/[a-z]+)"', layout)
-    assert len(pages) == 9, pages
+    assert len(pages) == 7, pages
     sentence = next(
         ln for ln in _text().splitlines() if ln.startswith("The admin console is the React UI:")
     )
-    assert "has seven pages" not in sentence and "has nine pages" in sentence
-    named = re.findall(r"`(/admin/[a-z]+)`", sentence.split("has nine pages", 1)[1])
+    assert "has nine pages" not in sentence and "has seven pages" in sentence
+    named = re.findall(r"`(/admin/[a-z]+)`", sentence.split("has seven pages", 1)[1])
     assert sorted(named) == sorted(pages), (named, pages)
 
 
