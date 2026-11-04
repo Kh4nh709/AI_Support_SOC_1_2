@@ -18,8 +18,8 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
   display blob (`tier1/soar_view.py`), `None` for an alert that carries none. INT-T02 adds
   `llm_stopped_by`: why the newest ① run gave up, a `visibility.ANALYST_HIDE` key (`latest_stopped_by`
   below, the one-column sibling of `latest_suggestion`). P14-T03 (DEC-213) adds `proposed_action`
-  and `held_by`: the model's own conclusion and why the system held it back (`latest_held` below, another
-  sibling read of the same run; the queue rows carry them from their own statement). All of these are
+  and `held_by`: the model's own conclusion and why the system held it back (`latest_suggestion_held` below, the
+  same one read of the newest run that builds `suggestion`; the queue rows carry them from their own statement). All of these are
   `visibility.ANALYST_HIDE` keys.
 - `latest_suggestion` — **the one place in P4 that reads `llm_runs`** (planning decision
   5). The row shape is P3-T10's and may still move; every read here is `.get`-tolerant,
@@ -202,10 +202,28 @@ def latest_suggestion(conn: psycopg.Connection, alert_id: str) -> Suggestion | N
     are ordered by `run_id DESC` (here, in `latest_suggestions` and in the queue's join: the three
     readers name the same run). Every key is read with `.get`: a key P3-T10 does not write becomes `None`, never a
     `KeyError`."""
+    return latest_suggestion_held(conn, alert_id)[0]
+
+
+def latest_suggestion_held(
+    conn: psycopg.Connection, alert_id: str
+) -> tuple[Suggestion | None, str | None, list[str]]:
+    """`(suggestion, proposed_action, held_by)` from ONE read of the newest proposer run
+    (`_SUGGESTION_SQL`): `latest_suggestion`'s `Suggestion`, the model's own definite answer
+    (`gate_result.proposed_verdict`, `verdicts.proposed_action`) and the closed reasons the gate held it
+    back (`verdicts.held_reasons`) - so the three are the same run by construction, not by two statements
+    that happen to agree. The alert view's `proposed_action` and `held_by` (P14-T03, DEC-213). `(None, None,
+    [])` when there is no run or its `result` is NULL (① failed: an older run does not stand in), and
+    `(suggestion, None, [])` for a `gate_result` that is missing or garbled. Like `latest_suggestion` it
+    applies no blind-branch rule: `visibility.strip` does, in the reader that serves an analyst."""
     row = conn.execute(_SUGGESTION_SQL, (alert_id,)).fetchone()
     if row is None:
-        return None
-    return _suggestion_of(*row)
+        return None, None, []
+    suggestion = _suggestion_of(*row)
+    if suggestion is None:
+        return None, None, []
+    gate_result = row[2]
+    return suggestion, verdicts.proposed_action(gate_result), verdicts.held_reasons(gate_result)
 
 
 _STOPPED_BY_SQL = """
@@ -228,29 +246,6 @@ def latest_stopped_by(conn: psycopg.Connection, alert_id: str) -> str | None:
     one."""
     row = conn.execute(_STOPPED_BY_SQL, (alert_id,)).fetchone()
     return None if row is None else row[0]
-
-
-_HELD_SQL = """
-    SELECT result IS NOT NULL, gate_result
-    FROM llm_runs
-    WHERE subject_id = %s AND pipeline = 'triage' AND role = 'proposer'
-    ORDER BY created_at DESC, run_id DESC
-    LIMIT 1
-"""
-
-
-def latest_held(conn: psycopg.Connection, alert_id: str) -> tuple[str | None, list[str]]:
-    """`(proposed_action, held_by)` of the **same** run `latest_suggestion` reads (the newest `proposer`
-    triage run, ties by `run_id DESC`): the model's own definite answer (`gate_result.proposed_verdict`,
-    `verdicts.proposed_action`) and the closed reasons the gate held it back (`verdicts.held_reasons`).
-    `(None, [])` when there is no run, when the run has no `result` (① failed: an older run does not
-    stand in, as in `latest_suggestion`), and for a `gate_result` that is missing or garbled. The alert
-    view's `proposed_action` and `held_by` (P14-T03, DEC-213). Like `latest_suggestion` it applies no
-    blind-branch rule: `visibility.strip` does, in the reader that serves an analyst."""
-    row = conn.execute(_HELD_SQL, (alert_id,)).fetchone()
-    if row is None or not row[0]:
-        return None, []
-    return verdicts.proposed_action(row[1]), verdicts.held_reasons(row[1])
 
 
 _SUGGESTIONS_SQL = """
@@ -702,16 +697,14 @@ def get_alert_view(
 
     view["playbook"] = get_playbook(view["category"])
 
-    suggestion = latest_suggestion(conn, head_id)
+    suggestion, proposed_action, held_by = latest_suggestion_held(conn, head_id)
     view["suggestion"] = suggestion.to_dict() if suggestion is not None else None
     # Why the newest ① run stopped (INT-T02): added BEFORE the strip, so a blind, undecided head
     # loses it with the other ① keys (`visibility.ANALYST_HIDE`), and the labelling page never has it.
     view["llm_stopped_by"] = latest_stopped_by(conn, head_id)
-    # The model's own conclusion and why the system held it (P14-T03): the same run, and the same rule —
-    # added BEFORE the strip, so the blind arm and the labelling page never get them.
-    view["proposed_action"], view["held_by"] = (
-        latest_held(conn, head_id) if suggestion is not None else (None, [])
-    )
+    # The model's own conclusion and why the system held it (P14-T03): from the very row the suggestion
+    # came from, and added BEFORE the strip, so the blind arm and the labelling page never get them.
+    view["proposed_action"], view["held_by"] = proposed_action, held_by
 
     view["risk_band"] = risk_band(view.pop("risk_score"))
 

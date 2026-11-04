@@ -245,6 +245,52 @@ class _count_statements:
         self.conn.execute = self.original
 
 
+@pytest.mark.db
+def test_the_alert_view_reads_the_newest_run_once_for_the_suggestion_and_the_held_reasons(db):
+    """Fix round 1 (M2): `proposed_action` and `held_by` come out of the very row the suggestion is built
+    from (`_SUGGESTION_SQL`), so "the same run" is true by construction. The view's other `llm_runs` read
+    is the stop reason (`_STOPPED_BY_SQL`), so two statements, not three."""
+    alert_id = _queued(db, suggestion_visible=True)
+    _insert_run(db, alert_id, result=HELD_RESULT, gate_result=HELD_GATE)
+
+    with _count_statements(db) as statements:
+        view = get_alert_view(db, alert_id)
+
+    assert view["held_by"] == ["fp_policy:asset_criticality"]
+    assert len([s for s in statements if "FROM llm_runs" in s]) == 2
+
+
+@pytest.mark.db
+def test_a_run_inserted_between_the_reads_cannot_pair_one_runs_suggestion_with_anothers_reasons(db):
+    """A newer proposer run lands right after the suggestion row was read (READ COMMITTED lets it): the
+    view must say what the run it read says - the suggestion, `proposed_action` and `held_by` of one run.
+    """
+    alert_id = _queued(db, suggestion_visible=True)
+    _insert_run(db, alert_id, result=HELD_RESULT, gate_result=HELD_GATE, offset_s=0)
+    newer_gate = {**HELD_GATE, "proposed_verdict": "true_positive", "forced_by": ["step6"]}
+    newer_gate["missing"] = []
+    original = db.execute
+    fired: list[bool] = []
+
+    def spy(query, *args, **kwargs):
+        answer = original(query, *args, **kwargs)
+        if not fired and "FROM llm_runs" in str(query):
+            fired.append(True)
+            _insert_run(db, alert_id, result=HELD_RESULT, gate_result=newer_gate, offset_s=5)
+        return answer
+
+    db.execute = spy  # type: ignore[method-assign]
+    try:
+        view = get_alert_view(db, alert_id)
+    finally:
+        db.execute = original  # type: ignore[method-assign]
+
+    assert fired
+    assert view["suggestion"]["gate"]["forced_by"] == ["step4"]
+    assert view["proposed_action"] == "false_positive"
+    assert view["held_by"] == ["fp_policy:asset_criticality"]
+
+
 # ── the blind arm (DEC-101) ─────────────────────────────────────────────────────────────────
 
 
