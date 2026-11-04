@@ -42,6 +42,10 @@ spend of this process is added to ``llm_runs`` of the month, a call that would p
 subject is counted ``cap`` and the exit code is 6. The measurement writes **nothing** to the database (it runs
 in ``READ ONLY`` transactions), so its spend is in the report, not in ``llm_runs``.
 
+An evaluation that raises something the pipelines do not handle is counted as an ``error`` outcome (no
+answer), its class is said on stderr, and the run goes on: one subject does not lose a paid run. A model that
+stops (``cap``, ``schema``, ``transient`` ...) is counted the same way, by outcome, in ``no_answer``.
+
 The DSN is ``--dsn``, else ``DATABASE_URL`` from ``--env-file``. It is never printed, and no ``Config`` in this
 process keeps it. A database error is one generic line (the class of the error, never its text: libpq quotes
 a malformed address, password included).
