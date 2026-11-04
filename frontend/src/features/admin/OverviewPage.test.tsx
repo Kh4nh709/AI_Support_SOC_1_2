@@ -413,7 +413,9 @@ describe("the normal render", () => {
     expect(total(second as Element) / total(first as Element)).toBeCloseTo(3840 / 3200, 1);
   });
 
-  it("shows the funnel: auto-closed, waiting, active, closed by Tier 1, escalated and ① coverage", async () => {
+  // The fixture's funnel still has `auto_closed: 41`, as the backend still sends it (DEC-214): the page shows the
+  // four rows that stay and ① coverage, ignores the extra key, and does not add it to another row.
+  it("shows the funnel: waiting, active, closed by Tier 1, escalated and ① coverage", async () => {
     await renderLoaded();
     const funnel = block("Tình trạng xử lý");
     expect(
@@ -421,7 +423,6 @@ describe("the normal render", () => {
         .getAllByRole("term")
         .map((t) => [t.textContent, valueOf(funnel, t.textContent ?? "")]),
     ).toEqual([
-      ["Tự động đóng (rules)", "41"],
       ["Chờ Tier-1", "848"],
       ["Tier-1 đang xử lý", "2"],
       ["Đã đóng bởi Tier-1", "9"],
@@ -565,7 +566,7 @@ describe("zero-filling what the API leaves out", () => {
       ],
     });
     const funnel = block("Tình trạng xử lý");
-    expect(valueOf(funnel, "Tự động đóng (rules)")).toBe("0");
+    expect(within(funnel).queryByText("Tự động đóng (rules)")).not.toBeInTheDocument();
     expect(valueOf(funnel, "Chờ Tier-1")).toBe("5");
     expect(valueOf(funnel, "Tier-1 đang xử lý")).toBe("0");
     expect(valueOf(funnel, "Đã đóng bởi Tier-1")).toBe("0");
@@ -606,7 +607,8 @@ describe("zero-filling what the API leaves out", () => {
       ],
     });
     const funnel = block("Tình trạng xử lý");
-    expect(valueOf(funnel, "Tự động đóng (rules)")).toBe("0");
+    expect(within(funnel).queryByText("Tự động đóng (rules)")).not.toBeInTheDocument();
+    expect(within(funnel).getAllByRole("term")).toHaveLength(5);
     expect(valueOf(funnel, "Có gợi ý AI ① sẵn")).toBe("0 / 0");
   });
 });
@@ -934,7 +936,7 @@ describe("one block failing alone (AdminStates)", () => {
     alerts_by_day: () => expect(valueOf(tile("Alert nhận vào"), "Alert nhận vào")).toBe("7.040"),
     by_source: () => expect(screen.getByText("wazuh")).toBeInTheDocument(),
     top_agents: () => expect(screen.getByText("win-endpoint-01")).toBeInTheDocument(),
-    funnel: () => expect(valueOf(block("Tình trạng xử lý"), "Tự động đóng (rules)")).toBe("41"),
+    funnel: () => expect(valueOf(block("Tình trạng xử lý"), "Chờ Tier-1")).toBe("848"),
     waiting: () => expect(valueOf(tile("Cụm chờ Tier-1"), "Cụm chờ Tier-1")).toBe("848"),
     cases_open: () => expect(valueOf(tile("Case đang mở"), "Case đang mở")).toBe("3"),
     health: () => expect(screen.getByText("10/10 ổn")).toBeInTheDocument(),
@@ -2284,7 +2286,6 @@ describe("what the page keeps equal to the backend", () => {
       /CONSTRAINT ck_alerts_status CHECK \(status IN \(([\s\S]*?)\)\)/.exec(schema)?.[1] ?? "";
     const statuses = [...list.matchAll(/'([a-z_0-9]+)'/g)].map((m) => m[1]);
     for (const status of [
-      "auto_closed",
       "queued_tier1",
       "tier1_active",
       "closed_fp",

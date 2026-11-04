@@ -137,8 +137,6 @@ type Entry = {
 const users = (): string => router("admin_users.py");
 const llm = (): string => router("admin_llm.py");
 const overview = (): string => router("admin_overview.py");
-const rules = (): string => router("admin_rules.py");
-const digest = (): string => router("admin_digest.py");
 const labels = (): string => router("labels.py");
 const audit = (): string => router("admin_audit.py");
 const knowledge = (): string => router("admin_knowledge.py");
@@ -366,104 +364,6 @@ const ENTRIES: Entry[] = [
     path: "LoadReport",
     keys: ["assets", "identities", "iocs", "deactivated", "warnings"],
     backend: () => pyClassFields(py("enrichment", "inventory.py"), "LoadReport"),
-  },
-
-  // --- auto-close rules (admin_rules.py) ---
-  {
-    // `width_threshold_pct` is on every row since P11-T06 (api_list_rules adds it to each).
-    path: "RuleRow",
-    keys: [
-      "rule_id",
-      "name",
-      "enabled",
-      "match",
-      "match_json",
-      "reason",
-      "created_by",
-      "created_at",
-      "width_pct",
-      "width_threshold_pct",
-    ],
-    backend: () => [
-      ...dictKeys(rules(), /result\.append\(\s*\{/),
-      ...dictKeys(rules(), /\{(?=\s*\*\*row,\s*"width_threshold_pct")/),
-    ],
-  },
-  {
-    path: "RuleCondition",
-    keys: ["field", "op", "value"],
-    backend: () => pyNames(py("ingest", "autoclose.py"), /set\(item\.keys\(\)\) != \{([^}]*)\}/),
-  },
-  {
-    // `hard_block_tally` is always present since P11-T06: null, or the tally of a preview with no cluster.
-    path: "SimulateResult",
-    keys: [
-      "clusters",
-      "alerts",
-      "by_severity",
-      "by_asset_criticality",
-      "samples",
-      "hard_block_tally",
-    ],
-    backend: () => [
-      ...pyClassFields(py("ingest", "autoclose.py"), "SimulateStats"),
-      ...new Set([...rules().matchAll(/result\["(\w+)"\] =/g)].map((m) => m[1] as string)),
-    ],
-  },
-  {
-    path: "HardBlockTally",
-    keys: ["matched", "blocks"],
-    backend: () => dictKeys(rules(), /result\["hard_block_tally"\] = \{/),
-  },
-  {
-    path: "HardBlockTally.blocks",
-    keys: ["code", "count"],
-    backend: () => dictKeys(rules(), /\{(?=\s*"code": code,\s*"count": count)/),
-  },
-  {
-    path: "fn:createRule",
-    keys: ["rule_id", "name", "enabled"],
-    backend: () => dictKeys(rules(), /return \{(?=\s*"rule_id": rule_id,\s*"name": body\.name)/),
-  },
-  {
-    path: "fn:toggleRule",
-    keys: ["rule_id", "name", "enabled"],
-    backend: () => dictKeys(rules(), /return \{(?=\s*"rule_id": rule_id,\s*"name": name)/),
-  },
-
-  // --- daily digest (admin_digest.py) ---
-  {
-    path: "DigestRow",
-    keys: [
-      "alert_id",
-      "rule_id",
-      "description",
-      "severity",
-      "category",
-      "agent_name",
-      "occurrence_count",
-      "first_seen_at",
-      "last_seen_at",
-      "autoclose_rule_id",
-      "autoclose_rule_name",
-      "suggested_action",
-      "disagreement",
-      "reviewed_verdict",
-      "reviewed_by_name",
-      "reviewed_at",
-      "reopened_by_review",
-    ],
-    backend: () => pyClassFields(digest(), "DigestRowOut"),
-  },
-  {
-    path: "DigestResponse",
-    keys: ["day", "today", "rules_enabled", "rows"],
-    backend: () => pyClassFields(digest(), "DigestOut"),
-  },
-  {
-    path: "fn:reviewDigest",
-    keys: ["row", "reopened"],
-    backend: () => pyClassFields(digest(), "ReviewOut"),
   },
 
   // --- blind labelling (labels.py, tier1/labels.py) ---
@@ -808,14 +708,6 @@ describe("the response types of api/admin.ts equal the keys of their handlers", 
     const pinned = new Set(ENTRIES.map((e) => e.path));
     expect(inline.filter((path) => !pinned.has(path))).toEqual([]);
     expect(inline.length).toBeGreaterThan(5);
-  });
-
-  it("has the two keys P11-T06 made certain required, not optional", () => {
-    const rule = tsPropsOf("RuleRow");
-    expect(rule.find((p) => p.name === "width_threshold_pct")?.optional).toBe(false);
-    const simulate = tsPropsOf("SimulateResult");
-    expect(simulate.find((p) => p.name === "hard_block_tally")?.optional).toBe(false);
-    expect(simulate.find((p) => p.name === "hard_block_tally")?.type).toBe("HardBlockTally | null");
   });
 });
 

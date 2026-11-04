@@ -100,12 +100,12 @@ export function zeroFillDays(
 type Funnel = NonNullable<OverviewResponse["funnel"]>;
 
 /**
- * The five status rows of the canvas's "Tình trạng xử lý", in its order: the statuses of `alerts.status` each
- * one adds up (`closed_by_tier1` is the three ways Tier 1 closes a head). The sixth row, ① coverage, is
- * `ready / heads`.
+ * The four status rows of the canvas's "Tình trạng xử lý" that stay, in its order: the statuses of `alerts.status`
+ * each one adds up (`closed_by_tier1` is the three ways Tier 1 closes a head). The fifth row, ① coverage, is
+ * `ready / heads`. The row "Tự động đóng (rules)" went with DEC-214, but the API still sends an `auto_closed` count
+ * (the status stays in the schema): it is added to none of these rows, and stays among the `heads`.
  */
 export const FUNNEL_STEPS = [
-  { key: "auto_closed", statuses: ["auto_closed"] },
   { key: "waiting", statuses: ["queued_tier1"] },
   { key: "active", statuses: ["tier1_active"] },
   { key: "closed_by_tier1", statuses: ["closed_fp", "closed_benign", "closed_confirmed"] },
@@ -127,7 +127,7 @@ export function funnelCounts(funnel: Funnel): {
   /** Every head of the range, in whatever status (a head being enriched has no row of its own). */
   heads: number;
   /**
-   * The heads the archive set aside (INT-T03, DEC-212). A bucket of their own: not one of the five rows, and
+   * The heads the archive set aside (INT-T03, DEC-212). A bucket of their own: not one of the four rows, and
    * never part of "closed by Tier-1" - no person closed them.
    */
   archived: number;

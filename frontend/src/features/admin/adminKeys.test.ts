@@ -1,14 +1,18 @@
 // src/features/admin/adminKeys.test.ts — the query keys of the admin pages, and what each write makes stale.
 import { QueryClient } from "@tanstack/react-query";
-import { ADMIN_MUTATIONS, adminKeys, invalidateAfter, type AdminMutation } from "./adminKeys";
+import {
+  ADMIN_INVALIDATES,
+  ADMIN_MUTATIONS,
+  adminKeys,
+  invalidateAfter,
+  type AdminMutation,
+} from "./adminKeys";
 
 describe("adminKeys", () => {
-  it("has the seven keys of the spec", () => {
+  it("has the five keys of the spec that stay", () => {
     expect(adminKeys.overview("24h")).toEqual(["admin", "overview", "24h"]);
     expect(adminKeys.users).toEqual(["admin", "users"]);
     expect(adminKeys.llmUsage("month")).toEqual(["admin", "llm", "usage", "month"]);
-    expect(adminKeys.rules).toEqual(["admin", "rules"]);
-    expect(adminKeys.digest("2026-09-30")).toEqual(["admin", "digest", "2026-09-30"]);
     expect(adminKeys.labels).toEqual(["admin", "labels"]);
     expect(adminKeys.audit({ range: "7d", group: "users" })).toEqual([
       "admin",
@@ -17,9 +21,30 @@ describe("adminKeys", () => {
     ]);
   });
 
-  it("keys the digest of today, which has no day in its URL, apart from a named day", () => {
-    expect(adminKeys.digest(null)).toEqual(["admin", "digest", null]);
-    expect(adminKeys.digest(null)).not.toEqual(adminKeys.digest("2026-09-30"));
+  // DEC-214: the auto-close pages are gone, and with them their reads. No key is left for a cache entry to sit under.
+  it("has no key for the removed rules and digest pages", () => {
+    expect(Object.keys(adminKeys)).not.toContain("rules");
+    expect(Object.keys(adminKeys)).not.toContain("digest");
+    expect(Object.keys(adminKeys)).not.toContain("digestAll");
+    expect(Object.keys(adminKeys).sort()).toEqual(
+      [
+        "all",
+        "audit",
+        "auditAll",
+        "knowledgeAll",
+        "knowledgeDraft",
+        "knowledgeDrafts",
+        "knowledgeEntries",
+        "knowledgeEntry",
+        "knowledgeTags",
+        "labels",
+        "llmAll",
+        "llmUsage",
+        "overview",
+        "overviewAll",
+        "users",
+      ].sort(),
+    );
   });
 
   it("has the five keys of the learned-knowledge page, under one prefix", () => {
@@ -60,8 +85,6 @@ describe("adminKeys", () => {
       adminKeys.overview("24h"),
       adminKeys.users,
       adminKeys.llmUsage("7d"),
-      adminKeys.rules,
-      adminKeys.digest(null),
       adminKeys.labels,
       adminKeys.audit({ range: "24h" }),
       adminKeys.knowledgeDrafts("pending"),
@@ -81,8 +104,6 @@ describe("adminKeys", () => {
     for (const range of ["24h", "7d", "30d", "month"] as const) {
       expect(starts(adminKeys.llmUsage(range), adminKeys.llmAll)).toBe(true);
     }
-    expect(starts(adminKeys.digest("2026-09-30"), adminKeys.digestAll)).toBe(true);
-    expect(starts(adminKeys.digest(null), adminKeys.digestAll)).toBe(true);
   });
 
   it("separates two filter sets of the audit page", () => {
@@ -95,7 +116,6 @@ describe("what a write makes stale", () => {
     expect([...ADMIN_MUTATIONS].sort()).toEqual(
       [
         "approveKnowledgeDraft",
-        "createRule",
         "createUser",
         "postLabel",
         "putLlmLimits",
@@ -105,8 +125,6 @@ describe("what a write makes stale", () => {
         "resetPassword",
         "retireKnowledgeEntry",
         "retryJob",
-        "reviewDigest",
-        "toggleRule",
         "undoLabel",
         "unlockUser",
         "updateUser",
@@ -124,11 +142,6 @@ describe("what a write makes stale", () => {
     ["resetPassword", [adminKeys.users, adminKeys.auditAll]],
     ["unlockUser", [adminKeys.users, adminKeys.auditAll]],
     ["putLlmLimits", [adminKeys.llmAll, adminKeys.overviewAll, adminKeys.auditAll]],
-    // The digest page shows "no rule enabled" from `rules_enabled` (admin_digest.py), which a rule written or
-    // toggled changes.
-    ["createRule", [adminKeys.rules, adminKeys.digestAll, adminKeys.auditAll]],
-    ["toggleRule", [adminKeys.rules, adminKeys.digestAll, adminKeys.auditAll]],
-    ["reviewDigest", [adminKeys.digestAll, adminKeys.overviewAll, adminKeys.auditAll]],
     ["postLabel", [adminKeys.labels, adminKeys.auditAll]],
     ["undoLabel", [adminKeys.labels, adminKeys.auditAll]],
     // The knowledge page's every list and detail (a draft leaves one tab for another, an entry is born or retired),
@@ -153,25 +166,27 @@ describe("what a write makes stale", () => {
   it("marks a cached read stale and leaves an unrelated one alone", async () => {
     const client = new QueryClient();
     client.setQueryData(adminKeys.users, { users: [] });
-    client.setQueryData(adminKeys.rules, []);
+    client.setQueryData(adminKeys.labels, {});
     client.setQueryData(adminKeys.audit({ range: "7d" }), { events: [] });
     await invalidateAfter(client, "updateUser");
     expect(client.getQueryState(adminKeys.users)?.isInvalidated).toBe(true);
     expect(client.getQueryState(adminKeys.audit({ range: "7d" }))?.isInvalidated).toBe(true);
-    expect(client.getQueryState(adminKeys.rules)?.isInvalidated).toBe(false);
+    expect(client.getQueryState(adminKeys.labels)?.isInvalidated).toBe(false);
   });
 
-  it.each(["createRule", "toggleRule"] as const)(
-    "%s refreshes the digest of every day, whose 'no rule enabled' state a rule changes",
-    async (mutation) => {
-      const client = new QueryClient();
-      client.setQueryData(adminKeys.digest(null), { rules_enabled: false, rows: [] });
-      client.setQueryData(adminKeys.digest("2026-09-30"), { rules_enabled: false, rows: [] });
-      await invalidateAfter(client, mutation);
-      expect(client.getQueryState(adminKeys.digest(null))?.isInvalidated).toBe(true);
-      expect(client.getQueryState(adminKeys.digest("2026-09-30"))?.isInvalidated).toBe(true);
-    },
-  );
+  // DEC-214: no write of the removed pages is left in the table, and none of the others names a key that is gone.
+  it("has no write for the removed rules and digest pages, and no write touches their keys", () => {
+    expect(ADMIN_MUTATIONS).not.toContain("createRule");
+    expect(ADMIN_MUTATIONS).not.toContain("toggleRule");
+    expect(ADMIN_MUTATIONS).not.toContain("reviewDigest");
+    for (const mutation of ADMIN_MUTATIONS) {
+      for (const key of ADMIN_INVALIDATES[mutation]) {
+        expect(key[0], mutation).toBe("admin");
+        expect(key.length, mutation).toBeGreaterThan(0);
+        expect(key[1], `${mutation} ${JSON.stringify(key)}`).not.toMatch(/^(rules|digest)$/);
+      }
+    }
+  });
 
   it.each([
     "approveKnowledgeDraft",
@@ -187,7 +202,7 @@ describe("what a write makes stale", () => {
       client.setQueryData(adminKeys.knowledgeDraft("d-1"), {});
       client.setQueryData(adminKeys.knowledgeEntry("e-1"), {});
       client.setQueryData(adminKeys.overview("24h"), {});
-      client.setQueryData(adminKeys.rules, []);
+      client.setQueryData(adminKeys.labels, {});
       await invalidateAfter(client, mutation);
       for (const key of [
         adminKeys.knowledgeDrafts("pending"),
@@ -198,7 +213,7 @@ describe("what a write makes stale", () => {
       ]) {
         expect(client.getQueryState(key)?.isInvalidated, JSON.stringify(key)).toBe(true);
       }
-      expect(client.getQueryState(adminKeys.rules)?.isInvalidated).toBe(false);
+      expect(client.getQueryState(adminKeys.labels)?.isInvalidated).toBe(false);
     },
   );
 

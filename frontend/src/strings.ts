@@ -2,14 +2,7 @@
 // The tables keyed by a server code (`status`, `band`, `conclusion`, ...) are read through `labelOf`, so a
 // code this file has no label for is shown as the code itself.
 
-import type {
-  AdminReason,
-  AuditGroup,
-  DigestVerdict,
-  HardBlockCode,
-  KnowledgeFault,
-  LlmRange,
-} from "./api/admin";
+import type { AdminReason, AuditGroup, KnowledgeFault, LlmRange } from "./api/admin";
 import { BAND_CODES, type BandCode } from "./api/types";
 
 /** The shortest quote ② may cite, in characters (`MIN_QUOTE_CHARS` of backend/app/tier2/investigate.py). */
@@ -601,14 +594,12 @@ export const S = {
   // a text for each code the admin routes answer with. The page tasks add their own page's words under their
   // own key (`S.admin.users`, ...); what two pages share lives here.
   admin: {
-    // The sidebar: the label of the navigation, then the seven links in the order of the canvas.
+    // The sidebar: the label of the navigation, then the six links in the order of the canvas.
     nav: {
       label: "Quản trị",
       overview: "Tổng quan",
       users: "Người dùng & quyền",
       llm: "LLM & hạn mức",
-      rules: "Rules tự đóng",
-      digest: "Digest hằng ngày",
       labels: "Gán nhãn",
       knowledge: "Tri thức",
       audit: "Nhật ký audit",
@@ -618,8 +609,6 @@ export const S = {
       overview: "Tổng quan hệ thống",
       users: "Người dùng và quyền",
       llm: "LLM và hạn mức",
-      rules: "Rules tự đóng",
-      digest: "Digest hằng ngày",
       labels: "Gán nhãn tập vàng",
       knowledge: "Tri thức học được",
       audit: "Nhật ký audit",
@@ -677,7 +666,6 @@ export const S = {
 
       funnel: {
         title: "Tình trạng xử lý",
-        auto_closed: "Tự động đóng (rules)",
         waiting: "Chờ Tier-1",
         active: "Tier-1 đang xử lý",
         closed_by_tier1: "Đã đóng bởi Tier-1",
@@ -831,18 +819,11 @@ export const S = {
         "Job không còn ở trạng thái lỗi — đã được chạy lại hoặc đã xong. Danh sách đã được tải lại.",
       already_queued:
         "Đã có một job cùng loại và cùng đối tượng đang chờ hoặc đang chạy, nên chưa chạy lại được.",
-      bad_day: "Ngày không hợp lệ",
-      not_in_digest: "Cụm này không có trong digest của ngày đã chọn.",
-      already_reviewed:
-        "Cụm này đã được duyệt trước đó. Dòng đã được cập nhật theo kết quả đã ghi.",
-      not_auto_closed:
-        "Cụm không còn ở trạng thái tự đóng (đã được mở lại), nên không duyệt được nữa.",
       // The reason of a refused undo and of a refused label save alike: it names neither.
       frozen: "Tập vàng đã đóng băng — không gán thêm hay hoàn tác được nữa.",
       nothing_to_undo: "Bạn chưa có nhãn nào để hoàn tác.",
       forbidden:
         "Bạn không còn quyền làm việc này. Vai trò của tài khoản có thể đã đổi — đăng nhập lại.",
-      rule_not_found: "Không tìm thấy rule này. Danh sách đã được tải lại.",
       unknown_cluster: "Cụm này không nằm trong danh sách ứng viên",
       already_labelled: "Bạn đã gán nhãn cụm này rồi",
       labeler_mismatch: "Người gán nhãn phải là tài khoản đang đăng nhập",
@@ -979,7 +960,7 @@ export const S = {
           "Chỉ dùng chữ thường a–z, số, dấu chấm, gạch dưới, gạch ngang; dài 3 đến 32 ký tự",
         displayNameInvalid: "Tên hiển thị không được chứa ký tự điều khiển hay ký tự vô hình",
       },
-      // The read-only matrix of role to function (the canvas's nine rows), static text.
+      // The read-only matrix of role to function (the canvas's rows, less the auto-close one that went with DEC-214), static text.
       matrix: {
         title: "Quyền theo vai trò",
         note: "đổi vai trò là đổi quyền; phiên cũ của người đó bị đăng xuất",
@@ -994,7 +975,6 @@ export const S = {
           ["Quyết định alert (đóng, chuyển Tier-2)", true, false, false],
           ["Xem và kết luận case", false, true, true],
           ["Chạy phân tích ② và hỏi AI", false, true, true],
-          ["Quản trị rules tự đóng, digest", false, false, true],
           ["Gán nhãn đánh giá", false, false, true],
           ["Quản lý người dùng", false, false, true],
           ["Xem và chỉnh hạn mức LLM", false, false, true],
@@ -1432,205 +1412,13 @@ export const S = {
       },
     },
 
-    // The six hard blocks (`_HARD_BLOCK_ORDER` of admin_rules.py), word for word, keyed by code. The order is
-    // `HARD_BLOCK_CODES` of api/admin.ts. A test keeps both equal to the backend.
-    hardBlock: {
-      critical: "Mức độ nghiêm trọng = critical",
-      never_autoclose_agent: "Agent nằm trong NEVER_AUTOCLOSE_AGENTS",
-      asset_high: "Asset trọng yếu (asset.criticality = high)",
-      asset_not_in_inventory: "Asset không có trong kiểm kê (inventory)",
-      identity_privileged: "Danh tính đặc quyền (identity_privileged)",
-      ioc_bad: "IoC malicious hoặc suspicious",
-    } satisfies Record<HardBlockCode, string>,
-
-    // `/admin/rules` (P11-T14, spec §4.4): the words of the rules page. The six hard-block texts above are
-    // reused as they are; the reasons of a failed write come from `S.admin.reason` (`rule_not_found`,
-    // `forbidden`) and the rest from here.
-    rulesPage: {
-      subtitle: (total: number, enabled: number) =>
-        `Rule chỉ đóng cụm đã qua sáu chặn cứng · ${total} rule, ${enabled} đang bật`,
-      create: "Tạo rule mới",
-      loadFailed: "Không tải được danh sách rule",
-      hardBlocks: {
-        label: "Sáu chặn cứng",
-        title: "Sáu chặn cứng (G8′) — luôn chạy trước mọi rule",
-        note: "Một cụm dính bất kỳ chặn nào thì không rule nào đóng được nó, kể cả rule khớp mọi thứ",
-      },
-      empty: {
-        title: "Chưa có rule tự đóng nào",
-        body: "Mọi cụm đều vào hàng đợi Tier 1. Khối sáu chặn cứng vẫn hiện ở đầu trang.",
-      },
-      table: {
-        label: "Các rule tự đóng",
-        nameAndReason: "Tên và lý do",
-        conditions: "Điều kiện",
-        width: "Độ rộng 7 ngày",
-        created: "Tạo lúc",
-        state: "Trạng thái",
-        action: "Thao tác",
-        on: "bật",
-        off: "tắt",
-        turnOn: "Bật",
-        turnOff: "Tắt",
-        turnOnLabel: (name: string) => `Bật rule ${name}`,
-        turnOffLabel: (name: string) => `Tắt rule ${name}`,
-        noConditions: "Không có điều kiện: khớp mọi cụm",
-        widthWarning: (pct: string, threshold: string) => `⚠ ${pct}% > ${threshold}%`,
-        widthNote: (threshold: string) =>
-          `Độ rộng = tỉ lệ alert của 7 ngày qua (tính cả bản sao) mà rule đã đóng. Vượt ${threshold}% (AUTOCLOSE_RULE_WIDTH_PCT) thì cảnh báo: rule có thể đang đóng cả alert thật.`,
-      },
-      toggle: {
-        offTitle: (name: string) => `Tắt rule “${name}”?`,
-        offBody:
-          "Từ giờ các cụm khớp rule này vào hàng đợi Tier 1. Cụm đã bị đóng trước đó không tự mở lại. Thao tác được ghi audit.",
-        offConfirm: "Tắt rule",
-        onTitle: (name: string) => `Bật rule “${name}”?`,
-        onBody:
-          "Từ giờ các cụm khớp rule này, sau khi qua sáu chặn cứng, sẽ được tự đóng và không vào hàng đợi Tier 1. Thao tác được ghi audit.",
-        onConfirm: "Bật rule",
-        doneOff: (name: string) => `Đã tắt rule “${name}”.`,
-        doneOn: (name: string) => `Đã bật rule “${name}”.`,
-        failed: "Chưa đổi được trạng thái rule. Thử lại sau ít phút.",
-      },
-      builder: {
-        step: "Bước 1/2 · nhập điều kiện",
-        name: "Tên",
-        reason: "Lý do",
-        conditions: "Điều kiện — mọi điều kiện đều phải khớp",
-        group: (n: number) => `Điều kiện ${n}`,
-        field: "Trường",
-        op: "Phép so",
-        value: "Giá trị",
-        remove: "Xoá điều kiện",
-        add: "+ Thêm điều kiện",
-        none: "Chưa có điều kiện nào: rule này khớp mọi cụm đã qua sáu chặn cứng. Xem trước để biết nó sẽ đóng bao nhiêu cụm.",
-        help: "Chỉ các trường và phép so mà bộ máy cho phép mới chọn được. Phép in nhận nhiều giá trị, cách nhau bằng dấu phẩy.",
-        placeholder: {
-          text: "giá trị",
-          integer: "số nguyên, ví dụ 443",
-          list: "a, b, c",
-          integerList: "22, 443",
-          cidr: "10.0.0.0/8",
-          prefix: "tiền tố",
-        },
-        problem: {
-          not_integer: "Phải là số nguyên, ví dụ 443",
-          list_empty: "Nhập ít nhất một giá trị",
-          list_blank_item: "Danh sách có một giá trị rỗng giữa hai dấu phẩy",
-          not_boolean: "Chọn true hoặc false",
-        },
-        emptyEq: "Giá trị đang để trống: điều kiện này chỉ khớp chuỗi rỗng.",
-        emptyPrefix: "Tiền tố rỗng khớp mọi giá trị chuỗi.",
-        neverCloses: (field: string, values: string) =>
-          `Chặn cứng chạy trước mọi rule: cụm có ${field} = ${values} không bao giờ bị rule đóng.`,
-        preview: "Xem trước",
-        previewing: "Đang xem trước…",
-        submit: "Tạo rule",
-        submitting: "Đang tạo rule…",
-        hintIdle:
-          "Nút “Tạo rule” chỉ mở sau khi đã xem trước đúng bộ điều kiện đang nhập. Sửa điều kiện thì phải xem trước lại.",
-        hintStale:
-          "Điều kiện đã đổi sau lần xem trước gần nhất. Xem trước lại để mở nút “Tạo rule”.",
-        hintNeedText: "Nhập tên và lý do của rule.",
-        hintReady:
-          "Rule được tạo ở trạng thái bật và áp dụng ngay cho các alert nhận từ giờ. Xem trước đã tính cả sáu chặn cứng.",
-        created: (name: string) => `Đã tạo rule “${name}”. Rule đang bật.`,
-        conditionRejected:
-          "Máy chủ từ chối điều kiện: có trường hoặc phép so ngoài danh sách cho phép, hoặc giá trị sai dạng. Chưa tạo rule nào; phần đã nhập vẫn còn nguyên.",
-        conditionMalformed:
-          "Máy chủ không đọc được điều kiện vì sai dạng. Chưa tạo rule nào; phần đã nhập vẫn còn nguyên.",
-        previewFailed: "Chưa xem trước được. Điều kiện vẫn còn nguyên — thử lại sau ít phút.",
-        createFailed: "Chưa tạo được rule. Điều kiện vẫn còn nguyên — thử lại sau ít phút.",
-      },
-      preview: {
-        title: "Kết quả xem trước",
-        step: "Bước 2/2 · 30 ngày qua, đã tính sáu chặn cứng",
-        idle: "Chưa có kết quả. Bấm “Xem trước” để chạy thử các điều kiện trên 30 ngày dữ liệu; chưa có gì được ghi.",
-        running: "Đang chạy thử trên 30 ngày dữ liệu…",
-        stale:
-          "Kết quả bên dưới là của bộ điều kiện trước khi sửa. Xem trước lại để có kết quả mới.",
-        clusters: "Cụm sẽ bị đóng",
-        alerts: "Alert, gồm bản sao",
-        bySeverity: "Theo mức độ",
-        byAsset: "Theo asset criticality",
-        samples: "Alert mẫu (tối đa 20) — mở trong trang alert",
-        tallyMatched: (n: string) => `Rule khớp ${n} cụm nhưng cả ${n} bị chặn cứng:`,
-        tallyNone: "Rule không khớp cụm nào trong 30 ngày qua.",
-        tallyNote:
-          "Bạn vẫn tạo được rule này, nhưng với dữ liệu hiện tại nó sẽ không đóng được cụm nào.",
-      },
-    },
-
-    // The daily digest page (P11-T15, spec §4.5): `/admin/digest`. Its words are here and nowhere else; the
-    // texts of its refusals are the shared `S.admin.reason` ones, except the two the canvas words for a row.
-    digestPage: {
-      subtitle: "Duyệt từng cụm mà rule đã tự đóng trong ngày",
-      dayLabel: "Ngày",
-      today: "Hôm nay (đến giờ)",
-      // The day the server fell back to, `dd/mm/yyyy` (`formatDay`), after a day the server refused.
-      badDay: (day: string) => `Ngày không hợp lệ — đang hiển thị ${day}.`,
-      // A read after a review failed while the page still shows the list it had.
-      refreshFailed: "Không làm mới được danh sách — đang hiển thị lần tải trước.",
-      loadErrorOffline: "Không kết nối được máy chủ. Kiểm tra mạng rồi thử lại.",
-      loadErrorServer: (status: number) =>
-        `Máy chủ trả lỗi ${status}. Thử lại sau ít phút; nếu lặp lại, xem Tổng quan → Sức khoẻ hệ thống.`,
-      summary: {
-        clusters: (n: number) => `${n} cụm tự đóng`,
-        reviewed: (done: number, waiting: number) => `${done} đã duyệt · ${waiting} chờ duyệt`,
-        disagreements: (n: number) => `${n} cụm ① không đề xuất đóng`,
-      },
-      table: {
-        label: "Các cụm đã tự đóng trong ngày",
-        colRule: "Rule tự đóng",
-        colRuleDesc: "Rule · mô tả",
-        colSeverity: "Mức độ",
-        colAgent: "Agent",
-        colCount: "Số lần",
-        colSpan: "Khoảng thời gian",
-        colSuggestion: "Đề xuất ①",
-        colReview: "Duyệt",
-      },
-      // ① has no suggestion for the cluster yet.
-      noSuggestion: "(chưa có kết quả ①)",
-      // A row a "Sai" review reopened is blind again while it is undecided (A17, DEC-101): the server leaves
-      // ①'s verdict off it, and "no result" would be a wrong thing to say.
-      reopenedNoSuggestion: "(không hiện sau khi mở lại về hàng đợi Tier 1)",
-      disagreement: "⚠ ① không đề xuất đóng",
-      // The name of the group of the three buttons of a row (the buttons themselves are `S.admin.verdict`).
-      group: (ruleId: string, agent: string) => `Duyệt cụm ${ruleId} · ${agent}`,
-      reviewed: (verdict: string) => `Đã duyệt: ${verdict}`,
-      reopened: "đã mở lại về hàng đợi Tier 1",
-      // A refused review, said in the row it was for.
-      invalidVerdict: "Đánh giá không hợp lệ. Dòng giữ nguyên, chưa ghi gì.",
-      notAutoClosed: (cluster: string) =>
-        `Cụm ${cluster} không còn ở trạng thái tự đóng (đã được mở lại), nên không duyệt được nữa.`,
-      // A write that failed with no word of its own (a 5xx, the network): `status` 0 is no answer at all.
-      saveFailed: (status: number) =>
-        status === 0
-          ? "Không lưu được: mất kết nối máy chủ. Thử lại."
-          : `Không lưu được: máy chủ trả lỗi ${status}. Thử lại.`,
-      noRules: {
-        title: "Không có gì để duyệt",
-        body: "Chưa có rule tự đóng nào đang bật, nên không có cụm nào bị tự đóng.",
-        link: "Đến Rules tự đóng",
-      },
-      noClusters: {
-        title: (day: string) => `Không có cụm nào bị tự đóng ngày ${day}`,
-        body: "Chọn ngày khác hoặc xem hôm nay.",
-      },
-      legend: {
-        disagreement: "① không đồng ý với việc tự đóng: nên xem trước",
-        reviewed: "Đã duyệt (mờ đi)",
-        wrong: '"Sai" mở lại cụm về hàng đợi Tier 1 và đánh dấu rule có thể sai.',
-      },
-    },
-
-    // The verdicts of a digest review (`_VERDICT_LABEL` of admin_digest.py).
+    // The verdicts a digest review recorded, as the audit page words an `autoclose.reviewed` event (auditSummary.ts).
+    // The digest page that wrote them was removed with DEC-214; an old event still reads correctly.
     verdict: {
       correct: "Đúng",
       wrong: "Sai",
       unsure: "Không chắc",
-    } satisfies Record<DigestVerdict, string>,
+    } satisfies Record<"correct" | "wrong" | "unsure", string>,
 
     // The blind labelling page (P11-T16, spec §4.6): `/admin/labels`. Its words are here and nowhere else.
     // Nothing on it names the model, a suggestion, an alert page or a case: the page is blind (DEC-019, DEC-101).

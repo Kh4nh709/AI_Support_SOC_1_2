@@ -656,14 +656,13 @@ describe("the role to function matrix", () => {
     ["Quyết định alert (đóng, chuyển Tier-2)", "có", "—", "—"],
     ["Xem và kết luận case", "—", "có", "có"],
     ["Chạy phân tích ② và hỏi AI", "—", "có", "có"],
-    ["Quản trị rules tự đóng, digest", "—", "—", "có"],
     ["Gán nhãn đánh giá", "—", "—", "có"],
     ["Quản lý người dùng", "—", "—", "có"],
     ["Xem và chỉnh hạn mức LLM", "—", "—", "có"],
     ["Xem nhật ký audit, chạy lại job lỗi, nạp lại kiểm kê", "—", "—", "có"],
   ];
 
-  it("has the nine rows and the three role columns of the canvas, under its own heading", async () => {
+  it("has the eight rows and the three role columns of the canvas, under its own heading", async () => {
     backend();
     renderPage();
     await table();
@@ -683,6 +682,23 @@ describe("the role to function matrix", () => {
     expect(body.map((r) => within(r).getAllByRole("cell")[0]?.textContent)).toEqual(
       ROWS.map(([label]) => label),
     );
+  });
+
+  // DEC-214: the row "Quản trị rules tự đóng, digest" went with the two pages; every other row is where it was.
+  it("has no row about the auto-close rules or the digest, in the table or in strings.ts", async () => {
+    const labels = S.admin.usersPage.matrix.rows.map(([label]) => label);
+    expect(labels).toEqual(ROWS.map(([label]) => label));
+    expect(labels.filter((label) => /tự đóng|digest/i.test(label))).toEqual([]);
+    backend();
+    renderPage();
+    await table();
+    const matrix = screen.getByRole("table", { name: "Quyền theo vai trò" });
+    const shown = within(matrix)
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => within(r).getAllByRole("cell")[0]?.textContent ?? "");
+    expect(shown.filter((label) => /tự đóng|digest/i.test(label))).toEqual([]);
+    expect(shown).toHaveLength(8);
   });
 
   it("says 'có' or '—' in each cell, and the '—' is read out as 'không'", async () => {

@@ -287,7 +287,7 @@ export function DayChart({ days }: { days: readonly DayPoint[] }) {
 
 // --- the funnel, the two small tables, the health list --------------------------------------------------------
 
-/** "Tình trạng xử lý": the five status rows and ① coverage, each a number even when the API had none. */
+/** "Tình trạng xử lý": the four status rows and ① coverage, each a number even when the API had none. */
 export function FunnelList({ funnel }: { funnel: NonNullable<OverviewResponse["funnel"]> }) {
   const counts = funnelCounts(funnel);
   const rows: { key: string; label: string; value: string }[] = [

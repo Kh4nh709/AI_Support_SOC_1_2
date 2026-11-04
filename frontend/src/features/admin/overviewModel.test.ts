@@ -146,20 +146,19 @@ describe("funnelCounts", () => {
   type Funnel = NonNullable<OverviewResponse["funnel"]>;
   const triage = { ready: 0, unavailable: 0, pending: 0, none: 0 };
 
-  it("has the five status rows of the canvas, in its order (the sixth row, ① coverage, is ready / heads)", () => {
+  it("has the four status rows that stay, in the canvas order (the fifth row, ① coverage, is ready / heads)", () => {
     expect(FUNNEL_STEPS.map((s) => s.key)).toEqual([
-      "auto_closed",
       "waiting",
       "active",
       "closed_by_tier1",
       "escalated",
     ]);
+    expect(FUNNEL_STEPS.flatMap((s) => s.statuses)).not.toContain("auto_closed");
   });
 
   it("sums the three Tier-1 closings and zero-fills what the API left out", () => {
     const funnel: Funnel = {
       by_status: {
-        auto_closed: 41,
         queued_tier1: 848,
         closed_fp: 4,
         closed_benign: 3,
@@ -169,14 +168,40 @@ describe("funnelCounts", () => {
     };
     const counts = funnelCounts(funnel);
     expect(counts.steps).toEqual([
-      { key: "auto_closed", count: 41 },
       { key: "waiting", count: 848 },
       { key: "active", count: 0 },
       { key: "closed_by_tier1", count: 9 },
       { key: "escalated", count: 0 },
     ]);
     expect(counts.ready).toBe(733);
-    expect(counts.heads).toBe(41 + 848 + 4 + 3 + 2);
+    expect(counts.heads).toBe(848 + 4 + 3 + 2);
+  });
+
+  // DEC-214: the row "Tự động đóng (rules)" is gone, but the API still sends the count (the status `auto_closed`
+  // is still in the schema). The rows ignore it: it is added to none of them.
+  it("returns the four rows only when the funnel still carries an auto_closed count, and adds it to none", () => {
+    const counts = funnelCounts({
+      by_status: {
+        auto_closed: 41,
+        queued_tier1: 848,
+        tier1_active: 2,
+        closed_fp: 4,
+        closed_benign: 3,
+        closed_confirmed: 2,
+        escalated_tier2: 3,
+      },
+      triage: { ready: 733, unavailable: 50, pending: 70, none: 2 },
+    });
+    expect(counts.steps).toEqual([
+      { key: "waiting", count: 848 },
+      { key: "active", count: 2 },
+      { key: "closed_by_tier1", count: 9 },
+      { key: "escalated", count: 3 },
+    ]);
+    expect(counts.steps.map((step) => step.key)).not.toContain("auto_closed");
+    // ① coverage is ready / heads, and a head in any status is a head: the count stays among the heads it was in.
+    expect(counts.heads).toBe(41 + 848 + 2 + 4 + 3 + 2 + 3);
+    expect(counts.archived).toBe(0);
   });
 
   it("counts a head in a status the funnel has no row for among the heads", () => {
@@ -209,8 +234,11 @@ describe("funnelCounts", () => {
   });
 
   it("does not read a status off the prototype", () => {
-    const counts = funnelCounts({ by_status: Object.create({ auto_closed: 99 }) as never, triage });
-    expect(counts.steps[0]?.count).toBe(0);
+    const counts = funnelCounts({
+      by_status: Object.create({ queued_tier1: 99 }) as never,
+      triage,
+    });
+    expect(counts.steps.find((s) => s.key === "waiting")?.count).toBe(0);
   });
 });
 

@@ -1,8 +1,9 @@
 // The admin routes (P11-T10), one typed function each, written by hand against the handlers: the backend
 // answers with plain dicts, so there is no generated schema to import. The handlers are
-//   web/routers/admin_users.py, admin_llm.py, admin_overview.py, admin_rules.py, admin_digest.py,
-//   labels.py, admin_audit.py, admin_knowledge.py (the learned knowledge, DEC-210), and
-//   `POST /api/admin/reload-inventory` in web/main.py.
+//   web/routers/admin_users.py, admin_llm.py, admin_overview.py, labels.py, admin_audit.py,
+//   admin_knowledge.py (the learned knowledge, DEC-210), and `POST /api/admin/reload-inventory` in web/main.py.
+// The routes of the auto-close rules and of the daily digest (admin_rules.py, admin_digest.py) are not called from
+// here since DEC-214: their pages were removed, the routes stay on the server.
 // Every string a person or the model wrote arrives as text and is rendered as text; nothing here is markup.
 //
 // Two rules of the client:
@@ -36,21 +37,6 @@ export type LlmRange = (typeof LLM_RANGES)[number];
 /** The groups of the audit page (`GROUPS` of admin_audit.py), in the order the filter lists them. */
 export const AUDIT_GROUPS = ["users", "configuration", "alerts_cases", "model", "system"] as const;
 export type AuditGroup = (typeof AUDIT_GROUPS)[number];
-
-/** The six G8' hard blocks, in the order of `_HARD_BLOCK_ORDER` (admin_rules.py): `ingest/autoclose.py`'s codes. */
-export const HARD_BLOCK_CODES = [
-  "critical",
-  "never_autoclose_agent",
-  "asset_high",
-  "asset_not_in_inventory",
-  "identity_privileged",
-  "ioc_bad",
-] as const;
-export type HardBlockCode = (typeof HARD_BLOCK_CODES)[number];
-
-/** The verdicts of a digest review (`_VERDICT_LABEL` of admin_digest.py). */
-export const DIGEST_VERDICTS = ["correct", "wrong", "unsure"] as const;
-export type DigestVerdict = (typeof DIGEST_VERDICTS)[number];
 
 /** The labels and confidences of blind labelling (`LabelIn` of labels.py). */
 export const LABEL_CHOICES = ["false_positive", "benign", "escalate"] as const;
@@ -91,13 +77,15 @@ export const ADMIN_LIMITS = {
  *   `timeout`, `query_failed` (503, the usage page).
  * - admin_overview.py: `not_found` (404), `not_failed`, `already_queued` (409); `timeout`, `query_failed`
  *   (the `errors[]` of a section).
- * - admin_digest.py: `bad_day`, `invalid` (422); `not_in_digest` (404); `already_reviewed`,
- *   `not_auto_closed` (409).
  * - labels.py (P11-T08's undo): `frozen` (409), `nothing_to_undo` (404).
  * - admin_audit.py: `timeout` (503).
  * - plain-text details of the older routes, read as the reason they stand for (`LEGACY_DETAIL` below):
- *   `forbidden`, `rule_not_found`, `unknown_cluster`, `already_labelled`, `labeler_mismatch`, and the
- *   labels route's "the gold set is frozen" as `frozen`.
+ *   `forbidden`, `unknown_cluster`, `already_labelled`, `labeler_mismatch`, and the labels route's "the gold
+ *   set is frozen" as `frozen`.
+ *
+ * DEC-214 removed the reasons that only admin_rules.py and admin_digest.py answered with (`bad_day`,
+ * `not_in_digest`, `already_reviewed`, `not_auto_closed`, `rule_not_found`). `invalid`, `forbidden` and
+ * `not_found`, which those routes also wrote, are written by the routes that stay, and stay.
  */
 export const ADMIN_REASONS = [
   "username_taken",
@@ -117,14 +105,9 @@ export const ADMIN_REASONS = [
   "query_failed",
   "not_failed",
   "already_queued",
-  "bad_day",
-  "not_in_digest",
-  "already_reviewed",
-  "not_auto_closed",
   "frozen",
   "nothing_to_undo",
   "forbidden",
-  "rule_not_found",
   "unknown_cluster",
   "already_labelled",
   "labeler_mismatch",
@@ -134,11 +117,10 @@ export type AdminReason = (typeof ADMIN_REASONS)[number];
 /**
  * What a failed admin call said, as a discriminated value. Every kind carries the HTTP `status` of the
  * answer (`ApiError.status`), or 0 when there was no answer (a network failure):
- * - `reason`: `{reason}` or a known plain text. `extra` holds the rest of the object (the `row` of a digest
- *   `already_reviewed`; `conflictRow` reads it);
+ * - `reason`: `{reason}` or a known plain text. `extra` holds the rest of the object;
  * - `field`: `{field, reason, min?, max?}`, a 422 about one field, shown at the field;
- * - `message`: any other text, as the server wrote it, and only on a 422: the 422 of a rule or of a label
- *   says what is wrong with it. A text at any other status is English meant for a log (FastAPI's "Not
+ * - `message`: any other text, as the server wrote it, and only on a 422: the text of a 422 says what is wrong
+ *   with the request. A text at any other status is English meant for a log (FastAPI's "Not
  *   Found" and "Method Not Allowed", the 503 "auth disabled: ..."), never for the admin: it is `other`;
  * - `messages`: a list of texts, again only on a 422 (the file errors of a refused inventory reload);
  * - `other`: anything else, FastAPI's own list-shaped 422 (`[{type, loc, msg, input}]`) included, a 401, a
@@ -166,13 +148,12 @@ export type AdminError =
 /** The plain-text `detail`s the older routes answer with, by the reason each one stands for. */
 const LEGACY_DETAIL: Readonly<Record<string, AdminReason>> = {
   forbidden: "forbidden", // require_role: 403 (also the actor of a PATCH who stopped being admin)
-  "rule not found": "rule_not_found", // PATCH /api/admin/rules: 404
   "cluster is not a gold candidate": "unknown_cluster", // POST /api/admin/labels: 404
   "already labelled by this labeler": "already_labelled", // POST /api/admin/labels: 409
   "the gold set is frozen": "frozen", // labels: 409
   "labeler must be the current user": "labeler_mismatch", // labels: 403
-  // `deps.clean_path_id`: a control character in an alert id, e.g. on the digest review path (lower case,
-  // unlike FastAPI's own "Not Found" for a path that is not a route, which stays `other`).
+  // `deps.clean_path_id`: a control character in an alert or case id (lower case, unlike FastAPI's own
+  // "Not Found" for a path that is not a route, which stays `other`).
   "not found": "not_found",
 };
 
@@ -230,19 +211,6 @@ export function adminErrorOf(error: unknown): AdminError {
   return error instanceof ApiError
     ? parseAdminDetail(error.detail, error.status)
     : { kind: "other", status: 0 };
-}
-
-/** The row an `already_reviewed` answer carries (the review on file), or null for any other error. */
-export function conflictRow(error: AdminError): DigestRow | null {
-  if (error.kind !== "reason" || error.reason !== "already_reviewed") return null;
-  const row = error.extra.row;
-  if (typeof row !== "object" || row === null || Array.isArray(row)) return null;
-  const candidate = row as Record<string, unknown>;
-  const ok =
-    typeof candidate.alert_id === "string" &&
-    typeof candidate.occurrence_count === "number" &&
-    typeof candidate.disagreement === "boolean";
-  return ok ? (row as DigestRow) : null;
 }
 
 // --- users (admin_users.py) -------------------------------------------------------------------------------
@@ -517,135 +485,6 @@ export type LoadReport = {
 /** `POST /api/admin/reload-inventory`. A 422's `detail` is a list of file errors (`messages`); nothing changed. */
 export function reloadInventory(): Promise<LoadReport> {
   return api<LoadReport>("/admin/reload-inventory", { method: "POST", json: {} });
-}
-
-// --- auto-close rules (admin_rules.py) --------------------------------------------------------------------
-
-/** One condition of a rule: `field op value`, from `autoclose._WHITELIST`. */
-export type RuleCondition = { field: string; op: string; value: unknown };
-
-/** One row of `GET /api/admin/rules`. */
-export type RuleRow = {
-  rule_id: string;
-  name: string;
-  enabled: boolean;
-  match: RuleCondition[];
-  /** `match` as JSON text, for the old form; the page reads `match`. */
-  match_json: string;
-  reason: string;
-  created_by: string;
-  created_at: string;
-  /** The rule's share of the 7-day volume when it is over the threshold, else null. */
-  width_pct: number | null;
-  /** `AUTOCLOSE_RULE_WIDTH_PCT`, on every row: the threshold `width_pct` is measured against. */
-  width_threshold_pct: number;
-};
-
-/**
- * When a preview closes no cluster, why: how many clusters the rule's conditions match, and for each hard
- * block how many of them it stopped (the six blocks, the largest count first).
- */
-export type HardBlockTally = { matched: number; blocks: { code: HardBlockCode; count: number }[] };
-
-/** `POST /api/admin/rules/simulate`: the last 30 days, hard blocks included. */
-export type SimulateResult = {
-  clusters: number;
-  alerts: number;
-  by_severity: Record<string, number>;
-  by_asset_criticality: Record<string, number>;
-  /** Up to 20 alert ids, linking to `/alerts/:id`. */
-  samples: string[];
-  /** Always sent: the tally when `clusters` is 0, `null` otherwise. */
-  hard_block_tally: HardBlockTally | null;
-};
-
-export function listRules(): Promise<RuleRow[]> {
-  return api<RuleRow[]>("/admin/rules");
-}
-
-/** `422`: the detail is a text (`message`), or FastAPI's own list for a body of the wrong shape (`other`). */
-export function simulateRule(match: RuleCondition[]): Promise<SimulateResult> {
-  return api<SimulateResult>("/admin/rules/simulate", { method: "POST", json: { match } });
-}
-
-/** `201 {rule_id, name, enabled: true}`; the same 422 as `simulateRule`. */
-export function createRule(body: {
-  name: string;
-  reason: string;
-  match: RuleCondition[];
-}): Promise<{ rule_id: string; name: string; enabled: boolean }> {
-  return api<{ rule_id: string; name: string; enabled: boolean }>("/admin/rules", {
-    method: "POST",
-    json: body,
-  });
-}
-
-/** `PATCH /api/admin/rules`: the id is in the body, not the path. `404 rule_not_found`. */
-export function toggleRule(
-  ruleId: string,
-  enabled: boolean,
-): Promise<{ rule_id: string; name: string; enabled: boolean }> {
-  return api<{ rule_id: string; name: string; enabled: boolean }>("/admin/rules", {
-    method: "PATCH",
-    json: { rule_id: ruleId, enabled },
-  });
-}
-
-// --- daily digest (admin_digest.py) -----------------------------------------------------------------------
-
-/** One cluster of the digest (`DigestRowOut`). */
-export type DigestRow = {
-  alert_id: string;
-  rule_id: string;
-  description: string;
-  severity: string;
-  category: string;
-  agent_name: string;
-  occurrence_count: number;
-  first_seen_at: string;
-  last_seen_at: string;
-  autoclose_rule_id: string | null;
-  autoclose_rule_name: string | null;
-  /**
-   * The suggestion of ① (`false_positive`, `needs_review`, `escalate`), or null when it has none, and null on a
-   * row a "Sai" review reopened while the alert is blind and not yet decided (DEC-101: a reopened alert is blind
-   * again, and the server leaves ① off it, with `disagreement` false).
-   */
-  suggested_action: string | null;
-  /** ① did not suggest closing it. */
-  disagreement: boolean;
-  reviewed_verdict: DigestVerdict | null;
-  reviewed_by_name: string | null;
-  reviewed_at: string | null;
-  /** A "Sai" review reopened it: the row stays on the list with its verdict. */
-  reopened_by_review: boolean;
-};
-
-/** `GET /api/admin/digest`. */
-export type DigestResponse = {
-  /** The day shown, `YYYY-MM-DD` in the display zone. */
-  day: string;
-  today: string;
-  rules_enabled: boolean;
-  rows: DigestRow[];
-};
-
-/** `?day=YYYY-MM-DD`, or none for today. `422 bad_day` for anything else: the page falls back by itself. */
-export function getDigest(day?: string): Promise<DigestResponse> {
-  const query = day === undefined ? "" : `?${new URLSearchParams({ day })}`;
-  return api<DigestResponse>(`/admin/digest${query}`);
-}
-
-/** `409 already_reviewed` carries the recorded `row` (`conflictRow`); `409 not_auto_closed`; `404 not_in_digest`. */
-export function reviewDigest(
-  alertId: string,
-  day: string,
-  verdict: DigestVerdict,
-): Promise<{ row: DigestRow; reopened: boolean }> {
-  return api<{ row: DigestRow; reopened: boolean }>(`/admin/digest/${enc(alertId)}/review`, {
-    method: "POST",
-    json: { day, verdict },
-  });
 }
 
 // --- blind labelling (labels.py) --------------------------------------------------------------------------

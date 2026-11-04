@@ -9,11 +9,8 @@ import {
   ADMIN_REASONS,
   adminErrorOf,
   approveKnowledgeDraft,
-  conflictRow,
-  createRule,
   createUser,
   getAudit,
-  getDigest,
   getKnowledgeDraft,
   getKnowledgeEntry,
   getKnowledgeTags,
@@ -23,7 +20,6 @@ import {
   knowledgeErrorOf,
   listKnowledgeDrafts,
   listKnowledgeEntries,
-  listRules,
   listUsers,
   parseAdminDetail,
   postLabel,
@@ -34,9 +30,6 @@ import {
   resetPassword,
   retireKnowledgeEntry,
   retryJob,
-  reviewDigest,
-  simulateRule,
-  toggleRule,
   undoLabel,
   unlockUser,
   updateUser,
@@ -90,7 +83,6 @@ function record(answer: JsonBodyType = {}, status = 200): Seen[] {
 }
 
 const UID = "5f1c0a2e-3b4d-4e5f-8a9b-0123456789ab";
-const RULE_ID = "7c1d2e3f-4a5b-4c6d-8e9f-abcdef012345";
 const DRAFT_ID = "0b7e4f10-2c3d-4a5b-9c8d-111111111111";
 const ENTRY_ID = "3a9d5e20-4b6c-4d7e-8f90-222222222222";
 
@@ -188,52 +180,6 @@ const CALLS: Call[] = [
     method: "PUT",
     path: "/api/admin/llm/limits",
     body: { cap_usd: 40, timeout_s: 90 },
-  },
-  { name: "listRules", run: () => listRules(), method: "GET", path: "/api/admin/rules" },
-  {
-    name: "simulateRule",
-    run: () => simulateRule([{ field: "category", op: "eq", value: "ssh_failed" }]),
-    method: "POST",
-    path: "/api/admin/rules/simulate",
-    body: { match: [{ field: "category", op: "eq", value: "ssh_failed" }] },
-  },
-  {
-    name: "createRule",
-    run: () =>
-      createRule({
-        name: "Cảnh báo đĩa lab",
-        reason: "máy lab",
-        match: [{ field: "agent_name", op: "prefix", value: "lab-" }],
-      }),
-    method: "POST",
-    path: "/api/admin/rules",
-    body: {
-      name: "Cảnh báo đĩa lab",
-      reason: "máy lab",
-      match: [{ field: "agent_name", op: "prefix", value: "lab-" }],
-    },
-  },
-  {
-    name: "toggleRule",
-    run: () => toggleRule(RULE_ID, false),
-    method: "PATCH",
-    path: "/api/admin/rules",
-    body: { rule_id: RULE_ID, enabled: false },
-  },
-  { name: "getDigest (today)", run: () => getDigest(), method: "GET", path: "/api/admin/digest" },
-  {
-    name: "getDigest (a day)",
-    run: () => getDigest("2026-09-30"),
-    method: "GET",
-    path: "/api/admin/digest",
-    search: "?day=2026-09-30",
-  },
-  {
-    name: "reviewDigest",
-    run: () => reviewDigest("1661877", "2026-09-30", "wrong"),
-    method: "POST",
-    path: "/api/admin/digest/1661877/review",
-    body: { day: "2026-09-30", verdict: "wrong" },
   },
   {
     name: "getLabelsNext",
@@ -396,10 +342,6 @@ describe("every admin write sends a JSON body", () => {
       "POST /api/admin/users/:id/password",
       "POST /api/admin/users/:id/unlock",
       "PUT /api/admin/llm/limits",
-      "POST /api/admin/rules/simulate",
-      "POST /api/admin/rules",
-      "PATCH /api/admin/rules",
-      "POST /api/admin/digest/1661877/review",
       "POST /api/admin/labels",
       "POST /api/admin/labels/undo",
       `POST /api/admin/knowledge/drafts/${DRAFT_ID}/approve`,
@@ -449,12 +391,6 @@ describe("every admin write sends a JSON body", () => {
 });
 
 describe("the ids in a path are encoded", () => {
-  it("encodes an alert id that holds a slash or a percent sign", async () => {
-    const seen = record({});
-    await reviewDigest("a/b%c", "2026-09-30", "unsure");
-    expect(seen[0]?.path).toBe("/api/admin/digest/a%2Fb%25c/review");
-  });
-
   it("encodes a user id and a labeler", async () => {
     const seen = record({});
     await updateUser("x/y", { role: "tier1" });
@@ -537,12 +473,12 @@ describe("parseAdminDetail", () => {
   });
 
   it("keeps the rest of the object as `extra`", () => {
-    const row = { alert_id: "1661877" };
-    expect(parse({ reason: "already_reviewed", row })).toEqual({
+    const job = { job_id: 100412 };
+    expect(parse({ reason: "already_queued", job })).toEqual({
       kind: "reason",
       status: 409,
-      reason: "already_reviewed",
-      extra: { row },
+      reason: "already_queued",
+      extra: { job },
     });
   });
 
@@ -553,10 +489,10 @@ describe("parseAdminDetail", () => {
       field: "username",
       reason: "invalid",
     });
-    expect(parse({ field: "verdict", reason: "invalid" }, 422)).toEqual({
+    expect(parse({ field: "role", reason: "invalid" }, 422)).toEqual({
       kind: "field",
       status: 422,
-      field: "verdict",
+      field: "role",
       reason: "invalid",
     });
     expect(parse({ field: "body", reason: "invalid" }, 422)).toEqual({
@@ -615,12 +551,11 @@ describe("parseAdminDetail", () => {
 
   it.each<[text: string, status: number, reason: AdminReason]>([
     ["forbidden", 403, "forbidden"],
-    ["rule not found", 404, "rule_not_found"],
     ["cluster is not a gold candidate", 404, "unknown_cluster"],
     ["already labelled by this labeler", 409, "already_labelled"],
     ["the gold set is frozen", 409, "frozen"],
     ["labeler must be the current user", 403, "labeler_mismatch"],
-    // `deps.clean_path_id`: a control character in an alert id on the digest review path.
+    // `deps.clean_path_id`: a control character in an alert or case id (lower case, unlike FastAPI's own).
     ["not found", 404, "not_found"],
   ])(
     "reads the plain text %j of the older routes as the reason it stands for",
@@ -630,9 +565,9 @@ describe("parseAdminDetail", () => {
   );
 
   describe("a text is a message only on a 422", () => {
-    const TEXT = "simulate: match is outside the whitelist or malformed: []";
+    const TEXT = "a value is outside the allowed list or malformed: []";
 
-    it("reads the 422 of a rule, which says what is wrong with it, as a message", () => {
+    it("reads the 422 text of a route, which says what is wrong, as a message", () => {
       expect(parse(TEXT, 422)).toEqual({ kind: "message", status: 422, message: TEXT });
     });
 
@@ -768,14 +703,14 @@ describe("adminErrorOf", () => {
 
   it("reads FastAPI's list-shaped 422 off a real answer as other", async () => {
     server.use(
-      http.post("/api/admin/rules", () =>
+      http.put("/api/admin/llm/limits", () =>
         HttpResponse.json(
-          { detail: [{ type: "missing", loc: ["body", "name"], msg: "Field required" }] },
+          { detail: [{ type: "missing", loc: ["body", "cap_usd"], msg: "Field required" }] },
           { status: 422 },
         ),
       ),
     );
-    const error = await createRule({ name: "", reason: "", match: [] }).catch((e: unknown) => e);
+    const error = await putLlmLimits({}).catch((e: unknown) => e);
     expect(adminErrorOf(error)).toEqual({ kind: "other", status: 422 });
   });
 
@@ -796,24 +731,13 @@ describe("adminErrorOf", () => {
     });
   });
 
-  it("reads the 422 text of a refused rule as a message", async () => {
-    const text = "simulate: match is outside the whitelist or malformed: [{'field': 'x'}]";
+  it("reads the 404 text of a bad id in a path as not_found", async () => {
     server.use(
-      http.post("/api/admin/rules/simulate", () =>
-        HttpResponse.json({ detail: text }, { status: 422 }),
-      ),
-    );
-    const error = await simulateRule([]).catch((e: unknown) => e);
-    expect(adminErrorOf(error)).toEqual({ kind: "message", status: 422, message: text });
-  });
-
-  it("reads the 404 text of a bad alert id on the digest review path as not_found", async () => {
-    server.use(
-      http.post("/api/admin/digest/:id/review", () =>
+      http.post("/api/admin/jobs/:id/retry", () =>
         HttpResponse.json({ detail: "not found" }, { status: 404 }),
       ),
     );
-    const error = await reviewDigest("x\u0000y", "2026-09-30", "correct").catch((e: unknown) => e);
+    const error = await retryJob(7).catch((e: unknown) => e);
     expect(adminErrorOf(error)).toEqual({
       kind: "reason",
       status: 404,
@@ -836,46 +760,6 @@ describe("adminErrorOf", () => {
       expect(adminErrorOf(error)).toEqual({ kind: "other", status });
     },
   );
-});
-
-describe("conflictRow", () => {
-  const row = {
-    alert_id: "1661877",
-    rule_id: "5710",
-    description: "x",
-    severity: "low",
-    category: "ssh",
-    agent_name: "lab-01",
-    occurrence_count: 3,
-    first_seen_at: "2026-09-30T01:00:00+00:00",
-    last_seen_at: "2026-09-30T02:00:00+00:00",
-    autoclose_rule_id: null,
-    autoclose_rule_name: null,
-    suggested_action: null,
-    disagreement: false,
-    reviewed_verdict: "correct",
-    reviewed_by_name: "nguyen-admin",
-    reviewed_at: "2026-09-30T01:12:00+00:00",
-    reopened_by_review: false,
-  };
-
-  it("returns the row an already_reviewed 409 carries", () => {
-    const error = parse({ reason: "already_reviewed", row });
-    expect(conflictRow(error)?.alert_id).toBe("1661877");
-    expect(conflictRow(error)?.reviewed_verdict).toBe("correct");
-  });
-
-  it("returns null for any other error, or a row that is not a row", () => {
-    const none: AdminError[] = [
-      parse({ reason: "not_auto_closed" }),
-      parse({ reason: "already_reviewed" }),
-      parse({ reason: "already_reviewed", row: "text" }),
-      parse({ reason: "already_reviewed", row: { alert_id: 5 } }),
-      parse({ field: "verdict", reason: "invalid" }, 422),
-      { kind: "other", status: 0 },
-    ];
-    for (const error of none) expect(conflictRow(error)).toBeNull();
-  });
 });
 
 // --- learned knowledge (P13-T06; the routes are admin_knowledge.py of P13-T05) -----------------------------------

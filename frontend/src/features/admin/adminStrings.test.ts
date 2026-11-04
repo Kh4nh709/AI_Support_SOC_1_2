@@ -1,6 +1,7 @@
 // src/features/admin/adminStrings.test.ts — the admin section of strings.ts (P11-T10): a text for every
 // reason code of the admin routes and for every audit event type, and the tables that the backend owns
-// (the six hard blocks, the verdict labels, the audit groups, the limits of the forms) kept equal to it.
+// (the audit groups, the limits of the forms) kept equal to it. The rules and digest routes (admin_rules.py,
+// admin_digest.py) are not read here since DEC-214: the UI no longer calls them.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -8,8 +9,6 @@ import {
   ADMIN_RANGES,
   ADMIN_REASONS,
   AUDIT_GROUPS,
-  DIGEST_VERDICTS,
-  HARD_BLOCK_CODES,
   KNOWLEDGE_CLOSED_FIELDS,
   KNOWLEDGE_DRAFT_STATUSES,
   KNOWLEDGE_ENTRY_STATUSES,
@@ -118,6 +117,28 @@ describe("the audit groups", () => {
 });
 
 describe("the reason codes", () => {
+  // DEC-214, ruling 3: each of these was answered by admin_rules.py or admin_digest.py and by no router a page
+  // that stays calls (read from `backend/app/web/routers`: admin_users, admin_llm, admin_overview, admin_audit,
+  // admin_knowledge, labels, `POST /api/admin/reload-inventory` in main.py). `invalid`, `forbidden` and
+  // `not_found`, which the digest route also wrote, are written by those too, and stay.
+  const REMOVED_REASONS = [
+    "bad_day",
+    "not_in_digest",
+    "already_reviewed",
+    "not_auto_closed",
+    "rule_not_found",
+  ];
+
+  it("has no reason, and no text, that only the removed rules and digest routes answered with", () => {
+    for (const reason of REMOVED_REASONS) {
+      expect(ADMIN_REASONS as readonly string[], reason).not.toContain(reason);
+      expect(Object.keys(S.admin.reason), reason).not.toContain(reason);
+    }
+    for (const reason of ["invalid", "forbidden", "not_found"]) {
+      expect(ADMIN_REASONS as readonly string[], reason).toContain(reason);
+    }
+  });
+
   it.each(ADMIN_REASONS)("has a Vietnamese text for %s", (reason) => {
     expect(isText(S.admin.reason[reason])).toBe(true);
   });
@@ -133,7 +154,6 @@ describe("the reason codes", () => {
       ["admin_users.py", ["web", "routers", "admin_users.py"]],
       ["admin_llm.py", ["web", "routers", "admin_llm.py"]],
       ["admin_overview.py", ["web", "routers", "admin_overview.py"]],
-      ["admin_digest.py", ["web", "routers", "admin_digest.py"]],
       ["admin_audit.py", ["web", "routers", "admin_audit.py"]],
       ["labels.py", ["web", "routers", "labels.py"]],
     ];
@@ -165,7 +185,6 @@ describe("the reason codes", () => {
       "admin_users.py",
       "admin_llm.py",
       "admin_overview.py",
-      "admin_digest.py",
       "admin_audit.py",
       "labels.py",
     ]
@@ -173,19 +192,15 @@ describe("the reason codes", () => {
       .join("\n");
     const written = (code: string) => new RegExp(`"${code}"`).test(text);
     const beyond = ADMIN_REASONS.filter((code) => !written(code));
-    // The codes of a plain-text `detail` (the rules and labels routes: `rule_not_found`, `unknown_cluster`,
-    // `already_labelled`, `labeler_mismatch`). `reserved` is no longer one of them: P11-T20 part 1 is merged,
-    // and the create route writes it (`_bad("username", "reserved")`). `frozen` and `nothing_to_undo`, the undo
-    // route of P11-T08, are written in labels.py and need no entry either.
-    const readFromElsewhere = new Set([
-      "rule_not_found",
-      "unknown_cluster",
-      "already_labelled",
-      "labeler_mismatch",
-    ]);
+    // The codes of a plain-text `detail` (the labels route: `unknown_cluster`, `already_labelled`,
+    // `labeler_mismatch`). `reserved` is no longer one of them: P11-T20 part 1 is merged, and the create route
+    // writes it (`_bad("username", "reserved")`). `frozen` and `nothing_to_undo`, the undo route of P11-T08, are
+    // written in labels.py and need no entry either. A code only the removed rules and digest routes answered
+    // with (DEC-214) is in neither list: no route a page calls writes it, so it has no place here.
+    const readFromElsewhere = new Set(["unknown_cluster", "already_labelled", "labeler_mismatch"]);
     expect(beyond.filter((code) => !readFromElsewhere.has(code))).toEqual([]);
     // And the ones the routes of this base do write really are written there: nothing is listed by guess.
-    expect(beyond).toContain("rule_not_found");
+    expect(beyond).toContain("unknown_cluster");
     expect(written("reserved")).toBe(true);
     expect(ADMIN_REASONS.filter(written).length).toBeGreaterThan(15);
   });
@@ -206,7 +221,7 @@ describe("the reason codes", () => {
   });
 
   // `not_found` is read from `{reason: "not_found"}` (a user or a job that is gone: the page reloads its list)
-  // and from the plain "not found" of a bad alert id on the digest review path (nothing is reloaded), so its
+  // and from the plain "not found" of a bad id in a path (`deps.clean_path_id`; nothing is reloaded), so its
   // text must not say that a list was reloaded.
   it("has a text for `not_found` that does not claim a list was reloaded", () => {
     expect(isText(S.admin.reason.not_found)).toBe(true);
@@ -250,46 +265,11 @@ describe("adminReasonText", () => {
   });
 });
 
-describe("the six hard blocks", () => {
-  /** `_HARD_BLOCK_ORDER` of admin_rules.py, as `[code, label]` in its order. */
-  function backendBlocks(): [string, string][] {
-    const constants = new Map(
-      [...py("ingest", "autoclose.py").matchAll(/^(_HARD_BLOCK_[A-Z_]+)\s*=\s*"([^"]+)"/gm)].map(
-        (m) => [m[1] as string, m[2] as string] as const,
-      ),
-    );
-    const order = /_HARD_BLOCK_ORDER[^=]*=\s*\(([\s\S]*?)\n\)/.exec(
-      py("web", "routers", "admin_rules.py"),
-    )?.[1];
-    if (order === undefined) throw new Error("_HARD_BLOCK_ORDER not found in admin_rules.py");
-    return [...order.matchAll(/\(autoclose\.(_HARD_BLOCK_[A-Z_]+),\s*"([^"]*)"\)/g)].map((m) => {
-      const code = constants.get(m[1] as string);
-      if (code === undefined) throw new Error(`${m[1]} is not a constant of autoclose.py`);
-      return [code, m[2] as string];
-    });
-  }
-
-  it("are listed by the client in the order of the backend", () => {
-    expect(backendBlocks().map(([code]) => code)).toEqual([...HARD_BLOCK_CODES]);
-    expect(HARD_BLOCK_CODES).toHaveLength(6);
-  });
-
-  it("carry the labels of the backend, word for word, keyed by code", () => {
-    expect(Object.fromEntries(backendBlocks())).toEqual(S.admin.hardBlock);
-  });
-});
-
-describe("the digest verdicts", () => {
-  it("carry the labels of admin_digest.py", () => {
-    const body = /_VERDICT_LABEL\s*=\s*\{([^}]*)\}/.exec(
-      py("web", "routers", "admin_digest.py"),
-    )?.[1];
-    const backend = Object.fromEntries(
-      [...(body ?? "").matchAll(/"(\w+)":\s*"([^"]+)"/g)].map((m) => [m[1], m[2]]),
-    );
-    expect(backend).toEqual({ correct: "Đúng", wrong: "Sai", unsure: "Không chắc" });
-    expect(S.admin.verdict).toEqual(backend);
-    expect([...DIGEST_VERDICTS]).toEqual(["correct", "wrong", "unsure"]);
+// The audit page still reads an old `autoclose.reviewed` event, and words its verdict with these three labels
+// (auditSummary.ts). They were the digest page's; since DEC-214 nothing but the audit page uses them.
+describe("the verdict labels of an old digest review", () => {
+  it("are the three the audit summary of `autoclose.reviewed` reads, word for word", () => {
+    expect(S.admin.verdict).toEqual({ correct: "Đúng", wrong: "Sai", unsure: "Không chắc" });
   });
 });
 
@@ -403,8 +383,6 @@ describe("the common words and the page titles", () => {
       overview: "Tổng quan hệ thống",
       users: "Người dùng và quyền",
       llm: "LLM và hạn mức",
-      rules: "Rules tự đóng",
-      digest: "Digest hằng ngày",
       labels: "Gán nhãn tập vàng",
       knowledge: "Tri thức học được",
       audit: "Nhật ký audit",
@@ -414,8 +392,6 @@ describe("the common words and the page titles", () => {
       overview: "Tổng quan",
       users: "Người dùng & quyền",
       llm: "LLM & hạn mức",
-      rules: "Rules tự đóng",
-      digest: "Digest hằng ngày",
       labels: "Gán nhãn",
       knowledge: "Tri thức",
       audit: "Nhật ký audit",
