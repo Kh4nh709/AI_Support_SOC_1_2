@@ -204,11 +204,13 @@ def test_the_ui_section_says_where_the_react_console_is_and_that_the_jinja_pages
     # and the sentence that lists them says so without naming a path of either.
     listed = re.search(r"React app served here at `http://127\.0\.0\.1:8080/admin` \(([^)]*)\)", ui)
     assert listed, "the UI section no longer lists the pages of the console"
+    # On the trial branch the lab page of DEC-213 (P14-T10) stays, straight after the gold-set labelling.
     assert re.findall(r"`/admin/([a-z]+)`", listed.group(1)) == [
         "overview",
         "users",
         "llm",
         "labels",
+        "lab",
         "knowledge",
         "audit",
     ]
