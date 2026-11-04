@@ -40,6 +40,13 @@ export type QueueRow = {
   suggested_action?: string | null;
   confidence?: string | null;
   gate_forced?: boolean | null;
+  /**
+   * P14-T03 (DEC-213): what the model itself concluded (`false_positive` or `true_positive`) and why the system
+   * held it back as `needs_review` (`llm.verdicts.HELD_REASONS`; `[]` when it did not). Absent on a blind,
+   * undecided head, like the keys above.
+   */
+  proposed_action?: string | null;
+  held_by?: string[];
 };
 
 /** `GET /api/tier1/queue`. `counts_by_band` counts under every filter but `band`. */
@@ -280,6 +287,12 @@ export type AlertView = {
    * It goes with `suggestion`: absent on a blind, undecided head. Only `aiStateOfView` reads it.
    */
   llm_stopped_by?: string | null;
+  /**
+   * What the model itself concluded, and why the system held it (P14-T03, DEC-213): the same two keys as a queue
+   * row. They go with `suggestion` on the blind arm: absent on a blind, undecided head.
+   */
+  proposed_action?: string | null;
+  held_by?: string[];
 
   requested_alert_id?: string;
   duplicate_of?: string | null;

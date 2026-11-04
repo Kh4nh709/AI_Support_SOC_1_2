@@ -6,12 +6,13 @@ import { render, screen, within } from "@testing-library/react";
 import axe from "axe-core";
 import type { AlertView, Suggestion } from "../../api/tier1";
 import { S } from "../../strings";
+import { phrasesFound, textOf, wordsFound } from "../../testing/containsWord";
 import { AiColumn, Unavailable } from "./AiColumn";
 import { aiStateOfView } from "./aiState";
 
 const suggestion = (over: Partial<Suggestion> = {}): Suggestion => ({
   run_id: "r1",
-  suggested_action: "escalate",
+  suggested_action: "true_positive",
   confidence: "medium",
   reasons: [
     {
@@ -24,8 +25,8 @@ const suggestion = (over: Partial<Suggestion> = {}): Suggestion => ({
   gate: {
     forced: false,
     forced_by: null,
-    proposed_verdict: "escalate",
-    final_verdict: "escalate",
+    proposed_verdict: "true_positive",
+    final_verdict: "true_positive",
     verifier_verdict: "agree",
     warnings: [],
   },
@@ -42,14 +43,21 @@ const view = (over: Partial<AlertView> = {}): AlertView => ({
   triage_status: "ready",
   suggestion: suggestion(),
   correlated_now: 4,
+  proposed_action: "true_positive",
+  held_by: [],
   ...over,
 });
 
-/** What the server sends for a blind, undecided head: no `suggestion`, no `triage_status`, no `run_id`. */
+/**
+ * What the server sends for a blind, undecided head: no `suggestion`, no `triage_status`, no `run_id`, and
+ * (P14-T03) no `proposed_action` and no `held_by`.
+ */
 function blindView(over: Partial<AlertView> = {}): AlertView {
   const stripped = view({ suggestion_visible: false });
   delete stripped.suggestion;
   delete stripped.triage_status;
+  delete stripped.proposed_action;
+  delete stripped.held_by;
   return { ...stripped, ...over };
 }
 
@@ -61,27 +69,40 @@ const renderColumn = (v: AlertView) =>
     </main>,
   );
 
-/** Every word of a verdict that must not reach a column that is hidden. */
+/** The two-letter labels of a verdict: found as WORDS, so "SFTP" in an unrelated line is not a leak. */
+const LABEL_MARKERS = ["TP", "FP"];
+
+/** Everything else of a verdict that must not reach a column that is hidden: found as plain substrings. */
 const VERDICT_WORDS = [
-  "Chuyển tier 2",
-  "escalate",
+  "true_positive",
+  "false_positive",
   "Cần xem xét",
-  "Dương tính giả",
+  "AI kết luận",
+  "giữ lại",
+  "độ tin cậy",
   "trung bình",
   "37 lần xác thực",
   "Failed password",
 ];
 
+/**
+ * What of a verdict is in `el`. The text is read per text node: `textContent` glues the text of neighbouring
+ * elements ("Đề xuất" + "Cần xem xét" read "Đề xuấtCần xem xét"), and a whole-word search would lose a marker at
+ * the seam. The labels are looked for as words, the phrases as substrings.
+ */
+const leaksIn = (el: Element, phrases: readonly string[] = VERDICT_WORDS): string[] => {
+  const text = textOf(el);
+  return [...wordsFound(text, LABEL_MARKERS), ...phrasesFound(text, phrases)];
+};
+
 describe("ready", () => {
-  it("shows the verdict with its code, the confidence, and no flag when the gate forced nothing", () => {
+  it("shows what the AI concluded with its confidence, and no flag when the gate forced nothing", () => {
     renderColumn(view());
     const col = within(column());
     expect(col.getByRole("heading", { name: S.alert.aiHeading })).toBeInTheDocument();
-    expect(col.getByText(S.ai1.verdict).parentElement).toHaveTextContent(S.ai1.action.escalate);
-    expect(col.getAllByText("escalate").length).toBeGreaterThan(0);
-    expect(
-      col.getByText(new RegExp(`${S.ai1.confidence}.*${S.confidence.medium}`)),
-    ).toBeInTheDocument();
+    expect(col.getByText(/AI kết luận/)).toHaveTextContent(
+      "AI kết luận: TP (độ tin cậy trung bình)",
+    );
     expect(col.queryByRole("img", { name: S.ai1.forcedLabel })).not.toBeInTheDocument();
     expect(col.getByText(S.ai1.gateNotForced)).toBeInTheDocument();
   });
@@ -135,8 +156,8 @@ describe("ready", () => {
           gate: {
             forced: false,
             forced_by: null,
-            proposed_verdict: "escalate",
-            final_verdict: "escalate",
+            proposed_verdict: "true_positive",
+            final_verdict: "true_positive",
             verifier_verdict: "agree",
             warnings: ["reason 3 cites no log"],
           },
@@ -177,6 +198,7 @@ describe("ready", () => {
   it("unknown enum renders raw code: an action, a confidence and a verifier verdict without a label", () => {
     renderColumn(
       view({
+        proposed_action: null, // nothing the AI may have concluded: the old block, with the code
         suggestion: suggestion({
           suggested_action: "quarantine_host",
           confidence: "very_high",
@@ -207,12 +229,278 @@ describe("ready", () => {
   });
 });
 
+// P14-T03 (DEC-213): ① always concludes `false_positive | true_positive`. The alert page says what the AI
+// concluded, with its confidence, and when the gate held it back for a person, says so and why.
+describe("AI kết luận", () => {
+  /** A verdict the gate held: the model said false_positive, the system stored needs_review. */
+  const held = (reasons: string[], over: Partial<AlertView> = {}) =>
+    view({
+      suggestion: suggestion({
+        suggested_action: "needs_review",
+        confidence: "medium",
+        gate: {
+          forced: true,
+          forced_by: ["step4"],
+          proposed_verdict: "false_positive",
+          final_verdict: "needs_review",
+          verifier_verdict: "needs_review",
+          warnings: [],
+        },
+      }),
+      proposed_action: "false_positive",
+      held_by: reasons,
+      ...over,
+    });
+  /** The sentence itself: the one element whose own text starts it. */
+  const line = () => within(column()).getByText(/AI kết luận/);
+
+  it("says TP with the confidence of a true_positive the gate kept, and holds nothing back", () => {
+    renderColumn(view({ suggestion: suggestion({ confidence: "high" }) }));
+    expect(line()).toHaveTextContent(/^AI kết luận: TP \(độ tin cậy cao\)$/);
+    expect(within(line()).getByText("TP").tagName).toBe("STRONG");
+    expect(line().textContent).not.toContain("giữ lại");
+  });
+
+  it("says FP for a false_positive the gate kept", () => {
+    renderColumn(
+      view({
+        suggestion: suggestion({ suggested_action: "false_positive", confidence: "low" }),
+        proposed_action: "false_positive",
+      }),
+    );
+    expect(line()).toHaveTextContent(/^AI kết luận: FP \(độ tin cậy thấp\)$/);
+  });
+
+  it("says what the AI concluded and that the system held it for a person, with both reasons", () => {
+    renderColumn(held(["fp_policy:asset_criticality", "verifier_disagrees"]));
+    expect(line()).toHaveTextContent(
+      "AI kết luận: FP (độ tin cậy trung bình) — hệ thống giữ lại cho người xem vì: " +
+        "tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý",
+    );
+    // the AI's own answer, not the system's `Cần xem xét`, is the conclusion
+    expect(within(line()).getByText("FP").tagName).toBe("STRONG");
+    // and the phrase "hệ thống giữ lại cho người xem" is bold too, as spec 4.3 has it (M1)
+    expect(within(line()).getByText("hệ thống giữ lại cho người xem").tagName).toBe("STRONG");
+    expect(line().textContent).not.toContain("Cần xem xét");
+  });
+
+  it.each([
+    ["facts_mismatch", "AI khai dữ kiện lệch với hệ thống"],
+    ["no_verified_quote", "không có dẫn chứng kiểm chứng được"],
+    ["fp_policy:severity", "alert mức critical"],
+    ["fp_policy:ioc_reputation", "IOC độc hại hoặc đáng ngờ"],
+    ["fp_policy:asset_criticality", "tài sản quan trọng hoặc chưa rõ"],
+    ["fp_policy:identity_privileged", "tài khoản đặc quyền"],
+    ["fp_policy:playbook_rule", "không khớp bảng quyết định đã duyệt"],
+    ["verifier_disagrees", "bộ kiểm tra không đồng ý"],
+  ])("words the reason %s as '%s'", (reason, label) => {
+    renderColumn(held([reason]));
+    expect(line()).toHaveTextContent(`hệ thống giữ lại cho người xem vì: ${label}`);
+    expect(line().textContent).not.toContain(reason);
+  });
+
+  it("joins the reasons with a comma, in the order the server gave them", () => {
+    renderColumn(held(["facts_mismatch", "no_verified_quote", "fp_policy:severity"]));
+    expect(line()).toHaveTextContent(
+      "vì: AI khai dữ kiện lệch với hệ thống, không có dẫn chứng kiểm chứng được, alert mức critical",
+    );
+  });
+
+  it("shows a reason it has no label for as the code, as text", () => {
+    const markup = "<img src=x onerror=alert(1)>";
+    const { container } = renderColumn(held(["fp_policy:new_field", markup]));
+    expect(line()).toHaveTextContent(`vì: fp_policy:new_field, ${markup}`);
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("says it was held without a 'because' when the server names no reason", () => {
+    renderColumn(held([]));
+    expect(line()).toHaveTextContent(
+      /^AI kết luận: FP \(độ tin cậy trung bình\) — hệ thống giữ lại cho người xem(⚑)?$/,
+    );
+    expect(line().textContent).not.toContain("vì:");
+  });
+
+  it("leaves the confidence out when the result has none", () => {
+    renderColumn(view({ suggestion: suggestion({ confidence: null }) }));
+    expect(line()).toHaveTextContent(/^AI kết luận: TP$/);
+  });
+
+  it("flags the held verdict and still shows the gate's own account of it", () => {
+    renderColumn(held(["fp_policy:playbook_rule"]));
+    const col = within(column());
+    expect(col.getByRole("img", { name: S.ai1.forcedLabel })).toBeInTheDocument();
+    expect(col.getByText(S.ai1.gateForced)).toBeInTheDocument();
+    expect(col.getByText("step4")).toBeInTheDocument();
+    const steps = within(col.getByRole("region", { name: S.ai1.gateSteps }));
+    expect(steps.getByText(S.ai1.action.false_positive)).toBeInTheDocument();
+    expect(steps.getByText(S.ai1.action.needs_review)).toBeInTheDocument();
+  });
+
+  it("falls back on the final action when the server sent no proposed_action", () => {
+    const bare = view();
+    delete bare.proposed_action;
+    delete bare.held_by;
+    renderColumn(bare);
+    expect(line()).toHaveTextContent(/^AI kết luận: TP \(độ tin cậy trung bình\)$/);
+  });
+
+  it("makes no claim for a needs_review the server did not explain: the system's own word, as before", () => {
+    const bare = held([]);
+    delete bare.proposed_action;
+    delete bare.held_by;
+    renderColumn(bare);
+    const col = within(column());
+    expect(col.queryByText(/AI kết luận/)).not.toBeInTheDocument();
+    expect(col.getByText(S.ai1.verdict).parentElement).toHaveTextContent("Cần xem xét");
+  });
+
+  it("names the ninth reason, an unusable verifier answer, in its own words (M3)", () => {
+    renderColumn(held(["verifier_invalid"]));
+    expect(line()).toHaveTextContent("vì: bộ kiểm tra không trả lời hợp lệ");
+    expect(line().textContent).not.toContain("không đồng ý");
+  });
+
+  // Fix round 1 (I1): a decided page still says what the AI concluded and why the gate held it - in the
+  // "Gợi ý ①" box, by the very component the undecided column uses. "Khớp" is still the stored verdict's.
+  describe("on a decided page", () => {
+    const decidedHeld = (over: Partial<AlertView> = {}) =>
+      held(["fp_policy:asset_criticality", "verifier_disagrees"], {
+        status: "closed_fp",
+        acknowledged_by: "u1",
+        acknowledged_by_name: "An",
+        ...over,
+      });
+    const box = () => within(column()).getByText(S.ai1.decidedAi).closest("div")!;
+    const khop = () => within(column()).getByText(S.ai1.match).parentElement!;
+
+    it("says TP with the confidence in the box, and Khớp stays the stored verdict's", () => {
+      renderColumn(view({ status: "escalated_tier2", case_id: 9, acknowledged_by_name: "An" }));
+      expect(within(box()).getByText(/AI kết luận/)).toHaveTextContent(
+        /^AI kết luận: TP \(độ tin cậy trung bình\)$/,
+      );
+      expect(khop()).toHaveTextContent(S.ai1.matchAgree);
+    });
+
+    it("says what the AI concluded and why the system held it, two reasons, and Khớp has no verdict to compare", () => {
+      renderColumn(decidedHeld());
+      expect(within(box()).getByText(/AI kết luận/)).toHaveTextContent(
+        "AI kết luận: FP (độ tin cậy trung bình) — hệ thống giữ lại cho người xem vì: " +
+          "tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý",
+      );
+      expect(within(box()).getByText("hệ thống giữ lại cho người xem").tagName).toBe("STRONG");
+      // the stored verdict is `needs_review`: the pilot report leaves it out, so does Khớp
+      expect(khop()).toHaveTextContent(S.ai1.matchNoVerdict);
+    });
+
+    it("is one line in the column, not two", () => {
+      renderColumn(decidedHeld());
+      expect(within(column()).getAllByText(/AI kết luận/)).toHaveLength(1);
+    });
+
+    it("is the same line the undecided column draws for the same suggestion", () => {
+      const undecided = renderColumn(held(["fp_policy:playbook_rule", "verifier_invalid"]));
+      const before = within(column()).getByText(/AI kết luận/).textContent;
+      undecided.unmount();
+      renderColumn(
+        held(["fp_policy:playbook_rule", "verifier_invalid"], { status: "closed_benign" }),
+      );
+      const after = within(box()).getByText(/AI kết luận/).textContent;
+      // the gate's ⚑ belongs to the undecided column only (the decided state has no gate flag)
+      expect(after).toBe((before ?? "").replace("⚑", ""));
+    });
+
+    it.each([
+      ["a visible head", true],
+      ["a blind head, now decided", false],
+    ])("shows it for %s", (_name, visible) => {
+      renderColumn(decidedHeld({ suggestion_visible: visible }));
+      expect(within(box()).getByText(/AI kết luận/)).toHaveTextContent(
+        /^AI kết luận: FP .* vì: tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý$/,
+      );
+      expect(within(column()).queryByText(S.ai1.hidden)).not.toBeInTheDocument();
+    });
+
+    it("is not there before the decision on the blind arm, and is after it (the same head)", () => {
+      const before = renderColumn(blindView({ status: "tier1_active" }));
+      expect(within(column()).queryByText(/AI kết luận/)).not.toBeInTheDocument();
+      expect(within(column()).getByText(S.ai1.hidden)).toBeInTheDocument();
+      before.unmount();
+      renderColumn(decidedHeld({ suggestion_visible: false }));
+      expect(within(column()).getByText(/AI kết luận/)).toBeInTheDocument();
+    });
+
+    it("falls back on the stored verdict when the server sent neither key", () => {
+      const bare = decidedHeld();
+      delete bare.proposed_action;
+      delete bare.held_by;
+      renderColumn(bare);
+      expect(within(column()).queryByText(/AI kết luận/)).not.toBeInTheDocument();
+      expect(box()).toHaveTextContent("Cần xem xét");
+    });
+
+    it("says nothing for a decided alert ① never answered", () => {
+      renderColumn(
+        view({
+          status: "closed_fp",
+          suggestion: null,
+          proposed_action: null,
+          held_by: [],
+          acknowledged_by_name: "An",
+        }),
+      );
+      expect(within(column()).queryByText(/AI kết luận/)).not.toBeInTheDocument();
+      expect(box()).toHaveTextContent(S.ai1.none);
+    });
+  });
+
+  it("is not in a blind column, and nothing of it is: not the AI's answer, not a reason", () => {
+    const stray = blindView({
+      proposed_action: "false_positive",
+      held_by: ["fp_policy:asset_criticality"],
+    });
+    expect(aiStateOfView(stray)).toEqual({ kind: "hidden" });
+    renderColumn(stray);
+    const col = column();
+    expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
+    expect(leaksIn(col, ["AI kết luận", "giữ lại", "tài sản quan trọng hoặc chưa rõ"])).toEqual([]);
+  });
+});
+
+// Fix round 2 (Minor): the markers must still be found where a leaked verdict's text is glued to the text of the
+// element beside it. A ready column that says `needs_review` with nothing the AI concluded draws "Đề xuất" and
+// "Cần xem xét" in two elements: `textContent` reads them as "Đề xuấtCần xem xét".
+describe("the leak markers of the blind tests", () => {
+  it("find a verdict whose text is glued to its neighbour's", () => {
+    const leaked = view({
+      suggestion: suggestion({ suggested_action: "needs_review", confidence: null }),
+      proposed_action: null,
+      held_by: [],
+    });
+    renderColumn(leaked);
+    const col = column();
+    expect(col.textContent).toContain("Đề xuấtCần xem xét"); // the seam
+    expect(leaksIn(col)).toContain("Cần xem xét");
+  });
+
+  it("find a leaked conclusion line, its label and its reasons", () => {
+    renderColumn(
+      view({
+        suggestion: suggestion({ suggested_action: "needs_review" }),
+        proposed_action: "false_positive",
+        held_by: ["fp_policy:asset_criticality"],
+      }),
+    );
+    expect(leaksIn(column())).toEqual(expect.arrayContaining(["FP", "AI kết luận", "giữ lại"]));
+  });
+});
+
 describe("hidden (the blind arm)", () => {
   it("says S.ai1.hidden for a view the server stripped, and names no verdict anywhere in the column", () => {
     renderColumn(blindView());
     const col = column();
     expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
-    for (const word of VERDICT_WORDS) expect(col.textContent, word).not.toContain(word);
+    expect(leaksIn(col), "verdict markers in the column").toEqual([]);
     // it does not say that ① is working, or has failed, or has nothing to say
     expect(col.textContent).not.toContain(S.ai1.pending);
     expect(col.textContent).not.toContain(S.ai1.unavailable);
@@ -242,7 +530,7 @@ describe("hidden (the blind arm)", () => {
     renderColumn(stray);
     const col = column();
     expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
-    for (const word of VERDICT_WORDS) expect(col.textContent, word).not.toContain(word);
+    expect(leaksIn(col), "verdict markers in the column").toEqual([]);
     expect(col.textContent).not.toContain(S.ai1.correlatedThen);
     expect(within(col).queryByRole("img", { name: S.ai1.forcedLabel })).not.toBeInTheDocument();
   });
@@ -270,7 +558,7 @@ describe("hidden (the blind arm)", () => {
     );
     const col = column();
     expect(within(col).queryByText(S.ai1.hidden)).not.toBeInTheDocument();
-    expect(col.textContent).toContain(S.ai1.action.escalate);
+    expect(col.textContent).toContain(S.ai1.action.true_positive);
   });
 });
 
@@ -281,7 +569,7 @@ describe("pending", () => {
     expect(within(col).getByText(S.ai1.pending)).toBeInTheDocument();
     expect(col.textContent).toContain(S.ai1.pendingBody);
     expect(col.textContent).not.toContain(S.ai1.hidden);
-    for (const word of VERDICT_WORDS) expect(col.textContent, word).not.toContain(word);
+    expect(leaksIn(col), "verdict markers in the column").toEqual([]);
   });
 });
 
@@ -294,7 +582,7 @@ describe("none (an archived alert with no ①)", () => {
     expect(col.textContent).not.toContain(S.ai1.pending);
     expect(col.textContent).not.toContain(S.ai1.pendingBody);
     expect(col.textContent).not.toContain(S.ai1.hidden);
-    for (const word of VERDICT_WORDS) expect(col.textContent, word).not.toContain(word);
+    expect(leaksIn(col), "verdict markers in the column").toEqual([]);
   });
 
   it("is not what a blind archived head shows: that one stays 'ẩn — nhánh mù'", () => {
@@ -394,12 +682,13 @@ describe("decided", () => {
     expect(mine).toHaveTextContent(S.status.closed_fp);
     expect(mine).toHaveTextContent("An");
     const ai = col.getByText(S.ai1.decidedAi).closest("div")!;
-    expect(ai).toHaveTextContent(S.ai1.action.escalate);
+    expect(ai).toHaveTextContent(S.ai1.action.true_positive);
     expect(ai).toHaveTextContent(S.confidence.medium);
   });
 
   it("says ① had nothing to say when the view carries no result, and compares nothing", () => {
-    renderColumn(decided({ suggestion: null }));
+    // no result, so the server sends no conclusion and no reason either
+    renderColumn(decided({ suggestion: null, proposed_action: null, held_by: [] }));
     const ai = within(column()).getByText(S.ai1.decidedAi).closest("div")!;
     expect(ai).toHaveTextContent(S.ai1.none);
     expect(match()).toHaveTextContent(S.ai1.matchNoVerdict);
@@ -408,7 +697,12 @@ describe("decided", () => {
   it("unknown enum renders raw code: an action without a label", () => {
     // A status the UI does not know is not one of `DECIDED`, so it is not a decided view (the page tests
     // word an unknown status); the action is what a decided view can carry that the UI has no label for.
-    renderColumn(decided({ suggestion: suggestion({ suggested_action: "quarantine_host" }) }));
+    renderColumn(
+      decided({
+        suggestion: suggestion({ suggested_action: "quarantine_host" }),
+        proposed_action: null, // nothing the AI may have concluded: the stored word, as it came
+      }),
+    );
     expect(within(column()).getByText("quarantine_host")).toBeInTheDocument();
     // the pilot report counts an action that is none of the three as no result: nothing is compared
     expect(match()).toHaveTextContent(S.ai1.matchNoVerdict);
@@ -417,12 +711,12 @@ describe("decided", () => {
   describe("the Khớp row, by the pilot report's mapping (P10-T06, eval/ops_export.py)", () => {
     it.each([
       // agreement: ① escalate with a human escalation, ① false_positive with a human closed_fp
-      ["escalated_tier2", "escalate", S.ai1.matchAgree],
+      ["escalated_tier2", "true_positive", S.ai1.matchAgree],
       ["closed_fp", "false_positive", S.ai1.matchAgree],
       // any other pair of a verdict and a human decision disagrees
       ["escalated_tier2", "false_positive", S.ai1.matchDisagree],
-      ["closed_fp", "escalate", S.ai1.matchDisagree],
-      ["closed_benign", "escalate", S.ai1.matchDisagree],
+      ["closed_fp", "true_positive", S.ai1.matchDisagree],
+      ["closed_benign", "true_positive", S.ai1.matchDisagree],
       // ① has no benign verdict: a human closed_benign after ① false_positive is a disagreement
       ["closed_benign", "false_positive", S.ai1.matchDisagree],
       // ① needs_review is no verdict
@@ -456,7 +750,7 @@ describe("decided", () => {
         expect(col.queryByText(S.ai1.match)).not.toBeInTheDocument();
         // what ① said is still shown beside it
         expect(col.getByText(S.ai1.decidedAi).closest("div")).toHaveTextContent(
-          S.ai1.action.escalate,
+          S.ai1.action.true_positive,
         );
       },
     );
@@ -491,11 +785,13 @@ describe("decided", () => {
         case_id: 9,
         acknowledged_by_name: "Nguyễn Văn Ân",
         suggestion: suggestion({ suggested_action: action }),
+        // the AI concluded what it stored, unless the gate held it (`needs_review`)
+        proposed_action: action === "needs_review" ? "false_positive" : action,
         ...over,
       });
 
     it.each([
-      ...CONCLUDED.map((status) => [status, "escalate", S.ai1.matchAgree] as const),
+      ...CONCLUDED.map((status) => [status, "true_positive", S.ai1.matchAgree] as const),
       ...CONCLUDED.map((status) => [status, "false_positive", S.ai1.matchDisagree] as const),
       ...CONCLUDED.map((status) => [status, "needs_review", S.ai1.matchNoVerdict] as const),
     ])(
@@ -512,7 +808,7 @@ describe("decided", () => {
     it.each(CONCLUDED)(
       "%s: says Tier 1 escalated it, names the acknowledger there, and gives the conclusion as Tier 2's",
       (status) => {
-        renderColumn(concluded(status, "escalate"));
+        renderColumn(concluded(status, "true_positive"));
         const col = within(column());
         // the decision is what Tier 1 did: the escalation, with the person who did it
         const escalation = col.getByText(S.status.escalated_tier2).closest("p")!;
@@ -529,7 +825,7 @@ describe("decided", () => {
     );
 
     it("says the escalation and no Tier 2 conclusion while the case is still open (escalated_tier2)", () => {
-      renderColumn(concluded("escalated_tier2", "escalate"));
+      renderColumn(concluded("escalated_tier2", "true_positive"));
       const col = within(column());
       expect(col.getByText(S.status.escalated_tier2).closest("p")).toHaveTextContent(
         "Nguyễn Văn Ân",
@@ -560,6 +856,17 @@ describe("accessibility", () => {
           gate: { forced: true, forced_by: ["x"], warnings: ["w"], verifier_verdict: "agree" },
         }),
         correlated_now: 9,
+      }),
+    ],
+    [
+      "ready and held for a person (P14-T03)",
+      view({
+        suggestion: suggestion({
+          suggested_action: "needs_review",
+          gate: { forced: true, forced_by: ["step4"], proposed_verdict: "false_positive" },
+        }),
+        proposed_action: "false_positive",
+        held_by: ["fp_policy:asset_criticality", "verifier_disagrees"],
       }),
     ],
     ["hidden", blindView()],

@@ -1229,7 +1229,7 @@ describe("①'s suggestion: its gate and its reasons, beside what ① decided (s
     expect(gate).toHaveTextContent(S.ai1.gateProposed);
     expect(gate).toHaveTextContent(S.ai1.action.false_positive);
     expect(gate).toHaveTextContent(S.ai1.gateFinal);
-    expect(gate).toHaveTextContent(S.ai1.action.escalate);
+    expect(gate).toHaveTextContent(S.ai1.action.needs_review);
     expect(gate).toHaveTextContent(S.ai1.verifier);
     expect(gate).toHaveTextContent("disagree");
     expect(gate).toHaveTextContent(S.ai1.gateWarnings);

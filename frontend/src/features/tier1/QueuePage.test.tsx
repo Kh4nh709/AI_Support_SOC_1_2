@@ -345,15 +345,15 @@ describe("the ① cell", () => {
           row({
             alert_id: "r2",
             description: "forced",
-            suggested_action: "escalate",
+            suggested_action: "true_positive",
             gate_forced: true,
           }),
         ]),
       );
     renderQueue();
-    expect(await ai(/plain/)).toHaveTextContent("Dương tính giả (cao)");
+    expect(await ai(/plain/)).toHaveTextContent("FP (cao)");
     expect(within(await ai(/plain/)).queryByRole("img")).toBeNull();
-    expect(await ai(/forced/)).toHaveTextContent("Chuyển tier 2 (trung bình)");
+    expect(await ai(/forced/)).toHaveTextContent("TP (trung bình)");
     expect(
       within(await ai(/forced/)).getByRole("img", { name: S.ai1.forcedLabel }),
     ).toBeInTheDocument();

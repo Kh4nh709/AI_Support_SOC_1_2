@@ -99,7 +99,7 @@ export function forcedSuggestion(over: Partial<Suggestion> = {}): Suggestion {
       forced: true,
       forced_by: ["asset_high", "ioc_bad"],
       proposed_verdict: "false_positive",
-      final_verdict: "escalate",
+      final_verdict: "needs_review",
       verifier_verdict: "disagree",
       warnings: ["<script>alert('gate')</script>"],
     },

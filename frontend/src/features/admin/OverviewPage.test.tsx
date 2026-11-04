@@ -2270,11 +2270,14 @@ describe("what the page keeps equal to the backend", () => {
     expect(Object.keys(windows)).toEqual([...ADMIN_RANGES]);
   });
 
-  it("has a Vietnamese label for each of the thirteen health checks of the backend, and no other", () => {
+  it("has a Vietnamese label for each of the fourteen health checks of the backend, and no other", () => {
     const names = new Set(
       [...read("infra", "health.py").matchAll(/CheckResult\(\s*"([a-z_]+)"/g)].map((m) => m[1]),
     );
-    expect(names.size).toBe(13);
+    expect(names.size).toBe(14);
+    expect(S.admin.overviewPage.health.check.rag_lookup_failures).toBe(
+      "Tra cứu RAG thất bại liên tục",
+    );
     expect(Object.keys(S.admin.overviewPage.health.check).sort()).toEqual([...names].sort());
   });
 
