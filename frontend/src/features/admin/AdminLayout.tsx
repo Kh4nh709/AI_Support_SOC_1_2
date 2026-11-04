@@ -1,4 +1,4 @@
-// The frame of every admin page (spec §3): the left sidebar of the canvas, with the seven pages in its
+// The frame of every admin page (spec §3): the left sidebar of the canvas, with the seven links in its
 // order, and the page beside it. The app shell (`Shell` in routes.tsx) already gives the header and the one
 // `main` landmark; this adds only a navigation, so a page task renders its `h1` and its content and nothing else.
 //
