@@ -569,12 +569,18 @@ def run_lookup_job(
 
 
 def latest_lookup(
-    conn: psycopg.Connection, subject: Subject, *, statuses: Sequence[str] | None = None
+    conn: psycopg.Connection,
+    subject: Subject,
+    *,
+    statuses: Sequence[str] | None = None,
+    before: datetime | None = None,
 ) -> LookupResult | None:
     """The newest stored lookup of `subject`, or None. By default whatever its status, which is how ①
     reads it. With `statuses`, the newest row among those statuses: ② passes `USABLE_STATUSES` because
     spec §7.6 says it uses "the newest `ok` row", and a `budget` refresh written after one must not hide it
     (a `failed` one does: `lookup_failure` is asked first, DEC-213). An empty `statuses` matches nothing.
+    With `before` (P14-T11, the lab measurement) only a lookup created strictly before that instant is
+    considered: what the product could have read then. None is today's behaviour.
     """
     query = (
         "SELECT lookup_id, status, history, matches, created_at, failure_kind FROM rag_results"
@@ -584,6 +590,9 @@ def latest_lookup(
     if statuses is not None:
         query += " AND status = ANY(%s)"
         params.append(list(statuses))
+    if before is not None:
+        query += " AND created_at < %s"
+        params.append(before)
     row = conn.execute(query + " ORDER BY created_at DESC, lookup_id LIMIT 1", params).fetchone()
     if row is None:
         return None

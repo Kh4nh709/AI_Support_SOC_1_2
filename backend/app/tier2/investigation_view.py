@@ -63,10 +63,9 @@ import psycopg
 from app.llm import rag_view, verdicts
 from app.rag.failures import FAILURE_KINDS
 from app.tier2.investigate import (
-    HELD_BY,
-    HELD_HIGH_INJECTION,
-    HELD_NO_VERIFIED_EVIDENCE,
+    HELD_BY,  # noqa: F401 - the view's public name for the closed causes (test_investigation_view_api pins it)
     MIN_QUOTE_CHARS,
+    held_causes,
     run_id_for_job,
 )
 
@@ -305,12 +304,7 @@ def held_by(check: dict[str, Any]) -> list[str]:
     """
     if model_conclusion(check) is None:
         return []
-    verified = check.get("verified")
-    found = {
-        HELD_NO_VERIFIED_EVIDENCE: isinstance(verified, list) and not verified,
-        HELD_HIGH_INJECTION: check.get("forced_by") == HELD_HIGH_INJECTION,
-    }
-    return [cause for cause in HELD_BY if found[cause]]
+    return held_causes(check)
 
 
 def snapshot(agent_trace: Any) -> dict[str, Any] | None:
