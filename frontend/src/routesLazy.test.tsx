@@ -1,4 +1,4 @@
-// src/routesLazy.test.tsx — the eight admin pages are fetched when their route opens, and only for an admin
+// src/routesLazy.test.tsx — the six admin pages are fetched when their route opens, and only for an admin
 // (P11-T20 row 56: the main bundle carried every page of the console, for tier1 and tier2 as well).
 //
 // routes.test.tsx tests which route opens for which role, with the pages as stubs that are ready at once. This file
@@ -27,7 +27,7 @@ const gate = vi.hoisted(() => {
     loads: [] as string[],
     rendered: [] as string[],
     failAudit: false,
-    rulesBug: false,
+    llmBug: false,
     /** From now on a page's module is not ready until `open()`. */
     hold() {
       held = new Promise<void>((resolve) => {
@@ -69,30 +69,9 @@ vi.mock("./features/admin/LlmPage", async () => {
   return {
     LlmPage: () => {
       gate.rendered.push("LlmPage");
-      return <h1>{S.admin.title.llm}</h1>;
-    },
-  };
-});
-vi.mock("./features/admin/RulesPage", async () => {
-  gate.loads.push("RulesPage");
-  await gate.ready();
-  return {
-    RulesPage: () => {
-      gate.rendered.push("RulesPage");
       // A page with a bug in it, which is not a page that could not be fetched.
-      if (gate.rulesBug)
-        throw new TypeError("Cannot read properties of undefined (reading 'rows')");
-      return <h1>{S.admin.title.rules}</h1>;
-    },
-  };
-});
-vi.mock("./features/admin/DigestPage", async () => {
-  gate.loads.push("DigestPage");
-  await gate.ready();
-  return {
-    DigestPage: () => {
-      gate.rendered.push("DigestPage");
-      return <h1>{S.admin.title.digest}</h1>;
+      if (gate.llmBug) throw new TypeError("Cannot read properties of undefined (reading 'rows')");
+      return <h1>{S.admin.title.llm}</h1>;
     },
   };
 });
@@ -179,8 +158,6 @@ const ADMIN_PATHS = [
   "/admin/overview",
   "/admin/users",
   "/admin/llm",
-  "/admin/rules",
-  "/admin/digest",
   "/admin/labels",
   "/admin/knowledge",
   "/admin/audit",
@@ -280,10 +257,10 @@ describe("a page that cannot be fetched", () => {
 
 describe("a page that has a bug in it", () => {
   it("says it could not be shown, with no reload to offer, under the sidebar; the other pages still open", async () => {
-    gate.rulesBug = true;
+    gate.llmBug = true;
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      renderAt("/admin/rules", session("admin"));
+      renderAt("/admin/llm", session("admin"));
       const alert = await screen.findByRole("alert");
       expect(alert).toHaveTextContent(S.admin.common.renderError);
       expect(alert).not.toHaveTextContent(S.admin.common.loadError);
@@ -299,7 +276,7 @@ describe("a page that has a bug in it", () => {
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     } finally {
       logged.mockRestore();
-      gate.rulesBug = false;
+      gate.llmBug = false;
     }
   });
 });
@@ -309,7 +286,7 @@ describe("the route table in source", () => {
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/.*$/gm, "");
 
-  it.each(["Overview", "Users", "Llm", "Rules", "Digest", "Labels", "Knowledge", "Audit"])(
+  it.each(["Overview", "Users", "Llm", "Labels", "Knowledge", "Audit"])(
     "has %sPage in a dynamic import() and in no static import, so the page stays out of the main bundle",
     (name) => {
       const path = `./features/admin/${name}Page`;
@@ -317,4 +294,26 @@ describe("the route table in source", () => {
       expect(source).toContain(`import("${path}")`);
     },
   );
+
+  // DEC-214: the auto-close pages are gone from the route table, so a path under them is an unknown path.
+  it("has no route, no import and no component for the removed rules and digest pages", () => {
+    expect(source).not.toMatch(/RulesPage|DigestPage/);
+    expect(source).not.toMatch(/admin\/(rules|digest)/);
+    expect([...source.matchAll(/path="([^"]+)"/g)].map((m) => m[1])).toEqual([
+      "/login",
+      "/",
+      "/queue",
+      "/alerts/:alertId",
+      "/cases",
+      "/cases/:caseId",
+      "/admin",
+      "/admin/overview",
+      "/admin/users",
+      "/admin/llm",
+      "/admin/labels",
+      "/admin/knowledge",
+      "/admin/audit",
+      "*",
+    ]);
+  });
 });

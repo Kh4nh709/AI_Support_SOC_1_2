@@ -1,4 +1,4 @@
-// The frame of every admin page (spec §3): the left sidebar of the canvas, with the eight pages in its
+// The frame of every admin page (spec §3): the left sidebar of the canvas, with the six pages in its
 // order, and the page beside it. The app shell (`Shell` in routes.tsx) already gives the header and the one
 // `main` landmark; this adds only a navigation, so a page task renders its `h1` and its content and nothing else.
 //
@@ -13,8 +13,6 @@ const PAGES = [
   { to: "/admin/overview", label: S.admin.nav.overview },
   { to: "/admin/users", label: S.admin.nav.users },
   { to: "/admin/llm", label: S.admin.nav.llm },
-  { to: "/admin/rules", label: S.admin.nav.rules },
-  { to: "/admin/digest", label: S.admin.nav.digest },
   { to: "/admin/labels", label: S.admin.nav.labels },
   { to: "/admin/knowledge", label: S.admin.nav.knowledge },
   { to: "/admin/audit", label: S.admin.nav.audit },

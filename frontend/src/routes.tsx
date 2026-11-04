@@ -1,6 +1,7 @@
 // The route table of the spec §3.1: the queue is P10-T09's, the alert page P10-T10's, the case list and the
-// case page P10-T11's. The admin console (P11-T10, admin spec §3) is `/admin` and its eight pages (the eighth,
-// `/admin/knowledge`, is DEC-210's, P13-T06).
+// case page P10-T11's. The admin console (P11-T10, admin spec §3) is `/admin` and its six pages (`/admin/knowledge`
+// is DEC-210's, P13-T06; the pages for the auto-close rules and the digest were removed with DEC-214, and a path under
+// either is an unknown path, which the `*` route below answers).
 import { lazy, type ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router";
 import { useAuth } from "./auth/AuthProvider";
@@ -25,7 +26,7 @@ const TIER2_UP = CASE_ROLES;
 /** The admin console is the admin's alone; the API refuses the others on its own (and writes `authz.denied`). */
 const ADMIN_ONLY: readonly Role[] = ["admin"];
 
-// The eight pages of the console are fetched when their route first renders (P11-T20 row 56), so the tier1 and tier2
+// The six pages of the console are fetched when their route first renders (P11-T20 row 56), so the tier1 and tier2
 // pages do not carry the admin console in the main bundle. `RequireRole` wraps them, so a role that is turned away never
 // asks for one. They are named exports, hence the `default` of the module `lazy` wants. Any other file that imports one
 // of these statically would put it back in the main bundle: routesLazy.test.tsx reads this file for that, and `make
@@ -38,12 +39,6 @@ const UsersPage = lazy(() =>
 );
 const LlmPage = lazy(() =>
   import("./features/admin/LlmPage").then((m) => ({ default: m.LlmPage })),
-);
-const RulesPage = lazy(() =>
-  import("./features/admin/RulesPage").then((m) => ({ default: m.RulesPage })),
-);
-const DigestPage = lazy(() =>
-  import("./features/admin/DigestPage").then((m) => ({ default: m.DigestPage })),
 );
 const LabelsPage = lazy(() =>
   import("./features/admin/LabelsPage").then((m) => ({ default: m.LabelsPage })),
@@ -164,22 +159,6 @@ export function AppRoutes() {
           element={
             <AdminPage>
               <LlmPage />
-            </AdminPage>
-          }
-        />
-        <Route
-          path="/admin/rules"
-          element={
-            <AdminPage>
-              <RulesPage />
-            </AdminPage>
-          }
-        />
-        <Route
-          path="/admin/digest"
-          element={
-            <AdminPage>
-              <DigestPage />
             </AdminPage>
           }
         />

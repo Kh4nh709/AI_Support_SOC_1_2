@@ -27,10 +27,6 @@ vi.mock("./features/admin/LabelsPage", () => ({
   LabelsPage: () => <h1>{S.admin.title.labels}</h1>,
 }));
 
-// The rules page (P11-T14) reads the backend too, and RulesPage.test.tsx tests it: the route test looks for its place.
-vi.mock("./features/admin/RulesPage", () => ({
-  RulesPage: () => <h1>{S.admin.title.rules}</h1>,
-}));
 // The users page of the console reads the backend and its own file tests it (UsersPage.test.tsx); here only
 // its place in the route table matters.
 vi.mock("./features/admin/UsersPage", () => ({
@@ -69,8 +65,13 @@ const session = (role: Session["role"]): Session => ({
 const newClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
 function Where() {
-  const { pathname } = useLocation();
-  return <p data-testid="where">{pathname}</p>;
+  const { pathname, search } = useLocation();
+  return (
+    <>
+      <p data-testid="where">{pathname}</p>
+      <p data-testid="where-search">{search}</p>
+    </>
+  );
 }
 
 function renderAt(path: string, s: Session | null, ready = true) {
@@ -94,6 +95,7 @@ function renderAt(path: string, s: Session | null, ready = true) {
 }
 
 const where = () => screen.getByTestId("where").textContent;
+const whereSearch = () => screen.getByTestId("where-search").textContent;
 
 describe("the route table", () => {
   it.each<[Session["role"], string]>([
@@ -178,22 +180,17 @@ vi.mock("./features/admin/AuditPage", () => ({
   AuditPage: () => <h1>{S.admin.title.audit}</h1>,
 }));
 
-// The LLM page and the digest page read the API as well (LlmPage.test.tsx, DigestPage.test.tsx test them). The admin
-// pages are fetched with `import()` when their route opens (P11-T20 row 56), so a page that is not a stub would be
-// transformed from source inside the test, and `findBy` would wait for that: here too only the place matters.
+// The LLM page reads the API as well (LlmPage.test.tsx tests it). The admin pages are fetched with `import()` when their
+// route opens (P11-T20 row 56), so a page that is not a stub would be transformed from source inside the test, and
+// `findBy` would wait for that: here too only the place matters.
 vi.mock("./features/admin/LlmPage", () => ({
   LlmPage: () => <h1>{S.admin.title.llm}</h1>,
-}));
-vi.mock("./features/admin/DigestPage", () => ({
-  DigestPage: () => <h1>{S.admin.title.digest}</h1>,
 }));
 
 const ADMIN_PAGES: [path: string, title: string][] = [
   ["/admin/overview", S.admin.title.overview],
   ["/admin/users", S.admin.title.users],
   ["/admin/llm", S.admin.title.llm],
-  ["/admin/rules", S.admin.title.rules],
-  ["/admin/digest", S.admin.title.digest],
   ["/admin/labels", S.admin.title.labels],
   ["/admin/knowledge", S.admin.title.knowledge],
   ["/admin/audit", S.admin.title.audit],
@@ -266,8 +263,8 @@ describe("the admin console (spec §3)", () => {
   });
 
   it("has one main landmark on an admin page, and the header above it", async () => {
-    renderAt("/admin/rules", session("admin"));
-    await screen.findByRole("heading", { level: 1, name: S.admin.title.rules });
+    renderAt("/admin/llm", session("admin"));
+    await screen.findByRole("heading", { level: 1, name: S.admin.title.llm });
     expect(screen.getAllByRole("main")).toHaveLength(1);
     expect(screen.getByRole("banner")).toHaveTextContent(S.app.name);
     expect(screen.getByRole("navigation", { name: S.nav.label })).toBeInTheDocument();
@@ -279,6 +276,51 @@ describe("the admin console (spec §3)", () => {
     const names = screen.getAllByRole("navigation").map((n) => n.getAttribute("aria-label"));
     expect(names).toEqual([S.nav.label, S.admin.nav.label]);
   });
+});
+
+// DEC-214: the pages "Rules tự đóng" and "Digest hằng ngày" are gone, and so are their routes. A bookmark or an old
+// link to one lands where every unknown path lands: no redirect of its own, no notice, no page.
+describe("a removed admin page is an unknown path (DEC-214)", () => {
+  const REMOVED = [
+    "/admin/rules",
+    "/admin/rules/anything",
+    "/admin/digest",
+    "/admin/digest?day=2026-11-03",
+  ];
+  /** The h1 the two removed pages had. Literals: the strings are gone with the pages. */
+  const REMOVED_TITLES = ["Rules tự đóng", "Digest hằng ngày"];
+
+  it("sends an unknown admin path to the admin's home", async () => {
+    renderAt("/admin/no-such-page", session("admin"));
+    expect(where()).toBe("/admin/overview");
+    expect(
+      await screen.findByRole("heading", { level: 1, name: S.admin.title.overview }),
+    ).toBeInTheDocument();
+  });
+
+  it.each(REMOVED)(
+    "ends %s where /admin/no-such-page ends, and shows nothing of the page",
+    async (path) => {
+      const unknown = renderAt("/admin/no-such-page", session("admin"));
+      await screen.findByRole("heading", { level: 1, name: S.admin.title.overview });
+      const expected = [where(), whereSearch()];
+      unknown.unmount();
+
+      renderAt(path, session("admin"));
+      expect(
+        await screen.findByRole("heading", { level: 1, name: S.admin.title.overview }),
+      ).toBeInTheDocument();
+      expect([where(), whereSearch()]).toEqual(expected);
+      expect(where()).toBe("/admin/overview");
+      expect(whereSearch()).toBe("");
+      for (const title of REMOVED_TITLES) {
+        expect(screen.queryByRole("heading", { name: title })).not.toBeInTheDocument();
+      }
+      // no notice, no error boundary: the overview under the sidebar, nothing else
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByText(/rules? tự đóng|digest/i)).not.toBeInTheDocument();
+    },
+  );
 });
 
 describe("the layout", () => {

@@ -2013,7 +2013,7 @@ describe("the source of the page", () => {
       ["another query key", "void adminKeys.overviewAll;"],
       // The allow-list of relative imports: a new file next to these four would otherwise be read by nobody.
       ["a new helper of the same folder", 'import { helper } from "./labelHelpers";\nvoid helper;'],
-      ["a helper of another admin page", 'import { rows } from "./digestFigures";\nvoid rows;'],
+      ["a helper of another admin page", 'import { rows } from "./overviewModel";\nvoid rows;'],
       [
         "a shared component that is not on the list",
         'import { Chip } from "../../components/Chip";\nvoid Chip;',
