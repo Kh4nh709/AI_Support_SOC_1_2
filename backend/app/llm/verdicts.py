@@ -58,10 +58,12 @@ FP_POLICY_FIELDS: tuple[str, ...] = (
 _FACTS_MISMATCH = "facts_mismatch"
 _NO_VERIFIED_QUOTE = "no_verified_quote"
 _VERIFIER_DISAGREES = "verifier_disagrees"
+_VERIFIER_INVALID = "verifier_invalid"
 _FP_POLICY_PREFIX = "fp_policy:"
 
 #: Every reason ``held_reasons`` can return, in the gate's step order: step 2, step 3, step 4 (one per
-#: field, in ``FP_POLICY_FIELDS`` order) and step 6. A literal on purpose: the UI words each one
+#: field, in ``FP_POLICY_FIELDS`` order) and step 6 (``verifier_disagrees``, or ``verifier_invalid`` when
+#: the verifier's answer was unusable). A literal on purpose: the UI words each one
 #: (``strings.ts``, ``ai1.heldReason``) and its test reads this tuple from the source; the blind arm
 #: hides the list with ``held_by``. ``tests/test_held_reasons.py`` ties it to ``FP_POLICY_FIELDS``.
 HELD_REASONS: tuple[str, ...] = (
@@ -73,6 +75,7 @@ HELD_REASONS: tuple[str, ...] = (
     "fp_policy:identity_privileged",
     "fp_policy:playbook_rule",
     "verifier_disagrees",
+    "verifier_invalid",
 )
 
 
@@ -86,8 +89,10 @@ def held_reasons(gate_result: Mapping[str, Any] | None) -> list[str]:
     """Why the gate held the model's definite answer as ``needs_review``: the closed reasons of
     ``HELD_REASONS`` that ``gate_result`` records, in the gate's step order.
 
-    ``facts_mismatch`` is step 2 in ``forced_by``, ``no_verified_quote`` step 3, ``verifier_disagrees``
-    step 6; step 4 gives one ``fp_policy:<field>`` per entry of ``missing`` (in the order of ``missing``,
+    ``facts_mismatch`` is step 2 in ``forced_by``, ``no_verified_quote`` step 3; step 6 is
+    ``verifier_invalid`` when the gate recorded that the verifier's answer was unusable
+    (``steps["6"] == "invalid"``, ``security/gate.py`` ``step6_verifier``) and ``verifier_disagrees`` for
+    every other step-6 force; step 4 gives one ``fp_policy:<field>`` per entry of ``missing`` (in the order of ``missing``,
     which is the gate's). Only a value of the closed set leaves: an unknown step name or field, a
     duplicate, and a ``gate_result`` that is ``None`` or not a mapping all give less, never an error. A
     verdict the gate kept has an empty ``forced_by`` and ``missing``, so its list is empty."""
@@ -104,7 +109,9 @@ def held_reasons(gate_result: Mapping[str, Any] | None) -> list[str]:
         if field in FP_POLICY_FIELDS and reason not in reasons:
             reasons.append(reason)
     if "step6" in forced_by:
-        reasons.append(_VERIFIER_DISAGREES)
+        steps = gate_result.get("steps")
+        invalid = isinstance(steps, Mapping) and steps.get("6") == "invalid"
+        reasons.append(_VERIFIER_INVALID if invalid else _VERIFIER_DISAGREES)
     return reasons
 
 

@@ -4,7 +4,8 @@
 No database. The reasons are a closed set, in the gate's step order (spec 4.3):
 
     facts_mismatch (step 2), no_verified_quote (step 3), fp_policy:<field> for each entry of step 4's
-    `missing`, verifier_disagrees (step 6)
+    `missing`, verifier_disagrees (step 6), verifier_invalid (step 6 when the verifier's answer was
+    unusable: `steps["6"] == "invalid"`)
 
 and nothing else ever leaves: a garbled `gate_result` gives `[]`, never an exception.
 """
@@ -28,10 +29,11 @@ CLOSED = (
     "fp_policy:identity_privileged",
     "fp_policy:playbook_rule",
     "verifier_disagrees",
+    "verifier_invalid",
 )
 
 
-def test_the_closed_reasons_are_the_eight_of_the_spec_in_step_order():
+def test_the_closed_reasons_are_the_nine_in_step_order():
     assert verdicts.HELD_REASONS == CLOSED
     # The literal tuple and the fields step 4 can name cannot drift apart.
     assert verdicts.HELD_REASONS == (
@@ -39,6 +41,7 @@ def test_the_closed_reasons_are_the_eight_of_the_spec_in_step_order():
         "no_verified_quote",
         *(f"fp_policy:{field}" for field in verdicts.FP_POLICY_FIELDS),
         "verifier_disagrees",
+        "verifier_invalid",
     )
     assert verdicts.FP_POLICY_FIELDS == (
         "severity",
@@ -61,6 +64,29 @@ def test_each_forcing_step_gives_its_own_reason():
     assert verdicts.held_reasons({"forced_by": ["step2"]}) == ["facts_mismatch"]
     assert verdicts.held_reasons({"forced_by": ["step3"]}) == ["no_verified_quote"]
     assert verdicts.held_reasons({"forced_by": ["step6"]}) == ["verifier_disagrees"]
+
+
+def test_step_6_with_an_unusable_verifier_answer_is_verifier_invalid_not_disagreement():
+    invalid = {"forced_by": ["step6"], "steps": {"6": "invalid"}}
+    assert verdicts.held_reasons(invalid) == ["verifier_invalid"]
+    for other in ({"6": "disagree"}, {"6": "agree"}, {}, {"5": "findings:0"}):
+        assert verdicts.held_reasons({"forced_by": ["step6"], "steps": other}) == [
+            "verifier_disagrees"
+        ]
+
+
+def test_an_invalid_verifier_is_named_only_when_step_6_forced_the_verdict():
+    # `steps["6"]` alone does not hold anything back: the verdict may have been forced before, and the
+    # step only ever forces through `forced_by`.
+    assert verdicts.held_reasons({"forced_by": [], "steps": {"6": "invalid"}}) == []
+    assert verdicts.held_reasons({"forced_by": ["step2"], "steps": {"6": "invalid"}}) == [
+        "facts_mismatch"
+    ]
+
+
+@pytest.mark.parametrize("steps", [None, "6", ["6"], {"6": ["invalid"]}, {6: "invalid"}, 7])
+def test_a_garbled_steps_value_reads_as_a_plain_disagreement(steps):
+    assert verdicts.held_reasons({"forced_by": ["step6"], "steps": steps}) == ["verifier_disagrees"]
 
 
 def test_the_reasons_come_in_step_order_whatever_the_order_of_forced_by():
@@ -183,7 +209,11 @@ def _blocks(payload: dict, *, quote: str | None = None) -> dict[str, wrap.Block]
 _VERIFIER_FP_AGREES = {**VERIFIER_V2_AGREE, "structured_only_verdict": "false_positive"}
 
 
-def _run(proposal: dict, *, facts: dict, blocks: dict, holds: bool = True, verifier=None):
+_DEFAULT = object()
+
+
+def _run(proposal: dict, *, facts: dict, blocks: dict, holds: bool = True, verifier=_DEFAULT):
+    """The real gate, steps 1-7. ``verifier=None`` is a verifier whose answer did not parse."""
     state = gate.run_steps_1_to_5(
         proposal,
         facts,
@@ -192,7 +222,7 @@ def _run(proposal: dict, *, facts: dict, blocks: dict, holds: bool = True, verif
         rule_check=lambda _rule: (holds, None),
         scan=lambda _blocks: [],
     )
-    gate.finish(state, verifier if verifier is not None else _VERIFIER_FP_AGREES)
+    gate.finish(state, _VERIFIER_FP_AGREES if verifier is _DEFAULT else verifier)
     return gate.gate_result(state, prompt_version="pv", playbook_used_effective=None)
 
 
@@ -242,3 +272,77 @@ def test_a_verdict_the_gate_kept_is_not_held():
     assert result["forced"] is False
     assert verdicts.held_reasons(result) == []
     assert verdicts.proposed_action(result) == "false_positive"
+
+
+def test_a_verifier_whose_answer_did_not_parse_is_verifier_invalid_from_the_real_gate():
+    proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    result = _run(
+        proposal,
+        facts=_facts(proposal["structured_basis"]),
+        blocks=_blocks(proposal),
+        verifier=None,
+    )
+    assert result["steps"]["6"] == "invalid" and result["forced_by"] == ["step6"]
+    assert result["final_verdict"] == "needs_review"
+    assert verdicts.held_reasons(result) == ["verifier_invalid"]
+    assert verdicts.proposed_action(result) == "false_positive"
+
+
+def test_a_verifier_that_disagrees_is_verifier_disagrees_from_the_real_gate():
+    proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    result = _run(
+        proposal,
+        facts=_facts(proposal["structured_basis"]),
+        blocks=_blocks(proposal),
+        verifier=VERIFIER_V2_DISAGREE,
+    )
+    assert result["steps"]["6"] == "disagree"
+    assert verdicts.held_reasons(result) == ["verifier_disagrees"]
+
+
+def test_an_invalid_verifier_after_an_earlier_force_names_both():
+    proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    facts = _facts(proposal["structured_basis"], severity="critical")
+    result = _run(proposal, facts=facts, blocks=_blocks(proposal), verifier=None)
+    assert verdicts.held_reasons(result) == ["facts_mismatch", "verifier_invalid"]
+
+
+# ── FP_POLICY_FIELDS against the real step 4 (every field, not two of the five) ──────────────
+
+#: What makes each field fail step 4 (``security/gate.py``, ``step4_fp_policy``): the basis the model
+#: wrote and the DB facts must agree (step 2), so the basis carries the value too.
+_FAILS_STEP_4 = {
+    "severity": {"severity": "critical"},
+    "ioc_reputation": {"ioc_reputation": "malicious"},
+    "asset_criticality": {"asset_criticality": "high"},
+    "identity_privileged": {"identity_privileged": "true"},
+}
+
+
+def _step_4(fields: list[str]):
+    """The real gate with exactly ``fields`` failing step 4 (``playbook_rule`` through the rule check)."""
+    over: dict = {}
+    for field in fields:
+        over.update(_FAILS_STEP_4.get(field, {}))
+    basis = {**TRIAGE_V2_FALSE_POSITIVE["structured_basis"], **over}
+    proposal = {**copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE), "structured_basis": basis}
+    return _run(
+        proposal,
+        facts=_facts(basis),
+        blocks=_blocks(proposal),
+        holds="playbook_rule" not in fields,
+        verifier={**VERIFIER_V2_AGREE, "structured_only_verdict": "needs_review"},
+    )
+
+
+@pytest.mark.parametrize("field", verdicts.FP_POLICY_FIELDS)
+def test_each_field_step_4_can_name_is_a_reason_from_the_real_gate(field):
+    result = _step_4([field])
+    assert result["forced_by"] == ["step4"] and result["missing"] == [field]
+    assert verdicts.held_reasons(result) == [f"fp_policy:{field}"]
+
+
+def test_step_4_names_all_five_fields_in_the_order_of_fp_policy_fields():
+    result = _step_4(list(verdicts.FP_POLICY_FIELDS))
+    assert result["missing"] == list(verdicts.FP_POLICY_FIELDS)
+    assert verdicts.held_reasons(result) == [f"fp_policy:{f}" for f in verdicts.FP_POLICY_FIELDS]
