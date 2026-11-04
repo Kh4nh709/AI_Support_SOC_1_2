@@ -1818,7 +1818,6 @@ export const S = {
         requiredPurpose: "Chọn một mục đích",
         empty: "Không được để trống",
         tooLong: (max: number) => `Quá dài: tối đa ${max} ký tự`,
-        invalid: "Giá trị không hợp lệ",
         invalidName: "Tên có ký tự không được dùng (ký tự điều khiển hoặc ký tự vô hình)",
         invalidPurpose: "Chọn Xây kho hoặc Chấm điểm",
         invalidTime: (yearMin: number, yearMax: number) =>
@@ -1868,7 +1867,6 @@ export const S = {
         rule: "rule",
         level: (level: number) => `(level ${level})`,
         agent: "Máy",
-        route: "Src → Dst",
         details: "Chi tiết",
         detail: {
           alertTime: "Giờ SIEM phát hiện",

@@ -1,9 +1,13 @@
 // src/features/admin/labModel.test.ts — the pure parts of the lab pages (P14-T10): the time the form takes and
 // sends, what the form checks before it posts, the counter after a label, and the words of a refusal.
 import type { InfiniteData } from "@tanstack/react-query";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   LAB_FIELDS,
   LAB_FIELD_REASONS,
+  LAB_LABELS,
+  LAB_PURPOSES,
   type LabAlert,
   type LabAlertsResponse,
 } from "../../api/admin";
@@ -318,5 +322,68 @@ describe("withLabel, the counter after a label", () => {
     // a page that held nothing of the alert, and is not the one that counts, is the same object
     expect(next.pages[1]).toBe(before.pages[1]);
     expect(next.pageParams).toEqual(before.pageParams);
+  });
+});
+
+// Fix round 1, M5: a word nobody reads is a word nobody keeps equal to the page (`fieldReason.invalid` and
+// `runPage.route` were two). Every string, and every function that makes one, of the three blocks the lab pages read
+// is read somewhere in their source as `.name` or `["name"]`; the names of the two tables that are indexed by a
+// vocabulary (the labels, the purposes) are read by that vocabulary. The check goes by name, not by path: a name that
+// two blocks share is found if either is read.
+describe("the words of the lab pages", () => {
+  const SOURCES = [
+    "labModel.ts",
+    "LabRunsPage.tsx",
+    "LabRunCreatePanel.tsx",
+    "LabRunPage.tsx",
+    "LabAlertRow.tsx",
+  ];
+  const code = SOURCES.map((name) =>
+    readFileSync(join("src", "features", "admin", name), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, ""),
+  ).join("\n");
+  const DYNAMIC = new Set<string>([...LAB_LABELS, ...LAB_PURPOSES]);
+
+  /** The names of the strings and of the functions that make one, at any depth. */
+  function names(value: unknown, skip: ReadonlySet<string> = new Set()): string[] {
+    if (typeof value !== "object" || value === null) return [];
+    return Object.entries(value).flatMap(([name, item]) => {
+      if (skip.has(name)) return [];
+      return typeof item === "object" ? names(item, skip) : [name];
+    });
+  }
+  const lab = S.admin.lab;
+  const NAMES = [
+    ...names(lab.fieldReason),
+    ...names(lab.runsPage, new Set(["purposeHelp"])),
+    ...names(lab.runPage),
+  ];
+
+  it("reads a name in each of three blocks (a check over no names would pass for nothing)", () => {
+    expect(NAMES.length).toBeGreaterThan(30);
+    expect(code.length).toBeGreaterThan(5000);
+    expect(NAMES).toContain("invalidTime");
+    expect(NAMES).toContain("loadMore");
+  });
+
+  it.each(NAMES)("%s is read by a page", (name) => {
+    const read = new RegExp(`\\.${name}\\b|\\[["']${name}["']\\]`).test(code);
+    expect(read || DYNAMIC.has(name), `S.admin.lab: nothing reads ${name}`).toBe(true);
+  });
+
+  it("finds the two that were left unused, if they come back", () => {
+    for (const unused of ["route", "invalid"]) {
+      expect(new RegExp(`\\.${unused}\\b|\\[["']${unused}["']\\]`).test(code), unused).toBe(false);
+    }
+    expect(Object.keys(lab.fieldReason)).not.toContain("invalid");
+    expect(Object.keys(lab.runPage)).not.toContain("route");
+  });
+
+  it("holds a text for every purpose and every label of the backend's vocabularies", () => {
+    expect(Object.keys(lab.purpose).sort()).toEqual([...LAB_PURPOSES].sort());
+    expect(Object.keys(lab.runsPage.create.purposeHelp).sort()).toEqual([...LAB_PURPOSES].sort());
+    expect(Object.keys(lab.label).sort()).toEqual([...LAB_LABELS, "none"].sort());
+    for (const label of LAB_LABELS) expect(lab.runPage.action[label]).toBeTruthy();
   });
 });
