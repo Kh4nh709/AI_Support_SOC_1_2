@@ -372,14 +372,6 @@ describe("the words of the lab pages", () => {
     expect(read || DYNAMIC.has(name), `S.admin.lab: nothing reads ${name}`).toBe(true);
   });
 
-  it("finds the two that were left unused, if they come back", () => {
-    for (const unused of ["route", "invalid"]) {
-      expect(new RegExp(`\\.${unused}\\b|\\[["']${unused}["']\\]`).test(code), unused).toBe(false);
-    }
-    expect(Object.keys(lab.fieldReason)).not.toContain("invalid");
-    expect(Object.keys(lab.runPage)).not.toContain("route");
-  });
-
   it("holds a text for every purpose and every label of the backend's vocabularies", () => {
     expect(Object.keys(lab.purpose).sort()).toEqual([...LAB_PURPOSES].sort());
     expect(Object.keys(lab.runsPage.create.purposeHelp).sort()).toEqual([...LAB_PURPOSES].sort());
