@@ -114,7 +114,8 @@ def test_a_soar_switch_row_says_true_false_dec_207_and_where_the_how_to_is(key):
 
 def test_the_autoclose_switch_row_warns_that_the_pages_to_review_its_rules_are_gone():
     """P15-T01 (DEC-214): with `true`, an alert is closed by a rule; the UI has no page that shows the rules or
-    reviews the digest any more, so the row says it is not switched on again before the pages come back."""
+    reviews the digest any more, so the row says it is not switched on again before the pages come back.
+    """
     what = _rows()["AUTOCLOSE_ENABLED"]
     assert "DEC-214" in what
     assert "no rules page and no digest page" in what

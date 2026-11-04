@@ -202,9 +202,7 @@ def test_the_ui_section_says_where_the_react_console_is_and_that_the_jinja_pages
     assert "went with the retire step" in ui
     # P15-T01 (DEC-214): the console's pages are the ones that stay; the rules and digest pages were removed,
     # and the sentence that lists them says so without naming a path of either.
-    listed = re.search(
-        r"React app served here at `http://127\.0\.0\.1:8080/admin` \(([^)]*)\)", ui
-    )
+    listed = re.search(r"React app served here at `http://127\.0\.0\.1:8080/admin` \(([^)]*)\)", ui)
     assert listed, "the UI section no longer lists the pages of the console"
     assert re.findall(r"`/admin/([a-z]+)`", listed.group(1)) == [
         "overview",

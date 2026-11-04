@@ -255,7 +255,10 @@ def test_the_alarms_paragraph_does_not_say_the_rules_page_is_merged():
     section = _section(_text(), "Alarms")
     assert "is merged; the first rule" not in section
     assert "/admin/rules" not in section
-    assert "DEC-214" in section.split("`digest_unreviewed` reads `ok` all day", 1)[1].split("\n\n", 1)[0]
+    assert (
+        "DEC-214"
+        in section.split("`digest_unreviewed` reads `ok` all day", 1)[1].split("\n\n", 1)[0]
+    )
 
 
 def test_restore_drill_heading_appears_once():

@@ -81,7 +81,9 @@ def test_no_sentence_sends_the_operator_to_a_page_the_ui_no_longer_has() -> None
     for number, line in enumerate(_text().splitlines(), start=1):
         for page in ("/admin/rules", "/admin/digest"):
             if page in line:
-                assert "8000" in line, f"line {number} sends the operator to {page}, a page the UI no longer has"
+                assert (
+                    "8000" in line
+                ), f"line {number} sends the operator to {page}, a page the UI no longer has"
 
 
 def test_the_two_owner_steps_are_one_procedure_in_dec_205s_order() -> None:
