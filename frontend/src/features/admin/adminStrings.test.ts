@@ -220,9 +220,9 @@ describe("the reason codes", () => {
     expect(S.admin.reason.frozen).not.toMatch(/^Không hoàn tác được/);
   });
 
-  // `not_found` is read from `{reason: "not_found"}` (a user or a job that is gone: the page reloads its list)
-  // and from the plain "not found" of a bad id in a path (`deps.clean_path_id`; nothing is reloaded), so its
-  // text must not say that a list was reloaded.
+  // `not_found` is read from `{reason: "not_found"}`: a user, a job or a knowledge entry that is gone. The pages
+  // of the users and of the failed jobs reload their list; the others do not, so its text must not say that a
+  // list was reloaded.
   it("has a text for `not_found` that does not claim a list was reloaded", () => {
     expect(isText(S.admin.reason.not_found)).toBe(true);
     expect(S.admin.reason.not_found).not.toContain("Danh sách đã được tải lại");

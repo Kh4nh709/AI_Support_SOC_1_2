@@ -152,9 +152,6 @@ const LEGACY_DETAIL: Readonly<Record<string, AdminReason>> = {
   "already labelled by this labeler": "already_labelled", // POST /api/admin/labels: 409
   "the gold set is frozen": "frozen", // labels: 409
   "labeler must be the current user": "labeler_mismatch", // labels: 403
-  // `deps.clean_path_id`: a control character in an alert or case id (lower case, unlike FastAPI's own
-  // "Not Found" for a path that is not a route, which stays `other`).
-  "not found": "not_found",
 };
 
 function isReason(value: unknown): value is AdminReason {

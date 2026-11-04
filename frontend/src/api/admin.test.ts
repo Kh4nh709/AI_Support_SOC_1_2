@@ -555,8 +555,6 @@ describe("parseAdminDetail", () => {
     ["already labelled by this labeler", 409, "already_labelled"],
     ["the gold set is frozen", 409, "frozen"],
     ["labeler must be the current user", 403, "labeler_mismatch"],
-    // `deps.clean_path_id`: a control character in an alert or case id (lower case, unlike FastAPI's own).
-    ["not found", 404, "not_found"],
   ])(
     "reads the plain text %j of the older routes as the reason it stands for",
     (text, status, reason) => {
@@ -580,6 +578,10 @@ describe("parseAdminDetail", () => {
 
     it.each<[text: string, status: number]>([
       ["Not Found", 404], // FastAPI's own, for a path that is not a route
+      // The plain text of `deps.clean_path_id` (a control character in an alert or case id). Only the tier 1 and
+      // tier 2 routes and the removed digest route used that id type, none of them is called through this client
+      // (DEC-214), and the lookup is exact: neither this text nor FastAPI's capital-N one is a reason.
+      ["not found", 404],
       ["Method Not Allowed", 405],
       ["auth disabled: JWT_SECRET unset", 503], // `deps.current_user`
       ["Internal Server Error", 500],
@@ -701,16 +703,19 @@ describe("adminErrorOf", () => {
     });
   });
 
+  // `POST /api/admin/labels` has a Pydantic body (`LabelIn`, labels.py): a body that breaks it gets FastAPI's list.
   it("reads FastAPI's list-shaped 422 off a real answer as other", async () => {
     server.use(
-      http.put("/api/admin/llm/limits", () =>
+      http.post("/api/admin/labels", () =>
         HttpResponse.json(
-          { detail: [{ type: "missing", loc: ["body", "cap_usd"], msg: "Field required" }] },
+          { detail: [{ type: "missing", loc: ["body", "label"], msg: "Field required" }] },
           { status: 422 },
         ),
       ),
     );
-    const error = await putLlmLimits({}).catch((e: unknown) => e);
+    const error = await postLabel({ labeler: UID, cluster_id: "c-1" } as never).catch(
+      (e: unknown) => e,
+    );
     expect(adminErrorOf(error)).toEqual({ kind: "other", status: 422 });
   });
 
@@ -728,21 +733,6 @@ describe("adminErrorOf", () => {
       kind: "messages",
       status: 422,
       messages: ["inventory.yaml:14: bad", "iocs.csv:2: bad"],
-    });
-  });
-
-  it("reads the 404 text of a bad id in a path as not_found", async () => {
-    server.use(
-      http.post("/api/admin/jobs/:id/retry", () =>
-        HttpResponse.json({ detail: "not found" }, { status: 404 }),
-      ),
-    );
-    const error = await retryJob(7).catch((e: unknown) => e);
-    expect(adminErrorOf(error)).toEqual({
-      kind: "reason",
-      status: 404,
-      reason: "not_found",
-      extra: {},
     });
   });
 
