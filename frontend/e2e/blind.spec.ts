@@ -22,6 +22,7 @@ import {
   waitForTriage,
   type Answer,
 } from "./fixtures";
+import { wordsFound } from "../src/testing/containsWord";
 
 /** The keys `visibility.strip` removes from an undecided blind head (with R17's two). */
 const HIDDEN_KEYS = [
@@ -44,14 +45,32 @@ const VERDICT = "needs_review";
 const PROPOSED = "false_positive";
 
 /** A reason the gate held it for (`llm.verdicts.HELD_REASONS`): a closed code, ①'s account of itself. */
-const HELD_REASON = /^(facts_mismatch|no_verified_quote|fp_policy:[a-z_]+|verifier_disagrees)$/;
+const HELD_REASON =
+  /^(facts_mismatch|no_verified_quote|fp_policy:[a-z_]+|verifier_disagrees|verifier_invalid)$/;
 
-/** What the page would say of ①'s conclusion: the line, its "held" half, and the words of every reason. */
-const CONCLUSION_WORDS = [
-  S.ai1.conclusion,
-  "giữ lại cho người xem",
-  ...Object.values(S.ai1.heldReason),
-] as const;
+/** What is distinctive of ①'s conclusion line, so it is looked for on the whole page: the line and its bold half. */
+const CONCLUSION_PHRASES = [S.ai1.conclusion, S.ai1.held] as const;
+
+/**
+ * What a leak of the conclusion would put in the AI column, and only there: the words of every reason (an
+ * alert's own text or a playbook line may say "tài khoản đặc quyền"; that is not a leak), and the two labels of a
+ * verdict as WORDS ("SFTP" is not "TP").
+ */
+const COLUMN_MARKERS = [...Object.values(S.ai1.heldReason), "FP", "TP"] as const;
+
+/** The labels of the reasons the gate held the stub's verdict for, read from the database (step 4's fields). */
+function heldLabels(id: string): string[] {
+  const fields = sql(
+    "SELECT string_agg(m, ',' ORDER BY ord) FROM llm_runs r, " +
+      "jsonb_array_elements_text(r.gate_result->'missing') WITH ORDINALITY AS t(m, ord) " +
+      `WHERE r.pipeline = 'triage' AND r.role = 'proposer' AND r.subject_id = '${id}'`,
+  ).split(",");
+  expect(fields, "step 4 named the playbook rule the stub did not cite").toContain("playbook_rule");
+  const wording = S.ai1.heldReason as Record<string, string>;
+  const labels = fields.map((field) => wording[`fp_policy:${field}`]);
+  expect(labels.every(Boolean), "every field step 4 named has a label").toBe(true);
+  return labels as string[];
+}
 
 function walk(value: unknown, keys: Set<string>, strings: string[]): void {
   if (Array.isArray(value)) {
@@ -147,7 +166,7 @@ test("a blind head shows nothing of ① until it is decided, then shows it", asy
   const row = page.getByRole("row").filter({ has: link });
   await expect(row).toContainText(S.ai1.hidden);
   await expect(row).not.toContainText(S.ai1.action.needs_review);
-  await expect(row).not.toContainText(S.ai1.action.false_positive);
+  await expect(row).not.toContainText(/\bFP\b/); // the AI's answer, as a word
 
   await link.click();
   await expect(page).toHaveURL(`/alerts/${head.id}`);
@@ -163,13 +182,20 @@ test("a blind head shows nothing of ① until it is decided, then shows it", asy
   for (const seen of [text, html]) {
     expect(seen.includes(token), "the page holds the head's token").toBe(false);
     expect(seen.includes(S.ai1.action.needs_review), "the page words ①'s verdict").toBe(false);
-    for (const word of CONCLUSION_WORDS) {
-      expect(seen.includes(word), `the page says "${word}" of a blind head's conclusion`).toBe(
+    for (const phrase of CONCLUSION_PHRASES) {
+      expect(seen.includes(phrase), `the page says "${phrase}" of a blind head's conclusion`).toBe(
         false,
       );
     }
   }
   await expect(page.getByText(/AI kết luận/)).toHaveCount(0);
+  // The AI column itself: no reason, no verdict label as a word.
+  const column = page.getByRole("region", { name: S.alert.aiHeading });
+  for (const seen of [await column.innerText(), await column.innerHTML()]) {
+    expect(wordsFound(seen, COLUMN_MARKERS), "the blind AI column names ①'s conclusion").toEqual(
+      [],
+    );
+  }
   const answers = await traffic.answers();
   // The traffic includes the queue (with the row of this head) and the head's own view, or the check is empty.
   expect(
@@ -201,8 +227,13 @@ test("a blind head shows nothing of ① until it is decided, then shows it", asy
   await page.getByRole("button", { name: S.decision.submit }).click();
   await expect(page.getByRole("status").filter({ hasText: S.decision.recorded })).toBeVisible();
   await expect(page.getByText(S.ai1.decidedHeading)).toBeVisible();
-  await expect(page.getByText(S.ai1.action.needs_review)).toBeVisible();
+  // The decision lifts the arm: the AI column now says what the AI concluded and why the system held it
+  // (fix round 1, I1), and "Khớp" compares the decision with the stored verdict, which was held: no verdict.
+  await expect(column.getByText(/AI kết luận/)).toContainText(
+    `AI kết luận: ${S.ai1.action.false_positive} (độ tin cậy trung bình) — ${S.ai1.held} vì: ${heldLabels(head.id).join(", ")}`,
+  );
   await expect(page.getByText(S.ai1.match)).toBeVisible();
+  await expect(page.getByText(S.ai1.matchNoVerdict)).toBeVisible();
   const after = (await traffic.answers()).slice(beforeDecision);
   const revealed = after
     .filter((a) => a.path === `/api/tier1/alerts/${head.id}`)
@@ -230,17 +261,7 @@ test("a visible head says what the AI concluded and why the system held it for a
   await waitForStatus(head.id, "queued_tier1");
   await waitForTriage(head.id);
   // The stub concludes false_positive; gate step 4 held it, and the database records which fields it named.
-  const missing = sql(
-    "SELECT string_agg(m, ',' ORDER BY ord) FROM llm_runs r, " +
-      "jsonb_array_elements_text(r.gate_result->'missing') WITH ORDINALITY AS t(m, ord) " +
-      `WHERE r.pipeline = 'triage' AND r.role = 'proposer' AND r.subject_id = '${head.id}'`,
-  ).split(",");
-  expect(missing, "step 4 named the playbook rule the stub did not cite").toContain(
-    "playbook_rule",
-  );
-  const wording = S.ai1.heldReason as Record<string, string>;
-  const labels = missing.map((field) => wording[`fp_policy:${field}`]);
-  expect(labels.every(Boolean), "every field step 4 named has a label").toBe(true);
+  const labels = heldLabels(head.id);
 
   await loginAs(page, "t1");
   const link = page.locator(`a[href="/alerts/${head.id}"]`);
@@ -251,7 +272,9 @@ test("a visible head says what the AI concluded and why the system held it for a
 
   const column = page.getByRole("region", { name: S.alert.aiHeading });
   await expect(column.getByText(/AI kết luận/)).toContainText(
-    `AI kết luận: ${S.ai1.action.false_positive} (độ tin cậy trung bình) — hệ thống giữ lại cho người xem vì: ${labels.join(", ")}`,
+    `AI kết luận: ${S.ai1.action.false_positive} (độ tin cậy trung bình) — ${S.ai1.held} vì: ${labels.join(", ")}`,
   );
+  // the phrase is bold (spec 4.3)
+  await expect(column.locator("strong", { hasText: S.ai1.held })).toHaveCount(1);
   await expect(column.getByText(S.ai1.hidden)).toHaveCount(0);
 });

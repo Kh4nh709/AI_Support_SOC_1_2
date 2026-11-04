@@ -80,10 +80,16 @@ describe("AiCell", () => {
   });
 
   it("words a decided alert by the action ① had suggested, or 'chưa có' when it had none", () => {
-    const { unmount } = show({ kind: "decided", action: "needs_review", confidence: null });
+    const base = {
+      kind: "decided" as const,
+      confidence: null,
+      proposed: null,
+      heldBy: [] as string[],
+    };
+    const { unmount } = show({ ...base, action: "needs_review" });
     expect(screen.getByText("Cần xem xét")).toBeInTheDocument();
     unmount();
-    show({ kind: "decided", action: null, confidence: null });
+    show({ ...base, action: null });
     expect(screen.getByText(S.ai1.none)).toBeInTheDocument();
   });
 });

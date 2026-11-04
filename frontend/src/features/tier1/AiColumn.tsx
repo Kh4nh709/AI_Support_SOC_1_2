@@ -8,7 +8,7 @@ import type { AlertView, Suggestion } from "../../api/tier1";
 import { formatDateTime } from "../../format";
 import { S, labelOf } from "../../strings";
 import { agreementOf, humanDecisionOf } from "./agreement";
-import { aiStateOfView, conclusionOf, heldOf, type AiState } from "./aiState";
+import { aiStateOfView, conclusionOf, heldOf, type AiConclusion, type AiState } from "./aiState";
 
 const MUTED = "text-muted";
 
@@ -44,26 +44,40 @@ function ForcedFlag() {
 }
 
 /**
- * What the AI concluded (P14-T03, DEC-213): "AI kết luận: TP (độ tin cậy cao)", and when the gate held the
- * answer back for a person, "… — hệ thống giữ lại cho người xem vì: <reasons>". The conclusion is the model's own
- * answer, not the `needs_review` the system stored in its place; a reason the UI has no label for is shown as its
- * code. All of it is text.
+ * What the AI concluded (P14-T03, DEC-213): "AI kết luận: **TP** (độ tin cậy cao)", and when the gate held the
+ * answer back for a person, "… — **hệ thống giữ lại cho người xem** vì: <reasons>". The conclusion is the model's
+ * own answer, not the `needs_review` the system stored in its place; a reason the UI has no label for is shown as
+ * its code. All of it is text.
+ *
+ * The one component of that line, for the undecided column (`Verdict`) and for the decided one (`Decided`, in the
+ * "Gợi ý ①" box): the two pages say the same thing in the same words, and what is added to the line later (the
+ * match percentage and the notice that the RAG was not applied, P14-T07) is added here, once. `forced` is the
+ * gate's flag, which only an undecided state knows.
  */
-function Conclusion({
+export function ConclusionLine({
   state,
   conclusion,
+  forced = false,
 }: {
-  state: Extract<AiState, { kind: "ready" }>;
+  state: AiConclusion & { confidence: string | null };
   conclusion: string;
+  forced?: boolean;
 }) {
   const reasons = state.heldBy.map((code) => labelOf(S.ai1.heldReason, code));
+  const because = S.ai1.heldBecause(reasons);
   return (
     <p className="text-base text-ai-accent">
       {S.ai1.conclusion}: <strong className="text-lg">{labelOf(S.ai1.action, conclusion)}</strong>
       {state.confidence !== null &&
         ` ${S.ai1.confidenceNote(labelOf(S.confidence, state.confidence))}`}
-      {heldOf(state) && ` ${S.ai1.heldLine(reasons)}`}
-      {state.forced && <ForcedFlag />}
+      {heldOf(state) && (
+        <>
+          {` ${S.ai1.heldDash} `}
+          <strong>{S.ai1.held}</strong>
+          {because !== "" && ` ${because}`}
+        </>
+      )}
+      {forced && <ForcedFlag />}
     </p>
   );
 }
@@ -81,7 +95,7 @@ function Verdict({
   return (
     <div className="space-y-2">
       {conclusion !== null ? (
-        <Conclusion state={state} conclusion={conclusion} />
+        <ConclusionLine state={state} conclusion={conclusion} forced={state.forced} />
       ) : (
         <>
           <div>
@@ -293,7 +307,10 @@ function Decided({
   // What the pilot report counts as the human decision, read from the case as well as the status (agreement.ts):
   // `null` is a status that is not a Tier 1 decision (auto_closed, or a closed_confirmed with no case).
   const human = humanDecisionOf(view.status, view.case_id);
+  // "Khớp" is the stored verdict's, as the pilot report counts it; the line beside it says what the AI concluded
+  // and why the gate held it (P14-T03, fix round 1), the same line the undecided column draws.
   const agreement = agreementOf(view.status, state.action, view.case_id);
+  const conclusion = conclusionOf(state);
   const byTier1 = human !== null;
   // Tier 2 has concluded an alert Tier 1 escalated: the status is the conclusion's, the decision is still the
   // escalation. The holder of the alert is named on the escalation, never on the conclusion.
@@ -320,18 +337,22 @@ function Decided({
         </div>
         <div className="rounded border border-ai-border p-3">
           <span className="text-xs text-muted">{S.ai1.decidedAi}</span>
-          <p className="text-sm">
-            {state.action === null ? (
-              <span className={MUTED}>{S.ai1.none}</span>
-            ) : (
-              <>
-                <span className="text-ai-accent">{labelOf(S.ai1.action, state.action)}</span>
-                {state.confidence !== null && (
-                  <span className={MUTED}> · {labelOf(S.confidence, state.confidence)}</span>
-                )}
-              </>
-            )}
-          </p>
+          {conclusion !== null ? (
+            <ConclusionLine state={state} conclusion={conclusion} />
+          ) : (
+            <p className="text-sm">
+              {state.action === null ? (
+                <span className={MUTED}>{S.ai1.none}</span>
+              ) : (
+                <>
+                  <span className="text-ai-accent">{labelOf(S.ai1.action, state.action)}</span>
+                  {state.confidence !== null && (
+                    <span className={MUTED}> · {labelOf(S.confidence, state.confidence)}</span>
+                  )}
+                </>
+              )}
+            </p>
+          )}
         </div>
       </div>
       {agreement === null ? (

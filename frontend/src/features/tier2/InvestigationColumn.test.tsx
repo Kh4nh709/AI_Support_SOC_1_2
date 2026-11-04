@@ -880,6 +880,50 @@ describe("done", () => {
       expect(screen.queryByText(sentence)).not.toBeInTheDocument();
     });
 
+    // Fix round 1 (M5): the stored conclusion is the system's word. `need_more_data` beside one of the three
+    // definite conclusions of the model means the system held it, whatever `held_by` managed to name.
+    it("holds a conclusion stored as need_more_data even when held_by names no cause, and keeps the overruled sentence", async () => {
+      const sentence =
+        "Mô hình đề xuất Không phải sự cố (false_positive) nhưng kết luận đã bị hạ xuống Cần thêm dữ liệu (need_more_data).";
+      serveViews(heldRun([], { overruled: sentence }));
+      renderColumn();
+      const text = await line();
+      expect(text).toHaveTextContent(/^AI kết luận: Không phải sự cố — hệ thống giữ lại$/);
+      expect(text.textContent).not.toContain("vì:");
+      // with no cause to name, the server's sentence is the only account of the override: it stays
+      expect(screen.getByText(sentence)).toBeInTheDocument();
+    });
+
+    it.each(["false_positive", "policy_violation", "confirmed_incident"])(
+      "holds a need_more_data stored over the model's %s, with no cause",
+      async (modelConclusion) => {
+        serveViews(heldRun([], { model_conclusion: modelConclusion }));
+        renderColumn();
+        expect(await line()).toHaveTextContent(/ — hệ thống giữ lại$/);
+      },
+    );
+
+    it("does not hold a conclusion that is the model's own, whatever held_by says it has not named", async () => {
+      serveViews(concluded({ held_by: [] }));
+      renderColumn();
+      expect((await line()).textContent).not.toContain("giữ lại");
+    });
+
+    it("does not call a stored need_more_data held when the model's conclusion is not one of the three", async () => {
+      // `model_conclusion` is closed on the server; a value outside it is nothing the model may have said
+      serveViews(heldRun([], { model_conclusion: "need_more_data" }));
+      renderColumn();
+      expect((await line()).textContent).not.toContain("giữ lại");
+    });
+
+    it("keeps the overruled sentence hidden when the causes are named (it would repeat them)", async () => {
+      const sentence = "Mô hình đề xuất Không phải sự cố nhưng kết luận đã bị hạ xuống.";
+      serveViews(heldRun(["no_verified_evidence"], { overruled: sentence }));
+      renderColumn();
+      await line();
+      expect(screen.queryByText(sentence)).not.toBeInTheDocument();
+    });
+
     it("keeps the existing overruled sentence for an old run that has no model_conclusion", async () => {
       const sentence =
         "Mô hình đề xuất Không phải sự cố (false_positive) nhưng kết luận đã bị hạ xuống Cần thêm dữ liệu (need_more_data): không có bằng chứng nào kiểm chứng được với log của case.";

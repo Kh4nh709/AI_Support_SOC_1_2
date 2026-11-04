@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ALERT_STATUSES } from "./api/tier1";
-import { CASE_STATUSES } from "./api/tier2";
+import { CASE_STATUSES, HELD_CONCLUSION, MODEL_CONCLUSIONS } from "./api/tier2";
 import { MIN_QUOTE_CHARS, S, bandCodeOfLabel, labelOf } from "./strings";
 
 it("names the two Tier-1 closing decisions, escalate and reopen", () => {
@@ -328,7 +328,7 @@ describe("② labels follow the backend", () => {
 describe("① verdict and held-reason labels follow the backend", () => {
   it("reads the backend tuples (a parse that finds nothing would compare nothing)", () => {
     expect(pyTuple("GATED_ACTIONS")).toEqual(["false_positive", "needs_review", "true_positive"]);
-    expect(pyTuple("HELD_REASONS")).toHaveLength(8);
+    expect(pyTuple("HELD_REASONS")).toHaveLength(9);
     expect(pyTuple("FP_POLICY_FIELDS")).toHaveLength(5);
   });
 
@@ -353,14 +353,18 @@ describe("① verdict and held-reason labels follow the backend", () => {
       "fp_policy:identity_privileged": "tài khoản đặc quyền",
       "fp_policy:playbook_rule": "không khớp bảng quyết định đã duyệt",
       verifier_disagrees: "bộ kiểm tra không đồng ý",
+      verifier_invalid: "bộ kiểm tra không trả lời hợp lệ",
     });
   });
 
   it("writes the conclusion line of the alert page as the spec has it", () => {
     expect(S.ai1.conclusion).toBe("AI kết luận");
     expect(S.ai1.confidenceNote("cao")).toBe("(độ tin cậy cao)");
-    expect(S.ai1.heldLine(["a", "b"])).toBe("— hệ thống giữ lại cho người xem vì: a, b");
-    expect(S.ai1.heldLine([])).toBe("— hệ thống giữ lại cho người xem");
+    // the phrase is bold on the page (spec 4.3), so it is a string of its own
+    expect(S.ai1.heldDash).toBe("—");
+    expect(S.ai1.held).toBe("hệ thống giữ lại cho người xem");
+    expect(S.ai1.heldBecause(["a", "b"])).toBe("vì: a, b");
+    expect(S.ai1.heldBecause([])).toBe("");
   });
 });
 
@@ -378,6 +382,13 @@ describe("② held-reason labels follow the backend", () => {
   it("writes the conclusion line of the case page as the spec has it", () => {
     expect(S.ai2.conclusion).toBe("AI kết luận");
     expect(S.ai2.heldLine(["x", "y"])).toBe("— hệ thống giữ lại vì: x, y");
+    expect(S.ai2.heldLine([])).toBe("— hệ thống giữ lại"); // held, with no cause to name (M5)
+  });
+
+  it("holds the model's three conclusions and the system's own as the backend does (M5)", () => {
+    expect([...MODEL_CONCLUSIONS]).toEqual(pyTuple("MODEL_CONCLUSIONS"));
+    expect(pyTuple("MODEL_CONCLUSIONS")).toHaveLength(3); // a parse that finds nothing compares nothing
+    expect(Object.keys(S.ai2.suggestedConclusion)).toEqual([...MODEL_CONCLUSIONS, HELD_CONCLUSION]);
   });
 });
 

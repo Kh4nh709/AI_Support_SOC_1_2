@@ -3,6 +3,7 @@
 // text, and the escape of the characters a person cannot see. A payload is whatever the writers of the
 // events put there, so every function here is also shown to survive a payload of the wrong shape.
 import { S } from "../../strings";
+import { containsWord } from "../../testing/containsWord";
 import {
   REDACTED,
   hasInvisible,
@@ -592,10 +593,13 @@ describe("the summary of a label.created event never shows a verdict (DEC-204)",
 describe("the summary of an event whose suggestion the server withheld (DEC-101)", () => {
   const H = REDACTED;
   const A = S.admin.auditPage.summary;
-  const WORDS = ["TP", "FP", "Cần xem xét", "độ tin cậy", "đã ép", " ép "];
+  const WORDS = ["Cần xem xét", "độ tin cậy", "đã ép", " ép "];
+  // the two labels of a verdict are found as words ("SFTP" in a payload is not a leak)
+  const VERDICT_LABELS = ["TP", "FP"];
   const notShown = (line: string) => {
     expect(line).not.toContain(H);
     for (const word of WORDS) expect(line).not.toContain(word);
+    for (const label of VERDICT_LABELS) expect(containsWord(line, label), label).toBe(false);
   };
 
   it("says triage.suggested is withheld, with no marker, no action and no confidence", () => {

@@ -6,6 +6,7 @@ import { render, screen, within } from "@testing-library/react";
 import axe from "axe-core";
 import type { AlertView, Suggestion } from "../../api/tier1";
 import { S } from "../../strings";
+import { wordsFound } from "../../testing/containsWord";
 import { AiColumn, Unavailable } from "./AiColumn";
 import { aiStateOfView } from "./aiState";
 
@@ -267,6 +268,8 @@ describe("AI kết luận", () => {
     );
     // the AI's own answer, not the system's `Cần xem xét`, is the conclusion
     expect(within(line()).getByText("FP").tagName).toBe("STRONG");
+    // and the phrase "hệ thống giữ lại cho người xem" is bold too, as spec 4.3 has it (M1)
+    expect(within(line()).getByText("hệ thống giữ lại cho người xem").tagName).toBe("STRONG");
     expect(line().textContent).not.toContain("Cần xem xét");
   });
 
@@ -341,10 +344,103 @@ describe("AI kết luận", () => {
     expect(col.getByText(S.ai1.verdict).parentElement).toHaveTextContent("Cần xem xét");
   });
 
-  it("is not in a decided column, which compares the decision with what ① stored", () => {
-    renderColumn(held(["verifier_disagrees"], { status: "closed_fp", acknowledged_by_name: "An" }));
-    expect(within(column()).queryByText(/AI kết luận/)).not.toBeInTheDocument();
-    expect(within(column()).getByText(S.ai1.decidedAi)).toBeInTheDocument();
+  it("names the ninth reason, an unusable verifier answer, in its own words (M3)", () => {
+    renderColumn(held(["verifier_invalid"]));
+    expect(line()).toHaveTextContent("vì: bộ kiểm tra không trả lời hợp lệ");
+    expect(line().textContent).not.toContain("không đồng ý");
+  });
+
+  // Fix round 1 (I1): a decided page still says what the AI concluded and why the gate held it - in the
+  // "Gợi ý ①" box, by the very component the undecided column uses. "Khớp" is still the stored verdict's.
+  describe("on a decided page", () => {
+    const decidedHeld = (over: Partial<AlertView> = {}) =>
+      held(["fp_policy:asset_criticality", "verifier_disagrees"], {
+        status: "closed_fp",
+        acknowledged_by: "u1",
+        acknowledged_by_name: "An",
+        ...over,
+      });
+    const box = () => within(column()).getByText(S.ai1.decidedAi).closest("div")!;
+    const khop = () => within(column()).getByText(S.ai1.match).parentElement!;
+
+    it("says TP with the confidence in the box, and Khớp stays the stored verdict's", () => {
+      renderColumn(view({ status: "escalated_tier2", case_id: 9, acknowledged_by_name: "An" }));
+      expect(within(box()).getByText(/AI kết luận/)).toHaveTextContent(
+        /^AI kết luận: TP \(độ tin cậy trung bình\)$/,
+      );
+      expect(khop()).toHaveTextContent(S.ai1.matchAgree);
+    });
+
+    it("says what the AI concluded and why the system held it, two reasons, and Khớp has no verdict to compare", () => {
+      renderColumn(decidedHeld());
+      expect(within(box()).getByText(/AI kết luận/)).toHaveTextContent(
+        "AI kết luận: FP (độ tin cậy trung bình) — hệ thống giữ lại cho người xem vì: " +
+          "tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý",
+      );
+      expect(within(box()).getByText("hệ thống giữ lại cho người xem").tagName).toBe("STRONG");
+      // the stored verdict is `needs_review`: the pilot report leaves it out, so does Khớp
+      expect(khop()).toHaveTextContent(S.ai1.matchNoVerdict);
+    });
+
+    it("is one line in the column, not two", () => {
+      renderColumn(decidedHeld());
+      expect(within(column()).getAllByText(/AI kết luận/)).toHaveLength(1);
+    });
+
+    it("is the same line the undecided column draws for the same suggestion", () => {
+      const undecided = renderColumn(held(["fp_policy:playbook_rule", "verifier_invalid"]));
+      const before = within(column()).getByText(/AI kết luận/).textContent;
+      undecided.unmount();
+      renderColumn(
+        held(["fp_policy:playbook_rule", "verifier_invalid"], { status: "closed_benign" }),
+      );
+      const after = within(box()).getByText(/AI kết luận/).textContent;
+      // the gate's ⚑ belongs to the undecided column only (the decided state has no gate flag)
+      expect(after).toBe((before ?? "").replace("⚑", ""));
+    });
+
+    it.each([
+      ["a visible head", true],
+      ["a blind head, now decided", false],
+    ])("shows it for %s", (_name, visible) => {
+      renderColumn(decidedHeld({ suggestion_visible: visible }));
+      expect(within(box()).getByText(/AI kết luận/)).toHaveTextContent(
+        /^AI kết luận: FP .* vì: tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý$/,
+      );
+      expect(within(column()).queryByText(S.ai1.hidden)).not.toBeInTheDocument();
+    });
+
+    it("is not there before the decision on the blind arm, and is after it (the same head)", () => {
+      const before = renderColumn(blindView({ status: "tier1_active" }));
+      expect(within(column()).queryByText(/AI kết luận/)).not.toBeInTheDocument();
+      expect(within(column()).getByText(S.ai1.hidden)).toBeInTheDocument();
+      before.unmount();
+      renderColumn(decidedHeld({ suggestion_visible: false }));
+      expect(within(column()).getByText(/AI kết luận/)).toBeInTheDocument();
+    });
+
+    it("falls back on the stored verdict when the server sent neither key", () => {
+      const bare = decidedHeld();
+      delete bare.proposed_action;
+      delete bare.held_by;
+      renderColumn(bare);
+      expect(within(column()).queryByText(/AI kết luận/)).not.toBeInTheDocument();
+      expect(box()).toHaveTextContent("Cần xem xét");
+    });
+
+    it("says nothing for a decided alert ① never answered", () => {
+      renderColumn(
+        view({
+          status: "closed_fp",
+          suggestion: null,
+          proposed_action: null,
+          held_by: [],
+          acknowledged_by_name: "An",
+        }),
+      );
+      expect(within(column()).queryByText(/AI kết luận/)).not.toBeInTheDocument();
+      expect(box()).toHaveTextContent(S.ai1.none);
+    });
   });
 
   it("is not in a blind column, and nothing of it is: not the AI's answer, not a reason", () => {
@@ -356,10 +452,16 @@ describe("AI kết luận", () => {
     renderColumn(stray);
     const col = column();
     expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
-    expect(col.textContent).not.toContain("AI kết luận");
-    expect(col.textContent).not.toContain("giữ lại");
-    expect(col.textContent).not.toContain("tài sản");
-    expect(col.textContent).not.toContain("FP");
+    // whole words: "FP" is a marker, "SFTP" in an unrelated line would not be one
+    expect(
+      wordsFound(col.textContent ?? "", [
+        "AI kết luận",
+        "giữ lại",
+        "tài sản quan trọng hoặc chưa rõ",
+        "FP",
+        "TP",
+      ]),
+    ).toEqual([]);
   });
 });
 
@@ -368,7 +470,9 @@ describe("hidden (the blind arm)", () => {
     renderColumn(blindView());
     const col = column();
     expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
-    for (const word of VERDICT_WORDS) expect(col.textContent, word).not.toContain(word);
+    expect(wordsFound(col.textContent ?? "", VERDICT_WORDS), "verdict words in the column").toEqual(
+      [],
+    );
     // it does not say that ① is working, or has failed, or has nothing to say
     expect(col.textContent).not.toContain(S.ai1.pending);
     expect(col.textContent).not.toContain(S.ai1.unavailable);
@@ -398,7 +502,9 @@ describe("hidden (the blind arm)", () => {
     renderColumn(stray);
     const col = column();
     expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
-    for (const word of VERDICT_WORDS) expect(col.textContent, word).not.toContain(word);
+    expect(wordsFound(col.textContent ?? "", VERDICT_WORDS), "verdict words in the column").toEqual(
+      [],
+    );
     expect(col.textContent).not.toContain(S.ai1.correlatedThen);
     expect(within(col).queryByRole("img", { name: S.ai1.forcedLabel })).not.toBeInTheDocument();
   });
@@ -437,7 +543,9 @@ describe("pending", () => {
     expect(within(col).getByText(S.ai1.pending)).toBeInTheDocument();
     expect(col.textContent).toContain(S.ai1.pendingBody);
     expect(col.textContent).not.toContain(S.ai1.hidden);
-    for (const word of VERDICT_WORDS) expect(col.textContent, word).not.toContain(word);
+    expect(wordsFound(col.textContent ?? "", VERDICT_WORDS), "verdict words in the column").toEqual(
+      [],
+    );
   });
 });
 
@@ -450,7 +558,9 @@ describe("none (an archived alert with no ①)", () => {
     expect(col.textContent).not.toContain(S.ai1.pending);
     expect(col.textContent).not.toContain(S.ai1.pendingBody);
     expect(col.textContent).not.toContain(S.ai1.hidden);
-    for (const word of VERDICT_WORDS) expect(col.textContent, word).not.toContain(word);
+    expect(wordsFound(col.textContent ?? "", VERDICT_WORDS), "verdict words in the column").toEqual(
+      [],
+    );
   });
 
   it("is not what a blind archived head shows: that one stays 'ẩn — nhánh mù'", () => {
@@ -555,7 +665,8 @@ describe("decided", () => {
   });
 
   it("says ① had nothing to say when the view carries no result, and compares nothing", () => {
-    renderColumn(decided({ suggestion: null }));
+    // no result, so the server sends no conclusion and no reason either
+    renderColumn(decided({ suggestion: null, proposed_action: null, held_by: [] }));
     const ai = within(column()).getByText(S.ai1.decidedAi).closest("div")!;
     expect(ai).toHaveTextContent(S.ai1.none);
     expect(match()).toHaveTextContent(S.ai1.matchNoVerdict);
@@ -564,7 +675,12 @@ describe("decided", () => {
   it("unknown enum renders raw code: an action without a label", () => {
     // A status the UI does not know is not one of `DECIDED`, so it is not a decided view (the page tests
     // word an unknown status); the action is what a decided view can carry that the UI has no label for.
-    renderColumn(decided({ suggestion: suggestion({ suggested_action: "quarantine_host" }) }));
+    renderColumn(
+      decided({
+        suggestion: suggestion({ suggested_action: "quarantine_host" }),
+        proposed_action: null, // nothing the AI may have concluded: the stored word, as it came
+      }),
+    );
     expect(within(column()).getByText("quarantine_host")).toBeInTheDocument();
     // the pilot report counts an action that is none of the three as no result: nothing is compared
     expect(match()).toHaveTextContent(S.ai1.matchNoVerdict);
@@ -647,6 +763,8 @@ describe("decided", () => {
         case_id: 9,
         acknowledged_by_name: "Nguyễn Văn Ân",
         suggestion: suggestion({ suggested_action: action }),
+        // the AI concluded what it stored, unless the gate held it (`needs_review`)
+        proposed_action: action === "needs_review" ? "false_positive" : action,
         ...over,
       });
 

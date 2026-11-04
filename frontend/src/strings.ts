@@ -193,13 +193,13 @@ export const S = {
       true_positive: "TP",
     },
     // The alert page's line: "AI kết luận: TP (độ tin cậy cao)", and when the gate held it back, "… — hệ thống giữ
-    // lại cho người xem vì: <reasons>" (P14-T03, spec 4.3).
+    // lại cho người xem vì: <reasons>" (P14-T03, spec 4.3). The phrase `held` is bold on the page, so it is a string
+    // of its own: the dash, the phrase, and the "vì: …" that follows it when a reason is known.
     conclusion: "AI kết luận",
     confidenceNote: (level: string) => `(độ tin cậy ${level})`,
-    heldLine: (reasons: string[]) =>
-      reasons.length === 0
-        ? "— hệ thống giữ lại cho người xem"
-        : `— hệ thống giữ lại cho người xem vì: ${reasons.join(", ")}`,
+    heldDash: "—",
+    held: "hệ thống giữ lại cho người xem",
+    heldBecause: (reasons: string[]) => (reasons.length === 0 ? "" : `vì: ${reasons.join(", ")}`),
     // `llm.verdicts.HELD_REASONS`: why the gate held the model's verdict, in the gate's step order. The keys are
     // compared with the backend's tuple in strings.test.ts; a code with no label is shown as the code.
     heldReason: {
@@ -211,6 +211,7 @@ export const S = {
       "fp_policy:identity_privileged": "tài khoản đặc quyền",
       "fp_policy:playbook_rule": "không khớp bảng quyết định đã duyệt",
       verifier_disagrees: "bộ kiểm tra không đồng ý",
+      verifier_invalid: "bộ kiểm tra không trả lời hợp lệ",
     },
     pending: "Đang phân tích…",
     unavailable: "Không có gợi ý ①",
@@ -602,7 +603,8 @@ export const S = {
     // The case page's line: "AI kết luận: <label>", and when the system held it as `need_more_data`,
     // "… — hệ thống giữ lại vì: <causes>" (P14-T03, spec 4.3). The causes are `tier2.investigate.HELD_BY`.
     conclusion: "AI kết luận",
-    heldLine: (causes: string[]) => `— hệ thống giữ lại vì: ${causes.join(", ")}`,
+    heldLine: (causes: string[]) =>
+      causes.length === 0 ? "— hệ thống giữ lại" : `— hệ thống giữ lại vì: ${causes.join(", ")}`,
     heldReason: {
       no_verified_evidence: "không có bằng chứng kiểm chứng được",
       high_severity_injection_finding: "phát hiện dấu hiệu chèn lệnh mức cao",

@@ -11,7 +11,14 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AlertView, QueueRow } from "../../api/tier1";
-import { DECIDED, aiStateOfRow, aiStateOfView, conclusionOf, heldOf } from "./aiState";
+import {
+  DECIDED,
+  MODEL_ACTIONS,
+  aiStateOfRow,
+  aiStateOfView,
+  conclusionOf,
+  heldOf,
+} from "./aiState";
 
 /** A visible-arm row of the queue with a ① result: every key the server sends. */
 const row = (over: Partial<QueueRow> = {}): QueueRow => ({
@@ -243,15 +250,65 @@ describe("aiStateOfView", () => {
         kind: "decided",
         action: "false_positive",
         confidence: "high",
+        proposed: "false_positive",
+        heldBy: [],
       });
     }
   });
 
+  // Fix round 1 (I1): a decided alert still says what the AI concluded and why the gate held it.
+  it("carries the model's own answer and the reasons into the decided state", () => {
+    const held = view({
+      status: "closed_fp",
+      suggestion: {
+        suggested_action: "needs_review",
+        confidence: "medium",
+        gate: { forced: true },
+      },
+      proposed_action: "true_positive",
+      held_by: ["facts_mismatch", "verifier_invalid"],
+    });
+    expect(aiStateOfView(held)).toEqual({
+      kind: "decided",
+      action: "needs_review",
+      confidence: "medium",
+      proposed: "true_positive",
+      heldBy: ["facts_mismatch", "verifier_invalid"],
+    });
+  });
+
+  it("reads a decided view without the two keys as none, and a blind head the decision revealed as decided", () => {
+    const bare = view({ status: "closed_benign" });
+    delete bare.proposed_action;
+    delete bare.held_by;
+    expect(aiStateOfView(bare)).toMatchObject({ kind: "decided", proposed: null, heldBy: [] });
+    // the decision lifts the blind arm: the keys the server sent back are read
+    const revealed = view({
+      status: "closed_benign",
+      suggestion_visible: false,
+      proposed_action: "false_positive",
+      held_by: ["verifier_disagrees"],
+    });
+    expect(aiStateOfView(revealed)).toMatchObject({
+      kind: "decided",
+      proposed: "false_positive",
+      heldBy: ["verifier_disagrees"],
+    });
+  });
+
   it("is decided with no action when ① never produced one", () => {
-    expect(aiStateOfView(view({ status: "closed_benign", suggestion: null }))).toEqual({
+    const silent = view({
+      status: "closed_benign",
+      suggestion: null,
+      proposed_action: null,
+      held_by: [],
+    });
+    expect(aiStateOfView(silent)).toEqual({
       kind: "decided",
       action: null,
       confidence: null,
+      proposed: null,
+      heldBy: [],
     });
   });
 
@@ -303,6 +360,8 @@ describe("aiStateOfView", () => {
         kind: "decided",
         action: "false_positive",
         confidence: "high",
+        proposed: "false_positive",
+        heldBy: [],
       });
     });
 
@@ -515,10 +574,59 @@ describe("conclusionOf and heldOf", () => {
     expect(conclusionOf(ready({ proposed: "needs_review", action: "needs_review" }))).toBeNull();
   });
 
+  it("reads a decided state the same way, whose action may be null", () => {
+    const decided = { action: null, proposed: "false_positive", heldBy: ["verifier_invalid"] };
+    expect(conclusionOf(decided)).toBe("false_positive");
+    expect(heldOf(decided)).toBe(true);
+    expect(conclusionOf({ action: null, proposed: null, heldBy: [] })).toBeNull();
+    expect(conclusionOf({ action: "true_positive", proposed: null, heldBy: [] })).toBe(
+      "true_positive",
+    );
+    expect(heldOf({ action: null, proposed: null, heldBy: [] })).toBe(false);
+  });
+
   it("holds when the system's action is needs_review or reasons are given, and not otherwise", () => {
     expect(heldOf(ready())).toBe(false);
     expect(heldOf(ready({ action: "needs_review", proposed: "false_positive" }))).toBe(true);
     expect(heldOf(ready({ heldBy: ["verifier_disagrees"] }))).toBe(true);
     expect(heldOf(ready({ action: "false_positive", proposed: "false_positive" }))).toBe(false);
+  });
+});
+
+// MODEL_ACTIONS is a copy of the backend's `llm.verdicts.MODEL_ACTIONS` (the two answers the model may give), and a
+// copy drifts: a third answer added there and not here would show as the system's `Cần xem xét` instead of the
+// AI's conclusion. So the Python source is read and the two are compared, like DECIDED above.
+function pyModelActions(root = BACKEND_APP): string[] {
+  const pattern = /^MODEL_ACTIONS(?::\s*tuple\[str,\s*\.\.\.\])?\s*=\s*\(([^)]*)\)/m;
+  const found = pyFiles(root).flatMap((path) => {
+    const body = pattern.exec(readFileSync(path, "utf8"))?.[1];
+    return body === undefined ? [] : [{ path, body }];
+  });
+  const [only] = found;
+  if (found.length !== 1 || !only) {
+    throw new Error(`expected exactly one definition of MODEL_ACTIONS, found ${found.length}`);
+  }
+  return [...only.body.matchAll(/"([^"]+)"/g)].map((m) => m[1] ?? "");
+}
+
+describe("MODEL_ACTIONS", () => {
+  it("is the backend's llm.verdicts.MODEL_ACTIONS, value for value", () => {
+    const backend = pyModelActions();
+    expect(backend).toEqual(["false_positive", "true_positive"]); // a parse that finds nothing compares nothing
+    expect([...MODEL_ACTIONS].sort()).toEqual([...backend].sort());
+  });
+
+  it("reports a value added on the Python side only", () => {
+    const root = mkdtempSync(join(tmpdir(), "p14t03-py-"));
+    try {
+      mkdirSync(join(root, "llm"), { recursive: true });
+      writeFileSync(
+        join(root, "llm", "verdicts.py"),
+        'MODEL_ACTIONS: tuple[str, ...] = ("false_positive", "true_positive", "quarantine")\n',
+      );
+      expect([...MODEL_ACTIONS].sort()).not.toEqual([...pyModelActions(root)].sort());
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

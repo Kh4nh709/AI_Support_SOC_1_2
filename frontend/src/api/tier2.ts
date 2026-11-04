@@ -169,6 +169,20 @@ export type RunView = {
   changed?: boolean;
 };
 
+/**
+ * What the model may conclude on a case (`llm.verdicts.MODEL_CONCLUSIONS`, P14-T02). `need_more_data` is not one:
+ * only the system stores it, when it holds a conclusion back. A copy; strings.test.ts reads the Python source and
+ * compares the two.
+ */
+export const MODEL_CONCLUSIONS = [
+  "false_positive",
+  "policy_violation",
+  "confirmed_incident",
+] as const;
+
+/** The conclusion the system stores in place of the model's own when it holds one back. */
+export const HELD_CONCLUSION = "need_more_data";
+
 export const INVESTIGATION_STATES = ["idle", "running", "stalled", "done", "failed"] as const;
 export type InvestigationState = (typeof INVESTIGATION_STATES)[number];
 
