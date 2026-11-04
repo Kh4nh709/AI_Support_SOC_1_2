@@ -73,6 +73,9 @@ SPEC_GROUPS: dict[str, set[str]] = {
         "knowledge.rejected",
         "knowledge.retired",
         "knowledge.redraft_requested",
+        # DEC-213 (P14-T09): what an admin did to the lab: a run recorded, an alert labelled
+        "lab.run_created",
+        "lab.labeled",
     },
     "alerts_cases": {
         "alert.received",
@@ -123,7 +126,7 @@ def test_every_event_type_is_in_exactly_one_group_and_there_are_no_extras() -> N
     assert (
         sorted(set(members) - EVENT_TYPES) == []
     ), "a group lists a name that is not an event type"
-    assert sum(members.values()) == len(EVENT_TYPES) == 38
+    assert sum(members.values()) == len(EVENT_TYPES) == 40
 
 
 def test_the_groups_are_exactly_the_spec_table() -> None:

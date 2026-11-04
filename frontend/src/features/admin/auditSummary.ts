@@ -1,4 +1,4 @@
-// What the audit page makes of an event (spec §4.7): the one-line summary of each of the 38 event types, built
+// What the audit page makes of an event (spec §4.7): the one-line summary of each of the 40 event types, built
 // client-side from the payload; the link of a subject that is an alert or a case; the payload as text; and the
 // escape of the characters a person cannot see.
 //
@@ -407,6 +407,17 @@ const BUILDERS: Readonly<Record<string, Builder>> = {
   "knowledge.retired": (p) => [A.knowledgeRetired, ...entryClause(p), ...reasonClause(p)],
   "knowledge.merged": (p) => [A.knowledgeMerged, ...entryClause(p)],
   "knowledge.redraft_requested": (p) => [A.knowledgeRedraft, ...draftClause(p)],
+  // The lab events (DEC-213): a run recorded, an alert labelled by hand (`label` is null when it is cleared).
+  "lab.run_created": (p) => [
+    A.labRunCreated,
+    ...when(str(p, "name"), (name) => A.labRunName(free(name))),
+    ...when(str(p, "purpose"), (purpose) => A.labPurpose(free(labelOf(A.labPurposes, purpose)))),
+  ],
+  "lab.labeled": (p) => {
+    const label = str(p, "label");
+    if (label !== null) return [A.labLabeled(free(labelOf(A.labLabels, label)))];
+    return [own(p, "label") === null ? A.labLabelCleared : A.labLabelUnknown];
+  },
   "rag.lookup_failed": () => [A.lookupFailed],
   "rag.integrity_failed": (p) => [A.integrityFailed, ...entryClause(p)],
 };

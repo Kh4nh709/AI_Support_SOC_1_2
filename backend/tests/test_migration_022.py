@@ -19,7 +19,7 @@ Three layers, each on trial here:
 * a scratch database at 021, `make migrate` applying the 022 FILE the way the live database takes it
   (the fixture builds from `schema.sql`, which on its own would not notice a 022 that differs from
   what `schema.sql` holds), over rows of every verdict that may exist. The tree applied is the one
-  THROUGH 022 (`test_migration_021._schema_below`), so a later migration does not change what is shown;
+  THROUGH 022 (`scratch_db._schema_tree_through`), so a later migration does not change what is shown;
 * a scratch database at 021 holding one `escalate` run, one per path: 022 raises its message, the old
   constraint stays, the row is untouched, and 022 is not recorded.
 
@@ -40,12 +40,11 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from tests import conftest
-from tests.scratch_db import _with_db
+from tests.scratch_db import _schema_tree_through, _with_db
 from tests.test_migration_021 import (
     _migrate,
     _migrate_run,
     _refused,
-    _schema_below,
     _session_dsn,
 )
 
@@ -126,8 +125,8 @@ class _Scratch:
         self.session = _session_dsn()
         if shutil.which("psql") is None:
             pytest.skip("psql is not installed")
-        self.at_021 = _schema_below(tmp_path, 22)
-        self.through_022 = _schema_below(tmp_path, 23)
+        self.at_021 = _schema_tree_through(21, tmp_path)
+        self.through_022 = _schema_tree_through(22, tmp_path)
         self.name = f"{conftest._dbname(self.session)}_{suffix}_test"
         self.dsn = _with_db(self.session, self.name)
         self.admin: psycopg.Connection | None = None

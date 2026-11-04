@@ -838,6 +838,28 @@ Thử vi phạm: `test_constraints.py` thêm 12 ca (9 âm, 3 dương) cho 5 ràn
 `backend/tests/test_migration_021.py` thử từng ràng buộc trên cơ sở dữ liệu thật và thử áp 021 lên một
 cơ sở dữ liệu đang ở 020 bằng `scripts/migrate.sh`.
 
+## 12 · Migration 024 — các lần chạy lab và nhãn lab (DEC-213)
+
+Phần C của đợt đo (đặc tả §6): chủ sở hữu chốt ngày 03/11/2026 rằng **chân lý** của phép đo do một admin
+**gán nhãn bằng tay** trên trang "Gán nhãn lab". Hai bảng mới ghi lại việc đó; không bảng cũ nào đổi.
+
+| Đối tượng | Nội dung |
+|---|---|
+| `lab_runs` | Một lần tấn công của lab: `name` (1..80 ký tự, duy nhất), `purpose` (`kb` dựng cơ sở tri thức, `test` được chấm điểm), cửa sổ `[starts_at, ends_at)`, `created_by`, `created_at` |
+| `ck_lab_runs_ends_after_starts` | `ends_at > starts_at`: cửa sổ rỗng không chứa alert nào, và một range rỗng cũng lọt qua ràng buộc loại trừ bên dưới (nó không bao giờ "chồng" lên gì) |
+| `ex_lab_runs_no_overlap` | `EXCLUDE USING gist (tstzrange(starts_at, ends_at, '[)') WITH &&)`: hai cửa sổ không bao giờ chồng nhau. Range **nửa mở**: run sau được bắt đầu đúng lúc run trước kết thúc, và alert nhận vào đúng giây đó thuộc run sau, không thuộc cả hai. GiST trên kiểu range không cần extension |
+| `lab_labels` | Nhãn tay của **một** alert (khóa chính `alert_id`): `true_positive` (tấn công thật) hoặc `false_positive` (không phải tấn công), `run_id`, `labeled_by`, `labeled_at`. Gán lại là UPDATE, xóa nhãn là DELETE |
+| `run_id` của nhãn | Là run có cửa sổ chứa `alerts.received_at`; **ứng dụng** ghi (`lab.labels.set_label`), admin không chọn. Một CHECK không đọc được bảng khác, nên hai giá trị khớp nhau nhờ ứng dụng; chúng không lệch về sau vì run không bao giờ bị sửa và `received_at` chỉ ghi một lần |
+| `ck_audit_event_type` | 38 → 40 tên: `lab.run_created`, `lab.labeled` (`label` là null khi xóa nhãn) |
+| Quyền của `app_rw` | `lab_runs`: SELECT, INSERT (không có route nào sửa hay xóa một run; một run ghi nhầm do Owner xóa bằng quyền chủ cơ sở dữ liệu). `lab_labels`: SELECT, INSERT, UPDATE, DELETE. Không bảng nào có TRUNCATE |
+
+024 đứng trên 021: không đọc gì của 022 (`022_true_positive.sql`, thẻ khác) hay 023, nên áp theo thứ tự nào cũng ra cùng một
+schema. Không dòng cũ nào bị sửa hay xóa.
+
+Thử vi phạm: `test_constraints.py` thêm 17 ca (13 âm, 4 dương); `backend/tests/test_migration_024.py` thử từng ràng buộc
+trên cơ sở dữ liệu thật (kể cả cửa sổ chồng nhau ở mọi tư thế và các quyền của `app_rw`), và áp 024 lên cây ở 021, ở 023 không có 022, và ở 023
+bằng `scripts/migrate.sh`.
+
 ---
 
 ## 12 · Migration 022 — ① đổi tên `escalate` thành `true_positive` (DEC-213, P14-T01)

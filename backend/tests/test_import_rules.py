@@ -25,6 +25,7 @@ ALL = frozenset(
         "kb",
         "enrichment",
         "rag",  # DEC-210 (P13-T01)
+        "lab",  # DEC-213 (P14-T09)
         "web",
     }
 )
@@ -36,6 +37,9 @@ ALLOWED: dict[str, frozenset[str] | set[str]] = {
     # DEC-210: the learned-knowledge package. It imports no tier and no `web`; tier1, tier2 and
     # `web` import it, and nothing else does.
     "rag": {"infra", "audit", "security", "llm", "kb", "domain"},
+    # DEC-213 (P14-T09): the lab runs and labels. It reads the blind view of an alert from `tier1`
+    # (`visibility.strip`) and writes audit events; no other package imports it but `web`.
+    "lab": {"infra", "audit", "tier1"},
     "domain": {"infra", "audit"},
     "infra": set(),
     "audit": {"infra"},
@@ -235,7 +239,8 @@ def test_tier1_tier2_and_web_may_import_rag(pkg):
 
 
 @pytest.mark.parametrize(
-    "pkg", ["infra", "audit", "security", "llm", "kb", "domain", "ingest", "soar", "enrichment"]
+    "pkg",
+    ["infra", "audit", "security", "llm", "kb", "domain", "ingest", "soar", "enrichment", "lab"],
 )
 def test_no_other_package_may_import_rag(pkg):
     assert violations_in("from app.rag import lookup\n", f"{pkg}.mod") == [
@@ -247,6 +252,72 @@ def test_a_deferred_import_of_rag_inside_a_function_is_still_judged():
     source = "def f():\n    from app.rag import lookup\n    return lookup\n"
     assert violations_in(source, "domain.transitions") == [
         "domain.transitions imports rag — not in ALLOWED[domain]"
+    ]
+
+
+# --- P14-T09 / DEC-213: the `lab` package ------------------------------------------------------
+
+
+def test_the_lab_package_exists_and_is_only_a_docstring():
+    init = APP_ROOT / "lab" / "__init__.py"
+    assert init.is_file(), "backend/app/lab/__init__.py"
+    tree = ast.parse(init.read_text(encoding="utf-8"))
+    assert ast.get_docstring(tree), "lab/__init__.py must open with a docstring"
+    assert len(tree.body) == 1, "lab/__init__.py holds a docstring and nothing else"
+
+
+def test_the_lab_row_is_infra_audit_and_tier1():
+    assert ALLOWED["lab"] == {"infra", "audit", "tier1"}
+
+
+@pytest.mark.parametrize("target", ["infra", "audit", "tier1"])
+def test_lab_may_import_its_three_packages(target):
+    assert violations_in(f"from app.{target} import x\n", "lab.labels") == []
+    assert violations_in(f"from app.{target}.y import x\n", "lab.runs") == []
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["tier2", "web", "ingest", "soar", "enrichment", "domain", "llm", "kb", "security", "rag"],
+)
+def test_lab_importing_any_other_package_is_a_violation(target):
+    assert violations_in(f"from app.{target} import x\n", "lab.labels") == [
+        f"lab.labels imports {target} — not in ALLOWED[lab]"
+    ]
+
+
+def test_web_may_import_lab():
+    assert violations_in("from app.lab import runs\n", "web.routers.admin_lab") == []
+    assert violations_in("from ..lab import labels\n", "web.routers.admin_lab") == []
+
+
+@pytest.mark.parametrize(
+    "pkg",
+    [
+        "infra",
+        "audit",
+        "security",
+        "llm",
+        "kb",
+        "domain",
+        "ingest",
+        "soar",
+        "enrichment",
+        "rag",
+        "tier1",
+        "tier2",
+    ],
+)
+def test_no_package_but_web_may_import_lab(pkg):
+    assert violations_in("from app.lab import runs\n", f"{pkg}.mod") == [
+        f"{pkg}.mod imports lab — not in ALLOWED[{pkg}]"
+    ]
+
+
+def test_a_deferred_import_of_lab_inside_a_function_is_still_judged():
+    source = "def f():\n    from app.lab import runs\n    return runs\n"
+    assert violations_in(source, "tier1.queue") == [
+        "tier1.queue imports lab — not in ALLOWED[tier1]"
     ]
 
 
