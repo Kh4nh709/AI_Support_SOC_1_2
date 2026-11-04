@@ -25,9 +25,14 @@ LIMITATIONS = REPO_ROOT / "docs" / "limitations.md"
 SCHEMA_DIR = REPO_ROOT / "docs" / "Schema"
 HEALTH = REPO_ROOT / "backend" / "app" / "infra" / "health.py"
 
-#: The queue the rollback drains: the three job types `rag-worker` claims (`web/rag_worker.py`).
+#: The queue DEC-210's rollback drains before `rag-worker` is removed: the three job types it claims
+#: (`web/rag_worker.py`). The Voyage rollback stops `vectordb` and counts the two that use it (fix round 1, M1).
 DRAIN = (
     "select count(*) from jobs where job_type in ('rag_lookup','knowledge_embed','knowledge_draft') "
+    "and status in ('pending','running')"
+)
+DRAIN_VECTORDB = (
+    "select count(*) from jobs where job_type in ('rag_lookup','knowledge_embed') "
     "and status in ('pending','running')"
 )
 
@@ -54,18 +59,23 @@ def _row(starts: str) -> str:
     return next(ln for ln in _text().splitlines() if ln.startswith(starts))
 
 
-def test_the_drain_query_lists_knowledge_embed_beside_the_other_two():
+def test_the_drain_queries_list_knowledge_embed_and_the_vectordb_one_leaves_the_draft_out():
+    """DEC-210's rollback removes `rag-worker`, so it waits for all three job types; the Voyage rollback only
+    stops `vectordb`, which a draft never touches: its count has the two types that do (M1)."""
     text = _text()
     queries = re.findall(
         r"select count\(\*\) from jobs where job_type in \(([^)]*)\) and status in", text
     )
-    assert queries, "no drain query in the runbook"
-    for listed in queries:
-        assert listed == "'rag_lookup','knowledge_embed','knowledge_draft'", listed
+    assert len(queries) == 2, queries
+    assert sorted(queries) == sorted(
+        ["'rag_lookup','knowledge_embed','knowledge_draft'", "'rag_lookup','knowledge_embed'"]
+    )
     rollback = next(
         p for p in text.split("\n\n") if p.startswith("**Rollback.** Set `RAG_ENABLED=false`")
     )
-    assert DRAIN in rollback
+    assert DRAIN in rollback and DRAIN_VECTORDB not in rollback
+    step = text.split("**9 · Rollback.**", 1)[1].split("#### Lab procedure", 1)[0]
+    assert DRAIN_VECTORDB in step and "knowledge_draft" not in step.split("```")[1]
     # every other place that names the RAG job types names the third
     for starts in ("| `job_backlog` |", "| **Worker stuck**"):
         assert "`knowledge_embed`" in _row(starts), starts
