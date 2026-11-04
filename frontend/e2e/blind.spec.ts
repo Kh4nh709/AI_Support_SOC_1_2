@@ -232,7 +232,8 @@ test("a blind head shows nothing of ① until it is decided, then shows it", asy
   await expect(column.getByText(/AI kết luận/)).toContainText(
     `AI kết luận: ${S.ai1.action.false_positive} (độ tin cậy trung bình) — ${S.ai1.held} vì: ${heldLabels(head.id).join(", ")}`,
   );
-  await expect(page.getByText(S.ai1.match)).toBeVisible();
+  // exact: the reason "không khớp bảng quyết định đã duyệt" says "khớp" too
+  await expect(page.getByText(S.ai1.match, { exact: true })).toBeVisible();
   await expect(page.getByText(S.ai1.matchNoVerdict)).toBeVisible();
   const after = (await traffic.answers()).slice(beforeDecision);
   const revealed = after
