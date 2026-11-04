@@ -267,6 +267,27 @@ export const S = {
     source: "Nguồn",
   },
 
+  // P14-T07 (DEC-213, spec 4.3): what the alert page and the case page say of the RAG beside the AI's conclusion.
+  // The percentage follows the conclusion line ("AI kết luận: TP (độ tin cậy cao) — trùng 87% với tri thức đã
+  // duyệt"); the notice is a sentence of its own, in the words of the alert or of the case. `failureKind` is
+  // `rag.failures.FAILURE_KINDS` (strings.test.ts compares the keys): each label names where the failure was,
+  // because a `vectordb` failure is not Voyage's. A kind with no label is not shown at all, and never as its code
+  // (`failureKindLabel`): the server sends only the closed six, never the provider's words.
+  rag: {
+    dash: "—",
+    match: (pct: number) => `trùng ${pct}% với tri thức đã duyệt`,
+    notApplied: (subject: "alert" | "case", reason: string) =>
+      `⚠ Không áp dụng RAG cho ${subject} này: ${reason} — AI đã phân tích không có tri thức tham khảo.`,
+    failureKind: {
+      rate_limit: "Voyage vượt giới hạn tốc độ",
+      timeout: "Voyage quá thời gian chờ",
+      auth: "thiếu hoặc sai API key Voyage",
+      quota: "Voyage hết hạn mức",
+      provider_error: "lỗi phía Voyage",
+      vectordb_unreachable: "không kết nối được vector DB",
+    },
+  },
+
   alert: {
     infoHeading: "THÔNG TIN ALERT",
     aiHeading: "PHÂN TÍCH AI ①",
@@ -2051,6 +2072,24 @@ export const S = {
             heading: "Cổng kiểm soát và lý do của ①",
             none: "① không ghi cổng kiểm soát hay lý do nào cho alert này.",
           },
+          // P14-T07 (DEC-213): the newest lookup of the source - every candidate the Voyage rerank scored, as a
+          // percentage (where the P13 agent's reasons used to be), or why a failed lookup failed (S.rag.failureKind).
+          // `status` is `rag_results.status`, read through `labelOf`.
+          lookup: {
+            heading: "Tra cứu tri thức",
+            hint: "Lần tra cứu mới nhất của nguồn này: các mục tri thức đã duyệt được chấm điểm giống với nguồn.",
+            status: {
+              ok: "Đã tra cứu",
+              empty: "Chưa có tri thức nào để so",
+              failed: "Tra cứu thất bại",
+              budget: "Hết hạn mức RAG, không tra cứu",
+            },
+            at: (time: string) => `Lúc ${time}`,
+            reason: (label: string) => `Lý do: ${label}`,
+            ranked: "Điểm giống của từng mục tri thức",
+            rankedNone: "Không có mục tri thức nào được chấm điểm.",
+            percent: (pct: number) => `${pct}%`,
+          },
           conflict: {
             heading: {
               active: "Mâu thuẫn với mục đã duyệt",
@@ -2224,6 +2263,17 @@ export function labelOf(labels: Labels, code: string | null | undefined): string
   if (code === null || code === undefined || code === "") return S.common.missing;
   const label = Object.hasOwn(labels, code) ? labels[code] : undefined;
   return typeof label === "string" ? label : code;
+}
+
+/**
+ * The words for a RAG failure kind (`S.rag.failureKind`, P14-T07), or null when the table has none: unlike
+ * `labelOf` it never falls back on the code. The pages draw a notice for a kind they can word and nothing for any
+ * other, so a value the server should never send (or a name from the prototype chain) is not shown as it came.
+ */
+export function failureKindLabel(kind: string | null | undefined): string | null {
+  if (kind === null || kind === undefined || !Object.hasOwn(S.rag.failureKind, kind)) return null;
+  const label: unknown = (S.rag.failureKind as Record<string, unknown>)[kind];
+  return typeof label === "string" ? label : null;
 }
 
 /** The code of a risk-band label (`Rất cao` is `critical`), or null for a label this table does not have. */

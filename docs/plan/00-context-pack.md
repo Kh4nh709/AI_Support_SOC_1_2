@@ -152,7 +152,7 @@ VECTOR_DATABASE_URL(a secret, redacted: it carries the vector database's passwor
 
 `POST /webhook/alerts` · `POST /api/auth/login` · `POST /api/auth/logout` · `GET /api/tier1/queue` · `GET /api/tier1/alerts/{id}` · `POST /api/tier1/alerts/{id}/acknowledge|decide|escalate|reopen` · `GET /api/tier2/cases` · `GET /api/tier2/cases/{id}` · `POST /api/tier2/cases/{id}/analyze` (202) · `GET /api/tier2/runs/{run_id}` · `POST /api/tier2/cases/{id}/notes` · `POST /api/tier2/cases/{id}/conclude` · `GET|POST|PATCH /api/admin/rules` · `POST /api/admin/rules/simulate` · `GET /api/admin/digest` · `POST /api/admin/digest/{alert_id}/review` · `GET /api/admin/labels/next` · `POST /api/admin/labels` · `POST /api/admin/jobs/{id}/retry` · `POST /api/admin/reload-inventory` · `GET /health`.
 
-Roles: `tier1`, `tier2`, `admin`. The suggestion of ① is **removed from any response** (all roles) while `suggestion_visible = false` and the alert is not yet decided.
+Roles: `tier1`, `tier2`, `admin`. The suggestion of ① is **removed from any response** (all roles) while `suggestion_visible = false` and the alert is not yet decided. The hidden keys are `tier1/visibility.ANALYST_HIDE`: `suggestion`, `suggested_action`, `confidence`, `gate_forced`, `triage_status`, `run_id`, `triaged_count`, `needs_retriage`, `llm_stopped_by`, `proposed_action`, `held_by` and (P14-T07) **`rag`**, the match percentage and the "RAG not applied" notice beside ①'s conclusion (`{best_pct, not_applied}`); the labelling page never has them.
 
 ### 6.5 Job types and semantics
 

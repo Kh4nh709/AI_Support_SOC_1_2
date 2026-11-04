@@ -260,6 +260,109 @@ describe("the analyst's work, on the left, of an alert", () => {
   });
 });
 
+// P14-T07 (DEC-213): the lookup the draft's source was judged by - every candidate the Voyage rerank scored, as a
+// percentage, where the P13 agent's reasons used to be - and, for a lookup that failed, the closed kind in words.
+describe("the lookup of the source, on the left", () => {
+  const lookup = (over: Record<string, unknown> = {}) => ({
+    lookup_id: "5d3c6f0e-2f55-4b7a-9d7b-111111111111",
+    status: "ok",
+    failure_kind: null,
+    ranked: [
+      { entry_id: "entry-a", pct: 87 },
+      { entry_id: "entry-b", pct: 61 },
+    ],
+    created_at: "2026-10-25T00:59:00+00:00",
+    ...over,
+  });
+  const withLookup = (over: Record<string, unknown> | null) =>
+    draftDetail(1, { source: { lookup: over === null ? null : lookup(over) } as never });
+  const block = () => within(left()).getByRole("region", { name: D.left.lookup.heading });
+
+  it("lists each ranked entry with its score as a percentage, best first", async () => {
+    await open({ details: [withLookup({})] });
+    const rows = within(block()).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("entry-a");
+    expect(rows[0]).toHaveTextContent("87%");
+    expect(rows[1]).toHaveTextContent("entry-b");
+    expect(rows[1]).toHaveTextContent("61%");
+  });
+
+  it("words the status of the lookup", async () => {
+    await open({ details: [withLookup({})] });
+    expect(block()).toHaveTextContent(D.left.lookup.status.ok);
+  });
+
+  it("shows nothing for a lookup from before migration 023 (ranked is null)", async () => {
+    await open({ details: [withLookup({ ranked: null })] });
+    expect(within(block()).queryByRole("list")).not.toBeInTheDocument();
+    expect(within(block()).queryByRole("listitem")).not.toBeInTheDocument();
+    expect(block().textContent).not.toContain("%");
+    expect(block().textContent).not.toContain(D.left.lookup.rankedNone);
+  });
+
+  it("says when the lookup had no candidate to score", async () => {
+    await open({ details: [withLookup({ status: "empty", ranked: [] })] });
+    expect(within(block()).queryByRole("listitem")).not.toBeInTheDocument();
+    expect(block()).toHaveTextContent(D.left.lookup.rankedNone);
+  });
+
+  it.each([
+    ["rate_limit", "Voyage vượt giới hạn tốc độ"],
+    ["timeout", "Voyage quá thời gian chờ"],
+    ["auth", "thiếu hoặc sai API key Voyage"],
+    ["quota", "Voyage hết hạn mức"],
+    ["provider_error", "lỗi phía Voyage"],
+    ["vectordb_unreachable", "không kết nối được vector DB"],
+  ])("shows the failure kind %s in words for a failed lookup", async (kind, label) => {
+    await open({ details: [withLookup({ status: "failed", failure_kind: kind, ranked: null })] });
+    expect(block()).toHaveTextContent(D.left.lookup.status.failed);
+    expect(block()).toHaveTextContent(label);
+    expect(within(block()).queryByRole("listitem")).not.toBeInTheDocument();
+  });
+
+  it("shows a failed lookup from before the kind was stored without a reason", async () => {
+    await open({ details: [withLookup({ status: "failed", failure_kind: null, ranked: null })] });
+    expect(block()).toHaveTextContent(D.left.lookup.status.failed);
+    expect(block().textContent).not.toContain("Voyage");
+  });
+
+  it("draws no reason for a kind it has no words for, and never the code", async () => {
+    await open({
+      details: [withLookup({ status: "failed", failure_kind: "<b>weird</b>", ranked: null })],
+    });
+    // the status line stays; the reason line does not
+    expect(block()).toHaveTextContent(D.left.lookup.status.failed);
+    expect(block().textContent).not.toContain("weird");
+    expect(block().textContent).not.toContain(D.left.lookup.reason("").trim());
+    expect(block().querySelector("b")).toBeNull();
+  });
+
+  it.each(["constructor", "toString", "__proto__"])(
+    "draws no reason for the name %s: only the table's own kinds are words",
+    async (kind) => {
+      await open({ details: [withLookup({ status: "failed", failure_kind: kind, ranked: null })] });
+      expect(block().textContent).not.toContain(kind);
+      expect(block().textContent).not.toContain(D.left.lookup.reason("").trim());
+    },
+  );
+
+  it("shows an entry id as text", async () => {
+    await open({
+      details: [withLookup({ ranked: [{ entry_id: "<img src=x onerror=alert(1)>", pct: 50 }] })],
+    });
+    expect(block().textContent).toContain("<img src=x onerror=alert(1)>");
+    expect(block().querySelector("img")).toBeNull();
+  });
+
+  it("draws no block for a source with no lookup, nor for a server that sends none", async () => {
+    await open({ details: [withLookup(null)] });
+    expect(
+      within(left()).queryByRole("region", { name: D.left.lookup.heading }),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("the analyst's work, on the left, of a case", () => {
   const caseDraft = (source: Parameters<typeof draftDetail>[1] = {}) =>
     draftDetail(1, {

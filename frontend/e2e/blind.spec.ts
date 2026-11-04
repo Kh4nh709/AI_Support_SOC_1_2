@@ -23,6 +23,7 @@ import {
   type Answer,
 } from "./fixtures";
 import { phrasesFound, wordsFound } from "../src/testing/containsWord";
+import { seedFailedLookup, seedFoundLookup, seedRun } from "./ragFixtures";
 
 /** The keys `visibility.strip` removes from an undecided blind head (with R17's two). */
 const HIDDEN_KEYS = [
@@ -36,6 +37,7 @@ const HIDDEN_KEYS = [
   "needs_retriage",
   "proposed_action",
   "held_by",
+  "rag", // P14-T07: the match percentage and the "RAG not applied" notice are ①'s account of itself
 ] as const;
 
 /** The value of ①'s verdict on this head: the one `suggested_action` the stub's proposer wrote. */
@@ -281,3 +283,104 @@ test("a visible head says what the AI concluded and why the system held it for a
   await expect(column.locator("strong", { hasText: S.ai1.held })).toHaveCount(1);
   await expect(column.getByText(S.ai1.hidden)).toHaveCount(0);
 });
+
+// P14-T07 (DEC-213, spec 4.3): the percentage ("trùng 87% với tri thức đã duyệt") and the notice that the RAG was not
+// applied are said beside ①'s conclusion, so on the blind arm they are ①'s verdict by another name: neither reaches
+// the browser before the decision (not the page, not an answer of the API, not a frame of the socket), and both
+// appear with the rest of the line after it. The lookups and the runs that name them are seeded (ragFixtures.ts): the
+// stack runs with the RAG off and no Voyage key, and no request is sent to Voyage.
+const SEEDED = [
+  {
+    name: "the percentage of a lookup that matched",
+    tag: "blindmatch",
+    seed: (id: string) => seedRun(id, { lookupId: seedFoundLookup(id, [0.61, 0.87]) }),
+    shown: "trùng 87% với tri thức đã duyệt",
+    value: 87,
+    kind: null,
+  },
+  {
+    name: "the notice of a lookup that failed",
+    tag: "blindfail",
+    seed: (id: string) => {
+      seedRun(id, { warnings: ["rag_not_applied:quota"] });
+      seedFailedLookup(id, "quota");
+    },
+    shown: "⚠ Không áp dụng RAG cho alert này: Voyage hết hạn mức",
+    value: null,
+    kind: "quota",
+  },
+] as const;
+
+/**
+ * What of the RAG is in a page: its words, found as plain substrings. "trùng" alone is left out on purpose: a playbook
+ * of the page may say it ("trùng lịch bảo trì"); the sentences of the line and of the notice are what is looked for.
+ */
+const RAG_PHRASES = [
+  "với tri thức đã duyệt",
+  "Không áp dụng RAG",
+  "tri thức tham khảo",
+  "Voyage",
+  "vector DB",
+];
+
+for (const seeded of SEEDED) {
+  test(`a blind head shows ${seeded.name} only after it is decided`, async ({ page, request }) => {
+    const head = await postAlert(request, { tag: seeded.tag, arm: "blind" });
+    await waitForStatus(head.id, "queued_tier1");
+    await waitForTriage(head.id);
+    seeded.seed(head.id);
+
+    const traffic = captureTraffic(page);
+    await loginAs(page, "t1");
+    await page.locator(`a[href="/alerts/${head.id}"]`).click();
+    await expect(page).toHaveURL(`/alerts/${head.id}`);
+    await expect(page.getByText(S.ai1.hiddenBody)).toBeVisible();
+    await page.getByRole("button", { name: S.decision.acknowledge }).click();
+    await expect(
+      page.getByRole("status").filter({ hasText: S.decision.acknowledged }),
+    ).toBeVisible();
+    await page.getByLabel(S.decision.falsePositive).check();
+    await reasonBox(page).fill("Read the alert and its log; routine.");
+
+    // Before the decision: neither on the page nor in the AI column, in no answer, in no frame.
+    const text = await page.locator("body").innerText();
+    const html = await page.content();
+    for (const seen of [text, html]) {
+      expect(phrasesFound(seen, RAG_PHRASES), "the page words the RAG of a blind head").toEqual([]);
+    }
+    await expect(page.getByRole("note")).toHaveCount(0);
+    const column = page.getByRole("region", { name: S.alert.aiHeading });
+    expect(phrasesFound(await column.innerText(), RAG_PHRASES)).toEqual([]);
+    const answers = await traffic.answers();
+    expect(
+      answers.some(
+        (a) => a.path === `/api/tier1/alerts/${head.id}` && aboutHead(a, head.id).length > 0,
+      ),
+      "the head's own view was read",
+    ).toBe(true);
+    expect(unchecked(answers, head.id)).toEqual([]);
+    expect(leaks(answers, traffic.frames(), head.id)).toEqual([]);
+    const beforeDecision = answers.length;
+
+    // The decision reveals it, in the same line as the rest.
+    await page.getByRole("button", { name: S.decision.submit }).click();
+    await expect(page.getByRole("status").filter({ hasText: S.decision.recorded })).toBeVisible();
+    await expect(page.getByText(S.ai1.decidedHeading)).toBeVisible();
+    if (seeded.kind === null) {
+      await expect(column.getByText(/AI kết luận/)).toContainText(seeded.shown);
+    } else {
+      await expect(column.getByRole("note")).toContainText(seeded.shown);
+    }
+    const revealed = (await traffic.answers())
+      .slice(beforeDecision)
+      .filter((a) => a.path === `/api/tier1/alerts/${head.id}`)
+      .flatMap((a) => aboutHead(a, head.id));
+    expect(
+      revealed.some((part) => {
+        const rag = (part as { rag?: { best_pct?: unknown; not_applied?: unknown } }).rag;
+        return rag?.best_pct === seeded.value && rag?.not_applied === seeded.kind;
+      }),
+      "the decided head's view carries the pair",
+    ).toBe(true);
+  });
+}

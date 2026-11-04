@@ -706,12 +706,19 @@ const ENTRIES: Entry[] = [
       "notes",
       "enrichment",
       "conflict_entry",
+      "lookup", // P14-T07: the source's newest lookup, set beside the conflicting entry
     ],
     backend: () => [
       ...dictKeys(knowledge(), /source: dict\[str, Any\] = \{/),
       ...dictKeys(knowledge(), /return \{(?=\s*"alert": _alert_view\()/),
       ...[...knowledge().matchAll(/^\s+source\["(\w+)"\] = /gm)].map((m) => m[1] as string),
     ],
+  },
+  {
+    // P14-T07 (DEC-213): what `_lookup` answers - the source's newest `rag_results` row, `ranked` as `{entry_id, pct}`.
+    path: "KnowledgeLookup",
+    keys: ["lookup_id", "status", "failure_kind", "ranked", "created_at"],
+    backend: () => dictKeys(knowledge(), /return \{(?=\s*"lookup_id": str\(found\.lookup_id\),)/),
   },
   {
     path: "KnowledgeDraftDetail",

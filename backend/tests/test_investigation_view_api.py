@@ -354,7 +354,7 @@ def test_a_run_without_a_result_says_why(client, db):
     body = _get(client, case_id).json()
 
     assert body["state"] == "done"
-    assert set(body["run"]) == {"run_id", "created_at", "result", "stopped_text"}
+    assert set(body["run"]) == {"run_id", "created_at", "rag", "result", "stopped_text"}
     assert body["run"]["result"] is None
     assert body["run"]["stopped_text"] == "đã chạm hạn mức chi phí LLM"
 
@@ -402,6 +402,7 @@ def test_done_run_has_evidence_marks_and_labels(client, db):
         "overruled",
         "model_conclusion",  # P14-T02
         "held_by",  # P14-T02
+        "rag",  # P14-T07
         "snapshot",
         "changed",
     }
@@ -821,6 +822,7 @@ _DONE_RUN_KEYS = {
     "overruled",
     "model_conclusion",
     "held_by",
+    "rag",  # P14-T07
     "snapshot",
     "changed",
 }
@@ -910,7 +912,7 @@ def test_every_stopped_by_code_has_its_sentence(client, db, stopped_by, sentence
     body = _get(client, case_id).json()
 
     assert body["state"] == "done"
-    assert set(body["run"]) == {"run_id", "created_at", "result", "stopped_text"}
+    assert set(body["run"]) == {"run_id", "created_at", "rag", "result", "stopped_text"}
     assert body["run"]["result"] is None
     assert body["run"]["stopped_text"] == sentence
     assert set(view.STOPPED_TEXT) == {"cap", "permanent", "linter", "schema", "transient"}

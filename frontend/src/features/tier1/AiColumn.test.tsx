@@ -846,9 +846,297 @@ describe("decided", () => {
   });
 });
 
+// P14-T07 (DEC-213, spec 4.3): beside the conclusion the column says how strongly the alert matched approved
+// knowledge ("— trùng 87% với tri thức đã duyệt", in the conclusion line) and, when the lookup failed, the notice
+// that the RAG was not applied. The sentences are written out in full: a label edited in strings.ts alone fails here.
+describe("the RAG beside the conclusion", () => {
+  const MATCH = "trùng 87% với tri thức đã duyệt";
+  const withRag = (best_pct: number | null, not_applied: string | null = null) => ({
+    rag: { best_pct, not_applied },
+  });
+  /** A verdict the gate held: the model said false_positive, the system stored needs_review. */
+  const held = (reasons: string[], over: Partial<AlertView> = {}) =>
+    view({
+      suggestion: suggestion({
+        suggested_action: "needs_review",
+        confidence: "medium",
+        gate: {
+          forced: true,
+          forced_by: ["step4"],
+          proposed_verdict: "false_positive",
+          final_verdict: "needs_review",
+          verifier_verdict: "needs_review",
+          warnings: [],
+        },
+      }),
+      proposed_action: "false_positive",
+      held_by: reasons,
+      ...over,
+    });
+  const line = () => within(column()).getByText(/AI kết luận/);
+  const notice = () => within(column()).queryByRole("note");
+
+  describe("the percentage", () => {
+    it("follows the conclusion line, in the same sentence", () => {
+      renderColumn(view({ suggestion: suggestion({ confidence: "high" }), ...withRag(87) }));
+      expect(line()).toHaveTextContent(
+        /^AI kết luận: TP \(độ tin cậy cao\) — trùng 87% với tri thức đã duyệt$/,
+      );
+      // only the verdict is bold: the percentage is not shouted
+      expect(within(line()).getByText("TP").tagName).toBe("STRONG");
+      expect(line().textContent).toContain(MATCH);
+    });
+
+    it("says what the server said, whatever the number", () => {
+      renderColumn(view({ ...withRag(50) }));
+      expect(line()).toHaveTextContent("— trùng 50% với tri thức đã duyệt");
+    });
+
+    it("says 0% when the best match is 0%", () => {
+      renderColumn(view({ ...withRag(0) }));
+      expect(line()).toHaveTextContent("— trùng 0% với tri thức đã duyệt");
+    });
+
+    it("says nothing when there is no match", () => {
+      renderColumn(view({ ...withRag(null) }));
+      expect(line().textContent).not.toContain("trùng");
+      expect(line()).toHaveTextContent(/^AI kết luận: TP \(độ tin cậy trung bình\)$/);
+    });
+
+    it("says nothing when the server sent no rag at all (an older server)", () => {
+      renderColumn(view());
+      expect(line().textContent).not.toContain("trùng");
+      expect(within(column()).queryByText(/trùng/)).not.toBeInTheDocument();
+    });
+
+    it("puts the percentage after the confidence note", () => {
+      renderColumn(view({ ...withRag(87) }));
+      expect(line().textContent).toBe(
+        "AI kết luận: TP (độ tin cậy trung bình) — trùng 87% với tri thức đã duyệt",
+      );
+    });
+
+    it("is in the same line when the gate held the verdict, before the system's own clause", () => {
+      renderColumn(held(["fp_policy:asset_criticality"], { ...withRag(87) }));
+      expect(line()).toHaveTextContent(
+        "AI kết luận: FP (độ tin cậy trung bình) — trùng 87% với tri thức đã duyệt — " +
+          "hệ thống giữ lại cho người xem vì: tài sản quan trọng hoặc chưa rõ",
+      );
+      expect(within(line()).getByText("hệ thống giữ lại cho người xem").tagName).toBe("STRONG");
+    });
+
+    it("is one line in the column, not two", () => {
+      renderColumn(view({ ...withRag(87) }));
+      expect(within(column()).getAllByText(/AI kết luận/)).toHaveLength(1);
+    });
+  });
+
+  describe("the notice that the RAG was not applied", () => {
+    const TAIL = "AI đã phân tích không có tri thức tham khảo.";
+    const KINDS = [
+      ["rate_limit", "Voyage vượt giới hạn tốc độ"],
+      ["timeout", "Voyage quá thời gian chờ"],
+      ["auth", "thiếu hoặc sai API key Voyage"],
+      ["quota", "Voyage hết hạn mức"],
+      ["provider_error", "lỗi phía Voyage"],
+      ["vectordb_unreachable", "không kết nối được vector DB"],
+    ] as const;
+
+    it.each(KINDS)("says it for %s, in the alert's words", (kind, label) => {
+      renderColumn(view({ ...withRag(null, kind) }));
+      expect(notice()).toHaveTextContent(`⚠ Không áp dụng RAG cho alert này: ${label} — ${TAIL}`);
+    });
+
+    it("is beside the conclusion, not instead of it", () => {
+      renderColumn(view({ ...withRag(null, "auth") }));
+      expect(line()).toHaveTextContent(/^AI kết luận: TP \(độ tin cậy trung bình\)$/);
+      expect(notice()).toBeInTheDocument();
+      expect(notice()?.textContent).not.toContain("AI kết luận");
+    });
+
+    it("never says 'case' on the alert page", () => {
+      renderColumn(view({ ...withRag(null, "timeout") }));
+      expect(notice()?.textContent).not.toContain("case");
+    });
+
+    it("is not there when the lookup did not fail", () => {
+      renderColumn(view({ ...withRag(87, null) }));
+      expect(notice()).not.toBeInTheDocument();
+      expect(within(column()).queryByText(/Không áp dụng RAG/)).not.toBeInTheDocument();
+    });
+
+    it("is not there when the server sent no rag at all", () => {
+      renderColumn(view());
+      expect(within(column()).queryByText(/Không áp dụng RAG/)).not.toBeInTheDocument();
+    });
+
+    it("is beside a held conclusion too", () => {
+      renderColumn(held(["verifier_disagrees"], { ...withRag(null, "quota") }));
+      expect(line()).toHaveTextContent(
+        "hệ thống giữ lại cho người xem vì: bộ kiểm tra không đồng ý",
+      );
+      expect(notice()).toHaveTextContent("Voyage hết hạn mức");
+    });
+
+    it("is also drawn for a verdict with no conclusion line (a needs_review nobody explained)", () => {
+      renderColumn(
+        view({
+          suggestion: suggestion({ suggested_action: "needs_review", confidence: null }),
+          proposed_action: null,
+          held_by: [],
+          ...withRag(null, "auth"),
+        }),
+      );
+      expect(within(column()).queryByText(/AI kết luận/)).not.toBeInTheDocument();
+      expect(notice()).toHaveTextContent("thiếu hoặc sai API key Voyage");
+    });
+
+    it("draws nothing for a kind it has no words for, and never the code", () => {
+      renderColumn(view({ ...withRag(null, "<b>cosmic_ray</b>") }));
+      expect(notice()).not.toBeInTheDocument();
+      expect(column().textContent).not.toContain("cosmic_ray");
+      expect(column().querySelector("b")).toBeNull();
+      // the conclusion beside it is untouched
+      expect(line()).toHaveTextContent(/^AI kết luận: TP \(độ tin cậy trung bình\)$/);
+    });
+
+    it("draws nothing for a kind it has no words for on a decided page either", () => {
+      renderColumn(
+        view({
+          status: "closed_fp",
+          acknowledged_by_name: "An",
+          ...withRag(64, "cosmic_ray"),
+        }),
+      );
+      expect(notice()).not.toBeInTheDocument();
+      expect(column().textContent).not.toContain("cosmic_ray");
+      // the percentage is a different fact and still stands
+      expect(line()).toHaveTextContent("— trùng 64% với tri thức đã duyệt");
+    });
+
+    it("can stand beside the percentage", () => {
+      renderColumn(view({ ...withRag(64, "timeout") }));
+      expect(line()).toHaveTextContent("— trùng 64% với tri thức đã duyệt");
+      expect(notice()).toHaveTextContent("Voyage quá thời gian chờ");
+    });
+
+    it("is not drawn when ① gave up: no analysis was made without references", () => {
+      renderColumn(
+        view({
+          suggestion: null,
+          triage_status: "unavailable",
+          llm_stopped_by: "unavailable",
+          ...withRag(null, "quota"),
+        }),
+      );
+      expect(notice()).not.toBeInTheDocument();
+      expect(within(column()).queryByText(/Không áp dụng RAG/)).not.toBeInTheDocument();
+    });
+
+    it("is not drawn while ① is still working", () => {
+      renderColumn(view({ suggestion: null, triage_status: "pending", ...withRag(null, "auth") }));
+      expect(within(column()).queryByText(/Không áp dụng RAG/)).not.toBeInTheDocument();
+    });
+  });
+
+  describe("on a decided page", () => {
+    const decided = (over: Partial<AlertView> = {}) =>
+      view({ status: "closed_fp", acknowledged_by: "u1", acknowledged_by_name: "An", ...over });
+    const box = () => within(column()).getByText(S.ai1.decidedAi).closest("div")!;
+
+    it("says the percentage in the box, in the same line as the undecided column", () => {
+      renderColumn(decided({ ...withRag(87) }));
+      expect(within(box()).getByText(/AI kết luận/)).toHaveTextContent(
+        /^AI kết luận: TP \(độ tin cậy trung bình\) — trùng 87% với tri thức đã duyệt$/,
+      );
+    });
+
+    it("says the percentage with the system's own clause when the gate held the verdict", () => {
+      renderColumn(
+        decided({
+          ...held(["fp_policy:asset_criticality"], { ...withRag(72) }),
+          status: "closed_fp",
+          acknowledged_by_name: "An",
+        }),
+      );
+      expect(within(box()).getByText(/AI kết luận/)).toHaveTextContent(
+        "AI kết luận: FP (độ tin cậy trung bình) — trùng 72% với tri thức đã duyệt — " +
+          "hệ thống giữ lại cho người xem vì: tài sản quan trọng hoặc chưa rõ",
+      );
+    });
+
+    it("says the notice in the box, for the alert", () => {
+      renderColumn(decided({ ...withRag(null, "rate_limit") }));
+      expect(within(box()).getByRole("note")).toHaveTextContent(
+        "⚠ Không áp dụng RAG cho alert này: Voyage vượt giới hạn tốc độ — " +
+          "AI đã phân tích không có tri thức tham khảo.",
+      );
+    });
+
+    it("is the same line the undecided column draws for the same view", () => {
+      const rag = withRag(87, "timeout");
+      const undecided = renderColumn(view(rag));
+      const before = line().textContent;
+      const noteBefore = notice()?.textContent;
+      undecided.unmount();
+      renderColumn(decided(rag));
+      expect(within(box()).getByText(/AI kết luận/).textContent).toBe(before);
+      expect(within(box()).getByRole("note").textContent).toBe(noteBefore);
+    });
+
+    it("says nothing for a decided alert with no match and no failure", () => {
+      renderColumn(decided({ ...withRag(null, null) }));
+      expect(within(box()).getByText(/AI kết luận/).textContent).not.toContain("trùng");
+      expect(within(column()).queryByRole("note")).not.toBeInTheDocument();
+    });
+
+    it("is not there before the decision on the blind arm, and is after it (the same head)", () => {
+      const before = renderColumn(blindView({ status: "tier1_active" }));
+      expect(within(column()).queryByText(/trùng/)).not.toBeInTheDocument();
+      expect(within(column()).queryByText(/Không áp dụng RAG/)).not.toBeInTheDocument();
+      before.unmount();
+      renderColumn(decided({ suggestion_visible: false, ...withRag(87, "auth") }));
+      expect(within(box()).getByText(/AI kết luận/)).toHaveTextContent(MATCH);
+      expect(within(box()).getByRole("note")).toHaveTextContent("Không áp dụng RAG");
+    });
+  });
+
+  describe("on the blind arm, before the decision", () => {
+    it("shows neither, even for a view that (wrongly) still carries rag", () => {
+      const stray = blindView({ ...withRag(87, "auth") });
+      expect(aiStateOfView(stray)).toEqual({ kind: "hidden" });
+      renderColumn(stray);
+      const col = column();
+      expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
+      expect(
+        leaksIn(col, ["trùng", "tri thức đã duyệt", "Không áp dụng RAG", "Voyage", "87%"]),
+      ).toEqual([]);
+      expect(within(col).queryByRole("note")).not.toBeInTheDocument();
+    });
+
+    it("shows neither for a blind head the server stripped", () => {
+      renderColumn(blindView());
+      expect(within(column()).queryByText(/trùng/)).not.toBeInTheDocument();
+      expect(within(column()).queryByText(/Không áp dụng RAG/)).not.toBeInTheDocument();
+    });
+  });
+});
+
 describe("accessibility", () => {
   const states: [string, AlertView][] = [
     ["ready", view()],
+    [
+      "ready with the percentage and the RAG notice (P14-T07)",
+      view({ rag: { best_pct: 87, not_applied: "timeout" } }),
+    ],
+    [
+      "decided with the percentage and the RAG notice (P14-T07)",
+      view({
+        status: "closed_benign",
+        acknowledged_by_name: "An",
+        rag: { best_pct: 87, not_applied: "auth" },
+      }),
+    ],
     [
       "ready and forced",
       view({

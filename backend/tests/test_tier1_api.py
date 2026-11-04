@@ -232,6 +232,9 @@ _SUGGESTION_KEYS = (
     "triaged_count",  # ... and the two counts that say how often ① ran (R17 / DEC-101)
     "needs_retriage",
     "llm_stopped_by",  # INT-T02: why ① gave up is as telling as "① ran"
+    "proposed_action",  # P14-T03: the model's own answer ...
+    "held_by",  # ... and why the system held it
+    "rag",  # P14-T07: the match percentage and the "RAG not applied" notice
 )
 
 

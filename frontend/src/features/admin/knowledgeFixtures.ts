@@ -265,6 +265,7 @@ export function draftDetail(
           notes: [],
           enrichment: { asset: { host: "fw-edge-01", criticality: "high" } },
           conflict_entry: null,
+          lookup: null,
           ...over.source,
         }
       : {
@@ -283,6 +284,7 @@ export function draftDetail(
           notes: caseView().notes,
           enrichment: {},
           conflict_entry: null,
+          lookup: null,
           ...over.source,
         };
   return { draft, source };
