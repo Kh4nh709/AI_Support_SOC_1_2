@@ -87,7 +87,7 @@ check and the archived-case skip stay in the job: they are about the job's own t
 
 `as_of` (None: today's behaviour, byte for byte) makes the evaluation what ② could have known at that instant:
 the dossier keeps only the rows created strictly before it in block 6 and block 8 (`dossier.build(as_of=)`),
-and the RAG arm reads the newest lookup of the case created before it (`lookups_before`). The newest decides, as
+and the RAG arm reads the newest lookup of the case created before it (`lookups_before`, which is `rag.lookup.latest_lookup(before=)`). The newest decides, as
 in the product: a `failed` one hides an older good one. A tier-2 note, or an earlier ② answer, written after the
 escalation would otherwise hand the human's (or an earlier run's) conclusion to both arms and hide the RAG's effect.
 """
@@ -121,8 +121,7 @@ from app.rag.lookup import (
     USABLE_STATUSES,
     LookupResult,
     PromptMaterial,
-    _history_of,
-    _matches_of,
+    latest_lookup,
     lookup_failure,
     lookup_material,
     prompt_material,
@@ -490,35 +489,6 @@ def _scan_for_injection(dossier: dossier_mod.Dossier) -> list[detector.Finding]:
 # The lookup as of an instant (P14-T11).
 # ---------------------------------------------------------------------------
 
-_LOOKUP_BEFORE_SQL = (
-    "SELECT lookup_id, status, history, matches, created_at, failure_kind FROM rag_results"
-    " WHERE subject_kind = 'case' AND subject_id = %s AND created_at < %s"
-)
-
-
-def _lookup_before(
-    conn: psycopg.Connection,
-    case_id: str,
-    as_of: datetime,
-    statuses: tuple[str, ...] | None = None,
-) -> LookupResult | None:
-    """`rag.lookup.latest_lookup` with one more condition: the newest lookup of the case created strictly
-    before `as_of` (among `statuses` when given). The rows are read into a `LookupResult` by the same two
-    validators `latest_lookup` uses (`rag.lookup._history_of`, `_matches_of`): what reaches a prompt is
-    checked in one place. `rag/` has no `before` parameter and is not this card's to change."""
-    query = _LOOKUP_BEFORE_SQL
-    params: list[Any] = [case_id.lower(), as_of]
-    if statuses is not None:
-        query += " AND status = ANY(%s)"
-        params.append(list(statuses))
-    row = conn.execute(query + " ORDER BY created_at DESC, lookup_id LIMIT 1", params).fetchone()
-    if row is None:
-        return None
-    lookup_id, status, history, matches, created_at, failure_kind = row
-    return LookupResult(
-        lookup_id, status, _history_of(history), _matches_of(matches), created_at, failure_kind
-    )
-
 
 def lookups_before(
     conn: psycopg.Connection, case_id: str, as_of: datetime
@@ -528,9 +498,10 @@ def lookups_before(
     row written after an `ok` one does not hide it, spec §7.6). `newest.status == "failed"` is the notice
     and no section, whatever `usable` holds: the newest lookup decides. Read as ② reads it and the
     measurement describes it, so the two cannot disagree about which lookup a case had."""
+    subject = Subject("case", case_id.lower())
     return (
-        _lookup_before(conn, case_id, as_of),
-        _lookup_before(conn, case_id, as_of, USABLE_STATUSES),
+        latest_lookup(conn, subject, before=as_of),
+        latest_lookup(conn, subject, statuses=USABLE_STATUSES, before=as_of),
     )
 
 
@@ -608,18 +579,24 @@ class CaseEvaluation:
     def __post_init__(self) -> None:
         if self.outcome not in OUTCOMES:
             raise ValueError(f"outcome must be one of {sorted(OUTCOMES)}, got {self.outcome!r}")
+        if self.outcome == "transient" and self.exception is None:
+            raise ValueError("a transient outcome carries the error the job re-raises")
 
     @property
     def stopped_by(self) -> str | None:
         return None if self.outcome == "ok" else self.outcome
 
 
-def _held_by(evidence_check: dict[str, Any]) -> list[str]:
-    """Why the system held the model's conclusion back, from the check just built: the same causes, in
-    `HELD_BY`'s order, that `investigation_view.held_by` reads back from the stored row (that module imports
-    this one, so the rule is written here and `test_lab_measure` holds the two equal)."""
+def held_causes(evidence_check: dict[str, Any]) -> list[str]:
+    """Why the system held the model's conclusion back as `need_more_data`, read from an `evidence_check`
+    (the one just built, or one stored): the closed causes in `HELD_BY`'s order - `no_verified_evidence` when
+    no cited evidence verified, `high_severity_injection_finding` when `forced_by` says so. This is the one
+    rule: `evaluate_case` uses it, and `investigation_view.held_by` (which imports this module, so it
+    cannot be the other way round) calls it after its own check that the run carries a `model_conclusion`.
+    """
+    verified = evidence_check.get("verified")
     found = {
-        HELD_NO_VERIFIED_EVIDENCE: not evidence_check["verified"],
+        HELD_NO_VERIFIED_EVIDENCE: isinstance(verified, list) and not verified,
         HELD_HIGH_INJECTION: evidence_check.get("forced_by") == HELD_HIGH_INJECTION,
     }
     return [cause for cause in HELD_BY if found[cause]]
@@ -634,8 +611,26 @@ def evaluate_case(
     rag: bool,
     as_of: datetime | None = None,
 ) -> CaseEvaluation | None:
-    """Pipeline (2) for one case, computed and returned, never written (P14-T11); `None` when the case does
-    not exist.
+    """`_compute_case` for a caller that wants `None` when the case does not exist (the lab measurement).
+    `run_investigate_job` calls `_compute_case` itself to keep the `UnknownCase` it turns into a
+    `PermanentError`."""
+    try:
+        return _compute_case(conn, case_id, adapter=adapter, cfg=cfg, rag=rag, as_of=as_of)
+    except dossier_mod.UnknownCase:
+        return None
+
+
+def _compute_case(
+    conn: psycopg.Connection,
+    case_id: str,
+    *,
+    adapter: Any | None,
+    cfg: config.Config,
+    rag: bool,
+    as_of: datetime | None = None,
+) -> CaseEvaluation:
+    """Pipeline (2) for one case, computed and returned, never written (P14-T11); `dossier_mod.UnknownCase`
+    when the case does not exist (`evaluate_case` returns None for it).
 
     Only `SELECT`s run on `conn`: no `llm_runs`, no `audit_events`, no `cases` column, no job. `rag` says
     whether the learned section is put in the dossier (the job passes `cfg.RAG_ENABLED`; `cfg` itself is not
@@ -666,12 +661,7 @@ def evaluate_case(
         else:
             not_applied, material = _learned_before(conn, case_id, as_of)
 
-    try:
-        dossier = dossier_mod.build(
-            conn, case_id, nonce=nonce, cfg=cfg, learned=material, as_of=as_of
-        )
-    except dossier_mod.UnknownCase:
-        return None
+    dossier = dossier_mod.build(conn, case_id, nonce=nonce, cfg=cfg, learned=material, as_of=as_of)
 
     # The lookup is named on the row only when its material reached the prompt - not when there was none,
     # and not when the budget dropped block 10 (`Dossier.learned_used`).
@@ -803,7 +793,7 @@ def evaluate_case(
         result.usage,
         result=final_result,
         model_conclusion=model_conclusion,
-        held_by=_held_by(evidence_check),
+        held_by=held_causes(evidence_check),
         evidence_check=evidence_check,
         citation_warnings=citation_warnings or None,
         injection_findings=detector.as_json(findings),
@@ -835,9 +825,10 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
         print(json.dumps({"investigate": "skipped", "reason": "archived", "case_id": case_id}))
         return
 
-    evaluation = evaluate_case(conn, case_id, adapter=adapter, cfg=cfg, rag=cfg.RAG_ENABLED)
-    if evaluation is None:
-        raise PermanentError(str(dossier_mod.UnknownCase(case_id)))
+    try:
+        evaluation = _compute_case(conn, case_id, adapter=adapter, cfg=cfg, rag=cfg.RAG_ENABLED)
+    except dossier_mod.UnknownCase as exc:
+        raise PermanentError(str(exc)) from exc
 
     run_id = run_id_for_job(job.job_id)
 
@@ -874,8 +865,10 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
         is_final = job.attempts >= cfg.JOB_MAX_ATTEMPTS
         write_row(run_id if is_final else attempt_run_id(job.job_id, job.attempts))
         conn.commit()
-        assert evaluation.exception is not None  # a transient outcome always carries its error
-        raise evaluation.exception
+        error = evaluation.exception
+        if error is None:  # never: `CaseEvaluation` refuses a transient outcome without its error
+            raise PermanentError("a transient evaluation carries no error to re-raise")
+        raise error
 
     write_row(run_id)
     if evaluation.outcome != "ok":
