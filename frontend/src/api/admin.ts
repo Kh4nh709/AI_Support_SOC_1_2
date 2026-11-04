@@ -938,6 +938,22 @@ export type KnowledgeSource = {
   notes: CaseNote[];
   enrichment: unknown;
   conflict_entry: KnowledgeEntry | null;
+  /** The source's newest lookup (P14-T07, DEC-213), or null when it has none. */
+  lookup: KnowledgeLookup | null;
+};
+
+/**
+ * The newest stored lookup of a draft's source (`rag_results`; P14-T07, DEC-213). `ranked` lists every candidate
+ * the Voyage rerank scored, best first, each with its score as a whole percentage (`round(score * 100)`); it is
+ * null for a lookup from before migration 023 and for one that failed or ran out of budget, and `[]` for a lookup
+ * with nothing left to rerank. `failure_kind` is the closed kind of a `failed` lookup (null for any other status).
+ */
+export type KnowledgeLookup = {
+  lookup_id: string;
+  status: string;
+  failure_kind: string | null;
+  ranked: { entry_id: string; pct: number }[] | null;
+  created_at: string;
 };
 
 /** `GET /api/admin/knowledge/drafts/{id}`. */
@@ -1165,6 +1181,187 @@ export function knowledgeErrorOf(error: unknown): KnowledgeError {
     return { kind: "publish_failed", status };
   } else if (status === 404 && reason === "not_found") {
     return { kind: "not_found", status };
+  }
+  return { kind: "other", status };
+}
+
+// --- lab runs and labels (admin_lab.py, lab/runs.py, lab/labels.py; DEC-213, P14-T09 and P14-T10) ---------------
+//
+// The attack runs of the lab and the hand labels that are the ground truth of the measurement. A run is a name, a
+// purpose and a half-open window `[starts_at, ends_at)` of the time alerts were received; its alerts are the queue
+// heads received inside it. The alerts come BLIND: the alert's own fields and its label, nothing of ① or ② (the
+// server passes them through `tier1.visibility.strip(..., mode="labeling")`), and this client has no call that
+// reads ① or ②. Every text in them (a name, a description, a raw log) is rendered as text and never as markup.
+
+/** What a run is for (`PURPOSES` of lab/runs.py): `kb` builds the knowledge base, `test` is scored. */
+export const LAB_PURPOSES = ["kb", "test"] as const;
+export type LabPurpose = (typeof LAB_PURPOSES)[number];
+
+/** The two hand labels (`LABELS` of lab/labels.py): a real attack, and not an attack. */
+export const LAB_LABELS = ["true_positive", "false_positive"] as const;
+export type LabLabel = (typeof LAB_LABELS)[number];
+
+/**
+ * What the create form may check before it posts, equal to the constants of lab/runs.py (a test reads them):
+ * `NAME_MAX_CHARS`, `YEAR_MIN` and `YEAR_MAX` (the years, in UTC, an instant may have). The server still has the
+ * last word.
+ */
+export const LAB_LIMITS = { nameMax: 80, yearMin: 2000, yearMax: 2099 } as const;
+
+/** One run of `GET /api/admin/lab/runs`. `total` is the queue heads received in the window, `labelled` how many carry a label. */
+export type LabRun = {
+  run_id: string;
+  name: string;
+  purpose: LabPurpose;
+  starts_at: string;
+  ends_at: string;
+  total: number;
+  labelled: number;
+};
+
+/** The runs, the latest window first. */
+export type LabRunsResponse = { runs: LabRun[] };
+
+/** The body of `POST /api/admin/lab/runs`: both instants are ISO 8601 with a zone (an offset or `Z`). */
+export type NewLabRun = {
+  name: string;
+  purpose: LabPurpose;
+  starts_at: string;
+  ends_at: string;
+};
+
+/**
+ * One alert of a run, as the labeller sees it: exactly `ITEM_KEYS` of lab/labels.py plus `label`. A key the
+ * labeller must not see (the verdict of ①, the risk, the status, the source) is not here, and the page renders
+ * each field below by name.
+ */
+export type LabAlert = {
+  alert_id: string;
+  received_at: string;
+  alert_time: string;
+  rule_id: string;
+  rule_level: number;
+  severity: string;
+  description: string;
+  agent_name: string;
+  alert_user: string | null;
+  srcip: string;
+  dstip: string;
+  category: string;
+  mitre_ids: string[];
+  occurrence_count: number;
+  /** Cut at 32 KB; `raw_log_truncated_for_display` says so. */
+  raw_log: string;
+  raw_log_truncated_for_display: boolean;
+  label: LabLabel | null;
+};
+
+/** `GET /api/admin/lab/runs/{id}/alerts`. `next_after` is the last alert's id when the page is full, else null. */
+export type LabAlertsResponse = {
+  run: LabRun;
+  alerts: LabAlert[];
+  next_after: string | null;
+};
+
+export function listLabRuns(): Promise<LabRunsResponse> {
+  return api<LabRunsResponse>("/admin/lab/runs");
+}
+
+/** `201` with the run; `409 overlap` when the window shares time with another run's; `422 {field, reason}`. */
+export function createLabRun(body: NewLabRun): Promise<LabRun> {
+  return api<LabRun>("/admin/lab/runs", { method: "POST", json: body });
+}
+
+/**
+ * A page of a run's alerts, oldest first. `after` is the `next_after` of the page before; `limit` is 1 to 200
+ * (100 by default, and left to the server when it is not given). `404 not_found` for a run that is not there,
+ * `422` for an id that is no uuid.
+ */
+export function getLabRunAlerts(
+  runId: string,
+  options: { after?: string | null; limit?: number } = {},
+): Promise<LabAlertsResponse> {
+  const query = new URLSearchParams();
+  if (options.after !== undefined && options.after !== null) query.set("after", options.after);
+  if (options.limit !== undefined) query.set("limit", String(options.limit));
+  const search = query.size === 0 ? "" : `?${query}`;
+  return api<LabAlertsResponse>(`/admin/lab/runs/${enc(runId)}/alerts${search}`);
+}
+
+/**
+ * Sets or changes the label of an alert; the run is the one the alert's `received_at` falls in. `404 not_found`,
+ * `409 not_a_queue_head` (a duplicate under a head) and `409 outside_every_run`.
+ */
+export function putLabLabel(
+  alertId: string,
+  label: LabLabel,
+): Promise<{ alert_id: string; run_id: string; label: LabLabel }> {
+  return api<{ alert_id: string; run_id: string; label: LabLabel }>(
+    `/admin/lab/labels/${enc(alertId)}`,
+    { method: "PUT", json: { label } },
+  );
+}
+
+/** `204`; clearing what is not there is a `204` too. The body is `{}`: the route asks DELETE for the JSON content type. */
+export async function deleteLabLabel(alertId: string): Promise<void> {
+  await api<null>(`/admin/lab/labels/${enc(alertId)}`, { method: "DELETE", json: {} });
+}
+
+/** The inputs a `422 {field, reason}` of the lab routes names (`body` is the whole request, `label` the label of a PUT). */
+export const LAB_FIELDS = ["name", "purpose", "starts_at", "ends_at", "body", "label"] as const;
+export type LabField = (typeof LAB_FIELDS)[number];
+
+/** The reasons of a lab 422 (admin_lab.py, lab/runs.py). `invalid` on a time covers the years 2000 to 2099 in UTC. */
+export const LAB_FIELD_REASONS = [
+  "required",
+  "empty",
+  "too_long",
+  "invalid",
+  "taken",
+  "not_after_starts",
+] as const;
+export type LabFieldReason = (typeof LAB_FIELD_REASONS)[number];
+
+/**
+ * What a failed call of the lab routes said, as a value; every kind carries the HTTP `status` of the answer (0
+ * when there was none):
+ * - `overlap`: the 409 of a window that shares time with another run's;
+ * - `not_a_queue_head`, `outside_every_run`: the 409s of a label;
+ * - `not_found`: the 404 of an alert or a run that is not there;
+ * - `field`: a 422 about one input, shown beside it;
+ * - `other`: everything else, an unknown code, FastAPI's own list-shaped 422 and a network failure included. The
+ *   page says `S.common.unknownError`.
+ */
+export type LabError =
+  | { kind: "overlap"; status: number }
+  | { kind: "not_a_queue_head"; status: number }
+  | { kind: "outside_every_run"; status: number }
+  | { kind: "not_found"; status: number }
+  | { kind: "field"; status: number; field: LabField; reason: LabFieldReason }
+  | { kind: "other"; status: number };
+
+/** The member of a closed list that `value` is, or null: a hostile `constructor` is not one. */
+function memberOf<T extends string>(list: readonly T[], value: string | null): T | null {
+  return list.find((item) => item === value) ?? null;
+}
+
+/** Reads what a failed call of the lab routes threw. Never throws, whatever it is handed. */
+export function labErrorOf(error: unknown): LabError {
+  if (!(error instanceof ApiError)) return { kind: "other", status: 0 };
+  const { status, detail } = error;
+  // `deps.clean_path_id`: a control character in an id is a 404 whose detail is this plain text.
+  if (status === 404 && detail === "not found") return { kind: "not_found", status };
+  const reason = isRecord(detail) ? ownText(detail, "reason") : null;
+  if (status === 409) {
+    if (reason === "overlap") return { kind: "overlap", status };
+    if (reason === "not_a_queue_head") return { kind: "not_a_queue_head", status };
+    if (reason === "outside_every_run") return { kind: "outside_every_run", status };
+  } else if (status === 404 && reason === "not_found") {
+    return { kind: "not_found", status };
+  } else if (status === 422 && isRecord(detail)) {
+    const field = memberOf(LAB_FIELDS, ownText(detail, "field"));
+    const why = memberOf(LAB_FIELD_REASONS, reason);
+    if (field !== null && why !== null) return { kind: "field", status, field, reason: why };
   }
   return { kind: "other", status };
 }

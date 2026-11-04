@@ -141,6 +141,8 @@ const rules = (): string => router("admin_rules.py");
 const digest = (): string => router("admin_digest.py");
 const labels = (): string => router("labels.py");
 const audit = (): string => router("admin_audit.py");
+const lab = (): string => router("admin_lab.py");
+const labLabels = (): string => py("lab", "labels.py");
 const knowledge = (): string => router("admin_knowledge.py");
 const ragDraft = (): string => py("rag", "draft.py");
 const tier1Labels = (): string => py("tier1", "labels.py");
@@ -542,6 +544,60 @@ const ENTRIES: Entry[] = [
     backend: () => dictKeys(labels(), /return \{(?=\s*"undone_cluster_id")/),
   },
 
+  // --- lab runs and labels (admin_lab.py, lab/labels.py; DEC-213, P14-T10) ---
+  {
+    path: "LabRun",
+    keys: ["run_id", "name", "purpose", "starts_at", "ends_at", "total", "labelled"],
+    backend: () => dictKeys(lab(), /return \{(?=\s*"run_id": run\.run_id)/),
+  },
+  {
+    path: "LabRunsResponse",
+    keys: ["runs"],
+    backend: () => dictKeys(lab(), /return \{(?=\s*"runs")/),
+  },
+  {
+    path: "NewLabRun",
+    keys: ["name", "purpose", "starts_at", "ends_at"],
+    backend: () => pyNames(lab(), /def api_create_run[\s\S]*?_only\(body, \(([^)]*)\)\)/),
+  },
+  {
+    // `ITEM_KEYS` of lab/labels.py are the columns of the blind view; the router adds `label` through the SQL.
+    path: "LabAlert",
+    keys: [
+      "alert_id",
+      "received_at",
+      "alert_time",
+      "rule_id",
+      "rule_level",
+      "severity",
+      "description",
+      "agent_name",
+      "alert_user",
+      "srcip",
+      "dstip",
+      "category",
+      "mitre_ids",
+      "occurrence_count",
+      "raw_log",
+      "raw_log_truncated_for_display",
+      "label",
+    ],
+    backend: () => [
+      ...pyNames(labLabels(), /^ITEM_KEYS: tuple\[str, \.\.\.\] = \(([^)]*)\)/m),
+      ...(/item\["label"\] = label/.test(labLabels()) ? ["label"] : []),
+    ],
+  },
+  {
+    path: "LabAlertsResponse",
+    keys: ["run", "alerts", "next_after"],
+    backend: () => dictKeys(lab(), /return \{(?=\s*"run": _run_json)/),
+  },
+  {
+    path: "fn:putLabLabel",
+    keys: ["alert_id", "run_id", "label"],
+    backend: () => dictKeys(lab(), /return \{(?=\s*"alert_id": alert_id)/),
+  },
+
   // --- audit log (admin_audit.py) ---
   {
     path: "AuditEvent",
@@ -650,12 +706,19 @@ const ENTRIES: Entry[] = [
       "notes",
       "enrichment",
       "conflict_entry",
+      "lookup", // P14-T07: the source's newest lookup, set beside the conflicting entry
     ],
     backend: () => [
       ...dictKeys(knowledge(), /source: dict\[str, Any\] = \{/),
       ...dictKeys(knowledge(), /return \{(?=\s*"alert": _alert_view\()/),
       ...[...knowledge().matchAll(/^\s+source\["(\w+)"\] = /gm)].map((m) => m[1] as string),
     ],
+  },
+  {
+    // P14-T07 (DEC-213): what `_lookup` answers - the source's newest `rag_results` row, `ranked` as `{entry_id, pct}`.
+    path: "KnowledgeLookup",
+    keys: ["lookup_id", "status", "failure_kind", "ranked", "created_at"],
+    backend: () => dictKeys(knowledge(), /return \{(?=\s*"lookup_id": str\(found\.lookup_id\),)/),
   },
   {
     path: "KnowledgeDraftDetail",

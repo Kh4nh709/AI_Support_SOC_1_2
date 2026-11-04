@@ -115,6 +115,8 @@ def _fixture_view(source: str = "replay") -> dict[str, Any]:
         "llm_stopped_by": "unavailable",  # why ① gave up (INT-T02): "① stopped" is as telling as "① ran"
         "proposed_action": "false_positive",  # P14-T03: the model's own answer, and
         "held_by": ["fp_policy:asset_criticality"],  # why the system held it: both are ①'s verdict
+        # P14-T07: the match percentage and the "RAG not applied" notice beside ①'s conclusion
+        "rag": {"best_pct": 87, "not_applied": None},
         # --- the rest of LABELING_DENYLIST: dropped in labeling mode only -------
         "suggestion_visible": False,
         "source": source,
@@ -203,6 +205,7 @@ _ANALYST_BLIND_SURVIVORS = _ALL_KEYS - frozenset(
         "llm_stopped_by",  # INT-T02: the reason ① gave up says that it ran
         "proposed_action",  # P14-T03: what the model concluded, before the gate held it
         "held_by",  # P14-T03: why the gate held it
+        "rag",  # P14-T07: how strongly the RAG matched, and the notice that it was not applied
     }
 )
 _LABELING_SURVIVORS = frozenset(
@@ -286,6 +289,7 @@ def test_constant_sets_are_the_card_verbatim():
         "llm_stopped_by",  # INT-T02 / DEC-211 R6: why ① gave up
         "proposed_action",  # P14-T03 / DEC-213: the model's own answer
         "held_by",  # P14-T03 / DEC-213: why the system held it
+        "rag",  # P14-T07 / DEC-213: the match percentage and the "RAG not applied" notice
     }
     assert ANALYST_HIDE <= LABELING_DENYLIST
     assert {"triaged_count", "needs_retriage"} <= LABELING_DENYLIST  # DEC-101

@@ -34,7 +34,9 @@ import pytest
 from app.audit.events import write_event
 from app.infra import config
 from app.infra.auth import Claims
+from app.rag import lookup as rag_lookup
 from app.rag import publish
+from app.rag.subject import Subject
 from app.rag.tags import load_tags
 from app.web import deps, main
 from app.web.routers import admin_knowledge
@@ -1224,6 +1226,279 @@ def test_the_tags_are_the_closed_vocabulary_with_a_description_each(api) -> None
     assert body["tags"] == sorted(load_tags())
     assert set(body["descriptions"]) == set(body["tags"])
     assert all(isinstance(text, str) and text for text in body["descriptions"].values())
+
+
+# ═══ the lookup the admin judges a draft against (P14-T07, DEC-213) ═══════════════════════════
+
+
+def store_lookup(
+    conn,
+    kind: str,
+    subject_id: str,
+    *,
+    status: str = "ok",
+    ranked=None,
+    failure_kind: str | None = None,
+    match_notes=None,
+    age_s: int = 0,
+) -> str:
+    """One `rag_results` row as `rag.lookup._store` writes it (`ranked` NULL for a row from before 023)."""
+    lookup_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO rag_results (lookup_id, subject_kind, subject_id, status, history, matches, "
+        "match_notes, failure_kind, ranked, created_at) VALUES (%s, %s, %s, %s, NULL, '[]'::jsonb, "
+        "%s, %s, %s, now() - %s * interval '1 second')",
+        (
+            lookup_id,
+            kind,
+            subject_id,
+            status,
+            Jsonb({} if match_notes is None else match_notes),
+            failure_kind,
+            None if ranked is None else Jsonb(ranked),
+            age_s,
+        ),
+    )
+    return lookup_id
+
+
+@pytest.mark.db
+def test_a_draft_with_no_lookup_has_none(api) -> None:
+    _, draft_id = alert_draft(api.conn)
+
+    assert api.get(f"/drafts/{draft_id}").json()["source"]["lookup"] is None
+
+
+@pytest.mark.db
+def test_the_lookup_lists_each_ranked_entry_with_its_score_as_a_percentage(api) -> None:
+    alert, draft_id = alert_draft(api.conn)
+    lookup_id = store_lookup(
+        api.conn,
+        "alert",
+        alert,
+        ranked=[
+            {"entry_id": "entry-a", "score": 0.866},
+            {"entry_id": "entry-b", "score": 0.61},
+            {"entry_id": "entry-c", "score": 0.5},
+        ],
+    )
+
+    lookup = api.get(f"/drafts/{draft_id}").json()["source"]["lookup"]
+
+    assert lookup["lookup_id"] == lookup_id
+    assert lookup["status"] == "ok" and lookup["failure_kind"] is None
+    assert lookup["created_at"]
+    assert lookup["ranked"] == [
+        {"entry_id": "entry-a", "pct": 87},
+        {"entry_id": "entry-b", "pct": 61},
+        {"entry_id": "entry-c", "pct": 50},
+    ]
+    assert set(lookup) == {"lookup_id", "status", "failure_kind", "ranked", "created_at"}
+
+
+@pytest.mark.db
+def test_a_lookup_from_before_023_has_no_ranked_list(api) -> None:
+    alert, draft_id = alert_draft(api.conn)
+    store_lookup(api.conn, "alert", alert, ranked=None)
+
+    lookup = api.get(f"/drafts/{draft_id}").json()["source"]["lookup"]
+
+    assert lookup["status"] == "ok"
+    assert lookup["ranked"] is None
+
+
+@pytest.mark.db
+def test_a_lookup_that_scored_no_candidate_has_an_empty_list(api) -> None:
+    alert, draft_id = alert_draft(api.conn)
+    store_lookup(api.conn, "alert", alert, status="empty", ranked=[])
+
+    assert api.get(f"/drafts/{draft_id}").json()["source"]["lookup"]["ranked"] == []
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "kind", ["rate_limit", "timeout", "auth", "quota", "provider_error", "vectordb_unreachable"]
+)
+def test_a_failed_lookup_shows_its_failure_kind(api, kind) -> None:
+    alert, draft_id = alert_draft(api.conn)
+    store_lookup(api.conn, "alert", alert, status="failed", failure_kind=kind)
+
+    lookup = api.get(f"/drafts/{draft_id}").json()["source"]["lookup"]
+
+    assert lookup["status"] == "failed"
+    assert lookup["failure_kind"] == kind
+    assert lookup["ranked"] is None
+
+
+@pytest.mark.db
+def test_a_failed_lookup_from_before_the_kind_was_stored_reads_as_the_lookup_reads_it(api) -> None:
+    """A `failed` row with no stored kind (older than migration 023) reads as `rag.lookup.UNKNOWN_FAILURE_KIND`
+    for ① and ② (`lookup_failure`), so the alert and case pages say "lỗi phía Voyage" for it; the admin block
+    says the same, read from the same constant."""
+    alert, draft_id = alert_draft(api.conn)
+    store_lookup(api.conn, "alert", alert, status="failed", failure_kind=None)
+
+    lookup = api.get(f"/drafts/{draft_id}").json()["source"]["lookup"]
+
+    assert lookup["status"] == "failed"
+    assert lookup["failure_kind"] == rag_lookup.UNKNOWN_FAILURE_KIND
+    assert lookup["failure_kind"] == rag_lookup.lookup_failure(api.conn, Subject("alert", alert))
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("status", ["ok", "empty", "budget"])
+def test_a_lookup_that_did_not_fail_names_no_kind(api, status) -> None:
+    alert, draft_id = alert_draft(api.conn)
+    store_lookup(api.conn, "alert", alert, status=status, failure_kind=None)
+
+    lookup = api.get(f"/drafts/{draft_id}").json()["source"]["lookup"]
+
+    assert lookup["status"] == status and lookup["failure_kind"] is None
+
+
+@pytest.mark.db
+def test_the_lookup_shown_is_the_one_latest_lookup_picks(api) -> None:
+    """Several lookups of one subject, two of them stamped alike: the block shows the row `rag.lookup.latest_lookup`
+    (what ① and ② read at prompt time) picks, whatever the tie-break is."""
+    alert, draft_id = alert_draft(api.conn)
+    store_lookup(api.conn, "alert", alert, ranked=[{"entry_id": "oldest", "score": 0.9}], age_s=120)
+    for name in ("tie-a", "tie-b", "tie-c"):
+        store_lookup(api.conn, "alert", alert, ranked=[{"entry_id": name, "score": 0.5}])
+
+    shown = api.get(f"/drafts/{draft_id}").json()["source"]["lookup"]
+    picked = rag_lookup.latest_lookup(api.conn, Subject("alert", alert))
+
+    assert picked is not None
+    assert shown["lookup_id"] == str(picked.lookup_id)
+    assert shown["ranked"][0]["entry_id"] != "oldest"
+
+
+@pytest.mark.db
+def test_a_case_id_in_capitals_finds_the_lookup_stored_in_lower_case(api) -> None:
+    """`rag.subject` keeps a case id in lower case; the block builds its subject the same way."""
+    case_id = concluded_case(api.conn)
+    draft_id = pending_draft(api.conn, f"case:{case_id}")
+    api.conn.execute(
+        "UPDATE knowledge_drafts SET source_id = %s WHERE draft_id = %s",
+        (case_id.upper(), draft_id),
+    )
+    store_lookup(
+        api.conn, "case", case_id.lower(), ranked=[{"entry_id": "case-entry", "score": 0.7}]
+    )
+
+    lookup = api.get(f"/drafts/{draft_id}").json()["source"]["lookup"]
+
+    assert lookup is not None and lookup["ranked"] == [{"entry_id": "case-entry", "pct": 70}]
+
+
+@pytest.mark.db
+def test_a_source_id_that_is_no_subject_has_no_lookup(api) -> None:
+    """A draft whose source id `rag.subject` would refuse (a space in an alert id, a case id that is no UUID)
+    has no lookup, and the detail still answers."""
+    for kind, source_id in (("alert", "has a space"), ("case", "not-a-uuid")):
+        (draft_id,) = api.conn.execute(
+            "INSERT INTO knowledge_drafts (source_kind, source_id, conclusion, status)"
+            " VALUES (%s, %s, 'closed_fp', 'pending') RETURNING draft_id",
+            (kind, source_id),
+        ).fetchone()
+
+        response = api.get(f"/drafts/{draft_id}")
+
+        assert response.status_code == 200
+        assert response.json()["source"]["lookup"] is None
+
+
+@pytest.mark.db
+def test_a_ranked_item_that_is_not_an_entry_and_a_score_is_left_out(api) -> None:
+    alert, draft_id = alert_draft(api.conn)
+    store_lookup(
+        api.conn,
+        "alert",
+        alert,
+        ranked=[
+            {"entry_id": "ok-1", "score": 0.7},
+            {"entry_id": "no-score"},
+            {"entry_id": "bad-score", "score": "0.9"},
+            {"entry_id": "out-of-range", "score": 7},
+            {"score": 0.9},
+            {"entry_id": 5, "score": 0.9},
+            "text",
+            None,
+            {"entry_id": "bool", "score": True},
+            {"entry_id": "ok-2", "score": 0},
+        ],
+    )
+
+    ranked = api.get(f"/drafts/{draft_id}").json()["source"]["lookup"]["ranked"]
+
+    assert ranked == [{"entry_id": "ok-1", "pct": 70}, {"entry_id": "ok-2", "pct": 0}]
+
+
+@pytest.mark.db
+def test_a_ranked_value_that_is_not_a_list_is_none(api) -> None:
+    alert, draft_id = alert_draft(api.conn)
+    store_lookup(api.conn, "alert", alert, ranked={"entry_id": "x", "score": 0.9})
+
+    assert api.get(f"/drafts/{draft_id}").json()["source"]["lookup"]["ranked"] is None
+
+
+@pytest.mark.db
+def test_the_newest_lookup_of_the_subject_is_the_one_shown(api) -> None:
+    alert, draft_id = alert_draft(api.conn)
+    store_lookup(api.conn, "alert", alert, ranked=[{"entry_id": "old", "score": 0.9}], age_s=60)
+    newest = store_lookup(api.conn, "alert", alert, ranked=[{"entry_id": "new", "score": 0.6}])
+
+    lookup = api.get(f"/drafts/{draft_id}").json()["source"]["lookup"]
+
+    assert lookup["lookup_id"] == newest
+    assert lookup["ranked"] == [{"entry_id": "new", "pct": 60}]
+
+
+@pytest.mark.db
+def test_another_subjects_lookup_is_not_shown(api) -> None:
+    alert, draft_id = alert_draft(api.conn)
+    other_alert, _ = alert_draft(api.conn)
+    store_lookup(api.conn, "alert", other_alert, ranked=[{"entry_id": "x", "score": 0.9}])
+    store_lookup(
+        api.conn, "case", alert, ranked=[{"entry_id": "y", "score": 0.9}]
+    )  # same text, a case
+
+    assert api.get(f"/drafts/{draft_id}").json()["source"]["lookup"] is None
+
+
+@pytest.mark.db
+def test_a_case_drafts_lookup_is_the_cases(api) -> None:
+    case_id, draft_id = case_draft(api.conn)
+    store_lookup(api.conn, "case", case_id, ranked=[{"entry_id": "case-entry", "score": 0.82}])
+
+    lookup = api.get(f"/drafts/{draft_id}").json()["source"]["lookup"]
+
+    assert lookup["ranked"] == [{"entry_id": "case-entry", "pct": 82}]
+
+
+@pytest.mark.db
+def test_the_old_agents_reasons_are_never_sent(api) -> None:
+    """`match_notes` is the P13 ranking agent's text. A row written then still holds it; nothing of it leaves."""
+    alert, draft_id = alert_draft(api.conn)
+    store_lookup(
+        api.conn,
+        "alert",
+        alert,
+        ranked=[{"entry_id": "e", "score": 0.7}],
+        match_notes={"e": "MARK-AGENT-REASON"},
+    )
+
+    assert "MARK-AGENT-REASON" not in api.get(f"/drafts/{draft_id}").text
+
+
+@pytest.mark.db
+def test_a_draft_whose_source_is_gone_has_no_lookup(api) -> None:
+    (draft_id,) = api.conn.execute(
+        "INSERT INTO knowledge_drafts (source_kind, source_id, conclusion, status)"
+        " VALUES ('alert', 'no-such-alert', 'closed_fp', 'pending') RETURNING draft_id"
+    ).fetchone()
+
+    assert api.get(f"/drafts/{draft_id}").json()["source"]["lookup"] is None
 
 
 # ═══ a whole round, as the page does it ══════════════════════════════════════════════════════

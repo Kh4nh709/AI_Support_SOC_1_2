@@ -142,6 +142,7 @@ test("scenario 1: an admin logs in and lands on the overview", async ({ page }) 
     A.nav.rules,
     A.nav.digest,
     A.nav.labels,
+    A.lab.nav,
     A.nav.knowledge,
     A.nav.audit,
   ];

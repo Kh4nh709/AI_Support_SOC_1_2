@@ -55,6 +55,20 @@ describe("adminKeys", () => {
     }
   });
 
+  it("has the keys of the lab pages, apart: the list of runs, and the alerts of one run", () => {
+    expect(adminKeys.labRuns).toEqual(["admin", "lab", "runs"]);
+    expect(adminKeys.labRun("r-1")).toEqual(["admin", "lab", "run", "r-1"]);
+    expect(adminKeys.labRun("r-1")).not.toEqual(adminKeys.labRun("r-2"));
+    // The list's key is not a prefix of a run's: marking the list stale never refetches every page of a run.
+    const starts = (key: readonly unknown[], prefix: readonly unknown[]) =>
+      prefix.every((part, i) => key[i] === part);
+    expect(starts(adminKeys.labRun("r-1"), adminKeys.labRuns)).toBe(false);
+    expect(starts(adminKeys.labRuns, adminKeys.labRun("r-1"))).toBe(false);
+    for (const key of [adminKeys.labRuns, adminKeys.labRun("r-1")]) {
+      expect(starts(key, adminKeys.labAll)).toBe(true);
+    }
+  });
+
   it("starts every key with admin, so one prefix reaches the whole console", () => {
     const all = [
       adminKeys.overview("24h"),
@@ -66,6 +80,8 @@ describe("adminKeys", () => {
       adminKeys.audit({ range: "24h" }),
       adminKeys.knowledgeDrafts("pending"),
       adminKeys.knowledgeEntry("e-1"),
+      adminKeys.labRuns,
+      adminKeys.labRun("r-1"),
     ];
     for (const key of all) expect(key[0]).toBe("admin");
     expect(adminKeys.all).toEqual(["admin"]);
@@ -95,9 +111,12 @@ describe("what a write makes stale", () => {
     expect([...ADMIN_MUTATIONS].sort()).toEqual(
       [
         "approveKnowledgeDraft",
+        "createLabRun",
         "createRule",
         "createUser",
+        "deleteLabLabel",
         "postLabel",
+        "putLabLabel",
         "putLlmLimits",
         "redraftKnowledgeDraft",
         "rejectKnowledgeDraft",
@@ -137,6 +156,12 @@ describe("what a write makes stale", () => {
     ["rejectKnowledgeDraft", [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll]],
     ["redraftKnowledgeDraft", [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll]],
     ["retireKnowledgeEntry", [adminKeys.knowledgeAll, adminKeys.overviewAll, adminKeys.auditAll]],
+    // The lab: a run is born (the list of runs, and the event on the audit page); a label moves the counter of the
+    // list. A run's own alerts are NOT here: the run page sets them in its cache from the answer it got, and a refetch
+    // would read every page it has loaded again.
+    ["createLabRun", [adminKeys.labRuns, adminKeys.auditAll]],
+    ["putLabLabel", [adminKeys.labRuns, adminKeys.auditAll]],
+    ["deleteLabLabel", [adminKeys.labRuns, adminKeys.auditAll]],
   ];
 
   it.each(EXPECTED)("%s invalidates its keys", async (mutation, keys) => {

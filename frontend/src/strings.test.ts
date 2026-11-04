@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ALERT_STATUSES } from "./api/tier1";
 import { CASE_STATUSES, HELD_CONCLUSION, MODEL_CONCLUSIONS } from "./api/tier2";
-import { MIN_QUOTE_CHARS, S, bandCodeOfLabel, labelOf } from "./strings";
+import { MIN_QUOTE_CHARS, S, bandCodeOfLabel, failureKindLabel, labelOf } from "./strings";
 
 it("names the two Tier-1 closing decisions, escalate and reopen", () => {
   expect(S.decision.falsePositive).toBe("Đóng — dương tính giả");
@@ -439,6 +439,77 @@ describe("the category labels follow the backend PRIORITY", () => {
     expect(labelOf(S.category, "credential_access")).toBe("Đánh cắp thông tin xác thực");
     expect(labelOf(S.category, "new_thing")).toBe("new_thing");
     expect(labelOf(S.category, "constructor")).toBe("constructor");
+  });
+});
+
+// P14-T07 (DEC-213, spec 4.3): the percentage and the "RAG not applied" notice. The kinds are the backend's
+// (`rag.failures.FAILURE_KINDS`, also what a lookup records), the words are the UI's; both sides are compared, and
+// the sentences are written out in full so that one edited in strings.ts alone goes red.
+describe("RAG percentage and notice follow the backend", () => {
+  it("reads the backend's kinds (a parse that finds nothing would compare nothing)", () => {
+    expect(pyTuple("FAILURE_KINDS")).toEqual([
+      "rate_limit",
+      "timeout",
+      "auth",
+      "quota",
+      "provider_error",
+      "vectordb_unreachable",
+    ]);
+  });
+
+  it("words every failure kind the backend can record, in its order, and no other", () => {
+    expect(Object.keys(S.rag.failureKind)).toEqual(pyTuple("FAILURE_KINDS"));
+    expect(S.rag.failureKind).toEqual({
+      rate_limit: "Voyage vượt giới hạn tốc độ",
+      timeout: "Voyage quá thời gian chờ",
+      auth: "thiếu hoặc sai API key Voyage",
+      quota: "Voyage hết hạn mức",
+      provider_error: "lỗi phía Voyage",
+      vectordb_unreachable: "không kết nối được vector DB",
+    });
+  });
+
+  it("says the percentage as the spec has it", () => {
+    expect(S.rag.match(87)).toBe("trùng 87% với tri thức đã duyệt");
+    expect(S.rag.match(0)).toBe("trùng 0% với tri thức đã duyệt");
+  });
+
+  it("says the notice of an alert and of a case as the brief has it", () => {
+    expect(S.rag.notApplied("alert", "lỗi phía Voyage")).toBe(
+      "⚠ Không áp dụng RAG cho alert này: lỗi phía Voyage — AI đã phân tích không có tri thức tham khảo.",
+    );
+    expect(S.rag.notApplied("case", "lỗi phía Voyage")).toBe(
+      "⚠ Không áp dụng RAG cho case này: lỗi phía Voyage — AI đã phân tích không có tri thức tham khảo.",
+    );
+  });
+
+  it("gives the words of a kind the table has, and nothing for any other name", () => {
+    for (const [kind, label] of Object.entries(S.rag.failureKind)) {
+      expect(failureKindLabel(kind)).toBe(label);
+    }
+    // never the code itself, never a name from the prototype chain, never a blank
+    for (const other of [
+      "cosmic_ray",
+      "<b>x</b>",
+      "",
+      "constructor",
+      "toString",
+      "__proto__",
+      "hasOwnProperty",
+    ]) {
+      expect(failureKindLabel(other), other).toBeNull();
+    }
+    expect(failureKindLabel(null)).toBeNull();
+    expect(failureKindLabel(undefined)).toBeNull();
+  });
+
+  it("words the lookup of the admin page", () => {
+    expect(Object.keys(S.admin.knowledgePage.draft.left.lookup.status).sort()).toEqual([
+      "budget",
+      "empty",
+      "failed",
+      "ok",
+    ]);
   });
 });
 

@@ -4,13 +4,18 @@
 // verdict, not "pending", not "failed", not "no result". The server dropped the keys; this column does not
 // look for them, and it takes no state from a caller: the only way to a state is the view itself.
 import { useId, type ReactNode } from "react";
+import { ragNoteOf, type RagNote } from "../../api/rag";
 import type { AlertView, Suggestion } from "../../api/tier1";
+import { RagNotice } from "../../components/RagNotice";
 import { formatDateTime } from "../../format";
 import { S, labelOf } from "../../strings";
 import { agreementOf, humanDecisionOf } from "./agreement";
 import { aiStateOfView, conclusionOf, heldOf, type AiConclusion, type AiState } from "./aiState";
 
 const MUTED = "text-muted";
+
+/** No match and no notice: the pair of a view that carries none (an older server, a lookup that found nothing). */
+const NO_RAG: RagNote = { pct: null, notApplied: null };
 
 /** A titled block of the column, named for a screen reader by its own heading. */
 function Block({ title, children }: { title: string; children: ReactNode }) {
@@ -50,44 +55,57 @@ function ForcedFlag() {
  * its code. All of it is text.
  *
  * The one component of that line, for the undecided column (`Verdict`) and for the decided one (`Decided`, in the
- * "Gợi ý ①" box): the two pages say the same thing in the same words, and what is added to the line later (the
- * match percentage and the notice that the RAG was not applied, P14-T07) is added here, once. `forced` is the
- * gate's flag, which only an undecided state knows.
+ * "Gợi ý ①" box): the two pages say the same thing in the same words, and what is added to the line is added here,
+ * once. `forced` is the gate's flag, which only an undecided state knows.
+ *
+ * P14-T07 (DEC-213, spec 4.3): `rag` is the view's `rag` pair (`ragNoteOf`). The percentage joins the line, after the
+ * confidence note and before the system's own clause: "AI kết luận: **TP** (độ tin cậy cao) — trùng 87% với tri thức
+ * đã duyệt", nothing when there was no match. The notice that the RAG was not applied is a sentence of its own
+ * beside the line (`RagNotice`). The blind arm has no conclusion to draw this beside, so neither is ever drawn
+ * there: the server drops the key, and this column draws a line only for a state that has a conclusion.
  */
 export function ConclusionLine({
   state,
   conclusion,
   forced = false,
+  rag = NO_RAG,
 }: {
   state: AiConclusion & { confidence: string | null };
   conclusion: string;
   forced?: boolean;
+  rag?: RagNote;
 }) {
   const reasons = state.heldBy.map((code) => labelOf(S.ai1.heldReason, code));
   const because = S.ai1.heldBecause(reasons);
   return (
-    <p className="text-base text-ai-accent">
-      {S.ai1.conclusion}: <strong className="text-lg">{labelOf(S.ai1.action, conclusion)}</strong>
-      {state.confidence !== null &&
-        ` ${S.ai1.confidenceNote(labelOf(S.confidence, state.confidence))}`}
-      {heldOf(state) && (
-        <>
-          {` ${S.ai1.heldDash} `}
-          <strong>{S.ai1.held}</strong>
-          {because !== "" && ` ${because}`}
-        </>
-      )}
-      {forced && <ForcedFlag />}
-    </p>
+    <>
+      <p className="text-base text-ai-accent">
+        {S.ai1.conclusion}: <strong className="text-lg">{labelOf(S.ai1.action, conclusion)}</strong>
+        {state.confidence !== null &&
+          ` ${S.ai1.confidenceNote(labelOf(S.confidence, state.confidence))}`}
+        {rag.pct !== null && ` ${S.rag.dash} ${S.rag.match(rag.pct)}`}
+        {heldOf(state) && (
+          <>
+            {` ${S.ai1.heldDash} `}
+            <strong>{S.ai1.held}</strong>
+            {because !== "" && ` ${because}`}
+          </>
+        )}
+        {forced && <ForcedFlag />}
+      </p>
+      {rag.notApplied !== null && <RagNotice kind={rag.notApplied} subject="alert" />}
+    </>
   );
 }
 
 function Verdict({
   state,
   suggestion,
+  rag,
 }: {
   state: Extract<AiState, { kind: "ready" }>;
   suggestion: Suggestion | null;
+  rag: RagNote;
 }) {
   const conclusion = conclusionOf(state);
   const action = labelOf(S.ai1.action, state.action);
@@ -95,7 +113,7 @@ function Verdict({
   return (
     <div className="space-y-2">
       {conclusion !== null ? (
-        <ConclusionLine state={state} conclusion={conclusion} forced={state.forced} />
+        <ConclusionLine state={state} conclusion={conclusion} forced={state.forced} rag={rag} />
       ) : (
         <>
           <div>
@@ -113,6 +131,7 @@ function Verdict({
               {S.ai1.confidence}: {labelOf(S.confidence, state.confidence)}
             </p>
           )}
+          {rag.notApplied !== null && <RagNotice kind={rag.notApplied} subject="alert" />}
         </>
       )}
       {gate !== null && <GateLine gate={gate} forced={state.forced} />}
@@ -224,7 +243,7 @@ function Ready({ view, state }: { view: AlertView; state: Extract<AiState, { kin
   const analysedThen = suggestion?.correlated_at_analysis;
   return (
     <div className="space-y-3">
-      <Verdict state={state} suggestion={suggestion} />
+      <Verdict state={state} suggestion={suggestion} rag={ragNoteOf(view.rag)} />
       {suggestion?.gate && <GateSteps gate={suggestion.gate} />}
       {suggestion?.reasons && <Reasons reasons={suggestion.reasons} />}
       {typeof analysedThen === "number" && <Facts then={analysedThen} now={view.correlated_now} />}
@@ -311,6 +330,9 @@ function Decided({
   // and why the gate held it (P14-T03, fix round 1), the same line the undecided column draws.
   const agreement = agreementOf(view.status, state.action, view.case_id);
   const conclusion = conclusionOf(state);
+  // The percentage and the notice (P14-T07) are the view's own, like the line they stand beside: the decision lifts
+  // the blind arm, so the server sends the key back.
+  const rag = ragNoteOf(view.rag);
   const byTier1 = human !== null;
   // Tier 2 has concluded an alert Tier 1 escalated: the status is the conclusion's, the decision is still the
   // escalation. The holder of the alert is named on the escalation, never on the conclusion.
@@ -338,20 +360,25 @@ function Decided({
         <div className="rounded border border-ai-border p-3">
           <span className="text-xs text-muted">{S.ai1.decidedAi}</span>
           {conclusion !== null ? (
-            <ConclusionLine state={state} conclusion={conclusion} />
+            <ConclusionLine state={state} conclusion={conclusion} rag={rag} />
           ) : (
-            <p className="text-sm">
-              {state.action === null ? (
-                <span className={MUTED}>{S.ai1.none}</span>
-              ) : (
-                <>
-                  <span className="text-ai-accent">{labelOf(S.ai1.action, state.action)}</span>
-                  {state.confidence !== null && (
-                    <span className={MUTED}> · {labelOf(S.confidence, state.confidence)}</span>
-                  )}
-                </>
+            <>
+              <p className="text-sm">
+                {state.action === null ? (
+                  <span className={MUTED}>{S.ai1.none}</span>
+                ) : (
+                  <>
+                    <span className="text-ai-accent">{labelOf(S.ai1.action, state.action)}</span>
+                    {state.confidence !== null && (
+                      <span className={MUTED}> · {labelOf(S.confidence, state.confidence)}</span>
+                    )}
+                  </>
+                )}
+              </p>
+              {state.action !== null && rag.notApplied !== null && (
+                <RagNotice kind={rag.notApplied} subject="alert" />
               )}
-            </p>
+            </>
           )}
         </div>
       </div>
