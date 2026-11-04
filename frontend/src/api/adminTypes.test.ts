@@ -718,7 +718,7 @@ const ENTRIES: Entry[] = [
     // P14-T07 (DEC-213): what `_lookup` answers - the source's newest `rag_results` row, `ranked` as `{entry_id, pct}`.
     path: "KnowledgeLookup",
     keys: ["lookup_id", "status", "failure_kind", "ranked", "created_at"],
-    backend: () => dictKeys(knowledge(), /return \{(?=\s*"lookup_id": str\(lookup_id\),)/),
+    backend: () => dictKeys(knowledge(), /return \{(?=\s*"lookup_id": str\(found\.lookup_id\),)/),
   },
   {
     path: "KnowledgeDraftDetail",
