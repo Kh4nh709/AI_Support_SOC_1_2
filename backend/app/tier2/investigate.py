@@ -75,6 +75,21 @@ that refuses it). The override is unchanged - zero verified evidence, or a high 
 still admits - and `evidence_check.original_conclusion` is still written only when it fired. What is new is
 `evidence_check.model_conclusion`: the model's own answer, written on every run with a parsed result, so a
 reader can tell "the model concluded X and the system held it" from "the model concluded X".
+
+**Computed, then written (P14-T11, DEC-213, spec §6).** `evaluate_case(conn, case_id, *, adapter, cfg, rag,
+as_of=None)` is everything the job does up to its writes, and runs `SELECT`s only: the lookup, the dossier,
+the model call, the evidence check, the injection scan and the override. It returns a `CaseEvaluation` and
+writes nothing, so the lab measurement (`eval/lab_measure.py`) can ask ② about a case twice, RAG off and on,
+without a row, an event or a timestamp. `run_investigate_job` is `evaluate_case(..., rag=cfg.RAG_ENABLED)`
+and exactly the writes it made before: the `llm_runs` row of each outcome, the commit before a transient
+failure is re-raised, and `cases.last_analyzed_at`. The idle timeout, the isolation level, the `llm_enabled`
+check and the archived-case skip stay in the job: they are about the job's own transaction.
+
+`as_of` (None: today's behaviour, byte for byte) makes the evaluation what ② could have known at that instant:
+the dossier keeps only the rows created strictly before it in block 6 and block 8 (`dossier.build(as_of=)`),
+and the RAG arm reads the newest lookup of the case created before it (`lookups_before`). The newest decides, as
+in the product: a `failed` one hides an older good one. A tier-2 note, or an earlier ② answer, written after the
+escalation would otherwise hand the human's (or an earlier run's) conclusion to both arms and hide the RAG's effect.
 """
 
 from __future__ import annotations
@@ -82,6 +97,8 @@ from __future__ import annotations
 import html
 import json
 import uuid
+from dataclasses import dataclass
+from datetime import datetime
 from functools import partial
 from typing import Any
 
@@ -99,7 +116,17 @@ from app.llm import investigate as llm_investigate
 from app.llm.adapter import DeepSeekAdapter, LLMBudgetExceeded, LLMPermanent, cost_usd
 from app.llm.builder import rag_not_applied_warning
 from app.llm.triage import prompt_version
-from app.rag.lookup import USABLE_STATUSES, lookup_failure, lookup_material
+from app.rag.lookup import (
+    UNKNOWN_FAILURE_KIND,
+    USABLE_STATUSES,
+    LookupResult,
+    PromptMaterial,
+    _history_of,
+    _matches_of,
+    lookup_failure,
+    lookup_material,
+    prompt_material,
+)
 from app.rag.subject import Subject
 from app.security import detector, wrap
 from app.security.gate import _norm
@@ -459,57 +486,198 @@ def _scan_for_injection(dossier: dossier_mod.Dossier) -> list[detector.Finding]:
     return detector.scan(blocks)
 
 
-def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = None) -> None:
-    """Run pipeline ② for one case. `adapter` defaults to a real `DeepSeekAdapter`;
-    every test passes a fake instead (design note 8)."""
-    cfg = config.load()
-    _raise_idle_timeout(conn, cfg)
-    _set_repeatable_read(conn)
+# ---------------------------------------------------------------------------
+# The lookup as of an instant (P14-T11).
+# ---------------------------------------------------------------------------
 
-    case_id = job.subject_id
+_LOOKUP_BEFORE_SQL = (
+    "SELECT lookup_id, status, history, matches, created_at, failure_kind FROM rag_results"
+    " WHERE subject_kind = 'case' AND subject_id = %s AND created_at < %s"
+)
 
-    if not cfg.llm_enabled:
-        # G7: the case is untouched, no status moves, and no attempt was made — not
-        # even a dossier read, so this never opens a connection to a case that might
-        # since have been concluded.
-        return
 
-    # INT-T03 / DEC-212: the archive does not cancel the jobs it leaves behind. A case it set aside is
-    # nobody's to investigate (`POST /analyze` refuses it with the same 409 as a concluded one): a job
-    # queued before the archive makes no model call and writes no `llm_runs` row. Read after
-    # `_set_repeatable_read`, so it is also the first statement of the snapshot the dossier reads in.
-    archived = conn.execute("SELECT status FROM cases WHERE case_id = %s", (case_id,)).fetchone()
-    if archived is not None and archived[0] == "archived":
-        print(json.dumps({"investigate": "skipped", "reason": "archived", "case_id": case_id}))
-        return
+def _lookup_before(
+    conn: psycopg.Connection,
+    case_id: str,
+    as_of: datetime,
+    statuses: tuple[str, ...] | None = None,
+) -> LookupResult | None:
+    """`rag.lookup.latest_lookup` with one more condition: the newest lookup of the case created strictly
+    before `as_of` (among `statuses` when given). The rows are read into a `LookupResult` by the same two
+    validators `latest_lookup` uses (`rag.lookup._history_of`, `_matches_of`): what reaches a prompt is
+    checked in one place. `rag/` has no `before` parameter and is not this card's to change."""
+    query = _LOOKUP_BEFORE_SQL
+    params: list[Any] = [case_id.lower(), as_of]
+    if statuses is not None:
+        query += " AND status = ANY(%s)"
+        params.append(list(statuses))
+    row = conn.execute(query + " ORDER BY created_at DESC, lookup_id LIMIT 1", params).fetchone()
+    if row is None:
+        return None
+    lookup_id, status, history, matches, created_at, failure_kind = row
+    return LookupResult(
+        lookup_id, status, _history_of(history), _matches_of(matches), created_at, failure_kind
+    )
 
+
+def lookups_before(
+    conn: psycopg.Connection, case_id: str, as_of: datetime
+) -> tuple[LookupResult | None, LookupResult | None]:
+    """`(newest, usable)`: the newest lookup of the case created before `as_of` whatever its status (None:
+    there is none), and the newest of those with a status a prompt may use (`USABLE_STATUSES`: a `budget`
+    row written after an `ok` one does not hide it, spec §7.6). `newest.status == "failed"` is the notice
+    and no section, whatever `usable` holds: the newest lookup decides. Read as ② reads it and the
+    measurement describes it, so the two cannot disagree about which lookup a case had."""
+    return (
+        _lookup_before(conn, case_id, as_of),
+        _lookup_before(conn, case_id, as_of, USABLE_STATUSES),
+    )
+
+
+def _learned_before(
+    conn: psycopg.Connection, case_id: str, as_of: datetime
+) -> tuple[str | None, PromptMaterial | None]:
+    """`(failure kind, material)` for ② as of an instant: the product's two reads (`lookup_failure`, then
+    `lookup_material` over the usable statuses) on the lookups created before `as_of`. Read in a savepoint
+    like theirs: the lookup is an extra, and a database error in it is no notice and no section, never a
+    failed ②."""
+    try:
+        with conn.transaction():
+            newest, usable = lookups_before(conn, case_id, as_of)
+            if newest is not None and newest.status == "failed":
+                return (newest.failure_kind or UNKNOWN_FAILURE_KIND), None
+            return None, prompt_material(conn, usable)
+    except psycopg.Error as exc:
+        print(
+            json.dumps(
+                {"rag_lookup": "unreadable", "subject": case_id, "error": type(exc).__name__}
+            )
+        )
+        return None, None
+
+
+# ---------------------------------------------------------------------------
+# ② computed, not written.
+# ---------------------------------------------------------------------------
+
+#: `CaseEvaluation.outcome`'s closed set: one per way ② can end for a case. `stopped_by` of the row the job
+#: writes is the outcome itself, and `None` for "ok".
+OUTCOMES = frozenset({"ok", "schema", "cap", "permanent", "linter", "transient"})
+
+
+@dataclass(frozen=True)
+class CaseEvaluation:
+    """② on one case, computed and not written (P14-T11).
+
+    `outcome` (`OUTCOMES`): "ok" - a schema-valid answer, checked and overridden; "schema" - still invalid
+    after the repair round; "cap" / "permanent" / "linter" - the model call raised `LLMBudgetExceeded` /
+    `LLMPermanent` / the pre-send linter's `PermanentError`; "transient" - a timeout, a transport error or a
+    5xx (`exception` is the error; the job writes a row and re-raises it).
+
+    `result` is the object the job stores: the model's `investigate_v3` answer with the override applied,
+    only for "ok". `model_conclusion` is the model's own answer and `final_conclusion` the stored one (they
+    differ exactly when `held_by` is not empty: `no_verified_evidence` and / or
+    `high_severity_injection_finding`, the closed causes `investigation_view.held_by` reads from the same
+    check). `rag_lookup_id` is the lookup whose material is in the prompt (None when there was none, and
+    when the budget cut block 10); `rag_not_applied` the closed failure kind when the newest lookup
+    `failed`. `usage` is summed over the calls that were answered; `cost_usd` prices it.
+
+    The fields from `system_prompt` on are what the job writes its `llm_runs` row from: the prompt, the
+    P7-2 snapshot, the evidence check, the warnings (the failed-lookup notice included), the injection
+    findings and the five usage columns of the row.
+    """
+
+    outcome: str
+    result: dict[str, Any] | None
+    model_conclusion: str | None
+    final_conclusion: str | None
+    held_by: list[str]
+    rag_lookup_id: uuid.UUID | None
+    rag_not_applied: str | None
+    usage: dict[str, Any]
+    cost_usd: float
+    system_prompt: str
+    user_message: str
+    agent_trace: dict[str, Any]
+    evidence_check: dict[str, Any] | None
+    citation_warnings: list[str] | None
+    injection_findings: list[dict[str, Any]] | None
+    columns: dict[str, Any]
+    exception: BaseException | None = None
+
+    def __post_init__(self) -> None:
+        if self.outcome not in OUTCOMES:
+            raise ValueError(f"outcome must be one of {sorted(OUTCOMES)}, got {self.outcome!r}")
+
+    @property
+    def stopped_by(self) -> str | None:
+        return None if self.outcome == "ok" else self.outcome
+
+
+def _held_by(evidence_check: dict[str, Any]) -> list[str]:
+    """Why the system held the model's conclusion back, from the check just built: the same causes, in
+    `HELD_BY`'s order, that `investigation_view.held_by` reads back from the stored row (that module imports
+    this one, so the rule is written here and `test_lab_measure` holds the two equal)."""
+    found = {
+        HELD_NO_VERIFIED_EVIDENCE: not evidence_check["verified"],
+        HELD_HIGH_INJECTION: evidence_check.get("forced_by") == HELD_HIGH_INJECTION,
+    }
+    return [cause for cause in HELD_BY if found[cause]]
+
+
+def evaluate_case(
+    conn: psycopg.Connection,
+    case_id: str,
+    *,
+    adapter: Any | None,
+    cfg: config.Config,
+    rag: bool,
+    as_of: datetime | None = None,
+) -> CaseEvaluation | None:
+    """Pipeline (2) for one case, computed and returned, never written (P14-T11); `None` when the case does
+    not exist.
+
+    Only `SELECT`s run on `conn`: no `llm_runs`, no `audit_events`, no `cases` column, no job. `rag` says
+    whether the learned section is put in the dossier (the job passes `cfg.RAG_ENABLED`; `cfg` itself is not
+    asked). `as_of` is described in the module docstring; None is today's dossier and today's lookup (the
+    newest of the case, read by `lookup_failure` and `lookup_material`). `adapter=None` builds the real
+    `DeepSeekAdapter` at the same point, with the same spend check, as the job always has. A model failure is
+    an `outcome` and not an exception, except that a transient one is also carried in `exception` for the
+    caller to re-raise; anything else (a programming error) propagates untouched.
+
+    The idle timeout, the isolation level, the `llm_enabled` check and the archived-case skip are the
+    job's, not this function's: an evaluation may run on a concluded case."""
     nonce = wrap.new_nonce()  # design note 3(a): a new nonce per attempt, never cached
 
     # P13-T08: the learned section. With the switch off, not one query and `learned=None`. With it on, the
     # newest lookup of the case, whatever it holds (or nothing): ② never waits for the lookup job, never
-    # queues one and never sleeps. Read after `_set_repeatable_read`, so the lookup is part of the snapshot
-    # the dossier is read in. `parse_subject` stores a case's id in lower case.
+    # queues one and never sleeps. The job reads it after `_set_repeatable_read`, so the lookup is part of
+    # the snapshot the dossier is read in. `parse_subject` stores a case's id in lower case.
     material = None
     not_applied = None
-    if cfg.RAG_ENABLED:
-        # DEC-213: a newest lookup that `failed` is a notice and no section, whatever an older one held.
-        not_applied = lookup_failure(conn, Subject("case", case_id.lower()))
-        if not_applied is None:
-            material = lookup_material(
-                conn, Subject("case", case_id.lower()), statuses=USABLE_STATUSES
-            )
+    if rag:
+        if as_of is None:
+            # DEC-213: a newest lookup that `failed` is a notice and no section, whatever an older one held.
+            not_applied = lookup_failure(conn, Subject("case", case_id.lower()))
+            if not_applied is None:
+                material = lookup_material(
+                    conn, Subject("case", case_id.lower()), statuses=USABLE_STATUSES
+                )
+        else:
+            not_applied, material = _learned_before(conn, case_id, as_of)
 
     try:
-        dossier = dossier_mod.build(conn, case_id, nonce=nonce, cfg=cfg, learned=material)
-    except dossier_mod.UnknownCase as exc:
-        raise PermanentError(str(exc)) from exc
+        dossier = dossier_mod.build(
+            conn, case_id, nonce=nonce, cfg=cfg, learned=material, as_of=as_of
+        )
+    except dossier_mod.UnknownCase:
+        return None
 
     # The lookup is named on the row only when its material reached the prompt - not when there was none,
     # and not when the budget dropped block 10 (`Dossier.learned_used`).
     rag_lookup_id = material.lookup_id if material is not None and dossier.learned_used else None
 
     system, user = llm_investigate.build(dossier, nonce=nonce, cfg=cfg)
-    run_id = run_id_for_job(job.job_id)
     agent_trace = _snapshot_trace(dossier)
     spend = llm_investigate.Spend()
 
@@ -517,31 +685,50 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
         cfg,
         spent_usd=partial(month_spend_usd, conn),
         # the cap and the deadline are the admin's saved limits, read per attempt; a read that
-        # fails stops the call as `LLMBudgetExceeded`, so the row below is `stopped_by='cap'`
+        # fails stops the call as `LLMBudgetExceeded`, so the row is `stopped_by='cap'`
         limits=partial(settings.effective_limits, conn, cfg),
     )
 
     # DEC-213: every row of a run whose lookup failed says so, not only the one with a verdict - a `cap`,
     # `permanent`, `linter`, `schema` or `transient` row was built from the same dossier without block 10
-    # (the way ① puts `built.warnings` on every row it writes). The success row below passes its own list,
-    # which already ends with it.
+    # (the way ① puts `built.warnings` on every row it writes). The success row passes its own list, which
+    # already ends with it.
     notice = [rag_not_applied_warning(not_applied)] if not_applied is not None else []
 
-    def write_row(row_id: uuid.UUID, stopped_by: str | None, **outcome: Any) -> None:
-        """This attempt's one `llm_runs` row. The usage columns come from `spend` unless
-        the caller passes its own (`**outcome`) — so a failure row still carries whatever
-        was already paid for (S7). `citation_warnings` is the notice unless the caller passes its own.
-        """
-        _write_llm_run(
-            conn,
-            run_id=row_id,
-            case_id=case_id,
+    def evaluation(
+        outcome: str,
+        columns: dict[str, Any],
+        usage: dict[str, Any],
+        *,
+        result: dict[str, Any] | None = None,
+        model_conclusion: str | None = None,
+        held_by: list[str] | None = None,
+        evidence_check: dict[str, Any] | None = None,
+        citation_warnings: list[str] | None = None,
+        injection_findings: list[dict[str, Any]] | None = None,
+        exception: BaseException | None = None,
+    ) -> CaseEvaluation:
+        return CaseEvaluation(
+            outcome=outcome,
+            result=result,
+            model_conclusion=model_conclusion,
+            final_conclusion=None if result is None else result["suggested_conclusion"],
+            held_by=held_by or [],
+            rag_lookup_id=rag_lookup_id,
+            rag_not_applied=not_applied,
+            usage=usage,
+            cost_usd=round(cost_usd(usage, cfg), 5) if usage else 0.0,
             system_prompt=system,
             user_message=user,
             agent_trace=agent_trace,
-            stopped_by=stopped_by,
-            rag_lookup_id=rag_lookup_id,
-            **{"citation_warnings": notice or None, **_spend_columns(spend, cfg), **outcome},
+            evidence_check=evidence_check,
+            # the notice is on every row of a run whose lookup failed; the success row's own list ends with it
+            citation_warnings=(
+                citation_warnings if citation_warnings is not None else (notice or None)
+            ),
+            injection_findings=injection_findings,
+            columns=columns,
+            exception=exception,
         )
 
     try:
@@ -554,50 +741,28 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
             spend=spend,
         )
     except LLMBudgetExceeded:
-        write_row(run_id, "cap")
-        return  # permanent by nature (the cap will not clear itself) — no retry warranted
+        return evaluation("cap", _spend_columns(spend, cfg), spend.usage)
     except LLMPermanent:
-        write_row(run_id, "permanent")
-        return
+        return evaluation("permanent", _spend_columns(spend, cfg), spend.usage)
     except PermanentError:
-        # The pre-send linter guard (G6′, `llm.investigate._lint_or_raise`) — a
-        # template defect, not a model outcome. Caught after the two LLM-specific
-        # PermanentError subclasses above so their own `stopped_by` values are not
-        # shadowed by this catch-all.
-        write_row(run_id, "linter")
-        return
+        # The pre-send linter guard (G6', `llm.investigate._lint_or_raise`) - a template defect, not a model
+        # outcome. Caught after the two LLM-specific PermanentError subclasses above so their own outcomes
+        # are not shadowed by this catch-all.
+        return evaluation("linter", _spend_columns(spend, cfg), spend.usage)
     except Exception as exc:
         if not _is_transient(exc):
             raise
-        # Transient (design note 3(d)): the row must survive the reschedule, and the
-        # worker's `transaction()` rolls back the whole handler transaction on any
-        # exception it lets through — so this commits explicitly before re-raising,
-        # the same "commit before the caller sees the failure" shape `deps.require_role`
-        # uses for its own 403 (P4 planning decision 3), applied to a job instead of a
-        # route.
-        #
-        # B1: `llm_runs.run_id` is a primary key and the table is append-only, so the
-        # retry would die on `llm_runs_pkey` if every attempt wrote `run_id_for_job`.
-        # A non-final attempt writes under its own attempt-scoped id; only the LAST
-        # attempt — after which the job is `failed` and nothing will run again —
-        # writes the id the route handed out, so `GET /runs/{run_id}` answers `running`
-        # between attempts and `done` (stopped_by='transient', result NULL) only once
-        # nothing more will run.
-        is_final = job.attempts >= cfg.JOB_MAX_ATTEMPTS
-        write_row(run_id if is_final else attempt_run_id(job.job_id, job.attempts), "transient")
-        conn.commit()
-        raise
+        # Transient (design note 3(d)): the caller keeps the row across the reschedule, so it commits and
+        # re-raises `exception` after writing it.
+        return evaluation("transient", _spend_columns(spend, cfg), spend.usage, exception=exc)
 
     usage_columns = _usage_columns(result.usage, result.latency_ms, result.model, cfg)
 
     if result.parsed is None:
         # Schema-invalid after the one repair (design note 2: "a second failure sets
-        # stopped_by='schema' and result stays NULL") — mirrors ①'s own "schema"
-        # outcome (`tier1/triage.py`'s `run_triage_job`): write the row with the real
-        # usage/cost the calls actually spent, and complete normally — a response was
-        # received and recorded, so no retry would change anything.
-        write_row(run_id, "schema", **usage_columns)
-        return
+        # stopped_by='schema' and result stays NULL") - mirrors ①'s own "schema" outcome: the row carries the
+        # real usage/cost the calls spent.
+        return evaluation("schema", usage_columns, result.usage)
 
     evidence_check = _check_evidence(conn, case_id, result.parsed)
     findings = _scan_for_injection(dossier)
@@ -632,15 +797,89 @@ def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | No
     ]
     citation_warnings.extend(notice)
 
-    write_row(
-        run_id,
-        None,
+    return evaluation(
+        "ok",
+        usage_columns,
+        result.usage,
         result=final_result,
+        model_conclusion=model_conclusion,
+        held_by=_held_by(evidence_check),
         evidence_check=evidence_check,
         citation_warnings=citation_warnings or None,
         injection_findings=detector.as_json(findings),
-        **usage_columns,
     )
+
+
+def run_investigate_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = None) -> None:
+    """Run pipeline ② for one case. `adapter` defaults to a real `DeepSeekAdapter`;
+    every test passes a fake instead (design note 8). `evaluate_case` does the work; this function adds the
+    job's own checks and every write."""
+    cfg = config.load()
+    _raise_idle_timeout(conn, cfg)
+    _set_repeatable_read(conn)
+
+    case_id = job.subject_id
+
+    if not cfg.llm_enabled:
+        # G7: the case is untouched, no status moves, and no attempt was made — not
+        # even a dossier read, so this never opens a connection to a case that might
+        # since have been concluded.
+        return
+
+    # INT-T03 / DEC-212: the archive does not cancel the jobs it leaves behind. A case it set aside is
+    # nobody's to investigate (`POST /analyze` refuses it with the same 409 as a concluded one): a job
+    # queued before the archive makes no model call and writes no `llm_runs` row. Read after
+    # `_set_repeatable_read`, so it is also the first statement of the snapshot the dossier reads in.
+    archived = conn.execute("SELECT status FROM cases WHERE case_id = %s", (case_id,)).fetchone()
+    if archived is not None and archived[0] == "archived":
+        print(json.dumps({"investigate": "skipped", "reason": "archived", "case_id": case_id}))
+        return
+
+    evaluation = evaluate_case(conn, case_id, adapter=adapter, cfg=cfg, rag=cfg.RAG_ENABLED)
+    if evaluation is None:
+        raise PermanentError(str(dossier_mod.UnknownCase(case_id)))
+
+    run_id = run_id_for_job(job.job_id)
+
+    def write_row(row_id: uuid.UUID) -> None:
+        """This attempt's one `llm_runs` row, from the evaluation: the usage columns are what the calls that
+        were answered cost, so a failure row still carries whatever was already paid for (S7)."""
+        _write_llm_run(
+            conn,
+            run_id=row_id,
+            case_id=case_id,
+            system_prompt=evaluation.system_prompt,
+            user_message=evaluation.user_message,
+            agent_trace=evaluation.agent_trace,
+            stopped_by=evaluation.stopped_by,
+            rag_lookup_id=evaluation.rag_lookup_id,
+            result=evaluation.result,
+            evidence_check=evaluation.evidence_check,
+            citation_warnings=evaluation.citation_warnings,
+            injection_findings=evaluation.injection_findings,
+            **evaluation.columns,
+        )
+
+    if evaluation.outcome == "transient":
+        # The row must survive the reschedule, and the worker's `transaction()` rolls back the whole handler
+        # transaction on any exception it lets through - so this commits explicitly before re-raising, the
+        # same "commit before the caller sees the failure" shape `deps.require_role` uses for its own 403
+        # (P4 planning decision 3), applied to a job instead of a route.
+        #
+        # B1: `llm_runs.run_id` is a primary key and the table is append-only, so the retry would die on
+        # `llm_runs_pkey` if every attempt wrote `run_id_for_job`. A non-final attempt writes under its own
+        # attempt-scoped id; only the LAST attempt - after which the job is `failed` and nothing will run
+        # again - writes the id the route handed out, so `GET /runs/{run_id}` answers `running` between
+        # attempts and `done` (stopped_by='transient', result NULL) only once nothing more will run.
+        is_final = job.attempts >= cfg.JOB_MAX_ATTEMPTS
+        write_row(run_id if is_final else attempt_run_id(job.job_id, job.attempts))
+        conn.commit()
+        assert evaluation.exception is not None  # a transient outcome always carries its error
+        raise evaluation.exception
+
+    write_row(run_id)
+    if evaluation.outcome != "ok":
+        return  # a refused, schema-invalid or linter-stopped attempt: the row is the record
 
     # S5: under REPEATABLE READ a `cases` row that a concurrent transaction (a Tier-2
     # `conclude`, ...) changed after this transaction's snapshot cannot be updated —

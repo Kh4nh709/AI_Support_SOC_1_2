@@ -512,6 +512,32 @@ _PREVIOUS_RUN_SQL = """
     LIMIT 1
 """
 
+#: P14-T11 (ruling 1): the same three reads for a dossier built `as_of` an instant - only rows created
+#: STRICTLY before it. `created_at < %s` is the whole difference; the text of each statement above is
+#: unchanged and is still what `as_of=None` runs.
+_TIER1_EVENTS_BEFORE_SQL = f"""
+    SELECT audit_id, event_type, subject_id, actor_id, actor_role, payload, created_at
+    FROM audit_events
+    WHERE subject_id IN ({_CASE_ALERT_IDS})
+      AND event_type IN ('alert.acknowledged', 'tier1.decided', 'tier1.escalated', 'alert.reopened')
+      AND created_at < %s
+    ORDER BY created_at, audit_id
+"""
+
+_NOTES_BEFORE_SQL = (
+    "SELECT author_id, body, created_at FROM case_notes "
+    "WHERE case_id = %s AND created_at < %s ORDER BY created_at, note_id"
+)
+
+_PREVIOUS_RUN_BEFORE_SQL = """
+    SELECT run_id, result, created_at
+    FROM llm_runs
+    WHERE pipeline = 'investigate' AND subject_id = %s AND result IS NOT NULL
+      AND created_at < %s
+    ORDER BY created_at DESC, run_id DESC
+    LIMIT 1
+"""
+
 
 def _fetch_case(conn: psycopg.Connection, case_id: str) -> dict[str, Any] | None:
     row = conn.execute(_CASE_SQL, (case_id,)).fetchone()
@@ -550,8 +576,12 @@ def _fetch_timeline(
     return rows[:TIMELINE_HEAD_LINES] + tail, True, total
 
 
-def _fetch_tier1_events(conn: psycopg.Connection, case_id: str) -> list[tuple[Any, ...]]:
-    return conn.execute(_TIER1_EVENTS_SQL, (case_id,)).fetchall()
+def _fetch_tier1_events(
+    conn: psycopg.Connection, case_id: str, as_of: datetime | None = None
+) -> list[tuple[Any, ...]]:
+    if as_of is None:
+        return conn.execute(_TIER1_EVENTS_SQL, (case_id,)).fetchall()
+    return conn.execute(_TIER1_EVENTS_BEFORE_SQL, (case_id, as_of)).fetchall()
 
 
 def _fetch_correlation(
@@ -572,12 +602,20 @@ def _fetch_trigger_alert_id(conn: psycopg.Connection, case_id: str) -> str | Non
     return row[0] if row and row[0] else None
 
 
-def _fetch_notes(conn: psycopg.Connection, case_id: str) -> list[tuple[Any, ...]]:
-    return conn.execute(_NOTES_SQL, (case_id,)).fetchall()
+def _fetch_notes(
+    conn: psycopg.Connection, case_id: str, as_of: datetime | None = None
+) -> list[tuple[Any, ...]]:
+    if as_of is None:
+        return conn.execute(_NOTES_SQL, (case_id,)).fetchall()
+    return conn.execute(_NOTES_BEFORE_SQL, (case_id, as_of)).fetchall()
 
 
-def _fetch_previous_run(conn: psycopg.Connection, case_id: str) -> tuple[Any, ...] | None:
-    return conn.execute(_PREVIOUS_RUN_SQL, (case_id,)).fetchone()
+def _fetch_previous_run(
+    conn: psycopg.Connection, case_id: str, as_of: datetime | None = None
+) -> tuple[Any, ...] | None:
+    if as_of is None:
+        return conn.execute(_PREVIOUS_RUN_SQL, (case_id,)).fetchone()
+    return conn.execute(_PREVIOUS_RUN_BEFORE_SQL, (case_id, as_of)).fetchone()
 
 
 # ───────────────────────────────────────────────────── entity extraction (design note 2)
@@ -1311,10 +1349,16 @@ def build(
     nonce: str,
     cfg: config.Config | None = None,
     learned: LearnedLike | None = None,
+    as_of: datetime | None = None,
 ) -> Dossier:
     """The dossier of `case_id`: nine blocks. `learned` (P13-T08): None - those nine blocks, byte for byte
     what this function returned before the parameter existed. Else ten: block 10, the learned section (see
-    the module docstring), follows block 8 and the scope sentence stays last."""
+    the module docstring), follows block 8 and the scope sentence stays last.
+
+    `as_of` (P14-T11, the lab measurement): None - today's dossier. With an instant, block 6 (the tier-1
+    audit rows) and block 8 (the case notes and the previous ② run) keep only the rows created strictly
+    before it, so a note or an earlier ② answer written after the escalation does not reach the prompt.
+    Every other block is built as ever."""
     cfg = cfg or config.load()
 
     case_row = _fetch_case(conn, case_id)
@@ -1324,10 +1368,10 @@ def build(
     heads = _fetch_heads(conn, case_id)
     dup_spans = _fetch_duplicate_spans(conn, case_id)
     timeline_rows, timeline_capped, timeline_total = _fetch_timeline(conn, case_id)
-    tier1_rows = _fetch_tier1_events(conn, case_id)
+    tier1_rows = _fetch_tier1_events(conn, case_id, as_of)
     trigger_alert_id = _fetch_trigger_alert_id(conn, case_id)
-    notes = _fetch_notes(conn, case_id)
-    previous_run = _fetch_previous_run(conn, case_id)
+    notes = _fetch_notes(conn, case_id, as_of)
+    previous_run = _fetch_previous_run(conn, case_id, as_of)
     categories = sorted({h.category for h in heads})
 
     truncations: list[dict[str, Any]] = []
