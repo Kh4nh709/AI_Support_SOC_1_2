@@ -358,6 +358,11 @@ def prompt_entries(learned: LearnedLike | None) -> tuple[tuple[KbLearnedLevel, i
 
 # ───────────────────────────────────── the warning when the RAG was not applied (DEC-213, spec §5.3)
 RAG_NOT_APPLIED_PREFIX = "rag_not_applied:"
+#: The budget-cut warning ① stores in `citation_warnings` when the token budget dropped the learned ENTRIES but
+#: kept the decision history (`llm.triage.build_proposer_prompt`): the run still names its lookup
+#: (`rag_lookup_id`), yet none of the lookup's matches reached the prompt. `llm.rag_view` and the lab
+#: measurement read it, so the page and the report count no match for such a run (P14 final fix wave, M2).
+LEARNED_ENTRIES_DROPPED_WARNING = "learned_entries_dropped"
 #: The shape of a failure kind (`rag.failures.FAILURE_KINDS`: `rate_limit`, `timeout`, `auth`, `quota`,
 #: `provider_error`, `vectordb_unreachable`); `llm` may not import `rag`, so the shape stands in for the list
 #: and `test_builder_trung_pct.py` holds every kind of the list to it.

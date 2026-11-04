@@ -75,6 +75,7 @@ from app.llm.builder import (
     HEADING_REPAIR,
     HEADING_REQUEST,
     HEADING_TABLE,
+    LEARNED_ENTRIES_DROPPED_WARNING,
     SENTENCE_ABSENT,
     SENTENCE_LEARNED_IS_REFERENCE,
     SENTENCE_NO_CORRELATION,
@@ -608,7 +609,7 @@ def build_proposer_prompt(
         # (name, limit key, new value, whether the step changes anything) — a no-op is not a cut
         steps = (
             # the learned section goes first (P13-T07): a reference, never a basis for the verdict
-            ("learned_entries_dropped", "entries", 0, len(entries) > 0),
+            (LEARNED_ENTRIES_DROPPED_WARNING, "entries", 0, len(entries) > 0),
             ("learned_history_dropped", "history", 0, history_text is not None),
             (
                 "raw_log_cut_to_8192",
