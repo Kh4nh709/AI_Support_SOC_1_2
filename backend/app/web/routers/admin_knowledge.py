@@ -98,9 +98,11 @@ from fastapi.responses import JSONResponse
 
 from app.infra.auth import Claims
 from app.llm import rag_view
+from app.rag import lookup as rag_lookup
 from app.rag import publish
 from app.rag.entries import KB_LEARNED_ROOT, Entry, entry_by_id, file_matches, sha256_text
 from app.rag.failures import FAILURE_KINDS
+from app.rag.subject import parse_subject
 from app.rag.tags import TAGS_FILE, load_tags, read_tags_file
 from app.tier1 import queue
 from app.tier2 import investigation_view
@@ -356,41 +358,47 @@ def _alert_view(conn: psycopg.Connection, alert_id: str) -> Any:
 def _ranked(raw: Any) -> list[dict[str, Any]] | None:
     """`rag_results.ranked` (`[{entry_id, score}]`, best first) as `[{entry_id, pct}]`; None when it is not a
     list (NULL: a row from before migration 023, or a lookup that never reached the rerank). An item that is not
-    an entry id with a score in [0, 1] is left out."""
+    an entry id with a score in [0, 1] (`llm.rag_view.score`, the rule the pages use) is left out.
+    """
     if not isinstance(raw, list):
         return None
     rows: list[dict[str, Any]] = []
     for item in raw:
-        if not isinstance(item, dict) or not isinstance(item.get("entry_id"), str):
+        found = rag_view.score(item)
+        if found is None or not isinstance(item.get("entry_id"), str):
             continue
-        score = item.get("score")
-        if isinstance(score, bool) or not isinstance(score, (int, float)):
-            continue
-        if not 0 <= score <= 1:  # also false for NaN
-            continue
-        rows.append({"entry_id": item["entry_id"], "pct": rag_view.percent(score)})
+        rows.append({"entry_id": item["entry_id"], "pct": rag_view.percent(found)})
     return rows
 
 
 def _lookup(conn: psycopg.Connection, kind: str, subject_id: str) -> dict[str, Any] | None:
-    """The newest `rag_results` row of the source (P14-T07): the one ① and ② read (`rag.lookup.latest_lookup`
-    orders by `created_at DESC, lookup_id`), with the rerank's list as percentages and the closed failure kind. A
-    case id is read in lower case, as `rag.subject` keeps it. `match_notes`, the old agent's text, is not read.
-    """
-    row = conn.execute(
-        "SELECT lookup_id, status, failure_kind, ranked, created_at FROM rag_results"
-        " WHERE subject_kind = %s AND subject_id = %s ORDER BY created_at DESC, lookup_id LIMIT 1",
-        (kind, subject_id.lower() if kind == "case" else subject_id),
-    ).fetchone()
-    if row is None:
+    """The newest stored lookup of the source (P14-T07): the very row ① and ② read, because it is picked by
+    `rag.lookup.latest_lookup` (no copy of its ordering) for the subject `rag.subject` builds (a case id in lower
+    case). Its rerank list leaves as percentages, its failure kind as the closed kind: a `failed` row with no
+    stored kind reads as `rag.lookup.UNKNOWN_FAILURE_KIND`, as `lookup_failure` tells it to ① and ②, so this page
+    and the alert and case pages agree. `match_notes`, the old agent's text, is never read. A source id that is
+    no subject (a draft whose source is gone) has no lookup."""
+    try:
+        subject = parse_subject(f"{kind}:{subject_id}")
+    except ValueError:
         return None
-    lookup_id, status, failure_kind, ranked, created_at = row
+    found = rag_lookup.latest_lookup(conn, subject)
+    if found is None:
+        return None
+    (ranked,) = conn.execute(
+        "SELECT ranked FROM rag_results WHERE lookup_id = %s", (found.lookup_id,)
+    ).fetchone()
+    failure_kind = (
+        (found.failure_kind or rag_lookup.UNKNOWN_FAILURE_KIND)
+        if found.status == "failed"
+        else None
+    )
     return {
-        "lookup_id": str(lookup_id),
-        "status": status,
+        "lookup_id": str(found.lookup_id),
+        "status": found.status,
         "failure_kind": failure_kind if failure_kind in FAILURE_KINDS else None,
         "ranked": _ranked(ranked),
-        "created_at": created_at,
+        "created_at": found.created_at,
     }
 
 

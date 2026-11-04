@@ -80,6 +80,21 @@ def test_an_integer_score_of_zero_or_one_is_a_score():
     assert rag_view.rag_view([_match(1)], None, KINDS)["best_pct"] == 100
 
 
+# ── score: the one reading of a stored score, public so the admin page uses it too ──────────────
+
+
+def test_score_reads_the_score_of_one_stored_item():
+    """`rag_view.score` is what `best_pct` and the admin page's list both read: a number in [0, 1] of an object,
+    else None. It is public so no second copy of the rule exists."""
+    assert rag_view.score({"entry_id": "e1", "score": 0.87}) == 0.87
+    assert rag_view.score({"score": 0}) == 0.0
+    assert rag_view.score({"score": 1}) == 1.0
+    for item in (None, "x", 3, [], {}, {"score": None}, {"score": True}, {"score": "0.9"}):
+        assert rag_view.score(item) is None, item
+    for value in (math.nan, math.inf, -0.01, 1.01, 87):
+        assert rag_view.score({"score": value}) is None, value
+
+
 # ── not_applied: the closed kind of a rag_not_applied warning ───────────────────────────────────
 
 

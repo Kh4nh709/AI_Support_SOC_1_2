@@ -34,7 +34,9 @@ import pytest
 from app.audit.events import write_event
 from app.infra import config
 from app.infra.auth import Claims
+from app.rag import lookup as rag_lookup
 from app.rag import publish
+from app.rag.subject import Subject
 from app.rag.tags import load_tags
 from app.web import deps, main
 from app.web.routers import admin_knowledge
@@ -1329,13 +1331,81 @@ def test_a_failed_lookup_shows_its_failure_kind(api, kind) -> None:
 
 
 @pytest.mark.db
-def test_a_failed_lookup_from_before_the_kind_was_stored_names_none(api) -> None:
+def test_a_failed_lookup_from_before_the_kind_was_stored_reads_as_the_lookup_reads_it(api) -> None:
+    """A `failed` row with no stored kind (older than migration 023) reads as `rag.lookup.UNKNOWN_FAILURE_KIND`
+    for ① and ② (`lookup_failure`), so the alert and case pages say "lỗi phía Voyage" for it; the admin block
+    says the same, read from the same constant."""
     alert, draft_id = alert_draft(api.conn)
     store_lookup(api.conn, "alert", alert, status="failed", failure_kind=None)
 
     lookup = api.get(f"/drafts/{draft_id}").json()["source"]["lookup"]
 
-    assert lookup["status"] == "failed" and lookup["failure_kind"] is None
+    assert lookup["status"] == "failed"
+    assert lookup["failure_kind"] == rag_lookup.UNKNOWN_FAILURE_KIND
+    assert lookup["failure_kind"] == rag_lookup.lookup_failure(api.conn, Subject("alert", alert))
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("status", ["ok", "empty", "budget"])
+def test_a_lookup_that_did_not_fail_names_no_kind(api, status) -> None:
+    alert, draft_id = alert_draft(api.conn)
+    store_lookup(api.conn, "alert", alert, status=status, failure_kind=None)
+
+    lookup = api.get(f"/drafts/{draft_id}").json()["source"]["lookup"]
+
+    assert lookup["status"] == status and lookup["failure_kind"] is None
+
+
+@pytest.mark.db
+def test_the_lookup_shown_is_the_one_latest_lookup_picks(api) -> None:
+    """Several lookups of one subject, two of them stamped alike: the block shows the row `rag.lookup.latest_lookup`
+    (what ① and ② read at prompt time) picks, whatever the tie-break is."""
+    alert, draft_id = alert_draft(api.conn)
+    store_lookup(api.conn, "alert", alert, ranked=[{"entry_id": "oldest", "score": 0.9}], age_s=120)
+    for name in ("tie-a", "tie-b", "tie-c"):
+        store_lookup(api.conn, "alert", alert, ranked=[{"entry_id": name, "score": 0.5}])
+
+    shown = api.get(f"/drafts/{draft_id}").json()["source"]["lookup"]
+    picked = rag_lookup.latest_lookup(api.conn, Subject("alert", alert))
+
+    assert picked is not None
+    assert shown["lookup_id"] == str(picked.lookup_id)
+    assert shown["ranked"][0]["entry_id"] != "oldest"
+
+
+@pytest.mark.db
+def test_a_case_id_in_capitals_finds_the_lookup_stored_in_lower_case(api) -> None:
+    """`rag.subject` keeps a case id in lower case; the block builds its subject the same way."""
+    case_id = concluded_case(api.conn)
+    draft_id = pending_draft(api.conn, f"case:{case_id}")
+    api.conn.execute(
+        "UPDATE knowledge_drafts SET source_id = %s WHERE draft_id = %s",
+        (case_id.upper(), draft_id),
+    )
+    store_lookup(
+        api.conn, "case", case_id.lower(), ranked=[{"entry_id": "case-entry", "score": 0.7}]
+    )
+
+    lookup = api.get(f"/drafts/{draft_id}").json()["source"]["lookup"]
+
+    assert lookup is not None and lookup["ranked"] == [{"entry_id": "case-entry", "pct": 70}]
+
+
+@pytest.mark.db
+def test_a_source_id_that_is_no_subject_has_no_lookup(api) -> None:
+    """A draft whose source id `rag.subject` would refuse (a space in an alert id, a case id that is no UUID)
+    has no lookup, and the detail still answers."""
+    for kind, source_id in (("alert", "has a space"), ("case", "not-a-uuid")):
+        (draft_id,) = api.conn.execute(
+            "INSERT INTO knowledge_drafts (source_kind, source_id, conclusion, status)"
+            " VALUES (%s, %s, 'closed_fp', 'pending') RETURNING draft_id",
+            (kind, source_id),
+        ).fetchone()
+
+        response = api.get(f"/drafts/{draft_id}")
+
+        assert response.status_code == 200
+        assert response.json()["source"]["lookup"] is None
 
 
 @pytest.mark.db

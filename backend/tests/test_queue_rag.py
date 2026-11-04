@@ -361,8 +361,10 @@ def test_a_blind_undecided_view_has_no_rag_key_and_none_of_its_values(db):
 
     assert "rag" not in view
     assert "suggestion" not in view
+    # No key of the pair survives anywhere in the view, at any depth. (Not a search for the figure "87" in the
+    # dump: the head's timestamps carry microseconds and the alert id a shared counter, and either can hold "87".)
+    assert {"rag", "best_pct", "not_applied"}.isdisjoint(_walk_keys(view))
     text = json.dumps(view, default=str)
-    assert "87" not in text.replace("-", "")  # no figure of the lookup survives anywhere
     assert "rag_not_applied" not in text and '"auth"' not in text
 
 
