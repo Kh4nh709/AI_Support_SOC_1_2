@@ -32,7 +32,7 @@ waits for this transaction to commit, and its own `enqueue` then succeeds: no ch
 
 **The transaction.** The worker runs the handler in one transaction of the main database; a Voyage call is
 idle time to it, so the first statement raises `idle_in_transaction_session_timeout` to `JOB_LOCK_TIMEOUT_S`
-(as `rag.lookup` and `rag.draft` do). The vector database is another connection, in autocommit, opened for
+(`infra.db.raise_idle_timeout`, which `rag.lookup` and `rag.draft` call too). The vector database is another connection, in autocommit, opened for
 the job and closed after it unless the caller gives one.
 """
 
@@ -44,9 +44,9 @@ from typing import Any
 
 import httpx
 import psycopg
-from psycopg import sql
 
 from app.infra import config
+from app.infra.db import raise_idle_timeout
 from app.infra.errors import PermanentError, TransientError
 from app.infra.jobs import Job, Reschedule
 from app.rag import match, vector_store, voyage
@@ -62,17 +62,6 @@ RESCHEDULE_S = 2.0
 
 def _log(payload: dict[str, Any]) -> None:
     print(json.dumps(payload))
-
-
-def _raise_idle_timeout(conn: psycopg.Connection, cfg: config.Config) -> None:
-    """The handler's first statement, `rag.lookup`'s (duplicated: that one is not this card's to change).
-    `infra/db.py::transaction()` allows 10 s idle in the transaction and a Voyage call may take 15, so the
-    job raises it to `JOB_LOCK_TIMEOUT_S`, the bound `reclaim_stale` uses."""
-    conn.execute(
-        sql.SQL("SET LOCAL idle_in_transaction_session_timeout = {}").format(
-            sql.Literal(f"{cfg.JOB_LOCK_TIMEOUT_S}s")
-        )
-    )
 
 
 def _entry_id(job: Job) -> str:
@@ -159,7 +148,7 @@ def run_embed_job(
     """Run one `knowledge_embed` job (module doc). `client` and `vconn` default to a Voyage client and a
     connection of its own; every test passes its own."""
     cfg = config.load()
-    _raise_idle_timeout(conn, cfg)
+    raise_idle_timeout(conn, cfg)
     entry_id = _entry_id(job)
     opened = None
     try:

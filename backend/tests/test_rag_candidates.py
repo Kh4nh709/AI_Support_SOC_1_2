@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from app.rag.candidates import candidates
+from app.rag.candidates import by_ids, candidates
 from app.rag.entries import Entry
 from app.rag.fingerprint import Fingerprint
 from app.rag.history import Exclusion, self_exclusion
@@ -366,3 +366,52 @@ def test_an_exclusion_that_names_a_case_id_that_is_not_a_uuid_is_ignored(db) -> 
     found = candidates(db, fp(), Exclusion(frozenset(), frozenset({"not-a-uuid"})))
     assert ids(found) == [entry]
     assert db.execute("SELECT 1").fetchone() == (1,)
+
+
+# ── by_ids: the vector hits, read back from the main database (P14-T06, spec §5.1 and §5.3) ───
+
+
+def test_by_ids_returns_the_whole_entries_in_the_order_asked(db) -> None:
+    first, second, third = (add_entry(db, **about("recon")) for _ in range(3))
+    found = by_ids(db, [third, first, second], NONE)
+    assert ids(found) == [third, first, second]
+    assert all(isinstance(entry, Entry) and entry.content for entry in found)
+
+
+def test_by_ids_leaves_out_a_retired_entry(db) -> None:
+    """A vector row can outlive its entry (the embed job deletes it only when it runs): a hit for a
+    retired entry is ignored."""
+    live = add_entry(db, **about("recon"))
+    retired = add_entry(db, status="retired", **about("recon"))
+    assert ids(by_ids(db, [retired, live], NONE)) == [live]
+
+
+def test_by_ids_leaves_out_an_id_that_is_no_entry(db) -> None:
+    live = add_entry(db, **about("recon"))
+    assert ids(by_ids(db, [str(uuid.uuid4()), live], NONE)) == [live]
+
+
+def test_by_ids_leaves_out_an_entry_drafted_from_the_subject(db) -> None:
+    """A5, as for the database search: an entry drafted from the subject itself is not a candidate."""
+    alert = "ra-self"
+    add_alert(db, alert, rule_id="100190", category="recon")
+    own = add_entry(db, source_alert_ids=[alert], **about("recon"))
+    other = add_entry(db, **about("recon"))
+    exclusion = self_exclusion(db, Subject("alert", alert))
+    assert ids(by_ids(db, [own, other], exclusion)) == [other]
+
+
+def test_by_ids_of_nothing_is_nothing_and_a_repeat_is_once(db) -> None:
+    live = add_entry(db, **about("recon"))
+    assert by_ids(db, [], NONE) == []
+    assert ids(by_ids(db, [live, live], NONE)) == [live]
+
+
+def test_by_ids_takes_an_id_in_any_spelling_and_gives_the_canonical_one(db) -> None:
+    live = add_entry(db, **about("recon"))
+    assert ids(by_ids(db, [live.upper()], NONE)) == [live]
+
+
+def test_by_ids_ignores_what_is_not_a_uuid(db) -> None:
+    live = add_entry(db, **about("recon"))
+    assert ids(by_ids(db, ["not-a-uuid", "", live], NONE)) == [live]

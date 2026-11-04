@@ -81,11 +81,17 @@ def _refuse_a_bare_string(value: Any, name: str) -> None:
         raise TypeError(f"{name}: must be a sequence of strings, not a single string")
 
 
+def has_key(cfg: Config) -> bool:
+    """Whether a call can be made at all: `VOYAGE_API_KEY` is not empty or blank. Without one every call is
+    `auth` before any request is built (`_require_key`), so a caller that records what it sent (the lookup's
+    run row) asks this first."""
+    return bool(cfg.VOYAGE_API_KEY.strip())
+
+
 def _require_key(cfg: Config) -> str:
-    key = cfg.VOYAGE_API_KEY.strip()
-    if not key:
+    if not has_key(cfg):
         raise RagUnavailable("auth")
-    return key
+    return cfg.VOYAGE_API_KEY.strip()
 
 
 def _post(path: str, payload: dict[str, Any], cfg: Config, client: httpx.Client | None):

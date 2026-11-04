@@ -138,3 +138,34 @@ def test_transaction_default_statement_timeout_is_3s(db):
     with infra_db.transaction(db):
         value = db.execute("SHOW statement_timeout").fetchone()[0]
     assert value == "3s"
+
+
+# ── raise_idle_timeout: the one statement the RAG jobs share (P14-T06, P14-T05 review item 7) ──
+
+
+@pytest.mark.db
+def test_raise_idle_timeout_sets_the_job_lock_timeout_for_the_transaction(db):
+    from app.infra.config import Config
+
+    with infra_db.transaction(db):
+        assert db.execute("SHOW idle_in_transaction_session_timeout").fetchone()[0] == "10s"
+        infra_db.raise_idle_timeout(db, Config(JOB_LOCK_TIMEOUT_S=300))
+        assert db.execute("SHOW idle_in_transaction_session_timeout").fetchone()[0] == "5min"
+    assert db.execute("SHOW idle_in_transaction_session_timeout").fetchone()[0] != "5min"
+
+
+def test_the_three_rag_jobs_use_the_one_helper_and_keep_no_copy_of_the_statement():
+    """P14-T05 review item 7: `rag/lookup.py`, `rag/draft.py` and `web/rag_handlers/embed.py` each had their
+    own `SET LOCAL idle_in_transaction_session_timeout` (a third copy of a statement that must change
+    together). They call `infra.db.raise_idle_timeout` and spell the statement nowhere else."""
+    from pathlib import Path
+
+    app_root = Path(infra_db.__file__).resolve().parents[1]
+    for relative in ("rag/lookup.py", "rag/draft.py", "web/rag_handlers/embed.py"):
+        source = (app_root / relative).read_text(encoding="utf-8")
+        assert "SET LOCAL idle_in_transaction_session_timeout" not in source, relative
+        assert "raise_idle_timeout(conn, cfg)" in source, relative
+        assert "def _raise_idle_timeout" not in source, relative
+    assert (app_root / "infra/db.py").read_text(encoding="utf-8").count(
+        "SET LOCAL idle_in_transaction_session_timeout"
+    ) == 2  # transaction()'s 10 s and the helper's JOB_LOCK_TIMEOUT_S

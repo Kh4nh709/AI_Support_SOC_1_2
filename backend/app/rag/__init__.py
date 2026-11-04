@@ -14,17 +14,22 @@ What is here (P13-T02), all of it a database search or plain code, with no model
 * `fingerprint`: the closed fields and generalised log of an alert or a case;
 * `history`: the decision history of a subject, its key levels and its self-exclusion;
 * `entries`: the `knowledge_entries` row, its hash, its published file and its Markdown;
-* `candidates`: the at most 20 active entries the ranking agent chooses from.
+* `candidates`: the at most 20 active entries the database search finds, and (P14-T06) `by_ids` and `hybrid`,
+  which merge them with the vector search's hits (at most 40).
 
 What is here (P13-T03), the DeepSeek part of a lookup and the job that runs it:
 
 * `agent`: one call that must answer a schema of `schemas.json`, linted before it is sent, with at
   most one repair (`call_json`); `Tape`, which keeps what was sent and paid for;
-* `match`: the ranking agent (`rank`), its prompt, and V-R1's membership and V-R2 (`validate_matches`);
+* `match`: (P14-T06 replaced the LLM ranker that was here) the Voyage rerank's selection, `score`, `keep`,
+  `level_for` and `Match` with its `score` and `pct`, and `entry_digest`;
+* `draft_rank`: the P13 ranking agent, moved from `match` unchanged and kept for the draft job's merge rule
+  only (`rank`, its prompt, V-R1's membership and V-R2); the lookup never calls it;
 * `budget`: the RAG's sub-cap and the global cap, which stop a call;
 * `runs`: the `llm_runs` row of a RAG call (`write_rag_run`);
-* `lookup`: the `rag_lookup` job (`run_lookup_job`), the newest stored lookup of a subject
-  (`latest_lookup`) and what ① and ② may put in a prompt from it (`prompt_material`).
+* `lookup`: the `rag_lookup` job (`run_lookup_job`: Voyage embeddings, a vector search, the hybrid merge, Voyage
+  rerank; P14-T06), the newest stored lookup of a subject (`latest_lookup`, `latest_status`, `lookup_failure`)
+  and what ① and ② may put in a prompt from it (`prompt_material`, with each match's percentage).
 
 What is here (P13-T04), the drafts that a conclusion proposes:
 

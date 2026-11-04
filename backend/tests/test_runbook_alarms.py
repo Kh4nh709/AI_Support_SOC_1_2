@@ -209,10 +209,11 @@ def test_alarms_heading_appears_once():
     _section(_text(), "Alarms")
 
 
-def test_alarm_table_has_exactly_thirteen_rows_on_both_sides():
-    # ten (§3.9) and, since P13-T05 (DEC-210), knowledge_queue, knowledge_integrity and rag_budget
-    assert len(_health_check_names()) == 13, sorted(_health_check_names())
-    assert len(_alarm_table_check_names()) == 13, sorted(_alarm_table_check_names())
+def test_alarm_table_has_exactly_fourteen_rows_on_both_sides():
+    # ten (§3.9), since P13-T05 (DEC-210) knowledge_queue, knowledge_integrity and rag_budget, and since
+    # P14-T06 (DEC-213) rag_lookup_failures
+    assert len(_health_check_names()) == 14, sorted(_health_check_names())
+    assert len(_alarm_table_check_names()) == 14, sorted(_alarm_table_check_names())
 
 
 def test_alarm_table_matches_health_py_both_directions():
