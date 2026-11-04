@@ -1,0 +1,404 @@
+# SDD ledger — plan: docs/superpowers/plans/2026-11-03-voyage-vector-rag-definite-verdicts.md
+
+- **Spec:** `docs/superpowers/specs/2026-11-03-voyage-vector-rag-definite-verdicts-design.md` (DEC-213). It is reachable, and it is the authority.
+- **Branch:** `director/voyage-rag`, cut from main `af56b13`.
+  - Docs commit `1e2c4f5`: spec, plan, DEC-213, and the STATE rows T01–T11 at todo.
+  - **Never merged into main (Owner, 03/11).**
+- **Director worktree:** `/project/project/AI_Support_SOC_voyage`.
+
+## Pre-flight scan (03/11)
+
+| Pair or task | What | Found |
+|---|---|---|
+| T01–T02 | `output_schemas.json`: T01 adds `triage_v3` / `verifier_v2`; T02 adds `investigate_v3` | sequential (T02 after T01): OK |
+| T01–T03 | `llm/verdicts.py`: T01 `MODEL_ACTIONS` / `GATED_ACTIONS`; T03 adds `held_reasons`. T03 reads `gate_result.proposed_verdict` | consistent |
+| T01–T04 | both regenerate `docs/Schema/schema.sql` (022 vs 023) while running in parallel | conflict risk at the second merge → Ruling 2 |
+| T01–T06 | `llm/builder.py` (`Verdict` / `trung_pct`), `llm/triage.py` (schema names / learned lines) | sequential (T06 after T01): OK |
+| T02–T03 | investigation view keys `model_conclusion`, `held_by` | consistent |
+| T02–T06–T11 | `tier2/investigate.py`: `model_conclusion` → `rag_not_applied` → `evaluate_case` split | sequential: OK |
+| T03–T07 | `tier1/queue.py`, `visibility.py`, AI blocks: T03 `proposed_action` / `held_by`; T07 adds `rag` | sequential: OK |
+| T04–T05 | keys and `JOB_TYPES` (T04) → handler and claim (T05) | consistent (T04 registers no handler) |
+| T04–T06 | `rag_results.failure_kind` / `ranked` (T04) → written by T06 | consistent |
+| T04–T09 | migrations 023 / 024, `schema.sql` | sequential (T09 after T04): OK |
+| T05–T06 | `voyage.embed` / `rerank`, `Usage`, `RagUnavailable`, `vector_store.nearest`; `match.entry_digest` kept by T06 | names consistent |
+| T06–T07 | `rag_not_applied:<kind>` in `citation_warnings`; `Match.pct`; `ranked` | consistent |
+| T06/T09–T11 | stored lookups (arrival-time), `ranked`, lab tables | consistent |
+| T01 self | "grep `"escalate"` lists only analyst/gold uses", but the kb load-time mapping holds the literal | not a defect: the report lists it |
+| T01 self | the rename may break `eval/` code beyond `OUTCOME_OF` | → Ruling 3 |
+| T04 self | 76 + 11 = 87 keys; `${VECTOR_DB_PASSWORD:?…}` only affects stacks that run this branch | consistent |
+| T05 self | pgvector test server | → Ruling 4 (plan text amended in `1e2c4f5`) |
+| T02, T03, T06–T11 self | tests match code; files created before touched | consistent |
+
+## Rulings
+
+1. **Ruling:** T01 and T04 are dispatched in parallel, against the skill's "never parallel implementers".
+   - **Why:** each Coder has its own isolated worktree, the files are disjoint apart from the generated `schema.sql`, merges are one at a time, and the plan's order (Owner-approved) says so.
+   - **Cost if wrong:** one merge conflict in a generated file.
+2. **Ruling:** a merge that conflicts in `docs/Schema/schema.sql` is not hand-edited by the Director.
+   - The second Coder is resumed to merge the new `director/voyage-rag` tip into its branch, regenerate `schema.sql` with the repo's generator, and re-run `make lint` and `make test-db`.
+   - **Why:** controller edits skip review, and the file is generated.
+   - **Cost if wrong:** one extra Coder round.
+3. **Ruling:** if the rename breaks `eval/` code beyond `eval/metrics.OUTCOME_OF`, T01 may make the minimal name-only change needed. Each one is listed in the report, and nothing else in `eval/` changes.
+   - **Why:** the Owner allowed the rename ("cho phép đổi luôn"); a broken `eval/` is worse than a listed name change.
+   - **Cost if wrong:** a few `eval/` lines to revert.
+4. **Ruling:** T05's pgvector tests run on the throwaway `pgserver` (PyPI, which bundles pgvector). Only if `CREATE EXTENSION vector` fails there does the Owner get a `docker run`.
+   - **Why:** no container write is needed.
+   - **Cost if wrong:** a NEEDS_CONTEXT round.
+5. **Ruling:** each Coder commits its report as `docs/plan/tasks/P14/P14-T<NN>.report.md` on its own branch, and returns only a short contract. If the harness refuses the file, the full report comes as text.
+   - **Why:** this keeps the Director's context lean and puts the report in git.
+   - **Cost if wrong:** none.
+6. **Ruling:** in T04, `vectordb` is pinned to `pgvector/pgvector:0.8.0-pg16`.
+   - **Why:** Coders have no Docker. The Owner's `docker compose pull` at deploy confirms the tag.
+   - **Cost if wrong:** a one-line tag change at deploy.
+7. **Ruling:** Reviewers run on `opus` without isolation. They read the review package, the brief and the report, and do not re-run suites.
+   - **Why:** the skill's rule; memory `[[subagents-need-their-own-worktree]]` (a read-only reviewer needs no isolation).
+
+## Tasks
+- Task 1 (P14-T01): dispatched 03/11 — BASE 1e2c4f5; coder agent ad499e945e664ef60 (sonnet-5-5, xhigh verified), branch worktree-agent-ad499e945e664ef60 = task/P14-T01; brief task-1-brief.md; report → docs/plan/tasks/P14/P14-T01.report.md on its branch.
+- Task 4 (P14-T04): dispatched 03/11 — BASE 1e2c4f5; coder agent a25f2aa766b3ab32b (sonnet-5-5, xhigh verified), branch worktree-agent-a25f2aa766b3ab32b = task/P14-T04; brief task-4-brief.md; report → docs/plan/tasks/P14/P14-T04.report.md on its branch.
+- STATE commit: T01/T04 in-progress (director tip after this line).
+- Task 4: coder DONE_WITH_CONCERNS — tip 9b24fe8 (code tip 2f46a9b), 5 commits 1e2c4f5..9b24fe8; make test 4903 (base 4822), test-db 3428 + 2 libxml, lint green; report saved as task-4-report.md (also committed on its branch).
+  - Concern → merge: textual conflicts with T01 expected on the runbook migration count and test_migration_021; schema.sql regenerated after the merge (Ruling 2).
+  - Concern → T05 dispatch: flip the no-claim pins in test_rag_worker.py when adding the handler (they are meant to trip).
+  - Concern → open: VECTOR_DB_PASSWORD reaches app/worker via env_file and the Compose network is shared, so "only rag-worker reaches vectordb" holds by address/credentials/no ports, not network isolation (DEC-213 item 2 says "reachable only from rag-worker"). Decide after the review.
+  - Concern → final review: docs/Schema/test_constraints.py needs docker; run via a psql-patched scratch copy, 9 new cases pass, 3 older cases fail "unrelated".
+- Task 4: reviewer dispatched (agent ab32d96a9e69df780, opus), package review-1e2c4f5..9b24fe8.diff.
+- Task 4: review round 1 (opus) — Spec ✅ apart from one ❌ Extra (Minor); quality **Approved**; 0 Critical, 0 Important, 7 Minor, 5 ⚠️. Saved verbatim as task-4-review.md.
+  - Ruling: an empty VOYAGE_API_KEY with the RAG on is `failed`/`auth` with no request and a UI notice. This follows the plan, and the spec §5.6 is updated (`2b42f8a`) — the spec said "skipped, as with no model", written before the Owner's "báo thông báo lỗi" ruling. Cost if wrong: a silent skip instead of a notice when the key is missing; easy to flip.
+  - Ruling: reviewer Minor 3 (isolation by configuration only) is a gap against DEC-213 item 2 ("reachable only from rag-worker"). It is fixed with a dedicated `internal: true` network, not by softening the wording. Cost if wrong: one more compose network.
+  - Ruling: the ❌ Extra runbook section is retitled "Voyage vector RAG (DEC-213)" as the single DEC-213 section, and T08 extends it rather than writing a second. Cost if wrong: T08 has to restructure one section.
+  - ⚠️1 → the empty-key ruling above. ⚠️2 (pre-existing DSN `repr` of DATABASE_URL etc.) → Ruling: out of P14's scope (pre-existing, not introduced here); for the final review to triage. ⚠️3 (compose checked as YAML only) → T08 / deploy block: the Owner runs `docker compose … config --quiet` without and then with VECTOR_DB_PASSWORD. ⚠️4 (`docs/Schema/test_constraints.py` has 3 pre-existing failing cases, docker-only) → final review. ⚠️5 (merge with T01: runbook count 22→23 pinned by test_runbook_pilot.py, schema.sql regenerated, the "no 022" prose) → Ruling 2 at merge; the prose is removed in fix round 1.
+  - Task 4: minor (deferred): Minor 6 — third copy of the tree-builder helper; → T09, which needs it for 024.
+  - Task 4: minor (deferred): Minor 7 — two compose loops iterate {**base, **override} and skip base `app`; → final review.
+- Task 4: fix round 1/5 dispatched — resumed coder a25f2aa766b3ab32b. F1 internal `vector` network; F2 one runbook section, the `test -z` check, trial wording, the 3 pointers; F3 empty-key wording ×4; F4 a pytest for `gen_env_example --check`. FIX_BASE 9b24fe8.
+- Task 1: coder DONE_WITH_CONCERNS — tip 6ef3d9d (3 commits on 1e2c4f5: 8ebeb89, d0b2bbd, 6ef3d9d). make test 4887 (base 4822); test-db 3397 + the 2 libxml; lint green; 5 guards shown red. Report saved as task-1-report.md.
+  - Concern → T03: the React UI still reads ①'s `escalate`; a stored `true_positive` shows as no verdict until T03 lands.
+  - Concern → T03: `scripts/e2e_llm_stub.py` now detects verifier_v2; the stub concludes false_positive, which gate step 4 holds as needs_review. `make ui-e2e` was not run (no Playwright), so T03 must run ui-e2e and reconcile any e2e expectations.
+  - Concern → noted: changes outside the card's list, all pinned by lint or tests: `eval/ops_export.py` one WHEN, true_positive→escalate (Ruling 3), plus its test fixture; context pack §6.2; runbook migration count 21→22; schema-notes §12.
+  - Concern → for the reviewer to weigh: the kb loader also accepts YAML `then: true_positive` (lenient), where the card asked only for `escalate`.
+  - Concern → Owner: the new triage_system.txt opening is quoted in the report (§6), and is shown to the Owner in the status message.
+- Task 1: reviewer dispatched (agent aee34349d3da914b2, opus), package review-1e2c4f5..6ef3d9d.diff (346 KB).
+- Task 4: fix round 1 coder DONE_WITH_CONCERNS — tip acb6d1c (F1 49696ef, F2 d77e0a6, F3 10fb0d4, F4 cb0d382, report acb6d1c). Covering tests 533 passed; make test 4916; lint green; test-db not run (no SQL changed); new pins red 13 before the fix.
+  - Concerns noted: the .env.example VOYAGE_API_KEY line carries both F2 and F3 wording (it is in the F2 commit); the RAG_EMBED_DIMS comment and key rows name `python -m app.rag.vector_index --rebuild`, which T05 creates (a forward reference, consistent with the plan).
+- Task 4: scoped re-review dispatched (agent a4cab603ab145fbf1, sonnet), package review-9b24fe8..acb6d1c.diff.
+- Task 4: fix round 1/5 (4 addressed, 0 open; commits 9b24fe8..acb6d1c). Re-review a4cab603ab145fbf1: all addressed; the reviewer ran `docker compose config`, plus the trial override, to confirm the isolation.
+  - Task 4: minor (deferred): `test_compose_rag.py` bans the substring "vector" anywhere in docker-compose.yml, comments included (robustness nit) → final review.
+  - Task 4: minor (deferred): the `docker-compose.rag.yml` header says a down vectordb means the lookup "is skipped"; it should say `failed` / `vectordb_unreachable` → T06, which implements the failure path, aligns the wording.
+- Task 4: complete (commits 1e2c4f5..acb6d1c, review clean after fix round 1)
+- Task 5 (P14-T05): dispatched 04/11 — BASE 91ea6cc; coder agent aaf01ab5c7eca8e17 (sonnet-5-5, xhigh verified), branch = task/P14-T05; the dispatch carries T04's no-claim pins to flip, the documented Voyage REST shapes, the empty key = auth, pgserver for pgvector, and the enqueue sites.
+- Task 9 (P14-T09): dispatched 04/11 — BASE 91ea6cc; coder agent a523fd209a5618ad7 (sonnet-5-5, xhigh verified), branch = task/P14-T09; the dispatch carries T04's deferred Minor 6 (the shared `_schema_tree_through` helper).
+- Ruling: T05 and T09 run in parallel (disjoint files: rag/* and web/rag_* vs lab/*, admin_lab, events, 024) — same reasoning as Ruling 1.
+- Task 1: review round 1 (opus) — Spec ❌ (one Extra: the kb loader also accepts `then: true_positive`), nothing missing; quality **Needs fixes**: I1 Important (test_migration_022 copies 021's helpers and repeats the bug just fixed there, so 023 breaks it; `_Scratch` leaks outside try/finally); M1–M7; ⚠️1–5. Saved verbatim as task-1-review.md.
+  - Ruling: ⚠️4 (the tracked backups/latest.dump has 6 rows with `gate_result.proposed_verdict = "escalate"`, restored only on an empty-volume start) → 022's refusal is widened to any triage-pipeline row where `result->>'suggested_action'`, `result->>'structured_only_verdict'`, `gate_result->>'proposed_verdict'` or `gate_result->>'final_verdict'` is 'escalate'. Why: the Owner's "no old data compatibility" means nothing may read a stored ① `escalate`. The wipe script uses DROP/CREATE + migrate (no restore), so in practice the count is 0. Cost if wrong: none, since the refusal fires only on non-wiped data. This also settles M3, whose shape is now "counted".
+  - Ruling: the Extra and M2 → drop `then: true_positive`, and pin the signed decision tables by sha256 instead of by substring. M1 → `_ACTIONS` becomes the declared vocabulary the loader checks, with the stale wording fixed.
+  - Ruling: Ruling 2 applies — the T01 coder merges director/voyage-rag (c76e1cf, T04 in) into its branch, regenerates schema.sql, reconciles test_migration_021 (both T01 and T04 generalised it), and sets the runbook count to 23.
+  - Task 1: minor (deferred): M4 (gate-test helpers duplicated in test_verdicts.py; they belong in test_gate.py) → final review.
+  - Task 1: minor (deferred): M5 (`test_backup_restore.py` never runs on this host: libxml missing) → final review / environment.
+  - ⚠️1 and ⚠️2 → T03 (agreement.ts; run ui-e2e against the changed stub). ⚠️3 → final review (test_constraints.py is docker-only). ⚠️5 (the false_positive gloss covers benign-but-real activity) → Owner FYI; the wording is already shown to the Owner, who did not object.
+- Task 1: fix round 1/5 dispatched — resumed coder ad499e945e664ef60: F1 (I1), F2 (Extra + M1 + M2), F3 (widened refusal + M3), F4 (M7 pointer), F5 (merge the tip, Ruling 2), F6 (M6: paste the raw grep). FIX_BASE 6ef3d9d.
+- Task 1: fix round 1 coder DONE — tip 5e581f3 (merge 2ba0c67 of director/voyage-rag at 5e02fe9; f67e8c8 F1+F3+F4; 37027c4 F2; 5e581f3 report). make lint green; make test 4985; test_migration_021/022/023 112 passed; test-db 3460 + the 2 libxml. Merge conflicts: schema.sql regenerated; runbook count 23; test_migration_021 on a shared `_schema_below(tmp_path, below)`; T04's stale `test_runbook_env_keys` row test rewritten for the merged row.
+- Task 1: scoped re-review dispatched (agent a2f7a5a0ad912ed4d, opus) over review-2ba0c67..5e581f3.diff plus the remerge-diff of 2ba0c67.
+- Task 1: fix round 1/5 (6 addressed: F5 F1 F2 F3 F4 F6; 1 new open — N1 Important: runbook.md:12 says "6 applied, 17 already present" on the tracked latest.dump, but the widened 022 refuses there (6 rows hold gate_result.proposed_verdict = escalate); plus N2 Minor: the wording says the refusal counts "ANYWHERE"/"the four places", which overstates it; commits 6ef3d9d..5e581f3). Re-review a2f7a5a0ad912ed4d.
+  - Ruling: N1 → fix the runbook text, and leave the tracked backups/latest.dump untouched. The text says that on that dump `make migrate` applies 018–021 and then 022 refuses (022 itself changes nothing), so a stack started from an empty volume must be wiped per spec §11 before `make migrate`. Why: the dump is old data, the trial path is DROP/CREATE + migrate (no restore), and the runbook must be true. Cost if wrong: one sentence.
+  - Ruling: N2 joins fix round 2 (same lines): say "the four places the ruling names", not "anywhere".
+  - Task 1: minor (deferred): out of scope — test_migration_023.py's tree still leaves 022 out (T04's file); T09 may switch it to the shared helper → final review.
+- Task 1: fix round 2/5 dispatched — resumed coder ad499e945e664ef60 with N1 + N2. FIX_BASE 5e581f3.
+- Task 5: coder DONE_WITH_CONCERNS — tip d7f63c6 (code tip d3cc3d9), ff from 91ea6cc. make lint 0; make test 5152; test-db 3574 + the 2 libxml, with VECTOR_TEST_DATABASE_URL set (pgvector module 63 passed).
+  - Concern → T08: runbook "no Voyage call in any code yet" / "no worker claims it yet" and test_runbook_env_keys.py:313 are now false.
+  - Concern → noted: deviation — run_embed_job returns `Reschedule | None` (it re-reads the entry after the Voyage call; enqueue dedupes while a job runs).
+  - Concern → noted: the scratch pgvector is 0.6.2 while the compose image is 0.8.0; 0.8.0 was not run → deploy check.
+  - Concern → for the reviewer to weigh: with no VECTOR_DATABASE_URL, each approval → a job that retries 3× and then job.exhausted.
+- Task 9: coder DONE_WITH_CONCERNS — tip 780d3d4 (code tip 1165a16), from 91ea6cc. make lint green; make test 4950; test-db 3699 + the 2 libxml; 4 new test files 271 passed; 6 guards shown red.
+  - Concern → final review / Owner FYI (pre-existing, not P14): deps.require_role writes authz.denied with the raw URL path as subject_id, so a NUL byte in an id path gives a non-admin a 500 instead of 403, on every id route.
+  - Concern → Ruling: lab.labeled shows its label on the audit page (label.created is blind). Lab labels are the team's ground truth, not an independent multi-labeller gold set, so they are not made blind. Cost if wrong: one entry added to BLIND_EVENT_TYPES.
+  - Concern → open: no route or app_rw right edits or deletes a run, so a mistaken run (and its overlap exclusion) needs Owner SQL. Decide after the review (candidate: DELETE a run that has no labels).
+  - Concern → T10: frontend labels for lab.run_created / lab.labeled (strings.ts, auditSummary.ts).
+  - Concern → noted: no network and pgserver not installed, so it used pgserver binaries copied from an earlier scratchpad via initdb/pg_ctl.
+- Task 1: fix round 2 coder DONE — tip 3a09046 (N1: the runbook row says the tracked dump stops at 21 (018–021 applied, then 022 refuses with 6) and an empty-volume stack is wiped per spec §11 before migrate; verified by restoring the dump on a private PG and running migrate.sh; a new test ties the row to the dump and 022's message. N2: "the four places the ruling names"). Tests: lint green; test_migration_022 27; 021+023 85; runbook + schemas 203.
+- Task 1: fix round 2/5 (2 addressed: N1, N2; 1 new open — N3 Important: the new runbook tie test in test_runbook_pilot.py:576 reads the working-tree backups/latest.dump, which in the primary checkout is the uncommitted 94 MB nightly refresh (3045 triage runs ≠ 68), so it goes red wherever the dump was refreshed; commits 5e581f3..3a09046). Re-review a5a8018caf77005bf.
+  - Ruling: N3 → the tie test reads the committed blob (`git show HEAD:backups/latest.dump` into tmp_path, then pg_restore it), and skips when git, the blob or pg_restore is unavailable. Why: a test must not depend on a nightly-overwritten data file. Cost if wrong: none.
+  - Task 1: minor (deferred): runbook.md:12 still lists "2 applied, 21 already present (022 refuses while…)" under "a database that holds no ① escalate" (slightly self-contradictory, but pinned by test_runbook_env_keys.py) → T08 when it rewrites the DEC-213 runbook section.
+- Task 1: fix round 3/5 dispatched — resumed coder ad499e945e664ef60 with N3. FIX_BASE 3a09046.
+- Task 1: fix round 3 coder DONE — tip ac9b18a (N3: the tie test writes `git show HEAD:backups/latest.dump` to tmp_path and pg_restores that copy; skips when git, the blob or pg_restore is missing; proven on a scratch clone with garbage in the working-tree dump). Runbook tests 169 passed; lint green.
+- Task 1: fix round 3/5 (1 addressed: N3, 0 open; commits 3a09046..ac9b18a). Re-review a165e2d39201758c4 clean.
+  - Task 1: minor (deferred): a nonzero pg_restore exit in the tie test skips, so a corrupt committed dump would show as a skip → final review.
+- Task 1: complete (commits 1e2c4f5..ac9b18a, review clean after 3 fix rounds)
+- Task 2 (P14-T02): dispatched 04/11 — BASE 403c41d; coder agent aad9626f6e2c09b73 (sonnet-5-5, xhigh verified), branch = task/P14-T02. Ruling: ②'s vocabulary (MODEL_CONCLUSIONS / GATED_CONCLUSIONS) goes in llm/verdicts.py next to ①'s — one home for both verdict vocabularies, used by T03 and T11; cost if wrong: a move.
+- Task 5: review round 1 (opus) — Spec ❌ one gap (I1 Important: the vector_index CLI catches only OperationalError around infra_db.connect(), so a malformed DATABASE_URL raises ProgrammingError and prints its password in the traceback); quality **Needs fixes**; Minors 1–10; ⚠️1–7. Saved verbatim as task-5-review.md.
+  - Ruling: fix round 1 = I1 + Minors 1, 2, 3, 4, 5, 6, 9 and 10 (all in this card's files, cheap, and two are real race windows), plus two Director rulings from ⚠️5 and ⚠️6:
+    - (a) enqueue `knowledge_embed` only when `cfg.RAG_ENABLED`. Why: with the RAG off nothing needs vectors, and a stack with no rag-worker (rollback) would otherwise hold a job_backlog alarm forever. After turning the RAG on, run `--rebuild` (runbook, T08). Cost if wrong: entries approved while the RAG was off lack vectors until a rebuild, and the DB-search half still finds them.
+    - (b) add `--rebuild --force`, which re-embeds every active entry — spec §5.1 says "from scratch". The default stays "every entry that needs it". Cost if wrong: none.
+  - Task 5: minor (deferred): Minor 7 (a third copy of `SET LOCAL idle_in_transaction_session_timeout`) → T06 folds it into one helper when it opens lookup.py.
+  - Task 5: minor (deferred): Minor 8 (shared test doubles imported from other test modules) → final review.
+  - ⚠️1 → T06 (re-check against the main DB). ⚠️2 → noted (the shapes were fetched by the coder on 04/11). ⚠️3 (pgvector 0.8.0 not run) → deploy check. ⚠️4 (libxml) → environment / final review. ⚠️5 → ruling (a), plus T08: the runbook drain query must list knowledge_embed. ⚠️7 → noted.
+- Task 5: fix round 1/5 dispatched — resumed coder aaf01ab5c7eca8e17. FIX_BASE d7f63c6.
+- Task 9: review round 1 (opus) — Spec ❌ two issues; quality **Needs fixes**.
+  - I1 (Important): test_admin_lab_api.py stores `str(scratch_dsn)`, which defeats the redacted conftest.Dsn repr, so a failing test prints the password. The pre-existing test_admin_labels_api.py:103 has the same pattern.
+  - I2 (Important): make ui-test goes red — adminStrings.test.ts needs a Vietnamese label for each events.py name (38 → 40), and strings.ts has none for lab.run_created / lab.labeled.
+  - Minors 3–10. Saved verbatim as task-9-review.md.
+  - Ruling: I2 → option (a): the minimal frontend change lands in T09 — two entries in strings.ts, and 38 → 40 in adminStrings.test.ts and the strings.ts:1198 comment. Why: keep every suite green between cards; the change is two strings. Cost if wrong: none (T10 builds on them).
+  - Ruling: I1 also fixes the pre-existing test_admin_labels_api.py:103 (the same one-line pattern, a security hygiene fix). Cost if wrong: none.
+  - Ruling: Minor 5 → set_label refuses an alert that is not a queue head with 409 `not_a_queue_head`. Why: a label nobody can see or count must not reach T11's truth. Cost if wrong: an admin must label the head instead.
+  - Ruling: fix round 1 also takes Minor 3 (create_run atomicity: write_event inside the `with`, plus the POST failure twin), Minor 4 (OverflowError → invalid), and Minor 8 (tighten the test).
+  - Task 9: minor (deferred): Minor 6 (small copies; moving the raw-log cut into tier1/visibility.py would touch T03's file) → final review.
+  - Task 9: minor (deferred): Minor 7 (redundant queries) → final review.
+  - Minor 9 (the strip call is unpinned; defence in depth) and Minor 10 (pre-existing noise) → noted.
+  - Ruling 2 applies: the T09 coder merges director/voyage-rag (ab633b7, with T01's 022). It keeps ONE shared tree helper (scratch_db._schema_tree_through) across 020–024 including T01's 022 test, regenerates schema.sql, and reconciles the runbook count to 24 and the 022 row text.
+- Task 9: fix round 1/5 dispatched — resumed coder a523fd209a5618ad7. FIX_BASE 780d3d4.
+- Task 5: fix round 1 coder DONE — tip 2b260ab (code tip ae0aece). I1, M1–M6, M9, M10, rulings (a) and (b) done; M7 and M8 deferred. make test 5170; test-db 3603 + the 2 libxml (pgvector on); guards red per item. Concern: retire_published may wait milliseconds on the embed job's FOR SHARE lock.
+- Task 2: coder DONE — tip d9fc7a1 (code tip 978827f), base 403c41d. make lint passes; make test 5022; test-db 3490 + the 2 libxml.
+  - Deviation (accepted pattern, as T01 did for verifier_v2): scripts/e2e_llm_stub.py detects "## Schema investigate_v3".
+  - Concern → T08: runbook "need_more_data is two things" (pinned by test_runbook_alarms.py) still says the model answers it.
+  - Concern → T11: eval/investigate_measure.py renders the new template with the investigate_v2 schema.
+- Task 2: reviewer dispatched (agent acc3e529bf1b360cc, opus), package review-403c41d..d9fc7a1.diff.
+- Task 5: fix round 1/5 (11 addressed, 0 open; commits d7f63c6..2b260ab). Re-review ab1d029724dd4bc59 clean.
+  - Task 5: minor (deferred): the FOR SHARE lock is held across the vectordb upsert, so the admin's retire can wait up to 10 s (300 s on a stalled socket) → final review (option: upsert before the locked re-read).
+  - Task 5: minor (deferred): `--force` widens the retire-mid-rebuild window (bounded by T06's re-check) → final review.
+  - Task 5: minor (deferred): the `--force`-alone test nit → final review.
+  - → T08: the runbook says entries approved or retired while RAG is off reach the index only via `--rebuild` after enabling it, and the drain query lists knowledge_embed.
+- Task 5: complete (commits 91ea6cc..2b260ab, review clean after fix round 1)
+- Director at T05 merge d585cce: the mutation check (dims filter dropped → red); make test at the merge tip 5239 passed / 20 skipped / 2 xfailed, one third-party DeprecationWarning (starlette/anyio, pre-existing).
+- Task 6 (P14-T06): dispatched 04/11 — BASE 1713d72; coder agent a2acd2188cffb5884, branch = task/P14-T06. The dispatch carries the T04 header-wording minor, the T05 M7 helper fold, and T05 ⚠️1 (re-check of vector rows). Ruling: dispatched before T02 merges, with T06 told to keep its tier2/investigate.py and dossier.py edits minimal and localized; Ruling 2 handles the merge. Cost if wrong: one merge round.
+- Task 2: review round 1 (opus) — Spec ✅; quality **Approved**; 0 Critical, 0 Important; Minors 1–5; ⚠️1–3. Saved verbatim as task-2-review.md.
+  - ⚠️1 resolved by the Director: `git show --stat f4adb39` moves investigate_system.txt, dossier.py and the test_investigate_rag.py pins together.
+  - ⚠️2 → T11 (eval/investigate_measure.py renders the new template with the v2 schema).
+  - ⚠️3 → T03: for old overruled runs, held_by is [] and model_conclusion None, so fall back on `overruled` for a hold reason.
+  - Task 2: minor (deferred): M1 — held_by re-derives the writer's rule, and `found[cause]` would KeyError → 500 on a new HELD_BY value → final review (`.get`).
+  - Task 2: minor (deferred): M2 — one literal remains for the injection cause → final review.
+  - Task 2: minor (deferred): M3 — redundant tests → final review.
+  - Task 2: minor (deferred, flagged for the final review): M4 — dossier block 8 shows the previous run's held `need_more_data` to the next ② run, which may anchor the model and cost a repair call → final review / T11 measurement.
+  - M5 → environment (libxml).
+- Task 2: complete (commits 403c41d..d9fc7a1, review clean)
+- Task 3 (P14-T03): dispatched 04/11 — BASE 5159e97; coder agent ad092081006724159, branch = task/P14-T03. It carries T01 ⚠️1/⚠️2 (agreement.ts; run ui-e2e against the new stub shapes), T02 ⚠️3 (the overruled fallback), and the shared-node_modules route (Playwright present).
+- Task 6: coder DONE_WITH_CONCERNS — tip 228201b (code tip cf3e895), ff from 1713d72. make lint clean; make test 5389; test-db 3721 + the 2 libxml (pgvector variants run); the grep for rag_match_v1 / match_system is empty.
+  - Concern 1 → Ruling: the draft pipeline's merge step (P13-T04) keeps its LLM ranker, moved unchanged in behaviour to rag/draft_rank.py (schema draft_rank_v1, template draft_rank_system.txt); the lookup never uses it. Why: spec §3 non-goal "the draft pipeline is unchanged"; the plan's removal assumed only the lookup used `rank`, a planning oversight. Cost if wrong: drafts still make one LLM call for merge similarity, as before P14.
+  - Concern 2 → T11: a newer `failed` lookup hides an older good one for ② too; T11's evaluate_case must use lookup_failure the same way.
+  - Concern 3 → noted: the rag.lookup_failed payload is {lookup_id, failure_kind} (failure_kind added to the existing payload; the subject is in the event's subject_id).
+  - Concern 4 → final review: a pre-023 failed row with no kind reads as provider_error; idle-timeout statement copies remain in tier1/triage.py, tier2/investigate.py and web/handlers/health.py.
+- Task 6: reviewer dispatched (agent af376aba1f0587682, opus), with per-commit diff files (a1e53fd 318 KB, 0f78884 109 KB, 96158f8 48 KB, cf3e895, 228201b).
+- Task 6: review round 1 (opus, five passes) — Spec ❌ three Minor gaps; quality **Needs fixes**.
+  - I1 Important: failed lookups write NULL-result rag_lookup run rows, so the pipeline-blind `llm_null_ratio` alarm ("Model API down") fires during any Voyage or vectordb outage; the empty-key case also writes a row although nothing was sent.
+  - Saved verbatim as task-6-review.md.
+  - Ruling: fix round 1 =
+    - I1: leave `rag_lookup` out of llm_null_ratio; write no run row when nothing was sent; drive real failed lookups through health.check in a test;
+    - Spec 1 / M1: ② carries rag_not_applied on every stopped row too, as ① does;
+    - M4: the 020 → 023 text;
+    - M5 (part): the replacement for test_every_attempt_has_its_own_run_row, and close httpx clients in VoyageRouter;
+    - M6: the docs (ranked [] vs NULL, level_for);
+    - M7: the stale compose line;
+    - M9: the alias;
+    - plus Ruling 2: merge director/voyage-rag (T02 merged; tier2/investigate.py, dossier.py and the test_investigate_rag.py goldens conflict) and recompute the ② goldens for the combined state, with RAG off byte-identical to the new base.
+  - Ruling: Spec 2 / M2 (`_FORGED_LINE` gains trung_pct, so V4 refuses a draft line starting `trung_pct:`; the draft ranker's prompt names draft_rank_v1, so its prompt_version moves) are accepted as defensible hardening and a rename. Why: a forged trung_pct line in a draft is prompt-structure forgery; the draft logic is unchanged. Cost if wrong: a draft containing such a line is refused.
+  - Task 6: minor (deferred): M3 — integrity events can be lost on the 429-late path → final review.
+  - Task 6: minor (deferred): M5 rest — duplicated validate_against tests, the non-atomic "written together" test, the cross-module test import → final review.
+  - Task 6: minor (deferred): M8 — intermediate commits are not each green (history) → noted.
+  - ⚠️ → the libxml pair on the standard test DB → final review / environment.
+- Task 6: fix round 1/5 dispatched — resumed coder a2acd2188cffb5884. FIX_BASE 228201b.
+- Task 6: fix round 1 coder DONE_WITH_CONCERNS — tip c18e9a3 (code tip 02fcf1b; merge e95771d of 7344e12). make test 5434; test-db 3773 + the 2 libxml (pgvector variants run). One merge conflict, in context pack §6.2; no golden moved (RAG-off prompts match 7344e12). Concern: a 401 that reached Voyage still writes a run row (a request was sent) — now harmless to llm_null_ratio.
+- Task 6: fix round 1/5 (F0 merge, I1, Spec1/M1, M4, M5 part, M6, M7 and M9 all addressed; 0 open; commits 228201b..c18e9a3). Re-review a2bf8c1529f957929 clean.
+  - → T08: runbook.md:354 (the llm_null_ratio row and its SQL must exclude rag_lookup); runbook.md:503 (Model API down: the lookup calls no model now).
+  - Task 6: minor (deferred): lookup.py:37-38's "one run row" sentence (retried = two, 429-late = none) → final review.
+  - Task 6: minor (deferred): the health.py `_read_or_none` docstring ("three checks … 020") → final review.
+  - Task 6: minor (deferred): the 429-late path leaves no `failed` row and no check sees it, folded with M3 → final review.
+  - Task 6: minor (deferred): the cross-module test import, and the DB-state-dependent assertion in test_rag_lookup_job.py → final review.
+- Task 6: complete (commits 1713d72..c18e9a3, review clean after fix round 1)
+- Director at T06 merge 7bd9d89: mutation check (RAG_MIN_SCORE exclusive → 2 red); make test at the merge tip green.
+- Task 3: coder DONE — tip 3fc4e7d (code tip 18ff5a3), base 5159e97. make lint clean; make test 5311; test-db 3610 + the 2 libxml; ui-lint clean; ui-test 3270; ui-build OK; ui-e2e blind 2 passed (+ blind/tier2 3, tier2/tier1 4). A trial merge onto director 6e3ed76 is clean (no file in common with T06).
+  - Ruling: FP/TP go in the one shared table S.ai1.action, so the queue cell, digest, LLM page and audit lines read FP/TP — why: the Owner's own words are "FP, TP", spec §4.3 writes TP/FP, and one label per value avoids two names for one verdict — cost if wrong: a second label table for the non-alert pages.
+  - Ruling: the queue cell keeps the stored (gated) verdict, "Cần xem xét" ⚑ for a held row; the AI's conclusion and the reasons are on the alert page only — why: spec §4.3 puts the copy on the alert and case pages, §4.4 has the queue read the stored value — cost if wrong: one queue column.
+  - Noted: DecisionPanel.tsx holds no ① copy; digest.py, admin_digest.py and admin_llm.py never compared with "escalate" (pinned by tests); an unknown reason code from a newer server shows as the code.
+- Task 3: reviewer dispatched (agent af7c19d749e190d79, opus), whole-range package review-5159e97..3fc4e7d.diff plus per-commit review-t03-<sha>.diff files.
+- Task 9: fix round 1 coder DONE_WITH_CONCERNS — tip 0d56e90 (merge 0976e1a of ab633b7; I1 c67b26e; I2 4ba4811; M3/M4/M8 0e694ee; M5 bd8df6a; API ae7cc55). make lint green; make test 5019; test-db 3746 + the 2 libxml; ui-lint 0; ui-test 3225. One shared tree helper (_schema_below gone); schema.sql regenerated; runbook counts 24.
+  - Concern 1 → accepted: I2 also adds a one-line audit summary for each lab event (auditSummary.test.ts holds every event to a case; labels alone left 4 red).
+  - Concern 2 → Ruling: lab run instants must fall in UTC years 2000–2099, else 422 `invalid` — why: a UTC-valid instant near year 1 or 9999 is stored and then cannot be read in a session whose zone moves it out of 1..9999 (psycopg DataError → 500); the lab runs in 2026 — cost if wrong: a window outside that range is refused.
+  - Concern 3 → T08: the runbook names where the lab API's 409 reasons are listed.
+  - A trial merge of 0d56e90 onto director 6e3ed76 conflicts in backend/tests/test_import_rules.py (T05/T06 since ab633b7) → fix round 2.
+- Task 3: review round 1 (opus, per commit, 594eaa7 in five parts) — Spec ❌ one gap; quality **Needs fixes**.
+  - I1 (Important): a decided alert page never shows "AI kết luận" or the hold reasons — aiStateOfView returns `decided` first and drops proposed/heldBy (aiState.ts:116-121; AiColumn.tsx:286-346; pinned by AiColumn.test.tsx:344), although the API serves both after the decision. Every escalated, closed and blind-arm alert loses the line.
+  - Saved verbatim as task-3-review.md.
+  - Ruling: fix round 1 =
+    - I1: the decided state carries proposed/heldBy and renders the conclusion line (and reasons) in the "① đề xuất" box; Khớp stays computed from the stored verdict; a blind-arm alert shows it after the decision, as the suggestion; replace the :344 test;
+    - M1: bold "hệ thống giữ lại cho người xem" (spec §4.3);
+    - M2: latest_held derived from the one _SUGGESTION_SQL row (no second read; Suggestion keeps its shape);
+    - M3 → Ruling: a ninth closed reason `verifier_invalid` ("bộ kiểm tra không trả lời hợp lệ") when gate_result.steps["6"] == "invalid"; `verifier_disagrees` otherwise — why: the reason must not tell the analyst the verifier disagreed when it gave no usable answer; the gate records the difference (gate.py:205-208, steps at :248) — cost if wrong: one extra label;
+    - M4: source-parity tests for aiState.ts MODEL_ACTIONS, and FP_POLICY_FIELDS against the real gate for all five fields;
+    - M5: ② counts a stored `need_more_data` beside a definite model_conclusion as held even when held_by is empty ("… — hệ thống giữ lại", the overruled sentence kept);
+    - M6: whole-word FP/TP markers and AI-column-scoped reason checks in the tests;
+    - ⚠️: the fix report pastes each suite's final summary lines verbatim (warnings included);
+    - plus Ruling 2: merge director/voyage-rag (6e3ed76, T06 in; the trial merge is clean).
+- Task 3: fix round 1/5 dispatched — resumed coder ad092081006724159. FIX_BASE 3fc4e7d.
+- Task 9: re-review of fix round 1 dispatched (agent ac6eebe582f5b8c0d, opus), packages review-0976e1a..0d56e90.diff + review-t09-merge-0976e1a.remerge.diff (FIX_BASE 780d3d4 → 0d56e90).
+- Task 9: fix round 2/5 dispatched in parallel — resumed coder a523fd209a5618ad7. FIX_BASE 0d56e90: F0 merge director/voyage-rag (6e3ed76; test_import_rules.py conflict) and the year bound (UTC 2000–2099).
+- Task 9: re-review of fix round 1 (opus) — all of I1, I2, M3, M4, M5, M8 and F0 ADDRESSED; the I2 audit-summary builders correct; no new Critical/Important. Saved verbatim as task-9-rereview-1.md.
+  - New Minor (runs.py:10 docstring "commits nothing") and two stale wordings (scratch_db.py:47-49 users list without 022; test_migration_021.py:369 "022 and 023 follow it") → folded into fix round 2 (sent to the running coder).
+  - Task 9: minor (deferred): test_schema_v3_019.py:60-74 keeps its own tree builder (a tree at 018) → final review.
+  - Task 9: minor (deferred): tier1/labels.py:537-546 writes label.created after its savepoint (Minor 3's shape; only on an idle connection; pre-existing) → final review.
+  - → T11: with grouping on, an alert received in run B grouped under a head received in run A is neither listed nor labellable in B (moot while DEDUP_ENABLED=false).
+  - Noted: infra/db.py does not pin the session TimeZone; round 2's year bound closes the read failure for lab runs.
+- Task 9: fix round 2 coder DONE_WITH_CONCERNS — tip 9bcfdd3 (merge c6e82cb of 6e3ed76; year bound a5ca6e4; the three wordings + report 9bcfdd3). One conflict (test_import_rules.py, both sides kept); runbook still 24; build_schema --check green; migration tests 331 passed. make lint 0; make test 5466; test-db 4002 + the 2 libxml (86 pgvector skips); ui-lint 0; ui-test 3224/3225 (the inherited failure below). A trial merge onto director 9c79386 is clean.
+  - Concern 1 → Director's verification gap: `make ui-test` has been red on director/voyage-rag since the T06 merge (7bd9d89) — OverviewPage.test.tsx:2277 expects 13 health checks, T06 added rag_lookup_failures without a label. I ran only `make test` at the T06 merge. Ruling: the next frontend card to merge (T03, in its running fix round) adds the label "Tra cứu RAG thất bại liên tục" (T07's text) and 13 → 14 — why: keep the build branch green; the label text is already fixed by T07's brief — cost if wrong: T07 finds the label already there. From now on the Director's merge check runs `make ui-test` too when the merge touches backend lists the UI mirrors.
+  - Concern 2 → final review: deps.require_role writes authz.denied with the raw path, so a NUL in an id path gives a non-admin a 500 instead of a 403 (pre-existing; no bypass).
+- Task 9: re-review of fix round 2 dispatched (agent a545e6163c0e4143c, sonnet), packages review-c6e82cb..9bcfdd3.diff + review-t09-merge-c6e82cb.remerge.diff.
+- Pre-dispatch rulings for T07/T10/T11 (dispatch drafts in the session scratchpad: t07-dispatch.txt, t10-dispatch.txt, t11-dispatch.txt):
+  - T07 Ruling: `rag.best_pct` = the highest round(score×100) among the matches of the lookup named by the run's rag_lookup_id (None without one); `not_applied` only for a kind in FAILURE_KINDS; `rag` in ANALYST_HIDE; the percentage in T03's one conclusion-line component, both states. The spec's "#…" entry reference is not shown — why: the analyst pages list no knowledge entries and tier1 cannot open the admin knowledge page — cost if wrong: one more key (best entry) and a link.
+  - T11 Ruling: evaluate_case gains `as_of`; the measurement builds each case's dossier as of its first ② run (blocks 6 and 8 keep only rows created before it; the RAG arm reads the newest lookup before it); a case with no ② run is counted `no_investigation` — why: a tier-2 note or an earlier ② answer written after the escalation would hand the human's conclusion to both arms and hide the RAG's effect — cost if wrong: ② sees fewer notes than a re-run would.
+  - T11 Ruling: eval/'s existing files stay untouched (spec §6); T02 ⚠️2 (investigate_measure.py renders the v3 template with the v2 schema) → T08 records it as a limitation.
+  - T11: the coder checks and reports (no change) whether ①'s context sections can show an analyst decision made after the alert arrived.
+- Task 9: re-review of fix round 2 (sonnet) — F0, the year bound and the three wordings ADDRESSED; no new Critical/Important. Saved verbatim as task-9-rereview-2.md.
+  - Task 9: minor (deferred): runs.py:10-11 docstring "issues no COMMIT of its own" is loose on the idle path; admin_lab.py:17 one 155-column docstring line → final review.
+  - Noted: the year bound is in the domain and the API only (not a CHECK in 024), as ruled.
+- Task 9: complete (commits 91ea6cc..9bcfdd3, review clean after fix rounds 1 and 2)
+- Director at T09 merge 9848dfc: mutation check (YEAR_MIN 2000 → 1999 on a scratch worktree, private PostgreSQL → 4 red); T09's DB tests (lab_runs, lab_labels, admin_lab_api, migration_024, migration_022) green at the merge tip; make test 5466 passed / 20 skipped / 2 xfailed, one pre-existing starlette DeprecationWarning; make ui-test 3224/3225 — the one failure is T06's inherited OverviewPage 13-vs-14 (T03's fix round adds the label).
+- Task 10 (P14-T10): dispatched 04/11 — BASE 425ed8b; coder agent adeb7f7f458ef49ed, branch = task/P14-T10 (worktree-agent-adeb7f7f458ef49ed). In parallel with T03's fix round (both touch strings.ts; T10 keeps its block under S.admin). The dispatch names the inherited OverviewPage failure (T03 fixes it).
+- Task 3: fix round 1 coder DONE — tip 01103d2 (merge abd9c74 of 6e3ed76, clean; M3/M4 backend 2d6412d; M2 3fb5bcc; frontend I1/M1/M3/M4/M5/M6 d797c33; inherited T06 label 37515b9; e2e locator f435dd4; report 01103d2). make lint clean; make test 5486; test-db 3710 + the 2 libxml (86 pgvector skips); ui-lint clean; ui-test 66 files / 3309; ui-build OK; ui-e2e blind/tier1/tier2 6 passed. A trial merge onto director 425ed8b (T09 in) is clean.
+  - Concern 1 → noted: the e2e `getByText("Khớp")` matched the reason "không khớp bảng…", now `exact: true`.
+  - Concern 2 → accepted: the E2E_BACKEND_DIR red run was not repeated for the column-scoped checks; unit-level reds shown.
+  - Concern 3 → known: starlette's DeprecationWarning (pre-existing).
+- Task 3: re-review of fix round 1 dispatched (agent a0f0aa74212aa4911, opus), packages review-abd9c74..01103d2.diff + review-t03-merge-abd9c74.remerge.diff (FIX_BASE 3fc4e7d → 01103d2).
+- Task 3: re-review of fix round 1 (opus, nine passes) — I1, M1, M2, M4, M5, M6, ⚠️, F0 and the inherited label ADDRESSED; M3 NOT ADDRESSED in the queue rows (the queue's gate projection has no `steps`, so a row says verifier_disagrees where the alert view says verifier_invalid; API only today). Minor: whole-word matching on textContent loses glued markers. Saved verbatim as task-3-rereview-1.md.
+  - Out of scope → final review: this round's test-db skipped all 86 pgvector tests (VECTOR_TEST_DATABASE_URL unset) — the final review must run T05/T06's pgvector variants on the merged branch.
+- Task 3: fix round 2/5 dispatched — resumed coder ad092081006724159. FIX_BASE 01103d2: F0 merge director 425ed8b (T09 in); M3 step 6 in the queue projection + a row-and-view agreement DB test; the marker Minor (whole words for FP/TP only).
+- Task 11 (P14-T11): dispatched 04/11 — BASE c7b9051; coder agent a752f94922efb6b05, branch = task/P14-T11 (worktree-agent-a752f94922efb6b05). Ruling: dispatched before T03 merges — the tool reads TriageEvaluation.proposed_verdict/final_verdict and ②'s view, none of T03's files (disjoint from T03 and T10) — cost if wrong: one merge round. The dispatch carries the as_of ruling, eval/ untouched, T06 Concern 2 (the newest lookup decides), the ①-context check.
+- Task 3: fix round 2 coder DONE — tip 31d1d45 (merge 2b13f95 of c7b9051, clean; M3 f0f31c6: the queue projection carries only steps["6"]; Minor 36af315: per-text-node markers, FP/TP whole words, phrases substrings). make lint clean; make test 5520; test-db 4116 + the 2 libxml, 0 skipped (pgvector variants ran: VECTOR_TEST_DATABASE_URL set); ui-lint clean; ui-test 66 files / 3326; ui-build OK; ui-e2e blind/tier1/tier2 6 passed. A trial merge onto director c7b9051 is clean.
+  - Concern → noted: the queue row's held_by is drawn nowhere yet (AiCell ignores it); M3 changes the API only.
+- Task 3: re-review of fix round 2 dispatched (agent ab0b50d6e06e7a086, sonnet), packages review-2b13f95..31d1d45.diff + review-t03-merge-2b13f95.remerge.diff.
+- Task 3: re-review of fix round 2 (sonnet) — M3, the marker Minor and F0 ADDRESSED; no new breakage. Saved verbatim as task-3-rereview-2.md.
+  - Task 3: minor (deferred): the projection pin (test_queue_held.py:222-225) is a substring check; no blind-arm test uses a step-6 gate (the path is gate-agnostic) → final review.
+  - Task 3: minor (deferred): P14-T03.report.md:14 (round-1 text) still says "three gate keys" → noted.
+  - Task 3: minor (deferred): from round 1 — the textContent probe is fixed; the queue row's held_by is drawn nowhere (API only) → noted for T07/final review.
+- Task 3: complete (commits 5159e97..31d1d45, review clean after fix rounds 1 and 2)
+- Director at T03 merge 8720bab: mutation check (held_by dropped from ANALYST_HIDE → 17 red); make test 5520 passed / 20 skipped / 2 xfailed, one pre-existing starlette DeprecationWarning; make ui-test 66 files / 3326 passed (green again).
+- Task 7 (P14-T07): dispatched 04/11 — BASE a6d2dee; coder agent a20bf4ee380db72fe, branch = task/P14-T07 (worktree-agent-a20bf4ee380db72fe). Carries the best_pct/not_applied rulings, the "#…" ruling, the shared ConclusionLine, the health label already on the tip (T03), and the parallel T10/T11 note.
+- Task 10: coder DONE_WITH_CONCERNS — tip d89c3d0 (code tip 8334b66), ff from 425ed8b (Sonnet 5.5 xhigh verified). make lint green; make test 5468; ui-lint green; ui-test 3443/3444 (the one inherited OverviewPage failure, fixed on director by T03); ui-build OK (two lab chunks); ui-e2e admin-lab 2 passed, full e2e 27 passed. make test-db not run (backend untouched). A trial merge onto director a6d2dee (T03 in) is clean.
+  - Concern → accepted: admin.spec.ts scenario 1 pinned eight sidebar links; the ninth added there.
+  - Concern → accepted for the lab (one admin labels): the counter is a local delta of the first page; arrivals or a second admin show after the next full read.
+  - Concern → for the reviewer: refusals use their own labErrorOf, not new ADMIN_REASONS codes.
+  - Concern → Ruling 2: admin.ts, strings.ts, adminTypes.test.ts, adminKeys.ts are also edited by T07; the second to merge reconciles.
+  - The coder was still running background work after its report → told to stop everything and end.
+- Task 10: reviewer dispatched (opus), package review-425ed8b..d89c3d0.diff (208 KB) split per commit review-t10-<sha>.diff.
+- Task 10: reviewer agent a8adc1431bc5495a0 (opus). The coder confirmed every background process stopped.
+- Task 10: review round 1 (opus, per commit) — Spec ✅; quality **Needs fixes**. Saved verbatim as task-10-review.md.
+  - I1 (Important): a background refetch overlapping a label write reverts the row and the counter to a state the server no longer holds (LabRunPage.tsx:71-77; confirmed by the reviewer's focused test).
+  - Ruling: fix round 1 = F0 merge director 554b603 (T03 in); I1 cancelQueries before setQueryData + refetchOnWindowFocus false + the race regression test; M1 the current label's button aria-disabled and sends nothing; M2 a pending row's buttons aria-disabled and dimmed; M3 "Tải thêm" disabled with the loading text while any fetch is out; M4 heading level; M5 the two unused strings.
+  - Ruling: ⚠️ Ruling 2 confirmed — lab times are entered and shown in the console's display zone (+07:00), as formatDateTime shows them — why: one zone for input and display, the SOC's own — cost if wrong: an admin abroad types Vietnam time (the label says so).
+  - Ruling: ⚠️ make test-db waived for this frontend-only card.
+  - Task 10: minor (deferred): M6 the inherited starlette warning → noted; M7 the ~130-line source-text checker is broad → final review.
+- Task 10: fix round 1/5 dispatched — resumed coder adeb7f7f458ef49ed. FIX_BASE d89c3d0.
+- Task 11: coder DONE_WITH_CONCERNS — tip c703b9d (code tip 3c86967), ff from c7b9051 (Sonnet 5.5 xhigh verified). make lint green; make test 5506; test-db 4037 + the 2 libxml (86 pgvector skips); 72 new tests; the existing ② tests unchanged and green. A trial merge onto director 554b603 (T03 in) is clean.
+  - Concern 1 → Ruling (for the fix round after review): ①'s correlation section (tier1/triage.py:674 → domain/correlation.py) and ②'s block 5 show neighbours' CURRENT status, so an analyst decision made after the subject arrived reaches both arms (the RAG delta stays unbiased; the absolute accuracy is flattered). No prompt change: the tool reports, per tier, how many subjects had a neighbour decided after the subject's arrival (①) or after as_of (②), and the report states the caveat; T08's runbook says to run ①'s measure before analysts work the test runs for first-look accuracy — why: the Owner's targets are absolute numbers; the reader must see the exposure — cost if wrong: one more count in the report.
+  - Concern 2 → Ruling (fix round): tier2/investigate.py must not import rag.lookup's private _history_of/_matches_of; allow one small public `before=` keyword on rag.lookup.latest_lookup (or one public helper) — why: a private import across packages is the coupling the import rules exist to stop — cost if wrong: one keyword in rag/.
+  - Concern 3 → T08 (limitation), as ruled.
+  - Concern 4 → T08: the tool's spend is not in llm_runs and not seen by the monthly cap; it reads .env limits, not the admin's saved ones; the estimate is an upper bound and --yes is the go-ahead.
+  - Concern 5 → noted (rates over answered subjects; budget lookups on their own line; sequential).
+- Task 11: reviewer dispatched (opus), package review-c7b9051..c703b9d.diff (179 KB) split per commit review-t11-<sha>.diff.
+- Task 11: reviewer agent aec6c10a79d18abeb (opus).
+- Task 10: fix round 1 coder DONE_WITH_CONCERNS — tip 18e7144 (merge e3c8a0c of 554b603, clean; I1 4146516; M1/M2/M4 92ab275; M3 f85f63e; M5 60d83fe; report 18e7144). make lint green; make test 5522; ui-lint clean; ui-test 71 files / 3621 (inherited failure gone); ui-build OK; ui-e2e admin-lab + admin 15 passed. Race test red first (4 failed on round-0 code). A trial merge onto director 08a1a3b is clean.
+  - Concern → for the re-review: a label cancels an in-flight "Tải thêm" (the admin presses it again).
+  - Concerns → noted: the unused-string check goes by name; jsdom adds ".000" to a time with seconds (localInputToIso accepts either).
+- Task 10: re-review of fix round 1 dispatched (agent a676dbb894f5b03d3, opus), packages review-e3c8a0c..18e7144.diff + review-t10-merge-e3c8a0c.remerge.diff.
+- Task 11: review round 1 (opus, three passes) — Spec ✅; quality **Needs fixes**. Saved verbatim as task-11-review.md. The numbers, evaluate_case's no-write guarantee, the job's unchanged writes, as_of, the stored-lookup reads, the gate and secrets all checked out.
+  - I1 (Important): only the RAG-on arm sees the stored decision history (rag/history.py), which can carry same-run analyst decisions → inflates exactly the RAG-on − RAG-off delta. Ruling: flag `history_same_run`, count per tier the RAG-on prompts with a history and the flagged ones, list ids, add to the caveat — why: spec §6 flags same-run information rather than silently counting it — cost if wrong: one more flag in the report.
+  - Ruling: fix round 1 = F0 merge director 08a1a3b; R1 (correlation exposure count + caveat); R2 (public `before=` on rag.lookup.latest_lookup instead of the private imports); I1; M1 (pin the strict `<` at as_of); M2 (coverage/flags from what reached the prompt); M3 (verifier_cap counts; non-zero exit when nothing answered); M4 (--out checked before the gate; a PARTIAL report on a mid-run error or Ctrl-C); M5 (header labels the thresholds as current settings); M6 (a paired line per tier; the verifier_* sentence); M7 (one held_by rule + a high-injection case); M8 (no assert in control flow; keep the exception chain); M9 (unplaceable entries counted); ⚠️ the warning lines pasted.
+  - Task 11: minor (deferred): M10 eval/lab_measure.py is 1,466 lines; calibrate could stand alone as eval/lab_calibrate.py → final review.
+  - ⚠️ → T08 / the deploy block: the first real check on the trial is `measure` without --yes (estimate only), then a small `--test-runs` run.
+- Task 11: fix round 1/5 dispatched — resumed coder a752f94922efb6b05. FIX_BASE c703b9d.
+- Task 7: coder DONE (one deviation) — tip 08bf490 (backend c29840a, frontend 46dd2c9, e2e 2518b57, report 08bf490), ff from a6d2dee (Sonnet 5.5 xhigh verified). make lint clean; make test 5589; test-db 4108 + the 2 libxml; ui-lint clean; ui-test 68 files / 3435; ui-build OK; ui-e2e blind+tier1+tier2+rag 12 passed. Trial merges onto director 0f1f3b9 and onto T10's tip are both clean.
+  - Deviation → Ruling: no admin lookup detail existed on the tip (no router read rag_results; no match_notes in the frontend) — the plan's premise was an oversight; accept the coder's minimal `source.lookup` on the admin draft detail and the "Tra cứu tri thức" block on the draft page — why: a draft's source lookup is where an admin meets a lookup — cost if wrong: one block to remove.
+  - Concern → accepted: the e2e seeds the lookups and runs in T06's shape (the e2e stack runs RAG off; no Voyage in tests); the case page is covered by vitest.
+  - Concern → noted for the final review: best_pct counts every stored match of the run's lookup (as ruled), including an entry dropped by the prompt-time re-check (T11 M2 filters for the measurement).
+  - Concern → Ruling 2: strings.ts, api/admin.ts and adminTypes.test.ts are adjacent to T10's edits; the second to merge reconciles.
+- Task 7: reviewer dispatched (opus), package review-a6d2dee..08bf490.diff (180 KB) split per commit review-t07-<sha>.diff.
+- Task 7: reviewer agent a79d62401f8082ff6 (opus).
+- Task 10: re-review of fix round 1 (opus) — I1, M1–M5 and F0 ADDRESSED (the race test red on round-0 code, the TanStack revert semantics checked in query-core, the counter right through label → change → clear); no new Critical/Important. Saved verbatim as task-10-rereview-1.md.
+  - Ruling: T10 completes now; the three new Minors go to the final review's fix wave (one dispatch for the branch) — why: all Minor, the page and the server agree on every write; a fourth round would only delay T07's reconcile — cost if wrong: the focus jump on "Tải thêm" lives until the wave.
+  - Task 10: minor (deferred → final wave): NB1 the M3 refocus steals focus and scroll-jumps (refocus only when activeElement is body/null, preventScroll) — the covering test passes without the focus() call.
+  - Task 10: minor (deferred → final wave): NB2 a label during a mount/reconnect refetch drops that read's news (invalidate after cancelling a full refetch).
+  - Task 10: minor (deferred → final wave): NB3 labModel.test.ts:375 asserts two names absent (drop it; the it.each covers unused strings).
+  - Task 10: out of scope (→ final review): a refetch torn across the server's commit leaves the counter one short (rare; the PUT/DELETE answer could carry the run's counts — a T09 API change).
+- Task 10: complete (commits 425ed8b..18e7144, review clean after fix round 1)
+- Director at T10 merge d864474: mutation check (the cancelQueries await removed → 3 red race tests); make test 5522 passed / 20 skipped / 2 xfailed, one pre-existing starlette warning; make ui-test 71 files / 3621 passed.
+- Task 7: review round 1 (opus, three passes) — Spec ✅; quality **Needs fixes**. Saved verbatim as task-7-review.md. Blind arm, statement counts, closed values, the percentage and the admin block all checked out.
+  - I1 (Important): test_queue_rag.py:365 asserts "87" absent from the whole dumped blind view — fails without a leak ~5 % of runs (microsecond timestamps) and on 2 % of the shared alert-id counter's values.
+  - Ruling: fix round 1 = F0 merge director 5d7438e (T10 in); I1 assert on keys (shown red with rag out of ANALYST_HIDE); M1 the client draws nothing for an unknown kind (flip the four raw-display tests); M2 the admin block mirrors rag.lookup's UNKNOWN_FAILURE_KIND fallback + the docstring/report wording; M3 no copies of rag logic in admin_knowledge.py (public _score, rag.subject, latest_lookup or a same-row test); ⚠️ context pack §6.4 lists `rag`; ⚠️ the warning lines pasted.
+  - Ruling: ⚠️ best_pct naming an entry dropped at the prompt-time re-check is accepted (ruling 1) → recorded for the final review.
+- Task 7: fix round 1/5 dispatched — resumed coder a20bf4ee380db72fe. FIX_BASE 08bf490.
+- Owner 04/11: "Đã xóa DB trial". Verified read-only: backup backups/soc-trial-pre-lab-20261103T163506Z.dump (96 MB, 03/11 23:35 ICT); kb_learned/entries.pre-lab-20261103T163506Z set aside; alerts 0, cases 0, llm_runs 0, knowledge_entries 0, users 7, migrations 20; jobs are the scheduler's health/digest only; app/worker/rag-worker/ui/db running. The trial checkout is at detached 0d1e40c (20 migrations) → the deploy block moves it to director/voyage-rag (20 → 24).
+- Task 11: fix round 1 coder DONE_WITH_CONCERNS — tip 91cf67b (merge a12eea5 of 0f1f3b9, clean; 902edcd R2/M7/M8; a30b7a1 R1/I1/M1–M6/M9; report 91cf67b). make lint green; make test 5575; test-db 4167 + the 2 libxml, pgvector on, nothing skipped; the one warning is starlette's BlockingPortal; 104 tests in the new file; 33 new tests red first, 20 mutations red. Trial merges onto director af2aaf7 and onto T07's tip are clean.
+  - Concern → for the re-review: correlation_after_arrival is an upper bound (the section's caps not replayed); history_same_run by last_seen is conservative.
+  - Concern → accepted (ruled): rag/lookup.py gained the one `before=` keyword (R2); tier2/investigation_view.py's held_by body (M7) — T07 also edits the view; textually no conflict.
+- Task 11: re-review of fix round 1 dispatched (agent a5bd5b77c4b8aa538, opus), packages review-a12eea5..91cf67b.diff + review-t11-merge-a12eea5.remerge.diff.
+- Task 7: fix round 1 coder DONE — tip 7dc51ec (merge 997ba07 of af2aaf7, clean; backend+docs 062ff53; client 152123c; adminTypes regex a063835; report 7dc51ec). make lint clean; make test 5591; test-db 4200 + the 2 libxml (pgvector variants run); ui-lint/ui-build OK; ui-test 73 files / 3740; ui-e2e blind+tier1+tier2+rag+admin-lab 14 passed; the one warning is starlette's BlockingPortal. Trial merges onto director af2aaf7 and onto T11's tip are clean.
+  - Concern → noted: the admin `_lookup` now takes two statements (once per draft detail).
+- Task 7: re-review of fix round 1 dispatched (agent a62e939d71fe77e48, sonnet), packages review-997ba07..7dc51ec.diff + review-t07-merge-997ba07.remerge.diff.
+- Task 7: re-review of fix round 1 (sonnet) — I1, M1, M2, M3, both ⚠️ and F0 ADDRESSED; no new Critical/Important. Saved verbatim as task-7-rereview-1.md.
+  - Task 7: minor (deferred → final wave): admin_knowledge.py:43-45 module docstring still says failure_kind is null for a pre-023 failed row (it is now provider_error); "the very row ① and ② read" is loose for ② (USABLE_STATUSES).
+  - Task 7: minor (deferred → final wave): the admin block's status goes through labelOf (raw code fallback; closed by the CHECK); KnowledgeDraftView.test.tsx:~582 tests a failed lookup with failure_kind null, which the server no longer sends.
+  - Task 7: minor (deferred → final wave): the blind test could also assert the view is populated (view["alert_id"]).
+- Task 7: complete (commits a6d2dee..7dc51ec, review clean after fix round 1)
+- Director at T07 merge 7dacdb8: mutation check (rag_view.percent round → int → 3 red); make test 5591 passed / 20 skipped / 2 xfailed, one pre-existing starlette warning; make ui-test 73 files / 3740 passed.
+- Task 11: re-review of fix round 1 (opus) — R2, I1, M1–M9, F0 ADDRESSED; ⚠️ in substance; R1 NOT ADDRESSED: an escalated neighbour has no tier1.escalated event of its own (escalate writes one event keyed on the trigger with payload.alert_ids), so the correlation count under-counts systematically (not an upper bound). Five new Minors (PARTIAL leak lines, PARTIAL cost, a private correlation import in eval/, seen_for's fallback labels, with_leaks' early return) and one older (error rows cost 0.0). Saved verbatim as task-11-rereview-1.md.
+- Task 11: fix round 2/5 dispatched — resumed coder a752f94922efb6b05. FIX_BASE 91cf67b: F0 merge director ce12b53 (T07, T10 in); R1 date escalated neighbours by payload.alert_ids (or cases.created_at) with a test through the real transitions.escalate; Minors 1–6; the full warning lines.
+- Task 8 (P14-T08): dispatched 04/11 — BASE 2ce9d4b; coder agent a6689abf11f879e78, branch = task/P14-T08 (worktree-agent-a6689abf11f879e78). Ruling: dispatched while T11 is in fix round 2 — the runbook reads the tool's settled CLI (exit 0/5/6/7/8) from T11's branch; disjoint files (docs + test_runbook_*) — cost if wrong: a small reconcile at T11's merge. Carries every "→ T08" item from the ledger (stale sentences, drain query, llm_null_ratio row/SQL, rag_lookup_failures alarm row, Model API down, need_more_data, the start-everything row, the config --quiet check, the lab procedure, measuring, limitations).
+- Task 11: fix round 2 coder DONE_WITH_CONCERNS — tip 4538b33 (merge 1c0abac of ce12b53, clean; code 29ed944; report 4538b33). R1: escalated neighbours dated by the tier1.escalated event whose payload->'alert_ids' lists them (chosen over cases.created_at: the record of the decision, one writer); tests through the real transitions.escalate, red on round-1 code. m1–m6 done. make lint green; make test 5649; test-db 4261 + the 2 libxml (pgvector on, nothing skipped); the starlette warning's lines pasted verbatim; 117 tests in the new file. A trial merge onto director 2ce9d4b is clean.
+  - Concern → noted for the final review: the payload scan runs per decided neighbour with no payload index on audit_events (fine for a lab DB).
+  - Concern → noted: cost_usd (the guard's total) can exceed the per-arm sums; the header says by how much.
+- Task 11: re-review of fix round 2 dispatched (agent ab4b1a264ee5336a8, opus), packages review-1c0abac..4538b33.diff + review-t11-merge-1c0abac.remerge.diff.
+- Task 8: coder DONE (two flagged departures) — tip 777fc42 (code tip dad0df2), ff from 2ce9d4b (Sonnet 5.5 xhigh verified). make lint green; make test 5624 (21 skipped: one guard waits for eval/lab_measure.py); guards red first (32 failed). Trial merges onto director 2ce9d4b and onto T11's tip are clean.
+  - Departure 1 → Ruling: `make migrate` before `up -d` (the brief's steps 3 and 4 swapped) — why: the runbook's own 019/020 rule, the database moves before any container runs the new code — cost if wrong: one block moved.
+  - Departure 2 → accepted: the rag_lookup_failures Alarms row existed (T06); extended instead of added.
+  - Concern 3 → at T11's merge: the skipped Measuring guard activates; make test must stay green.
+  - Concern 4 → for the reviewer/fix round: the Admin console and UI sections still say seven admin pages and do not list /admin/lab (made false by T10).
+- Task 8: reviewer dispatched (opus), package review-2ce9d4b..777fc42.diff (181 KB) split per commit review-t08-<sha>.diff.
+- Task 8: reviewer agent aa973cd112174ae01 (opus).
+- Task 11: re-review of fix round 2 (opus) — R1 (the payload query matches what escalate writes; a neighbour escalated before arrival not counted), m1–m6 and F0 ADDRESSED; ⚠️ open only as documentation (make test-db's warning lines given by reference). Saved verbatim as task-11-rereview-2.md.
+  - Ruling: the ⚠️ is adjudicated, not looped — the one warning in make test-db is starlette's BlockingPortal (pasted for make test; confirmed by this coder in rounds 1–2 and by T07's re-review on the same suites); not load-bearing.
+  - Task 11: minor (deferred → final wave): the generated report's CAVEAT and its "Correlation (both arms)" line must carry the estimate wording (over-counts: caps not replayed; under-counts: undated decisions) — this text reaches the thesis.
+  - Task 11: minor (deferred → final wave): evaluation_error shown in the Markdown too (same numbers as the JSON); an error row whose newest lookup failed still counted under failed_lookups.by_kind.
+  - Task 11: minor (deferred → final wave): per-row JSON writes leaks []/false/0 when the leak pass did not run — write null.
+  - Task 11: nit (deferred → final wave): "the run stopped before the leak pass" → "during"; the m3 guard regex misses a wrapped import.
+- Task 11: complete (commits c7b9051..4538b33, review clean after fix rounds 1 and 2; one documentation ⚠️ adjudicated)
+- Director at T11 merge 34e76bf: mutation check (summarise's precision numerator counts every model TP → the pure statistics test red); make test at the merge tip: 5649 passed, 20 skipped, 4264 deselected, 2 xfailed, 1 warning in 29.45s.
+- Task 8: review round 1 (opus) — Spec ✅; quality **Needs fixes**. Every command, service, option, exit code and the secret handling checked against the code, compose files and the trial's real .env (values never printed). Saved verbatim as task-8-review.md.
+  - I1 (Important): step 6 restores an unnamed dump; on the trial the only soc-* dump is the pre-wipe backup, which undoes the wipe (022 then refuses).
+  - I2 (Important): step 3's hard-stop expected output is wrong on the re-wipe branch (P14's schema.sql records 24 → "0 applied, 24 already present").
+  - Ruling: fix round 1 = F0 merge director 3473669 (T11 in; the lab_measure cross-check guard activates); I1 a post-migrate backup step + the named dump + "never restore soc-trial-pre-lab-* or latest.dump"; I2 accept 4/20 or 0/24, gate on 24; M1 drain only rag_lookup/knowledge_embed, vectordb first on re-enable; M2 the three stale sentences (:41 admin pages, :131 job types, :245 RAG_MODEL); M3 switches already on, calibrate's preconditions; M4 exit 0 on an empty index proves no key; M5 printf leading \n, two pastes, bash; M6 the secret guard refuses env/printenv/export -p/declare -p/docker inspect/exec env/sed-awk-cat-grep of .env; M7 measuring nits; M8 bold; ⚠️ n8n uses the trial's webhook credential; ⚠️ the ui LAN bind check before up -d --build ui.
+  - → deploy block (Director): from the moment the trial checkout moves to P14, restart nothing until step 1 writes VECTOR_DB_PASSWORD (every docker compose command fails before that, since COMPOSE_FILE includes docker-compose.rag.yml with a required password).
+- Task 8: fix round 1/5 dispatched — resumed coder a6689abf11f879e78. FIX_BASE 777fc42.
+- Task 8: fix round 1 coder DONE — tip 4d01439 (merge a0f5d81 of 3473669, clean; 634065f M2/M8; fd1ce85 the rest; report 4d01439). make lint green; make test 5686; guards red first (19 failed); 18 mutations red; the lab_measure cross-check guard runs (its skipif removed). Steps renumbered 1–9 (new step 4: backup after migrate). A trial merge onto director 222e25b is clean.
+  - Concern → final wave: .env.example and context pack §6.3 still call RAG_MODEL "the model of the ranking and drafting calls" (generated from config.py's description).
+  - Concern → deploy block: step 4's backup.sh rewrites the trial checkout's tracked latest.dump (git status shows it modified; not to be committed).
+- Task 8: re-review of fix round 1 dispatched (agent ab11269a91dff1a46, opus), packages review-a0f5d81..4d01439.diff + review-t08-merge-a0f5d81.remerge.diff.
+- Owner 04/11: reviews on Opus 5.5; never Fable 5.1 / Mythos 5.1 for any task. Ruling: the whole-branch review runs on model opus (verified alias → claude-opus-5-5), overriding the skill's "most capable model".
+- Task 8: re-review of fix round 1 (opus) — all 13 items ADDRESSED (the count gate rejects both old dumps: latest 17, pre-lab 20); NEW Important: step 7's gate shares one paste with the restore, so pasting the block restores the wrong dump anyway. Minors: the pre-lab dump falls to backup.sh's 14-file retention; step 5/9 check-and-act in one paste; "live's key gives 401" probably false (make_env copies the key); thresholds wording; :381 rollback reference; a stale test comment; secret-guard gaps. Saved verbatim as task-8-rereview-1.md.
+- Task 8: fix round 2/5 dispatched — resumed coder a6689abf11f879e78. FIX_BASE 4d01439: NB1 + the same rule on steps 5 and 9 (no check-and-act in one paste, guarded); NB2 copy the pre-lab dump out of backups/ now; NB4–NB8; DEC-210's restore block points the trial to step 7.
+  - → final wave: .env.example:89 RAG_MODEL wording.
+- Whole-branch review dispatched 04/11 (agent a9e43dd4e4af25bb7, model opus = claude-opus-5-5 per the Owner's rule; never Fable/Mythos). Range 1e2c4f5..222e25b (T01–T07, T09–T11 merged); T08's runbook read from its branch (its docs-only round 2 runs in parallel). Inputs: spec, plan, DEC-213, rulings.txt, deferred-for-final.txt, every task review. Ruling: started before T08 merges — why: T08 is docs-only and already task-reviewed twice; the final review covers code integration first — cost if wrong: a few runbook findings already fixed by T08's round 2.
+- Task 8: fix round 2 coder DONE — tip 9cd5179 (merge 6df2537 of 222e25b, STATE only; fixes fad405b; report 9cd5179). make lint green; make test 5691; guard files 41 passed; red first 10 failed; 14 mutations red. Every check is its own paste before its act (steps 1, 5, 7, 9), one parametrized guard; the pre-lab dump copied to ~/soc-trial-keep/ before backup.sh; n8n: the port tells the stacks apart (make_env copies the key; the trial allowlist checked). A trial merge onto director 222e25b is clean.
+  - Concerns → for the re-review: a 96 MB copy in the Owner's home; "only when" headers are text only; the allowlist as generated.
+- Task 8: re-review of fix round 2 dispatched (agent a62cf94112326ad68, opus — the Owner's rule now covers every review seat, scoped re-reviews included).
+- Task 8: re-review of fix round 2 (opus) — NB1 (all four gates split, one guard), NB2, NB4–NB8 and the DEC-210 note ADDRESSED; no new Critical/Important. Out of scope, Important-class: the Measuring block runs the estimates and both --yes runs in one paste (spend before the estimate can be read; capped by the monthly cap). Minors m1–m5. Saved verbatim as task-8-rereview-2.md.
+  - Ruling: fix the Measuring paste now (three pastes, in GATES) with m1–m5 in round 3 — why: the same class as NB1, and the Owner pastes whole blocks; spending before the estimate is read breaks the approval gate's purpose — cost if wrong: one more docs round.
+- Task 8: fix round 3/5 dispatched — resumed coder a6689abf11f879e78. FIX_BASE 9cd5179.
+- Task 8: fix round 3 coder DONE — tip 6141ccf (fix 73942c5 + report). make lint green; make test 5694; guard files 44 passed; red first 6 failed (incl. GATES[Measuring]); 11 mutations red. Measuring = three pastes with "only when" headers; GATES covers steps 1, 5, 7, 9 and Measuring (steps 2, 3, 4, 6, 8 act then check their own result); step 4's copy && backup pinned, ls -t its own paste; step 7 recovery from the count; :149 agrees with :140; the allowlist check by grep -c. A trial merge onto director 222e25b is clean.
+- Task 8: re-review of fix round 3 dispatched (agent af790996af4c6f190, opus).
+- Whole-branch review (opus, seven passes; ran 020→024 on scratch PG, 022's refusal, pgvector variants 296 passed) — Ready to deploy: **with fixes**. Saved verbatim as final-review.md.
+  - C1 (Critical for the measurement): ①'s burst count (BURST_COUNT_SQL, no upper bound, DEDUP off on the trial) and the correlation rows/samples (±2 h alert_time, no received_at bound), and ②'s block 5, show alerts received AFTER the subject's first look — both arms get the same hindsight, so the absolute accuracy is not production-faithful; nothing discloses it.
+  - Ruling: fix C1 (not disclosure only) — ① gets `as_of` like ②: the alert's first ① proposer run created_at, else received_at + RAG_TRIAGE_DELAY_S; with it, received_at < as_of on the burst count and both correlation queries, and on ②'s block 5; byte-identical with as_of=None — why: the Owner's targets are absolute numbers; ② already has the same design — cost if wrong: one keyword and three bounded queries.
+  - Ruling: the single fix wave = C1 + deferred 26, 27, 33, 41–43, 46, 50 (with C1's wording), 51, 52, 53 + M1–M4 + item 28 (store the failed/rate_limit row on a late 429 if cheap, else document) + the 3-name _SECRET_FIELDS hardening + Rec 2 (a paired line over subjects whose RAG-on prompt carried ≥ 1 match) + the runbook: step 5 `up -d --force-recreate app worker` (M3), a Voyage usage check after the first lookups (Rec 3), the first-look wording after C1, .env.example's RAG_MODEL wording. Every other deferred minor: leave, as the review classified.
+  - Declined-to-judge lines: all accepted as stated (spec scope or Owner decisions); the by-rule breakdown is offered to the Owner, not built.
+- Task 8: re-review of fix round 3 (opus) — OOS1 (Measuring in three pastes, in GATES; all 17 bash blocks checked: none acts before its check) and m1–m5 ADDRESSED; no new Critical/Important. Saved verbatim as task-8-rereview-3.md.
+  - Task 8: minor (→ final wave): step 4's failed-copy recovery belongs in :327 with an else branch; the GATES comment's "nothing to wait for" is wrong for step 4; the monthly cap is per tool run, not cumulative (the tool writes no llm_runs) — say "their sum, plus this month's earlier lab runs" at :425/:456.
+- Task 8: complete (commits 2ce9d4b..6141ccf, review clean after fix rounds 1–3)
+- Director at T08 merge ad8e5c9: mutation check (step 1's password printf → echo → 3 red guards); make test 5694 passed / 20 skipped / 2 xfailed, one pre-existing starlette warning (the lab_measure cross-check guard now runs). All 11 cards merged.
+- Final fix wave dispatched 04/11 — BASE c7d7f62 (all 11 cards merged); coder agent a16b9bc7a05874ea6 (coder-sonnet55, fresh), brief final-wave-brief.md (items A1–E26: C1 ①'s as_of + ②'s block-5 bound; the report items 50–53, Rec 2's matched-only paired line, M2, M3, item 28; docstrings 26/27/33/46/M1/M4; _SECRET_FIELDS; RAG_MODEL's description; the lab page 41–43; the runbook M3 force-recreate, Rec 3 usage check, T08's last minors). One scoped re-review (opus) follows, then residuals adjudicated.
+- Final wave coder DONE — tip 7fed7ef (code tip 3e7808c; Sonnet 5.5 xhigh verified), ff from c7d7f62: f5de640 C1 1–2; d35b1b8 C1 3–5 + B 6–11; fcef0d2 docs + item 12 documented + 13; 7c5a8be C 13–20; 35ea88e D 21–23; 3e7808c E 24–26. make lint; make test 5726; test-db 4287 + the 2 libxml (pgvector on); ui-test 3743; ui-build; ui-e2e 14. A trial merge onto director c7d7f62 is clean.
+  - Deviation → accepted: UNKNOWN_FAILURE_KIND defined once in infra/errors.py (infra may import nothing), rag.lookup re-exports it.
+  - Item 12 → documented, not coded (the late retry cannot tell it is a retry; "late writes nothing" is pinned design).
+  - Item 20 → gen_env_example.py holds the comment itself; edited there + context pack §6.3 + config.py comment; --check green.
+  - Pins moved (expected by C1/M4/E24): test_lab_measure's seed gains first ① runs and the tier-1 correlation count expects {t2}; test_runbook_voyage needles; test_health "unknown" → "provider_error".
+  - Concerns: ①'s first look = llm_runs.created_at (transaction now(), slightly early — conservative); with DEDUP on the occurrence counts are not bounded (documented; trial runs DEDUP off); pgvector 0.8.0 not run.
+- Final wave: the one scoped re-review dispatched (opus), package review-c7d7f62..7fed7ef.diff (271 KB) split per commit review-wave-<sha>.diff.
+- Final wave re-review (opus) — all 26 items ADDRESSED; no new Critical/Important (seven bound mutations red; the None path byte-identical; the {t2} pin traced to the seed; JSON and Markdown agree). Saved verbatim as wave-rereview.md.
+  - Residuals adjudicated (no further wave, per the skill): (1) NO_LOOKUP_NOTE's ①-only wording also printed under ②'s table — wording only, no number; (2) RAG_TRIAGE_DELAY_S=0 makes the fallback as_of == received_at (latent; the trial uses 45); (3) the CAVEAT and runbook Measuring omit the DEDUP_ENABLED=true exception (the trial runs DEDUP off); OOS: transaction-start created_at timing; kb/ read at measurement time.
+  - Ruling: all five parked — none blocks the deploy or changes a number on the trial's settings; (1) is to be fixed by a one-line follow-up before the report's text is quoted in the thesis (offered to the Owner) — cost if wrong: one wording line in a generated report.
+- Director's final verification at 58bd2bf (the merge of the wave; its tree == the wave tip): make lint green (336 files); make test 5726 passed / 20 skipped / 2 xfailed; make ui-lint clean (0 vulnerabilities); make ui-test 73 files / 3743 passed; make ui-build OK; make test-db 4200 passed with 2 failed = the known libxml pair, plus 86 errors + 1 failure that were only my missing pgvector test database — rerun of the four RAG DB modules with it: 296 passed, 0 skipped, 0 failed. ui-e2e: the wave coder's 14 passed on the identical tree.
