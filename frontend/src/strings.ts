@@ -743,7 +743,7 @@ export const S = {
           `Lấy từ lần kiểm tra mới nhất (system_health), ${time}. Check lỗi đứng đầu danh sách.`,
         ok: "Ổn",
         failing: "Lỗi",
-        // The thirteen checks of `infra/health.py` (the last three are DEC-210's), in the canvas's words; a name
+        // The fourteen checks of `infra/health.py` (the last four are DEC-210's and P14-T06's), in the canvas's words; a name
         // with no label is shown as it is.
         check: {
           // True in both modes on purpose (INT-T02): with the pull on (the default) the check reads the last
@@ -762,6 +762,7 @@ export const S = {
           knowledge_queue: "Hàng đợi tri thức chờ duyệt",
           knowledge_integrity: "Tệp tri thức khớp bản gốc",
           rag_budget: "Hạn mức chi phí RAG",
+          rag_lookup_failures: "Tra cứu RAG thất bại liên tục",
         },
       },
 
