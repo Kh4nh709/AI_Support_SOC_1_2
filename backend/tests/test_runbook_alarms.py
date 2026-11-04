@@ -232,6 +232,32 @@ def test_alarm_table_matches_health_py_both_directions():
     ), f"## Alarms names a check that does not exist in infra/health.py: {sorted(extra_in_doc)}"
 
 
+def _alarm_row(check: str) -> list[str]:
+    rows = [r for r in _table_rows(_section(_text(), "Alarms")) if r[0] == f"`{check}`"]
+    assert len(rows) == 1, f"expected one ## Alarms row for {check}, found {len(rows)}"
+    return rows[0]
+
+
+def test_digest_unreviewed_row_says_it_stays_green_while_auto_close_is_off_and_the_page_is_gone():
+    """P15-T01 (DEC-214): the digest page left the UI. With `AUTOCLOSE_ENABLED=false` (DEC-207) no alert is
+    auto-closed, so the check stays green; the row no longer sends anyone to a page."""
+    _, _, meaning, first_look, what_to_do = _alarm_row("digest_unreviewed")
+    assert "`AUTOCLOSE_ENABLED=false`" in meaning and "no alert is auto-closed" in meaning
+    assert "stays green" in meaning
+    assert "/admin/digest" not in first_look and first_look.startswith("`psql ")
+    assert "/admin/digest" not in what_to_do and "DEC-214" in what_to_do
+    assert "review page is gone" in what_to_do
+
+
+def test_the_alarms_paragraph_does_not_say_the_rules_page_is_merged():
+    """P15-T01 (DEC-214): it said "the rules page (`http://<host>:8080/admin/rules`) is merged; the first rule is
+    the Owner's action"; that page is gone, and so is the way to make the first rule."""
+    section = _section(_text(), "Alarms")
+    assert "is merged; the first rule" not in section
+    assert "/admin/rules" not in section
+    assert "DEC-214" in section.split("`digest_unreviewed` reads `ok` all day", 1)[1].split("\n\n", 1)[0]
+
+
 def test_restore_drill_heading_appears_once():
     # Same reasoning as test_alarms_heading_appears_once: the preamble now
     # cross-references `` `## Restore drill (P8)` `` in prose too.

@@ -758,7 +758,8 @@ the Measured paragraph of item (ix) in section B.
      (privileged 15) and IoC (`malicious` 25, `suspicious` 10) addends are scored, capped at +25 as before.
      The occurrence addend is 0 for every alert of this stream, because the pipeline passes a count of 1.
   3. With `AUTOCLOSE_ENABLED=false` no alert is auto-closed by this system, so the auto-close digest has no
-     row to review (the rules page and the `autoclose_rules` table stay), and the G8′ hard blocks, which
+     row to review (the `autoclose_rules` table and the backend stay; the rules page and the digest page are gone
+     from the UI, DEC-214), and the G8′ hard blocks, which
      go with the rules, are not evaluated: the decision to close is the stream's.
   4. **The occurrence count of an alert SOAR enriched is unknown** (DEC-208 item 4). SOAR posts one
      representative per case (one payload per `dedup_key` per hour), so this system cannot count the alerts

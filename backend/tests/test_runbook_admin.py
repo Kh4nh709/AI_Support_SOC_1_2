@@ -57,6 +57,33 @@ def test_the_admin_console_is_on_port_8080_under_admin() -> None:
     assert "renders no page" in section
 
 
+def test_the_console_section_lists_the_pages_that_stay_and_says_two_went() -> None:
+    """P15-T01 (DEC-214): the rules page and the digest page left the UI; the section counts and names the rest."""
+    section = _section(CONSOLE)
+    found = re.search(r"has (\w+) pages: (.*?)\. Each calls", section, re.DOTALL)
+    assert found, "the console section no longer says how many pages the admin has"
+    count, pages = found.groups()
+    assert count == "six"
+    assert re.findall(r"`/admin/([a-z]+)`", pages) == [
+        "overview",
+        "users",
+        "llm",
+        "labels",
+        "knowledge",
+        "audit",
+    ]
+    assert "DEC-214" in pages
+
+
+def test_no_sentence_sends_the_operator_to_a_page_the_ui_no_longer_has() -> None:
+    """P15-T01 (DEC-214): `/admin/rules` and `/admin/digest` are named only in the sentences about the Jinja pages
+    that port 8000 stopped serving (P11-T19); no row, no alarm and no step sends anyone to them."""
+    for number, line in enumerate(_text().splitlines(), start=1):
+        for page in ("/admin/rules", "/admin/digest"):
+            if page in line:
+                assert "8000" in line, f"line {number} sends the operator to {page}, a page the UI no longer has"
+
+
 def test_the_two_owner_steps_are_one_procedure_in_dec_205s_order() -> None:
     block = _section(BLOCK)
     in_order = [

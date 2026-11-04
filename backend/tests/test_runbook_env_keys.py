@@ -112,6 +112,16 @@ def test_a_soar_switch_row_says_true_false_dec_207_and_where_the_how_to_is(key):
     assert "**SOAR intake (DEC-207)**" in what
 
 
+def test_the_autoclose_switch_row_warns_that_the_pages_to_review_its_rules_are_gone():
+    """P15-T01 (DEC-214): with `true`, an alert is closed by a rule; the UI has no page that shows the rules or
+    reviews the digest any more, so the row says it is not switched on again before the pages come back."""
+    what = _rows()["AUTOCLOSE_ENABLED"]
+    assert "DEC-214" in what
+    assert "no rules page and no digest page" in what
+    assert "no page shows" in what and "nobody can review" in what
+    assert "unless the two pages come back first" in what
+
+
 @pytest.mark.parametrize("key", _SOAR_KEYS)
 def test_a_soar_switch_is_a_pack_key_and_an_env_example_key_with_a_true_default(key):
     assert key in gen_env_example.keys_from_pack()
