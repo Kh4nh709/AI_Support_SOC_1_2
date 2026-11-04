@@ -84,6 +84,12 @@ test("Tier 1 escalates, Tier 2 analyses, notes and concludes, and a second concl
   await expect(
     page.getByText(S.ai2.suggestedConclusion.false_positive, { exact: true }),
   ).toBeVisible();
+  // P14-T03 (DEC-213): the page says what the AI concluded; one quote verified, so the system held nothing back.
+  const conclusion = page.getByText(S.ai2.conclusion, { exact: false });
+  await expect(conclusion).toContainText(
+    `${S.ai2.conclusion}: ${S.ai2.suggestedConclusion.false_positive}`,
+  );
+  await expect(conclusion).not.toContainText("giữ lại");
 
   // ---- A note.
   const note = `Checked with the owner of ${head.agent}: routine.`;

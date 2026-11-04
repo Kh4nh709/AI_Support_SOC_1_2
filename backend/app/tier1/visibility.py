@@ -7,7 +7,7 @@ parameter here. `strip` rebuilds the dict it is given and never mutates it.
 
 | mode       | when                                                  | drops                                                   | why |
 |------------|-------------------------------------------------------|---------------------------------------------------------|-----|
-| `analyst`  | `suggestion_visible` is false **and** `status` is not in `SHOW_STATES` | `ANALYST_HIDE` at the **top level** only | the blind arm: the analyst may know they are on it (`suggestion_visible` stays) but not what the model said; `triage_status` goes too because "ready"/"unavailable" leaks whether ① produced a verdict, and so does the queue row's top-level `run_id` — a blind row must not even say "① ran" (DEC-101). `triaged_count` and `needs_retriage` go for the same reason (R17): ① is the only first-time writer of `triaged_count`, so a count that ticks or a ⟳ that lights up says "① just ran" — and the queue's sort key ignores `needs_retriage` for such a head, or the row's move to the top would say it. `llm_stopped_by` (INT-T02, the alert view's reason ① gave up) goes with them: "gave up because the provider refused" says ① ran. Nested `correlation` rows keep their `status` — that is *other* clusters' history, which an analyst may see. |
+| `analyst`  | `suggestion_visible` is false **and** `status` is not in `SHOW_STATES` | `ANALYST_HIDE` at the **top level** only | the blind arm: the analyst may know they are on it (`suggestion_visible` stays) but not what the model said; `triage_status` goes too because "ready"/"unavailable" leaks whether ① produced a verdict, and so does the queue row's top-level `run_id` — a blind row must not even say "① ran" (DEC-101). `triaged_count` and `needs_retriage` go for the same reason (R17): ① is the only first-time writer of `triaged_count`, so a count that ticks or a ⟳ that lights up says "① just ran" — and the queue's sort key ignores `needs_retriage` for such a head, or the row's move to the top would say it. `llm_stopped_by` (INT-T02, the alert view's reason ① gave up) goes with them: "gave up because the provider refused" says ① ran. `proposed_action` and `held_by` (P14-T03, DEC-213: the model's own answer and the reasons the gate held it) go with them: they are ①'s verdict by another name. Nested `correlation` rows keep their `status` — that is *other* clusters' history, which an analyst may see. |
 | `analyst`  | otherwise (visible arm, or already decided)           | nothing — an equal copy                                 | once decided, the ① verdict is evaluation material (P8's agreement metric); `auto_closed` is in `SHOW_STATES` because D8's digest (P5) reviews auto-closed clusters *against* ①. A reopened alert (A17 → `queued_tier1`) is blind again. |
 | `labeling` | **always**, whatever the two flags say                | `LABELING_DENYLIST` and every key starting with one of `LABELING_PREFIXES`, **recursively** through nested dicts and lists | `source` — DEC-019: `replay` vs `wazuh` lets a labeller infer the storm day; `status` — a pilot decision (a correlated cluster's `closed_fp` too) is human context the labeller must reach on their own; the rest is LLM-derived (`suggestion`, `gate*`, `verifier*`, `llm_*`, `run_id`; `triaged_count`/`needs_retriage` say how often ① ran — DEC-101) or enrichment (`risk_*`, `*_context`, `lookup_status`, and the SIEM's SOAR blob `soar` — its triage score and signal text, planned action and scenario say what the SIEM thinks of the alert, S3) the labeller must not be primed with. `soar` is **not** in `ANALYST_HIDE`: it says nothing about ①, so a blind undecided analyst view keeps it. |
 """
@@ -36,6 +36,11 @@ SHOW_STATES: frozenset[str] = frozenset(
 #: of the newest proposer run), is on the list for the reason `triage_status` is: "① gave up, because
 #: the provider refused" says that ① ran. It also starts with `llm_`, so the labelling page drops it
 #: by `LABELING_PREFIXES` even without this entry.
+#: P14-T03 (DEC-213): `proposed_action`, the answer the model itself gave (``gate_result.proposed_verdict``),
+#: and `held_by`, the closed reasons the system held it back (``llm.verdicts.held_reasons``), are on the list
+#: because they ARE ①'s verdict: "AI kết luận: TP, held because ..." says what ① concluded even when
+#: `suggested_action` is gone. Neither starts with `llm_`, so unlike `llm_stopped_by` the labelling page drops
+#: them by this entry alone (`LABELING_DENYLIST` includes the set).
 ANALYST_HIDE: frozenset[str] = frozenset(
     {
         "suggestion",
@@ -47,6 +52,8 @@ ANALYST_HIDE: frozenset[str] = frozenset(
         "triaged_count",
         "needs_retriage",
         "llm_stopped_by",
+        "proposed_action",
+        "held_by",
     }
 )
 

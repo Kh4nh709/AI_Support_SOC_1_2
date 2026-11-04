@@ -792,6 +792,180 @@ describe("done", () => {
     expect(screen.queryByText(/đã bị hạ xuống/)).not.toBeInTheDocument();
   });
 
+  // P14-T03 (DEC-213): ② always concludes; the page says what the AI concluded and, when the system held
+  // it as need_more_data, why. A run from before P14-T02 has no `model_conclusion` and keeps the old text.
+  describe("AI kết luận", () => {
+    const concluded = (over: Record<string, unknown> = {}) =>
+      done(
+        run({
+          conclusion: "false_positive",
+          conclusion_label: "Không phải sự cố",
+          model_conclusion: "false_positive",
+          held_by: [],
+          ...over,
+        }),
+      );
+    const heldRun = (heldBy: string[], over: Record<string, unknown> = {}) =>
+      concluded({
+        conclusion: "need_more_data",
+        conclusion_label: "Cần thêm dữ liệu",
+        model_conclusion: "false_positive",
+        held_by: heldBy,
+        ...over,
+      });
+    const line = () => screen.findByText(/AI kết luận/);
+
+    it("says the AI's conclusion in ②'s existing label when the system held nothing back", async () => {
+      serveViews(
+        concluded({
+          model_conclusion: "confirmed_incident",
+          conclusion: "confirmed_incident",
+          conclusion_label: "Là sự cố thật",
+        }),
+      );
+      renderColumn();
+      expect(await line()).toHaveTextContent(/^AI kết luận: Là sự cố thật/);
+      expect((await line()).textContent).not.toContain("giữ lại");
+    });
+
+    it("labels each of the three conclusions the model may give", async () => {
+      serveViews(
+        concluded({ model_conclusion: "policy_violation", conclusion: "policy_violation" }),
+      );
+      renderColumn();
+      expect(await line()).toHaveTextContent(
+        "AI kết luận: Có vi phạm nội quy, không phải tấn công",
+      );
+    });
+
+    it("says the system held the conclusion because no evidence verified", async () => {
+      serveViews(heldRun(["no_verified_evidence"]));
+      renderColumn();
+      expect(await line()).toHaveTextContent(
+        "AI kết luận: Không phải sự cố — hệ thống giữ lại vì: không có bằng chứng kiểm chứng được",
+      );
+    });
+
+    it("says the system held it because of a high-severity injection finding", async () => {
+      serveViews(heldRun(["high_severity_injection_finding"]));
+      renderColumn();
+      expect(await line()).toHaveTextContent(
+        "AI kết luận: Không phải sự cố — hệ thống giữ lại vì: phát hiện dấu hiệu chèn lệnh mức cao",
+      );
+    });
+
+    it("joins both causes with a comma", async () => {
+      serveViews(heldRun(["no_verified_evidence", "high_severity_injection_finding"]));
+      renderColumn();
+      expect(await line()).toHaveTextContent(
+        "vì: không có bằng chứng kiểm chứng được, phát hiện dấu hiệu chèn lệnh mức cao",
+      );
+    });
+
+    it("shows a cause it has no label for as the code, as text", async () => {
+      const markup = "<b>x</b>";
+      serveViews(heldRun(["new_cause", markup]));
+      const { container } = renderColumn();
+      expect(await line()).toHaveTextContent(`vì: new_cause, ${markup}`);
+      expect(container.querySelector("b")).toBeNull();
+    });
+
+    it("keeps the confidence line, and does not repeat the server's overrule sentence", async () => {
+      const sentence =
+        "Mô hình đề xuất Không phải sự cố nhưng kết luận đã bị hạ xuống Cần thêm dữ liệu.";
+      serveViews(heldRun(["no_verified_evidence"], { overruled: sentence }));
+      renderColumn();
+      await line();
+      expect(screen.getByText(`${S.ai2.confidence}: trung bình`)).toBeInTheDocument();
+      expect(screen.queryByText(sentence)).not.toBeInTheDocument();
+    });
+
+    // Fix round 1 (M5): the stored conclusion is the system's word. `need_more_data` beside one of the three
+    // definite conclusions of the model means the system held it, whatever `held_by` managed to name.
+    it("holds a conclusion stored as need_more_data even when held_by names no cause, and keeps the overruled sentence", async () => {
+      const sentence =
+        "Mô hình đề xuất Không phải sự cố (false_positive) nhưng kết luận đã bị hạ xuống Cần thêm dữ liệu (need_more_data).";
+      serveViews(heldRun([], { overruled: sentence }));
+      renderColumn();
+      const text = await line();
+      expect(text).toHaveTextContent(/^AI kết luận: Không phải sự cố — hệ thống giữ lại$/);
+      expect(text.textContent).not.toContain("vì:");
+      // with no cause to name, the server's sentence is the only account of the override: it stays
+      expect(screen.getByText(sentence)).toBeInTheDocument();
+    });
+
+    it.each(["false_positive", "policy_violation", "confirmed_incident"])(
+      "holds a need_more_data stored over the model's %s, with no cause",
+      async (modelConclusion) => {
+        serveViews(heldRun([], { model_conclusion: modelConclusion }));
+        renderColumn();
+        expect(await line()).toHaveTextContent(/ — hệ thống giữ lại$/);
+      },
+    );
+
+    it("does not hold a conclusion that is the model's own, whatever held_by says it has not named", async () => {
+      serveViews(concluded({ held_by: [] }));
+      renderColumn();
+      expect((await line()).textContent).not.toContain("giữ lại");
+    });
+
+    it("does not call a stored need_more_data held when the model's conclusion is not one of the three", async () => {
+      // `model_conclusion` is closed on the server; a value outside it is nothing the model may have said
+      serveViews(heldRun([], { model_conclusion: "need_more_data" }));
+      renderColumn();
+      expect((await line()).textContent).not.toContain("giữ lại");
+    });
+
+    it("keeps the overruled sentence hidden when the causes are named (it would repeat them)", async () => {
+      const sentence = "Mô hình đề xuất Không phải sự cố nhưng kết luận đã bị hạ xuống.";
+      serveViews(heldRun(["no_verified_evidence"], { overruled: sentence }));
+      renderColumn();
+      await line();
+      expect(screen.queryByText(sentence)).not.toBeInTheDocument();
+    });
+
+    it("keeps the existing overruled sentence for an old run that has no model_conclusion", async () => {
+      const sentence =
+        "Mô hình đề xuất Không phải sự cố (false_positive) nhưng kết luận đã bị hạ xuống Cần thêm dữ liệu (need_more_data): không có bằng chứng nào kiểm chứng được với log của case.";
+      serveViews(
+        done(
+          run({
+            conclusion: "need_more_data",
+            conclusion_label: "Cần thêm dữ liệu",
+            model_conclusion: null,
+            held_by: [],
+            overruled: sentence,
+          }),
+        ),
+      );
+      renderColumn();
+      expect(await screen.findByText(sentence)).toBeInTheDocument();
+      expect(screen.getByText("Cần thêm dữ liệu")).toBeInTheDocument();
+      expect(screen.queryByText(/AI kết luận/)).not.toBeInTheDocument();
+    });
+
+    it("shows an old run with neither key as it always was", async () => {
+      serveViews(done(run()));
+      renderColumn();
+      expect(await screen.findByText("Không phải sự cố")).toBeInTheDocument();
+      expect(screen.queryByText(/AI kết luận/)).not.toBeInTheDocument();
+    });
+
+    it("says it under the last result of a failed run too", async () => {
+      const earlier = run({
+        conclusion: "need_more_data",
+        conclusion_label: "Cần thêm dữ liệu",
+        model_conclusion: "false_positive",
+        held_by: ["no_verified_evidence"],
+      });
+      serveViews(view({ state: "failed", run: earlier }));
+      renderColumn();
+      expect(await line()).toHaveTextContent(
+        "hệ thống giữ lại vì: không có bằng chứng kiểm chứng được",
+      );
+    });
+  });
+
   it("says the case has changed since the run, beside the numbers then and now", async () => {
     serveViews(
       done(run({ changed: true }), {
@@ -888,6 +1062,22 @@ describe("accessibility", () => {
     );
     const { container } = renderColumn();
     await screen.findByRole("list", { name: S.ai2.evidence });
+    expect(await scan(container)).toEqual([]);
+  });
+
+  it("has no axe violation with the AI's conclusion held by the system (P14-T03)", async () => {
+    serveViews(
+      done(
+        run({
+          conclusion: "need_more_data",
+          conclusion_label: "Cần thêm dữ liệu",
+          model_conclusion: "false_positive",
+          held_by: ["no_verified_evidence", "high_severity_injection_finding"],
+        }),
+      ),
+    );
+    const { container } = renderColumn();
+    await screen.findByText(/AI kết luận/);
     expect(await scan(container)).toEqual([]);
   });
 

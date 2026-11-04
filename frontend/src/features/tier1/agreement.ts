@@ -1,12 +1,14 @@
 // Whether ① and the person who decided agree, worded the way the pilot report counts it (P10-T06,
 // eval/ops_export.py: `Q_PILOT_AGREEMENT` over `_PILOT_VERDICT`). The console must not say "khớp" for a pair
 // the report calls a disagreement, so the mapping is that file's and is not this file's to improve:
-//   - ① `escalate` agrees with a human escalation (status `escalated_tier2`);
+//   - ① `true_positive` agrees with a human escalation (status `escalated_tier2`); it was `escalate` before
+//     P14-T01 (DEC-213), and the pilot report still counts it under that name;
 //   - ① `false_positive` agrees with a human `false_positive` (status `closed_fp`);
 //   - any other pair of a ① verdict and a human decision disagrees, a human `benign` (status `closed_benign`)
 //     after ① `false_positive` included: ① has no `benign` verdict;
-//   - ① `needs_review`, no ① result, and an action that is none of the three are no verdict (the report
-//     leaves them out of the denominator): nothing is compared.
+//   - ① `needs_review` (the system held the model's answer), no ① result, and an action that is none of the
+//     three are no verdict (the report leaves them out of the denominator): nothing is compared. The old word
+//     `escalate` is one of those: no row of that kind exists (the database was wiped), and nothing reads it.
 // A decision that is not a Tier 1 person's (`auto_closed`, and a `closed_confirmed` with no case, which is
 // Tier 2's conclusion) is not in the report at all, so it has no comparison: `null`. An alert with a case was
 // escalated by Tier 1 whatever its status is now (see `humanDecisionOf`), and is compared as an escalation.
@@ -51,9 +53,9 @@ export function agreementOf(
 ): Agreement | null {
   const human = humanDecisionOf(status, caseId);
   if (human === null) return null;
-  if (action !== "escalate" && action !== "false_positive") return "no_verdict";
+  if (action !== "true_positive" && action !== "false_positive") return "no_verdict";
   const agrees =
-    (action === "escalate" && human === "escalated") ||
+    (action === "true_positive" && human === "escalated") ||
     (action === "false_positive" && human === "false_positive");
   return agrees ? "agree" : "disagree";
 }

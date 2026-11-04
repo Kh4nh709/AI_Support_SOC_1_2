@@ -101,7 +101,7 @@ const recentRows = (): RecentRun[] => [
     input_tokens: 2214,
     output_tokens: 190,
     latency_ms: 2300,
-    outcome: "escalate",
+    outcome: "true_positive",
     cost_usd: 0.0004,
   },
   {
@@ -114,7 +114,7 @@ const recentRows = (): RecentRun[] => [
     input_tokens: 1380,
     output_tokens: 60,
     latency_ms: 1000,
-    outcome: "escalate",
+    outcome: "true_positive",
     cost_usd: 0.0002,
   },
   {
@@ -754,7 +754,7 @@ describe("recent calls", () => {
         "alert ….1662100",
         "2.214 / 190",
         "2,3 s",
-        "Chuyển tier 2",
+        "TP",
         "$0,0004",
       ],
       [
@@ -763,7 +763,7 @@ describe("recent calls", () => {
         "alert ….1662100",
         "1.380 / 60",
         "1,0 s",
-        "kết luận riêng: Chuyển tier 2",
+        "kết luận riêng: TP",
         "$0,0002",
       ],
       [
@@ -816,7 +816,7 @@ describe("recent calls", () => {
     const rows = rowsOf(await table());
     const verifier = rows[1] ?? [];
     expect(verifier[1]).toBe("① triage · verifier");
-    expect(verifier[5]).toBe(L.recent.verifier("Chuyển tier 2"));
+    expect(verifier[5]).toBe(L.recent.verifier("TP"));
     expect(verifier[5]).not.toMatch(/đồng ý|không đồng ý|agree/i);
   });
 

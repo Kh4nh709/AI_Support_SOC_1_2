@@ -607,7 +607,7 @@ export type DigestRow = {
   autoclose_rule_id: string | null;
   autoclose_rule_name: string | null;
   /**
-   * The suggestion of ① (`false_positive`, `needs_review`, `escalate`), or null when it has none, and null on a
+   * The suggestion of ① (`false_positive`, `needs_review`, `true_positive`), or null when it has none, and null on a
    * row a "Sai" review reopened while the alert is blind and not yet decided (DEC-101: a reopened alert is blind
    * again, and the server leaves ① off it, with `disagreement` false).
    */
