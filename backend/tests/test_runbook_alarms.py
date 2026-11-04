@@ -309,9 +309,11 @@ TWO_CIRCLE_REQUIRED_FACTS: list[tuple[str, str]] = [
     ("the evidence check", "checks the cited evidence"),
     ("G7: no status changes", "**It changes no case or alert status (G7)"),
     ("the only writes", "`llm_runs` and `cases.last_analyzed_at`"),
-    # 3. need_more_data
-    ("need_more_data is two things", "`need_more_data`"),
-    ("the model's own answer", "**the model's own answer**"),
+    # 3. need_more_data (P14-T08, DEC-213: the model no longer answers it; only the override sets it)
+    ("need_more_data is the system's hold", "`need_more_data` is **the system's hold**"),
+    ("the model never answers it", "never the model's answer"),
+    ("the schema refuses it", "`investigate_v3`"),
+    ("the model's own conclusion is kept on every run", "`evidence_check.model_conclusion`"),
     ("an overrule", "**overrule**"),
     ("overrule on no verified evidence", "**no cited evidence verified**"),
     ("overrule on a high injection finding", "**high-severity injection finding**"),
@@ -384,6 +386,9 @@ def test_two_circle_operations_states_every_required_fact():
     assert not missing, "## ② operations no longer states: " + "; ".join(
         f"{what} (expected {needle!r})" for what, needle in missing
     )
+    # P14-T08: it used to say "Two different things wear the same label" and "the model's own answer"
+    assert "Two different things wear the same label" not in body
+    assert "**the model's own answer**" not in body
 
 
 CONFIG_PATH = REPO_ROOT / "backend" / "app" / "infra" / "config.py"

@@ -305,33 +305,50 @@ def test_the_check_is_the_test_z_one_for_app_and_worker_and_prints_no_value():
     assert "wc -c" not in section and "printenv" not in section
 
 
-def test_the_section_keeps_only_what_is_true_now():
-    """P14-T04 adds contracts, a container and a network: no Voyage call is made, `vectordb` has no table, and
-    no lookup fails or succeeds because of it yet. The section must not describe a behaviour that is not there.
+def test_the_section_says_what_is_true_now_that_the_voyage_rag_is_built():
+    """P14-T04 wrote the section when the contracts were all there was ("no Voyage call in any code yet",
+    "no worker claims it yet", "an empty pgvector server"). P14-T05/T06 built the rest and P14-T08 wrote the
+    steps: the section must say what exists, with the rebuild and check commands, and not the stub.
     """
     section = " ".join(_voyage_section().split())
-    assert "no Voyage call" in section and "empty pgvector server" in section
-    for future in ("a failed lookup", "is rebuilt", "--rebuild", "vector_index"):
-        assert future not in section, future
+    for stale in (
+        "no Voyage call in any code yet",
+        "There is no Voyage call in any code yet",
+        "no worker claims it yet",
+        "is an empty pgvector server: it has no table",
+    ):
+        assert stale not in section, stale
+    for now in (
+        "which `rag-worker` claims",
+        "calls **no model**",
+        "no fallback to an LLM ranker",
+        "python -m app.rag.vector_index --rebuild",
+        "python -m app.rag.vector_index --check",
+    ):
+        assert now in section, now
 
 
 def test_the_migration_row_of_start_everything_names_the_trial_and_the_p14_migrations():
     """022 (P14-T01, the rename: it refuses while a triage run still says `escalate`), 023 (P14-T04,
-    the Voyage RAG contracts) and 024 (P14-T09, the lab: both on the trial branch only) are in the row, and
-    the trial is where they land.
+    the Voyage RAG contracts) and 024 (P14-T09, the lab: all three on the trial branch only) are in the row.
+    P14-T08: the trial's database stands at 20 after the wipe (spec §11), so it is the `4 applied, 20 already
+    present` entry that names it, and the entry for a dump taken after 021 does not carry the refusal (the
+    list holds the counts of a database with no `escalate`; one that has any stops at 022, above it).
     """
     row = next(
         ln
         for ln in RUNBOOK_PATH.read_text(encoding="utf-8").splitlines()
         if ln.startswith("| start everything |")
     )
+    assert "on a dump taken after 020 or on the trial database as the wipe left it" in row
+    assert "on a dump taken after 021 (it applies `022_true_positive.sql`" in row
     assert (
-        "on a dump taken after 021 or on the trial database today (it applies `022_true_positive.sql`"
-        in row
+        "refuses while a `triage` run still says `escalate`" in row
+        and "`023_vector_rag.sql`" in row
     )
-    assert "refuses, changing nothing" in row and "and `023_vector_rag.sql`" in row
-    assert "on the live database today" not in row
+    assert "on the live database today" not in row and "on the trial database today" not in row
     assert "there is no 022" not in row and "the number belongs to another card" not in row
-    assert "and `024_lab.sql`: the lab runs and labels" in row  # P14-T09: the trial takes all three
+    assert "`024_lab.sql`: the lab runs and labels" in row  # P14-T09: the trial takes all three
+    assert "`migrate: 4 applied, 20 already present`" in row
     assert "`migrate: 3 applied, 21 already present`" in row
     assert "`migrate: 0 applied, 24 already present` after that." in row
