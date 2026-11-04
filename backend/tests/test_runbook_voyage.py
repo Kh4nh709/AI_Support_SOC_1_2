@@ -41,7 +41,7 @@ HEALTH = REPO_ROOT / "backend" / "app" / "infra" / "health.py"
 VECTOR_INDEX = REPO_ROOT / "backend" / "app" / "rag" / "vector_index.py"
 ADMIN_LAB = REPO_ROOT / "backend" / "app" / "web" / "routers" / "admin_lab.py"
 ROUTES = REPO_ROOT / "frontend" / "src" / "routes.tsx"
-# P14-T11: on its own branch until it merges; the cross-check below skips while it is not in the tree.
+# P14-T11 (merged since fix round 1): the cross-check below reads the tool's options and exit codes.
 LAB_MEASURE = REPO_ROOT / "eval" / "lab_measure.py"
 
 TITLE = "Voyage vector RAG (DEC-213)"
@@ -133,6 +133,17 @@ def _fenced(text: str) -> list[str]:
     return lines
 
 
+def _pastes(step: str) -> list[tuple[str, str]]:
+    """The ```bash blocks of a step, each with the prose that comes before it (back to the previous block)."""
+    parts = step.split("```bash")
+    pastes: list[tuple[str, str]] = []
+    for index, part in enumerate(parts[1:], 1):
+        block = part.partition("```")[0]
+        before = parts[0] if index == 1 else parts[index - 1].partition("```")[2]
+        pastes.append((before, block))
+    return pastes
+
+
 def _commands(text: str) -> list[str]:
     """The code lines of `text` that are commands, a trailing `# comment` cut."""
     return [line.split("  #")[0].strip() for line in _code(text) if line.strip()]
@@ -209,6 +220,33 @@ def test_the_database_moves_before_the_containers_run_the_p14_code():
 # --------------------------------------------------------------------------- the keys and the secrets
 
 
+#: Every "check, then act" of the section: (step, the line that checks, the lines that act). A check that shares a
+#: paste with its act cannot be obeyed: the act has run by the time the answer is read (fix round 2, NB1).
+GATES = [
+    (1, "grep -c '^COMPOSE_PROJECT_NAME", ("printf '\\nVECTOR_DB_PASSWORD",)),
+    (5, "ip -4 addr", ("docker compose up -d",)),
+    (7, "pg_restore --data-only", ("docker compose stop rag-worker", "make db-restore")),
+    (9, "psql ", ("docker compose stop vectordb",)),
+]
+
+
+@pytest.mark.parametrize(("number", "gate", "acts"), GATES, ids=[f"step {g[0]}" for g in GATES])
+def test_no_check_then_act_pair_shares_one_paste(number, gate, acts):
+    pastes = _pastes(_steps()[number])
+    checked = [i for i, (_, block) in enumerate(pastes) if gate in block]
+    acting = [
+        i
+        for i, (_, block) in enumerate(pastes)
+        if any(line.strip().startswith(acts) for line in block.splitlines())
+    ]
+    assert checked and acting, (checked, acting)
+    assert max(checked) < min(acting), f"step {number}: the check and the act are in one paste"
+    # the paste that acts is headed by the condition under which to paste it
+    assert (
+        "only when" in pastes[min(acting)][0].lower()
+    ), f"step {number}: its second paste has no 'only when'"
+
+
 def test_the_two_secrets_are_written_with_printf_never_echo():
     code = _code(_steps()[1])
     writes = [ln for ln in code if ">> .env" in ln]
@@ -249,7 +287,12 @@ def test_no_line_prints_a_secret_variable_or_a_dsn():
         ),
         (r"\becho\b[^\n]*\$", "echo of a variable"),
         # whatever lists the environment lists the key and both DSNs (fix round 1, M6)
-        (r"(?<![\w./$-])env(?![\w=./-])", "env"),
+        (r"(?<![\w.$-])env(?![\w=./-])", "env (also /usr/bin/env)"),
+        (
+            r"\b(?:ba|da|z)?sh\s+-c\s+[\"']?\s*(?:set|env|export|declare|printenv)\b",
+            "sh -c set/env",
+        ),
+        (r"\benviron\b", "os.environ"),
         (r"\bexport\s+-p\b", "export -p"),
         (r"\bdeclare\s+-[a-zA-Z]*p\b", "declare -p"),
         (r"\bdocker\s+(?:compose\s+)?inspect\b", "docker inspect"),
@@ -326,7 +369,16 @@ def test_step_4_takes_a_backup_of_the_migrated_trial_and_says_which_dumps_are_ne
     """
     step = _steps()[4]
     commands = _commands(step)
-    assert "bash scripts/backup.sh" in commands
+    assert any(c.endswith("bash scripts/backup.sh") for c in commands)
+    # fix round 2 (NB2): the pre-lab dump is copied out of backups/ NOW, by the same line that makes the backup,
+    # to a place the retention glob `soc-*.dump` does not reach; "before the fifteenth backup" came one too late
+    chain = next(c for c in commands if c.endswith("bash scripts/backup.sh"))
+    assert chain.index("cp -p backups/soc-trial-pre-lab-*.dump") < chain.index(
+        "bash scripts/backup.sh"
+    )
+    destination = chain.split("cp -p backups/soc-trial-pre-lab-*.dump ", 1)[1].split(" ", 1)[0]
+    assert "backups/" not in destination and not destination.endswith(".dump")
+    assert "fifteenth" not in _voyage()
     script = _text(REPO_ROOT / "scripts" / "backup.sh")
     assert 'OUT="backups/soc-$STAMP.dump"' in script and 'KEEP="${BACKUP_KEEP:-14}"' in script
     assert 'mv -f -- "$LATEST_TMP" backups/latest.dump' in script  # it overwrites latest.dump
@@ -344,7 +396,7 @@ def test_step_4_takes_a_backup_of_the_migrated_trial_and_says_which_dumps_are_ne
         "`latest.dump`",
         "are never restored onto the P14 trial",
         "the backup of the wipe",
-        "fifteenth backup",
+        "copy it out of `backups/` now",
         "do not commit it",
         "`DATABASE_URL_OWNER`",
     ):
@@ -372,6 +424,8 @@ def test_step_5_creates_vectordb_and_recreates_rag_worker_and_checks_the_address
         "exits at start",
         "boot race",
         "docker compose up -d --force-recreate ui",
+        "the DHCP lease has moved",
+        "must be changed first",
         "`RAG_ENABLED=true`",
         "`KNOWLEDGE_DRAFT_ENABLED=true`",
     ):
@@ -465,7 +519,7 @@ def test_step_7_rebuilds_the_index_after_a_db_restore_and_names_the_dump():
         "`latest.dump`",
         "are never restored onto the P14 trial",
         "022 would refuse",
-        "go on only when it is `24`",
+        "go on only when it printed `24`",
         "(24 migrations)",
     ):
         assert needle in flat, f"step 7 no longer says {needle!r}"
@@ -611,8 +665,10 @@ def test_the_lab_procedure_says_what_the_owner_does_for_each_run():
         # fix round 1 (M3): the trial has both switches on already
         "already has `RAG_ENABLED=true` and `KNOWLEDGE_DRAFT_ENABLED=true`",
         "nothing in this section switches the lookup on",
-        # fix round 1: the trial's webhook credential, by the name of its key and never its value
-        "n8n must send the trial's webhook credential, not live's",
+        # fix round 2 (NB4): the port tells the stacks apart, not the key (`make_env.py` copies it from live)
+        "What tells the two stacks apart is the port, not the key",
+        "`.trial/make_env.py`",
+        "unless one of the two was rotated",
         "`WEBHOOK_API_KEY`",
         "`X-API-Key`",
         "`WEBHOOK_IP_ALLOWLIST`",
@@ -628,6 +684,11 @@ def test_the_lab_procedure_says_what_the_owner_does_for_each_run():
     assert "status_code=403" in webhook and "WEBHOOK_IP_ALLOWLIST" in webhook
     # the trial's switches are not restated as values: counts only
     assert "grep -c '^RAG_ENABLED=true$' .env" in flat
+    assert (
+        "Live's key gives `401`" not in flat
+    )  # probably false: the trial's key is live's unless rotated
+    # NB6: which rollback the "way back on" is
+    assert "After the Voyage rollback" in flat and "step 9's own order" in flat
 
 
 def test_the_lab_procedure_names_where_the_refusals_are_listed_and_they_are_there():
@@ -819,6 +880,8 @@ def test_the_measuring_subsection_gives_the_caveats_and_what_calibrate_decides()
         "whose alerts arrived with the RAG on and with entries already indexed",
         "exit 3",
         "Choose them before the first `test` run",
+        # fix round 2 (NB5)
+        "after `calibrate`, before the first `test` run",
     ):
         assert needle in flat, f"the measuring subsection no longer says {needle!r}"
     # the recreate that applies the thresholds comes last, and only when no measurement is going on
@@ -826,3 +889,4 @@ def test_the_measuring_subsection_gives_the_caveats_and_what_calibrate_decides()
         "`docker compose up -d --force-recreate app worker rag-worker`"
     ) > flat.index("only when no `lab_measure.py` run is going on")
     assert flat.index("calibrate") < flat.index("only when no `lab_measure.py` run is going on")
+    assert "comes last" not in flat  # it read as "after the measurement"

@@ -75,7 +75,8 @@ def test_the_drain_queries_list_knowledge_embed_and_the_vectordb_one_leaves_the_
     )
     assert DRAIN in rollback and DRAIN_VECTORDB not in rollback
     step = text.split("**9 · Rollback.**", 1)[1].split("#### Lab procedure", 1)[0]
-    assert DRAIN_VECTORDB in step and "knowledge_draft" not in step.split("```")[1]
+    blocks = re.findall(r"```bash\n(.*?)```", step, re.DOTALL)
+    assert DRAIN_VECTORDB in "".join(blocks) and "knowledge_draft" not in "".join(blocks)
     # every other place that names the RAG job types names the third
     for starts in ("| `job_backlog` |", "| **Worker stuck**"):
         assert "`knowledge_embed`" in _row(starts), starts
@@ -200,6 +201,14 @@ def test_the_admin_console_lists_the_nine_pages_the_ui_has():
     assert "has seven pages" not in sentence and "has nine pages" in sentence
     named = re.findall(r"`(/admin/[a-z]+)`", sentence.split("has nine pages", 1)[1])
     assert sorted(named) == sorted(pages), (named, pages)
+
+
+def test_on_the_trial_a_restore_goes_through_the_voyage_step_7_never_through_the_dec_210_block():
+    """Fix round 2: DEC-210's restore block has no dump check; on the trial it would restore anything."""
+    before_commands = _text().split("### After `make db-restore`\n", 1)[1].split("```bash", 1)[0]
+    flat = _flat(before_commands)
+    assert "On the trial a restore goes through step 7 of **Voyage vector RAG (DEC-213)**" in flat
+    assert "never through this block" in flat and "dump check" in flat
 
 
 def test_the_job_loop_row_counts_the_three_job_types_rag_worker_claims():
