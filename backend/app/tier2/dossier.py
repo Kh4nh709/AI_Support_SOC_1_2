@@ -576,11 +576,13 @@ def _fetch_timeline(
     return rows[:TIMELINE_HEAD_LINES] + tail, True, total
 
 
-def _fetch_tier1_events(
-    conn: psycopg.Connection, case_id: str, as_of: datetime | None = None
+def _fetch_tier1_events(conn: psycopg.Connection, case_id: str) -> list[tuple[Any, ...]]:
+    return conn.execute(_TIER1_EVENTS_SQL, (case_id,)).fetchall()
+
+
+def _fetch_tier1_events_before(
+    conn: psycopg.Connection, case_id: str, as_of: datetime
 ) -> list[tuple[Any, ...]]:
-    if as_of is None:
-        return conn.execute(_TIER1_EVENTS_SQL, (case_id,)).fetchall()
     return conn.execute(_TIER1_EVENTS_BEFORE_SQL, (case_id, as_of)).fetchall()
 
 
@@ -602,19 +604,23 @@ def _fetch_trigger_alert_id(conn: psycopg.Connection, case_id: str) -> str | Non
     return row[0] if row and row[0] else None
 
 
-def _fetch_notes(
-    conn: psycopg.Connection, case_id: str, as_of: datetime | None = None
+def _fetch_notes(conn: psycopg.Connection, case_id: str) -> list[tuple[Any, ...]]:
+    return conn.execute(_NOTES_SQL, (case_id,)).fetchall()
+
+
+def _fetch_notes_before(
+    conn: psycopg.Connection, case_id: str, as_of: datetime
 ) -> list[tuple[Any, ...]]:
-    if as_of is None:
-        return conn.execute(_NOTES_SQL, (case_id,)).fetchall()
     return conn.execute(_NOTES_BEFORE_SQL, (case_id, as_of)).fetchall()
 
 
-def _fetch_previous_run(
-    conn: psycopg.Connection, case_id: str, as_of: datetime | None = None
+def _fetch_previous_run(conn: psycopg.Connection, case_id: str) -> tuple[Any, ...] | None:
+    return conn.execute(_PREVIOUS_RUN_SQL, (case_id,)).fetchone()
+
+
+def _fetch_previous_run_before(
+    conn: psycopg.Connection, case_id: str, as_of: datetime
 ) -> tuple[Any, ...] | None:
-    if as_of is None:
-        return conn.execute(_PREVIOUS_RUN_SQL, (case_id,)).fetchone()
     return conn.execute(_PREVIOUS_RUN_BEFORE_SQL, (case_id, as_of)).fetchone()
 
 
@@ -1368,10 +1374,16 @@ def build(
     heads = _fetch_heads(conn, case_id)
     dup_spans = _fetch_duplicate_spans(conn, case_id)
     timeline_rows, timeline_capped, timeline_total = _fetch_timeline(conn, case_id)
-    tier1_rows = _fetch_tier1_events(conn, case_id, as_of)
-    trigger_alert_id = _fetch_trigger_alert_id(conn, case_id)
-    notes = _fetch_notes(conn, case_id, as_of)
-    previous_run = _fetch_previous_run(conn, case_id, as_of)
+    if as_of is None:  # today's reads, with today's arguments
+        tier1_rows = _fetch_tier1_events(conn, case_id)
+        trigger_alert_id = _fetch_trigger_alert_id(conn, case_id)
+        notes = _fetch_notes(conn, case_id)
+        previous_run = _fetch_previous_run(conn, case_id)
+    else:  # P14-T11: the three reads that keep only what was created strictly before `as_of`
+        tier1_rows = _fetch_tier1_events_before(conn, case_id, as_of)
+        trigger_alert_id = _fetch_trigger_alert_id(conn, case_id)
+        notes = _fetch_notes_before(conn, case_id, as_of)
+        previous_run = _fetch_previous_run_before(conn, case_id, as_of)
     categories = sorted({h.category for h in heads})
 
     truncations: list[dict[str, Any]] = []
