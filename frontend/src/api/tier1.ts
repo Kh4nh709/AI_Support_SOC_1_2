@@ -2,6 +2,7 @@
 // (P10-T10). The shapes are written by hand against the backend (web/routers/tier1.py, tier1/queue.py,
 // tier1/decide.py): the backend answers with plain dicts.
 import { api } from "./client";
+import type { RagWire } from "./rag";
 import type { BandCode } from "./types";
 
 /**
@@ -293,6 +294,12 @@ export type AlertView = {
    */
   proposed_action?: string | null;
   held_by?: string[];
+  /**
+   * How strongly the lookup ①'s prompt held matched approved knowledge, and the closed kind of the failure when the
+   * RAG was left out (P14-T07, DEC-213): `{best_pct, not_applied}`, read through `ragNoteOf`. It goes with
+   * `suggestion` on the blind arm: absent on a blind, undecided head. The queue rows carry none.
+   */
+  rag?: RagWire;
 
   requested_alert_id?: string;
   duplicate_of?: string | null;

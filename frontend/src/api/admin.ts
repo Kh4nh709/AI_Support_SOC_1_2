@@ -938,6 +938,22 @@ export type KnowledgeSource = {
   notes: CaseNote[];
   enrichment: unknown;
   conflict_entry: KnowledgeEntry | null;
+  /** The source's newest lookup (P14-T07, DEC-213), or null when it has none. */
+  lookup: KnowledgeLookup | null;
+};
+
+/**
+ * The newest stored lookup of a draft's source (`rag_results`; P14-T07, DEC-213). `ranked` lists every candidate
+ * the Voyage rerank scored, best first, each with its score as a whole percentage (`round(score * 100)`); it is
+ * null for a lookup from before migration 023 and for one that failed or ran out of budget, and `[]` for a lookup
+ * with nothing left to rerank. `failure_kind` is the closed kind of a `failed` lookup (null for any other status).
+ */
+export type KnowledgeLookup = {
+  lookup_id: string;
+  status: string;
+  failure_kind: string | null;
+  ranked: { entry_id: string; pct: number }[] | null;
+  created_at: string;
 };
 
 /** `GET /api/admin/knowledge/drafts/{id}`. */

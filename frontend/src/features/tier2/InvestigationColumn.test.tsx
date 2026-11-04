@@ -966,6 +966,157 @@ describe("done", () => {
     });
   });
 
+  // P14-T07 (DEC-213, spec 4.3): beside ②'s conclusion the page says how strongly the case matched approved
+  // knowledge, in the conclusion line, and, when the lookup failed, the notice that the RAG was not applied -
+  // in the case's words. The sentences are written out in full on purpose.
+  describe("the RAG beside the conclusion", () => {
+    const TAIL = "AI đã phân tích không có tri thức tham khảo.";
+    const concluded = (rag: unknown, over: Record<string, unknown> = {}) =>
+      done(
+        run({
+          conclusion: "false_positive",
+          conclusion_label: "Không phải sự cố",
+          model_conclusion: "false_positive",
+          held_by: [],
+          rag,
+          ...over,
+        }),
+      );
+    const line = () => screen.findByText(/AI kết luận/);
+
+    it("follows the conclusion line, in the same sentence", async () => {
+      serveViews(concluded({ best_pct: 87, not_applied: null }));
+      renderColumn();
+      expect(await line()).toHaveTextContent(
+        /^AI kết luận: Không phải sự cố — trùng 87% với tri thức đã duyệt$/,
+      );
+      expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    });
+
+    it("comes before the system's own clause when it held the conclusion", async () => {
+      serveViews(
+        concluded(
+          { best_pct: 72, not_applied: null },
+          {
+            conclusion: "need_more_data",
+            conclusion_label: "Cần thêm dữ liệu",
+            held_by: ["no_verified_evidence"],
+          },
+        ),
+      );
+      renderColumn();
+      expect(await line()).toHaveTextContent(
+        "AI kết luận: Không phải sự cố — trùng 72% với tri thức đã duyệt — " +
+          "hệ thống giữ lại vì: không có bằng chứng kiểm chứng được",
+      );
+    });
+
+    it("says nothing without a match, and nothing for a run that carries no rag", async () => {
+      serveViews(concluded({ best_pct: null, not_applied: null }));
+      renderColumn();
+      expect((await line()).textContent).not.toContain("trùng");
+    });
+
+    it("says nothing for an old run with no rag key at all", async () => {
+      serveViews(
+        done(
+          run({ model_conclusion: "false_positive", held_by: [], conclusion: "false_positive" }),
+        ),
+      );
+      renderColumn();
+      expect((await line()).textContent).not.toContain("trùng");
+      expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    });
+
+    it.each([
+      ["rate_limit", "Voyage vượt giới hạn tốc độ"],
+      ["timeout", "Voyage quá thời gian chờ"],
+      ["auth", "thiếu hoặc sai API key Voyage"],
+      ["quota", "Voyage hết hạn mức"],
+      ["provider_error", "lỗi phía Voyage"],
+      ["vectordb_unreachable", "không kết nối được vector DB"],
+    ])("says the notice for %s in the case's words", async (kind, label) => {
+      serveViews(concluded({ best_pct: null, not_applied: kind }));
+      renderColumn();
+      await line();
+      expect(screen.getByRole("note")).toHaveTextContent(
+        `⚠ Không áp dụng RAG cho case này: ${label} — ${TAIL}`,
+      );
+    });
+
+    it("never says 'alert' in the case's notice", async () => {
+      serveViews(concluded({ best_pct: null, not_applied: "auth" }));
+      renderColumn();
+      await line();
+      expect(screen.getByRole("note").textContent).not.toContain("alert");
+    });
+
+    it("is not there when the lookup did not fail", async () => {
+      serveViews(concluded({ best_pct: 87, not_applied: null }));
+      renderColumn();
+      await line();
+      expect(screen.queryByText(/Không áp dụng RAG/)).not.toBeInTheDocument();
+    });
+
+    it("is beside an old run's stored label too (a run with no model_conclusion)", async () => {
+      serveViews(done(run({ rag: { best_pct: null, not_applied: "quota" } })));
+      renderColumn();
+      expect(await screen.findByRole("note")).toHaveTextContent("Voyage hết hạn mức");
+    });
+
+    it("shows a kind it has no words for as the code, as text", async () => {
+      serveViews(concluded({ best_pct: null, not_applied: "<b>cosmic_ray</b>" }));
+      const { container } = renderColumn();
+      await line();
+      expect(screen.getByRole("note").textContent).toContain("<b>cosmic_ray</b>");
+      expect(container.querySelector("b")).toBeNull();
+    });
+
+    it("is not drawn for a run that stopped with no result: nothing was analysed", async () => {
+      serveViews(
+        view({
+          state: "done",
+          run: {
+            run_id: RUN,
+            created_at: "2026-09-30T01:19:00+00:00",
+            result: null,
+            stopped_text: "đã chạm hạn mức chi phí LLM",
+            rag: { best_pct: null, not_applied: "auth" },
+          },
+        }),
+      );
+      renderColumn();
+      expect(await screen.findByText(/Phân tích không có kết quả/)).toBeInTheDocument();
+      expect(screen.queryByText(/Không áp dụng RAG/)).not.toBeInTheDocument();
+    });
+
+    it("is drawn under the last result of a failed run too", async () => {
+      serveViews(
+        view({
+          state: "failed",
+          run: run({
+            model_conclusion: "false_positive",
+            held_by: [],
+            rag: { best_pct: 64, not_applied: "timeout" },
+          }),
+        }),
+      );
+      renderColumn();
+      expect(await line()).toHaveTextContent("— trùng 64% với tri thức đã duyệt");
+      expect(screen.getByRole("note")).toHaveTextContent("Voyage quá thời gian chờ");
+    });
+
+    it("has no axe violation with the percentage and the notice", async () => {
+      serveViews(concluded({ best_pct: 87, not_applied: "auth" }));
+      const { container } = renderColumn();
+      await line();
+      const result = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
+      expect(
+        result.violations.map((x) => `${x.id}: ${x.nodes.map((n) => n.html).join(" | ")}`),
+      ).toEqual([]);
+    });
+  });
+
   it("says the case has changed since the run, beside the numbers then and now", async () => {
     serveViews(
       done(run({ changed: true }), {

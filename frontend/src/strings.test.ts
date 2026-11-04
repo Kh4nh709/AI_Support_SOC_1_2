@@ -442,6 +442,57 @@ describe("the category labels follow the backend PRIORITY", () => {
   });
 });
 
+// P14-T07 (DEC-213, spec 4.3): the percentage and the "RAG not applied" notice. The kinds are the backend's
+// (`rag.failures.FAILURE_KINDS`, also what a lookup records), the words are the UI's; both sides are compared, and
+// the sentences are written out in full so that one edited in strings.ts alone goes red.
+describe("RAG percentage and notice follow the backend", () => {
+  it("reads the backend's kinds (a parse that finds nothing would compare nothing)", () => {
+    expect(pyTuple("FAILURE_KINDS")).toEqual([
+      "rate_limit",
+      "timeout",
+      "auth",
+      "quota",
+      "provider_error",
+      "vectordb_unreachable",
+    ]);
+  });
+
+  it("words every failure kind the backend can record, in its order, and no other", () => {
+    expect(Object.keys(S.rag.failureKind)).toEqual(pyTuple("FAILURE_KINDS"));
+    expect(S.rag.failureKind).toEqual({
+      rate_limit: "Voyage vượt giới hạn tốc độ",
+      timeout: "Voyage quá thời gian chờ",
+      auth: "thiếu hoặc sai API key Voyage",
+      quota: "Voyage hết hạn mức",
+      provider_error: "lỗi phía Voyage",
+      vectordb_unreachable: "không kết nối được vector DB",
+    });
+  });
+
+  it("says the percentage as the spec has it", () => {
+    expect(S.rag.match(87)).toBe("trùng 87% với tri thức đã duyệt");
+    expect(S.rag.match(0)).toBe("trùng 0% với tri thức đã duyệt");
+  });
+
+  it("says the notice of an alert and of a case as the brief has it", () => {
+    expect(S.rag.notApplied("alert", "lỗi phía Voyage")).toBe(
+      "⚠ Không áp dụng RAG cho alert này: lỗi phía Voyage — AI đã phân tích không có tri thức tham khảo.",
+    );
+    expect(S.rag.notApplied("case", "lỗi phía Voyage")).toBe(
+      "⚠ Không áp dụng RAG cho case này: lỗi phía Voyage — AI đã phân tích không có tri thức tham khảo.",
+    );
+  });
+
+  it("words the lookup of the admin page", () => {
+    expect(Object.keys(S.admin.knowledgePage.draft.left.lookup.status).sort()).toEqual([
+      "budget",
+      "empty",
+      "failed",
+      "ok",
+    ]);
+  });
+});
+
 describe("labelOf", () => {
   it("returns the label of a known code", () => {
     expect(labelOf(S.status, "queued_tier1")).toBe("Chờ xử lý");

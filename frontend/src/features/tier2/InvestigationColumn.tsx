@@ -19,6 +19,8 @@ import {
   type RunView,
 } from "../../api/tier2";
 import { ApiError } from "../../api/client";
+import { ragNoteOf } from "../../api/rag";
+import { RagNotice } from "../../components/RagNotice";
 import { formatDateTime, formatTime } from "../../format";
 import { S, labelOf } from "../../strings";
 import { BUTTON, ERROR_TEXT, ErrorNotice, HEADING, asText } from "./parts";
@@ -294,19 +296,26 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
  * system held it as `need_more_data`, "… — hệ thống giữ lại vì: <causes>" (just "… — hệ thống giữ lại" when it
  * knows no cause). The conclusion is the model's own (`model_conclusion`), not the `need_more_data` the system
  * stored in its place; a cause the UI has no label for is shown as its code. All of it is text.
+ *
+ * P14-T07 (DEC-213, spec 4.3): `pct` is how strongly the case matched approved knowledge (the run's `rag.best_pct`,
+ * null when there was no match): "AI kết luận: <label> — trùng 87% với tri thức đã duyệt", before the system's own
+ * clause, as on the alert page.
  */
 function ModelConclusion({
   conclusion,
   causes,
   held,
+  pct,
 }: {
   conclusion: string;
   causes: string[];
   held: boolean;
+  pct: number | null;
 }) {
   return (
     <p className="text-base">
       {S.ai2.conclusion}: <strong>{labelOf(S.ai2.suggestedConclusion, conclusion)}</strong>
+      {pct !== null && ` ${S.rag.dash} ${S.rag.match(pct)}`}
       {held && ` ${S.ai2.heldLine(causes.map((cause) => labelOf(S.ai2.heldReason, cause)))}`}
     </p>
   );
@@ -338,6 +347,8 @@ export function RunResult({
     (causes.length > 0 ||
       (run.conclusion === HELD_CONCLUSION &&
         (MODEL_CONCLUSIONS as readonly string[]).includes(modelConclusion)));
+  // The percentage and the notice (P14-T07) are the run's own, read through `ragNoteOf`.
+  const rag = ragNoteOf(run.rag);
   const hypotheses = run.hypotheses ?? [];
   const evidence = run.evidence ?? [];
   const nextSteps = run.next_steps ?? [];
@@ -372,7 +383,7 @@ export function RunResult({
 
       <Block title={S.ai2.suggested}>
         {modelConclusion !== null ? (
-          <ModelConclusion conclusion={modelConclusion} causes={causes} held={held} />
+          <ModelConclusion conclusion={modelConclusion} causes={causes} held={held} pct={rag.pct} />
         ) : (
           <p className="flex flex-wrap items-baseline gap-2">
             <strong className="text-base">{asText(run.conclusion_label)}</strong>
@@ -382,6 +393,7 @@ export function RunResult({
         <p className="text-sm">
           {`${S.ai2.confidence}: ${labelOf(S.ai2.confidenceLevel, run.confidence)}`}
         </p>
+        {rag.notApplied !== null && <RagNotice kind={rag.notApplied} subject="case" />}
       </Block>
 
       {(modelConclusion === null || (held && causes.length === 0)) &&

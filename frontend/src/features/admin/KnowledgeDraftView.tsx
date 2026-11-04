@@ -541,6 +541,7 @@ function AnalystWork({ draft, source }: { draft: KnowledgeDraft; source: Knowled
       <DecisionBlock source={source} />
       {source.kind === "alert" ? <AlertWork source={source} /> : <CaseWork source={source} />}
       <SoarBlock source={source} />
+      <LookupBlock source={source} />
     </section>
   );
 }
@@ -737,6 +738,52 @@ function SoarBlock({ source }: { source: KnowledgeSource }) {
             <TextBox value={value} />
           </div>
         ))}
+      </div>
+    </Block>
+  );
+}
+
+/**
+ * The newest lookup of the source (P14-T07, DEC-213): what the status was, why a failed one failed (the closed
+ * kind, in words), and every candidate the Voyage rerank scored with its score as a percentage, best first, where
+ * the P13 agent's reasons used to be. A lookup from before migration 023 has no list (`ranked` is null) and shows
+ * only its status; a source with no lookup draws nothing. An entry id and a kind the UI has no label for are text.
+ */
+function LookupBlock({ source }: { source: KnowledgeSource }) {
+  const lookup = source.lookup;
+  if (lookup === null || lookup === undefined) return null;
+  const L = D.left.lookup;
+  const kind = lookup.failure_kind;
+  return (
+    <Block title={L.heading}>
+      <Sentence>{L.hint}</Sentence>
+      <div className={`${PANEL} space-y-2 p-3 text-sm`}>
+        <p>
+          <strong>{labelOf(L.status, lookup.status)}</strong>
+          <span className="text-muted">
+            {" · "}
+            {L.at(formatDateTime(lookup.created_at))}
+          </span>
+        </p>
+        {kind !== null && kind !== undefined && kind !== "" && (
+          <p>{L.reason(labelOf(S.rag.failureKind, kind))}</p>
+        )}
+        {Array.isArray(lookup.ranked) &&
+          (lookup.ranked.length === 0 ? (
+            <Sentence>{L.rankedNone}</Sentence>
+          ) : (
+            <div>
+              <p className="text-xs text-muted">{L.ranked}</p>
+              <ul className="space-y-1">
+                {lookup.ranked.map((item, index) => (
+                  <li key={index} className="flex items-baseline justify-between gap-3">
+                    <code className="break-all">{asText(item.entry_id)}</code>
+                    <strong>{L.percent(item.pct)}</strong>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
       </div>
     </Block>
   );

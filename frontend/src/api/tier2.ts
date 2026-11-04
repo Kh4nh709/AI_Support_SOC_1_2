@@ -2,6 +2,7 @@
 // answers with plain dicts, so there is no generated schema to import. Every string a person or the model
 // wrote arrives as `unknown`-tolerant text and is rendered as text; nothing here is markup.
 import { ApiError, api } from "./client";
+import type { RagWire } from "./rag";
 
 /** `cases.status` of a case that is still being worked; every other value is closed. */
 export const OPEN_CASE_STATUS = "investigating";
@@ -164,6 +165,13 @@ export type RunView = {
    */
   model_conclusion?: string | null;
   held_by?: string[];
+  /**
+   * How strongly the lookup ②'s prompt held matched approved knowledge, and the closed kind of the failure when the
+   * RAG was left out (P14-T07, DEC-213): `{best_pct, not_applied}`, read through `ragNoteOf`. A run from before
+   * T06 has `{best_pct: null, not_applied: null}`; a stopped run carries the kind but the page words it only beside
+   * a conclusion.
+   */
+  rag?: RagWire;
   snapshot?: Snapshot | null;
   /** The case has changed since the run's snapshot. */
   changed?: boolean;
