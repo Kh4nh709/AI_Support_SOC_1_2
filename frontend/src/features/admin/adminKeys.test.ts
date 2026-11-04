@@ -37,6 +37,10 @@ describe("adminKeys", () => {
         "knowledgeEntries",
         "knowledgeEntry",
         "knowledgeTags",
+        // the lab's three keys (DEC-213, P14-T10) stay on the trial branch
+        "labAll",
+        "labRun",
+        "labRuns",
         "labels",
         "llmAll",
         "llmUsage",
