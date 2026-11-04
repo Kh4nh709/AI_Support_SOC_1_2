@@ -3628,3 +3628,41 @@ Decision:
      - The expected 60–70 % and 80–90 % are expectations, not acceptance criteria.
   8. **Trial only.** The branch `director/voyage-rag` is cut from `main` `af56b13` and is never merged back. Live stays at `af56b13`.
 Supersedes: **DEC-210** in part: its "no embedding model, DeepSeek only" and the LLM ranking agent (spec 2026-10-24 §4 and §7.6). Everything else in DEC-210 stands: the drafts, the approval, the decision history, the integrity checks, and "a RAG match is not a citable basis for a kept FP".
+
+## DEC-214 · 2026-11-04 · The admin console stops showing auto-close: the pages "Rules tự đóng" and "Digest hằng ngày" leave the frontend, and the backend stays, switched off
+Scope: **product** (the React admin console: two pages, two sidebar entries, one permission row, one row of the Overview funnel) · **operations** (the runbook rows of `AUTOCLOSE_ENABLED` and `digest_unreviewed`)
+Numbering: DEC-213 is the trial branch's own decision (P14, `director/voyage-rag`). That branch is never merged into `main`, so `main` has no DEC-213.
+Decided by: **the Owner, 04/11/2026.**
+  - **What the Director had confirmed first.** Rule-based auto-close is off on live and on trial: `AUTOCLOSE_ENABLED=false` since 23/10 (DEC-207). Live holds 0 rules and 0 `alert.auto_closed` events, and none of the 8 828 alerts that arrived since the switch was auto-closed. DEC-207 item 5 had kept the code.
+  - **The Owner's request, in two messages:** "Giờ thì xóa code của Rules tự đóng giúp tôi. Xóa cả UI chức năng này trên UI luôn. Lưu ý chỉ xóa auto-close", then, narrowing it, "Tui nghĩ lại ko cần xóa code backend đâu. Xóa UI font-end là dc".
+  - **The Owner's answers to two questions:** "Rules + Digest" for the scope, and "Cả live và trial" for where it lands.
+Drafted by: the Director: this entry, the plan `docs/superpowers/plans/2026-11-04-remove-autoclose-ui.md`, and STATE phase P15.
+Propagated to:
+  - `frontend/` (P15-T01);
+  - `backend/tests/test_rules_whitelist_pin.py`, removed, because it pins the removed `ruleFields.ts`;
+  - `backend/tests/test_runbook_admin.py`, `test_runbook_alarms.py`, `test_runbook_deploy.py` and `test_runbook_env_keys.py`, which pin the runbook and limitations sentences that changed;
+  - `docs/runbook.md` and `docs/limitations.md`;
+  - STATE phase P15, task P15-T01, and `docs/plan/tasks/P15/`.
+Decision:
+  1. **Removed from the frontend.**
+     - The page "Rules tự đóng" (`/admin/rules`) and the page "Digest hằng ngày" (`/admin/digest`), together with their routes, sidebar entries, API client, query keys, strings and tests.
+     - The Users page's permission row "Quản trị rules tự đóng, digest".
+     - The Overview funnel's row "Tự động đóng (rules)".
+     - A removed path is an unknown path: it goes where every unknown path goes.
+  2. **Kept in the frontend.**
+     - How an alert in status `auto_closed` is shown: its status label and the decision panel's branch for it.
+     - The audit page's summaries of the auto-close events.
+     - The health check label `digest_unreviewed`.
+     - The Overview's inventory hint.
+     - No alert has the status `auto_closed` today, but the backend still knows it.
+  3. **The backend is not changed.**
+     - These all stay: `AUTOCLOSE_ENABLED` (DEC-207), `ingest/autoclose.py`, `tier1/digest.py`, the `digest` job, the `digest_unreviewed` health check, `/api/admin/rules`, `/api/admin/digest`, the tables `autoclose_rules` and `autoclose_reviews`, and the status `auto_closed`.
+     - There is no migration and no row is deleted.
+     - Only backend tests change. `test_rules_whitelist_pin.py` is removed, because it read a removed frontend file. Four `test_runbook_*.py` files follow the runbook and limitations sentences that changed.
+  4. **Switching auto-close on again now needs the pages back first.** With `AUTOCLOSE_ENABLED=true`, an alert could be closed by a rule that no page shows and that no person can review in the UI. The runbook says so on the key's row.
+  5. **Where it lands.**
+     - It is built once, on `director/remove-autoclose-ui` from `main` (`af56b13`).
+     - After review it goes to `main` (live), and it is merged into `director/voyage-rag` (the trial, P14). That branch itself is never merged into `main`.
+     - The Owner rebuilds each stack's `ui` (`docker compose up -d --build ui`). Nothing else restarts.
+  6. **Process.** DEC-201: one Coder (Sonnet 5.5 at xhigh, in its own worktree) and one independent Reviewer on Opus 5.5. The Director manages, runs a mutation at the merge, and commits the review verbatim.
+Supersedes: the clause "the rules page stays" of **DEC-207** item 3. The pages go. The rest of item 3, and item 5, stand: the tables and the backend code stay.

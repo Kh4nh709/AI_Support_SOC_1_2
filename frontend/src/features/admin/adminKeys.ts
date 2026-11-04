@@ -7,8 +7,6 @@
 //   overview (24h|7d|30d)        adminKeys.overview(range)                 getOverview
 //   users                        adminKeys.users                           listUsers
 //   LLM usage and limits         adminKeys.llmUsage(range)                 getLlmUsage
-//   auto-close rules             adminKeys.rules                           listRules
-//   digest of one day            adminKeys.digest(day)                     getDigest (day null: today)
 //   blind labelling              adminKeys.labels                          getLabelsNext
 //   audit page                   adminKeys.audit(filters)                  getAudit
 //   knowledge: a draft tab       adminKeys.knowledgeDrafts(status)         listKnowledgeDrafts
@@ -19,7 +17,7 @@
 //   lab: the runs                adminKeys.labRuns                         listLabRuns
 //   lab: the alerts of one run   adminKeys.labRun(id)                      getLabRunAlerts (an infinite query)
 //
-// What each write invalidates is `ADMIN_INVALIDATES`; a page calls `invalidateAfter(client, "toggleRule")`
+// What each write invalidates is `ADMIN_INVALIDATES`; a page calls `invalidateAfter(client, "updateUser")`
 // in its mutation's `onSuccess`, and shows its toast. There are no optimistic updates.
 import type { QueryClient } from "@tanstack/react-query";
 import type {
@@ -45,13 +43,6 @@ export const adminKeys = {
   llmUsage: (range: LlmRange) => ["admin", "llm", "usage", range] as const,
   /** Everything of the LLM page, whatever the range. */
   llmAll: ["admin", "llm"] as const,
-
-  rules: ["admin", "rules"] as const,
-
-  /** The digest of one day; `null` is today, whose day is not in the URL. */
-  digest: (day: string | null) => ["admin", "digest", day] as const,
-  /** The digest of every day. */
-  digestAll: ["admin", "digest"] as const,
 
   labels: ["admin", "labels"] as const,
 
@@ -91,9 +82,7 @@ export const adminKeys = {
  * - Each write touches the read of its own page.
  * - Each also touches the audit page (`auditAll`), which shows the event it wrote.
  * - The overview shows counts that other pages change: the inventory (a reload), the failed jobs (a retry),
- *   the LLM cost against the cap (a limit change), the funnel (a digest review reopens an alert).
- * - The digest shows "no rule enabled" from `rules_enabled`, which a rule created or toggled changes, so the
- *   two rule writes touch the digest of every day (`digestAll`) too.
+ *   the LLM cost against the cap (a limit change).
  */
 export const ADMIN_INVALIDATES = {
   retryJob: [adminKeys.overviewAll, adminKeys.auditAll],
@@ -103,9 +92,6 @@ export const ADMIN_INVALIDATES = {
   resetPassword: [adminKeys.users, adminKeys.auditAll],
   unlockUser: [adminKeys.users, adminKeys.auditAll],
   putLlmLimits: [adminKeys.llmAll, adminKeys.overviewAll, adminKeys.auditAll],
-  createRule: [adminKeys.rules, adminKeys.digestAll, adminKeys.auditAll],
-  toggleRule: [adminKeys.rules, adminKeys.digestAll, adminKeys.auditAll],
-  reviewDigest: [adminKeys.digestAll, adminKeys.overviewAll, adminKeys.auditAll],
   postLabel: [adminKeys.labels, adminKeys.auditAll],
   undoLabel: [adminKeys.labels, adminKeys.auditAll],
   // A draft leaves its tab (and an entry is born, or retired), the overview counts the drafts that wait, and the

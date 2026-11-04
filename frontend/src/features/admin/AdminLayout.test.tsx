@@ -1,18 +1,17 @@
-// src/features/admin/AdminLayout.test.tsx — the sidebar of the admin console (spec §3): nine links in the
+// src/features/admin/AdminLayout.test.tsx — the sidebar of the admin console (spec §3): seven links in the
 // canvas order (the knowledge page of DEC-210 before the audit log, and the lab labelling of P14-T10 after the
-// gold-set labelling), the current one marked, and the page titles (all eight pages with a title of their own are built).
+// gold-set labelling), the current one marked, and the page titles (all six pages with a title of their own are
+// built). The auto-close pages, rules and digest, left the console with DEC-214.
 import { render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 import { S } from "../../strings";
 import { AdminLayout } from "./AdminLayout";
 import { AuditPage } from "./AuditPage";
-import { DigestPage } from "./DigestPage";
 import { KnowledgePage } from "./KnowledgePage";
 import { LabelsPage } from "./LabelsPage";
 import { LlmPage } from "./LlmPage";
 import { OverviewPage } from "./OverviewPage";
-import { RulesPage } from "./RulesPage";
 import { UsersPage } from "./UsersPage";
 
 /** The sidebar, in the order and with the words of the canvas (and DEC-210's "Tri thức"), and where each link goes. */
@@ -20,8 +19,6 @@ const SIDEBAR: [label: string, href: string][] = [
   ["Tổng quan", "/admin/overview"],
   ["Người dùng & quyền", "/admin/users"],
   ["LLM & hạn mức", "/admin/llm"],
-  ["Rules tự đóng", "/admin/rules"],
-  ["Digest hằng ngày", "/admin/digest"],
   ["Gán nhãn", "/admin/labels"],
   ["Gán nhãn lab", "/admin/lab"],
   ["Tri thức", "/admin/knowledge"],
@@ -45,10 +42,27 @@ describe("the sidebar", () => {
     expect(S.admin.nav.label).toBe("Quản trị");
   });
 
-  it("has nine links, in the canvas order, with the canvas words, to the nine paths", () => {
+  it("has seven links, in the canvas order, with the canvas words, to the seven paths", () => {
     renderAt("/admin/overview");
     const links = within(sidebar()).getAllByRole("link");
     expect(links.map((a) => [a.textContent, a.getAttribute("href")])).toEqual(SIDEBAR);
+    expect(links.map((a) => a.getAttribute("href"))).toEqual([
+      "/admin/overview",
+      "/admin/users",
+      "/admin/llm",
+      "/admin/labels",
+      "/admin/lab",
+      "/admin/knowledge",
+      "/admin/audit",
+    ]);
+  });
+
+  it("has no link to the removed auto-close pages (DEC-214)", () => {
+    renderAt("/admin/overview");
+    for (const link of within(sidebar()).getAllByRole("link")) {
+      expect(link.getAttribute("href")).not.toMatch(/\/admin\/(rules|digest)/);
+      expect(link.textContent).not.toMatch(/rules tự đóng|digest/i);
+    }
   });
 
   it("takes its words from strings.ts", () => {
@@ -58,8 +72,6 @@ describe("the sidebar", () => {
       S.admin.nav.overview,
       S.admin.nav.users,
       S.admin.nav.llm,
-      S.admin.nav.rules,
-      S.admin.nav.digest,
       S.admin.nav.labels,
       S.admin.lab.nav,
       S.admin.nav.knowledge,
@@ -96,7 +108,7 @@ describe("the sidebar", () => {
     expect(names.indexOf("Gán nhãn lab")).toBe(names.indexOf("Gán nhãn") + 1);
   });
 
-  it("marks nothing as current on a path that is not one of the nine", () => {
+  it("marks nothing as current on a path that is not one of the seven", () => {
     renderAt("/admin");
     for (const link of within(sidebar()).getAllByRole("link")) {
       expect(link).not.toHaveAttribute("aria-current");
@@ -120,14 +132,12 @@ const PAGES: [name: string, Page: () => ReactNode, title: string][] = [
   ["OverviewPage", OverviewPage, "Tổng quan hệ thống"],
   ["UsersPage", UsersPage, "Người dùng và quyền"],
   ["LlmPage", LlmPage, "LLM và hạn mức"],
-  ["RulesPage", RulesPage, "Rules tự đóng"],
-  ["DigestPage", DigestPage, "Digest hằng ngày"],
   ["LabelsPage", LabelsPage, "Gán nhãn tập vàng"],
   ["KnowledgePage", KnowledgePage, "Tri thức học được"],
   ["AuditPage", AuditPage, "Nhật ký audit"],
 ];
 
-// All eight pages are built (P11-T11 to T17, and the knowledge page of P13-T06): each has its own test file, which needs a query client, a session
+// All six pages are built (P11-T11, T12, T13, T16, T17, and the knowledge page of P13-T06): each has its own test file, which needs a query client, a session
 // and an API this file does not give, and covers its page, axe included. No placeholder is left to test here.
 describe("the pages", () => {
   it("leave no placeholder text in strings.ts: no admin text says a page is being built", () => {
@@ -146,8 +156,6 @@ describe("the pages", () => {
       S.admin.title.overview,
       S.admin.title.users,
       S.admin.title.llm,
-      S.admin.title.rules,
-      S.admin.title.digest,
       S.admin.title.labels,
       S.admin.title.knowledge,
       S.admin.title.audit,

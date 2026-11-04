@@ -226,13 +226,6 @@ export async function waitForTriage(id: string): Promise<void> {
     .toBeGreaterThanOrEqual(2);
 }
 
-const HOSTNAME = /^[a-z0-9._-]+$/i;
-
-function assertHostname(name: string): string {
-  if (!HOSTNAME.test(name)) throw new Error(`not a host name: ${name}`);
-  return name;
-}
-
 /** The count the database holds for a head: what the queue and the alert page are supposed to show. */
 export function occurrenceCount(id: string): number {
   return Number(sql(`SELECT occurrence_count FROM alerts WHERE alert_id = '${assertAlertId(id)}'`));
@@ -306,7 +299,7 @@ async function postWebhook(request: APIRequestContext, body: Record<string, unkn
  */
 export async function postAlert(
   request: APIRequestContext,
-  options: { tag: string; arm?: Arm; rule?: string; inventory?: "low" | "medium" },
+  options: { tag: string; arm?: Arm },
 ): Promise<Posted> {
   const id = newAlertId(options.arm);
   const suffix = randomInt(100_000, 999_999);
@@ -314,17 +307,10 @@ export async function postAlert(
     id,
     agent: `e2e-${options.tag}-${suffix}`,
     description: `E2E ${options.tag} ${suffix} routine event`,
-    rule: options.rule ?? "99001",
+    rule: "99001",
     srcip: `203.0.113.${randomInt(1, 250)}`,
     dstip: `10.9.${randomInt(1, 250)}.${randomInt(1, 250)}`,
   };
-  // An asset in the inventory is what the hard block "asset not in inventory" asks for: an alert of an agent
-  // that has one can be closed by a rule. It is put in before the webhook, so the worker finds it.
-  if (options.inventory !== undefined) {
-    sql(
-      `INSERT INTO assets (hostname, criticality) VALUES ('${assertHostname(alert.agent)}', '${options.inventory}')`,
-    );
-  }
   await postWebhook(request, wazuhBody(alert, id));
   return alert;
 }

@@ -1,9 +1,10 @@
-// The admin console on the real stack (P11-T18, admin console v1.1 spec §7): the ten scenarios, one after the
+// The admin console on the real stack (P11-T18, admin console v1.1 spec §7): the scenarios, one after the
 // other, in a real browser, through the real client, against the real API, worker and database of the scratch
 // stack (scripts/ui_e2e_stack.sh). One file, one run: the scenarios share what the earlier ones made (the account
-// of scenario 2 is the one that is unlocked in 2b and whose role changes in 3, the alert the rule of scenario 6
-// closes is the one the digest reopens in scenario 7, and the events of all of them are what the audit page lists
-// in scenario 9), so the describe is serial and stops at the first that fails.
+// of scenario 2 is the one that is unlocked in 2b and whose role changes in 3, and the events of all of them are
+// what the audit page lists in scenario 9), so the describe is serial and stops at the first that fails.
+// Scenarios 6 and 7, the pages of the auto-close rules and of the daily digest, went with those pages (DEC-214);
+// the other numbers are kept, so that the reports and reviews that cite them still read.
 //
 //   scenario 1   an admin logs in and lands on the overview
 //   scenario 2   creates a Tier 1 user, who then logs in
@@ -13,8 +14,6 @@
 //   scenario 4b  the same rule met by two admins demoting each other at once, with no help from the test
 //   scenario 4c  the 409 that needs no race: an admin changing their own role or active flag (self_change)
 //   scenario 5   lowers the cap below the month's spend: the next ① run stops with `stopped_by = 'cap'`
-//   scenario 6   previews, creates and disables a rule
-//   scenario 7   reviews a digest row "Sai": the alert is back in the Tier 1 queue
 //   scenario 8   labels one cluster and undoes it on an unfrozen scratch set, then meets the frozen 409
 //   scenario 9   the audit page shows the events of those steps, and no label or confidence of `label.created`
 //   scenario 10  a Tier 1 user opening /admin/users gets the 403 notice, and the API refuses
@@ -67,8 +66,6 @@ import {
 const A = S.admin;
 const U = A.usersPage;
 const L = A.llmPage;
-const R = A.rulesPage;
-const D = A.digestPage;
 const LB = A.labelsPage;
 const P = A.auditPage;
 
@@ -94,8 +91,6 @@ const NEW_NAME = "E2E New User";
 /** What one scenario hands the next. */
 const made: {
   newUserId?: string;
-  rule?: { name: string; id: string };
-  closed?: Posted;
   /** The cluster scenario 8 labelled, undid and labelled again: which of its two is the labeller's own order. */
   labelled?: Posted;
 } = {};
@@ -139,8 +134,6 @@ test("scenario 1: an admin logs in and lands on the overview", async ({ page }) 
     A.nav.overview,
     A.nav.users,
     A.nav.llm,
-    A.nav.rules,
-    A.nav.digest,
     A.nav.labels,
     A.lab.nav,
     A.nav.knowledge,
@@ -615,135 +608,6 @@ test("scenario 5: a cap below the month's spend stops the next ① run with stop
 });
 
 // ---------------------------------------------------------------------------------------------------------
-// Scenario 6
-
-const RULE_ID = "99701";
-
-test("scenario 6: an admin previews, creates and disables a rule", async ({ page, request }) => {
-  // A head the rule would close: its agent is in the inventory (the hard block "asset not in inventory").
-  const probe = await postAlert(request, { tag: "rule-probe", rule: RULE_ID, inventory: "low" });
-  await waitForStatus(probe.id, "queued_tier1");
-
-  await loginAs(page, "admin");
-  await openPage(page, A.nav.rules, /\/admin\/rules$/, A.title.rules);
-  // The six hard blocks are on the page whatever the rules are.
-  await expect(
-    page.getByRole("region", { name: R.hardBlocks.label }).getByRole("listitem"),
-  ).toHaveCount(6);
-
-  const name = `E2E rule ${RULE_ID} ${Date.now() % 100_000}`;
-  const create = page.getByRole("region", { name: R.create });
-  await create.getByLabel(R.builder.name, { exact: true }).fill(name);
-  await create
-    .getByLabel(R.builder.reason, { exact: true })
-    .fill("Routine events of the e2e hosts.");
-  const condition = create.getByRole("group", { name: R.builder.group(1) });
-  await expect(condition.getByLabel(R.builder.field)).toHaveValue("rule_id");
-  await expect(condition.getByLabel(R.builder.op)).toHaveValue("eq");
-  await condition.getByLabel(R.builder.value).fill(RULE_ID);
-
-  // "Tạo rule" is not open until the conditions have been previewed.
-  const submit = create.getByRole("button", { name: R.builder.submit, exact: true });
-  await expect(submit).toBeDisabled();
-  await create.getByRole("button", { name: R.builder.preview, exact: true }).click();
-  const preview = page.getByRole("region", { name: R.preview.title });
-  const figure = (label: string) =>
-    preview.locator("dt", { hasText: label }).locator("xpath=following-sibling::dd");
-  await expect(figure(R.preview.clusters)).toHaveText("1");
-  await expect(figure(R.preview.alerts)).toHaveText("1");
-  await expect(preview.getByRole("link", { name: probe.id })).toHaveAttribute(
-    "href",
-    `/alerts/${probe.id}`,
-  );
-  await expect(submit).toBeEnabled();
-  // The button is for the conditions that were previewed, no others: edit them and it closes, and the preview on
-  // screen says it is of the conditions before the edit; put them back and it opens on that preview again.
-  await condition.getByLabel(R.builder.value).fill(`${RULE_ID}0`);
-  await expect(submit).toBeDisabled();
-  await expect(preview.getByText(R.preview.stale)).toBeVisible();
-  await condition.getByLabel(R.builder.value).fill(RULE_ID);
-  await expect(submit).toBeEnabled();
-  await expect(preview.getByText(R.preview.stale)).toHaveCount(0);
-
-  const before = eventCount("admin.autoclose_rule_toggled");
-  await submit.click();
-  await expect(toast(page, R.builder.created(name))).toBeVisible();
-  const table = page.getByRole("table", { name: R.table.label });
-  const row = table.getByRole("row").filter({ hasText: name });
-  await expect(row).toContainText(RULE_ID);
-  await expect(row.getByText(R.table.on, { exact: true })).toBeVisible();
-  const ruleId = sql(`SELECT autoclose_rule_id FROM autoclose_rules WHERE name = '${name}'`);
-  expect(sql(`SELECT enabled FROM autoclose_rules WHERE name = '${name}'`)).toBe("t");
-  expect(eventCount("admin.autoclose_rule_toggled")).toBe(before + 1);
-  made.rule = { name, id: ruleId };
-
-  // The rule is live at once: the next alert of that kind is closed by it, not queued.
-  const closed = await postAlert(request, { tag: "rule-closed", rule: RULE_ID, inventory: "low" });
-  await waitForStatus(closed.id, "auto_closed");
-  expect(sql(`SELECT autoclose_rule_id FROM alerts WHERE alert_id = '${closed.id}'`)).toBe(ruleId);
-  made.closed = closed;
-
-  // Disabling it, in its dialog: the row says off, and the next alert is queued again.
-  await row.getByRole("button", { name: R.table.turnOffLabel(name) }).click();
-  const dialog = dialogOf(page, R.toggle.offTitle(name));
-  await expect(dialog.getByText(R.toggle.offBody)).toBeVisible();
-  await dialog.getByRole("button", { name: R.toggle.offConfirm }).click();
-  await expect(toast(page, R.toggle.doneOff(name))).toBeVisible();
-  await expect(row.getByText(R.table.off, { exact: true })).toBeVisible();
-  await expect(row.getByRole("button", { name: R.table.turnOnLabel(name) })).toBeVisible();
-  expect(sql(`SELECT enabled FROM autoclose_rules WHERE name = '${name}'`)).toBe("f");
-  expect(eventCount("admin.autoclose_rule_toggled")).toBe(before + 2);
-  const queued = await postAlert(request, { tag: "rule-off", rule: RULE_ID, inventory: "low" });
-  await waitForStatus(queued.id, "queued_tier1");
-});
-
-// ---------------------------------------------------------------------------------------------------------
-// Scenario 7
-
-test("scenario 7: reviewing a digest row Sai puts the alert back in the Tier 1 queue", async ({
-  page,
-  browser,
-  baseURL,
-}) => {
-  const closed = made.closed;
-  expect(closed, "scenario 6 closed an alert by a rule").toBeDefined();
-  if (closed === undefined) return;
-
-  await loginAs(page, "admin");
-  await openPage(page, A.nav.digest, /\/admin\/digest$/, A.title.digest);
-  // The rule that closed it has been disabled since, and its row is there all the same.
-  const row = page.locator(`tr[data-alert-id="${closed.id}"]`);
-  await expect(row).toBeVisible();
-  await expect(row).toHaveAttribute("data-state", "open");
-  await expect(row).toContainText(made.rule?.name ?? "");
-  await expect(row).toContainText(closed.agent);
-  await row
-    .getByRole("group", { name: D.group(closed.rule, closed.agent) })
-    .getByRole("button", { name: A.verdict.wrong, exact: true })
-    .click();
-  await expect(row).toHaveAttribute("data-state", "reviewed");
-  await expect(row).toContainText(D.reviewed(A.verdict.wrong));
-  await expect(row).toContainText(D.reopened);
-  // The server reopened it: status, and an event that carries the admin as its actor.
-  expect(sql(`SELECT status FROM alerts WHERE alert_id = '${closed.id}'`)).toBe("queued_tier1");
-  expect(sql(`SELECT verdict FROM autoclose_reviews WHERE alert_id = '${closed.id}'`)).toBe(
-    "wrong",
-  );
-  expect(eventCount("alert.reopened", closed.id)).toBe(1);
-  expect(eventCount("autoclose.reviewed", closed.id)).toBe(1);
-
-  // Tier 1 sees it in the queue.
-  const context = await browser.newContext({ baseURL });
-  try {
-    const analyst = await context.newPage();
-    await loginAs(analyst, "t1");
-    await expect(analyst.locator(`a[href="/alerts/${closed.id}"]`)).toBeVisible();
-  } finally {
-    await context.close();
-  }
-});
-
-// ---------------------------------------------------------------------------------------------------------
 // Scenario 8
 
 /** What the labelling page may send of a cluster: `VIEW_KEYS` of backend/app/tier1/labels.py. */
@@ -1001,25 +865,6 @@ test("scenario 9: the audit page shows the events of the steps above, and no lab
   const limits = rows("admin.settings_changed");
   await expect(limits).toHaveCount(2);
   await expect(limits.filter({ hasText: P.summary.limitName.LLM_MONTHLY_USD_CAP })).toHaveCount(2);
-  // Step 6: the rule, created (off to on) and disabled.
-  const rule = made.rule;
-  expect(rule).toBeDefined();
-  const toggles = rows("admin.autoclose_rule_toggled").filter({ hasText: rule?.id ?? "" });
-  await expect(toggles).toHaveCount(2);
-  await expect(
-    toggles.filter({
-      hasText: P.summary.ruleToggled(rule?.name ?? "", P.summary.off, P.summary.on),
-    }),
-  ).toHaveCount(1);
-  await expect(
-    toggles.filter({
-      hasText: P.summary.ruleToggled(rule?.name ?? "", P.summary.on, P.summary.off),
-    }),
-  ).toHaveCount(1);
-  // Step 7: the review and the reopening.
-  await expect(rows("autoclose.reviewed")).toHaveCount(1);
-  await expect(rows("autoclose.reviewed")).toContainText(made.closed?.id ?? "");
-  await expect(rows("alert.reopened")).toHaveCount(1);
   // Step 8: three `label.created` events (a label, its undo, the label again), each naming the cluster.
   const created = rows("label.created");
   await expect(created).toHaveCount(3);

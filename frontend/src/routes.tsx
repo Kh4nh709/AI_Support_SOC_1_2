@@ -1,6 +1,8 @@
 // The route table of the spec §3.1: the queue is P10-T09's, the alert page P10-T10's, the case list and the
 // case page P10-T11's. The admin console (P11-T10, admin spec §3) is `/admin` and its pages (`/admin/knowledge` is
-// DEC-210's, P13-T06; `/admin/lab` and `/admin/lab/:runId`, the lab labelling, are DEC-213's, P14-T10).
+// DEC-210's, P13-T06; `/admin/lab` and `/admin/lab/:runId`, the lab labelling, are DEC-213's, P14-T10; the pages for
+// the auto-close rules and the digest were removed with DEC-214, and a path under either is an unknown path, which
+// the `*` route below answers).
 import { lazy, type ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router";
 import { useAuth } from "./auth/AuthProvider";
@@ -38,12 +40,6 @@ const UsersPage = lazy(() =>
 );
 const LlmPage = lazy(() =>
   import("./features/admin/LlmPage").then((m) => ({ default: m.LlmPage })),
-);
-const RulesPage = lazy(() =>
-  import("./features/admin/RulesPage").then((m) => ({ default: m.RulesPage })),
-);
-const DigestPage = lazy(() =>
-  import("./features/admin/DigestPage").then((m) => ({ default: m.DigestPage })),
 );
 const LabelsPage = lazy(() =>
   import("./features/admin/LabelsPage").then((m) => ({ default: m.LabelsPage })),
@@ -170,22 +166,6 @@ export function AppRoutes() {
           element={
             <AdminPage>
               <LlmPage />
-            </AdminPage>
-          }
-        />
-        <Route
-          path="/admin/rules"
-          element={
-            <AdminPage>
-              <RulesPage />
-            </AdminPage>
-          }
-        />
-        <Route
-          path="/admin/digest"
-          element={
-            <AdminPage>
-              <DigestPage />
             </AdminPage>
           }
         />

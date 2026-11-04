@@ -1,13 +1,13 @@
 // A latch around a TanStack mutation, so a write is never sent twice by two clicks of one button.
 //
-//   const create = useMutation({ mutationFn: createRule, ... });
+//   const create = useMutation({ mutationFn: createUser, ... });
 //   const run = useSubmitLatch(create);
 //   <button onClick={() => run(body)}>
 //
 // Why `disabled={mutation.isPending}` is not enough: TanStack Query 5 tells React that a mutation went pending
 // through a `setTimeout(0)`, so a second click that lands in the same tick (a double click of an automated
 // browser, two events before React has rendered) still sees the enabled button and its `isPending === false`,
-// and calls `mutate` again: two POSTs, two rules. The latch is a REF, set before the call and cleared when
+// and calls `mutate` again: two POSTs, two users. The latch is a REF, set before the call and cleared when
 // the call settles, so the second call returns at once whatever React has rendered.
 //
 // `run(variables, options?)` returns `true` when it sent the call and `false` when it turned it away (the
