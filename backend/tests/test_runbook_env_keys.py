@@ -340,13 +340,15 @@ def test_the_migration_row_of_start_everything_names_the_trial_and_the_p14_migra
         for ln in RUNBOOK_PATH.read_text(encoding="utf-8").splitlines()
         if ln.startswith("| start everything |")
     )
+    assert "on a dump taken after 020 or on the trial database as the wipe left it" in row
+    assert "on a dump taken after 021 (it applies `022_true_positive.sql`" in row
     assert (
-        "on a dump taken after 021 or on the trial database today (it applies `022_true_positive.sql`"
-        in row
+        "refuses while a `triage` run still says `escalate`" in row
+        and "`023_vector_rag.sql`" in row
     )
-    assert "refuses, changing nothing" in row and "and `023_vector_rag.sql`" in row
-    assert "on the live database today" not in row
+    assert "on the live database today" not in row and "on the trial database today" not in row
     assert "there is no 022" not in row and "the number belongs to another card" not in row
-    assert "and `024_lab.sql`: the lab runs and labels" in row  # P14-T09: the trial takes all three
+    assert "`024_lab.sql`: the lab runs and labels" in row  # P14-T09: the trial takes all three
+    assert "`migrate: 4 applied, 20 already present`" in row
     assert "`migrate: 3 applied, 21 already present`" in row
     assert "`migrate: 0 applied, 24 already present` after that." in row

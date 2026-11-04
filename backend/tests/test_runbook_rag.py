@@ -359,7 +359,8 @@ def test_the_section_says_how_to_keep_rag_worker_running():
         "`job_backlog`",
         "`rag_lookup`",
         "`knowledge_draft`",
-        "the main `worker` claims neither",
+        "`knowledge_embed`",  # P14-T08: the third type `rag-worker` claims (DEC-213)
+        "the main `worker` claims none of them",
     ):
         assert needle in paragraph, f"the paragraph on running rag-worker no longer says {needle!r}"
 
@@ -746,10 +747,12 @@ def test_the_what_to_watch_paragraph_counts_fourteen_checks():
 
 
 def test_the_runbook_says_the_triage_delay_is_paid_even_when_no_lookup_can_run():
-    """Item 11: `RAG_ENABLED` on and no working RAG model (or `rag-worker` stopped) still delays ①."""
+    """Item 11: `RAG_ENABLED` on and no working lookup (or `rag-worker` stopped) still delays ①. Since P14
+    (DEC-213) the lookup needs a Voyage key, not a RAG model (P14-T08)."""
     section = _section(_text())
     step9 = next(r for r in _step_rows(section) if r[0].startswith("9"))
-    assert "no working RAG model" in step9[1] + step9[2] and "RAG_TRIAGE_DELAY_S" in step9[2]
+    assert "no working Voyage key" in step9[1] + step9[2] and "RAG_TRIAGE_DELAY_S" in step9[2]
+    assert "no working RAG model" not in step9[1] + step9[2]
     assert "still delayed" in step9[2]
     assert "even when no lookup can run" in _row("| `RAG_TRIAGE_DELAY_S` |")
 
@@ -759,8 +762,8 @@ def test_the_rollback_drains_the_rag_queue_before_anything_is_removed():
     `rag-worker` is gone is a `job_backlog` alarm for ever. The count must print 0 first."""
     section = _section(_text())
     note = _paragraph(section, "**Rollback.**")
-    count = (
-        "select count(*) from jobs where job_type in ('rag_lookup','knowledge_draft') "
+    count = (  # P14-T08: `knowledge_embed` (DEC-213) is the third type `rag-worker` claims
+        "select count(*) from jobs where job_type in ('rag_lookup','knowledge_embed','knowledge_draft') "
         "and status in ('pending','running')"
     )
     assert count in note and "prints `0`" in note

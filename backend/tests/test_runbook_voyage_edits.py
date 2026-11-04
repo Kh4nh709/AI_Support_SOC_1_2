@@ -1,0 +1,173 @@
+"""`docs/runbook.md` and `docs/limitations.md` — the sentences the earlier P14 cards made false, and the limits P14
+adds (P14-T08, DEC-213).
+
+WHY A TEST FOR A DOCUMENT. The runbook was written card by card. P14-T04 said "no Voyage call in any code yet" and
+"no worker claims it yet" when `knowledge_embed` had no worker; P14-T05 gave it one, P14-T06 took the model out of
+the lookup and added `rag_lookup_failures`, and P14-T02 took `need_more_data` out of ②'s answers. None of those
+cards had the runbook in its scope, so each sentence stayed true to its card and false to the next. This file pins
+the corrected ones: the drain query lists the three job types `rag-worker` claims; the Alarms table has
+`rag_lookup_failures` with what to do, and `llm_null_ratio` leaves the lookup's runs out; the model-API row says
+the lookup calls no model; the start-everything row's counts sum to the migration files; and the limitations the
+brief and the Director name are in `docs/limitations.md` with their four parts. The section itself is
+`test_runbook_voyage.py`. It does not judge prose.
+
+PURE. No database, no socket, no docker.
+"""
+
+from __future__ import annotations
+
+import pathlib
+import re
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+RUNBOOK = REPO_ROOT / "docs" / "runbook.md"
+LIMITATIONS = REPO_ROOT / "docs" / "limitations.md"
+SCHEMA_DIR = REPO_ROOT / "docs" / "Schema"
+HEALTH = REPO_ROOT / "backend" / "app" / "infra" / "health.py"
+
+#: The queue the rollback drains: the three job types `rag-worker` claims (`web/rag_worker.py`).
+DRAIN = (
+    "select count(*) from jobs where job_type in ('rag_lookup','knowledge_embed','knowledge_draft') "
+    "and status in ('pending','running')"
+)
+
+
+def _text(path: pathlib.Path = RUNBOOK) -> str:
+    assert path.exists(), f"{path} does not exist"
+    return path.read_text(encoding="utf-8")
+
+
+def _flat(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _code(text: str) -> list[str]:
+    """Every `inline code` span of `text`."""
+    return re.findall(r"`([^`]+)`", text)
+
+
+def _migration_files() -> list[str]:
+    return sorted(p.stem for p in SCHEMA_DIR.glob("[0-9][0-9][0-9]_*.sql"))
+
+
+def _row(starts: str) -> str:
+    return next(ln for ln in _text().splitlines() if ln.startswith(starts))
+
+
+def test_the_drain_query_lists_knowledge_embed_beside_the_other_two():
+    text = _text()
+    queries = re.findall(
+        r"select count\(\*\) from jobs where job_type in \(([^)]*)\) and status in", text
+    )
+    assert queries, "no drain query in the runbook"
+    for listed in queries:
+        assert listed == "'rag_lookup','knowledge_embed','knowledge_draft'", listed
+    rollback = next(
+        p for p in text.split("\n\n") if p.startswith("**Rollback.** Set `RAG_ENABLED=false`")
+    )
+    assert DRAIN in rollback
+    # every other place that names the RAG job types names the third
+    for starts in ("| `job_backlog` |", "| **Worker stuck**"):
+        assert "`knowledge_embed`" in _row(starts), starts
+    running = next(p for p in text.split("\n\n") if p.startswith("**Running `rag-worker`.**"))
+    assert "`knowledge_embed`" in running
+
+
+def test_the_alarms_table_has_rag_lookup_failures_with_its_label_threshold_and_what_to_do():
+    row = _row("| `rag_lookup_failures` |")
+    flat = _flat(row)
+    for needle in (
+        "Tra cứu RAG thất bại liên tục",
+        "5 failed lookups",
+        "60 minutes",
+        "alarms at 5 or more",
+        "n/a — RAG off",
+        "`auth`",
+        "`quota`",
+        "`rate_limit`",
+        "`timeout`",
+        "`provider_error`",
+        "`vectordb_unreachable`",
+        "docker compose up -d --force-recreate rag-worker",
+        "docker compose ps vectordb",
+        "**Voyage vector RAG (DEC-213)**",
+    ):
+        assert needle in flat, f"the rag_lookup_failures row no longer says {needle!r}"
+    assert "(P14-T08)" not in flat, "the row still points at a runbook that was to come"
+    source = _text(HEALTH)
+    assert (
+        "_RAG_LOOKUP_FAILURES_MAX = 5" in source
+        and "_RAG_LOOKUP_FAILURES_WINDOW_MIN = 60" in source
+    )
+    assert '"n/a — RAG off"' in source
+
+
+def test_llm_null_ratio_leaves_rag_lookup_out_in_the_row_and_in_its_sql():
+    row = _row("| `llm_null_ratio` |")
+    assert "AND pipeline <> 'rag_lookup'" in _text(
+        HEALTH
+    ), "health.py no longer leaves rag_lookup out"
+    assert "pipeline <> 'rag_lookup'" in row, "the first-look SQL counts rag_lookup runs"
+    flat = _flat(row)
+    assert "`rag_lookup_failures`" in flat and "Voyage" in flat
+    sql = next(c for c in _code(row) if c.startswith('psql "$DATABASE_URL"'))
+    assert "interval '1 hour'" in sql and "result is null" in sql
+
+
+def test_model_api_down_says_the_lookup_calls_no_model():
+    row = _row("| **Model API down**")
+    flat = _flat(row)
+    assert "a RAG lookup is stored `failed` (its run `permanent`)" not in flat
+    assert "calls no model" in flat and "`rag_lookup_failures`" in flat
+    assert (
+        "a knowledge draft is stored empty with the warning `llm_permanent`" in flat
+    )  # still true
+
+
+def test_the_start_everything_row_is_consistent_with_the_24_migrations():
+    row = _row("| start everything |")
+    total = len(_migration_files())
+    assert total == 24
+    pairs = re.findall(r"`migrate: (\d+) applied, (\d+) already present`", row)
+    assert pairs, "no `migrate: N applied, M already present` in the row"
+    for applied, present in pairs:
+        assert int(applied) + int(present) == total, (applied, present)
+    flat = _flat(row)
+    # the trial's database stands at 20 after the wipe (spec §11): 021, 022, 023, 024 are applied
+    assert (
+        "`migrate: 4 applied, 20 already present` on a dump taken after 020 or on the trial database"
+        in flat
+    )
+    assert "on the trial database today" not in flat
+    assert "`migrate: 3 applied, 21 already present` on a dump taken after 021 (" in flat
+    # the refusal belongs to a database that holds an escalate, not inside the list of counts for one that does not
+    counts = flat.split("The counts for a database or a dump that holds no ① `escalate`", 1)[1]
+    assert (
+        "**refuses" not in counts
+    ), "the list of counts for a database with no escalate talks of a refusal"
+    assert "has no count" in counts  # a database that does hold one stops at 022: no count at all
+    assert "`migrate: 0 applied, 24 already present` after that." in flat
+
+
+def test_the_lookup_is_no_longer_said_to_call_deepseek_and_the_old_stubs_are_gone():
+    text = _text()
+    flat = _flat(text)
+    for stale in (
+        "no worker claims it yet",
+        "There is no Voyage call in any code yet",
+        "and call DeepSeek only. **Both switches",
+        "Each lookup is one more DeepSeek call",
+        "(the DeepSeek call failed after its repair or its retries)",
+        "The page that uses the API is P14-T10 and the tool that reads the labels is P14-T11",
+    ):
+        assert stale not in flat, f"the runbook still says {stale!r}"
+    intro = flat.split("**Both switches default to `false`**", 1)[0]
+    assert "Only `knowledge_draft` calls DeepSeek" in intro
+    step9 = next(ln for ln in text.splitlines() if ln.startswith("| 9 · lookup on |"))
+    assert "two Voyage calls" in step9 and "no working Voyage key" in step9
+    lookups = next(ln for ln in text.splitlines() if ln.startswith("| lookups |"))
+    assert "`failure_kind`" in lookups
+
+
+def test_the_runbook_header_says_how_p14_t08_was_checked():
+    assert "P14-T08" in _flat(_text().split("\n## Start and stop")[0])
