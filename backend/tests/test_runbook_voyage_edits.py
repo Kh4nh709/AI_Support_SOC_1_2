@@ -170,7 +170,47 @@ def test_the_lookup_is_no_longer_said_to_call_deepseek_and_the_old_stubs_are_gon
 
 
 def test_the_runbook_header_says_how_p14_t08_was_checked():
-    assert "P14-T08" in _flat(_text().split("\n## Start and stop")[0])
+    header = _text().split("\n## Start and stop")[0]
+    assert "P14-T08" in _flat(header)
+    # fix round 1, M8: the sentence has no bold inside its bold
+    line = next(ln for ln in header.splitlines() if "P14-T08's additions and edits" in ln)
+    assert "**Environment keys**" not in line
+    assert line.count("**") % 2 == 0, "the bold of the header paragraph is not balanced"
+
+
+def test_the_admin_console_lists_the_nine_pages_the_ui_has():
+    """M2: the runbook said seven pages; `AdminLayout.tsx` lists nine (the knowledge page of DEC-210 and the
+    lab page of DEC-213). The sentence names exactly the routes the layout has."""
+    layout = _text(REPO_ROOT / "frontend" / "src" / "features" / "admin" / "AdminLayout.tsx")
+    pages = re.findall(r'\{ to: "(/admin/[a-z]+)"', layout)
+    assert len(pages) == 9, pages
+    sentence = next(
+        ln for ln in _text().splitlines() if ln.startswith("The admin console is the React UI:")
+    )
+    assert "has seven pages" not in sentence and "has nine pages" in sentence
+    named = re.findall(r"`(/admin/[a-z]+)`", sentence.split("has nine pages", 1)[1])
+    assert sorted(named) == sorted(pages), (named, pages)
+
+
+def test_the_job_loop_row_counts_the_three_job_types_rag_worker_claims():
+    from_code = _text(REPO_ROOT / "backend" / "app" / "web" / "rag_worker.py")
+    assert 'CLAIM_ORDER = [["rag_lookup"], ["knowledge_embed"], ["knowledge_draft"]]' in from_code
+    row = _flat(_row("| the job loop |"))
+    assert "claims neither type" not in row
+    assert "none of the three types" in row and "`knowledge_embed`" in row
+
+
+def test_the_rag_model_row_says_what_the_key_is_now_that_the_lookup_calls_no_model():
+    """M2: `RAG_MODEL` was "the model of the lookup's ranking call and the draft call". Since P14 the lookup calls no
+    model (`rag/agent.py` is read by the draft only)."""
+    agent = _text(REPO_ROOT / "backend" / "app" / "rag" / "agent.py")
+    assert "return cfg.RAG_MODEL or cfg.LLM_MODEL_PROPOSER" in agent
+    for module in ("rag/lookup.py", "rag/match.py"):
+        assert "rag_model(" not in _text(REPO_ROOT / "backend" / "app" / module), module
+    row = _flat(_row("| `RAG_MODEL` |"))
+    assert "lookup's ranking call" not in row
+    assert "the model of the draft calls" in row and "the lookup calls no model" in row
+    assert "empty means `LLM_MODEL_PROPOSER`" in row
 
 
 # --------------------------------------------------------------------------- limitations
