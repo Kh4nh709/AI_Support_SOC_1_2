@@ -211,6 +211,20 @@ def test_on_the_trial_a_restore_goes_through_the_voyage_step_7_never_through_the
     assert "never through this block" in flat and "dump check" in flat
 
 
+def test_the_dec_210_restore_section_agrees_with_itself_about_the_trial():
+    """Fix round 3 (m3): the sentence before its block says a trial restore never goes through it; the one after the
+    block must not say the trial rebuilds the index 'after these four commands' (as if the block were run there).
+    """
+    section = _text().split("### After `make db-restore`\n", 1)[1].split("\n## ", 1)[0]
+    flat = _flat(section)
+    assert "never through this block" in flat
+    assert "rebuilt after these four commands as well" not in flat
+    assert (
+        "On the trial, with the Voyage RAG (P14), step 7 of **Voyage vector RAG (DEC-213)** runs these four commands"
+        " after its dump check, then rebuilds the vector index" in flat
+    )
+
+
 def test_the_job_loop_row_counts_the_three_job_types_rag_worker_claims():
     from_code = _text(REPO_ROOT / "backend" / "app" / "web" / "rag_worker.py")
     assert 'CLAIM_ORDER = [["rag_lookup"], ["knowledge_embed"], ["knowledge_draft"]]' in from_code

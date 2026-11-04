@@ -220,31 +220,85 @@ def test_the_database_moves_before_the_containers_run_the_p14_code():
 # --------------------------------------------------------------------------- the keys and the secrets
 
 
-#: Every "check, then act" of the section: (step, the line that checks, the lines that act). A check that shares a
-#: paste with its act cannot be obeyed: the act has run by the time the answer is read (fix round 2, NB1).
+def _begins(*prefixes: str):
+    return lambda line: line.strip().startswith(prefixes)
+
+
+def _measure(*, yes: bool):
+    return lambda line: "lab_measure.py measure" in line and ((" --yes" in line) is yes)
+
+
+#: The "check, then act" pairs of the section, and the guard that keeps each in two pastes: (name, the text, the
+#: line that checks, the lines that act). A check that shares a paste with its act cannot be obeyed: the act has run
+#: by the time the answer is read. COVERED: steps 1 (the checks, then the writes), 5 (the LAN address, then
+#: `up -d`), 7 (the dump's migration count, then the restore) and 9 (the drain count, then `stop vectordb`), and the
+#: Measuring block (the estimates, then each `--yes` run). NOT COVERED, because there is nothing to wait for: steps 2,
+#: 3, 4, 6 and 8, each an act followed by the check of its own result, or a check read in its own step.
 GATES = [
-    (1, "grep -c '^COMPOSE_PROJECT_NAME", ("printf '\\nVECTOR_DB_PASSWORD",)),
-    (5, "ip -4 addr", ("docker compose up -d",)),
-    (7, "pg_restore --data-only", ("docker compose stop rag-worker", "make db-restore")),
-    (9, "psql ", ("docker compose stop vectordb",)),
+    (
+        "step 1",
+        lambda: _steps()[1],
+        lambda ln: "grep -c '^COMPOSE_PROJECT_NAME" in ln,
+        _begins("printf '\\nVECTOR_DB_PASSWORD"),
+    ),
+    ("step 5", lambda: _steps()[5], lambda ln: "ip -4 addr" in ln, _begins("docker compose up -d")),
+    (
+        "step 7",
+        lambda: _steps()[7],
+        lambda ln: "pg_restore --data-only" in ln,
+        _begins("docker compose stop rag-worker", "make db-restore"),
+    ),
+    (
+        "step 9",
+        lambda: _steps()[9],
+        lambda ln: ln.startswith("psql "),
+        _begins("docker compose stop vectordb"),
+    ),
+    ("Measuring", lambda: _sub("Measuring"), _measure(yes=False), _measure(yes=True)),
 ]
 
 
-@pytest.mark.parametrize(("number", "gate", "acts"), GATES, ids=[f"step {g[0]}" for g in GATES])
-def test_no_check_then_act_pair_shares_one_paste(number, gate, acts):
-    pastes = _pastes(_steps()[number])
-    checked = [i for i, (_, block) in enumerate(pastes) if gate in block]
-    acting = [
-        i
-        for i, (_, block) in enumerate(pastes)
-        if any(line.strip().startswith(acts) for line in block.splitlines())
+@pytest.mark.parametrize(("name", "text", "gate", "act"), GATES, ids=[g[0] for g in GATES])
+def test_no_check_then_act_pair_shares_one_paste(name, text, gate, act):
+    pastes = _pastes(text())
+    checked = [
+        i for i, (_, block) in enumerate(pastes) if any(gate(ln) for ln in block.splitlines())
     ]
+    acting = [i for i, (_, block) in enumerate(pastes) if any(act(ln) for ln in block.splitlines())]
     assert checked and acting, (checked, acting)
-    assert max(checked) < min(acting), f"step {number}: the check and the act are in one paste"
-    # the paste that acts is headed by the condition under which to paste it
+    assert max(checked) < min(acting), f"{name}: the check and the act are in one paste"
+    # every paste that acts is headed by the condition under which to paste it
+    for index in acting:
+        assert (
+            "only when" in pastes[index][0].lower()
+        ), f"{name}: paste {index + 1} has no 'only when'"
+
+
+def test_the_measuring_block_is_three_pastes_the_estimates_the_small_run_the_full_run():
+    """OOS1 (fix round 3): money is spent by `--yes`, so no estimate may share a paste with a `--yes` run, and the
+    full run is a paste after the small run's: the estimates only (exit 5 is expected); the small run; the full run.
+    """
+    pastes = _pastes(_sub("Measuring"))
+    assert len(pastes) == 3, len(pastes)
+    first, second, third = (block for _, block in pastes)
+    assert " --yes" not in first and first.count("lab_measure.py measure") == 2
+    assert "--test-runs" in first  # the small run's own estimate is read before it is paid for
     assert (
-        "only when" in pastes[min(acting)][0].lower()
-    ), f"step {number}: its second paste has no 'only when'"
+        second.count("lab_measure.py measure") == 1
+        and "--test-runs" in second
+        and " --yes" in second
+    )
+    assert (
+        third.count("lab_measure.py measure") == 1
+        and "--test-runs" not in third
+        and " --yes" in third
+    )
+    headers = [before.lower() for before, _ in pastes]
+    assert "only when the owner has read the figure and accepts it" in headers[1]
+    assert "only when that small run's report reads right" in headers[2]
+    assert "exit 5 is expected" in pastes[0][1].lower() or "exit 5 is expected" in _flat(
+        _sub("Measuring")
+    )
 
 
 def test_the_two_secrets_are_written_with_printf_never_echo():
@@ -372,7 +426,25 @@ def test_step_4_takes_a_backup_of_the_migrated_trial_and_says_which_dumps_are_ne
     assert any(c.endswith("bash scripts/backup.sh") for c in commands)
     # fix round 2 (NB2): the pre-lab dump is copied out of backups/ NOW, by the same line that makes the backup,
     # to a place the retention glob `soc-*.dump` does not reach; "before the fifteenth backup" came one too late
-    chain = next(c for c in commands if c.endswith("bash scripts/backup.sh"))
+    chain = next(c for c in commands if c.startswith("mkdir -p ~/soc-trial-keep"))
+    # fix round 3 (m1): the chain is `&&`, so a failed copy makes no backup and prunes nothing (a `;` would not)
+    assert chain.count(" && ") == 2 and ";" not in chain
+    assert chain.endswith("&& bash scripts/backup.sh")
+    # the line that names the new dump comes after the backup, in a paste of its own, so it cannot name an older one
+    pastes = _pastes(step)
+    assert len(pastes) == 2 and "ls -t backups/soc-*.dump" not in pastes[0][1]
+    assert "ls -t backups/soc-*.dump | head -1" in pastes[1][1]
+    assert "only when" in pastes[1][0].lower()
+    # when the copy fails: look, and run the backup alone; every later backup is the script alone
+    flat_step = _flat(step)
+    for needle in (
+        "If the copy fails",
+        "no backup was taken",
+        "`ls ~/soc-trial-keep/`",
+        "`bash scripts/backup.sh` alone",
+        "Every later backup is `bash scripts/backup.sh` alone",
+    ):
+        assert needle in flat_step, f"step 4 no longer says {needle!r}"
     assert chain.index("cp -p backups/soc-trial-pre-lab-*.dump") < chain.index(
         "bash scripts/backup.sh"
     )
@@ -520,12 +592,16 @@ def test_step_7_rebuilds_the_index_after_a_db_restore_and_names_the_dump():
         "are never restored onto the P14 trial",
         "022 would refuse",
         "go on only when it printed `24`",
+        "start this step again from the count",
         "(24 migrations)",
     ):
         assert needle in flat, f"step 7 no longer says {needle!r}"
     # the migration count of the dump is read before anything is stopped, and the command prints only a count
     check = next(c for c in commands if c.startswith("pg_restore "))
     assert check.endswith("| grep -c '^[0-9][0-9][0-9]_'") and "-t schema_migrations" in check
+    assert (
+        "run this block again" not in flat
+    )  # the act block alone would skip the count of the new dump
     # the line `make db-restore` ends with, and the number it prints (the Makefile counts schema_migrations)
     makefile = _text(MAKEFILE)
     assert 'echo "db-restore: $$f → $$db ($$(' in makefile
@@ -672,6 +748,11 @@ def test_the_lab_procedure_says_what_the_owner_does_for_each_run():
         "`WEBHOOK_API_KEY`",
         "`X-API-Key`",
         "`WEBHOOK_IP_ALLOWLIST`",
+        # fix round 3 (m5): a check that prints no secret, and where the ranges are
+        "grep -c '^WEBHOOK_IP_ALLOWLIST=' .env",
+        "`.trial/make_env.py`",
+        "`docker-compose.trial.yml`",
+        "never a plain grep of the `WEBHOOK` lines",
         "`401`",
         "`403`",
     ):
@@ -884,7 +965,8 @@ def test_the_measuring_subsection_gives_the_caveats_and_what_calibrate_decides()
         "after `calibrate`, before the first `test` run",
     ):
         assert needle in flat, f"the measuring subsection no longer says {needle!r}"
-    # the recreate that applies the thresholds comes last, and only when no measurement is going on
+    # the recreate that applies the thresholds comes after calibrate and before the first test run, and only when
+    # no measurement is going on
     assert flat.rindex(
         "`docker compose up -d --force-recreate app worker rag-worker`"
     ) > flat.index("only when no `lab_measure.py` run is going on")
