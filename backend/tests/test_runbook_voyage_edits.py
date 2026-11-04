@@ -171,3 +171,69 @@ def test_the_lookup_is_no_longer_said_to_call_deepseek_and_the_old_stubs_are_gon
 
 def test_the_runbook_header_says_how_p14_t08_was_checked():
     assert "P14-T08" in _flat(_text().split("\n## Start and stop")[0])
+
+
+# --------------------------------------------------------------------------- limitations
+
+
+def _limitation(heading: str) -> str:
+    text = _text(LIMITATIONS)
+    start = text.index(heading)
+    following = re.search(r"^##+ ", text[start + 4 :], re.MULTILINE)
+    item = text[start:] if following is None else text[start : start + 4 + following.start()]
+    return _flat(item)
+
+
+FOUR_PARTS = ("- **Statement.**", "- **Measured.**", "- **Source.**", "- **Affects.**")
+
+
+def test_limitation_l_says_what_voyage_does_with_the_data_and_what_the_free_tier_cannot_do():
+    item = _limitation("### (l) · Voyage vector RAG")
+    for label in FOUR_PARTS:
+        assert label in item, label
+    for needle in (
+        "DEC-213",
+        "trial only",
+        "cannot opt out of training",
+        "payment method",
+        "MongoDB",
+        "retention",
+        "unverified",
+        "rate limits",
+        "`rate_limit`",
+        'scored "RAG on" with no RAG',
+        "counted",
+        "approval-time embeddings",
+        "`knowledge_embed`",
+        "outside the budget",
+        "`RAG_MONTHLY_USD_CAP`",
+        "never sent",
+        "raw log",
+    ):
+        assert needle in item, f"limitation (l) no longer says {needle!r}"
+
+
+def test_limitation_li_says_what_the_lab_measurement_cannot_show():
+    item = _limitation("### (li) · The lab measurement")
+    for label in FOUR_PARTS:
+        assert label in item, label
+    for needle in (
+        "DEC-213",
+        "unseen scenario",
+        "not measured",
+        "provisional until calibration",
+        "`RAG_MIN_SCORE`",
+        "`RAG_LEVEL_GIONG`",
+        "`RAG_LEVEL_RAT_GIONG`",
+        "flattered",
+        "neighbours' current status",
+        "`history_same_run`",
+        "`DEDUP_ENABLED=true`",
+        "neither listed nor labelled",
+        "2000",
+        "2099",
+        "`eval/investigate_measure.py`",
+        "`investigate_v2`",
+        "the lab tool does not use it",
+    ):
+        assert needle in item, f"limitation (li) no longer says {needle!r}"

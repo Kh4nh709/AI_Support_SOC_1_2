@@ -912,6 +912,87 @@ the Measured paragraph of item (ix) in section B.
   approval of a draft and the audit of merges are the controls, not the agent. The supported deployment is
   one `rag-worker` and the single role.
 
+### (l) · Voyage vector RAG (DEC-213, trial only): the free tier may train on what is sent and cannot opt out, Voyage's retention is unverified, its rate limits are not published, and the approval-time embeddings are outside the budget
+
+- **Statement.** DEC-213 (03/11/2026) replaces the lookup's candidate ranking by Voyage AI embeddings in an
+  independent pgvector (`vectordb`) and by Voyage rerank, with no fallback to an LLM ranker. It runs on the trial
+  only: the P14 branch is never merged into `main` and live is never deployed with it, so none of this describes
+  the live system. Four limits, each real once `RAG_ENABLED` is on:
+  1. **The free tier cannot opt out of training.** MongoDB, Voyage's owner, may use the data sent to its
+     self-serve API to improve Voyage models, and opting out needs a payment method on file. The Owner's account
+     is the free tier with none (spec §5.5), so on this account it cannot be turned off. What is sent is
+     redacted material only: the fingerprint of an alert or a case (closed fields, MITRE and rule ids, rule
+     descriptions, and one log line generalised by `rag/generalise.py`, at most 2 000 characters) and the digests
+     of admin-approved entries (already through V1 to V5). A raw log, a hostname, a username, an owner or an
+     analyst's free text that did not pass approval is never sent. The thesis must say that what is sent may be
+     used for training.
+  2. **Voyage's retention is unverified.** No retention period is documented for the data sent. This register
+     states it as unverified and claims no deletion.
+  3. **The free tier's rate limits are not published, and a burst can fail lookups.** The published limits (2 000
+     requests per minute, 2 to 8 million tokens per minute) are Tier 1's, which needs a payment method. Under a
+     burst of alerts a lookup fails with `rate_limit` (asked again once, if that can still finish before ①
+     starts); the alert's ① and ② then run without the RAG and say so, and for the lab such an alert is scored
+     "RAG on" with no RAG in it. It is counted, not hidden: the measurement reports the failed lookups by kind and
+     the health check `rag_lookup_failures` alarms at five in an hour. A failed lookup lowers the RAG-on score for
+     a reason that has nothing to do with retrieval.
+  4. **The approval-time embeddings are outside the budget.** `knowledge_embed` (the embedding of an entry when it
+     is approved, edited, merged or retired, and of `python -m app.rag.vector_index --rebuild`) writes no
+     `llm_runs` row, so `RAG_MONTHLY_USD_CAP`, the global cap and the admin's cost views do not count it; its
+     tokens are logged. The lookup's calls, which are the bulk of the spend, are counted.
+- **Measured.** Not measured. (1) and (2) are the provider's published terms and their silence as read for the
+  spec on 03/11/2026 (§5.5), not a test; (3) the free tier's limits were not read and no burst has been sent; (4)
+  by construction of `web/rag_handlers/embed.py`, which writes no run row, and the spec's estimate of about 300
+  tokens per approval, under $0.01 for the whole lab at $0.06 per million tokens (`VOYAGE_PRICE_EMBED_PER_M`).
+- **Source.** DEC-213; `docs/superpowers/specs/2026-11-03-voyage-vector-rag-definite-verdicts-design.md` §5.3,
+  §5.5, §5.6 and §8 item 4; `backend/app/rag/lookup.py`; `backend/app/web/rag_handlers/embed.py`;
+  `backend/app/rag/vector_index.py`; `docs/runbook.md`, **Voyage vector RAG (DEC-213)** (P14-T08).
+- **Affects.** Any claim about the privacy of the RAG: with `RAG_ENABLED` on, redacted text goes to a third party
+  that may train on it, and "no data leaves the host" is false for the trial. Any RAG-on figure measured on the
+  free tier (it counts failed lookups as RAG on with no RAG). Any cost figure of the RAG (the embeddings at
+  approval are not in it).
+
+### (li) · The lab measurement (DEC-213): an unseen scenario is not measured, the thresholds are provisional until calibration, the absolute accuracy may be flattered, grouped alerts of another run are unlabelled, and a measurement tool still carries the `investigate_v2` schema
+
+- **Statement.** The lab measurement (spec §6: the page "Gán nhãn lab" and `eval/lab_measure.py`) scores ① and ②
+  against hand labels, RAG off and on. Six limits:
+  1. **An unseen scenario is not measured.** The Owner chose not to put a scenario the knowledge base has never
+     seen in the test set (03/11): the `test` runs are of the same scenarios as the `kb` runs, so how the system
+     does on an attack it has never seen is not measured. Our expectation, not a measurement, is that it behaves
+     as with the RAG off. The leak check keeps the claim honest about runs, not about scenarios.
+  2. **The thresholds are provisional until calibration.** `RAG_MIN_SCORE` (0.50), `RAG_LEVEL_GIONG` (0.65) and
+     `RAG_LEVEL_RAT_GIONG` (0.80) are the builder's first values, and `rerank-2.5` is used without a comparison
+     with `rerank-3`. `lab_measure.py calibrate`, on the `kb` runs, is where they are chosen; until it has run,
+     the percentage the analyst sees and the level in the prompt rest on values nobody has measured.
+  3. **The absolute accuracy may be flattered.** ①'s correlation section and ②'s block 5 show the neighbours'
+     current status, so a prompt may show an analyst decision made after the subject arrived. It is the same in
+     both arms, so the RAG difference is not biased by it, but the absolute accuracy may be flattered. The RAG-on
+     arm alone also reads the stored decision history, which may hold same-run decisions (`history_same_run`):
+     those subjects make the RAG difference unreliable. The report lists the subjects it can have touched; the
+     advice is to run ①'s measurement before analysts work the test runs' alerts.
+  4. **With grouping on, an alert grouped under a head received in another run is neither listed nor labelled.**
+     Only queue heads (`duplicate_of IS NULL`) are listed on "Gán nhãn lab", and only they take a label (`409
+     not_a_queue_head`). With `DEDUP_ENABLED=true`, an alert that repeats a head received in another run is a
+     duplicate of that head: it is neither listed nor labelled in its own run, and it is not scored there. With
+     `DEDUP_ENABLED=false` every alert is a head and the limit does not arise.
+  5. **A lab run's instants are bound to the UTC years 2000 to 2099.** A time near year 1 or year 9999 could not
+     be read back in every session zone, so the API refuses it (`422 invalid`): a lab run outside that range
+     cannot be recorded.
+  6. **`eval/investigate_measure.py` still renders the new ② template with the `investigate_v2` schema block.**
+     That tool (P5-T02) appends `schemas.render('investigate_v2')`, the old answer, which still offers
+     `need_more_data`, while P14-T02 took that sentence out of the template. `eval/` was kept off-limits for the
+     lab, so the file was not changed; the lab tool does not use it, and a measurement made with it describes
+     neither the old ② nor the new one.
+- **Measured.** Not measured. (1) is the Owner's ruling of 03/11 (spec §8 item 3 and §10); (2) is
+  `.env.example`'s provisional values; (3) is the caveat the report prints in its header, with the subjects it can
+  have touched listed, not a figure; (4) follows from `lab/labels.py` (heads only) and from the grouping rule; (5)
+  from `lab/runs.py` (`YEAR_MIN`, `YEAR_MAX`); (6) from reading `eval/investigate_measure.py` at the P14-T08 tip
+  (the schema block is added by `schemas.render('investigate_v2')`).
+- **Source.** DEC-213; the spec's §6, §8 and §10; `eval/lab_measure.py` (P14-T11); `backend/app/lab/`;
+  `docs/runbook.md`, **Voyage vector RAG (DEC-213)**, *Lab procedure* and *Measuring* (P14-T08).
+- **Affects.** Any claim that the RAG helps ① or ② on attacks in general (the measurement is of the lab's
+  scenarios); any accuracy of the lab measurement read as an absolute figure; the percentage and the levels shown
+  to the analyst; the label counts of a lab run on a stack that groups alerts.
+
 ## F. What the thesis must not claim
 
 ### (xxxviii) · Only Wazuh, no detection; no "MTTD", no "ATT&CK coverage"
