@@ -9,9 +9,12 @@
 // A write goes to the server first, and the row changes when the server has said yes: no optimistic update, so the
 // row never shows a label the server does not hold. The row is told through `onLabelled`, which moves the counter of
 // the page (and, as the write's last step, makes sure no read of the run that was already out can undo it: the row's
-// write is not over until `onLabelled` has answered). A button the click would change nothing with (the label the alert
-// already has, `Bỏ nhãn` of an alert with none) is `aria-disabled` and sends nothing; it is not `disabled`, so the
-// focus stays where the admin put it.
+// write is not over until `onLabelled` has answered).
+//
+// A button the click would change nothing with is `aria-disabled` and sends nothing: the button of the label the alert
+// already has, `Bỏ nhãn` of an alert with none, and all three while the row's own write is out (dimmed as well, so a
+// click that the latch drops is seen not to have been taken). It is `aria-disabled` and not `disabled`, so the focus
+// stays where the admin put it.
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import {
@@ -31,7 +34,9 @@ const R = S.admin.lab.runPage;
 
 const MONO = "font-mono";
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-text";
-const BUTTON = `h-[34px] whitespace-nowrap rounded-md border px-3 text-[13px] ${FOCUS} aria-disabled:cursor-not-allowed aria-disabled:opacity-50`;
+const BUTTON = `h-[34px] whitespace-nowrap rounded-md border px-3 text-[13px] ${FOCUS} aria-disabled:cursor-not-allowed`;
+// A button that does nothing right now looks it: the row's write is out, or there is no label to take off.
+const DIMMED = "opacity-50";
 // Whole class names, written out: Tailwind finds a class by reading the source.
 const IDLE = "border-[#2e3a48] text-[#c9d3df] hover:bg-ground";
 const PRESSED: Record<LabLabel, string> = {
@@ -85,6 +90,7 @@ export function LabAlertRow({
     if (alert.label !== null) run(null);
   };
 
+  const pending = mutation.isPending;
   const state = alert.label ?? "none";
   const stateText = alert.label === null ? S.admin.lab.label.none : S.admin.lab.label[alert.label];
 
@@ -138,7 +144,8 @@ export function LabAlertRow({
               <dd>{alert.occurrence_count}</dd>
             </dl>
             <div className="space-y-1.5">
-              <h3 className="text-[13px] font-semibold text-[#aeb9c6]">{R.detail.rawLog}</h3>
+              {/* Not a heading: the page has an h1 and no h2, so a heading here would skip a level. */}
+              <p className="text-[13px] font-semibold text-[#aeb9c6]">{R.detail.rawLog}</p>
               <LogBlock text={alert.raw_log} />
               {alert.raw_log_truncated_for_display && (
                 <p className="text-xs text-muted">{R.detail.rawLogCut}</p>
@@ -149,22 +156,26 @@ export function LabAlertRow({
       </details>
 
       <div role="group" aria-label={R.actionsLabel} className="flex flex-wrap items-center gap-2">
-        {(["true_positive", "false_positive"] as const).map((label) => (
-          <button
-            key={label}
-            type="button"
-            aria-pressed={alert.label === label}
-            onClick={() => choose(label)}
-            className={`${BUTTON} ${alert.label === label ? PRESSED[label] : IDLE}`}
-          >
-            {R.action[label]}
-          </button>
-        ))}
+        {(["true_positive", "false_positive"] as const).map((label) => {
+          const held = alert.label === label;
+          return (
+            <button
+              key={label}
+              type="button"
+              aria-pressed={held}
+              aria-disabled={held || pending}
+              onClick={() => choose(label)}
+              className={`${BUTTON} ${held ? PRESSED[label] : IDLE} ${pending ? DIMMED : ""}`}
+            >
+              {R.action[label]}
+            </button>
+          );
+        })}
         <button
           type="button"
-          aria-disabled={alert.label === null}
+          aria-disabled={alert.label === null || pending}
           onClick={clear}
-          className={`${BUTTON} ${IDLE}`}
+          className={`${BUTTON} ${IDLE} ${alert.label === null || pending ? DIMMED : ""}`}
         >
           {R.action.clear}
         </button>

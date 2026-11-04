@@ -363,6 +363,64 @@ describe("the run", () => {
     expect(two.getByRole("button", { name: CLEAR })).toHaveAttribute("aria-disabled", "true");
   });
 
+  // Fix round 1, M1: the code says what the comment of LabAlertRow says.
+  it("makes the button of the label the alert already has, and only it, aria-disabled; it is not dimmed", async () => {
+    backend();
+    renderPage();
+    const one = await rowOf(1);
+    expect(one.getByRole("button", { name: TP })).toHaveAttribute("aria-disabled", "true");
+    expect(one.getByRole("button", { name: FP })).toHaveAttribute("aria-disabled", "false");
+    expect(one.getByRole("button", { name: CLEAR })).toHaveAttribute("aria-disabled", "false");
+    // the pressed label is the one that stands out, not the one that fades
+    expect(one.getByRole("button", { name: TP }).className).not.toMatch(/\bopacity-50\b/);
+    const two = await rowOf(2);
+    for (const name of [TP, FP]) {
+      expect(two.getByRole("button", { name })).toHaveAttribute("aria-disabled", "false");
+    }
+  });
+
+  it("moves the aria-disabled with the label: after a TP, TP is the one that does nothing", async () => {
+    backend();
+    const user = userEvent.setup();
+    renderPage();
+    const two = await rowOf(2);
+    await user.click(two.getByRole("button", { name: TP }));
+    await counter("Đã gán 2/3");
+    await waitFor(() =>
+      expect(two.getByRole("button", { name: TP })).toHaveAttribute("aria-disabled", "true"),
+    );
+    expect(two.getByRole("button", { name: FP })).toHaveAttribute("aria-disabled", "false");
+    expect(two.getByRole("button", { name: CLEAR })).toHaveAttribute("aria-disabled", "false");
+  });
+
+  // Fix round 1, M4: the details of a row hold no heading (an h3 under the h1 skipped a level).
+  it("leaves no heading in a row, details open or not: the page has an h1 and no h2 to put one under", async () => {
+    backend({ alerts: [alert(1), alert(2, { raw_log_truncated_for_display: true })] });
+    const user = userEvent.setup();
+    const { container } = renderPage();
+    const one = await rowOf(1);
+    await user.click(one.getByText("Chi tiết"));
+    await one.findByText("raw log of alert 1");
+    expect(within(await list()).queryAllByRole("heading")).toEqual([]);
+    expect(container.querySelectorAll("h2, h3, h4")).toHaveLength(0);
+    // "raw_log" still names what the box is
+    expect(one.getByText("raw_log")).toBeInTheDocument();
+  });
+
+  it("has no axe violation with the details of a row open, heading order included", async () => {
+    backend();
+    const user = userEvent.setup();
+    const { container } = renderPage();
+    const one = await rowOf(1);
+    await user.click(one.getByText("Chi tiết"));
+    await one.findByText("raw log of alert 1");
+    const result = await axe.run(container, {
+      rules: { "color-contrast": { enabled: false } },
+      runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "best-practice"] },
+    });
+    expect(result.violations.map((v) => v.id)).toEqual([]);
+  });
+
   it("says there is no alert, and offers no more to load, for a run with none", async () => {
     backend({ alerts: [] });
     renderPage();
@@ -550,6 +608,87 @@ describe("labelling an alert", () => {
     await user.click(within(li).getByRole("button", { name: TP }));
     await waitFor(() => expect(li).toHaveAttribute("aria-busy", "true"));
     await waitFor(() => expect(li).not.toHaveAttribute("aria-busy"));
+  });
+
+  // Fix round 1, M2: a click the latch drops is seen not to have been taken.
+  it("dims the three buttons of a row and makes them aria-disabled while its write is out, and a click on one sends nothing", async () => {
+    const b = backend();
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.put("/api/admin/lab/labels/:alertId", async ({ request, params }) => {
+        const { label } = (await request.json()) as { label: LabLabel };
+        b.calls.push({
+          method: "PUT",
+          path: `/api/admin/lab/labels/${String(params.alertId)}`,
+          search: "",
+          body: { label },
+          contentType: null,
+        });
+        await held;
+        return HttpResponse.json({ alert_id: params.alertId, run_id: RUN_ID, label });
+      }),
+    );
+    const user = userEvent.setup();
+    renderPage();
+    await counter("Đã gán 1/3");
+    const two = await rowOf(2);
+    // before: nothing is dimmed but the `Bỏ nhãn` of an alert with no label
+    for (const name of [TP, FP]) {
+      expect(two.getByRole("button", { name }).className).not.toMatch(/\bopacity-50\b/);
+    }
+    await user.click(two.getByRole("button", { name: TP }));
+    await waitFor(() =>
+      expect(two.getByRole("button", { name: FP })).toHaveAttribute("aria-disabled", "true"),
+    );
+    for (const name of [TP, FP, CLEAR]) {
+      const button = two.getByRole("button", { name });
+      expect(button, name).toHaveAttribute("aria-disabled", "true");
+      expect(button.className, name).toMatch(/\bopacity-50\b/);
+    }
+    // the click that is dropped sends nothing
+    await user.click(two.getByRole("button", { name: FP }));
+    await user.click(two.getByRole("button", { name: CLEAR }));
+    expect(b.writes()).toHaveLength(1);
+    // another row is not held by this one's write
+    expect((await rowOf(3)).getByRole("button", { name: TP }).className).not.toMatch(
+      /\bopacity-50\b/,
+    );
+
+    release();
+    await counter("Đã gán 2/3");
+    // after: TP is what the row holds (aria-disabled, but standing out), FP and `Bỏ nhãn` are free and bright again
+    await waitFor(() =>
+      expect(two.getByRole("button", { name: FP })).toHaveAttribute("aria-disabled", "false"),
+    );
+    expect(two.getByRole("button", { name: CLEAR })).toHaveAttribute("aria-disabled", "false");
+    expect(two.getByRole("button", { name: TP })).toHaveAttribute("aria-disabled", "true");
+    for (const name of [TP, FP, CLEAR]) {
+      expect(two.getByRole("button", { name }).className, name).not.toMatch(/\bopacity-50\b/);
+    }
+    expect(b.writes()).toHaveLength(1);
+  });
+
+  it("lets the FP that was dropped be pressed again once the TP has landed", async () => {
+    const b = backend();
+    const user = userEvent.setup();
+    renderPage();
+    await counter("Đã gán 1/3");
+    const two = await rowOf(2);
+    fireEvent.click(two.getByRole("button", { name: TP }));
+    fireEvent.click(two.getByRole("button", { name: FP }));
+    await counter("Đã gán 2/3");
+    await waitFor(() =>
+      expect(two.getByRole("button", { name: FP })).toHaveAttribute("aria-disabled", "false"),
+    );
+    await user.click(two.getByRole("button", { name: FP }));
+    await waitFor(() => expect(state(two)).toHaveTextContent("FP"));
+    expect(b.writes().map((w) => (w.body as { label: string }).label)).toEqual([
+      "true_positive",
+      "false_positive",
+    ]);
   });
 
   describe("when the server refuses", () => {
