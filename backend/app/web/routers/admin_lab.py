@@ -14,8 +14,9 @@ received in the window and `labelled` how many of them carry a label (an unlabel
 is counted as such). Runs come latest window first.
 
 **Create.** `purpose` is `kb` or `test`; `starts_at` and `ends_at` are ISO 8601 with a zone (`Z` or an
-offset; a time with none is ambiguous and refused, and so is one whose UTC year is not in 2000..2099). The window is half-open, `[starts_at, ends_at)`, and
-may not overlap another run's. A run starts where another ends. `409 {"detail": {"reason": "overlap"}}`
+offset; a time with none is ambiguous and refused, and so is one whose UTC year is not in 2000..2099). The
+window is half-open, `[starts_at, ends_at)`, and may not overlap another run's. A run starts where another
+ends. `409 {"detail": {"reason": "overlap"}}`
 when it does. `422 {"detail": {"field", "reason"}}` otherwise: `field` is `name`, `purpose`, `starts_at`,
 `ends_at` or `body`, and `reason` is `required`, `empty`, `too_long`, `invalid`, `taken` (the name is in
 use) or `not_after_starts` (`ends_at` is not after `starts_at`).

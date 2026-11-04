@@ -54,7 +54,7 @@ from typing import Any
 
 import psycopg
 
-from app.domain.correlation import _STATUS_PREDICATE, _WINDOW_PREDICATE
+from app.domain.correlation import _STATUS_PREDICATE, _WINDOW_PREDICATE, RECEIVED_BEFORE_PREDICATE
 from app.domain.correlation import _params as _correlation_params
 from app.infra import config
 from app.kb.lookup import get_playbook
@@ -449,12 +449,14 @@ _TIMELINE_TAIL_SQL = f"""
 #: run, when `_TIMELINE_SQL` alone already answered the whole case.
 _TIMELINE_COUNT_SQL = f"SELECT count(*) FROM ({_TIMELINE_BASE_SQL}) t"
 
+
 #: Blocker 4: this module's own correlation queries, not `domain.correlation`'s —
 #: `domain.correlation.rows_query`/`samples_query` never exclude the case's own heads
 #: (deviation 6 flipped: they must), are not a total order, and cap samples' `raw_log` not
 #: at all. `_WINDOW_PREDICATE` (the ±2h agent/user/srcip window) is imported, not copied,
 #: so this can never drift from what `escalate`'s own correlation reads.
-_CORRELATION_ROWS_SQL = f"""
+def _correlation_rows_sql(bound: str = "") -> str:
+    return f"""
     SELECT rule_id, category, status,
            count(*) AS cluster_count,
            sum(occurrence_count) AS alert_count,
@@ -463,23 +465,37 @@ _CORRELATION_ROWS_SQL = f"""
            count(DISTINCT srcip) AS src_ip_count
     FROM alerts
     WHERE {_WINDOW_PREDICATE}
-      AND {_STATUS_PREDICATE}
+      AND {_STATUS_PREDICATE}{bound}
       AND alert_id NOT IN ({_CASE_ALERT_IDS_NAMED})
     GROUP BY rule_id, category, status
     ORDER BY sum(occurrence_count) DESC, rule_id, category, status
     LIMIT {MAX_CORRELATION_ROWS}
 """
 
-_CORRELATION_SAMPLES_SQL = f"""
+
+def _correlation_samples_sql(bound: str = "") -> str:
+    return f"""
     SELECT alert_id, rule_id, category, severity, status, occurrence_count,
            alert_time, description, raw_log
     FROM alerts
     WHERE {_WINDOW_PREDICATE}
-      AND {_STATUS_PREDICATE}
+      AND {_STATUS_PREDICATE}{bound}
       AND alert_id NOT IN ({_CASE_ALERT_IDS_NAMED})
     ORDER BY occurrence_count DESC, alert_time DESC, alert_id
     LIMIT {MAX_CORRELATION_SAMPLES}
 """
+
+
+_CORRELATION_ROWS_SQL = _correlation_rows_sql()
+_CORRELATION_SAMPLES_SQL = _correlation_samples_sql()
+
+#: P14 final fix wave, C1: block 5 for a dossier built `as_of` an instant - the same two statements with one
+#: more bound, `received_at < as_of` (`domain.correlation.RECEIVED_BEFORE_PREDICATE`), so a later stage of the
+#: attack, received after the first ② run, is neither counted nor sampled. The two above are unchanged and
+#: are still what `as_of=None` runs.
+_RECEIVED_BEFORE = f"\n      AND {RECEIVED_BEFORE_PREDICATE}"
+_CORRELATION_ROWS_BEFORE_SQL = _correlation_rows_sql(_RECEIVED_BEFORE)
+_CORRELATION_SAMPLES_BEFORE_SQL = _correlation_samples_sql(_RECEIVED_BEFORE)
 
 _TIER1_EVENTS_SQL = f"""
     SELECT audit_id, event_type, subject_id, actor_id, actor_role, payload, created_at
@@ -587,15 +603,21 @@ def _fetch_tier1_events_before(
 
 
 def _fetch_correlation(
-    conn: psycopg.Connection, case_id: str, head: _Head
+    conn: psycopg.Connection, case_id: str, head: _Head, as_of: datetime | None = None
 ) -> tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]:
     """`(rows, samples)` for one head's ±2h window, this module's own queries (blocker 4):
     the case's own alerts excluded in SQL (deviation 6, flipped), a total order on each
     (tie-breakers `rule_id, category, status` / `alert_id`), samples uncapped in row count
-    here — `_block5_correlation` caps and dedupes across heads at render time."""
+    here — `_block5_correlation` caps and dedupes across heads at render time. With `as_of`
+    (C1) the `_BEFORE` variants: only alerts received before it."""
     params = {**_correlation_params(head), "case_id": case_id}
-    rows = conn.execute(_CORRELATION_ROWS_SQL, params).fetchall()
-    samples = conn.execute(_CORRELATION_SAMPLES_SQL, params).fetchall()
+    if as_of is None:
+        rows_sql, samples_sql = _CORRELATION_ROWS_SQL, _CORRELATION_SAMPLES_SQL
+    else:
+        rows_sql, samples_sql = _CORRELATION_ROWS_BEFORE_SQL, _CORRELATION_SAMPLES_BEFORE_SQL
+        params["as_of"] = as_of
+    rows = conn.execute(rows_sql, params).fetchall()
+    samples = conn.execute(samples_sql, params).fetchall()
     return rows, samples
 
 
@@ -1363,8 +1385,9 @@ def build(
 
     `as_of` (P14-T11, the lab measurement): None - today's dossier. With an instant, block 6 (the tier-1
     audit rows) and block 8 (the case notes and the previous ② run) keep only the rows created strictly
-    before it, so a note or an earlier ② answer written after the escalation does not reach the prompt.
-    Every other block is built as ever."""
+    before it, so a note or an earlier ② answer written after the escalation does not reach the prompt;
+    and block 5 (C1, P14 final fix wave) keeps only the alerts RECEIVED strictly before it, so a later stage
+    of the attack is neither counted nor sampled. Every other block is built as ever."""
     cfg = cfg or config.load()
 
     case_row = _fetch_case(conn, case_id)
@@ -1403,7 +1426,12 @@ def build(
         )
     entities = entities_all[:MAX_ENTITIES]
 
-    correlation_by_head = {h.alert_id: _fetch_correlation(conn, case_id, h) for h in heads}
+    if as_of is None:
+        correlation_by_head = {h.alert_id: _fetch_correlation(conn, case_id, h) for h in heads}
+    else:
+        correlation_by_head = {
+            h.alert_id: _fetch_correlation(conn, case_id, h, as_of) for h in heads
+        }
 
     total_dup = sum(span[0] for span in dup_spans.values())
     snapshot = Snapshot(

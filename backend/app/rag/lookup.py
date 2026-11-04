@@ -34,8 +34,12 @@ ranker (Owner, 03/11). One lookup, in order:
    `result={"ranked": [...]}`, `model_id` `"<embedding model>+<rerank model>"`, both calls' tokens as
    `input_tokens` and `output_tokens=0`, and `cost_usd` at Voyage's prices, so `rag.budget` counts it. Its
    `gate_result` holds `integrity_failed` (the entries dropped at 4), `vector_hits` and `candidates` (the
-   number sent to the rerank). Every lookup that sent a request has one run row, whatever its outcome; one
-   that sent none (an empty `VOYAGE_API_KEY`) has none, its `failed` row and event are its record.
+   number sent to the rerank). A lookup that finished after sending a request has one run row for that
+   attempt, whatever its outcome. The rows are counted per ATTEMPT, not per lookup: a rate-limited first
+   attempt that had paid for its embedding wrote its own row (committed before the retry), so a retried lookup
+   has two; a 429 whose retry comes too late (1b) has only that one, and one whose first request was itself
+   refused with a 429 has none. A lookup that sent no request (an empty `VOYAGE_API_KEY`) has none, its
+   `failed` row and event are its record.
 
 The outcomes (`rag_results.status`): `empty` (nothing to show, the first day); `ok` (a history, or matches);
 `budget` (a cap reached, before any call); `failed` with a closed `failure_kind` and the event
@@ -45,8 +49,12 @@ The outcomes (`rag_results.status`): `empty` (nothing to show, the first day); `
 `vectordb_unreachable`; the rest `provider_error`. ① and ② then run without the RAG and say so
 (`rag_not_applied:<kind>`, `lookup_failure`). One exception (Director's call, spec §5.3): a `rate_limit` on the
 job's **first** attempt is raised as `TransientError("rate_limit")`; the worker retries after 10 s, which is
-inside `RAG_TRIAGE_DELAY_S`, and a retry that finds ① finished is "late" (1b) and writes nothing. On the
-second attempt it is a failure like any other. What was paid for before that failure (the embedding, when the
+inside `RAG_TRIAGE_DELAY_S`, and a retry that finds ① finished is "late" (1b) and writes nothing: **no
+`failed` row, no `rag.lookup_failed` event, no integrity event of the first attempt (its transaction is rolled
+back)**, so `rag_lookup_failures` (`infra/health.py`) and the lab measurement's failed-lookup count by kind
+cannot see a 429 whose retry came too late; "no lookup" can hide it (P14 final fix wave, deferred item 28:
+documented, not changed - the retry cannot tell why it is a retry, and the pinned design is that it writes
+nothing). On the second attempt it is a failure like any other. What was paid for before that failure (the embedding, when the
 rerank was refused) is written as a run row and committed first (the worker rolls the handler's transaction
 back, the spend must not vanish with it).
 
@@ -81,7 +89,7 @@ from psycopg.types.json import Jsonb
 from app.audit.events import write_event
 from app.infra import config
 from app.infra.db import raise_idle_timeout
-from app.infra.errors import PermanentError, TransientError
+from app.infra.errors import UNKNOWN_FAILURE_KIND, PermanentError, TransientError
 from app.infra.jobs import Job
 from app.llm.builder import KbLearnedLevel
 from app.rag import match, vector_store, voyage
@@ -110,9 +118,10 @@ USABLE_STATUSES = ("ok", "empty")
 #: (the vector search and the database search merged, then Voyage rerank).
 RETRIEVAL_VERSION = "voyage_hybrid_v1"
 
-#: What a `failed` row with no stored kind (the rows 020 wrote before migration 023) is told as: a closed word
-#: for the notice, the nearest to "the retrieval did not work and nothing says why".
-UNKNOWN_FAILURE_KIND = "provider_error"
+# `UNKNOWN_FAILURE_KIND` (imported above, and the name ① and ② import from here): what a `failed` row with no
+# stored kind (the rows 020 wrote before migration 023) is told as, a closed word for the notice, the nearest to
+# "the retrieval did not work and nothing says why". It is defined in `infra.errors`, where the health check
+# reads it too: `infra` may not import `rag`.
 
 
 @dataclass(frozen=True)

@@ -7,7 +7,9 @@ One pair of values, the same on both pages: `{"best_pct": int | None, "not_appli
   readers fetch that `rag_results.matches` in the statement that reads the run). The formula is `Match.pct`'s
   and the prompt fact `trung_pct`'s (`rag/match.py`): the page, the prompt and the admin page say one number,
   and `tests/test_rag_view.py` holds the two copies equal. `None` when the run holds no lookup or the lookup
-  kept no match.
+  kept no match, and when ①'s token budget dropped the entries and kept only the decision history (the run
+  then still names its lookup, but none of its matches reached the prompt; the run's `citation_warnings` carry
+  `learned_entries_dropped`, P14 final fix wave M2).
 * **`not_applied`** is the closed failure kind of the `rag_not_applied:<kind>` warning ① and ② put in the run's
   `citation_warnings` when the newest lookup of their subject failed and the learned section was left out
   (`llm.builder.rag_not_applied_warning`). Only a kind of `rag.failures.FAILURE_KINDS` leaves: `llm` may not
@@ -28,7 +30,7 @@ import math
 from collections.abc import Collection, Mapping
 from typing import Any
 
-from app.llm.builder import RAG_NOT_APPLIED_PREFIX
+from app.llm.builder import LEARNED_ENTRIES_DROPPED_WARNING, RAG_NOT_APPLIED_PREFIX
 
 
 def percent(score: float) -> int:
@@ -72,8 +74,17 @@ def not_applied(warnings: Any, kinds: Collection[str]) -> str | None:
     return None
 
 
+def entries_dropped(warnings: Any) -> bool:
+    """Whether the run's `citation_warnings` say the token budget dropped the learned entries (①'s first cut)."""
+    return isinstance(warnings, list) and LEARNED_ENTRIES_DROPPED_WARNING in warnings
+
+
 def rag_view(matches: Any, warnings: Any, kinds: Collection[str]) -> dict[str, int | str | None]:
     """`{"best_pct", "not_applied"}` of one run: `matches` is the stored `matches` of the lookup the run held
     (`None` when it held none), `warnings` the run's `citation_warnings`, `kinds` `rag.failures.FAILURE_KINDS`.
-    A new dict on every call."""
-    return {"best_pct": best_pct(matches), "not_applied": not_applied(warnings, kinds)}
+    No percentage when the run's budget cut dropped the entries (`entries_dropped`). A new dict on every
+    call."""
+    return {
+        "best_pct": None if entries_dropped(warnings) else best_pct(matches),
+        "not_applied": not_applied(warnings, kinds),
+    }

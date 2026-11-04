@@ -40,6 +40,12 @@ _SECRET_FIELDS = frozenset(
         # P14-T04 / DEC-213: the Voyage key, and the vector database's DSN (it carries `vectordb`'s password).
         "VOYAGE_API_KEY",
         "VECTOR_DATABASE_URL",
+        # P14 final fix wave: the three DSNs of the main database (they carry its passwords). Nothing printed
+        # a `Config` before, but `repr(cfg)` or `cfg.dump()` in a log line or a traceback would have; the
+        # fields themselves still hold the real value for `db.connect`.
+        "DATABASE_URL",
+        "DATABASE_URL_OWNER",
+        "TEST_DATABASE_URL",
     }
 )
 
@@ -212,9 +218,10 @@ class Config:
     # DEC-210: learned knowledge and RAG for ① and ②. `.env` keys only, not web settings. Both
     # switches default to false, so merging the feature changes nothing until the Owner turns one
     # on: RAG_ENABLED=false enqueues no lookup, delays no triage and adds no block to a prompt;
-    # KNOWLEDGE_DRAFT_ENABLED=false enqueues no draft on a conclusion. RAG_MODEL empty means
-    # LLM_MODEL_PROPOSER, resolved by the ranking agent (it is not copied here, unlike the
-    # verifier's). RAG_MONTHLY_USD_CAP is the lookup's own sub-cap, counted inside
+    # KNOWLEDGE_DRAFT_ENABLED=false enqueues no draft on a conclusion. RAG_MODEL is the model of the
+    # knowledge-draft calls (the lookup calls no model since DEC-213); empty means LLM_MODEL_PROPOSER,
+    # resolved by `rag.agent.rag_model` (it is not copied here, unlike the verifier's).
+    # RAG_MONTHLY_USD_CAP is the lookup's own sub-cap, counted inside
     # LLM_MONTHLY_USD_CAP; KNOWLEDGE_QUEUE_MAX is the pending-draft count above which
     # `knowledge_queue` alarms (it caps nothing: drafts keep coming).
     RAG_ENABLED: bool = False

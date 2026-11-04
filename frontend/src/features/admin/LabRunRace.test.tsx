@@ -218,6 +218,65 @@ describe("a read of the run that is out when a label write succeeds", () => {
   });
 });
 
+// P14 final fix wave, item 42. `labelled` cancels the read that is out so that its old snapshot cannot undo the write;
+// the cancelled read's news (another admin's label, an alert that arrived) went with it, and nothing read again. When
+// the read it cancelled was a refetch of the loaded pages, the run is read once more after the write, so that read comes
+// after it. A cancelled "Tải thêm" is not a refetch: its press is simply repeated, and nothing is read in its place.
+describe("a refetch that a label write cancelled", () => {
+  it("is read again after the write, so the news it carried is not lost", async () => {
+    const b = backend();
+    const user = userEvent.setup();
+    const client = renderPage();
+    await twoPagesLoaded(user);
+    await refetchWithPage2Held(client, b);
+    const getsBefore = b.gets();
+
+    // While that refetch is out another admin labels alert 3 FP (the refetch took its snapshot before): its answer
+    // cannot carry that, and it is cancelled by the write below.
+    const third = b.alerts[2];
+    if (third) third.label = "false_positive";
+    const two = await rowOf(2);
+    await user.click(two.getByRole("button", { name: "TP — tấn công thật" }));
+    await screen.findByText(/^Đã gán \d+\/3$/);
+    expect(b.alerts[1]?.label).toBe("true_positive");
+
+    await releaseAndSettle(client, b);
+
+    // the page read the run again after the write: the news is there, and the counter is the server's
+    await waitFor(async () => expect(chip(await rowOf(3))).toHaveTextContent("FP"));
+    expect({ two: chip(await rowOf(2)).textContent, counter: counter() }).toEqual({
+      two: "TP",
+      counter: "Đã gán 3/3",
+    });
+    expect(b.gets()).toBeGreaterThan(getsBefore);
+  });
+
+  it("is not read again when what the write cancelled was a `Tải thêm` (its press is repeated instead)", async () => {
+    const b = backend();
+    const user = userEvent.setup();
+    const client = renderPage();
+    await screen.findByText("Đã gán 1/3");
+    b.holdLaterPages();
+    // not awaited: the next page stays out until the server is let go
+    await user.click(await screen.findByRole("button", { name: "Tải thêm" }));
+    await waitFor(() => expect(b.heldArrived()).toBe(true));
+    const getsBefore = b.gets();
+
+    await user.click((await rowOf(2)).getByRole("button", { name: "TP — tấn công thật" }));
+    await screen.findByText("Đã gán 2/3");
+    b.release();
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+
+    expect(b.gets()).toBe(getsBefore); // no read in place of the cancelled page
+    expect(counter()).toBe("Đã gán 2/3");
+    expect(screen.queryByRole("listitem", { name: "Alert 1766000000.3" })).not.toBeInTheDocument();
+    // the cancelled press is pressed again, as before
+    await user.click(await screen.findByRole("button", { name: "Tải thêm" }));
+    await rowOf(3);
+    expect(counter()).toBe("Đã gán 2/3");
+  });
+});
+
 describe("a focus of the window", () => {
   it("does not read the loaded pages again: a label is not undone by a focus, and a large run is not reloaded", async () => {
     const b = backend();

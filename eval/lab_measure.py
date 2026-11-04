@@ -9,12 +9,16 @@ against the labels an admin gave by hand.
   any head is labelled TP; with no TP and a head nobody labelled it is *unlabelled*; otherwise it is FP. An
   unlabelled subject is excluded and counted, never scored as FP. A labelled case whose ② never ran has no
   ② answer: it is counted as ``no_investigation``.
-* **Two runs per subject.** ①: ``evaluate_alert`` with ``DEPLOYED`` and ``rag`` off, then on; the RAG-on run
-  uses the lookup stored when the alert arrived (what ``evaluate_alert`` reads). ②: ``evaluate_case``, ``rag``
-  off then on, **as of the case's first ② run** (``as_of``): the dossier then holds no tier-2 note and no
-  earlier ② answer written after that instant, and the RAG arm reads the newest lookup created before it.
-  Nothing is looked up again; a subject with no usable lookup is counted (failed lookups by kind, "no
-  lookup", "budget") and scored without RAG.
+* **Two runs per subject, each as of the subject's first look** (``as_of``), so a prompt holds what production
+  could have shown then and not what arrived since. ①: ``evaluate_alert`` with ``DEPLOYED`` and ``rag`` off,
+  then on, **as of the alert's first ① proposer run** (the ``created_at`` of its first ``triage`` / ``proposer``
+  row in ``llm_runs``), else ``received_at + RAG_TRIAGE_DELAY_S``; the row records which of the two was used and the
+  report counts both. The burst count (``DEDUP_ENABLED=false``) and the correlation section then hold only the
+  alerts received before ``as_of``, and the RAG-on run reads the newest lookup created before it. ②:
+  ``evaluate_case``, ``rag`` off then on, **as of the case's first ② run**: the dossier then holds no tier-2
+  note and no earlier ② answer written after that instant, block 5 only alerts received before it, and the RAG
+  arm reads the newest lookup created before it. Nothing is looked up again; a subject with no usable lookup is
+  counted (failed lookups by kind, "no lookup", "budget") and scored without RAG.
 * **The model's TP.** ①: ``proposed_verdict == "true_positive"``. ②: ``model_conclusion ==
   "confirmed_incident"``. **Held.** ①: ``final_verdict == "needs_review"``. ②: a non-empty ``held_by``, or a
   stored ``need_more_data`` beside a definite ``model_conclusion``.
@@ -51,23 +55,27 @@ process keeps it. A database error is one generic line (the class of the error, 
 a malformed address, password included).
 
 Exit codes: 0 done; 2 usage (also: ``--out`` cannot be written, checked before the estimate); 3 not ready (no
-test run, nothing to score, Voyage refused the key); 4 the DSN or the database is unusable; 5 the estimate needs
+test run, nothing to score, the Voyage key missing or refused); 4 the DSN or the database is unusable; 5 the estimate needs
 approval (``--yes``); 6 stopped by the monthly cap (``cap`` and ``verifier_cap`` both count); 7 nothing was
 answered in any arm; 8 stopped part-way (a database error or Ctrl-C): the subjects that finished are written as a
 report marked PARTIAL.
 
-**What the numbers may be flattered or biased by (the report's caveat).** ①'s correlation section and ②'s block
-5 print the neighbours' CURRENT status, so a prompt may show an analyst decision made after the subject arrived
-(①: the alert's ``received_at``; ②: ``as_of``). It is the same in both arms, so the RAG difference is not biased by
+**What the numbers may be flattered or biased by (the report's caveat).** The inputs of ① and ② are bounded at
+the subject's first look (above): the burst count, the correlation section and block 5 hold only alerts
+received before it, so a later stage of the attack is not in a prompt. What is NOT bounded is the neighbours'
+CURRENT status: the section prints the status a neighbour has now, so a prompt may show an analyst decision made
+after the subject's first look (``as_of``). It is the same in both arms, so the RAG difference is not biased by
 it and the absolute accuracy may be flattered; the report counts and lists the subjects it can have touched.
-That count is an estimate, not a bound. A neighbour counts when it is in the +-2 h window, in a decided status
-(``closed_fp``, ``closed_benign``, ``closed_confirmed``, ``escalated_tier2``), and its decision is dated after
-the subject arrived: a closed one by ``sealed_at``, an escalated one by the ``tier1.escalated`` event whose
-``payload.alert_ids`` lists it (``transitions.escalate`` writes one event per case, keyed on the trigger, so a
-swept sibling has none of its own). It OVER-counts because the section's caps (20 groups, 5 samples) are not
-replayed: a neighbour the section cut is counted. It UNDER-counts a neighbour in a decided status with no record
-that dates the decision (an escalation no event lists, as in hand-made data), and a decision the section shows
-under a status outside the four above (none today).
+That count is an estimate, not a bound. A neighbour counts when it was received before ``as_of`` (so the section
+holds it), is in the +-2 h window, in a decided status (``closed_fp``, ``closed_benign``, ``closed_confirmed``,
+``escalated_tier2``), and its decision is dated after ``as_of``: a closed one by ``sealed_at``, an escalated one
+by the ``tier1.escalated`` event whose ``payload.alert_ids`` lists it (``transitions.escalate`` writes one event
+per case, keyed on the trigger, so a swept sibling has none of its own). It OVER-counts because the section's
+caps (20 groups, 5 samples) are not replayed: a neighbour the section cut is counted. It UNDER-counts a
+neighbour in a decided status with no record that dates the decision (an escalation no event lists, as in
+hand-made data), and a decision the section shows under a status outside the four above (none today). With
+``DEDUP_ENABLED=true`` (the trial runs it off) an alert's own ``occurrence_count`` and the correlated heads'
+counts are the ones stored now, not bounded.
 The RAG-on arm alone also reads the stored decision history, which may hold same-run decisions
 (``history_same_run``): those subjects make the RAG difference unreliable. Coverage, the mean best percentage and
 the leak flags describe what reached each PROMPT (decided from the evaluation, with ``prompt_material``'s own
@@ -90,7 +98,7 @@ import uuid
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -104,11 +112,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import llm_cache  # P7-T02: the spend guard
 from app.audit import llm_runs
-from app.domain.correlation import STATUS_PREDICATE, WINDOW_PREDICATE, window_params
+from app.domain.correlation import (
+    RECEIVED_BEFORE_PREDICATE,
+    STATUS_PREDICATE,
+    WINDOW_PREDICATE,
+    window_params,
+)
 from app.infra import config, db
 from app.infra.errors import ConfigError
 from app.llm import verdicts
 from app.llm.adapter import DeepSeekAdapter
+from app.llm.builder import LEARNED_ENTRIES_DROPPED_WARNING
 from app.rag import fingerprint, match, voyage
 from app.rag.entries import entry_by_id
 from app.rag.failures import RagUnavailable
@@ -144,15 +158,33 @@ LEAK_KINDS = ("same_run", "after_cutoff")
 #: The outcomes that are the spend guard's refusal: ①'s verifier call can be the one that meets the cap.
 CAP_OUTCOMES = ("cap", "verifier_cap")
 
-#: One sentence, in the header of every report (the Director's ruling on the correlation section, and the
-#: Reviewer's on the decision history): what the numbers may be flattered or biased by.
+#: One sentence, in the header of every report (the Director's ruling on the correlation section, the
+#: Reviewer's on the decision history, and the final wave's C1 and item 50): what the numbers may be flattered or
+#: biased by. The inputs are bounded at the first look; what is left is the neighbours' status and the history.
 CAVEAT = (
-    "The correlation section of ① and block 5 of ② show the neighbours' current status, so a prompt in either "
-    "arm may show an analyst decision made after the subject arrived (that is the same in both arms: the RAG "
-    "difference is not biased by it, the absolute accuracy may be flattered), while only the RAG-on arm also "
-    "reads the stored decision history, which may hold same-run analyst decisions (the subjects listed under "
-    "history_same_run make the RAG difference unreliable)."
+    "The inputs of ① and ② are bounded at the subject's first look (the burst count, the correlation section "
+    "and block 5 hold only alerts received before it, and the RAG-on arm reads only a lookup created before "
+    "it), but the neighbours in them show their current status, so a prompt in either arm may still show an "
+    "analyst decision made after that instant (that is the same in both arms: the RAG difference is not biased "
+    "by it, the absolute accuracy may be flattered; the subjects counted under correlation_after_arrival are an "
+    "estimate, which over-counts because the section's caps are not replayed and under-counts where a decision "
+    "has no date), while only the RAG-on arm also reads the stored decision history, which may hold same-run "
+    "analyst decisions (the subjects listed under history_same_run make the RAG difference unreliable)."
 )
+
+#: Under the table of every tier that read a lookup (deferred item 28): what the "no lookup" count cannot say.
+#: A lookup rate-limited (429) on its first attempt is retried; a retry that finds ① finished writes nothing,
+#: not even a `failed` row (`rag.lookup.run_lookup_job`, 1b), so the subject has no lookup and no failure kind.
+NO_LOOKUP_NOTE = (
+    '"No lookup" may hide a 429: a rate-limited lookup whose retry came after ① had finished is stored '
+    "nowhere, so no failed-lookup count, in this report or in `rag_lookup_failures`, sees it."
+)
+
+#: Where a subject's `as_of` came from. ①: its first proposer run in `llm_runs`, else `received_at` plus the
+#: triage delay. ②: its first investigation run.
+AS_OF_FIRST_LOOK = "first_look"
+AS_OF_DELAY = "delay"
+AS_OF_FIRST_RUN = "first_run"
 
 #: calibrate's grid: 0.30, 0.35 ... 0.95.
 THRESHOLDS: tuple[float, ...] = tuple(round(0.30 + 0.05 * i, 2) for i in range(14))
@@ -239,9 +271,12 @@ class Seen:
     row). `status`: `ok` / `empty` (the lookup's material reached the prompt), `failed` (with its closed
     `failure_kind`), `budget` (the newest lookup hit a cap: no material), `none` (no lookup at all) or
     `not_in_prompt` (a usable lookup exists but its section did not reach the prompt: the token budget cut it,
-    or its read failed) or `error` (the evaluation raised, so nothing is known of its prompt). `matches` are `(entry_id, percentage)` of the matches the prompt kept, best first
-    (the active, hash-intact ones: `prompt_material`'s own filter). The history fields are the stored
-    decision history that came with the lookup: how many decisions, the newest activity, the example alerts.
+    or its read failed) or `error` (the evaluation raised, so nothing is known of its prompt; `failure_kind` is
+    then the kind of the newest lookup when that one `failed`, so the failed-lookup count is complete). `matches`
+    are `(entry_id, percentage)` of the matches the prompt kept, best first (the active, hash-intact ones:
+    `prompt_material`'s own filter, and none at all when ①'s budget cut dropped the entries and kept only the
+    history). The history fields are the stored decision history that came with the lookup: how many decisions,
+    the newest activity, the example alerts.
     """
 
     status: str
@@ -295,12 +330,19 @@ class ArmRow:
     held_by: tuple[str, ...] = ()
     history_same_run: bool = False
     unplaceable: int = 0
+    #: The instant the subject was evaluated as of, and which of the two ways named it (`AS_OF_*`). None: the
+    #: row was not evaluated as of an instant (a unit test's row).
+    as_of: datetime | None = None
+    as_of_source: str | None = None
 
     @property
     def correct(self) -> bool | None:
         return None if self.model_tp is None else self.model_tp == (self.truth == TRUE_POSITIVE)
 
-    def to_json(self) -> dict[str, Any]:
+    def to_json(self, *, leaks_computed: bool = True) -> dict[str, Any]:
+        """The row of the JSON report. With `leaks_computed` False (the leak pass did not finish) the three
+        values only that pass sets are `null`: `[]`, `false` and `0` would read as "checked, nothing found".
+        """
         row: dict[str, Any] = {
             "tier": self.tier,
             "subject": self.subject,
@@ -314,11 +356,16 @@ class ArmRow:
             "correct": self.correct,
             "cost_usd": self.cost_usd,
         }
+        if self.as_of is not None:
+            row["as_of"] = self.as_of.astimezone(
+                UTC
+            ).isoformat()  # UTC, whatever zone the session read in
+            row["as_of_source"] = self.as_of_source
         if self.seen is not None:
             row["lookup"] = self.seen.to_json()
-            row["leaks"] = list(self.leaks)
-            row["history_same_run"] = self.history_same_run
-            row["unplaceable"] = self.unplaceable
+            row["leaks"] = list(self.leaks) if leaks_computed else None
+            row["history_same_run"] = self.history_same_run if leaks_computed else None
+            row["unplaceable"] = self.unplaceable if leaks_computed else None
         return row
 
 
@@ -326,8 +373,9 @@ def summarise(rows: Sequence[ArmRow], *, leaks_computed: bool = True) -> dict[st
     """The numbers of one arm of one tier. `n` is every subject of the arm; the rates are over the subjects
     the model answered (`answered`), and `no_answer` says by outcome why the others were not scored. A rate
     with nothing to divide is None, never 0. Held is split by whether the model's own conclusion was right.
-    `rag` is None for an arm that read no lookup. With `leaks_computed` False (a PARTIAL report whose leak pass
-    did not run) the leak and history-flag numbers are None: they are not zero, they are unknown."""
+    `rag` is None for an arm that read no lookup. With `leaks_computed` False (a PARTIAL report: the run stopped
+    during the leak pass) the leak and history-flag numbers are None: they are not zero, they are unknown.
+    """
     scored = [row for row in rows if row.model_tp is not None]
     no_answer = Counter(row.outcome for row in rows if row.model_tp is None)
     correct = sum(1 for row in scored if row.correct)
@@ -365,10 +413,13 @@ def _rag_summary(rows: Sequence[ArmRow], leaks_computed: bool = True) -> dict[st
     if not seen_rows:
         return None
     covered = [row for row in seen_rows if row.seen.matches]
+    # An evaluation that raised (`error`) is counted here too when its newest lookup `failed`: it names the kind,
+    # `evaluation_error` below counts it as an evaluation that raised, and neither hides the other.
     failed = Counter(
         (row.seen.failure_kind or UNKNOWN_FAILURE_KIND)
         for row in seen_rows
         if row.seen.status == "failed"
+        or (row.seen.status == "error" and row.seen.failure_kind is not None)
     )
     leaks: dict[str, Any] = {
         kind: {
@@ -413,11 +464,19 @@ def _rag_summary(rows: Sequence[ArmRow], leaks_computed: bool = True) -> dict[st
     }
 
 
-def paired(off_rows: Sequence[ArmRow], on_rows: Sequence[ArmRow]) -> dict[str, Any]:
+def paired(
+    off_rows: Sequence[ArmRow], on_rows: Sequence[ArmRow], *, with_matches: bool = False
+) -> dict[str, Any]:
     """Accuracy of the two arms over the SAME subjects: those the model answered in both. Each arm's own
     rates are over its own `answered` set, so the two can differ in who is scored; this is the exact
-    comparison."""
-    on_by_subject = {row.subject: row for row in on_rows if row.model_tp is not None}
+    comparison. With `with_matches` only the subjects whose RAG-on prompt carried at least one match: where the
+    RAG could act (a failed, an empty, a no-lookup or a budget-cut subject cannot show an effect, and the first
+    line mixes them in)."""
+    on_by_subject = {
+        row.subject: row
+        for row in on_rows
+        if row.model_tp is not None and (not with_matches or (row.seen and row.seen.matches))
+    }
     pairs = [
         (row, on_by_subject[row.subject])
         for row in off_rows
@@ -585,10 +644,16 @@ class Run:
 
 @dataclass(frozen=True)
 class AlertSubject:
+    """A queue head of a test run. `as_of` is the instant ① is evaluated as of (C1): `load_alert_subjects` sets
+    it from the alert's first proposer run (`AS_OF_FIRST_LOOK`) or, with none, `received_at` plus the triage delay
+    (`AS_OF_DELAY`). None - a subject built by hand - is evaluated with no bound, as before."""
+
     alert_id: str
     run_id: str
     label: str | None
     received_at: datetime
+    as_of: datetime | None = None
+    as_of_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -650,9 +715,36 @@ _FIRST_RUN_SQL = """
 """
 
 
-def load_alert_subjects(conn: psycopg.Connection, runs: Sequence[Run]) -> list[AlertSubject]:
+#: ①'s first look at an alert: the `created_at` of its first proposer run, whatever that run ended in (a `cap` or
+#: a `transient` row is written after ① read the alert too). Production's own rows: the lab writes none.
+_FIRST_LOOK_SQL = """
+    SELECT subject_id, min(created_at) FROM llm_runs
+     WHERE pipeline = 'triage' AND role = 'proposer' AND subject_id = ANY(%s)
+     GROUP BY subject_id
+"""
+
+
+def load_alert_subjects(
+    conn: psycopg.Connection, runs: Sequence[Run], *, triage_delay_s: int
+) -> list[AlertSubject]:
+    """The queue heads of `runs`, each with its `as_of`: the `created_at` of the alert's first ① proposer run,
+    else `received_at + triage_delay_s` (`RAG_TRIAGE_DELAY_S`: ① starts that long after the alert, so by then the
+    lookup was stored or it never would be). `as_of_source` says which."""
     rows = conn.execute(_ALERT_SUBJECTS_SQL, ([run.run_id for run in runs],)).fetchall()
-    return [AlertSubject(*row) for row in rows]
+    first = dict(conn.execute(_FIRST_LOOK_SQL, ([row[0] for row in rows],)).fetchall())
+    subjects = []
+    for alert_id, run_id, label, received_at in rows:
+        looked = first.get(alert_id)
+        if looked is not None:
+            subjects.append(
+                AlertSubject(alert_id, run_id, label, received_at, looked, AS_OF_FIRST_LOOK)
+            )
+        else:
+            delayed = received_at + timedelta(seconds=triage_delay_s)
+            subjects.append(
+                AlertSubject(alert_id, run_id, label, received_at, delayed, AS_OF_DELAY)
+            )
+    return subjects
 
 
 def load_case_subjects(conn: psycopg.Connection, runs: Sequence[Run]) -> list[CaseSubject]:
@@ -696,15 +788,18 @@ def seen_for(
     failed_kind: str | None = None,
     before: datetime | None = None,
     skips_budget: bool = False,
+    entries_dropped: bool = False,
 ) -> Seen:
     """What the RAG-on prompt of `subject` held of its lookup. Whether the material reached the prompt is
     decided by the evaluation: `applied` is its `rag_lookup_id` (set only when the section is in the prompt,
     after any budget cut), `failed_kind` its `rag_not_applied` (②). When `applied`, that lookup is read back
     (it is the newest usable one created before `before`) and only the matches the prompt kept are counted,
-    with the stored history. When not, the newest row before `before` says why: none, `failed`, `budget`, or a
-    usable one that did not reach the prompt (`not_in_prompt`). ② looks past a newer `budget` row to the usable
-    row before it (`skips_budget`, spec §7.6; ① reads the newest row whatever it is), so for ② a usable row
-    behind a `budget` one makes it `not_in_prompt`: its section was cut."""
+    with the stored history; with `entries_dropped` (①'s budget cut took the entries and kept the history,
+    warning `learned_entries_dropped`) none is, for none reached the prompt. When not applied, the newest row
+    before `before` says why: none, `failed`, `budget`, or a usable one that did not reach the prompt
+    (`not_in_prompt`). ② looks past a newer `budget` row to the usable row before it (`skips_budget`, spec
+    §7.6; ① reads the newest row whatever it is), so for ② a usable row behind a `budget` one makes it
+    `not_in_prompt`: its section was cut."""
     if applied is not None:
         used = latest_lookup(conn, subject, statuses=USABLE_STATUSES, before=before)
         if used is None or used.lookup_id != applied:
@@ -713,7 +808,7 @@ def seen_for(
         return Seen(
             used.status,
             None,
-            surviving_matches(conn, used),
+            () if entries_dropped else surviving_matches(conn, used),
             history.total,
             history.last_seen,
             tuple(history.examples),
@@ -732,6 +827,18 @@ def seen_for(
         )
         return Seen("not_in_prompt" if behind else "budget", None, ())
     return Seen("not_in_prompt", None, ())
+
+
+def error_seen(
+    conn: psycopg.Connection, subject: Subject, *, before: datetime | None = None
+) -> Seen:
+    """`Seen` for a RAG-on subject whose evaluation raised: nothing is known of its prompt (`error`), but when
+    the newest lookup before `before` `failed` its kind is kept, so the failed-lookup count by kind is complete
+    (a `failed` row with no stored kind is told as `UNKNOWN_FAILURE_KIND`, as everywhere)."""
+    newest = latest_lookup(conn, subject, before=before)
+    if newest is not None and newest.status == "failed":
+        return Seen("error", newest.failure_kind or UNKNOWN_FAILURE_KIND, ())
+    return Seen("error", None, ())
 
 
 def _is_uuid(value: str) -> bool:
@@ -779,7 +886,7 @@ def leak_context(
     return entries, alert_run, {case: frozenset(runs) for case, runs in case_runs.items()}
 
 
-# ── the correlation section may show a decision made after the subject arrived
+# ── the correlation section may show a decision made after the subject's first look
 
 #: The statuses that record an analyst's decision on a neighbour, as ① and ② print them.
 _DECIDED_STATUSES = ("closed_fp", "closed_benign", "closed_confirmed", "escalated_tier2")
@@ -809,9 +916,21 @@ _DECISIONS_OUTSIDE_CASE_SQL = (
 )
 
 
+#: C1: the section holds only the neighbours received before the subject's `as_of`, so the count of the decisions
+#: it can show narrows to those (`domain.correlation.RECEIVED_BEFORE_PREDICATE`, the predicate the section uses).
+_RECEIVED_BEFORE_CLAUSE = f"       AND {RECEIVED_BEFORE_PREDICATE}\n"
+
+
 def _decided_after(
-    conn: psycopg.Connection, sql: str, params: dict[str, Any], since: datetime
+    conn: psycopg.Connection,
+    sql: str,
+    params: dict[str, Any],
+    since: datetime,
+    received_before: datetime | None = None,
 ) -> bool:
+    if received_before is not None:
+        sql += _RECEIVED_BEFORE_CLAUSE
+        params = {**params, "as_of": received_before}
     for status, sealed_at, escalated_at in conn.execute(sql, params).fetchall():
         decided_at = escalated_at if status == "escalated_tier2" else sealed_at
         if decided_at is not None and decided_at > since:
@@ -832,9 +951,17 @@ def _window(alert_id: str, row: Sequence[Any]) -> dict[str, Any]:
     )
 
 
-def alert_correlation_after(conn: psycopg.Connection, alert_id: str, since: datetime) -> bool:
+def alert_correlation_after(
+    conn: psycopg.Connection,
+    alert_id: str,
+    since: datetime,
+    *,
+    received_before: datetime | None = None,
+) -> bool:
     """Whether ①'s correlation section for the alert shows a neighbour with an analyst decision recorded after
-    `since` (the alert's arrival). The section prints every neighbour's CURRENT status, so it can.
+    `since` (the alert's `as_of`, its first look). The section prints every neighbour's CURRENT status, so it
+    can. With `received_before` only the neighbours received before that instant count: the section holds no
+    other (the run is evaluated as of that instant, C1). The measurement passes the same instant for both.
     """
     row = conn.execute(
         "SELECT agent_name, alert_user, srcip, alert_time FROM alerts WHERE alert_id = %s",
@@ -843,11 +970,18 @@ def alert_correlation_after(conn: psycopg.Connection, alert_id: str, since: date
     if row is None:
         return False
     params = {**_window(alert_id, row), "decided": list(_DECIDED_STATUSES)}
-    return _decided_after(conn, _DECISIONS_SQL, params, since)
+    return _decided_after(conn, _DECISIONS_SQL, params, since, received_before)
 
 
-def case_correlation_after(conn: psycopg.Connection, case_id: str, since: datetime) -> bool:
-    """The same for ②'s block 5, over the case's heads, with `since` the case's `as_of`."""
+def case_correlation_after(
+    conn: psycopg.Connection,
+    case_id: str,
+    since: datetime,
+    *,
+    received_before: datetime | None = None,
+) -> bool:
+    """The same for ②'s block 5, over the case's heads, with `since` the case's `as_of` (and, with
+    `received_before`, the neighbours received before it only)."""
     heads = conn.execute(
         "SELECT a.alert_id, a.agent_name, a.alert_user, a.srcip, a.alert_time FROM alerts a"
         " JOIN case_alerts ca ON ca.alert_id = a.alert_id WHERE ca.case_id = %s",
@@ -859,7 +993,7 @@ def case_correlation_after(conn: psycopg.Connection, case_id: str, since: dateti
             "decided": list(_DECIDED_STATUSES),
             "case_id": case_id,
         }
-        if _decided_after(conn, _DECISIONS_OUTSIDE_CASE_SQL, params, since):
+        if _decided_after(conn, _DECISIONS_OUTSIDE_CASE_SQL, params, since, received_before):
             return True
     return False
 
@@ -898,9 +1032,21 @@ def _alert_row(
     seen: Seen | None,
     error_cost: float = 0.0,
 ) -> ArmRow:
+    as_of = {"as_of": subject.as_of, "as_of_source": subject.as_of_source}
     if evaluation is None:
         return ArmRow(
-            1, subject.alert_id, truth, arm, "error", None, None, None, False, error_cost, seen
+            1,
+            subject.alert_id,
+            truth,
+            arm,
+            "error",
+            None,
+            None,
+            None,
+            False,
+            error_cost,
+            seen,
+            **as_of,
         )
     answered = evaluation.outcome == "ok" and evaluation.proposed_verdict is not None
     return ArmRow(
@@ -915,6 +1061,7 @@ def _alert_row(
         held=answered and evaluation.final_verdict == NEEDS_REVIEW,
         cost_usd=evaluation.cost_usd,
         seen=seen,
+        **as_of,
     )
 
 
@@ -925,9 +1072,13 @@ def _case_row(
     evaluation: Any | None,
     seen: Seen | None,
     error_cost: float = 0.0,
+    as_of: datetime | None = None,
 ) -> ArmRow:
+    when = {"as_of": as_of, "as_of_source": None if as_of is None else AS_OF_FIRST_RUN}
     if evaluation is None:
-        return ArmRow(2, case_id, truth, arm, "error", None, None, None, False, error_cost, seen)
+        return ArmRow(
+            2, case_id, truth, arm, "error", None, None, None, False, error_cost, seen, **when
+        )
     answered = (
         evaluation.outcome == "ok" and evaluation.model_conclusion in verdicts.MODEL_CONCLUSIONS
     )
@@ -945,6 +1096,7 @@ def _case_row(
         cost_usd=evaluation.cost_usd,
         seen=seen,
         held_by=tuple(evaluation.held_by),
+        **when,
     )
 
 
@@ -978,7 +1130,10 @@ def run_alert(
     adapter: Any,
     cfg: config.Config,
 ) -> list[ArmRow]:
-    """① twice for one alert, RAG off then on, each in its own READ ONLY transaction."""
+    """① twice for one alert, RAG off then on, each in its own READ ONLY transaction, as of the alert's first
+    look (`subject.as_of`, C1): the burst count, the correlation section and the lookup are those of that
+    instant. A subject with no `as_of` is evaluated with no bound, as `evaluate_alert` always did.
+    """
     rows = []
     for arm in ARMS:
         _begin(conn)
@@ -988,16 +1143,26 @@ def run_alert(
             subject.alert_id,
             arm,
             lambda switches=switches: evaluate_alert(
-                conn, subject.alert_id, adapter=adapter, cfg=cfg, switches=switches
+                conn,
+                subject.alert_id,
+                adapter=adapter,
+                cfg=cfg,
+                switches=switches,
+                as_of=subject.as_of,
             ),
         )
         seen = None
         if arm == "on":
+            where = Subject("alert", subject.alert_id)
             seen = (
-                Seen("error", None, ())
+                error_seen(conn, where, before=subject.as_of)
                 if evaluation is None
                 else seen_for(
-                    conn, Subject("alert", subject.alert_id), applied=evaluation.rag_lookup_id
+                    conn,
+                    where,
+                    applied=evaluation.rag_lookup_id,
+                    before=subject.as_of,
+                    entries_dropped=LEARNED_ENTRIES_DROPPED_WARNING in evaluation.built.warnings,
                 )
             )
         conn.rollback()
@@ -1030,12 +1195,13 @@ def run_case(
         )
         seen = None
         if arm == "on":
+            where = Subject("case", subject.case_id.lower())
             seen = (
-                Seen("error", None, ())
+                error_seen(conn, where, before=as_of)
                 if evaluation is None
                 else seen_for(
                     conn,
-                    Subject("case", subject.case_id.lower()),
+                    where,
                     applied=evaluation.rag_lookup_id,
                     failed_kind=evaluation.rag_not_applied,
                     before=as_of,
@@ -1044,7 +1210,7 @@ def run_case(
             )
         conn.rollback()
         error_cost = max(_spent(adapter) - spent_before, 0.0) if evaluation is None else 0.0
-        rows.append(_case_row(subject.case_id, truth, arm, evaluation, seen, error_cost))
+        rows.append(_case_row(subject.case_id, truth, arm, evaluation, seen, error_cost, as_of))
     return rows
 
 
@@ -1194,6 +1360,10 @@ def build_measure_report(
                 arm: summarise(by_arm[tier][arm], leaks_computed=leaks_computed) for arm in ARMS
             },
             "paired": paired(by_arm[tier]["off"], by_arm[tier]["on"]),
+            # where the RAG could act: the subjects whose RAG-on prompt carried at least one match
+            "paired_with_matches": paired(
+                by_arm[tier]["off"], by_arm[tier]["on"], with_matches=True
+            ),
         }
     return {
         "tool": "lab_measure",
@@ -1225,7 +1395,7 @@ def build_measure_report(
         "cost_usd": total_usd,
         "cost_in_rows_usd": in_rows_usd,
         "cost_unattributed_usd": round(max(total_usd - in_rows_usd, 0.0), 5),
-        "rows": [row.to_json() for row in rows],
+        "rows": [row.to_json(leaks_computed=leaks_computed) for row in rows],
     }
 
 
@@ -1284,6 +1454,7 @@ def _tier_table(tier: Mapping[str, Any]) -> list[str]:
                 "-",
                 f"{failed['no_lookup']} / {failed['budget']} / {failed['not_in_prompt']}",
             ),
+            ("evaluation error (no prompt known)", "-", str(failed["evaluation_error"])),
         ]
     rows.append(("cost", f"${off['cost_usd']:.5f}", f"${on['cost_usd']:.5f}"))
     return ["| | RAG off | RAG on |", "|---|---|---|"] + [
@@ -1345,10 +1516,19 @@ def render_measure_md(report: Mapping[str, Any]) -> str:
         if tier["tier"] == 2:
             lines.append(
                 f"- Labelled cases ② never ran on (no investigation): {tier['no_investigation']} "
-                f"({_ids(tier['no_investigation_ids'])})"
+                f"({_ids(tier['no_investigation_ids'])}); each case is evaluated as of its first ② run"
+            )
+        else:
+            sources = tier["as_of_sources"]
+            lines.append(
+                "- Each alert is evaluated as of its first look: "
+                f"{sources['first_look']} by the first ① proposer run of the alert, "
+                f"{sources['delay']} by received_at + RAG_TRIAGE_DELAY_S ({tier['triage_delay_s']} s)"
             )
         lines += ["", *_tier_table(tier)]
-        pair = tier["paired"]
+        if tier["arms"]["on"]["rag"] is not None:
+            lines += ["", NO_LOOKUP_NOTE]
+        pair, pair_hit = tier["paired"], tier["paired_with_matches"]
         lines += [
             "",
             (
@@ -1358,9 +1538,18 @@ def render_measure_md(report: Mapping[str, Any]) -> str:
             ),
             "",
             (
-                f"Correlation (both arms): {tier['correlation_after_arrival']['count']} subject(s) whose "
-                "correlation section shows a neighbour with an analyst decision recorded after the "
-                f"subject arrived: {_ids(tier['correlation_after_arrival']['subjects'])}"
+                f"Paired, where the RAG could act (the same {pair_hit['n']} subjects whose RAG-on prompt "
+                "carried at least one match, answered in both arms): accuracy RAG off "
+                f"{_share(pair_hit['off']['correct'], pair_hit['n'])}, RAG on "
+                f"{_share(pair_hit['on']['correct'], pair_hit['n'])}."
+            ),
+            "",
+            (
+                f"Correlation (both arms, an estimate): {tier['correlation_after_arrival']['count']} "
+                "subject(s) whose correlation section shows a neighbour with an analyst decision recorded "
+                "after the subject's first look: "
+                f"{_ids(tier['correlation_after_arrival']['subjects'])}. It over-counts (the section's "
+                "caps are not replayed) and under-counts (some decisions have no date)."
             ),
         ]
         rag = tier["arms"]["on"]["rag"]
@@ -1370,7 +1559,7 @@ def render_measure_md(report: Mapping[str, Any]) -> str:
                 lines += [
                     "",
                     (
-                        "Leaks and history (RAG on): not computed - the run stopped before the leak pass, "
+                        "Leaks and history (RAG on): not computed - the run stopped during the leak pass, "
                         "so `same_run`, `after_cutoff`, `history_same_run` and `unplaceable` are unknown, "
                         f"not zero. {history['in_prompt']} prompt(s) carried a decision history."
                     ),
@@ -1569,14 +1758,21 @@ def cmd_measure(args: argparse.Namespace) -> int:
         case_work: list[tuple[CaseSubject, str, datetime]] = []
         runs_of: dict[tuple[int, str], frozenset[str]] = {}
         if 1 in tiers:
-            heads = load_alert_subjects(conn, test_runs)
+            heads = load_alert_subjects(conn, test_runs, triage_delay_s=cfg.RAG_TRIAGE_DELAY_S)
             alert_work = [(s, s.label) for s in heads if s.label is not None]
             unlabelled = [s.alert_id for s in heads if s.label is None]
+            sources = Counter(s.as_of_source for s, _label in alert_work)
             facts[1] = {
                 "subjects": len(heads),
                 "labelled": len(alert_work),
                 "unlabelled": len(unlabelled),
                 "unlabelled_ids": unlabelled,
+                # which way each scored alert's `as_of` was named (C1): both are counted
+                "as_of_sources": {
+                    AS_OF_FIRST_LOOK: sources[AS_OF_FIRST_LOOK],
+                    AS_OF_DELAY: sources[AS_OF_DELAY],
+                },
+                "triage_delay_s": cfg.RAG_TRIAGE_DELAY_S,
             }
             for subject, _label in alert_work:
                 runs_of[(1, subject.alert_id)] = frozenset({subject.run_id})
@@ -1614,18 +1810,21 @@ def cmd_measure(args: argparse.Namespace) -> int:
             f"token budget) month_spend={month_spend:.4f} cap={cfg.LLM_MONTHLY_USD_CAP}",
         )
 
-        # R1: the subjects whose correlation section can show a decision taken after they arrived (reads only)
+        # R1: the subjects whose correlation section can show a decision taken after their first look (reads
+        # only). The section holds the neighbours received before `as_of`, so only those are looked at.
         if 1 in tiers:
             facts[1]["correlation_after_arrival"] = _listing(
                 {
-                    s.alert_id: alert_correlation_after(conn, s.alert_id, s.received_at)
+                    s.alert_id: alert_correlation_after(
+                        conn, s.alert_id, s.as_of, received_before=s.as_of
+                    )
                     for s, _ in alert_work
                 }
             )
         if 2 in tiers:
             facts[2]["correlation_after_arrival"] = _listing(
                 {
-                    c.case_id: case_correlation_after(conn, c.case_id, as_of)
+                    c.case_id: case_correlation_after(conn, c.case_id, as_of, received_before=as_of)
                     for c, _t, as_of in case_work
                 }
             )
@@ -1872,9 +2071,15 @@ def _rescore(jobs: Sequence[_CalJob], cfg: config.Config, model: str) -> dict[st
             scores, used = _rerank(job.query, job.documents, cfg)
         except RagUnavailable as exc:
             if exc.kind in ("auth", "quota"):
+                # `auth` is also what an EMPTY key gives (no request is sent), so it does not say "refused"
+                cause = (
+                    "the Voyage key is missing or was refused"
+                    if exc.kind == "auth"
+                    else "Voyage refused the request"
+                )
                 raise Exit(
                     EXIT_NOT_READY,
-                    f"Voyage refused the request ({exc.kind}): check VOYAGE_API_KEY and the account",
+                    f"{cause} ({exc.kind}): check VOYAGE_API_KEY (set in this container) and the account",
                 ) from None
             failed[exc.kind] += 1
             continue

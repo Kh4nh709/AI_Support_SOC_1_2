@@ -66,6 +66,7 @@ from psycopg.types.json import Jsonb
 
 from app.infra import notify, settings
 from app.infra.config import Config
+from app.infra.errors import UNKNOWN_FAILURE_KIND
 
 # ── thresholds §3.9 gives no §6.3 key for (module constants, not Config) ────
 _INTAKE_BACKLOG_MAX_MIN = 5
@@ -344,7 +345,7 @@ def _check_disk_free() -> CheckResult:
     return CheckResult("disk_free", ok, pct, threshold_pct, detail)
 
 
-# ── the three checks of the learned knowledge (P13-T05, DEC-210) ─────────────
+# ── the checks of the learned knowledge: three of P13-T05 (DEC-210), one of P14-T06 (DEC-213) ──
 
 
 _UNREADABLE_020 = "could not be read (is migration 020 applied?); failing closed"
@@ -353,10 +354,12 @@ _UNREADABLE_023 = "could not be read (is migration 023 applied?); failing closed
 
 
 def _read_or_none(conn: psycopg.Connection, read: Callable[[], CheckResult]) -> CheckResult | None:
-    """`read()` in a savepoint, or None when the database refuses it. These three checks read tables
-    migration 020 made; on a database without them (code deployed before `make migrate`) a missing
-    table must fail ITS check, closed, and not the ten before it: the error aborts the transaction
-    the whole run shares, and without the savepoint no `system_health` row would be written at all.
+    """`read()` in a savepoint, or None when the database refuses it. These four checks read what
+    migrations 020 and 023 made (`knowledge_queue`, `knowledge_integrity` and `rag_budget` the tables of
+    020, `rag_lookup_failures` the `failure_kind` column of 023); on a database without them (code deployed
+    before `make migrate`) a missing table or column must fail ITS check, closed, and not the ten before it:
+    the error aborts the transaction the whole run shares, and without the savepoint no `system_health` row
+    would be written at all.
     The caller builds the failing result (the check names stay string literals, which
     `test_runbook_alarms.py` reads by `ast`); it never carries the driver's message, which can hold
     SQL text."""
@@ -463,11 +466,11 @@ def _check_rag_lookup_failures(conn: psycopg.Connection, cfg: Config) -> CheckRe
 
     def read() -> CheckResult:
         rows = conn.execute(
-            "SELECT coalesce(failure_kind, 'unknown'), count(*) FROM rag_results"
+            "SELECT coalesce(failure_kind, %s), count(*) FROM rag_results"
             " WHERE status = 'failed'"
             " AND created_at > now() - make_interval(mins => %s)"
             " GROUP BY 1 ORDER BY 2 DESC, 1",
-            (_RAG_LOOKUP_FAILURES_WINDOW_MIN,),
+            (UNKNOWN_FAILURE_KIND, _RAG_LOOKUP_FAILURES_WINDOW_MIN),
         ).fetchall()
         failed = sum(count for _kind, count in rows)
         ok = failed < _RAG_LOOKUP_FAILURES_MAX

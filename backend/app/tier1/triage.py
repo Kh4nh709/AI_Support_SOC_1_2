@@ -24,6 +24,13 @@ Voyage or `vectordb` failure, DEC-213) also adds the warning `rag_not_applied:<k
 age check: the newest stored lookup is used, whatever its age (a late one is simply not there yet). The
 proposer's `llm_runs` row records which lookup its prompt held (`rag_lookup_id`).
 
+`as_of` (P14 final fix wave, C1; the lab measurement, `eval/lab_measure.py`): `evaluate_alert(..., as_of=)` is ①
+as it could have run at that instant. The burst count and both correlation queries keep only the alerts received
+STRICTLY before it (`burst_count_query`, `correlation.summarize_for_prompt`), and the RAG-on arm reads the newest
+lookup created before it (`_learned_before`), so an alert, or a lookup, that arrived after the first look is not
+in the prompt, the facts or the gate. `None` (the job, and every test that does not pass it) is today's
+evaluation: the same statements, the same prompt.
+
 `_set_triage_status` is this module's only write to `alerts` — it names
 `triage_status` and `triaged_count` and nothing else (G2). `domain/`, not `tier1/`,
 is the only package that may ever write `alerts.status`.
@@ -78,7 +85,14 @@ from app.llm.triage import (
     propose,
     verify,
 )
-from app.rag.lookup import lookup_failure, lookup_material
+from app.rag.lookup import (
+    UNKNOWN_FAILURE_KIND,
+    PromptMaterial,
+    latest_lookup,
+    lookup_failure,
+    lookup_material,
+    prompt_material,
+)
 from app.rag.subject import Subject
 from app.security import detector, gate, linter
 
@@ -249,7 +263,8 @@ def _load(conn: psycopg.Connection, alert_id: str) -> _AlertRow | None:
 #: `ingest/dedup.py`'s cluster key (`tier1/` may not import `ingest/`, so the key is
 #: restated here) and the window is its `MAX_CLUSTER_AGE_HOURS` age ceiling, measured from
 #: this alert's `first_seen_at`: what the largest cluster dedup would have built holds. No
-#: upper bound (counted when (1) runs) and no status filter: every alert with the key is
+#: upper bound (counted when (1) runs; the lab measurement's `as_of` is the one exception,
+#: `BURST_COUNT_BEFORE_SQL` below) and no status filter: every alert with the key is
 #: an alert of the burst, sealed `duplicate` rows of a pre-switch cluster included. The
 #: alert is read by primary key and every other value is a bound parameter. `ix_alerts_dedup`
 #: cannot serve it — it is partial (open, non-duplicate alerts only) and ends in
@@ -268,19 +283,31 @@ JOIN alerts AS a
 WHERE s.alert_id = %s
   AND a.first_seen_at >= s.first_seen_at - (%s || ' hours')::interval"""
 
+#: `BURST_COUNT_SQL` for a count as of an instant (C1): the alerts of the burst received strictly before it. A
+#: separate statement, so the one above stays the text it has always been.
+BURST_COUNT_BEFORE_SQL = BURST_COUNT_SQL + "\n  AND a.received_at < %s"
 
-def burst_count_query(alert_id: str, cfg: config.Config) -> tuple[str, tuple[object, ...]]:
+
+def burst_count_query(
+    alert_id: str, cfg: config.Config, *, as_of: datetime | None = None
+) -> tuple[str, tuple[object, ...]]:
     """`BURST_COUNT_SQL` and its parameters, public so the plan test runs the query the job
-    runs and not a retyped copy (`ingest.dedup.find_open_cluster_query`'s reason)."""
-    return BURST_COUNT_SQL, (alert_id, cfg.MAX_CLUSTER_AGE_HOURS)
+    runs and not a retyped copy (`ingest.dedup.find_open_cluster_query`'s reason). With `as_of`,
+    `BURST_COUNT_BEFORE_SQL` and one more parameter."""
+    if as_of is None:
+        return BURST_COUNT_SQL, (alert_id, cfg.MAX_CLUSTER_AGE_HOURS)
+    return BURST_COUNT_BEFORE_SQL, (alert_id, cfg.MAX_CLUSTER_AGE_HOURS, as_of)
 
 
-def burst_count(conn: psycopg.Connection, alert_id: str, cfg: config.Config) -> int:
+def burst_count(
+    conn: psycopg.Connection, alert_id: str, cfg: config.Config, *, as_of: datetime | None = None
+) -> int:
     """How many alerts share `alert_id`'s rule, srcip, dstip and agent within
     `MAX_CLUSTER_AGE_HOURS` of its `first_seen_at`, itself included (0 for a missing
     alert). Only meaningful with `DEDUP_ENABLED=false`: with grouping on, the alert row's
-    own `occurrence_count` is the cluster size and this query is never run."""
-    statement, params = burst_count_query(alert_id, cfg)
+    own `occurrence_count` is the cluster size and this query is never run. With `as_of`
+    only the alerts received before that instant count (the burst at ①'s first look)."""
+    statement, params = burst_count_query(alert_id, cfg, as_of=as_of)
     return int(conn.execute(statement, params).fetchone()[0])
 
 
@@ -572,6 +599,33 @@ def _with_proposer_template(
     return replace(built, prompt=prompt, estimated_tokens=estimated), version
 
 
+def _learned_before(
+    conn: psycopg.Connection, alert_id: str, as_of: datetime
+) -> tuple[str | None, PromptMaterial | None]:
+    """`(failure kind, material)` for ① as of an instant: the newest lookup of the alert created before `as_of`,
+    whatever its status (① reads the newest row, as `lookup_failure` and `lookup_material` do), read once. A
+    `failed` one is the kind and no material (`UNKNOWN_FAILURE_KIND` when none is stored); else the material its
+    approved entries make (`prompt_material`: None for a `budget` row and for none at all). A lookup created
+    after `as_of` is not there, as it was not at ①'s first look. Read in a savepoint like the product's two
+    reads: the lookup is an extra, and a database error in it is no notice and no section, never a failed ①.
+    """
+    try:
+        with conn.transaction():
+            newest = latest_lookup(conn, Subject("alert", alert_id), before=as_of)
+            if newest is not None and newest.status == "failed":
+                return (newest.failure_kind or UNKNOWN_FAILURE_KIND), None
+            return None, prompt_material(conn, newest)
+    except psycopg.Error as exc:
+        _log(
+            {
+                "rag_lookup": "unreadable",
+                "subject": f"alert:{alert_id}",
+                "error": type(exc).__name__,
+            }
+        )
+        return None, None
+
+
 def _evaluation(
     outcome: str,
     *,
@@ -640,6 +694,7 @@ def evaluate_alert(
     adapter: Any | None,
     cfg: config.Config,
     switches: EvalSwitches = DEPLOYED,
+    as_of: datetime | None = None,
 ) -> TriageEvaluation | None:
     """Pipeline (1) for one alert, computed and returned, never written (P7-T01);
     `None` when the alert does not exist.
@@ -659,6 +714,11 @@ def evaluate_alert(
     one is today's prompt too, plus the warning `rag_not_applied:<kind>` (DEC-213). An entry that no
     longer passes `prompt_material`'s check is dropped from it, and a database error in either read is no
     material and no notice (a savepoint each); nothing here can fail ① because of the lookup.
+
+    `as_of` (C1, the lab measurement; module docstring): None - everything above, byte for byte. With an
+    instant, ① as it could have run then: the burst count and both correlation queries keep only the alerts
+    received strictly before it, and the RAG-on arm reads the newest lookup created before it. The alert's own
+    row, its context and the decision history stored with the lookup are read as they are.
     """
     row = _load(conn, alert_id)
     if row is None:
@@ -671,7 +731,10 @@ def evaluate_alert(
         srcip=row.srcip,
         alert_time=row.alert_time,
     )
-    corr = correlation.summarize_for_prompt(conn, subject)
+    if as_of is None:
+        corr = correlation.summarize_for_prompt(conn, subject)
+    else:
+        corr = correlation.summarize_for_prompt(conn, subject, as_of=as_of)
 
     playbook_text = kb.get_playbook(row.category)
     table = kb.get_decision_table(row.category)
@@ -685,7 +748,10 @@ def evaluate_alert(
     # this system.
     occurrence_count = row.occurrence_count
     if occurrence_count is not None and not cfg.DEDUP_ENABLED:
-        occurrence_count = burst_count(conn, alert_id, cfg)
+        if as_of is None:
+            occurrence_count = burst_count(conn, alert_id, cfg)
+        else:  # the burst as it stood at ①'s first look (C1)
+            occurrence_count = burst_count(conn, alert_id, cfg, as_of=as_of)
 
     inp = TriageInput(
         alert_id=row.alert_id,
@@ -717,12 +783,17 @@ def evaluate_alert(
     # DEC-213: a lookup that `failed` is told to the reader (`rag_not_applied:<kind>`) and renders no section.
     # The failure is read first, so a newer failed row can only mean "no section, no notice", never a section
     # beside a notice; with the switch off neither read is made.
-    not_applied = lookup_failure(conn, Subject("alert", alert_id)) if switches.rag else None
-    material = (
-        lookup_material(conn, Subject("alert", alert_id))
-        if switches.rag and not_applied is None
-        else None
-    )
+    if (
+        switches.rag and as_of is not None
+    ):  # C1: the lookup that existed at ①'s first look, in one read
+        not_applied, material = _learned_before(conn, alert_id, as_of)
+    else:
+        not_applied = lookup_failure(conn, Subject("alert", alert_id)) if switches.rag else None
+        material = (
+            lookup_material(conn, Subject("alert", alert_id))
+            if switches.rag and not_applied is None
+            else None
+        )
     built = build_proposer_prompt(
         inp,
         facts,

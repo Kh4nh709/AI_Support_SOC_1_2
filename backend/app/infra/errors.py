@@ -15,6 +15,14 @@ import psycopg
 
 _counters: dict[str, int] = {}
 
+#: Not an exception: the one closed word that two layers need, so it lives in the layer both may import. What a
+#: `failed` lookup row with no stored kind (a row written before migration 023) is told as: `rag.lookup`
+#: (`UNKNOWN_FAILURE_KIND`, which re-exports it) tells ① and ② and the admin page so, the lab measurement counts
+#: it so, and the health check `rag_lookup_failures` counts it so (it used to say `unknown`). The nearest of
+#: `rag.failures.FAILURE_KINDS` to "the retrieval did not work and nothing says why". `infra` may import nothing
+#: from `rag` (G1), and `rag` may import `infra`: the value is defined here, once.
+UNKNOWN_FAILURE_KIND = "provider_error"
+
 
 class ConfigError(Exception):
     """The environment/`.env` cannot be turned into a valid `Config`."""

@@ -200,6 +200,16 @@ def _put_run(conn: psycopg.Connection, case_id: str, created_at: datetime, summa
     )
 
 
+def _put_first_look(conn: psycopg.Connection, alert_id: str, created_at: datetime) -> None:
+    """The alert's first ① proposer run: the lab tool reads ①'s `as_of` from its `created_at`."""
+    conn.execute(
+        "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, role, system_prompt,"
+        " user_message, gate_result, created_at)"
+        " VALUES (%s, 'triage', 'alert', %s, 'proposer', 's', 'u', %s, %s)",
+        (str(uuid.uuid4()), alert_id, Jsonb({}), created_at),
+    )
+
+
 def _put_event(
     conn: psycopg.Connection,
     event_type: str,
@@ -952,6 +962,11 @@ def seed_lab(dsn) -> Lab:
                 ranked=[{"entry_id": e, "score": s} for e, s in ranked],
             )
 
+        # ① first looked at each labelled alert a minute after its lookup was stored (what `RAG_TRIAGE_DELAY_S`
+        # is for): the first proposer run's time is ①'s `as_of`, and the lookup is before it (P14 final fix
+        # wave, C1). t5 is unlabelled and has no run.
+        for name, looked_at in (("t1", 6.6), ("t2", 7.1), ("t3", 7.6), ("t4", 8.1)):
+            _put_first_look(conn, ids[name], at(looked_at) + timedelta(minutes=1))
         # ② ran once or twice before the measurement; the first run's time is `as_of`
         _put_run(conn, cases["c1"], at(9), "FIRST-RUN-OF-C1")
         _put_run(conn, cases["c1"], at(9.1), "PREVIOUS-RUN-AFTER-AS-OF")
@@ -1957,12 +1972,14 @@ def test_the_lookup_is_classified_from_the_evaluation_not_from_the_newest_row(la
 
 @pytest.mark.db
 def test_the_report_counts_the_subjects_whose_correlation_showed_a_later_decision(lab, measured):
-    """t2 was escalated at 7.4 h, after t1 arrived (6.5 h) and in t1's +-2 h window (same agent); t1's own
-    escalation (8.8 h) is after t2 arrived (7.0 h); t5 was escalated at 9.6 h, after t3 arrived (7.5 h).
-    t4 has no neighbour. ②: C2 (head t3) is cut at 8.8 h, before t5's decision; C1 is cut at 9 h, after t2's.
+    """t1's own escalation (8.8 h) is after t2 arrived (7.0 h), and t2 is in t1's +-2 h window (same agent).
+    P14 final fix wave, C1: ① no longer sees an alert received after its first look, so t2 (received 7.0 h) is
+    not in t1's section (first look 6.6 h) and t5 (8.5 h) is not in t3's (7.6 h). Of the three subjects this
+    counted before (t1, t2, t3) only t2 is still shown a decision recorded after its first look. t4 has no
+    neighbour. ②: C2 (head t3) is cut at 8.8 h, before t5's decision; C1 is cut at 9 h, after t2's.
     """
     tier1 = measured.report["tiers"]["1"]["correlation_after_arrival"]
-    assert tier1 == {"count": 3, "subjects": sorted([lab.ids["t1"], lab.ids["t2"], lab.ids["t3"]])}
+    assert tier1 == {"count": 1, "subjects": [lab.ids["t2"]]}
     tier2 = measured.report["tiers"]["2"]["correlation_after_arrival"]
     assert tier2 == {"count": 1, "subjects": [lab.cases["c2"]]}
 

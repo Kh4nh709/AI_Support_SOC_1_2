@@ -14,6 +14,8 @@
 // write lands would bring back the labels it took before the write (a refetch reads every page loaded, one after the
 // other): `labelled` cancels it before it sets the cache. And a focus of the window does not start such a read
 // (`refetchOnWindowFocus: false`): it would re-read up to a hundred alerts, raw logs included, for every page loaded.
+// The one read that does follow a write is the one that replaces a cancelled REFETCH (not a cancelled "Tải thêm"): the
+// refetch's own news was cancelled with it, so the run is read again after the write (final fix wave, item 42).
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { Link, useParams } from "react-router";
@@ -75,26 +77,39 @@ export function LabRunPage() {
   });
 
   // The button "Tải thêm" is disabled while anything of the run is being read; the focus it had is given back when the
-  // read is over (a disabled button drops it), so a keyboard user can press it again.
+  // read is over (a disabled button drops it), so a keyboard user can press it again. Only if the focus is nowhere
+  // (or still on the button): an admin who went on labelling keeps the focus where they put it, and the page does not
+  // scroll to the button (P14 final fix wave, item 41).
   const loadMore = useRef<HTMLButtonElement>(null);
   const refocus = useRef(false);
   const fetching = query.isFetching;
   useEffect(() => {
     if (fetching || !refocus.current) return;
     refocus.current = false;
-    loadMore.current?.focus();
+    const active = document.activeElement;
+    if (active === null || active === document.body || active === loadMore.current) {
+      loadMore.current?.focus({ preventScroll: true });
+    }
   }, [fetching]);
 
   /**
    * The server set (or cleared) a label: the row and the counter change in the cache, and nothing is read again. A
    * read of the run that is out is cancelled first, and what it had read is discarded: it took its snapshot before this
-   * write, and would bring the old label and the old counter back (a cancelled "Tải thêm" is pressed again).
+   * write, and would bring the old label and the old counter back (a cancelled "Tải thêm" is pressed again). The one
+   * exception: when the read it cancelled was a refetch of the loaded pages (not a "Tải thêm"), its news went with
+   * it, so the run is read once more now, a read that starts after the write (P14 final fix wave, item 42).
    */
   const labelled = async (alertId: string, label: LabLabel | null) => {
+    const state = client.getQueryState(key);
+    const refetching =
+      state?.fetchStatus === "fetching" &&
+      state.data !== undefined &&
+      state.fetchMeta?.fetchMore === undefined;
     await client.cancelQueries({ queryKey: key });
     client.setQueryData<Pages>(key, (data) =>
       data === undefined ? data : withLabel(data, alertId, label),
     );
+    if (refetching) void client.invalidateQueries({ queryKey: key });
     // The list of runs shows a counter of its own, and the audit page the event: both are stale, neither is on screen.
     void invalidateAfter(client, label === null ? "deleteLabLabel" : "putLabLabel");
   };

@@ -35,13 +35,16 @@ against, read-only, by calling the functions of the routes the analysts use, so 
 * `enrichment`: the SOAR `enrichment` block of the payload (`alerts.raw_payload -> enrichment`), redacted
   as the audit payloads are: for an alert the block or null, for a case a map `{head alert id: block}`
   of the heads that have one;
-* `lookup` (P14-T07, DEC-213): the newest stored lookup of the source (`rag_results`, the row ① and ② read at
-  prompt time), `{lookup_id, status, failure_kind, ranked, created_at}`, or null when the source has none.
+* `lookup` (P14-T07, DEC-213): the newest stored lookup of the source (`rag_results`), the row ① reads at
+  prompt time, `{lookup_id, status, failure_kind, ranked, created_at}`, or null when the source has none. (For ②
+  the row a prompt may use differs: it looks past a newer `budget` row to the newest `ok` or `empty` one,
+  `rag.lookup.USABLE_STATUSES`, after asking whether the newest failed; the page shows the newest of any status.)
   `ranked` lists every candidate the Voyage rerank scored, best first, as `{entry_id, pct}` (`pct` is
   `round(score * 100)`, `llm.rag_view.percent`, the number the prompt and the pages say), where the P13 ranking
   agent's reasons used to be; it is null for a row from before migration 023 and for a `failed` or `budget`
   lookup, `[]` for a lookup with nothing left to rerank. `failure_kind` is the closed kind a `failed` lookup
-  recorded (null for any other status and for a `failed` row older than the column). The agent's old
+  recorded (null for any other status; a `failed` row older than the column, migration 023, reads as
+  `provider_error`, `rag.lookup.UNKNOWN_FAILURE_KIND`, as it does for ① and ②). The agent's old
   `match_notes` are not sent;
 * `conflict_entry`: the active entry the draft was found to conflict with, rendered (`entry_json`, with
   its Markdown `content`), or null.

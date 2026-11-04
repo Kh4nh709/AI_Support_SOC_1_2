@@ -910,9 +910,55 @@ describe("more alerts", () => {
       const release = b.holdGets();
       await user.click(button);
       expect(await screen.findByRole("button", { name: "Đang tải…" })).toBeDisabled();
+      // A browser takes the focus off a button that becomes disabled; jsdom keeps it there (and `blur()` of a
+      // disabled element does nothing), which hid a missing `focus()` call from this test (P14 final fix wave,
+      // item 41). The focus is dropped as the browser does: it goes to an element that is then removed.
+      const stray = document.createElement("input");
+      document.body.append(stray);
+      stray.focus();
+      stray.remove();
+      expect(document.activeElement).toBe(document.body);
+      const focus = vi.spyOn(button, "focus");
       release();
       await screen.findByRole("listitem", { name: "Alert 1766000000.4" });
-      expect(await screen.findByRole("button", { name: "Tải thêm" })).toHaveFocus();
+      const again = await screen.findByRole("button", { name: "Tải thêm" });
+      await waitFor(() => expect(document.activeElement).toBe(again));
+      // without stealing the scroll position of the page either
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    });
+
+    it("leaves the focus where the admin put it while the page was coming", async () => {
+      const b = backend({ alerts: FIVE(), pageSize: 2 });
+      const user = userEvent.setup();
+      renderPage();
+      const button = await screen.findByRole("button", { name: "Tải thêm" });
+      const release = b.holdGets();
+      await user.click(button);
+      expect(await screen.findByRole("button", { name: "Đang tải…" })).toBeDisabled();
+      // the admin goes on labelling: the focus is on a button of a row, not on `Tải thêm`
+      const [elsewhere] = screen.getAllByRole("button", { name: "FP — không phải tấn công" });
+      act(() => elsewhere?.focus());
+      expect(document.activeElement).toBe(elsewhere);
+      const focus = vi.spyOn(button, "focus");
+      release();
+      await screen.findByRole("listitem", { name: "Alert 1766000000.4" });
+      await screen.findByRole("button", { name: "Tải thêm" });
+      expect(document.activeElement).toBe(elsewhere);
+      expect(focus).not.toHaveBeenCalled();
+    });
+
+    it("does not give the focus to a button nobody pressed", async () => {
+      const b = backend({ alerts: FIVE(), pageSize: 2 });
+      const { client } = renderPage();
+      const button = await screen.findByRole("button", { name: "Tải thêm" });
+      const focus = vi.spyOn(button, "focus");
+      // a read of the run that is not a press of `Tải thêm` (a reconnect, the run opened again from the cache)
+      await act(async () => {
+        void client.refetchQueries({ queryKey: adminKeys.labRun(RUN_ID) });
+      });
+      await waitFor(() => expect(b.gets().length).toBeGreaterThan(1));
+      await waitFor(() => expect(client.isFetching()).toBe(0));
+      expect(focus).not.toHaveBeenCalled();
     });
   });
 

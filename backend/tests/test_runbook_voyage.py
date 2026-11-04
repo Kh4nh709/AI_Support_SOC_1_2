@@ -232,8 +232,10 @@ def _measure(*, yes: bool):
 #: line that checks, the lines that act). A check that shares a paste with its act cannot be obeyed: the act has run
 #: by the time the answer is read. COVERED: steps 1 (the checks, then the writes), 5 (the LAN address, then
 #: `up -d`), 7 (the dump's migration count, then the restore) and 9 (the drain count, then `stop vectordb`), and the
-#: Measuring block (the estimates, then each `--yes` run). NOT COVERED, because there is nothing to wait for: steps 2,
-#: 3, 4, 6 and 8, each an act followed by the check of its own result, or a check read in its own step.
+#: Measuring block (the estimates, then each `--yes` run). Step 4 has a gate of its own and is pinned by its own test,
+#: `test_step_4_takes_a_backup...` (the backup is one paste; the `ls -t` that names the new dump waits for the three
+#: lines the backup prints and is another). NOT COVERED, because there is nothing to wait for: steps 2, 3, 6 and 8,
+#: each an act followed by the check of its own result, or a check read in its own step.
 GATES = [
     (
         "step 1",
@@ -502,7 +504,26 @@ def test_step_5_creates_vectordb_and_recreates_rag_worker_and_checks_the_address
         "`KNOWLEDGE_DRAFT_ENABLED=true`",
     ):
         assert needle in flat_step, f"step 5 no longer says {needle!r}"
-    assert "docker compose restart app worker" in commands
+    # P14 final fix wave, M3: `app` and `worker` are RECREATED, so they see the keys step 1 wrote into `.env`
+    # (`calibrate --rerank-model` runs in `app` and needs VOYAGE_API_KEY); a `restart` does not read `.env` again
+    assert "docker compose up -d --force-recreate app worker" in commands
+    assert "docker compose restart app worker" not in commands
+    assert "docker compose restart app worker" not in _fenced(step)
+    for needle in (
+        "recreated, not restarted",
+        "`VOYAGE_API_KEY`",
+        "reads when it is *created*",
+        "`calibrate --rerank-model`",
+        "runs `calibrate --rerank-model`",
+        "exit 3",
+        "the Voyage key is missing or was refused (auth)",
+    ):
+        assert needle in flat_step, f"step 5 no longer says {needle!r}"
+    fenced_commands = [line.split("  #")[0].strip() for line in _fenced(step)]
+    # the recreate is after the check of the LAN address and in the paste that acts (`GATES` keeps it so)
+    assert fenced_commands.index("ip -4 addr") < fenced_commands.index(
+        "docker compose up -d --force-recreate app worker"
+    )
     flat = _flat(step)
     image = yaml.safe_load(_text(COMPOSE_RAG))["services"]["vectordb"]["image"]
     assert image in flat, "the step does not name the image docker-compose.rag.yml pins"
@@ -937,7 +958,14 @@ def test_the_measuring_subsection_gives_the_caveats_and_what_calibrate_decides()
         "RAG-on arm",
         "`--tiers 1`",
         "before analysts work",
-        "first-look",
+        # P14 final fix wave, C1 (the old needle "first-look" claimed first-look accuracy that running early
+        # could not deliver; the inputs are now bounded at the first look, and the status exposure remains)
+        "bounded at the subject's first look",
+        "hold only the alerts received before that instant",
+        "What is not bounded",
+        "That count is an estimate",
+        "over-counts",
+        "under-counts",
         "not written to `llm_runs`",
         "monthly cap",
         "`.env`",

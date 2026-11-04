@@ -26,9 +26,9 @@ from app.infra.errors import PermanentError
 
 # §6.5 — the six v3 job types, plus the two DEC-210 added (migration 020): `rag_lookup` and
 # `knowledge_draft`, claimed only by the `rag-worker`, plus the one DEC-213 adds (migration 023):
-# `knowledge_embed`, whose subject is an entry's uuid as text. It too is for the `rag-worker` alone,
-# but P14-T04 registers NO handler for it: until P14-T05 adds one neither worker claims or reclaims
-# it, and a row of that type would only sit `pending`. A frozen contract, not a Config knob: mirrors
+# `knowledge_embed`, whose subject is an entry's uuid as text. It too is for the `rag-worker` alone
+# (P14-T05 registered its handler there, second in `web/rag_worker.CLAIM_ORDER`); the main worker has no
+# handler for it, so it neither claims nor reclaims one. A frozen contract, not a Config knob: mirrors
 # `ck_jobs_job_type` exactly.
 JOB_TYPES = frozenset(
     {
