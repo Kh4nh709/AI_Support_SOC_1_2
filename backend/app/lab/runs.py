@@ -8,8 +8,8 @@ time (`ex_lab_runs_no_overlap`, `ck_lab_runs_ends_after_starts`); this module ch
 so the admin gets the field and the reason, and maps what the database still refuses.
 
 Every function runs in the caller's transaction: it commits nothing. `create_run` takes a savepoint around
-its INSERT, so a refusal leaves the caller's transaction usable, and writes `lab.run_created`
-`{run_id, name, purpose}` for the admin after the row is in.
+its INSERT and the event, so a refusal leaves the caller's transaction usable, and writes `lab.run_created`
+`{run_id, name, purpose}` for the admin after the row is in, in the same savepoint: both land or neither.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from __future__ import annotations
 import unicodedata
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import psycopg
@@ -97,10 +97,14 @@ def _clean_name(value: Any) -> str:
 
 def _check_time(field: str, value: Any) -> datetime:
     """A moment is a datetime that says its zone: a naive one would be read in the session's, which is not
-    what the admin meant."""
+    what the admin meant. It is returned in UTC; one that has no UTC form (year 0001 at +14:00, year 9999 at
+    -14:00) is `invalid`, where it would otherwise be an overflow the driver turns into a 500."""
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         raise InvalidRun(field, "invalid")
-    return value
+    try:
+        return value.astimezone(UTC)
+    except (OverflowError, ValueError):  # an offset that takes it before year 1 or past year 9999
+        raise InvalidRun(field, "invalid") from None
 
 
 def create_run(
@@ -123,27 +127,30 @@ def create_run(
         raise InvalidRun("ends_at", "not_after_starts")
 
     try:
-        with conn.transaction():  # a savepoint: a refusal leaves the caller's transaction usable
+        # A savepoint: a refusal leaves the caller's transaction usable. The event is written INSIDE it, so the
+        # run and its event land together or not at all; on an idle connection this block is the outermost
+        # transaction, and an event written after it would find the run already committed.
+        with conn.transaction():
             row = conn.execute(
                 f"INSERT INTO lab_runs (name, purpose, starts_at, ends_at, created_by) "
                 f"VALUES (%s, %s, %s, %s, %s) RETURNING {_RUN_COLUMNS}",
                 (name, purpose, starts_at, ends_at, admin_id),
             ).fetchone()
+            run = _run(row)
+            write_event(
+                conn,
+                "lab.run_created",
+                run.run_id,
+                "admin",
+                actor_id=admin_id,
+                payload={"run_id": run.run_id, "name": run.name, "purpose": run.purpose},
+            )
     except errors.ExclusionViolation as exc:
         raise RunOverlap(name) from exc
     except errors.UniqueViolation as exc:
         if exc.diag.constraint_name != "lab_runs_name_key":
             raise
         raise InvalidRun("name", "taken") from exc
-    run = _run(row)
-    write_event(
-        conn,
-        "lab.run_created",
-        run.run_id,
-        "admin",
-        actor_id=admin_id,
-        payload={"run_id": run.run_id, "name": run.name, "purpose": run.purpose},
-    )
     return run
 
 

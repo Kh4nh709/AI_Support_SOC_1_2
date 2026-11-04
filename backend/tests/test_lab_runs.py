@@ -164,6 +164,30 @@ def test_a_time_that_is_not_a_timezone_aware_datetime_is_invalid(db, field, valu
     assert (caught.value.field, caught.value.reason) == (field, "invalid")
 
 
+@pytest.mark.parametrize(
+    "field,moment",
+    [
+        ("starts_at", datetime(1, 1, 1, 0, 0, tzinfo=timezone(timedelta(hours=14)))),
+        ("ends_at", datetime(9999, 12, 31, 23, 0, tzinfo=timezone(timedelta(hours=-14)))),
+    ],
+    ids=["before-year-1-in-utc", "after-year-9999-in-utc"],
+)
+def test_a_time_that_has_no_utc_form_is_invalid_not_an_overflow(db, field, moment):
+    over = {field: moment}
+    over["ends_at" if field == "starts_at" else "starts_at"] = at(4 if field == "starts_at" else 0)
+    with pytest.raises(runs.InvalidRun) as caught:
+        _create(db, insert_user(db, "admin"), **over)
+    assert (caught.value.field, caught.value.reason) == (field, "invalid")
+
+
+def test_a_time_is_normalised_to_utc():
+    moment = runs._check_time(
+        "starts_at", datetime(2026, 11, 5, 16, 0, tzinfo=timezone(timedelta(hours=7)))
+    )
+    assert moment == datetime(2026, 11, 5, 9, 0, tzinfo=UTC)
+    assert moment.utcoffset() == timedelta(0)
+
+
 @pytest.mark.parametrize("name", ["", "   ", "\t\n"])
 def test_an_empty_name_is_invalid(db, name):
     with pytest.raises(runs.InvalidRun) as caught:
@@ -196,7 +220,7 @@ def test_a_name_over_eighty_characters_is_invalid(db):
 def test_a_name_with_a_control_or_invisible_character_or_that_is_not_text_is_invalid(db, name):
     with pytest.raises(runs.InvalidRun) as caught:
         _create(db, insert_user(db, "admin"), name=name)
-    assert caught.value.field == "name" and caught.value.reason in ("invalid", "empty")
+    assert (caught.value.field, caught.value.reason) == ("name", "invalid")
 
 
 def test_a_name_already_taken_is_invalid_and_leaves_the_transaction_usable(db):
