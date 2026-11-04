@@ -18,14 +18,20 @@ from app.audit import events
 from app.infra.errors import PermanentError
 
 
-def test_event_types_has_exactly_38_entries():
-    assert len(events.EVENT_TYPES) == 38
+def test_event_types_has_exactly_40_entries():
+    assert len(events.EVENT_TYPES) == 40
+
+
+def test_event_types_holds_the_two_dec_213_lab_names():
+    two = {"lab.run_created", "lab.labeled"}
+    assert two <= events.EVENT_TYPES
+    assert len(events.EVENT_TYPES - two) == 38
 
 
 def test_event_types_holds_the_two_dec_212_names():
     two = {"alert.archived", "case.archived"}
     assert two <= events.EVENT_TYPES
-    assert len(events.EVENT_TYPES - two) == 36
+    assert len(events.EVENT_TYPES - two - {"lab.run_created", "lab.labeled"}) == 36
 
 
 def test_event_types_holds_the_eight_p13_names_dec_210():
@@ -40,7 +46,8 @@ def test_event_types_holds_the_eight_p13_names_dec_210():
         "knowledge.redraft_requested",
     }
     assert eight <= events.EVENT_TYPES
-    assert len(events.EVENT_TYPES - eight - {"alert.archived", "case.archived"}) == 28
+    later = {"alert.archived", "case.archived", "lab.run_created", "lab.labeled"}
+    assert len(events.EVENT_TYPES - eight - later) == 28
 
 
 def test_event_types_contains_the_v1_and_v3_spot_checks():

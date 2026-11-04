@@ -20,14 +20,13 @@ import re
 import shutil
 import subprocess
 import uuid
-from pathlib import Path
 
 import psycopg
 import pytest
 from psycopg import sql
 
 from tests import conftest
-from tests.scratch_db import INSERT_ALERT, _with_db, insert_user
+from tests.scratch_db import INSERT_ALERT, _schema_tree_through, _with_db, insert_user
 from tests.test_archive import _put_alert, _put_case
 from tests.test_migration_020 import EVENTS_BEFORE_020, EVENTS_IN_020
 
@@ -81,24 +80,6 @@ def _constraint_names(db, name: str) -> list[str]:
         "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = %s", (name,)
     ).fetchone()[0]
     return re.findall(r"'([^']+)'::text", definition)
-
-
-def _schema_below(tmp_path: Path, below: int) -> Path:
-    """A copy of `docs/Schema` with only the migrations numbered below `below`, and a `schema.sql` the
-    real `build_schema.py` builds from them: the tree as it stood just before migration `below`
-    (21: at 020; 22: through 021). The later migration tests build their own trees with it."""
-    tree = tmp_path / f"Schema_below_{below:03d}"
-    tree.mkdir()
-    for path in SCHEMA_DIR.glob(MIGRATION_FILES):
-        if int(path.name[:3]) < below:
-            shutil.copy(path, tree)
-    shutil.copy(SCHEMA_DIR / "build_schema.py", tree)
-    built = subprocess.run(
-        ["python3", str(tree / "build_schema.py")], capture_output=True, text=True, check=False
-    )
-    if built.returncode != 0:
-        pytest.fail(f"build_schema.py exit {built.returncode}:\n{built.stderr}")
-    return tree
 
 
 def _migrate_run(dsn, mig_dir) -> subprocess.CompletedProcess:
@@ -333,10 +314,12 @@ def test_a_case_status_outside_the_five_is_still_refused(db):
 
 
 def test_the_event_constraint_holds_38_names_the_36_first_in_order(db):
+    """The shared database is migrated to the end, so a later migration's names (024: `lab.run_created`,
+    `lab.labeled`, DEC-213) follow the 38: they only ever append."""
     names = _constraint_names(db, "ck_audit_event_type")
-    assert len(names) == len(set(names)) == 38
+    assert len(names) == len(set(names)) >= 38
     assert names[:36] == EVENTS_BEFORE_021
-    assert names[36:] == EVENTS_IN_021
+    assert names[36:38] == EVENTS_IN_021
 
 
 @pytest.mark.parametrize("name", EVENTS_IN_021)
@@ -378,12 +361,12 @@ def test_021_applies_on_a_database_at_020_the_way_make_migrate_runs_it(tmp_path)
     session = _session_dsn()
     if shutil.which("psql") is None:
         pytest.skip("psql is not installed")
-    at_020 = _schema_below(tmp_path, 21)
-    through_021 = _schema_below(tmp_path, 22)  # 022 comes after 021
+    at_020 = _schema_tree_through(20, tmp_path)
+    through_021 = _schema_tree_through(21, tmp_path)  # 022 comes after 021
     stems = {path.stem for path in SCHEMA_DIR.glob(MIGRATION_FILES) if int(path.name[:3]) <= 21}
     total = len(stems)
     before = len(list(at_020.glob(MIGRATION_FILES)))
-    # 021 is no longer the last migration (022 and 023 follow it): the tree at 020 is every file below
+    # 021 is no longer the last migration (022, 023 and 024 follow it): the tree at 020 is every file below
     # 21, the tree through 021 every file below 22, and the real `migrate.sh` applies the second to the
     # first, so this test pins 021 alone whatever comes after it.
     assert before == total - 1 == len({s for s in stems if int(s[:3]) < 21})
@@ -489,7 +472,7 @@ def test_021_applies_cleanly_on_rows_of_the_live_shapes_and_leaves_every_one_unc
     session = _session_dsn()
     if shutil.which("psql") is None:
         pytest.skip("psql is not installed")
-    at_020 = _schema_below(tmp_path, 21)
+    at_020 = _schema_tree_through(20, tmp_path)
     dbname = f"{conftest._dbname(session)}_021seed_test"
     dsn = _with_db(session, dbname)
     admin = psycopg.connect(conftest._maintenance_dsn(session), autocommit=True)

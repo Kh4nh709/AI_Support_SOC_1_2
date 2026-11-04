@@ -32,7 +32,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from tests import conftest
-from tests.scratch_db import _with_db
+from tests.scratch_db import _schema_tree_through, _with_db
 from tests.test_migration_020 import (
     RESULT_COLUMNS,
     _columns,
@@ -330,24 +330,6 @@ def test_app_rw_writes_and_reads_both_new_columns_but_cannot_change_them_later(d
 # ── upgrade from 021, with no 022 ───────────────────────────────────────────────────────────
 
 
-def _tree_at_021(tmp_path: Path) -> Path:
-    """A copy of `docs/Schema` with only the migrations numbered 21 and below, and a `schema.sql` the
-    real `build_schema.py` builds from them: the tree as it stood at 021. Number 22 is left out even when
-    the repository has a 022 (another card's): 023 must apply without it."""
-    at_021 = tmp_path / "Schema_at_021"
-    at_021.mkdir()
-    for path in SCHEMA_DIR.glob(MIGRATION_FILES):
-        if int(path.name[:3]) <= 21:
-            shutil.copy(path, at_021)
-    shutil.copy(SCHEMA_DIR / "build_schema.py", at_021)
-    built = subprocess.run(
-        ["python3", str(at_021 / "build_schema.py")], capture_output=True, text=True, check=False
-    )
-    if built.returncode != 0:
-        pytest.fail(f"build_schema.py exit {built.returncode}:\n{built.stderr}")
-    return at_021
-
-
 def _tree_at_021_plus_023(at_021: Path, tmp_path: Path) -> Path:
     with_023 = tmp_path / "Schema_at_021_plus_023"
     shutil.copytree(at_021, with_023)
@@ -372,7 +354,7 @@ def test_023_applies_on_a_database_at_021_the_way_make_migrate_runs_it(tmp_path)
     """
     if shutil.which("psql") is None:
         pytest.skip("psql is not installed")
-    at_021 = _tree_at_021(tmp_path)
+    at_021 = _schema_tree_through(21, tmp_path)
     with_023 = _tree_at_021_plus_023(at_021, tmp_path)
     before = len(list(at_021.glob(MIGRATION_FILES)))
     assert before == 21 and not list(at_021.glob("022_*.sql"))
@@ -435,7 +417,7 @@ def test_023_applies_cleanly_on_rows_of_the_old_shapes_and_leaves_every_one_unch
     are NULL on all of it."""
     if shutil.which("psql") is None:
         pytest.skip("psql is not installed")
-    at_021 = _tree_at_021(tmp_path)
+    at_021 = _schema_tree_through(21, tmp_path)
     with_023 = _tree_at_021_plus_023(at_021, tmp_path)
     admin, dbname, dsn = _scratch("023seed")
     try:

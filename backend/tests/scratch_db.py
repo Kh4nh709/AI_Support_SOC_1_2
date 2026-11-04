@@ -22,14 +22,45 @@ import shutil
 import subprocess
 import urllib.parse
 import uuid
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
 import psycopg
 import pytest
 from psycopg import sql
 
 from tests import conftest
+
+SCHEMA_DIR = conftest.REPO_ROOT / "docs" / "Schema"
+MIGRATION_FILES = "[0-9][0-9][0-9]_*.sql"
+
+
+def _schema_tree_through(n: int, tmp_path: Path, *, skip: Collection[int] = ()) -> Path:
+    """A copy of `docs/Schema` with only the migrations numbered `n` and below (minus the numbers in
+    `skip`), and a `schema.sql` the real `build_schema.py` builds from them: the tree as it stood at
+    migration `n`. An upgrade test builds a scratch database from it, through the real `migrate.sh`,
+    and then applies the migration under trial from the real file.
+
+    `skip` leaves a number out even though it is below `n`: a migration that stands on an older one
+    alone (023 does not read 022) is shown to apply on a tree without the one written in parallel.
+    It is the one copy of the tree-builder that `test_migration_020`, `_021`, `_022`, `_023` and `_024`
+    share
+    (the P14-T04 review's note: three copies of the same twelve lines)."""
+    name = f"Schema_through_{n}" + "".join(f"_without_{k}" for k in sorted(skip))
+    tree = tmp_path / name
+    tree.mkdir()
+    for path in SCHEMA_DIR.glob(MIGRATION_FILES):
+        number = int(path.name[:3])
+        if number <= n and number not in skip:
+            shutil.copy(path, tree)
+    shutil.copy(SCHEMA_DIR / "build_schema.py", tree)
+    built = subprocess.run(
+        ["python3", str(tree / "build_schema.py")], capture_output=True, text=True, check=False
+    )
+    if built.returncode != 0:
+        pytest.fail(f"build_schema.py exit {built.returncode}:\n{built.stderr}")
+    return tree
 
 
 def _with_db(dsn: str, dbname: str) -> conftest.Dsn:

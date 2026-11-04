@@ -1,5 +1,5 @@
 // src/features/admin/auditSummary.test.ts — what the audit page makes of an event's payload: the one-line
-// summary of each of the 38 event types, the link of a subject that is an alert or a case, the payload as
+// summary of each of the 40 event types, the link of a subject that is an alert or a case, the payload as
 // text, and the escape of the characters a person cannot see. A payload is whatever the writers of the
 // events put there, so every function here is also shown to survive a payload of the wrong shape.
 import { S } from "../../strings";
@@ -20,8 +20,8 @@ const TYPES = Object.keys(S.admin.eventType);
 const sum = (event_type: string, payload: unknown) => summaryOf({ event_type, payload });
 
 describe("summaryOf, one event type at a time", () => {
-  it("covers all 38 event types of the backend, and each has a case below", () => {
-    expect(TYPES).toHaveLength(38);
+  it("covers all 40 event types of the backend, and each has a case below", () => {
+    expect(TYPES).toHaveLength(40);
   });
 
   it.each<[type: string, payload: unknown, summary: string]>([
@@ -376,11 +376,35 @@ describe("summaryOf, one event type at a time", () => {
       null,
       "tệp tri thức không còn khớp mã băm lúc duyệt, mục bị loại khỏi tra cứu",
     ],
+    [
+      "lab.run_created",
+      { run_id: "r-1", name: "Lần 1", purpose: "test" },
+      "ghi nhận một lần chạy lab; tên: Lần 1; mục đích: để chấm điểm",
+    ],
+    [
+      "lab.run_created",
+      { run_id: "r-2", name: "Dựng KB", purpose: "kb" },
+      "ghi nhận một lần chạy lab; tên: Dựng KB; mục đích: dựng cơ sở tri thức",
+    ],
+    ["lab.run_created", null, "ghi nhận một lần chạy lab"],
+    [
+      "lab.labeled",
+      { alert_id: "a1", run_id: "r-1", label: "true_positive" },
+      "gán nhãn: tấn công thật (TP)",
+    ],
+    [
+      "lab.labeled",
+      { alert_id: "a1", run_id: "r-1", label: "false_positive" },
+      "gán nhãn: không phải tấn công (FP)",
+    ],
+    ["lab.labeled", { alert_id: "a1", run_id: "r-1", label: null }, "xoá nhãn lab"],
+    ["lab.labeled", null, "gán nhãn lab"],
+    ["lab.labeled", { label: {} }, "gán nhãn lab"],
   ])("%s %j says %j", (type, payload, summary) => {
     expect(sum(type, payload)).toBe(summary);
   });
 
-  it("has a case for every one of the 38 types", () => {
+  it("has a case for every one of the 40 types", () => {
     // The cases above are the table; this is the other direction: no type of the backend is left without one.
     const covered = new Set(
       [
@@ -420,6 +444,8 @@ describe("summaryOf, one event type at a time", () => {
         "knowledge.retired",
         "knowledge.merged",
         "knowledge.redraft_requested",
+        "lab.run_created",
+        "lab.labeled",
         "rag.lookup_failed",
         "rag.integrity_failed",
       ].sort(),
@@ -887,6 +913,8 @@ describe("subjectPathOf", () => {
       "knowledge.redraft_requested",
       "knowledge.rejected",
       "knowledge.retired",
+      "lab.labeled",
+      "lab.run_created",
       "rag.integrity_failed",
       "rag.lookup_failed",
       "rule.suspected_wrong",

@@ -1228,7 +1228,7 @@ export const S = {
       system: "Hệ thống và job",
     } satisfies Record<AuditGroup, string>,
 
-    // One label for each of the 38 names of `audit/events.py`'s EVENT_TYPES, read through `labelOf`. The
+    // One label for each of the 40 names of `audit/events.py`'s EVENT_TYPES, read through `labelOf`. The
     // canvas gives nine; the rest follow its wording. An event with more than one use says the common part
     // (`admin.user_updated` is a role change, a deactivation, a reset and an unlock): the summary line of the
     // audit page says which.
@@ -1271,6 +1271,8 @@ export const S = {
       "rag.integrity_failed": "Tệp tri thức không khớp bản gốc",
       "alert.archived": "Lưu trữ alert (dọn hàng đợi)",
       "case.archived": "Lưu trữ case (dọn hàng đợi)",
+      "lab.run_created": "Tạo lần chạy lab",
+      "lab.labeled": "Gán nhãn lab",
     },
 
     // The audit page (P11-T17, spec §4.7): `/admin/audit`, the canvas's `AdminAudit` and the "AUDIT" cards of
@@ -1462,6 +1464,23 @@ export const S = {
         integrityFailed: "tệp tri thức không còn khớp mã băm lúc duyệt, mục bị loại khỏi tra cứu",
         draftId: (id: string) => `bản nháp ${id}`,
         entryId: (id: string) => `tri thức ${id}`,
+        // The lab events (DEC-213, P14-T09): a run recorded, an alert labelled by hand. The summary names the
+        // run and what it is for, or the label; it says nothing of the alert, and the subject is not linked
+        // (the alert's page shows ①'s answer, and labelling is blind to it).
+        labRunCreated: "ghi nhận một lần chạy lab",
+        labRunName: (name: string) => `tên: ${name}`,
+        labPurpose: (purpose: string) => `mục đích: ${purpose}`,
+        labPurposes: {
+          kb: "dựng cơ sở tri thức",
+          test: "để chấm điểm",
+        } as Readonly<Record<string, string>>,
+        labLabeled: (label: string) => `gán nhãn: ${label}`,
+        labLabelCleared: "xoá nhãn lab",
+        labLabelUnknown: "gán nhãn lab",
+        labLabels: {
+          true_positive: "tấn công thật (TP)",
+          false_positive: "không phải tấn công (FP)",
+        } as Readonly<Record<string, string>>,
       },
     },
 
