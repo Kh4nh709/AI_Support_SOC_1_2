@@ -4,13 +4,61 @@
 // suggestion any other way, so a component that wants to know "what does ① say" asks here and nowhere else.
 import type { AlertView, QueueRow } from "../../api/tier1";
 
+/**
+ * What ① concluded and what the system did with it (P14-T03, DEC-213): the part of a `ready` and of a `decided`
+ * state that the conclusion line ("AI kết luận: …") is made of. `action` is the verdict ① ends with
+ * (`suggested_action`, after the gate), `proposed` what the model itself concluded (`proposed_action`, null when
+ * the server sent none), `heldBy` the closed codes of `llm.verdicts.HELD_REASONS` the gate held it for (`[]` when
+ * it did not).
+ */
+export type AiConclusion = {
+  action: string | null;
+  proposed: string | null;
+  heldBy: string[];
+};
+
 export type AiState =
-  | { kind: "ready"; action: string; confidence: string | null; forced: boolean }
+  | ({
+      kind: "ready";
+      action: string;
+      confidence: string | null;
+      forced: boolean;
+    } & AiConclusion)
   | { kind: "hidden" }
   | { kind: "pending" }
   | { kind: "none" }
   | { kind: "unavailable"; stoppedBy: string | null }
-  | { kind: "decided"; action: string | null; confidence: string | null };
+  | ({ kind: "decided"; confidence: string | null } & AiConclusion);
+
+/**
+ * What the model may answer (`llm.verdicts.MODEL_ACTIONS`, P14-T01): ① always concludes one of the two. A copy:
+ * the test of this file reads the Python source and compares the two, so an answer added on one side fails.
+ */
+export const MODEL_ACTIONS: ReadonlySet<string> = new Set(["false_positive", "true_positive"]);
+
+/**
+ * What the AI concluded, for the line "AI kết luận: …": the model's own answer (`proposed`) when it is one of the two
+ * it may give, else the verdict ① ended with when that is one of them (a gate that kept the answer; a server that
+ * sent no `proposed_action`), else null: a `needs_review` nobody explained is the system's word, not a conclusion.
+ */
+export function conclusionOf(state: AiConclusion): string | null {
+  if (state.proposed !== null && MODEL_ACTIONS.has(state.proposed)) return state.proposed;
+  return state.action !== null && MODEL_ACTIONS.has(state.action) ? state.action : null;
+}
+
+/** Whether the system held the model's answer back for a person: the gate ended on `needs_review`, or named a reason. */
+export function heldOf(state: AiConclusion): boolean {
+  return state.action === "needs_review" || state.heldBy.length > 0;
+}
+
+/** A list of reason codes as it arrives: only its non-empty strings; anything else is none. */
+function codes(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((x): x is string => typeof x === "string" && x !== "")
+    : [];
+}
+
+const textOrNull = (value: unknown): string | null => (typeof value === "string" ? value : null);
 
 /**
  * The statuses in which the server shows the ① verdict to everyone (visibility.SHOW_STATES). A copy: the
@@ -59,6 +107,8 @@ export function aiStateOfRow(row: QueueRow): AiState {
       action: row.suggested_action,
       confidence: row.confidence ?? null,
       forced: row.gate_forced === true,
+      proposed: textOrNull(row.proposed_action),
+      heldBy: codes(row.held_by),
     };
   }
   if (row.triage_status === "unavailable") return UNAVAILABLE;
@@ -79,6 +129,9 @@ export function aiStateOfView(view: AlertView): AiState {
       kind: "decided",
       action: typeof suggestion?.suggested_action === "string" ? suggestion.suggested_action : null,
       confidence: suggestion?.confidence ?? null,
+      // The decision lifts the blind arm: the server sends the two keys back with the rest of the suggestion.
+      proposed: textOrNull(view.proposed_action),
+      heldBy: codes(view.held_by),
     };
   }
   if (!("suggestion" in view) && view.suggestion_visible === false) return { kind: "hidden" };
@@ -88,6 +141,8 @@ export function aiStateOfView(view: AlertView): AiState {
       action: suggestion.suggested_action,
       confidence: suggestion.confidence ?? null,
       forced: suggestion.gate?.forced === true,
+      proposed: textOrNull(view.proposed_action),
+      heldBy: codes(view.held_by),
     };
   }
   if (view.triage_status === "unavailable") {

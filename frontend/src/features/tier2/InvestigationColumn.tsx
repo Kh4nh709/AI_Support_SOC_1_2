@@ -7,6 +7,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useRef, useState } from "react";
 import {
+  HELD_CONCLUSION,
+  MODEL_CONCLUSIONS,
   getInvestigation,
   isInvestigationState,
   postAnalyze,
@@ -287,6 +289,29 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
   );
 }
 
+/**
+ * What the AI concluded on the case (P14-T03, DEC-213): "AI kết luận: <the label of ②'s conclusion>", and when the
+ * system held it as `need_more_data`, "… — hệ thống giữ lại vì: <causes>" (just "… — hệ thống giữ lại" when it
+ * knows no cause). The conclusion is the model's own (`model_conclusion`), not the `need_more_data` the system
+ * stored in its place; a cause the UI has no label for is shown as its code. All of it is text.
+ */
+function ModelConclusion({
+  conclusion,
+  causes,
+  held,
+}: {
+  conclusion: string;
+  causes: string[];
+  held: boolean;
+}) {
+  return (
+    <p className="text-base">
+      {S.ai2.conclusion}: <strong>{labelOf(S.ai2.suggestedConclusion, conclusion)}</strong>
+      {held && ` ${S.ai2.heldLine(causes.map((cause) => labelOf(S.ai2.heldReason, cause)))}`}
+    </p>
+  );
+}
+
 export function RunResult({
   run,
   current,
@@ -297,6 +322,22 @@ export function RunResult({
   title: string | null;
 }) {
   const evidenceId = useId();
+  // A run from before P14-T02 carries no `model_conclusion`: it keeps the stored label and the overruled text.
+  const modelConclusion =
+    typeof run.model_conclusion === "string" && run.model_conclusion !== ""
+      ? run.model_conclusion
+      : null;
+  // The causes the server named. The system held the conclusion when it named one, and also when the stored
+  // conclusion is `need_more_data` over one of the three the model may give (M5): the stored word is the
+  // system's own, so a `held_by` that came out empty does not turn the override into the model's answer.
+  const causes = (Array.isArray(run.held_by) ? run.held_by : []).filter(
+    (cause): cause is string => typeof cause === "string" && cause !== "",
+  );
+  const held =
+    modelConclusion !== null &&
+    (causes.length > 0 ||
+      (run.conclusion === HELD_CONCLUSION &&
+        (MODEL_CONCLUSIONS as readonly string[]).includes(modelConclusion)));
   const hypotheses = run.hypotheses ?? [];
   const evidence = run.evidence ?? [];
   const nextSteps = run.next_steps ?? [];
@@ -330,20 +371,27 @@ export function RunResult({
       )}
 
       <Block title={S.ai2.suggested}>
-        <p className="flex flex-wrap items-baseline gap-2">
-          <strong className="text-base">{asText(run.conclusion_label)}</strong>
-          <code className="text-xs text-muted">{asText(run.conclusion)}</code>
-        </p>
+        {modelConclusion !== null ? (
+          <ModelConclusion conclusion={modelConclusion} causes={causes} held={held} />
+        ) : (
+          <p className="flex flex-wrap items-baseline gap-2">
+            <strong className="text-base">{asText(run.conclusion_label)}</strong>
+            <code className="text-xs text-muted">{asText(run.conclusion)}</code>
+          </p>
+        )}
         <p className="text-sm">
           {`${S.ai2.confidence}: ${labelOf(S.ai2.confidenceLevel, run.confidence)}`}
         </p>
       </Block>
 
-      {run.overruled !== null && run.overruled !== undefined && run.overruled !== "" && (
-        <p className="rounded border border-high/40 bg-high-bg p-3 text-sm text-high">
-          {run.overruled}
-        </p>
-      )}
+      {(modelConclusion === null || (held && causes.length === 0)) &&
+        run.overruled !== null &&
+        run.overruled !== undefined &&
+        run.overruled !== "" && (
+          <p className="rounded border border-high/40 bg-high-bg p-3 text-sm text-high">
+            {run.overruled}
+          </p>
+        )}
 
       <Block title={S.ai2.summary}>
         <p className="whitespace-pre-wrap text-sm">{asText(run.summary)}</p>

@@ -395,6 +395,7 @@ def test_queue_unavailable_alert_still_listed(db):
     assert row["suggested_action"] is None
     assert row["confidence"] is None
     assert row["gate_forced"] is None
+    assert row["proposed_action"] is None and row["held_by"] == []  # P14-T03
 
 
 @pytest.mark.db
@@ -428,6 +429,8 @@ def test_queue_row_has_band_not_score(db):
         "suggested_action",
         "confidence",
         "gate_forced",
+        "proposed_action",  # P14-T03 / DEC-213: the model's own answer, an `ANALYST_HIDE` key
+        "held_by",  # P14-T03 / DEC-213: why the system held it, an `ANALYST_HIDE` key
         "needs_retriage",
         "risk_band",
     }

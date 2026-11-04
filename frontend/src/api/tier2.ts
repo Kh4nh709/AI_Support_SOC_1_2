@@ -157,10 +157,31 @@ export type RunView = {
   playbook_used?: string | null;
   /** The sentence saying the model's conclusion was lowered, or null. */
   overruled?: string | null;
+  /**
+   * P14-T02/T03 (DEC-213): the model's own conclusion (`false_positive`, `policy_violation` or
+   * `confirmed_incident`), and why the system held it as `need_more_data` (`no_verified_evidence`,
+   * `high_severity_injection_finding`; `[]` when it did not). A run from before P14-T02 has `null` and `[]`.
+   */
+  model_conclusion?: string | null;
+  held_by?: string[];
   snapshot?: Snapshot | null;
   /** The case has changed since the run's snapshot. */
   changed?: boolean;
 };
+
+/**
+ * What the model may conclude on a case (`llm.verdicts.MODEL_CONCLUSIONS`, P14-T02). `need_more_data` is not one:
+ * only the system stores it, when it holds a conclusion back. A copy; strings.test.ts reads the Python source and
+ * compares the two.
+ */
+export const MODEL_CONCLUSIONS = [
+  "false_positive",
+  "policy_violation",
+  "confirmed_incident",
+] as const;
+
+/** The conclusion the system stores in place of the model's own when it holds one back. */
+export const HELD_CONCLUSION = "need_more_data";
 
 export const INVESTIGATION_STATES = ["idle", "running", "stalled", "done", "failed"] as const;
 export type InvestigationState = (typeof INVESTIGATION_STATES)[number];

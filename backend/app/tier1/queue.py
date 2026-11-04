@@ -17,7 +17,10 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
   suggestion, the acknowledger's name, and (S3) `soar` — the SIEM's SOAR enrichment as one
   display blob (`tier1/soar_view.py`), `None` for an alert that carries none. INT-T02 adds
   `llm_stopped_by`: why the newest ① run gave up, a `visibility.ANALYST_HIDE` key (`latest_stopped_by`
-  below, the one-column sibling of `latest_suggestion`).
+  below, the one-column sibling of `latest_suggestion`). P14-T03 (DEC-213) adds `proposed_action`
+  and `held_by`: the model's own conclusion and why the system held it back (`latest_suggestion_held` below, the
+  same one read of the newest run that builds `suggestion`; the queue rows carry them from their own statement). All of these are
+  `visibility.ANALYST_HIDE` keys.
 - `latest_suggestion` — **the one place in P4 that reads `llm_runs`** (planning decision
   5). The row shape is P3-T10's and may still move; every read here is `.get`-tolerant,
   and this function is where to follow it. `latest_suggestions` is the same read for many
@@ -41,6 +44,7 @@ import psycopg
 
 from app.domain import correlation
 from app.kb.lookup import get_playbook
+from app.llm import verdicts
 from app.tier1 import visibility
 from app.tier1.soar_view import soar_view
 
@@ -198,10 +202,28 @@ def latest_suggestion(conn: psycopg.Connection, alert_id: str) -> Suggestion | N
     are ordered by `run_id DESC` (here, in `latest_suggestions` and in the queue's join: the three
     readers name the same run). Every key is read with `.get`: a key P3-T10 does not write becomes `None`, never a
     `KeyError`."""
+    return latest_suggestion_held(conn, alert_id)[0]
+
+
+def latest_suggestion_held(
+    conn: psycopg.Connection, alert_id: str
+) -> tuple[Suggestion | None, str | None, list[str]]:
+    """`(suggestion, proposed_action, held_by)` from ONE read of the newest proposer run
+    (`_SUGGESTION_SQL`): `latest_suggestion`'s `Suggestion`, the model's own definite answer
+    (`gate_result.proposed_verdict`, `verdicts.proposed_action`) and the closed reasons the gate held it
+    back (`verdicts.held_reasons`) - so the three are the same run by construction, not by two statements
+    that happen to agree. The alert view's `proposed_action` and `held_by` (P14-T03, DEC-213). `(None, None,
+    [])` when there is no run or its `result` is NULL (① failed: an older run does not stand in), and
+    `(suggestion, None, [])` for a `gate_result` that is missing or garbled. Like `latest_suggestion` it
+    applies no blind-branch rule: `visibility.strip` does, in the reader that serves an analyst."""
     row = conn.execute(_SUGGESTION_SQL, (alert_id,)).fetchone()
     if row is None:
-        return None
-    return _suggestion_of(*row)
+        return None, None, []
+    suggestion = _suggestion_of(*row)
+    if suggestion is None:
+        return None, None, []
+    gate_result = row[2]
+    return suggestion, verdicts.proposed_action(gate_result), verdicts.held_reasons(gate_result)
 
 
 _STOPPED_BY_SQL = """
@@ -304,6 +326,7 @@ _QUEUE_COLUMNS = (
     "suggested_action",
     "confidence",
     "gate_forced",
+    "gate_held",
     "needs_retriage",
 )
 _NEEDS_RETRIAGE_SQL = """(a.triaged_count > 0 AND
@@ -330,6 +353,11 @@ _QUEUE_SQL = """
            r.result->>'suggested_action',
            r.result->>'confidence',
            r.gate_result->>'forced',
+           CASE WHEN r.result IS NULL THEN NULL ELSE jsonb_build_object(
+               'proposed_verdict', r.gate_result->'proposed_verdict',
+               'forced_by', r.gate_result->'forced_by',
+               'missing', r.gate_result->'missing',
+               'steps', jsonb_build_object('6', r.gate_result->'steps'->'6')) END AS gate_held,
            {needs_retriage} AS needs_retriage
     FROM alerts a
     LEFT JOIN LATERAL (
@@ -462,7 +490,7 @@ def list_queue(
     """One page of the Tier-1 queue, by default in the phase-6 order. Each row carries the queue
     columns plus `risk_band` and **minus** `risk_score`, already passed through
     `visibility.strip(mode="analyst")` — a blind, undecided head has no
-    `suggested_action`/`confidence`/`gate_forced`/`triage_status`/`run_id` keys and no
+    `suggested_action`/`confidence`/`gate_forced`/`proposed_action`/`held_by`/`triage_status`/`run_id` keys and no
     `triaged_count`/`needs_retriage` (R17) at all, under every filter, and its `needs_retriage`
     does not affect where it sorts (see `_NEEDS_RETRIAGE_SORT_SQL`).
 
@@ -511,6 +539,12 @@ def list_queue(
         if row["run_id"] is not None:
             row["run_id"] = str(row["run_id"])
         row["gate_forced"] = _JSON_BOOL.get(row["gate_forced"])
+        # P14-T03: only the gate keys `verdicts` reads - the model's answer, `forced_by`, `missing` and step 6's
+        # outcome (what tells `verifier_invalid` from `verifier_disagrees`), never the whole `gate_result`; `strip`
+        # drops both results for a blind, undecided head.
+        gate_held = row.pop("gate_held")
+        row["proposed_action"] = verdicts.proposed_action(gate_held)
+        row["held_by"] = verdicts.held_reasons(gate_held)
         rows.append(
             visibility.strip(
                 row,
@@ -665,11 +699,14 @@ def get_alert_view(
 
     view["playbook"] = get_playbook(view["category"])
 
-    suggestion = latest_suggestion(conn, head_id)
+    suggestion, proposed_action, held_by = latest_suggestion_held(conn, head_id)
     view["suggestion"] = suggestion.to_dict() if suggestion is not None else None
     # Why the newest ① run stopped (INT-T02): added BEFORE the strip, so a blind, undecided head
     # loses it with the other ① keys (`visibility.ANALYST_HIDE`), and the labelling page never has it.
     view["llm_stopped_by"] = latest_stopped_by(conn, head_id)
+    # The model's own conclusion and why the system held it (P14-T03): from the very row the suggestion
+    # came from, and added BEFORE the strip, so the blind arm and the labelling page never get them.
+    view["proposed_action"], view["held_by"] = proposed_action, held_by
 
     view["risk_band"] = risk_band(view.pop("risk_score"))
 
