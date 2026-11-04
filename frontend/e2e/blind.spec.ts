@@ -22,7 +22,7 @@ import {
   waitForTriage,
   type Answer,
 } from "./fixtures";
-import { wordsFound } from "../src/testing/containsWord";
+import { phrasesFound, wordsFound } from "../src/testing/containsWord";
 
 /** The keys `visibility.strip` removes from an undecided blind head (with R17's two). */
 const HIDDEN_KEYS = [
@@ -53,10 +53,11 @@ const CONCLUSION_PHRASES = [S.ai1.conclusion, S.ai1.held] as const;
 
 /**
  * What a leak of the conclusion would put in the AI column, and only there: the words of every reason (an
- * alert's own text or a playbook line may say "tài khoản đặc quyền"; that is not a leak), and the two labels of a
- * verdict as WORDS ("SFTP" is not "TP").
+ * alert's own text or a playbook line may say "tài khoản đặc quyền"; that is not a leak), found as plain
+ * substrings, and the two labels of a verdict as WORDS ("SFTP" is not "TP").
  */
-const COLUMN_MARKERS = [...Object.values(S.ai1.heldReason), "FP", "TP"] as const;
+const COLUMN_PHRASES = Object.values(S.ai1.heldReason);
+const COLUMN_LABELS = ["FP", "TP"] as const;
 
 /** The labels of the reasons the gate held the stub's verdict for, read from the database (step 4's fields). */
 function heldLabels(id: string): string[] {
@@ -192,9 +193,10 @@ test("a blind head shows nothing of ① until it is decided, then shows it", asy
   // The AI column itself: no reason, no verdict label as a word.
   const column = page.getByRole("region", { name: S.alert.aiHeading });
   for (const seen of [await column.innerText(), await column.innerHTML()]) {
-    expect(wordsFound(seen, COLUMN_MARKERS), "the blind AI column names ①'s conclusion").toEqual(
-      [],
-    );
+    expect(
+      [...phrasesFound(seen, COLUMN_PHRASES), ...wordsFound(seen, COLUMN_LABELS)],
+      "the blind AI column names ①'s conclusion",
+    ).toEqual([]);
   }
   const answers = await traffic.answers();
   // The traffic includes the queue (with the row of this head) and the head's own view, or the check is empty.

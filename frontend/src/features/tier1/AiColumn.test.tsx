@@ -6,7 +6,7 @@ import { render, screen, within } from "@testing-library/react";
 import axe from "axe-core";
 import type { AlertView, Suggestion } from "../../api/tier1";
 import { S } from "../../strings";
-import { wordsFound } from "../../testing/containsWord";
+import { phrasesFound, textOf, wordsFound } from "../../testing/containsWord";
 import { AiColumn, Unavailable } from "./AiColumn";
 import { aiStateOfView } from "./aiState";
 
@@ -69,10 +69,11 @@ const renderColumn = (v: AlertView) =>
     </main>,
   );
 
-/** Every word of a verdict that must not reach a column that is hidden. */
+/** The two-letter labels of a verdict: found as WORDS, so "SFTP" in an unrelated line is not a leak. */
+const LABEL_MARKERS = ["TP", "FP"];
+
+/** Everything else of a verdict that must not reach a column that is hidden: found as plain substrings. */
 const VERDICT_WORDS = [
-  "TP",
-  "FP",
   "true_positive",
   "false_positive",
   "Cần xem xét",
@@ -83,6 +84,16 @@ const VERDICT_WORDS = [
   "37 lần xác thực",
   "Failed password",
 ];
+
+/**
+ * What of a verdict is in `el`. The text is read per text node: `textContent` glues the text of neighbouring
+ * elements ("Đề xuất" + "Cần xem xét" read "Đề xuấtCần xem xét"), and a whole-word search would lose a marker at
+ * the seam. The labels are looked for as words, the phrases as substrings.
+ */
+const leaksIn = (el: Element, phrases: readonly string[] = VERDICT_WORDS): string[] => {
+  const text = textOf(el);
+  return [...wordsFound(text, LABEL_MARKERS), ...phrasesFound(text, phrases)];
+};
 
 describe("ready", () => {
   it("shows what the AI concluded with its confidence, and no flag when the gate forced nothing", () => {
@@ -452,16 +463,35 @@ describe("AI kết luận", () => {
     renderColumn(stray);
     const col = column();
     expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
-    // whole words: "FP" is a marker, "SFTP" in an unrelated line would not be one
-    expect(
-      wordsFound(col.textContent ?? "", [
-        "AI kết luận",
-        "giữ lại",
-        "tài sản quan trọng hoặc chưa rõ",
-        "FP",
-        "TP",
-      ]),
-    ).toEqual([]);
+    expect(leaksIn(col, ["AI kết luận", "giữ lại", "tài sản quan trọng hoặc chưa rõ"])).toEqual([]);
+  });
+});
+
+// Fix round 2 (Minor): the markers must still be found where a leaked verdict's text is glued to the text of the
+// element beside it. A ready column that says `needs_review` with nothing the AI concluded draws "Đề xuất" and
+// "Cần xem xét" in two elements: `textContent` reads them as "Đề xuấtCần xem xét".
+describe("the leak markers of the blind tests", () => {
+  it("find a verdict whose text is glued to its neighbour's", () => {
+    const leaked = view({
+      suggestion: suggestion({ suggested_action: "needs_review", confidence: null }),
+      proposed_action: null,
+      held_by: [],
+    });
+    renderColumn(leaked);
+    const col = column();
+    expect(col.textContent).toContain("Đề xuấtCần xem xét"); // the seam
+    expect(leaksIn(col)).toContain("Cần xem xét");
+  });
+
+  it("find a leaked conclusion line, its label and its reasons", () => {
+    renderColumn(
+      view({
+        suggestion: suggestion({ suggested_action: "needs_review" }),
+        proposed_action: "false_positive",
+        held_by: ["fp_policy:asset_criticality"],
+      }),
+    );
+    expect(leaksIn(column())).toEqual(expect.arrayContaining(["FP", "AI kết luận", "giữ lại"]));
   });
 });
 
@@ -470,9 +500,7 @@ describe("hidden (the blind arm)", () => {
     renderColumn(blindView());
     const col = column();
     expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
-    expect(wordsFound(col.textContent ?? "", VERDICT_WORDS), "verdict words in the column").toEqual(
-      [],
-    );
+    expect(leaksIn(col), "verdict markers in the column").toEqual([]);
     // it does not say that ① is working, or has failed, or has nothing to say
     expect(col.textContent).not.toContain(S.ai1.pending);
     expect(col.textContent).not.toContain(S.ai1.unavailable);
@@ -502,9 +530,7 @@ describe("hidden (the blind arm)", () => {
     renderColumn(stray);
     const col = column();
     expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
-    expect(wordsFound(col.textContent ?? "", VERDICT_WORDS), "verdict words in the column").toEqual(
-      [],
-    );
+    expect(leaksIn(col), "verdict markers in the column").toEqual([]);
     expect(col.textContent).not.toContain(S.ai1.correlatedThen);
     expect(within(col).queryByRole("img", { name: S.ai1.forcedLabel })).not.toBeInTheDocument();
   });
@@ -543,9 +569,7 @@ describe("pending", () => {
     expect(within(col).getByText(S.ai1.pending)).toBeInTheDocument();
     expect(col.textContent).toContain(S.ai1.pendingBody);
     expect(col.textContent).not.toContain(S.ai1.hidden);
-    expect(wordsFound(col.textContent ?? "", VERDICT_WORDS), "verdict words in the column").toEqual(
-      [],
-    );
+    expect(leaksIn(col), "verdict markers in the column").toEqual([]);
   });
 });
 
@@ -558,9 +582,7 @@ describe("none (an archived alert with no ①)", () => {
     expect(col.textContent).not.toContain(S.ai1.pending);
     expect(col.textContent).not.toContain(S.ai1.pendingBody);
     expect(col.textContent).not.toContain(S.ai1.hidden);
-    expect(wordsFound(col.textContent ?? "", VERDICT_WORDS), "verdict words in the column").toEqual(
-      [],
-    );
+    expect(leaksIn(col), "verdict markers in the column").toEqual([]);
   });
 
   it("is not what a blind archived head shows: that one stays 'ẩn — nhánh mù'", () => {

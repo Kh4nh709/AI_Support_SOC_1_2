@@ -17,3 +17,24 @@ export function containsWord(text: string, word: string): boolean {
 export function wordsFound(text: string, words: readonly string[]): string[] {
   return words.filter((word) => containsWord(text, word));
 }
+
+/** The markers of `phrases` that occur in `text` as plain substrings (a phrase may be glued to a neighbour). */
+export function phrasesFound(text: string, phrases: readonly string[]): string[] {
+  return phrases.filter((phrase) => phrase !== "" && text.includes(phrase));
+}
+
+/**
+ * The text of `root`, read per text node and joined with a line break. `textContent` glues the text of
+ * neighbouring elements ("Đề xuất" beside "Cần xem xét" reads "Đề xuấtCần xem xét"), so a whole-word search over
+ * it loses a marker at the seam; here the seam is a line break, a non-letter, and a marker at the edge of an
+ * element is still a word of its own. A phrase never spans two text nodes.
+ */
+export function textOf(root: Node): string {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const parts: string[] = [];
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    const text = node.textContent ?? "";
+    if (text !== "") parts.push(text);
+  }
+  return parts.join("\n");
+}
