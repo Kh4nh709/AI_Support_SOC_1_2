@@ -356,7 +356,8 @@ _QUEUE_SQL = """
            CASE WHEN r.result IS NULL THEN NULL ELSE jsonb_build_object(
                'proposed_verdict', r.gate_result->'proposed_verdict',
                'forced_by', r.gate_result->'forced_by',
-               'missing', r.gate_result->'missing') END AS gate_held,
+               'missing', r.gate_result->'missing',
+               'steps', jsonb_build_object('6', r.gate_result->'steps'->'6')) END AS gate_held,
            {needs_retriage} AS needs_retriage
     FROM alerts a
     LEFT JOIN LATERAL (
@@ -538,7 +539,8 @@ def list_queue(
         if row["run_id"] is not None:
             row["run_id"] = str(row["run_id"])
         row["gate_forced"] = _JSON_BOOL.get(row["gate_forced"])
-        # P14-T03: only the three gate keys the readers need (never the whole `gate_result`); `strip`
+        # P14-T03: only the gate keys `verdicts` reads - the model's answer, `forced_by`, `missing` and step 6's
+        # outcome (what tells `verifier_invalid` from `verifier_disagrees`), never the whole `gate_result`; `strip`
         # drops both results for a blind, undecided head.
         gate_held = row.pop("gate_held")
         row["proposed_action"] = verdicts.proposed_action(gate_held)

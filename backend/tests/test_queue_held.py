@@ -8,6 +8,7 @@ inserted in P3-T10's shape. Every test runs in the `db` fixture's transaction.
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any
 
@@ -18,6 +19,8 @@ from app.tier1 import queue
 from app.tier1.queue import get_alert_view
 from app.tier1.visibility import ANALYST_HIDE, LABELING_DENYLIST
 
+from tests.fakes.llm import TRIAGE_V2_FALSE_POSITIVE, VERIFIER_V2_DISAGREE
+from tests.test_held_reasons import _blocks, _facts, _run
 from tests.test_queue import (
     GATE,
     RESULT,
@@ -136,6 +139,91 @@ def test_the_row_and_the_view_agree_with_held_reasons_and_proposed_action(db):
     for shown in (row, view):
         assert shown["held_by"] == verdicts.held_reasons(HELD_GATE)
         assert shown["proposed_action"] == verdicts.proposed_action(HELD_GATE)
+
+
+# ── step 6: a queue row and the alert view of the same run name the same reason ──────────────
+
+#: What step 6 records (`security/gate.py`, `step6_verifier`): the verifier's answer did not parse
+#: (`invalid`), or it parsed and disagreed (`disagree`). Both force `needs_review` through `step6`.
+_STEP_6 = [("invalid", "verifier_invalid"), ("disagree", "verifier_disagrees")]
+
+
+def _step_6_gate(outcome: str) -> dict[str, Any]:
+    return {
+        **GATE,
+        "proposed_verdict": "false_positive",
+        "final_verdict": "needs_review",
+        "forced": True,
+        "forced_by": ["step6"],
+        "missing": [],
+        "verifier_verdict": None if outcome == "invalid" else "needs_review",
+        "steps": {
+            "1": "ok",
+            "2": "ok",
+            "3": "dropped:0",
+            "4": "ok",
+            "5": "findings:0",
+            "6": outcome,
+        },
+    }
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(("outcome", "reason"), _STEP_6)
+def test_a_queue_row_and_the_alert_view_of_the_same_run_agree_on_step_6(db, outcome, reason):
+    """Fix round 2 (M3): the queue's gate projection carries step 6's outcome, so its `held_by` is the
+    alert view's, run for run - an unusable verifier is `verifier_invalid` in both, a disagreeing one
+    `verifier_disagrees` in both."""
+    alert_id = _queued(db, suggestion_visible=True)
+    _insert_run(db, alert_id, result=HELD_RESULT, gate_result=_step_6_gate(outcome))
+
+    row, view = _row(db, alert_id), get_alert_view(db, alert_id)
+
+    assert row["held_by"] == [reason]
+    assert view["held_by"] == [reason]
+    assert row["proposed_action"] == view["proposed_action"] == "false_positive"
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(("verifier", "reason"), [(None, "verifier_invalid"), (False, None)])
+def test_a_real_gate_result_gives_the_row_and_the_view_the_same_held_by(db, verifier, reason):
+    """The same, with the gate_result the real gate writes (`gate.finish(state, None)` for an answer that
+    did not parse; a disagreeing verifier for the other), so the stored shape is the one the projection reads.
+    """
+    proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    stored = _run(
+        proposal,
+        facts=_facts(proposal["structured_basis"]),
+        blocks=_blocks(proposal),
+        verifier=None if verifier is None else VERIFIER_V2_DISAGREE,
+    )
+    expected = verdicts.held_reasons(stored)
+    assert expected == [reason or "verifier_disagrees"]
+    alert_id = _queued(db, suggestion_visible=True)
+    _insert_run(db, alert_id, result=HELD_RESULT, gate_result=stored)
+
+    row, view = _row(db, alert_id), get_alert_view(db, alert_id)
+
+    assert row["held_by"] == view["held_by"] == expected
+
+
+@pytest.mark.db
+def test_the_gate_projection_of_a_queue_row_holds_step_6_and_not_the_whole_gate_result(db):
+    """Only what `held_reasons` reads leaves the database: three gate keys and step 6's outcome, never
+    `facts` or `proposer_raw`; and the rows are still one statement."""
+    alert_id = _queued(db, suggestion_visible=True)
+    _insert_run(db, alert_id, result=HELD_RESULT, gate_result=_step_6_gate("invalid"))
+
+    with _count_statements(db) as statements:
+        rows = _all_rows(db)
+
+    queue_statements = [s for s in statements if "FROM llm_runs" in s]
+    assert len(queue_statements) == 1
+    assert "'steps'" in queue_statements[0] and "'6'" in queue_statements[0]
+    assert (
+        "r.gate_result," not in queue_statements[0]
+    )  # the column list holds no bare `gate_result`
+    assert [r["held_by"] for r in rows if r["alert_id"] == alert_id] == [["verifier_invalid"]]
 
 
 # ── no run, a failed run, a garbled gate_result ─────────────────────────────────────────────
