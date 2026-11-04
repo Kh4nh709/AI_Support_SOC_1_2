@@ -11,6 +11,13 @@ Both functions run only `SELECT`s inside a transaction the caller owns (E4) —
 correlation is never persisted here; `escalate` is the only place it is ever written,
 into `case_alerts`, once an analyst has confirmed it is worth keeping.
 
+`as_of` (P14 final fix wave, C1; the lab measurement, `eval/lab_measure.py`): `rows_query`,
+`samples_query` and `summarize_for_prompt` take an optional instant and then keep only the alerts
+received STRICTLY before it (`RECEIVED_BEFORE_PREDICATE`, on `received_at`: "when did we hear about
+it", the question for what a prompt could have shown at that instant, as opposed to the event-time
+window above). A later stage of the same attack is then neither counted nor sampled. `None` — every
+caller of the product — is the statement it has always been, text and parameters.
+
 `alert` is duck-typed: anything exposing `.alert_id`, `.agent_name`, `.alert_user`,
 `.srcip`, `.alert_time` works (`domain.transitions.escalate` passes a lightweight
 `_CorrelationSubject`, not a full `Alert`).
@@ -46,6 +53,13 @@ _WINDOW_PREDICATE = (
 #: would not render. `cluster_ids_query` needs no such term: it takes `queued_tier1` / `tier1_active` only.
 STATUS_PREDICATE = "status NOT IN ('duplicate', 'archived')"
 _STATUS_PREDICATE = STATUS_PREDICATE
+
+#: The bound `as_of` adds (C1): an alert counts only if it had been received before that instant. Public,
+#: with the two above, so `tier2.dossier` and `eval/lab_measure.py` use this one predicate and never a copy.
+RECEIVED_BEFORE_PREDICATE = "received_at < %(as_of)s"
+#: What the bounded statements append to the status predicate; `""` for `as_of=None`, which leaves the
+#: statement byte for byte what it was.
+_RECEIVED_BEFORE_CLAUSE = "\n          AND " + RECEIVED_BEFORE_PREDICATE
 
 
 @dataclass(frozen=True)
@@ -92,13 +106,22 @@ def window_params(alert: Any) -> dict[str, Any]:
     }
 
 
+def _bounded(params: dict[str, Any], as_of: datetime | None) -> tuple[str, dict[str, Any]]:
+    """`(the clause to append, the parameters)` for an optional `as_of`: nothing and the same dict for None."""
+    if as_of is None:
+        return "", params
+    return _RECEIVED_BEFORE_CLAUSE, {**params, "as_of": as_of}
+
+
 _params = window_params  # the private name `tier2.dossier` and the queries below use
 
 
-def rows_query(alert: Any) -> tuple[str, dict[str, Any]]:
+def rows_query(alert: Any, *, as_of: datetime | None = None) -> tuple[str, dict[str, Any]]:
     """The grouped query `summarize_for_prompt` runs. Exposed (as
     `ingest.dedup.find_open_cluster_query` is) so the EXPLAIN test proves the
-    predicate this module actually executes, not a retyped copy."""
+    predicate this module actually executes, not a retyped copy. With `as_of` it also
+    requires `received_at < as_of` (module docstring); without, it is unchanged."""
+    bound, params = _bounded(_params(alert), as_of)
     sql = f"""
         SELECT rule_id, category, status,
                count(*) AS cluster_count,
@@ -108,27 +131,29 @@ def rows_query(alert: Any) -> tuple[str, dict[str, Any]]:
                count(DISTINCT srcip) AS src_ip_count
         FROM alerts
         WHERE {_WINDOW_PREDICATE}
-          AND {_STATUS_PREDICATE}
+          AND {_STATUS_PREDICATE}{bound}
         GROUP BY rule_id, category, status
         ORDER BY sum(occurrence_count) DESC
         LIMIT 20
     """
-    return sql, _params(alert)
+    return sql, params
 
 
-def samples_query(alert: Any) -> tuple[str, dict[str, Any]]:
+def samples_query(alert: Any, *, as_of: datetime | None = None) -> tuple[str, dict[str, Any]]:
     """Up to 5 representative alerts: the newest heads with the highest
-    `occurrence_count` inside the same window (design note 1)."""
+    `occurrence_count` inside the same window (design note 1). With `as_of`, only
+    those received before it."""
+    bound, params = _bounded(_params(alert), as_of)
     sql = f"""
         SELECT alert_id, rule_id, category, severity, status, occurrence_count,
                alert_time, description, raw_log
         FROM alerts
         WHERE {_WINDOW_PREDICATE}
-          AND {_STATUS_PREDICATE}
+          AND {_STATUS_PREDICATE}{bound}
         ORDER BY occurrence_count DESC, alert_time DESC
         LIMIT 5
     """
-    return sql, _params(alert)
+    return sql, params
 
 
 def cluster_ids_query(alert: Any, limit: int, *, actor_id: str) -> tuple[str, dict[str, Any]]:
@@ -160,10 +185,13 @@ def cluster_ids_query(alert: Any, limit: int, *, actor_id: str) -> tuple[str, di
     return sql, params
 
 
-def summarize_for_prompt(conn: psycopg.Connection, alert: Any) -> CorrelationSummary:
+def summarize_for_prompt(
+    conn: psycopg.Connection, alert: Any, *, as_of: datetime | None = None
+) -> CorrelationSummary:
     """Grouped ±2h summary (up to 20 rows) plus up to 5 representative
-    samples. Read-only (E4): two `SELECT`s inside the caller's transaction."""
-    sql, params = rows_query(alert)
+    samples. Read-only (E4): two `SELECT`s inside the caller's transaction. With
+    `as_of`, only alerts received before it (module docstring)."""
+    sql, params = rows_query(alert, as_of=as_of)
     rows = tuple(
         CorrelationRow(
             rule_id=r[0],
@@ -178,7 +206,7 @@ def summarize_for_prompt(conn: psycopg.Connection, alert: Any) -> CorrelationSum
         for r in conn.execute(sql, params).fetchall()
     )
 
-    sql, params = samples_query(alert)
+    sql, params = samples_query(alert, as_of=as_of)
     cur = conn.execute(sql, params)
     columns = [column.name for column in cur.description]
     samples = tuple(dict(zip(columns, row)) for row in cur.fetchall())
