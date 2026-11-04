@@ -89,7 +89,7 @@ from psycopg.types.json import Jsonb
 from app.audit.events import write_event
 from app.infra import config
 from app.infra.db import raise_idle_timeout
-from app.infra.errors import PermanentError, TransientError
+from app.infra.errors import UNKNOWN_FAILURE_KIND, PermanentError, TransientError
 from app.infra.jobs import Job
 from app.llm.builder import KbLearnedLevel
 from app.rag import match, vector_store, voyage
@@ -118,9 +118,10 @@ USABLE_STATUSES = ("ok", "empty")
 #: (the vector search and the database search merged, then Voyage rerank).
 RETRIEVAL_VERSION = "voyage_hybrid_v1"
 
-#: What a `failed` row with no stored kind (the rows 020 wrote before migration 023) is told as: a closed word
-#: for the notice, the nearest to "the retrieval did not work and nothing says why".
-UNKNOWN_FAILURE_KIND = "provider_error"
+# `UNKNOWN_FAILURE_KIND` (imported above, and the name ① and ② import from here): what a `failed` row with no
+# stored kind (the rows 020 wrote before migration 023) is told as, a closed word for the notice, the nearest to
+# "the retrieval did not work and nothing says why". It is defined in `infra.errors`, where the health check
+# reads it too: `infra` may not import `rag`.
 
 
 @dataclass(frozen=True)

@@ -1295,7 +1295,9 @@ def test_rag_lookup_failures_says_which_kinds_failed(db, tmp_path):
     assert (
         "auth 3" in check.detail and "rate_limit 2" in check.detail and "timeout 1" in check.detail
     )
-    assert "unknown 1" in check.detail
+    # P14 final fix wave, M4: a failed row with no kind is `provider_error` here as in the lookup, the UI and the
+    # lab measurement (`infra.errors.UNKNOWN_FAILURE_KIND`); this said `unknown`
+    assert "provider_error 1" in check.detail and "unknown" not in check.detail
     assert check.detail.index("auth 3") < check.detail.index("rate_limit 2")  # the most first
 
 
