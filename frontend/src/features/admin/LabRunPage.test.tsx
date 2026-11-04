@@ -7,7 +7,7 @@
 // calls no tier1, tier2 or knowledge route, and links to no alert page. The tests plant the keys the server must never
 // send and read the source of the page for the ways one could get through.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { readFileSync } from "node:fs";
@@ -18,6 +18,7 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import ts from "typescript";
 import type { LabAlert, LabAlertsResponse, LabLabel, LabRun } from "../../api/admin";
 import { S } from "../../strings";
+import { adminKeys } from "./adminKeys";
 import { LabRunPage } from "./LabRunPage";
 
 const server = setupServer();
@@ -134,9 +135,22 @@ function backend(
     });
   };
   const view = (a: LabAlert) => (opts.leak ? { ...a, ...LEAK } : a);
+  // A read of the alerts that waits here until `holdGets()`'s release is called (the server is slow, not down).
+  let gate: Promise<void> | null = null;
+  const holdGets = (): (() => void) => {
+    let release: () => void = () => {};
+    gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return () => {
+      release();
+      gate = null;
+    };
+  };
   server.use(
     http.get("/api/admin/lab/runs/:runId/alerts", async ({ request }) => {
       await note(request);
+      if (gate !== null) await gate;
       const after = new URL(request.url).searchParams.get("after");
       if (opts.list) return opts.list(after);
       const from = after === null ? 0 : alerts.findIndex((a) => a.alert_id === after) + 1;
@@ -175,6 +189,7 @@ function backend(
   return {
     calls,
     alertsNow: () => alerts,
+    holdGets,
     gets: () => calls.filter((c) => c.method === "GET"),
     writes: () => calls.filter((c) => c.method !== "GET"),
   };
@@ -847,6 +862,58 @@ describe("more alerts", () => {
     fireEvent.click(button);
     await screen.findByRole("listitem", { name: "Alert 1766000000.3" });
     expect(b.gets()).toHaveLength(2);
+  });
+
+  // Fix round 1, M3: pressed while a read of the run was out, the button used to join that read and fetch nothing.
+  describe("while a read of the run is out", () => {
+    async function withRefetchHeld() {
+      const b = backend({ alerts: FIVE(), pageSize: 2 });
+      const user = userEvent.setup();
+      const { client } = renderPage();
+      await screen.findByRole("button", { name: "Tải thêm" });
+      const release = b.holdGets();
+      await act(async () => {
+        void client.refetchQueries({ queryKey: adminKeys.labRun(RUN_ID) });
+      });
+      await waitFor(() => expect(b.gets()).toHaveLength(2));
+      return { b, user, release };
+    }
+
+    it("disables `Tải thêm` and shows the loading text, and a press fetches nothing", async () => {
+      const { b, user, release } = await withRefetchHeld();
+      const button = await screen.findByRole("button", { name: "Đang tải…" });
+      expect(button).toBeDisabled();
+      expect(screen.queryByRole("button", { name: "Tải thêm" })).not.toBeInTheDocument();
+      await user.click(button);
+      expect(b.gets()).toHaveLength(2);
+      release();
+      await screen.findByRole("button", { name: "Tải thêm" });
+    });
+
+    it("fetches the next page on a press after the read has settled", async () => {
+      const { b, user, release } = await withRefetchHeld();
+      await screen.findByRole("button", { name: "Đang tải…" });
+      release();
+      const button = await screen.findByRole("button", { name: "Tải thêm" });
+      expect(button).toBeEnabled();
+      await user.click(button);
+      await screen.findByRole("listitem", { name: "Alert 1766000000.4" });
+      // the refetch read one page, the press read the next after it
+      expect(b.gets().map((g) => g.search)).toEqual(["", "", "?after=1766000000.2"]);
+    });
+
+    it("says `Đang tải…` and is disabled while its own page is coming, and gives the focus back when it is in", async () => {
+      const b = backend({ alerts: FIVE(), pageSize: 2 });
+      const user = userEvent.setup();
+      renderPage();
+      const button = await screen.findByRole("button", { name: "Tải thêm" });
+      const release = b.holdGets();
+      await user.click(button);
+      expect(await screen.findByRole("button", { name: "Đang tải…" })).toBeDisabled();
+      release();
+      await screen.findByRole("listitem", { name: "Alert 1766000000.4" });
+      expect(await screen.findByRole("button", { name: "Tải thêm" })).toHaveFocus();
+    });
   });
 
   it("says the next page could not be loaded, keeps the rows, and loads it on the next press", async () => {

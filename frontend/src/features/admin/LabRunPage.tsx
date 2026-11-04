@@ -11,10 +11,11 @@
 // of the page. The counter is the run's `labelled` and `total` of the first page, moved by the one label.
 //
 // Two things keep that cache true to the server (P14-T10 fix round 1). A read of the run that is already out when a
-// write lands would bring back the labels it took before the write (a refetch reads every page loaded, one after
-// the other): `labelled` cancels it before it sets the cache. And a focus of the window does not start such a read
+// write lands would bring back the labels it took before the write (a refetch reads every page loaded, one after the
+// other): `labelled` cancels it before it sets the cache. And a focus of the window does not start such a read
 // (`refetchOnWindowFocus: false`): it would re-read up to a hundred alerts, raw logs included, for every page loaded.
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import { Link, useParams } from "react-router";
 import {
   getLabRunAlerts,
@@ -72,6 +73,17 @@ export function LabRunPage() {
     getNextPageParam: (last) => last.next_after,
     refetchOnWindowFocus: false,
   });
+
+  // The button "Tải thêm" is disabled while anything of the run is being read; the focus it had is given back when the
+  // read is over (a disabled button drops it), so a keyboard user can press it again.
+  const loadMore = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
+  const fetching = query.isFetching;
+  useEffect(() => {
+    if (fetching || !refocus.current) return;
+    refocus.current = false;
+    loadMore.current?.focus();
+  }, [fetching]);
 
   /**
    * The server set (or cleared) a label: the row and the counter change in the cache, and nothing is read again. A
@@ -151,14 +163,19 @@ export function LabRunPage() {
             </p>
             {query.hasNextPage && (
               <button
+                ref={loadMore}
                 type="button"
-                aria-disabled={query.isFetchingNextPage}
-                // `cancelRefetch: false`: a second press in the same tick, before React has rendered the first,
-                // joins the request that is out instead of cancelling it and sending another.
-                onClick={() => void query.fetchNextPage({ cancelRefetch: false })}
-                className={`h-[34px] rounded-md border border-[#2e3a48] px-3 text-[13px] text-[#c9d3df] hover:bg-ground aria-disabled:cursor-wait aria-disabled:opacity-60 ${FOCUS}`}
+                // Disabled while ANY read of the run is out, a refetch included: pressed then, it would join that
+                // read and fetch nothing, and say nothing. `cancelRefetch: false`: a second press in the same tick,
+                // before React has rendered the first, joins the request that is out instead of sending another.
+                disabled={fetching}
+                onClick={() => {
+                  refocus.current = true;
+                  void query.fetchNextPage({ cancelRefetch: false });
+                }}
+                className={`h-[34px] rounded-md border border-[#2e3a48] px-3 text-[13px] text-[#c9d3df] hover:bg-ground disabled:cursor-wait disabled:opacity-60 ${FOCUS}`}
               >
-                {query.isFetchingNextPage ? R.loadingMore : R.loadMore}
+                {fetching ? R.loadingMore : R.loadMore}
               </button>
             )}
             {query.isFetchNextPageError && (
