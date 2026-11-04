@@ -299,7 +299,7 @@ async function postWebhook(request: APIRequestContext, body: Record<string, unkn
  */
 export async function postAlert(
   request: APIRequestContext,
-  options: { tag: string; arm?: Arm; rule?: string },
+  options: { tag: string; arm?: Arm },
 ): Promise<Posted> {
   const id = newAlertId(options.arm);
   const suffix = randomInt(100_000, 999_999);
@@ -307,7 +307,7 @@ export async function postAlert(
     id,
     agent: `e2e-${options.tag}-${suffix}`,
     description: `E2E ${options.tag} ${suffix} routine event`,
-    rule: options.rule ?? "99001",
+    rule: "99001",
     srcip: `203.0.113.${randomInt(1, 250)}`,
     dstip: `10.9.${randomInt(1, 250)}.${randomInt(1, 250)}`,
   };
