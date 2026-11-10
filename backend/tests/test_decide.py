@@ -23,7 +23,7 @@ from typing import Any
 
 import psycopg
 import pytest
-from app.domain import correlation, transitions
+from app.domain import transitions
 from app.domain.alert import Alert, AlertContext
 from app.domain.transitions import AutocloseMatch, finish_enrichment, open_alert, start_enrichment
 from app.infra import config
@@ -38,8 +38,6 @@ from app.tier1.decide import (
     reopen,
 )
 from psycopg.types.json import Jsonb
-
-from tests.scratch_db import scratch_database
 
 pytestmark = pytest.mark.db
 
@@ -422,7 +420,9 @@ def test_decide_reason_validation(db) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_escalate_from_active_pulls_correlated_queued_head_not_auto_closed(db) -> None:
+def test_escalate_from_active_takes_only_the_trigger_not_its_correlated_heads(db) -> None:
+    """T2 (the Owner, 11/11): the correlated open heads stay in the queue with their status and
+    `case_id` as they were — they used to be swept into the case, and the closed one never was."""
     _seed_user(db, USER_ID, USER_NAME)
     agent = f"shared-agent-{next(_counter)}"
     trigger = _active(db, agent_name=agent)
@@ -431,8 +431,8 @@ def test_escalate_from_active_pulls_correlated_queued_head_not_auto_closed(db) -
 
     result = escalate(db, trigger, _actor(USER_ID), title="brute force", severity="high")
     assert result["status"] == "escalated_tier2"
-    assert result["head_count"] == 2
-    assert result["truncated"] is False
+    assert result["head_count"] == 1
+    assert "truncated" not in result  # no cap can cut a case of one alert any more
 
     heads = {
         r[0]
@@ -440,10 +440,17 @@ def test_escalate_from_active_pulls_correlated_queued_head_not_auto_closed(db) -
             "SELECT alert_id FROM case_alerts WHERE case_id = %s", (result["case_id"],)
         ).fetchall()
     }
-    assert heads == {trigger, correlated_queued}
-    assert correlated_auto_closed not in heads
-    assert _status(db, correlated_queued) == "escalated_tier2"
-    assert _status(db, correlated_auto_closed) == "auto_closed"  # untouched
+    assert heads == {trigger}
+    assert _status(db, trigger) == "escalated_tier2"
+    for sibling, status in (
+        (correlated_queued, "queued_tier1"),
+        (correlated_auto_closed, "auto_closed"),
+    ):
+        assert _status(db, sibling) == status  # untouched
+        assert (
+            db.execute("SELECT case_id FROM alerts WHERE alert_id = %s", (sibling,)).fetchone()[0]
+            is None
+        )
 
 
 def test_escalate_duplicates_keep_status_and_get_case_id(db) -> None:
@@ -492,21 +499,19 @@ def test_escalate_already_in_case_is_conflict(db) -> None:
     assert excinfo.value.body["kind"] == "already_in_case"
 
 
-def test_escalate_candidate_claimed_concurrently_is_conflict_and_nothing_half_written(db) -> None:
+def test_escalate_trigger_claimed_concurrently_is_conflict_and_nothing_half_written(db) -> None:
     """Review round 1, item 3 — the `UniqueViolation` flavor of `transitions.
-    escalate`'s `StaleState` (a correlated candidate already sits in
-    `case_alerts` for another case): without the savepoint around the call,
-    the connection's transaction is aborted by the `UniqueViolation` and
-    `_conflict()`'s own re-read would itself raise `InFailedSqlTransaction`
-    instead of building the 409 body."""
+    escalate`'s `StaleState` (the trigger already sits in `case_alerts` for
+    another case, as it would if a concurrent escalate had committed first):
+    without the savepoint around the call, the connection's transaction is
+    aborted by the `UniqueViolation` and `_conflict()`'s own re-read would
+    itself raise `InFailedSqlTransaction` instead of building the 409 body."""
     _seed_user(db, USER_ID, USER_NAME)
-    agent = f"probe-agent-{next(_counter)}"
-    trigger = _active(db, agent_name=agent)
-    other = _queued(db, agent_name=agent)
+    trigger = _active(db)
     other_case = _make_case(db, USER_ID)
     db.execute(
         "INSERT INTO case_alerts (case_id, alert_id, added_by) VALUES (%s, %s, %s)",
-        (other_case, other, USER_ID),
+        (other_case, trigger, USER_ID),
     )
     cases_before = db.execute("SELECT count(*) FROM cases").fetchone()[0]
 
@@ -522,18 +527,16 @@ def test_escalate_candidate_claimed_concurrently_is_conflict_and_nothing_half_wr
 
 
 def test_escalate_rowcount_mismatch_is_conflict_and_nothing_half_written(db) -> None:
-    """Review round 1, item 3 — the other `StaleState` flavor: a correlated
-    candidate's `case_id` is already set directly (no `case_alerts` row, so no
+    """Review round 1, item 3 — the other `StaleState` flavor: the trigger's
+    `case_id` is already set directly (no `case_alerts` row, so no
     `UniqueViolation`), so `transitions.escalate` gets as far as inserting the
-    `cases` row, the two `case_alerts` rows and updating the trigger's own
-    status before the rowcount mismatch on `other` raises `StaleState`. The
-    savepoint must undo all of it, not just skip re-raising."""
+    `cases` row and the `case_alerts` row before the rowcount mismatch on the
+    trigger raises `StaleState`. The savepoint must undo all of it, not just
+    skip re-raising."""
     _seed_user(db, USER_ID, USER_NAME)
-    agent = f"probe-agent-{next(_counter)}"
-    trigger = _active(db, agent_name=agent)
-    other = _queued(db, agent_name=agent)
+    trigger = _active(db)
     other_case = _make_case(db, USER_ID)
-    db.execute("UPDATE alerts SET case_id = %s WHERE alert_id = %s", (other_case, other))
+    db.execute("UPDATE alerts SET case_id = %s WHERE alert_id = %s", (other_case, trigger))
     cases_before = db.execute("SELECT count(*) FROM cases").fetchone()[0]
 
     with pytest.raises(DecisionConflict) as excinfo:
@@ -541,77 +544,35 @@ def test_escalate_rowcount_mismatch_is_conflict_and_nothing_half_written(db) -> 
     assert excinfo.value.body["kind"] == "already_in_case"
 
     assert db.execute("SELECT count(*) FROM cases").fetchone()[0] == cases_before
+    assert db.execute("SELECT count(*) FROM case_alerts").fetchone()[0] == 0
     status, case_id = db.execute(
         "SELECT status, case_id FROM alerts WHERE alert_id = %s", (trigger,)
     ).fetchone()
-    assert (status, case_id) == ("tier1_active", None)
+    assert (status, str(case_id)) == ("tier1_active", other_case)
 
 
-def test_escalate_sibling_acknowledged_by_another_after_the_select_is_conflict_not_swept(
-    monkeypatch,
-) -> None:
-    """DEC-166 item 3, the race (P10-T17 fix round 1): `correlated_cluster_ids` is a plain
-    SELECT, so analyst B can acknowledge a `queued_tier1` sibling and commit between that
-    SELECT and `transitions.escalate`'s UPDATE. The UPDATE's own WHERE must then skip the
-    sibling (it is B's now), the rowcount check raises `StaleState` and the route answers
-    409; sweeping it would leave an alert held by B inside A's case and B's next decide on
-    it would 409. Two real connections and committed data — the `db` fixture's single open
-    transaction cannot show a commit landing in the middle of another connection's escalate.
-    After the 409 the retry succeeds and the sibling stays with B, outside the case."""
-    with scratch_database("esc_race") as dsn:
-        conn_a = psycopg.connect(dsn)
-        conn_b = psycopg.connect(dsn)
-        try:
-            _seed_user(conn_a, USER_ID, USER_NAME)
-            _seed_user(conn_a, OTHER_USER_ID, OTHER_USER_NAME)
-            agent = f"race-agent-{next(_counter)}"
-            trigger = _active(conn_a, agent_name=agent)
-            sibling = _queued(conn_a, agent_name=agent)
-            conn_a.commit()
+def test_escalate_is_not_blocked_by_a_correlated_alert_already_in_another_case(db) -> None:
+    """The old sweep answered 409 when a correlated candidate was already in another case; the
+    siblings are no longer looked at, so the escalation goes through and that case is untouched."""
+    _seed_user(db, USER_ID, USER_NAME)
+    agent = f"probe-agent-{next(_counter)}"
+    trigger = _active(db, agent_name=agent)
+    sibling = _active(db, agent_name=agent)
+    other_case = _make_case(db, USER_ID)
+    db.execute(
+        "INSERT INTO case_alerts (case_id, alert_id, added_by) VALUES (%s, %s, %s)",
+        (other_case, sibling, USER_ID),
+    )
 
-            real_select = correlation.correlated_cluster_ids
-            swept_by_the_select: list[list[str]] = []
+    result = escalate(db, trigger, _actor(USER_ID), title="t", severity="high")
 
-            def select_then_b_acknowledges(conn, subject, *, actor_id):
-                ids = real_select(conn, subject, actor_id=actor_id)
-                if not swept_by_the_select:
-                    swept_by_the_select.append(ids)
-                    acknowledge(conn_b, sibling, _actor(OTHER_USER_ID))
-                    conn_b.commit()
-                return ids
-
-            monkeypatch.setattr(correlation, "correlated_cluster_ids", select_then_b_acknowledges)
-
-            with pytest.raises(DecisionConflict) as excinfo:
-                escalate(conn_a, trigger, _actor(USER_ID), title="t", severity="high")
-            assert excinfo.value.body["kind"] == "already_in_case"
-            assert sibling in swept_by_the_select[0]  # the SELECT did see it as free
-            conn_a.rollback()  # what the route's 409 path does
-
-            def state(alert_id: str) -> tuple:
-                return conn_a.execute(
-                    "SELECT status, acknowledged_by::text, case_id FROM alerts WHERE alert_id = %s",
-                    (alert_id,),
-                ).fetchone()
-
-            assert state(sibling) == ("tier1_active", OTHER_USER_ID, None)
-            assert state(trigger) == ("tier1_active", USER_ID, None)
-            assert conn_a.execute("SELECT count(*) FROM cases").fetchone()[0] == 0
-            assert conn_a.execute("SELECT count(*) FROM case_alerts").fetchone()[0] == 0
-
-            # The retry: the SELECT now sees B holding it, so the case is the trigger alone.
-            result = escalate(conn_a, trigger, _actor(USER_ID), title="t", severity="high")
-            conn_a.commit()
-            assert result["head_count"] == 1
-            members = conn_a.execute(
-                "SELECT alert_id FROM case_alerts WHERE case_id = %s", (result["case_id"],)
-            ).fetchall()
-            assert members == [(trigger,)]
-            assert state(sibling) == ("tier1_active", OTHER_USER_ID, None)
-            assert state(trigger)[0] == "escalated_tier2"
-        finally:
-            conn_a.close()
-            conn_b.close()
+    assert result["head_count"] == 1
+    members = db.execute("SELECT case_id, alert_id FROM case_alerts ORDER BY alert_id").fetchall()
+    assert {(str(c), a) for c, a in members} == {
+        (other_case, sibling),
+        (result["case_id"], trigger),
+    }
+    assert _status(db, sibling) == "tier1_active"
 
 
 # ---------------------------------------------------------------------------

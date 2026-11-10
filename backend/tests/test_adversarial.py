@@ -715,16 +715,8 @@ def test_loader_rows_invisible_to_queue_and_escalate_predicates(loaded) -> None:
         "SELECT alert_id FROM alerts WHERE status <> 'received' AND alert_id = ANY(%s)", (ids,)
     ).fetchall()
     assert by_status_alone == []
-    # The escalate predicate, via the product function on every target.
-    for row in _rows():
-        target = _alert(row["fixture_file"])
-        assert (
-            correlation.correlated_cluster_ids(
-                loaded, target, actor_id="00000000-0000-4000-8000-0000000000a1"
-            )
-            == []
-        )
-    # And by the literal predicate over the loaded ids.
+    # The escalate guard (`tier1.decide.escalate`: only these two statuses), as a literal
+    # predicate over the loaded ids. (Escalate no longer reads the correlated alerts at all, T2.)
     escalatable = loaded.execute(
         "SELECT alert_id FROM alerts WHERE status IN ('queued_tier1', 'tier1_active') "
         "AND alert_id = ANY(%s)",

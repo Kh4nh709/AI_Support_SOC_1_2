@@ -16,10 +16,12 @@ event's own payload (`llm_suggestion`), and, for a `tier1.escalated` event, whic
 the latest proposer run created at or before it (a caveat line says a run in flight may be
 included). ① `needs_review` is no verdict: it is left out of the agreement's denominator and
 counted apart, and a small table crosses ①'s verdict with the human decision. The visible arm
-never gets an agreement figure. An escalation sweeps the other correlated heads into its case
-without a decision of their own (A11b; never one that another analyst holds, DEC-166): those
-alerts are recorded apart, per arm and source, as "kéo theo (không phải quyết định)" (Q34,
-DEC-165, DEC-166), and are in no decision count, denominator or agreement. A reopened alert (A17)
+never gets an agreement figure. Until T2 (DEC-215, 11/11) an escalation swept the other correlated
+heads into its case without a decision of their own (A11b; never one that another analyst holds,
+DEC-166): those alerts are recorded apart, per arm and source, as "kéo theo (không phải quyết
+định)" (Q34, DEC-165, DEC-166), and are in no decision count, denominator or agreement. Since T2 an
+escalation takes only its trigger, so the count is 0 for the cases it opens and is the older
+cases' alone. A reopened alert (A17)
 is no pilot decision either: it is left out of every decision figure, on both arms, and counted
 apart as "đã mở lại (loại khỏi pilot)" (Q35, DEC-166). Section 6's ② usefulness row is "not
 measured" in v1.0 (no rating control, DEC-161), the `case.opened` count beside it being context.
@@ -645,14 +647,15 @@ FROM v
 GROUP BY ROLLUP (v.source), v.verdict
 ORDER BY GROUPING(v.source), v.source, v.verdict""",
 )
-# "Kéo theo" (Owner decision 30/09, DEC-165): the alerts an escalation swept into its case. The
-# escalate transition (A11b, `domain/transitions.escalate`) folds the trigger and every correlated
-# head into one case in one transaction and writes ONE `tier1.escalated` event, about the trigger.
-# A swept alert is therefore a `case_alerts` row whose alert is the subject of no `tier1.escalated`
-# event: nobody decided it, so it is never a row of `d`, and no query above reads it. `case_alerts`
-# has one writer (`escalate`), and `added_at` is that transaction's `now()`, the `created_at` of
-# its event. The arm and the source are the swept alert's own. A duplicate of a head (A12) gets a
-# `case_id` and no `case_alerts` row: it is a folded member of its head, not a swept head.
+# "Kéo theo" (Owner decision 30/09, DEC-165): the alerts an escalation swept into its case. Until T2
+# (DEC-215, 11/11) the escalate transition (A11b, `domain/transitions.escalate`) folded the trigger
+# and every correlated head into one case in one transaction and wrote ONE `tier1.escalated` event,
+# about the trigger; since T2 it takes the trigger alone, so no new row of this kind appears and the
+# query reads the older cases. A swept alert is a `case_alerts` row whose alert is the subject of no
+# `tier1.escalated` event: nobody decided it, so it is never a row of `d`, and no query above reads
+# it. `case_alerts` has one writer (`escalate`), and `added_at` is that transaction's `now()`, the
+# `created_at` of its event. The arm and the source are the swept alert's own. A duplicate of a head
+# (A12) gets a `case_id` and no `case_alerts` row: it is a folded member of its head, not a swept head.
 _PILOT_SWEPT = f"""s AS (
   SELECT CASE WHEN a.suggestion_visible THEN 'visible' ELSE 'blind' END AS arm,
          a.source

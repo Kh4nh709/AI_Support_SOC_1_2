@@ -70,7 +70,8 @@ That count is an estimate, not a bound. A neighbour counts when it was received 
 holds it), is in the +-2 h window, in a decided status (``closed_fp``, ``closed_benign``, ``closed_confirmed``,
 ``escalated_tier2``), and its decision is dated after ``as_of``: a closed one by ``sealed_at``, an escalated one
 by the ``tier1.escalated`` event whose ``payload.alert_ids`` lists it (``transitions.escalate`` writes one event
-per case, keyed on the trigger, so a swept sibling has none of its own). It OVER-counts because the section's
+per case, keyed on the trigger; until T2, DEC-215, it listed every head it swept in, so a swept sibling has none of
+its own, and since T2 it lists the trigger alone). It OVER-counts because the section's
 caps (20 groups, 5 samples) are not replayed: a neighbour the section cut is counted. It UNDER-counts a
 neighbour in a decided status with no record that dates the decision (an escalation no event lists, as in
 hand-made data), and a decision the section shows under a status outside the four above (none today). With
@@ -895,8 +896,9 @@ _DECIDED_STATUSES = ("closed_fp", "closed_benign", "closed_confirmed", "escalate
 #: and status predicates (`domain.correlation`, which `tier2.dossier` uses in the same way), with when each was
 #: decided. A closed one: `sealed_at`, which a human close must set (`ck_alerts_h2`). An escalated one: the
 #: `tier1.escalated` event whose `payload.alert_ids` lists it. `transitions.escalate` (the only writer of that
-#: event) writes ONE event, keyed on the trigger, with every head it swept into the case in `alert_ids`, so a
-#: swept sibling has no event of its own and only this lookup dates it. Read from `audit_events` by the event
+#: event) wrote ONE event, keyed on the trigger, with every head it swept into the case in `alert_ids` until T2
+#: (DEC-215; since then `alert_ids` is the trigger alone), so a swept sibling has no event of its own and only
+#: this lookup dates it. Read from `audit_events` by the event
 #: type and the payload, not by `cases.created_at`: the event is the record of the decision itself, and it
 #: needs no join on `alerts.case_id`, which a duplicate also carries.
 _DECISIONS_SQL = f"""

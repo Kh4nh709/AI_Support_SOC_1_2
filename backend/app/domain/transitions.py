@@ -36,7 +36,6 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from app.audit.events import write_event
-from app.domain import correlation
 from app.domain.alert import Alert, AlertContext
 from app.infra import config
 from app.infra.jobs import enqueue
@@ -470,19 +469,6 @@ def decide(
         enqueue(conn, "knowledge_draft", f"alert:{alert_id}")
 
 
-@dataclasses.dataclass(frozen=True)
-class _CorrelationSubject:
-    """Just enough of an alert for `correlation.correlated_cluster_ids()`'s
-    predicate (agent_name/alert_user/srcip/alert_time) — `escalate` only has
-    `alert_id`, not a full `Alert`."""
-
-    alert_id: str
-    agent_name: str
-    alert_user: str | None
-    srcip: str
-    alert_time: object
-
-
 def escalate(
     conn: psycopg.Connection,
     alert_id: str,
@@ -491,54 +477,34 @@ def escalate(
     title: str,
     severity: str,
 ) -> str:
-    """A11 (trigger) / A11b (correlated heads) / A12 (their duplicates get
-    `case_id` only) — read design note 4 of the card before touching this.
+    """A11 (trigger) / A12 (its duplicates get `case_id` only) — read design note 4 of the card
+    before touching this.
 
-    `case_alerts` holds **heads only**: the trigger plus
-    `correlated_cluster_ids(alert, actor_id=user_id)` (already `duplicate_of IS NULL`, and
-    without a `tier1_active` alert another analyst holds, DEC-166), capped at
-    `MAX_ALERTS_PER_CASE` with a `case.truncated` audit row when the cap cuts.
-    ③ is two statements, not one `OR`ed `UPDATE`: a duplicate always has
-    `sealed_at` set and `escalated_tier2` forbids it, so one `UPDATE` touching
-    both shapes would roll every cluster with a duplicate back on
-    `ck_alerts_h3_escalate_khong_seal`. ③a's rowcount is checked against the
-    number of `case_alerts` rows just inserted — a mismatch means a
-    concurrent escalate claimed a candidate first (N2), or another analyst acknowledged a
-    `queued_tier1` sibling after the cluster was read (the UPDATE re-applies DEC-166's
-    exclusion on the row, trigger exempt) — and
-    `ux_case_alerts_mot_alert_mot_case` (UNIQUE on `alert_id`) is the second,
-    DB-enforced layer of the same rule: an alert already in a case raises
-    `psycopg.errors.UniqueViolation` here, converted to `StaleState`.
+    The case holds **one alert**, the trigger (T2, DEC-215: the Owner, 11/11, reversing the sweep
+    of DEC-165/166). The open alerts correlated with it (same agent / source IP / user within
+    ±2 h) are not looked at: they keep their status and `case_id` and stay in the Tier-1 queue,
+    to be decided one by one, so concluding the case closes the trigger and its own duplicates
+    and nothing else. (The sweep took 14 alerts of 13 rules into one case on the trial, 07/11, and
+    `tier2.concluded` closed all 14.) `case_alerts` gets one row; the table, its unique index and
+    every reader of a case's heads are unchanged, a case just has one head.
+
+    ③ is two statements, not one `OR`ed `UPDATE`: a duplicate always has `sealed_at` set and
+    `escalated_tier2` forbids it, so one `UPDATE` touching both shapes would roll every cluster
+    with a duplicate back on `ck_alerts_h3_escalate_khong_seal`. ③a's rowcount must be 1 — 0
+    means a concurrent escalate claimed the trigger first (N2) — and
+    `ux_case_alerts_mot_alert_mot_case` (UNIQUE on `alert_id`) is the second, DB-enforced layer
+    of the same rule: an alert already in a case raises `psycopg.errors.UniqueViolation` here,
+    converted to `StaleState`. The trigger's status is the caller's to guard (`tier1.decide`
+    takes it `FOR UPDATE`, and accepts a `tier1_active` alert someone else holds): nothing here
+    asks who holds it.
 
     With `RAG_ENABLED` (P13-T08) the case's learned-knowledge lookup is queued last, in this same
     transaction; with the switch off nothing else is queued, as before.
     """
     cfg = config.load()
-    trigger = conn.execute(
-        "SELECT agent_name, alert_user, srcip, alert_time FROM alerts WHERE alert_id = %s",
-        (alert_id,),
-    ).fetchone()
-    if trigger is None:
+    exists = conn.execute("SELECT 1 FROM alerts WHERE alert_id = %s", (alert_id,)).fetchone()
+    if exists is None:
         raise StaleState(f"A11: alert_id={alert_id!r} does not exist")
-    agent_name, alert_user, srcip, alert_time = trigger
-    subject = _CorrelationSubject(
-        alert_id=alert_id,
-        agent_name=agent_name,
-        alert_user=alert_user,
-        srcip=srcip,
-        alert_time=alert_time,
-    )
-    correlated_ids = [
-        cid
-        for cid in correlation.correlated_cluster_ids(conn, subject, actor_id=user_id)
-        if cid != alert_id
-    ]
-
-    head_ids = [alert_id, *correlated_ids]
-    dropped = 0
-    if len(head_ids) > cfg.MAX_ALERTS_PER_CASE:
-        dropped = len(head_ids) - cfg.MAX_ALERTS_PER_CASE
-        head_ids = head_ids[: cfg.MAX_ALERTS_PER_CASE]
 
     case_id = str(uuid.uuid4())
     conn.execute(
@@ -547,60 +513,36 @@ def escalate(
         (case_id, title, severity, user_id),
     )
     try:
-        for head_id in head_ids:
-            conn.execute(
-                "INSERT INTO case_alerts (case_id, alert_id, added_by) VALUES (%s, %s, %s)",
-                (case_id, head_id, user_id),
-            )
+        conn.execute(
+            "INSERT INTO case_alerts (case_id, alert_id, added_by) VALUES (%s, %s, %s)",
+            (case_id, alert_id, user_id),
+        )
     except psycopg.errors.UniqueViolation as exc:
-        raise StaleState(f"A11/A11b: {head_id!r} is already in another case") from exc
+        raise StaleState(f"A11: {alert_id!r} is already in another case") from exc
 
-    # The held-by-other exclusion is applied again here, on the row itself (DEC-166, P10-T17 fix
-    # round 1): `correlated_cluster_ids` above is a plain SELECT, so another analyst can
-    # acknowledge a `queued_tier1` sibling and commit between it and this UPDATE. A sibling
-    # that is now another analyst's (or no longer open) fails the WHERE, the rowcount check
-    # below raises `StaleState`, and the caller's savepoint undoes the case. READ COMMITTED
-    # re-evaluates the WHERE against the newest committed row, also when this UPDATE had to
-    # wait for the acknowledging transaction's lock. The trigger is exempt: the caller has it
-    # `FOR UPDATE` and may legitimately escalate an alert someone else holds (the API accepts
-    # `tier1_active` for it with no holder check); only the swept siblings are the actor's to take.
     touched = conn.execute(
         "UPDATE alerts SET status = 'escalated_tier2', case_id = %s "
-        "WHERE alert_id IN (SELECT alert_id FROM case_alerts WHERE case_id = %s) "
-        "AND case_id IS NULL "
-        "AND (alert_id = %s OR status = 'queued_tier1' "
-        "OR (status = 'tier1_active' AND acknowledged_by = %s::uuid))",
-        (case_id, case_id, alert_id, user_id),
+        "WHERE alert_id = %s AND case_id IS NULL",
+        (case_id, alert_id),
     )
-    if touched.rowcount != len(head_ids):
+    if touched.rowcount != 1:
         raise StaleState(
-            f"A11b: escalate rowcount mismatch ({touched.rowcount} of {len(head_ids)} "
-            "case_alerts rows touched) — a candidate was claimed by another case, or "
-            "acknowledged by another analyst, after the cluster was read"
+            f"A11: escalate rowcount mismatch ({touched.rowcount} of 1 alerts touched) — "
+            "the trigger was claimed by another case after it was read"
         )
 
     conn.execute(
-        "UPDATE alerts SET case_id = %s "
-        "WHERE duplicate_of IN (SELECT alert_id FROM case_alerts WHERE case_id = %s)",
-        (case_id, case_id),
+        "UPDATE alerts SET case_id = %s WHERE duplicate_of = %s",
+        (case_id, alert_id),
     )
 
-    if dropped:
-        write_event(
-            conn,
-            "case.truncated",
-            case_id,
-            "analyst",
-            actor_id=user_id,
-            payload={"dropped": dropped},
-        )
     write_event(
         conn,
         "tier1.escalated",
         alert_id,
         "analyst",
         actor_id=user_id,
-        payload={"case_id": case_id, "alert_ids": head_ids, "llm_suggestion": None},
+        payload={"case_id": case_id, "alert_ids": [alert_id], "llm_suggestion": None},
     )
     write_event(
         conn,
@@ -610,8 +552,10 @@ def escalate(
         actor_id=user_id,
         payload={
             "trigger_alert_id": alert_id,
-            "alert_count": len(head_ids),
-            "correlated_count": len(head_ids) - 1,
+            # The keys stay, as they were written before T2, so an old `case.opened` and a new one
+            # read alike: a case is one alert now, and none was taken along.
+            "alert_count": 1,
+            "correlated_count": 0,
         },
     )
     if cfg.RAG_ENABLED:

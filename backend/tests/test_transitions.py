@@ -4,11 +4,11 @@
 A11b) — 36 tests minimum, each `ok` case asserting the row's new status, the
 columns the edge sets, and exactly the audit rows it writes; each `fail` case
 asserting `StaleState` and, inside a psycopg savepoint (`conn.transaction()`),
-that nothing changed. `correlation.correlated_cluster_ids` (P2-T07) does not
-exist yet on this branch — every escalate test that exercises `escalate()`'s
-own guard logic monkeypatches it to a fixed list, and the two tests that would
-instead prove the real predicate integrates correctly are `skip`ped, named,
-per the card.
+that nothing changed.
+
+Escalate takes only the trigger (T2, DEC-215): A11b, which used to fold the correlated open
+alerts into the case, now pins that they are left alone; the tests under "T2" at the end of
+the file pin it against real correlated rows.
 """
 
 from __future__ import annotations
@@ -311,12 +311,6 @@ def _pending_job(conn: psycopg.Connection, job_type: str, subject_id: str) -> in
         "SELECT count(*) FROM jobs WHERE job_type = %s AND subject_id = %s AND status = 'pending'",
         (job_type, subject_id),
     ).fetchone()[0]
-
-
-def _no_correlation(monkeypatch):
-    monkeypatch.setattr(
-        correlation, "correlated_cluster_ids", lambda conn, alert, **_: [], raising=False
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -788,8 +782,7 @@ def test_A10_fail(db):
 # ---------------------------------------------------------------------------
 
 
-def test_A11_ok(db, monkeypatch):
-    _no_correlation(monkeypatch)
+def test_A11_ok(db):
     user = _make_user(db)
     trigger = _insert_alert(db, status="tier1_active")
     case_id = escalate(db, trigger, user, title="brute force", severity="high")
@@ -816,9 +809,8 @@ def test_A11_ok(db, monkeypatch):
     assert [r[0] for r in case_rows] == ["case.opened"]
 
 
-def test_A11_fail(db, monkeypatch):
+def test_A11_fail(db):
     """A second escalate on an alert already in a case → StaleState via the unique index."""
-    _no_correlation(monkeypatch)
     user = _make_user(db)
     trigger = _insert_alert(db, status="tier1_active")
     first_case_id = escalate(db, trigger, user, title="t1", severity="high")
@@ -838,49 +830,37 @@ def test_A11_fail(db, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# A11b — escalate's correlated heads
+# A11b — escalate leaves the correlated open heads where they are (T2, DEC-215)
 # ---------------------------------------------------------------------------
+#
+# A11b used to fold the correlated open heads into the case. It is now the edge that is NOT
+# taken: an open alert correlated with the trigger keeps its status and `case_id`. The full
+# scene (every kind of sibling, duplicates, conclude) is under "T2" at the end of the file.
 
 
-def test_A11b_ok(db, monkeypatch):
+def test_A11b_ok(db):
     user = _make_user(db)
     trigger = _insert_alert(db, status="tier1_active")
-    head2 = _insert_alert(db, status="queued_tier1")
-    monkeypatch.setattr(
-        correlation, "correlated_cluster_ids", lambda conn, alert, **_: [head2], raising=False
-    )
+    head2 = _insert_alert(db, status="queued_tier1")  # same agent, user, source IP and time
 
     case_id = escalate(db, trigger, user, title="t", severity="high")
 
-    heads = {
-        r[0]
-        for r in db.execute(
-            "SELECT alert_id FROM case_alerts WHERE case_id = %s", (case_id,)
-        ).fetchall()
-    }
-    assert heads == {trigger, head2}
-    for alert_id in (trigger, head2):
-        status, sealed_at, case_id_col = _fetch_alert(
-            db, alert_id, "status", "sealed_at", "case_id"
-        )
-        assert status == "escalated_tier2"
-        assert sealed_at is None
-        assert case_id_col == case_id
+    assert _case_heads(db, case_id) == {trigger}
+    status, sealed_at, case_id_col = _fetch_alert(db, trigger, "status", "sealed_at", "case_id")
+    assert (status, sealed_at, case_id_col) == ("escalated_tier2", None, case_id)
+    assert _fetch_alert(db, head2, "status", "sealed_at", "case_id") == ("queued_tier1", None, None)
 
 
-def test_A11b_fail(db, monkeypatch):
-    """Rowcount race (N2): a correlated head's case_id is already set by
-    another (simulated concurrent) transaction → StaleState, and the whole
-    escalate rolls back — no new case, no case_alerts row, no audit row."""
+def test_A11b_fail(db):
+    """Rowcount race (N2): the trigger's `case_id` is already set by another (simulated
+    concurrent) transaction → StaleState, and the whole escalate rolls back — no new case, no
+    case_alerts row, no audit row, and the correlated head is as it was."""
     user = _make_user(db)
     trigger = _insert_alert(db, status="tier1_active")
     head2 = _insert_alert(db, status="queued_tier1")
-    monkeypatch.setattr(
-        correlation, "correlated_cluster_ids", lambda conn, alert, **_: [head2], raising=False
-    )
 
     other_case_id = _make_case(db, user, title="other")
-    db.execute("UPDATE alerts SET case_id = %s WHERE alert_id = %s", (other_case_id, head2))
+    db.execute("UPDATE alerts SET case_id = %s WHERE alert_id = %s", (other_case_id, trigger))
 
     with pytest.raises(StaleState), db.transaction():
         escalate(db, trigger, user, title="t", severity="high")
@@ -888,10 +868,8 @@ def test_A11b_fail(db, monkeypatch):
     assert db.execute("SELECT count(*) FROM cases").fetchone()[0] == 1  # only "other"
     assert db.execute("SELECT count(*) FROM case_alerts").fetchone()[0] == 0
     assert _audit_rows(db, trigger) == []
-    status, case_id_col = _fetch_alert(db, trigger, "status", "case_id")
-    assert status == "tier1_active"
-    assert case_id_col is None
-    assert _fetch_alert(db, head2, "case_id")[0] == other_case_id  # untouched
+    assert _fetch_alert(db, trigger, "status", "case_id") == ("tier1_active", other_case_id)
+    assert _fetch_alert(db, head2, "status", "case_id") == ("queued_tier1", None)
 
 
 # ---------------------------------------------------------------------------
@@ -899,11 +877,10 @@ def test_A11b_fail(db, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_A12_ok(db, monkeypatch):
+def test_A12_ok(db):
     """Acceptance 4: a cluster of three (trigger + two duplicates) escalates
     without violating H3 — the exact case phase-6's original ② would have
     broken (a duplicate always has sealed_at, escalated_tier2 forbids it)."""
-    _no_correlation(monkeypatch)
     user = _make_user(db)
     trigger = _insert_alert(db, status="tier1_active", occurrence_count=3)
     dup1 = _insert_alert(
@@ -933,9 +910,8 @@ def test_A12_ok(db, monkeypatch):
         assert dup_case == case_id  # A12: case_id attached
 
 
-def test_A12_fail(db, monkeypatch):
+def test_A12_fail(db):
     """A failed escalate must not touch the trigger's duplicates."""
-    _no_correlation(monkeypatch)
     user = _make_user(db)
     trigger = _insert_alert(db, status="tier1_active")
     dup = _insert_alert(
@@ -948,89 +924,6 @@ def test_A12_fail(db, monkeypatch):
         escalate(db, trigger, user, title="t2", severity="high")
 
     assert _fetch_alert(db, dup, "case_id")[0] == case_id  # unchanged
-
-
-def test_escalate_truncates_at_max_alerts_per_case(db, monkeypatch):
-    monkeypatch.setenv("MAX_ALERTS_PER_CASE", "2")
-    user = _make_user(db)
-    trigger = _insert_alert(db, status="tier1_active")
-    extra = [_insert_alert(db, status="queued_tier1") for _ in range(3)]
-    monkeypatch.setattr(
-        correlation, "correlated_cluster_ids", lambda conn, alert, **_: extra, raising=False
-    )
-
-    case_id = escalate(db, trigger, user, title="t", severity="high")
-
-    heads = {
-        r[0]
-        for r in db.execute(
-            "SELECT alert_id FROM case_alerts WHERE case_id = %s", (case_id,)
-        ).fetchall()
-    }
-    assert len(heads) == 2
-    assert trigger in heads
-    rows = _audit_rows(db, case_id)
-    truncated = [r for r in rows if r[0] == "case.truncated"]
-    assert len(truncated) == 1
-    assert truncated[0][3] == {"dropped": 2}
-
-
-def test_escalate_does_not_sweep_an_alert_another_analyst_holds(db):
-    """DEC-166, through the real transition: the escalating analyst's own held alert and every
-    queued one are folded into the case; one another analyst acknowledged is left exactly as it
-    was, still held by them and in no case."""
-    me, other = _make_user(db), _make_user(db)
-    trigger = _insert_alert(db, status="tier1_active", agent_name="held-agent", acknowledged_by=me)
-    queued = _insert_alert(db, status="queued_tier1", agent_name="held-agent")
-    mine = _insert_alert(db, status="tier1_active", agent_name="held-agent", acknowledged_by=me)
-    theirs = _insert_alert(
-        db, status="tier1_active", agent_name="held-agent", acknowledged_by=other
-    )
-
-    case_id = escalate(db, trigger, me, title="t", severity="high")
-
-    heads = {
-        r[0]
-        for r in db.execute(
-            "SELECT alert_id FROM case_alerts WHERE case_id = %s", (case_id,)
-        ).fetchall()
-    }
-    assert heads == {trigger, queued, mine}
-    status, holder, in_case = _fetch_alert(db, theirs, "status", "acknowledged_by", "case_id")
-    assert (status, str(holder), in_case) == ("tier1_active", other, None)
-    for swept in (queued, mine):
-        assert _fetch_alert(db, swept, "status", "case_id") == ("escalated_tier2", case_id)
-    opened = [r for r in _audit_rows(db, case_id) if r[0] == "case.opened"]
-    assert opened[0][3]["alert_count"] == 3
-
-
-def test_escalate_holds_back_another_analysts_alert_before_the_cap_counts(db, monkeypatch):
-    """The cap (`MAX_ALERTS_PER_CASE`) is applied to what is left: an alert another analyst holds
-    never takes a place a sweepable one would have had, and nothing is reported as dropped."""
-    monkeypatch.setenv("MAX_ALERTS_PER_CASE", "2")
-    me, other = _make_user(db), _make_user(db)
-    trigger = _insert_alert(
-        db, status="tier1_active", agent_name="held-cap-agent", acknowledged_by=me
-    )
-    _insert_alert(
-        db,
-        status="tier1_active",
-        agent_name="held-cap-agent",
-        acknowledged_by=other,
-        occurrence_count=50,
-    )
-    queued = _insert_alert(db, status="queued_tier1", agent_name="held-cap-agent")
-
-    case_id = escalate(db, trigger, me, title="t", severity="high")
-
-    heads = {
-        r[0]
-        for r in db.execute(
-            "SELECT alert_id FROM case_alerts WHERE case_id = %s", (case_id,)
-        ).fetchall()
-    }
-    assert heads == {trigger, queued}
-    assert [r for r in _audit_rows(db, case_id) if r[0] == "case.truncated"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -1325,40 +1218,150 @@ def test_no_triage_job_after_reopen(db):
 
 
 # ---------------------------------------------------------------------------
-# P2-T07 integration — skipped until domain/correlation.py merges (see report)
+# T2 — escalating one alert takes only that alert (and its own duplicates) into the case
 # ---------------------------------------------------------------------------
+#
+# The Owner's requirement (11/11), reversing the sweep of DEC-165/166: the correlated open alerts
+# (same agent / source IP / user within ±2 h) stay in the Tier-1 queue, status and `case_id`
+# untouched, to be decided one by one. Trial data (07/11): one escalation took 14 alerts of 13
+# rules into a case, and concluding it closed all 14.
 
 
-def test_escalate_pulls_in_real_correlated_alerts(db):
-    """Without mocking correlated_cluster_ids: an alert on the same agent
-    within +/-2h should be pulled into the case as a correlated head. Proves
-    the real predicate integrates once domain/correlation.py exists."""
-    user = _make_user(db)
-    trigger = _insert_alert(db, status="tier1_active", agent_name="shared-agent")
-    _insert_alert(db, status="queued_tier1", agent_name="shared-agent")
-    case_id = escalate(db, trigger, user, title="t", severity="high")
-    heads = {
+def _case_heads(db, case_id) -> set[str]:
+    return {
         r[0]
         for r in db.execute(
             "SELECT alert_id FROM case_alerts WHERE case_id = %s", (case_id,)
         ).fetchall()
     }
-    assert len(heads) == 2
 
 
-def test_escalate_truncates_real_correlated_alerts_at_cap(db, monkeypatch):
-    """Same as test_escalate_truncates_at_max_alerts_per_case, but against the
-    real correlation query instead of a mocked return value."""
-    monkeypatch.setenv("MAX_ALERTS_PER_CASE", "2")
-    user = _make_user(db)
-    trigger = _insert_alert(db, status="tier1_active", agent_name="busy-agent")
-    for _ in range(3):
-        _insert_alert(db, status="queued_tier1", agent_name="busy-agent")
-    case_id = escalate(db, trigger, user, title="t", severity="high")
-    heads = {
-        r[0]
-        for r in db.execute(
-            "SELECT alert_id FROM case_alerts WHERE case_id = %s", (case_id,)
-        ).fetchall()
+def _escalation_scene(db, me: str, other: str, *, occurrences: int = 1):
+    """`(trigger, siblings)`: a `tier1_active` trigger held by `me` and the open siblings the old
+    sweep took into its case, one for each way of being correlated (same agent / same source IP /
+    same user, all within ±2 h) and each open status it took: `siblings` is `{alert_id: status}`."""
+    trigger = _insert_alert(
+        db,
+        status="tier1_active",
+        acknowledged_by=me,
+        agent_name="agent-t2",
+        alert_user="u-t2",
+        srcip="198.51.100.1",
+        occurrence_count=occurrences,
+    )
+    siblings = {
+        _insert_alert(
+            db, status="queued_tier1", agent_name="agent-t2", alert_user="u-a", srcip="192.0.2.1"
+        ): "queued_tier1",
+        _insert_alert(
+            db, status="queued_tier1", agent_name="agent-b", alert_user="u-b", srcip="198.51.100.1"
+        ): "queued_tier1",
+        _insert_alert(
+            db, status="queued_tier1", agent_name="agent-c", alert_user="u-t2", srcip="192.0.2.3"
+        ): "queued_tier1",
+        _insert_alert(
+            db,
+            status="tier1_active",
+            acknowledged_by=me,
+            agent_name="agent-t2",
+            alert_user="u-d",
+            srcip="192.0.2.4",
+        ): "tier1_active",
+        _insert_alert(
+            db,
+            status="tier1_active",
+            acknowledged_by=other,
+            agent_name="agent-t2",
+            alert_user="u-e",
+            srcip="192.0.2.5",
+        ): "tier1_active",
     }
-    assert len(heads) == 2
+    # They really are in the trigger's ±2 h window, one cluster each: without this the assertions
+    # about them in the tests below would hold for any code, and prove nothing.
+    subject = _make_alert(
+        alert_id=trigger, agent_name="agent-t2", alert_user="u-t2", srcip="198.51.100.1"
+    )
+    summary = correlation.summarize_for_prompt(db, subject)
+    assert sum(row.cluster_count for row in summary.rows) == len(siblings)
+    return trigger, siblings
+
+
+def _closed_duplicate(db, head: str) -> str:
+    return _insert_alert(
+        db, status="duplicate", duplicate_of=head, closed_at=_PAST, sealed_at=_PAST
+    )
+
+
+def test_escalate_takes_only_the_trigger_and_leaves_its_correlated_siblings(db):
+    """The queued siblings and the ones the escalating analyst or another analyst holds alike keep
+    their status and `case_id IS NULL`; the case has the trigger and nothing else."""
+    me, other = _make_user(db), _make_user(db)
+    trigger, siblings = _escalation_scene(db, me, other)
+    dup_of_sibling = _closed_duplicate(db, next(iter(siblings)))
+
+    case_id = escalate(db, trigger, me, title="t", severity="high")
+
+    assert _case_heads(db, case_id) == {trigger}
+    assert db.execute("SELECT count(*) FROM case_alerts").fetchone()[0] == 1
+    assert _fetch_alert(db, trigger, "status", "case_id") == ("escalated_tier2", case_id)
+    for sibling, status in siblings.items():
+        assert _fetch_alert(db, sibling, "status", "case_id") == (status, None)
+    assert _fetch_alert(db, dup_of_sibling, "status", "case_id") == ("duplicate", None)
+
+    escalated = [r for r in _audit_rows(db, trigger) if r[0] == "tier1.escalated"]
+    assert [r[3]["alert_ids"] for r in escalated] == [[trigger]]
+    opened = [r for r in _audit_rows(db, case_id) if r[0] == "case.opened"]
+    assert opened[0][3]["alert_count"] == 1
+    assert opened[0][3]["correlated_count"] == 0
+    for sibling in siblings:  # nothing was written about a sibling
+        assert _audit_rows(db, sibling) == []
+
+
+def test_concluding_the_case_closes_only_the_escalated_alert_and_its_duplicates(db):
+    me, other = _make_user(db), _make_user(db)
+    trigger, siblings = _escalation_scene(db, me, other, occurrences=3)
+    own_dups = [_closed_duplicate(db, trigger) for _ in range(2)]
+    sibling_dup = _closed_duplicate(db, next(iter(siblings)))
+    case_id = escalate(db, trigger, me, title="t", severity="high")
+
+    conclude_case(db, case_id, me, conclusion="confirmed_incident", reason="confirmed")
+
+    for closed in (trigger, *own_dups):
+        status, closed_at, case_col = _fetch_alert(db, closed, "status", "closed_at", "case_id")
+        assert (status, case_col) == ("closed_confirmed", case_id)
+        assert closed_at is not None
+    for sibling, status in siblings.items():
+        assert _fetch_alert(db, sibling, "status", "closed_at", "sealed_at", "case_id") == (
+            status,
+            None,
+            None,
+            None,
+        )
+    assert _fetch_alert(db, sibling_dup, "status", "case_id") == ("duplicate", None)
+
+
+def test_escalate_attaches_the_triggers_own_duplicates_and_no_others(db):
+    """A12 is unchanged: every row with `duplicate_of` = the trigger gets the `case_id` (its status
+    stays `duplicate`); the duplicates of a correlated sibling do not."""
+    me, other = _make_user(db), _make_user(db)
+    trigger, siblings = _escalation_scene(db, me, other, occurrences=3)
+    own_dups = [_closed_duplicate(db, trigger) for _ in range(2)]
+    sibling_dup = _closed_duplicate(db, next(iter(siblings)))
+
+    case_id = escalate(db, trigger, me, title="t", severity="high")
+
+    for dup in own_dups:
+        assert _fetch_alert(db, dup, "status", "case_id") == ("duplicate", case_id)
+    assert _fetch_alert(db, sibling_dup, "status", "case_id") == ("duplicate", None)
+    in_case = {
+        r[0]
+        for r in db.execute("SELECT alert_id FROM alerts WHERE case_id = %s", (case_id,)).fetchall()
+    }
+    assert in_case == {trigger, *own_dups}
+
+
+def test_escalate_of_an_alert_that_does_not_exist_is_stale(db):
+    user = _make_user(db)
+    with pytest.raises(StaleState), db.transaction():
+        escalate(db, "no-such-alert", user, title="t", severity="high")
+    assert db.execute("SELECT count(*) FROM cases").fetchone()[0] == 0
