@@ -384,13 +384,12 @@ export type DecideResult = {
   closed_count: number;
   case_id: number | string | null;
 };
-/** `POST .../escalate` (201): the case it opened. */
+/** `POST .../escalate` (201): the case it opened. `head_count` is 1: the case is the alert alone (and its copies). */
 export type EscalateResult = {
   alert_id: string;
   case_id: number | string;
   status: string;
   head_count?: number;
-  truncated?: boolean;
 };
 /** `POST .../reopen`. */
 export type ReopenResult = { alert_id: string; status: string };

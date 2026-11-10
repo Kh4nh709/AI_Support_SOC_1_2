@@ -8,6 +8,7 @@ import {
   apiPost,
   loginAs,
   postAlert,
+  postCorrelated,
   sql,
   userIdOf,
   usernameOf,
@@ -38,13 +39,18 @@ test("Tier 1 escalates, Tier 2 analyses, notes and concludes, and a second concl
 }) => {
   // ---- Tier 1 hands the cluster over.
   const head = await postAlert(request, { tag: "case", arm: "visible" });
+  // A correlated alert (same agent, another rule): escalating `head` must leave it in the queue (T2, DEC-215).
+  const sibling = await postCorrelated(request, head, { arm: "visible" });
   await waitForStatus(head.id, "queued_tier1");
+  await waitForStatus(sibling.id, "queued_tier1");
   const title = `E2E case for ${head.agent}`;
 
   await loginAs(page, "t1");
   await page.goto(`/alerts/${head.id}`);
   await page.getByRole("button", { name: S.decision.acknowledge }).click();
   await expect(toast(page, S.decision.acknowledged)).toBeVisible();
+  // The form says, before the button is pressed, that only this alert goes into the case.
+  await expect(page.getByText(S.decision.escalateScope)).toBeVisible();
   await page.getByLabel(S.decision.caseTitle).fill(title);
   await page.getByRole("button", { name: S.decision.escalate, exact: true }).click();
   const opened = toast(page, S.decision.caseOpened);
@@ -54,6 +60,13 @@ test("Tier 1 escalates, Tier 2 analyses, notes and concludes, and a second concl
   expect(caseId, "the toast names the case").toBeTruthy();
   const id = caseId ?? "";
   expect(sql(`SELECT status FROM alerts WHERE alert_id = '${head.id}'`)).toBe("escalated_tier2");
+  // The case is that alert alone; the correlated one keeps its status and has no case.
+  expect(sql(`SELECT alert_id FROM case_alerts WHERE case_id = '${id}'`)).toBe(head.id);
+  expect(
+    sql(
+      `SELECT status, coalesce(case_id::text, 'none') FROM alerts WHERE alert_id = '${sibling.id}'`,
+    ),
+  ).toBe("queued_tier1|none");
 
   // Signing out has reached the server before the next login (it would otherwise end a later session).
   const loggedOut = page.waitForResponse(
@@ -117,6 +130,9 @@ test("Tier 1 escalates, Tier 2 analyses, notes and concludes, and a second concl
     await expect(page.getByText(`Đã được ${T2_NAME} kết luận lúc`)).toBeVisible();
     await expect(first.submit).toHaveCount(0);
     expect(sql(`SELECT status FROM cases WHERE case_id = '${id}'`)).toBe("concluded_fp");
+    // Concluding closed the escalated alert and nothing else: the correlated one is still in the queue.
+    expect(sql(`SELECT status FROM alerts WHERE alert_id = '${head.id}'`)).toBe("closed_fp");
+    expect(sql(`SELECT status FROM alerts WHERE alert_id = '${sibling.id}'`)).toBe("queued_tier1");
 
     // The other user's form was drawn before: what it sends is refused, and the page names the user who got
     // there first (e2e-t2, not the user who is looking at it, e2e-t2b).

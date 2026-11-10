@@ -194,7 +194,7 @@ function defaultTitle(view: AlertView): string {
   return named.length > 0 ? named.join(" — ") : (view.description ?? view.alert_id);
 }
 
-/** Send the cluster to Tier 2 as a case. */
+/** Send this alert (and its own copies) to Tier 2 as a case; the alerts correlated with it stay in the queue. */
 export function EscalateForm({ view, busy, error, onRun }: FormProps & { view: AlertView }) {
   const [title, setTitle] = useState(() => defaultTitle(view));
   const [severity, setSeverity] = useState<CaseSeverity>(() => asSeverity(view.severity));
@@ -209,6 +209,7 @@ export function EscalateForm({ view, busy, error, onRun }: FormProps & { view: A
     <form onSubmit={submit} className="space-y-3">
       <fieldset className="space-y-3 border-t border-border pt-3" disabled={busy}>
         <legend className="text-sm">{S.decision.escalate}</legend>
+        <p className="text-xs text-muted">{S.decision.escalateScope}</p>
         <Field label={S.decision.caseTitle} error={error}>
           {({ id, describedBy, invalid }) => (
             <input

@@ -75,11 +75,23 @@ describe("summaryOf, one event type at a time", () => {
       { case_id: "c-1", alert_ids: ["a", "b", "c"], llm_suggestion: null },
       "chuyển lên Tier 2, case c-1; 3 alert",
     ],
+    [
+      "tier1.escalated",
+      { case_id: "c-1", alert_ids: ["a"], llm_suggestion: null },
+      "chuyển lên Tier 2, case c-1; 1 alert",
+    ],
     ["tier1.escalated", null, "chuyển lên Tier 2"],
+    // An event written before T2 (DEC-215) says how many correlated alerts the escalation swept in; one
+    // written since says that none was taken along.
     [
       "case.opened",
       { trigger_alert_id: "a1", alert_count: 3, correlated_count: 2 },
       "mở từ alert a1; 3 alert, 2 liên quan",
+    ],
+    [
+      "case.opened",
+      { trigger_alert_id: "a1", alert_count: 1, correlated_count: 0 },
+      "mở từ alert a1; 1 alert, không kéo theo alert liên quan",
     ],
     ["case.opened", null, "mở case"],
     ["case.truncated", { dropped: 4 }, "cắt 4 cụm vượt giới hạn của case"],
