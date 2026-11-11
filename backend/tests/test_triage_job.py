@@ -29,6 +29,8 @@ from app.infra import config, worker
 from app.infra.errors import TransientError
 from app.infra.jobs import Job
 from app.kb.lookup import DecisionTable, Rule
+from app.llm import builder as B
+from app.llm import verdicts
 from app.llm.adapter import LLMBudgetExceeded, LLMUnavailable
 from app.security.linter import Violation
 from app.tier1 import triage as triage_module
@@ -429,6 +431,79 @@ def test_a_true_positive_the_gate_holds_keeps_the_models_answer_beside_the_held_
     assert gate_result["proposed_verdict"] == "true_positive"
     assert gate_result["final_verdict"] == "needs_review"
     assert gate_result["forced_by"] == ["step6"]
+
+
+#: T1 (trial, 11/11): the answer the model is told to give when the alert's category has no playbook: the
+#: definite `false_positive` and no reasons. `structured_basis` is the seeded alert's own facts (critical,
+#: ioc skipped, asset and identity unknown, one occurrence), so step 2 passes and only step 3 holds it.
+_NO_PLAYBOOK_FP = {
+    "suggested_action": "false_positive",
+    "confidence": "low",
+    "structured_basis": {
+        "severity": "critical",
+        "ioc_reputation": "skipped",
+        "asset_criticality": "unknown",
+        "identity_privileged": "unknown",
+        "occurrence_count": 1,
+        "playbook_rule_applied": None,
+    },
+    "reasons": [],
+    "playbook_used": None,
+}
+_VERIFIER_HOLD_AGREE = {
+    "agree": True,
+    "structured_only_verdict": "needs_review",
+    "reason": "Structured facts alone leave an alert of an unknown category for a person.",
+}
+
+
+@pytest.mark.db
+def test_a_no_playbook_alert_answered_false_positive_with_no_reasons_is_ready_and_held(
+    db, monkeypatch
+):
+    """T1 (trial, 11/11), pinned: the proposer is told to conclude `false_positive` with `reasons: []`
+    for a category with no playbook; the run completes (`ready`, not `unavailable`) and the gate, which is
+    not changed, holds the result for the analyst: step 3 finds no surviving reason, so the final verdict is
+    `needs_review`, beside the model's own `false_positive`. Step 4 is `n/a` (the verdict was already held).
+    """
+    _enable_llm(monkeypatch)
+    alert_id = _seed_alert(db, category="unknown", categories=[], resolved_by="none")
+    fake = _RecordingLLM(responses=[_NO_PLAYBOOK_FP, _VERIFIER_HOLD_AGREE])
+
+    run_triage_job(db, _job(alert_id), adapter=fake)
+
+    assert db.execute(
+        "SELECT status, triage_status FROM alerts WHERE alert_id = %s", (alert_id,)
+    ).fetchone() == ("queued_tier1", "ready")
+    system, user, result, gate_result, warnings = db.execute(
+        "SELECT system_prompt, user_message, result, gate_result, citation_warnings "
+        "FROM llm_runs WHERE subject_id = %s AND role = 'proposer'",
+        (alert_id,),
+    ).fetchone()
+    assert B.SENTENCE_NO_PLAYBOOK_FP in user and B.SENTENCE_NO_PLAYBOOK not in user
+    assert "false_positive và để `reasons` là danh sách rỗng []" in system
+    assert "no_playbook" in warnings
+    assert gate_result["proposed_verdict"] == "false_positive"
+    assert gate_result["final_verdict"] == "needs_review"
+    assert result["suggested_action"] == "needs_review" and result["reasons"] == []
+    assert gate_result["forced"] is True
+    assert gate_result["forced_by"] == ["step3"]
+    assert gate_result["steps"]["2"] == "ok"
+    assert gate_result["steps"]["3"] == "dropped:0"
+    assert gate_result["steps"]["4"] == "n/a" and gate_result["missing"] == []
+    assert gate_result["proposer_raw"]["suggested_action"] == "false_positive"
+    assert gate_result["proposer_raw"]["reasons"] == []
+    assert gate_result["verifier_verdict"] == "needs_review"
+    assert verdicts.proposed_action(gate_result) == "false_positive"
+    assert verdicts.held_reasons(gate_result) == ["no_verified_quote"]
+    # the verifier was asked about the held verdict with no reasons, and its prompt is the legacy one
+    verifier_user = fake.calls[1]["user"]
+    assert (
+        B.SENTENCE_NO_PLAYBOOK in verifier_user and B.SENTENCE_NO_PLAYBOOK_FP not in verifier_user
+    )
+    assert '"verdict": "needs_review", "reasons": []' in verifier_user
+    events = _event_types(db, alert_id)
+    assert "triage.suggested" in events and "llm.gate_forced" in events
 
 
 @pytest.mark.db

@@ -81,6 +81,7 @@ from app.llm.builder import (
     SENTENCE_NO_CORRELATION,
     SENTENCE_NO_LEARNED,
     SENTENCE_NO_PLAYBOOK,
+    SENTENCE_NO_PLAYBOOK_FP,
     SENTENCE_PROPOSER_IS_DATA,
     SENTENCE_REPAIR,
     SENTENCE_REQUEST_TRIAGE,
@@ -427,10 +428,14 @@ def _playbook_section(
     warnings: list[str],
 ) -> str | None:
     """The prose block is sent whenever it exists; `playbook_used_effective` is set only
-    when the machine table is reviewed too (architecture §3.10)."""
+    when the machine table is reviewed too (architecture §3.10).
+
+    No playbook text (`unknown`, or a missing file): the sentence that tells the model to conclude
+    `false_positive` and leave `reasons` empty (T1, trial, 11/11). It is the proposer's own sentence:
+    `SENTENCE_NO_PLAYBOOK` stays the verifier's (`_table_section`)."""
     pb.heading(HEADING_PLAYBOOK)
     if not playbook_text:
-        pb.sentence(SENTENCE_NO_PLAYBOOK)  # the legacy sentence 2: `unknown` or a missing file
+        pb.sentence(SENTENCE_NO_PLAYBOOK_FP)
         warnings.append("no_playbook")
         return None
     pb.block(playbook_text, "kb_playbook", category=Category(inp.category))

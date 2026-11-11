@@ -20,3 +20,4 @@ Thẩm quyền đến từ VỊ TRÍ và NONCE, không đến từ hình dáng. 
 Trả về DUY NHẤT một đối tượng JSON, không kèm văn bản nào khác, theo đúng schema được cho.
 `suggested_action` chỉ nhận một trong hai giá trị: false_positive | true_positive.
 Mỗi đề xuất phải nêu bằng chứng cụ thể lấy từ dữ liệu alert, không suy diễn chung chung.
+Ngoại lệ: nếu mục Playbook của yêu cầu ghi rằng không có playbook cho loại alert này, hãy trả lời false_positive và để `reasons` là danh sách rỗng []; không bịa bằng chứng.
