@@ -244,8 +244,10 @@ def escalate(
     title: str,
     severity: str | None = None,
 ) -> dict:
-    """A11/A11b (+ A12), guarded before `transitions.escalate` — it has no
-    status guard on the trigger (§5). `severity` defaults to the alert's own."""
+    """A11 (+ A12), guarded before `transitions.escalate` — it has no
+    status guard on the trigger (§5). `severity` defaults to the alert's own.
+    The case is the trigger and its own duplicates; the correlated open alerts stay in the queue
+    (T2, DEC-215), so `head_count` is 1."""
     title = title.strip()
     if not 1 <= len(title) <= 200:
         raise ValueError("title: must be 1-200 characters")
@@ -264,7 +266,7 @@ def escalate(
     try:
         # A savepoint (review round 1, item 3): `transitions.escalate`'s two
         # `StaleState` flavors differ in how much SQL already ran — a
-        # `UniqueViolation` on `case_alerts` (a candidate claimed concurrently)
+        # `UniqueViolation` on `case_alerts` (the trigger claimed concurrently)
         # aborts the connection's current transaction before this function's
         # own `_conflict()` re-read could run; the rowcount-mismatch flavor
         # leaves a `cases` row and partial `UPDATE`s uncommitted but the
@@ -282,17 +284,11 @@ def escalate(
     head_count = conn.execute(
         "SELECT count(*) FROM case_alerts WHERE case_id = %s", (case_id,)
     ).fetchone()[0]
-    truncated = conn.execute(
-        "SELECT EXISTS (SELECT 1 FROM audit_events WHERE event_type = 'case.truncated' "
-        "AND subject_id = %s)",
-        (case_id,),
-    ).fetchone()[0]
     return {
         "alert_id": alert_id,
         "case_id": case_id,
         "status": "escalated_tier2",
         "head_count": head_count,
-        "truncated": truncated,
     }
 
 

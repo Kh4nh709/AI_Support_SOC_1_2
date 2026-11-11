@@ -1,15 +1,15 @@
 """Find alerts correlated with a given alert in a time window, for pipeline context and evidence.
 
-Two read-only entry points (phase-4 P4-2, phase-6 §Escalate). `summarize_for_prompt`
-returns a grouped ±2h summary plus up to five representative alerts, for P3's prompt
-builder to place outside an `<untrusted_data>` block — every `CorrelationRow` field is
-closed-set, numeric or a datetime (G6'); only the samples carry free text
-(`description`/`raw_log`), which P3 wraps. `correlated_cluster_ids` returns the
-status-filtered cluster ids P2-T06's `escalate` folds into a case.
+One read-only entry point (phase-4 P4-2): `summarize_for_prompt` returns a grouped ±2h summary
+plus up to five representative alerts, for P3's prompt builder to place outside an
+`<untrusted_data>` block — every `CorrelationRow` field is closed-set, numeric or a datetime
+(G6'); only the samples carry free text (`description`/`raw_log`), which P3 wraps. The window
+and status predicates it runs are public too (`WINDOW_PREDICATE`, `STATUS_PREDICATE`,
+`rows_query`, `samples_query`), for `tier2.dossier` and `eval/lab_measure.py`.
 
-Both functions run only `SELECT`s inside a transaction the caller owns (E4) —
-correlation is never persisted here; `escalate` is the only place it is ever written,
-into `case_alerts`, once an analyst has confirmed it is worth keeping.
+It runs only `SELECT`s inside a transaction the caller owns (E4). Correlation is context, never
+membership: since T2 (DEC-215) `escalate` no longer folds the correlated open alerts into a case
+(it used to, through a `correlated_cluster_ids` that is gone), so nothing here is ever written.
 
 `as_of` (P14 final fix wave, C1; the lab measurement, `eval/lab_measure.py`): `rows_query`,
 `samples_query` and `summarize_for_prompt` take an optional instant and then keep only the alerts
@@ -19,8 +19,8 @@ window above). A later stage of the same attack is then neither counted nor samp
 caller of the product — is the statement it has always been, text and parameters.
 
 `alert` is duck-typed: anything exposing `.alert_id`, `.agent_name`, `.alert_user`,
-`.srcip`, `.alert_time` works (`domain.transitions.escalate` passes a lightweight
-`_CorrelationSubject`, not a full `Alert`).
+`.srcip`, `.alert_time` works (`tier1.queue` and `tier1.triage` pass a lightweight subject of
+their own, not a full `Alert`).
 """
 
 from __future__ import annotations
@@ -30,8 +30,6 @@ from datetime import datetime
 from typing import Any
 
 import psycopg
-
-from app.infra import config
 
 #: The three-way OR + ±2h window + "still a cluster" + "not myself" predicate
 #: shared by every query below (phase-4 P4-2 / phase-6 §Escalate, verbatim).
@@ -50,7 +48,7 @@ _WINDOW_PREDICATE = (
 #: What the grouped rows and the samples leave out by status. A duplicate is counted in its head.
 #: An `archived` alert (INT-T03, DEC-212) is the Owner's fresh start: it is neither a decision nor in
 #: play, `AlertStatus` (the vocabulary of ①'s and ②'s prompts) has no such value, and a row carrying it
-#: would not render. `cluster_ids_query` needs no such term: it takes `queued_tier1` / `tier1_active` only.
+#: would not render.
 STATUS_PREDICATE = "status NOT IN ('duplicate', 'archived')"
 _STATUS_PREDICATE = STATUS_PREDICATE
 
@@ -156,35 +154,6 @@ def samples_query(alert: Any, *, as_of: datetime | None = None) -> tuple[str, di
     return sql, params
 
 
-def cluster_ids_query(alert: Any, limit: int, *, actor_id: str) -> tuple[str, dict[str, Any]]:
-    """Phase-6 §Escalate's predicate plus a tie-break (DEC-165) and one exclusion (DEC-166).
-    The WHERE clause is the doc's: `status IN (...)` is kept literal rather than named so a
-    reviewer can diff it against the doc. The doc orders by `occurrence_count DESC` only; with
-    `DEDUP_ENABLED=false` every head has `occurrence_count` 1, so at `MAX_ALERTS_PER_CASE` that
-    alone would leave the choice of siblings to heap order. `alert_time DESC, alert_id ASC` after
-    it keeps the newest first and makes the order total, hence deterministic.
-
-    The exclusion: a `tier1_active` alert that someone other than `actor_id` acknowledged is not
-    swept. It is in another analyst's hands, and escalating a sibling must not take it from them.
-    The test is `IS DISTINCT FROM`, so a `tier1_active` row with no recorded holder is left alone
-    too (A7 always records one, the schema does not insist): only an alert the escalating analyst
-    holds, or one nobody holds yet (`queued_tier1`), is swept. It sits in the WHERE, ahead of the
-    LIMIT, so an alert left alone never uses up a place at the cap."""
-    sql = f"""
-        SELECT alert_id
-        FROM alerts
-        WHERE {_WINDOW_PREDICATE}
-          AND status IN ('queued_tier1', 'tier1_active')
-          AND NOT (status = 'tier1_active' AND acknowledged_by IS DISTINCT FROM %(actor_id)s::uuid)
-        ORDER BY occurrence_count DESC, alert_time DESC, alert_id ASC
-        LIMIT %(limit)s
-    """
-    params = _params(alert)
-    params["limit"] = limit
-    params["actor_id"] = actor_id
-    return sql, params
-
-
 def summarize_for_prompt(
     conn: psycopg.Connection, alert: Any, *, as_of: datetime | None = None
 ) -> CorrelationSummary:
@@ -212,14 +181,3 @@ def summarize_for_prompt(
     samples = tuple(dict(zip(columns, row)) for row in cur.fetchall())
 
     return CorrelationSummary(rows=rows, samples=samples)
-
-
-def correlated_cluster_ids(conn: psycopg.Connection, alert: Any, *, actor_id: str) -> list[str]:
-    """The cluster ids `escalate` (P2-T06) folds into a case, capped at
-    `Config.MAX_ALERTS_PER_CASE`. Do not quote 200 as a routinely-binding
-    limit (phase-6): it is a guard rail against a pathological cluster, not a
-    cut analysts hit day to day. `actor_id` is the analyst who escalates: an alert
-    another analyst holds is not returned (`cluster_ids_query`, DEC-166). Read-only (E4)."""
-    limit = config.load().MAX_ALERTS_PER_CASE
-    sql, params = cluster_ids_query(alert, limit, actor_id=actor_id)
-    return [row[0] for row in conn.execute(sql, params).fetchall()]

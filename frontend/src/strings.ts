@@ -415,6 +415,11 @@ export const S = {
     falsePositive: "Đóng — dương tính giả",
     benign: "Đóng — lành tính",
     escalate: "Chuyển tier 2",
+    // Beside the escalate form (T2, DEC-215, the Owner 11/11): what goes into the case. Only this alert and its
+    // own copies; the alerts correlated with it stay in the queue as they are, to be decided one by one. It used to
+    // be the other way round (the correlated open alerts were swept into the case and closed with it).
+    escalateScope:
+      "Chỉ alert này (cùng các bản sao của nó) được chuyển vào case. Các alert tương quan trong ±2 giờ vẫn ở hàng đợi Tier 1 với trạng thái hiện tại, để quyết định từng alert.",
     reopen: "Mở lại",
     choose: "Chọn quyết định",
     reason: "Lý do",
@@ -1370,8 +1375,12 @@ export const S = {
         alertCount: (n: number) => `${n} alert`,
         caseOpened: (alert: string) => `mở từ alert ${alert}`,
         caseOpenedUnknown: "mở case",
+        // Since T2 (DEC-215) a case is the trigger alone and `correlated` is 0; the events written before it say
+        // how many correlated alerts that escalation swept in, and still read as they were.
         caseSize: (alerts: number, correlated: number) =>
-          `${alerts} alert, ${correlated} liên quan`,
+          correlated === 0
+            ? `${alerts} alert, không kéo theo alert liên quan`
+            : `${alerts} alert, ${correlated} liên quan`,
         truncated: (n: number) => `cắt ${n} cụm vượt giới hạn của case`,
         truncatedUnknown: "case bị cắt bớt cụm",
         concluded: (conclusion: string) => `kết luận: ${conclusion}`,

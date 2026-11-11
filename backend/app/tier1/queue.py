@@ -662,8 +662,8 @@ _SOAR_SQL = """
 
 @dataclasses.dataclass(frozen=True)
 class _CorrelationSubject:
-    """Just enough of the head for `correlation.summarize_for_prompt`'s predicate — the
-    same shape `transitions.escalate` builds for itself (duck-typed there)."""
+    """Just enough of the head for `correlation.summarize_for_prompt`'s predicate (duck-typed
+    there): the head's agent, user, source IP and time."""
 
     alert_id: str
     agent_name: str

@@ -157,9 +157,7 @@ _DEFAULT_LOOKUP_STATUS = {"asset": "skipped", "identity": "skipped", "ioc": "ski
 @dataclass(frozen=True)
 class _Subject:
     """Just enough of an alert for `correlation.summarize_for_prompt`'s window
-    predicate (`agent_name`/`alert_user`/`srcip`/`alert_time`) — mirrors
-    `app.domain.transitions._CorrelationSubject`; not imported, that name is
-    private to `domain/` (design note 6)."""
+    predicate (`agent_name`/`alert_user`/`srcip`/`alert_time`), duck-typed there."""
 
     alert_id: str
     agent_name: str

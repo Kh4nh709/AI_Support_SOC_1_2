@@ -315,6 +315,27 @@ export async function postAlert(
   return alert;
 }
 
+/**
+ * Posts one alert on the same agent as `head` under another rule: a head of its own (another dedup key) that
+ * is correlated with `head` (same agent, same ±2 h window). Escalating `head` used to sweep it into the case;
+ * since T2 (DEC-215) it stays in the queue.
+ */
+export async function postCorrelated(
+  request: APIRequestContext,
+  head: Posted,
+  options: { arm?: Arm } = {},
+): Promise<Posted> {
+  const id = newAlertId(options.arm);
+  const alert: Posted = {
+    ...head,
+    id,
+    rule: "99002",
+    description: `${head.description} (another rule, same agent)`,
+  };
+  await postWebhook(request, wazuhBody(alert, id));
+  return alert;
+}
+
 /** Posts `times` more alerts with the same dedup key: each one is a duplicate of the head (its count grows). */
 export async function postDuplicates(
   request: APIRequestContext,

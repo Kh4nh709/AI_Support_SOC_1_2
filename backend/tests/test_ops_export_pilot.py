@@ -698,12 +698,14 @@ def test_synthetic_alerts_are_not_pilot_decisions(db):
     assert "| all | 0 | 0 | 0 | 0 | 0 | n/a (0 rows) |" in section
 
 
-# --- kéo theo: the alerts an escalation sweeps in, recorded and never decided (DEC-165) -----------
+# --- kéo theo: the alerts an escalation swept in, recorded and never decided (DEC-165) -----------
 #
-# `transitions.escalate` folds the trigger and every correlated head into one case and writes ONE
-# `tier1.escalated` event, about the trigger. The swept heads have no decision of their own, so they
-# are counted apart ("kéo theo (không phải quyết định)", Q34) and never as a decision (Q29), in a
-# denominator or in an agreement figure (Q31, Q33).
+# Until T2 (DEC-215) `transitions.escalate` folded the trigger and every correlated head into one case
+# and wrote ONE `tier1.escalated` event, about the trigger. The swept heads have no decision of their
+# own, so they are counted apart ("kéo theo (không phải quyết định)", Q34) and never as a decision
+# (Q29), in a denominator or in an agreement figure (Q31, Q33). The transition takes the trigger alone
+# now, so the tests below seed the old shape (`_sweep`) for the count, and one test runs the real
+# transition and finds nothing to count.
 
 SWEPT_HEADING = "### kéo theo (không phải quyết định) (Q34)"
 
@@ -732,9 +734,9 @@ def _sweep(db, actor: str, added: dict[str, datetime]) -> str:
 
 
 @pytest.mark.db
-def test_a_real_escalation_that_sweeps_two_siblings_is_one_decision_and_two_keo_theo(db):
+def test_a_real_escalation_with_two_correlated_siblings_is_one_decision_and_no_keo_theo(db):
     # the real transition, not a seeded shape: three alerts of one agent inside +/-2 h of each
-    # other, the trigger escalated by an analyst, the other two swept in by A11b
+    # other, the trigger escalated by an analyst; since T2 (DEC-215) the other two are left alone
     from app.domain.transitions import escalate
 
     actor = _user(db)
@@ -749,7 +751,12 @@ def test_a_real_escalation_that_sweeps_two_siblings_is_one_decision_and_two_keo_
         ([sibling_one, sibling_two],),
     )
     escalate(db, trigger, actor, title="sweep", severity="high")
-    # the transition stamps the transaction's `now()` on the event and on each case_alerts row:
+    # the siblings are in no case and are still in the queue
+    for sibling in (sibling_one, sibling_two):
+        assert db.execute(
+            "SELECT status, case_id FROM alerts WHERE alert_id = %s", (sibling,)
+        ).fetchone() == ("queued_tier1", None)
+    # the transition stamps the transaction's `now()` on the event and on the case_alerts row:
     # a window of exactly that instant holds this escalation and nothing another test committed
     now = db.execute("SELECT now()").fetchone()[0]
 
@@ -762,20 +769,19 @@ def test_a_real_escalation_that_sweeps_two_siblings_is_one_decision_and_two_keo_
     assert "| blind | wazuh | 0 | 0 | 0 | 0 |" in decisions
     assert "| blind | all | 0 | 0 | 1 | 1 |" in decisions
     assert "| visible | all | 0 | 0 | 0 | 0 |" in decisions
-    # two kéo theo, each in its own arm and source; the trigger is a decision, not a kéo theo
+    # no kéo theo: nobody was swept in, and the trigger is a decision, not a kéo theo
     swept = _block(section, SWEPT_HEADING)
-    assert "| blind | lab | 0 |" in swept
-    assert "| blind | wazuh | 1 |" in swept
-    assert "| blind | all | 1 |" in swept
-    assert "| visible | lab | 1 |" in swept
-    assert "| visible | all | 1 |" in swept
-    # section 6 carries the same two, beside the decision count of 1
+    for arm in ("blind", "visible"):
+        for source in ("lab", "wazuh", "all"):
+            assert f"| {arm} | {source} | 0 |" in swept, (arm, source)
+    assert not re.search(r"\| (blind|visible) \| (lab|wazuh|all) \| [1-9]", swept)
+    # section 6 carries the same zeros, beside the decision count of 1
     rows = _section_rows(text, "6 · ")
     assert rows["Decisions by branch (blind / visible) and by person"][0] == "measured, n = 1"
     blind = rows["kéo theo (không phải quyết định), blind arm"]
     visible = rows["kéo theo (không phải quyết định), visible arm"]
-    assert blind[0] == "1" and visible[0] == "1"
-    assert "wazuh = 1, lab = 0" in blind[1] and "wazuh = 0, lab = 1" in visible[1]
+    assert blind[0] == "0" and visible[0] == "0"
+    assert "wazuh = 0, lab = 0" in blind[1] and "wazuh = 0, lab = 0" in visible[1]
     assert "Q34" in blind[1] and "not a decision" in blind[1]
 
 

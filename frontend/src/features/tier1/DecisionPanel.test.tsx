@@ -465,7 +465,7 @@ describe("escalate", () => {
   it("posts the title and the severity, and the toast names the new case", async () => {
     answerPost("escalate", () =>
       HttpResponse.json(
-        { alert_id: "a1", case_id: 9, status: "escalated_tier2", head_count: 1, truncated: false },
+        { alert_id: "a1", case_id: 9, status: "escalated_tier2", head_count: 1 },
         { status: 201 },
       ),
     );
@@ -489,6 +489,19 @@ describe("escalate", () => {
       },
     ]);
     expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ case_id: 9 }));
+  });
+
+  it("says that only this alert goes into the case and the correlated ones stay in the queue", async () => {
+    renderPanel(mine());
+    await findDecideForm();
+    // T2 (DEC-215): beside the form, in the words the analyst reads before pressing the button.
+    const note = screen.getByText(S.decision.escalateScope);
+    expect(note).toBeInTheDocument();
+    expect(note.closest("fieldset")).toBe(
+      screen.getByLabelText(S.decision.caseTitle).closest("fieldset"),
+    );
+    expect(S.decision.escalateScope).toMatch(/^Chỉ alert này/);
+    expect(S.decision.escalateScope).toContain("vẫn ở hàng đợi Tier 1");
   });
 
   it("does not send an empty title", async () => {

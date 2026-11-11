@@ -2304,20 +2304,44 @@ def test_the_job_has_no_assert_in_its_control_flow():
 
 
 def _swept_alert(conn: psycopg.Connection, n: int, agent: str, srcip: str) -> str:
-    """A `queued_tier1` alert with a user of its own: what `transitions.escalate` sweeps in when it shares the
-    trigger's agent (or address)."""
+    """A `queued_tier1` alert with a user of its own: what `transitions.escalate` swept in, until T2, when it
+    shared the trigger's agent (or address)."""
     alert_id = _alert_id(n)
     _seed_alert(conn, alert_id=alert_id, agent_name=agent, alert_user=f"esc-user-{n}", srcip=srcip)
     return alert_id
 
 
-def _escalate(dsn, trigger: str, user: str) -> str:
-    """The real `transitions.escalate`, committed; the id of the case it opened."""
-    from app.domain import transitions
+def _escalate_sweeping(dsn, trigger: str, swept: list[str], user: str) -> str:
+    """A case as `transitions.escalate` wrote it until T2 (DEC-215), committed; its id. The trigger and each
+    swept head are `case_alerts` rows and `escalated_tier2`, and ONE `tier1.escalated` event, keyed on the
+    trigger, lists them all in `payload.alert_ids`. The transition takes the trigger alone now, so the shape is
+    written by hand: the trial holds cases of it, and the lab measurement still has to date them."""
+    from app.audit.events import write_event
 
+    heads = [trigger, *swept]
+    case_id = str(uuid.uuid4())
     with _connect(dsn) as conn:
-        case_id = transitions.escalate(
-            conn, trigger, user, title="t11 escalation", severity="medium"
+        conn.execute(
+            "INSERT INTO cases (case_id, title, status, severity, created_by) "
+            "VALUES (%s, 't11 escalation', 'investigating', 'medium', %s)",
+            (case_id, user),
+        )
+        for head in heads:
+            conn.execute(
+                "INSERT INTO case_alerts (case_id, alert_id, added_by) VALUES (%s, %s, %s)",
+                (case_id, head, user),
+            )
+        conn.execute(
+            "UPDATE alerts SET status = 'escalated_tier2', case_id = %s WHERE alert_id = ANY(%s)",
+            (case_id, heads),
+        )
+        write_event(
+            conn,
+            "tier1.escalated",
+            trigger,
+            "analyst",
+            actor_id=user,
+            payload={"case_id": case_id, "alert_ids": heads, "llm_suggestion": None},
         )
         conn.commit()
     return case_id
@@ -2325,8 +2349,8 @@ def _escalate(dsn, trigger: str, user: str) -> str:
 
 @pytest.mark.db
 def test_a_sibling_swept_into_a_case_is_dated_by_the_event_that_lists_it(scratch_dsn):
-    """`transitions.escalate` writes ONE `tier1.escalated`, keyed on the trigger, with every swept head in
-    `payload.alert_ids`: the siblings have no event of their own. The trigger's correlation section prints
+    """Until T2 `transitions.escalate` wrote ONE `tier1.escalated`, keyed on the trigger, with every swept head
+    in `payload.alert_ids`: the siblings have no event of their own. The trigger's correlation section prints
     them as `escalated_tier2`, decided after the trigger arrived, so the trigger must be counted."""
     n = 700 + 10 * next(_seq)
     agent = f"esc-agent-{n}"
@@ -2336,7 +2360,7 @@ def test_a_sibling_swept_into_a_case_is_dated_by_the_event_that_lists_it(scratch
         sibling_a = _swept_alert(conn, n + 1, agent, f"10.96.{n % 200}.2")
         sibling_b = _swept_alert(conn, n + 2, agent, f"10.96.{n % 200}.3")
         conn.commit()
-    _escalate(scratch_dsn, trigger, user)
+    _escalate_sweeping(scratch_dsn, trigger, [sibling_a, sibling_b], user)
 
     with _connect(scratch_dsn) as conn:
         # the premise: one event, on the trigger, listing the three heads; none on a sibling
@@ -2378,13 +2402,15 @@ def test_a_case_next_to_a_swept_sibling_of_another_case_is_counted(scratch_dsn):
     with _connect(scratch_dsn) as conn:
         user = insert_user(conn, "tier1")
         a = _swept_alert(conn, n, agent_x, f"10.95.{n % 200}.1")
-        _swept_alert(conn, n + 1, agent_x, f"10.95.{n % 200}.2")
-        _swept_alert(conn, n + 2, agent_x, f"10.95.{n % 200}.3")
+        b = _swept_alert(conn, n + 1, agent_x, f"10.95.{n % 200}.2")
+        c = _swept_alert(conn, n + 2, agent_x, f"10.95.{n % 200}.3")
         f = _swept_alert(conn, n + 3, agent_x, shared_ip)
         e = _swept_alert(conn, n + 4, agent_y, shared_ip)
         conn.commit()
-    _escalate(scratch_dsn, e, user)  # sweeps F through the shared address
-    case_one = _escalate(scratch_dsn, a, user)  # sweeps B and C; F is already in a case
+    _escalate_sweeping(scratch_dsn, e, [f], user)  # swept F through the shared address
+    case_one = _escalate_sweeping(
+        scratch_dsn, a, [b, c], user
+    )  # swept B and C; F was already in a case
 
     with _connect(scratch_dsn) as conn:
         assert (
