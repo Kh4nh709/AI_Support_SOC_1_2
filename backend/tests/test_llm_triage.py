@@ -30,7 +30,9 @@ from app.llm import builder as B
 from app.llm import schemas
 from app.llm import triage as T
 from app.llm.adapter import DeepSeekAdapter
+from app.security import gate, output_guard
 from app.security import linter as L
+from app.tier1.triage import _make_rule_check
 
 from tests.fakes.llm import (
     TRIAGE_V3_TRUE_POSITIVE,
@@ -474,7 +476,10 @@ def test_absent_lookups_emit_sentence_outside_and_no_context_block():
 def test_no_playbook_emits_sentence_outside():
     built = _build(_inp(category="unknown"), playbook=None, table=None)
     residual = _residual(built.prompt.user)
-    assert B.SENTENCE_NO_PLAYBOOK in residual
+    # T1 (trial, 11/11): the proposer's sentence is the one that says what to conclude; the legacy
+    # "chỉ suy luận từ dữ liệu alert" stays the verifier's (`_table_section`)
+    assert B.SENTENCE_NO_PLAYBOOK_FP in residual
+    assert B.SENTENCE_NO_PLAYBOOK not in residual
     assert "kb_playbook" not in built.prompt.block_index
     assert built.playbook_used_effective is None
     assert "no_playbook" in built.warnings
@@ -529,8 +534,146 @@ def test_fresh_nonce_per_build_when_none_is_given():
 def test_empty_playbook_text_reads_as_no_playbook():
     built = _build(playbook="")
     assert "kb_playbook" not in built.prompt.block_index
-    assert B.SENTENCE_NO_PLAYBOOK in _residual(built.prompt.user)
+    assert B.SENTENCE_NO_PLAYBOOK_FP in _residual(built.prompt.user)
+    assert B.SENTENCE_NO_PLAYBOOK not in _residual(built.prompt.user)
     assert built.warnings == ["no_playbook"]
+
+
+# ────────────────────────────────────────── T1 (trial, 11/11): no playbook -> false_positive, no reasons
+def test_no_playbook_proposer_is_told_to_conclude_false_positive_with_no_reasons():
+    """The proposer prompt of an alert whose category has no playbook carries the new sentence: under the
+    `## Playbook` heading, outside every untrusted block, and the linter is clean."""
+    built = _build(_inp(category="unknown"), playbook=None, table=None)
+    user = built.prompt.user
+    assert B.SENTENCE_NO_PLAYBOOK_FP in _residual(user)
+    assert not any(B.SENTENCE_NO_PLAYBOOK_FP in span for span in _spans(user))
+    assert user.index(B.HEADING_PLAYBOOK) < user.index(B.SENTENCE_NO_PLAYBOOK_FP)
+    assert user.index(B.SENTENCE_NO_PLAYBOOK_FP) < user.index(B.HEADING_REQUEST)
+    assert "false_positive" in B.SENTENCE_NO_PLAYBOOK_FP and "reasons" in B.SENTENCE_NO_PLAYBOOK_FP
+    assert _lint(user) == []
+    assert "no_playbook" in built.warnings  # the warning stays
+    assert built.playbook_used_effective is None
+
+
+def test_a_category_with_a_playbook_never_gets_the_no_playbook_sentence():
+    """Every category: the sentence is there exactly when `kb.get_playbook` gives nothing (today only
+    `unknown`), and never because a decision table is missing or unreviewed."""
+    for category in B.Category:
+        playbook = get_playbook(category.value)
+        built = _build(_inp(category=category.value), playbook=playbook, table=None)
+        residual = _residual(built.prompt.user)
+        assert (B.SENTENCE_NO_PLAYBOOK_FP in residual) == (playbook is None), category
+        assert B.SENTENCE_NO_PLAYBOOK not in residual, category
+        assert _lint(built.prompt.user) == [], category
+    assert get_playbook("unknown") is None
+    for table in (REVIEWED, UNREVIEWED, None):
+        built = _build(table=table)
+        assert "kb_playbook" in built.prompt.block_index
+        assert B.SENTENCE_NO_PLAYBOOK_FP not in built.prompt.user
+        assert B.SENTENCE_NO_PLAYBOOK not in built.prompt.user
+
+
+def test_the_no_playbook_sentence_is_a_template_constant_and_the_legacy_one_is_unchanged():
+    assert B.SENTENCE_NO_PLAYBOOK_FP in B.TEMPLATE_CONSTANTS
+    assert B.SENTENCE_NO_PLAYBOOK_FP in B.SENTENCES
+    assert B.SENTENCE_NO_PLAYBOOK_FP != B.SENTENCE_NO_PLAYBOOK
+    assert B.SENTENCE_NO_PLAYBOOK == "không tìm được playbook khớp, chỉ suy luận từ dữ liệu alert"
+
+
+NO_PLAYBOOK_EXCEPTION = (
+    "Ngoại lệ: nếu mục Playbook của yêu cầu ghi rằng không có playbook cho loại alert này, hãy trả lời "
+    "false_positive và để `reasons` là danh sách rỗng []; không bịa bằng chứng."
+)
+
+
+def test_system_prompt_carries_the_no_playbook_exception():
+    template = T.TRIAGE_TEMPLATE.read_text("utf-8")
+    assert template.count(NO_PLAYBOOK_EXCEPTION) == 1
+    evidence_rule = "Mỗi đề xuất phải nêu bằng chứng cụ thể lấy từ dữ liệu alert"
+    assert template.index("ĐẦU RA") < template.index(evidence_rule)
+    assert template.index(evidence_rule) < template.index(NO_PLAYBOOK_EXCEPTION)
+    assert NO_PLAYBOOK_EXCEPTION in _build().prompt.system
+    assert NO_PLAYBOOK_EXCEPTION in _build(_inp(category="unknown"), playbook=None).prompt.system
+    # the exception is the proposer's: the verifier's system prompt does not know it
+    assert NO_PLAYBOOK_EXCEPTION not in T.VERIFIER_TEMPLATE.read_text("utf-8")
+    assert NO_PLAYBOOK_EXCEPTION not in _verifier().prompt.system
+
+
+NO_PLAYBOOK_FP = {
+    "suggested_action": "false_positive",
+    "confidence": "low",
+    "structured_basis": {
+        "severity": "critical",
+        "ioc_reputation": "skipped",
+        "asset_criticality": "unknown",
+        "identity_privileged": "unknown",
+        "occurrence_count": 3,
+        "playbook_rule_applied": None,
+    },
+    "reasons": [],
+    "playbook_used": None,
+}
+
+
+def test_an_empty_reasons_list_is_schema_valid_and_the_output_guard_takes_it():
+    assert schemas.validate("triage_v3", NO_PLAYBOOK_FP) == []
+    assert output_guard.enforce(dict(NO_PLAYBOOK_FP))["reasons"] == []
+
+
+def test_propose_parses_a_false_positive_with_no_reasons_first_try():
+    built = _build(_inp(category="unknown"), playbook=None, table=None)
+    llm = RecordingLLM(responses=[NO_PLAYBOOK_FP])
+    proposal = T.propose(llm, built, cfg=_cfg())
+    assert proposal.parsed == NO_PLAYBOOK_FP
+    assert proposal.repaired is False
+    assert len(llm.calls) == 1
+
+
+def test_the_verifier_prompt_builds_for_a_false_positive_with_no_reasons():
+    facts = T.build_facts(_inp(category="unknown"), _correlation())
+    built = T.build_verifier_prompt(facts, None, "false_positive", [], cfg=_cfg(), nonce=NONCE)
+    residual = _residual(built.prompt.user)
+    assert json.loads(built.prompt.block_index["proposer"].plain) == {
+        "verdict": "false_positive",
+        "reasons": [],
+    }
+    assert _lint(built.prompt.user) == []
+    # the verifier's own sentence for a category with no table: untouched by T1
+    assert B.SENTENCE_NO_PLAYBOOK in residual
+    assert B.SENTENCE_NO_PLAYBOOK_FP not in built.prompt.user
+    assert built.warnings == ["no_playbook"]
+    assert built.playbook_used_effective is None
+
+
+def test_the_gate_holds_a_false_positive_with_no_reasons_at_step_3_and_changes_nothing_else():
+    """Prompt only (the Owner's decision): with `reasons: []` no reason survives step 3, so the verdict is
+    held as needs_review. Step 4 then has nothing to do (it acts only on a verdict still false_positive), so
+    it is `n/a` and not in `forced_by`. The gate itself is untouched."""
+    inp = _inp(category="unknown", severity="critical", occurrence_count=3)
+    built = _build(inp, playbook=None, table=None)
+    facts = T.build_facts(inp, _correlation())
+    # what an honest model would write in `structured_basis`: the request's own facts
+    basis = {k: facts[k] for k in NO_PLAYBOOK_FP["structured_basis"] if k in facts}
+    parsed = {**NO_PLAYBOOK_FP, "structured_basis": {**NO_PLAYBOOK_FP["structured_basis"], **basis}}
+    assert schemas.validate("triage_v3", parsed) == []
+    state = gate.run_steps_1_to_5(
+        parsed,
+        facts,
+        built.prompt.block_index,
+        repaired=False,
+        rule_check=_make_rule_check(None, facts),
+        scan=lambda _: [],
+    )
+    assert state.proposed_verdict == "false_positive"
+    assert state.verdict == "needs_review"
+    assert state.forced_by == ["step3"]
+    assert state.steps == {"1": "ok", "2": "ok", "3": "dropped:0", "4": "n/a", "5": "findings:0"}
+    assert state.reasons == [] and state.dropped_reasons == [] and state.missing == []
+    verifier = {"agree": True, "structured_only_verdict": "needs_review", "reason": "x"}
+    result = gate.finish(state, verifier)
+    assert result["suggested_action"] == "needs_review"
+    assert result["reasons"] == []
+    assert state.forced_by == ["step3"]  # a verifier that agrees with the hold adds nothing
 
 
 def test_correlation_rows_and_samples_rendering():

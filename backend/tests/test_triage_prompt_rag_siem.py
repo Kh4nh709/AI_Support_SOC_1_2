@@ -45,10 +45,12 @@ PLAYBOOK_TEXT = "PLAYBOOK_TEXT_FIXED"
 #: The one value S2 added to the `triage_v2` `reasons[].source` enum, and so to the ① system message.
 SIEM_ENUM_VALUE = "|siem_context"
 #: sha256 of the ① system message without S2's value: the integration's system message with
-#: `SIEM_ENUM_VALUE` taken out once. 2531 bytes against the integration's 2544. It was main's
+#: `SIEM_ENUM_VALUE` taken out once. 2744 bytes against the integration's 2757. It was main's
 #: (ba31def; P13's, 923c6b2, is the same bytes: b3c884fd1d9a...) until P14-T01 (DEC-213) moved the system
-#: message on purpose: the new opening, `false_positive | true_positive`, and `## Schema triage_v3`.
-MAIN_SYSTEM_SHA256 = "80c7a9b8c0461c4aa7b3ea8f661a23daae3da50dfa437e541dc2d55855a862d6"
+#: message on purpose: the new opening, `false_positive | true_positive`, and `## Schema triage_v3` (2531
+#: bytes, sha 80c7a9b8c046...). T1 (trial, 11/11) moved it again, on purpose: one more line in ĐẦU RA, the
+#: exception for an alert whose category has no playbook (`false_positive`, empty `reasons`); +213 bytes.
+MAIN_SYSTEM_SHA256 = "4aae7ecb41df87b41cef88526bad22a70cc2312e8b71aa1fac60c12d513ede7d"
 #: One whole `siem_context` block, with the blank line after it.
 SIEM_BLOCK = re.compile(
     r'<untrusted_data nonce="\w+" source="siem_context">.*?</untrusted_data nonce="\w+">\n\n',

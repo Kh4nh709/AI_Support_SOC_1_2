@@ -192,6 +192,13 @@ HEADING_REPAIR = "## Repair"
 HEADING_LEARNED = "## Tri thức đã duyệt và lịch sử quyết định"
 SENTENCE_ABSENT = "không có trong cơ sở dữ liệu nội bộ — vắng mặt không phải bằng chứng vô hại"
 SENTENCE_NO_PLAYBOOK = "không tìm được playbook khớp, chỉ suy luận từ dữ liệu alert"
+#: The ① proposer's sentence under `## Playbook` when the alert's category has no playbook (`kb.get_playbook`
+#: gives nothing: `unknown`, or a missing file) - T1, trial, 11/11. It says what to conclude: the model answers
+#: `false_positive` and leaves `reasons` empty, no justification needed. The gate is not told and is not changed:
+#: with no reason left, step 3 holds the verdict for the analyst. It is NOT `SENTENCE_NO_PLAYBOOK`, which the
+#: verifier's `_table_section` also writes for a missing or unreviewed decision table, where it is not an
+#: instruction to anyone to conclude anything.
+SENTENCE_NO_PLAYBOOK_FP = "không có playbook cho loại alert này, nên kết luận false_positive và để trống reasons (không cần nêu bằng chứng)"
 SENTENCE_NO_CORRELATION = "không có alert tương quan trong ±2 giờ"
 SENTENCE_REQUEST_TRIAGE = "Trả về DUY NHẤT một đối tượng JSON theo schema triage_v3."
 SENTENCE_REQUEST_VERIFIER = "Trả về DUY NHẤT một đối tượng JSON theo schema verifier_v2."
@@ -217,6 +224,7 @@ HEADINGS = (
 SENTENCES = (
     SENTENCE_ABSENT,
     SENTENCE_NO_PLAYBOOK,
+    SENTENCE_NO_PLAYBOOK_FP,
     SENTENCE_NO_CORRELATION,
     SENTENCE_REQUEST_TRIAGE,
     SENTENCE_REQUEST_VERIFIER,
