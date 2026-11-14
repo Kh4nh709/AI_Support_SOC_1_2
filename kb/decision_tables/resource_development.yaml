@@ -1,0 +1,27 @@
+# kb/decision_tables/resource_development.yaml — SKELETON, UNSIGNED.
+# DRAFT 14/11/2026 — agent-drafted (DEC-216, mapping v3.5), not reviewed.
+# ATT&CK Resource Development; T1587.001, T1584; tier 6 còn T1583, T1585–T1588, T1608, T1650, T1683.
+# Trial evidence: 50 alerts: 112431 ×33 (level 5), 110256 ×17 (3).
+# No gold alert carries this category: implemented, not measured; no fold measured.
+# No false_positive rule: facts cannot see command, path, parent, task action or intent.
+# Routine and attack branches require playbook §3/§4; low severity or clean IoC cannot separate them.
+# Context comes from SOAR enrichment; skipped is not clean (DEC-208).
+# apply_table evaluates first match in file order; differing actions below are disjoint.
+# Unsigned tables are absent to the gate: decision_table_unreviewed:resource_development; step 4 table_unreviewed.
+category: resource_development
+playbook: resource_development_v1
+reviewed_by: null
+reviewed_at: null
+rules:
+  # evidence: playbook resource_development.md:27; §3 50 alerts: 112431 ×33 (level 5), 110256 ×17 (3); bad-IoC policy, not a measured verdict.
+  - id: rsd-1
+    if: {ioc_reputation: [malicious, suspicious]}
+    then: escalate
+  # evidence: playbook resource_development.md:28; §3 50 alerts: 112431 ×33 (level 5), 110256 ×17 (3); DEC-053 critical band, including unseen future rules.
+  - id: rsd-2
+    if: {rule_level_gte: 12}
+    then: escalate
+  # evidence: playbook resource_development.md:22 and :35; §3 50 alerts: 112431 ×33 (level 5), 110256 ×17 (3); content needed to distinguish routine/attack, so review below critical without bad IoC.
+  - id: rsd-3
+    if: {rule_level_lt: 12, ioc_reputation: [not_found, clean, skipped]}
+    then: needs_review
