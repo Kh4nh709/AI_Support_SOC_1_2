@@ -1,0 +1,27 @@
+# kb/decision_tables/impact.yaml — SKELETON, UNSIGNED.
+# DRAFT 14/11/2026 — agent-drafted (DEC-216, mapping v3.5), not reviewed.
+# ATT&CK Impact; T1531, T1489, T1485, T1112, T1070.004.
+# Trial evidence: 41 alerts: 110229 ×20 (level 3), 112524 ×15 (5), 751 ×2 (5), 597 ×2 (5), 60778 ×2 (5).
+# No gold alert carries this category: implemented, not measured; no fold measured.
+# No false_positive rule: facts cannot see command, path, parent, task action or intent.
+# Routine and attack branches require playbook §3/§4; low severity or clean IoC cannot separate them.
+# Context comes from SOAR enrichment; skipped is not clean (DEC-208).
+# apply_table evaluates first match in file order; differing actions below are disjoint.
+# Unsigned tables are absent to the gate: decision_table_unreviewed:impact; step 4 table_unreviewed.
+category: impact
+playbook: impact_v1
+reviewed_by: null
+reviewed_at: null
+rules:
+  # evidence: playbook impact.md:27; §3 41 alerts: 110229 ×20 (level 3), 112524 ×15 (5), 751 ×2 (5), 597 ×2 (5), 60778 ×2 (5); bad-IoC policy, not a measured verdict.
+  - id: imp-1
+    if: {ioc_reputation: [malicious, suspicious]}
+    then: escalate
+  # evidence: playbook impact.md:28; §3 41 alerts: 110229 ×20 (level 3), 112524 ×15 (5), 751 ×2 (5), 597 ×2 (5), 60778 ×2 (5); DEC-053 critical band, including unseen future rules.
+  - id: imp-2
+    if: {rule_level_gte: 12}
+    then: escalate
+  # evidence: playbook impact.md:22 and :35; §3 41 alerts: 110229 ×20 (level 3), 112524 ×15 (5), 751 ×2 (5), 597 ×2 (5), 60778 ×2 (5); content needed to distinguish routine/attack, so review below critical without bad IoC.
+  - id: imp-3
+    if: {rule_level_lt: 12, ioc_reputation: [not_found, clean, skipped]}
+    then: needs_review
