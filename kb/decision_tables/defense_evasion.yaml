@@ -1,0 +1,27 @@
+# kb/decision_tables/defense_evasion.yaml — SKELETON, UNSIGNED.
+# DRAFT 14/11/2026 — agent-drafted (DEC-216, mapping v3.5), not reviewed.
+# ATT&CK Defense Evasion; T1220, T1222.001, T1140, T1070.004, T1620, T1036.003, T1564.004.
+# Trial evidence: 370 alerts: 110665 ×152 (level 8), 112519 ×50 (8), 110753 ×49 (3), 112466 ×34 (5), 110810 ×25 (8), 110915 ×22 (8), 92021 ×11 (3), 112520 ×6 (8); 6 other rules ×21, unspecified.
+# No gold alert carries this category: implemented, not measured; no fold measured.
+# No false_positive rule: facts cannot see command, path, parent, task action or intent.
+# Routine and attack branches require playbook §3/§4; low severity or clean IoC cannot separate them.
+# Context comes from SOAR enrichment; skipped is not clean (DEC-208).
+# apply_table evaluates first match in file order; differing actions below are disjoint.
+# Unsigned tables are absent to the gate: decision_table_unreviewed:defense_evasion; step 4 table_unreviewed.
+category: defense_evasion
+playbook: defense_evasion_v1
+reviewed_by: null
+reviewed_at: null
+rules:
+  # evidence: playbook defense_evasion.md:27; §3 370 alerts: 110665 ×152 (level 8), 112519 ×50 (8), 110753 ×49 (3), 112466 ×34 (5), 110810 ×25 (8), 110915 ×22 (8), 92021 ×11 (3), 112520 ×6 (8); 6 other rules ×21, unspecified; bad-IoC policy, not a measured verdict.
+  - id: dfe-1
+    if: {ioc_reputation: [malicious, suspicious]}
+    then: escalate
+  # evidence: playbook defense_evasion.md:28; §3 370 alerts: 110665 ×152 (level 8), 112519 ×50 (8), 110753 ×49 (3), 112466 ×34 (5), 110810 ×25 (8), 110915 ×22 (8), 92021 ×11 (3), 112520 ×6 (8); 6 other rules ×21, unspecified; DEC-053 critical band, including unseen future rules.
+  - id: dfe-2
+    if: {rule_level_gte: 12}
+    then: escalate
+  # evidence: playbook defense_evasion.md:22 and :35; §3 370 alerts: 110665 ×152 (level 8), 112519 ×50 (8), 110753 ×49 (3), 112466 ×34 (5), 110810 ×25 (8), 110915 ×22 (8), 92021 ×11 (3), 112520 ×6 (8); 6 other rules ×21, unspecified; content needed to distinguish routine/attack, so review below critical without bad IoC.
+  - id: dfe-3
+    if: {rule_level_lt: 12, ioc_reputation: [not_found, clean, skipped]}
+    then: needs_review
