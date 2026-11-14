@@ -256,8 +256,15 @@ def test_snapshot_is_the_base_parser_at_mapping_version_v3_2():
 def test_linux_document_parses_exactly_as_the_base_parser_did(name, monkeypatch):
     doc, limit = _CORPUS[name]
     monkeypatch.setenv("RAW_LOG_MAX_BYTES", str(limit))
+    # v3.5 (DEC-216): the snapshot is the base parser's; tier 6 is switched off for the exact
+    # comparison and checked on its own below — it may only fill a category the base left unknown.
+    with_tier_6 = parse_result_json(parse_wazuh_alert(copy.deepcopy(doc)))
+    monkeypatch.setattr(category, "EXTENDED_TECHNIQUE_TO_CATEGORY", {})
     got = parse_result_json(parse_wazuh_alert(copy.deepcopy(doc)))
     want = _snapshot()["cases"][name]
+    if want["alert"] is not None and want["alert"]["category"] != "unknown":
+        assert with_tier_6["alert"]["category"] == want["alert"]["category"]
+        assert with_tier_6["alert"]["resolved_by"] == want["alert"]["resolved_by"]
 
     assert (got["envelope"], got["rejection"]) == (want["envelope"], want["rejection"])
     if want["alert"] is None:

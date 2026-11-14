@@ -27,7 +27,8 @@ TAGS_YAML = Path(tags_module.__file__).with_name("tags.yaml")
 def test_the_vocabulary_is_short_and_made_of_snake_case_words() -> None:
     vocabulary = load_tags()
     assert isinstance(vocabulary, frozenset)
-    assert 15 <= len(vocabulary) <= 25
+    # v3.5 (DEC-216): 24 -> 32 with one behaviour tag for each of the eight new categories
+    assert 15 <= len(vocabulary) <= 35
     for tag in vocabulary:
         assert re.fullmatch(r"[a-z][a-z0-9_]{1,39}", tag), tag
 
@@ -56,6 +57,15 @@ CATEGORY_TAG = {
     "suspicious_login": "successful_login",
     "recon": "reconnaissance",
     "policy_violation": "policy_violation",
+    # v3.5 (DEC-216): tier 6's eight categories, each its own tag
+    "impact": "impact",
+    "collection": "collection",
+    "lateral_movement": "lateral_movement",
+    "persistence": "persistence",
+    "defense_evasion": "defense_evasion",
+    "execution": "execution",
+    "initial_access": "initial_access",
+    "resource_development": "resource_development",
 }
 
 

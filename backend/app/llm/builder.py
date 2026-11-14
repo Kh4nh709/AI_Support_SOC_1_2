@@ -57,17 +57,27 @@ class Severity(Enum):
 
 class Category(Enum):
     # Order matches the category-resolver's priority tuple (checked by test, never imported here).
+    # v3.5 (DEC-216): the eight values tier 6 of the resolver can emit. Without them `Category(...)`
+    # raises on such an alert and ① fails as a permanent job error instead of answering.
     RANSOMWARE = "ransomware"
+    IMPACT = "impact"  # v3.5
     MALWARE = "malware"
     C2_BEACON = "c2_beacon"
     DATA_EXFILTRATION = "data_exfiltration"
+    COLLECTION = "collection"  # v3.5
+    LATERAL_MOVEMENT = "lateral_movement"  # v3.5
     PRIVILEGE_ESCALATION = "privilege_escalation"
     CREDENTIAL_ACCESS = "credential_access"  # LSASS / OS credential dumping, MITRE T1003 (S1)
+    PERSISTENCE = "persistence"  # v3.5
+    DEFENSE_EVASION = "defense_evasion"  # v3.5
+    EXECUTION = "execution"  # v3.5
     SSH_BRUTE_FORCE = "ssh_brute_force"
     BRUTE_FORCE = "brute_force"  # Windows credential attacks, MITRE T1110 (P9-T02)
     WEB_ATTACK = "web_attack"
+    INITIAL_ACCESS = "initial_access"  # v3.5
     SUSPICIOUS_LOGIN = "suspicious_login"
     RECON = "recon"
+    RESOURCE_DEVELOPMENT = "resource_development"  # v3.5
     POLICY_VIOLATION = "policy_violation"
     UNKNOWN = "unknown"
 

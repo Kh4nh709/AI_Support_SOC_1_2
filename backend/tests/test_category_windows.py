@@ -39,18 +39,20 @@ SHARED_PLAYBOOKS = ("suspicious_login", "malware", "ransomware", "c2_beacon", "d
 WINDOWS_SECTION = "## 7 · Windows (added 29/09, P9-T02, not reviewed)"
 
 #: What each Windows-tier id resolves to on any decoder other than `windows_eventchannel`:
-#: the shared tiers' answer at v3.2, which the Windows tiers must leave untouched.
+#: the shared tiers' answer at v3.2, which the Windows tiers must leave untouched. v3.5
+#: (DEC-216): the ids tiers 1-5 leave `unknown` now reach tier 6 — never the Windows table,
+#: which `T1485` shows (Windows: `ransomware`; tier 6: `impact`).
 SHARED_TIER_ANSWER: dict[str, tuple[str, str]] = {
     "T1110": ("ssh_brute_force", "mitre"),
     "T1110.001": ("ssh_brute_force", "mitre"),
     "T1110.003": ("ssh_brute_force", "mitre_parent"),
-    "T1490": ("unknown", "none"),
-    "T1485": ("unknown", "none"),
+    "T1490": ("ransomware", "mitre"),  # tier 6
+    "T1485": ("impact", "mitre"),  # tier 6
     "T1071.001": ("c2_beacon", "mitre_parent"),
-    "T1573": ("unknown", "none"),
-    "T1048": ("unknown", "none"),
-    "T1567": ("unknown", "none"),
-    "T1059.001": ("unknown", "none"),
+    "T1573": ("c2_beacon", "mitre"),  # tier 6
+    "T1048": ("data_exfiltration", "mitre"),  # tier 6
+    "T1567": ("data_exfiltration", "mitre"),  # tier 6
+    "T1059.001": ("malware", "mitre_parent"),  # tier 6, through T1059
 }
 
 
@@ -259,7 +261,14 @@ def test_windows_tier_never_raises(mitre_ids, groups, dst_port):
 
 def test_priority_places_brute_force_directly_after_ssh_brute_force():
     assert PRIORITY.index("brute_force") == PRIORITY.index("ssh_brute_force") + 1
-    assert tuple(c for c in PRIORITY if c not in ("brute_force", "credential_access")) == (
+    # v3.5 (DEC-216) adds eight categories between these; the original eleven keep their order
+    new = {
+        "impact", "collection", "lateral_movement", "persistence", "defense_evasion",
+        "execution", "initial_access", "resource_development",
+    }  # fmt: skip
+    assert tuple(
+        c for c in PRIORITY if c not in ("brute_force", "credential_access") and c not in new
+    ) == (
         "ransomware",
         "malware",
         "c2_beacon",
@@ -306,7 +315,7 @@ def test_windows_multiple_logon_failures_resolve_brute_force():
     """60204-shaped: T1110 + `authentication_failures` — W1."""
     alert = parse_wazuh_alert(_win("4625_multiple_logon_failures")).alert
     assert (alert.category, alert.resolved_by) == ("brute_force", "mitre")
-    assert alert.mapping_version == "v3.4"
+    assert alert.mapping_version == "v3.5"
 
 
 def test_windows_logon_success_resolves_suspicious_login():

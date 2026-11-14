@@ -17,8 +17,10 @@ import re
 from pathlib import Path
 
 import pytest
+from app.ingest import category as category_module
 from app.ingest.category import (
     DECODER_TO_CATEGORY,
+    EXTENDED_TECHNIQUE_TO_CATEGORY,
     GROUP_TO_CATEGORY,
     MAPPING_VERSION,
     PORT_TO_CATEGORY,
@@ -43,6 +45,20 @@ RESOLVED_BY_SET = {"mitre", "mitre_parent", "rule_groups", "decoder", "dst_port"
 # appearing anywhere in `category.py`, code or comments.
 DROPPED_TECHNIQUE_IDS = ("T1566", "T1136", "T1098", "T1543", "T1053", "T1059", "T1059.001")
 DROPPED_PORT = 3389
+
+WIN = "windows_eventchannel"
+
+#: v3.5 (DEC-216): the categories only tier 6 can emit.
+NEW_CATEGORIES = (
+    "impact",
+    "collection",
+    "lateral_movement",
+    "persistence",
+    "defense_evasion",
+    "execution",
+    "initial_access",
+    "resource_development",
+)
 
 
 # --------------------------------------------------------------------------
@@ -143,11 +159,128 @@ def test_dropped_port_mapping_falls_through_to_unknown():
     assert r.categories == ()
 
 
+#: v3.5 (DEC-216): tiers 1-5 still have no key for the dropped ids; tier 6 maps each of them
+#: onto one of the eight new categories (the parent step for T1059.001).
+DROPPED_ID_TIER_6_ANSWER = {
+    "T1566": ("initial_access", "mitre"),
+    "T1136": ("persistence", "mitre"),
+    "T1098": ("persistence", "mitre"),
+    "T1543": ("persistence", "mitre"),
+    "T1053": ("persistence", "mitre"),
+    "T1059": ("malware", "mitre"),
+    "T1059.001": ("malware", "mitre_parent"),
+}
+
+
 @pytest.mark.parametrize("technique_id", DROPPED_TECHNIQUE_IDS)
-def test_dropped_technique_ids_no_longer_match_any_tier(technique_id):
+def test_dropped_technique_ids_match_no_tier_above_tier_6(technique_id):
+    for table in (TECHNIQUE_TO_CATEGORY, GROUP_TO_CATEGORY, DECODER_TO_CATEGORY):
+        assert technique_id not in table and technique_id.split(".")[0] not in table
     r = resolve([technique_id], [], None, 0)
-    assert r.category == "unknown"
-    assert r.resolved_by == "none"
+    assert (r.category, r.resolved_by) == DROPPED_ID_TIER_6_ANSWER[technique_id]
+
+
+# --------------------------------------------------------------------------
+# tier 6 (v3.5, DEC-216) — the fallback: it can only turn a v3.4 `unknown` into a category
+# --------------------------------------------------------------------------
+
+
+def _without_tier_6(monkeypatch, *signals):
+    monkeypatch.setattr(category_module, "EXTENDED_TECHNIQUE_TO_CATEGORY", {})
+    try:
+        return resolve(*signals)
+    finally:
+        monkeypatch.undo()
+
+
+def _corpus():
+    """Every technique key of every table alone, and each extended key beside each key of the
+    tables above it, on a Linux, a Windows and no decoder, with and without a login group."""
+    old_keys = sorted(set(TECHNIQUE_TO_CATEGORY) | set(WINDOWS_TECHNIQUE_TO_CATEGORY))
+    extended = sorted(EXTENDED_TECHNIQUE_TO_CATEGORY)
+    sets = [[k] for k in old_keys + extended]
+    sets += [[e, o] for e in extended[::7] for o in old_keys]  # every 7th extended id: ~1,000 pairs
+    sets += [[e, f"{o}.999"] for e in extended[::11] for o in old_keys if "." not in o]
+    for mitre in sets:
+        for decoder in (None, "sshd", WIN):
+            for groups in ([], ["authentication_failed"], ["virus"]):
+                yield mitre, groups, decoder
+
+
+def test_tier_6_never_changes_an_alert_tiers_above_it_resolve(monkeypatch):
+    checked = changed = rescued = 0
+    for mitre, groups, decoder in _corpus():
+        before = _without_tier_6(monkeypatch, mitre, groups, decoder, 0)
+        after = resolve(mitre, groups, decoder, 0)
+        if before.category != "unknown":
+            checked += 1
+            changed += after != before
+        elif after.category != "unknown":
+            rescued += 1
+    assert checked > 1000 and rescued > 300  # the corpus exercises both sides
+    assert changed == 0
+
+
+@pytest.mark.parametrize(
+    "mitre_ids,groups,expected",
+    [
+        # the regressions an ATT&CK map in tier 1 would cause, pinned on Windows (WIN)
+        (["T1047", "T1204.002", "T1218.010"], [], ("malware", "mitre_parent")),  # rule 111466
+        (["T1531"], ["windows", "authentication_failed"], ("brute_force", "rule_groups")),  # 4625
+        (["T1078", "T1190", "T1133"], ["authentication_failed"], ("brute_force", "rule_groups")),
+        (["T1059.001", "T1036"], [], ("malware", "mitre")),
+        (["T1485"], [], ("ransomware", "mitre")),  # W1 keeps it; tier 6 would say impact
+        # v3.4 `unknown`s that tier 6 now files
+        (["T1059"], [], ("malware", "mitre")),  # rule 112514, Elevated System Shell
+        (["T1197"], [], ("persistence", "mitre")),  # rule 112438, BITS
+        (["T1033", "T1087.001"], [], ("recon", "mitre")),  # rule 111921
+        (["T1087.002"], [], ("recon", "mitre_parent")),  # rule 111586, AdFind
+        (["T1053.005"], [], ("persistence", "mitre_parent")),  # rules 112533 / 92154
+        (["T1220"], [], ("defense_evasion", "mitre")),  # rule 110665
+        (["T1550.002"], [], ("lateral_movement", "mitre_parent")),  # rule 110243, NTLMv1
+    ],
+)
+def test_tier_6_on_windows_alert_shapes_seen_on_the_trial(mitre_ids, groups, expected):
+    r = resolve(mitre_ids, groups, WIN, 0)
+    assert (r.category, r.resolved_by) == expected
+
+
+def test_tier_6_collects_and_sorts_by_priority_like_every_tier():
+    # T1055 -> privilege_escalation, T1036 -> defense_evasion: neither is in tiers 1-5
+    r = resolve(["T1036.005", "T1055", "T1055.012"], [], WIN, 0)
+    assert (r.category, r.categories, r.resolved_by) == (
+        "privilege_escalation",
+        ("privilege_escalation",),
+        "mitre",
+    )
+    r = resolve(["T1036", "T1055"], [], WIN, 0)
+    assert r.categories == ("privilege_escalation", "defense_evasion")
+
+
+def test_tier_6_exact_step_wins_over_its_parent_step_for_the_whole_call():
+    # T1036 is an exact extended key; T1055.012's parent would add privilege_escalation
+    r = resolve(["T1036", "T1055.012"], [], WIN, 0)
+    assert (r.category, r.resolved_by) == ("defense_evasion", "mitre")
+
+
+def test_tier_6_does_not_run_when_the_port_tier_answers():
+    r = resolve(["T1197"], [], "pam", 443)
+    assert (r.category, r.resolved_by) == ("web_attack", "dst_port")
+
+
+def test_priority_keeps_the_twelve_in_their_v34_order_and_places_the_eight():
+    v34 = (
+        "ransomware", "malware", "c2_beacon", "data_exfiltration", "privilege_escalation",
+        "credential_access", "ssh_brute_force", "brute_force", "web_attack", "suspicious_login",
+        "recon", "policy_violation", "unknown",
+    )  # fmt: skip
+    assert tuple(c for c in PRIORITY if c in v34) == v34
+    assert set(PRIORITY) - set(v34) == set(NEW_CATEGORIES)
+    assert len(PRIORITY) == len(set(PRIORITY)) == 21
+    assert PRIORITY.index("impact") == PRIORITY.index("ransomware") + 1
+    assert PRIORITY.index("malware") < PRIORITY.index("defense_evasion")
+    assert PRIORITY.index("malware") < PRIORITY.index("execution")
+    assert PRIORITY[-2:] == ("policy_violation", "unknown")
 
 
 # --------------------------------------------------------------------------
@@ -188,13 +321,22 @@ def test_resolve_is_deterministic_r3():
 
 
 def test_r5_every_mapped_value_has_a_real_playbook():
+    # v3.5 (DEC-216): tier 6 and the Windows table are bound by R5 like the shared tables. Red until
+    # the eight new playbooks land (docs/plan/prompts/kb-drafter-run-2026-11-14.md).
     produced = (
         set(TECHNIQUE_TO_CATEGORY.values())
         | set(GROUP_TO_CATEGORY.values())
         | set(DECODER_TO_CATEGORY.values())
         | set(PORT_TO_CATEGORY.values())
+        | set(WINDOWS_TECHNIQUE_TO_CATEGORY.values())
+        | set(EXTENDED_TECHNIQUE_TO_CATEGORY.values())
     )
     assert produced - PLAYBOOKS == set()
+
+
+def test_tier_6_emits_exactly_the_old_categories_plus_the_eight():
+    assert set(EXTENDED_TECHNIQUE_TO_CATEGORY.values()) <= set(PRIORITY) - {"unknown"}
+    assert set(NEW_CATEGORIES) <= set(EXTENDED_TECHNIQUE_TO_CATEGORY.values())
 
 
 def test_priority_table_is_covered_by_playbooks_plus_unknown():
@@ -205,9 +347,9 @@ def test_ten_playbooks_exist_on_disk_matching_r5s_premise():
     # If this fails, kb/playbooks/ changed shape and the two tests above are
     # trivially vacuous (an empty PLAYBOOKS set would pass both for free).
     # P9-T02 (DEC-149) adds an eleventh, `brute_force`; S1 a twelfth, `credential_access`;
-    # the ten are named, not only counted.
-    assert len(PLAYBOOKS) == 12
-    assert PLAYBOOKS - {"brute_force", "credential_access"} == {
+    # v3.5 (DEC-216) the eight of tier 6; the ten are named, not only counted.
+    assert len(PLAYBOOKS) == 20
+    assert PLAYBOOKS - {"brute_force", "credential_access", *NEW_CATEGORIES} == {
         "ransomware",
         "malware",
         "c2_beacon",
@@ -292,7 +434,14 @@ def test_mapping_version_is_pinned_to_a_hash_of_the_four_tables():
     )
     windows_digest = hashlib.sha256(windows.encode("utf-8")).hexdigest()
     assert windows_digest == "c24dc7197618f6a972942ed8f182323ed9f3ba555136961f5784be4e6c392141"
-    assert MAPPING_VERSION == "v3.4"
+    # v3.5 (DEC-216): the two digests above are v3.4's, unchanged on purpose — tier 6 is a new
+    # table, and PRIORITY gained eight names; those two are pinned here.
+    extended = json.dumps(
+        {"extended": EXTENDED_TECHNIQUE_TO_CATEGORY, "priority": list(PRIORITY)}, sort_keys=True
+    )
+    extended_digest = hashlib.sha256(extended.encode("utf-8")).hexdigest()
+    assert extended_digest == "a4bfc7fc4219f292f8625e8a69ad7f75fe7d3d5618b559c8c0d72c40c373066f"
+    assert MAPPING_VERSION == "v3.5"
 
 
 # --------------------------------------------------------------------------
@@ -539,8 +688,6 @@ def test_rule_40112_multiple_failures_then_success_ssh_brute_force_outranks_susp
 # S1 (v3.4) — discovery techniques reach `recon`; LSASS credential theft gets its own
 # category, `credential_access`, ranked right after `privilege_escalation`
 # --------------------------------------------------------------------------
-
-WIN = "windows_eventchannel"
 
 
 @pytest.mark.parametrize("technique_id", ["T1018", "T1016", "T1482"])

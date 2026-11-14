@@ -449,9 +449,13 @@ def test_brute_force_table_is_unreviewed():
     assert table.reviewed_by is None
     assert table.reviewed_at is None
     assert table.reviewed is False
-    # Every category is one of the ten signed on 28/09 or one of the two unsigned ones
-    # (`brute_force`, `credential_access`) — nothing else.
-    assert set(CATEGORIES) == set(SIGNED_CATEGORIES) | {"brute_force", "credential_access"}
+    # Every category is one of the ten signed on 28/09 or one of the unsigned ones
+    # (`brute_force`, `credential_access`, and v3.5's eight, DEC-216) — nothing else.
+    unsigned = {
+        "brute_force", "credential_access", "impact", "collection", "lateral_movement",
+        "persistence", "defense_evasion", "execution", "initial_access", "resource_development",
+    }  # fmt: skip
+    assert set(CATEGORIES) == set(SIGNED_CATEGORIES) | unsigned
 
 
 def test_credential_access_table_is_unreviewed():

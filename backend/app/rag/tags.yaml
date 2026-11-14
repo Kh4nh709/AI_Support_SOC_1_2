@@ -20,6 +20,15 @@ tags:
   data_exfiltration: Data leaving the network to an outside destination.
   privilege_escalation: An account or process gaining rights it did not have.
   credential_access: Credentials read from memory or the OS store, such as LSASS dumping (T1003).
+  # v3.5 (DEC-216): the eight categories of the resolver's tier 6, one behaviour tag each
+  impact: Damage or disruption of data or service, such as data destruction or a stopped service.
+  collection: Data gathered on a host before it leaves, such as staging, archiving or screen capture.
+  lateral_movement: Movement from one internal host to another, such as remote services or pass-the-hash.
+  persistence: A foothold that survives a reboot, such as a new service, scheduled task or run key.
+  defense_evasion: Hiding from or disabling defences, such as masquerading, injection or proxy execution.
+  execution: Code run through an interpreter, a system tool or an API, such as WMI or a script host.
+  initial_access: The first way in, such as a phishing attachment or an exposed remote service.
+  resource_development: Attacker preparation outside the target, such as acquired infrastructure or tools.
   web_attack: An attack on a web application, such as SQL injection.
   policy_violation: Allowed by the system but against the organisation's rules.
   test_activity: A known harmless test, such as the EICAR file or a lab exercise.
