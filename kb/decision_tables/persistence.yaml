@@ -1,0 +1,27 @@
+# kb/decision_tables/persistence.yaml — SKELETON, UNSIGNED.
+# DRAFT 14/11/2026 — agent-drafted (DEC-216, mapping v3.5), not reviewed.
+# ATT&CK Persistence; T1197, T1053.005, T1574.001.
+# Trial evidence: 1,119 alerts: 112438 ×496 (level 5), 112533 ×201 (5), 92154 ×124 (4), 111810 ×56 (5), 111828 ×56 (12), 112430 ×50 (5), 110798 ×41 (8), 110437 ×22 (12); 11 other rules ×73, unspecified.
+# No gold alert carries this category: implemented, not measured; no fold measured.
+# No false_positive rule: facts cannot see command, path, parent, task action or intent.
+# Routine and attack branches require playbook §3/§4; low severity or clean IoC cannot separate them.
+# Context comes from SOAR enrichment; skipped is not clean (DEC-208).
+# apply_table evaluates first match in file order; differing actions below are disjoint.
+# Unsigned tables are absent to the gate: decision_table_unreviewed:persistence; step 4 table_unreviewed.
+category: persistence
+playbook: persistence_v1
+reviewed_by: null
+reviewed_at: null
+rules:
+  # evidence: playbook persistence.md:27; §3 1,119 alerts: 112438 ×496 (level 5), 112533 ×201 (5), 92154 ×124 (4), 111810 ×56 (5), 111828 ×56 (12), 112430 ×50 (5), 110798 ×41 (8), 110437 ×22 (12); 11 other rules ×73, unspecified; bad-IoC policy, not a measured verdict.
+  - id: per-1
+    if: {ioc_reputation: [malicious, suspicious]}
+    then: escalate
+  # evidence: playbook persistence.md:28; §3 1,119 alerts: 112438 ×496 (level 5), 112533 ×201 (5), 92154 ×124 (4), 111810 ×56 (5), 111828 ×56 (12), 112430 ×50 (5), 110798 ×41 (8), 110437 ×22 (12); 11 other rules ×73, unspecified; DEC-053 critical band, including unseen future rules.
+  - id: per-2
+    if: {rule_level_gte: 12}
+    then: escalate
+  # evidence: playbook persistence.md:22 and :35; §3 1,119 alerts: 112438 ×496 (level 5), 112533 ×201 (5), 92154 ×124 (4), 111810 ×56 (5), 111828 ×56 (12), 112430 ×50 (5), 110798 ×41 (8), 110437 ×22 (12); 11 other rules ×73, unspecified; content needed to distinguish routine/attack, so review below critical without bad IoC.
+  - id: per-3
+    if: {rule_level_lt: 12, ioc_reputation: [not_found, clean, skipped]}
+    then: needs_review
