@@ -1,0 +1,27 @@
+# kb/decision_tables/execution.yaml — SKELETON, UNSIGNED.
+# DRAFT 14/11/2026 — agent-drafted (DEC-216, mapping v3.5), not reviewed.
+# ATT&CK Execution; tier 6 T1047, T1106, T1127, T1129, T1203, T1559, T1569, T1609, T1610, T1648, T1651; các id mới/cũ theo category.py.
+# Trial evidence: 0 alerts (no trial alert — ATT&CK only); lab-scenarios.md:476-527 describes malware execution, not an execution-labelled measurement.
+# No gold alert carries this category: implemented, not measured; no fold measured.
+# No false_positive rule: facts cannot see command, path, parent, task action or intent.
+# Routine and attack branches require playbook §3/§4; low severity or clean IoC cannot separate them.
+# Context comes from SOAR enrichment; skipped is not clean (DEC-208).
+# apply_table evaluates first match in file order; differing actions below are disjoint.
+# Unsigned tables are absent to the gate: decision_table_unreviewed:execution; step 4 table_unreviewed.
+category: execution
+playbook: execution_v1
+reviewed_by: null
+reviewed_at: null
+rules:
+  # evidence: playbook execution.md:27; §3 0 alerts (no trial alert — ATT&CK only); lab-scenarios.md:476-527 describes malware execution, not an execution-labelled measurement; bad-IoC policy, not a measured verdict.
+  - id: exe-1
+    if: {ioc_reputation: [malicious, suspicious]}
+    then: escalate
+  # evidence: playbook execution.md:28; §3 0 alerts (no trial alert — ATT&CK only); lab-scenarios.md:476-527 describes malware execution, not an execution-labelled measurement; DEC-053 critical band, including unseen future rules.
+  - id: exe-2
+    if: {rule_level_gte: 12}
+    then: escalate
+  # evidence: playbook execution.md:22 and :35; §3 0 alerts (no trial alert — ATT&CK only); lab-scenarios.md:476-527 describes malware execution, not an execution-labelled measurement; content needed to distinguish routine/attack, so review below critical without bad IoC.
+  - id: exe-3
+    if: {rule_level_lt: 12, ioc_reputation: [not_found, clean, skipped]}
+    then: needs_review
