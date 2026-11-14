@@ -1,0 +1,27 @@
+# kb/decision_tables/initial_access.yaml — SKELETON, UNSIGNED.
+# DRAFT 14/11/2026 — agent-drafted (DEC-216, mapping v3.5), not reviewed.
+# ATT&CK Initial Access; T1566.001; tier 6 còn T1133, T1195, T1199, T1200 và các id map tương ứng.
+# Trial evidence: 19 alerts: 110464 ×19 (level 5).
+# No gold alert carries this category: implemented, not measured; no fold measured.
+# No false_positive rule: facts cannot see command, path, parent, task action or intent.
+# Routine and attack branches require playbook §3/§4; low severity or clean IoC cannot separate them.
+# Context comes from SOAR enrichment; skipped is not clean (DEC-208).
+# apply_table evaluates first match in file order; differing actions below are disjoint.
+# Unsigned tables are absent to the gate: decision_table_unreviewed:initial_access; step 4 table_unreviewed.
+category: initial_access
+playbook: initial_access_v1
+reviewed_by: null
+reviewed_at: null
+rules:
+  # evidence: playbook initial_access.md:27; §3 19 alerts: 110464 ×19 (level 5); bad-IoC policy, not a measured verdict.
+  - id: ina-1
+    if: {ioc_reputation: [malicious, suspicious]}
+    then: escalate
+  # evidence: playbook initial_access.md:28; §3 19 alerts: 110464 ×19 (level 5); DEC-053 critical band, including unseen future rules.
+  - id: ina-2
+    if: {rule_level_gte: 12}
+    then: escalate
+  # evidence: playbook initial_access.md:22 and :35; §3 19 alerts: 110464 ×19 (level 5); content needed to distinguish routine/attack, so review below critical without bad IoC.
+  - id: ina-3
+    if: {rule_level_lt: 12, ioc_reputation: [not_found, clean, skipped]}
+    then: needs_review
