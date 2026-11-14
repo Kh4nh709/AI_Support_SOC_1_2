@@ -61,6 +61,16 @@ SIGNED_TABLES_SHA256 = {
     "ssh_brute_force": "d9de975796f340293c9cb24ee69ef334a79cf0e862100bf744863cd111c3006a",
     "suspicious_login": "a686d266286be81c12061b51f0c5f48cb9ee5363a9ca5276c8861ea0db287652",
     "web_attack": "707bf1a09671fc2129ff25fbdd3447d01088d1e460be12554f314d6a49106f2d",
+    # DEC-216 (v3.5): the eight agent-drafted, UNSIGNED tables of kb/v35-playbooks (ca1d428), as
+    # drafted; the sitting that signs one updates its digest here with it.
+    "collection": "feed0c5d347f4dfe449a6a97d75e4c476145c94d8a9f5e039c7c0ad8458865f2",
+    "defense_evasion": "c179e37dfcc5220aec0be50b2f81baefbb7ec424dda54d2e6d81a152f5d2b19f",
+    "execution": "93a1bf888fd1a82f54f8a364c664864e60b21f5ee78e6404591af50f5d2cbd91",
+    "impact": "15c4fda8fbbd2ed17ca30f2141a795a790497f1389622d7ebbfd2561d32c3161",
+    "initial_access": "3980d7d674012d71e469f1f23e426a9cae3af0cf5e5047e9ad9917b36919a73d",
+    "lateral_movement": "0d58d088e5db69cd6aa314b5267c4b5b4269acc3dae44d531ca42993334fd373",
+    "persistence": "9b8c845969915f56b9adf215e8743d4a0f042b22f9b8d8671e01ec3f8a5a01b6",
+    "resource_development": "698f61805b13f4190ca6f22e5fe8feb1271a3d274933e62558dcad17ff119226",
 }
 
 
