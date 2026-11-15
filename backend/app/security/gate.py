@@ -15,12 +15,14 @@ still recorded (`hallucination_flag`, `mismatched_fields`, `dropped_reasons`, `m
 check forced the verdict to `needs_review` (`forced_by`, `gate_result` version 1); those documents stay in
 the database and the readers still read them (`llm.verdicts`).
 
-DEC-219 (RR-T1): the one step that can change the verdict. `step3r_rag_rule` runs after step 3 and before step
-4: when the alert's best RAG match is below the configured threshold and the model answered `true_positive`, the
-verdict becomes `false_positive` (`forced_by` gains `rag_rule`). It is a deterministic rule, not a failed check:
-it never touches `flagged_by`. `proposed_verdict` stays the model's own answer, which the verifier is sent and
-step 6 compares with; `verdict` is what ① ends with. `security` imports only `infra`, so the rule is handed two
-plain integers (`best_pct | None`, `threshold`), computed by `tier1/triage.py`.
+DEC-219 (RR-T1, as amended): the one step that can change the verdict. `step3r_rag_rule` runs after step 3 and
+before step 4: when the alert's best RAG match is below the configured threshold, `false_positive` is ①'s
+DEFAULT answer, so a model `true_positive` becomes `false_positive`. It is not a gate force and not a failed
+check: `forced` stays false, `forced_by` stays empty and `flagged_by` is not touched; `steps["3r"]` and
+`gate_result.rag_rule` are the record. `proposed_verdict` stays the model's own answer (the stored record of
+it), which the verifier is sent and step 6 compares with; `verdict` is what ① ends with. `security` imports
+only `infra`, so the rule is handed two plain integers (`best_pct | None`, `threshold`), computed by
+`tier1/triage.py`.
 """
 
 from __future__ import annotations
@@ -65,9 +67,6 @@ class GateState:
     #: DEC-218: the first call's schema-validator messages when step 1 was `repaired`, else `[]`. They may name a
     #: key the model invented, so they are for `gate_result` (the database) only and never for a prompt.
     step1_errors: list[str] = dataclass_field(default_factory=list)
-    #: DEC-219: what replaced the model's verdict (`["rag_rule"]`), `[]` when nothing did. Not `flagged_by`: a
-    #: failed check flags, a rule forces.
-    forced_by: list[str] = dataclass_field(default_factory=list)
     #: DEC-219: `{threshold, best_pct, applied, changed}`, what `step3r_rag_rule` was given and found. Before the
     #: step runs (and when no caller runs it) it is the switch-off value, so every document carries the key.
     rag_rule: dict[str, Any] = dataclass_field(
@@ -183,18 +182,17 @@ def step3_quotes(state: GateState) -> None:
 def step3r_rag_rule(state: GateState, best_pct: int | None, threshold: int) -> None:
     """The RAG low-match rule (DEC-219). It APPLIES when `threshold > 0`, `best_pct` is a number and
     `best_pct < threshold` (equal does not apply: 80 is not below 80). When it applies and the model answered
-    `true_positive`, ①'s verdict becomes `false_positive`, `forced_by` gains `rag_rule` and the step is
-    `changed`; when it applies and the model already answered `false_positive` the step is `applied` and
+    `true_positive`, ①'s verdict becomes `false_positive` (its default answer below the threshold) and the step
+    is `changed`; when it applies and the model already answered `false_positive` the step is `applied` and
     nothing else changes; otherwise `n/a`. The rule reads the model's own answer (`proposed_verdict`), not the
     verdict so far, so a second call gives the same state. It runs wherever step 3 runs, and step 4 then
-    evaluates the verdict it finds. It is not a failed check: `flagged_by`, the reasons and `proposed_verdict`
-    are not touched."""
+    evaluates the verdict it finds. It is neither a force (`forced` and `forced_by` are not touched: the
+    record is `steps["3r"]` and `rag_rule`) nor a failed check (`flagged_by`, the reasons and `proposed_verdict`
+    are not touched)."""
     applied = threshold > 0 and best_pct is not None and best_pct < threshold
     changed = applied and state.proposed_verdict == "true_positive"
     if changed:
         state.verdict = "false_positive"
-        if "rag_rule" not in state.forced_by:
-            state.forced_by.append("rag_rule")
     state.rag_rule = {
         "threshold": threshold,
         "best_pct": best_pct,
@@ -320,17 +318,18 @@ def gate_result(
     not affected) is what the first call got wrong when the repair round fixed it, else `[]`; it may name a key
     the model invented and is never read into a prompt.
 
-    DEC-219 (still version 2, same reason): the one thing that can force is the RAG rule. `final_verdict` is
-    the verdict after it, `forced` is `proposed_verdict != final_verdict` (so true exactly when the rule changed
-    the verdict), `forced_by` is `["rag_rule"]` then and `[]` otherwise, and `rag_rule` is
-    `{threshold, best_pct, applied, changed}` on every document (the switch off: threshold 0, nothing applied).
-    `flagged_by` is not touched by the rule: it is not a failed check."""
+    DEC-219 (still version 2, same reason): `rag_rule` is `{threshold, best_pct, applied, changed}` on every
+    document (the switch off: threshold 0, nothing applied). `proposed_verdict` is the model's own answer, the
+    stored record of it; `final_verdict` is the verdict after the RAG rule (the rule's default answer below the
+    threshold), so the two differ exactly when `rag_rule.changed` is true. The rule is not a gate force:
+    `forced` stays false and `forced_by` stays empty on every new run, as since DEC-217. `flagged_by` is not
+    touched by the rule either: it is not a failed check."""
     return {
         "version": 2,
         "proposed_verdict": state.proposed_verdict,
         "final_verdict": state.verdict,
-        "forced": state.proposed_verdict != state.verdict,
-        "forced_by": list(state.forced_by),
+        "forced": False,
+        "forced_by": [],
         "flagged_by": list(state.flagged_by),
         "rag_rule": dict(state.rag_rule),
         "step1_errors": list(state.step1_errors),

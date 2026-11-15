@@ -4,10 +4,12 @@ no socket, `security` imports only `infra`, so the gate is handed two plain inte
 `threshold`) and everything else is the model's answer and crafted facts.
 
 The rule APPLIES when `threshold > 0`, `best_pct is not None` and `best_pct < threshold`. When it applies and
-the model answered `true_positive`, ①'s verdict becomes `false_positive` (`forced_by` gains `rag_rule`, the
-step is `changed`); when it applies and the model already answered `false_positive`, the step is `applied` and
-nothing else changes; otherwise `n/a`. It is the one step that can change the verdict (DEC-217: the checks of
-steps 2, 3, 4 and 6 only flag).
+the model answered `true_positive`, ①'s verdict becomes `false_positive` (its DEFAULT answer below the
+threshold; the step is `changed`); when it applies and the model already answered `false_positive`, the step
+is `applied` and nothing else changes; otherwise `n/a`. It is the one step that can change the verdict
+(DEC-217: the checks of steps 2, 3, 4 and 6 only flag). As amended by the Owner it is NOT a gate force:
+`forced` stays false and `forced_by` stays empty on every new run, whatever the rule did; `steps["3r"]` and
+`gate_result.rag_rule` are its record, and `proposed_verdict` keeps the model's own answer.
 """
 
 from __future__ import annotations
@@ -140,9 +142,9 @@ def test_the_truth_table(threshold, best_pct, answer, applied, changed, step, fi
         "changed": changed,
     }
     assert (doc["proposed_verdict"], doc["final_verdict"]) == (answer, final)
-    assert doc["forced"] is changed  # true exactly when the rule changed the verdict
-    assert doc["forced"] is (doc["proposed_verdict"] != doc["final_verdict"])
-    assert doc["forced_by"] == (["rag_rule"] if changed else [])
+    # the verdicts differ exactly when the rule changed it, and that is recorded by `rag_rule`, not by a force
+    assert (doc["proposed_verdict"] != doc["final_verdict"]) is changed
+    assert doc["forced"] is False and doc["forced_by"] == []  # in every case, as since DEC-217
     assert doc["flagged_by"] == []  # a rule is not a failed check: it flags nothing
     assert doc["version"] == 2
 
@@ -166,7 +168,7 @@ def test_step7_carries_the_verdict_after_the_rule_and_the_models_reasons(
 def test_best_pct_and_threshold_are_the_numbers_it_was_given():
     state = _through_step3r(TP, 62, 80)
     assert state.rag_rule == {"threshold": 80, "best_pct": 62, "applied": True, "changed": True}
-    assert state.forced_by == ["rag_rule"]
+    assert not hasattr(state, "forced_by")  # nothing is forced: the gate state has no such list
 
 
 def test_the_rule_does_not_change_the_reasons_that_leave_the_gate():
@@ -187,16 +189,15 @@ def test_the_rule_does_not_change_the_reasons_that_leave_the_gate():
 
 
 def test_calling_the_step_twice_gives_the_same_state():
-    """The rule reads the model's own answer, not the verdict it has so far: a second call changes nothing and
-    lists the rule once."""
+    """The rule reads the model's own answer, not the verdict it has so far: a second call changes nothing."""
     state = _through_step3r(TP, 62, 80)
-    before = (state.verdict, list(state.forced_by), dict(state.rag_rule), state.steps["3r"])
+    before = (state.verdict, dict(state.rag_rule), state.steps["3r"])
 
     gate.step3r_rag_rule(state, 62, 80)
 
-    assert (state.verdict, state.forced_by, state.rag_rule, state.steps["3r"]) == before
-    assert state.forced_by == ["rag_rule"] and state.steps["3r"] == "changed"
-    assert _document(state)["forced"] is True
+    assert (state.verdict, state.rag_rule, state.steps["3r"]) == before
+    assert state.steps["3r"] == "changed" and state.verdict == FP
+    assert _document(state)["proposed_verdict"] == TP
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +238,7 @@ def test_run_steps_1_to_5_without_the_rule_is_what_it_was_plus_an_n_a_step():
 
     assert list(state.steps) == ["1", "2", "3", "3r", "4", "5"]
     assert state.steps["3r"] == "n/a"
-    assert state.verdict == TP and state.forced_by == []
+    assert state.verdict == TP
     assert state.rag_rule == SWITCH_OFF
 
 
@@ -252,7 +253,9 @@ def test_the_restricted_mode_runs_the_rule_too_after_step_3():
 
     assert list(state.steps) == ["1", "2", "3", "3r", "7"]
     assert result["suggested_action"] == FP
-    assert _document(state)["forced_by"] == ["rag_rule"]
+    doc = _document(state)
+    assert (doc["proposed_verdict"], doc["final_verdict"]) == (TP, FP)
+    assert doc["forced"] is False and doc["forced_by"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +281,7 @@ def test_step4_evaluates_a_false_positive_the_rule_produced_like_one_the_model_g
     assert state.flagged_by == ["step4"]
     assert state.verdict == FP and state.proposed_verdict == TP
     doc = _document(state)
-    assert doc["forced"] is True and doc["forced_by"] == ["rag_rule"]  # a flag does not replace it
+    assert doc["forced"] is False and doc["forced_by"] == []  # a flag is not a force either
     assert doc["flagged_by"] == ["step4"]
 
 
@@ -408,7 +411,7 @@ def test_the_document_of_a_changed_run_says_everything_the_spec_lists():
     assert set(doc) == VERSION_2_KEYS | {"rag_rule"}
     assert doc["version"] == 2  # a reader that does not know the key is not affected
     assert doc["proposed_verdict"] == TP and doc["final_verdict"] == FP
-    assert doc["forced"] is True and doc["forced_by"] == ["rag_rule"]
+    assert doc["forced"] is False and doc["forced_by"] == []  # the rule is the record, not a force
     assert doc["rag_rule"] == {"threshold": 80, "best_pct": 62, "applied": True, "changed": True}
     assert doc["steps"]["3r"] == "changed"
     assert doc["flagged_by"] == ["step4"]  # step 4 flagged the false_positive the rule produced

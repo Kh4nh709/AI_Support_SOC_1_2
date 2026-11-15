@@ -672,6 +672,7 @@ def test_the_gate_flags_a_false_positive_with_no_reasons_at_step_3_and_keeps_the
         "1": "ok",
         "2": "ok",
         "3": "dropped:0",
+        "3r": "n/a",  # DEC-219: the RAG rule's step, `n/a` with the switch off (the runner's defaults)
         "4": "missing",
         "5": "findings:0",
     }
