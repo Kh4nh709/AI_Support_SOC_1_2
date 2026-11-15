@@ -575,11 +575,20 @@ def test_any_other_database_refusal_of_the_isolation_statement_is_permanent():
 
 
 @pytest.mark.db
-def test_the_stored_result_is_the_version_4_answer_and_the_override_is_what_it_was(db, monkeypatch):
+def test_the_stored_result_is_the_version_4_answer_and_the_override_is_what_it_was(
+    db, _test_database, monkeypatch
+):
     """DEC-221 (AP-T1): ② asks for `investigate_v4` and stores what it got - the timeline, the scope, the
     likelihood and the `{step, priority}` rows leave the job as the model wrote them - while the evidence
     check and the conclusion are what they were: a quote of the log verifies, the model's conclusion stands; a
-    quote that is in no log is rejected and the conclusion becomes `need_more_data`."""
+    quote that is in no log is rejected and the conclusion becomes `need_more_data`.
+
+    The two jobs are independent, and each needs the worker's own fresh transaction (a real commit between
+    them). A real commit here would leave the first job's `llm_runs` row in the shared session database for
+    good (the table is append-only; the autouse fixture above cannot delete it), and
+    `test_rag_lookup_job.py` and `test_schema_v3_016.py` / `_017.py` assume the table starts empty (hard rule 5,
+    the same one `test_nonce_differs_between_two_attempts_on_the_same_case` follows): so each job gets its own
+    connection and each is rolled back."""
     from app.llm import schemas
 
     _enable_llm(monkeypatch)
@@ -591,19 +600,29 @@ def test_the_stored_result_is_the_version_4_answer_and_the_override_is_what_it_w
     good["scope"] = {"hosts": ["h1"], "accounts": ["a1"]}
     fake = FakeLLM(responses=[good])
 
-    tier2_investigate.run_investigate_job(db, _job(case_id), adapter=fake)
-
-    ((_run, result, evidence_check, *_rest),) = _rows(db, case_id)
+    first = psycopg.connect(_test_database)
+    try:
+        tier2_investigate.run_investigate_job(first, _job(case_id), adapter=fake)
+        ((_run, result, evidence_check, *_rest),) = _rows(first, case_id)
+    finally:
+        first.rollback()
+        first.close()
     assert "## Schema investigate_v4" in fake.calls[0]["system"]
     assert schemas.validate("investigate_v4", result) == []
     assert result == good
     assert evidence_check["verified"] == [0] and evidence_check["rejected"] == []
     assert evidence_check["model_conclusion"] == "confirmed_incident"
 
-    db.commit()  # the next job starts a fresh transaction, as the worker's does
     held = _investigate_v4(evidence=[{"alert_id": head, "quote": "not in any log", "why": "w"}])
-    tier2_investigate.run_investigate_job(db, _job(case_id), adapter=FakeLLM(responses=[held]))
-    rows = _rows(db, case_id)
+    second = psycopg.connect(_test_database)
+    try:
+        tier2_investigate.run_investigate_job(
+            second, _job(case_id), adapter=FakeLLM(responses=[held])
+        )
+        rows = _rows(second, case_id)
+    finally:
+        second.rollback()
+        second.close()
     assert rows[-1][1]["suggested_conclusion"] == "need_more_data"
     assert rows[-1][1]["timeline"] == held["timeline"] and rows[-1][1]["scope"] == held["scope"]
     assert rows[-1][2]["original_conclusion"] == "confirmed_incident"
@@ -626,9 +645,16 @@ def test_a_second_run_is_not_shown_the_first_runs_new_fields(db, monkeypatch):
     first["next_steps"] = [{"step": "FIRST-RUN-STEP", "priority": "high"}]
     fake = FakeLLM(responses=[first, _investigate_v4(evidence=evidence)])
 
+    # The second job must see the first job's row (it is the "previous ②" the dossier carries), so both run in
+    # ONE transaction that is rolled back at the end: a real commit between them would leave the first job's
+    # `llm_runs` row in the shared session database for good (append-only; hard rule 5, see
+    # `test_the_stored_result_is_the_version_4_answer_...`). The isolation level is the first job's to set and
+    # has its own tests, so the second job's own `SET TRANSACTION` is a no-op here; both rows share one
+    # `created_at` (one transaction), so the second is found by its run id, not by its position.
     tier2_investigate.run_investigate_job(db, _job(case_id), adapter=fake)
-    db.commit()
-    tier2_investigate.run_investigate_job(db, _job(case_id), adapter=fake)
+    monkeypatch.setattr(tier2_investigate, "_set_repeatable_read", lambda conn: None)
+    second_job = _job(case_id)
+    tier2_investigate.run_investigate_job(db, second_job, adapter=fake)
 
     second_user = fake.calls[1]["user"]
     assert "FIRST-RUN-SUMMARY" in second_user and "FIRST-RUN-STEP" in second_user
@@ -636,7 +662,10 @@ def test_a_second_run_is_not_shown_the_first_runs_new_fields(db, monkeypatch):
     assert '"timeline"' not in second_user
     assert '"scope"' not in second_user and '"priority"' not in second_user
     assert '"likelihood"' not in second_user
-    assert sentinel not in _rows(db, case_id)[1][10]  # nor in the user_message the row recorded
+    second_row = next(
+        r for r in _rows(db, case_id) if r[0] == tier2_investigate.run_id_for_job(second_job.job_id)
+    )
+    assert sentinel not in second_row[10]  # nor in the user_message the row recorded
 
 
 @pytest.mark.db
