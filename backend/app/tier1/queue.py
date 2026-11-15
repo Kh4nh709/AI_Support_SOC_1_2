@@ -18,7 +18,7 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
   display blob (`tier1/soar_view.py`), `None` for an alert that carries none. INT-T02 adds
   `llm_stopped_by`: why the newest ① run gave up, a `visibility.ANALYST_HIDE` key (`latest_stopped_by`
   below, the one-column sibling of `latest_suggestion`). P14-T03 (DEC-213) adds `proposed_action`
-  and `held_by`: the model's own conclusion and why the system held it back (`latest_suggestion_held` below, the
+  and `held_by`: the model's own conclusion and which checks raised a warning on it (`latest_suggestion_held` below, the
   same one read of the newest run that builds `suggestion`; the queue rows carry them from their own statement). All of these are
   `visibility.ANALYST_HIDE` keys. P14-T07 (DEC-213) adds `rag`, `{best_pct, not_applied}` (`llm.rag_view`): how
   strongly the lookup the newest run's prompt held matched approved knowledge, and the closed kind of its
@@ -228,8 +228,9 @@ def latest_suggestion_held(
 ) -> tuple[Suggestion | None, str | None, list[str]]:
     """`(suggestion, proposed_action, held_by)` from ONE read of the newest proposer run
     (`_SUGGESTION_SQL`): `latest_suggestion`'s `Suggestion`, the model's own definite answer
-    (`gate_result.proposed_verdict`, `verdicts.proposed_action`) and the closed reasons the gate held it
-    back (`verdicts.held_reasons`) - so the three are the same run by construction, not by two statements
+    (`gate_result.proposed_verdict`, `verdicts.proposed_action`) and the closed reasons of the checks that
+    raised a warning on it (`verdicts.held_reasons`; DEC-217: warnings beside the verdict, before it the
+    reasons the gate held it back) - so the three are the same run by construction, not by two statements
     that happen to agree. The alert view's `proposed_action` and `held_by` (P14-T03, DEC-213). `(None, None,
     [])` when there is no run or its `result` is NULL (① failed: an older run does not stand in), and
     `(suggestion, None, [])` for a `gate_result` that is missing or garbled. Like `latest_suggestion` it
@@ -369,16 +370,10 @@ _QUEUE_COLUMNS = (
 )
 #: DEC-217 (G3): `verdicts.served_action` in SQL, over the LATERAL alias `r`: the stored verdict when it is one
 #: of the model's two; for a stored `needs_review` (version 1) the model's own `gate_result.proposed_verdict`
-#: when that is one of the two; else NULL. `tests/test_queue_held.py` runs this text against every
-#: stored/proposed pair and holds it to `served_action`'s answers.
-_MODEL_ACTIONS_SQL = ", ".join(f"'{action}'" for action in verdicts.MODEL_ACTIONS)
-_SERVED_ACTION_SQL = (
-    f"CASE WHEN r.result->>'suggested_action' IN ({_MODEL_ACTIONS_SQL}) "
-    "THEN r.result->>'suggested_action' "
-    "WHEN r.result->>'suggested_action' = 'needs_review' "
-    f"AND r.gate_result->>'proposed_verdict' IN ({_MODEL_ACTIONS_SQL}) "
-    "THEN r.gate_result->>'proposed_verdict' END"
-)
+#: when that is one of the two; else NULL. The text is `verdicts.served_action_sql`, the one copy (the ops export
+#: reads ① at an escalation with it too); `tests/test_queue_held.py` runs it against every stored/proposed pair
+#: and holds it to `served_action`'s answers.
+_SERVED_ACTION_SQL = verdicts.served_action_sql("r")
 _NEEDS_RETRIAGE_SQL = """(a.triaged_count > 0 AND
             (a.occurrence_count >= a.triaged_count * %(retriage_factor)s
              OR a.occurrence_count - a.triaged_count >= %(retriage_abs_delta)s))"""
@@ -761,7 +756,7 @@ def get_alert_view(
     # Why the newest ① run stopped (INT-T02): added BEFORE the strip, so a blind, undecided head
     # loses it with the other ① keys (`visibility.ANALYST_HIDE`), and the labelling page never has it.
     view["llm_stopped_by"] = latest_stopped_by(conn, head_id)
-    # The model's own conclusion and why the system held it (P14-T03): from the very row the suggestion
+    # The model's own conclusion and which checks raised a warning on it (P14-T03): from the very row the suggestion
     # came from, and added BEFORE the strip, so the blind arm and the labelling page never get them.
     view["proposed_action"], view["held_by"] = proposed_action, held_by
     # How strongly the lookup matched and whether the RAG was not applied (P14-T07): the same row again, added

@@ -37,8 +37,9 @@ SHOW_STATES: frozenset[str] = frozenset(
 #: the provider refused" says that ① ran. It also starts with `llm_`, so the labelling page drops it
 #: by `LABELING_PREFIXES` even without this entry.
 #: P14-T03 (DEC-213): `proposed_action`, the answer the model itself gave (``gate_result.proposed_verdict``),
-#: and `held_by`, the closed reasons the system held it back (``llm.verdicts.held_reasons``), are on the list
-#: because they ARE ①'s verdict: "AI kết luận: TP, held because ..." says what ① concluded even when
+#: and `held_by`, the closed reasons of the checks that raised a warning on it (``llm.verdicts.held_reasons``;
+#: before DEC-217 the reasons the system held it back), are on the list
+#: because they ARE ①'s verdict: "AI kết luận: TP, with a warning because ..." says what ① concluded even when
 #: `suggested_action` is gone. Neither starts with `llm_`, so unlike `llm_stopped_by` the labelling page drops
 #: them by this entry alone (`LABELING_DENYLIST` includes the set).
 #: P14-T07 (DEC-213): `rag`, `{"best_pct", "not_applied"}` (`llm.rag_view`), is on the list too: "trùng 87% với tri

@@ -628,7 +628,9 @@ def _known_hostnames(cfg: Config) -> set[str]:
 def _unknown_agents(data: bytes, cfg: Config) -> dict[str, _AgentStats]:
     """Design note 3b — every `agent.name` the archive contains that the
     inventory does not, with its count and date span. A report, not a filter:
-    the caller still ingests these rows (G8′ pins them to `needs_review`)."""
+    the caller still ingests these rows (G8′ keeps such an alert from being auto-closed, and a ① `false_positive`
+    on it carries the asset warning `fp_policy:asset_criticality`: a flag beside the verdict, nothing is pinned to
+    `needs_review`)."""
     known = _known_hostnames(cfg)
     stats: dict[str, _AgentStats] = {}
     for raw_bytes in data.split(b"\n"):
@@ -674,8 +676,8 @@ def _cmd_replay(args: argparse.Namespace) -> int:
     for name, agent_stats in sorted(_unknown_agents(data, cfg).items()):
         print(
             f"replay: agent {name!r} not in inventory — {agent_stats.count} alerts, "
-            f"{agent_stats.first_date}..{agent_stats.last_date} (ingested anyway; pins "
-            "to needs_review under G8′)"
+            f"{agent_stats.first_date}..{agent_stats.last_date} (ingested anyway; G8′ keeps it from "
+            "being auto-closed, and a false_positive from ① on it carries the asset warning)"
         )
 
     dsn = cfg.DATABASE_URL_OWNER or cfg.DATABASE_URL
