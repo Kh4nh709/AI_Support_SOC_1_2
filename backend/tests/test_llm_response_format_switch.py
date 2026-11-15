@@ -83,3 +83,18 @@ def test_the_runbook_environment_table_has_a_row_for_it_that_names_both_values_a
     assert (
         who == "Owner" and secret == "no"
     )  # the trial's value differs from the default: the Owner sets it
+
+
+def test_the_runbook_row_says_to_recreate_the_containers_and_how_to_check_it_not_to_restart_them():
+    """`.env` is read when a container is created, so `restart` never sees an edit (the runbook's own rule,
+    "The switches" section): the row says `up -d --force-recreate app worker rag-worker`, then how to read the
+    value back from the running container, and never `restart`."""
+    text = (ROOT / "docs" / "runbook.md").read_text(encoding="utf-8")
+    section = text.split("\n## Environment keys")[1].split("\n## ")[0]
+    what = re.findall(rf"(?m)^\| `{KEY}` \| (.*)$", section)[0]
+    flat = " ".join(what.split())
+    assert "docker compose up -d --force-recreate app worker rag-worker" in flat
+    assert "docker compose exec -T app printenv LLM_RESPONSE_FORMAT" in flat
+    assert "`json_schema`" in flat.split("printenv LLM_RESPONSE_FORMAT")[1]  # what it should print
+    assert "restart" not in flat.replace("`restart` never sees", "")  # only to say why not
+    assert "`restart` never sees" in flat
