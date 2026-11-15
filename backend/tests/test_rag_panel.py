@@ -130,7 +130,9 @@ def test_a_candidate_without_an_entry_id_counts_as_scored_but_is_not_listed():
     panel = _panel([], [{"score": 0.45}, _cand(0.3, "b")])
     assert panel["scored"] == 2
     assert [c["entry_id"] for c in panel["candidates"]] == ["b"]
-    assert panel["best_pct"] == 45  # the pair's number: the best score of the ranking, listed or not
+    assert (
+        panel["best_pct"] == 45
+    )  # the pair's number: the best score of the ranking, listed or not
 
 
 @pytest.mark.parametrize("junk", [None, "0.4", True, math.nan, math.inf, -0.1, 1.01, 47])
@@ -213,7 +215,8 @@ def test_a_run_that_holds_no_lookup_is_no_lookup():
 
 def test_entries_the_budget_dropped_never_reached_the_prompt_so_the_run_has_no_lookup():
     """The lookup kept matches but the token budget cut them: the DEC-213 pair gives `best_pct` None for such a
-    run, and the panel says `no_lookup` with nothing listed rather than numbers the run did not use."""
+    run, and the panel says `no_lookup` with nothing listed rather than numbers the run did not use.
+    """
     panel = _panel(
         [_match(0.62)], [_cand(0.62), _cand(0.4)], warnings=[LEARNED_ENTRIES_DROPPED_WARNING]
     )

@@ -172,7 +172,8 @@ _RANKED_STATES = frozenset({"matched", "below_floor", "no_candidate"})
 
 def _ranking(items: Any) -> list[tuple[str | None, float]]:
     """`(entry_id, score)` of each item of a stored list (`matches`, `ranked`) that has a score, best first, ties in
-    the stored order. The id is `None` when the item has none that is a string: it was scored and is not listed."""
+    the stored order. The id is `None` when the item has none that is a string: it was scored and is not listed.
+    """
     if not isinstance(items, list):
         return []
     found: list[tuple[str | None, float]] = []
@@ -216,7 +217,8 @@ def rag_panel(
       and conclusion are a database read the caller does (`rag.entries.entry_cards`); `llm` may not import `rag`.
 
     Entries the token budget dropped never reached the prompt, so such a run is `no_lookup` and lists nothing: the
-    DEC-213 pair gives it no number either. Pure: it reads only its arguments and builds new objects."""
+    DEC-213 pair gives it no number either. Pure: it reads only its arguments and builds new objects.
+    """
     pair = rag_view(matches, warnings, kinds, ranked=ranked, floor=floor)
     has_lookup = isinstance(matches, list) or isinstance(ranked, list)
     if pair["not_applied"] is not None:

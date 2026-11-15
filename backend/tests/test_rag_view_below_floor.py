@@ -56,7 +56,8 @@ def test_the_candidate_is_the_best_of_the_list_not_the_first_or_the_last():
 
 def test_the_percentage_is_the_score_times_a_hundred_cut_down_not_rounded():
     """DEC-221 (spec 5, last paragraph): the number under the floor is cut down, so it is always below
-    `floor_pct`. A raw 0.4999 is 49, not 50; `best_pct` of a kept match keeps `round` (`rag_view.percent`)."""
+    `floor_pct`. A raw 0.4999 is 49, not 50; `best_pct` of a kept match keeps `round` (`rag_view.percent`).
+    """
     for value, expected in (
         (0.0, 0),
         (0.004, 0),
@@ -167,7 +168,9 @@ def test_a_candidate_at_or_over_the_floor_is_not_below_it():
     not described as under the floor. Compared on the raw score, not on the rounded percentage."""
     assert _below([], [_cand(0.5)]) == NOTHING
     assert _below([], [_cand(0.62)]) == NOTHING
-    just_under = _below([], [_cand(0.4999)])  # 49.99 would round to 50; it is cut down to 49 (DEC-221)
+    just_under = _below(
+        [], [_cand(0.4999)]
+    )  # 49.99 would round to 50; it is cut down to 49 (DEC-221)
     assert (just_under["below_floor_pct"], just_under["floor_pct"]) == (49, 50)
 
 
