@@ -199,7 +199,7 @@ describe("ragTile", () => {
   it("is the best match, as a figure, for a lookup that kept one", () => {
     expect(tile(knowledge("matched", { best_pct: 84 }))).toEqual({
       value: "84%",
-      note: "trùng sự cố cũ",
+      note: "trùng tri thức đã duyệt",
     });
   });
 
@@ -260,7 +260,7 @@ describe("ragTile", () => {
     });
     expect(tile(undefined, rag({ best_pct: 87 }))).toEqual({
       value: "87%",
-      note: "trùng sự cố cũ",
+      note: "trùng tri thức đã duyệt",
     });
     expect(tile(undefined, rag({ below_floor_pct: 47, floor_pct: 50 }))).toEqual({
       value: "47%",

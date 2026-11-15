@@ -21,7 +21,17 @@ const heldClause = (causes: readonly string[]): string =>
  * (DEC-221): `S.analysis.ragNote`, read by `analysis/knowledge.ts`'s `ragTile`.
  */
 const RAG_TILE_NOTE = {
-  matched: "trùng sự cố cũ",
+  // A match is worded by what its best candidate was learned from (`knowledge_entries.conclusion`; strings.test.ts holds
+  // the keys equal to the backend's): "trùng sự cố cũ" is the mock-up's, for an entry that concluded an incident. An
+  // entry that is not listed, or concluded something this table has no word for, is `matchedOther`.
+  matched: {
+    confirmed_incident: "trùng sự cố cũ",
+    closed_fp: "trùng mục đã đóng FP",
+    concluded_fp: "trùng mục đã đóng FP",
+    closed_benign: "trùng mục lành tính",
+    concluded_policy_violation: "trùng vi phạm chính sách",
+  },
+  matchedOther: "trùng tri thức đã duyệt",
   belowFloor: (floor: number | null) =>
     floor === null ? "dưới mức tối thiểu" : `dưới mức ${floor}%`,
   noCandidate: "không có mục nào trùng",

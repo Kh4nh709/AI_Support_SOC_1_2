@@ -165,7 +165,7 @@ describe("the Tri thức (RAG) tile", () => {
 
   it("is the best match for a lookup that kept one", () => {
     rag(knowledgeOf("matched", { best_pct: 84 }));
-    expect(tile("Tri thức (RAG)").textContent).toBe("Tri thức (RAG)84%trùng sự cố cũ");
+    expect(tile("Tri thức (RAG)").textContent).toBe("Tri thức (RAG)84%trùng tri thức đã duyệt");
   });
 
   it("is the best candidate and the floor it was under, for a lookup that kept none", () => {
@@ -202,7 +202,7 @@ describe("the Tri thức (RAG) tile", () => {
 
   it("falls back on the older rag pair when the server sends no knowledge", () => {
     renderPanel(runOld({ rag: { best_pct: 87, not_applied: null } }));
-    expect(tile("Tri thức (RAG)").textContent).toBe("Tri thức (RAG)87%trùng sự cố cũ");
+    expect(tile("Tri thức (RAG)").textContent).toBe("Tri thức (RAG)87%trùng tri thức đã duyệt");
   });
 });
 

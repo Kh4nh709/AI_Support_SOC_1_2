@@ -62,6 +62,20 @@ export function knowledgeFrom(raw: unknown): Knowledge | null {
 export type RagTile = { value: string; note: string };
 
 /**
+ * The line under the number of a match: what the best candidate (the first listed: the server sends them best first)
+ * was learned from. The mock-up's "trùng sự cố cũ" is for an entry that concluded an incident; a benign entry, a closed
+ * false positive and a policy violation say what they are, and a match whose best candidate is not listed (or concluded
+ * something this page has no words for) says only that it matched approved knowledge.
+ */
+function matchedNote(k: Knowledge): string {
+  const N = S.analysis.ragNote;
+  const conclusion = k.candidates[0]?.conclusion ?? null;
+  return conclusion !== null && Object.hasOwn(N.matched, conclusion)
+    ? (N.matched as Record<string, string>)[conclusion]!
+    : N.matchedOther;
+}
+
+/**
  * The Tri thức (RAG) tile: the number for a lookup that kept a match or scored candidates under the floor, and a dash
  * with a short line for the other three states and for each failure kind (`S.analysis.ragNote`). A failure kind the page
  * has no words for is a plain "the lookup failed", never the code.
@@ -72,7 +86,7 @@ export function ragTile(k: Knowledge | null): RagTile {
   if (k === null) return noData;
   switch (k.state) {
     case "matched":
-      return k.best_pct === null ? noData : { value: `${k.best_pct}%`, note: N.matched };
+      return k.best_pct === null ? noData : { value: `${k.best_pct}%`, note: matchedNote(k) };
     case "below_floor":
       return k.best_pct === null
         ? noData

@@ -61,11 +61,63 @@ describe("knowledgeFrom", () => {
 });
 
 describe("the Tri thức (RAG) tile", () => {
-  it("is the number and 'trùng sự cố cũ' for a match", () => {
-    expect(ragTile(known({ state: "matched", best_pct: 62 }))).toEqual({
-      value: "62%",
-      note: "trùng sự cố cũ",
+  // The line says what the best candidate was learned from, not an incident whatever it was (review of AP-T4): the
+  // mock-up's "trùng sự cố cũ" is for an entry that concluded an incident.
+  it.each([
+    ["confirmed_incident", "trùng sự cố cũ"],
+    ["closed_fp", "trùng mục đã đóng FP"],
+    ["concluded_fp", "trùng mục đã đóng FP"],
+    ["closed_benign", "trùng mục lành tính"],
+    ["concluded_policy_violation", "trùng vi phạm chính sách"],
+  ])("is the number and the line of a best candidate that concluded %s: %s", (conclusion, note) => {
+    const k = known({
+      state: "matched",
+      best_pct: 62,
+      candidates: [
+        { pct: 62, title: "a", conclusion },
+        { pct: 55, title: "b", conclusion: "confirmed_incident" },
+      ],
     });
+    expect(ragTile(k)).toEqual({ value: "62%", note });
+  });
+
+  it("says 'trùng tri thức đã duyệt' for a match whose best candidate is not listed or concluded something it has no words for", () => {
+    const plain = { value: "62%", note: "trùng tri thức đã duyệt" };
+    expect(ragTile(known({ state: "matched", best_pct: 62, candidates: [] }))).toEqual(plain);
+    expect(
+      ragTile(
+        known({
+          state: "matched",
+          best_pct: 62,
+          candidates: [{ pct: 62, title: "a", conclusion: "future_conclusion" }],
+        }),
+      ),
+    ).toEqual(plain);
+    expect(
+      ragTile(known({ state: "matched", best_pct: 62, candidates: [{ pct: 62, title: "a" }] })),
+    ).toEqual(plain);
+    // a name from the prototype chain is not a conclusion
+    expect(
+      ragTile(
+        known({
+          state: "matched",
+          best_pct: 62,
+          candidates: [{ pct: 62, title: "a", conclusion: "constructor" }],
+        }),
+      ),
+    ).toEqual(plain);
+  });
+
+  it("reads the best candidate as the first one listed, as the server sends them best first", () => {
+    const k = known({
+      state: "matched",
+      best_pct: 62,
+      candidates: [
+        { pct: 62, title: "a", conclusion: "closed_benign" },
+        { pct: 70, title: "b", conclusion: "confirmed_incident" },
+      ],
+    });
+    expect(ragTile(k).note).toBe("trùng mục lành tính");
   });
 
   it("is the number and the floor for a lookup whose candidates all scored under it", () => {

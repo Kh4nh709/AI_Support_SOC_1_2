@@ -678,7 +678,9 @@ describe("a run the RAG default applied to (DEC-219)", () => {
     ]);
     expect(within(tile("Độ tin cậy")).queryByRole("img")).not.toBeInTheDocument();
     expect(within(tile("Kết luận")).queryByRole("img")).not.toBeInTheDocument();
-    expect(said(tile("Tri thức (RAG)"))).toEqual(["Tri thức (RAG)", "62%", "trùng sự cố cũ"]);
+    // the matched entry closed a false positive, and the line says so: not an old incident
+    expect(said(tile("Tri thức (RAG)"))).toEqual(["Tri thức (RAG)", "62%", "trùng mục đã đóng FP"]);
+    expect(tile("Tri thức (RAG)")).toHaveAttribute("data-tone", "neutral");
     expect(said(tile("Kiểm chứng"))).toEqual(["Kiểm chứng", "6/6", "không có cảnh báo"]);
   });
 

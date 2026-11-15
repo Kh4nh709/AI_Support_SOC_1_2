@@ -82,7 +82,8 @@ test("an alert that matched approved knowledge says how strongly, on the RAG til
   // the best of the three matches, as a whole percentage, on the tile
   const tile = col.getByRole("group", { name: S.ai1.panel.tile.rag });
   await expect(tile).toContainText("87%");
-  await expect(tile).toContainText(S.analysis.ragNote.matched);
+  // the seeded entries have no stored conclusion, so the line says only that approved knowledge matched
+  await expect(tile).toContainText(S.analysis.ragNote.matchedOther);
   // and the three candidates, best first, in the Tri thức tab (their entries are seeded without a title)
   await col.getByRole("tab", { name: S.ai1.panel.tabs.knowledge }).click();
   await expect(col.getByRole("tabpanel").getByText(/^\d+%$/)).toHaveText(["87%", "72%", "61%"]);
