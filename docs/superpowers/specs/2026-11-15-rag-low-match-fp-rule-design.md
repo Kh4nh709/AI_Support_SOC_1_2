@@ -83,8 +83,9 @@ does.
 - `result.suggested_action` is the verdict after the rule.
 - `llm.gate_forced` is still never written for a new run. `triage.suggested` keeps its keys
   (`forced` false) and its `suggested_action` is the verdict after the rule.
-- `Suggestion.gate` (the alert view) gains the key `rag_rule` (the stored object, or `null` for a
-  run that has none). The blind arm sees none of it: `rag_rule` is hidden wherever the suggestion
+- `Suggestion.gate` (the alert view) gains the key `rag_rule`: `{"threshold", "best_pct", "applied"}`
+  taken from the stored object, or `null` for a run that has none. The stored `changed` is NOT
+  served: for an applied run it says what the model answered. The blind arm sees none of it: `rag_rule` is hidden wherever the suggestion
   and `rag` are hidden today.
 - **Tier 1 is not served the model's own answer for a run the rule applied to.** Wherever the
   Tier 1 API returns the model's answer — `proposed_action` (the queue row and the alert view) and
