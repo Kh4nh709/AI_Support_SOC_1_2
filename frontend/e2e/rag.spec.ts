@@ -1,5 +1,6 @@
-// The RAG beside the AI's conclusion on the real stack (P14-T07, DEC-213, spec 4.3). On a visible head the alert page
-// says how strongly the alert matched approved knowledge, inside the conclusion line, and, when the lookup failed,
+// The RAG beside the AI's conclusion on the real stack (P14-T07, DEC-213, spec 4.3; the scorecard of DEC-221). On a
+// visible head the alert page says how strongly the alert matched approved knowledge, on the RAG tile, and, when the
+// lookup failed,
 // the notice that the RAG was not applied, in the alert's words and with the closed kind worded. The blind head's
 // side - neither before the decision - is in blind.spec.ts, beside the rest of what the blind arm hides.
 //
@@ -43,12 +44,17 @@ test("an alert whose lookup failed says that the RAG was not applied, and why", 
   await page.goto(`/alerts/${head.id}`);
 
   const col = column(page);
-  await expect(col.getByText(/AI kết luận/)).toBeVisible();
+  await expect(col.getByRole("group", { name: S.ai1.panel.tile.verdict })).toContainText(
+    S.ai1.action.false_positive,
+  );
   await expect(col.getByRole("note")).toHaveText(
     `⚠ Không áp dụng RAG cho alert này: thiếu hoặc sai API key Voyage — ${TAIL}`,
   );
-  // beside the conclusion, not instead of it; and no percentage for a lookup that did not happen
-  await expect(col.getByText(/AI kết luận/)).not.toContainText("trùng");
+  // beside the conclusion, not instead of it; and no percentage for a lookup that did not happen: the RAG tile is a
+  // dash with the failure kind in a short line (DEC-221)
+  const tile = col.getByRole("group", { name: S.ai1.panel.tile.rag });
+  await expect(tile).toContainText(S.analysis.ragNote.failedKind.auth);
+  await expect(tile).not.toContainText("%");
   await expect(col.getByText(S.ai1.hidden)).toHaveCount(0);
 
   // the view says the same, in the API's words
@@ -62,7 +68,7 @@ test("an alert whose lookup failed says that the RAG was not applied, and why", 
   });
 });
 
-test("an alert that matched approved knowledge says how strongly, in the conclusion line", async ({
+test("an alert that matched approved knowledge says how strongly, on the RAG tile and in the Tri thức tab", async ({
   page,
   request,
 }) => {
@@ -73,10 +79,13 @@ test("an alert that matched approved knowledge says how strongly, in the conclus
   await page.goto(`/alerts/${head.id}`);
 
   const col = column(page);
-  // the best of the three matches, as a whole percentage, after the confidence note
-  await expect(col.getByText(/AI kết luận/)).toContainText(
-    "AI kết luận: FP (độ tin cậy trung bình) — trùng 87% với tri thức đã duyệt — có cảnh báo kiểm chứng",
-  );
+  // the best of the three matches, as a whole percentage, on the tile
+  const tile = col.getByRole("group", { name: S.ai1.panel.tile.rag });
+  await expect(tile).toContainText("87%");
+  await expect(tile).toContainText(S.analysis.ragNote.matched);
+  // and the three candidates, best first, in the Tri thức tab (their entries are seeded without a title)
+  await col.getByRole("tab", { name: S.ai1.panel.tabs.knowledge }).click();
+  await expect(col.getByRole("tabpanel").getByText(/^\d+%$/)).toHaveText(["87%", "72%", "61%"]);
   await expect(col.getByRole("note")).toHaveCount(0);
   await expect(col.getByText(/Không áp dụng RAG/)).toHaveCount(0);
 
@@ -97,8 +106,13 @@ test("an alert whose RAG was not used says nothing of it", async ({ page, reques
   await page.goto(`/alerts/${head.id}`);
 
   const col = column(page);
-  await expect(col.getByText(/AI kết luận/)).toBeVisible();
-  await expect(col.getByText(/AI kết luận/)).not.toContainText("trùng");
+  await expect(col.getByRole("group", { name: S.ai1.panel.tile.verdict })).toContainText(
+    S.ai1.action.false_positive,
+  );
+  // no lookup: a dash and a line saying so, and no percentage anywhere on the tile
+  const tile = col.getByRole("group", { name: S.ai1.panel.tile.rag });
+  await expect(tile).toContainText(S.analysis.ragNote.noLookup);
+  await expect(tile).not.toContainText("%");
   await expect(col.getByRole("note")).toHaveCount(0);
   const token = await apiLogin(request, "t1");
   const view = await apiGet(request, `/api/tier1/alerts/${head.id}`, { token });

@@ -923,6 +923,13 @@ describe("a decided alert", () => {
     expect(within(column()).getByText(/AI kết luận/)).not.toHaveTextContent("độ tin cậy");
   });
 
+  it("says that the RAG was not applied once, in the comparison's line: the scorecard under it does not say it again", () => {
+    renderColumn(decided({ rag: { best_pct: null, not_applied: "auth" } }));
+    const notes = within(column()).getAllByRole("note");
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toHaveTextContent(S.rag.notApplied("alert", S.rag.failureKind.auth));
+  });
+
   it("says a decision that is not a Tier 1 person's is not compared", () => {
     renderColumn(decided({ status: "auto_closed" }));
     expect(within(column()).getByText(S.ai1.notTier1Decision)).toBeInTheDocument();

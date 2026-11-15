@@ -19,10 +19,13 @@ export function AnalysisPanel({
   view,
   state,
   model,
+  ragNotice = true,
 }: {
   view: AlertView;
   state: Extract<AiState, { kind: "ready" | "decided" }>;
   model: AnalysisModel;
+  /** Whether the panel says that the RAG was not applied: the decided comparison's line says it already. */
+  ragNotice?: boolean;
 }) {
   const rag = ragNoteOf(view.rag);
   const suggestion = view.suggestion ?? null;
@@ -42,7 +45,7 @@ export function AnalysisPanel({
 
       <AnalysisTiles state={state} model={model} />
 
-      {rag.notApplied !== null && <RagNotice kind={rag.notApplied} subject="alert" />}
+      {ragNotice && rag.notApplied !== null && <RagNotice kind={rag.notApplied} subject="alert" />}
 
       {/* A new run starts on the first tab again: the open tab is the panel's own state. */}
       <Tabs

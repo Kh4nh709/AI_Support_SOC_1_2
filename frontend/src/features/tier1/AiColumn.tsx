@@ -48,7 +48,9 @@ export function AiColumn({ view }: { view: AlertView }) {
       {state.kind === "decided" && (
         <div className="flex flex-col gap-3.5">
           <Decided view={view} state={state} />
-          {model !== null && <AnalysisPanel view={view} state={state} model={model} />}
+          {model !== null && (
+            <AnalysisPanel view={view} state={state} model={model} ragNotice={false} />
+          )}
         </div>
       )}
     </section>
