@@ -72,8 +72,45 @@ describe("aiStateOfRow", () => {
     });
   });
 
-  // P14-T03 (DEC-213): the row carries the model's own answer and the reasons the system held it.
-  it("carries the model's own answer and the reasons the system held it back", () => {
+  // DEC-217: a verdict with warnings is the model's verdict (the server serves FP or TP), with the checks that
+  // raised a warning in `held_by`; nothing is forced for a new run.
+  it("keeps the verdict and carries the warnings beside it, forced false, for a new run", () => {
+    const warned = row({
+      suggested_action: "false_positive",
+      gate_forced: false,
+      proposed_action: "false_positive",
+      held_by: ["fp_policy:asset_criticality", "verifier_disagrees"],
+    });
+    expect(aiStateOfRow(warned)).toEqual({
+      kind: "ready",
+      action: "false_positive",
+      confidence: "medium",
+      forced: false,
+      proposed: "false_positive",
+      heldBy: ["fp_policy:asset_criticality", "verifier_disagrees"],
+    });
+  });
+
+  it("keeps forced true for a version 1 row the gate forced (gate_forced true), served as the model's verdict", () => {
+    const v1 = row({
+      suggested_action: "false_positive",
+      gate_forced: true,
+      proposed_action: "false_positive",
+      held_by: ["fp_policy:playbook_rule"],
+    });
+    expect(aiStateOfRow(v1)).toEqual({
+      kind: "ready",
+      action: "false_positive",
+      confidence: "medium",
+      forced: true,
+      proposed: "false_positive",
+      heldBy: ["fp_policy:playbook_rule"],
+    });
+  });
+
+  // P14-T03 (DEC-213), now only a guard: a stored `needs_review` that still arrives (an old client cache, a server
+  // that predates DEC-217) is read as it came, with the model's own answer and the reasons beside it.
+  it("carries the model's own answer and the reasons beside a stored needs_review that still arrives", () => {
     const held = row({
       suggested_action: "needs_review",
       gate_forced: true,
@@ -191,7 +228,45 @@ describe("aiStateOfView", () => {
     });
   });
 
-  it("carries the model's own answer and the reasons the system held it back", () => {
+  it("keeps the verdict and carries the warnings beside it, forced false, for a new run", () => {
+    const warned = view({
+      suggestion: {
+        suggested_action: "true_positive",
+        confidence: "medium",
+        gate: { forced: false },
+      },
+      proposed_action: "true_positive",
+      held_by: ["facts_mismatch", "no_verified_quote"],
+    });
+    expect(aiStateOfView(warned)).toEqual({
+      kind: "ready",
+      action: "true_positive",
+      confidence: "medium",
+      forced: false,
+      proposed: "true_positive",
+      heldBy: ["facts_mismatch", "no_verified_quote"],
+    });
+  });
+
+  it("keeps forced true for a version 1 row the gate forced, served as the model's verdict", () => {
+    const v1 = view({
+      suggestion: {
+        suggested_action: "true_positive",
+        confidence: "medium",
+        gate: { forced: true, forced_by: ["step4"] },
+      },
+      proposed_action: "true_positive",
+      held_by: ["facts_mismatch"],
+    });
+    expect(aiStateOfView(v1)).toMatchObject({
+      kind: "ready",
+      action: "true_positive",
+      forced: true,
+      heldBy: ["facts_mismatch"],
+    });
+  });
+
+  it("carries the model's own answer and the reasons beside a stored needs_review that still arrives (the guard)", () => {
     const held = view({
       suggestion: {
         suggested_action: "needs_review",
@@ -256,8 +331,28 @@ describe("aiStateOfView", () => {
     }
   });
 
-  // Fix round 1 (I1): a decided alert still says what the AI concluded and why the gate held it.
-  it("carries the model's own answer and the reasons into the decided state", () => {
+  // Fix round 1 (I1): a decided alert still says what the AI concluded and which checks warned (DEC-217).
+  it("carries the verdict and the warnings into the decided state", () => {
+    const warned = view({
+      status: "closed_fp",
+      suggestion: {
+        suggested_action: "true_positive",
+        confidence: "medium",
+        gate: { forced: false },
+      },
+      proposed_action: "true_positive",
+      held_by: ["facts_mismatch", "verifier_invalid"],
+    });
+    expect(aiStateOfView(warned)).toEqual({
+      kind: "decided",
+      action: "true_positive",
+      confidence: "medium",
+      proposed: "true_positive",
+      heldBy: ["facts_mismatch", "verifier_invalid"],
+    });
+  });
+
+  it("carries the model's own answer and the reasons into the decided state beside a stored needs_review (the guard)", () => {
     const held = view({
       status: "closed_fp",
       suggestion: {
@@ -538,8 +633,9 @@ it("DECIDED is the backend's visibility.SHOW_STATES, status for status", () => {
   expect([...DECIDED].sort()).toEqual(backend);
 });
 
-// P14-T03 (DEC-213): what the model concluded, and whether the system held it back. Two readings of a `ready`
-// state, kept here so the column and the cell do not each decide them.
+// P14-T03 (DEC-213): what the model concluded, and whether the checks raised a warning beside it (DEC-217: the
+// gate holds nothing back). Two readings of a `ready` state, kept here so the column and the cell do not each
+// decide them.
 describe("conclusionOf and heldOf", () => {
   type Ready = Extract<ReturnType<typeof aiStateOfRow>, { kind: "ready" }>;
   const ready = (over: Partial<Ready> = {}): Ready => ({
@@ -585,11 +681,21 @@ describe("conclusionOf and heldOf", () => {
     expect(heldOf({ action: null, proposed: null, heldBy: [] })).toBe(false);
   });
 
-  it("holds when the system's action is needs_review or reasons are given, and not otherwise", () => {
+  it("warns when reasons are given beside a verdict, and not otherwise (DEC-217)", () => {
     expect(heldOf(ready())).toBe(false);
-    expect(heldOf(ready({ action: "needs_review", proposed: "false_positive" }))).toBe(true);
     expect(heldOf(ready({ heldBy: ["verifier_disagrees"] }))).toBe(true);
     expect(heldOf(ready({ action: "false_positive", proposed: "false_positive" }))).toBe(false);
+    expect(
+      heldOf(
+        ready({ action: "false_positive", proposed: "false_positive", heldBy: ["facts_mismatch"] }),
+      ),
+    ).toBe(true);
+    expect(heldOf(ready({ action: "true_positive", heldBy: ["fp_policy:severity"] }))).toBe(true);
+  });
+
+  it("still warns for a stored needs_review that arrives with no reason: the guard half", () => {
+    expect(heldOf(ready({ action: "needs_review", proposed: "false_positive" }))).toBe(true);
+    expect(heldOf(ready({ action: "needs_review", proposed: null }))).toBe(true);
   });
 });
 

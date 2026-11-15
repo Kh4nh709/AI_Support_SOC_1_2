@@ -78,7 +78,7 @@ const VERDICT_WORDS = [
   "false_positive",
   "Cần xem xét",
   "AI kết luận",
-  "giữ lại",
+  "cảnh báo kiểm chứng",
   "độ tin cậy",
   "trung bình",
   "37 lần xác thực",
@@ -107,11 +107,13 @@ describe("ready", () => {
     expect(col.getByText(S.ai1.gateNotForced)).toBeInTheDocument();
   });
 
-  it("shows ⚑ and the gate rules that forced the verdict", () => {
+  it("shows ⚑ and the gate rules that forced the verdict of a version 1 row (gate_forced true)", () => {
+    // DEC-217: the server serves the model's own verdict for a row the gate forced (version 1); the gate's
+    // own record of it, `forced`, `forced_by` and `final_verdict`, is what was stored and is shown as it is.
     renderColumn(
       view({
         suggestion: suggestion({
-          suggested_action: "needs_review",
+          suggested_action: "false_positive",
           gate: {
             forced: true,
             forced_by: ["quote_not_in_log", "privileged_account"],
@@ -230,13 +232,39 @@ describe("ready", () => {
 });
 
 // P14-T03 (DEC-213): ① always concludes `false_positive | true_positive`. The alert page says what the AI
-// concluded, with its confidence, and when the gate held it back for a person, says so and why.
+// concluded, with its confidence, and, DEC-217, when the gate's checks raised warnings, says so and which: the
+// verdict is the model's own, and the gate holds nothing back for a person.
 describe("AI kết luận", () => {
-  /** A verdict the gate held: the model said false_positive, the system stored needs_review. */
-  const held = (reasons: string[], over: Partial<AlertView> = {}) =>
+  /**
+   * A verdict with warnings (DEC-217): the model said false_positive, ① stored and served it as it is, and the gate
+   * (version 2) forced nothing: `held_by` lists the checks that raised a warning.
+   */
+  const warned = (reasons: string[], over: Partial<AlertView> = {}) =>
     view({
       suggestion: suggestion({
-        suggested_action: "needs_review",
+        suggested_action: "false_positive",
+        confidence: "medium",
+        gate: {
+          forced: false,
+          forced_by: [],
+          proposed_verdict: "false_positive",
+          final_verdict: "false_positive",
+          verifier_verdict: "needs_review",
+          warnings: [],
+        },
+      }),
+      proposed_action: "false_positive",
+      held_by: reasons,
+      ...over,
+    });
+  /**
+   * A version 1 row: the gate forced `needs_review` then. The server serves the model's own verdict for it; the
+   * gate's record (`forced`, `forced_by`, `final_verdict`) is what was stored, and `held_by` its reasons.
+   */
+  const forcedV1 = (reasons: string[], over: Partial<AlertView> = {}) =>
+    view({
+      suggestion: suggestion({
+        suggested_action: "false_positive",
         confidence: "medium",
         gate: {
           forced: true,
@@ -254,11 +282,19 @@ describe("AI kết luận", () => {
   /** The sentence itself: the one element whose own text starts it. */
   const line = () => within(column()).getByText(/AI kết luận/);
 
-  it("says TP with the confidence of a true_positive the gate kept, and holds nothing back", () => {
+  it("says TP with the confidence of a true_positive, and raises no warning", () => {
     renderColumn(view({ suggestion: suggestion({ confidence: "high" }) }));
     expect(line()).toHaveTextContent(/^AI kết luận: TP \(độ tin cậy cao\)$/);
     expect(within(line()).getByText("TP").tagName).toBe("STRONG");
-    expect(line().textContent).not.toContain("giữ lại");
+    expect(line().textContent).not.toContain("cảnh báo");
+  });
+
+  it("has no warning clause for a row with no warnings", () => {
+    renderColumn(warned([]));
+    expect(line()).toHaveTextContent(/^AI kết luận: FP \(độ tin cậy trung bình\)$/);
+    expect(line().textContent).not.toContain("cảnh báo");
+    expect(line().textContent).not.toContain("—");
+    expect(within(line()).queryByText(S.ai1.held)).not.toBeInTheDocument();
   });
 
   it("says FP for a false_positive the gate kept", () => {
@@ -271,17 +307,53 @@ describe("AI kết luận", () => {
     expect(line()).toHaveTextContent(/^AI kết luận: FP \(độ tin cậy thấp\)$/);
   });
 
-  it("says what the AI concluded and that the system held it for a person, with both reasons", () => {
-    renderColumn(held(["fp_policy:asset_criticality", "verifier_disagrees"]));
-    expect(line()).toHaveTextContent(
-      "AI kết luận: FP (độ tin cậy trung bình) — hệ thống giữ lại cho người xem vì: " +
+  it("says FP and the warning, with one reason: the line of the spec (DEC-217 section 8)", () => {
+    renderColumn(
+      warned(["fp_policy:playbook_rule"], {
+        suggestion: suggestion({ suggested_action: "false_positive", confidence: "high" }),
+      }),
+    );
+    expect(line().textContent).toBe(
+      "AI kết luận: FP (độ tin cậy cao) — có cảnh báo kiểm chứng: không khớp bảng quyết định đã duyệt",
+    );
+  });
+
+  it("says FP and the warning, with several reasons, joined by a comma", () => {
+    renderColumn(
+      warned(["facts_mismatch", "fp_policy:asset_criticality", "verifier_disagrees"], {
+        suggestion: suggestion({ suggested_action: "false_positive", confidence: "high" }),
+      }),
+    );
+    expect(line().textContent).toBe(
+      "AI kết luận: FP (độ tin cậy cao) — có cảnh báo kiểm chứng: AI khai dữ kiện lệch với hệ thống, " +
         "tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý",
     );
-    // the AI's own answer, not the system's `Cần xem xét`, is the conclusion
+  });
+
+  it("shows the verdict, not Cần xem xét, for a false_positive with warnings", () => {
+    renderColumn(warned(["fp_policy:asset_criticality", "verifier_disagrees"]));
+    expect(line()).toHaveTextContent(
+      "AI kết luận: FP (độ tin cậy trung bình) — có cảnh báo kiểm chứng: " +
+        "tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý",
+    );
+    // the model's own verdict is the conclusion, bold, and so is the phrase of the warning (spec section 8)
     expect(within(line()).getByText("FP").tagName).toBe("STRONG");
-    // and the phrase "hệ thống giữ lại cho người xem" is bold too, as spec 4.3 has it (M1)
-    expect(within(line()).getByText("hệ thống giữ lại cho người xem").tagName).toBe("STRONG");
-    expect(line().textContent).not.toContain("Cần xem xét");
+    expect(within(line()).getByText("có cảnh báo kiểm chứng").tagName).toBe("STRONG");
+    expect(column().textContent).not.toContain("Cần xem xét");
+    expect(line().textContent).not.toContain("giữ lại");
+  });
+
+  it("shows the verdict, with the warning, for a true_positive with warnings", () => {
+    renderColumn(
+      warned(["verifier_disagrees"], {
+        suggestion: suggestion({ suggested_action: "true_positive", confidence: "high" }),
+        proposed_action: "true_positive",
+      }),
+    );
+    expect(line().textContent).toBe(
+      "AI kết luận: TP (độ tin cậy cao) — có cảnh báo kiểm chứng: bộ kiểm tra không đồng ý",
+    );
+    expect(column().textContent).not.toContain("Cần xem xét");
   });
 
   it.each([
@@ -294,31 +366,43 @@ describe("AI kết luận", () => {
     ["fp_policy:playbook_rule", "không khớp bảng quyết định đã duyệt"],
     ["verifier_disagrees", "bộ kiểm tra không đồng ý"],
   ])("words the reason %s as '%s'", (reason, label) => {
-    renderColumn(held([reason]));
-    expect(line()).toHaveTextContent(`hệ thống giữ lại cho người xem vì: ${label}`);
+    renderColumn(warned([reason]));
+    expect(line()).toHaveTextContent(`có cảnh báo kiểm chứng: ${label}`);
     expect(line().textContent).not.toContain(reason);
   });
 
   it("joins the reasons with a comma, in the order the server gave them", () => {
-    renderColumn(held(["facts_mismatch", "no_verified_quote", "fp_policy:severity"]));
+    renderColumn(warned(["facts_mismatch", "no_verified_quote", "fp_policy:severity"]));
     expect(line()).toHaveTextContent(
-      "vì: AI khai dữ kiện lệch với hệ thống, không có dẫn chứng kiểm chứng được, alert mức critical",
+      "có cảnh báo kiểm chứng: AI khai dữ kiện lệch với hệ thống, không có dẫn chứng kiểm chứng được, alert mức critical",
     );
   });
 
   it("shows a reason it has no label for as the code, as text", () => {
     const markup = "<img src=x onerror=alert(1)>";
-    const { container } = renderColumn(held(["fp_policy:new_field", markup]));
-    expect(line()).toHaveTextContent(`vì: fp_policy:new_field, ${markup}`);
+    const { container } = renderColumn(warned(["fp_policy:new_field", markup]));
+    expect(line()).toHaveTextContent(`có cảnh báo kiểm chứng: fp_policy:new_field, ${markup}`);
     expect(container.querySelector("img")).toBeNull();
   });
 
-  it("says it was held without a 'because' when the server names no reason", () => {
-    renderColumn(held([]));
-    expect(line()).toHaveTextContent(
-      /^AI kết luận: FP \(độ tin cậy trung bình\) — hệ thống giữ lại cho người xem(⚑)?$/,
+  it("has no warning clause for a version 1 row that names no reason, and keeps its flag", () => {
+    renderColumn(forcedV1([]));
+    expect(line()).toHaveTextContent(/^AI kết luận: FP \(độ tin cậy trung bình\)⚑$/);
+    expect(line().textContent).not.toContain("cảnh báo");
+  });
+
+  it("says there is a warning, with no list, for a stored needs_review that names no reason (the guard)", () => {
+    // `heldOf` keeps its second half for an old client cache: the stored word, with the model's answer beside it
+    renderColumn(
+      view({
+        suggestion: suggestion({ suggested_action: "needs_review", confidence: "medium" }),
+        proposed_action: "false_positive",
+        held_by: [],
+      }),
     );
-    expect(line().textContent).not.toContain("vì:");
+    expect(line()).toHaveTextContent(
+      /^AI kết luận: FP \(độ tin cậy trung bình\) — có cảnh báo kiểm chứng$/,
+    );
   });
 
   it("leaves the confidence out when the result has none", () => {
@@ -326,8 +410,8 @@ describe("AI kết luận", () => {
     expect(line()).toHaveTextContent(/^AI kết luận: TP$/);
   });
 
-  it("flags the held verdict and still shows the gate's own account of it", () => {
-    renderColumn(held(["fp_policy:playbook_rule"]));
+  it("still flags a version 1 row the gate forced (gate_forced true) and shows the gate's own account of it", () => {
+    renderColumn(forcedV1(["fp_policy:playbook_rule"]));
     const col = within(column());
     expect(col.getByRole("img", { name: S.ai1.forcedLabel })).toBeInTheDocument();
     expect(col.getByText(S.ai1.gateForced)).toBeInTheDocument();
@@ -335,6 +419,35 @@ describe("AI kết luận", () => {
     const steps = within(col.getByRole("region", { name: S.ai1.gateSteps }));
     expect(steps.getByText(S.ai1.action.false_positive)).toBeInTheDocument();
     expect(steps.getByText(S.ai1.action.needs_review)).toBeInTheDocument();
+    // the head line of that row says the model's verdict and the warning, never the stored Cần xem xét
+    expect(line()).toHaveTextContent(
+      "AI kết luận: FP (độ tin cậy trung bình) — có cảnh báo kiểm chứng: không khớp bảng quyết định đã duyệt",
+    );
+  });
+
+  it("shows no forced flag for a new run, with or without warnings", () => {
+    for (const reasons of [["fp_policy:playbook_rule", "verifier_disagrees"], []]) {
+      const { unmount } = renderColumn(warned(reasons));
+      const col = within(column());
+      expect(col.queryByRole("img", { name: S.ai1.forcedLabel })).not.toBeInTheDocument();
+      expect(col.queryByText(S.ai1.forced)).not.toBeInTheDocument();
+      expect(col.getByText(S.ai1.gateNotForced)).toBeInTheDocument();
+      expect(col.queryByText(S.ai1.gateForced)).not.toBeInTheDocument();
+      expect(col.queryByText(S.ai1.gateForcedBy)).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("lists the gate's own warnings of a run with warnings, as before", () => {
+    const v = warned(["fp_policy:playbook_rule"]);
+    v.suggestion = suggestion({
+      ...v.suggestion,
+      gate: { ...v.suggestion?.gate, warnings: ["fp_policy:playbook_rule: no rule cited"] },
+    });
+    renderColumn(v);
+    const steps = within(within(column()).getByRole("region", { name: S.ai1.gateSteps }));
+    expect(steps.getByText(S.ai1.gateWarnings)).toBeInTheDocument();
+    expect(steps.getByText("fp_policy:playbook_rule: no rule cited")).toBeInTheDocument();
   });
 
   it("falls back on the final action when the server sent no proposed_action", () => {
@@ -345,8 +458,12 @@ describe("AI kết luận", () => {
     expect(line()).toHaveTextContent(/^AI kết luận: TP \(độ tin cậy trung bình\)$/);
   });
 
-  it("makes no claim for a needs_review the server did not explain: the system's own word, as before", () => {
-    const bare = held([]);
+  it("makes no claim for a stored needs_review the server did not explain: the guard, the stored word as it came", () => {
+    // DEC-217: the server serves one of the two. A `needs_review` that still arrives (an old cache, a server that
+    // predates the decision) with no `proposed_action` is shown as the stored word, never as a conclusion.
+    const bare = view({
+      suggestion: suggestion({ suggested_action: "needs_review", confidence: "medium" }),
+    });
     delete bare.proposed_action;
     delete bare.held_by;
     renderColumn(bare);
@@ -356,16 +473,16 @@ describe("AI kết luận", () => {
   });
 
   it("names the ninth reason, an unusable verifier answer, in its own words (M3)", () => {
-    renderColumn(held(["verifier_invalid"]));
-    expect(line()).toHaveTextContent("vì: bộ kiểm tra không trả lời hợp lệ");
+    renderColumn(warned(["verifier_invalid"]));
+    expect(line()).toHaveTextContent("có cảnh báo kiểm chứng: bộ kiểm tra không trả lời hợp lệ");
     expect(line().textContent).not.toContain("không đồng ý");
   });
 
-  // Fix round 1 (I1): a decided page still says what the AI concluded and why the gate held it - in the
+  // Fix round 1 (I1): a decided page still says what the AI concluded and which checks warned - in the
   // "Gợi ý ①" box, by the very component the undecided column uses. "Khớp" is still the stored verdict's.
   describe("on a decided page", () => {
     const decidedHeld = (over: Partial<AlertView> = {}) =>
-      held(["fp_policy:asset_criticality", "verifier_disagrees"], {
+      warned(["fp_policy:asset_criticality", "verifier_disagrees"], {
         status: "closed_fp",
         acknowledged_by: "u1",
         acknowledged_by_name: "An",
@@ -382,14 +499,19 @@ describe("AI kết luận", () => {
       expect(khop()).toHaveTextContent(S.ai1.matchAgree);
     });
 
-    it("says what the AI concluded and why the system held it, two reasons, and Khớp has no verdict to compare", () => {
+    it("says what the AI concluded and which checks warned, two reasons, and Khớp compares the verdict", () => {
       renderColumn(decidedHeld());
       expect(within(box()).getByText(/AI kết luận/)).toHaveTextContent(
-        "AI kết luận: FP (độ tin cậy trung bình) — hệ thống giữ lại cho người xem vì: " +
+        "AI kết luận: FP (độ tin cậy trung bình) — có cảnh báo kiểm chứng: " +
           "tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý",
       );
-      expect(within(box()).getByText("hệ thống giữ lại cho người xem").tagName).toBe("STRONG");
-      // the stored verdict is `needs_review`: the pilot report leaves it out, so does Khớp
+      expect(within(box()).getByText("có cảnh báo kiểm chứng").tagName).toBe("STRONG");
+      // the stored verdict is `false_positive` (DEC-217), a closed_fp agrees with it, warnings or none
+      expect(khop()).toHaveTextContent(S.ai1.matchAgree);
+    });
+
+    it("leaves Khớp with no verdict for a stored needs_review that still arrives (the guard)", () => {
+      renderColumn(decidedHeld({ suggestion: suggestion({ suggested_action: "needs_review" }) }));
       expect(khop()).toHaveTextContent(S.ai1.matchNoVerdict);
     });
 
@@ -398,12 +520,15 @@ describe("AI kết luận", () => {
       expect(within(column()).getAllByText(/AI kết luận/)).toHaveLength(1);
     });
 
-    it("is the same line the undecided column draws for the same suggestion", () => {
-      const undecided = renderColumn(held(["fp_policy:playbook_rule", "verifier_invalid"]));
+    it.each([
+      ["a run with warnings", warned],
+      ["a version 1 row the gate forced", forcedV1],
+    ])("is the same line the undecided column draws for the same suggestion: %s", (_name, make) => {
+      const undecided = renderColumn(make(["fp_policy:playbook_rule", "verifier_invalid"]));
       const before = within(column()).getByText(/AI kết luận/).textContent;
       undecided.unmount();
       renderColumn(
-        held(["fp_policy:playbook_rule", "verifier_invalid"], { status: "closed_benign" }),
+        make(["fp_policy:playbook_rule", "verifier_invalid"], { status: "closed_benign" }),
       );
       const after = within(box()).getByText(/AI kết luận/).textContent;
       // the gate's ⚑ belongs to the undecided column only (the decided state has no gate flag)
@@ -416,7 +541,7 @@ describe("AI kết luận", () => {
     ])("shows it for %s", (_name, visible) => {
       renderColumn(decidedHeld({ suggestion_visible: visible }));
       expect(within(box()).getByText(/AI kết luận/)).toHaveTextContent(
-        /^AI kết luận: FP .* vì: tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý$/,
+        /^AI kết luận: FP .* có cảnh báo kiểm chứng: tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý$/,
       );
       expect(within(column()).queryByText(S.ai1.hidden)).not.toBeInTheDocument();
     });
@@ -431,7 +556,8 @@ describe("AI kết luận", () => {
     });
 
     it("falls back on the stored verdict when the server sent neither key", () => {
-      const bare = decidedHeld();
+      // a stored needs_review (the guard): with no `proposed_action` it is the stored word, as it came
+      const bare = decidedHeld({ suggestion: suggestion({ suggested_action: "needs_review" }) });
       delete bare.proposed_action;
       delete bare.held_by;
       renderColumn(bare);
@@ -463,7 +589,9 @@ describe("AI kết luận", () => {
     renderColumn(stray);
     const col = column();
     expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
-    expect(leaksIn(col, ["AI kết luận", "giữ lại", "tài sản quan trọng hoặc chưa rõ"])).toEqual([]);
+    expect(
+      leaksIn(col, ["AI kết luận", "cảnh báo kiểm chứng", "tài sản quan trọng hoặc chưa rõ"]),
+    ).toEqual([]);
   });
 });
 
@@ -483,15 +611,17 @@ describe("the leak markers of the blind tests", () => {
     expect(leaksIn(col)).toContain("Cần xem xét");
   });
 
-  it("find a leaked conclusion line, its label and its reasons", () => {
+  it("find a leaked conclusion line, its label and its warnings", () => {
     renderColumn(
       view({
-        suggestion: suggestion({ suggested_action: "needs_review" }),
+        suggestion: suggestion({ suggested_action: "false_positive" }),
         proposed_action: "false_positive",
         held_by: ["fp_policy:asset_criticality"],
       }),
     );
-    expect(leaksIn(column())).toEqual(expect.arrayContaining(["FP", "AI kết luận", "giữ lại"]));
+    expect(leaksIn(column())).toEqual(
+      expect.arrayContaining(["FP", "AI kết luận", "cảnh báo kiểm chứng"]),
+    );
   });
 });
 
@@ -854,17 +984,17 @@ describe("the RAG beside the conclusion", () => {
   const withRag = (best_pct: number | null, not_applied: string | null = null) => ({
     rag: { best_pct, not_applied },
   });
-  /** A verdict the gate held: the model said false_positive, the system stored needs_review. */
-  const held = (reasons: string[], over: Partial<AlertView> = {}) =>
+  /** A verdict with warnings (DEC-217): the model said false_positive, ① stored it as it is, the checks warned. */
+  const warned = (reasons: string[], over: Partial<AlertView> = {}) =>
     view({
       suggestion: suggestion({
-        suggested_action: "needs_review",
+        suggested_action: "false_positive",
         confidence: "medium",
         gate: {
-          forced: true,
-          forced_by: ["step4"],
+          forced: false,
+          forced_by: [],
           proposed_verdict: "false_positive",
-          final_verdict: "needs_review",
+          final_verdict: "false_positive",
           verifier_verdict: "needs_review",
           warnings: [],
         },
@@ -916,13 +1046,13 @@ describe("the RAG beside the conclusion", () => {
       );
     });
 
-    it("is in the same line when the gate held the verdict, before the system's own clause", () => {
-      renderColumn(held(["fp_policy:asset_criticality"], { ...withRag(87) }));
+    it("is in the same line when the checks warned, before the warning clause", () => {
+      renderColumn(warned(["fp_policy:asset_criticality"], { ...withRag(87) }));
       expect(line()).toHaveTextContent(
         "AI kết luận: FP (độ tin cậy trung bình) — trùng 87% với tri thức đã duyệt — " +
-          "hệ thống giữ lại cho người xem vì: tài sản quan trọng hoặc chưa rõ",
+          "có cảnh báo kiểm chứng: tài sản quan trọng hoặc chưa rõ",
       );
-      expect(within(line()).getByText("hệ thống giữ lại cho người xem").tagName).toBe("STRONG");
+      expect(within(line()).getByText("có cảnh báo kiểm chứng").tagName).toBe("STRONG");
     });
 
     it("is one line in the column, not two", () => {
@@ -970,11 +1100,9 @@ describe("the RAG beside the conclusion", () => {
       expect(within(column()).queryByText(/Không áp dụng RAG/)).not.toBeInTheDocument();
     });
 
-    it("is beside a held conclusion too", () => {
-      renderColumn(held(["verifier_disagrees"], { ...withRag(null, "quota") }));
-      expect(line()).toHaveTextContent(
-        "hệ thống giữ lại cho người xem vì: bộ kiểm tra không đồng ý",
-      );
+    it("is beside a conclusion with warnings too", () => {
+      renderColumn(warned(["verifier_disagrees"], { ...withRag(null, "quota") }));
+      expect(line()).toHaveTextContent("có cảnh báo kiểm chứng: bộ kiểm tra không đồng ý");
       expect(notice()).toHaveTextContent("Voyage hết hạn mức");
     });
 
@@ -1051,17 +1179,17 @@ describe("the RAG beside the conclusion", () => {
       );
     });
 
-    it("says the percentage with the system's own clause when the gate held the verdict", () => {
+    it("says the percentage with the warning clause when the checks warned", () => {
       renderColumn(
         decided({
-          ...held(["fp_policy:asset_criticality"], { ...withRag(72) }),
+          ...warned(["fp_policy:asset_criticality"], { ...withRag(72) }),
           status: "closed_fp",
           acknowledged_by_name: "An",
         }),
       );
       expect(within(box()).getByText(/AI kết luận/)).toHaveTextContent(
         "AI kết luận: FP (độ tin cậy trung bình) — trùng 72% với tri thức đã duyệt — " +
-          "hệ thống giữ lại cho người xem vì: tài sản quan trọng hoặc chưa rõ",
+          "có cảnh báo kiểm chứng: tài sản quan trọng hoặc chưa rõ",
       );
     });
 
@@ -1147,10 +1275,21 @@ describe("accessibility", () => {
       }),
     ],
     [
-      "ready and held for a person (P14-T03)",
+      "ready with warnings beside the verdict (DEC-217)",
       view({
         suggestion: suggestion({
-          suggested_action: "needs_review",
+          suggested_action: "false_positive",
+          gate: { forced: false, forced_by: [], proposed_verdict: "false_positive" },
+        }),
+        proposed_action: "false_positive",
+        held_by: ["fp_policy:asset_criticality", "verifier_disagrees"],
+      }),
+    ],
+    [
+      "ready, a version 1 row the gate forced",
+      view({
+        suggestion: suggestion({
+          suggested_action: "false_positive",
           gate: { forced: true, forced_by: ["step4"], proposed_verdict: "false_positive" },
         }),
         proposed_action: "false_positive",

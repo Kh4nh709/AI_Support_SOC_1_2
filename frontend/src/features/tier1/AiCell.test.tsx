@@ -51,24 +51,56 @@ describe("AiCell", () => {
     expect(screen.queryByText(/Chuyển tier 2/)).toBeNull();
   });
 
-  it("words a verdict the system held as the system's own Cần xem xét, flagged: the reasons are the alert page's", () => {
+  // DEC-217: the gate's checks are warnings beside ①'s verdict; the cell words the verdict, and the warnings are
+  // the alert page's.
+  it("words a false_positive with warnings as FP, never Cần xem xét, with no flag and no reason", () => {
     show({
       ...READY,
-      action: "needs_review",
+      action: "false_positive",
+      confidence: "medium",
+      proposed: "false_positive",
+      heldBy: ["fp_policy:asset_criticality", "verifier_disagrees"],
+    });
+    expect(screen.getByText(/FP/)).toHaveTextContent("FP (trung bình)");
+    expect(screen.queryByText(/Cần xem xét/)).toBeNull();
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(screen.queryByText(/tài sản/)).toBeNull();
+  });
+
+  it("words a true_positive with warnings as TP, never Cần xem xét", () => {
+    show({
+      ...READY,
+      action: "true_positive",
+      confidence: "high",
+      proposed: "true_positive",
+      heldBy: ["verifier_invalid"],
+    });
+    expect(screen.getByText(/TP/)).toHaveTextContent("TP (cao)");
+    expect(screen.queryByText(/Cần xem xét/)).toBeNull();
+  });
+
+  it("still marks a version 1 row the gate forced (forced true), as its verdict and the flag", () => {
+    show({
+      ...READY,
+      action: "false_positive",
       confidence: "medium",
       forced: true,
       proposed: "false_positive",
       heldBy: ["fp_policy:asset_criticality"],
     });
-    expect(screen.getByText(/Cần xem xét/)).toHaveTextContent("Cần xem xét (trung bình)");
+    expect(screen.getByText(/FP/)).toHaveTextContent("FP (trung bình)");
     expect(screen.getByRole("img", { name: S.ai1.forcedLabel })).toBeInTheDocument();
-    expect(screen.queryByText(/tài sản/)).toBeNull();
   });
 
   it("leaves out the confidence when the result has none, and marks a forced one", () => {
-    show({ ...READY, action: "needs_review", confidence: null, forced: true });
-    expect(screen.getByText(/Cần xem xét/)).not.toHaveTextContent("(");
+    show({ ...READY, action: "false_positive", confidence: null, forced: true });
+    expect(screen.getByText(/FP/)).not.toHaveTextContent("(");
     expect(screen.getByRole("img", { name: S.ai1.forcedLabel })).toHaveTextContent(S.ai1.forced);
+  });
+
+  it("words a stored needs_review that still arrives as its label (the guard: the server serves FP or TP)", () => {
+    show({ ...READY, action: "needs_review", confidence: "medium", proposed: "false_positive" });
+    expect(screen.getByText(/Cần xem xét/)).toHaveTextContent("Cần xem xét (trung bình)");
   });
 
   it("shows an action it has no label for as the code, the old `escalate` included", () => {

@@ -62,9 +62,11 @@ const row = (over: Partial<QueueRow> = {}): QueueRow => ({
   risk_band: "Cao",
   triage_status: "ready",
   run_id: "r1",
-  suggested_action: "needs_review",
+  suggested_action: "false_positive",
   confidence: "medium",
   gate_forced: false,
+  proposed_action: "false_positive",
+  held_by: [],
   ...over,
 });
 
@@ -357,6 +359,38 @@ describe("the ① cell", () => {
     expect(
       within(await ai(/forced/)).getByRole("img", { name: S.ai1.forcedLabel }),
     ).toBeInTheDocument();
+  });
+
+  // DEC-217: the server serves the model's own verdict, FP or TP, and the checks that warned in `held_by`. The queue
+  // says the verdict: no row is "Cần xem xét" for ①, and the warnings are the alert page's.
+  it("says the verdict of a row with warnings, never Cần xem xét, and no flag for a new run", async () => {
+    respond = () =>
+      HttpResponse.json(
+        answer([
+          row({
+            alert_id: "w1",
+            description: "warned fp",
+            suggested_action: "false_positive",
+            confidence: "high",
+            proposed_action: "false_positive",
+            held_by: ["fp_policy:asset_criticality", "verifier_disagrees"],
+          }),
+          row({
+            alert_id: "w2",
+            description: "warned tp",
+            suggested_action: "true_positive",
+            confidence: "medium",
+            proposed_action: "true_positive",
+            held_by: ["facts_mismatch"],
+          }),
+        ]),
+      );
+    renderQueue();
+    expect(await ai(/warned fp/)).toHaveTextContent("FP (cao)");
+    expect(await ai(/warned tp/)).toHaveTextContent("TP (trung bình)");
+    expect(within(await ai(/warned fp/)).queryByRole("img")).toBeNull();
+    expect(within(await ai(/warned tp/)).queryByRole("img")).toBeNull();
+    expect(screen.queryByText(/Cần xem xét/)).toBeNull();
   });
 
   it("says 'ẩn — nhánh mù' for a blind row, never 'chưa có', and asks the server for nothing else", async () => {

@@ -322,23 +322,35 @@ describe("② labels follow the backend", () => {
   });
 });
 
-// P14-T03 (DEC-213): ① always concludes `false_positive | true_positive`; the system may hold that as
-// `needs_review`, and says why. The words are the UI's, the closed values are the backend's: a reason added
-// there without a label here would show as its code, so both sides are compared.
-describe("① verdict and held-reason labels follow the backend", () => {
+// DEC-217 (the backend card): the three values a STORED ① row may hold are `llm.verdicts.STORED_ACTIONS` (a row
+// written before the decision holds `needs_review`, and the admin LLM page shows it as it is). What a NEW run may
+// hold is `GATED_ACTIONS`, now the two. A tree that predates the backend card has only `GATED_ACTIONS`, and it
+// held all three: the fallback reads that, and goes when both cards are merged.
+function pyStoredActions(): string[] {
+  try {
+    return pyTuple("STORED_ACTIONS");
+  } catch {
+    return pyTuple("GATED_ACTIONS");
+  }
+}
+
+// P14-T03 (DEC-213): ① always concludes `false_positive | true_positive`. DEC-217: the gate's checks are warnings
+// beside that verdict, and the UI says which. The words are the UI's, the closed values are the backend's: a reason
+// added there without a label here would show as its code, so both sides are compared.
+describe("① verdict and warning labels follow the backend", () => {
   it("reads the backend tuples (a parse that finds nothing would compare nothing)", () => {
-    expect(pyTuple("GATED_ACTIONS")).toEqual(["false_positive", "needs_review", "true_positive"]);
+    expect(pyStoredActions()).toEqual(["false_positive", "needs_review", "true_positive"]);
     expect(pyTuple("HELD_REASONS")).toHaveLength(9);
     expect(pyTuple("FP_POLICY_FIELDS")).toHaveLength(5);
   });
 
-  it("labels the verdicts of ① as TP and FP, and the system's own as Cần xem xét", () => {
+  it("labels the verdicts of ① as TP and FP, and keeps the label of a stored needs_review (Cần xem xét)", () => {
     expect(S.ai1.action).toEqual({
       false_positive: "FP",
       needs_review: "Cần xem xét",
       true_positive: "TP",
     });
-    expect(Object.keys(S.ai1.action).sort()).toEqual([...pyTuple("GATED_ACTIONS")].sort());
+    expect(Object.keys(S.ai1.action).sort()).toEqual([...pyStoredActions()].sort());
     expect(S.ai1.action).not.toHaveProperty("escalate");
   });
 
@@ -362,9 +374,19 @@ describe("① verdict and held-reason labels follow the backend", () => {
     expect(S.ai1.confidenceNote("cao")).toBe("(độ tin cậy cao)");
     // the phrase is bold on the page (spec 4.3), so it is a string of its own
     expect(S.ai1.heldDash).toBe("—");
-    expect(S.ai1.held).toBe("hệ thống giữ lại cho người xem");
-    expect(S.ai1.heldBecause(["a", "b"])).toBe("vì: a, b");
+    // DEC-217: the gate's checks are warnings beside the verdict, never a verdict held back for a person
+    expect(S.ai1.held).toBe("có cảnh báo kiểm chứng");
+    expect(S.ai1.heldBecause(["a", "b"])).toBe(": a, b");
+    expect(S.ai1.heldBecause(["a"])).toBe(": a");
     expect(S.ai1.heldBecause([])).toBe("");
+  });
+
+  it("says no ① warning word that the system held or kept the verdict back for a person", () => {
+    const words = [S.ai1.held, ...Object.values(S.ai1.heldReason)];
+    for (const word of words) {
+      expect(word).not.toMatch(/giữ lại|hệ thống giữ/);
+    }
+    expect(Object.keys(S.ai1.heldReason)).toHaveLength(9);
   });
 });
 

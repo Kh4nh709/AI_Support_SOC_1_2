@@ -558,12 +558,12 @@ describe("the ① column, from the state of the view", () => {
     );
   });
 
-  it("says why the system held a verdict for a person, from the view's own keys", async () => {
+  it("says the verdict and which checks warned (DEC-217), from the view's own keys", async () => {
     views = {
       a1: full({
         suggestion: suggestion({
-          suggested_action: "needs_review",
-          gate: { forced: true, forced_by: ["step4"], proposed_verdict: "false_positive" },
+          suggested_action: "false_positive",
+          gate: { forced: false, forced_by: [], proposed_verdict: "false_positive" },
         }),
         proposed_action: "false_positive",
         held_by: ["fp_policy:asset_criticality", "fp_policy:playbook_rule"],
@@ -572,9 +572,27 @@ describe("the ① column, from the state of the view", () => {
     renderPage();
     await loaded();
     expect(within(aiColumn()).getByText(/AI kết luận/)).toHaveTextContent(
-      "AI kết luận: FP (độ tin cậy trung bình) — hệ thống giữ lại cho người xem vì: " +
+      "AI kết luận: FP (độ tin cậy trung bình) — có cảnh báo kiểm chứng: " +
         "tài sản quan trọng hoặc chưa rõ, không khớp bảng quyết định đã duyệt",
     );
+    expect(aiColumn().textContent).not.toContain("Cần xem xét");
+  });
+
+  it("still flags a version 1 row the gate forced (gate_forced true), with the model's own verdict", async () => {
+    views = {
+      a1: full({
+        suggestion: suggestion({
+          suggested_action: "false_positive",
+          gate: { forced: true, forced_by: ["step4"], proposed_verdict: "false_positive" },
+        }),
+        proposed_action: "false_positive",
+        held_by: ["fp_policy:playbook_rule"],
+      }),
+    };
+    renderPage();
+    await loaded();
+    expect(within(aiColumn()).getByRole("img", { name: S.ai1.forcedLabel })).toBeInTheDocument();
+    expect(within(aiColumn()).getByText(S.ai1.gateForced)).toBeInTheDocument();
   });
 
   it("shows the hidden state for a blind view, names no verdict, and still lets the analyst act", async () => {
@@ -589,7 +607,7 @@ describe("the ① column, from the state of the view", () => {
       "TP",
       "true_positive",
       "AI kết luận",
-      "giữ lại",
+      "cảnh báo kiểm chứng",
       "trung bình",
       "Failed password for invalid user admin from",
     ]) {
