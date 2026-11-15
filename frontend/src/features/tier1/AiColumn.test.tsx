@@ -1256,7 +1256,7 @@ describe("the RAG beside the conclusion", () => {
 // confidence note and no forced flag. The sentences are written out in full: a label edited in strings.ts alone fails
 // here.
 describe("the RAG default below the threshold (DEC-219)", () => {
-  const RULE: RagRule = { threshold: 80, best_pct: 62, applied: true, changed: true };
+  const RULE: RagRule = { threshold: 80, best_pct: 62, applied: true };
   /**
    * A visible-arm run the rule applied to, as the server serves it: ① ended FP, the gate forced nothing, and nothing
    * of the model's own answer is served: `proposed_action` and `gate.proposed_verdict` are the verdict ① ended with,
@@ -1329,10 +1329,13 @@ describe("the RAG default below the threshold (DEC-219)", () => {
       );
     });
 
+    // The server serves `rag_rule` as `{ threshold, best_pct, applied }` and nothing about what the model answered; the
+    // line reads `applied` and `threshold` only, so a key it does not read (a `changed` an older server might send)
+    // cannot alter it, whatever its value.
     it.each([true, false])(
-      "is the same text whether the rule changed the model's verdict (%s) or the model had said FP itself",
+      "is the same text when the rule carries an extra `changed` key an older server might send (%s)",
       (changed) => {
-        renderColumn(ragDefault(REASONS, {}, { ...RULE, changed }));
+        renderColumn(ragDefault(REASONS, {}, { ...RULE, changed } as RagRule));
         expect(line().textContent).toBe(
           "AI kết luận: FP — trùng 62% với tri thức đã duyệt (dưới 80%: mặc định FP) — " +
             `có cảnh báo kiểm chứng: ${REASONS_TEXT}`,
@@ -1411,13 +1414,10 @@ describe("the RAG default below the threshold (DEC-219)", () => {
     it.each([
       ["a rag_rule that is null", null],
       ["no rag_rule key (a run stored before DEC-219)", undefined],
-      [
-        "a rule that is switched off",
-        { threshold: 0, best_pct: null, applied: false, changed: false } as RagRule,
-      ],
+      ["a rule that is switched off", { threshold: 0, best_pct: null, applied: false } as RagRule],
       [
         "a rule the match did not fall under",
-        { threshold: 80, best_pct: 91, applied: false, changed: false } as RagRule,
+        { threshold: 80, best_pct: 91, applied: false } as RagRule,
       ],
     ])("is today's line when the rule did not apply: %s", (_name, rule) => {
       renderColumn(noRule(NO_RULE_REASONS, rule));
@@ -1439,7 +1439,7 @@ describe("the RAG default below the threshold (DEC-219)", () => {
     });
 
     it("is today's line, without a warning clause, when the rule did not apply and the checks did not warn", () => {
-      renderColumn(noRule([], { threshold: 80, best_pct: 91, applied: false, changed: false }));
+      renderColumn(noRule([], { threshold: 80, best_pct: 91, applied: false }));
       expect(line().textContent).toBe(
         "AI kết luận: FP (độ tin cậy cao) — trùng 62% với tri thức đã duyệt",
       );
@@ -1540,7 +1540,7 @@ describe("the RAG default below the threshold (DEC-219)", () => {
       renderColumn(
         noRule(
           NO_RULE_REASONS,
-          { threshold: 80, best_pct: 91, applied: false, changed: false },
+          { threshold: 80, best_pct: 91, applied: false },
           { status: "closed_fp", acknowledged_by_name: "An" },
         ),
       );
@@ -1617,7 +1617,7 @@ describe("accessibility", () => {
             proposed_verdict: "false_positive",
             final_verdict: "false_positive",
             verifier_verdict: null,
-            rag_rule: { threshold: 80, best_pct: 62, applied: true, changed: true },
+            rag_rule: { threshold: 80, best_pct: 62, applied: true },
           },
         }),
         proposed_action: "false_positive",

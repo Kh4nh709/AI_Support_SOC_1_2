@@ -142,19 +142,20 @@ export type SuggestionReason = {
 };
 
 /**
- * The RAG rule of a ① run (DEC-219, trial, amended): "a RAG match exists and its best is below `threshold` percent:
- * `false_positive` is ①'s default answer". `threshold` is 0 when the rule is switched off, `best_pct` the number the
- * page shows as "trùng X% với tri thức đã duyệt" (null when the run has none), `applied` whether the rule applied (a
- * match below the threshold), and `changed` whether the model had answered `true_positive` and the default replaced
- * it. For a run the rule applied to the server serves the verdict ① ended with (`false_positive`) as the view's
- * `proposed_action` and the gate's `proposed_verdict`, never the model's own answer, and the gate is not forced
- * (`forced` false, `forced_by` empty): `changed` makes no difference to what the page says.
+ * The RAG rule of a ① run (DEC-219, trial, amended), as the alert view serves it: three keys. "A RAG match exists and
+ * its best is below `threshold` percent: `false_positive` is ①'s default answer". `threshold` is 0 when the rule is
+ * switched off, `best_pct` the number the page shows as "trùng X% với tri thức đã duyệt" (null when the run has none),
+ * and `applied` whether the rule applied (a match below the threshold). The line reads only `applied` and `threshold`.
+ * The server never sends whether the model had said `false_positive` itself or the default replaced its
+ * `true_positive`: that would give the model's answer away. For a run the rule applied to it serves the verdict ①
+ * ended with (`false_positive`) as the view's `proposed_action` and the gate's `proposed_verdict`, never the model's
+ * own answer, no `confidence` and no `verifier_verdict`, and the gate is not forced (`forced` false, `forced_by`
+ * empty).
  */
 export type RagRule = {
   threshold: number;
   best_pct: number | null;
   applied: boolean;
-  changed: boolean;
 };
 
 /**

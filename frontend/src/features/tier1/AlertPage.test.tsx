@@ -609,7 +609,7 @@ describe("the ① column, from the state of the view", () => {
             proposed_verdict: "false_positive",
             final_verdict: "false_positive",
             verifier_verdict: null,
-            rag_rule: { threshold: 80, best_pct: 62, applied: true, changed: true },
+            rag_rule: { threshold: 80, best_pct: 62, applied: true },
           },
         }),
         proposed_action: "false_positive",

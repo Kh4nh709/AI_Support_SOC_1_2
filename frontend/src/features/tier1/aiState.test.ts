@@ -410,9 +410,9 @@ describe("aiStateOfView", () => {
   // DEC-219 (amended): below the threshold `false_positive` is ①'s default answer. The alert view's
   // `suggestion.gate.rag_rule` says the rule applied (`applied` true, whether or not the model had said FP itself); the
   // state keeps the threshold of that rule, and only then (a rule that did not apply, a run with no `rag_rule`, and a
-  // version 1 row have no such key). `changed` makes no difference: the page never says what the model answered.
+  // version 1 row have no such key). Only `applied` and `threshold` are read: the page never says what the model answered.
   describe("the RAG default below the threshold (DEC-219)", () => {
-    const RULE: RagRule = { threshold: 80, best_pct: 62, applied: true, changed: true };
+    const RULE: RagRule = { threshold: 80, best_pct: 62, applied: true };
     /**
      * A run the rule applied to as the server serves it: ① ended with FP, nothing of the model's own answer is served
      * (`proposed_action` and `gate.proposed_verdict` are the verdict ① ended with, the verifier's verdict and the
@@ -449,11 +449,13 @@ describe("aiStateOfView", () => {
       });
     });
 
-    it("is the same state whether the rule changed the model's verdict or the model had said FP itself", () => {
-      const changed = aiStateOfView(applied({}, { ...RULE, changed: true }));
-      const kept = aiStateOfView(applied({}, { ...RULE, changed: false }));
-      expect(kept).toEqual(changed);
-      expect(kept).toMatchObject({ kind: "ready", ragDefaultBelow: 80 });
+    it("reads only applied and threshold: a key of the rule it does not read (a `changed` an older server sent) alters nothing", () => {
+      const plain = aiStateOfView(applied());
+      expect(plain).toMatchObject({ kind: "ready", ragDefaultBelow: 80 });
+      for (const changed of [true, false]) {
+        expect(aiStateOfView(applied({}, { ...RULE, changed }))).toEqual(plain);
+      }
+      expect(aiStateOfView(applied({}, { ...RULE, note: "x" }))).toEqual(plain);
     });
 
     it("is carried by a decided state too, the decision lifting the blind arm", () => {
@@ -485,15 +487,12 @@ describe("aiStateOfView", () => {
     });
 
     it.each([
-      [
-        "a rule that did not apply",
-        { threshold: 80, best_pct: 91, applied: false, changed: false },
-      ],
-      ["a rule switched off", { threshold: 0, best_pct: null, applied: false, changed: false }],
+      ["a rule that did not apply", { threshold: 80, best_pct: 91, applied: false }],
+      ["a rule switched off", { threshold: 0, best_pct: null, applied: false }],
       ["a run with no rag_rule (null)", null],
       ["a run with no rag_rule (not a key)", undefined],
       ["a rag_rule that is not an object", "applied"],
-      ["an applied rule with no threshold", { applied: true, changed: false }],
+      ["an applied rule with no threshold", { applied: true }],
       ["an applied rule whose threshold is not a number", { ...RULE, threshold: "80" }],
       [
         "an applied rule whose threshold is 0 (switched off: nothing is below it)",
@@ -501,7 +500,7 @@ describe("aiStateOfView", () => {
       ],
       ["a rule whose applied is not true", { ...RULE, applied: "yes" }],
       [
-        "a rule that only changed (applied missing)",
+        "a rule with no applied key (a `changed` alone is not read)",
         { threshold: 80, best_pct: 62, changed: true },
       ],
     ])("has no threshold for %s", (_name, rule) => {
@@ -797,7 +796,7 @@ describe("conclusionOf and heldOf", () => {
   });
 
   // DEC-219: the conclusion is the verdict ① ended with. For every run before the RAG rule the action and the
-  // model's answer are the same word, or the action is a stored `needs_review`, so only a changed run reads differently.
+  // model's answer are the same word, or the action is a stored `needs_review`, so only a run below the RAG threshold can read differently.
   it("takes the verdict ① ended with first, the model's own answer when it is the same", () => {
     expect(conclusionOf(ready({ action: "true_positive", proposed: "true_positive" }))).toBe(
       "true_positive",

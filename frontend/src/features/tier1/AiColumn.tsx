@@ -52,7 +52,7 @@ function ForcedFlag() {
  * What the AI concluded (P14-T03, DEC-213): "AI kết luận: **TP** (độ tin cậy cao)", and when the gate's checks raised
  * warnings, "… — **có cảnh báo kiểm chứng**: <reasons>" (DEC-217: the verdict is the model's own, the checks are
  * warnings beside it, and nothing is held back for a person). The conclusion is the verdict ① ended with, which is
- * the model's own answer except for a run the RAG rule changed (DEC-219, below), and the model's own answer for a
+ * the model's own answer except for a run below the RAG threshold (DEC-219, below), and the model's own answer for a
  * `needs_review` stored before DEC-217 that still arrives (`heldOf`'s guard half); a reason the UI has no label for
  * is shown as its code. All of it is text.
  *

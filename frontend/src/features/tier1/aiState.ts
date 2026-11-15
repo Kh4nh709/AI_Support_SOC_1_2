@@ -79,10 +79,11 @@ const textOrNull = (value: unknown): string | null => (typeof value === "string"
  * The RAG rule of DEC-219, as the key of an `AiConclusion` it belongs to: `ragDefaultBelow` when the gate says the rule
  * applied to this run (`rag_rule.applied` is true, with the threshold the match was below), and no key at all for any
  * other run: a rule that did not apply or was switched off, a run stored before the rule (`rag_rule` null or absent),
- * and a value that is not what the server sends. `changed` is not read: whether the model had said `false_positive`
- * itself or the rule made it, the page says the same. The default is `false_positive`, so a run whose verdict is
- * anything else (an inconsistent server) announces none: its line is today's. Only the alert view's gate carries it,
- * so only `aiStateOfView` reads it.
+ * and a value that is not what the server sends. Only `applied` and `threshold` are read; any other key of the rule
+ * is ignored (the server never says whether the model had answered `false_positive` itself, and the page says the
+ * same either way). The default is `false_positive`, so a run whose verdict is anything else (an inconsistent
+ * server) announces none: its line is today's. Only the alert view's gate carries it, so only `aiStateOfView` reads
+ * it.
  */
 function ragRuleOf(
   gate: SuggestionGate | null | undefined,
