@@ -30,7 +30,6 @@ from app.tier1 import analysis, queue
 
 from tests.test_analysis_view import (
     BASIS,
-    FACTS,
     NOW,
     RAW,
     STEPS,

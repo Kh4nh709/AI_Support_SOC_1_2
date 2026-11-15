@@ -22,8 +22,9 @@ from typing import Any
 
 import pytest
 from app.domain.transitions import acknowledge, decide
+from app.kb.lookup import get_decision_table
 from app.rag import entries
-from app.tier1 import queue
+from app.tier1 import analysis, queue
 from app.tier1.queue import get_alert_view, latest_suggestions, list_queue
 from app.tier1.visibility import ANALYST_HIDE, LABELING_DENYLIST
 from psycopg.types.json import Jsonb
@@ -31,6 +32,8 @@ from psycopg.types.json import Jsonb
 from tests.rag_data import add_entry
 from tests.test_analysis_view import BASIS, RAW, REASONS, STEPS, TEXTS, _gate
 from tests.test_queue import USER_ID, _duplicate, _queued, _seed_user, _walk_keys
+from tests.test_served_playbook_rule import _applied_gate as _pb_applied_gate
+from tests.test_served_playbook_rule import _changed_gate as _pb_changed_gate
 
 pytestmark = pytest.mark.db
 
@@ -156,6 +159,43 @@ def _insert_run(
         ),
     )
     return run_id
+
+
+def _verifier_row(
+    conn,
+    alert_id: str,
+    proposer_run_id: str | None,
+    *,
+    input_tokens: int | None = 300,
+    output_tokens: int | None = 80,
+    latency_ms: int | None = 900,
+    cost_usd: str | None = "0.0021",
+    model_id: str | None = VERIFIER_MODEL_ID,
+    gate_result: Any = "PAIRED",
+    offset_s: int = 1,
+) -> str:
+    """The `role = 'verifier'` row `tier1/triage.py` writes beside a proposer row: its `gate_result.proposer_run_id`
+    names the proposer run it checked (the only link between the two). `gate_result="PAIRED"` writes that;
+    anything else is stored as given (a garbled link, or none)."""
+    pair = {
+        "role": "verifier",
+        "step6": "agree",
+        "compared_to": "true_positive",
+        "proposer_run_id": proposer_run_id,
+    }
+    return _insert_run(
+        conn,
+        alert_id,
+        result={"agree": True, "structured_only_verdict": "true_positive"},
+        gate_result=pair if gate_result == "PAIRED" else gate_result,
+        role="verifier",
+        model_id=model_id,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        latency_ms=latency_ms,
+        cost_usd=cost_usd,
+        offset_s=offset_s,
+    )
 
 
 def _strings(value: Any):
@@ -385,15 +425,10 @@ def test_the_model_id_is_in_the_database_and_nowhere_in_what_the_tier_1_view_and
         ranked=[{"entry_id": ENTRY_A, "score": 0.9}],
         history=HISTORY,
     )
-    _insert_run(db, visible, lookup_id=lookup, offset_s=0)
-    _insert_run(
-        db,
-        visible,
-        result={"agree": True, "structured_only_verdict": "true_positive"},
-        role="verifier",
-        model_id=VERIFIER_MODEL_ID,
-        offset_s=1,
-    )
+    proposer = _insert_run(db, visible, lookup_id=lookup, offset_s=0)
+    _verifier_row(
+        db, visible, proposer, offset_s=1
+    )  # paired: its figures are summed into tech (follow-up B)
     blind = _queued(db, suggestion_visible=False)
     _insert_run(db, blind, offset_s=0)
     acknowledge(db, blind, USER_ID)
@@ -627,8 +662,12 @@ def test_for_a_run_the_rule_applied_to_the_model_own_answer_is_not_served(db, ch
 
 
 def test_a_changed_run_and_an_unchanged_one_are_served_the_same_analysis(db):
-    """Nothing served may give away what the model answered: two stored runs that differ in everything the model's
-    answer touches give one analysis (the whole object, through the real statement)."""
+    """One PAIR, through the real statement, not a proof. The two stored runs differ in the model's verdict and
+    confidence, the rule's `changed`, the verifier's answer and the step it flagged, the facts it declared and the
+    readings it wrote, and agree on everything else; their whole analyses are equal, so none of those fields
+    reaches the object. It says nothing about a field the pair does not vary (the reasons, the summary and step 4's
+    playbook outcome are held by their own tests: `test_a_run_the_rule_changed_and_one_it_applied_to_unchanged_...`
+    below and `test_served_playbook_rule.py`)."""
     _entry(db, ENTRY_A, "Quét cổng nội bộ", "confirmed_incident")
     served = []
     for changed in (True, False):
@@ -851,3 +890,237 @@ def test_entry_cards_is_one_read_only_statement(db):
     with _Statements(db) as statements:
         entries.entry_cards(db, [ENTRY_A, ENTRY_B, ENTRY_C, ENTRY_A])
     assert len(statements) == 1 and statements[0].lstrip().upper().startswith("SELECT")
+
+
+# ── follow-up B: tech covers the whole analysis (the proposer row plus its verifier row) ─────────
+
+
+def _tech(db, alert_id):
+    return get_alert_view(db, alert_id)["analysis"]["tech"]
+
+
+def test_tech_is_the_sum_of_the_proposer_row_and_its_paired_verifier_row(db):
+    alert_id = _queued(db, suggestion_visible=True)
+    proposer = _insert_run(db, alert_id)  # 1200 in, 340 out, 2100 ms, 0.01234
+    _verifier_row(db, alert_id, proposer)  # 300 in, 80 out, 900 ms, 0.0021
+
+    tech = _tech(db, alert_id)
+
+    assert (tech["input_tokens"], tech["output_tokens"], tech["latency_ms"]) == (1500, 420, 3000)
+    assert tech["cost_usd"] == 0.01444 and isinstance(tech["cost_usd"], float)
+
+
+def test_only_the_verifier_row_that_names_the_newest_run_is_summed(db):
+    """The pairing is the verifier row's `gate_result.proposer_run_id`: not the alert, not the time."""
+    alert_id = _queued(db, suggestion_visible=True)
+    older = _insert_run(db, alert_id, offset_s=0)
+    _verifier_row(
+        db,
+        alert_id,
+        older,
+        offset_s=1,
+        input_tokens=1000,
+        output_tokens=1000,
+        latency_ms=1000,
+        cost_usd="1",
+    )
+    newest = _insert_run(db, alert_id, offset_s=5)
+    _verifier_row(db, alert_id, newest, offset_s=6)  # the one that counts
+    _verifier_row(db, alert_id, None, offset_s=7, gate_result={"role": "verifier"})  # no link
+    _verifier_row(db, alert_id, None, offset_s=8, gate_result=[])  # a garbled document
+    _verifier_row(
+        db, alert_id, None, offset_s=8, gate_result={"proposer_run_id": 7}
+    )  # not a run id
+    _verifier_row(db, alert_id, str(uuid.uuid4()), offset_s=9)  # names a run that is not here
+    other_alert = _queued(db, suggestion_visible=True)
+    elsewhere = _insert_run(db, other_alert)
+    _verifier_row(db, alert_id, elsewhere, offset_s=9)  # names a run of ANOTHER alert
+    _verifier_row(
+        db, other_alert, newest, offset_s=9
+    )  # sits under another alert but names this run
+
+    tech = _tech(db, alert_id)
+
+    assert (tech["input_tokens"], tech["output_tokens"], tech["latency_ms"]) == (1500, 420, 3000)
+    assert tech["cost_usd"] == 0.01444
+
+
+def test_a_row_that_is_not_a_verifier_row_is_not_summed_even_if_it_names_the_run(db):
+    alert_id = _queued(db, suggestion_visible=True)
+    proposer = _insert_run(db, alert_id, offset_s=0)
+    # an OLDER proposer-role row whose document names the newest run: the role is what makes a verifier row
+    _insert_run(db, alert_id, offset_s=-5, gate_result={"proposer_run_id": proposer})
+    tech = _tech(db, alert_id)
+    assert (tech["input_tokens"], tech["output_tokens"], tech["latency_ms"]) == (1200, 340, 2100)
+
+
+def test_a_verifier_row_that_failed_has_no_figures_and_the_proposers_stand(db):
+    alert_id = _queued(db, suggestion_visible=True)
+    proposer = _insert_run(db, alert_id)
+    _verifier_row(
+        db,
+        alert_id,
+        proposer,
+        input_tokens=None,
+        output_tokens=None,
+        latency_ms=None,
+        cost_usd=None,
+    )
+    tech = _tech(db, alert_id)
+    assert (tech["input_tokens"], tech["output_tokens"], tech["latency_ms"], tech["cost_usd"]) == (
+        1200,
+        340,
+        2100,
+        0.01234,
+    )
+
+
+def test_a_proposer_row_with_no_figures_takes_the_verifiers(db):
+    alert_id = _queued(db, suggestion_visible=True)
+    proposer = _insert_run(
+        db, alert_id, input_tokens=None, output_tokens=None, latency_ms=None, cost_usd=None
+    )
+    _verifier_row(db, alert_id, proposer)
+    tech = _tech(db, alert_id)
+    assert (tech["input_tokens"], tech["output_tokens"], tech["latency_ms"], tech["cost_usd"]) == (
+        300,
+        80,
+        900,
+        0.0021,
+    )
+
+
+def test_figures_are_none_only_when_both_rows_have_none(db):
+    alert_id = _queued(db, suggestion_visible=True)
+    proposer = _insert_run(
+        db, alert_id, input_tokens=None, output_tokens=None, latency_ms=None, cost_usd=None
+    )
+    _verifier_row(
+        db,
+        alert_id,
+        proposer,
+        input_tokens=None,
+        output_tokens=None,
+        latency_ms=None,
+        cost_usd=None,
+    )
+    tech = _tech(db, alert_id)
+    assert (tech["input_tokens"], tech["output_tokens"], tech["latency_ms"], tech["cost_usd"]) == (
+        None,
+    ) * 4
+
+
+def test_the_verifier_row_costs_no_statement_and_its_model_is_not_selected(db):
+    alert_id = _queued(db, suggestion_visible=True)
+    proposer = _insert_run(db, alert_id)
+    _verifier_row(db, alert_id, proposer)
+    with _Statements(db) as statements:
+        view = get_alert_view(db, alert_id)
+    assert (
+        len([s for s in statements if "FROM llm_runs" in s]) == 2
+    )  # the run (verifier row inside) and the stop reason
+    assert all("model" not in s.lower() for s in statements)
+    assert _leaks(view) == []
+
+
+# ── follow-up A: the playbook-rule signal of a run the RAG default applied to ───────────────────
+
+NOT_APPLIED = {"threshold": 80, "best_pct": 91, "applied": False, "changed": False}
+
+
+def _applied_runs(db, fields):
+    """Two alerts: a model `true_positive` the rule changed, and a model `false_positive` it applied to without
+    changing, whose stored step-4 playbook outcomes differ (served_playbook_rule's pair)."""
+    ids = []
+    for gate in (_pb_changed_gate(fields), _pb_applied_gate(fields)):
+        alert_id = _queued(db, suggestion_visible=True)
+        _insert_run(
+            db, alert_id, result={**RAW, "suggested_action": "false_positive"}, gate_result=gate
+        )
+        ids.append(alert_id)
+    return ids
+
+
+@pytest.mark.parametrize(
+    "fields", [(), ("severity",), ("asset_criticality", "identity_privileged")]
+)
+def test_a_changed_run_and_an_applied_unchanged_one_are_served_identically_through_the_statement(
+    db, fields
+):
+    changed, applied = _applied_runs(db, fields)
+    views = [get_alert_view(db, alert_id) for alert_id in (changed, applied)]
+    rows = {row["alert_id"]: row for row in list_queue(db, page_size=200).rows}
+
+    expected_held = [f"fp_policy:{field}" for field in fields]
+    for view, alert_id in zip(views, (changed, applied), strict=True):
+        assert view["suggestion"]["gate"]["warnings"] == []
+        assert view["held_by"] == expected_held
+        assert rows[alert_id]["held_by"] == expected_held
+    first, second = (view["analysis"] for view in views)
+    for key in ("checks", "check_totals", "highlights"):
+        assert first[key] == second[key], key
+    step4 = {row["id"]: row for row in first["checks"]}["4"]
+    assert step4["detail"] == ("fp_policy_facts" if fields else "fp_policy_ok")
+    # nothing stored was changed: the first run's stored document still holds what the model's check wrote
+    stored = db.execute(
+        "SELECT gate_result->'warnings', gate_result->'missing' FROM llm_runs WHERE subject_id = %s",
+        (changed,),
+    ).fetchone()
+    assert stored == (["rule_is_not_false_positive"], [*fields, "playbook_rule"])
+
+
+def test_a_run_the_rule_did_not_apply_to_is_served_exactly_as_before(db):
+    alert_id = _queued(db, suggestion_visible=True)
+    gate = _pb_changed_gate(("severity",), rag_rule=NOT_APPLIED)
+    _insert_run(
+        db, alert_id, result={**RAW, "suggested_action": "false_positive"}, gate_result=gate
+    )
+    view = get_alert_view(db, alert_id)
+    row = {r["alert_id"]: r for r in list_queue(db, page_size=200).rows}[alert_id]
+    assert view["suggestion"]["gate"]["warnings"] == ["rule_is_not_false_positive"]
+    assert (
+        view["held_by"]
+        == row["held_by"]
+        == ["fp_policy:severity", "fp_policy:playbook_rule", "verifier_disagrees"]
+    )
+
+
+# ── follow-up C, D, E through the view ──────────────────────────────────────────────────────────
+
+
+def test_the_playbook_carries_the_review_state_of_its_table(db):
+    alert_id = _queued(db, suggestion_visible=True)
+    _insert_run(db, alert_id)
+    got = get_alert_view(db, alert_id)["analysis"]["playbook"]
+    assert got["name"] == "brute_force_v1"
+    assert got["rule_table_reviewed"] is get_decision_table("brute_force").reviewed
+
+
+def test_the_reasons_are_capped_at_ten_like_the_suggestions(db):
+    alert_id = _queued(db, suggestion_visible=True)
+    many = [{"claim": f"c{i}", "quote": f"q{i}", "source": "context"} for i in range(13)]
+    _insert_run(
+        db,
+        alert_id,
+        result={**RAW, "reasons": many},
+        gate_result=_gate(proposer_raw={**RAW, "reasons": many}),
+    )
+    view = get_alert_view(db, alert_id)
+    assert len(view["suggestion"]["reasons"]) == len(view["analysis"]["reasons"]) == 10
+
+
+def test_a_decision_table_that_cannot_be_read_never_breaks_the_alert_view(db, monkeypatch):
+    def boom(category):
+        raise RuntimeError("a malformed kb file")
+
+    monkeypatch.setattr(analysis, "get_decision_table", boom)
+    alert_id = _queued(db, suggestion_visible=True)
+    _insert_run(db, alert_id)
+    view = get_alert_view(db, alert_id)
+    assert view["analysis"]["playbook"] == {
+        "name": None,
+        "rule_id": None,
+        "rule_action": None,
+        "rule_table_reviewed": None,
+    }
+    assert view["analysis"]["summary"] == TEXTS["summary"] and view["suggestion"] is not None

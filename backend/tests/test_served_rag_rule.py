@@ -246,8 +246,9 @@ class _OneRowConn:
 
 def _alert_view_pair(run):
     result, gate_result = run
-    # the twelve columns of `queue._SUGGESTION_SQL`: matches, ranked, history, then the run's token/latency/cost
-    row = (RUN_ID, result, gate_result, NOW, [], None, None, None, None, None, None, None)
+    # the sixteen columns of `queue._SUGGESTION_SQL`: matches, ranked, history, the run's token/latency/cost and the
+    # four sums of its verifier row
+    row = (RUN_ID, result, gate_result, NOW, [], *(None,) * 11)
     suggestion, proposed_action, held_by, _rag = queue.latest_suggestion_rag(
         _OneRowConn(row), "a-1"
     )

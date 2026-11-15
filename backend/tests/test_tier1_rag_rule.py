@@ -545,6 +545,10 @@ def _what_the_page_shows(*, result, gate_result, warnings, matches) -> int | Non
         None,  # output_tokens
         None,  # latency_ms
         None,  # cost_usd
+        None,  # the verifier row's four sums: input_tokens, output_tokens, latency_ms, cost_usd
+        None,
+        None,
+        None,
     )
     return queue.latest_suggestion_rag(_PageConn(row), _ALERT_ID)[3]["best_pct"]
 
@@ -661,7 +665,7 @@ class _NullTransaction:
 
 def _the_page_pair(proposer, *, matches, ranked, floor=0.5) -> dict:
     """The pair the alert view carries for a stored run: the page's reader over a row shaped as the statement
-    returns it (twelve columns, `queue._Row`: DEC-220's `ranked` after the matches, DEC-221's history and the run's
+    returns it (sixteen columns, `queue._Row`: DEC-220's `ranked` after the matches, DEC-221's history and the run's
     token, latency and cost columns after it)."""
     row = (
         "run-1",
@@ -676,6 +680,10 @@ def _the_page_pair(proposer, *, matches, ranked, floor=0.5) -> dict:
         None,  # output_tokens
         None,  # latency_ms
         None,  # cost_usd
+        None,  # the verifier row's four sums: input_tokens, output_tokens, latency_ms, cost_usd
+        None,
+        None,
+        None,
     )
     return queue.latest_suggestion_rag(_PageConn(row), _ALERT_ID, rag_min_score=floor)[3]
 
