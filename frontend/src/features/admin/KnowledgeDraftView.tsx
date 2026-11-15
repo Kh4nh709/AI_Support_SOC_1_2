@@ -65,7 +65,7 @@ import {
   Summary as CaseSummary,
   Timeline as CaseTimeline,
 } from "../tier2/CasePage";
-import { RunResult } from "../tier2/InvestigationColumn";
+import { RunResult } from "../tier2/RunResult";
 import { asText } from "../tier2/parts";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { adminKeys, invalidateAfter } from "./adminKeys";

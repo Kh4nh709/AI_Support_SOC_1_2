@@ -510,7 +510,8 @@ export const S = {
       lastAnalysed: "Phân tích gần nhất",
     },
     infoHeading: "THÔNG TIN CASE",
-    aiHeading: "PHÂN TÍCH AI ②",
+    // DEC-221: the heading of the Tier 2 panel, as the approved mock-up has it.
+    aiHeading: "PHÂN TÍCH AI · TIER 2",
     ongoing: "Còn tiếp diễn",
     ongoingHint: (lastSeen: string) =>
       `Có alert mới đến lúc ${lastSeen} sau lần phân tích gần nhất — hãy chạy lại ②.`,
@@ -586,6 +587,44 @@ export const S = {
     closed_benign: "Đã đóng — vi phạm nội quy",
     closed_confirmed: "Đã đóng — sự cố xác nhận",
     archived: "Đã lưu trữ",
+  },
+
+  // What the two AI panels share (DEC-221, spec 2026-11-15): the score tiles, the tab strip, the evidence block, the
+  // knowledge candidates and the technical figures. Nothing here names a tier, and nothing names a model (G5): the
+  // technical tab shows tokens, time and cost, never which model spent them.
+  analysis: {
+    // The middle dot between the parts of one line: "Né tránh phòng thủ · T1562.001 · alert 112437".
+    separator: " · ",
+    // The confidence tile's word, from the model's `low`, `medium` or `high`.
+    level: { low: "Thấp", medium: "Trung bình", high: "Cao" },
+    // The three-segment meter, said to a screen reader.
+    meter: (filled: number) => `${filled} trên 3`,
+    // StatusIcon: the spoken name of a mark that has no text beside it.
+    status: { pass: "Đạt", warn: "Cảnh báo", na: "Không áp dụng" },
+    // The mark of a quoted piece of evidence: the server checked the quote against the log, or could not.
+    evidence: { verified: "Đã kiểm chứng", unverified: "Không kiểm chứng được" },
+    knowledge: {
+      heading: "Tri thức đã duyệt",
+      scored: (count: number) => `${count} mục được chấm điểm`,
+      // An entry the server could not read a title for (it is gone, or has no heading).
+      untitled: "Mục không có tiêu đề",
+      // `knowledge_entries.conclusion`: the closing of the alert or the case the entry was learned from.
+      conclusion: {
+        confirmed_incident: "sự cố thật",
+        concluded_policy_violation: "vi phạm chính sách",
+        concluded_fp: "dương tính giả",
+        closed_fp: "đã đóng FP",
+        closed_benign: "lành tính",
+      },
+    },
+    tech: {
+      tokens: "Token vào → ra",
+      tokenLine: (input: string, output: string) => `${input} → ${output}`,
+      time: "Thời gian",
+      seconds: (value: string) => `${value} giây`,
+      cost: "Chi phí",
+      analysedAt: "Phân tích lúc",
+    },
   },
 
   ai2: {
@@ -669,6 +708,112 @@ export const S = {
       linter: "dữ liệu của case không qua bộ kiểm tra an toàn trước khi gửi cho mô hình",
       schema: "mô hình trả lời sai định dạng, kể cả sau một lần sửa",
       transient: "mô hình không phản hồi sau nhiều lần thử",
+    },
+
+    // ── The Tier 2 panel (DEC-221): four tiles, five tabs ─────────────────────────────────────────────────────
+    // The line at the right of the panel's heading: the case, its clusters and the agents they came from.
+    caseLine: (id: string, clusters: number, agents: readonly string[]) =>
+      [`Case ${id}`, `${clusters} cụm`, ...(agents.length > 0 ? [agents.join(", ")] : [])].join(
+        " · ",
+      ),
+    tile: {
+      verdict: "Kết luận",
+      confidence: "Độ tin cậy",
+      rag: "Tri thức (RAG)",
+      evidence: "Dẫn chứng",
+      // The line under the conclusion: whose word it is. The system's own `need_more_data` (a conclusion it held back,
+      // or an older run's lowered one) says so; every other conclusion is the assistant's suggestion.
+      verdictNote: { plain: "gợi ý của AI", held: "hệ thống giữ lại", overruled: "đã bị hạ" },
+      // The line under the RAG tile, one for each state of the lookup and for each failure kind
+      // (`rag.failures.FAILURE_KINDS`; strings.test.ts holds the keys equal to the backend's).
+      ragNote: {
+        matched: "trùng sự cố cũ",
+        belowFloor: (floor: number | null) =>
+          floor === null ? "dưới mức tối thiểu" : `dưới mức ${floor}%`,
+        noCandidate: "không có mục nào trùng",
+        noLookup: "không có tra cứu",
+        noData: "chưa có dữ liệu",
+        failed: "tra cứu bị lỗi",
+        failedKind: {
+          rate_limit: "vượt giới hạn tốc độ",
+          timeout: "quá thời gian chờ",
+          auth: "thiếu hoặc sai API key",
+          quota: "hết hạn mức",
+          provider_error: "lỗi phía nhà cung cấp",
+          vectordb_unreachable: "không kết nối được vector DB",
+        },
+      },
+      evidenceNote: "khớp nguyên văn",
+      evidenceNone: "không có dẫn chứng",
+    },
+    tabs: {
+      label: "Chi tiết phân tích AI Tier 2",
+      overview: "Tổng quan",
+      timeline: "Diễn biến",
+      hypotheses: "Giả thuyết",
+      evidence: "Bằng chứng",
+      tech: "Kỹ thuật",
+    },
+    // Tổng quan: the scope sets what the model said beside what the system knows of the case's alerts.
+    overview: {
+      scope: {
+        label: "Phạm vi",
+        hosts: "Máy",
+        accounts: "Tài khoản",
+        tactics: "Chiến thuật",
+        model: (list: string) => `AI nêu: ${list}`,
+        modelNone: "AI không nêu",
+        system: (list: string) => `Hệ thống ghi: ${list}`,
+        systemNone: "Hệ thống chưa ghi",
+        steps: (count: number) => `${count} bước MITRE`,
+        endsAt: (what: string) => `kết thúc ở ${what}`,
+        noSteps: "chưa có dòng thời gian",
+      },
+      nextSteps: "Việc nên làm tiếp",
+      priority: { high: "ưu tiên cao", medium: "trung bình", low: "thấp" },
+      attention: "Cần lưu ý",
+      unverified: (count: number, total: number) =>
+        `${count} trên ${total} dẫn chứng chưa kiểm chứng được — cần xác minh trước khi tin (xem tab Bằng chứng).`,
+    },
+    // Diễn biến: the narrative the model wrote, then the timeline the server built from the alerts' own times.
+    timeline: {
+      label: "Dòng thời gian",
+      none: "Lượt phân tích này không có dòng thời gian.",
+      alert: "alert",
+    },
+    // Giả thuyết: each hypothesis, then what the knowledge base had (the same card as the alert page's).
+    hypothesesTab: {
+      likelihood: {
+        high: "khả dĩ cao",
+        medium: "khả dĩ trung bình",
+        low: "khả dĩ thấp",
+      },
+      for: "Ủng hộ:",
+      against: "Chống lại:",
+      none: "Lượt phân tích này không nêu giả thuyết nào.",
+      knowledgeBelowFloor: (floor: number | null) =>
+        floor === null
+          ? "Không mục nào đạt mức tối thiểu, nên không có tri thức tham khảo nào được đưa cho AI."
+          : `Không mục nào đạt mức tối thiểu ${floor}%, nên không có tri thức tham khảo nào được đưa cho AI.`,
+      knowledgeNoCandidate: "Không có mục tri thức đã duyệt nào được chấm điểm cho case này.",
+      knowledgeNoLookup: "Lượt phân tích này không tra cứu tri thức đã duyệt.",
+      knowledgeFailed: (reason: string | null) =>
+        reason === null
+          ? "Không tra cứu được tri thức đã duyệt."
+          : `Không tra cứu được tri thức đã duyệt: ${reason}.`,
+    },
+    // Bằng chứng: the quotes the assistant cited and whether the server found each in the log.
+    evidenceTab: {
+      summary: (verified: number, cited: number) =>
+        `${verified} trên ${cited} dẫn chứng khớp nguyên văn với log của alert trong case.`,
+      matched: "khớp nguyên văn",
+      alert: "alert",
+    },
+    // Kỹ thuật: the figures of the run. Tokens, time, cost and when are `S.analysis.tech`'s.
+    tech: {
+      playbook: "Playbook",
+      alertsRead: "Alert AI đã đọc",
+      alertsReadOf: (read: number, total: number) => `${read} trên ${total}`,
     },
   },
 

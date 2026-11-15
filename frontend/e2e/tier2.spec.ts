@@ -85,24 +85,81 @@ test("Tier 1 escalates, Tier 2 analyses, notes and concludes, and a second concl
   await expect(page.getByRole("heading", { name: title })).toBeVisible();
 
   await page.getByRole("button", { name: S.ai2.analyze, exact: true }).click();
-  // The worker takes the job, the stub answers, and the page (polling while it runs) shows the result: the
-  // conclusion it suggests, and its two quotes marked by what the server checked against the log.
-  const verified = page.locator('[data-verified="true"]');
-  const unverified = page.locator('[data-verified="false"]');
-  await expect(verified.first()).toBeVisible({ timeout: 60_000 });
-  await expect(unverified.first()).toBeVisible();
-  await expect(verified.first()).toHaveText(S.ai2.mark.verified);
-  await expect(unverified.first()).toHaveText(S.ai2.unverified);
-  await expect(page.getByText(S.ai2.mark.quote_not_found)).toBeVisible();
-  await expect(
-    page.getByText(S.ai2.suggestedConclusion.false_positive, { exact: true }),
-  ).toBeVisible();
-  // P14-T03 (DEC-213): the page says what the AI concluded; one quote verified, so the system held nothing back.
-  const conclusion = page.getByText(S.ai2.conclusion, { exact: false });
-  await expect(conclusion).toContainText(
-    `${S.ai2.conclusion}: ${S.ai2.suggestedConclusion.false_positive}`,
+  // The worker takes the job, the stub answers, and the page (polling while it runs) shows the scorecard of the
+  // result (DEC-221): four tiles over five tabs. The panel is headed as the approved mock-up has it, with the case
+  // line (the case, its clusters, the agent) at the right.
+  const column = page.getByRole("region", { name: S.case.aiHeading });
+  await expect(column.getByRole("tablist", { name: S.ai2.tabs.label })).toBeVisible({
+    timeout: 60_000,
+  });
+  await expect(column.getByRole("heading", { name: S.case.aiHeading })).toHaveText(
+    "PHÂN TÍCH AI · TIER 2",
   );
-  await expect(conclusion).not.toContainText("giữ lại");
+  await expect(column.getByText(S.ai2.caseLine(id.slice(0, 8), 1, [head.agent]))).toBeVisible();
+  // The conclusion tile: what the AI suggests, and that it is only a suggestion. P14-T03 (DEC-213): one quote
+  // verified, so the system held nothing back.
+  const verdict = column.getByRole("group", { name: S.ai2.tile.verdict });
+  await expect(
+    verdict.getByText(S.ai2.suggestedConclusion.false_positive, { exact: true }),
+  ).toBeVisible();
+  await expect(verdict).toContainText(S.ai2.tile.verdictNote.plain);
+  await expect(column).not.toContainText("giữ lại");
+  // The evidence tile: one of the stub's two quotes was found in the log.
+  await expect(column.getByRole("group", { name: S.ai2.tile.evidence })).toContainText(
+    `1/2${S.ai2.tile.evidenceNote}`,
+  );
+  // The quotes are on the Bằng chứng tab, each marked by what the server checked against the log, with the
+  // server's reason for the one it did not find.
+  await column.getByRole("tab", { name: S.ai2.tabs.evidence }).click();
+  const verified = column.locator('[data-verified="true"]');
+  const unverified = column.locator('[data-verified="false"]');
+  await expect(verified.first()).toBeVisible();
+  await expect(unverified.first()).toBeVisible();
+  await expect(
+    verified.first().getByRole("img", { name: S.analysis.evidence.verified }),
+  ).toBeVisible();
+  await expect(
+    unverified.first().getByRole("img", { name: S.analysis.evidence.unverified }),
+  ).toBeVisible();
+  await expect(column.getByText(S.ai2.mark.quote_not_found)).toBeVisible();
+  // The tab strip is a real tablist: the arrow keys move between the tabs.
+  await column.getByRole("tab", { name: S.ai2.tabs.evidence }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(column.getByRole("tab", { name: S.ai2.tabs.tech })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  // G5 (DEC-221, the Owner's requirement): the technical tab has its six rows and no model, and no tab of the
+  // page names one, in its text or in a tooltip.
+  await expect(column.getByRole("tabpanel").locator("dt")).toHaveText([
+    S.analysis.tech.tokens,
+    S.analysis.tech.time,
+    S.analysis.tech.cost,
+    S.analysis.tech.analysedAt,
+    S.ai2.tech.playbook,
+    S.ai2.tech.alertsRead,
+  ]);
+  const MODEL_NAME = /glm|gpt|deepseek|claude|model:/i;
+  for (const name of Object.values(S.ai2.tabs).slice(1)) {
+    await column.getByRole("tab", { name }).click();
+    expect(await column.innerText()).not.toMatch(MODEL_NAME);
+    expect(
+      await column
+        .locator("[title], [aria-label], [alt]")
+        .evaluateAll((els) =>
+          els
+            .map((el) =>
+              [
+                el.getAttribute("title"),
+                el.getAttribute("aria-label"),
+                el.getAttribute("alt"),
+              ].join(" "),
+            )
+            .join(" "),
+        ),
+    ).not.toMatch(MODEL_NAME);
+  }
+  await column.getByRole("tab", { name: S.ai2.tabs.overview }).click();
 
   // ---- A note.
   const note = `Checked with the owner of ${head.agent}: routine.`;
