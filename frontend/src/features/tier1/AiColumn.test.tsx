@@ -402,6 +402,21 @@ describe("Bằng chứng", () => {
     ]);
   });
 
+  it("says 'Không kiểm chứng được', the words of the mark beside it, for a quote the server gave no reason for", async () => {
+    renderColumn(
+      view({
+        analysis: analysis({
+          reasons: [
+            { claim: "c", quote: "q", source: "wazuh_raw_log", verified: false, why: null },
+          ],
+        }),
+      }),
+    );
+    const row = within(await openTab("Bằng chứng")).getByRole("listitem");
+    expect(said(row)[2]).toBe("Log gốc của alert · Không kiểm chứng được");
+    expect(within(row).getByRole("img")).toHaveAccessibleName("Không kiểm chứng được");
+  });
+
   it("shows a source it has no words for as the code, and says plainly when the model cited nothing", async () => {
     const odd = renderColumn(
       view({

@@ -330,7 +330,10 @@ export function EvidenceTab({ run }: { run: RunView }) {
         {evidence.map((row, index) => {
           const ok = row.verified === true;
           const alertId = nonEmpty(row.alert_id);
-          const outcome = ok ? T.matched : (nonEmpty(row.reason_text) ?? S.ai2.unverified);
+          // The words of the mark beside the row ("Không kiểm chứng được"), for a quote the server gave no reason for.
+          const outcome = ok
+            ? T.matched
+            : (nonEmpty(row.reason_text) ?? S.analysis.evidence.unverified);
           return (
             <li key={index}>
               <EvidenceBlock
