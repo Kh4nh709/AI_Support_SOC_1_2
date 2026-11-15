@@ -159,12 +159,17 @@ Tier 1 (`tier1/queue.py`, the alert view):
 - `analysis.highlights`: built by the server, not the model, from the above: up to four rows of
   `{direction: up|down|warn, code, params}` (history majority, privileged identity, high or
   unknown asset, critical severity, RAG state, each warning). The UI words the codes.
-- `analysis.tech`: tokens, latency, cost, analysed at, response format, MITRE ids, correlated
-  clusters at analysis. No model id.
+- `analysis.tech`: tokens, latency, cost, analysed at, MITRE ids, correlated clusters at analysis.
+  No model id. (The answer format of the mock-up is not stored per run and is left out.)
 
 Tier 2 (`tier2/investigation_view.py`): `timeline` (with server times), `scope`, hypotheses with
-`likelihood`, `next_steps` with `priority`, the knowledge candidates as above, `tech` without the
-model id.
+`likelihood`, `next_steps_rows` (`{step, priority}`; the existing `next_steps` list of strings stays
+until the new UI lands), the knowledge candidates as above, `tech` without the model id. The raw
+`result` the view and `GET /api/tier2/runs/{id}` serve carries the server-filtered timeline, never a
+row naming an alert outside the case.
+
+**The number under the floor** (`below_floor_pct`, DEC-220) is cut down, not rounded, so it is
+always below `floor_pct` on the page (a raw 0.4999 prints 49 %, not 50 %).
 
 **For a run the RAG default applied to (DEC-219)** the Tier 1 view serves none of: the model's two
 readings, `would_change`, the model's declared facts, the verifier's check row, the reasons'
