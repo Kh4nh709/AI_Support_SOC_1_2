@@ -56,7 +56,24 @@ export type ReasonRow = {
   /** Why the quote was not verified, in words (or the code); null when it was. */
   why: string | null;
 };
-export type CheckRow = { id: string; name: string; outcome: "pass" | "warn" | "na"; text: string };
+export type CheckRow = {
+  id: string;
+  name: string;
+  outcome: "pass" | "warn" | "na";
+  text: string;
+  /** The held reasons and gate warnings of this step, in words: what the line above them cannot say. */
+  notes: string[];
+};
+/**
+ * The gate's own account of the run, read from the keys of the view beside `analysis` (spec G2: which checks warned, and
+ * why): `held` is every held reason in words (the overview's line), `loose` the ones no step row of the page carries, and
+ * `forced` the verdict before and after the gate for a run the gate forced (a version 1 row).
+ */
+export type GateNotes = {
+  held: string[];
+  loose: string[];
+  forced: { proposed: string | null; final: string | null } | null;
+};
 export type FactRow = {
   field: string;
   system: string;
@@ -94,6 +111,7 @@ export type AnalysisModel = {
   /** Whether the facts table has the model's column and the agreement: a run with no declared value has neither. */
   showDeclared: boolean;
   checks: CheckRow[];
+  gate: GateNotes;
   totals: { passed: number; applicable: number; warnings: number };
   rag: RagModel | null;
   history: { line: string } | null;
@@ -107,7 +125,7 @@ export type AnalysisModel = {
  * The sentence of a highlight: its code's words, from the params the server sent. A param that is missing or not a
  * number leaves a plainer sentence, and a code with no words is the code itself.
  */
-export function highlightText(code: string, params: unknown): string {
+export function highlightText(code: string, params: unknown, scope: string | null = null): string {
   if (!Object.hasOwn(P.highlight, code)) return code;
   const bag = isRecord(params) ? params : {};
   const conclusion = text(bag.conclusion);
@@ -117,6 +135,7 @@ export function highlightText(code: string, params: unknown): string {
     total: wholeCount(bag.total),
     pct: pct(bag.pct),
     floor: pct(bag.floor_pct),
+    scope,
     conclusion: conclusion === null ? null : labelOf(S.analysis.knowledge.conclusion, conclusion),
     reason: failureKindLabel(failure),
   };
@@ -124,13 +143,25 @@ export function highlightText(code: string, params: unknown): string {
   return say === undefined ? code : say(words);
 }
 
-function highlightsOf(value: unknown): HighlightRow[] {
+/**
+ * The scope of the decision history as the middle of a sentence: the words of the Tri thức tab's line for the history's
+ * key ("Cùng kịch bản và cùng máy" is "cùng kịch bản và cùng máy"), or null when the run has no history or names a key
+ * this page has no words for (the highlight then says "tương tự", and the history line shows the key as it came).
+ */
+function scopeOf(history: unknown): string | null {
+  const key = isRecord(history) ? text(history.key) : null;
+  if (key === null || !Object.hasOwn(P.history.scope, key)) return null;
+  const words = wordOf(P.history.scope, key);
+  return words.charAt(0).toLowerCase() + words.slice(1);
+}
+
+function highlightsOf(value: unknown, scope: string | null): HighlightRow[] {
   return list(value).flatMap((row): HighlightRow[] => {
     if (!isRecord(row)) return [];
     const code = text(row.code);
     if (code === null) return [];
     const direction = row.direction === "up" || row.direction === "down" ? row.direction : "warn";
-    return [{ direction, text: highlightText(code, row.params) }];
+    return [{ direction, text: highlightText(code, row.params, scope) }];
   });
 }
 
@@ -194,10 +225,25 @@ function rawFactsOf(value: unknown): RawFact[] {
 
 const OUTCOMES = ["pass", "warn", "na"] as const;
 
+/**
+ * Why the RAG rule did not apply, from the state of the lookup ("không có mục trùng"). A state this page has no words
+ * for is shown as the code, never left out.
+ */
+function ruleWhy(rag: RagModel | null): string | null {
+  if (rag === null) return null;
+  const why = Object.hasOwn(P.checks.ragRuleWhy, rag.state)
+    ? (P.checks.ragRuleWhy as Record<string, (best: number | null, threshold: number) => string>)[
+        rag.state
+      ]
+    : undefined;
+  return why === undefined ? rag.state : why(rag.best_pct, rag.threshold);
+}
+
 function checksOf(
   value: unknown,
   facts: readonly RawFact[],
   evidence: { verified: number; total: number },
+  rag: RagModel | null,
 ): CheckRow[] {
   return list(value).flatMap((row): CheckRow[] => {
     if (!isRecord(row)) return [];
@@ -229,9 +275,92 @@ function checksOf(
       evidence.total > 0
     ) {
       words = P.checks.quotes(evidence.verified, evidence.total);
+    } else if (detail === "rag_rule_not_applied") {
+      const why = ruleWhy(rag);
+      if (why !== null) words = P.checks.withWhy(words, why);
     }
-    return [{ id, name: wordOf(P.checks.step, id), outcome, text: words }];
+    return [{ id, name: wordOf(P.checks.step, id), outcome, text: words, notes: [] }];
   });
+}
+
+// ── the gate's own account ───────────────────────────────────────────────────────────────────────
+
+/** The gate step each closed held reason belongs to (`llm.verdicts.held_reasons`); null for a code that names none. */
+function stepOfHeld(code: string): string | null {
+  if (code === "facts_mismatch") return "2";
+  if (code === "no_verified_quote") return "3";
+  if (code.startsWith("fp_policy:")) return "4";
+  if (code === "verifier_disagrees" || code === "verifier_invalid") return "6";
+  return null;
+}
+
+/** The non-empty strings of a list, once each, in their order (what `aiState` reads `held_by` as). */
+function codesOf(value: unknown): string[] {
+  const found = list(value).filter((x): x is string => typeof x === "string" && x !== "");
+  return [...new Set(found)];
+}
+
+/** The verifier's verdict in the product's verdict labels ("FP", "TP", "Cần xem xét"), or null when it gave none. */
+function verifierWords(gate: Record<string, unknown>): string | null {
+  const verdict = text(gate.verifier_verdict);
+  return verdict === null ? null : labelOf(S.ai1.action, verdict);
+}
+
+/**
+ * What the view says of the gate beside `analysis` and the panel must not leave unread (spec G2): the held reasons
+ * (`held_by`) and the reasons the step-4 rule check wrote (`gate.warnings`), each on the row of the step it belongs to, in
+ * the words of the flat column; the verifier's verdict beside step 6; the verdict before and after the gate of a run the
+ * gate forced. The server leaves some of these out for a run the RAG default applied to (DEC-219: `served_held_reasons`,
+ * `served_warnings`, `served_verifier_verdict`), and this page does too, whatever arrives: it never says what the
+ * verifier answered, never a verdict before and after the gate, and none of the reasons that would tell what the model
+ * answered. A reason whose step has no row, and a code that names no step, is listed apart and never dropped.
+ */
+function withGate(view: AlertView, checks: CheckRow[]): { checks: CheckRow[]; gate: GateNotes } {
+  const suggestion: unknown = view.suggestion;
+  const gateRaw = isRecord(suggestion) ? suggestion.gate : null;
+  const gate: Record<string, unknown> = isRecord(gateRaw) ? gateRaw : {};
+  const rule = isRecord(gate.rag_rule) ? gate.rag_rule : {};
+  const applied = rule.applied === true;
+  const leftOut = ["verifier_disagrees", "fp_policy:playbook_rule"];
+
+  const heldCodes = codesOf(view.held_by).filter((code) => !applied || !leftOut.includes(code));
+  const warnings = list(gate.warnings)
+    .filter((w) => !(applied && typeof w === "string" && Object.hasOwn(P.checks.ruleWarning, w)))
+    .map((w) => (typeof w === "string" ? wordOf(P.checks.ruleWarning, w) : JSON.stringify(w)));
+
+  const rows = new Map(checks.map((row) => [row.id, row]));
+  const loose: string[] = [];
+  const place = (step: string | null, words: string): void => {
+    const row = step === null ? undefined : rows.get(step);
+    if (row === undefined) loose.push(words);
+    else row.notes.push(words);
+  };
+  const held = heldCodes.map((code) => labelOf(S.ai1.heldReason, code));
+  heldCodes.forEach((code, index) => place(stepOfHeld(code), held[index] ?? code));
+  for (const words of warnings) place("4", words);
+
+  // The verifier's own verdict, beside the outcome of step 6; never for a run the default decided.
+  const said = applied ? null : verifierWords(gate);
+  const verifierRow = rows.get("6");
+  if (said !== null && verifierRow !== undefined) {
+    verifierRow.text += P.checks.verifierSaid(said);
+  }
+
+  const forcedRun = !applied && gate.forced === true;
+  const pair = (value: unknown): string | null => {
+    const verdict = text(value);
+    return verdict === null ? null : labelOf(S.ai1.action, verdict);
+  };
+  return {
+    checks,
+    gate: {
+      held,
+      loose,
+      forced: forcedRun
+        ? { proposed: pair(gate.proposed_verdict), final: pair(gate.final_verdict) }
+        : null,
+    },
+  };
 }
 
 /** `{passed, applicable, warnings}` as the server sent them, or counted from the rows when it sent none. */
@@ -267,16 +396,14 @@ function historyOf(value: unknown): { line: string } | null {
   if (total === null || total <= 0) return null;
   const counts = isRecord(value.by_conclusion) ? value.by_conclusion : {};
   const count = (name: string): number => wholeCount(counts[name]) ?? 0;
+  // A key this page has no words for is shown as it came; a history with no key is "Alert tương tự".
   const key = text(value.key);
-  const scope =
-    key !== null && Object.hasOwn(P.history.scope, key)
-      ? wordOf(P.history.scope, key)
-      : P.history.generic;
+  const scope = key === null ? P.history.generic : wordOf(P.history.scope, key);
   let line = P.history.line(scope, total, count("confirmed_incident"));
   const rest = Object.keys(P.history.conclusion)
     .filter((name) => name !== "confirmed_incident" && count(name) > 0)
     .map((name) => `${count(name)} ${wordOf(P.history.conclusion, name)}`);
-  if (rest.length > 0) line += P.history.rest(rest.join(", "));
+  if (rest.length > 0) line += P.history.rest(rest);
   const lastSeen = text(value.last_seen);
   if (lastSeen !== null) line += P.history.lastSeen(formatTime(lastSeen));
   return { line };
@@ -317,7 +444,8 @@ export function analysisOf(view: AlertView): AnalysisModel | null {
   const reasons = reasonsOf(raw.reasons);
   const evidence = { verified: reasons.filter((r) => r.verified).length, total: reasons.length };
   const facts = rawFactsOf(raw.facts);
-  const checks = checksOf(raw.checks, facts, evidence);
+  const rag = ragOf(raw.rag);
+  const { checks, gate } = withGate(view, checksOf(raw.checks, facts, evidence, rag));
   return {
     summary: text(raw.summary),
     readingAttack: text(raw.reading_attack),
@@ -326,7 +454,7 @@ export function analysisOf(view: AlertView): AnalysisModel | null {
     nextChecks: list(raw.next_checks)
       .flatMap((item) => (text(item) === null ? [] : [item as string]))
       .slice(0, SHOWN),
-    highlights: highlightsOf(raw.highlights),
+    highlights: highlightsOf(raw.highlights, scopeOf(raw.history)),
     reasons,
     evidence,
     facts: facts.map((fact) => ({
@@ -337,8 +465,9 @@ export function analysisOf(view: AlertView): AnalysisModel | null {
     })),
     showDeclared: facts.some((fact) => fact.declared !== null),
     checks,
+    gate,
     totals: totalsOf(raw.check_totals, checks),
-    rag: ragOf(raw.rag),
+    rag,
     history: historyOf(raw.history),
     playbook: playbookOf(raw.playbook),
     tech: techOf(raw.tech),
@@ -359,7 +488,8 @@ export type VerdictTile = { label: string; tone: Tone; note: string | null; forc
  * line. The flag is the gate's own (a version 1 row, before DEC-217): a new run never carries it.
  */
 export function verdictTile(state: Concluded): VerdictTile {
-  const forced = state.kind === "ready" && state.forced;
+  // A run the RAG default decided is never forced (DEC-219, section 6: no flag): whatever the gate's record says.
+  const forced = state.kind === "ready" && state.forced && state.ragDefaultBelow === undefined;
   const conclusion = conclusionOf(state);
   if (conclusion === null) {
     return { label: labelOf(S.ai1.action, state.action), tone: "neutral", note: null, forced };

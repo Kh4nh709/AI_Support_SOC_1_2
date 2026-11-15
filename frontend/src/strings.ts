@@ -58,6 +58,8 @@ export type HighlightWords = {
   total: number | null;
   pct: number | null;
   floor: number | null;
+  /** The history's scope as the middle of a sentence ("cùng kịch bản và cùng máy"), or null when the run names none. */
+  scope: string | null;
   /** The label of the entry's conclusion, or null. */
   conclusion: string | null;
   /** The words of the failure kind, or null. */
@@ -375,18 +377,23 @@ export const S = {
         nextChecks: "Nên kiểm tra tiếp",
         // An older run, or one with nothing to say: no empty headings, one plain line.
         none: "Lượt phân tích này không có phần tóm tắt.",
+        // The checks that raised a warning, all of them, as the last line of the highlights (the Kiểm chứng tab says
+        // under which step each one stands): the held reasons, in the words of the flat column.
+        held: (reasons: readonly string[]) => `Cảnh báo kiểm chứng: ${reasons.join(", ")}`,
       },
       // `analysis.highlights[].code`, in the order the server serves them (`HIGHLIGHT_CODES`). The server builds each one
       // from system facts, never from a text the model wrote.
       highlight: {
-        history_incident: ({ count, total }: HighlightWords) =>
+        // "Lịch sử: 15 trên 15 alert cùng kịch bản và cùng máy từng là sự cố thật." The scope is the history's own
+        // (`history.scope`), the words of the Tri thức tab's line; a run that names none says "tương tự".
+        history_incident: ({ count, total, scope }: HighlightWords) =>
           count !== null && total !== null
-            ? `Lịch sử: ${count} trên ${total} alert tương tự từng là sự cố thật.`
-            : "Lịch sử: phần lớn alert tương tự từng là sự cố thật.",
-        history_benign: ({ count, total }: HighlightWords) =>
+            ? `Lịch sử: ${count} trên ${total} alert ${scope ?? "tương tự"} từng là sự cố thật.`
+            : `Lịch sử: phần lớn alert ${scope ?? "tương tự"} từng là sự cố thật.`,
+        history_benign: ({ count, total, scope }: HighlightWords) =>
           count !== null && total !== null
-            ? `Lịch sử: ${count} trên ${total} alert tương tự từng được đóng là không phải tấn công.`
-            : "Lịch sử: phần lớn alert tương tự từng được đóng là không phải tấn công.",
+            ? `Lịch sử: ${count} trên ${total} alert ${scope ?? "tương tự"} từng được đóng là không phải tấn công.`
+            : `Lịch sử: phần lớn alert ${scope ?? "tương tự"} từng được đóng là không phải tấn công.`,
         identity_privileged: () => "Tài khoản liên quan là tài khoản đặc quyền.",
         asset_high: () => "Tài sản liên quan có độ quan trọng cao.",
         asset_unknown: () => "Độ quan trọng của tài sản liên quan chưa rõ.",
@@ -494,7 +501,7 @@ export const S = {
         // "Cùng kịch bản và cùng máy: 15 quyết định, 15 là sự cố thật · gần nhất 06/11."
         line: (scope: string, total: number, incidents: number) =>
           `${scope}: ${total} quyết định, ${incidents} là sự cố thật`,
-        rest: (parts: string) => `; còn lại: ${parts}`,
+        rest: (parts: readonly string[]) => `; còn lại: ${parts.join(", ")}`,
         lastSeen: (when: string) => ` · gần nhất ${when}`,
       },
       playbook: {
@@ -556,6 +563,34 @@ export const S = {
         mismatch: (field: string, declared: string, system: string) =>
           `AI khai ${field.toLowerCase()} ${declared}, hệ thống ghi ${system}`,
         mismatchJoin: "; ",
+        // The verdict the verifier gave, beside the step's outcome: "không đồng ý (trả lời: Cần xem xét)".
+        verifierSaid: (verdict: string) => ` (trả lời: ${verdict})`,
+        // The RAG rule's outcome and why it did not apply: "không áp dụng, không có mục trùng".
+        withWhy: (detail: string, why: string) => `${detail}, ${why}`,
+        // Why the rule did not apply, from the state of the lookup (`STATES`).
+        ragRuleWhy: {
+          matched: (best: number | null, threshold: number) =>
+            best === null
+              ? "độ trùng không dưới ngưỡng"
+              : `độ trùng ${best}% không dưới ngưỡng ${threshold}%`,
+          below_floor: () => "không có mục nào đạt mức tối thiểu",
+          no_candidate: () => "không có mục trùng",
+          failed: () => "tra cứu bị lỗi",
+          no_lookup: () => "không có tra cứu",
+        },
+        // `gate.warnings`: each reason the rule check of step 4 wrote (`llm.verdicts.RULE_CHECK_WARNINGS`).
+        ruleWarning: {
+          no_rule_cited: "AI không dẫn rule nào của bảng quyết định",
+          no_table: "loại alert này chưa có bảng quyết định",
+          table_unreviewed: "bảng quyết định chưa được ký duyệt",
+          unknown_rule: "rule AI dẫn không có trong bảng quyết định",
+          rule_does_not_hold: "rule AI dẫn không khớp dữ kiện của alert",
+          rule_is_not_false_positive: "rule AI dẫn không dẫn tới kết luận FP",
+        },
+        // The held reasons that name none of the steps drawn above: listed under the tab, never dropped.
+        loose: "Cảnh báo không thuộc bước nào ở trên",
+        // The list of the gate's steps, named for a screen reader.
+        listLabel: "Các bước kiểm chứng",
       },
       facts: {
         label: "Dữ kiện đã dùng",

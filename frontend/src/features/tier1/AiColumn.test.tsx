@@ -311,12 +311,15 @@ describe("Tổng quan, a version 4 run", () => {
       S.analysis.status.up,
       S.analysis.status.warn,
       S.analysis.status.warn,
+      S.analysis.status.warn,
     ]);
     expect(said(highlights).slice(1)).toEqual([
-      "Lịch sử: 15 trên 15 alert tương tự từng là sự cố thật.",
+      "Lịch sử: 15 trên 15 alert cùng kịch bản và cùng máy từng là sự cố thật.",
       "Tài khoản liên quan là tài khoản đặc quyền.",
       "Không có tri thức đã duyệt nào trùng từ 50% trở lên (cao nhất 47%).",
       "Bộ kiểm chứng độc lập không đồng ý.",
+      // the held reasons of the view, all of them, in the words of the flat column (spec G2)
+      "Cảnh báo kiểm chứng: AI khai dữ kiện lệch với hệ thống, bộ kiểm tra không đồng ý",
     ]);
     const attack = within(panel).getByRole("region", { name: "Nếu là tấn công" });
     expect(attack).toHaveTextContent(
@@ -354,7 +357,7 @@ describe("Tổng quan, an older run (stored before version 4)", () => {
   });
 
   it("says plainly that there is nothing to show when there is not even a highlight", () => {
-    renderColumn(view({ analysis: olderAnalysis({ highlights: [] }) }));
+    renderColumn(view({ analysis: olderAnalysis({ highlights: [] }), held_by: [] }));
     const panel = within(column()).getByRole("tabpanel");
     expect(panel).toHaveTextContent("Lượt phân tích này không có phần tóm tắt.");
     expect(within(panel).queryByRole("region")).not.toBeInTheDocument();
@@ -567,22 +570,24 @@ describe("Kiểm chứng", () => {
       "Đạt",
       "Cảnh báo",
     ]);
-    const card = within(panel).getAllByRole("img")[0]!.closest("div")!.parentElement!;
+    const card = within(panel).getByRole("list", { name: "Các bước kiểm chứng" });
     expect(said(card)).toEqual([
       "Đúng định dạng",
       "— hợp lệ ngay lần đầu",
       "Dữ kiện",
       "— AI khai mức nghiêm trọng high, hệ thống ghi medium",
+      "AI khai dữ kiện lệch với hệ thống",
       "Dẫn chứng",
       "— 2 trên 4 khớp nguyên văn",
       "Quy tắc RAG",
-      "— không áp dụng",
+      "— không áp dụng, không có mục nào đạt mức tối thiểu",
       "Chính sách FP",
       "— không xét, vì kết luận là TP",
       "Chèn lệnh",
       "— không phát hiện",
       "Bộ kiểm chứng độc lập",
-      "— không đồng ý",
+      "— không đồng ý (trả lời: Cần xem xét)",
+      "bộ kiểm tra không đồng ý",
     ]);
   });
 
@@ -613,6 +618,301 @@ describe("Kiểm chứng", () => {
   it("says that nothing was checked when no row came", async () => {
     renderColumn(view({ analysis: analysis({ checks: [], check_totals: undefined }) }));
     expect(await openTab("Kiểm chứng")).toHaveTextContent("chưa có kiểm chứng");
+  });
+});
+
+/** What the column says on each of its five tabs, one text each: the page as a whole, for comparing two pages. */
+async function everyTab(): Promise<string[]> {
+  const pages: string[] = [];
+  for (const tab of ["Tổng quan", "Bằng chứng", "Tri thức", "Kiểm chứng", "Kỹ thuật"]) {
+    await openTab(tab);
+    pages.push(textOf(column()));
+  }
+  return pages;
+}
+
+/** The gate of a view, with what is said of it (`held_by`, the gate's own keys) changed. */
+const withGate = (
+  gate: Record<string, unknown>,
+  held: string[] = [],
+  over: Partial<AlertView> = {},
+) =>
+  view({
+    held_by: held,
+    suggestion: suggestion({
+      gate: {
+        forced: false,
+        forced_by: [],
+        proposed_verdict: "true_positive",
+        final_verdict: "true_positive",
+        verifier_verdict: null,
+        warnings: [],
+        ...gate,
+      },
+    }),
+    ...over,
+  });
+
+describe("the gate's own account of the run, on the page (spec G2)", () => {
+  // step 4 saw a fact and the playbook fail; the model cited no rule; the verifier answered needs_review
+  const HELD = [
+    "fp_policy:ioc_reputation",
+    "fp_policy:playbook_rule",
+    "facts_mismatch",
+    "verifier_disagrees",
+  ];
+  const fpFacts = analysis({
+    checks: [
+      { id: "2", outcome: "warn", detail: "facts_mismatch" },
+      { id: "4", outcome: "warn", detail: "fp_policy_facts" },
+      { id: "6", outcome: "warn", detail: "verifier_disagrees" },
+    ],
+    check_totals: { passed: 0, applicable: 3, warnings: 3 },
+  });
+  const both = () =>
+    withGate({ warnings: ["no_rule_cited"], verifier_verdict: "needs_review" }, HELD, {
+      analysis: fpFacts,
+    });
+
+  it("names, under step 4, the fact that failed and the playbook that failed with it, and what the rule check wrote", async () => {
+    renderColumn(both());
+    const panel = await openTab("Kiểm chứng");
+    const card = within(panel).getByRole("list", { name: "Các bước kiểm chứng" });
+    expect(said(card)).toEqual([
+      "Dữ kiện",
+      "— AI khai mức nghiêm trọng high, hệ thống ghi medium",
+      "AI khai dữ kiện lệch với hệ thống",
+      "Chính sách FP",
+      "— một dữ kiện của alert không cho phép kết luận FP",
+      "IOC độc hại hoặc đáng ngờ",
+      "không khớp bảng quyết định đã duyệt",
+      "AI không dẫn rule nào của bảng quyết định",
+      "Bộ kiểm chứng độc lập",
+      "— không đồng ý (trả lời: Cần xem xét)",
+      "bộ kiểm tra không đồng ý",
+    ]);
+  });
+
+  it("puts the held reasons on the default tab too: the IOC reputation has no highlight, and is said there", () => {
+    renderColumn(both());
+    const panel = within(column()).getByRole("tabpanel");
+    const highlights = within(panel).getByRole("region", { name: "Điều nổi bật" });
+    expect(said(highlights).at(-1)).toBe(
+      "Cảnh báo kiểm chứng: IOC độc hại hoặc đáng ngờ, không khớp bảng quyết định đã duyệt, AI khai dữ kiện lệch với hệ thống, bộ kiểm tra không đồng ý",
+    );
+    expect(within(highlights).getAllByRole("img").at(-1)).toHaveAccessibleName("Cảnh báo");
+  });
+
+  it("says no warning line on the default tab for a run no check warned about", () => {
+    renderColumn(withGate({}, [], { analysis: analysis({ highlights: [] }) }));
+    const panel = within(column()).getByRole("tabpanel");
+    expect(within(panel).queryByText(/^Cảnh báo kiểm chứng:/)).not.toBeInTheDocument();
+  });
+
+  it("draws the highlights card for a run whose only highlight is the held line", () => {
+    renderColumn(
+      withGate({}, ["fp_policy:severity"], {
+        analysis: olderAnalysis({ highlights: [] }),
+      }),
+    );
+    const panel = within(column()).getByRole("tabpanel");
+    expect(said(within(panel).getByRole("region", { name: "Điều nổi bật" }))).toEqual([
+      "Điều nổi bật",
+      "Cảnh báo kiểm chứng: alert mức critical",
+    ]);
+    expect(within(panel).queryByText(P.overview.none)).not.toBeInTheDocument();
+  });
+
+  // The page used to read none of these keys: a change to any of them left it as it was.
+  it.each([
+    [
+      "held_by",
+      () => withGate({}, [], { analysis: fpFacts }),
+      () => withGate({}, ["fp_policy:severity"], { analysis: fpFacts }),
+    ],
+    [
+      "the gate's warnings",
+      () => withGate({}, HELD, { analysis: fpFacts }),
+      () => withGate({ warnings: ["unknown_rule"] }, HELD, { analysis: fpFacts }),
+    ],
+    [
+      "the verifier's verdict",
+      () => withGate({ verifier_verdict: "needs_review" }, HELD, { analysis: fpFacts }),
+      () => withGate({ verifier_verdict: "true_positive" }, HELD, { analysis: fpFacts }),
+    ],
+  ])("is a different page when %s change", async (_name, before, after) => {
+    const first = renderColumn(before());
+    const pagesBefore = await everyTab();
+    first.unmount();
+    renderColumn(after());
+    const pagesAfter = await everyTab();
+    expect(pagesAfter).not.toEqual(pagesBefore);
+  });
+
+  it("says the verdict before and after the gate beside the gate line of a run the gate forced (a version 1 row)", async () => {
+    renderColumn(
+      withGate({
+        forced: true,
+        forced_by: ["step4"],
+        proposed_verdict: "true_positive",
+        final_verdict: "needs_review",
+      }),
+    );
+    const panel = await openTab("Kiểm chứng");
+    const gate = within(panel).getByRole("group", { name: S.ai1.gate });
+    expect(said(gate)).toEqual([
+      S.ai1.gate,
+      S.ai1.gateForced,
+      S.ai1.gateForcedBy,
+      "step4",
+      S.ai1.gateProposed,
+      "TP",
+      S.ai1.gateFinal,
+      "Cần xem xét",
+    ]);
+  });
+
+  it("lists a held reason that names no step under the tab, as the code, in a card of its own", async () => {
+    renderColumn(withGate({}, ["brand_new_reason", "fp_policy:severity"]));
+    const panel = await openTab("Kiểm chứng");
+    const card = within(panel).getByRole("region", {
+      name: "Cảnh báo không thuộc bước nào ở trên",
+    });
+    expect(said(card)).toEqual(["Cảnh báo không thuộc bước nào ở trên", "brand_new_reason"]);
+  });
+
+  it("has no card of loose reasons when every reason stands under its step", async () => {
+    renderColumn(both());
+    const panel = await openTab("Kiểm chứng");
+    expect(
+      within(panel).queryByRole("region", { name: "Cảnh báo không thuộc bước nào ở trên" }),
+    ).not.toBeInTheDocument();
+  });
+
+  describe("for a run the RAG default applied to (DEC-219)", () => {
+    /**
+     * What the server serves for it whatever the model answered (`served_held_reasons`, `served_warnings`,
+     * `served_verifier_verdict`, `served_action` of llm/verdicts.py): the verdict ① ended with, no verifier verdict, no
+     * reason that is about the rule the MODEL cited and no disagreement of the verifier.
+     */
+    function served(stored: {
+      answer: string;
+      verifier: string;
+      held: string[];
+      warnings: string[];
+    }): AlertView {
+      const left = ["verifier_disagrees", "fp_policy:playbook_rule"];
+      const ruleWarnings = Object.keys(S.ai1.panel.checks.ruleWarning);
+      return ragDefault({
+        held_by: stored.held.filter((code) => !left.includes(code)),
+        suggestion: {
+          ...ragDefaultKeys(80, 62).suggestion!,
+          gate: {
+            ...ragDefaultKeys(80, 62).suggestion!.gate!,
+            verifier_verdict: null,
+            warnings: stored.warnings.filter((w) => !ruleWarnings.includes(w)),
+          },
+        },
+        // the model's own answer is in none of the keys served
+        proposed_action: "false_positive",
+      } as Partial<AlertView>);
+    }
+
+    it("is the same page on every tab whatever the model answered and the verifier said (the view the server serves is the same)", async () => {
+      const held = ["fp_policy:asset_criticality", "fp_policy:playbook_rule", "verifier_disagrees"];
+      const warnings = ["rule_is_not_false_positive", "no_rule_cited"];
+      const one = renderColumn(
+        served({ answer: "true_positive", verifier: "needs_review", held, warnings }),
+      );
+      const asTp = await everyTab();
+      one.unmount();
+      renderColumn(
+        served({ answer: "false_positive", verifier: "false_positive", held, warnings }),
+      );
+      expect(await everyTab()).toEqual(asTp);
+    });
+
+    it("says only what the system itself checked: a fact that failed, and none of the rule the model cited", async () => {
+      renderColumn(
+        served({
+          answer: "true_positive",
+          verifier: "needs_review",
+          held: ["fp_policy:asset_criticality", "fp_policy:playbook_rule", "verifier_disagrees"],
+          warnings: ["rule_is_not_false_positive"],
+        }),
+      );
+      const checks = textOf(within(column()).getByRole("tabpanel"));
+      expect(checks).not.toContain("không đồng ý");
+      await openTab("Kiểm chứng");
+      const text = textOf(column());
+      for (const word of [
+        "không khớp bảng quyết định đã duyệt",
+        "rule AI dẫn không dẫn tới kết luận FP",
+        "bộ kiểm tra không đồng ý",
+        "trả lời:",
+        S.ai1.gateProposed,
+        S.ai1.gateFinal,
+      ]) {
+        expect(text, word).not.toContain(word);
+      }
+      expect(text).toContain("tài sản quan trọng hoặc chưa rõ");
+    });
+
+    it("never draws a verifier verdict or a verdict before and after the gate even if a stray key arrives", async () => {
+      const clean = served({
+        answer: "true_positive",
+        verifier: "needs_review",
+        held: [],
+        warnings: [],
+      });
+      const first = renderColumn(clean);
+      const expected = await everyTab();
+      first.unmount();
+      const stray = served({
+        answer: "true_positive",
+        verifier: "needs_review",
+        held: [],
+        warnings: [],
+      });
+      stray.held_by = ["verifier_disagrees", "fp_policy:playbook_rule"];
+      stray.suggestion = {
+        ...stray.suggestion!,
+        gate: {
+          ...stray.suggestion!.gate!,
+          verifier_verdict: "needs_review",
+          proposed_verdict: "true_positive",
+          final_verdict: "needs_review",
+          forced: true,
+          forced_by: ["step4"],
+          warnings: ["rule_is_not_false_positive", "no_rule_cited"],
+        },
+      };
+      stray.analysis = analysis({
+        ...ragDefaultAnalysis(),
+        checks: [
+          ...ragDefaultAnalysis().checks,
+          { id: "6", outcome: "warn", detail: "verifier_disagrees" },
+        ],
+      });
+      renderColumn(stray);
+      const pages = await everyTab();
+      // the only difference the stray row 6 makes is its own line, which the server never sends for such a run
+      for (const text of pages) {
+        for (const word of [
+          "trả lời:",
+          S.ai1.gateProposed,
+          S.ai1.gateFinal,
+          "rule AI dẫn",
+          "không khớp bảng quyết định đã duyệt",
+        ]) {
+          expect(text, word).not.toContain(word);
+        }
+      }
+      expect(pages.length).toBe(expected.length);
+      expect(
+        within(column()).queryByRole("img", { name: S.ai1.forcedLabel }),
+      ).not.toBeInTheDocument();
+    });
   });
 });
 

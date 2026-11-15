@@ -215,6 +215,17 @@ describe("the Kết luận tile", () => {
     expect(verdictTile(stateOf()).forced).toBe(false);
   });
 
+  it("carries no flag for a run the RAG default applied to, even if the gate's record says forced", () => {
+    const stray = stateOf({
+      ...ragDefaultKeys(80, 62),
+      suggestion: {
+        ...ragDefaultKeys(80, 62).suggestion!,
+        gate: { ...ragDefaultKeys(80, 62).suggestion!.gate!, forced: true, forced_by: ["step4"] },
+      },
+    });
+    expect(verdictTile(stray).forced).toBe(false);
+  });
+
   it("falls back on the model's own answer for a stored needs_review that still arrives, as the line did", () => {
     const stored = stateOf({
       suggestion: {
@@ -327,7 +338,7 @@ describe("the highlights", () => {
     expect(analysisOf(baseView())?.highlights).toEqual([
       {
         direction: "up",
-        text: "Lịch sử: 15 trên 15 alert tương tự từng là sự cố thật.",
+        text: "Lịch sử: 15 trên 15 alert cùng kịch bản và cùng máy từng là sự cố thật.",
       },
       { direction: "up", text: "Tài khoản liên quan là tài khoản đặc quyền." },
       {
@@ -352,6 +363,52 @@ describe("the highlights", () => {
     expect(highlightText("rag_failed", { failure: "cosmic_ray" })).toBe(
       "Không tra cứu được tri thức đã duyệt.",
     );
+  });
+
+  // The scope is the history's own key, in the words of the Tri thức tab's line (the mock-up: "alert cùng kịch bản và
+  // cùng máy"); no history, no key, or a key this page has no words for says "tương tự".
+  it.each([
+    ["soar_case", "cùng case SOAR"],
+    ["cluster", "cùng cụm (rule, nguồn, đích, máy)"],
+    ["scenario_host", "cùng kịch bản và cùng máy"],
+    ["rule_host", "cùng rule và cùng máy"],
+    ["rule_source", "cùng rule và cùng nguồn hoặc người dùng"],
+    ["category_host", "cùng loại alert và cùng máy"],
+  ])("words the history highlights with the scope of the key %s: %s", (key, scope) => {
+    const model = analysisOf(
+      baseView({
+        analysis: analysis({
+          history: { ...analysis().history, key } as never,
+          highlights: [
+            { direction: "up", code: "history_incident", params: { count: 9, total: 12 } },
+            { direction: "down", code: "history_benign", params: { count: 7, total: 8 } },
+          ],
+        }),
+      }),
+    );
+    expect(model?.highlights.map((row) => row.text)).toEqual([
+      `Lịch sử: 9 trên 12 alert ${scope} từng là sự cố thật.`,
+      `Lịch sử: 7 trên 8 alert ${scope} từng được đóng là không phải tấn công.`,
+    ]);
+  });
+
+  it("says 'tương tự' for a highlight of a run with no history, no key or a key it has no words for", () => {
+    const text = (history: unknown) =>
+      analysisOf(
+        baseView({
+          analysis: analysis({
+            history: history as never,
+            highlights: [
+              { direction: "up", code: "history_incident", params: { count: 3, total: 4 } },
+            ],
+          }),
+        }),
+      )?.highlights[0]?.text;
+    const expected = "Lịch sử: 3 trên 4 alert tương tự từng là sự cố thật.";
+    expect(text(null)).toBe(expected);
+    expect(text({ ...analysis().history, key: null })).toBe(expected);
+    expect(text({ ...analysis().history, key: "future_level" })).toBe(expected);
+    expect(text({ ...analysis().history, key: "constructor" })).toBe(expected);
   });
 
   it("degrades to a plainer sentence when the params are missing or of the wrong kind", () => {
@@ -396,18 +453,43 @@ describe("the checks", () => {
 
   it("words each row with the name of its step and its closed detail, in the order served", () => {
     expect(lines()).toEqual([
-      { id: "1", name: "Đúng định dạng", outcome: "pass", text: "hợp lệ ngay lần đầu" },
+      { id: "1", name: "Đúng định dạng", outcome: "pass", text: "hợp lệ ngay lần đầu", notes: [] },
       {
         id: "2",
         name: "Dữ kiện",
         outcome: "warn",
         text: "AI khai mức nghiêm trọng high, hệ thống ghi medium",
+        notes: [],
       },
-      { id: "3", name: "Dẫn chứng", outcome: "pass", text: "2 trên 4 khớp nguyên văn" },
-      { id: "3r", name: "Quy tắc RAG", outcome: "na", text: "không áp dụng" },
-      { id: "4", name: "Chính sách FP", outcome: "na", text: "không xét, vì kết luận là TP" },
-      { id: "5", name: "Chèn lệnh", outcome: "pass", text: "không phát hiện" },
-      { id: "6", name: "Bộ kiểm chứng độc lập", outcome: "warn", text: "không đồng ý" },
+      {
+        id: "3",
+        name: "Dẫn chứng",
+        outcome: "pass",
+        text: "2 trên 4 khớp nguyên văn",
+        notes: [],
+      },
+      {
+        id: "3r",
+        name: "Quy tắc RAG",
+        outcome: "na",
+        text: "không áp dụng, không có mục nào đạt mức tối thiểu",
+        notes: [],
+      },
+      {
+        id: "4",
+        name: "Chính sách FP",
+        outcome: "na",
+        text: "không xét, vì kết luận là TP",
+        notes: [],
+      },
+      { id: "5", name: "Chèn lệnh", outcome: "pass", text: "không phát hiện", notes: [] },
+      {
+        id: "6",
+        name: "Bộ kiểm chứng độc lập",
+        outcome: "warn",
+        text: "không đồng ý",
+        notes: [],
+      },
     ]);
   });
 
@@ -439,7 +521,7 @@ describe("the checks", () => {
     const rows = lines({
       checks: [{ id: "9", outcome: "warn", detail: "brand_new" }],
     });
-    expect(rows).toEqual([{ id: "9", name: "9", outcome: "warn", text: "brand_new" }]);
+    expect(rows).toEqual([{ id: "9", name: "9", outcome: "warn", text: "brand_new", notes: [] }]);
   });
 
   it("reads an outcome it does not know as not applicable, and skips a row that is not an object", () => {
@@ -447,6 +529,262 @@ describe("the checks", () => {
       checks: [{ id: "1", outcome: "maybe", detail: "schema_ok" }, null, 3],
     });
     expect(rows?.map((row) => row.outcome)).toEqual(["na"]);
+  });
+});
+
+describe("the RAG rule's check says why it did not apply, from the state of the lookup", () => {
+  const rule = (rag: Record<string, unknown>, detail = "rag_rule_not_applied") =>
+    analysisOf(
+      baseView({
+        analysis: analysis({
+          rag: { ...analysis().rag, ...rag } as never,
+          checks: [{ id: "3r", outcome: "na", detail }],
+        } as never),
+      }),
+    )?.checks[0]?.text;
+
+  it.each([
+    [{ state: "no_candidate", best_pct: null, candidates: [] }, "không có mục trùng"],
+    [{ state: "no_lookup", best_pct: null, candidates: [] }, "không có tra cứu"],
+    [{ state: "failed", failure: "auth", best_pct: null, candidates: [] }, "tra cứu bị lỗi"],
+    [{ state: "below_floor", best_pct: 47, floor_pct: 50 }, "không có mục nào đạt mức tối thiểu"],
+    [{ state: "matched", best_pct: 85, threshold_pct: 80 }, "độ trùng 85% không dưới ngưỡng 80%"],
+  ])("for %j: 'không áp dụng, %s'", (rag, why) => {
+    expect(rule(rag)).toBe(`không áp dụng, ${why}`);
+  });
+
+  it("shows a state it has no words for as the code, and says nothing more of a rule that is off or applied", () => {
+    expect(rule({ state: "future_state" })).toBe("không áp dụng, future_state");
+    expect(rule({ state: "no_candidate" }, "rag_rule_off")).toBe("quy tắc đang tắt");
+    expect(rule({ state: "matched", best_pct: 62 }, "rag_rule_applied")).toBe(
+      "đã áp dụng, kết luận mặc định là FP",
+    );
+  });
+});
+
+/**
+ * The gate's own account of a run, from the keys of the view the panel used to leave unread (spec G2): `held_by`, the
+ * gate's `warnings`, the verifier's verdict and the verdict before and after the gate. Built as the server serves them.
+ */
+describe("the gate's own account of the run", () => {
+  const gated = (
+    gate: Record<string, unknown> = {},
+    held: unknown = [],
+    over: Partial<AlertView> = {},
+  ): AlertView =>
+    baseView({
+      held_by: held as never,
+      suggestion: {
+        run_id: "r1",
+        suggested_action: "true_positive",
+        confidence: "medium",
+        gate: {
+          forced: false,
+          forced_by: [],
+          proposed_verdict: "true_positive",
+          final_verdict: "true_positive",
+          warnings: [],
+          ...gate,
+        } as never,
+      },
+      ...over,
+    });
+  const notes = (view: AlertView) => {
+    const model = analysisOf(view);
+    return Object.fromEntries(model?.checks.map((row) => [row.id, row.notes]) ?? []);
+  };
+
+  it("names, under each step, the held reasons that belong to it, in the words of the flat column", () => {
+    const view = gated({}, [
+      "facts_mismatch",
+      "no_verified_quote",
+      "fp_policy:severity",
+      "fp_policy:ioc_reputation",
+      "fp_policy:asset_criticality",
+      "fp_policy:identity_privileged",
+      "fp_policy:playbook_rule",
+      "verifier_disagrees",
+    ]);
+    expect(notes(view)).toEqual({
+      "1": [],
+      "2": ["AI khai dữ kiện lệch với hệ thống"],
+      "3": ["không có dẫn chứng kiểm chứng được"],
+      "3r": [],
+      "4": [
+        "alert mức critical",
+        "IOC độc hại hoặc đáng ngờ",
+        "tài sản quan trọng hoặc chưa rõ",
+        "tài khoản đặc quyền",
+        "không khớp bảng quyết định đã duyệt",
+      ],
+      "5": [],
+      "6": ["bộ kiểm tra không đồng ý"],
+    });
+    expect(analysisOf(view)?.gate.held).toEqual([
+      "AI khai dữ kiện lệch với hệ thống",
+      "không có dẫn chứng kiểm chứng được",
+      "alert mức critical",
+      "IOC độc hại hoặc đáng ngờ",
+      "tài sản quan trọng hoặc chưa rõ",
+      "tài khoản đặc quyền",
+      "không khớp bảng quyết định đã duyệt",
+      "bộ kiểm tra không đồng ý",
+    ]);
+  });
+
+  it("names the playbook failure beside the fact that failed, when both did (the step's line says only the fact)", () => {
+    const both = analysis({
+      checks: [{ id: "4", outcome: "warn", detail: "fp_policy_facts" }],
+      check_totals: { passed: 0, applicable: 1, warnings: 1 },
+    });
+    const view = gated({}, ["fp_policy:ioc_reputation", "fp_policy:playbook_rule"], {
+      analysis: both,
+    });
+    const row = analysisOf(view)?.checks[0];
+    expect(row?.text).toBe("một dữ kiện của alert không cho phép kết luận FP");
+    expect(row?.notes).toEqual([
+      "IOC độc hại hoặc đáng ngờ",
+      "không khớp bảng quyết định đã duyệt",
+    ]);
+  });
+
+  it("words each reason the rule check wrote into the gate's warnings, under step 4, after the held reasons", () => {
+    const view = gated({ warnings: ["no_rule_cited", "rule_is_not_false_positive"] }, [
+      "fp_policy:playbook_rule",
+    ]);
+    expect(notes(view)["4"]).toEqual([
+      "không khớp bảng quyết định đã duyệt",
+      "AI không dẫn rule nào của bảng quyết định",
+      "rule AI dẫn không dẫn tới kết luận FP",
+    ]);
+  });
+
+  it.each([
+    ["no_rule_cited", "AI không dẫn rule nào của bảng quyết định"],
+    ["no_table", "loại alert này chưa có bảng quyết định"],
+    ["table_unreviewed", "bảng quyết định chưa được ký duyệt"],
+    ["unknown_rule", "rule AI dẫn không có trong bảng quyết định"],
+    ["rule_does_not_hold", "rule AI dẫn không khớp dữ kiện của alert"],
+    ["rule_is_not_false_positive", "rule AI dẫn không dẫn tới kết luận FP"],
+  ])("words the warning %s", (code, words) => {
+    expect(notes(gated({ warnings: [code] }))["4"]).toEqual([words]);
+  });
+
+  it("shows a warning it has no words for as it came, a non-text warning as its text, and drops none", () => {
+    expect(notes(gated({ warnings: ["brand_new_warning", { odd: 1 }] }))["4"]).toEqual([
+      "brand_new_warning",
+      '{"odd":1}',
+    ]);
+  });
+
+  it("lists a held code that names no step of the page under the tab, shown as the code, and never drops it", () => {
+    const view = gated({}, ["brand_new_reason", "facts_mismatch", "fp_policy:brand_new"]);
+    const model = analysisOf(view);
+    expect(model?.gate.loose).toEqual(["brand_new_reason"]);
+    expect(notes(view)["4"]).toEqual(["fp_policy:brand_new"]);
+    expect(model?.gate.held).toEqual([
+      "brand_new_reason",
+      "AI khai dữ kiện lệch với hệ thống",
+      "fp_policy:brand_new",
+    ]);
+  });
+
+  it("lists a reason whose step has no row (a run with no verifier check) under the tab", () => {
+    const view = gated({}, ["verifier_invalid", "facts_mismatch"], {
+      analysis: analysis({
+        checks: [{ id: "2", outcome: "warn", detail: "facts_mismatch" }],
+      }),
+    });
+    const model = analysisOf(view);
+    expect(model?.gate.loose).toEqual(["bộ kiểm tra không trả lời hợp lệ"]);
+    expect(model?.checks[0]?.notes).toEqual(["AI khai dữ kiện lệch với hệ thống"]);
+  });
+
+  it("reads held_by as the page always did: only its non-empty strings, once each", () => {
+    const view = gated({}, ["facts_mismatch", "", 3, null, "facts_mismatch"]);
+    expect(analysisOf(view)?.gate.held).toEqual(["AI khai dữ kiện lệch với hệ thống"]);
+    expect(analysisOf(gated({}, "facts_mismatch"))?.gate.held).toEqual([]);
+    expect(analysisOf(gated({}, undefined))?.gate.held).toEqual([]);
+  });
+
+  it("says what the verifier answered beside step 6, in the product's verdict labels", () => {
+    const text = (verdict: unknown) =>
+      analysisOf(gated({ verifier_verdict: verdict }))?.checks.find((row) => row.id === "6")?.text;
+    expect(text("needs_review")).toBe("không đồng ý (trả lời: Cần xem xét)");
+    expect(text("false_positive")).toBe("không đồng ý (trả lời: FP)");
+    expect(text("true_positive")).toBe("không đồng ý (trả lời: TP)");
+    expect(text("something_new")).toBe("không đồng ý (trả lời: something_new)");
+    expect(text(null)).toBe("không đồng ý");
+    expect(text("")).toBe("không đồng ý");
+    expect(text(5)).toBe("không đồng ý");
+  });
+
+  it("gives the verdict before and after the gate for a run the gate forced (a version 1 row), and for no other", () => {
+    const forced = gated({
+      forced: true,
+      forced_by: ["step4"],
+      proposed_verdict: "true_positive",
+      final_verdict: "needs_review",
+    });
+    expect(analysisOf(forced)?.gate.forced).toEqual({ proposed: "TP", final: "Cần xem xét" });
+    expect(
+      analysisOf(gated({ forced: true, proposed_verdict: "true_positive", final_verdict: null }))
+        ?.gate.forced,
+    ).toEqual({ proposed: "TP", final: null });
+    expect(
+      analysisOf(gated({ forced: false, final_verdict: "needs_review" }))?.gate.forced,
+    ).toBeNull();
+    expect(analysisOf(baseView())?.gate.forced).toBeNull();
+  });
+
+  describe("for a run the RAG default applied to (DEC-219), whatever arrives", () => {
+    const applied = (gate: Record<string, unknown>, held: unknown, over: Partial<AlertView> = {}) =>
+      gated({ rag_rule: { threshold: 80, best_pct: 62, applied: true }, ...gate }, held, {
+        analysis: ragDefaultAnalysis(),
+        ...over,
+      });
+
+    it("never says what the verifier answered, nor a verdict before and after the gate, even from a stray key", () => {
+      const view = applied(
+        {
+          verifier_verdict: "needs_review",
+          forced: true,
+          forced_by: ["step4"],
+          proposed_verdict: "true_positive",
+          final_verdict: "false_positive",
+        },
+        ["verifier_disagrees"],
+        {
+          analysis: analysis({
+            checks: ragDefaultAnalysis().checks.concat([
+              { id: "6", outcome: "warn", detail: "verifier_disagrees" },
+            ]),
+          }),
+        },
+      );
+      const model = analysisOf(view);
+      expect(model?.checks.find((row) => row.id === "6")?.text).toBe("không đồng ý");
+      expect(model?.gate.forced).toBeNull();
+    });
+
+    it("leaves out the reasons the server leaves out: the verifier's disagreement, the playbook rule and its warnings", () => {
+      const view = applied(
+        { warnings: ["rule_is_not_false_positive", "no_rule_cited", "brand_new_warning"] },
+        [
+          "fp_policy:asset_criticality",
+          "fp_policy:playbook_rule",
+          "verifier_disagrees",
+          "verifier_invalid",
+        ],
+      );
+      const model = analysisOf(view);
+      expect(model?.gate.held).toEqual([
+        "tài sản quan trọng hoặc chưa rõ",
+        "bộ kiểm tra không trả lời hợp lệ",
+      ]);
+      const byStep = Object.fromEntries(model?.checks.map((row) => [row.id, row.notes]) ?? []);
+      expect(byStep["4"]).toEqual(["tài sản quan trọng hoặc chưa rõ", "brand_new_warning"]);
+    });
   });
 });
 
@@ -568,7 +906,7 @@ describe("the lookup, the history, the playbook and the technical figures", () =
     );
   });
 
-  it("calls a history with no or an unknown key 'alert tương tự', and has none for a total that is not a count", () => {
+  it("calls a history with no key 'Alert tương tự', shows an unknown key as it came, and has none for a total that is not a count", () => {
     const history = (over: Record<string, unknown>) =>
       analysisOf(
         baseView({
@@ -578,7 +916,9 @@ describe("the lookup, the history, the playbook and the technical figures", () =
     expect(history({ key: null, last_seen: null })?.line).toBe(
       "Alert tương tự: 15 quyết định, 15 là sự cố thật",
     );
-    expect(history({ key: "future_level", last_seen: null })?.line).toMatch(/^Alert tương tự:/);
+    expect(history({ key: "future_level", last_seen: null })?.line).toBe(
+      "future_level: 15 quyết định, 15 là sự cố thật",
+    );
     expect(history({ total: 0 })).toBeNull();
     expect(history({ total: "x" })).toBeNull();
     expect(analysisOf(baseView({ analysis: analysis({ history: null }) }))?.history).toBeNull();

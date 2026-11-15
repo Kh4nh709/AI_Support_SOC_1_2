@@ -33,8 +33,6 @@ export function AnalysisPanel({
   const now = view.correlated_now;
   const moved = typeof then === "number" && typeof now === "number" && now !== then;
   const gate = suggestion?.gate ?? null;
-  // The gate forced the verdict: only a row stored before DEC-217 says so (`aiStateOfView` reads the same key).
-  const forced = state.kind === "ready" && state.forced;
   return (
     <div className="flex flex-col gap-3.5">
       {moved && (
@@ -62,7 +60,7 @@ export function AnalysisPanel({
           {
             id: "checks",
             label: T.checks,
-            content: <ChecksTab model={model} gate={gate} forced={forced} />,
+            content: <ChecksTab model={model} gate={gate} />,
           },
           { id: "tech", label: T.tech, content: <TechTab model={model} /> },
         ]}

@@ -51,9 +51,11 @@ function Reading({
 export function OverviewTab({ model }: { model: AnalysisModel }) {
   const T = P.overview;
   const { summary, readingAttack, readingBenign, wouldChange, nextChecks, highlights } = model;
+  const held = model.gate.held;
   const empty =
     summary === null &&
     highlights.length === 0 &&
+    held.length === 0 &&
     readingAttack === null &&
     readingBenign === null &&
     wouldChange === null &&
@@ -77,13 +79,15 @@ export function OverviewTab({ model }: { model: AnalysisModel }) {
         <p className="text-[15px] leading-[22px] break-words whitespace-pre-wrap">{summary}</p>
       )}
 
-      {highlights.length > 0 && (
+      {(highlights.length > 0 || held.length > 0) && (
         <Card title={T.highlights}>
           {highlights.map((row, index) => (
             <IconLine key={index} kind={row.direction}>
               {row.text}
             </IconLine>
           ))}
+          {/* Every check that raised a warning, in words: the reputation of an IOC has no highlight of its own. */}
+          {held.length > 0 && <IconLine kind="warn">{T.held(held)}</IconLine>}
         </Card>
       )}
 
@@ -309,36 +313,66 @@ function FactsTable({ model }: { model: AnalysisModel }) {
   );
 }
 
-export function ChecksTab({
-  model,
-  gate,
-  forced,
-}: {
-  model: AnalysisModel;
-  gate: SuggestionGate | null;
-  /** The gate forced the verdict: only a row stored before DEC-217 says so, and then its line is drawn. */
-  forced: boolean;
-}) {
+/**
+ * One line per gate step with the reasons the gate held for it under the line (spec G2), the reasons that stand under no
+ * step, and, for a run the gate forced (a version 1 row, before DEC-217), the gate's line with the verdict before and
+ * after it. Then the facts the system recorded beside what the model declared.
+ */
+export function ChecksTab({ model, gate }: { model: AnalysisModel; gate: SuggestionGate | null }) {
   const { checks } = model;
+  const { forced, loose } = model.gate;
   return (
     <div className="flex flex-col gap-3">
       {checks.length === 0 ? (
         <p className="text-sm text-muted">{P.tile.checksNote.none}</p>
       ) : (
-        <Card>
+        <ul aria-label={P.checks.listLabel} className={`${CARD} flex flex-col gap-2`}>
           {checks.map((row, index) => (
-            <IconLine key={index} kind={row.outcome}>
-              <span className="font-medium">{row.name}</span>{" "}
-              <span className={row.outcome === "warn" ? "text-medium" : "text-muted"}>
-                {`${P.checks.dash} ${row.text}`}
-              </span>
-            </IconLine>
+            <li key={index} className="flex flex-col gap-1">
+              <IconLine kind={row.outcome}>
+                <span className="font-medium">{row.name}</span>{" "}
+                <span className={row.outcome === "warn" ? "text-medium" : "text-muted"}>
+                  {`${P.checks.dash} ${row.text}`}
+                </span>
+              </IconLine>
+              {row.notes.length > 0 && (
+                <ul className="ml-6 flex list-disc flex-col gap-0.5 pl-4 text-xs break-words text-medium">
+                  {row.notes.map((note, at) => (
+                    <li key={at}>{note}</li>
+                  ))}
+                </ul>
+              )}
+            </li>
           ))}
+        </ul>
+      )}
+      {loose.length > 0 && (
+        <Card title={P.checks.loose} variant="title">
+          <ul className="flex list-disc flex-col gap-0.5 pl-5 text-[13px] break-words text-medium">
+            {loose.map((words, index) => (
+              <li key={index}>{words}</li>
+            ))}
+          </ul>
         </Card>
       )}
-      {forced && gate !== null && (
-        <div className={CARD}>
+      {forced !== null && gate !== null && (
+        <div role="group" aria-label={S.ai1.gate} className={`${CARD} flex flex-col gap-2`}>
           <GateLine gate={gate} forced />
+          <dl className="flex flex-col gap-1 text-sm">
+            {(
+              [
+                [S.ai1.gateProposed, forced.proposed],
+                [S.ai1.gateFinal, forced.final],
+              ] as const
+            ).map(([label, verdict]) =>
+              verdict === null ? null : (
+                <div key={label} className="flex flex-wrap gap-x-2">
+                  <dt className="text-muted">{label}</dt>
+                  <dd>{verdict}</dd>
+                </div>
+              ),
+            )}
+          </dl>
         </div>
       )}
       <FactsTable model={model} />
