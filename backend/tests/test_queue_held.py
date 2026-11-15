@@ -332,16 +332,33 @@ _STORED = ["false_positive", "needs_review", "true_positive", "escalate", None, 
 _PROPOSED = ["false_positive", "true_positive", "needs_review", "escalate", None, 1]
 
 
-def _sql_served(stored: Any, proposed: Any) -> str | None:
-    """The queue's SQL expression for the served verdict, run on one stored/proposed pair. `r` is the
-    LATERAL alias of `_QUEUE_SQL`; the two documents are JSON text, as `->>` reads them."""
+def _sql_served(stored: Any, proposed: Any, *, alias: str = "r") -> str | None:
+    """The SQL expression for the served verdict (`verdicts.served_action_sql`), run on one stored/proposed
+    pair. `r` is the LATERAL alias of `_QUEUE_SQL`; the two documents are JSON text, as `->>` reads them.
+    """
     result = json.dumps({"suggested_action": stored})
     gate_result = json.dumps({"proposed_verdict": proposed})
     with sqlite3.connect(":memory:") as conn:
         return conn.execute(
-            f"SELECT {queue._SERVED_ACTION_SQL} FROM (SELECT ? AS result, ? AS gate_result) r",
+            f"SELECT {verdicts.served_action_sql(alias)} "
+            f"FROM (SELECT ? AS result, ? AS gate_result) {alias}",
             (result, gate_result),
         ).fetchone()[0]
+
+
+def test_the_queue_and_the_pilot_export_use_the_one_copy_of_the_served_sql():
+    """The SQL twin of `served_action` is written once, in `verdicts`; the queue list and the ops export's
+    escalation branch (which must read the same verdict Tier 1 was shown) take it from there."""
+    assert queue._SERVED_ACTION_SQL == verdicts.served_action_sql("r")
+    assert verdicts.served_action_sql("x") == verdicts.served_action_sql("r").replace("r.", "x.")
+
+
+def test_the_served_sql_answers_the_same_under_any_alias():
+    for stored, proposed in (("needs_review", "true_positive"), ("false_positive", None)):
+        expected = verdicts.served_action(
+            {"suggested_action": stored}, {"proposed_verdict": proposed}
+        )
+        assert _sql_served(stored, proposed, alias="llm") == expected
 
 
 @pytest.mark.parametrize("stored", _STORED, ids=repr)

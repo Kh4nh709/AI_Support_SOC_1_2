@@ -75,6 +75,7 @@ from pathlib import Path
 # importable from the caller (PYTHONPATH=backend, or pytest's pythonpath).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from app.llm import verdicts  # the one copy of the SQL for the verdict Tier 1 was served (DEC-217)
 from build_gold import DEC111_SENTENCE  # limitation (xii), imported, never retyped
 from metrics import EVIDENCE_TARGET  # architecture §6: the evidence-verified rate targets ≥ 0.90
 
@@ -540,10 +541,16 @@ _PILOT_TIMED = """t AS (
 # triage job in flight) was never on the analyst's console, and `created_at` cannot tell. A
 # `tier1.escalated` event records none, so ① is the alert's latest proposer row created at or before
 # the decision, which may include a run in flight at that moment (the caveat printed in section 6a).
+# DEC-217: ① is the verdict Tier 1 was SERVED, on both paths: `llm_suggestion` of a decided event is the served
+# verdict (`queue.latest_suggestion`), and the escalated branch reads the row through `verdicts.served_action_sql`,
+# so a stored version 1 `needs_review` row (the old gate held it) is the model's own answer, as it was on the
+# console, and not "no verdict" for an escalation only. A recorded payload from before DEC-217 may still say
+# `needs_review`, `escalate` or `false_positive`: the outer CASE keeps reading those.
 # A latest row whose `result` is NULL, or a payload with no `llm_suggestion`, is `no_result`.
 # ① stores `true_positive` where it stored `escalate` before P14-T01 (DEC-213); the export keeps its own
 # label for it, `escalate`, so its figures and tables read as they always did.
-_PILOT_VERDICT = """v AS (
+_SERVED_AT_ESCALATION_SQL = verdicts.served_action_sql("r")  # `r` is `llm_runs`, below
+_PILOT_VERDICT = f"""v AS (
   SELECT x.source,
          x.decision,
          CASE WHEN x.suggested_action = 'true_positive' THEN 'escalate'
@@ -555,7 +562,7 @@ _PILOT_VERDICT = """v AS (
     SELECT d.source,
            d.decision,
            CASE WHEN d.decision = 'escalated'
-                THEN (SELECT r.result->>'suggested_action'
+                THEN (SELECT {_SERVED_AT_ESCALATION_SQL}
                       FROM llm_runs r
                       WHERE r.pipeline = 'triage'
                         AND r.role = 'proposer'

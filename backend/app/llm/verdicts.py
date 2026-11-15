@@ -153,11 +153,27 @@ def served_action(result: Any, gate_result: Mapping[str, Any] | None) -> str | N
     has no usable ``proposed_verdict``. Never ``needs_review``, and never a verdict ① did not stand behind:
     a stored definite answer is never replaced by ``proposed_verdict``.
 
-    ``queue._QUEUE_SQL``'s ``suggested_action`` column is the SQL twin of this function; ``tests/test_queue.py``
-    holds the two to the same answers."""
+    ``served_action_sql`` is the SQL twin of this function; ``tests/test_queue_held.py`` holds the two to the same
+    answers."""
     stored = result.get("suggested_action") if isinstance(result, Mapping) else None
     if isinstance(stored, str) and stored in MODEL_ACTIONS:
         return stored
     if stored == "needs_review":
         return proposed_action(gate_result)
     return None
+
+
+def served_action_sql(alias: str) -> str:
+    """``served_action`` as a SQL expression over the ``llm_runs`` row (or LATERAL row) named ``alias``: the
+    stored ``result->>'suggested_action'`` when it is one of ``MODEL_ACTIONS``; for a stored ``needs_review``
+    the ``gate_result->>'proposed_verdict'`` when that is one of them; else NULL. The one copy: the queue list
+    (``tier1/queue.py``) and the operations export's reading of ① at an escalation (``eval/ops_export.py``) both
+    take it from here, so what Tier 1 was shown is read the same way everywhere. ``alias`` is a SQL identifier
+    the caller wrote (``r``), never a request value."""
+    actions = ", ".join(f"'{action}'" for action in MODEL_ACTIONS)
+    stored = f"{alias}.result->>'suggested_action'"
+    proposed = f"{alias}.gate_result->>'proposed_verdict'"
+    return (
+        f"CASE WHEN {stored} IN ({actions}) THEN {stored} "
+        f"WHEN {stored} = 'needs_review' AND {proposed} IN ({actions}) THEN {proposed} END"
+    )
