@@ -16,6 +16,7 @@ import { LiveProvider } from "../../live/LiveProvider";
 import type { LiveOptions } from "../../live/socket";
 import { S } from "../../strings";
 import { AlertPage } from "./AlertPage";
+import { analysis } from "./analysisFixtures";
 import { GEO, MW03, SC03 } from "./soarFixtures";
 
 // The socket is faked: the test is the server, and calls what the client handed to connectLive.
@@ -556,6 +557,59 @@ describe("the ① column, from the state of the view", () => {
     expect(within(aiColumn()).getByText(/AI kết luận/)).toHaveTextContent(
       "AI kết luận: TP (độ tin cậy trung bình)",
     );
+  });
+
+  // DEC-221 (AP-T4): a view the server gave an `analysis` is the scorecard, in the column beside the alert.
+  it("draws the scorecard, four tiles over five tabs, for a view that has an analysis", async () => {
+    views = { a1: full({ analysis: analysis() }) };
+    renderPage();
+    await loaded();
+    const col = aiColumn();
+    expect(
+      within(col)
+        .getAllByRole("group")
+        .map((group) => group.textContent),
+    ).toEqual([
+      "Kết luậnTPtấn công thật",
+      "Độ tin cậyTrung bình",
+      "Tri thức (RAG)47%dưới mức 50%",
+      "Kiểm chứng3/52 cảnh báo",
+    ]);
+    expect(
+      within(col)
+        .getAllByRole("tab")
+        .map((tab) => tab.textContent),
+    ).toEqual(["Tổng quan", "Bằng chứng", "Tri thức", "Kiểm chứng", "Kỹ thuật"]);
+    // the flat line is not drawn beside the tiles
+    expect(within(col).queryByText(/AI kết luận/)).not.toBeInTheDocument();
+    expect(within(col).getByText(S.alert.aiHint)).toBeInTheDocument();
+  });
+
+  it("opens each tab of the scorecard on a click, and the next page load starts on the first one again", async () => {
+    views = { a1: full({ analysis: analysis() }) };
+    const first = renderPage();
+    await loaded();
+    await userEvent.setup().click(within(aiColumn()).getByRole("tab", { name: "Kỹ thuật" }));
+    expect(within(aiColumn()).getByRole("tabpanel")).toHaveTextContent("Nhãn MITRE của alert");
+    first.unmount();
+    renderPage();
+    await loaded();
+    expect(within(aiColumn()).getByRole("tab", { name: "Tổng quan" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("draws nothing of the scorecard for a blind view, even if an analysis came with it", async () => {
+    views = { a1: blind({ analysis: analysis() }) };
+    renderPage();
+    await loaded();
+    expect(within(aiColumn()).getByText(S.ai1.hidden)).toBeInTheDocument();
+    expect(within(aiColumn()).queryByRole("tablist")).not.toBeInTheDocument();
+    expect(within(aiColumn()).queryByRole("group")).not.toBeInTheDocument();
+    for (const word of ["Điều nổi bật", "Tổng quan", "tấn công thật", "amsi.dll"]) {
+      expect(aiColumn().textContent, word).not.toContain(word);
+    }
   });
 
   it("says the verdict and which checks warned (DEC-217), from the view's own keys", async () => {
