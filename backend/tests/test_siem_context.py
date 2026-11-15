@@ -923,6 +923,8 @@ def _fp(quote: str) -> dict:
         },
         "reasons": [{"claim": "benign", "quote": quote, "source": "siem_context"}],
         "playbook_used": "malware_v1",
+        # ① validates `triage_v4` since AP-T1 (DEC-221): the five fields the model writes for the analyst
+        **copy.deepcopy(TRIAGE_V4_NEW_FIELDS),
     }
 
 
