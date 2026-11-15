@@ -54,7 +54,12 @@ test("an alert whose lookup failed says that the RAG was not applied, and why", 
   // the view says the same, in the API's words
   const token = await apiLogin(request, "t1");
   const view = await apiGet(request, `/api/tier1/alerts/${head.id}`, { token });
-  expect((view.body as { rag?: unknown }).rag).toEqual({ best_pct: null, not_applied: "auth" });
+  expect((view.body as { rag?: unknown }).rag).toEqual({
+    best_pct: null,
+    not_applied: "auth",
+    below_floor_pct: null,
+    floor_pct: null,
+  });
 });
 
 test("an alert that matched approved knowledge says how strongly, in the conclusion line", async ({
@@ -77,7 +82,12 @@ test("an alert that matched approved knowledge says how strongly, in the conclus
 
   const token = await apiLogin(request, "t1");
   const view = await apiGet(request, `/api/tier1/alerts/${head.id}`, { token });
-  expect((view.body as { rag?: unknown }).rag).toEqual({ best_pct: 87, not_applied: null });
+  expect((view.body as { rag?: unknown }).rag).toEqual({
+    best_pct: 87,
+    not_applied: null,
+    below_floor_pct: null,
+    floor_pct: null,
+  });
 });
 
 test("an alert whose RAG was not used says nothing of it", async ({ page, request }) => {
@@ -92,7 +102,12 @@ test("an alert whose RAG was not used says nothing of it", async ({ page, reques
   await expect(col.getByRole("note")).toHaveCount(0);
   const token = await apiLogin(request, "t1");
   const view = await apiGet(request, `/api/tier1/alerts/${head.id}`, { token });
-  expect((view.body as { rag?: unknown }).rag).toEqual({ best_pct: null, not_applied: null });
+  expect((view.body as { rag?: unknown }).rag).toEqual({
+    best_pct: null,
+    not_applied: null,
+    below_floor_pct: null,
+    floor_pct: null,
+  });
 });
 
 test("every closed failure kind is worded, and the provider's words are nowhere", async ({
