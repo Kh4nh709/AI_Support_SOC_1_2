@@ -755,6 +755,26 @@ def test_the_walk_goes_red_when_the_tech_figures_leak_the_model(client, db, monk
     assert _leaks(body, MODEL_ID) == ["$.run.tech.model_id"]
 
 
+@pytest.mark.parametrize("field", sorted(MODEL_CONFIG))
+def test_the_walk_goes_red_when_a_model_name_of_the_configuration_is_served(
+    client, db, monkeypatch, field
+):
+    """C, the same for the configuration: a `tech` that carries any one model field of the configuration the routes
+    run with (here a `RAG_MODEL`, an embedding model's name...) is flagged by the walk the test above makes.
+    """
+    case_id, *_ = _case_with_two_heads(db, client.user_id)
+    _insert_run(db, case_id, job_id=_insert_job(db, case_id), result=_v4())
+    real = view._tech
+    served = config.Config(**MODEL_CONFIG)
+    monkeypatch.setattr(
+        view, "_tech", lambda *a, **k: {**real(*a, **k), "label": getattr(served, field)}
+    )
+
+    body = _view(client, case_id)
+
+    assert _leaks(body, MODEL_CONFIG[field]) == ["$.run.tech.label"]
+
+
 def test_no_endpoint_serves_the_model_id(client, db):
     """The case view and the Tier 2 run endpoints, for a case with a run (of version 4, a version 3 one and one that
     stopped) whose `model_id` is distinctive: the string is in no key and no value, at any depth. Found today, before
