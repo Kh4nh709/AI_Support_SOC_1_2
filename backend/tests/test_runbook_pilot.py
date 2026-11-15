@@ -696,6 +696,12 @@ def test_the_tier_1_panel_is_quoted_as_the_scorecard_it_is():
     flag = _runbook_line_with("**(d) ⚑ beside a suggestion**")
     assert "`Kết luận` tile" in flag and "`Kiểm chứng` tab" in flag, flag[:400]
     assert "the alert page says which step" not in flag, "the flat line of before"
+    # what the tile counts and what the tab names are not the same thing: the tile counts the gate's CHECKS that warned
+    # (`check_totals`), the tab names each held REASON (`held_by`) under its step, the overview lists them in one line
+    assert "the `Kiểm chứng` tile counts the checks that warned" in flag, flag
+    assert "the `Kiểm chứng` tab names each held reason under its step" in flag, flag
+    assert "the `Tổng quan` tab lists them in one line" in flag, flag
+    assert "tile counts them" not in flag, "a tile that counts held_by codes: it counts gate steps"
     for word in (
         "Kết luận",
         "Độ tin cậy",
