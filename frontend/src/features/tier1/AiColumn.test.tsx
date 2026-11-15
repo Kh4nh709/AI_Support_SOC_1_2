@@ -322,7 +322,7 @@ describe("Tổng quan, a version 4 run", () => {
       "Không có tri thức đã duyệt nào trùng từ 50% trở lên (cao nhất 47%).",
       "Bộ kiểm chứng độc lập không đồng ý.",
       // the held reasons of the view, all of them, in the words of the flat column (spec G2)
-      "Cảnh báo kiểm chứng: AI khai dữ kiện lệch với hệ thống, bộ kiểm tra không đồng ý",
+      "Cảnh báo kiểm chứng: AI khai dữ kiện lệch với hệ thống, bộ kiểm chứng không đồng ý",
     ]);
     const attack = within(panel).getByRole("region", { name: "Nếu là tấn công" });
     expect(attack).toHaveTextContent(
@@ -607,7 +607,7 @@ describe("Kiểm chứng", () => {
       "— không phát hiện",
       "Bộ kiểm chứng độc lập",
       "— không đồng ý (trả lời: Cần xem xét)",
-      "bộ kiểm tra không đồng ý",
+      "bộ kiểm chứng không đồng ý",
     ]);
   });
 
@@ -709,7 +709,7 @@ describe("the gate's own account of the run, on the page (spec G2)", () => {
       "AI không dẫn rule nào của bảng quyết định",
       "Bộ kiểm chứng độc lập",
       "— không đồng ý (trả lời: Cần xem xét)",
-      "bộ kiểm tra không đồng ý",
+      "bộ kiểm chứng không đồng ý",
     ]);
   });
 
@@ -718,7 +718,7 @@ describe("the gate's own account of the run, on the page (spec G2)", () => {
     const panel = within(column()).getByRole("tabpanel");
     const highlights = within(panel).getByRole("region", { name: "Điều nổi bật" });
     expect(said(highlights).at(-1)).toBe(
-      "Cảnh báo kiểm chứng: IOC độc hại hoặc đáng ngờ, không khớp bảng quyết định đã duyệt, AI khai dữ kiện lệch với hệ thống, bộ kiểm tra không đồng ý",
+      "Cảnh báo kiểm chứng: IOC độc hại hoặc đáng ngờ, không khớp bảng quyết định đã duyệt, AI khai dữ kiện lệch với hệ thống, bộ kiểm chứng không đồng ý",
     );
     expect(within(highlights).getAllByRole("img").at(-1)).toHaveAccessibleName("Cảnh báo");
   });
@@ -868,7 +868,7 @@ describe("the gate's own account of the run, on the page (spec G2)", () => {
       for (const word of [
         "không khớp bảng quyết định đã duyệt",
         "rule AI dẫn không dẫn tới kết luận FP",
-        "bộ kiểm tra không đồng ý",
+        "bộ kiểm chứng không đồng ý",
         "trả lời:",
         S.ai1.gateProposed,
         S.ai1.gateFinal,

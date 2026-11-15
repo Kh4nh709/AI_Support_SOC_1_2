@@ -353,7 +353,7 @@ describe("AI kết luận", () => {
     );
     expect(line().textContent).toBe(
       "AI kết luận: FP (độ tin cậy cao) — có cảnh báo kiểm chứng: AI khai dữ kiện lệch với hệ thống, " +
-        "tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý",
+        "tài sản quan trọng hoặc chưa rõ, bộ kiểm chứng không đồng ý",
     );
   });
 
@@ -361,7 +361,7 @@ describe("AI kết luận", () => {
     renderColumn(warned(["fp_policy:asset_criticality", "verifier_disagrees"]));
     expect(line()).toHaveTextContent(
       "AI kết luận: FP (độ tin cậy trung bình) — có cảnh báo kiểm chứng: " +
-        "tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý",
+        "tài sản quan trọng hoặc chưa rõ, bộ kiểm chứng không đồng ý",
     );
     // the model's own verdict is the conclusion, bold, and so is the phrase of the warning (spec section 8)
     expect(within(line()).getByText("FP").tagName).toBe("STRONG");
@@ -375,7 +375,7 @@ describe("AI kết luận", () => {
       warned(["verifier_disagrees"], {}, { verdict: "true_positive", confidence: "high" }),
     );
     expect(line().textContent).toBe(
-      "AI kết luận: TP (độ tin cậy cao) — có cảnh báo kiểm chứng: bộ kiểm tra không đồng ý",
+      "AI kết luận: TP (độ tin cậy cao) — có cảnh báo kiểm chứng: bộ kiểm chứng không đồng ý",
     );
     expect(column().textContent).not.toContain("Cần xem xét");
   });
@@ -388,7 +388,7 @@ describe("AI kết luận", () => {
     ["fp_policy:asset_criticality", "tài sản quan trọng hoặc chưa rõ"],
     ["fp_policy:identity_privileged", "tài khoản đặc quyền"],
     ["fp_policy:playbook_rule", "không khớp bảng quyết định đã duyệt"],
-    ["verifier_disagrees", "bộ kiểm tra không đồng ý"],
+    ["verifier_disagrees", "bộ kiểm chứng không đồng ý"],
   ])("words the reason %s as '%s'", (reason, label) => {
     renderColumn(warned([reason]));
     expect(line()).toHaveTextContent(`có cảnh báo kiểm chứng: ${label}`);
@@ -498,7 +498,7 @@ describe("AI kết luận", () => {
 
   it("names the ninth reason, an unusable verifier answer, in its own words (M3)", () => {
     renderColumn(warned(["verifier_invalid"]));
-    expect(line()).toHaveTextContent("có cảnh báo kiểm chứng: bộ kiểm tra không trả lời hợp lệ");
+    expect(line()).toHaveTextContent("có cảnh báo kiểm chứng: bộ kiểm chứng không trả lời hợp lệ");
     expect(line().textContent).not.toContain("không đồng ý");
   });
 
@@ -527,7 +527,7 @@ describe("AI kết luận", () => {
       renderColumn(decidedHeld());
       expect(within(box()).getByText(/AI kết luận/)).toHaveTextContent(
         "AI kết luận: FP (độ tin cậy trung bình) — có cảnh báo kiểm chứng: " +
-          "tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý",
+          "tài sản quan trọng hoặc chưa rõ, bộ kiểm chứng không đồng ý",
       );
       expect(within(box()).getByText("có cảnh báo kiểm chứng").tagName).toBe("STRONG");
       // the stored verdict is `false_positive` (DEC-217), a closed_fp agrees with it, warnings or none
@@ -565,7 +565,7 @@ describe("AI kết luận", () => {
     ])("shows it for %s", (_name, visible) => {
       renderColumn(decidedHeld({ suggestion_visible: visible }));
       expect(within(box()).getByText(/AI kết luận/)).toHaveTextContent(
-        /^AI kết luận: FP .* có cảnh báo kiểm chứng: tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý$/,
+        /^AI kết luận: FP .* có cảnh báo kiểm chứng: tài sản quan trọng hoặc chưa rõ, bộ kiểm chứng không đồng ý$/,
       );
       expect(within(column()).queryByText(S.ai1.hidden)).not.toBeInTheDocument();
     });
@@ -1111,7 +1111,7 @@ describe("the RAG beside the conclusion", () => {
 
     it("is beside a conclusion with warnings too", () => {
       renderColumn(warned(["verifier_disagrees"], { ...withRag(null, "quota") }));
-      expect(line()).toHaveTextContent("có cảnh báo kiểm chứng: bộ kiểm tra không đồng ý");
+      expect(line()).toHaveTextContent("có cảnh báo kiểm chứng: bộ kiểm chứng không đồng ý");
       expect(notice()).toHaveTextContent("Voyage hết hạn mức");
     });
 
@@ -1329,7 +1329,7 @@ describe("the RAG default below the threshold (DEC-219)", () => {
   const REASONS_TEXT = "tài sản quan trọng hoặc chưa rõ, không khớp bảng quyết định đã duyệt";
   // The warnings of a run the rule did not apply to, where the verifier's answer is served and may disagree.
   const NO_RULE_REASONS = ["fp_policy:asset_criticality", "verifier_disagrees"];
-  const NO_RULE_REASONS_TEXT = "tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý";
+  const NO_RULE_REASONS_TEXT = "tài sản quan trọng hoặc chưa rõ, bộ kiểm chứng không đồng ý";
 
   describe("the line", () => {
     it("says the verdict is the default below the threshold, after the percentage, with no note and no flag", () => {

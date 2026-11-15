@@ -373,8 +373,8 @@ describe("① verdict and warning labels follow the backend", () => {
       "fp_policy:asset_criticality": "tài sản quan trọng hoặc chưa rõ",
       "fp_policy:identity_privileged": "tài khoản đặc quyền",
       "fp_policy:playbook_rule": "không khớp bảng quyết định đã duyệt",
-      verifier_disagrees: "bộ kiểm tra không đồng ý",
-      verifier_invalid: "bộ kiểm tra không trả lời hợp lệ",
+      verifier_disagrees: "bộ kiểm chứng không đồng ý",
+      verifier_invalid: "bộ kiểm chứng không trả lời hợp lệ",
     });
   });
 

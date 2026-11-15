@@ -618,7 +618,7 @@ describe("the gate's own account of the run", () => {
         "không khớp bảng quyết định đã duyệt",
       ],
       "5": [],
-      "6": ["bộ kiểm tra không đồng ý"],
+      "6": ["bộ kiểm chứng không đồng ý"],
     });
     expect(analysisOf(view)?.gate.held).toEqual([
       "AI khai dữ kiện lệch với hệ thống",
@@ -628,7 +628,7 @@ describe("the gate's own account of the run", () => {
       "tài sản quan trọng hoặc chưa rõ",
       "tài khoản đặc quyền",
       "không khớp bảng quyết định đã duyệt",
-      "bộ kiểm tra không đồng ý",
+      "bộ kiểm chứng không đồng ý",
     ]);
   });
 
@@ -704,7 +704,7 @@ describe("the gate's own account of the run", () => {
       }),
     });
     const model = analysisOf(view);
-    expect(model?.gate.loose).toEqual(["bộ kiểm tra không trả lời hợp lệ"]);
+    expect(model?.gate.loose).toEqual(["bộ kiểm chứng không trả lời hợp lệ"]);
     expect(model?.checks[0]?.notes).toEqual(["AI khai dữ kiện lệch với hệ thống"]);
   });
 
@@ -788,7 +788,7 @@ describe("the gate's own account of the run", () => {
       const model = analysisOf(view);
       expect(model?.gate.held).toEqual([
         "tài sản quan trọng hoặc chưa rõ",
-        "bộ kiểm tra không trả lời hợp lệ",
+        "bộ kiểm chứng không trả lời hợp lệ",
       ]);
       const byStep = Object.fromEntries(model?.checks.map((row) => [row.id, row.notes]) ?? []);
       expect(byStep["4"]).toEqual(["tài sản quan trọng hoặc chưa rõ", "brand_new_warning"]);
