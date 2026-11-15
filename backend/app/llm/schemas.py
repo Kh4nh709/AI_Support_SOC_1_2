@@ -66,6 +66,11 @@ node it is given. Written by hand like the interpreter, from the same file, so t
 
 ``structured_basis.identity_privileged`` stays the string enum ``true|false|unknown``; ``normalise``
 turns a JSON boolean into it, and the schema the provider enforces asks for the string.
+
+JSON Schema's ``integer`` is looser than the ``0`` row above: it admits an integer-valued number such as
+``1.0``, which ``validate`` still refuses (an ``int`` and not a ``bool``; ``json.loads`` reads ``1.0`` as a
+float). That is by design: the validator is the check behind the provider, and the repair round covers
+whatever a provider lets through.
 """
 
 from __future__ import annotations

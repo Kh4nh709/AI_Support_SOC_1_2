@@ -261,3 +261,20 @@ def test_the_validator_stays_what_it_was_on_the_same_inputs():
     wrong = copy.deepcopy(TRIAGE_V3_TRUE_POSITIVE)
     wrong["reasones"] = wrong.pop("reasons")
     assert schemas.validate("triage_v3", wrong) == ["reasons: missing", "reasones: unexpected key"]
+
+
+def test_integer_is_the_providers_looser_check_and_the_validator_is_the_one_behind_it():
+    """JSON Schema's `integer` admits an integer-valued number such as `1.0`; the validator wants a Python int
+    (`json.loads("1.0")` is a float) and still refuses it, so the repair round covers what a provider lets
+    through. The docstring table says so, next to the `0` row."""
+    assert schemas.json_schema("triage_v3")["properties"]["structured_basis"]["properties"][
+        "occurrence_count"
+    ] == {"type": "integer"}
+    loose = copy.deepcopy(TRIAGE_V3_TRUE_POSITIVE)
+    loose["structured_basis"]["occurrence_count"] = json.loads("1.0")
+    assert schemas.validate("triage_v3", loose) == [
+        "structured_basis.occurrence_count: expected integer"
+    ]
+
+    doc = " ".join((schemas.__doc__ or "").split())
+    assert "``1.0``" in doc and "the validator is the check behind the provider" in doc

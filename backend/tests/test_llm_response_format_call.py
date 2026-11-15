@@ -20,10 +20,35 @@ from app.llm import triage as T
 from app.llm.adapter import DeepSeekAdapter, LLMResult
 
 from tests.fakes.llm import TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE
-from tests.test_llm_triage import _build, _cfg, _lint, _verifier
+from tests.test_llm_triage import (
+    NONCE,
+    REVIEWED,
+    _build,
+    _cfg,
+    _correlation,
+    _lint,
+    _zz_inp,
+)
 
 ON = "json_schema"
 OFF = "json_object"
+
+
+def _verifier(cfg=None):
+    """The verifier's prompt, built with the `cfg` given (as `_build` is for the proposer's). It is
+    `test_llm_triage._verifier`'s build with the `cfg` left to the caller, so a test can build it once per
+    switch value and compare the two."""
+    facts = T.build_facts(_zz_inp(), _correlation())
+    reasons = [{"claim": "rule_level 12", "quote": "escalate", "source": "kb_playbook"}]
+    return T.build_verifier_prompt(
+        facts,
+        REVIEWED,
+        "true_positive",
+        reasons,
+        cfg=cfg if cfg is not None else _cfg(),
+        nonce=NONCE,
+    )
+
 
 TRIAGE_BAD = {"suggested_action": "maybe"}  # fails the schema: the repair round follows
 VERIFIER_BAD = {"agree": "yes"}
@@ -218,8 +243,9 @@ class TestThePromptsDoNotMove:
         self, call, name, good, bad, build
     ):
         off, on = _Spy([bad, good]), _Spy([bad, good])
-        built_off = build(cfg=_cfg(LLM_RESPONSE_FORMAT=OFF)) if build is _build else build()
-        built_on = build(cfg=_cfg(LLM_RESPONSE_FORMAT=ON)) if build is _build else build()
+        # each role's prompt is built with the switch's own value, then sent by the call that carries it
+        built_off = build(cfg=_cfg(LLM_RESPONSE_FORMAT=OFF))
+        built_on = build(cfg=_cfg(LLM_RESPONSE_FORMAT=ON))
 
         call(off, built_off, cfg=_cfg(LLM_RESPONSE_FORMAT=OFF))
         call(on, built_on, cfg=_cfg(LLM_RESPONSE_FORMAT=ON))
@@ -232,7 +258,10 @@ class TestThePromptsDoNotMove:
             assert sent_on["user"].encode() == sent_off["user"].encode()
 
     def test_the_system_prompts_do_not_mention_the_format(self):
-        for built in (_build(cfg=_cfg(LLM_RESPONSE_FORMAT=ON)), _verifier()):
+        for built in (
+            _build(cfg=_cfg(LLM_RESPONSE_FORMAT=ON)),
+            _verifier(cfg=_cfg(LLM_RESPONSE_FORMAT=ON)),
+        ):
             assert "json_schema" not in built.prompt.system
             assert "strict" not in built.prompt.system
 
