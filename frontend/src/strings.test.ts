@@ -139,7 +139,7 @@ it("says 'ẩn — nhánh mù' for the blind arm and 'chưa có' for no result y
 it("carries the two column headings and the live indicator", () => {
   expect(S.alert.infoHeading).toBe("THÔNG TIN ALERT");
   expect(S.alert.aiHeading).toBe("PHÂN TÍCH AI ①");
-  expect(S.case.aiHeading).toBe("PHÂN TÍCH AI ②");
+  expect(S.case.aiHeading).toBe("PHÂN TÍCH AI · TIER 2");
   expect(S.live.on).toBe("Trực tiếp");
   expect(S.live.off).toBe("Mất kết nối");
 });
@@ -419,9 +419,10 @@ describe("② held-reason labels follow the backend", () => {
   });
 });
 
-// The columns show no model, latency, token or cost line (the evaluation reads those from `llm_runs`, not
-// the screen), so no label for one is kept: an entry nothing reads is a string that can drift unseen.
-it("keeps no label for a model, time, token or cost line, which no screen shows", () => {
+// The Tier 1 column still shows no model, latency, token or cost line. The Tier 2 panel's technical tab (DEC-221)
+// does show tokens, time and cost, and its labels live in `S.analysis.tech`, shared by both panels; no label for a
+// model exists anywhere (G5, the Owner's requirement of 15/11/2026: the model's name is nowhere in the UI).
+it("keeps no label for a model, time, token or cost line in the Tier 1 column", () => {
   expect(S.ai1).not.toHaveProperty("model");
   expect(S.ai1).not.toHaveProperty("latency");
   expect(S.ai1).not.toHaveProperty("cost");
@@ -434,6 +435,80 @@ it("keeps no label for a model, time, token or cost line, which no screen shows"
   expect(S.ai2).not.toHaveProperty("injection");
   expect(S.case).not.toHaveProperty("reasonOfConclusion");
   expect(S.common).not.toHaveProperty("none");
+});
+
+describe("the analysis panel's words (DEC-221)", () => {
+  /** Every string a table holds, at any depth; a function is called with sample arguments. */
+  const wordsOf = (value: unknown): string[] => {
+    if (typeof value === "string") return [value];
+    if (typeof value === "function") {
+      const said = (value as (...args: unknown[]) => unknown)("x", "y", "z");
+      return wordsOf(said);
+    }
+    if (typeof value === "object" && value !== null) return Object.values(value).flatMap(wordsOf);
+    return [];
+  };
+  // The name of a model, as a label or as a "model:" line. "mô hình" is the Vietnamese word, not a name.
+  const MODEL_NAME = /glm|gpt|deepseek|claude|model:/i;
+
+  it("names no model in the shared pieces or the Tier 2 panel", () => {
+    const words = [
+      ...wordsOf(S.analysis),
+      ...wordsOf(S.ai2.tile),
+      ...wordsOf(S.ai2.tabs),
+      ...wordsOf(S.ai2.overview),
+      ...wordsOf(S.ai2.timeline),
+      ...wordsOf(S.ai2.hypothesesTab),
+      ...wordsOf(S.ai2.evidenceTab),
+      ...wordsOf(S.ai2.tech),
+      S.ai2.caseLine("x", 1, ["y"]),
+    ];
+    expect(words.length).toBeGreaterThan(40); // a walk that finds nothing would pass for nothing
+    expect(words.filter((word) => MODEL_NAME.test(word))).toEqual([]);
+    expect(S.analysis.tech).not.toHaveProperty("model");
+    expect(S.ai2.tech).not.toHaveProperty("model");
+  });
+
+  it("labels the technical tab with the six rows of the approved mock-up, and no row for a model", () => {
+    expect([
+      S.analysis.tech.tokens,
+      S.analysis.tech.time,
+      S.analysis.tech.cost,
+      S.analysis.tech.analysedAt,
+      S.ai2.tech.playbook,
+      S.ai2.tech.alertsRead,
+    ]).toEqual([
+      "Token vào → ra",
+      "Thời gian",
+      "Chi phí",
+      "Phân tích lúc",
+      "Playbook",
+      "Alert AI đã đọc",
+    ]);
+  });
+
+  it("words the RAG tile's line for every failure kind the backend can record, in its order", () => {
+    expect(Object.keys(S.ai2.tile.ragNote.failedKind)).toEqual(pyTuple("FAILURE_KINDS"));
+    expect(Object.keys(S.ai2.tile.ragNote.failedKind)).toEqual(Object.keys(S.rag.failureKind));
+  });
+
+  it("names the five tabs of the Tier 2 panel as the approved mock-up does", () => {
+    expect(Object.values(S.ai2.tabs).slice(1)).toEqual([
+      "Tổng quan",
+      "Diễn biến",
+      "Giả thuyết",
+      "Bằng chứng",
+      "Kỹ thuật",
+    ]);
+  });
+
+  it("says the case line and the confidence words", () => {
+    expect(S.ai2.caseLine("0b30b853", 3, ["lab-ubuntu-01", "lab-win-02"])).toBe(
+      "Case 0b30b853 · 3 cụm · lab-ubuntu-01, lab-win-02",
+    );
+    expect(S.ai2.caseLine("0b30b853", 1, [])).toBe("Case 0b30b853 · 1 cụm");
+    expect(S.analysis.level).toEqual({ low: "Thấp", medium: "Trung bình", high: "Cao" });
+  });
 });
 
 it("writes no English-only label where a Vietnamese one is named by the spec", () => {

@@ -132,10 +132,85 @@ export type EvidenceRow = {
   reason_text: string | null;
 };
 
+/** The closed values of a hypothesis's `likelihood` and a next step's `priority` (`investigate_v4`). */
+export const LEVELS = ["low", "medium", "high"] as const;
+export type Level = (typeof LEVELS)[number];
+
 export type HypothesisRow = {
   text: string | null;
   evidence_for: unknown[];
   evidence_against: unknown[];
+  /** DEC-221: `null` for a run stored before version 4, which has none; absent from an older server. */
+  likelihood?: Level | null;
+};
+
+/**
+ * One row of the timeline of a version 4 run (DEC-221). `time` is the alert's own time, taken by the server from the
+ * alert the row names; the model writes none. The rows come sorted by it, at most 50, never one naming an alert outside
+ * the case. `tactic` and `technique` are the model's text, or null.
+ */
+export type TimelineRow = {
+  alert_id: string;
+  time: string | null;
+  what: string;
+  tactic: string | null;
+  technique: string | null;
+};
+
+/** A next step with its priority (DEC-221): `priority` is null for a run stored before version 4. */
+export type NextStepRow = { step: string; priority: Level | null };
+
+/**
+ * The scope of a run (DEC-221): the hosts and accounts the model named (`[]` for a run stored before version 4), and
+ * what the system knows of the case's alerts (`system`).
+ */
+export type ScopeView = {
+  hosts: string[];
+  accounts: string[];
+  system: { hosts: string[]; accounts: string[]; alert_count: number };
+};
+
+/**
+ * The technical figures of a run (DEC-221). There is no model in it, and none is shown: the Owner asked for the
+ * model's name to be out of the page (G5). `alerts_read` is null when the run recorded no snapshot.
+ */
+export type TechView = {
+  input_tokens: number | null;
+  output_tokens: number | null;
+  latency_ms: number | null;
+  cost_usd: number | null;
+  analysed_at: string | null;
+  playbook: string | null;
+  alerts_read: number | null;
+};
+
+/** How many quotes the run cited, and how many of them the server found in the log. */
+export type EvidenceSummary = { cited: number; verified: number };
+
+/** What the knowledge lookup of a run came to (`llm.rag_view.rag_panel`): five states, and a failure kind for one. */
+export const KNOWLEDGE_STATES = [
+  "matched",
+  "below_floor",
+  "no_candidate",
+  "failed",
+  "no_lookup",
+] as const;
+export type KnowledgeState = (typeof KNOWLEDGE_STATES)[number];
+
+/**
+ * `run.knowledge` (DEC-221): `best_pct` is the best kept match (`matched`) or the best candidate under the floor
+ * (`below_floor`, cut down), else null; `floor_pct` is the floor the candidates were held to, null when the lookup
+ * had no ranking; `scored` is how many candidates were scored. `candidates` is at most three, best first, only for
+ * `matched` and `below_floor`; a title or a conclusion is null when the entry is gone.
+ */
+export type KnowledgeView = {
+  state: string;
+  failure: string | null;
+  best_pct: number | null;
+  floor_pct: number | null;
+  threshold_pct: number;
+  scored: number | null;
+  candidates: { pct: number; title: string | null; conclusion: string | null }[];
 };
 
 /**
@@ -176,6 +251,17 @@ export type RunView = {
   snapshot?: Snapshot | null;
   /** The case has changed since the run's snapshot. */
   changed?: boolean;
+  /**
+   * DEC-221 (the Tier 2 panel). Every key below is absent from an older server and may be empty or null for a run
+   * stored before version 4: the page reads each one as optional (`runModel.ts`).
+   */
+  evidence_summary?: EvidenceSummary;
+  timeline?: TimelineRow[];
+  scope?: ScopeView;
+  /** `next_steps` with the priority of each step; the list of strings above stays until the old page is gone. */
+  next_steps_rows?: NextStepRow[];
+  tech?: TechView;
+  knowledge?: KnowledgeView;
 };
 
 /**

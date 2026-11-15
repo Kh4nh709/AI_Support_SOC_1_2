@@ -19,6 +19,8 @@ it.each([
   ["color-ai-surface", "#17142a"],
   ["color-ai-border", "#3a3170"],
   ["color-ai-accent", "#a78bfa"],
+  // DEC-221: the green of the analysis panel's "verified" and "pass" marks (the mock-up's #4ade80).
+  ["color-ok", "#4ade80"],
 ])("token --%s is %s", (name, value) => {
   expect(token(name)).toBe(value);
 });
