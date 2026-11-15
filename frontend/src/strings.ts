@@ -593,6 +593,8 @@ export const S = {
   // knowledge candidates and the technical figures. Nothing here names a tier, and nothing names a model (G5): the
   // technical tab shows tokens, time and cost, never which model spent them.
   analysis: {
+    // The middle dot between the parts of one line: "Né tránh phòng thủ · T1562.001 · alert 112437".
+    separator: " · ",
     // The confidence tile's word, from the model's `low`, `medium` or `high`.
     level: { low: "Thấp", medium: "Trung bình", high: "Cao" },
     // The three-segment meter, said to a screen reader.

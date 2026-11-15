@@ -61,7 +61,7 @@ export function KnowledgeCandidates({
                 {row.title ?? S.analysis.knowledge.untitled}
                 {row.conclusion !== null && (
                   <>
-                    {" · "}
+                    {S.analysis.separator}
                     <span data-tone={tone} className={TONE_INK[tone]}>
                       {labelOf(S.analysis.knowledge.conclusion, row.conclusion)}
                     </span>

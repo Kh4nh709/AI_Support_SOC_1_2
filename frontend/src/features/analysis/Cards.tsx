@@ -1,6 +1,7 @@
 // The cards a tab is made of: a titled card, the "label over value" grid, the label/value rows of the technical tab,
 // and a line of text with a mark beside it. Plain structure: the words come from the caller.
 import { useId, type ReactNode } from "react";
+import { S } from "../../strings";
 import { StatusIcon, type StatusKind } from "./StatusIcon";
 import { CAPTION, CARD } from "./styles";
 
@@ -75,11 +76,11 @@ export function FactRows({ rows }: { rows: readonly { label: string; value: Reac
   );
 }
 
-/** A line of text with a mark beside it. The mark is decoration: the text says it. */
+/** A line of text with a mark beside it. The mark is spoken ("Cảnh báo") so a screen reader hears the kind of line. */
 export function IconLine({ kind, children }: { kind: StatusKind; children: ReactNode }) {
   return (
     <div className="flex items-start gap-2">
-      <StatusIcon kind={kind} />
+      <StatusIcon kind={kind} label={S.analysis.status[kind]} />
       <span className="min-w-0 text-[13px] leading-[19px] break-words">{children}</span>
     </div>
   );

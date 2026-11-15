@@ -170,7 +170,7 @@ export function TimelineTab({ run }: { run: RunView }) {
             const last = index === rows.length - 1;
             const lead = [row.tactic, row.technique]
               .filter((part): part is string => part !== null)
-              .join(" · ");
+              .join(S.analysis.separator);
             return (
               <li key={index} className="col-span-3 grid grid-cols-subgrid">
                 <time
@@ -190,7 +190,7 @@ export function TimelineTab({ run }: { run: RunView }) {
                 <div className={`flex min-w-0 flex-col gap-1 ${last ? "" : "pb-3.5"}`}>
                   <span className="break-words">{row.what}</span>
                   <span data-part="meta" className="text-xs break-words text-muted">
-                    {`${lead === "" ? "" : `${lead} · `}${S.ai2.timeline.alert} `}
+                    {`${lead === "" ? "" : `${lead}${S.analysis.separator}`}${S.ai2.timeline.alert} `}
                     <AlertLink id={row.alert_id} />
                   </span>
                 </div>
@@ -343,7 +343,7 @@ export function EvidenceTab({ run }: { run: RunView }) {
                       <>
                         {`${T.alert} `}
                         <AlertLink id={alertId} />
-                        {" · "}
+                        {S.analysis.separator}
                       </>
                     )}
                     {outcome}

@@ -445,5 +445,7 @@ describe("Card and IconLine", () => {
     const { container } = render(<IconLine kind="warn">Một dẫn chứng không khớp.</IconLine>);
     expect(container).toHaveTextContent("Một dẫn chứng không khớp.");
     expect(container.querySelector("svg")).toHaveAttribute("data-kind", "warn");
+    // the mark is spoken: a screen reader hears that this is a warning
+    expect(screen.getByRole("img", { name: "Cảnh báo" })).toBeInTheDocument();
   });
 });
