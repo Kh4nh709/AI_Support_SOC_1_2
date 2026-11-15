@@ -1,8 +1,8 @@
 """What the alert page and the case page say of the RAG beside the AI's conclusion (P14-T07, DEC-213, spec §4.3).
 
-One set of values, the same on both pages: `{"best_pct": int | None, "not_applied": str | None, "below_floor_pct":
-int | None, "floor_pct": int | None}`. The last two are DEC-220's (trial; `docs/superpowers/specs/
-2026-11-15-rag-below-floor-percentage.md`).
+One set of values, the same on both pages: `{"best_pct": int | None, "not_applied": str | None,
+"below_floor_pct": int | None, "floor_pct": int | None}`. The last two are DEC-220's (trial; the spec is
+`docs/superpowers/specs/2026-11-15-rag-below-floor-percentage.md`).
 
 * **`best_pct`** is how strongly the alert (or case) matched approved knowledge: the highest
   `round(score * 100)` among the `matches` of the lookup the run's prompt held (`llm_runs.rag_lookup_id`; the
