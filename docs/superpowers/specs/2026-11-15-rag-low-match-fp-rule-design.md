@@ -93,6 +93,11 @@ does.
   confidence is the model's, in its own answer. The stored `gate_result.proposed_verdict` and
   `result.confidence` are untouched; the admin LLM page and the audit log show stored rows as they
   are.
+- **Nor what would let a reader work the model's answer out.** Step 6 compares the verifier with
+  the model's own verdict, so for a run the rule applied to the Tier 1 API returns
+  `Suggestion.gate.verifier_verdict: null` and leaves `verifier_disagrees` out of `held_by` (the
+  queue row and the alert view). Every other warning code stays, `verifier_invalid` included. The
+  stored `gate_result` keeps the verifier's verdict, `steps["6"]` and `flagged_by` as they are.
 - Stored runs are not re-judged: the rule applies to new runs only. `served_action` is unchanged.
 
 ## 6 · Frontend (`frontend/`)
