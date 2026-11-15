@@ -181,3 +181,49 @@ INVESTIGATE_V2_OK = {
 # (`investigate_v3`). The payload above stays, valid under both: `investigate_v2` is still in
 # `output_schemas.json` for `eval/`, and its conclusion is a definite one.
 INVESTIGATE_V3_OK = copy.deepcopy(INVESTIGATE_V2_OK)
+
+# DEC-221 (AP-T1): ①'s model answer is `triage_v4` - `triage_v3` plus five fields the model writes for the
+# analyst - and ②'s is `investigate_v4`. The payloads above stay: `triage_v3` / `investigate_v3` are still in
+# `output_schemas.json` for the runs already stored, and the tests that read those rows use them.
+TRIAGE_V4_NEW_FIELDS = {
+    "summary": "SSH đăng nhập thành công sau nhiều lần thất bại liên tiếp từ cùng một nguồn.",
+    "reading_attack": "Nếu là tấn công, đây là một cuộc dò mật khẩu đã thành công trên tài khoản user1.",
+    "reading_benign": "Nếu lành tính, người dùng gõ sai mật khẩu vài lần rồi đăng nhập đúng.",
+    "would_change": "Một lần đăng nhập thành công từ máy quen thuộc của người dùng sẽ làm đổi kết luận.",
+    "next_checks": [
+        "Xem nguồn của các lần đăng nhập thất bại có phải máy của người dùng không.",
+        "Kiểm tra tài khoản user1 có hoạt động bất thường sau lần đăng nhập thành công.",
+    ],
+}
+
+TRIAGE_V4_TRUE_POSITIVE = {
+    **copy.deepcopy(TRIAGE_V3_TRUE_POSITIVE),
+    **copy.deepcopy(TRIAGE_V4_NEW_FIELDS),
+}
+TRIAGE_V4_FALSE_POSITIVE = {
+    **copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE),
+    **copy.deepcopy(TRIAGE_V4_NEW_FIELDS),
+}
+
+INVESTIGATE_V4_OK = {
+    "summary": INVESTIGATE_V3_OK["summary"],
+    "attack_narrative": INVESTIGATE_V3_OK["attack_narrative"],
+    "timeline": [
+        {
+            "alert_id": "1786903016.121311",
+            "what": "Đăng nhập SSH thành công sau nhiều lần thất bại.",
+            "tactic": "Credential Access",
+            "technique": "T1110",
+        }
+    ],
+    "scope": {"hosts": ["host-a"], "accounts": ["user1"]},
+    "suggested_conclusion": INVESTIGATE_V3_OK["suggested_conclusion"],
+    "confidence": INVESTIGATE_V3_OK["confidence"],
+    "gia_thuyet": [{**copy.deepcopy(INVESTIGATE_V3_OK["gia_thuyet"][0]), "likelihood": "high"}],
+    "evidence": copy.deepcopy(INVESTIGATE_V3_OK["evidence"]),
+    "next_steps": [
+        {"step": "Rotate credentials for user1.", "priority": "high"},
+        {"step": "Review sshd logs for the source IP over the prior 7 days.", "priority": "medium"},
+    ],
+    "playbook_used": INVESTIGATE_V3_OK["playbook_used"],
+}

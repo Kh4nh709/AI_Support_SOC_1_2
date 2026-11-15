@@ -26,18 +26,20 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = ROOT / "backend" / "app" / "llm" / "templates"
 
 
-def test_file_parses_and_has_six_schemas():
-    """`triage_v3` and `verifier_v2` (P14-T01) and `investigate_v3` (P14-T02) are the product's;
-    `triage_v2`, `verifier_v1` and `investigate_v2` stay, unused by the product, because the
-    evaluation reads them (DEC-213)."""
+def test_file_parses_and_has_eight_schemas():
+    """`triage_v4` and `investigate_v4` (DEC-221, AP-T1) and `verifier_v2` (P14-T01) are the product's;
+    `triage_v3` and `investigate_v3` stay for the runs already stored, and `triage_v2`, `verifier_v1` and
+    `investigate_v2` stay, unused by the product, because the evaluation reads them (DEC-213)."""
     loaded = schemas.load()
     assert set(loaded) == {
         "triage_v2",
         "triage_v3",
+        "triage_v4",
         "verifier_v1",
         "verifier_v2",
         "investigate_v2",
         "investigate_v3",
+        "investigate_v4",
     }
 
 
