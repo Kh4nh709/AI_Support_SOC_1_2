@@ -51,7 +51,8 @@ function ForcedFlag() {
 /**
  * What the AI concluded (P14-T03, DEC-213): "AI kết luận: **TP** (độ tin cậy cao)", and when the gate's checks raised
  * warnings, "… — **có cảnh báo kiểm chứng**: <reasons>" (DEC-217: the verdict is the model's own, the checks are
- * warnings beside it, and nothing is held back for a person). The conclusion is the model's own answer, also for a
+ * warnings beside it, and nothing is held back for a person). The conclusion is the verdict ① ended with, which is
+ * the model's own answer except for a run the RAG rule changed (DEC-219, below), and the model's own answer for a
  * `needs_review` stored before DEC-217 that still arrives (`heldOf`'s guard half); a reason the UI has no label for
  * is shown as its code. All of it is text.
  *
@@ -64,6 +65,12 @@ function ForcedFlag() {
  * đã duyệt", nothing when there was no match. The notice that the RAG was not applied is a sentence of its own
  * beside the line (`RagNotice`). The blind arm has no conclusion to draw this beside, so neither is ever drawn
  * there: the server drops the key, and this column draws a line only for a state that has a conclusion.
+ *
+ * DEC-219 (trial, amended): for a run the RAG rule applied to (`state.ragDefaultBelow`, the threshold) `false_positive`
+ * is ①'s default answer, and the line says so, the same whether the model had said FP itself or not: no confidence
+ * note (it is the model's, in its own answer), then, after the percentage clause, a parenthesis, "(dưới 80%: mặc định
+ * FP)", then the warning clause as before. With no percentage on the page the parenthesis follows the verdict. The line
+ * never names the model's own answer. Any other run reads as it did.
  */
 export function ConclusionLine({
   state,
@@ -78,13 +85,16 @@ export function ConclusionLine({
 }) {
   const reasons = state.heldBy.map((code) => labelOf(S.ai1.heldReason, code));
   const because = S.ai1.heldBecause(reasons);
+  const defaultBelow = state.ragDefaultBelow;
   return (
     <>
       <p className="text-base text-ai-accent">
         {S.ai1.conclusion}: <strong className="text-lg">{labelOf(S.ai1.action, conclusion)}</strong>
-        {state.confidence !== null &&
+        {defaultBelow === undefined &&
+          state.confidence !== null &&
           ` ${S.ai1.confidenceNote(labelOf(S.confidence, state.confidence))}`}
         {rag.pct !== null && ` ${S.rag.dash} ${S.rag.match(rag.pct)}`}
+        {defaultBelow !== undefined && ` ${S.ai1.ragDefault(defaultBelow)}`}
         {heldOf(state) && (
           <>
             {` ${S.ai1.heldDash} `}
@@ -142,7 +152,7 @@ function Verdict({
 
 /**
  * The gate in one line: whether it forced the verdict, and by which rules (a version 1 row; a new run reads "Không bị
- * ép" and names none). Exported to be drawn on its own.
+ * ép" and names none, the RAG default of DEC-219 included: it is not a gate force). Exported to be drawn on its own.
  */
 export function GateLine({
   gate,
@@ -167,8 +177,11 @@ export function GateLine({
 }
 
 /**
- * What the gate did: the verdict ① proposed, the one it ended with (the same for a new run, DEC-217), the verifier,
- * and the gate's warnings. A version 1 row shows what the gate stored, `needs_review` included.
+ * What the gate did: the verdict ① proposed, the one it ended with (the same for a new run, DEC-217; for a run below
+ * the RAG threshold, DEC-219, the server serves the verdict ① ended with in both places), the verifier, and the
+ * gate's warnings. A row is drawn only for a verdict the server gave: a null verifier verdict (the server sends it for
+ * a run below the RAG threshold, DEC-219) has no "Bộ kiểm chứng" row at all. A version 1 row shows what the gate
+ * stored, `needs_review` included.
  */
 export function GateSteps({ gate }: { gate: NonNullable<Suggestion["gate"]> }) {
   const warnings = gate.warnings ?? [];

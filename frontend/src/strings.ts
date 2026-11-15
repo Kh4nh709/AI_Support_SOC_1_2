@@ -205,6 +205,12 @@ export const S = {
     heldDash: "—",
     held: "có cảnh báo kiểm chứng",
     heldBecause: (reasons: string[]) => (reasons.length === 0 ? "" : `: ${reasons.join(", ")}`),
+    // DEC-219 (trial, amended by the Owner): below the RAG threshold `false_positive` is ①'s default answer, whether
+    // the model had said it itself or not. The line says so in a parenthesis after the percentage clause and prints
+    // no confidence note (it is the model's, in its own answer), and never names the model's answer: "AI kết luận: FP
+    // — trùng 62% với tri thức đã duyệt (dưới 80%: mặc định FP) — có cảnh báo kiểm chứng: …". The verdict it names is
+    // always `false_positive`, worded as `action.false_positive` (strings.test.ts compares the two).
+    ragDefault: (threshold: number) => `(dưới ${threshold}%: mặc định FP)`,
     // `llm.verdicts.HELD_REASONS`: the checks of the gate that raised a warning, in the gate's step order (the codes
     // kept their names from before DEC-217, when a failed check held the verdict). The keys are compared with the
     // backend's tuple in strings.test.ts; a code with no label is shown as the code.

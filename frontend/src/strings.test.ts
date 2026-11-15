@@ -376,6 +376,16 @@ describe("① verdict and warning labels follow the backend", () => {
     expect(S.ai1.heldBecause([])).toBe("");
   });
 
+  // DEC-219 (amended): the parenthesis of the line when the verdict is the default below the RAG threshold.
+  it("words the RAG default below the threshold as the spec has it (DEC-219 section 6)", () => {
+    expect(S.ai1.ragDefault(80)).toBe("(dưới 80%: mặc định FP)");
+    expect(S.ai1.ragDefault(65)).toBe("(dưới 65%: mặc định FP)");
+    // the default is `false_positive`: the verdict it names is the label the line gives that verdict
+    expect(S.ai1.ragDefault(80)).toContain(`mặc định ${S.ai1.action.false_positive})`);
+    // nothing of the model's own answer: the page does not say it
+    expect(S.ai1.ragDefault(80)).not.toMatch(/model|TP/);
+  });
+
   it("says no ① warning word that the system held or kept the verdict back for a person", () => {
     const words = [S.ai1.held, ...Object.values(S.ai1.heldReason)];
     for (const word of words) {

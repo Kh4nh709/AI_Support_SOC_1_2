@@ -595,6 +595,39 @@ describe("the ① column, from the state of the view", () => {
     expect(within(aiColumn()).getByText(S.ai1.gateForced)).toBeInTheDocument();
   });
 
+  // DEC-219 (amended): the page hands the column the view as it is, and below the threshold the line says FP is the
+  // default: no confidence note, no flag, and nothing of what the model answered.
+  it("says FP is the default below the RAG threshold, with no flag, from the view's own gate (DEC-219)", async () => {
+    views = {
+      a1: full({
+        suggestion: suggestion({
+          suggested_action: "false_positive",
+          confidence: null,
+          gate: {
+            forced: false,
+            forced_by: [],
+            proposed_verdict: "false_positive",
+            final_verdict: "false_positive",
+            verifier_verdict: null,
+            rag_rule: { threshold: 80, best_pct: 62, applied: true, changed: true },
+          },
+        }),
+        proposed_action: "false_positive",
+        held_by: ["fp_policy:playbook_rule"],
+        rag: { best_pct: 62, not_applied: null },
+      }),
+    };
+    renderPage();
+    await loaded();
+    expect(within(aiColumn()).getByText(/AI kết luận/).textContent).toBe(
+      "AI kết luận: FP — trùng 62% với tri thức đã duyệt (dưới 80%: mặc định FP) — " +
+        "có cảnh báo kiểm chứng: không khớp bảng quyết định đã duyệt",
+    );
+    expect(
+      within(aiColumn()).queryByRole("img", { name: S.ai1.forcedLabel }),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows the hidden state for a blind view, names no verdict, and still lets the analyst act", async () => {
     views = {
       a1: blind({ status: "tier1_active", acknowledged_by: ME_ID, acknowledged_by_name: "An" }),
@@ -608,6 +641,8 @@ describe("the ① column, from the state of the view", () => {
       "true_positive",
       "AI kết luận",
       "cảnh báo kiểm chứng",
+      "dưới 80%",
+      "mặc định FP",
       "trung bình",
       "Failed password for invalid user admin from",
     ]) {

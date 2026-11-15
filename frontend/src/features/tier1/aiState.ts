@@ -2,20 +2,28 @@
 // P10-T10, reuses it). The blind arm (DEC-101) is read from the response only: the server drops the ①
 // keys from a blind, undecided head, and this file recognises that. It never fetches, infers or caches a
 // suggestion any other way, so a component that wants to know "what does ① say" asks here and nowhere else.
-import type { AlertView, QueueRow } from "../../api/tier1";
+import type { AlertView, QueueRow, SuggestionGate } from "../../api/tier1";
 
 /**
- * What ① concluded and which of the gate's checks warned about it (P14-T03, DEC-213; DEC-217): the part of a `ready`
- * and of a `decided` state that the conclusion line ("AI kết luận: …") is made of. `action` is the verdict ① ends
- * with (`suggested_action`: `false_positive` or `true_positive`, the model's own answer; the server never serves
- * `needs_review` for ①), `proposed` what the model itself concluded (`proposed_action`, null when the server sent
- * none), `heldBy` the closed codes of `llm.verdicts.HELD_REASONS` that name the checks that raised a warning (`[]`
- * when none did). The name `heldBy` is the wire's (`held_by`); since DEC-217 it holds a warning, not a hold.
+ * What ① concluded and which of the gate's checks warned about it (P14-T03, DEC-213; DEC-217; DEC-219): the part of a
+ * `ready` and of a `decided` state that the conclusion line ("AI kết luận: …") is made of. `action` is the verdict ①
+ * ends with (`suggested_action`: `false_positive` or `true_positive`; the model's own answer, except for a run below
+ * the RAG threshold, below; the server never serves `needs_review` for ①), `proposed` what the server calls the
+ * model's answer (`proposed_action`, null when it sent none; for a run below the threshold it is the verdict ① ended
+ * with, never the model's own), `heldBy` the closed codes of `llm.verdicts.HELD_REASONS` that name the checks that
+ * raised a warning (`[]` when none did). The name `heldBy` is the wire's (`held_by`); since DEC-217 it holds a
+ * warning, not a hold.
+ *
+ * `ragDefaultBelow` is there only for a run the RAG rule applied to (DEC-219): a RAG match existed and its best was
+ * below this percentage, so `false_positive` is ①'s default answer, whether the model had said it itself or not. The
+ * alert view says so (`suggestion.gate.rag_rule.applied`) and the verdict it serves is `false_positive`; the queue row
+ * carries nothing of it, and any other run has no such key.
  */
 export type AiConclusion = {
   action: string | null;
   proposed: string | null;
   heldBy: string[];
+  ragDefaultBelow?: number;
 };
 
 export type AiState =
@@ -38,14 +46,15 @@ export type AiState =
 export const MODEL_ACTIONS: ReadonlySet<string> = new Set(["false_positive", "true_positive"]);
 
 /**
- * What the AI concluded, for the line "AI kết luận: …": the model's own answer (`proposed`) when it is one of the two
- * it may give, else the verdict ① ended with when that is one of them (every new run, DEC-217; a server that sent no
- * `proposed_action`), else null: a `needs_review` nobody explained (stored before DEC-217, and still arriving from
- * an old cache) is the system's word, not a conclusion.
+ * What the AI concluded, for the line "AI kết luận: …": the verdict ① ended with (`action`) when it is one of the two
+ * the model may give (every run: the model's own answer, DEC-217, or the verdict the RAG rule made of it, DEC-219),
+ * else the model's own answer (`proposed`) when that is one of them, else null. The second reading is the guard for a
+ * `needs_review` stored before DEC-217 that still arrives from an old cache, and for a decided state with no action;
+ * a `needs_review` nobody explained is the system's word, not a conclusion.
  */
 export function conclusionOf(state: AiConclusion): string | null {
-  if (state.proposed !== null && MODEL_ACTIONS.has(state.proposed)) return state.proposed;
-  return state.action !== null && MODEL_ACTIONS.has(state.action) ? state.action : null;
+  if (state.action !== null && MODEL_ACTIONS.has(state.action)) return state.action;
+  return state.proposed !== null && MODEL_ACTIONS.has(state.proposed) ? state.proposed : null;
 }
 
 /**
@@ -65,6 +74,30 @@ function codes(value: unknown): string[] {
 }
 
 const textOrNull = (value: unknown): string | null => (typeof value === "string" ? value : null);
+
+/**
+ * The RAG rule of DEC-219, as the key of an `AiConclusion` it belongs to: `ragDefaultBelow` when the gate says the rule
+ * applied to this run (`rag_rule.applied` is true, with the threshold the match was below), and no key at all for any
+ * other run: a rule that did not apply or was switched off, a run stored before the rule (`rag_rule` null or absent),
+ * and a value that is not what the server sends. `changed` is not read: whether the model had said `false_positive`
+ * itself or the rule made it, the page says the same. The default is `false_positive`, so a run whose verdict is
+ * anything else (an inconsistent server) announces none: its line is today's. Only the alert view's gate carries it,
+ * so only `aiStateOfView` reads it.
+ */
+function ragRuleOf(
+  gate: SuggestionGate | null | undefined,
+  action: string | null,
+): { ragDefaultBelow?: number } {
+  const rule: unknown = gate?.rag_rule;
+  if (action !== "false_positive" || typeof rule !== "object" || rule === null) return {};
+  const { applied, threshold } = rule as Record<string, unknown>;
+  return applied === true &&
+    typeof threshold === "number" &&
+    Number.isFinite(threshold) &&
+    threshold > 0
+    ? { ragDefaultBelow: threshold }
+    : {};
+}
 
 /**
  * The statuses in which the server shows the ① verdict to everyone (visibility.SHOW_STATES). A copy: the
@@ -131,13 +164,16 @@ export function aiStateOfRow(row: QueueRow): AiState {
 export function aiStateOfView(view: AlertView): AiState {
   const suggestion = view.suggestion;
   if (DECIDED.has(view.status)) {
+    const action =
+      typeof suggestion?.suggested_action === "string" ? suggestion.suggested_action : null;
     return {
       kind: "decided",
-      action: typeof suggestion?.suggested_action === "string" ? suggestion.suggested_action : null,
+      action,
       confidence: suggestion?.confidence ?? null,
       // The decision lifts the blind arm: the server sends the two keys back with the rest of the suggestion.
       proposed: textOrNull(view.proposed_action),
       heldBy: codes(view.held_by),
+      ...ragRuleOf(suggestion?.gate, action),
     };
   }
   if (!("suggestion" in view) && view.suggestion_visible === false) return { kind: "hidden" };
@@ -149,6 +185,7 @@ export function aiStateOfView(view: AlertView): AiState {
       forced: suggestion.gate?.forced === true,
       proposed: textOrNull(view.proposed_action),
       heldBy: codes(view.held_by),
+      ...ragRuleOf(suggestion.gate, suggestion.suggested_action),
     };
   }
   if (view.triage_status === "unavailable") {
