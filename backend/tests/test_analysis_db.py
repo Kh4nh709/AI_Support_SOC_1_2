@@ -284,7 +284,9 @@ def test_the_view_carries_the_analysis_of_the_newest_run(db):
         "name": "brute_force_v1",
         "rule_id": "bf-2",
         "rule_action": "true_positive",
+        "rule_table_reviewed": get_decision_table("brute_force").reviewed,
     }
+    # no verifier row was inserted for this run: the figures are the proposer row's alone
     assert built["tech"]["input_tokens"] == 1200 and built["tech"]["output_tokens"] == 340
     assert built["tech"]["latency_ms"] == 2100 and built["tech"]["cost_usd"] == 0.01234
     assert built["tech"]["analysed_at"] == view["suggestion"]["created_at"]
