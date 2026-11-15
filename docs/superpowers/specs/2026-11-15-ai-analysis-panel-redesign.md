@@ -1,7 +1,7 @@
 # The AI analysis panel of Tier 1 and Tier 2, redesigned (scorecard + tabs) — design
 
 Date: 2026-11-15 · Trial only (branch `director/trial-binary-verdict`, on top of `1beb89a`; never
-merged into `main`) · Decision: DEC-221 (to be written when built)
+merged into `main`) · Decision: DEC-221 (built 16/11/2026; see `docs/plan/DECISIONS.md`)
 
 Mock-up the Owner approved: the canvas "Phân tích AI Tier 1 và Tier 2", option **C** (artboards
 `T1-BangDiem` and `T2-BangDiem`), https://claude.ai/artifact/Swto1Mm8ANWuevPT16NVen
