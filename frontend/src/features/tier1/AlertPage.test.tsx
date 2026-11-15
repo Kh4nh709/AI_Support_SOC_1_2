@@ -595,6 +595,37 @@ describe("the ① column, from the state of the view", () => {
     expect(within(aiColumn()).getByText(S.ai1.gateForced)).toBeInTheDocument();
   });
 
+  // DEC-219: the page hands the column the view as it is, and the line says the RAG rule made the verdict.
+  it("says the RAG rule made the verdict, with the flag, from the view's own gate (DEC-219)", async () => {
+    views = {
+      a1: full({
+        suggestion: suggestion({
+          suggested_action: "false_positive",
+          confidence: "high",
+          gate: {
+            forced: true,
+            forced_by: ["rag_rule"],
+            proposed_verdict: "true_positive",
+            final_verdict: "false_positive",
+            verifier_verdict: "true_positive",
+            rag_rule: { threshold: 80, best_pct: 62, applied: true, changed: true },
+          },
+        }),
+        proposed_action: "true_positive",
+        held_by: ["fp_policy:playbook_rule"],
+        rag: { best_pct: 62, not_applied: null },
+      }),
+    };
+    renderPage();
+    await loaded();
+    expect(within(aiColumn()).getByText(/AI kết luận/).textContent).toBe(
+      "AI kết luận: FP — trùng 62% với tri thức đã duyệt — theo quy tắc RAG: trùng dưới 80% (model kết luận TP) — " +
+        "có cảnh báo kiểm chứng: không khớp bảng quyết định đã duyệt⚑",
+    );
+    expect(within(aiColumn()).getByRole("img", { name: S.ai1.forcedLabel })).toBeInTheDocument();
+    expect(within(aiColumn()).getByText("quy tắc RAG")).toBeInTheDocument();
+  });
+
   it("shows the hidden state for a blind view, names no verdict, and still lets the analyst act", async () => {
     views = {
       a1: blind({ status: "tier1_active", acknowledged_by: ME_ID, acknowledged_by_name: "An" }),
@@ -608,6 +639,8 @@ describe("the ① column, from the state of the view", () => {
       "true_positive",
       "AI kết luận",
       "cảnh báo kiểm chứng",
+      "quy tắc RAG",
+      "model kết luận",
       "trung bình",
       "Failed password for invalid user admin from",
     ]) {

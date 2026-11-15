@@ -183,8 +183,8 @@ export const S = {
   ai1: {
     hidden: "ẩn — nhánh mù",
     none: "chưa có",
-    // The flag of a gate that forced the verdict: only a version 1 row (before DEC-217) carries it; a new run
-    // never does, because the gate's checks are warnings beside the verdict.
+    // The flag of a gate that forced the verdict: a version 1 row (before DEC-217) carries it, and since DEC-219 a run
+    // whose verdict the RAG rule made; no other new run does, because the gate's checks are warnings beside the verdict.
     forced: "⚑",
     forcedLabel: "Cổng kiểm soát đã ép kết quả",
     // `suggested_action` of ① (`llm.verdicts.STORED_ACTIONS`, read through `labelOf`; strings.test.ts compares the
@@ -205,6 +205,13 @@ export const S = {
     heldDash: "—",
     held: "có cảnh báo kiểm chứng",
     heldBecause: (reasons: string[]) => (reasons.length === 0 ? "" : `: ${reasons.join(", ")}`),
+    // DEC-219 (trial): a run whose verdict the RAG rule made. The line says so after the percentage clause, with no
+    // confidence note (it was the model's, in the other verdict): "AI kết luận: FP — trùng 62% với tri thức đã duyệt
+    // — theo quy tắc RAG: trùng dưới 80% (model kết luận TP) — có cảnh báo kiểm chứng: …". The clause that names
+    // the rule is bold on the page, so it is a string of its own, and the model's answer follows it in a parenthesis.
+    ragRuleDash: "—",
+    ragRule: (threshold: number) => `theo quy tắc RAG: trùng dưới ${threshold}%`,
+    ragRuleModelSaid: (label: string) => `(model kết luận ${label})`,
     // `llm.verdicts.HELD_REASONS`: the checks of the gate that raised a warning, in the gate's step order (the codes
     // kept their names from before DEC-217, when a failed check held the verdict). The keys are compared with the
     // backend's tuple in strings.test.ts; a code with no label is shown as the code.
@@ -259,6 +266,11 @@ export const S = {
     gateForced: "Bị ép",
     gateNotForced: "Không bị ép",
     gateForcedBy: "Ép bởi",
+    // The steps of the gate that can force a verdict, by the name the gate stores in `forced_by`, read through `labelOf`:
+    // a name with no label here is shown as the name. A new run is forced only by the RAG rule (DEC-219).
+    gateForcedByStep: {
+      rag_rule: "quy tắc RAG",
+    },
     gateProposed: "Đề xuất gốc",
     gateFinal: "Kết luận sau cổng",
     gateWarnings: "Cảnh báo của cổng",

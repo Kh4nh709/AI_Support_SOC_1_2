@@ -4,7 +4,7 @@
 // only way the page does, with a view the server could have sent.
 import { render, screen, within } from "@testing-library/react";
 import axe from "axe-core";
-import type { AlertView, Suggestion } from "../../api/tier1";
+import type { AlertView, RagRule, Suggestion } from "../../api/tier1";
 import { S } from "../../strings";
 import { phrasesFound, textOf, wordsFound } from "../../testing/containsWord";
 import { AiColumn, Unavailable } from "./AiColumn";
@@ -109,6 +109,12 @@ const renderColumn = (v: AlertView) =>
 /** The two-letter labels of a verdict: found as WORDS, so "SFTP" in an unrelated line is not a leak. */
 const LABEL_MARKERS = ["TP", "FP"];
 
+/**
+ * What the RAG rule of DEC-219 adds to ①'s account of itself, and only there: the name of the rule (the line says
+ * "theo quy tắc RAG: trùng dưới 80%", the gate block "quy tắc RAG") and the words that name the model's answer.
+ */
+const RULE_MARKERS = ["quy tắc RAG", "model kết luận"];
+
 /** Everything else of a verdict that must not reach a column that is hidden: found as plain substrings. */
 const VERDICT_WORDS = [
   "true_positive",
@@ -120,6 +126,7 @@ const VERDICT_WORDS = [
   "trung bình",
   "37 lần xác thực",
   "Failed password",
+  ...RULE_MARKERS,
 ];
 
 /**
@@ -600,7 +607,12 @@ describe("AI kết luận", () => {
     const col = column();
     expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
     expect(
-      leaksIn(col, ["AI kết luận", "cảnh báo kiểm chứng", "tài sản quan trọng hoặc chưa rõ"]),
+      leaksIn(col, [
+        "AI kết luận",
+        "cảnh báo kiểm chứng",
+        "tài sản quan trọng hoặc chưa rõ",
+        ...RULE_MARKERS,
+      ]),
     ).toEqual([]);
   });
 });
@@ -1239,6 +1251,351 @@ describe("the RAG beside the conclusion", () => {
   });
 });
 
+// DEC-219 (trial): a ① run whose model said `true_positive` while a RAG match existed and its best was below the
+// threshold ends `false_positive`, and the line says the rule made it and what the model said. The sentences are
+// written out in full: a label edited in strings.ts alone fails here.
+describe("the RAG rule changed the verdict (DEC-219)", () => {
+  const RULE: RagRule = { threshold: 80, best_pct: 62, applied: true, changed: true };
+  /** A visible-arm run the rule changed: ① ended FP, the model said TP, and the gate recorded the rule. */
+  const ragChanged = (
+    reasons: string[] = [],
+    over: Partial<AlertView> = {},
+    rule: RagRule | null | undefined = RULE,
+  ): AlertView => {
+    const gate: NonNullable<Suggestion["gate"]> = {
+      forced: true,
+      forced_by: ["rag_rule"],
+      proposed_verdict: "true_positive",
+      final_verdict: "false_positive",
+      verifier_verdict: "true_positive",
+      warnings: [],
+    };
+    if (rule !== undefined) gate.rag_rule = rule;
+    return view({
+      suggestion: suggestion({ suggested_action: "false_positive", confidence: "high", gate }),
+      proposed_action: "true_positive",
+      held_by: reasons,
+      rag: { best_pct: 62, not_applied: null },
+      ...over,
+    });
+  };
+  /** A run the model itself answered FP while the rule applied: nothing was changed. */
+  const ragApplied = (reasons: string[] = [], over: Partial<AlertView> = {}) =>
+    warned(
+      reasons,
+      {
+        rag: { best_pct: 62, not_applied: null },
+        ...over,
+      },
+      { verdict: "false_positive", confidence: "high" },
+    );
+  const withRule = (v: AlertView, rule: RagRule | null): AlertView => ({
+    ...v,
+    suggestion: { ...v.suggestion!, gate: { ...v.suggestion!.gate, rag_rule: rule } },
+  });
+  const line = () => within(column()).getByText(/AI kết luận/);
+  const FLAG = S.ai1.forced;
+  const PERCENT = "trùng 62% với tri thức đã duyệt";
+  const RULE_CLAUSE = "theo quy tắc RAG: trùng dưới 80%";
+  const MODEL_SAID = "(model kết luận TP)";
+  const REASONS = ["fp_policy:asset_criticality", "verifier_disagrees"];
+  const REASONS_TEXT = "tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý";
+
+  describe("the line", () => {
+    it("names the rule and the model's answer after the percentage, with no confidence note", () => {
+      renderColumn(ragChanged());
+      expect(line().textContent).toBe(
+        `AI kết luận: FP — ${PERCENT} — ${RULE_CLAUSE} ${MODEL_SAID}${FLAG}`,
+      );
+      expect(line().textContent).toBe(
+        "AI kết luận: FP — trùng 62% với tri thức đã duyệt — theo quy tắc RAG: trùng dưới 80% (model kết luận TP)⚑",
+      );
+    });
+
+    it("keeps the warning clause after the rule's, with the reasons", () => {
+      renderColumn(ragChanged(REASONS));
+      expect(line().textContent).toBe(
+        "AI kết luận: FP — trùng 62% với tri thức đã duyệt — theo quy tắc RAG: trùng dưới 80% (model kết luận TP) — " +
+          `có cảnh báo kiểm chứng: ${REASONS_TEXT}⚑`,
+      );
+    });
+
+    it("leaves the percentage clause out when the page has no percentage, with and without warnings", () => {
+      const none = { rag: { best_pct: null, not_applied: null } };
+      const { unmount } = renderColumn(ragChanged([], none));
+      expect(line().textContent).toBe(
+        "AI kết luận: FP — theo quy tắc RAG: trùng dưới 80% (model kết luận TP)⚑",
+      );
+      unmount();
+      renderColumn(ragChanged(REASONS, none));
+      expect(line().textContent).toBe(
+        "AI kết luận: FP — theo quy tắc RAG: trùng dưới 80% (model kết luận TP) — " +
+          `có cảnh báo kiểm chứng: ${REASONS_TEXT}⚑`,
+      );
+    });
+
+    it("leaves the percentage clause out when the server sent no rag at all", () => {
+      const noRag = ragChanged();
+      delete noRag.rag;
+      renderColumn(noRag);
+      expect(line().textContent).toBe(
+        "AI kết luận: FP — theo quy tắc RAG: trùng dưới 80% (model kết luận TP)⚑",
+      );
+    });
+
+    it("says the threshold the rule had, whatever it was", () => {
+      renderColumn(ragChanged([], {}, { ...RULE, threshold: 65, best_pct: 40 }));
+      expect(line().textContent).toBe(
+        "AI kết luận: FP — trùng 62% với tri thức đã duyệt — theo quy tắc RAG: trùng dưới 65% (model kết luận TP)⚑",
+      );
+    });
+
+    it("says no confidence, which was the model's in the other verdict, whatever the run holds", () => {
+      for (const confidence of ["high", "medium", "low", null]) {
+        const v = ragChanged();
+        v.suggestion = { ...v.suggestion!, confidence };
+        const { unmount } = renderColumn(v);
+        expect(line().textContent).not.toContain("độ tin cậy");
+        unmount();
+      }
+    });
+
+    it("bolds the verdict and the rule's clause, and the warning phrase, and nothing else", () => {
+      renderColumn(ragChanged(REASONS));
+      const strong = Array.from(line().querySelectorAll("strong")).map((el) => el.textContent);
+      expect(strong).toEqual(["FP", RULE_CLAUSE, "có cảnh báo kiểm chứng"]);
+    });
+
+    it("says the model's answer in the model's own words, FP for an FP", () => {
+      // not a case the server sends (the rule only turns TP into FP), but the words follow the answer, not a constant
+      renderColumn(ragChanged([], { proposed_action: "false_positive" }));
+      expect(line().textContent).toBe(
+        "AI kết luận: FP — trùng 62% với tri thức đã duyệt — theo quy tắc RAG: trùng dưới 80% (model kết luận FP)⚑",
+      );
+    });
+
+    it("leaves the parenthesis out when the server did not say what the model concluded", () => {
+      const v = ragChanged();
+      delete v.proposed_action;
+      renderColumn(v);
+      expect(line().textContent).toBe(
+        "AI kết luận: FP — trùng 62% với tri thức đã duyệt — theo quy tắc RAG: trùng dưới 80%⚑",
+      );
+    });
+
+    it("is one line in the column, and the model's reasons stay under it", () => {
+      renderColumn(ragChanged());
+      expect(within(column()).getAllByText(/AI kết luận/)).toHaveLength(1);
+      const reasons = within(within(column()).getByRole("region", { name: S.ai1.reasons }));
+      expect(reasons.getAllByRole("listitem")).toHaveLength(2);
+    });
+
+    it("is today's line when the rule applied and the model itself said FP", () => {
+      const rule: RagRule = { threshold: 80, best_pct: 62, applied: true, changed: false };
+      renderColumn(withRule(ragApplied(), rule));
+      expect(line().textContent).toBe(
+        "AI kết luận: FP (độ tin cậy cao) — trùng 62% với tri thức đã duyệt",
+      );
+    });
+
+    it("is today's line, warnings included, when the rule applied and changed nothing", () => {
+      const rule: RagRule = { threshold: 80, best_pct: 62, applied: true, changed: false };
+      renderColumn(withRule(ragApplied(REASONS), rule));
+      expect(line().textContent).toBe(
+        "AI kết luận: FP (độ tin cậy cao) — trùng 62% với tri thức đã duyệt — " +
+          `có cảnh báo kiểm chứng: ${REASONS_TEXT}`,
+      );
+      expect(column().textContent).not.toContain("quy tắc RAG");
+      expect(column().textContent).not.toContain("model kết luận");
+    });
+
+    it.each([
+      ["a rag_rule that is null", null],
+      ["no rag_rule key (a run stored before DEC-219)", undefined],
+      [
+        "a rule that is switched off",
+        { threshold: 0, best_pct: null, applied: false, changed: false } as RagRule,
+      ],
+      [
+        "a rule the match did not fall under",
+        { threshold: 80, best_pct: 91, applied: false, changed: false } as RagRule,
+      ],
+    ])("is the line of the same run with no rag_rule at all: %s", (_name, rule) => {
+      const base = ragApplied(REASONS);
+      const { unmount } = renderColumn(base);
+      const before = line().textContent;
+      unmount();
+      const v = rule === undefined ? base : withRule(base, rule);
+      renderColumn(v);
+      expect(line().textContent).toBe(before);
+      expect(before).toBe(
+        "AI kết luận: FP (độ tin cậy cao) — trùng 62% với tri thức đã duyệt — " +
+          `có cảnh báo kiểm chứng: ${REASONS_TEXT}`,
+      );
+    });
+  });
+
+  describe("the forced flag and the gate block", () => {
+    it("shows the flag in the undecided column, in the line", () => {
+      renderColumn(ragChanged());
+      const flag = within(column()).getByRole("img", { name: S.ai1.forcedLabel });
+      expect(flag).toHaveTextContent(S.ai1.forced);
+      expect(line()).toContainElement(flag);
+    });
+
+    it("words forced_by rag_rule as quy tắc RAG, and never as the code", () => {
+      renderColumn(ragChanged());
+      const col = within(column());
+      expect(col.getByText(S.ai1.gateForced)).toBeInTheDocument();
+      expect(col.getByText(S.ai1.gateForcedBy)).toBeInTheDocument();
+      expect(col.getByText("quy tắc RAG")).toBeInTheDocument();
+      expect(column().textContent).not.toContain("rag_rule");
+    });
+
+    it("shows a step name it has no label for as its code, beside the rule's name", () => {
+      const v = ragChanged();
+      v.suggestion = {
+        ...v.suggestion!,
+        gate: { ...v.suggestion!.gate, forced_by: ["rag_rule", "step9"] },
+      };
+      renderColumn(v);
+      expect(within(column()).getByText("quy tắc RAG, step9")).toBeInTheDocument();
+    });
+
+    it("words it too when the server sends the rule as a string, not a list", () => {
+      const v = ragChanged();
+      v.suggestion = { ...v.suggestion!, gate: { ...v.suggestion!.gate, forced_by: "rag_rule" } };
+      renderColumn(v);
+      expect(within(column()).getByText("quy tắc RAG")).toBeInTheDocument();
+    });
+
+    it("shows a name from the prototype chain as text, not as a label", () => {
+      const v = ragChanged();
+      v.suggestion = {
+        ...v.suggestion!,
+        gate: { ...v.suggestion!.gate, forced_by: ["constructor", "__proto__"] },
+      };
+      renderColumn(v);
+      expect(within(column()).getByText("constructor, __proto__")).toBeInTheDocument();
+    });
+
+    it("shows the verdict the model gave and the one the rule made, in the gate's steps", () => {
+      renderColumn(ragChanged());
+      const steps = within(within(column()).getByRole("region", { name: S.ai1.gateSteps }));
+      expect(steps.getByText(S.ai1.gateProposed).parentElement).toHaveTextContent(
+        `${S.ai1.gateProposed}${S.ai1.action.true_positive}`,
+      );
+      expect(steps.getByText(S.ai1.gateFinal).parentElement).toHaveTextContent(
+        `${S.ai1.gateFinal}${S.ai1.action.false_positive}`,
+      );
+    });
+
+    it("shows no flag and no rule name for a run the rule applied to without changing it", () => {
+      renderColumn(
+        withRule(ragApplied(), { threshold: 80, best_pct: 62, applied: true, changed: false }),
+      );
+      const col = within(column());
+      expect(col.queryByRole("img", { name: S.ai1.forcedLabel })).not.toBeInTheDocument();
+      expect(col.getByText(S.ai1.gateNotForced)).toBeInTheDocument();
+      expect(col.queryByText("quy tắc RAG")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("on a decided page", () => {
+    const decided = (over: Partial<AlertView> = {}) =>
+      ragChanged(REASONS, { status: "closed_fp", acknowledged_by_name: "An", ...over });
+    const box = () => within(column()).getByText(S.ai1.decidedAi).closest("div")!;
+    const khop = () => within(column()).getByText(S.ai1.match).parentElement!;
+
+    it("says the same line in the box, without the gate's flag", () => {
+      const undecided = renderColumn(ragChanged(REASONS));
+      const before = line().textContent;
+      undecided.unmount();
+      renderColumn(decided());
+      const after = within(box()).getByText(/AI kết luận/).textContent;
+      expect(after).toBe(
+        "AI kết luận: FP — trùng 62% với tri thức đã duyệt — theo quy tắc RAG: trùng dưới 80% (model kết luận TP) — " +
+          `có cảnh báo kiểm chứng: ${REASONS_TEXT}`,
+      );
+      expect(after).toBe((before ?? "").replace(FLAG, ""));
+      expect(within(column()).getAllByText(/AI kết luận/)).toHaveLength(1);
+    });
+
+    it("says Khớp 'có' when the alert was closed as a false positive: ① ended with FP", () => {
+      renderColumn(decided({ status: "closed_fp" }));
+      expect(khop().textContent).toBe("Khớp có");
+    });
+
+    it("says Khớp 'không' when the alert was escalated: ① ended with FP, not the model's TP", () => {
+      renderColumn(decided({ status: "escalated_tier2", case_id: 9 }));
+      expect(khop().textContent).toBe("Khớp không");
+    });
+
+    it("says Khớp 'không' for an alert Tier 2 has since concluded as a confirmed incident (an escalation)", () => {
+      renderColumn(decided({ status: "closed_confirmed", case_id: 9 }));
+      expect(khop().textContent).toBe("Khớp không");
+    });
+
+    it("says Khớp 'không' when the alert was closed as benign (① has no benign verdict)", () => {
+      renderColumn(decided({ status: "closed_benign" }));
+      expect(khop().textContent).toBe("Khớp không");
+    });
+
+    it("is not drawn for a run the rule applied to without changing, whose line is today's", () => {
+      renderColumn(
+        withRule(ragApplied(REASONS, { status: "closed_fp", acknowledged_by_name: "An" }), {
+          threshold: 80,
+          best_pct: 62,
+          applied: true,
+          changed: false,
+        }),
+      );
+      expect(within(box()).getByText(/AI kết luận/).textContent).toBe(
+        "AI kết luận: FP (độ tin cậy cao) — trùng 62% với tri thức đã duyệt — " +
+          `có cảnh báo kiểm chứng: ${REASONS_TEXT}`,
+      );
+    });
+  });
+
+  describe("on the blind arm", () => {
+    it("draws nothing of the rule before the decision, and the markers find it where it is drawn", () => {
+      const blind = blindView({ status: "tier1_active" });
+      expect(aiStateOfView(blind)).toEqual({ kind: "hidden" });
+      const hidden = renderColumn(blind);
+      expect(within(column()).getByText(S.ai1.hidden)).toBeInTheDocument();
+      expect(leaksIn(column())).toEqual([]);
+      expect(leaksIn(column(), RULE_MARKERS)).toEqual([]);
+      hidden.unmount();
+      renderColumn(ragChanged(REASONS));
+      expect(leaksIn(column(), RULE_MARKERS)).toEqual(["TP", "FP", ...RULE_MARKERS]);
+      expect(leaksIn(column())).toEqual(
+        expect.arrayContaining(["FP", "TP", "AI kết luận", "quy tắc RAG", "model kết luận"]),
+      );
+    });
+
+    it("draws nothing of the rule for a blind head with the keys the server drops: no suggestion, no gate", () => {
+      const stray = blindView({
+        proposed_action: "true_positive",
+        held_by: ["fp_policy:asset_criticality"],
+        rag: { best_pct: 62, not_applied: null },
+      });
+      renderColumn(stray);
+      expect(leaksIn(column(), [...RULE_MARKERS, "trùng 62%", "62%"])).toEqual([]);
+    });
+
+    it("shows the rule once the head is decided: the decision lifts the blind arm", () => {
+      renderColumn(
+        ragChanged(REASONS, {
+          status: "closed_fp",
+          suggestion_visible: false,
+          acknowledged_by_name: "An",
+        }),
+      );
+      expect(within(column()).getByText(/AI kết luận/).textContent).toContain(RULE_CLAUSE);
+    });
+  });
+});
+
 describe("accessibility", () => {
   const states: [string, AlertView][] = [
     ["ready", view()],
@@ -1252,6 +1609,25 @@ describe("accessibility", () => {
         status: "closed_benign",
         acknowledged_by_name: "An",
         rag: { best_pct: 87, not_applied: "auth" },
+      }),
+    ],
+    [
+      "ready, the RAG rule changed the verdict (DEC-219)",
+      view({
+        suggestion: suggestion({
+          suggested_action: "false_positive",
+          gate: {
+            forced: true,
+            forced_by: ["rag_rule"],
+            proposed_verdict: "true_positive",
+            final_verdict: "false_positive",
+            verifier_verdict: "true_positive",
+            rag_rule: { threshold: 80, best_pct: 62, applied: true, changed: true },
+          },
+        }),
+        proposed_action: "true_positive",
+        held_by: ["fp_policy:asset_criticality"],
+        rag: { best_pct: 62, not_applied: null },
       }),
     ],
     [

@@ -376,6 +376,16 @@ describe("① verdict and warning labels follow the backend", () => {
     expect(S.ai1.heldBecause([])).toBe("");
   });
 
+  // DEC-219: the clause of the line when the RAG rule changed the verdict, and the name the gate block gives it.
+  it("words the RAG rule that changed the verdict as the spec has it (DEC-219 section 6)", () => {
+    expect(S.ai1.ragRuleDash).toBe("—");
+    expect(S.ai1.ragRule(80)).toBe("theo quy tắc RAG: trùng dưới 80%");
+    expect(S.ai1.ragRule(65)).toBe("theo quy tắc RAG: trùng dưới 65%");
+    expect(S.ai1.ragRuleModelSaid("TP")).toBe("(model kết luận TP)");
+    expect(S.ai1.ragRuleModelSaid("FP")).toBe("(model kết luận FP)");
+    expect(S.ai1.gateForcedByStep).toEqual({ rag_rule: "quy tắc RAG" });
+  });
+
   it("says no ① warning word that the system held or kept the verdict back for a person", () => {
     const words = [S.ai1.held, ...Object.values(S.ai1.heldReason)];
     for (const word of words) {
