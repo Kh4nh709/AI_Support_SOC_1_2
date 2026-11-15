@@ -288,6 +288,11 @@ export const S = {
   rag: {
     dash: "—",
     match: (pct: number) => `trùng ${pct}% với tri thức đã duyệt`,
+    // DEC-220 (trial): a lookup that kept no match still scored candidates; the line says the best one's percentage
+    // and the floor it was under, in the place of `match`: "— trùng cao nhất 47% với tri thức đã duyệt (dưới mức tối
+    // thiểu 50%)". The rule of DEC-219 does not apply to such a run, so no "mặc định FP" follows.
+    belowFloor: (pct: number, floor: number) =>
+      `trùng cao nhất ${pct}% với tri thức đã duyệt (dưới mức tối thiểu ${floor}%)`,
     notApplied: (subject: "alert" | "case", reason: string) =>
       `⚠ Không áp dụng RAG cho ${subject} này: ${reason} — AI đã phân tích không có tri thức tham khảo.`,
     failureKind: {

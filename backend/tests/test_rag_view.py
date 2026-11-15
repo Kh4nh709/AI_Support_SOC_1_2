@@ -1,5 +1,6 @@
 """P14-T07 (DEC-213, spec §4.3): `llm.rag_view` - what the alert page and the case page say of the RAG beside the
-AI's conclusion, as the closed pair `{"best_pct": int | None, "not_applied": str | None}`.
+AI's conclusion, as the closed pair `{"best_pct": int | None, "not_applied": str | None}` and, since DEC-220, the
+two keys of a lookup that kept no match, `below_floor_pct` and `floor_pct` (the section at the end of this file).
 
 Pure: no database. The two readers that feed it (`tier1.queue.get_alert_view` and `tier2.investigation_view`)
 are tested in `test_queue_rag.py` and `test_investigation_view_rag.py`; this file pins the rules they share.
@@ -17,6 +18,9 @@ from app.rag.match import Match
 from app.tier1 import visibility
 
 KINDS = FAILURE_KINDS
+
+#: The two keys DEC-220 adds to the pair; both `None` for every run but one whose lookup kept no match.
+NO_FLOOR = {"below_floor_pct": None, "floor_pct": None}
 
 
 def _match(score: object) -> dict:
@@ -49,7 +53,11 @@ def test_the_percentage_is_the_rounded_score_times_a_hundred():
 
 def test_best_pct_is_the_highest_of_the_matches_not_the_first_or_the_last():
     matches = [_match(0.61), _match(0.87), _match(0.72)]
-    assert rag_view.rag_view(matches, None, KINDS) == {"best_pct": 87, "not_applied": None}
+    assert rag_view.rag_view(matches, None, KINDS) == {
+        "best_pct": 87,
+        "not_applied": None,
+        **NO_FLOOR,
+    }
 
 
 def test_a_single_match_gives_its_percentage():
@@ -101,7 +109,11 @@ def test_score_reads_the_score_of_one_stored_item():
 @pytest.mark.parametrize("kind", FAILURE_KINDS)
 def test_every_failure_kind_comes_back_from_its_warning(kind):
     warnings = [rag_not_applied_warning(kind)]
-    assert rag_view.rag_view(None, warnings, KINDS) == {"best_pct": None, "not_applied": kind}
+    assert rag_view.rag_view(None, warnings, KINDS) == {
+        "best_pct": None,
+        "not_applied": kind,
+        **NO_FLOOR,
+    }
 
 
 def test_the_kind_is_found_among_other_warnings():
@@ -139,12 +151,21 @@ def test_an_unknown_kind_does_not_hide_a_valid_one_after_it():
 
 def test_the_two_parts_are_independent():
     both = rag_view.rag_view([_match(0.92)], [rag_not_applied_warning("timeout")], KINDS)
-    assert both == {"best_pct": 92, "not_applied": "timeout"}
+    assert both == {"best_pct": 92, "not_applied": "timeout", **NO_FLOOR}
 
 
-def test_the_shape_is_exactly_the_two_keys():
-    assert set(rag_view.rag_view(None, None, KINDS)) == {"best_pct", "not_applied"}
-    assert rag_view.rag_view(None, None, KINDS) == {"best_pct": None, "not_applied": None}
+def test_the_shape_is_exactly_the_four_keys():
+    assert set(rag_view.rag_view(None, None, KINDS)) == {
+        "best_pct",
+        "not_applied",
+        "below_floor_pct",
+        "floor_pct",
+    }
+    assert rag_view.rag_view(None, None, KINDS) == {
+        "best_pct": None,
+        "not_applied": None,
+        **NO_FLOOR,
+    }
 
 
 def test_the_result_is_a_new_dict_each_time():
@@ -162,13 +183,13 @@ def test_rag_is_hidden_on_the_blind_arm_and_from_the_labeller():
 
 
 def test_a_blind_undecided_view_loses_rag_and_a_decided_one_keeps_it():
-    view = {"alert_id": "a", "rag": {"best_pct": 87, "not_applied": None}}
+    view = {"alert_id": "a", "rag": {"best_pct": 87, "not_applied": None, **NO_FLOOR}}
     blind = visibility.strip(view, status="queued_tier1", suggestion_visible=False, mode="analyst")
     assert "rag" not in blind
     decided = visibility.strip(view, status="closed_fp", suggestion_visible=False, mode="analyst")
-    assert decided["rag"] == {"best_pct": 87, "not_applied": None}
+    assert decided["rag"] == {"best_pct": 87, "not_applied": None, **NO_FLOOR}
     visible = visibility.strip(view, status="queued_tier1", suggestion_visible=True, mode="analyst")
-    assert visible["rag"] == {"best_pct": 87, "not_applied": None}
+    assert visible["rag"] == {"best_pct": 87, "not_applied": None, **NO_FLOOR}
     assert "rag" not in visibility.strip(
         view, status="closed_fp", suggestion_visible=True, mode="labeling"
     )

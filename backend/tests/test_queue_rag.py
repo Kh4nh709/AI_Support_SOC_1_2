@@ -39,7 +39,10 @@ from tests.test_queue import (
 
 pytestmark = pytest.mark.db
 
-NO_RAG = {"best_pct": None, "not_applied": None}
+#: DEC-220: the two keys of a lookup that kept no match; `None` for every run these tests build but the ones
+#: that say otherwise (the section at the end of this file).
+NO_FLOOR = {"below_floor_pct": None, "floor_pct": None}
+NO_RAG = {"best_pct": None, "not_applied": None, **NO_FLOOR}
 
 
 def _lookup(
@@ -50,18 +53,35 @@ def _lookup(
     scores: tuple[float, ...] = (),
     failure_kind: str | None = None,
     subject_kind: str = "alert",
+    ranked: tuple[float, ...] | None = None,
 ) -> str:
     """One `rag_results` row in the shape `rag.lookup._store` writes: matches `{entry_id, level, content_sha256,
-    score}`, `match_notes` empty."""
+    score}`, `match_notes` empty. `ranked` (DEC-220) is the rerank's list, `[{entry_id, score}]`, every candidate
+    it scored: NULL when not given, as a row from before migration 023 or a lookup that never reached the rerank.
+    """
     lookup_id = str(uuid.uuid4())
     matches = [
         {"entry_id": f"entry-{i}", "level": "giong", "content_sha256": "0" * 64, "score": score}
         for i, score in enumerate(scores)
     ]
+    ranking = (
+        None
+        if ranked is None
+        else Jsonb([{"entry_id": f"cand-{i}", "score": value} for i, value in enumerate(ranked)])
+    )
     conn.execute(
         "INSERT INTO rag_results (lookup_id, subject_kind, subject_id, status, history, matches, "
-        "match_notes, failure_kind) VALUES (%s, %s, %s, %s, NULL, %s, %s, %s)",
-        (lookup_id, subject_kind, alert_id, status, Jsonb(matches), Jsonb({}), failure_kind),
+        "match_notes, failure_kind, ranked) VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s)",
+        (
+            lookup_id,
+            subject_kind,
+            alert_id,
+            status,
+            Jsonb(matches),
+            Jsonb({}),
+            failure_kind,
+            ranking,
+        ),
     )
     return lookup_id
 
@@ -108,7 +128,7 @@ def test_best_pct_is_the_best_match_of_the_lookup_the_latest_run_held(db):
     lookup = _lookup(db, alert_id, scores=(0.61, 0.87, 0.72))
     _run(db, alert_id, lookup_id=lookup)
 
-    assert get_alert_view(db, alert_id)["rag"] == {"best_pct": 87, "not_applied": None}
+    assert get_alert_view(db, alert_id)["rag"] == {"best_pct": 87, "not_applied": None, **NO_FLOOR}
 
 
 def test_the_percentage_is_the_rounded_score_times_a_hundred(db):
@@ -185,7 +205,7 @@ def test_a_newer_run_replaces_an_older_notice(db):
     _run(db, alert_id, warnings=[rag_not_applied_warning("timeout")], offset_s=0)
     _run(db, alert_id, lookup_id=_lookup(db, alert_id, scores=(0.7,)), offset_s=5)
 
-    assert get_alert_view(db, alert_id)["rag"] == {"best_pct": 70, "not_applied": None}
+    assert get_alert_view(db, alert_id)["rag"] == {"best_pct": 70, "not_applied": None, **NO_FLOOR}
 
 
 def test_the_verifier_row_is_never_read(db):
@@ -200,7 +220,7 @@ def test_the_verifier_row_is_never_read(db):
         offset_s=5,
     )
 
-    assert get_alert_view(db, alert_id)["rag"] == {"best_pct": 60, "not_applied": None}
+    assert get_alert_view(db, alert_id)["rag"] == {"best_pct": 60, "not_applied": None, **NO_FLOOR}
 
 
 # ── not_applied: the kind from the run's citation_warnings ──────────────────────────────────────
@@ -210,7 +230,11 @@ def test_not_applied_is_the_kind_of_rag_not_applied_auth(db):
     alert_id = _queued(db, suggestion_visible=True)
     _run(db, alert_id, warnings=["rag_not_applied:auth"])
 
-    assert get_alert_view(db, alert_id)["rag"] == {"best_pct": None, "not_applied": "auth"}
+    assert get_alert_view(db, alert_id)["rag"] == {
+        "best_pct": None,
+        "not_applied": "auth",
+        **NO_FLOOR,
+    }
 
 
 @pytest.mark.parametrize("kind", FAILURE_KINDS)
@@ -258,7 +282,7 @@ def test_a_stopped_run_still_carries_the_kind_but_no_suggestion(db):
 
     view = get_alert_view(db, alert_id)
     assert view["suggestion"] is None
-    assert view["rag"] == {"best_pct": None, "not_applied": "quota"}
+    assert view["rag"] == {"best_pct": None, "not_applied": "quota", **NO_FLOOR}
 
 
 # ── no run at all, a duplicate, the reader's shape ──────────────────────────────────────────────
@@ -324,7 +348,7 @@ def test_a_run_inserted_between_the_reads_cannot_pair_one_runs_suggestion_with_a
         db.execute = original  # type: ignore[method-assign]
 
     assert fired
-    assert view["rag"] == {"best_pct": 50, "not_applied": None}
+    assert view["rag"] == {"best_pct": 50, "not_applied": None, **NO_FLOOR}
 
 
 def test_latest_suggestion_held_keeps_its_three_values(db):
@@ -337,7 +361,7 @@ def test_latest_suggestion_held_keeps_its_three_values(db):
 
     assert len(triple) == 3 and len(quad) == 4
     assert quad[:3] == triple
-    assert quad[3] == {"best_pct": 66, "not_applied": None}
+    assert quad[3] == {"best_pct": 66, "not_applied": None, **NO_FLOOR}
 
 
 # ── the blind arm (DEC-101) ─────────────────────────────────────────────────────────────────────
@@ -395,7 +419,7 @@ def test_a_decision_brings_rag_back_on_the_blind_arm(db):
     view = get_alert_view(db, alert_id)
 
     assert view["status"] == "closed_benign"
-    assert view["rag"] == {"best_pct": 87, "not_applied": None}
+    assert view["rag"] == {"best_pct": 87, "not_applied": None, **NO_FLOOR}
 
 
 @pytest.mark.parametrize("suggestion_visible", [True, False], ids=["visible", "blind"])
@@ -427,3 +451,240 @@ def test_the_queue_rows_do_not_carry_rag(db):
     rows = list_queue(db).rows
     assert [row for row in rows if row["alert_id"] == alert_id]
     assert all("rag" not in row for row in rows)
+
+
+# ── DEC-220: the best candidate's percentage when the lookup kept no match ──────────────────────
+#
+# `rag_results.ranked` is read in the same statement as the `matches` (a second scalar subquery on the run's
+# `rag_lookup_id`), and the floor is `RAG_MIN_SCORE` of the running configuration (a test pins it through the
+# environment, as every config-reading test does).
+
+BELOW_47 = {"best_pct": None, "not_applied": None, "below_floor_pct": 47, "floor_pct": 50}
+
+
+@pytest.fixture
+def floor_half(monkeypatch):
+    monkeypatch.setenv("RAG_MIN_SCORE", "0.5")
+
+
+def test_a_lookup_that_kept_no_match_gives_its_best_candidates_percentage_and_the_floor(
+    db, floor_half
+):
+    alert_id = _queued(db, suggestion_visible=True)
+    _run(db, alert_id, lookup_id=_lookup(db, alert_id, scores=(), ranked=(0.31, 0.47, 0.12)))
+
+    assert get_alert_view(db, alert_id)["rag"] == BELOW_47
+
+
+def test_the_floor_is_the_running_configurations(db, monkeypatch):
+    monkeypatch.setenv("RAG_MIN_SCORE", "0.65")
+    monkeypatch.setenv("RAG_LEVEL_GIONG", "0.8")
+    monkeypatch.setenv("RAG_LEVEL_RAT_GIONG", "0.9")
+    alert_id = _queued(db, suggestion_visible=True)
+    _run(db, alert_id, lookup_id=_lookup(db, alert_id, scores=(), ranked=(0.47,)))
+
+    rag = get_alert_view(db, alert_id)["rag"]
+    assert (rag["below_floor_pct"], rag["floor_pct"]) == (47, 65)
+
+
+def test_a_floor_the_best_candidate_reaches_is_not_below_it(db, monkeypatch):
+    """The floor was lowered after the lookup ran: 47 is no longer under it, and the page does not say it is."""
+    monkeypatch.setenv("RAG_MIN_SCORE", "0.4")
+    alert_id = _queued(db, suggestion_visible=True)
+    _run(db, alert_id, lookup_id=_lookup(db, alert_id, scores=(), ranked=(0.47,)))
+
+    assert get_alert_view(db, alert_id)["rag"] == NO_RAG
+
+
+def test_an_explicit_floor_is_used_without_reading_the_configuration(db, monkeypatch):
+    monkeypatch.setenv("RAG_MIN_SCORE", "0.4")
+    alert_id = _queued(db, suggestion_visible=True)
+    _run(db, alert_id, lookup_id=_lookup(db, alert_id, scores=(), ranked=(0.47,)))
+
+    rag = latest_suggestion_rag(db, alert_id, rag_min_score=0.5)[3]
+    assert rag == BELOW_47
+
+
+def test_a_kept_match_is_unchanged_and_carries_no_below_floor_number(db, floor_half):
+    """The run's lookup kept 62 % and the rerank scored 47 % and 31 % as well: `best_pct` is 62, as before."""
+    alert_id = _queued(db, suggestion_visible=True)
+    lookup = _lookup(db, alert_id, scores=(0.62,), ranked=(0.62, 0.47, 0.31))
+    _run(db, alert_id, lookup_id=lookup)
+
+    assert get_alert_view(db, alert_id)["rag"] == {"best_pct": 62, "not_applied": None, **NO_FLOOR}
+
+
+def test_a_kept_match_the_budget_dropped_carries_no_below_floor_number(db, floor_half):
+    alert_id = _queued(db, suggestion_visible=True)
+    lookup = _lookup(db, alert_id, scores=(0.62,), ranked=(0.62, 0.47))
+    _run(db, alert_id, lookup_id=lookup, warnings=["learned_entries_dropped"])
+
+    assert get_alert_view(db, alert_id)["rag"] == NO_RAG
+
+
+def test_a_lookup_with_no_ranking_gives_no_below_floor_number(db, floor_half):
+    """`ranked` is NULL on a row from before migration 023, and on a `budget` or a `failed` one."""
+    alert_id = _queued(db, suggestion_visible=True)
+    _run(db, alert_id, lookup_id=_lookup(db, alert_id, scores=(), ranked=None))
+
+    assert get_alert_view(db, alert_id)["rag"] == NO_RAG
+
+
+def test_a_lookup_with_an_empty_ranking_gives_no_below_floor_number(db, floor_half):
+    """Nothing was left to rerank (`ranked` is `[]`): no candidate, no number."""
+    alert_id = _queued(db, suggestion_visible=True)
+    _run(db, alert_id, lookup_id=_lookup(db, alert_id, scores=(), ranked=()))
+
+    assert get_alert_view(db, alert_id)["rag"] == NO_RAG
+
+
+def test_a_ranking_of_junk_scores_gives_no_below_floor_number(db, floor_half):
+    alert_id = _queued(db, suggestion_visible=True)
+    lookup = str(uuid.uuid4())
+    db.execute(
+        "INSERT INTO rag_results (lookup_id, subject_kind, subject_id, status, matches, match_notes, ranked) "
+        "VALUES (%s, 'alert', %s, 'ok', '[]'::jsonb, '{}'::jsonb, %s)",
+        (
+            lookup,
+            alert_id,
+            Jsonb([{"entry_id": "a", "score": "0.4"}, {"entry_id": "b"}, "x", {"score": 1.5}]),
+        ),
+    )
+    _run(db, alert_id, lookup_id=lookup)
+
+    assert get_alert_view(db, alert_id)["rag"] == NO_RAG
+
+
+def test_a_run_that_names_no_lookup_gives_no_below_floor_number(db, floor_half):
+    alert_id = _queued(db, suggestion_visible=True)
+    _lookup(db, alert_id, scores=(), ranked=(0.47,))  # the alert has one; the run did not hold it
+    _run(db, alert_id, lookup_id=None)
+
+    assert get_alert_view(db, alert_id)["rag"] == NO_RAG
+
+
+def test_a_failed_lookup_gives_no_below_floor_number_and_not_applied_says_so(db, floor_half):
+    alert_id = _queued(db, suggestion_visible=True)
+    lookup = _lookup(db, alert_id, status="failed", failure_kind="auth", ranked=(0.47,))
+    _run(db, alert_id, lookup_id=lookup, warnings=[rag_not_applied_warning("auth")])
+
+    assert get_alert_view(db, alert_id)["rag"] == {**NO_RAG, "not_applied": "auth"}
+
+
+def test_the_lookup_the_run_names_is_the_one_whose_ranking_is_read(db, floor_half):
+    """The run's prompt held lookup A (best candidate 47 %); a newer lookup B for the alert scored 31 %."""
+    alert_id = _queued(db, suggestion_visible=True)
+    held = _lookup(db, alert_id, scores=(), ranked=(0.47,))
+    _lookup(db, alert_id, scores=(), ranked=(0.31,))
+    _run(db, alert_id, lookup_id=held)
+
+    assert get_alert_view(db, alert_id)["rag"] == BELOW_47
+
+
+def test_the_ranking_comes_with_the_suggestion_in_the_one_statement(db, floor_half):
+    """Still one read of the newest run: the ranking rides the statement that builds the suggestion, never a
+    statement of its own, so the pair is the very run's."""
+    alert_id = _queued(db, suggestion_visible=True)
+    _run(db, alert_id, lookup_id=_lookup(db, alert_id, scores=(), ranked=(0.47,)))
+    statements: list[str] = []
+    original = db.execute
+
+    def spy(query, *args, **kwargs):
+        statements.append(str(query))
+        return original(query, *args, **kwargs)
+
+    db.execute = spy  # type: ignore[method-assign]
+    try:
+        view = get_alert_view(db, alert_id)
+    finally:
+        db.execute = original  # type: ignore[method-assign]
+
+    assert view["rag"]["below_floor_pct"] == 47
+    assert len([s for s in statements if "FROM llm_runs" in s]) == 2
+    assert not [s for s in statements if "FROM rag_results" in s and "FROM llm_runs" not in s]
+    assert any("g.ranked" in s for s in statements)
+
+
+def test_a_duplicates_view_carries_its_heads_below_floor_number(db, floor_half):
+    head = _queued(db, suggestion_visible=True)
+    _run(db, head, lookup_id=_lookup(db, head, scores=(), ranked=(0.47,)))
+    duplicate = _duplicate(db, head)
+
+    assert get_alert_view(db, duplicate)["rag"] == BELOW_47
+
+
+def test_a_stopped_run_still_carries_the_number_but_no_suggestion(db, floor_half):
+    """Like `best_pct`, the pair is the run's, not the suggestion's: the page words it only beside a conclusion."""
+    alert_id = _queued(db, suggestion_visible=True)
+    _run(
+        db,
+        alert_id,
+        result=None,
+        gate_result=None,
+        stopped_by="unavailable",
+        lookup_id=_lookup(db, alert_id, scores=(), ranked=(0.47,)),
+    )
+
+    view = get_alert_view(db, alert_id)
+    assert view["suggestion"] is None
+    assert view["rag"] == BELOW_47
+
+
+def test_the_queue_rows_do_not_carry_the_below_floor_number(db, floor_half):
+    alert_id = _queued(db, suggestion_visible=True)
+    _run(db, alert_id, lookup_id=_lookup(db, alert_id, scores=(), ranked=(0.47,)))
+
+    rows = list_queue(db).rows
+    assert [row for row in rows if row["alert_id"] == alert_id]
+    for row in rows:
+        assert {"rag", "below_floor_pct", "floor_pct"}.isdisjoint(row)
+
+
+def test_a_blind_undecided_view_has_none_of_the_below_floor_keys_or_values(db, floor_half):
+    alert_id = _queued(db, suggestion_visible=False)
+    _run(db, alert_id, lookup_id=_lookup(db, alert_id, scores=(), ranked=(0.47,)))
+
+    view = get_alert_view(db, alert_id)
+
+    assert "rag" not in view
+    assert {"rag", "below_floor_pct", "floor_pct"}.isdisjoint(_walk_keys(view))
+    text = json.dumps(view, default=str)
+    assert "below_floor" not in text and "floor_pct" not in text
+
+
+def test_a_decision_brings_the_below_floor_number_back_on_the_blind_arm(db, floor_half):
+    _seed_user(db)
+    alert_id = _queued(db, suggestion_visible=False, risk_score=30)
+    _run(db, alert_id, lookup_id=_lookup(db, alert_id, scores=(), ranked=(0.47,)))
+    acknowledge(db, alert_id, USER_ID)
+    assert "rag" not in get_alert_view(db, alert_id)  # still undecided, still blind
+
+    decide(
+        db,
+        alert_id,
+        USER_ID,
+        decision="closed_benign",
+        reason="benign",
+        seen_occurrence_count=1,
+        llm_suggestion=None,
+        llm_confidence=None,
+    )
+
+    assert get_alert_view(db, alert_id)["rag"] == BELOW_47
+
+
+@pytest.mark.parametrize("suggestion_visible", [True, False], ids=["visible", "blind"])
+def test_the_labelling_page_never_has_the_below_floor_keys(db, floor_half, suggestion_visible):
+    alert_id = _queued(db, suggestion_visible=suggestion_visible)
+    _run(db, alert_id, lookup_id=_lookup(db, alert_id, scores=(), ranked=(0.47,)))
+
+    keys: set[Any] = set(_walk_keys(get_alert_view(db, alert_id, mode="labeling")))
+
+    assert {"rag", "below_floor_pct", "floor_pct"}.isdisjoint(keys)
+
+
+def test_the_visible_arm_has_the_number_while_undecided(db, floor_half):
+    alert_id = _queued(db, suggestion_visible=True)
+    _run(db, alert_id, lookup_id=_lookup(db, alert_id, scores=(), ranked=(0.47,)))
+
+    assert get_alert_view(db, alert_id)["rag"] == BELOW_47

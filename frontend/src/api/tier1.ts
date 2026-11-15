@@ -326,8 +326,10 @@ export type AlertView = {
   held_by?: string[];
   /**
    * How strongly the lookup ①'s prompt held matched approved knowledge, and the closed kind of the failure when the
-   * RAG was left out (P14-T07, DEC-213): `{best_pct, not_applied}`, read through `ragNoteOf`. It goes with
-   * `suggestion` on the blind arm: absent on a blind, undecided head. The queue rows carry none.
+   * RAG was left out (P14-T07, DEC-213): `{best_pct, not_applied}`, read through `ragNoteOf`; and, for a lookup that
+   * kept no match, the best candidate's percentage and the floor it was under (DEC-220, trial): `below_floor_pct`,
+   * `floor_pct`. It goes with `suggestion` on the blind arm: absent on a blind, undecided head. The queue rows carry
+   * none.
    */
   rag?: RagWire;
 

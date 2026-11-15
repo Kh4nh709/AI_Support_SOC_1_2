@@ -20,6 +20,9 @@ What only a database can show:
 
 from __future__ import annotations
 
+import json
+import uuid
+
 import pytest
 from app.tier1 import queue
 from app.tier1.decide import decide
@@ -37,7 +40,7 @@ from tests.test_decide import (
 )
 from tests.test_decide import _insert_run as _decide_insert_run
 from tests.test_triage_job import _enable_llm, _event_types, _job, _RecordingLLM, _seed_alert
-from tests.test_triage_rag import approved, put_lookup
+from tests.test_triage_rag import approved, history_json, put_lookup
 
 pytestmark = pytest.mark.db
 
@@ -165,6 +168,103 @@ def test_a_lookup_that_kept_no_match_leaves_the_models_verdict(db, rule_on) -> N
     stored = _stored(db, alert_id)
     assert stored["result"]["suggested_action"] == TP
     assert stored["gate_result"]["rag_rule"]["best_pct"] is None
+
+
+def _with_ranked_lookup(db, ranked: tuple[float, ...]) -> str:
+    """A visible-arm head with a stored `ok` lookup that KEPT NO MATCH (`matches` is `[]`) and whose rerank
+    scored `ranked` (DEC-220: `rag_results.ranked`, every candidate, best first): the history is in the prompt,
+    so the run names the lookup. `rag_results` is append-only, so the row is written with its ranking.
+    """
+    alert_id = _seed_alert(db, suggestion_visible=True)
+    ranking = [{"entry_id": f"cand-{i}", "score": score} for i, score in enumerate(ranked)]
+    db.execute(
+        "INSERT INTO rag_results (lookup_id, subject_kind, subject_id, status, history, matches, ranked)"
+        " VALUES (%s, 'alert', %s, 'ok', %s::jsonb, '[]'::jsonb, %s::jsonb)",
+        (uuid.uuid4(), alert_id, json.dumps(history_json(4)), json.dumps(ranking)),
+    )
+    return alert_id
+
+
+# ── DEC-220: the number the page shows for a lookup that kept no match is not the rule's ─────────────
+
+
+def test_a_47_percent_candidate_under_the_floor_keeps_the_models_verdict_and_is_on_the_page(
+    db, rule_on, monkeypatch
+) -> None:
+    """The pin of the DEC-220 spec, section 3, against the real rows: the lookup scored 47 % and kept no match
+    (the floor is 50 %), the threshold is 80. The rule of DEC-219 reads kept matches only: the model's verdict
+    stays, `rag_rule.applied` is false, `rag_rule.best_pct` is null - and the page pair for the same stored run
+    carries the candidate's 47 % and the floor."""
+    monkeypatch.setenv("RAG_MIN_SCORE", "0.5")
+    alert_id = _with_ranked_lookup(db, (0.47, 0.31, 0.12))
+
+    run_triage_job(db, _job(alert_id), adapter=_model())
+
+    stored = _stored(db, alert_id)
+    assert (
+        stored["rag_lookup_id"] is not None
+    )  # the run holds the lookup whose ranking the page reads
+    assert stored["result"]["suggested_action"] == TP
+    gate_result = stored["gate_result"]
+    assert gate_result["final_verdict"] == TP and gate_result["proposed_verdict"] == TP
+    assert gate_result["rag_rule"] == {
+        "threshold": 80,
+        "best_pct": None,
+        "applied": False,
+        "changed": False,
+    }
+    assert gate_result["steps"]["3r"] == "n/a"
+    assert gate_result["forced"] is False and gate_result["forced_by"] == []
+
+    view = get_alert_view(db, alert_id)
+    assert view["rag"] == {
+        "best_pct": None,
+        "not_applied": None,
+        "below_floor_pct": 47,
+        "floor_pct": 50,
+    }
+    # served as the model's verdict, with its confidence, and the rule's block says it did not apply
+    assert view["proposed_action"] == TP
+    assert view["suggestion"]["confidence"] == TRIAGE_V3_TRUE_POSITIVE["confidence"]
+    assert view["suggestion"]["gate"]["rag_rule"] == {
+        "threshold": 80,
+        "best_pct": None,
+        "applied": False,
+    }
+    assert _stored(db, alert_id) == stored  # serving changed nothing
+
+
+def test_a_kept_match_is_the_rules_number_and_the_page_has_no_below_floor_number(
+    db, rule_on, monkeypatch
+) -> None:
+    """The counterpart: the lookup kept a 62 % match (and scored a 47 % candidate too). The rule applies to 62,
+    the page's `best_pct` is 62 and `below_floor_pct` is null: the two are never both set."""
+    monkeypatch.setenv("RAG_MIN_SCORE", "0.5")
+    alert_id = _with_lookup(db, 0.62)
+
+    run_triage_job(db, _job(alert_id), adapter=_model())
+
+    stored = _stored(db, alert_id)
+    assert stored["gate_result"]["rag_rule"]["best_pct"] == 62
+    assert stored["result"]["suggested_action"] == FP
+    rag = get_alert_view(db, alert_id)["rag"]
+    assert rag["best_pct"] == 62
+    assert rag["below_floor_pct"] is None and rag["floor_pct"] is None
+
+
+def test_the_switch_off_still_shows_the_percentage_below_the_floor(db, monkeypatch) -> None:
+    """The display does not depend on the rule's switch: with `TRIAGE_RAG_FP_BELOW_PCT` off the model's verdict
+    stays (as it always did) and the page says the same 47 %."""
+    _enable_llm(monkeypatch)
+    monkeypatch.setenv("RAG_ENABLED", "true")
+    monkeypatch.setenv("RAG_MIN_SCORE", "0.5")
+    monkeypatch.delenv("TRIAGE_RAG_FP_BELOW_PCT", raising=False)
+    alert_id = _with_ranked_lookup(db, (0.47,))
+
+    run_triage_job(db, _job(alert_id), adapter=_model())
+
+    assert _stored(db, alert_id)["result"]["suggested_action"] == TP
+    assert get_alert_view(db, alert_id)["rag"]["below_floor_pct"] == 47
 
 
 def test_a_failed_lookup_leaves_the_models_verdict(db, rule_on) -> None:

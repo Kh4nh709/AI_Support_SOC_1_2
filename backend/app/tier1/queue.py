@@ -24,6 +24,10 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
   strongly the lookup the newest run's prompt held matched approved knowledge, and the closed kind of its
   `rag_not_applied:<kind>` warning - from the same read of the newest run (`latest_suggestion_rag`), one more
   column and one scalar subquery of the statement that builds `suggestion`; the queue rows do not carry it.
+  DEC-220 (trial) adds two keys to the pair, `below_floor_pct` and `floor_pct`: for a run whose lookup kept no match,
+  the best candidate the rerank scored (the lookup's `ranked`, one more scalar subquery of the same statement) and
+  the `RAG_MIN_SCORE` it was under. They go with `rag`, whole, so the blind arm never has them; `best_pct` and
+  `not_applied` are as they were, and the rule of DEC-219 does not read them.
 - `latest_suggestion` — **the one place in P4 that reads `llm_runs`** (planning decision
   5). The row shape is P3-T10's and may still move; every read here is `.get`-tolerant,
   and this function is where to follow it. `latest_suggestions` is the same read for many
@@ -69,6 +73,7 @@ from typing import Any, Literal
 import psycopg
 
 from app.domain import correlation
+from app.infra import config
 from app.kb.lookup import get_playbook
 from app.llm import rag_view, verdicts
 from app.rag.failures import FAILURE_KINDS
@@ -187,9 +192,12 @@ class Suggestion:
 # P14-T07: the run's `citation_warnings` (the `rag_not_applied:<kind>` notice) and the `matches` of the lookup
 # its prompt held (`rag_lookup_id`; NULL when it held none) ride on the same row, so the suggestion, the held
 # reasons and the RAG pair are one run by construction. `lookup_id` is `rag_results`' primary key: at most one row.
+# DEC-220: the lookup's `ranked` (every candidate the rerank scored) is the last column, read the same way: the
+# best candidate's percentage of a lookup that kept no match is the pair's too.
 _SUGGESTION_SQL = """
     SELECT r.run_id, r.result, r.gate_result, r.created_at, r.citation_warnings,
-           (SELECT g.matches FROM rag_results g WHERE g.lookup_id = r.rag_lookup_id)
+           (SELECT g.matches FROM rag_results g WHERE g.lookup_id = r.rag_lookup_id),
+           (SELECT g.ranked FROM rag_results g WHERE g.lookup_id = r.rag_lookup_id)
     FROM llm_runs r
     WHERE r.subject_id = %s AND r.pipeline = 'triage' AND r.role = 'proposer'
     ORDER BY r.created_at DESC, r.run_id DESC
@@ -280,24 +288,38 @@ def latest_suggestion_held(
     [])` when there is no run or its `result` is NULL (① failed: an older run does not stand in), and
     `(suggestion, None, [])` for a `gate_result` that is missing or garbled. Like `latest_suggestion` it
     applies no blind-branch rule: `visibility.strip` does, in the reader that serves an analyst."""
-    return latest_suggestion_rag(conn, alert_id)[:3]
+    # the pair is dropped here: a floor of 0 has no candidate under it, so the configuration is not read for it
+    return latest_suggestion_rag(conn, alert_id, rag_min_score=0.0)[:3]
 
 
 def latest_suggestion_rag(
-    conn: psycopg.Connection, alert_id: str
+    conn: psycopg.Connection, alert_id: str, *, rag_min_score: float | None = None
 ) -> tuple[Suggestion | None, str | None, list[str], dict[str, Any]]:
-    """`latest_suggestion_held`'s three values and a fourth, `rag` - `{"best_pct", "not_applied"}`
-    (`llm.rag_view`, P14-T07) - from the very same row. `best_pct` is the best match of the lookup the run's
-    prompt held (`llm_runs.rag_lookup_id`), `not_applied` the closed kind of its `rag_not_applied:<kind>`
-    warning, only a kind of `rag.failures.FAILURE_KINDS`. Unlike the first three it is given for a run whose
-    `result` is NULL too (① gave up with the RAG already off): the pair is the run's, not the suggestion's;
-    the page words it only beside a conclusion. No run gives the empty pair. Like its sibling it applies no
-    blind-branch rule: `rag` is a `visibility.ANALYST_HIDE` key."""
+    """`latest_suggestion_held`'s three values and a fourth, `rag` - `{"best_pct", "not_applied", "below_floor_pct",
+    "floor_pct"}` (`llm.rag_view`, P14-T07, DEC-220) - from the very same row. `best_pct` is the best match of the
+    lookup the run's prompt held (`llm_runs.rag_lookup_id`), `not_applied` the closed kind of its
+    `rag_not_applied:<kind>` warning, only a kind of `rag.failures.FAILURE_KINDS`. `below_floor_pct` is the best
+    candidate the rerank scored (that lookup's `ranked`) when it kept no match, and `floor_pct` the floor it was
+    under: `rag_min_score`, or `RAG_MIN_SCORE` of the running configuration when not given (read only when the
+    lookup scored a candidate, so a run with none costs nothing more). Unlike the first three it is given for a
+    run whose `result` is NULL too (① gave up with the RAG already off): the pair is the run's, not the
+    suggestion's; the page words it only beside a conclusion. No run gives the empty pair. Like its sibling it
+    applies no blind-branch rule: `rag` is a `visibility.ANALYST_HIDE` key.
+
+    A row of the statement as it was before DEC-220 (six columns, no `ranked`) is read as a lookup with none.
+    """
     row = conn.execute(_SUGGESTION_SQL, (alert_id,)).fetchone()
     if row is None:
         return None, None, [], rag_view.rag_view(None, None, FAILURE_KINDS)
-    *run, warnings, lookup_matches = row
-    rag = rag_view.rag_view(lookup_matches, warnings, FAILURE_KINDS)
+    run, (warnings, lookup_matches, *rest) = row[:4], row[4:]
+    lookup_ranked = rest[0] if rest else None
+    rag = rag_view.rag_view(
+        lookup_matches,
+        warnings,
+        FAILURE_KINDS,
+        ranked=lookup_ranked,
+        floor=_floor(rag_min_score, lookup_ranked),
+    )
     suggestion = _suggestion_of(*run)
     if suggestion is None:
         return None, None, [], rag
@@ -310,6 +332,14 @@ def latest_suggestion_rag(
         verdicts.served_held_reasons(gate_result),
         rag,
     )
+
+
+def _floor(given: float | None, ranked: Any) -> float | None:
+    """The floor `rag_view` compares a lookup's best candidate with (DEC-220): `given`, else `RAG_MIN_SCORE` of the
+    running configuration - loaded only when there is a ranking to compare it with."""
+    if given is not None or not ranked:
+        return given
+    return config.load().RAG_MIN_SCORE
 
 
 _STOPPED_BY_SQL = """

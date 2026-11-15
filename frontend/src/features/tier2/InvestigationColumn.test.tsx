@@ -1017,6 +1017,75 @@ describe("done", () => {
       expect((await line()).textContent).not.toContain("trùng");
     });
 
+    // DEC-220 (trial): a lookup that kept no match still scored candidates; the line says the best one's
+    // percentage and the floor, in the same place and in the same sentence as a kept match's.
+    describe("the best candidate under the floor (DEC-220)", () => {
+      const UNDER = {
+        best_pct: null,
+        not_applied: null,
+        below_floor_pct: 47,
+        floor_pct: 50,
+      };
+
+      it("says it in the conclusion line, whole", async () => {
+        serveViews(concluded(UNDER));
+        renderColumn();
+        expect((await line()).textContent).toBe(
+          "AI kết luận: Không phải sự cố — trùng cao nhất 47% với tri thức đã duyệt (dưới mức tối thiểu 50%)",
+        );
+        expect(screen.queryByRole("note")).not.toBeInTheDocument();
+      });
+
+      it("comes before the system's own clause when it held the conclusion", async () => {
+        serveViews(
+          concluded(UNDER, {
+            conclusion: "need_more_data",
+            conclusion_label: "Cần thêm dữ liệu",
+            held_by: ["no_verified_evidence"],
+          }),
+        );
+        renderColumn();
+        expect((await line()).textContent).toBe(
+          "AI kết luận: Không phải sự cố — trùng cao nhất 47% với tri thức đã duyệt (dưới mức tối thiểu 50%) — " +
+            "hệ thống giữ lại vì: không có bằng chứng kiểm chứng được",
+        );
+      });
+
+      it("says the floor the server sent, and 0% as a percentage", async () => {
+        serveViews(
+          concluded({ best_pct: null, not_applied: null, below_floor_pct: 0, floor_pct: 65 }),
+        );
+        renderColumn();
+        expect((await line()).textContent).toBe(
+          "AI kết luận: Không phải sự cố — trùng cao nhất 0% với tri thức đã duyệt (dưới mức tối thiểu 65%)",
+        );
+      });
+
+      it("prints a kept match's text, unchanged, when there is a match", async () => {
+        serveViews(
+          concluded({ best_pct: 87, not_applied: null, below_floor_pct: null, floor_pct: null }),
+        );
+        renderColumn();
+        expect((await line()).textContent).toBe(
+          "AI kết luận: Không phải sự cố — trùng 87% với tri thức đã duyệt",
+        );
+      });
+
+      it("says nothing for no candidate, for a server that sends no new keys, and for half a pair", async () => {
+        const none = [
+          { best_pct: null, not_applied: null, below_floor_pct: null, floor_pct: null },
+          { best_pct: null, not_applied: null },
+          { best_pct: null, not_applied: null, below_floor_pct: 47, floor_pct: null },
+        ];
+        for (const rag of none) {
+          serveViews(concluded(rag));
+          const shown = renderColumn();
+          expect((await line()).textContent).toBe("AI kết luận: Không phải sự cố");
+          shown.unmount();
+        }
+      });
+    });
+
     it("says nothing for an old run with no rag key at all", async () => {
       serveViews(
         done(

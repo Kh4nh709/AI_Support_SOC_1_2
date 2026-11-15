@@ -501,6 +501,19 @@ describe("RAG percentage and notice follow the backend", () => {
     expect(S.rag.match(0)).toBe("trùng 0% với tri thức đã duyệt");
   });
 
+  // DEC-220 (trial): a lookup that kept no match still has a best candidate; the line says its percentage and the
+  // floor it was under, in the place of "trùng 87% với tri thức đã duyệt".
+  it("says the best candidate under the floor as the spec has it", () => {
+    expect(S.rag.belowFloor(47, 50)).toBe(
+      "trùng cao nhất 47% với tri thức đã duyệt (dưới mức tối thiểu 50%)",
+    );
+    expect(S.rag.belowFloor(0, 65)).toBe(
+      "trùng cao nhất 0% với tri thức đã duyệt (dưới mức tối thiểu 65%)",
+    );
+    // the same words as a kept match's, after the superlative: "trùng 47%" and "trùng cao nhất 47%" differ only there
+    expect(S.rag.belowFloor(47, 50).replace("cao nhất ", "")).toContain(S.rag.match(47));
+  });
+
   it("says the notice of an alert and of a case as the brief has it", () => {
     expect(S.rag.notApplied("alert", "lỗi phía Voyage")).toBe(
       "⚠ Không áp dụng RAG cho alert này: lỗi phía Voyage — AI đã phân tích không có tri thức tham khảo.",
