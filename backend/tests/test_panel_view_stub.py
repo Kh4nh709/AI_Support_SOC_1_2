@@ -23,7 +23,9 @@ CREATED = dt.datetime(2026, 11, 15, 9, 30, tzinfo=dt.UTC)
 
 
 def _row(result: dict, check: dict | None = None) -> tuple:
-    return (uuid.uuid4(), CREATED, None, result, check or {}, None, None, None)
+    """A row of `investigation_view._RUN_COLUMNS`: run_id, created_at, stopped_by, result, evidence_check,
+    agent_trace, citation_warnings, the lookup's `matches` and (DEC-220) its `ranked`."""
+    return (uuid.uuid4(), CREATED, None, result, check or {}, None, None, None, None)
 
 
 def _as_served(result: dict) -> dict:

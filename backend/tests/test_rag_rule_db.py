@@ -225,7 +225,7 @@ def test_a_47_percent_candidate_under_the_floor_keeps_the_models_verdict_and_is_
     }
     # served as the model's verdict, with its confidence, and the rule's block says it did not apply
     assert view["proposed_action"] == TP
-    assert view["suggestion"]["confidence"] == TRIAGE_V3_TRUE_POSITIVE["confidence"]
+    assert view["suggestion"]["confidence"] == TRIAGE_V4_TRUE_POSITIVE["confidence"]
     assert view["suggestion"]["gate"]["rag_rule"] == {
         "threshold": 80,
         "best_pct": None,
