@@ -49,6 +49,24 @@ and `floor_pct`, the `cfg.RAG_MIN_SCORE` it was under. All of it comes out of th
 scalar subquery each for the lookup's `matches` and `ranked`), so there is no second read; a run from before T06
 gives the empty pair. The case page has no blind arm, so the key is always there.
 
+**What a version 4 run adds (DEC-221, card AP-T3).** A run with a result also carries `timeline`, `scope`,
+`next_steps_rows`, `evidence_summary` and `tech`, and each hypothesis a `likelihood`. They are read from the stored
+`investigate_v4` answer (`llm.results`) and from the case's own alerts, and nothing of them goes back into a prompt:
+the model's words about untrusted data are served as text.
+
+* `timeline`: `{alert_id, time, what, tactic, technique}`. The model writes no time: `time` is the `alert_time` of the
+  alert the row names, an alert of the case (a head or a duplicate absorbed into one, the evidence check's own
+  meaning of "in the case"). A row naming any other alert is dropped; the rest are sorted by time, ties in the stored
+  order, and cut at `TIMELINE_CAP`. `[]` for a run stored before version 4.
+* the raw `result` carries that same list in its stored shape (no `time`) in place of the stored one, so a row naming
+  an alert outside the case is nowhere in what is served (`GET /api/tier2/runs/{id}` does the same, `served_result`);
+  every other key of it is as stored.
+* `scope`: the model's `{hosts, accounts}` and, beside it, `system: {hosts, accounts, alert_count}` computed from the
+  case's alerts, so the page shows both without trusting the model.
+* `tech`: the run's figures and the case's, and never the model's name (goal G5: the model id is not read at all).
+
+One statement is added to the view, `case_alerts`, for a run that has a result: not one per timeline row.
+
 Model output is untrusted. It leaves here as plain values (strings, lists, dicts) and the React
 UI renders it as text. This module builds no markup (`test_investigation_view_guard.py` scans
 its source for anything that would mark a string as safe).
@@ -56,8 +74,12 @@ its source for anything that would mark a string as safe).
 
 from __future__ import annotations
 
+import math
 import uuid
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 import psycopg
@@ -134,12 +156,14 @@ _LATEST_JOB_SQL = (
 )
 # P14-T07: `citation_warnings` and the `matches` of the lookup the run's prompt held (`rag_lookup_id`, NULL when
 # it held none) are the last columns, and DEC-220 adds that lookup's `ranked` (every candidate the rerank scored);
-# `present_run` makes `rag` of them. `lookup_id` is the primary key of `rag_results`, so each subquery answers at
+# `present_run` makes `rag` of them. DEC-221 adds the run's own figures, `input_tokens` to `cost_usd`, for `tech`
+# (never `model_id`). `lookup_id` is the primary key of `rag_results`, so each subquery answers at
 # most one row.
 _RUN_COLUMNS = (
     "run_id, created_at, stopped_by, result, evidence_check, agent_trace, citation_warnings, "
     "(SELECT g.matches FROM rag_results g WHERE g.lookup_id = llm_runs.rag_lookup_id), "
-    "(SELECT g.ranked FROM rag_results g WHERE g.lookup_id = llm_runs.rag_lookup_id)"
+    "(SELECT g.ranked FROM rag_results g WHERE g.lookup_id = llm_runs.rag_lookup_id), "
+    "input_tokens, output_tokens, latency_ms, cost_usd"
 )
 _RUN_BY_ID_SQL = (
     f"SELECT {_RUN_COLUMNS} FROM llm_runs "
@@ -168,6 +192,51 @@ _CURRENT_SQL = """
 """
 
 
+#: The most rows `timeline` carries (and the raw `result`'s `timeline` with it): the earliest by time. Fifty is more
+#: than a case's story needs and keeps one page and one JSON body small.
+TIMELINE_CAP = 50
+#: The most hosts, and the most accounts, `scope` carries from each source (the model's, the system's).
+SCOPE_CAP = 100
+
+
+@dataclass(frozen=True)
+class CaseAlerts:
+    """What the case's own alerts say (`case_alerts`): how many there are (heads plus the duplicates absorbed into
+    them, the same count `_CURRENT_SQL` makes), the hosts and the accounts they carry (sorted, cut at `SCOPE_CAP`),
+    and `alert_time` for the alerts a timeline names."""
+
+    alert_count: int
+    hosts: tuple[str, ...]
+    accounts: tuple[str, ...]
+    times: Mapping[str, datetime]
+
+
+#: A run read without the case's alerts (a direct call of `present_run`) has none of this.
+NO_ALERTS = CaseAlerts(0, (), (), {})
+
+#: "An alert of the case" is what `tier2.investigate._check_evidence` means by it (a head or a duplicate of one), so a
+#: row of the timeline and a cited quote are judged by one rule. The five columns: the count, the hosts, the accounts,
+#: and, for the ids given, their ids and times (the same order, `ORDER BY alert_id`). One statement, whatever the
+#: number of rows a timeline has. `alert_user` is NULL when the alert names no account.
+_CASE_ALERTS_SQL = """
+    WITH members AS (
+        SELECT alert_id, alert_time, agent_name, alert_user FROM alerts
+        WHERE alert_id IN (SELECT alert_id FROM case_alerts WHERE case_id = %(case)s)
+           OR duplicate_of IN (SELECT alert_id FROM case_alerts WHERE case_id = %(case)s)
+    )
+    SELECT (SELECT count(*) FROM members),
+           (SELECT coalesce(array_agg(h ORDER BY h), '{}')
+              FROM (SELECT DISTINCT agent_name AS h FROM members ORDER BY 1 LIMIT %(cap)s) AS hosts),
+           (SELECT coalesce(array_agg(u ORDER BY u), '{}')
+              FROM (SELECT DISTINCT alert_user AS u FROM members WHERE alert_user <> '' ORDER BY 1 LIMIT %(cap)s)
+                AS accounts),
+           (SELECT coalesce(array_agg(alert_id ORDER BY alert_id), '{}')
+              FROM members WHERE alert_id = ANY(%(ids)s::text[])),
+           (SELECT coalesce(array_agg(alert_time ORDER BY alert_id), '{}')
+              FROM members WHERE alert_id = ANY(%(ids)s::text[]))
+"""
+
+
 # ---------------------------------------------------------------------------
 # Reads
 # ---------------------------------------------------------------------------
@@ -189,6 +258,30 @@ def current_values(conn: psycopg.Connection, case_id: str) -> dict[str, Any]:
         "total_occurrences": int(total_occurrences),
         "last_seen_at": last_seen_at,
     }
+
+
+def case_alerts(conn: psycopg.Connection, case_id: str, alert_ids: Iterable[str]) -> CaseAlerts:
+    """The case's own alerts as `CaseAlerts`, with `alert_time` for those of `alert_ids` that are the case's. One
+    statement. A `case_id` that is not a uuid has no alerts (the row's `subject_id` is read as it was stored).
+    """
+    try:
+        uuid.UUID(case_id)
+    except ValueError:
+        return NO_ALERTS
+    count, hosts, accounts, ids, times = conn.execute(
+        _CASE_ALERTS_SQL,
+        {"case": case_id, "cap": SCOPE_CAP, "ids": list(alert_ids)},
+    ).fetchone()
+    return CaseAlerts(int(count), tuple(hosts), tuple(accounts), dict(zip(ids, times, strict=True)))
+
+
+def alerts_for_row(conn: psycopg.Connection, case_id: str, row: tuple) -> CaseAlerts | None:
+    """`case_alerts` for the alerts the timeline of `row`'s result names, or `None` when the row has no result (the
+    view reads nothing of the case's alerts then)."""
+    result = row[3]
+    if not isinstance(result, dict):
+        return None
+    return case_alerts(conn, case_id, results.timeline_alert_ids(result.get("timeline")))
 
 
 def derive_view(
@@ -335,9 +428,91 @@ def snapshot(agent_trace: Any) -> dict[str, Any] | None:
     }
 
 
-def present_run(row: tuple, rag_min_score: float | None = None) -> dict[str, Any]:
-    """`row` is a row of `_RUN_COLUMNS`. `rag_min_score` is `RAG_MIN_SCORE` of the running configuration, the floor
-    the run's best candidate was under (DEC-220): without it `rag` carries no `below_floor_pct`."""
+def served_timeline(
+    stored: Any, times: Mapping[str, datetime]
+) -> list[tuple[Mapping[str, Any], datetime]]:
+    """`(stored row, time)` for what the page shows of a stored `timeline`: the usable rows (`results.timeline_entries`)
+    naming an alert that has a time in `times` (the case's own alerts), sorted by that time - a stable sort, so a tie
+    keeps the stored order - and the first `TIMELINE_CAP` of them."""
+    entries = [
+        (row, times[row["alert_id"]])
+        for row in results.timeline_entries(stored)
+        if row["alert_id"] in times
+    ]
+    entries.sort(key=lambda entry: entry[1])
+    return entries[:TIMELINE_CAP]
+
+
+def _result_with_timeline(
+    result: dict[str, Any], shown: list[tuple[Mapping[str, Any], datetime]]
+) -> dict[str, Any]:
+    """The stored result with the rows of `shown` in place of its `timeline`, in the stored shape, so a row naming an
+    alert outside the case is nowhere in it. A result with no `timeline` key (a version 3 run) is returned as it is.
+    """
+    if "timeline" not in result:
+        return result
+    return {**result, "timeline": [dict(row) for row, _ in shown]}
+
+
+def served_result(conn: psycopg.Connection, case_id: str, result: Any) -> Any:
+    """What `GET /api/tier2/runs/{id}` serves of a stored `result`: the stored result, with its `timeline` cut as the
+    case view cuts the raw one (`_result_with_timeline`). The case's alerts are read only when the timeline names
+    some; a `result` with no `timeline` is returned as stored."""
+    if not isinstance(result, dict) or "timeline" not in result:
+        return result
+    ids = results.timeline_alert_ids(result["timeline"])
+    times = case_alerts(conn, case_id, ids).times if ids else {}
+    return _result_with_timeline(result, served_timeline(result["timeline"], times))
+
+
+def _text_or_none(value: Any) -> str | None:
+    """A tactic or a technique as text: the schema's empty string and `null` both mean "none", and so does a value that
+    is not text."""
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _count(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _money(value: Any) -> float | None:
+    """`cost_usd` (a `numeric`, so a `Decimal`) as the JSON number it is served as."""
+    if isinstance(value, bool) or not isinstance(value, int | float | Decimal):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _tech(
+    created_at: Any,
+    result: dict[str, Any],
+    snap: dict[str, Any] | None,
+    usage: tuple[Any, ...],
+) -> dict[str, Any]:
+    """The technical figures of a run: what the run stored (tokens, latency, cost, when, the playbook the answer
+    names) and the alerts the case had when it read them. Never the model: `llm_runs.model_id` is not selected (G5).
+    """
+    input_tokens, output_tokens, latency_ms, cost_usd = (*usage, None, None, None, None)[:4]
+    playbook = result.get("playbook_used")
+    return {
+        "input_tokens": _count(input_tokens),
+        "output_tokens": _count(output_tokens),
+        "latency_ms": _count(latency_ms),
+        "cost_usd": _money(cost_usd),
+        "analysed_at": created_at,
+        "playbook": playbook if isinstance(playbook, str) else None,
+        "alerts_read": None if snap is None else snap["alert_count"],
+    }
+
+
+def present_run(
+    row: tuple, rag_min_score: float | None = None, alerts: CaseAlerts | None = None
+) -> dict[str, Any]:
+    """`row` is a row of `_RUN_COLUMNS`; its last four columns (the run's tokens in and out, latency and cost) may be
+    missing, and the run then has no technical figures. `rag_min_score` is `RAG_MIN_SCORE` of the running
+    configuration, the floor the run's best candidate was under (DEC-220): without it `rag` carries no
+    `below_floor_pct`. `alerts` is what the case's own alerts say (`case_alerts`, DEC-221): without it the timeline
+    has no row (no alert to take a time from) and the system's part of `scope` is empty."""
     (
         run_id,
         created_at,
@@ -348,6 +523,7 @@ def present_run(row: tuple, rag_min_score: float | None = None) -> dict[str, Any
         citation_warnings,
         lookup_matches,
         lookup_ranked,
+        *usage,
     ) = row
     rag = rag_view.rag_view(
         lookup_matches,
@@ -362,9 +538,14 @@ def present_run(row: tuple, rag_min_score: float | None = None) -> dict[str, Any
 
     check = evidence_check if isinstance(evidence_check, dict) else {}
     conclusion = result.get("suggested_conclusion")
+    facts = alerts if alerts is not None else NO_ALERTS
+    shown = served_timeline(result.get("timeline"), facts.times)
+    evidence = evidence_rows(result, check)
+    snap = snapshot(agent_trace)
+    scope = results.scope_lists(result.get("scope"))
     return {
         **base,
-        "result": result,
+        "result": _result_with_timeline(result, shown),
         "conclusion": conclusion,
         "conclusion_label": CONCLUSION_LABELS.get(conclusion, "Chưa rõ kết luận"),
         "confidence": result.get("confidence"),
@@ -375,20 +556,46 @@ def present_run(row: tuple, rag_min_score: float | None = None) -> dict[str, Any
                 "text": h.get("noi_dung"),
                 "evidence_for": as_list(h.get("evidence_for")),
                 "evidence_against": as_list(h.get("evidence_against")),
+                "likelihood": results.level(h.get("likelihood")),
             }
             for h in as_list(result.get("gia_thuyet"))
             if isinstance(h, dict)
         ],
-        "evidence": evidence_rows(result, check),
+        "evidence": evidence,
+        "evidence_summary": {
+            "cited": len(evidence),
+            "verified": sum(1 for item in evidence if item["verified"]),
+        },
+        "timeline": [
+            {
+                "alert_id": entry["alert_id"],
+                "time": time,
+                "what": entry["what"],
+                "tactic": _text_or_none(entry.get("tactic")),
+                "technique": _text_or_none(entry.get("technique")),
+            }
+            for entry, time in shown
+        ],
+        "scope": {
+            "hosts": scope["hosts"][:SCOPE_CAP],
+            "accounts": scope["accounts"][:SCOPE_CAP],
+            "system": {
+                "hosts": list(facts.hosts[:SCOPE_CAP]),
+                "accounts": list(facts.accounts[:SCOPE_CAP]),
+                "alert_count": facts.alert_count,
+            },
+        },
         # a version 4 run stores `{step, priority}` rows (DEC-221): this page reads the text of each step, as it
         # always has; a version 3 run's strings are themselves
         "next_steps": results.next_step_texts(result.get("next_steps")),
+        "next_steps_rows": results.next_step_rows(result.get("next_steps")),
         "playbook_used": result.get("playbook_used"),
         "overruled": overrule_text(result, check),
         "model_conclusion": model_conclusion(check),
         "held_by": held_by(check),
-        "snapshot": snapshot(agent_trace),
+        "snapshot": snap,
         "changed": False,
+        "tech": _tech(created_at, result, snap, tuple(usage)),
     }
 
 
@@ -411,7 +618,10 @@ def build_investigation(
     current = None
     if view["state"] not in ("running", "stalled") and view.get("run_row") is not None:
         # DEC-220: the floor is the running configuration's; a `cfg` that carries none (a partial one) gives no number
-        run = present_run(view["run_row"], getattr(cfg, "RAG_MIN_SCORE", None))
+        row = view["run_row"]
+        run = present_run(
+            row, getattr(cfg, "RAG_MIN_SCORE", None), alerts_for_row(conn, case_id, row)
+        )
         if run.get("snapshot") is not None:
             current = current_values(conn, case_id)
             snap = run["snapshot"]

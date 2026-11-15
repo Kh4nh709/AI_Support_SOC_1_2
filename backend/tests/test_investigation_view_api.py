@@ -405,6 +405,11 @@ def test_done_run_has_evidence_marks_and_labels(client, db):
         "rag",  # P14-T07
         "snapshot",
         "changed",
+        "timeline",  # DEC-221 AP-T3 (`test_panel_t2_db.py` pins these)
+        "scope",
+        "next_steps_rows",
+        "evidence_summary",
+        "tech",
     }
     assert run["run_id"] == str(run_id)
     assert run["conclusion"] == "confirmed_incident"
@@ -419,6 +424,7 @@ def test_done_run_has_evidence_marks_and_labels(client, db):
             "text": "HYPOTHESIS-TEXT",
             "evidence_for": ["FOR-TEXT"],
             "evidence_against": ["AGAINST-TEXT"],
+            "likelihood": None,  # DEC-221 AP-T3: a run stored before version 4 has none
         }
     ]
     assert run["next_steps"] == ["STEP-TEXT"]
@@ -825,6 +831,11 @@ _DONE_RUN_KEYS = {
     "rag",  # P14-T07
     "snapshot",
     "changed",
+    "timeline",  # DEC-221 AP-T3
+    "scope",
+    "next_steps_rows",
+    "evidence_summary",
+    "tech",
 }
 
 

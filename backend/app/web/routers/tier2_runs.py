@@ -177,7 +177,10 @@ def api_analyze(conn: Conn, claims: Tier2, cfg: Cfg, case_id: CaseId) -> dict[st
 def api_get_run(conn: Conn, claims: Tier2, run_id: uuid.UUID) -> dict[str, Any]:
     """`{status: "done", result, evidence_check, citation_warnings, stopped_by}` once the
     job's FINAL row exists (`stopped_by` is `null` on a normal answer; `cap` / `permanent`
-    / `linter` / `schema` / `transient` say why `result` is `null` — N13);
+    / `linter` / `schema` / `transient` say why `result` is `null` — N13). `result` is the
+    stored answer with its `timeline` cut to the alerts of the run's own case, in the stored
+    shape, exactly as the case view's raw `result` is (DEC-221, `investigation_view.served_result`);
+    nothing here names the model;
     `{status: "running"}` while a live `investigate` job's deterministic id matches and no
     final row exists yet — which includes the gap between two attempts, whose transient
     rows sit under attempt-scoped ids this route never looks up (B1); **404** otherwise.
@@ -192,15 +195,17 @@ def api_get_run(conn: Conn, claims: Tier2, run_id: uuid.UUID) -> dict[str, Any]:
     # any run; there is no per-case ownership column to filter on (`web/routers/
     # tier2.py`'s `list_cases`/`case_detail` have none either).
     row = conn.execute(
-        "SELECT result, evidence_check, citation_warnings, stopped_by FROM llm_runs "
+        "SELECT result, evidence_check, citation_warnings, stopped_by, subject_id FROM llm_runs "
         "WHERE run_id = %s AND pipeline = 'investigate'",
         (str(run_id),),
     ).fetchone()
     if row is not None:
-        result, evidence_check, citation_warnings, stopped_by = row
+        result, evidence_check, citation_warnings, stopped_by, case_id = row
         return {
             "status": "done",
-            "result": result,
+            # DEC-221: the stored result, its `timeline` cut to the case's own alerts (never a row naming another
+            # case's alert); every other key as stored
+            "result": investigation_view.served_result(conn, case_id, result),
             "evidence_check": evidence_check,
             "citation_warnings": citation_warnings,
             "stopped_by": stopped_by,
