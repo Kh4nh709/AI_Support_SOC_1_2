@@ -1,7 +1,8 @@
 // The tab strip under the tiles: a real tablist (WAI-ARIA tabs with automatic activation). One tab stop: the open tab
 // is the only one in the Tab order, and the arrow keys, Home and End move between the tabs and open the one they land
 // on. Only the open tab's panel is drawn. Which tab is open is this component's own state, so a new mount, a page
-// load or another run starts on the first tab.
+// load or another run starts on the first tab. The strip scrolls sideways when its labels do not fit the column (they
+// leave no slack at 486 px): a tab keeps its width, and the strip never clips a tab or widens the page.
 import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { FOCUS } from "./styles";
 
@@ -47,7 +48,11 @@ export function Tabs({ label, tabs }: { label: string; tabs: readonly TabDef[] }
 
   return (
     <div className="space-y-3.5">
-      <div role="tablist" aria-label={label} className="flex gap-1 border-b border-border">
+      <div
+        role="tablist"
+        aria-label={label}
+        className="flex max-w-full gap-1 overflow-x-auto border-b border-border"
+      >
         {tabs.map((tab, index) => {
           const selected = tab.id === open.id;
           return (
@@ -65,7 +70,7 @@ export function Tabs({ label, tabs }: { label: string; tabs: readonly TabDef[] }
               tabIndex={selected ? 0 : -1}
               onClick={() => setPicked(tab.id)}
               onKeyDown={(event) => onKeyDown(event, index)}
-              className={`min-h-[44px] border-b-2 px-3 text-sm whitespace-nowrap ${FOCUS} ${
+              className={`min-h-[44px] shrink-0 border-b-2 px-3 text-sm whitespace-nowrap ${FOCUS} ${
                 selected
                   ? "border-ai-accent font-semibold text-text"
                   : "border-transparent font-medium text-muted hover:text-text"

@@ -356,9 +356,12 @@ export function EvidenceTab({ run }: { run: RunView }) {
           const ok = row.verified === true;
           const alertId = nonEmpty(row.alert_id);
           // The words of the mark beside the row ("Không kiểm chứng được"), for a quote the server gave no reason for.
-          const outcome = ok
-            ? T.matched
-            : (nonEmpty(row.reason_text) ?? S.analysis.evidence.unverified);
+          // It starts a sentence when it stands alone, and goes on after the separator when the alert comes first.
+          const unverified =
+            alertId === null
+              ? S.analysis.evidence.unverified
+              : S.analysis.evidence.unverifiedInline;
+          const outcome = ok ? T.matched : (nonEmpty(row.reason_text) ?? unverified);
           return (
             <li key={index}>
               <EvidenceBlock

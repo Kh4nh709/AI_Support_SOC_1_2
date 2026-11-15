@@ -191,6 +191,19 @@ describe("Tabs", () => {
   ];
   const tab = (name: string) => screen.getByRole("tab", { name });
 
+  // The five labels leave no slack in a 486 px column (review of AP-T4): the strip scrolls sideways inside the column
+  // rather than clip a tab or widen the page, and a tab keeps its width (it is not squeezed, and does not wrap).
+  it("scrolls sideways when the labels do not fit, so that it cannot clip or widen the column", () => {
+    render(<Tabs label="Chi tiết" tabs={TABS} />);
+    const list = screen.getByRole("tablist", { name: "Chi tiết" });
+    expect(list).toHaveClass("overflow-x-auto");
+    expect(list).toHaveClass("max-w-full");
+    for (const tab of within(list).getAllByRole("tab")) {
+      expect(tab).toHaveClass("shrink-0");
+      expect(tab).toHaveClass("whitespace-nowrap");
+    }
+  });
+
   it("is a tablist with a tab for each entry, and the first one open", () => {
     render(<Tabs label="Chi tiết" tabs={TABS} />);
     const list = screen.getByRole("tablist", { name: "Chi tiết" });

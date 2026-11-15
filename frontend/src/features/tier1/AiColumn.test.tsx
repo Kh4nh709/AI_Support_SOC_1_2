@@ -416,8 +416,20 @@ describe("Bằng chứng", () => {
       }),
     );
     const row = within(await openTab("Bằng chứng")).getByRole("listitem");
-    expect(said(row)[2]).toBe("Log gốc của alert · Không kiểm chứng được");
+    expect(said(row)[2]).toBe("Log gốc của alert · không kiểm chứng được");
     expect(within(row).getByRole("img")).toHaveAccessibleName("Không kiểm chứng được");
+  });
+
+  it("starts 'Không kiểm chứng được' with a capital when it stands alone: a reason that names no source", async () => {
+    renderColumn(
+      view({
+        analysis: analysis({
+          reasons: [{ claim: "c", quote: "q", source: null, verified: false, why: null }],
+        }),
+      }),
+    );
+    const row = within(await openTab("Bằng chứng")).getByRole("listitem");
+    expect(said(row)[2]).toBe("Không kiểm chứng được");
   });
 
   it("shows a source it has no words for as the code, and says plainly when the model cited nothing", async () => {
@@ -918,6 +930,86 @@ describe("the gate's own account of the run, on the page (spec G2)", () => {
         within(column()).queryByRole("img", { name: S.ai1.forcedLabel }),
       ).not.toBeInTheDocument();
     });
+  });
+});
+
+// A name or an id the server sends has no spaces to break at: it must wrap inside the column, in a code span and in the
+// cells of an auto-layout table (which `break-words` does not reach). jsdom has no layout, so the classes are pinned; the
+// built CSS is checked by `make ui-build` carrying the utility.
+describe("a long unbroken token stays inside the column", () => {
+  const ANYWHERE = "[overflow-wrap:anywhere]";
+
+  it("wraps a playbook name and a rule id", async () => {
+    const long = "ransomware_v1_with_a_very_long_name_that_has_no_spaces_at_all_1234567890";
+    renderColumn(
+      view({
+        analysis: analysis({
+          playbook: {
+            name: long,
+            rule_id: `${long}-rule`,
+            rule_action: "needs_review",
+            rule_table_reviewed: true,
+          },
+        }),
+      }),
+    );
+    const panel = await openTab("Tri thức");
+    const codes = within(panel).getAllByText(/^ransomware_v1_with/, { selector: "code" });
+    expect(codes).toHaveLength(2);
+    for (const code of codes) expect(code).toHaveClass(ANYWHERE);
+  });
+
+  it("wraps the cells of the facts table, whichever value arrives", async () => {
+    const long = "x".repeat(90);
+    renderColumn(
+      view({
+        analysis: analysis({
+          facts: [{ field: "severity", system: long, model: long, match: true }],
+        }),
+      }),
+    );
+    const panel = await openTab("Kiểm chứng");
+    const table = within(panel).getByRole("table", { name: "Dữ kiện đã dùng" });
+    const cells = [...table.querySelectorAll("tbody th, tbody td")];
+    expect(cells).toHaveLength(4);
+    for (const cell of cells) expect(cell, cell.textContent ?? "").toHaveClass(ANYWHERE);
+  });
+});
+
+describe("a new run starts on the first tab again", () => {
+  it("resets the open tab when the run changes, and keeps it while the same run is shown", async () => {
+    const first = suggestion({ run_id: "run-1" });
+    const view1 = view({ suggestion: first });
+    const { rerender } = render(
+      <main>
+        <AiColumn view={view1} />
+      </main>,
+    );
+    await openTab("Kỹ thuật");
+    expect(within(column()).getByRole("tab", { name: "Kỹ thuật" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    // the same run, drawn again (a poll that found nothing new): the open tab is kept
+    rerender(
+      <main>
+        <AiColumn view={view({ suggestion: suggestion({ run_id: "run-1" }) })} />
+      </main>,
+    );
+    expect(within(column()).getByRole("tab", { name: "Kỹ thuật" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    // a new run: back to the first
+    rerender(
+      <main>
+        <AiColumn view={view({ suggestion: suggestion({ run_id: "run-2" }) })} />
+      </main>,
+    );
+    expect(within(column()).getByRole("tab", { name: "Tổng quan" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 });
 

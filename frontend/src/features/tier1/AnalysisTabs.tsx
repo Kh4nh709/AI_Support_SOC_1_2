@@ -17,7 +17,12 @@ import type { AnalysisModel, RagModel } from "./analysisModel";
 const P = S.ai1.panel;
 const SEPARATOR = S.analysis.separator;
 
-const CODE = "font-mono text-xs";
+/**
+ * A name or an id the server sends has no space to break at: it wraps anywhere inside the column. `break-words` does not
+ * reach the cells of an auto-layout table (it keeps their minimum width at the word's), `anywhere` does.
+ */
+const WRAP = "[overflow-wrap:anywhere]";
+const CODE = `font-mono text-xs ${WRAP}`;
 
 // ── Tổng quan ────────────────────────────────────────────────────────────────────────────────────
 
@@ -132,9 +137,11 @@ export function EvidenceTab({ model }: { model: AnalysisModel }) {
       <ul aria-label={P.tabs.evidence} className="flex flex-col gap-2.5">
         {reasons.map((reason, index) => {
           // Where the quote is from, then what became of it: "Log gốc của alert · khớp nguyên văn".
-          const outcome = reason.verified
-            ? T.matched
-            : (reason.why ?? S.analysis.evidence.unverified);
+          const unverified =
+            reason.source === null
+              ? S.analysis.evidence.unverified
+              : S.analysis.evidence.unverifiedInline;
+          const outcome = reason.verified ? T.matched : (reason.why ?? unverified);
           return (
             <li key={index}>
               <EvidenceBlock
@@ -281,18 +288,18 @@ function FactsTable({ model }: { model: AnalysisModel }) {
         <tbody>
           {facts.map((fact, index) => (
             <tr key={index}>
-              <th scope="row" className="pr-3 text-left font-normal break-words">
+              <th scope="row" className={`pr-3 text-left font-normal break-words ${WRAP}`}>
                 {fact.field}
               </th>
-              <td className="pr-3 font-mono break-words">{fact.system}</td>
+              <td className={`pr-3 font-mono break-words ${WRAP}`}>{fact.system}</td>
               {showDeclared && (
                 <>
                   <td
-                    className={`pr-3 font-mono break-words ${fact.match === false ? "text-medium" : ""}`}
+                    className={`pr-3 font-mono break-words ${WRAP} ${fact.match === false ? "text-medium" : ""}`}
                   >
                     {fact.declared ?? S.common.missing}
                   </td>
-                  <td>
+                  <td className={WRAP}>
                     {fact.match === null ? (
                       <span className="text-muted">{S.common.missing}</span>
                     ) : (

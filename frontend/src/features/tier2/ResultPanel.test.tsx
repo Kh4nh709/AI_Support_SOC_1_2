@@ -724,7 +724,7 @@ describe("Bằng chứng", () => {
     renderPanel(runV4({ evidence: [unverifiedRow({ reason_text: null })] }));
     await open("Bằng chứng");
     const block = document.querySelector("[data-verified='false']")!;
-    expect(block.lastElementChild!.textContent).toBe("alert 112438 · Không kiểm chứng được");
+    expect(block.lastElementChild!.textContent).toBe("alert 112438 · không kiểm chứng được");
     expect(within(block as HTMLElement).getByRole("img")).toHaveAccessibleName(
       "Không kiểm chứng được",
     );

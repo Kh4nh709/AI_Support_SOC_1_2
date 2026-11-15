@@ -962,7 +962,13 @@ export const S = {
     // The line under the RAG tile of both tiers (see `RAG_TILE_NOTE`).
     ragNote: RAG_TILE_NOTE,
     // The mark of a quoted piece of evidence: the server checked the quote against the log, or could not.
-    evidence: { verified: "Đã kiểm chứng", unverified: "Không kiểm chứng được" },
+    // `unverifiedInline` is the same words after a separator ("Log gốc của alert · không kiểm chứng được"): a line that
+    // goes on does not start a new sentence, and `unverified` starts one (the mark's spoken name, a line of its own).
+    evidence: {
+      verified: "Đã kiểm chứng",
+      unverified: "Không kiểm chứng được",
+      unverifiedInline: "không kiểm chứng được",
+    },
     knowledge: {
       heading: "Tri thức đã duyệt",
       scored: (count: number) => `${count} mục được chấm điểm`,
