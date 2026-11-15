@@ -21,7 +21,12 @@ _MATCHES = [
 
 
 def test_the_percentage_is_the_best_match_when_no_entry_was_cut():
-    assert rag_view.rag_view(_MATCHES, [], FAILURE_KINDS) == {"best_pct": 87, "not_applied": None}
+    assert rag_view.rag_view(_MATCHES, [], FAILURE_KINDS) == {
+        "best_pct": 87,
+        "not_applied": None,
+        "below_floor_pct": None,
+        "floor_pct": None,
+    }
     assert rag_view.rag_view(_MATCHES, None, FAILURE_KINDS)["best_pct"] == 87
 
 
@@ -43,6 +48,8 @@ def test_the_failure_notice_is_read_as_before():
     assert rag_view.rag_view(_MATCHES, warnings, FAILURE_KINDS) == {
         "best_pct": None,
         "not_applied": "rate_limit",
+        "below_floor_pct": None,
+        "floor_pct": None,
     }
     assert (
         rag_view.best_pct(_MATCHES) == 87

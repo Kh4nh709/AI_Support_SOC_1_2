@@ -1,6 +1,8 @@
 """What the alert page and the case page say of the RAG beside the AI's conclusion (P14-T07, DEC-213, spec §4.3).
 
-One pair of values, the same on both pages: `{"best_pct": int | None, "not_applied": str | None}`.
+One set of values, the same on both pages: `{"best_pct": int | None, "not_applied": str | None, "below_floor_pct":
+int | None, "floor_pct": int | None}`. The last two are DEC-220's (trial; `docs/superpowers/specs/
+2026-11-15-rag-below-floor-percentage.md`).
 
 * **`best_pct`** is how strongly the alert (or case) matched approved knowledge: the highest
   `round(score * 100)` among the `matches` of the lookup the run's prompt held (`llm_runs.rag_lookup_id`; the
@@ -19,6 +21,21 @@ One pair of values, the same on both pages: `{"best_pct": int | None, "not_appli
   row with no stored kind is not such a case: `rag.lookup.lookup_failure` reads it as `UNKNOWN_FAILURE_KIND`,
   `provider_error`, so ① and ② warn with that closed kind and the pages word it.) The provider's own words are
   never stored (spec §5.5), so there are none to leave out here.
+
+* **`below_floor_pct`** is the percentage of the best candidate the rerank scored, for a run whose lookup kept no
+  match: the highest `percent(score)` among the `ranked` of the lookup the run held (`rag_results.ranked`,
+  `[{entry_id, score}]`, every candidate scored, best first; the readers fetch it with the `matches`), under the
+  same `score` rule as every other number here. It is `None` when the lookup kept a match (`matches` holds one:
+  `best_pct` is then the number, whether or not the budget dropped its entries - the two are never both set), when
+  no candidate has a score, when the run names no lookup, and when the lookup failed (`not_applied` says so). It is
+  also `None` when the best score is not under `floor`: the configuration's floor may have moved since the lookup
+  ran, and a candidate the lookup would now keep is not "below the floor".
+* **`floor_pct`** is `percent(floor)`, `floor` being `RAG_MIN_SCORE` of the running configuration; set exactly when
+  `below_floor_pct` is, else `None`. `llm` may not import `rag` and takes plain values, so the readers hand the
+  floor in.
+
+The rule of DEC-219 (`tier1.triage._rag_best_pct`, `gate_result.rag_rule`) reads `best_pct` and nothing else here:
+a candidate under the floor never reaches it, and `tests/test_rag_rule_db.py` pins that against this number.
 
 The module reads values and builds no markup. The blind arm (DEC-101) is `tier1/visibility.py`'s: `rag` is an
 `ANALYST_HIDE` key, because "trùng 87%" and "RAG not applied" say something about what ① was shown.
@@ -79,12 +96,46 @@ def entries_dropped(warnings: Any) -> bool:
     return isinstance(warnings, list) and LEARNED_ENTRIES_DROPPED_WARNING in warnings
 
 
-def rag_view(matches: Any, warnings: Any, kinds: Collection[str]) -> dict[str, int | str | None]:
-    """`{"best_pct", "not_applied"}` of one run: `matches` is the stored `matches` of the lookup the run held
-    (`None` when it held none), `warnings` the run's `citation_warnings`, `kinds` `rag.failures.FAILURE_KINDS`.
-    No percentage when the run's budget cut dropped the entries (`entries_dropped`). A new dict on every
-    call."""
+def below_floor_pct(
+    matches: Any, ranked: Any, warnings: Any, kinds: Collection[str], floor: Any
+) -> int | None:
+    """DEC-220: the percentage of the best candidate of `ranked` (the lookup's stored `rag_results.ranked`) when
+    the lookup kept no match and that candidate scored under `floor`, else `None` (module doc)."""
+    if not _is_score(floor) or not isinstance(ranked, list):
+        return None
+    if isinstance(matches, list) and matches:
+        return None  # the lookup kept a match: `best_pct` is the number
+    if not_applied(warnings, kinds) is not None:
+        return None  # the lookup failed
+    best = max((found for found in map(score, ranked) if found is not None), default=None)
+    if best is None or not best < floor:
+        return None
+    return percent(best)
+
+
+def _is_score(value: Any) -> bool:
+    """A real number in [0, 1]: what a stored `score` must be, and so what a floor handed in must be."""
+    return score({"score": value}) is not None
+
+
+def rag_view(
+    matches: Any,
+    warnings: Any,
+    kinds: Collection[str],
+    *,
+    ranked: Any = None,
+    floor: Any = None,
+) -> dict[str, int | str | None]:
+    """`{"best_pct", "not_applied", "below_floor_pct", "floor_pct"}` of one run: `matches` is the stored `matches`
+    of the lookup the run held (`None` when it held none), `warnings` the run's `citation_warnings`, `kinds`
+    `rag.failures.FAILURE_KINDS`. No percentage when the run's budget cut dropped the entries (`entries_dropped`).
+    `ranked` is the stored `ranked` of that same lookup and `floor` `RAG_MIN_SCORE` (DEC-220); without them the
+    last two keys are `None`, so a caller that asks for `best_pct` alone (`tier1.triage`) is as it was. A new dict
+    on every call."""
+    below = below_floor_pct(matches, ranked, warnings, kinds, floor)
     return {
         "best_pct": None if entries_dropped(warnings) else best_pct(matches),
         "not_applied": not_applied(warnings, kinds),
+        "below_floor_pct": below,
+        "floor_pct": None if below is None else percent(floor),
     }
