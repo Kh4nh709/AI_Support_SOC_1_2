@@ -37,7 +37,9 @@ def test_the_field_default_is_0():
     assert Config().TRIAGE_RAG_FP_BELOW_PCT == 0
 
 
-@pytest.mark.parametrize("raw, expected", [("0", 0), ("1", 1), ("80", 80), ("99", 99), ("100", 100)])
+@pytest.mark.parametrize(
+    "raw, expected", [("0", 0), ("1", 1), ("80", 80), ("99", 99), ("100", 100)]
+)
 def test_an_integer_from_0_to_100_is_accepted(monkeypatch, raw, expected):
     monkeypatch.setenv(KEY, raw)
     value = load(env_file="/dev/null").TRIAGE_RAG_FP_BELOW_PCT
@@ -102,4 +104,3 @@ def test_the_runbook_row_says_to_recreate_the_containers_and_how_to_check_it_not
     assert f"docker compose exec -T app printenv {KEY}" in flat
     assert "restart" not in flat.replace("`restart` never sees", "")  # only to say why not
     assert "`restart` never sees" in flat
-

@@ -98,7 +98,8 @@ def _parse_nonneg_int(key: str, raw: str) -> int:
 
 def _parse_percent(key: str, raw: str) -> int:
     """An integer from 0 to 100 (DEC-219): a percentage of matching approved knowledge. Anything else - a
-    fraction, a word, a number outside the range - stops the start-up naming `key` and is never clamped."""
+    fraction, a word, a number outside the range - stops the start-up naming `key` and is never clamped.
+    """
     value = _parse_int(key, raw)
     if not 0 <= value <= 100:
         raise ConfigError(f"{key}: must be an integer from 0 to 100, got {raw!r}")

@@ -109,6 +109,7 @@ def test_the_document_is_still_version_2_and_every_other_key_is_where_it_was():
         "forced",
         "forced_by",
         "flagged_by",
+        "rag_rule",  # DEC-219: on every new run
         "step1_errors",
         "steps",
         "hallucination_flag",
