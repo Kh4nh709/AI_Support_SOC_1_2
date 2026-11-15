@@ -89,13 +89,14 @@ const VERDICT_TONE: Record<string, Tone> = {
   need_more_data: "medium",
 };
 
-export type VerdictTile = { label: string; tone: Tone; note: string };
+export type VerdictTile = { label: string; word: string; tone: Tone; note: string };
 
 /**
- * The Kết luận tile. The label is the stored conclusion's own (the system's `need_more_data` when it held the
- * model's conclusion back or lowered it), and the line under it says whose word that is: the assistant's suggestion,
- * a conclusion the system held, or one an older run had lowered. What the model itself concluded, and why the system
- * held it, are in "Cần lưu ý" on the overview.
+ * The Kết luận tile. `label` is the stored conclusion's own whole label (the system's `need_more_data` when it held
+ * the model's conclusion back or lowered it) and `word` the one short word the tile shows for it, as the mock-up does
+ * ("Sự cố"); a conclusion with no word of its own shows its label. The line under it says whose word that is: the
+ * assistant's suggestion, a conclusion the system held, or one an older run had lowered. What the model itself
+ * concluded, and why the system held it, are in "Cần lưu ý" on the overview.
  */
 export function verdictTile(run: RunView): VerdictTile {
   const code = text(run.conclusion);
@@ -113,7 +114,11 @@ export function verdictTile(run: RunView): VerdictTile {
     : overruledShown(run) !== null
       ? S.ai2.tile.verdictNote.overruled
       : S.ai2.tile.verdictNote.plain;
-  return { label, tone, note };
+  const word =
+    code !== null && Object.hasOwn(S.ai2.tile.verdictWord, code)
+      ? ((S.ai2.tile.verdictWord as Record<string, string>)[code] ?? label)
+      : label;
+  return { label, word, tone, note };
 }
 
 /** The Độ tin cậy tile: the word and the level of the meter. A level this page has no scale for has no meter. */
@@ -235,6 +240,20 @@ export function scopeOf(run: RunView): { hosts: ScopeSide; accounts: ScopeSide }
   };
 }
 
+/** How many hosts or accounts of a scope the overview names before it counts the rest. */
+const SCOPE_SHOWN = 5;
+
+/**
+ * The first `shown` items of a list the server can send by the hundred (the case's hosts), and how many were left
+ * out. A list of `shown` items or fewer is whole.
+ */
+export function capList(
+  items: readonly string[],
+  shown: number = SCOPE_SHOWN,
+): { shown: string[]; rest: number } {
+  return { shown: items.slice(0, shown), rest: Math.max(0, items.length - shown) };
+}
+
 // ── the steps, the hypotheses, the figures ───────────────────────────────────────────────────────
 
 export type NextStep = { step: string; priority: Level | null };
@@ -290,6 +309,23 @@ export type Tech = {
   alertsRead: number | null;
   alertsTotal: number | null;
 };
+
+/**
+ * The numbers of the case at a moment (`snapshot` at the run, `current` now) as the notice of a changed case says them,
+ * or null when the value is not that: both counts whole numbers, and the last-seen time text or null. A notice that is
+ * given none says that the case changed and leaves the numbers out; it never prints what it does not have.
+ */
+export function snapshotOf(value: unknown): Snapshot | null {
+  if (!isRecord(value)) return null;
+  const alerts = wholeCount(value.alert_count);
+  const occurrences = wholeCount(value.total_occurrences);
+  if (alerts === null || occurrences === null) return null;
+  return {
+    alert_count: alerts,
+    total_occurrences: occurrences,
+    last_seen_at: typeof value.last_seen_at === "string" ? value.last_seen_at : null,
+  };
+}
 
 /**
  * The figures of the technical tab. There is no model in them and none is read from anywhere else (G5). A server that

@@ -35,20 +35,65 @@ const panel = () => screen.getByRole("tabpanel");
 
 // ── the four tiles ───────────────────────────────────────────────────────────────────────────────
 
+// A: the tile shows one short word per conclusion, as the mock-up does ("Sự cố"). The server's whole label is read by a
+// screen reader in its place (the short word is hidden from it) and is the first line of the overview.
 describe("the Kết luận tile", () => {
   it.each([
-    ["confirmed_incident", "Là sự cố thật", "critical"],
-    ["policy_violation", "Có vi phạm nội quy, không phải tấn công", "high"],
-    ["false_positive", "Không phải sự cố", "low"],
-    ["need_more_data", "Cần thêm dữ liệu", "medium"],
+    ["confirmed_incident", "Là sự cố thật", "Sự cố", "critical"],
+    ["policy_violation", "Có vi phạm nội quy, không phải tấn công", "Vi phạm nội quy", "high"],
+    ["false_positive", "Không phải sự cố", "Không phải sự cố", "low"],
+    ["need_more_data", "Cần thêm dữ liệu", "Thiếu dữ liệu", "medium"],
   ])(
-    "shows %s as its label in its colour, under the line that says it is a suggestion",
-    (code, label, tone) => {
+    "shows %s as the short word %s in its colour, under the line that says it is a suggestion",
+    (code, label, word, tone) => {
       renderPanel(runV4({ conclusion: code, conclusion_label: label, model_conclusion: null }));
-      expect(tile("Kết luận").textContent).toBe(`Kết luận${label}gợi ý của AI`);
+      // the whole label is in the tile for a screen reader, unless the word already is the whole label
+      const spoken = word === label ? "" : label;
+      expect(tile("Kết luận").textContent).toBe(`Kết luận${word}${spoken}gợi ý của AI`);
       expect(tile("Kết luận")).toHaveAttribute("data-tone", tone);
+      expect(within(tile("Kết luận")).getByText(word)).toBeInTheDocument();
     },
   );
+
+  it.each([
+    ["confirmed_incident", "Là sự cố thật", "Sự cố"],
+    ["policy_violation", "Có vi phạm nội quy, không phải tấn công", "Vi phạm nội quy"],
+    ["need_more_data", "Cần thêm dữ liệu", "Thiếu dữ liệu"],
+  ])(
+    "hides the short word %s from a screen reader and gives it the whole label %s instead",
+    (code, label, word) => {
+      renderPanel(runV4({ conclusion: code, conclusion_label: label, model_conclusion: null }));
+      expect(within(tile("Kết luận")).getByText(word)).toHaveAttribute("aria-hidden", "true");
+      expect(within(tile("Kết luận")).getByText(label)).toHaveClass("sr-only");
+    },
+  );
+
+  it("does not hide a word that is the whole label", () => {
+    renderPanel(runV4({ conclusion: "false_positive", conclusion_label: "Không phải sự cố" }));
+    expect(within(tile("Kết luận")).getByText("Không phải sự cố")).not.toHaveAttribute(
+      "aria-hidden",
+    );
+  });
+
+  it.each([
+    ["confirmed_incident", "Là sự cố thật"],
+    ["policy_violation", "Có vi phạm nội quy, không phải tấn công"],
+    ["false_positive", "Không phải sự cố"],
+    ["need_more_data", "Cần thêm dữ liệu"],
+  ])("puts the whole label of %s as the first line of the overview: %s", (code, label) => {
+    renderPanel(runV4({ conclusion: code, conclusion_label: label, model_conclusion: null }));
+    const first = panel().querySelector("[data-part='verdict']");
+    expect(first?.textContent).toBe(label);
+    // it is the first thing in the overview, above the summary
+    expect(panel().firstElementChild?.firstElementChild).toBe(first);
+  });
+
+  it("shows the server's label on the overview for a conclusion it has no words for", () => {
+    renderPanel(
+      runV4({ conclusion: "cosmic", conclusion_label: "Nhãn lạ", model_conclusion: null }),
+    );
+    expect(panel().querySelector("[data-part='verdict']")?.textContent).toBe("Nhãn lạ");
+  });
 
   it("reads a conclusion the system held back as the system's own, and keeps the model's for the overview", () => {
     renderPanel(
@@ -59,7 +104,9 @@ describe("the Kết luận tile", () => {
         held_by: ["no_verified_evidence"],
       }),
     );
-    expect(tile("Kết luận").textContent).toBe("Kết luậnCần thêm dữ liệuhệ thống giữ lại");
+    expect(tile("Kết luận").textContent).toBe(
+      "Kết luậnThiếu dữ liệuCần thêm dữ liệuhệ thống giữ lại",
+    );
     expect(tile("Kết luận")).toHaveAttribute("data-tone", "medium");
     expect(
       screen.getByText(
@@ -80,7 +127,7 @@ describe("the Kết luận tile", () => {
         overruled: sentence,
       }),
     );
-    expect(tile("Kết luận").textContent).toBe("Kết luậnCần thêm dữ liệuđã bị hạ");
+    expect(tile("Kết luận").textContent).toBe("Kết luậnThiếu dữ liệuCần thêm dữ liệuđã bị hạ");
     expect(screen.getByText(sentence)).toBeInTheDocument();
   });
 
@@ -256,6 +303,56 @@ describe("Tổng quan", () => {
         "4 bước MITRE" +
         "kết thúc ở T1490",
     );
+  });
+
+  // D: the server can send a hundred hosts into a column a third of a panel wide: the first five, then what is left.
+  describe("a scope with many hosts and accounts", () => {
+    const names = (prefix: string, n: number) =>
+      Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`);
+    const scopeOf = (over: Record<string, unknown>) => {
+      renderPanel(
+        runV4({
+          scope: {
+            hosts: ["m1"],
+            accounts: ["a1"],
+            system: { hosts: ["s1"], accounts: ["u1"], alert_count: 4 },
+            ...over,
+          },
+        }),
+      );
+      return [...screen.getByRole("group", { name: "Phạm vi" }).querySelectorAll("dd")].map(
+        (dd) => dd.textContent,
+      );
+    };
+
+    it("shows the first five hosts the system knows and counts the other ninety-five", () => {
+      const system = { hosts: names("s", 100), accounts: ["u1"], alert_count: 4 };
+      expect(scopeOf({ system })).toEqual([
+        "AI nêu: m1",
+        "Hệ thống ghi: s1, s2, s3, s4, s5 và 95 máy khác",
+        "AI nêu: a1",
+        "Hệ thống ghi: u1",
+        "4 bước MITRE",
+        "kết thúc ở T1490",
+      ]);
+    });
+
+    it("cuts the model's hosts the same way", () => {
+      expect(scopeOf({ hosts: names("m", 7) })[0]).toBe("AI nêu: m1, m2, m3, m4, m5 và 2 máy khác");
+    });
+
+    it("cuts the accounts of both sides, and words them as accounts", () => {
+      const lines = scopeOf({
+        accounts: names("a", 6),
+        system: { hosts: ["s1"], accounts: names("u", 9), alert_count: 4 },
+      });
+      expect(lines[2]).toBe("AI nêu: a1, a2, a3, a4, a5 và 1 tài khoản khác");
+      expect(lines[3]).toBe("Hệ thống ghi: u1, u2, u3, u4, u5 và 4 tài khoản khác");
+    });
+
+    it("keeps a list of exactly five whole, with no remainder", () => {
+      expect(scopeOf({ hosts: names("m", 5) })[0]).toBe("AI nêu: m1, m2, m3, m4, m5");
+    });
   });
 
   it("lists the next steps with their priority, in the model's order", () => {
@@ -730,7 +827,7 @@ describe("Kỹ thuật", () => {
 describe("a run stored before version 4", () => {
   it("still draws its four tiles and five tabs", () => {
     renderPanel(runV3());
-    expect(tile("Kết luận").textContent).toBe("Kết luậnLà sự cố thậtgợi ý của AI");
+    expect(tile("Kết luận").textContent).toBe("Kết luậnSự cốLà sự cố thậtgợi ý của AI");
     expect(tile("Độ tin cậy").textContent).toBe("Độ tin cậyTrung bình");
     expect(tile("Tri thức (RAG)").textContent).toBe("Tri thức (RAG)84%trùng sự cố cũ");
     expect(tile("Dẫn chứng").textContent).toBe("Dẫn chứng2/3khớp nguyên văn");
@@ -850,6 +947,37 @@ describe("what stays above the tabs", () => {
   it("says nothing of a change when the case is as it was", () => {
     renderPanel(runV4({ changed: false }));
     expect(screen.queryByText(S.ai2.stale)).not.toBeInTheDocument();
+  });
+
+  // E: a snapshot or a current that is not what the server sends is no numbers; the notice is said without them.
+  it.each([
+    ["a string", "snapshot"],
+    ["a list", [3, 61]],
+    ["an empty object", {}],
+    ["half a snapshot", { alert_count: 3 }],
+    ["counts that are text", { alert_count: "3", total_occurrences: "61" }],
+  ])(
+    "says the change without the numbers of a snapshot that is %s, never 'undefined'",
+    (_what, snapshot) => {
+      const { container } = renderPanel(runV4({ changed: true, snapshot }), null);
+      expect(screen.getByText(S.ai2.stale)).toBeInTheDocument();
+      expect(screen.queryByText(/Lúc phân tích/)).not.toBeInTheDocument();
+      expect(container.textContent).not.toContain("undefined");
+      expect(container.textContent).not.toContain("NaN");
+    },
+  );
+
+  it("says the numbers it has and leaves out the ones it has not: a good snapshot with a current that is nothing", () => {
+    const { container } = renderPanel(
+      runV4({
+        changed: true,
+        snapshot: { alert_count: 3, total_occurrences: 61, last_seen_at: null },
+      }),
+      {} as unknown as typeof CURRENT,
+    );
+    expect(screen.getByText("Lúc phân tích: 3 alert, 61 lần xuất hiện.")).toBeInTheDocument();
+    expect(screen.queryByText(/Hiện tại/)).not.toBeInTheDocument();
+    expect(container.textContent).not.toContain("undefined");
   });
 
   it("says the stale notice on whichever tab is open", async () => {

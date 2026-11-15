@@ -144,6 +144,13 @@ function renderColumn(caseOpen = true, caseLine?: string) {
 
 const analyzeButton = () => screen.findByRole("button", { name: S.ai2.analyze });
 
+/**
+ * The conclusion a finished analysis shows: the Kết luận tile's word. ("Không phải sự cố" is the word and the whole
+ * label both, and the overview's first line says it again, so a lookup of the text alone would find two.)
+ */
+const concluded = async (word = "Không phải sự cố") =>
+  within(await screen.findByRole("group", { name: S.ai2.tile.verdict })).findByText(word);
+
 // ── the states ──────────────────────────────────────────────────────────────────────────────────
 
 describe("idle", () => {
@@ -187,7 +194,7 @@ describe("the state read from the server", () => {
     expect(await screen.findByText(S.ai2.running)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: S.ai2.analyze })).not.toBeInTheDocument();
     await act(() => vi.advanceTimersByTimeAsync(3000));
-    expect(await screen.findByText("Không phải sự cố")).toBeInTheDocument();
+    expect(await concluded()).toBeInTheDocument();
     expect(seen).toEqual([null, RUN]);
   });
 
@@ -206,7 +213,7 @@ describe("the state read from the server", () => {
     await userEvent
       .setup({ delay: null })
       .click(screen.getByRole("button", { name: S.ai2.recheck }));
-    expect(await screen.findByText("Không phải sự cố")).toBeInTheDocument();
+    expect(await concluded()).toBeInTheDocument();
     expect(seen).toEqual([null, RUN]);
   });
 
@@ -222,7 +229,9 @@ describe("the state read from the server", () => {
     renderColumn();
     expect(await screen.findByText(S.ai2.failed)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: S.ai2.lastResult })).toBeInTheDocument();
-    expect(screen.getByText("Không phải sự cố")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("group", { name: S.ai2.tile.verdict })).getByText("Không phải sự cố"),
+    ).toBeInTheDocument();
   });
 
   // A run with no result carries `result: null` and `stopped_text` only (`present_run`).
@@ -339,7 +348,7 @@ describe("analyze and the poll", () => {
     expect(screen.getByText(S.ai2.running)).toBeInTheDocument();
 
     await wait(3000);
-    expect(await screen.findByText("Không phải sự cố")).toBeInTheDocument();
+    expect(await concluded()).toBeInTheDocument();
     expect(seen).toEqual([null, RUN, RUN, RUN]);
     expect(screen.queryByText(S.ai2.running)).not.toBeInTheDocument();
 
@@ -357,7 +366,7 @@ describe("analyze and the poll", () => {
     await screen.findByText(S.ai2.running);
     await wait(3000);
     await wait(3000);
-    await screen.findByText("Không phải sự cố");
+    await concluded();
     expect(seen.slice(1)).toEqual([RUN, RUN]);
   });
 
@@ -688,7 +697,7 @@ describe("done", () => {
 
   it("says the case at the right of the heading when the page gives its line", async () => {
     serveViews(done(runV4()));
-    renderColumn(true, S.ai2.caseLine("0b30b853", 3, ["lab-win-02"]));
+    renderColumn(true, "Case 0b30b853 · 3 cụm · lab-win-02");
     expect(await screen.findByText("Case 0b30b853 · 3 cụm · lab-win-02")).toBeInTheDocument();
   });
 
@@ -1126,7 +1135,7 @@ describe("accessibility", () => {
           }),
         ),
       );
-      const { container } = renderColumn(true, S.ai2.caseLine("0b30b853", 3, ["lab-win-02"]));
+      const { container } = renderColumn(true, "Case 0b30b853 · 3 cụm · lab-win-02");
       await userEvent.setup().click(await screen.findByRole("tab", { name: tab }));
       expect(await scan(container)).toEqual([]);
     },

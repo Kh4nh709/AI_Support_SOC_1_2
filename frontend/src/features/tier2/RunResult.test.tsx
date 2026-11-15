@@ -597,6 +597,20 @@ describe("done", () => {
     expect(screen.queryByText(S.ai2.stale)).not.toBeInTheDocument();
   });
 
+  // E: the same on the flat result the admin's draft view draws: no numbers are better than "undefined".
+  it.each([
+    ["a string", "snapshot"],
+    ["an empty object", {}],
+    ["half a snapshot", { alert_count: 3 }],
+  ])("says the change without the numbers of a snapshot that is %s", async (_what, snapshot) => {
+    serveViews(done(run({ changed: true, snapshot }), { current: {} }));
+    const { container } = renderColumn();
+    expect(await screen.findByText(S.ai2.stale)).toBeInTheDocument();
+    expect(screen.queryByText(/Lúc phân tích/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Hiện tại/)).not.toBeInTheDocument();
+    expect(container.textContent).not.toContain("undefined");
+  });
+
   it("renders text the model wrote as text: no element is made of it", async () => {
     const markup = '<b>đậm</b> <img src=x onerror="alert(1)"> </script> ‮';
     serveViews(

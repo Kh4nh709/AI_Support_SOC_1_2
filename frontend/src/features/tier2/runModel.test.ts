@@ -2,6 +2,7 @@
 // as the server serves it, may meet a key that is absent, null or of the wrong kind (an older server, a stored
 // document is data), and answers with a value the panel can draw without a crash.
 import {
+  capList,
   confidenceOf,
   evidenceCounts,
   evidenceTile,
@@ -13,6 +14,7 @@ import {
   overruledShown,
   ragTile,
   scopeOf,
+  snapshotOf,
   techOf,
   timelineOf,
   verdictTile,
@@ -31,16 +33,20 @@ import {
 const run = (over: Record<string, unknown> = {}) => asRun(runV4(over));
 
 describe("verdictTile", () => {
+  // A: the tile shows one short word per conclusion, as the mock-up does ("Sự cố"); the server's whole label is `label`.
   it.each([
-    ["confirmed_incident", "Là sự cố thật", "critical"],
-    ["policy_violation", "Có vi phạm nội quy, không phải tấn công", "high"],
-    ["false_positive", "Không phải sự cố", "low"],
-    ["need_more_data", "Cần thêm dữ liệu", "medium"],
-  ])("says %s as %s in the tone %s, as the assistant's suggestion", (code, label, tone) => {
-    expect(
-      verdictTile(run({ conclusion: code, conclusion_label: label, model_conclusion: null })),
-    ).toEqual({ label, tone, note: "gợi ý của AI" });
-  });
+    ["confirmed_incident", "Là sự cố thật", "Sự cố", "critical"],
+    ["policy_violation", "Có vi phạm nội quy, không phải tấn công", "Vi phạm nội quy", "high"],
+    ["false_positive", "Không phải sự cố", "Không phải sự cố", "low"],
+    ["need_more_data", "Cần thêm dữ liệu", "Thiếu dữ liệu", "medium"],
+  ])(
+    "says %s as the short word %s over its whole label, in the tone %s, as the assistant's suggestion",
+    (code, label, word, tone) => {
+      expect(
+        verdictTile(run({ conclusion: code, conclusion_label: label, model_conclusion: null })),
+      ).toEqual({ label, word, tone, note: "gợi ý của AI" });
+    },
+  );
 
   it("says a conclusion the system held back as the system's own, in the caution tone", () => {
     expect(
@@ -52,7 +58,12 @@ describe("verdictTile", () => {
           held_by: ["no_verified_evidence"],
         }),
       ),
-    ).toEqual({ label: "Cần thêm dữ liệu", tone: "medium", note: "hệ thống giữ lại" });
+    ).toEqual({
+      label: "Cần thêm dữ liệu",
+      word: "Thiếu dữ liệu",
+      tone: "medium",
+      note: "hệ thống giữ lại",
+    });
   });
 
   it("says a conclusion an older run had lowered, when it names no model conclusion", () => {
@@ -67,7 +78,12 @@ describe("verdictTile", () => {
             "Mô hình đề xuất Là sự cố thật nhưng kết luận đã bị hạ xuống Cần thêm dữ liệu: x.",
         }),
       ),
-    ).toEqual({ label: "Cần thêm dữ liệu", tone: "medium", note: "đã bị hạ" });
+    ).toEqual({
+      label: "Cần thêm dữ liệu",
+      word: "Thiếu dữ liệu",
+      tone: "medium",
+      note: "đã bị hạ",
+    });
   });
 
   it("holds a stored need_more_data over one of the model's three even when no cause was named", () => {
@@ -87,13 +103,13 @@ describe("verdictTile", () => {
       verdictTile(
         run({ conclusion: "cosmic", conclusion_label: "Nhãn lạ", model_conclusion: null }),
       ),
-    ).toEqual({ label: "Nhãn lạ", tone: "neutral", note: "gợi ý của AI" });
+    ).toEqual({ label: "Nhãn lạ", word: "Nhãn lạ", tone: "neutral", note: "gợi ý của AI" });
   });
 
   it("shows a run with no conclusion at all as a dash, without a crash", () => {
     expect(
       verdictTile(run({ conclusion: null, conclusion_label: undefined, model_conclusion: null })),
-    ).toEqual({ label: "—", tone: "neutral", note: "gợi ý của AI" });
+    ).toEqual({ label: "—", word: "—", tone: "neutral", note: "gợi ý của AI" });
   });
 });
 
@@ -615,5 +631,69 @@ describe("techOf", () => {
       null,
       null,
     ]);
+  });
+});
+
+// D: a list the server can send by the hundred is cut to its first few, and what is left of it is counted.
+describe("capList", () => {
+  const hosts = (n: number) => Array.from({ length: n }, (_, i) => `h${i + 1}`);
+
+  it("keeps the first five and counts the rest", () => {
+    expect(capList(hosts(100))).toEqual({ shown: ["h1", "h2", "h3", "h4", "h5"], rest: 95 });
+    expect(capList(hosts(6))).toEqual({ shown: ["h1", "h2", "h3", "h4", "h5"], rest: 1 });
+  });
+
+  it("keeps a list of five or fewer whole, with nothing left over", () => {
+    expect(capList(hosts(5))).toEqual({ shown: hosts(5), rest: 0 });
+    expect(capList(hosts(1))).toEqual({ shown: ["h1"], rest: 0 });
+    expect(capList([])).toEqual({ shown: [], rest: 0 });
+  });
+
+  it("cuts at the number it is given", () => {
+    expect(capList(hosts(4), 2)).toEqual({ shown: ["h1", "h2"], rest: 2 });
+  });
+});
+
+// E: the numbers of the case at the run and now are read as numbers, or not at all: a notice never says "undefined".
+describe("snapshotOf", () => {
+  it("reads a snapshot with its two counts, and its last-seen time or null", () => {
+    const seen = "2026-09-26T04:12:00+00:00";
+    expect(snapshotOf({ alert_count: 3, total_occurrences: 61, last_seen_at: seen })).toEqual({
+      alert_count: 3,
+      total_occurrences: 61,
+      last_seen_at: seen,
+    });
+    expect(snapshotOf({ alert_count: 0, total_occurrences: 0, last_seen_at: null })).toEqual({
+      alert_count: 0,
+      total_occurrences: 0,
+      last_seen_at: null,
+    });
+    expect(snapshotOf({ alert_count: 3, total_occurrences: 61 })).toEqual({
+      alert_count: 3,
+      total_occurrences: 61,
+      last_seen_at: null,
+    });
+    expect(snapshotOf({ alert_count: 3, total_occurrences: 61, last_seen_at: 7 })).toEqual({
+      alert_count: 3,
+      total_occurrences: 61,
+      last_seen_at: null,
+    });
+  });
+
+  it.each([
+    ["nothing", undefined],
+    ["null", null],
+    ["a string", "snapshot"],
+    ["a number", 7],
+    ["a list", [3, 61]],
+    ["an empty object", {}],
+    ["half a snapshot", { alert_count: 3 }],
+    ["the other half", { total_occurrences: 61 }],
+    ["counts that are text", { alert_count: "3", total_occurrences: "61" }],
+    ["a count that is not a whole number", { alert_count: 3.5, total_occurrences: 61 }],
+    ["a negative count", { alert_count: -1, total_occurrences: 61 }],
+    ["a count that is not a number", { alert_count: Number.NaN, total_occurrences: 61 }],
+  ])("is nothing for %s", (_what, value) => {
+    expect(snapshotOf(value)).toBeNull();
   });
 });

@@ -16,7 +16,7 @@ import { RagNotice } from "../../components/RagNotice";
 import { formatDateTime, formatTime } from "../../format";
 import { S, labelOf } from "../../strings";
 import { HEADING, asText } from "./parts";
-import { heldOf } from "./runModel";
+import { heldOf, snapshotOf } from "./runModel";
 import { useId } from "react";
 
 function Block({ title, children }: { title: string; children: React.ReactNode }) {
@@ -76,6 +76,9 @@ export function RunResult({
   const { modelConclusion, causes, held } = heldOf(run);
   // The percentage and the notice (P14-T07) are the run's own, read through `ragNoteOf`.
   const rag = ragNoteOf(run.rag);
+  // The numbers of the changed-case notice are said only when the server sent numbers (`snapshotOf`).
+  const then = snapshotOf(run.snapshot);
+  const now = snapshotOf(current);
   const hypotheses = run.hypotheses ?? [];
   const evidence = run.evidence ?? [];
   const nextSteps = run.next_steps ?? [];
@@ -87,21 +90,21 @@ export function RunResult({
       {run.changed === true && (
         <div className="space-y-1 rounded border border-medium/40 bg-medium-bg p-3 text-sm text-medium">
           <p>{S.ai2.stale}</p>
-          {run.snapshot !== null && run.snapshot !== undefined && (
+          {then !== null && (
             <p>
               {S.ai2.snapshot(
-                run.snapshot.alert_count,
-                run.snapshot.total_occurrences,
-                run.snapshot.last_seen_at === null ? null : formatTime(run.snapshot.last_seen_at),
+                then.alert_count,
+                then.total_occurrences,
+                then.last_seen_at === null ? null : formatTime(then.last_seen_at),
               )}
             </p>
           )}
-          {current !== null && (
+          {now !== null && (
             <p>
               {S.ai2.current(
-                current.alert_count,
-                current.total_occurrences,
-                current.last_seen_at === null ? null : formatTime(current.last_seen_at),
+                now.alert_count,
+                now.total_occurrences,
+                now.last_seen_at === null ? null : formatTime(now.last_seen_at),
               )}
             </p>
           )}

@@ -95,7 +95,11 @@ test("Tier 1 escalates, Tier 2 analyses, notes and concludes, and a second concl
   await expect(column.getByRole("heading", { name: S.case.aiHeading })).toHaveText(
     "PHÂN TÍCH AI · TIER 2",
   );
-  await expect(column.getByText(S.ai2.caseLine(id.slice(0, 8), 1, [head.agent]))).toBeVisible();
+  await expect(
+    column.getByText(
+      [S.ai2.caseId(id.slice(0, 8)), S.case.clusterCount(1), head.agent].join(S.analysis.separator),
+    ),
+  ).toBeVisible();
   // The conclusion tile: what the AI suggests, and that it is only a suggestion. P14-T03 (DEC-213): one quote
   // verified, so the system held nothing back.
   const verdict = column.getByRole("group", { name: S.ai2.tile.verdict });
@@ -103,6 +107,10 @@ test("Tier 1 escalates, Tier 2 analyses, notes and concludes, and a second concl
     verdict.getByText(S.ai2.suggestedConclusion.false_positive, { exact: true }),
   ).toBeVisible();
   await expect(verdict).toContainText(S.ai2.tile.verdictNote.plain);
+  // The tile shows one short word; the conclusion's whole label is the first line of the overview (A).
+  await expect(column.locator("[data-part='verdict']")).toHaveText(
+    S.ai2.suggestedConclusion.false_positive,
+  );
   await expect(column).not.toContainText("giữ lại");
   // The evidence tile: one of the stub's two quotes was found in the log.
   await expect(column.getByRole("group", { name: S.ai2.tile.evidence })).toContainText(

@@ -13,7 +13,9 @@ import { KnowledgeCandidates } from "../analysis/KnowledgeCandidates";
 import { CARD, FOCUS } from "../analysis/styles";
 import { useId } from "react";
 import { asText } from "./parts";
+import { TONE_INK } from "./ResultTiles";
 import {
+  capList,
   evidenceCounts,
   heldOf,
   hypothesesOf,
@@ -24,6 +26,7 @@ import {
   scopeOf,
   techOf,
   timelineOf,
+  verdictTile,
   type ScopeSide,
 } from "./runModel";
 
@@ -47,12 +50,24 @@ const nonEmpty = (value: unknown): string | null =>
 const PRIORITY_TONE = { high: "critical", medium: "medium", low: "muted" } as const;
 const PRIORITY_INK = { high: "text-critical", medium: "text-medium", low: "text-muted" } as const;
 
-function scopeItem(label: string, side: ScopeSide) {
+/**
+ * A list of hosts or accounts as one line: the first few, joined by the list separator, then what is left of it
+ * ("và 95 máy khác"). The server can send a hundred, and the cell is a third of the panel.
+ */
+function listLine(items: readonly string[], more: (count: number) => string): string {
+  const { shown, rest } = capList(items);
+  return S.ai2.overview.scope.list(
+    shown.join(S.analysis.listSeparator),
+    rest > 0 ? more(rest) : null,
+  );
+}
+
+function scopeItem(label: string, side: ScopeSide, more: (count: number) => string) {
   const T = S.ai2.overview.scope;
   return {
     label,
-    value: side.model.length > 0 ? T.model(side.model.join(", ")) : T.modelNone,
-    note: side.system.length > 0 ? T.system(side.system.join(", ")) : T.systemNone,
+    value: side.model.length > 0 ? T.model(listLine(side.model, more)) : T.modelNone,
+    note: side.system.length > 0 ? T.system(listLine(side.system, more)) : T.systemNone,
   };
 }
 
@@ -62,15 +77,18 @@ export function OverviewTab({ run }: { run: RunView }) {
   const steps = mitreSteps(timelineOf(run));
   const nextSteps = nextStepsOf(run);
   const anyPriority = nextSteps.some((row) => row.priority !== null);
+  // The tile shows one short word; the conclusion's whole label is the first line of the overview, in its colour.
+  const verdict = verdictTile(run);
 
   // What to look at twice: the conclusion the system held or lowered, and the quotes that were not found.
   const { modelConclusion, causes, held } = heldOf(run);
   const attention: string[] = [];
   if (held && modelConclusion !== null) {
     attention.push(
-      `${S.ai2.conclusion}: ${labelOf(S.ai2.suggestedConclusion, modelConclusion)} ${S.ai2.heldLine(
+      S.ai2.heldNotice(
+        labelOf(S.ai2.suggestedConclusion, modelConclusion),
         causes.map((cause) => labelOf(S.ai2.heldReason, cause)),
-      )}`,
+      ),
     );
   }
   const overruled = overruledShown(run);
@@ -80,15 +98,22 @@ export function OverviewTab({ run }: { run: RunView }) {
 
   return (
     <div className="flex flex-col gap-3.5">
-      <p className="text-[15px] leading-[22px] break-words whitespace-pre-wrap">
+      <p
+        data-part="verdict"
+        data-tone={verdict.tone}
+        className={`text-[15px] leading-[22px] font-semibold break-words ${TONE_INK[verdict.tone]}`}
+      >
+        {verdict.label}
+      </p>
+      <p className="-mt-2 text-[15px] leading-[22px] break-words whitespace-pre-wrap">
         {asText(run.summary)}
       </p>
 
       <Figures
         label={T.scope.label}
         items={[
-          scopeItem(T.scope.hosts, scope.hosts),
-          scopeItem(T.scope.accounts, scope.accounts),
+          scopeItem(T.scope.hosts, scope.hosts, T.scope.moreHosts),
+          scopeItem(T.scope.accounts, scope.accounts, T.scope.moreAccounts),
           {
             label: T.scope.tactics,
             value: steps.count > 0 ? T.scope.steps(steps.count) : S.common.missing,

@@ -475,7 +475,9 @@ describe("the analysis panel's words (DEC-221)", () => {
       ...wordsOf(S.ai2.hypothesesTab),
       ...wordsOf(S.ai2.evidenceTab),
       ...wordsOf(S.ai2.tech),
-      S.ai2.caseLine("x", 1, ["y"]),
+      S.ai2.caseId("x"),
+      S.ai2.heldNotice("x", ["y"]),
+      S.analysis.listSeparator,
     ];
     expect(words.length).toBeGreaterThan(40); // a walk that finds nothing would pass for nothing
     expect(words.filter((word) => MODEL_NAME.test(word))).toEqual([]);
@@ -506,6 +508,23 @@ describe("the analysis panel's words (DEC-221)", () => {
     expect(Object.keys(S.analysis.ragNote.failedKind)).toEqual(Object.keys(S.rag.failureKind));
   });
 
+  it("has a short word for each conclusion the Kết luận tile can show, the mock-up's way (A)", () => {
+    expect(Object.keys(S.ai2.tile.verdictWord).sort()).toEqual(
+      Object.keys(S.ai2.suggestedConclusion).sort(),
+    );
+    expect(S.ai2.tile.verdictWord).toEqual({
+      confirmed_incident: "Sự cố",
+      policy_violation: "Vi phạm nội quy",
+      false_positive: "Không phải sự cố",
+      need_more_data: "Thiếu dữ liệu",
+    });
+    // a word is shorter than the label it stands for, or is the label itself
+    for (const [code, word] of Object.entries(S.ai2.tile.verdictWord)) {
+      const label = (S.ai2.suggestedConclusion as Record<string, string>)[code]!;
+      expect(word.length, code).toBeLessThanOrEqual(label.length);
+    }
+  });
+
   it("names the five tabs of the Tier 2 panel as the approved mock-up does", () => {
     expect(Object.values(S.ai2.tabs).slice(1)).toEqual([
       "Tổng quan",
@@ -516,12 +535,43 @@ describe("the analysis panel's words (DEC-221)", () => {
     ]);
   });
 
-  it("says the case line and the confidence words", () => {
-    expect(S.ai2.caseLine("0b30b853", 3, ["lab-ubuntu-01", "lab-win-02"])).toBe(
-      "Case 0b30b853 · 3 cụm · lab-ubuntu-01, lab-win-02",
-    );
-    expect(S.ai2.caseLine("0b30b853", 1, [])).toBe("Case 0b30b853 · 1 cụm");
+  it("says the case, the confidence words and the joiners the panel's lines are made with", () => {
+    // the case line is made by `caseLineOf` from these (caseLine.test.ts), not written out here a second time
+    expect(S.ai2.caseId("0b30b853")).toBe("Case 0b30b853");
+    expect(S.analysis.separator).toBe(" · ");
+    expect(S.analysis.listSeparator).toBe(", ");
     expect(S.analysis.level).toEqual({ low: "Thấp", medium: "Trung bình", high: "Cao" });
+  });
+
+  it("says the conclusion the system held, with the model's own label and each cause it named", () => {
+    expect(S.ai2.heldNotice("Là sự cố thật", [])).toBe(
+      "AI kết luận: Là sự cố thật — hệ thống giữ lại",
+    );
+    expect(S.ai2.heldNotice("Là sự cố thật", ["a"])).toBe(
+      "AI kết luận: Là sự cố thật — hệ thống giữ lại vì: a",
+    );
+    expect(S.ai2.heldNotice("Là sự cố thật", ["a", "b"])).toBe(
+      "AI kết luận: Là sự cố thật — hệ thống giữ lại vì: a, b",
+    );
+    // the same clause the flat result's line ends with
+    expect(S.ai2.heldNotice("X", ["a", "b"]).endsWith(S.ai2.heldLine(["a", "b"]))).toBe(true);
+  });
+
+  it("says what is left of a list that was cut, for hosts and for accounts, and joins it to the list", () => {
+    expect(S.ai2.overview.scope.moreHosts(95)).toBe("và 95 máy khác");
+    expect(S.ai2.overview.scope.moreAccounts(1)).toBe("và 1 tài khoản khác");
+    expect(S.ai2.overview.scope.list("a, b", null)).toBe("a, b");
+    expect(S.ai2.overview.scope.list("a, b", "và 2 máy khác")).toBe("a, b và 2 máy khác");
+  });
+
+  it("says the case page's re-run hint and its timeline's analysis row as the panel is named (F)", () => {
+    expect(S.case.ongoingHint("30/09 09:30")).toBe(
+      "Có alert mới đến lúc 30/09 09:30 sau lần phân tích gần nhất — hãy chạy lại phân tích AI Tier 2.",
+    );
+    expect(S.case.timelineAnalysed).toBe("Chạy phân tích AI Tier 2");
+    // the panel is "PHÂN TÍCH AI · TIER 2": no sentence of the case page still calls it ②
+    expect(S.case.ongoingHint("x")).not.toContain("②");
+    expect(S.case.timelineAnalysed).not.toContain("②");
   });
 });
 

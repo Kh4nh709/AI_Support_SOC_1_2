@@ -9,6 +9,13 @@ import { BAND_CODES, type BandCode } from "./api/types";
 export const MIN_QUOTE_CHARS = 8;
 
 /**
+ * What a held conclusion's line ends with: "— hệ thống giữ lại", and "— hệ thống giữ lại vì: <causes>" when the server
+ * named them. The flat result (`S.ai2.heldLine`) and the scorecard's notice (`S.ai2.heldNotice`) say it the same way.
+ */
+const heldClause = (causes: readonly string[]): string =>
+  causes.length === 0 ? "— hệ thống giữ lại" : `— hệ thống giữ lại vì: ${causes.join(", ")}`;
+
+/**
  * The line under the "Tri thức (RAG)" tile, for each state of the lookup and each failure kind
  * (`rag.failures.FAILURE_KINDS`; strings.test.ts holds the keys equal to the backend's). One table for both tiers' tiles
  * (DEC-221): `S.analysis.ragNote`, read by `analysis/knowledge.ts`'s `ragTile`.
@@ -811,7 +818,7 @@ export const S = {
     aiHeading: "PHÂN TÍCH AI · TIER 2",
     ongoing: "Còn tiếp diễn",
     ongoingHint: (lastSeen: string) =>
-      `Có alert mới đến lúc ${lastSeen} sau lần phân tích gần nhất — hãy chạy lại ②.`,
+      `Có alert mới đến lúc ${lastSeen} sau lần phân tích gần nhất — hãy chạy lại phân tích AI Tier 2.`,
     heads: "Cụm cảnh báo",
     noHeads: "Case chưa có cảnh báo nào.",
     headCol: {
@@ -835,7 +842,7 @@ export const S = {
     // What the case detail itself records: its creation, each note, the last run of ② and the conclusion.
     timelineCreated: "Case được tạo",
     timelineNote: (who: string) => `${who} thêm ghi chú`,
-    timelineAnalysed: "Chạy phân tích AI ②",
+    timelineAnalysed: "Chạy phân tích AI Tier 2",
     timelineConcluded: (who: string, conclusion: string) => `${who} kết luận: ${conclusion}`,
     // DEC-212: the archive is the system's, not a person's conclusion.
     timelineArchived: "Case được lưu trữ (dọn hàng đợi)",
@@ -892,6 +899,8 @@ export const S = {
   analysis: {
     // The middle dot between the parts of one line: "Né tránh phòng thủ · T1562.001 · alert 112437".
     separator: " · ",
+    // The comma between the items of a list that one line carries: the hosts of a scope.
+    listSeparator: ", ",
     // The confidence tile's word, from the model's `low`, `medium` or `high`.
     level: { low: "Thấp", medium: "Trung bình", high: "Cao" },
     // The three-segment meter, said to a screen reader.
@@ -991,8 +1000,10 @@ export const S = {
     // The case page's line: "AI kết luận: <label>", and when the system held it as `need_more_data`,
     // "… — hệ thống giữ lại vì: <causes>" (P14-T03, spec 4.3). The causes are `tier2.investigate.HELD_BY`.
     conclusion: "AI kết luận",
-    heldLine: (causes: string[]) =>
-      causes.length === 0 ? "— hệ thống giữ lại" : `— hệ thống giữ lại vì: ${causes.join(", ")}`,
+    heldLine: (causes: string[]) => heldClause(causes),
+    // The scorecard's note on a held conclusion: the model's own label, then the clause above.
+    heldNotice: (conclusion: string, causes: readonly string[]) =>
+      `AI kết luận: ${conclusion} ${heldClause(causes)}`,
     heldReason: {
       no_verified_evidence: "không có bằng chứng kiểm chứng được",
       high_severity_injection_finding: "phát hiện dấu hiệu chèn lệnh mức cao",
@@ -1017,11 +1028,9 @@ export const S = {
     },
 
     // ── The Tier 2 panel (DEC-221): four tiles, five tabs ─────────────────────────────────────────────────────
-    // The line at the right of the panel's heading: the case, its clusters and the agents they came from.
-    caseLine: (id: string, clusters: number, agents: readonly string[]) =>
-      [`Case ${id}`, `${clusters} cụm`, ...(agents.length > 0 ? [agents.join(", ")] : [])].join(
-        " · ",
-      ),
+    // The first part of the line at the right of the panel's heading; `caseLineOf` (caseLine.ts) joins it with the
+    // case's cluster count (`S.case.clusterCount`) and its agents, by `S.analysis.separator`.
+    caseId: (id: string) => `Case ${id}`,
     tile: {
       verdict: "Kết luận",
       confidence: "Độ tin cậy",
@@ -1030,6 +1039,16 @@ export const S = {
       // The line under the conclusion: whose word it is. The system's own `need_more_data` (a conclusion it held back,
       // or an older run's lowered one) says so; every other conclusion is the assistant's suggestion.
       verdictNote: { plain: "gợi ý của AI", held: "hệ thống giữ lại", overruled: "đã bị hạ" },
+      // The word of the tile, one short word for each conclusion as the mock-up has it ("Sự cố"): the tile is a quarter
+      // of a 528 px column, and the longest label ("Có vi phạm nội quy, không phải tấn công") took four lines of it.
+      // The whole label is the first line of the overview and what a screen reader hears in the tile's place. The
+      // keys are the conclusions of `suggestedConclusion`; a conclusion with no word here shows the server's label.
+      verdictWord: {
+        confirmed_incident: "Sự cố",
+        policy_violation: "Vi phạm nội quy",
+        false_positive: "Không phải sự cố",
+        need_more_data: "Thiếu dữ liệu",
+      },
       // The line under the RAG tile is the one table of both tiers: `S.analysis.ragNote`.
       evidenceNote: "khớp nguyên văn",
       evidenceNone: "không có dẫn chứng",
@@ -1056,6 +1075,10 @@ export const S = {
         steps: (count: number) => `${count} bước MITRE`,
         endsAt: (what: string) => `kết thúc ở ${what}`,
         noSteps: "chưa có dòng thời gian",
+        // A list of hosts or accounts the server can send by the hundred: the first few, then what is left of it.
+        moreHosts: (count: number) => `và ${count} máy khác`,
+        moreAccounts: (count: number) => `và ${count} tài khoản khác`,
+        list: (shown: string, more: string | null) => (more === null ? shown : `${shown} ${more}`),
       },
       nextSteps: "Việc nên làm tiếp",
       priority: { high: "ưu tiên cao", medium: "trung bình", low: "thấp" },

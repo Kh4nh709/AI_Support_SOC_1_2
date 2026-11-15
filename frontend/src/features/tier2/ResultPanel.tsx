@@ -9,31 +9,35 @@ import { formatTime } from "../../format";
 import { S } from "../../strings";
 import { Tabs } from "../analysis/Tabs";
 import { ResultTiles } from "./ResultTiles";
+import { snapshotOf } from "./runModel";
 import { EvidenceTab, HypothesesTab, OverviewTab, TechTab, TimelineTab } from "./ResultTabs";
 
 export function ResultPanel({ run, current }: { run: RunView; current: Snapshot | null }) {
   const rag = ragNoteOf(run.rag);
   const T = S.ai2.tabs;
+  // The numbers are said only when the server sent numbers (`snapshotOf`): a notice never prints what it does not have.
+  const then = snapshotOf(run.snapshot);
+  const now = snapshotOf(current);
   return (
     <div className="flex flex-col gap-3.5">
       {run.changed === true && (
         <div className="space-y-1 rounded border border-medium/40 bg-medium-bg p-3 text-sm text-medium">
           <p>{S.ai2.stale}</p>
-          {run.snapshot !== null && run.snapshot !== undefined && (
+          {then !== null && (
             <p>
               {S.ai2.snapshot(
-                run.snapshot.alert_count,
-                run.snapshot.total_occurrences,
-                run.snapshot.last_seen_at === null ? null : formatTime(run.snapshot.last_seen_at),
+                then.alert_count,
+                then.total_occurrences,
+                then.last_seen_at === null ? null : formatTime(then.last_seen_at),
               )}
             </p>
           )}
-          {current !== null && (
+          {now !== null && (
             <p>
               {S.ai2.current(
-                current.alert_count,
-                current.total_occurrences,
-                current.last_seen_at === null ? null : formatTime(current.last_seen_at),
+                now.alert_count,
+                now.total_occurrences,
+                now.last_seen_at === null ? null : formatTime(now.last_seen_at),
               )}
             </p>
           )}
