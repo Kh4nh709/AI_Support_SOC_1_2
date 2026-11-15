@@ -62,13 +62,17 @@ ALL_STATUSES = (
 )
 
 # What the writers put there (`tier1/triage.py:957-980` and `:812`, `tier1/digest.py` review).
+# DEC-217: `triage.suggested` keeps `forced` (always false for a new run) and gains `flagged_by`, the steps whose
+# check raised a warning; the blind arm must not see either, or which checks fired tells what ① concluded.
 RUN_ID = "5d1f0c2e-8f7b-4c43-9f43-0d2b0d1e9a11"
 SUGGESTED = {
     "suggested_action": "true_positive",
     "confidence": "high",
-    "forced": True,
+    "forced": False,
+    "flagged_by": ["step4"],
     "run_id": RUN_ID,
 }
+#: `llm.gate_forced` is no longer written (nothing is forced); the rows of old runs are still there.
 GATE_FORCED = {
     "proposed": "false_positive",
     "final": "needs_review",
@@ -577,7 +581,7 @@ def test_audit_the_suggestion_keys_are_the_visibility_keys_and_the_events_own() 
     assert {admin_audit.normalise_key(k) for k in visibility.ANALYST_HIDE} <= set(
         admin_audit.SUGGESTION_HIDE
     )
-    for key in ("forced", "proposed", "final", "forced_by", "missing"):
+    for key in ("forced", "flagged_by", "proposed", "final", "forced_by", "missing"):
         assert admin_audit.normalise_key(key) in admin_audit.SUGGESTION_HIDE, key
     assert admin_audit.SUGGESTION_EVENT_TYPES == {
         "triage.suggested",

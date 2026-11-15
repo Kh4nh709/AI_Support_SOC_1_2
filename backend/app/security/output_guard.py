@@ -5,14 +5,15 @@ vocabulary transcribed here, not imported from `app.llm.schemas`. `enforce()` is
 re-check: it never adds an action and never rewrites text — ① has no actions to strip, and the
 legacy output_guard's "force `requires_human_approval`" has no counterpart in `triage_v3`.
 `SUGGESTED_ACTIONS` is the vocabulary AFTER the gate (`llm/verdicts.py`'s `GATED_ACTIONS`): the
-model's `false_positive | true_positive`, and the `needs_review` that only the system sets.
+model's `false_positive | true_positive`, nothing else (DEC-217: no step sets a verdict of its own, so a
+`needs_review` can no longer leave the gate).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-SUGGESTED_ACTIONS = frozenset({"false_positive", "needs_review", "true_positive"})
+SUGGESTED_ACTIONS = frozenset({"false_positive", "true_positive"})
 CONFIDENCES = frozenset({"low", "medium", "high"})
 SEVERITIES = frozenset({"critical", "high", "medium", "low"})
 IOC_REPUTATIONS = frozenset({"malicious", "suspicious", "clean", "not_found", "skipped"})

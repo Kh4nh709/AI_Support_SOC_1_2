@@ -41,6 +41,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from app.llm import verdicts
 
 from tests.test_ops_export import (
     MARKER,
@@ -48,8 +49,10 @@ from tests.test_ops_export import (
     UNUSED_DSN,
     _appendix_sql,
     _event,
+    _gate,
     _gated,
     _open,
+    _result,
     _run,
     _section,
     _user,
@@ -538,6 +541,70 @@ def test_an_escalation_takes_the_latest_proposer_row_at_or_before_it(db):
     _escalate(db, e2, a, _t(360))
 
     assert _lab_line(db) == "| lab | 2 | 0 | 0 | 2 | 1 | 0.500 (1 / 2) |"
+
+
+def test_the_escalation_branch_of_the_pilot_sql_reads_the_served_verdict_not_the_stored_one():
+    """DEC-217 (G3): a `tier1.decided` event records `llm_suggestion`, which is the served verdict; a
+    `tier1.escalated` event records none, so ① is read from `llm_runs`, and it must be read the same way, or a
+    stored version 1 `needs_review` row would be a verdict for a close and "no verdict" for an escalation.
+    """
+    sql = ops_export._PILOT_VERDICT
+    assert "SELECT r.result->>'suggested_action'" not in sql
+    assert verdicts.served_action_sql("r") in sql
+
+
+def _held_v1(db, alert_id: str, proposed: str, when: datetime) -> str:
+    """A proposer row the old gate held (version 1): stored `needs_review`, the model's own answer in
+    `gate_result.proposed_verdict`. Returns its run_id."""
+    gate = {
+        **_gate("needs_review", forced=True, forced_by=("step6",)),
+        "proposed_verdict": proposed,
+    }
+    _run(
+        db,
+        alert_id,
+        when,
+        gate=gate,
+        result=_result("needs_review", 1),
+        latency_ms=10,
+        model_id="model-p",
+    )
+    row = db.execute(
+        "SELECT run_id FROM llm_runs WHERE subject_id = %s AND role = 'proposer' "
+        "AND created_at = %s",
+        (alert_id, when),
+    ).fetchone()
+    return str(row[0])
+
+
+@pytest.mark.db
+def test_an_escalation_reads_a_stored_needs_review_as_the_model_answer_the_analyst_was_shown(db):
+    """E1: the old gate held the model's `true_positive`; Tier 1 was shown `true_positive` and the human
+    escalated: an agreement. E2: it held a `false_positive`; the human escalated: a disagreement. Neither is
+    "① needs_review (no verdict)" any more, which would have left both out of the denominator."""
+    e1, a = _blind_lab(db)
+    _held_v1(db, e1, "true_positive", at(1))
+    _ack(db, e1, a, _t(60))
+    _escalate(db, e1, a, _t(120))
+    e2, _ = _blind_lab(db)
+    _held_v1(db, e2, "false_positive", at(1))
+    _ack(db, e2, a, _t(300))
+    _escalate(db, e2, a, _t(360))
+
+    # 2 decisions, no needs_review, no no_result, denominator 2, agreed 1
+    assert _lab_line(db) == "| lab | 2 | 0 | 0 | 2 | 1 | 0.500 (1 / 2) |"
+
+
+@pytest.mark.db
+def test_a_stored_needs_review_without_a_model_answer_is_still_no_verdict_at_an_escalation(db):
+    """The served verdict is None when the held row carries no usable `proposed_verdict`: that is
+    `no_result`, as for a close whose payload recorded no suggestion."""
+    alert, a = _blind_lab(db)
+    _held_v1(db, alert, "needs_review", at(1))  # nothing the model may answer
+    _ack(db, alert, a, _t(60))
+    _escalate(db, alert, a, _t(120))
+
+    assert _lab_line(db) == "| lab | 1 | 0 | 1 | 0 | 0 | n/a (0 rows) |"
 
 
 @pytest.mark.db

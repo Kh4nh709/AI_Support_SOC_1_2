@@ -166,14 +166,20 @@ def _auto_closed(conn: psycopg.Connection, *, created_by: str = USER_ID, **overr
     return alert.alert_id
 
 
-def _insert_run(conn: psycopg.Connection, alert_id: str) -> str:
+def _insert_run(
+    conn: psycopg.Connection,
+    alert_id: str,
+    *,
+    result: dict[str, Any] = RESULT,
+    gate_result: dict[str, Any] = GATE,
+) -> str:
     """One `llm_runs` proposer row in P3-T10's shape (P4-T02's fixture INSERT)."""
     row = conn.execute(
         "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, system_prompt, "
         "user_message, result, role, gate_result) "
         "VALUES (gen_random_uuid(), 'triage', 'alert', %s, 's', 'u', %s::jsonb, 'proposer', "
         "%s::jsonb) RETURNING run_id",
-        (alert_id, json.dumps(RESULT), json.dumps(GATE)),
+        (alert_id, json.dumps(result), json.dumps(gate_result)),
     ).fetchone()
     return str(row[0])
 
@@ -401,6 +407,44 @@ def test_decide_payload_has_eight_keys(db) -> None:
     assert payload["gate_forced"] is False
     assert payload["suggestion_visible"] is True
     assert payload["llm_run_id"] == run_id
+
+
+@pytest.mark.parametrize("proposed", ["false_positive", "true_positive"])
+def test_decide_records_the_served_verdict_of_a_stored_needs_review_run(db, proposed) -> None:
+    """DEC-217 (G3, spec 5): `decide` joins ①'s latest suggestion to the decision, and that is what Tier 1 was
+    shown: for a run the old gate held (stored `needs_review`, version 1) the model's own `proposed_verdict`,
+    never the raw stored value. `gate_forced` stays what the run stored (`True`)."""
+    _seed_user(db, USER_ID, USER_NAME)
+    head = _active(db)
+    held = {**RESULT, "suggested_action": "needs_review", "confidence": "medium"}
+    held_gate = {
+        **GATE,
+        "version": 1,
+        "proposed_verdict": proposed,
+        "final_verdict": "needs_review",
+        "forced": True,
+        "forced_by": ["step6"],
+    }
+    run_id = _insert_run(db, head, result=held, gate_result=held_gate)
+
+    decide(
+        db,
+        head,
+        _actor(USER_ID),
+        decision="false_positive",
+        reason="as ① said",
+        seen_occurrence_count=1,
+    )
+
+    (payload,) = [r[1] for r in _audit_rows(db, head) if r[0] == "tier1.decided"]
+    assert payload["llm_suggestion"] == proposed  # the served verdict, not `needs_review`
+    assert payload["llm_confidence"] == "medium"
+    assert payload["gate_forced"] is True
+    assert payload["llm_run_id"] == run_id
+    stored = db.execute(
+        "SELECT result->>'suggested_action' FROM llm_runs WHERE run_id = %s", (run_id,)
+    ).fetchone()
+    assert stored == ("needs_review",)  # llm_runs is the record: untouched
 
 
 def test_decide_reason_validation(db) -> None:

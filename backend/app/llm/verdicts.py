@@ -4,12 +4,20 @@
 ``true_positive`` (``triage_v3``'s ``suggested_action``). ① no longer offers the model a way to say
 "I am not sure".
 
-``GATED_ACTIONS`` is what ① may hold after the gate: the same two, plus ``needs_review``, which only
-the system sets (gate steps 2, 3, 4 and 6 force it; the model's own definite answer is kept beside it
-as ``gate_result.proposed_verdict``). It is also what the verifier may answer (``verifier_v2``), what
-a decision-table rule carries (``kb/lookup.py`` reads the signed YAML's ``then: escalate`` as
-``true_positive``), what ``security/output_guard.py`` lets through, and what the CHECK
-``ck_llm_runs_suggested_action`` (migration 022) admits.
+``GATED_ACTIONS`` is what a NEW ① run may hold after the gate (DEC-217): the same two. No gate step sets a
+verdict of its own any more - a failed check only flags the run (``gate_result.flagged_by``, shown as a
+warning beside the verdict) - so what ``security/output_guard.py`` lets through is exactly the model's
+answer.
+
+``STORED_ACTIONS`` is what a STORED ① row may hold: the two, plus ``needs_review``, which the gate wrote
+before DEC-217 (steps 2, 3, 4 and 6 forced it; the model's own definite answer is kept beside it as
+``gate_result.proposed_verdict``). Old rows keep it - ``llm_runs`` is immutable - so it is what the CHECK
+``ck_llm_runs_suggested_action`` (migration 022) still admits; ``served_action`` is what Tier 1 is shown
+for such a row.
+
+``REVIEW_ACTIONS`` is what the verifier may answer (``verifier_v2``: it may still say ``needs_review``)
+and what a decision-table rule carries (``kb/lookup.py`` reads the signed YAML's ``then: escalate`` as
+``true_positive``; ``builder.Verdict`` renders the same three in the verifier's prompt).
 
 **②.** ``MODEL_CONCLUSIONS`` is what the model may answer: ``false_positive``, ``policy_violation`` or
 ``confirmed_incident`` (``investigate_v3``'s ``suggested_conclusion``). ② no longer offers the model
@@ -22,9 +30,9 @@ as ``evidence_check.model_conclusion``). It is what ``tier2/investigation_view.C
 labels and what the CHECK ``ck_llm_runs_suggested_conclusion`` admits - that CHECK is not changed by
 P14: the override still writes ``need_more_data``.
 
-``security`` and ``kb`` may import only ``infra`` (G1), so ``output_guard.SUGGESTED_ACTIONS`` and
-``kb.lookup._ACTIONS`` transcribe ``GATED_ACTIONS``; ``tests/test_verdicts.py`` ties the copies
-together, and ties both tuples to ``output_schemas.json`` and to ``builder.Verdict``.
+``security`` and ``kb`` may import only ``infra`` (G1), so ``output_guard.SUGGESTED_ACTIONS`` transcribes
+``GATED_ACTIONS`` and ``kb.lookup._ACTIONS`` transcribes ``REVIEW_ACTIONS``; ``tests/test_verdicts.py`` ties
+the copies together, ties the tuples to ``output_schemas.json``, to ``builder.Verdict`` and to the CHECK.
 ``tests/test_conclusions.py`` does the same for ②'s two tuples, the schema file, the view and the CHECK.
 
 The analyst's own action keeps its name: the route ``POST /api/tier1/alerts/{id}/escalate``,
@@ -38,12 +46,14 @@ from collections.abc import Mapping
 from typing import Any
 
 MODEL_ACTIONS: tuple[str, ...] = ("false_positive", "true_positive")
-GATED_ACTIONS: tuple[str, ...] = ("false_positive", "needs_review", "true_positive")
+GATED_ACTIONS: tuple[str, ...] = MODEL_ACTIONS
+STORED_ACTIONS: tuple[str, ...] = ("false_positive", "needs_review", "true_positive")
+REVIEW_ACTIONS: tuple[str, ...] = ("false_positive", "needs_review", "true_positive")
 
 MODEL_CONCLUSIONS: tuple[str, ...] = ("false_positive", "policy_violation", "confirmed_incident")
 GATED_CONCLUSIONS: tuple[str, ...] = MODEL_CONCLUSIONS + ("need_more_data",)
 
-# ── why ① held the model's verdict (P14-T03) ───────────────────────────────────────────────────────
+# ── which checks raised a warning on the model's verdict (P14-T03, DEC-217) ───────────────────────────
 
 #: The fields gate step 4 (``security/gate.py``, ``step4_fp_policy``) can name in ``gate_result.missing``,
 #: in the order it appends them.
@@ -66,6 +76,8 @@ _FP_POLICY_PREFIX = "fp_policy:"
 #: the verifier's answer was unusable). A literal on purpose: the UI words each one
 #: (``strings.ts``, ``ai1.heldReason``) and its test reads this tuple from the source; the blind arm
 #: hides the list with ``held_by``. ``tests/test_held_reasons.py`` ties it to ``FP_POLICY_FIELDS``.
+#: DEC-217: the codes now mean "the checks that raised a warning" on a verdict that is the model's own;
+#: the names (``HELD_REASONS``, ``held_reasons``, the wire field ``held_by``) are kept so the API does not move.
 HELD_REASONS: tuple[str, ...] = (
     "facts_mismatch",
     "no_verified_quote",
@@ -86,29 +98,37 @@ def _strings(value: Any) -> list[str]:
 
 
 def held_reasons(gate_result: Mapping[str, Any] | None) -> list[str]:
-    """Why the gate held the model's definite answer as ``needs_review``: the closed reasons of
-    ``HELD_REASONS`` that ``gate_result`` records, in the gate's step order.
+    """The checks that raised a warning on ①'s verdict: the closed reasons of ``HELD_REASONS`` that
+    ``gate_result`` records, in the gate's step order. Before DEC-217 the same checks held the model's
+    answer back as ``needs_review``; the codes are the same and now mean "warning".
 
-    ``facts_mismatch`` is step 2 in ``forced_by``, ``no_verified_quote`` step 3; step 6 is
-    ``verifier_invalid`` when the gate recorded that the verifier's answer was unusable
-    (``steps["6"] == "invalid"``, ``security/gate.py`` ``step6_verifier``) and ``verifier_disagrees`` for
-    every other step-6 force; step 4 gives one ``fp_policy:<field>`` per entry of ``missing`` (in the order of ``missing``,
-    which is the gate's). Only a value of the closed set leaves: an unknown step name or field, a
-    duplicate, and a ``gate_result`` that is ``None`` or not a mapping all give less, never an error. A
-    verdict the gate kept has an empty ``forced_by`` and ``missing``, so its list is empty."""
+    The steps come from ``flagged_by`` (``gate_result`` version 2) when the document has it - a list - and
+    from ``forced_by`` (version 1, the old gate's forces) otherwise; a ``flagged_by`` that is ``null`` or
+    not a list counts as absent, because the queue's SQL projection hands over ``null`` for a version 1
+    row. ``facts_mismatch`` is step 2, ``no_verified_quote`` step 3; step 6 is ``verifier_invalid`` when
+    the gate recorded that the verifier's answer was unusable (``steps["6"] == "invalid"``,
+    ``security/gate.py`` ``step6_verifier``) and ``verifier_disagrees`` for every other step-6 entry; step 4
+    gives one ``fp_policy:<field>`` per entry of ``missing`` (in the order of ``missing``, which is the
+    gate's). Only a value of the closed set leaves: an unknown step name or field, a duplicate, and a
+    ``gate_result`` that is ``None`` or not a mapping all give less, never an error. A run no check
+    flagged has an empty ``flagged_by`` (``forced_by`` in version 1) and ``missing``, so its list is
+    empty."""
     if not isinstance(gate_result, Mapping):
         return []
-    forced_by = set(_strings(gate_result.get("forced_by")))
+    flagged = gate_result.get("flagged_by")
+    steps_named = set(
+        _strings(flagged if isinstance(flagged, list) else gate_result.get("forced_by"))
+    )
     reasons: list[str] = []
-    if "step2" in forced_by:
+    if "step2" in steps_named:
         reasons.append(_FACTS_MISMATCH)
-    if "step3" in forced_by:
+    if "step3" in steps_named:
         reasons.append(_NO_VERIFIED_QUOTE)
     for field in _strings(gate_result.get("missing")):
         reason = _FP_POLICY_PREFIX + field
         if field in FP_POLICY_FIELDS and reason not in reasons:
             reasons.append(reason)
-    if "step6" in forced_by:
+    if "step6" in steps_named:
         steps = gate_result.get("steps")
         invalid = isinstance(steps, Mapping) and steps.get("6") == "invalid"
         reasons.append(_VERIFIER_INVALID if invalid else _VERIFIER_DISAGREES)
@@ -123,3 +143,37 @@ def proposed_action(gate_result: Mapping[str, Any] | None) -> str | None:
         return None
     value = gate_result.get("proposed_verdict")
     return value if isinstance(value, str) and value in MODEL_ACTIONS else None
+
+
+def served_action(result: Any, gate_result: Mapping[str, Any] | None) -> str | None:
+    """The verdict Tier 1 is shown for a STORED ① run (DEC-217, G3): the stored ``result.suggested_action``
+    when it is one of ``MODEL_ACTIONS``; for a stored ``needs_review`` (a run the pre-DEC-217 gate held,
+    ``llm_runs`` being immutable) the model's own answer, ``proposed_action(gate_result)``; ``None`` when
+    neither exists - no ``result``, a value that is none of the three, or a held run whose ``gate_result``
+    has no usable ``proposed_verdict``. Never ``needs_review``, and never a verdict ① did not stand behind:
+    a stored definite answer is never replaced by ``proposed_verdict``.
+
+    ``served_action_sql`` is the SQL twin of this function; ``tests/test_queue_held.py`` holds the two to the same
+    answers."""
+    stored = result.get("suggested_action") if isinstance(result, Mapping) else None
+    if isinstance(stored, str) and stored in MODEL_ACTIONS:
+        return stored
+    if stored == "needs_review":
+        return proposed_action(gate_result)
+    return None
+
+
+def served_action_sql(alias: str) -> str:
+    """``served_action`` as a SQL expression over the ``llm_runs`` row (or LATERAL row) named ``alias``: the
+    stored ``result->>'suggested_action'`` when it is one of ``MODEL_ACTIONS``; for a stored ``needs_review``
+    the ``gate_result->>'proposed_verdict'`` when that is one of them; else NULL. The one copy: the queue list
+    (``tier1/queue.py``) and the operations export's reading of ① at an escalation (``eval/ops_export.py``) both
+    take it from here, so what Tier 1 was shown is read the same way everywhere. ``alias`` is a SQL identifier
+    the caller wrote (``r``), never a request value."""
+    actions = ", ".join(f"'{action}'" for action in MODEL_ACTIONS)
+    stored = f"{alias}.result->>'suggested_action'"
+    proposed = f"{alias}.gate_result->>'proposed_verdict'"
+    return (
+        f"CASE WHEN {stored} IN ({actions}) THEN {stored} "
+        f"WHEN {stored} = 'needs_review' AND {proposed} IN ({actions}) THEN {proposed} END"
+    )

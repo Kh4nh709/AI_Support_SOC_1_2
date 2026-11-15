@@ -2,10 +2,11 @@
 
 What this file pins, none of it needing a database:
 
-* the two vocabularies in `llm/verdicts.py` and every place that transcribes them;
+* the vocabularies in `llm/verdicts.py` and every place that transcribes them (DEC-217: what a new
+  ① run may hold, what a stored row may hold, what the verifier and a decision-table rule may say);
 * `triage_v3` (the model's answer: `false_positive | true_positive`) and `verifier_v2`
   (`false_positive | needs_review | true_positive`) against their `*_v2` / `*_v1` parents;
-* the gate: a definite model answer, still held (steps 2-6) into `needs_review` by the system;
+* the gate: a definite model answer, kept to the end - steps 2-6 only flag it (DEC-217);
 * the decision tables: the signed YAML keeps its `then: escalate`, the loader reads it as
   `true_positive`;
 * the two system prompts.
@@ -42,6 +43,7 @@ from tests.fakes.llm import (
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES = ROOT / "backend" / "app" / "llm" / "templates"
 KB_TABLES = ROOT / "kb" / "decision_tables"
+MIGRATION_022 = ROOT / "docs" / "Schema" / "022_true_positive.sql"
 
 #: The bytes of every signed decision table under `kb/decision_tables/`, as P14-T01 found them
 #: (`1e2c4f5`). The files are policy the Owner and the advisor signed (`reviewed_by`) and are never
@@ -81,22 +83,47 @@ def test_the_model_may_answer_false_positive_or_true_positive_only():
     assert verdicts.MODEL_ACTIONS == ("false_positive", "true_positive")
 
 
-def test_after_the_gate_there_is_a_third_value_the_system_alone_may_set():
-    assert verdicts.GATED_ACTIONS == ("false_positive", "needs_review", "true_positive")
+def test_a_new_run_may_hold_only_the_models_two_values():
+    """DEC-217 (G1): the gate can no longer set a third one, so what ① may hold after it is what the
+    model may answer."""
+    assert verdicts.GATED_ACTIONS == ("false_positive", "true_positive")
+    assert verdicts.GATED_ACTIONS == verdicts.MODEL_ACTIONS
 
 
-def test_the_model_vocabulary_is_a_subset_of_the_gated_one():
-    assert set(verdicts.MODEL_ACTIONS) < set(verdicts.GATED_ACTIONS)
-    assert set(verdicts.GATED_ACTIONS) - set(verdicts.MODEL_ACTIONS) == {"needs_review"}
+def test_a_stored_row_and_the_verifier_and_a_rule_keep_the_three_values():
+    """History keeps `needs_review` (old rows), so the stored vocabulary - and the verifier's and a
+    decision-table rule's, which may still say it - are the three values."""
+    three = ("false_positive", "needs_review", "true_positive")
+    assert verdicts.STORED_ACTIONS == three
+    assert verdicts.REVIEW_ACTIONS == three
 
 
-def test_verdict_has_the_three_gated_members_and_no_escalate():
+def test_the_model_vocabulary_is_a_subset_of_the_stored_one():
+    assert set(verdicts.MODEL_ACTIONS) < set(verdicts.STORED_ACTIONS)
+    assert set(verdicts.STORED_ACTIONS) - set(verdicts.GATED_ACTIONS) == {"needs_review"}
+
+
+def _migration_022_check_values() -> tuple[str, ...]:
+    """The values `ck_llm_runs_suggested_action` admits, as migration 022 (the last to write it) says."""
+    text = MIGRATION_022.read_text("utf-8")
+    start = text.index("ADD CONSTRAINT ck_llm_runs_suggested_action CHECK (")
+    clause = text[start : text.index("\n);", start)]
+    (admitted,) = re.findall(r"\bIN\s*\(([^)]*)\)", clause)
+    return tuple(re.findall(r"'([a-z_]+)'", admitted))
+
+
+def test_the_stored_check_admits_the_stored_vocabulary():
+    # DEC-217 adds no migration: the CHECK keeps admitting `needs_review`, old rows hold it.
+    assert _migration_022_check_values() == verdicts.STORED_ACTIONS
+
+
+def test_verdict_has_the_three_review_members_and_no_escalate():
     assert [(v.name, v.value) for v in Verdict] == [
         ("FALSE_POSITIVE", "false_positive"),
         ("NEEDS_REVIEW", "needs_review"),
         ("TRUE_POSITIVE", "true_positive"),
     ]
-    assert tuple(v.value for v in Verdict) == verdicts.GATED_ACTIONS
+    assert tuple(v.value for v in Verdict) == verdicts.REVIEW_ACTIONS
     assert not hasattr(Verdict, "ESCALATE")
     assert "escalate" not in builder.ENUM_VALUES
     assert "true_positive" in builder.ENUM_VALUES
@@ -104,12 +131,13 @@ def test_verdict_has_the_three_gated_members_and_no_escalate():
 
 def test_the_output_guard_holds_the_gated_vocabulary():
     assert output_guard.SUGGESTED_ACTIONS == frozenset(verdicts.GATED_ACTIONS)
+    assert "needs_review" not in output_guard.SUGGESTED_ACTIONS
 
 
-def test_the_decision_table_loader_holds_the_gated_vocabulary():
-    assert lookup._ACTIONS == verdicts.GATED_ACTIONS
+def test_the_decision_table_loader_holds_the_review_vocabulary():
+    assert lookup._ACTIONS == verdicts.REVIEW_ACTIONS
     # whatever a table may say after `then:`, the loaded action is one of them, and each is reachable
-    assert set(lookup._YAML_ACTION.values()) == set(verdicts.GATED_ACTIONS)
+    assert set(lookup._YAML_ACTION.values()) == set(verdicts.REVIEW_ACTIONS)
     assert lookup._YAML_ACTION["escalate"] == "true_positive"  # the signed spelling
     # only that spelling is mapped: `then: true_positive` is not something a signed table says
     assert lookup._YAML_RENAMED == {"escalate": "true_positive"}
@@ -132,7 +160,7 @@ def test_triage_v3_is_triage_v2_with_the_narrowed_verdict():
 def test_verifier_v2_is_verifier_v1_with_the_renamed_verdict():
     loaded = schemas.load()
     v1, v2 = loaded["verifier_v1"], loaded["verifier_v2"]
-    assert v2["structured_only_verdict"] == "|".join(verdicts.GATED_ACTIONS)
+    assert v2["structured_only_verdict"] == "|".join(verdicts.REVIEW_ACTIONS)
     assert {k: v for k, v in v2.items() if k != "structured_only_verdict"} == {
         k: v for k, v in v1.items() if k != "structured_only_verdict"
     }
@@ -231,7 +259,7 @@ def _no_findings(_blocks):
     return []
 
 
-def test_a_true_positive_proposal_with_a_basis_mismatch_ends_needs_review():
+def test_a_true_positive_proposal_with_a_basis_mismatch_stays_true_positive_and_is_flagged():
     facts = _facts(TRIAGE_V3_TRUE_POSITIVE["structured_basis"], severity="high")
     state = gate.run_steps_1_to_5(
         TRIAGE_V3_TRUE_POSITIVE,
@@ -243,9 +271,10 @@ def test_a_true_positive_proposal_with_a_basis_mismatch_ends_needs_review():
     )
     result = gate.gate_result(state, prompt_version="pv", playbook_used_effective=None)
     assert result["proposed_verdict"] == "true_positive"
-    assert result["final_verdict"] == "needs_review"
-    assert result["forced"] is True
-    assert result["forced_by"] == ["step2"]
+    assert result["final_verdict"] == "true_positive"
+    assert result["forced"] is False
+    assert result["forced_by"] == []
+    assert result["flagged_by"] == ["step2"]
     assert result["mismatched_fields"] == ["severity"]
     assert result["proposer_raw"]["suggested_action"] == "true_positive"
 
@@ -265,10 +294,11 @@ def test_a_true_positive_the_gate_keeps_is_stored_as_the_models_own_answer():
     result = gate.gate_result(state, prompt_version="pv", playbook_used_effective=None)
     assert (result["proposed_verdict"], result["final_verdict"]) == ("true_positive",) * 2
     assert result["forced"] is False and result["forced_by"] == []
+    assert result["flagged_by"] == []
     assert result["verifier_verdict"] == "true_positive"
 
 
-def test_a_verifier_that_says_needs_review_still_holds_a_true_positive_at_step6():
+def test_a_verifier_that_says_needs_review_only_flags_a_true_positive_at_step6():
     facts = _facts(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
     state = gate.run_steps_1_to_5(
         TRIAGE_V3_TRUE_POSITIVE,
@@ -279,12 +309,13 @@ def test_a_verifier_that_says_needs_review_still_holds_a_true_positive_at_step6(
         scan=_no_findings,
     )
     final = gate.finish(state, VERIFIER_V2_DISAGREE)
-    assert final["suggested_action"] == "needs_review"
-    assert state.forced_by == ["step6"]
+    assert final["suggested_action"] == "true_positive"
+    assert state.flagged_by == ["step6"]
+    assert state.verifier_verdict == "needs_review"  # the verifier keeps its three values
     assert state.proposed_verdict == "true_positive"
 
 
-def test_a_false_positive_on_a_high_criticality_asset_is_still_forced_at_step4():
+def test_a_false_positive_on_a_high_criticality_asset_is_still_a_false_positive_flagged_at_step4():
     basis = dict(TRIAGE_V2_FALSE_POSITIVE["structured_basis"], asset_criticality="high")
     proposal = {**copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE), "structured_basis": basis}
     state = gate.run_steps_1_to_5(
@@ -297,17 +328,83 @@ def test_a_false_positive_on_a_high_criticality_asset_is_still_forced_at_step4()
     )
     result = gate.gate_result(state, prompt_version="pv", playbook_used_effective=None)
     assert result["proposed_verdict"] == "false_positive"
-    assert result["final_verdict"] == "needs_review"
-    assert result["forced_by"] == ["step4"]
+    assert result["final_verdict"] == "false_positive"
+    assert result["forced_by"] == [] and result["flagged_by"] == ["step4"]
     assert result["missing"] == ["asset_criticality"]
 
 
-def test_the_output_guard_lets_true_positive_through_and_refuses_escalate():
+def test_the_output_guard_lets_true_positive_through_and_refuses_escalate_and_needs_review():
     assert output_guard.enforce(copy.deepcopy(TRIAGE_V3_TRUE_POSITIVE))["suggested_action"] == (
         "true_positive"
     )
     with pytest.raises(output_guard.OutputGuardError):
         output_guard.enforce(copy.deepcopy(TRIAGE_V2_ESCALATE))
+    with pytest.raises(output_guard.OutputGuardError):
+        output_guard.enforce(
+            {**copy.deepcopy(TRIAGE_V3_TRUE_POSITIVE), "suggested_action": "needs_review"}
+        )
+
+
+# ── what Tier 1 is served (DEC-217 G3) ──────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("answer", ["false_positive", "true_positive"])
+def test_served_action_is_the_stored_verdict_when_it_is_one_of_the_two(answer):
+    result = {"suggested_action": answer}
+    # whatever the gate_result says, a stored definite answer is what is served
+    for gate_result in (None, {}, {"proposed_verdict": "true_positive"}, {"proposed_verdict": "x"}):
+        assert verdicts.served_action(result, gate_result) == answer
+
+
+@pytest.mark.parametrize("proposed", ["false_positive", "true_positive"])
+def test_served_action_of_a_stored_needs_review_is_the_models_own_answer(proposed):
+    """A version 1 row the old gate held: the analyst is shown what the model said (proposed_verdict)."""
+    gate_result = {"version": 1, "proposed_verdict": proposed, "final_verdict": "needs_review"}
+    assert verdicts.served_action({"suggested_action": "needs_review"}, gate_result) == proposed
+
+
+@pytest.mark.parametrize(
+    "gate_result",
+    [
+        None,
+        {},
+        [],
+        "true_positive",
+        {"proposed_verdict": None},
+        {"proposed_verdict": "needs_review"},
+        {"proposed_verdict": "escalate"},
+        {"proposed_verdict": ["true_positive"]},
+        {"final_verdict": "true_positive"},
+    ],
+)
+def test_served_action_of_a_stored_needs_review_without_a_proposed_verdict_is_none(gate_result):
+    assert verdicts.served_action({"suggested_action": "needs_review"}, gate_result) is None
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        None,
+        {},
+        [],
+        "true_positive",
+        {"suggested_action": None},
+        {"suggested_action": "escalate"},
+        {"suggested_action": 1},
+    ],
+)
+def test_served_action_is_none_for_a_result_that_holds_no_verdict(result):
+    # even a gate_result that names a proposed verdict does not stand in for a missing stored one
+    assert verdicts.served_action(result, {"proposed_verdict": "true_positive"}) is None
+
+
+def test_served_action_never_returns_needs_review():
+    for stored in (*verdicts.STORED_ACTIONS, "escalate", None):
+        for proposed in (*verdicts.STORED_ACTIONS, None):
+            served = verdicts.served_action(
+                {"suggested_action": stored}, {"proposed_verdict": proposed}
+            )
+            assert served in (None, *verdicts.MODEL_ACTIONS)
 
 
 # ── the decision tables: signed policy, read as the new verdict ─────────────────────────────
@@ -335,15 +432,15 @@ def test_recon_then_escalate_rules_load_with_action_true_positive():
     assert "escalate" not in set(loaded.values())
 
 
-def test_every_signed_table_loads_with_actions_in_the_gated_vocabulary():
+def test_every_signed_table_loads_with_actions_in_the_review_vocabulary():
     seen = set()
     for path in sorted(KB_TABLES.glob("*.yaml")):
         table = lookup.get_decision_table(path.stem)
         assert table is not None, path.name
         for rule in table.rules:
-            assert rule.action in verdicts.GATED_ACTIONS, (path.name, rule.id)
+            assert rule.action in verdicts.REVIEW_ACTIONS, (path.name, rule.id)
             seen.add(rule.action)
-    assert seen == set(verdicts.GATED_ACTIONS)
+    assert seen == set(verdicts.REVIEW_ACTIONS)
 
 
 def test_apply_table_answers_true_positive_where_the_yaml_says_escalate():
@@ -502,7 +599,7 @@ def test_the_prompt_versions_moved_with_the_wording():
     assert verifier.split("+")[1] != OLD_VERIFIER_TEMPLATE_SHA256
 
 
-def test_the_verifier_prompt_lists_the_three_gated_values():
+def test_the_verifier_prompt_lists_the_three_review_values():
     text = (TEMPLATES / "verifier_system.txt").read_text("utf-8")
     assert "giá trị duy nhất trong: false_positive | needs_review | true_positive." in text
     assert "escalate" not in text

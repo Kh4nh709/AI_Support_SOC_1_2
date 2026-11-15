@@ -554,13 +554,27 @@ def test_queue_lateral_join_picks_proposer_and_does_not_double(db):
         db,
         alert_id,
         role="proposer",
-        result={**RESULT, "suggested_action": "needs_review"},
+        result={**RESULT, "suggested_action": "true_positive"},
         offset_s=2,
     )
     rows = [row for row in _all_rows(db) if row["alert_id"] == alert_id]
     assert len(rows) == 1
     assert rows[0]["run_id"] == later
-    assert rows[0]["suggested_action"] == "needs_review"
+    assert rows[0]["suggested_action"] == "true_positive"
+
+    # DEC-217: a still later run stored as `needs_review` (version 1: the old gate held it) is served as the
+    # model's own `proposed_verdict`, which `GATE` says is `false_positive`
+    latest = _insert_run(
+        db,
+        alert_id,
+        role="proposer",
+        result={**RESULT, "suggested_action": "needs_review"},
+        offset_s=4,
+    )
+    rows = [row for row in _all_rows(db) if row["alert_id"] == alert_id]
+    assert len(rows) == 1
+    assert rows[0]["run_id"] == latest
+    assert rows[0]["suggested_action"] == "false_positive"
 
 
 @pytest.mark.db
@@ -940,7 +954,8 @@ def test_latest_suggestion_tolerates_missing_gate_keys(db):
     suggestion = latest_suggestion(db, alert_id)
 
     assert suggestion is not None
-    assert suggestion.suggested_action == "needs_review"
+    # a stored `needs_review` with a `gate_result` that does not name the model's answer: nothing to serve (DEC-217)
+    assert suggestion.suggested_action is None
     assert suggestion.confidence == "low"
     assert suggestion.reasons == []
     assert suggestion.gate == {
@@ -1012,7 +1027,8 @@ def test_latest_suggestion_reads_p3_t10_shape_and_latest_proposer_wins(db):
     )
     got = latest_suggestion(db, alert_id)
     assert got.run_id == later
-    assert got.suggested_action == "needs_review"
+    # stored `needs_review` (a version 1 run), served as the model's own answer, `GATE`'s `false_positive`
+    assert got.suggested_action == "false_positive"
     assert len(got.reasons) == 10
     assert got.reasons[0] == {"claim": "c0", "quote": "q", "source": "kb_playbook"}
     assert got.gate["forced"] is True and got.gate["forced_by"] == ["rule_check"]
@@ -1067,7 +1083,9 @@ def test_latest_suggestions_equals_latest_suggestion_for_each_alert_in_one_state
     assert batched == {alert_id: got for alert_id, got in per_id.items() if got is not None}
     # and the seeds are not all alike: the comparison above is not two empty answers
     assert set(batched) == {one, several, blind, twelve}
-    assert batched[several].suggested_action == "needs_review"
+    assert (
+        batched[several].suggested_action == "false_positive"
+    )  # served: stored `needs_review`, GATE's proposed
     assert failed_last not in batched and len(batched[twelve].reasons) == 10
 
     counting = _CountingConn(db)

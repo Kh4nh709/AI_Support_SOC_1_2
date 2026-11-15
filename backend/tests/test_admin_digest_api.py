@@ -244,14 +244,14 @@ def _reopened(
     return alert_id
 
 
-def _run(conn: Any, alert_id: str, suggested_action: str) -> None:
+def _run(conn: Any, alert_id: str, suggested_action: str, gate_result: dict | None = None) -> None:
     """One ① (`proposer`) run, in the shape `queue.latest_suggestion` reads."""
     result = {"suggested_action": suggested_action, "confidence": "high", "reasons": []}
     conn.execute(
         "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, system_prompt,"
         " user_message, result, role, gate_result)"
-        " VALUES (gen_random_uuid(), 'triage', 'alert', %s, 's', 'u', %s::jsonb, 'proposer', '{}')",
-        (alert_id, json.dumps(result)),
+        " VALUES (gen_random_uuid(), 'triage', 'alert', %s, 's', 'u', %s::jsonb, 'proposer', %s::jsonb)",
+        (alert_id, json.dumps(result), json.dumps(gate_result or {})),
     )
 
 
@@ -1414,7 +1414,8 @@ def test_the_digest_rows_read_the_suggestion_exactly_as_latest_suggestion_does(c
         (failed_last,),
     )
     sai = _alert(db, closed_at=day_at, autoclose_rule_id=rule_id, occurrence_count=4)
-    _run(db, sai, "needs_review")
+    # a version 1 run the old gate held (DEC-217): served as the model's own `true_positive`
+    _run(db, sai, "needs_review", {"version": 1, "proposed_verdict": "true_positive"})
     digest.review(db, sai, "wrong", admin.user_id)
 
     rows = digest.build(db, "2026-09-25", tz=TZ) + digest.reopened_by_review(
@@ -1431,7 +1432,7 @@ def test_the_digest_rows_read_the_suggestion_exactly_as_latest_suggestion_does(c
     assert by_id[good].suggested_action == "true_positive" and by_id[good].disagreement is True
     assert by_id[no_run].suggested_action is None and by_id[no_run].disagreement is False
     assert by_id[failed_last].suggested_action is None  # not the older run's "true_positive"
-    assert by_id[sai].suggested_action == "needs_review"
+    assert by_id[sai].suggested_action == "true_positive" and by_id[sai].disagreement is True
 
 
 # ---------------------------------------------------------------------------

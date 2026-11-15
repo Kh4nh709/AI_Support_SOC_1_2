@@ -125,10 +125,12 @@ _TRUE_POSITIVE = _proposal("true_positive", rule="sbf-3")
 #: Gate step 4 forbids this on the canonical alert (context pack §8): severity is
 #: critical, the asset is not in inventory, and no decision-table rule is cited.
 _POLICY_BLOCKED_FP = _proposal("false_positive")
-_VERIFIER_AGREES_NEEDS_REVIEW = {
+#: DEC-217: step 4 flags that answer, it no longer holds it, so the verifier is asked about the model's own
+#: `false_positive` and a verifier that agrees with it says so.
+_VERIFIER_AGREES_FALSE_POSITIVE = {
     "agree": True,
-    "structured_only_verdict": "needs_review",
-    "reason": "Critical severity and an asset outside the inventory rule out closing it.",
+    "structured_only_verdict": "false_positive",
+    "reason": "Nothing in the structured facts contradicts the model's false_positive.",
 }
 
 _B2 = EvalSwitches(include_context=False, include_correlation=False)
@@ -334,12 +336,12 @@ def test_steps_1_3_makes_one_call_and_keeps_a_policy_blocked_fp(db, cfg):
     assert isinstance(b3, TriageEvaluation)
     assert b3.outcome == "ok"
     assert b3.final_verdict == "false_positive" == b3.result["suggested_action"]
-    assert b3.forced_by == ()
+    assert b3.forced_by == () and b3.flagged_by == ()  # B3 stops after step 3: step 4 never ran
     assert len(b3_llm.calls) == 1 and b3.calls == 1  # the verifier is never called
     assert b3.vbuilt is None and b3.verification is None and b3.verifier_verdict is None
     assert sorted(b3.gate_result["steps"]) == ["1", "2", "3", "7"]  # no 4, no 5, no 6
 
-    full_llm = _FakeLLM(responses=[_POLICY_BLOCKED_FP, _VERIFIER_AGREES_NEEDS_REVIEW])
+    full_llm = _FakeLLM(responses=[_POLICY_BLOCKED_FP, _VERIFIER_AGREES_FALSE_POSITIVE])
     full = evaluate_alert(db, alert_id, adapter=full_llm, cfg=cfg)  # DEPLOYED
 
     assert full.outcome == "ok"
@@ -347,9 +349,11 @@ def test_steps_1_3_makes_one_call_and_keeps_a_policy_blocked_fp(db, cfg):
     assert full.proposed_verdict == b3.proposed_verdict == "false_positive"
     assert full.gate_result["steps"]["4"] == "missing"
     assert full.gate_result["missing"] == ["severity", "asset_criticality", "playbook_rule"]
-    assert full.verdict_for_verifier == "needs_review"  # the verifier saw step 4's verdict
-    assert full.forced_by == ("step4",)
-    assert full.final_verdict == "needs_review"
+    # DEC-217: step 4 flags, it does not hold - the verifier was asked about the model's own verdict
+    assert full.verdict_for_verifier == "false_positive"
+    assert full.forced_by == () and full.flagged_by == ("step4",)
+    assert full.final_verdict == "false_positive" == full.proposed_verdict
+    assert full.gate_result["flagged_by"] == ["step4"] and full.gate_result["forced"] is False
 
 
 @pytest.mark.db
@@ -359,7 +363,7 @@ def test_full_mode_calls_the_verifier_and_respects_disagreement(db, cfg):
     agreed = evaluate_alert(
         db, alert_id, adapter=_FakeLLM(responses=[_TRUE_POSITIVE, VERIFIER_V2_AGREE]), cfg=cfg
     )
-    assert (agreed.final_verdict, agreed.forced_by) == ("true_positive", ())
+    assert (agreed.final_verdict, agreed.forced_by, agreed.flagged_by) == ("true_positive", (), ())
     assert agreed.gate_result["steps"]["6"] == "agree"
 
     llm = _FakeLLM(responses=[_TRUE_POSITIVE, VERIFIER_V2_DISAGREE])
@@ -372,8 +376,8 @@ def test_full_mode_calls_the_verifier_and_respects_disagreement(db, cfg):
     assert ev.verdict_for_verifier == "true_positive"
     assert ev.verifier_verdict == "needs_review"
     assert ev.gate_result["steps"]["6"] == "disagree"
-    assert ev.forced_by == ("step6",)
-    assert (ev.proposed_verdict, ev.final_verdict) == ("true_positive", "needs_review")
+    assert ev.forced_by == () and ev.flagged_by == ("step6",)  # a warning, not a hold (DEC-217)
+    assert (ev.proposed_verdict, ev.final_verdict) == ("true_positive", "true_positive")
     # the numbers are the two calls', summed
     p, v = ev.proposal, ev.verification
     assert ev.usage["prompt_tokens"] == p.usage["prompt_tokens"] + v.usage["prompt_tokens"]
@@ -562,7 +566,7 @@ def test_run_triage_job_is_evaluate_alert_with_the_deployed_switches(db, cfg, mo
     run_triage_job(
         db,
         _job(alert_id),
-        adapter=_FakeLLM(responses=[_POLICY_BLOCKED_FP, _VERIFIER_AGREES_NEEDS_REVIEW]),
+        adapter=_FakeLLM(responses=[_POLICY_BLOCKED_FP, _VERIFIER_AGREES_FALSE_POSITIVE]),
     )
 
     assert [(s, w) for s, w, _ in seen] == [(alert_id, DEPLOYED)]
@@ -587,7 +591,7 @@ def test_what_is_measured_is_what_is_deployed(db, cfg):
     """An evaluation run first, then the job on the same alert with the same answers:
     the gate document the job writes is the one the evaluation measured."""
     alert_id = _seed(db)
-    answers = [_POLICY_BLOCKED_FP, _VERIFIER_AGREES_NEEDS_REVIEW]
+    answers = [_POLICY_BLOCKED_FP, _VERIFIER_AGREES_FALSE_POSITIVE]
 
     measured = evaluate_alert(db, alert_id, adapter=_FakeLLM(responses=answers), cfg=cfg)
     run_triage_job(db, _job(alert_id), adapter=_FakeLLM(responses=answers))
@@ -598,4 +602,4 @@ def test_what_is_measured_is_what_is_deployed(db, cfg):
     ).fetchone()
     assert gate_result == measured.gate_result
     assert result == measured.result
-    assert gate_result["forced_by"] == ["step4"]
+    assert gate_result["flagged_by"] == ["step4"] and gate_result["forced_by"] == []

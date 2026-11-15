@@ -135,10 +135,11 @@ class RiskBand(Enum):
 
 
 class Verdict(Enum):
-    """①'s verdict after the gate (``llm/verdicts.py``'s ``GATED_ACTIONS``, same order). The model
-    answers ``false_positive`` or ``true_positive`` only; ``needs_review`` is the system's.
-    ``TRUE_POSITIVE`` was ``ESCALATE`` until P14-T01 (DEC-213); the analyst's escalation is not this
-    enum and keeps its name."""
+    """The verdicts the verifier's prompt names (``llm/verdicts.py``'s ``REVIEW_ACTIONS``, same order). The
+    model answers ``false_positive`` or ``true_positive`` only, and since DEC-217 so does ①'s stored
+    result; ``needs_review`` stays here because the verifier (``verifier_v2``) and a decision-table rule
+    may still say it. ``TRUE_POSITIVE`` was ``ESCALATE`` until P14-T01 (DEC-213); the analyst's escalation
+    is not this enum and keeps its name."""
 
     FALSE_POSITIVE = "false_positive"
     NEEDS_REVIEW = "needs_review"
@@ -204,8 +205,9 @@ SENTENCE_ABSENT = "không có trong cơ sở dữ liệu nội bộ — vắng m
 SENTENCE_NO_PLAYBOOK = "không tìm được playbook khớp, chỉ suy luận từ dữ liệu alert"
 #: The ① proposer's sentence under `## Playbook` when the alert's category has no playbook (`kb.get_playbook`
 #: gives nothing: `unknown`, or a missing file) - T1, trial, 11/11. It says what to conclude: the model answers
-#: `false_positive` and leaves `reasons` empty, no justification needed. The gate is not told and is not changed:
-#: with no reason left, step 3 holds the verdict for the analyst. It is NOT `SENTENCE_NO_PLAYBOOK`, which the
+#: `false_positive` and leaves `reasons` empty, no justification needed. The gate is not told: with no reason
+#: left, step 3 flags the run (DEC-217: a warning beside the model's `false_positive`, which stays the verdict;
+#: before it the gate held the verdict as `needs_review`). It is NOT `SENTENCE_NO_PLAYBOOK`, which the
 #: verifier's `_table_section` also writes for a missing or unreviewed decision table, where it is not an
 #: instruction to anyone to conclude anything.
 SENTENCE_NO_PLAYBOOK_FP = "không có playbook cho loại alert này, nên kết luận false_positive và để trống reasons (không cần nêu bằng chứng)"

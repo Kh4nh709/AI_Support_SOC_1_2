@@ -6,6 +6,9 @@ verdict is `false_positive | true_positive`, P14-T01) with one field changed, pe
 crafted-JSON matrix. `security` may import only `infra`
 (G1) — `rule_check` and the verifier's parsed JSON always arrive as plain arguments, never as a
 `kb`/`llm` import.
+
+DEC-217 (BV-T1): a failed check FLAGS the run (`state.flagged_by`), it never changes `state.verdict`,
+which stays the model's own answer from `start()` to step 7. Nothing here can produce `needs_review`.
 """
 
 from __future__ import annotations
@@ -137,16 +140,16 @@ def test_start_records_repaired_flag_in_steps():
 # ---------------------------------------------------------------------------
 
 
-def test_step2_basis_mismatch_forces_needs_review_and_flags():
+def test_step2_basis_mismatch_flags_and_keeps_the_models_verdict():
     facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"], severity="high")
     state = gate.start(TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), repaired=False)
 
     gate.step2_basis(state)
 
-    assert state.verdict == "needs_review"
+    assert state.verdict == "true_positive"
     assert state.hallucination_flag is True
     assert state.mismatched_fields == ["severity"]
-    assert state.forced_by == ["step2"]
+    assert state.flagged_by == ["step2"]
     assert state.steps["2"] == "mismatch"
 
 
@@ -161,6 +164,7 @@ def test_step2_string_fields_compared_case_insensitively():
     assert state.verdict == "true_positive"
     assert state.steps["2"] == "ok"
     assert state.hallucination_flag is False
+    assert state.flagged_by == []
 
 
 def test_step2_occurrence_is_integer_equal_at_build_time():
@@ -178,7 +182,8 @@ def test_step2_occurrence_is_integer_equal_at_build_time():
     state2 = gate.start(parsed, facts_grown, _true_positive_blocks(), repaired=False)
     gate.step2_basis(state2)
     assert state2.mismatched_fields == ["occurrence_count"]
-    assert state2.verdict == "needs_review"
+    assert state2.verdict == "true_positive"
+    assert state2.flagged_by == ["step2"]
 
 
 def test_step2_playbook_rule_applied_is_not_compared():
@@ -216,10 +221,11 @@ def test_step3_invalid_quote_dropped_survivors_kept():
     assert state.reasons == [good]
     assert state.dropped_reasons == [{"index": 1, "why": "not_substring"}]
     assert state.steps["3"] == "dropped:1"
-    assert state.verdict == "false_positive"  # a survivor remains — step 3 does not force
+    assert state.verdict == "false_positive"
+    assert state.flagged_by == []  # a survivor remains - step 3 does not flag
 
 
-def test_step3_all_invalid_forces_needs_review():
+def test_step3_all_invalid_flags_and_keeps_the_models_verdict():
     bad = {"claim": "fabricated", "quote": "not anywhere", "source": "rule_description"}
     parsed = dict(TRIAGE_V2_FALSE_POSITIVE, reasons=[bad])
     facts = _facts_from(TRIAGE_V2_FALSE_POSITIVE["structured_basis"])
@@ -228,8 +234,8 @@ def test_step3_all_invalid_forces_needs_review():
     gate.step3_quotes(state)
 
     assert state.reasons == []
-    assert state.verdict == "needs_review"
-    assert state.forced_by == ["step3"]
+    assert state.verdict == "false_positive"
+    assert state.flagged_by == ["step3"]
     assert state.steps["3"] == "dropped:1"
 
 
@@ -268,7 +274,8 @@ def test_step3_empty_quote_dropped():
     gate.step3_quotes(state)
 
     assert state.dropped_reasons == [{"index": 0, "why": "empty_quote"}]
-    assert state.verdict == "needs_review"
+    assert state.verdict == "false_positive"
+    assert state.flagged_by == ["step3"]
 
 
 # ---------------------------------------------------------------------------
@@ -292,8 +299,8 @@ def test_step4_fp_without_rule_is_missing_playbook_rule():
     gate.step4_fp_policy(state, _rule_check_no_rule_cited)
 
     assert state.missing == ["playbook_rule"]
-    assert state.verdict == "needs_review"
-    assert state.forced_by == ["step4"]
+    assert state.verdict == "false_positive"
+    assert state.flagged_by == ["step4"]
     assert state.warnings == ["no_rule_cited"]
 
 
@@ -306,7 +313,8 @@ def test_step4_fp_with_asset_unknown_is_missing():
     gate.step4_fp_policy(state, _rule_check_holds)
 
     assert state.missing == ["asset_criticality"]
-    assert state.verdict == "needs_review"
+    assert state.verdict == "false_positive"
+    assert state.flagged_by == ["step4"]
 
 
 def test_step4_fp_with_critical_is_missing():
@@ -318,7 +326,8 @@ def test_step4_fp_with_critical_is_missing():
     gate.step4_fp_policy(state, _rule_check_holds)
 
     assert state.missing == ["severity"]
-    assert state.verdict == "needs_review"
+    assert state.verdict == "false_positive"
+    assert state.flagged_by == ["step4"]
 
 
 def test_step4_fp_with_all_conditions_survives():
@@ -335,7 +344,7 @@ def test_step4_fp_with_all_conditions_survives():
     assert state.missing == []
     assert state.verdict == "false_positive"
     assert state.steps["4"] == "ok"
-    assert state.forced_by == []
+    assert state.flagged_by == []
 
 
 def test_step4_missing_names_every_failed_condition():
@@ -372,7 +381,63 @@ def test_step4_not_applied_to_true_positive():
     assert state.steps["4"] == "n/a"
     assert state.verdict == "true_positive"
     assert state.missing == []
-    assert state.forced_by == []
+    assert state.flagged_by == []
+
+
+def test_step4_is_evaluated_after_a_step2_flag():
+    """DEC-217 G1: a step 2 flag no longer ends the policy check - step 4 still looks at every
+    `false_positive` answer, so its `missing` and its warning are recorded beside step 2's."""
+    parsed, facts = _fp_parsed_and_facts(playbook_rule_applied=None)
+    facts = {**facts, "severity": "high"}  # the model said `low`: step 2 mismatch
+    state = gate.start(parsed, facts, _fp_blocks(), repaired=False)
+    gate.step2_basis(state)
+    assert state.steps["2"] == "mismatch"
+
+    gate.step4_fp_policy(state, _rule_check_no_rule_cited)
+
+    assert state.steps["4"] == "missing"
+    assert state.missing == ["playbook_rule"]
+    assert state.warnings == ["no_rule_cited"]
+    assert state.verdict == "false_positive"
+    assert state.flagged_by == ["step2", "step4"]
+
+
+def test_step4_is_evaluated_after_a_step3_flag():
+    bad = {"claim": "fabricated", "quote": "not anywhere", "source": "rule_description"}
+    parsed = dict(TRIAGE_V2_FALSE_POSITIVE, reasons=[bad])
+    facts = _facts_from(TRIAGE_V2_FALSE_POSITIVE["structured_basis"])
+    state = gate.start(parsed, facts, _fp_blocks(), repaired=False)
+    gate.step2_basis(state)
+    gate.step3_quotes(state)
+    assert state.steps["3"] == "dropped:1" and state.reasons == []
+
+    gate.step4_fp_policy(state, _rule_check_no_rule_cited)
+
+    assert state.steps["4"] == "missing"
+    assert state.missing == ["playbook_rule"]
+    assert state.verdict == "false_positive"
+    assert state.flagged_by == ["step3", "step4"]
+
+
+def test_flagged_by_lists_the_steps_in_step_order_and_never_twice():
+    parsed, facts = _fp_parsed_and_facts(playbook_rule_applied=None)
+    facts = {**facts, "severity": "high"}
+    bad = {"claim": "fabricated", "quote": "not anywhere", "source": "rule_description"}
+    parsed = dict(parsed, reasons=[bad])
+    state = gate.run_steps_1_to_5(
+        parsed,
+        facts,
+        _fp_blocks(),
+        repaired=False,
+        rule_check=_rule_check_no_rule_cited,
+        scan=_no_findings,
+    )
+    gate.step6_verifier(
+        state, {"agree": False, "structured_only_verdict": "false_positive", "reason": "no"}
+    )
+
+    assert state.flagged_by == ["step2", "step3", "step4", "step6"]
+    assert state.verdict == "false_positive" == state.proposed_verdict
 
 
 # ---------------------------------------------------------------------------
@@ -435,7 +500,7 @@ def _state_after_1_to_5(parsed, facts, blocks, *, rule_check):
     )
 
 
-def test_step6_disagree_forces():
+def test_step6_disagree_flags_and_keeps_the_models_verdict():
     facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
     state = _state_after_1_to_5(
         TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
@@ -451,13 +516,13 @@ def test_step6_disagree_forces():
         },
     )
 
-    assert state.verdict == "needs_review"
-    assert state.forced_by == ["step6"]
+    assert state.verdict == "true_positive"
+    assert state.flagged_by == ["step6"]
     assert state.steps["6"] == "disagree"
     assert state.verifier_verdict == "true_positive"
 
 
-def test_step6_agree_true_different_verdict_forces():
+def test_step6_agree_true_different_verdict_flags():
     facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
     state = _state_after_1_to_5(
         TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
@@ -467,12 +532,12 @@ def test_step6_agree_true_different_verdict_forces():
         state, {"agree": True, "structured_only_verdict": "needs_review", "reason": "not enough"}
     )
 
-    assert state.verdict == "needs_review"
-    assert state.forced_by == ["step6"]
+    assert state.verdict == "true_positive"
+    assert state.flagged_by == ["step6"]
     assert state.steps["6"] == "disagree"
 
 
-def test_step6_invalid_forces():
+def test_step6_invalid_flags():
     facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
     state = _state_after_1_to_5(
         TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
@@ -480,9 +545,10 @@ def test_step6_invalid_forces():
 
     gate.step6_verifier(state, None)
 
-    assert state.verdict == "needs_review"
-    assert state.forced_by == ["step6"]
+    assert state.verdict == "true_positive"
+    assert state.flagged_by == ["step6"]
     assert state.steps["6"] == "invalid"
+    assert state.verifier_verdict is None
 
 
 def test_step6_agrees_and_matches_keeps_verdict():
@@ -496,36 +562,50 @@ def test_step6_agrees_and_matches_keeps_verdict():
     )
 
     assert state.verdict == "true_positive"
-    assert state.forced_by == []
+    assert state.flagged_by == []
     assert state.steps["6"] == "agree"
 
 
-def test_step6_compares_against_post_step4_verdict():
-    parsed, facts = _fp_parsed_and_facts(
-        playbook_rule_applied=None
-    )  # step 4 will force needs_review
+def test_step6_compares_against_the_models_verdict_even_after_a_step4_flag():
+    """DEC-217: step 4 flags but does not change the verdict, so the verifier's prompt carried the model's
+    own `false_positive` and step 6 compares its answer with that."""
+    parsed, facts = _fp_parsed_and_facts(playbook_rule_applied=None)  # step 4 will flag
     state = _state_after_1_to_5(parsed, facts, _fp_blocks(), rule_check=_rule_check_no_rule_cited)
-    assert state.verdict == "needs_review"
-    assert state.proposed_verdict == "false_positive"
+    assert state.flagged_by == ["step4"]
+    assert state.verdict == "false_positive" == state.proposed_verdict
 
-    disagree_with_proposer = {
+    disagree_by_flag = {
         "agree": False,
-        "structured_only_verdict": "needs_review",
-        "reason": "proposer's false_positive is unsupported",
+        "structured_only_verdict": "false_positive",
+        "reason": "the proposer's false_positive is unsupported",
     }
     state_a = copy.deepcopy(state)
-    gate.step6_verifier(state_a, disagree_with_proposer)
+    gate.step6_verifier(state_a, disagree_by_flag)
     assert state_a.steps["6"] == "disagree"  # agree is False, regardless of the verdict match
+    assert state_a.flagged_by == ["step4", "step6"]
 
-    agree_and_matches_post_step4 = {
+    agree_and_matches = {
         "agree": True,
-        "structured_only_verdict": "needs_review",
-        "reason": "consistent with the forced verdict",
+        "structured_only_verdict": "false_positive",
+        "reason": "consistent with the model's verdict",
     }
     state_b = copy.deepcopy(state)
-    gate.step6_verifier(state_b, agree_and_matches_post_step4)
+    gate.step6_verifier(state_b, agree_and_matches)
     assert state_b.steps["6"] == "agree"
-    assert state_b.verdict == "needs_review"
+    assert state_b.flagged_by == ["step4"]
+    assert state_b.verdict == "false_positive"
+
+    verifier_says_needs_review = {
+        "agree": True,
+        "structured_only_verdict": "needs_review",
+        "reason": "not enough to say",
+    }
+    state_c = copy.deepcopy(state)
+    gate.step6_verifier(state_c, verifier_says_needs_review)
+    assert state_c.steps["6"] == "disagree"  # the verifier may still say it; it only flags
+    assert state_c.verifier_verdict == "needs_review"
+    assert state_c.flagged_by == ["step4", "step6"]
+    assert state_c.verdict == "false_positive"
 
 
 # ---------------------------------------------------------------------------
@@ -533,21 +613,31 @@ def test_step6_compares_against_post_step4_verdict():
 # ---------------------------------------------------------------------------
 
 
-def test_step7_result_carries_final_verdict_and_survivors():
+def test_step7_result_carries_the_models_verdict_and_the_survivors():
     good = TRIAGE_V2_FALSE_POSITIVE["reasons"][0]
     bad = {"claim": "fabricated", "quote": "nowhere", "source": "rule_description"}
     parsed = dict(TRIAGE_V2_FALSE_POSITIVE, reasons=[good, bad])
-    facts = _facts_from(TRIAGE_V2_FALSE_POSITIVE["structured_basis"])
+    facts = _facts_from(TRIAGE_V2_FALSE_POSITIVE["structured_basis"], severity="high")
     state = gate.start(parsed, facts, _fp_blocks(), repaired=False)
+    gate.step2_basis(state)  # a mismatch: flagged
     gate.step3_quotes(state)  # drops `bad`, keeps `good`
-    state.verdict = "needs_review"  # simulate some earlier step forcing it
-    state.forced_by.append("step2")
+    assert state.flagged_by == ["step2"]
 
     result = gate.step7_output_guard(state)
 
-    assert result["suggested_action"] == "needs_review"
+    assert result["suggested_action"] == "false_positive"  # the model's own, flagged or not
     assert result["reasons"] == [good]
     assert state.steps["7"] == "ok"
+
+
+def test_step7_refuses_needs_review_even_if_a_step_set_it():
+    """DEC-217: `needs_review` can no longer leave the gate - the guard raises, whatever wrote it."""
+    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
+    state = gate.start(TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), repaired=False)
+    state.verdict = "needs_review"
+
+    with pytest.raises(output_guard.OutputGuardError, match="suggested_action: invalid"):
+        gate.step7_output_guard(state)
 
 
 def test_step7_raises_via_output_guard_on_violation():
@@ -578,6 +668,19 @@ def test_finish_runs_step6_then_step7():
 # ---------------------------------------------------------------------------
 # output_guard.enforce — the closed-set re-check, tested live and directly
 # ---------------------------------------------------------------------------
+
+
+def test_output_guard_refuses_needs_review():
+    """DEC-217 (G1): a `needs_review` can no longer leave the gate."""
+    with pytest.raises(output_guard.OutputGuardError, match="suggested_action: invalid"):
+        output_guard.enforce(dict(TRIAGE_V3_TRUE_POSITIVE, suggested_action="needs_review"))
+
+
+def test_output_guard_vocabulary_is_the_models_two_values():
+    assert output_guard.SUGGESTED_ACTIONS == frozenset({"false_positive", "true_positive"})
+    for answer in ("false_positive", "true_positive"):
+        enforced = output_guard.enforce(dict(TRIAGE_V3_TRUE_POSITIVE, suggested_action=answer))
+        assert enforced["suggested_action"] == answer
 
 
 def test_output_guard_raises_on_closed_set_violation():
@@ -631,7 +734,7 @@ def test_output_guard_never_adds_an_action_or_rewrites_text():
 # ---------------------------------------------------------------------------
 
 
-def test_gate_result_shape_and_forced_flag():
+def test_gate_result_is_version_2_and_shows_the_flags_not_a_force():
     facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
     state = _state_after_1_to_5(
         TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
@@ -646,11 +749,12 @@ def test_gate_result_shape_and_forced_flag():
     )
 
     assert doc == {
-        "version": 1,
+        "version": 2,
         "proposed_verdict": "true_positive",
-        "final_verdict": "needs_review",
-        "forced": True,
-        "forced_by": ["step6"],
+        "final_verdict": "true_positive",
+        "forced": False,
+        "forced_by": [],
+        "flagged_by": ["step6"],
         "steps": state.steps,
         "hallucination_flag": False,
         "mismatched_fields": [],
@@ -665,7 +769,7 @@ def test_gate_result_shape_and_forced_flag():
     }
 
 
-def test_gate_result_forced_is_false_when_verdict_unchanged():
+def test_gate_result_of_a_run_nothing_flagged_has_an_empty_flagged_by():
     facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
     state = _state_after_1_to_5(
         TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
@@ -676,42 +780,76 @@ def test_gate_result_forced_is_false_when_verdict_unchanged():
 
     doc = gate.gate_result(state, prompt_version="v", playbook_used_effective=None)
 
-    assert doc["forced"] is False
+    assert doc["version"] == 2
+    assert doc["forced"] is False and doc["forced_by"] == [] and doc["flagged_by"] == []
     assert doc["playbook_used_effective"] is None
 
 
+def test_gate_result_of_every_check_failing_still_carries_the_models_verdict_twice():
+    """G1 and G2 together: all four checks fire, the verdict is the model's, and each finding is recorded."""
+    parsed, facts = _fp_parsed_and_facts(playbook_rule_applied=None)
+    facts = {**facts, "severity": "high"}
+    bad = {"claim": "fabricated", "quote": "not anywhere", "source": "rule_description"}
+    parsed = dict(parsed, reasons=[bad])
+    state = gate.run_steps_1_to_5(
+        parsed,
+        facts,
+        _fp_blocks(),
+        repaired=False,
+        rule_check=_rule_check_no_rule_cited,
+        scan=_no_findings,
+    )
+    result = gate.finish(state, None)  # and the verifier's answer did not parse
+
+    doc = gate.gate_result(state, prompt_version="v", playbook_used_effective=None)
+
+    assert result["suggested_action"] == "false_positive" and result["reasons"] == []
+    assert (doc["proposed_verdict"], doc["final_verdict"]) == ("false_positive",) * 2
+    assert doc["flagged_by"] == ["step2", "step3", "step4", "step6"]
+    assert doc["forced"] is False and doc["forced_by"] == []
+    assert doc["hallucination_flag"] is True and doc["mismatched_fields"] == ["severity"]
+    assert doc["dropped_reasons"] == [{"index": 0, "why": "not_substring"}]
+    assert doc["missing"] == ["playbook_rule"] and doc["warnings"] == ["no_rule_cited"]
+    assert doc["steps"]["6"] == "invalid"
+
+
 # ---------------------------------------------------------------------------
-# monotonicity — DEC-025/DEC-077: no step un-forces needs_review
+# the verdict is constant — DEC-217 (it replaces DEC-025/DEC-077's "no step un-forces needs_review")
 # ---------------------------------------------------------------------------
 
 
-def test_verdict_is_monotone():
-    """Starting from a state already forced to needs_review, every order of the
-    remaining steps must leave the verdict at needs_review — none may set it back
-    to false_positive or true_positive, even when every individual step's own
-    admission conditions would otherwise be satisfied."""
-    parsed, facts = _fp_parsed_and_facts(
-        playbook_rule_applied="sbf-1"
-    )  # all step-4 conditions hold
-
-    def build_forced_state():
-        state = gate.start(parsed, facts, _fp_blocks(), repaired=False)
-        state.verdict = "needs_review"  # simulate an earlier, unmodelled force
-        state.forced_by = ["manual"]
-        return state
+@pytest.mark.parametrize("answer", ["false_positive", "true_positive"])
+def test_no_step_changes_the_models_verdict_in_any_order(answer):
+    """Every order of steps 2, 3, 4 and 6, each one failing its check: the verdict is the model's answer
+    after every call, so a step can raise a warning and nothing else. A step that wrote `needs_review`
+    (or the other definite answer) would break it."""
+    basis = dict(TRIAGE_V2_FALSE_POSITIVE["structured_basis"], playbook_rule_applied=None)
+    bad_reason = {"claim": "fabricated", "quote": "not anywhere", "source": "rule_description"}
+    parsed = dict(
+        TRIAGE_V2_FALSE_POSITIVE,
+        suggested_action=answer,
+        structured_basis=basis,
+        reasons=[bad_reason],
+    )
+    facts = {
+        **_facts_from(basis),
+        "severity": "critical",
+    }  # steps 2, 3 fail; for FP step 4 fails too
 
     steps = {
         "step2": lambda s: gate.step2_basis(s),
         "step3": lambda s: gate.step3_quotes(s),
-        "step4": lambda s: gate.step4_fp_policy(s, _rule_check_holds),
-        "step6_agree": lambda s: gate.step6_verifier(
-            s, {"agree": True, "structured_only_verdict": "needs_review", "reason": "ok"}
+        "step4": lambda s: gate.step4_fp_policy(s, _rule_check_no_rule_cited),
+        "step6": lambda s: gate.step6_verifier(
+            s, {"agree": False, "structured_only_verdict": "needs_review", "reason": "no"}
         ),
     }
 
     for order in itertools.permutations(steps):
-        state = build_forced_state()
+        state = gate.start(parsed, facts, _fp_blocks(), repaired=False)
         for name in order:
             steps[name](state)
-            assert state.verdict == "needs_review", f"{name} (order {order}) reverted the verdict"
-        assert state.verdict not in ("false_positive", "true_positive")
+            assert state.verdict == answer, f"{name} (order {order}) changed the verdict"
+            assert state.proposed_verdict == answer
+        assert state.flagged_by  # something was flagged ...
+        assert gate.step7_output_guard(state)["suggested_action"] == answer  # ... and kept

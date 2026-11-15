@@ -66,7 +66,9 @@ def test_after_the_override_there_is_a_fourth_value_the_system_alone_may_set():
 
 def test_the_conclusion_vocabularies_sit_beside_the_verdict_ones():
     assert verdicts.MODEL_ACTIONS == ("false_positive", "true_positive")
-    assert verdicts.GATED_ACTIONS == ("false_positive", "needs_review", "true_positive")
+    # DEC-217: ①'s gate no longer sets a verdict of its own (②'s override still does: `need_more_data`)
+    assert verdicts.GATED_ACTIONS == verdicts.MODEL_ACTIONS
+    assert verdicts.STORED_ACTIONS == ("false_positive", "needs_review", "true_positive")
 
 
 def test_the_views_label_table_holds_the_gated_vocabulary():

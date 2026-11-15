@@ -20,7 +20,8 @@ against the labels an admin gave by hand.
   arm reads the newest lookup created before it. Nothing is looked up again; a subject with no usable lookup is
   counted (failed lookups by kind, "no lookup", "budget") and scored without RAG.
 * **The model's TP.** ①: ``proposed_verdict == "true_positive"``. ②: ``model_conclusion ==
-  "confirmed_incident"``. **Held.** ①: ``final_verdict == "needs_review"``. ②: a non-empty ``held_by``, or a
+  "confirmed_incident"``. **Held.** ①: ``final_verdict == "needs_review"`` (0 for a run since DEC-217: the gate's checks are warnings
+  beside the model's verdict, not holds). ②: a non-empty ``held_by``, or a
   stored ``need_more_data`` beside a definite ``model_conclusion``.
 * **Leaks** (reported, never silent). ``same_run``: a matched entry whose source alert or case lies in the
   subject's own run. ``after_cutoff``: the entry's ``approved_at`` is later than ``--kb-cutoff``, which
@@ -313,7 +314,9 @@ class Seen:
 @dataclass(frozen=True)
 class ArmRow:
     """One subject in one arm: closed tokens and numbers, nothing a model or an alert wrote. `model_tp` is
-    None when the model gave no answer (`outcome` says why); `held` is the gate's or the override's hold.
+    None when the model gave no answer (`outcome` says why); `held` is the hold: ② 's override, and for ① a
+    `final_verdict` of `needs_review`, which no new run has (DEC-217: the gate flags, it no longer holds), so it
+    reads False there.
     """
 
     tier: int

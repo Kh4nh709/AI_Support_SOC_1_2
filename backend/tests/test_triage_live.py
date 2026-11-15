@@ -383,6 +383,102 @@ def test_check_live_fails_on_a_surviving_false_positive_with_missing(live_db):
     assert len(summary.failures) == 1
 
 
+def test_the_fp_missing_condition_reads_flagged_by_in_its_sql():
+    """DEC-217: since then a flagged `false_positive` keeps a non-empty `missing`, so the condition must tell a
+    version 2 row (its `flagged_by` array names `step4`: the warning is the gate working) from a version 1 row
+    that survived step 4. The behaviour is the three db tests below; this one needs no database and pins that
+    the statement the live check runs carries the distinction."""
+    sql = triage_live._FACTS_SQL
+    clause = sql[sql.index("'fp_with_missing'") : sql.index("'forced_rows'")]
+    assert "flagged_by" in clause and "step4" in clause
+
+
+@pytest.mark.db
+def test_check_live_accepts_a_version_2_false_positive_whose_missing_is_flagged_at_step_4(live_db):
+    """DEC-217: every `false_positive` the gate's step 4 found a failed condition for is stored as the
+    model's own `false_positive` with `missing` filled and `step4` in `flagged_by`. That is the gate working,
+    not a proposal that slipped through, so the live check must not fail on the first new runs."""
+    _seed_healthy(live_db, 3)
+    _run(
+        live_db,
+        _alert(live_db, "fp-flagged"),
+        result={"suggested_action": "false_positive"},
+        gate_result={
+            "version": 2,
+            "forced": False,
+            "forced_by": [],
+            "flagged_by": ["step2", "step4", "step6"],
+            "missing": ["asset_criticality", "playbook_rule"],
+        },
+    )
+
+    summary = check_live(live_db, want=3)
+
+    assert summary.ok is True and summary.failures == []
+    assert summary.false_positive_rows == 1  # it is a false_positive proposal ...
+    assert summary.fp_with_missing == 0  # ... whose non-empty `missing` is explained
+
+
+@pytest.mark.db
+def test_check_live_fails_on_a_version_2_false_positive_with_missing_that_step_4_did_not_flag(
+    live_db,
+):
+    """A version 2 row with a non-empty `missing` and no `step4` in `flagged_by` is the inconsistency the
+    condition exists for: the gate recorded a failed policy condition and did not say it flagged the run.
+    """
+    _seed_healthy(live_db, 3)
+    for alert_id, flagged_by in (("fp-no-step4", ["step2", "step6"]), ("fp-empty", [])):
+        _run(
+            live_db,
+            _alert(live_db, alert_id),
+            result={"suggested_action": "false_positive"},
+            gate_result={
+                "version": 2,
+                "forced": False,
+                "forced_by": [],
+                "flagged_by": flagged_by,
+                "missing": ["asset_criticality"],
+            },
+        )
+
+    summary = check_live(live_db, want=3)
+
+    assert summary.ok is False
+    assert summary.fp_with_missing == 2 and summary.false_positive_rows == 2
+    assert len(_failures_naming(summary, triage_live.COND_FP_MISSING)) == 1
+    assert len(summary.failures) == 1
+
+
+@pytest.mark.db
+def test_check_live_still_fails_on_a_version_1_false_positive_with_missing(live_db):
+    """A version 1 document (no `flagged_by` array: absent, `null`, or not a list) keeps the old reading, even
+    when `forced_by` names `step4`: a `false_positive` the old gate should have forced away."""
+    _seed_healthy(live_db, 3)
+    for alert_id, extra in (
+        ("fp-v1", {}),
+        ("fp-v1-null", {"flagged_by": None}),
+        ("fp-v1-garbled", {"flagged_by": "step4"}),
+    ):
+        _run(
+            live_db,
+            _alert(live_db, alert_id),
+            result={"suggested_action": "false_positive"},
+            gate_result={
+                "version": 1,
+                "forced": False,
+                "forced_by": ["step4"],
+                "missing": ["asset_criticality"],
+                **extra,
+            },
+        )
+
+    summary = check_live(live_db, want=3)
+
+    assert summary.ok is False
+    assert summary.fp_with_missing == 3 and summary.false_positive_rows == 3
+    assert len(_failures_naming(summary, triage_live.COND_FP_MISSING)) == 1
+
+
 @pytest.mark.db
 def test_check_live_fails_on_a_failed_triage_job(live_db):
     _seed_healthy(live_db, 3)

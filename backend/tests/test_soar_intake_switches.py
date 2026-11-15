@@ -10,10 +10,11 @@ One scenario, built the way the stream builds it and not row by row: two alerts 
 `infra.intake.receive` (the webhook's own function), `run_pipeline_job` with the four switches read
 from the environment, and `run_triage_job` with the fake adapter, one alert on the blind arm and one
 on the visible arm (`pipeline._suggestion_visible` decides, from the alert id). The "unknown"
-context makes ① 's `false_positive` fall to `needs_review` at gate step 4 (`test_pipeline.py`), so
-both `triage.suggested` and `llm.gate_forced` are written for each alert: the two events whose bare
-presence under a blind alert would tell its verdict. The visible alert is the control of every
-assertion about the blind one (DEC-025): the same route, the same kind of row, shown whole.
+context makes gate step 4 flag ① 's `false_positive` (DEC-217: a warning, the verdict stays; `test_pipeline.py`),
+so `triage.suggested` is written for each alert, and the scenario adds the `llm.gate_forced` row an old run
+left (the job stopped writing it): the two events whose bare presence under a blind alert would tell its
+verdict. The visible alert is the control of every assertion about the blind one (DEC-025): the same route,
+the same kind of row, shown whole.
 
 The database is a scratch one (`tests/scratch_db.py`) and each test rolls its connection back.
 """
@@ -28,6 +29,7 @@ from types import SimpleNamespace
 
 import psycopg
 import pytest
+from app.audit.events import write_event
 from app.infra import config, intake
 from app.infra.auth import Claims
 from app.infra.jobs import Job
@@ -96,7 +98,8 @@ class _FakeComplete(FakeLLM):
 
 def _answers() -> list[dict]:
     """① says `false_positive` under `sbf-1` on facts that are all "unknown" (what the pipeline
-    wrote with enrichment off): step 4 forces `needs_review`; the verifier agrees with that."""
+    wrote with enrichment off): step 4 flags it (DEC-217); the verifier answers `needs_review`, which step 6
+    flags too."""
     proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
     proposal["structured_basis"] = {
         "severity": "medium",
@@ -143,6 +146,21 @@ def stream(sdb, monkeypatch):
             sdb,
             Job(job_id=-1, job_type="triage", subject_id=alert_id, attempts=1),
             adapter=_FakeComplete(responses=_answers()),
+        )
+        # DEC-217: the job no longer writes `llm.gate_forced` (nothing is forced). A run from before it did, and
+        # its row must still stay off the page of an alert nobody has decided, so the scenario writes one, as
+        # the old job did: the event whose bare presence tells the verdict.
+        write_event(
+            sdb,
+            "llm.gate_forced",
+            alert_id,
+            "system",
+            payload={
+                "proposed": "false_positive",
+                "final": "needs_review",
+                "forced_by": ["step4"],
+                "missing": ["asset_criticality"],
+            },
         )
     admin_id = insert_user(sdb, "admin")
     claims = Claims(user_id=admin_id, username="p12t01-admin", role="admin", iat=0.0, exp=0.0)
@@ -197,13 +215,13 @@ def test_the_queue_and_the_alert_view_hide_the_suggestion_of_the_blind_alert(str
     by_id = {row["alert_id"]: row for row in queue.list_queue(db).rows}
     assert set(by_id) >= {stream.blind, stream.visible}
     assert visibility.ANALYST_HIDE.isdisjoint(by_id[stream.blind])  # not one suggestion key
-    assert by_id[stream.visible]["suggested_action"] == "needs_review"  # the control: shown whole
+    assert by_id[stream.visible]["suggested_action"] == "false_positive"  # the control: shown whole
 
     blind_view = queue.get_alert_view(db, stream.blind)
     visible_view = queue.get_alert_view(db, stream.visible)
     assert blind_view is not None and visible_view is not None
     assert visibility.ANALYST_HIDE.isdisjoint(blind_view)
-    assert visible_view["suggestion"]["suggested_action"] == "needs_review"
+    assert visible_view["suggestion"]["suggested_action"] == "false_positive"
 
 
 @pytest.mark.db
@@ -242,7 +260,7 @@ def test_the_usage_list_hides_the_outcome_and_subject_of_a_run_on_the_blind_aler
     hidden = recent[run_ids[blind][0]]  # the run stays listed...
     assert hidden["outcome"] is None and hidden["subject_id"] is None  # ...without what ① said
     shown = recent[run_ids[visible][0]]  # the control
-    assert shown["outcome"] == "needs_review" and shown["subject_id"] == visible
+    assert shown["outcome"] == "false_positive" and shown["subject_id"] == visible
     assert blind not in json.dumps(recent)
 
 

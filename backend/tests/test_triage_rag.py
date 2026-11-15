@@ -1328,12 +1328,13 @@ _FP_SEED = {
 }
 
 
-#: A verifier that agrees with the only verdict the structured facts allow, so step 4 is the one
-#: step that forces the answer (a disagreeing verifier would force it at step 6 as well).
-VERIFIER_AGREES_NEEDS_REVIEW = {
+#: A verifier that agrees with the model's own `false_positive` (DEC-217: the verdict is not changed by
+#: a flag), so step 4 is the one step that flags the answer (a disagreeing verifier would flag it at step 6
+#: as well).
+VERIFIER_AGREES_FALSE_POSITIVE = {
     "agree": True,
-    "structured_only_verdict": "needs_review",
-    "reason": "No signed rule is cited, so the facts alone cannot close the alert.",
+    "structured_only_verdict": "false_positive",
+    "reason": "Nothing in the structured facts contradicts the model's false_positive.",
 }
 
 
@@ -1343,13 +1344,11 @@ def false_positive_citing(rule: str | None) -> dict:
 
 
 @pytest.mark.db
-def test_an_entry_id_cited_as_the_playbook_rule_is_unknown_rule_and_needs_review(
-    db, rag_on
-) -> None:
+def test_an_entry_id_cited_as_the_playbook_rule_is_unknown_rule_and_flagged(db, rag_on) -> None:
     alert_id = _seed_alert(db, **_FP_SEED)
     match = approved(db, LONG_A, "rat_giong")
     put_lookup(db, alert_id, matches=[match])
-    llm = fake(false_positive_citing(match["entry_id"]), VERIFIER_AGREES_NEEDS_REVIEW)
+    llm = fake(false_positive_citing(match["entry_id"]), VERIFIER_AGREES_FALSE_POSITIVE)
 
     run_triage_job(db, _job(alert_id), adapter=llm)
 
@@ -1357,8 +1356,10 @@ def test_an_entry_id_cited_as_the_playbook_rule_is_unknown_rule_and_needs_review
         "SELECT result, gate_result FROM llm_runs WHERE subject_id = %s AND role = 'proposer'",
         (alert_id,),
     ).fetchone()
-    assert result["suggested_action"] == "needs_review"  # an entry is not a signed rule
-    assert gate["proposed_verdict"] == "false_positive" and gate["forced_by"] == ["step4"]
+    # an entry is not a signed rule: a step 4 warning, and the verdict stays the model's own (DEC-217)
+    assert result["suggested_action"] == "false_positive"
+    assert gate["proposed_verdict"] == "false_positive" and gate["flagged_by"] == ["step4"]
+    assert gate["forced"] is False and gate["forced_by"] == []
     assert gate["missing"] == ["playbook_rule"] and gate["warnings"] == ["unknown_rule"]
     assert proposer_row(db, alert_id)["rag_lookup_id"] is not None  # and the section was there
 
@@ -1368,7 +1369,7 @@ def test_the_gate_decides_the_same_with_and_without_the_section(db, rag_on, cfg)
     alert_id = _seed_alert(db, **_FP_SEED)
     match = approved(db, LONG_A, "rat_giong")
     put_lookup(db, alert_id, matches=[match])
-    answers = [false_positive_citing(match["entry_id"]), VERIFIER_AGREES_NEEDS_REVIEW]
+    answers = [false_positive_citing(match["entry_id"]), VERIFIER_AGREES_FALSE_POSITIVE]
     on = evaluate_alert(
         db,
         alert_id,

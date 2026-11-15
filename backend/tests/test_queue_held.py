@@ -1,15 +1,25 @@
-"""DB tests for P14-T03 (DEC-213): the queue rows and the alert view carry ①'s own conclusion
-(`proposed_action`, `gate_result.proposed_verdict`) and why the system held it (`held_by`,
+"""P14-T03 (DEC-213), DEC-217: the queue rows and the alert view carry ①'s own conclusion
+(`proposed_action`, `gate_result.proposed_verdict`) and which checks raised a warning on it (`held_by`,
 `llm.verdicts.held_reasons`) - and the blind arm (DEC-101) shows neither.
 
+DEC-217 (BV-T1, G3): Tier 1 is served the model's verdict. A new run stores it (`gate_result` version 2,
+`flagged_by`); a stored run the old gate held (version 1: `suggested_action` `needs_review`, `forced_by`)
+is served as its `proposed_verdict` (`verdicts.served_action`), in the alert view (`Suggestion`) and in the
+queue list's `suggested_action` column, without a new model call and without touching `llm_runs`. The
+version 1 fixtures below (`HELD_RESULT`, `HELD_GATE`) are exactly such stored rows.
+
 The fixtures are `test_queue.py`'s: a head through the real transitions, and one `llm_runs` row
-inserted in P3-T10's shape. Every test runs in the `db` fixture's transaction.
+inserted in P3-T10's shape. The `db` tests run in the `db` fixture's transaction; the ones without the
+mark need no database (`_suggestion_of`, and the SQL of the queue's `suggested_action` column run on
+an in-memory SQLite, whose `->>` is PostgreSQL's for these documents).
 """
 
 from __future__ import annotations
 
 import copy
 import json
+import sqlite3
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -34,10 +44,12 @@ from tests.test_queue import (
     _walk_keys,
 )
 
-#: The model concluded `false_positive`; gate step 4 held it on a critical asset (P14-T03 spec 4.3).
+#: A VERSION 1 run: the model concluded `false_positive`; gate step 4 held it on a critical asset
+#: (P14-T03 spec 4.3). `llm_runs` is immutable, so rows like this one stay in the database (DEC-217).
 HELD_RESULT: dict[str, Any] = {**RESULT, "suggested_action": "needs_review", "confidence": "medium"}
 HELD_GATE: dict[str, Any] = {
     **GATE,
+    "version": 1,
     "proposed_verdict": "false_positive",
     "final_verdict": "needs_review",
     "forced": True,
@@ -50,6 +62,22 @@ TRUE_POSITIVE_GATE: dict[str, Any] = {
     "proposed_verdict": "true_positive",
     "final_verdict": "true_positive",
     "verifier_verdict": "true_positive",
+}
+#: A VERSION 2 run (DEC-217): step 4 flagged the model's own `false_positive`; the verdict is stored as it is.
+FLAGGED_RESULT: dict[str, Any] = {
+    **RESULT,
+    "suggested_action": "false_positive",
+    "confidence": "medium",
+}
+FLAGGED_GATE: dict[str, Any] = {
+    **GATE,
+    "version": 2,
+    "proposed_verdict": "false_positive",
+    "final_verdict": "false_positive",
+    "forced": False,
+    "forced_by": [],
+    "flagged_by": ["step4"],
+    "missing": ["asset_criticality"],
 }
 
 
@@ -91,10 +119,11 @@ def test_queue_row_of_a_held_verdict_names_the_models_answer_and_the_field(db):
 
     row = _row(db, alert_id)
 
-    assert row["suggested_action"] == "needs_review"
+    # DEC-217: the row stores `needs_review` (version 1), Tier 1 is shown the model's own verdict
+    assert row["suggested_action"] == "false_positive"
     assert row["proposed_action"] == "false_positive"
     assert row["held_by"] == ["fp_policy:asset_criticality"]
-    assert row["gate_forced"] is True
+    assert row["gate_forced"] is True  # what is stored, for a version 1 row
 
 
 @pytest.mark.db
@@ -106,7 +135,8 @@ def test_alert_view_of_a_held_verdict_names_the_models_answer_and_the_field(db):
 
     assert view["proposed_action"] == "false_positive"
     assert view["held_by"] == ["fp_policy:asset_criticality"]
-    assert view["suggestion"]["suggested_action"] == "needs_review"
+    assert view["suggestion"]["suggested_action"] == "false_positive"  # served, not the stored one
+    assert view["suggestion"]["gate"]["forced"] is True  # the version 1 gate, as stored
 
 
 @pytest.mark.db
@@ -139,6 +169,231 @@ def test_the_row_and_the_view_agree_with_held_reasons_and_proposed_action(db):
     for shown in (row, view):
         assert shown["held_by"] == verdicts.held_reasons(HELD_GATE)
         assert shown["proposed_action"] == verdicts.proposed_action(HELD_GATE)
+
+
+# ── DEC-217 G3: a stored version 1 `needs_review` row is served as the model's own verdict ────
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("proposed", ["false_positive", "true_positive"])
+def test_a_stored_needs_review_is_served_as_its_proposed_verdict_in_the_queue_list(db, proposed):
+    alert_id = _queued(db, suggestion_visible=True)
+    _insert_run(
+        db,
+        alert_id,
+        result=HELD_RESULT,
+        gate_result={**HELD_GATE, "proposed_verdict": proposed},
+    )
+
+    row = _row(db, alert_id)
+
+    assert row["suggested_action"] == proposed
+    assert row["proposed_action"] == proposed
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("proposed", ["false_positive", "true_positive"])
+def test_a_stored_needs_review_is_served_as_its_proposed_verdict_in_the_alert_view(db, proposed):
+    alert_id = _queued(db, suggestion_visible=True)
+    gate_result = {**HELD_GATE, "proposed_verdict": proposed}
+    _insert_run(db, alert_id, result=HELD_RESULT, gate_result=gate_result)
+
+    view = get_alert_view(db, alert_id)
+    suggestion = queue.latest_suggestion(db, alert_id)
+
+    assert view["suggestion"]["suggested_action"] == proposed
+    assert suggestion is not None and suggestion.suggested_action == proposed
+    assert queue.latest_suggestions(db, [alert_id])[alert_id].suggested_action == proposed
+
+
+@pytest.mark.db
+def test_the_stored_row_is_not_touched_by_serving_it(db):
+    alert_id = _queued(db, suggestion_visible=True)
+    run_id = _insert_run(db, alert_id, result=HELD_RESULT, gate_result=HELD_GATE)
+
+    _row(db, alert_id)
+    get_alert_view(db, alert_id)
+
+    stored = db.execute(
+        "SELECT result->>'suggested_action', gate_result->>'final_verdict' FROM llm_runs "
+        "WHERE run_id = %s",
+        (run_id,),
+    ).fetchone()
+    assert stored == ("needs_review", "needs_review")
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "gate_result",
+    [None, {}, {"proposed_verdict": "needs_review"}, {"proposed_verdict": 1}],
+    ids=["null", "empty", "needs_review", "garbled"],
+)
+def test_a_stored_needs_review_with_no_usable_proposed_verdict_is_served_as_none(db, gate_result):
+    alert_id = _queued(db, suggestion_visible=True)
+    _insert_run(db, alert_id, result=HELD_RESULT, gate_result=gate_result)
+
+    assert _row(db, alert_id)["suggested_action"] is None
+    assert get_alert_view(db, alert_id)["suggestion"]["suggested_action"] is None
+
+
+@pytest.mark.db
+def test_a_version_2_run_is_served_as_stored_with_its_warnings(db):
+    alert_id = _queued(db, suggestion_visible=True)
+    _insert_run(db, alert_id, result=FLAGGED_RESULT, gate_result=FLAGGED_GATE)
+
+    row, view = _row(db, alert_id), get_alert_view(db, alert_id)
+
+    for shown in (row, view):
+        assert shown["proposed_action"] == "false_positive"
+        assert shown["held_by"] == ["fp_policy:asset_criticality"]  # read from `flagged_by`
+    assert row["suggested_action"] == "false_positive"
+    assert row["gate_forced"] is False
+    assert view["suggestion"]["suggested_action"] == "false_positive"
+    assert view["suggestion"]["gate"]["forced"] is False
+
+
+@pytest.mark.db
+def test_a_version_2_run_flagged_by_every_check_names_them_all_in_the_row_and_the_view(db):
+    gate_result = {
+        **FLAGGED_GATE,
+        "flagged_by": ["step2", "step3", "step4", "step6"],
+        "missing": ["severity", "playbook_rule"],
+        "steps": {"6": "disagree"},
+    }
+    alert_id = _queued(db, suggestion_visible=True)
+    _insert_run(db, alert_id, result=FLAGGED_RESULT, gate_result=gate_result)
+    expected = [
+        "facts_mismatch",
+        "no_verified_quote",
+        "fp_policy:severity",
+        "fp_policy:playbook_rule",
+        "verifier_disagrees",
+    ]
+
+    assert _row(db, alert_id)["held_by"] == expected
+    assert get_alert_view(db, alert_id)["held_by"] == expected
+
+
+@pytest.mark.db
+def test_a_version_1_row_still_reads_its_forced_by_in_the_queue_projection(db):
+    """The queue's projection now carries `flagged_by` too; for a version 1 row that is `null`, and the
+    old reasons must still come out of `forced_by`."""
+    alert_id = _queued(db, suggestion_visible=True)
+    _insert_run(db, alert_id, result=HELD_RESULT, gate_result=HELD_GATE)
+
+    assert "flagged_by" not in HELD_GATE
+    assert _row(db, alert_id)["held_by"] == ["fp_policy:asset_criticality"]
+
+
+# ── the same, with no database: `_suggestion_of`, and the SQL twin of `served_action` ─────────
+
+
+_NOW = datetime(2026, 11, 15, 9, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("proposed", ["false_positive", "true_positive"])
+def test_suggestion_of_serves_a_stored_needs_review_as_the_proposed_verdict(proposed):
+    got = queue._suggestion_of(
+        "run-1", HELD_RESULT, {**HELD_GATE, "proposed_verdict": proposed}, _NOW
+    )
+
+    assert got is not None
+    assert got.suggested_action == proposed
+    assert got.confidence == "medium"
+    # the gate as stored, version 1 included: the page's gate line is a record
+    assert got.gate["forced"] is True and got.gate["forced_by"] == ["step4"]
+    assert got.gate["final_verdict"] == "needs_review"
+
+
+def test_suggestion_of_keeps_a_stored_definite_verdict():
+    for result, gate_result in (
+        (TRUE_POSITIVE_RESULT, TRUE_POSITIVE_GATE),
+        (FLAGGED_RESULT, FLAGGED_GATE),
+        # the stored verdict wins over a gate_result that says something else
+        ({**RESULT, "suggested_action": "true_positive"}, GATE),
+    ):
+        got = queue._suggestion_of("run-1", result, gate_result, _NOW)
+        assert got is not None and got.suggested_action == result["suggested_action"]
+
+
+@pytest.mark.parametrize("gate_result", [None, {}, [], "x", {"proposed_verdict": "needs_review"}])
+def test_suggestion_of_a_stored_needs_review_with_no_proposed_verdict_has_none(gate_result):
+    got = queue._suggestion_of("run-1", HELD_RESULT, gate_result, _NOW)
+
+    assert got is not None and got.suggested_action is None
+
+
+def test_suggestion_of_a_failed_run_is_still_no_suggestion():
+    assert queue._suggestion_of("run-1", None, HELD_GATE, _NOW) is None
+
+
+#: What the queue's `suggested_action` column is for every stored/proposed pair the database can hold.
+_STORED = ["false_positive", "needs_review", "true_positive", "escalate", None, 5]
+_PROPOSED = ["false_positive", "true_positive", "needs_review", "escalate", None, 1]
+
+
+def _sql_served(stored: Any, proposed: Any, *, alias: str = "r") -> str | None:
+    """The SQL expression for the served verdict (`verdicts.served_action_sql`), run on one stored/proposed
+    pair. `r` is the LATERAL alias of `_QUEUE_SQL`; the two documents are JSON text, as `->>` reads them.
+    """
+    result = json.dumps({"suggested_action": stored})
+    gate_result = json.dumps({"proposed_verdict": proposed})
+    with sqlite3.connect(":memory:") as conn:
+        return conn.execute(
+            f"SELECT {verdicts.served_action_sql(alias)} "
+            f"FROM (SELECT ? AS result, ? AS gate_result) {alias}",
+            (result, gate_result),
+        ).fetchone()[0]
+
+
+def test_the_queue_and_the_pilot_export_use_the_one_copy_of_the_served_sql():
+    """The SQL twin of `served_action` is written once, in `verdicts`; the queue list and the ops export's
+    escalation branch (which must read the same verdict Tier 1 was shown) take it from there."""
+    assert queue._SERVED_ACTION_SQL == verdicts.served_action_sql("r")
+    assert verdicts.served_action_sql("x") == verdicts.served_action_sql("r").replace("r.", "x.")
+
+
+def test_the_served_sql_answers_the_same_under_any_alias():
+    for stored, proposed in (("needs_review", "true_positive"), ("false_positive", None)):
+        expected = verdicts.served_action(
+            {"suggested_action": stored}, {"proposed_verdict": proposed}
+        )
+        assert _sql_served(stored, proposed, alias="llm") == expected
+
+
+@pytest.mark.parametrize("stored", _STORED, ids=repr)
+@pytest.mark.parametrize("proposed", _PROPOSED, ids=repr)
+def test_the_queue_sql_serves_what_served_action_serves(stored, proposed):
+    expected = verdicts.served_action({"suggested_action": stored}, {"proposed_verdict": proposed})
+
+    assert _sql_served(stored, proposed) == expected
+
+
+def test_the_queue_list_selects_the_served_verdict_not_the_stored_one():
+    """The statement `list_queue` runs names the served expression for its `suggested_action` column, and
+    not the bare stored value (`r.result->>'suggested_action'` alone, version 1's `needs_review` too).
+    """
+    statements: list[str] = []
+
+    class _Cursor:
+        def fetchall(self):
+            return []
+
+        def fetchone(self):
+            return (0,)
+
+    class _Conn:
+        def execute(self, statement, params=None):
+            statements.append(str(statement))
+            return _Cursor()
+
+    queue.list_queue(_Conn())  # type: ignore[arg-type]
+
+    (listing,) = [s for s in statements if "FROM alerts a" in s and "LATERAL" in s]
+    assert (
+        "r.result->>'suggested_action',\n" not in listing
+    )  # no bare stored value in the select list
+    assert queue._SERVED_ACTION_SQL in listing
 
 
 # ── step 6: a queue row and the alert view of the same run name the same reason ──────────────
@@ -200,7 +455,7 @@ def test_a_real_gate_result_gives_the_row_and_the_view_the_same_held_by(db, veri
     expected = verdicts.held_reasons(stored)
     assert expected == [reason or "verifier_disagrees"]
     alert_id = _queued(db, suggestion_visible=True)
-    _insert_run(db, alert_id, result=HELD_RESULT, gate_result=stored)
+    _insert_run(db, alert_id, result=FLAGGED_RESULT, gate_result=stored)
 
     row, view = _row(db, alert_id), get_alert_view(db, alert_id)
 

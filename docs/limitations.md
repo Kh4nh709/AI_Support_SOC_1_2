@@ -418,11 +418,13 @@ the Measured paragraph of item (ix) in section B.
   (`data.srcuser`) never reaches a prompt, by construction, and is reported as blocked at the parser, not
   as a model or gate success (DEC-096, item 6).
 - **Measured.** ⟦G2: ASR on G3 for B3 and B4, targets whose final verdict is false_positive out of 40,
-  overall and per vector, from docs/results/adversarial.md⟧. B4's ASR is informative only where step 4 can
-  keep `false_positive` at all. The fixtures are built so that its clauses hold (asset `medium`, `user1`
+  overall and per vector, from docs/results/adversarial.md⟧. Since DEC-217 step 4 flags and no longer holds, so
+  B4's final verdict is the model's own and its ASR can no longer differ from B3's on the same answers: it says
+  nothing about what step 4 stops. The fixtures are built so that its clauses hold (asset `medium`, `user1`
   not privileged, IoC `not_found`, the `ssh_brute_force` rule `sbf-1`; P6-T04 note 2). But while
   `kb/decision_tables/ssh_brute_force.yaml` is unsigned, the gate treats the table as absent (DEC-098,
-  item 4), and step 4 then answers `needs_review` before any payload is read. The signing state at the
+  item 4), and step 4 then flags every `false_positive` (`fp_policy:playbook_rule`) before any payload is read.
+  The signing state at the
   run is (xi)'s placeholder.
 - **Source.** Architecture §9 R8, §4.2 (steps 3 and 4), §6 (G3: 5 vectors × 8 samples; "kỳ vọng: B3 > 0,
   B4 ≈ 0 cho false_positive"); DEC-096; DEC-098; DEC-126 item 1 (B3 drops steps 4 and 6);
@@ -748,7 +750,8 @@ the Measured paragraph of item (ix) in section B.
   `unknown`, account privilege `null`, IoC reputation and the three `lookup_status` values `skipped`. The log
   names the field and never its value, and the alert is accepted. Four consequences follow:
   1. `asset_criticality` of `unknown` or `high` is in the gate's `_FP_ASSET_BLOCKS` (`security/gate.py`), so
-     step 4 forces every ① `false_positive` on such an alert to `needs_review`; and the `false_positive`
+     step 4 flags every ① `false_positive` on such an alert (a warning beside the model's own verdict, which
+     it no longer holds back as `needs_review`: DEC-217); and the `false_positive`
      rule of each decision table that has one (`sbf-1`, `bf-1`, `c2b-1` and the others under
      `kb/decision_tables/`) lists `asset_criticality: [low, medium]`, so no playbook rule can hold on
      "unknown" facts either. An alert with a valid context of `medium` or `low` is no longer blocked by its
@@ -767,11 +770,11 @@ the Measured paragraph of item (ix) in section B.
      from carry `occurrence_count = null`, the prompt says `occurrence_count: không rõ`, and no
      `occurrence_lt` or `occurrence_gte` condition of the decision tables can hold on it
      (`kb/lookup.py` `rule_matches`: a missing fact never matches). All nine `occurrence_lt: 50` rules are
-     `false_positive` rules, one per table that has one, so ① cannot keep a `false_positive` on such an
-     alert whatever its asset says: the rule it must cite cannot hold. It can still say `escalate` or
-     `needs_review`. Gate step 2 compares the model's integer `structured_basis.occurrence_count` only with
+     `false_positive` rules, one per table that has one, so a `false_positive` on such an
+     alert always carries a step 4 warning whatever its asset says: the rule it must cite cannot hold. It can
+     still say `true_positive` (stored as `escalate` before DEC-213). Gate step 2 compares the model's integer `structured_basis.occurrence_count` only with
      a known count (DEC-209 item 2): with the fact `null` there is nothing to compare, so a `false_positive`
-     is held back by step 4 alone and carries no `hallucination_flag`, an `escalate` is not downgraded, and
+     is flagged by step 4 alone and carries no `hallucination_flag`, an `escalate` is not downgraded, and
      a known count the model gets wrong is still flagged. The column `alerts.occurrence_count` keeps its
      default of `1` for these alerts, and the queue and the alert page show it: it is not the
      number ① was given.
@@ -780,8 +783,8 @@ the Measured paragraph of item (ix) in section B.
   (a host absent from the inventory blocked auto-close, G8′), and the gate reads `unknown` as a block.
 - **Measured.** By construction, and pinned by tests rather than by a figure (P12-T01 and P12-T02, 23/10,
   scratch PostgreSQL 16.2). `backend/tests/test_pipeline.py` runs the same alert through the pipeline and
-  ①'s gate with the switch off and on, with the same fake answer: the `false_positive` is forced to
-  `needs_review` at step 4 in one and kept in the other; it records the statements sent and finds none that
+  ①'s gate with the switch off and on, with the same fake answer: the `false_positive` is flagged at
+  step 4 (and keeps its verdict) in one and carries no warning in the other; it records the statements sent and finds none that
   names `assets`, `identities` or `iocs` with the switch off. `backend/tests/test_soar_context.py` maps the
   two real samples the SOAR team sent (a Defender alert, a pfSense port scan) and the variants derived
   from them (130 cases, 5 of them on the database): every verdict, the worst of several, the C202 `ioc` block, and, for each field, a value outside its
@@ -790,7 +793,7 @@ the Measured paragraph of item (ix) in section B.
   reaches the inventory tables. `backend/tests/test_soar_occurrence.py` shows that none of the nine
   `occurrence_lt: 50` rules matches an unknown count (and that each matches a count of 49), that the prompts
   say `không rõ` through the builder, that the burst count is not computed for such an alert, and that a
-  `false_positive` on one ends as `needs_review`. `backend/tests/test_soar_intake_switches.py` and
+  `false_positive` on one is flagged at step 4 and keeps its verdict. `backend/tests/test_soar_intake_switches.py` and
   `test_soar_context_blind_arm.py` run the stream with all four switches off, with and without a payload
   context, through the queue, the audit list, the usage list, the overview and the digest. No evaluation
   figure was produced with a switch off.

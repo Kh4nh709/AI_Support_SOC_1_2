@@ -18,7 +18,7 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
   display blob (`tier1/soar_view.py`), `None` for an alert that carries none. INT-T02 adds
   `llm_stopped_by`: why the newest ① run gave up, a `visibility.ANALYST_HIDE` key (`latest_stopped_by`
   below, the one-column sibling of `latest_suggestion`). P14-T03 (DEC-213) adds `proposed_action`
-  and `held_by`: the model's own conclusion and why the system held it back (`latest_suggestion_held` below, the
+  and `held_by`: the model's own conclusion and which checks raised a warning on it (`latest_suggestion_held` below, the
   same one read of the newest run that builds `suggestion`; the queue rows carry them from their own statement). All of these are
   `visibility.ANALYST_HIDE` keys. P14-T07 (DEC-213) adds `rag`, `{best_pct, not_applied}` (`llm.rag_view`): how
   strongly the lookup the newest run's prompt held matched approved knowledge, and the closed kind of its
@@ -29,6 +29,13 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
   and this function is where to follow it. `latest_suggestions` is the same read for many
   alerts in ONE statement (P11-T20 row 20: the digest read one query per row), and shares
   the row-to-`Suggestion` step, so the two cannot drift apart.
+
+DEC-217 (BV-T1, G3): what Tier 1 is shown as ①'s verdict is `verdicts.served_action` of the stored run,
+never the raw `result.suggested_action`: a run the pre-DEC-217 gate held (stored `needs_review`, version 1
+`gate_result`; `llm_runs` is immutable) is served as the model's own `proposed_verdict`. `Suggestion`
+(`_suggestion_of`) and the queue list's `suggested_action` column (`_SERVED_ACTION_SQL`, its SQL twin) say
+it, so the alert page, `decide`'s `llm_suggestion` and the digest, which read them, do too. The admin LLM
+page and the audit log show stored rows as they are.
 
 Both readers pass their dict through `visibility.strip` before returning it, so the blind
 branch (context pack §6.4) is enforced here, never in the client. `risk_score` never
@@ -140,8 +147,11 @@ _BAND_CASE_SQL, _BAND_CASE_PARAMS = _band_case()
 @dataclasses.dataclass(frozen=True)
 class Suggestion:
     """The latest ① proposer run for one alert, in the shape the detail page and P4-T03's
-    `decide` consume. `suggested_action` is `result["suggested_action"]` — already the
-    gated verdict (G11), never `gate_result.proposed_verdict`."""
+    `decide` consume. `suggested_action` is the verdict Tier 1 is served (`verdicts.served_action`,
+    DEC-217): `result["suggested_action"]` for a run that stores the model's own answer, which is every
+    run since DEC-217 (G11), and `gate_result.proposed_verdict` for a stored `needs_review` (a run the old
+    gate held). `gate` is the stored gate document as it is: `forced` is what the run says, whatever its
+    version."""
 
     run_id: str
     suggested_action: str | None
@@ -188,7 +198,7 @@ def _suggestion_of(
     reasons = [r for r in (_reason(item) for item in raw_reasons[:10]) if r is not None]
     return Suggestion(
         run_id=str(run_id),
-        suggested_action=result.get("suggested_action"),
+        suggested_action=verdicts.served_action(result, gate_result),
         confidence=result.get("confidence"),
         reasons=reasons,
         gate={
@@ -218,8 +228,9 @@ def latest_suggestion_held(
 ) -> tuple[Suggestion | None, str | None, list[str]]:
     """`(suggestion, proposed_action, held_by)` from ONE read of the newest proposer run
     (`_SUGGESTION_SQL`): `latest_suggestion`'s `Suggestion`, the model's own definite answer
-    (`gate_result.proposed_verdict`, `verdicts.proposed_action`) and the closed reasons the gate held it
-    back (`verdicts.held_reasons`) - so the three are the same run by construction, not by two statements
+    (`gate_result.proposed_verdict`, `verdicts.proposed_action`) and the closed reasons of the checks that
+    raised a warning on it (`verdicts.held_reasons`; DEC-217: warnings beside the verdict, before it the
+    reasons the gate held it back) - so the three are the same run by construction, not by two statements
     that happen to agree. The alert view's `proposed_action` and `held_by` (P14-T03, DEC-213). `(None, None,
     [])` when there is no run or its `result` is NULL (① failed: an older run does not stand in), and
     `(suggestion, None, [])` for a `gate_result` that is missing or garbled. Like `latest_suggestion` it
@@ -357,6 +368,12 @@ _QUEUE_COLUMNS = (
     "gate_held",
     "needs_retriage",
 )
+#: DEC-217 (G3): `verdicts.served_action` in SQL, over the LATERAL alias `r`: the stored verdict when it is one
+#: of the model's two; for a stored `needs_review` (version 1) the model's own `gate_result.proposed_verdict`
+#: when that is one of the two; else NULL. The text is `verdicts.served_action_sql`, the one copy (the ops export
+#: reads ① at an escalation with it too); `tests/test_queue_held.py` runs it against every stored/proposed pair
+#: and holds it to `served_action`'s answers.
+_SERVED_ACTION_SQL = verdicts.served_action_sql("r")
 _NEEDS_RETRIAGE_SQL = """(a.triaged_count > 0 AND
             (a.occurrence_count >= a.triaged_count * %(retriage_factor)s
              OR a.occurrence_count - a.triaged_count >= %(retriage_abs_delta)s))"""
@@ -378,12 +395,13 @@ _QUEUE_SQL = """
            a.risk_score, a.occurrence_count, a.triaged_count, a.first_seen_at, a.last_seen_at,
            a.alert_time, a.suggestion_visible, a.triage_status, a.status,
            r.run_id,
-           r.result->>'suggested_action',
+           {served_action},
            r.result->>'confidence',
            r.gate_result->>'forced',
            CASE WHEN r.result IS NULL THEN NULL ELSE jsonb_build_object(
                'proposed_verdict', r.gate_result->'proposed_verdict',
                'forced_by', r.gate_result->'forced_by',
+               'flagged_by', r.gate_result->'flagged_by',
                'missing', r.gate_result->'missing',
                'steps', jsonb_build_object('6', r.gate_result->'steps'->'6')) END AS gate_held,
            {needs_retriage} AS needs_retriage
@@ -550,7 +568,12 @@ def list_queue(
 
     where, params = _filters(band, category, agent, status, actor_id, with_band=True)
     cur = conn.execute(
-        _QUEUE_SQL.format(where=where, needs_retriage=_NEEDS_RETRIAGE_SQL, order_by=order_by),
+        _QUEUE_SQL.format(
+            where=where,
+            needs_retriage=_NEEDS_RETRIAGE_SQL,
+            order_by=order_by,
+            served_action=_SERVED_ACTION_SQL,
+        ),
         {
             **params,
             "retriage_factor": RETRIAGE_FACTOR,
@@ -567,7 +590,8 @@ def list_queue(
         if row["run_id"] is not None:
             row["run_id"] = str(row["run_id"])
         row["gate_forced"] = _JSON_BOOL.get(row["gate_forced"])
-        # P14-T03: only the gate keys `verdicts` reads - the model's answer, `forced_by`, `missing` and step 6's
+        # P14-T03: only the gate keys `verdicts` reads - the model's answer, `forced_by` (version 1), `flagged_by`
+        # (version 2; `null` for a version 1 row, which `held_reasons` reads as absent), `missing` and step 6's
         # outcome (what tells `verifier_invalid` from `verifier_disagrees`), never the whole `gate_result`; `strip`
         # drops both results for a blind, undecided head.
         gate_held = row.pop("gate_held")
@@ -732,7 +756,7 @@ def get_alert_view(
     # Why the newest ① run stopped (INT-T02): added BEFORE the strip, so a blind, undecided head
     # loses it with the other ① keys (`visibility.ANALYST_HIDE`), and the labelling page never has it.
     view["llm_stopped_by"] = latest_stopped_by(conn, head_id)
-    # The model's own conclusion and why the system held it (P14-T03): from the very row the suggestion
+    # The model's own conclusion and which checks raised a warning on it (P14-T03): from the very row the suggestion
     # came from, and added BEFORE the strip, so the blind arm and the labelling page never get them.
     view["proposed_action"], view["held_by"] = proposed_action, held_by
     # How strongly the lookup matched and whether the RAG was not applied (P14-T07): the same row again, added

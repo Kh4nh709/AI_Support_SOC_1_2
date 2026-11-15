@@ -581,7 +581,7 @@ def _step3(reasons: list[dict], enrichment=None) -> gate.GateState:
     facts = T.build_facts(inp, None)
     built = T.build_proposer_prompt(inp, facts, None, None, None, cfg=_cfg(), nonce=NONCE)
     state = gate.start(
-        _answer("needs_review", facts, reasons), facts, built.prompt.block_index, repaired=False
+        _answer("false_positive", facts, reasons), facts, built.prompt.block_index, repaired=False
     )
     gate.step3_quotes(state)
     return state
@@ -591,7 +591,7 @@ def test_siem_context_is_a_block_source_and_a_reason_source() -> None:
     assert "siem_context" in wrap.BLOCK_SOURCES
     assert "siem_context" in output_guard.REASON_SOURCES
     facts = T.build_facts(triage_input(), None)
-    answer = _answer("needs_review", facts, [_reason("siem_context", "tier=auto")])
+    answer = _answer("false_positive", facts, [_reason("siem_context", "tier=auto")])
     assert schemas.validate("triage_v2", answer) == []
     assert "siem_context" in schemas.render("triage_v2")
     assert output_guard.enforce(answer)["reasons"][0]["source"] == "siem_context"
@@ -601,8 +601,8 @@ def test_a_quote_of_the_block_survives_step_3() -> None:
     state = _step3([_reason("siem_context", "type=block_ip target=79.79.78.202 tier=auto")])
 
     assert [r["source"] for r in state.reasons] == ["siem_context"]
-    assert state.dropped_reasons == [] and state.verdict == "needs_review"
-    assert state.forced_by == []
+    assert state.dropped_reasons == [] and state.verdict == "false_positive"
+    assert state.flagged_by == []
 
 
 def test_a_kept_quote_of_the_block_goes_through_the_step_7_output_guard() -> None:
@@ -627,7 +627,8 @@ def test_a_quote_that_is_not_in_the_block_is_dropped_not_substring() -> None:
 
     assert state.reasons == []
     assert state.dropped_reasons == [{"index": 0, "why": "not_substring"}]
-    assert state.forced_by == ["step3"]
+    assert state.flagged_by == ["step3"]
+    assert state.verdict == "false_positive"  # DEC-217: flagged, not held
 
 
 def test_a_quote_of_another_block_does_not_count_for_siem_context() -> None:
@@ -644,7 +645,7 @@ def test_an_unknown_source_is_still_unknown_and_so_is_siem_context_without_a_blo
     no_block = _step3([_reason("siem_context", "tier=auto")], enrichment={})
     assert no_block.dropped_reasons == [{"index": 0, "why": "unknown_source"}]
     facts = T.build_facts(triage_input(), None)
-    bad = _answer("needs_review", facts, [_reason("siem_ctx", "x")])
+    bad = _answer("false_positive", facts, [_reason("siem_ctx", "x")])
     assert any("reasons[0].source" in e for e in schemas.validate("triage_v2", bad))
 
 
@@ -788,14 +789,15 @@ def _gated(enrichment: dict, *, holds: bool, **overrides) -> gate.GateState:
     )
 
 
-def test_a_proposer_that_obeys_the_injection_is_still_held_by_the_facts() -> None:
-    """A critical alert: step 4 forbids `false_positive` whatever the proposer was told or quoted."""
+def test_a_proposer_that_obeys_the_injection_is_still_flagged_by_the_facts() -> None:
+    """A critical alert: step 4 flags `false_positive` whatever the proposer was told or quoted (DEC-217: the
+    verdict is the model's own, the warning says the facts do not support it)."""
     injected = _with_injection(mw03_enrichment())
 
     state = _gated(injected, holds=True, severity="critical")
 
     assert state.proposed_verdict == "false_positive"
-    assert state.verdict == "needs_review" and state.forced_by == ["step4"]
+    assert state.verdict == "false_positive" and state.flagged_by == ["step4"]
     assert state.missing == ["severity"]
     assert [r["source"] for r in state.reasons] == ["siem_context"]  # the quote is a real substring
     assert [f.category for f in state.injection_findings] == ["instruction_override"]
@@ -804,18 +806,20 @@ def test_a_proposer_that_obeys_the_injection_is_still_held_by_the_facts() -> Non
 
 def test_the_injection_changes_neither_the_verdict_nor_the_steps_in_either_direction() -> None:
     """The gate reads the facts, not the block: with the injection or without it, the same answer gets the
-    same verdict — held when a fact forbids it, kept when every condition holds."""
+    same verdict (the model's own, DEC-217) and the same warnings — flagged when a fact forbids it, not
+    flagged when every condition holds."""
     plain, injected = mw03_enrichment(), _with_injection(mw03_enrichment())
 
-    for holds, severity, verdict in (
-        (False, "medium", "needs_review"),
-        (True, "critical", "needs_review"),
-        (True, "medium", "false_positive"),
+    for holds, severity, flagged in (
+        (False, "medium", ["step4"]),
+        (True, "critical", ["step4"]),
+        (True, "medium", []),
     ):
         a = _gated(plain, holds=holds, severity=severity)
         b = _gated(injected, holds=holds, severity=severity)
-        assert a.verdict == b.verdict == verdict, (holds, severity)
-        assert a.forced_by == b.forced_by and a.missing == b.missing
+        assert a.verdict == b.verdict == "false_positive", (holds, severity)
+        assert a.flagged_by == b.flagged_by == flagged, (holds, severity)
+        assert a.missing == b.missing
         assert {k: v for k, v in a.steps.items() if k != "5"} == {
             k: v for k, v in b.steps.items() if k != "5"
         }
@@ -1022,6 +1026,9 @@ def test_end_to_end_an_injected_log_is_recorded_and_the_verdict_is_the_one_witho
     ]
     assert INJECTION in ev_inj.built.prompt.block_index["siem_context"].plain
     assert ev_inj.proposed_verdict == ev_clean.proposed_verdict == "false_positive"
-    assert ev_inj.final_verdict == ev_clean.final_verdict == "needs_review"
-    assert ev_inj.forced_by == ev_clean.forced_by
+    # DEC-217: the verdict is the model's own; the verifier answering `needs_review` is a step 6 warning
+    assert ev_inj.final_verdict == ev_clean.final_verdict == "false_positive"
+    assert ev_inj.forced_by == ev_clean.forced_by == ()
+    assert ev_inj.flagged_by == ev_clean.flagged_by
+    assert "step6" in ev_inj.flagged_by
     assert ev_inj.facts == ev_clean.facts

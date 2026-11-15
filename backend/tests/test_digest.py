@@ -146,15 +146,29 @@ def _insert_alert(
     return alert_id
 
 
+#: A stored VERSION 1 run the old gate held (DEC-217): `result.suggested_action` is `needs_review`, the model's
+#: own answer is `gate_result.proposed_verdict`. Tier 1, and so the digest, is served that answer.
+_HELD_V1_TRUE_POSITIVE = {
+    "version": 1,
+    "proposed_verdict": "true_positive",
+    "final_verdict": "needs_review",
+    "forced": True,
+    "forced_by": ["step6"],
+}
+_HELD_V1_FALSE_POSITIVE = {**_HELD_V1_TRUE_POSITIVE, "proposed_verdict": "false_positive"}
+
+
 def _insert_run(
     conn: psycopg.Connection,
     alert_id: str,
     *,
     suggested_action: str | None = "false_positive",
     role: str = "proposer",
+    gate_result: dict | None = None,
 ) -> str:
     """One `llm_runs` row in P3-T10's shape (`test_queue.py`'s own
-    convention)."""
+    convention). `gate_result` defaults to `{}`: a stored `needs_review` row needs the version 1
+    document that names the model's answer to be served as anything."""
     result = {"suggested_action": suggested_action, "confidence": "high", "reasons": []}
     row = conn.execute(
         """
@@ -165,7 +179,7 @@ def _insert_run(
             gen_random_uuid(), 'triage', 'alert', %s, 's', 'u', %s::jsonb, %s, %s::jsonb
         ) RETURNING run_id
         """,
-        (alert_id, json.dumps(result), role, json.dumps({})),
+        (alert_id, json.dumps(result), role, json.dumps(gate_result or {})),
     ).fetchone()
     return str(row[0])
 
@@ -291,7 +305,7 @@ def test_build_membership_both_agreeing_and_disagreeing_clusters(db):
     agree = _insert_alert(db, autoclose_rule_id=rule, occurrence_count=10)
     _insert_run(db, agree, suggested_action="false_positive")
     disagree = _insert_alert(db, autoclose_rule_id=rule, occurrence_count=1)
-    _insert_run(db, disagree, suggested_action="needs_review")
+    _insert_run(db, disagree, suggested_action="needs_review", gate_result=_HELD_V1_TRUE_POSITIVE)
 
     rows = build(db, _DAY)
 
@@ -306,7 +320,7 @@ def test_disagreements_sort_first(db):
     agree = _insert_alert(db, autoclose_rule_id=rule, occurrence_count=10)
     _insert_run(db, agree, suggested_action="false_positive")
     disagree = _insert_alert(db, autoclose_rule_id=rule, occurrence_count=1)
-    _insert_run(db, disagree, suggested_action="needs_review")
+    _insert_run(db, disagree, suggested_action="needs_review", gate_result=_HELD_V1_TRUE_POSITIVE)
 
     rows = build(db, _DAY)
 
@@ -338,18 +352,33 @@ def test_a_true_positive_run_is_listed_as_true_positive_and_is_a_disagreement(db
     ]
 
 
-def test_a_verdict_the_gate_held_is_still_a_disagreement_with_the_rule(db):
-    """The model said `false_positive` and gate step 4 held it as `needs_review` (the reader sees the
-    gated verdict, `result.suggested_action`, never `gate_result.proposed_verdict`): the system did not
-    close it, so the digest still asks a person whether the rule was right to."""
+def test_a_stored_needs_review_is_listed_as_the_models_own_verdict(db):
+    """DEC-217 (G3): the old gate held the model's `true_positive` as `needs_review` (a version 1 run,
+    `llm_runs` being immutable). The digest reads what Tier 1 is served, `served_action`: the model's own
+    answer. The rule closed the cluster, the model would have raised it: a disagreement, listed as
+    `true_positive`."""
     user = _make_user(db)
     rule = _make_autoclose_rule(db, user)
     alert_id = _insert_alert(db, autoclose_rule_id=rule)
-    _insert_run(db, alert_id, suggested_action="needs_review")
+    _insert_run(db, alert_id, suggested_action="needs_review", gate_result=_HELD_V1_TRUE_POSITIVE)
 
     (row,) = build(db, _DAY)
 
-    assert row.suggested_action == "needs_review" and row.disagreement is True
+    assert row.suggested_action == "true_positive" and row.disagreement is True
+
+
+def test_a_stored_needs_review_over_a_false_positive_agrees_with_the_rule(db):
+    """The old gate held the model's `false_positive` (step 4: no rule cited, say). It is served as the
+    `false_positive` the model said, which agrees with the auto-close rule: no longer a disagreement just
+    because the gate held it."""
+    user = _make_user(db)
+    rule = _make_autoclose_rule(db, user)
+    alert_id = _insert_alert(db, autoclose_rule_id=rule)
+    _insert_run(db, alert_id, suggested_action="needs_review", gate_result=_HELD_V1_FALSE_POSITIVE)
+
+    (row,) = build(db, _DAY)
+
+    assert row.suggested_action == "false_positive" and row.disagreement is False
 
 
 def test_build_ties_break_on_occurrence_count_then_alert_id(db):
@@ -623,7 +652,7 @@ def test_review_writes_autoclose_reviewed_event_for_every_verdict(db):
     user = _make_user(db)
     rule = _make_autoclose_rule(db, user)
     alert_id = _insert_alert(db, autoclose_rule_id=rule)
-    _insert_run(db, alert_id, suggested_action="needs_review")
+    _insert_run(db, alert_id, suggested_action="needs_review", gate_result=_HELD_V1_FALSE_POSITIVE)
 
     review(db, alert_id, "wrong", user)
 
@@ -634,7 +663,9 @@ def test_review_writes_autoclose_reviewed_event_for_every_verdict(db):
     assert str(actor_id) == user
     assert payload["verdict"] == "wrong"
     assert payload["autoclose_rule_id"] == rule
-    assert payload["suggested_action"] == "needs_review"
+    assert (
+        payload["suggested_action"] == "false_positive"
+    )  # served (DEC-217), not the stored `needs_review`
     assert payload["run_id"] is not None
 
 
@@ -765,7 +796,7 @@ def test_to_csv_byte_stable_across_two_builds(db):
     agree = _insert_alert(db, autoclose_rule_id=rule, occurrence_count=3)
     _insert_run(db, agree, suggested_action="false_positive")
     disagree = _insert_alert(db, autoclose_rule_id=rule, occurrence_count=1)
-    _insert_run(db, disagree, suggested_action="needs_review")
+    _insert_run(db, disagree, suggested_action="needs_review", gate_result=_HELD_V1_TRUE_POSITIVE)
 
     csv_1 = to_csv(build(db, _DAY))
     csv_2 = to_csv(build(db, _DAY))
@@ -794,7 +825,7 @@ def test_to_csv_header_and_line_endings(db):
     user = _make_user(db)
     rule = _make_autoclose_rule(db, user)
     alert_id = _insert_alert(db, autoclose_rule_id=rule, occurrence_count=2)
-    _insert_run(db, alert_id, suggested_action="needs_review")
+    _insert_run(db, alert_id, suggested_action="needs_review", gate_result=_HELD_V1_TRUE_POSITIVE)
 
     text = to_csv(build(db, _DAY))
 
