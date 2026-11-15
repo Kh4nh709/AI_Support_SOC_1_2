@@ -50,7 +50,7 @@ import {
   knowledgeWarningText,
   labelOf,
 } from "../../strings";
-import { AiColumn, GateLine, GateSteps, Reasons } from "../tier1/AiColumn";
+import { FlatAiColumn, GateLine, GateSteps, Reasons } from "../tier1/FlatAiColumn";
 import {
   Accounts,
   Correlation,
@@ -637,7 +637,7 @@ function AlertWork({ source }: { source: KnowledgeSource }) {
       <Enrichment view={alert} />
       <Correlation view={alert} />
       <Playbook view={alert} />
-      <AiColumn view={alert} />
+      <FlatAiColumn view={alert} />
       {alert.suggestion != null && <SuggestionDetail suggestion={alert.suggestion} />}
     </div>
   );
