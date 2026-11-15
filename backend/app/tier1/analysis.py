@@ -11,9 +11,10 @@ outcomes, never from the model's text.
      "checks": [{id, outcome, detail}], "check_totals": {passed, applicable, warnings}, the gate steps and the tile
      "rag": {state, failure, best_pct, floor_pct, threshold_pct, scored, candidates},   `llm.rag_view.rag_panel` + entries
      "history": {key, total, by_conclusion, last_seen} | None,
-     "playbook": {name, rule_id, rule_action},                                          the decision table, today
+     "playbook": {name, rule_id, rule_action, rule_table_reviewed},                     the decision table, today
      "highlights": [{direction, code, params}],                                         at most four, server-built
      "tech": {input_tokens, output_tokens, latency_ms, cost_usd, analysed_at, mitre_ids, correlated_at_analysis}}
+                                                       (tokens, time, cost: the proposer row plus its verifier row)
 
 **The model's name is not an input.** `StoredRun` has no model column and the statement that feeds it
 (`queue._SUGGESTION_SQL`) does not select one (the Owner's requirement, goal G5: the model's name appears nowhere in
