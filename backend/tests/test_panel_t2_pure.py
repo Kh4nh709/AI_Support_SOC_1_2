@@ -14,6 +14,7 @@ The view is `tier2.investigation_view.present_run`; the facts it takes from the 
 
 from __future__ import annotations
 
+import ast
 import copy
 import datetime as dt
 import json
@@ -22,6 +23,8 @@ import uuid
 
 import pytest
 from app.llm import results
+from app.llm.builder import rag_not_applied_warning
+from app.rag.failures import FAILURE_KINDS
 from app.tier2 import investigation_view as view
 
 from tests.fakes.llm import INVESTIGATE_V3_OK, INVESTIGATE_V4_OK
@@ -34,11 +37,31 @@ def _t(minutes: int) -> dt.datetime:
     return T0 + dt.timedelta(minutes=minutes)
 
 
-def _row(result, check=None, *, usage=(1200, 340, 5400, 0.00123), trace=None) -> tuple:
+def _row(
+    result,
+    check=None,
+    *,
+    usage=(1200, 340, 5400, 0.00123),
+    trace=None,
+    warnings=None,
+    matches=None,
+    ranked=None,
+) -> tuple:
     """A row of `investigation_view._RUN_COLUMNS`: run_id, created_at, stopped_by, result, evidence_check, agent_trace,
     citation_warnings, the lookup's `matches` and `ranked`, then the four figures of the run (input tokens, output
     tokens, latency, cost)."""
-    return (uuid.uuid4(), CREATED, None, result, check or {}, trace, None, None, None, *usage)
+    return (
+        uuid.uuid4(),
+        CREATED,
+        None,
+        result,
+        check or {},
+        trace,
+        warnings,
+        matches,
+        ranked,
+        *usage,
+    )
 
 
 def _alerts(times: dict[str, dt.datetime], **kw) -> view.CaseAlerts:
@@ -472,6 +495,230 @@ def test_the_readers_of_the_new_fields_are_where_the_stored_shapes_are_read():
     assert results.timeline_alert_ids("x") == []
 
 
+# --------------------------------------------------------------------------- the raw timeline's four keys
+
+
+def test_a_raw_timeline_row_carries_only_the_four_known_keys():
+    """A hand-edited stored row cannot carry a `time` of its own, or anything else, out through the raw result."""
+    row = {
+        "alert_id": "a-1",
+        "what": "x",
+        "tactic": "t",
+        "technique": "T1",
+        "time": "1999-01-01T00:00:00Z",
+        "note": "<b>x</b>",
+        "model": "zz-model",
+    }
+    served = _served(_v4(timeline=[row]), _alerts({"a-1": _t(3)}))
+    assert served["result"]["timeline"] == [
+        {"alert_id": "a-1", "what": "x", "tactic": "t", "technique": "T1"}
+    ]
+    assert served["timeline"][0]["time"] == _t(3)  # and the view's own row has the alert's time
+
+
+def test_a_raw_timeline_row_keeps_the_known_keys_it_has_and_invents_none():
+    row = {"alert_id": "a-1", "what": "x", "extra": 1}
+    served = _served(_v4(timeline=[row]), _alerts({"a-1": _t(3)}))
+    assert served["result"]["timeline"] == [{"alert_id": "a-1", "what": "x"}]
+    assert served["timeline"][0]["tactic"] is None and served["timeline"][0]["technique"] is None
+
+
+# --------------------------------------------------------------------------- the knowledge candidates (A)
+
+E1, E2, E3, E4 = "entry-1", "entry-2", "entry-3", "entry-4"
+CARDS = {
+    E1: ("Quy tắc một", "confirmed_incident"),
+    E2: ("Quy tắc hai", "false_positive"),
+    E3: (None, "closed_fp"),
+}
+KNOWLEDGE_KEYS = {
+    "state",
+    "failure",
+    "best_pct",
+    "floor_pct",
+    "threshold_pct",
+    "scored",
+    "candidates",
+}
+
+
+def _m(entry_id: str, score: float) -> dict:
+    return {"entry_id": entry_id, "level": "giong", "content_sha256": "0" * 64, "score": score}
+
+
+def _r(entry_id: str, score: float) -> dict:
+    return {"entry_id": entry_id, "score": score}
+
+
+class _Cards:
+    """A `read_cards` that records its calls, like `rag.entries.entry_cards` over a database."""
+
+    def __init__(self, cards=CARDS) -> None:
+        self.cards = cards
+        self.calls: list[list[str]] = []
+
+    def __call__(self, ids):
+        self.calls.append(list(ids))
+        return {i: self.cards[i] for i in ids if i in self.cards}
+
+
+def _knowledge(cards=None, *, floor=0.5, **row_kw):
+    cards = _Cards() if cards is None else cards
+    served = view.present_run(_row(_v4(), **row_kw), floor, _alerts({}), cards)
+    return served, cards
+
+
+def _agrees(served: dict) -> None:
+    """The panel says the number the `rag` pair says for the same run, and never another."""
+    knowledge, rag = served["knowledge"], served["rag"]
+    if knowledge["state"] == "matched":
+        assert knowledge["best_pct"] == rag["best_pct"] is not None
+        assert rag["below_floor_pct"] is None
+    elif knowledge["state"] == "below_floor":
+        assert knowledge["best_pct"] == rag["below_floor_pct"] is not None
+        assert knowledge["floor_pct"] == rag["floor_pct"]
+        assert rag["best_pct"] is None
+    else:
+        assert knowledge["best_pct"] is None
+        assert rag["below_floor_pct"] is None
+        if knowledge["state"] != "no_lookup":
+            assert rag["best_pct"] is None
+
+
+def test_knowledge_of_a_matched_run_lists_the_top_three_with_title_and_conclusion():
+    matches = [_m(E1, 0.87), _m(E2, 0.6)]
+    ranked = [_r(E1, 0.87), _r(E2, 0.6), _r(E3, 0.2), _r(E4, 0.1)]
+    served, cards = _knowledge(matches=matches, ranked=ranked)
+    assert served["knowledge"] == {
+        "state": "matched",
+        "failure": None,
+        "best_pct": 87,
+        "floor_pct": 50,
+        "threshold_pct": 0,
+        "scored": 4,
+        "candidates": [
+            {"pct": 87, "title": "Quy tắc một", "conclusion": "confirmed_incident"},
+            {"pct": 60, "title": "Quy tắc hai", "conclusion": "false_positive"},
+            {"pct": 20, "title": None, "conclusion": "closed_fp"},
+        ],
+    }
+    assert set(served["knowledge"]) == KNOWLEDGE_KEYS
+    assert cards.calls == [[E1, E2, E3]]  # one read, for the listed three
+    _agrees(served)
+
+
+def test_knowledge_of_a_run_under_the_floor_cuts_the_number_down_and_agrees_with_the_pair():
+    served, _ = _knowledge(ranked=[_r(E1, 0.4999), _r(E2, 0.3)], matches=[])
+    assert served["knowledge"]["state"] == "below_floor"
+    assert served["knowledge"]["best_pct"] == 49 and served["knowledge"]["floor_pct"] == 50
+    assert [c["pct"] for c in served["knowledge"]["candidates"]] == [49, 30]
+    assert served["rag"]["below_floor_pct"] == 49 and served["rag"]["floor_pct"] == 50
+    _agrees(served)
+
+
+def test_knowledge_of_a_lookup_with_nothing_that_counts_is_no_candidate_and_reads_no_entry():
+    served, cards = _knowledge(matches=[], ranked=[])
+    assert served["knowledge"] == {
+        "state": "no_candidate",
+        "failure": None,
+        "best_pct": None,
+        "floor_pct": 50,
+        "threshold_pct": 0,
+        "scored": 0,
+        "candidates": [],
+    }
+    assert cards.calls == []  # nothing listed, nothing read
+    _agrees(served)
+
+
+def test_knowledge_of_a_failed_lookup_names_the_closed_kind():
+    kind = FAILURE_KINDS[0]
+    served, cards = _knowledge(warnings=[rag_not_applied_warning(kind)], matches=None, ranked=None)
+    assert served["knowledge"]["state"] == "failed" and served["knowledge"]["failure"] == kind
+    assert served["knowledge"]["candidates"] == [] and served["knowledge"]["scored"] is None
+    assert cards.calls == []
+    _agrees(served)
+
+
+def test_knowledge_of_a_run_with_no_lookup_is_no_lookup():
+    served, cards = _knowledge(matches=None, ranked=None)
+    assert served["knowledge"]["state"] == "no_lookup"
+    assert served["knowledge"]["floor_pct"] is None and served["knowledge"]["scored"] is None
+    assert cards.calls == []
+    _agrees(served)
+
+
+def test_knowledge_threshold_is_always_zero_for_a_case():
+    """② has no RAG verdict rule: the key is there for the one shape both tiers' panels have."""
+    for kw in (
+        {"matches": [_m(E1, 0.87)], "ranked": [_r(E1, 0.87)]},
+        {"matches": [], "ranked": [_r(E1, 0.3)]},
+        {"matches": None, "ranked": None},
+    ):
+        assert _knowledge(**kw)[0]["knowledge"]["threshold_pct"] == 0
+
+
+def test_knowledge_of_an_entry_that_is_gone_has_no_title_and_no_conclusion():
+    served, _ = _knowledge(_Cards({}), matches=[_m(E1, 0.9)], ranked=[_r(E1, 0.9)])
+    assert served["knowledge"]["candidates"] == [{"pct": 90, "title": None, "conclusion": None}]
+
+
+def test_knowledge_without_a_card_reader_lists_candidates_without_titles():
+    served = view.present_run(
+        _row(_v4(), matches=[_m(E1, 0.9)], ranked=[_r(E1, 0.9)]), 0.5, _alerts({})
+    )
+    assert served["knowledge"]["candidates"] == [{"pct": 90, "title": None, "conclusion": None}]
+
+
+def test_knowledge_without_a_floor_has_no_floor_and_no_below_floor_state():
+    served = view.present_run(
+        _row(_v4(), matches=[], ranked=[_r(E1, 0.3)]), None, _alerts({}), _Cards()
+    )
+    assert served["knowledge"]["state"] == "no_candidate"
+    assert served["knowledge"]["floor_pct"] is None
+
+
+def test_knowledge_of_a_run_that_stopped_is_not_there():
+    row = (
+        uuid.uuid4(),
+        CREATED,
+        "schema",
+        None,
+        None,
+        None,
+        None,
+        [_m(E1, 0.9)],
+        [_r(E1, 0.9)],
+        1,
+        2,
+        3,
+        0.1,
+    )
+    assert "knowledge" not in view.present_run(row, 0.5, _alerts({}), _Cards())
+
+
+def test_knowledge_is_json_plain_and_the_rag_pair_is_as_it_was():
+    served, _ = _knowledge(matches=[], ranked=[_r(E1, 0.47)])
+    json.dumps(served["knowledge"])
+    assert served["rag"] == {
+        "best_pct": None,
+        "not_applied": None,
+        "below_floor_pct": 47,
+        "floor_pct": 50,
+    }
+
+
+def test_a_reader_that_returns_junk_for_a_card_gives_no_title():
+    class _Junk:
+        def __call__(self, ids):
+            return {i: "not a pair" for i in ids}
+
+    served = view.present_run(
+        _row(_v4(), matches=[_m(E1, 0.9)], ranked=[_r(E1, 0.9)]), 0.5, _alerts({}), _Junk()
+    )
+    assert served["knowledge"]["candidates"] == [{"pct": 90, "title": None, "conclusion": None}]
+
+
 # --------------------------------------------------------------------------- the tripwire
 
 #: A module of `backend/app` that names a hypothesis's `likelihood` (the one word of the new Tier 2 fields no other
@@ -497,3 +744,120 @@ def test_only_the_expected_modules_name_the_tier_2_analyst_fields():
         if path.suffix in {".py", ".json", ".txt"} and "likelihood" in path.read_text("utf-8")
     }
     assert found == MAY_NAME_LIKELIHOOD
+
+
+# The prompt-side modules are the ones a stored answer could be carried through into a model's prompt. Three of them
+# name `likelihood` in prose today - `llm/investigate.py` (twice), `tier2/dossier.py` and `rag/draft.py` (once each),
+# every time to say it is NOT read - so the module list above would let a read added to one of them pass. Two pins
+# close that. (1) The number of times each names the word is exactly what it is today: a new mention, a comment or a
+# read, changes the count and sends the person who made it here. (2) None of the prompt-side modules names a field of
+# the new Tier 2 shape IN CODE: no string constant that is exactly `likelihood`, `timeline`, `scope` or `priority`
+# (`result.get("timeline")`, `step["priority"]`), no identifier `likelihood`, and none of the page-side readers of
+# `llm/results.py` that read them (`timeline_entries`, `timeline_alert_ids`, `scope_lists`, `next_step_rows`). The words
+# `timeline` and `scope` are ordinary in the dossier's own case timeline and scope blocks (`_block3_timeline`,
+# `HEADING_SCOPE`): only the exact constant is a key of the stored answer, so an identifier that holds them is not
+# flagged. Prose (docstrings and comments) is not code.
+PROMPT_SIDE = (
+    "llm/investigate.py",
+    "tier2/dossier.py",
+    "rag/draft.py",
+    "llm/builder.py",
+    "llm/triage.py",
+    "tier1/triage.py",
+)
+#: How many times each of the three names the word `likelihood` today (all of them prose).
+LIKELIHOOD_MENTIONS = {"llm/investigate.py": 2, "tier2/dossier.py": 1, "rag/draft.py": 1}
+FIELD_KEYS = frozenset({"likelihood", "timeline", "scope", "priority"})
+PAGE_SIDE_READERS = frozenset(
+    {"timeline_entries", "timeline_alert_ids", "scope_lists", "next_step_rows"}
+)
+
+
+def _docstring_ids(tree: ast.AST) -> set[int]:
+    ids = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            first = node.body[0] if node.body else None
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                ids.add(id(first.value))
+    return ids
+
+
+def names_a_new_field_in_code(source: str) -> list[str]:
+    """What of the new Tier 2 fields the code of `source` names (see above), as text; `[]` for none."""
+    tree = ast.parse(source)
+    skip = _docstring_ids(tree)
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip:
+            if node.value in FIELD_KEYS:
+                found.append(f"constant {node.value!r}")
+            continue
+        names: list[str] = []
+        if isinstance(node, ast.Name):
+            names = [node.id]
+        elif isinstance(node, ast.Attribute):
+            names = [node.attr]
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names = [node.name]
+        elif isinstance(node, ast.arg | ast.keyword) and node.arg:
+            names = [node.arg]
+        elif isinstance(node, ast.alias):
+            names = [node.name.rpartition(".")[2], node.asname or ""]
+        for name in names:
+            if name in PAGE_SIDE_READERS or "likelihood" in name.lower():
+                found.append(f"name {name!r}")
+    return found
+
+
+def test_the_prompt_side_modules_mention_likelihood_exactly_as_often_as_today():
+    app = pathlib.Path(__file__).resolve().parents[1] / "app"
+    counts = {
+        path: (app / path).read_text("utf-8").count("likelihood") for path in LIKELIHOOD_MENTIONS
+    }
+    assert counts == LIKELIHOOD_MENTIONS
+
+
+def test_no_prompt_side_module_names_a_new_tier_2_field_in_code():
+    app = pathlib.Path(__file__).resolve().parents[1] / "app"
+    found = {
+        path: names_a_new_field_in_code((app / path).read_text("utf-8")) for path in PROMPT_SIDE
+    }
+    assert found == {path: [] for path in PROMPT_SIDE}
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ('x = result.get("timeline")', ["constant 'timeline'"]),
+        ('x = h["likelihood"]', ["constant 'likelihood'"]),
+        ('rows = [s["priority"] for s in steps]', ["constant 'priority'"]),
+        ('scope = result.get("scope")', ["constant 'scope'"]),
+        ("likelihood = 3", ["name 'likelihood'"]),
+        ("x = row.likelihood", ["name 'likelihood'"]),
+        ("from app.llm.results import timeline_entries", ["name 'timeline_entries'"]),
+        ("import app.llm.results as r\nr.scope_lists(x)", ["name 'scope_lists'"]),
+        ("f(next_step_rows=1)", ["name 'next_step_rows'"]),
+        # prose is not code, and the dossier's own words are not the stored answer's keys
+        ('"""A docstring that says likelihood and timeline."""\nx = 1', []),
+        ("# result.get('timeline') in a comment\nx = 1", []),
+        ('HEADING_TIMELINE = "## Diễn biến"\ntimeline_rows = []\nscope_block = 1', []),
+        ('STEP = "timeline_cap_300"', []),
+    ],
+)
+def test_the_scan_for_the_new_fields_in_code_finds_what_it_should(source, expected):
+    assert names_a_new_field_in_code(source) == expected
+
+
+def test_the_guards_go_red_on_a_scratch_copy_of_a_prompt_builder(tmp_path):
+    """Never in the real file: the dossier's source with one line added that reads the field is flagged by the scan,
+    and counted by the pin."""
+    real = (pathlib.Path(__file__).resolve().parents[1] / "app" / "tier2" / "dossier.py").read_text(
+        "utf-8"
+    )
+    scratch = tmp_path / "dossier_copy.py"
+    scratch.write_text(real + '\nLEAK = {"h": block.get("likelihood")}\n', "utf-8")
+    text = scratch.read_text("utf-8")
+    assert names_a_new_field_in_code(real) == []
+    assert names_a_new_field_in_code(text) == ["constant 'likelihood'"]
+    assert text.count("likelihood") == LIKELIHOOD_MENTIONS["tier2/dossier.py"] + 1

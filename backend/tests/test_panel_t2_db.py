@@ -18,6 +18,7 @@ convention): the ones below are this file's own copies.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import hashlib
 import json
 import uuid
@@ -26,6 +27,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from app.infra import config
 from app.infra.auth import Claims
+from app.llm.builder import rag_not_applied_warning
+from app.rag import entries
+from app.rag.failures import FAILURE_KINDS
 from app.tier2 import investigate as tier2_investigate
 from app.tier2 import investigation_view as view
 from app.web import deps, main
@@ -33,6 +37,7 @@ from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 
 from tests.fakes.llm import INVESTIGATE_V3_OK, INVESTIGATE_V4_OK
+from tests.rag_data import add_entry
 
 pytestmark = pytest.mark.db
 
@@ -41,6 +46,14 @@ T0 = datetime(2026, 11, 15, 8, 0, tzinfo=UTC)
 
 #: A model id no real answer, log or title holds: if it shows anywhere in what is served, the model's name is served.
 MODEL_ID = "zz-distinctive-model-id-GLM-9.9-xq7"
+
+#: Every field of the configuration that names a model, set to a value that holds `MODEL_ID`: the configuration the
+#: routes are run with. A name served out of the configuration (not only out of `llm_runs.model_id`) would show.
+MODEL_CONFIG = {
+    field.name: f"{MODEL_ID}:{field.name}"
+    for field in dataclasses.fields(config.Config)
+    if "MODEL" in field.name
+}
 
 
 # ---------------------------------------------------------------------------
@@ -134,13 +147,15 @@ def _insert_run(
     output_tokens: int | None = 340,
     latency_ms: int | None = 5400,
     cost_usd: float | None = 0.00123,
+    lookup_id: str | None = None,
+    warnings: list[str] | None = None,
 ) -> uuid.UUID:
     run_id = tier2_investigate.run_id_for_job(job_id) if job_id is not None else uuid.uuid4()
     conn.execute(
         "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, role, system_prompt, user_message, "
         "agent_trace, result, evidence_check, stopped_by, model_id, input_tokens, output_tokens, latency_ms, "
-        "cost_usd) VALUES (%s, 'investigate', 'case', %s, 'investigator', 's', 'u', %s, %s, %s, %s, %s, %s, %s, "
-        "%s, %s)",
+        "cost_usd, rag_lookup_id, citation_warnings) VALUES (%s, 'investigate', 'case', %s, 'investigator', 's', "
+        "'u', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             run_id,
             case_id,
@@ -153,9 +168,50 @@ def _insert_run(
             output_tokens,
             latency_ms,
             cost_usd,
+            lookup_id,
+            Jsonb(warnings) if warnings is not None else None,
         ),
     )
     return run_id
+
+
+def _entry(conn, title: str, conclusion: str = "closed_fp") -> str:
+    """A knowledge entry whose Markdown carries `title`, as the publisher writes it."""
+    entry_id = str(uuid.uuid4())
+    content = entries.render_entry_markdown(
+        {
+            "entry_id": entry_id,
+            "version": 1,
+            "title": title,
+            "conclusion": conclusion,
+            "category": "recon",
+            "summary": "Tóm tắt.",
+        }
+    )
+    add_entry(conn, entry_id=entry_id, conclusion=conclusion, content=content)
+    return entry_id
+
+
+def _lookup(conn, case_id: str, *, matches=(), ranked=None, status: str = "ok") -> str:
+    """A `rag_results` row of the case: `matches` and `ranked` are `[(entry_id, score)]`."""
+    lookup_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO rag_results (lookup_id, subject_kind, subject_id, status, matches, match_notes, ranked) "
+        "VALUES (%s, 'case', %s, %s, %s, '{}'::jsonb, %s)",
+        (
+            lookup_id,
+            case_id,
+            status,
+            Jsonb(
+                [
+                    {"entry_id": e, "level": "giong", "content_sha256": "0" * 64, "score": sc}
+                    for e, sc in matches
+                ]
+            ),
+            None if ranked is None else Jsonb([{"entry_id": e, "score": sc} for e, sc in ranked]),
+        ),
+    )
+    return lookup_id
 
 
 def _rows(*pairs: tuple[str, str]) -> list[dict]:
@@ -195,7 +251,7 @@ def client(db, monkeypatch):
             raise
 
     main.app.dependency_overrides[deps.get_conn] = get_conn
-    main.app.dependency_overrides[deps.get_config] = lambda: config.Config()
+    main.app.dependency_overrides[deps.get_config] = lambda: config.Config(**MODEL_CONFIG)
     main.app.dependency_overrides[deps.current_user] = c.claims
     try:
         yield c
@@ -744,3 +800,287 @@ def test_tech_has_exactly_these_keys(client, db):
         "playbook",
         "alerts_read",
     }
+
+
+def test_the_configuration_the_routes_run_with_names_a_model_in_every_model_field():
+    """The introspection is not vacuous: the fields of today's configuration that name a model are all in it."""
+    assert {
+        "LLM_MODEL_PROPOSER",
+        "LLM_MODEL_VERIFIER",
+        "RAG_MODEL",
+        "RAG_EMBED_MODEL",
+        "RAG_RERANK_MODEL",
+    } <= set(MODEL_CONFIG)
+    assert all(MODEL_ID in value for value in MODEL_CONFIG.values())
+
+
+def test_the_model_fields_of_the_configuration_are_served_nowhere(client, db):
+    """C: the walk also looks for what the configuration says (`MODEL_CONFIG`), through a view that lists knowledge
+    candidates and a run endpoint; the view reads `RAG_MIN_SCORE` of that configuration and nothing named MODEL.
+    """
+    case_id, h1, *_ = _case_with_two_heads(db, client.user_id)
+    entry = _entry(db, "Một quy tắc")
+    lookup = _lookup(db, case_id, matches=[(entry, 0.9)], ranked=[(entry, 0.9)])
+    rid = _insert_run(
+        db,
+        case_id,
+        job_id=_insert_job(db, case_id),
+        result=_v4(timeline=_rows((h1, "x"))),
+        lookup_id=lookup,
+    )
+    documents = {"investigation": _view(client, case_id), "run": _raw_run(client, rid)}
+    for name, document in documents.items():
+        for value in MODEL_CONFIG.values():
+            assert _leaks(document, value) == [], (name, value)
+        assert _leaks(document, MODEL_ID) == [], name
+    assert documents["investigation"]["run"]["knowledge"]["state"] == "matched"
+
+
+# ---------------------------------------------------------------------------
+# The raw timeline's four keys (D)
+# ---------------------------------------------------------------------------
+
+
+def test_a_hand_edited_timeline_row_carries_only_the_four_keys_through_both_routes(client, db):
+    case_id, h1, *_ = _case_with_two_heads(db, client.user_id)
+    row = {
+        **_rows((h1, "x"))[0],
+        "time": "1999-01-01T00:00:00Z",
+        "model": MODEL_ID,
+        "html": "<b>x</b>",
+    }
+    rid = _insert_run(db, case_id, job_id=_insert_job(db, case_id), result=_v4(timeline=[row]))
+
+    served = _view(client, case_id)["run"]["result"]["timeline"]
+    raw = _raw_run(client, rid)["result"]["timeline"]
+
+    assert served == raw == _rows((h1, "x"))
+
+
+# ---------------------------------------------------------------------------
+# The knowledge candidates (A)
+# ---------------------------------------------------------------------------
+
+
+def test_knowledge_lists_the_best_candidates_with_the_title_and_conclusion_of_their_entries(
+    client, db
+):
+    case_id, *_ = _case_with_two_heads(db, client.user_id)
+    e1 = _entry(db, "Quét cổng từ máy nội bộ", "closed_fp")
+    e2 = _entry(db, "Brute force SSH", "confirmed_incident")
+    e3 = _entry(db, "Cập nhật phần mềm", "closed_fp")
+    e4 = _entry(db, "Không được liệt kê", "closed_fp")
+    lookup = _lookup(
+        db,
+        case_id,
+        matches=[(e1, 0.87), (e2, 0.62)],
+        ranked=[(e1, 0.87), (e2, 0.62), (e3, 0.31), (e4, 0.1)],
+    )
+    _insert_run(db, case_id, job_id=_insert_job(db, case_id), result=_v4(), lookup_id=lookup)
+
+    run = _view(client, case_id)["run"]
+
+    assert run["knowledge"] == {
+        "state": "matched",
+        "failure": None,
+        "best_pct": 87,
+        "floor_pct": 50,
+        "threshold_pct": 0,
+        "scored": 4,
+        "candidates": [
+            {"pct": 87, "title": "Quét cổng từ máy nội bộ", "conclusion": "closed_fp"},
+            {"pct": 62, "title": "Brute force SSH", "conclusion": "confirmed_incident"},
+            {"pct": 31, "title": "Cập nhật phần mềm", "conclusion": "closed_fp"},
+        ],
+    }
+    # the pair the run already served is as it was and says the same number
+    assert run["rag"] == {
+        "best_pct": 87,
+        "not_applied": None,
+        "below_floor_pct": None,
+        "floor_pct": None,
+    }
+
+
+def test_knowledge_of_a_run_under_the_floor_agrees_with_the_pair_and_is_cut_down(client, db):
+    case_id, *_ = _case_with_two_heads(db, client.user_id)
+    entry = _entry(db, "Gần mức tối thiểu")
+    lookup = _lookup(db, case_id, matches=[], ranked=[(entry, 0.4999)])
+    _insert_run(db, case_id, job_id=_insert_job(db, case_id), result=_v4(), lookup_id=lookup)
+
+    run = _view(client, case_id)["run"]
+
+    assert run["rag"]["below_floor_pct"] == 49 and run["rag"]["floor_pct"] == 50
+    assert run["knowledge"]["state"] == "below_floor"
+    assert run["knowledge"]["best_pct"] == run["rag"]["below_floor_pct"]
+    assert run["knowledge"]["floor_pct"] == run["rag"]["floor_pct"]
+    assert run["knowledge"]["candidates"] == [
+        {"pct": 49, "title": "Gần mức tối thiểu", "conclusion": "closed_fp"}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("kind", "state"), [("empty", "no_candidate"), ("none", "no_lookup"), ("failed", "failed")]
+)
+def test_knowledge_of_a_run_without_candidates_reads_no_entry(client, db, monkeypatch, kind, state):
+    case_id, *_ = _case_with_two_heads(db, client.user_id)
+    lookup, warnings = None, None
+    if kind == "empty":
+        lookup = _lookup(db, case_id, matches=[], ranked=[])
+    elif kind == "failed":
+        lookup = _lookup(db, case_id, status="failed")
+        warnings = [rag_not_applied_warning(FAILURE_KINDS[0])]
+    _insert_run(
+        db,
+        case_id,
+        job_id=_insert_job(db, case_id),
+        result=_v4(),
+        lookup_id=lookup,
+        warnings=warnings,
+    )
+    statements = _statements(db, monkeypatch)
+
+    run = _view(client, case_id)["run"]
+
+    assert run["knowledge"]["state"] == state and run["knowledge"]["candidates"] == []
+    assert run["knowledge"]["threshold_pct"] == 0
+    assert not any("knowledge_entries" in sql for sql in statements)
+
+
+def test_knowledge_adds_one_statement_and_only_when_a_candidate_is_listed(client, db, monkeypatch):
+    case_id, h1, *_ = _case_with_two_heads(db, client.user_id)
+    snap = {"alert_count": 3, "total_occurrences": 3, "last_seen_at": None}
+    entry = _entry(db, "Một quy tắc")
+    lookup = _lookup(db, case_id, matches=[(entry, 0.9)], ranked=[(entry, 0.9)])
+    _insert_run(
+        db,
+        case_id,
+        job_id=_insert_job(db, case_id),
+        result=_v4(timeline=_rows((h1, "x"))),
+        agent_trace=snap,
+        lookup_id=lookup,
+    )
+    statements = _statements(db, monkeypatch)
+
+    _view(client, case_id)
+
+    # the case's status, the latest job, the run, the numbers now, the case's alerts, and the entries' titles
+    assert len(statements) == 6, statements
+    assert sum("knowledge_entries" in sql for sql in statements) == 1
+    for sql in statements:
+        assert sql.upper().startswith(("SELECT", "WITH")), sql
+
+
+def test_knowledge_of_a_ranking_with_ids_that_are_no_entries_is_listed_without_titles(client, db):
+    """An id that is not a UUID (a stored ranking's text) costs no statement; an id with no entry has no title."""
+    case_id, *_ = _case_with_two_heads(db, client.user_id)
+    gone = str(uuid.uuid4())
+    lookup = _lookup(
+        db, case_id, matches=[("not-a-uuid", 0.9)], ranked=[("not-a-uuid", 0.9), (gone, 0.8)]
+    )
+    _insert_run(db, case_id, job_id=_insert_job(db, case_id), result=_v4(), lookup_id=lookup)
+
+    run = _view(client, case_id)["run"]
+
+    assert run["knowledge"]["candidates"] == [
+        {"pct": 90, "title": None, "conclusion": None},
+        {"pct": 80, "title": None, "conclusion": None},
+    ]
+
+
+def test_a_run_that_stopped_has_no_knowledge(client, db):
+    case_id, *_ = _case_with_two_heads(db, client.user_id)
+    entry = _entry(db, "Một quy tắc")
+    lookup = _lookup(db, case_id, matches=[(entry, 0.9)], ranked=[(entry, 0.9)])
+    _insert_run(
+        db,
+        case_id,
+        job_id=_insert_job(db, case_id),
+        result=None,
+        stopped_by="schema",
+        lookup_id=lookup,
+    )
+
+    assert "knowledge" not in _view(client, case_id)["run"]
+
+
+# ---------------------------------------------------------------------------
+# The plan of the case's alerts read (B)
+# ---------------------------------------------------------------------------
+
+#: The statement as it was in the first version of this card: one `OR`ed `WHERE`, which no index can serve (a hashed
+#: sub-plan on each side). Kept here to show the check below is live: it has a sequential scan of `alerts`.
+_OR_FORM = """
+    WITH members AS (
+        SELECT alert_id, alert_time, agent_name, alert_user FROM alerts
+        WHERE alert_id IN (SELECT alert_id FROM case_alerts WHERE case_id = %(case)s)
+           OR duplicate_of IN (SELECT alert_id FROM case_alerts WHERE case_id = %(case)s)
+    )
+    SELECT (SELECT count(*) FROM members)
+"""
+
+
+def _plan_nodes(node):
+    yield node
+    for child in node.get("Plans", ()):
+        yield from _plan_nodes(child)
+
+
+def _scans(db, sql: str, params: dict) -> list[tuple[str, str | None, str | None]]:
+    """`(node type, relation, index)` of every scan node in the plan of `sql`, with sequential scans switched off:
+    on a table as small as the test database's, the planner would choose one whatever the statement says.
+    """
+    db.execute("SET LOCAL enable_seqscan = off")
+    try:
+        (plan,) = db.execute("EXPLAIN (FORMAT JSON) " + sql, params).fetchone()
+    finally:
+        db.execute("SET LOCAL enable_seqscan = on")
+    return [
+        (n["Node Type"], n.get("Relation Name"), n.get("Index Name"))
+        for n in _plan_nodes(plan[0]["Plan"])
+        if "Scan" in n["Node Type"]
+    ]
+
+
+_PARAMS = {"case": str(uuid.uuid4()), "cap": 100, "ids": ["a-1"]}
+
+
+def test_the_or_form_reads_alerts_with_a_sequential_scan_so_the_plan_check_is_live(db):
+    assert ("Seq Scan", "alerts", None) in _scans(db, _OR_FORM, _PARAMS)
+
+
+def test_each_half_of_the_alerts_read_uses_its_own_index(db):
+    scans = _scans(db, view._CASE_ALERTS_SQL, _PARAMS)
+
+    assert not [s for s in scans if s[0] == "Seq Scan" and s[1] == "alerts"], scans
+    # an index scan names its index and relation; a bitmap scan names the index on one node and the relation on the
+    # heap scan above it: the indexes of the plan are those of every scan node
+    indexes = {index for _kind, _relation, index in scans if index}
+    assert {"alerts_pkey", "ix_alerts_duplicate_of"} <= indexes, scans
+    assert not [s for s in scans if s[1] == "alerts" and s[0] in ("Seq Scan", "Sample Scan")], scans
+
+
+def test_the_alerts_read_is_one_statement_of_two_union_all_halves():
+    sql = " ".join(view._CASE_ALERTS_SQL.split())
+    assert sql.count("UNION ALL") == 1
+    assert sql.count("WITH members AS") == 1
+
+
+def test_an_alert_that_is_a_head_and_a_duplicate_of_a_head_is_read_once(client, db):
+    """The two halves must not read a row twice: the same rows as the `OR`ed form gave."""
+    case_id = _make_case(db, client.user_id)
+    h1 = _add_head(
+        db, case_id, client.user_id, alert_time=T0, agent_name="host-a", alert_user="alice"
+    )
+    both = _add_head(
+        db, case_id, client.user_id, alert_time=T0 + timedelta(minutes=5), agent_name="host-b"
+    )
+    db.execute("UPDATE alerts SET duplicate_of = %s WHERE alert_id = %s", (h1, both))
+    _insert_run(
+        db, case_id, job_id=_insert_job(db, case_id), result=_v4(timeline=_rows((both, "x")))
+    )
+
+    run = _view(client, case_id)["run"]
+
+    assert run["scope"]["system"]["alert_count"] == 2
+    assert [row["alert_id"] for row in run["timeline"]] == [both]

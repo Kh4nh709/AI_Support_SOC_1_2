@@ -76,7 +76,7 @@ from __future__ import annotations
 
 import math
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -85,6 +85,7 @@ from typing import Any
 import psycopg
 
 from app.llm import rag_view, results, verdicts
+from app.rag.entries import entry_cards
 from app.rag.failures import FAILURE_KINDS
 from app.tier2.investigate import (
     HELD_BY,  # noqa: F401 - the view's public name for the closed causes (test_investigation_view_api pins it)
@@ -211,6 +212,13 @@ class CaseAlerts:
     times: Mapping[str, datetime]
 
 
+#: `(entry ids) -> {entry id: (title, conclusion)}`; an id with no entry is absent (`rag.entries.entry_cards`).
+CardReader = Callable[[Sequence[str]], Mapping[str, tuple[str | None, str | None]]]
+
+#: The keys of a stored timeline row the page knows. The raw `result` serves a row with these and nothing else, so a
+#: hand-edited row cannot carry a `time` of its own, or any other text, out through it.
+TIMELINE_KEYS = ("alert_id", "what", "tactic", "technique")
+
 #: A run read without the case's alerts (a direct call of `present_run`) has none of this.
 NO_ALERTS = CaseAlerts(0, (), (), {})
 
@@ -218,11 +226,20 @@ NO_ALERTS = CaseAlerts(0, (), (), {})
 #: row of the timeline and a cited quote are judged by one rule. The five columns: the count, the hosts, the accounts,
 #: and, for the ids given, their ids and times (the same order, `ORDER BY alert_id`). One statement, whatever the
 #: number of rows a timeline has. `alert_user` is NULL when the alert names no account.
+#:
+#: The members are a `UNION ALL` of the primary-key path and the `ix_alerts_duplicate_of` path, as the dossier's
+#: timeline reads them (`tier2.dossier._TIMELINE_BASE_SQL`, Should 11), not one `OR`ed `WHERE`: a single-column `IN` on
+#: each side lets the planner use the index each predicate has, where the `OR` form forced a sequential scan of
+#: `alerts` (`tests/test_panel_t2_db.py` reads the plan). The second half leaves out an alert the first half read - a
+#: head that is also marked a duplicate of a head - so the rows are the `OR` form's, each once.
 _CASE_ALERTS_SQL = """
     WITH members AS (
         SELECT alert_id, alert_time, agent_name, alert_user FROM alerts
-        WHERE alert_id IN (SELECT alert_id FROM case_alerts WHERE case_id = %(case)s)
-           OR duplicate_of IN (SELECT alert_id FROM case_alerts WHERE case_id = %(case)s)
+         WHERE alert_id IN (SELECT alert_id FROM case_alerts WHERE case_id = %(case)s)
+        UNION ALL
+        SELECT alert_id, alert_time, agent_name, alert_user FROM alerts
+         WHERE duplicate_of IN (SELECT alert_id FROM case_alerts WHERE case_id = %(case)s)
+           AND alert_id NOT IN (SELECT alert_id FROM case_alerts WHERE case_id = %(case)s)
     )
     SELECT (SELECT count(*) FROM members),
            (SELECT coalesce(array_agg(h ORDER BY h), '{}')
@@ -446,12 +463,15 @@ def served_timeline(
 def _result_with_timeline(
     result: dict[str, Any], shown: list[tuple[Mapping[str, Any], datetime]]
 ) -> dict[str, Any]:
-    """The stored result with the rows of `shown` in place of its `timeline`, in the stored shape, so a row naming an
-    alert outside the case is nowhere in it. A result with no `timeline` key (a version 3 run) is returned as it is.
-    """
+    """The stored result with the rows of `shown` in place of its `timeline`, in the stored shape (the keys of
+    `TIMELINE_KEYS` a row has, no other), so a row naming an alert outside the case is nowhere in it and no row
+    carries a `time`. A result with no `timeline` key (a version 3 run) is returned as it is."""
     if "timeline" not in result:
         return result
-    return {**result, "timeline": [dict(row) for row, _ in shown]}
+    return {
+        **result,
+        "timeline": [{key: row[key] for key in TIMELINE_KEYS if key in row} for row, _ in shown],
+    }
 
 
 def served_result(conn: psycopg.Connection, case_id: str, result: Any) -> Any:
@@ -505,14 +525,42 @@ def _tech(
     }
 
 
+def _knowledge(
+    matches: Any,
+    ranked: Any,
+    warnings: Any,
+    floor: float | None,
+    read_cards: CardReader | None,
+) -> dict[str, Any]:
+    """The RAG panel of the run, the one the Tier 1 view serves as `analysis.rag` (`llm.rag_view.rag_panel`):
+    `{state, failure, best_pct, floor_pct, threshold_pct, scored, candidates: [{pct, title, conclusion}]}`. ② has no
+    RAG verdict rule, so `threshold_pct` is 0. Each listed candidate's title and conclusion come from `read_cards`
+    (`rag.entries.entry_cards`: one statement, made only when a candidate is listed); an entry that is gone, or a
+    view with no reader, gives `None` for both."""
+    panel = rag_view.rag_panel(matches, warnings, FAILURE_KINDS, ranked=ranked, floor=floor)
+    ids = [candidate["entry_id"] for candidate in panel["candidates"]]
+    cards = read_cards(ids) if ids and read_cards is not None else {}
+    candidates = []
+    for candidate in panel["candidates"]:
+        card = cards.get(candidate["entry_id"])
+        title, conclusion = card if isinstance(card, tuple) and len(card) == 2 else (None, None)
+        candidates.append({"pct": candidate["pct"], "title": title, "conclusion": conclusion})
+    return {**panel, "candidates": candidates}
+
+
 def present_run(
-    row: tuple, rag_min_score: float | None = None, alerts: CaseAlerts | None = None
+    row: tuple,
+    rag_min_score: float | None = None,
+    alerts: CaseAlerts | None = None,
+    read_cards: CardReader | None = None,
 ) -> dict[str, Any]:
     """`row` is a row of `_RUN_COLUMNS`; its last four columns (the run's tokens in and out, latency and cost) may be
     missing, and the run then has no technical figures. `rag_min_score` is `RAG_MIN_SCORE` of the running
     configuration, the floor the run's best candidate was under (DEC-220): without it `rag` carries no
     `below_floor_pct`. `alerts` is what the case's own alerts say (`case_alerts`, DEC-221): without it the timeline
-    has no row (no alert to take a time from) and the system's part of `scope` is empty."""
+    has no row (no alert to take a time from) and the system's part of `scope` is empty. `read_cards` reads the title
+    and conclusion of the knowledge entries `knowledge` lists (`CardReader`): without it they are `None`.
+    """
     (
         run_id,
         created_at,
@@ -596,6 +644,9 @@ def present_run(
         "snapshot": snap,
         "changed": False,
         "tech": _tech(created_at, result, snap, tuple(usage)),
+        "knowledge": _knowledge(
+            lookup_matches, lookup_ranked, citation_warnings, rag_min_score, read_cards
+        ),
     }
 
 
@@ -620,7 +671,10 @@ def build_investigation(
         # DEC-220: the floor is the running configuration's; a `cfg` that carries none (a partial one) gives no number
         row = view["run_row"]
         run = present_run(
-            row, getattr(cfg, "RAG_MIN_SCORE", None), alerts_for_row(conn, case_id, row)
+            row,
+            getattr(cfg, "RAG_MIN_SCORE", None),
+            alerts_for_row(conn, case_id, row),
+            lambda ids: entry_cards(conn, ids),
         )
         if run.get("snapshot") is not None:
             current = current_values(conn, case_id)

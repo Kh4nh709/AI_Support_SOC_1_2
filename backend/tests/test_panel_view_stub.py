@@ -29,7 +29,7 @@ def _row(result: dict, check: dict | None = None) -> tuple:
 
 
 #: What AP-T3 added to a run of the view (`test_panel_t2_pure.py` pins it): the existing page reads none of it.
-AP_T3_KEYS = ("timeline", "scope", "next_steps_rows", "evidence_summary", "tech")
+AP_T3_KEYS = ("timeline", "scope", "next_steps_rows", "evidence_summary", "tech", "knowledge")
 
 
 def _as_served(result: dict) -> dict:

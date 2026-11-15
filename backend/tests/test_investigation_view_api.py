@@ -410,6 +410,7 @@ def test_done_run_has_evidence_marks_and_labels(client, db):
         "next_steps_rows",
         "evidence_summary",
         "tech",
+        "knowledge",  # DEC-221 AP-T3 follow-up: the RAG panel of the run
     }
     assert run["run_id"] == str(run_id)
     assert run["conclusion"] == "confirmed_incident"
@@ -836,6 +837,7 @@ _DONE_RUN_KEYS = {
     "next_steps_rows",
     "evidence_summary",
     "tech",
+    "knowledge",
 }
 
 
