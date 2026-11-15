@@ -363,13 +363,13 @@ test("a visible head says what the AI concluded and which of the gate's checks w
   const steps = column.getByRole("list", { name: PANEL.checks.listLabel });
   for (const label of labels) await expect(steps, `step 4 names "${label}"`).toContainText(label);
 
-  // the same reasons on the default tab, in the line that lists every warning: it is not hidden behind a click
+  // the same reasons on the default tab, not hidden behind a click: in a highlight that says it, or in the line that
+  // lists the reasons no highlight says (each once: the line leaves out what a drawn highlight already says)
   await column.getByRole("tab", { name: PANEL.tabs.overview }).click();
   const overview = column.getByRole("tabpanel");
   for (const label of labels) {
     await expect(overview, `the overview names "${label}"`).toContainText(label);
   }
-  await expect(overview).toContainText(S.ai1.panel.overview.held(labels).split(":")[0]!);
 
   // the tab strip never widens the column or the page, whatever the width the labels need
   const tablist = column.getByRole("tablist");
