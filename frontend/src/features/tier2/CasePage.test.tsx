@@ -1311,6 +1311,25 @@ describe("the page and the ② column", () => {
     expect(screen.getByRole("heading", { name: S.case.infoHeading })).toBeInTheDocument();
   });
 
+  // DEC-221: the line at the right of the panel's heading is the page's, which knows the case.
+  it("gives the ② column the case line: the case, its clusters and the agents they came from", async () => {
+    serve(
+      detail({
+        heads: [
+          head({ alert_id: "a-1", agent_name: "lab-ubuntu-01" }),
+          head({ alert_id: "a-2", agent_name: "lab-win-02" }),
+          head({ alert_id: "a-3", agent_name: "lab-ubuntu-01" }),
+        ],
+      }),
+    );
+    renderCase();
+    await page();
+    const column = await screen.findByRole("region", { name: S.case.aiHeading });
+    expect(
+      within(column).getByText("Case 0b30b853 · 3 cụm · lab-ubuntu-01, lab-win-02"),
+    ).toBeInTheDocument();
+  });
+
   it("tells the ② column an archived case is closed", async () => {
     serve(archived());
     server.use(

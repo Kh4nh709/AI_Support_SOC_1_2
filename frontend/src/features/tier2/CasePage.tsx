@@ -21,6 +21,7 @@ import {
 import { ApiError } from "../../api/client";
 import { formatDateTime, formatTime } from "../../format";
 import { S, labelOf } from "../../strings";
+import { caseLineOf } from "./caseLine";
 import { InvestigationColumn } from "./InvestigationColumn";
 import { lastAnalysedText } from "./lastAnalysed";
 import { BUTTON, ERROR_TEXT, ErrorNotice, FIELD, HEADING, PANEL, BandBadge, asText } from "./parts";
@@ -69,7 +70,12 @@ function CaseView({ caseId }: { caseId: string }) {
           <Notes caseId={caseId} data={data} open={open} />
           <Conclusion caseId={caseId} data={data} open={open} />
         </div>
-        <InvestigationColumn key={caseId} caseId={caseId} caseOpen={open} />
+        <InvestigationColumn
+          key={caseId}
+          caseId={caseId}
+          caseOpen={open}
+          caseLine={caseLineOf(data)}
+        />
       </div>
     </div>
   );

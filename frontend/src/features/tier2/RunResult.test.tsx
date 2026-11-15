@@ -1,0 +1,620 @@
+// src/features/tier2/RunResult.test.tsx — the flat result of a run (`RunResult`), which the admin's knowledge-draft
+// view still draws on the left of a case (DEC-221 moved the case column to the scorecard, `ResultPanel`, and left
+// this view alone). These are the tests the column carried for it: the conclusion, the evidence marks, the held and
+// overruled lines, the RAG beside the conclusion, the changed-case notice, and text-only rendering.
+import { render, screen, within } from "@testing-library/react";
+import axe from "axe-core";
+import type { InvestigationView } from "../../api/tier2";
+import { S } from "../../strings";
+import { RunResult } from "./RunResult";
+
+const RUN = "6f1c7a52-98d4-5c0e-b3a1-2d4e6f8a0b1c";
+
+// ── what the investigation route answers ────────────────────────────────────────────────────────
+
+const evidenceItem = (over: Record<string, unknown> = {}) => ({
+  alert_id: "a-1",
+  quote: "Failed password for root",
+  why: "37 lần sai mật khẩu vào root",
+  verified: true,
+  reason_text: null,
+  ...over,
+});
+
+const run = (over: Record<string, unknown> = {}) => ({
+  run_id: RUN,
+  created_at: "2026-09-30T01:19:00+00:00",
+  result: { suggested_conclusion: "false_positive" },
+  conclusion: "false_positive",
+  conclusion_label: "Không phải sự cố",
+  confidence: "medium",
+  summary: "Chuỗi đăng nhập thất bại đến từ chính máy lab.",
+  narrative: "08:00 script bắt đầu\n08:12 script dừng",
+  hypotheses: [
+    {
+      text: "Script kiểm thử của nhóm hạ tầng",
+      evidence_for: ["Nguồn là 127.0.0.1"],
+      evidence_against: ["Không có ticket kiểm thử"],
+    },
+  ],
+  evidence: [
+    evidenceItem(),
+    evidenceItem({
+      alert_id: "a-2",
+      quote: "session opened for user root",
+      why: "phiên root mở thành công",
+      verified: false,
+      reason_text: "trích dẫn không có trong log hay mô tả của alert",
+    }),
+  ],
+  next_steps: ["Hỏi nhóm hạ tầng về lịch chạy script"],
+  playbook_used: null,
+  overruled: null,
+  snapshot: { alert_count: 3, total_occurrences: 61, last_seen_at: "2026-09-26T04:12:00+00:00" },
+  changed: false,
+  ...over,
+});
+
+const view = (over: Record<string, unknown> = {}) => ({
+  state: "idle",
+  run_id: null,
+  minutes: null,
+  run: null,
+  current: null,
+  case_open: true,
+  ...over,
+});
+
+const done = (r: Record<string, unknown> = run(), over: Record<string, unknown> = {}) =>
+  view({
+    state: "done",
+    run: r,
+    current: { alert_count: 3, total_occurrences: 61, last_seen_at: "2026-09-26T04:12:00+00:00" },
+    ...over,
+  });
+
+// The tests below were written against the column: `serveViews` hands over the view and `renderColumn` draws its run.
+let shown: InvestigationView | null = null;
+const serveViews = (next: unknown): void => {
+  shown = next as InvestigationView;
+};
+const renderColumn = () => {
+  if (shown === null || shown.run === null) throw new Error("no run to draw");
+  return render(<RunResult run={shown.run} current={shown.current} title={null} />);
+};
+
+describe("done", () => {
+  it("shows the suggested conclusion by the server's label and code, the confidence and the summary", async () => {
+    serveViews(done());
+    renderColumn();
+    expect(await screen.findByText("Không phải sự cố")).toBeInTheDocument();
+    expect(screen.getByText("false_positive")).toBeInTheDocument();
+    expect(
+      screen.getByText(`${S.ai2.confidence}: ${S.ai2.confidenceLevel.medium}`),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Chuỗi đăng nhập thất bại đến từ chính máy lab.")).toBeInTheDocument();
+    expect(screen.getByText(S.ai2.disclaimer)).toBeInTheDocument();
+    expect(screen.getByText(S.ai2.resultAt("30/09/2026 08:19:00"))).toBeInTheDocument();
+  });
+
+  it("shows a conclusion label and a confidence it has no words for as they came", async () => {
+    serveViews(
+      done(
+        run({
+          conclusion: "other_thing",
+          conclusion_label: "Chưa rõ kết luận",
+          confidence: "certain",
+        }),
+      ),
+    );
+    renderColumn();
+    expect(await screen.findByText("Chưa rõ kết luận")).toBeInTheDocument();
+    expect(screen.getByText("other_thing")).toBeInTheDocument();
+    expect(screen.getByText(`${S.ai2.confidence}: certain`)).toBeInTheDocument();
+  });
+
+  it("shows the narrative with its line breaks, the hypotheses and the next steps", async () => {
+    serveViews(done());
+    renderColumn();
+    const narrative = await screen.findByText(/08:00 script bắt đầu/);
+    expect(narrative).toHaveTextContent("08:00 script bắt đầu 08:12 script dừng");
+    expect(narrative).toHaveClass("whitespace-pre-wrap");
+    expect(screen.getByText("Script kiểm thử của nhóm hạ tầng")).toBeInTheDocument();
+    expect(screen.getByText("Hỏi nhóm hạ tầng về lịch chạy script")).toBeInTheDocument();
+  });
+
+  it("keeps a hypothesis's supporting and counter-evidence in two labelled lists", async () => {
+    serveViews(done());
+    renderColumn();
+    const hypothesis = (await screen.findByText("Script kiểm thử của nhóm hạ tầng")).closest("li");
+    expect(hypothesis).not.toBeNull();
+    const inside = within(hypothesis as HTMLElement);
+    const support = inside.getByRole("list", { name: S.ai2.supporting });
+    const counter = inside.getByRole("list", { name: S.ai2.counter });
+    expect(within(support).getByText("Nguồn là 127.0.0.1")).toBeInTheDocument();
+    expect(within(counter).getByText("Không có ticket kiểm thử")).toBeInTheDocument();
+    expect(within(support).queryByText("Không có ticket kiểm thử")).not.toBeInTheDocument();
+  });
+
+  it("warns when a hypothesis has no counter-evidence, and only then", async () => {
+    serveViews(
+      done(
+        run({
+          hypotheses: [
+            { text: "giả thuyết một", evidence_for: ["a"], evidence_against: [] },
+            { text: "giả thuyết hai", evidence_for: ["b"], evidence_against: ["c"] },
+          ],
+        }),
+      ),
+    );
+    renderColumn();
+    const one = (await screen.findByText("giả thuyết một")).closest("li") as HTMLElement;
+    const two = screen.getByText("giả thuyết hai").closest("li") as HTMLElement;
+    expect(within(one).getByText(S.ai2.noCounterEvidence)).toBeInTheDocument();
+    expect(within(two).queryByText(S.ai2.noCounterEvidence)).not.toBeInTheDocument();
+  });
+
+  it("marks each evidence item verified or not, with the reason the quote was refused", async () => {
+    serveViews(done());
+    renderColumn();
+    const list = await screen.findByRole("list", { name: S.ai2.evidence });
+    const [first, second] = within(list).getAllByRole("listitem");
+    expect(within(first as HTMLElement).getByText(S.ai2.mark.verified)).toBeInTheDocument();
+    expect(within(first as HTMLElement).queryByText(S.ai2.unverified)).not.toBeInTheDocument();
+    expect(within(first as HTMLElement).getByText("a-1")).toBeInTheDocument();
+    expect(within(first as HTMLElement).getByText(/Failed password for root/)).toBeInTheDocument();
+    expect(
+      within(first as HTMLElement).getByText("37 lần sai mật khẩu vào root"),
+    ).toBeInTheDocument();
+    const other = within(second as HTMLElement);
+    expect(other.getByText(S.ai2.unverified)).toBeInTheDocument();
+    expect(other.queryByText(S.ai2.mark.verified)).not.toBeInTheDocument();
+    expect(other.getByText(/trích dẫn không có trong log hay mô tả của alert/)).toBeInTheDocument();
+    expect(other.getByText("a-2")).toBeInTheDocument();
+  });
+
+  it("marks every item of a longer list by its own verdict, not by the first", async () => {
+    serveViews(
+      done(
+        run({
+          evidence: [
+            evidenceItem({ verified: false, reason_text: "alert này không thuộc case" }),
+            evidenceItem({ alert_id: "a-2" }),
+            evidenceItem({ alert_id: "a-3", verified: false, reason_text: "trích dẫn ngắn" }),
+          ],
+        }),
+      ),
+    );
+    renderColumn();
+    await screen.findByRole("list", { name: S.ai2.evidence });
+    expect(screen.getAllByText(S.ai2.mark.verified)).toHaveLength(1);
+    expect(screen.getAllByText(S.ai2.unverified)).toHaveLength(2);
+    expect(screen.getByText(/alert này không thuộc case/)).toBeInTheDocument();
+    expect(screen.getByText(/trích dẫn ngắn/)).toBeInTheDocument();
+  });
+
+  it("says so when the assistant gave no evidence", async () => {
+    serveViews(done(run({ evidence: [] })));
+    renderColumn();
+    expect(await screen.findByText(S.ai2.noEvidence)).toBeInTheDocument();
+  });
+
+  it("names the playbook the run used, as the Jinja page does", async () => {
+    serveViews(done(run({ playbook_used: "ssh_brute_force" })));
+    renderColumn();
+    expect(await screen.findByText(S.ai2.playbook("ssh_brute_force"))).toBeInTheDocument();
+  });
+
+  it("names no playbook for a run that used none", async () => {
+    serveViews(done(run({ playbook_used: null })));
+    renderColumn();
+    await screen.findByText("Không phải sự cố");
+    expect(screen.queryByText(/Playbook/)).not.toBeInTheDocument();
+  });
+
+  it("says the model was overruled, in the server's sentence", async () => {
+    const sentence =
+      "Mô hình đề xuất Không phải sự cố (false_positive) nhưng kết luận đã bị hạ xuống Cần thêm dữ liệu (need_more_data): không có bằng chứng nào kiểm chứng được với log của case.";
+    serveViews(done(run({ overruled: sentence })));
+    renderColumn();
+    expect(await screen.findByText(sentence)).toBeInTheDocument();
+  });
+
+  it("says nothing of an overrule when the model was not overruled", async () => {
+    serveViews(done(run({ overruled: null })));
+    renderColumn();
+    await screen.findByText("Không phải sự cố");
+    expect(screen.queryByText(/đã bị hạ xuống/)).not.toBeInTheDocument();
+  });
+
+  // P14-T03 (DEC-213): ② always concludes; the page says what the AI concluded and, when the system held
+  // it as need_more_data, why. A run from before P14-T02 has no `model_conclusion` and keeps the old text.
+  describe("AI kết luận", () => {
+    const concluded = (over: Record<string, unknown> = {}) =>
+      done(
+        run({
+          conclusion: "false_positive",
+          conclusion_label: "Không phải sự cố",
+          model_conclusion: "false_positive",
+          held_by: [],
+          ...over,
+        }),
+      );
+    const heldRun = (heldBy: string[], over: Record<string, unknown> = {}) =>
+      concluded({
+        conclusion: "need_more_data",
+        conclusion_label: "Cần thêm dữ liệu",
+        model_conclusion: "false_positive",
+        held_by: heldBy,
+        ...over,
+      });
+    const line = () => screen.findByText(/AI kết luận/);
+
+    it("says the AI's conclusion in ②'s existing label when the system held nothing back", async () => {
+      serveViews(
+        concluded({
+          model_conclusion: "confirmed_incident",
+          conclusion: "confirmed_incident",
+          conclusion_label: "Là sự cố thật",
+        }),
+      );
+      renderColumn();
+      expect(await line()).toHaveTextContent(/^AI kết luận: Là sự cố thật/);
+      expect((await line()).textContent).not.toContain("giữ lại");
+    });
+
+    it("labels each of the three conclusions the model may give", async () => {
+      serveViews(
+        concluded({ model_conclusion: "policy_violation", conclusion: "policy_violation" }),
+      );
+      renderColumn();
+      expect(await line()).toHaveTextContent(
+        "AI kết luận: Có vi phạm nội quy, không phải tấn công",
+      );
+    });
+
+    it("says the system held the conclusion because no evidence verified", async () => {
+      serveViews(heldRun(["no_verified_evidence"]));
+      renderColumn();
+      expect(await line()).toHaveTextContent(
+        "AI kết luận: Không phải sự cố — hệ thống giữ lại vì: không có bằng chứng kiểm chứng được",
+      );
+    });
+
+    it("says the system held it because of a high-severity injection finding", async () => {
+      serveViews(heldRun(["high_severity_injection_finding"]));
+      renderColumn();
+      expect(await line()).toHaveTextContent(
+        "AI kết luận: Không phải sự cố — hệ thống giữ lại vì: phát hiện dấu hiệu chèn lệnh mức cao",
+      );
+    });
+
+    it("joins both causes with a comma", async () => {
+      serveViews(heldRun(["no_verified_evidence", "high_severity_injection_finding"]));
+      renderColumn();
+      expect(await line()).toHaveTextContent(
+        "vì: không có bằng chứng kiểm chứng được, phát hiện dấu hiệu chèn lệnh mức cao",
+      );
+    });
+
+    it("shows a cause it has no label for as the code, as text", async () => {
+      const markup = "<b>x</b>";
+      serveViews(heldRun(["new_cause", markup]));
+      const { container } = renderColumn();
+      expect(await line()).toHaveTextContent(`vì: new_cause, ${markup}`);
+      expect(container.querySelector("b")).toBeNull();
+    });
+
+    it("keeps the confidence line, and does not repeat the server's overrule sentence", async () => {
+      const sentence =
+        "Mô hình đề xuất Không phải sự cố nhưng kết luận đã bị hạ xuống Cần thêm dữ liệu.";
+      serveViews(heldRun(["no_verified_evidence"], { overruled: sentence }));
+      renderColumn();
+      await line();
+      expect(screen.getByText(`${S.ai2.confidence}: trung bình`)).toBeInTheDocument();
+      expect(screen.queryByText(sentence)).not.toBeInTheDocument();
+    });
+
+    // Fix round 1 (M5): the stored conclusion is the system's word. `need_more_data` beside one of the three
+    // definite conclusions of the model means the system held it, whatever `held_by` managed to name.
+    it("holds a conclusion stored as need_more_data even when held_by names no cause, and keeps the overruled sentence", async () => {
+      const sentence =
+        "Mô hình đề xuất Không phải sự cố (false_positive) nhưng kết luận đã bị hạ xuống Cần thêm dữ liệu (need_more_data).";
+      serveViews(heldRun([], { overruled: sentence }));
+      renderColumn();
+      const text = await line();
+      expect(text).toHaveTextContent(/^AI kết luận: Không phải sự cố — hệ thống giữ lại$/);
+      expect(text.textContent).not.toContain("vì:");
+      // with no cause to name, the server's sentence is the only account of the override: it stays
+      expect(screen.getByText(sentence)).toBeInTheDocument();
+    });
+
+    it.each(["false_positive", "policy_violation", "confirmed_incident"])(
+      "holds a need_more_data stored over the model's %s, with no cause",
+      async (modelConclusion) => {
+        serveViews(heldRun([], { model_conclusion: modelConclusion }));
+        renderColumn();
+        expect(await line()).toHaveTextContent(/ — hệ thống giữ lại$/);
+      },
+    );
+
+    it("does not hold a conclusion that is the model's own, whatever held_by says it has not named", async () => {
+      serveViews(concluded({ held_by: [] }));
+      renderColumn();
+      expect((await line()).textContent).not.toContain("giữ lại");
+    });
+
+    it("does not call a stored need_more_data held when the model's conclusion is not one of the three", async () => {
+      // `model_conclusion` is closed on the server; a value outside it is nothing the model may have said
+      serveViews(heldRun([], { model_conclusion: "need_more_data" }));
+      renderColumn();
+      expect((await line()).textContent).not.toContain("giữ lại");
+    });
+
+    it("keeps the overruled sentence hidden when the causes are named (it would repeat them)", async () => {
+      const sentence = "Mô hình đề xuất Không phải sự cố nhưng kết luận đã bị hạ xuống.";
+      serveViews(heldRun(["no_verified_evidence"], { overruled: sentence }));
+      renderColumn();
+      await line();
+      expect(screen.queryByText(sentence)).not.toBeInTheDocument();
+    });
+
+    it("keeps the existing overruled sentence for an old run that has no model_conclusion", async () => {
+      const sentence =
+        "Mô hình đề xuất Không phải sự cố (false_positive) nhưng kết luận đã bị hạ xuống Cần thêm dữ liệu (need_more_data): không có bằng chứng nào kiểm chứng được với log của case.";
+      serveViews(
+        done(
+          run({
+            conclusion: "need_more_data",
+            conclusion_label: "Cần thêm dữ liệu",
+            model_conclusion: null,
+            held_by: [],
+            overruled: sentence,
+          }),
+        ),
+      );
+      renderColumn();
+      expect(await screen.findByText(sentence)).toBeInTheDocument();
+      expect(screen.getByText("Cần thêm dữ liệu")).toBeInTheDocument();
+      expect(screen.queryByText(/AI kết luận/)).not.toBeInTheDocument();
+    });
+
+    it("shows an old run with neither key as it always was", async () => {
+      serveViews(done(run()));
+      renderColumn();
+      expect(await screen.findByText("Không phải sự cố")).toBeInTheDocument();
+      expect(screen.queryByText(/AI kết luận/)).not.toBeInTheDocument();
+    });
+  });
+
+  // P14-T07 (DEC-213, spec 4.3): beside ②'s conclusion the page says how strongly the case matched approved
+  // knowledge, in the conclusion line, and, when the lookup failed, the notice that the RAG was not applied -
+  // in the case's words. The sentences are written out in full on purpose.
+  describe("the RAG beside the conclusion", () => {
+    const TAIL = "AI đã phân tích không có tri thức tham khảo.";
+    const concluded = (rag: unknown, over: Record<string, unknown> = {}) =>
+      done(
+        run({
+          conclusion: "false_positive",
+          conclusion_label: "Không phải sự cố",
+          model_conclusion: "false_positive",
+          held_by: [],
+          rag,
+          ...over,
+        }),
+      );
+    const line = () => screen.findByText(/AI kết luận/);
+
+    it("follows the conclusion line, in the same sentence", async () => {
+      serveViews(concluded({ best_pct: 87, not_applied: null }));
+      renderColumn();
+      expect(await line()).toHaveTextContent(
+        /^AI kết luận: Không phải sự cố — trùng 87% với tri thức đã duyệt$/,
+      );
+      expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    });
+
+    it("comes before the system's own clause when it held the conclusion", async () => {
+      serveViews(
+        concluded(
+          { best_pct: 72, not_applied: null },
+          {
+            conclusion: "need_more_data",
+            conclusion_label: "Cần thêm dữ liệu",
+            held_by: ["no_verified_evidence"],
+          },
+        ),
+      );
+      renderColumn();
+      expect(await line()).toHaveTextContent(
+        "AI kết luận: Không phải sự cố — trùng 72% với tri thức đã duyệt — " +
+          "hệ thống giữ lại vì: không có bằng chứng kiểm chứng được",
+      );
+    });
+
+    it("says nothing without a match, and nothing for a run that carries no rag", async () => {
+      serveViews(concluded({ best_pct: null, not_applied: null }));
+      renderColumn();
+      expect((await line()).textContent).not.toContain("trùng");
+    });
+
+    // DEC-220 (trial): a lookup that kept no match still scored candidates; the line says the best one's
+    // percentage and the floor, in the same place and in the same sentence as a kept match's.
+    describe("the best candidate under the floor (DEC-220)", () => {
+      const UNDER = {
+        best_pct: null,
+        not_applied: null,
+        below_floor_pct: 47,
+        floor_pct: 50,
+      };
+
+      it("says it in the conclusion line, whole", async () => {
+        serveViews(concluded(UNDER));
+        renderColumn();
+        expect((await line()).textContent).toBe(
+          "AI kết luận: Không phải sự cố — trùng cao nhất 47% với tri thức đã duyệt (dưới mức tối thiểu 50%)",
+        );
+        expect(screen.queryByRole("note")).not.toBeInTheDocument();
+      });
+
+      it("comes before the system's own clause when it held the conclusion", async () => {
+        serveViews(
+          concluded(UNDER, {
+            conclusion: "need_more_data",
+            conclusion_label: "Cần thêm dữ liệu",
+            held_by: ["no_verified_evidence"],
+          }),
+        );
+        renderColumn();
+        expect((await line()).textContent).toBe(
+          "AI kết luận: Không phải sự cố — trùng cao nhất 47% với tri thức đã duyệt (dưới mức tối thiểu 50%) — " +
+            "hệ thống giữ lại vì: không có bằng chứng kiểm chứng được",
+        );
+      });
+
+      it("says the floor the server sent, and 0% as a percentage", async () => {
+        serveViews(
+          concluded({ best_pct: null, not_applied: null, below_floor_pct: 0, floor_pct: 65 }),
+        );
+        renderColumn();
+        expect((await line()).textContent).toBe(
+          "AI kết luận: Không phải sự cố — trùng cao nhất 0% với tri thức đã duyệt (dưới mức tối thiểu 65%)",
+        );
+      });
+
+      it("prints a kept match's text, unchanged, when there is a match", async () => {
+        serveViews(
+          concluded({ best_pct: 87, not_applied: null, below_floor_pct: null, floor_pct: null }),
+        );
+        renderColumn();
+        expect((await line()).textContent).toBe(
+          "AI kết luận: Không phải sự cố — trùng 87% với tri thức đã duyệt",
+        );
+      });
+
+      it("says nothing for no candidate, for a server that sends no new keys, and for half a pair", async () => {
+        const none = [
+          { best_pct: null, not_applied: null, below_floor_pct: null, floor_pct: null },
+          { best_pct: null, not_applied: null },
+          { best_pct: null, not_applied: null, below_floor_pct: 47, floor_pct: null },
+        ];
+        for (const rag of none) {
+          serveViews(concluded(rag));
+          const shown = renderColumn();
+          expect((await line()).textContent).toBe("AI kết luận: Không phải sự cố");
+          shown.unmount();
+        }
+      });
+    });
+
+    it("says nothing for an old run with no rag key at all", async () => {
+      serveViews(
+        done(
+          run({ model_conclusion: "false_positive", held_by: [], conclusion: "false_positive" }),
+        ),
+      );
+      renderColumn();
+      expect((await line()).textContent).not.toContain("trùng");
+      expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    });
+
+    it.each([
+      ["rate_limit", "Voyage vượt giới hạn tốc độ"],
+      ["timeout", "Voyage quá thời gian chờ"],
+      ["auth", "thiếu hoặc sai API key Voyage"],
+      ["quota", "Voyage hết hạn mức"],
+      ["provider_error", "lỗi phía Voyage"],
+      ["vectordb_unreachable", "không kết nối được vector DB"],
+    ])("says the notice for %s in the case's words", async (kind, label) => {
+      serveViews(concluded({ best_pct: null, not_applied: kind }));
+      renderColumn();
+      await line();
+      expect(screen.getByRole("note")).toHaveTextContent(
+        `⚠ Không áp dụng RAG cho case này: ${label} — ${TAIL}`,
+      );
+    });
+
+    it("never says 'alert' in the case's notice", async () => {
+      serveViews(concluded({ best_pct: null, not_applied: "auth" }));
+      renderColumn();
+      await line();
+      expect(screen.getByRole("note").textContent).not.toContain("alert");
+    });
+
+    it("is not there when the lookup did not fail", async () => {
+      serveViews(concluded({ best_pct: 87, not_applied: null }));
+      renderColumn();
+      await line();
+      expect(screen.queryByText(/Không áp dụng RAG/)).not.toBeInTheDocument();
+    });
+
+    it("is beside an old run's stored label too (a run with no model_conclusion)", async () => {
+      serveViews(done(run({ rag: { best_pct: null, not_applied: "quota" } })));
+      renderColumn();
+      expect(await screen.findByRole("note")).toHaveTextContent("Voyage hết hạn mức");
+    });
+
+    it("draws nothing for a kind it has no words for, and never the code", async () => {
+      serveViews(concluded({ best_pct: null, not_applied: "<b>cosmic_ray</b>" }));
+      const { container } = renderColumn();
+      await line();
+      expect(screen.queryByRole("note")).not.toBeInTheDocument();
+      expect(container.textContent).not.toContain("cosmic_ray");
+      expect(container.querySelector("b")).toBeNull();
+    });
+
+    it("has no axe violation with the percentage and the notice", async () => {
+      serveViews(concluded({ best_pct: 87, not_applied: "auth" }));
+      const { container } = renderColumn();
+      await line();
+      const result = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
+      expect(
+        result.violations.map((x) => `${x.id}: ${x.nodes.map((n) => n.html).join(" | ")}`),
+      ).toEqual([]);
+    });
+  });
+
+  it("says the case has changed since the run, beside the numbers then and now", async () => {
+    serveViews(
+      done(run({ changed: true }), {
+        current: {
+          alert_count: 4,
+          total_occurrences: 75,
+          last_seen_at: "2026-09-30T02:30:00+00:00",
+        },
+      }),
+    );
+    renderColumn();
+    expect(await screen.findByText(S.ai2.stale)).toBeInTheDocument();
+    expect(screen.getByText(S.ai2.snapshot(3, 61, "26/09 11:12"))).toBeInTheDocument();
+    expect(screen.getByText(S.ai2.current(4, 75, "30/09 09:30"))).toBeInTheDocument();
+  });
+
+  it("says nothing of a change when the case is as it was", async () => {
+    serveViews(done());
+    renderColumn();
+    await screen.findByText("Không phải sự cố");
+    expect(screen.queryByText(S.ai2.stale)).not.toBeInTheDocument();
+  });
+
+  it("renders text the model wrote as text: no element is made of it", async () => {
+    const markup = '<b>đậm</b> <img src=x onerror="alert(1)"> </script> ‮';
+    serveViews(
+      done(
+        run({
+          summary: markup,
+          narrative: markup,
+          hypotheses: [{ text: markup, evidence_for: [markup], evidence_against: [markup] }],
+          evidence: [evidenceItem({ quote: markup, why: markup, alert_id: markup })],
+          next_steps: [markup],
+          overruled: markup,
+          playbook_used: markup,
+        }),
+      ),
+    );
+    const { container } = renderColumn();
+    await screen.findByRole("list", { name: S.ai2.evidence });
+    expect(container.querySelector("b, img, script")).toBeNull();
+    expect(screen.getAllByText(markup, { exact: false }).length).toBeGreaterThan(5);
+  });
+});
