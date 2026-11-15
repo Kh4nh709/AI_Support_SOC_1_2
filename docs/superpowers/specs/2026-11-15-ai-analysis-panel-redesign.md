@@ -18,6 +18,9 @@ said 15 of 15 earlier alerts were incidents; the best knowledge candidate scored
 Three mock-ups were shown. The Owner chose option C and asked for one change: no "Mô hình" and no
 "Bộ kiểm chứng" row in the technical tab (the two rows that named the models).
 
+**Approved by the Owner, 15/11/2026:** "Duyệt phần UI mới. Nhớ ghi vào yêu cầu tôi là bỏ tên model
+GLM 5.3 ra khỏi UI. Đưa coder code lại UI đi."
+
 ## 2 · Goals, non-goals
 
 Goals
@@ -31,6 +34,10 @@ Goals
 - G3. The model says more that an analyst can act on: a short summary, the attack and the benign
   reading, what would change the verdict, what to check next (Tier 1); a timeline, the scope, a
   likelihood per hypothesis, a priority per next step (Tier 2).
+- G5. **The model's name (for example GLM 5.3) appears nowhere in the Tier 1 and Tier 2 pages** (the
+  Owner's requirement, stated twice): not in the panel, not in a tooltip or an attribute, and not in
+  what the server sends to these pages. Tests assert it on the served view and on the rendered
+  panels.
 - G4. The rules already decided stay true: the blind arm sees nothing of ① (DEC-101); for a run
   the RAG default applied to, nothing served says or gives away the model's own answer (DEC-219);
   ① is recommend-only.
@@ -117,6 +124,13 @@ Rules
   they read today.
 - With `LLM_RESPONSE_FORMAT=json_schema` the new schemas are sent as they are (DEC-218's
   converter handles every notation used here).
+- `security/output_guard.py` carries the new Tier 1 fields through step 7 with their types checked
+  (strings; a non-empty list of strings); it still rewrites no text. `next_checks` is cut to three
+  items where it is served.
+- **Each card leaves the product working.** After AP-T1 and before the UI cards, the existing
+  pages must read a version 4 run without change: the existing Tier 2 view keeps serving
+  `next_steps` as the list of strings it serves today (each row's `step`), and ignores the keys it
+  does not know.
 - The prompts gain the sentences that ask for the new fields. This moves `prompt_version`, and a
   run with the new prompt is not comparable call for call with gold v2's runs: the DEC says so.
 
