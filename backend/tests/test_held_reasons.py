@@ -1,6 +1,11 @@
 """P14-T03 (DEC-213): why the system held ①'s definite verdict - `llm.verdicts.held_reasons` and
 `llm.verdicts.proposed_action`, the two readers of `gate_result` the alert view and the queue rows use.
 
+DEC-217 (BV-T1): nothing is held any more; the same closed reasons now say which checks raised a
+warning. `held_reasons` reads `flagged_by` (a version 2 `gate_result`) when the document has it and
+`forced_by` (version 1, the old gate's forces) otherwise, so a stored version 1 document is read as it
+always was and keeps its version 1 fixture here.
+
 No database. The reasons are a closed set, in the gate's step order (spec 4.3):
 
     facts_mismatch (step 2), no_verified_quote (step 3), fp_policy:<field> for each entry of step 4's
@@ -121,6 +126,70 @@ def test_a_verdict_the_gate_kept_has_no_reasons():
     assert verdicts.held_reasons(kept) == []
 
 
+# ── a version 2 document: `flagged_by` ──────────────────────────────────────────────────────
+
+
+def test_a_version_2_document_reads_flagged_by():
+    assert verdicts.held_reasons({"version": 2, "flagged_by": ["step2"]}) == ["facts_mismatch"]
+    assert verdicts.held_reasons({"version": 2, "flagged_by": ["step3"]}) == ["no_verified_quote"]
+    assert verdicts.held_reasons(
+        {"version": 2, "flagged_by": ["step4"], "missing": ["asset_criticality"]}
+    ) == ["fp_policy:asset_criticality"]
+    assert verdicts.held_reasons({"version": 2, "flagged_by": ["step6"]}) == ["verifier_disagrees"]
+    assert verdicts.held_reasons(
+        {"version": 2, "flagged_by": ["step6"], "steps": {"6": "invalid"}}
+    ) == ["verifier_invalid"]
+
+
+def test_a_version_2_document_lists_every_check_that_flagged_in_step_order():
+    gate_result = {
+        "version": 2,
+        "forced": False,
+        "forced_by": [],
+        "flagged_by": ["step2", "step3", "step4", "step6"],
+        "missing": ["severity", "playbook_rule"],
+        "steps": {"6": "disagree"},
+    }
+    assert verdicts.held_reasons(gate_result) == [
+        "facts_mismatch",
+        "no_verified_quote",
+        "fp_policy:severity",
+        "fp_policy:playbook_rule",
+        "verifier_disagrees",
+    ]
+
+
+def test_a_version_2_document_that_nothing_flagged_has_no_reasons():
+    assert verdicts.held_reasons({"version": 2, "flagged_by": [], "forced_by": []}) == []
+
+
+def test_flagged_by_wins_over_forced_by_when_the_document_has_it():
+    """`forced_by` is `[]` in a version 2 document; if one ever carried both, the flags are the reasons."""
+    assert verdicts.held_reasons({"flagged_by": ["step3"], "forced_by": ["step2"]}) == [
+        "no_verified_quote"
+    ]
+    assert verdicts.held_reasons({"flagged_by": [], "forced_by": ["step2"]}) == []
+
+
+@pytest.mark.parametrize("absent", [None, "step2", {"step2": True}, 7])
+def test_a_flagged_by_that_is_not_a_list_is_read_as_a_version_1_document(absent):
+    """The queue's SQL projection puts `flagged_by: null` into the document it hands over for a version
+    1 row; that must read as "absent", not as an empty list that would hide the old reasons. A garbled
+    value gives what `forced_by` gives."""
+    gate_result = {"flagged_by": absent, "forced_by": ["step2"]}
+    assert verdicts.held_reasons(gate_result) == ["facts_mismatch"]
+
+
+def test_only_closed_values_leave_from_flagged_by_too():
+    gate_result = {
+        "flagged_by": ["step4", "step9", "step3", 7, None, "step3"],
+        "missing": ["asset_criticality", "<script>", 3, None],
+    }
+    reasons = verdicts.held_reasons(gate_result)
+    assert reasons == ["no_verified_quote", "fp_policy:asset_criticality"]
+    assert set(reasons) <= set(verdicts.HELD_REASONS)
+
+
 def test_only_closed_values_ever_leave():
     gate_result = {
         "forced_by": ["step4", "step9", "step3", 7, None, "step3"],
@@ -226,18 +295,12 @@ def _run(proposal: dict, *, facts: dict, blocks: dict, holds: bool = True, verif
     return gate.gate_result(state, prompt_version="pv", playbook_used_effective=None)
 
 
-def test_a_high_criticality_asset_is_held_for_that_field_only():
+def test_a_high_criticality_asset_is_flagged_for_that_field_only():
     basis = dict(TRIAGE_V2_FALSE_POSITIVE["structured_basis"], asset_criticality="high")
     proposal = {**copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE), "structured_basis": basis}
-    result = _run(
-        proposal,
-        facts=_facts(basis),
-        blocks=_blocks(proposal),
-        verifier={**VERIFIER_V2_AGREE, "structured_only_verdict": "needs_review"},
-    )
-    assert (
-        result["proposed_verdict"] == "false_positive" and result["final_verdict"] == "needs_review"
-    )
+    result = _run(proposal, facts=_facts(basis), blocks=_blocks(proposal))
+    assert result["proposed_verdict"] == "false_positive" == result["final_verdict"]
+    assert result["forced"] is False and result["flagged_by"] == ["step4"]
     assert verdicts.held_reasons(result) == ["fp_policy:asset_criticality"]
     assert verdicts.proposed_action(result) == "false_positive"
 
@@ -251,6 +314,8 @@ def test_a_basis_mismatch_and_a_dropped_quote_and_a_verifier_that_disagrees_are_
     assert reasons[0] == "facts_mismatch"
     assert reasons[1] == "no_verified_quote"
     assert reasons[-1] == "verifier_disagrees"
+    # DEC-217: step 4 is evaluated after steps 2 and 3 flagged, so its reason is there too
+    assert "fp_policy:severity" in reasons
     assert set(reasons) <= set(verdicts.HELD_REASONS)
 
 
@@ -261,15 +326,14 @@ def test_a_missing_playbook_rule_is_a_reason_of_its_own():
         facts=_facts(proposal["structured_basis"]),
         blocks=_blocks(proposal),
         holds=False,
-        verifier={**VERIFIER_V2_AGREE, "structured_only_verdict": "needs_review"},
     )
-    assert "fp_policy:playbook_rule" in verdicts.held_reasons(result)
+    assert verdicts.held_reasons(result) == ["fp_policy:playbook_rule"]
 
 
-def test_a_verdict_the_gate_kept_is_not_held():
+def test_a_run_no_check_flagged_has_no_reasons():
     proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
     result = _run(proposal, facts=_facts(proposal["structured_basis"]), blocks=_blocks(proposal))
-    assert result["forced"] is False
+    assert result["forced"] is False and result["flagged_by"] == []
     assert verdicts.held_reasons(result) == []
     assert verdicts.proposed_action(result) == "false_positive"
 
@@ -282,8 +346,8 @@ def test_a_verifier_whose_answer_did_not_parse_is_verifier_invalid_from_the_real
         blocks=_blocks(proposal),
         verifier=None,
     )
-    assert result["steps"]["6"] == "invalid" and result["forced_by"] == ["step6"]
-    assert result["final_verdict"] == "needs_review"
+    assert result["steps"]["6"] == "invalid" and result["flagged_by"] == ["step6"]
+    assert result["final_verdict"] == "false_positive"
     assert verdicts.held_reasons(result) == ["verifier_invalid"]
     assert verdicts.proposed_action(result) == "false_positive"
 
@@ -300,11 +364,16 @@ def test_a_verifier_that_disagrees_is_verifier_disagrees_from_the_real_gate():
     assert verdicts.held_reasons(result) == ["verifier_disagrees"]
 
 
-def test_an_invalid_verifier_after_an_earlier_force_names_both():
+def test_an_invalid_verifier_after_an_earlier_flag_names_every_check():
     proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
     facts = _facts(proposal["structured_basis"], severity="critical")
     result = _run(proposal, facts=facts, blocks=_blocks(proposal), verifier=None)
-    assert verdicts.held_reasons(result) == ["facts_mismatch", "verifier_invalid"]
+    # step 4 is evaluated after step 2's flag now: a critical severity is its field too
+    assert verdicts.held_reasons(result) == [
+        "facts_mismatch",
+        "fp_policy:severity",
+        "verifier_invalid",
+    ]
 
 
 # ── FP_POLICY_FIELDS against the real step 4 (every field, not two of the five) ──────────────
@@ -331,14 +400,13 @@ def _step_4(fields: list[str]):
         facts=_facts(basis),
         blocks=_blocks(proposal),
         holds="playbook_rule" not in fields,
-        verifier={**VERIFIER_V2_AGREE, "structured_only_verdict": "needs_review"},
     )
 
 
 @pytest.mark.parametrize("field", verdicts.FP_POLICY_FIELDS)
 def test_each_field_step_4_can_name_is_a_reason_from_the_real_gate(field):
     result = _step_4([field])
-    assert result["forced_by"] == ["step4"] and result["missing"] == [field]
+    assert result["flagged_by"] == ["step4"] and result["missing"] == [field]
     assert verdicts.held_reasons(result) == [f"fp_policy:{field}"]
 
 

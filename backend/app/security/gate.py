@@ -3,14 +3,17 @@
 Implements context pack §7.3 literally (`docs/plan/tasks/P3/P3-T08.prompt.md` pastes the same
 seven steps). `security` may import only `infra` (G1), so three things the gate needs — schema
 validation (P3-T05), the decision-table check (P3-T10, wrapping `kb.rule_holds`), and the
-detector (P3-T07) — arrive as injected callables rather than imports; the verifier's parsed JSON
+detector (P3-T07) — arrive as injected callables rather than imported; the verifier's parsed JSON
 arrives as a plain argument for the same reason.
 
-Verdict transitions are monotone: only `start()` may set `verdict` to `false_positive` or
-`true_positive` (from the proposer's own claim, which `triage_v3` makes a definite one: the model may
-not answer `needs_review`); every step after that may only force it to `needs_review`, appending its
-own name to `forced_by`. `forced = proposed_verdict != verdict`, and `proposed_verdict` is always the
-model's definite answer (P14-T01, DEC-213; the steps themselves are unchanged).
+DEC-217 (BV-T1): ① gives only `true_positive` or `false_positive`, and every check the gate runs is a
+warning shown beside that verdict. `verdict` is the model's own definite answer (`triage_v3`: the model
+may not answer `needs_review`) from `start()` to step 7 and no step changes it. A failed check of step 2,
+3, 4 or 6 FLAGS the run: it appends its own name (`"step2"`, …) to `flagged_by`, and what it found is
+still recorded (`hallucination_flag`, `mismatched_fields`, `dropped_reasons`, `missing`, `warnings`,
+`steps`). `needs_review` can no longer leave the gate: `output_guard` refuses it. Before DEC-217 a failed
+check forced the verdict to `needs_review` (`forced_by`, `gate_result` version 1); those documents stay in
+the database and the readers still read them (`llm.verdicts`).
 """
 
 from __future__ import annotations
@@ -38,10 +41,10 @@ class GateState:
     facts: Mapping[str, Any]  # planning decision 7
     blocks: Mapping[str, Block]  # BuiltPrompt.block_index
     proposed_verdict: str
-    verdict: str  # evolves through the steps
+    verdict: str  # the model's answer, from `start()` to step 7: no step changes it
     reasons: list[dict]  # surviving reasons
     steps: dict[str, str]
-    forced_by: list[str]
+    flagged_by: list[str]  # the steps whose check failed, in step order
     missing: list[str]
     mismatched_fields: list[str]
     dropped_reasons: list[dict]
@@ -76,7 +79,7 @@ def start(
         verdict=parsed["suggested_action"],
         reasons=list(parsed["reasons"]),
         steps={"1": "repaired" if repaired else "ok"},
-        forced_by=[],
+        flagged_by=[],
         missing=[],
         mismatched_fields=[],
         dropped_reasons=[],
@@ -87,9 +90,10 @@ def start(
     )
 
 
-def _force_needs_review(state: GateState, step_name: str) -> None:
-    state.verdict = "needs_review"
-    state.forced_by.append(step_name)
+def _flag(state: GateState, step_name: str) -> None:
+    """A failed check raises a warning: the step's name joins `flagged_by`. The verdict is not touched."""
+    if step_name not in state.flagged_by:
+        state.flagged_by.append(step_name)
 
 
 def step2_basis(state: GateState) -> None:
@@ -107,7 +111,7 @@ def step2_basis(state: GateState) -> None:
     if mismatched:
         state.hallucination_flag = True
         state.mismatched_fields = mismatched
-        _force_needs_review(state, "step2")
+        _flag(state, "step2")
         state.steps["2"] = "mismatch"
     else:
         state.steps["2"] = "ok"
@@ -118,7 +122,9 @@ def _norm(text: str) -> str:
 
 
 def step3_quotes(state: GateState) -> None:
-    """Every reason's quote must be a normalised substring of the block it names."""
+    """Every reason's quote must be a normalised substring of the block it names. A reason whose quote is
+    not verified leaves the reasons the gate hands on (`dropped_reasons` records it); no survivor flags
+    the run, and its result then carries `reasons: []`."""
     survivors: list[dict] = []
     dropped: list[dict] = []
     for index, reason in enumerate(state.reasons):
@@ -138,13 +144,14 @@ def step3_quotes(state: GateState) -> None:
     state.dropped_reasons = dropped
     state.steps["3"] = f"dropped:{len(dropped)}"
     if not survivors:
-        _force_needs_review(state, "step3")
+        _flag(state, "step3")
 
 
 def step4_fp_policy(state: GateState, rule_check: RuleCheck) -> None:
-    """`false_positive` is kept only when every condition below holds; `missing` names all
-    the ones that failed, not just the first. Applies only when verdict == "false_positive"
-    at this point — no detector output feeds this step."""
+    """A `false_positive` answer is checked against every condition below; `missing` names all the ones
+    that failed, not just the first, and any of them flags the run. Evaluated for EVERY `false_positive`
+    answer, whatever step 2 or step 3 found (a flag no longer ends the policy check); `n/a` only for a
+    `true_positive` answer. No detector output feeds this step."""
     if state.verdict != "false_positive":
         state.steps["4"] = "n/a"
         return
@@ -169,7 +176,7 @@ def step4_fp_policy(state: GateState, rule_check: RuleCheck) -> None:
 
     if missing:
         state.missing = missing
-        _force_needs_review(state, "step4")
+        _flag(state, "step4")
         state.steps["4"] = "missing"
     else:
         state.steps["4"] = "ok"
@@ -200,16 +207,19 @@ def run_steps_1_to_5(
 
 
 def step6_verifier(state: GateState, verifier_parsed: dict | None) -> None:
-    """Compare against `state.verdict` (the verdict *after* step 4), not the proposer's
-    original claim — that is what the verifier prompt actually carried (P3-T09)."""
+    """Compare against `state.verdict`: the model's own answer, which is what the verifier prompt carried
+    (P3-T09; `false_positive` or `true_positive`, since no step changes it). A verifier answer that is
+    unusable (`None`) is `invalid` and flags the run; `agree` false, or a `structured_only_verdict` that
+    differs from the model's verdict (the verifier may still answer `needs_review`), is `disagree` and
+    flags it; otherwise `agree`."""
     if verifier_parsed is None:
-        _force_needs_review(state, "step6")
+        _flag(state, "step6")
         state.steps["6"] = "invalid"
         return
 
     state.verifier_verdict = verifier_parsed["structured_only_verdict"]
     if verifier_parsed["agree"] is False or state.verifier_verdict != state.verdict:
-        _force_needs_review(state, "step6")
+        _flag(state, "step6")
         state.steps["6"] = "disagree"
     else:
         state.steps["6"] = "agree"
@@ -217,8 +227,8 @@ def step6_verifier(state: GateState, verifier_parsed: dict | None) -> None:
 
 def step7_output_guard(state: GateState) -> dict:
     """`proposer_raw` with `suggested_action`/`reasons` replaced by the gated values, passed
-    through `output_guard.enforce()` — the final `triage_v3`-shaped result (its verdict may be
-    `needs_review`: the system's own, never the model's)."""
+    through `output_guard.enforce()` — the final `triage_v3`-shaped result: the model's own verdict (a
+    `needs_review` raises `OutputGuardError`) and the reasons whose quote was verified."""
     result = dict(state.proposer_raw)
     result["suggested_action"] = state.verdict
     result["reasons"] = list(state.reasons)
@@ -238,13 +248,17 @@ def finish(state: GateState, verifier_parsed: dict | None) -> dict:
 def gate_result(
     state: GateState, *, prompt_version: str, playbook_used_effective: str | None
 ) -> dict:
-    """The document P4 displays and P7 re-gates from (planning decision 1)."""
+    """The document P4 displays and P7 re-gates from (planning decision 1). Version 2 (DEC-217): the
+    proposed and the final verdict are both the model's answer, nothing is forced (`forced` false,
+    `forced_by` empty: version 1's keys, kept so a reader of either version finds them), and `flagged_by`
+    names the steps whose check failed, in step order."""
     return {
-        "version": 1,
+        "version": 2,
         "proposed_verdict": state.proposed_verdict,
         "final_verdict": state.verdict,
-        "forced": state.proposed_verdict != state.verdict,
-        "forced_by": list(state.forced_by),
+        "forced": False,
+        "forced_by": [],
+        "flagged_by": list(state.flagged_by),
         "steps": dict(state.steps),
         "hallucination_flag": state.hallucination_flag,
         "mismatched_fields": list(state.mismatched_fields),

@@ -135,10 +135,11 @@ class RiskBand(Enum):
 
 
 class Verdict(Enum):
-    """①'s verdict after the gate (``llm/verdicts.py``'s ``GATED_ACTIONS``, same order). The model
-    answers ``false_positive`` or ``true_positive`` only; ``needs_review`` is the system's.
-    ``TRUE_POSITIVE`` was ``ESCALATE`` until P14-T01 (DEC-213); the analyst's escalation is not this
-    enum and keeps its name."""
+    """The verdicts the verifier's prompt names (``llm/verdicts.py``'s ``REVIEW_ACTIONS``, same order). The
+    model answers ``false_positive`` or ``true_positive`` only, and since DEC-217 so does ①'s stored
+    result; ``needs_review`` stays here because the verifier (``verifier_v2``) and a decision-table rule
+    may still say it. ``TRUE_POSITIVE`` was ``ESCALATE`` until P14-T01 (DEC-213); the analyst's escalation
+    is not this enum and keeps its name."""
 
     FALSE_POSITIVE = "false_positive"
     NEEDS_REVIEW = "needs_review"
