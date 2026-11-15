@@ -96,6 +96,15 @@ def _parse_nonneg_int(key: str, raw: str) -> int:
     return value
 
 
+def _parse_percent(key: str, raw: str) -> int:
+    """An integer from 0 to 100 (DEC-219): a percentage of matching approved knowledge. Anything else - a
+    fraction, a word, a number outside the range - stops the start-up naming `key` and is never clamped."""
+    value = _parse_int(key, raw)
+    if not 0 <= value <= 100:
+        raise ConfigError(f"{key}: must be an integer from 0 to 100, got {raw!r}")
+    return value
+
+
 def _parse_float(key: str, raw: str) -> float:
     try:
         return float(raw)
@@ -257,6 +266,11 @@ class Config:
     VOYAGE_PRICE_EMBED_PER_M: float = 0.06
     VOYAGE_PRICE_RERANK_PER_M: float = 0.05
     VECTOR_DATABASE_URL: str = ""
+    # DEC-219: the RAG low-match rule of ①, trial first. An integer from 0 to 100 (`ConfigError` otherwise): when
+    # the alert's RAG lookup kept a match and its best match is BELOW this percentage, ① answers
+    # `false_positive` whatever the model said (`security.gate.step3r_rag_rule`). 0 (the default) is off: the
+    # rule never applies and a run is exactly what it was before the key existed. `.env` key only.
+    TRIAGE_RAG_FP_BELOW_PCT: int = 0
 
     @property
     def llm_enabled(self) -> bool:
@@ -298,6 +312,10 @@ def load(*, env_file: str | Path = ".env") -> Config:
     def as_nonneg_int(key: str, default: int) -> int:
         value = raw(key)
         return default if value is None else _parse_nonneg_int(key, value)
+
+    def as_percent(key: str, default: int) -> int:
+        value = raw(key)
+        return default if value is None else _parse_percent(key, value)
 
     def as_float(key: str, default: float) -> float:
         value = raw(key)
@@ -432,4 +450,5 @@ def load(*, env_file: str | Path = ".env") -> Config:
         VOYAGE_PRICE_EMBED_PER_M=as_float("VOYAGE_PRICE_EMBED_PER_M", 0.06),
         VOYAGE_PRICE_RERANK_PER_M=as_float("VOYAGE_PRICE_RERANK_PER_M", 0.05),
         VECTOR_DATABASE_URL=as_str("VECTOR_DATABASE_URL", ""),
+        TRIAGE_RAG_FP_BELOW_PCT=as_percent("TRIAGE_RAG_FP_BELOW_PCT", 0),
     )
