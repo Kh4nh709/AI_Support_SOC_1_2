@@ -152,8 +152,11 @@ Red first, then green:
 
 ## 9 · Deploy (the Owner)
 
-`LLM_RESPONSE_FORMAT=json_schema` in the trial `.env`, then restart `app`, `worker`,
-`rag-worker`. The live stack keeps the default.
+`LLM_RESPONSE_FORMAT=json_schema` in the trial `.env`, then recreate the containers that read it:
+`docker compose up -d --force-recreate app worker rag-worker`. A `restart` does not apply an `.env`
+edit (`.env` is read when a container is created). Check:
+`docker compose exec -T app printenv LLM_RESPONSE_FORMAT` → `json_schema`. The live stack keeps the
+default.
 
 After the deploy, the measure is the share of proposer runs whose `gate_result.steps["1"]` is
 `repaired` and the count of `stopped_by = 'schema'` rows, against 8.0 % and 0.7 % before.
