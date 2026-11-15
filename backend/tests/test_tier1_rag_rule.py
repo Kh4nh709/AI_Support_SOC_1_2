@@ -641,6 +641,122 @@ class _NullTransaction:
         return False
 
 
+# ---------------------------------------------------------------------------------------------------
+# DEC-220: the number the page shows for a lookup that kept no match is NOT the rule's number
+# ---------------------------------------------------------------------------------------------------
+
+
+def _the_page_pair(proposer, *, matches, ranked, floor=0.5) -> dict:
+    """The pair the alert view carries for a stored run: the page's reader over a row shaped as the statement
+    returns it (DEC-220: the lookup's `ranked` is its last column)."""
+    row = (
+        "run-1",
+        proposer["result"],
+        proposer["gate_result"],
+        datetime(2026, 11, 15, tzinfo=UTC),
+        proposer["citation_warnings"],
+        matches,
+        ranked,
+    )
+    return queue.latest_suggestion_rag(_PageConn(row), _ALERT_ID, rag_min_score=floor)[3]
+
+
+_RANKED = [{"entry_id": "c-1", "score": 0.47}, {"entry_id": "c-2", "score": 0.31}]
+
+
+class TestACandidateUnderTheFloorIsNotAMatch:
+    """The page says "trùng cao nhất 47% (dưới mức tối thiểu 50%)" for a run whose lookup kept no match and
+    scored a 47 % candidate. The rule of DEC-219 reads kept matches only (`_rag_best_pct`): for the same stored run
+    it has no number, does not apply and leaves the model's verdict, whatever the threshold. The two can never be
+    confused: this class pins the one against the other."""
+
+    @pytest.mark.parametrize("threshold", ["80", "100", "51"])
+    def test_a_47_percent_candidate_with_no_kept_match_keeps_the_models_verdict(
+        self, world, threshold
+    ):
+        world.material = _material(
+            entries=False
+        )  # history only: the run holds the lookup; no entry
+        world.matches = []  # the lookup kept no match: 47 % is under the floor of 50 %
+
+        world.run(_tp_model(), TRIAGE_RAG_FP_BELOW_PCT=threshold)
+
+        row = world.proposer
+        assert (
+            row["rag_lookup_id"] == LOOKUP_ID
+        )  # the run names the lookup the page reads the ranking of
+        assert row["result"]["suggested_action"] == TP
+        assert row["gate_result"]["final_verdict"] == TP
+        assert row["gate_result"]["rag_rule"] == {
+            "threshold": int(threshold),
+            "best_pct": None,
+            "applied": False,
+            "changed": False,
+        }
+        assert row["gate_result"]["steps"]["3r"] == "n/a"
+        assert row["gate_result"]["forced"] is False and row["gate_result"]["forced_by"] == []
+        assert "llm.gate_forced" not in world.event_types
+        # ... while the page pair for the same stored run has the candidate's percentage
+        pair = _the_page_pair(row, matches=world.matches, ranked=_RANKED)
+        assert pair == {
+            "best_pct": None,
+            "not_applied": None,
+            "below_floor_pct": 47,
+            "floor_pct": 50,
+        }
+
+    def test_the_rule_reads_the_stored_matches_and_never_the_ranking(self, world):
+        world.material = _material(entries=False)
+        world.matches = []
+
+        world.run(_tp_model())
+
+        # `_rag_best_pct` read the one thing it always read: the matches of the lookup the prompt held
+        assert world.match_reads == [LOOKUP_ID]
+        assert world.proposer["gate_result"]["rag_rule"]["best_pct"] is None
+
+    def test_a_kept_match_is_the_rules_number_and_the_page_has_no_below_floor_number(self, world):
+        world.matches = [_match(0.62)]
+
+        world.run(_tp_model())
+
+        row = world.proposer
+        assert row["gate_result"]["rag_rule"]["best_pct"] == 62
+        assert row["result"]["suggested_action"] == FP
+        pair = _the_page_pair(
+            row, matches=world.matches, ranked=[{"entry_id": "e-1", "score": 0.62}, *_RANKED]
+        )
+        assert pair == {
+            "best_pct": 62,
+            "not_applied": None,
+            "below_floor_pct": None,
+            "floor_pct": None,
+        }
+
+    def test_a_row_of_the_statement_before_dec_220_has_no_ranking(self, world):
+        """Six columns, no `ranked`: the reader takes it as a lookup with none, and says nothing of a floor."""
+        world.matches = []
+        world.run(_tp_model())
+        proposer = world.proposer
+        row = (
+            "run-1",
+            proposer["result"],
+            proposer["gate_result"],
+            datetime(2026, 11, 15, tzinfo=UTC),
+            proposer["citation_warnings"],
+            world.matches,
+        )
+
+        pair = queue.latest_suggestion_rag(_PageConn(row), _ALERT_ID, rag_min_score=0.5)[3]
+
+        assert pair == {
+            "best_pct": None,
+            "not_applied": None,
+            "below_floor_pct": None,
+            "floor_pct": None,
+        }
+
+
 class TestTheHelper:
     def test_a_threshold_of_zero_never_touches_the_connection(self):
         assert triage_module._rag_best_pct(_Conn(), LOOKUP_ID, [], 0) is None
