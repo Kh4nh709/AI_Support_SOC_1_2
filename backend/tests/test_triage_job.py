@@ -40,6 +40,7 @@ from psycopg.types.json import Jsonb
 
 from tests.fakes.llm import (
     TRIAGE_V4_FALSE_POSITIVE,
+    TRIAGE_V4_NEW_FIELDS,
     TRIAGE_V4_TRUE_POSITIVE,
     VERIFIER_V2_AGREE,
     VERIFIER_V2_DISAGREE,
@@ -475,6 +476,8 @@ _NO_PLAYBOOK_FP = {
     },
     "reasons": [],
     "playbook_used": None,
+    # DEC-221 (AP-T1): with no playbook the model still fills the five fields it writes for the analyst
+    **TRIAGE_V4_NEW_FIELDS,
 }
 _VERIFIER_HOLD_AGREE = {
     "agree": True,
@@ -512,6 +515,8 @@ def test_a_no_playbook_alert_answered_false_positive_with_no_reasons_is_ready_an
     assert gate_result["proposed_verdict"] == "false_positive"
     assert gate_result["final_verdict"] == "false_positive"
     assert result["suggested_action"] == "false_positive" and result["reasons"] == []
+    # the five fields of `triage_v4` are stored too: the no-playbook answer is not a shorter one (DEC-221)
+    assert {key: result[key] for key in TRIAGE_V4_NEW_FIELDS} == TRIAGE_V4_NEW_FIELDS
     assert gate_result["forced"] is False and gate_result["forced_by"] == []
     assert gate_result["flagged_by"] == ["step3", "step4", "step6"]
     assert gate_result["steps"]["2"] == "ok"
