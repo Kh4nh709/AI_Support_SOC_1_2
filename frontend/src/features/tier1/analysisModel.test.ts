@@ -297,6 +297,23 @@ describe("the Kiểm chứng tile", () => {
     expect(checksTile(model({}))).toEqual({ value: "3/5", note: "2 cảnh báo", warn: true });
   });
 
+  it("counts the held reasons no drawn row accounts for beside the server's figure, which stays the server's", () => {
+    // a run the default decided has no row 6, yet the verifier's unusable answer is a held reason (the server keeps it)
+    const view = baseView({
+      held_by: ["verifier_invalid"],
+      analysis: analysis({
+        checks: ragDefaultAnalysis().checks,
+        check_totals: { passed: 6, applicable: 6, warnings: 0 },
+      }),
+    });
+    const read = analysisOf(view);
+    expect(read && checksTile(read)).toEqual({ value: "6/6", note: "1 cảnh báo", warn: true });
+    // it adds to the checks that warned: the 2 warned steps and 1 code that names no step are 3 (the verifier's
+    // answer stands under step 6, which warned, and is not counted again)
+    const more = analysisOf(baseView({ held_by: ["verifier_invalid", "brand_new_reason"] }));
+    expect(more && checksTile(more)).toEqual({ value: "3/5", note: "3 cảnh báo", warn: true });
+  });
+
   it("says there is no warning when there is none", () => {
     expect(checksTile(model({ check_totals: { passed: 6, applicable: 6, warnings: 0 } }))).toEqual({
       value: "6/6",
@@ -448,8 +465,28 @@ describe("the highlights", () => {
 });
 
 describe("the checks", () => {
+  /** The rows as the page words them: the raw closed detail is tested on its own below. */
   const lines = (over: Record<string, unknown> = {}) =>
-    analysisOf(baseView({ analysis: analysis(over as never) }))?.checks;
+    analysisOf(baseView({ analysis: analysis(over as never) }))?.checks.map((row) => ({
+      id: row.id,
+      name: row.name,
+      outcome: row.outcome,
+      text: row.text,
+      notes: row.notes,
+    }));
+
+  it("keeps the closed detail code of each row (what the page decides on whether a line already says a held reason)", () => {
+    const rows = analysisOf(baseView())?.checks.map((row) => [row.id, row.detail]);
+    expect(rows).toEqual([
+      ["1", "schema_ok"],
+      ["2", "facts_mismatch"],
+      ["3", "quotes_some_dropped"],
+      ["3r", "rag_rule_not_applied"],
+      ["4", "not_false_positive"],
+      ["5", "no_injection_findings"],
+      ["6", "verifier_disagrees"],
+    ]);
+  });
 
   it("words each row with the name of its step and its closed detail, in the order served", () => {
     expect(lines()).toEqual([
@@ -594,7 +631,7 @@ describe("the gate's own account of the run", () => {
     return Object.fromEntries(model?.checks.map((row) => [row.id, row.notes]) ?? []);
   };
 
-  it("names, under each step, the held reasons that belong to it, in the words of the flat column", () => {
+  it("names, under each step, the held reasons that its line does not already say, in the words of the flat column", () => {
     const view = gated({}, [
       "facts_mismatch",
       "no_verified_quote",
@@ -605,9 +642,11 @@ describe("the gate's own account of the run", () => {
       "fp_policy:playbook_rule",
       "verifier_disagrees",
     ]);
+    // the default run: step 2 says the facts differ and step 6 that the verifier disagreed, so those two draw no note;
+    // step 3 says some quotes dropped (not that none verified) and step 4 that it was not checked: they add theirs
     expect(notes(view)).toEqual({
       "1": [],
-      "2": ["AI khai dữ kiện lệch với hệ thống"],
+      "2": [],
       "3": ["không có dẫn chứng kiểm chứng được"],
       "3r": [],
       "4": [
@@ -618,7 +657,7 @@ describe("the gate's own account of the run", () => {
         "không khớp bảng quyết định đã duyệt",
       ],
       "5": [],
-      "6": ["bộ kiểm chứng không đồng ý"],
+      "6": [],
     });
     expect(analysisOf(view)?.gate.held).toEqual([
       "AI khai dữ kiện lệch với hệ thống",
@@ -632,10 +671,36 @@ describe("the gate's own account of the run", () => {
     ]);
   });
 
+  /** Every row of the gate as the server builds it, each with the detail given and `not_run` for the others. */
+  const rowsWith = (details: Record<string, string>, outcome = "warn") =>
+    analysis({
+      checks: ["1", "2", "3", "3r", "4", "5", "6"].map((id) => ({
+        id,
+        outcome,
+        detail: details[id] ?? "not_run",
+      })) as never,
+    });
+
+  // The closed detail of a step that says the held reason in its own line: no note repeats it in vaguer words.
+  it.each([
+    ["facts_mismatch", "2", "facts_mismatch"],
+    ["no_verified_quote", "3", "no_verified_quote"],
+    ["fp_policy:playbook_rule", "4", "fp_policy_playbook"],
+    ["verifier_disagrees", "6", "verifier_disagrees"],
+    ["verifier_invalid", "6", "verifier_invalid"],
+  ])("draws no note for %s when the line of step %s already says it (%s)", (code, step, detail) => {
+    const says = gated({}, [code], { analysis: rowsWith({ [step]: detail }) });
+    expect(notes(says)[step]).toEqual([]);
+    expect(analysisOf(says)?.gate.loose).toEqual([]);
+    // and the same code names itself when the line says something else
+    const other = gated({}, [code], { analysis: rowsWith({ [step]: "not_run" }) });
+    expect(notes(other)[step]).toEqual([S.ai1.heldReason[code as never]]);
+  });
+
   // Every code of `held_by` the page has words for (`S.ai1.heldReason`, held equal to the backend's HELD_REASONS by
-  // strings.test.ts) stands under a step of the page: none is left to the loose list.
+  // strings.test.ts) stands under a step of the page, or is said by that step's line: none is left to the loose list.
   it.each(Object.keys(S.ai1.heldReason))("places the held reason %s under a step", (code) => {
-    const model = analysisOf(gated({}, [code]));
+    const model = analysisOf(gated({}, [code], { analysis: rowsWith({}) }));
     expect(model?.gate.loose).toEqual([]);
     expect(model?.checks.flatMap((row) => row.notes)).toEqual([S.ai1.heldReason[code as never]]);
   });
@@ -705,7 +770,8 @@ describe("the gate's own account of the run", () => {
     });
     const model = analysisOf(view);
     expect(model?.gate.loose).toEqual(["bộ kiểm chứng không trả lời hợp lệ"]);
-    expect(model?.checks[0]?.notes).toEqual(["AI khai dữ kiện lệch với hệ thống"]);
+    // step 2's own line says it: no note
+    expect(model?.checks[0]?.notes).toEqual([]);
   });
 
   it("reads held_by as the page always did: only its non-empty strings, once each", () => {
@@ -791,7 +857,107 @@ describe("the gate's own account of the run", () => {
         "bộ kiểm chứng không trả lời hợp lệ",
       ]);
       const byStep = Object.fromEntries(model?.checks.map((row) => [row.id, row.notes]) ?? []);
-      expect(byStep["4"]).toEqual(["tài sản quan trọng hoặc chưa rõ", "brand_new_warning"]);
+      // EVERY gate warning goes, the unknown one too: its only writer is the rule check of the model's own rule
+      expect(byStep["4"]).toEqual(["tài sản quan trọng hoặc chưa rõ"]);
+    });
+
+    it("keeps the facts of the alert the system itself checked, and the verifier's unusable answer", () => {
+      const view = applied({}, ["fp_policy:severity", "verifier_invalid"]);
+      expect(analysisOf(view)?.gate.held).toEqual([
+        "alert mức critical",
+        "bộ kiểm chứng không trả lời hợp lệ",
+      ]);
+    });
+  });
+});
+
+describe("which held reasons the overview still names, and what the Kiểm chứng tile counts", () => {
+  const gated = (held: string[], over: Partial<AlertView> = {}): AlertView =>
+    baseView({ held_by: held, ...over });
+  const withHighlights = (codes: string[], held: string[]) =>
+    gated(held, {
+      analysis: analysis({
+        highlights: codes.map((code) => ({ direction: "warn", code, params: {} })) as never,
+      }),
+    });
+
+  // The warning highlight that says the same thing as a held reason, in the same words or vaguer ones
+  it.each([
+    ["facts_mismatch", "warning_facts_mismatch"],
+    ["no_verified_quote", "warning_no_verified_quote"],
+    ["fp_policy:playbook_rule", "warning_fp_policy_playbook"],
+    ["verifier_disagrees", "warning_verifier_disagrees"],
+    ["verifier_invalid", "warning_verifier_invalid"],
+  ])(
+    "leaves %s out of the overview line when the highlight %s is drawn, and names it when it is not",
+    (code, highlight) => {
+      const words = S.ai1.heldReason[code as never];
+      expect(analysisOf(withHighlights([highlight], [code]))?.gate.overview).toEqual([]);
+      expect(analysisOf(withHighlights([], [code]))?.gate.overview).toEqual([words]);
+      // a different highlight does not cover it: the cap of four can cut the one that would have
+      expect(analysisOf(withHighlights(["asset_high"], [code]))?.gate.overview).toEqual([words]);
+      // and the reason is still in `held` (the Kiểm chứng tab's) whatever is drawn
+      expect(analysisOf(withHighlights([highlight], [code]))?.gate.held).toEqual([words]);
+    },
+  );
+
+  it("never covers a reason about a fact of the alert: its words are more exact than the one highlight of step 4", () => {
+    const model = analysisOf(
+      withHighlights(
+        ["warning_fp_policy_facts"],
+        ["fp_policy:ioc_reputation", "fp_policy:severity"],
+      ),
+    );
+    expect(model?.gate.overview).toEqual(["IOC độc hại hoặc đáng ngờ", "alert mức critical"]);
+  });
+
+  it("keeps the order of held_by in what is left", () => {
+    const model = analysisOf(
+      withHighlights(
+        ["warning_verifier_disagrees"],
+        ["fp_policy:ioc_reputation", "verifier_disagrees", "facts_mismatch"],
+      ),
+    );
+    expect(model?.gate.overview).toEqual([
+      "IOC độc hại hoặc đáng ngờ",
+      "AI khai dữ kiện lệch với hệ thống",
+    ]);
+  });
+
+  describe("the warnings the tile counts beyond the server's figure", () => {
+    const extra = (view: AlertView) => analysisOf(view)?.gate.extra;
+
+    it("counts none for a run whose every held reason stands under a warning row", () => {
+      expect(extra(baseView({ held_by: ["facts_mismatch", "verifier_disagrees"] }))).toBe(0);
+      expect(extra(baseView({ held_by: [] }))).toBe(0);
+    });
+
+    it("counts a held reason no drawn row accounts for: the verifier's unusable answer of a run with no row 6", () => {
+      const view = gated(["verifier_invalid"], {
+        analysis: analysis({ checks: [{ id: "2", outcome: "pass", detail: "facts_match" }] }),
+      });
+      expect(extra(view)).toBe(1);
+      expect(analysisOf(view)?.gate.loose).toEqual(["bộ kiểm chứng không trả lời hợp lệ"]);
+    });
+
+    it("counts a code that names no step, and a reason standing under a row that is not a warning", () => {
+      expect(extra(gated(["brand_new_reason"]))).toBe(1);
+      // step 4 is `na` (not checked) in the default run, yet a reason of the facts is held
+      expect(extra(gated(["fp_policy:severity", "fp_policy:ioc_reputation"]))).toBe(2);
+    });
+
+    it("counts a gate warning that has no step-4 row to stand under", () => {
+      const view = baseView({
+        analysis: analysis({ checks: [] }),
+        suggestion: {
+          run_id: "r1",
+          suggested_action: "true_positive",
+          confidence: "medium",
+          gate: { forced: false, warnings: ["no_rule_cited"] },
+        },
+      });
+      expect(extra(view)).toBe(1);
+      expect(analysisOf(view)?.gate.loose).toEqual(["AI không dẫn rule nào của bảng quyết định"]);
     });
   });
 });

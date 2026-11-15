@@ -667,7 +667,8 @@ describe("the ① column, from the state of the view", () => {
           },
         }),
         proposed_action: "false_positive",
-        held_by: ["fp_policy:playbook_rule"],
+        // a reason about a fact of the alert: the playbook rule the model cited is never served for such a run
+        held_by: ["fp_policy:asset_criticality"],
         rag: { best_pct: 62, not_applied: null },
       }),
     };
@@ -675,7 +676,7 @@ describe("the ① column, from the state of the view", () => {
     await loaded();
     expect(within(aiColumn()).getByText(/AI kết luận/).textContent).toBe(
       "AI kết luận: FP — trùng 62% với tri thức đã duyệt (dưới 80%: mặc định FP) — " +
-        "có cảnh báo kiểm chứng: không khớp bảng quyết định đã duyệt",
+        "có cảnh báo kiểm chứng: tài sản quan trọng hoặc chưa rõ",
     );
     expect(
       within(aiColumn()).queryByRole("img", { name: S.ai1.forcedLabel }),

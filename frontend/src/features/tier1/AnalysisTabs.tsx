@@ -56,7 +56,8 @@ function Reading({
 export function OverviewTab({ model }: { model: AnalysisModel }) {
   const T = P.overview;
   const { summary, readingAttack, readingBenign, wouldChange, nextChecks, highlights } = model;
-  const held = model.gate.held;
+  // The held reasons no drawn warning highlight already says (the Kiểm chứng tab names them all, under their steps).
+  const held = model.gate.overview;
   const empty =
     summary === null &&
     highlights.length === 0 &&

@@ -7,13 +7,13 @@
 //
 // The model's name is not an input and not an output (G5): nothing below reads a key that could hold one, and the
 // technical figures are the six the Owner approved. `facts[].model` is the value the model DECLARED for a field.
-import type { AlertView } from "../../api/tier1";
+import type { AlertView, SuggestionGate } from "../../api/tier1";
 import { formatTime } from "../../format";
 import { S, labelOf, failureKindLabel, type HighlightWords } from "../../strings";
 import type { MeterLevel } from "../analysis/ConfidenceMeter";
 import { knowledgeFrom, type Knowledge } from "../analysis/knowledge";
 import type { Tone } from "../analysis/styles";
-import { conclusionOf, type AiState } from "./aiState";
+import { conclusionOf, servedGate, servedHeldBy, type AiState } from "./aiState";
 
 const P = S.ai1.panel;
 
@@ -61,17 +61,24 @@ export type CheckRow = {
   name: string;
   outcome: "pass" | "warn" | "na";
   text: string;
+  /** The closed `detail` code the line was worded from: what decides whether the line already says a held reason. */
+  detail: string;
   /** The held reasons and gate warnings of this step, in words: what the line above them cannot say. */
   notes: string[];
 };
 /**
  * The gate's own account of the run, read from the keys of the view beside `analysis` (spec G2: which checks warned, and
- * why): `held` is every held reason in words (the overview's line), `loose` the ones no step row of the page carries, and
- * `forced` the verdict before and after the gate for a run the gate forced (a version 1 row).
+ * why): `held` is every held reason in words (the Kiểm chứng tab says each one, under its step's line or in a note),
+ * `overview` the ones the overview's line still names (not those a drawn warning highlight already says), `loose` the
+ * ones no step row of the page carries, `extra` how many held reasons no drawn warning row accounts for (the tile counts
+ * them beside the server's figure), and `forced` the verdict before and after the gate for a run the gate forced (a
+ * version 1 row).
  */
 export type GateNotes = {
   held: string[];
+  overview: string[];
   loose: string[];
+  extra: number;
   forced: { proposed: string | null; final: string | null } | null;
 };
 export type FactRow = {
@@ -279,7 +286,7 @@ function checksOf(
       const why = ruleWhy(rag);
       if (why !== null) words = P.checks.withWhy(words, why);
     }
-    return [{ id, name: wordOf(P.checks.step, id), outcome, text: words, notes: [] }];
+    return [{ id, name: wordOf(P.checks.step, id), outcome, text: words, detail, notes: [] }];
   });
 }
 
@@ -294,12 +301,6 @@ function stepOfHeld(code: string): string | null {
   return null;
 }
 
-/** The non-empty strings of a list, once each, in their order (what `aiState` reads `held_by` as). */
-function codesOf(value: unknown): string[] {
-  const found = list(value).filter((x): x is string => typeof x === "string" && x !== "");
-  return [...new Set(found)];
-}
-
 /** The verifier's verdict in the product's verdict labels ("FP", "TP", "Cần xem xét"), or null when it gave none. */
 function verifierWords(gate: Record<string, unknown>): string | null {
   const verdict = text(gate.verifier_verdict);
@@ -307,58 +308,117 @@ function verifierWords(gate: Record<string, unknown>): string | null {
 }
 
 /**
- * What the view says of the gate beside `analysis` and the panel must not leave unread (spec G2): the held reasons
- * (`held_by`) and the reasons the step-4 rule check wrote (`gate.warnings`), each on the row of the step it belongs to, in
- * the words of the flat column; the verifier's verdict beside step 6; the verdict before and after the gate of a run the
- * gate forced. The server leaves some of these out for a run the RAG default applied to (DEC-219: `served_held_reasons`,
- * `served_warnings`, `served_verifier_verdict`), and this page does too, whatever arrives: it never says what the
- * verifier answered, never a verdict before and after the gate, and none of the reasons that would tell what the model
- * answered. A reason whose step has no row, and a code that names no step, is listed apart and never dropped.
+ * The step line that says a held reason in its own words: the step and the closed `detail` of its row. A reason whose
+ * line says it draws no note under the line (the note would repeat it in vaguer words); a reason whose line says
+ * something else, or no line at all, is named.
  */
-function withGate(view: AlertView, checks: CheckRow[]): { checks: CheckRow[]; gate: GateNotes } {
-  const suggestion: unknown = view.suggestion;
-  const gateRaw = isRecord(suggestion) ? suggestion.gate : null;
-  const gate: Record<string, unknown> = isRecord(gateRaw) ? gateRaw : {};
-  const rule = isRecord(gate.rag_rule) ? gate.rag_rule : {};
-  const applied = rule.applied === true;
-  const leftOut = ["verifier_disagrees", "fp_policy:playbook_rule"];
+const SAID_BY_LINE: Record<string, { step: string; detail: string }> = {
+  facts_mismatch: { step: "2", detail: "facts_mismatch" },
+  no_verified_quote: { step: "3", detail: "no_verified_quote" },
+  "fp_policy:playbook_rule": { step: "4", detail: "fp_policy_playbook" },
+  verifier_disagrees: { step: "6", detail: "verifier_disagrees" },
+  verifier_invalid: { step: "6", detail: "verifier_invalid" },
+};
 
-  const heldCodes = codesOf(view.held_by).filter((code) => !applied || !leftOut.includes(code));
-  const warnings = list(gate.warnings)
-    .filter((w) => !(applied && typeof w === "string" && Object.hasOwn(P.checks.ruleWarning, w)))
-    .map((w) => (typeof w === "string" ? wordOf(P.checks.ruleWarning, w) : JSON.stringify(w)));
+/**
+ * The warning highlight that says a held reason too, in the same words or vaguer ones. The overview's line leaves a
+ * reason out when this highlight is drawn, and names it when it is not (the server serves at most four highlights, and
+ * the cap can cut it). The reasons about a fact of the alert have none: the one highlight of step 4 does not say which
+ * fact, and the reason does.
+ */
+const COVERED_BY_HIGHLIGHT: Record<string, string> = {
+  facts_mismatch: "warning_facts_mismatch",
+  no_verified_quote: "warning_no_verified_quote",
+  "fp_policy:playbook_rule": "warning_fp_policy_playbook",
+  verifier_disagrees: "warning_verifier_disagrees",
+  verifier_invalid: "warning_verifier_invalid",
+};
+
+/** The codes of the highlights the overview draws: every row that has a code, as `highlightsOf` reads them. */
+function drawnHighlightCodes(value: unknown): Set<string> {
+  return new Set(
+    list(value).flatMap((row) => {
+      const code = isRecord(row) ? text(row.code) : null;
+      return code === null ? [] : [code];
+    }),
+  );
+}
+
+/**
+ * What the view says of the gate beside `analysis` and the panel must not leave unread (spec G2): the held reasons
+ * (`held_by`) and the reasons the step-4 rule check wrote (`gate.warnings`), each on the row of the step it belongs to,
+ * in the words of the flat column, unless the line of that step already says it; the verifier's verdict beside step 6;
+ * the verdict before and after the gate of a run the gate forced. For a run the RAG default applied to (DEC-219) the
+ * gate and `held_by` are read as `servedGate` and `servedHeldBy` say (aiState.ts, the one place that does), so none of
+ * what would tell what the model answered is here. A reason whose step has no row, and a code that names no step, is
+ * listed apart and never dropped, and the tile counts it (`extra`).
+ */
+function withGate(
+  view: AlertView,
+  checks: CheckRow[],
+  drawn: ReadonlySet<string>,
+): { checks: CheckRow[]; gate: GateNotes } {
+  const suggestion: unknown = view.suggestion;
+  const gateRaw: unknown = isRecord(suggestion) ? suggestion.gate : null;
+  const action = isRecord(suggestion) ? text(suggestion.suggested_action) : null;
+  const served = servedGate(isRecord(gateRaw) ? (gateRaw as SuggestionGate) : null, action);
+  const gate: Record<string, unknown> = served === null ? {} : (served as Record<string, unknown>);
+
+  const heldCodes = [...new Set(servedHeldBy(view))];
+  const held = heldCodes.map((code) => labelOf(S.ai1.heldReason, code));
+  const warnings = list(gate.warnings).map((w) =>
+    typeof w === "string" ? wordOf(P.checks.ruleWarning, w) : JSON.stringify(w),
+  );
 
   const rows = new Map(checks.map((row) => [row.id, row]));
   const loose: string[] = [];
-  const place = (step: string | null, words: string): void => {
+  let extra = 0;
+  /** Puts words under the row of a step (unless its line says them), or in the loose list; counts what no warning accounts for. */
+  const place = (step: string | null, words: string, said: boolean): void => {
     const row = step === null ? undefined : rows.get(step);
-    if (row === undefined) loose.push(words);
-    else row.notes.push(words);
+    if (row === undefined) {
+      loose.push(words);
+      extra += 1;
+      return;
+    }
+    if (!said) row.notes.push(words);
+    if (row.outcome !== "warn") extra += 1;
   };
-  const held = heldCodes.map((code) => labelOf(S.ai1.heldReason, code));
-  heldCodes.forEach((code, index) => place(stepOfHeld(code), held[index] ?? code));
-  for (const words of warnings) place("4", words);
+  heldCodes.forEach((code, index) => {
+    const line = Object.hasOwn(SAID_BY_LINE, code) ? SAID_BY_LINE[code] : undefined;
+    const said = line !== undefined && rows.get(line.step)?.detail === line.detail;
+    place(stepOfHeld(code), held[index] ?? code, said);
+  });
+  for (const words of warnings) place("4", words, false);
 
-  // The verifier's own verdict, beside the outcome of step 6; never for a run the default decided.
-  const said = applied ? null : verifierWords(gate);
+  // The verifier's own verdict, beside the outcome of step 6 (the served gate has none for a run the default decided).
+  const verifier = verifierWords(gate);
   const verifierRow = rows.get("6");
-  if (said !== null && verifierRow !== undefined) {
-    verifierRow.text += P.checks.verifierSaid(said);
+  if (verifier !== null && verifierRow !== undefined) {
+    verifierRow.text += P.checks.verifierSaid(verifier);
   }
 
-  const forcedRun = !applied && gate.forced === true;
   const pair = (value: unknown): string | null => {
     const verdict = text(value);
     return verdict === null ? null : labelOf(S.ai1.action, verdict);
   };
+  const overview = heldCodes.flatMap((code, index) => {
+    const cover = Object.hasOwn(COVERED_BY_HIGHLIGHT, code)
+      ? COVERED_BY_HIGHLIGHT[code]
+      : undefined;
+    return cover !== undefined && drawn.has(cover) ? [] : [held[index] ?? code];
+  });
   return {
     checks,
     gate: {
       held,
+      overview,
       loose,
-      forced: forcedRun
-        ? { proposed: pair(gate.proposed_verdict), final: pair(gate.final_verdict) }
-        : null,
+      extra,
+      forced:
+        gate.forced === true
+          ? { proposed: pair(gate.proposed_verdict), final: pair(gate.final_verdict) }
+          : null,
     },
   };
 }
@@ -445,7 +505,11 @@ export function analysisOf(view: AlertView): AnalysisModel | null {
   const evidence = { verified: reasons.filter((r) => r.verified).length, total: reasons.length };
   const facts = rawFactsOf(raw.facts);
   const rag = ragOf(raw.rag);
-  const { checks, gate } = withGate(view, checksOf(raw.checks, facts, evidence, rag));
+  const { checks, gate } = withGate(
+    view,
+    checksOf(raw.checks, facts, evidence, rag),
+    drawnHighlightCodes(raw.highlights),
+  );
   return {
     summary: text(raw.summary),
     readingAttack: text(raw.reading_attack),
@@ -537,12 +601,15 @@ export type ChecksTile = { value: string; note: string; warn: boolean };
 
 /** The Kiểm chứng tile: checks passed over the checks that apply, and the warnings in the warning colour. */
 export function checksTile(model: AnalysisModel): ChecksTile {
-  const { passed, applicable, warnings } = model.totals;
-  if (applicable === 0) {
+  const { passed, applicable } = model.totals;
+  // The figure is the server's. The note adds the held reasons no drawn row accounts for, so that it cannot say "no
+  // warning" while the page lists one.
+  const warnings = model.totals.warnings + model.gate.extra;
+  if (applicable === 0 && warnings === 0) {
     return { value: S.common.missing, note: P.tile.checksNote.none, warn: false };
   }
   return {
-    value: `${passed}/${applicable}`,
+    value: applicable === 0 ? S.common.missing : `${passed}/${applicable}`,
     note: warnings > 0 ? P.tile.checksNote.warnings(warnings) : P.tile.checksNote.clean,
     warn: warnings > 0,
   };

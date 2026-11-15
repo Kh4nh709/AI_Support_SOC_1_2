@@ -587,8 +587,10 @@ export const S = {
           rule_does_not_hold: "rule AI dẫn không khớp dữ kiện của alert",
           rule_is_not_false_positive: "rule AI dẫn không dẫn tới kết luận FP",
         },
-        // The held reasons that name none of the steps drawn above: listed under the tab, never dropped.
-        loose: "Cảnh báo không thuộc bước nào ở trên",
+        // The held reasons no line above accounts for (a code that names no step, or a step with no row: the verifier's
+        // unusable answer of a run the default decided has no row 6): listed under the tab, never dropped, and counted by
+        // the tile.
+        loose: "Cảnh báo khác, không có dòng kiểm chứng riêng",
         // The list of the gate's steps, named for a screen reader.
         listLabel: "Các bước kiểm chứng",
       },
