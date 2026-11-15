@@ -632,6 +632,14 @@ describe("the gate's own account of the run", () => {
     ]);
   });
 
+  // Every code of `held_by` the page has words for (`S.ai1.heldReason`, held equal to the backend's HELD_REASONS by
+  // strings.test.ts) stands under a step of the page: none is left to the loose list.
+  it.each(Object.keys(S.ai1.heldReason))("places the held reason %s under a step", (code) => {
+    const model = analysisOf(gated({}, [code]));
+    expect(model?.gate.loose).toEqual([]);
+    expect(model?.checks.flatMap((row) => row.notes)).toEqual([S.ai1.heldReason[code as never]]);
+  });
+
   it("names the playbook failure beside the fact that failed, when both did (the step's line says only the fact)", () => {
     const both = analysis({
       checks: [{ id: "4", outcome: "warn", detail: "fp_policy_facts" }],

@@ -603,10 +603,17 @@ function pyFrozenset(name: string, root = BACKEND_APP): string[] {
 
 describe("the Tier 1 panel's words (DEC-221)", () => {
   const P = S.ai1.panel;
+  /** Every string a table holds; a function is called with words, and with lists of words for one that takes a list. */
   const wordsOf = (value: unknown): string[] => {
     if (typeof value === "string") return [value];
     if (typeof value === "function") {
-      const said = (value as (...args: unknown[]) => unknown)("x", "y", "z");
+      const call = value as (...args: unknown[]) => unknown;
+      let said: unknown;
+      try {
+        said = call("x", "y", "z");
+      } catch {
+        said = call(["x", "y"], ["x", "y"], ["x", "y"]);
+      }
       return wordsOf(said);
     }
     if (typeof value === "object" && value !== null) return Object.values(value).flatMap(wordsOf);
@@ -664,6 +671,41 @@ describe("the Tier 1 panel's words (DEC-221)", () => {
       pyTuple("CONCLUSIONS", join(BACKEND_APP, "rag")),
     );
     expect(Object.keys(P.history.scope)).toEqual([...HISTORY_KEYS]);
+  });
+
+  // The tables that word a closed value the backend defines (review of AP-T4): each is compared with its source, so a
+  // value added there without a word here goes red.
+  it("words every conclusion a knowledge entry can be learned from, in the candidates list and on the RAG tile", () => {
+    const sources = [
+      ...pyFrozenset("_ALERT_CONCLUSIONS", join(BACKEND_APP, "rag")),
+      ...pyFrozenset("_CASE_CONCLUSIONS", join(BACKEND_APP, "rag")),
+    ].sort();
+    expect(sources).toHaveLength(5);
+    expect(Object.keys(S.analysis.knowledge.conclusion).sort()).toEqual(sources);
+    expect(Object.keys(S.analysis.ragNote.matched).sort()).toEqual(sources);
+  });
+
+  it("words every action a decision-table rule can have (the verdicts the verifier may answer)", () => {
+    expect(pyTuple("REVIEW_ACTIONS")).toEqual(["false_positive", "needs_review", "true_positive"]);
+    expect(Object.keys(P.playbook.action)).toEqual(pyTuple("REVIEW_ACTIONS"));
+  });
+
+  it("words every value of the two facts that have words, from the values the model may declare for them", () => {
+    expect(Object.keys(P.facts.value.identity_privileged).sort()).toEqual(
+      pyFrozenset("IDENTITY_PRIVILEGED"),
+    );
+    expect(Object.keys(P.facts.value.ioc_reputation).sort()).toEqual(
+      pyFrozenset("IOC_REPUTATIONS"),
+    );
+  });
+
+  it("words every reason the rule check of step 4 can write into the gate's warnings, in its order", () => {
+    expect(pyTuple("RULE_CHECK_WARNINGS")).toHaveLength(6);
+    expect(Object.keys(P.checks.ruleWarning)).toEqual(pyTuple("RULE_CHECK_WARNINGS"));
+  });
+
+  it("says why the RAG rule did not apply for every state of the lookup", () => {
+    expect(Object.keys(P.checks.ragRuleWhy)).toEqual(pyTuple("STATES", join(BACKEND_APP, "llm")));
   });
 
   it("words the RAG tile of both tiers with one table, in S.analysis and nowhere else, one line for every failure kind", () => {
