@@ -174,7 +174,7 @@ An archived alert keeps its `case_id`, `acknowledged_by`, `triage_status` and ev
 
 ## Environment keys
 
-The 87 keys of `.env.example`, one row each, no values. `.env.example` is generated from context pack §6.3 (`scripts/gen_env_example.py`, checked by `make lint`) and frozen: a new key is a decision (DEC-003), never an edit. **Who sets it:** *Owner* — a private or host-specific value, in `.env` only; *default* — `.env.example`'s value, changed only by a DEC. **Secret:** *yes* — `.env` only, never `.env.example`, a commit, a chat or a command line. *Compose* keys are read by `docker-compose.yml` and `db/init/*.sh` only, never by the application; *read by nothing* is a §6.3 key whose reader was cut or never built.
+The 88 keys of `.env.example`, one row each, no values. `.env.example` is generated from context pack §6.3 (`scripts/gen_env_example.py`, checked by `make lint`) and frozen: a new key is a decision (DEC-003), never an edit. **Who sets it:** *Owner* — a private or host-specific value, in `.env` only; *default* — `.env.example`'s value, changed only by a DEC. **Secret:** *yes* — `.env` only, never `.env.example`, a commit, a chat or a command line. *Compose* keys are read by `docker-compose.yml` and `db/init/*.sh` only, never by the application; *read by nothing* is a §6.3 key whose reader was cut or never built.
 
 | key | what it controls | who sets it | secret |
 |---|---|---|---|
@@ -218,6 +218,7 @@ The 87 keys of `.env.example`, one row each, no values. `.env.example` is genera
 | `LLM_TIMEOUT_S` | the wall-clock deadline of one model call | default | no |
 | `LLM_RETRY` | retries inside one call, on a network error or a 5xx | default | no |
 | `LLM_THINKING` | the model's thinking mode, `disabled` \| `enabled` | default | no |
+| `LLM_RESPONSE_FORMAT` | what ①'s calls ask the provider to enforce, `json_object` \| `json_schema` (DEC-218). `json_object` (the default) guarantees JSON; `json_schema` also sends the output schema, and one call the provider refuses with HTTP 400 or 422 is sent again as `json_object` (the proposer row's `citation_warnings` then carry `response_format_fallback`). The trial's value is `json_schema` (set in its `.env`, then restart `app`, `worker` and `rag-worker`); the live stack keeps `json_object` | Owner | no |
 | `LLM_MONTHLY_USD_CAP` | the month's spend at which ① stops (`stopped_by='cap'`) | default | no |
 | `LLM_PRICE_IN_PER_M` | USD per million input tokens (`llm_runs.cost_usd`) | default | no |
 | `LLM_PRICE_OUT_PER_M` | USD per million output tokens | default | no |
