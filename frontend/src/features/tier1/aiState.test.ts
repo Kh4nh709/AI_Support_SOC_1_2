@@ -407,72 +407,82 @@ describe("aiStateOfView", () => {
     });
   });
 
-  // DEC-219: the RAG rule changed the verdict. The alert view's `suggestion.gate.rag_rule` says so; the state keeps
-  // the threshold of that rule, and only then (a run the rule applied to without changing, a run with no `rag_rule`
-  // and a version 1 row have no such key).
-  describe("the RAG rule that changed the verdict (DEC-219)", () => {
+  // DEC-219 (amended): below the threshold `false_positive` is ①'s default answer. The alert view's
+  // `suggestion.gate.rag_rule` says the rule applied (`applied` true, whether or not the model had said FP itself); the
+  // state keeps the threshold of that rule, and only then (a rule that did not apply, a run with no `rag_rule`, and a
+  // version 1 row have no such key). `changed` makes no difference: the page never says what the model answered.
+  describe("the RAG default below the threshold (DEC-219)", () => {
     const RULE: RagRule = { threshold: 80, best_pct: 62, applied: true, changed: true };
-    /** A changed run as the server serves it: ① ended with FP, the model said TP, the gate recorded the rule. */
-    const changed = (over: Partial<AlertView> = {}, rule: unknown = RULE): AlertView =>
+    /**
+     * A run the rule applied to as the server serves it: ① ended with FP, the model's own answer is not served (both
+     * `proposed_action` and `gate.proposed_verdict` are the verdict ① ended with), and nothing is forced.
+     */
+    const applied = (over: Partial<AlertView> = {}, rule: unknown = RULE): AlertView =>
       view({
         suggestion: {
           suggested_action: "false_positive",
           confidence: "high",
           gate: {
-            forced: true,
-            forced_by: ["rag_rule"],
-            proposed_verdict: "true_positive",
+            forced: false,
+            forced_by: [],
+            proposed_verdict: "false_positive",
             final_verdict: "false_positive",
             rag_rule: rule as RagRule | null | undefined,
           },
         },
-        proposed_action: "true_positive",
+        proposed_action: "false_positive",
         held_by: [],
         ...over,
       });
 
-    it("is carried by a ready state, beside the verdict ① ended with and the model's own answer", () => {
-      expect(aiStateOfView(changed())).toEqual({
+    it("is carried by a ready state, beside the verdict, with nothing forced", () => {
+      expect(aiStateOfView(applied())).toEqual({
         kind: "ready",
         action: "false_positive",
         confidence: "high",
-        forced: true,
-        proposed: "true_positive",
+        forced: false,
+        proposed: "false_positive",
         heldBy: [],
-        ragRuleThreshold: 80,
+        ragDefaultBelow: 80,
       });
+    });
+
+    it("is the same state whether the rule changed the model's verdict or the model had said FP itself", () => {
+      const changed = aiStateOfView(applied({}, { ...RULE, changed: true }));
+      const kept = aiStateOfView(applied({}, { ...RULE, changed: false }));
+      expect(kept).toEqual(changed);
+      expect(kept).toMatchObject({ kind: "ready", ragDefaultBelow: 80 });
     });
 
     it("is carried by a decided state too, the decision lifting the blind arm", () => {
       for (const status of DECIDED) {
-        expect(aiStateOfView(changed({ status }))).toEqual({
+        expect(aiStateOfView(applied({ status }))).toEqual({
           kind: "decided",
           action: "false_positive",
           confidence: "high",
-          proposed: "true_positive",
+          proposed: "false_positive",
           heldBy: [],
-          ragRuleThreshold: 80,
+          ragDefaultBelow: 80,
         });
       }
       expect(
-        aiStateOfView(changed({ status: "closed_fp", suggestion_visible: false })),
-      ).toMatchObject({ kind: "decided", ragRuleThreshold: 80 });
+        aiStateOfView(applied({ status: "closed_fp", suggestion_visible: false })),
+      ).toMatchObject({ kind: "decided", ragDefaultBelow: 80 });
     });
 
     it("takes the threshold from the stored rule, whatever it was", () => {
-      const rule = { ...RULE, threshold: 65, best_pct: null };
-      expect(aiStateOfView(changed({}, rule))).toMatchObject({ ragRuleThreshold: 65 });
+      const rule = { ...RULE, threshold: 65, best_pct: 40 };
+      expect(aiStateOfView(applied({}, rule))).toMatchObject({ ragDefaultBelow: 65 });
     });
 
     it("keeps the warnings beside it", () => {
-      expect(aiStateOfView(changed({ held_by: ["fp_policy:playbook_rule"] }))).toMatchObject({
+      expect(aiStateOfView(applied({ held_by: ["fp_policy:playbook_rule"] }))).toMatchObject({
         heldBy: ["fp_policy:playbook_rule"],
-        ragRuleThreshold: 80,
+        ragDefaultBelow: 80,
       });
     });
 
     it.each([
-      ["a rule that applied without changing the verdict", { ...RULE, changed: false }],
       [
         "a rule that did not apply",
         { threshold: 80, best_pct: 91, applied: false, changed: false },
@@ -480,42 +490,46 @@ describe("aiStateOfView", () => {
       ["a rule switched off", { threshold: 0, best_pct: null, applied: false, changed: false }],
       ["a run with no rag_rule (null)", null],
       ["a run with no rag_rule (not a key)", undefined],
-      ["a rag_rule that is not an object", "changed"],
-      ["a changed rule with no threshold", { applied: true, changed: true }],
-      ["a changed rule whose threshold is not a number", { ...RULE, threshold: "80" }],
+      ["a rag_rule that is not an object", "applied"],
+      ["an applied rule with no threshold", { applied: true, changed: false }],
+      ["an applied rule whose threshold is not a number", { ...RULE, threshold: "80" }],
       [
-        "a changed rule whose threshold is 0 (switched off: nothing is below it)",
+        "an applied rule whose threshold is 0 (switched off: nothing is below it)",
         { ...RULE, threshold: 0 },
       ],
-      ["a rule whose changed is not true", { ...RULE, changed: "yes" }],
+      ["a rule whose applied is not true", { ...RULE, applied: "yes" }],
+      [
+        "a rule that only changed (applied missing)",
+        { threshold: 80, best_pct: 62, changed: true },
+      ],
     ])("has no threshold for %s", (_name, rule) => {
-      const v = changed({}, rule);
+      const v = applied({}, rule);
       if (rule === undefined) delete v.suggestion?.gate?.rag_rule;
       const state = aiStateOfView(v);
       expect(state).toMatchObject({ kind: "ready" });
-      expect("ragRuleThreshold" in state).toBe(false);
+      expect("ragDefaultBelow" in state).toBe(false);
     });
 
     it("is never in the state of a queue row, which carries no rag_rule", () => {
       const queued = aiStateOfRow(
         row({
           suggested_action: "false_positive",
-          proposed_action: "true_positive",
-          gate_forced: true,
+          proposed_action: "false_positive",
+          gate_forced: false,
         }),
       );
       expect(queued).toEqual({
         kind: "ready",
         action: "false_positive",
         confidence: "medium",
-        forced: true,
-        proposed: "true_positive",
+        forced: false,
+        proposed: "false_positive",
         heldBy: [],
       });
     });
 
     it("is not in a blind, undecided head, which has no suggestion to read it from", () => {
-      const blind = changed({ suggestion_visible: false });
+      const blind = applied({ suggestion_visible: false });
       delete blind.suggestion;
       delete blind.triage_status;
       expect(aiStateOfView(blind)).toEqual({ kind: "hidden" });
@@ -774,7 +788,7 @@ describe("conclusionOf and heldOf", () => {
     );
   });
 
-  it("is the verdict the RAG rule made, not the model's answer, for a changed run", () => {
+  it("is the verdict ① ended with, not the model's answer, whenever the two differ (the RAG default, DEC-219)", () => {
     expect(conclusionOf(ready({ action: "false_positive", proposed: "true_positive" }))).toBe(
       "false_positive",
     );

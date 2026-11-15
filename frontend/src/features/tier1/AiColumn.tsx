@@ -10,14 +10,7 @@ import { RagNotice } from "../../components/RagNotice";
 import { formatDateTime } from "../../format";
 import { S, labelOf } from "../../strings";
 import { agreementOf, humanDecisionOf } from "./agreement";
-import {
-  MODEL_ACTIONS,
-  aiStateOfView,
-  conclusionOf,
-  heldOf,
-  type AiConclusion,
-  type AiState,
-} from "./aiState";
+import { aiStateOfView, conclusionOf, heldOf, type AiConclusion, type AiState } from "./aiState";
 
 const MUTED = "text-muted";
 
@@ -46,7 +39,7 @@ function forcedByOf(gate: NonNullable<Suggestion["gate"]>): string[] {
 
 const asText = (x: unknown): string => (typeof x === "string" ? x : JSON.stringify(x));
 
-/** The flag of a verdict the gate forced: a version 1 row, or a run whose verdict the RAG rule made (DEC-219). */
+/** The flag of a verdict the gate forced: only a version 1 row has one (DEC-217: a new run is never forced). */
 function ForcedFlag() {
   return (
     <span role="img" aria-label={S.ai1.forcedLabel} title={S.ai1.forcedLabel} className="ml-2">
@@ -73,10 +66,11 @@ function ForcedFlag() {
  * beside the line (`RagNotice`). The blind arm has no conclusion to draw this beside, so neither is ever drawn
  * there: the server drops the key, and this column draws a line only for a state that has a conclusion.
  *
- * DEC-219 (trial): for a run whose verdict the RAG rule made (`state.ragRuleThreshold`) the conclusion is the verdict
- * ① ended with, and the line says so: no confidence note (it was the model's, in the other verdict), then, after the
- * percentage clause, "— **theo quy tắc RAG: trùng dưới 80%** (model kết luận TP)", then the warning clause as before.
- * The model's answer is `state.proposed`; with none given the parenthesis is left out. Any other run reads as it did.
+ * DEC-219 (trial, amended): for a run the RAG rule applied to (`state.ragDefaultBelow`, the threshold) `false_positive`
+ * is ①'s default answer, and the line says so, the same whether the model had said FP itself or not: no confidence
+ * note (it is the model's, in its own answer), then, after the percentage clause, a parenthesis, "(dưới 80%: mặc định
+ * FP)", then the warning clause as before. With no percentage on the page the parenthesis follows the verdict. The line
+ * never names the model's own answer. Any other run reads as it did.
  */
 export function ConclusionLine({
   state,
@@ -91,26 +85,16 @@ export function ConclusionLine({
 }) {
   const reasons = state.heldBy.map((code) => labelOf(S.ai1.heldReason, code));
   const because = S.ai1.heldBecause(reasons);
-  const ruleThreshold = state.ragRuleThreshold;
-  const modelSaid =
-    state.proposed !== null && MODEL_ACTIONS.has(state.proposed)
-      ? ` ${S.ai1.ragRuleModelSaid(labelOf(S.ai1.action, state.proposed))}`
-      : "";
+  const defaultBelow = state.ragDefaultBelow;
   return (
     <>
       <p className="text-base text-ai-accent">
         {S.ai1.conclusion}: <strong className="text-lg">{labelOf(S.ai1.action, conclusion)}</strong>
-        {ruleThreshold === undefined &&
+        {defaultBelow === undefined &&
           state.confidence !== null &&
           ` ${S.ai1.confidenceNote(labelOf(S.confidence, state.confidence))}`}
         {rag.pct !== null && ` ${S.rag.dash} ${S.rag.match(rag.pct)}`}
-        {ruleThreshold !== undefined && (
-          <>
-            {` ${S.ai1.ragRuleDash} `}
-            <strong>{S.ai1.ragRule(ruleThreshold)}</strong>
-            {modelSaid}
-          </>
-        )}
+        {defaultBelow !== undefined && ` ${S.ai1.ragDefault(defaultBelow)}`}
         {heldOf(state) && (
           <>
             {` ${S.ai1.heldDash} `}
@@ -167,10 +151,8 @@ function Verdict({
 }
 
 /**
- * The gate in one line: whether it forced the verdict, and by which rules (a version 1 row, or a run the RAG rule
- * changed, DEC-219: "Bị ép — Ép bởi quy tắc RAG"; any other new run reads "Không bị ép" and names none). A rule is
- * worded when the UI has a label for its name (`S.ai1.gateForcedByStep`) and shown as its name otherwise. Exported to
- * be drawn on its own.
+ * The gate in one line: whether it forced the verdict, and by which rules (a version 1 row; a new run reads "Không bị
+ * ép" and names none, the RAG default of DEC-219 included: it is not a gate force). Exported to be drawn on its own.
  */
 export function GateLine({
   gate,
@@ -187,7 +169,7 @@ export function GateLine({
       {forcedBy.length > 0 && (
         <>
           <span className={MUTED}>{S.ai1.gateForcedBy}</span>
-          <code>{forcedBy.map((step) => labelOf(S.ai1.gateForcedByStep, step)).join(", ")}</code>
+          <code>{forcedBy.join(", ")}</code>
         </>
       )}
     </div>
@@ -195,9 +177,9 @@ export function GateLine({
 }
 
 /**
- * What the gate did: the verdict ① proposed, the one it ended with (the same for a new run, DEC-217, unless the RAG
- * rule changed it, DEC-219), the verifier, and the gate's warnings. A version 1 row shows what the gate stored,
- * `needs_review` included.
+ * What the gate did: the verdict ① proposed, the one it ended with (the same for a new run, DEC-217; for a run below
+ * the RAG threshold, DEC-219, the server serves the verdict ① ended with in both places), the verifier, and the
+ * gate's warnings. A version 1 row shows what the gate stored, `needs_review` included.
  */
 export function GateSteps({ gate }: { gate: NonNullable<Suggestion["gate"]> }) {
   const warnings = gate.warnings ?? [];

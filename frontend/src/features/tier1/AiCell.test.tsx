@@ -92,20 +92,6 @@ describe("AiCell", () => {
     expect(screen.getByRole("img", { name: S.ai1.forcedLabel })).toBeInTheDocument();
   });
 
-  // DEC-219: the verdict the RAG rule made is FP, flagged as forced (`gate_forced`); the row has nothing else of it.
-  it("words a verdict the RAG rule made as FP, flagged, whatever the model said", () => {
-    show({
-      ...READY,
-      action: "false_positive",
-      confidence: "high",
-      forced: true,
-      proposed: "true_positive",
-    });
-    expect(screen.getByText(/FP/)).toHaveTextContent("FP (cao)");
-    expect(screen.queryByText(/TP/)).toBeNull();
-    expect(screen.getByRole("img", { name: S.ai1.forcedLabel })).toHaveTextContent(S.ai1.forced);
-  });
-
   it("leaves out the confidence when the result has none, and marks a forced one", () => {
     show({ ...READY, action: "false_positive", confidence: null, forced: true });
     expect(screen.getByText(/FP/)).not.toHaveTextContent("(");

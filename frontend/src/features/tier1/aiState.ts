@@ -7,22 +7,23 @@ import type { AlertView, QueueRow, SuggestionGate } from "../../api/tier1";
 /**
  * What ① concluded and which of the gate's checks warned about it (P14-T03, DEC-213; DEC-217; DEC-219): the part of a
  * `ready` and of a `decided` state that the conclusion line ("AI kết luận: …") is made of. `action` is the verdict ①
- * ends with (`suggested_action`: `false_positive` or `true_positive`; the model's own answer, except for a run the RAG
- * rule changed, below; the server never serves `needs_review` for ①), `proposed` what the model itself concluded
- * (`proposed_action`, null when the server sent none), `heldBy` the closed codes of `llm.verdicts.HELD_REASONS` that
- * name the checks that raised a warning (`[]` when none did). The name `heldBy` is the wire's (`held_by`); since
- * DEC-217 it holds a warning, not a hold.
+ * ends with (`suggested_action`: `false_positive` or `true_positive`; the model's own answer, except for a run below
+ * the RAG threshold, below; the server never serves `needs_review` for ①), `proposed` what the server calls the
+ * model's answer (`proposed_action`, null when it sent none; for a run below the threshold it is the verdict ① ended
+ * with, never the model's own), `heldBy` the closed codes of `llm.verdicts.HELD_REASONS` that name the checks that
+ * raised a warning (`[]` when none did). The name `heldBy` is the wire's (`held_by`); since DEC-217 it holds a
+ * warning, not a hold.
  *
- * `ragRuleThreshold` is there only for a run the RAG rule changed (DEC-219): the model answered `true_positive`, a RAG
- * match existed and its best was below this percentage, and the system made the verdict `false_positive` (`action`),
- * `proposed` staying the model's answer. The alert view says so (`suggestion.gate.rag_rule.changed`); the queue row
- * carries nothing of it, and a run the rule did not change has no such key.
+ * `ragDefaultBelow` is there only for a run the RAG rule applied to (DEC-219): a RAG match existed and its best was
+ * below this percentage, so `false_positive` is ①'s default answer, whether the model had said it itself or not. The
+ * alert view says so (`suggestion.gate.rag_rule.applied`); the queue row carries nothing of it, and a run the rule
+ * did not apply to has no such key.
  */
 export type AiConclusion = {
   action: string | null;
   proposed: string | null;
   heldBy: string[];
-  ragRuleThreshold?: number;
+  ragDefaultBelow?: number;
 };
 
 export type AiState =
@@ -75,21 +76,22 @@ function codes(value: unknown): string[] {
 const textOrNull = (value: unknown): string | null => (typeof value === "string" ? value : null);
 
 /**
- * The RAG rule of DEC-219, as the key of an `AiConclusion` it belongs to: `ragRuleThreshold` when the gate says the
- * rule changed this run's verdict (`rag_rule.changed` is true, with the threshold it was below), and no key at all for
- * any other run: a rule that applied to a verdict the model had already given, a rule that did not apply or was
- * switched off, a run stored before the rule (`rag_rule` null or absent), and a value that is not what the server
- * sends. Only the alert view's gate carries it, so only `aiStateOfView` reads it.
+ * The RAG rule of DEC-219, as the key of an `AiConclusion` it belongs to: `ragDefaultBelow` when the gate says the rule
+ * applied to this run (`rag_rule.applied` is true, with the threshold the match was below), and no key at all for any
+ * other run: a rule that did not apply or was switched off, a run stored before the rule (`rag_rule` null or absent),
+ * and a value that is not what the server sends. `changed` is not read: whether the model had said `false_positive`
+ * itself or the rule made it, the page says the same. Only the alert view's gate carries it, so only `aiStateOfView`
+ * reads it.
  */
-function ragRuleOf(gate: SuggestionGate | null | undefined): { ragRuleThreshold?: number } {
+function ragRuleOf(gate: SuggestionGate | null | undefined): { ragDefaultBelow?: number } {
   const rule: unknown = gate?.rag_rule;
   if (typeof rule !== "object" || rule === null) return {};
-  const { changed, threshold } = rule as Record<string, unknown>;
-  return changed === true &&
+  const { applied, threshold } = rule as Record<string, unknown>;
+  return applied === true &&
     typeof threshold === "number" &&
     Number.isFinite(threshold) &&
     threshold > 0
-    ? { ragRuleThreshold: threshold }
+    ? { ragDefaultBelow: threshold }
     : {};
 }
 

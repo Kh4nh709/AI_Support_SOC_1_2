@@ -12,8 +12,8 @@
 //     hold), so a `needs_review` reaches this file only from an old client cache or a record. The old word
 //     `escalate` is one of those: no row of that kind exists (the database was wiped), and nothing reads it.
 // The comparison is with the verdict ① ended with (`suggested_action`), as the report counts it. Since DEC-219 that
-// is not always the model's own answer: a run the RAG rule changed ended `false_positive` over the model's
-// `true_positive`, and it is compared as a `false_positive` (agrees with a closed_fp, disagrees with an escalation).
+// is not always the model's own answer: a run below the RAG threshold ends `false_positive` whatever the model said,
+// and it is compared as a `false_positive` (agrees with a closed_fp, disagrees with an escalation).
 // A decision that is not a Tier 1 person's (`auto_closed`, and a `closed_confirmed` with no case, which is
 // Tier 2's conclusion) is not in the report at all, so it has no comparison: `null`. An alert with a case was
 // escalated by Tier 1 whatever its status is now (see `humanDecisionOf`), and is compared as an escalation.
