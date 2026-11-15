@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read what the production worker already wrote for ① (triage) and say whether the gate held.
+"""Read what the production worker already wrote for ① (triage) and say whether the gate ran.
 
 **What this is (P3-T11, amended by DEC-156).** The card first meant to drive the queue with a fake
 model and prove the worker's loop end to end. The production worker then ran ① on the live
@@ -18,8 +18,13 @@ CLI opens its session READ ONLY so that even a future edit cannot change a row b
    transient error, the cap, the linter — and `llm_runs` is append-only, so a plain NULL-cost
    count would fail for ever after the first of them; that plain count stays in the summary as
    context, by `stopped_by`, and never fails);
-4. no proposer row is still a `false_positive` while the gate's `missing` list is non-empty — the
-   gate must have forced that proposal away from `false_positive`;
+4. no proposer row is still a `false_positive` while the gate's `missing` list is non-empty, unless the
+   gate says it flagged it. A version 1 `gate_result` (the gate before DEC-217) had to force such a proposal
+   away from `false_positive`, so a `false_positive` that kept a non-empty `missing` is a failure. A
+   version 2 one (it has a `flagged_by` array) never changes the verdict: the model's own `false_positive`
+   stays and step 4's failed conditions are `missing`, so a non-empty `missing` is consistent exactly when
+   `step4` is in `flagged_by`, and a failure when it is not (the gate recorded a failed condition and did
+   not say it raised the warning);
 5. no triage job is `failed`.
 
 A proposer run stopped by the schema check (`stopped_by = 'schema'`) has no verdict to gate and no
@@ -112,7 +117,10 @@ SELECT jsonb_build_object(
     'fp_with_missing', (
         SELECT count(*) FROM false_positive
         WHERE COALESCE(gate_result->'missing', 'null'::jsonb)
-              NOT IN ('null'::jsonb, '[]'::jsonb, '{}'::jsonb, '""'::jsonb)),
+              NOT IN ('null'::jsonb, '[]'::jsonb, '{}'::jsonb, '""'::jsonb)
+          AND NOT COALESCE(
+              jsonb_typeof(gate_result->'flagged_by') = 'array'
+              AND gate_result->'flagged_by' @> '["step4"]'::jsonb, false)),
     'forced_rows', (SELECT count(*) FROM proposer WHERE gate_result->>'forced' = 'true'),
     'suggested_action', (
         SELECT COALESCE(jsonb_object_agg(k, n), '{}'::jsonb) FROM (
@@ -253,7 +261,7 @@ def format_table(summary: LiveSummary) -> str:
             ),
         ),
         (
-            "false_positive proposals with a non-empty gate missing",
+            "false_positive proposals with a non-empty gate missing (version 2: not flagged at step4)",
             f"{s.fp_with_missing} / {s.false_positive_rows} false_positive proposals",
         ),
         ("triage jobs by status", _fractions(s.jobs_by_status, jobs, "triage jobs")),
@@ -365,7 +373,7 @@ def _non_negative_int(text: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python3 eval/triage_live.py",
-        description="Read the triage rows the production worker wrote and check the gate held on "
+        description="Read the triage rows the production worker wrote and check the gate ran on "
         "every one of them. Reads only; makes no model call.",
     )
     parser.add_argument(
