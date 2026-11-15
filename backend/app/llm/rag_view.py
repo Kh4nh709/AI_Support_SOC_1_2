@@ -23,9 +23,11 @@ One set of values, the same on both pages: `{"best_pct": int | None, "not_applie
   never stored (spec §5.5), so there are none to leave out here.
 
 * **`below_floor_pct`** is the percentage of the best candidate the rerank scored, for a run whose lookup kept no
-  match: the highest `percent(score)` among the `ranked` of the lookup the run held (`rag_results.ranked`,
+  match: the highest score among the `ranked` of the lookup the run held (`rag_results.ranked`,
   `[{entry_id, score}]`, every candidate scored, best first; the readers fetch it with the `matches`), under the
-  same `score` rule as every other number here. It is `None` when the lookup kept a match (`matches` holds one:
+  same `score` rule as every other number here, **cut down** (`under_floor_pct`), not rounded (DEC-221, spec
+  `2026-11-15-ai-analysis-panel-redesign.md` section 5): a raw 0.4999 is 49, so the number printed under the
+  floor is always below `floor_pct`. `best_pct` of a kept match keeps `percent` (`round`). It is `None` when the lookup kept a match (`matches` holds one:
   `best_pct` is then the number, whether or not the budget dropped its entries - the two are never both set), when
   no candidate has a score, when the run names no lookup, and when the lookup failed (`not_applied` says so). It is
   also `None` when the best score is not under `floor`: the configuration's floor may have moved since the lookup
@@ -70,6 +72,19 @@ def score(item: Any) -> float | None:
     return float(value)
 
 
+def cut_percent(score: float) -> int:
+    """`score * 100` cut down to a whole number (`floor`), after the floating-point noise is rounded away:
+    0.29 * 100 is 28.999999999999996, and it is 29 that the reranker returned."""
+    return math.floor(round(score * 100, 9))
+
+
+def under_floor_pct(score: float, floor: float) -> int:
+    """The percentage of a candidate that scored under `floor` (DEC-221): cut down, not rounded, so that it is below
+    `percent(floor)` - the number the page prints beside it. The `min` keeps that true for a floor that is not a
+    whole percent (0.505 prints as 50): the number is at most one under the floor's own."""
+    return min(cut_percent(score), max(percent(floor) - 1, 0))
+
+
 def best_pct(matches: Any) -> int | None:
     """The highest percentage among a lookup's stored `matches` (`[{entry_id, level, content_sha256, score}]`),
     or `None` when there is no list or no match with a score."""
@@ -100,7 +115,8 @@ def below_floor_pct(
     matches: Any, ranked: Any, warnings: Any, kinds: Collection[str], floor: Any
 ) -> int | None:
     """DEC-220: the percentage of the best candidate of `ranked` (the lookup's stored `rag_results.ranked`) when
-    the lookup kept no match and that candidate scored under `floor`, else `None` (module doc)."""
+    the lookup kept no match and that candidate scored under `floor`, else `None` (module doc). DEC-221: cut down
+    (`under_floor_pct`), never rounded up to the floor."""
     if not _is_score(floor) or not isinstance(ranked, list):
         return None
     if isinstance(matches, list) and matches:
@@ -110,7 +126,7 @@ def below_floor_pct(
     best = max((found for found in map(score, ranked) if found is not None), default=None)
     if best is None or not best < floor:
         return None
-    return percent(best)
+    return under_floor_pct(best, floor)
 
 
 def _is_score(value: Any) -> bool:
