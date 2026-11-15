@@ -68,12 +68,46 @@ def _refusals():
 class _Adapter(DeepSeekAdapter):
     """The adapter with its log lines and its pauses kept where a test can read them."""
 
-    def __init__(self, client, **cfg):
+    def __init__(self, client, *, clock=None, **cfg):
         self.events: list[dict] = []
         self.pauses: list[float] = []
+        extra = {} if clock is None else {"clock": clock}
         super().__init__(
-            _cfg(**cfg), client=client, sleep=self.pauses.append, log=self.events.append
+            _cfg(**cfg), client=client, sleep=self.pauses.append, log=self.events.append, **extra
         )
+
+
+class _Clock:
+    """A clock a test moves by hand: `_TimedClient` advances it while a request is "in flight"."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class _TimedClient(FakeClient):
+    """`FakeClient` whose n-th request takes `durations[n]` seconds on `clock`."""
+
+    def __init__(self, sequence, clock: _Clock, durations):
+        super().__init__(sequence)
+        self._clock = clock
+        self._durations = list(durations)
+
+    def _create(self, **kwargs):
+        self._clock.now += self._durations[len(self.calls)]
+        return super()._create(**kwargs)
+
+
+class _RefuseThenSlow(SlowClient):
+    """The first request is refused with a 400 at once; every later one takes `delay_s` (a real sleep)."""
+
+    def _create(self, **kwargs):
+        if not self.calls:
+            self.calls.append(kwargs)
+            raise _status_error(400)
+        return super()._create(**kwargs)
 
 
 class TestTheRequestAndTheResult:
@@ -215,6 +249,88 @@ class TestTheFallback:
             assert set(event) == {"llm", "n", "outcome", "ms"}
             assert event["n"] == 1
             assert "super secret alert body" not in str(event)
+
+
+class TestAFailureOfTheFallbackRequestItself:
+    """The second request is an ordinary request: whatever it fails with is classified as it always was."""
+
+    def test_a_timeout_on_the_fallback_request_is_an_llm_timeout_and_is_not_retried(self):
+        client = _RefuseThenSlow(delay_s=3)
+        adapter = _Adapter(client, LLM_TIMEOUT_S=1, LLM_RETRY=2)
+
+        with pytest.raises(LLMTimeout):
+            adapter.complete(system=VALID_SYSTEM, user="x", response_format=SCHEMA_FORMAT)
+
+        assert client.call_count == 2  # the refused request, then the fallback that timed out
+        assert [c["response_format"]["type"] for c in client.calls] == [
+            "json_schema",
+            "json_object",
+        ]
+        assert [e["outcome"] for e in adapter.events] == ["format_fallback", "timeout"]
+        assert adapter.pauses == []  # a timeout is not retried inside the adapter (design note 3)
+
+    def test_a_429_on_the_fallback_request_is_permanent_not_unavailable(self):
+        client = FakeClient([_status_error(400), _status_error(429)])
+        adapter = _Adapter(client)
+
+        with pytest.raises(LLMPermanent) as excinfo:
+            adapter.complete(system=VALID_SYSTEM, user="x", response_format=SCHEMA_FORMAT)
+
+        assert not isinstance(excinfo.value, LLMUnavailable)
+        assert client.call_count == 2
+        assert [e["outcome"] for e in adapter.events] == ["format_fallback", "permanent"]
+
+    def test_a_connection_error_on_the_fallback_request_follows_the_normal_retry_then_is_transient(
+        self,
+    ):
+        """Every attempt is refused as json_schema and then fails on its fallback: the retry schedule is the
+        ordinary one (pauses 2 and 4 seconds, three attempts) and the end is the wrapped TransientError.
+        """
+        client = FakeClient([_status_error(400), _connection_error()] * 3)
+        adapter = _Adapter(client, LLM_RETRY=2)
+
+        with pytest.raises(TransientError) as excinfo:
+            adapter.complete(system=VALID_SYSTEM, user="x", response_format=SCHEMA_FORMAT)
+
+        assert not isinstance(excinfo.value, openai.APIConnectionError)
+        assert classify(excinfo.value) == "transient"
+        assert client.call_count == 6
+        assert [c["response_format"]["type"] for c in client.calls] == [
+            "json_schema",
+            "json_object",
+        ] * 3
+        assert adapter.pauses == [2.0, 4.0]
+        assert [e["outcome"] for e in adapter.events] == ["format_fallback", "transient"] * 3
+        assert [e["n"] for e in adapter.events] == [1, 1, 2, 2, 3, 3]
+
+
+class TestTheTimeOfAFallbackedCall:
+    def test_latency_ms_covers_the_refused_request_and_the_one_that_answered(self):
+        """The attempt took 0.3 s refused plus 0.5 s answered: the result says 800 ms, not 500, and each
+        log line says how long its own request took."""
+        clock = _Clock()
+        client = _TimedClient(
+            [_status_error(400), _response(content="{}")], clock, durations=[0.3, 0.5]
+        )
+        adapter = _Adapter(client, clock=clock)
+
+        result = adapter.complete(system=VALID_SYSTEM, user="x", response_format=SCHEMA_FORMAT)
+
+        assert result.latency_ms == 800
+        assert [(e["outcome"], e["ms"]) for e in adapter.events] == [
+            ("format_fallback", 300),
+            ("ok", 500),
+        ]
+
+    def test_a_call_that_needed_no_fallback_has_its_own_latency_alone(self):
+        clock = _Clock()
+        client = _TimedClient([_response(content="{}")], clock, durations=[0.5])
+        adapter = _Adapter(client, clock=clock)
+
+        result = adapter.complete(system=VALID_SYSTEM, user="x", response_format=SCHEMA_FORMAT)
+
+        assert result.latency_ms == 500
+        assert [(e["outcome"], e["ms"]) for e in adapter.events] == [("ok", 500)]
 
 
 class TestEverythingElseIsClassifiedAsToday:
