@@ -15,7 +15,8 @@ export const MIN_QUOTE_CHARS = 8;
  */
 const RAG_TILE_NOTE = {
   matched: "trùng sự cố cũ",
-  belowFloor: (floor: number | null) => (floor === null ? "dưới mức tối thiểu" : `dưới mức ${floor}%`),
+  belowFloor: (floor: number | null) =>
+    floor === null ? "dưới mức tối thiểu" : `dưới mức ${floor}%`,
   noCandidate: "không có mục nào trùng",
   noLookup: "không có tra cứu",
   noData: "chưa có dữ liệu",
@@ -388,7 +389,8 @@ export const S = {
             ? "Không tra cứu được tri thức đã duyệt."
             : `Không tra cứu được tri thức đã duyệt: ${reason}.`,
         warning_facts_mismatch: () => "AI khai dữ kiện lệch với hệ thống.",
-        warning_no_verified_quote: () => "Không có dẫn chứng nào khớp nguyên văn với dữ liệu alert.",
+        warning_no_verified_quote: () =>
+          "Không có dẫn chứng nào khớp nguyên văn với dữ liệu alert.",
         warning_fp_policy_facts: () => "Một dữ kiện của alert không cho phép kết luận FP.",
         warning_fp_policy_playbook: () => "Kết luận FP không khớp bảng quyết định đã duyệt.",
         warning_injection_findings: () => "Dữ liệu alert có dấu hiệu chèn lệnh.",

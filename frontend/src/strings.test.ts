@@ -587,9 +587,7 @@ describe("the Tier 1 panel's words (DEC-221)", () => {
       /^LEVELS: tuple\[tuple\[int, str\], \.\.\.\] = \(([\s\S]*?)\n\)/m,
       join(BACKEND_APP, "rag"),
     ).body;
-    expect([...HISTORY_KEYS]).toEqual(
-      [...levels.matchAll(/\(\d+, "([^"]*)"\)/g)].map((m) => m[1]),
-    );
+    expect([...HISTORY_KEYS]).toEqual([...levels.matchAll(/\(\d+, "([^"]*)"\)/g)].map((m) => m[1]));
   });
 
   it("words every gate step (a set: JS puts the integer-like keys of an object first, whatever the order written)", () => {

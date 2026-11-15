@@ -126,6 +126,30 @@ describe("StatusIcon", () => {
       "na",
     ]);
   });
+
+  // The Tier 1 panel's highlights point up (towards an attack) or down (towards a benign reading), as the approved
+  // mock-up draws them: an arrow in the warning-orange or the calm blue. Added for Tier 1; the three marks above are
+  // unchanged.
+  it("draws an arrow up and an arrow down, each with its own shape and colour, and says them aloud", () => {
+    const { container } = render(
+      <>
+        <StatusIcon kind="up" label={S.analysis.status.up} />
+        <StatusIcon kind="down" label={S.analysis.status.down} />
+      </>,
+    );
+    const svgs = [...container.querySelectorAll("svg")];
+    expect(svgs.map((svg) => svg.dataset.kind)).toEqual(["up", "down"]);
+    expect(new Set(svgs.map((svg) => svg.querySelector("path")?.getAttribute("d"))).size).toBe(2);
+    expect(svgs[0]).toHaveClass("stroke-high");
+    expect(svgs[1]).toHaveClass("stroke-low");
+    expect(screen.getByRole("img", { name: "Nghiêng về tấn công" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Nghiêng về lành tính" })).toBeInTheDocument();
+  });
+
+  it("speaks the arrow of an icon line", () => {
+    render(<IconLine kind="up">Tài khoản đặc quyền.</IconLine>);
+    expect(screen.getByRole("img", { name: S.analysis.status.up })).toBeInTheDocument();
+  });
 });
 
 describe("Tabs", () => {
