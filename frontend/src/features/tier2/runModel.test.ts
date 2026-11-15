@@ -38,7 +38,7 @@ describe("verdictTile", () => {
     ["confirmed_incident", "Là sự cố thật", "Sự cố", "critical"],
     ["policy_violation", "Có vi phạm nội quy, không phải tấn công", "Vi phạm nội quy", "high"],
     ["false_positive", "Không phải sự cố", "Không phải sự cố", "low"],
-    ["need_more_data", "Cần thêm dữ liệu", "Thiếu dữ liệu", "medium"],
+    ["need_more_data", "Cần thêm dữ liệu", "Cần thêm dữ liệu", "medium"],
   ])(
     "says %s as the short word %s over its whole label, in the tone %s, as the assistant's suggestion",
     (code, label, word, tone) => {
@@ -60,7 +60,7 @@ describe("verdictTile", () => {
       ),
     ).toEqual({
       label: "Cần thêm dữ liệu",
-      word: "Thiếu dữ liệu",
+      word: "Cần thêm dữ liệu",
       tone: "medium",
       note: "hệ thống giữ lại",
     });
@@ -80,7 +80,7 @@ describe("verdictTile", () => {
       ),
     ).toEqual({
       label: "Cần thêm dữ liệu",
-      word: "Thiếu dữ liệu",
+      word: "Cần thêm dữ liệu",
       tone: "medium",
       note: "đã bị hạ",
     });

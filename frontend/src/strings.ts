@@ -1047,7 +1047,7 @@ export const S = {
         confirmed_incident: "Sự cố",
         policy_violation: "Vi phạm nội quy",
         false_positive: "Không phải sự cố",
-        need_more_data: "Thiếu dữ liệu",
+        need_more_data: "Cần thêm dữ liệu",
       },
       // The line under the RAG tile is the one table of both tiers: `S.analysis.ragNote`.
       evidenceNote: "khớp nguyên văn",

@@ -23,7 +23,7 @@ const NOTE_INK: Record<Tone, string> = { ...TONE_INK, neutral: "text-muted", ai:
 
 /**
  * The size of the conclusion's word: the mock-up's 20 px. The tile is a quarter of a 528 px column, 100 px inside its
- * padding, and each of the four words ("Sự cố", "Vi phạm nội quy", "Không phải sự cố", "Thiếu dữ liệu") must take two
+ * padding, and each of the four words ("Sự cố", "Vi phạm nội quy", "Không phải sự cố", "Cần thêm dữ liệu") must take two
  * lines at most there. Measured in Chromium at the column's real width (IBM Plex Sans 600): at 20 px the widest line
  * ("phải sự cố") is 94 px of 100, at 21 px 98 px (it still holds, with 2 px to spare, which another renderer's metrics
  * could take), at 22 px 101 px and "Không phải sự cố" takes three lines. 20 px is the largest that holds with room.

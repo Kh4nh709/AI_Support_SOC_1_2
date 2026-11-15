@@ -42,7 +42,7 @@ describe("the Kết luận tile", () => {
     ["confirmed_incident", "Là sự cố thật", "Sự cố", "critical"],
     ["policy_violation", "Có vi phạm nội quy, không phải tấn công", "Vi phạm nội quy", "high"],
     ["false_positive", "Không phải sự cố", "Không phải sự cố", "low"],
-    ["need_more_data", "Cần thêm dữ liệu", "Thiếu dữ liệu", "medium"],
+    ["need_more_data", "Cần thêm dữ liệu", "Cần thêm dữ liệu", "medium"],
   ])(
     "shows %s as the short word %s in its colour, under the line that says it is a suggestion",
     (code, label, word, tone) => {
@@ -58,7 +58,6 @@ describe("the Kết luận tile", () => {
   it.each([
     ["confirmed_incident", "Là sự cố thật", "Sự cố"],
     ["policy_violation", "Có vi phạm nội quy, không phải tấn công", "Vi phạm nội quy"],
-    ["need_more_data", "Cần thêm dữ liệu", "Thiếu dữ liệu"],
   ])(
     "hides the short word %s from a screen reader and gives it the whole label %s instead",
     (code, label, word) => {
@@ -68,11 +67,13 @@ describe("the Kết luận tile", () => {
     },
   );
 
-  it("does not hide a word that is the whole label", () => {
-    renderPanel(runV4({ conclusion: "false_positive", conclusion_label: "Không phải sự cố" }));
-    expect(within(tile("Kết luận")).getByText("Không phải sự cố")).not.toHaveAttribute(
-      "aria-hidden",
-    );
+  it.each([
+    ["false_positive", "Không phải sự cố"],
+    ["need_more_data", "Cần thêm dữ liệu"],
+  ])("does not hide a word that is the whole label (%s: %s), and says it once", (code, label) => {
+    renderPanel(runV4({ conclusion: code, conclusion_label: label, model_conclusion: null }));
+    expect(within(tile("Kết luận")).getByText(label)).not.toHaveAttribute("aria-hidden");
+    expect(within(tile("Kết luận")).getAllByText(label)).toHaveLength(1);
   });
 
   it.each([
@@ -104,9 +105,7 @@ describe("the Kết luận tile", () => {
         held_by: ["no_verified_evidence"],
       }),
     );
-    expect(tile("Kết luận").textContent).toBe(
-      "Kết luậnThiếu dữ liệuCần thêm dữ liệuhệ thống giữ lại",
-    );
+    expect(tile("Kết luận").textContent).toBe("Kết luậnCần thêm dữ liệuhệ thống giữ lại");
     expect(tile("Kết luận")).toHaveAttribute("data-tone", "medium");
     expect(
       screen.getByText(
@@ -127,7 +126,7 @@ describe("the Kết luận tile", () => {
         overruled: sentence,
       }),
     );
-    expect(tile("Kết luận").textContent).toBe("Kết luậnThiếu dữ liệuCần thêm dữ liệuđã bị hạ");
+    expect(tile("Kết luận").textContent).toBe("Kết luậnCần thêm dữ liệuđã bị hạ");
     expect(screen.getByText(sentence)).toBeInTheDocument();
   });
 

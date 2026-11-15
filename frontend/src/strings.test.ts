@@ -516,7 +516,7 @@ describe("the analysis panel's words (DEC-221)", () => {
       confirmed_incident: "Sự cố",
       policy_violation: "Vi phạm nội quy",
       false_positive: "Không phải sự cố",
-      need_more_data: "Thiếu dữ liệu",
+      need_more_data: "Cần thêm dữ liệu",
     });
     // a word is shorter than the label it stands for, or is the label itself
     for (const [code, word] of Object.entries(S.ai2.tile.verdictWord)) {
