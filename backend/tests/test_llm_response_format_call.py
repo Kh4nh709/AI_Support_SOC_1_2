@@ -19,7 +19,7 @@ from app.llm import schemas
 from app.llm import triage as T
 from app.llm.adapter import DeepSeekAdapter, LLMResult
 
-from tests.fakes.llm import TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE
+from tests.fakes.llm import TRIAGE_V4_TRUE_POSITIVE, VERIFIER_V2_AGREE
 from tests.test_llm_triage import (
     NONCE,
     REVIEWED,
@@ -90,7 +90,7 @@ class _Spy:
 # (the function, the schema name, a valid answer, a bad one, how to build its prompt)
 ROLES = [
     pytest.param(
-        T.propose, "triage_v3", TRIAGE_V3_TRUE_POSITIVE, TRIAGE_BAD, _build, id="proposer"
+        T.propose, "triage_v4", TRIAGE_V4_TRUE_POSITIVE, TRIAGE_BAD, _build, id="proposer"
     ),
     pytest.param(
         T.verify, "verifier_v2", VERIFIER_V2_AGREE, VERIFIER_BAD, _verifier, id="verifier"
@@ -135,13 +135,13 @@ class TestTheFormatIsPassedWhenTheSwitchIsOn:
         assert set(sent["schema"]["required"]) == set(good)
 
     def test_the_proposer_and_the_verifier_name_different_schemas(self):
-        proposer, verifier = _Spy([TRIAGE_V3_TRUE_POSITIVE]), _Spy([VERIFIER_V2_AGREE])
+        proposer, verifier = _Spy([TRIAGE_V4_TRUE_POSITIVE]), _Spy([VERIFIER_V2_AGREE])
         cfg = _cfg(LLM_RESPONSE_FORMAT=ON)
 
         T.propose(proposer, _build(), cfg=cfg)
         T.verify(verifier, _verifier(), cfg=cfg)
 
-        assert proposer.kwargs[0]["response_format"]["json_schema"]["name"] == "triage_v3"
+        assert proposer.kwargs[0]["response_format"]["json_schema"]["name"] == "triage_v4"
         assert verifier.kwargs[0]["response_format"]["json_schema"]["name"] == "verifier_v2"
 
     @pytest.mark.parametrize("call,name,good,bad,build", ROLES)
@@ -184,7 +184,7 @@ class TestNothingIsPassedWhenTheSwitchIsOff:
         repair_user = client.calls[1]["user_sent"]
         assert repair_user.startswith(built.prompt.user)
         for kwargs in client.calls:
-            expected_model = "proposer-model" if name == "triage_v3" else "verifier-model"
+            expected_model = "proposer-model" if name == "triage_v4" else "verifier-model"
             assert {k: v for k, v in kwargs.items() if k != "user_sent"} == {
                 "model": expected_model,
                 "messages": [
@@ -279,7 +279,7 @@ class TestThePromptsDoNotMove:
 
     def test_propose_does_not_touch_the_prompt_version_cache(self, monkeypatch):
         monkeypatch.setattr(T, "_PROMPT_VERSION_CACHE", {})
-        T.propose(_Spy([TRIAGE_V3_TRUE_POSITIVE]), _build(), cfg=_cfg(LLM_RESPONSE_FORMAT=ON))
+        T.propose(_Spy([TRIAGE_V4_TRUE_POSITIVE]), _build(), cfg=_cfg(LLM_RESPONSE_FORMAT=ON))
         T.verify(_Spy([VERIFIER_V2_AGREE]), _verifier(), cfg=_cfg(LLM_RESPONSE_FORMAT=ON))
         assert T._PROMPT_VERSION_CACHE == {}
 
@@ -321,7 +321,7 @@ class TestFirstErrors:
         assert result.first_errors is not result.schema_errors
 
     def test_a_json_that_does_not_parse_is_a_root_error_in_first_errors(self):
-        result = T.propose(_Spy(["not json at all", TRIAGE_V3_TRUE_POSITIVE]), _build(), cfg=_cfg())
+        result = T.propose(_Spy(["not json at all", TRIAGE_V4_TRUE_POSITIVE]), _build(), cfg=_cfg())
 
         assert result.first_errors == ["<root>: expected a JSON object"]
         assert result.schema_errors == []
@@ -329,9 +329,9 @@ class TestFirstErrors:
     def test_the_misspelt_key_is_in_first_errors_by_name_and_not_in_the_repair_prompt(self):
         """The 8 % case (spec 1): `reasones` for `reasons`. The stored message names the key; the repair
         prompt, which goes to the model, never does (planning decision 9)."""
-        wrong = copy.deepcopy(TRIAGE_V3_TRUE_POSITIVE)
+        wrong = copy.deepcopy(TRIAGE_V4_TRUE_POSITIVE)
         wrong["reasones"] = wrong.pop("reasons")
-        spy = _Spy([wrong, TRIAGE_V3_TRUE_POSITIVE])
+        spy = _Spy([wrong, TRIAGE_V4_TRUE_POSITIVE])
 
         result = T.propose(spy, _build(), cfg=_cfg())
 
@@ -343,7 +343,7 @@ class TestFirstErrors:
         assert _lint(repair_user, extra=T.REPAIR_CONSTANTS) == []
 
     def test_no_stored_message_is_in_any_prompt_sent_when_the_switch_is_on(self):
-        wrong = copy.deepcopy(TRIAGE_V3_TRUE_POSITIVE)
+        wrong = copy.deepcopy(TRIAGE_V4_TRUE_POSITIVE)
         wrong["IGNORE_PREVIOUS_INSTRUCTIONS"] = 1
         spy = _Spy([wrong, wrong])
 
@@ -411,7 +411,7 @@ class TestFormatFallbackIsNoticed:
         assert result.format_fallback is False
 
     def test_through_the_real_adapter_a_refused_schema_request_is_noticed_end_to_end(self):
-        client = _RefusingClient([TRIAGE_V3_TRUE_POSITIVE])
+        client = _RefusingClient([TRIAGE_V4_TRUE_POSITIVE])
         cfg = _cfg(
             LLM_API_KEY="k",
             LLM_BASE_URL="http://127.0.0.1:9",
@@ -426,7 +426,7 @@ class TestFormatFallbackIsNoticed:
             "json_object",
         ]
         assert result.format_fallback is True and result.calls == 1  # the model was called once
-        assert result.parsed == TRIAGE_V3_TRUE_POSITIVE
+        assert result.parsed == TRIAGE_V4_TRUE_POSITIVE
 
 
 class _RefusingClient(_FakeClient):

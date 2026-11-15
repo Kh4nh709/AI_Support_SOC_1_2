@@ -62,7 +62,7 @@ from typing import Any
 
 import psycopg
 
-from app.llm import rag_view, verdicts
+from app.llm import rag_view, results, verdicts
 from app.rag.failures import FAILURE_KINDS
 from app.tier2.investigate import (
     HELD_BY,  # noqa: F401 - the view's public name for the closed causes (test_investigation_view_api pins it)
@@ -72,7 +72,7 @@ from app.tier2.investigate import (
 )
 
 #: `llm_runs.result.suggested_conclusion` in Vietnamese: the keys are `verdicts.GATED_CONCLUSIONS` - the
-#: three conclusions of `docs/phase-7-tier2.md` the model may give (`investigate_v3`, the same wording
+#: three conclusions of `docs/phase-7-tier2.md` the model may give (`investigate_v3` and `investigate_v4`, the same wording
 #: the retired Jinja case page's status labels used for them) plus the value only the system sets,
 #: `need_more_data` (P14-T02). `tests/test_conclusions.py` ties the keys to the tuple.
 CONCLUSION_LABELS: dict[str, str] = {
@@ -380,7 +380,9 @@ def present_run(row: tuple, rag_min_score: float | None = None) -> dict[str, Any
             if isinstance(h, dict)
         ],
         "evidence": evidence_rows(result, check),
-        "next_steps": as_list(result.get("next_steps")),
+        # a version 4 run stores `{step, priority}` rows (DEC-221): this page reads the text of each step, as it
+        # always has; a version 3 run's strings are themselves
+        "next_steps": results.next_step_texts(result.get("next_steps")),
         "playbook_used": result.get("playbook_used"),
         "overruled": overrule_text(result, check),
         "model_conclusion": model_conclusion(check),

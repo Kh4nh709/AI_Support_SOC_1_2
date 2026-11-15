@@ -68,7 +68,8 @@ output schema, the injection scan and `_check_evidence` are unchanged: an entry 
 material, and a quote taken from one is not in the alert's own text, so it is refused as any quote
 that is not. With the switch off nothing here runs and nothing differs, the INSERT included.
 
-**The definite conclusion (P14-T02, DEC-213, spec 4.2).** The model answers `investigate_v3`: one of
+**The definite conclusion (P14-T02, DEC-213, spec 4.2).** The model answers `investigate_v3` (since DEC-221 `investigate_v4`,
+which adds the fields it writes for the analyst and changes nothing of this): one of
 `llm.verdicts.MODEL_CONCLUSIONS`, never `need_more_data` (a prompt that no longer offers it, and a schema
 that refuses it). The override is unchanged - zero verified evidence, or a high injection finding meeting a
 `false_positive`, makes the stored conclusion `need_more_data`, which `ck_llm_runs_suggested_conclusion`
@@ -365,7 +366,7 @@ def _is_transient(exc: BaseException) -> bool:
 def _snapshot_trace(dossier: llm_investigate.DossierLike) -> dict[str, Any]:
     """The P7-2 snapshot plus `Dossier.truncations`/`estimated_tokens`, together in
     `agent_trace` (this card's choice — see the report; `result` stays the pure
-    validated `investigate_v3` object, or `None`, never an envelope around it, so a
+    validated `investigate_v4` object, or `None`, never an envelope around it, so a
     reader does not have to know this module's storage convention to read a `result`
     that validates)."""
     snapshot = dossier.snapshot
@@ -545,7 +546,7 @@ class CaseEvaluation:
     `LLMPermanent` / the pre-send linter's `PermanentError`; "transient" - a timeout, a transport error or a
     5xx (`exception` is the error; the job writes a row and re-raises it).
 
-    `result` is the object the job stores: the model's `investigate_v3` answer with the override applied,
+    `result` is the object the job stores: the model's `investigate_v4` answer with the override applied,
     only for "ok". `model_conclusion` is the model's own answer and `final_conclusion` the stored one (they
     differ exactly when `held_by` is not empty: `no_verified_evidence` and / or
     `high_severity_injection_finding`, the closed causes `investigation_view.held_by` reads from the same

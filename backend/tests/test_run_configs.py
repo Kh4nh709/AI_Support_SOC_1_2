@@ -47,7 +47,7 @@ from app.llm.triage import TRIAGE_TEMPLATE, prompt_version
 from app.tier1.triage import DEPLOYED, EvalSwitches, evaluate_alert
 from psycopg.types.json import Jsonb
 
-from tests.fakes.llm import VERIFIER_V2_AGREE, FakeLLM
+from tests.fakes.llm import TRIAGE_V4_NEW_FIELDS, VERIFIER_V2_AGREE, FakeLLM
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EVAL_DIR = REPO_ROOT / "eval"
@@ -126,7 +126,7 @@ _REASON = {
 
 
 def _answer(action: str, rule: str | None = None) -> dict:
-    """A schema-valid `triage_v3` answer matching the canonical facts (gate step 2 passes) whose
+    """A schema-valid `triage_v4` answer matching the canonical facts (gate step 2 passes) whose
     one reason quotes the raw log (step 3 keeps it)."""
     return {
         "suggested_action": action,
@@ -134,6 +134,7 @@ def _answer(action: str, rule: str | None = None) -> dict:
         "structured_basis": {**_BASIS, "playbook_rule_applied": rule},
         "reasons": [dict(_REASON)],
         "playbook_used": None,
+        **TRIAGE_V4_NEW_FIELDS,
     }
 
 
@@ -167,7 +168,7 @@ _counter = itertools.count()
 
 
 class SchemaFake(FakeLLM):
-    """`FakeLLM` answering by schema: the proposer's `triage_v3` answer or the verifier's
+    """`FakeLLM` answering by schema: the proposer's `triage_v4` answer or the verifier's
     `verifier_v2` one, whatever order concurrent items call in. Thread-safe. `calls` is the call
     counter. `models` are the response models of the two roles. `fail(system, user)` may return an
     exception to raise instead of answering (the call is still counted)."""

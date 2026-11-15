@@ -5,7 +5,8 @@ What this file pins, none of it needing a database:
 * the two conclusion vocabularies in `llm/verdicts.py` and every place that transcribes them (the
   schema file, the view's label table, the stored CHECK);
 * `investigate_v3` (the model's answer: `false_positive | policy_violation | confirmed_incident`)
-  against its parent `investigate_v2`, which stays because `eval/` reads it;
+  against its parent `investigate_v2`, which stays because `eval/` reads it; since DEC-221 (AP-T1) the product asks
+  for `investigate_v4`, `investigate_v3` plus the fields the model writes for the analyst, with the same conclusion;
 * the repair round: a model that answers `need_more_data` is refused by the schema, told so in the
   one repair turn, and a second refusal leaves nothing parsed;
 * the two prompts: the system template and the dossier's closing sentence no longer tell the model
@@ -32,7 +33,7 @@ from app.tier2 import dossier
 from app.tier2 import investigate as tier2_investigate
 from app.tier2 import investigation_view as view
 
-from tests.fakes.llm import INVESTIGATE_V2_OK, INVESTIGATE_V3_OK, FakeLLM
+from tests.fakes.llm import INVESTIGATE_V2_OK, INVESTIGATE_V3_OK, INVESTIGATE_V4_OK, FakeLLM
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES = ROOT / "backend" / "app" / "llm" / "templates"
@@ -46,6 +47,10 @@ V3_MESSAGE = (
 
 def _answer(conclusion: str) -> dict:
     return {**INVESTIGATE_V3_OK, "suggested_conclusion": conclusion}
+
+
+def _answer_v4(conclusion: str) -> dict:
+    return {**INVESTIGATE_V4_OK, "suggested_conclusion": conclusion}
 
 
 # ── the two vocabularies ────────────────────────────────────────────────────────────────────
@@ -150,11 +155,18 @@ class _Dossier:
     )
 
 
-def test_the_product_investigates_against_investigate_v3():
-    assert llm_investigate.SCHEMA_NAME == "investigate_v3"
+@pytest.mark.parametrize("conclusion", verdicts.MODEL_CONCLUSIONS)
+def test_investigate_v4_takes_the_same_three_conclusions_and_refuses_the_rest(conclusion):
+    assert schemas.validate("investigate_v4", _answer_v4(conclusion)) == []
+    problems = schemas.validate("investigate_v4", _answer_v4("need_more_data"))
+    assert problems == [V3_MESSAGE]
+
+
+def test_the_product_investigates_against_investigate_v4():
+    assert llm_investigate.SCHEMA_NAME == "investigate_v4"
     system, _user = llm_investigate.build(_Dossier(), nonce=_Dossier.nonce, cfg=None)
-    assert "## Schema investigate_v3\n" in system
-    assert "investigate_v2" not in system
+    assert "## Schema investigate_v4\n" in system
+    assert "investigate_v2" not in system and "investigate_v3" not in system
     assert V3_LINE in system.splitlines()
     assert "need_more_data" not in system  # neither the template nor the rendered schema offers it
 
@@ -179,7 +191,7 @@ def _run(answers: list[dict]) -> tuple[llm_investigate.InvestigateResult, FakeLL
 
 
 def test_a_model_answering_need_more_data_is_refused_and_repaired():
-    result, fake = _run([_answer("need_more_data"), _answer("confirmed_incident")])
+    result, fake = _run([_answer_v4("need_more_data"), _answer_v4("confirmed_incident")])
 
     assert result.calls == 2
     assert result.repaired is True
@@ -192,7 +204,7 @@ def test_a_model_answering_need_more_data_is_refused_and_repaired():
 
 
 def test_a_model_answering_need_more_data_twice_leaves_nothing_parsed():
-    result, fake = _run([_answer("need_more_data"), _answer("need_more_data")])
+    result, fake = _run([_answer_v4("need_more_data"), _answer_v4("need_more_data")])
 
     assert result.calls == 2
     assert result.parsed is None
@@ -202,7 +214,7 @@ def test_a_model_answering_need_more_data_twice_leaves_nothing_parsed():
 
 @pytest.mark.parametrize("conclusion", verdicts.MODEL_CONCLUSIONS)
 def test_a_definite_answer_is_one_call(conclusion):
-    result, _fake = _run([_answer(conclusion)])
+    result, _fake = _run([_answer_v4(conclusion)])
 
     assert result.calls == 1
     assert result.repaired is False
@@ -235,7 +247,9 @@ def test_the_template_offers_no_need_more_data():
     assert "need_more_data" not in text
     assert "JSON" in text  # the adapter's response_format requires the word
     assert "tool" not in text.lower()
-    assert len(text.splitlines()) <= 30
+    assert (
+        len(text.splitlines()) <= 40
+    )  # 30 until DEC-221 (AP-T1) added the sentences for the new fields
 
 
 def test_the_template_lists_exactly_the_three_conclusions():
@@ -316,7 +330,7 @@ def test_the_constant_set_holds_no_sentence_that_offers_need_more_data():
 
 def test_the_e2e_stub_answers_pipeline_two_against_the_new_schema():
     """`scripts/e2e_llm_stub.py` picks its answer from the schema name in the system prompt; with
-    the product on `investigate_v3` it must still recognise ②, or ② would be answered as ①."""
+    the product on `investigate_v4` it must still recognise ②, or ② would be answered as ①."""
     spec = importlib.util.spec_from_file_location(
         "e2e_llm_stub_t02", ROOT / "scripts" / "e2e_llm_stub.py"
     )
@@ -325,5 +339,5 @@ def test_the_e2e_stub_answers_pipeline_two_against_the_new_schema():
 
     answer = stub.answer_for(llm_investigate._system_prompt(), "no blocks here")
 
-    assert schemas.validate("investigate_v3", answer) == []
+    assert schemas.validate("investigate_v4", answer) == []
     assert answer["suggested_conclusion"] in verdicts.MODEL_CONCLUSIONS

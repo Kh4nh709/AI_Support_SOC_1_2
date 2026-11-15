@@ -22,7 +22,7 @@ import itertools
 import pytest
 from app.security import gate, output_guard, wrap
 
-from tests.fakes.llm import TRIAGE_V2_FALSE_POSITIVE, TRIAGE_V3_TRUE_POSITIVE
+from tests.fakes.llm import TRIAGE_V4_FALSE_POSITIVE, TRIAGE_V4_TRUE_POSITIVE
 
 NONCE = wrap.new_nonce()
 
@@ -47,12 +47,12 @@ def _facts_from(structured_basis: dict, **overrides) -> dict:
 
 
 def _true_positive_blocks() -> dict[str, wrap.Block]:
-    reason = TRIAGE_V3_TRUE_POSITIVE["reasons"][0]
+    reason = TRIAGE_V4_TRUE_POSITIVE["reasons"][0]
     return _blocks(**{reason["source"]: reason["quote"] + " — trailing log context"})
 
 
 def _fp_blocks() -> dict[str, wrap.Block]:
-    reason = TRIAGE_V2_FALSE_POSITIVE["reasons"][0]
+    reason = TRIAGE_V4_FALSE_POSITIVE["reasons"][0]
     return _blocks(**{reason["source"]: reason["quote"] + " (routine)"})
 
 
@@ -83,11 +83,11 @@ def test_step1_first_failure_asks_repair_second_fails():
     def validate_fails(_name, _obj):
         return ["structured_basis.severity: expected one of critical|high|medium|low"]
 
-    status, errors = gate.step1_schema(TRIAGE_V3_TRUE_POSITIVE, validate_fails, repaired=False)
+    status, errors = gate.step1_schema(TRIAGE_V4_TRUE_POSITIVE, validate_fails, repaired=False)
     assert status == "repair"
     assert errors
 
-    status, errors = gate.step1_schema(TRIAGE_V3_TRUE_POSITIVE, validate_fails, repaired=True)
+    status, errors = gate.step1_schema(TRIAGE_V4_TRUE_POSITIVE, validate_fails, repaired=True)
     assert status == "failed"
     assert errors
 
@@ -96,21 +96,21 @@ def test_step1_passes_when_validator_reports_no_errors():
     def validate_ok(_name, _obj):
         return []
 
-    status, errors = gate.step1_schema(TRIAGE_V3_TRUE_POSITIVE, validate_ok, repaired=False)
+    status, errors = gate.step1_schema(TRIAGE_V4_TRUE_POSITIVE, validate_ok, repaired=False)
     assert status == "ok"
     assert errors == []
 
 
-def test_step1_asks_the_validator_for_triage_v3():
-    """P14-T01: the model's answer is held to `triage_v3` (`false_positive | true_positive`)."""
+def test_step1_asks_the_validator_for_triage_v4():
+    """P14-T01: the model's answer is held to `false_positive | true_positive`; DEC-221 (AP-T1): to `triage_v4`."""
     asked = []
 
     def spy(name, _obj):
         asked.append(name)
         return []
 
-    gate.step1_schema(TRIAGE_V3_TRUE_POSITIVE, spy, repaired=False)
-    assert asked == ["triage_v3"]
+    gate.step1_schema(TRIAGE_V4_TRUE_POSITIVE, spy, repaired=False)
+    assert asked == ["triage_v4"]
 
 
 def test_step1_unparsed_json_counts_as_invalid():
@@ -127,15 +127,15 @@ def test_step1_unparsed_json_counts_as_invalid():
 
 
 def test_start_records_repaired_flag_in_steps():
-    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
-    state = gate.start(TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), repaired=False)
+    facts = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
+    state = gate.start(TRIAGE_V4_TRUE_POSITIVE, facts, _true_positive_blocks(), repaired=False)
     assert state.steps["1"] == "ok"
 
-    state = gate.start(TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), repaired=True)
+    state = gate.start(TRIAGE_V4_TRUE_POSITIVE, facts, _true_positive_blocks(), repaired=True)
     assert state.steps["1"] == "repaired"
     assert state.proposed_verdict == "true_positive"
     assert state.verdict == "true_positive"
-    assert state.reasons == TRIAGE_V3_TRUE_POSITIVE["reasons"]
+    assert state.reasons == TRIAGE_V4_TRUE_POSITIVE["reasons"]
 
 
 # ---------------------------------------------------------------------------
@@ -144,8 +144,8 @@ def test_start_records_repaired_flag_in_steps():
 
 
 def test_step2_basis_mismatch_flags_and_keeps_the_models_verdict():
-    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"], severity="high")
-    state = gate.start(TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), repaired=False)
+    facts = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"], severity="high")
+    state = gate.start(TRIAGE_V4_TRUE_POSITIVE, facts, _true_positive_blocks(), repaired=False)
 
     gate.step2_basis(state)
 
@@ -157,8 +157,8 @@ def test_step2_basis_mismatch_flags_and_keeps_the_models_verdict():
 
 
 def test_step2_string_fields_compared_case_insensitively():
-    basis = dict(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
-    parsed = dict(TRIAGE_V3_TRUE_POSITIVE, structured_basis=basis)
+    basis = dict(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
+    parsed = dict(TRIAGE_V4_TRUE_POSITIVE, structured_basis=basis)
     facts = _facts_from(basis, severity="CRITICAL")  # DB facts upper-cased, still a match
     state = gate.start(parsed, facts, _true_positive_blocks(), repaired=False)
 
@@ -172,16 +172,16 @@ def test_step2_string_fields_compared_case_insensitively():
 
 def test_step2_occurrence_is_integer_equal_at_build_time():
     basis = dict(
-        TRIAGE_V3_TRUE_POSITIVE["structured_basis"], occurrence_count="1"
+        TRIAGE_V4_TRUE_POSITIVE["structured_basis"], occurrence_count="1"
     )  # model sent a string
-    parsed = dict(TRIAGE_V3_TRUE_POSITIVE, structured_basis=basis)
-    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"], occurrence_count=1)
+    parsed = dict(TRIAGE_V4_TRUE_POSITIVE, structured_basis=basis)
+    facts = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"], occurrence_count=1)
     state = gate.start(parsed, facts, _true_positive_blocks(), repaired=False)
 
     gate.step2_basis(state)
     assert state.steps["2"] == "ok"  # int("1") == 1, not a mismatch
 
-    facts_grown = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"], occurrence_count=2)
+    facts_grown = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"], occurrence_count=2)
     state2 = gate.start(parsed, facts_grown, _true_positive_blocks(), repaired=False)
     gate.step2_basis(state2)
     assert state2.mismatched_fields == ["occurrence_count"]
@@ -190,10 +190,10 @@ def test_step2_occurrence_is_integer_equal_at_build_time():
 
 
 def test_step2_playbook_rule_applied_is_not_compared():
-    basis = dict(TRIAGE_V3_TRUE_POSITIVE["structured_basis"], playbook_rule_applied="not-in-facts")
-    parsed = dict(TRIAGE_V3_TRUE_POSITIVE, structured_basis=basis)
+    basis = dict(TRIAGE_V4_TRUE_POSITIVE["structured_basis"], playbook_rule_applied="not-in-facts")
+    parsed = dict(TRIAGE_V4_TRUE_POSITIVE, structured_basis=basis)
     facts = _facts_from(
-        TRIAGE_V3_TRUE_POSITIVE["structured_basis"]
+        TRIAGE_V4_TRUE_POSITIVE["structured_basis"]
     )  # facts carry no playbook_rule_applied key at all
     state = gate.start(parsed, facts, _true_positive_blocks(), repaired=False)
 
@@ -209,14 +209,14 @@ def test_step2_playbook_rule_applied_is_not_compared():
 
 
 def test_step3_invalid_quote_dropped_survivors_kept():
-    good = TRIAGE_V2_FALSE_POSITIVE["reasons"][0]
+    good = TRIAGE_V4_FALSE_POSITIVE["reasons"][0]
     bad = {
         "claim": "fabricated",
         "quote": "this text is nowhere in any block",
         "source": "rule_description",
     }
-    parsed = dict(TRIAGE_V2_FALSE_POSITIVE, reasons=[good, bad])
-    facts = _facts_from(TRIAGE_V2_FALSE_POSITIVE["structured_basis"])
+    parsed = dict(TRIAGE_V4_FALSE_POSITIVE, reasons=[good, bad])
+    facts = _facts_from(TRIAGE_V4_FALSE_POSITIVE["structured_basis"])
     state = gate.start(parsed, facts, _fp_blocks(), repaired=False)
 
     gate.step3_quotes(state)
@@ -230,8 +230,8 @@ def test_step3_invalid_quote_dropped_survivors_kept():
 
 def test_step3_all_invalid_flags_and_keeps_the_models_verdict():
     bad = {"claim": "fabricated", "quote": "not anywhere", "source": "rule_description"}
-    parsed = dict(TRIAGE_V2_FALSE_POSITIVE, reasons=[bad])
-    facts = _facts_from(TRIAGE_V2_FALSE_POSITIVE["structured_basis"])
+    parsed = dict(TRIAGE_V4_FALSE_POSITIVE, reasons=[bad])
+    facts = _facts_from(TRIAGE_V4_FALSE_POSITIVE["structured_basis"])
     state = gate.start(parsed, facts, _fp_blocks(), repaired=False)
 
     gate.step3_quotes(state)
@@ -244,8 +244,8 @@ def test_step3_all_invalid_flags_and_keeps_the_models_verdict():
 
 def test_step3_quote_matches_escaped_form():
     reason = {"claim": "html-ish quote", "quote": "&lt;script&gt;", "source": "context"}
-    parsed = dict(TRIAGE_V2_FALSE_POSITIVE, reasons=[reason])
-    facts = _facts_from(TRIAGE_V2_FALSE_POSITIVE["structured_basis"])
+    parsed = dict(TRIAGE_V4_FALSE_POSITIVE, reasons=[reason])
+    facts = _facts_from(TRIAGE_V4_FALSE_POSITIVE["structured_basis"])
     blocks = _blocks(context="payload contains <script>alert(1)</script> inline")
     state = gate.start(parsed, facts, blocks, repaired=False)
 
@@ -256,10 +256,10 @@ def test_step3_quote_matches_escaped_form():
 
 
 def test_step3_unknown_source_dropped():
-    good = TRIAGE_V2_FALSE_POSITIVE["reasons"][0]
+    good = TRIAGE_V4_FALSE_POSITIVE["reasons"][0]
     unknown = {"claim": "typo'd source", "quote": "irrelevant", "source": "kb_playbok"}
-    parsed = dict(TRIAGE_V2_FALSE_POSITIVE, reasons=[good, unknown])
-    facts = _facts_from(TRIAGE_V2_FALSE_POSITIVE["structured_basis"])
+    parsed = dict(TRIAGE_V4_FALSE_POSITIVE, reasons=[good, unknown])
+    facts = _facts_from(TRIAGE_V4_FALSE_POSITIVE["structured_basis"])
     state = gate.start(parsed, facts, _fp_blocks(), repaired=False)
 
     gate.step3_quotes(state)
@@ -270,8 +270,8 @@ def test_step3_unknown_source_dropped():
 
 def test_step3_empty_quote_dropped():
     empty = {"claim": "nothing quoted", "quote": "", "source": "rule_description"}
-    parsed = dict(TRIAGE_V2_FALSE_POSITIVE, reasons=[empty])
-    facts = _facts_from(TRIAGE_V2_FALSE_POSITIVE["structured_basis"])
+    parsed = dict(TRIAGE_V4_FALSE_POSITIVE, reasons=[empty])
+    facts = _facts_from(TRIAGE_V4_FALSE_POSITIVE["structured_basis"])
     state = gate.start(parsed, facts, _fp_blocks(), repaired=False)
 
     gate.step3_quotes(state)
@@ -287,8 +287,8 @@ def test_step3_empty_quote_dropped():
 
 
 def _fp_parsed_and_facts(**basis_overrides):
-    basis = dict(TRIAGE_V2_FALSE_POSITIVE["structured_basis"], **basis_overrides)
-    parsed = dict(TRIAGE_V2_FALSE_POSITIVE, structured_basis=basis)
+    basis = dict(TRIAGE_V4_FALSE_POSITIVE["structured_basis"], **basis_overrides)
+    parsed = dict(TRIAGE_V4_FALSE_POSITIVE, structured_basis=basis)
     facts = _facts_from(basis)
     return parsed, facts
 
@@ -374,8 +374,8 @@ def test_step4_missing_names_every_failed_condition():
 
 
 def test_step4_not_applied_to_true_positive():
-    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
-    state = gate.start(TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), repaired=False)
+    facts = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
+    state = gate.start(TRIAGE_V4_TRUE_POSITIVE, facts, _true_positive_blocks(), repaired=False)
     gate.step2_basis(state)
     gate.step3_quotes(state)
 
@@ -407,8 +407,8 @@ def test_step4_is_evaluated_after_a_step2_flag():
 
 def test_step4_is_evaluated_after_a_step3_flag():
     bad = {"claim": "fabricated", "quote": "not anywhere", "source": "rule_description"}
-    parsed = dict(TRIAGE_V2_FALSE_POSITIVE, reasons=[bad])
-    facts = _facts_from(TRIAGE_V2_FALSE_POSITIVE["structured_basis"])
+    parsed = dict(TRIAGE_V4_FALSE_POSITIVE, reasons=[bad])
+    facts = _facts_from(TRIAGE_V4_FALSE_POSITIVE["structured_basis"])
     state = gate.start(parsed, facts, _fp_blocks(), repaired=False)
     gate.step2_basis(state)
     gate.step3_quotes(state)
@@ -449,8 +449,8 @@ def test_flagged_by_lists_the_steps_in_step_order_and_never_twice():
 
 
 def test_step5_high_finding_never_changes_verdict():
-    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
-    state = gate.start(TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), repaired=False)
+    facts = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
+    state = gate.start(TRIAGE_V4_TRUE_POSITIVE, facts, _true_positive_blocks(), repaired=False)
     gate.step2_basis(state)
     gate.step3_quotes(state)
     gate.step4_fp_policy(state, _rule_check_no_rule_cited)
@@ -463,8 +463,8 @@ def test_step5_high_finding_never_changes_verdict():
 
 
 def test_step5_no_findings_recorded_as_zero():
-    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
-    state = gate.start(TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), repaired=False)
+    facts = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
+    state = gate.start(TRIAGE_V4_TRUE_POSITIVE, facts, _true_positive_blocks(), repaired=False)
 
     gate.step5_detector(state, _no_findings)
 
@@ -478,9 +478,9 @@ def test_step5_no_findings_recorded_as_zero():
 
 
 def test_run_steps_1_to_5_runs_start_through_five_in_order():
-    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
+    facts = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
     state = gate.run_steps_1_to_5(
-        TRIAGE_V3_TRUE_POSITIVE,
+        TRIAGE_V4_TRUE_POSITIVE,
         facts,
         _true_positive_blocks(),
         repaired=False,
@@ -506,9 +506,9 @@ def _state_after_1_to_5(parsed, facts, blocks, *, rule_check):
 
 
 def test_step6_disagree_flags_and_keeps_the_models_verdict():
-    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
+    facts = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
     state = _state_after_1_to_5(
-        TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
+        TRIAGE_V4_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
     )
     assert state.verdict == "true_positive"
 
@@ -528,9 +528,9 @@ def test_step6_disagree_flags_and_keeps_the_models_verdict():
 
 
 def test_step6_agree_true_different_verdict_flags():
-    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
+    facts = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
     state = _state_after_1_to_5(
-        TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
+        TRIAGE_V4_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
     )
 
     gate.step6_verifier(
@@ -543,9 +543,9 @@ def test_step6_agree_true_different_verdict_flags():
 
 
 def test_step6_invalid_flags():
-    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
+    facts = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
     state = _state_after_1_to_5(
-        TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
+        TRIAGE_V4_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
     )
 
     gate.step6_verifier(state, None)
@@ -557,9 +557,9 @@ def test_step6_invalid_flags():
 
 
 def test_step6_agrees_and_matches_keeps_verdict():
-    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
+    facts = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
     state = _state_after_1_to_5(
-        TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
+        TRIAGE_V4_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
     )
 
     gate.step6_verifier(
@@ -619,10 +619,10 @@ def test_step6_compares_against_the_models_verdict_even_after_a_step4_flag():
 
 
 def test_step7_result_carries_the_models_verdict_and_the_survivors():
-    good = TRIAGE_V2_FALSE_POSITIVE["reasons"][0]
+    good = TRIAGE_V4_FALSE_POSITIVE["reasons"][0]
     bad = {"claim": "fabricated", "quote": "nowhere", "source": "rule_description"}
-    parsed = dict(TRIAGE_V2_FALSE_POSITIVE, reasons=[good, bad])
-    facts = _facts_from(TRIAGE_V2_FALSE_POSITIVE["structured_basis"], severity="high")
+    parsed = dict(TRIAGE_V4_FALSE_POSITIVE, reasons=[good, bad])
+    facts = _facts_from(TRIAGE_V4_FALSE_POSITIVE["structured_basis"], severity="high")
     state = gate.start(parsed, facts, _fp_blocks(), repaired=False)
     gate.step2_basis(state)  # a mismatch: flagged
     gate.step3_quotes(state)  # drops `bad`, keeps `good`
@@ -637,8 +637,8 @@ def test_step7_result_carries_the_models_verdict_and_the_survivors():
 
 def test_step7_refuses_needs_review_even_if_a_step_set_it():
     """DEC-217: `needs_review` can no longer leave the gate - the guard raises, whatever wrote it."""
-    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
-    state = gate.start(TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), repaired=False)
+    facts = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
+    state = gate.start(TRIAGE_V4_TRUE_POSITIVE, facts, _true_positive_blocks(), repaired=False)
     state.verdict = "needs_review"
 
     with pytest.raises(output_guard.OutputGuardError, match="suggested_action: invalid"):
@@ -646,8 +646,8 @@ def test_step7_refuses_needs_review_even_if_a_step_set_it():
 
 
 def test_step7_raises_via_output_guard_on_violation():
-    parsed = dict(TRIAGE_V3_TRUE_POSITIVE)
-    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
+    parsed = dict(TRIAGE_V4_TRUE_POSITIVE)
+    facts = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
     state = gate.start(parsed, facts, _true_positive_blocks(), repaired=False)
     state.verdict = "maybe"  # not a real verdict — output_guard must catch this, not trust the gate
 
@@ -656,9 +656,9 @@ def test_step7_raises_via_output_guard_on_violation():
 
 
 def test_finish_runs_step6_then_step7():
-    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
+    facts = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
     state = _state_after_1_to_5(
-        TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
+        TRIAGE_V4_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
     )
 
     result = gate.finish(
@@ -678,25 +678,25 @@ def test_finish_runs_step6_then_step7():
 def test_output_guard_refuses_needs_review():
     """DEC-217 (G1): a `needs_review` can no longer leave the gate."""
     with pytest.raises(output_guard.OutputGuardError, match="suggested_action: invalid"):
-        output_guard.enforce(dict(TRIAGE_V3_TRUE_POSITIVE, suggested_action="needs_review"))
+        output_guard.enforce(dict(TRIAGE_V4_TRUE_POSITIVE, suggested_action="needs_review"))
 
 
 def test_output_guard_vocabulary_is_the_models_two_values():
     assert output_guard.SUGGESTED_ACTIONS == frozenset({"false_positive", "true_positive"})
     for answer in ("false_positive", "true_positive"):
-        enforced = output_guard.enforce(dict(TRIAGE_V3_TRUE_POSITIVE, suggested_action=answer))
+        enforced = output_guard.enforce(dict(TRIAGE_V4_TRUE_POSITIVE, suggested_action=answer))
         assert enforced["suggested_action"] == answer
 
 
 def test_output_guard_raises_on_closed_set_violation():
-    bad = dict(TRIAGE_V3_TRUE_POSITIVE, suggested_action="maybe")
+    bad = dict(TRIAGE_V4_TRUE_POSITIVE, suggested_action="maybe")
 
     with pytest.raises(output_guard.OutputGuardError):
         output_guard.enforce(bad)
 
 
 def test_output_guard_drops_unknown_keys():
-    with_extra = dict(TRIAGE_V3_TRUE_POSITIVE, unexpected_field="smuggled")
+    with_extra = dict(TRIAGE_V4_TRUE_POSITIVE, unexpected_field="smuggled")
 
     enforced = output_guard.enforce(with_extra)
 
@@ -707,31 +707,36 @@ def test_output_guard_drops_unknown_keys():
         "structured_basis",
         "reasons",
         "playbook_used",
+        "summary",
+        "reading_attack",
+        "reading_benign",
+        "would_change",
+        "next_checks",
     }
 
 
 def test_output_guard_requires_occurrence_count_int():
-    basis = dict(TRIAGE_V3_TRUE_POSITIVE["structured_basis"], occurrence_count="1")
-    bad = dict(TRIAGE_V3_TRUE_POSITIVE, structured_basis=basis)
+    basis = dict(TRIAGE_V4_TRUE_POSITIVE["structured_basis"], occurrence_count="1")
+    bad = dict(TRIAGE_V4_TRUE_POSITIVE, structured_basis=basis)
 
     with pytest.raises(output_guard.OutputGuardError):
         output_guard.enforce(bad)
 
 
 def test_output_guard_rechecks_reason_source():
-    bad_reason = dict(TRIAGE_V3_TRUE_POSITIVE["reasons"][0], source="not_a_real_source")
-    bad = dict(TRIAGE_V3_TRUE_POSITIVE, reasons=[bad_reason])
+    bad_reason = dict(TRIAGE_V4_TRUE_POSITIVE["reasons"][0], source="not_a_real_source")
+    bad = dict(TRIAGE_V4_TRUE_POSITIVE, reasons=[bad_reason])
 
     with pytest.raises(output_guard.OutputGuardError):
         output_guard.enforce(bad)
 
 
 def test_output_guard_never_adds_an_action_or_rewrites_text():
-    enforced = output_guard.enforce(TRIAGE_V3_TRUE_POSITIVE)
+    enforced = output_guard.enforce(TRIAGE_V4_TRUE_POSITIVE)
 
-    assert enforced["suggested_action"] == TRIAGE_V3_TRUE_POSITIVE["suggested_action"]
-    assert enforced["reasons"][0]["claim"] == TRIAGE_V3_TRUE_POSITIVE["reasons"][0]["claim"]
-    assert enforced["reasons"][0]["quote"] == TRIAGE_V3_TRUE_POSITIVE["reasons"][0]["quote"]
+    assert enforced["suggested_action"] == TRIAGE_V4_TRUE_POSITIVE["suggested_action"]
+    assert enforced["reasons"][0]["claim"] == TRIAGE_V4_TRUE_POSITIVE["reasons"][0]["claim"]
+    assert enforced["reasons"][0]["quote"] == TRIAGE_V4_TRUE_POSITIVE["reasons"][0]["quote"]
 
 
 # ---------------------------------------------------------------------------
@@ -740,9 +745,9 @@ def test_output_guard_never_adds_an_action_or_rewrites_text():
 
 
 def test_gate_result_is_version_2_and_shows_the_flags_not_a_force():
-    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
+    facts = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
     state = _state_after_1_to_5(
-        TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
+        TRIAGE_V4_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
     )
     gate.step6_verifier(
         state,
@@ -773,14 +778,14 @@ def test_gate_result_is_version_2_and_shows_the_flags_not_a_force():
         "verifier_verdict": "true_positive",
         "playbook_used_effective": "ssh_brute_force",
         "prompt_version": "abc123+deadbeef",
-        "proposer_raw": TRIAGE_V3_TRUE_POSITIVE,
+        "proposer_raw": TRIAGE_V4_TRUE_POSITIVE,
     }
 
 
 def test_gate_result_of_a_run_nothing_flagged_has_an_empty_flagged_by():
-    facts = _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
+    facts = _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
     state = _state_after_1_to_5(
-        TRIAGE_V3_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
+        TRIAGE_V4_TRUE_POSITIVE, facts, _true_positive_blocks(), rule_check=_rule_check_holds
     )
     gate.step6_verifier(
         state, {"agree": True, "structured_only_verdict": "true_positive", "reason": "consistent"}
@@ -831,10 +836,10 @@ def test_no_step_changes_the_models_verdict_in_any_order(answer):
     """Every order of steps 2, 3, 4 and 6, each one failing its check: the verdict is the model's answer
     after every call, so a step can raise a warning and nothing else. A step that wrote `needs_review`
     (or the other definite answer) would break it."""
-    basis = dict(TRIAGE_V2_FALSE_POSITIVE["structured_basis"], playbook_rule_applied=None)
+    basis = dict(TRIAGE_V4_FALSE_POSITIVE["structured_basis"], playbook_rule_applied=None)
     bad_reason = {"claim": "fabricated", "quote": "not anywhere", "source": "rule_description"}
     parsed = dict(
-        TRIAGE_V2_FALSE_POSITIVE,
+        TRIAGE_V4_FALSE_POSITIVE,
         suggested_action=answer,
         structured_basis=basis,
         reasons=[bad_reason],

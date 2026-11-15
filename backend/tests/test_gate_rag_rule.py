@@ -19,7 +19,7 @@ import copy
 import pytest
 from app.security import gate, output_guard, wrap
 
-from tests.fakes.llm import TRIAGE_V2_FALSE_POSITIVE, TRIAGE_V3_TRUE_POSITIVE
+from tests.fakes.llm import TRIAGE_V4_FALSE_POSITIVE, TRIAGE_V4_TRUE_POSITIVE
 
 NONCE = wrap.new_nonce()
 TP, FP = "true_positive", "false_positive"
@@ -46,12 +46,12 @@ def _facts_from(structured_basis: dict, **overrides) -> dict:
 
 
 def _tp_blocks() -> dict[str, wrap.Block]:
-    reason = TRIAGE_V3_TRUE_POSITIVE["reasons"][0]
+    reason = TRIAGE_V4_TRUE_POSITIVE["reasons"][0]
     return _blocks(**{reason["source"]: reason["quote"] + " - trailing log context"})
 
 
 def _fp_blocks() -> dict[str, wrap.Block]:
-    reason = TRIAGE_V2_FALSE_POSITIVE["reasons"][0]
+    reason = TRIAGE_V4_FALSE_POSITIVE["reasons"][0]
     return _blocks(**{reason["source"]: reason["quote"] + " (routine)"})
 
 
@@ -71,9 +71,9 @@ def _model_answer(answer: str) -> tuple[dict, dict, dict]:
     """`(parsed, facts, blocks)` of one model answer whose steps 2 and 3 pass, so only the rule and step 4
     can say anything about it."""
     if answer == TP:
-        parsed = TRIAGE_V3_TRUE_POSITIVE
+        parsed = TRIAGE_V4_TRUE_POSITIVE
         return parsed, _facts_from(parsed["structured_basis"]), _tp_blocks()
-    parsed = TRIAGE_V2_FALSE_POSITIVE
+    parsed = TRIAGE_V4_FALSE_POSITIVE
     return parsed, _facts_from(parsed["structured_basis"]), _fp_blocks()
 
 
@@ -172,9 +172,9 @@ def test_best_pct_and_threshold_are_the_numbers_it_was_given():
 
 
 def test_the_rule_does_not_change_the_reasons_that_leave_the_gate():
-    good = TRIAGE_V3_TRUE_POSITIVE["reasons"][0]
+    good = TRIAGE_V4_TRUE_POSITIVE["reasons"][0]
     bad = {"claim": "fabricated", "quote": "nowhere in the log", "source": "rule_description"}
-    parsed = dict(TRIAGE_V3_TRUE_POSITIVE, reasons=[good, bad])
+    parsed = dict(TRIAGE_V4_TRUE_POSITIVE, reasons=[good, bad])
     facts = _facts_from(parsed["structured_basis"])
     state = gate.start(parsed, facts, _tp_blocks(), repaired=False)
     gate.step2_basis(state)
@@ -294,13 +294,13 @@ def test_step4_is_n_a_when_the_rule_did_not_apply_to_a_true_positive():
 
 def test_step4_passes_a_rule_produced_false_positive_whose_conditions_hold():
     basis = dict(
-        TRIAGE_V3_TRUE_POSITIVE["structured_basis"],
+        TRIAGE_V4_TRUE_POSITIVE["structured_basis"],
         severity="low",
         ioc_reputation="clean",
         asset_criticality="low",
         identity_privileged="false",
     )
-    parsed = dict(TRIAGE_V3_TRUE_POSITIVE, structured_basis=basis)
+    parsed = dict(TRIAGE_V4_TRUE_POSITIVE, structured_basis=basis)
     state = gate.start(parsed, _facts_from(basis), _tp_blocks(), repaired=False)
     gate.step2_basis(state)
     gate.step3_quotes(state)

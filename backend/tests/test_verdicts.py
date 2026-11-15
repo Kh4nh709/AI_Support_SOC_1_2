@@ -33,9 +33,10 @@ from app.llm.builder import Verdict
 from app.security import gate, linter, output_guard, wrap
 
 from tests.fakes.llm import (
-    TRIAGE_V2_ESCALATE,
     TRIAGE_V2_FALSE_POSITIVE,
     TRIAGE_V3_TRUE_POSITIVE,
+    TRIAGE_V4_FALSE_POSITIVE,
+    TRIAGE_V4_TRUE_POSITIVE,
     VERIFIER_V2_AGREE,
     VERIFIER_V2_DISAGREE,
 )
@@ -187,13 +188,16 @@ def test_triage_v3_refuses_what_is_not_a_definite_answer(refused):
     assert not any(refused in p for p in problems)  # a message never carries the offending value
 
 
-def test_triage_v3_refuses_the_old_verdict_through_the_gate_step_one():
-    status, errors = gate.step1_schema(TRIAGE_V2_ESCALATE, schemas.validate, repaired=False)
+def test_the_gate_step_one_refuses_the_old_verdict():
+    """Step 1 holds the answer to `triage_v4` (DEC-221), which has the narrowed verdict of `triage_v3`: an answer
+    that is otherwise a good one but says `escalate` fails on that alone."""
+    escalate = {**TRIAGE_V4_TRUE_POSITIVE, "suggested_action": "escalate"}
+    status, errors = gate.step1_schema(escalate, schemas.validate, repaired=False)
     assert (status, errors) == (
         "repair",
         ["suggested_action: expected one of false_positive|true_positive"],
     )
-    status, errors = gate.step1_schema(TRIAGE_V2_ESCALATE, schemas.validate, repaired=True)
+    status, errors = gate.step1_schema(escalate, schemas.validate, repaired=True)
     assert status == "failed"
 
 
@@ -260,11 +264,11 @@ def _no_findings(_blocks):
 
 
 def test_a_true_positive_proposal_with_a_basis_mismatch_stays_true_positive_and_is_flagged():
-    facts = _facts(TRIAGE_V3_TRUE_POSITIVE["structured_basis"], severity="high")
+    facts = _facts(TRIAGE_V4_TRUE_POSITIVE["structured_basis"], severity="high")
     state = gate.run_steps_1_to_5(
-        TRIAGE_V3_TRUE_POSITIVE,
+        TRIAGE_V4_TRUE_POSITIVE,
         facts,
-        _blocks(TRIAGE_V3_TRUE_POSITIVE),
+        _blocks(TRIAGE_V4_TRUE_POSITIVE),
         repaired=False,
         rule_check=_holds,
         scan=_no_findings,
@@ -280,11 +284,11 @@ def test_a_true_positive_proposal_with_a_basis_mismatch_stays_true_positive_and_
 
 
 def test_a_true_positive_the_gate_keeps_is_stored_as_the_models_own_answer():
-    facts = _facts(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
+    facts = _facts(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
     state = gate.run_steps_1_to_5(
-        TRIAGE_V3_TRUE_POSITIVE,
+        TRIAGE_V4_TRUE_POSITIVE,
         facts,
-        _blocks(TRIAGE_V3_TRUE_POSITIVE),
+        _blocks(TRIAGE_V4_TRUE_POSITIVE),
         repaired=False,
         rule_check=_holds,
         scan=_no_findings,
@@ -299,11 +303,11 @@ def test_a_true_positive_the_gate_keeps_is_stored_as_the_models_own_answer():
 
 
 def test_a_verifier_that_says_needs_review_only_flags_a_true_positive_at_step6():
-    facts = _facts(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
+    facts = _facts(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
     state = gate.run_steps_1_to_5(
-        TRIAGE_V3_TRUE_POSITIVE,
+        TRIAGE_V4_TRUE_POSITIVE,
         facts,
-        _blocks(TRIAGE_V3_TRUE_POSITIVE),
+        _blocks(TRIAGE_V4_TRUE_POSITIVE),
         repaired=False,
         rule_check=_holds,
         scan=_no_findings,
@@ -316,8 +320,8 @@ def test_a_verifier_that_says_needs_review_only_flags_a_true_positive_at_step6()
 
 
 def test_a_false_positive_on_a_high_criticality_asset_is_still_a_false_positive_flagged_at_step4():
-    basis = dict(TRIAGE_V2_FALSE_POSITIVE["structured_basis"], asset_criticality="high")
-    proposal = {**copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE), "structured_basis": basis}
+    basis = dict(TRIAGE_V4_FALSE_POSITIVE["structured_basis"], asset_criticality="high")
+    proposal = {**copy.deepcopy(TRIAGE_V4_FALSE_POSITIVE), "structured_basis": basis}
     state = gate.run_steps_1_to_5(
         proposal,
         _facts(basis),
@@ -334,14 +338,16 @@ def test_a_false_positive_on_a_high_criticality_asset_is_still_a_false_positive_
 
 
 def test_the_output_guard_lets_true_positive_through_and_refuses_escalate_and_needs_review():
-    assert output_guard.enforce(copy.deepcopy(TRIAGE_V3_TRUE_POSITIVE))["suggested_action"] == (
+    assert output_guard.enforce(copy.deepcopy(TRIAGE_V4_TRUE_POSITIVE))["suggested_action"] == (
         "true_positive"
     )
-    with pytest.raises(output_guard.OutputGuardError):
-        output_guard.enforce(copy.deepcopy(TRIAGE_V2_ESCALATE))
+    with pytest.raises(output_guard.OutputGuardError, match="suggested_action: invalid"):
+        output_guard.enforce(
+            {**copy.deepcopy(TRIAGE_V4_TRUE_POSITIVE), "suggested_action": "escalate"}
+        )
     with pytest.raises(output_guard.OutputGuardError):
         output_guard.enforce(
-            {**copy.deepcopy(TRIAGE_V3_TRUE_POSITIVE), "suggested_action": "needs_review"}
+            {**copy.deepcopy(TRIAGE_V4_TRUE_POSITIVE), "suggested_action": "needs_review"}
         )
 
 

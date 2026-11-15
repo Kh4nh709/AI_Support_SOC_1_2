@@ -7,13 +7,18 @@ P5-T04 (DEC-151 wave 3). Pure: no database, no tier import — `llm` may import 
 this structurally, and so does a small test double with the same attributes).
 
 Mirrors `llm/triage.py`'s propose()/verify() shape (design note 2's "the prompt-build
--> send -> one-repair -> validate shape you mirror"): one call against `investigate_v3`
+-> send -> one-repair -> validate shape you mirror"): one call against `investigate_v4`
 (`app.llm.schemas`), at most one repair naming only the failing fields
 (`llm.builder.SENTENCE_REPAIR`), take whatever comes back. `tier2/investigate.py` (the
 job) is the only caller and the only writer of `llm_runs` — this module returns a plain
 result object and touches no connection, no adapter it did not receive.
 
-**P14-T02 (DEC-213).** The schema is `investigate_v3`: the model's `suggested_conclusion` is one of
+**DEC-221 (AP-T1).** The schema is now `investigate_v4`: `investigate_v3` plus the fields the model writes for the
+analyst (`timeline`, `scope`, a hypothesis's `likelihood`, `next_steps` as `{step, priority}`). Nothing else of this
+module moved: the call, the one repair, the closed vocabulary of the repair bullets (derived from the schema) and the
+`json_object` request are what they were; ② is not on DEC-218's `json_schema` switch.
+
+**P14-T02 (DEC-213).** The schema (then `investigate_v3`; it keeps this rule): the model's `suggested_conclusion` is one of
 `llm.verdicts.MODEL_CONCLUSIONS` (`false_positive | policy_violation | confirmed_incident`). It can no
 longer answer `need_more_data`: an answer that does is a schema failure, goes through the one repair
 round like any other, and a second one is `parsed=None` (`stopped_by='schema'`). `need_more_data` stays
@@ -51,7 +56,9 @@ from app.llm.builder import (
 from app.security import linter
 
 TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "investigate_system.txt"
-SCHEMA_NAME = "investigate_v3"
+#: DEC-221 (AP-T1): `investigate_v4`, `investigate_v3` plus a `timeline`, a `scope`, a `likelihood` per hypothesis and
+#: `next_steps` as `{step, priority}` rows. A stored run is read as the version it was written in (`llm.results`).
+SCHEMA_NAME = "investigate_v4"
 
 
 class DossierLike(Protocol):
@@ -87,7 +94,7 @@ def build(dossier: DossierLike, *, nonce: str, cfg: Config | None = None) -> tup
 
 # --------------------------------------------------------------------------- the
 # repair round (mirrors llm/triage.py's "the repair round", design note 5 there):
-# a value-free vocabulary derived from `investigate_v3`'s own §6.2 shape, so the
+# a value-free vocabulary derived from the schema's own §6.2 shape, so the
 # repair turn's bullets are template constants the linter already knows, never
 # free text a validator message happened to contain.
 # ---------------------------------------------------------------------------
@@ -118,7 +125,7 @@ _MESSAGE_CONSTANTS = frozenset(
 
 
 def _schema_paths(node: Any, prefix: str, paths: dict[str, str], vocabularies: set[str]) -> None:
-    """Every dotted path of the `investigate_v3` schema -> its kind (`object` | `array`
+    """Every dotted path of the `investigate_v4` schema -> its kind (`object` | `array`
     | `leaf`), arrays in the rendered `[]` form; every enum leaf's `expected one of …`
     message. Identical algorithm to `llm/triage.py::_schema_paths` (design note 2:
     mirror ①'s shape), applied to one schema instead of two."""
@@ -288,7 +295,7 @@ def investigate(
     extra_constants: frozenset[str] = frozenset(),
     spend: Spend | None = None,
 ) -> InvestigateResult:
-    """One call against `investigate_v3`, at most one repair. `response_format={"type":
+    """One call against `investigate_v4`, at most one repair. `response_format={"type":
     "json_object"}` (design note 2); `model` is deliberately not passed — the adapter's
     own default is `cfg.LLM_MODEL_PROPOSER` (there is no separate investigator model in
     §6.3), and the fake adapter every test uses (`backend/tests/fakes/llm.py`) accepts

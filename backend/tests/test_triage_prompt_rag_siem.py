@@ -50,7 +50,9 @@ SIEM_ENUM_VALUE = "|siem_context"
 #: message on purpose: the new opening, `false_positive | true_positive`, and `## Schema triage_v3` (2531
 #: bytes, sha 80c7a9b8c046...). T1 (trial, 11/11) moved it again, on purpose: one more line in ĐẦU RA, the
 #: exception for an alert whose category has no playbook (`false_positive`, empty `reasons`); +213 bytes.
-MAIN_SYSTEM_SHA256 = "4aae7ecb41df87b41cef88526bad22a70cc2312e8b71aa1fac60c12d513ede7d"
+#: DEC-221 (AP-T1) moved it once more, on purpose: `## Schema triage_v4` (the five fields of the analyst's reading)
+#: and the sentences that ask for them (3795 bytes without S2's value; the digest before was 4aae7ecb41df...).
+MAIN_SYSTEM_SHA256 = "1991c0563562c443331edaf1417871550c055b159a35aacb61d4947155a95411"
 #: One whole `siem_context` block, with the blank line after it.
 SIEM_BLOCK = re.compile(
     r'<untrusted_data nonce="\w+" source="siem_context">.*?</untrusted_data nonce="\w+">\n\n',
@@ -152,11 +154,12 @@ def test_with_both_off_the_user_message_is_the_one_main_built() -> None:
 
 
 def test_the_system_message_differs_from_mains_by_exactly_the_siem_context_enum_value() -> None:
-    """F1 of the INT-T01 review, ruling (a): the `triage_v3` schema in the system message lists the
+    """F1 of the INT-T01 review, ruling (a): the `triage_v4` schema in the system message lists the
     `reasons[].source` values, and S2 (DEC-211 item 4) added `siem_context` to it. Whatever the flag and
     whatever `learned` holds, the system message is the same text, and taking that one value out of it once
     gives the system message without S2, byte for byte (the hash was main's until P14-T01 moved the
-    system message on purpose, see `MAIN_SYSTEM_SHA256`). It costs 5 estimated tokens."""
+    system message on purpose, see `MAIN_SYSTEM_SHA256`). It costs 13 bytes: 5 estimated tokens before DEC-221,
+    6 since, the estimate rounding the longer system message up (`llm.adapter.estimate_tokens`)."""
     from app.llm.adapter import estimate_tokens
 
     corr = _correlation()
@@ -175,7 +178,7 @@ def test_the_system_message_differs_from_mains_by_exactly_the_siem_context_enum_
     main_system = system.replace(SIEM_ENUM_VALUE, "", 1)
     assert hashlib.sha256(main_system.encode()).hexdigest() == MAIN_SYSTEM_SHA256
     assert len(system.encode()) - len(main_system.encode()) == len(SIEM_ENUM_VALUE) == 13
-    assert estimate_tokens(system) - estimate_tokens(main_system) == 5
+    assert estimate_tokens(system) - estimate_tokens(main_system) == 6
 
 
 def test_the_budget_cuts_the_learned_section_first_and_never_the_siem_block_before_it() -> None:

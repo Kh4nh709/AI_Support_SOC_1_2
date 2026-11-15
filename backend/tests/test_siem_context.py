@@ -37,7 +37,7 @@ from app.security import detector, gate, output_guard, wrap
 from app.security import linter as L
 from app.tier1 import triage as tier1
 
-from tests.fakes.llm import FakeLLM
+from tests.fakes.llm import TRIAGE_V4_NEW_FIELDS, FakeLLM
 from tests.soar_payloads import (
     mw03,
     receive_and_run,
@@ -594,7 +594,10 @@ def test_siem_context_is_a_block_source_and_a_reason_source() -> None:
     answer = _answer("false_positive", facts, [_reason("siem_context", "tier=auto")])
     assert schemas.validate("triage_v2", answer) == []
     assert "siem_context" in schemas.render("triage_v2")
-    assert output_guard.enforce(answer)["reasons"][0]["source"] == "siem_context"
+    # step 7 holds a `triage_v4` answer (DEC-221): the answer above is the `triage_v2` one, so add the five fields
+    assert output_guard.enforce({**answer, **TRIAGE_V4_NEW_FIELDS})["reasons"][0]["source"] == (
+        "siem_context"
+    )
 
 
 def test_a_quote_of_the_block_survives_step_3() -> None:
@@ -609,6 +612,10 @@ def test_a_kept_quote_of_the_block_goes_through_the_step_7_output_guard() -> Non
     """Step 7 re-checks every kept reason against §6.2's closed sets and raises on a source it does not
     know: a `siem_context` quote that survived step 3 must not crash the run there."""
     state = _step3([_reason("siem_context", "type=block_ip target=79.79.78.202 tier=auto")])
+    state.proposer_raw = {
+        **state.proposer_raw,
+        **TRIAGE_V4_NEW_FIELDS,
+    }  # a `triage_v4` answer (DEC-221)
 
     result = gate.step7_output_guard(state)
 

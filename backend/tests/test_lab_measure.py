@@ -47,11 +47,11 @@ from app.tier2 import investigation_view
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from tests.fakes.llm import FakeLLM, LLMResult
+from tests.fakes.llm import TRIAGE_V4_NEW_FIELDS, FakeLLM, LLMResult
 from tests.rag_data import add_case, add_entry
 from tests.scratch_db import insert_user, scratch_database
 from tests.test_investigate import (
-    _investigate_v3,
+    _investigate_v4,
     _make_case,
     _make_head,
     _make_user,
@@ -262,7 +262,7 @@ def test_evaluate_case_writes_nothing(scratch_dsn):
         )
         conn.commit()
 
-    fake = FakeLLM(responses=[_investigate_v3(evidence=_evidence(head))])
+    fake = FakeLLM(responses=[_investigate_v4(evidence=_evidence(head))])
     with _connect(scratch_dsn) as conn:
         conn.execute("SET TRANSACTION READ ONLY")
         before = _counts(conn)
@@ -306,7 +306,7 @@ def test_evaluate_case_result_is_the_jobs(scratch_dsn, monkeypatch, rag, verifie
         entry = _entry(conn, content)
         _put_lookup(conn, "case", case_id, at(0), matches=[_entry_match(entry, content, 0.8)])
         conn.commit()
-    answer = _investigate_v3(
+    answer = _investigate_v4(
         evidence=_evidence(head) if verified else _evidence(head, "no such text")
     )
 
@@ -357,7 +357,7 @@ def test_evaluate_case_without_the_switch_reads_no_lookup(scratch_dsn):
         entry = _entry(conn, content)
         _put_lookup(conn, "case", case_id, at(0), matches=[_entry_match(entry, content, 0.8)])
         conn.commit()
-    fake = FakeLLM(responses=[_investigate_v3(evidence=_evidence(head))])
+    fake = FakeLLM(responses=[_investigate_v4(evidence=_evidence(head))])
     with _connect(scratch_dsn) as conn:
         ev = tier2_investigate.evaluate_case(conn, case_id, adapter=fake, cfg=_cfg(), rag=False)
     assert ev.rag_lookup_id is None and ev.rag_not_applied is None
@@ -426,7 +426,7 @@ def test_as_of_reaches_the_prompt_of_the_evaluation(scratch_dsn):
         _put_note(conn, case_id, user, "NOTE-BEFORE-THE-RUN", at(4))
         _put_note(conn, case_id, user, "NOTE-AFTER-THE-RUN", at(6))
         conn.commit()
-    fake = FakeLLM(responses=[_investigate_v3(evidence=_evidence(head))])
+    fake = FakeLLM(responses=[_investigate_v4(evidence=_evidence(head))])
     with _connect(scratch_dsn) as conn:
         tier2_investigate.evaluate_case(
             conn, case_id, adapter=fake, cfg=_cfg(), rag=False, as_of=at(5)
@@ -450,7 +450,7 @@ def test_the_rag_arm_reads_the_newest_lookup_before_as_of(scratch_dsn):
         conn.commit()
 
     def run(**kwargs):
-        fake = FakeLLM(responses=[_investigate_v3(evidence=_evidence(head))])
+        fake = FakeLLM(responses=[_investigate_v4(evidence=_evidence(head))])
         with _connect(scratch_dsn) as conn:
             ev = tier2_investigate.evaluate_case(
                 conn, case_id, adapter=fake, cfg=_cfg(), rag=True, **kwargs
@@ -477,7 +477,7 @@ def test_a_newer_failed_lookup_before_as_of_hides_an_older_good_one(scratch_dsn)
         _put_lookup(conn, "case", case_id, at(1), matches=[_entry_match(entry, content, 0.8)])
         _put_lookup(conn, "case", case_id, at(2), status="failed", failure_kind="timeout")
         conn.commit()
-    fake = FakeLLM(responses=[_investigate_v3(evidence=_evidence(head))])
+    fake = FakeLLM(responses=[_investigate_v4(evidence=_evidence(head))])
     with _connect(scratch_dsn) as conn:
         ev = tier2_investigate.evaluate_case(
             conn, case_id, adapter=fake, cfg=_cfg(), rag=True, as_of=at(3)
@@ -1020,6 +1020,7 @@ def _triage_answer(action: str) -> dict:
             }
         ],
         "playbook_used": None,
+        **TRIAGE_V4_NEW_FIELDS,
     }
 
 
@@ -1040,11 +1041,11 @@ class LabFake:
 
     def complete(self, *, system, user, response_format=None, timeout_s=None, model=None):
         rag = B.HEADING_LEARNED in user
-        if "## Schema investigate_v3" in system:
+        if "## Schema investigate_v4" in system:
             tier = 2
             head = next(a for a in re.findall(r"alert_id: (\S+)", user) if a in self.cases)
             off, on, verifies = self.cases[head]
-            payload = _investigate_v3(
+            payload = _investigate_v4(
                 conclusion=on if rag else off,
                 evidence=(
                     _evidence(head, _QUOTE[:30]) if verifies else _evidence(head, "not in the log")
@@ -1741,7 +1742,7 @@ class _Exploding(LabFake):
 
     def complete(self, *, system, user, **kwargs):
         proposing = (
-            "## Schema investigate_v3" not in system and "## Schema verifier_v2" not in system
+            "## Schema investigate_v4" not in system and "## Schema verifier_v2" not in system
         )
         if proposing and f"alert_id: {self.bad_alert}" in user:
             raise RuntimeError("the-text-of-an-unknown-error-4711")
@@ -2227,7 +2228,7 @@ def test_held_by_for_a_high_injection_finding_is_the_views(scratch_dsn):
         conn.commit()
     fake = FakeLLM(
         responses=[
-            _investigate_v3(
+            _investigate_v4(
                 conclusion="false_positive", evidence=_evidence(head, "attacker text here")
             )
         ]

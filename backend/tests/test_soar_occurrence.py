@@ -41,7 +41,7 @@ from app.security import gate
 from app.security import linter as L
 from app.tier1 import triage as tier1
 
-from tests.fakes.llm import TRIAGE_V2_FALSE_POSITIVE, FakeLLM
+from tests.fakes.llm import TRIAGE_V4_FALSE_POSITIVE, FakeLLM
 from tests.soar_payloads import (
     edit,
     llm_cfg,
@@ -259,7 +259,7 @@ def test_a_look_alike_of_the_phrase_is_free_text_to_the_linter() -> None:
 
 def _false_positive(rule: str = "mal-1", *, occurrence: int = 1) -> dict:
     """① says `false_positive` under `mal-1`, its `structured_basis` equal to the facts of `_input`."""
-    answer = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    answer = copy.deepcopy(TRIAGE_V4_FALSE_POSITIVE)
     answer["structured_basis"] = {
         "severity": "medium",
         "ioc_reputation": "clean",
