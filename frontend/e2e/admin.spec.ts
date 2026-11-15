@@ -662,6 +662,7 @@ async function expectBlind(
     ...Object.values(HIDDEN),
     ...candidates.map((c) => claimToken(c.id)),
     S.ai1.action.needs_review,
+    S.ai1.held, // DEC-217: the warning clause of ①'s line, which a labeller never sees
   ];
   const text = await page.locator("body").innerText();
   const html = await page.content();

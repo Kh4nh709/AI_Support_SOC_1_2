@@ -5,10 +5,11 @@
 // the answer is shown.
 //
 // P14-T03 (DEC-213): ① always concludes `false_positive | true_positive`, and the alert page says what the AI
-// concluded and why the system held it ("AI kết luận: FP ... — hệ thống giữ lại cho người xem vì: ..."). The
-// stub's proposer concludes `false_positive`, which gate step 4 holds as `needs_review` (it cites no playbook
-// rule), so a blind head carries both: the model's own answer (`proposed_action`) and the reasons (`held_by`).
-// Neither may reach the browser, nor the sentence made of them.
+// concluded and which of the gate's checks warned about it ("AI kết luận: FP ... — có cảnh báo kiểm chứng: ...",
+// DEC-217: the gate holds nothing back, its checks are warnings beside the verdict). The stub's proposer concludes
+// `false_positive`, and gate step 4 raises a warning on it (it cites no playbook rule), so a blind head carries both:
+// the model's own answer, which is also the stored verdict (`suggested_action`, `proposed_action`), and the warnings
+// (`held_by`). None of them may reach the browser, nor the sentence made of them.
 import { expect, test } from "@playwright/test";
 import {
   S,
@@ -40,13 +41,13 @@ const HIDDEN_KEYS = [
   "rag", // P14-T07: the match percentage and the "RAG not applied" notice are ①'s account of itself
 ] as const;
 
-/** The value of ①'s verdict on this head: the one `suggested_action` the stub's proposer wrote. */
-const VERDICT = "needs_review";
+/**
+ * The value of ①'s verdict on this head: the one `suggested_action` the stub's proposer wrote. DEC-217: the gate
+ * keeps the model's own answer, so it is also what the model concluded (`proposed_action`).
+ */
+const VERDICT = "false_positive";
 
-/** What the stub's proposer itself concluded (the gate then held it as `VERDICT`): ①'s answer, so also hidden. */
-const PROPOSED = "false_positive";
-
-/** A reason the gate held it for (`llm.verdicts.HELD_REASONS`): a closed code, ①'s account of itself. */
+/** A check that raised a warning (`llm.verdicts.HELD_REASONS`): a closed code, ①'s account of itself. */
 const HELD_REASON =
   /^(facts_mismatch|no_verified_quote|fp_policy:[a-z_]+|verifier_disagrees|verifier_invalid)$/;
 
@@ -61,7 +62,7 @@ const CONCLUSION_PHRASES = [S.ai1.conclusion, S.ai1.held] as const;
 const COLUMN_PHRASES = Object.values(S.ai1.heldReason);
 const COLUMN_LABELS = ["FP", "TP"] as const;
 
-/** The labels of the reasons the gate held the stub's verdict for, read from the database (step 4's fields). */
+/** The labels of the checks that warned about the stub's verdict, read from the database (step 4's fields). */
 function heldLabels(id: string): string[] {
   const fields = sql(
     "SELECT string_agg(m, ',' ORDER BY ord) FROM llm_runs r, " +
@@ -130,9 +131,8 @@ function leaks(answers: Answer[], frames: string[], id: string): string[] {
     for (const part of aboutHead(answer, id)) walk(part, keys, strings);
     for (const key of HIDDEN_KEYS) if (keys.has(key)) found.push(`${answer.path}: key ${key}`);
     if (strings.includes(VERDICT)) found.push(`${answer.path}: value ${VERDICT}`);
-    if (strings.includes(PROPOSED)) found.push(`${answer.path}: value ${PROPOSED}`);
     if (strings.some((value) => HELD_REASON.test(value))) {
-      found.push(`${answer.path}: a reason the verdict was held`);
+      found.push(`${answer.path}: a check that raised a warning`);
     }
     if (answer.text.includes(token)) found.push(`${answer.path}: the token`);
   }
@@ -231,14 +231,16 @@ test("a blind head shows nothing of ① until it is decided, then shows it", asy
   await page.getByRole("button", { name: S.decision.submit }).click();
   await expect(page.getByRole("status").filter({ hasText: S.decision.recorded })).toBeVisible();
   await expect(page.getByText(S.ai1.decidedHeading)).toBeVisible();
-  // The decision lifts the arm: the AI column now says what the AI concluded and why the system held it
-  // (fix round 1, I1), and "Khớp" compares the decision with the stored verdict, which was held: no verdict.
+  // The decision lifts the arm: the AI column now says what the AI concluded and which checks warned (fix round 1,
+  // I1; DEC-217), and "Khớp" compares the decision (closed as a false positive) with the stored verdict, `false_positive`.
   await expect(column.getByText(/AI kết luận/)).toContainText(
-    `AI kết luận: ${S.ai1.action.false_positive} (độ tin cậy trung bình) — ${S.ai1.held} vì: ${heldLabels(head.id).join(", ")}`,
+    `AI kết luận: ${S.ai1.action.false_positive} (độ tin cậy trung bình) — ${S.ai1.held}${S.ai1.heldBecause(heldLabels(head.id))}`,
   );
   // exact: the reason "không khớp bảng quyết định đã duyệt" says "khớp" too
   await expect(page.getByText(S.ai1.match, { exact: true })).toBeVisible();
-  await expect(page.getByText(S.ai1.matchNoVerdict)).toBeVisible();
+  await expect(page.getByText(S.ai1.match, { exact: true }).locator("..")).toContainText(
+    S.ai1.matchAgree,
+  );
   const after = (await traffic.answers()).slice(beforeDecision);
   const revealed = after
     .filter((a) => a.path === `/api/tier1/alerts/${head.id}`)
@@ -258,26 +260,28 @@ test("a blind head shows nothing of ① until it is decided, then shows it", asy
   ).toBe(true);
 });
 
-test("a visible head says what the AI concluded and why the system held it for a person", async ({
+test("a visible head says what the AI concluded and which of the gate's checks warned about it", async ({
   page,
   request,
 }) => {
   const head = await postAlert(request, { tag: "held", arm: "visible" });
   await waitForStatus(head.id, "queued_tier1");
   await waitForTriage(head.id);
-  // The stub concludes false_positive; gate step 4 held it, and the database records which fields it named.
+  // The stub concludes false_positive; gate step 4 raised a warning, and the database records which fields it named.
   const labels = heldLabels(head.id);
 
   await loginAs(page, "t1");
   const link = page.locator(`a[href="/alerts/${head.id}"]`);
   const row = page.getByRole("row").filter({ has: link });
-  await expect(row).toContainText(S.ai1.action.needs_review); // the queue says what the system stored
+  // the queue says the verdict (DEC-217): the model's own answer, never the system's Cần xem xét
+  await expect(row).toContainText(S.ai1.action.false_positive);
+  await expect(row).not.toContainText(S.ai1.action.needs_review);
   await link.click();
   await expect(page).toHaveURL(`/alerts/${head.id}`);
 
   const column = page.getByRole("region", { name: S.alert.aiHeading });
   await expect(column.getByText(/AI kết luận/)).toContainText(
-    `AI kết luận: ${S.ai1.action.false_positive} (độ tin cậy trung bình) — ${S.ai1.held} vì: ${labels.join(", ")}`,
+    `AI kết luận: ${S.ai1.action.false_positive} (độ tin cậy trung bình) — ${S.ai1.held}${S.ai1.heldBecause(labels)}`,
   );
   // the phrase is bold (spec 4.3)
   await expect(column.locator("strong", { hasText: S.ai1.held })).toHaveCount(1);

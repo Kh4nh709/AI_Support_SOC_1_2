@@ -5,11 +5,12 @@
 import type { AlertView, QueueRow } from "../../api/tier1";
 
 /**
- * What ① concluded and what the system did with it (P14-T03, DEC-213): the part of a `ready` and of a `decided`
- * state that the conclusion line ("AI kết luận: …") is made of. `action` is the verdict ① ends with
- * (`suggested_action`, after the gate), `proposed` what the model itself concluded (`proposed_action`, null when
- * the server sent none), `heldBy` the closed codes of `llm.verdicts.HELD_REASONS` the gate held it for (`[]` when
- * it did not).
+ * What ① concluded and which of the gate's checks warned about it (P14-T03, DEC-213; DEC-217): the part of a `ready`
+ * and of a `decided` state that the conclusion line ("AI kết luận: …") is made of. `action` is the verdict ① ends
+ * with (`suggested_action`: `false_positive` or `true_positive`, the model's own answer; the server never serves
+ * `needs_review` for ①), `proposed` what the model itself concluded (`proposed_action`, null when the server sent
+ * none), `heldBy` the closed codes of `llm.verdicts.HELD_REASONS` that name the checks that raised a warning (`[]`
+ * when none did). The name `heldBy` is the wire's (`held_by`); since DEC-217 it holds a warning, not a hold.
  */
 export type AiConclusion = {
   action: string | null;
@@ -38,15 +39,20 @@ export const MODEL_ACTIONS: ReadonlySet<string> = new Set(["false_positive", "tr
 
 /**
  * What the AI concluded, for the line "AI kết luận: …": the model's own answer (`proposed`) when it is one of the two
- * it may give, else the verdict ① ended with when that is one of them (a gate that kept the answer; a server that
- * sent no `proposed_action`), else null: a `needs_review` nobody explained is the system's word, not a conclusion.
+ * it may give, else the verdict ① ended with when that is one of them (every new run, DEC-217; a server that sent no
+ * `proposed_action`), else null: a `needs_review` nobody explained (stored before DEC-217, and still arriving from
+ * an old cache) is the system's word, not a conclusion.
  */
 export function conclusionOf(state: AiConclusion): string | null {
   if (state.proposed !== null && MODEL_ACTIONS.has(state.proposed)) return state.proposed;
   return state.action !== null && MODEL_ACTIONS.has(state.action) ? state.action : null;
 }
 
-/** Whether the system held the model's answer back for a person: the gate ended on `needs_review`, or named a reason. */
+/**
+ * Whether the gate's checks raised a warning beside the verdict: a reason is named (`heldBy`). The second half, a
+ * stored `needs_review`, is only a guard for an old client cache or a server that predates DEC-217: ① never ends
+ * `needs_review` for a new run, and nothing is held back for a person.
+ */
 export function heldOf(state: AiConclusion): boolean {
   return state.action === "needs_review" || state.heldBy.length > 0;
 }

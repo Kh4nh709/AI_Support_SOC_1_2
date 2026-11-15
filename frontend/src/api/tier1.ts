@@ -38,13 +38,19 @@ export type QueueRow = {
   risk_band: string | null;
   triage_status?: string | null;
   run_id?: string | null;
+  /**
+   * ①'s verdict as Tier 1 is served it: `false_positive` or `true_positive` (DEC-217: never `needs_review`, also for a
+   * run stored before it, which is served the model's own answer), null when ① has no result.
+   */
   suggested_action?: string | null;
   confidence?: string | null;
+  /** True only for a run the gate forced (a version 1 run, before DEC-217); false for a new one. */
   gate_forced?: boolean | null;
   /**
-   * P14-T03 (DEC-213): what the model itself concluded (`false_positive` or `true_positive`) and why the system
-   * held it back as `needs_review` (`llm.verdicts.HELD_REASONS`; `[]` when it did not). Absent on a blind,
-   * undecided head, like the keys above.
+   * P14-T03 (DEC-213): what the model itself concluded (`false_positive` or `true_positive`) and, DEC-217, which
+   * checks of the gate raised a warning beside it (`llm.verdicts.HELD_REASONS`, the same closed codes as before;
+   * `[]` when none did). The verdict is not held back: the list can be non-empty beside a verdict. Absent on a
+   * blind, undecided head, like the keys above.
    */
   proposed_action?: string | null;
   held_by?: string[];
@@ -135,7 +141,11 @@ export type SuggestionReason = {
   source?: string | null;
 };
 
-/** What the ① gate did (`queue.latest_suggestion`). `forced_by` is a list of gate rules, or absent. */
+/**
+ * What the ① gate did (`queue.latest_suggestion`). `forced_by` is a list of gate rules, or absent. `forced` and
+ * `forced_by` are the gate's own record: only a version 1 run (before DEC-217) was ever forced, and its
+ * `final_verdict` may be `needs_review` there; a new run has `forced` false and `final_verdict` as `proposed_verdict`.
+ */
 export type SuggestionGate = {
   forced?: boolean | null;
   forced_by?: string[] | string | null;
@@ -289,8 +299,9 @@ export type AlertView = {
    */
   llm_stopped_by?: string | null;
   /**
-   * What the model itself concluded, and why the system held it (P14-T03, DEC-213): the same two keys as a queue
-   * row. They go with `suggestion` on the blind arm: absent on a blind, undecided head.
+   * What the model itself concluded, and which checks of the gate raised a warning beside it (P14-T03, DEC-213;
+   * DEC-217): the same two keys as a queue row. They go with `suggestion` on the blind arm: absent on a blind,
+   * undecided head.
    */
   proposed_action?: string | null;
   held_by?: string[];

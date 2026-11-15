@@ -6,8 +6,10 @@
 //   - ① `false_positive` agrees with a human `false_positive` (status `closed_fp`);
 //   - any other pair of a ① verdict and a human decision disagrees, a human `benign` (status `closed_benign`)
 //     after ① `false_positive` included: ① has no `benign` verdict;
-//   - ① `needs_review` (the system held the model's answer), no ① result, and an action that is none of the
-//     three are no verdict (the report leaves them out of the denominator): nothing is compared. The old word
+//   - ① `needs_review`, no ① result, and an action that is none of the three are no verdict (the report leaves
+//     them out of the denominator): nothing is compared. Since DEC-217 the server serves ①'s own verdict, FP or TP,
+//     also for a run the gate had held as `needs_review` (the gate's checks are warnings beside the verdict, not a
+//     hold), so a `needs_review` reaches this file only from an old client cache or a record. The old word
 //     `escalate` is one of those: no row of that kind exists (the database was wiped), and nothing reads it.
 // A decision that is not a Tier 1 person's (`auto_closed`, and a `closed_confirmed` with no case, which is
 // Tier 2's conclusion) is not in the report at all, so it has no comparison: `null`. An alert with a case was

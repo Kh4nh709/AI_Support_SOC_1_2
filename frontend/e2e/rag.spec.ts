@@ -70,7 +70,7 @@ test("an alert that matched approved knowledge says how strongly, in the conclus
   const col = column(page);
   // the best of the three matches, as a whole percentage, after the confidence note
   await expect(col.getByText(/AI kết luận/)).toContainText(
-    "AI kết luận: FP (độ tin cậy trung bình) — trùng 87% với tri thức đã duyệt — hệ thống giữ lại cho người xem",
+    "AI kết luận: FP (độ tin cậy trung bình) — trùng 87% với tri thức đã duyệt — có cảnh báo kiểm chứng",
   );
   await expect(col.getByRole("note")).toHaveCount(0);
   await expect(col.getByText(/Không áp dụng RAG/)).toHaveCount(0);

@@ -39,7 +39,7 @@ function forcedByOf(gate: NonNullable<Suggestion["gate"]>): string[] {
 
 const asText = (x: unknown): string => (typeof x === "string" ? x : JSON.stringify(x));
 
-/** The flag the gate raises on a verdict it forced. */
+/** The flag of a verdict the gate forced: only a version 1 row has one (DEC-217: a new run is never forced). */
 function ForcedFlag() {
   return (
     <span role="img" aria-label={S.ai1.forcedLabel} title={S.ai1.forcedLabel} className="ml-2">
@@ -49,17 +49,18 @@ function ForcedFlag() {
 }
 
 /**
- * What the AI concluded (P14-T03, DEC-213): "AI kết luận: **TP** (độ tin cậy cao)", and when the gate held the
- * answer back for a person, "… — **hệ thống giữ lại cho người xem** vì: <reasons>". The conclusion is the model's
- * own answer, not the `needs_review` the system stored in its place; a reason the UI has no label for is shown as
- * its code. All of it is text.
+ * What the AI concluded (P14-T03, DEC-213): "AI kết luận: **TP** (độ tin cậy cao)", and when the gate's checks raised
+ * warnings, "… — **có cảnh báo kiểm chứng**: <reasons>" (DEC-217: the verdict is the model's own, the checks are
+ * warnings beside it, and nothing is held back for a person). The conclusion is the model's own answer, also for a
+ * `needs_review` stored before DEC-217 that still arrives (`heldOf`'s guard half); a reason the UI has no label for
+ * is shown as its code. All of it is text.
  *
  * The one component of that line, for the undecided column (`Verdict`) and for the decided one (`Decided`, in the
  * "Gợi ý ①" box): the two pages say the same thing in the same words, and what is added to the line is added here,
  * once. `forced` is the gate's flag, which only an undecided state knows.
  *
  * P14-T07 (DEC-213, spec 4.3): `rag` is the view's `rag` pair (`ragNoteOf`). The percentage joins the line, after the
- * confidence note and before the system's own clause: "AI kết luận: **TP** (độ tin cậy cao) — trùng 87% với tri thức
+ * confidence note and before the warning clause: "AI kết luận: **TP** (độ tin cậy cao) — trùng 87% với tri thức
  * đã duyệt", nothing when there was no match. The notice that the RAG was not applied is a sentence of its own
  * beside the line (`RagNotice`). The blind arm has no conclusion to draw this beside, so neither is ever drawn
  * there: the server drops the key, and this column draws a line only for a state that has a conclusion.
@@ -88,7 +89,7 @@ export function ConclusionLine({
           <>
             {` ${S.ai1.heldDash} `}
             <strong>{S.ai1.held}</strong>
-            {because !== "" && ` ${because}`}
+            {because}
           </>
         )}
         {forced && <ForcedFlag />}
@@ -139,7 +140,10 @@ function Verdict({
   );
 }
 
-/** The gate in one line: whether it forced the verdict, and by which rules. Exported to be drawn on its own. */
+/**
+ * The gate in one line: whether it forced the verdict, and by which rules (a version 1 row; a new run reads "Không bị
+ * ép" and names none). Exported to be drawn on its own.
+ */
 export function GateLine({
   gate,
   forced,
@@ -162,7 +166,10 @@ export function GateLine({
   );
 }
 
-/** What the gate did: the verdict ① proposed, the one it ended with, the verifier, and the gate's warnings. */
+/**
+ * What the gate did: the verdict ① proposed, the one it ended with (the same for a new run, DEC-217), the verifier,
+ * and the gate's warnings. A version 1 row shows what the gate stored, `needs_review` included.
+ */
 export function GateSteps({ gate }: { gate: NonNullable<Suggestion["gate"]> }) {
   const warnings = gate.warnings ?? [];
   const rows: [string, string | null | undefined][] = [
@@ -327,7 +334,7 @@ function Decided({
   // `null` is a status that is not a Tier 1 decision (auto_closed, or a closed_confirmed with no case).
   const human = humanDecisionOf(view.status, view.case_id);
   // "Khớp" is the stored verdict's, as the pilot report counts it; the line beside it says what the AI concluded
-  // and why the gate held it (P14-T03, fix round 1), the same line the undecided column draws.
+  // and which checks warned (P14-T03, fix round 1; DEC-217), the same line the undecided column draws.
   const agreement = agreementOf(view.status, state.action, view.case_id);
   const conclusion = conclusionOf(state);
   // The percentage and the notice (P14-T07) are the view's own, like the line they stand beside: the decision lifts

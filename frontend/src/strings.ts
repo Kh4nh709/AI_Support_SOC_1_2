@@ -183,26 +183,31 @@ export const S = {
   ai1: {
     hidden: "ẩn — nhánh mù",
     none: "chưa có",
+    // The flag of a gate that forced the verdict: only a version 1 row (before DEC-217) carries it; a new run
+    // never does, because the gate's checks are warnings beside the verdict.
     forced: "⚑",
     forcedLabel: "Cổng kiểm soát đã ép kết quả",
-    // `suggested_action` of ① (`llm.verdicts.GATED_ACTIONS`, read through `labelOf`; strings.test.ts compares the
+    // `suggested_action` of ① (`llm.verdicts.STORED_ACTIONS`, read through `labelOf`; strings.test.ts compares the
     // keys). P14-T03 (DEC-213): ① concludes `false_positive` or `true_positive` (it was `escalate`) and says them as
-    // FP and TP; `needs_review` is the system's own word, for a verdict it held back.
+    // FP and TP. DEC-217: ① never ends `needs_review` any more, so the alert page and the queue say FP or TP; the
+    // label is kept for a row stored before it, which the admin LLM page shows as it is.
     action: {
       false_positive: "FP",
       needs_review: "Cần xem xét",
       true_positive: "TP",
     },
-    // The alert page's line: "AI kết luận: TP (độ tin cậy cao)", and when the gate held it back, "… — hệ thống giữ
-    // lại cho người xem vì: <reasons>" (P14-T03, spec 4.3). The phrase `held` is bold on the page, so it is a string
-    // of its own: the dash, the phrase, and the "vì: …" that follows it when a reason is known.
+    // The alert page's line: "AI kết luận: TP (độ tin cậy cao)", and when the gate's checks raised warnings, "… — có
+    // cảnh báo kiểm chứng: <reasons>" (P14-T03, spec 4.3; DEC-217 section 8). The verdict is the model's own and the
+    // warnings sit beside it: nothing is held back for a person. The phrase `held` is bold on the page, so it is a
+    // string of its own: the dash, the phrase, and the ": …" that follows it directly when a reason is known.
     conclusion: "AI kết luận",
     confidenceNote: (level: string) => `(độ tin cậy ${level})`,
     heldDash: "—",
-    held: "hệ thống giữ lại cho người xem",
-    heldBecause: (reasons: string[]) => (reasons.length === 0 ? "" : `vì: ${reasons.join(", ")}`),
-    // `llm.verdicts.HELD_REASONS`: why the gate held the model's verdict, in the gate's step order. The keys are
-    // compared with the backend's tuple in strings.test.ts; a code with no label is shown as the code.
+    held: "có cảnh báo kiểm chứng",
+    heldBecause: (reasons: string[]) => (reasons.length === 0 ? "" : `: ${reasons.join(", ")}`),
+    // `llm.verdicts.HELD_REASONS`: the checks of the gate that raised a warning, in the gate's step order (the codes
+    // kept their names from before DEC-217, when a failed check held the verdict). The keys are compared with the
+    // backend's tuple in strings.test.ts; a code with no label is shown as the code.
     heldReason: {
       facts_mismatch: "AI khai dữ kiện lệch với hệ thống",
       no_verified_quote: "không có dẫn chứng kiểm chứng được",
