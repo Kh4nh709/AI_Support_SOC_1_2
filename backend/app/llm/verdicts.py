@@ -6,8 +6,11 @@
 
 ``GATED_ACTIONS`` is what a NEW ① run may hold after the gate (DEC-217): the same two. No gate step sets a
 verdict of its own any more - a failed check only flags the run (``gate_result.flagged_by``, shown as a
-warning beside the verdict) - so what ``security/output_guard.py`` lets through is exactly the model's
-answer.
+warning beside the verdict) - so what ``security/output_guard.py`` lets through is the model's answer, with
+one exception (DEC-219): below ``TRIAGE_RAG_FP_BELOW_PCT`` ``false_positive`` is ①'s default answer
+(``gate_result.rag_rule``), the model's own answer staying in ``gate_result.proposed_verdict``. For such a run
+Tier 1 is served the verdict ① ended with, and no confidence: ``rag_rule_applied``,
+``served_proposed_action`` and ``served_confidence`` below.
 
 ``STORED_ACTIONS`` is what a STORED ① row may hold: the two, plus ``needs_review``, which the gate wrote
 before DEC-217 (steps 2, 3, 4 and 6 forced it; the model's own definite answer is kept beside it as
@@ -143,6 +146,41 @@ def proposed_action(gate_result: Mapping[str, Any] | None) -> str | None:
         return None
     value = gate_result.get("proposed_verdict")
     return value if isinstance(value, str) and value in MODEL_ACTIONS else None
+
+
+def rag_rule_applied(gate_result: Any) -> bool:
+    """Whether the stored run says the RAG low-match rule (DEC-219) applied to it: ``gate_result.rag_rule`` is an
+    object whose ``applied`` is the JSON boolean ``true``. Anything else - no ``rag_rule`` (a run from before the
+    key, or a version 1 document), ``null``, a string, a ``true`` that is not a boolean - is "did not apply",
+    never an error. Whether the rule also *changed* the model's answer is ``rag_rule.changed``; the serving rule
+    below does not need it."""
+    rule = gate_result.get("rag_rule") if isinstance(gate_result, Mapping) else None
+    return isinstance(rule, Mapping) and rule.get("applied") is True
+
+
+def served_proposed_action(gate_result: Mapping[str, Any] | None, served: str | None) -> str | None:
+    """The "model's own answer" as the Tier 1 API serves it (the queue row's and the alert view's
+    ``proposed_action``, ``Suggestion.gate.proposed_verdict``). Below the RAG threshold ``false_positive`` is
+    ①'s default answer (DEC-219, amended), so for a run the rule applied to (``rag_rule_applied``, whether or not
+    the model had answered ``false_positive`` itself) Tier 1 is served the verdict ① ended with - ``served``, the
+    ``served_action`` of the same run - and never the model's own answer, which stays in the stored
+    ``gate_result.proposed_verdict`` (the admin LLM page and the audit log show stored rows as they are). For
+    every other run it is ``proposed_action(gate_result)``, exactly as before. ``served`` that is not one of
+    ``MODEL_ACTIONS`` (no usable result) gives ``None`` for a rule-applied run: no verdict, not the model's.
+    """
+    if rag_rule_applied(gate_result):
+        return served if isinstance(served, str) and served in MODEL_ACTIONS else None
+    return proposed_action(gate_result)
+
+
+def served_confidence(confidence: Any, gate_result: Mapping[str, Any] | None) -> Any:
+    """The model's ``result.confidence`` as the Tier 1 API serves it (the alert view's ``suggestion.confidence``,
+    the queue row's ``confidence``, and so what ``tier1/decide.py`` records with a decision). It is the model's
+    confidence in ITS OWN answer, not in the default verdict ① ended with below the RAG threshold (DEC-219,
+    amended), so for a run the rule applied to (``rag_rule_applied``) it is ``None``; for every other run it is
+    ``confidence`` as stored. The stored ``result.confidence`` is untouched: the admin LLM page and the audit log
+    show stored rows as they are."""
+    return None if rag_rule_applied(gate_result) else confidence
 
 
 def served_action(result: Any, gate_result: Mapping[str, Any] | None) -> str | None:
