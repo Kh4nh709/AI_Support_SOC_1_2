@@ -677,7 +677,9 @@ def test_the_analysis_panel_is_quoted_as_the_react_ui_words_it():
     text = _text()
     assert "titled `PHÂN TÍCH AI · TIER 2`" in text
     assert "`Trợ lý điều tra ②`" not in text, "the Jinja title of the ② panel"
-    assert "PHÂN TÍCH AI ②" not in text and "PHÂN TÍCH AI ①" not in text, "the headings before DEC-221"
+    assert (
+        "PHÂN TÍCH AI ②" not in text and "PHÂN TÍCH AI ①" not in text
+    ), "the headings before DEC-221"
     row = _runbook_line_with("`429` `analyze quota exceeded for today`")
     assert "`Đã dùng hết lượt phân tích trong 24 giờ gần nhất`" in row
     assert "HTTP `200`" not in row and "hết N lượt" not in row, row
@@ -689,16 +691,23 @@ def test_the_tier_1_panel_is_quoted_as_the_scorecard_it_is():
     text = _text()
     pilot = _pilot_section(text)
     # (e) the blind branch is the title of the panel, in its new words
-    assert "the title of the ① panel (*\"PHÂN TÍCH AI · TIER 1\"*)" in pilot
+    assert 'the title of the ① panel (*"PHÂN TÍCH AI · TIER 1"*)' in pilot
     # (d) the forced flag sits beside the Kết luận tile, and the Kiểm chứng tab says how the gate forced it
     flag = _runbook_line_with("**(d) ⚑ beside a suggestion**")
     assert "`Kết luận` tile" in flag and "`Kiểm chứng` tab" in flag, flag[:400]
     assert "the alert page says which step" not in flag, "the flat line of before"
-    for word in ("Kết luận", "Độ tin cậy", "Tri thức (RAG)", "Kiểm chứng", "Cổng kiểm soát", "Bị ép"):
+    for word in (
+        "Kết luận",
+        "Độ tin cậy",
+        "Tri thức (RAG)",
+        "Kiểm chứng",
+        "Cổng kiểm soát",
+        "Bị ép",
+    ):
         assert f'"{word}"' in strings, word
     # the RAG number is on the Tri thức (RAG) tile now, not in a "trùng X%" line
     rag = _runbook_line_with("| `TRIAGE_RAG_FP_BELOW_PCT` |")
-    assert "the `Tri thức (RAG)` tile" in rag and "the \"trùng X%\" the alert page shows" not in rag
+    assert "the `Tri thức (RAG)` tile" in rag and 'the "trùng X%" the alert page shows' not in rag
     # the notice that the RAG was not applied is still a sentence of its own
     assert "Không áp dụng RAG cho" in strings
 
