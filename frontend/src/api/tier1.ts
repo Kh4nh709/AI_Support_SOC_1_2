@@ -142,9 +142,27 @@ export type SuggestionReason = {
 };
 
 /**
+ * The RAG rule of a ① run (DEC-219, trial): "a RAG match exists and its best is below `threshold` percent: ①
+ * answers `false_positive`". `threshold` is 0 when the rule is switched off, `best_pct` the number the page shows
+ * as "trùng X% với tri thức đã duyệt" (null when the run has none), `applied` whether the rule applied (a match
+ * below the threshold), and `changed` whether it replaced the model's `true_positive` by `false_positive`. When it
+ * did, `suggested_action` is `false_positive`, the view's `proposed_action` is the model's `true_positive`, and the
+ * gate's `forced` is true with `forced_by` `["rag_rule"]`. `applied` with `changed` false is a model that already
+ * said `false_positive`.
+ */
+export type RagRule = {
+  threshold: number;
+  best_pct: number | null;
+  applied: boolean;
+  changed: boolean;
+};
+
+/**
  * What the ① gate did (`queue.latest_suggestion`). `forced_by` is a list of gate rules, or absent. `forced` and
- * `forced_by` are the gate's own record: only a version 1 run (before DEC-217) was ever forced, and its
- * `final_verdict` may be `needs_review` there; a new run has `forced` false and `final_verdict` as `proposed_verdict`.
+ * `forced_by` are the gate's own record: a version 1 run (before DEC-217) was forced to `needs_review`, and a
+ * version 2 run is forced only when the RAG rule changed its verdict (`rag_rule.changed`, DEC-219: `final_verdict`
+ * `false_positive` over a `proposed_verdict` of `true_positive`); any other new run has `forced` false and
+ * `final_verdict` as `proposed_verdict`. `rag_rule` is null or absent for a run stored before DEC-219.
  */
 export type SuggestionGate = {
   forced?: boolean | null;
@@ -153,6 +171,7 @@ export type SuggestionGate = {
   final_verdict?: string | null;
   verifier_verdict?: string | null;
   warnings?: unknown[] | null;
+  rag_rule?: RagRule | null;
 };
 
 /** The latest ① result of an alert. Present only where the server shows it (the blind arm never gets it). */
