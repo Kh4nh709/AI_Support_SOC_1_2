@@ -16,10 +16,12 @@ names, over `backend/app`, `eval/`, `scripts/`) and what this file pins for each
 
 from __future__ import annotations
 
+import ast
 import copy
 import datetime as dt
 import json
 import pathlib
+import re
 import uuid
 
 import pytest
@@ -194,6 +196,9 @@ MAY_NAME_THEM = {
     "rag/draft.py",
     "security/gate.py",
     "security/output_guard.py",
+    # DEC-221, AP-T2: the Tier 1 alert view's analysis serves the model's texts to the page as text. It imports no
+    # prompt builder (`test_the_analysis_module_imports_nothing_that_builds_a_prompt`) and joins this list deliberately.
+    "tier1/analysis.py",
 }
 
 
@@ -206,3 +211,113 @@ def test_only_the_expected_modules_name_the_analyst_fields():
         and any(name in path.read_text("utf-8") for name in ANALYST_FIELD_NAMES)
     }
     assert found == MAY_NAME_THEM
+
+
+# --------------------------------------------------------------------------- who reads `result` from llm_runs
+#
+# The model-written text is only ever safe if no new reader of a stored answer can carry it into a prompt without
+# somebody who knows the rule looking at it (the last review of AP-T1 asked for this pin). A reader of a stored answer
+# is a module of `backend/app` that selects the `result` column of `llm_runs`: found here by reading the SQL text in
+# its string constants (docstrings left out), because that is where a statement has to name the table and the column.
+# A writer (`INSERT`) is not a reader.
+
+_RESULT_COLUMN = re.compile(
+    r"[\s,(.]result[\s,)\-]"
+)  # `SELECT result FROM`, `r.result,`, `(result IS NULL)`
+_RESULT_PATH = re.compile(
+    r"\.result\s*->"
+)  # `{alias}.result->>'suggested_action'`: a fragment built for a SELECT
+
+#: Each module below was read when it was put here. `tier1/queue.py` builds the alert view and the queue (and hands
+#: the row to `tier1/analysis.py`, which reads no table); `tier2/investigation_view.py`, `tier2/case_view.py` and
+#: `web/routers/tier2_runs.py` serve ②'s result; `tier2/dossier.py` and `rag/draft.py` put a stored answer in a prompt
+#: AS ITS VERSION 3 FORM (`results.*_v3_view`, pinned above); `llm/verdicts.py` is the SQL twin of `served_action`;
+#: `web/routers/admin_llm.py` is the admin page; `infra/health.py` counts the NULL ones.
+MAY_READ_RESULT = {
+    "infra/health.py",
+    "llm/verdicts.py",
+    "rag/draft.py",
+    "tier1/queue.py",
+    "tier2/case_view.py",
+    "tier2/dossier.py",
+    "tier2/investigation_view.py",
+    "web/routers/admin_llm.py",
+    "web/routers/tier2_runs.py",
+}
+
+
+def _docstring_ids(tree: ast.AST) -> set[int]:
+    ids = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            first = node.body[0] if node.body else None
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                ids.add(id(first.value))
+    return ids
+
+
+def _reads_result_from_llm_runs(source: str) -> bool:
+    tree = ast.parse(source)
+    skip = _docstring_ids(tree)
+    texts = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip
+    ]
+    selects = [t for t in texts if not t.lstrip().upper().startswith("INSERT")]
+    if any(_RESULT_PATH.search(t) for t in selects):
+        return True
+    names_table = any(re.search(r"\bllm_runs\b", t) for t in texts)
+    return names_table and any(_RESULT_COLUMN.search(t) for t in selects)
+
+
+def test_only_the_expected_modules_read_result_from_llm_runs():
+    app = ROOT / "backend" / "app"
+    found = {
+        str(path.relative_to(app))
+        for path in app.rglob("*.py")
+        if _reads_result_from_llm_runs(path.read_text("utf-8"))
+    }
+    assert found == MAY_READ_RESULT
+
+
+@pytest.mark.parametrize(
+    ("source", "reads"),
+    [
+        ('Q = "SELECT result FROM llm_runs WHERE run_id = %s"', True),
+        ('Q = "SELECT r.run_id, r.result, r.gate_result FROM llm_runs r"', True),
+        ('COLS = "run_id, created_at, stopped_by, result, evidence_check"\nT = "llm_runs"', True),
+        ("def f(alias):\n    return f\"{alias}.result->>'suggested_action'\"", True),
+        ('Q = "SELECT gate_result, verifier_result FROM llm_runs"', False),
+        ('Q = f"INSERT INTO llm_runs ({cols}) VALUES"\nCOLS = ["result", "gate_result"]', False),
+        ('"""SELECT result FROM llm_runs (a docstring)."""\nX = 1', False),
+        ('Q = "SELECT result FROM something_else"', False),
+        ('KEY = "result"', False),
+    ],
+)
+def test_the_scan_that_finds_a_reader_of_result_finds_what_it_should(source, reads):
+    assert _reads_result_from_llm_runs(source) is reads
+
+
+def test_the_analysis_module_imports_nothing_that_builds_a_prompt():
+    """It serves the model's texts to a page; nothing it imports can put them in a prompt."""
+    tree = ast.parse((ROOT / "backend" / "app" / "tier1" / "analysis.py").read_text("utf-8"))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+            imported.update(f"{node.module}.{alias.name}" for alias in node.names)
+        elif isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+    for forbidden in (
+        "app.llm.builder",
+        "app.llm.triage",
+        "app.llm.investigate",
+        "app.llm.adapter",
+        "app.security.wrap",
+        "app.tier2",
+        "app.rag.draft",
+    ):
+        assert not any(
+            name == forbidden or name.startswith(forbidden + ".") for name in imported
+        ), forbidden

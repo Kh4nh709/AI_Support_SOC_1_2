@@ -290,6 +290,7 @@ def test_constant_sets_are_the_card_verbatim():
         "proposed_action",  # P14-T03 / DEC-213: the model's own answer
         "held_by",  # P14-T03 / DEC-213: why the system held it
         "rag",  # P14-T07 / DEC-213: the match percentage and the "RAG not applied" notice
+        "analysis",  # DEC-221 / AP-T2: the AI analysis object of the alert view
     }
     assert ANALYST_HIDE <= LABELING_DENYLIST
     assert {"triaged_count", "needs_retriage"} <= LABELING_DENYLIST  # DEC-101

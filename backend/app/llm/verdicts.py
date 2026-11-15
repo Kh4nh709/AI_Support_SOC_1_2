@@ -101,6 +101,21 @@ def _strings(value: Any) -> list[str]:
     return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
 
+def flagged_steps(gate_result: Mapping[str, Any] | None) -> frozenset[str]:
+    """The names of the gate steps whose check raised a warning on ①'s verdict (`"step2"`, `"step3"`, `"step4"`,
+    `"step6"`): `flagged_by` (``gate_result`` version 2) when the document has it - a list - and `forced_by` (version
+    1, the old gate's forces) otherwise; a `flagged_by` that is ``null`` or not a list counts as absent, because the
+    queue's SQL projection hands over ``null`` for a version 1 row. Only strings leave; a ``gate_result`` that is
+    ``None`` or not a mapping gives the empty set. `held_reasons` and the analysis panel's check rows
+    (`tier1/analysis.py`, DEC-221) read the steps through this one function."""
+    if not isinstance(gate_result, Mapping):
+        return frozenset()
+    flagged = gate_result.get("flagged_by")
+    return frozenset(
+        _strings(flagged if isinstance(flagged, list) else gate_result.get("forced_by"))
+    )
+
+
 def held_reasons(gate_result: Mapping[str, Any] | None) -> list[str]:
     """The checks that raised a warning on ①'s verdict: the closed reasons of ``HELD_REASONS`` that
     ``gate_result`` records, in the gate's step order. Before DEC-217 the same checks held the model's
@@ -119,10 +134,7 @@ def held_reasons(gate_result: Mapping[str, Any] | None) -> list[str]:
     empty."""
     if not isinstance(gate_result, Mapping):
         return []
-    flagged = gate_result.get("flagged_by")
-    steps_named = set(
-        _strings(flagged if isinstance(flagged, list) else gate_result.get("forced_by"))
-    )
+    steps_named = flagged_steps(gate_result)
     reasons: list[str] = []
     if "step2" in steps_named:
         reasons.append(_FACTS_MISMATCH)

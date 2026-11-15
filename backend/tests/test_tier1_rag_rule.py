@@ -532,7 +532,20 @@ class _PageConn:
 def _what_the_page_shows(*, result, gate_result, warnings, matches) -> int | None:
     """`rag.best_pct` of the alert view for a stored run: the page's reader, over a row shaped as its
     statement returns it."""
-    row = ("run-1", result, gate_result, datetime(2026, 11, 15, tzinfo=UTC), warnings, matches)
+    row = (
+        "run-1",
+        result,
+        gate_result,
+        datetime(2026, 11, 15, tzinfo=UTC),
+        warnings,
+        matches,
+        None,  # ranked
+        None,  # history
+        None,  # input_tokens
+        None,  # output_tokens
+        None,  # latency_ms
+        None,  # cost_usd
+    )
     return queue.latest_suggestion_rag(_PageConn(row), _ALERT_ID)[3]["best_pct"]
 
 
@@ -648,7 +661,8 @@ class _NullTransaction:
 
 def _the_page_pair(proposer, *, matches, ranked, floor=0.5) -> dict:
     """The pair the alert view carries for a stored run: the page's reader over a row shaped as the statement
-    returns it (DEC-220: the lookup's `ranked` is its last column)."""
+    returns it (twelve columns, `queue._Row`: DEC-220's `ranked` after the matches, DEC-221's history and the run's
+    token, latency and cost columns after it)."""
     row = (
         "run-1",
         proposer["result"],
@@ -657,6 +671,11 @@ def _the_page_pair(proposer, *, matches, ranked, floor=0.5) -> dict:
         proposer["citation_warnings"],
         matches,
         ranked,
+        None,  # history
+        None,  # input_tokens
+        None,  # output_tokens
+        None,  # latency_ms
+        None,  # cost_usd
     )
     return queue.latest_suggestion_rag(_PageConn(row), _ALERT_ID, rag_min_score=floor)[3]
 
@@ -728,29 +747,6 @@ class TestACandidateUnderTheFloorIsNotAMatch:
         )
         assert pair == {
             "best_pct": 62,
-            "not_applied": None,
-            "below_floor_pct": None,
-            "floor_pct": None,
-        }
-
-    def test_a_row_of_the_statement_before_dec_220_has_no_ranking(self, world):
-        """Six columns, no `ranked`: the reader takes it as a lookup with none, and says nothing of a floor."""
-        world.matches = []
-        world.run(_tp_model())
-        proposer = world.proposer
-        row = (
-            "run-1",
-            proposer["result"],
-            proposer["gate_result"],
-            datetime(2026, 11, 15, tzinfo=UTC),
-            proposer["citation_warnings"],
-            world.matches,
-        )
-
-        pair = queue.latest_suggestion_rag(_PageConn(row), _ALERT_ID, rag_min_score=0.5)[3]
-
-        assert pair == {
-            "best_pct": None,
             "not_applied": None,
             "below_floor_pct": None,
             "floor_pct": None,

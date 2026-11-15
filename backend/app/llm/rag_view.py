@@ -23,9 +23,11 @@ One set of values, the same on both pages: `{"best_pct": int | None, "not_applie
   never stored (spec §5.5), so there are none to leave out here.
 
 * **`below_floor_pct`** is the percentage of the best candidate the rerank scored, for a run whose lookup kept no
-  match: the highest `percent(score)` among the `ranked` of the lookup the run held (`rag_results.ranked`,
+  match: the highest score among the `ranked` of the lookup the run held (`rag_results.ranked`,
   `[{entry_id, score}]`, every candidate scored, best first; the readers fetch it with the `matches`), under the
-  same `score` rule as every other number here. It is `None` when the lookup kept a match (`matches` holds one:
+  same `score` rule as every other number here, **cut down** (`under_floor_pct`), not rounded (DEC-221, spec
+  `2026-11-15-ai-analysis-panel-redesign.md` section 5): a raw 0.4999 is 49, so the number printed under the
+  floor is always below `floor_pct`. `best_pct` of a kept match keeps `percent` (`round`). It is `None` when the lookup kept a match (`matches` holds one:
   `best_pct` is then the number, whether or not the budget dropped its entries - the two are never both set), when
   no candidate has a score, when the run names no lookup, and when the lookup failed (`not_applied` says so). It is
   also `None` when the best score is not under `floor`: the configuration's floor may have moved since the lookup
@@ -70,6 +72,19 @@ def score(item: Any) -> float | None:
     return float(value)
 
 
+def cut_percent(score: float) -> int:
+    """`score * 100` cut down to a whole number (`floor`), after the floating-point noise is rounded away:
+    0.29 * 100 is 28.999999999999996, and it is 29 that the reranker returned."""
+    return math.floor(round(score * 100, 9))
+
+
+def under_floor_pct(score: float, floor: float) -> int:
+    """The percentage of a candidate that scored under `floor` (DEC-221): cut down, not rounded, so that it is below
+    `percent(floor)` - the number the page prints beside it. The `min` keeps that true for a floor that is not a
+    whole percent (0.505 prints as 50): the number is at most one under the floor's own."""
+    return min(cut_percent(score), max(percent(floor) - 1, 0))
+
+
 def best_pct(matches: Any) -> int | None:
     """The highest percentage among a lookup's stored `matches` (`[{entry_id, level, content_sha256, score}]`),
     or `None` when there is no list or no match with a score."""
@@ -100,7 +115,8 @@ def below_floor_pct(
     matches: Any, ranked: Any, warnings: Any, kinds: Collection[str], floor: Any
 ) -> int | None:
     """DEC-220: the percentage of the best candidate of `ranked` (the lookup's stored `rag_results.ranked`) when
-    the lookup kept no match and that candidate scored under `floor`, else `None` (module doc)."""
+    the lookup kept no match and that candidate scored under `floor`, else `None` (module doc). DEC-221: cut down
+    (`under_floor_pct`), never rounded up to the floor."""
     if not _is_score(floor) or not isinstance(ranked, list):
         return None
     if isinstance(matches, list) and matches:
@@ -110,7 +126,7 @@ def below_floor_pct(
     best = max((found for found in map(score, ranked) if found is not None), default=None)
     if best is None or not best < floor:
         return None
-    return percent(best)
+    return under_floor_pct(best, floor)
 
 
 def _is_score(value: Any) -> bool:
@@ -138,4 +154,108 @@ def rag_view(
         "not_applied": not_applied(warnings, kinds),
         "below_floor_pct": below,
         "floor_pct": None if below is None else percent(floor),
+    }
+
+
+# ── the panel (DEC-221, AP-T2): the Tier 1 alert view's `analysis.rag`, and the case view's later ──────────────
+
+#: What `rag_panel` calls a run's RAG standing, in the order the spec lists them (`2026-11-15-ai-analysis-panel-
+#: redesign.md` section 5): `matched` (the lookup kept a match, so one at or over the floor), `below_floor` (it scored
+#: candidates and none reached the floor), `no_candidate` (it ran and scored nothing that counts), `failed` (the closed
+#: kind is `failure`), `no_lookup` (the run holds no lookup: RAG off, none usable, or the budget cut its entries). A
+#: literal on purpose: the page words each one, and `tests/test_rag_panel.py` pins it.
+STATES: tuple[str, ...] = ("matched", "below_floor", "no_candidate", "failed", "no_lookup")
+#: How many of the ranking's best candidates the panel lists.
+CANDIDATES_SHOWN = 3
+_RANKED_STATES = frozenset({"matched", "below_floor", "no_candidate"})
+
+
+def _ranking(items: Any) -> list[tuple[str | None, float]]:
+    """`(entry_id, score)` of each item of a stored list (`matches`, `ranked`) that has a score, best first, ties in
+    the stored order. The id is `None` when the item has none that is a string: it was scored and is not listed.
+    """
+    if not isinstance(items, list):
+        return []
+    found: list[tuple[str | None, float]] = []
+    for item in items:
+        value = score(item)
+        if value is not None:
+            entry = item.get("entry_id")
+            found.append((entry if isinstance(entry, str) else None, value))
+    return sorted(found, key=lambda pair: -pair[1])
+
+
+def _candidate_pct(value: float, floor: Any) -> int:
+    """A listed candidate's percentage: cut down when it scored under the floor (`under_floor_pct`, so the list and
+    `best_pct` say one number for the best of them), `percent` otherwise."""
+    return under_floor_pct(value, floor) if _is_score(floor) and value < floor else percent(value)
+
+
+def rag_panel(
+    matches: Any,
+    warnings: Any,
+    kinds: Collection[str],
+    *,
+    ranked: Any = None,
+    floor: Any = None,
+    threshold: Any = 0,
+) -> dict[str, Any]:
+    """The RAG standing of one run for the analysis panel: `{"state", "failure", "best_pct", "floor_pct",
+    "threshold_pct", "scored", "candidates"}`. The arguments are `rag_view`'s (the stored `matches` and `ranked` of
+    the lookup the run held, the run's `citation_warnings`, `rag.failures.FAILURE_KINDS`, `RAG_MIN_SCORE`) and the
+    rule's `threshold` (`gate_result.rag_rule.threshold`, 0 = off; anything that is not a positive integer is 0).
+
+    * `state` is one of `STATES`; `failure` is the closed kind when it is `failed`, else `None`.
+    * `best_pct` is the number the page shows for the run: the best kept match (`rag_view`'s `best_pct`) when
+      `matched`, the best candidate under the floor (its `below_floor_pct`, DEC-220, cut down) when `below_floor`,
+      else `None` - never a number the pair does not give for the same run.
+    * `floor_pct` is `percent(floor)` for a run whose lookup has a ranking to compare it with (`matched`,
+      `below_floor`, `no_candidate`), else `None`. `scored` is how many items of the ranking carry a valid score
+      (`None` for `failed` and `no_lookup`).
+    * `candidates` is the top `CANDIDATES_SHOWN` of the ranking (the lookup's `ranked`; its kept `matches` for a
+      lookup stored without one) as `{"entry_id", "pct"}` for `matched` and `below_floor`, else `[]`. An entry's title
+      and conclusion are a database read the caller does (`rag.entries.entry_cards`); `llm` may not import `rag`.
+
+    Entries the token budget dropped never reached the prompt, so such a run is `no_lookup` and lists nothing: the
+    DEC-213 pair gives it no number either. Pure: it reads only its arguments and builds new objects.
+    """
+    pair = rag_view(matches, warnings, kinds, ranked=ranked, floor=floor)
+    has_lookup = isinstance(matches, list) or isinstance(ranked, list)
+    if pair["not_applied"] is not None:
+        state = "failed"
+    elif entries_dropped(warnings):
+        state = "no_lookup"
+    elif isinstance(matches, list) and matches:
+        state = "matched"
+    elif pair["below_floor_pct"] is not None:
+        state = "below_floor"
+    elif has_lookup:
+        state = "no_candidate"
+    else:
+        state = "no_lookup"
+
+    ranking = (_ranking(ranked) or _ranking(matches)) if state in _RANKED_STATES else []
+    best = None
+    if state == "matched":
+        best = pair["best_pct"]
+    elif state == "below_floor":
+        best = pair["below_floor_pct"]
+    listed = state in ("matched", "below_floor")
+    threshold_ok = isinstance(threshold, int) and not isinstance(threshold, bool) and threshold > 0
+    return {
+        "state": state,
+        "failure": pair["not_applied"] if state == "failed" else None,
+        "best_pct": best,
+        "floor_pct": percent(floor) if state in _RANKED_STATES and _is_score(floor) else None,
+        "threshold_pct": threshold if threshold_ok else 0,
+        "scored": len(ranking) if state in _RANKED_STATES else None,
+        "candidates": (
+            [
+                {"entry_id": entry, "pct": _candidate_pct(value, floor)}
+                for entry, value in ranking
+                if entry is not None
+            ][:CANDIDATES_SHOWN]
+            if listed
+            else []
+        ),
     }

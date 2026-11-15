@@ -54,10 +54,44 @@ def test_the_candidate_is_the_best_of_the_list_not_the_first_or_the_last():
     assert _below([], [_cand(0.2), _cand(0.49)])["below_floor_pct"] == 49
 
 
-def test_the_percentage_is_the_pages_own_rule_round_of_score_times_a_hundred():
-    for value in (0.0, 0.004, 0.005, 0.1, 0.333, 0.465, 0.47, 0.484, 0.4949):
-        assert _below([], [_cand(value)])["below_floor_pct"] == rag_view.percent(value)
-    assert rag_view.percent(0.47) == 47
+def test_the_percentage_is_the_score_times_a_hundred_cut_down_not_rounded():
+    """DEC-221 (spec 5, last paragraph): the number under the floor is cut down, so it is always below
+    `floor_pct`. A raw 0.4999 is 49, not 50; `best_pct` of a kept match keeps `round` (`rag_view.percent`).
+    """
+    for value, expected in (
+        (0.0, 0),
+        (0.004, 0),
+        (0.005, 0),
+        (0.1, 10),
+        (0.333, 33),
+        (0.465, 46),
+        (0.47, 47),
+        (0.477, 47),
+        (0.484, 48),
+        (0.4949, 49),
+        (0.495, 49),
+        (0.4999, 49),
+    ):
+        assert _below([], [_cand(value)])["below_floor_pct"] == expected, value
+    assert rag_view.percent(0.477) == 48  # the pages' own rounding is untouched
+    assert rag_view.percent(0.4999) == 50
+
+
+def test_cutting_down_is_not_fooled_by_the_floating_point_representation():
+    """0.29 * 100 is 28.999999999999996 and 0.57 * 100 is 56.99999999999999: a plain `floor` would print 28
+    and 56 for a score the model-free reranker returned as 29 % and 57 %."""
+    assert 0.29 * 100 < 29 and 0.57 * 100 < 57
+    assert _below([], [_cand(0.29)])["below_floor_pct"] == 29
+    assert _below([], [_cand(0.57)], floor=0.6)["below_floor_pct"] == 57
+    assert _below([], [_cand(0.58)], floor=0.6)["below_floor_pct"] == 58
+
+
+@pytest.mark.parametrize("floor", [0.5, 0.505, 0.455, 0.9, 0.333])
+def test_the_number_is_always_below_the_floor_it_is_printed_beside(floor):
+    for raw in (0.0, 0.1, 0.3, 0.4, 0.4999, 0.5049, 0.4549, 0.8999, 0.3329):
+        pair = _below([], [_cand(raw)], floor=floor)
+        if raw < floor:
+            assert pair["below_floor_pct"] < pair["floor_pct"], (raw, floor, pair)
 
 
 def test_the_floor_is_the_rounded_floor_times_a_hundred():
@@ -134,8 +168,10 @@ def test_a_candidate_at_or_over_the_floor_is_not_below_it():
     not described as under the floor. Compared on the raw score, not on the rounded percentage."""
     assert _below([], [_cand(0.5)]) == NOTHING
     assert _below([], [_cand(0.62)]) == NOTHING
-    just_under = _below([], [_cand(0.4999)])  # 49.99 rounds to 50, and 0.4999 is under 0.5
-    assert (just_under["below_floor_pct"], just_under["floor_pct"]) == (50, 50)
+    just_under = _below(
+        [], [_cand(0.4999)]
+    )  # 49.99 would round to 50; it is cut down to 49 (DEC-221)
+    assert (just_under["below_floor_pct"], just_under["floor_pct"]) == (49, 50)
 
 
 @pytest.mark.parametrize("floor", [None, True, "0.5", math.nan, math.inf, -0.1, 1.5])

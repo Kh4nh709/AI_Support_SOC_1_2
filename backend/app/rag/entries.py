@@ -20,7 +20,7 @@ import hashlib
 import hmac
 import re
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -169,6 +169,49 @@ def entry_by_id(conn: psycopg.Connection, entry_id: str | uuid.UUID) -> Entry | 
         return None
     row = conn.execute(SELECT_ENTRY + " WHERE entry_id = %s", (wanted,)).fetchone()
     return None if row is None else Entry.from_row(row)
+
+
+#: The title is the first `# ` heading of an entry's Markdown: `render_entry_markdown` writes exactly one, after the
+#: front matter, and folds the title onto one line. `web/routers/admin_knowledge.title_of` reads it the same way;
+#: `tests/test_entry_title.py` holds the two equal.
+_TITLE_LINE = re.compile(r"\n# ([^\n]*)\n")
+
+
+def title_of(content: Any) -> str | None:
+    """The title of an entry's Markdown, or None (no heading, or `content` is not text)."""
+    if not isinstance(content, str):
+        return None
+    found = _TITLE_LINE.search(content)
+    return None if found is None else found.group(1)
+
+
+def entry_cards(
+    conn: psycopg.Connection, entry_ids: Iterable[str]
+) -> dict[str, tuple[str | None, str]]:
+    """`{entry_id: (title, conclusion)}` for the entries of `entry_ids` that exist, of any status, in ONE read-only
+    statement (DEC-221, AP-T2: the Tier 1 analysis lists each RAG candidate with the title and the conclusion of its
+    entry). The keys are the ids as given. An id that is not a UUID is left out without a statement: it is a stored
+    ranking's text, and a cast of it must not poison the transaction (`entry_by_id`'s rule); an entry that is gone is
+    simply absent, and so is a call with no ids (no statement at all). The title is None when the entry's Markdown has
+    no heading."""
+    given: dict[str, list[str]] = {}
+    for value in entry_ids:
+        try:
+            canonical = str(uuid.UUID(str(value)))
+        except ValueError:
+            continue
+        given.setdefault(canonical, []).append(value)
+    if not given:
+        return {}
+    rows = conn.execute(
+        "SELECT entry_id, conclusion, content FROM knowledge_entries WHERE entry_id = ANY(%s)",
+        ([uuid.UUID(canonical) for canonical in given],),
+    ).fetchall()
+    cards: dict[str, tuple[str | None, str]] = {}
+    for entry_id, conclusion, content in rows:
+        for value in given.get(str(entry_id), ()):
+            cards[value] = (title_of(content), conclusion)
+    return cards
 
 
 def _published_path(entry: Entry, root: Path) -> Path | None:

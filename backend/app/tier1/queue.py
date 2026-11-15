@@ -20,14 +20,22 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
   below, the one-column sibling of `latest_suggestion`). P14-T03 (DEC-213) adds `proposed_action`
   and `held_by`: the model's own conclusion and which checks raised a warning on it (`latest_suggestion_held` below, the
   same one read of the newest run that builds `suggestion`; the queue rows carry them from their own statement). All of these are
-  `visibility.ANALYST_HIDE` keys. P14-T07 (DEC-213) adds `rag`, `{best_pct, not_applied}` (`llm.rag_view`): how
-  strongly the lookup the newest run's prompt held matched approved knowledge, and the closed kind of its
-  `rag_not_applied:<kind>` warning - from the same read of the newest run (`latest_suggestion_rag`), one more
-  column and one scalar subquery of the statement that builds `suggestion`; the queue rows do not carry it.
-  DEC-220 (trial) adds two keys to the pair, `below_floor_pct` and `floor_pct`: for a run whose lookup kept no match,
-  the best candidate the rerank scored (the lookup's `ranked`, one more scalar subquery of the same statement) and
-  the `RAG_MIN_SCORE` it was under. They go with `rag`, whole, so the blind arm never has them; `best_pct` and
-  `not_applied` are as they were, and the rule of DEC-219 does not read them.
+  `visibility.ANALYST_HIDE` keys. P14-T07 (DEC-213) adds `rag`, `llm.rag_view`'s four-key pair `{best_pct, not_applied,
+  below_floor_pct, floor_pct}`: how strongly the lookup the newest run's prompt held matched approved knowledge, and the
+  closed kind of its `rag_not_applied:<kind>` warning - from the same read of the newest run (`latest_suggestion_rag`),
+  one more column of the statement that builds `suggestion` (a join on the run's lookup); the queue rows do not carry it.
+  `best_pct` and `not_applied` are DEC-213's; DEC-220 (trial) added `below_floor_pct`, for a run whose lookup kept no
+  match the best candidate the rerank scored (the lookup's `ranked`) and `floor_pct`, the `RAG_MIN_SCORE` it was under -
+  DEC-221 cuts that number down to a whole percent instead of rounding it, so it is always below `floor_pct`. All four go
+  with `rag`, whole, so the blind arm never has them, and the rule of DEC-219 does not read the last two.
+  DEC-221 (AP-T2) adds `analysis`, the object the Tier 1 AI analysis panel is drawn from (`tier1/analysis.py`: the model's
+  summary, readings and next checks, every reason with whether its quote was verified, the facts table, the gate checks,
+  the RAG standing with its top candidates, the decision history, the playbook and its rule, the server-built
+  highlights, the technical figures - no model id): built from the SAME row of the newest run
+  (`latest_suggestion_analysis`), plus one statement that reads the title and conclusion of the listed knowledge entries
+  (only when the lookup scored a candidate), and `None` for an alert with no run. It is a `visibility.ANALYST_HIDE` key
+  too, so it is hidden wherever `suggestion` is; the queue rows do not carry it. The model's name appears nowhere in
+  what this module serves (goal G5): no statement of it selects a model column.
 - `latest_suggestion` — **the one place in P4 that reads `llm_runs`** (planning decision
   5). The row shape is P3-T10's and may still move; every read here is `.get`-tolerant,
   and this function is where to follow it. `latest_suggestions` is the same read for many
@@ -68,7 +76,7 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import psycopg
 
@@ -76,8 +84,9 @@ from app.domain import correlation
 from app.infra import config
 from app.kb.lookup import get_playbook
 from app.llm import rag_view, verdicts
+from app.rag.entries import entry_cards
 from app.rag.failures import FAILURE_KINDS
-from app.tier1 import visibility
+from app.tier1 import analysis, visibility
 from app.tier1.soar_view import soar_view
 
 #: `needs_retriage` — phase-2's v1 constants, `docs/phase-2-chong-trung-lap.md:321`.
@@ -192,13 +201,17 @@ class Suggestion:
 # P14-T07: the run's `citation_warnings` (the `rag_not_applied:<kind>` notice) and the `matches` of the lookup
 # its prompt held (`rag_lookup_id`; NULL when it held none) ride on the same row, so the suggestion, the held
 # reasons and the RAG pair are one run by construction. `lookup_id` is `rag_results`' primary key: at most one row.
-# DEC-220: the lookup's `ranked` (every candidate the rerank scored) is the last column, read the same way: the
-# best candidate's percentage of a lookup that kept no match is the pair's too.
+# DEC-220: the lookup's `ranked` (every candidate the rerank scored) is read the same way: the best candidate's
+# percentage of a lookup that kept no match is the pair's too. DEC-221 (AP-T2): the lookup's `history` and the run's
+# own token, latency and cost columns ride on it as well, because the `analysis` of the alert view is built from the
+# same run; the statement always returns these twelve columns and `_read_latest` unpacks them strictly. No model
+# column is selected: the model's name is not served anywhere in the Tier 1 view (goal G5), so it is not read.
 _SUGGESTION_SQL = """
     SELECT r.run_id, r.result, r.gate_result, r.created_at, r.citation_warnings,
-           (SELECT g.matches FROM rag_results g WHERE g.lookup_id = r.rag_lookup_id),
-           (SELECT g.ranked FROM rag_results g WHERE g.lookup_id = r.rag_lookup_id)
+           g.matches, g.ranked, g.history,
+           r.input_tokens, r.output_tokens, r.latency_ms, r.cost_usd
     FROM llm_runs r
+    LEFT JOIN rag_results g ON g.lookup_id = r.rag_lookup_id
     WHERE r.subject_id = %s AND r.pipeline = 'triage' AND r.role = 'proposer'
     ORDER BY r.created_at DESC, r.run_id DESC
     LIMIT 1
@@ -292,6 +305,80 @@ def latest_suggestion_held(
     return latest_suggestion_rag(conn, alert_id, rag_min_score=0.0)[:3]
 
 
+class _Row(NamedTuple):
+    """The twelve columns of `_SUGGESTION_SQL`, in its order. `_Row(*record)` is the strict unpack: a row of any other
+    width is a bug and raises, it is no longer read as "a lookup with none" (the statement always returns `ranked`).
+    """
+
+    run_id: Any
+    result: Any
+    gate_result: Any
+    created_at: datetime
+    citation_warnings: Any
+    matches: Any
+    ranked: Any
+    history: Any
+    input_tokens: Any
+    output_tokens: Any
+    latency_ms: Any
+    cost_usd: Any
+
+
+@dataclasses.dataclass(frozen=True)
+class _Latest:
+    """What one read of the newest proposer run gives (`_read_latest`): the three values of `latest_suggestion_held`,
+    the RAG pair, and the stored columns the `analysis` is built from with the floor the pair was compared with.
+    """
+
+    suggestion: Suggestion | None
+    proposed_action: str | None
+    held_by: list[str]
+    rag: dict[str, Any]
+    stored: analysis.StoredRun | None
+    floor: float | None
+
+
+def _read_latest(conn: psycopg.Connection, alert_id: str, rag_min_score: float | None) -> _Latest:
+    """ONE read of the newest proposer run, in every shape the alert view needs it (`latest_suggestion_rag`,
+    `latest_suggestion_analysis`)."""
+    record = conn.execute(_SUGGESTION_SQL, (alert_id,)).fetchone()
+    if record is None:
+        return _Latest(
+            None, None, [], rag_view.rag_view(None, None, FAILURE_KINDS), None, rag_min_score
+        )
+    row = _Row(*record)  # strict: the statement always returns its twelve columns
+    floor = _floor(rag_min_score, row.ranked)
+    rag = rag_view.rag_view(
+        row.matches, row.citation_warnings, FAILURE_KINDS, ranked=row.ranked, floor=floor
+    )
+    stored = analysis.StoredRun(
+        result=row.result,
+        gate_result=row.gate_result,
+        created_at=row.created_at,
+        citation_warnings=row.citation_warnings,
+        matches=row.matches,
+        ranked=row.ranked,
+        history=row.history,
+        input_tokens=row.input_tokens,
+        output_tokens=row.output_tokens,
+        latency_ms=row.latency_ms,
+        cost_usd=row.cost_usd,
+    )
+    suggestion = _suggestion_of(row.run_id, row.result, row.gate_result, row.created_at)
+    if suggestion is None:
+        return _Latest(None, None, [], rag, stored, floor)
+    return _Latest(
+        suggestion,
+        # DEC-219: the verdict ① ended with, not the model's own answer, for a run the RAG rule applied to
+        verdicts.served_proposed_action(row.gate_result, suggestion.suggested_action),
+        # ... and without `verifier_disagrees`, which would give the model's answer away (DEC-219)
+        verdicts.served_held_reasons(row.gate_result),
+        rag,
+        stored,
+        floor,
+    )
+
+
 def latest_suggestion_rag(
     conn: psycopg.Connection, alert_id: str, *, rag_min_score: float | None = None
 ) -> tuple[Suggestion | None, str | None, list[str], dict[str, Any]]:
@@ -299,39 +386,41 @@ def latest_suggestion_rag(
     "floor_pct"}` (`llm.rag_view`, P14-T07, DEC-220) - from the very same row. `best_pct` is the best match of the
     lookup the run's prompt held (`llm_runs.rag_lookup_id`), `not_applied` the closed kind of its
     `rag_not_applied:<kind>` warning, only a kind of `rag.failures.FAILURE_KINDS`. `below_floor_pct` is the best
-    candidate the rerank scored (that lookup's `ranked`) when it kept no match, and `floor_pct` the floor it was
-    under: `rag_min_score`, or `RAG_MIN_SCORE` of the running configuration when not given (read only when the
-    lookup scored a candidate, so a run with none costs nothing more). Unlike the first three it is given for a
-    run whose `result` is NULL too (① gave up with the RAG already off): the pair is the run's, not the
-    suggestion's; the page words it only beside a conclusion. No run gives the empty pair. Like its sibling it
-    applies no blind-branch rule: `rag` is a `visibility.ANALYST_HIDE` key.
-
-    A row of the statement as it was before DEC-220 (six columns, no `ranked`) is read as a lookup with none.
+    candidate the rerank scored (that lookup's `ranked`) when it kept no match, cut down to a whole percent (DEC-221),
+    and `floor_pct` the floor it was under: `rag_min_score`, or `RAG_MIN_SCORE` of the running configuration when not
+    given (read only when the lookup scored a candidate, so a run with none costs nothing more). Unlike the first
+    three it is given for a run whose `result` is NULL too (① gave up with the RAG already off): the pair is the
+    run's, not the suggestion's; the page words it only beside a conclusion. No run gives the empty pair. Like its
+    sibling it applies no blind-branch rule: `rag` is a `visibility.ANALYST_HIDE` key.
     """
-    row = conn.execute(_SUGGESTION_SQL, (alert_id,)).fetchone()
-    if row is None:
-        return None, None, [], rag_view.rag_view(None, None, FAILURE_KINDS)
-    run, (warnings, lookup_matches, *rest) = row[:4], row[4:]
-    lookup_ranked = rest[0] if rest else None
-    rag = rag_view.rag_view(
-        lookup_matches,
-        warnings,
-        FAILURE_KINDS,
-        ranked=lookup_ranked,
-        floor=_floor(rag_min_score, lookup_ranked),
+    latest = _read_latest(conn, alert_id, rag_min_score)
+    return latest.suggestion, latest.proposed_action, latest.held_by, latest.rag
+
+
+def latest_suggestion_analysis(
+    conn: psycopg.Connection,
+    alert_id: str,
+    *,
+    mitre_ids: Sequence[Any],
+    rag_min_score: float | None = None,
+) -> tuple[Suggestion | None, str | None, list[str], dict[str, Any], dict[str, Any] | None]:
+    """`latest_suggestion_rag`'s four values and a fifth, `analysis` (`tier1/analysis.build`, DEC-221), from the very
+    same row: `None` when there is no run or its `result` is NULL. `mitre_ids` are the alert's. The only statement it
+    adds to the one read of the run is the read of the knowledge entries the RAG block lists (`rag.entries.entry_cards`:
+    title and conclusion, one statement), made only when the lookup scored a candidate to list. Like its sibling it
+    applies no blind-branch rule: `analysis` is a `visibility.ANALYST_HIDE` key."""
+    latest = _read_latest(conn, alert_id, rag_min_score)
+    built = (
+        None
+        if latest.stored is None
+        else analysis.build(
+            latest.stored,
+            mitre_ids=mitre_ids,
+            floor=latest.floor,
+            read_cards=lambda ids: entry_cards(conn, ids),
+        )
     )
-    suggestion = _suggestion_of(*run)
-    if suggestion is None:
-        return None, None, [], rag
-    gate_result = run[2]
-    return (
-        suggestion,
-        # DEC-219: the verdict ① ended with, not the model's own answer, for a run the RAG rule applied to
-        verdicts.served_proposed_action(gate_result, suggestion.suggested_action),
-        # ... and without `verifier_disagrees`, which would give the model's answer away (DEC-219)
-        verdicts.served_held_reasons(gate_result),
-        rag,
-    )
+    return latest.suggestion, latest.proposed_action, latest.held_by, latest.rag, built
 
 
 def _floor(given: float | None, ranked: Any) -> float | None:
@@ -835,7 +924,9 @@ def get_alert_view(
 
     view["playbook"] = get_playbook(view["category"])
 
-    suggestion, proposed_action, held_by, rag = latest_suggestion_rag(conn, head_id)
+    suggestion, proposed_action, held_by, rag, analysed = latest_suggestion_analysis(
+        conn, head_id, mitre_ids=view["mitre_ids"] or []
+    )
     view["suggestion"] = suggestion.to_dict() if suggestion is not None else None
     # Why the newest ① run stopped (INT-T02): added BEFORE the strip, so a blind, undecided head
     # loses it with the other ① keys (`visibility.ANALYST_HIDE`), and the labelling page never has it.
@@ -846,6 +937,10 @@ def get_alert_view(
     # How strongly the lookup matched and whether the RAG was not applied (P14-T07): the same row again, added
     # BEFORE the strip for the same reason - the blind arm and the labelling page never get it.
     view["rag"] = rag
+    # Everything the system knows about that run, for the analysis panel (DEC-221, AP-T2): the same row once more
+    # (`tier1/analysis.py`), `None` for an alert with no run or whose newest run has no result - added BEFORE the strip
+    # for the same reason, so the blind arm and the labelling page never get it. It carries no model id (goal G5).
+    view["analysis"] = analysed
 
     view["risk_band"] = risk_band(view.pop("risk_score"))
 
