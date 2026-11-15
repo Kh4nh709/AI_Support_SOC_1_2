@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import inspect
 import re
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -64,6 +65,11 @@ def _row(**over):
         "output_tokens": 200,
         "latency_ms": 1500,
         "cost_usd": None,
+        # the run's verifier row: the sum of its four columns (`_SUGGESTION_SQL`'s LATERAL), None when there is none
+        "verifier_input_tokens": None,
+        "verifier_output_tokens": None,
+        "verifier_latency_ms": None,
+        "verifier_cost_usd": None,
     }
     cols.update(over)
     return tuple(cols.values())
@@ -91,7 +97,7 @@ class _Conn:
 # ── the row is read once and unpacked strictly ──────────────────────────────────────────────────
 
 
-def test_the_statement_returns_the_twelve_columns_in_this_order():
+def test_the_statement_returns_the_sixteen_columns_in_this_order():
     sql = " ".join(queue._SUGGESTION_SQL.split())
     select = sql[len("SELECT ") : sql.index(" FROM llm_runs")]
     assert [c.strip() for c in select.split(",")] == [
@@ -107,16 +113,34 @@ def test_the_statement_returns_the_twelve_columns_in_this_order():
         "r.output_tokens",
         "r.latency_ms",
         "r.cost_usd",
+        "v.input_tokens",
+        "v.output_tokens",
+        "v.latency_ms",
+        "v.cost_usd",
     ]
     assert "rag_results g ON g.lookup_id = r.rag_lookup_id" in sql
     assert "LIMIT 1" in sql
 
 
-@pytest.mark.parametrize("width", [0, 1, 4, 5, 6, 7, 8, 11, 13])
+def test_the_verifier_row_is_the_one_whose_gate_result_names_the_proposer_run_and_is_summed():
+    """Follow-up B: `tech` covers the whole analysis. The product pairs the two rows by the verifier row's
+    `gate_result.proposer_run_id` (`tier1/triage.py` writes it), in the same statement: no second read.
+    """
+    sql = " ".join(queue._SUGGESTION_SQL.split())
+    assert "LEFT JOIN LATERAL" in sql
+    assert "x.gate_result->>'proposer_run_id' = r.run_id::text" in sql
+    assert "x.role = 'verifier'" in sql and "x.pipeline = 'triage'" in sql
+    assert "x.subject_id = r.subject_id" in sql
+    for column in ("input_tokens", "output_tokens", "latency_ms", "cost_usd"):
+        assert f"sum(x.{column}) AS {column}" in sql
+    assert "model" not in sql.lower()
+
+
+@pytest.mark.parametrize("width", [0, 1, 4, 5, 6, 7, 8, 11, 12, 15, 17])
 def test_a_row_of_any_other_width_is_refused(width):
-    """The statement always returns its twelve columns: a row with fewer (the shape before DEC-220 had six) is not
+    """The statement always returns its sixteen columns: a row with fewer (the shape before DEC-220 had six) is not
     read as "a lookup with none" any more."""
-    row = _row()[:width] + (None,) * max(0, width - 12)
+    row = _row()[:width] + (None,) * max(0, width - 16)
     with pytest.raises((TypeError, ValueError)):
         queue.latest_suggestion_rag(_Conn(row), "a-1")
     with pytest.raises((TypeError, ValueError)):
@@ -163,6 +187,23 @@ def test_the_run_is_read_once_and_a_run_with_no_candidate_costs_no_second_statem
     assert built["summary"] == "SUMMARY-OF-THE-MODEL"
     assert built["tech"]["mitre_ids"] == ["T1110"]
     assert built["tech"]["input_tokens"] == 1000 and built["tech"]["correlated_at_analysis"] == 3
+
+
+def test_the_verifier_rows_figures_are_added_to_the_proposers_in_tech():
+    conn = _Conn(
+        _row(
+            cost_usd=Decimal("0.01"),
+            verifier_input_tokens=300,
+            verifier_output_tokens=80,
+            verifier_latency_ms=900,
+            verifier_cost_usd=Decimal("0.002"),
+        )
+    )
+    *_rest, built = queue.latest_suggestion_analysis(conn, "a-1", mitre_ids=[])
+    tech = built["tech"]
+    assert (tech["input_tokens"], tech["output_tokens"], tech["latency_ms"]) == (1300, 280, 2400)
+    assert tech["cost_usd"] == 0.012
+    assert len(conn.statements) == 1
 
 
 def test_candidates_are_read_with_one_more_statement_that_touches_only_the_entries():

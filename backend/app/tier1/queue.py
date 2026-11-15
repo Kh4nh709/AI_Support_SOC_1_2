@@ -204,14 +204,26 @@ class Suggestion:
 # DEC-220: the lookup's `ranked` (every candidate the rerank scored) is read the same way: the best candidate's
 # percentage of a lookup that kept no match is the pair's too. DEC-221 (AP-T2): the lookup's `history` and the run's
 # own token, latency and cost columns ride on it as well, because the `analysis` of the alert view is built from the
-# same run; the statement always returns these twelve columns and `_read_latest` unpacks them strictly. No model
-# column is selected: the model's name is not served anywhere in the Tier 1 view (goal G5), so it is not read.
+# same run, and so do the sums of the same four columns over the run's VERIFIER row (the follow-up: `tech` covers the
+# whole analysis). The product pairs the two rows by the verifier row's `gate_result.proposer_run_id`, which
+# `tier1/triage.py` writes with the run it checked; the LATERAL sums them (NULL when there is none, or when none has
+# the column), so there is still one statement. The statement always returns these sixteen columns and `_read_latest`
+# unpacks them strictly. No model column is selected, of either row: the model's name is not served anywhere in the
+# Tier 1 view (goal G5), so it is not read.
 _SUGGESTION_SQL = """
     SELECT r.run_id, r.result, r.gate_result, r.created_at, r.citation_warnings,
            g.matches, g.ranked, g.history,
-           r.input_tokens, r.output_tokens, r.latency_ms, r.cost_usd
+           r.input_tokens, r.output_tokens, r.latency_ms, r.cost_usd,
+           v.input_tokens, v.output_tokens, v.latency_ms, v.cost_usd
     FROM llm_runs r
     LEFT JOIN rag_results g ON g.lookup_id = r.rag_lookup_id
+    LEFT JOIN LATERAL (
+        SELECT sum(x.input_tokens) AS input_tokens, sum(x.output_tokens) AS output_tokens,
+               sum(x.latency_ms) AS latency_ms, sum(x.cost_usd) AS cost_usd
+        FROM llm_runs x
+        WHERE x.subject_id = r.subject_id AND x.pipeline = 'triage' AND x.role = 'verifier'
+          AND x.gate_result->>'proposer_run_id' = r.run_id::text
+    ) v ON true
     WHERE r.subject_id = %s AND r.pipeline = 'triage' AND r.role = 'proposer'
     ORDER BY r.created_at DESC, r.run_id DESC
     LIMIT 1
@@ -264,7 +276,9 @@ def _suggestion_of(
             "verifier_verdict": verdicts.served_verifier_verdict(
                 gate_result.get("verifier_verdict"), gate_result
             ),
-            "warnings": gate_result.get("warnings") or [],
+            # DEC-219: for a run the RAG rule applied to without the reasons of the rule check, which judged the
+            # rule the model cited (`verdicts.served_warnings`); the stored list is untouched
+            "warnings": verdicts.served_warnings(gate_result),
             # DEC-219: `{threshold, best_pct, applied}` of the stored object, `null` for a run that has none
             # (before the key, or a version 1 document) or whose stored value is not an object. The stored
             # `changed` is never served: for an applied run it says what the model answered.
@@ -306,7 +320,7 @@ def latest_suggestion_held(
 
 
 class _Row(NamedTuple):
-    """The twelve columns of `_SUGGESTION_SQL`, in its order. `_Row(*record)` is the strict unpack: a row of any other
+    """The sixteen columns of `_SUGGESTION_SQL`, in its order. `_Row(*record)` is the strict unpack: a row of any other
     width is a bug and raises, it is no longer read as "a lookup with none" (the statement always returns `ranked`).
     """
 
@@ -322,6 +336,10 @@ class _Row(NamedTuple):
     output_tokens: Any
     latency_ms: Any
     cost_usd: Any
+    verifier_input_tokens: Any
+    verifier_output_tokens: Any
+    verifier_latency_ms: Any
+    verifier_cost_usd: Any
 
 
 @dataclasses.dataclass(frozen=True)
@@ -346,7 +364,7 @@ def _read_latest(conn: psycopg.Connection, alert_id: str, rag_min_score: float |
         return _Latest(
             None, None, [], rag_view.rag_view(None, None, FAILURE_KINDS), None, rag_min_score
         )
-    row = _Row(*record)  # strict: the statement always returns its twelve columns
+    row = _Row(*record)  # strict: the statement always returns its sixteen columns
     floor = _floor(rag_min_score, row.ranked)
     rag = rag_view.rag_view(
         row.matches, row.citation_warnings, FAILURE_KINDS, ranked=row.ranked, floor=floor
@@ -363,6 +381,10 @@ def _read_latest(conn: psycopg.Connection, alert_id: str, rag_min_score: float |
         output_tokens=row.output_tokens,
         latency_ms=row.latency_ms,
         cost_usd=row.cost_usd,
+        verifier_input_tokens=row.verifier_input_tokens,
+        verifier_output_tokens=row.verifier_output_tokens,
+        verifier_latency_ms=row.verifier_latency_ms,
+        verifier_cost_usd=row.verifier_cost_usd,
     )
     suggestion = _suggestion_of(row.run_id, row.result, row.gate_result, row.created_at)
     if suggestion is None:

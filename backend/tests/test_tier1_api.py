@@ -235,6 +235,7 @@ _SUGGESTION_KEYS = (
     "proposed_action",  # P14-T03: the model's own answer ...
     "held_by",  # ... and why the system held it
     "rag",  # P14-T07: the match percentage and the "RAG not applied" notice
+    "analysis",  # DEC-221 / AP-T2: the AI analysis object of the alert view
 )
 
 

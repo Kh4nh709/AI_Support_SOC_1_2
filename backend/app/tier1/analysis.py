@@ -11,9 +11,10 @@ outcomes, never from the model's text.
      "checks": [{id, outcome, detail}], "check_totals": {passed, applicable, warnings}, the gate steps and the tile
      "rag": {state, failure, best_pct, floor_pct, threshold_pct, scored, candidates},   `llm.rag_view.rag_panel` + entries
      "history": {key, total, by_conclusion, last_seen} | None,
-     "playbook": {name, rule_id, rule_action},                                          the decision table, today
+     "playbook": {name, rule_id, rule_action, rule_table_reviewed},                     the decision table, today
      "highlights": [{direction, code, params}],                                         at most four, server-built
      "tech": {input_tokens, output_tokens, latency_ms, cost_usd, analysed_at, mitre_ids, correlated_at_analysis}}
+                                                       (tokens, time, cost: the proposer row plus its verifier row)
 
 **The model's name is not an input.** `StoredRun` has no model column and the statement that feeds it
 (`queue._SUGGESTION_SQL`) does not select one (the Owner's requirement, goal G5: the model's name appears nowhere in
@@ -41,22 +42,23 @@ touches and must give the same analysis.
 from __future__ import annotations
 
 import dataclasses
-import math
+import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-import yaml
-
-from app.kb.lookup import DecisionTableError, apply_table, get_decision_table
+from app.kb.lookup import apply_table, get_decision_table
 from app.llm import rag_view, verdicts
 from app.rag.failures import FAILURE_KINDS
 from app.rag.history import CONCLUSIONS, LEVELS
 
 #: How many of the model's `next_checks` are served (the schema asks for one to three; a longer list is cut).
 NEXT_CHECKS_SHOWN = 3
+#: How many of the model's reasons are served: the first ten items of its answer, like `Suggestion.reasons`
+#: (`queue._suggestion_of`), so the two lists cannot disagree about where they stop.
+REASONS_SHOWN = 10
 #: How many highlights are served, at most.
 HIGHLIGHTS_SHOWN = 4
 
@@ -140,6 +142,8 @@ _LEVEL_NAMES = frozenset(name for _level, name in LEVELS)
 _CATEGORY = re.compile(r"[a-z0-9_]+")
 _COUNT_AFTER = re.compile(r"(?:dropped|findings):(\d+)")
 
+logger = logging.getLogger(__name__)
+
 #: `(entry ids) -> {entry id: (title, conclusion)}`; an id with no entry is absent (`rag.entries.entry_cards`).
 CardReader = Callable[[Sequence[str]], Mapping[str, tuple[str | None, str | None]]]
 
@@ -161,6 +165,12 @@ class StoredRun:
     output_tokens: Any
     latency_ms: Any
     cost_usd: Any
+    #: The same four columns of the run's verifier row (the row whose `gate_result.proposer_run_id` names the run;
+    #: `queue._SUGGESTION_SQL` sums them), `None` when there is none. `tech` is the sum of the two.
+    verifier_input_tokens: Any = None
+    verifier_output_tokens: Any = None
+    verifier_latency_ms: Any = None
+    verifier_cost_usd: Any = None
 
 
 # ── small readers: a stored document is data, and a garbled one gives less ─────────────────────────────────────
@@ -233,13 +243,14 @@ def _reasons(result: Mapping[str, Any], gate: Mapping[str, Any]) -> list[dict[st
     """Every reason of the model's answer in its order (`gate_result.proposer_raw.reasons`, which step 3 did not
     thin out), each with whether its quote was verified and, when it was not, the closed code step 3 recorded. With
     no usable `proposer_raw.reasons` the stored `result.reasons` (step 3's survivors, which is all that is stored) are
-    served, each verified by construction."""
+    served, each verified by construction. At most `REASONS_SHOWN` items are read, as `Suggestion.reasons` does: the
+    first ten of the answer, of which the ones that are not objects are skipped."""
     raw = _mapping(gate.get("proposer_raw")).get("reasons")
     from_raw = isinstance(raw, list)
     items = raw if from_raw else result.get("reasons")
     dropped = _dropped(gate) if from_raw else {}
     rows: list[dict[str, Any]] = []
-    for index, item in enumerate(items if isinstance(items, list) else []):
+    for index, item in enumerate(items[:REASONS_SHOWN] if isinstance(items, list) else []):
         if not isinstance(item, Mapping):
             continue
         why = dropped.get(index)
@@ -287,17 +298,22 @@ def _check(check_id: str, outcome: str, detail: str) -> dict[str, str]:
     return {"id": check_id, "outcome": outcome, "detail": detail}
 
 
-def _step4(steps: Mapping[str, Any], gate: Mapping[str, Any]) -> dict[str, str]:
+def _step4(steps: Mapping[str, Any], gate: Mapping[str, Any], withheld: bool) -> dict[str, str]:
+    """Step 4, the false-positive policy. `missing` is read as the API serves it (`verdicts.served_missing`). For a
+    run the RAG default applied to (`withheld`) step 4 is told from the SYSTEM facts only: the playbook condition is
+    about the rule the MODEL cited (`gate._step4`: `structured_basis.playbook_rule_applied`), so which rule it cited
+    would go with what it answered. It is `fp_policy_facts` (warn) when a fact field is in `missing`, else
+    `fp_policy_ok` (pass) - never `fp_policy_playbook`."""
     status = steps.get("4")
+    missing = verdicts.served_missing(gate)
+    if withheld and status in ("ok", "missing"):
+        if any(field in verdicts.FP_FACT_FIELDS for field in missing):
+            return _check("4", "warn", "fp_policy_facts")
+        return _check("4", "pass", "fp_policy_ok")
     if status == "ok":
         return _check("4", "pass", "fp_policy_ok")
     if status == "missing":
-        missing = gate.get("missing")
-        only_playbook = (
-            isinstance(missing, list)
-            and bool(missing)
-            and all(m == "playbook_rule" for m in missing)
-        )
+        only_playbook = bool(missing) and all(m == verdicts.PLAYBOOK_RULE_FIELD for m in missing)
         return _check("4", "warn", "fp_policy_playbook" if only_playbook else "fp_policy_facts")
     if status == "n/a" and gate.get("final_verdict") == "true_positive":
         return _check("4", "na", "not_false_positive")
@@ -348,7 +364,7 @@ def _checks(gate: Mapping[str, Any], withheld: bool) -> list[dict[str, str]]:
     else:
         rows.append(_check("3r", "na", "rag_rule_off"))
 
-    rows.append(_step4(steps, gate))
+    rows.append(_step4(steps, gate, withheld))
 
     findings = _count_in(steps.get("5"))
     if findings is None:
@@ -438,31 +454,46 @@ def _history(raw: Any) -> dict[str, Any] | None:
     }
 
 
-def _playbook(gate: Mapping[str, Any]) -> dict[str, str | None]:
-    """`{name, rule_id, rule_action}`: the playbook of the run's category (the decision table's `playbook`) and the
-    first rule of that table which holds against the facts the run stored (`kb.lookup.apply_table`, which ignores the
-    table's review state on purpose). All `None` when the category has no table; the rule is `None` when none holds.
+def _playbook(gate: Mapping[str, Any]) -> dict[str, str | bool | None]:
+    """`{name, rule_id, rule_action, rule_table_reviewed}`: the playbook of the run's category (the decision table's
+    `playbook`), the first rule of that table which holds against the facts the run stored (`kb.lookup.apply_table`,
+    which ignores the table's review state on purpose) and whether that table is signed today
+    (`rule_table_reviewed`, so the page can say that the matching rule comes from an unsigned table). All `None` when
+    the category has no table; the rule is `None` when none holds.
+
+    The decision table is a file the Owner edits: reading it is a boundary, and ANY failure there - a malformed file
+    (`rules: 5` makes `kb.lookup.get_decision_table` raise a plain `TypeError`, an empty playbook an `IndexError`),
+    an unreadable one, a table `apply_table` cannot compare the facts with - gives the all-`None` playbook and a log
+    line (the exception's type and the category, never its text), never an error on the alert view.
     """
-    nothing: dict[str, str | None] = {"name": None, "rule_id": None, "rule_action": None}
-    facts = _mapping(gate.get("facts"))
-    category = facts.get("category")
+    nothing: dict[str, str | bool | None] = {
+        "name": None,
+        "rule_id": None,
+        "rule_action": None,
+        "rule_table_reviewed": None,
+    }
+    category = _mapping(gate.get("facts")).get("category")
     if not isinstance(category, str) or not _CATEGORY.fullmatch(category):
         return nothing
     try:
         table = get_decision_table(category)
-    except (DecisionTableError, OSError, ValueError, yaml.YAMLError):
+        if table is None:
+            return nothing
+        rule = apply_table(table, _mapping(gate.get("facts")))
+        return {
+            "name": table.playbook,
+            "rule_id": None if rule is None else rule[1],
+            "rule_action": None if rule is None else rule[0],
+            "rule_table_reviewed": bool(table.reviewed),
+        }
+    # the boundary of a file the Owner edits: anything it raises gives the all-null playbook (docstring)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "decision table of category %s unusable for the analysis panel: %s",
+            category,
+            type(exc).__name__,
+        )
         return nothing
-    if table is None:
-        return nothing
-    try:
-        rule = apply_table(table, facts)
-    except (TypeError, ValueError):  # a stored fact the table cannot compare: no rule, not an error
-        rule = None
-    return {
-        "name": table.playbook,
-        "rule_id": None if rule is None else rule[1],
-        "rule_action": None if rule is None else rule[0],
-    }
 
 
 # ── the highlights ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -531,20 +562,36 @@ def _highlights(
 # ── the technical figures ───────────────────────────────────────────────────────────────────────────────────────
 
 
-def _cost(value: Any) -> float | None:
+def _cost(value: Any) -> Decimal | None:
+    """A cost as an exact `Decimal` (`llm_runs.cost_usd` is `numeric`), else None: a bool, a string, NaN and an
+    infinity are not a cost."""
     if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
         return None
-    number = float(value)
-    return number if math.isfinite(number) else None
+    number = Decimal(repr(value)) if isinstance(value, float) else Decimal(value)
+    return number if number.is_finite() else None
+
+
+def _sum_counts(first: Any, second: Any) -> int | None:
+    """The sum of two whole numbers (tokens, milliseconds), None only when neither row has one."""
+    a, b = _int_or_none(first), _int_or_none(second)
+    return None if a is None and b is None else (a or 0) + (b or 0)
+
+
+def _sum_cost(first: Any, second: Any) -> float | None:
+    """The sum of two costs, added exactly and served as a float, None only when neither row has one."""
+    a, b = _cost(first), _cost(second)
+    return None if a is None and b is None else float((a or Decimal(0)) + (b or Decimal(0)))
 
 
 def _tech(run: StoredRun, gate: Mapping[str, Any], mitre_ids: Sequence[Any]) -> dict[str, Any]:
-    """What the run cost and when it ran, and the alert's MITRE ids. No model id."""
+    """What the whole analysis cost and when it ran, and the alert's MITRE ids. Tokens, time and cost are the SUM of
+    the run's proposer row and its verifier row (the one whose `gate_result.proposer_run_id` names the run), a figure
+    being None only when neither row has it. No model id."""
     return {
-        "input_tokens": _int_or_none(run.input_tokens),
-        "output_tokens": _int_or_none(run.output_tokens),
-        "latency_ms": _int_or_none(run.latency_ms),
-        "cost_usd": _cost(run.cost_usd),
+        "input_tokens": _sum_counts(run.input_tokens, run.verifier_input_tokens),
+        "output_tokens": _sum_counts(run.output_tokens, run.verifier_output_tokens),
+        "latency_ms": _sum_counts(run.latency_ms, run.verifier_latency_ms),
+        "cost_usd": _sum_cost(run.cost_usd, run.verifier_cost_usd),
         "analysed_at": run.created_at,
         "mitre_ids": [item for item in mitre_ids if isinstance(item, str)],
         "correlated_at_analysis": _int_or_none(

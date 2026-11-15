@@ -15,6 +15,7 @@ the RAG default of DEC-219 applied to, that none of the model's own answer is se
 from __future__ import annotations
 
 import copy
+import dataclasses
 import datetime as dt
 import decimal
 import itertools
@@ -23,7 +24,7 @@ import pytest
 from app.kb.lookup import get_decision_table
 from app.llm import rag_view, verdicts
 from app.rag.failures import FAILURE_KINDS
-from app.tier1 import analysis
+from app.tier1 import analysis, queue
 
 NOW = dt.datetime(2026, 11, 15, 9, 30, tzinfo=dt.UTC)
 
@@ -132,6 +133,10 @@ def _run(
         output_tokens=cols.get("output_tokens", 340),
         latency_ms=cols.get("latency_ms", 2100),
         cost_usd=cols.get("cost_usd", decimal.Decimal("0.01234")),
+        verifier_input_tokens=cols.get("verifier_input_tokens"),
+        verifier_output_tokens=cols.get("verifier_output_tokens"),
+        verifier_latency_ms=cols.get("verifier_latency_ms"),
+        verifier_cost_usd=cols.get("verifier_cost_usd"),
     )
 
 
@@ -651,7 +656,12 @@ def test_a_missing_or_garbled_gate_document_still_gives_an_analysis(gate):
     assert built["check_totals"] == {"passed": 0, "applicable": 0, "warnings": 0}
     assert built["facts"][0]["system"] is None
     assert built["history"] is None and built["rag"]["state"] == "no_lookup"
-    assert built["playbook"] == {"name": None, "rule_id": None, "rule_action": None}
+    assert built["playbook"] == {
+        "name": None,
+        "rule_id": None,
+        "rule_action": None,
+        "rule_table_reviewed": None,
+    }
 
 
 def test_the_totals_are_derived_from_the_rows_and_add_up():
@@ -890,6 +900,7 @@ def test_the_playbook_is_the_tables_and_the_rule_is_the_first_that_matches_the_r
         "name": "brute_force_v1",
         "rule_id": "bf-2",
         "rule_action": "true_positive",
+        "rule_table_reviewed": get_decision_table("brute_force").reviewed,
     }
 
 
@@ -907,6 +918,7 @@ def test_a_false_positive_rule_when_the_facts_fit_it():
         "name": "brute_force_v1",
         "rule_id": "bf-1",
         "rule_action": "false_positive",
+        "rule_table_reviewed": get_decision_table("brute_force").reviewed,
     }
 
 
@@ -927,10 +939,13 @@ def test_a_table_where_no_rule_matches_gives_the_name_and_no_rule():
 @pytest.mark.parametrize("category", ["unknown", "no_such_category", None, 7, "", "../x"])
 def test_a_category_with_no_table_gives_all_nulls(category):
     got = _build(_run(gate=_gate(facts={**FACTS, "category": category})))["playbook"]
-    assert got == {"name": None, "rule_id": None, "rule_action": None}
+    assert got == {"name": None, "rule_id": None, "rule_action": None, "rule_table_reviewed": None}
 
 
-def test_facts_that_make_a_rule_condition_raise_give_no_rule_not_an_error():
+def test_facts_that_make_a_rule_condition_raise_give_the_all_null_playbook_not_an_error():
+    """A stored fact the table cannot be compared with (`rule_level: "ten"` against `occurrence_lt: 50`) is a failure
+    of APPLYING the table: the playbook is all-null (follow-up E), and the rest of the analysis is intact.
+    """
     facts = {
         **FACTS,
         "rule_level": "ten",
@@ -938,8 +953,14 @@ def test_facts_that_make_a_rule_condition_raise_give_no_rule_not_an_error():
         "ioc_reputation": "clean",
         "severity": "medium",
     }
-    got = _build(_run(gate=_gate(facts=facts)))["playbook"]
-    assert got["name"] == "brute_force_v1"
+    built = _build(_run(gate=_gate(facts=facts)))
+    assert built["playbook"] == {
+        "name": None,
+        "rule_id": None,
+        "rule_action": None,
+        "rule_table_reviewed": None,
+    }
+    assert built["summary"] == TEXTS["summary"]
 
 
 # ── the highlights ──────────────────────────────────────────────────────────────────────────────
@@ -1160,19 +1181,53 @@ def test_the_highlights_are_deterministic():
 
 
 def test_a_highlight_is_never_built_from_the_models_words():
-    """The model's texts are not an input of the highlights: changing every one of them changes none."""
-    base = _build(_run(history=HISTORY, gate=_gate(facts={**FACTS, "severity": "critical"})))[
-        "highlights"
+    """Nothing the model wrote is an input of the highlights: its five texts, the whole raw answer the gate kept
+    (`proposer_raw`: texts, declared facts, reasons, the rule it cited) and the reasons that were stored change none
+    of them. (The system facts, the history, the RAG standing and the checks' outcomes do; they are held fixed.)
+    """
+    facts = {**FACTS, "severity": "critical", "identity_privileged": "true"}
+    base_run = _run(history=HISTORY, gate=_gate(facts=facts))
+    base = _build(base_run)["highlights"]
+    assert [row["code"] for row in base] == [
+        "history_incident",
+        "identity_privileged",
+        "severity_critical",
     ]
+
     texts = {
         k: "different " + k for k in ("summary", "reading_attack", "reading_benign", "would_change")
     }
+    other_reasons = [
+        {"claim": "another claim", "quote": "another quote", "source": "context"},
+        {"claim": "and another", "quote": "x", "source": "kb_playbook"},
+    ]
+    other_raw = {
+        **RAW,
+        **texts,
+        "next_checks": ["z"],
+        "reasons": other_reasons,
+        "confidence": "low",
+        "suggested_action": "false_positive",
+        "structured_basis": {
+            **BASIS,
+            "severity": "low",
+            "asset_criticality": "high",
+            "identity_privileged": "false",
+            "playbook_rule_applied": "bf-1",
+        },
+        "playbook_used": "some playbook",
+    }
     changed = _run(
-        result={**RAW, **texts, "next_checks": ["z"]},
+        result={**other_raw, "reasons": other_reasons[:1]},
         history=HISTORY,
-        gate=_gate(facts={**FACTS, "severity": "critical"}),
+        gate=_gate(facts=facts, proposer_raw=other_raw),
     )
     assert _build(changed)["highlights"] == base
+    # the control: the same change to a SYSTEM fact does change them
+    assert (
+        _build(_run(history=HISTORY, gate=_gate(facts={**facts, "severity": "low"})))["highlights"]
+        != base
+    )
 
 
 # ── the technical figures ───────────────────────────────────────────────────────────────────────
@@ -1299,10 +1354,12 @@ def test_for_such_a_run_the_summary_the_next_checks_the_reasons_and_the_rest_are
 
 
 def test_what_the_rule_applied_to_serves_is_the_same_whatever_the_model_answered():
-    """Nothing served may state or give away the model's own verdict or confidence for such a run. The two runs
-    below differ in everything the model's own answer touches - its verdict, its confidence, the rule's `changed`,
-    the verifier's answer and the step it flagged, the facts it declared, the readings it wrote - and agree on
-    everything else. The analyses must be identical."""
+    """One PAIR, not a proof. The two stored runs below differ in the fields listed here - the model's verdict and
+    confidence, the rule's `changed`, the verifier's answer and the step it flagged, the facts it declared, the
+    readings it wrote - and agree on everything else (the reasons, the summary, the playbook outcomes, step 4). Their
+    analyses are identical, so none of THOSE fields reaches the analysis. It says nothing about a field the pair
+    does not vary: the model's own words in the reasons and the summary are served by design, and what step 4 says
+    about the playbook rule is held by `test_served_playbook_rule.py`, which varies it."""
     tp_changed = _applied()
     fp_unchanged_raw = {
         **RAW,
@@ -1407,3 +1464,288 @@ def test_a_second_build_of_the_same_run_is_equal_and_a_new_object():
     assert first == second and first is not second
     first["checks"].append("x")
     assert _build(run)["checks"] != first["checks"]
+
+
+# ── follow-up B: tech covers the whole analysis (the proposer row plus its verifier row) ─────────
+
+_NULL_PLAYBOOK = {"name": None, "rule_id": None, "rule_action": None, "rule_table_reviewed": None}
+
+
+def _tech_of(**cols):
+    return _build(_run(**cols))["tech"]
+
+
+def test_the_figures_are_the_sum_of_the_proposer_row_and_its_verifier_row():
+    tech = _tech_of(
+        input_tokens=1200,
+        output_tokens=340,
+        latency_ms=2100,
+        cost_usd=decimal.Decimal("0.01234"),
+        verifier_input_tokens=300,
+        verifier_output_tokens=80,
+        verifier_latency_ms=900,
+        verifier_cost_usd=decimal.Decimal("0.0021"),
+    )
+    assert (tech["input_tokens"], tech["output_tokens"], tech["latency_ms"]) == (1500, 420, 3000)
+    assert tech["cost_usd"] == 0.01444 and isinstance(tech["cost_usd"], float)
+    assert list(tech) == [
+        "input_tokens",
+        "output_tokens",
+        "latency_ms",
+        "cost_usd",
+        "analysed_at",
+        "mitre_ids",
+        "correlated_at_analysis",
+    ]
+
+
+@pytest.mark.parametrize("field", ["input_tokens", "output_tokens", "latency_ms"])
+@pytest.mark.parametrize(
+    ("mine", "theirs", "expected"),
+    [
+        (5, 7, 12),
+        (5, None, 5),
+        (None, 7, 7),
+        (None, None, None),
+        (0, 0, 0),
+        (0, None, 0),
+        (None, 0, 0),
+    ],
+)
+def test_a_figure_is_none_only_when_both_rows_have_none(field, mine, theirs, expected):
+    cols = {"input_tokens": None, "output_tokens": None, "latency_ms": None, "cost_usd": None}
+    tech = _tech_of(**{**cols, field: mine, f"verifier_{field}": theirs})
+    assert tech[field] == expected
+    assert all(tech[other] is None for other in cols if other != field)
+
+
+@pytest.mark.parametrize(
+    ("mine", "theirs", "expected"),
+    [
+        (decimal.Decimal("0.5"), decimal.Decimal("0.25"), 0.75),
+        (decimal.Decimal("0.5"), None, 0.5),
+        (None, decimal.Decimal("0.25"), 0.25),
+        (None, None, None),
+        (decimal.Decimal(0), None, 0.0),
+    ],
+)
+def test_the_cost_follows_the_same_rule(mine, theirs, expected):
+    cols = {"input_tokens": None, "output_tokens": None, "latency_ms": None}
+    assert _tech_of(**cols, cost_usd=mine, verifier_cost_usd=theirs)["cost_usd"] == expected
+
+
+@pytest.mark.parametrize("junk", ["12", True, 1.5, [1]])
+def test_a_verifier_token_count_that_is_not_an_integer_counts_as_none(junk):
+    assert _tech_of(input_tokens=5, verifier_input_tokens=junk)["input_tokens"] == 5
+    assert _tech_of(input_tokens=None, verifier_input_tokens=junk)["input_tokens"] is None
+
+
+@pytest.mark.parametrize("junk", ["12", True, [1], float("nan"), float("inf"), {"a": 1}])
+def test_a_verifier_cost_that_is_not_a_finite_number_counts_as_none(junk):
+    assert _tech_of(cost_usd=decimal.Decimal("0.5"), verifier_cost_usd=junk)["cost_usd"] == 0.5
+    assert _tech_of(cost_usd=None, verifier_cost_usd=junk)["cost_usd"] is None
+
+
+def test_the_stored_run_has_no_model_column_for_the_verifier_either():
+    assert not any("model" in name for name in analysis.StoredRun.__dataclass_fields__)
+
+
+# ── follow-up C: the playbook says whether its table is signed ──────────────────────────────────
+
+
+def _table_with(monkeypatch, *, signed):
+    real = get_decision_table("brute_force")
+    table = dataclasses.replace(
+        real,
+        reviewed_by="the Owner" if signed else None,
+        reviewed_at="2026-11-01" if signed else None,
+    )
+    monkeypatch.setattr(analysis, "get_decision_table", lambda category: table)
+    return table
+
+
+@pytest.mark.parametrize("signed", [True, False])
+def test_the_playbook_carries_the_review_state_of_its_table_today(monkeypatch, signed):
+    _table_with(monkeypatch, signed=signed)
+    got = _build(_run())["playbook"]
+    assert got == {
+        "name": "brute_force_v1",
+        "rule_id": "bf-2",
+        "rule_action": "true_positive",
+        "rule_table_reviewed": signed,
+    }
+    assert isinstance(got["rule_table_reviewed"], bool)
+
+
+def test_a_table_with_no_matching_rule_still_says_whether_it_is_signed(monkeypatch):
+    _table_with(monkeypatch, signed=False)
+    facts = {
+        **FACTS,
+        "severity": "critical",
+        "rule_level": 3,
+        "ioc_reputation": "clean",
+        "asset_criticality": "high",
+    }
+    got = _build(_run(gate=_gate(facts=facts)))["playbook"]
+    assert (got["rule_id"], got["rule_table_reviewed"]) == (None, False)
+
+
+def test_no_table_gives_none_for_the_review_state():
+    got = _build(_run(gate=_gate(facts={**FACTS, "category": "unknown"})))["playbook"]
+    assert got["rule_table_reviewed"] is None
+
+
+# ── follow-up D: the reasons are capped like the suggestion's ───────────────────────────────────
+
+
+def _many(n):
+    return [{"claim": f"c{i}", "quote": f"q{i}", "source": "context"} for i in range(n)]
+
+
+def test_the_cap_is_ten_like_suggestion_reasons():
+    assert analysis.REASONS_SHOWN == 10
+    result = {**RAW, "reasons": _many(13)}
+    suggestion = queue._suggestion_of("r", result, _gate(), NOW)
+    assert len(suggestion.reasons) == analysis.REASONS_SHOWN
+
+
+def test_thirteen_reasons_serve_the_first_ten_with_their_flags():
+    raw = {**RAW, "reasons": _many(13)}
+    gate = _gate(
+        proposer_raw=raw,
+        dropped_reasons=[{"index": 3, "why": "empty_quote"}, {"index": 11, "why": "not_substring"}],
+    )
+    rows = _build(_run(result={**raw, "reasons": _many(10)}, gate=gate))["reasons"]
+    assert [r["claim"] for r in rows] == [f"c{i}" for i in range(10)]
+    assert [r["verified"] for r in rows] == [i != 3 for i in range(10)]
+    assert rows[3]["why"] == "empty_quote"
+
+
+def test_the_stored_survivors_are_capped_too_when_the_raw_reasons_are_gone():
+    result = {**RAW, "reasons": _many(13)}
+    rows = _build(_run(result=result, gate=_gate(proposer_raw=None)))["reasons"]
+    assert len(rows) == 10
+
+
+def test_the_cap_counts_the_first_ten_items_as_the_suggestion_does():
+    """`suggestion.reasons` takes the first ten items and then drops what is not an object: so does the analysis."""
+    raw = {**RAW, "reasons": ["junk", None, *_many(12)]}
+    rows = _build(_run(result=raw, gate=_gate(proposer_raw=raw)))["reasons"]
+    assert [r["claim"] for r in rows] == [f"c{i}" for i in range(8)]
+    suggestion = queue._suggestion_of("r", {**RAW, "reasons": raw["reasons"]}, _gate(), NOW)
+    assert [r["claim"] for r in suggestion.reasons] == [r["claim"] for r in rows]
+
+
+def test_ten_or_fewer_are_all_served():
+    for n in (0, 1, 10):
+        raw = {**RAW, "reasons": _many(n)}
+        assert len(_build(_run(result=raw, gate=_gate(proposer_raw=raw)))["reasons"]) == n
+
+
+# ── follow-up E: a decision table that cannot be read or applied never breaks the view ──────────
+
+
+def _boom(exc):
+    def reader(category):
+        raise exc
+
+    return reader
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        RuntimeError("boom"),
+        KeyError("k"),
+        AttributeError("a"),
+        IndexError("i"),
+        ZeroDivisionError(),
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad"),
+        OSError("disk"),
+        TypeError("t"),
+        ValueError("v"),
+        NotImplementedError("n"),
+    ],
+    ids=lambda e: type(e).__name__,
+)
+def test_a_decision_table_reader_that_raises_anything_gives_the_all_null_playbook(monkeypatch, exc):
+    monkeypatch.setattr(analysis, "get_decision_table", _boom(exc))
+    built = _build(_run())
+    assert built["playbook"] == _NULL_PLAYBOOK
+    assert built["summary"] == TEXTS["summary"] and len(built["checks"]) == 7  # the rest is intact
+
+
+def test_applying_a_table_that_raises_gives_the_all_null_playbook(monkeypatch):
+    def apply(table, facts):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(analysis, "apply_table", apply)
+    assert _build(_run())["playbook"] == _NULL_PLAYBOOK
+
+
+def test_a_table_whose_review_state_cannot_be_read_gives_the_all_null_playbook(monkeypatch):
+    class Odd:
+        playbook = "x"
+        rules = ()
+
+        @property
+        def reviewed(self):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(analysis, "get_decision_table", lambda category: Odd())
+    monkeypatch.setattr(analysis, "apply_table", lambda table, facts: None)
+    assert _build(_run())["playbook"] == _NULL_PLAYBOOK
+
+
+def _kb_tree(tmp_path, table_text, playbook_text="# `brute_force` `brute_force_v1`\n"):
+    (tmp_path / "decision_tables").mkdir()
+    (tmp_path / "playbooks").mkdir()
+    (tmp_path / "decision_tables" / "brute_force.yaml").write_text(table_text, "utf-8")
+    (tmp_path / "playbooks" / "brute_force.md").write_text(playbook_text, "utf-8")
+    real = analysis.get_decision_table
+    return lambda category: real(category, root=tmp_path)
+
+
+def test_a_rules_value_that_is_not_a_list_raises_a_plain_type_error_in_the_reader_and_not_in_the_view(
+    monkeypatch, tmp_path
+):
+    """The reviewer's case: `rules: 5` makes `kb.lookup.get_decision_table` raise a plain `TypeError`, not its own
+    `DecisionTableError`. The view must not."""
+    reader = _kb_tree(tmp_path, "category: brute_force\nplaybook: brute_force_v1\nrules: 5\n")
+    with pytest.raises(TypeError):
+        reader("brute_force")
+    monkeypatch.setattr(analysis, "get_decision_table", reader)
+    assert _build(_run())["playbook"] == _NULL_PLAYBOOK
+
+
+def test_an_empty_playbook_file_raises_in_the_reader_and_not_in_the_view(monkeypatch, tmp_path):
+    reader = _kb_tree(tmp_path, "category: brute_force\nplaybook: x\nrules: []\n", playbook_text="")
+    with pytest.raises(IndexError):
+        reader("brute_force")
+    monkeypatch.setattr(analysis, "get_decision_table", reader)
+    assert _build(_run())["playbook"] == _NULL_PLAYBOOK
+
+
+@pytest.mark.parametrize(
+    "table_text",
+    [
+        "category: [unclosed\n",
+        "- a\n- b\n",
+        "",
+        "category: brute_force\nplaybook: brute_force_v1\nrules: oops\n",
+    ],
+    ids=["yaml_syntax", "top_level_list", "empty", "rules_is_a_string"],
+)
+def test_other_malformed_tables_give_the_all_null_playbook(monkeypatch, tmp_path, table_text):
+    reader = _kb_tree(tmp_path, table_text)
+    monkeypatch.setattr(analysis, "get_decision_table", reader)
+    assert _build(_run())["playbook"] == _NULL_PLAYBOOK
+
+
+def test_the_failure_is_logged_by_type_and_category_only(monkeypatch, caplog):
+    monkeypatch.setattr(analysis, "get_decision_table", _boom(RuntimeError("SECRET-PATH-OR-TEXT")))
+    with caplog.at_level("WARNING", logger=analysis.logger.name):
+        _build(_run())
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert "RuntimeError" in messages and "brute_force" in messages
+    assert "SECRET-PATH-OR-TEXT" not in messages
