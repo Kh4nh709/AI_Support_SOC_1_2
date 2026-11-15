@@ -123,7 +123,7 @@ from app.infra import config, settings
 from app.infra.db import raise_idle_timeout
 from app.infra.errors import PermanentError
 from app.infra.jobs import Job, Reschedule
-from app.llm import schemas
+from app.llm import results, schemas
 from app.llm.adapter import (
     DeepSeekAdapter,
     LLMBudgetExceeded,
@@ -306,6 +306,15 @@ def _inventory_hostnames(conn: psycopg.Connection) -> set[str]:
     return {name for (name,) in conn.execute("SELECT hostname FROM assets LIMIT 10000") if name}
 
 
+def _ai_text(pipeline: str, result: Any) -> str:
+    """A stored ① (`triage`) or ② (`investigate`) answer as the text of an `ai_texts` block. DEC-221: it goes in
+    its version 3 form (`llm.results`), so the fields the model wrote for the analyst in version 4 (`summary`,
+    `reading_attack`, `reading_benign`, `would_change`, `next_checks`; `timeline`, `scope`, a hypothesis's
+    `likelihood`) are never fed into a prompt; a version 3 run's text is what it was."""
+    cut = results.triage_v3_view if pipeline == "triage" else results.investigate_v3_view
+    return json.dumps(cut(result), ensure_ascii=False, sort_keys=True)
+
+
 def _latest_result(
     conn: psycopg.Connection, pipeline: str, subject_type: str, role: str, subject_id: str
 ) -> list[str]:
@@ -314,7 +323,7 @@ def _latest_result(
         " AND subject_id = %s AND result IS NOT NULL ORDER BY created_at DESC, run_id DESC LIMIT 1",
         (pipeline, subject_type, role, subject_id),
     ).fetchone()
-    return [] if row is None else [json.dumps(row[0], ensure_ascii=False, sort_keys=True)]
+    return [] if row is None else [_ai_text(pipeline, row[0])]
 
 
 def _texts(values: Sequence[Any]) -> tuple[str, ...]:

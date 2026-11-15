@@ -58,6 +58,7 @@ from app.domain.correlation import _STATUS_PREDICATE, _WINDOW_PREDICATE, RECEIVE
 from app.domain.correlation import _params as _correlation_params
 from app.infra import config
 from app.kb.lookup import get_playbook
+from app.llm import results
 from app.llm.builder import (
     HEADING_LEARNED,
     SENTENCE_ABSENT,
@@ -1293,6 +1294,9 @@ def _block8_notes_and_previous(
     parts.append(HEADING_PREVIOUS_RUN)
     if previous_run is not None:
         _run_id, result, created_at = previous_run
+        # DEC-221: the previous answer goes back in its `investigate_v3` form, so the fields the model wrote for
+        # the analyst in `investigate_v4` (`timeline`, `scope`, `likelihood`, a step's `priority`) never do
+        result = results.investigate_v3_view(result)
         body = f"{_iso(created_at)}\n{json.dumps(result, ensure_ascii=False, sort_keys=True)}"
         # Injection accumulating across rounds (docs/phase-7-tier2.md:250): a previous ②
         # result that was itself injected must not re-enter the next prompt unwrapped.

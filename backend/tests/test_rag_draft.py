@@ -53,7 +53,13 @@ from app.rag.subject import Subject
 from app.rag.tags import load_tags
 from app.security import linter
 
-from tests.fakes.llm import FakeLLM
+from tests.fakes.llm import (
+    INVESTIGATE_V3_OK,
+    INVESTIGATE_V4_OK,
+    TRIAGE_V3_TRUE_POSITIVE,
+    TRIAGE_V4_TRUE_POSITIVE,
+    FakeLLM,
+)
 from tests.rag_data import add_alert, add_case, add_entry, add_user
 
 DESCRIPTION = "Port Scan: External Host Probing Many Ports (pfSense)"
@@ -1312,6 +1318,29 @@ def test_the_ai_text_of_an_alert_is_the_latest_proposer_result_only(db) -> None:
     )
     (ai,) = draft.source_record(db, Subject("alert", "da-1")).ai_texts
     assert json.loads(ai) == {"suggested_action": "true_positive", "confidence": "high"}
+
+
+@db_marked
+def test_the_ai_text_of_a_version_4_run_is_its_version_3_form_never_the_new_fields(db) -> None:
+    """DEC-221 (AP-T1): the five fields ① writes for the analyst in `triage_v4` are the model's words about
+    untrusted data and are never fed back into a prompt; the draft prompt carries what a version 3 run held.
+    """
+    decided_alert(db)
+    proposer_result(db, "da-1", **TRIAGE_V4_TRUE_POSITIVE)
+    (ai,) = draft.source_record(db, Subject("alert", "da-1")).ai_texts
+    assert json.loads(ai) == TRIAGE_V3_TRUE_POSITIVE
+    for key in ("summary", "reading_attack", "reading_benign", "would_change", "next_checks"):
+        assert key not in ai
+
+
+@db_marked
+def test_the_ai_text_of_a_version_4_case_run_is_its_version_3_form(db) -> None:
+    case_id = concluded_case(db, status="confirmed_incident", heads=("dc-1",))
+    investigator_result(db, case_id, **INVESTIGATE_V4_OK)
+    (ai,) = draft.source_record(db, Subject("case", case_id)).ai_texts
+    assert json.loads(ai) == INVESTIGATE_V3_OK
+    for key in ("timeline", "scope", "likelihood", "priority"):
+        assert key not in ai
 
 
 @db_marked
