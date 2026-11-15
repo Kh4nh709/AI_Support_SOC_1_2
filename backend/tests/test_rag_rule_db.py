@@ -227,12 +227,8 @@ def test_the_alert_view_serves_the_verdict_it_ended_with_and_no_confidence(db, r
     assert suggestion["gate"]["proposed_verdict"] == FP
     assert suggestion["gate"]["final_verdict"] == FP
     assert suggestion["gate"]["forced"] is False
-    assert suggestion["gate"]["rag_rule"] == {
-        "threshold": 80,
-        "best_pct": 62,
-        "applied": True,
-        "changed": True,
-    }
+    # `{threshold, best_pct, applied}`: the stored `changed` says what the model answered, so it is not served
+    assert suggestion["gate"]["rag_rule"] == {"threshold": 80, "best_pct": 62, "applied": True}
     assert view["rag"]["best_pct"] == 62
 
 
@@ -262,8 +258,11 @@ def test_a_run_the_rule_applied_to_without_changing_it_is_served_the_same(db, ru
 
     assert row["proposed_action"] == FP and row["confidence"] is None
     assert view["proposed_action"] == FP and view["suggestion"]["confidence"] is None
-    assert view["suggestion"]["gate"]["rag_rule"]["changed"] is False
-    assert view["suggestion"]["gate"]["rag_rule"]["applied"] is True
+    assert view["suggestion"]["gate"]["rag_rule"] == {
+        "threshold": 80,
+        "best_pct": 62,
+        "applied": True,
+    }
 
 
 def test_a_run_the_rule_did_not_apply_to_is_served_the_models_answer_and_confidence(
@@ -321,6 +320,78 @@ def test_decide_records_the_verdict_it_ended_with_and_no_confidence(db) -> None:
     assert payload["llm_run_id"] == run_id
     stored = db.execute("SELECT result->>'confidence' FROM llm_runs WHERE run_id = %s", (run_id,))
     assert stored.fetchone()[0] == "high"  # `llm_runs` is as it was written
+
+
+# ── nothing served gives the model's answer away (fix round 1) ──────────────────────────────────
+
+#: The verifier answers `needs_review`: step 6 flags the run, `verifier_verdict` is stored, and `held_by` would
+#: say `verifier_disagrees` - which, for a run the rule applied to, would tell that the model's verdict was not
+#: `false_positive` (the verifier was sent the model's own verdict).
+VERIFIER_DISAGREES = {"agree": False, "structured_only_verdict": "needs_review", "reason": "no"}
+
+
+def test_an_applied_run_is_served_no_verifier_verdict_and_no_verifier_disagrees(
+    db, rule_on
+) -> None:
+    alert_id = _with_lookup(db, 0.62)
+    run_triage_job(db, _job(alert_id), adapter=_model(verifier=VERIFIER_DISAGREES))
+
+    row = _queue_row(db, alert_id)
+    view = get_alert_view(db, alert_id)
+
+    assert "verifier_disagrees" not in row["held_by"]
+    assert "verifier_disagrees" not in view["held_by"]
+    assert row["held_by"] == view["held_by"]
+    assert view["suggestion"]["gate"]["verifier_verdict"] is None
+    assert "changed" not in view["suggestion"]["gate"]["rag_rule"]
+
+
+def test_the_stored_gate_result_keeps_what_serving_withholds(db, rule_on) -> None:
+    alert_id = _with_lookup(db, 0.62)
+    run_triage_job(db, _job(alert_id), adapter=_model(verifier=VERIFIER_DISAGREES))
+    before = _stored(db, alert_id)
+
+    get_alert_view(db, alert_id)
+    _queue_row(db, alert_id)
+
+    after = _stored(db, alert_id)
+    assert after == before
+    gate_result = after["gate_result"]
+    assert gate_result["rag_rule"]["changed"] is True
+    assert gate_result["verifier_verdict"] == "needs_review"
+    assert gate_result["steps"]["6"] == "disagree" and "step6" in gate_result["flagged_by"]
+
+
+def test_a_run_the_rule_did_not_apply_to_is_served_the_verifier_verdict_and_the_disagreement(
+    db, rule_on
+) -> None:
+    alert_id = _with_lookup(db, 0.91)
+    run_triage_job(db, _job(alert_id), adapter=_model(verifier=VERIFIER_DISAGREES))
+
+    row = _queue_row(db, alert_id)
+    view = get_alert_view(db, alert_id)
+
+    assert "verifier_disagrees" in row["held_by"] and "verifier_disagrees" in view["held_by"]
+    assert view["suggestion"]["gate"]["verifier_verdict"] == "needs_review"
+    assert view["suggestion"]["gate"]["rag_rule"] == {
+        "threshold": 80,
+        "best_pct": 91,
+        "applied": False,
+    }
+
+
+def test_an_unusable_verifier_answer_stays_in_held_by_for_an_applied_run(db, rule_on) -> None:
+    alert_id = _with_lookup(db, 0.62)
+    not_the_verifiers_shape = {"agree": "yes"}  # twice: the first call and the repair round
+    adapter = _RecordingLLM(
+        responses=[TRIAGE_V3_TRUE_POSITIVE, not_the_verifiers_shape, not_the_verifiers_shape]
+    )
+    run_triage_job(db, _job(alert_id), adapter=adapter)
+
+    row = _queue_row(db, alert_id)
+    view = get_alert_view(db, alert_id)
+
+    assert "verifier_invalid" in row["held_by"] and "verifier_invalid" in view["held_by"]
 
 
 # ── the blind arm sees none of it ────────────────────────────────────────────────────────────────

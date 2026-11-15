@@ -34,7 +34,9 @@ evaluation: the same statements, the same prompt.
 DEC-217 (BV-T1): ① gives only `true_positive` or `false_positive`. The gate's checks (steps 2, 3, 4 and 6)
 are warnings: they flag the run (`TriageEvaluation.flagged_by`, `gate_result.flagged_by`) and the verdict
 stored in `result.suggested_action`, `gate_result.final_verdict` and `TriageEvaluation.final_verdict` is the
-model's own answer. Nothing is forced, so `forced_by` is `()` for a new run and `llm.gate_forced` is not
+verdict ① ended with: the model's own answer, except where the RAG rule of DEC-219 below replaced it (the model's
+own answer is always `gate_result.proposed_verdict` and `TriageEvaluation.proposed_verdict`). Nothing is forced,
+so `forced_by` is `()` for a new run and `llm.gate_forced` is not
 written (the event type stays for old rows); `triage.suggested` keeps `forced` (now always false) and gains
 `flagged_by`.
 
@@ -563,7 +565,8 @@ class TriageEvaluation:
     "verifier_cap" / "verifier_unavailable" / "verifier_transient" — the same from the verifier
     call, after a schema-valid proposal.
 
-    `final_verdict` (the gated `suggested_action`: the model's own answer, DEC-217) and `gate_result` exist
+    `final_verdict` (the gated `suggested_action`: the verdict ① ended with, which is the model's own answer
+    unless the RAG rule replaced it, DEC-219; the model's own answer is `proposed_verdict`) and `gate_result` exist
     only for "ok". `proposed_verdict`, `reasons_kept`, `reasons_dropped`, `flagged_by` and
     `verifier_verdict` are read from the gate state whenever the gate started (steps
     4-7 never change either reason list, so the two counts are step 3's). `flagged_by` names the steps whose

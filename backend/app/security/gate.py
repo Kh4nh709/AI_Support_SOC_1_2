@@ -51,9 +51,8 @@ class GateState:
     facts: Mapping[str, Any]  # planning decision 7
     blocks: Mapping[str, Block]  # BuiltPrompt.block_index
     proposed_verdict: str
-    verdict: (
-        str  # ①'s verdict: the model's answer, which only `step3r_rag_rule` (DEC-219) can replace
-    )
+    # ①'s verdict: the model's answer, which only `step3r_rag_rule` (DEC-219) can replace
+    verdict: str
     reasons: list[dict]  # surviving reasons
     steps: dict[str, str]
     flagged_by: list[str]  # the steps whose check failed, in step order

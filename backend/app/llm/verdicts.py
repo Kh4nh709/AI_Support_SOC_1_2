@@ -9,8 +9,9 @@ verdict of its own any more - a failed check only flags the run (``gate_result.f
 warning beside the verdict) - so what ``security/output_guard.py`` lets through is the model's answer, with
 one exception (DEC-219): below ``TRIAGE_RAG_FP_BELOW_PCT`` ``false_positive`` is ①'s default answer
 (``gate_result.rag_rule``), the model's own answer staying in ``gate_result.proposed_verdict``. For such a run
-Tier 1 is served the verdict ① ended with, and no confidence: ``rag_rule_applied``,
-``served_proposed_action`` and ``served_confidence`` below.
+Tier 1 is served the verdict ① ended with, and no confidence, and nothing that would let a reader work the
+model's answer out: ``rag_rule_applied``, ``served_proposed_action``, ``served_confidence``,
+``served_verifier_verdict`` and ``served_held_reasons`` below.
 
 ``STORED_ACTIONS`` is what a STORED ① row may hold: the two, plus ``needs_review``, which the gate wrote
 before DEC-217 (steps 2, 3, 4 and 6 forced it; the model's own definite answer is kept beside it as
@@ -171,6 +172,28 @@ def served_proposed_action(gate_result: Mapping[str, Any] | None, served: str | 
     if rag_rule_applied(gate_result):
         return served if isinstance(served, str) and served in MODEL_ACTIONS else None
     return proposed_action(gate_result)
+
+
+def served_held_reasons(gate_result: Mapping[str, Any] | None) -> list[str]:
+    """``held_reasons`` as the Tier 1 API serves it (the queue row's and the alert view's ``held_by``). For a run
+    the RAG rule applied to (``rag_rule_applied``, DEC-219) the verifier was sent the model's own verdict and step
+    6 compared its answer with that, not with the verdict ① ended with; ``verifier_disagrees`` would therefore
+    tell a reader the model's answer, so it is left out. Every other code stays, ``verifier_invalid`` (the
+    verifier's answer was unusable: it says nothing about any verdict) included. For every other run this is
+    ``held_reasons`` exactly. ``held_reasons`` itself is not changed: it reads stored documents in general (the
+    stored ``flagged_by`` and ``steps["6"]`` keep the disagreement)."""
+    reasons = held_reasons(gate_result)
+    if rag_rule_applied(gate_result):
+        return [reason for reason in reasons if reason != _VERIFIER_DISAGREES]
+    return reasons
+
+
+def served_verifier_verdict(verifier_verdict: Any, gate_result: Mapping[str, Any] | None) -> Any:
+    """``gate_result.verifier_verdict`` as the Tier 1 API serves it (``Suggestion.gate.verifier_verdict``). For a
+    run the RAG rule applied to the verifier was sent the model's own verdict, so its answer (and whether it
+    agreed) gives that verdict away: ``None``. For every other run ``verifier_verdict`` as stored. The stored
+    document keeps the verifier's verdict."""
+    return None if rag_rule_applied(gate_result) else verifier_verdict
 
 
 def served_confidence(confidence: Any, gate_result: Mapping[str, Any] | None) -> Any:

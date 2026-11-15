@@ -7,7 +7,7 @@ alert read, the correlation read, the idle-timeout statement, `llm_runs.write_ru
 `write_event`) and by two stubs for the RAG: the lookup's status and material (`lookup_failure`,
 `lookup_material`) and the stored `matches` of the lookup the prompt held (`_lookup_matches`). The database-backed
 counterpart, which stores real rows and reads them back through the alert page's own statement, is
-`test_tier1_rag_rule_db.py` (marked `db`; it cannot run on a host whose `TEST_DATABASE_URL` does not
+`test_rag_rule_db.py` (marked `db`; it cannot run on a host whose `TEST_DATABASE_URL` does not
 authenticate).
 
 The central claim of the card: `best_pct` is the number the alert page shows for the same stored run. The page
@@ -461,12 +461,48 @@ class TestNoNumberNoRule:
 
     def test_the_token_budget_dropped_the_learned_section(self, world):
         """A budget so small that every cut is taken: the entries go first (`learned_entries_dropped`), the
-        history next. The run holds no lookup then, or no entries; the page shows no number, and neither does
-        the rule, whatever the stored matches say."""
+        history next. The run holds no lookup then (`rag_lookup_id` is None: the short-circuit branch); the page
+        shows no number, and neither does the rule, whatever the stored matches say."""
         world.run(_tp_model(), PROMPT_TOTAL_BUDGET_TOKENS="1")
 
         self._assert_the_models_verdict_stays(world)
         assert "learned_entries_dropped" in world.proposer["citation_warnings"]
+        assert world.proposer["rag_lookup_id"] is None and world.match_reads == []
+
+    def test_the_token_budget_dropped_the_entries_and_kept_the_history(self, world):
+        """The other branch: a budget one token under the full prompt takes only the first cut, the entries
+        (`learned_entries_dropped`). The history stays, so the run still names its lookup
+        (`rag_lookup_id` is set), the job READS that lookup's stored matches (a 62 % match is there) and the
+        warning alone gives no number - the page's own rule (`rag_view`), so the page shows none either.
+        """
+        full = evaluate_alert(
+            None,
+            _ALERT_ID,
+            adapter=_tp_model(),
+            cfg=config.load(),
+            switches=EvalSwitches(rag=True),
+        )
+        world.match_reads.clear()  # that evaluation read the matches once; this is about the job below
+
+        world.run(_tp_model(), PROMPT_TOTAL_BUDGET_TOKENS=str(full.built.estimated_tokens - 1))
+
+        warnings = world.proposer["citation_warnings"]
+        assert "learned_entries_dropped" in warnings and "learned_history_dropped" not in warnings
+        assert world.proposer["rag_lookup_id"] == LOOKUP_ID  # the history is in the prompt
+        assert "key_name: rule_id" in world.proposer["user_message"]
+        assert ENTRY_TEXT not in world.proposer["user_message"]
+        assert world.match_reads == [LOOKUP_ID]  # it read the matches, and the warning decided
+        assert world.matches == [_match(0.62)]  # ... which held a 62 % match
+        self._assert_the_models_verdict_stays(world)
+        assert (
+            _what_the_page_shows(
+                result=world.proposer["result"],
+                gate_result=world.proposer["gate_result"],
+                warnings=warnings,
+                matches=world.matches,
+            )
+            is None
+        )
 
     def test_a_response_with_no_lookup_in_the_prompt_reads_no_matches(self, world):
         world.material = _material(entries=False, history=None)  # "nothing found": no number either
