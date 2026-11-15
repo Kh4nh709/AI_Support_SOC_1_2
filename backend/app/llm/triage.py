@@ -110,6 +110,11 @@ from app.security import linter, wrap
 TRIAGE_TEMPLATE = Path(__file__).resolve().parent / "templates" / "triage_system.txt"
 VERIFIER_TEMPLATE = Path(__file__).resolve().parent / "templates" / "verifier_system.txt"
 
+#: The schema the proposer is asked for and held to (`llm/templates/output_schemas.json`). DEC-221 (AP-T1): `triage_v4`,
+#: `triage_v3` plus the five fields the model writes for the analyst. `security/gate.py`'s step 1 names the same
+#: schema (it cannot import this module; a test ties the two) and a stored run is read as the version it was written in.
+PROPOSER_SCHEMA = "triage_v4"
+
 #: Phase-5's caps: ≤ 20 grouped correlation rows, ≤ 5 representative alerts, each
 #: sample's raw_log cut to 2 KB with the marker inside the block (design note 2).
 MAX_CORRELATION_ROWS = 20
@@ -565,7 +570,7 @@ def build_proposer_prompt(
     with `learned=None`), `learned_used` is False, and the warning `rag_not_applied:<kind>`
     (`builder.rag_not_applied_warning`) is added after the section warnings and before the budget cuts.
     """
-    system = _system_prompt(TRIAGE_TEMPLATE, "triage_v3")
+    system = _system_prompt(TRIAGE_TEMPLATE, PROPOSER_SCHEMA)
     notice = [rag_not_applied_warning(rag_not_applied)] if rag_not_applied is not None else []
     if notice:
         learned = None
@@ -800,7 +805,7 @@ def _repair_vocabulary(*names: str) -> tuple[dict[str, str], frozenset[str]]:
     return paths, frozenset(constants)
 
 
-_SCHEMA_PATHS, REPAIR_CONSTANTS = _repair_vocabulary("triage_v3", "verifier_v2")
+_SCHEMA_PATHS, REPAIR_CONSTANTS = _repair_vocabulary(PROPOSER_SCHEMA, "verifier_v2")
 
 
 def _object_prefix(path: str) -> str:
@@ -937,13 +942,13 @@ def _call(
 
 
 def propose(adapter: Any, built: BuiltTriagePrompt, *, cfg: Config) -> Proposal:
-    """The ① proposer call against `triage_v3` with `cfg.LLM_MODEL_PROPOSER`."""
+    """The ① proposer call against `triage_v4` (`PROPOSER_SCHEMA`) with `cfg.LLM_MODEL_PROPOSER`."""
     return _call(
         adapter,
         built,
-        schema_name="triage_v3",
+        schema_name=PROPOSER_SCHEMA,
         model=cfg.LLM_MODEL_PROPOSER,
-        response_format=_response_format(cfg, "triage_v3"),
+        response_format=_response_format(cfg, PROPOSER_SCHEMA),
     )
 
 

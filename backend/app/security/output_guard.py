@@ -1,9 +1,15 @@
 """Unconditionally enforce recommend-only output before a model result reaches an analyst.
 
-`security` may import only `infra` (G1), so the closed sets below are §6.2's `triage_v3`
+`security` may import only `infra` (G1), so the closed sets below are §6.2's `triage_v4`
 vocabulary transcribed here, not imported from `app.llm.schemas`. `enforce()` is the step-7
 re-check: it never adds an action and never rewrites text — ① has no actions to strip, and the
-legacy output_guard's "force `requires_human_approval`" has no counterpart in `triage_v3`.
+legacy output_guard's "force `requires_human_approval`" has no counterpart in `triage_v4`.
+
+DEC-221 (AP-T1): `triage_v4` is `triage_v3` plus five fields the model writes for the analyst. They are free text,
+so there is no vocabulary to check: `enforce()` carries them through as they are and checks their TYPES - four
+strings (`summary`, `reading_attack`, `reading_benign`, `would_change`) and `next_checks`, a non-empty list of
+strings. A missing one, or one of the wrong type, is an `OutputGuardError` like any other violation: step 1 has
+already refused it, so this is the second line.
 `SUGGESTED_ACTIONS` is the vocabulary AFTER the gate (`llm/verdicts.py`'s `GATED_ACTIONS`): the
 model's `false_positive | true_positive`, nothing else (DEC-217: no step sets a verdict of its own, so a
 `needs_review` can no longer leave the gate).
@@ -39,17 +45,22 @@ STRUCTURED_BASIS_FIELDS = (
     "playbook_rule_applied",
 )
 REASON_FIELDS = ("claim", "quote", "source")
+#: The fields `triage_v4` added to `triage_v3` (DEC-221): four strings and a non-empty list of strings.
+ANALYST_TEXT_FIELDS = ("summary", "reading_attack", "reading_benign", "would_change")
+ANALYST_LIST_FIELD = "next_checks"
 TOP_LEVEL_FIELDS = (
     "suggested_action",
     "confidence",
     "structured_basis",
     "reasons",
     "playbook_used",
+    *ANALYST_TEXT_FIELDS,
+    ANALYST_LIST_FIELD,
 )
 
 
 class OutputGuardError(ValueError):
-    """Raised when a `triage_v3`-shaped result violates §6.2's closed sets after the gate."""
+    """Raised when a `triage_v4`-shaped result violates §6.2's closed sets or types after the gate."""
 
 
 def _require(condition: bool, message: str) -> None:
@@ -94,8 +105,25 @@ def _enforce_reason(raw: Any) -> dict:
     return {field: raw[field] for field in REASON_FIELDS}
 
 
+def _enforce_analyst_fields(result: dict) -> dict:
+    """The five fields of `triage_v4` that are not in `triage_v3`, as they are: strings, and `next_checks` a
+    non-empty list of strings. Nothing is rewritten, trimmed or cut (the server cuts `next_checks` where it
+    serves it)."""
+    for field in ANALYST_TEXT_FIELDS:
+        _require(isinstance(result[field], str), f"{field}: expected string")
+    next_checks = result[ANALYST_LIST_FIELD]
+    _require(isinstance(next_checks, list), f"{ANALYST_LIST_FIELD}: expected array")
+    _require(len(next_checks) > 0, f"{ANALYST_LIST_FIELD}: expected non-empty array")
+    for item in next_checks:
+        _require(isinstance(item, str), f"{ANALYST_LIST_FIELD}[]: expected string")
+    return {
+        **{field: result[field] for field in ANALYST_TEXT_FIELDS},
+        ANALYST_LIST_FIELD: list(next_checks),
+    }
+
+
 def enforce(result: dict) -> dict:
-    """Re-check `result` (a `triage_v3`-shaped dict) against §6.2's closed sets, drop keys
+    """Re-check `result` (a `triage_v4`-shaped dict) against §6.2's closed sets and types, drop keys
     outside the schema, and return a fresh dict. Raises `OutputGuardError` on any violation —
     this should be impossible after step 1, and a test proves the guard is live by feeding it
     a crafted object directly."""
@@ -112,10 +140,12 @@ def enforce(result: dict) -> dict:
         playbook_used is None or isinstance(playbook_used, str),
         "playbook_used: expected string or null",
     )
+    analyst = _enforce_analyst_fields(result)
     return {
         "suggested_action": result["suggested_action"],
         "confidence": result["confidence"],
         "structured_basis": structured_basis,
         "reasons": reasons,
         "playbook_used": playbook_used,
+        **analyst,
     }

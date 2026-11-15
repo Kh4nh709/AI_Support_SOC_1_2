@@ -47,7 +47,7 @@ from app.tier1.triage import (
 )
 from psycopg import sql
 
-from tests.fakes.llm import VERIFIER_V2_AGREE, VERIFIER_V2_DISAGREE, FakeLLM
+from tests.fakes.llm import TRIAGE_V4_NEW_FIELDS, VERIFIER_V2_AGREE, VERIFIER_V2_DISAGREE, FakeLLM
 
 _DOC = json.loads((Path(__file__).parent / "fixtures" / "alert_40112.json").read_text("utf-8"))
 _CANONICAL = parse_wazuh_alert(_DOC).alert
@@ -110,7 +110,7 @@ def _proposal(
     basis: dict | None = None,
     reasons: list[dict] | None = None,
 ) -> dict:
-    """A schema-valid `triage_v3` answer whose `structured_basis` matches the seeded facts
+    """A schema-valid `triage_v4` answer whose `structured_basis` matches the seeded facts
     (gate step 2 passes) and whose reason quotes the raw log (step 3 keeps it)."""
     return {
         "suggested_action": action,
@@ -118,6 +118,7 @@ def _proposal(
         "structured_basis": {**(basis or _CANONICAL_BASIS), "playbook_rule_applied": rule},
         "reasons": reasons if reasons is not None else [dict(_GOOD_REASON)],
         "playbook_used": None,
+        **TRIAGE_V4_NEW_FIELDS,
     }
 
 
@@ -501,7 +502,7 @@ def test_override_template_changes_prompt_version_to_file_sha(db, cfg, tmp_path)
     assert system.removeprefix(template.read_text("utf-8")) == (
         deployed.built.prompt.system.removeprefix(deployed_text)
     )
-    assert "## Schema triage_v3" in system
+    assert "## Schema triage_v4" in system
     assert "## Schema verifier_v2" in llm.calls[1]["system"]  # the verifier keeps its own
     # and the user message is untouched (up to the per-build nonce)
     assert ev.built.prompt.user.replace(ev.built.prompt.nonce, "N") == (

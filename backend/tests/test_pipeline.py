@@ -44,7 +44,7 @@ from app.soar.pipeline import _suggestion_visible, _write_rejection_receipt, run
 from app.tier1.triage import run_triage_job
 from psycopg.types.json import Jsonb
 
-from tests.fakes.llm import TRIAGE_V2_FALSE_POSITIVE, FakeLLM
+from tests.fakes.llm import TRIAGE_V4_FALSE_POSITIVE, FakeLLM
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -1259,7 +1259,7 @@ class _FakeComplete(FakeLLM):
 def _false_positive_answer(*, ioc: str, asset: str, identity: str) -> dict:
     """① says `false_positive` under `sbf-1`; its `structured_basis` equals the facts of the alert
     (a mismatch flags the run at step 2 by itself) and it quotes the rule description."""
-    answer = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    answer = copy.deepcopy(TRIAGE_V4_FALSE_POSITIVE)
     answer["structured_basis"] = {
         "severity": "medium",
         "ioc_reputation": ioc,

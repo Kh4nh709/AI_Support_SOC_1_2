@@ -21,14 +21,14 @@ from app.llm.adapter import LLMBudgetExceeded, LLMResult
 from app.llm.triage import RESPONSE_FORMAT_FALLBACK
 from app.tier1.triage import run_triage_job
 
-from tests.fakes.llm import TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE
+from tests.fakes.llm import TRIAGE_V4_TRUE_POSITIVE, VERIFIER_V2_AGREE
 from tests.test_triage_job import _enable_llm, _job, _RecordingLLM, _seed_alert
 
 pytestmark = pytest.mark.db
 
-MISSPELT = copy.deepcopy(TRIAGE_V3_TRUE_POSITIVE)
+MISSPELT = copy.deepcopy(TRIAGE_V4_TRUE_POSITIVE)
 MISSPELT["reasones"] = MISSPELT.pop("reasons")
-WRONG_ENUM = {**TRIAGE_V3_TRUE_POSITIVE, "suggested_action": "maybe"}
+WRONG_ENUM = {**TRIAGE_V4_TRUE_POSITIVE, "suggested_action": "maybe"}
 
 
 class _FormatAwareLLM(_RecordingLLM):
@@ -86,12 +86,12 @@ def test_a_repaired_run_stores_step1_errors_and_a_run_valid_at_once_stores_none(
     run_triage_job(
         db,
         _job(repaired_id),
-        adapter=_FormatAwareLLM(responses=[MISSPELT, TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE]),
+        adapter=_FormatAwareLLM(responses=[MISSPELT, TRIAGE_V4_TRUE_POSITIVE, VERIFIER_V2_AGREE]),
     )
     run_triage_job(
         db,
         _job(plain_id),
-        adapter=_FormatAwareLLM(responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE]),
+        adapter=_FormatAwareLLM(responses=[TRIAGE_V4_TRUE_POSITIVE, VERIFIER_V2_AGREE]),
     )
 
     repaired_gate = _proposer(db, repaired_id)[0]
@@ -126,7 +126,7 @@ def test_a_fallback_puts_the_warning_in_the_proposer_rows_citation_warnings(
     monkeypatch.setenv("LLM_RESPONSE_FORMAT", "json_schema")
     alert_id = _seed_alert(db)
     fake = _FormatAwareLLM(
-        responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE], fall_back=fall_back
+        responses=[TRIAGE_V4_TRUE_POSITIVE, VERIFIER_V2_AGREE], fall_back=fall_back
     )
 
     run_triage_job(db, _job(alert_id), adapter=fake)
@@ -135,7 +135,7 @@ def test_a_fallback_puts_the_warning_in_the_proposer_rows_citation_warnings(
     assert warnings.count(RESPONSE_FORMAT_FALLBACK) == 1
     assert RESPONSE_FORMAT_FALLBACK not in (_verifier(db, alert_id)[1] or [])
     assert [c["response_format"]["json_schema"]["name"] for c in fake.calls] == [
-        "triage_v3",
+        "triage_v4",
         "verifier_v2",
     ]
 
@@ -148,10 +148,10 @@ def test_without_a_fallback_or_with_the_switch_off_there_is_no_warning(db, monke
     run_triage_job(
         db,
         _job(on_id),
-        adapter=_FormatAwareLLM(responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE]),
+        adapter=_FormatAwareLLM(responses=[TRIAGE_V4_TRUE_POSITIVE, VERIFIER_V2_AGREE]),
     )
     monkeypatch.delenv("LLM_RESPONSE_FORMAT")
-    off = _FormatAwareLLM(responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE], fall_back={0, 1})
+    off = _FormatAwareLLM(responses=[TRIAGE_V4_TRUE_POSITIVE, VERIFIER_V2_AGREE], fall_back={0, 1})
     run_triage_job(db, _job(off_id), adapter=off)
 
     assert RESPONSE_FORMAT_FALLBACK not in (_proposer(db, on_id)[1] or [])
@@ -163,7 +163,7 @@ def test_the_warning_survives_a_verifier_that_then_fails(db, monkeypatch):
     _enable_llm(monkeypatch)
     monkeypatch.setenv("LLM_RESPONSE_FORMAT", "json_schema")
     alert_id = _seed_alert(db)
-    fake = _FormatAwareLLM(responses=[TRIAGE_V3_TRUE_POSITIVE], fall_back={0}, fail_from=1)
+    fake = _FormatAwareLLM(responses=[TRIAGE_V4_TRUE_POSITIVE], fall_back={0}, fail_from=1)
 
     run_triage_job(db, _job(alert_id), adapter=fake)
 
@@ -176,7 +176,7 @@ def test_no_stored_message_is_in_a_prompt_the_rows_record(db, monkeypatch):
     _enable_llm(monkeypatch)
     monkeypatch.setenv("LLM_RESPONSE_FORMAT", "json_schema")
     alert_id = _seed_alert(db)
-    fake = _FormatAwareLLM(responses=[MISSPELT, TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE])
+    fake = _FormatAwareLLM(responses=[MISSPELT, TRIAGE_V4_TRUE_POSITIVE, VERIFIER_V2_AGREE])
 
     run_triage_job(db, _job(alert_id), adapter=fake)
 

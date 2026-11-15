@@ -29,7 +29,7 @@ from app.tier1 import queue
 from app.tier1.queue import get_alert_view
 from app.tier1.visibility import ANALYST_HIDE, LABELING_DENYLIST
 
-from tests.fakes.llm import TRIAGE_V2_FALSE_POSITIVE, VERIFIER_V2_DISAGREE
+from tests.fakes.llm import TRIAGE_V4_FALSE_POSITIVE, VERIFIER_V2_DISAGREE
 from tests.test_held_reasons import _blocks, _facts, _run
 from tests.test_queue import (
     GATE,
@@ -445,7 +445,7 @@ def test_a_real_gate_result_gives_the_row_and_the_view_the_same_held_by(db, veri
     """The same, with the gate_result the real gate writes (`gate.finish(state, None)` for an answer that
     did not parse; a disagreeing verifier for the other), so the stored shape is the one the projection reads.
     """
-    proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    proposal = copy.deepcopy(TRIAGE_V4_FALSE_POSITIVE)
     stored = _run(
         proposal,
         facts=_facts(proposal["structured_basis"]),

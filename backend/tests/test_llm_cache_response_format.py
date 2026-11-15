@@ -24,7 +24,7 @@ from app.llm import schemas
 from app.llm import triage as T
 from app.llm.adapter import LLMResult
 
-from tests.fakes.llm import TRIAGE_V3_TRUE_POSITIVE
+from tests.fakes.llm import TRIAGE_V4_TRUE_POSITIVE
 from tests.test_llm_cache import (
     MODEL,
     NONCE_A,
@@ -40,7 +40,7 @@ from tests.test_llm_cache import (
 from tests.test_llm_triage import _build, _cfg
 
 
-def _format(name: str = "triage_v3") -> dict:
+def _format(name: str = "triage_v4") -> dict:
     return {
         "type": "json_schema",
         "json_schema": {"name": name, "strict": True, "schema": schemas.json_schema(name)},
@@ -359,7 +359,7 @@ class TestACachedResultReportsTheFormatItWasMadeWith:
 
 class TestThroughProposeAndTheSwitch:
     def test_a_json_object_run_then_a_json_schema_run_are_two_measurements(self, tmp_path):
-        inner = ReportingLLM([TRIAGE_V3_TRUE_POSITIVE, TRIAGE_V3_TRUE_POSITIVE])
+        inner = ReportingLLM([TRIAGE_V4_TRUE_POSITIVE, TRIAGE_V4_TRUE_POSITIVE])
         cache = _cache(tmp_path, inner)
         built = _build()
 
@@ -373,7 +373,7 @@ class TestThroughProposeAndTheSwitch:
         assert replay.parsed == on.parsed and len(inner.calls) == 2  # and then it is a hit
 
     def test_a_replayed_fallback_is_still_a_fallback(self, tmp_path):
-        inner = ReportingLLM([TRIAGE_V3_TRUE_POSITIVE], reports=["json_object"])
+        inner = ReportingLLM([TRIAGE_V4_TRUE_POSITIVE], reports=["json_object"])
         cache = _cache(tmp_path, inner)
         cfg = _cfg(LLM_RESPONSE_FORMAT="json_schema")
 

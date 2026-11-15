@@ -39,7 +39,7 @@ from app.tier1.triage import run_triage_job
 from app.web import deps, main
 from fastapi.testclient import TestClient
 
-from tests.fakes.llm import TRIAGE_V2_FALSE_POSITIVE, FakeLLM
+from tests.fakes.llm import TRIAGE_V4_FALSE_POSITIVE, FakeLLM
 from tests.scratch_db import insert_user, scratch_database
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -100,7 +100,7 @@ def _answers() -> list[dict]:
     """① says `false_positive` under `sbf-1` on facts that are all "unknown" (what the pipeline
     wrote with enrichment off): step 4 flags it (DEC-217); the verifier answers `needs_review`, which step 6
     flags too."""
-    proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    proposal = copy.deepcopy(TRIAGE_V4_FALSE_POSITIVE)
     proposal["structured_basis"] = {
         "severity": "medium",
         "ioc_reputation": "skipped",

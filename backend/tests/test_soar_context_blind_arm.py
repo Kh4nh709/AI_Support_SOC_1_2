@@ -36,7 +36,7 @@ from app.tier1.triage import run_triage_job
 from app.web import deps, main
 from fastapi.testclient import TestClient
 
-from tests.fakes.llm import TRIAGE_V2_FALSE_POSITIVE, FakeLLM
+from tests.fakes.llm import TRIAGE_V4_FALSE_POSITIVE, FakeLLM
 from tests.scratch_db import insert_user, scratch_database
 from tests.soar_payloads import edit, receive_and_run, sc03, stream_config
 
@@ -96,7 +96,7 @@ class _FakeComplete(FakeLLM):
 def _answers() -> list[dict]:
     """① says `false_positive`, its `structured_basis` equal to the facts the payload gave (a `high`
     asset, a `clean` address, no known account); the verifier answers `needs_review`."""
-    proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    proposal = copy.deepcopy(TRIAGE_V4_FALSE_POSITIVE)
     proposal["structured_basis"] = {
         "severity": "high",
         "ioc_reputation": "clean",

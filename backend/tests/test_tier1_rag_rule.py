@@ -33,7 +33,7 @@ from app.tier1 import queue
 from app.tier1 import triage as triage_module
 from app.tier1.triage import EvalSwitches, evaluate_alert, run_triage_job
 
-from tests.fakes.llm import TRIAGE_V2_FALSE_POSITIVE, TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE
+from tests.fakes.llm import TRIAGE_V4_FALSE_POSITIVE, TRIAGE_V4_TRUE_POSITIVE, VERIFIER_V2_AGREE
 from tests.test_tier1_json_schema import _ALERT_ID, _Model, _row
 
 TP, FP = "true_positive", "false_positive"
@@ -129,7 +129,7 @@ def world(monkeypatch):
 
 
 def _tp_model(verifier=VERIFIER_V2_AGREE):
-    return _Model([TRIAGE_V3_TRUE_POSITIVE, verifier])
+    return _Model([TRIAGE_V4_TRUE_POSITIVE, verifier])
 
 
 def _without_nonce(text: str) -> str:
@@ -175,8 +175,8 @@ class TestAMatchBelowTheThreshold:
         world.run(_tp_model())
 
         result = world.proposer["result"]
-        assert result["confidence"] == TRIAGE_V3_TRUE_POSITIVE["confidence"]
-        assert result["reasons"] == TRIAGE_V3_TRUE_POSITIVE["reasons"]
+        assert result["confidence"] == TRIAGE_V4_TRUE_POSITIVE["confidence"]
+        assert result["reasons"] == TRIAGE_V4_TRUE_POSITIVE["reasons"]
 
     def test_step_4_evaluated_the_false_positive_the_rule_produced(self, world):
         world.run(_tp_model())
@@ -254,7 +254,7 @@ class TestAMatchBelowTheThreshold:
 class TestARuleThatAppliedButChangedNothing:
     def test_a_false_positive_answer_is_applied_and_not_forced(self, world):
         model = _Model(
-            [TRIAGE_V2_FALSE_POSITIVE, {**VERIFIER_V2_AGREE, "structured_only_verdict": FP}]
+            [TRIAGE_V4_FALSE_POSITIVE, {**VERIFIER_V2_AGREE, "structured_only_verdict": FP}]
         )
 
         world.run(model)
@@ -710,7 +710,7 @@ class TestTheEvaluation:
         assert ev.forced_by == () and ev.final_verdict == ev.proposed_verdict == TP
 
     def test_the_restricted_mode_runs_the_rule_too(self, world):
-        model = _Model([TRIAGE_V3_TRUE_POSITIVE])
+        model = _Model([TRIAGE_V4_TRUE_POSITIVE])
 
         ev = self._evaluate(world, EvalSwitches(rag=True, gate_mode="steps_1_3"), model)
 
@@ -732,7 +732,7 @@ class TestTheEvaluation:
         world.setenv("TRIAGE_RAG_FP_BELOW_PCT", "0")
 
         ev = self._evaluate(
-            world, EvalSwitches(rag=True, gate_mode="steps_1_3"), _Model([TRIAGE_V3_TRUE_POSITIVE])
+            world, EvalSwitches(rag=True, gate_mode="steps_1_3"), _Model([TRIAGE_V4_TRUE_POSITIVE])
         )
 
         assert ev.final_verdict == TP and ev.forced_by == ()
@@ -752,7 +752,7 @@ class TestTheEvaluation:
         from app.llm.adapter import LLMBudgetExceeded
 
         model = _Model(
-            [TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE],
+            [TRIAGE_V4_TRUE_POSITIVE, VERIFIER_V2_AGREE],
             raises_from=1,
             exc=LLMBudgetExceeded("cap"),
         )

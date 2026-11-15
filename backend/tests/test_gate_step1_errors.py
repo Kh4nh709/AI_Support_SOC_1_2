@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 from app.security import gate
 
-from tests.fakes.llm import TRIAGE_V3_TRUE_POSITIVE
+from tests.fakes.llm import TRIAGE_V4_TRUE_POSITIVE
 from tests.test_gate import (
     _facts_from,
     _no_findings,
@@ -23,11 +23,11 @@ FIRST = ["reasones: unexpected key", "reasons: missing"]
 
 
 def _facts() -> dict:
-    return _facts_from(TRIAGE_V3_TRUE_POSITIVE["structured_basis"])
+    return _facts_from(TRIAGE_V4_TRUE_POSITIVE["structured_basis"])
 
 
 def _start(**kwargs):
-    return gate.start(TRIAGE_V3_TRUE_POSITIVE, _facts(), _true_positive_blocks(), **kwargs)
+    return gate.start(TRIAGE_V4_TRUE_POSITIVE, _facts(), _true_positive_blocks(), **kwargs)
 
 
 def _result(state) -> dict:
@@ -71,7 +71,7 @@ def test_the_state_and_the_document_hold_their_own_lists():
 
 def test_run_steps_1_to_5_passes_them_through():
     state = gate.run_steps_1_to_5(
-        TRIAGE_V3_TRUE_POSITIVE,
+        TRIAGE_V4_TRUE_POSITIVE,
         _facts(),
         _true_positive_blocks(),
         repaired=True,
@@ -86,7 +86,7 @@ def test_run_steps_1_to_5_passes_them_through():
 
 def test_run_steps_1_to_5_without_them_is_what_it_was():
     state = gate.run_steps_1_to_5(
-        TRIAGE_V3_TRUE_POSITIVE,
+        TRIAGE_V4_TRUE_POSITIVE,
         _facts(),
         _true_positive_blocks(),
         repaired=True,

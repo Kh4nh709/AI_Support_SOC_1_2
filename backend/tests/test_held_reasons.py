@@ -23,7 +23,7 @@ import pytest
 from app.llm import verdicts
 from app.security import gate, wrap
 
-from tests.fakes.llm import TRIAGE_V2_FALSE_POSITIVE, VERIFIER_V2_AGREE, VERIFIER_V2_DISAGREE
+from tests.fakes.llm import TRIAGE_V4_FALSE_POSITIVE, VERIFIER_V2_AGREE, VERIFIER_V2_DISAGREE
 
 CLOSED = (
     "facts_mismatch",
@@ -296,8 +296,8 @@ def _run(proposal: dict, *, facts: dict, blocks: dict, holds: bool = True, verif
 
 
 def test_a_high_criticality_asset_is_flagged_for_that_field_only():
-    basis = dict(TRIAGE_V2_FALSE_POSITIVE["structured_basis"], asset_criticality="high")
-    proposal = {**copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE), "structured_basis": basis}
+    basis = dict(TRIAGE_V4_FALSE_POSITIVE["structured_basis"], asset_criticality="high")
+    proposal = {**copy.deepcopy(TRIAGE_V4_FALSE_POSITIVE), "structured_basis": basis}
     result = _run(proposal, facts=_facts(basis), blocks=_blocks(proposal))
     assert result["proposed_verdict"] == "false_positive" == result["final_verdict"]
     assert result["forced"] is False and result["flagged_by"] == ["step4"]
@@ -306,7 +306,7 @@ def test_a_high_criticality_asset_is_flagged_for_that_field_only():
 
 
 def test_a_basis_mismatch_and_a_dropped_quote_and_a_verifier_that_disagrees_are_all_named():
-    proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    proposal = copy.deepcopy(TRIAGE_V4_FALSE_POSITIVE)
     facts = _facts(proposal["structured_basis"], severity="critical")
     blocks = _blocks(proposal, quote="a line the model never quoted")
     result = _run(proposal, facts=facts, blocks=blocks, verifier=VERIFIER_V2_DISAGREE)
@@ -320,7 +320,7 @@ def test_a_basis_mismatch_and_a_dropped_quote_and_a_verifier_that_disagrees_are_
 
 
 def test_a_missing_playbook_rule_is_a_reason_of_its_own():
-    proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    proposal = copy.deepcopy(TRIAGE_V4_FALSE_POSITIVE)
     result = _run(
         proposal,
         facts=_facts(proposal["structured_basis"]),
@@ -331,7 +331,7 @@ def test_a_missing_playbook_rule_is_a_reason_of_its_own():
 
 
 def test_a_run_no_check_flagged_has_no_reasons():
-    proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    proposal = copy.deepcopy(TRIAGE_V4_FALSE_POSITIVE)
     result = _run(proposal, facts=_facts(proposal["structured_basis"]), blocks=_blocks(proposal))
     assert result["forced"] is False and result["flagged_by"] == []
     assert verdicts.held_reasons(result) == []
@@ -339,7 +339,7 @@ def test_a_run_no_check_flagged_has_no_reasons():
 
 
 def test_a_verifier_whose_answer_did_not_parse_is_verifier_invalid_from_the_real_gate():
-    proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    proposal = copy.deepcopy(TRIAGE_V4_FALSE_POSITIVE)
     result = _run(
         proposal,
         facts=_facts(proposal["structured_basis"]),
@@ -353,7 +353,7 @@ def test_a_verifier_whose_answer_did_not_parse_is_verifier_invalid_from_the_real
 
 
 def test_a_verifier_that_disagrees_is_verifier_disagrees_from_the_real_gate():
-    proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    proposal = copy.deepcopy(TRIAGE_V4_FALSE_POSITIVE)
     result = _run(
         proposal,
         facts=_facts(proposal["structured_basis"]),
@@ -365,7 +365,7 @@ def test_a_verifier_that_disagrees_is_verifier_disagrees_from_the_real_gate():
 
 
 def test_an_invalid_verifier_after_an_earlier_flag_names_every_check():
-    proposal = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
+    proposal = copy.deepcopy(TRIAGE_V4_FALSE_POSITIVE)
     facts = _facts(proposal["structured_basis"], severity="critical")
     result = _run(proposal, facts=facts, blocks=_blocks(proposal), verifier=None)
     # step 4 is evaluated after step 2's flag now: a critical severity is its field too
@@ -393,8 +393,8 @@ def _step_4(fields: list[str]):
     over: dict = {}
     for field in fields:
         over.update(_FAILS_STEP_4.get(field, {}))
-    basis = {**TRIAGE_V2_FALSE_POSITIVE["structured_basis"], **over}
-    proposal = {**copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE), "structured_basis": basis}
+    basis = {**TRIAGE_V4_FALSE_POSITIVE["structured_basis"], **over}
+    proposal = {**copy.deepcopy(TRIAGE_V4_FALSE_POSITIVE), "structured_basis": basis}
     return _run(
         proposal,
         facts=_facts(basis),

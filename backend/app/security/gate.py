@@ -7,7 +7,7 @@ detector (P3-T07) — arrive as injected callables rather than imported; the ver
 arrives as a plain argument for the same reason.
 
 DEC-217 (BV-T1): ① gives only `true_positive` or `false_positive`, and every check the gate runs is a
-warning shown beside that verdict. `verdict` is the model's own definite answer (`triage_v3`: the model
+warning shown beside that verdict. `verdict` is the model's own definite answer (`triage_v4`: the model
 may not answer `needs_review`) from `start()` to step 7 and no step changes it. A failed check of step 2,
 3, 4 or 6 FLAGS the run: it appends its own name (`"step2"`, …) to `flagged_by`, and what it found is
 still recorded (`hallucination_flag`, `mismatched_fields`, `dropped_reasons`, `missing`, `warnings`,
@@ -85,7 +85,7 @@ def step1_schema(
     if parsed is None:
         errors = ["<root>: invalid JSON"]
     else:
-        errors = validate("triage_v3", parsed)
+        errors = validate("triage_v4", parsed)
     if not errors:
         return "ok", []
     return ("failed" if repaired else "repair"), errors
@@ -289,9 +289,12 @@ def step6_verifier(state: GateState, verifier_parsed: dict | None) -> None:
 
 def step7_output_guard(state: GateState) -> dict:
     """`proposer_raw` with `suggested_action`/`reasons` replaced by the gated values, passed
-    through `output_guard.enforce()` — the final `triage_v3`-shaped result: ①'s verdict (the model's own, or the
+    through `output_guard.enforce()` — the final `triage_v4`-shaped result: ①'s verdict (the model's own, or the
     `false_positive` the RAG rule put in its place; a `needs_review` raises `OutputGuardError`) and the reasons
-    whose quote was verified (the model's, also when the rule changed the verdict)."""
+    whose quote was verified (the model's, also when the rule changed the verdict). DEC-221: the five fields the
+    model writes for the analyst (`summary`, `reading_attack`, `reading_benign`, `would_change`, `next_checks`) go
+    through `proposer_raw` untouched and `output_guard.enforce` checks their types; no other step reads them.
+    """
     result = dict(state.proposer_raw)
     result["suggested_action"] = state.verdict
     result["reasons"] = list(state.reasons)

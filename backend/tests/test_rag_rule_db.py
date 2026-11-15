@@ -26,7 +26,7 @@ from app.tier1.decide import decide
 from app.tier1.queue import get_alert_view, list_queue
 from app.tier1.triage import run_triage_job
 
-from tests.fakes.llm import TRIAGE_V2_FALSE_POSITIVE, TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE
+from tests.fakes.llm import TRIAGE_V4_FALSE_POSITIVE, TRIAGE_V4_TRUE_POSITIVE, VERIFIER_V2_AGREE
 from tests.test_decide import (
     USER_ID,
     USER_NAME,
@@ -53,7 +53,7 @@ def rule_on(monkeypatch) -> None:
     monkeypatch.setenv("TRIAGE_RAG_FP_BELOW_PCT", "80")
 
 
-def _model(answer=TRIAGE_V3_TRUE_POSITIVE, verifier=VERIFIER_V2_AGREE) -> _RecordingLLM:
+def _model(answer=TRIAGE_V4_TRUE_POSITIVE, verifier=VERIFIER_V2_AGREE) -> _RecordingLLM:
     return _RecordingLLM(responses=[answer, verifier])
 
 
@@ -245,13 +245,13 @@ def test_the_stored_run_is_untouched_by_serving(db, rule_on) -> None:
     assert (
         after["gate_result"]["proposed_verdict"] == TP
     )  # the model's own answer is in the stored row
-    assert after["result"]["confidence"] == TRIAGE_V3_TRUE_POSITIVE["confidence"]
+    assert after["result"]["confidence"] == TRIAGE_V4_TRUE_POSITIVE["confidence"]
 
 
 def test_a_run_the_rule_applied_to_without_changing_it_is_served_the_same(db, rule_on) -> None:
     alert_id = _with_lookup(db, 0.62)
     answers_fp = {**VERIFIER_V2_AGREE, "structured_only_verdict": FP}
-    run_triage_job(db, _job(alert_id), adapter=_model(TRIAGE_V2_FALSE_POSITIVE, answers_fp))
+    run_triage_job(db, _job(alert_id), adapter=_model(TRIAGE_V4_FALSE_POSITIVE, answers_fp))
 
     row = _queue_row(db, alert_id)
     view = get_alert_view(db, alert_id)
@@ -275,9 +275,9 @@ def test_a_run_the_rule_did_not_apply_to_is_served_the_models_answer_and_confide
     view = get_alert_view(db, alert_id)
 
     assert row["proposed_action"] == TP
-    assert row["confidence"] == TRIAGE_V3_TRUE_POSITIVE["confidence"]
+    assert row["confidence"] == TRIAGE_V4_TRUE_POSITIVE["confidence"]
     assert view["proposed_action"] == TP
-    assert view["suggestion"]["confidence"] == TRIAGE_V3_TRUE_POSITIVE["confidence"]
+    assert view["suggestion"]["confidence"] == TRIAGE_V4_TRUE_POSITIVE["confidence"]
     assert view["suggestion"]["gate"]["proposed_verdict"] == TP
     assert view["suggestion"]["gate"]["rag_rule"]["applied"] is False
 
@@ -384,7 +384,7 @@ def test_an_unusable_verifier_answer_stays_in_held_by_for_an_applied_run(db, rul
     alert_id = _with_lookup(db, 0.62)
     not_the_verifiers_shape = {"agree": "yes"}  # twice: the first call and the repair round
     adapter = _RecordingLLM(
-        responses=[TRIAGE_V3_TRUE_POSITIVE, not_the_verifiers_shape, not_the_verifiers_shape]
+        responses=[TRIAGE_V4_TRUE_POSITIVE, not_the_verifiers_shape, not_the_verifiers_shape]
     )
     run_triage_job(db, _job(alert_id), adapter=adapter)
 
