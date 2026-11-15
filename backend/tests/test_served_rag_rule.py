@@ -269,8 +269,19 @@ class TestAlertView:
     def test_a_run_the_rule_did_not_apply_to_keeps_the_models_answer(self, run):
         assert _alert_view_pair(run)[1] == TP
 
-    def test_the_held_by_warnings_are_unchanged(self):
+    def test_the_held_by_warnings_of_an_applied_run_are_the_system_facts_only(self):
+        """Step 4's playbook condition is about the rule the MODEL cited, so it is not served for a run the rule
+        applied to (the playbook-rule ruling, `test_served_playbook_rule.py`); the fact fields stay.
+        """
         result, gate_result = CHANGED_RUN
+        flagged = {**gate_result, "flagged_by": ["step4"], "missing": ["severity", "playbook_rule"]}
+
+        _suggestion_unused, _proposed, held_by = _alert_view_pair((result, flagged))
+
+        assert held_by == ["fp_policy:severity"]
+
+    def test_the_held_by_warnings_of_a_run_the_rule_did_not_apply_to_are_unchanged(self):
+        result, gate_result = NOT_APPLIED_RUN
         flagged = {**gate_result, "flagged_by": ["step4"], "missing": ["severity", "playbook_rule"]}
 
         _suggestion_unused, _proposed, held_by = _alert_view_pair((result, flagged))

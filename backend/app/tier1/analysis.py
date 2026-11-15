@@ -287,17 +287,22 @@ def _check(check_id: str, outcome: str, detail: str) -> dict[str, str]:
     return {"id": check_id, "outcome": outcome, "detail": detail}
 
 
-def _step4(steps: Mapping[str, Any], gate: Mapping[str, Any]) -> dict[str, str]:
+def _step4(steps: Mapping[str, Any], gate: Mapping[str, Any], withheld: bool) -> dict[str, str]:
+    """Step 4, the false-positive policy. `missing` is read as the API serves it (`verdicts.served_missing`). For a
+    run the RAG default applied to (`withheld`) step 4 is told from the SYSTEM facts only: the playbook condition is
+    about the rule the MODEL cited (`gate._step4`: `structured_basis.playbook_rule_applied`), so which rule it cited
+    would go with what it answered. It is `fp_policy_facts` (warn) when a fact field is in `missing`, else
+    `fp_policy_ok` (pass) - never `fp_policy_playbook`."""
     status = steps.get("4")
+    missing = verdicts.served_missing(gate)
+    if withheld and status in ("ok", "missing"):
+        if any(field in verdicts.FP_FACT_FIELDS for field in missing):
+            return _check("4", "warn", "fp_policy_facts")
+        return _check("4", "pass", "fp_policy_ok")
     if status == "ok":
         return _check("4", "pass", "fp_policy_ok")
     if status == "missing":
-        missing = gate.get("missing")
-        only_playbook = (
-            isinstance(missing, list)
-            and bool(missing)
-            and all(m == "playbook_rule" for m in missing)
-        )
+        only_playbook = bool(missing) and all(m == verdicts.PLAYBOOK_RULE_FIELD for m in missing)
         return _check("4", "warn", "fp_policy_playbook" if only_playbook else "fp_policy_facts")
     if status == "n/a" and gate.get("final_verdict") == "true_positive":
         return _check("4", "na", "not_false_positive")
@@ -348,7 +353,7 @@ def _checks(gate: Mapping[str, Any], withheld: bool) -> list[dict[str, str]]:
     else:
         rows.append(_check("3r", "na", "rag_rule_off"))
 
-    rows.append(_step4(steps, gate))
+    rows.append(_step4(steps, gate, withheld))
 
     findings = _count_in(steps.get("5"))
     if findings is None:

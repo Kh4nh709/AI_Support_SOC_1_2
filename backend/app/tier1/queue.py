@@ -264,7 +264,9 @@ def _suggestion_of(
             "verifier_verdict": verdicts.served_verifier_verdict(
                 gate_result.get("verifier_verdict"), gate_result
             ),
-            "warnings": gate_result.get("warnings") or [],
+            # DEC-219: for a run the RAG rule applied to without the reasons of the rule check, which judged the
+            # rule the model cited (`verdicts.served_warnings`); the stored list is untouched
+            "warnings": verdicts.served_warnings(gate_result),
             # DEC-219: `{threshold, best_pct, applied}` of the stored object, `null` for a run that has none
             # (before the key, or a version 1 document) or whose stored value is not an object. The stored
             # `changed` is never served: for an applied run it says what the model answered.

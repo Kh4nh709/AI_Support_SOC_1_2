@@ -69,6 +69,25 @@ FP_POLICY_FIELDS: tuple[str, ...] = (
     "playbook_rule",
 )
 
+#: The one of those fields that is not a fact of the alert: ``playbook_rule``, the rule the MODEL cited
+#: (``structured_basis.playbook_rule_applied``) checked against the decision table. The other four are read from the
+#: system's own facts. For a run the RAG default applied to (DEC-219) only the four are served (below).
+PLAYBOOK_RULE_FIELD = "playbook_rule"
+FP_FACT_FIELDS: tuple[str, ...] = tuple(f for f in FP_POLICY_FIELDS if f != PLAYBOOK_RULE_FIELD)
+
+#: Every reason gate step 4's rule check can write into ``gate_result.warnings`` (``tier1/triage.py``,
+#: ``_make_rule_check``, which `llm` may not import: transcribed here and tied to its source by
+#: ``tests/test_served_playbook_rule.py``). They all describe the rule the model cited, so for a run the RAG default
+#: applied to none of them is served (``served_warnings``).
+RULE_CHECK_WARNINGS: tuple[str, ...] = (
+    "no_rule_cited",
+    "no_table",
+    "table_unreviewed",
+    "unknown_rule",
+    "rule_does_not_hold",
+    "rule_is_not_false_positive",
+)
+
 _FACTS_MISMATCH = "facts_mismatch"
 _NO_VERIFIED_QUOTE = "no_verified_quote"
 _VERIFIER_DISAGREES = "verifier_disagrees"
@@ -188,16 +207,49 @@ def served_proposed_action(gate_result: Mapping[str, Any] | None, served: str | 
 
 def served_held_reasons(gate_result: Mapping[str, Any] | None) -> list[str]:
     """``held_reasons`` as the Tier 1 API serves it (the queue row's and the alert view's ``held_by``). For a run
-    the RAG rule applied to (``rag_rule_applied``, DEC-219) the verifier was sent the model's own verdict and step
-    6 compared its answer with that, not with the verdict ① ended with; ``verifier_disagrees`` would therefore
-    tell a reader the model's answer, so it is left out. Every other code stays, ``verifier_invalid`` (the
-    verifier's answer was unusable: it says nothing about any verdict) included. For every other run this is
-    ``held_reasons`` exactly. ``held_reasons`` itself is not changed: it reads stored documents in general (the
-    stored ``flagged_by`` and ``steps["6"]`` keep the disagreement)."""
+    the RAG rule applied to (``rag_rule_applied``, DEC-219) two things would tell a reader what the model answered,
+    and are left out:
+
+    * ``verifier_disagrees``: the verifier was sent the model's own verdict and step 6 compared its answer with
+      that, not with the verdict ① ended with. ``verifier_invalid`` (the verifier's answer was unusable: it says
+      nothing about any verdict) stays.
+    * ``fp_policy:playbook_rule``: step 4 checks the rule the MODEL cited, and which rule it cited (an escalate rule,
+      one that does not hold, none) goes with what it answered. The four fact fields of step 4 are the system's own
+      and stay (``served_missing``).
+
+    Every other code stays. For every other run this is ``held_reasons`` exactly. ``held_reasons`` itself is not
+    changed: it reads stored documents in general (the stored ``flagged_by``, ``missing`` and ``steps["6"]`` keep it
+    all)."""
     reasons = held_reasons(gate_result)
     if rag_rule_applied(gate_result):
-        return [reason for reason in reasons if reason != _VERIFIER_DISAGREES]
+        left_out = (_VERIFIER_DISAGREES, _FP_POLICY_PREFIX + PLAYBOOK_RULE_FIELD)
+        return [reason for reason in reasons if reason not in left_out]
     return reasons
+
+
+def served_missing(gate_result: Mapping[str, Any] | None) -> list[str]:
+    """Step 4's ``gate_result.missing`` as the Tier 1 API serves it: its strings, in order. For a run the RAG rule
+    applied to (DEC-219) without ``playbook_rule``, which is about the rule the model cited and not about the alert
+    (``served_held_reasons``). The analysis panel's step-4 row is read from this. Anything that is not a list gives
+    ``[]``; the stored document is not changed."""
+    missing = _strings(gate_result.get("missing")) if isinstance(gate_result, Mapping) else []
+    if rag_rule_applied(gate_result):
+        return [field for field in missing if field != PLAYBOOK_RULE_FIELD]
+    return missing
+
+
+def served_warnings(gate_result: Mapping[str, Any] | None) -> Any:
+    """``gate_result.warnings`` as the Tier 1 API serves it (``Suggestion.gate.warnings``). For a run the RAG rule
+    applied to (DEC-219) every reason the rule check wrote (``RULE_CHECK_WARNINGS``) is left out, because the check
+    judged the rule the MODEL cited: ``rule_is_not_false_positive`` says it cited an escalate rule. Any other warning
+    stays; what is not a list gives ``[]``. For every other run it is the stored value, or ``[]`` when there is none,
+    exactly as it was served before. The stored document is not changed."""
+    warnings = gate_result.get("warnings") if isinstance(gate_result, Mapping) else None
+    if not rag_rule_applied(gate_result):
+        return warnings or []
+    if not isinstance(warnings, list):
+        return []
+    return [w for w in warnings if not (isinstance(w, str) and w in RULE_CHECK_WARNINGS)]
 
 
 def served_verifier_verdict(verifier_verdict: Any, gate_result: Mapping[str, Any] | None) -> Any:
