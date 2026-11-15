@@ -555,6 +555,61 @@ def test_every_free_text_block_is_wrapped_including_notes_and_previous_run(db):
 
 
 @pytest.mark.db
+@pytest.mark.parametrize("as_of", [False, True])
+def test_a_previous_version_4_run_reaches_block_8_as_its_version_3_form(db, as_of):
+    """DEC-221 (AP-T1): the model's `timeline`, `scope`, `likelihood` and `priority` are never fed back into a
+    prompt; the previous run is in block 8 as an `investigate_v3` answer (the steps as strings), through the
+    live read and through the `as_of` one."""
+    from app.llm.builder import ENUM_VALUES, TEMPLATE_CONSTANTS
+
+    user = _make_user(db)
+    case_id = _make_case(db, user)
+    _make_head(db, case_id, user, raw_log="x")
+    answer = {
+        "summary": "PRIOR-SUMMARY",
+        "attack_narrative": "n",
+        "timeline": [
+            {"alert_id": "1.1", "what": "PRIOR-TIMELINE", "tactic": "", "technique": None}
+        ],
+        "scope": {"hosts": ["PRIOR-HOST"], "accounts": []},
+        "suggested_conclusion": "false_positive",
+        "confidence": "low",
+        "gia_thuyet": [
+            {"noi_dung": "h", "evidence_for": [], "evidence_against": ["a"], "likelihood": "high"}
+        ],
+        "evidence": [],
+        "next_steps": [{"step": "PRIOR-STEP", "priority": "high"}],
+        "playbook_used": None,
+    }
+    db.execute(
+        "INSERT INTO llm_runs (run_id, pipeline, subject_type, subject_id, system_prompt, "
+        "user_message, result, created_at) VALUES (%s, 'investigate', 'case', %s, 's', 'u', %s, %s)",
+        (str(uuid.uuid4()), case_id, Jsonb(answer), _BASE_TIME),
+    )
+    nonce = "q" * 16
+    kwargs = {"as_of": _BASE_TIME + timedelta(hours=1)} if as_of else {}
+    result = dossier.build(db, case_id, nonce=nonce, **kwargs)
+
+    assert "PRIOR-SUMMARY" in result.text and "PRIOR-STEP" in result.text
+    for absent in (
+        "PRIOR-TIMELINE",
+        "PRIOR-HOST",
+        '"likelihood"',
+        '"priority"',
+        '"timeline"',
+        '"scope"',
+    ):
+        assert absent not in result.text
+    violations = linter.lint(
+        result.text,
+        nonce=nonce,
+        constants=TEMPLATE_CONSTANTS | dossier.DOSSIER_TEMPLATE_CONSTANTS,
+        enums=ENUM_VALUES,
+    )
+    assert violations == []
+
+
+@pytest.mark.db
 def test_case_with_no_notes_or_previous_run_still_lints_clean(db):
     from app.llm.builder import ENUM_VALUES, TEMPLATE_CONSTANTS
 

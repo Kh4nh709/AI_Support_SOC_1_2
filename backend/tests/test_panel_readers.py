@@ -178,3 +178,31 @@ def test_no_new_field_reaches_the_drafters_prompt():
         ("investigate", _v4_investigation_with_sentinel()),
     ):
         assert SENTINEL not in rag_draft._ai_text(pipeline, answer)
+
+
+# --------------------------------------------------------------------------- the tripwire
+
+#: The model-written fields of version 4 that are new text for the analyst. A module of `backend/app` that names one is
+#: one of these: the schemas and the templates that ask for them, the guard that types them, the readers above and the
+#: docstrings of the gate and the drafter. A prompt builder is not, and a new reader that appears here must be read by
+#: someone who knows the rule (spec 4): these words are never fed back into a prompt.
+ANALYST_FIELD_NAMES = ("reading_attack", "reading_benign", "would_change", "next_checks")
+MAY_NAME_THEM = {
+    "llm/results.py",
+    "llm/templates/output_schemas.json",
+    "llm/templates/triage_system.txt",
+    "rag/draft.py",
+    "security/gate.py",
+    "security/output_guard.py",
+}
+
+
+def test_only_the_expected_modules_name_the_analyst_fields():
+    app = ROOT / "backend" / "app"
+    found = {
+        str(path.relative_to(app))
+        for path in app.rglob("*")
+        if path.suffix in {".py", ".json", ".txt"}
+        and any(name in path.read_text("utf-8") for name in ANALYST_FIELD_NAMES)
+    }
+    assert found == MAY_NAME_THEM

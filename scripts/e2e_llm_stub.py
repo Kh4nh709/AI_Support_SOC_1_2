@@ -5,18 +5,20 @@ talks to DeepSeek: `POST {LLM_BASE_URL}/chat/completions`. Nothing in `backend/a
 live model is ever called, and the stack that starts this server unsets every provider key. The answers
 are canned, but each one is built from the prompt it answers, so the product's own gate accepts it:
 
-* triage_v3 (proposer): `structured_basis` copied from the `## Alert` facts (gate step 2), one reason whose
+* triage_v4 (proposer; DEC-221): `structured_basis` copied from the `## Alert` facts (gate step 2), one reason whose
   quote is a verbatim line of the `rule_description` block (step 3), verdict `false_positive`: the model
   may only conclude `false_positive | true_positive` (P14-T01), and this answer cites no playbook rule, so
   gate step 4 always flags it (`fp_policy:playbook_rule`; DEC-217: a warning beside the model's verdict -
   it no longer holds it as `needs_review`, so the stub's alerts end with `false_positive`). The reason's
   `claim` carries a token derived from the alert id (`claim_token`), which the blind spec looks for: it is
-  in no other place.
+  in no other place. The five fields the model writes for the analyst (`summary`, `reading_attack`,
+  `reading_benign`, `would_change`, `next_checks`) are fixed Vietnamese sentences.
 * verifier_v2: echoes the verdict out of the `proposer` block (the model's own, which no gate step changes),
   `agree: true` (step 6 agrees).
-* investigate_v3 (Tier 2, P14-T02): two evidence items about the dossier's first alert, one quoted from its raw log
+* investigate_v4 (Tier 2, P14-T02, DEC-221): two evidence items about the dossier's first alert, one quoted from its raw log
   (verified by the server) and one that is in no log (rejected as `quote_not_found`), so the case page shows
-  both marks; the conclusion `false_positive` stands because one item verified.
+  both marks; the conclusion `false_positive` stands because one item verified. The timeline has one row, for
+  that alert; `scope`, a `likelihood` per hypothesis and a `{step, priority}` per next step complete version 4.
 
 Stdlib only; binds 127.0.0.1 only. `E2E_STUB_DUMP_DIR`, when set, writes each request's prompts there (the
 data is synthetic; this is for developing the stub, the stack never sets it).
@@ -122,6 +124,14 @@ def triage_answer(user: str) -> dict:
             }
         ],
         "playbook_used": None,
+        "summary": "Alert mô tả một sự kiện lặp lại, trông giống hoạt động thường ngày của máy thử nghiệm.",
+        "reading_attack": "Nếu là tấn công, đây là một bước thăm dò lặp lại nhằm tìm điểm yếu của máy.",
+        "reading_benign": "Nếu lành tính, đây là tác vụ định kỳ của máy thử nghiệm do chủ máy cài sẵn.",
+        "would_change": "Một dấu hiệu truy cập từ bên ngoài vào cùng máy sẽ làm đổi kết luận.",
+        "next_checks": [
+            "Hỏi chủ máy xem tác vụ này có được lên lịch hay không.",
+            "Xem lịch sử các alert cùng quy tắc trên máy này.",
+        ],
     }
 
 
@@ -156,6 +166,7 @@ def investigate_answer(user: str) -> dict:
     against the log and marks it verified), one that is in no log (marked as not found). The dossier names an
     alert on the line above its blocks, not in a block attribute."""
     evidence = []
+    timeline: list[dict] = []
     for block in _blocks(user):
         if block["source"] != "wazuh_raw_log":
             continue
@@ -176,10 +187,20 @@ def investigate_answer(user: str) -> dict:
                 "why": "The assistant cites a line that is not in the case.",
             }
         )
+        timeline.append(
+            {
+                "alert_id": alert_id,
+                "what": "The alert reports the repeated event of the case.",
+                "tactic": "",
+                "technique": None,
+            }
+        )
         break
     return {
         "summary": "The case holds one repeated event that looks routine.",
         "attack_narrative": "Nothing in the cluster shows an attacker moving past the first event.",
+        "timeline": timeline,
+        "scope": {"hosts": [], "accounts": []},
         "suggested_conclusion": "false_positive",
         "confidence": "medium",
         "gia_thuyet": [
@@ -187,10 +208,16 @@ def investigate_answer(user: str) -> dict:
                 "noi_dung": "The event is the routine noise of a test host.",
                 "evidence_for": ["The description names a routine event."],
                 "evidence_against": ["Only the alert text was read; no host was inspected."],
+                "likelihood": "medium",
             }
         ],
         "evidence": evidence,
-        "next_steps": ["Close the case if the owner of the host confirms the activity."],
+        "next_steps": [
+            {
+                "step": "Close the case if the owner of the host confirms the activity.",
+                "priority": "medium",
+            }
+        ],
         "playbook_used": None,
     }
 
@@ -198,7 +225,7 @@ def investigate_answer(user: str) -> dict:
 def answer_for(system: str, user: str) -> dict:
     if "## Schema verifier_v2" in system:
         return verifier_answer(user)
-    if "## Schema investigate_v3" in system:
+    if "## Schema investigate_v4" in system:
         return investigate_answer(user)
     return triage_answer(user)
 

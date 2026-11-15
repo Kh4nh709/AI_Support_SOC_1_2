@@ -134,7 +134,7 @@ def _estimate_tokens(text: str) -> int:
 #: add it to the `constants` they pass `security.linter.lint()`.
 #:
 #: P14-T02 (DEC-213): the second sentence used to say *"Thiếu thì trả need_more_data"* (answer
-#: `need_more_data` when something is missing). ②'s model schema (`investigate_v3`) no longer has that
+#: `need_more_data` when something is missing). ②'s model schema (`investigate_v3`, now `investigate_v4`) no longer has that
 #: value, so it now says what to do instead: name the best conclusion and write what is missing in
 #: `next_steps`. It is a member of `DOSSIER_TEMPLATE_CONSTANTS` below, so the linter and every caller
 #: that passes that set follow the new wording without a second list.

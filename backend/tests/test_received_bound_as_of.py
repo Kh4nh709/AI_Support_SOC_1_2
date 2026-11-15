@@ -33,7 +33,7 @@ from app.tier2 import investigate as tier2_investigate
 
 from tests.fakes.llm import FakeLLM
 from tests.rag_data import add_entry
-from tests.test_investigate import _add_head, _investigate_v3, _make_case, _make_user
+from tests.test_investigate import _add_head, _investigate_v4, _make_case, _make_user
 from tests.test_lab_measure import _cfg as _lab_cfg
 from tests.test_lab_measure import _entry_match, _evidence, _put_lookup
 from tests.test_triage_job import (
@@ -336,10 +336,10 @@ def test_the_prompt_of_evaluate_case_as_of_holds_no_later_stage(db):
     _seed(
         db, received=AFTER, rule_id="91011", description="LATE-NEIGHBOUR", raw_log="LATE-RAW", **key
     )
-    fake = FakeLLM(responses=[_investigate_v3(evidence=_evidence(head))])
+    fake = FakeLLM(responses=[_investigate_v4(evidence=_evidence(head))])
     tier2_investigate.evaluate_case(db, case_id, adapter=fake, cfg=_lab_cfg(), rag=False, as_of=CUT)
     prompt = fake.calls[0]["user"]
     assert "91010" in prompt and "91011" not in prompt and "LATE-RAW" not in prompt
-    fake = FakeLLM(responses=[_investigate_v3(evidence=_evidence(head))])
+    fake = FakeLLM(responses=[_investigate_v4(evidence=_evidence(head))])
     tier2_investigate.evaluate_case(db, case_id, adapter=fake, cfg=_lab_cfg(), rag=False)
     assert "91011" in fake.calls[0]["user"]  # without it, today's prompt

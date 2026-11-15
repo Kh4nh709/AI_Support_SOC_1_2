@@ -70,7 +70,7 @@ from app.tier2.investigate import (
 )
 
 #: `llm_runs.result.suggested_conclusion` in Vietnamese: the keys are `verdicts.GATED_CONCLUSIONS` - the
-#: three conclusions of `docs/phase-7-tier2.md` the model may give (`investigate_v3`, the same wording
+#: three conclusions of `docs/phase-7-tier2.md` the model may give (`investigate_v3` and `investigate_v4`, the same wording
 #: the retired Jinja case page's status labels used for them) plus the value only the system sets,
 #: `need_more_data` (P14-T02). `tests/test_conclusions.py` ties the keys to the tuple.
 CONCLUSION_LABELS: dict[str, str] = {
