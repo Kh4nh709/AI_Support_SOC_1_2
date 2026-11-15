@@ -89,8 +89,10 @@ does.
 - **Tier 1 is not served the model's own answer for a run the rule applied to.** Wherever the
   Tier 1 API returns the model's answer — `proposed_action` (the queue row and the alert view) and
   `Suggestion.gate.proposed_verdict` — a run whose `rag_rule.applied` is true returns the verdict ①
-  ended with instead. The stored `gate_result.proposed_verdict` is untouched; the admin LLM page
-  and the audit log show stored rows as they are.
+  ended with instead, and returns `confidence: null` (the queue row and the alert view): the
+  confidence is the model's, in its own answer. The stored `gate_result.proposed_verdict` and
+  `result.confidence` are untouched; the admin LLM page and the audit log show stored rows as they
+  are.
 - Stored runs are not re-judged: the rule applies to new runs only. `served_action` is unchanged.
 
 ## 6 · Frontend (`frontend/`)
