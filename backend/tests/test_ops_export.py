@@ -266,14 +266,19 @@ def _gate(
     hallucination: bool = False,
     step6: str = "agree",
     dropped: int = 0,
+    flagged_by: tuple[str, ...] | None = None,
 ) -> dict:
-    """A `gate.gate_result()`-shaped document; every free-text field carries the marker."""
+    """A `gate.gate_result()`-shaped document; every free-text field carries the marker. Version 1 (the old
+    gate: `forced`, `forced_by`) unless `flagged_by` is given: then version 2 (DEC-217), where nothing is
+    forced and the steps whose check raised a warning are `flagged_by`."""
+    version_2 = flagged_by is not None
     return {
-        "version": 1,
+        "version": 2 if version_2 else 1,
         "proposed_verdict": "false_positive" if forced else final,
         "final_verdict": final,
-        "forced": forced,
-        "forced_by": list(forced_by),
+        "forced": False if version_2 else forced,
+        "forced_by": [] if version_2 else list(forced_by),
+        **({"flagged_by": list(flagged_by)} if version_2 else {}),
         "steps": {"1": "ok", "2": "ok", "3": f"dropped:{dropped}", "6": step6, "7": "ok"},
         "hallucination_flag": hallucination,
         "mismatched_fields": [],
@@ -747,6 +752,25 @@ def test_window_bounds_are_half_open(db):
         in (text)
     )
     assert "`tier1.decided` = 2" in _section(text, "6 · ")
+
+
+@pytest.mark.db
+def test_the_step_table_lists_flagged_by_for_a_version_2_row_and_forced_by_for_a_version_1_row(db):
+    """DEC-217 (spec 7): the report lists the steps per run from whichever the row has, and the held rate
+    is not redefined - a version 2 row is never `forced`, so it adds nothing to it."""
+    alert_id = _open(db, received_at=at(1))
+    _gated(db, alert_id, at(2), "needs_review", forced=True, forced_by=("step4",))  # version 1
+    _gated(
+        db, alert_id, at(3), "false_positive", forced=False, flagged_by=("step2", "step4", "step6")
+    )
+    for minute in (2, 3):
+        _run(db, alert_id, at(minute), role="verifier", latency_ms=10, model_id="model-v")
+
+    text = ops_export.build_report(db, _window())
+
+    assert "- rows where the gate ran: 2" in text
+    assert "- `forced = true`: 1" in text  # only the version 1 row was forced
+    assert "| step | rows |\n|---|---|\n| step2 | 1 |\n| step4 | 2 |\n| step6 | 1 |\n" in text
 
 
 @pytest.mark.db

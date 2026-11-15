@@ -319,12 +319,18 @@ Q_GATE = Query(
 {_RUNS_WHERE}
 {_GATE_RAN}""",
 )
+# DEC-217: a version 2 `gate_result` has no forced run (`forced_by` is empty) and names the steps whose check
+# raised a warning in `flagged_by`; a version 1 one (a run from before it) names the steps that forced the verdict
+# in `forced_by`. The table lists whichever the row has: `flagged_by` when it is an array, else `forced_by`.
 Q_FORCED_BY = Query(
     "Q14",
-    "forced_by, per step",
+    "forced_by (version 1) or flagged_by (version 2), per step",
     f"""SELECT f.step, count(*) AS n
 {_RUNS_FROM}
-CROSS JOIN LATERAL jsonb_array_elements_text(r.gate_result->'forced_by') AS f(step)
+CROSS JOIN LATERAL jsonb_array_elements_text(
+  CASE WHEN jsonb_typeof(r.gate_result->'flagged_by') = 'array'
+       THEN r.gate_result->'flagged_by'
+       ELSE r.gate_result->'forced_by' END) AS f(step)
 {_RUNS_WHERE}
 {_GATE_RAN}
 GROUP BY f.step
@@ -1032,7 +1038,7 @@ def _online_section(res: Mapping[str, list[tuple]]) -> list[str]:
             f"{surviving} surviving, {dropped} dropped"
         ),
         "",
-        f"### `forced_by`, per step ({Q_FORCED_BY.qid})",
+        f"### `forced_by` (version 1) or `flagged_by` (version 2), per step ({Q_FORCED_BY.qid})",
         "",
         _table(["step", "rows"], res[Q_FORCED_BY.qid]),
         "",
