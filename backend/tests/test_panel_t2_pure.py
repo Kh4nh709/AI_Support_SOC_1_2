@@ -17,6 +17,7 @@ from __future__ import annotations
 import copy
 import datetime as dt
 import json
+import pathlib
 import uuid
 
 import pytest
@@ -469,3 +470,30 @@ def test_the_readers_of_the_new_fields_are_where_the_stored_shapes_are_read():
     ]
     assert results.timeline_alert_ids(_rows(("a", "x"), ("b", "y"), ("a", "z"))) == ["a", "b"]
     assert results.timeline_alert_ids("x") == []
+
+
+# --------------------------------------------------------------------------- the tripwire
+
+#: A module of `backend/app` that names a hypothesis's `likelihood` (the one word of the new Tier 2 fields no other
+#: part of the product uses): the schema and the template that ask for it, the readers, and the docstrings of the
+#: prompt builders that say they never read it. The words are the model's, about untrusted data: a new module that
+#: appears here is a new reader, and must be read by someone who knows the rule (spec 4) - never fed back into a prompt.
+MAY_NAME_LIKELIHOOD = {
+    "llm/investigate.py",
+    "llm/results.py",
+    "llm/templates/investigate_system.txt",
+    "llm/templates/output_schemas.json",
+    "rag/draft.py",
+    "tier2/dossier.py",
+    "tier2/investigation_view.py",
+}
+
+
+def test_only_the_expected_modules_name_the_tier_2_analyst_fields():
+    app = pathlib.Path(__file__).resolve().parents[1] / "app"
+    found = {
+        str(path.relative_to(app))
+        for path in app.rglob("*")
+        if path.suffix in {".py", ".json", ".txt"} and "likelihood" in path.read_text("utf-8")
+    }
+    assert found == MAY_NAME_LIKELIHOOD
