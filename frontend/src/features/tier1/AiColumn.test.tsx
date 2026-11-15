@@ -1258,8 +1258,10 @@ describe("the RAG beside the conclusion", () => {
 describe("the RAG default below the threshold (DEC-219)", () => {
   const RULE: RagRule = { threshold: 80, best_pct: 62, applied: true, changed: true };
   /**
-   * A visible-arm run the rule applied to, as the server serves it: ① ended FP, the gate forced nothing, and the
-   * model's own answer is not served (`proposed_action` and `gate.proposed_verdict` are the verdict ① ended with).
+   * A visible-arm run the rule applied to, as the server serves it: ① ended FP, the gate forced nothing, and nothing
+   * of the model's own answer is served: `proposed_action` and `gate.proposed_verdict` are the verdict ① ended with,
+   * the verifier's verdict is `null` (it would give the model's answer away), the confidence is `null` (it is the
+   * model's), and `held_by` never carries `verifier_disagrees` (the other warning codes can be there).
    */
   const ragDefault = (
     reasons: string[] = [],
@@ -1271,12 +1273,12 @@ describe("the RAG default below the threshold (DEC-219)", () => {
       forced_by: [],
       proposed_verdict: "false_positive",
       final_verdict: "false_positive",
-      verifier_verdict: "agree",
+      verifier_verdict: null,
       warnings: [],
     };
     if (rule !== undefined) gate.rag_rule = rule;
     return view({
-      suggestion: suggestion({ suggested_action: "false_positive", confidence: "high", gate }),
+      suggestion: suggestion({ suggested_action: "false_positive", confidence: null, gate }),
       proposed_action: "false_positive",
       held_by: reasons,
       rag: { best_pct: 62, not_applied: null },
@@ -1303,8 +1305,12 @@ describe("the RAG default below the threshold (DEC-219)", () => {
   const line = () => within(column()).getByText(/AI kết luận/);
   const PERCENT = "trùng 62% với tri thức đã duyệt";
   const DEFAULT = "(dưới 80%: mặc định FP)";
-  const REASONS = ["fp_policy:asset_criticality", "verifier_disagrees"];
-  const REASONS_TEXT = "tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý";
+  // The warnings of a run the rule applied to: the server never lists `verifier_disagrees` there.
+  const REASONS = ["fp_policy:asset_criticality", "fp_policy:playbook_rule"];
+  const REASONS_TEXT = "tài sản quan trọng hoặc chưa rõ, không khớp bảng quyết định đã duyệt";
+  // The warnings of a run the rule did not apply to, where the verifier's answer is served and may disagree.
+  const NO_RULE_REASONS = ["fp_policy:asset_criticality", "verifier_disagrees"];
+  const NO_RULE_REASONS_TEXT = "tài sản quan trọng hoặc chưa rõ, bộ kiểm tra không đồng ý";
 
   describe("the line", () => {
     it("says the verdict is the default below the threshold, after the percentage, with no note and no flag", () => {
@@ -1335,6 +1341,9 @@ describe("the RAG default below the threshold (DEC-219)", () => {
     );
 
     it("puts the parenthesis after the verdict when the page has no percentage, with and without warnings", () => {
+      // The percentage of the line is the page's own, the `rag` pair every conclusion line reads; the backend gives
+      // `rag_rule.best_pct` the same number, so with the pair empty there is no percentage clause, whatever the rule
+      // stored (here `best_pct` 62), and the parenthesis (which needs only the threshold) still follows the verdict.
       const none = { rag: { best_pct: null, not_applied: null } };
       const { unmount } = renderColumn(ragDefault([], none));
       expect(line().textContent).toBe("AI kết luận: FP (dưới 80%: mặc định FP)");
@@ -1411,10 +1420,20 @@ describe("the RAG default below the threshold (DEC-219)", () => {
         { threshold: 80, best_pct: 91, applied: false, changed: false } as RagRule,
       ],
     ])("is today's line when the rule did not apply: %s", (_name, rule) => {
-      renderColumn(noRule(REASONS, rule));
+      renderColumn(noRule(NO_RULE_REASONS, rule));
       expect(line().textContent).toBe(
         "AI kết luận: FP (độ tin cậy cao) — trùng 62% với tri thức đã duyệt — " +
-          `có cảnh báo kiểm chứng: ${REASONS_TEXT}`,
+          `có cảnh báo kiểm chứng: ${NO_RULE_REASONS_TEXT}`,
+      );
+      expect(column().textContent).not.toContain("mặc định");
+    });
+
+    it("is today's line when the server says the rule applied but serves a verdict that is not FP (inconsistent)", () => {
+      const v = ragDefault();
+      v.suggestion = { ...v.suggestion!, suggested_action: "true_positive", confidence: "medium" };
+      renderColumn(v);
+      expect(line().textContent).toBe(
+        "AI kết luận: TP (độ tin cậy trung bình) — trùng 62% với tri thức đã duyệt",
       );
       expect(column().textContent).not.toContain("mặc định");
     });
@@ -1446,16 +1465,34 @@ describe("the RAG default below the threshold (DEC-219)", () => {
       expect(column().textContent).not.toContain("quy tắc RAG");
     });
 
-    it("shows what the server serves in the gate's steps: the verdict ① ended with, twice", () => {
+    // The gate block of a run the rule applied to is pinned whole: the verdict ① ended with twice, and no verifier row
+    // (the server sends `verifier_verdict` null, and `GateSteps` draws a row only for a verdict it was given), so
+    // nothing in it can give the model's own answer away. A label edited in strings.ts alone fails here.
+    it("pins the gate block of a run the rule applied to: the verdict ① ended with twice, no verifier row", () => {
       renderColumn(ragDefault());
-      const steps = within(within(column()).getByRole("region", { name: S.ai1.gateSteps }));
-      expect(steps.getByText(S.ai1.gateProposed).parentElement).toHaveTextContent(
-        `${S.ai1.gateProposed}${S.ai1.action.false_positive}`,
+      const steps = within(column()).getByRole("region", { name: S.ai1.gateSteps });
+      expect(steps.textContent).toBe("Các bước của cổngĐề xuất gốcFPKết luận sau cổngFP");
+      expect(steps.textContent).not.toContain(S.ai1.verifier);
+    });
+
+    it("pins the gate block of such a run that also carries a gate warning of its own", () => {
+      const v = ragDefault(REASONS);
+      v.suggestion = {
+        ...v.suggestion!,
+        gate: { ...v.suggestion!.gate, warnings: ["fp_policy:playbook_rule: no rule cited"] },
+      };
+      renderColumn(v);
+      const steps = within(column()).getByRole("region", { name: S.ai1.gateSteps });
+      expect(steps.textContent).toBe(
+        "Các bước của cổngĐề xuất gốcFPKết luận sau cổngFPCảnh báo của cổngfp_policy:playbook_rule: no rule cited",
       );
-      expect(steps.getByText(S.ai1.gateFinal).parentElement).toHaveTextContent(
-        `${S.ai1.gateFinal}${S.ai1.action.false_positive}`,
+    });
+
+    it("pins the gate line of such a run: the gate forced nothing", () => {
+      renderColumn(ragDefault(REASONS));
+      expect(within(column()).getByText(S.ai1.gate).parentElement?.textContent).toBe(
+        "Cổng kiểm soátKhông bị ép",
       );
-      expect(steps.queryByText(S.ai1.action.true_positive)).not.toBeInTheDocument();
     });
   });
 
@@ -1502,14 +1539,14 @@ describe("the RAG default below the threshold (DEC-219)", () => {
     it("is today's line in the box when the rule did not apply", () => {
       renderColumn(
         noRule(
-          REASONS,
+          NO_RULE_REASONS,
           { threshold: 80, best_pct: 91, applied: false, changed: false },
           { status: "closed_fp", acknowledged_by_name: "An" },
         ),
       );
       expect(within(box()).getByText(/AI kết luận/).textContent).toBe(
         "AI kết luận: FP (độ tin cậy cao) — trùng 62% với tri thức đã duyệt — " +
-          `có cảnh báo kiểm chứng: ${REASONS_TEXT}`,
+          `có cảnh báo kiểm chứng: ${NO_RULE_REASONS_TEXT}`,
       );
     });
   });
@@ -1573,12 +1610,13 @@ describe("accessibility", () => {
       view({
         suggestion: suggestion({
           suggested_action: "false_positive",
+          confidence: null,
           gate: {
             forced: false,
             forced_by: [],
             proposed_verdict: "false_positive",
             final_verdict: "false_positive",
-            verifier_verdict: "agree",
+            verifier_verdict: null,
             rag_rule: { threshold: 80, best_pct: 62, applied: true, changed: true },
           },
         }),

@@ -602,13 +602,13 @@ describe("the ① column, from the state of the view", () => {
       a1: full({
         suggestion: suggestion({
           suggested_action: "false_positive",
-          confidence: "high",
+          confidence: null,
           gate: {
             forced: false,
             forced_by: [],
             proposed_verdict: "false_positive",
             final_verdict: "false_positive",
-            verifier_verdict: "agree",
+            verifier_verdict: null,
             rag_rule: { threshold: 80, best_pct: 62, applied: true, changed: true },
           },
         }),

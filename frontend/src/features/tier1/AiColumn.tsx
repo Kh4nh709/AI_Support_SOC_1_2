@@ -179,7 +179,9 @@ export function GateLine({
 /**
  * What the gate did: the verdict ① proposed, the one it ended with (the same for a new run, DEC-217; for a run below
  * the RAG threshold, DEC-219, the server serves the verdict ① ended with in both places), the verifier, and the
- * gate's warnings. A version 1 row shows what the gate stored, `needs_review` included.
+ * gate's warnings. A row is drawn only for a verdict the server gave: a null verifier verdict (the server sends it for
+ * a run below the RAG threshold, DEC-219) has no "Bộ kiểm chứng" row at all. A version 1 row shows what the gate
+ * stored, `needs_review` included.
  */
 export function GateSteps({ gate }: { gate: NonNullable<Suggestion["gate"]> }) {
   const warnings = gate.warnings ?? [];

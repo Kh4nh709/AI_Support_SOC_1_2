@@ -414,19 +414,21 @@ describe("aiStateOfView", () => {
   describe("the RAG default below the threshold (DEC-219)", () => {
     const RULE: RagRule = { threshold: 80, best_pct: 62, applied: true, changed: true };
     /**
-     * A run the rule applied to as the server serves it: ① ended with FP, the model's own answer is not served (both
-     * `proposed_action` and `gate.proposed_verdict` are the verdict ① ended with), and nothing is forced.
+     * A run the rule applied to as the server serves it: ① ended with FP, nothing of the model's own answer is served
+     * (`proposed_action` and `gate.proposed_verdict` are the verdict ① ended with, the verifier's verdict and the
+     * confidence are null), and nothing is forced. `held_by` never carries `verifier_disagrees`.
      */
     const applied = (over: Partial<AlertView> = {}, rule: unknown = RULE): AlertView =>
       view({
         suggestion: {
           suggested_action: "false_positive",
-          confidence: "high",
+          confidence: null,
           gate: {
             forced: false,
             forced_by: [],
             proposed_verdict: "false_positive",
             final_verdict: "false_positive",
+            verifier_verdict: null,
             rag_rule: rule as RagRule | null | undefined,
           },
         },
@@ -439,7 +441,7 @@ describe("aiStateOfView", () => {
       expect(aiStateOfView(applied())).toEqual({
         kind: "ready",
         action: "false_positive",
-        confidence: "high",
+        confidence: null,
         forced: false,
         proposed: "false_positive",
         heldBy: [],
@@ -459,7 +461,7 @@ describe("aiStateOfView", () => {
         expect(aiStateOfView(applied({ status }))).toEqual({
           kind: "decided",
           action: "false_positive",
-          confidence: "high",
+          confidence: null,
           proposed: "false_positive",
           heldBy: [],
           ragDefaultBelow: 80,
@@ -509,6 +511,23 @@ describe("aiStateOfView", () => {
       expect(state).toMatchObject({ kind: "ready" });
       expect("ragDefaultBelow" in state).toBe(false);
     });
+
+    // A server that says the rule applied while the verdict it serves is not `false_positive` is inconsistent: the
+    // state then has no default to announce, and the line is today's.
+    it.each([
+      ["true_positive", "ready"],
+      ["needs_review", "ready"],
+      ["true_positive", "decided"],
+    ])(
+      "has no threshold when the rule applied but the action is %s (an inconsistent server): %s",
+      (action, kind) => {
+        const v = applied(kind === "decided" ? { status: "closed_fp" } : {});
+        v.suggestion = { ...v.suggestion!, suggested_action: action };
+        const state = aiStateOfView(v);
+        expect(state).toMatchObject({ kind, action });
+        expect("ragDefaultBelow" in state).toBe(false);
+      },
+    );
 
     it("is never in the state of a queue row, which carries no rag_rule", () => {
       const queued = aiStateOfRow(
@@ -795,6 +814,16 @@ describe("conclusionOf and heldOf", () => {
     expect(conclusionOf({ action: "false_positive", proposed: "true_positive", heldBy: [] })).toBe(
       "false_positive",
     );
+  });
+
+  it("falls back on proposed for an action that is none of the two, whatever the word: an unknown one too", () => {
+    expect(conclusionOf(ready({ action: "escalate", proposed: "true_positive" }))).toBe(
+      "true_positive",
+    );
+    expect(conclusionOf(ready({ action: "quarantine_host", proposed: "false_positive" }))).toBe(
+      "false_positive",
+    );
+    expect(conclusionOf(ready({ action: "escalate", proposed: "needs_review" }))).toBeNull();
   });
 
   it("takes the model's own answer only when the action is not one of the two: the guard for a stored needs_review", () => {

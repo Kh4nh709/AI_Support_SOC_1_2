@@ -16,8 +16,8 @@ import type { AlertView, QueueRow, SuggestionGate } from "../../api/tier1";
  *
  * `ragDefaultBelow` is there only for a run the RAG rule applied to (DEC-219): a RAG match existed and its best was
  * below this percentage, so `false_positive` is ①'s default answer, whether the model had said it itself or not. The
- * alert view says so (`suggestion.gate.rag_rule.applied`); the queue row carries nothing of it, and a run the rule
- * did not apply to has no such key.
+ * alert view says so (`suggestion.gate.rag_rule.applied`) and the verdict it serves is `false_positive`; the queue row
+ * carries nothing of it, and any other run has no such key.
  */
 export type AiConclusion = {
   action: string | null;
@@ -80,12 +80,16 @@ const textOrNull = (value: unknown): string | null => (typeof value === "string"
  * applied to this run (`rag_rule.applied` is true, with the threshold the match was below), and no key at all for any
  * other run: a rule that did not apply or was switched off, a run stored before the rule (`rag_rule` null or absent),
  * and a value that is not what the server sends. `changed` is not read: whether the model had said `false_positive`
- * itself or the rule made it, the page says the same. Only the alert view's gate carries it, so only `aiStateOfView`
- * reads it.
+ * itself or the rule made it, the page says the same. The default is `false_positive`, so a run whose verdict is
+ * anything else (an inconsistent server) announces none: its line is today's. Only the alert view's gate carries it,
+ * so only `aiStateOfView` reads it.
  */
-function ragRuleOf(gate: SuggestionGate | null | undefined): { ragDefaultBelow?: number } {
+function ragRuleOf(
+  gate: SuggestionGate | null | undefined,
+  action: string | null,
+): { ragDefaultBelow?: number } {
   const rule: unknown = gate?.rag_rule;
-  if (typeof rule !== "object" || rule === null) return {};
+  if (action !== "false_positive" || typeof rule !== "object" || rule === null) return {};
   const { applied, threshold } = rule as Record<string, unknown>;
   return applied === true &&
     typeof threshold === "number" &&
@@ -160,14 +164,16 @@ export function aiStateOfRow(row: QueueRow): AiState {
 export function aiStateOfView(view: AlertView): AiState {
   const suggestion = view.suggestion;
   if (DECIDED.has(view.status)) {
+    const action =
+      typeof suggestion?.suggested_action === "string" ? suggestion.suggested_action : null;
     return {
       kind: "decided",
-      action: typeof suggestion?.suggested_action === "string" ? suggestion.suggested_action : null,
+      action,
       confidence: suggestion?.confidence ?? null,
       // The decision lifts the blind arm: the server sends the two keys back with the rest of the suggestion.
       proposed: textOrNull(view.proposed_action),
       heldBy: codes(view.held_by),
-      ...ragRuleOf(suggestion?.gate),
+      ...ragRuleOf(suggestion?.gate, action),
     };
   }
   if (!("suggestion" in view) && view.suggestion_visible === false) return { kind: "hidden" };
@@ -179,7 +185,7 @@ export function aiStateOfView(view: AlertView): AiState {
       forced: suggestion.gate?.forced === true,
       proposed: textOrNull(view.proposed_action),
       heldBy: codes(view.held_by),
-      ...ragRuleOf(suggestion.gate),
+      ...ragRuleOf(suggestion.gate, suggestion.suggested_action),
     };
   }
   if (view.triage_status === "unavailable") {
