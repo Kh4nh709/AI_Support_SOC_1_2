@@ -606,6 +606,44 @@ describe("the refusals of Phân tích", () => {
     await screen.findByText(S.ai2.running);
     expect(posts).toBe(1);
   });
+
+  // G: the button is disabled by the mutation's state, which TanStack hands to the page a macrotask after the click
+  // (`notifyManager`). The ordinary double click above waits that long between its two clicks (user-event's default
+  // delay), so the disabled button alone passes it. With `delay: null` the second click lands before the state
+  // reaches the button: only the `postingNow` ref stands between it and a second POST.
+  it("posts once when the second click lands before the button is drawn busy (the ref guard)", async () => {
+    serveViews(idle());
+    let posts = 0;
+    server.use(
+      http.post(ANALYZE_URL, () => {
+        posts += 1;
+        return HttpResponse.json({ run_id: RUN, job_id: 41 }, { status: 202 });
+      }),
+    );
+    renderColumn();
+    const button = await analyzeButton();
+    await userEvent.setup({ delay: null }).dblClick(button);
+    await screen.findByText(S.ai2.running);
+    expect(posts).toBe(1);
+  });
+
+  it("can post again once the first request is over: the guard is released, not stuck", async () => {
+    serveViews(idle());
+    let posts = 0;
+    server.use(
+      http.post(ANALYZE_URL, () => {
+        posts += 1;
+        return HttpResponse.json({ detail: "boom" }, { status: 500 });
+      }),
+    );
+    renderColumn();
+    const user = userEvent.setup();
+    await user.click(await analyzeButton());
+    await screen.findByRole("alert");
+    expect(posts).toBe(1);
+    await user.click(screen.getByRole("button", { name: S.ai2.analyze }));
+    await waitFor(() => expect(posts).toBe(2));
+  });
 });
 
 // ── another case ────────────────────────────────────────────────────────────────────────────────
@@ -660,6 +698,56 @@ describe("another case", () => {
     release();
     await settle();
     expect(screen.queryByText(S.common.unknownError)).not.toBeInTheDocument();
+  });
+
+  // G: the run of a 202 is kept with the case it belongs to (`kept.caseId === caseId`). A request of the first case that
+  // is answered after the page has moved to the second must not give the second the first's run: it would read
+  // `?run_id=<the first's>`, and the first case's job would be followed on the second case's page.
+  it("does not give another case the run a request of the first case is accepted with after the page moved on", async () => {
+    let accept: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      accept = resolve;
+    });
+    const asked: (string | null)[] = [];
+    server.use(
+      http.get(VIEW_URL, () => HttpResponse.json(idle())),
+      http.post(ANALYZE_URL, async () => {
+        await gate;
+        return HttpResponse.json({ run_id: RUN, job_id: 41 }, { status: 202 });
+      }),
+      http.get(OTHER_VIEW_URL, ({ request }) => {
+        asked.push(new URL(request.url).searchParams.get("run_id"));
+        return HttpResponse.json(idle());
+      }),
+    );
+    const client = newClient();
+    const { rerender } = render(columnOf(client, CASE));
+    await userEvent.setup().click(await analyzeButton());
+    // the page moves to the other case while the request of the first is still in flight
+    rerender(columnOf(client, OTHER));
+    expect(await screen.findByText(S.ai2.idle)).toBeInTheDocument();
+    expect(asked).toEqual([null]);
+
+    // the first case's request is answered: 202 with a run of the first case
+    accept();
+    await settle();
+    expect(asked).toEqual([null]); // the other case never asked for the first's run
+    expect(screen.getByText(S.ai2.idle)).toBeInTheDocument();
+    expect(screen.queryByText(S.ai2.running)).not.toBeInTheDocument();
+  });
+
+  it("follows the run of a 202 on the case it was made for, though the view of the case's state names none", async () => {
+    // the other half of the guard: a run of this case is still kept and sent (a `done` view carries no run_id of its own)
+    const seen = serveViews(idle(), running(), done());
+    server.use(
+      http.post(ANALYZE_URL, () => HttpResponse.json({ run_id: RUN, job_id: 41 }, { status: 202 })),
+    );
+    renderColumn();
+    await userEvent.setup().click(await analyzeButton());
+    await screen.findByText(S.ai2.running);
+    expect(seen.slice(0, 1)).toEqual([null]);
+    await waitFor(() => expect(seen.length).toBeGreaterThan(1), { timeout: 5000 });
+    expect(seen[1]).toBe(RUN);
   });
 });
 
