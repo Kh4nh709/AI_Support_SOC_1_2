@@ -3,7 +3,7 @@
 // (the confidence meter) passes it as children, in place of the value and the note.
 import type { ReactNode } from "react";
 import { useId } from "react";
-import { CAPTION, type Tone } from "./styles";
+import { CAPTION_BASE, type Tone } from "./styles";
 
 const FRAME: Record<Tone, string> = {
   neutral: "border-border bg-surface",
@@ -62,7 +62,10 @@ export function ScoreTile({
       data-tone={tone}
       className={`flex min-w-0 flex-col gap-0.5 rounded-[10px] border p-3 ${FRAME[tone]}`}
     >
-      <span id={labelId} className={`${CAPTION} ${coloured ? CAPTION_INK[tone] : ""}`}>
+      <span
+        id={labelId}
+        className={`${CAPTION_BASE} ${coloured ? CAPTION_INK[tone] : "text-muted"}`}
+      >
         {label}
       </span>
       {children !== undefined ? (

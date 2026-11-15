@@ -354,7 +354,8 @@ TWO_CIRCLE_REQUIRED_FACTS: list[tuple[str, str]] = [
     ("verified: plain or HTML-escaped", "HTML-escaped"),
     ("verified: duplicates count", "duplicate of a case alert"),
     ("the verified mark", "`Đã kiểm chứng`"),
-    ("the unverified mark", "`Chưa kiểm chứng`"),
+    # DEC-221: an evidence mark is an icon the page speaks; the unverified one says "Không kiểm chứng được"
+    ("the unverified mark", "`Không kiểm chứng được`"),
     ("reason not_in_case", "`not_in_case`"),
     ("reason quote_not_found", "`quote_not_found`"),
     ("reason quote_too_short", "`quote_too_short`"),

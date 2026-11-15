@@ -186,6 +186,197 @@ export type Suggestion = {
   created_at?: string | null;
 };
 
+// ── The `analysis` object of the alert view (DEC-221, AP-T2) ────────────────────────────────────────────────────
+// Everything the system knows of ①'s newest run, in the shape the Tier 1 panel is drawn from
+// (`backend/app/tier1/analysis.py` is the source of truth). `null` for an alert with no ① run or whose newest run has
+// no result; ABSENT on the blind arm, like `suggestion` (`visibility.ANALYST_HIDE`). Every key may be missing or of
+// another shape in a stored or an older document: the panel reads it through `analysisModel.ts` and never trusts a
+// key's type. The closed codes below are the backend's tuples (`CHECK_IDS`, `CHECK_OUTCOMES`, `CHECK_DETAILS`,
+// `HIGHLIGHT_DIRECTIONS`, `HIGHLIGHT_CODES`, `REASON_WHY`, `FACT_FIELDS` of `tier1/analysis.py`; `STATES` of
+// `llm/rag_view.py`; `REASON_SOURCES` of `security/output_guard.py`; `LEVELS` and `CONCLUSIONS` of `rag/history.py`):
+// `strings.test.ts` reads those tuples and holds both sides equal, so a code added there without a word here goes red.
+// A code this UI does not know still arrives as a plain string and is shown as it came.
+
+export const CHECK_IDS = ["1", "2", "3", "3r", "4", "5", "6"] as const;
+export type CheckId = (typeof CHECK_IDS)[number];
+export const CHECK_OUTCOMES = ["pass", "warn", "na"] as const;
+export type CheckOutcome = (typeof CHECK_OUTCOMES)[number];
+export const CHECK_DETAILS = [
+  "schema_ok",
+  "schema_repaired",
+  "facts_match",
+  "facts_mismatch",
+  "quotes_verified",
+  "quotes_some_dropped",
+  "no_verified_quote",
+  "rag_rule_applied",
+  "rag_rule_not_applied",
+  "rag_rule_off",
+  "fp_policy_ok",
+  "fp_policy_facts",
+  "fp_policy_playbook",
+  "not_false_positive",
+  "no_injection_findings",
+  "injection_findings",
+  "verifier_agrees",
+  "verifier_disagrees",
+  "verifier_invalid",
+  "not_run",
+] as const;
+export type CheckDetail = (typeof CHECK_DETAILS)[number];
+export const HIGHLIGHT_DIRECTIONS = ["up", "down", "warn"] as const;
+export type HighlightDirection = (typeof HIGHLIGHT_DIRECTIONS)[number];
+export const HIGHLIGHT_CODES = [
+  "history_incident",
+  "history_benign",
+  "identity_privileged",
+  "asset_high",
+  "asset_unknown",
+  "severity_critical",
+  "rag_matched",
+  "rag_below_floor",
+  "rag_failed",
+  "warning_facts_mismatch",
+  "warning_no_verified_quote",
+  "warning_fp_policy_facts",
+  "warning_fp_policy_playbook",
+  "warning_injection_findings",
+  "warning_verifier_disagrees",
+  "warning_verifier_invalid",
+] as const;
+export type HighlightCode = (typeof HIGHLIGHT_CODES)[number];
+export const REASON_WHY = ["not_substring", "unknown_source", "empty_quote"] as const;
+export type ReasonWhy = (typeof REASON_WHY)[number];
+/** The sources a reason may cite (`security/output_guard.REASON_SOURCES`). */
+export const REASON_SOURCES = [
+  "wazuh_raw_log",
+  "rule_description",
+  "correlation_samples",
+  "kb_playbook",
+  "context",
+  "siem_context",
+] as const;
+export const FACT_FIELDS = [
+  "severity",
+  "ioc_reputation",
+  "asset_criticality",
+  "identity_privileged",
+  "occurrence_count",
+] as const;
+export type FactField = (typeof FACT_FIELDS)[number];
+/** What the lookup of the run came to (`llm.rag_view.STATES`). */
+export const RAG_STATES = [
+  "matched",
+  "below_floor",
+  "no_candidate",
+  "failed",
+  "no_lookup",
+] as const;
+export type RagState = (typeof RAG_STATES)[number];
+/** What an approved knowledge entry was learned from (`knowledge_entries.conclusion`). */
+export type EntryConclusion =
+  | "closed_fp"
+  | "closed_benign"
+  | "concluded_fp"
+  | "concluded_policy_violation"
+  | "confirmed_incident";
+/** The decision history's six conclusions (`rag.history.CONCLUSIONS`). */
+export const HISTORY_CONCLUSIONS = [
+  "tier1_closed_fp",
+  "tier1_closed_benign",
+  "escalated_open",
+  "concluded_fp",
+  "concluded_policy_violation",
+  "confirmed_incident",
+] as const;
+export type HistoryConclusion = (typeof HISTORY_CONCLUSIONS)[number];
+/** The six key levels of the decision history (`rag.history.LEVELS`, by name). */
+export const HISTORY_KEYS = [
+  "soar_case",
+  "cluster",
+  "scenario_host",
+  "rule_host",
+  "rule_source",
+  "category_host",
+] as const;
+export type HistoryKey = (typeof HISTORY_KEYS)[number];
+
+export type AnalysisReason = {
+  claim: string | null;
+  quote: string | null;
+  source: string | null;
+  verified: boolean;
+  /** Why the quote was not verified, null when it was. */
+  why: ReasonWhy | null;
+};
+/** `model` is the value the model DECLARED for the field (a key name), never the name of a model. */
+export type AnalysisFact = {
+  field: FactField;
+  system: string | number | null;
+  model: string | number | null;
+  /** Null: not compared (no value on one side, step 2 left no record, or a run the RAG default applied to). */
+  match: boolean | null;
+};
+export type AnalysisCheck = { id: CheckId; outcome: CheckOutcome; detail: CheckDetail };
+export type AnalysisCandidate = {
+  pct: number;
+  title: string | null;
+  conclusion: EntryConclusion | null;
+};
+export type AnalysisRag = {
+  state: RagState;
+  failure: string | null;
+  best_pct: number | null;
+  floor_pct: number | null;
+  /** The RAG rule's threshold (0: the rule is off). */
+  threshold_pct: number;
+  scored: number | null;
+  candidates: AnalysisCandidate[];
+};
+export type AnalysisHistory = {
+  key: HistoryKey | null;
+  total: number;
+  by_conclusion: Record<HistoryConclusion, number>;
+  last_seen: string | null;
+};
+export type AnalysisPlaybook = {
+  name: string | null;
+  rule_id: string | null;
+  rule_action: "false_positive" | "needs_review" | "true_positive" | null;
+  /** Whether the decision table is signed: null when the table cannot be read. */
+  rule_table_reviewed: boolean | null;
+};
+export type AnalysisHighlight = {
+  direction: HighlightDirection;
+  code: HighlightCode;
+  params: Record<string, unknown>;
+};
+export type AnalysisTech = {
+  input_tokens: number | null;
+  output_tokens: number | null;
+  latency_ms: number | null;
+  cost_usd: number | null;
+  analysed_at: string | null;
+  mitre_ids: string[];
+  correlated_at_analysis: number | null;
+};
+export type Analysis = {
+  summary: string | null;
+  reading_attack: string | null;
+  reading_benign: string | null;
+  would_change: string | null;
+  next_checks: string[];
+  reasons: AnalysisReason[];
+  facts: AnalysisFact[];
+  checks: AnalysisCheck[];
+  check_totals: { passed: number; applicable: number; warnings: number };
+  rag: AnalysisRag;
+  history: AnalysisHistory | null;
+  playbook: AnalysisPlaybook;
+  highlights: AnalysisHighlight[];
+  tech: AnalysisTech;
+};
+
 /**
  * `ck_alerts_status`: the eleven values of `alerts.status`, `archived` (021, DEC-212: the old queue closed out
  * without review) last. A response may still carry a word the UI does not know (the fields below stay `string`
@@ -332,6 +523,11 @@ export type AlertView = {
    * none.
    */
   rag?: RagWire;
+  /**
+   * The Tier 1 panel's data (DEC-221): see `Analysis`. Null for an alert with no ① result, absent on a blind, undecided
+   * head (it goes with `suggestion`) and from an older server; the panel then falls back to the flat column.
+   */
+  analysis?: Analysis | null;
 
   requested_alert_id?: string;
   duplicate_of?: string | null;

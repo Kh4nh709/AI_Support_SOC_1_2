@@ -11,6 +11,7 @@ import { EvidenceBlock } from "./EvidenceBlock";
 import { KnowledgeCandidates } from "./KnowledgeCandidates";
 import { ScoreTile } from "./ScoreTile";
 import { StatusIcon } from "./StatusIcon";
+import { CAPTION, CAPTION_BASE } from "./styles";
 import { Tabs } from "./Tabs";
 
 describe("ScoreTile", () => {
@@ -27,6 +28,36 @@ describe("ScoreTile", () => {
       "data-tone",
       "critical",
     );
+  });
+
+  // The cascade cannot be seen in jsdom, and in the built CSS `.text-muted` wins over a tint on the same element: so the
+  // caption of a coloured tile must not carry both colour classes. It carries its tile's tint and no `text-muted`; a
+  // quiet tile's carries `text-muted` and no tint. (Review of the Tier 2 panel: every coloured caption rendered grey.)
+  it.each(["critical", "high", "medium", "low"] as const)(
+    "tints the caption of a %s tile with its own colour, and not with the muted grey too",
+    (tone) => {
+      render(<ScoreTile label="Kết luận" tone={tone} value="TP" />);
+      const caption = screen.getByText("Kết luận");
+      expect(caption).toHaveClass(`text-${tone}`);
+      expect(caption).not.toHaveClass("text-muted");
+    },
+  );
+
+  it.each(["neutral", "ai"] as const)(
+    "writes the caption of a %s tile in the muted grey and in no tint",
+    (tone) => {
+      render(<ScoreTile label="Độ tin cậy" tone={tone} value="x" />);
+      const caption = screen.getByText("Độ tin cậy");
+      expect(caption).toHaveClass("text-muted");
+      for (const tint of ["critical", "high", "medium", "low"]) {
+        expect(caption).not.toHaveClass(`text-${tint}`);
+      }
+    },
+  );
+
+  it("shares its caption style with the cards without the colour: the base has none, the card's has the grey", () => {
+    expect(CAPTION_BASE).not.toMatch(/text-(muted|critical|high|medium|low|text|ok)\b/);
+    expect(CAPTION).toBe(`${CAPTION_BASE} text-muted`);
   });
 
   it("is neutral when it is given no tone", () => {
@@ -125,6 +156,30 @@ describe("StatusIcon", () => {
       "warn",
       "na",
     ]);
+  });
+
+  // The Tier 1 panel's highlights point up (towards an attack) or down (towards a benign reading), as the approved
+  // mock-up draws them: an arrow in the warning-orange or the calm blue. Added for Tier 1; the three marks above are
+  // unchanged.
+  it("draws an arrow up and an arrow down, each with its own shape and colour, and says them aloud", () => {
+    const { container } = render(
+      <>
+        <StatusIcon kind="up" label={S.analysis.status.up} />
+        <StatusIcon kind="down" label={S.analysis.status.down} />
+      </>,
+    );
+    const svgs = [...container.querySelectorAll("svg")];
+    expect(svgs.map((svg) => svg.dataset.kind)).toEqual(["up", "down"]);
+    expect(new Set(svgs.map((svg) => svg.querySelector("path")?.getAttribute("d"))).size).toBe(2);
+    expect(svgs[0]).toHaveClass("stroke-high");
+    expect(svgs[1]).toHaveClass("stroke-low");
+    expect(screen.getByRole("img", { name: "Nghiêng về tấn công" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Nghiêng về lành tính" })).toBeInTheDocument();
+  });
+
+  it("speaks the arrow of an icon line", () => {
+    render(<IconLine kind="up">Tài khoản đặc quyền.</IconLine>);
+    expect(screen.getByRole("img", { name: S.analysis.status.up })).toBeInTheDocument();
   });
 });
 

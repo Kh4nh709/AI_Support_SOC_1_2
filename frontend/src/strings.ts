@@ -8,6 +8,45 @@ import { BAND_CODES, type BandCode } from "./api/types";
 /** The shortest quote ② may cite, in characters (`MIN_QUOTE_CHARS` of backend/app/tier2/investigate.py). */
 export const MIN_QUOTE_CHARS = 8;
 
+/**
+ * The line under the "Tri thức (RAG)" tile, for each state of the lookup and each failure kind
+ * (`rag.failures.FAILURE_KINDS`; strings.test.ts holds the keys equal to the backend's). One table for both tiers' tiles
+ * (DEC-221): `S.analysis.ragNote`, read by `analysis/knowledge.ts`'s `ragTile`.
+ */
+const RAG_TILE_NOTE = {
+  matched: "trùng sự cố cũ",
+  belowFloor: (floor: number | null) =>
+    floor === null ? "dưới mức tối thiểu" : `dưới mức ${floor}%`,
+  noCandidate: "không có mục nào trùng",
+  noLookup: "không có tra cứu",
+  noData: "chưa có dữ liệu",
+  failed: "tra cứu bị lỗi",
+  failedKind: {
+    rate_limit: "vượt giới hạn tốc độ",
+    timeout: "quá thời gian chờ",
+    auth: "thiếu hoặc sai API key",
+    quota: "hết hạn mức",
+    provider_error: "lỗi phía nhà cung cấp",
+    vectordb_unreachable: "không kết nối được vector DB",
+  },
+} as const;
+
+/**
+ * What a highlight of the Tier 1 panel's "Điều nổi bật" says: the server's params, read into numbers and words by
+ * `analysisModel.ts` (`null` when the server sent none), so a sentence below degrades to a plainer one instead of
+ * printing a hole.
+ */
+export type HighlightWords = {
+  count: number | null;
+  total: number | null;
+  pct: number | null;
+  floor: number | null;
+  /** The label of the entry's conclusion, or null. */
+  conclusion: string | null;
+  /** The words of the failure kind, or null. */
+  reason: string | null;
+};
+
 export const S = {
   app: {
     name: "AI Support SOC",
@@ -277,6 +316,264 @@ export const S = {
     gateSteps: "Các bước của cổng",
     facts: "Dữ kiện đã dùng",
     source: "Nguồn",
+
+    // ── The Tier 1 panel (DEC-221): four tiles, five tabs ───────────────────────────────────────────────────────
+    // The heading and the advisory line at its right are `S.alert.aiHeading` and `S.alert.aiHint`. Every closed code of
+    // the server's `analysis` object has a word here; the keys are compared with the backend's tuples in
+    // strings.test.ts, and a code with no word is shown as the code. The panel names no model (G5).
+    panel: {
+      // The tablist's name for a screen reader.
+      tabsLabel: "Chi tiết phân tích AI Tier 1",
+      tile: {
+        verdict: "Kết luận",
+        confidence: "Độ tin cậy",
+        rag: "Tri thức (RAG)",
+        checks: "Kiểm chứng",
+        // The line under the conclusion: what the verdict means.
+        verdictNote: { true_positive: "tấn công thật", false_positive: "dương tính giả" },
+        // The confidence is the model's, in its own answer, so a verdict the RAG default decided (DEC-219) has none
+        // to show: the tile says it does not apply, and never what the model had answered.
+        confidenceNone: "không áp dụng cho kết luận mặc định",
+        // Checks passed over checks that apply, and under it the warnings (in the warning colour) or the calm line.
+        checksNote: {
+          clean: "không có cảnh báo",
+          none: "chưa có kiểm chứng",
+          warnings: (count: number) => `${count} cảnh báo`,
+        },
+      },
+      tabs: {
+        overview: "Tổng quan",
+        evidence: "Bằng chứng",
+        knowledge: "Tri thức",
+        checks: "Kiểm chứng",
+        tech: "Kỹ thuật",
+      },
+
+      // Tổng quan.
+      overview: {
+        highlights: "Điều nổi bật",
+        attack: "Nếu là tấn công",
+        benign: "Nếu lành tính",
+        wouldChange: "Điều sẽ làm đổi kết luận:",
+        nextChecks: "Nên kiểm tra tiếp",
+        // An older run, or one with nothing to say: no empty headings, one plain line.
+        none: "Lượt phân tích này không có phần tóm tắt.",
+      },
+      // `analysis.highlights[].code`, in the order the server serves them (`HIGHLIGHT_CODES`). The server builds each one
+      // from system facts, never from a text the model wrote.
+      highlight: {
+        history_incident: ({ count, total }: HighlightWords) =>
+          count !== null && total !== null
+            ? `Lịch sử: ${count} trên ${total} alert tương tự từng là sự cố thật.`
+            : "Lịch sử: phần lớn alert tương tự từng là sự cố thật.",
+        history_benign: ({ count, total }: HighlightWords) =>
+          count !== null && total !== null
+            ? `Lịch sử: ${count} trên ${total} alert tương tự từng được đóng là không phải tấn công.`
+            : "Lịch sử: phần lớn alert tương tự từng được đóng là không phải tấn công.",
+        identity_privileged: () => "Tài khoản liên quan là tài khoản đặc quyền.",
+        asset_high: () => "Tài sản liên quan có độ quan trọng cao.",
+        asset_unknown: () => "Độ quan trọng của tài sản liên quan chưa rõ.",
+        severity_critical: () => "Alert ở mức nghiêm trọng critical.",
+        rag_matched: ({ pct, conclusion }: HighlightWords) =>
+          pct === null
+            ? "Có tri thức đã duyệt trùng với alert này."
+            : `Tri thức đã duyệt trùng ${pct}%${conclusion === null ? "" : ` (${conclusion})`}.`,
+        rag_below_floor: ({ pct, floor }: HighlightWords) =>
+          floor === null
+            ? "Không có tri thức đã duyệt nào đạt mức tối thiểu."
+            : pct === null
+              ? `Không có tri thức đã duyệt nào trùng từ ${floor}% trở lên.`
+              : `Không có tri thức đã duyệt nào trùng từ ${floor}% trở lên (cao nhất ${pct}%).`,
+        rag_failed: ({ reason }: HighlightWords) =>
+          reason === null
+            ? "Không tra cứu được tri thức đã duyệt."
+            : `Không tra cứu được tri thức đã duyệt: ${reason}.`,
+        warning_facts_mismatch: () => "AI khai dữ kiện lệch với hệ thống.",
+        warning_no_verified_quote: () =>
+          "Không có dẫn chứng nào khớp nguyên văn với dữ liệu alert.",
+        warning_fp_policy_facts: () => "Một dữ kiện của alert không cho phép kết luận FP.",
+        warning_fp_policy_playbook: () => "Kết luận FP không khớp bảng quyết định đã duyệt.",
+        warning_injection_findings: () => "Dữ liệu alert có dấu hiệu chèn lệnh.",
+        warning_verifier_disagrees: () => "Bộ kiểm chứng độc lập không đồng ý.",
+        warning_verifier_invalid: () => "Bộ kiểm chứng độc lập không trả lời hợp lệ.",
+      },
+
+      // Bằng chứng: every reason of the model's answer, the quote, where it is from and whether the server found it.
+      evidence: {
+        summary: (verified: number, total: number) =>
+          `${verified} trên ${total} dẫn chứng khớp nguyên văn với dữ liệu alert.`,
+        none: "AI không nêu dẫn chứng nào.",
+        matched: "khớp nguyên văn",
+        // `reasons[].source`: the six sources a reason may cite (`security/output_guard.REASON_SOURCES`).
+        source: {
+          wazuh_raw_log: "Log gốc của alert",
+          rule_description: "Mô tả rule",
+          correlation_samples: "Mẫu tương quan",
+          kb_playbook: "Playbook",
+          context: "Ngữ cảnh tài khoản và tài sản",
+          siem_context: "Ngữ cảnh SIEM",
+        },
+        // `reasons[].why`: why the server did not verify a quote (`REASON_WHY`).
+        why: {
+          not_substring: "AI ghép hoặc diễn giải, không tìm thấy nguyên văn",
+          unknown_source: "nguồn trích dẫn không nằm trong dữ liệu AI được đưa",
+          empty_quote: "AI diễn giải, không trích nguyên văn",
+        },
+      },
+
+      // Tri thức: the lookup, the decision history, the playbook and the decision table.
+      knowledge: {
+        // The card's one sentence for each state of the lookup (`rag.state`, `STATES`).
+        state: {
+          matched: (best: number | null, floor: number | null) =>
+            best === null
+              ? "Có tri thức đã duyệt trùng với alert này, nên AI được cung cấp tri thức tham khảo."
+              : floor === null
+                ? `Mục trùng cao nhất đạt ${best}%, nên AI được cung cấp tri thức tham khảo.`
+                : `Mục trùng cao nhất đạt ${best}%, qua mức tối thiểu ${floor}%, nên AI được cung cấp tri thức tham khảo.`,
+          below_floor: (floor: number | null) =>
+            floor === null
+              ? "Không mục nào đạt mức tối thiểu, nên AI không được cung cấp tri thức tham khảo."
+              : `Không mục nào đạt mức tối thiểu ${floor}%, nên AI không được cung cấp tri thức tham khảo.`,
+          no_candidate: () => "Không có mục tri thức đã duyệt nào được chấm điểm cho alert này.",
+          failed: (reason: string | null) =>
+            reason === null
+              ? "Không tra cứu được tri thức đã duyệt."
+              : `Không tra cứu được tri thức đã duyệt: ${reason}.`,
+          no_lookup: () => "Lượt phân tích này không tra cứu tri thức đã duyệt.",
+        },
+        // The rule of DEC-219: below the threshold `false_positive` is the default answer. The sentence says whether it
+        // applied and never what the model had answered.
+        rule: {
+          applied: (threshold: number) =>
+            `Quy tắc "dưới ${threshold}% → mặc định FP" đã áp dụng: kết luận mặc định là FP.`,
+          notApplied: (threshold: number) =>
+            `Quy tắc "dưới ${threshold}% → mặc định FP" không áp dụng.`,
+          off: 'Quy tắc "dưới ngưỡng → mặc định FP" đang tắt.',
+        },
+      },
+      history: {
+        heading: "Lịch sử quyết định",
+        none: "Chưa có quyết định nào trước đây cho alert tương tự.",
+        // Which alerts the history counts (`rag.history.LEVELS`, by name).
+        scope: {
+          soar_case: "Cùng case SOAR",
+          cluster: "Cùng cụm (rule, nguồn, đích, máy)",
+          scenario_host: "Cùng kịch bản và cùng máy",
+          rule_host: "Cùng rule và cùng máy",
+          rule_source: "Cùng rule và cùng nguồn hoặc người dùng",
+          category_host: "Cùng loại alert và cùng máy",
+        },
+        generic: "Alert tương tự",
+        // `rag.history.CONCLUSIONS`: what the earlier alerts came to.
+        conclusion: {
+          tier1_closed_fp: "đóng FP",
+          tier1_closed_benign: "đóng lành tính",
+          escalated_open: "đang điều tra ở Tier 2",
+          concluded_fp: "Tier 2 kết luận dương tính giả",
+          concluded_policy_violation: "vi phạm chính sách",
+          confirmed_incident: "sự cố thật",
+        },
+        // "Cùng kịch bản và cùng máy: 15 quyết định, 15 là sự cố thật · gần nhất 06/11."
+        line: (scope: string, total: number, incidents: number) =>
+          `${scope}: ${total} quyết định, ${incidents} là sự cố thật`,
+        rest: (parts: string) => `; còn lại: ${parts}`,
+        lastSeen: (when: string) => ` · gần nhất ${when}`,
+      },
+      playbook: {
+        heading: "Playbook và bảng quyết định",
+        playbook: "Playbook",
+        ruleHead: "Theo bảng quyết định, rule",
+        ruleMatches: (action: string) => `khớp: ${action}.`,
+        // `analysis.playbook.rule_action`.
+        action: {
+          false_positive: "cho phép kết luận FP",
+          needs_review: "cần người xem",
+          true_positive: "kết luận TP",
+        },
+        ruleNone: "Theo bảng quyết định, không có rule nào khớp.",
+        unsigned: "Bảng quyết định này chưa được ký duyệt.",
+        none: "Không có playbook hay bảng quyết định cho loại alert này.",
+      },
+
+      // Kiểm chứng: one line per gate step, then the facts the system recorded beside what the model declared.
+      checks: {
+        // `analysis.checks[].id` (`CHECK_IDS`): the name of the gate step.
+        step: {
+          "1": "Đúng định dạng",
+          "2": "Dữ kiện",
+          "3": "Dẫn chứng",
+          "3r": "Quy tắc RAG",
+          "4": "Chính sách FP",
+          "5": "Chèn lệnh",
+          "6": "Bộ kiểm chứng độc lập",
+        },
+        // `analysis.checks[].detail` (`CHECK_DETAILS`): the closed explanation of the outcome.
+        detail: {
+          schema_ok: "hợp lệ ngay lần đầu",
+          schema_repaired: "hợp lệ sau một lần sửa lại",
+          facts_match: "dữ kiện AI khai khớp với hệ thống",
+          facts_mismatch: "AI khai dữ kiện lệch với hệ thống",
+          quotes_verified: "mọi dẫn chứng khớp nguyên văn",
+          quotes_some_dropped: "một số dẫn chứng không khớp nguyên văn",
+          no_verified_quote: "không có dẫn chứng nào khớp nguyên văn",
+          rag_rule_applied: "đã áp dụng, kết luận mặc định là FP",
+          rag_rule_not_applied: "không áp dụng",
+          rag_rule_off: "quy tắc đang tắt",
+          fp_policy_ok: "đạt",
+          fp_policy_facts: "một dữ kiện của alert không cho phép kết luận FP",
+          fp_policy_playbook: "không khớp bảng quyết định đã duyệt",
+          not_false_positive: "không xét, vì kết luận là TP",
+          no_injection_findings: "không phát hiện",
+          injection_findings: "phát hiện dấu hiệu chèn lệnh",
+          verifier_agrees: "đồng ý với kết luận",
+          verifier_disagrees: "không đồng ý",
+          verifier_invalid: "không trả lời hợp lệ",
+          not_run: "không có ghi nhận",
+        },
+        // The dash between a step's name and its explanation.
+        dash: "—",
+        // `quotes_verified` and `quotes_some_dropped` with the counts the reasons give: "2 trên 4 khớp nguyên văn".
+        quotes: (verified: number, total: number) => `${verified} trên ${total} khớp nguyên văn`,
+        // `facts_mismatch` with the fields step 2 flagged: "AI khai mức nghiêm trọng high, hệ thống ghi medium".
+        mismatch: (field: string, declared: string, system: string) =>
+          `AI khai ${field.toLowerCase()} ${declared}, hệ thống ghi ${system}`,
+        mismatchJoin: "; ",
+      },
+      facts: {
+        label: "Dữ kiện đã dùng",
+        // `analysis.facts[].field` (`FACT_FIELDS`).
+        field: {
+          severity: "Mức nghiêm trọng",
+          ioc_reputation: "Danh tiếng IOC",
+          asset_criticality: "Độ quan trọng tài sản",
+          identity_privileged: "Tài khoản đặc quyền",
+          occurrence_count: "Số lần xuất hiện",
+        },
+        // The columns: the fact, what the system recorded, what the model declared (the value, not a model's name), and
+        // whether they agree. A run the RAG default decided has the first two only.
+        column: { fact: "Dữ kiện", system: "Hệ thống", declared: "AI khai", match: "Khớp" },
+        match: { yes: "khớp", no: "lệch" },
+        // The words of a few closed values; any other value is shown as it came.
+        value: {
+          identity_privileged: { true: "có", false: "không", unknown: "chưa rõ" },
+          ioc_reputation: {
+            malicious: "độc hại",
+            suspicious: "đáng ngờ",
+            clean: "sạch",
+            not_found: "không thấy",
+            skipped: "chưa tra",
+          },
+        },
+      },
+
+      // Kỹ thuật: tokens, time, cost and when are `S.analysis.tech`'s; there is no model, no verifier and no answer
+      // format among the rows (the Owner's change, G5).
+      tech: {
+        mitre: "Nhãn MITRE của alert",
+        correlated: "Cụm tương quan lúc phân tích",
+      },
+    },
   },
 
   // P14-T07 (DEC-213, spec 4.3): what the alert page and the case page say of the RAG beside the AI's conclusion.
@@ -307,12 +604,12 @@ export const S = {
 
   alert: {
     infoHeading: "THÔNG TIN ALERT",
-    aiHeading: "PHÂN TÍCH AI ①",
+    aiHeading: "PHÂN TÍCH AI · TIER 1",
     notFound: "Không tìm thấy alert",
     loadFailed: "Không tải được alert",
     duplicateOf: (headId: string) => `bản sao của ${headId}`,
     infoHint: "dữ liệu gốc từ Wazuh và phần làm giàu",
-    aiHint: "gợi ý tham khảo — bạn là người quyết",
+    aiHint: "Gợi ý tham khảo — bạn là người quyết định",
     summaryLabel: "Tóm tắt alert",
     summary: {
       rule: "Rule",
@@ -599,8 +896,17 @@ export const S = {
     level: { low: "Thấp", medium: "Trung bình", high: "Cao" },
     // The three-segment meter, said to a screen reader.
     meter: (filled: number) => `${filled} trên 3`,
-    // StatusIcon: the spoken name of a mark that has no text beside it.
-    status: { pass: "Đạt", warn: "Cảnh báo", na: "Không áp dụng" },
+    // StatusIcon: the spoken name of a mark that has no text beside it. `up` and `down` are the arrows of a highlight
+    // (Tier 1): towards an attack, towards a benign reading.
+    status: {
+      pass: "Đạt",
+      warn: "Cảnh báo",
+      na: "Không áp dụng",
+      up: "Nghiêng về tấn công",
+      down: "Nghiêng về lành tính",
+    },
+    // The line under the RAG tile of both tiers (see `RAG_TILE_NOTE`).
+    ragNote: RAG_TILE_NOTE,
     // The mark of a quoted piece of evidence: the server checked the quote against the log, or could not.
     evidence: { verified: "Đã kiểm chứng", unverified: "Không kiểm chứng được" },
     knowledge: {
@@ -724,25 +1030,7 @@ export const S = {
       // The line under the conclusion: whose word it is. The system's own `need_more_data` (a conclusion it held back,
       // or an older run's lowered one) says so; every other conclusion is the assistant's suggestion.
       verdictNote: { plain: "gợi ý của AI", held: "hệ thống giữ lại", overruled: "đã bị hạ" },
-      // The line under the RAG tile, one for each state of the lookup and for each failure kind
-      // (`rag.failures.FAILURE_KINDS`; strings.test.ts holds the keys equal to the backend's).
-      ragNote: {
-        matched: "trùng sự cố cũ",
-        belowFloor: (floor: number | null) =>
-          floor === null ? "dưới mức tối thiểu" : `dưới mức ${floor}%`,
-        noCandidate: "không có mục nào trùng",
-        noLookup: "không có tra cứu",
-        noData: "chưa có dữ liệu",
-        failed: "tra cứu bị lỗi",
-        failedKind: {
-          rate_limit: "vượt giới hạn tốc độ",
-          timeout: "quá thời gian chờ",
-          auth: "thiếu hoặc sai API key",
-          quota: "hết hạn mức",
-          provider_error: "lỗi phía nhà cung cấp",
-          vectordb_unreachable: "không kết nối được vector DB",
-        },
-      },
+      // The line under the RAG tile is the one table of both tiers: `S.analysis.ragNote`.
       evidenceNote: "khớp nguyên văn",
       evidenceNone: "không có dẫn chứng",
     },

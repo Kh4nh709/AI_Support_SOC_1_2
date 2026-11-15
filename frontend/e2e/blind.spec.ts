@@ -24,6 +24,7 @@ import {
   type Answer,
 } from "./fixtures";
 import { phrasesFound, wordsFound } from "../src/testing/containsWord";
+import { MODEL_NAME } from "../src/testing/modelName";
 import { seedFailedLookup, seedFoundLookup, seedRun } from "./ragFixtures";
 
 /** The keys `visibility.strip` removes from an undecided blind head (with R17's two). */
@@ -39,6 +40,7 @@ const HIDDEN_KEYS = [
   "proposed_action",
   "held_by",
   "rag", // P14-T07: the match percentage and the "RAG not applied" notice are ①'s account of itself
+  "analysis", // DEC-221: the whole scorecard's data (checks, facts, the lookup, the history) is ①'s account of itself
 ] as const;
 
 /**
@@ -59,16 +61,46 @@ const CONCLUSION_PHRASES = [S.ai1.conclusion, S.ai1.held] as const;
  * alert's own text or a playbook line may say "tài khoản đặc quyền"; that is not a leak), found as plain
  * substrings, and the two labels of a verdict as WORDS ("SFTP" is not "TP").
  */
-const COLUMN_PHRASES = Object.values(S.ai1.heldReason);
 const COLUMN_LABELS = ["FP", "TP"] as const;
 
-/** The labels of the checks that warned about the stub's verdict, read from the database (step 4's fields). */
-function heldLabels(id: string): string[] {
-  const fields = sql(
+/**
+ * What the scorecard of DEC-221 adds to the AI column, and only there (the page's other column and its decision form
+ * say "dương tính giả" and "kết luận" in their own words): its tiles, its tabs, its headings and the line under the
+ * conclusion. A blind column holds none of them.
+ */
+const PANEL = S.ai1.panel;
+const PANEL_PHRASES = [
+  PANEL.tile.confidence,
+  PANEL.tile.rag,
+  PANEL.tile.checks,
+  PANEL.tabs.overview,
+  PANEL.tabs.evidence,
+  PANEL.tabs.knowledge,
+  PANEL.tabs.tech,
+  PANEL.overview.highlights,
+  PANEL.overview.attack,
+  PANEL.overview.benign,
+  PANEL.overview.nextChecks,
+  PANEL.tile.verdictNote.true_positive,
+  PANEL.tile.verdictNote.false_positive,
+  PANEL.history.heading,
+  PANEL.playbook.heading,
+  S.analysis.knowledge.heading,
+];
+const COLUMN_PHRASES = [...Object.values(S.ai1.heldReason), ...PANEL_PHRASES];
+
+/** The fields step 4 named as missing for the stub's verdict, read from the database. */
+function missingFields(id: string): string[] {
+  return sql(
     "SELECT string_agg(m, ',' ORDER BY ord) FROM llm_runs r, " +
       "jsonb_array_elements_text(r.gate_result->'missing') WITH ORDINALITY AS t(m, ord) " +
       `WHERE r.pipeline = 'triage' AND r.role = 'proposer' AND r.subject_id = '${id}'`,
   ).split(",");
+}
+
+/** The labels of the checks that warned about the stub's verdict, read from the database (step 4's fields). */
+function heldLabels(id: string): string[] {
+  const fields = missingFields(id);
   expect(fields, "step 4 named the playbook rule the stub did not cite").toContain("playbook_rule");
   const wording = S.ai1.heldReason as Record<string, string>;
   const labels = fields.map((field) => wording[`fp_policy:${field}`]);
@@ -280,13 +312,52 @@ test("a visible head says what the AI concluded and which of the gate's checks w
   await link.click();
   await expect(page).toHaveURL(`/alerts/${head.id}`);
 
+  // DEC-221: the column is the scorecard. The verdict is the first tile, the model's own answer (DEC-217); the checks
+  // that warned about it are the last tile's count, a line of the Kiểm chứng tab and a highlight of the overview.
   const column = page.getByRole("region", { name: S.alert.aiHeading });
-  await expect(column.getByText(/AI kết luận/)).toContainText(
-    `AI kết luận: ${S.ai1.action.false_positive} (độ tin cậy trung bình) — ${S.ai1.held}${S.ai1.heldBecause(labels)}`,
+  const verdict = column.getByRole("group", { name: PANEL.tile.verdict });
+  await expect(verdict).toContainText(S.ai1.action.false_positive);
+  await expect(verdict).toContainText(PANEL.tile.verdictNote.false_positive);
+  await expect(column.getByRole("group", { name: PANEL.tile.confidence })).toContainText(
+    S.analysis.level.medium,
   );
-  // the phrase is bold (spec 4.3)
-  await expect(column.locator("strong", { hasText: S.ai1.held })).toHaveCount(1);
+  await expect(column.getByRole("group", { name: PANEL.tile.checks })).toContainText(
+    /\d+ cảnh báo/,
+  );
+  // the flat line of before is not drawn beside the tiles, and nothing says ① is hidden
+  await expect(column.getByText(/AI kết luận/)).toHaveCount(0);
   await expect(column.getByText(S.ai1.hidden)).toHaveCount(0);
+  await expect(column.getByRole("tab")).toHaveText([
+    PANEL.tabs.overview,
+    PANEL.tabs.evidence,
+    PANEL.tabs.knowledge,
+    PANEL.tabs.checks,
+    PANEL.tabs.tech,
+  ]);
+
+  // the Kiểm chứng tab: step 4's warning, in the closed word for what it named (no playbook rule cited, and maybe more)
+  const detail = missingFields(head.id).every((field) => field === "playbook_rule")
+    ? PANEL.checks.detail.fp_policy_playbook
+    : PANEL.checks.detail.fp_policy_facts;
+  await column.getByRole("tab", { name: PANEL.tabs.checks }).click();
+  await expect(column.getByRole("tabpanel")).toContainText(
+    `${PANEL.checks.step["4"]} ${PANEL.checks.dash} ${detail}`,
+  );
+  expect(labels.length, "step 4 named at least one field").toBeGreaterThan(0);
+
+  // G5 on the real page: no model's name in the column, on any tab, in its text or in any attribute
+  for (const tab of [
+    PANEL.tabs.overview,
+    PANEL.tabs.evidence,
+    PANEL.tabs.knowledge,
+    PANEL.tabs.checks,
+    PANEL.tabs.tech,
+  ]) {
+    await column.getByRole("tab", { name: tab }).click();
+    const html = await column.innerHTML();
+    expect(MODEL_NAME.test(html), `the ${tab} tab names a model`).toBe(false);
+    expect(MODEL_NAME.test(await column.innerText()), `the ${tab} tab names a model`).toBe(false);
+  }
 });
 
 // P14-T07 (DEC-213, spec 4.3): the percentage ("trùng 87% với tri thức đã duyệt") and the notice that the RAG was not

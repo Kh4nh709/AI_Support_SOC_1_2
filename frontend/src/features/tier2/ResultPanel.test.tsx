@@ -623,11 +623,14 @@ describe("Bằng chứng", () => {
     ]);
   });
 
-  it("says 'Chưa kiểm chứng' for an unverified quote the server gave no reason for", async () => {
+  // One wording on both tiers' panels, the same as the mark's spoken name beside it: "Không kiểm chứng được".
+  it("says 'Không kiểm chứng được' for an unverified quote the server gave no reason for, as the icon beside it does", async () => {
     renderPanel(runV4({ evidence: [unverifiedRow({ reason_text: null })] }));
     await open("Bằng chứng");
-    expect(document.querySelector("[data-verified='false']")!.lastElementChild!.textContent).toBe(
-      "alert 112438 · Chưa kiểm chứng",
+    const block = document.querySelector("[data-verified='false']")!;
+    expect(block.lastElementChild!.textContent).toBe("alert 112438 · Không kiểm chứng được");
+    expect(within(block as HTMLElement).getByRole("img")).toHaveAccessibleName(
+      "Không kiểm chứng được",
     );
   });
 
@@ -640,7 +643,7 @@ describe("Bằng chứng", () => {
     );
     await open("Bằng chứng");
     const block = document.querySelector("[data-verified='false']") as HTMLElement;
-    expect(block.textContent).toBe("—Chưa kiểm chứng");
+    expect(block.textContent).toBe("—Không kiểm chứng được");
     expect(within(block).queryByRole("link")).not.toBeInTheDocument();
   });
 
