@@ -57,7 +57,8 @@ def _lookup(
 ) -> str:
     """One `rag_results` row in the shape `rag.lookup._store` writes: matches `{entry_id, level, content_sha256,
     score}`, `match_notes` empty. `ranked` (DEC-220) is the rerank's list, `[{entry_id, score}]`, every candidate
-    it scored: NULL when not given, as a row from before migration 023 or a lookup that never reached the rerank."""
+    it scored: NULL when not given, as a row from before migration 023 or a lookup that never reached the rerank.
+    """
     lookup_id = str(uuid.uuid4())
     matches = [
         {"entry_id": f"entry-{i}", "level": "giong", "content_sha256": "0" * 64, "score": score}

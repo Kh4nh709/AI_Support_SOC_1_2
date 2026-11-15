@@ -173,7 +173,8 @@ def test_a_lookup_that_kept_no_match_leaves_the_models_verdict(db, rule_on) -> N
 def _with_ranked_lookup(db, ranked: tuple[float, ...]) -> str:
     """A visible-arm head with a stored `ok` lookup that KEPT NO MATCH (`matches` is `[]`) and whose rerank
     scored `ranked` (DEC-220: `rag_results.ranked`, every candidate, best first): the history is in the prompt,
-    so the run names the lookup. `rag_results` is append-only, so the row is written with its ranking."""
+    so the run names the lookup. `rag_results` is append-only, so the row is written with its ranking.
+    """
     alert_id = _seed_alert(db, suggestion_visible=True)
     ranking = [{"entry_id": f"cand-{i}", "score": score} for i, score in enumerate(ranked)]
     db.execute(

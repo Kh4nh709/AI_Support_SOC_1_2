@@ -306,7 +306,8 @@ def latest_suggestion_rag(
     suggestion's; the page words it only beside a conclusion. No run gives the empty pair. Like its sibling it
     applies no blind-branch rule: `rag` is a `visibility.ANALYST_HIDE` key.
 
-    A row of the statement as it was before DEC-220 (six columns, no `ranked`) is read as a lookup with none."""
+    A row of the statement as it was before DEC-220 (six columns, no `ranked`) is read as a lookup with none.
+    """
     row = conn.execute(_SUGGESTION_SQL, (alert_id,)).fetchone()
     if row is None:
         return None, None, [], rag_view.rag_view(None, None, FAILURE_KINDS)
