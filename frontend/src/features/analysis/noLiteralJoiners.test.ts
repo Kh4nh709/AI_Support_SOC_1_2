@@ -1,25 +1,29 @@
-// src/features/tier2/noLiteralJoiners.test.ts — a WORDING rule (DEC-221, review of AP-T5): the scorecard's components
+// src/features/analysis/noLiteralJoiners.test.ts — a WORDING rule (DEC-221, review of AP-T5): the scorecards' components
 // write no word and no joiner of their own that reaches the page. The user-visible separators live in `strings.ts`: the
 // ", " between the hosts of a scope is `S.analysis.listSeparator`, the " · " between the parts of one line is
-// `S.analysis.separator`, and a labelled line ("a: b") is a function of strings.ts. This reads the sources of the Tier 2
-// scorecard and of the shared pieces (not the flat result the admin's draft view draws, which predates the rule) and
-// holds them to it. It is not a style rule: a separator that is only whitespace (the space between the classes of a
-// class list, or none at all) never reaches the page as a word, and is left alone.
+// `S.analysis.separator`, and a labelled line ("a: b") is a function of strings.ts. This reads the sources of both tiers'
+// scorecards (Tier 2's panel, Tier 1's panel and its model) and of the shared pieces, not the flat columns the admin's
+// draft view draws, which predate the rule, and holds them to it. It is not a style rule: a separator that is only
+// whitespace (the space between the classes of a class list, or none at all) never reaches the page as a word, and is
+// left alone.
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+const FEATURES = join("src", "features");
+const sourcesIn = (folder: string, keep: (name: string) => boolean): string[] =>
+  readdirSync(join(FEATURES, folder))
+    .filter((name) => /\.(ts|tsx)$/.test(name) && !/\.test\./.test(name) && keep(name))
+    .map((name) => join(FEATURES, folder, name));
+
 const FILES = [
-  ...["ResultPanel", "ResultTabs", "ResultTiles", "runModel", "caseLine"].map((name) =>
-    join(
-      "src",
-      "features",
-      "tier2",
-      `${name}.${name === "runModel" || name === "caseLine" ? "ts" : "tsx"}`,
-    ),
+  // Tier 2's scorecard: the panel, its tabs and tiles, its model and its case line (not RunResult, the flat result)
+  ...sourcesIn("tier2", (name) => /^(Result(Panel|Tabs|Tiles)|runModel|caseLine)\./.test(name)),
+  // Tier 1's scorecard: the panel, its tabs and tiles, and what they read (not FlatAiColumn, the flat column)
+  ...sourcesIn("tier1", (name) =>
+    /^(Analysis[A-Za-z]*\.tsx|analysisModel\.ts|AiColumn\.tsx)$/.test(name),
   ),
-  ...readdirSync(join("src", "features", "analysis"))
-    .filter((name) => /\.(ts|tsx)$/.test(name) && !/\.test\./.test(name))
-    .map((name) => join("src", "features", "analysis", name)),
+  // the pieces both share
+  ...sourcesIn("analysis", () => true),
 ];
 
 /** The code of a file with its comments taken out, so a comment that quotes a joiner is not a joiner. */
@@ -37,7 +41,21 @@ function wordJoinsIn(code: string): string[] {
 }
 
 it("reads the scorecard's sources (a guard over no files would pass for nothing)", () => {
-  expect(FILES.length).toBeGreaterThan(10);
+  expect(FILES.length).toBeGreaterThan(16);
+  // both tiers' scorecards are read, not only the shared pieces
+  for (const name of [
+    "AnalysisTabs.tsx",
+    "AnalysisPanel.tsx",
+    "AnalysisTiles.tsx",
+    "analysisModel.ts",
+    "ResultTabs.tsx",
+  ]) {
+    expect(
+      FILES.some((path) => path.endsWith(name)),
+      name,
+    ).toBe(true);
+  }
+  expect(FILES.some((path) => path.endsWith("FlatAiColumn.tsx"))).toBe(false);
   for (const path of FILES) expect(codeOf(path).length, path).toBeGreaterThan(0);
 });
 

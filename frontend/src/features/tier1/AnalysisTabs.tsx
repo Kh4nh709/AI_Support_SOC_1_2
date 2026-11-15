@@ -406,7 +406,8 @@ export function TechTab({ model }: { model: AnalysisModel }) {
         { label: S.analysis.tech.analysedAt, value: formatDateTime(tech.analysedAt) },
         {
           label: P.tech.mitre,
-          value: tech.mitre.length > 0 ? tech.mitre.join(", ") : S.common.missing,
+          value:
+            tech.mitre.length > 0 ? tech.mitre.join(S.analysis.listSeparator) : S.common.missing,
         },
         { label: P.tech.correlated, value: tech.correlated ?? S.common.missing },
       ]}
