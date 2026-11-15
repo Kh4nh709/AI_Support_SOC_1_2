@@ -24,7 +24,6 @@ from types import SimpleNamespace
 
 import pytest
 from app.domain.correlation import CorrelationSummary
-from app.infra.errors import PermanentError
 from app.infra.jobs import Job
 from app.llm.adapter import LLMBudgetExceeded, LLMResult
 from app.llm.triage import RESPONSE_FORMAT_FALLBACK
@@ -96,7 +95,9 @@ class _Model:
         if self._raises_from is not None and index >= self._raises_from:
             raise self._exc
         got = self._fake.complete(
-            system=kwargs["system"], user=kwargs["user"], response_format=kwargs.get("response_format")
+            system=kwargs["system"],
+            user=kwargs["user"],
+            response_format=kwargs.get("response_format"),
         )
         asked = (kwargs.get("response_format") or {"type": "json_object"})["type"]
         return LLMResult(
@@ -128,7 +129,9 @@ def world(monkeypatch):
     )
     monkeypatch.setattr(triage_module.llm_runs, "write_run", _write_run)
     monkeypatch.setattr(
-        triage_module, "_set_triage_status", lambda conn, alert_id, status: writes.statuses.append(status)
+        triage_module,
+        "_set_triage_status",
+        lambda conn, alert_id, status: writes.statuses.append(status),
     )
     monkeypatch.setattr(triage_module, "write_event", lambda *a, **k: writes.events.append((a, k)))
 
@@ -209,7 +212,9 @@ class TestWhatIsStoredAboutTheFirstCall:
         assert world.statuses == ["unavailable"]
 
     def test_a_failure_of_the_verifiers_own_shape_does_not_touch_the_proposer_row(self, world):
-        model = _Model([TRIAGE_V3_TRUE_POSITIVE, VERIFIER_DISAGREES_IN_SHAPE, VERIFIER_DISAGREES_IN_SHAPE])
+        model = _Model(
+            [TRIAGE_V3_TRUE_POSITIVE, VERIFIER_DISAGREES_IN_SHAPE, VERIFIER_DISAGREES_IN_SHAPE]
+        )
 
         world.run(model)
 
@@ -265,7 +270,9 @@ class TestNoStoredMessageReachesAPrompt:
         world.run(model, response_format="json_schema")
 
         stored = json.dumps(world.proposer["gate_result"])
-        assert stored.count("IGNORE_ALL_PREVIOUS_INSTRUCTIONS") == 2  # first_errors and schema_errors
+        assert (
+            stored.count("IGNORE_ALL_PREVIOUS_INSTRUCTIONS") == 2
+        )  # first_errors and schema_errors
         assert all("IGNORE_ALL_PREVIOUS_INSTRUCTIONS" not in t for t in _every_prompt(model, world))
 
     def test_the_verifier_prompt_is_built_from_the_gate_state_and_carries_no_message(self, world):
@@ -307,7 +314,9 @@ class TestTheFallbackWarning:
 
         assert _warnings(world.proposer) == [*without, RESPONSE_FORMAT_FALLBACK]
 
-    def test_a_run_in_which_only_the_verifiers_call_fell_back_carries_it_on_the_proposer_row(self, world):
+    def test_a_run_in_which_only_the_verifiers_call_fell_back_carries_it_on_the_proposer_row(
+        self, world
+    ):
         model = _Model([TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE], fall_back={1})
 
         world.run(model, response_format="json_schema")
@@ -323,9 +332,7 @@ class TestTheFallbackWarning:
         assert RESPONSE_FORMAT_FALLBACK in _warnings(world.proposer)
 
     def test_every_call_falling_back_still_gives_one_warning(self, world):
-        model = _Model(
-            [MISSPELT, TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE], fall_back={0, 1, 2}
-        )
+        model = _Model([MISSPELT, TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_AGREE], fall_back={0, 1, 2})
 
         world.run(model, response_format="json_schema")
 
@@ -386,8 +393,15 @@ class TestTheFallbackWarning:
 
         def answer(fell_back: bool) -> Proposal:
             return Proposal(
-                content="{}", parsed={}, schema_errors=[], repaired=False, usage={}, model="m",
-                latency_ms=1, calls=1, format_fallback=fell_back,
+                content="{}",
+                parsed={},
+                schema_errors=[],
+                repaired=False,
+                usage={},
+                model="m",
+                latency_ms=1,
+                calls=1,
+                format_fallback=fell_back,
             )
 
         grown = triage_module._proposer_warnings(built, answer(True), None)

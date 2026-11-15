@@ -64,14 +64,20 @@ class _Spy:
 
 # (the function, the schema name, a valid answer, a bad one, how to build its prompt)
 ROLES = [
-    pytest.param(T.propose, "triage_v3", TRIAGE_V3_TRUE_POSITIVE, TRIAGE_BAD, _build, id="proposer"),
-    pytest.param(T.verify, "verifier_v2", VERIFIER_V2_AGREE, VERIFIER_BAD, _verifier, id="verifier"),
+    pytest.param(
+        T.propose, "triage_v3", TRIAGE_V3_TRUE_POSITIVE, TRIAGE_BAD, _build, id="proposer"
+    ),
+    pytest.param(
+        T.verify, "verifier_v2", VERIFIER_V2_AGREE, VERIFIER_BAD, _verifier, id="verifier"
+    ),
 ]
 
 
 class TestTheFormatIsPassedWhenTheSwitchIsOn:
     @pytest.mark.parametrize("call,name,good,bad,build", ROLES)
-    def test_the_first_call_carries_the_format_with_the_schema_name(self, call, name, good, bad, build):
+    def test_the_first_call_carries_the_format_with_the_schema_name(
+        self, call, name, good, bad, build
+    ):
         spy = _Spy([good])
 
         call(spy, build(), cfg=_cfg(LLM_RESPONSE_FORMAT=ON))
@@ -233,7 +239,8 @@ class TestThePromptsDoNotMove:
     @pytest.mark.parametrize("template", [T.TRIAGE_TEMPLATE, T.VERIFIER_TEMPLATE])
     def test_prompt_version_is_the_same_with_the_switch_on_and_off(self, template, monkeypatch):
         """`prompt_version(template)` is a function of the template file's bytes and the git revision: it
-        reads no configuration, and the module's per-process cache is cleared so each value is computed."""
+        reads no configuration, and the module's per-process cache is cleared so each value is computed.
+        """
         values = []
         for flag in (OFF, ON):
             monkeypatch.setenv("LLM_RESPONSE_FORMAT", flag)
@@ -328,7 +335,9 @@ class TestFormatFallbackIsNoticed:
     def test_a_result_that_says_json_object_to_a_schema_request_is_a_fallback(
         self, call, name, good, bad, build
     ):
-        result = call(_Spy([good], reported="json_object"), build(), cfg=_cfg(LLM_RESPONSE_FORMAT=ON))
+        result = call(
+            _Spy([good], reported="json_object"), build(), cfg=_cfg(LLM_RESPONSE_FORMAT=ON)
+        )
 
         assert result.format_fallback is True
         assert result.parsed == good  # the run goes on with what the provider gave
@@ -383,7 +392,10 @@ class TestFormatFallbackIsNoticed:
 
         result = T.propose(DeepSeekAdapter(cfg, client=client), _build(), cfg=cfg)
 
-        assert [c["response_format"]["type"] for c in client.calls] == ["json_schema", "json_object"]
+        assert [c["response_format"]["type"] for c in client.calls] == [
+            "json_schema",
+            "json_object",
+        ]
         assert result.format_fallback is True and result.calls == 1  # the model was called once
         assert result.parsed == TRIAGE_V3_TRUE_POSITIVE
 

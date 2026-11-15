@@ -71,7 +71,9 @@ class _Adapter(DeepSeekAdapter):
     def __init__(self, client, **cfg):
         self.events: list[dict] = []
         self.pauses: list[float] = []
-        super().__init__(_cfg(**cfg), client=client, sleep=self.pauses.append, log=self.events.append)
+        super().__init__(
+            _cfg(**cfg), client=client, sleep=self.pauses.append, log=self.events.append
+        )
 
 
 class TestTheRequestAndTheResult:
@@ -163,9 +165,12 @@ class TestTheFallback:
 
         assert client.call_count == 2
 
-    def test_a_5xx_on_the_fallback_request_is_the_ordinary_retry_and_asks_for_the_schema_again(self):
+    def test_a_5xx_on_the_fallback_request_is_the_ordinary_retry_and_asks_for_the_schema_again(
+        self,
+    ):
         """The fallback is per request, nothing is remembered: the next attempt of the same call is the
-        request the caller made, and the provider that refused it refuses it again, then the fallback again."""
+        request the caller made, and the provider that refused it refuses it again, then the fallback again.
+        """
         client = FakeClient(
             [_status_error(400), _status_error(503), _status_error(400), _response(content="{}")]
         )
@@ -298,7 +303,9 @@ class TestEverythingElseIsClassifiedAsToday:
 
     def test_the_monthly_cap_still_stops_a_json_schema_request_before_any_socket(self):
         client = FakeClient([_response(content="{}")])
-        adapter = DeepSeekAdapter(_cfg(LLM_MONTHLY_USD_CAP=30), client=client, spent_usd=lambda: 30.0)
+        adapter = DeepSeekAdapter(
+            _cfg(LLM_MONTHLY_USD_CAP=30), client=client, spent_usd=lambda: 30.0
+        )
 
         with pytest.raises(LLMBudgetExceeded):
             adapter.complete(system=VALID_SYSTEM, user="x", response_format=SCHEMA_FORMAT)

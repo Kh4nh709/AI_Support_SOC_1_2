@@ -80,4 +80,6 @@ def test_the_runbook_environment_table_has_a_row_for_it_that_names_both_values_a
     what, who, secret = (cell.strip() for cell in rows[0].rstrip("|").split(" | "))
     assert "`json_object`" in what and "`json_schema`" in what
     assert "DEC-218" in what
-    assert who == "Owner" and secret == "no"  # the trial's value differs from the default: the Owner sets it
+    assert (
+        who == "Owner" and secret == "no"
+    )  # the trial's value differs from the default: the Owner sets it

@@ -327,13 +327,12 @@ def _set_triage_status(conn: psycopg.Connection, alert_id: str, status: str) -> 
     )
 
 
-def _proposer_warnings(
-    built: BuiltTriagePrompt, *answers: Proposal | None
-) -> list[str]:
+def _proposer_warnings(built: BuiltTriagePrompt, *answers: Proposal | None) -> list[str]:
     """The `citation_warnings` of a run's proposer row (DEC-218): the builder's own, plus
     `response_format_fallback` when a call of the run (the proposer's or the verifier's, whichever answered)
     asked for `json_schema` and the provider refused the format. The builder's list is not touched: the
-    warning is added to a copy, once, and a run no call of which fell back gets the builder's list as it was."""
+    warning is added to a copy, once, and a run no call of which fell back gets the builder's list as it was.
+    """
     if any(a is not None and a.format_fallback for a in answers):
         return [*built.warnings, RESPONSE_FORMAT_FALLBACK]
     return built.warnings

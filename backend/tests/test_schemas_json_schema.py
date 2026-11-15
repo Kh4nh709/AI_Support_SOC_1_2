@@ -138,7 +138,8 @@ def test_it_returns_a_fresh_object_each_call():
 
 def test_the_notation_table_one_row_at_a_time():
     """Each row of section 3's table, on a node written here, through the module's own node converter's
-    public door: a schema of one file is not needed to see the row, so a tiny one is made and read back."""
+    public door: a schema of one file is not needed to see the row, so a tiny one is made and read back.
+    """
     compact = {
         "an_object": {"inner": "string"},
         "an_array": ["string"],

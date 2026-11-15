@@ -198,7 +198,8 @@ class Config:
     LLM_TIMEOUT_S: int = 120
     LLM_RETRY: int = 2
     LLM_THINKING: str = "disabled"
-    LLM_RESPONSE_FORMAT: str = "json_object"  # DEC-218: json_object | json_schema; ① only, trial first
+    # DEC-218: json_object | json_schema, for ①'s calls only (see _LLM_RESPONSE_FORMAT_VALUES)
+    LLM_RESPONSE_FORMAT: str = "json_object"
     LLM_MONTHLY_USD_CAP: int = 30
     LLM_PRICE_IN_PER_M: float = 0.0
     LLM_PRICE_OUT_PER_M: float = 0.0

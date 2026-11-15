@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import Any
 
 from app.security import output_guard
@@ -54,7 +55,7 @@ class GateState:
     verifier_verdict: str | None
     #: DEC-218: the first call's schema-validator messages when step 1 was `repaired`, else `[]`. They may name a
     #: key the model invented, so they are for `gate_result` (the database) only and never for a prompt.
-    step1_errors: list[str] = field(default_factory=list)
+    step1_errors: list[str] = dataclass_field(default_factory=list)
 
 
 def step1_schema(

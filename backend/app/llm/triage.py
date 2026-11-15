@@ -872,7 +872,8 @@ def _sum_usage(usages: Sequence[Mapping[str, Any]]) -> dict:
 def _response_format(cfg: Config, schema_name: str) -> dict | None:
     """DEC-218: what to ask the provider to enforce, or `None` for "nothing": the adapter then sends
     `json_object` exactly as it always has. With `LLM_RESPONSE_FORMAT=json_schema` it is the JSON Schema of the
-    schema the answer is validated against, generated from `output_schemas.json` (`schemas.json_schema`)."""
+    schema the answer is validated against, generated from `output_schemas.json` (`schemas.json_schema`).
+    """
     if cfg.LLM_RESPONSE_FORMAT != "json_schema":
         return None
     return {
