@@ -74,6 +74,9 @@ function blindView(over: Partial<AlertView> = {}): AlertView {
 }
 
 const column = () => screen.getByRole("region", { name: S.alert.aiHeading });
+
+/** All the blind column says: its heading, the advisory line and the notice with its explanation. */
+const BLIND_TEXT = [S.alert.aiHeading, S.alert.aiHint, S.ai1.hidden, S.ai1.hiddenBody];
 const renderColumn = (v: AlertView) =>
   render(
     <main>
@@ -1155,6 +1158,9 @@ describe("the states the column kept", () => {
     expect(within(column()).queryByRole("group")).not.toBeInTheDocument();
     expect(within(column()).queryByRole("tablist")).not.toBeInTheDocument();
     expect(within(column()).queryByRole("tab")).not.toBeInTheDocument();
+    // the WHOLE text of the column is the heading, the advisory line and the notice, and nothing else: a leak of a
+    // number alone ("3/5", "47%") that no marker lists goes red here (review of AP-T4)
+    expect(said(column())).toEqual(BLIND_TEXT);
   });
 
   it("draws nothing of the panel for a blind head even if an analysis reached the page: the state is the suggestion's", () => {
@@ -1162,6 +1168,18 @@ describe("the states the column kept", () => {
     expect(within(column()).getByText(S.ai1.hidden)).toBeInTheDocument();
     expect(leaksIn(column())).toEqual([]);
     expect(within(column()).queryByRole("tablist")).not.toBeInTheDocument();
+    expect(said(column())).toEqual(BLIND_TEXT);
+  });
+
+  it("says exactly the same whole text for a blind head whatever else the view carries", () => {
+    const stray = blindView({
+      analysis: analysis(),
+      rag: { best_pct: 62, not_applied: "timeout" },
+      held_by: ["facts_mismatch"],
+      proposed_action: "true_positive",
+    });
+    renderColumn(stray);
+    expect(said(column())).toEqual(BLIND_TEXT);
   });
 
   it("finds the new panel's words as leaks (so the blind tests catch a leak of the scorecard)", () => {

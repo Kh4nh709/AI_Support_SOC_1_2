@@ -10,7 +10,7 @@
 // `false_positive`, and gate step 4 raises a warning on it (it cites no playbook rule), so a blind head carries both:
 // the model's own answer, which is also the stored verdict (`suggested_action`, `proposed_action`), and the warnings
 // (`held_by`). None of them may reach the browser, nor the sentence made of them.
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import {
   S,
   captureTraffic,
@@ -88,6 +88,16 @@ const PANEL_PHRASES = [
   S.analysis.knowledge.heading,
 ];
 const COLUMN_PHRASES = [...Object.values(S.ai1.heldReason), ...PANEL_PHRASES];
+
+/** All a blind column says: its heading, the advisory line, the notice and what it explains, single-spaced. */
+const BLIND_COLUMN_TEXT = [S.alert.aiHeading, S.alert.aiHint, S.ai1.hidden, S.ai1.hiddenBody].join(
+  " ",
+);
+
+/** What a person reads in `where`, with every run of white space made one space. */
+async function wholeText(where: Locator): Promise<string> {
+  return (await where.innerText()).replace(/\s+/g, " ").trim();
+}
 
 /** The fields step 4 named as missing for the stub's verdict, read from the database. */
 function missingFields(id: string): string[] {
@@ -232,6 +242,11 @@ test("a blind head shows nothing of ① until it is decided, then shows it", asy
       "the blind AI column names ①'s conclusion",
     ).toEqual([]);
   }
+  // and the WHOLE text of the column is its heading, the advisory line and the notice: a leak of a number alone ("3/5",
+  // "47%"), which no marker above lists, goes red here
+  expect(await wholeText(column), "the blind AI column says more than its notice").toBe(
+    BLIND_COLUMN_TEXT,
+  );
   const answers = await traffic.answers();
   // The traffic includes the queue (with the row of this head) and the head's own view, or the check is empty.
   expect(
@@ -344,6 +359,25 @@ test("a visible head says what the AI concluded and which of the gate's checks w
     `${PANEL.checks.step["4"]} ${PANEL.checks.dash} ${detail}`,
   );
   expect(labels.length, "step 4 named at least one field").toBeGreaterThan(0);
+  // ... and WHICH reasons the gate held, in the words of the flat column the labels come from: under step 4's line
+  const steps = column.getByRole("list", { name: PANEL.checks.listLabel });
+  for (const label of labels) await expect(steps, `step 4 names "${label}"`).toContainText(label);
+
+  // the same reasons on the default tab, in the line that lists every warning: it is not hidden behind a click
+  await column.getByRole("tab", { name: PANEL.tabs.overview }).click();
+  const overview = column.getByRole("tabpanel");
+  for (const label of labels) {
+    await expect(overview, `the overview names "${label}"`).toContainText(label);
+  }
+  await expect(overview).toContainText(S.ai1.panel.overview.held(labels).split(":")[0]!);
+
+  // the tab strip never widens the column or the page, whatever the width the labels need
+  const tablist = column.getByRole("tablist");
+  expect(await tablist.evaluate((el) => getComputedStyle(el).overflowX)).toBe("auto");
+  expect(await column.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
 
   // G5 on the real page: no model's name in the column, on any tab, in its text or in any attribute
   for (const tab of [
@@ -427,6 +461,9 @@ for (const seeded of SEEDED) {
     await expect(page.getByRole("note")).toHaveCount(0);
     const column = page.getByRole("region", { name: S.alert.aiHeading });
     expect(phrasesFound(await column.innerText(), RAG_PHRASES)).toEqual([]);
+    expect(await wholeText(column), "the blind AI column says more than its notice").toBe(
+      BLIND_COLUMN_TEXT,
+    );
     const answers = await traffic.answers();
     expect(
       answers.some(
