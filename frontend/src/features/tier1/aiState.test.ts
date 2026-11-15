@@ -248,6 +248,74 @@ describe("aiStateOfView", () => {
     });
   });
 
+  // DEC-219: for a run the RAG default applied to, the server leaves out of `held_by` the two reasons that would tell
+  // what the model answered (the verifier's disagreement, the playbook rule it cited). The state leaves them out too, once,
+  // so every consumer of `heldBy` (the line of a decided page, the flat column, the panel) gets the filtered list.
+  describe("for a run the RAG default applied to (DEC-219), whatever arrives", () => {
+    const applied = (over: Partial<AlertView> = {}, gate: Record<string, unknown> = {}) =>
+      view({
+        suggestion: {
+          suggested_action: "false_positive",
+          confidence: null,
+          gate: {
+            forced: false,
+            rag_rule: { threshold: 80, best_pct: 62, applied: true },
+            ...gate,
+          },
+        },
+        proposed_action: "false_positive",
+        ...over,
+      });
+    const STRAY = [
+      "fp_policy:asset_criticality",
+      "verifier_disagrees",
+      "fp_policy:playbook_rule",
+      "verifier_invalid",
+      "facts_mismatch",
+    ];
+
+    it("leaves out the verifier's disagreement and the playbook rule, and keeps every other reason, in order", () => {
+      expect(aiStateOfView(applied({ held_by: STRAY }))).toMatchObject({
+        kind: "ready",
+        heldBy: ["fp_policy:asset_criticality", "verifier_invalid", "facts_mismatch"],
+      });
+    });
+
+    it("does the same for a decided page, whose line reads the same list", () => {
+      const decided = applied({ status: "closed_fp", held_by: STRAY });
+      expect(aiStateOfView(decided)).toMatchObject({
+        kind: "decided",
+        heldBy: ["fp_policy:asset_criticality", "verifier_invalid", "facts_mismatch"],
+      });
+    });
+
+    it("is never forced, whatever the gate's record says", () => {
+      expect(aiStateOfView(applied({}, { forced: true, forced_by: ["step4"] }))).toMatchObject({
+        kind: "ready",
+        forced: false,
+      });
+    });
+
+    it("leaves a run the rule did not apply to as it was: both reasons stay", () => {
+      const notApplied = applied(
+        { held_by: STRAY },
+        { rag_rule: { threshold: 80, applied: false } },
+      );
+      expect(aiStateOfView(notApplied)).toMatchObject({ heldBy: STRAY });
+      const noRule = view({ held_by: STRAY });
+      expect(aiStateOfView(noRule)).toMatchObject({ heldBy: STRAY });
+    });
+
+    it("reads `applied` as the server wrote it: only the JSON true", () => {
+      for (const odd of ["true", 1, "yes", null, undefined, {}]) {
+        const state = aiStateOfView(
+          applied({ held_by: STRAY }, { rag_rule: { threshold: 80, applied: odd } }),
+        );
+        expect(state, String(odd)).toMatchObject({ heldBy: STRAY });
+      }
+    });
+  });
+
   it("keeps forced true for a version 1 row the gate forced, served as the model's verdict", () => {
     const v1 = view({
       suggestion: {
@@ -480,8 +548,9 @@ describe("aiStateOfView", () => {
     });
 
     it("keeps the warnings beside it", () => {
-      expect(aiStateOfView(applied({ held_by: ["fp_policy:playbook_rule"] }))).toMatchObject({
-        heldBy: ["fp_policy:playbook_rule"],
+      // a reason about a fact of the alert is the system's own and stays (the playbook rule is the model's and goes)
+      expect(aiStateOfView(applied({ held_by: ["fp_policy:asset_criticality"] }))).toMatchObject({
+        heldBy: ["fp_policy:asset_criticality"],
         ragDefaultBelow: 80,
       });
     });

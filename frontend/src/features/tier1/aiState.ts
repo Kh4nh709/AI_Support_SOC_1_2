@@ -76,6 +76,58 @@ function codes(value: unknown): string[] {
 const textOrNull = (value: unknown): string | null => (typeof value === "string" ? value : null);
 
 /**
+ * Whether the gate says the RAG default of DEC-219 applied to the run: the JSON `true` of `rag_rule.applied`, read raw
+ * (the page's other reading of the rule, `ragRuleOf`, also wants a positive threshold and a `false_positive` verdict).
+ * For such a run the server serves none of what would tell what the model answered, and the page, whatever arrives,
+ * draws none of it either: this is the one place that says so, for every consumer of the gate and of `held_by`.
+ */
+export function ragRuleApplied(gate: unknown): boolean {
+  if (typeof gate !== "object" || gate === null) return false;
+  const rule: unknown = (gate as Record<string, unknown>).rag_rule;
+  return (
+    typeof rule === "object" && rule !== null && (rule as Record<string, unknown>).applied === true
+  );
+}
+
+/** The two reasons of `held_by` that the server leaves out for a run the RAG default applied to (`served_held_reasons`). */
+const LEFT_OUT_WHEN_APPLIED: readonly string[] = ["verifier_disagrees", "fp_policy:playbook_rule"];
+
+/**
+ * `held_by` as the page reads it: its non-empty strings, and for a run the RAG default applied to without the verifier's
+ * disagreement (step 6 compared its answer with the model's own verdict) and the playbook rule (which rule the model
+ * cited goes with what it answered). Every other reason stays, `verifier_invalid` included, as the server keeps it.
+ */
+export function servedHeldBy(view: AlertView): string[] {
+  const held = codes(view.held_by);
+  return ragRuleApplied(view.suggestion?.gate)
+    ? held.filter((code) => !LEFT_OUT_WHEN_APPLIED.includes(code))
+    : held;
+}
+
+/**
+ * The gate as the page reads it. For a run the RAG default applied to it is not forced, has no verifier verdict, no
+ * warnings (the only writer of `gate.warnings` is step 4's rule check, about the rule the MODEL cited: any code there
+ * would differ with its answer) and no proposed-versus-final pair: both are the verdict ① ended with (`action`). Any
+ * other gate is as it came.
+ */
+export function servedGate(
+  gate: SuggestionGate | null | undefined,
+  action: string | null,
+): SuggestionGate | null {
+  if (gate === null || gate === undefined) return null;
+  if (!ragRuleApplied(gate)) return gate;
+  return {
+    ...gate,
+    forced: false,
+    forced_by: [],
+    warnings: [],
+    verifier_verdict: null,
+    proposed_verdict: action,
+    final_verdict: action,
+  };
+}
+
+/**
  * The RAG rule of DEC-219, as the key of an `AiConclusion` it belongs to: `ragDefaultBelow` when the gate says the rule
  * applied to this run (`rag_rule.applied` is true, with the threshold the match was below), and no key at all for any
  * other run: a rule that did not apply or was switched off, a run stored before the rule (`rag_rule` null or absent),
@@ -173,7 +225,7 @@ export function aiStateOfView(view: AlertView): AiState {
       confidence: suggestion?.confidence ?? null,
       // The decision lifts the blind arm: the server sends the two keys back with the rest of the suggestion.
       proposed: textOrNull(view.proposed_action),
-      heldBy: codes(view.held_by),
+      heldBy: servedHeldBy(view),
       ...ragRuleOf(suggestion?.gate, action),
     };
   }
@@ -183,9 +235,9 @@ export function aiStateOfView(view: AlertView): AiState {
       kind: "ready",
       action: suggestion.suggested_action,
       confidence: suggestion.confidence ?? null,
-      forced: suggestion.gate?.forced === true,
+      forced: servedGate(suggestion.gate, suggestion.suggested_action)?.forced === true,
       proposed: textOrNull(view.proposed_action),
-      heldBy: codes(view.held_by),
+      heldBy: servedHeldBy(view),
       ...ragRuleOf(suggestion.gate, suggestion.suggested_action),
     };
   }

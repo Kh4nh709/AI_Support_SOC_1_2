@@ -15,7 +15,14 @@ import { RagNotice } from "../../components/RagNotice";
 import { formatDateTime } from "../../format";
 import { S, labelOf } from "../../strings";
 import { agreementOf, humanDecisionOf } from "./agreement";
-import { aiStateOfView, conclusionOf, heldOf, type AiConclusion, type AiState } from "./aiState";
+import {
+  aiStateOfView,
+  conclusionOf,
+  heldOf,
+  servedGate,
+  type AiConclusion,
+  type AiState,
+} from "./aiState";
 
 const MUTED = "text-muted";
 
@@ -278,7 +285,11 @@ export function Ready({
   view: AlertView;
   state: Extract<AiState, { kind: "ready" }>;
 }) {
-  const suggestion = view.suggestion ?? null;
+  // The gate as the page reads it: for a run the RAG default applied to it has no verifier verdict, no warning, no
+  // forced flag and no proposed-versus-final pair, whatever the view carries (DEC-219; `servedGate`).
+  const served = view.suggestion ?? null;
+  const gate = servedGate(served?.gate, state.action);
+  const suggestion: Suggestion | null = served === null ? null : { ...served, gate };
   const analysedThen = suggestion?.correlated_at_analysis;
   return (
     <div className="space-y-3">

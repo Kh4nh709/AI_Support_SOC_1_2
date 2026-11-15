@@ -1324,9 +1324,11 @@ describe("the RAG default below the threshold (DEC-219)", () => {
   const line = () => within(column()).getByText(/AI kết luận/);
   const PERCENT = "trùng 62% với tri thức đã duyệt";
   const DEFAULT = "(dưới 80%: mặc định FP)";
-  // The warnings of a run the rule applied to: the server never lists `verifier_disagrees` there.
-  const REASONS = ["fp_policy:asset_criticality", "fp_policy:playbook_rule"];
-  const REASONS_TEXT = "tài sản quan trọng hoặc chưa rõ, không khớp bảng quyết định đã duyệt";
+  // The warnings of a run the rule applied to: the facts of the alert only. The server lists neither `verifier_disagrees`
+  // nor `fp_policy:playbook_rule` there (they are about the model's own answer and the rule it cited), and the page
+  // leaves both out whatever arrives (`servedHeldBy`).
+  const REASONS = ["fp_policy:asset_criticality", "fp_policy:severity"];
+  const REASONS_TEXT = "tài sản quan trọng hoặc chưa rõ, alert mức critical";
   // The warnings of a run the rule did not apply to, where the verifier's answer is served and may disagree.
   const NO_RULE_REASONS = ["fp_policy:asset_criticality", "verifier_disagrees"];
   const NO_RULE_REASONS_TEXT = "tài sản quan trọng hoặc chưa rõ, bộ kiểm chứng không đồng ý";
@@ -1494,17 +1496,20 @@ describe("the RAG default below the threshold (DEC-219)", () => {
       expect(steps.textContent).not.toContain(S.ai1.verifier);
     });
 
-    it("pins the gate block of such a run that also carries a gate warning of its own", () => {
+    // Every gate warning goes for such a run, whatever its code: the only writer of `gate.warnings` is the rule check of
+    // the rule the MODEL cited, and any code there would differ with its answer.
+    it("pins the gate block of such a run that also carries a gate warning of its own: the warning is not drawn", () => {
       const v = ragDefault(REASONS);
       v.suggestion = {
         ...v.suggestion!,
-        gate: { ...v.suggestion!.gate, warnings: ["fp_policy:playbook_rule: no rule cited"] },
+        gate: {
+          ...v.suggestion!.gate,
+          warnings: ["fp_policy:playbook_rule: no rule cited", "brand_new_warning"],
+        },
       };
       renderColumn(v);
       const steps = within(column()).getByRole("region", { name: S.ai1.gateSteps });
-      expect(steps.textContent).toBe(
-        "Các bước của cổngĐề xuất gốcFPKết luận sau cổngFPCảnh báo của cổngfp_policy:playbook_rule: no rule cited",
-      );
+      expect(steps.textContent).toBe("Các bước của cổngĐề xuất gốcFPKết luận sau cổngFP");
     });
 
     it("pins the gate line of such a run: the gate forced nothing", () => {
