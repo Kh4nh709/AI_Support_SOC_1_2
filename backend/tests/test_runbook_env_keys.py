@@ -194,7 +194,9 @@ def test_the_soar_intake_section_gives_the_three_rollback_levels_in_order():
 
 def test_the_soar_intake_section_names_the_consequences_of_the_unknown_context():
     section = _soar_section()
-    assert "forces every ① `false_positive` to `needs_review`" in section
+    # DEC-217: step 4 is a warning beside the model's verdict now, no longer a hold as `needs_review`
+    assert "flags every ① `false_positive`" in section
+    assert "forces every ① `false_positive` to `needs_review`" not in section
     assert "severity base alone" in section
     assert "auto-close digest is empty" in section
     assert "`n/a — enrichment off`" in section  # the inventory_empty alarm

@@ -796,6 +796,7 @@ def test_the_kb_cutoff_must_say_its_zone():
 #   ① lookups t1 ok [E_kb .80]   t2 ok [E_kb2 .90, E_late .60]   t3 failed rate_limit
 #             t4 ok [E_same .70]   t5 none
 #   the model t1 TP/TP  t2 TP/FP  t3 FP/FP held  t4 FP/FP held       (RAG off / RAG on)
+#             ("held" is the verifier disagreeing: since DEC-217 only a warning, ① 's held figure reads 0)
 #             C1 FP/confirmed_incident   C2 confirmed_incident (evidence not verified: held) both arms
 
 
@@ -1187,11 +1188,22 @@ def test_measure_tier_1_exact_accuracy_recall_and_precision(lab, measured):
 
 
 @pytest.mark.db
-def test_measure_tier_1_splits_what_the_gate_held_by_whether_the_model_was_right(measured):
-    """t3 (the model said FP for a real attack) and t4 (it said FP for a benign alert) are held by the
-    verifier's disagreement: one held while wrong, one held while right."""
+def test_measure_tier_1_reads_no_held_verdict_when_the_verifier_only_disagrees(lab, measured):
+    """DEC-217 (spec 7): the held figure is not redefined (`final_verdict == needs_review`) and reads 0 for
+    new runs. t3 (the model said FP for a real attack) and t4 (it said FP for a benign alert) are the alerts
+    the verifier disagrees with - it answers `needs_review`, a step 6 warning - and the final verdict stays the
+    model's own, so nothing is held and the model's rightness is counted as before (the accuracy above).
+    """
     for arm in ("off", "on"):
-        assert _arm(measured, 1, arm)["held"] == {"total": 2, "model_wrong": 1, "model_right": 1}
+        assert _arm(measured, 1, arm)["held"] == {"total": 0, "model_wrong": 0, "model_right": 0}
+    rows = {
+        (row["subject"], row["arm"]): row for row in measured.report["rows"] if row["tier"] == 1
+    }
+    for name in ("t3", "t4"):
+        for arm in ("off", "on"):
+            row = rows[(lab.ids[name], arm)]
+            assert row["held"] is False
+            assert row["final"] == row["model"] == "false_positive"
 
 
 @pytest.mark.db

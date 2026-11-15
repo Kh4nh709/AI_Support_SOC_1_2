@@ -8,11 +8,12 @@ are canned, but each one is built from the prompt it answers, so the product's o
 * triage_v3 (proposer): `structured_basis` copied from the `## Alert` facts (gate step 2), one reason whose
   quote is a verbatim line of the `rule_description` block (step 3), verdict `false_positive`: the model
   may only conclude `false_positive | true_positive` (P14-T01), and this answer cites no playbook rule, so
-  gate step 4 always holds it as `needs_review` - the verdict the stub's alerts end with, as before, now
-  because the system held it. The reason's `claim` carries a token derived from the alert id
-  (`claim_token`), which the blind spec looks for: it is in no other place.
-* verifier_v2: echoes the verdict out of the `proposer` block (the gate's, after step 4), `agree: true`
-  (step 6 agrees).
+  gate step 4 always flags it (`fp_policy:playbook_rule`; DEC-217: a warning beside the model's verdict -
+  it no longer holds it as `needs_review`, so the stub's alerts end with `false_positive`). The reason's
+  `claim` carries a token derived from the alert id (`claim_token`), which the blind spec looks for: it is
+  in no other place.
+* verifier_v2: echoes the verdict out of the `proposer` block (the model's own, which no gate step changes),
+  `agree: true` (step 6 agrees).
 * investigate_v3 (Tier 2, P14-T02): two evidence items about the dossier's first alert, one quoted from its raw log
   (verified by the server) and one that is in no log (rejected as `quote_not_found`), so the case page shows
   both marks; the conclusion `false_positive` stands because one item verified.
