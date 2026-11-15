@@ -755,6 +755,7 @@ def test_gate_result_is_version_2_and_shows_the_flags_not_a_force():
         "forced": False,
         "forced_by": [],
         "flagged_by": ["step6"],
+        "step1_errors": [],  # DEC-218: the first call was valid, so none
         "steps": state.steps,
         "hallucination_flag": False,
         "mismatched_fields": [],

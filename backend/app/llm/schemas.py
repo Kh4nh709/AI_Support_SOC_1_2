@@ -48,6 +48,29 @@ The rendered vocabulary reads as JSON literals, and the model answers ``true``, 
 ``render(name) -> str`` renders the schema for a system prompt: one line per field,
 ``path: vocabulary|kind``, nested objects indented two spaces, arrays as
 ``path[]: ...``. Two calls on the same file produce identical bytes.
+
+``json_schema(name) -> dict`` (DEC-218) is the same notation read as a JSON Schema, for a provider that
+enforces the output shape (``response_format: json_schema``); ``json_schema_of(node)`` is it over a
+node it is given. Written by hand like the interpreter, from the same file, so there is still one source:
+
+    §6.2 value                          JSON Schema
+    -----------------------------------  ---------------------------------------------------------
+    {...}                                object; every key in ``required`` (file order), no others
+    [x]                                  array of x; ``minItems: 1`` where the note says so
+    "a|b|c" (an enum)                    ``{"type": "string", "enum": [...]}``; with "null" among the
+                                         alternatives ``{"type": ["string", "null"], "enum": [..., null]}``
+    "string" / a free string with note   ``{"type": "string"}``
+    "string|null"                        ``{"type": ["string", "null"]}``
+    0                                    ``{"type": "integer"}``
+    true / false                         ``{"type": "boolean"}``
+
+``structured_basis.identity_privileged`` stays the string enum ``true|false|unknown``; ``normalise``
+turns a JSON boolean into it, and the schema the provider enforces asks for the string.
+
+JSON Schema's ``integer`` is looser than the ``0`` row above: it admits an integer-valued number such as
+``1.0``, which ``validate`` still refuses (an ``int`` and not a ``bool``; ``json.loads`` reads ``1.0`` as a
+float). That is by design: the validator is the check behind the provider, and the repair round covers
+whatever a provider lets through.
 """
 
 from __future__ import annotations
@@ -273,3 +296,49 @@ def render(name: str) -> str:
     lines: list[str] = []
     _render_fields(schema, 0, lines)
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# json_schema()
+# ---------------------------------------------------------------------------
+
+
+def _json_schema_node(node: Any) -> dict[str, Any]:
+    if isinstance(node, dict):
+        return {
+            "type": "object",
+            "properties": {key: _json_schema_node(sub) for key, sub in node.items()},
+            "required": list(node),
+            "additionalProperties": False,
+        }
+    if isinstance(node, list):
+        assert len(node) == 1, "§6.2 array node must carry exactly one item spec"
+        item_spec = node[0]
+        array: dict[str, Any] = {"type": "array", "items": _json_schema_node(item_spec)}
+        if isinstance(item_spec, str) and "(minitems 1)" in item_spec.lower():
+            array["minItems"] = 1
+        return array
+    if isinstance(node, bool):  # must precede the int check — bool is an int subclass
+        return {"type": "boolean"}
+    if isinstance(node, int):
+        return {"type": "integer"}
+    if isinstance(node, str):
+        kind, _extra = _classify_string_spec(node)
+        if kind == "enum":
+            alternatives = [None if a == "null" else a for a in node.split("|")]
+            nullable = None in alternatives
+            return {"type": ["string", "null"] if nullable else "string", "enum": alternatives}
+        if kind == "nullable_string":
+            return {"type": ["string", "null"]}
+        return {"type": "string"}  # "string" and note_string (free string with a human note)
+    raise AssertionError(f"unrecognised §6.2 schema node: {node!r}")
+
+
+def json_schema_of(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """The JSON Schema of a node in the §6.2 notation (see the module docstring), a fresh dict each call."""
+    return _json_schema_node(schema)
+
+
+def json_schema(name: str) -> dict[str, Any]:
+    """The JSON Schema of the ``name`` schema of ``output_schemas.json``. ``name`` not in the file → ``KeyError``."""
+    return json_schema_of(_get_schema(name))

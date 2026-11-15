@@ -19,8 +19,9 @@ the database and the readers still read them (`llm.verdicts`).
 from __future__ import annotations
 
 import unicodedata
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import Any
 
 from app.security import output_guard
@@ -52,6 +53,9 @@ class GateState:
     warnings: list[str]
     injection_findings: list[Any]
     verifier_verdict: str | None
+    #: DEC-218: the first call's schema-validator messages when step 1 was `repaired`, else `[]`. They may name a
+    #: key the model invented, so they are for `gate_result` (the database) only and never for a prompt.
+    step1_errors: list[str] = dataclass_field(default_factory=list)
 
 
 def step1_schema(
@@ -68,9 +72,15 @@ def step1_schema(
 
 
 def start(
-    parsed: dict, facts: Mapping[str, Any], blocks: Mapping[str, Block], *, repaired: bool
+    parsed: dict,
+    facts: Mapping[str, Any],
+    blocks: Mapping[str, Block],
+    *,
+    repaired: bool,
+    step1_errors: Sequence[str] = (),
 ) -> GateState:
-    """Build the initial state after step 1 has passed."""
+    """Build the initial state after step 1 has passed. `step1_errors` (DEC-218) are what the first call got
+    wrong; they are kept only when step 1 was `repaired` - a run valid at once has none."""
     return GateState(
         proposer_raw=parsed,
         facts=facts,
@@ -87,6 +97,7 @@ def start(
         warnings=[],
         injection_findings=[],
         verifier_verdict=None,
+        step1_errors=list(step1_errors) if repaired else [],
     )
 
 
@@ -196,9 +207,10 @@ def run_steps_1_to_5(
     repaired: bool,
     rule_check: RuleCheck,
     scan: Scanner,
+    step1_errors: Sequence[str] = (),
 ) -> GateState:
     """`start` + steps 2..5, in order. Assumes `parsed` already passed step 1."""
-    state = start(parsed, facts, blocks, repaired=repaired)
+    state = start(parsed, facts, blocks, repaired=repaired, step1_errors=step1_errors)
     step2_basis(state)
     step3_quotes(state)
     step4_fp_policy(state, rule_check)
@@ -251,7 +263,9 @@ def gate_result(
     """The document P4 displays and P7 re-gates from (planning decision 1). Version 2 (DEC-217): the
     proposed and the final verdict are both the model's answer, nothing is forced (`forced` false,
     `forced_by` empty: version 1's keys, kept so a reader of either version finds them), and `flagged_by`
-    names the steps whose check failed, in step order."""
+    names the steps whose check failed, in step order. `step1_errors` (DEC-218, still version 2: a reader
+    that does not know the key is not affected) is what the first call got wrong when the repair round fixed
+    it, else `[]`; it may name a key the model invented and is never read into a prompt."""
     return {
         "version": 2,
         "proposed_verdict": state.proposed_verdict,
@@ -259,6 +273,7 @@ def gate_result(
         "forced": False,
         "forced_by": [],
         "flagged_by": list(state.flagged_by),
+        "step1_errors": list(state.step1_errors),
         "steps": dict(state.steps),
         "hallucination_flag": state.hallucination_flag,
         "mismatched_fields": list(state.mismatched_fields),

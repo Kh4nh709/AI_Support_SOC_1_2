@@ -51,6 +51,11 @@ _SECRET_FIELDS = frozenset(
 
 _LLM_THINKING_VALUES = ("enabled", "disabled")
 
+# DEC-218: what ① asks the provider to enforce about the shape of the answer. `json_object` (the default, and
+# what every call sent before) guarantees JSON; `json_schema` also sends the JSON Schema of the output schema
+# (`llm/schemas.py` `json_schema`), which the provider then obeys. A closed set: a typo stops the start-up.
+_LLM_RESPONSE_FORMAT_VALUES = ("json_object", "json_schema")
+
 # P14-T04 / DEC-213: the sizes Voyage serves for a `voyage-4` embedding (Matryoshka). The vector column
 # of `vectordb` is created at the configured size, so any other number must stop the start-up.
 _RAG_EMBED_DIMS_VALUES = (256, 512, 1024, 2048)
@@ -193,6 +198,8 @@ class Config:
     LLM_TIMEOUT_S: int = 120
     LLM_RETRY: int = 2
     LLM_THINKING: str = "disabled"
+    # DEC-218: json_object | json_schema, for ①'s calls only (see _LLM_RESPONSE_FORMAT_VALUES)
+    LLM_RESPONSE_FORMAT: str = "json_object"
     LLM_MONTHLY_USD_CAP: int = 30
     LLM_PRICE_IN_PER_M: float = 0.0
     LLM_PRICE_OUT_PER_M: float = 0.0
@@ -381,6 +388,9 @@ def load(*, env_file: str | Path = ".env") -> Config:
         LLM_TIMEOUT_S=as_int("LLM_TIMEOUT_S", 120),
         LLM_RETRY=as_int("LLM_RETRY", 2),
         LLM_THINKING=as_enum("LLM_THINKING", "disabled", _LLM_THINKING_VALUES),
+        LLM_RESPONSE_FORMAT=as_enum(
+            "LLM_RESPONSE_FORMAT", "json_object", _LLM_RESPONSE_FORMAT_VALUES
+        ),
         LLM_MONTHLY_USD_CAP=as_int("LLM_MONTHLY_USD_CAP", 30),
         LLM_PRICE_IN_PER_M=as_float("LLM_PRICE_IN_PER_M", 0.0),
         LLM_PRICE_OUT_PER_M=as_float("LLM_PRICE_OUT_PER_M", 0.0),

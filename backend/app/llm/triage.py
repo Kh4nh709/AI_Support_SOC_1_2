@@ -50,7 +50,7 @@ import json
 import re
 import subprocess
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -223,9 +223,23 @@ class Proposal:
     model: str  # from the last call
     latency_ms: int  # summed over the calls made
     calls: int  # 1 or 2 — never 3 (design note 5)
+    #: The first call's validation errors (DEC-218): `[]` when the first call was valid. `schema_errors` is the
+    #: last call's; after a repair they can differ, and what the first call got wrong is what a measurement of
+    #: the repair round needs. They may name a key the model invented (`reasones: unexpected key`): they are
+    #: stored (`gate_result.step1_errors` / `first_errors`) and never put in a prompt - `_repair_user` is
+    #: handed `errors`, which it sanitises, and nothing reads this field but the code that stores it.
+    first_errors: list[str] = field(default_factory=list)
+    #: A call asked for `json_schema` and the adapter reports it was answered as `json_object` (the provider
+    #: refused the format, `DeepSeekAdapter.complete`). Always False with the switch off, and for a result that
+    #: does not say which format produced it. `tier1/triage.py` turns it into `RESPONSE_FORMAT_FALLBACK`.
+    format_fallback: bool = False
 
 
 Verification = Proposal  # same shape, schema "verifier_v2"
+
+#: DEC-218: the warning a run's proposer row carries in `citation_warnings` when a call of the run asked for
+#: `json_schema` and the provider refused the format (HTTP 400 or 422), so it was answered as `json_object`.
+RESPONSE_FORMAT_FALLBACK = "response_format_fallback"
 
 
 class RepairPromptViolation(PermanentError):
@@ -855,18 +869,54 @@ def _sum_usage(usages: Sequence[Mapping[str, Any]]) -> dict:
     return total
 
 
-def _call(adapter: Any, built: BuiltTriagePrompt, *, schema_name: str, model: str) -> Proposal:
-    """One call, validate, at most one repair, never a third call."""
+def _response_format(cfg: Config, schema_name: str) -> dict | None:
+    """DEC-218: what to ask the provider to enforce, or `None` for "nothing": the adapter then sends
+    `json_object` exactly as it always has. With `LLM_RESPONSE_FORMAT=json_schema` it is the JSON Schema of the
+    schema the answer is validated against, generated from `output_schemas.json` (`schemas.json_schema`).
+    """
+    if cfg.LLM_RESPONSE_FORMAT != "json_schema":
+        return None
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": schema_name,
+            "strict": True,
+            "schema": schemas.json_schema(schema_name),
+        },
+    }
+
+
+def _call(
+    adapter: Any,
+    built: BuiltTriagePrompt,
+    *,
+    schema_name: str,
+    model: str,
+    response_format: dict | None = None,
+) -> Proposal:
+    """One call, validate, at most one repair, never a third call. A `response_format` goes to both calls; with
+    `None` it is not passed at all, so a request is exactly what it was before DEC-218."""
     system, user = built.prompt.system, built.prompt.user
-    result = adapter.complete(system=system, user=user, model=model)
+    extra: dict[str, Any] = {} if response_format is None else {"response_format": response_format}
+    asked = None if response_format is None else response_format["type"]
+
+    def _refused(result: Any) -> bool:
+        # absent on a test double, None on a cached result: then nothing is known and nothing is reported
+        reported = getattr(result, "response_format", None)
+        return asked is not None and reported is not None and reported != asked
+
+    result = adapter.complete(system=system, user=user, model=model, **extra)
+    fell_back = _refused(result)
     parsed, errors = _parse(schema_name, result.content)
+    first_errors = list(errors)
     usages = [result.usage]
     latency_ms = int(result.latency_ms)
     calls = 1
     repaired = False
     if errors:
         repair_user = _repair_user(user, errors, nonce=built.prompt.nonce)
-        result = adapter.complete(system=system, user=repair_user, model=model)
+        result = adapter.complete(system=system, user=repair_user, model=model, **extra)
+        fell_back = fell_back or _refused(result)
         parsed, errors = _parse(schema_name, result.content)
         usages.append(result.usage)
         latency_ms += int(result.latency_ms)
@@ -881,17 +931,31 @@ def _call(adapter: Any, built: BuiltTriagePrompt, *, schema_name: str, model: st
         model=result.model,
         latency_ms=latency_ms,
         calls=calls,
+        first_errors=first_errors,
+        format_fallback=fell_back,
     )
 
 
 def propose(adapter: Any, built: BuiltTriagePrompt, *, cfg: Config) -> Proposal:
     """The ① proposer call against `triage_v3` with `cfg.LLM_MODEL_PROPOSER`."""
-    return _call(adapter, built, schema_name="triage_v3", model=cfg.LLM_MODEL_PROPOSER)
+    return _call(
+        adapter,
+        built,
+        schema_name="triage_v3",
+        model=cfg.LLM_MODEL_PROPOSER,
+        response_format=_response_format(cfg, "triage_v3"),
+    )
 
 
 def verify(adapter: Any, built: BuiltTriagePrompt, *, cfg: Config) -> Verification:
     """The verifier call (gate step 6) against `verifier_v2` with `cfg.LLM_MODEL_VERIFIER`."""
-    return _call(adapter, built, schema_name="verifier_v2", model=cfg.LLM_MODEL_VERIFIER)
+    return _call(
+        adapter,
+        built,
+        schema_name="verifier_v2",
+        model=cfg.LLM_MODEL_VERIFIER,
+        response_format=_response_format(cfg, "verifier_v2"),
+    )
 
 
 # ─────────────────────────────────────────────────────────── prompt_version (design note 6)

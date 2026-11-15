@@ -77,6 +77,7 @@ from app.llm.adapter import (
 # composed exactly as the deployed one is, and an evaluation's usage is summed exactly
 # as `Proposal.usage` is. `llm/triage.py` itself is out of P7-T01's scope (frozen).
 from app.llm.triage import (
+    RESPONSE_FORMAT_FALLBACK,
     TRIAGE_TEMPLATE,
     VERIFIER_TEMPLATE,
     BuiltTriagePrompt,
@@ -326,6 +327,17 @@ def _set_triage_status(conn: psycopg.Connection, alert_id: str, status: str) -> 
     )
 
 
+def _proposer_warnings(built: BuiltTriagePrompt, *answers: Proposal | None) -> list[str]:
+    """The `citation_warnings` of a run's proposer row (DEC-218): the builder's own, plus
+    `response_format_fallback` when a call of the run (the proposer's or the verifier's, whichever answered)
+    asked for `json_schema` and the provider refused the format. The builder's list is not touched: the
+    warning is added to a copy, once, and a run no call of which fell back gets the builder's list as it was.
+    """
+    if any(a is not None and a.format_fallback for a in answers):
+        return [*built.warnings, RESPONSE_FORMAT_FALLBACK]
+    return built.warnings
+
+
 def _make_rule_check(table: Any, facts: dict[str, Any]):
     """The callable gate step 4 gets (design note 5). Six reasons, in order:
     `no_rule_cited` (no rule was cited), `no_table` (the category has no table),
@@ -436,7 +448,7 @@ def _verify_failed_last_attempt(
         gate_result={"error": stopped_by, "message": str(exc)[:200], "facts": facts},
         verifier_result=None,
         injection_findings=None,
-        citation_warnings=built.warnings,
+        citation_warnings=_proposer_warnings(built, proposal),
         input_tokens=proposal.usage.get("prompt_tokens"),
         output_tokens=proposal.usage.get("completion_tokens"),
         latency_ms=proposal.latency_ms,
@@ -865,7 +877,11 @@ def evaluate_alert(
     if switches.gate_mode == "steps_1_3":
         # B3 — `gate.py` keeps its step functions importable for exactly this re-run.
         state = gate.start(
-            proposal.parsed, facts, built.prompt.block_index, repaired=proposal.repaired
+            proposal.parsed,
+            facts,
+            built.prompt.block_index,
+            repaired=proposal.repaired,
+            step1_errors=proposal.first_errors,
         )
         gate.step2_basis(state)
         gate.step3_quotes(state)
@@ -880,6 +896,7 @@ def evaluate_alert(
         repaired=proposal.repaired,
         rule_check=rule_check,
         scan=lambda _: findings,
+        step1_errors=proposal.first_errors,
     )
     # The verifier row must record what it was actually asked to check. Since DEC-217 that is the model's own
     # answer (`false_positive` or `true_positive`): no step changes the verdict, step 6 only flags it.
@@ -1086,11 +1103,12 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
             gate_result={
                 "error": "schema",
                 "schema_errors": proposal.schema_errors,
+                "first_errors": proposal.first_errors,
                 "facts": facts,
             },
             verifier_result=None,
             injection_findings=detector.as_json(ev.findings),
-            citation_warnings=built.warnings,
+            citation_warnings=_proposer_warnings(built, proposal),
             input_tokens=proposal.usage.get("prompt_tokens"),
             output_tokens=proposal.usage.get("completion_tokens"),
             latency_ms=proposal.latency_ms,
@@ -1174,7 +1192,7 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
         gate_result=g,
         verifier_result=verification.parsed,
         injection_findings=detector.as_json(ev.findings),
-        citation_warnings=built.warnings,
+        citation_warnings=_proposer_warnings(built, proposal, verification),
         input_tokens=proposal.usage.get("prompt_tokens"),
         output_tokens=proposal.usage.get("completion_tokens"),
         latency_ms=proposal.latency_ms,
