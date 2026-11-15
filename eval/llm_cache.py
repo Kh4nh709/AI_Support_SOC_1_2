@@ -10,6 +10,15 @@ handed one, and a repeated measurement is answered from disk:
   and it is atomic (a temporary file, then a rename).
 * **The thinking mode is part of the key and has no default** anywhere on the key path: without it
   the paired ablation replays one mode's answers for both and reports a null difference.
+* **The response format is part of the key, without moving any key that exists** (DEC-218). A request
+  with no format, or with `{"type": "json_object"}`, has exactly the key above and the same `request`
+  record, so every entry already on disk stays a hit. Any other format (`json_schema`, which asks the
+  provider to enforce the output schema) is folded into the key, its name and its schema both, and its
+  digest joins the entry's `request` record: a run with `LLM_RESPONSE_FORMAT=json_schema` is never served
+  what a `json_object` run recorded, nor the reverse. An entry also records the format the inner adapter
+  reports for the answer (`LLMResult.response_format`) and a hit reports it, so a `json_schema` request the
+  provider refused and answered as `json_object` is a fallback on a replay as it was live; an entry that
+  says nothing (every entry written before this) reports `None`.
 * **The nonce is folded** because context pack §7.1 makes every build's nonce fresh, so an unfolded
   key would miss on every re-run. A message carrying two distinct boundary nonces is a builder
   defect: it raises `NonceAmbiguous` and is neither sent nor cached.
@@ -202,6 +211,23 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+#: The format every request sent before DEC-218 asked for, and still the default: the one whose key is
+#: `smoke_test.cache_key`'s and nothing else's.
+_JSON_OBJECT_FORMAT: dict[str, str] = {"type": "json_object"}
+
+
+def _format_digest(response_format: Mapping[str, Any] | None) -> str | None:
+    """`None` for a request whose key stays today's (no format, or exactly `json_object`); otherwise the
+    sha256 of the format as canonical JSON, which carries a `json_schema` request's name and its schema.
+    """
+    if response_format is None or dict(response_format) == _JSON_OBJECT_FORMAT:
+        return None
+    canonical = json.dumps(
+        response_format, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    return _sha256(canonical)
+
+
 def _write_atomic(path: Path, entry: Mapping[str, Any]) -> None:
     """A temporary file in the entry's own directory, flushed and fsynced, then `os.replace`d
     onto the entry: a reader sees the whole entry or none. On any failure the temporary file is
@@ -277,10 +303,19 @@ class CachingAdapter:
         with self._results_lock:
             return list(self._results)
 
-    def key_for(self, *, system: str, user: str, model: str | None = None) -> str:
+    def key_for(
+        self,
+        *,
+        system: str,
+        user: str,
+        model: str | None = None,
+        response_format: Mapping[str, Any] | None = None,
+    ) -> str:
         """The key of this request's entry: `smoke_test.cache_key` over the resolved request
-        model, the system prompt (the template), the nonce-folded user message and the mode."""
-        return self._key_inputs(system, user, model)[0]
+        model, the system prompt (the template), the nonce-folded user message and the mode. For a
+        request with no format or with `json_object` that is the whole key; any other format is
+        folded into it (DEC-218, the module docstring)."""
+        return self._key_inputs(system, user, model, response_format)[0]
 
     def complete(
         self,
@@ -291,13 +326,16 @@ class CachingAdapter:
         timeout_s: float | None = None,
         model: str | None = None,
     ) -> CachedResult:
-        key, request_model, folded = self._key_inputs(system, user, model)
+        key, request_model, folded = self._key_inputs(system, user, model, response_format)
         request = {
             "model": request_model,
             "thinking": self._thinking,
             "system_sha256": _sha256(system),
             "user_sha256": _sha256(folded),
         }
+        format_digest = _format_digest(response_format)
+        if format_digest is not None:  # a json_object request keeps today's four-key record
+            request["response_format_sha256"] = format_digest
         entry = self._load(key, request)
         cached = entry is not None
         if entry is None:
@@ -321,12 +359,23 @@ class CachingAdapter:
             latency_ms=entry["latency_ms"],
             cached=cached,
             key=key,
+            # what the inner adapter reported when the entry was measured; None for an entry that says
+            # nothing (every one written before DEC-218) or whose field is not a string
+            response_format=(
+                entry["response_format"] if isinstance(entry.get("response_format"), str) else None
+            ),
         )
         with self._results_lock:
             self._results.append(result)
         return result
 
-    def _key_inputs(self, system: str, user: str, model: str | None) -> tuple[str, str, str]:
+    def _key_inputs(
+        self,
+        system: str,
+        user: str,
+        model: str | None,
+        response_format: Mapping[str, Any] | None = None,
+    ) -> tuple[str, str, str]:
         request_model = model or self._default_model
         if not request_model:
             raise ValueError(
@@ -335,6 +384,9 @@ class CachingAdapter:
             )
         folded = fold_nonce(user)
         key = smoke_test.cache_key(request_model, system, folded, self._thinking)
+        format_digest = _format_digest(response_format)
+        if format_digest is not None:  # no format, or json_object: the key above, unchanged
+            key = _sha256(f"{key}\nresponse_format={format_digest}")
         return key, request_model, folded
 
     def _load(self, key: str, request: Mapping[str, str]) -> dict[str, Any] | None:
@@ -393,6 +445,9 @@ class CachingAdapter:
             "usage": dict(live.usage),
             "latency_ms": int(live.latency_ms),
         }
+        reported = getattr(live, "response_format", None)  # a double's result has no such field
+        if isinstance(reported, str):
+            entry["response_format"] = reported
         _write_atomic(self._cache_dir / f"{key}.json", entry)
         return entry
 
