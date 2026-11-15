@@ -162,11 +162,16 @@ describe("the Tri thức (RAG) tile", () => {
     );
   });
 
-  it("has no data for a number that is not there, a state it does not know, or no lookup", () => {
+  it("has no data for a number that is not there, or no lookup", () => {
     const none = { value: "—", note: "chưa có dữ liệu" };
     expect(ragTile(known({ state: "matched", best_pct: null }))).toEqual(none);
     expect(ragTile(known({ state: "below_floor", best_pct: null }))).toEqual(none);
-    expect(ragTile(known({ state: "future_state" }))).toEqual(none);
     expect(ragTile(null)).toEqual(none);
+  });
+
+  // A state this page has no words for is shown as it came, not as "no data" (review of AP-T4).
+  it("shows a state it does not know as the code, and not as no data", () => {
+    expect(ragTile(known({ state: "future_state" }))).toEqual({ value: "—", note: "future_state" });
+    expect(ragTile(known({ state: "constructor" }))).toEqual({ value: "—", note: "constructor" });
   });
 });

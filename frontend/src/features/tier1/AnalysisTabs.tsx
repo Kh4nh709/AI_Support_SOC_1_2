@@ -168,7 +168,8 @@ function stateSentence(rag: RagModel): string {
     case "failed":
       return S2.failed(failureWords(rag.failure));
     default:
-      return S.analysis.ragNote.noData;
+      // a state this page has no words for is shown as it came
+      return rag.state;
   }
 }
 

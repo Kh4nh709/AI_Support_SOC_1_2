@@ -104,6 +104,7 @@ export function ragTile(k: Knowledge | null): RagTile {
             : N.failed,
       };
     default:
-      return noData;
+      // a state this page has no words for is shown as it came, never as "no data"
+      return { value: S.common.missing, note: k.state };
   }
 }

@@ -546,6 +546,11 @@ describe("Tri thức", () => {
       { state: "failed", failure: "timeout", best_pct: null, candidates: [] },
       'Không tra cứu được tri thức đã duyệt: Voyage quá thời gian chờ. Quy tắc "dưới 80% → mặc định FP" không áp dụng.',
     ],
+    [
+      "a state it has no words for (shown as the code)",
+      { state: "future_state", best_pct: null, candidates: [] },
+      'future_state Quy tắc "dưới 80% → mặc định FP" không áp dụng.',
+    ],
   ])("explains the state %s", async (_name, rag, expected) => {
     renderColumn(view({ analysis: analysis({ rag: { ...analysis().rag, ...rag } as never }) }));
     const panel = await openTab("Tri thức");

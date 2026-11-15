@@ -274,8 +274,8 @@ describe("ragTile", () => {
     expect(tile(undefined, null).note).toBe("chưa có dữ liệu");
   });
 
-  it("reads a state it does not know as no data", () => {
-    expect(tile(knowledge("quantum")).note).toBe("chưa có dữ liệu");
+  it("shows a state it does not know as the code", () => {
+    expect(tile(knowledge("quantum")).note).toBe("quantum");
     // a `knowledge` that is not an object is ignored, and the rag pair (here empty) is read instead
     const empty = { best_pct: null, not_applied: null, below_floor_pct: null, floor_pct: null };
     expect(tile("matched", empty).note).toBe("chưa có dữ liệu");
