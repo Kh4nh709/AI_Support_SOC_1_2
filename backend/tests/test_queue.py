@@ -965,6 +965,7 @@ def test_latest_suggestion_tolerates_missing_gate_keys(db):
         "final_verdict": None,
         "verifier_verdict": None,
         "warnings": [],
+        "rag_rule": None,  # DEC-219: `null` for a run that has none
     }
     assert suggestion.correlated_at_analysis is None
 
@@ -998,6 +999,7 @@ def test_latest_suggestion_reads_p3_t10_shape_and_latest_proposer_wins(db):
         "final_verdict": "false_positive",
         "verifier_verdict": "false_positive",
         "warnings": [],
+        "rag_rule": None,  # DEC-219: `GATE` is a run from before the key
     }
     assert suggestion.correlated_at_analysis == 2
     assert isinstance(suggestion.created_at, datetime)

@@ -339,7 +339,9 @@ def test_steps_1_3_makes_one_call_and_keeps_a_policy_blocked_fp(db, cfg):
     assert b3.forced_by == () and b3.flagged_by == ()  # B3 stops after step 3: step 4 never ran
     assert len(b3_llm.calls) == 1 and b3.calls == 1  # the verifier is never called
     assert b3.vbuilt is None and b3.verification is None and b3.verifier_verdict is None
-    assert sorted(b3.gate_result["steps"]) == ["1", "2", "3", "7"]  # no 4, no 5, no 6
+    # no 4, no 5, no 6; the RAG rule's step (DEC-219) sits after 3 and is `n/a` with the switch off
+    assert sorted(b3.gate_result["steps"]) == ["1", "2", "3", "3r", "7"]
+    assert b3.gate_result["steps"]["3r"] == "n/a"
 
     full_llm = _FakeLLM(responses=[_POLICY_BLOCKED_FP, _VERIFIER_AGREES_FALSE_POSITIVE])
     full = evaluate_alert(db, alert_id, adapter=full_llm, cfg=cfg)  # DEPLOYED

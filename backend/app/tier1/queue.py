@@ -37,6 +37,22 @@ never the raw `result.suggested_action`: a run the pre-DEC-217 gate held (stored
 it, so the alert page, `decide`'s `llm_suggestion` and the digest, which read them, do too. The admin LLM
 page and the audit log show stored rows as they are.
 
+DEC-219 (RR-T1, as amended): below `TRIAGE_RAG_FP_BELOW_PCT` `false_positive` is ①'s DEFAULT answer, so for a
+stored run whose `gate_result.rag_rule.applied` is true (`verdicts.rag_rule_applied`, whether or not the model
+had answered `false_positive` itself) Tier 1 is not served the model's own answer or its confidence in it:
+`proposed_action` (the alert view's, and the queue row's from the `gate_held` projection, which carries
+`rag_rule.applied`) and `Suggestion.gate.proposed_verdict` are the verdict ① ended with
+(`verdicts.served_proposed_action`), and `Suggestion.confidence` and the queue row's `confidence` are `None`
+(`verdicts.served_confidence`; what `decide` records follows, `llm_confidence` included). Nor is anything served
+that would let a reader work the model's answer out: the verifier was sent the model's own verdict and step 6
+compared it with that, so for such a run `Suggestion.gate.verifier_verdict` is `None`
+(`verdicts.served_verifier_verdict`) and `held_by` (the queue row's and the alert view's) leaves out
+`verifier_disagrees` (`verdicts.served_held_reasons`; every other code stays, `verifier_invalid` included).
+`Suggestion.gate` also gains `rag_rule`: `{threshold, best_pct, applied}` of the stored object, never its
+`changed` (for an applied run it says what the model answered), or `None`. Nothing stored changes: `llm_runs`
+is as written, and the admin LLM page and the audit log show stored rows as they are. `rag_rule` is nested in `suggestion`, so the blind
+arm (`visibility.strip` drops it with the suggestion) and the labelling page (`gate` is denied) never get it.
+
 Both readers pass their dict through `visibility.strip` before returning it, so the blind
 branch (context pack §6.4) is enforced here, never in the client. `risk_score` never
 leaves this module as a bare number — the four-band `risk_band` replaces it (phase-4
@@ -150,8 +166,11 @@ class Suggestion:
     `decide` consume. `suggested_action` is the verdict Tier 1 is served (`verdicts.served_action`,
     DEC-217): `result["suggested_action"]` for a run that stores the model's own answer, which is every
     run since DEC-217 (G11), and `gate_result.proposed_verdict` for a stored `needs_review` (a run the old
-    gate held). `gate` is the stored gate document as it is: `forced` is what the run says, whatever its
-    version."""
+    gate held). `gate` is the stored gate document's keys as they are: `forced` is what the run says, whatever
+    its version. Three values are served, not stored, for a run the RAG rule applied to (DEC-219, module
+    docstring): `confidence` is `None`, `gate["proposed_verdict"]` is the verdict ① ended with and
+    `gate["verifier_verdict"]` is `None`. `gate["rag_rule"]` is `{threshold, best_pct, applied}` of the stored
+    object (never its `changed`) or `None`."""
 
     run_id: str
     suggested_action: str | None
@@ -178,6 +197,10 @@ _SUGGESTION_SQL = """
 """
 
 
+#: The keys of the stored `gate_result.rag_rule` that Tier 1 is served (`changed` is not one of them).
+_SERVED_RAG_RULE_KEYS = ("threshold", "best_pct", "applied")
+
+
 def _reason(item: Any) -> dict[str, Any] | None:
     if not isinstance(item, Mapping):
         return None
@@ -196,18 +219,39 @@ def _suggestion_of(
     facts = facts if isinstance(facts, Mapping) else {}
     raw_reasons = result.get("reasons") or []
     reasons = [r for r in (_reason(item) for item in raw_reasons[:10]) if r is not None]
+    served = verdicts.served_action(result, gate_result)
+    rag_rule = gate_result.get("rag_rule")
     return Suggestion(
         run_id=str(run_id),
-        suggested_action=verdicts.served_action(result, gate_result),
-        confidence=result.get("confidence"),
+        suggested_action=served,
+        # DEC-219: the model's confidence in its own answer is not served for a run the RAG rule applied to
+        confidence=verdicts.served_confidence(result.get("confidence"), gate_result),
         reasons=reasons,
         gate={
             "forced": gate_result.get("forced"),
             "forced_by": gate_result.get("forced_by"),
-            "proposed_verdict": gate_result.get("proposed_verdict"),
+            # DEC-219: for a run the RAG rule applied to, the verdict ① ended with, not the model's own answer
+            # (which stays in the stored row): `false_positive` is ①'s default below the threshold.
+            "proposed_verdict": (
+                served
+                if verdicts.rag_rule_applied(gate_result)
+                else gate_result.get("proposed_verdict")
+            ),
             "final_verdict": gate_result.get("final_verdict"),
-            "verifier_verdict": gate_result.get("verifier_verdict"),
+            # DEC-219: the verifier was sent the model's own verdict for a run the rule applied to, so its answer
+            # is not served for such a run (`null`): it would give the model's answer away
+            "verifier_verdict": verdicts.served_verifier_verdict(
+                gate_result.get("verifier_verdict"), gate_result
+            ),
             "warnings": gate_result.get("warnings") or [],
+            # DEC-219: `{threshold, best_pct, applied}` of the stored object, `null` for a run that has none
+            # (before the key, or a version 1 document) or whose stored value is not an object. The stored
+            # `changed` is never served: for an applied run it says what the model answered.
+            "rag_rule": (
+                {key: rag_rule.get(key) for key in _SERVED_RAG_RULE_KEYS}
+                if isinstance(rag_rule, Mapping)
+                else None
+            ),
         },
         correlated_at_analysis=facts.get("correlated_clusters"),
         created_at=created_at,
@@ -228,7 +272,8 @@ def latest_suggestion_held(
 ) -> tuple[Suggestion | None, str | None, list[str]]:
     """`(suggestion, proposed_action, held_by)` from ONE read of the newest proposer run
     (`_SUGGESTION_SQL`): `latest_suggestion`'s `Suggestion`, the model's own definite answer
-    (`gate_result.proposed_verdict`, `verdicts.proposed_action`) and the closed reasons of the checks that
+    (`gate_result.proposed_verdict`, `verdicts.served_proposed_action`: for a run the RAG rule applied to, DEC-219,
+    the verdict ① ended with instead) and the closed reasons of the checks that
     raised a warning on it (`verdicts.held_reasons`; DEC-217: warnings beside the verdict, before it the
     reasons the gate held it back) - so the three are the same run by construction, not by two statements
     that happen to agree. The alert view's `proposed_action` and `held_by` (P14-T03, DEC-213). `(None, None,
@@ -259,8 +304,10 @@ def latest_suggestion_rag(
     gate_result = run[2]
     return (
         suggestion,
-        verdicts.proposed_action(gate_result),
-        verdicts.held_reasons(gate_result),
+        # DEC-219: the verdict ① ended with, not the model's own answer, for a run the RAG rule applied to
+        verdicts.served_proposed_action(gate_result, suggestion.suggested_action),
+        # ... and without `verifier_disagrees`, which would give the model's answer away (DEC-219)
+        verdicts.served_held_reasons(gate_result),
         rag,
     )
 
@@ -403,7 +450,8 @@ _QUEUE_SQL = """
                'forced_by', r.gate_result->'forced_by',
                'flagged_by', r.gate_result->'flagged_by',
                'missing', r.gate_result->'missing',
-               'steps', jsonb_build_object('6', r.gate_result->'steps'->'6')) END AS gate_held,
+               'steps', jsonb_build_object('6', r.gate_result->'steps'->'6'),
+               'rag_rule', jsonb_build_object('applied', r.gate_result->'rag_rule'->'applied')) END AS gate_held,
            {needs_retriage} AS needs_retriage
     FROM alerts a
     LEFT JOIN LATERAL (
@@ -595,8 +643,14 @@ def list_queue(
         # outcome (what tells `verifier_invalid` from `verifier_disagrees`), never the whole `gate_result`; `strip`
         # drops both results for a blind, undecided head.
         gate_held = row.pop("gate_held")
-        row["proposed_action"] = verdicts.proposed_action(gate_held)
-        row["held_by"] = verdicts.held_reasons(gate_held)
+        # DEC-219: for a run the RAG rule applied to (`gate_held.rag_rule.applied`) the verdict ① ended with, which
+        # is the row's own `suggested_action`, not the model's answer
+        row["proposed_action"] = verdicts.served_proposed_action(gate_held, row["suggested_action"])
+        # ... and the model's confidence in its own answer is not served for such a run either
+        row["confidence"] = verdicts.served_confidence(row["confidence"], gate_held)
+        # DEC-219: without `verifier_disagrees` for a run the RAG rule applied to (it would give the model's
+        # answer away: step 6 compared the verifier with that answer)
+        row["held_by"] = verdicts.served_held_reasons(gate_held)
         rows.append(
             visibility.strip(
                 row,

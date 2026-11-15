@@ -34,9 +34,21 @@ evaluation: the same statements, the same prompt.
 DEC-217 (BV-T1): ① gives only `true_positive` or `false_positive`. The gate's checks (steps 2, 3, 4 and 6)
 are warnings: they flag the run (`TriageEvaluation.flagged_by`, `gate_result.flagged_by`) and the verdict
 stored in `result.suggested_action`, `gate_result.final_verdict` and `TriageEvaluation.final_verdict` is the
-model's own answer. Nothing is forced, so `forced_by` is `()` for a new run and `llm.gate_forced` is not
+verdict ① ended with: the model's own answer, except where the RAG rule of DEC-219 below replaced it (the model's
+own answer is always `gate_result.proposed_verdict` and `TriageEvaluation.proposed_verdict`). Nothing is forced,
+so `forced_by` is `()` for a new run and `llm.gate_forced` is not
 written (the event type stays for old rows); `triage.suggested` keeps `forced` (now always false) and gains
 `flagged_by`.
+
+DEC-219 (RR-T1, as amended): below `TRIAGE_RAG_FP_BELOW_PCT` (0 = off, the default) `false_positive` is ①'s
+default answer. `_rag_best_pct` computes the run's `best_pct` - the number the alert page shows for it, by the
+page's own function over the page's own inputs (the stored `matches` of the lookup the prompt held, the run's
+`citation_warnings`) - and the gate's `step3r_rag_rule` (steps 1-3 and the deployed gate alike) turns a model
+`true_positive` into `false_positive`. The model is still called, its reasons are still shown, its own answer is
+kept in `gate_result.proposed_verdict`. It is not a force: `forced_by` stays `()`, `llm.gate_forced` is still
+never written, `triage.suggested.forced` is false and its `suggested_action` is the verdict after the rule. The
+verifier is sent the model's own verdict (`TriageEvaluation.verdict_for_verifier`), and step 6 compares its
+answer with it. `proposed_verdict` and `final_verdict` differ when the rule changed the verdict.
 
 `_set_triage_status` is this module's only write to `alerts` — it names
 `triage_status` and `triaged_count` and nothing else (G2). `domain/`, not `tier1/`,
@@ -64,7 +76,7 @@ from app.infra import config, settings
 from app.infra.errors import PermanentError, TransientError
 from app.infra.jobs import Job
 from app.kb import lookup as kb
-from app.llm import builder
+from app.llm import builder, rag_view
 from app.llm.adapter import (
     DeepSeekAdapter,
     LLMBudgetExceeded,
@@ -93,6 +105,7 @@ from app.llm.triage import (
     propose,
     verify,
 )
+from app.rag.failures import FAILURE_KINDS
 from app.rag.lookup import (
     UNKNOWN_FAILURE_KIND,
     PromptMaterial,
@@ -552,12 +565,14 @@ class TriageEvaluation:
     "verifier_cap" / "verifier_unavailable" / "verifier_transient" — the same from the verifier
     call, after a schema-valid proposal.
 
-    `final_verdict` (the gated `suggested_action`: the model's own answer, DEC-217) and `gate_result` exist
+    `final_verdict` (the gated `suggested_action`: the verdict ① ended with, which is the model's own answer
+    unless the RAG rule replaced it, DEC-219; the model's own answer is `proposed_verdict`) and `gate_result` exist
     only for "ok". `proposed_verdict`, `reasons_kept`, `reasons_dropped`, `flagged_by` and
     `verifier_verdict` are read from the gate state whenever the gate started (steps
     4-7 never change either reason list, so the two counts are step 3's). `flagged_by` names the steps whose
     check raised a warning, in step order; `forced_by` stays for the readers of version 1 and is `()` for a
-    new run, which no step forces. `calls`,
+    new run, which no step forces (the RAG rule of DEC-219 is not a force: where it changed the verdict,
+    `proposed_verdict` and `final_verdict` differ and `gate_result.rag_rule` says why). `calls`,
     `usage`, `latency_ms` and `cost_usd` are summed over the adapter results that came
     back: a call that raised returned nothing to count or price. `model_id` is the
     proposer response's. The fields from `built` on are the intermediates
@@ -646,6 +661,47 @@ def _learned_before(
         return None, None
 
 
+def _lookup_matches(conn: psycopg.Connection, lookup_id: UUID) -> Any:
+    """The stored `rag_results.matches` of the lookup `lookup_id`, exactly the value the alert page reads for
+    the same run (`tier1.queue._SUGGESTION_SQL`: the scalar subquery on `llm_runs.rag_lookup_id`). `None` when
+    the row is gone or the read fails: a savepoint like the lookup's own reads, because the number is an
+    extra of a rule and a database error in it must be no number, never a failed ①."""
+    try:
+        with conn.transaction():
+            row = conn.execute(
+                "SELECT matches FROM rag_results WHERE lookup_id = %s", (lookup_id,)
+            ).fetchone()
+    except psycopg.Error as exc:
+        _log({"rag_lookup": "unreadable", "lookup_id": str(lookup_id), "error": type(exc).__name__})
+        return None
+    return None if row is None else row[0]
+
+
+def _rag_best_pct(
+    conn: psycopg.Connection,
+    rag_lookup_id: UUID | None,
+    warnings: list[str],
+    threshold: int,
+) -> int | None:
+    """The run's `best_pct` (DEC-219): the number the alert page shows as "trùng X% với tri thức đã duyệt" for
+    this run, computed by the page's own function (`llm.rag_view.rag_view`) from the page's own two inputs:
+    the stored `matches` of the lookup the run's prompt held (`rag_lookup_id`: None unless the learned section
+    is in the prompt) and the run's `citation_warnings` (`learned_entries_dropped`: the token budget dropped the
+    entries). So it is `None` for every case the page shows no number: no lookup in the prompt (no lookup, a
+    `failed` or `budget` one, RAG off by the switch or by an evaluation switch, all of which leave
+    `rag_lookup_id` None), a lookup that kept no match, and entries the budget dropped.
+
+    The prompt's own entries are NOT the source: they are the matches that passed the integrity re-check and
+    the section's own checks, at most the section's cap, and the page shows the best of the STORED matches.
+    With `threshold` 0 (the switch off, the default) nothing is read: not one statement more than a run made
+    before the key existed."""
+    if threshold <= 0 or rag_lookup_id is None:
+        return None
+    matches = _lookup_matches(conn, rag_lookup_id)
+    best = rag_view.rag_view(matches, warnings, FAILURE_KINDS)["best_pct"]
+    return best if isinstance(best, int) else None
+
+
 def _evaluation(
     outcome: str,
     *,
@@ -684,7 +740,7 @@ def _evaluation(
         ),
         reasons_kept=len(state.reasons) if state is not None else None,
         reasons_dropped=len(state.dropped_reasons) if state is not None else None,
-        forced_by=(),  # nothing is forced since DEC-217: a failed check flags, it does not hold
+        forced_by=(),  # nothing is forced: a failed check flags (DEC-217) and the RAG rule is no force (DEC-219)
         flagged_by=tuple(state.flagged_by) if state is not None else (),
         verifier_verdict=state.verifier_verdict if state is not None else None,
         model_id=proposal.model if proposal is not None else None,
@@ -874,6 +930,11 @@ def evaluate_alert(
     if proposal.parsed is None:
         return evaluation("schema", proposal=proposal)
 
+    # DEC-219: the number the alert page shows for this run, for the RAG low-match rule. Read after the model
+    # answered (a run that never reaches the gate reads nothing), and not at all with the switch off.
+    rag_threshold = cfg.TRIAGE_RAG_FP_BELOW_PCT
+    rag_best_pct = _rag_best_pct(conn, rag_lookup_id, built.warnings, rag_threshold)
+
     if switches.gate_mode == "steps_1_3":
         # B3 — `gate.py` keeps its step functions importable for exactly this re-run.
         state = gate.start(
@@ -885,6 +946,7 @@ def evaluate_alert(
         )
         gate.step2_basis(state)
         gate.step3_quotes(state)
+        gate.step3r_rag_rule(state, rag_best_pct, rag_threshold)  # wherever step 3 runs (DEC-219)
         result = gate.step7_output_guard(state)
         return evaluation("ok", proposal=proposal, state=state, result=result)
 
@@ -897,10 +959,14 @@ def evaluate_alert(
         rule_check=rule_check,
         scan=lambda _: findings,
         step1_errors=proposal.first_errors,
+        rag_best_pct=rag_best_pct,
+        rag_threshold=rag_threshold,
     )
-    # The verifier row must record what it was actually asked to check. Since DEC-217 that is the model's own
-    # answer (`false_positive` or `true_positive`): no step changes the verdict, step 6 only flags it.
-    verdict_for_verifier = state.verdict
+    # The verifier row must record what it was actually asked to check: the model's own answer (`false_positive`
+    # or `true_positive`), not the verdict ① ends with. Since DEC-217 no check changes the verdict, and since
+    # DEC-219 the one thing that can, the RAG rule, is not the verifier's to judge: it checks the model's claim,
+    # and step 6 compares its answer with `proposed_verdict`.
+    verdict_for_verifier = state.proposed_verdict
     vbuilt = build_verifier_prompt(facts, table, verdict_for_verifier, state.reasons, cfg=cfg)
 
     verifier_violations = linter.lint(
@@ -1242,5 +1308,7 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
             "run_id": str(proposer_id),
         },
     )
-    # `llm.gate_forced` is not written (DEC-217): nothing is forced. The event type stays for old rows.
+    # `llm.gate_forced` is not written (DEC-217): nothing is forced, and the RAG rule (DEC-219) is the verdict
+    # ① ends with, not a force: it is `triage.suggested`'s `suggested_action` and `gate_result.rag_rule`'s
+    # `changed`. The event type stays for old rows.
     return

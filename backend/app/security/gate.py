@@ -14,6 +14,15 @@ still recorded (`hallucination_flag`, `mismatched_fields`, `dropped_reasons`, `m
 `steps`). `needs_review` can no longer leave the gate: `output_guard` refuses it. Before DEC-217 a failed
 check forced the verdict to `needs_review` (`forced_by`, `gate_result` version 1); those documents stay in
 the database and the readers still read them (`llm.verdicts`).
+
+DEC-219 (RR-T1, as amended): the one step that can change the verdict. `step3r_rag_rule` runs after step 3 and
+before step 4: when the alert's best RAG match is below the configured threshold, `false_positive` is ①'s
+DEFAULT answer, so a model `true_positive` becomes `false_positive`. It is not a gate force and not a failed
+check: `forced` stays false, `forced_by` stays empty and `flagged_by` is not touched; `steps["3r"]` and
+`gate_result.rag_rule` are the record. `proposed_verdict` stays the model's own answer (the stored record of
+it), which the verifier is sent and step 6 compares with; `verdict` is what ① ends with. `security` imports
+only `infra`, so the rule is handed two plain integers (`best_pct | None`, `threshold`), computed by
+`tier1/triage.py`.
 """
 
 from __future__ import annotations
@@ -42,7 +51,8 @@ class GateState:
     facts: Mapping[str, Any]  # planning decision 7
     blocks: Mapping[str, Block]  # BuiltPrompt.block_index
     proposed_verdict: str
-    verdict: str  # the model's answer, from `start()` to step 7: no step changes it
+    # ①'s verdict: the model's answer, which only `step3r_rag_rule` (DEC-219) can replace
+    verdict: str
     reasons: list[dict]  # surviving reasons
     steps: dict[str, str]
     flagged_by: list[str]  # the steps whose check failed, in step order
@@ -56,6 +66,16 @@ class GateState:
     #: DEC-218: the first call's schema-validator messages when step 1 was `repaired`, else `[]`. They may name a
     #: key the model invented, so they are for `gate_result` (the database) only and never for a prompt.
     step1_errors: list[str] = dataclass_field(default_factory=list)
+    #: DEC-219: `{threshold, best_pct, applied, changed}`, what `step3r_rag_rule` was given and found. Before the
+    #: step runs (and when no caller runs it) it is the switch-off value, so every document carries the key.
+    rag_rule: dict[str, Any] = dataclass_field(
+        default_factory=lambda: {
+            "threshold": 0,
+            "best_pct": None,
+            "applied": False,
+            "changed": False,
+        }
+    )
 
 
 def step1_schema(
@@ -158,11 +178,36 @@ def step3_quotes(state: GateState) -> None:
         _flag(state, "step3")
 
 
+def step3r_rag_rule(state: GateState, best_pct: int | None, threshold: int) -> None:
+    """The RAG low-match rule (DEC-219). It APPLIES when `threshold > 0`, `best_pct` is a number and
+    `best_pct < threshold` (equal does not apply: 80 is not below 80). When it applies and the model answered
+    `true_positive`, ①'s verdict becomes `false_positive` (its default answer below the threshold) and the step
+    is `changed`; when it applies and the model already answered `false_positive` the step is `applied` and
+    nothing else changes; otherwise `n/a`. The rule reads the model's own answer (`proposed_verdict`), not the
+    verdict so far, so a second call gives the same state. It runs wherever step 3 runs, and step 4 then
+    evaluates the verdict it finds. It is neither a force (`forced` and `forced_by` are not touched: the
+    record is `steps["3r"]` and `rag_rule`) nor a failed check (`flagged_by`, the reasons and `proposed_verdict`
+    are not touched)."""
+    applied = threshold > 0 and best_pct is not None and best_pct < threshold
+    changed = applied and state.proposed_verdict == "true_positive"
+    if changed:
+        state.verdict = "false_positive"
+    state.rag_rule = {
+        "threshold": threshold,
+        "best_pct": best_pct,
+        "applied": applied,
+        "changed": changed,
+    }
+    state.steps["3r"] = "changed" if changed else "applied" if applied else "n/a"
+
+
 def step4_fp_policy(state: GateState, rule_check: RuleCheck) -> None:
-    """A `false_positive` answer is checked against every condition below; `missing` names all the ones
+    """A `false_positive` verdict is checked against every condition below; `missing` names all the ones
     that failed, not just the first, and any of them flags the run. Evaluated for EVERY `false_positive`
-    answer, whatever step 2 or step 3 found (a flag no longer ends the policy check); `n/a` only for a
-    `true_positive` answer. No detector output feeds this step."""
+    verdict, whatever step 2 or step 3 found (a flag no longer ends the policy check); `n/a` only for a
+    `true_positive` verdict. It evaluates the verdict it finds (`state.verdict`): a `false_positive` the RAG
+    rule produced (`step3r_rag_rule`, DEC-219) gets the same checks as one the model gave. No detector output
+    feeds this step."""
     if state.verdict != "false_positive":
         state.steps["4"] = "n/a"
         return
@@ -208,29 +253,34 @@ def run_steps_1_to_5(
     rule_check: RuleCheck,
     scan: Scanner,
     step1_errors: Sequence[str] = (),
+    rag_best_pct: int | None = None,
+    rag_threshold: int = 0,
 ) -> GateState:
-    """`start` + steps 2..5, in order. Assumes `parsed` already passed step 1."""
+    """`start` + steps 2..5, in order, the RAG rule (DEC-219) between 3 and 4. Assumes `parsed` already passed
+    step 1. The defaults are the switch off: the rule's step is `n/a` and nothing else changes."""
     state = start(parsed, facts, blocks, repaired=repaired, step1_errors=step1_errors)
     step2_basis(state)
     step3_quotes(state)
+    step3r_rag_rule(state, rag_best_pct, rag_threshold)
     step4_fp_policy(state, rule_check)
     step5_detector(state, scan)
     return state
 
 
 def step6_verifier(state: GateState, verifier_parsed: dict | None) -> None:
-    """Compare against `state.verdict`: the model's own answer, which is what the verifier prompt carried
-    (P3-T09; `false_positive` or `true_positive`, since no step changes it). A verifier answer that is
-    unusable (`None`) is `invalid` and flags the run; `agree` false, or a `structured_only_verdict` that
-    differs from the model's verdict (the verifier may still answer `needs_review`), is `disagree` and
-    flags it; otherwise `agree`."""
+    """Compare against `state.proposed_verdict`: the model's own answer, which is what the verifier prompt
+    carried (P3-T09; `false_positive` or `true_positive`). Since DEC-219 that is not always the verdict ① ends
+    with: the verifier is not asked about a `false_positive` the RAG rule produced, it checks the model's
+    claim. A verifier answer that is unusable (`None`) is `invalid` and flags the run; `agree` false, or a
+    `structured_only_verdict` that differs from the model's verdict (the verifier may still answer
+    `needs_review`), is `disagree` and flags it; otherwise `agree`."""
     if verifier_parsed is None:
         _flag(state, "step6")
         state.steps["6"] = "invalid"
         return
 
     state.verifier_verdict = verifier_parsed["structured_only_verdict"]
-    if verifier_parsed["agree"] is False or state.verifier_verdict != state.verdict:
+    if verifier_parsed["agree"] is False or state.verifier_verdict != state.proposed_verdict:
         _flag(state, "step6")
         state.steps["6"] = "disagree"
     else:
@@ -239,8 +289,9 @@ def step6_verifier(state: GateState, verifier_parsed: dict | None) -> None:
 
 def step7_output_guard(state: GateState) -> dict:
     """`proposer_raw` with `suggested_action`/`reasons` replaced by the gated values, passed
-    through `output_guard.enforce()` — the final `triage_v3`-shaped result: the model's own verdict (a
-    `needs_review` raises `OutputGuardError`) and the reasons whose quote was verified."""
+    through `output_guard.enforce()` — the final `triage_v3`-shaped result: ①'s verdict (the model's own, or the
+    `false_positive` the RAG rule put in its place; a `needs_review` raises `OutputGuardError`) and the reasons
+    whose quote was verified (the model's, also when the rule changed the verdict)."""
     result = dict(state.proposer_raw)
     result["suggested_action"] = state.verdict
     result["reasons"] = list(state.reasons)
@@ -261,11 +312,17 @@ def gate_result(
     state: GateState, *, prompt_version: str, playbook_used_effective: str | None
 ) -> dict:
     """The document P4 displays and P7 re-gates from (planning decision 1). Version 2 (DEC-217): the
-    proposed and the final verdict are both the model's answer, nothing is forced (`forced` false,
-    `forced_by` empty: version 1's keys, kept so a reader of either version finds them), and `flagged_by`
-    names the steps whose check failed, in step order. `step1_errors` (DEC-218, still version 2: a reader
-    that does not know the key is not affected) is what the first call got wrong when the repair round fixed
-    it, else `[]`; it may name a key the model invented and is never read into a prompt."""
+    proposed verdict is the model's answer and `flagged_by` names the steps whose check failed, in step order;
+    no check forces anything. `step1_errors` (DEC-218, still version 2: a reader that does not know the key is
+    not affected) is what the first call got wrong when the repair round fixed it, else `[]`; it may name a key
+    the model invented and is never read into a prompt.
+
+    DEC-219 (still version 2, same reason): `rag_rule` is `{threshold, best_pct, applied, changed}` on every
+    document (the switch off: threshold 0, nothing applied). `proposed_verdict` is the model's own answer, the
+    stored record of it; `final_verdict` is the verdict after the RAG rule (the rule's default answer below the
+    threshold), so the two differ exactly when `rag_rule.changed` is true. The rule is not a gate force:
+    `forced` stays false and `forced_by` stays empty on every new run, as since DEC-217. `flagged_by` is not
+    touched by the rule either: it is not a failed check."""
     return {
         "version": 2,
         "proposed_verdict": state.proposed_verdict,
@@ -273,6 +330,7 @@ def gate_result(
         "forced": False,
         "forced_by": [],
         "flagged_by": list(state.flagged_by),
+        "rag_rule": dict(state.rag_rule),
         "step1_errors": list(state.step1_errors),
         "steps": dict(state.steps),
         "hallucination_flag": state.hallucination_flag,

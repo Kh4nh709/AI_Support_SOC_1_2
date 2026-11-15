@@ -46,6 +46,10 @@ SHOW_STATES: frozenset[str] = frozenset(
 #: thức đã duyệt" and "không áp dụng RAG" are said beside ①'s conclusion and are what ① was shown (or not shown)
 #: when it concluded, so on a blind, undecided head they would say that ① ran and on what. Like the two keys above
 #: it does not start with `llm_`: the labelling page drops it by this entry alone.
+#: DEC-219: `gate.rag_rule` (`{threshold, best_pct, applied, changed}`, "this alert was 62 % like approved
+#: knowledge, below 80") is nested in `suggestion.gate`, so it needs no entry of its own: a blind, undecided head
+#: loses it with `suggestion`, and the labelling page drops `gate` at any depth (`LABELING_DENYLIST`). The queue row
+#: has no such key. `tests/test_served_rag_rule.py` walks the stripped views for it.
 ANALYST_HIDE: frozenset[str] = frozenset(
     {
         "suggestion",

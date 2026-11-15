@@ -777,12 +777,12 @@ class TestVoyageVectorKeys:
             assert "auth" in flat and ("failed" in flat or "fails" in flat), name
             assert "no request" in flat, name
 
-    def test_env_example_has_88_keys_and_names_the_compose_only_password_in_a_comment(self):
+    def test_env_example_has_89_keys_and_names_the_compose_only_password_in_a_comment(self):
         lines = _example_text().splitlines()
         keys = [
             ln.partition("=")[0].strip() for ln in lines if re.match(r"^\s*[A-Z][A-Z0-9_]{2,}=", ln)
         ]
-        assert len(keys) == len(set(keys)) == 88  # 87 + LLM_RESPONSE_FORMAT (DEC-218)
+        assert len(keys) == len(set(keys)) == 89  # 88 + TRIAGE_RAG_FP_BELOW_PCT (DEC-219)
         assert (
             "VECTOR_DB_PASSWORD" not in keys
         )  # Compose-only, like APP_RW_PASSWORD, and a comment here

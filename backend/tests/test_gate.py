@@ -9,6 +9,9 @@ crafted-JSON matrix. `security` may import only `infra`
 
 DEC-217 (BV-T1): a failed check FLAGS the run (`state.flagged_by`), it never changes `state.verdict`,
 which stays the model's own answer from `start()` to step 7. Nothing here can produce `needs_review`.
+DEC-219 (RR-T1): the one exception is the RAG low-match rule (`step3r_rag_rule`, a rule, not a check): with
+the switch off (its defaults, which is what every test below runs) it is `n/a` and the verdict is the model's.
+Its own tests are `test_gate_rag_rule.py`.
 """
 
 from __future__ import annotations
@@ -485,7 +488,9 @@ def test_run_steps_1_to_5_runs_start_through_five_in_order():
         scan=_no_findings,
     )
 
-    assert set(state.steps) == {"1", "2", "3", "4", "5"}
+    # DEC-219: the RAG rule's step sits between 3 and 4; with the switch off (the defaults) it is `n/a`
+    assert list(state.steps) == ["1", "2", "3", "3r", "4", "5"]
+    assert state.steps["3r"] == "n/a"
     assert state.verdict == "true_positive"
 
 
@@ -755,6 +760,8 @@ def test_gate_result_is_version_2_and_shows_the_flags_not_a_force():
         "forced": False,
         "forced_by": [],
         "flagged_by": ["step6"],
+        # DEC-219: on every new run; the switch off (threshold 0) applies nothing
+        "rag_rule": {"threshold": 0, "best_pct": None, "applied": False, "changed": False},
         "step1_errors": [],  # DEC-218: the first call was valid, so none
         "steps": state.steps,
         "hallucination_flag": False,
