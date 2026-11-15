@@ -3,9 +3,8 @@
 // product's CSP allows no style attribute. A title or a conclusion the server could not read is left out or named as
 // missing; a conclusion this page has no words for is shown as it came.
 import { S, labelOf } from "../../strings";
+import type { Candidate } from "./knowledge";
 import type { Tone } from "./styles";
-
-export type CandidateRow = { pct: number; title: string | null; conclusion: string | null };
 
 /** The tone of a conclusion's label: a real incident warns, a violation is a caution, a closed false positive is calm. */
 const CONCLUSION_TONE: Record<string, Tone> = {
@@ -30,7 +29,7 @@ export function KnowledgeCandidates({
   rows,
   bar = true,
 }: {
-  rows: readonly CandidateRow[];
+  rows: readonly Candidate[];
   /** The mock-up of the alert page draws a bar under each title; the case page's does not. */
   bar?: boolean;
 }) {

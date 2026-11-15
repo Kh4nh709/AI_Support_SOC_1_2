@@ -9,7 +9,6 @@ import {
   checksTile,
   confidenceTile,
   highlightText,
-  ragTile,
   verdictTile,
 } from "./analysisModel";
 import { analysis, olderAnalysis, ragDefaultAnalysis, ragDefaultKeys } from "./analysisFixtures";
@@ -276,64 +275,6 @@ describe("the Độ tin cậy tile", () => {
   });
 });
 
-describe("the Tri thức (RAG) tile", () => {
-  const rag = (over: Record<string, unknown>) =>
-    analysisOf(baseView({ analysis: analysis({ rag: { ...analysis().rag, ...over } as never }) }))
-      ?.rag ?? null;
-
-  it("is the number and 'trùng sự cố cũ' for a match", () => {
-    expect(ragTile(rag({ state: "matched", best_pct: 62 }))).toEqual({
-      value: "62%",
-      note: "trùng sự cố cũ",
-    });
-  });
-
-  it("is the number and the floor for a lookup whose candidates all scored under it", () => {
-    expect(ragTile(rag({ state: "below_floor", best_pct: 47, floor_pct: 50 }))).toEqual({
-      value: "47%",
-      note: "dưới mức 50%",
-    });
-    expect(ragTile(rag({ state: "below_floor", best_pct: 47, floor_pct: null })).note).toBe(
-      "dưới mức tối thiểu",
-    );
-  });
-
-  it("is a dash and a line for each of the other three states", () => {
-    expect(ragTile(rag({ state: "no_candidate", best_pct: null }))).toEqual({
-      value: "—",
-      note: "không có mục nào trùng",
-    });
-    expect(ragTile(rag({ state: "no_lookup", best_pct: null }))).toEqual({
-      value: "—",
-      note: "không có tra cứu",
-    });
-    expect(ragTile(rag({ state: "failed", failure: "timeout", best_pct: null }))).toEqual({
-      value: "—",
-      note: "quá thời gian chờ",
-    });
-  });
-
-  it.each(Object.entries(S.analysis.ragNote.failedKind))(
-    "words the failure kind %s as the Tier 2 tile does",
-    (kind, words) => {
-      expect(ragTile(rag({ state: "failed", failure: kind, best_pct: null })).note).toBe(words);
-    },
-  );
-
-  it("says only that the lookup failed for a kind it has no words for, and never shows the code", () => {
-    const tile = ragTile(rag({ state: "failed", failure: "cosmic_ray", best_pct: null }));
-    expect(tile).toEqual({ value: "—", note: "tra cứu bị lỗi" });
-  });
-
-  it("has no data for a number that is not there, a state it does not know, or no lookup object", () => {
-    const none = { value: "—", note: "chưa có dữ liệu" };
-    expect(ragTile(rag({ state: "matched", best_pct: null }))).toEqual(none);
-    expect(ragTile(rag({ state: "below_floor", best_pct: null }))).toEqual(none);
-    expect(ragTile(rag({ state: "future_state" }))).toEqual(none);
-    expect(ragTile(null)).toEqual(none);
-  });
-});
-
 describe("the Kiểm chứng tile", () => {
   const model = (over: Record<string, unknown>) => {
     const read = analysisOf(baseView({ analysis: analysis(over as never) }));
@@ -563,8 +504,8 @@ describe("the lookup, the history, the playbook and the technical figures", () =
   it("reads the lookup with its candidates, best first, at most three, each with a percentage", () => {
     const rag = analysisOf(baseView())?.rag;
     expect(rag?.state).toBe("below_floor");
-    expect(rag?.best).toBe(47);
-    expect(rag?.floor).toBe(50);
+    expect(rag?.best_pct).toBe(47);
+    expect(rag?.floor_pct).toBe(50);
     expect(rag?.threshold).toBe(80);
     expect(rag?.scored).toBe(23);
     expect(rag?.candidates.map((row) => row.pct)).toEqual([47, 43, 41]);

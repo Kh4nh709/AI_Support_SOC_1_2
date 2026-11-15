@@ -14,6 +14,12 @@ import {
   type TimelineRow,
 } from "../../api/tier2";
 import { S } from "../../strings";
+import {
+  knowledgeFrom,
+  ragTile as sharedRagTile,
+  type Knowledge,
+  type RagTile,
+} from "../analysis/knowledge";
 import type { Tone } from "../analysis/styles";
 import { asText } from "./parts";
 
@@ -32,10 +38,6 @@ const texts = (value: unknown): string[] =>
 
 const isLevel = (value: unknown): value is Level =>
   typeof value === "string" && (LEVELS as readonly string[]).includes(value);
-
-/** A whole percentage from 0 to 100, else null (`api/rag.ts` holds the lookup's pair to the same rule). */
-const pct = (value: unknown): number | null =>
-  typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 100 ? value : null;
 
 const count = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -123,49 +125,14 @@ export function confidenceOf(run: RunView): { level: Level | null; word: string 
 
 // ── the knowledge lookup ─────────────────────────────────────────────────────────────────────────
 
-export type Candidate = { pct: number; title: string | null; conclusion: string | null };
-
-/** What the lookup of a run came to, as the panel reads it (`KnowledgeView` with every key made safe). */
-export type Knowledge = {
-  state: string;
-  failure: string | null;
-  best_pct: number | null;
-  floor_pct: number | null;
-  scored: number | null;
-  candidates: Candidate[];
-};
-
-/** At most three candidates are listed, best first, as the server sends them. */
-const CANDIDATES_SHOWN = 3;
-
-function candidatesOf(value: unknown): Candidate[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .flatMap((row): Candidate[] => {
-      if (!isRecord(row)) return [];
-      const percentage = pct(row.pct);
-      if (percentage === null) return [];
-      return [{ pct: percentage, title: text(row.title), conclusion: text(row.conclusion) }];
-    })
-    .slice(0, CANDIDATES_SHOWN);
-}
-
 /**
- * The lookup of a run: `run.knowledge` when the server sends one, else what the older `rag` pair says
- * (`api/rag.ts`): a failure kind, a kept match, or the best candidate under the floor. Null when neither says anything.
+ * The lookup of a run: `run.knowledge` when the server sends one (read by `analysis/knowledge.ts`, which both tiers
+ * share), else what the older `rag` pair says (`api/rag.ts`): a failure kind, a kept match, or the best candidate under
+ * the floor. Null when neither says anything. The Tri thức (RAG) tile is `analysis/knowledge.ts`'s `ragTile`.
  */
 export function knowledgeOf(run: RunView): Knowledge | null {
-  const raw: unknown = run.knowledge;
-  if (isRecord(raw) && typeof raw.state === "string") {
-    return {
-      state: raw.state,
-      failure: text(raw.failure),
-      best_pct: pct(raw.best_pct),
-      floor_pct: pct(raw.floor_pct),
-      scored: wholeCount(raw.scored),
-      candidates: candidatesOf(raw.candidates),
-    };
-  }
+  const read = knowledgeFrom(run.knowledge);
+  if (read !== null) return read;
   const note = ragNoteOf(run.rag);
   const none = { scored: null, candidates: [] };
   if (note.notApplied !== null) {
@@ -186,40 +153,11 @@ export function knowledgeOf(run: RunView): Knowledge | null {
   return null;
 }
 
-export type RagTile = { value: string; note: string };
-
 /**
- * The Tri thức (RAG) tile: the number for a lookup that kept a match or scored candidates under the floor, and a dash
- * with a short line for the other three states and for each failure kind.
+ * The Tri thức (RAG) tile of a run: the lookup of the run (`knowledgeOf`) said by the tile both tiers share
+ * (`analysis/knowledge.ts`), so the two panels say one thing in one place.
  */
-export function ragTile(run: RunView): RagTile {
-  const N = S.ai2.tile.ragNote;
-  const k = knowledgeOf(run);
-  const noData: RagTile = { value: S.common.missing, note: N.noData };
-  if (k === null) return noData;
-  switch (k.state) {
-    case "matched":
-      return k.best_pct === null ? noData : { value: `${k.best_pct}%`, note: N.matched };
-    case "below_floor":
-      return k.best_pct === null
-        ? noData
-        : { value: `${k.best_pct}%`, note: N.belowFloor(k.floor_pct) };
-    case "no_candidate":
-      return { value: S.common.missing, note: N.noCandidate };
-    case "no_lookup":
-      return { value: S.common.missing, note: N.noLookup };
-    case "failed":
-      return {
-        value: S.common.missing,
-        note:
-          k.failure !== null && Object.hasOwn(N.failedKind, k.failure)
-            ? (N.failedKind as Record<string, string>)[k.failure]!
-            : N.failed,
-      };
-    default:
-      return noData;
-  }
-}
+export const ragTile = (run: RunView): RagTile => sharedRagTile(knowledgeOf(run));
 
 // ── the evidence ─────────────────────────────────────────────────────────────────────────────────
 

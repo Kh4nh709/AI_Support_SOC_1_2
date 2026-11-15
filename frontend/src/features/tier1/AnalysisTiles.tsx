@@ -4,15 +4,10 @@
 // alike.
 import { S } from "../../strings";
 import { ConfidenceMeter } from "../analysis/ConfidenceMeter";
+import { ragTile } from "../analysis/knowledge";
 import { ScoreTile } from "../analysis/ScoreTile";
 import type { AiState } from "./aiState";
-import {
-  checksTile,
-  confidenceTile,
-  ragTile,
-  verdictTile,
-  type AnalysisModel,
-} from "./analysisModel";
+import { checksTile, confidenceTile, verdictTile, type AnalysisModel } from "./analysisModel";
 
 const P = S.ai1.panel;
 

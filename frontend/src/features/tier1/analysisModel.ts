@@ -11,6 +11,7 @@ import type { AlertView } from "../../api/tier1";
 import { formatTime } from "../../format";
 import { S, labelOf, failureKindLabel, type HighlightWords } from "../../strings";
 import type { MeterLevel } from "../analysis/ConfidenceMeter";
+import { knowledgeFrom, type Knowledge } from "../analysis/knowledge";
 import type { Tone } from "../analysis/styles";
 import { conclusionOf, type AiState } from "./aiState";
 
@@ -62,16 +63,8 @@ export type FactRow = {
   declared: string | null;
   match: boolean | null;
 };
-export type CandidateRow = { pct: number; title: string | null; conclusion: string | null };
-export type RagModel = {
-  state: string;
-  failure: string | null;
-  best: number | null;
-  floor: number | null;
-  threshold: number;
-  scored: number | null;
-  candidates: CandidateRow[];
-};
+/** The lookup of the run (the shape both tiers read) and the threshold of the rule of DEC-219 (0: the rule is off). */
+export type RagModel = Knowledge & { threshold: number };
 export type PlaybookModel = {
   name: string;
   ruleId: string | null;
@@ -261,27 +254,11 @@ function totalsOf(
 
 // ── the lookup, the history, the playbook, the figures ───────────────────────────────────────────
 
+/** The lookup, read by the reader both tiers share, with the rule's threshold (0: the rule is off). */
 function ragOf(value: unknown): RagModel | null {
-  if (!isRecord(value) || typeof value.state !== "string") return null;
-  const candidates = list(value.candidates)
-    .flatMap((row): CandidateRow[] => {
-      if (!isRecord(row)) return [];
-      const percentage = pct(row.pct);
-      return percentage === null
-        ? []
-        : [{ pct: percentage, title: text(row.title), conclusion: text(row.conclusion) }];
-    })
-    .slice(0, SHOWN);
-  const threshold = wholeCount(value.threshold_pct);
-  return {
-    state: value.state,
-    failure: text(value.failure),
-    best: pct(value.best_pct),
-    floor: pct(value.floor_pct),
-    threshold: threshold ?? 0,
-    scored: wholeCount(value.scored),
-    candidates,
-  };
+  const knowledge = knowledgeFrom(value);
+  if (knowledge === null || !isRecord(value)) return null;
+  return { ...knowledge, threshold: wholeCount(value.threshold_pct) ?? 0 };
 }
 
 function historyOf(value: unknown): { line: string } | null {
@@ -424,38 +401,7 @@ export function confidenceTile(state: Concluded): ConfidenceTile {
   return { kind: "word", word: level !== null && level !== "" ? level : S.common.missing };
 }
 
-export type RagTile = { value: string; note: string };
-
-/**
- * The Tri thức (RAG) tile: the number for a lookup that kept a match and for one whose candidates all scored under the
- * floor, and a dash with a short line for the other three states and for each failure kind: the words of the Tier 2
- * tile (`S.analysis.ragNote`).
- */
-export function ragTile(rag: RagModel | null): RagTile {
-  const N = S.analysis.ragNote;
-  const noData: RagTile = { value: S.common.missing, note: N.noData };
-  if (rag === null) return noData;
-  switch (rag.state) {
-    case "matched":
-      return rag.best === null ? noData : { value: `${rag.best}%`, note: N.matched };
-    case "below_floor":
-      return rag.best === null ? noData : { value: `${rag.best}%`, note: N.belowFloor(rag.floor) };
-    case "no_candidate":
-      return { value: S.common.missing, note: N.noCandidate };
-    case "no_lookup":
-      return { value: S.common.missing, note: N.noLookup };
-    case "failed":
-      return {
-        value: S.common.missing,
-        note:
-          rag.failure !== null && Object.hasOwn(N.failedKind, rag.failure)
-            ? (N.failedKind as Record<string, string>)[rag.failure]!
-            : N.failed,
-      };
-    default:
-      return noData;
-  }
-}
+// The Tri thức (RAG) tile is `analysis/knowledge.ts`'s `ragTile`, the one both tiers say it with.
 
 export type ChecksTile = { value: string; note: string; warn: boolean };
 

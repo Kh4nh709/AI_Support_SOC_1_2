@@ -8,6 +8,7 @@ import { S, failureKindLabel, labelOf } from "../../strings";
 import { Card, FactRows, Figures, IconLine } from "../analysis/Cards";
 import { EvidenceBlock } from "../analysis/EvidenceBlock";
 import { formatCost, formatCount, formatSeconds } from "../analysis/figures";
+import type { Knowledge } from "../analysis/knowledge";
 import { KnowledgeCandidates } from "../analysis/KnowledgeCandidates";
 import { CARD, FOCUS } from "../analysis/styles";
 import { useId } from "react";
@@ -23,7 +24,6 @@ import {
   scopeOf,
   techOf,
   timelineOf,
-  type Knowledge,
   type ScopeSide,
 } from "./runModel";
 

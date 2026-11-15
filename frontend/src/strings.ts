@@ -11,7 +11,7 @@ export const MIN_QUOTE_CHARS = 8;
 /**
  * The line under the "Tri thức (RAG)" tile, for each state of the lookup and each failure kind
  * (`rag.failures.FAILURE_KINDS`; strings.test.ts holds the keys equal to the backend's). One table for both tiers' tiles
- * (DEC-221): `S.analysis.ragNote` and `S.ai2.tile.ragNote` are this object.
+ * (DEC-221): `S.analysis.ragNote`, read by `analysis/knowledge.ts`'s `ragTile`.
  */
 const RAG_TILE_NOTE = {
   matched: "trùng sự cố cũ",
@@ -1030,9 +1030,7 @@ export const S = {
       // The line under the conclusion: whose word it is. The system's own `need_more_data` (a conclusion it held back,
       // or an older run's lowered one) says so; every other conclusion is the assistant's suggestion.
       verdictNote: { plain: "gợi ý của AI", held: "hệ thống giữ lại", overruled: "đã bị hạ" },
-      // The line under the RAG tile, one for each state of the lookup and for each failure kind
-      // (`rag.failures.FAILURE_KINDS`; strings.test.ts holds the keys equal to the backend's).
-      ragNote: RAG_TILE_NOTE,
+      // The line under the RAG tile is the one table of both tiers: `S.analysis.ragNote`.
       evidenceNote: "khớp nguyên văn",
       evidenceNone: "không có dẫn chứng",
     },

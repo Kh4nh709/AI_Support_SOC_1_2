@@ -154,9 +154,9 @@ function stateSentence(rag: RagModel): string {
   const S2 = P.knowledge.state;
   switch (rag.state) {
     case "matched":
-      return S2.matched(rag.best, rag.floor);
+      return S2.matched(rag.best_pct, rag.floor_pct);
     case "below_floor":
-      return S2.below_floor(rag.floor);
+      return S2.below_floor(rag.floor_pct);
     case "no_candidate":
       return S2.no_candidate();
     case "no_lookup":

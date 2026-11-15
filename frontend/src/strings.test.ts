@@ -502,8 +502,8 @@ describe("the analysis panel's words (DEC-221)", () => {
   });
 
   it("words the RAG tile's line for every failure kind the backend can record, in its order", () => {
-    expect(Object.keys(S.ai2.tile.ragNote.failedKind)).toEqual(pyTuple("FAILURE_KINDS"));
-    expect(Object.keys(S.ai2.tile.ragNote.failedKind)).toEqual(Object.keys(S.rag.failureKind));
+    expect(Object.keys(S.analysis.ragNote.failedKind)).toEqual(pyTuple("FAILURE_KINDS"));
+    expect(Object.keys(S.analysis.ragNote.failedKind)).toEqual(Object.keys(S.rag.failureKind));
   });
 
   it("names the five tabs of the Tier 2 panel as the approved mock-up does", () => {
@@ -616,8 +616,8 @@ describe("the Tier 1 panel's words (DEC-221)", () => {
     expect(Object.keys(P.history.scope)).toEqual([...HISTORY_KEYS]);
   });
 
-  it("words the RAG tile of both tiers with the same table, one line for every failure kind", () => {
-    expect(S.analysis.ragNote).toBe(S.ai2.tile.ragNote);
+  it("words the RAG tile of both tiers with one table, in S.analysis and nowhere else, one line for every failure kind", () => {
+    expect(S.ai2.tile).not.toHaveProperty("ragNote");
     expect(Object.keys(S.analysis.ragNote.failedKind)).toEqual(pyTuple("FAILURE_KINDS"));
   });
 
