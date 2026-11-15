@@ -238,8 +238,9 @@ test("a blind head shows nothing of ① until it is decided, then shows it", asy
   );
   // exact: the reason "không khớp bảng quyết định đã duyệt" says "khớp" too
   await expect(page.getByText(S.ai1.match, { exact: true })).toBeVisible();
-  await expect(page.getByText(S.ai1.match, { exact: true }).locator("..")).toContainText(
-    S.ai1.matchAgree,
+  // the whole row, by exact text: "có" is a substring of "không có đề xuất để so" (no verdict), so a substring would pass for both
+  await expect(page.getByText(S.ai1.match, { exact: true }).locator("..")).toHaveText(
+    `${S.ai1.match} ${S.ai1.matchAgree}`,
   );
   const after = (await traffic.answers()).slice(beforeDecision);
   const revealed = after

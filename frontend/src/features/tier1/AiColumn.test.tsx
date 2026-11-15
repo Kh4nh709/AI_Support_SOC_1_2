@@ -49,6 +49,43 @@ const view = (over: Partial<AlertView> = {}): AlertView => ({
 });
 
 /**
+ * A run with warnings (DEC-217): the model said `verdict`, ① stored and served it as it is, and the gate (version 2)
+ * forced nothing; `held_by` lists the checks that raised a warning. The gate document is the one the version 2 server
+ * writes: `proposed_verdict` and `final_verdict` are both the model's answer, and the verifier's verdict is the
+ * model's too unless `held_by` carries `verifier_disagrees` (step 6 flags exactly a verifier that differs, and then
+ * it said `needs_review`) or `verifier_invalid` (an unusable answer, so none).
+ */
+const warned = (
+  reasons: string[],
+  over: Partial<AlertView> = {},
+  { verdict = "false_positive", confidence = "medium" } = {},
+): AlertView => {
+  let verifier: string | null = verdict;
+  if (reasons.includes("verifier_disagrees")) verifier = "needs_review";
+  else if (reasons.includes("verifier_invalid")) verifier = null;
+  return view({
+    suggestion: suggestion({
+      suggested_action: verdict,
+      confidence,
+      gate: {
+        forced: false,
+        forced_by: [],
+        proposed_verdict: verdict,
+        final_verdict: verdict,
+        verifier_verdict: verifier,
+        warnings: [],
+      },
+    }),
+    proposed_action: verdict,
+    held_by: reasons,
+    ...over,
+  });
+};
+
+/** What the Khớp row says, whole: its label and its word. The words are substrings of each other ("có" is in "không có đề xuất để so"), so a check on the word alone is vacuous. */
+const KHOP = (word: string): string => `${S.ai1.match} ${word}`;
+
+/**
  * What the server sends for a blind, undecided head: no `suggestion`, no `triage_status`, no `run_id`, and
  * (P14-T03) no `proposed_action` and no `held_by`.
  */
@@ -236,28 +273,6 @@ describe("ready", () => {
 // verdict is the model's own, and the gate holds nothing back for a person.
 describe("AI kết luận", () => {
   /**
-   * A verdict with warnings (DEC-217): the model said false_positive, ① stored and served it as it is, and the gate
-   * (version 2) forced nothing: `held_by` lists the checks that raised a warning.
-   */
-  const warned = (reasons: string[], over: Partial<AlertView> = {}) =>
-    view({
-      suggestion: suggestion({
-        suggested_action: "false_positive",
-        confidence: "medium",
-        gate: {
-          forced: false,
-          forced_by: [],
-          proposed_verdict: "false_positive",
-          final_verdict: "false_positive",
-          verifier_verdict: "needs_review",
-          warnings: [],
-        },
-      }),
-      proposed_action: "false_positive",
-      held_by: reasons,
-      ...over,
-    });
-  /**
    * A version 1 row: the gate forced `needs_review` then. The server serves the model's own verdict for it; the
    * gate's record (`forced`, `forced_by`, `final_verdict`) is what was stored, and `held_by` its reasons.
    */
@@ -308,11 +323,7 @@ describe("AI kết luận", () => {
   });
 
   it("says FP and the warning, with one reason: the line of the spec (DEC-217 section 8)", () => {
-    renderColumn(
-      warned(["fp_policy:playbook_rule"], {
-        suggestion: suggestion({ suggested_action: "false_positive", confidence: "high" }),
-      }),
-    );
+    renderColumn(warned(["fp_policy:playbook_rule"], {}, { confidence: "high" }));
     expect(line().textContent).toBe(
       "AI kết luận: FP (độ tin cậy cao) — có cảnh báo kiểm chứng: không khớp bảng quyết định đã duyệt",
     );
@@ -320,9 +331,11 @@ describe("AI kết luận", () => {
 
   it("says FP and the warning, with several reasons, joined by a comma", () => {
     renderColumn(
-      warned(["facts_mismatch", "fp_policy:asset_criticality", "verifier_disagrees"], {
-        suggestion: suggestion({ suggested_action: "false_positive", confidence: "high" }),
-      }),
+      warned(
+        ["facts_mismatch", "fp_policy:asset_criticality", "verifier_disagrees"],
+        {},
+        { confidence: "high" },
+      ),
     );
     expect(line().textContent).toBe(
       "AI kết luận: FP (độ tin cậy cao) — có cảnh báo kiểm chứng: AI khai dữ kiện lệch với hệ thống, " +
@@ -345,10 +358,7 @@ describe("AI kết luận", () => {
 
   it("shows the verdict, with the warning, for a true_positive with warnings", () => {
     renderColumn(
-      warned(["verifier_disagrees"], {
-        suggestion: suggestion({ suggested_action: "true_positive", confidence: "high" }),
-        proposed_action: "true_positive",
-      }),
+      warned(["verifier_disagrees"], {}, { verdict: "true_positive", confidence: "high" }),
     );
     expect(line().textContent).toBe(
       "AI kết luận: TP (độ tin cậy cao) — có cảnh báo kiểm chứng: bộ kiểm tra không đồng ý",
@@ -496,7 +506,7 @@ describe("AI kết luận", () => {
       expect(within(box()).getByText(/AI kết luận/)).toHaveTextContent(
         /^AI kết luận: TP \(độ tin cậy trung bình\)$/,
       );
-      expect(khop()).toHaveTextContent(S.ai1.matchAgree);
+      expect(khop().textContent).toBe(KHOP(S.ai1.matchAgree));
     });
 
     it("says what the AI concluded and which checks warned, two reasons, and Khớp compares the verdict", () => {
@@ -507,12 +517,12 @@ describe("AI kết luận", () => {
       );
       expect(within(box()).getByText("có cảnh báo kiểm chứng").tagName).toBe("STRONG");
       // the stored verdict is `false_positive` (DEC-217), a closed_fp agrees with it, warnings or none
-      expect(khop()).toHaveTextContent(S.ai1.matchAgree);
+      expect(khop().textContent).toBe(KHOP(S.ai1.matchAgree));
     });
 
     it("leaves Khớp with no verdict for a stored needs_review that still arrives (the guard)", () => {
       renderColumn(decidedHeld({ suggestion: suggestion({ suggested_action: "needs_review" }) }));
-      expect(khop()).toHaveTextContent(S.ai1.matchNoVerdict);
+      expect(khop().textContent).toBe(KHOP(S.ai1.matchNoVerdict));
     });
 
     it("is one line in the column, not two", () => {
@@ -821,7 +831,7 @@ describe("decided", () => {
     renderColumn(decided({ suggestion: null, proposed_action: null, held_by: [] }));
     const ai = within(column()).getByText(S.ai1.decidedAi).closest("div")!;
     expect(ai).toHaveTextContent(S.ai1.none);
-    expect(match()).toHaveTextContent(S.ai1.matchNoVerdict);
+    expect(match()?.textContent).toBe(KHOP(S.ai1.matchNoVerdict));
   });
 
   it("unknown enum renders raw code: an action without a label", () => {
@@ -835,7 +845,7 @@ describe("decided", () => {
     );
     expect(within(column()).getByText("quarantine_host")).toBeInTheDocument();
     // the pilot report counts an action that is none of the three as no result: nothing is compared
-    expect(match()).toHaveTextContent(S.ai1.matchNoVerdict);
+    expect(match()?.textContent).toBe(KHOP(S.ai1.matchNoVerdict));
   });
 
   describe("the Khớp row, by the pilot report's mapping (P10-T06, eval/ops_export.py)", () => {
@@ -855,8 +865,7 @@ describe("decided", () => {
       ["closed_benign", "needs_review", S.ai1.matchNoVerdict],
     ])("%s after ① %s says '%s'", (status, action, said) => {
       renderColumn(decided({ status, suggestion: suggestion({ suggested_action: action }) }));
-      expect(match()).toHaveTextContent(said);
-      expect(match()).toHaveTextContent(S.ai1.match);
+      expect(match()?.textContent).toBe(KHOP(said));
     });
 
     it("has no row when the view is not decided", () => {
@@ -928,8 +937,7 @@ describe("decided", () => {
       "%s with a case, after ① %s, says '%s' (the report counts an escalation)",
       (status, action, said) => {
         renderColumn(concluded(status, action));
-        expect(match()).toHaveTextContent(said);
-        expect(match()).toHaveTextContent(S.ai1.match);
+        expect(match()?.textContent).toBe(KHOP(said));
         // it is a Tier 1 decision: the column does not say it was none
         expect(within(column()).queryByText(S.ai1.notTier1Decision)).not.toBeInTheDocument();
       },
@@ -964,7 +972,7 @@ describe("decided", () => {
         col.queryByText(S.ai1.tier2Concluded(labelOfStatus("closed_fp"))),
       ).not.toBeInTheDocument();
       expect(column().textContent).not.toContain(S.ai1.tier2Concluded(""));
-      expect(match()).toHaveTextContent(S.ai1.matchAgree);
+      expect(match()?.textContent).toBe(KHOP(S.ai1.matchAgree));
     });
 
     it("keeps what ① said beside it", () => {
@@ -984,25 +992,6 @@ describe("the RAG beside the conclusion", () => {
   const withRag = (best_pct: number | null, not_applied: string | null = null) => ({
     rag: { best_pct, not_applied },
   });
-  /** A verdict with warnings (DEC-217): the model said false_positive, ① stored it as it is, the checks warned. */
-  const warned = (reasons: string[], over: Partial<AlertView> = {}) =>
-    view({
-      suggestion: suggestion({
-        suggested_action: "false_positive",
-        confidence: "medium",
-        gate: {
-          forced: false,
-          forced_by: [],
-          proposed_verdict: "false_positive",
-          final_verdict: "false_positive",
-          verifier_verdict: "needs_review",
-          warnings: [],
-        },
-      }),
-      proposed_action: "false_positive",
-      held_by: reasons,
-      ...over,
-    });
   const line = () => within(column()).getByText(/AI kết luận/);
   const notice = () => within(column()).queryByRole("note");
 

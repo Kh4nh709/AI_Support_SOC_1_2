@@ -325,13 +325,14 @@ describe("② labels follow the backend", () => {
 // DEC-217 (the backend card): the three values a STORED ① row may hold are `llm.verdicts.STORED_ACTIONS` (a row
 // written before the decision holds `needs_review`, and the admin LLM page shows it as it is). What a NEW run may
 // hold is `GATED_ACTIONS`, now the two. A tree that predates the backend card has only `GATED_ACTIONS`, and it
-// held all three: the fallback reads that, and goes when both cards are merged.
+// held all three: the fallback reads that, and goes when both cards are merged. It is taken only when no file of
+// the backend assigns `STORED_ACTIONS` at all; once one does, `pyTuple` reads it and its own error (a definition
+// that is not a literal tuple, or two definitions) comes through under its own name.
 function pyStoredActions(): string[] {
-  try {
-    return pyTuple("STORED_ACTIONS");
-  } catch {
-    return pyTuple("GATED_ACTIONS");
-  }
+  const assigned = pyFiles(BACKEND_APP).some((path) =>
+    /^STORED_ACTIONS(?::[^=\n]*)?\s*=/m.test(readFileSync(path, "utf8")),
+  );
+  return pyTuple(assigned ? "STORED_ACTIONS" : "GATED_ACTIONS");
 }
 
 // P14-T03 (DEC-213): ① always concludes `false_positive | true_positive`. DEC-217: the gate's checks are warnings
