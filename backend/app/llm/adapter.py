@@ -14,7 +14,7 @@ import math
 import threading
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from typing import Any
 
@@ -35,6 +35,12 @@ class LLMResult:
     model: str  # response.model, falling back to the requested model
     usage: dict  # prompt/completion/total/reasoning tokens, the two cache counters, attempts
     latency_ms: int
+    #: The `type` of the `response_format` of the request that produced this answer (DEC-218): `json_object`
+    #: unless the caller asked for another, and `json_object` when a `json_schema` request was refused and
+    #: sent again as such (`DeepSeekAdapter.complete`). `None` for a result the adapter did not produce (a
+    #: cached one, a test double): nothing is then known about the format. Keyword-only and last, so a
+    #: subclass that adds required fields after the four (`eval/llm_cache.py`'s `CachedResult`) is unchanged.
+    response_format: str | None = field(default=None, kw_only=True)
 
 
 class LLMTimeout(TransientError):
@@ -132,6 +138,23 @@ def _classify_attempt(exc: Exception) -> str:
     return "permanent"
 
 
+_JSON_OBJECT: dict[str, str] = {"type": "json_object"}
+
+#: The two statuses a provider that does not know `json_schema` answers it with: 400 (a bad parameter) and
+#: 422 (an unprocessable one). Nothing else is a fallback (DEC-218): not a 402, a 429, a 5xx, a timeout or a
+#: connection error, which are classified exactly as before.
+_FORMAT_REFUSED_STATUSES = (400, 422)
+
+
+def _is_format_refusal(response_format: dict | None, exc: Exception) -> bool:
+    """A request that asked for `json_schema` and was refused with 400 or 422."""
+    return (
+        isinstance(response_format, Mapping)
+        and response_format.get("type") == "json_schema"
+        and getattr(exc, "status_code", None) in _FORMAT_REFUSED_STATUSES
+    )
+
+
 class DeepSeekAdapter:
     """One chat completion the §7.5 way: `json_object`, `LLM_THINKING` as `extra_body`,
     a wall-clock deadline around the SDK call, two retries on network/5xx, the monthly
@@ -200,15 +223,34 @@ class DeepSeekAdapter:
             if self._spent_usd() >= limits.cap_usd:
                 raise LLMBudgetExceeded(f"spent_usd() >= LLM_MONTHLY_USD_CAP={limits.cap_usd}")
             deadline_s = timeout_s or limits.timeout_s
-            started = self._clock()
+            attempt_started = started = self._clock()
+            sent_format = response_format or _JSON_OBJECT
             try:
-                response = self._call_once(
-                    model=resolved_model,
-                    system=system,
-                    user=user,
-                    response_format=response_format,
-                    timeout_s=deadline_s,
-                )
+                try:
+                    response = self._call_once(
+                        model=resolved_model,
+                        system=system,
+                        user=user,
+                        response_format=response_format,
+                        timeout_s=deadline_s,
+                    )
+                except Exception as refused:
+                    # DEC-218: a `json_schema` request the provider refuses with 400 or 422 is sent again
+                    # once as `json_object`, inside this attempt: it is not one of the `LLM_RETRY` attempts,
+                    # and a failure of the second request is classified below like any other. Nothing else
+                    # is caught here: it propagates to the handlers below unchanged.
+                    if not _is_format_refusal(response_format, refused):
+                        raise
+                    self._emit(attempt, "format_fallback", started)
+                    started = self._clock()
+                    sent_format = _JSON_OBJECT
+                    response = self._call_once(
+                        model=resolved_model,
+                        system=system,
+                        user=user,
+                        response_format=sent_format,
+                        timeout_s=deadline_s,
+                    )
             except LLMTimeout:
                 self._emit(attempt, "timeout", started)
                 raise  # design note 3: a timeout is not retried inside the adapter
@@ -240,7 +282,8 @@ class DeepSeekAdapter:
                     content=_message_content(message),
                     model=getattr(response, "model", None) or resolved_model,
                     usage=usage,
-                    latency_ms=int((self._clock() - started) * 1000),
+                    latency_ms=int((self._clock() - attempt_started) * 1000),
+                    response_format=sent_format.get("type"),
                 )
         raise AssertionError("unreachable: attempts_allowed is always >= 1")
 
