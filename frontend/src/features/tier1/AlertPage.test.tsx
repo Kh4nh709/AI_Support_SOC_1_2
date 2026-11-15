@@ -628,6 +628,36 @@ describe("the ① column, from the state of the view", () => {
     ).not.toBeInTheDocument();
   });
 
+  // DEC-220 (trial): a lookup that kept no match still scored candidates; the page says the best one's percentage
+  // and the floor, from the view's own `rag`, in the place of "trùng 87% …". The rule of DEC-219 did not apply.
+  it("says the best candidate under the floor, from the view's own rag (DEC-220)", async () => {
+    views = {
+      a1: full({
+        suggestion: suggestion({
+          suggested_action: "true_positive",
+          gate: {
+            forced: false,
+            forced_by: [],
+            proposed_verdict: "true_positive",
+            final_verdict: "true_positive",
+            verifier_verdict: "agree",
+            rag_rule: { threshold: 80, best_pct: null, applied: false },
+          },
+        }),
+        proposed_action: "true_positive",
+        held_by: ["fp_policy:playbook_rule"],
+        rag: { best_pct: null, not_applied: null, below_floor_pct: 47, floor_pct: 50 },
+      }),
+    };
+    renderPage();
+    await loaded();
+    expect(within(aiColumn()).getByText(/AI kết luận/).textContent).toBe(
+      "AI kết luận: TP (độ tin cậy trung bình) — " +
+        "trùng cao nhất 47% với tri thức đã duyệt (dưới mức tối thiểu 50%) — " +
+        "có cảnh báo kiểm chứng: không khớp bảng quyết định đã duyệt",
+    );
+  });
+
   it("shows the hidden state for a blind view, names no verdict, and still lets the analyst act", async () => {
     views = {
       a1: blind({ status: "tier1_active", acknowledged_by: ME_ID, acknowledged_by_name: "An" }),
@@ -643,6 +673,8 @@ describe("the ① column, from the state of the view", () => {
       "cảnh báo kiểm chứng",
       "dưới 80%",
       "mặc định FP",
+      "trùng cao nhất",
+      "dưới mức tối thiểu",
       "trung bình",
       "Failed password for invalid user admin from",
     ]) {

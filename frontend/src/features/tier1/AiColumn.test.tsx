@@ -115,6 +115,12 @@ const LABEL_MARKERS = ["TP", "FP"];
  */
 const RULE_MARKERS = ["dưới 80%", "mặc định FP"];
 
+/**
+ * What the best candidate under the floor (DEC-220) adds to the line, "trùng cao nhất 47% với tri thức đã duyệt (dưới
+ * mức tối thiểu 50%)": its own words, found as plain substrings. A blind column must not carry them either.
+ */
+const BELOW_FLOOR_MARKERS = ["trùng cao nhất", "dưới mức tối thiểu"];
+
 /** Everything else of a verdict that must not reach a column that is hidden: found as plain substrings. */
 const VERDICT_WORDS = [
   "true_positive",
@@ -127,6 +133,7 @@ const VERDICT_WORDS = [
   "37 lần xác thực",
   "Failed password",
   ...RULE_MARKERS,
+  ...BELOW_FLOOR_MARKERS,
 ];
 
 /**
@@ -612,6 +619,7 @@ describe("AI kết luận", () => {
         "cảnh báo kiểm chứng",
         "tài sản quan trọng hoặc chưa rõ",
         ...RULE_MARKERS,
+        ...BELOW_FLOOR_MARKERS,
       ]),
     ).toEqual([]);
   });
@@ -1243,6 +1251,17 @@ describe("the RAG beside the conclusion", () => {
       expect(within(col).queryByRole("note")).not.toBeInTheDocument();
     });
 
+    it("shows nothing of the best candidate under the floor either, even for a view that still carries it (DEC-220)", () => {
+      const stray = blindView({
+        rag: { best_pct: null, not_applied: null, below_floor_pct: 47, floor_pct: 50 },
+      });
+      expect(aiStateOfView(stray)).toEqual({ kind: "hidden" });
+      renderColumn(stray);
+      const col = column();
+      expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
+      expect(leaksIn(col, [...BELOW_FLOOR_MARKERS, "trùng", "47%", "50%"])).toEqual([]);
+    });
+
     it("shows neither for a blind head the server stripped", () => {
       renderColumn(blindView());
       expect(within(column()).queryByText(/trùng/)).not.toBeInTheDocument();
@@ -1590,9 +1609,238 @@ describe("the RAG default below the threshold (DEC-219)", () => {
   });
 });
 
+// DEC-220 (trial): a lookup that kept no match still scored candidates; the page says the best one's percentage and
+// the floor it was under, in the place of "— trùng 87% với tri thức đã duyệt". The rule of DEC-219 does not apply to
+// such a run (it reads kept matches only), so no default clause follows. Whole-string assertions: a word edited in
+// strings.ts alone fails here.
+describe("the best candidate under the floor (DEC-220)", () => {
+  const BELOW = "trùng cao nhất 47% với tri thức đã duyệt (dưới mức tối thiểu 50%)";
+  const underFloor = (
+    best: number | null = null,
+    kind: string | null = null,
+  ): NonNullable<AlertView["rag"]> => ({
+    best_pct: best,
+    not_applied: kind,
+    below_floor_pct: 47,
+    floor_pct: 50,
+  });
+  /** What the gate stores for a run whose lookup kept no match: the rule did not apply, the threshold is 80. */
+  const NOT_APPLIED: RagRule = { threshold: 80, best_pct: null, applied: false };
+  const line = () => within(column()).getByText(/AI kết luận/);
+
+  describe("the line", () => {
+    it("says the best candidate and the floor, after the confidence note", () => {
+      renderColumn(view({ rag: underFloor() }));
+      expect(line().textContent).toBe(`AI kết luận: TP (độ tin cậy trung bình) — ${BELOW}`);
+      expect(line().textContent).toBe(
+        "AI kết luận: TP (độ tin cậy trung bình) — trùng cao nhất 47% với tri thức đã duyệt (dưới mức tối thiểu 50%)",
+      );
+      // only the verdict is bold: the percentage is not shouted
+      expect(within(line()).getByText("TP").tagName).toBe("STRONG");
+    });
+
+    it("keeps the warning clause after it, with the reasons", () => {
+      renderColumn(warned(["fp_policy:asset_criticality"], { rag: underFloor() }));
+      expect(line().textContent).toBe(
+        `AI kết luận: FP (độ tin cậy trung bình) — ${BELOW} — ` +
+          "có cảnh báo kiểm chứng: tài sản quan trọng hoặc chưa rõ",
+      );
+      expect(within(line()).getByText("có cảnh báo kiểm chứng").tagName).toBe("STRONG");
+    });
+
+    it("says the floor the server sent, whatever it is", () => {
+      renderColumn(
+        view({ rag: { best_pct: null, not_applied: null, below_floor_pct: 12, floor_pct: 65 } }),
+      );
+      expect(line().textContent).toBe(
+        "AI kết luận: TP (độ tin cậy trung bình) — trùng cao nhất 12% với tri thức đã duyệt (dưới mức tối thiểu 65%)",
+      );
+    });
+
+    it("says 0% when the best candidate scored 0", () => {
+      renderColumn(
+        view({ rag: { best_pct: null, not_applied: null, below_floor_pct: 0, floor_pct: 50 } }),
+      );
+      expect(line().textContent).toContain("trùng cao nhất 0% với tri thức đã duyệt");
+    });
+
+    it("has no default clause: the rule of DEC-219 cannot apply to such a run", () => {
+      renderColumn(
+        view({
+          suggestion: suggestion({
+            gate: {
+              forced: false,
+              forced_by: [],
+              proposed_verdict: "true_positive",
+              final_verdict: "true_positive",
+              verifier_verdict: "agree",
+              rag_rule: NOT_APPLIED,
+            },
+          }),
+          rag: underFloor(),
+        }),
+      );
+      expect(line().textContent).toBe(`AI kết luận: TP (độ tin cậy trung bình) — ${BELOW}`);
+      expect(line().textContent).not.toContain("mặc định FP");
+      expect(line().textContent).not.toMatch(/dưới 80%/);
+    });
+
+    it("is one line in the column, not two", () => {
+      renderColumn(view({ rag: underFloor() }));
+      expect(within(column()).getAllByText(/AI kết luận/)).toHaveLength(1);
+    });
+
+    it("can stand beside the notice when both are there", () => {
+      renderColumn(view({ rag: underFloor(null, "timeout") }));
+      expect(line().textContent).toContain(BELOW);
+      expect(within(column()).getByRole("note")).toHaveTextContent("Voyage quá thời gian chờ");
+    });
+  });
+
+  describe("what it leaves as it was", () => {
+    it("a kept match prints today's text", () => {
+      renderColumn(view({ rag: { best_pct: 87, not_applied: null } }));
+      expect(line().textContent).toBe(
+        "AI kết luận: TP (độ tin cậy trung bình) — trùng 87% với tri thức đã duyệt",
+      );
+    });
+
+    it("a kept match prints today's text even if the pair also carried a below-floor number", () => {
+      renderColumn(
+        view({
+          rag: { best_pct: 87, not_applied: null, below_floor_pct: 47, floor_pct: 50 },
+        }),
+      );
+      expect(line().textContent).toBe(
+        "AI kết luận: TP (độ tin cậy trung bình) — trùng 87% với tri thức đã duyệt",
+      );
+      expect(line().textContent).not.toContain("cao nhất");
+    });
+
+    it("no match and no candidate prints today's text", () => {
+      renderColumn(
+        view({
+          rag: { best_pct: null, not_applied: null, below_floor_pct: null, floor_pct: null },
+        }),
+      );
+      expect(line().textContent).toBe("AI kết luận: TP (độ tin cậy trung bình)");
+    });
+
+    it("a server that sends no new keys prints today's text", () => {
+      renderColumn(view({ rag: { best_pct: null, not_applied: null } }));
+      expect(line().textContent).toBe("AI kết luận: TP (độ tin cậy trung bình)");
+    });
+
+    it("half a pair prints nothing: the floor alone, or the percentage alone", () => {
+      const only = renderColumn(
+        view({ rag: { best_pct: null, not_applied: null, below_floor_pct: 47, floor_pct: null } }),
+      );
+      expect(line().textContent).toBe("AI kết luận: TP (độ tin cậy trung bình)");
+      only.unmount();
+      renderColumn(
+        view({ rag: { best_pct: null, not_applied: null, below_floor_pct: null, floor_pct: 50 } }),
+      );
+      expect(line().textContent).toBe("AI kết luận: TP (độ tin cậy trung bình)");
+    });
+
+    it("a run the rule applied to, with a kept match, prints the DEC-219 line, unchanged", () => {
+      renderColumn(
+        view({
+          suggestion: suggestion({
+            suggested_action: "false_positive",
+            confidence: null,
+            gate: {
+              forced: false,
+              forced_by: [],
+              proposed_verdict: "false_positive",
+              final_verdict: "false_positive",
+              verifier_verdict: null,
+              rag_rule: { threshold: 80, best_pct: 62, applied: true },
+            },
+          }),
+          proposed_action: "false_positive",
+          rag: { best_pct: 62, not_applied: null, below_floor_pct: null, floor_pct: null },
+        }),
+      );
+      expect(line().textContent).toBe(
+        "AI kết luận: FP — trùng 62% với tri thức đã duyệt (dưới 80%: mặc định FP)",
+      );
+    });
+  });
+
+  describe("on a decided page", () => {
+    const decided = (over: Partial<AlertView> = {}) =>
+      view({ status: "closed_fp", acknowledged_by: "u1", acknowledged_by_name: "An", ...over });
+    const box = () => within(column()).getByText(S.ai1.decidedAi).closest("div")!;
+
+    it("says it in the box, in the same line as the undecided column", () => {
+      renderColumn(decided({ rag: underFloor() }));
+      expect(within(box()).getByText(/AI kết luận/).textContent).toBe(
+        `AI kết luận: TP (độ tin cậy trung bình) — ${BELOW}`,
+      );
+    });
+
+    it("keeps the warning clause after it when the checks warned", () => {
+      renderColumn(
+        decided({
+          ...warned(["fp_policy:asset_criticality"], { rag: underFloor() }),
+          status: "closed_fp",
+          acknowledged_by_name: "An",
+        }),
+      );
+      expect(within(box()).getByText(/AI kết luận/).textContent).toBe(
+        `AI kết luận: FP (độ tin cậy trung bình) — ${BELOW} — ` +
+          "có cảnh báo kiểm chứng: tài sản quan trọng hoặc chưa rõ",
+      );
+    });
+
+    it("is the same line the undecided column draws for the same view", () => {
+      const rag = underFloor();
+      const undecided = renderColumn(view({ rag }));
+      const before = line().textContent;
+      undecided.unmount();
+      renderColumn(decided({ rag }));
+      expect(within(box()).getByText(/AI kết luận/).textContent).toBe(before);
+    });
+  });
+
+  describe("on the blind arm", () => {
+    it("draws nothing before the decision, and the markers find it where it is drawn", () => {
+      const blind = renderColumn(blindView({ status: "tier1_active" }));
+      expect(within(column()).getByText(S.ai1.hidden)).toBeInTheDocument();
+      expect(leaksIn(column())).toEqual([]);
+      expect(leaksIn(column(), BELOW_FLOOR_MARKERS)).toEqual([]);
+      blind.unmount();
+      renderColumn(view({ rag: underFloor() }));
+      expect(phrasesFound(textOf(column()), BELOW_FLOOR_MARKERS)).toEqual(BELOW_FLOOR_MARKERS);
+      expect(leaksIn(column())).toEqual(
+        expect.arrayContaining(["AI kết luận", "trùng cao nhất", "dưới mức tối thiểu"]),
+      );
+    });
+
+    it("shows the line once the head is decided: the decision lifts the blind arm", () => {
+      renderColumn(
+        view({
+          status: "closed_fp",
+          suggestion_visible: false,
+          acknowledged_by_name: "An",
+          rag: underFloor(),
+        }),
+      );
+      expect(within(column()).getByText(/AI kết luận/).textContent).toContain(BELOW);
+    });
+  });
+});
+
 describe("accessibility", () => {
   const states: [string, AlertView][] = [
     ["ready", view()],
+    [
+      "ready, the best candidate under the floor (DEC-220)",
+      view({
+        rag: { best_pct: null, not_applied: null, below_floor_pct: 47, floor_pct: 50 },
+      }),
+    ],
     [
       "ready with the percentage and the RAG notice (P14-T07)",
       view({ rag: { best_pct: 87, not_applied: "timeout" } }),

@@ -66,6 +66,11 @@ function ForcedFlag() {
  * beside the line (`RagNotice`). The blind arm has no conclusion to draw this beside, so neither is ever drawn
  * there: the server drops the key, and this column draws a line only for a state that has a conclusion.
  *
+ * DEC-220 (trial): a run whose lookup kept no match has no `pct`, and its best candidate under the floor takes the
+ * place of the percentage, in the same spot: "AI kết luận: **TP** (độ tin cậy trung bình) — trùng cao nhất 47% với tri
+ * thức đã duyệt (dưới mức tối thiểu 50%)". The rule of DEC-219 cannot apply to such a run, so no default clause
+ * follows it.
+ *
  * DEC-219 (trial, amended): for a run the RAG rule applied to (`state.ragDefaultBelow`, the threshold) `false_positive`
  * is ①'s default answer, and the line says so, the same whether the model had said FP itself or not: no confidence
  * note (it is the model's, in its own answer), then, after the percentage clause, a parenthesis, "(dưới 80%: mặc định
@@ -94,6 +99,8 @@ export function ConclusionLine({
           state.confidence !== null &&
           ` ${S.ai1.confidenceNote(labelOf(S.confidence, state.confidence))}`}
         {rag.pct !== null && ` ${S.rag.dash} ${S.rag.match(rag.pct)}`}
+        {rag.belowFloor !== undefined &&
+          ` ${S.rag.dash} ${S.rag.belowFloor(rag.belowFloor.pct, rag.belowFloor.floor)}`}
         {defaultBelow !== undefined && ` ${S.ai1.ragDefault(defaultBelow)}`}
         {heldOf(state) && (
           <>

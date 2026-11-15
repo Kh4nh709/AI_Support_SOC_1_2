@@ -19,7 +19,7 @@ import {
   type RunView,
 } from "../../api/tier2";
 import { ApiError } from "../../api/client";
-import { ragNoteOf } from "../../api/rag";
+import { ragNoteOf, type RagNote } from "../../api/rag";
 import { RagNotice } from "../../components/RagNotice";
 import { formatDateTime, formatTime } from "../../format";
 import { S, labelOf } from "../../strings";
@@ -297,25 +297,28 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
  * knows no cause). The conclusion is the model's own (`model_conclusion`), not the `need_more_data` the system
  * stored in its place; a cause the UI has no label for is shown as its code. All of it is text.
  *
- * P14-T07 (DEC-213, spec 4.3): `pct` is how strongly the case matched approved knowledge (the run's `rag.best_pct`,
- * null when there was no match): "AI kết luận: <label> — trùng 87% với tri thức đã duyệt", before the system's own
- * clause, as on the alert page.
+ * P14-T07 (DEC-213, spec 4.3): `rag.pct` is how strongly the case matched approved knowledge (the run's
+ * `rag.best_pct`, null when there was no match): "AI kết luận: <label> — trùng 87% với tri thức đã duyệt", before the
+ * system's own clause, as on the alert page. DEC-220 (trial): with no match, `rag.belowFloor` takes its place: "—
+ * trùng cao nhất 47% với tri thức đã duyệt (dưới mức tối thiểu 50%)".
  */
 function ModelConclusion({
   conclusion,
   causes,
   held,
-  pct,
+  rag,
 }: {
   conclusion: string;
   causes: string[];
   held: boolean;
-  pct: number | null;
+  rag: RagNote;
 }) {
   return (
     <p className="text-base">
       {S.ai2.conclusion}: <strong>{labelOf(S.ai2.suggestedConclusion, conclusion)}</strong>
-      {pct !== null && ` ${S.rag.dash} ${S.rag.match(pct)}`}
+      {rag.pct !== null && ` ${S.rag.dash} ${S.rag.match(rag.pct)}`}
+      {rag.belowFloor !== undefined &&
+        ` ${S.rag.dash} ${S.rag.belowFloor(rag.belowFloor.pct, rag.belowFloor.floor)}`}
       {held && ` ${S.ai2.heldLine(causes.map((cause) => labelOf(S.ai2.heldReason, cause)))}`}
     </p>
   );
@@ -383,7 +386,7 @@ export function RunResult({
 
       <Block title={S.ai2.suggested}>
         {modelConclusion !== null ? (
-          <ModelConclusion conclusion={modelConclusion} causes={causes} held={held} pct={rag.pct} />
+          <ModelConclusion conclusion={modelConclusion} causes={causes} held={held} rag={rag} />
         ) : (
           <p className="flex flex-wrap items-baseline gap-2">
             <strong className="text-base">{asText(run.conclusion_label)}</strong>
