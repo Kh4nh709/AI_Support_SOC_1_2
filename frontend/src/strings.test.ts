@@ -9,9 +9,23 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ALERT_STATUSES } from "./api/tier1";
+import {
+  ALERT_STATUSES,
+  CHECK_DETAILS,
+  CHECK_IDS,
+  CHECK_OUTCOMES,
+  FACT_FIELDS,
+  HIGHLIGHT_CODES,
+  HIGHLIGHT_DIRECTIONS,
+  HISTORY_CONCLUSIONS,
+  HISTORY_KEYS,
+  RAG_STATES,
+  REASON_SOURCES,
+  REASON_WHY,
+} from "./api/tier1";
 import { CASE_STATUSES, HELD_CONCLUSION, MODEL_CONCLUSIONS } from "./api/tier2";
 import { MIN_QUOTE_CHARS, S, bandCodeOfLabel, failureKindLabel, labelOf } from "./strings";
+import { MODEL_NAME as MODEL_NAME_PATTERN } from "./testing/modelName";
 
 it("names the two Tier-1 closing decisions, escalate and reopen", () => {
   expect(S.decision.falsePositive).toBe("Đóng — dương tính giả");
@@ -138,7 +152,7 @@ it("says 'ẩn — nhánh mù' for the blind arm and 'chưa có' for no result y
 
 it("carries the two column headings and the live indicator", () => {
   expect(S.alert.infoHeading).toBe("THÔNG TIN ALERT");
-  expect(S.alert.aiHeading).toBe("PHÂN TÍCH AI ①");
+  expect(S.alert.aiHeading).toBe("PHÂN TÍCH AI · TIER 1");
   expect(S.case.aiHeading).toBe("PHÂN TÍCH AI · TIER 2");
   expect(S.live.on).toBe("Trực tiếp");
   expect(S.live.off).toBe("Mất kết nối");
@@ -508,6 +522,163 @@ describe("the analysis panel's words (DEC-221)", () => {
     );
     expect(S.ai2.caseLine("0b30b853", 1, [])).toBe("Case 0b30b853 · 1 cụm");
     expect(S.analysis.level).toEqual({ low: "Thấp", medium: "Trung bình", high: "Cao" });
+  });
+});
+
+// ── The Tier 1 panel's words (DEC-221, AP-T4): every closed code the server serves has a word ─────────────────────
+// The backend's tuples are the source: `tier1/analysis.py` (checks, highlights, reasons, facts), `llm/rag_view.py` (the
+// RAG states), `security/output_guard.py` (the sources a reason may cite), `rag/history.py` (the history's keys and
+// conclusions). Both sides are compared: the closed lists of `api/tier1.ts` and the tables of `S.ai1.panel`.
+
+/** A tuple whose body has `#` comments (and so may have a `)` in one): the comments are cut, then the strings read. */
+function pyTupleWithComments(name: string, root = BACKEND_APP): string[] {
+  const pattern = new RegExp(
+    `^${name}(?::\\s*tuple\\[str,\\s*\\.\\.\\.\\])?\\s*=\\s*\\(\\n([\\s\\S]*?)\\n\\)`,
+    "m",
+  );
+  const { body } = definition(name, pattern, root);
+  const code = body
+    .split("\n")
+    .map((line) => line.replace(/#.*$/, ""))
+    .join("\n");
+  return [...code.matchAll(/"([^"]*)"/g)].map((m) => m[1] as string);
+}
+
+/** A module-level `NAME = frozenset({"a", "b"})` of the backend, as a sorted list. */
+function pyFrozenset(name: string, root = BACKEND_APP): string[] {
+  const pattern = new RegExp(`^${name}\\s*=\\s*frozenset\\(\\s*\\{([^}]*)\\}`, "m");
+  const { body } = definition(name, pattern, root);
+  return [...body.matchAll(/"([^"]*)"/g)].map((m) => m[1] as string).sort();
+}
+
+describe("the Tier 1 panel's words (DEC-221)", () => {
+  const P = S.ai1.panel;
+  const wordsOf = (value: unknown): string[] => {
+    if (typeof value === "string") return [value];
+    if (typeof value === "function") {
+      const said = (value as (...args: unknown[]) => unknown)("x", "y", "z");
+      return wordsOf(said);
+    }
+    if (typeof value === "object" && value !== null) return Object.values(value).flatMap(wordsOf);
+    return [];
+  };
+
+  it("reads the backend's tuples (a parse that finds nothing would compare nothing)", () => {
+    expect(pyTuple("CHECK_IDS")).toEqual(["1", "2", "3", "3r", "4", "5", "6"]);
+    expect(pyTupleWithComments("CHECK_DETAILS")).toHaveLength(20);
+    expect(pyTupleWithComments("HIGHLIGHT_CODES")).toHaveLength(16);
+    expect(pyTuple("REASON_WHY")).toHaveLength(3);
+    expect(pyFrozenset("REASON_SOURCES")).toHaveLength(6);
+  });
+
+  it("keeps the closed lists of api/tier1.ts equal to the backend's, in order", () => {
+    expect([...CHECK_IDS]).toEqual(pyTuple("CHECK_IDS"));
+    expect([...CHECK_OUTCOMES]).toEqual(pyTuple("CHECK_OUTCOMES"));
+    expect([...CHECK_DETAILS]).toEqual(pyTupleWithComments("CHECK_DETAILS"));
+    expect([...HIGHLIGHT_DIRECTIONS]).toEqual(pyTuple("HIGHLIGHT_DIRECTIONS"));
+    expect([...HIGHLIGHT_CODES]).toEqual(pyTupleWithComments("HIGHLIGHT_CODES"));
+    expect([...REASON_WHY]).toEqual(pyTuple("REASON_WHY"));
+    expect([...REASON_SOURCES].sort()).toEqual(pyFrozenset("REASON_SOURCES"));
+    expect([...FACT_FIELDS]).toEqual(pyTupleWithComments("FACT_FIELDS"));
+    expect([...RAG_STATES]).toEqual(pyTuple("STATES", join(BACKEND_APP, "llm")));
+    expect([...HISTORY_CONCLUSIONS]).toEqual(pyTuple("CONCLUSIONS", join(BACKEND_APP, "rag")));
+    const levels = definition(
+      "LEVELS",
+      /^LEVELS: tuple\[tuple\[int, str\], \.\.\.\] = \(([\s\S]*?)\n\)/m,
+      join(BACKEND_APP, "rag"),
+    ).body;
+    expect([...HISTORY_KEYS]).toEqual(
+      [...levels.matchAll(/\(\d+, "([^"]*)"\)/g)].map((m) => m[1]),
+    );
+  });
+
+  it("words every gate step (a set: JS puts the integer-like keys of an object first, whatever the order written)", () => {
+    expect(Object.keys(P.checks.step).sort()).toEqual([...pyTuple("CHECK_IDS")].sort());
+  });
+
+  it("words every detail a check row can carry, in the backend's order", () => {
+    expect(Object.keys(P.checks.detail)).toEqual(pyTupleWithComments("CHECK_DETAILS"));
+  });
+
+  it("words every highlight the server can build, in the order it serves them", () => {
+    expect(Object.keys(P.highlight)).toEqual(pyTupleWithComments("HIGHLIGHT_CODES"));
+  });
+
+  it("words every reason the server can give for an unverified quote, and every source a reason may cite", () => {
+    expect(Object.keys(P.evidence.why)).toEqual(pyTuple("REASON_WHY"));
+    expect(Object.keys(P.evidence.source).sort()).toEqual(pyFrozenset("REASON_SOURCES"));
+  });
+
+  it("words every state of the lookup, every field of the facts table and the history's keys", () => {
+    expect(Object.keys(P.knowledge.state)).toEqual(pyTuple("STATES", join(BACKEND_APP, "llm")));
+    expect(Object.keys(P.facts.field)).toEqual(pyTupleWithComments("FACT_FIELDS"));
+    expect(Object.keys(P.history.conclusion)).toEqual(
+      pyTuple("CONCLUSIONS", join(BACKEND_APP, "rag")),
+    );
+    expect(Object.keys(P.history.scope)).toEqual([...HISTORY_KEYS]);
+  });
+
+  it("words the RAG tile of both tiers with the same table, one line for every failure kind", () => {
+    expect(S.analysis.ragNote).toBe(S.ai2.tile.ragNote);
+    expect(Object.keys(S.analysis.ragNote.failedKind)).toEqual(pyTuple("FAILURE_KINDS"));
+  });
+
+  it("marks a highlight up or down in words a screen reader can say", () => {
+    expect(S.analysis.status.up).toBeTruthy();
+    expect(S.analysis.status.down).toBeTruthy();
+  });
+
+  it("names the five tabs and the four tiles as the approved mock-up does", () => {
+    expect(Object.values(P.tabs)).toEqual([
+      "Tổng quan",
+      "Bằng chứng",
+      "Tri thức",
+      "Kiểm chứng",
+      "Kỹ thuật",
+    ]);
+    expect([P.tile.verdict, P.tile.confidence, P.tile.rag, P.tile.checks]).toEqual([
+      "Kết luận",
+      "Độ tin cậy",
+      "Tri thức (RAG)",
+      "Kiểm chứng",
+    ]);
+  });
+
+  it("labels the technical tab with the six rows the Owner approved: no model, no verifier row, no answer format", () => {
+    expect([
+      S.analysis.tech.tokens,
+      S.analysis.tech.time,
+      S.analysis.tech.cost,
+      S.analysis.tech.analysedAt,
+      P.tech.mitre,
+      P.tech.correlated,
+    ]).toEqual([
+      "Token vào → ra",
+      "Thời gian",
+      "Chi phí",
+      "Phân tích lúc",
+      "Nhãn MITRE của alert",
+      "Cụm tương quan lúc phân tích",
+    ]);
+    expect(P.tech).not.toHaveProperty("model");
+    expect(P.tech).not.toHaveProperty("verifier");
+    expect(P.tech).not.toHaveProperty("format");
+  });
+
+  it("names no model anywhere in the panel's words (G5)", () => {
+    const words = [...wordsOf(P), ...wordsOf(S.analysis), S.alert.aiHeading, S.alert.aiHint];
+    expect(words.length).toBeGreaterThan(80); // a walk that finds nothing would pass for nothing
+    expect(words.filter((word) => MODEL_NAME_PATTERN.test(word))).toEqual([]);
+  });
+
+  it("says the tile lines and the composed sentences exactly", () => {
+    expect(P.tile.checksNote.warnings(2)).toBe("2 cảnh báo");
+    expect(P.tile.verdictNote.true_positive).toBe("tấn công thật");
+    expect(P.knowledge.state.below_floor(50)).toBe(
+      "Không mục nào đạt mức tối thiểu 50%, nên AI không được cung cấp tri thức tham khảo.",
+    );
+    expect(P.knowledge.rule.notApplied(80)).toBe('Quy tắc "dưới 80% → mặc định FP" không áp dụng.');
+    expect(P.evidence.summary(2, 4)).toBe("2 trên 4 dẫn chứng khớp nguyên văn với dữ liệu alert.");
   });
 });
 
