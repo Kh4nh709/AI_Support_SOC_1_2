@@ -31,6 +31,13 @@ lookup created before it (`_learned_before`), so an alert, or a lookup, that arr
 in the prompt, the facts or the gate. `None` (the job, and every test that does not pass it) is today's
 evaluation: the same statements, the same prompt.
 
+DEC-217 (BV-T1): ① gives only `true_positive` or `false_positive`. The gate's checks (steps 2, 3, 4 and 6)
+are warnings: they flag the run (`TriageEvaluation.flagged_by`, `gate_result.flagged_by`) and the verdict
+stored in `result.suggested_action`, `gate_result.final_verdict` and `TriageEvaluation.final_verdict` is the
+model's own answer. Nothing is forced, so `forced_by` is `()` for a new run and `llm.gate_forced` is not
+written (the event type stays for old rows); `triage.suggested` keeps `forced` (now always false) and gains
+`flagged_by`.
+
 `_set_triage_status` is this module's only write to `alerts` — it names
 `triage_status` and `triaged_count` and nothing else (G2). `domain/`, not `tier1/`,
 is the only package that may ever write `alerts.status`.
@@ -533,10 +540,12 @@ class TriageEvaluation:
     "verifier_cap" / "verifier_unavailable" / "verifier_transient" — the same from the verifier
     call, after a schema-valid proposal.
 
-    `final_verdict` (the gated `suggested_action`) and `gate_result` exist only for
-    "ok". `proposed_verdict`, `reasons_kept`, `reasons_dropped`, `forced_by` and
+    `final_verdict` (the gated `suggested_action`: the model's own answer, DEC-217) and `gate_result` exist
+    only for "ok". `proposed_verdict`, `reasons_kept`, `reasons_dropped`, `flagged_by` and
     `verifier_verdict` are read from the gate state whenever the gate started (steps
-    4-7 never change either reason list, so the two counts are step 3's). `calls`,
+    4-7 never change either reason list, so the two counts are step 3's). `flagged_by` names the steps whose
+    check raised a warning, in step order; `forced_by` stays for the readers of version 1 and is `()` for a
+    new run, which no step forces. `calls`,
     `usage`, `latency_ms` and `cost_usd` are summed over the adapter results that came
     back: a call that raised returned nothing to count or price. `model_id` is the
     proposer response's. The fields from `built` on are the intermediates
@@ -556,6 +565,7 @@ class TriageEvaluation:
     reasons_kept: int | None
     reasons_dropped: int | None
     forced_by: tuple[str, ...]
+    flagged_by: tuple[str, ...]
     verifier_verdict: str | None
     model_id: str | None
     prompt_version: str
@@ -662,7 +672,8 @@ def _evaluation(
         ),
         reasons_kept=len(state.reasons) if state is not None else None,
         reasons_dropped=len(state.dropped_reasons) if state is not None else None,
-        forced_by=tuple(state.forced_by) if state is not None else (),
+        forced_by=(),  # nothing is forced since DEC-217: a failed check flags, it does not hold
+        flagged_by=tuple(state.flagged_by) if state is not None else (),
         verifier_verdict=state.verifier_verdict if state is not None else None,
         model_id=proposal.model if proposal is not None else None,
         prompt_version=pv,
@@ -870,8 +881,8 @@ def evaluate_alert(
         rule_check=rule_check,
         scan=lambda _: findings,
     )
-    # step 6 may still change state.verdict; the verifier row must record what it
-    # was actually asked to check, so this is captured before that happens.
+    # The verifier row must record what it was actually asked to check. Since DEC-217 that is the model's own
+    # answer (`false_positive` or `true_positive`): no step changes the verdict, step 6 only flags it.
     verdict_for_verifier = state.verdict
     vbuilt = build_verifier_prompt(facts, table, verdict_for_verifier, state.reasons, cfg=cfg)
 
@@ -1209,20 +1220,9 @@ def run_triage_job(conn: psycopg.Connection, job: Job, *, adapter: Any | None = 
             "suggested_action": result["suggested_action"],
             "confidence": result["confidence"],
             "forced": g["forced"],
+            "flagged_by": g["flagged_by"],
             "run_id": str(proposer_id),
         },
     )
-    if g["forced"]:
-        write_event(
-            conn,
-            "llm.gate_forced",
-            alert_id,
-            "system",
-            payload={
-                "proposed": g["proposed_verdict"],
-                "final": g["final_verdict"],
-                "forced_by": g["forced_by"],
-                "missing": g["missing"],
-            },
-        )
+    # `llm.gate_forced` is not written (DEC-217): nothing is forced. The event type stays for old rows.
     return

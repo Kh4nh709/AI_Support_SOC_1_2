@@ -68,9 +68,10 @@ nothing else is changed (no stringifying, no cutting). Three rules (spec §5.8, 
   is blind (`NOT suggestion_visible`) and not yet decided (`status NOT IN visibility.SHOW_STATES`:
   the rule of `tier1/visibility.py`, not a copy of it, its state list passed as a parameter).
   - **Left out.** The rows of `BLIND_OMITTED_EVENT_TYPES` about such an alert are not on the
-    page and not in `total`: `triage.suggested`; `llm.gate_forced` (the gate only ever forces
-    `needs_review`, `security/gate.py`, and `triage.py` writes the event only when it did, so its
-    bare presence tells the verdict); `llm.builder_violation` (it tells that ① produced none,
+    page and not in `total`: `triage.suggested`; `llm.gate_forced` (the gate used to force
+    `needs_review`, `security/gate.py`, and `triage.py` wrote the event only when it did, so its
+    bare presence tells the verdict; DEC-217 stopped writing it, the rows of old runs remain);
+    `llm.builder_violation` (it tells that ① produced none,
     the `triage_status` fact `ANALYST_HIDE` hides). The test is a fragment of the page's own WHERE
     (`_BLIND_OMIT`, a primary-key lookup per candidate row), so it applies BEFORE the `LIMIT`:
     pages stay full, the cursor chain stays whole, and `_total` counts the same rows because it
@@ -284,9 +285,12 @@ def normalise_key(key: str) -> str:
 #: The normalised key names hidden in the payload of a `SUGGESTION_EVENT_TYPES` event on a blind,
 #: undecided alert: everything `visibility` hides, plus the names `triage.py` gives the verdict in
 #: `llm.gate_forced` (`proposed`, `final`, `forced_by`, and `missing`, the gate conditions that
-#: were not met, which say what the model proposed) and `forced` of `triage.suggested`.
+#: were not met, which say what the model proposed) and `forced` of `triage.suggested`, with its
+#: `flagged_by` (DEC-217: the steps whose check raised a warning, which say which conditions failed and so
+#: what the model proposed, as `missing` does).
 SUGGESTION_HIDE = frozenset(normalise_key(key) for key in visibility.ANALYST_HIDE) | frozenset(
-    normalise_key(key) for key in ("forced", "proposed", "final", "forced_by", "missing")
+    normalise_key(key)
+    for key in ("forced", "flagged_by", "proposed", "final", "forced_by", "missing")
 )
 
 

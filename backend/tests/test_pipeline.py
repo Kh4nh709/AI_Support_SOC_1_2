@@ -1239,12 +1239,12 @@ def test_all_four_switches_off_two_alerts_with_one_cluster_key_are_two_heads(
 
 # -- the consequence DEC-207 item 3 records: the gate ------------------------------------
 #
-# With the "unknown" context every alert carries, gate step 4 cannot keep a `false_positive`:
-# `asset_criticality = unknown` is one of the conditions that force `needs_review` (and the
-# playbook rule cannot hold on `unknown` facts either). This documents that consequence end to
-# end, through the pipeline and then ①, with the fake adapter: the very same alert and the very
-# same answer from the model keep their `false_positive` when the switch is on and the inventory
-# knows the host.
+# With the "unknown" context every alert carries, gate step 4 cannot support a `false_positive`:
+# `asset_criticality = unknown` is one of the conditions it checks (and the playbook rule cannot
+# hold on `unknown` facts either). Since DEC-217 that is a warning (`flagged_by`), not a hold: the
+# verdict stays the model's. This documents that consequence end to end, through the pipeline and
+# then ①, with the fake adapter: the very same alert and the very same answer from the model keep
+# their `false_positive`, with no warning, when the switch is on and the inventory knows the host.
 
 
 class _FakeComplete(FakeLLM):
@@ -1258,7 +1258,7 @@ class _FakeComplete(FakeLLM):
 
 def _false_positive_answer(*, ioc: str, asset: str, identity: str) -> dict:
     """① says `false_positive` under `sbf-1`; its `structured_basis` equals the facts of the alert
-    (a mismatch forces `needs_review` at step 2 by itself) and it quotes the rule description."""
+    (a mismatch flags the run at step 2 by itself) and it quotes the rule description."""
     answer = copy.deepcopy(TRIAGE_V2_FALSE_POSITIVE)
     answer["structured_basis"] = {
         "severity": "medium",
@@ -1290,7 +1290,7 @@ def _gate_result_after_triage(conn: psycopg.Connection, alert_id: str, answers: 
 
 
 @pytest.mark.db
-def test_the_unknown_context_forces_a_false_positive_to_needs_review_at_step_4(
+def test_the_unknown_context_flags_a_false_positive_at_step_4_and_keeps_it(
     db, monkeypatch, tmp_path
 ):
     monkeypatch.setenv("LLM_MODEL_PROPOSER", "fake-deepseek")
@@ -1306,28 +1306,30 @@ def test_the_unknown_context_forces_a_false_positive_to_needs_review_at_step_4(
         alert_id,
         [
             _false_positive_answer(ioc="skipped", asset="unknown", identity="unknown"),
-            _verifier_agrees("needs_review"),
+            _verifier_agrees("false_positive"),  # so step 4 is the only warning
         ],
     )
 
     assert gate_result["facts"]["asset_criticality"] == "unknown"
     assert gate_result["proposed_verdict"] == "false_positive"
-    assert gate_result["final_verdict"] == "needs_review"
-    assert gate_result["forced"] is True
-    assert gate_result["forced_by"] == ["step4"]
+    assert gate_result["final_verdict"] == "false_positive"
+    assert gate_result["forced"] is False and gate_result["forced_by"] == []
+    assert gate_result["flagged_by"] == ["step4"]
     assert "asset_criticality" in gate_result["missing"]
     result = db.execute(
         "SELECT result->>'suggested_action' FROM llm_runs "
         "WHERE subject_id = %s AND role = 'proposer'",
         (alert_id,),
     ).fetchone()
-    assert result == ("needs_review",)  # and that is all an analyst can be shown (G11)
+    assert result == (
+        "false_positive",
+    )  # the model's own verdict is what an analyst is shown (DEC-217)
 
 
 @pytest.mark.db
 def test_the_same_alert_with_a_known_host_keeps_its_false_positive(db, monkeypatch, tmp_path):
     """The control of the test above (DEC-025): nothing differs but the switch and what the
-    inventory says about the host, so the forcing is the context's doing."""
+    inventory says about the host, so the warning is the context's doing."""
     monkeypatch.setenv("LLM_MODEL_PROPOSER", "fake-deepseek")
     _switches(monkeypatch)  # every switch unset: on
     _seed_lookup_inventory(db, tmp_path, agent_criticality="low", root_privileged=False)
@@ -1346,5 +1348,5 @@ def test_the_same_alert_with_a_known_host_keeps_its_false_positive(db, monkeypat
     )
 
     assert gate_result["final_verdict"] == "false_positive"
-    assert gate_result["forced"] is False
+    assert gate_result["forced"] is False and gate_result["flagged_by"] == []
     assert gate_result["steps"]["4"] == "ok"

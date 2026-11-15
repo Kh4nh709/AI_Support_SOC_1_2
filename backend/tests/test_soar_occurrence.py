@@ -8,11 +8,12 @@ would count only the representatives that arrived. So the facts ① works from c
    match, so none of the nine `occurrence_lt: 50` `false_positive` rules can hold on an unknown count.
 2. **The prompt.** The proposer and verifier prompts say `occurrence_count: không rõ`, through the
    builder: `fact()` still refuses a free string, and the phrase is one `TEMPLATE_CONSTANTS` entry.
-3. **The gate.** A ① `false_positive` whose cited rule cannot hold is forced to `needs_review` by
-   step 4. Step 2 compares the model's integer `structured_basis.occurrence_count` only with a
-   known count (DEC-209 item 2): with the fact `None` it has nothing to compare, so the only thing
-   that forces such an answer is step 4 and the hallucination flag stays false; a known count that
-   the model gets wrong is still flagged.
+3. **The gate.** A ① `false_positive` whose cited rule cannot hold is flagged by step 4 (DEC-217: a
+   warning; it used to be forced to `needs_review`, and the verdict is now the model's own). Step 2
+   compares the model's integer `structured_basis.occurrence_count` only with a known count (DEC-209
+   item 2): with the fact `None` it has nothing to compare, so the only thing that flags such an
+   answer is step 4 and the hallucination flag stays false; a known count that the model gets wrong
+   is still flagged.
 4. **Where `None` comes from.** From the alert's own document (`raw_payload` carries SOAR's
    `enrichment` block), read in `tier1/triage._load`, so `evaluate_alert`, the job and the evaluation
    harness's `b1_facts` (which shares `_load`) see the same value whatever the switches say. An alert
@@ -285,14 +286,16 @@ def test_step_4_keeps_the_false_positive_when_the_count_is_known_and_small() -> 
     state = _step_4(1)
 
     assert state.verdict == "false_positive"
-    assert state.forced_by == [] and state.missing == [] and state.steps["4"] == "ok"
+    assert state.flagged_by == [] and state.missing == [] and state.steps["4"] == "ok"
 
 
-def test_step_4_forces_the_false_positive_to_needs_review_when_the_count_is_unknown() -> None:
+def test_step_4_flags_the_false_positive_when_the_count_is_unknown() -> None:
+    """DEC-217: the rule cannot be shown to hold without a count, so step 4 flags the run; the verdict is the
+    model's own `false_positive`."""
     state = _step_4(None)
 
-    assert state.verdict == "needs_review" and state.proposed_verdict == "false_positive"
-    assert state.forced_by == ["step4"]
+    assert state.verdict == "false_positive" and state.proposed_verdict == "false_positive"
+    assert state.flagged_by == ["step4"]
     assert state.missing == ["playbook_rule"]  # severity, IoC, asset and account all pass
     assert state.warnings == ["rule_does_not_hold"]
 
@@ -327,7 +330,7 @@ def test_step_2_takes_any_integer_when_the_count_is_unknown(
 ) -> None:
     state = _step_2(fact_count, basis_count)
 
-    assert state.steps["2"] == "ok" and state.forced_by == []
+    assert state.steps["2"] == "ok" and state.flagged_by == []
     assert state.verdict == "false_positive" and state.hallucination_flag is False
 
 
@@ -355,7 +358,7 @@ def test_step_2_still_flags_a_known_count_the_model_got_wrong(
     assert state.steps["2"] == "mismatch"
     assert state.hallucination_flag is True
     assert state.mismatched_fields == ["occurrence_count"]
-    assert state.forced_by == ["step2"] and state.verdict == "needs_review"
+    assert state.flagged_by == ["step2"] and state.verdict == "false_positive"
 
 
 # ---------------------------------------------------------------------------
@@ -539,10 +542,10 @@ def test_the_prompts_of_a_soar_alert_say_unknown_and_pass_the_linter(db, stream)
 
 
 @pytest.mark.db
-def test_a_false_positive_on_a_soar_alert_is_forced_to_needs_review(db, stream) -> None:
+def test_a_false_positive_on_a_soar_alert_is_flagged_and_keeps_its_verdict(db, stream) -> None:
     """End to end, the fake model saying `false_positive` under `mal-1` on an alert whose every fact
-    but the count satisfies that rule: the rule cannot hold on an unknown count, and the final
-    verdict is `needs_review`."""
+    but the count satisfies that rule: the rule cannot hold on an unknown count, so the run is flagged,
+    and the final verdict is the model's own `false_positive` (DEC-217)."""
     receive_and_run(db, stream, fp_candidate())
 
     ev = tier1.evaluate_alert(
@@ -551,39 +554,46 @@ def test_a_false_positive_on_a_soar_alert_is_forced_to_needs_review(db, stream) 
 
     assert ev is not None and ev.outcome == "ok"
     assert ev.proposed_verdict == "false_positive"
-    assert ev.final_verdict == "needs_review"
-    assert ev.gate_result["forced"] is True and ev.forced_by
+    assert ev.final_verdict == "false_positive"
+    assert ev.gate_result["forced"] is False and ev.forced_by == ()
+    assert "step4" in ev.flagged_by
     assert kb.rule_holds(kb.get_decision_table("malware"), "mal-1", ev.facts) is False
 
 
 @pytest.mark.db
-def test_step_4_is_what_forces_it_end_to_end(db, stream) -> None:
+def test_step_4_is_what_flags_it_end_to_end(db, stream) -> None:
     receive_and_run(db, stream, fp_candidate())
 
     ev = tier1.evaluate_alert(
-        db, _FP_ID, adapter=_FakeComplete(responses=[_false_positive(), _verifier()]), cfg=stream
+        db,
+        _FP_ID,
+        adapter=_FakeComplete(responses=[_false_positive(), _verifier("false_positive")]),
+        cfg=stream,
     )
 
     assert ev is not None
-    assert ev.forced_by == ("step4",)
+    assert ev.flagged_by == ("step4",)  # the verifier agrees with the verdict: step 4 alone
     assert ev.gate_result["missing"] == ["playbook_rule"]
     assert ev.gate_result["hallucination_flag"] is False
     assert ev.gate_result["mismatched_fields"] == []
 
 
 @pytest.mark.db
-def test_the_same_alert_with_a_wazuh_shaped_id_is_forced_the_same(db, stream) -> None:
+def test_the_same_alert_with_a_wazuh_shaped_id_is_flagged_the_same(db, stream) -> None:
     """The id's shape changes nothing about the gate: the Wazuh form still runs end to end."""
     receive_and_run(db, stream, fp_candidate(_WAZUH_ID))
 
     ev = tier1.evaluate_alert(
-        db, _WAZUH_ID, adapter=_FakeComplete(responses=[_false_positive(), _verifier()]), cfg=stream
+        db,
+        _WAZUH_ID,
+        adapter=_FakeComplete(responses=[_false_positive(), _verifier("false_positive")]),
+        cfg=stream,
     )
 
     assert ev is not None and ev.outcome == "ok"
     assert f"alert_id: {_WAZUH_ID}" in ev.built.prompt.user
     assert ev.facts["occurrence_count"] is None
-    assert ev.forced_by == ("step4",) and ev.final_verdict == "needs_review"
+    assert ev.flagged_by == ("step4",) and ev.final_verdict == "false_positive"
     assert ev.gate_result["hallucination_flag"] is False
 
 
@@ -601,7 +611,7 @@ def test_the_real_gl_id_is_a_fact_of_both_prompts_and_the_run_reaches_the_end(db
     assert _FP_ID.startswith("gl-")
     assert f"alert_id: {_FP_ID} · rule_id: 100140" in ev.built.prompt.user
     assert ev.state is not None and ev.verification is not None
-    assert ev.final_verdict == "needs_review"
+    assert ev.final_verdict == "false_positive"  # the model's own; step 4 and step 6 are warnings
 
 
 def _true_positive() -> dict:
@@ -616,7 +626,8 @@ def _true_positive() -> dict:
 def test_a_true_positive_on_a_soar_alert_is_not_downgraded_by_the_unknown_count(db, stream) -> None:
     """Before DEC-209 item 2 step 2 forced EVERY answer on such an alert, `escalate` (now
     `true_positive`, P14-T01) included, to
-    `needs_review` as a hallucination. Now only the `false_positive` that needs a rule is held back.
+    `needs_review` as a hallucination. Now only the `false_positive` that needs a rule is flagged (and
+    since DEC-217 flagged, not held).
     """
     receive_and_run(db, stream, fp_candidate())
 
@@ -628,7 +639,7 @@ def test_a_true_positive_on_a_soar_alert_is_not_downgraded_by_the_unknown_count(
     )
 
     assert ev is not None and ev.outcome == "ok"
-    assert ev.final_verdict == "true_positive" and ev.forced_by == ()
+    assert ev.final_verdict == "true_positive" and ev.forced_by == () and ev.flagged_by == ()
     assert ev.gate_result["hallucination_flag"] is False
 
 
@@ -669,7 +680,7 @@ def test_the_job_writes_its_rows_with_a_null_count(db, stream, monkeypatch) -> N
         "result->>'suggested_action' FROM llm_runs WHERE subject_id = %s ORDER BY role",
         (_FP_ID,),
     ).fetchall()
-    assert ("proposer", "null", "needs_review") in runs
+    assert ("proposer", "null", "false_positive") in runs
     status = db.execute(
         "SELECT triage_status FROM alerts WHERE alert_id = %s", (_FP_ID,)
     ).fetchone()

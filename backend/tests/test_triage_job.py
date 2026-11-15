@@ -274,10 +274,21 @@ def test_happy_path_writes_two_rows_ready_and_audit(db, monkeypatch):
         (alert_id,),
     ).fetchone()
     assert payload == ("llm",)
+    assert _triage_suggested_payload(db, alert_id)["flagged_by"] == []
+
+
+def _triage_suggested_payload(db, alert_id: str) -> dict:
+    return db.execute(
+        "SELECT payload FROM audit_events WHERE subject_id = %s AND event_type = 'triage.suggested'",
+        (alert_id,),
+    ).fetchone()[0]
 
 
 @pytest.mark.db
-def test_forced_path_writes_gate_forced(db, monkeypatch):
+def test_flagged_path_keeps_the_models_verdict_and_writes_no_gate_forced(db, monkeypatch):
+    """DEC-217 (G1, G2, spec 6): a failed check flags the run - it is recorded and shown as a warning - and the
+    stored verdict is the model's own. Nothing is forced, so `llm.gate_forced` is not written;
+    `triage.suggested` keeps `forced` (false) and gains `flagged_by`."""
     _enable_llm(monkeypatch)
     alert_id = _seed_alert(
         db,
@@ -297,17 +308,24 @@ def test_forced_path_writes_gate_forced(db, monkeypatch):
         "SELECT result, gate_result FROM llm_runs WHERE subject_id = %s AND role = 'proposer'",
         (alert_id,),
     ).fetchone()
-    assert result["suggested_action"] == "needs_review"
-    assert gate_result["forced"] is True
+    assert result["suggested_action"] == "false_positive"  # the model's own answer
+    assert gate_result["version"] == 2
+    assert gate_result["forced"] is False and gate_result["forced_by"] == []
+    assert gate_result["proposed_verdict"] == gate_result["final_verdict"] == "false_positive"
+    assert "step6" in gate_result["flagged_by"]  # the verifier disagreed: agree is false
     assert gate_result["proposer_raw"]["suggested_action"] == "false_positive"
 
-    assert "llm.gate_forced" in _event_types(db, alert_id)
+    assert "llm.gate_forced" not in _event_types(db, alert_id)
+    suggested = _triage_suggested_payload(db, alert_id)
+    assert suggested["suggested_action"] == "false_positive" and suggested["forced"] is False
+    assert suggested["flagged_by"] == gate_result["flagged_by"]
 
 
 @pytest.mark.db
-def test_result_column_never_carries_ungated_fp(db, monkeypatch):
-    """G11, on the column (acceptance 3): `result` never carries an ungated
-    `false_positive`, even though the model's own answer did."""
+def test_result_column_never_carries_needs_review_for_a_new_run(db, monkeypatch):
+    """G11, on the column, as DEC-217 rewrote it: `result` carries the model's own answer and never a
+    `needs_review`, even when every check of the gate flagged the run (old rows may hold one: the CHECK
+    admits it; no new run writes it)."""
     _enable_llm(monkeypatch)
     alert_id = _seed_alert(
         db,
@@ -323,10 +341,15 @@ def test_result_column_never_carries_ungated_fp(db, monkeypatch):
 
     run_triage_job(db, _job(alert_id), adapter=fake)
 
-    survivors = db.execute(
-        "SELECT count(*) FROM llm_runs WHERE result->>'suggested_action' = 'false_positive'"
+    held = db.execute(
+        "SELECT count(*) FROM llm_runs WHERE result->>'suggested_action' = 'needs_review'"
     ).fetchone()[0]
-    assert survivors == 0
+    assert held == 0
+    kept = db.execute(
+        "SELECT result->>'suggested_action' FROM llm_runs WHERE subject_id = %s AND role = 'proposer'",
+        (alert_id,),
+    ).fetchone()
+    assert kept == ("false_positive",)
 
     proposer_raw_action = db.execute(
         "SELECT gate_result->'proposer_raw'->>'suggested_action' FROM llm_runs "
@@ -403,6 +426,7 @@ def test_a_true_positive_answer_is_stored_as_the_suggested_action(db, monkeypatc
     assert result["suggested_action"] == "true_positive"
     assert gate_result["proposed_verdict"] == gate_result["final_verdict"] == "true_positive"
     assert gate_result["forced"] is False and gate_result["forced_by"] == []
+    assert gate_result["version"] == 2 and gate_result["flagged_by"] == []
     assert gate_result["proposer_raw"]["suggested_action"] == "true_positive"
     assert gate_result["verifier_verdict"] == "true_positive"
     assert db.execute(
@@ -412,11 +436,11 @@ def test_a_true_positive_answer_is_stored_as_the_suggested_action(db, monkeypatc
 
 
 @pytest.mark.db
-def test_a_true_positive_the_gate_holds_keeps_the_models_answer_beside_the_held_one(
+def test_a_true_positive_the_verifier_disagrees_with_is_stored_as_the_models_answer_and_flagged(
     db, monkeypatch
 ):
-    """The model concluded; the system held it (here, the verifier disagrees): `result` says
-    `needs_review`, `gate_result.proposed_verdict` still says what the model concluded."""
+    """The model concluded; the verifier disagrees (it answers `needs_review`): DEC-217 - `result` says what
+    the model concluded, and step 6 is a warning beside it."""
     _enable_llm(monkeypatch)
     alert_id = _seed_alert(db)
     fake = _RecordingLLM(responses=[TRIAGE_V3_TRUE_POSITIVE, VERIFIER_V2_DISAGREE])
@@ -427,10 +451,12 @@ def test_a_true_positive_the_gate_holds_keeps_the_models_answer_beside_the_held_
         "SELECT result, gate_result FROM llm_runs WHERE subject_id = %s AND role = 'proposer'",
         (alert_id,),
     ).fetchone()
-    assert result["suggested_action"] == "needs_review"
+    assert result["suggested_action"] == "true_positive"
     assert gate_result["proposed_verdict"] == "true_positive"
-    assert gate_result["final_verdict"] == "needs_review"
-    assert gate_result["forced_by"] == ["step6"]
+    assert gate_result["final_verdict"] == "true_positive"
+    assert gate_result["forced"] is False and gate_result["forced_by"] == []
+    assert gate_result["flagged_by"] == ["step6"]
+    assert gate_result["verifier_verdict"] == "needs_review"  # the verifier keeps its three values
 
 
 #: T1 (trial, 11/11): the answer the model is told to give when the alert's category has no playbook: the
@@ -458,13 +484,13 @@ _VERIFIER_HOLD_AGREE = {
 
 
 @pytest.mark.db
-def test_a_no_playbook_alert_answered_false_positive_with_no_reasons_is_ready_and_held(
+def test_a_no_playbook_alert_answered_false_positive_with_no_reasons_is_ready_and_flagged(
     db, monkeypatch
 ):
-    """T1 (trial, 11/11), pinned: the proposer is told to conclude `false_positive` with `reasons: []`
-    for a category with no playbook; the run completes (`ready`, not `unavailable`) and the gate, which is
-    not changed, holds the result for the analyst: step 3 finds no surviving reason, so the final verdict is
-    `needs_review`, beside the model's own `false_positive`. Step 4 is `n/a` (the verdict was already held).
+    """T1 (trial, 11/11), pinned, as DEC-217 reads it: the proposer is told to conclude `false_positive` with
+    `reasons: []` for a category with no playbook; the run completes (`ready`, not `unavailable`) and the gate
+    warns: step 3 finds no surviving reason and step 4, which now runs for every `false_positive`, finds the
+    critical severity and the missing rule. The final verdict is the model's own `false_positive`.
     """
     _enable_llm(monkeypatch)
     alert_id = _seed_alert(db, category="unknown", categories=[], resolved_by="none")
@@ -484,26 +510,35 @@ def test_a_no_playbook_alert_answered_false_positive_with_no_reasons_is_ready_an
     assert "false_positive và để `reasons` là danh sách rỗng []" in system
     assert "no_playbook" in warnings
     assert gate_result["proposed_verdict"] == "false_positive"
-    assert gate_result["final_verdict"] == "needs_review"
-    assert result["suggested_action"] == "needs_review" and result["reasons"] == []
-    assert gate_result["forced"] is True
-    assert gate_result["forced_by"] == ["step3"]
+    assert gate_result["final_verdict"] == "false_positive"
+    assert result["suggested_action"] == "false_positive" and result["reasons"] == []
+    assert gate_result["forced"] is False and gate_result["forced_by"] == []
+    assert gate_result["flagged_by"] == ["step3", "step4", "step6"]
     assert gate_result["steps"]["2"] == "ok"
     assert gate_result["steps"]["3"] == "dropped:0"
-    assert gate_result["steps"]["4"] == "n/a" and gate_result["missing"] == []
+    # step 4 is evaluated although step 3 flagged: the facts are critical, the asset unknown, no rule cited
+    assert gate_result["steps"]["4"] == "missing"
+    assert gate_result["missing"] == ["severity", "asset_criticality", "playbook_rule"]
+    assert gate_result["steps"]["6"] == "disagree"  # the verifier answers `needs_review`
     assert gate_result["proposer_raw"]["suggested_action"] == "false_positive"
     assert gate_result["proposer_raw"]["reasons"] == []
     assert gate_result["verifier_verdict"] == "needs_review"
     assert verdicts.proposed_action(gate_result) == "false_positive"
-    assert verdicts.held_reasons(gate_result) == ["no_verified_quote"]
-    # the verifier was asked about the held verdict with no reasons, and its prompt is the legacy one
+    assert verdicts.held_reasons(gate_result) == [
+        "no_verified_quote",
+        "fp_policy:severity",
+        "fp_policy:asset_criticality",
+        "fp_policy:playbook_rule",
+        "verifier_disagrees",
+    ]
+    # the verifier was asked about the model's own verdict with no reasons, and its prompt is the legacy one
     verifier_user = fake.calls[1]["user"]
     assert (
         B.SENTENCE_NO_PLAYBOOK in verifier_user and B.SENTENCE_NO_PLAYBOOK_FP not in verifier_user
     )
-    assert '"verdict": "needs_review", "reasons": []' in verifier_user
+    assert '"verdict": "false_positive", "reasons": []' in verifier_user
     events = _event_types(db, alert_id)
-    assert "triage.suggested" in events and "llm.gate_forced" in events
+    assert "triage.suggested" in events and "llm.gate_forced" not in events
 
 
 @pytest.mark.db
@@ -1094,7 +1129,8 @@ def _switch(monkeypatch, value: str) -> None:
 @pytest.mark.db
 def test_switch_off_sixty_alert_burst_cannot_take_sbf_1(db, monkeypatch):
     """The safety case: 60 identical alerts, each row at 1. The gate must see 60, so
-    `sbf-1` (`occurrence_lt: 50`) does not hold and the false positive is forced away."""
+    `sbf-1` (`occurrence_lt: 50`) does not hold and the false positive is flagged (DEC-217: a warning beside
+    the model's verdict, no longer a hold)."""
     _switch(monkeypatch, "false")
     ids = _seed_burst(db, 60, **_FP_ALERT)
     fake = _RecordingLLM(responses=[_fp_proposal(60), _VERIFIER_REVIEW_AGREE])
@@ -1105,8 +1141,14 @@ def test_switch_off_sixty_alert_burst_cannot_take_sbf_1(db, monkeypatch):
     assert gate_result["facts"]["occurrence_count"] == 60
     assert gate_result["steps"]["2"] == "ok"  # the model was shown 60, the gate holds 60
     assert gate_result["proposed_verdict"] == "false_positive"
-    assert gate_result["final_verdict"] == "needs_review"  # never an accepted FP
-    assert gate_result["forced_by"] == ["step4"]
+    assert (
+        gate_result["final_verdict"] == "false_positive"
+    )  # the model's own, with the warning below
+    assert gate_result["forced"] is False and gate_result["forced_by"] == []
+    assert gate_result["flagged_by"] == [
+        "step4",
+        "step6",
+    ]  # and the verifier (`needs_review`) disagrees
     assert gate_result["missing"] == ["playbook_rule"]
     assert "rule_does_not_hold" in gate_result["warnings"]
     assert "occurrence_count: 60" in fake.calls[0]["user"]  # the prompt shows it too
@@ -1233,7 +1275,8 @@ def test_switch_on_the_same_occurrence_gte_rule_does_not_fire_at_one(db, monkeyp
 
     gate_result = _proposer_gate_result(db, ids[0])
     assert gate_result["facts"]["occurrence_count"] == 1
-    assert gate_result["final_verdict"] == "needs_review"
+    assert gate_result["final_verdict"] == "false_positive"
+    assert gate_result["flagged_by"] == ["step4"]  # the rule does not fire at one: a warning
     assert "rule_does_not_hold" in gate_result["warnings"]
 
 

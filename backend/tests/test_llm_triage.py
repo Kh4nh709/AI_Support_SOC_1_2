@@ -645,10 +645,11 @@ def test_the_verifier_prompt_builds_for_a_false_positive_with_no_reasons():
     assert built.playbook_used_effective is None
 
 
-def test_the_gate_holds_a_false_positive_with_no_reasons_at_step_3_and_changes_nothing_else():
-    """Prompt only (the Owner's decision): with `reasons: []` no reason survives step 3, so the verdict is
-    held as needs_review. Step 4 then has nothing to do (it acts only on a verdict still false_positive), so
-    it is `n/a` and not in `forced_by`. The gate itself is untouched."""
+def test_the_gate_flags_a_false_positive_with_no_reasons_at_step_3_and_keeps_the_verdict():
+    """Prompt only (the Owner's decision): with `reasons: []` no reason survives step 3, so the run is
+    flagged `step3` (DEC-217: it used to be held as needs_review). The verdict stays the model's
+    `false_positive`, and step 4, which acts on every `false_positive` answer, still runs and flags what it
+    finds (`severity` here, and the missing rule)."""
     inp = _inp(category="unknown", severity="critical", occurrence_count=3)
     built = _build(inp, playbook=None, table=None)
     facts = T.build_facts(inp, _correlation())
@@ -665,15 +666,25 @@ def test_the_gate_holds_a_false_positive_with_no_reasons_at_step_3_and_changes_n
         scan=lambda _: [],
     )
     assert state.proposed_verdict == "false_positive"
-    assert state.verdict == "needs_review"
-    assert state.forced_by == ["step3"]
-    assert state.steps == {"1": "ok", "2": "ok", "3": "dropped:0", "4": "n/a", "5": "findings:0"}
-    assert state.reasons == [] and state.dropped_reasons == [] and state.missing == []
-    verifier = {"agree": True, "structured_only_verdict": "needs_review", "reason": "x"}
+    assert state.verdict == "false_positive"
+    assert state.flagged_by == ["step3", "step4"]
+    assert state.steps == {
+        "1": "ok",
+        "2": "ok",
+        "3": "dropped:0",
+        "4": "missing",
+        "5": "findings:0",
+    }
+    assert state.reasons == [] and state.dropped_reasons == []
+    assert state.missing == ["severity", "playbook_rule"]
+    verifier = {"agree": True, "structured_only_verdict": "false_positive", "reason": "x"}
     result = gate.finish(state, verifier)
-    assert result["suggested_action"] == "needs_review"
+    assert result["suggested_action"] == "false_positive"
     assert result["reasons"] == []
-    assert state.forced_by == ["step3"]  # a verifier that agrees with the hold adds nothing
+    assert state.flagged_by == [
+        "step3",
+        "step4",
+    ]  # a verifier that agrees with the verdict adds nothing
 
 
 def test_correlation_rows_and_samples_rendering():
