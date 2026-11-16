@@ -1,7 +1,8 @@
 // src/features/soar/SoarPage.decision.test.tsx — pressing a button: keep at once; undo and false positive through a dialog
 // with a note (and a stronger warning for an isolated or domain-controller host); "Đang xử lý…" while the request runs (up
 // to 45 s); then each outcome, the local 409, the 403, the 503 and a network failure, on the row.
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, fireEvent, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse } from "msw";
 import { setupServer } from "msw/node";
@@ -12,6 +13,7 @@ import { listOf, review } from "./fixtures";
 import { NOTE_MAX } from "./model";
 import { SOAR_LIST_POLL_MS } from "./soarQueries";
 import { fake, renderSoar, serve, type Fake } from "./testkit";
+import { useDecisions } from "./useDecisions";
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -63,6 +65,74 @@ function serveDecision(make: (state: Fake) => SoarDecisionAnswer | Response, row
   serve(server, state);
   return state;
 }
+
+// m12: holding Enter on a button repeats its click. After a fast failure the buttons are enabled again, and the repeat would send
+// the decision again, and again. A repeated key is not a new press: its default action (the click) is cancelled.
+describe("a key held down on a button", () => {
+  it("cancels the click of a repeated keydown, and lets the first press through", async () => {
+    serveDecision(() => answer());
+    renderSoar();
+    const keep = within(await rowOf()).getByRole("button", { name: KEEP });
+    // fireEvent says whether the event was left alone: false when its default action was cancelled
+    expect(fireEvent.keyDown(keep, { key: "Enter" })).toBe(true);
+    expect(fireEvent.keyDown(keep, { key: "Enter", repeat: true })).toBe(false);
+    expect(fireEvent.keyDown(keep, { key: " ", repeat: true })).toBe(false);
+  });
+});
+
+// m11: the guard of the hook that stops two requests for one ticket, tested on its own.
+describe("run() for one ticket twice", () => {
+  it("sends one request, whatever the buttons say", async () => {
+    const state = fake({ rows: [review()] });
+    let release: () => void = () => {};
+    const wait = new Promise<void>((resolve) => (release = resolve));
+    state.decision = async () => {
+      await wait;
+      return answer();
+    };
+    serve(server, state);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useDecisions(), {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    });
+    let first: Promise<void> = Promise.resolve();
+    let second: Promise<void> = Promise.resolve();
+    act(() => {
+      first = result.current.run(review(), "keep", "");
+      second = result.current.run(review(), "keep", "");
+    });
+    await act(async () => release());
+    await act(async () => {
+      await Promise.all([first, second]);
+    });
+    expect(state.decisions).toHaveLength(1);
+    // once it has settled, the same ticket can be pressed again: the guard is for one request at a time, not for ever
+    await act(async () => {
+      await result.current.run(review(), "keep", "");
+    });
+    expect(state.decisions).toHaveLength(2);
+  });
+
+  it("lets two different tickets run together", async () => {
+    const state = fake({ rows: [review(), review({ id: "B2C3D4E5" })] });
+    serve(server, state);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useDecisions(), {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    });
+    await act(async () => {
+      await Promise.all([
+        result.current.run(review(), "keep", ""),
+        result.current.run(review({ id: "B2C3D4E5" }), "keep", ""),
+      ]);
+    });
+    expect(state.decisions.map((call) => call.id).sort()).toEqual(["B2C3D4E5", "K7QM2XHP"]);
+  });
+});
 
 describe("keep", () => {
   it("sends at once, with no dialog and no note", async () => {

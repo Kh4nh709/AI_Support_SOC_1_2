@@ -224,6 +224,89 @@ describe("the buttons", () => {
       .filter((b) => !b.getAttribute("aria-label")?.startsWith("Xem chi tiết"))
       .map((b) => b.textContent);
 
+  // m6: the word of the WEB for each decision is always there: a description of the button for a screen reader, and a small
+  // muted tag for the eye when the label n8n wrote does not already carry the word.
+  describe("the word of the web for each decision", () => {
+    const WORDS = { keep: "Giữ", undo: "Gỡ", fp: "Dương tính giả" } as const;
+    const tagOf = (button: HTMLElement) => {
+      const id = button.getAttribute("aria-describedby");
+      const tag = id === null ? null : document.getElementById(id);
+      if (tag === null) throw new Error("no description");
+      return tag;
+    };
+
+    it("describes every button by the word of its decision, keep included, and says it in the table's own words", async () => {
+      serve(server, fake({ rows: [review()] }));
+      renderSoar();
+      const row = await rowOf("K7QM2XHP");
+      expect(within(row).getByRole("button", { name: "✅ Giữ chặn" })).toHaveAccessibleDescription(
+        "Giữ",
+      );
+      expect(
+        within(row).getByRole("button", { name: "↩️ Gỡ chặn IP" }),
+      ).toHaveAccessibleDescription("Gỡ");
+      expect(S.soar.decision).toEqual(WORDS);
+    });
+
+    it("shows no tag when the label already has the word, in any case", async () => {
+      serve(
+        server,
+        fake({
+          rows: [
+            review({
+              buttons: [
+                { decision: "keep", label: "GIỮ LẠI" },
+                { decision: "undo", label: "gỡ bỏ" },
+              ],
+            }),
+          ],
+        }),
+      );
+      renderSoar();
+      const row = await rowOf("K7QM2XHP");
+      for (const name of ["GIỮ LẠI", "gỡ bỏ"]) {
+        const tag = tagOf(within(row).getByRole("button", { name }));
+        expect(tag.className).toContain("sr-only");
+      }
+    });
+
+    it("shows a small muted tag with the web's word when the label does not have it, for every decision", async () => {
+      serve(
+        server,
+        fake({
+          rows: [
+            review({
+              action_type: "kill_process",
+              buttons: [
+                { decision: "keep", label: "OK" },
+                { decision: "undo", label: "Hoàn tác" },
+                { decision: "fp", label: "Not a threat" },
+              ],
+              allowed_decisions: ["keep", "undo", "fp"],
+            }),
+          ],
+        }),
+      );
+      renderSoar();
+      const row = await rowOf("K7QM2XHP");
+      for (const [label, word] of [
+        ["OK", "Giữ"],
+        ["Hoàn tác", "Gỡ"],
+        ["Not a threat", "Dương tính giả"],
+      ] as const) {
+        const button = within(row).getByRole("button", { name: label });
+        const tag = tagOf(button);
+        expect(tag).toHaveTextContent(new RegExp(`^${word}$`));
+        expect(tag.className).not.toContain("sr-only");
+        expect(tag.className).toContain("text-muted");
+        expect(button).toHaveAccessibleDescription(word);
+        // beside the button, not inside it: the name of the button stays n8n's label alone
+        expect(button).toHaveAccessibleName(label);
+        expect(button.contains(tag)).toBe(false);
+      }
+    });
+  });
+
   it("shows one button per entry of buttons, with n8n's label as text, on an open ticket", async () => {
     serve(server, fake({ rows: [review()] }));
     renderSoar();

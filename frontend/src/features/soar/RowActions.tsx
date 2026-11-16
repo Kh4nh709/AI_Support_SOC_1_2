@@ -1,15 +1,54 @@
 // The last cell of a row: the buttons of the ticket (one per entry of `buttons` that the caller may press, n8n's label as
 // plain text), "Đang xử lý…" while a request of this row is out (the buttons then disabled), and what the last request
 // said (an error line, or a note) and what the row itself stores as its last error.
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import type { SoarDecision, SoarReview } from "../../api/soar";
 import { S } from "../../strings";
-import { buttonsOf } from "./model";
+import { buttonsOf, type ShownButton } from "./model";
 import { sameStamp, stampOf, type RowState } from "./useDecisions";
 
 // Whole class names, written out: Tailwind finds a class by reading the source. A long label wraps inside its button.
 const BUTTON =
   "max-w-56 rounded border border-border px-2 py-1 text-left text-xs wrap-anywhere hover:bg-surface disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-text";
+
+/**
+ * One button of a ticket: n8n label as text, and beside it the word of the WEB for the decision ("Giữ", "Gỡ", "Dương tính
+ * giả"), which is the button's accessible description. It is a small muted tag for the eye when the label does not already
+ * carry the word (case does not matter), and for a screen reader alone when it does: the web's word is always there.
+ */
+function DecisionButton({
+  button,
+  disabled,
+  onPress,
+}: {
+  button: ShownButton;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  const wordId = useId();
+  const word = S.soar.decision[button.decision];
+  const carried = button.label.toLocaleLowerCase("vi").includes(word.toLocaleLowerCase("vi"));
+  return (
+    <span className="inline-flex max-w-full flex-wrap items-center gap-1">
+      <button
+        type="button"
+        disabled={disabled}
+        aria-describedby={wordId}
+        onClick={onPress}
+        // Holding Enter on a button repeats its click: the repeat is not a new press (a fast failure would send again).
+        onKeyDown={(event) => {
+          if (event.repeat) event.preventDefault();
+        }}
+        className={BUTTON}
+      >
+        {button.label}
+      </button>
+      <span id={wordId} className={carried ? "sr-only" : "text-xs text-muted"}>
+        {word}
+      </span>
+    </span>
+  );
+}
 
 export function RowActions({
   row,
@@ -55,15 +94,12 @@ export function RowActions({
       {buttons.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {buttons.map((button) => (
-            <button
+            <DecisionButton
               key={button.decision}
-              type="button"
+              button={button}
               disabled={running}
-              onClick={() => onPress(row, button.decision)}
-              className={BUTTON}
-            >
-              {button.label}
-            </button>
+              onPress={() => onPress(row, button.decision)}
+            />
           ))}
         </div>
       )}
