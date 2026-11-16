@@ -6,6 +6,12 @@ import { setupServer } from "msw/node";
 import { StrictMode } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { api } from "../api/client";
+import {
+  readDismissed,
+  readSignalChoice,
+  DISMISSED_KEY,
+  SIGNAL_KEY,
+} from "../features/soar/storage";
 import { AuthProvider, useAuth } from "./AuthProvider";
 
 const server = setupServer();
@@ -433,5 +439,129 @@ describe("login and logout", () => {
     await waitFor(() => expect(state()).toBe("ready none"));
     expect(sessionStorage.getItem(KEY)).toBeNull();
     expect(where()).toBe("/login from -");
+  });
+});
+
+// The signal switch and the dismissed notices of the SOAR page are kept in this tab for the session of whoever set them: every way a
+// session ends clears them, and the next person to sign in in the same tab starts from the default.
+describe("the preferences of the SOAR page end with the session", () => {
+  const N1 = "N000000000001";
+  const setPrefs = () => {
+    sessionStorage.setItem(SIGNAL_KEY, "1");
+    sessionStorage.setItem(DISMISSED_KEY, JSON.stringify([N1]));
+  };
+  const gone = () => {
+    expect(sessionStorage.getItem(SIGNAL_KEY)).toBeNull();
+    expect(sessionStorage.getItem(DISMISSED_KEY)).toBeNull();
+    expect(readSignalChoice()).toBeNull();
+    expect(readDismissed()).toEqual([]);
+  };
+
+  it("are kept while the session lasts", async () => {
+    server.use(meOk({ username: "stale", role: "tier1" }));
+    stored();
+    setPrefs();
+    renderProvider();
+    await waitFor(() => expect(state()).toBe("ready stale/tier1/tok-1"));
+    expect(readSignalChoice()).toBe(true);
+    expect(readDismissed()).toEqual([N1]);
+  });
+
+  it("are cleared by Đăng xuất", async () => {
+    server.use(
+      meOk({ username: "stale", role: "tier1" }),
+      http.post("/api/auth/logout", () => new HttpResponse(null, { status: 204 })),
+    );
+    stored();
+    renderProvider("/alerts/5");
+    await waitFor(() => expect(state()).toBe("ready stale/tier1/tok-1"));
+    setPrefs();
+    await userEvent.setup().click(screen.getByText("do logout"));
+    await waitFor(() => expect(state()).toBe("ready none"));
+    gone();
+  });
+
+  it("are cleared when a 401 ends the session", async () => {
+    server.use(
+      meOk({ username: "stale", role: "tier1" }),
+      http.get("/api/ping", () => HttpResponse.json({ detail: "expired" }, { status: 401 })),
+    );
+    stored();
+    renderProvider();
+    await waitFor(() => expect(state()).toBe("ready stale/tier1/tok-1"));
+    setPrefs();
+    await userEvent.setup().click(screen.getByText("call api"));
+    await waitFor(() => expect(state()).toBe("ready none"));
+    gone();
+  });
+
+  it("are cleared when /me answers 401 on load", async () => {
+    server.use(http.get("/api/auth/me", () => HttpResponse.json({ detail: "x" }, { status: 401 })));
+    stored();
+    setPrefs();
+    renderProvider();
+    await waitFor(() => expect(state()).toBe("ready none"), { timeout: 2000 });
+    gone();
+  });
+
+  it("are cleared at the expiry, and by a logout of another tab", async () => {
+    const expiresAt = later(400);
+    server.use(meOk({ username: "stale", role: "tier1", expires_at: expiresAt }));
+    stored({ expiresAt });
+    setPrefs();
+    const first = renderProvider();
+    await waitFor(() => expect(state()).toBe("ready stale/tier1/tok-1"));
+    await waitFor(() => expect(state()).toBe("ready none"), { timeout: 2000 });
+    gone();
+    first.unmount();
+    server.use(meOk({ username: "stale", role: "tier1" }));
+    stored();
+    setPrefs();
+    renderProvider();
+    await waitFor(() => expect(state()).toBe("ready stale/tier1/tok-1"));
+    const other = new BroadcastChannel("soc-session");
+    tabs.push(other);
+    other.postMessage({ type: "logout" });
+    await waitFor(() => expect(state()).toBe("ready none"));
+    gone();
+  });
+
+  it("start from the default for a different person who signs in in the same tab", async () => {
+    server.use(
+      meOk({ username: "stale", role: "tier1" }),
+      http.post("/api/auth/logout", () => new HttpResponse(null, { status: 204 })),
+      http.post("/api/auth/login", () =>
+        HttpResponse.json({
+          token: "tok-9",
+          role: "tier2",
+          user_id: 8,
+          expires_at: later(3_600_000),
+        }),
+      ),
+    );
+    stored();
+    renderProvider("/alerts/5");
+    await waitFor(() => expect(state()).toBe("ready stale/tier1/tok-1"));
+    setPrefs();
+    const user = userEvent.setup();
+    await user.click(screen.getByText("do logout"));
+    await waitFor(() => expect(state()).toBe("ready none"));
+    await user.click(screen.getByText("do login"));
+    await waitFor(() => expect(state()).toBe("ready an/tier2/tok-9"));
+    // nothing of the first person is there for the second: no choice (so the default of the browser permission stands), none dismissed
+    gone();
+  });
+
+  it("writes nothing to the store that outlives the tab", async () => {
+    server.use(
+      meOk({ username: "stale", role: "tier1" }),
+      http.post("/api/auth/logout", () => new HttpResponse(null, { status: 204 })),
+    );
+    stored();
+    renderProvider("/alerts/5");
+    await waitFor(() => expect(state()).toBe("ready stale/tier1/tok-1"));
+    await userEvent.setup().click(screen.getByText("do logout"));
+    await waitFor(() => expect(state()).toBe("ready none"));
+    expect(localStorage.length).toBe(0);
   });
 });

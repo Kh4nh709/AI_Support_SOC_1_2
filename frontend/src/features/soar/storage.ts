@@ -4,6 +4,8 @@
 // tab; nothing is written to a store that outlives it (ruling R5, src/guards.test.ts). Neither is a secret and neither names
 // a person. The store can be missing, full, blocked or filled by hand, so every read and every write is inside try/catch, the
 // page works without it, and nothing read back is believed until it has the shape that was written.
+// Both are one person's choices: auth/session.ts names the two keys (`PER_SESSION_KEYS`, held equal to these by a test) and removes
+// them with the session, so the next person to sign in in the same tab starts from the default.
 
 export const SIGNAL_KEY = "soc.soar.signal";
 export const DISMISSED_KEY = "soc.soar.dismissed";

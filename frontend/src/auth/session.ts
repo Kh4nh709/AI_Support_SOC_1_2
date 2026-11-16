@@ -78,12 +78,26 @@ export function saveSession(s: Session): void {
   }
 }
 
-/** Empties this tab's stored session and says nothing to the other tabs. */
+/**
+ * The preferences of one session that this tab keeps beside it (the page of the SOAR tickets: the signal switch and the dismissed
+ * notices, features/soar/storage.ts, whose test holds this list equal to its two keys). They are the choices of the person who
+ * signed in, so they end with the session: the next person to sign in in the same tab starts from the default. They are named here,
+ * as strings, and not imported, so that the session layer knows nothing of the features.
+ */
+export const PER_SESSION_KEYS = ["soc.soar.signal", "soc.soar.dismissed"] as const;
+
+/**
+ * Empties this tab's stored session, and the preferences of that session (`PER_SESSION_KEYS`), and says nothing to the other tabs.
+ * Every way a session ends passes here: logout (`clearSession`), a 401 and the expiry (`AuthProvider.endHere`), a logout of another
+ * tab (`startSessionSharing`), an entry that is expired or malformed (`loadSession`).
+ */
 export function forgetSession(): void {
-  try {
-    sessionStorage.removeItem(KEY);
-  } catch {
-    // Nothing to remove from a store that cannot be read.
+  for (const key of [KEY, ...PER_SESSION_KEYS]) {
+    try {
+      sessionStorage.removeItem(key);
+    } catch {
+      // Nothing to remove from a store that cannot be read; the others are still tried.
+    }
   }
 }
 
