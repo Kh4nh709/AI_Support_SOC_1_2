@@ -23,6 +23,7 @@ export type OpenDetail = (id: string, opener: HTMLElement) => void;
 export function reviewColumns(parts: {
   states: Readonly<Record<string, RowState>>;
   me: string | null;
+  focus: { id: string } | null;
   onPress: (row: SoarReview, decision: SoarDecision) => void;
   onOpen: OpenDetail;
 }): Column<SoarReview>[] {
@@ -119,6 +120,7 @@ export function reviewColumns(parts: {
           row={row}
           state={Object.hasOwn(parts.states, row.id) ? parts.states[row.id] : undefined}
           me={parts.me}
+          focus={parts.focus}
           onPress={parts.onPress}
         />
       ),

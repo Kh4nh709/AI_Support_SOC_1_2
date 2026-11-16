@@ -52,6 +52,12 @@ export type Decisions = {
   /** The note that stays after a decision went through, until it is closed. */
   toast: string | null;
   closeToast: () => void;
+  /**
+   * Where the focus should go: the row whose request has just started. Its button is disabled at that moment (and the dialog
+   * it came from is gone), and a focused element that is disabled leaves the focus on the page; the row takes it instead.
+   * A new object for each request, so the same row can ask again.
+   */
+  focus: { id: string } | null;
   run: (row: SoarReview, decision: SoarDecision, note: string) => Promise<void>;
 };
 
@@ -59,6 +65,7 @@ export function useDecisions(): Decisions {
   const client = useQueryClient();
   const [states, setStates] = useState<Readonly<Record<string, RowState>>>({});
   const [toast, setToast] = useState<string | null>(null);
+  const [focus, setFocus] = useState<{ id: string } | null>(null);
   // A second press can arrive before the first has been drawn as a disabled button: this says so at once.
   const out = useRef(new Set<string>());
   const mutation = useMutation({
@@ -96,6 +103,7 @@ export function useDecisions(): Decisions {
       if (out.current.has(row.id)) return;
       out.current.add(row.id);
       put(row.id, { running: true, lines: [], at: null });
+      setFocus({ id: row.id });
       setToast(null);
       try {
         const answer = await mutateAsync({ id: row.id, decision, note });
@@ -133,5 +141,5 @@ export function useDecisions(): Decisions {
     [client, mutateAsync, put, write],
   );
 
-  return { states, toast, closeToast: () => setToast(null), run };
+  return { states, toast, closeToast: () => setToast(null), focus, run };
 }

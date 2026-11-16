@@ -94,6 +94,7 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
       : reviewColumns({
           states: decisions.states,
           me: session?.username ?? null,
+          focus: decisions.focus,
           onPress: press,
           onOpen: openDetail,
         });

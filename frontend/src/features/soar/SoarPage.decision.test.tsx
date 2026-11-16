@@ -423,6 +423,56 @@ describe("while the request runs", () => {
     expect(within(await rowOf()).queryByText(S.soar.working)).not.toBeInTheDocument();
   });
 
+  it("moves the focus to the row's group when a decision starts, so it never falls to the page: after the dialog is confirmed", async () => {
+    let release: () => void = () => {};
+    const wait = new Promise<void>((resolve) => (release = resolve));
+    const state = fake({ rows: [review()] });
+    state.decision = async () => {
+      await wait;
+      return answer();
+    };
+    serve(server, state);
+    renderSoar();
+    await press(UNDO);
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: S.soar.dialog.confirm.undo }));
+    const group = await screen.findByRole("group", { name: S.soar.buttonsLabel("K7QM2XHP") });
+    await waitFor(() => expect(group).toHaveFocus());
+    expect(document.body).not.toHaveFocus();
+    await act(async () => release());
+    // it stays there when the result comes, and is not taken away
+    await waitFor(() => expect(screen.queryByText(S.soar.working)).not.toBeInTheDocument());
+    expect(group).toHaveFocus();
+  });
+
+  it("moves the focus to the row's group when keep is pressed (its button is disabled the moment the request starts)", async () => {
+    let release: () => void = () => {};
+    const wait = new Promise<void>((resolve) => (release = resolve));
+    const state = fake({ rows: [review()] });
+    state.decision = async () => {
+      await wait;
+      return answer();
+    };
+    serve(server, state);
+    renderSoar();
+    await press(KEEP);
+    const group = await screen.findByRole("group", { name: S.soar.buttonsLabel("K7QM2XHP") });
+    await waitFor(() => expect(group).toHaveFocus());
+    expect(group).toHaveAttribute("tabindex", "-1");
+    await act(async () => release());
+  });
+
+  it("does not take the focus for a request that fails to start with the focus elsewhere, nor on a list refetch", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const state = fake({ rows: [review(), review({ id: "B2C3D4E5" })] });
+    serve(server, state);
+    renderSoar();
+    const other = within(await rowOf("B2C3D4E5")).getByRole("button", { name: KEEP });
+    other.focus();
+    await act(() => vi.advanceTimersByTimeAsync(SOAR_LIST_POLL_MS + 100));
+    expect(other).toHaveFocus();
+  });
+
   it("leaves another row's buttons alone", async () => {
     let release: () => void = () => {};
     const wait = new Promise<void>((resolve) => (release = resolve));
