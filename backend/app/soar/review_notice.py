@@ -28,13 +28,14 @@ A fault names the field and the kind of fault, never the value: nothing the send
 | no row with this `id` | `201 {id, created: true}` | the row, `last_sent_at = sent_at`, `raw` = the body as sent |
 | a row, `sent_at` older than `last_sent_at` | `200 {id, created: false, ignored: true, reason: "stale"}` | nothing |
 | a row in `undone`, `false_positive` or `expired`, and the body says `open` | `200 {..., ignored: true, reason: "terminal"}` | nothing |
-| otherwise | `200 {id, created: false}` | every field of the body replaces the stored one; `raw`, `last_sent_at`, `updated_at` |
+| otherwise | `200 {id, created: false}` | every field of the body replaces the stored one (but `decided_by`, `decided_at`, `result`: null or absent keeps the stored value); `raw`, `last_sent_at`, `updated_at` |
 
 An update that lands on a row the web holds (`processing`) is applied, since n8n is the authority: the lock columns are
 cleared, and the decision request in flight finds its compare-and-set no longer matches (`soar/reviews.py`). An `updated`
 or `reminder` for an unknown id creates the row. `created_at` of the body is n8n's time of the ticket; absent, the first
 `sent_at` stands in, and an update that omits it keeps the stored one. The fields the web owns (`last_error`) are not
-touched. Every request that parsed writes one event, whatever the outcome; a body that did not parse writes none.
+touched. The record of a decision (`decided_by`, `decided_at`, `result`) is kept when a push leaves it null or out: the web writes it on a
+press, and n8n's next push may not carry it; a non-null value replaces it. Every request that parsed writes one event, whatever the outcome; a body that did not parse writes none.
 
 Everything in the body is data: it is stored as text and JSON, and reaches SQL only as a bound parameter.
 """
@@ -573,11 +574,23 @@ def _insert(conn: psycopg.Connection, notice: Notice) -> bool:
     return conn.execute(statement, _params(notice)).fetchone() is not None
 
 
+#: The record of a decision. A push that carries one replaces it; a push that leaves it null or out keeps the stored one, so that
+#: n8n's next `updated` or `reminder` cannot erase who decided, when and with what result (the web writes them on a press).
+_KEPT_WHEN_NULL = ("decided_by", "decided_at", "result")
+
+
 def _update(conn: psycopg.Connection, notice: Notice) -> None:
-    """Every field of the body replaces the stored one; the lock is released: n8n is the authority."""
+    """Every field of the body replaces the stored one, except the three of `_KEPT_WHEN_NULL`, which a null or an absent field
+    leaves as it is; the lock is released: n8n is the authority."""
     assignments = sql.SQL(", ").join(
-        sql.SQL("{} = {}").format(sql.Identifier(name), sql.Placeholder(name))
-        for name in _BODY_COLUMNS
+        (
+            sql.SQL("{name} = COALESCE({value}, {name})").format(
+                name=sql.Identifier(column), value=sql.Placeholder(column)
+            )
+            if column in _KEPT_WHEN_NULL
+            else sql.SQL("{} = {}").format(sql.Identifier(column), sql.Placeholder(column))
+        )
+        for column in _BODY_COLUMNS
     )
     statement = sql.SQL(
         "UPDATE soar_reviews SET {assignments}, created_at = COALESCE(%(created_at)s, created_at), "

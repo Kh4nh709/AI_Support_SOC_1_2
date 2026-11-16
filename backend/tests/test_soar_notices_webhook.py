@@ -496,6 +496,103 @@ def test_a_ticket_delivered_late_with_an_older_created_at_is_received_later(worl
     assert datetime.fromisoformat(two["received_at"]) >= datetime.fromisoformat(one["received_at"])
 
 
+STORED_DECISION = {
+    "decided_by": "alice",
+    "decided_at": data.iso(data.T0 + timedelta(seconds=5)),
+    "result": "giữ chặn",
+}
+NEW_DECISION = {
+    "decided_by": "bob",
+    "decided_at": data.iso(data.T0 + timedelta(seconds=50)),
+    "result": "gỡ chặn",
+}
+
+
+@pytest.mark.parametrize("field", ["decided_by", "decided_at", "result"])
+@pytest.mark.parametrize("how", [MISSING, None], ids=["absent", "null"])
+def test_a_push_that_leaves_a_decision_field_null_or_out_does_not_erase_the_stored_one(
+    world, field, how
+):
+    """The web's record of who decided, when and with what result survives an n8n push that does not carry it: a non-null value
+    replaces the stored one, null or absent keeps it. Every other field keeps the rule 'the push replaces'.
+    """
+    first = data.review(status="kept", **STORED_DECISION)
+    world.post(first)
+    others = {name: value for name, value in NEW_DECISION.items() if name != field}
+    update = data.review(
+        id=first["id"],
+        event="updated",
+        sent_at=_at(30),
+        status="kept",
+        note=None,
+        **others,
+        **{field: how},
+    )
+    assert world.post(update).json() == {"id": first["id"], "created": False}
+    row = world.row(first["id"])
+    for name, stored in STORED_DECISION.items():
+        expected = stored if name == field else NEW_DECISION[name]
+        got = row[name]
+        if name == "decided_at":
+            assert datetime.fromisoformat(got) == datetime.fromisoformat(expected), name
+        else:
+            assert got == expected, name
+    assert row["note"] is None  # any other field: the push replaces it, null included
+    assert row["raw"] == update  # and the body is stored as sent, nulls and all
+
+
+@pytest.mark.parametrize("how", [MISSING, None], ids=["absent", "null"])
+def test_a_push_with_none_of_the_three_decision_fields_keeps_all_three(world, how):
+    first = data.review(status="kept", **STORED_DECISION)
+    world.post(first)
+    update = data.review(
+        id=first["id"],
+        event="reminder",
+        sent_at=_at(30),
+        decided_by=how,
+        decided_at=how,
+        result=how,
+    )
+    world.post(update)
+    row = world.row(first["id"])
+    assert (row["decided_by"], row["result"]) == ("alice", "giữ chặn")
+    assert datetime.fromisoformat(row["decided_at"]) == data.T0 + timedelta(seconds=5)
+
+
+def test_a_non_null_decision_replaces_the_stored_one_and_null_stays_null_when_nothing_is_stored(
+    world,
+):
+    first = data.review()
+    world.post(first)
+    assert world.row(first["id"])["decided_by"] is None
+    world.post(data.review(id=first["id"], sent_at=_at(10), status="kept", **NEW_DECISION))
+    assert world.row(first["id"])["decided_by"] == "bob"
+    world.post(data.review(id=first["id"], sent_at=_at(20), status="kept", decided_by="carol"))
+    row = world.row(first["id"])
+    assert (row["decided_by"], row["result"]) == (
+        "carol",
+        "gỡ chặn",
+    )  # result was not in the last push: kept
+
+
+def test_updated_at_moves_on_a_push_that_is_applied_and_not_on_one_that_is_ignored(world):
+    first = data.review(sent_at=_at(100), status="expired")
+    world.post(first)
+    old = "2026-01-01T00:00:00+00:00"
+    world.execute("UPDATE soar_reviews SET updated_at = %s WHERE id = %s", (old, first["id"]))
+    world.post(data.review(id=first["id"], sent_at=_at(1)))  # stale: ignored
+    world.post(data.review(id=first["id"], sent_at=_at(200), status="open"))  # terminal: ignored
+    assert datetime.fromisoformat(world.row(first["id"])["updated_at"]) == datetime.fromisoformat(
+        old
+    )
+    world.post(
+        data.review(id=first["id"], event="updated", sent_at=_at(300), status="kept")
+    )  # applied
+    assert datetime.fromisoformat(world.row(first["id"])["updated_at"]) > datetime.now(
+        UTC
+    ) - timedelta(minutes=5)
+
+
 def test_an_update_leaves_the_webs_own_last_error_alone(world):
     first = data.review()
     world.post(first)

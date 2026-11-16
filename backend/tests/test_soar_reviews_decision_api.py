@@ -881,6 +881,64 @@ def test_n8ns_own_update_arriving_during_the_call_wins_and_the_press_writes_noth
     assert (event["payload"]["status_before"], event["payload"]["status_after"]) == ("open", "kept")
 
 
+def test_n8ns_next_push_does_not_erase_who_decided_when_it_carries_no_decision(world):
+    """After a press, n8n's own `updated` push may not know who decided (decided_by, decided_at, result null): the web's record
+    of the decision stays."""
+    review_id = world.put()
+    world.fake = FakeN8n(Reply.ok("kept", result="giữ chặn", message="ok"))
+    assert _decide(world, "tier2", review_id, "keep").status_code == 200
+    decided = world.row(review_id)
+    _webhook_update(world, review_id, status="kept", decided_by=None, decided_at=None, result=None)
+    row = world.row(review_id)
+    assert row["decided_by"] == world.users["tier2"][1] == decided["decided_by"]
+    assert row["result"] == "giữ chặn" and row["decided_at"] == decided["decided_at"]
+    assert row["status"] == "kept"
+    assert (
+        row["last_sent_at"] != decided["last_sent_at"]
+    )  # the push was applied: only the three fields are kept
+
+
+OLD_UPDATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "reply,outcome",
+    [
+        (Reply.ok("kept"), "ok"),
+        (Reply.failed("lỗi"), "failed"),
+        (Reply.timeout(), "unavailable"),
+        (Reply.conflict("undone"), "conflict"),
+    ],
+    ids=["ok", "failed", "unavailable", "conflict"],
+)
+def test_updated_at_moves_on_the_lock_and_again_on_each_kind_of_finish(world, reply, outcome):
+    review_id = world.put()
+    world.execute(
+        "UPDATE soar_reviews SET updated_at = %s WHERE id = %s", (OLD_UPDATED_AT, review_id)
+    )
+    during: list[str] = []
+    world.fake = FakeN8n(reply)
+    world.fake.on_request = lambda call: during.append(world.row(review_id)["updated_at"])
+    response = _decide(world, "tier2", review_id, "keep")
+    assert response.json()["outcome"] == outcome
+    locked = datetime.fromisoformat(during[0])
+    finished = datetime.fromisoformat(world.row(review_id)["updated_at"])
+    assert locked > OLD_UPDATED_AT + timedelta(days=100)  # the lock is a write of the row
+    assert finished > locked  # and so is the finish
+    assert response.json()["review"]["updated_at"] == finished.astimezone(UTC).isoformat()
+
+
+def test_a_refused_press_does_not_touch_the_row_so_updated_at_stays(world):
+    held = world.put_locked(by="alice", age_s=5)
+    closed = world.put(status="expired")
+    for review_id in (held, closed):
+        world.execute(
+            "UPDATE soar_reviews SET updated_at = %s WHERE id = %s", (OLD_UPDATED_AT, review_id)
+        )
+        assert _decide(world, "tier2", review_id, "keep").status_code == 409
+        assert datetime.fromisoformat(world.row(review_id)["updated_at"]) == OLD_UPDATED_AT
+
+
 @pytest.mark.parametrize(
     "reply",
     [Reply.failed("lỗi"), Reply.timeout(), Reply.conflict("undone")],
