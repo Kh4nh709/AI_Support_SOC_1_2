@@ -1,0 +1,67 @@
+// src/features/soar/soarParams.test.ts — the view of the page in the URL, and the request each view makes.
+import { soarListPath } from "../../api/soar";
+import { Q_MAX, listQueryOf, readView, viewSearch, viewToParams } from "./soarParams";
+
+const read = (search: string) => readView(new URLSearchParams(search));
+const requestOf = (search: string) =>
+  Object.fromEntries(new URL(soarListPath(listQueryOf(read(search))), "http://x").searchParams);
+const statusesOf = (search: string) =>
+  new URL(soarListPath(listQueryOf(read(search))), "http://x").searchParams.getAll("status");
+
+describe("readView", () => {
+  it("is the open tab, no search, the first page, for no params at all", () => {
+    expect(read("")).toEqual({ tab: "open", q: "", page: 1 });
+  });
+
+  it("reads the four tabs, the search and the page", () => {
+    expect(read("tab=done&q=10.0.0.5&page=3")).toEqual({ tab: "done", q: "10.0.0.5", page: 3 });
+    for (const tab of ["open", "done", "expired", "notice"])
+      expect(read(`tab=${tab}`).tab).toBe(tab);
+  });
+
+  it("drops a tab it does not know, a page that is not a whole number, and a search over 100 characters", () => {
+    expect(read("tab=everything").tab).toBe("open");
+    expect(read("tab=constructor").tab).toBe("open");
+    for (const page of ["0", "-1", "2.5", "abc", "", "99999999"])
+      expect(read(`page=${page}`).page).toBe(1);
+    expect(read(`q=${"x".repeat(150)}`).q).toBe("x".repeat(Q_MAX));
+    expect(read("q=%20%20").q).toBe("");
+  });
+});
+
+describe("viewToParams and viewSearch", () => {
+  it("writes only what differs from the default", () => {
+    expect(viewSearch({ tab: "open", q: "", page: 1 })).toBe("");
+    expect(viewSearch({ tab: "expired", q: "", page: 1 })).toBe("?tab=expired");
+    expect(viewSearch({ tab: "open", q: "AD-server", page: 2 })).toBe("?q=AD-server&page=2");
+    expect(viewToParams({ tab: "notice", q: "", page: 1 }).toString()).toBe("tab=notice");
+  });
+
+  it("round-trips a view", () => {
+    const view = { tab: "done" as const, q: "a b&c", page: 4 };
+    expect(read(viewToParams(view).toString())).toEqual(view);
+  });
+});
+
+describe("the request of each tab", () => {
+  it("Đang mở asks for open and processing", () => {
+    expect(statusesOf("")).toEqual(["open", "processing"]);
+  });
+
+  it("Đã xử lý asks for kept, undone and false_positive", () => {
+    expect(statusesOf("tab=done")).toEqual(["kept", "undone", "false_positive"]);
+  });
+
+  it("Hết hạn asks for expired", () => {
+    expect(statusesOf("tab=expired")).toEqual(["expired"]);
+  });
+
+  it("Thông báo asks for kind=notice and for no status", () => {
+    expect(requestOf("tab=notice")).toEqual({ kind: "notice", page: "1", page_size: "50" });
+  });
+
+  it("sends the search and the page, and nothing for an empty search", () => {
+    expect(requestOf("q=AD-server&page=2")).toMatchObject({ q: "AD-server", page: "2" });
+    expect(requestOf("")).not.toHaveProperty("q");
+  });
+});
