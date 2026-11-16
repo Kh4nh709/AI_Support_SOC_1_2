@@ -40,6 +40,8 @@ export const usernameOf = (who: Who): string => USERNAME[who];
 
 type Secrets = {
   webhook_key: string;
+  /** The key of `POST /webhook/soar-notices` (SOAR_NOTICE_API_KEY of the stack; e2e/soarFixtures.ts). */
+  soar_notice_key: string;
   t1_password: string;
   t2_password: string;
   t2b_password: string;
@@ -68,6 +70,9 @@ function secrets(): Secrets {
 }
 
 const passwordOf = (who: Who): string => secrets()[`${who}_password`];
+
+/** The key n8n sends the SOAR tickets with (`X-API-Key`): for the helpers of e2e/soarFixtures.ts only. */
+export const soarNoticeKey = (): string => secrets().soar_notice_key;
 
 /** The password the admin suite gives the account it creates. */
 export const newUserPassword = (): string => secrets().new_password;

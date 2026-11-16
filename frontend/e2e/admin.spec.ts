@@ -349,15 +349,22 @@ test("scenario 3: a role change ends the user's open session and live socket", a
     ).toBe("t");
     expect(eventCount("admin.user_updated", made.newUserId)).toBeGreaterThanOrEqual(2);
 
-    // The socket is closed by the server (4401, "sign in again": it re-checks the token each minute), and the
-    // page, which did nothing meanwhile, is on the login page.
+    // The socket is closed, and the page, which did nothing meanwhile, is on the login page. Either of two things ends the
+    // session first, and either ends the socket: the server (4401, "sign in again": it re-checks the token each minute), or the
+    // page itself, which asks the API for the count of open SOAR tickets every 30 s for the badge of its header: that call is
+    // refused with a 401 now that the token is dead, the session ends there, and the page closes the socket normally (1000).
+    // Which comes first depends on the minute of the server's check against the poll of the page.
     await expect
-      .poll(async () => (await socketsSeen(own)).closed, {
-        message: "the server closed the user's live socket with 4401",
-        timeout: 85_000,
-        intervals: [1_000],
-      })
-      .toContain(4401);
+      .poll(
+        async () => (await socketsSeen(own)).closed.some((code) => code === 4401 || code === 1000),
+        {
+          message:
+            "the live socket of the user was closed (4401 by the server, or 1000 by the page that met a 401)",
+          timeout: 85_000,
+          intervals: [1_000],
+        },
+      )
+      .toBe(true);
     console.log(
       `role change: the live socket was closed ${Math.round((Date.now() - changed) / 1000)} s later`,
     );
@@ -816,11 +823,13 @@ test("scenario 8: labels one cluster and undoes it on an unfrozen scratch set, t
   expect((again.body as { detail: unknown }).detail).toEqual({ reason: "frozen" });
 
   // ---- Review Focus 5, in the browser: from the first load of the page to here, the only calls to the API were
-  // the three label routes, the shell's own session read (`GET /api/auth/me`) and the live socket (`/api/ws`):
-  // the last two carry nothing about a cluster. No alert, case or queue route was ever asked for.
+  // the three label routes, the shell's own session read (`GET /api/auth/me`), the count of open SOAR tickets the header asks for
+  // (`GET /api/soar/reviews/count`, the badge of the link "Phản hồi SOAR") and the live socket (`/api/ws`): the last three carry
+  // nothing about a cluster. No alert, case or queue route was ever asked for.
   expect([...new Set(calls())].sort()).toEqual([
     "GET /api/admin/labels/next",
     "GET /api/auth/me",
+    "GET /api/soar/reviews/count",
     "POST /api/admin/labels",
     "POST /api/admin/labels/undo",
     "WS /api/ws",

@@ -252,9 +252,11 @@ test("an admin records a lab run, labels two of its alerts, reloads and sees bot
 
   // ... and not in what the browser received: only the lab routes were read, and no key of ① is in their answers.
   const answers = await traffic.answers();
-  // (`/api/auth/me` is the app asking who the session is after the reload, not a page's read.)
+  // (`/api/auth/me` is the app asking who the session is after the reload, not a page's read; nor is the count of open SOAR
+  // tickets of the header, which every signed-in page asks for every 30 s for the badge of the link "Phản hồi SOAR": it carries
+  // no alert and no key of ①.)
   const paths = [...new Set(answers.map((x) => x.path.split("?")[0] as string))].filter(
-    (path) => path !== "/api/auth/me",
+    (path) => path !== "/api/auth/me" && path !== "/api/soar/reviews/count",
   );
   expect(paths.length).toBeGreaterThan(2);
   for (const path of paths) {

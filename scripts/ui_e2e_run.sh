@@ -2,7 +2,8 @@
 # ui_e2e_run.sh [playwright args...] — what `make ui-e2e` runs (P10-T12): the Playwright suite on the scratch
 # stack, then a scan of everything the run left behind for the run's own secrets.
 #
-# The run's secrets (the signing key, the webhook key, the passwords of the seeded users, the two seeded admins
+# The run's secrets (the signing key, the webhook key, the key of the SOAR notice webhook, the secret the web sends to the
+# stand-in of n8n, the passwords of the seeded users, the two seeded admins
 # and the account the admin suite creates) are made here and
 # handed to the stack and to the fixtures by the environment, so that this script can search for them
 # afterwards: in frontend/test-results, in frontend/playwright-report and in the run's own output (captured
@@ -42,8 +43,11 @@ E2E_T2B_PASSWORD="$(gen 16)"
 E2E_ADMIN_PASSWORD="$(gen 16)"
 E2E_ADMIN2_PASSWORD="$(gen 16)"
 E2E_NEWUSER_PASSWORD="$(gen 16)"
+E2E_SOAR_NOTICE_API_KEY="$(gen 24)"
+E2E_N8N_APPROVAL_SECRET="$(gen 24)"
 export E2E_JWT_SECRET E2E_WEBHOOK_API_KEY E2E_T1_PASSWORD E2E_T2_PASSWORD E2E_T2B_PASSWORD \
-  E2E_ADMIN_PASSWORD E2E_ADMIN2_PASSWORD E2E_NEWUSER_PASSWORD
+  E2E_ADMIN_PASSWORD E2E_ADMIN2_PASSWORD E2E_NEWUSER_PASSWORD \
+  E2E_SOAR_NOTICE_API_KEY E2E_N8N_APPROVAL_SECRET
 
 # The password of the test cluster, for the scan only (never exported to the run): it is in the stack's
 # environment and in a mode-600 file of the run, and a failing helper could print it.
