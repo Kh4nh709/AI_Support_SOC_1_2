@@ -78,6 +78,9 @@ export type SoarReview = {
   locked_by: string | null;
   locked_at: string | null;
   last_sent_at: string | null;
+  /** The clock of the web when it first stored the row; never changed. */
+  received_at: string | null;
+  /** Moves on every write of the row (a webhook update, the lock, the finish). */
   updated_at: string | null;
   /** For THIS caller: valid for the state AND allowed for the role. */
   allowed_decisions: SoarDecision[];
@@ -94,7 +97,11 @@ export type SoarListResponse = {
 };
 
 /** `GET /api/soar/reviews/count`. */
-export type SoarCountResponse = { count: number; latest_created_at: string | null };
+/**
+ * `GET /api/soar/reviews/count`. `latest_received_at` is the clock of the WEB at the first arrival of the newest open
+ * review (the `created_at` of n8n can be older than a ticket already shown when a delivery is late): the signal compares it.
+ */
+export type SoarCountResponse = { count: number; latest_received_at: string | null };
 
 /** One event of a review's history: an audit event whose subject is the review's id. */
 export type SoarHistoryEvent = {

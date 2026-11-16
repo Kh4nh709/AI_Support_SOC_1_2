@@ -484,7 +484,7 @@ describe("with the real AuthProvider", () => {
 describe("the SOAR page (SR-T2)", () => {
   const count = (n: number) =>
     http.get("/api/soar/reviews/count", () =>
-      HttpResponse.json({ count: n, latest_created_at: "2026-11-16T01:00:00+00:00" }),
+      HttpResponse.json({ count: n, latest_received_at: "2026-11-16T01:00:00+00:00" }),
     );
 
   it.each<Session["role"]>(["tier1", "tier2", "admin"])("lets %s open /soar", async (role) => {
@@ -502,7 +502,7 @@ describe("the SOAR page (SR-T2)", () => {
     server.use(
       http.get("/api/soar/reviews/count", () => {
         asked += 1;
-        return HttpResponse.json({ count: 1, latest_created_at: null });
+        return HttpResponse.json({ count: 1, latest_received_at: null });
       }),
     );
     renderAt("/soar", null);

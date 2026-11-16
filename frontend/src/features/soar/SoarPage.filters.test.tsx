@@ -53,7 +53,7 @@ describe("the filters", () => {
     expect(url.searchParams.getAll("status")).toEqual(["open", "processing"]);
     expect(url.searchParams.get("page")).toBe("1");
     expect(url.searchParams.get("page_size")).toBe("50");
-    expect(url.searchParams.has("kind")).toBe(false);
+    expect(url.searchParams.get("kind")).toBe("review");
   });
 
   it("Đã xử lý asks for kept, undone and false_positive, and puts tab=done in the URL", async () => {

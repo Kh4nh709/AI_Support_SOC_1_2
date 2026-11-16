@@ -465,7 +465,7 @@ describe("the page itself", () => {
   it("never asks for a status of the closed set it does not know, and is not broken by an empty answer body", async () => {
     server.use(
       http.get("/api/soar/reviews/count", () =>
-        HttpResponse.json({ count: 0, latest_created_at: null }),
+        HttpResponse.json({ count: 0, latest_received_at: null }),
       ),
       http.get("/api/soar/reviews", () =>
         HttpResponse.json({ rows: [], total: 0, page: 1, page_size: 50 }),

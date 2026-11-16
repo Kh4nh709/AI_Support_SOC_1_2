@@ -68,10 +68,10 @@ describe("the routes", () => {
   });
 
   it("fetches the count from /api/soar/reviews/count", async () => {
-    const spy = fakeFetch({ count: 3, latest_created_at: "2026-11-16T01:00:00+00:00" });
+    const spy = fakeFetch({ count: 3, latest_received_at: "2026-11-16T01:00:00+00:00" });
     await expect(fetchSoarCount()).resolves.toEqual({
       count: 3,
-      latest_created_at: "2026-11-16T01:00:00+00:00",
+      latest_received_at: "2026-11-16T01:00:00+00:00",
     });
     expect(String(spy.mock.calls[0]?.[0])).toBe("/api/soar/reviews/count");
   });

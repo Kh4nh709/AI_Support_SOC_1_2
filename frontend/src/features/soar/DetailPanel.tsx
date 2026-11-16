@@ -104,6 +104,7 @@ function fieldsOf(r: SoarReviewDetail): KeyValueItem[] {
     { label: F.lockedBy, value: text(r.locked_by) },
     { label: F.lockedAt, value: time(r.locked_at) },
     { label: F.lastSentAt, value: time(r.last_sent_at) },
+    { label: F.receivedAt, value: time(r.received_at) },
     { label: F.updatedAt, value: time(r.updated_at) },
     { label: F.buttons, value: buttons.length > 0 ? buttons.join(D.listSeparator) : null },
     { label: F.allowed, value: allowed.length > 0 ? allowed.join(D.listSeparator) : null },

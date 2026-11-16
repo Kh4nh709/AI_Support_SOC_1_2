@@ -198,7 +198,7 @@ describe("the new-ticket signal", () => {
     expect(FakeNotification.shown).toEqual([]);
   });
 
-  it("plays a tone and shows a notification, carrying only the count, when latest_created_at moves forward", async () => {
+  it("plays a tone and shows a notification, carrying only the count, when latest_received_at moves forward", async () => {
     turnSignalOn();
     serveCounts(countOf(1, T1), countOf(2, T2));
     renderBadge();

@@ -177,10 +177,12 @@ describe("the fields", () => {
       [F.result, "Đã gỡ chặn"],
       [F.lastError, "Lần trước hết giờ"],
       [F.lastSentAt, "13/11/2026 21:40:05"],
+      [F.receivedAt, "13/11/2026 21:40:05"],
       [F.updatedAt, "13/11/2026 21:40:05"],
       [F.buttons, "✅ Giữ chặn, ↩️ Gỡ chặn IP"],
       [F.strong, S.soar.detail.yes],
     ];
+    expect(F.receivedAt).toBe("Web nhận lúc");
     for (const [label, value] of expected) {
       expect(field(panel, label), label).toHaveTextContent(value);
     }

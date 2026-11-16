@@ -60,6 +60,13 @@ describe("the request of each tab", () => {
     expect(requestOf("tab=notice")).toEqual({ kind: "notice", page: "1", page_size: "50" });
   });
 
+  it("sends kind=review on the three review tabs, so a notice never shows among tickets, and not on the notices tab's own", () => {
+    for (const search of ["", "tab=done", "tab=expired"]) {
+      expect(requestOf(search), search).toMatchObject({ kind: "review" });
+    }
+    expect(requestOf("tab=notice")).toMatchObject({ kind: "notice" });
+  });
+
   it("sends the search and the page, and nothing for an empty search", () => {
     expect(requestOf("q=AD-server&page=2")).toMatchObject({ q: "AD-server", page: "2" });
     expect(requestOf("")).not.toHaveProperty("q");

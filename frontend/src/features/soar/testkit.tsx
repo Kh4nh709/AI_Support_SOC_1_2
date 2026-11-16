@@ -52,7 +52,7 @@ export function fake(over: Partial<Pick<Fake, "rows" | "notices">> = {}): Fake {
 export function serve(server: SetupServer, state: Fake): void {
   server.use(
     http.get("/api/soar/reviews/count", () =>
-      HttpResponse.json({ count: 0, latest_created_at: null }),
+      HttpResponse.json({ count: 0, latest_received_at: null }),
     ),
     http.get("/api/soar/reviews", async ({ request }) => {
       const url = new URL(request.url);

@@ -2785,6 +2785,7 @@ export const S = {
         lockedBy: "Đang được xử lý bởi",
         lockedAt: "Khoá lúc",
         lastSentAt: "SOAR gửi lúc",
+        receivedAt: "Web nhận lúc",
         updatedAt: "Cập nhật lúc",
         buttons: "Các nút SOAR gửi",
         allowed: "Bạn được phép",

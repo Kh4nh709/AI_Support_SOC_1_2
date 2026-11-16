@@ -50,8 +50,12 @@ const TAB_STATUSES: Record<Exclude<Tab, "notice">, readonly string[]> = {
 
 export function listQueryOf(view: SoarView): SoarListQuery {
   const query: SoarListQuery = { page: view.page };
+  // `kind` is sent on every tab: a notice has the status `info`, but no status filter may let one in among the tickets.
   if (view.tab === "notice") query.kind = "notice";
-  else query.status = TAB_STATUSES[view.tab];
+  else {
+    query.kind = "review";
+    query.status = TAB_STATUSES[view.tab];
+  }
   if (view.q !== "") query.q = view.q;
   return query;
 }

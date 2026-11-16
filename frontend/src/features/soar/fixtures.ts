@@ -46,6 +46,7 @@ export function review(over: Partial<SoarReview> = {}): SoarReview {
     locked_by: null,
     locked_at: null,
     last_sent_at: "2026-11-13T14:40:05+00:00",
+    received_at: "2026-11-13T14:40:05+00:00",
     updated_at: "2026-11-13T14:40:05+00:00",
     allowed_decisions: ["keep", "undo"],
     strong_warning: false,
@@ -83,7 +84,7 @@ export function listOf(rows: SoarReview[], over: Partial<SoarListResponse> = {})
 }
 
 export function countOf(count: number, latest: string | null = null): SoarCountResponse {
-  return { count, latest_created_at: latest };
+  return { count, latest_received_at: latest };
 }
 
 /** The review beside the history, the alerts of its case and the last body n8n sent. */
