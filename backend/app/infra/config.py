@@ -12,6 +12,7 @@ extractor of §6.3's key set, DEC-027); derived values such as `llm_enabled` are
 from __future__ import annotations
 
 import dataclasses
+import ipaddress
 import json
 import os
 import re
@@ -46,6 +47,11 @@ _SECRET_FIELDS = frozenset(
         "DATABASE_URL",
         "DATABASE_URL_OWNER",
         "TEST_DATABASE_URL",
+        # SR-T1 (SOAR review tickets on the web): the key n8n posts a ticket with, and the secret the web calls n8n
+        # back with. `N8N_APPROVAL_URL` is not one: it is an address (the lab's n8n), and the client never logs
+        # its query.
+        "SOAR_NOTICE_API_KEY",
+        "N8N_APPROVAL_SECRET",
     }
 )
 
@@ -59,6 +65,15 @@ _LLM_RESPONSE_FORMAT_VALUES = ("json_object", "json_schema")
 # P14-T04 / DEC-213: the sizes Voyage serves for a `voyage-4` embedding (Matryoshka). The vector column
 # of `vectordb` is created at the configured size, so any other number must stop the start-up.
 _RAG_EMBED_DIMS_VALUES = (256, 512, 1024, 2048)
+
+# SR-T1: the roles a SOAR review decision may be allowed to (`SOAR_ROLES_*`), the users' own three. A closed set: an
+# unknown role stops the start-up, because a typo here would silently leave a button with nobody allowed to press it.
+_SOAR_ROLE_VALUES = ("tier1", "tier2", "admin")
+
+# SR-T1: the ceiling of `N8N_APPROVAL_TIMEOUT_SECONDS`. A decision locks the ticket, then calls n8n; a lock older than
+# two minutes is taken to be abandoned and released by the next press (`soar/reviews.py` LOCK_STALE_SECONDS = 120). The
+# call must be over well before that, or a live call would look like a stale lock and n8n be asked twice.
+_N8N_TIMEOUT_MAX_S = 100
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -127,6 +142,46 @@ def _parse_json_list(key: str, raw: str, item_type: type) -> list:
     if not valid:
         raise ConfigError(f"{key}: must be a JSON list of {item_type.__name__}: {raw!r}")
     return value
+
+
+def _parse_roles(key: str, raw: str) -> list[str]:
+    """A comma list of `tier1`, `tier2`, `admin` (SR-T1), spaces around an item allowed, a repeat kept once, in
+    the order written. Any other item, an empty one included, stops the start-up naming `key`."""
+    roles: list[str] = []
+    for item in (part.strip() for part in raw.split(",")):
+        if item not in _SOAR_ROLE_VALUES:
+            allowed = "|".join(_SOAR_ROLE_VALUES)
+            raise ConfigError(f"{key}: must be a comma list of {allowed}, got {raw!r}")
+        if item not in roles:
+            roles.append(item)
+    return roles
+
+
+def _parse_ip_allowlist(key: str, raw: str) -> list[str]:
+    """A JSON list of IP addresses and CIDR ranges (SR-T1). `WEBHOOK_IP_ALLOWLIST` skips an entry it cannot read
+    at request time, which denies silently; this one names it at the start."""
+    entries = _parse_json_list(key, raw, str)
+    for entry in entries:
+        try:
+            ipaddress.ip_network(entry, strict=False)
+        except ValueError as exc:
+            raise ConfigError(f"{key}: not an IP address or a CIDR range: {entry!r}") from exc
+    return entries
+
+
+def _parse_timeout_seconds(key: str, raw: str, ceiling: int) -> int:
+    """An integer from 1 to `ceiling` (SR-T1). Anything else stops the start-up naming `key`, never clamped."""
+    value = _parse_int(key, raw)
+    if not 1 <= value <= ceiling:
+        raise ConfigError(f"{key}: must be an integer from 1 to {ceiling}, got {raw!r}")
+    return value
+
+
+def _parse_http_url(key: str, raw: str) -> str:
+    """An `http://` or `https://` address (SR-T1). The value is not echoed: a URL may carry a token in its query."""
+    if not raw.lower().startswith(("http://", "https://")):
+        raise ConfigError(f"{key}: must start with http:// or https://")
+    return raw
 
 
 def _parse_enum(key: str, raw: str, allowed: tuple[str, ...]) -> str:
@@ -272,6 +327,26 @@ class Config:
     # `false_positive` whatever the model said (`security.gate.step3r_rag_rule`). 0 (the default) is off: the
     # rule never applies and a run is exactly what it was before the key existed. `.env` key only.
     TRIAGE_RAG_FP_BELOW_PCT: int = 0
+    # SR-T1 (SOAR review tickets on the web, spec 2026-11-16 §6), `.env` keys only. SOAR_NOTICE_API_KEY: the key n8n
+    # sends as `X-API-Key` to `POST /webhook/soar-notices`; empty answers 503 (a secret). SOAR_NOTICE_IP_ALLOWLIST: a
+    # JSON list of IPs and CIDRs allowed to post it; empty denies all. N8N_APPROVAL_URL / N8N_APPROVAL_SECRET: where the
+    # web calls n8n back when a person presses a button, and the `X-SOAR-Secret` it sends (a secret); either empty means
+    # "not configured" and the decision route answers 503 before it locks anything. N8N_APPROVAL_TIMEOUT_SECONDS: 1..100
+    # (`_N8N_TIMEOUT_MAX_S`). SOAR_ROLES_KEEP / _UNDO / _FP: the roles allowed each decision. SOAR_AD_HOSTS: the hosts
+    # (a JSON list, compared without case) whose isolation gets the strong warning.
+    SOAR_NOTICE_API_KEY: str = ""
+    SOAR_NOTICE_IP_ALLOWLIST: list[str] = dataclasses.field(default_factory=list)
+    N8N_APPROVAL_URL: str = "http://79.79.79.14:5678/webhook/soar-approval"
+    N8N_APPROVAL_SECRET: str = ""
+    N8N_APPROVAL_TIMEOUT_SECONDS: int = 45
+    SOAR_ROLES_KEEP: list[str] = dataclasses.field(
+        default_factory=lambda: ["tier1", "tier2", "admin"]
+    )
+    SOAR_ROLES_UNDO: list[str] = dataclasses.field(default_factory=lambda: ["tier2", "admin"])
+    SOAR_ROLES_FP: list[str] = dataclasses.field(
+        default_factory=lambda: ["tier1", "tier2", "admin"]
+    )
+    SOAR_AD_HOSTS: list[str] = dataclasses.field(default_factory=lambda: ["AD-server"])
 
     @property
     def llm_enabled(self) -> bool:
@@ -334,6 +409,10 @@ def load(*, env_file: str | Path = ".env") -> Config:
         value = raw(key)
         return default if value is None else _parse_bool(key, value)
 
+    def as_roles(key: str, default: list[str]) -> list[str]:
+        value = raw(key)
+        return list(default) if value is None else _parse_roles(key, value)
+
     llm_model_proposer = as_str("LLM_MODEL_PROPOSER", "")
     verifier_raw = raw("LLM_MODEL_VERIFIER")
     llm_model_verifier = llm_model_proposer if verifier_raw is None else verifier_raw
@@ -361,6 +440,25 @@ def load(*, env_file: str | Path = ".env") -> Config:
             f"0 <= RAG_MIN_SCORE ({rag_min_score}) <= RAG_LEVEL_GIONG ({rag_level_giong}) <= "
             f"RAG_LEVEL_RAT_GIONG ({rag_level_rat_giong}) <= 1 does not hold"
         )
+
+    raw_allowlist = raw("SOAR_NOTICE_IP_ALLOWLIST")
+    soar_notice_ip_allowlist = (
+        []
+        if raw_allowlist is None
+        else _parse_ip_allowlist("SOAR_NOTICE_IP_ALLOWLIST", raw_allowlist)
+    )
+    raw_url = raw("N8N_APPROVAL_URL")
+    n8n_approval_url = (
+        "http://79.79.79.14:5678/webhook/soar-approval"
+        if raw_url is None
+        else _parse_http_url("N8N_APPROVAL_URL", raw_url)
+    )
+    raw_timeout = raw("N8N_APPROVAL_TIMEOUT_SECONDS")
+    n8n_approval_timeout = (
+        45
+        if raw_timeout is None
+        else _parse_timeout_seconds("N8N_APPROVAL_TIMEOUT_SECONDS", raw_timeout, _N8N_TIMEOUT_MAX_S)
+    )
 
     return Config(
         DATABASE_URL=as_str("DATABASE_URL", ""),
@@ -452,4 +550,13 @@ def load(*, env_file: str | Path = ".env") -> Config:
         VOYAGE_PRICE_RERANK_PER_M=as_float("VOYAGE_PRICE_RERANK_PER_M", 0.05),
         VECTOR_DATABASE_URL=as_str("VECTOR_DATABASE_URL", ""),
         TRIAGE_RAG_FP_BELOW_PCT=as_percent("TRIAGE_RAG_FP_BELOW_PCT", 0),
+        SOAR_NOTICE_API_KEY=as_str("SOAR_NOTICE_API_KEY", ""),
+        SOAR_NOTICE_IP_ALLOWLIST=soar_notice_ip_allowlist,
+        N8N_APPROVAL_URL=n8n_approval_url,
+        N8N_APPROVAL_SECRET=as_str("N8N_APPROVAL_SECRET", ""),
+        N8N_APPROVAL_TIMEOUT_SECONDS=n8n_approval_timeout,
+        SOAR_ROLES_KEEP=as_roles("SOAR_ROLES_KEEP", ["tier1", "tier2", "admin"]),
+        SOAR_ROLES_UNDO=as_roles("SOAR_ROLES_UNDO", ["tier2", "admin"]),
+        SOAR_ROLES_FP=as_roles("SOAR_ROLES_FP", ["tier1", "tier2", "admin"]),
+        SOAR_AD_HOSTS=as_json_list("SOAR_AD_HOSTS", ["AD-server"], str),
     )
