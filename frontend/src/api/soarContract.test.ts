@@ -53,6 +53,32 @@ function pyFunction(source: string, name: string): string {
   return end === -1 ? rest : rest.slice(0, end);
 }
 
+/** Python code with its comments and string literals blanked, in one pass so a `#` or a quote inside the other is not mistaken. */
+function pyCode(source: string): string {
+  return source.replace(
+    /"""[\s\S]*?"""|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|#[^\n]*/g,
+    (found) => (found.startsWith("#") ? "" : '""'),
+  );
+}
+
+/**
+ * The ways Python code can add keys to a dict that the readers of this file (`review["name"] =` in serve, `review["name"]` in
+ * get_detail) cannot see. The guard over the served keys reads those two forms only; a key added in any of these would be served
+ * and held against nothing, so the forms themselves are refused where the keys are built.
+ */
+const KEYS_THE_READERS_CANNOT_SEE: ReadonlyArray<readonly [string, RegExp]> = [
+  [".update(", /\.update\s*\(/],
+  ["setdefault(", /\bsetdefault\s*\(/],
+  ["** unpacking", /\*\*/],
+  ["|= merge", /\|=/],
+];
+
+/** The forms of KEYS_THE_READERS_CANNOT_SEE that the code of `body` (comments and strings aside) uses. */
+function unreadableKeyForms(body: string): string[] {
+  const code = pyCode(body);
+  return KEYS_THE_READERS_CANNOT_SEE.filter(([, form]) => form.test(code)).map(([name]) => name);
+}
+
 /** The property names of the TypeScript type `name` of api/soar.ts (one level: a nested `{` is skipped). */
 function tsKeys(name: string): string[] {
   const open = tsApi.indexOf("{", tsApi.indexOf(`export type ${name} =`));
@@ -143,6 +169,53 @@ describe("the detail", () => {
   it("serves the actor as a username or null and the role as tier1, tier2, admin or system (the page reads both)", () => {
     expect(pyWords(reviewsPy, "_PAYLOAD_ROLES")).toEqual(["tier1", "tier2", "admin"]);
     expect(pyFunction(reviewsPy, "_history")).toContain("a.actor_role");
+  });
+});
+
+describe("the readers of the served keys see every key (the guard fails closed)", () => {
+  const HOW =
+    'add a key of the review as review["name"] = … in serve() (or its name to _SERVED_NAMES), a key of the detail as ' +
+    'review["name"] = … in get_detail(): .update(, setdefault(, ** and |= add keys that this guard cannot read, so a key ' +
+    "added that way would be served and compared with nothing";
+
+  it.each(["serve", "get_detail"])(
+    "builds the keys of %s() in the two forms the guard reads",
+    (name) => {
+      expect(unreadableKeyForms(pyFunction(reviewsPy, name)), HOW).toEqual([]);
+    },
+  );
+
+  // A function of the shape of serve(), whose words in comments, docstring and strings are the forms the guard refuses.
+  const PLAIN = [
+    "def serve(row, role, cfg):",
+    '    """Not review.update(x), setdefault( or **."""',
+    "    # review.update(x) and {**review} are what is refused",
+    '    review = dict(zip(NAMES, row, strict=True))  # a "#" in a comment, and a quote \'',
+    '    review["a"] = "setdefault( ** |= .update("',
+    "    return review",
+  ].join("\n");
+
+  it("refuses each form that adds a key unseen (mutants of a function of the shape of serve)", () => {
+    const mutants: Array<[string, string]> = [
+      [".update(", '    review.update(extra="x")\n    return review'],
+      ["setdefault(", '    review.setdefault("extra", "x")\n    return review'],
+      ["** unpacking", '    review = {**review, "extra": "x"}\n    return review'],
+      ["|= merge", '    review |= {"extra": "x"}\n    return review'],
+    ];
+    for (const [form, line] of mutants) {
+      const mutant = PLAIN.replace("    return review", line);
+      expect(mutant, form).not.toBe(PLAIN);
+      // the reader of serve() does not see the key this mutant adds: that is what the refusal is for
+      expect([...mutant.matchAll(/review\["(\w+)"\]\s*=/g)].map((m) => m[1])).not.toContain(
+        "extra",
+      );
+      expect(unreadableKeyForms(mutant), form).toEqual([form]);
+    }
+  });
+
+  it("is not tripped by the words in a comment, a docstring or a string, and reads a key built the plain way", () => {
+    expect(unreadableKeyForms(PLAIN)).toEqual([]);
+    expect(unreadableKeyForms(`${PLAIN}\n    review.update(b=1)`)).toEqual([".update("]);
   });
 });
 
