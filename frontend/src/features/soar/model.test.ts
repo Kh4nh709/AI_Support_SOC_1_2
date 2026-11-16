@@ -139,18 +139,29 @@ describe("timersOf at fixed clocks", () => {
     expect(timersOf(row, at("2026-11-13T15:40:03+00:00")).expiry).toEqual({ kind: "past" });
   });
 
-  it("shows nothing for a past time on a row that is no longer open, nor any countdown on a decided one", () => {
+  it("shows nothing for a past time on a row that is not open, and no countdown on a row that has ended", () => {
     const past = "2026-11-13T15:40:03+00:00";
     const later = at("2026-11-13T16:00:00+00:00");
+    const before = at("2026-11-13T14:00:00+00:00");
     for (const status of ["kept", "undone", "false_positive", "expired"] as const) {
-      expect(timersOf(review({ status, auto_expire_at: past }), later).expiry).toBeNull();
-      expect(
-        timersOf(review({ status, auto_expire_at: past }), at("2026-11-13T14:00:00+00:00")).expiry,
-      ).toBeNull();
+      expect(timersOf(review({ status, auto_expire_at: past }), later).expiry, status).toBeNull();
+    }
+    for (const status of ["undone", "false_positive", "expired"] as const) {
+      expect(timersOf(review({ status, auto_expire_at: past }), before).expiry, status).toBeNull();
     }
     expect(
       timersOf(review({ status: "processing", auto_expire_at: past }), later).expiry,
     ).toBeNull();
+  });
+
+  it("counts down for a kept ticket too while auto_expire_at is ahead (the page shows what n8n says), but never says it is waiting to be closed", () => {
+    const row = review({ status: "kept", auto_expire_at: "2026-11-13T15:40:03+00:00" });
+    expect(timersOf(row, at("2026-11-13T14:40:05+00:00")).expiry).toEqual({
+      kind: "ahead",
+      clock: "22:40",
+      left: "59:58",
+    });
+    expect(timersOf(row, at("2026-11-13T15:40:04+00:00")).expiry).toBeNull();
   });
 
   it("shows nothing without a time, with an unreadable one, and for a notice", () => {

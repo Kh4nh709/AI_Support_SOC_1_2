@@ -90,6 +90,8 @@ export type Timers = {
   hold: { minutes: number; due: boolean } | null;
 };
 
+/** The states in which the countdown to the auto-undo shows (the page shows what n8n says; "waiting to be closed" is `open` only). */
+const COUNTING = new Set(["open", "processing", "kept"]);
 const HELD_ACTIONS: readonly SoarActionType[] = ["isolate_host", "disable_user"];
 /** The states in which the measure is still on: an undone or expired ticket holds nothing. */
 const HOLDING = new Set(["open", "processing", "kept"]);
@@ -108,7 +110,7 @@ export function timersOf(review: SoarReview, nowMs: number): Timers {
   if (review.kind !== "review") return { expiry: null, hold: null };
   let expiry: Timers["expiry"] = null;
   const expireAt = timeOf(review.auto_expire_at);
-  if (expireAt !== null && (review.status === "open" || review.status === "processing")) {
+  if (expireAt !== null && COUNTING.has(review.status)) {
     if (expireAt > nowMs) {
       expiry = {
         kind: "ahead",

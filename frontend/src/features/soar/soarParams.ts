@@ -16,13 +16,25 @@ const MAX_PAGE = 1_000_000;
 const isTab = (value: string | null): value is Tab =>
   value !== null && (TABS as readonly string[]).includes(value);
 
+/**
+ * What the search box means: trimmed, a leading `#` (and the spaces around it) dropped so that "#65" searches case 65, and
+ * at most 100 characters. Only a LEADING `#` goes: one inside the text is part of it.
+ */
+export function cleanQuery(text: string): string {
+  return text
+    .trim()
+    .replace(/^(?:#\s*)+/, "")
+    .trim()
+    .slice(0, Q_MAX);
+}
+
 export function readView(params: URLSearchParams): SoarView {
   const tab = params.get("tab");
   const raw = params.get("page") ?? "";
   const page = /^[1-9]\d{0,6}$/.test(raw) ? Number(raw) : 1;
   return {
     tab: isTab(tab) ? tab : "open",
-    q: (params.get("q") ?? "").trim().slice(0, Q_MAX),
+    q: cleanQuery(params.get("q") ?? ""),
     page: Math.min(page, MAX_PAGE),
   };
 }

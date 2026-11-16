@@ -151,6 +151,17 @@ describe("the search", () => {
     expect(lastList(state).searchParams.get("page")).toBe("1");
   });
 
+  it("strips a leading # on submit: #65 searches case 65, in the request and in the URL", async () => {
+    const state = fake({ rows: [review()] });
+    serve(server, state);
+    renderSoar();
+    const box = await screen.findByRole("searchbox", { name: S.soar.search.label });
+    await userEvent.type(box, "#65{Enter}");
+    expect(where()).toBe("/soar?q=65");
+    await waitFor(() => expect(lastList(state).searchParams.get("q")).toBe("65"));
+    expect(screen.getByRole("searchbox", { name: S.soar.search.label })).toHaveValue("65");
+  });
+
   it("does not ask for every half-typed word", async () => {
     const state = fake({ rows: [review()] });
     serve(server, state);

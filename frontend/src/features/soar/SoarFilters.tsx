@@ -5,7 +5,7 @@
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { S } from "../../strings";
-import { Q_MAX, TABS, viewSearch, type SoarView } from "./soarParams";
+import { Q_MAX, TABS, cleanQuery, viewSearch, type SoarView } from "./soarParams";
 
 const TAB =
   "border-b-2 px-3 py-2 text-sm whitespace-nowrap focus-visible:outline-2 focus-visible:outline-text";
@@ -35,7 +35,7 @@ export function SearchForm({ view, onSearch }: { view: SoarView; onSearch: (q: s
   const [draft, setDraft] = useState(view.q);
   const send = (event: FormEvent) => {
     event.preventDefault();
-    onSearch(draft.trim().slice(0, Q_MAX));
+    onSearch(cleanQuery(draft));
   };
   return (
     <form role="search" onSubmit={send} className="flex flex-wrap items-end gap-3">

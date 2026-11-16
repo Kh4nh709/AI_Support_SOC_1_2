@@ -343,7 +343,7 @@ describe("the timers at fixed clocks", () => {
     expect(within(row).getByRole("button", { name: "✅ Giữ chặn" })).toBeEnabled();
   });
 
-  it("shows no timer for a ticket that is kept, whatever its time", async () => {
+  it("counts down for a kept ticket while its time is ahead, and says nothing once it is past (it is not open)", async () => {
     serve(
       server,
       fake({
@@ -363,10 +363,10 @@ describe("the timers at fixed clocks", () => {
       }),
     );
     renderSoar({ entry: "/soar?tab=done" });
-    for (const id of ["K7QM2XHP", "B2"]) {
-      const row = await rowOf(id);
-      expect(within(row).queryByText(/Tự gỡ lúc|Chờ SOAR đóng phiếu/)).not.toBeInTheDocument();
-    }
+    const ahead = await rowOf("K7QM2XHP");
+    expect(within(ahead).getByText("Tự gỡ lúc 22:40 · còn 58:58")).toBeInTheDocument();
+    const past = await rowOf("B2");
+    expect(within(past).queryByText(/Tự gỡ lúc|Chờ SOAR đóng phiếu/)).not.toBeInTheDocument();
   });
 
   it("says an isolation is held, with the interval, and does not highlight it before the reminder is due", async () => {

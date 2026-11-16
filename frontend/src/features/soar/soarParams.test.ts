@@ -1,6 +1,6 @@
 // src/features/soar/soarParams.test.ts — the view of the page in the URL, and the request each view makes.
 import { soarListPath } from "../../api/soar";
-import { Q_MAX, listQueryOf, readView, viewSearch, viewToParams } from "./soarParams";
+import { Q_MAX, cleanQuery, listQueryOf, readView, viewSearch, viewToParams } from "./soarParams";
 
 const read = (search: string) => readView(new URLSearchParams(search));
 const requestOf = (search: string) =>
@@ -26,6 +26,25 @@ describe("readView", () => {
       expect(read(`page=${page}`).page).toBe(1);
     expect(read(`q=${"x".repeat(150)}`).q).toBe("x".repeat(Q_MAX));
     expect(read("q=%20%20").q).toBe("");
+  });
+});
+
+describe("a leading # of the search is not part of it (#65 searches case 65)", () => {
+  it("is stripped when the URL is read, with the spaces around it", () => {
+    expect(read("q=%2365").q).toBe("65");
+    expect(read("q=%23%2065%20").q).toBe("65");
+    expect(read("q=%23%2365").q).toBe("65");
+    expect(read("q=%23").q).toBe("");
+    // only a LEADING one: a # inside the text is kept
+    expect(read("q=a%2365").q).toBe("a#65");
+  });
+
+  it("is stripped from what the form sends, so the request and the URL carry 65", () => {
+    expect(cleanQuery("#65")).toBe("65");
+    expect(cleanQuery("  # 65  ")).toBe("65");
+    expect(cleanQuery("#")).toBe("");
+    expect(cleanQuery("x".repeat(150))).toBe("x".repeat(Q_MAX));
+    expect(requestOf("q=%2365")).toMatchObject({ q: "65" });
   });
 });
 
