@@ -435,6 +435,11 @@ describe("the alerts of the same case", () => {
     expect(items[0]).toHaveTextContent("13/11 21:30");
     expect(items[0]).toHaveTextContent("agent-1");
     expect(items[0]).toHaveTextContent("Chờ xử lý");
+    // m9: the severity and the number of occurrences, in the product's words
+    expect(within(items[0] as HTMLElement).getByText("Mức Cao")).toBeInTheDocument();
+    expect(within(items[0] as HTMLElement).getByText("2 lần xuất hiện")).toBeInTheDocument();
+    expect(S.soar.detail.related.severity("Cao")).toBe("Mức Cao");
+    expect(S.soar.detail.related.occurrences(2)).toBe("2 lần xuất hiện");
     expect(items[1]).toHaveTextContent("Đã đóng — dương tính giả");
   });
 
@@ -460,7 +465,10 @@ describe("the alerts of the same case", () => {
     serve(server, state);
     renderSoar();
     const panel = await open();
-    expect(await within(panel).findByText("+3 alert khác")).toBeInTheDocument();
+    const more = await within(panel).findByText("+3 alert khác");
+    // plain text: it leads nowhere, so it is neither a link nor a button, and nothing in it can be pressed
+    expect(more.tagName).toBe("P");
+    expect(more.closest("a, button, [role=link], [role=button]")).toBeNull();
     expect(S.soar.detail.related.more(3)).toBe("+3 alert khác");
   });
 

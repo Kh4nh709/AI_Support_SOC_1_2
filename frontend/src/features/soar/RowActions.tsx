@@ -13,14 +13,19 @@ const BUTTON =
 export function RowActions({
   row,
   state,
+  me,
   onPress,
 }: {
   row: SoarReview;
   state: RowState | undefined;
+  /** The signed-in username: a row held by it is a request of its own, which this page may have lost track of. */
+  me: string | null;
   onPress: (row: SoarReview, decision: SoarDecision) => void;
 }) {
   const buttons = buttonsOf(row);
-  const running = state?.running === true;
+  // A request of this person that the page no longer holds (they left the page, or pressed in another tab) is still running.
+  const mine = row.status === "processing" && me !== null && row.locked_by === me;
+  const running = state?.running === true || mine;
   // What the last request said is about the row as it was then: when n8n has changed the ticket since, it is old news.
   const lines =
     state !== undefined && !state.running && state.at !== null && sameStamp(state.at, stampOf(row))

@@ -13,6 +13,7 @@ import {
   type SoarDecision,
   type SoarReview,
 } from "../../api/soar";
+import { useAuth } from "../../auth/AuthProvider";
 import { DataTable } from "../../components/DataTable";
 import { Toast } from "../../components/Toast";
 import { S } from "../../strings";
@@ -35,6 +36,7 @@ const NOTICE_FETCH = { kind: "notice", page: 1, pageSize: SOAR_PAGE_SIZE } as co
 export function SoarPage({ now = Date.now }: { now?: () => number }) {
   const [params, setParams] = useSearchParams();
   const view = useMemo(() => readView(params), [params]);
+  const { session } = useAuth();
   const decisions = useDecisions();
 
   const query = useQuery({
@@ -89,7 +91,12 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
   const columns =
     view.tab === "notice"
       ? noticeColumns({ dismissed: dismissedSet, onDismiss: dismiss, onOpen: openDetail })
-      : reviewColumns({ states: decisions.states, onPress: press, onOpen: openDetail });
+      : reviewColumns({
+          states: decisions.states,
+          me: session?.username ?? null,
+          onPress: press,
+          onOpen: openDetail,
+        });
 
   function emptyText(total: number): string {
     if (total > 0) return S.soar.pageEmpty;

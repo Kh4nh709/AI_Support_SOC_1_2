@@ -386,6 +386,43 @@ describe("while the request runs", () => {
     expect(within(await rowOf()).queryByText("Đang xử lý (an)")).not.toBeInTheDocument();
   });
 
+  it("shows a row that is processing for ME as Đang xử lý… with no buttons, as after leaving the page during a request", async () => {
+    serve(
+      server,
+      fake({
+        rows: [
+          review({ id: "MINE0001", status: "processing", locked_by: "an", allowed_decisions: [] }),
+          review({
+            id: "THEIRS01",
+            status: "processing",
+            locked_by: "binh",
+            allowed_decisions: [],
+          }),
+        ],
+      }),
+    );
+    renderSoar({ username: "an" });
+    const mine = await rowOf("MINE0001");
+    expect(within(mine).getByText(S.soar.working)).toBeInTheDocument();
+    expect(within(mine).getAllByRole("cell")[8]).toHaveTextContent("Đang xử lý (an)");
+    expect(within(mine).queryByRole("button", { name: KEEP })).not.toBeInTheDocument();
+    // somebody else's row only says who holds it
+    const theirs = await rowOf("THEIRS01");
+    expect(within(theirs).queryByText(S.soar.working)).not.toBeInTheDocument();
+    expect(within(theirs).getAllByRole("cell")[8]).toHaveTextContent("Đang xử lý (binh)");
+  });
+
+  it("does not take a row held by someone else for mine, nor a row of mine that is not processing", async () => {
+    serve(
+      server,
+      fake({
+        rows: [review({ locked_by: "an", status: "open" })],
+      }),
+    );
+    renderSoar({ username: "an" });
+    expect(within(await rowOf()).queryByText(S.soar.working)).not.toBeInTheDocument();
+  });
+
   it("leaves another row's buttons alone", async () => {
     let release: () => void = () => {};
     const wait = new Promise<void>((resolve) => (release = resolve));
@@ -591,6 +628,10 @@ describe("the outcomes", () => {
       expect(within(row).getAllByRole("cell")[8]).toHaveTextContent(status);
     },
   );
+
+  it("words a locked row without saying it is someone else's: it may be the person's own request", () => {
+    expect(S.soar.result.locked).toBe("Phiếu đang được xử lý; đã làm mới.");
+  });
 
   it("a local 409 with no usable review still explains, and asks the list again", async () => {
     const state = serveDecision(

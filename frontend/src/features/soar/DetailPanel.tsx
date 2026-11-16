@@ -222,6 +222,14 @@ function RelatedAlerts({ alerts, total }: { alerts: readonly SoarRelatedAlert[];
               </Link>
               <span className="text-xs text-muted">{formatTime(alert.alert_time)}</span>
               <span className="text-xs">{text(alert.agent_name) ?? S.common.missing}</span>
+              {text(alert.severity) !== null && (
+                <span className="text-xs">
+                  {D.related.severity(labelOf(S.severity, alert.severity))}
+                </span>
+              )}
+              {typeof alert.occurrence_count === "number" && (
+                <span className="text-xs">{D.related.occurrences(alert.occurrence_count)}</span>
+              )}
               <span className="text-xs">{labelOf(S.status, alert.status)}</span>
             </li>
           ))}

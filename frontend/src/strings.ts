@@ -2681,7 +2681,8 @@ export const S = {
       unavailableNoMessage: "Không kết nối được tới SOAR (n8n). Hãy thử lại.",
       conflict: (status: string) => `Phiếu đã được xử lý ở nơi khác: ${status}`,
       invalidState: "Phiếu không còn ở trạng thái cho phép thao tác này; đã làm mới.",
-      locked: "Người khác đang xử lý phiếu này; đã làm mới.",
+      // Not "someone else": the row may be held by the request this person sent from another tab, or before leaving the page.
+      locked: "Phiếu đang được xử lý; đã làm mới.",
       forbidden: "Bạn không có quyền thực hiện thao tác này",
       notConfigured: "Chưa cấu hình liên kết duyệt tới SOAR (n8n); hãy báo quản trị viên.",
       notFound: "Không tìm thấy phiếu.",
@@ -2869,6 +2870,8 @@ export const S = {
         heading: "Alert cùng case",
         empty: "Không có alert nào cùng case.",
         more: (n: number) => `+${n} alert khác`,
+        severity: (word: string) => `Mức ${word}`,
+        occurrences: (n: number) => `${n} lần xuất hiện`,
         label: "Các alert cùng case",
       },
       raw: {
