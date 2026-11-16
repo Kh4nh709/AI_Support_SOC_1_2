@@ -178,8 +178,8 @@ describe("the table", () => {
 
 describe("bidi and zero-width controls (U+200B-200F, 202A-202E, 2060-2069, FEFF)", () => {
   // a label wrapped in a right-to-left override and a zero-width space would read reversed, or hide a letter
-  const wrap = (text: string) => `‮${text}​⁦`;
-  const CONTROL = /[​-‏‪-‮⁠-⁩﻿]/;
+  const wrap = (text: string) => `\u202e${text}\u200b\u2066`;
+  const CONTROL = /[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/;
   const noControl = () => expect(document.body.innerHTML).not.toMatch(CONTROL);
 
   it("never reaches the table, the buttons, the notices, the dialog, the toast or an error line, in text or in an attribute", async () => {
