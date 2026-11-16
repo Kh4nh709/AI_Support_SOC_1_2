@@ -5,7 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import type { SetupServer } from "msw/node";
-import { MemoryRouter, useLocation } from "react-router";
+import { useEffect } from "react";
+import { MemoryRouter, useLocation, useNavigate } from "react-router";
 import type {
   SoarDecision,
   SoarDecisionAnswer,
@@ -101,6 +102,21 @@ function Where() {
   return <p data-testid="where">{`${pathname}${search}`}</p>;
 }
 
+/** Moves the router of the page rendered last, as the back and forward buttons of a browser would: `nav.go("/soar?tab=done")`. */
+export const nav: { go: (to: string) => void } = {
+  go: () => {
+    throw new Error("no page is rendered");
+  },
+};
+
+function Navigator() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    nav.go = (to) => void navigate(to);
+  }, [navigate]);
+  return null;
+}
+
 export function renderSoar(
   options: {
     entry?: string;
@@ -133,6 +149,7 @@ export function renderSoar(
             <SoarPage now={now} />
           </main>
           <Where />
+          <Navigator />
         </MemoryRouter>
       </AuthContext.Provider>
     </QueryClientProvider>,

@@ -197,10 +197,14 @@ export function strongTitleOf(review: SoarReview, decision: "undo" | "fp"): stri
   return T[decision];
 }
 
-// Bidi and zero-width controls: U+200B-U+200F (zero-width space, joiners, direction marks), U+202A-U+202E (embeddings and
-// overrides), U+2060-U+2069 (word joiner, invisible operators, isolates) and U+FEFF. A label wrapped in a right-to-left
-// override reads reversed; a zero-width space hides a letter. Nothing n8n wrote is shown with them.
-const CONTROLS = /[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g;
+// Bidi and zero-width controls, and the letters and marks that draw nothing: U+200B-U+200F (zero-width space, joiners, direction
+// marks), U+202A-U+202E (embeddings and overrides), U+2060-U+2069 (word joiner, invisible operators, isolates), U+FEFF, the Arabic
+// letter mark U+061C, the Mongolian vowel separator U+180E, the soft hyphen U+00AD, the Hangul fillers (U+115F, U+1160, U+3164,
+// U+FFA0) and the Tag characters U+E0000-U+E007F (which spell text nobody can see). A label wrapped in a right-to-left override
+// reads reversed; a zero-width space hides a letter. Nothing n8n wrote is shown with them (the raw body, which is forensic, is shown
+// with each of them as a visible escape instead). The Tag characters are outside the BMP, so the pattern has the `u` flag.
+const CONTROLS =
+  /[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF\u061C\u180E\u00AD\u115F\u1160\u3164\uFFA0\u{E0000}-\u{E007F}]/gu;
 
 export const stripControls = (text: string): string => text.replace(CONTROLS, "");
 

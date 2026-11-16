@@ -58,6 +58,8 @@ export type Decisions = {
    * A new object for each request, so the same row can ask again.
    */
   focus: { id: string } | null;
+  /** The request has been used (the row has taken the focus): it must not be used again when the row is drawn anew. */
+  clearFocus: () => void;
   run: (row: SoarReview, decision: SoarDecision, note: string) => Promise<void>;
 };
 
@@ -151,5 +153,7 @@ export function useDecisions(): Decisions {
     [client, mutateAsync, put, write],
   );
 
-  return { states, toast, closeToast: () => setToast(null), focus, run };
+  const clearFocus = useCallback(() => setFocus(null), []);
+
+  return { states, toast, closeToast: () => setToast(null), focus, clearFocus, run };
 }

@@ -225,7 +225,7 @@ describe("the buttons", () => {
       .map((b) => b.textContent);
 
   // m6: the word of the WEB for each decision is always there: a description of the button for a screen reader, and a small
-  // muted tag for the eye when the label n8n wrote does not already carry the word.
+  // muted tag for the eye beside it, always (a keep labelled with the word of an undo would otherwise read as an undo).
   describe("the word of the web for each decision", () => {
     const WORDS = { keep: "Giữ", undo: "Gỡ", fp: "Dương tính giả" } as const;
     const tagOf = (button: HTMLElement) => {
@@ -248,7 +248,7 @@ describe("the buttons", () => {
       expect(S.soar.decision).toEqual(WORDS);
     });
 
-    it("shows no tag when the label already has the word, in any case", async () => {
+    it("shows the web word beside EVERY button, also when the label already has it (a label that says the opposite must not read as the web word)", async () => {
       serve(
         server,
         fake({
@@ -256,7 +256,7 @@ describe("the buttons", () => {
             review({
               buttons: [
                 { decision: "keep", label: "GIỮ LẠI" },
-                { decision: "undo", label: "gỡ bỏ" },
+                { decision: "undo", label: "↩️ Gỡ chặn (không giữ)" },
               ],
             }),
           ],
@@ -264,13 +264,21 @@ describe("the buttons", () => {
       );
       renderSoar();
       const row = await rowOf("K7QM2XHP");
-      for (const name of ["GIỮ LẠI", "gỡ bỏ"]) {
-        const tag = tagOf(within(row).getByRole("button", { name }));
-        expect(tag.className).toContain("sr-only");
+      const keep = within(row).getByRole("button", { name: "GIỮ LẠI" });
+      const undo = within(row).getByRole("button", { name: "↩️ Gỡ chặn (không giữ)" });
+      for (const [button, word] of [
+        [keep, "Giữ"],
+        [undo, "Gỡ"],
+      ] as const) {
+        const tag = tagOf(button);
+        expect(tag).toHaveTextContent(new RegExp(`^${word}$`));
+        expect(tag.className).not.toContain("sr-only");
+        expect(tag.className).toContain("text-muted");
+        expect(button).toHaveAccessibleDescription(word);
       }
     });
 
-    it("shows a small muted tag with the web's word when the label does not have it, for every decision", async () => {
+    it("shows a small muted tag with the web's word for every decision, whatever the label", async () => {
       serve(
         server,
         fake({

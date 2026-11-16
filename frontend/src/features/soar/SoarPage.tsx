@@ -5,7 +5,7 @@
 // stays on its row (see `useDecisions`), and none of the page's state (the dialog, its note, the open detail panel, an error
 // line) is in the query cache, so a refetch never wipes it. Everything n8n wrote is text.
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
   fetchSoarReviews,
@@ -92,11 +92,20 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
   };
 
   const data = query.data;
-  // The ticket of the open dialog as the list has it now (the dialog follows it, see DecisionDialog).
+  // The row a request started on takes the focus in its own effect, which runs before this one: once it has, the request is
+  // spent, so going to another tab and back does not pull the focus from the link the person pressed into that row.
+  const { focus: focusRequest, clearFocus } = decisions;
+  useEffect(() => {
+    if (focusRequest !== null) clearFocus();
+  }, [focusRequest, clearFocus]);
+  // The ticket of the open dialog as the list has it now (the dialog follows it, see DecisionDialog). While the rows on screen are
+  // those of another view (placeholder data), or there are none (the list is loading, or failed), the ticket cannot be followed.
   const liveRow =
     dialog === null
       ? null
       : (data?.rows.find((candidate) => candidate.id === dialog.row.id) ?? null);
+  const following: "ok" | "gone" | "unknown" =
+    data === undefined || query.isPlaceholderData ? "unknown" : liveRow === null ? "gone" : "ok";
   const columns =
     view.tab === "notice"
       ? noticeColumns({ dismissed: dismissedSet, onDismiss: dismiss, onOpen: openDetail })
@@ -130,7 +139,6 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
 
         <TabNav view={view} />
         <SearchForm
-          key={view.q}
           view={view}
           onSearch={(q) => {
             primeAudio();
@@ -192,8 +200,8 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
       {dialog !== null && (
         <DecisionDialog
           row={dialog.row}
-          live={liveRow}
-          gone={liveRow === null && data !== undefined && !query.isPlaceholderData}
+          live={following === "ok" ? liveRow : null}
+          follow={following}
           decision={dialog.decision}
           onCancel={() => setDialog(null)}
           onConfirm={(note, current) => {

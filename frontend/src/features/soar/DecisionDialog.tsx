@@ -7,7 +7,7 @@
 //   - the ticket changed (its status, `updated_at` or `allowed_decisions`): "Phiếu vừa thay đổi: <trạng thái> (<ai>)" and the
 //     confirm waits for a box that says the person has seen it; a second change asks again;
 //   - the decision is no longer allowed: the dialog says why and has no confirm, only "Đóng";
-//   - the ticket has left the list (`gone`): it says so and has no confirm either. This is the simpler of the two ways: the page
+//   - the ticket has left the list (`follow` is `gone`), or cannot be followed (`unknown`: another view, loading, failed): it says so and has no confirm either. This is the simpler of the two ways: the page
 //     has no second source for the row (a detail read could confirm it, at the price of a second request to wait for), so
 //     the person closes the dialog and looks at the ticket again.
 // Keep sends at once and has no dialog.
@@ -36,7 +36,7 @@ const said = (value: unknown): string | null =>
 export function DecisionDialog({
   row,
   live,
-  gone,
+  follow,
   decision,
   onConfirm,
   onCancel,
@@ -45,8 +45,11 @@ export function DecisionDialog({
   row: SoarReview;
   /** The ticket as the list has it now; null when the list has no row of that id. */
   live: SoarReview | null;
-  /** The list is loaded and the ticket is not in it any more. */
-  gone: boolean;
+  /**
+   * Whether the dialog can follow the ticket: `ok` (the list has it), `gone` (the list is loaded and does not hold it any more) or
+   * `unknown` (the rows on screen are of another view, or the list is loading or failed: the ticket as it is now is not known).
+   */
+  follow: "ok" | "gone" | "unknown";
   decision: DialogDecision;
   /** Told the note, and the ticket as it now is. */
   onConfirm: (note: string, current: SoarReview) => void;
@@ -65,7 +68,7 @@ export function DecisionDialog({
   const changed = live !== null && stateKey(live) !== stateKey(row);
   const acknowledged = changed && seen === stateKey(live);
   const title = strongTitleOf(current, decision);
-  const available = !gone && allowed;
+  const available = follow === "ok" && allowed;
   // The boxes still to tick before the confirm opens: the risk first, then the change. While one is, the confirm is shut.
   const waiting = !available
     ? null
@@ -76,7 +79,8 @@ export function DecisionDialog({
         : null;
 
   let problem: string | null = null;
-  if (gone) problem = S.soar.dialog.gone;
+  if (follow === "gone") problem = S.soar.dialog.gone;
+  else if (follow === "unknown") problem = S.soar.dialog.cannotFollow;
   else if (!allowed) problem = S.soar.dialog.notAllowed(statusText(current));
   else if (changed) {
     problem = S.soar.dialog.changed(
@@ -94,10 +98,18 @@ export function DecisionDialog({
       // look (its own is the red button at 60 % opacity, which looks pressable).
       hideConfirm={!available || waiting !== null}
       tone={strong ? "danger" : "primary"}
-      error={problem}
       onConfirm={() => onConfirm(note.trim(), current)}
       onCancel={onCancel}
     >
+      {/* The notice comes first: it is what the person must read before anything else in the dialog. */}
+      {problem !== null && (
+        <div
+          role="alert"
+          className="rounded border border-critical bg-critical-bg px-3 py-2 text-text"
+        >
+          {problem}
+        </div>
+      )}
       <p className="wrap-anywhere">{S.soar.dialog.subject(current.id, actionTextOf(current))}</p>
       {strong && (
         <p className="rounded border border-critical bg-critical-bg px-3 py-2 font-medium text-text wrap-anywhere">

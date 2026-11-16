@@ -13,8 +13,9 @@ const BUTTON =
 
 /**
  * One button of a ticket: n8n label as text, and beside it the word of the WEB for the decision ("Giữ", "Gỡ", "Dương tính
- * giả"), which is the button's accessible description. It is a small muted tag for the eye when the label does not already
- * carry the word (case does not matter), and for a screen reader alone when it does: the web's word is always there.
+ * giả"), which is the button's accessible description and, always, a small muted tag for the eye: a label n8n wrote can say
+ * the opposite of what the button does (a keep labelled "Gỡ chặn (không giữ)" would read as an undo), so the word of the web is
+ * never hidden, even when the label happens to contain it.
  */
 function DecisionButton({
   button,
@@ -27,7 +28,6 @@ function DecisionButton({
 }) {
   const wordId = useId();
   const word = S.soar.decision[button.decision];
-  const carried = button.label.toLocaleLowerCase("vi").includes(word.toLocaleLowerCase("vi"));
   return (
     <span className="inline-flex max-w-full flex-wrap items-center gap-1">
       <button
@@ -43,7 +43,7 @@ function DecisionButton({
       >
         {button.label}
       </button>
-      <span id={wordId} className={carried ? "sr-only" : "text-xs text-muted"}>
+      <span id={wordId} className="text-xs text-muted">
         {word}
       </span>
     </span>

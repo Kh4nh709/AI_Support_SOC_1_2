@@ -2,7 +2,7 @@
 // a new view: the page puts it in the URL, and the query follows the URL. A tab is a link to the same view on another tab,
 // so it can be opened in a new tab and shared, and `aria-current` says which one is on. The search acts when the form is
 // sent, so a half-typed word is not a request.
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { S } from "../../strings";
 import { Q_MAX, TABS, cleanQuery, viewSearch, type SoarView } from "./soarParams";
@@ -30,9 +30,15 @@ export function TabNav({ view }: { view: SoarView }) {
 }
 
 export function SearchForm({ view, onSearch }: { view: SoarView; onSearch: (q: string) => void }) {
-  // The draft of the box. The page gives the form a key of the applied search, so the draft starts again when the URL
-  // changes it (Xoá tìm kiếm, the back button) and not while somebody types.
+  // The draft of the box follows the URL when the URL changes it (Xoá tìm kiếm, the back button, "#65" sent as 65), and is left
+  // alone while somebody types. The form is NOT remounted for it, so the focus stays in the box: it is the field of the person.
+  const [applied, setApplied] = useState(view.q);
   const [draft, setDraft] = useState(view.q);
+  if (applied !== view.q) {
+    setApplied(view.q);
+    setDraft(view.q);
+  }
+  const input = useRef<HTMLInputElement>(null);
   const send = (event: FormEvent) => {
     event.preventDefault();
     onSearch(cleanQuery(draft));
@@ -42,6 +48,7 @@ export function SearchForm({ view, onSearch }: { view: SoarView; onSearch: (q: s
       <label className="flex flex-col gap-1 text-xs text-muted">
         {S.soar.search.label}
         <input
+          ref={input}
           type="search"
           value={draft}
           maxLength={Q_MAX}
@@ -55,7 +62,15 @@ export function SearchForm({ view, onSearch }: { view: SoarView; onSearch: (q: s
         {S.soar.search.submit}
       </button>
       {view.q !== "" && (
-        <button type="button" className={BUTTON} onClick={() => onSearch("")}>
+        <button
+          type="button"
+          className={BUTTON}
+          onClick={() => {
+            onSearch("");
+            // the button goes with the search: the focus goes to the box, not to the page
+            input.current?.focus();
+          }}
+        >
           {S.soar.search.clear}
         </button>
       )}

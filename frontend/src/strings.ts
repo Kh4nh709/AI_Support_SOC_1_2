@@ -2815,6 +2815,9 @@ export const S = {
       acknowledgeChange: "Tôi đã xem thay đổi và vẫn muốn tiếp tục",
       notAllowed: (status: string) =>
         `Thao tác này không còn được phép với phiếu (đang ở trạng thái “${status}”). Hãy đóng hộp thoại.`,
+      // The list the dialog follows is another view, is loading, or failed: the ticket as it is now is not known.
+      cannotFollow:
+        "Không theo dõi được phiếu lúc này: danh sách đang tải hoặc không tải được. Hãy đóng hộp thoại và xem lại phiếu.",
       gone: "Phiếu không còn trong danh sách này (đã đổi trạng thái hoặc sang trang khác). Hãy đóng hộp thoại và xem lại phiếu.",
       note: "Ghi chú (không bắt buộc)",
       noteCount: (n: number, max: number) => `${n}/${max}`,
@@ -2912,6 +2915,7 @@ export const S = {
         heading: "Lịch sử",
         label: "Lịch sử của phiếu",
         empty: "Chưa có lịch sử.",
+        truncated: "Chỉ hiện 200 sự kiện mới nhất.",
         col: {
           time: "Thời gian",
           event: "Sự kiện",
@@ -2937,7 +2941,11 @@ export const S = {
         actor: { system: "Hệ thống" },
         who: (name: string, role: string) => `${name} (${role})`,
         n8nEvent: { created: "tạo", updated: "cập nhật", reminder: "nhắc" },
-        reason: { stale: "bản cũ hơn bản đã lưu", terminal: "phiếu đã kết thúc" },
+        reason: {
+          stale: "bản cũ hơn bản đã lưu",
+          terminal: "phiếu đã kết thúc",
+          decided: "đã có quyết định sau thời điểm đó",
+        },
         received: (event: string, status: string) => `SOAR ${event}, trạng thái ${status}`,
         reasonLine: (reason: string) => `Lý do: ${reason}`,
         decided: (decision: string) => `Quyết định: ${decision}`,

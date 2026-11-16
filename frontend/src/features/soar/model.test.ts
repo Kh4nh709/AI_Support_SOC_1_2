@@ -226,6 +226,19 @@ describe("stripControls: bidi and zero-width controls never reach the page", () 
     ...Array.from({ length: 5 }, (_, i) => 0x202a + i), // U+202A-U+202E
     ...Array.from({ length: 10 }, (_, i) => 0x2060 + i), // U+2060-U+2069
     0xfeff,
+    // the invisible letters and marks of the second review: the Arabic letter mark, the Mongolian vowel separator, the soft
+    // hyphen, the Hangul fillers, and the Tag characters (U+E0000-U+E007F, which spell text nobody can see)
+    0x061c,
+    0x180e,
+    0x00ad,
+    0x115f,
+    0x1160,
+    0x3164,
+    0xffa0,
+    0xe0000,
+    0xe0001,
+    0xe0041,
+    0xe007f,
   ];
 
   it.each(CONTROLS.map((code) => [code.toString(16).toUpperCase(), code] as const))(
@@ -244,7 +257,10 @@ describe("stripControls: bidi and zero-width controls never reach the page", () 
   });
 
   it("does not touch the code points next to the ranges", () => {
-    for (const code of [0x200a, 0x2010, 0x2029, 0x202f, 0x205f, 0x206a, 0xfefe]) {
+    for (const code of [
+      0x200a, 0x2010, 0x2029, 0x202f, 0x205f, 0x206a, 0xfefe, 0xac, 0x61b, 0x115e, 0x1161, 0x3163,
+      0xff9f, 0xe0080,
+    ]) {
       const text = `a${String.fromCodePoint(code)}b`;
       expect(stripControls(text), code.toString(16)).toBe(text);
     }

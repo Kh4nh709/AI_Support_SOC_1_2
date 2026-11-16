@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { setupServer } from "msw/node";
 import { afterEach } from "vitest";
 import { S } from "../../strings";
+import { visible } from "../admin/auditSummary";
 import { detailOf, notice, review } from "./fixtures";
 import { fake, renderSoar, serve } from "./testkit";
 
@@ -275,9 +276,12 @@ describe("bidi and zero-width controls (U+200B-200F, 202A-202E, 2060-2069, FEFF)
     const panel = await screen.findByRole("region", { name: S.soar.detail.title("K7QM2XHP") });
     await within(panel).findByRole("link", { name: "Mô tả 1" });
     expect(within(panel).getByText("Ghi chú: ghi chú")).toBeInTheDocument();
-    expect(panel.querySelector("details pre")?.textContent).toBe(
-      JSON.stringify({ title: "gốc", nested: ["x"] }, null, 2),
+    // the raw body is forensic: its controls are NOT stripped, they are shown as visible escapes, so an analyst sees them
+    const rawShown = panel.querySelector("details pre")?.textContent;
+    expect(rawShown).toBe(
+      visible(JSON.stringify({ title: wrap("gốc"), nested: [wrap("x")] }, null, 2)),
     );
+    expect(rawShown).toContain("\\u202egốc\\u200b\\u2066");
     noControl();
   });
 });

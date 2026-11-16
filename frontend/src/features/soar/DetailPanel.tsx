@@ -14,6 +14,7 @@ import {
   type SoarReviewDetail,
 } from "../../api/soar";
 import { DataTable, type Column } from "../../components/DataTable";
+import { visible } from "../admin/auditSummary";
 import { KeyValueGrid, type KeyValueItem } from "../../components/KeyValueGrid";
 import { formatDateTime, formatTime } from "../../format";
 import { S, labelOf } from "../../strings";
@@ -189,6 +190,15 @@ const HISTORY_COLUMNS: Column<HistoryRow>[] = [
   },
 ];
 
+/**
+ * The detail as the page reads it: every text of it cleaned of bidi and zero-width controls, EXCEPT the raw body, which is what
+ * n8n sent and is forensic: it keeps what it holds and is shown with each invisible character as a visible escape.
+ */
+function cleanDetail(detail: SoarReviewDetail): SoarReviewDetail {
+  const { raw, ...rest } = detail;
+  return { ...cleanDeep(rest), raw };
+}
+
 /** The body n8n sent, as text: a string as it is, anything else as indented JSON. */
 function rawText(raw: unknown): string | null {
   if (raw === null || raw === undefined) return null;
@@ -244,13 +254,18 @@ function Body({ detail }: { detail: SoarReviewDetail }) {
   const history: HistoryRow[] = (Array.isArray(detail.history) ? detail.history : []).map(
     (e, index) => ({ ...e, index }),
   );
-  const raw = rawText(detail.raw);
+  // forensic: every invisible character of the body is written out (`\\u202e`), so an analyst sees what is there
+  const rawBody = rawText(detail.raw);
+  const raw = rawBody === null ? null : visible(rawBody);
   const related = Array.isArray(detail.related_alerts) ? detail.related_alerts : [];
   return (
     <div className="flex min-w-0 flex-col gap-5">
       <KeyValueGrid items={fieldsOf(detail)} columns={1} />
       <section className="flex flex-col gap-2">
         <h3 className="text-sm font-semibold">{D.history.heading}</h3>
+        {detail.history_truncated === true && (
+          <p className="text-xs text-muted">{D.history.truncated}</p>
+        )}
         {history.length === 0 ? (
           <p className="text-sm text-muted">{D.history.empty}</p>
         ) : (
@@ -285,7 +300,7 @@ export function DetailPanel({ id, onClose }: { id: string; onClose: () => void }
   const box = useRef<HTMLElement>(null);
   const query = useQuery({
     queryKey: soarKeys.detail(id),
-    queryFn: ({ signal }) => fetchSoarReview(id, signal).then((answer) => cleanDeep(answer)),
+    queryFn: ({ signal }) => fetchSoarReview(id, signal).then(cleanDetail),
     refetchInterval: SOAR_LIST_POLL_MS,
   });
   // The focus goes to the panel when it opens or moves to another ticket: the person asked for it.
