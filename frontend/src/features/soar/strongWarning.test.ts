@@ -2,6 +2,12 @@
 // undone and by `host_critical`: only a host that the configuration of the web lists as critical is called "máy quan trọng", and
 // the text says it is the configuration that lists it (not the SOAR). An isolation on an ordinary host says what it does and
 // hedges nothing. `strong_warning` is `isolate_host` OR `host_critical`; an old server sends no `host_critical`, which reads as false.
+//
+// What a sentence may claim about the fields of the ticket is only what the action type itself guarantees: the object of the action
+// is its `action_target` (the blocked address, the domain, the account, the machine isolated, the SQL server), and `host` is the
+// REPORTING or ENFORCING device (the spec's own block_ip example has host pfSense.home.arpa; in the lab the domain controller is also
+// the DNS server). So `host` appears only in the neutral clause "Biện pháp này liên quan tới <host>, một máy được cấu hình là máy
+// quan trọng …", never as the one that queried a domain, was the target of an address, or was the machine acted on.
 // Whole strings, one per (action type x host_critical).
 import { strongTitleOf, strongWarningOf } from "./model";
 import { review } from "./fixtures";
@@ -11,59 +17,64 @@ const ordinary = (over: Parameters<typeof review>[0]) =>
 const critical = (over: Parameters<typeof review>[0]) =>
   review({ strong_warning: true, host_critical: true, host: "AD-server", ...over });
 
-const CFG = "máy được cấu hình là máy quan trọng (ví dụ máy chủ AD)";
-const GROUP = "thuộc các máy được cấu hình là máy quan trọng (ví dụ máy chủ AD)";
+const CFG = "một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD)";
+/** The neutral clause: the host is related to the ticket, and nothing is said of how. */
+const REL = `Biện pháp này liên quan tới AD-server, ${CFG}`;
 
 describe("undo, by the action that is undone and by host_critical", () => {
-  it("isolate_host on an ordinary host: what it does, no hedge", () => {
-    expect(strongWarningOf(ordinary({ action_type: "isolate_host" }), "undo")).toBe(
-      "Gỡ cách ly web-01 sẽ nối lại máy với mạng ngay. Nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.",
+  it("isolate_host on an ordinary host: what it does to the machine the action names, no hedge", () => {
+    expect(
+      strongWarningOf(ordinary({ action_type: "isolate_host", action_target: "db-02" }), "undo"),
+    ).toBe(
+      "Gỡ cách ly db-02 sẽ nối lại máy với mạng ngay. Nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.",
     );
   });
 
-  it("isolate_host on a critical host: the same, and that the configuration lists the host", () => {
-    expect(strongWarningOf(critical({ action_type: "isolate_host" }), "undo")).toBe(
-      `Gỡ cách ly AD-server sẽ nối lại máy với mạng ngay. AD-server ${GROUP}; nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.`,
+  it("isolate_host on a critical host: the same, and the neutral clause names the host", () => {
+    expect(
+      strongWarningOf(critical({ action_type: "isolate_host", action_target: "db-02" }), "undo"),
+    ).toBe(
+      `Gỡ cách ly db-02 sẽ nối lại máy với mạng ngay. ${REL}; nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.`,
     );
   });
 
-  it("disable_user: the account can sign in again", () => {
-    const over = { action_type: "disable_user", user_name: "administrator" } as const;
+  it("disable_user: the account the action names can sign in again", () => {
+    const over = { action_type: "disable_user", action_target: "administrator" } as const;
     expect(strongWarningOf(ordinary(over), "undo")).toBe(
-      "Mở khoá tài khoản administrator trên web-01: tài khoản này sẽ đăng nhập lại được ngay. Nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.",
+      "Mở khoá tài khoản administrator: tài khoản này sẽ đăng nhập lại được ngay. Nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.",
     );
     expect(strongWarningOf(critical(over), "undo")).toBe(
-      `Mở khoá tài khoản administrator trên AD-server: tài khoản này sẽ đăng nhập lại được ngay. AD-server ${GROUP}; nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.`,
+      `Mở khoá tài khoản administrator: tài khoản này sẽ đăng nhập lại được ngay. ${REL}; nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.`,
     );
   });
 
-  it("block_ip: traffic from the address is allowed again, and how the host relates to the address", () => {
+  it("block_ip: traffic from the address is allowed again; the host is only said to be related", () => {
     const over = { action_type: "block_ip", action_target: "79.79.78.202" } as const;
     expect(strongWarningOf(ordinary(over), "undo")).toBe(
       "Gỡ chặn 79.79.78.202: lưu lượng từ địa chỉ này được phép đi qua trở lại. Hãy chắc chắn địa chỉ này không còn nguy hiểm.",
     );
     expect(strongWarningOf(critical(over), "undo")).toBe(
-      `Gỡ chặn 79.79.78.202: lưu lượng từ địa chỉ này được phép đi qua trở lại. Địa chỉ này đã nhắm tới AD-server, một ${CFG}; hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
+      `Gỡ chặn 79.79.78.202: lưu lượng từ địa chỉ này được phép đi qua trở lại. ${REL}; hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
     );
   });
 
-  it("sinkhole_domain: the domain resolves again, and how the host relates to it", () => {
+  it("sinkhole_domain: the domain resolves again; the host is only said to be related", () => {
     const over = { action_type: "sinkhole_domain", action_target: "evil.example" } as const;
     expect(strongWarningOf(ordinary(over), "undo")).toBe(
       "Gỡ chặn tên miền evil.example: tên miền này sẽ phân giải trở lại. Hãy chắc chắn tên miền này không còn nguy hiểm.",
     );
     expect(strongWarningOf(critical(over), "undo")).toBe(
-      `Gỡ chặn tên miền evil.example: tên miền này sẽ phân giải trở lại. Tên miền này đã được truy vấn từ AD-server, một ${CFG}; hãy chắc chắn tên miền này không còn nguy hiểm.`,
+      `Gỡ chặn tên miền evil.example: tên miền này sẽ phân giải trở lại. ${REL}; hãy chắc chắn tên miền này không còn nguy hiểm.`,
     );
   });
 
-  it("disable_xp_cmdshell: xp_cmdshell is enabled again on the host", () => {
-    const over = { action_type: "disable_xp_cmdshell" } as const;
+  it("disable_xp_cmdshell: xp_cmdshell is enabled again on the server the action names", () => {
+    const over = { action_type: "disable_xp_cmdshell", action_target: "sql-01" } as const;
     expect(strongWarningOf(ordinary(over), "undo")).toBe(
-      "xp_cmdshell sẽ được bật lại trên web-01: máy chủ SQL cho phép chạy lệnh hệ điều hành trở lại. Hãy chắc chắn trước khi tiếp tục.",
+      "xp_cmdshell sẽ được bật lại trên sql-01: máy chủ SQL cho phép chạy lệnh hệ điều hành trở lại. Hãy chắc chắn trước khi tiếp tục.",
     );
     expect(strongWarningOf(critical(over), "undo")).toBe(
-      `xp_cmdshell sẽ được bật lại trên AD-server: máy chủ SQL cho phép chạy lệnh hệ điều hành trở lại. AD-server ${GROUP}; hãy chắc chắn trước khi tiếp tục.`,
+      `xp_cmdshell sẽ được bật lại trên sql-01: máy chủ SQL cho phép chạy lệnh hệ điều hành trở lại. ${REL}; hãy chắc chắn trước khi tiếp tục.`,
     );
   });
 
@@ -73,17 +84,17 @@ describe("undo, by the action that is undone and by host_critical", () => {
       "Bạn sắp gỡ biện pháp “Pha cà phê”. Hãy chắc chắn trước khi tiếp tục.",
     );
     expect(strongWarningOf(critical(over), "undo")).toBe(
-      `Bạn sắp gỡ biện pháp “Pha cà phê” liên quan tới AD-server, một ${CFG}; hãy chắc chắn trước khi tiếp tục.`,
+      `Bạn sắp gỡ biện pháp “Pha cà phê” liên quan tới AD-server, ${CFG}; hãy chắc chắn trước khi tiếp tục.`,
     );
   });
 
-  it("falls back to plain words when n8n sent no host, account, address or domain, and a critical flag without a host is not claimed", () => {
+  it("falls back to plain words when the action names no target, and a critical flag without a host is not claimed", () => {
     const bare = { host: null, user_name: null, action_target: null };
     expect(strongWarningOf(ordinary({ ...bare, action_type: "isolate_host" }), "undo")).toMatch(
       /^Gỡ cách ly máy này sẽ nối lại máy với mạng ngay\./,
     );
     expect(strongWarningOf(ordinary({ ...bare, action_type: "disable_user" }), "undo")).toMatch(
-      /^Mở khoá tài khoản này trên máy này: tài khoản này sẽ đăng nhập lại được ngay\./,
+      /^Mở khoá tài khoản này: tài khoản này sẽ đăng nhập lại được ngay\./,
     );
     expect(strongWarningOf(ordinary({ ...bare, action_type: "block_ip" }), "undo")).toMatch(
       /^Gỡ chặn địa chỉ này: /,
@@ -91,6 +102,9 @@ describe("undo, by the action that is undone and by host_critical", () => {
     expect(strongWarningOf(ordinary({ ...bare, action_type: "sinkhole_domain" }), "undo")).toMatch(
       /^Gỡ chặn tên miền này: /,
     );
+    expect(
+      strongWarningOf(ordinary({ ...bare, action_type: "disable_xp_cmdshell" }), "undo"),
+    ).toMatch(/^xp_cmdshell sẽ được bật lại trên máy chủ SQL này: /);
     const noHost = strongWarningOf(critical({ ...bare, action_type: "block_ip" }), "undo");
     expect(noHost).not.toContain("quan trọng");
   });
@@ -110,6 +124,51 @@ describe("undo, by the action that is undone and by host_critical", () => {
       const loud = strongWarningOf(critical({ action_type }), "undo");
       expect(loud, action_type).toContain("được cấu hình là máy quan trọng (ví dụ máy chủ AD)");
       expect(loud, action_type).not.toContain("SOAR");
+    }
+  });
+
+  // The host is the reporting or enforcing device. No sentence says which way it relates to the address, the domain, the account
+  // or the machine of the action, whatever the action type, critical or not, undo or false positive.
+  it("never reads a direction into host, src_ip, domain or user_name: the host never queried, was targeted, owns the account or was acted on", () => {
+    const FORBIDDEN =
+      /nhắm tới|truy vấn|truy cập từ|bị chặn|gửi tới|gửi từ|tài khoản của|thuộc máy|trên AD-server|trên web-01|dừng trên|áp dụng trên/;
+    const types = [
+      "isolate_host",
+      "disable_user",
+      "block_ip",
+      "sinkhole_domain",
+      "disable_xp_cmdshell",
+      "kill_process",
+      "make_coffee" as never,
+    ] as const;
+    for (const action_type of types) {
+      for (const make of [ordinary, critical]) {
+        for (const decision of ["undo", "fp"] as const) {
+          const text = strongWarningOf(
+            make({
+              action_type,
+              action_target: "THE-TARGET",
+              src_ip: "10.9.9.9",
+              domain: "d.example",
+              user_name: "someone",
+            }),
+            decision,
+          );
+          expect(text, `${String(action_type)} ${decision}`).not.toMatch(FORBIDDEN);
+          // the fields that only describe the alert are not in a sentence about the action
+          for (const field of ["10.9.9.9", "d.example", "someone"]) {
+            expect(text, `${String(action_type)} ${decision} ${field}`).not.toContain(field);
+          }
+          // a host is named only by the neutral clause: right after "liên quan tới", and only when it is critical
+          const named = [...text.matchAll(/(AD-server|web-01)/g)];
+          for (const found of named) {
+            const before = text.slice(0, found.index);
+            expect(before.endsWith("liên quan tới "), `${String(action_type)} ${decision}`).toBe(
+              true,
+            );
+          }
+        }
+      }
     }
   });
 
@@ -137,12 +196,12 @@ describe("undo, by the action that is undone and by host_critical", () => {
 });
 
 describe("false positive, by the action of the ticket and by host_critical", () => {
-  it("kill_process", () => {
+  it("kill_process: the process that was stopped, with no claim of where", () => {
     expect(strongWarningOf(ordinary({ action_type: "kill_process" }), "fp")).toBe(
-      "Tiến trình đã bị dừng trên web-01. Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.",
+      "Tiến trình đã bị dừng. Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.",
     );
     expect(strongWarningOf(critical({ action_type: "kill_process" }), "fp")).toBe(
-      `Tiến trình đã bị dừng trên AD-server, một ${CFG}. Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.`,
+      `Tiến trình đã bị dừng. ${REL}. Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.`,
     );
   });
 
@@ -155,7 +214,7 @@ describe("false positive, by the action of the ticket and by host_critical", () 
     expect(plain).not.toContain("quan trọng");
     expect(plain).not.toContain("Tiến trình");
     expect(strongWarningOf(critical(over), "fp")).toBe(
-      `Đánh dấu dương tính giả cho “Cách ly web-01” sẽ đóng phiếu, kể cả khi biện pháp vẫn áp dụng trên AD-server, một ${CFG}. Nếu đây là tấn công thật, sẽ không còn nhắc nữa.`,
+      `Đánh dấu dương tính giả cho “Cách ly web-01” sẽ đóng phiếu, kể cả khi biện pháp vẫn đang áp dụng. ${REL}. Nếu đây là tấn công thật, sẽ không còn nhắc nữa.`,
     );
   });
 });

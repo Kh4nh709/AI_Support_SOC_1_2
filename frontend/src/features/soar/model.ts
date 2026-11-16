@@ -148,25 +148,28 @@ const criticalHost = (review: SoarReview): boolean =>
  */
 export function strongWarningOf(review: SoarReview, decision: "undo" | "fp"): string {
   const W = S.soar.dialog.strong;
-  const host = text(review.host) ?? W.host;
   const action = actionTextOf(review);
   const loud = criticalHost(review);
+  // `host` is the reporting or enforcing device, so it is named only by the neutral clause of a critical host; the object of the
+  // action is its own target (`action_target`), the one thing the action type guarantees.
+  const host = text(review.host) ?? W.host;
+  const target = text(review.action_target);
   if (decision === "fp") {
     if (review.action_type === "kill_process") {
-      return loud ? W.fp.critical.kill_process(host) : W.fp.plain.kill_process(host);
+      return loud ? W.fp.critical.kill_process(host) : W.fp.plain.kill_process();
     }
     return loud ? W.fp.critical.other(action, host) : W.fp.plain.other(action);
   }
-  const target = text(review.action_target);
-  const user = text(review.user_name);
-  const account = user === null ? W.accountNone : W.account(user);
+  const account = target === null ? W.accountNone : W.account(target);
   switch (review.action_type) {
     case "isolate_host":
-      return loud ? W.undo.critical.isolate_host(host) : W.undo.plain.isolate_host(host);
+      return loud
+        ? W.undo.critical.isolate_host(target ?? W.host, host)
+        : W.undo.plain.isolate_host(target ?? W.host);
     case "disable_user":
       return loud
         ? W.undo.critical.disable_user(account, host)
-        : W.undo.plain.disable_user(account, host);
+        : W.undo.plain.disable_user(account);
     case "block_ip":
       return loud
         ? W.undo.critical.block_ip(target ?? W.ip, host)
@@ -177,8 +180,8 @@ export function strongWarningOf(review: SoarReview, decision: "undo" | "fp"): st
         : W.undo.plain.sinkhole_domain(target ?? W.domain);
     case "disable_xp_cmdshell":
       return loud
-        ? W.undo.critical.disable_xp_cmdshell(host)
-        : W.undo.plain.disable_xp_cmdshell(host);
+        ? W.undo.critical.disable_xp_cmdshell(target ?? W.sqlServer, host)
+        : W.undo.plain.disable_xp_cmdshell(target ?? W.sqlServer);
     default:
       return loud ? W.undo.critical.other(action, host) : W.undo.plain.other(action);
   }

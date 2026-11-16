@@ -2750,47 +2750,50 @@ export const S = {
       strong: {
         undo: {
           plain: {
-            isolate_host: (host: string) =>
-              `Gỡ cách ly ${host} sẽ nối lại máy với mạng ngay. Nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.`,
-            disable_user: (account: string, host: string) =>
-              `Mở khoá ${account} trên ${host}: tài khoản này sẽ đăng nhập lại được ngay. Nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.`,
+            isolate_host: (target: string) =>
+              `Gỡ cách ly ${target} sẽ nối lại máy với mạng ngay. Nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.`,
+            disable_user: (account: string) =>
+              `Mở khoá ${account}: tài khoản này sẽ đăng nhập lại được ngay. Nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.`,
             block_ip: (target: string) =>
               `Gỡ chặn ${target}: lưu lượng từ địa chỉ này được phép đi qua trở lại. Hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
             sinkhole_domain: (target: string) =>
               `Gỡ chặn tên miền ${target}: tên miền này sẽ phân giải trở lại. Hãy chắc chắn tên miền này không còn nguy hiểm.`,
-            disable_xp_cmdshell: (host: string) =>
-              `xp_cmdshell sẽ được bật lại trên ${host}: máy chủ SQL cho phép chạy lệnh hệ điều hành trở lại. Hãy chắc chắn trước khi tiếp tục.`,
+            disable_xp_cmdshell: (server: string) =>
+              `xp_cmdshell sẽ được bật lại trên ${server}: máy chủ SQL cho phép chạy lệnh hệ điều hành trở lại. Hãy chắc chắn trước khi tiếp tục.`,
             // An action type this file has no sentence for: the action is named by its own text.
             other: (action: string) =>
               `Bạn sắp gỡ biện pháp “${action}”. Hãy chắc chắn trước khi tiếp tục.`,
           },
+          // The host is the REPORTING or ENFORCING device, not what the action was done to (the lab domain controller is also
+          // its DNS server), so it appears only in the neutral clause: "Biện pháp này liên quan tới <host>, một máy được cấu
+          // hình là máy quan trọng (ví dụ máy chủ AD)". The object of the action is its own target.
           critical: {
-            isolate_host: (host: string) =>
-              `Gỡ cách ly ${host} sẽ nối lại máy với mạng ngay. ${host} thuộc các máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.`,
+            isolate_host: (target: string, host: string) =>
+              `Gỡ cách ly ${target} sẽ nối lại máy với mạng ngay. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.`,
             disable_user: (account: string, host: string) =>
-              `Mở khoá ${account} trên ${host}: tài khoản này sẽ đăng nhập lại được ngay. ${host} thuộc các máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.`,
+              `Mở khoá ${account}: tài khoản này sẽ đăng nhập lại được ngay. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.`,
             block_ip: (target: string, host: string) =>
-              `Gỡ chặn ${target}: lưu lượng từ địa chỉ này được phép đi qua trở lại. Địa chỉ này đã nhắm tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
+              `Gỡ chặn ${target}: lưu lượng từ địa chỉ này được phép đi qua trở lại. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
             sinkhole_domain: (target: string, host: string) =>
-              `Gỡ chặn tên miền ${target}: tên miền này sẽ phân giải trở lại. Tên miền này đã được truy vấn từ ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn tên miền này không còn nguy hiểm.`,
-            disable_xp_cmdshell: (host: string) =>
-              `xp_cmdshell sẽ được bật lại trên ${host}: máy chủ SQL cho phép chạy lệnh hệ điều hành trở lại. ${host} thuộc các máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn trước khi tiếp tục.`,
+              `Gỡ chặn tên miền ${target}: tên miền này sẽ phân giải trở lại. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn tên miền này không còn nguy hiểm.`,
+            disable_xp_cmdshell: (server: string, host: string) =>
+              `xp_cmdshell sẽ được bật lại trên ${server}: máy chủ SQL cho phép chạy lệnh hệ điều hành trở lại. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn trước khi tiếp tục.`,
             other: (action: string, host: string) =>
               `Bạn sắp gỡ biện pháp “${action}” liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn trước khi tiếp tục.`,
           },
         },
         fp: {
           plain: {
-            kill_process: (host: string) =>
-              `Tiến trình đã bị dừng trên ${host}. Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.`,
+            kill_process: () =>
+              "Tiến trình đã bị dừng. Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.",
             other: (action: string) =>
               `Đánh dấu dương tính giả cho “${action}” sẽ đóng phiếu, kể cả khi biện pháp vẫn đang áp dụng. Nếu đây là tấn công thật, sẽ không còn nhắc nữa.`,
           },
           critical: {
             kill_process: (host: string) =>
-              `Tiến trình đã bị dừng trên ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD). Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.`,
+              `Tiến trình đã bị dừng. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD). Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.`,
             other: (action: string, host: string) =>
-              `Đánh dấu dương tính giả cho “${action}” sẽ đóng phiếu, kể cả khi biện pháp vẫn áp dụng trên ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD). Nếu đây là tấn công thật, sẽ không còn nhắc nữa.`,
+              `Đánh dấu dương tính giả cho “${action}” sẽ đóng phiếu, kể cả khi biện pháp vẫn đang áp dụng. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD). Nếu đây là tấn công thật, sẽ không còn nhắc nữa.`,
           },
         },
         // What stands for a value n8n did not send, and the words around an account.
@@ -2800,6 +2803,7 @@ export const S = {
         ip: "địa chỉ này",
         // The word after "tên miền" when n8n sent no domain ("Gỡ chặn tên miền này").
         domain: "này",
+        sqlServer: "máy chủ SQL này",
       },
       // What happens once it is done.
       after: {
