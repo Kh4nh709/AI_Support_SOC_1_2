@@ -1300,6 +1300,237 @@ def _webhook_update(world: World, review_id: str, **over: Any) -> None:
         review_notice.apply(conn, review_notice.parse(json.dumps(body).encode()))
 
 
+LOCK_TIMEOUTS = [psycopg.errors.LockNotAvailable, psycopg.errors.QueryCanceled]
+
+
+@pytest.mark.parametrize("error", LOCK_TIMEOUTS, ids=lambda e: e.__name__)
+def test_f1_a_timeout_in_both_finish_attempts_is_a_500_never_a_retry_and_says_n8n_was_asked(
+    world, monkeypatch, caplog, error
+):
+    """Final round 1: `except (LockNotAvailable, QueryCanceled)` answered "503 busy, retry" for a timeout raised by the finish AFTER n8n
+    had acted, with the row left `processing`. A retry would ask n8n again. After the call a failure of both finish attempts is the
+    documented 500, and the log says that n8n was already asked (no secret, no text of n8n's)."""
+    review_id = world.put()
+
+    def timeout_in_the_finish(*args, **kwargs):
+        raise error("a timeout inside the finish")
+
+    monkeypatch.setattr(reviews, "write_event", timeout_in_the_finish)
+    caplog.set_level(logging.INFO)
+    response = _decide(world, "tier2", review_id, "keep")
+    assert response.status_code == 500
+    assert "retry-after" not in response.headers and "busy" not in response.text
+    assert (
+        world.row(review_id)["status"] == "processing"
+    )  # the lock stays: it goes stale, it is not released by a retry
+    assert len(world.fake.calls) == 1
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "already asked" in text and review_id in text
+    assert SECRET not in text and "giữ" not in text
+
+
+@pytest.mark.parametrize("error", LOCK_TIMEOUTS, ids=lambda e: e.__name__)
+def test_f1_a_timeout_before_the_lock_is_still_503_busy(world, monkeypatch, error):
+    review_id = world.put()
+    before = world.row(review_id)
+
+    def timeout_on_the_read(conn, rid):
+        raise error("a timeout before anything is locked")
+
+    monkeypatch.setattr(reviews, "_fetch_row", timeout_on_the_read)
+    response = _decide(world, "tier2", review_id, "keep")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "busy"} and response.headers["retry-after"] == "2"
+    _untouched(world, review_id, before)
+
+
+def test_f1_a_timeout_in_the_first_finish_attempt_only_is_still_recorded_by_the_second(
+    world, monkeypatch
+):
+    review_id = world.put()
+    real = reviews.write_event
+    failures: list[int] = []
+
+    def once(*args, **kwargs):
+        if not failures:
+            failures.append(1)
+            raise psycopg.errors.QueryCanceled("a timeout in the first finish")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(reviews, "write_event", once)
+    response = _decide(world, "tier2", review_id, "keep")
+    assert response.status_code == 200 and response.json()["outcome"] == "ok"
+    assert world.row(review_id)["status"] == "kept"
+
+
+def test_f2_a_pre_keep_open_push_during_an_undo_press_does_not_release_the_lock(world):
+    """Final round 2: a row `kept` with the web's `decided_at`, an UNDO press in flight (`processing`, `prev_status` `kept`), and n8n
+    resends a push written before the keep, saying `open`. Rule (a) covered only a row that was `kept`: the push was applied, the lock
+    released, the row showed `open` while the press answered ok."""
+    review_id = world.put(
+        status="kept",
+        decided_by="alice",
+        decided_at=data.T0 + timedelta(minutes=10),
+        result="giữ chặn",
+    )
+    world.fake = FakeN8n(Reply.ok("undone", result="đã gỡ", message="Đã gỡ chặn"))
+    seen: list[dict[str, Any]] = []
+
+    def push_during_the_call(call) -> None:
+        _webhook_update(
+            world, review_id, status="open", note="push cũ"
+        )  # written at T0 + 5 min: before the keep
+        seen.append(world.row(review_id))
+
+    world.fake.on_request = push_during_the_call
+    response = _decide(world, "tier2", review_id, "undo")
+    assert response.status_code == 200 and response.json()["outcome"] == "ok"
+    [during] = seen
+    assert during["status"] == "processing" and during["prev_status"] == "kept"
+    assert during["locked_by"] == world.users["tier2"][1]
+    assert during["note"] != "push cũ"  # ignored as decided: not even the other fields were written
+    row = world.row(review_id)
+    assert row["status"] == "undone" and row["result"] == "đã gỡ"
+    assert (row["locked_by"], row["locked_at"], row["prev_status"]) == (None, None, None)
+    assert [e["payload"]["outcome"] for e in _decided(world, review_id)] == ["ok"]
+    received = world.events(review_id, "soar.review_received")
+    assert (received[-1]["payload"]["outcome"], received[-1]["payload"]["reason"]) == (
+        "ignored",
+        "decided",
+    )
+
+
+def test_f3_a_path_with_a_nul_from_a_role_in_none_of_the_lists_is_a_403_not_a_500(world):
+    """Final round 3: `_deny` wrote `request.url.path` as the audit subject, and a NUL in it made the insert fail: a 500 for a caller
+    who should have had a 403. The subject is made storable; a signed-in analyst gets the same 404 as for any other id.
+    """
+    for raw_id in ("a%00b", "%00", "%ed%a0%80x"):
+        denied_before = len(world.denied("tier1"))
+        response = world.client("viewer").post(
+            f"{REVIEWS}/{raw_id}/decision", json={"decision": "keep"}
+        )
+        assert response.status_code == 403, raw_id
+        assert response.json() == {"detail": "forbidden"}
+        [*_, event] = world.denied("tier1")
+        assert len(world.denied("tier1")) == denied_before + 1
+        assert event["subject_id"].startswith(f"{REVIEWS}/") and event["subject_id"].endswith(
+            "/decision"
+        )
+        assert "\x00" not in event["subject_id"]
+        assert (
+            world.client("tier2")
+            .post(f"{REVIEWS}/{raw_id}/decision", json={"decision": "keep"})
+            .status_code
+            == 404
+        )
+    clean = world.client("viewer").post(f"{REVIEWS}/ZZZZZZZ9/decision", json={"decision": "keep"})
+    assert (
+        clean.status_code == 403
+        and world.denied("tier1")[-1]["subject_id"] == f"{REVIEWS}/ZZZZZZZ9/decision"
+    )
+
+
+def test_f4_a_reminder_between_the_read_and_the_lock_does_not_cost_the_press(world, monkeypatch):
+    """Final round 4: the lock's WHERE carries `updated_at` as read, so ANY push in between made the press miss, even a reminder that
+    changes nothing that matters. The press re-reads once and locks again on the fresh row."""
+    review_id = world.put()
+    original = reviews._fetch_row
+    pushed: list[bool] = []
+
+    def fetch_then_remind(conn, rid):
+        row = original(conn, rid)
+        if not pushed:
+            pushed.append(True)
+            _webhook_update(world, review_id, status="open", note="nhắc lại")
+        return row
+
+    monkeypatch.setattr(reviews, "_fetch_row", fetch_then_remind)
+    response = _decide(world, "tier2", review_id, "keep")
+    assert response.status_code == 200 and response.json()["outcome"] == "ok"
+    assert len(world.fake.calls) == 1
+    row = world.row(review_id)
+    assert row["status"] == "kept" and row["note"] == "nhắc lại"
+    assert [e["payload"]["outcome"] for e in _decided(world, review_id)] == ["ok"]
+
+
+def test_f4_a_push_that_makes_the_decision_invalid_in_between_is_409_invalid_state_with_the_fresh_row(
+    world, monkeypatch
+):
+    review_id = world.put()
+    original = reviews._fetch_row
+    pushed: list[bool] = []
+
+    def fetch_then_push(conn, rid):
+        row = original(conn, rid)
+        if not pushed:
+            pushed.append(True)
+            _webhook_update(
+                world, review_id, status="open", buttons=KEEP_FP, note="đổi nút",
+                action={"type": "kill_process", "text": "kill", "target": "m.exe", "via": "wazuh", "agent": "A"},
+            )  # fmt: skip
+        return row
+
+    monkeypatch.setattr(reviews, "_fetch_row", fetch_then_push)
+    response = _decide(world, "tier2", review_id, "undo")
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason"] == "invalid_state" and detail["review"]["action_type"] == "kill_process"
+    assert (
+        detail["review"]["note"] == "đổi nút"
+        and "undo" not in detail["review"]["allowed_decisions"]
+    )
+    assert world.fake.calls == []
+    assert [e["payload"]["outcome"] for e in _decided(world, review_id)] == ["invalid_state"]
+
+
+def test_f4_a_second_miss_is_a_409_and_n8n_is_never_asked_twice(world, monkeypatch):
+    """Pushes keep arriving between every read and lock: the press tries the lock twice, no more, and answers 409 as the fresh row
+    says. There is never more than one call to n8n."""
+    review_id = world.put()
+    original = reviews._fetch_row
+    reads: list[int] = []
+
+    def fetch_then_push(conn, rid):
+        row = original(conn, rid)
+        reads.append(1)
+        if len(reads) <= 2:  # the first read and the re-read are each overtaken by a push
+            _webhook_update(world, review_id, status="open", note=f"push {len(reads)}")
+        return row
+
+    monkeypatch.setattr(reviews, "_fetch_row", fetch_then_push)
+    response = _decide(world, "tier2", review_id, "keep")
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] in ("invalid_state", "locked")
+    assert (
+        response.json()["detail"]["review"]["note"] == "push 2"
+    )  # the fresh row, not the one that was read
+    assert world.fake.calls == []
+    assert world.row(review_id)["status"] == "open" and world.row(review_id)["locked_by"] is None
+
+
+def test_f4_a_press_the_row_changed_under_to_processing_is_locked_not_retried(world, monkeypatch):
+    review_id = world.put()
+    original = reviews._fetch_row
+    taken: list[bool] = []
+
+    def fetch_then_someone_locks(conn, rid):
+        row = original(conn, rid)
+        if not taken:
+            taken.append(True)
+            world.execute(
+                "UPDATE soar_reviews SET prev_status = status, status = 'processing', locked_by = 'bob', "
+                "locked_at = now(), updated_at = now() WHERE id = %s",
+                (review_id,),
+            )
+        return row
+
+    monkeypatch.setattr(reviews, "_fetch_row", fetch_then_someone_locks)
+    response = _decide(world, "tier2", review_id, "keep")
+    assert response.status_code == 409 and response.json()["detail"]["reason"] == "locked"
+    assert response.json()["detail"]["review"]["locked_by"] == "bob"
+    assert world.fake.calls == []
+
+
 def test_n8ns_own_update_arriving_during_the_call_wins_and_the_press_writes_nothing(world):
     review_id = world.put()
     world.fake = FakeN8n(Reply.ok("undone"))

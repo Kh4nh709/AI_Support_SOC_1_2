@@ -54,7 +54,7 @@ from pydantic import AfterValidator, BeforeValidator
 
 from app.audit.events import write_event
 from app.infra.auth import Claims
-from app.infra.storable import is_storable
+from app.infra.storable import is_storable, make_storable
 from app.soar import reviews
 from app.web.deps import (
     ROLE_TO_ACTOR,
@@ -204,7 +204,9 @@ def _deny(
     write_event(
         conn,
         "authz.denied",
-        request.url.path,
+        make_storable(
+            request.url.path
+        ),  # a NUL in the path must not turn a 403 into a 500 (the path names no ticket anyway)
         ROLE_TO_ACTOR.get(claims.role, "analyst"),
         actor_id=claims.user_id,
         payload={"required": required, "role": claims.role, "method": request.method},

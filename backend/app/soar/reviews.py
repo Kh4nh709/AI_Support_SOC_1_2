@@ -35,6 +35,7 @@ never for a `kill_process` (a killed process cannot be brought back); anything e
 
 from __future__ import annotations
 
+import logging
 import re
 import unicodedata
 from collections.abc import Callable
@@ -48,6 +49,8 @@ import psycopg
 from app.audit.events import write_event
 from app.infra import n8n_approval
 from app.infra.config import Config
+
+logger = logging.getLogger(__name__)
 
 #: A lock older than this is taken to be abandoned (a call ends well before: `N8N_APPROVAL_TIMEOUT_SECONDS` is at most 100).
 LOCK_STALE_SECONDS = 120
@@ -88,6 +91,12 @@ class NotFound(Exception):
 
 class NotConfigured(Exception):
     """`N8N_APPROVAL_URL` or `N8N_APPROVAL_SECRET` is empty: nothing was locked."""
+
+
+class FinishFailed(Exception):
+    """n8n HAS been asked and acted, and BOTH attempts to record the outcome failed: the ticket stays `processing` until its lock goes
+    stale. It is never a "retry" (a second press would ask n8n again): the route answers it with the documented 500. `__cause__` is the
+    database error of the second attempt."""
 
 
 class Refused(Exception):
@@ -557,34 +566,39 @@ def decide(
     """
     _bound_waits(conn)
     row = _fetch_row(conn, review_id)
-    if row is None:
-        raise NotFound(review_id)
-    review = serve(row, person.role, cfg)
-    status_before = review["status"]
-    if status_before == "processing":
-        raise _refuse(conn, person, cfg, review_id, decision, note, "locked")
-    if decision not in valid_decisions(
-        review["kind"], status_before, review["action_type"], review["buttons"]
-    ):
-        raise _refuse(conn, person, cfg, review_id, decision, note, "invalid_state")
-    if not n8n_approval.is_configured(cfg):
-        raise NotConfigured
+    locked = None
+    for attempt in (1, 2):
+        if row is None:
+            raise NotFound(review_id)
+        review = serve(row, person.role, cfg)
+        status_before = review["status"]
+        if status_before == "processing":
+            raise _refuse(conn, person, cfg, review_id, decision, note, "locked")
+        if decision not in valid_decisions(
+            review["kind"], status_before, review["action_type"], review["buttons"]
+        ):
+            raise _refuse(conn, person, cfg, review_id, decision, note, "invalid_state")
+        if not n8n_approval.is_configured(cfg):
+            raise NotConfigured
 
-    locked = conn.execute(
-        _LOCK_SQL,
-        {
-            "id": review_id,
-            "user": person.username,
-            "status": status_before,
-            "updated_at": row[-1],  # as it was read: a push in between makes the lock miss
-        },
-    ).fetchone()
-    if (
-        locked is None
-    ):  # the ticket changed between the look and the lock: whoever got there first is right
-        now = _fetch_row(conn, review_id)
-        reason = "locked" if now is not None and now[2] == "processing" else "invalid_state"
-        raise _refuse(conn, person, cfg, review_id, decision, note, reason)
+        locked = conn.execute(
+            _LOCK_SQL,
+            {
+                "id": review_id,
+                "user": person.username,
+                "status": status_before,
+                "updated_at": row[-1],  # as it was read: a push in between makes the lock miss
+            },
+        ).fetchone()
+        if locked is not None:
+            break
+        # The ticket was written between the look and the lock (a push from n8n: a reminder, new buttons). Look again, once, and
+        # judge the decision against the fresh row; a second miss answers as the fresh row says (`locked` if it is held, else
+        # `invalid_state`). There is never a second call to n8n: nothing has been sent yet.
+        row = _fetch_row(conn, review_id)
+        if attempt == 2:
+            reason = "locked" if row is not None and row[2] == "processing" else "invalid_state"
+            raise _refuse(conn, person, cfg, review_id, decision, note, reason)
     (locked_at,) = locked
     conn.commit()  # the lock is visible, and no transaction is open while n8n is asked
 
@@ -614,20 +628,32 @@ def decide(
     except (psycopg.Error, ValueError):
         # The finish transaction failed for a database reason (a text the database refuses that slipped through, a timeout, an
         # audit insert): n8n HAS acted, so the lock must not be left behind. Roll back, and write the outcome again in a fresh
-        # transaction with fixed safe texts and the event. Only if that fails too is the answer a 500.
+        # transaction with fixed safe texts and the event. Only if that fails too is the answer a 500: `FinishFailed`, which is
+        # never "busy, retry" (a retry would ask n8n again), whatever the database said (a lock timeout included).
         conn.rollback()
-        return _finish(
-            conn,
-            person,
-            cfg,
-            review_id,
-            decision,
-            note,
-            answer,
-            locked_at,
-            status_before,
-            safe=True,
-        )
+        try:
+            return _finish(
+                conn,
+                person,
+                cfg,
+                review_id,
+                decision,
+                note,
+                answer,
+                locked_at,
+                status_before,
+                safe=True,
+            )
+        except (psycopg.Error, ValueError) as exc:
+            conn.rollback()
+            logger.error(
+                "soar review %s: n8n was already asked (outcome %s) and both attempts to record it failed (%s); "
+                "the ticket stays processing until its lock goes stale",
+                review_id,
+                answer.outcome,
+                type(exc).__name__,
+            )
+            raise FinishFailed(review_id) from exc
 
 
 def _finish(
