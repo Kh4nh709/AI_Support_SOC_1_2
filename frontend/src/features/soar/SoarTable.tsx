@@ -113,7 +113,13 @@ export function reviewColumns(parts: {
       id: "actions",
       header: S.soar.col.actions,
       className: WRAP,
-      cell: (row) => <RowActions row={row} state={parts.states[row.id]} onPress={parts.onPress} />,
+      cell: (row) => (
+        <RowActions
+          row={row}
+          state={Object.hasOwn(parts.states, row.id) ? parts.states[row.id] : undefined}
+          onPress={parts.onPress}
+        />
+      ),
     },
   ];
 }

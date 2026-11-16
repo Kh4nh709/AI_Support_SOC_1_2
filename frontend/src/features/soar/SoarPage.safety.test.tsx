@@ -174,6 +174,20 @@ describe("the table", () => {
   });
 });
 
+describe("an id that is a name of the prototype chain", () => {
+  it("draws its row, its buttons and its detail like any other, and no state leaks from the prototype", async () => {
+    serve(server, fake({ rows: [review({ id: "__proto__" }), review({ id: "constructor" })] }));
+    renderSoar();
+    for (const id of ["__proto__", "constructor"]) {
+      const row = (await screen.findByRole("button", { name: S.soar.detail.open(id) })).closest(
+        "tr",
+      ) as HTMLElement;
+      expect(within(row).getByRole("button", { name: "✅ Giữ chặn" })).toBeEnabled();
+      expect(within(row).queryByText(S.soar.working)).not.toBeInTheDocument();
+    }
+  });
+});
+
 describe("the sources", () => {
   const dir = join("src", "features", "soar");
   const sources = readdirSync(dir)
