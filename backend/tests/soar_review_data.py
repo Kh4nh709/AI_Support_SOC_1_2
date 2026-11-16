@@ -16,6 +16,8 @@ import random
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from psycopg.types.json import Jsonb
+
 MISSING = object()
 
 #: The alphabet of a review's 8-character id (spec §2): no `I`, no `O`, no `0`, no `1`.
@@ -148,3 +150,48 @@ def edit(doc: dict[str, Any], path: str, value: Any = MISSING) -> dict[str, Any]
     else:
         node[leaf] = value
     return doc
+
+
+# ── rows, written straight into the table (a test of the API does not stand on the webhook) ─────────────────
+
+
+def insert_row(conn: Any, **over: Any) -> str:
+    """One `soar_reviews` row on `conn` (the caller commits); its id. `over` names columns: `buttons` and `raw` take their
+    Python value, a timestamp a `datetime`. The defaults are the spec's example (`review()`), flat.
+    """
+    body = review()
+    row: dict[str, Any] = {
+        "id": body["id"],
+        "kind": "review",
+        "status": "open",
+        "severity": "info",
+        "title": body["title"],
+        "simulated": False,
+        "case_id": "~4096",
+        "case_number": 65,
+        "action_type": "block_ip",
+        "action_text": body["action"]["text"],
+        "action_target": "79.79.78.202",
+        "action_via": "pfsense",
+        "host": "pfSense.home.arpa",
+        "agent_id": "003",
+        "src_ip": "79.79.78.202",
+        "scenario_id": "SC03",
+        "scenario_name": "Quét cổng từ bên ngoài",
+        "score": 50,
+        "note": body["note"],
+        "buttons": body["buttons"],
+        "created_at": T0 - timedelta(seconds=2),
+        "auto_expire_at": T0 + timedelta(hours=1),
+        "last_sent_at": T0,
+        "raw": body,
+    }
+    row.update(over)
+    for name in ("buttons", "raw"):
+        row[name] = Jsonb(row[name])
+    names = list(row)
+    conn.execute(
+        f"INSERT INTO soar_reviews ({', '.join(names)}) VALUES ({', '.join('%s' for _ in names)})",
+        list(row.values()),
+    )
+    return row["id"]
