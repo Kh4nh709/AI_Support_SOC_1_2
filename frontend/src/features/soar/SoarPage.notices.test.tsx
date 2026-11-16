@@ -9,6 +9,10 @@ import { notice, review } from "./fixtures";
 import { DISMISSED_CAP, DISMISSED_KEY, SIGNAL_KEY } from "./storage";
 import { fake, renderSoar, serve } from "./testkit";
 
+/** An id of a notice: N and twelve characters (spec section 2); the store keeps nothing of another shape. */
+const nid = (n: number) => `N${String(n).padStart(12, "0")}`;
+const [N1, N2, N3, N5, N9] = [1, 2, 3, 5, 9].map(nid) as [string, string, string, string, string];
+
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 beforeEach(() => localStorage.clear());
@@ -20,19 +24,19 @@ afterEach(() => {
 afterAll(() => server.close());
 
 const errorNotice = notice({
-  id: "N1",
+  id: N1,
   severity: "error",
   title: "Không gỡ được chặn IP",
   note: "pfSense từ chối",
 });
 const warningNotice = notice({
-  id: "N2",
+  id: N2,
   severity: "warning",
   title: "Sắp hết hạn chặn",
   note: null,
 });
 const infoNotice = notice({
-  id: "N3",
+  id: N3,
   severity: "info",
   title: "Đã gỡ chặn IP 79.79.78.202",
   note: null,
@@ -72,7 +76,7 @@ describe("the notices above the table", () => {
   it("shows a severity it does not know as its code, in the grey of info, and does not crash", async () => {
     serve(
       server,
-      fake({ rows: [], notices: [notice({ id: "N9", severity: "fatal" as never, title: "Lạ" })] }),
+      fake({ rows: [], notices: [notice({ id: N9, severity: "fatal" as never, title: "Lạ" })] }),
     );
     renderSoar();
     const strip = await waitFor(() => stripOf());
@@ -97,11 +101,11 @@ describe("the notices above the table", () => {
     const first = renderSoar();
     const strip = await waitFor(() => stripOf());
     await userEvent.click(
-      within(strip).getByRole("button", { name: S.soar.notice.dismissLabel("N1") }),
+      within(strip).getByRole("button", { name: S.soar.notice.dismissLabel(N1) }),
     );
     expect(screen.queryByText("Không gỡ được chặn IP")).not.toBeInTheDocument();
     expect(screen.getByText("Sắp hết hạn chặn")).toBeInTheDocument();
-    expect(JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]")).toEqual(["N1"]);
+    expect(JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]")).toEqual([N1]);
     first.unmount();
     renderSoar();
     await screen.findByText("Sắp hết hạn chặn");
@@ -113,13 +117,13 @@ describe("the notices above the table", () => {
     renderSoar();
     const strip = await waitFor(() => stripOf());
     await userEvent.click(
-      within(strip).getByRole("button", { name: S.soar.notice.dismissLabel("N3") }),
+      within(strip).getByRole("button", { name: S.soar.notice.dismissLabel(N3) }),
     );
     expect(screen.queryByRole("region", { name: S.soar.notice.heading })).not.toBeInTheDocument();
   });
 
   it("starts without the ids already dismissed", async () => {
-    localStorage.setItem(DISMISSED_KEY, JSON.stringify(["N1", "N2"]));
+    localStorage.setItem(DISMISSED_KEY, JSON.stringify([N1, N2]));
     serve(server, fake({ rows: [review()], notices: [errorNotice, warningNotice, infoNotice] }));
     renderSoar();
     const strip = await waitFor(() => stripOf());
@@ -128,18 +132,18 @@ describe("the notices above the table", () => {
   });
 
   it("caps what it remembers: the newest DISMISSED_CAP ids", async () => {
-    const seeded = Array.from({ length: DISMISSED_CAP }, (_, i) => `OLD${i}`);
+    const seeded = Array.from({ length: DISMISSED_CAP }, (_, i) => nid(1000 + i));
     localStorage.setItem(DISMISSED_KEY, JSON.stringify(seeded));
     serve(server, fake({ rows: [review()], notices: [infoNotice] }));
     renderSoar();
     const strip = await waitFor(() => stripOf());
     await userEvent.click(
-      within(strip).getByRole("button", { name: S.soar.notice.dismissLabel("N3") }),
+      within(strip).getByRole("button", { name: S.soar.notice.dismissLabel(N3) }),
     );
     const stored = JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]") as string[];
     expect(stored).toHaveLength(DISMISSED_CAP);
-    expect(stored.at(-1)).toBe("N3");
-    expect(stored).not.toContain("OLD0");
+    expect(stored.at(-1)).toBe(N3);
+    expect(stored).not.toContain(nid(1000));
   });
 
   it("works with the store blocked: a dismissal holds for the visit", async () => {
@@ -153,14 +157,14 @@ describe("the notices above the table", () => {
     renderSoar();
     const strip = await waitFor(() => stripOf());
     await userEvent.click(
-      within(strip).getByRole("button", { name: S.soar.notice.dismissLabel("N1") }),
+      within(strip).getByRole("button", { name: S.soar.notice.dismissLabel(N1) }),
     );
     expect(screen.queryByText("Không gỡ được chặn IP")).not.toBeInTheDocument();
   });
 
   it("shows the first 20 and says how many more there are, and where to find them", async () => {
     const many = Array.from({ length: 23 }, (_, i) =>
-      notice({ id: `N${100 + i}`, title: `Thông báo ${i}` }),
+      notice({ id: nid(100 + i), title: `Thông báo ${i}` }),
     );
     serve(server, fake({ rows: [review()], notices: many }));
     renderSoar();
@@ -182,7 +186,7 @@ describe("the notices above the table", () => {
 
 describe("the filter Thông báo", () => {
   it("lists them all, dismissed or not, in a table of their own, and the strip is not drawn twice", async () => {
-    localStorage.setItem(DISMISSED_KEY, JSON.stringify(["N1"]));
+    localStorage.setItem(DISMISSED_KEY, JSON.stringify([N1]));
     serve(server, fake({ rows: [review()], notices: [errorNotice, warningNotice] }));
     renderSoar({ entry: "/soar?tab=notice" });
     const table = await screen.findByRole("table", { name: S.soar.noticeTableLabel });
@@ -193,7 +197,7 @@ describe("the filter Thông báo", () => {
   });
 
   it("marks a dismissed one as such, and still lets the others be dismissed", async () => {
-    localStorage.setItem(DISMISSED_KEY, JSON.stringify(["N1"]));
+    localStorage.setItem(DISMISSED_KEY, JSON.stringify([N1]));
     serve(server, fake({ notices: [errorNotice, warningNotice] }));
     renderSoar({ entry: "/soar?tab=notice" });
     const table = await screen.findByRole("table", { name: S.soar.noticeTableLabel });
@@ -204,11 +208,11 @@ describe("the filter Thông báo", () => {
     ).not.toBeInTheDocument();
     await userEvent.click(
       within(rows[1] as HTMLElement).getByRole("button", {
-        name: S.soar.notice.dismissLabel("N2"),
+        name: S.soar.notice.dismissLabel(N2),
       }),
     );
     expect(rows[1]).toHaveTextContent(S.soar.notice.dismissed);
-    expect(JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]")).toEqual(["N1", "N2"]);
+    expect(JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]")).toEqual([N1, N2]);
   });
 
   it("shows the time, the severity word, the title, the note, the host and the case of a notice", async () => {
@@ -217,7 +221,7 @@ describe("the filter Thông báo", () => {
       fake({
         notices: [
           notice({
-            id: "N5",
+            id: N5,
             severity: "warning",
             title: "Tiêu đề",
             note: "Nội dung",

@@ -9,8 +9,12 @@ export const SIGNAL_KEY = "soc.soar.signal";
 export const DISMISSED_KEY = "soc.soar.dismissed";
 /** The most dismissed ids kept: the newest ones, so the list cannot grow without bound. */
 export const DISMISSED_CAP = 200;
-/** The longest id kept (an id is at most 13 characters; anything longer in the store is not one). */
-const ID_MAX = 64;
+/**
+ * The shape of the id of a notice (spec section 2): N and twelve letters, digits, `_` or `-`. It is all this file keeps of a
+ * dismissed notice, on the way in and on the way out: a store somebody filled by hand, or a call with a token, a path or a
+ * review id, keeps nothing of it.
+ */
+export const NOTICE_ID = /^N[A-Za-z0-9_-]{12}$/;
 
 export function readSignalOn(): boolean {
   try {
@@ -32,7 +36,7 @@ export function writeSignalOn(on: boolean): void {
 function capped(ids: readonly unknown[]): string[] {
   const kept: string[] = [];
   for (const id of ids) {
-    if (typeof id !== "string" || id === "" || id.length > ID_MAX) continue;
+    if (typeof id !== "string" || !NOTICE_ID.test(id)) continue;
     const at = kept.indexOf(id);
     if (at !== -1) kept.splice(at, 1);
     kept.push(id);
