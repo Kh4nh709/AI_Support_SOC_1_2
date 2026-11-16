@@ -97,8 +97,9 @@ export function detailOf(over: Partial<SoarReviewDetail> = {}): SoarReviewDetail
       {
         at: "2026-11-13T14:40:05+00:00",
         event: "soar.review_received",
-        actor: "system",
-        actor_role: null,
+        // as the backend serves a push of n8n: no person, the role is the word "system"
+        actor: null,
+        actor_role: "system",
         payload: {
           event: "created",
           kind: "review",

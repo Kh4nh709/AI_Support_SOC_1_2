@@ -2728,6 +2728,11 @@ export const S = {
       locked: "Phiếu đang được xử lý; đã làm mới.",
       forbidden: "Bạn không có quyền thực hiện thao tác này",
       notConfigured: "Chưa cấu hình liên kết duyệt tới SOAR (n8n); hãy báo quản trị viên.",
+      // `503 {"detail": "busy"}` with `Retry-After`: a row another session holds, or a statement past its bound: nothing was locked.
+      busy: "Hệ thống đang bận; hãy thử lại sau vài giây.",
+      // `422` for the note: what the person typed, as the server refuses it (the dialog refuses it first).
+      noteInvalid: "Ghi chú có ký tự không lưu được; hãy sửa ghi chú rồi gửi lại.",
+      noteTooLong: "Ghi chú dài quá 500 ký tự; hãy rút ngắn rồi gửi lại.",
       notFound: "Không tìm thấy phiếu.",
       network: "Không gửi được yêu cầu. Hãy thử lại.",
       toast: (id: string, status: string) => `Phiếu ${id}: ${status}`,
@@ -2811,6 +2816,9 @@ export const S = {
         fp: "Phiếu chuyển sang “Dương tính giả” và đóng lại, không thể xử lý tiếp trên trang này.",
       },
       understand: "Tôi hiểu rủi ro và muốn tiếp tục",
+      // A note the server would refuse (a NUL, or half of an emoji): said in the dialog, and the confirm stays shut.
+      noteUnstorable:
+        "Ghi chú có ký tự không lưu được (ký tự NUL, hoặc ký tự bị cắt dở như nửa của một biểu tượng); hãy xoá hoặc gõ lại chỗ đó.",
       // The line beside a shut confirm: which box opens it.
       shutHint: (box: string) => `Tích ô “${box}” để bật nút xác nhận.`,
       // The dialog follows the live ticket: what it says when the ticket changes under it, and the box that asks again.

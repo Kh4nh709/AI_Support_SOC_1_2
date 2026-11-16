@@ -65,7 +65,26 @@ export function failureOf(error: unknown): {
     case 403:
       return { lines: line("error", S.soar.result.forbidden), review: null, refetch: false };
     case 503:
-      return { lines: line("error", S.soar.result.notConfigured), review: null, refetch: false };
+      // `busy` (with `Retry-After`) and `soar approval not configured` are both 503: the detail tells them apart.
+      return {
+        lines: line(
+          "error",
+          error.detail === "busy" ? S.soar.result.busy : S.soar.result.notConfigured,
+        ),
+        review: null,
+        refetch: false,
+      };
+    case 422: {
+      // Only the note is the person's own text; anything else the server refuses (the decision, the body) is the page's fault and
+      // is said generically, repeating nothing the server said.
+      const detail = isRecord(error.detail) ? error.detail : {};
+      if (detail.field !== "note") {
+        return { lines: line("error", S.common.unknownError), review: null, refetch: false };
+      }
+      const text =
+        detail.reason === "too_long" ? S.soar.result.noteTooLong : S.soar.result.noteInvalid;
+      return { lines: line("error", text), review: null, refetch: false };
+    }
     case 404:
       return { lines: line("error", S.soar.result.notFound), review: null, refetch: true };
     case 409: {

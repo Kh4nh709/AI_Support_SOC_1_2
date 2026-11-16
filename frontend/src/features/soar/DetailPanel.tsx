@@ -115,12 +115,19 @@ function fieldsOf(r: SoarReviewDetail): KeyValueItem[] {
 
 type HistoryRow = SoarHistoryEvent & { index: number };
 
-/** Who did it: the actor (the system has a word), and the role beside it when the audit event has both. */
+/**
+ * Who did it, as the backend serves it: `actor` is the username of a person (null for the system, and for a person whose row is
+ * gone), `actor_role` is tier1, tier2, admin or system. A person is "name (role)"; the system is "Hệ thống"; a role with no name is
+ * the role.
+ */
 function whoOf(event: SoarHistoryEvent): string {
   const actor = text(event.actor);
-  if (actor === null) return S.common.missing;
-  const name = labelOf(D.history.actor, actor);
   const role = text(event.actor_role);
+  if (actor === null) {
+    if (role === null) return S.common.missing;
+    return role === "system" ? D.history.actor.system : labelOf(S.role, role);
+  }
+  const name = labelOf(D.history.actor, actor);
   return role === null ? name : D.history.who(name, labelOf(S.role, role));
 }
 

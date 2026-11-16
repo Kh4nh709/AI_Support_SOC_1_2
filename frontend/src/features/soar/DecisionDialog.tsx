@@ -15,7 +15,14 @@ import { useId, useState } from "react";
 import type { SoarDecision, SoarReview } from "../../api/soar";
 import { S } from "../../strings";
 import { ConfirmDialog } from "../admin/ConfirmDialog";
-import { NOTE_MAX, actionTextOf, statusText, strongTitleOf, strongWarningOf } from "./model";
+import {
+  NOTE_MAX,
+  actionTextOf,
+  isStorable,
+  statusText,
+  strongTitleOf,
+  strongWarningOf,
+} from "./model";
 
 export type DialogDecision = Extract<SoarDecision, "undo" | "fp">;
 
@@ -69,14 +76,19 @@ export function DecisionDialog({
   const acknowledged = changed && seen === stateKey(live);
   const title = strongTitleOf(current, decision);
   const available = follow === "ok" && allowed;
-  // The boxes still to tick before the confirm opens: the risk first, then the change. While one is, the confirm is shut.
-  const waiting = !available
+  // What the person typed is sent as typed, and the server refuses a note it cannot store (a NUL, half of an emoji): said here, and
+  // the confirm stays shut until it is fixed.
+  const noteFault = !isStorable(note);
+  // Why the confirm is shut, if it is: the note first, then the boxes still to tick (the risk, then the change).
+  const shutHint: string | null = !available
     ? null
-    : strong && !understood
-      ? S.soar.dialog.understand
-      : changed && !acknowledged
-        ? S.soar.dialog.acknowledgeChange
-        : null;
+    : noteFault
+      ? S.soar.dialog.noteUnstorable
+      : strong && !understood
+        ? S.soar.dialog.shutHint(S.soar.dialog.understand)
+        : changed && !acknowledged
+          ? S.soar.dialog.shutHint(S.soar.dialog.acknowledgeChange)
+          : null;
 
   let problem: string | null = null;
   if (follow === "gone") problem = S.soar.dialog.gone;
@@ -96,7 +108,7 @@ export function DecisionDialog({
       cancelLabel={available ? undefined : S.common.close}
       // The shared dialog shows its own confirm only when it can be pressed: a shut one is drawn below, in the normal disabled
       // look (its own is the red button at 60 % opacity, which looks pressable).
-      hideConfirm={!available || waiting !== null}
+      hideConfirm={!available || shutHint !== null}
       tone={strong ? "danger" : "primary"}
       onConfirm={() => onConfirm(note.trim(), current)}
       onCancel={onCancel}
@@ -148,14 +160,16 @@ export function DecisionDialog({
           maxLength={NOTE_MAX}
           value={note}
           onChange={(event) => setNote(event.target.value)}
+          aria-invalid={noteFault ? true : undefined}
+          aria-describedby={noteFault ? hintId : undefined}
           className={FIELD}
         />
         <p className="text-right text-xs">{S.soar.dialog.noteCount(note.length, NOTE_MAX)}</p>
       </div>
-      {waiting !== null && (
+      {shutHint !== null && (
         <div className="flex items-center justify-between gap-3">
           <p id={hintId} className="text-xs text-muted">
-            {S.soar.dialog.shutHint(waiting)}
+            {shutHint}
           </p>
           <button
             type="button"
