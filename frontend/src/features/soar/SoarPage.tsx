@@ -81,6 +81,11 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
   };
 
   const data = query.data;
+  // The ticket of the open dialog as the list has it now (the dialog follows it, see DecisionDialog).
+  const liveRow =
+    dialog === null
+      ? null
+      : (data?.rows.find((candidate) => candidate.id === dialog.row.id) ?? null);
   const columns =
     view.tab === "notice"
       ? noticeColumns({ dismissed: dismissedSet, onDismiss: dismiss, onOpen: openDetail })
@@ -167,12 +172,14 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
       {dialog !== null && (
         <DecisionDialog
           row={dialog.row}
+          live={liveRow}
+          gone={liveRow === null && data !== undefined && !query.isPlaceholderData}
           decision={dialog.decision}
           onCancel={() => setDialog(null)}
-          onConfirm={(note) => {
-            const { row, decision } = dialog;
+          onConfirm={(note, current) => {
+            const { decision } = dialog;
             setDialog(null);
-            void decisions.run(row, decision, note);
+            void decisions.run(current, decision, note);
           }}
         />
       )}

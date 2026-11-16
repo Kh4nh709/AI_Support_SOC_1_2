@@ -2735,6 +2735,13 @@ export const S = {
         fp: "Phiếu chuyển sang “Dương tính giả” và đóng lại, không thể xử lý tiếp trên trang này.",
       },
       understand: "Tôi hiểu rủi ro và muốn tiếp tục",
+      // The dialog follows the live ticket: what it says when the ticket changes under it, and the box that asks again.
+      changed: (status: string, who: string | null) =>
+        who === null ? `Phiếu vừa thay đổi: ${status}` : `Phiếu vừa thay đổi: ${status} (${who})`,
+      acknowledgeChange: "Tôi đã xem thay đổi và vẫn muốn tiếp tục",
+      notAllowed: (status: string) =>
+        `Thao tác này không còn được phép với phiếu (đang ở trạng thái “${status}”). Hãy đóng hộp thoại.`,
+      gone: "Phiếu không còn trong danh sách này (đã đổi trạng thái hoặc sang trang khác). Hãy đóng hộp thoại và xem lại phiếu.",
       note: "Ghi chú (không bắt buộc)",
       noteCount: (n: number, max: number) => `${n}/${max}`,
       confirm: {
