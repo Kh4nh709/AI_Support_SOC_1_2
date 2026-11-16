@@ -418,10 +418,12 @@ def _event_names(db) -> list[str]:
 
 
 def test_the_event_constraint_holds_40_names_the_38_first_in_order(db):
+    """The shared database is migrated to the end, so a later migration's names (025: `soar.review_received`,
+    `soar.review_decided`) follow the 40: they only ever append."""
     names = _event_names(db)
-    assert len(names) == len(set(names)) == 40
+    assert len(names) == len(set(names)) >= 40
     assert names[:38] == EVENTS_BEFORE_024
-    assert names[38:] == EVENTS_IN_024
+    assert names[38:40] == EVENTS_IN_024
 
 
 @pytest.mark.parametrize("name", EVENTS_IN_024)

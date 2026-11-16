@@ -94,6 +94,9 @@ SPEC_GROUPS: dict[str, set[str]] = {
         # INT-T03 (DEC-212): the old queue closed out without review
         "alert.archived",
         "case.archived",
+        # 025: a ticket n8n pushed and a button a person pressed on it
+        "soar.review_received",
+        "soar.review_decided",
     },
     "model": {
         "triage.suggested",
@@ -126,7 +129,7 @@ def test_every_event_type_is_in_exactly_one_group_and_there_are_no_extras() -> N
     assert (
         sorted(set(members) - EVENT_TYPES) == []
     ), "a group lists a name that is not an event type"
-    assert sum(members.values()) == len(EVENT_TYPES) == 40
+    assert sum(members.values()) == len(EVENT_TYPES) == 42
 
 
 def test_the_groups_are_exactly_the_spec_table() -> None:
