@@ -1,7 +1,7 @@
 # "Phản hồi SOAR" on the web (replaces the Telegram buttons) — design
 
 Date: 2026-11-16 · Branch `feature/soar-review-web`, cut from the trial line `director/trial-binary-verdict`
-@ `d6df9fe` · Not deployed, not merged anywhere · Decision number: assigned when built
+@ `d6df9fe` · Not deployed, not merged anywhere · Decision: DEC-222 (`docs/plan/DECISIONS.md`)
 
 ## 1 · Why
 
