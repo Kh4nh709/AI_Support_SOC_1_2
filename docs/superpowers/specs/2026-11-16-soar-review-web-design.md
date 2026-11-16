@@ -83,6 +83,9 @@ Processing (one transaction, the row locked)
   columns are cleared; the decision request in flight then finds its compare-and-set does not match and
   answers with the row as it now is (section 4).
 - An `updated` or `reminder` for an unknown `id` creates the row (`201`).
+- One exception to "every field replaces the stored one": `decided_by`, `decided_at` and `result` that arrive
+  null or absent keep the stored value, so a push that does not repeat who decided cannot erase the web's
+  record. `last_error` is the web's own and no push touches it.
 - `created_at` of the body is n8n's time of the ticket; when absent the first `sent_at` stands in.
 - Every request that passes the three checks and parses writes one audit event (section 6).
 
@@ -219,7 +222,9 @@ Audit (`audit.events.write_event`, subject = the review id):
   invalid_state|locked, status_before, status_after, message}`.
 - Both get a Vietnamese label on the admin audit page, as every event name has.
 
-Configuration (`infra/config.py`, `.env.example`; the three secrets redacted like the others):
+Configuration (`infra/config.py`, `.env.example`; the two secrets, `SOAR_NOTICE_API_KEY` and
+`N8N_APPROVAL_SECRET`, redacted like the others; `N8N_APPROVAL_URL` is not a secret, and the client still never
+logs it):
 `SOAR_NOTICE_API_KEY`, `SOAR_NOTICE_IP_ALLOWLIST`, `N8N_APPROVAL_URL`, `N8N_APPROVAL_SECRET`,
 `N8N_APPROVAL_TIMEOUT_SECONDS` (45), `SOAR_ROLES_KEEP`, `SOAR_ROLES_UNDO`, `SOAR_ROLES_FP` (comma lists of
 `tier1`, `tier2`, `admin`; an unknown role stops the start-up), `SOAR_AD_HOSTS`.
