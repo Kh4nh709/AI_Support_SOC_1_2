@@ -1,4 +1,4 @@
-"""P11-T19 (spec §8, DEC-205) — port 8000 serves `/api/*`, `/webhook/alerts` and `/health`, and
+"""P11-T19 (spec §8, DEC-205) — port 8000 serves `/api/*`, `/webhook/alerts`, `/webhook/soar-notices` (SR-T1) and `/health`, and
 nothing that renders a page. The Jinja admin pages (`/admin/rules`, `/admin/digest`, `/admin/labels`)
 and the sign-in pages (`/login`, `/logout`, `/`) are gone; the React UI on port 8080 is the only
 admin console.
@@ -31,9 +31,9 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from starlette.routing import Mount
 
-#: The two routes outside `/api/` that the application is meant to answer (`web/routers/health.py`,
-#: `web/routers/webhook.py`).
-OPS_PATHS = {"/health", "/webhook/alerts"}
+#: The routes outside `/api/` that the application is meant to answer (`web/routers/health.py`,
+#: `web/routers/webhook.py`, and `web/routers/webhook_soar_notices.py`, SR-T1).
+OPS_PATHS = {"/health", "/webhook/alerts", "/webhook/soar-notices"}
 
 #: `FastAPI()` adds these four itself (Swagger UI, ReDoc, the schema and the Swagger redirect). They
 #: are the framework's, not a page of this application's, and removing them is a separate decision
@@ -109,10 +109,10 @@ def test_every_router_the_app_includes_is_one_the_routes_were_read_from() -> Non
     assert len(iter_routers()) > 0
 
 
-def test_the_app_answers_api_paths_and_the_two_ops_paths_only() -> None:
+def test_the_app_answers_api_paths_and_the_three_ops_paths_only() -> None:
     paths = _every_path()
     outside_api = {p for p in paths if not p.startswith("/api/")}
-    # exactly the two ops paths, plus the framework's own four: nothing else outside /api/
+    # exactly the three ops paths, plus the framework's own four: nothing else outside /api/
     assert outside_api - FRAMEWORK_DOC_PATHS == OPS_PATHS, sorted(outside_api)
     # the test is not vacuous: the API is there
     assert {"/api/auth/login", "/api/auth/me", "/api/admin/rules", "/api/tier1/queue"} <= paths
