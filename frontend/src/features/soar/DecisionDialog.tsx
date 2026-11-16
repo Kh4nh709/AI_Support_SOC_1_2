@@ -15,7 +15,7 @@ import { useId, useState } from "react";
 import type { SoarDecision, SoarReview } from "../../api/soar";
 import { S } from "../../strings";
 import { ConfirmDialog } from "../admin/ConfirmDialog";
-import { NOTE_MAX, actionTextOf, statusText, strongWarningOf } from "./model";
+import { NOTE_MAX, actionTextOf, statusText, strongTitleOf, strongWarningOf } from "./model";
 
 export type DialogDecision = Extract<SoarDecision, "undo" | "fp">;
 
@@ -64,7 +64,7 @@ export function DecisionDialog({
     Array.isArray(current.allowed_decisions) && current.allowed_decisions.includes(decision);
   const changed = live !== null && stateKey(live) !== stateKey(row);
   const acknowledged = changed && seen === stateKey(live);
-  const title = S.soar.dialog.title[strong ? (`${decision}Strong` as const) : decision];
+  const title = strongTitleOf(current, decision);
   const available = !gone && allowed;
   // The boxes still to tick before the confirm opens: the risk first, then the change. While one is, the confirm is shut.
   const waiting = !available

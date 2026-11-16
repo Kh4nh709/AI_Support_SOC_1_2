@@ -136,37 +136,65 @@ export function timersOf(review: SoarReview, nowMs: number): Timers {
   return { expiry, hold };
 }
 
+/** Whether the web may call the host important: the server says so (`host_critical`), and there is a host to name. Absent is false. */
+const criticalHost = (review: SoarReview): boolean =>
+  review.host_critical === true && text(review.host) !== null;
+
 /**
- * The stronger warning of the dialog, worded by the action being undone or called a false positive. `strong_warning` is true
- * for an isolation AND for any action on a host the SOAR marks as important, so the words follow the action and say nothing
- * of why the host matters beyond that the SOAR marks it.
+ * The stronger warning of the dialog, worded by the action being undone or called a false positive and by `host_critical`.
+ * `strong_warning` is true for an isolation AND for any action on a host the configuration of the web lists as critical, so the
+ * words follow the action, and only a critical host is called "máy quan trọng", as listed by the configuration (never "by the
+ * SOAR"); an isolation on an ordinary host says what it does and hedges nothing.
  */
 export function strongWarningOf(review: SoarReview, decision: "undo" | "fp"): string {
   const W = S.soar.dialog.strong;
   const host = text(review.host) ?? W.host;
   const action = actionTextOf(review);
+  const loud = criticalHost(review);
   if (decision === "fp") {
-    return review.action_type === "kill_process"
-      ? W.fp.kill_process(host)
-      : W.fp.other(action, host);
+    if (review.action_type === "kill_process") {
+      return loud ? W.fp.critical.kill_process(host) : W.fp.plain.kill_process(host);
+    }
+    return loud ? W.fp.critical.other(action, host) : W.fp.plain.other(action);
   }
   const target = text(review.action_target);
+  const user = text(review.user_name);
+  const account = user === null ? W.accountNone : W.account(user);
   switch (review.action_type) {
     case "isolate_host":
-      return W.undo.isolate_host(host);
-    case "disable_user": {
-      const user = text(review.user_name);
-      return W.undo.disable_user(user === null ? W.accountNone : W.account(user), host);
-    }
+      return loud ? W.undo.critical.isolate_host(host) : W.undo.plain.isolate_host(host);
+    case "disable_user":
+      return loud
+        ? W.undo.critical.disable_user(account, host)
+        : W.undo.plain.disable_user(account, host);
     case "block_ip":
-      return W.undo.block_ip(target ?? W.ip, host);
+      return loud
+        ? W.undo.critical.block_ip(target ?? W.ip, host)
+        : W.undo.plain.block_ip(target ?? W.ip);
     case "sinkhole_domain":
-      return W.undo.sinkhole_domain(target ?? W.domain, host);
+      return loud
+        ? W.undo.critical.sinkhole_domain(target ?? W.domain, host)
+        : W.undo.plain.sinkhole_domain(target ?? W.domain);
     case "disable_xp_cmdshell":
-      return W.undo.disable_xp_cmdshell(host);
+      return loud
+        ? W.undo.critical.disable_xp_cmdshell(host)
+        : W.undo.plain.disable_xp_cmdshell(host);
     default:
-      return W.undo.other(action, host);
+      return loud ? W.undo.critical.other(action, host) : W.undo.plain.other(action);
   }
+}
+
+/**
+ * The title of the dialog. A strong warning on a critical host says so in the title; one that is only an isolation names the
+ * isolation; a ticket with no strong warning has the ordinary title, and so has a strong one whose reason the web cannot name.
+ */
+export function strongTitleOf(review: SoarReview, decision: "undo" | "fp"): string {
+  const T = S.soar.dialog.title;
+  if (review.strong_warning !== true) return T[decision];
+  if (criticalHost(review)) return decision === "undo" ? T.undoStrong : T.fpStrong;
+  if (review.action_type === "isolate_host")
+    return decision === "undo" ? T.undoIsolated : T.fpIsolated;
+  return T[decision];
 }
 
 // Bidi and zero-width controls: U+200B-U+200F (zero-width space, joiners, direction marks), U+202A-U+202E (embeddings and

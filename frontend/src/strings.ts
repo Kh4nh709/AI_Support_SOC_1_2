@@ -2738,32 +2738,60 @@ export const S = {
         fp: "Đánh dấu dương tính giả?",
         undoStrong: "Cảnh báo: gỡ biện pháp trên máy quan trọng",
         fpStrong: "Cảnh báo: đánh dấu dương tính giả trên máy quan trọng",
+        // A strong warning whose host is not critical (an isolation on an ordinary host) names no importance.
+        undoIsolated: "Cảnh báo: gỡ cách ly máy",
+        fpIsolated: "Cảnh báo: đánh dấu dương tính giả cho máy bị cách ly",
       },
       subject: (id: string, action: string) => `Phiếu ${id}: ${action}`,
-      // What the person is about to do on a host the SOAR marks as important (`strong_warning`), worded by the ACTION: the web
-      // does not know whether the host is the domain controller or the action is an isolation, so no text claims the host
-      // is the AD server. Every value in it (host, account, address, domain, action) is the text of n8n.
+      // What the person is about to do when `strong_warning` is true (an isolation, or a host the configuration of the web lists as
+      // critical), worded by the ACTION and by `host_critical`: only a critical host is called "máy quan trọng", and the text says it
+      // is the configuration that lists it (not the SOAR); an isolation on an ordinary host says what it does and hedges nothing.
+      // Every value in it (host, account, address, domain, action) is the text of n8n.
       strong: {
         undo: {
-          isolate_host: (host: string) =>
-            `Gỡ cách ly ${host} sẽ nối lại máy với mạng ngay. Đây là máy đang bị cách ly hoặc máy mà SOAR đánh dấu quan trọng (ví dụ máy chủ AD). Nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.`,
-          disable_user: (account: string, host: string) =>
-            `Mở khoá ${account} trên ${host}: tài khoản này sẽ đăng nhập lại được ngay. ${host} là máy mà SOAR đánh dấu quan trọng; nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.`,
-          block_ip: (target: string, host: string) =>
-            `Gỡ chặn ${target}: lưu lượng từ địa chỉ này được phép đi qua trở lại. ${host} là máy mà SOAR đánh dấu quan trọng; hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
-          sinkhole_domain: (target: string, host: string) =>
-            `Gỡ chặn tên miền ${target}: tên miền này sẽ phân giải trở lại. ${host} là máy mà SOAR đánh dấu quan trọng; hãy chắc chắn tên miền này không còn nguy hiểm.`,
-          disable_xp_cmdshell: (host: string) =>
-            `xp_cmdshell sẽ được bật lại trên ${host}: máy chủ SQL cho phép chạy lệnh hệ điều hành trở lại. ${host} là máy mà SOAR đánh dấu quan trọng; hãy chắc chắn trước khi tiếp tục.`,
-          // An action type this file has no sentence for: the action is named by its own text.
-          other: (action: string, host: string) =>
-            `Bạn sắp gỡ biện pháp “${action}”. ${host} là máy mà SOAR đánh dấu quan trọng; hãy chắc chắn trước khi tiếp tục.`,
+          plain: {
+            isolate_host: (host: string) =>
+              `Gỡ cách ly ${host} sẽ nối lại máy với mạng ngay. Nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.`,
+            disable_user: (account: string, host: string) =>
+              `Mở khoá ${account} trên ${host}: tài khoản này sẽ đăng nhập lại được ngay. Nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.`,
+            block_ip: (target: string) =>
+              `Gỡ chặn ${target}: lưu lượng từ địa chỉ này được phép đi qua trở lại. Hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
+            sinkhole_domain: (target: string) =>
+              `Gỡ chặn tên miền ${target}: tên miền này sẽ phân giải trở lại. Hãy chắc chắn tên miền này không còn nguy hiểm.`,
+            disable_xp_cmdshell: (host: string) =>
+              `xp_cmdshell sẽ được bật lại trên ${host}: máy chủ SQL cho phép chạy lệnh hệ điều hành trở lại. Hãy chắc chắn trước khi tiếp tục.`,
+            // An action type this file has no sentence for: the action is named by its own text.
+            other: (action: string) =>
+              `Bạn sắp gỡ biện pháp “${action}”. Hãy chắc chắn trước khi tiếp tục.`,
+          },
+          critical: {
+            isolate_host: (host: string) =>
+              `Gỡ cách ly ${host} sẽ nối lại máy với mạng ngay. ${host} thuộc các máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.`,
+            disable_user: (account: string, host: string) =>
+              `Mở khoá ${account} trên ${host}: tài khoản này sẽ đăng nhập lại được ngay. ${host} thuộc các máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.`,
+            block_ip: (target: string, host: string) =>
+              `Gỡ chặn ${target}: lưu lượng từ địa chỉ này được phép đi qua trở lại. Địa chỉ này đã nhắm tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
+            sinkhole_domain: (target: string, host: string) =>
+              `Gỡ chặn tên miền ${target}: tên miền này sẽ phân giải trở lại. Tên miền này đã được truy vấn từ ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn tên miền này không còn nguy hiểm.`,
+            disable_xp_cmdshell: (host: string) =>
+              `xp_cmdshell sẽ được bật lại trên ${host}: máy chủ SQL cho phép chạy lệnh hệ điều hành trở lại. ${host} thuộc các máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn trước khi tiếp tục.`,
+            other: (action: string, host: string) =>
+              `Bạn sắp gỡ biện pháp “${action}” liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn trước khi tiếp tục.`,
+          },
         },
         fp: {
-          kill_process: (host: string) =>
-            `Tiến trình đã bị dừng trên ${host}, một máy mà SOAR đánh dấu quan trọng. Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.`,
-          other: (action: string, host: string) =>
-            `Đánh dấu dương tính giả cho “${action}” sẽ đóng phiếu, kể cả khi biện pháp vẫn áp dụng trên ${host}, một máy mà SOAR đánh dấu quan trọng. Nếu đây là tấn công thật, sẽ không còn nhắc nữa.`,
+          plain: {
+            kill_process: (host: string) =>
+              `Tiến trình đã bị dừng trên ${host}. Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.`,
+            other: (action: string) =>
+              `Đánh dấu dương tính giả cho “${action}” sẽ đóng phiếu, kể cả khi biện pháp vẫn đang áp dụng. Nếu đây là tấn công thật, sẽ không còn nhắc nữa.`,
+          },
+          critical: {
+            kill_process: (host: string) =>
+              `Tiến trình đã bị dừng trên ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD). Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.`,
+            other: (action: string, host: string) =>
+              `Đánh dấu dương tính giả cho “${action}” sẽ đóng phiếu, kể cả khi biện pháp vẫn áp dụng trên ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD). Nếu đây là tấn công thật, sẽ không còn nhắc nữa.`,
+          },
         },
         // What stands for a value n8n did not send, and the words around an account.
         host: "máy này",

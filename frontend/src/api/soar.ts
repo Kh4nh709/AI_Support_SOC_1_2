@@ -84,8 +84,13 @@ export type SoarReview = {
   updated_at: string | null;
   /** For THIS caller: valid for the state AND allowed for the role. */
   allowed_decisions: SoarDecision[];
-  /** `action_type` is `isolate_host`, or the host is a domain controller. */
+  /** `action_type` is `isolate_host`, or `host_critical`. */
   strong_warning: boolean;
+  /**
+   * The host is one the configuration of the web lists as critical (`SOAR_AD_HOSTS`, the domain controller among them). Absent
+   * on an older server, which reads as false: the pages never say a host is important unless this is true.
+   */
+  host_critical?: boolean;
 };
 
 /** `GET /api/soar/reviews`. */
@@ -130,6 +135,8 @@ export type SoarReviewDetail = SoarReview & {
   history: SoarHistoryEvent[];
   related_alerts: SoarRelatedAlert[];
   related_total: number;
+  /** True when older events were left out of `history` (the newest 200 are served). Absent reads as false. */
+  history_truncated?: boolean;
 };
 
 /** `POST /api/soar/reviews/{id}/decision`. HTTP errors are only the local ones (401, 403, 404, 409, 422, 503). */

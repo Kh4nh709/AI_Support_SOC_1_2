@@ -48,6 +48,7 @@ const hostile = () =>
     ],
     allowed_decisions: ["keep", "undo"],
     strong_warning: true,
+    host_critical: true,
   });
 
 /** Everything that ran or linked would show up here. */
@@ -170,7 +171,7 @@ describe("the table", () => {
     await userEvent.click(within(row).getByRole("button", { name: LONG }));
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent(
-      S.soar.dialog.strong.undo.block_ip(JS, "<svg onload=window.__pwned=1>"),
+      S.soar.dialog.strong.undo.critical.block_ip(JS, "<svg onload=window.__pwned=1>"),
     );
     expectInert(container);
   });
@@ -451,7 +452,7 @@ describe("accessibility", () => {
       await screen.findByRole("button", { name: S.soar.detail.open("HOLD0001") })
     ).closest("tr") as HTMLElement;
     await userEvent.click(within(strong).getByRole("button", { name: "↩️ Gỡ chặn IP" }));
-    await screen.findByRole("dialog", { name: S.soar.dialog.title.undoStrong });
+    await screen.findByRole("dialog", { name: S.soar.dialog.title.undoIsolated });
     expect(await violationsIn(container)).toEqual([]);
   });
 

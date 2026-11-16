@@ -50,6 +50,7 @@ export function review(over: Partial<SoarReview> = {}): SoarReview {
     updated_at: "2026-11-13T14:40:05+00:00",
     allowed_decisions: ["keep", "undo"],
     strong_warning: false,
+    host_critical: false,
     ...over,
   };
 }

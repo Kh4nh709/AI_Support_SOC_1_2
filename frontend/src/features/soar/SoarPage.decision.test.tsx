@@ -310,6 +310,7 @@ describe("the strong warning", () => {
       ],
       allowed_decisions: ["keep", "undo"],
       strong_warning: true,
+      host_critical: true,
     });
 
   it("is in the dialog of undo when strong_warning is true: stronger title, the warning, what follows", async () => {
@@ -319,7 +320,7 @@ describe("the strong warning", () => {
     const dialog = await screen.findByRole("dialog", { name: S.soar.dialog.title.undoStrong });
     expect(S.soar.dialog.title.undoStrong).not.toBe(S.soar.dialog.title.undo);
     const warning = within(dialog).getByText(
-      "Gỡ cách ly AD-server sẽ nối lại máy với mạng ngay. Đây là máy đang bị cách ly hoặc máy mà SOAR đánh dấu quan trọng (ví dụ máy chủ AD). Nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.",
+      "Gỡ cách ly AD-server sẽ nối lại máy với mạng ngay. AD-server thuộc các máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.",
     );
     expect(warning.textContent).toMatch(/^Gỡ cách ly AD-server/);
     expect(within(dialog).getByText(S.soar.dialog.after.undo)).toBeInTheDocument();
@@ -382,6 +383,7 @@ describe("the strong warning", () => {
       buttons: [{ decision: "fp", label: "🚫 Dương tính giả" }],
       allowed_decisions: ["fp"],
       strong_warning: true,
+      host_critical: true,
     });
     serveDecision(() => answer(), [row]);
     renderSoar();
@@ -389,7 +391,7 @@ describe("the strong warning", () => {
     const dialog = await screen.findByRole("dialog", { name: S.soar.dialog.title.fpStrong });
     expect(
       within(dialog).getByText(
-        "Tiến trình đã bị dừng trên AD-server, một máy mà SOAR đánh dấu quan trọng. Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.",
+        "Tiến trình đã bị dừng trên AD-server, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD). Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.",
       ),
     ).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: S.soar.dialog.confirm.fp })).toBeDisabled();
@@ -410,6 +412,7 @@ describe("the strong warning", () => {
       action_type: "block_ip",
       action_target: "79.79.78.202",
       strong_warning: true,
+      host_critical: true,
     });
     serveDecision(() => answer(), [row]);
     renderSoar();
@@ -417,7 +420,7 @@ describe("the strong warning", () => {
     const dialog = await screen.findByRole("dialog", { name: S.soar.dialog.title.undoStrong });
     expect(
       within(dialog).getByText(
-        "Gỡ chặn 79.79.78.202: lưu lượng từ địa chỉ này được phép đi qua trở lại. AD-server là máy mà SOAR đánh dấu quan trọng; hãy chắc chắn địa chỉ này không còn nguy hiểm.",
+        "Gỡ chặn 79.79.78.202: lưu lượng từ địa chỉ này được phép đi qua trở lại. Địa chỉ này đã nhắm tới AD-server, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn địa chỉ này không còn nguy hiểm.",
       ),
     ).toBeInTheDocument();
     expect(dialog).not.toHaveTextContent("Gỡ cách ly");
