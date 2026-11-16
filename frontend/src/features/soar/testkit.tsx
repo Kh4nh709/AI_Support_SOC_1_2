@@ -2,8 +2,9 @@
 // page rendered under the providers it has in the app. Not a test file itself. The clock is a fixed instant, so a
 // countdown reads the same in every run.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render } from "@testing-library/react";
+import { configure, render } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
+import { vi } from "vitest";
 import type { SetupServer } from "msw/node";
 import { useEffect } from "react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router";
@@ -19,6 +20,21 @@ import { AuthContext, type AuthState } from "../../auth/AuthProvider";
 import type { Session } from "../../auth/session";
 import { detailOf, listOf } from "./fixtures";
 import { SoarPage } from "./SoarPage";
+
+/**
+ * How long a step of these tests waits for what the page gets from the mock server (the first list, a tab's list, a detail, an
+ * answer) before it says it is not there. The library's default is 1 s of wall clock for every `findBy*` and `waitFor`, which a
+ * machine running a hundred test files at once spends between the render and the answer. With thirty-two busy loops beside it on
+ * eight cores, five of seven runs of one test of followup.test.tsx failed at the first `findByRole` of the page, the first list
+ * (not at a tab change, as it was first read): the same 1 s is under every list, detail and answer these tests wait for. Nothing
+ * waited for is slower then, only the clock is, so a step waits on the state it needs and gives up only on a hang; the limit
+ * costs a passing test nothing. The test itself gets room for the waits it holds (vitest's default of 5 s would end it before
+ * the last one gave up).
+ */
+export const STEP_WAIT_MS = 8_000;
+export const TEST_MS = 20_000;
+configure({ asyncUtilTimeout: STEP_WAIT_MS });
+vi.setConfig({ testTimeout: TEST_MS });
 
 /** 14:41:05 UTC on the day of the fixtures: 21:41:05 in +07, 35 minutes after the ticket was made. */
 export const NOW = Date.parse("2026-11-13T14:41:05+00:00");
