@@ -4,7 +4,7 @@
 import type { SoarDecision, SoarReview } from "../../api/soar";
 import { S } from "../../strings";
 import { buttonsOf } from "./model";
-import type { RowState } from "./useDecisions";
+import { sameStamp, stampOf, type RowState } from "./useDecisions";
 
 // Whole class names, written out: Tailwind finds a class by reading the source. A long label wraps inside its button.
 const BUTTON =
@@ -23,7 +23,9 @@ export function RowActions({
   const running = state?.running === true;
   // What the last request said is about the row as it was then: when n8n has changed the ticket since, it is old news.
   const lines =
-    state !== undefined && !state.running && state.at === row.updated_at ? state.lines : [];
+    state !== undefined && !state.running && state.at !== null && sameStamp(state.at, stampOf(row))
+      ? state.lines
+      : [];
   const stored =
     typeof row.last_error === "string" && row.last_error.trim() !== "" ? row.last_error : null;
   const saidAlready = lines.some((line) => line.text === stored);

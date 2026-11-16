@@ -17,12 +17,34 @@ import { answerLines, failureOf, isReview, type RowLine } from "./outcome";
 import { soarKeys } from "./soarQueries";
 import { S } from "../../strings";
 
+/** What a row was when a line was written about it: the lines are shown only while the row is still that. */
+export type RowStamp = {
+  updated_at: string | null;
+  status: string;
+  decided_at: string | null;
+};
+
+/**
+ * The stamp of a row. `updated_at` moves on every write, but a line must not outlive a change of the status or of the
+ * decision either (a later decision of someone else must never sit beside my failure), whatever the clock says.
+ */
+export const stampOf = (
+  row: Pick<SoarReview, "updated_at" | "status" | "decided_at">,
+): RowStamp => ({
+  updated_at: row.updated_at ?? null,
+  status: row.status,
+  decided_at: row.decided_at ?? null,
+});
+
+export const sameStamp = (a: RowStamp, b: RowStamp): boolean =>
+  a.updated_at === b.updated_at && a.status === b.status && a.decided_at === b.decided_at;
+
 export type RowState = {
   /** The request is out (it may take up to 45 s). */
   running: boolean;
   lines: readonly RowLine[];
-  /** The `updated_at` of the row the lines are about; they are shown only while the row still has it. */
-  at: string | null;
+  /** The row the lines are about; they are shown only while the row still has this stamp. */
+  at: RowStamp | null;
 };
 
 export type Decisions = {
@@ -85,7 +107,7 @@ export function useDecisions(): Decisions {
         put(row.id, {
           running: false,
           lines: answerLines(answer),
-          at: review?.updated_at ?? row.updated_at,
+          at: stampOf(review ?? row),
         });
         if (answer.outcome === "ok" && review !== null) {
           setToast(S.soar.result.toast(row.id, statusText(review)));
@@ -99,7 +121,7 @@ export function useDecisions(): Decisions {
         put(row.id, {
           running: false,
           lines: failure.lines,
-          at: failure.review?.updated_at ?? row.updated_at,
+          at: stampOf(failure.review ?? row),
         });
         if (failure.refetch) void client.invalidateQueries({ queryKey: soarKeys.lists });
       } finally {

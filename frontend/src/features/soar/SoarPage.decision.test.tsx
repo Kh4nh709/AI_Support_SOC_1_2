@@ -513,6 +513,34 @@ describe("the outcomes", () => {
     await waitFor(() => expect(screen.queryByText("GỠ THẤT BẠI: hết giờ")).not.toBeInTheDocument());
   });
 
+  it.each([
+    ["a new status", { status: "undone", allowed_decisions: [] } as Partial<SoarReview>],
+    ["a new decided_at", { decided_at: "2026-11-13T14:50:00+00:00", decided_by: "binh" }],
+  ])(
+    "drops my error line when a poll brings %s, even when updated_at has not moved: a later decision of someone else never sits beside my failure",
+    async (_name, changed) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const state = serveDecision(() =>
+        answer({
+          outcome: "failed",
+          message: "GỠ THẤT BẠI: hết giờ",
+          review: review({ last_error: null, updated_at: "2026-11-13T14:41:10+00:00" }),
+        }),
+      );
+      renderSoar();
+      await press(KEEP);
+      await screen.findByText("GỠ THẤT BẠI: hết giờ");
+      // the poll that brings what somebody else decided: the same updated_at, another status or another decision time
+      state.rows = [
+        review({ updated_at: "2026-11-13T14:41:10+00:00", last_error: null, ...changed }),
+      ];
+      await act(() => vi.advanceTimersByTimeAsync(SOAR_LIST_POLL_MS + 100));
+      await waitFor(() =>
+        expect(screen.queryByText("GỠ THẤT BẠI: hết giờ")).not.toBeInTheDocument(),
+      );
+    },
+  );
+
   it("conflict: shows the status n8n gave and says it was handled elsewhere", async () => {
     serveDecision(() =>
       answer({
