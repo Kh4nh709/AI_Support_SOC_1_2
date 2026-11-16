@@ -29,10 +29,14 @@ A fault names the field and the kind of fault, never the value: nothing the send
 | no row with this `id` | `201 {id, created: true}` | the row, `last_sent_at = sent_at`, `raw` = the body as sent |
 | a row, `sent_at` older than `last_sent_at` | `200 {id, created: false, ignored: true, reason: "stale"}` | nothing |
 | a row in `undone`, `false_positive` or `expired`, and the body says `open` | `200 {..., ignored: true, reason: "terminal"}` | nothing |
+| a row `kept` with a `decided_at` LATER than the body's `sent_at`, and the body says `open` | `200 {..., ignored: true, reason: "decided"}` | nothing |
 | otherwise | `200 {id, created: false}` | every field of the body replaces the stored one (but `decided_by`, `decided_at`, `result`: null or absent keeps the stored value); `raw`, `last_sent_at`, `updated_at` |
 
 An update that lands on a row the web holds (`processing`) is applied, since n8n is the authority: the lock columns are
-cleared, and the decision request in flight finds its compare-and-set no longer matches (`soar/reviews.py`). An `updated`
+cleared, and the decision request in flight finds its compare-and-set no longer matches (`soar/reviews.py`); EXCEPT a push whose
+`status` is the one the row had before the lock (`prev_status`): it says nothing new, so it updates the other fields and leaves
+`status`, `prev_status`, `locked_by` and `locked_at` alone, and the press in flight finishes normally. A push saying `open` for a row
+the web kept, written BEFORE the web's own `decided_at`, is ignored (`decided`): it predates the press. An `updated`
 or `reminder` for an unknown id creates the row. `created_at` of the body is n8n's time of the ticket; absent, the first
 `sent_at` stands in, and an update that omits it keeps the stored one. The fields the web owns (`last_error`) are not
 touched. The record of a decision (`decided_by`, `decided_at`, `result`) is kept when a push leaves it null or out: the web writes it on a
@@ -582,9 +586,16 @@ def _insert(conn: psycopg.Connection, notice: Notice) -> bool:
 _KEPT_WHEN_NULL = ("decided_by", "decided_at", "result")
 
 
-def _update(conn: psycopg.Connection, notice: Notice) -> None:
-    """Every field of the body replaces the stored one, except the three of `_KEPT_WHEN_NULL`, which a null or an absent field
-    leaves as it is; the lock is released: n8n is the authority."""
+#: The columns of the lock: a push that says nothing new about the state of a row a press is working on leaves them, and `status`, as
+#: they are.
+_LOCK_COLUMNS = ("status",)
+
+
+def _update(conn: psycopg.Connection, notice: Notice, *, keep_lock: bool = False) -> None:
+    """Every field of the body replaces the stored one, except the three of `_KEPT_WHEN_NULL`, which a null or an absent field leaves
+    as it is; the lock is released: n8n is the authority. With `keep_lock` (a push onto a row that is `processing` and says the state
+    it had before the lock) `status` is not assigned and `prev_status`, `locked_by` and `locked_at` are left: the press in flight
+    finishes normally."""
     assignments = sql.SQL(", ").join(
         (
             sql.SQL("{name} = COALESCE({value}, {name})").format(
@@ -594,21 +605,26 @@ def _update(conn: psycopg.Connection, notice: Notice) -> None:
             else sql.SQL("{} = {}").format(sql.Identifier(column), sql.Placeholder(column))
         )
         for column in _BODY_COLUMNS
+        if not (keep_lock and column in _LOCK_COLUMNS)
     )
+    release = "" if keep_lock else "locked_by = NULL, locked_at = NULL, prev_status = NULL, "
     statement = sql.SQL(
         "UPDATE soar_reviews SET {assignments}, created_at = COALESCE(%(created_at)s, created_at), "
-        "raw = %(raw)s, last_sent_at = %(sent_at)s, locked_by = NULL, locked_at = NULL, "
-        "prev_status = NULL, updated_at = now() WHERE id = %(id)s"
-    ).format(assignments=assignments)
+        "raw = %(raw)s, last_sent_at = %(sent_at)s, {release}updated_at = now() WHERE id = %(id)s"
+    ).format(assignments=assignments, release=sql.SQL(release))
     conn.execute(statement, _params(notice))
 
 
-def _lock_row(conn: psycopg.Connection, review_id: str) -> tuple[str, datetime] | None:
-    """`(status, last_sent_at)` of the ticket, its row locked until the transaction ends; `None` when there is none."""
+def _lock_row(
+    conn: psycopg.Connection, review_id: str
+) -> tuple[str, datetime, datetime | None, str | None] | None:
+    """`(status, last_sent_at, decided_at, prev_status)` of the ticket, its row locked until the transaction ends; `None` when there
+    is none."""
     row = conn.execute(
-        "SELECT status, last_sent_at FROM soar_reviews WHERE id = %s FOR UPDATE", (review_id,)
+        "SELECT status, last_sent_at, decided_at, prev_status FROM soar_reviews WHERE id = %s FOR UPDATE",
+        (review_id,),
     ).fetchone()
-    return None if row is None else (row[0], row[1])
+    return None if row is None else (row[0], row[1], row[2], row[3])
 
 
 def apply(conn: psycopg.Connection, notice: Notice) -> Applied:
@@ -620,13 +636,28 @@ def apply(conn: psycopg.Connection, notice: Notice) -> Applied:
         if row is None:  # another request made it between our look and our insert: it is there now
             row = _lock_row(conn, notice.id)
         assert row is not None
-        stored_status, last_sent_at = row
+        stored_status, last_sent_at, decided_at, prev_status = row
         if notice.sent_at < last_sent_at:
             applied = Applied(notice.id, "ignored", "stale")
         elif stored_status in TERMINAL_STATUSES and notice.status == "open":
             applied = Applied(notice.id, "ignored", "terminal")
+        elif (
+            notice.status == "open"
+            and stored_status == "kept"
+            and decided_at is not None
+            and decided_at > notice.sent_at
+        ):
+            # kept by a decision made AFTER this push was written: the push predates it (n8n resends the original `created`
+            # body, or a reminder generated before the press) and must not bring the buttons back. A push written after the
+            # decision is applied: n8n is the authority.
+            applied = Applied(notice.id, "ignored", "decided")
         else:
-            _update(conn, notice)
+            # a push that says the state a row had before a press took it says nothing new: it must not release the press
+            _update(
+                conn,
+                notice,
+                keep_lock=stored_status == "processing" and notice.status == prev_status,
+            )
             applied = Applied(notice.id, "updated")
     write_event(
         conn,

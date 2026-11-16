@@ -624,6 +624,92 @@ def test_updated_at_moves_on_a_push_that_is_applied_and_not_on_one_that_is_ignor
     ) - timedelta(minutes=5)
 
 
+def _decided_by_the_web(world: World, review_id: str, *, at: float, status: str = "kept") -> None:
+    """The state after a press: `status`, with the moment the WEB decided (its own clock; here fixed to `_at(at)`)."""
+    world.execute(
+        "UPDATE soar_reviews SET status = %s, decided_by = 'alice', decided_at = %s, result = 'giữ chặn' WHERE id = %s",
+        (status, data.T0 + timedelta(seconds=at), review_id),
+    )
+
+
+@pytest.mark.parametrize("sent", [10, 50, 99])
+def test_i3a_a_push_saying_open_that_predates_the_decision_is_ignored_as_decided(world, sent):
+    """I3(a): keep -> kept; n8n then resends the original `created` body, or a reminder generated before the press: `open`
+    again, the buttons back, a second press calling n8n again. A push whose `status` is `open`, onto a `kept` row whose stored
+    `decided_at` is LATER than the push's `sent_at`, is ignored."""
+    first = data.review(sent_at=_at(10))
+    world.post(first)
+    _decided_by_the_web(world, first["id"], at=100)
+    before = world.row(first["id"])
+    response = world.post(
+        data.review(id=first["id"], event="reminder", sent_at=_at(sent), status="open", note="cũ")
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": first["id"],
+        "created": False,
+        "ignored": True,
+        "reason": "decided",
+    }
+    assert world.row(first["id"]) == before  # nothing stored, `updated_at` included
+    [*_, last] = world.events(first["id"])
+    assert (last["payload"]["outcome"], last["payload"]["reason"], last["payload"]["status"]) == (
+        "ignored",
+        "decided",
+        "open",
+    )
+
+
+@pytest.mark.parametrize("sent", [100, 101, 500])
+def test_i3a_a_push_saying_open_that_is_not_older_than_the_decision_is_applied_n8n_is_the_authority(
+    world, sent
+):
+    first = data.review(sent_at=_at(10))
+    world.post(first)
+    _decided_by_the_web(world, first["id"], at=100)
+    response = world.post(
+        data.review(
+            id=first["id"], event="updated", sent_at=_at(sent), status="open", note="mở lại"
+        )
+    )
+    assert response.json() == {"id": first["id"], "created": False}
+    row = world.row(first["id"])
+    assert (row["status"], row["note"]) == ("open", "mở lại")
+
+
+def test_i3a_only_open_onto_kept_with_a_decision_time_is_in_the_rule(world):
+    first = data.review(sent_at=_at(10))
+    world.post(first)
+    _decided_by_the_web(world, first["id"], at=100)
+    # another status is not `open`: applied
+    assert world.post(
+        data.review(id=first["id"], sent_at=_at(20), status="kept", note="x")
+    ).json() == {"id": first["id"], "created": False}
+    # no stored decision time: nothing to compare with, applied
+    world.execute("UPDATE soar_reviews SET decided_at = NULL WHERE id = %s", (first["id"],))
+    assert world.post(data.review(id=first["id"], sent_at=_at(30), status="open")).json() == {
+        "id": first["id"],
+        "created": False,
+    }
+    assert world.row(first["id"])["status"] == "open"
+    # a row that is not `kept` (here `open`) is not in this rule either
+    world.execute(
+        "UPDATE soar_reviews SET decided_at = %s WHERE id = %s",
+        (data.T0 + timedelta(seconds=900), first["id"]),
+    )
+    assert world.post(
+        data.review(id=first["id"], sent_at=_at(40), status="open", note="y")
+    ).json() == {"id": first["id"], "created": False}
+
+
+def test_i3a_stale_is_still_said_before_decided(world):
+    first = data.review(sent_at=_at(60))
+    world.post(first)
+    _decided_by_the_web(world, first["id"], at=100)
+    response = world.post(data.review(id=first["id"], sent_at=_at(5), status="open"))
+    assert response.json()["reason"] == "stale"
+
+
 def test_an_update_leaves_the_webs_own_last_error_alone(world):
     first = data.review()
     world.post(first)
@@ -738,14 +824,82 @@ def test_an_update_that_lands_on_a_processing_row_is_applied_and_clears_the_lock
     assert (row["locked_by"], row["locked_at"], row["prev_status"]) == (None, None, None)
 
 
-def test_an_open_body_on_a_row_in_processing_is_applied_too(world):
-    """`processing` is not terminal: the row that was `open` before the lock goes back to `open`, unlocked."""
+def test_i3b_a_push_with_the_status_the_row_had_before_the_lock_leaves_the_press_alone(world):
+    """I3(b): a resend, or a reminder generated before the press, says `open` about a row that is `processing` from `open`: nothing
+    new about the state. It updates the other fields and leaves status, prev_status, locked_by and locked_at alone, so the press in
+    flight finishes normally (it used to clear the lock, and the press's result was lost)."""
+    first = data.review()
+    world.post(first)
+    _lock(world, first["id"], by="alice")
+    held = world.row(first["id"])
+    response = world.post(
+        data.review(
+            id=first["id"],
+            event="reminder",
+            sent_at=_at(30),
+            status="open",
+            note="nhắc lại",
+            score=77,
+        )
+    )
+    assert response.status_code == 200 and response.json() == {"id": first["id"], "created": False}
+    row = world.row(first["id"])
+    assert (row["status"], row["prev_status"], row["locked_by"], row["locked_at"]) == (
+        "processing",
+        "open",
+        "alice",
+        held["locked_at"],
+    )
+    assert (row["note"], row["score"]) == ("nhắc lại", 77)  # the other fields are updated
+    assert datetime.fromisoformat(row["last_sent_at"]) == data.T0 + timedelta(seconds=30)
+    assert row["raw"]["note"] == "nhắc lại"
+    [*_, last] = world.events(first["id"])
+    assert (last["payload"]["outcome"], last["payload"]["reason"]) == ("updated", None)
+
+
+def test_i3b_the_decision_fields_still_keep_their_stored_value_on_that_path(world):
+    first = data.review(status="open")
+    world.post(first)
+    world.execute(
+        "UPDATE soar_reviews SET decided_by = 'alice', result = 'cũ' WHERE id = %s", (first["id"],)
+    )
+    _lock(world, first["id"])
+    world.post(
+        data.review(id=first["id"], sent_at=_at(30), status="open", decided_by=None, result="mới")
+    )
+    row = world.row(first["id"])
+    assert (row["status"], row["decided_by"], row["result"]) == ("processing", "alice", "mới")
+
+
+@pytest.mark.parametrize("prev", ["open", "kept"])
+def test_i3b_the_same_rule_whatever_the_state_before_the_lock(world, prev):
+    first = data.review(status=prev)
+    world.post(first)
+    _lock(world, first["id"])
+    world.post(data.review(id=first["id"], sent_at=_at(30), status=prev, note="x"))
+    assert world.row(first["id"])["status"] == "processing"
+    other = "kept" if prev == "open" else "open"
+    world.post(data.review(id=first["id"], sent_at=_at(60), status=other, note="y"))
+    row = world.row(first["id"])
+    assert (row["status"], row["locked_by"], row["prev_status"]) == (
+        other,
+        None,
+        None,
+    )  # any other status: applied as before
+
+
+def test_i3b_a_push_with_another_status_is_applied_and_clears_the_lock_n8n_decided(world):
     first = data.review()
     world.post(first)
     _lock(world, first["id"])
-    world.post(data.review(id=first["id"], event="reminder", sent_at=_at(30), status="open"))
+    world.post(data.review(id=first["id"], sent_at=_at(30), status="expired"))
     row = world.row(first["id"])
-    assert row["status"] == "open" and row["locked_by"] is None
+    assert (row["status"], row["locked_by"], row["locked_at"], row["prev_status"]) == (
+        "expired",
+        None,
+        None,
+        None,
+    )
 
 
 def test_a_stale_body_leaves_a_processing_row_as_it_was(world):

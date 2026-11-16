@@ -1133,6 +1133,52 @@ def test_n8ns_own_update_arriving_during_the_call_wins_and_the_press_writes_noth
     assert (event["payload"]["status_before"], event["payload"]["status_after"]) == ("open", "kept")
 
 
+def test_i3b_a_push_with_the_same_status_during_the_call_does_not_cost_the_press_its_result(world):
+    """I3(b): a resend or a reminder generated before the press says `open` while the press is in flight (the row is `processing`
+    from `open`). It used to clear the lock: the compare-and-set then matched nothing, and n8n's `ok` was lost. Now the press
+    finishes normally."""
+    review_id = world.put()
+    world.fake = FakeN8n(Reply.ok("kept", result="giữ chặn", message="Đã giữ chặn"))
+    seen: list[dict[str, Any]] = []
+
+    def push_during_the_call(call) -> None:
+        _webhook_update(world, review_id, status="open", note="gửi lại trong lúc xử lý")
+        seen.append(world.row(review_id))
+
+    world.fake.on_request = push_during_the_call
+    response = _decide(world, "tier2", review_id, "keep")
+    assert response.status_code == 200 and response.json()["outcome"] == "ok"
+    [during] = seen
+    assert during["status"] == "processing" and during["locked_by"] == world.users["tier2"][1]
+    assert during["note"] == "gửi lại trong lúc xử lý"  # the push was applied to the other fields
+    row = world.row(review_id)
+    assert row["status"] == "kept" and row["decided_by"] == world.users["tier2"][1]
+    assert row["result"] == "giữ chặn"
+    assert (row["locked_by"], row["locked_at"], row["prev_status"]) == (None, None, None)
+    assert row["note"] == "gửi lại trong lúc xử lý"
+    assert [e["payload"]["outcome"] for e in _decided(world, review_id)] == ["ok"]
+    assert _decide(world, "tier2", review_id, "keep").status_code == 409  # the buttons are not back
+    assert len(world.fake.calls) == 1
+
+
+def test_i3a_after_a_press_n8ns_old_open_push_does_not_bring_the_buttons_back(world):
+    """I3(a): keep -> `kept`; then n8n resends the original `created` body (`open`, `sent_at` from before the press)."""
+    original = data.review()
+    review_id = original["id"]
+    world.put(id=review_id, last_sent_at=data.T0)
+    assert _decide(world, "tier2", review_id, "keep").status_code == 200
+    decided_at = datetime.fromisoformat(world.row(review_id)["decided_at"])
+    assert decided_at > data.T0  # the web's clock
+    with psycopg.connect(world.dsn) as conn:
+        outcome = review_notice.apply(conn, review_notice.parse(json.dumps(original).encode()))
+    assert (outcome.outcome, outcome.reason) == ("ignored", "decided")
+    row = world.row(review_id)
+    assert row["status"] == "kept"
+    assert world.get("tier2", f"{REVIEWS}/{review_id}").json()["allowed_decisions"] == ["undo"]
+    assert _decide(world, "tier2", review_id, "keep").status_code == 409
+    assert len(world.fake.calls) == 1
+
+
 def test_n8ns_next_push_does_not_erase_who_decided_when_it_carries_no_decision(world):
     """After a press, n8n's own `updated` push may not know who decided (decided_by, decided_at, result null): the web's record
     of the decision stays."""
