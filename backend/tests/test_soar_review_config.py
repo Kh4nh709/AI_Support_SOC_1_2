@@ -16,6 +16,7 @@ import pathlib
 import re
 
 import pytest
+from app.infra import n8n_approval
 from app.infra.config import Config, load
 from app.infra.errors import ConfigError
 
@@ -209,6 +210,58 @@ def test_the_ad_hosts_are_kept_as_written(monkeypatch):
 
 
 # ── the approval URL ────────────────────────────────────────────────────────────────────────
+
+
+DEFAULT_URL = "http://79.79.79.14:5678/webhook/soar-approval"
+
+
+def test_i2_a_key_that_is_absent_takes_the_default_url(monkeypatch, tmp_path):
+    assert _load(monkeypatch).N8N_APPROVAL_URL == DEFAULT_URL
+    env = tmp_path / ".env"
+    env.write_text("SOAR_ROLES_UNDO=admin\n", "utf-8")
+    assert load(env_file=env).N8N_APPROVAL_URL == DEFAULT_URL
+
+
+@pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "spaces"])
+def test_i2_a_url_that_is_present_and_empty_in_the_environment_is_empty_not_the_default(
+    monkeypatch, blank
+):
+    """The README, the runbook, the context pack and `.env.example` all say an empty `N8N_APPROVAL_URL` is "not configured": the
+    decision route answers 503. Every other key falls through to its default when empty; this one does not, or an Owner who blanks
+    the URL to switch the calls off would still send real decisions to the lab's n8n."""
+    cfg = _load(monkeypatch, N8N_APPROVAL_URL=blank, N8N_APPROVAL_SECRET="s")
+    assert cfg.N8N_APPROVAL_URL == ""
+    assert n8n_approval.is_configured(cfg) is False
+
+
+def test_i2_a_url_that_is_present_and_empty_in_the_env_file_is_empty(monkeypatch, tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("N8N_APPROVAL_URL=\nN8N_APPROVAL_SECRET=s\n", "utf-8")
+    cfg = load(env_file=env)
+    assert cfg.N8N_APPROVAL_URL == "" and n8n_approval.is_configured(cfg) is False
+    env.write_text("N8N_APPROVAL_URL=   # switched off\nN8N_APPROVAL_SECRET=s\n", "utf-8")
+    assert load(env_file=env).N8N_APPROVAL_URL == ""
+
+
+def test_i2_the_environment_wins_over_the_file_even_when_it_is_empty(monkeypatch, tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("N8N_APPROVAL_URL=http://file.example/x\n", "utf-8")
+    monkeypatch.setenv("N8N_APPROVAL_URL", "")
+    assert load(env_file=env).N8N_APPROVAL_URL == ""
+    monkeypatch.delenv("N8N_APPROVAL_URL")
+    assert load(env_file=env).N8N_APPROVAL_URL == "http://file.example/x"
+
+
+def test_i2_a_url_that_is_set_is_still_checked(monkeypatch):
+    with pytest.raises(ConfigError, match="N8N_APPROVAL_URL"):
+        _load(monkeypatch, N8N_APPROVAL_URL="ftp://n8n/x")
+
+
+def test_i2_other_keys_still_fall_through_when_empty(monkeypatch):
+    """Only the URL changes: an empty value of any other key is an absent one (the documented rule of `load`)."""
+    cfg = _load(monkeypatch, N8N_APPROVAL_TIMEOUT_SECONDS="", SOAR_AD_HOSTS="", SOAR_ROLES_UNDO="")
+    assert cfg.N8N_APPROVAL_TIMEOUT_SECONDS == 45 and cfg.SOAR_AD_HOSTS == ["AD-server"]
+    assert cfg.SOAR_ROLES_UNDO == ["tier2", "admin"]
 
 
 @pytest.mark.parametrize(

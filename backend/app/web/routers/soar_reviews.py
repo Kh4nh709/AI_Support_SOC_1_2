@@ -54,6 +54,7 @@ from pydantic import AfterValidator, BeforeValidator
 
 from app.audit.events import write_event
 from app.infra.auth import Claims
+from app.infra.storable import is_storable
 from app.soar import reviews
 from app.web.deps import (
     ROLE_TO_ACTOR,
@@ -69,6 +70,11 @@ router = APIRouter()
 
 #: The note a person may attach to a decision, in characters.
 NOTE_MAX = 500
+#: The body of a decision is a few dozen bytes plus a note of at most 500 characters (2,000 bytes): 8 KiB is far more than it needs,
+#: and the cap is what keeps the body from being read whole, or parsed, when it is not one.
+BODY_MAX_BYTES = 8 * 1024
+#: What a timed-out request tells the sender (the webhook's own value).
+RETRY_AFTER_S = "2"
 #: A page number past this is not a page: the offset would overflow the driver's integer.
 PAGE_MAX = 1_000_000
 
@@ -224,9 +230,24 @@ async def _read_body(
     403 whatever they sent. An empty body, one that is not JSON and one that is not an object are the same 422.
     """
     require_json_type(request)
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > BODY_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="payload too large")
+    chunks: list[bytes] = []
+    size = 0
+    async for (
+        chunk
+    ) in request.stream():  # counted as it arrives: a chunked upload declares no length
+        size += len(chunk)
+        if size > BODY_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="payload too large")
+        chunks.append(chunk)
     try:
-        value = json.loads(await request.body())
-    except ValueError:  # JSONDecodeError and UnicodeDecodeError both
+        value = json.loads(b"".join(chunks))
+    except (
+        ValueError,
+        RecursionError,
+    ):  # not JSON, not UTF-8, or nested past what the parser will read
         raise _bad("body", "invalid") from None
     if not isinstance(value, dict):
         raise _bad("body", "invalid")
@@ -248,7 +269,9 @@ def _validated(body: dict[str, Any]) -> tuple[str, str | None]:
         raise _bad("decision", "invalid")
     note = body.get("note")
     if note is not None:
-        if not isinstance(note, str) or "\x00" in note:
+        if not isinstance(note, str) or not is_storable(
+            note
+        ):  # a NUL or a lone surrogate: 422 before any lock
             raise _bad("note", "invalid")
         if len(note) > NOTE_MAX:
             raise _bad("note", "too_long")
@@ -304,6 +327,12 @@ def api_decide(
         # `decide` committed the press's own event; the 409 is raised after it
         raise HTTPException(
             status_code=409, detail={"reason": refused.reason, "review": refused.review}
+        ) from None
+    except (psycopg.errors.LockNotAvailable, psycopg.errors.QueryCanceled):
+        # `lock_timeout` / `statement_timeout` (`reviews.LOCK_TIMEOUT`, `STATEMENT_TIMEOUT`) fired before anything was locked: the
+        # webhook's own answer, "try again". After the call these are caught by the finish, which writes the outcome anyway.
+        raise HTTPException(
+            status_code=503, detail="busy", headers={"Retry-After": RETRY_AFTER_S}
         ) from None
     return JSONResponse(
         {"outcome": decided.outcome, "message": decided.message, "review": decided.review}

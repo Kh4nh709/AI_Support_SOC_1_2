@@ -331,7 +331,8 @@ class Config:
     # sends as `X-API-Key` to `POST /webhook/soar-notices`; empty answers 503 (a secret). SOAR_NOTICE_IP_ALLOWLIST: a
     # JSON list of IPs and CIDRs allowed to post it; empty denies all. N8N_APPROVAL_URL / N8N_APPROVAL_SECRET: where the
     # web calls n8n back when a person presses a button, and the `X-SOAR-Secret` it sends (a secret); either empty means
-    # "not configured" and the decision route answers 503 before it locks anything. N8N_APPROVAL_TIMEOUT_SECONDS: 1..100
+    # "not configured" and the decision route answers 503 before it locks anything (for the URL: a key that is ABSENT takes the
+    # default, a key that is present and empty is "", the one key whose empty value is not an absent one). N8N_APPROVAL_TIMEOUT_SECONDS: 1..100
     # (`_N8N_TIMEOUT_MAX_S`). SOAR_ROLES_KEEP / _UNDO / _FP: the roles allowed each decision. SOAR_AD_HOSTS: the hosts
     # (a JSON list, normalised before they are compared: `soar.reviews.normalise_host`) whose tickets get the strong warning.
     SOAR_NOTICE_API_KEY: str = ""
@@ -447,11 +448,20 @@ def load(*, env_file: str | Path = ".env") -> Config:
         if raw_allowlist is None
         else _parse_ip_allowlist("SOAR_NOTICE_IP_ALLOWLIST", raw_allowlist)
     )
-    raw_url = raw("N8N_APPROVAL_URL")
+    # `N8N_APPROVAL_URL` is the one key whose empty value is NOT an absent one: a key that is absent takes the lab's address, a key that
+    # is present and empty is "" and means "not configured" (the decision route answers 503 before it locks anything). Documented that
+    # way in the README, the runbook, the context pack and `.env.example`; without it an Owner who blanks the URL to switch the calls
+    # off would still send real decisions to the default. The real environment, empty or not, wins over the file.
+    if "N8N_APPROVAL_URL" in os.environ:
+        raw_url: str | None = os.environ["N8N_APPROVAL_URL"].strip()
+    elif "N8N_APPROVAL_URL" in file_values:
+        raw_url = file_values["N8N_APPROVAL_URL"].strip()
+    else:
+        raw_url = None
     n8n_approval_url = (
         "http://79.79.79.14:5678/webhook/soar-approval"
         if raw_url is None
-        else _parse_http_url("N8N_APPROVAL_URL", raw_url)
+        else _parse_http_url("N8N_APPROVAL_URL", raw_url) if raw_url else ""
     )
     raw_timeout = raw("N8N_APPROVAL_TIMEOUT_SECONDS")
     n8n_approval_timeout = (

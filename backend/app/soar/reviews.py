@@ -78,6 +78,8 @@ _INT64_MAX = 2**63 - 1
 #: What the person is told when a press failed or was refused and n8n gave no text of its own.
 FAILED_TEXT = "n8n báo thao tác không thành công. Phiếu giữ nguyên trạng thái."
 CONFLICT_TEXT = "Phiếu đã được xử lý ở nơi khác. Đã cập nhật theo trạng thái của n8n."
+#: What is written when the database refuses n8n's own text (or any write of the finish fails): fixed, so the outcome is still recorded.
+SAFE_TEXT = "Đã ghi nhận kết quả từ n8n, nhưng nội dung chi tiết n8n trả về không lưu được."
 
 
 class NotFound(Exception):
@@ -196,21 +198,23 @@ def roles_for_any(cfg: Config) -> list[str]:
 def normalise_host(name: str) -> str:
     """A host name as it is compared: control, zero-width and bidi characters (the categories `Cc` and `Cf`: a NUL, a tab, the
     zero-width space, joiners, the byte-order mark, the left-to-right and right-to-left marks, embeddings, overrides and isolates)
-    and surrounding whitespace removed, ONE trailing dot removed (a fully qualified name), case folded. A name that looks like
+    and surrounding whitespace removed, the compatibility forms folded (NFKC: a fullwidth letter or full stop, a ligature, a no-break
+    space), ONE trailing dot removed (a fully qualified name), case folded. A name that looks like
     the domain controller to a person but carries a character nobody can see is the domain controller here too.
     """
     visible = "".join(char for char in name if unicodedata.category(char) not in ("Cc", "Cf"))
-    visible = visible.strip()
+    visible = unicodedata.normalize(
+        "NFKC", visible
+    ).strip()  # fullwidth letters and dots, ligatures, no-break spaces
     visible = visible.removesuffix(".")
     return visible.casefold()
 
 
-def strong_warning(action_type: str | None, host: str | None, cfg: Config) -> bool:
-    """An isolation, or a host that is a domain controller: the whole normalised name, or its first DNS label, is a name of
-    `SOAR_AD_HOSTS` (normalised the same way), so `AD-server.home.arpa` and `ad-SERVER.` are `AD-server`. `notAD-server` and
-    `AD-server2` are not. An empty name, in the list or as a host, matches nothing."""
-    if action_type == "isolate_host":
-        return True
+def host_critical(host: str | None, cfg: Config) -> bool:
+    """The host is a domain controller: the whole normalised name, or its first DNS label, is a name of `SOAR_AD_HOSTS` (normalised
+    the same way), so `AD-server.home.arpa` and `ad-SERVER.` are `AD-server`; `notAD-server` and `AD-server2` are not. An empty name,
+    in the list or as a host, matches nothing. This is WHY a warning is strong when the action is not an isolation: the page words
+    the two causes differently."""
     if host is None:
         return False
     name = normalise_host(host)
@@ -218,6 +222,11 @@ def strong_warning(action_type: str | None, host: str | None, cfg: Config) -> bo
         return False
     names = {normalise_host(listed) for listed in cfg.SOAR_AD_HOSTS} - {""}
     return name in names or name.split(".", 1)[0] in names
+
+
+def strong_warning(action_type: str | None, host: str | None, cfg: Config) -> bool:
+    """`action_type == "isolate_host" or host_critical`: an isolation, or a host that is a domain controller."""
+    return action_type == "isolate_host" or host_critical(host, cfg)
 
 
 def serve(row: tuple, role: str, cfg: Config) -> dict[str, Any]:
@@ -233,6 +242,7 @@ def serve(row: tuple, role: str, cfg: Config) -> dict[str, Any]:
         if role in roles_for(decision, cfg)
     ]
     review["strong_warning"] = strong_warning(review["action_type"], review["host"], cfg)
+    review["host_critical"] = host_critical(review["host"], cfg)
     return review
 
 
@@ -352,11 +362,16 @@ def count_reviews(conn: psycopg.Connection, statuses: tuple[str, ...]) -> tuple[
 # ── the detail ──────────────────────────────────────────────────────────────────────────────
 
 
-def _history(conn: psycopg.Connection, review_id: str) -> list[dict[str, Any]]:
-    """The audit events of this ticket, oldest first, at most `HISTORY_MAX`. `actor` is the person's username (null for the
-    system); `actor_role` is `tier1`, `tier2` or `admin` (the role of the user as the `users` row has it now: the audit CHECKs
-    know only `analyst` and `admin`, and both analyst tiers are `analyst` there) or `system`. A person whose row is gone keeps
-    the audit's own word, `analyst` or `admin`."""
+#: The words `actor_role` may carry in a decision's payload: the role of the person AT THE TIME of the press.
+_PAYLOAD_ROLES = ("tier1", "tier2", "admin")
+
+
+def _history(conn: psycopg.Connection, review_id: str) -> tuple[list[dict[str, Any]], bool]:
+    """`(events, truncated)`: the audit events of this ticket, the NEWEST `HISTORY_MAX` of them, oldest first, and whether older ones
+    were left out. `actor` is the person's username (null for the system); `actor_role` is `tier1`, `tier2`, `admin` or `system`: the
+    role the decision's payload recorded at the time of the press when it has one, else the role of the user as the `users` row has it
+    now (the audit CHECKs know only `analyst` and `admin`, and both analyst tiers are `analyst` there). A person whose row is gone and
+    whose event predates the payload role keeps the audit's own word."""
     records = conn.execute(
         "SELECT a.created_at, a.event_type, u.username, "
         "CASE WHEN a.actor_role IN ('analyst', 'admin') THEN COALESCE(u.role, a.actor_role) ELSE a.actor_role END, "
@@ -364,19 +379,23 @@ def _history(conn: psycopg.Connection, review_id: str) -> list[dict[str, Any]]:
         "FROM audit_events a "
         "LEFT JOIN users u ON a.actor_role IN ('analyst', 'admin') AND u.user_id = a.actor_id "
         "WHERE a.subject_id = %s AND a.event_type IN ('soar.review_received', 'soar.review_decided') "
-        "ORDER BY a.audit_id LIMIT %s",
-        (review_id, HISTORY_MAX),
+        "ORDER BY a.audit_id DESC LIMIT %s",
+        (review_id, HISTORY_MAX + 1),
     ).fetchall()
-    return [
-        {
-            "at": _iso(at),
-            "event": event,
-            "actor": actor,
-            "actor_role": actor_role,
-            "payload": payload,
-        }
-        for at, event, actor, actor_role, payload in records
-    ]
+    truncated = len(records) > HISTORY_MAX
+    events = []
+    for at, event, actor, actor_role, payload in reversed(records[:HISTORY_MAX]):
+        recorded = payload.get("actor_role") if isinstance(payload, dict) else None
+        events.append(
+            {
+                "at": _iso(at),
+                "event": event,
+                "actor": actor,
+                "actor_role": recorded if recorded in _PAYLOAD_ROLES else actor_role,
+                "payload": payload,
+            }
+        )
+    return events, truncated
 
 
 #: The alerts of a SOAR case: `alerts.raw_payload -> enrichment -> case -> case_number` (the alert page's SOAR view reads the same
@@ -385,17 +404,14 @@ _CASE_OF_ALERT = "raw_payload #>> '{enrichment,case,case_number}'"
 
 
 def _related_alerts(conn: psycopg.Connection, case_number: int) -> tuple[list[dict[str, Any]], int]:
-    """The alerts of the same SOAR case, newest first, at most `RELATED_MAX`, and how many there are. The fields are the
-    queue row's, none of ①'s (the blind arm sees nothing new)."""
-    number = str(case_number)
+    """The alerts of the same SOAR case, newest first, at most `RELATED_MAX`, and how many there are, from ONE scan of `alerts`
+    (a window `count(*)` is the total of the matching rows, taken before the `LIMIT`). The fields are the queue row's, none of
+    ①'s (the blind arm sees nothing new)."""
     records = conn.execute(
-        "SELECT alert_id, alert_time, agent_name, description, severity, status, occurrence_count "
+        "SELECT alert_id, alert_time, agent_name, description, severity, status, occurrence_count, count(*) OVER () "
         f"FROM alerts WHERE {_CASE_OF_ALERT} = %s ORDER BY alert_time DESC, alert_id LIMIT %s",
-        (number, RELATED_MAX),
+        (str(case_number), RELATED_MAX),
     ).fetchall()
-    total = conn.execute(
-        f"SELECT count(*) FROM alerts WHERE {_CASE_OF_ALERT} = %s", (number,)
-    ).fetchone()[0]
     rows = [
         {
             "alert_id": alert_id,
@@ -406,22 +422,22 @@ def _related_alerts(conn: psycopg.Connection, case_number: int) -> tuple[list[di
             "status": status,
             "occurrence_count": occurrence_count,
         }
-        for alert_id, alert_time, agent_name, description, severity, status, occurrence_count in records
+        for alert_id, alert_time, agent_name, description, severity, status, occurrence_count, _ in records
     ]
-    return rows, total
+    return rows, records[0][7] if records else 0
 
 
 def get_detail(
     conn: psycopg.Connection, review_id: str, role: str, cfg: Config
 ) -> dict[str, Any] | None:
-    """The ticket plus `raw` (the last body n8n sent), `history`, `related_alerts` and `related_total`; `None` for an
-    unknown id."""
+    """The ticket plus `raw` (the last body n8n sent), `history` and `history_truncated`, `related_alerts` and
+    `related_total`; `None` for an unknown id."""
     review = get_review(conn, review_id, role, cfg)
     if review is None:
         return None
     (raw,) = conn.execute("SELECT raw FROM soar_reviews WHERE id = %s", (review_id,)).fetchone()
     review["raw"] = raw
-    review["history"] = _history(conn, review_id)
+    review["history"], review["history_truncated"] = _history(conn, review_id)
     if review["case_number"] is None:
         review["related_alerts"], review["related_total"] = [], 0
     else:
@@ -438,6 +454,7 @@ UPDATE soar_reviews
    SET prev_status = CASE WHEN status = 'processing' THEN prev_status ELSE status END,
        status = 'processing', locked_by = %(user)s, locked_at = now(), updated_at = now()
  WHERE id = %(id)s
+   AND updated_at = %(updated_at)s
    AND (status = %(status)s
         OR (status = 'processing' AND locked_at < now() - {_STALE_AFTER} AND prev_status = %(status)s))
 RETURNING locked_at
@@ -459,6 +476,20 @@ _FINISH_CONFLICT_SQL = (
     "last_error = NULL, locked_by = NULL, locked_at = NULL, prev_status = NULL, updated_at = now() "
     + _FINISH_WHERE
 )
+
+
+#: The bounds of every wait of the decision route's statements, as the webhook's: a row another session holds is waited for
+#: `LOCK_TIMEOUT` and no longer, and no statement runs past `STATEMENT_TIMEOUT`. Transaction-local, so one is set at the start of each
+#: of the two transactions of a press. Read at call time, so a test shortens them.
+LOCK_TIMEOUT = "3s"
+STATEMENT_TIMEOUT = "5s"
+
+
+def _bound_waits(conn: psycopg.Connection) -> None:
+    conn.execute(
+        "SELECT set_config('lock_timeout', %s, true), set_config('statement_timeout', %s, true)",
+        (LOCK_TIMEOUT, STATEMENT_TIMEOUT),
+    )
 
 
 def _record(
@@ -485,6 +516,7 @@ def _record(
             "status_before": status_before,
             "status_after": status_after,
             "message": message,
+            "actor_role": person.role,  # the role AT THE TIME: the history reads it before it reads the users row
         },
     )
 
@@ -523,6 +555,7 @@ def decide(
     validation are the caller's; the ticket, the lock, n8n and the finish are here. Raises `NotFound`, `NotConfigured`
     (nothing locked) or `Refused` (its event written and committed). On any other raise the connection's owner rolls back.
     """
+    _bound_waits(conn)
     row = _fetch_row(conn, review_id)
     if row is None:
         raise NotFound(review_id)
@@ -538,7 +571,13 @@ def decide(
         raise NotConfigured
 
     locked = conn.execute(
-        _LOCK_SQL, {"id": review_id, "user": person.username, "status": status_before}
+        _LOCK_SQL,
+        {
+            "id": review_id,
+            "user": person.username,
+            "status": status_before,
+            "updated_at": row[-1],  # as it was read: a push in between makes the lock miss
+        },
     ).fetchone()
     if (
         locked is None
@@ -559,19 +598,72 @@ def decide(
         client_factory=client_factory,
     )
 
+    try:
+        return _finish(
+            conn,
+            person,
+            cfg,
+            review_id,
+            decision,
+            note,
+            answer,
+            locked_at,
+            status_before,
+            safe=False,
+        )
+    except (psycopg.Error, ValueError):
+        # The finish transaction failed for a database reason (a text the database refuses that slipped through, a timeout, an
+        # audit insert): n8n HAS acted, so the lock must not be left behind. Roll back, and write the outcome again in a fresh
+        # transaction with fixed safe texts and the event. Only if that fails too is the answer a 500.
+        conn.rollback()
+        return _finish(
+            conn,
+            person,
+            cfg,
+            review_id,
+            decision,
+            note,
+            answer,
+            locked_at,
+            status_before,
+            safe=True,
+        )
+
+
+def _finish(
+    conn: psycopg.Connection,
+    person: Person,
+    cfg: Config,
+    review_id: str,
+    decision: str,
+    note: str | None,
+    answer: n8n_approval.Answer,
+    locked_at: datetime,
+    status_before: str,
+    *,
+    safe: bool,
+) -> Decided:
+    """The finish in ONE transaction: the compare-and-set of the outcome, the ticket as it now is, the audit event, COMMIT. With
+    `safe`, n8n's own texts are replaced by fixed ones (the outcome and n8n's status are still the truth).
+    """
+    _bound_waits(conn)
     key = {"id": review_id, "user": person.username, "locked_at": locked_at}
     message: str | None
     if answer.outcome == "ok":
-        message = answer.message
-        conn.execute(_FINISH_OK_SQL, {**key, "status": answer.status, "result": answer.result})
+        message = SAFE_TEXT if safe else answer.message
+        result = SAFE_TEXT if safe else answer.result
+        conn.execute(_FINISH_OK_SQL, {**key, "status": answer.status, "result": result})
     elif answer.outcome == "failed":
-        message = answer.message or answer.result or FAILED_TEXT
+        message = SAFE_TEXT if safe else (answer.message or answer.result or FAILED_TEXT)
         conn.execute(_FINISH_BACK_SQL, {**key, "error": message})
     elif answer.outcome == "conflict":
-        message = answer.message or CONFLICT_TEXT
+        message = CONFLICT_TEXT if safe else (answer.message or CONFLICT_TEXT)
         status = answer.status if answer.status in CONFLICT_STATUSES else None
-        conn.execute(_FINISH_CONFLICT_SQL, {**key, "status": status, "result": answer.result})
-    else:  # unavailable
+        conn.execute(
+            _FINISH_CONFLICT_SQL,
+            {**key, "status": status, "result": None if safe else answer.result},
+        )
+    else:  # unavailable: the text is ours, one of a few fixed sentences
         message = answer.message
         conn.execute(_FINISH_BACK_SQL, {**key, "error": message})
 

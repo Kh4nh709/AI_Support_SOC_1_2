@@ -290,6 +290,48 @@ def test_n8ns_texts_are_cut_at_2000_characters():
     assert len(answer.message) == len(answer.result) == n8n_approval.MAX_TEXT == 2000
 
 
+@pytest.mark.parametrize(
+    "raw,clean",
+    [
+        ("a\x00b", "ab"),
+        ("a\ud800b", "a�b"),
+        ("\udc00\x00\ud83d", "��"),
+        ("\x00" * 3000 + "ok", "ok"),
+    ],
+    ids=["nul", "high", "mixed", "nul-before-the-cut"],
+)
+@pytest.mark.parametrize("kind", ["ok", "failed", "conflict"])
+def test_c2_n8ns_texts_are_made_storable_before_they_are_returned_and_cut_after(kind, raw, clean):
+    """C2: a NUL or a lone surrogate in n8n's `message` or `result` made the finish UPDATE and the audit INSERT fail AFTER n8n had
+    acted. The client cleans every text it returns (NUL removed, lone surrogate to U+FFFD), then cuts.
+    """
+    body = {
+        "ok": kind == "ok",
+        "message": raw,
+        "result": raw,
+        "status": "kept" if kind != "failed" else "open",
+    }
+    reply = Reply.json_body(body, 409 if kind == "conflict" else 200)
+    answer = _call(FakeN8n(reply))
+    assert answer.outcome == kind
+    assert answer.message == clean and answer.result == clean
+    answer.message.encode("utf-8")
+    assert "\x00" not in answer.message and "\x00" not in answer.result
+
+
+def test_c2_the_clean_text_is_cut_at_2000_after_the_cleaning_not_before():
+    raw = ("\x00" * 5 + "é") * 1000  # 6,000 characters, 1,000 after cleaning
+    answer = _call(FakeN8n(Reply.json_body({"ok": False, "message": raw})))
+    assert answer.message == "é" * 1000
+    longer = ("\x00" + "é") * 3000
+    assert len(_call(FakeN8n(Reply.json_body({"ok": False, "message": longer}))).message) == 2000
+
+
+def test_a_status_with_a_nul_is_not_made_into_a_good_status():
+    answer = _call(FakeN8n(Reply.json_body({"ok": True, "status": "kep\x00t"})))
+    assert (answer.outcome, answer.kind) == ("unavailable", "bad_answer")
+
+
 def test_a_text_that_is_not_a_string_is_no_text():
     body = {"ok": False, "message": {"a": 1}, "result": 42, "status": ["x"]}
     answer = _call(FakeN8n(Reply.json_body(body)))

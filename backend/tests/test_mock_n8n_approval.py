@@ -9,6 +9,7 @@ network beyond 127.0.0.1.
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
 import subprocess
 import sys
@@ -121,9 +122,10 @@ def test_the_modes_are_the_four_the_card_names():
 
 
 def test_it_runs_as_a_script_prints_where_it_listens_and_answers_a_call():
-    """The way the Owner starts it: `python3 scripts/mock_n8n_approval.py --mode ok`, standard library only."""
+    """The way the Owner starts it: the secret in the ENVIRONMENT (never in argv, where `ps` shows it), standard library only."""
     process = subprocess.Popen(
-        [sys.executable, "-I", str(SCRIPT), "--port", "0", "--mode", "ok", "--secret", SECRET],
+        [sys.executable, "-I", str(SCRIPT), "--port", "0", "--mode", "ok"],
+        env={**os.environ, "N8N_APPROVAL_SECRET": SECRET},
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -132,15 +134,63 @@ def test_it_runs_as_a_script_prints_where_it_listens_and_answers_a_call():
         first = process.stdout.readline()
         match = re.search(r"listening on (http://127\.0\.0\.1:\d+/webhook/soar-approval)", first)
         assert match, first
-        assert SECRET not in first
+        assert "secret required" in first and SECRET not in first
         answer = _ask(match.group(1), "keep")
         assert (answer.outcome, answer.status) == ("ok", "kept")
+        wrong = _ask(match.group(1), "keep", secret="not-the-secret")
+        assert (wrong.outcome, wrong.http_status) == ("unavailable", 401)
         line = process.stdout.readline()
         assert "decision=keep" in line and "review=K7QM2XHP" in line and "user=alice" in line
         assert SECRET not in line
     finally:
         process.terminate()
         process.wait(timeout=10)
+
+
+def test_m8_without_the_variable_no_secret_is_required():
+    process = subprocess.Popen(
+        [sys.executable, "-I", str(SCRIPT), "--port", "0"],
+        env={k: v for k, v in os.environ.items() if k != "N8N_APPROVAL_SECRET"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        first = process.stdout.readline()
+        assert "secret not required" in first, first
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+
+
+def test_m8_the_secret_cannot_be_given_on_the_command_line_at_all():
+    """m8: an argument is visible to every user of the machine in `ps`, and in the shell history: the flag does not exist."""
+    run = subprocess.run(
+        [sys.executable, "-I", str(SCRIPT), "--secret", "x"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert run.returncode == 2
+    assert "unrecognized arguments" in run.stderr
+    assert (
+        "--secret"
+        not in subprocess.run(
+            [sys.executable, "-I", str(SCRIPT), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        ).stdout
+    )
+
+
+def test_m8_the_readme_starts_the_stand_in_with_the_secret_in_the_environment():
+    text = (SCRIPT.parents[1] / "README.md").read_text(encoding="utf-8")
+    section = text.split("\n## Phản hồi SOAR\n", 1)[1].split("\n## ", 1)[0]
+    assert "--secret" not in section
+    assert re.search(r"N8N_APPROVAL_SECRET=\S+ python3 scripts/mock_n8n_approval\.py", section)
 
 
 def test_the_script_imports_nothing_but_the_standard_library():

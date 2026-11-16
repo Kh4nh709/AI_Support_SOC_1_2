@@ -11,6 +11,8 @@ learns nothing about the body and grows nothing; a source address outside `SOAR_
 (`400 {"detail": {"errors": [{"field", "reason"}]}}`, every fault listed, nothing written) and stored by the upsert table of
 the spec (`soar/review_notice.py`): `201 {id, created: true}` for a new ticket, `200` for the others.
 
+The three checks are a dependency declared BEFORE the connection (`_checked`): a request that fails one opens no connection.
+
 The key is compared with `hmac.compare_digest` on bytes, so its time does not tell how much of a guess was right and a
 non-ASCII header is a `401`, not an exception.
 
@@ -31,9 +33,10 @@ from __future__ import annotations
 import hmac
 import ipaddress
 import logging
+from typing import Annotated
 
 import psycopg
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -93,8 +96,10 @@ def _store_in_thread(conn: psycopg.Connection, body: bytes) -> review_notice.App
     return review_notice.apply(conn, review_notice.parse(body))
 
 
-@router.post("/webhook/soar-notices")
-async def receive_soar_notice(request: Request, conn: Conn, cfg: Cfg) -> JSONResponse:
+def _checked(request: Request, cfg: Cfg) -> Config:
+    """The three checks, in the order of the spec, and NOTHING that touches a database: this dependency is declared before `Conn`, so
+    a request that fails one of them never opens a connection (m4: an unauthenticated flood used to hold one open per request).
+    Returns the configuration the route goes on with."""
     config: Config = cfg
     if not config.SOAR_NOTICE_API_KEY:
         raise HTTPException(status_code=503, detail="soar notices disabled")
@@ -107,7 +112,16 @@ async def receive_soar_notice(request: Request, conn: Conn, cfg: Cfg) -> JSONRes
     if not _ip_allowed(host, config.SOAR_NOTICE_IP_ALLOWLIST):
         logger.warning("soar notices: source ip %s is outside SOAR_NOTICE_IP_ALLOWLIST", host)
         raise HTTPException(status_code=403, detail="forbidden")
+    return config
 
+
+Checked = Annotated[Config, Depends(_checked)]
+
+
+@router.post("/webhook/soar-notices")
+async def receive_soar_notice(request: Request, config: Checked, conn: Conn) -> JSONResponse:
+    # `config` comes first on purpose: FastAPI solves the dependencies in the order of the parameters, so the checks run, and may
+    # answer, before `conn` opens a connection.
     body = await _read_body(request, config.MAX_PAYLOAD_BYTES)
     try:
         applied = await run_in_threadpool(_store_in_thread, conn, body)

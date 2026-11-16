@@ -148,3 +148,30 @@ def test_the_section_leaves_the_answers_of_the_route_documented():
     text = _section()
     for code in ("201", "200", "400", "401", "403", "413", "503"):
         assert code in text, code
+
+
+def test_i2_the_docs_say_what_the_code_does_with_a_blank_approval_url():
+    """Absent: the default. Present and empty: off. The loader does exactly this (`test_soar_review_config.py`)."""
+    readme = next(
+        line for line in _section().splitlines() if line.startswith("| `N8N_APPROVAL_URL` |")
+    )
+    assert "Không có dòng" in readme and "để trống" in readme and "503" in readme
+    runbook = (README.parent / "docs" / "runbook.md").read_text(encoding="utf-8")
+    row = next(line for line in runbook.splitlines() if line.startswith("| `N8N_APPROVAL_URL` |"))
+    assert "ABSENT" in row and "EMPTY" in row
+    example = (README.parent / ".env.example").read_text(encoding="utf-8")
+    line = next(line for line in example.splitlines() if line.startswith("N8N_APPROVAL_URL="))
+    assert "absent" in line and "EMPTY" in line
+
+
+def test_the_api_part_names_host_critical_history_truncated_and_the_limits_of_a_decision():
+    text = _section()
+    assert "`host_critical`" in text and "`strong_warning`" in text
+    assert "`history_truncated`" in text and "200 sự kiện **mới nhất**" in text
+    decision = next(
+        line
+        for line in text.splitlines()
+        if line.startswith("- `POST /api/soar/reviews/{id}/decision`")
+    )
+    for needle in ("8 KiB", "413", "422", "503 busy", "Retry-After"):
+        assert needle in decision, needle

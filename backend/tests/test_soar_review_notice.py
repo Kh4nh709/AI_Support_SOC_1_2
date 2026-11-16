@@ -201,6 +201,51 @@ def test_a_nul_character_anywhere_in_the_body_is_a_body_fault(where):
     assert _faults(doc) == BODY_FAULT
 
 
+LONE_SURROGATES = ["\ud800", "\udc00", "a\ud83db", "\ude00\ud83d"]
+
+
+@pytest.mark.parametrize("surrogate", LONE_SURROGATES, ids=repr)
+@pytest.mark.parametrize(
+    "where",
+    ["known_field", "unknown_field", "key", "nested", "button_label", "action_text", "case_id"],
+)
+def test_a_lone_surrogate_anywhere_in_the_body_is_a_body_fault(where, surrogate):
+    """C1: `json.loads` accepts the escape `\\ud800` and hands over a `str` no UTF-8 encoder accepts, so the write after it was a
+    500 and n8n retried a ticket that could never land (a JavaScript string cut inside an emoji produces exactly this).
+    """
+    doc = data.review()
+    if where == "known_field":
+        doc["title"] = f"x{surrogate}y"
+    elif where == "unknown_field":
+        doc["unknown"] = surrogate
+    elif where == "key":
+        doc[f"k{surrogate}"] = 1
+    elif where == "nested":
+        doc["unknown"] = {"deep": [{"k": [surrogate]}]}
+    elif where == "button_label":
+        doc["buttons"][0]["label"] = surrogate
+    elif where == "action_text":
+        doc["action"]["text"] = surrogate
+    else:
+        doc["case"]["id"] = surrogate
+    body = json.dumps(doc).encode(
+        "utf-8"
+    )  # ensure_ascii: the surrogate travels as the escape `\ud800`
+    assert b"\\ud" in body or b"\\ude" in body
+    assert _faults(body) == BODY_FAULT
+
+
+def test_a_valid_surrogate_pair_is_one_character_and_is_accepted():
+    """The escape pair `\\ud83d\\ude00` is the emoji U+1F600: valid, storable, and kept as sent."""
+    doc = data.review(id="K7QM2XHP", title="PLACEHOLDER")
+    body = json.dumps(doc).replace('"PLACEHOLDER"', '"x\\ud83d\\ude00y"').encode("utf-8")
+    assert b"\\ud83d\\ude00" in body
+    notice = review_notice.parse(body)
+    assert notice.columns["title"] == "x\U0001f600y"
+    literal = json.dumps(data.review(title="x\U0001f600y"), ensure_ascii=False).encode("utf-8")
+    assert review_notice.parse(literal).columns["title"] == "x\U0001f600y"
+
+
 def test_a_body_nested_deeper_than_32_levels_is_a_body_fault():
     """A stored body is served as `raw`; the serialiser gives up (a 500) a little under 250 levels."""
     deep: Any = "end"
