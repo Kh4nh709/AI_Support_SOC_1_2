@@ -297,6 +297,7 @@ test("what n8n writes is text: a ticket whose labels and notice carry markup ren
 }) => {
   const IMG = "<img src=x onerror=window.__pwned=1>";
   const hostile = blockIpBody({
+    title: IMG,
     actionText: `${IMG} Chặn IP javascript:window.__pwned=1`,
     host: "<svg onload=window.__pwned=1>",
     scenarioName: `${IMG}${"A".repeat(300)}`,
@@ -346,6 +347,8 @@ test("what n8n writes is text: a ticket whose labels and notice carry markup ren
   const panel = page.getByRole("region", { name: S.soar.detail.title(hostileId) });
   await panel.getByText(S.soar.detail.raw.summary).click();
   await expect(panel.locator("details pre")).toContainText(IMG);
+  // the title of the ticket is one of its fields: text too
+  await expect(panel.getByText(IMG, { exact: true }).first()).toBeVisible();
   await expect(page.locator("main img, main svg, main b")).toHaveCount(0);
   expect(
     await page.evaluate(() => (window as unknown as { __pwned?: unknown }).__pwned),
