@@ -214,6 +214,44 @@ def test_the_source_address_is_matched_against_the_allowlist(world, allowlist, h
     assert world.post(data.review(), host=host).status_code == status
 
 
+# ── m4: the checks run before a database connection is opened ─────────────────────────────
+
+
+def test_m4_a_request_that_fails_the_key_the_address_or_the_switch_opens_no_connection(
+    world, monkeypatch
+):
+    """m4: `Conn` opened a connection for every request, a 401 included: an unauthenticated flood held connections open. The
+    503, the 401 and the 403 are decided before any connection is made."""
+    opened: list[str] = []
+
+    def count(*args, **kwargs):
+        opened.append("connect")
+        raise AssertionError("a connection was opened before the checks")
+
+    monkeypatch.setattr(deps.db, "connect", count)
+    doc = data.review()
+    assert world.post(doc, key=None).status_code == 401
+    assert world.post(doc, key="wrong").status_code == 401
+    assert world.post(doc, host=OUTSIDE_HOST).status_code == 403
+    world.cfg = _cfg(SOAR_NOTICE_API_KEY="")
+    assert world.post(doc).status_code == 503
+    world.cfg = _cfg()
+    assert opened == []
+
+
+def test_m4_a_request_that_passes_the_checks_does_open_one(world, monkeypatch):
+    opened: list[int] = []
+    real = deps.db.connect
+
+    def count(*args, **kwargs):
+        opened.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(deps.db, "connect", count)
+    assert world.post(data.review()).status_code == 201
+    assert opened == [1]
+
+
 # ── 413 ─────────────────────────────────────────────────────────────────────────────────────
 
 

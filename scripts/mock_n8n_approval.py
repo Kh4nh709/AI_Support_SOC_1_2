@@ -10,8 +10,10 @@ header `X-SOAR-Secret` and the JSON body `{"source": "web", "review_id", "decisi
     python3 scripts/mock_n8n_approval.py --mode conflict   # 409 {"ok": false, "status": "undone", ...}: handled elsewhere
     python3 scripts/mock_n8n_approval.py --mode slow       # waits --slow-seconds (default 60), then answers as ok
 
-Standard library only. Options: `--host` (default 127.0.0.1), `--port` (default 5678; 0 picks a free one), `--secret`
-(the `X-SOAR-Secret` it requires; without it any secret is accepted; a wrong one is a 401, as the real n8n would answer).
+Standard library only. Options: `--host` (default 127.0.0.1) and `--port` (default 5678; 0 picks a free one). The
+`X-SOAR-Secret` it requires is read from the ENVIRONMENT, variable `N8N_APPROVAL_SECRET` (the app's own name for it), never from the
+command line, where `ps` and the shell history would show it: `N8N_APPROVAL_SECRET=thu-nghiem python3 scripts/mock_n8n_approval.py`.
+Without the variable any secret is accepted; a wrong one is a 401, as the real n8n would answer.
 
 To point the web at it, set in `.env`: `N8N_APPROVAL_URL=http://127.0.0.1:5678/webhook/soar-approval` and
 `N8N_APPROVAL_SECRET=<the same secret>`, then recreate the app container (README, "Phản hồi SOAR"). The server prints one
@@ -24,6 +26,7 @@ from __future__ import annotations
 import argparse
 import hmac
 import json
+import os
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -133,9 +136,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--port", type=int, default=5678, help="port (default 5678; 0 = any free one)"
     )
     parser.add_argument(
-        "--secret", default="", help="the X-SOAR-Secret it requires (empty: any is accepted)"
-    )
-    parser.add_argument(
         "--slow-seconds", type=float, default=60.0, help="how long --mode slow waits (default 60)"
     )
     return parser
@@ -143,13 +143,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    secret = os.environ.get("N8N_APPROVAL_SECRET", "")
     server = ThreadingHTTPServer(
-        (args.host, args.port), make_handler(args.mode, args.secret, args.slow_seconds)
+        (args.host, args.port), make_handler(args.mode, secret, args.slow_seconds)
     )
     host, port = server.server_address[:2]
     print(
         f"mock n8n approval: mode={args.mode} listening on http://{host}:{port}/webhook/soar-approval "
-        f"(secret {'required' if args.secret else 'not required'}); Ctrl+C to stop",
+        f"(secret {'required' if secret else 'not required'}, from N8N_APPROVAL_SECRET); Ctrl+C to stop",
         flush=True,
     )
     try:
