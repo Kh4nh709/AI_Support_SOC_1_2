@@ -2755,7 +2755,7 @@ export const S = {
             disable_user: (account: string) =>
               `Mở khoá ${account}: tài khoản này sẽ đăng nhập lại được ngay. Nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.`,
             block_ip: (target: string) =>
-              `Gỡ chặn ${target}: lưu lượng từ địa chỉ này được phép đi qua trở lại. Hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
+              `Gỡ chặn ${target}: lưu lượng với địa chỉ này được phép đi qua trở lại. Hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
             sinkhole_domain: (target: string) =>
               `Gỡ chặn tên miền ${target}: tên miền này sẽ phân giải trở lại. Hãy chắc chắn tên miền này không còn nguy hiểm.`,
             disable_xp_cmdshell: (server: string) =>
@@ -2769,11 +2769,11 @@ export const S = {
           // hình là máy quan trọng (ví dụ máy chủ AD)". The object of the action is its own target.
           critical: {
             isolate_host: (target: string, host: string) =>
-              `Gỡ cách ly ${target} sẽ nối lại máy với mạng ngay. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.`,
+              `Gỡ cách ly ${target} sẽ nối lại máy với mạng ngay. Nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD).`,
             disable_user: (account: string, host: string) =>
               `Mở khoá ${account}: tài khoản này sẽ đăng nhập lại được ngay. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.`,
             block_ip: (target: string, host: string) =>
-              `Gỡ chặn ${target}: lưu lượng từ địa chỉ này được phép đi qua trở lại. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
+              `Gỡ chặn ${target}: lưu lượng với địa chỉ này được phép đi qua trở lại. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
             sinkhole_domain: (target: string, host: string) =>
               `Gỡ chặn tên miền ${target}: tên miền này sẽ phân giải trở lại. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn tên miền này không còn nguy hiểm.`,
             disable_xp_cmdshell: (server: string, host: string) =>

@@ -30,11 +30,11 @@ describe("undo, by the action that is undone and by host_critical", () => {
     );
   });
 
-  it("isolate_host on a critical host: the same, and the neutral clause names the host", () => {
+  it("isolate_host on a critical host: the risk is about the isolated machine and comes first, the neutral clause about the host comes last", () => {
     expect(
       strongWarningOf(critical({ action_type: "isolate_host", action_target: "db-02" }), "undo"),
     ).toBe(
-      `Gỡ cách ly db-02 sẽ nối lại máy với mạng ngay. ${REL}; nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.`,
+      `Gỡ cách ly db-02 sẽ nối lại máy với mạng ngay. Nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan. ${REL}.`,
     );
   });
 
@@ -51,10 +51,10 @@ describe("undo, by the action that is undone and by host_critical", () => {
   it("block_ip: traffic from the address is allowed again; the host is only said to be related", () => {
     const over = { action_type: "block_ip", action_target: "79.79.78.202" } as const;
     expect(strongWarningOf(ordinary(over), "undo")).toBe(
-      "Gỡ chặn 79.79.78.202: lưu lượng từ địa chỉ này được phép đi qua trở lại. Hãy chắc chắn địa chỉ này không còn nguy hiểm.",
+      "Gỡ chặn 79.79.78.202: lưu lượng với địa chỉ này được phép đi qua trở lại. Hãy chắc chắn địa chỉ này không còn nguy hiểm.",
     );
     expect(strongWarningOf(critical(over), "undo")).toBe(
-      `Gỡ chặn 79.79.78.202: lưu lượng từ địa chỉ này được phép đi qua trở lại. ${REL}; hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
+      `Gỡ chặn 79.79.78.202: lưu lượng với địa chỉ này được phép đi qua trở lại. ${REL}; hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
     );
   });
 

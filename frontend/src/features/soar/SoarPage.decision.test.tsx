@@ -321,7 +321,7 @@ describe("the strong warning", () => {
     const dialog = await screen.findByRole("dialog", { name: S.soar.dialog.title.undoStrong });
     expect(S.soar.dialog.title.undoStrong).not.toBe(S.soar.dialog.title.undo);
     const warning = within(dialog).getByText(
-      "Gỡ cách ly AD-server sẽ nối lại máy với mạng ngay. Biện pháp này liên quan tới AD-server, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.",
+      "Gỡ cách ly AD-server sẽ nối lại máy với mạng ngay. Nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan. Biện pháp này liên quan tới AD-server, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD).",
     );
     expect(warning.textContent).toMatch(/^Gỡ cách ly AD-server/);
     expect(within(dialog).getByText(S.soar.dialog.after.undo)).toBeInTheDocument();
@@ -421,7 +421,7 @@ describe("the strong warning", () => {
     const dialog = await screen.findByRole("dialog", { name: S.soar.dialog.title.undoStrong });
     expect(
       within(dialog).getByText(
-        "Gỡ chặn 79.79.78.202: lưu lượng từ địa chỉ này được phép đi qua trở lại. Biện pháp này liên quan tới AD-server, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn địa chỉ này không còn nguy hiểm.",
+        "Gỡ chặn 79.79.78.202: lưu lượng với địa chỉ này được phép đi qua trở lại. Biện pháp này liên quan tới AD-server, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn địa chỉ này không còn nguy hiểm.",
       ),
     ).toBeInTheDocument();
     expect(dialog).not.toHaveTextContent("Gỡ cách ly");
