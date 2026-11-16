@@ -29,7 +29,7 @@ A fault names the field and the kind of fault, never the value: nothing the send
 | no row with this `id` | `201 {id, created: true}` | the row, `last_sent_at = sent_at`, `raw` = the body as sent |
 | a row, `sent_at` older than `last_sent_at` | `200 {id, created: false, ignored: true, reason: "stale"}` | nothing |
 | a row in `undone`, `false_positive` or `expired`, and the body says `open` | `200 {..., ignored: true, reason: "terminal"}` | nothing |
-| a row `kept` with a `decided_at` LATER than the body's `sent_at`, and the body says `open` | `200 {..., ignored: true, reason: "decided"}` | nothing |
+| a row `kept` (or `processing` from `kept`: an undo press in flight) with a `decided_at` LATER than the body's `sent_at`, and the body says `open` | `200 {..., ignored: true, reason: "decided"}` | nothing |
 | otherwise | `200 {id, created: false}` | every field of the body replaces the stored one (but `decided_by`, `decided_at`, `result`: null or absent keeps the stored value); `raw`, `last_sent_at`, `updated_at` |
 
 An update that lands on a row the web holds (`processing`) is applied, since n8n is the authority: the lock columns are
@@ -643,13 +643,16 @@ def apply(conn: psycopg.Connection, notice: Notice) -> Applied:
             applied = Applied(notice.id, "ignored", "terminal")
         elif (
             notice.status == "open"
-            and stored_status == "kept"
+            and (
+                stored_status == "kept" or (stored_status == "processing" and prev_status == "kept")
+            )
             and decided_at is not None
             and decided_at > notice.sent_at
         ):
             # kept by a decision made AFTER this push was written: the push predates it (n8n resends the original `created`
-            # body, or a reminder generated before the press) and must not bring the buttons back. A push written after the
-            # decision is applied: n8n is the authority.
+            # body, or a reminder generated before the press) and must not bring the buttons back. The same row while an undo
+            # press is in flight on it (`processing`, `prev_status` `kept`): ignored too, and the lock is left alone, so the press
+            # finishes normally. A push written after the decision is applied: n8n is the authority.
             applied = Applied(notice.id, "ignored", "decided")
         else:
             # a push that says the state a row had before a press took it says nothing new: it must not release the press

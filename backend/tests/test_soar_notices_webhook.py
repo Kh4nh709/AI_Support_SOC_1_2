@@ -740,6 +740,76 @@ def test_i3a_only_open_onto_kept_with_a_decision_time_is_in_the_rule(world):
     ).json() == {"id": first["id"], "created": False}
 
 
+@pytest.mark.parametrize("sent", [10, 50, 99])
+def test_f2_a_push_saying_open_that_predates_the_decision_is_ignored_on_a_processing_row_that_was_kept(
+    world, sent
+):
+    """Final round 2: rule (a) also covers a row that is `processing` with `prev_status` `kept` (an undo press is in flight on a kept
+    row): the push is ignored as `decided` and the lock is left alone."""
+    first = data.review(sent_at=_at(10))
+    world.post(first)
+    _decided_by_the_web(world, first["id"], at=100)
+    _lock(world, first["id"], by="alice")
+    before = world.row(first["id"])
+    assert (before["status"], before["prev_status"]) == ("processing", "kept")
+    response = world.post(
+        data.review(id=first["id"], event="reminder", sent_at=_at(sent), status="open", note="cũ")
+    )
+    assert response.json() == {
+        "id": first["id"],
+        "created": False,
+        "ignored": True,
+        "reason": "decided",
+    }
+    assert (
+        world.row(first["id"]) == before
+    )  # not a column moved: status, prev_status, the lock, the other fields
+    [*_, last] = world.events(first["id"])
+    assert (last["payload"]["outcome"], last["payload"]["reason"]) == ("ignored", "decided")
+
+
+@pytest.mark.parametrize("sent", [100, 101, 500])
+def test_f2_a_push_saying_open_that_is_not_older_than_the_decision_is_applied_on_that_row_too(
+    world, sent
+):
+    first = data.review(sent_at=_at(10))
+    world.post(first)
+    _decided_by_the_web(world, first["id"], at=100)
+    _lock(world, first["id"], by="alice")
+    response = world.post(data.review(id=first["id"], sent_at=_at(sent), status="open", note="mới"))
+    assert response.json() == {"id": first["id"], "created": False}
+    row = world.row(first["id"])
+    assert (row["status"], row["locked_by"], row["prev_status"], row["note"]) == (
+        "open",
+        None,
+        None,
+        "mới",
+    )
+
+
+def test_f2_the_rule_is_for_a_row_that_was_kept_not_for_one_that_was_open(world):
+    first = data.review(sent_at=_at(10))
+    world.post(first)
+    world.execute(
+        "UPDATE soar_reviews SET decided_at = %s WHERE id = %s",
+        (data.T0 + timedelta(seconds=100), first["id"]),
+    )
+    _lock(world, first["id"])  # processing from `open`: the same-status rule (b) applies, not (a)
+    response = world.post(data.review(id=first["id"], sent_at=_at(50), status="open", note="x"))
+    assert response.json() == {"id": first["id"], "created": False}
+    row = world.row(first["id"])
+    assert (row["status"], row["prev_status"], row["note"]) == ("processing", "open", "x")
+
+
+def test_f2_a_processing_row_with_no_decision_time_applies_the_push(world):
+    first = data.review(status="kept", sent_at=_at(10))
+    world.post(first)  # kept by n8n, no decided_at
+    _lock(world, first["id"])
+    response = world.post(data.review(id=first["id"], sent_at=_at(50), status="open"))
+    assert response.json() == {"id": first["id"], "created": False}
+    assert world.row(first["id"])["status"] == "open"
+
+
 def test_i3a_stale_is_still_said_before_decided(world):
     first = data.review(sent_at=_at(60))
     world.post(first)
