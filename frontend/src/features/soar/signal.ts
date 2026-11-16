@@ -95,14 +95,16 @@ export function signalNewTicket(open: number): void {
   showNotification(open);
 }
 
-/** The switch on: kept, and permission asked once, here, on the click (never at load, never again once decided). */
-export function turnSignalOn(): void {
+/**
+ * The switch on: kept at once, and permission asked once, here, on the click (never at load, never again once decided).
+ * The promise settles when the browser has answered, so the page can read the permission again.
+ */
+export async function turnSignalOn(): Promise<void> {
   writeSignalOn(true);
   try {
     const Notify = notificationCtor();
     if (Notify === null || notificationState() !== "default") return;
-    const asked = Notify.requestPermission();
-    if (asked instanceof Promise) void asked.catch(() => undefined);
+    await Promise.resolve(Notify.requestPermission());
   } catch {
     // the tone works without it
   }

@@ -144,13 +144,15 @@ it.each(["tier1", "tier2", "admin"] as const)("gives %s the link to /soar", (rol
   expect(link).not.toHaveAttribute("target");
 });
 
+const NAV = [S.nav.queue, S.nav.cases, S.nav.soar, S.nav.admin];
+
 it("puts the SOAR link after Case and before Quản trị", () => {
   renderHeader(session("admin"));
   const names = screen
     .getAllByRole("link")
     .map((a) => a.textContent)
-    .filter((text) => [S.nav.queue, S.nav.cases, S.nav.soar, S.nav.admin].includes(text ?? ""));
-  expect(names).toEqual([S.nav.queue, S.nav.cases, S.nav.soar, S.nav.admin]);
+    .filter((text) => (NAV as readonly string[]).includes(text ?? ""));
+  expect(names).toEqual(NAV);
 });
 
 it("marks the SOAR link as the current page on /soar", () => {
