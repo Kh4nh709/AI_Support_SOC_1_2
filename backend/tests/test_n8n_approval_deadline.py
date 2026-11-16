@@ -20,6 +20,7 @@ import time
 from collections.abc import Callable
 from dataclasses import replace
 
+import httpx
 import pytest
 from app.infra import config, n8n_approval
 from app.infra.config import Config
@@ -265,11 +266,11 @@ def test_the_default_client_is_closed_by_its_context_and_ignores_the_proxy_envir
     monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
     server = DrippingServer("silent")
     try:
-        with build() as client:
-            with pytest.raises(
-                Exception
-            ):  # the deadline of 5 s is longer than the 0.5 s of the read below
-                client.post(server.url, content=b"{}", timeout=0.5)
+        with (
+            build() as client,
+            pytest.raises(httpx.ReadTimeout),
+        ):  # 0.5 s of its own; the deadline is 5 s
+            client.post(server.url, content=b"{}", timeout=0.5)
         assert (
             server.received.is_set()
         ), "the request went through a proxy instead of straight to the server"
