@@ -8,7 +8,7 @@ import { setupServer } from "msw/node";
 import { afterEach, vi } from "vitest";
 import type { SoarDecisionAnswer, SoarReview } from "../../api/soar";
 import { S } from "../../strings";
-import { review } from "./fixtures";
+import { listOf, review } from "./fixtures";
 import { NOTE_MAX } from "./model";
 import { SOAR_LIST_POLL_MS } from "./soarQueries";
 import { fake, renderSoar, serve, type Fake } from "./testkit";
@@ -324,6 +324,46 @@ describe("while the request runs", () => {
     expect(state.decisions).toHaveLength(1);
     await act(async () => release());
     await waitFor(() => expect(within(row).queryByText(S.soar.working)).not.toBeInTheDocument());
+  });
+
+  it("is not overwritten by a poll that was already on its way when the answer came", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let releaseDecision: () => void = () => {};
+    const decisionGate = new Promise<void>((resolve) => (releaseDecision = resolve));
+    let releaseList: () => void = () => {};
+    const listGate = new Promise<void>((resolve) => (releaseList = resolve));
+    let hold = false;
+    const state = fake({ rows: [review()] });
+    state.decision = async () => {
+      await decisionGate;
+      state.rows = [decided()];
+      return answer();
+    };
+    // the poll that is on its way saw the ticket as held, and says so after the answer has landed
+    state.list = async (url) => {
+      if (!hold || !url.searchParams.has("status")) return undefined;
+      await listGate;
+      return listOf([
+        review({
+          status: "processing",
+          locked_by: "an",
+          allowed_decisions: [],
+          updated_at: "2026-11-13T14:41:07+00:00",
+        }),
+      ]);
+    };
+    serve(server, state);
+    renderSoar();
+    await press(KEEP);
+    hold = true;
+    await act(() => vi.advanceTimersByTimeAsync(SOAR_LIST_POLL_MS + 100));
+    await act(async () => releaseDecision());
+    const row = await rowOf();
+    await waitFor(() => expect(within(row).getAllByRole("cell")[8]).toHaveTextContent("Đã giữ"));
+    await act(async () => releaseList());
+    await act(() => vi.advanceTimersByTimeAsync(200));
+    expect(within(await rowOf()).getAllByRole("cell")[8]).toHaveTextContent("Đã giữ");
+    expect(within(await rowOf()).queryByText("Đang xử lý (an)")).not.toBeInTheDocument();
   });
 
   it("leaves another row's buttons alone", async () => {

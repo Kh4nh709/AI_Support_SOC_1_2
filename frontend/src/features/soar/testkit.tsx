@@ -35,7 +35,9 @@ export type Fake = {
     call: DecisionCall,
   ) => SoarDecisionAnswer | Response | Promise<SoarDecisionAnswer | Response>;
   /** A list answer of your own (a page of a bigger total, an error); falls back to the rows. */
-  list?: (url: URL) => SoarListResponse | Response | undefined;
+  list?: (
+    url: URL,
+  ) => SoarListResponse | Response | undefined | Promise<SoarListResponse | Response | undefined>;
   /** What the server saw, in order. */
   lists: URL[];
   decisions: DecisionCall[];
@@ -52,10 +54,10 @@ export function serve(server: SetupServer, state: Fake): void {
     http.get("/api/soar/reviews/count", () =>
       HttpResponse.json({ count: 0, latest_created_at: null }),
     ),
-    http.get("/api/soar/reviews", ({ request }) => {
+    http.get("/api/soar/reviews", async ({ request }) => {
       const url = new URL(request.url);
       state.lists.push(url);
-      const own = state.list?.(url);
+      const own = await state.list?.(url);
       if (own instanceof Response) return own;
       if (own !== undefined) return HttpResponse.json(own);
       return HttpResponse.json(

@@ -78,6 +78,9 @@ export function useDecisions(): Decisions {
       try {
         const answer = await mutateAsync({ id: row.id, decision, note });
         const review = isReview(answer.review) ? answer.review : null;
+        // A poll that was already on its way saw the ticket before this answer: let it go, or it would land after the
+        // answer and put the row back as it was (held, with the old buttons) until the next poll.
+        await client.cancelQueries({ queryKey: soarKeys.lists });
         if (review !== null) write(review);
         put(row.id, {
           running: false,
@@ -89,7 +92,10 @@ export function useDecisions(): Decisions {
         }
       } catch (error) {
         const failure = failureOf(error);
-        if (failure.review !== null) write(failure.review);
+        if (failure.review !== null) {
+          await client.cancelQueries({ queryKey: soarKeys.lists });
+          write(failure.review);
+        }
         put(row.id, {
           running: false,
           lines: failure.lines,
