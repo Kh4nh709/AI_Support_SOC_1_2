@@ -9,7 +9,9 @@ that wants to see a press fail needs the answer to change between two presses, s
 stand-in (`ok`, `fail`, `conflict`, `slow`: the real code, imported, not copied) and hands each POST to the one the file names. The
 file is in the stack's mode-700 state directory; a spec writes `ok`, `fail`, `conflict` or `slow` into it. Anything else in it, or
 no file, is `ok`. It decides nothing and changes nothing anywhere: it only answers. Loopback only; the secret comes from the
-environment, never from an argument; it is never printed (the stand-in prints one line per request without it).
+environment, never from an argument; it is never printed (the stand-in prints one line per request without it). Without a secret it
+refuses to start (exit 2, naming `N8N_APPROVAL_SECRET`), as it does without the mode file: with an empty one the stand-in would
+accept any request, and the stack would no longer prove that the web sends its secret.
 """
 
 from __future__ import annotations
@@ -37,6 +39,10 @@ def current_mode(mode_file: str) -> str:
 
 
 def make_server(port: int, secret: str, mode_file: str) -> ThreadingHTTPServer:
+    # `mock_n8n_approval.py` accepts ANY request when its secret is empty. The e2e stack proves that the web sends the secret it
+    # was given, so a stand-in with nothing to check would let a web that sent none pass: it is never made without one.
+    if not secret.strip():
+        raise ValueError("N8N_APPROVAL_SECRET is empty: the stand-in would accept any request")
     handlers = {mode: stand_in.make_handler(mode, secret, SLOW_SECONDS) for mode in stand_in.MODES}
 
     class Switching(handlers["ok"]):  # type: ignore[misc]  # a class made at run time
@@ -54,7 +60,12 @@ def main(argv: list[str]) -> int:
     if not mode_file:
         print("ui_e2e_n8n: E2E_N8N_MODE_FILE is not set", file=sys.stderr)
         return 2
-    server = make_server(int(argv[1]), os.environ.get("N8N_APPROVAL_SECRET", ""), mode_file)
+    secret = os.environ.get("N8N_APPROVAL_SECRET", "")
+    if not secret.strip():
+        # the variable is named; its value never is
+        print("ui_e2e_n8n: N8N_APPROVAL_SECRET is not set or empty", file=sys.stderr)
+        return 2
+    server = make_server(int(argv[1]), secret, mode_file)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
