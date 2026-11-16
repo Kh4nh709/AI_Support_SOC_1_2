@@ -133,3 +133,54 @@ it("calls logout when Đăng xuất is pressed", async () => {
   await userEvent.setup().click(screen.getByRole("button", { name: S.nav.logout }));
   expect(logout).toHaveBeenCalledTimes(1);
 });
+
+// SR-T2: the page "Phản hồi SOAR" is every role's, so its link is in every role's navigation, after the pages that are
+// some roles' own and before the console.
+it.each(["tier1", "tier2", "admin"] as const)("gives %s the link to /soar", (role) => {
+  renderHeader(session(role));
+  const link = screen.getByRole("link", { name: S.nav.soar });
+  expect(S.nav.soar).toBe("Phản hồi SOAR");
+  expect(link).toHaveAttribute("href", "/soar");
+  expect(link).not.toHaveAttribute("target");
+});
+
+it("puts the SOAR link after Case and before Quản trị", () => {
+  renderHeader(session("admin"));
+  const names = screen
+    .getAllByRole("link")
+    .map((a) => a.textContent)
+    .filter((text) => [S.nav.queue, S.nav.cases, S.nav.soar, S.nav.admin].includes(text ?? ""));
+  expect(names).toEqual([S.nav.queue, S.nav.cases, S.nav.soar, S.nav.admin]);
+});
+
+it("marks the SOAR link as the current page on /soar", () => {
+  renderHeader(session("tier1"), {}, undefined, "/soar");
+  expect(screen.getByRole("link", { name: S.nav.soar })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("link", { name: S.nav.queue })).not.toHaveAttribute("aria-current");
+});
+
+it("shows the SOAR link with no slot given, and the slot's content inside the link when it is", () => {
+  const view = renderHeader(session("tier1"));
+  expect(screen.getByRole("link", { name: S.nav.soar })).toHaveTextContent(/^Phản hồi SOAR$/);
+  view.unmount();
+  const auth: AuthState = {
+    session: session("tier1"),
+    ready: true,
+    signedOut: false,
+    login: async () => {},
+    logout: async () => {},
+  };
+  render(
+    <AuthContext.Provider value={auth}>
+      <MemoryRouter>
+        <AppHeader soarBadge={<span>badge here</span>} />
+      </MemoryRouter>
+    </AuthContext.Provider>,
+  );
+  expect(screen.getByRole("link", { name: /Phản hồi SOAR/ })).toHaveTextContent("badge here");
+});
+
+it("shows no SOAR link, and so mounts no badge, to nobody signed in", () => {
+  renderHeader(null);
+  expect(screen.queryByRole("link", { name: S.nav.soar })).not.toBeInTheDocument();
+});
