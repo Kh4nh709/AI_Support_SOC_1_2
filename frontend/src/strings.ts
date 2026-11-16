@@ -77,6 +77,8 @@ export const S = {
     cases: "Case",
     // The in-app link to the admin console (P11-T10), admin only; it replaced the link to the old console.
     admin: "Quản trị",
+    // The page of the SOAR review tickets (SR-T2); every role has it, and the link carries the count of open tickets.
+    soar: "Phản hồi SOAR",
     logout: "Đăng xuất",
   },
 
@@ -2022,6 +2024,47 @@ export const S = {
         labLabeled: (label: string) => `gán nhãn: ${label}`,
         labLabelCleared: "xoá nhãn lab",
         labLabelUnknown: "gán nhãn lab",
+        // The two events of the SOAR review tickets (migration 025): what n8n pushed, and what a person pressed. A code this
+        // file has no word for is shown as it came (`labelOf`).
+        soarReceived: (event: string) => `nhận phiếu từ SOAR (${event})`,
+        soarReceivedUnknown: "nhận phiếu từ SOAR",
+        soarDecided: (decision: string) => `quyết định: ${decision}`,
+        soarDecidedUnknown: "quyết định phiếu SOAR",
+        soarOutcome: (outcome: string) => `kết quả: ${outcome}`,
+        soarStatus: (status: string) => `trạng thái: ${status}`,
+        soarReason: (reason: string) => `lý do: ${reason}`,
+        soarChange: (before: string, after: string) => `${before} → ${after}`,
+        soarEvents: { created: "tạo", updated: "cập nhật", reminder: "nhắc" } as Readonly<
+          Record<string, string>
+        >,
+        soarOutcomes: {
+          created: "tạo mới",
+          updated: "cập nhật",
+          ignored: "bỏ qua",
+          ok: "thành công",
+          failed: "thất bại",
+          unavailable: "không gọi được n8n",
+          conflict: "xung đột",
+          invalid_state: "sai trạng thái",
+          locked: "đang bị khoá",
+        } as Readonly<Record<string, string>>,
+        soarReasons: {
+          stale: "bản cũ hơn bản đã lưu",
+          terminal: "phiếu đã kết thúc",
+          decided: "đã có quyết định sau thời điểm đó",
+        } as Readonly<Record<string, string>>,
+        soarDecisions: { keep: "giữ", undo: "gỡ", fp: "dương tính giả" } as Readonly<
+          Record<string, string>
+        >,
+        soarStatuses: {
+          open: "đang mở",
+          processing: "đang xử lý",
+          kept: "đã giữ",
+          undone: "đã gỡ",
+          false_positive: "dương tính giả",
+          expired: "hết hạn",
+          info: "thông tin",
+        } as Readonly<Record<string, string>>,
         labLabels: {
           true_positive: "tấn công thật (TP)",
           false_positive: "không phải tấn công (FP)",
@@ -2579,6 +2622,351 @@ export const S = {
           "Nhà cung cấp hoặc mô hình từ chối yêu cầu (ví dụ hết số dư, 402), không thử lại.",
         linter: "Lời nhắc không qua kiểm tra an toàn nên không được gửi đi.",
         rank_unavailable: "Không xếp hạng được các mục tương tự nên chưa tìm mục trùng.",
+      },
+    },
+  },
+
+  // The page "Phản hồi SOAR" (SR-T2, spec 2026-11-16-soar-review-web-design.md section 7): the review tickets the SOAR
+  // (n8n) pushes, and what an analyst does with them. A table keyed by a server code is read through `labelOf`, so a
+  // status, an action type or an event this file has no word for is shown as its code. What n8n sent (a title, a
+  // button's label, a note, a host, a result, an error, the raw body) is never worded here: it is shown as text.
+  soar: {
+    title: "Phản hồi SOAR",
+    tableLabel: "Các phiếu phản hồi SOAR",
+    noticeTableLabel: "Các thông báo từ SOAR",
+    loadError: "Không tải được danh sách phiếu",
+    count: (n: number) => `${n} phiếu`,
+    pageEmpty: "Không có phiếu nào ở trang này.",
+    empty: {
+      open: "Không có phiếu nào đang mở.",
+      done: "Chưa có phiếu nào được xử lý.",
+      expired: "Không có phiếu nào hết hạn.",
+      notice: "Không có thông báo nào.",
+      search: "Không có phiếu nào khớp với tìm kiếm.",
+    },
+    tabs: {
+      label: "Lọc phiếu",
+      open: "Đang mở",
+      done: "Đã xử lý",
+      expired: "Hết hạn",
+      notice: "Thông báo",
+    },
+    search: {
+      label: "Tìm theo case, IP hoặc máy",
+      submit: "Tìm",
+      clear: "Xoá tìm kiếm",
+    },
+    col: {
+      id: "Phiếu",
+      time: "Thời gian",
+      case: "Case",
+      scenario: "Kịch bản",
+      host: "Máy",
+      target: "Đối tượng",
+      action: "Hành động",
+      score: "Điểm",
+      status: "Trạng thái",
+      actions: "Thao tác",
+      severity: "Mức",
+      title: "Tiêu đề",
+      note: "Nội dung",
+      shown: "Thông báo",
+    },
+    caseNumber: (n: number) => `#${n}`,
+    simulated: "GIẢ LẬP",
+    // `status` of a review as the API serves it; `processing` is the web's own (a decision is in flight), `info` a notice's.
+    status: {
+      open: "Đang mở",
+      processing: "Đang xử lý",
+      kept: "Đã giữ",
+      undone: "Đã gỡ",
+      false_positive: "Dương tính giả",
+      expired: "Hết hạn",
+      info: "Thông tin",
+    },
+    // A row another person (or another tab of the same person) holds while their decision runs.
+    heldBy: (who: string) => `Đang xử lý (${who})`,
+    kind: {
+      review: "Phiếu duyệt",
+      notice: "Thông báo",
+    },
+    actionType: {
+      block_ip: "Chặn IP",
+      sinkhole_domain: "Chặn tên miền (sinkhole)",
+      isolate_host: "Cách ly máy",
+      disable_user: "Khoá tài khoản",
+      disable_xp_cmdshell: "Tắt xp_cmdshell",
+      kill_process: "Dừng tiến trình",
+    },
+    via: {
+      pfsense: "pfSense",
+      wazuh: "Wazuh",
+    },
+    // The word of a notice's severity, beside its colour.
+    severity: {
+      error: "Lỗi",
+      warning: "Cảnh báo",
+      info: "Thông tin",
+    },
+    // The word of a decision, for the button whose label n8n left empty, and for the history.
+    decision: {
+      keep: "Giữ",
+      undo: "Gỡ",
+      fp: "Dương tính giả",
+    },
+    working: "Đang xử lý…",
+    lastError: (text: string) => `Lỗi gần nhất: ${text}`,
+    buttonsLabel: (id: string) => `Thao tác với phiếu ${id}`,
+    result: {
+      // `ok`: the new status; n8n's message follows on its own line when it sent one.
+      ok: (status: string) => `Đã cập nhật: ${status}`,
+      failedNoMessage: "Thao tác không thành công.",
+      unavailableNoMessage: "Không kết nối được tới SOAR (n8n). Hãy thử lại.",
+      conflict: (status: string) => `Phiếu đã được xử lý ở nơi khác: ${status}`,
+      invalidState: "Phiếu không còn ở trạng thái cho phép thao tác này; đã làm mới.",
+      // Not "someone else": the row may be held by the request this person sent from another tab, or before leaving the page.
+      locked: "Phiếu đang được xử lý; đã làm mới.",
+      forbidden: "Bạn không có quyền thực hiện thao tác này",
+      notConfigured: "Chưa cấu hình liên kết duyệt tới SOAR (n8n); hãy báo quản trị viên.",
+      notFound: "Không tìm thấy phiếu.",
+      network: "Không gửi được yêu cầu. Hãy thử lại.",
+      toast: (id: string, status: string) => `Phiếu ${id}: ${status}`,
+    },
+    dialog: {
+      title: {
+        undo: "Gỡ biện pháp đã áp dụng?",
+        fp: "Đánh dấu dương tính giả?",
+        undoStrong: "Cảnh báo: gỡ biện pháp trên máy quan trọng",
+        fpStrong: "Cảnh báo: đánh dấu dương tính giả trên máy quan trọng",
+        // A strong warning whose host is not critical (an isolation on an ordinary host) names no importance.
+        undoIsolated: "Cảnh báo: gỡ cách ly máy",
+        fpIsolated: "Cảnh báo: đánh dấu dương tính giả cho máy bị cách ly",
+      },
+      subject: (id: string, action: string) => `Phiếu ${id}: ${action}`,
+      // What the person is about to do when `strong_warning` is true (an isolation, or a host the configuration of the web lists as
+      // critical), worded by the ACTION and by `host_critical`: only a critical host is called "máy quan trọng", and the text says it
+      // is the configuration that lists it (not the SOAR); an isolation on an ordinary host says what it does and hedges nothing.
+      // Every value in it (host, account, address, domain, action) is the text of n8n.
+      strong: {
+        undo: {
+          plain: {
+            isolate_host: (target: string) =>
+              `Gỡ cách ly ${target} sẽ nối lại máy với mạng ngay. Nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.`,
+            disable_user: (account: string) =>
+              `Mở khoá ${account}: tài khoản này sẽ đăng nhập lại được ngay. Nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.`,
+            block_ip: (target: string) =>
+              `Gỡ chặn ${target}: lưu lượng từ địa chỉ này được phép đi qua trở lại. Hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
+            sinkhole_domain: (target: string) =>
+              `Gỡ chặn tên miền ${target}: tên miền này sẽ phân giải trở lại. Hãy chắc chắn tên miền này không còn nguy hiểm.`,
+            disable_xp_cmdshell: (server: string) =>
+              `xp_cmdshell sẽ được bật lại trên ${server}: máy chủ SQL cho phép chạy lệnh hệ điều hành trở lại. Hãy chắc chắn trước khi tiếp tục.`,
+            // An action type this file has no sentence for: the action is named by its own text.
+            other: (action: string) =>
+              `Bạn sắp gỡ biện pháp “${action}”. Hãy chắc chắn trước khi tiếp tục.`,
+          },
+          // The host is the REPORTING or ENFORCING device, not what the action was done to (the lab domain controller is also
+          // its DNS server), so it appears only in the neutral clause: "Biện pháp này liên quan tới <host>, một máy được cấu
+          // hình là máy quan trọng (ví dụ máy chủ AD)". The object of the action is its own target.
+          critical: {
+            isolate_host: (target: string, host: string) =>
+              `Gỡ cách ly ${target} sẽ nối lại máy với mạng ngay. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.`,
+            disable_user: (account: string, host: string) =>
+              `Mở khoá ${account}: tài khoản này sẽ đăng nhập lại được ngay. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.`,
+            block_ip: (target: string, host: string) =>
+              `Gỡ chặn ${target}: lưu lượng từ địa chỉ này được phép đi qua trở lại. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
+            sinkhole_domain: (target: string, host: string) =>
+              `Gỡ chặn tên miền ${target}: tên miền này sẽ phân giải trở lại. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn tên miền này không còn nguy hiểm.`,
+            disable_xp_cmdshell: (server: string, host: string) =>
+              `xp_cmdshell sẽ được bật lại trên ${server}: máy chủ SQL cho phép chạy lệnh hệ điều hành trở lại. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn trước khi tiếp tục.`,
+            other: (action: string, host: string) =>
+              `Bạn sắp gỡ biện pháp “${action}” liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn trước khi tiếp tục.`,
+          },
+        },
+        fp: {
+          plain: {
+            kill_process: () =>
+              "Tiến trình đã bị dừng. Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.",
+            other: (action: string) =>
+              `Đánh dấu dương tính giả cho “${action}” sẽ đóng phiếu, kể cả khi biện pháp vẫn đang áp dụng. Nếu đây là tấn công thật, sẽ không còn nhắc nữa.`,
+          },
+          critical: {
+            kill_process: (host: string) =>
+              `Tiến trình đã bị dừng. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD). Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.`,
+            other: (action: string, host: string) =>
+              `Đánh dấu dương tính giả cho “${action}” sẽ đóng phiếu, kể cả khi biện pháp vẫn đang áp dụng. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD). Nếu đây là tấn công thật, sẽ không còn nhắc nữa.`,
+          },
+        },
+        // What stands for a value n8n did not send, and the words around an account.
+        host: "máy này",
+        account: (user: string) => `tài khoản ${user}`,
+        accountNone: "tài khoản này",
+        ip: "địa chỉ này",
+        // The word after "tên miền" when n8n sent no domain ("Gỡ chặn tên miền này").
+        domain: "này",
+        sqlServer: "máy chủ SQL này",
+      },
+      // What happens once it is done.
+      after: {
+        undo: "Khi đã gỡ, phiếu chuyển sang “Đã gỡ” và không thể giữ lại nữa trên trang này.",
+        fp: "Phiếu chuyển sang “Dương tính giả” và đóng lại, không thể xử lý tiếp trên trang này.",
+      },
+      understand: "Tôi hiểu rủi ro và muốn tiếp tục",
+      // The line beside a shut confirm: which box opens it.
+      shutHint: (box: string) => `Tích ô “${box}” để bật nút xác nhận.`,
+      // The dialog follows the live ticket: what it says when the ticket changes under it, and the box that asks again.
+      changed: (status: string, who: string | null) =>
+        who === null ? `Phiếu vừa thay đổi: ${status}` : `Phiếu vừa thay đổi: ${status} (${who})`,
+      acknowledgeChange: "Tôi đã xem thay đổi và vẫn muốn tiếp tục",
+      notAllowed: (status: string) =>
+        `Thao tác này không còn được phép với phiếu (đang ở trạng thái “${status}”). Hãy đóng hộp thoại.`,
+      // The list the dialog follows is another view, is loading, or failed: the ticket as it is now is not known.
+      cannotFollow:
+        "Không theo dõi được phiếu lúc này: danh sách đang tải hoặc không tải được. Hãy đóng hộp thoại và xem lại phiếu.",
+      gone: "Phiếu không còn trong danh sách này (đã đổi trạng thái hoặc sang trang khác). Hãy đóng hộp thoại và xem lại phiếu.",
+      note: "Ghi chú (không bắt buộc)",
+      noteCount: (n: number, max: number) => `${n}/${max}`,
+      confirm: {
+        undo: "Gỡ biện pháp",
+        fp: "Đánh dấu dương tính giả",
+      },
+    },
+    timer: {
+      autoUndo: (clock: string, left: string) => `Tự gỡ lúc ${clock} · còn ${left}`,
+      waitingClose: "Chờ SOAR đóng phiếu",
+      holding: (minutes: number) => `Đang giữ · nhắc mỗi ${minutes} phút`,
+      remindDue: "Đã đến hạn nhắc",
+    },
+    badge: {
+      text: (n: number) => (n > 99 ? "99+" : String(n)),
+      sr: (n: number) => `${n} phiếu đang mở`,
+    },
+    signal: {
+      label: "Báo khi có phiếu mới",
+      hint: "Phát âm báo và hiện thông báo của trình duyệt khi có phiếu mới.",
+      // The choice is the tab's own; what the browser remembers is its permission to notify.
+      perTab: "Lựa chọn chỉ áp dụng cho tab này; trình duyệt tự nhớ quyền hiện thông báo.",
+      toneOnly: "Trình duyệt không cho hiện thông báo, nên chỉ phát âm báo.",
+      notification: {
+        title: "Phiếu SOAR mới",
+        body: (open: number) => `Có ${open} phiếu đang mở`,
+      },
+    },
+    notice: {
+      heading: "Thông báo từ SOAR",
+      dismiss: "Ẩn",
+      dismissLabel: (id: string) => `Ẩn thông báo ${id}`,
+      dismissed: "Đã ẩn",
+      // A dismissal lasts as long as the tab: the ids are kept in its session store.
+      sessionOnly: "Ẩn trong phiên này",
+      sessionHint: "Thông báo đã ẩn sẽ hiện lại khi mở tab mới.",
+      more: (n: number) => `Còn ${n} thông báo khác, xem ở mục “Thông báo”.`,
+    },
+    pagination: "Phân trang",
+    range: (from: number, to: number, total: number) => `Hiển thị ${from}–${to} trên ${total}`,
+    page: (n: number) => `Trang ${n}`,
+    detail: {
+      open: (id: string) => `Xem chi tiết phiếu ${id}`,
+      title: (id: string) => `Chi tiết phiếu ${id}`,
+      close: "Đóng chi tiết",
+      loading: "Đang tải chi tiết…",
+      loadError: "Không tải được chi tiết phiếu",
+      notFound: "Không tìm thấy phiếu này.",
+      field: {
+        id: "Mã phiếu",
+        kind: "Loại",
+        status: "Trạng thái",
+        severity: "Mức",
+        title: "Tiêu đề",
+        simulated: "Chế độ",
+        case: "Case",
+        caseId: "Mã case",
+        action: "Hành động",
+        actionType: "Loại hành động",
+        target: "Đối tượng",
+        via: "Qua",
+        actionAgent: "Agent thực thi",
+        host: "Máy",
+        agentId: "ID agent",
+        user: "Tài khoản",
+        srcIp: "IP nguồn",
+        domain: "Tên miền",
+        scenario: "Kịch bản",
+        score: "Điểm",
+        note: "Ghi chú của SOAR",
+        createdAt: "Tạo lúc",
+        autoExpireAt: "Tự gỡ lúc",
+        remind: "Nhắc lại",
+        nextRemindAt: "Nhắc tiếp lúc",
+        decidedBy: "Quyết định bởi",
+        decidedAt: "Quyết định lúc",
+        result: "Kết quả",
+        lastError: "Lỗi gần nhất",
+        lockedBy: "Đang được xử lý bởi",
+        lockedAt: "Khoá lúc",
+        lastSentAt: "SOAR gửi lúc",
+        receivedAt: "Web nhận lúc",
+        updatedAt: "Cập nhật lúc",
+        buttons: "Các nút SOAR gửi",
+        allowed: "Bạn được phép",
+        strong: "Cảnh báo mạnh",
+      },
+      yes: "Có",
+      no: "Không",
+      scenario: (id: string, name: string) => `${id} ${name}`,
+      remindEvery: (minutes: number) => `mỗi ${minutes} phút`,
+      listSeparator: ", ",
+      history: {
+        heading: "Lịch sử",
+        label: "Lịch sử của phiếu",
+        empty: "Chưa có lịch sử.",
+        truncated: "Chỉ hiện 200 sự kiện mới nhất.",
+        col: {
+          time: "Thời gian",
+          event: "Sự kiện",
+          who: "Ai",
+          outcome: "Kết quả",
+          detail: "Chi tiết",
+        },
+        event: {
+          "soar.review_received": "Nhận phiếu từ SOAR",
+          "soar.review_decided": "Quyết định trên web",
+        },
+        outcome: {
+          created: "Tạo mới",
+          updated: "Cập nhật",
+          ignored: "Bỏ qua",
+          ok: "Thành công",
+          failed: "Thất bại",
+          unavailable: "Không gọi được n8n",
+          conflict: "Xung đột",
+          invalid_state: "Sai trạng thái",
+          locked: "Đang bị khoá",
+        },
+        actor: { system: "Hệ thống" },
+        who: (name: string, role: string) => `${name} (${role})`,
+        n8nEvent: { created: "tạo", updated: "cập nhật", reminder: "nhắc" },
+        reason: {
+          stale: "bản cũ hơn bản đã lưu",
+          terminal: "phiếu đã kết thúc",
+          decided: "đã có quyết định sau thời điểm đó",
+        },
+        received: (event: string, status: string) => `SOAR ${event}, trạng thái ${status}`,
+        reasonLine: (reason: string) => `Lý do: ${reason}`,
+        decided: (decision: string) => `Quyết định: ${decision}`,
+        noteLine: (note: string) => `Ghi chú: ${note}`,
+        change: (before: string, after: string) => `${before} → ${after}`,
+      },
+      related: {
+        heading: "Alert cùng case",
+        empty: "Không có alert nào cùng case.",
+        more: (n: number) => `+${n} alert khác`,
+        severity: (word: string) => `Mức ${word}`,
+        occurrences: (n: number) => `${n} lần xuất hiện`,
+        label: "Các alert cùng case",
+      },
+      raw: {
+        summary: "Nội dung gốc SOAR đã gửi (văn bản)",
+        empty: "Không có nội dung gốc.",
       },
     },
   },

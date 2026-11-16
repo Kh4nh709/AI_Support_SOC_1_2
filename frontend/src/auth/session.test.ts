@@ -1,6 +1,8 @@
 // src/auth/session.test.ts — the session lives in memory, sessionStorage and a BroadcastChannel; never in
 // the persistent store (spec §3, §6). A second `BroadcastChannel` instance here plays the second tab.
+import { DISMISSED_KEY, SIGNAL_KEY } from "../features/soar/storage";
 import {
+  PER_SESSION_KEYS,
   clearSession,
   forgetSession,
   loadSession,
@@ -195,5 +197,79 @@ describe("requestSessionFromOtherTabs", () => {
     const stop = startSessionSharing(() => {});
     await expect(requestSessionFromOtherTabs(1000)).resolves.toEqual(SESSION);
     stop();
+  });
+});
+
+// The preferences a person sets on the page of the SOAR tickets (the signal switch, the dismissed notices) live in the session store of
+// the tab, like the session, and they are that person's: when the session ends the next one in the same tab must start from the
+// default. They go wherever the stored session goes (`forgetSession`): logout, a 401, the expiry, a logout of another tab.
+describe("the preferences of one session do not outlive it", () => {
+  const N1 = "N000000000001";
+  const prefs = () => {
+    sessionStorage.setItem(SIGNAL_KEY, "1");
+    sessionStorage.setItem(DISMISSED_KEY, JSON.stringify([N1]));
+  };
+  const keys = () => [SIGNAL_KEY, DISMISSED_KEY].map((key) => sessionStorage.getItem(key));
+
+  it("are the two keys of features/soar/storage.ts, no more and no fewer", () => {
+    expect([...PER_SESSION_KEYS].sort()).toEqual([DISMISSED_KEY, SIGNAL_KEY].sort());
+    expect(PER_SESSION_KEYS).toEqual(["soc.soar.signal", "soc.soar.dismissed"]);
+  });
+
+  it("forgetSession removes both, with the session", () => {
+    saveSession(SESSION);
+    prefs();
+    forgetSession();
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+    expect(keys()).toEqual([null, null]);
+  });
+
+  it("clearSession (logout) removes both, and tells the other tabs", async () => {
+    const { heard } = otherTab();
+    saveSession(SESSION);
+    prefs();
+    clearSession();
+    expect(keys()).toEqual([null, null]);
+    await vi.waitFor(() => expect(heard).toContainEqual({ type: "logout" }));
+  });
+
+  it("loadSession of an expired session removes both too", () => {
+    saveSession({ ...SESSION, expiresAt: new Date(Date.now() - 1000).toISOString() });
+    prefs();
+    expect(loadSession()).toBeNull();
+    expect(keys()).toEqual([null, null]);
+  });
+
+  it("leaves everything else of the store alone: a draft, an unrelated key", () => {
+    saveSession(SESSION);
+    prefs();
+    sessionStorage.setItem("soc.draft.alert-1", "{}");
+    sessionStorage.setItem("something.else", "x");
+    forgetSession();
+    expect(sessionStorage.getItem("soc.draft.alert-1")).toBe("{}");
+    expect(sessionStorage.getItem("something.else")).toBe("x");
+  });
+
+  it("removes the second when the first cannot be removed, and never throws", () => {
+    saveSession(SESSION);
+    prefs();
+    const real = Storage.prototype.removeItem;
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(function (
+      this: Storage,
+      key: string,
+    ) {
+      if (key === SIGNAL_KEY) throw new DOMException("blocked", "SecurityError");
+      real.call(this, key);
+    });
+    expect(() => forgetSession()).not.toThrow();
+    expect(sessionStorage.getItem(DISMISSED_KEY)).toBeNull();
+    vi.restoreAllMocks();
+  });
+
+  it("touches nothing in the store that outlives the tab", () => {
+    saveSession(SESSION);
+    prefs();
+    forgetSession();
+    expect(localStorage.length).toBe(0);
   });
 });

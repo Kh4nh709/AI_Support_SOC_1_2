@@ -1,4 +1,4 @@
-// What the audit page makes of an event (spec §4.7): the one-line summary of each of the 40 event types, built
+// What the audit page makes of an event (spec §4.7): the one-line summary of each of the 42 event types, built
 // client-side from the payload; the link of a subject that is an alert or a case; the payload as text; and the
 // escape of the characters a person cannot see.
 //
@@ -8,6 +8,7 @@
 // free text is put on one line and cut. Everything returned is text for React to show as text.
 import type { AuditEvent } from "../../api/admin";
 import { S, labelOf } from "../../strings";
+import { hasInvisible, visible } from "../../visibleText";
 
 const A = S.admin.auditPage.summary;
 
@@ -22,56 +23,10 @@ export const REDACTED = "[đã ẩn]";
 
 // --- the characters a person cannot see -------------------------------------------------------------------------
 
-// The C0 controls but tab, line feed and carriage return; DEL and the C1 controls; the soft hyphen; the
-// combining grapheme joiner; the Arabic letter mark; the Hangul fillers (U+115F, U+1160, U+3164, U+FFA0); the
-// mongolian vowel separator; the zero-width and bidi marks, the line and paragraph separators, the word joiner
-// and its invisible neighbours; the blank braille pattern; the variation selectors (U+FE00 to U+FE0F); the
-// byte-order mark; the interlinear annotation marks; and the Tag characters (U+E0001, U+E0020 to U+E007F),
-// which spell ASCII text a person cannot see and a model may read. A right-to-left override among them could
-// make one name read as another. The Tag characters are outside the BMP, so the pattern has the `u` flag.
-// Text in other scripts (Vietnamese in NFC or NFD, CJK, Arabic, Hebrew) is none of these and is left alone.
-const INVISIBLE_RANGES: readonly (readonly [number, number])[] = [
-  [0x00, 0x08],
-  [0x0b, 0x0c],
-  [0x0e, 0x1f],
-  [0x7f, 0x9f],
-  [0xad, 0xad],
-  [0x34f, 0x34f],
-  [0x61c, 0x61c],
-  [0x115f, 0x1160],
-  [0x180e, 0x180e],
-  [0x200b, 0x200f],
-  [0x2028, 0x202e],
-  [0x2060, 0x206f],
-  [0x2800, 0x2800],
-  [0x3164, 0x3164],
-  [0xfe00, 0xfe0f],
-  [0xfeff, 0xfeff],
-  [0xffa0, 0xffa0],
-  [0xfff9, 0xfffb],
-  [0xe0001, 0xe0001],
-  [0xe0020, 0xe007f],
-];
-/** The escape of a code point as the text shows it: four hex digits, or `{...}` for one outside the BMP. */
-const escapeOf = (code: number): string =>
-  code > 0xffff ? `\\u{${code.toString(16)}}` : `\\u${code.toString(16).padStart(4, "0")}`;
-// The ranges as the inside of a character class, each end an escape: no control character is written into
-// the source, and none can be lost from it.
-const CLASS = INVISIBLE_RANGES.map(
-  ([from, to]) => `${escapeOf(from)}${from === to ? "" : `-${escapeOf(to)}`}`,
-).join("");
-const INVISIBLE = new RegExp(`[${CLASS}]`, "gu");
-
-/** True when the text holds a character a person cannot see. */
-export const hasInvisible = (text: string): boolean => new RegExp(`[${CLASS}]`, "u").test(text);
-
-/**
- * A text with each character a person cannot see written as its escape (`\u` and four hex digits, or
- * `\u{...}` outside the BMP), so what is shown is what is there.
- */
-export function visible(text: string): string {
-  return text.replace(INVISIBLE, (ch) => escapeOf(ch.codePointAt(0) ?? 0));
-}
+// The list, the escape and `visible` live in src/visibleText.ts, shared with the page of the SOAR tickets (a module of its own, so
+// that page does not carry this file's event builders). They are re-exported here: the audit page and its tests import them from
+// this file, and what they do has not changed.
+export { hasInvisible, visible };
 
 // --- reading a payload that may be anything ---------------------------------------------------------------------
 
@@ -417,6 +372,42 @@ const BUILDERS: Readonly<Record<string, Builder>> = {
     const label = str(p, "label");
     if (label !== null) return [A.labLabeled(free(labelOf(A.labLabels, label)))];
     return [own(p, "label") === null ? A.labLabelCleared : A.labLabelUnknown];
+  },
+  // The SOAR review tickets (spec 2026-11-16, section 6). `soar.review_received`: {event, kind, outcome, reason, status, sent_at}
+  // (written by the system for every push of n8n that parsed); `soar.review_decided`: {actor_role, decision, note, outcome,
+  // status_before, status_after, message} (a person pressed a button). The note and the message are free text and are not
+  // in the line: the whole payload is one click away.
+  "soar.review_received": (p) => {
+    const event = str(p, "event");
+    return [
+      event === null ? A.soarReceivedUnknown : A.soarReceived(free(labelOf(A.soarEvents, event))),
+      ...when(str(p, "outcome"), (outcome) =>
+        A.soarOutcome(free(labelOf(A.soarOutcomes, outcome))),
+      ),
+      ...when(str(p, "status"), (status) => A.soarStatus(free(labelOf(A.soarStatuses, status)))),
+      ...when(str(p, "reason"), (reason) => A.soarReason(free(labelOf(A.soarReasons, reason)))),
+    ];
+  },
+  "soar.review_decided": (p) => {
+    const decision = str(p, "decision");
+    const before = str(p, "status_before");
+    const after = str(p, "status_after");
+    return [
+      decision === null
+        ? A.soarDecidedUnknown
+        : A.soarDecided(free(labelOf(A.soarDecisions, decision))),
+      ...when(str(p, "outcome"), (outcome) =>
+        A.soarOutcome(free(labelOf(A.soarOutcomes, outcome))),
+      ),
+      ...(before !== null && after !== null
+        ? [
+            A.soarChange(
+              free(labelOf(A.soarStatuses, before)),
+              free(labelOf(A.soarStatuses, after)),
+            ),
+          ]
+        : []),
+    ];
   },
   "rag.lookup_failed": () => [A.lookupFailed],
   "rag.integrity_failed": (p) => [A.integrityFailed, ...entryClause(p)],

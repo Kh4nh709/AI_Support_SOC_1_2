@@ -21,6 +21,10 @@ vi.mock("./features/tier1/QueuePage", () => ({
 vi.mock("./features/tier1/AlertPage", () => ({
   AlertPage: () => <h1>{S.alert.infoHeading}</h1>,
 }));
+// The page of the SOAR tickets (SR-T2) reads the API (features/soar/SoarPage.*.test.tsx test it); here only its place matters.
+vi.mock("./features/soar/SoarPage", () => ({
+  SoarPage: () => <h1>{S.soar.title}</h1>,
+}));
 // The labelling page reads the label routes with the labeller named in the session's token (LabelsPage.test.tsx
 // tests it); this file looks for its place and its title.
 vi.mock("./features/admin/LabelsPage", () => ({
@@ -472,5 +476,57 @@ describe("with the real AuthProvider", () => {
     await user.type(screen.getByLabelText(S.login.password), "pw");
     await user.click(screen.getByRole("button", { name: S.login.submit }));
     await waitFor(() => expect(where()).toBe("/alerts/5"));
+  });
+});
+
+// SR-T2: the page "Phản hồi SOAR" is every role's, and its link in the header carries the count of open tickets, asked of
+// the API only while somebody is signed in.
+describe("the SOAR page (SR-T2)", () => {
+  const count = (n: number) =>
+    http.get("/api/soar/reviews/count", () =>
+      HttpResponse.json({ count: n, latest_received_at: "2026-11-16T01:00:00+00:00" }),
+    );
+
+  it.each<Session["role"]>(["tier1", "tier2", "admin"])("lets %s open /soar", async (role) => {
+    server.use(count(0));
+    renderAt("/soar", session(role));
+    expect(where()).toBe("/soar");
+    expect(
+      await screen.findByRole("heading", { level: 1, name: S.soar.title }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("sends a visitor with no session from /soar to /login, and asks the API for no count", async () => {
+    let asked = 0;
+    server.use(
+      http.get("/api/soar/reviews/count", () => {
+        asked += 1;
+        return HttpResponse.json({ count: 1, latest_received_at: null });
+      }),
+    );
+    renderAt("/soar", null);
+    expect(where()).toBe("/login");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(asked).toBe(0);
+  });
+
+  it("shows the count of open tickets in the link of the header, on any page", async () => {
+    server.use(count(4));
+    renderAt("/queue", session("tier1"));
+    const link = await screen.findByRole("link", { name: `${S.nav.soar} ${S.soar.badge.sr(4)}` });
+    expect(link).toHaveAttribute("href", "/soar");
+  });
+
+  it("leaves the link and the whole header as they are when the count fails", async () => {
+    server.use(
+      http.get("/api/soar/reviews/count", () =>
+        HttpResponse.json({ detail: "x" }, { status: 500 }),
+      ),
+    );
+    renderAt("/queue", session("tier1"));
+    expect(await screen.findByRole("link", { name: S.nav.soar })).toBeInTheDocument();
+    expect(screen.getByRole("banner")).toHaveTextContent(S.app.name);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

@@ -336,6 +336,8 @@ describe("the route table in source", () => {
       "/alerts/:alertId",
       "/cases",
       "/cases/:caseId",
+      // SR-T2: the page of the SOAR tickets, every role's, in the main bundle like the queue
+      "/soar",
       "/admin",
       "/admin/overview",
       "/admin/users",

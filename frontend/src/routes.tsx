@@ -2,7 +2,7 @@
 // case page P10-T11's. The admin console (P11-T10, admin spec §3) is `/admin` and its pages (`/admin/knowledge` is
 // DEC-210's, P13-T06; `/admin/lab` and `/admin/lab/:runId`, the lab labelling, are DEC-213's, P14-T10; the pages for
 // the auto-close rules and the digest were removed with DEC-214, and a path under either is an unknown path, which
-// the `*` route below answers).
+// the `*` route below answers). The page of the SOAR review tickets (`/soar`, SR-T2) is every role's, like the queue.
 import { lazy, type ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router";
 import { useAuth } from "./auth/AuthProvider";
@@ -13,6 +13,8 @@ import { CASE_ROLES } from "./caseAccess";
 import { AppHeader } from "./components/AppHeader";
 import { LazyPage } from "./components/LazyPage";
 import { AdminLayout } from "./features/admin/AdminLayout";
+import { SoarNavBadge } from "./features/soar/SoarNavBadge";
+import { SoarPage } from "./features/soar/SoarPage";
 import { AlertPage } from "./features/tier1/AlertPage";
 import { QueuePage } from "./features/tier1/QueuePage";
 import { CasePage } from "./features/tier2/CasePage";
@@ -77,7 +79,7 @@ function AdminPage({ children }: { children: ReactNode }) {
 function Shell() {
   return (
     <div className="min-h-screen">
-      <AppHeader live={<LiveIndicator />} />
+      <AppHeader live={<LiveIndicator />} soarBadge={<SoarNavBadge />} />
       <main className="p-6">
         <ForbiddenNotice />
         <Outlet />
@@ -134,6 +136,14 @@ export function AppRoutes() {
           element={
             <RequireRole roles={TIER2_UP}>
               <CasePage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="/soar"
+          element={
+            <RequireRole roles={EVERY_ROLE}>
+              <SoarPage />
             </RequireRole>
           }
         />
