@@ -473,6 +473,45 @@ describe("while the request runs", () => {
     expect(other).toHaveFocus();
   });
 
+  it("does not cancel the list of a tab that was just opened and holds no data yet: its rows land when the answer comes", async () => {
+    let releaseDecision: () => void = () => {};
+    const decisionGate = new Promise<void>((resolve) => (releaseDecision = resolve));
+    let releaseList: () => void = () => {};
+    const listGate = new Promise<void>((resolve) => (releaseList = resolve));
+    const state = fake({ rows: [review()] });
+    state.decision = async () => {
+      await decisionGate;
+      return answer();
+    };
+    // the list of the tab Đã xử lý is slow: it is on its way when the answer of the decision lands
+    state.list = async (url) => {
+      if (!url.searchParams.getAll("status").includes("kept")) return undefined;
+      await listGate;
+      return listOf([review({ id: "DONE0001", status: "kept", allowed_decisions: [] })]);
+    };
+    serve(server, state);
+    renderSoar();
+    await press(KEEP);
+    await userEvent.click(screen.getByRole("link", { name: "Đã xử lý" }));
+    await waitFor(() =>
+      expect(state.lists.some((url) => url.searchParams.getAll("status").includes("kept"))).toBe(
+        true,
+      ),
+    );
+    await act(async () => releaseDecision());
+    await waitFor(() => expect(screen.queryByText(S.soar.working)).not.toBeInTheDocument());
+    await act(async () => releaseList());
+    // the rows of the new tab are shown, and are no longer the dimmed rows of the old one
+    expect(await rowOf("DONE0001")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: S.soar.detail.open("K7QM2XHP") }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("table", { name: S.soar.tableLabel })).toHaveAttribute(
+      "aria-busy",
+      "false",
+    );
+  });
+
   it("leaves another row's buttons alone", async () => {
     let release: () => void = () => {};
     const wait = new Promise<void>((resolve) => (release = resolve));

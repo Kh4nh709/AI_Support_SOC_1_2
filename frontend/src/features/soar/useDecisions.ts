@@ -61,6 +61,16 @@ export type Decisions = {
   run: (row: SoarReview, decision: SoarDecision, note: string) => Promise<void>;
 };
 
+/**
+ * The list fetches to let go before an answer is written into the cache: those of lists that already HOLD rows, which a poll
+ * on its way would overwrite with the old state of the ticket. A list that holds no data yet (a tab just opened) is
+ * left alone: cancelling it would leave the rows of the previous tab on screen, dimmed, until the next poll.
+ */
+const OLD_POLLS = {
+  queryKey: soarKeys.lists,
+  predicate: (query: { state: { data: unknown } }) => query.state.data !== undefined,
+};
+
 export function useDecisions(): Decisions {
   const client = useQueryClient();
   const [states, setStates] = useState<Readonly<Record<string, RowState>>>({});
@@ -110,7 +120,7 @@ export function useDecisions(): Decisions {
         const review = isReview(answer.review) ? answer.review : null;
         // A poll that was already on its way saw the ticket before this answer: let it go, or it would land after the
         // answer and put the row back as it was (held, with the old buttons) until the next poll.
-        await client.cancelQueries({ queryKey: soarKeys.lists });
+        await client.cancelQueries(OLD_POLLS);
         if (review !== null) write(review);
         put(row.id, {
           running: false,
@@ -123,7 +133,7 @@ export function useDecisions(): Decisions {
       } catch (error) {
         const failure = failureOf(error);
         if (failure.review !== null) {
-          await client.cancelQueries({ queryKey: soarKeys.lists });
+          await client.cancelQueries(OLD_POLLS);
           write(failure.review);
         }
         put(row.id, {
