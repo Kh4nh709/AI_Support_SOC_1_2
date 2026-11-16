@@ -51,6 +51,7 @@ from typing import Any, Literal
 import httpx
 
 from app.infra.config import Config
+from app.infra.storable import make_storable
 
 logger = logging.getLogger(__name__)
 
@@ -141,8 +142,10 @@ def request_body(
 
 
 def _text(value: Any) -> str | None:
-    """n8n's text field: a string, cut; anything else is no text."""
-    return value[:MAX_TEXT] if isinstance(value, str) else None
+    """n8n's text field: a string, made storable (a NUL removed, a lone surrogate replaced: `infra.storable`) and then cut; anything
+    else is no text. n8n has already acted when this is read: a text the database refuses must not cost the record of it.
+    """
+    return make_storable(value)[:MAX_TEXT] if isinstance(value, str) else None
 
 
 def _read_capped(response: httpx.Response, deadline: float, clock: Callable[[], float]) -> bytes:

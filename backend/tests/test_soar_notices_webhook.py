@@ -280,6 +280,37 @@ def test_a_body_that_is_not_a_json_object_is_one_body_fault(world, body):
     assert _errors(response) == [{"field": "body", "reason": "invalid"}]
 
 
+@pytest.mark.parametrize("where", ["known_field", "unknown_field", "key"])
+@pytest.mark.parametrize("text", ["\ud800", "x\udc00y", "q\ud83d"], ids=repr)
+def test_a_lone_surrogate_or_a_nul_in_a_pushed_body_is_a_400_never_a_500_and_nothing_is_stored(
+    world, where, text
+):
+    """C1: a JavaScript string cut inside an emoji reaches here as `\\ud83d`. It was a 500 with nothing stored, so n8n retried a
+    ticket that could never land; it is a 400 that says so (`body` / `invalid`), and n8n's retry logic gives up.
+    """
+    for bad in (text, f"a\x00{text}"):
+        doc = data.review()
+        if where == "known_field":
+            doc["title"] = bad
+        elif where == "unknown_field":
+            doc["unknown"] = bad
+        else:
+            doc[f"k{bad}"] = 1
+        before = world.audit_count()
+        response = world.post(json.dumps(doc).encode("utf-8"))
+        assert response.status_code == 400, (where, bad, response.status_code)
+        assert _errors(response) == [{"field": "body", "reason": "invalid"}]
+        assert world.row(doc["id"]) is None
+        assert world.audit_count() == before
+
+
+def test_a_valid_pair_in_a_pushed_body_is_stored_as_the_emoji(world):
+    doc = data.review(title="PLACEHOLDER")
+    body = json.dumps(doc).replace('"PLACEHOLDER"', '"sự cố \\ud83d\\ude00"').encode("utf-8")
+    assert world.post(body).status_code == 201
+    assert world.row(doc["id"])["title"] == "sự cố \U0001f600"
+
+
 def test_an_error_answer_repeats_nothing_the_sender_wrote(world):
     hostile = "<script>alert(1)</script>'; DROP TABLE soar_reviews;--"
     response = world.post(data.review(severity=hostile, title=hostile * 10))

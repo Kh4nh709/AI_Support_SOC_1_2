@@ -78,6 +78,8 @@ _INT64_MAX = 2**63 - 1
 #: What the person is told when a press failed or was refused and n8n gave no text of its own.
 FAILED_TEXT = "n8n báo thao tác không thành công. Phiếu giữ nguyên trạng thái."
 CONFLICT_TEXT = "Phiếu đã được xử lý ở nơi khác. Đã cập nhật theo trạng thái của n8n."
+#: What is written when the database refuses n8n's own text (or any write of the finish fails): fixed, so the outcome is still recorded.
+SAFE_TEXT = "Đã ghi nhận kết quả từ n8n, nhưng nội dung chi tiết n8n trả về không lưu được."
 
 
 class NotFound(Exception):
@@ -559,19 +561,71 @@ def decide(
         client_factory=client_factory,
     )
 
+    try:
+        return _finish(
+            conn,
+            person,
+            cfg,
+            review_id,
+            decision,
+            note,
+            answer,
+            locked_at,
+            status_before,
+            safe=False,
+        )
+    except (psycopg.Error, ValueError):
+        # The finish transaction failed for a database reason (a text the database refuses that slipped through, a timeout, an
+        # audit insert): n8n HAS acted, so the lock must not be left behind. Roll back, and write the outcome again in a fresh
+        # transaction with fixed safe texts and the event. Only if that fails too is the answer a 500.
+        conn.rollback()
+        return _finish(
+            conn,
+            person,
+            cfg,
+            review_id,
+            decision,
+            note,
+            answer,
+            locked_at,
+            status_before,
+            safe=True,
+        )
+
+
+def _finish(
+    conn: psycopg.Connection,
+    person: Person,
+    cfg: Config,
+    review_id: str,
+    decision: str,
+    note: str | None,
+    answer: n8n_approval.Answer,
+    locked_at: datetime,
+    status_before: str,
+    *,
+    safe: bool,
+) -> Decided:
+    """The finish in ONE transaction: the compare-and-set of the outcome, the ticket as it now is, the audit event, COMMIT. With
+    `safe`, n8n's own texts are replaced by fixed ones (the outcome and n8n's status are still the truth).
+    """
     key = {"id": review_id, "user": person.username, "locked_at": locked_at}
     message: str | None
     if answer.outcome == "ok":
-        message = answer.message
-        conn.execute(_FINISH_OK_SQL, {**key, "status": answer.status, "result": answer.result})
+        message = SAFE_TEXT if safe else answer.message
+        result = SAFE_TEXT if safe else answer.result
+        conn.execute(_FINISH_OK_SQL, {**key, "status": answer.status, "result": result})
     elif answer.outcome == "failed":
-        message = answer.message or answer.result or FAILED_TEXT
+        message = SAFE_TEXT if safe else (answer.message or answer.result or FAILED_TEXT)
         conn.execute(_FINISH_BACK_SQL, {**key, "error": message})
     elif answer.outcome == "conflict":
-        message = answer.message or CONFLICT_TEXT
+        message = CONFLICT_TEXT if safe else (answer.message or CONFLICT_TEXT)
         status = answer.status if answer.status in CONFLICT_STATUSES else None
-        conn.execute(_FINISH_CONFLICT_SQL, {**key, "status": status, "result": answer.result})
-    else:  # unavailable
+        conn.execute(
+            _FINISH_CONFLICT_SQL,
+            {**key, "status": status, "result": None if safe else answer.result},
+        )
+    else:  # unavailable: the text is ours, one of a few fixed sentences
         message = answer.message
         conn.execute(_FINISH_BACK_SQL, {**key, "error": message})
 

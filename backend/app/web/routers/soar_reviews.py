@@ -54,6 +54,7 @@ from pydantic import AfterValidator, BeforeValidator
 
 from app.audit.events import write_event
 from app.infra.auth import Claims
+from app.infra.storable import is_storable
 from app.soar import reviews
 from app.web.deps import (
     ROLE_TO_ACTOR,
@@ -248,7 +249,9 @@ def _validated(body: dict[str, Any]) -> tuple[str, str | None]:
         raise _bad("decision", "invalid")
     note = body.get("note")
     if note is not None:
-        if not isinstance(note, str) or "\x00" in note:
+        if not isinstance(note, str) or not is_storable(
+            note
+        ):  # a NUL or a lone surrogate: 422 before any lock
             raise _bad("note", "invalid")
         if len(note) > NOTE_MAX:
             raise _bad("note", "too_long")

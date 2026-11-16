@@ -14,8 +14,9 @@ characters of `[A-HJ-NP-Z2-9]`, a notice's is `N` and 12 of `[A-Za-z0-9_-]`. A r
 is a finite number or null, stored rounded half up to an integer. Texts are capped by characters: `title` 200, the others
 2,000. `case.number` and `remind_every_minutes` are whole numbers inside their columns. At most 20 buttons.
 
-Beyond the contract, three limits that keep the rest of the system working, each a `body` fault: no NUL character anywhere
-(`jsonb` refuses it, and stored it would be a 500), no number too large for a float, and no nesting past `MAX_DEPTH` levels
+Beyond the contract, three limits that keep the rest of the system working, each a `body` fault: no NUL character and no lone UTF-16
+surrogate anywhere, in a key or a text (`jsonb` refuses the first, no UTF-8 encoder accepts the second, a JavaScript string cut inside an
+emoji makes one, and stored it would be a 500 that n8n retries for ever), no number too large for a float, and no nesting past `MAX_DEPTH` levels
 (the detail route serves `raw`, and the serialiser gives up, a 500, a little under 250 levels: `admin_audit.py` has the same
 cap for the same reason).
 
@@ -54,6 +55,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from app.audit.events import write_event
+from app.infra.storable import is_storable
 
 EVENTS = ("created", "updated", "reminder")
 KINDS = ("review", "notice")
@@ -146,8 +148,9 @@ def _reject_constant(name: str) -> Any:
 
 
 def _tree_fault(root: Any) -> str | None:
-    """`invalid` for a NUL character (in a key or a text) or a number that is not finite, `too_deep` for a body nested past
-    `MAX_DEPTH`; `None` when the tree is storable. Iterative: a hostile depth must not reach the interpreter's own limit.
+    """`invalid` for a key or a text that cannot be stored (a NUL character, or a lone UTF-16 surrogate that no UTF-8 encoder
+    accepts: `infra.storable`) or a number that is not finite, `too_deep` for a body nested past `MAX_DEPTH`; `None` when the tree
+    is storable. Iterative: a hostile depth must not reach the interpreter's own limit.
     """
     stack: list[tuple[Any, int]] = [(root, 1)]
     while stack:
@@ -156,10 +159,10 @@ def _tree_fault(root: Any) -> str | None:
             return "too_deep"
         children = node.items() if isinstance(node, dict) else enumerate(node)
         for key, child in children:
-            if isinstance(node, dict) and "\x00" in key:
+            if isinstance(node, dict) and not is_storable(key):
                 return "invalid"
             if isinstance(child, str):
-                if "\x00" in child:
+                if not is_storable(child):
                     return "invalid"
             elif isinstance(child, float):
                 if not math.isfinite(child):

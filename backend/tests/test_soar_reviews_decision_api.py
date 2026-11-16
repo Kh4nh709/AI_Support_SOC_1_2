@@ -574,6 +574,241 @@ def test_a_later_success_clears_the_last_error(world):
     assert row["last_error"] is None and row["status"] == "kept"
 
 
+# ── text the database cannot store (fix round 1: C2 and C3) ─────────────────────────────────
+
+#: A NUL, a lone high surrogate, a lone low surrogate, and both at once; and what each becomes once cleaned.
+BAD_TEXTS = {
+    "a\x00b": "ab",
+    "a\ud800b": "a�b",
+    "\udc00": "�",
+    "x\x00\ud800y": "x�y",
+}
+
+
+def _variants(bad: str) -> dict[str, tuple[Reply, str, str]]:
+    """The answers of n8n that carry `bad`, each with the outcome and the status the ticket must end in."""
+    return {
+        "ok-message": (Reply.json_body({"ok": True, "status": "kept", "message": bad, "result": "r"}), "ok", "kept"),
+        "ok-result": (Reply.json_body({"ok": True, "status": "kept", "message": "m", "result": bad}), "ok", "kept"),
+        "failed-message": (Reply.json_body({"ok": False, "message": bad}), "failed", "open"),
+        "failed-result": (Reply.json_body({"ok": False, "result": bad}), "failed", "open"),
+        "conflict-message": (Reply.json_body({"ok": False, "status": "undone", "message": bad}, 409), "conflict", "undone"),
+        "conflict-result": (
+            Reply.json_body({"ok": False, "status": "undone", "message": "m", "result": bad}, 409),
+            "conflict",
+            "undone",
+        ),
+    }  # fmt: skip
+
+
+@pytest.mark.parametrize("bad", list(BAD_TEXTS), ids=repr)
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "ok-message",
+        "ok-result",
+        "failed-message",
+        "failed-result",
+        "conflict-message",
+        "conflict-result",
+    ],
+)
+def test_c2_a_nul_or_a_lone_surrogate_in_n8ns_answer_is_recorded_not_a_500_and_never_leaves_the_lock(
+    world, variant, bad
+):
+    """C2: n8n's `message` or `result` with a NUL or a lone surrogate made the finish UPDATE or the audit INSERT fail AFTER n8n had
+    acted: a 500, the ticket left `processing`, no `soar.review_decided` event, and two minutes later the buttons were back and a second
+    press asked n8n again. Now: 200, the right outcome and status, the text cleaned, one event, no lock.
+    """
+    reply, outcome, status = _variants(bad)[variant]
+    review_id = world.put()
+    world.fake = FakeN8n(reply)
+    response = _decide(world, "tier2", review_id, "keep")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["outcome"] == outcome
+    assert body["review"]["status"] == status
+    row = world.row(review_id)
+    assert row["status"] == status
+    assert (row["locked_by"], row["locked_at"], row["prev_status"]) == (None, None, None)
+    [event] = _decided(world, review_id)
+    assert event["payload"]["outcome"] == outcome and event["payload"]["status_after"] == status
+    texts = [body["message"], row["last_error"], row["result"], event["payload"]["message"]]
+    for text in texts:
+        if text is not None:
+            assert "\x00" not in text
+            text.encode("utf-8")
+    clean = BAD_TEXTS[bad]
+    assert clean in " ".join(
+        t for t in texts if t
+    )  # what survives is the text with the bad characters taken out
+    assert len(world.fake.calls) == 1
+
+
+def test_c2_the_reviewers_four_probes_by_name(world):
+    probes = [
+        ("ok + NUL message", Reply.json_body({"ok": True, "status": "kept", "message": "a\x00b"}), "ok", "kept"),
+        ("ok + surrogate message", Reply.json_body({"ok": True, "status": "kept", "message": "a\ud800b"}), "ok", "kept"),
+        ("failed + NUL result", Reply.json_body({"ok": False, "result": "a\x00b"}), "failed", "open"),
+        ("409 + NUL message", Reply.json_body({"ok": False, "status": "undone", "message": "a\x00b"}, 409), "conflict", "undone"),
+    ]  # fmt: skip
+    for name, reply, outcome, status in probes:
+        review_id = world.put()
+        world.fake = FakeN8n(reply)
+        response = _decide(world, "tier2", review_id, "keep")
+        assert response.status_code == 200, name
+        assert (
+            response.json()["outcome"] == outcome and world.row(review_id)["status"] == status
+        ), name
+        assert len(_decided(world, review_id)) == 1, name
+
+
+def test_c2_a_database_failure_on_the_first_finish_falls_back_to_a_truthful_row_with_fixed_texts(
+    world, monkeypatch
+):
+    """The finish transaction fails for ANY database reason (here the audit insert): it is rolled back, and the outcome is written in a
+    fresh transaction with fixed safe texts and the event. An `ok` from n8n is still recorded as `ok` with n8n's status: the lock is
+    never left behind and the second press never asks n8n again."""
+    review_id = world.put()
+    world.fake = FakeN8n(Reply.ok("kept", result="giữ chặn", message="Đã giữ chặn"))
+    real = reviews.write_event
+    failures: list[str] = []
+
+    def fail_once(*args, **kwargs):
+        if not failures:
+            failures.append("boom")
+            raise psycopg.errors.DataError("the audit text cannot be stored")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(reviews, "write_event", fail_once)
+    response = _decide(world, "tier2", review_id, "keep")
+    assert failures == ["boom"]
+    assert response.status_code == 200
+    body = response.json()
+    assert body["outcome"] == "ok" and body["review"]["status"] == "kept"
+    assert body["message"] == reviews.SAFE_TEXT
+    row = world.row(review_id)
+    assert row["status"] == "kept" and row["decided_by"] == world.users["tier2"][1]
+    assert (
+        row["result"] == reviews.SAFE_TEXT
+    )  # n8n's own result text was not stored: the fixed one was
+    assert (row["locked_by"], row["locked_at"], row["prev_status"]) == (None, None, None)
+    [event] = _decided(
+        world, review_id
+    )  # the first attempt's insert was rolled back with its update
+    assert event["payload"]["outcome"] == "ok" and event["payload"]["message"] == reviews.SAFE_TEXT
+    assert (event["payload"]["status_before"], event["payload"]["status_after"]) == ("open", "kept")
+    assert len(world.fake.calls) == 1
+    assert (
+        _decide(world, "tier2", review_id, "keep").status_code == 409
+    )  # and the buttons are not back
+
+
+@pytest.mark.parametrize(
+    "reply,outcome,status,last_error",
+    [
+        (Reply.failed("lỗi"), "failed", "open", reviews.SAFE_TEXT),
+        (Reply.timeout(), "unavailable", "open", n8n_approval._UNAVAILABLE_TEXT["timeout"]),
+        (Reply.conflict("undone", "ở nơi khác"), "conflict", "undone", None),
+    ],
+    ids=["failed", "unavailable", "conflict"],
+)
+def test_c2_the_fallback_keeps_the_other_outcomes_truthful_too(
+    world, monkeypatch, reply, outcome, status, last_error
+):
+    review_id = world.put()
+    world.fake = FakeN8n(reply)
+    real = reviews.write_event
+    failures: list[str] = []
+
+    def fail_once(*args, **kwargs):
+        if not failures:
+            failures.append("boom")
+            raise psycopg.errors.InternalError("boom")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(reviews, "write_event", fail_once)
+    response = _decide(world, "tier2", review_id, "keep")
+    assert response.status_code == 200 and response.json()["outcome"] == outcome
+    row = world.row(review_id)
+    assert row["status"] == status and row["locked_by"] is None
+    assert row["last_error"] == last_error
+    assert [e["payload"]["outcome"] for e in _decided(world, review_id)] == [outcome]
+
+
+def test_c2_if_the_fallback_fails_too_the_answer_is_a_500_and_nothing_pretends_otherwise(
+    world, monkeypatch
+):
+    review_id = world.put()
+
+    def always(*args, **kwargs):
+        raise psycopg.errors.DataError("no audit at all")
+
+    monkeypatch.setattr(reviews, "write_event", always)
+    assert _decide(world, "tier2", review_id, "keep").status_code == 500
+
+
+@pytest.mark.parametrize("bad", list(BAD_TEXTS), ids=repr)
+def test_c3_a_note_that_cannot_be_encoded_is_422_before_any_lock(world, bad):
+    """C3: a note with a lone surrogate made httpx unable to encode the body (outcome "network"), then the audit insert failed and
+    everything rolled back with the lock COMMITTED: any signed-in analyst could hold any ticket in `processing` for two minutes,
+    repeatedly, with no audit trace. It is a 422 before the ticket is even read."""
+    review_id = world.put()
+    before = world.row(review_id)
+    for attempt in range(3):  # "repeatedly"
+        response = world.post_decision(
+            "tier1", review_id, json.dumps({"decision": "keep", "note": bad}).encode()
+        )
+        assert response.status_code == 422, attempt
+        assert response.json() == {"detail": {"field": "note", "reason": "invalid"}}
+        assert (
+            world.row(review_id) == before
+        )  # no lock taken: not processing, not even `updated_at`
+    assert world.fake.calls == [] and _decided(world, review_id) == []
+
+
+def test_c3_a_note_with_an_emoji_pair_is_fine(world):
+    review_id = world.put()
+    body = (
+        json.dumps({"decision": "keep", "note": "PLACEHOLDER"})
+        .replace('"PLACEHOLDER"', '"đã xem \\ud83d\\ude00"')
+        .encode()
+    )
+    assert world.post_decision("tier2", review_id, body).status_code == 200
+    assert world.fake.calls[0].body["note"] == "đã xem \U0001f600"
+
+
+def test_every_text_the_route_can_write_survives_a_nul_and_a_lone_surrogate(world):
+    """One walk over every text the decision route can write or send: the note (refused), n8n's message and result (cleaned) and
+    what is derived from them, `last_error` (cleaned). None is a 500 and none leaves a ticket in `processing`.
+    """
+    ids: list[str] = []
+    for bad in BAD_TEXTS:
+        # the person's note
+        review_id = world.put()
+        ids.append(review_id)
+        response = world.post_decision(
+            "tier2", review_id, json.dumps({"decision": "keep", "note": bad}).encode()
+        )
+        assert response.status_code == 422
+        assert world.row(review_id)["status"] == "open"
+        # n8n's message and result, for each outcome that carries them
+        for name, (reply, outcome, _status) in _variants(bad).items():
+            review_id = world.put()
+            ids.append(review_id)
+            world.fake = FakeN8n(reply)
+            response = _decide(world, "tier2", review_id, "keep", note="ok")
+            assert response.status_code == 200, (name, bad)
+            row = world.row(review_id)
+            assert row["status"] != "processing", (name, bad)
+            for column in ("result", "last_error"):
+                assert row[column] is None or "\x00" not in row[column]
+    stuck = world.rows(
+        "SELECT count(*) FROM soar_reviews WHERE status = 'processing' AND id = ANY(%s)", (ids,)
+    )
+    assert stuck[0][0] == 0 and len(ids) == len(BAD_TEXTS) * 7
+
+
 # ── unavailable: n8n could not be asked, or did not answer properly ─────────────────────────
 
 UNAVAILABLE = [
