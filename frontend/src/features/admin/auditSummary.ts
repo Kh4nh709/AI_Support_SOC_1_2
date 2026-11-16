@@ -1,4 +1,4 @@
-// What the audit page makes of an event (spec §4.7): the one-line summary of each of the 40 event types, built
+// What the audit page makes of an event (spec §4.7): the one-line summary of each of the 42 event types, built
 // client-side from the payload; the link of a subject that is an alert or a case; the payload as text; and the
 // escape of the characters a person cannot see.
 //
@@ -417,6 +417,42 @@ const BUILDERS: Readonly<Record<string, Builder>> = {
     const label = str(p, "label");
     if (label !== null) return [A.labLabeled(free(labelOf(A.labLabels, label)))];
     return [own(p, "label") === null ? A.labLabelCleared : A.labLabelUnknown];
+  },
+  // The SOAR review tickets (spec 2026-11-16, section 6). `soar.review_received`: {event, kind, outcome, reason, status, sent_at}
+  // (written by the system for every push of n8n that parsed); `soar.review_decided`: {actor_role, decision, note, outcome,
+  // status_before, status_after, message} (a person pressed a button). The note and the message are free text and are not
+  // in the line: the whole payload is one click away.
+  "soar.review_received": (p) => {
+    const event = str(p, "event");
+    return [
+      event === null ? A.soarReceivedUnknown : A.soarReceived(free(labelOf(A.soarEvents, event))),
+      ...when(str(p, "outcome"), (outcome) =>
+        A.soarOutcome(free(labelOf(A.soarOutcomes, outcome))),
+      ),
+      ...when(str(p, "status"), (status) => A.soarStatus(free(labelOf(A.soarStatuses, status)))),
+      ...when(str(p, "reason"), (reason) => A.soarReason(free(labelOf(A.soarReasons, reason)))),
+    ];
+  },
+  "soar.review_decided": (p) => {
+    const decision = str(p, "decision");
+    const before = str(p, "status_before");
+    const after = str(p, "status_after");
+    return [
+      decision === null
+        ? A.soarDecidedUnknown
+        : A.soarDecided(free(labelOf(A.soarDecisions, decision))),
+      ...when(str(p, "outcome"), (outcome) =>
+        A.soarOutcome(free(labelOf(A.soarOutcomes, outcome))),
+      ),
+      ...(before !== null && after !== null
+        ? [
+            A.soarChange(
+              free(labelOf(A.soarStatuses, before)),
+              free(labelOf(A.soarStatuses, after)),
+            ),
+          ]
+        : []),
+    ];
   },
   "rag.lookup_failed": () => [A.lookupFailed],
   "rag.integrity_failed": (p) => [A.integrityFailed, ...entryClause(p)],

@@ -17,17 +17,11 @@ import {
 
 const TYPES = Object.keys(S.admin.eventType);
 
-// The two events of the SOAR review tickets (migration 025) have a label (`strings.ts`) and no summary line yet: the audit
-// page shows a dash for them until the page "Phản hồi SOAR" gives them one. Every test that wants a line leaves them out.
-const SOAR_REVIEW_EVENTS = ["soar.review_received", "soar.review_decided"];
-const SUMMARISED = TYPES.filter((type) => !SOAR_REVIEW_EVENTS.includes(type));
-
 const sum = (event_type: string, payload: unknown) => summaryOf({ event_type, payload });
 
 describe("summaryOf, one event type at a time", () => {
-  it("covers all 42 event types of the backend but the two of the SOAR reviews, and each has a case below", () => {
+  it("covers all 42 event types of the backend, and each has a case below", () => {
     expect(TYPES).toHaveLength(42);
-    expect(SUMMARISED).toHaveLength(40);
   });
 
   it.each<[type: string, payload: unknown, summary: string]>([
@@ -418,11 +412,97 @@ describe("summaryOf, one event type at a time", () => {
     ["lab.labeled", { alert_id: "a1", run_id: "r-1", label: null }, "xoá nhãn lab"],
     ["lab.labeled", null, "gán nhãn lab"],
     ["lab.labeled", { label: {} }, "gán nhãn lab"],
+    // The two events of the SOAR review tickets (migration 025, spec section 6): what n8n pushed, and what a person pressed.
+    [
+      "soar.review_received",
+      {
+        event: "created",
+        kind: "review",
+        outcome: "created",
+        reason: null,
+        status: "open",
+        sent_at: "x",
+      },
+      "nhận phiếu từ SOAR (tạo); kết quả: tạo mới; trạng thái: đang mở",
+    ],
+    [
+      "soar.review_received",
+      { event: "reminder", kind: "review", outcome: "updated", reason: null, status: "open" },
+      "nhận phiếu từ SOAR (nhắc); kết quả: cập nhật; trạng thái: đang mở",
+    ],
+    [
+      "soar.review_received",
+      { event: "updated", outcome: "ignored", reason: "stale", status: "kept" },
+      "nhận phiếu từ SOAR (cập nhật); kết quả: bỏ qua; trạng thái: đã giữ; lý do: bản cũ hơn bản đã lưu",
+    ],
+    [
+      "soar.review_received",
+      { event: "updated", outcome: "ignored", reason: "terminal", status: "open" },
+      "nhận phiếu từ SOAR (cập nhật); kết quả: bỏ qua; trạng thái: đang mở; lý do: phiếu đã kết thúc",
+    ],
+    [
+      "soar.review_received",
+      { event: "updated", outcome: "ignored", reason: "decided", status: "open" },
+      "nhận phiếu từ SOAR (cập nhật); kết quả: bỏ qua; trạng thái: đang mở; lý do: đã có quyết định sau thời điểm đó",
+    ],
+    // a code this client has no word for is shown as it came; a payload that is not what the writer writes says the event alone
+    [
+      "soar.review_received",
+      { event: "teleport", outcome: "vanished", reason: "cosmic", status: "paused" },
+      "nhận phiếu từ SOAR (teleport); kết quả: vanished; trạng thái: paused; lý do: cosmic",
+    ],
+    ["soar.review_received", null, "nhận phiếu từ SOAR"],
+    ["soar.review_received", { event: 7, outcome: {}, status: [] }, "nhận phiếu từ SOAR"],
+    [
+      "soar.review_decided",
+      {
+        actor_role: "tier2",
+        decision: "undo",
+        note: "máy sạch",
+        outcome: "ok",
+        status_before: "open",
+        status_after: "undone",
+        message: "Đã gỡ",
+      },
+      "quyết định: gỡ; kết quả: thành công; đang mở → đã gỡ",
+    ],
+    [
+      "soar.review_decided",
+      { decision: "keep", outcome: "failed", status_before: "open", status_after: "open" },
+      "quyết định: giữ; kết quả: thất bại; đang mở → đang mở",
+    ],
+    [
+      "soar.review_decided",
+      { decision: "fp", outcome: "unavailable", status_before: "open", status_after: "open" },
+      "quyết định: dương tính giả; kết quả: không gọi được n8n; đang mở → đang mở",
+    ],
+    [
+      "soar.review_decided",
+      { decision: "keep", outcome: "conflict", status_before: "open", status_after: "undone" },
+      "quyết định: giữ; kết quả: xung đột; đang mở → đã gỡ",
+    ],
+    [
+      "soar.review_decided",
+      { decision: "undo", outcome: "invalid_state", status_before: "kept" },
+      "quyết định: gỡ; kết quả: sai trạng thái",
+    ],
+    [
+      "soar.review_decided",
+      { decision: "undo", outcome: "locked" },
+      "quyết định: gỡ; kết quả: đang bị khoá",
+    ],
+    [
+      "soar.review_decided",
+      { decision: "nuke", outcome: "exploded", status_before: "a", status_after: "b" },
+      "quyết định: nuke; kết quả: exploded; a → b",
+    ],
+    ["soar.review_decided", null, "quyết định phiếu SOAR"],
+    ["soar.review_decided", { decision: 1, outcome: null }, "quyết định phiếu SOAR"],
   ])("%s %j says %j", (type, payload, summary) => {
     expect(sum(type, payload)).toBe(summary);
   });
 
-  it("has a case for every one of the 40 types that have a line", () => {
+  it("has a case for every one of the 42 types", () => {
     // The cases above are the table; this is the other direction: no type of the backend is left without one.
     const covered = new Set(
       [
@@ -464,11 +544,13 @@ describe("summaryOf, one event type at a time", () => {
         "knowledge.redraft_requested",
         "lab.run_created",
         "lab.labeled",
+        "soar.review_received",
+        "soar.review_decided",
         "rag.lookup_failed",
         "rag.integrity_failed",
       ].sort(),
     );
-    expect([...covered]).toEqual([...SUMMARISED].sort());
+    expect([...covered]).toEqual([...TYPES].sort());
   });
 });
 
@@ -723,7 +805,7 @@ describe("the summary of an event whose suggestion the server withheld (DEC-101)
 
 describe("summaryOf, on a payload that is not what the writer would write", () => {
   it("says the payload is too big, whatever the event, when the server cut it", () => {
-    for (const type of SUMMARISED) {
+    for (const type of TYPES) {
       expect(sum(type, { truncated: true, size: 70000 })).toBe(
         "payload quá lớn (70.000 byte), server không gửi nội dung",
       );

@@ -2024,6 +2024,47 @@ export const S = {
         labLabeled: (label: string) => `gán nhãn: ${label}`,
         labLabelCleared: "xoá nhãn lab",
         labLabelUnknown: "gán nhãn lab",
+        // The two events of the SOAR review tickets (migration 025): what n8n pushed, and what a person pressed. A code this
+        // file has no word for is shown as it came (`labelOf`).
+        soarReceived: (event: string) => `nhận phiếu từ SOAR (${event})`,
+        soarReceivedUnknown: "nhận phiếu từ SOAR",
+        soarDecided: (decision: string) => `quyết định: ${decision}`,
+        soarDecidedUnknown: "quyết định phiếu SOAR",
+        soarOutcome: (outcome: string) => `kết quả: ${outcome}`,
+        soarStatus: (status: string) => `trạng thái: ${status}`,
+        soarReason: (reason: string) => `lý do: ${reason}`,
+        soarChange: (before: string, after: string) => `${before} → ${after}`,
+        soarEvents: { created: "tạo", updated: "cập nhật", reminder: "nhắc" } as Readonly<
+          Record<string, string>
+        >,
+        soarOutcomes: {
+          created: "tạo mới",
+          updated: "cập nhật",
+          ignored: "bỏ qua",
+          ok: "thành công",
+          failed: "thất bại",
+          unavailable: "không gọi được n8n",
+          conflict: "xung đột",
+          invalid_state: "sai trạng thái",
+          locked: "đang bị khoá",
+        } as Readonly<Record<string, string>>,
+        soarReasons: {
+          stale: "bản cũ hơn bản đã lưu",
+          terminal: "phiếu đã kết thúc",
+          decided: "đã có quyết định sau thời điểm đó",
+        } as Readonly<Record<string, string>>,
+        soarDecisions: { keep: "giữ", undo: "gỡ", fp: "dương tính giả" } as Readonly<
+          Record<string, string>
+        >,
+        soarStatuses: {
+          open: "đang mở",
+          processing: "đang xử lý",
+          kept: "đã giữ",
+          undone: "đã gỡ",
+          false_positive: "dương tính giả",
+          expired: "hết hạn",
+          info: "thông tin",
+        } as Readonly<Record<string, string>>,
         labLabels: {
           true_positive: "tấn công thật (TP)",
           false_positive: "không phải tấn công (FP)",
