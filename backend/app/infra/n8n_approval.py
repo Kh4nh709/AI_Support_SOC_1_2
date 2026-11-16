@@ -29,10 +29,14 @@ because an `httpx` exception's message can contain the request URL. `httpx` itse
 (`httpx/_client.py`), which would put that URL in the root logger regardless of anything here, so its logger is raised to
 WARNING at import, as `infra/notify.py` does. What is logged is the outcome, the status code and the duration.
 
-**A deadline, not only a socket timeout.** `N8N_APPROVAL_TIMEOUT_SECONDS` (1..100, enforced by the configuration) is the
-time a call may take. `httpx` bounds each wait (connect, then the response, then each piece of the body) but not their sum,
-so the body is read piece by piece against a deadline of the whole call: a lock older than two minutes is released by the
-next press, and a live call that outlived it would make n8n be asked twice for one decision.
+**A deadline for the whole call.** `N8N_APPROVAL_TIMEOUT_SECONDS` (1..100, enforced by the configuration) is the time a call may
+take, and a lock older than two minutes is released by the next press, so a live call that outlived it would make n8n be asked twice for
+one decision. `httpx` bounds each WAIT (the connect, the response, each piece of the body) but not their sum: a server that drips a
+byte at a time kept a call alive for ever (the reviewer measured 5 s, and 8 s with no upper bound, on a timeout of 3 s). The real client
+therefore runs on a network backend (`_DeadlineBackend`) whose every wait, in the connect, the TLS handshake, the headers and the body,
+is cut to the time remaining of the whole call, and whose name resolution is not waited for past it; the body is also read against the
+deadline. The call returns `unavailable` / `timeout` within `DEADLINE_MARGIN_S` of the timeout and closes the connection. 100 + 5 is under
+120. A test's `client_factory` replaces the client and, with it, this bound.
 
 The answer's texts (`message`, `result`) are n8n's: stored and shown as text, cut at `MAX_TEXT`, never used to build
 anything.
@@ -40,14 +44,18 @@ anything.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
+import socket
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+import httpcore
 import httpx
 
 from app.infra.config import Config
@@ -61,6 +69,11 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 #: The decisions of the page's buttons, and the statuses n8n may answer a successful one with.
 DECISIONS = ("keep", "undo", "fp")
 OK_STATUSES = ("kept", "undone", "false_positive")
+
+#: The call returns no later than `N8N_APPROVAL_TIMEOUT_SECONDS` plus this many seconds, whatever the server does (a drip at the
+#: connect, in the headers or in the body, a name that does not resolve). With the configuration's ceiling of 100 seconds that is 105,
+#: under the 120 seconds after which a lock is released: a live call never looks like a stale lock.
+DEADLINE_MARGIN_S = 5
 
 #: A text of n8n's answer is cut to this many characters (the cap `soar/review_notice.py` puts on the texts n8n pushes).
 MAX_TEXT = 2000
@@ -113,9 +126,118 @@ def is_configured(cfg: Config) -> bool:
     return bool(cfg.N8N_APPROVAL_URL) and bool(cfg.N8N_APPROVAL_SECRET)
 
 
-def _build_client() -> httpx.Client:
-    # No redirect is followed: n8n's webhook answers directly, and a redirect would carry the secret header elsewhere.
-    return httpx.Client(follow_redirects=False)
+class _DeadlineStream(httpcore.NetworkStream):
+    """A connection whose every wait is cut to what is left of the call's deadline: a read, a write and a TLS handshake each wait at
+    most the smaller of their own timeout and the time remaining, and none starts once the deadline has passed.
+    """
+
+    def __init__(
+        self,
+        inner: httpcore.NetworkStream,
+        left: Callable[[float | None, type[Exception]], float | None],
+    ) -> None:
+        self._inner = inner
+        self._left = left
+
+    def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        return self._inner.read(max_bytes, timeout=self._left(timeout, httpcore.ReadTimeout))
+
+    def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        self._inner.write(buffer, timeout=self._left(timeout, httpcore.WriteTimeout))
+
+    def close(self) -> None:
+        self._inner.close()
+
+    def start_tls(
+        self, ssl_context, server_hostname: str | None = None, timeout: float | None = None
+    ):
+        tls = self._inner.start_tls(
+            ssl_context, server_hostname, timeout=self._left(timeout, httpcore.ConnectTimeout)
+        )
+        return _DeadlineStream(tls, self._left)
+
+    def get_extra_info(self, info: str) -> Any:
+        return self._inner.get_extra_info(info)
+
+
+class _DeadlineBackend(httpcore.NetworkBackend):
+    """The network backend of the client: `httpx` bounds each wait but not their sum, so a server that drips a byte at a time, in
+    the connect, the headers or the body, would keep a call alive for ever. Every wait goes through `left` (the time remaining of the
+    whole call), and the name is resolved in a thread that is not waited for past the deadline: resolution is the operating system's
+    and has no timeout of its own."""
+
+    def __init__(self, deadline: float, clock: Callable[[], float]) -> None:
+        self._deadline = deadline
+        self._clock = clock
+        self._inner = httpcore.SyncBackend()
+
+    def _left(self, timeout: float | None, error: type[Exception]) -> float | None:
+        remaining = self._deadline - self._clock()
+        if remaining <= 0:
+            raise error("the deadline of the whole call passed")
+        return remaining if timeout is None else min(timeout, remaining)
+
+    def _resolve(self, host: str, port: int) -> str:
+        try:
+            ipaddress.ip_address(host)
+            return host  # an address: nothing to look up
+        except ValueError:
+            pass
+        found: list[Any] = []
+
+        def lookup() -> None:
+            try:
+                found.append(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)[0][4][0])
+            except (OSError, IndexError) as exc:
+                found.append(exc)
+
+        worker = threading.Thread(target=lookup, daemon=True)
+        worker.start()
+        worker.join(self._left(None, httpcore.ConnectTimeout))
+        if not found:
+            raise httpcore.ConnectTimeout("the name did not resolve before the deadline")
+        if isinstance(found[0], Exception):
+            raise httpcore.ConnectError("the name did not resolve")
+        return found[0]
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        address = self._resolve(host, port)
+        stream = self._inner.connect_tcp(
+            address,
+            port,
+            timeout=self._left(timeout, httpcore.ConnectTimeout),
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+        return _DeadlineStream(stream, self._left)
+
+    def connect_unix_socket(self, path, timeout=None, socket_options=None):
+        stream = self._inner.connect_unix_socket(
+            path,
+            timeout=self._left(timeout, httpcore.ConnectTimeout),
+            socket_options=socket_options,
+        )
+        return _DeadlineStream(stream, self._left)
+
+    def sleep(self, seconds: float) -> None:
+        self._inner.sleep(seconds)
+
+
+def _build_client(deadline: float, clock: Callable[[], float] = time.monotonic) -> httpx.Client:
+    """The real client: every wait of the call ends by `deadline`, and the connection is closed when the client is. No redirect is
+    followed (n8n's webhook answers directly, and a redirect would carry the secret header elsewhere), and the proxy variables of the
+    environment are not read (the call goes straight to the address that was configured)."""
+    transport = httpx.HTTPTransport()
+    transport._pool.close()  # the transport's own pool is replaced by one on the bounded backend
+    transport._pool = httpcore.ConnectionPool(
+        ssl_context=httpx.create_ssl_context(),
+        max_connections=1,
+        max_keepalive_connections=0,
+        http1=True,
+        http2=False,
+        network_backend=_DeadlineBackend(deadline, clock),
+    )
+    return httpx.Client(transport=transport, follow_redirects=False, trust_env=False)
 
 
 def request_body(
@@ -224,7 +346,7 @@ def call(
         body = request_body(review_id, decision, user, user_role, note, now)
         timeout = httpx.Timeout(timeout_s, connect=min(timeout_s, CONNECT_TIMEOUT_S))
         with (
-            (client_factory or _build_client)() as client,
+            client_factory() if client_factory else _build_client(deadline, clock) as client,
             client.stream(
                 "POST", cfg.N8N_APPROVAL_URL, json=body, headers=headers, timeout=timeout
             ) as response,
