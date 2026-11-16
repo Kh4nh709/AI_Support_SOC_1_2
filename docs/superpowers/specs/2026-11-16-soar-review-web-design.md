@@ -77,11 +77,15 @@ Processing (one transaction, the row locked)
 | no row with this `id` | `201 {"id", "created": true}` | the row, `last_sent_at = sent_at`, `raw` = the body as sent |
 | a row, `sent_at` older than `last_sent_at` | `200 {"id", "created": false, "ignored": true, "reason": "stale"}` | nothing |
 | a row in `undone`, `false_positive` or `expired`, and the body says `open` | `200 {…, "ignored": true, "reason": "terminal"}` | nothing |
+| a row that is `kept`, the body says `open`, and its `sent_at` is older than the stored `decided_at` | `200 {…, "ignored": true, "reason": "decided"}` | nothing |
 | otherwise | `200 {"id", "created": false}` | every field of the body replaces the stored one; `raw`, `last_sent_at`, `updated_at` |
 
-- An update that arrives while the web holds the row (`processing`) is applied: n8n is the authority. The lock
-  columns are cleared; the decision request in flight then finds its compare-and-set does not match and
-  answers with the row as it now is (section 4).
+- An update that arrives while the web holds the row (`processing`): when its `status` equals the status the
+  row had before the lock, it says nothing new about the state, so the other fields are updated and the lock is
+  left alone (the press in flight finishes normally). With any other status n8n has decided: the update is
+  applied, the lock columns are cleared, and the decision request in flight then finds its compare-and-set
+  does not match and answers with the row as it now is (section 4).
+- A text PostgreSQL cannot store (a NUL, an unpaired surrogate), in a value or a key, is a 400.
 - An `updated` or `reminder` for an unknown `id` creates the row (`201`).
 - One exception to "every field replaces the stored one": `decided_by`, `decided_at` and `result` that arrive
   null or absent keep the stored value, so a push that does not repeat who decided cannot erase the web's
@@ -93,8 +97,8 @@ Processing (one transaction, the row locked)
 
 `POST {N8N_APPROVAL_URL}` (default `http://79.79.79.14:5678/webhook/soar-approval`), header
 `X-SOAR-Secret: <N8N_APPROVAL_SECRET>`, `Content-Type: application/json`, timeout
-`N8N_APPROVAL_TIMEOUT_SECONDS` (45; the configuration refuses a value over 100, so a live call can never look
-like a stale lock).
+`N8N_APPROVAL_TIMEOUT_SECONDS` (45; the configuration refuses a value over 100, and the client returns within
+that time plus a few seconds whatever the server does, so a live call can never look like a stale lock).
 
 ```json
 { "source": "web", "review_id": "K7QM2XHP", "decision": "undo", "callback": "undo:K7QM2XHP",
@@ -110,7 +114,7 @@ like a stale lock).
 
 The client is its own module with an injected transport, so tests use a fake; it logs the outcome, the status
 code and the duration, never the secret, the URL's query or an exception text that could carry them. An empty
-`N8N_APPROVAL_SECRET` or `N8N_APPROVAL_URL` means "not configured": the decision route answers
+`N8N_APPROVAL_SECRET`, or an `N8N_APPROVAL_URL` set to empty (an absent key takes the default), means "not configured": the decision route answers
 `503 {"detail": "soar approval not configured"}` before it locks anything.
 
 ## 4 · The API (signed-in users; Bearer token as every `/api` route)
@@ -152,8 +156,8 @@ ticket already shown when a delivery is late); the UI compares `latest_received_
 to know a new ticket arrived.
 
 `GET /api/soar/reviews/{id}` — the review plus `raw` (the last body n8n sent), `history`
-(`[{at, event, actor, actor_role, payload}]`, the audit events whose subject is this id, oldest first, at
-most 200) and `related_alerts` (section 5). Unknown id: `404`.
+(`[{at, event, actor, actor_role, payload}]`, the audit events whose subject is this id: the newest 200,
+oldest first among them, with `history_truncated` true when older ones were left out) and `related_alerts` (section 5). Unknown id: `404`.
 
 `POST /api/soar/reviews/{id}/decision` — body `{"decision": "keep|undo|fp", "note": "<optional, ≤ 500>"}`.
 
@@ -164,7 +168,9 @@ most 200) and `related_alerts` (section 5). Unknown id: `404`.
    `kill_process`; anything else (also a notice) → `409 {"detail": {"reason": "invalid_state", "review": …}}`.
 3. Lock, one statement: `UPDATE … SET prev_status = status, status = 'processing', locked_by, locked_at =
    now() WHERE id = … AND (status = <the status just validated> OR (status = 'processing' AND locked_at <
-   now() - interval '2 minutes' AND prev_status = <that status>))`. No row → `409 {"detail": {"reason":
+   now() - interval '2 minutes' AND prev_status = <that status>))`, and `updated_at` still the value read in
+   step 2 (a push in between makes the lock miss). `prev_status` keeps its value when a stale lock is taken
+   over. No row → `409 {"detail": {"reason":
    "locked" | "invalid_state", "review": …}}`. Commit, so the lock is visible and no transaction is open
    during the call.
 4. Call n8n (contract B) off the event loop.
@@ -176,6 +182,9 @@ most 200) and `related_alerts` (section 5). Unknown id: `404`.
    - `conflict`: `status` from n8n when it is one of `open, kept, undone, false_positive, expired`, else back
      to `prev_status`; `result`/`message` kept.
    - compare-and-set matched nothing (n8n's own `updated` webhook won the race): nothing written.
+   - n8n's texts are cleaned before they are stored (NUL removed, unpaired surrogates replaced, cut at
+     2,000). If the finish cannot be written, a second attempt writes the truthful outcome with a fixed
+     text: a press never leaves the lock behind.
 6. Answer `200 {"outcome": "ok|failed|unavailable|conflict", "message": "<text for the person>|null",
    "review": <the row as it now is>}`. HTTP errors are only the local ones (401, 403, 404, 409, 422, 503).
 7. One audit event per press that passed the role check (section 6).
@@ -218,7 +227,7 @@ Audit (`audit.events.write_event`, subject = the review id):
 
 - `soar.review_received`, actor `system`: `{event, kind, outcome: created|updated|ignored, reason, status,
   sent_at}`.
-- `soar.review_decided`, actor the person: `{decision, note, outcome: ok|failed|unavailable|conflict|
+- `soar.review_decided`, actor the person: `{actor_role, decision, note, outcome: ok|failed|unavailable|conflict|
   invalid_state|locked, status_before, status_after, message}`.
 - Both get a Vietnamese label on the admin audit page, as every event name has.
 
