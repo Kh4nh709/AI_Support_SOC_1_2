@@ -2696,12 +2696,38 @@ export const S = {
         fpStrong: "Cảnh báo: đánh dấu dương tính giả trên máy quan trọng",
       },
       subject: (id: string, action: string) => `Phiếu ${id}: ${action}`,
-      // What the person is about to do to a machine that matters. The host is n8n's text.
+      // What the person is about to do on a host the SOAR marks as important (`strong_warning`), worded by the ACTION: the web
+      // does not know whether the host is the domain controller or the action is an isolation, so no text claims the host
+      // is the AD server. Every value in it (host, account, address, domain, action) is the text of n8n.
       strong: {
-        undo: (host: string) =>
-          `Gỡ cách ly máy chủ AD hoặc máy đang bị cách ly (${host}) sẽ nối máy đó lại với mạng ngay. Nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan; với máy chủ AD, cả miền bị ảnh hưởng.`,
-        fp: (host: string) =>
-          `Đây là máy quan trọng (${host}). Nếu tiến trình bị dừng thực ra là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.`,
+        undo: {
+          isolate_host: (host: string) =>
+            `Gỡ cách ly ${host} sẽ nối lại máy với mạng ngay. Đây là máy đang bị cách ly hoặc máy mà SOAR đánh dấu quan trọng (ví dụ máy chủ AD). Nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.`,
+          disable_user: (account: string, host: string) =>
+            `Mở khoá ${account} trên ${host}: tài khoản này sẽ đăng nhập lại được ngay. ${host} là máy mà SOAR đánh dấu quan trọng; nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.`,
+          block_ip: (target: string, host: string) =>
+            `Gỡ chặn ${target}: lưu lượng từ địa chỉ này được phép đi qua trở lại. ${host} là máy mà SOAR đánh dấu quan trọng; hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
+          sinkhole_domain: (target: string, host: string) =>
+            `Gỡ chặn tên miền ${target}: tên miền này sẽ phân giải trở lại. ${host} là máy mà SOAR đánh dấu quan trọng; hãy chắc chắn tên miền này không còn nguy hiểm.`,
+          disable_xp_cmdshell: (host: string) =>
+            `xp_cmdshell sẽ được bật lại trên ${host}: máy chủ SQL cho phép chạy lệnh hệ điều hành trở lại. ${host} là máy mà SOAR đánh dấu quan trọng; hãy chắc chắn trước khi tiếp tục.`,
+          // An action type this file has no sentence for: the action is named by its own text.
+          other: (action: string, host: string) =>
+            `Bạn sắp gỡ biện pháp “${action}”. ${host} là máy mà SOAR đánh dấu quan trọng; hãy chắc chắn trước khi tiếp tục.`,
+        },
+        fp: {
+          kill_process: (host: string) =>
+            `Tiến trình đã bị dừng trên ${host}, một máy mà SOAR đánh dấu quan trọng. Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.`,
+          other: (action: string, host: string) =>
+            `Đánh dấu dương tính giả cho “${action}” sẽ đóng phiếu, kể cả khi biện pháp vẫn áp dụng trên ${host}, một máy mà SOAR đánh dấu quan trọng. Nếu đây là tấn công thật, sẽ không còn nhắc nữa.`,
+        },
+        // What stands for a value n8n did not send, and the words around an account.
+        host: "máy này",
+        account: (user: string) => `tài khoản ${user}`,
+        accountNone: "tài khoản này",
+        ip: "địa chỉ này",
+        // The word after "tên miền" when n8n sent no domain ("Gỡ chặn tên miền này").
+        domain: "này",
       },
       // What happens once it is done.
       after: {

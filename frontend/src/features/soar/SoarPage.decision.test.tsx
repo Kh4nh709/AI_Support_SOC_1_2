@@ -248,8 +248,10 @@ describe("the strong warning", () => {
     await press("↩️ Gỡ cách ly");
     const dialog = await screen.findByRole("dialog", { name: S.soar.dialog.title.undoStrong });
     expect(S.soar.dialog.title.undoStrong).not.toBe(S.soar.dialog.title.undo);
-    const warning = within(dialog).getByText(S.soar.dialog.strong.undo("AD-server"));
-    expect(warning.textContent).toMatch(/^Gỡ cách ly máy chủ AD/);
+    const warning = within(dialog).getByText(
+      "Gỡ cách ly AD-server sẽ nối lại máy với mạng ngay. Đây là máy đang bị cách ly hoặc máy mà SOAR đánh dấu quan trọng (ví dụ máy chủ AD). Nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.",
+    );
+    expect(warning.textContent).toMatch(/^Gỡ cách ly AD-server/);
     expect(within(dialog).getByText(S.soar.dialog.after.undo)).toBeInTheDocument();
   });
 
@@ -283,7 +285,11 @@ describe("the strong warning", () => {
     renderSoar();
     await press("🚫 Dương tính giả");
     const dialog = await screen.findByRole("dialog", { name: S.soar.dialog.title.fpStrong });
-    expect(within(dialog).getByText(S.soar.dialog.strong.fp("AD-server"))).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(
+        "Tiến trình đã bị dừng trên AD-server, một máy mà SOAR đánh dấu quan trọng. Nếu đây là tấn công thật, đánh dấu dương tính giả sẽ đóng phiếu và không còn nhắc nữa.",
+      ),
+    ).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: S.soar.dialog.confirm.fp })).toBeDisabled();
   });
 
@@ -296,10 +302,24 @@ describe("the strong warning", () => {
     expect(within(dialog).getByRole("button", { name: S.soar.dialog.confirm.undo })).toBeEnabled();
   });
 
-  it("says the words of the Owner's example", () => {
-    expect(S.soar.dialog.strong.undo("AD-server")).toMatch(
-      /^Gỡ cách ly máy chủ AD hoặc máy đang bị cách ly \(AD-server\)/,
-    );
+  it("words the warning by the action being undone: unblocking an IP on the domain controller is not described as an isolation", async () => {
+    const row = review({
+      host: "AD-server",
+      action_type: "block_ip",
+      action_target: "79.79.78.202",
+      strong_warning: true,
+    });
+    serveDecision(() => answer(), [row]);
+    renderSoar();
+    await press(UNDO);
+    const dialog = await screen.findByRole("dialog", { name: S.soar.dialog.title.undoStrong });
+    expect(
+      within(dialog).getByText(
+        "Gỡ chặn 79.79.78.202: lưu lượng từ địa chỉ này được phép đi qua trở lại. AD-server là máy mà SOAR đánh dấu quan trọng; hãy chắc chắn địa chỉ này không còn nguy hiểm.",
+      ),
+    ).toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent("Gỡ cách ly");
+    expect(dialog).not.toHaveTextContent("nối lại máy với mạng");
   });
 });
 

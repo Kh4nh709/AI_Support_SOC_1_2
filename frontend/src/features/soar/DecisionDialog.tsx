@@ -7,7 +7,7 @@ import { useId, useState } from "react";
 import type { SoarDecision, SoarReview } from "../../api/soar";
 import { S } from "../../strings";
 import { ConfirmDialog } from "../admin/ConfirmDialog";
-import { NOTE_MAX, actionTextOf } from "./model";
+import { NOTE_MAX, actionTextOf, strongWarningOf } from "./model";
 
 export type DialogDecision = Extract<SoarDecision, "undo" | "fp">;
 
@@ -30,7 +30,6 @@ export function DecisionDialog({
   const [understood, setUnderstood] = useState(false);
   const noteId = useId();
   const strong = row.strong_warning === true;
-  const host = typeof row.host === "string" && row.host !== "" ? row.host : actionTextOf(row);
   const title = S.soar.dialog.title[strong ? (`${decision}Strong` as const) : decision];
   return (
     <ConfirmDialog
@@ -44,7 +43,7 @@ export function DecisionDialog({
       <p className="wrap-anywhere">{S.soar.dialog.subject(row.id, actionTextOf(row))}</p>
       {strong && (
         <p className="rounded border border-critical bg-critical-bg px-3 py-2 font-medium text-text wrap-anywhere">
-          {S.soar.dialog.strong[decision](host)}
+          {strongWarningOf(row, decision)}
         </p>
       )}
       <p>{S.soar.dialog.after[decision]}</p>

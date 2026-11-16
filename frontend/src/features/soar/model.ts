@@ -133,3 +133,36 @@ export function timersOf(review: SoarReview, nowMs: number): Timers {
   }
   return { expiry, hold };
 }
+
+/**
+ * The stronger warning of the dialog, worded by the action being undone or called a false positive. `strong_warning` is true
+ * for an isolation AND for any action on a host the SOAR marks as important, so the words follow the action and say nothing
+ * of why the host matters beyond that the SOAR marks it.
+ */
+export function strongWarningOf(review: SoarReview, decision: "undo" | "fp"): string {
+  const W = S.soar.dialog.strong;
+  const host = text(review.host) ?? W.host;
+  const action = actionTextOf(review);
+  if (decision === "fp") {
+    return review.action_type === "kill_process"
+      ? W.fp.kill_process(host)
+      : W.fp.other(action, host);
+  }
+  const target = text(review.action_target);
+  switch (review.action_type) {
+    case "isolate_host":
+      return W.undo.isolate_host(host);
+    case "disable_user": {
+      const user = text(review.user_name);
+      return W.undo.disable_user(user === null ? W.accountNone : W.account(user), host);
+    }
+    case "block_ip":
+      return W.undo.block_ip(target ?? W.ip, host);
+    case "sinkhole_domain":
+      return W.undo.sinkhole_domain(target ?? W.domain, host);
+    case "disable_xp_cmdshell":
+      return W.undo.disable_xp_cmdshell(host);
+    default:
+      return W.undo.other(action, host);
+  }
+}

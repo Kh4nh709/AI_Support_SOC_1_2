@@ -169,7 +169,9 @@ describe("the table", () => {
     ).closest("tr") as HTMLElement;
     await userEvent.click(within(row).getByRole("button", { name: LONG }));
     const dialog = await screen.findByRole("dialog");
-    expect(dialog).toHaveTextContent(S.soar.dialog.strong.undo("<svg onload=window.__pwned=1>"));
+    expect(dialog).toHaveTextContent(
+      S.soar.dialog.strong.undo.block_ip(JS, "<svg onload=window.__pwned=1>"),
+    );
     expectInert(container);
   });
 });
