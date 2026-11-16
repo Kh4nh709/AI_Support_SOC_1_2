@@ -57,6 +57,7 @@ export function DecisionDialog({
   // The state of the ticket the person has said they have seen (it asks again when the ticket changes again).
   const [seen, setSeen] = useState<string | null>(null);
   const noteId = useId();
+  const hintId = useId();
   const current = live ?? row;
   const strong = current.strong_warning === true;
   const allowed =
@@ -65,6 +66,14 @@ export function DecisionDialog({
   const acknowledged = changed && seen === stateKey(live);
   const title = S.soar.dialog.title[strong ? (`${decision}Strong` as const) : decision];
   const available = !gone && allowed;
+  // The boxes still to tick before the confirm opens: the risk first, then the change. While one is, the confirm is shut.
+  const waiting = !available
+    ? null
+    : strong && !understood
+      ? S.soar.dialog.understand
+      : changed && !acknowledged
+        ? S.soar.dialog.acknowledgeChange
+        : null;
 
   let problem: string | null = null;
   if (gone) problem = S.soar.dialog.gone;
@@ -81,9 +90,10 @@ export function DecisionDialog({
       title={title}
       confirmLabel={S.soar.dialog.confirm[decision]}
       cancelLabel={available ? undefined : S.common.close}
-      hideConfirm={!available}
+      // The shared dialog shows its own confirm only when it can be pressed: a shut one is drawn below, in the normal disabled
+      // look (its own is the red button at 60 % opacity, which looks pressable).
+      hideConfirm={!available || waiting !== null}
       tone={strong ? "danger" : "primary"}
-      confirmDisabled={(strong && !understood) || (changed && !acknowledged)}
       error={problem}
       onConfirm={() => onConfirm(note.trim(), current)}
       onCancel={onCancel}
@@ -130,6 +140,21 @@ export function DecisionDialog({
         />
         <p className="text-right text-xs">{S.soar.dialog.noteCount(note.length, NOTE_MAX)}</p>
       </div>
+      {waiting !== null && (
+        <div className="flex items-center justify-between gap-3">
+          <p id={hintId} className="text-xs text-muted">
+            {S.soar.dialog.shutHint(waiting)}
+          </p>
+          <button
+            type="button"
+            disabled
+            aria-describedby={hintId}
+            className="h-10 shrink-0 rounded-lg border border-border px-3.5 text-sm text-muted disabled:opacity-50"
+          >
+            {S.soar.dialog.confirm[decision]}
+          </button>
+        </div>
+      )}
     </ConfirmDialog>
   );
 }

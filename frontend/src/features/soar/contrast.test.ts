@@ -59,6 +59,11 @@ describe("the contrast of the page's colours", () => {
     expect(ratio(token(text), token(ground))).toBeGreaterThanOrEqual(4.5);
   });
 
+  it("muted text on the ground of the shared dialog (a literal of ConfirmDialog, not a token) is at least 4.5:1: the hint of a shut confirm and the tag of a button", () => {
+    expect(ratio(token("muted"), "#18202a")).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(token("text"), "#18202a")).toBeGreaterThanOrEqual(4.5);
+  });
+
   it("uses only pairs that are in this list: a colour class of the page is a token this file measures", () => {
     const sources = [
       "SoarPage.tsx",
@@ -68,6 +73,7 @@ describe("the contrast of the page's colours", () => {
       "DetailPanel.tsx",
       "SignalSwitch.tsx",
       "SoarTable.tsx",
+      "DecisionDialog.tsx",
       "model.ts",
       "SoarNavBadge.tsx",
     ]

@@ -330,17 +330,49 @@ describe("the strong warning", () => {
     renderSoar();
     await press("↩️ Gỡ cách ly");
     const dialog = await screen.findByRole("dialog");
-    const confirm = within(dialog).getByRole("button", { name: S.soar.dialog.confirm.undo });
-    expect(confirm).toBeDisabled();
-    expect(confirm).not.toHaveFocus();
-    await userEvent.click(confirm);
+    const shut = within(dialog).getByRole("button", { name: S.soar.dialog.confirm.undo });
+    expect(shut).toBeDisabled();
+    expect(shut).not.toHaveFocus();
+    await userEvent.click(shut);
     expect(state.decisions).toEqual([]);
     await userEvent.click(within(dialog).getByRole("checkbox", { name: S.soar.dialog.understand }));
-    expect(confirm).toBeEnabled();
-    await userEvent.click(confirm);
+    const open = within(dialog).getByRole("button", { name: S.soar.dialog.confirm.undo });
+    expect(open).toBeEnabled();
+    await userEvent.click(open);
     await waitFor(() =>
       expect(state.decisions).toEqual([{ id: "K7QM2XHP", body: { decision: "undo" } }]),
     );
+  });
+
+  // m8: a shut confirm must LOOK shut. The red button of the shared dialog at 60 % opacity looked pressable, so while the box is
+  // not ticked the confirm is a button in the repo normal disabled look (neutral, muted, half opacity), with a line that says
+  // which box to tick; once it is ticked the real confirm of the dialog (red) takes its place.
+  it("shows a shut confirm in the normal disabled look with a hint about the box, and the real red one once the box is ticked", async () => {
+    serveDecision(() => answer(), [isolated()]);
+    renderSoar();
+    await press("↩️ Gỡ cách ly");
+    const dialog = await screen.findByRole("dialog");
+    const shut = within(dialog).getByRole("button", { name: S.soar.dialog.confirm.undo });
+    expect(shut.className).toContain("disabled:opacity-50");
+    expect(shut.className).toContain("border-border");
+    expect(shut.className).toContain("text-muted");
+    expect(shut.className).not.toMatch(/bg-red|bg-blue/);
+    const hint = within(dialog).getByText(
+      "Tích ô “Tôi hiểu rủi ro và muốn tiếp tục” để bật nút xác nhận.",
+    );
+    expect(S.soar.dialog.shutHint(S.soar.dialog.understand)).toBe(
+      "Tích ô “Tôi hiểu rủi ro và muốn tiếp tục” để bật nút xác nhận.",
+    );
+    expect(shut).toHaveAccessibleDescription(hint.textContent ?? "");
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: S.soar.dialog.understand }));
+    expect(within(dialog).queryByText(/Tích ô/)).not.toBeInTheDocument();
+    const open = within(dialog).getByRole("button", { name: S.soar.dialog.confirm.undo });
+    expect(open).toBeEnabled();
+    expect(open.className).toContain("bg-red-600");
+    // unticking shuts it again, with the same hint
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: S.soar.dialog.understand }));
+    expect(within(dialog).getByText(/Tích ô/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: S.soar.dialog.confirm.undo })).toBeDisabled();
   });
 
   it("is in the dialog of a false positive on a domain controller too, worded for that decision", async () => {

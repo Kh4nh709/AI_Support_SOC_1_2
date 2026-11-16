@@ -100,6 +100,17 @@ describe("a ticket that changes while the dialog is open", () => {
     expect(S.soar.dialog.changed("Đang mở", null)).toBe("Phiếu vừa thay đổi: Đang mở");
   });
 
+  it("hints which box to tick when the shut confirm is waiting for the change to be seen", async () => {
+    const { state, dialog } = await openUndo();
+    state.rows = [keptByBinh()];
+    await poll();
+    expect(
+      await within(dialog).findByText(
+        "Tích ô “Tôi đã xem thay đổi và vẫn muốn tiếp tục” để bật nút xác nhận.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("asks again when it changes a second time after the person has acknowledged the first", async () => {
     const { state, dialog } = await openUndo();
     state.rows = [keptByBinh()];

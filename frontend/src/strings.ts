@@ -2736,6 +2736,8 @@ export const S = {
         fp: "Phiếu chuyển sang “Dương tính giả” và đóng lại, không thể xử lý tiếp trên trang này.",
       },
       understand: "Tôi hiểu rủi ro và muốn tiếp tục",
+      // The line beside a shut confirm: which box opens it.
+      shutHint: (box: string) => `Tích ô “${box}” để bật nút xác nhận.`,
       // The dialog follows the live ticket: what it says when the ticket changes under it, and the box that asks again.
       changed: (status: string, who: string | null) =>
         who === null ? `Phiếu vừa thay đổi: ${status}` : `Phiếu vừa thay đổi: ${status} (${who})`,
