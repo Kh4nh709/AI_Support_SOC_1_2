@@ -110,6 +110,40 @@ def test_it_says_how_to_run_the_stand_in_n8n_and_names_its_four_modes():
     assert "N8N_APPROVAL_URL=http://127.0.0.1:5678/webhook/soar-approval" in text
 
 
+def test_the_resend_rule_names_the_three_fields_a_push_cannot_erase():
+    """An update replaces every field of the stored ticket, except the record of a decision."""
+    text = _section()
+    paragraph = next(line for line in text.splitlines() if line.startswith("Gửi lại cùng `id`"))
+    for name in ("decided_by", "decided_at", "result"):
+        assert f"`{name}`" in paragraph, name
+    assert "giữ" in paragraph  # null or absent keeps the stored value
+
+
+def test_the_api_part_names_the_count_key_the_new_column_and_the_hash_in_q():
+    text = _section()
+    assert "`latest_received_at`" in text and "`received_at`" in text
+    assert "latest_created_at" not in text  # the old key is gone
+    assert "#65" in text  # q
+
+
+def test_the_ad_hosts_wording_says_the_name_is_normalised_in_the_readme_the_runbook_and_the_example():
+    runbook = (README.parent / "docs" / "runbook.md").read_text(encoding="utf-8")
+    row = next(line for line in runbook.splitlines() if line.startswith("| `SOAR_AD_HOSTS` |"))
+    example = next(
+        line
+        for line in (README.parent / ".env.example").read_text(encoding="utf-8").splitlines()
+        if line.startswith("SOAR_AD_HOSTS=")
+    )
+    readme_row = next(
+        line for line in _section().splitlines() if line.startswith("| `SOAR_AD_HOSTS` |")
+    )
+    for where, text in (("runbook", row), ("example", example), ("README", readme_row)):
+        assert "without case" not in text, where
+    assert "normalised" in row and "first DNS label" in row
+    assert "normalised" in example and "label" in example
+    assert "chuẩn hoá" in readme_row and "nhãn DNS đầu" in readme_row
+
+
 def test_the_section_leaves_the_answers_of_the_route_documented():
     text = _section()
     for code in ("201", "200", "400", "401", "403", "413", "503"):

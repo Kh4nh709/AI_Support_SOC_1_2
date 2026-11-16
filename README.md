@@ -88,7 +88,7 @@ n8n phải gửi tới **cổng của chính `app`**, không phải cổng của
 | `N8N_APPROVAL_SECRET` | giá trị header `X-SOAR-Secret` của lần gọi đó; **bí mật**. Trống (hoặc URL trống) → nút bấm trả `503 soar approval not configured`, chưa khoá phiếu nào | trống |
 | `N8N_APPROVAL_TIMEOUT_SECONDS` | chờ n8n tối đa bao lâu; từ `1` đến `100` (khoá quá hai phút được nhả ở lần bấm kế tiếp, nên một lần gọi đang chạy không được dài hơn) | `45` |
 | `SOAR_ROLES_KEEP` · `SOAR_ROLES_UNDO` · `SOAR_ROLES_FP` | vai trò được bấm từng nút (danh sách cách nhau bằng dấu phẩy của `tier1`, `tier2`, `admin`; vai trò lạ làm app không khởi động) | `tier1,tier2,admin` · `tier2,admin` · `tier1,tier2,admin` |
-| `SOAR_AD_HOSTS` | danh sách JSON tên máy (không phân biệt hoa thường) mà việc cô lập được cảnh báo mạnh trên trang: domain controller của lab | `["AD-server"]` |
+| `SOAR_AD_HOSTS` | danh sách JSON tên máy mà phiếu của nó được cảnh báo mạnh trên trang (domain controller của lab; việc cô lập máy nào cũng được cảnh báo mạnh). Tên được **chuẩn hoá** trước khi so: bỏ ký tự điều khiển, ký tự rộng-bằng-không và ký tự bidi, bỏ khoảng trắng hai đầu và một dấu chấm cuối, không phân biệt hoa thường; tên đầy đủ **hoặc nhãn DNS đầu tiên** của máy phải bằng một tên trong danh sách (`AD-server.home.arpa` và `ad-SERVER.` là `AD-server`; `notAD-server` và `AD-server2` thì không) | `["AD-server"]` |
 
 Đổi `.env` thì tạo lại container: `docker compose up -d --force-recreate app`.
 
@@ -143,7 +143,14 @@ curl -sS -X POST http://localhost:8001/webhook/soar-notices \
 }'
 ```
 
-Gửi lại cùng `id` với `event` `updated` hoặc `reminder` để cập nhật (n8n là nguồn sự thật: mọi trường của thân mới thay trường đã lưu). `id` phải ổn định qua các lần gửi lại; `sent_at` cũ hơn bản đã áp bị bỏ qua; phiếu đã `undone`, `false_positive` hoặc `expired` không bị mở lại bởi thân `open`.
+Gửi lại cùng `id` với `event` `updated` hoặc `reminder` để cập nhật (n8n là nguồn sự thật: mọi trường của thân mới thay trường đã lưu, **trừ** ba trường ghi lại một quyết định là `decided_by`, `decided_at` và `result`: thân gửi `null` hoặc không có chúng thì web giữ giá trị đã lưu, thân có giá trị thì thay). `id` phải ổn định qua các lần gửi lại; `sent_at` cũ hơn bản đã áp bị bỏ qua; phiếu đã `undone`, `false_positive` hoặc `expired` không bị mở lại bởi thân `open`.
+
+### API của trang (đã đăng nhập, Bearer token)
+
+- `GET /api/soar/reviews`: danh sách, mới nhất trước (`created_at`, rồi `id`). Lọc `status` (lặp được), `kind`, `action_type`, `case_number`, `from`/`to` và `q`: toàn chữ số là số case, dấu `#` đứng đầu và khoảng trắng quanh nó bị bỏ qua nên `#65` tìm đúng case 65; không thì là chuỗi con không phân biệt hoa thường của `src_ip`, `host`, `action_target`, `user_name`, `domain`.
+- `GET /api/soar/reviews/count`: `{"count", "latest_received_at"}` trên các **review** (không tính notice) ở các trạng thái `status` (mặc định `open`). `received_at` là đồng hồ của chính web lúc nhận phiếu lần đầu, không bao giờ đổi: `created_at` của n8n có thể cũ hơn một phiếu đã hiện khi gửi trễ, nên trang so `latest_received_at` để biết có phiếu mới.
+- `GET /api/soar/reviews/{id}`: phiếu cộng `raw`, `history`, `related_alerts`, `related_total`. `updated_at` đổi ở mọi lần ghi dòng (một lần đẩy được áp dụng, khóa, kết thúc).
+- `POST /api/soar/reviews/{id}/decision`: `{"decision": "keep|undo|fp", "note": "…"}`, trả `200 {"outcome", "message", "review"}`.
 
 ### Thử trang khi chưa có phía n8n: n8n giả lập
 

@@ -269,7 +269,7 @@ The 98 keys of `.env.example`, one row each, no values. `.env.example` is genera
 | `SOAR_ROLES_KEEP` | the roles that may press "keep" (a comma list of `tier1`, `tier2`, `admin`; an unknown role stops the start-up); default `tier1,tier2,admin` | default | no |
 | `SOAR_ROLES_UNDO` | the roles that may press "undo"; default `tier2,admin` | default | no |
 | `SOAR_ROLES_FP` | the roles that may press "false positive"; default `tier1,tier2,admin` | default | no |
-| `SOAR_AD_HOSTS` | a JSON list of host names, compared without case, whose isolation gets the strong warning on the page: the lab's domain controller, default `["AD-server"]` | default | no |
+| `SOAR_AD_HOSTS` | a JSON list of host names whose tickets get the strong warning on the page: the lab's domain controller, default `["AD-server"]` (an isolation gets it whatever the host). Names are normalised before they are compared (control, zero-width and bidi characters, surrounding whitespace and one trailing dot removed, case folded): the whole host name, or its first DNS label, must equal a name of the list, so `AD-server.home.arpa` and `ad-SERVER.` are `AD-server`, `notAD-server` and `AD-server2` are not | default | no |
 | `POSTGRES_USER` | Compose: the `db` superuser, owner of every object | default | no |
 | `POSTGRES_PASSWORD` | Compose: its password; `docker compose` refuses to start without it | Owner | yes |
 | `POSTGRES_DB` | Compose: the database name | default | no |

@@ -333,7 +333,7 @@ class Config:
     # web calls n8n back when a person presses a button, and the `X-SOAR-Secret` it sends (a secret); either empty means
     # "not configured" and the decision route answers 503 before it locks anything. N8N_APPROVAL_TIMEOUT_SECONDS: 1..100
     # (`_N8N_TIMEOUT_MAX_S`). SOAR_ROLES_KEEP / _UNDO / _FP: the roles allowed each decision. SOAR_AD_HOSTS: the hosts
-    # (a JSON list, compared without case) whose isolation gets the strong warning.
+    # (a JSON list, normalised before they are compared: `soar.reviews.normalise_host`) whose tickets get the strong warning.
     SOAR_NOTICE_API_KEY: str = ""
     SOAR_NOTICE_IP_ALLOWLIST: list[str] = dataclasses.field(default_factory=list)
     N8N_APPROVAL_URL: str = "http://79.79.79.14:5678/webhook/soar-approval"
