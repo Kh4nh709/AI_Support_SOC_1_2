@@ -36,6 +36,7 @@ never for a `kill_process` (a killed process cannot be brought back); anything e
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -192,11 +193,31 @@ def roles_for_any(cfg: Config) -> list[str]:
     return found
 
 
+def normalise_host(name: str) -> str:
+    """A host name as it is compared: control, zero-width and bidi characters (the categories `Cc` and `Cf`: a NUL, a tab, the
+    zero-width space, joiners, the byte-order mark, the left-to-right and right-to-left marks, embeddings, overrides and isolates)
+    and surrounding whitespace removed, ONE trailing dot removed (a fully qualified name), case folded. A name that looks like
+    the domain controller to a person but carries a character nobody can see is the domain controller here too.
+    """
+    visible = "".join(char for char in name if unicodedata.category(char) not in ("Cc", "Cf"))
+    visible = visible.strip()
+    visible = visible.removesuffix(".")
+    return visible.casefold()
+
+
 def strong_warning(action_type: str | None, host: str | None, cfg: Config) -> bool:
-    """An isolation, or a host that is a domain controller (`SOAR_AD_HOSTS`, compared without case)."""
+    """An isolation, or a host that is a domain controller: the whole normalised name, or its first DNS label, is a name of
+    `SOAR_AD_HOSTS` (normalised the same way), so `AD-server.home.arpa` and `ad-SERVER.` are `AD-server`. `notAD-server` and
+    `AD-server2` are not. An empty name, in the list or as a host, matches nothing."""
     if action_type == "isolate_host":
         return True
-    return host is not None and host.casefold() in {name.casefold() for name in cfg.SOAR_AD_HOSTS}
+    if host is None:
+        return False
+    name = normalise_host(host)
+    if not name:
+        return False
+    names = {normalise_host(listed) for listed in cfg.SOAR_AD_HOSTS} - {""}
+    return name in names or name.split(".", 1)[0] in names
 
 
 def serve(row: tuple, role: str, cfg: Config) -> dict[str, Any]:
@@ -276,6 +297,10 @@ def _where(filters: Filters) -> tuple[str, dict[str, Any]]:
         clauses.append("r.created_at < %(created_to)s")
         params["created_to"] = filters.created_to
     q = (filters.q or "").strip()
+    if q.startswith(
+        "#"
+    ):  # a case is written `#65` on the tickets: the hash, and the space after it, are not searched
+        q = q[1:].strip()
     if q:
         if re.fullmatch(r"[0-9]{1,18}", q):  # a case number; ASCII digits only, and inside a bigint
             clauses.append("r.case_number = %(q_number)s")

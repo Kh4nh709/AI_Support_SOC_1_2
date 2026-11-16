@@ -12,7 +12,7 @@ Signed-in users only, the Bearer token as every `/api` route; the three roles re
 
 **The list.** Filters, all optional and ANDed: `status` (repeatable; the EFFECTIVE status: a stale lock is served as, and found as,
 the state the row had), `kind`, `action_type`, `case_number`, `from` (`created_at`, inclusive) and `to` (exclusive), both ISO 8601
-WITH an offset (one with none is ambiguous: `422`), and `q` (a case number when it is all digits, else a case-insensitive substring
+WITH an offset (one with none is ambiguous: `422`), and `q` (a case number when it is all digits, a leading `#` and the whitespace around it ignored so `#65` finds case 65, else a case-insensitive substring
 of `src_ip`, `host`, `action_target`, `user_name` and `domain`; at most 100 characters, `%`, `_` and `\\` escaped so they match
 themselves). `page` ≥ 1, `page_size` ≥ 1, clamped to 200: the queue's convention. Newest `created_at` first, then `id`.
 `status`, `kind`, `action_type` and the numbers are closed sets and ranges: anything else is a `422`.

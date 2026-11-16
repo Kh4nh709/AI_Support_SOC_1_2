@@ -260,6 +260,10 @@ def test_the_list_gives_each_row_its_allowed_decisions_for_the_caller(world):
         ({"action_type": "block_ip", "host": None}, False),
         ({"action_type": None, "host": "AD-server", "kind": "notice", "status": "info"}, True),
         ({"action_type": "disable_user", "host": "WIN-01"}, False),
+        ({"action_type": "block_ip", "host": "ad-SERVER."}, True),
+        ({"action_type": "block_ip", "host": "AD-server.home.arpa"}, True),
+        ({"action_type": "block_ip", "host": "AD\u200b-server"}, True),
+        ({"action_type": "block_ip", "host": "notAD-server"}, False),
     ],
 )
 def test_strong_warning_is_isolate_host_or_the_domain_controller(world, fields, expected):
@@ -543,6 +547,36 @@ def test_a_numeric_q_is_a_case_number_and_nothing_else(world, mixed):
     assert _ids(world.get("tier2", REVIEWS, q=" 2 ")) == _pick(mixed, "c")
     assert _ids(world.get("tier2", REVIEWS, q="3")) == _pick(mixed, "d")
     assert _ids(world.get("tier2", REVIEWS, q="0")) == []
+
+
+@pytest.mark.parametrize("q", ["#1", " #1", "#1 ", "  #  1  ", "# 1", "#001"])
+def test_a_leading_hash_and_the_whitespace_around_it_are_ignored_so_65_can_be_written_65(
+    world, mixed, q
+):
+    """Case numbers are written `#65` on the SOAR's tickets: `#65` finds case 65 as `65` does."""
+    assert _ids(world.get("tier2", REVIEWS, q=q)) == _pick(mixed, "ab")  # case 1 (`#001` is 1)
+
+
+def test_a_hash_before_a_text_is_ignored_too_and_only_the_leading_one(world, mixed):
+    assert _ids(world.get("tier2", REVIEWS, q="#alpha")) == _pick(mixed, "a")
+    assert _ids(world.get("tier2", REVIEWS, q=" # WIN-dc")) == _pick(mixed, "c")
+    assert (
+        _ids(world.get("tier2", REVIEWS, q="##1")) == []
+    )  # one hash goes; `#1` is then a text nobody has
+    assert (
+        _ids(world.get("tier2", REVIEWS, q="al#pha")) == []
+    )  # a hash inside is a character like another
+
+
+@pytest.mark.parametrize("q", ["#", " # ", "#   "])
+def test_a_hash_alone_filters_nothing(world, mixed, q):
+    assert _ids(world.get("tier2", REVIEWS, q=q)) == _pick(mixed, "abcdefgh")
+
+
+def test_a_host_with_a_hash_in_it_is_found_with_or_without_a_leading_one(world):
+    plain = world.put(id="HASH0001", host="build#7", src_ip=None)
+    assert _ids(world.get("tier2", REVIEWS, q="build#7")) == [plain]
+    assert _ids(world.get("tier2", REVIEWS, q="#build#7")) == [plain]
 
 
 def test_a_number_too_large_for_a_case_number_is_searched_as_text(world, mixed):
