@@ -119,7 +119,7 @@ The served review object (all routes):
   action_type, action_text, action_target, action_via, action_agent,
   host, agent_id, user_name, src_ip, domain, scenario_id, scenario_name, score, note,
   buttons: [{decision, label}], created_at, auto_expire_at, remind_every_minutes, next_remind_at,
-  decided_by, decided_at, result, last_error, locked_by, locked_at, last_sent_at, updated_at,
+  decided_by, decided_at, result, last_error, locked_by, locked_at, last_sent_at, received_at, updated_at,
   allowed_decisions: ["keep" | "undo" | "fp"],   // for THIS caller: valid for the state AND allowed for the role
   strong_warning: bool }                          // action_type = isolate_host, or host is a domain controller
 ```
@@ -127,19 +127,26 @@ The served review object (all routes):
 - `status` as served is the **effective** status: a `processing` row whose `locked_at` is older than two
   minutes is served with the status it had before the lock (and `locked_by`/`locked_at` null). Reads write
   nothing.
-- `strong_warning`: `action_type == "isolate_host"`, or `host` equals (case-insensitively) a name of
-  `SOAR_AD_HOSTS` (JSON list, default `["AD-server"]`: the lab's domain controller).
+- `strong_warning`: `action_type == "isolate_host"`, or `host` names a host of `SOAR_AD_HOSTS` (JSON list,
+  default `["AD-server"]`: the lab's domain controller). The comparison is on a normalised name: control,
+  zero-width and bidi characters and surrounding whitespace removed, a trailing dot removed, case folded;
+  the whole name or its first DNS label matches (`AD-server.home.arpa` is the domain controller).
+- `locked_by` and `decided_by` are usernames. `created_at` is never null (section 2). `updated_at` moves on
+  every write of the row: a webhook update, the lock, the finish. A notice and a `processing` row have
+  `allowed_decisions: []`. The `review` inside a 409 is this same object for the caller.
 - Timestamps are ISO 8601 with offset `+00:00`, as the other routes serve them.
 
 `GET /api/soar/reviews` — `status` (repeatable), `kind`, `action_type`, `case_number`, `from`, `to`
-(`created_at`, inclusive / exclusive), `q` (case number when numeric; otherwise a case-insensitive substring
+(`created_at`, inclusive / exclusive), `q` (case number when numeric, a leading `#` ignored; otherwise a case-insensitive substring
 of `src_ip`, `host`, `action_target`, `user_name`, `domain`; at most 100 characters, `%`/`_` escaped),
 `page` (≥ 1), `page_size` (default 50, ceiling 200): the queue's convention. Answer
 `{"rows": [review], "total", "page", "page_size"}`, newest `created_at` first (then `id`).
 
 `GET /api/soar/reviews/count` — `status` (repeatable, default `open`). Answer
-`{"count": n, "latest_created_at": "<ISO>|null"}` over the reviews (`kind=review`) in those states; the UI
-compares `latest_created_at` with the last one it saw to know a new ticket arrived.
+`{"count": n, "latest_received_at": "<ISO>|null"}` over the reviews (`kind=review`) in those states.
+`received_at` is the web's own clock when it first stored the row (n8n's `created_at` can be older than a
+ticket already shown when a delivery is late); the UI compares `latest_received_at` with the last one it saw
+to know a new ticket arrived.
 
 `GET /api/soar/reviews/{id}` — the review plus `raw` (the last body n8n sent), `history`
 (`[{at, event, actor, actor_role, payload}]`, the audit events whose subject is this id, oldest first, at
@@ -193,11 +200,12 @@ Migration `docs/Schema/025_soar_reviews.sql` (run as the owner, after 024):
   `action_agent`, `host`, `agent_id`, `user_name`, `src_ip`, `domain`, `scenario_id`, `scenario_name`,
   `score integer`, `note`, `buttons jsonb`, `created_at timestamptz`, `auto_expire_at`,
   `remind_every_minutes integer`, `next_remind_at`, `decided_by`, `decided_at`, `result`, `last_error`,
-  `locked_by`, `locked_at`, `prev_status`, `last_sent_at timestamptz`, `raw jsonb`, `updated_at timestamptz`.
+  `locked_by`, `locked_at`, `prev_status`, `last_sent_at timestamptz`, `received_at timestamptz` (the web's
+  clock at the insert, never changed), `raw jsonb`, `updated_at timestamptz`.
   CHECKs on the closed sets (`kind`, `status` incl. `processing`, `severity`, `action_type`, `action_via`,
   `prev_status`); a `processing` row has `locked_by`, `locked_at` and `prev_status`. `prev_status` is the one
   column beyond the Owner's list: a stale lock is released to the state the row had, and only the row can say
-  which that was.
+  which that was. `received_at` is the other: the new-ticket signal needs the web's own arrival time.
 - Indexes: `(status)`, `(created_at DESC)`, `(case_number)`.
 - Rights: `app_rw` SELECT, INSERT, UPDATE; DELETE and TRUNCATE revoked.
 - `ck_audit_event_type`: the 40 names of 024 in 024's order, then `soar.review_received` and
@@ -219,9 +227,12 @@ Configuration (`infra/config.py`, `.env.example`; the three secrets redacted lik
 ## 7 · The page "Phản hồi SOAR" (`/soar`, all three roles; Vietnamese, every word in `strings.ts`)
 
 - **Menu**: a link "Phản hồi SOAR" in the header with a badge of the open reviews (the count route every
-  30 s). A new ticket (a later `latest_created_at`) plays a short tone (WebAudio, no asset) and shows a
+  30 s). A new ticket (a later `latest_received_at`) plays a short tone (WebAudio, no asset) and shows a
   browser Notification; permission is asked once, from a switch on the page that can also turn both off (the
-  choice is kept in `localStorage`, read and written inside try/catch).
+  choice is kept in `localStorage`, read and written inside try/catch). The repo's guard "no `localStorage`
+  in source" (ruling R5: the session token is never persisted) gets exactly one exception, the file
+  `features/soar/storage.ts`, pinned by tests: it names `localStorage` only in four fixed calls on two fixed
+  keys, its exports and its importers are listed, and what it stores is a flag and notice ids.
 - **Table**: time, case #, scenario, host, target (`action_target`), action, score (red ≥ 70, orange ≥ 40,
   yellow < 40; the number is always printed, colour is never the only carrier), status, and a "GIẢ LẬP" tag
   when `simulated`. The list refetches every 20 s (no WebSocket).
@@ -230,11 +241,14 @@ Configuration (`infra/config.py`, `.env.example`; the three secrets redacted lik
   none. While a request runs: "Đang xử lý…", buttons disabled; a row another person holds (`processing`)
   shows who.
 - **Confirmation**: undo and fp open a dialog with a note field (≤ 500); keep sends at once. The dialog's
-  warning is stronger when `strong_warning` ("Gỡ cách ly máy chủ AD …").
+  warning is stronger when `strong_warning`, worded by the action being undone ("Gỡ cách ly máy chủ AD …" only
+  for an isolation). The dialog follows the live row: if the ticket changes while it is open, it says so and
+  asks again.
 - **Result**: `outcome ok` → the new status; `failed` / `unavailable` → the message in an error line on the
   row (for example "GỠ THẤT BẠI: …") and the buttons again; `conflict` → the status n8n gave, with a note
   that it was handled elsewhere; a local 409 → the row is refreshed.
-- **Timers**: "Tự gỡ lúc HH:mm" with a countdown when `auto_expire_at` is ahead; past it with the status
+- **Timers**: "Tự gỡ lúc HH:mm" with a countdown when `auto_expire_at` is ahead (for `open`, `processing`
+  and `kept`: the page shows what n8n says); past it with the status
   still `open`: "Chờ SOAR đóng phiếu" (the web never changes the status itself). Isolation and account
   lock with `remind_every_minutes > 0`: "Đang giữ · nhắc mỗi N phút", highlighted once `next_remind_at` is
   past.
@@ -268,7 +282,7 @@ signal; notices and their dismissal; the filters; text-only rendering of hostile
 - The branch is cut from the trial line's newest tip (`d6df9fe`, which carries the approved panel redesign),
   since the web the Owner named is the trial.
 - The audit CHECK is replaced (section 1); `prev_status` and `SOAR_AD_HOSTS` are additions to the Owner's
-  lists (sections 6 and 4).
+  lists (sections 6 and 4), and so is `received_at`.
 - The decision route answers `200` with an `outcome` whenever n8n was asked, so the UI always gets the row
   and a message; HTTP errors are kept for what the web itself refuses.
 - A terminal row is protected only against `open` (the Owner's rule as written); another change n8n sends
