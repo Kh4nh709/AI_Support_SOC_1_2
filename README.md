@@ -149,8 +149,9 @@ Gửi lại cùng `id` với `event` `updated` hoặc `reminder` để cập nh�
 
 - `GET /api/soar/reviews`: danh sách, mới nhất trước (`created_at`, rồi `id`). Lọc `status` (lặp được), `kind`, `action_type`, `case_number`, `from`/`to` và `q`: toàn chữ số là số case, dấu `#` đứng đầu và khoảng trắng quanh nó bị bỏ qua nên `#65` tìm đúng case 65; không thì là chuỗi con không phân biệt hoa thường của `src_ip`, `host`, `action_target`, `user_name`, `domain`.
 - `GET /api/soar/reviews/count`: `{"count", "latest_received_at"}` trên các **review** (không tính notice) ở các trạng thái `status` (mặc định `open`). `received_at` là đồng hồ của chính web lúc nhận phiếu lần đầu, không bao giờ đổi: `created_at` của n8n có thể cũ hơn một phiếu đã hiện khi gửi trễ, nên trang so `latest_received_at` để biết có phiếu mới.
-- `GET /api/soar/reviews/{id}`: phiếu cộng `raw`, `history`, `related_alerts`, `related_total`. `updated_at` đổi ở mọi lần ghi dòng (một lần đẩy được áp dụng, khóa, kết thúc).
-- `POST /api/soar/reviews/{id}/decision`: `{"decision": "keep|undo|fp", "note": "…"}`, trả `200 {"outcome", "message", "review"}`.
+- `GET /api/soar/reviews/{id}`: phiếu cộng `raw`, `history` (tối đa 200 sự kiện **mới nhất**, cũ trước mới sau; `history_truncated` là `true` khi còn sự kiện cũ hơn bị bỏ), `related_alerts`, `related_total`. `updated_at` đổi ở mọi lần ghi dòng (một lần đẩy được áp dụng, khóa, kết thúc).
+- Mỗi phiếu có `strong_warning` (cô lập máy, hoặc máy là domain controller) và `host_critical` (chỉ vế thứ hai: `host` là một máy của `SOAR_AD_HOSTS`): trang dùng `host_critical` để nói **vì sao** cảnh báo mạnh. `strong_warning` luôn bằng `action_type == "isolate_host"` hoặc `host_critical`.
+- `POST /api/soar/reviews/{id}/decision`: `{"decision": "keep|undo|fp", "note": "…"}` (thân tối đa 8 KiB, `413` nếu quá; `note` tối đa 500 ký tự và không chứa NUL hay ký tự surrogate lẻ: `422`), trả `200 {"outcome", "message", "review"}`; `503 busy` kèm `Retry-After` nếu chờ khóa dòng quá lâu.
 
 ### Thử trang khi chưa có phía n8n: n8n giả lập
 
@@ -164,10 +165,10 @@ Gửi lại cùng `id` với `event` `updated` hoặc `reminder` để cập nh�
 | `slow` | chờ `--slow-seconds` (mặc định 60 giây) rồi trả lời như `ok`: thử hạn chờ |
 
 ```bash
-python3 scripts/mock_n8n_approval.py --mode ok --secret thu-nghiem --port 5678
+N8N_APPROVAL_SECRET=thu-nghiem python3 scripts/mock_n8n_approval.py --mode ok --port 5678
 ```
 
-Rồi trong `.env`: `N8N_APPROVAL_URL=http://127.0.0.1:5678/webhook/soar-approval` và `N8N_APPROVAL_SECRET=thu-nghiem` (app chạy trong container thì dùng địa chỉ máy chủ mà container thấy được, và chạy n8n giả lập với `--host 0.0.0.0`), tạo lại container `app`, đẩy một phiếu bằng các lệnh `curl` ở trên và bấm nút trên `/soar`. Dùng khoá thử nghiệm, không dùng khoá thật; dừng n8n giả lập bằng Ctrl+C.
+Bí mật được đọc từ **biến môi trường** `N8N_APPROVAL_SECRET`, không có tham số dòng lệnh (tham số hiện trong `ps` và lịch sử shell). Rồi trong `.env`: `N8N_APPROVAL_URL=http://127.0.0.1:5678/webhook/soar-approval` và `N8N_APPROVAL_SECRET=thu-nghiem` (app chạy trong container thì dùng địa chỉ máy chủ mà container thấy được, và chạy n8n giả lập với `--host 0.0.0.0`), tạo lại container `app`, đẩy một phiếu bằng các lệnh `curl` ở trên và bấm nút trên `/soar`. Dùng khoá thử nghiệm, không dùng khoá thật; dừng n8n giả lập bằng Ctrl+C.
 
 ## Đổi nhà cung cấp LLM (provider)
 

@@ -114,7 +114,10 @@ def test_an_empty_list_warns_for_isolations_only():
         ("AD-server", "ad-server"),
         ("  Ad-Server.  ", "ad-server"),
         ("AD\u200b-\u202eserver\u2069", "ad-server"),
-        ("ǅ.LAB", "ǆ.lab"),  # case folded, not only lower-cased
+        (
+            "\u01c5.LAB",
+            "d\u017e.lab",
+        ),  # NFKC splits the digraph into D and z with a caron, then the case is folded
         ("STRASSE", "strasse"),
         ("straße", "strasse"),
         (".", ""),
@@ -123,3 +126,82 @@ def test_an_empty_list_warns_for_isolations_only():
 )
 def test_the_normal_form(raw, expected):
     assert reviews.normalise_host(raw) == expected
+
+
+# ── host_critical (the UI re-review): WHY the warning is strong ────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "action_type,host,strong,critical",
+    [
+        (
+            "isolate_host",
+            "PC-17",
+            True,
+            False,
+        ),  # an isolation on an ordinary host: strong, not critical
+        ("isolate_host", None, True, False),
+        ("disable_user", "AD-server", True, True),  # an account on the domain controller: both
+        ("block_ip", "ad-SERVER.", True, True),
+        ("block_ip", "AD-server.home.arpa", True, True),
+        ("isolate_host", "AD-server", True, True),  # an isolation of the domain controller: both
+        ("block_ip", "PC-17", False, False),  # neither
+        ("block_ip", None, False, False),
+        ("kill_process", "notAD-server", False, False),
+        ("sinkhole_domain", "AD-server2", False, False),
+    ],
+)
+def test_host_critical_is_the_name_comparison_alone_and_strong_is_isolation_or_critical(
+    action_type, host, strong, critical
+):
+    assert reviews.host_critical(host, CFG) is critical
+    assert reviews.strong_warning(action_type, host, CFG) is strong
+    assert strong == (action_type == "isolate_host" or critical)
+
+
+def test_host_critical_follows_the_list_and_ignores_the_action():
+    cfg = replace(Config(), SOAR_AD_HOSTS=["DC01"])
+    assert reviews.host_critical("dc01.lab.", cfg) is True
+    assert reviews.host_critical("AD-server", cfg) is False
+    assert reviews.host_critical("dc01", replace(Config(), SOAR_AD_HOSTS=[])) is False
+
+
+# ── m7: NFKC before case folding ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "ＡＤ－ｓｅｒｖｅｒ",  # fullwidth letters and hyphen
+        "AD-server．",  # a fullwidth full stop as the trailing dot
+        "ＡＤ-server．home．arpa",  # fullwidth dots as the label separators
+        "A\u200bＤ-ｓerver",  # an invisible character and fullwidth letters
+    ],
+    ids=repr,
+)
+def test_m7_a_compatibility_form_of_the_name_is_the_domain_controller(host):
+    assert reviews.strong_warning("block_ip", host, CFG) is True
+    assert reviews.host_critical(host, CFG) is True
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("ＡＤ－ｓｅｒｖｅｒ", "ad-server"),
+        ("ﬁle", "file"),  # the ligature fi
+        ("①", "1"),  # a circled digit
+        (
+            "AD．",
+            "ad",
+        ),  # NFKC maps the fullwidth full stop to a dot, which is then the trailing one
+        (" AD-server ", "ad-server"),  # a no-break space is a space after NFKC
+    ],
+)
+def test_m7_the_normal_form_applies_nfkc_before_the_case_is_folded(raw, expected):
+    assert reviews.normalise_host(raw) == expected
+
+
+def test_m7_a_name_that_only_looks_alike_is_still_not_the_name():
+    assert (
+        reviews.host_critical("AD-servеr", CFG) is False
+    )  # a Cyrillic e: NFKC does not fold scripts

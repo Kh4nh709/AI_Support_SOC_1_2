@@ -43,7 +43,9 @@ pytestmark = pytest.mark.db
 
 DECIDED = "soar.review_decided"
 KEEP_FP = [{"decision": "keep", "label": "✅ Giữ"}, {"decision": "fp", "label": "🚫 Báo nhầm"}]
-PAYLOAD_KEYS = {"decision", "note", "outcome", "status_before", "status_after", "message"}
+PAYLOAD_KEYS = {
+    "decision", "note", "outcome", "status_before", "status_after", "message", "actor_role",
+}  # fmt: skip
 
 
 @pytest.fixture(scope="module")
@@ -311,6 +313,7 @@ def test_a_decision_that_does_not_fit_the_state_is_409_invalid_state(world, fiel
         "status_before": before["status"],
         "status_after": before["status"],
         "message": None,
+        "actor_role": "admin",
     }
 
 
@@ -338,7 +341,9 @@ def test_a_409_carries_the_ticket_as_the_get_serves_it_for_this_caller(world):
     served = world.get("tier1", f"{REVIEWS}/{review_id}").json()
     assert detail["review"] == {k: served[k] for k in detail["review"]}
     assert list(detail["review"]) == [
-        k for k in served if k not in ("raw", "history", "related_alerts", "related_total")
+        k
+        for k in served
+        if k not in ("raw", "history", "history_truncated", "related_alerts", "related_total")
     ]
 
 
@@ -433,6 +438,7 @@ def test_ok_n8n_did_it_the_ticket_takes_the_status_n8n_gave(world, fields, role,
         "status_before": fields.get("status", "open"),
         "status_after": status,
         "message": "Đã xử lý xong",
+        "actor_role": role,
     }
 
 
@@ -566,6 +572,7 @@ def test_failed_the_ticket_keeps_its_state_and_remembers_the_message(world, fiel
         "status_before": back,
         "status_after": back,
         "message": "GỠ THẤT BẠI: pfSense không trả lời",
+        "actor_role": "tier2",
     }
 
 
@@ -951,16 +958,17 @@ def test_the_lock_is_committed_and_no_transaction_is_open_while_n8n_is_being_ask
 
 
 def test_the_lock_is_one_statement_and_nothing_else_is_written_before_the_call(world, monkeypatch):
-    """What reaches the database before n8n is asked: the read of the ticket and ONE `UPDATE` (the lock). The audit event and
-    the finish come after the call."""
-    seen: list[tuple[str, bool]] = (
-        []
-    )  # (first word of the statement, whether n8n had been asked by then)
+    """What reaches the database before n8n is asked: the bound on the waits, the read of the ticket and ONE `UPDATE` (the lock).
+    After the call, in a transaction of its own: the bound again, the compare-and-set, the ticket as it is, the audit event.
+    """
+    seen: list[tuple[str, bool]] = []  # (what the statement is, whether n8n had been asked by then)
     asked = threading.Event()
 
     class Spy(psycopg.Connection):
         def execute(self, query, params=None, **kwargs):
-            seen.append((str(query).strip().split()[0].upper(), asked.is_set()))
+            text = str(query)
+            word = "BOUND" if "set_config" in text else text.strip().split()[0].upper()
+            seen.append((word, asked.is_set()))
             return super().execute(query, params, **kwargs)
 
     monkeypatch.setattr(
@@ -971,12 +979,12 @@ def test_the_lock_is_one_statement_and_nothing_else_is_written_before_the_call(w
     assert _decide(world, "tier2", review_id, "keep").status_code == 200
     before = [word for word, after in seen if not after]
     after = [word for word, after in seen if after]
-    assert before == ["SELECT", "UPDATE"], seen
-    assert after == [
-        "UPDATE",
+    assert before == [
+        "BOUND",
         "SELECT",
-        "INSERT",
-    ], seen  # the compare-and-set, the ticket as it is, the audit event
+        "UPDATE",
+    ], seen  # m10: every transaction starts with its bounds
+    assert after == ["BOUND", "UPDATE", "SELECT", "INSERT"], seen
 
 
 def test_a_lock_older_than_two_minutes_is_released_by_the_next_press(world):
@@ -1036,6 +1044,185 @@ def test_a_press_that_loses_the_lock_race_is_409_and_the_other_changes_state_is_
         "invalid_state",
         "kept",
     )
+
+
+def test_m1_a_push_between_the_read_and_the_lock_makes_the_lock_miss_so_the_decision_is_judged_on_the_fresh_row(
+    world, monkeypatch
+):
+    """m1: the lock's WHERE also carries `updated_at` as it was read. A push in between (new buttons, an `action_type` changed to
+    `kill_process`) leaves the status `open`, so the old WHERE still matched and an `undo` was sent for a kill; now the lock misses
+    and the answer is `409 invalid_state` with the fresh row."""
+    review_id = world.put()
+    original = reviews._fetch_row
+    pushed: list[bool] = []
+
+    def fetch_then_push(conn, rid):
+        row = original(conn, rid)
+        if not pushed:
+            pushed.append(True)
+            _webhook_update(
+                world, review_id, status="open", buttons=KEEP_FP, note="đổi nút",
+                action={"type": "kill_process", "text": "kill", "target": "m.exe", "via": "wazuh", "agent": "A"},
+            )  # fmt: skip
+        return row
+
+    monkeypatch.setattr(reviews, "_fetch_row", fetch_then_push)
+    response = _decide(world, "tier2", review_id, "undo")
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason"] == "invalid_state"
+    assert (
+        detail["review"]["action_type"] == "kill_process" and detail["review"]["note"] == "đổi nút"
+    )
+    assert "undo" not in detail["review"]["allowed_decisions"]
+    assert world.fake.calls == []
+    row = world.row(review_id)
+    assert row["status"] == "open" and row["locked_by"] is None
+    [event] = _decided(world, review_id)
+    assert event["payload"]["outcome"] == "invalid_state"
+
+
+def test_m1_a_press_with_nothing_in_between_still_locks(world):
+    assert _decide(world, "tier2", world.put(), "keep").status_code == 200
+
+
+def test_m2_a_late_finish_of_the_first_call_cannot_overwrite_the_second_of_the_same_user(world):
+    """m2: the finish is a compare-and-set on `(id, status, locked_by, locked_at)`. The same person takes over their own stale lock;
+    the first call then finishes late, while the second still holds the lock: only `locked_at` tells the two locks apart, and the
+    first finish must not write (a mutant that drops `locked_at` from the finish survived)."""
+    review_id = world.put()
+    username = world.users["tier2"][1]
+    world.fake = FakeN8n(Reply.ok("kept", result="first"), Reply.ok("kept", result="second"))
+    p2_inside, p1_finished = threading.Event(), threading.Event()
+    p2_answers: list[httpx.Response] = []
+    middle: list[dict[str, Any]] = []
+
+    def hook(call) -> None:
+        if (
+            len(world.fake.calls) == 1
+        ):  # the first press is asking n8n: its lock goes stale and the same person presses again
+            world.execute(
+                "UPDATE soar_reviews SET locked_at = locked_at - interval '200 seconds' WHERE id = %s",
+                (review_id,),
+            )
+            thread = threading.Thread(
+                target=lambda: p2_answers.append(_decide(world, "tier2", review_id, "keep"))
+            )
+            thread.start()
+            assert p2_inside.wait(15), "the second press never reached n8n"
+            hook.thread = thread
+        else:  # the second press is asking n8n: it waits for the first to finish
+            p2_inside.set()
+            assert p1_finished.wait(15), "the first press never finished"
+
+    world.fake.on_request = hook
+    first = _decide(world, "tier2", review_id, "keep")
+    middle.append(world.row(review_id))  # the first press has finished; the second holds the lock
+    p1_finished.set()
+    hook.thread.join(15)
+    assert first.status_code == 200 and first.json()["outcome"] == "ok"
+    held = middle[0]
+    assert (held["status"], held["locked_by"]) == (
+        "processing",
+        username,
+    )  # the late finish wrote nothing
+    assert held["result"] is None and held["decided_by"] is None
+    assert p2_answers[0].status_code == 200
+    row = world.row(review_id)
+    assert (row["status"], row["result"], row["decided_by"]) == ("kept", "second", username)
+    assert (row["locked_by"], row["locked_at"]) == (None, None)
+    assert len(world.fake.calls) == 2
+    assert [e["payload"]["outcome"] for e in _decided(world, review_id)] == ["ok", "ok"]
+
+
+def test_m3_a_decision_body_over_8_kib_is_413_whatever_it_holds(world):
+    review_id = world.put()
+    before = world.row(review_id)
+    base = json.dumps({"decision": "keep", "note": "x"}).encode()
+    body = base + b" " * (8193 - len(base))
+    assert len(body) == 8193
+    response = world.post_decision("tier2", review_id, body)
+    assert (response.status_code, response.json()) == (413, {"detail": "payload too large"})
+    _untouched(world, review_id, before)
+    assert _decided(world, review_id) == []
+
+
+def test_m3_a_body_of_exactly_8_kib_is_read(world):
+    body = json.dumps({"decision": "keep"}).encode()
+    body += b" " * (8192 - len(body))
+    assert len(body) == 8192
+    assert world.post_decision("tier2", world.put(), body).status_code == 200
+
+
+def test_m3_a_chunked_body_with_no_length_is_counted_as_it_arrives(world):
+    review_id = world.put()
+
+    def chunks():
+        for _ in range(40):
+            yield b" " * 1024
+
+    response = world.client("tier2").post(
+        f"{REVIEWS}/{review_id}/decision", content=chunks(), headers=JSON
+    )
+    assert response.status_code == 413
+    assert world.row(review_id)["status"] == "open"
+
+
+@pytest.mark.parametrize("opener,closer", [(b"[", b"]"), (b'{"a":', b"}")])
+def test_m3_a_deeply_nested_body_inside_the_cap_is_422_never_a_500(world, opener, closer):
+    """8 KiB of `[` is 8,192 levels: `json.loads` raises `RecursionError`, which used to be an unhandled 500."""
+    review_id = world.put()
+    depth = 8000 // (len(opener) + len(closer))
+    body = opener * depth + closer * depth
+    assert len(body) <= 8192
+    response = world.post_decision("tier2", review_id, body)
+    assert response.status_code == 422
+    assert response.json() == {"detail": {"field": "body", "reason": "invalid"}}
+    assert world.row(review_id)["status"] == "open"
+
+
+def test_m3_the_role_is_still_checked_before_the_size(world):
+    assert world.post_decision("viewer", world.put(), b" " * 9000).status_code == 403
+
+
+def test_m6_the_decided_event_stores_the_role_at_the_time_so_a_later_change_does_not_rewrite_it(
+    world,
+):
+    review_id = world.put()
+    assert _decide(world, "tier1", review_id, "keep").status_code == 200
+    assert _decide(world, "tier1", review_id, "keep").status_code == 409
+    assert [e["payload"]["actor_role"] for e in _decided(world, review_id)] == ["tier1", "tier1"]
+    user_id = world.users["tier1"][0]
+    world.execute("UPDATE users SET role = 'tier2' WHERE user_id = %s", (user_id,))
+    try:
+        history = world.get("tier2", f"{REVIEWS}/{review_id}").json()["history"]
+    finally:
+        world.execute("UPDATE users SET role = 'tier1' WHERE user_id = %s", (user_id,))
+    assert [h["actor_role"] for h in history] == ["tier1", "tier1"]
+
+
+def test_m10_the_decision_waits_for_a_row_lock_no_longer_than_the_bound_and_answers_503_busy(
+    world, monkeypatch
+):
+    """m10: the decision route's statements are bounded like the webhook's: a row another session holds is waited for `LOCK_TIMEOUT`
+    and then a 503 `busy` with `Retry-After`; nothing is locked and nothing is sent."""
+    monkeypatch.setattr(reviews, "LOCK_TIMEOUT", "1s")
+    review_id = world.put()
+    before = world.row(review_id)
+    holder = psycopg.connect(world.dsn)
+    holder.execute("SELECT 1 FROM soar_reviews WHERE id = %s FOR UPDATE", (review_id,))
+    started = time.monotonic()
+    try:
+        response = _decide(world, "tier2", review_id, "keep")
+    finally:
+        holder.rollback()
+        holder.close()
+    elapsed = time.monotonic() - started
+    assert response.status_code == 503
+    assert response.json() == {"detail": "busy"} and response.headers["retry-after"] == "2"
+    assert 0.8 < elapsed < 5, elapsed
+    _untouched(world, review_id, before)
+    assert _decided(world, review_id) == []
 
 
 # ── two presses at once: one call to n8n ────────────────────────────────────────────────────

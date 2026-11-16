@@ -36,9 +36,16 @@ SERVED_KEYS = [
     "host", "agent_id", "user_name", "src_ip", "domain", "scenario_id", "scenario_name", "score", "note",
     "buttons", "created_at", "auto_expire_at", "remind_every_minutes", "next_remind_at",
     "decided_by", "decided_at", "result", "last_error", "locked_by", "locked_at", "last_sent_at", "received_at", "updated_at",
-    "allowed_decisions", "strong_warning",
+    "allowed_decisions", "strong_warning", "host_critical",
 ]  # fmt: skip
-DETAIL_KEYS = [*SERVED_KEYS, "raw", "history", "related_alerts", "related_total"]
+DETAIL_KEYS = [
+    *SERVED_KEYS,
+    "raw",
+    "history",
+    "history_truncated",
+    "related_alerts",
+    "related_total",
+]
 ALERT_KEYS = [
     "alert_id", "alert_time", "agent_name", "description", "severity", "status", "occurrence_count",
 ]  # fmt: skip
@@ -269,6 +276,55 @@ def test_the_list_gives_each_row_its_allowed_decisions_for_the_caller(world):
 def test_strong_warning_is_isolate_host_or_the_domain_controller(world, fields, expected):
     review_id = world.put(**fields)
     assert world.get("tier2", f"{REVIEWS}/{review_id}").json()["strong_warning"] is expected
+
+
+@pytest.mark.parametrize(
+    "fields,strong,critical",
+    [
+        ({"action_type": "isolate_host", "host": "PC-17"}, True, False),
+        ({"action_type": "disable_user", "host": "AD-server"}, True, True),
+        ({"action_type": "block_ip", "host": "PC-17"}, False, False),
+        ({"action_type": "block_ip", "host": None}, False, False),
+        ({"action_type": "isolate_host", "host": "ad-SERVER."}, True, True),
+        ({"action_type": "kill_process", "host": "AD-server.home.arpa"}, True, True),
+        ({"action_type": "block_ip", "host": "\uff21\uff24\uff0dserver"}, True, True),
+        (
+            {"action_type": None, "host": "AD-server", "kind": "notice", "status": "info"},
+            True,
+            True,
+        ),
+    ],
+)
+def test_host_critical_says_why_the_warning_is_strong_on_every_route(
+    world, fields, strong, critical
+):
+    """The page words the strong warning by its cause: an isolation, or the domain controller."""
+    review_id = world.put(**fields)
+    served = [
+        world.get("tier2", f"{REVIEWS}/{review_id}").json(),
+        next(r for r in world.get("tier2", REVIEWS).json()["rows"] if r["id"] == review_id),
+    ]
+    for body in served:
+        assert (body["strong_warning"], body["host_critical"]) == (strong, critical)
+        keys = list(body)
+        assert (
+            keys.index("allowed_decisions") + 2
+            == keys.index("strong_warning") + 1
+            == keys.index("host_critical")
+        )
+
+
+def test_strong_warning_is_isolate_host_or_host_critical_over_every_fixture(world, mixed):
+    world.put(id="HOSTC001", action_type="isolate_host", host="PC-17")
+    world.put(id="HOSTC002", action_type="disable_user", host="AD-server")
+    world.put(id="HOSTC003", action_type="block_ip", host=None)
+    rows = world.get("tier2", REVIEWS, page_size=200).json()["rows"]
+    assert len(rows) >= 11
+    for row in rows:
+        assert row["strong_warning"] == (
+            row["action_type"] == "isolate_host" or row["host_critical"]
+        ), row["id"]
+        assert isinstance(row["host_critical"], bool)
 
 
 def test_the_domain_controllers_are_the_ad_hosts_of_the_configuration(world):
@@ -841,9 +897,8 @@ def test_the_history_of_a_ticket_with_no_event_is_empty(world):
     assert world.get("tier2", f"{REVIEWS}/{world.put()}").json()["history"] == []
 
 
-def test_the_history_is_at_most_200_events_the_oldest_ones(world):
-    review_id = world.put()
-    for i in range(205):
+def _events(world: World, review_id: str, count: int) -> None:
+    for i in range(count):
         _event(
             world,
             review_id,
@@ -853,8 +908,92 @@ def test_the_history_is_at_most_200_events_the_oldest_ones(world):
             payload={"i": i},
             at=_at(i),
         )
-    history = world.get("tier2", f"{REVIEWS}/{review_id}").json()["history"]
-    assert [h["payload"]["i"] for h in history] == list(range(200))
+
+
+@pytest.mark.parametrize("count", [0, 1, 199, 200])
+def test_m5_a_history_of_200_events_or_fewer_is_whole_and_not_truncated(world, count):
+    review_id = world.put()
+    _events(world, review_id, count)
+    body = world.get("tier2", f"{REVIEWS}/{review_id}").json()
+    assert [h["payload"]["i"] for h in body["history"]] == list(range(count))
+    assert body["history_truncated"] is False
+
+
+@pytest.mark.parametrize("count", [201, 205, 450])
+def test_m5_a_longer_history_serves_the_newest_200_oldest_first_and_says_older_ones_were_left_out(
+    world, count
+):
+    """The reviewer: the OLDEST 200 were served, so on a ticket with a long history the page never showed what happened last."""
+    review_id = world.put()
+    _events(world, review_id, count)
+    body = world.get("tier2", f"{REVIEWS}/{review_id}").json()
+    assert [h["payload"]["i"] for h in body["history"]] == list(range(count - 200, count))
+    assert body["history_truncated"] is True
+    assert [datetime.fromisoformat(h["at"]) for h in body["history"]] == sorted(
+        datetime.fromisoformat(h["at"]) for h in body["history"]
+    )
+
+
+def test_m5_the_truncation_flag_is_per_ticket(world):
+    long, short = world.put(), world.put()
+    _events(world, long, 210)
+    _events(world, short, 3)
+    assert world.get("tier2", f"{REVIEWS}/{long}").json()["history_truncated"] is True
+    assert world.get("tier2", f"{REVIEWS}/{short}").json()["history_truncated"] is False
+
+
+def test_m6_history_reads_the_role_from_the_payload_and_falls_back_to_the_join(world):
+    review_id = world.put()
+    tier2_id, tier2_name = world.users["tier2"]
+    _event(
+        world,
+        review_id,
+        "soar.review_decided",
+        role="analyst",
+        actor=tier2_id,
+        payload={"decision": "keep", "actor_role": "tier1"},
+        at=_at(1),
+    )
+    _event(
+        world,
+        review_id,
+        "soar.review_decided",
+        role="analyst",
+        actor=tier2_id,
+        payload={"decision": "keep"},
+        at=_at(2),
+    )  # an old event
+    _event(
+        world,
+        review_id,
+        "soar.review_decided",
+        role="analyst",
+        actor=tier2_id,
+        payload={"decision": "keep", "actor_role": "root"},
+        at=_at(3),
+    )  # not a role
+    _event(
+        world,
+        review_id,
+        "soar.review_decided",
+        role="analyst",
+        actor=tier2_id,
+        payload={"decision": "keep", "actor_role": ["admin"]},
+        at=_at(4),
+    )
+    history = world.get("tier1", f"{REVIEWS}/{review_id}").json()["history"]
+    assert [(h["actor"], h["actor_role"]) for h in history] == [
+        (tier2_name, "tier1"),  # what the payload says: the role AT THE TIME
+        (tier2_name, "tier2"),  # no payload role: the user's role now
+        (tier2_name, "tier2"),  # an unknown word is not served
+        (tier2_name, "tier2"),
+    ]
+    world.execute("UPDATE users SET role = 'admin' WHERE user_id = %s", (tier2_id,))
+    try:
+        again = world.get("tier1", f"{REVIEWS}/{review_id}").json()["history"]
+    finally:
+        world.execute("UPDATE users SET role = 'tier2' WHERE user_id = %s", (tier2_id,))
+    assert [h["actor_role"] for h in again] == ["tier1", "admin", "admin", "admin"]
 
 
 def test_a_ticket_without_a_case_number_has_no_related_alerts(world):
@@ -903,6 +1042,34 @@ def test_the_related_alerts_are_those_of_the_same_case_newest_first(world):
     assert first["severity"] == "medium" and first["status"] == "received"
     assert datetime.fromisoformat(first["alert_time"]) == t + timedelta(hours=2)
     assert first["alert_time"].endswith("+00:00")
+
+
+def test_m10_the_related_alerts_and_their_total_come_from_one_query(world, monkeypatch):
+    number = _case_number()
+    review_id = world.put(case_number=number)
+    t = datetime(2026, 11, 13, 10, 0, tzinfo=UTC)
+    for i in range(55):
+        world.put_alert(f"rel-q{i:02d}", number, alert_time=t + timedelta(minutes=i))
+    seen: list[str] = []
+
+    class Spy(psycopg.Connection):
+        def execute(self, query, params=None, **kwargs):
+            seen.append(str(query))
+            return super().execute(query, params, **kwargs)
+
+    monkeypatch.setattr(
+        "app.web.deps.db.connect", lambda *a, **k: Spy.connect(world.dsn, autocommit=False)
+    )
+    body = world.get("tier2", f"{REVIEWS}/{review_id}").json()
+    assert len(body["related_alerts"]) == 50 and body["related_total"] == 55
+    assert body["related_alerts"][0]["alert_id"] == "rel-q54"
+    assert len([q for q in seen if "FROM alerts" in q]) == 1, "the scan of `alerts` runs once"
+
+
+def test_m10_no_alert_of_the_case_is_a_zero_total_from_the_same_query(world):
+    review_id = world.put(case_number=_case_number())
+    body = world.get("tier2", f"{REVIEWS}/{review_id}").json()
+    assert (body["related_alerts"], body["related_total"]) == ([], 0)
 
 
 def test_related_alerts_carry_no_field_of_the_ai(world):

@@ -162,3 +162,16 @@ def test_i2_the_docs_say_what_the_code_does_with_a_blank_approval_url():
     example = (README.parent / ".env.example").read_text(encoding="utf-8")
     line = next(line for line in example.splitlines() if line.startswith("N8N_APPROVAL_URL="))
     assert "absent" in line and "EMPTY" in line
+
+
+def test_the_api_part_names_host_critical_history_truncated_and_the_limits_of_a_decision():
+    text = _section()
+    assert "`host_critical`" in text and "`strong_warning`" in text
+    assert "`history_truncated`" in text and "200 sự kiện **mới nhất**" in text
+    decision = next(
+        line
+        for line in text.splitlines()
+        if line.startswith("- `POST /api/soar/reviews/{id}/decision`")
+    )
+    for needle in ("8 KiB", "413", "422", "503 busy", "Retry-After"):
+        assert needle in decision, needle
