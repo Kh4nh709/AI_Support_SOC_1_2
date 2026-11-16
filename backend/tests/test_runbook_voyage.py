@@ -197,23 +197,24 @@ def test_the_database_moves_before_the_containers_run_the_p14_code():
     assert "docker compose up -d" not in steps[3], "step 3 starts containers"
     assert "make migrate" in steps[3] and "docker compose up -d" in steps[5]
     flat = _flat(steps[3])
-    # the trial as it stands (20 migrations) applies 021 to 024; a database the wipe recreated with the P14
-    # checkout (its schema.sql records 24) applies none: both are right, and the gate is the total (fix round 1, I2)
-    assert "migrate: 4 applied, 20 already present" in flat
-    assert "migrate: 0 applied, 24 already present" in flat
-    assert "Do not go on before the count reads `24`" in flat
+    # the trial as it stands (20 migrations) applies 021 to 025; a database the wipe recreated with the P14
+    # checkout (its schema.sql records 25) applies none: both are right, and the gate is the total (fix round 1, I2)
+    assert "migrate: 5 applied, 20 already present" in flat
+    assert "migrate: 0 applied, 25 already present" in flat
+    assert "Do not go on before the count reads `25`" in flat
     assert "Do not go on before this holds" not in flat  # it was false on the re-wipe branch
     stems = _migration_files()
-    assert len(stems) == 24 and stems[-4:] == [
+    assert len(stems) == 25 and stems[-5:] == [
         "021_archive",
         "022_true_positive",
         "023_vector_rag",
         "024_lab",
+        "025_soar_reviews",
     ]
-    for stem in stems[-4:]:
+    for stem in stems[-5:]:
         assert f"migrate: applying {stem}" in flat, stem
-    assert "`24`" in flat
-    assert 4 + 20 == 0 + 24 == len(stems)  # both answers quote the files' own total
+    assert "`25`" in flat
+    assert 5 + 20 == 0 + 25 == len(stems)  # both answers quote the files' own total
     assert "no alert has arrived since the wipe" in flat or "no worker holds a transaction" in flat
 
 
@@ -612,9 +613,9 @@ def test_step_7_rebuilds_the_index_after_a_db_restore_and_names_the_dump():
         "`latest.dump`",
         "are never restored onto the P14 trial",
         "022 would refuse",
-        "go on only when it printed `24`",
+        "go on only when it printed `25`",
         "start this step again from the count",
-        "(24 migrations)",
+        "(25 migrations)",
     ):
         assert needle in flat, f"step 7 no longer says {needle!r}"
     # the migration count of the dump is read before anything is stopped, and the command prints only a count

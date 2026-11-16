@@ -17,21 +17,30 @@ import pytest
 from app.audit import events
 from app.infra.errors import PermanentError
 
+SOAR_REVIEW_NAMES = {"soar.review_received", "soar.review_decided"}
 
-def test_event_types_has_exactly_40_entries():
-    assert len(events.EVENT_TYPES) == 40
+
+def test_event_types_has_exactly_42_entries():
+    assert len(events.EVENT_TYPES) == 42
+
+
+def test_event_types_holds_the_two_soar_review_names():
+    assert SOAR_REVIEW_NAMES <= events.EVENT_TYPES
+    assert len(events.EVENT_TYPES - SOAR_REVIEW_NAMES) == 40
 
 
 def test_event_types_holds_the_two_dec_213_lab_names():
     two = {"lab.run_created", "lab.labeled"}
     assert two <= events.EVENT_TYPES
-    assert len(events.EVENT_TYPES - two) == 38
+    assert len(events.EVENT_TYPES - two - SOAR_REVIEW_NAMES) == 38
 
 
 def test_event_types_holds_the_two_dec_212_names():
     two = {"alert.archived", "case.archived"}
     assert two <= events.EVENT_TYPES
-    assert len(events.EVENT_TYPES - two - {"lab.run_created", "lab.labeled"}) == 36
+    assert (
+        len(events.EVENT_TYPES - two - {"lab.run_created", "lab.labeled"} - SOAR_REVIEW_NAMES) == 36
+    )
 
 
 def test_event_types_holds_the_eight_p13_names_dec_210():
@@ -46,7 +55,12 @@ def test_event_types_holds_the_eight_p13_names_dec_210():
         "knowledge.redraft_requested",
     }
     assert eight <= events.EVENT_TYPES
-    later = {"alert.archived", "case.archived", "lab.run_created", "lab.labeled"}
+    later = {
+        "alert.archived",
+        "case.archived",
+        "lab.run_created",
+        "lab.labeled",
+    } | SOAR_REVIEW_NAMES
     assert len(events.EVENT_TYPES - eight - later) == 28
 
 

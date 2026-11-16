@@ -17,11 +17,17 @@ import {
 
 const TYPES = Object.keys(S.admin.eventType);
 
+// The two events of the SOAR review tickets (migration 025) have a label (`strings.ts`) and no summary line yet: the audit
+// page shows a dash for them until the page "Phản hồi SOAR" gives them one. Every test that wants a line leaves them out.
+const SOAR_REVIEW_EVENTS = ["soar.review_received", "soar.review_decided"];
+const SUMMARISED = TYPES.filter((type) => !SOAR_REVIEW_EVENTS.includes(type));
+
 const sum = (event_type: string, payload: unknown) => summaryOf({ event_type, payload });
 
 describe("summaryOf, one event type at a time", () => {
-  it("covers all 40 event types of the backend, and each has a case below", () => {
-    expect(TYPES).toHaveLength(40);
+  it("covers all 42 event types of the backend but the two of the SOAR reviews, and each has a case below", () => {
+    expect(TYPES).toHaveLength(42);
+    expect(SUMMARISED).toHaveLength(40);
   });
 
   it.each<[type: string, payload: unknown, summary: string]>([
@@ -416,7 +422,7 @@ describe("summaryOf, one event type at a time", () => {
     expect(sum(type, payload)).toBe(summary);
   });
 
-  it("has a case for every one of the 40 types", () => {
+  it("has a case for every one of the 40 types that have a line", () => {
     // The cases above are the table; this is the other direction: no type of the backend is left without one.
     const covered = new Set(
       [
@@ -462,7 +468,7 @@ describe("summaryOf, one event type at a time", () => {
         "rag.integrity_failed",
       ].sort(),
     );
-    expect([...covered]).toEqual([...TYPES].sort());
+    expect([...covered]).toEqual([...SUMMARISED].sort());
   });
 });
 
@@ -717,7 +723,7 @@ describe("the summary of an event whose suggestion the server withheld (DEC-101)
 
 describe("summaryOf, on a payload that is not what the writer would write", () => {
   it("says the payload is too big, whatever the event, when the server cut it", () => {
-    for (const type of TYPES) {
+    for (const type of SUMMARISED) {
       expect(sum(type, { truncated: true, size: 70000 })).toBe(
         "payload quá lớn (70.000 byte), server không gửi nội dung",
       );
@@ -930,6 +936,8 @@ describe("subjectPathOf", () => {
       "rag.integrity_failed",
       "rag.lookup_failed",
       "rule.suspected_wrong",
+      "soar.review_decided",
+      "soar.review_received",
     ]);
     for (const event_type of rest) {
       expect(subjectPathOf({ event_type, subject_id: "abc" }), event_type).toBeNull();

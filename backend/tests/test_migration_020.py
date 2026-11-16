@@ -1037,11 +1037,13 @@ def test_020_applies_on_a_database_at_019_the_way_make_migrate_runs_it(tmp_path)
                     "WHERE conname = 'ck_audit_event_type'"
                 ).fetchone()[0]
             )
-            # 020's 36, then 021's two, then 024's two: the real migrate.sh applied every file above 019
+            # 020's 36, then 021's two, then 024's two, then 025's two: the real migrate.sh applied every file
+            # above 019
             assert names == (
                 EVENTS_BEFORE_020
                 + EVENTS_IN_020
                 + ["alert.archived", "case.archived", "lab.run_created", "lab.labeled"]
+                + ["soar.review_received", "soar.review_decided"]
             )
             conn.rollback()
     finally:
