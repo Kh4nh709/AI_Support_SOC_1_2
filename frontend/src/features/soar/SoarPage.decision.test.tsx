@@ -115,6 +115,31 @@ describe("run() for one ticket twice", () => {
     expect(state.decisions).toHaveLength(2);
   });
 
+  it.each([
+    ["a NUL", "a\u0000b"],
+    ["a lone surrogate", "a\ud800b"],
+  ])(
+    "never sends a note with %s, whatever called it, and says why on the row",
+    async (_what, bad) => {
+      const state = fake({ rows: [review()] });
+      serve(server, state);
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const { result } = renderHook(() => useDecisions(), {
+        wrapper: ({ children }) => (
+          <QueryClientProvider client={client}>{children}</QueryClientProvider>
+        ),
+      });
+      await act(async () => {
+        await result.current.run(review(), "undo", bad);
+      });
+      expect(state.decisions).toEqual([]);
+      expect(result.current.states.K7QM2XHP?.lines).toEqual([
+        { tone: "error", text: S.soar.result.noteInvalid },
+      ]);
+      expect(result.current.states.K7QM2XHP?.running).toBe(false);
+    },
+  );
+
   it("lets two different tickets run together", async () => {
     const state = fake({ rows: [review(), review({ id: "B2C3D4E5" })] });
     serve(server, state);
@@ -255,6 +280,62 @@ describe("the dialog of undo and false positive", () => {
     }
   });
 
+  // What the person TYPES is sent as typed, and the server refuses a note it cannot store (a NUL, a lone surrogate: a 422). The
+  // dialog refuses it first, with a line that says so, and the confirm stays shut until the note is fixed.
+  it.each([
+    ["a NUL character", "ghi\u0000chú"],
+    ["a lone high surrogate", "ghi\ud83dchú"],
+    ["a lone low surrogate", "ghi\ude00chú"],
+    ["a surrogate cut at the end", "ghi chú \ud83d"],
+  ])(
+    "refuses a note with %s: a line says so, the confirm is shut, and nothing is sent",
+    async (_what, bad) => {
+      const state = serveDecision(() => answer());
+      renderSoar();
+      await press(UNDO);
+      const dialog = await screen.findByRole("dialog");
+      const note = within(dialog).getByRole("textbox") as HTMLTextAreaElement;
+      fireEvent.change(note, { target: { value: bad } });
+      const why = await within(dialog).findByText(
+        "Ghi chú có ký tự không lưu được (ký tự NUL, hoặc ký tự bị cắt dở như nửa của một biểu tượng); hãy xoá hoặc gõ lại chỗ đó.",
+      );
+      expect(why).toBeInTheDocument();
+      expect(S.soar.dialog.noteUnstorable).toBe(
+        "Ghi chú có ký tự không lưu được (ký tự NUL, hoặc ký tự bị cắt dở như nửa của một biểu tượng); hãy xoá hoặc gõ lại chỗ đó.",
+      );
+      expect(note).toHaveAttribute("aria-invalid", "true");
+      const shut = within(dialog).getByRole("button", { name: S.soar.dialog.confirm.undo });
+      expect(shut).toBeDisabled();
+      expect(shut).toHaveAccessibleDescription(why.textContent ?? "");
+      await userEvent.click(shut);
+      expect(state.decisions).toEqual([]);
+      // the Enter key of the form cannot send it either: there is no form, and the dialog has one way to confirm
+      fireEvent.keyDown(note, { key: "Enter", ctrlKey: true });
+      expect(state.decisions).toEqual([]);
+    },
+  );
+
+  it("lets the same note go once it is fixed, and a whole emoji (a valid pair) is fine", async () => {
+    const state = serveDecision(() =>
+      answer({ review: decided({ status: "undone", allowed_decisions: [] }) }),
+    );
+    renderSoar();
+    await press(UNDO);
+    const dialog = await screen.findByRole("dialog");
+    const note = within(dialog).getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(note, { target: { value: "ghi\u0000chú" } });
+    await within(dialog).findByText(S.soar.dialog.noteUnstorable);
+    fireEvent.change(note, { target: { value: "ghi chú 😀 đã sửa" } });
+    expect(within(dialog).queryByText(S.soar.dialog.noteUnstorable)).not.toBeInTheDocument();
+    expect(note).not.toHaveAttribute("aria-invalid", "true");
+    await userEvent.click(within(dialog).getByRole("button", { name: S.soar.dialog.confirm.undo }));
+    await waitFor(() =>
+      expect(state.decisions).toEqual([
+        { id: "K7QM2XHP", body: { decision: "undo", note: "ghi chú 😀 đã sửa" } },
+      ]),
+    );
+  });
+
   it("stops the note at 500 characters and says so in its count", async () => {
     serveDecision(() => answer());
     renderSoar();
@@ -321,7 +402,7 @@ describe("the strong warning", () => {
     const dialog = await screen.findByRole("dialog", { name: S.soar.dialog.title.undoStrong });
     expect(S.soar.dialog.title.undoStrong).not.toBe(S.soar.dialog.title.undo);
     const warning = within(dialog).getByText(
-      "Gỡ cách ly AD-server sẽ nối lại máy với mạng ngay. Biện pháp này liên quan tới AD-server, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.",
+      "Gỡ cách ly AD-server sẽ nối lại máy với mạng ngay. Nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan. Biện pháp này liên quan tới AD-server, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD).",
     );
     expect(warning.textContent).toMatch(/^Gỡ cách ly AD-server/);
     expect(within(dialog).getByText(S.soar.dialog.after.undo)).toBeInTheDocument();
@@ -421,7 +502,7 @@ describe("the strong warning", () => {
     const dialog = await screen.findByRole("dialog", { name: S.soar.dialog.title.undoStrong });
     expect(
       within(dialog).getByText(
-        "Gỡ chặn 79.79.78.202: lưu lượng từ địa chỉ này được phép đi qua trở lại. Biện pháp này liên quan tới AD-server, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn địa chỉ này không còn nguy hiểm.",
+        "Gỡ chặn 79.79.78.202: lưu lượng với địa chỉ này được phép đi qua trở lại. Biện pháp này liên quan tới AD-server, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn địa chỉ này không còn nguy hiểm.",
       ),
     ).toBeInTheDocument();
     expect(dialog).not.toHaveTextContent("Gỡ cách ly");
@@ -867,6 +948,80 @@ describe("the outcomes", () => {
     const row = await rowOf();
     expect(await within(row).findByText(S.soar.result.notConfigured)).toBeInTheDocument();
     expect(within(row).getByRole("button", { name: KEEP })).toBeEnabled();
+  });
+
+  it("503 busy (Retry-After): says the system is busy and to try again in a few seconds, and the buttons are back", async () => {
+    serveDecision(
+      () =>
+        HttpResponse.json(
+          { detail: "busy" },
+          { status: 503, headers: { "Retry-After": "2" } },
+        ) as unknown as Response,
+    );
+    renderSoar();
+    await press(KEEP);
+    const row = await rowOf();
+    const line = await within(row).findByText("Hệ thống đang bận; hãy thử lại sau vài giây.");
+    expect(line).toHaveAttribute("role", "alert");
+    expect(S.soar.result.busy).toBe("Hệ thống đang bận; hãy thử lại sau vài giây.");
+    // not the sentence of the other 503
+    expect(within(row).queryByText(S.soar.result.notConfigured)).not.toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: KEEP })).toBeEnabled();
+    expect(within(row).getByRole("button", { name: UNDO })).toBeEnabled();
+  });
+
+  it("413 (a body over 8 KiB, which the page never sends): the generic error, and the buttons are back", async () => {
+    serveDecision(
+      () =>
+        HttpResponse.json({ detail: "payload too large" }, { status: 413 }) as unknown as Response,
+    );
+    renderSoar();
+    await press(KEEP);
+    const row = await rowOf();
+    expect(await within(row).findByText(S.common.unknownError)).toHaveAttribute("role", "alert");
+    expect(within(row).getByRole("button", { name: KEEP })).toBeEnabled();
+  });
+
+  it.each([
+    ["invalid", S.soar.result.noteInvalid],
+    ["too_long", S.soar.result.noteTooLong],
+  ])(
+    "422 for the note (%s): says what is wrong with the note, and the buttons are back",
+    async (reason, text) => {
+      serveDecision(
+        () =>
+          HttpResponse.json(
+            { detail: { field: "note", reason } },
+            { status: 422 },
+          ) as unknown as Response,
+      );
+      renderSoar();
+      await press(KEEP);
+      const row = await rowOf();
+      expect(await within(row).findByText(text)).toHaveAttribute("role", "alert");
+      expect(within(row).getByRole("button", { name: KEEP })).toBeEnabled();
+    },
+  );
+
+  it("422 for anything else (the decision, the body): the generic error, repeating nothing the server said", async () => {
+    serveDecision(
+      () =>
+        HttpResponse.json(
+          { detail: { field: "decision", reason: "invalid" } },
+          { status: 422 },
+        ) as unknown as Response,
+    );
+    renderSoar();
+    await press(KEEP);
+    expect(await screen.findByText(S.common.unknownError)).toBeInTheDocument();
+    expect(screen.queryByText(/decision|invalid/)).not.toBeInTheDocument();
+  });
+
+  it("words the answers of the server for a note: whole strings", () => {
+    expect(S.soar.result.noteInvalid).toBe(
+      "Ghi chú có ký tự không lưu được; hãy sửa ghi chú rồi gửi lại.",
+    );
+    expect(S.soar.result.noteTooLong).toBe("Ghi chú dài quá 500 ký tự; hãy rút ngắn rồi gửi lại.");
   });
 
   it("404: says the ticket was not found", async () => {

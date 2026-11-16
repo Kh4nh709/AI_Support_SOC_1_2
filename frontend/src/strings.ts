@@ -2728,6 +2728,11 @@ export const S = {
       locked: "Phiếu đang được xử lý; đã làm mới.",
       forbidden: "Bạn không có quyền thực hiện thao tác này",
       notConfigured: "Chưa cấu hình liên kết duyệt tới SOAR (n8n); hãy báo quản trị viên.",
+      // `503 {"detail": "busy"}` with `Retry-After`: a row another session holds, or a statement past its bound: nothing was locked.
+      busy: "Hệ thống đang bận; hãy thử lại sau vài giây.",
+      // `422` for the note: what the person typed, as the server refuses it (the dialog refuses it first).
+      noteInvalid: "Ghi chú có ký tự không lưu được; hãy sửa ghi chú rồi gửi lại.",
+      noteTooLong: "Ghi chú dài quá 500 ký tự; hãy rút ngắn rồi gửi lại.",
       notFound: "Không tìm thấy phiếu.",
       network: "Không gửi được yêu cầu. Hãy thử lại.",
       toast: (id: string, status: string) => `Phiếu ${id}: ${status}`,
@@ -2755,7 +2760,7 @@ export const S = {
             disable_user: (account: string) =>
               `Mở khoá ${account}: tài khoản này sẽ đăng nhập lại được ngay. Nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.`,
             block_ip: (target: string) =>
-              `Gỡ chặn ${target}: lưu lượng từ địa chỉ này được phép đi qua trở lại. Hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
+              `Gỡ chặn ${target}: lưu lượng với địa chỉ này được phép đi qua trở lại. Hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
             sinkhole_domain: (target: string) =>
               `Gỡ chặn tên miền ${target}: tên miền này sẽ phân giải trở lại. Hãy chắc chắn tên miền này không còn nguy hiểm.`,
             disable_xp_cmdshell: (server: string) =>
@@ -2769,11 +2774,11 @@ export const S = {
           // hình là máy quan trọng (ví dụ máy chủ AD)". The object of the action is its own target.
           critical: {
             isolate_host: (target: string, host: string) =>
-              `Gỡ cách ly ${target} sẽ nối lại máy với mạng ngay. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan.`,
+              `Gỡ cách ly ${target} sẽ nối lại máy với mạng ngay. Nếu máy vẫn bị xâm nhập, kẻ tấn công có thể tiếp tục hoạt động và lây lan. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD).`,
             disable_user: (account: string, host: string) =>
               `Mở khoá ${account}: tài khoản này sẽ đăng nhập lại được ngay. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); nếu tài khoản đã bị chiếm quyền, kẻ tấn công có thể dùng lại nó.`,
             block_ip: (target: string, host: string) =>
-              `Gỡ chặn ${target}: lưu lượng từ địa chỉ này được phép đi qua trở lại. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
+              `Gỡ chặn ${target}: lưu lượng với địa chỉ này được phép đi qua trở lại. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn địa chỉ này không còn nguy hiểm.`,
             sinkhole_domain: (target: string, host: string) =>
               `Gỡ chặn tên miền ${target}: tên miền này sẽ phân giải trở lại. Biện pháp này liên quan tới ${host}, một máy được cấu hình là máy quan trọng (ví dụ máy chủ AD); hãy chắc chắn tên miền này không còn nguy hiểm.`,
             disable_xp_cmdshell: (server: string, host: string) =>
@@ -2811,6 +2816,9 @@ export const S = {
         fp: "Phiếu chuyển sang “Dương tính giả” và đóng lại, không thể xử lý tiếp trên trang này.",
       },
       understand: "Tôi hiểu rủi ro và muốn tiếp tục",
+      // A note the server would refuse (a NUL, or half of an emoji): said in the dialog, and the confirm stays shut.
+      noteUnstorable:
+        "Ghi chú có ký tự không lưu được (ký tự NUL, hoặc ký tự bị cắt dở như nửa của một biểu tượng); hãy xoá hoặc gõ lại chỗ đó.",
       // The line beside a shut confirm: which box opens it.
       shutHint: (box: string) => `Tích ô “${box}” để bật nút xác nhận.`,
       // The dialog follows the live ticket: what it says when the ticket changes under it, and the box that asks again.

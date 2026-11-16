@@ -211,7 +211,7 @@ ui-test:
 	cd frontend && npm test -- --run
 
 # scripts/ui_e2e_run.sh runs the Playwright suite, which starts scripts/ui_e2e_stack.sh (a scratch database, the API,
-# the worker, an LLM stub and the built UI, all on 127.0.0.1) and drops it all on exit; then it scans the run's
+# the worker, an LLM stub, a stand-in for n8n's soar-approval webhook and the built UI, all on 127.0.0.1) and drops it all on exit; then it scans the run's
 # output and test-results/ for the run's secrets and fails the target if one is there. PW_ARGS narrows the run
 # (PW_ARGS=e2e/blind.spec.ts). A relative PY is made absolute. The API and the worker run a COPY of backend/app made in
 # the run's state directory, with a copy of kb/ and an empty eval/ beside it, so the labelling scenario's candidates

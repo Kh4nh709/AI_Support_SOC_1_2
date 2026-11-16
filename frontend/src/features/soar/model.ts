@@ -11,6 +11,19 @@ import {
 import { formatClock } from "../../format";
 import { S, labelOf } from "../../strings";
 
+/**
+ * A half of a UTF-16 pair: a high surrogate not followed by a low one, or a low one not preceded by a high one. (No `u` flag: each
+ * code unit is looked at on its own, which is the point.)
+ */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/**
+ * Text the server can store (`infra/storable.py`): no NUL, and no lone surrogate (a JavaScript string cut inside an emoji has one,
+ * and `str.encode("utf-8")` refuses it). What a person types in the note is sent as typed, so the page refuses a note that is not.
+ */
+export const isStorable = (text: string): boolean =>
+  !text.includes("\u0000") && !LONE_SURROGATE.test(text);
+
 /** The longest note a decision carries (spec section 4). */
 export const NOTE_MAX = 500;
 

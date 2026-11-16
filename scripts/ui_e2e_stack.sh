@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # ui_e2e_stack.sh soc_ui_e2e_test — the whole stack the Playwright suite runs against (P10-T12).
 #
-# One scratch database, the API on 18000, the worker, an LLM stub on 18100 and `vite preview` of the
+# One scratch database, the API on 18000, the worker, an LLM stub on 18100, a stand-in for n8n's
+# `soar-approval` webhook on 18200 (scripts/ui_e2e_n8n.py: the stand-in of scripts/mock_n8n_approval.py, its mode
+# read from a file of the state directory at each request, so a spec can make a press fail) and `vite preview` of the
 # production build on 18080 (proxying /api and the /api/ws upgrade to 18000). Every port is 127.0.0.1.
 # The script stays in the foreground while the stack is up; Playwright starts it as `webServer` and
 # stops it with SIGTERM, and an EXIT trap then stops every child, removes the state directory and
@@ -34,8 +36,9 @@
 #              E2E_STATE_DIR (the directory to make for the run's secrets; required, must not exist,
 #              its name must start with soc-ui-e2e-), TEST_DATABASE_URL (optional, see above),
 #              E2E_JWT_SECRET, E2E_WEBHOOK_API_KEY, E2E_T1_PASSWORD, E2E_T2_PASSWORD, E2E_T2B_PASSWORD,
-#              E2E_ADMIN_PASSWORD, E2E_ADMIN2_PASSWORD (the two seeded admins) and E2E_NEWUSER_PASSWORD (the
-#              password the admin suite types for the account it creates)
+#              E2E_ADMIN_PASSWORD, E2E_ADMIN2_PASSWORD (the two seeded admins), E2E_NEWUSER_PASSWORD (the
+#              password the admin suite types for the account it creates), E2E_SOAR_NOTICE_API_KEY (the key of
+#              `POST /webhook/soar-notices`) and E2E_N8N_APPROVAL_SECRET (the secret the web sends to the stand-in of n8n)
 #              (optional, at least 16 characters: scripts/ui_e2e_run.sh generates them so that it can scan the
 #              run's output for them; generated here when unset),
 #              E2E_BACKEND_DIR (optional: the backend directory whose app/ is copied into the scratch repository
@@ -48,6 +51,7 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 API_PORT=18000
 WEB_PORT=18080
 LLM_PORT=18100
+N8N_PORT=18200
 HOST=127.0.0.1
 LOCK_FILE="/tmp/ui-e2e-stack-$(id -u).lock"
 
@@ -82,7 +86,7 @@ command -v flock >/dev/null 2>&1 || die "flock (util-linux) is required"
 exec 9>>"$LOCK_FILE"
 flock -n 9 || die "another ui-e2e run holds $LOCK_FILE: wait for it to finish (nothing was touched)"
 
-for port in "$API_PORT" "$WEB_PORT" "$LLM_PORT"; do
+for port in "$API_PORT" "$WEB_PORT" "$LLM_PORT" "$N8N_PORT"; do
   if (exec 3<>"/dev/tcp/$HOST/$port") 2>/dev/null; then
     die "port $port is already in use on $HOST"
   fi
@@ -109,6 +113,8 @@ T2B_PASSWORD="$(given_or_generated "${E2E_T2B_PASSWORD:-}" 16)"
 ADMIN_PASSWORD="$(given_or_generated "${E2E_ADMIN_PASSWORD:-}" 16)"
 ADMIN2_PASSWORD="$(given_or_generated "${E2E_ADMIN2_PASSWORD:-}" 16)"
 NEWUSER_PASSWORD="$(given_or_generated "${E2E_NEWUSER_PASSWORD:-}" 16)"
+SOAR_NOTICE_API_KEY="$(given_or_generated "${E2E_SOAR_NOTICE_API_KEY:-}" 24)"
+N8N_APPROVAL_SECRET="$(given_or_generated "${E2E_N8N_APPROVAL_SECRET:-}" 24)"
 
 pids=()
 created_state=0
@@ -118,9 +124,9 @@ redact_stream() {
   # stdin -> stdout with every secret of the run masked (a log tail may show one in an error line)
   E2E_R1="$JWT_SECRET" E2E_R2="$WEBHOOK_API_KEY" E2E_R3="$T1_PASSWORD" E2E_R4="$T2_PASSWORD" \
     E2E_R5="${PGPASSWORD:-}" E2E_R6="$T2B_PASSWORD" E2E_R7="$ADMIN_PASSWORD" E2E_R8="$ADMIN2_PASSWORD" \
-    E2E_R9="$NEWUSER_PASSWORD" "$PY" -c '
+    E2E_R9="$NEWUSER_PASSWORD" E2E_R10="$SOAR_NOTICE_API_KEY" E2E_R11="$N8N_APPROVAL_SECRET" "$PY" -c '
 import os, sys
-secrets = [os.environ[k] for k in ("E2E_R1", "E2E_R2", "E2E_R3", "E2E_R4", "E2E_R5", "E2E_R6", "E2E_R7", "E2E_R8", "E2E_R9") if os.environ.get(k)]
+secrets = [os.environ[k] for k in ("E2E_R1", "E2E_R2", "E2E_R3", "E2E_R4", "E2E_R5", "E2E_R6", "E2E_R7", "E2E_R8", "E2E_R9", "E2E_R10", "E2E_R11") if os.environ.get(k)]
 for line in sys.stdin:
     for s in secrets:
         line = line.replace(s, "***")
@@ -243,6 +249,9 @@ write_env_file "$STATE_DIR/child.env" \
   TEST_DATABASE_URL="postgresql:///$DB" \
   JWT_SECRET="$JWT_SECRET" WEBHOOK_API_KEY="$WEBHOOK_API_KEY" \
   WEBHOOK_IP_ALLOWLIST='["127.0.0.1"]' \
+  SOAR_NOTICE_API_KEY="$SOAR_NOTICE_API_KEY" SOAR_NOTICE_IP_ALLOWLIST='["127.0.0.1"]' \
+  N8N_APPROVAL_SECRET="$N8N_APPROVAL_SECRET" \
+  N8N_APPROVAL_URL="http://$HOST:$N8N_PORT/webhook/soar-approval" N8N_APPROVAL_TIMEOUT_SECONDS=10 \
   LLM_BASE_URL="http://$HOST:$LLM_PORT/v1" LLM_API_KEY="e2e-stub-not-a-key" \
   LLM_MODEL_PROPOSER="e2e-stub-proposer" LLM_MODEL_VERIFIER="e2e-stub-verifier" \
   LLM_TIMEOUT_S=30 LLM_RETRY=1 \
@@ -255,6 +264,11 @@ write_env_file "$STATE_DIR/seed.env" \
   SEED_PASSWORD_E2E_ADMIN2="$ADMIN2_PASSWORD"
 # vite preview needs no secret and no database
 write_env_file "$STATE_DIR/web.env" PATH="$PATH" HOME="$HOME" LANG=C.UTF-8
+# The stand-in of n8n: the secret the web must send, and the file its mode is read from (a spec writes `ok`, `fail` or
+# `conflict` into it; the stand-in reads it at every request). It starts as `ok`.
+(umask 077 && printf 'ok\n' >"$STATE_DIR/n8n.mode")
+write_env_file "$STATE_DIR/n8n.env" PATH="$PATH" HOME="$STATE_DIR/home" LANG=C.UTF-8 PYTHONUNBUFFERED=1 \
+  N8N_APPROVAL_SECRET="$N8N_APPROVAL_SECRET" E2E_N8N_MODE_FILE="$STATE_DIR/n8n.mode"
 
 CLEAN_SHELL='. "$1"; shift; exec "$@"'
 
@@ -294,7 +308,7 @@ rm -f -- "$STATE_DIR/seed.env"
 # the secrets file Playwright's fixtures read (mode 600, in the mode-700 directory)
 (
   umask 077
-  E2E_WH="$WEBHOOK_API_KEY" E2E_P1="$T1_PASSWORD" E2E_P2="$T2_PASSWORD" E2E_P3="$T2B_PASSWORD" \
+  E2E_WH="$WEBHOOK_API_KEY" E2E_SN="$SOAR_NOTICE_API_KEY" E2E_P1="$T1_PASSWORD" E2E_P2="$T2_PASSWORD" E2E_P3="$T2B_PASSWORD" \
     E2E_P4="$ADMIN_PASSWORD" E2E_P5="$ADMIN2_PASSWORD" E2E_P6="$NEWUSER_PASSWORD" \
     E2E_PGH="${PGHOST:-}" E2E_PGP="${PGPORT:-}" E2E_PGU="${PGUSER:-}" E2E_PGW="${PGPASSWORD:-}" \
     E2E_DB="$DB" "$PY" -c '
@@ -303,6 +317,7 @@ e = os.environ
 with open(sys.argv[1], "w") as f:
     json.dump({
         "webhook_key": e["E2E_WH"],
+        "soar_notice_key": e["E2E_SN"],
         "t1_password": e["E2E_P1"],
         "t2_password": e["E2E_P2"],
         "t2b_password": e["E2E_P3"],
@@ -318,6 +333,9 @@ with open(sys.argv[1], "w") as f:
 # ---------------------------------------------------------------- the processes
 start llm "$STATE_DIR/child.env" "$PY" "$ROOT/scripts/e2e_llm_stub.py" "$LLM_PORT"
 wait_http "the LLM stub" "http://$HOST:$LLM_PORT/health" "${pids[-1]}"
+
+start n8n "$STATE_DIR/n8n.env" "$PY" "$ROOT/scripts/ui_e2e_n8n.py" "$N8N_PORT"
+wait_http "the n8n stand-in" "http://$HOST:$N8N_PORT/" "${pids[-1]}"
 
 start api "$STATE_DIR/child.env" "$PY" -m uvicorn app.web.main:app --host "$HOST" --port "$API_PORT" --ws-max-size 65536
 wait_http "the API" "http://$HOST:$API_PORT/openapi.json" "${pids[-1]}"
@@ -338,7 +356,7 @@ start web "$STATE_DIR/web.env" \
 web_pid="${pids[-1]}"
 wait_http "vite preview" "http://$HOST:$WEB_PORT/" "$web_pid"
 
-echo "ui_e2e_stack: ready on http://$HOST:$WEB_PORT (api $API_PORT, llm stub $LLM_PORT, backend $BACKEND_SRC, database $DB)"
+echo "ui_e2e_stack: ready on http://$HOST:$WEB_PORT (api $API_PORT, llm stub $LLM_PORT, n8n stand-in $N8N_PORT, backend $BACKEND_SRC, database $DB)"
 
 # stay up until Playwright stops us (SIGTERM), the runner is gone, or a child dies
 while true; do

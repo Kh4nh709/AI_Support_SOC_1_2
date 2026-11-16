@@ -12,7 +12,7 @@ import {
   type SoarReview,
   type SoarReviewDetail,
 } from "../../api/soar";
-import { cleanDeep, statusText } from "./model";
+import { cleanDeep, isStorable, statusText } from "./model";
 import { answerLines, failureOf, isReview, type RowLine } from "./outcome";
 import { soarKeys } from "./soarQueries";
 import { S } from "../../strings";
@@ -113,6 +113,15 @@ export function useDecisions(): Decisions {
   const run = useCallback(
     async (row: SoarReview, decision: SoarDecision, note: string) => {
       if (out.current.has(row.id)) return;
+      // The note is what the person typed, sent as typed: one the server would refuse (422) is not sent, whatever called this.
+      if (!isStorable(note)) {
+        put(row.id, {
+          running: false,
+          lines: [{ tone: "error", text: S.soar.result.noteInvalid }],
+          at: stampOf(row),
+        });
+        return;
+      }
       out.current.add(row.id);
       put(row.id, { running: true, lines: [], at: null });
       setFocus({ id: row.id });

@@ -302,6 +302,60 @@ describe("the history", () => {
     ]);
   });
 
+  // The backend serves `actor` as the username of a person (null for the system) and `actor_role` as tier1, tier2, admin or system.
+  it("says Hệ thống for an event of the system, as the backend serves it (no actor, the role system)", async () => {
+    const state = fake({ rows: [review()] });
+    state.detail = () =>
+      detailOf({
+        history: [
+          {
+            at: "2026-11-13T14:40:05+00:00",
+            event: "soar.review_received",
+            actor: null,
+            actor_role: "system",
+            payload: { event: "created", outcome: "created", status: "open" },
+          },
+          {
+            at: "2026-11-13T14:41:05+00:00",
+            event: "soar.review_decided",
+            actor: "an",
+            actor_role: "tier2",
+            payload: { decision: "keep", outcome: "ok" },
+          },
+          {
+            at: "2026-11-13T14:42:05+00:00",
+            event: "soar.review_decided",
+            actor: null,
+            actor_role: "analyst",
+            payload: { decision: "keep", outcome: "ok" },
+          },
+          {
+            at: "2026-11-13T14:43:05+00:00",
+            event: "soar.review_received",
+            actor: null,
+            actor_role: null,
+            payload: null,
+          },
+          {
+            at: "2026-11-13T14:44:05+00:00",
+            event: "soar.review_received",
+            actor: "system",
+            actor_role: null,
+            payload: null,
+          },
+        ],
+      });
+    serve(server, state);
+    renderSoar();
+    const panel = await open();
+    const table = await within(panel).findByRole("table", { name: S.soar.detail.history.label });
+    const who = within(table)
+      .getAllByRole("row")
+      .slice(1)
+      .map((row) => within(row).getAllByRole("cell")[2]?.textContent);
+    expect(who).toEqual(["Hệ thống", "an (Tier 2)", "analyst", "—", "Hệ thống"]);
+  });
+
   it("says in the detail column what was decided, the note, the change of status and n8n's message", async () => {
     const state = fake({ rows: [review()] });
     state.detail = () => detailOf({ history });
