@@ -87,6 +87,7 @@ COLUMNS = [
     ("locked_at", "timestamp with time zone"),
     ("prev_status", "text"),
     ("last_sent_at", "timestamp with time zone"),
+    ("received_at", "timestamp with time zone"),
     ("raw", "jsonb"),
     ("updated_at", "timestamp with time zone"),
 ]
@@ -165,6 +166,17 @@ def test_only_the_columns_n8n_always_sends_are_required(db):
         (review_id,),
     ).fetchone()
     assert row == ("info", False, [], 0, True, None, None, None)
+
+
+def test_received_at_is_the_databases_clock_at_the_insert_and_never_null(db):
+    """The web's own arrival time (the new-ticket signal): n8n's `created_at` can be older than a ticket already shown."""
+    review_id = _review(db, created_at=T0)  # a ticket n8n created long ago, delivered now
+    received, now = db.execute(
+        "SELECT received_at, now() FROM soar_reviews WHERE id = %s", (review_id,)
+    ).fetchone()
+    assert received == now and received > T0
+    error = _refused(db, psycopg.errors.NotNullViolation, lambda: _review(db, received_at=None))
+    assert error.diag.column_name == "received_at"
 
 
 @pytest.mark.parametrize(

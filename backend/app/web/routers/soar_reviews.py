@@ -3,7 +3,7 @@
 codes and shapes the answers. `iter_routers()` discovers it.
 
     GET  /api/soar/reviews                       200 {rows: [review], total, page, page_size}
-    GET  /api/soar/reviews/count                 200 {count, latest_created_at}
+    GET  /api/soar/reviews/count                 200 {count, latest_received_at}
     GET  /api/soar/reviews/{id}                  200 review + raw, history, related_alerts, related_total; 404
     POST /api/soar/reviews/{id}/decision         200 {outcome, message, review}; 403, 404, 409, 422, 503
 
@@ -18,7 +18,8 @@ themselves). `page` ≥ 1, `page_size` ≥ 1, clamped to 200: the queue's conven
 `status`, `kind`, `action_type` and the numbers are closed sets and ranges: anything else is a `422`.
 
 **The count.** `status` (repeatable, default `open`): how many REVIEWS (never notices) are in those states and the newest one's
-`created_at`, which the page compares with the last it saw to know a ticket arrived.
+`received_at`, which the page compares with the last it saw to know a ticket arrived. `received_at` is the web's own clock when it
+first stored the ticket and no update moves it: n8n's `created_at` can be older than a ticket already shown when a delivery is late.
 
 **The decision.** Body `{"decision": "keep|undo|fp", "note": "<optional, at most 500>"}`, read by hand (as `admin_lab.py`: a `422`
 repeats nothing the client sent), JSON only (`deps.require_json_type`, the repo's rule for a route that changes something: the token
@@ -171,7 +172,7 @@ def api_count_reviews(
 ) -> dict[str, Any]:
     del claims
     count, latest = reviews.count_reviews(conn, tuple(status) if status else ("open",))
-    return {"count": count, "latest_created_at": latest}
+    return {"count": count, "latest_received_at": latest}
 
 
 @router.get("/api/soar/reviews/{review_id}")

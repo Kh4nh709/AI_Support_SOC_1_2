@@ -18,12 +18,15 @@
 --          (a lock older than two minutes is released to it): the one column beyond the Owner's list, because
 --          only the row can say which state that was;
 --        * `last_error`: why the last press did not finish; `last_sent_at`: the `sent_at` of the newest body
---          applied (an older one that arrives late is ignored); `raw`: that body, exactly as n8n sent it;
---          `updated_at`.
+--          applied (an older one that arrives late is ignored); `received_at`: the web's own clock at the insert,
+--          never changed by an update (n8n's `created_at` can be older than a ticket already shown when a delivery
+--          is late, so the page's new-ticket signal rests on this one); `raw`: that body, exactly as n8n sent it;
+--          `updated_at`: moves on every write of the row (a push, the lock, the finish).
 --      The closed sets are CHECKs: `kind`, `status` (n8n's six plus `processing`, which is the web's and is
 --      never sent by n8n), `severity`, `action_type`, `action_via`, `prev_status` (n8n's six: a lock is released
 --      to a state that is never itself a lock). A `processing` row names who locked it, since when and the state
 --      to go back to (`ck_soar_reviews_processing_lock`).
+--      `prev_status` and `received_at` are the two columns beyond the Owner's list.
 --      Three indexes, one per way the page looks a ticket up: by state, newest first, and by case.
 --
 --   2. `ck_audit_event_type` gains `soar.review_received` and `soar.review_decided`: 40 -> 42 names. The 40 before
@@ -81,6 +84,7 @@ CREATE TABLE soar_reviews (
   locked_at             timestamptz,
   prev_status           text,
   last_sent_at          timestamptz NOT NULL,
+  received_at           timestamptz NOT NULL DEFAULT now(),
   raw                   jsonb       NOT NULL,
   updated_at            timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT ck_soar_reviews_kind        CHECK (kind IN ('review', 'notice')),

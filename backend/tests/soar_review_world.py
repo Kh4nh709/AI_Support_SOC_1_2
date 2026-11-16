@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import psycopg
@@ -135,7 +135,8 @@ class World:
     # ── what a test puts in ─────────────────────────────────────────────────────────────────
 
     def put(self, **over: Any) -> str:
-        """A ticket, committed; its id."""
+        """A ticket, committed; its id. Unless `received_at` is given, the web received it when n8n created it."""
+        over.setdefault("received_at", over.get("created_at", data.T0 - timedelta(seconds=2)))
         with psycopg.connect(self.dsn) as conn:
             review_id = data.insert_row(conn, **over)
         return review_id

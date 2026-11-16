@@ -35,7 +35,7 @@ SERVED_KEYS = [
     "action_type", "action_text", "action_target", "action_via", "action_agent",
     "host", "agent_id", "user_name", "src_ip", "domain", "scenario_id", "scenario_name", "score", "note",
     "buttons", "created_at", "auto_expire_at", "remind_every_minutes", "next_remind_at",
-    "decided_by", "decided_at", "result", "last_error", "locked_by", "locked_at", "last_sent_at", "updated_at",
+    "decided_by", "decided_at", "result", "last_error", "locked_by", "locked_at", "last_sent_at", "received_at", "updated_at",
     "allowed_decisions", "strong_warning",
 ]  # fmt: skip
 DETAIL_KEYS = [*SERVED_KEYS, "raw", "history", "related_alerts", "related_total"]
@@ -622,42 +622,72 @@ def test_q_with_a_nul_character_is_422_not_a_500(world):
 
 def test_the_count_defaults_to_open_reviews_and_gives_the_newest_ones_time(world, mixed):
     body = world.get("tier2", f"{REVIEWS}/count").json()
-    assert list(body) == ["count", "latest_created_at"]
+    assert list(body) == ["count", "latest_received_at"]
     assert body["count"] == 2  # a and c: open reviews
-    assert datetime.fromisoformat(body["latest_created_at"]) == _at(30)
-    assert body["latest_created_at"].endswith("+00:00")
+    assert datetime.fromisoformat(body["latest_received_at"]) == _at(30)
+    assert body["latest_received_at"].endswith("+00:00")
 
 
 def test_the_count_is_over_the_effective_status_and_status_is_repeatable(world, mixed):
     client = world.client("tier1")
     both = client.get(f"{REVIEWS}/count?status=open&status=processing").json()
     assert both["count"] == 3  # a, c, f
-    assert datetime.fromisoformat(both["latest_created_at"]) == _at(60)
+    assert datetime.fromisoformat(both["latest_received_at"]) == _at(60)
     kept = client.get(f"{REVIEWS}/count?status=kept").json()
     assert kept["count"] == 2  # b, and g whose lock is stale
-    assert datetime.fromisoformat(kept["latest_created_at"]) == _at(70)
+    assert datetime.fromisoformat(kept["latest_received_at"]) == _at(70)
 
 
 def test_the_count_is_over_reviews_never_notices(world, mixed):
     assert world.get("tier2", f"{REVIEWS}/count", status="info").json() == {
         "count": 0,
-        "latest_created_at": None,
+        "latest_received_at": None,
     }
 
 
 def test_the_count_of_nothing_is_zero_and_null(world):
-    assert world.get("tier2", f"{REVIEWS}/count").json() == {"count": 0, "latest_created_at": None}
+    assert world.get("tier2", f"{REVIEWS}/count").json() == {"count": 0, "latest_received_at": None}
 
 
-def test_a_new_ticket_moves_latest_created_at(world):
-    world.put(created_at=_at(10))
+def test_a_new_ticket_moves_latest_received_at_and_a_late_delivery_of_an_older_ticket_does_too(
+    world,
+):
+    world.put(created_at=_at(10), received_at=_at(10))
     first = world.get("tier2", f"{REVIEWS}/count").json()
-    world.put(created_at=_at(99))
+    world.put(created_at=_at(99), received_at=_at(99))
     second = world.get("tier2", f"{REVIEWS}/count").json()
     assert (first["count"], second["count"]) == (1, 2)
-    assert datetime.fromisoformat(second["latest_created_at"]) > datetime.fromisoformat(
-        first["latest_created_at"]
+    assert datetime.fromisoformat(second["latest_received_at"]) > datetime.fromisoformat(
+        first["latest_received_at"]
     )
+    # a ticket n8n created BEFORE the newest one, but that reached the web only now: n8n's `created_at` would hide it
+    world.put(created_at=_at(5), received_at=_at(200))
+    third = world.get("tier2", f"{REVIEWS}/count").json()
+    assert third["count"] == 3
+    assert datetime.fromisoformat(third["latest_received_at"]) == _at(200)
+    assert datetime.fromisoformat(third["latest_received_at"]) > datetime.fromisoformat(
+        second["latest_received_at"]
+    )
+    assert "latest_created_at" not in third and list(third) == ["count", "latest_received_at"]
+
+
+def test_the_count_looks_at_received_at_not_created_at(world):
+    world.put(created_at=_at(500), received_at=_at(10))
+    body = world.get("tier2", f"{REVIEWS}/count").json()
+    assert datetime.fromisoformat(body["latest_received_at"]) == _at(10)
+
+
+def test_received_at_is_served_on_the_review_after_last_sent_at(world):
+    review_id = world.put(created_at=_at(1), received_at=_at(77))
+    body = world.get("tier2", f"{REVIEWS}/{review_id}").json()
+    assert datetime.fromisoformat(body["received_at"]) == _at(77)
+    assert body["received_at"].endswith("+00:00")
+    keys = list(body)
+    assert (
+        keys.index("last_sent_at") + 1 == keys.index("received_at") == keys.index("updated_at") - 1
+    )
+    row = world.get("tier2", REVIEWS).json()["rows"][0]
+    assert row["received_at"] == body["received_at"]
 
 
 def test_count_is_a_route_not_an_id(world):

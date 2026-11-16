@@ -125,10 +125,12 @@ _SERVED_NAMES = (
     "action_type", "action_text", "action_target", "action_via", "action_agent",
     "host", "agent_id", "user_name", "src_ip", "domain", "scenario_id", "scenario_name", "score", "note",
     "buttons", "created_at", "auto_expire_at", "remind_every_minutes", "next_remind_at",
-    "decided_by", "decided_at", "result", "last_error", "locked_by", "locked_at", "last_sent_at", "updated_at",
+    "decided_by", "decided_at", "result", "last_error", "locked_by", "locked_at", "last_sent_at", "received_at",
+    "updated_at",
 )  # fmt: skip
 _TIME_NAMES = (
-    "created_at", "auto_expire_at", "next_remind_at", "decided_at", "locked_at", "last_sent_at", "updated_at",
+    "created_at", "auto_expire_at", "next_remind_at", "decided_at", "locked_at", "last_sent_at", "received_at",
+    "updated_at",
 )  # fmt: skip
 
 #: The table with the effective status worked out: a stale lock is served as the state the row had.
@@ -146,7 +148,7 @@ _SERVED_SQL = """
   r.buttons, r.created_at, r.auto_expire_at, r.remind_every_minutes, r.next_remind_at,
   r.decided_by, r.decided_at, r.result, r.last_error,
   CASE WHEN r.locked THEN r.locked_by END, CASE WHEN r.locked THEN r.locked_at END,
-  r.last_sent_at, r.updated_at
+  r.last_sent_at, r.received_at, r.updated_at
 """
 
 
@@ -311,9 +313,11 @@ def list_reviews(
 
 
 def count_reviews(conn: psycopg.Connection, statuses: tuple[str, ...]) -> tuple[int, str | None]:
-    """`(count, latest created_at)` over the REVIEWS (never the notices) in these effective states."""
+    """`(count, latest received_at)` over the REVIEWS (never the notices) in these effective states. `received_at` is the web's
+    own clock when it first stored a ticket: n8n's `created_at` can be older than a ticket already shown when a delivery is late.
+    """
     count, latest = conn.execute(
-        f"SELECT count(*), max(r.created_at) FROM ({_BASE}) r "
+        f"SELECT count(*), max(r.received_at) FROM ({_BASE}) r "
         "WHERE r.kind = 'review' AND r.eff_status = ANY(%s)",
         (list(statuses),),
     ).fetchone()

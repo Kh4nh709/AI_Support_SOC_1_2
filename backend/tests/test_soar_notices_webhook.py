@@ -462,6 +462,40 @@ def test_an_update_that_leaves_created_at_out_keeps_the_stored_one(world):
     assert world.row(first["id"])["created_at"] == before
 
 
+def test_received_at_is_the_webs_clock_at_the_first_insert_and_no_update_moves_it(world):
+    first = data.review()
+    before = datetime.now(UTC)
+    world.post(first)
+    after = datetime.now(UTC)
+    received = world.row(first["id"])["received_at"]
+    assert (
+        before - timedelta(seconds=5)
+        <= datetime.fromisoformat(received)
+        <= after + timedelta(seconds=5)
+    )
+    assert (
+        datetime.fromisoformat(received) > data.T0
+    )  # the web's clock, not n8n's `created_at` or `sent_at`
+    for body in (
+        data.review(id=first["id"], event="updated", sent_at=_at(30), status="kept"),
+        data.review(id=first["id"], event="reminder", sent_at=_at(60)),
+        data.review(id=first["id"], sent_at=_at(1)),  # stale, ignored
+    ):
+        world.post(body)
+        assert world.row(first["id"])["received_at"] == received
+
+
+def test_a_ticket_delivered_late_with_an_older_created_at_is_received_later(world):
+    """What the page's new-ticket signal rests on: `received_at` follows delivery, not n8n's `created_at`."""
+    newer = data.review(created_at=_at(0))
+    older = data.review(created_at=data.iso(data.T0 - timedelta(hours=3)))
+    world.post(newer)
+    world.post(older)  # created three hours earlier, delivered after
+    one, two = world.row(newer["id"]), world.row(older["id"])
+    assert datetime.fromisoformat(two["created_at"]) < datetime.fromisoformat(one["created_at"])
+    assert datetime.fromisoformat(two["received_at"]) >= datetime.fromisoformat(one["received_at"])
+
+
 def test_an_update_leaves_the_webs_own_last_error_alone(world):
     first = data.review()
     world.post(first)
