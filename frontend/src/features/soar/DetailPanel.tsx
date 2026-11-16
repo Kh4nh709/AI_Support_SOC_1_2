@@ -14,7 +14,7 @@ import {
   type SoarReviewDetail,
 } from "../../api/soar";
 import { DataTable, type Column } from "../../components/DataTable";
-import { visible } from "../admin/auditSummary";
+import { visible } from "../../visibleText";
 import { KeyValueGrid, type KeyValueItem } from "../../components/KeyValueGrid";
 import { formatDateTime, formatTime } from "../../format";
 import { S, labelOf } from "../../strings";

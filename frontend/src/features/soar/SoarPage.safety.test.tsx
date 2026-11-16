@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { setupServer } from "msw/node";
 import { afterEach } from "vitest";
 import { S } from "../../strings";
-import { visible } from "../admin/auditSummary";
+import { visible } from "../../visibleText";
 import { detailOf, notice, review } from "./fixtures";
 import { fake, renderSoar, serve } from "./testkit";
 
