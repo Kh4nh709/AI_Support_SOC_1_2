@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { S } from "../../strings";
 import {
+  closeSignalAudio,
   movedForward,
   notificationState,
   signalNewTicket,
@@ -72,7 +73,11 @@ beforeEach(() => {
   vi.stubGlobal("AudioContext", FakeAudioContext);
   vi.stubGlobal("Notification", FakeNotification);
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  // the one audio context of the module belongs to no test: let it go before the next one stubs its own
+  closeSignalAudio();
+  vi.unstubAllGlobals();
+});
 
 describe("movedForward", () => {
   it("is true only when the newest ticket is newer than the one last seen", () => {
@@ -99,7 +104,7 @@ describe("movedForward", () => {
 });
 
 describe("signalNewTicket", () => {
-  it("does nothing while the switch is off: no tone, no notification, no audio context", () => {
+  it("does nothing while the switch is off: no tone, no notification, and no audio context is ever made", () => {
     signalNewTicket(2);
     expect(FakeAudioContext.made).toEqual([]);
     expect(FakeNotification.shown).toEqual([]);
@@ -123,9 +128,9 @@ describe("signalNewTicket", () => {
     for (const permission of ["denied", "default"]) {
       FakeNotification.permission = permission;
       FakeNotification.shown = [];
-      FakeAudioContext.made = [];
+      const before = tones().length;
       signalNewTicket(1);
-      expect(tones(), permission).toHaveLength(1);
+      expect(tones().length - before, permission).toBe(1);
       expect(FakeNotification.shown, permission).toEqual([]);
     }
   });
@@ -137,43 +142,116 @@ describe("signalNewTicket", () => {
     expect(tones()).toHaveLength(1);
   });
 
-  it("shows the notification alone, and does not throw, when there is no AudioContext or it cannot start", () => {
-    turnSignalOn();
+  it("shows the notification alone, and does not throw, when there is no AudioContext, or it cannot start", () => {
     vi.stubGlobal("AudioContext", undefined);
+    expect(() => turnSignalOn()).not.toThrow();
     expect(() => signalNewTicket(1)).not.toThrow();
     expect(FakeNotification.shown).toHaveLength(1);
     vi.stubGlobal("AudioContext", FakeAudioContext);
     FakeAudioContext.fail = true;
     expect(() => signalNewTicket(1)).not.toThrow();
     expect(FakeNotification.shown).toHaveLength(2);
+    expect(FakeAudioContext.made).toEqual([]);
   });
 
   it("does nothing, and does not throw, with neither API", () => {
-    turnSignalOn();
     vi.stubGlobal("Notification", undefined);
     vi.stubGlobal("AudioContext", undefined);
+    expect(() => turnSignalOn()).not.toThrow();
     expect(() => signalNewTicket(1)).not.toThrow();
   });
 
-  it("wakes a context the browser kept suspended, and closes it when the tone ends", () => {
+  it("goes quiet again at once when the switch is turned off, and lets its audio context go", () => {
     turnSignalOn();
+    const context = FakeAudioContext.made[0];
+    turnSignalOff();
+    expect(context?.close).toHaveBeenCalledTimes(1);
+    const before = FakeAudioContext.made.length;
+    signalNewTicket(1);
+    expect(FakeAudioContext.made).toHaveLength(before);
+    expect(FakeNotification.shown).toEqual([]);
+  });
+});
+
+// m5: one AudioContext for the whole signal, made (or woken) on the click that turns it on, which is a user gesture and the
+// one moment a browser lets a page start audio; every tone reuses it. It is let go when the switch is turned off and when the
+// header that owns the signal goes (the end of the session), never after each tone.
+describe("the one audio context", () => {
+  it("is made on the click that turns the signal on, and by nothing else", () => {
+    expect(FakeAudioContext.made).toEqual([]);
+    turnSignalOn();
+    expect(FakeAudioContext.made).toHaveLength(1);
+  });
+
+  it("is reused for every tone: two tones, one context, two oscillators, and it is not closed after a tone", () => {
+    turnSignalOn();
+    signalNewTicket(1);
+    signalNewTicket(2);
+    expect(FakeAudioContext.made).toHaveLength(1);
+    const [context] = FakeAudioContext.made;
+    expect(context?.oscillators).toHaveLength(2);
+    context?.oscillators[0]?.onended?.();
+    expect(context?.close).not.toHaveBeenCalled();
+  });
+
+  it("is woken when the browser kept it suspended: on the click, and again when a tone is due", () => {
     class Suspended extends FakeAudioContext {
       override state = "suspended";
     }
     vi.stubGlobal("AudioContext", Suspended);
-    signalNewTicket(1);
-    const context = FakeAudioContext.made[0];
+    turnSignalOn();
+    const [context] = FakeAudioContext.made;
     expect(context?.resume).toHaveBeenCalledTimes(1);
-    context?.oscillators[0]?.onended?.();
-    expect(context?.close).toHaveBeenCalledTimes(1);
+    signalNewTicket(1);
+    expect(context?.resume).toHaveBeenCalledTimes(2);
+    expect(context?.oscillators).toHaveLength(1);
   });
 
-  it("goes quiet again at once when the switch is turned off", () => {
+  it("swallows a failure to wake it, a rejected resume as well as a throw, and still shows the notification", async () => {
+    class Stubborn extends FakeAudioContext {
+      override state = "suspended";
+      override resume = vi.fn(async () => {
+        throw new Error("not allowed");
+      });
+    }
+    vi.stubGlobal("AudioContext", Stubborn);
     turnSignalOn();
-    turnSignalOff();
+    expect(() => signalNewTicket(1)).not.toThrow();
+    await Promise.resolve();
+    expect(FakeNotification.shown).toHaveLength(1);
+    class Throwing extends FakeAudioContext {
+      override createOscillator(): never {
+        throw new Error("no device");
+      }
+    }
+    closeSignalAudio();
+    vi.stubGlobal("AudioContext", Throwing);
+    turnSignalOn();
+    expect(() => signalNewTicket(2)).not.toThrow();
+    expect(FakeNotification.shown).toHaveLength(2);
+  });
+
+  it("is let go by closeSignalAudio, once, and a later tone makes a new one only if the switch is still on", () => {
+    turnSignalOn();
+    const [first] = FakeAudioContext.made;
+    closeSignalAudio();
+    expect(first?.close).toHaveBeenCalledTimes(1);
+    expect(() => closeSignalAudio()).not.toThrow();
+    expect(first?.close).toHaveBeenCalledTimes(1);
     signalNewTicket(1);
-    expect(FakeAudioContext.made).toEqual([]);
-    expect(FakeNotification.shown).toEqual([]);
+    expect(FakeAudioContext.made).toHaveLength(2);
+    turnSignalOff();
+    const after = FakeAudioContext.made.length;
+    signalNewTicket(1);
+    expect(FakeAudioContext.made).toHaveLength(after);
+  });
+
+  it("is made again if the browser closed it by itself", () => {
+    turnSignalOn();
+    const [first] = FakeAudioContext.made;
+    if (first !== undefined) first.state = "closed";
+    signalNewTicket(1);
+    expect(FakeAudioContext.made).toHaveLength(2);
   });
 });
 

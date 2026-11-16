@@ -6,7 +6,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { S } from "../../strings";
-import { movedForward, signalNewTicket } from "./signal";
+import { closeSignalAudio, movedForward, signalNewTicket } from "./signal";
 import { countQueryOptions } from "./soarQueries";
 
 export function SoarNavBadge() {
@@ -22,6 +22,9 @@ export function SoarNavBadge() {
       signalNewTicket(data.count);
     }
   }, [data]);
+
+  // The header owns the signal for as long as somebody is signed in: when it goes, its audio context goes with it.
+  useEffect(() => () => closeSignalAudio(), []);
 
   if (data === undefined || !(data.count > 0)) return null;
   // The number is for the eye; the words are for a screen reader, which would otherwise read a bare "3" after the name.

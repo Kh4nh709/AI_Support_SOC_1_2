@@ -48,29 +48,60 @@ export function movedForward(prev: string | null, next: string | null): boolean 
   return Number.isNaN(before) || now > before;
 }
 
+// One AudioContext for the whole signal. It is made, or woken, on the click that turns the signal on (a user gesture: the one
+// moment a browser lets a page start audio), reused for every tone, and let go when the switch is turned off or the header
+// that owns the signal goes (`closeSignalAudio`, the end of the session). It is never made while the switch is off, and a
+// failure to make or wake it is swallowed: the notification still goes.
+let context: AudioContext | null = null;
+
+/** The context of the signal: the one made already (woken if the browser suspended it), or a new one; null when it cannot be. */
+function audio(): AudioContext | null {
+  try {
+    if (context === null || context.state === "closed") {
+      const Context = audioCtor();
+      if (Context === null) return null;
+      context = new Context();
+    }
+    if (context.state === "suspended")
+      void Promise.resolve(context.resume()).catch(() => undefined);
+    return context;
+  } catch {
+    context = null;
+    return null;
+  }
+}
+
+/** Lets the audio context go, once; a later tone makes a new one if the switch is still on. */
+export function closeSignalAudio(): void {
+  const gone = context;
+  context = null;
+  if (gone === null || gone.state === "closed") return;
+  try {
+    void Promise.resolve(gone.close()).catch(() => undefined);
+  } catch {
+    // already gone
+  }
+}
+
 /** About a third of a second of a soft A5: short, and not a siren. */
 function playTone(): void {
   try {
-    const Context = audioCtor();
-    if (Context === null) return;
-    const context = new Context();
-    if (context.state === "suspended") void context.resume().catch(() => undefined);
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
+    const shared = audio();
+    if (shared === null) return;
+    const oscillator = shared.createOscillator();
+    const gain = shared.createGain();
     oscillator.type = "sine";
     oscillator.frequency.value = 880;
-    const t = context.currentTime;
+    const t = shared.currentTime;
     gain.gain.setValueAtTime(0.0001, t);
     gain.gain.exponentialRampToValueAtTime(0.2, t + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
     oscillator.connect(gain);
-    gain.connect(context.destination);
-    // A browser holds only a few contexts: this one is let go once the tone has ended.
-    oscillator.onended = () => void context.close().catch(() => undefined);
+    gain.connect(shared.destination);
     oscillator.start();
     oscillator.stop(t + 0.4);
   } catch {
-    // no device, or the browser refused to start audio without a gesture: the notification still goes
+    // no device, or the browser refused to start audio: the notification still goes
   }
 }
 
@@ -101,6 +132,8 @@ export function signalNewTicket(open: number): void {
  */
 export async function turnSignalOn(): Promise<void> {
   writeSignalOn(true);
+  // on the click: the one moment a browser lets this page start audio
+  audio();
   try {
     const Notify = notificationCtor();
     if (Notify === null || notificationState() !== "default") return;
@@ -112,4 +145,5 @@ export async function turnSignalOn(): Promise<void> {
 
 export function turnSignalOff(): void {
   writeSignalOn(false);
+  closeSignalAudio();
 }

@@ -15,7 +15,7 @@ import { S } from "../../strings";
 import { countOf } from "./fixtures";
 import { SOAR_COUNT_POLL_MS, countQueryOptions, soarKeys } from "./soarQueries";
 import { SoarNavBadge } from "./SoarNavBadge";
-import { turnSignalOn } from "./signal";
+import { closeSignalAudio, turnSignalOn } from "./signal";
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -29,13 +29,18 @@ const session: Session = {
   expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
 };
 
-const tone = vi.hoisted(() => ({ started: 0 }));
+const tone = vi.hoisted(() => ({ started: 0, made: 0, closed: 0 }));
 class FakeAudioContext {
   state = "running";
   currentTime = 0;
   destination = {};
+  constructor() {
+    tone.made += 1;
+  }
   resume = async () => {};
-  close = async () => {};
+  close = async () => {
+    tone.closed += 1;
+  };
   createGain() {
     return {
       gain: { setValueAtTime: () => {}, exponentialRampToValueAtTime: () => {} },
@@ -107,6 +112,8 @@ const link = () => screen.getByRole("link", { name: new RegExp(S.nav.soar) });
 beforeEach(() => {
   localStorage.clear();
   tone.started = 0;
+  tone.made = 0;
+  tone.closed = 0;
   FakeNotification.shown = [];
   FakeNotification.permission = "granted";
   vi.stubGlobal("AudioContext", FakeAudioContext);
@@ -118,6 +125,7 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 });
 afterEach(() => {
+  closeSignalAudio();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -250,6 +258,22 @@ describe("the new-ticket signal", () => {
     await waitFor(() => expect(link()).toHaveTextContent("2"));
     expect(tone.started).toBe(0);
     expect(FakeNotification.shown).toEqual([]);
+  });
+
+  it("makes one audio context for the signal, on the click, reuses it for every tone, and lets it go with the header", async () => {
+    await turnSignalOn();
+    expect(tone.made).toBe(1);
+    serveCounts(countOf(1, T1), countOf(2, T2), countOf(3, "2026-11-16T01:10:00+00:00"));
+    const view = renderBadge();
+    await waitFor(() => expect(link()).toHaveTextContent("1"));
+    await refetch();
+    await waitFor(() => expect(tone.started).toBe(1));
+    await refetch();
+    await waitFor(() => expect(tone.started).toBe(2));
+    expect(tone.made).toBe(1);
+    expect(tone.closed).toBe(0);
+    view.unmount();
+    expect(tone.closed).toBe(1);
   });
 
   it("plays the tone alone when the browser refused notifications", async () => {
