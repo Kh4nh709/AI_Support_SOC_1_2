@@ -200,6 +200,20 @@ LAB_U = "'00000000-1111-4000-8000-000000000001'"
 def LRUN(sfx, name="'r'", purpose="'test'", st="'2026-11-05 09:00+00'", en="'2026-11-05 11:00+00'"):
     return ("INSERT INTO lab_runs (run_id,name,purpose,starts_at,ends_at,created_by) VALUES "
             f"('00000000-0000-4000-8000-00000000f0{sfx}',{name},{purpose},{st},{en},{LAB_U});")
+# ── 025 · phiếu phản hồi SOAR (soar_reviews) và hai event `soar.*` ───────────────────────────
+# Tập đóng của kind/status, và một hàng 'processing' phải có đủ ba cột của khóa.
+def SREV(id_, kind="'review'", status="'open'", extra=""):
+    cols = "id,kind,status,created_at,last_sent_at,raw" + (extra and "," + extra.split("=")[0])
+    vals = f"'{id_}',{kind},{status},now(),now(),'{{}}'::jsonb" + (extra and "," + extra.split("=")[1])
+    return f"INSERT INTO soar_reviews ({cols}) VALUES ({vals});"
+case("025 · soar_reviews kind='ticket' (ngoài review|notice)", "ck_soar_reviews_kind",
+     SREV("S1", kind="'ticket'"))
+case("025 · soar_reviews status='processing ' (thừa dấu cách)", "ck_soar_reviews_status",
+     SREV("S2", status="'processing '"))
+case("025 · soar_reviews status='processing' không có khóa", "ck_soar_reviews_processing_lock",
+     SREV("S3", status="'processing'"))
+case("025 · soar_reviews prev_status='processing'", "ck_soar_reviews_prev_status",
+     SREV("S4", extra="prev_status='processing'"))
 case("024 · run lab có ends_at = starts_at", "ck_lab_runs_ends_after_starts",
      LRUN("01", st="'2026-11-05 09:00+00'", en="'2026-11-05 09:00+00'"))
 case("024 · run lab có ends_at < starts_at", "ck_lab_runs_ends_after_starts",
@@ -313,6 +327,12 @@ POSITIVE = [
     ("024 · audit lab.run_created và lab.labeled, actor_role='admin' CÓ actor_id",
      "INSERT INTO audit_events (event_type,subject_id,actor_role,actor_id) VALUES "
      f"('lab.run_created','r1','admin',{LAB_U}),('lab.labeled','a1','admin',{LAB_U});"),
+    ("025 · phiếu 'processing' có đủ locked_by, locked_at, prev_status",
+     "INSERT INTO soar_reviews (id,kind,status,created_at,last_sent_at,raw,locked_by,locked_at,prev_status) "
+     "VALUES ('S5','review','processing',now(),now(),'{}'::jsonb,'alice',now(),'open');"),
+    ("025 · audit soar.review_received (system, KHÔNG actor_id) và soar.review_decided (analyst CÓ actor_id)",
+     "INSERT INTO audit_events (event_type,subject_id,actor_role,actor_id) VALUES "
+     f"('soar.review_received','K7QM2XHP','system',NULL),('soar.review_decided','K7QM2XHP','analyst',{LAB_U});"),
     ("M4 · auto_closed có closed_at, sealed_at NULL (cụm còn hút)",
      ins(90, status="'auto_closed'", closed_at="now()")),
     ("D-C5 · escalated_tier2 không seal",

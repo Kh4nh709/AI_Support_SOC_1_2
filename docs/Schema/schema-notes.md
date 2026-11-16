@@ -862,6 +862,29 @@ bằng `scripts/migrate.sh`.
 
 ---
 
+## 13 · Migration 025 — phiếu phản hồi SOAR trên web (đặc tả 2026-11-16, mục 6)
+
+Chủ sở hữu (16/11/2026) muốn phiếu review của SOAR (n8n) và hai nút của nó nằm trên web thay vì tin nhắn
+Telegram: n8n đẩy phiếu vào `POST /webhook/soar-notices`, analyst bấm nút trên trang "Phản hồi SOAR", backend gọi
+ngược n8n. Một bảng mới và một ràng buộc; không cột nào của bảng cũ đổi.
+
+| Đối tượng | Nội dung |
+|---|---|
+| `soar_reviews` | Một phiếu, khóa `id` là mã của chính n8n (review: 8 ký tự `[A-HJ-NP-Z2-9]`, notice: `N` + 12 ký tự; ổn định qua các lần gửi lại). Các cột là những trường n8n gửi, dàn phẳng (`case_id`, `case_number`, `action_*`, `scenario_*`, `buttons` jsonb, các mốc giờ), cộng phần web thêm: `locked_by`, `locked_at`, `prev_status` (khóa của web), `last_error`, `last_sent_at` (`sent_at` của thân mới nhất đã áp), `received_at` (đồng hồ của chính web lúc chèn dòng, không bao giờ đổi: `created_at` của n8n có thể cũ hơn một phiếu đã hiện khi gửi trễ, nên tín hiệu "có phiếu mới" dựa vào cột này), `raw` (thân đó đúng như n8n gửi), `updated_at` (đổi ở mọi lần ghi dòng: một lần đẩy, khóa, kết thúc) |
+| CHECK tập đóng | `kind` (`review`, `notice`), `status` (sáu trạng thái của n8n cộng `processing`, của riêng web, n8n không bao giờ gửi), `severity`, `action_type` (sáu loại), `action_via` (`pfsense`, `wazuh`), `prev_status` (sáu trạng thái của n8n: một khóa được nhả về trạng thái cũ, và trạng thái cũ không bao giờ là một khóa) |
+| `ck_soar_reviews_processing_lock` | Hàng `processing` phải có `locked_by`, `locked_at` và `prev_status`: ai giữ, từ lúc nào, và trạng thái để quay về. `prev_status` (cùng với `received_at`) là cột ngoài danh sách của Owner: một khóa quá hai phút được nhả về trạng thái hàng đã có, và chỉ hàng mới biết đó là trạng thái nào |
+| Index | `(status)`, `(created_at DESC)`, `(case_number)`: theo trạng thái, mới nhất trước, theo case |
+| `ck_audit_event_type` | 40 → 42 tên: `soar.review_received` (hệ thống: n8n đẩy phiếu), `soar.review_decided` (một người bấm nút) |
+| Quyền của `app_rw` | `soar_reviews`: SELECT, INSERT, UPDATE. Ứng dụng không bao giờ xóa phiếu: DELETE và TRUNCATE bị thu hồi |
+
+025 đứng trên 024: nó thay đúng CHECK mà 024 để lại và không đụng bảng nào khác. Không dòng cũ nào bị sửa hay xóa.
+
+Thử vi phạm: `backend/tests/test_migration_025.py` thử từng ràng buộc trên cơ sở dữ liệu thật (mọi tập đóng, ba cột của khóa,
+ba index, quyền của `app_rw`, 42 tên) và áp 025 lên cây ở 024 bằng `scripts/migrate.sh`, kể cả trên một cơ sở dữ liệu đã có một
+dòng audit cho mỗi một trong 40 tên cũ. `test_constraints.py` thêm 6 ca (4 âm, 2 dương).
+
+---
+
 ## 12 · Migration 022 — ① đổi tên `escalate` thành `true_positive` (DEC-213, P14-T01)
 
 Chủ sở hữu cho phép (03/11/2026, "cho phép đổi luôn"): ① trả lời **dứt khoát** `false_positive |
