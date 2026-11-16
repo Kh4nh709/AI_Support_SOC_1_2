@@ -128,7 +128,8 @@ The served review object (all routes):
   buttons: [{decision, label}], created_at, auto_expire_at, remind_every_minutes, next_remind_at,
   decided_by, decided_at, result, last_error, locked_by, locked_at, last_sent_at, received_at, updated_at,
   allowed_decisions: ["keep" | "undo" | "fp"],   // for THIS caller: valid for the state AND allowed for the role
-  strong_warning: bool }                          // action_type = isolate_host, or host is a domain controller
+  strong_warning: bool,                           // action_type = isolate_host, or host_critical
+  host_critical: bool }                           // host names a host of SOAR_AD_HOSTS
 ```
 
 - `status` as served is the **effective** status: a `processing` row whose `locked_at` is older than two
@@ -243,10 +244,10 @@ logs it):
 - **Menu**: a link "Phản hồi SOAR" in the header with a badge of the open reviews (the count route every
   30 s). A new ticket (a later `latest_received_at`) plays a short tone (WebAudio, no asset) and shows a
   browser Notification; permission is asked once, from a switch on the page that can also turn both off (the
-  choice is kept in `localStorage`, read and written inside try/catch). The repo's guard "no `localStorage`
-  in source" (ruling R5: the session token is never persisted) gets exactly one exception, the file
-  `features/soar/storage.ts`, pinned by tests: it names `localStorage` only in four fixed calls on two fixed
-  keys, its exports and its importers are listed, and what it stores is a flag and notice ids.
+  choice is kept per tab in `sessionStorage`, as the alert page's draft is, inside try/catch). A tab with no
+  stored choice signals when the browser already holds the notification permission, which the browser itself
+  remembers. The repo's guard "no `localStorage` in source" (ruling R5) stands unchanged: two review rounds
+  showed that an exception for one file cannot be pinned tightly enough by a source-text test.
 - **Table**: time, case #, scenario, host, target (`action_target`), action, score (red ≥ 70, orange ≥ 40,
   yellow < 40; the number is always printed, colour is never the only carrier), status, and a "GIẢ LẬP" tag
   when `simulated`. The list refetches every 20 s (no WebSocket).
@@ -268,7 +269,7 @@ logs it):
   past.
 - **Notices** (`kind=notice`): a line per notice above the table, coloured by `severity` (error red,
   warning orange, info grey) with the word of the severity, each dismissible (dismissed ids kept in
-  `localStorage`); the filter "Thông báo" lists them all.
+  `sessionStorage`, for the tab's session); the filter "Thông báo" lists them all.
 - **Filters**: Đang mở (`open`, `processing`) · Đã xử lý (`kept`, `undone`, `false_positive`) · Hết hạn
   (`expired`) · Thông báo (`kind=notice`); a search box for case #, IP, host.
 - **Detail panel**: every field, the history, who decided, `result`, `last_error`, and links to the alerts
