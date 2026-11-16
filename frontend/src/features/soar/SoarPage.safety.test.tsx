@@ -176,6 +176,111 @@ describe("the table", () => {
   });
 });
 
+describe("bidi and zero-width controls (U+200B-200F, 202A-202E, 2060-2069, FEFF)", () => {
+  // a label wrapped in a right-to-left override and a zero-width space would read reversed, or hide a letter
+  const wrap = (text: string) => `‮${text}​⁦`;
+  const CONTROL = /[​-‏‪-‮⁠-⁩﻿]/;
+  const noControl = () => expect(document.body.innerHTML).not.toMatch(CONTROL);
+
+  it("never reaches the table, the buttons, the notices, the dialog, the toast or an error line, in text or in an attribute", async () => {
+    const row = review({
+      title: wrap("Tiêu đề"),
+      host: wrap("host-1"),
+      action_text: wrap("Chặn IP 1.2.3.4"),
+      action_target: wrap("1.2.3.4"),
+      scenario_name: wrap("Quét cổng"),
+      note: wrap("ghi chú"),
+      last_error: wrap("lỗi cũ"),
+      buttons: [
+        { decision: "keep", label: wrap("Giữ chặn") },
+        { decision: "undo", label: wrap("Gỡ chặn") },
+      ],
+      strong_warning: true,
+    });
+    const state = fake({
+      rows: [row],
+      notices: [
+        notice({ id: "N00000000001", title: wrap("Thông báo thử"), note: wrap("nội dung") }),
+      ],
+    });
+    state.decision = () => ({
+      outcome: "failed",
+      message: wrap("GỠ THẤT BẠI: thử lại"),
+      review: { ...row, updated_at: "2026-11-13T14:41:10+00:00" },
+    });
+    serve(server, state);
+    renderSoar();
+    const tr = (
+      await screen.findByRole("button", { name: S.soar.detail.open("K7QM2XHP") })
+    ).closest("tr") as HTMLElement;
+    // read as the plain text it should be
+    expect(within(tr).getByText("host-1")).toBeInTheDocument();
+    expect(within(tr).getByText("Chặn IP 1.2.3.4")).toBeInTheDocument();
+    expect(within(tr).getByRole("button", { name: "Giữ chặn" })).toBeInTheDocument();
+    expect(await screen.findByText("Thông báo thử")).toBeInTheDocument();
+    expect(within(tr).getByText("Lỗi gần nhất: lỗi cũ")).toBeInTheDocument();
+    noControl();
+    // the dialog is made of the row, so it is clean too
+    await userEvent.click(within(tr).getByRole("button", { name: "Gỡ chặn" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Phiếu K7QM2XHP: Chặn IP 1.2.3.4");
+    noControl();
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: S.soar.dialog.understand }));
+    await userEvent.click(within(dialog).getByRole("button", { name: S.soar.dialog.confirm.undo }));
+    // the message of n8n, on the failed line
+    expect(await within(tr).findByText("GỠ THẤT BẠI: thử lại")).toBeInTheDocument();
+    noControl();
+  });
+
+  it("never reaches the detail panel: its fields, history, raw body and alerts", async () => {
+    const state = fake({ rows: [review({ title: wrap("Tiêu đề") })] });
+    state.detail = () =>
+      detailOf({
+        title: wrap("Tiêu đề"),
+        result: wrap("kết quả"),
+        raw: { title: wrap("gốc"), nested: [wrap("x")] },
+        history: [
+          {
+            at: "2026-11-13T14:45:00+00:00",
+            event: "soar.review_decided",
+            actor: wrap("an"),
+            actor_role: "tier2",
+            payload: {
+              decision: "undo",
+              note: wrap("ghi chú"),
+              message: wrap("xong"),
+              outcome: "ok",
+            },
+          },
+        ],
+        related_alerts: [
+          {
+            alert_id: "alert-1",
+            alert_time: "2026-11-13T14:30:00+00:00",
+            agent_name: wrap("agent-1"),
+            description: wrap("Mô tả 1"),
+            severity: "high",
+            status: "queued_tier1",
+            occurrence_count: 1,
+          },
+        ],
+        related_total: 1,
+      });
+    serve(server, state);
+    renderSoar();
+    await userEvent.click(
+      await screen.findByRole("button", { name: S.soar.detail.open("K7QM2XHP") }),
+    );
+    const panel = await screen.findByRole("region", { name: S.soar.detail.title("K7QM2XHP") });
+    await within(panel).findByRole("link", { name: "Mô tả 1" });
+    expect(within(panel).getByText("Ghi chú: ghi chú")).toBeInTheDocument();
+    expect(panel.querySelector("details pre")?.textContent).toBe(
+      JSON.stringify({ title: "gốc", nested: ["x"] }, null, 2),
+    );
+    noControl();
+  });
+});
+
 describe("an id that is a name of the prototype chain", () => {
   it("draws its row, its buttons and its detail like any other, and no state leaks from the prototype", async () => {
     serve(server, fake({ rows: [review({ id: "__proto__" }), review({ id: "constructor" })] }));

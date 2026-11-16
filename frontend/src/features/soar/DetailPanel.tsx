@@ -17,7 +17,7 @@ import { DataTable, type Column } from "../../components/DataTable";
 import { KeyValueGrid, type KeyValueItem } from "../../components/KeyValueGrid";
 import { formatDateTime, formatTime } from "../../format";
 import { S, labelOf } from "../../strings";
-import { actionTextOf, statusText } from "./model";
+import { actionTextOf, cleanDeep, statusText } from "./model";
 import { SOAR_LIST_POLL_MS, soarKeys } from "./soarQueries";
 
 const D = S.soar.detail;
@@ -285,7 +285,7 @@ export function DetailPanel({ id, onClose }: { id: string; onClose: () => void }
   const box = useRef<HTMLElement>(null);
   const query = useQuery({
     queryKey: soarKeys.detail(id),
-    queryFn: ({ signal }) => fetchSoarReview(id, signal),
+    queryFn: ({ signal }) => fetchSoarReview(id, signal).then((answer) => cleanDeep(answer)),
     refetchInterval: SOAR_LIST_POLL_MS,
   });
   // The focus goes to the panel when it opens or moves to another ticket: the person asked for it.

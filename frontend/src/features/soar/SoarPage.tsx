@@ -11,6 +11,7 @@ import {
   fetchSoarReviews,
   SOAR_PAGE_SIZE,
   type SoarDecision,
+  type SoarListResponse,
   type SoarReview,
 } from "../../api/soar";
 import { useAuth } from "../../auth/AuthProvider";
@@ -18,6 +19,7 @@ import { DataTable } from "../../components/DataTable";
 import { Toast } from "../../components/Toast";
 import { S } from "../../strings";
 import { SoarClock } from "./Clock";
+import { cleanDeep } from "./model";
 import { DecisionDialog, type DialogDecision } from "./DecisionDialog";
 import { DetailPanel } from "./DetailPanel";
 import { NoticeStrip } from "./Notices";
@@ -39,17 +41,19 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
   const { session } = useAuth();
   const decisions = useDecisions();
 
-  const query = useQuery({
+  const query = useQuery<SoarListResponse>({
     queryKey: soarKeys.list(view.tab, view.q, view.page),
-    queryFn: ({ signal }) => fetchSoarReviews(listQueryOf(view), signal),
+    queryFn: ({ signal }) =>
+      fetchSoarReviews(listQueryOf(view), signal).then((answer) => cleanDeep(answer)),
     // The rows stay on screen (dimmed, aria-busy) while the next tab, search or page loads.
     placeholderData: keepPreviousData,
     refetchInterval: SOAR_LIST_POLL_MS,
   });
   // The notices above a review tab. On the notices tab the table itself lists them, so this is not asked.
-  const notices = useQuery({
+  const notices = useQuery<SoarListResponse>({
     queryKey: soarKeys.notices,
-    queryFn: ({ signal }) => fetchSoarReviews(NOTICE_FETCH, signal),
+    queryFn: ({ signal }) =>
+      fetchSoarReviews(NOTICE_FETCH, signal).then((answer) => cleanDeep(answer)),
     enabled: view.tab !== "notice",
     refetchInterval: SOAR_LIST_POLL_MS,
   });

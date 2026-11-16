@@ -4,7 +4,7 @@
 import { ApiError } from "../../api/client";
 import type { SoarDecisionAnswer, SoarReview } from "../../api/soar";
 import { S } from "../../strings";
-import { statusText } from "./model";
+import { cleanDeep, statusText } from "./model";
 
 /** One line under a row's buttons: an error (said at once to a screen reader) or a note (said politely). */
 export type RowLine = { tone: "error" | "note"; text: string };
@@ -71,7 +71,7 @@ export function failureOf(error: unknown): {
     case 409: {
       const detail = isRecord(error.detail) ? error.detail : {};
       const text = detail.reason === "locked" ? S.soar.result.locked : S.soar.result.invalidState;
-      const review = isReview(detail.review) ? detail.review : null;
+      const review = isReview(detail.review) ? cleanDeep(detail.review) : null;
       return { lines: line("note", text), review, refetch: review === null };
     }
     default:

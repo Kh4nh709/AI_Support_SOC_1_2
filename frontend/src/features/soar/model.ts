@@ -168,3 +168,32 @@ export function strongWarningOf(review: SoarReview, decision: "undo" | "fp"): st
       return W.undo.other(action, host);
   }
 }
+
+// Bidi and zero-width controls: U+200B-U+200F (zero-width space, joiners, direction marks), U+202A-U+202E (embeddings and
+// overrides), U+2060-U+2069 (word joiner, invisible operators, isolates) and U+FEFF. A label wrapped in a right-to-left
+// override reads reversed; a zero-width space hides a letter. Nothing n8n wrote is shown with them.
+const CONTROLS = /[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g;
+
+export const stripControls = (text: string): string => text.replace(CONTROLS, "");
+
+/** The keys whose text is an id of ours (a review, an alert of our own database): never touched, so every link still finds its row. */
+const IDS = new Set(["id", "alert_id"]);
+
+/**
+ * `value` with every string in it cleaned of bidi and zero-width controls, wherever it is (a field, a button label, a
+ * payload, the raw body, an alert of the case), applied once where the page reads what the API served. Ids and the shape
+ * are kept; what it is given is not changed.
+ */
+export function cleanDeep<T>(value: T): T {
+  const walk = (node: unknown): unknown => {
+    if (typeof node === "string") return stripControls(node);
+    if (Array.isArray(node)) return node.map(walk);
+    if (typeof node === "object" && node !== null) {
+      return Object.fromEntries(
+        Object.entries(node).map(([key, inner]) => [key, IDS.has(key) ? inner : walk(inner)]),
+      );
+    }
+    return node;
+  };
+  return walk(value) as T;
+}

@@ -12,7 +12,7 @@ import {
   type SoarReview,
   type SoarReviewDetail,
 } from "../../api/soar";
-import { statusText } from "./model";
+import { cleanDeep, statusText } from "./model";
 import { answerLines, failureOf, isReview, type RowLine } from "./outcome";
 import { soarKeys } from "./soarQueries";
 import { S } from "../../strings";
@@ -85,7 +85,7 @@ export function useDecisions(): Decisions {
         call.note === ""
           ? { decision: call.decision }
           : { decision: call.decision, note: call.note },
-      ),
+      ).then((answer) => cleanDeep(answer)),
   });
   const { mutateAsync } = mutation;
 

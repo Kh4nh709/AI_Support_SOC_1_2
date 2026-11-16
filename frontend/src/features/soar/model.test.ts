@@ -4,9 +4,11 @@ import {
   NOTE_MAX,
   actionTextOf,
   buttonsOf,
+  cleanDeep,
   formatCountdown,
   scoreTone,
   statusText,
+  stripControls,
   timersOf,
 } from "./model";
 import { notice, review } from "./fixtures";
@@ -215,5 +217,71 @@ describe("timersOf at fixed clocks", () => {
     const base = { action_type: "disable_user" as const, remind_every_minutes: 10 };
     expect(timersOf(review({ ...base, next_remind_at: null }), now).hold?.due).toBe(false);
     expect(timersOf(review({ ...base, next_remind_at: "soon" }), now).hold?.due).toBe(false);
+  });
+});
+
+describe("stripControls: bidi and zero-width controls never reach the page", () => {
+  const CONTROLS = [
+    ...Array.from({ length: 5 }, (_, i) => 0x200b + i), // U+200B-U+200F
+    ...Array.from({ length: 5 }, (_, i) => 0x202a + i), // U+202A-U+202E
+    ...Array.from({ length: 10 }, (_, i) => 0x2060 + i), // U+2060-U+2069
+    0xfeff,
+  ];
+
+  it.each(CONTROLS.map((code) => [code.toString(16).toUpperCase(), code] as const))(
+    "removes U+%s",
+    (_hex, code) => {
+      expect(stripControls(`a${String.fromCodePoint(code)}b`)).toBe("ab");
+    },
+  );
+
+  it("makes a reversed label plain, and leaves ordinary text alone", () => {
+    expect(stripControls("\u202Eetelet\u202C Giữ \u2066chặn\u2069")).toBe("etelet Giữ chặn");
+    expect(stripControls("Chặn IP 79.79.78.202 · pfSense ✅ Đã gỡ — #65")).toBe(
+      "Chặn IP 79.79.78.202 · pfSense ✅ Đã gỡ — #65",
+    );
+    expect(stripControls("")).toBe("");
+  });
+
+  it("does not touch the code points next to the ranges", () => {
+    for (const code of [0x200a, 0x2010, 0x2029, 0x202f, 0x205f, 0x206a, 0xfefe]) {
+      const text = `a${String.fromCodePoint(code)}b`;
+      expect(stripControls(text), code.toString(16)).toBe(text);
+    }
+  });
+});
+
+describe("cleanDeep: every text of what n8n sent, wherever it is", () => {
+  it("cleans the strings of nested objects and arrays, and keeps ids, numbers, nulls and the shape", () => {
+    const row = {
+      id: "K7QM2XHP",
+      title: "\u202Ex",
+      score: 50,
+      note: null,
+      simulated: false,
+      buttons: [{ decision: "keep", label: "\u200Bgiữ\u200F" }],
+      raw: { a: ["\u2066b\u2069", { c: "\uFEFFd" }] },
+      related_alerts: [{ alert_id: "a\u200Bb", description: "e\u202Ef" }],
+    };
+    expect(cleanDeep(row)).toEqual({
+      id: "K7QM2XHP",
+      title: "x",
+      score: 50,
+      note: null,
+      simulated: false,
+      buttons: [{ decision: "keep", label: "giữ" }],
+      raw: { a: ["b", { c: "d" }] },
+      // an alert id is a key of our own database: it is not touched, so its link still finds the alert
+      related_alerts: [{ alert_id: "a\u200Bb", description: "ef" }],
+    });
+  });
+
+  it("does not change what it is given, and returns what has no text as it is", () => {
+    const input = { title: "\u202Ex" };
+    cleanDeep(input);
+    expect(input.title).toBe("\u202Ex");
+    expect(cleanDeep(7)).toBe(7);
+    expect(cleanDeep(null)).toBeNull();
+    expect(cleanDeep(undefined)).toBeUndefined();
   });
 });
