@@ -85,7 +85,9 @@ Processing (one transaction, the row locked)
   left alone (the press in flight finishes normally). With any other status n8n has decided: the update is
   applied, the lock columns are cleared, and the decision request in flight then finds its compare-and-set
   does not match and answers with the row as it now is (section 4).
-- A text PostgreSQL cannot store (a NUL, an unpaired surrogate), in a value or a key, is a 400.
+- A text PostgreSQL cannot store (a NUL, an unpaired surrogate), in a value or a key, is a 400
+  (`body`/`invalid`); a body nested deeper than 32 levels is a 400 (`body`/`too_deep`). The three checks
+  (503 / 401 / 403) run before a database connection is opened.
 - An `updated` or `reminder` for an unknown `id` creates the row (`201`).
 - One exception to "every field replaces the stored one": `decided_by`, `decided_at` and `result` that arrive
   null or absent keep the stored value, so a push that does not repeat who decided cannot erase the web's
@@ -112,7 +114,10 @@ that time plus a few seconds whatever the server does, so a live call can never 
 | `409 {"ok": false, "status", "message"}` | already handled elsewhere | `conflict` |
 | `401`, `404`, `5xx`, a timeout, a network error, a body that is not this JSON, a `200 ok:true` whose `status` is not one of the three | temporary | `unavailable` |
 
-The client is its own module with an injected transport, so tests use a fake; it logs the outcome, the status
+The whole call — connect, headers, body — is bounded by the timeout: the client answers `unavailable` no later
+than the timeout plus 5 s whatever the server does (the ceiling of 100 keeps 100 + 5 + the lock and finish
+under the two minutes of a stale lock). n8n's `message` and `result` are cleaned (NUL removed, unpaired
+surrogates replaced) and cut at 2,000 characters. The client is its own module with an injected transport, so tests use a fake; it logs the outcome, the status
 code and the duration, never the secret, the URL's query or an exception text that could carry them. An empty
 `N8N_APPROVAL_SECRET`, or an `N8N_APPROVAL_URL` set to empty (an absent key takes the default), means "not configured": the decision route answers
 `503 {"detail": "soar approval not configured"}` before it locks anything.
@@ -135,9 +140,10 @@ The served review object (all routes):
 - `status` as served is the **effective** status: a `processing` row whose `locked_at` is older than two
   minutes is served with the status it had before the lock (and `locked_by`/`locked_at` null). Reads write
   nothing.
-- `strong_warning`: `action_type == "isolate_host"`, or `host` names a host of `SOAR_AD_HOSTS` (JSON list,
-  default `["AD-server"]`: the lab's domain controller). The comparison is on a normalised name: control,
-  zero-width and bidi characters and surrounding whitespace removed, a trailing dot removed, case folded;
+- `host_critical`: `host` names a host of `SOAR_AD_HOSTS` (JSON list, default `["AD-server"]`: the lab's
+  domain controller). `strong_warning` is exactly `action_type == "isolate_host"` or `host_critical`. The
+  comparison is on a normalised name: control, zero-width and bidi characters and surrounding whitespace
+  removed, NFKC, a trailing dot removed, case folded;
   the whole name or its first DNS label matches (`AD-server.home.arpa` is the domain controller).
 - `locked_by` and `decided_by` are usernames. `created_at` is never null (section 2). `updated_at` moves on
   every write of the row: a webhook update, the lock, the finish. A notice and a `processing` row have
@@ -162,6 +168,9 @@ oldest first among them, with `history_truncated` true when older ones were left
 
 `POST /api/soar/reviews/{id}/decision` — body `{"decision": "keep|undo|fp", "note": "<optional, ≤ 500>"}`.
 
+0. The body is at most 8 KiB (`413`); a `note` with a NUL or an unpaired surrogate is a `422`. The route's
+   statements are bounded (`lock_timeout` 3 s, `statement_timeout` 5 s): a wait that long before the lock is
+   `503 {"detail": "busy"}` with `Retry-After: 2`.
 1. Role: `SOAR_ROLES_KEEP` (default `tier1,tier2,admin`), `SOAR_ROLES_UNDO` (`tier2,admin`), `SOAR_ROLES_FP`
    (`tier1,tier2,admin`). A role not allowed for the decision asked: `403`, with the `authz.denied` event the
    other routes write.
@@ -188,7 +197,8 @@ oldest first among them, with `history_truncated` true when older ones were left
      text: a press never leaves the lock behind.
 6. Answer `200 {"outcome": "ok|failed|unavailable|conflict", "message": "<text for the person>|null",
    "review": <the row as it now is>}`. HTTP errors are only the local ones (401, 403, 404, 409, 422, 503).
-7. One audit event per press that passed the role check (section 6).
+7. One audit event per press that reached a decision about the ticket: the six outcomes of section 6. A 404,
+   413, 422 or 503 writes none; a 403 writes `authz.denied`.
 
 Every route that changes something takes JSON only (`require_json_type`), as the repo's other routes do: with
 the Bearer token in `sessionStorage` and no cookie, that is the repo's CSRF rule.
@@ -226,8 +236,8 @@ Migration `docs/Schema/025_soar_reviews.sql` (run as the owner, after 024):
 
 Audit (`audit.events.write_event`, subject = the review id):
 
-- `soar.review_received`, actor `system`: `{event, kind, outcome: created|updated|ignored, reason, status,
-  sent_at}`.
+- `soar.review_received`, actor `system`: `{event, kind, outcome: created|updated|ignored, reason: stale|terminal|
+  decided, status, sent_at}`.
 - `soar.review_decided`, actor the person: `{actor_role, decision, note, outcome: ok|failed|unavailable|conflict|
   invalid_state|locked, status_before, status_after, message}`.
 - Both get a Vietnamese label on the admin audit page, as every event name has.
