@@ -64,6 +64,104 @@ Kết quả âm đó là dữ liệu nghiên cứu hợp lệ và sẽ được 
 - **Tiếng Việt** cho tài liệu và diễn giải; **tiếng Anh** cho toàn bộ code, tên định danh, comment và docstring.
 - TDD cho mọi code mới. Biên LLM luôn được stub trong test — không test nào gọi model thật.
 
+## Phản hồi SOAR
+
+Hệ thống gồm SIEM (Graylog) → SOAR (n8n) → AI Support SOC (repo này). SOAR **hành động trước**: khi có alert, n8n tự chặn IP trên pfSense, sinkhole domain, cô lập máy, khoá tài khoản AD, tắt `xp_cmdshell` hoặc kill tiến trình, rồi mở một **phiếu review** cho analyst trực. Trước đây phiếu là tin nhắn Telegram có hai nút; nay phiếu và các nút nằm trên web, trang **Phản hồi SOAR** (`/soar`, cả ba vai trò):
+
+1. n8n **đẩy** phiếu (và các thông báo `notice`) tới `POST /webhook/soar-notices` của backend.
+2. Analyst bấm nút trên trang: **giữ** (`keep`), **gỡ** (`undo`) hoặc **báo nhầm** (`fp`). Ai được bấm nút nào do cấu hình quyết định (`SOAR_ROLES_*`).
+3. Backend **gọi ngược** n8n (`N8N_APPROVAL_URL`, header `X-SOAR-Secret`) và n8n thực hiện. Kết quả (`ok`, `failed`, `unavailable`, `conflict`) hiện ngay trên dòng của phiếu; mỗi lần bấm có một dòng audit `soar.review_decided`, mỗi lần n8n đẩy có một dòng `soar.review_received`.
+
+Đặc tả đầy đủ: `docs/superpowers/specs/2026-11-16-soar-review-web-design.md`.
+
+### Cổng n8n phải gọi
+
+n8n phải gửi tới **cổng của chính `app`**, không phải cổng của UI: trial là `:8001` (live là `:8000`), tức `http://<máy chạy app>:8001/webhook/soar-notices`. **Không** dùng `:8081` (trial) hay `:8080` (live): nginx của UI chỉ chuyển tiếp `/api/`, nên `/webhook/...` ở đó là 404.
+
+### Cấu hình (`.env`, ghi vào `docs/runbook.md` mục *Environment keys*)
+
+| Khóa | Ý nghĩa | Mặc định |
+|---|---|---|
+| `SOAR_NOTICE_API_KEY` | khóa n8n gửi trong header `X-API-Key`; **bí mật**, chỉ nằm trong `.env`. Để trống → route trả `503` | trống |
+| `SOAR_NOTICE_IP_ALLOWLIST` | danh sách JSON các IP/CIDR được gửi, ví dụ `["79.79.79.14"]`; để trống → từ chối tất cả (`403`) | trống |
+| `N8N_APPROVAL_URL` | nơi backend gọi n8n khi có người bấm nút | `http://79.79.79.14:5678/webhook/soar-approval` |
+| `N8N_APPROVAL_SECRET` | giá trị header `X-SOAR-Secret` của lần gọi đó; **bí mật**. Trống (hoặc URL trống) → nút bấm trả `503 soar approval not configured`, chưa khoá phiếu nào | trống |
+| `N8N_APPROVAL_TIMEOUT_SECONDS` | chờ n8n tối đa bao lâu; từ `1` đến `100` (khoá quá hai phút được nhả ở lần bấm kế tiếp, nên một lần gọi đang chạy không được dài hơn) | `45` |
+| `SOAR_ROLES_KEEP` · `SOAR_ROLES_UNDO` · `SOAR_ROLES_FP` | vai trò được bấm từng nút (danh sách cách nhau bằng dấu phẩy của `tier1`, `tier2`, `admin`; vai trò lạ làm app không khởi động) | `tier1,tier2,admin` · `tier2,admin` · `tier1,tier2,admin` |
+| `SOAR_AD_HOSTS` | danh sách JSON tên máy (không phân biệt hoa thường) mà việc cô lập được cảnh báo mạnh trên trang: domain controller của lab | `["AD-server"]` |
+
+Đổi `.env` thì tạo lại container: `docker compose up -d --force-recreate app`.
+
+### Gọi thử `POST /webhook/soar-notices`
+
+Kiểm tra theo thứ tự: khoá rỗng `503` → thiếu/sai `X-API-Key` `401` (so sánh thời gian hằng, trước khi đọc thân) → IP ngoài danh sách `403` → thân quá `MAX_PAYLOAD_BYTES` `413` → thân sai `400 {"detail": {"errors": [{"field", "reason"}]}}` (liệt kê **mọi** lỗi). Thành công: `201 {"id", "created": true}` cho phiếu mới, `200` cho phiếu đã có (`{"created": false}`, hoặc thêm `"ignored": true, "reason": "stale"|"terminal"` khi thân cũ hơn bản đã áp, hoặc đòi mở lại một phiếu đã đóng). Thay `<KHÓA>` bằng giá trị của `SOAR_NOTICE_API_KEY` và `localhost:8001` bằng địa chỉ của app.
+
+Phiếu review `block_ip` (hai nút: giữ chặn, gỡ chặn):
+
+```bash
+curl -sS -X POST http://localhost:8001/webhook/soar-notices \
+  -H 'Content-Type: application/json' -H 'X-API-Key: <KHÓA>' \
+  -d '{
+  "schema_version": "1.0", "event": "created", "kind": "review", "id": "K7QM2XHP",
+  "sent_at": "2026-11-13T21:40:05.123+07:00", "status": "open", "severity": "info",
+  "title": "ĐÃ TỰ XỬ LÝ", "simulated": false,
+  "case": { "id": "~4096", "number": 65 },
+  "action": { "type": "block_ip", "text": "Chặn IP 79.79.78.202 trên pfSense", "target": "79.79.78.202", "via": "pfsense", "agent": null },
+  "host": "pfSense.home.arpa", "agent_id": "003", "src_ip": "79.79.78.202",
+  "scenario": { "id": "SC03", "name": "Quét cổng từ bên ngoài" }, "score": 50,
+  "note": "Đã chặn 79.79.78.202 trên pfSense, tự gỡ 22:40",
+  "created_at": "2026-11-13T21:40:03.000+07:00", "auto_expire_at": "2026-11-13T22:40:03.000+07:00",
+  "buttons": [ { "decision": "keep", "label": "✅ Giữ chặn" }, { "decision": "undo", "label": "↩️ Gỡ chặn IP" } ]
+}'
+```
+
+Phiếu review `kill_process` (giữ hoặc báo nhầm; một tiến trình đã kill không có nút gỡ):
+
+```bash
+curl -sS -X POST http://localhost:8001/webhook/soar-notices \
+  -H 'Content-Type: application/json' -H 'X-API-Key: <KHÓA>' \
+  -d '{
+  "schema_version": "1.0", "event": "created", "kind": "review", "id": "M4HT8WZC",
+  "sent_at": "2026-11-13T21:52:10.000+07:00", "status": "open", "severity": "warning",
+  "title": "ĐÃ KILL TIẾN TRÌNH",
+  "case": { "id": "~8192", "number": 71 },
+  "action": { "type": "kill_process", "text": "Kết thúc mimikatz.exe trên WIN-DC01", "target": "mimikatz.exe", "via": "wazuh", "agent": "WIN-DC01" },
+  "host": "WIN-DC01", "agent_id": "005", "scenario": { "id": "MW03", "name": "Mã độc trên endpoint" }, "score": 82,
+  "buttons": [ { "decision": "keep", "label": "✅ Giữ (đã kill)" }, { "decision": "fp", "label": "🚫 Báo nhầm" } ]
+}'
+```
+
+Thông báo `notice` (một dòng thông tin, không có nút; `status` luôn là `info`, id là `N` + 12 ký tự chữ, số, `_` hoặc `-`):
+
+```bash
+curl -sS -X POST http://localhost:8001/webhook/soar-notices \
+  -H 'Content-Type: application/json' -H 'X-API-Key: <KHÓA>' \
+  -d '{
+  "schema_version": "1.0", "event": "created", "kind": "notice", "id": "Nab12cd34ef56",
+  "sent_at": "2026-11-13T22:00:00.000+07:00", "status": "info", "severity": "warning",
+  "title": "SOAR TẠM DỪNG", "note": "pfSense không phản hồi, các hành động chặn IP được hoãn", "buttons": []
+}'
+```
+
+Gửi lại cùng `id` với `event` `updated` hoặc `reminder` để cập nhật (n8n là nguồn sự thật: mọi trường của thân mới thay trường đã lưu). `id` phải ổn định qua các lần gửi lại; `sent_at` cũ hơn bản đã áp bị bỏ qua; phiếu đã `undone`, `false_positive` hoặc `expired` không bị mở lại bởi thân `open`.
+
+### Thử trang khi chưa có phía n8n: n8n giả lập
+
+`scripts/mock_n8n_approval.py` (chỉ dùng thư viện chuẩn) đứng thay `soar-approval` của n8n: nó chỉ trả lời, không làm gì cả. Chế độ chọn bằng `--mode`:
+
+| `--mode` | n8n giả lập trả lời |
+|---|---|
+| `ok` (mặc định) | `200 {"ok": true, "status": "kept"\|"undone"\|"false_positive", ...}`: thành công |
+| `fail` | `200 {"ok": false, ...}`: thao tác thất bại, phiếu giữ nguyên trạng thái |
+| `conflict` | `409 {"ok": false, "status": "undone", ...}`: phiếu đã được xử lý ở nơi khác |
+| `slow` | chờ `--slow-seconds` (mặc định 60 giây) rồi trả lời như `ok`: thử hạn chờ |
+
+```bash
+python3 scripts/mock_n8n_approval.py --mode ok --secret thu-nghiem --port 5678
+```
+
+Rồi trong `.env`: `N8N_APPROVAL_URL=http://127.0.0.1:5678/webhook/soar-approval` và `N8N_APPROVAL_SECRET=thu-nghiem` (app chạy trong container thì dùng địa chỉ máy chủ mà container thấy được, và chạy n8n giả lập với `--host 0.0.0.0`), tạo lại container `app`, đẩy một phiếu bằng các lệnh `curl` ở trên và bấm nút trên `/soar`. Dùng khoá thử nghiệm, không dùng khoá thật; dừng n8n giả lập bằng Ctrl+C.
+
 ## Đổi nhà cung cấp LLM (provider)
 
 Biên LLM là một endpoint **tương thích OpenAI** (`backend/app/llm/adapter.py`). Đổi provider hoàn toàn qua `.env`, **không sửa code**:

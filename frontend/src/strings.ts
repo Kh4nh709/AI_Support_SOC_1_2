@@ -1767,7 +1767,7 @@ export const S = {
       system: "Hệ thống và job",
     } satisfies Record<AuditGroup, string>,
 
-    // One label for each of the 40 names of `audit/events.py`'s EVENT_TYPES, read through `labelOf`. The
+    // One label for each of the 42 names of `audit/events.py`'s EVENT_TYPES, read through `labelOf`. The
     // canvas gives nine; the rest follow its wording. An event with more than one use says the common part
     // (`admin.user_updated` is a role change, a deactivation, a reset and an unlock): the summary line of the
     // audit page says which.
@@ -1812,6 +1812,8 @@ export const S = {
       "case.archived": "Lưu trữ case (dọn hàng đợi)",
       "lab.run_created": "Tạo lần chạy lab",
       "lab.labeled": "Gán nhãn lab",
+      "soar.review_received": "Nhận phiếu SOAR",
+      "soar.review_decided": "Quyết định phiếu SOAR",
     },
 
     // The audit page (P11-T17, spec §4.7): `/admin/audit`, the canvas's `AdminAudit` and the "AUDIT" cards of

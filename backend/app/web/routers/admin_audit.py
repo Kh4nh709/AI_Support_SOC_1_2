@@ -234,8 +234,9 @@ GROUPS: dict[str, tuple[str, ...]] = {
         # INT-T03 (DEC-212): the old queue closed out without review - a system act, not a decision
         "alert.archived",
         "case.archived",
-        # 025 (SOAR review tickets): a ticket n8n pushed (the system's act, like `alert.received`), and a
-        # button a person pressed on it (a decision, like `tier1.decided`).
+        # 025, the SOAR review tickets: a ticket n8n pushed, which is the system's act like `alert.received`;
+        # and a button a person pressed on it, which is a decision like `tier1.decided`. No comma follows a
+        # closing parenthesis here: the frontend test reads this table with a regular expression that stops at one.
         "soar.review_received",
         "soar.review_decided",
     ),
