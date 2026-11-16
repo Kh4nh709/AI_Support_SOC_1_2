@@ -322,6 +322,14 @@ test("scenario 3: a role change ends the user's open session and live socket", a
   try {
     const own = await context.newPage();
     await trackSockets(own);
+    // This scenario proves that the SERVER disconnects the live socket of a user whose role changed (4401, from its own check each
+    // minute). The header of every signed-in page asks the API for the count of open SOAR tickets every 30 s for the badge of the
+    // link "Phản hồi SOAR": once the token is dead that call is refused with a 401, the page ends its own session and closes its own
+    // socket (1000) before the server's check, and the proof would not be exercised. So, for this page only, the browser answers
+    // that route itself, before the login: the server's check is again the only thing that can end this session.
+    await own.route("**/api/soar/reviews/count", (route) =>
+      route.fulfill({ json: { count: 0, latest_received_at: null } }),
+    );
     await loginAs(own, { username: NEW_USER }, /\/queue$/);
     await expect(own.getByRole("status").filter({ hasText: S.live.on })).toBeVisible();
     expect((await socketsSeen(own)).opened).toBeGreaterThan(0);
@@ -349,22 +357,15 @@ test("scenario 3: a role change ends the user's open session and live socket", a
     ).toBe("t");
     expect(eventCount("admin.user_updated", made.newUserId)).toBeGreaterThanOrEqual(2);
 
-    // The socket is closed, and the page, which did nothing meanwhile, is on the login page. Either of two things ends the
-    // session first, and either ends the socket: the server (4401, "sign in again": it re-checks the token each minute), or the
-    // page itself, which asks the API for the count of open SOAR tickets every 30 s for the badge of its header: that call is
-    // refused with a 401 now that the token is dead, the session ends there, and the page closes the socket normally (1000).
-    // Which comes first depends on the minute of the server's check against the poll of the page.
+    // The socket is closed by the server (4401, "sign in again": it re-checks the token each minute), and the
+    // page, which did nothing meanwhile, is on the login page.
     await expect
-      .poll(
-        async () => (await socketsSeen(own)).closed.some((code) => code === 4401 || code === 1000),
-        {
-          message:
-            "the live socket of the user was closed (4401 by the server, or 1000 by the page that met a 401)",
-          timeout: 85_000,
-          intervals: [1_000],
-        },
-      )
-      .toBe(true);
+      .poll(async () => (await socketsSeen(own)).closed, {
+        message: "the server closed the user's live socket with 4401",
+        timeout: 85_000,
+        intervals: [1_000],
+      })
+      .toContain(4401);
     console.log(
       `role change: the live socket was closed ${Math.round((Date.now() - changed) / 1000)} s later`,
     );
