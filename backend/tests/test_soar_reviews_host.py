@@ -32,12 +32,12 @@ def _warns(host: str | None, *, action_type: str | None = "block_ip", cfg: Confi
         "AD-server.home.arpa",  # the first label is the domain controller
         "ad-server.HOME.arpa.",
         "AD\u200b-server",  # zero-width space inside
-        "A‌D‍-ser⁠ver",  # zero-width non-joiner, joiner, word joiner
-        "﻿AD-server",  # a byte-order mark
-        "AD-server‮",  # a right-to-left override after it
-        "‪AD‬-server",  # left-to-right embedding and its end
-        "⁦AD-server⁩",  # isolates
-        "AD‎-‏server",  # the two direction marks
+        "A\u200cD\u200d-ser\u2060ver",  # zero-width non-joiner, joiner, word joiner
+        "\ufeffAD-server",  # a byte-order mark
+        "AD-server\u202e",  # a right-to-left override after it
+        "\u202aAD\u202c-server",  # left-to-right embedding and its end
+        "\u2066AD-server\u2069",  # isolates
+        "AD\u200e-\u200fserver",  # the two direction marks
         "AD-ser\x07ver",  # a control character
         "AD-server\t",
         "  AD-server  ",
@@ -113,7 +113,7 @@ def test_an_empty_list_warns_for_isolations_only():
     [
         ("AD-server", "ad-server"),
         ("  Ad-Server.  ", "ad-server"),
-        ("AD\u200b-‮server⁩", "ad-server"),
+        ("AD\u200b-\u202eserver\u2069", "ad-server"),
         ("ǅ.LAB", "ǆ.lab"),  # case folded, not only lower-cased
         ("STRASSE", "strasse"),
         ("straße", "strasse"),
