@@ -84,7 +84,7 @@ n8n phải gửi tới **cổng của chính `app`**, không phải cổng của
 |---|---|---|
 | `SOAR_NOTICE_API_KEY` | khóa n8n gửi trong header `X-API-Key`; **bí mật**, chỉ nằm trong `.env`. Để trống → route trả `503` | trống |
 | `SOAR_NOTICE_IP_ALLOWLIST` | danh sách JSON các IP/CIDR được gửi, ví dụ `["79.79.79.14"]`; để trống → từ chối tất cả (`403`) | trống |
-| `N8N_APPROVAL_URL` | nơi backend gọi n8n khi có người bấm nút | `http://79.79.79.14:5678/webhook/soar-approval` |
+| `N8N_APPROVAL_URL` | nơi backend gọi n8n khi có người bấm nút. **Không có dòng này** → dùng mặc định; **có dòng nhưng để trống** (`N8N_APPROVAL_URL=`) → coi như chưa cấu hình và nút bấm trả `503` (cách tắt việc gọi n8n mà không xoá khoá) | `http://79.79.79.14:5678/webhook/soar-approval` |
 | `N8N_APPROVAL_SECRET` | giá trị header `X-SOAR-Secret` của lần gọi đó; **bí mật**. Trống (hoặc URL trống) → nút bấm trả `503 soar approval not configured`, chưa khoá phiếu nào | trống |
 | `N8N_APPROVAL_TIMEOUT_SECONDS` | chờ n8n tối đa bao lâu; từ `1` đến `100` (khoá quá hai phút được nhả ở lần bấm kế tiếp, nên một lần gọi đang chạy không được dài hơn) | `45` |
 | `SOAR_ROLES_KEEP` · `SOAR_ROLES_UNDO` · `SOAR_ROLES_FP` | vai trò được bấm từng nút (danh sách cách nhau bằng dấu phẩy của `tier1`, `tier2`, `admin`; vai trò lạ làm app không khởi động) | `tier1,tier2,admin` · `tier2,admin` · `tier1,tier2,admin` |

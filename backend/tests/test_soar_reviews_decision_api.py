@@ -30,7 +30,7 @@ from typing import Any
 import httpx
 import psycopg
 import pytest
-from app.infra import n8n_approval
+from app.infra import config, n8n_approval
 from app.soar import review_notice, reviews
 from app.web import main
 
@@ -348,6 +348,23 @@ def test_a_409_carries_the_ticket_as_the_get_serves_it_for_this_caller(world):
 @pytest.mark.parametrize("field", ["N8N_APPROVAL_URL", "N8N_APPROVAL_SECRET"])
 def test_without_the_address_or_the_secret_the_route_is_503_before_it_locks_anything(world, field):
     world.cfg = replace(world.cfg, **{field: ""})
+    review_id = world.put()
+    before = world.row(review_id)
+    response = _decide(world, "tier2", review_id, "keep")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "soar approval not configured"}
+    _untouched(world, review_id, before)
+    assert _decided(world, review_id) == []
+
+
+def test_i2_a_blank_url_through_the_real_loader_is_503_and_nothing_is_sent(world, tmp_path):
+    """I2: the test above builds `Config` by hand, which is vacuous for what the loader does with `N8N_APPROVAL_URL=`: a blank URL
+    used to load the lab's default, so the route counted as configured and real decisions were sent.
+    """
+    env = tmp_path / ".env"
+    env.write_text("N8N_APPROVAL_URL=\nN8N_APPROVAL_SECRET=s3cret-value\n", "utf-8")
+    world.cfg = config.load(env_file=env)
+    assert world.cfg.N8N_APPROVAL_URL == "" and world.cfg.N8N_APPROVAL_SECRET == "s3cret-value"
     review_id = world.put()
     before = world.row(review_id)
     response = _decide(world, "tier2", review_id, "keep")
