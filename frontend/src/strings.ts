@@ -2808,6 +2808,8 @@ export const S = {
     signal: {
       label: "Báo khi có phiếu mới",
       hint: "Phát âm báo và hiện thông báo của trình duyệt khi có phiếu mới.",
+      // The choice is the tab's own; what the browser remembers is its permission to notify.
+      perTab: "Lựa chọn chỉ áp dụng cho tab này; trình duyệt tự nhớ quyền hiện thông báo.",
       toneOnly: "Trình duyệt không cho hiện thông báo, nên chỉ phát âm báo.",
       notification: {
         title: "Phiếu SOAR mới",
@@ -2819,6 +2821,9 @@ export const S = {
       dismiss: "Ẩn",
       dismissLabel: (id: string) => `Ẩn thông báo ${id}`,
       dismissed: "Đã ẩn",
+      // A dismissal lasts as long as the tab: the ids are kept in its session store.
+      sessionOnly: "Ẩn trong phiên này",
+      sessionHint: "Thông báo đã ẩn sẽ hiện lại khi mở tab mới.",
       more: (n: number) => `Còn ${n} thông báo khác, xem ở mục “Thông báo”.`,
     },
     pagination: "Phân trang",

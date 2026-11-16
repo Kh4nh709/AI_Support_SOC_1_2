@@ -15,7 +15,7 @@ import { S } from "../../strings";
 import { countOf } from "./fixtures";
 import { SOAR_COUNT_POLL_MS, countQueryOptions, soarKeys } from "./soarQueries";
 import { SoarNavBadge } from "./SoarNavBadge";
-import { closeSignalAudio, turnSignalOn } from "./signal";
+import { closeSignalAudio, primeAudio, turnSignalOff, turnSignalOn } from "./signal";
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -110,6 +110,7 @@ const refetch = () => act(() => client.refetchQueries({ queryKey: soarKeys.count
 const link = () => screen.getByRole("link", { name: new RegExp(S.nav.soar) });
 
 beforeEach(() => {
+  sessionStorage.clear();
   localStorage.clear();
   tone.started = 0;
   tone.made = 0;
@@ -125,6 +126,7 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 });
 afterEach(() => {
+  expect(localStorage.length).toBe(0);
   closeSignalAudio();
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -251,6 +253,7 @@ describe("the new-ticket signal", () => {
   });
 
   it("is silent while the switch is off", async () => {
+    turnSignalOff();
     serveCounts(countOf(1, T1), countOf(2, T2));
     renderBadge();
     await waitFor(() => expect(link()).toHaveTextContent("1"));
@@ -274,6 +277,45 @@ describe("the new-ticket signal", () => {
     expect(tone.closed).toBe(0);
     view.unmount();
     expect(tone.closed).toBe(1);
+  });
+
+  // A new tab that has not chosen signals when the browser already holds the permission to notify; the tone, which needs a
+  // gesture, joins after the first one.
+  it("signals by default in a tab that has not chosen, when the permission is granted: the notification alone, then the tone after a gesture", async () => {
+    serveCounts(countOf(1, T1), countOf(2, T2), countOf(3, "2026-11-16T01:10:00+00:00"));
+    renderBadge();
+    await waitFor(() => expect(link()).toHaveTextContent("1"));
+    await refetch();
+    await waitFor(() => expect(FakeNotification.shown).toHaveLength(1));
+    expect(tone.made).toBe(0);
+    expect(tone.started).toBe(0);
+    primeAudio();
+    await refetch();
+    await waitFor(() => expect(FakeNotification.shown).toHaveLength(2));
+    expect(tone.made).toBe(1);
+    expect(tone.started).toBe(1);
+  });
+
+  it("stays silent by default when the permission is not granted, and when the browser has no Notification API", async () => {
+    FakeNotification.permission = "default";
+    serveCounts(countOf(1, T1), countOf(2, T2));
+    renderBadge();
+    await waitFor(() => expect(link()).toHaveTextContent("1"));
+    await refetch();
+    await waitFor(() => expect(link()).toHaveTextContent("2"));
+    expect(tone.started).toBe(0);
+    expect(FakeNotification.shown).toEqual([]);
+  });
+
+  it("obeys the choice of the tab over the default: off with the permission granted is silent", async () => {
+    turnSignalOff();
+    serveCounts(countOf(1, T1), countOf(2, T2));
+    renderBadge();
+    await waitFor(() => expect(link()).toHaveTextContent("1"));
+    await refetch();
+    await waitFor(() => expect(link()).toHaveTextContent("2"));
+    expect(tone.started).toBe(0);
+    expect(FakeNotification.shown).toEqual([]);
   });
 
   it("plays the tone alone when the browser refused notifications", async () => {

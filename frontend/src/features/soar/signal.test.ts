@@ -1,16 +1,19 @@
 // src/features/soar/signal.test.ts — the new-ticket signal: a short tone (WebAudio, no file) and a browser Notification.
-// `AudioContext` and `Notification` are faked; jsdom has neither. The switch is the page's, kept in localStorage.
+// `AudioContext` and `Notification` are faked; jsdom has neither. The switch is per tab (the session store of the tab); a tab
+// that has not chosen signals when the browser already holds the notification permission. The tone needs a gesture.
 import { afterEach, beforeEach, vi } from "vitest";
 import { S } from "../../strings";
 import {
   closeSignalAudio,
   movedForward,
   notificationState,
+  primeAudio,
+  signalEnabled,
   signalNewTicket,
   turnSignalOff,
   turnSignalOn,
 } from "./signal";
-import { readSignalOn } from "./storage";
+import { SIGNAL_KEY, readSignalChoice } from "./storage";
 
 class FakeAudioContext {
   static made: FakeAudioContext[] = [];
@@ -64,6 +67,7 @@ class FakeNotification {
 const tones = () => FakeAudioContext.made.flatMap((c) => c.oscillators);
 
 beforeEach(() => {
+  sessionStorage.clear();
   localStorage.clear();
   FakeAudioContext.made = [];
   FakeAudioContext.fail = false;
@@ -77,6 +81,8 @@ afterEach(() => {
   // the one audio context of the module belongs to no test: let it go before the next one stubs its own
   closeSignalAudio();
   vi.unstubAllGlobals();
+  // nothing was ever written to the store that outlives the tab
+  expect(localStorage.length).toBe(0);
 });
 
 describe("movedForward", () => {
@@ -103,8 +109,78 @@ describe("movedForward", () => {
   });
 });
 
+// A tab that has not chosen: the signal is ON when the browser already holds the notification permission (the browser
+// remembers that grant itself, which is the "ask once"), OFF otherwise. A choice made in the tab wins over it.
+describe("the default of a tab that has not chosen", () => {
+  it.each([
+    ["granted", true],
+    ["default", false],
+    ["denied", false],
+  ] as const)("with the permission %s the signal is %s", (permission, on) => {
+    FakeNotification.permission = permission;
+    expect(readSignalChoice()).toBeNull();
+    expect(signalEnabled()).toBe(on);
+  });
+
+  it("is off when the browser has no Notification API", () => {
+    vi.stubGlobal("Notification", undefined);
+    expect(signalEnabled()).toBe(false);
+    expect(() => signalNewTicket(1)).not.toThrow();
+    expect(FakeAudioContext.made).toEqual([]);
+  });
+
+  it("when on by default, shows the notification ALONE: the tone needs a gesture, and no context is made without one", () => {
+    signalNewTicket(2);
+    expect(FakeNotification.shown).toHaveLength(1);
+    expect(FakeNotification.shown[0]?.options?.body).toBe("Có 2 phiếu đang mở");
+    expect(FakeAudioContext.made).toEqual([]);
+    expect(tones()).toEqual([]);
+  });
+
+  it("when off by default (permission not granted), does nothing at all", () => {
+    for (const permission of ["default", "denied"]) {
+      FakeNotification.permission = permission;
+      signalNewTicket(2);
+    }
+    expect(FakeNotification.shown).toEqual([]);
+    expect(FakeAudioContext.made).toEqual([]);
+  });
+
+  it("a choice made in the tab wins: off with the permission granted is silent, on with it denied is a tone alone", () => {
+    turnSignalOff();
+    expect(signalEnabled()).toBe(false);
+    signalNewTicket(1);
+    expect(FakeNotification.shown).toEqual([]);
+    expect(FakeAudioContext.made).toEqual([]);
+    FakeNotification.permission = "denied";
+    turnSignalOn();
+    expect(signalEnabled()).toBe(true);
+    signalNewTicket(1);
+    expect(FakeNotification.shown).toEqual([]);
+    expect(tones()).toHaveLength(1);
+  });
+
+  it("keeps the choice for this tab only: 1 and 0 in the session store, and nothing in the store that outlives the tab", () => {
+    turnSignalOn();
+    expect(sessionStorage.getItem(SIGNAL_KEY)).toBe("1");
+    expect(readSignalChoice()).toBe(true);
+    turnSignalOff();
+    expect(sessionStorage.getItem(SIGNAL_KEY)).toBe("0");
+    expect(readSignalChoice()).toBe(false);
+    expect(localStorage.length).toBe(0);
+  });
+
+  it("a poisoned stored value is no choice, so the default stands", () => {
+    sessionStorage.setItem(SIGNAL_KEY, "maybe");
+    expect(signalEnabled()).toBe(true);
+    FakeNotification.permission = "default";
+    expect(signalEnabled()).toBe(false);
+  });
+});
+
 describe("signalNewTicket", () => {
   it("does nothing while the switch is off: no tone, no notification, and no audio context is ever made", () => {
+    turnSignalOff();
     signalNewTicket(2);
     expect(FakeAudioContext.made).toEqual([]);
     expect(FakeNotification.shown).toEqual([]);
@@ -149,6 +225,7 @@ describe("signalNewTicket", () => {
     expect(FakeNotification.shown).toHaveLength(1);
     vi.stubGlobal("AudioContext", FakeAudioContext);
     FakeAudioContext.fail = true;
+    expect(() => primeAudio()).not.toThrow();
     expect(() => signalNewTicket(1)).not.toThrow();
     expect(FakeNotification.shown).toHaveLength(2);
     expect(FakeAudioContext.made).toEqual([]);
@@ -173,14 +250,36 @@ describe("signalNewTicket", () => {
   });
 });
 
-// m5: one AudioContext for the whole signal, made (or woken) on the click that turns it on, which is a user gesture and the
-// one moment a browser lets a page start audio; every tone reuses it. It is let go when the switch is turned off and when the
-// header that owns the signal goes (the end of the session), never after each tone.
+// One AudioContext for the whole signal, made (or woken) only on a gesture of the person: the click that turns the signal on,
+// or `primeAudio()` from a handler the page already has (a press, a dismissal, a search). A tone never makes one: with none, the
+// notification goes alone. It is let go when the switch is turned off and when the header that owns the signal goes.
 describe("the one audio context", () => {
   it("is made on the click that turns the signal on, and by nothing else", () => {
     expect(FakeAudioContext.made).toEqual([]);
     turnSignalOn();
     expect(FakeAudioContext.made).toHaveLength(1);
+  });
+
+  it("is made by a gesture of the page when the signal is on by default, and then the tone joins the notification", () => {
+    signalNewTicket(1);
+    expect(tones()).toEqual([]);
+    primeAudio();
+    expect(FakeAudioContext.made).toHaveLength(1);
+    signalNewTicket(2);
+    expect(tones()).toHaveLength(1);
+    expect(FakeNotification.shown).toHaveLength(2);
+    // a second gesture makes no second context
+    primeAudio();
+    expect(FakeAudioContext.made).toHaveLength(1);
+  });
+
+  it("is not made by a gesture while the signal is off", () => {
+    turnSignalOff();
+    primeAudio();
+    FakeNotification.permission = "default";
+    sessionStorage.clear();
+    primeAudio();
+    expect(FakeAudioContext.made).toEqual([]);
   });
 
   it("is reused for every tone: two tones, one context, two oscillators, and it is not closed after a tone", () => {
@@ -231,7 +330,7 @@ describe("the one audio context", () => {
     expect(FakeNotification.shown).toHaveLength(2);
   });
 
-  it("is let go by closeSignalAudio, once, and a later tone makes a new one only if the switch is still on", () => {
+  it("is let go by closeSignalAudio, once, and a later tone makes none: the next gesture makes a new one", () => {
     turnSignalOn();
     const [first] = FakeAudioContext.made;
     closeSignalAudio();
@@ -239,18 +338,24 @@ describe("the one audio context", () => {
     expect(() => closeSignalAudio()).not.toThrow();
     expect(first?.close).toHaveBeenCalledTimes(1);
     signalNewTicket(1);
+    expect(FakeAudioContext.made).toHaveLength(1);
+    primeAudio();
     expect(FakeAudioContext.made).toHaveLength(2);
     turnSignalOff();
     const after = FakeAudioContext.made.length;
+    primeAudio();
     signalNewTicket(1);
     expect(FakeAudioContext.made).toHaveLength(after);
   });
 
-  it("is made again if the browser closed it by itself", () => {
+  it("is made again, on the next gesture, if the browser closed it by itself; a tone in between does not make one", () => {
     turnSignalOn();
     const [first] = FakeAudioContext.made;
     if (first !== undefined) first.state = "closed";
     signalNewTicket(1);
+    expect(FakeAudioContext.made).toHaveLength(1);
+    expect(tones()).toHaveLength(0);
+    primeAudio();
     expect(FakeAudioContext.made).toHaveLength(2);
   });
 });
@@ -259,7 +364,7 @@ describe("the switch", () => {
   it("turning it on keeps the choice and asks for permission once, when it was never decided", () => {
     FakeNotification.permission = "default";
     turnSignalOn();
-    expect(readSignalOn()).toBe(true);
+    expect(readSignalChoice()).toBe(true);
     expect(FakeNotification.requestPermission).toHaveBeenCalledTimes(1);
   });
 
@@ -271,13 +376,13 @@ describe("the switch", () => {
     FakeNotification.permission = "default";
     turnSignalOff();
     expect(FakeNotification.requestPermission).not.toHaveBeenCalled();
-    expect(readSignalOn()).toBe(false);
+    expect(readSignalChoice()).toBe(false);
   });
 
   it("works with no Notification API, and with a permission request that throws or is rejected", async () => {
     vi.stubGlobal("Notification", undefined);
     expect(() => turnSignalOn()).not.toThrow();
-    expect(readSignalOn()).toBe(true);
+    expect(readSignalChoice()).toBe(true);
     FakeNotification.permission = "default";
     FakeNotification.requestPermission = vi.fn(async () => {
       throw new Error("blocked");

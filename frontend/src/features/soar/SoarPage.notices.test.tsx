@@ -1,11 +1,12 @@
 // src/features/soar/SoarPage.notices.test.tsx — the notices above the table (coloured by severity, with its word, each
-// dismissible and remembered in localStorage), the filter "Thông báo", and the switch that turns the new-ticket signal on.
+// dismissible and remembered in sessionStorage), the filter "Thông báo", and the switch that turns the new-ticket signal on.
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { setupServer } from "msw/node";
 import { afterEach, beforeEach, vi } from "vitest";
 import { S } from "../../strings";
 import { notice, review } from "./fixtures";
+import { closeSignalAudio } from "./signal";
 import { DISMISSED_CAP, DISMISSED_KEY, SIGNAL_KEY } from "./storage";
 import { fake, renderSoar, serve } from "./testkit";
 
@@ -15,8 +16,13 @@ const [N1, N2, N3, N5, N9] = [1, 2, 3, 5, 9].map(nid) as [string, string, string
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  sessionStorage.clear();
+  localStorage.clear();
+});
 afterEach(() => {
+  // nothing of these flows is ever written to the store that outlives the tab
+  expect(localStorage.length).toBe(0);
   server.resetHandlers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -60,6 +66,21 @@ describe("the notices above the table", () => {
     expect(strip.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("says a dismissal is for this session: a hint line, and a title on each button", async () => {
+    serve(server, fake({ rows: [review()], notices: [errorNotice, warningNotice] }));
+    renderSoar();
+    const strip = await waitFor(() => stripOf());
+    expect(
+      within(strip).getByText("Thông báo đã ẩn sẽ hiện lại khi mở tab mới."),
+    ).toBeInTheDocument();
+    for (const id of [N1, N2]) {
+      const button = within(strip).getByRole("button", { name: S.soar.notice.dismissLabel(id) });
+      expect(button).toHaveAttribute("title", "Ẩn trong phiên này");
+    }
+    expect(S.soar.notice.sessionOnly).toBe("Ẩn trong phiên này");
+    expect(S.soar.notice.sessionHint).toBe("Thông báo đã ẩn sẽ hiện lại khi mở tab mới.");
+  });
+
   it("colours a line by its severity: error red, warning orange, info grey, always with the word", async () => {
     serve(server, fake({ rows: [review()], notices: [errorNotice, warningNotice, infoNotice] }));
     renderSoar();
@@ -96,7 +117,7 @@ describe("the notices above the table", () => {
     expect(screen.queryByRole("region", { name: S.soar.notice.heading })).not.toBeInTheDocument();
   });
 
-  it("dismisses one with its button, remembers it in localStorage, and does not show it again after a reload", async () => {
+  it("dismisses one with its button, remembers it for the tab (the session store), and does not show it again after the page is opened again", async () => {
     serve(server, fake({ rows: [review()], notices: [errorNotice, warningNotice] }));
     const first = renderSoar();
     const strip = await waitFor(() => stripOf());
@@ -105,7 +126,7 @@ describe("the notices above the table", () => {
     );
     expect(screen.queryByText("Không gỡ được chặn IP")).not.toBeInTheDocument();
     expect(screen.getByText("Sắp hết hạn chặn")).toBeInTheDocument();
-    expect(JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]")).toEqual([N1]);
+    expect(JSON.parse(sessionStorage.getItem(DISMISSED_KEY) ?? "[]")).toEqual([N1]);
     first.unmount();
     renderSoar();
     await screen.findByText("Sắp hết hạn chặn");
@@ -123,7 +144,7 @@ describe("the notices above the table", () => {
   });
 
   it("starts without the ids already dismissed", async () => {
-    localStorage.setItem(DISMISSED_KEY, JSON.stringify([N1, N2]));
+    sessionStorage.setItem(DISMISSED_KEY, JSON.stringify([N1, N2]));
     serve(server, fake({ rows: [review()], notices: [errorNotice, warningNotice, infoNotice] }));
     renderSoar();
     const strip = await waitFor(() => stripOf());
@@ -133,14 +154,14 @@ describe("the notices above the table", () => {
 
   it("caps what it remembers: the newest DISMISSED_CAP ids", async () => {
     const seeded = Array.from({ length: DISMISSED_CAP }, (_, i) => nid(1000 + i));
-    localStorage.setItem(DISMISSED_KEY, JSON.stringify(seeded));
+    sessionStorage.setItem(DISMISSED_KEY, JSON.stringify(seeded));
     serve(server, fake({ rows: [review()], notices: [infoNotice] }));
     renderSoar();
     const strip = await waitFor(() => stripOf());
     await userEvent.click(
       within(strip).getByRole("button", { name: S.soar.notice.dismissLabel(N3) }),
     );
-    const stored = JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]") as string[];
+    const stored = JSON.parse(sessionStorage.getItem(DISMISSED_KEY) ?? "[]") as string[];
     expect(stored).toHaveLength(DISMISSED_CAP);
     expect(stored.at(-1)).toBe(N3);
     expect(stored).not.toContain(nid(1000));
@@ -186,7 +207,7 @@ describe("the notices above the table", () => {
 
 describe("the filter Thông báo", () => {
   it("lists them all, dismissed or not, in a table of their own, and the strip is not drawn twice", async () => {
-    localStorage.setItem(DISMISSED_KEY, JSON.stringify([N1]));
+    sessionStorage.setItem(DISMISSED_KEY, JSON.stringify([N1]));
     serve(server, fake({ rows: [review()], notices: [errorNotice, warningNotice] }));
     renderSoar({ entry: "/soar?tab=notice" });
     const table = await screen.findByRole("table", { name: S.soar.noticeTableLabel });
@@ -197,7 +218,7 @@ describe("the filter Thông báo", () => {
   });
 
   it("marks a dismissed one as such, and still lets the others be dismissed", async () => {
-    localStorage.setItem(DISMISSED_KEY, JSON.stringify([N1]));
+    sessionStorage.setItem(DISMISSED_KEY, JSON.stringify([N1]));
     serve(server, fake({ notices: [errorNotice, warningNotice] }));
     renderSoar({ entry: "/soar?tab=notice" });
     const table = await screen.findByRole("table", { name: S.soar.noticeTableLabel });
@@ -212,7 +233,7 @@ describe("the filter Thông báo", () => {
       }),
     );
     expect(rows[1]).toHaveTextContent(S.soar.notice.dismissed);
-    expect(JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]")).toEqual([N1, N2]);
+    expect(JSON.parse(sessionStorage.getItem(DISMISSED_KEY) ?? "[]")).toEqual([N1, N2]);
   });
 
   it("shows the time, the severity word, the title, the note, the host and the case of a notice", async () => {
@@ -257,7 +278,7 @@ describe("the switch of the signal", () => {
     vi.stubGlobal("Notification", Notify);
   });
 
-  it("is off at first, labelled, and asks for nothing on load", async () => {
+  it("is off at first when the browser has not granted the permission, labelled, and asks for nothing on load", async () => {
     serve(server, fake({ rows: [review()] }));
     renderSoar();
     await screen.findByRole("table", { name: S.soar.tableLabel });
@@ -266,29 +287,96 @@ describe("the switch of the signal", () => {
     expect(screen.getByText(S.soar.signal.hint)).toBeInTheDocument();
   });
 
-  it("turns on with a click: keeps the choice and asks Notification permission once, on that click", async () => {
+  it("says the choice is the tab's own and that the browser remembers the permission", async () => {
+    serve(server, fake({ rows: [review()] }));
+    renderSoar();
+    await screen.findByRole("table", { name: S.soar.tableLabel });
+    expect(
+      screen.getByText(
+        "Lựa chọn chỉ áp dụng cho tab này; trình duyệt tự nhớ quyền hiện thông báo.",
+      ),
+    ).toBeInTheDocument();
+    expect(S.soar.signal.perTab).toBe(
+      "Lựa chọn chỉ áp dụng cho tab này; trình duyệt tự nhớ quyền hiện thông báo.",
+    );
+  });
+
+  // A new tab is not silently mute: with no choice stored in the tab, the signal is on when the browser already holds the
+  // permission to notify (it remembers that itself), and off otherwise.
+  it.each([
+    ["granted", true],
+    ["default", false],
+    ["denied", false],
+  ] as const)(
+    "a tab with no choice and the permission %s opens with the switch %s",
+    async (permission, on) => {
+      Notify.permission = permission;
+      serve(server, fake({ rows: [review()] }));
+      renderSoar();
+      await screen.findByRole("table", { name: S.soar.tableLabel });
+      if (on) expect(mine()).toBeChecked();
+      else expect(mine()).not.toBeChecked();
+      // looking at the page chooses nothing and asks for nothing
+      expect(sessionStorage.getItem(SIGNAL_KEY)).toBeNull();
+      expect(Notify.requestPermission).not.toHaveBeenCalled();
+    },
+  );
+
+  it("a tab with no choice and no Notification API opens with the switch off", async () => {
+    vi.stubGlobal("Notification", undefined);
+    serve(server, fake({ rows: [review()] }));
+    renderSoar();
+    await screen.findByRole("table", { name: S.soar.tableLabel });
+    expect(mine()).not.toBeChecked();
+  });
+
+  it("the choice of the tab wins over the default: off with the permission granted, on with it denied", async () => {
+    Notify.permission = "granted";
+    sessionStorage.setItem(SIGNAL_KEY, "0");
+    serve(server, fake({ rows: [review()] }));
+    const first = renderSoar();
+    await screen.findByRole("table", { name: S.soar.tableLabel });
+    expect(mine()).not.toBeChecked();
+    first.unmount();
+    Notify.permission = "denied";
+    sessionStorage.setItem(SIGNAL_KEY, "1");
+    renderSoar();
+    await screen.findByRole("table", { name: S.soar.tableLabel });
+    expect(mine()).toBeChecked();
+  });
+
+  it("turns on with a click: keeps the choice for the tab and asks Notification permission once, on that click", async () => {
     serve(server, fake({ rows: [review()] }));
     renderSoar();
     await screen.findByRole("table", { name: S.soar.tableLabel });
     await userEvent.click(mine());
     expect(mine()).toBeChecked();
-    expect(localStorage.getItem(SIGNAL_KEY)).toBe("1");
+    expect(sessionStorage.getItem(SIGNAL_KEY)).toBe("1");
     expect(Notify.requestPermission).toHaveBeenCalledTimes(1);
   });
 
-  it("turns off with a click, keeps that, and does not ask again", async () => {
-    localStorage.setItem(SIGNAL_KEY, "1");
+  it("turns off with a click, keeps that for the tab, and does not ask again; a default-on tab turned off stays off", async () => {
+    sessionStorage.setItem(SIGNAL_KEY, "1");
     serve(server, fake({ rows: [review()] }));
-    renderSoar();
+    const first = renderSoar();
     await screen.findByRole("table", { name: S.soar.tableLabel });
     expect(mine()).toBeChecked();
     await userEvent.click(mine());
     expect(mine()).not.toBeChecked();
-    expect(localStorage.getItem(SIGNAL_KEY)).toBe("0");
+    expect(sessionStorage.getItem(SIGNAL_KEY)).toBe("0");
     expect(Notify.requestPermission).not.toHaveBeenCalled();
+    first.unmount();
+    sessionStorage.clear();
+    Notify.permission = "granted";
+    renderSoar();
+    await screen.findByRole("table", { name: S.soar.tableLabel });
+    expect(mine()).toBeChecked();
+    await userEvent.click(mine());
+    expect(sessionStorage.getItem(SIGNAL_KEY)).toBe("0");
+    expect(mine()).not.toBeChecked();
   });
 
-  it("is where the choice was left after a reload", async () => {
+  it("is where the choice was left when the page is opened again in the same tab", async () => {
     serve(server, fake({ rows: [review()] }));
     const first = renderSoar();
     await screen.findByRole("table", { name: S.soar.tableLabel });
@@ -326,5 +414,103 @@ describe("the switch of the signal", () => {
     await screen.findByRole("table", { name: S.soar.tableLabel });
     await userEvent.click(mine());
     expect(mine()).toBeChecked();
+  });
+});
+
+// The tone needs a gesture. A tab on which the signal is on by default has had none: its notification goes alone, and the audio
+// context is made at the first gesture the page already handles (a press, a dismissal, a detail opened, a search, the switch).
+// No listener is added for this: the handlers call `primeAudio`.
+describe("the gestures of the page prime the tone", () => {
+  const made = { count: 0 };
+  class Audio {
+    state = "running";
+    currentTime = 0;
+    destination = {};
+    constructor() {
+      made.count += 1;
+    }
+    resume = async () => {};
+    close = async () => {};
+    createGain() {
+      return {
+        gain: { setValueAtTime: () => {}, exponentialRampToValueAtTime: () => {} },
+        connect: () => {},
+      };
+    }
+    createOscillator() {
+      return {
+        type: "",
+        frequency: { value: 0 },
+        connect: () => {},
+        start: () => {},
+        stop: () => {},
+      };
+    }
+  }
+  class Granted {
+    static permission = "granted";
+    static requestPermission = vi.fn(async () => "granted");
+  }
+
+  beforeEach(() => {
+    made.count = 0;
+    Granted.permission = "granted";
+    vi.stubGlobal("AudioContext", Audio);
+    vi.stubGlobal("Notification", Granted);
+  });
+  afterEach(() => closeSignalAudio());
+
+  it("makes no audio context on load, and one at the first press, whatever the number of gestures after", async () => {
+    serve(server, fake({ rows: [review()] }));
+    renderSoar();
+    const row = (
+      await screen.findByRole("button", { name: S.soar.detail.open("K7QM2XHP") })
+    ).closest("tr") as HTMLElement;
+    expect(made.count).toBe(0);
+    await userEvent.click(within(row).getByRole("button", { name: "✅ Giữ chặn" }));
+    await waitFor(() => expect(made.count).toBe(1));
+    await userEvent.click(screen.getByRole("button", { name: S.soar.detail.open("K7QM2XHP") }));
+    expect(made.count).toBe(1);
+  });
+
+  it("makes one at a dismissal of a notice", async () => {
+    serve(server, fake({ rows: [review()], notices: [notice({ id: N1 })] }));
+    renderSoar();
+    const strip = await waitFor(() => stripOf());
+    expect(made.count).toBe(0);
+    await userEvent.click(
+      within(strip).getByRole("button", { name: S.soar.notice.dismissLabel(N1) }),
+    );
+    expect(made.count).toBe(1);
+  });
+
+  it("makes one when a detail panel is opened", async () => {
+    serve(server, fake({ rows: [review()] }));
+    renderSoar();
+    await userEvent.click(
+      await screen.findByRole("button", { name: S.soar.detail.open("K7QM2XHP") }),
+    );
+    expect(made.count).toBe(1);
+  });
+
+  it("makes one when the search is sent", async () => {
+    serve(server, fake({ rows: [review()] }));
+    renderSoar();
+    const box = await screen.findByRole("searchbox", { name: S.soar.search.label });
+    expect(made.count).toBe(0);
+    await userEvent.type(box, "x{Enter}");
+    expect(made.count).toBe(1);
+  });
+
+  it("makes none while the signal is off for the tab", async () => {
+    sessionStorage.setItem(SIGNAL_KEY, "0");
+    serve(server, fake({ rows: [review()], notices: [notice({ id: N1 })] }));
+    renderSoar();
+    const strip = await waitFor(() => stripOf());
+    await userEvent.click(
+      within(strip).getByRole("button", { name: S.soar.notice.dismissLabel(N1) }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: S.soar.detail.open("K7QM2XHP") }));
+    expect(made.count).toBe(0);
   });
 });

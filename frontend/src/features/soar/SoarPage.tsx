@@ -23,6 +23,7 @@ import { cleanDeep } from "./model";
 import { DecisionDialog, type DialogDecision } from "./DecisionDialog";
 import { DetailPanel } from "./DetailPanel";
 import { NoticeStrip } from "./Notices";
+import { primeAudio } from "./signal";
 import { SignalSwitch } from "./SignalSwitch";
 import { SearchForm, TabNav } from "./SoarFilters";
 import { SoarPagination } from "./SoarPagination";
@@ -68,15 +69,19 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
 
   const show = (next: SoarView) => setParams(viewToParams(next));
   const dismiss = (id: string) => {
+    primeAudio();
     const next = [...dismissed.filter((known) => known !== id), id];
     setDismissed(next);
     writeDismissed(next);
   };
   const press = (row: SoarReview, decision: SoarDecision) => {
+    // a gesture the page handles anyway: if the signal is on, the audio context is made now (the tone needs one)
+    primeAudio();
     if (decision === "keep") void decisions.run(row, "keep", "");
     else if (decision === "undo" || decision === "fp") setDialog({ row, decision });
   };
   const openDetail = (id: string, from: HTMLElement) => {
+    primeAudio();
     setOpener(from);
     setDetailId(id);
   };
@@ -127,7 +132,10 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
         <SearchForm
           key={view.q}
           view={view}
-          onSearch={(q) => show({ tab: view.tab, q, page: 1 })}
+          onSearch={(q) => {
+            primeAudio();
+            show({ tab: view.tab, q, page: 1 });
+          }}
         />
 
         {view.tab !== "notice" && notices.data !== undefined && (

@@ -1,9 +1,9 @@
-// The two preferences of the SOAR page that outlive the tab, and the only code of this UI that touches the store that
-// does: whether the new-ticket signal is on (`soc.soar.signal`), and which notices were dismissed
-// (`soc.soar.dismissed`, a JSON list of ids, newest last). Neither is a secret and neither names a person: the session
-// and the token never come near this file (src/guards.test.ts holds ruling R5 for every other file, and reads this one
-// to prove it imports nothing of the session). The store can be missing, full, blocked or filled by hand, so every read
-// and every write is inside try/catch, and the page works without it.
+// The two preferences of the SOAR page, kept in THIS TAB's session store, as the alert page keeps its draft
+// (features/tier1/draft.ts): whether the new-ticket signal was turned on or off in this tab (`soc.soar.signal`, "1" or "0"),
+// and which notices were dismissed in it (`soc.soar.dismissed`, a JSON list of ids, newest last). Both live and die with the
+// tab; nothing is written to a store that outlives it (ruling R5, src/guards.test.ts). Neither is a secret and neither names
+// a person. The store can be missing, full, blocked or filled by hand, so every read and every write is inside try/catch, the
+// page works without it, and nothing read back is believed until it has the shape that was written.
 
 export const SIGNAL_KEY = "soc.soar.signal";
 export const DISMISSED_KEY = "soc.soar.dismissed";
@@ -16,19 +16,24 @@ export const DISMISSED_CAP = 200;
  */
 export const NOTICE_ID = /^N[A-Za-z0-9_-]{12}$/;
 
-export function readSignalOn(): boolean {
+/**
+ * What this tab chose for the signal: true (on), false (off), or null when it has not chosen (or the store cannot say, or
+ * holds anything but the two values written): the default of the browser's permission then stands (signal.ts).
+ */
+export function readSignalChoice(): boolean | null {
   try {
-    return localStorage.getItem(SIGNAL_KEY) === "1";
+    const raw = sessionStorage.getItem(SIGNAL_KEY);
+    return raw === "1" ? true : raw === "0" ? false : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
 export function writeSignalOn(on: boolean): void {
   try {
-    localStorage.setItem(SIGNAL_KEY, on ? "1" : "0");
+    sessionStorage.setItem(SIGNAL_KEY, on ? "1" : "0");
   } catch {
-    // blocked or full: the switch works for this visit, and is off again at the next
+    // blocked or full: the switch works for this visit, and the default stands at the next
   }
 }
 
@@ -46,7 +51,7 @@ function capped(ids: readonly unknown[]): string[] {
 
 export function readDismissed(): string[] {
   try {
-    const raw = localStorage.getItem(DISMISSED_KEY);
+    const raw = sessionStorage.getItem(DISMISSED_KEY);
     if (raw === null) return [];
     const value: unknown = JSON.parse(raw);
     return Array.isArray(value) ? capped(value) : [];
@@ -57,8 +62,8 @@ export function readDismissed(): string[] {
 
 export function writeDismissed(ids: readonly string[]): void {
   try {
-    localStorage.setItem(DISMISSED_KEY, JSON.stringify(capped(ids)));
+    sessionStorage.setItem(DISMISSED_KEY, JSON.stringify(capped(ids)));
   } catch {
-    // blocked or full: the notice stays dismissed until the tab is closed
+    // blocked or full: the notice stays dismissed until the page is left
   }
 }

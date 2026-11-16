@@ -4,11 +4,11 @@
 // will not show notifications (denied, or no such API) it says the tone is all there is.
 import { useState } from "react";
 import { S } from "../../strings";
-import { notificationState, turnSignalOff, turnSignalOn } from "./signal";
-import { readSignalOn } from "./storage";
+import { notificationState, signalEnabled, turnSignalOff, turnSignalOn } from "./signal";
 
 export function SignalSwitch() {
-  const [on, setOn] = useState(readSignalOn);
+  // What this tab chose, else on when the browser already holds the permission to notify (see signal.ts).
+  const [on, setOn] = useState(signalEnabled);
   // Read again after the browser has answered the permission request.
   const [, answered] = useState(0);
   const state = notificationState();
@@ -32,6 +32,7 @@ export function SignalSwitch() {
         <span>{S.soar.signal.label}</span>
       </label>
       <p className="text-xs text-muted">{S.soar.signal.hint}</p>
+      <p className="text-xs text-muted">{S.soar.signal.perTab}</p>
       {(state === "denied" || state === "absent") && (
         <p className="text-xs text-muted">{S.soar.signal.toneOnly}</p>
       )}

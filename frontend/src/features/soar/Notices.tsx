@@ -53,6 +53,7 @@ export function NoticeStrip({
             <button
               type="button"
               aria-label={S.soar.notice.dismissLabel(notice.id)}
+              title={S.soar.notice.sessionOnly}
               onClick={() => onDismiss(notice.id)}
               className="shrink-0 rounded border border-border px-2 py-0.5 text-xs text-text hover:bg-ground focus-visible:outline-2 focus-visible:outline-text"
             >
@@ -62,6 +63,7 @@ export function NoticeStrip({
         ))}
       </ul>
       {more > 0 && <p className="text-xs text-muted">{S.soar.notice.more(more)}</p>}
+      <p className="text-xs text-muted">{S.soar.notice.sessionHint}</p>
     </section>
   );
 }

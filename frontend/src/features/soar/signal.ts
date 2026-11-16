@@ -1,10 +1,11 @@
 // The new-ticket signal of the SOAR page (spec section 7): a short tone made with WebAudio (an oscillator, no audio
 // file, so nothing is fetched and the CSP stays as it is) and a browser Notification whose words are `strings.ts`'s and
-// whose only datum is the number of open tickets. The switch that turns it on lives on the page and is kept in
-// `storage.ts`. Every call is inside try/catch and looks the browser API up when it is called: a browser with no
+// whose only datum is the number of open tickets. The switch that turns it on lives on the page and is kept for this tab
+// in `storage.ts`; a tab that has not chosen signals when the browser already holds the notification permission (the browser
+// remembers that grant itself, which is the "ask once"). Every call is inside try/catch and looks the browser API up when it is called: a browser with no
 // AudioContext or no Notification, a denied permission, a device that cannot play, never break the header that calls this.
 import { S } from "../../strings";
-import { readSignalOn, writeSignalOn } from "./storage";
+import { readSignalChoice, writeSignalOn } from "./storage";
 
 export type NotificationState = "granted" | "denied" | "default" | "absent";
 
@@ -48,30 +49,43 @@ export function movedForward(prev: string | null, next: string | null): boolean 
   return Number.isNaN(before) || now > before;
 }
 
-// One AudioContext for the whole signal. It is made, or woken, on the click that turns the signal on (a user gesture: the one
-// moment a browser lets a page start audio), reused for every tone, and let go when the switch is turned off or the header
-// that owns the signal goes (`closeSignalAudio`, the end of the session). It is never made while the switch is off, and a
+// One AudioContext for the whole signal, made or woken ONLY on a gesture of the person: the click that turns the signal on
+// (`turnSignalOn`), or `primeAudio` from a handler the page already has (a press, a dismissal, a search). A tone never makes
+// one: a tab on which the signal is on by default and that nobody has touched yet shows the notification alone, and the tone
+// joins after the first gesture. The context is reused for every tone, and let go when the switch is turned off or the header
+// that owns the signal goes (`closeSignalAudio`, the end of the session). It is never made while the signal is off, and a
 // failure to make or wake it is swallowed: the notification still goes.
 let context: AudioContext | null = null;
 
-/** The context of the signal: the one made already (woken if the browser suspended it), or a new one; null when it cannot be. */
-function audio(): AudioContext | null {
+/** Makes the context if there is none (or the browser closed it), wakes it if it was suspended. Only for a gesture. */
+function makeAudio(): void {
   try {
     if (context === null || context.state === "closed") {
       const Context = audioCtor();
-      if (Context === null) return null;
+      if (Context === null) return;
       context = new Context();
     }
     if (context.state === "suspended")
       void Promise.resolve(context.resume()).catch(() => undefined);
-    return context;
   } catch {
     context = null;
-    return null;
   }
 }
 
-/** Lets the audio context go, once; a later tone makes a new one if the switch is still on. */
+/** Whether the signal is on for this tab: what the tab chose, else on when the browser already holds the permission. */
+export function signalEnabled(): boolean {
+  return readSignalChoice() ?? notificationState() === "granted";
+}
+
+/**
+ * A gesture of the person (a click the page handles anyway): the audio context is made or woken now, if the signal is on, so
+ * the next tone can play. Not a listener: a handler of the page calls it.
+ */
+export function primeAudio(): void {
+  if (signalEnabled()) makeAudio();
+}
+
+/** Lets the audio context go, once; the next gesture makes a new one if the signal is still on. */
 export function closeSignalAudio(): void {
   const gone = context;
   context = null;
@@ -83,11 +97,12 @@ export function closeSignalAudio(): void {
   }
 }
 
-/** About a third of a second of a soft A5: short, and not a siren. */
+/** About a third of a second of a soft A5: short, and not a siren. Plays on the context a gesture made; with none, not at all. */
 function playTone(): void {
   try {
-    const shared = audio();
-    if (shared === null) return;
+    const shared = context;
+    if (shared === null || shared.state === "closed") return;
+    if (shared.state === "suspended") void Promise.resolve(shared.resume()).catch(() => undefined);
     const oscillator = shared.createOscillator();
     const gain = shared.createGain();
     oscillator.type = "sine";
@@ -121,7 +136,7 @@ function showNotification(open: number): void {
 
 /** A new ticket has arrived and `open` are open: the tone and the notification, when the switch is on. */
 export function signalNewTicket(open: number): void {
-  if (!readSignalOn()) return;
+  if (!signalEnabled()) return;
   playTone();
   showNotification(open);
 }
@@ -133,7 +148,7 @@ export function signalNewTicket(open: number): void {
 export async function turnSignalOn(): Promise<void> {
   writeSignalOn(true);
   // on the click: the one moment a browser lets this page start audio
-  audio();
+  makeAudio();
   try {
     const Notify = notificationCtor();
     if (Notify === null || notificationState() !== "default") return;
