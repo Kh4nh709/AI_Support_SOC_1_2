@@ -4,10 +4,13 @@ One migration: two tables and nothing else, each on trial here against the migra
 
 * `ti_ioc`: one indicator of compromise from one abuse.ch source. The key is `(source, type, value)`
   (`uq_ti_ioc_key`); `source` is one of three (a CHECK), `confidence` is 0..100 or NULL (a CHECK),
-  `hit_count` is never negative (a CHECK); four indexes: `(value)`, `(first_seen DESC)`, `(source)`,
-  `(malware)`;
+  `hit_count` is never negative (a CHECK); the three text columns a btree indexes are bounded in BYTES by a
+  CHECK each (`value` 1..2 048, `type` 1..64, `malware` at most 256), so no row can fail a whole file's
+  transaction with "index row size exceeds btree maximum"; `first_seen` is NOT NULL; four indexes: `(value)`,
+  `(first_seen DESC, id DESC)`, `(source)`, `(malware)`;
 * `ti_import_log`: one row per importer run; `status` is `ok`, `partial` or `failed` (a CHECK), the four
-  counts are never negative (a CHECK each); one index: `(finished_at DESC)`;
+  counts are never negative (a CHECK each), a run does not finish before it starts (a CHECK); one index:
+  `(finished_at DESC)`;
 * rights: `app_rw` reads, inserts and updates and nothing more (nothing is deleted by the application);
 * nothing else: no old table, constraint, index, grant or row changes, and `audit_events` keeps its 42
   names; the 25 migrations before it are byte for byte what they were.
@@ -22,6 +25,7 @@ rolls everything back at the end.
 from __future__ import annotations
 
 import hashlib
+import random
 import shutil
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -66,7 +70,7 @@ IOC_COLUMNS = [
     ("confidence", "smallint", False, None, ""),
     ("tags", "text[]", True, "'{}'::text[]", ""),
     ("reference", "text", False, None, ""),
-    ("first_seen", "timestamp with time zone", False, None, ""),
+    ("first_seen", "timestamp with time zone", True, None, ""),
     ("last_seen", "timestamp with time zone", True, None, ""),
     ("imported_at", "timestamp with time zone", True, None, ""),
     ("expires_at", "timestamp with time zone", True, None, ""),
@@ -139,12 +143,13 @@ NEW_RELATIONS = {
 
 
 def _ioc(db, **over) -> int:
-    """One `ti_ioc` row on `db` (the caller rolls back); its id. The defaults are the three NOT NULL
+    """One `ti_ioc` row on `db` (the caller rolls back); its id. The defaults are the four NOT NULL
     instants the importer always sets; the key is unique per call unless the caller names it."""
     row = {
         "source": "threatfox",
         "type": "domain",
         "value": f"m26-{uuid.uuid4().hex[:10]}.example.com",
+        "first_seen": T0,
         "last_seen": T0,
         "imported_at": T0,
         "expires_at": T0 + timedelta(days=30),
@@ -155,6 +160,22 @@ def _ioc(db, **over) -> int:
     return db.execute(
         f"INSERT INTO ti_ioc ({columns}) VALUES ({marks}) RETURNING id", list(row.values())
     ).fetchone()[0]
+
+
+# Text a compressor cannot shrink: a btree entry is compressed before its size is checked, so a long run of
+# one character (`"x" * 5000`) sails under the limit that real, varied text meets. Seeded, so a failure repeats.
+_NOISE = random.Random(26)
+_ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+
+def _noise(n_bytes: int) -> str:
+    """`n_bytes` bytes of random ASCII (`n_bytes` characters)."""
+    return "".join(_NOISE.choice(_ALNUM) for _ in range(n_bytes))
+
+
+def _noise3(n_chars: int) -> str:
+    """`n_chars` random CJK characters: 3 bytes each in UTF-8."""
+    return "".join(chr(_NOISE.randrange(0x4E00, 0x9FA5)) for _ in range(n_chars))
 
 
 def _log(db, **over) -> int:
@@ -246,39 +267,51 @@ def test_the_table_has_exactly_these_constraints(db):
     assert rows == [
         ("ck_ti_ioc_confidence", "c"),
         ("ck_ti_ioc_hit_count", "c"),
+        ("ck_ti_ioc_malware_bytes", "c"),
         ("ck_ti_ioc_source", "c"),
+        ("ck_ti_ioc_type_bytes", "c"),
+        ("ck_ti_ioc_value_bytes", "c"),
         ("ti_ioc_pkey", "p"),
         ("uq_ti_ioc_key", "u"),
     ]
 
 
 def test_only_the_columns_the_importer_always_sets_are_required(db):
-    """`source`, `type`, `value` and the three instants: every descriptive field null is storable, and the
+    """`source`, `type`, `value` and the four instants: every descriptive field null is storable, and the
     defaults are the spec's (`tags` empty, `hit_count` 0, `last_hit` null)."""
     ioc_id = _ioc(db)
     row = db.execute(
-        "SELECT malware, threat, confidence, tags, reference, first_seen, hit_count, last_hit "
+        "SELECT malware, threat, confidence, tags, reference, hit_count, last_hit "
         "FROM ti_ioc WHERE id = %s",
         (ioc_id,),
     ).fetchone()
-    assert row == (None, None, None, [], None, None, 0, None)
+    assert row == (None, None, None, [], None, 0, None)
 
 
 @pytest.mark.parametrize(
     "column",
-    ["source", "type", "value", "last_seen", "imported_at", "expires_at", "tags", "hit_count"],
+    [
+        "source",
+        "type",
+        "value",
+        "first_seen",
+        "last_seen",
+        "imported_at",
+        "expires_at",
+        "tags",
+        "hit_count",
+    ],
 )
 def test_a_required_ioc_column_refuses_null(db, column):
     error = _refused(db, psycopg.errors.NotNullViolation, lambda: _ioc(db, **{column: None}))
     assert error.diag.column_name == column
 
 
-def test_a_missing_first_seen_is_storable(db):
-    """A feed row may carry no date (the importer decides what it accepts): the column is nullable."""
-    ioc_id = _ioc(db, first_seen=None)
-    assert db.execute("SELECT first_seen FROM ti_ioc WHERE id = %s", (ioc_id,)).fetchone() == (
-        None,
-    )
+def test_a_missing_first_seen_is_refused(db):
+    """The importer skips a row without a usable date, so the database does not take one: a NULL would sort
+    first under `first_seen DESC` and fall out of every date filter and of the per-day counts."""
+    error = _refused(db, psycopg.errors.NotNullViolation, lambda: _ioc(db, first_seen=None))
+    assert error.diag.column_name == "first_seen"
 
 
 def test_tags_are_a_text_array_that_keeps_every_element_as_it_is(db):
@@ -288,13 +321,12 @@ def test_tags_are_a_text_array_that_keeps_every_element_as_it_is(db):
 
 
 def test_an_ioc_value_is_text_whatever_it_holds(db):
-    """Markup, a formula and a long string are stored as they come: the database holds the text, the page
-    and the export are what keep it inert."""
+    """Markup and a formula are stored as they come: the database holds the text, the page and the export
+    are what keep it inert."""
     for value in (
         "<img src=x onerror=alert(1)>",
         "=cmd|' /C calc'!A0",
         "javascript:alert(1)",
-        "x" * 5000,
     ):
         ioc_id = _ioc(db, value=value, type="url")
         assert db.execute("SELECT value FROM ti_ioc WHERE id = %s", (ioc_id,)).fetchone() == (
@@ -333,11 +365,11 @@ def test_an_upsert_on_the_key_updates_the_one_row(db):
     """What the importer will run: the conflict target is the named constraint, the row is updated in place."""
     first = _ioc(db, source="urlhaus", type="url", value="http://up.example.com/", malware="old")
     again = db.execute(
-        "INSERT INTO ti_ioc (source, type, value, malware, last_seen, imported_at, expires_at) "
-        "VALUES ('urlhaus', 'url', 'http://up.example.com/', 'new', %s, %s, %s) "
+        "INSERT INTO ti_ioc (source, type, value, malware, first_seen, last_seen, imported_at, expires_at) "
+        "VALUES ('urlhaus', 'url', 'http://up.example.com/', 'new', %s, %s, %s, %s) "
         "ON CONFLICT ON CONSTRAINT uq_ti_ioc_key DO UPDATE SET malware = EXCLUDED.malware "
         "RETURNING id, malware",
-        (T0, T0, T0),
+        (T0, T0, T0, T0),
     ).fetchone()
     assert again == (first, "new")
     assert db.execute(
@@ -402,6 +434,128 @@ def test_a_hit_count_cannot_be_updated_below_zero(db):
     assert _constraint_of(error) == "ck_ti_ioc_hit_count"
 
 
+# ── ti_ioc: the three indexed text columns are bounded in bytes ─────────────────────────────
+#
+# `value` and `type` are in the key's btree, `value` also in `ix_ti_ioc_value`, `malware` in
+# `ix_ti_ioc_malware`; an entry holds at most 2 704 bytes, and a row that does not fit fails its whole
+# statement, so the importer's one transaction would load nothing. A CHECK per column keeps every row under
+# the limit and names the column. Each case below runs on text a compressor cannot shrink.
+
+
+def test_the_byte_checks_name_the_three_columns_and_their_bounds(db):
+    assert "octet_length(value) >= 1" in _constraint_def(db, "ti_ioc", "ck_ti_ioc_value_bytes")
+    assert "octet_length(value) <= 2048" in _constraint_def(db, "ti_ioc", "ck_ti_ioc_value_bytes")
+    assert "octet_length(type) >= 1" in _constraint_def(db, "ti_ioc", "ck_ti_ioc_type_bytes")
+    assert "octet_length(type) <= 64" in _constraint_def(db, "ti_ioc", "ck_ti_ioc_type_bytes")
+    assert "octet_length(malware) <= 256" in _constraint_def(
+        db, "ti_ioc", "ck_ti_ioc_malware_bytes"
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("a", id="1 byte"),
+        pytest.param(_noise(2048), id="2048 ASCII bytes"),
+        pytest.param(_noise3(682) + "ab", id="682 three-byte characters and 2 ASCII = 2048 bytes"),
+    ],
+)
+def test_a_value_of_1_to_2048_bytes_is_accepted_in_both_indexes(db, value):
+    ioc_id = _ioc(db, source="malwarebazaar", type="sha256_hash", value=value)
+    assert db.execute("SELECT value FROM ti_ioc WHERE id = %s", (ioc_id,)).fetchone() == (value,)
+    # the lookup the page runs: it finds the row by the value
+    assert db.execute("SELECT count(*) FROM ti_ioc WHERE value = %s", (value,)).fetchone() == (1,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("", id="empty"),
+        pytest.param(_noise(2049), id="2049 ASCII bytes"),
+        pytest.param(_noise3(683), id="683 three-byte characters = 2049 bytes"),
+        pytest.param(_noise3(2048), id="2048 three-byte characters = 6144 bytes"),
+        pytest.param(_noise(5000), id="5000 bytes"),
+    ],
+)
+def test_a_value_over_2048_bytes_or_empty_is_refused_by_the_check_not_by_a_btree(db, value):
+    error = _refused(db, psycopg.errors.CheckViolation, lambda: _ioc(db, value=value))
+    assert _constraint_of(error) == "ck_ti_ioc_value_bytes"
+
+
+@pytest.mark.parametrize(
+    "type_",
+    [
+        pytest.param("a", id="1 byte"),
+        pytest.param("ip:port", id="ip:port"),
+        pytest.param(_noise(64), id="64 ASCII bytes"),
+        pytest.param(_noise3(21) + "a", id="21 three-byte characters and 1 ASCII = 64 bytes"),
+    ],
+)
+def test_a_type_of_1_to_64_bytes_is_accepted(db, type_):
+    ioc_id = _ioc(db, type=type_)
+    assert db.execute("SELECT type FROM ti_ioc WHERE id = %s", (ioc_id,)).fetchone() == (type_,)
+
+
+@pytest.mark.parametrize(
+    "type_",
+    [
+        pytest.param("", id="empty"),
+        pytest.param(_noise(65), id="65 ASCII bytes"),
+        pytest.param(_noise3(22), id="22 three-byte characters = 66 bytes"),
+    ],
+)
+def test_a_type_over_64_bytes_or_empty_is_refused(db, type_):
+    error = _refused(db, psycopg.errors.CheckViolation, lambda: _ioc(db, type=type_))
+    assert _constraint_of(error) == "ck_ti_ioc_type_bytes"
+
+
+@pytest.mark.parametrize(
+    "malware",
+    [
+        pytest.param(None, id="NULL"),
+        pytest.param("", id="empty"),
+        pytest.param("Emotet", id="a name"),
+        pytest.param(_noise(256), id="256 ASCII bytes"),
+        pytest.param(_noise3(85) + "a", id="85 three-byte characters and 1 ASCII = 256 bytes"),
+    ],
+)
+def test_a_malware_of_none_or_up_to_256_bytes_is_accepted(db, malware):
+    ioc_id = _ioc(db, malware=malware)
+    assert db.execute("SELECT malware FROM ti_ioc WHERE id = %s", (ioc_id,)).fetchone() == (
+        malware,
+    )
+
+
+@pytest.mark.parametrize(
+    "malware",
+    [
+        pytest.param(_noise(257), id="257 ASCII bytes"),
+        pytest.param(_noise3(86), id="86 three-byte characters = 258 bytes"),
+        pytest.param(_noise(5000), id="5000 bytes"),
+    ],
+)
+def test_a_malware_over_256_bytes_is_refused(db, malware):
+    error = _refused(db, psycopg.errors.CheckViolation, lambda: _ioc(db, malware=malware))
+    assert _constraint_of(error) == "ck_ti_ioc_malware_bytes"
+
+
+def test_a_row_at_every_bound_at_once_fits_the_two_widest_index_entries(db):
+    """The widest key entry is `(source, type, value)` at 13 + 64 + 2048 bytes; the widest `malware` entry 256.
+    Both fit under the 2 704 of a btree page with room to spare, and the row is found through each index.
+    """
+    value, type_, malware = _noise(2048), _noise(64), _noise(256)
+    ioc_id = _ioc(db, source="malwarebazaar", type=type_, value=value, malware=malware)
+    db.execute("SET LOCAL enable_seqscan = off")
+    for column, wanted in (("value", value), ("malware", malware)):
+        assert db.execute(f"SELECT id FROM ti_ioc WHERE {column} = %s", (wanted,)).fetchone() == (
+            ioc_id,
+        )
+    assert db.execute(
+        "SELECT id FROM ti_ioc WHERE source = 'malwarebazaar' AND type = %s AND value = %s",
+        (type_, value),
+    ).fetchone() == (ioc_id,)
+
+
 # ── ti_ioc: the indexes ─────────────────────────────────────────────────────────────────────
 
 
@@ -420,7 +574,7 @@ def test_ti_ioc_has_exactly_its_key_and_the_four_indexes(db):
     ]
     definitions = dict(rows)
     assert "(value)" in definitions["ix_ti_ioc_value"]
-    assert "(first_seen DESC)" in definitions["ix_ti_ioc_first_seen"]
+    assert "(first_seen DESC, id DESC)" in definitions["ix_ti_ioc_first_seen"]
     assert "(source)" in definitions["ix_ti_ioc_source"]
     assert "(malware)" in definitions["ix_ti_ioc_malware"]
     assert all(
@@ -456,6 +610,7 @@ def test_the_log_table_has_exactly_these_constraints(db):
         "ORDER BY conname"
     ).fetchall()
     assert rows == [
+        ("ck_ti_import_log_finished_after_started", "c"),
         ("ck_ti_import_log_rows_error", "c"),
         ("ck_ti_import_log_rows_new", "c"),
         ("ck_ti_import_log_rows_total", "c"),
@@ -488,6 +643,20 @@ def test_only_the_message_is_optional(db):
 def test_a_required_log_column_refuses_null(db, column):
     error = _refused(db, psycopg.errors.NotNullViolation, lambda: _log(db, **{column: None}))
     assert error.diag.column_name == column
+
+
+def test_a_run_may_finish_at_the_instant_it_started_but_not_before(db):
+    _log(db, started_at=T0, finished_at=T0)
+    _log(db, started_at=T0, finished_at=T0 + timedelta(hours=1))
+    error = _refused(
+        db,
+        psycopg.errors.CheckViolation,
+        lambda: _log(db, started_at=T0, finished_at=T0 - timedelta(microseconds=1)),
+    )
+    assert _constraint_of(error) == "ck_ti_import_log_finished_after_started"
+    assert "finished_at >= started_at" in _constraint_def(
+        db, "ti_import_log", "ck_ti_import_log_finished_after_started"
+    )
 
 
 def test_the_status_check_names_the_three_statuses(db):
@@ -578,8 +747,9 @@ def test_app_rw_really_does_what_the_grants_say(db):
             "x",
         )
         upserted = db.execute(
-            "INSERT INTO ti_ioc (source, type, value, last_seen, imported_at, expires_at) "
-            "SELECT source, type, value, last_seen, imported_at, expires_at FROM ti_ioc WHERE id = %s "
+            "INSERT INTO ti_ioc (source, type, value, first_seen, last_seen, imported_at, expires_at) "
+            "SELECT source, type, value, first_seen, last_seen, imported_at, expires_at "
+            "FROM ti_ioc WHERE id = %s "
             "ON CONFLICT ON CONSTRAINT uq_ti_ioc_key DO UPDATE SET last_seen = EXCLUDED.last_seen "
             "RETURNING id",
             (ioc_id,),
