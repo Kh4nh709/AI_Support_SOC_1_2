@@ -562,8 +562,9 @@ def test_an_over_limit_quoted_multi_line_field_is_one_bad_row_and_forges_no_reco
 
 def test_an_unclosed_quote_swallows_the_rest_of_the_file_and_the_lines_lost_are_counted(tmp_path):
     ok = line(good(value="192.0.2.1:1"))
-    opened = line(good(value="192.0.2.2:2")).replace(",192.0.2.2:2,", ',"192.0.2.2:2,')
-    rest = [line(good(value=f"192.0.2.{n}:{n}")) for n in (3, 4, 5)]
+    opened = line(good(value="192.0.2.2:2", tags="")).replace(",192.0.2.2:2,", ',"192.0.2.2:2,')
+    # no tags: a tags field with a comma is quoted, and its quote would close the open one
+    rest = [line(good(value=f"192.0.2.{n}:{n}", tags="")) for n in (3, 4, 5)]
     path = write_raw(tmp_path / "f.csv", "\n".join([HEAD, ok, opened, *rest, ""]).encode())
     parsed = read_file(path)
     assert [i.value for i in parsed.iocs] == ["192.0.2.1:1"]
@@ -1227,8 +1228,9 @@ def test_a_forged_record_inside_an_over_limit_field_is_not_loaded(ti_conn, tmp_p
 @needs_db
 def test_an_unclosed_quote_is_logged_with_the_lines_it_swallowed(ti_conn, tmp_path):
     ok = line(good(value="192.0.2.1:1"))
-    opened = line(good(value="192.0.2.2:2")).replace(",192.0.2.2:2,", ',"192.0.2.2:2,')
-    rest = [line(good(value=f"192.0.2.{n}:{n}")) for n in (3, 4, 5)]
+    opened = line(good(value="192.0.2.2:2", tags="")).replace(",192.0.2.2:2,", ',"192.0.2.2:2,')
+    # no tags: a tags field with a comma is quoted, and its quote would close the open one
+    rest = [line(good(value=f"192.0.2.{n}:{n}", tags="")) for n in (3, 4, 5)]
     path = write_raw(tmp_path / "f.csv", "\n".join([HEAD, ok, opened, *rest, ""]).encode())
     result = import_file(ti_conn, path, now=NOW, clock=_clock())
     assert (result.status, result.total, result.new, result.errors) == ("partial", 5, 1, 4)
