@@ -16,9 +16,9 @@ describe("defang: a URL", () => {
       "http://user.name:pw@evil.example.com:8080/x",
       "hxxp://user[.]name:pw@evil[.]example[.]com:8080/x",
     ],
-    // an IPv4 host is an address: its last dot, as the address is shown everywhere else
-    ["http://203.0.113.9:8080/bin.sh", "hxxp://203.0.113[.]9:8080/bin.sh"],
-    ["http://203.0.113.9/bin.sh", "hxxp://203.0.113[.]9/bin.sh"],
+    // an authority loses EVERY dot, an IPv4 host too (a bare address keeps its last dot only: see "an address")
+    ["http://203.0.113.9:8080/bin.sh", "hxxp://203[.]0[.]113[.]9:8080/bin.sh"],
+    ["http://203.0.113.9/bin.sh", "hxxp://203[.]0[.]113[.]9/bin.sh"],
     // an IPv6 host: each colon of the address
     ["http://[2001:db8::1]:8080/x", "hxxp://[2001[:]db8[:][:]1]:8080/x"],
     // the path, the query and the fragment are left as they are
@@ -35,11 +35,11 @@ describe("defang: a URL", () => {
     expect(defang(value, "url")).toBe(shown);
   });
 
-  it("gives a URL with no scheme every dot, and one a hidden character hides the scheme of too", () => {
-    expect(defang("evil.example.com/path.exe", "url")).toBe("evil[.]example[.]com/path[.]exe");
-    // a zero-width space inside `http` breaks the scheme: nothing is a scheme, so every dot goes
+  it("gives a URL with no scheme every dot before its first / ? or #, and the path as it is", () => {
+    expect(defang("evil.example.com/path.exe", "url")).toBe("evil[.]example[.]com/path.exe");
+    // a zero-width space inside `http` breaks that scheme, but the `ttp://` that is left is a scheme with an authority
     expect(defang("ht\u200btp://evil.example.com/a.php", "url")).toBe(
-      "ht\u200btp://evil[.]example[.]com/a[.]php",
+      "ht\u200btp://evil[.]example[.]com/a.php",
     );
   });
 
@@ -77,8 +77,9 @@ describe("defang: an address", () => {
     ["192.0.2.10", "ip:port", "192.0.2[.]10"],
     ["192.0.2.10:443", "ip:port", "192.0.2[.]10:443"],
     ["198.51.100.7:8080", "ip:port", "198.51.100[.]7:8080"],
-    // an IPv4 address is an address whatever the type says
-    ["203.0.113.5", "domain", "203.0.113[.]5"],
+    // a type `url` or `domain` has no unbracketed dot before its first / ? or #: an address there loses every dot
+    ["203.0.113.5", "domain", "203[.]0[.]113[.]5"],
+    ["203.0.113.5:8080/x", "url", "203[.]0[.]113[.]5:8080/x"],
     // IPv6 has no dot: each colon of the address is bracketed; a bracketed address keeps its brackets and its port
     ["2001:db8::1", "ip:port", "2001[:]db8[:][:]1"],
     ["[2001:db8::1]:443", "ip:port", "[2001[:]db8[:][:]1]:443"],
@@ -122,8 +123,11 @@ describe("defang: a value that is already defanged is not defanged twice", () =>
     ["192[.]0[.]2[.]10", "ip:port"],
     ["2001[:]db8[:][:]1", "ip:port"],
     ["[2001[:]db8[:][:]1]:443", "ip:port"],
-    ["hxxp://203.0.113[.]9:8080/bin.sh", "url"],
+    ["hxxp://203[.]0[.]113[.]9:8080/bin.sh", "url"],
     ["hxxp://[2001[:]db8[:][:]1]:8080/x", "url"],
+    ["ws://evil[.]example[.]com/x", "url"],
+    ["ws://localhost[.]/x", "url"],
+    ["//evil[.]example[.]com/x", "url"],
   ])("%s (%s) stays as it is", (value, type) => {
     expect(defang(value, type)).toBe(value);
   });
@@ -135,6 +139,7 @@ describe("defang: a value that is already defanged is not defanged twice", () =>
       ["hxxp://evil.example.com/a", "url"],
       ["http://user.name:pw@evil.example.com:8080/x", "url"],
       ["http://203.0.113.9:8080/bin.sh", "url"],
+      ["http://203.0.113[.]9:8080/bin.sh", "url"],
       ["http://[2001:db8::1]:8080/x", "url"],
       ["http://evil.example.com/r?u=http://other.example.net/x", "url"],
       ["evil.example.com/path.exe", "url"],
