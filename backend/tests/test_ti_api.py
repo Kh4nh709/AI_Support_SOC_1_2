@@ -705,6 +705,8 @@ def test_an_out_of_range_filter_is_a_422_on_the_list_and_on_the_export(api, para
     "path, params",
     [
         (STATS, {"days": 0}),
+        (STATS, {"days": 31}),
+        (STATS, {"days": 90}),
         (STATS, {"days": 91}),
         (STATS, {"days": -3}),
         (STATS, {"days": "x"}),
@@ -740,7 +742,7 @@ def test_the_edge_values_of_the_bounds_are_accepted(api):
         {"to": "9999-12-30"},
     ):
         assert api.get("tier2", IOCS, **params).status_code == 200, params
-    for days in (1, 90):
+    for days in (1, 30):
         assert api.get("tier2", STATS, days=days).status_code == 200
     assert api.get("tier2", LOOKUP, value="x" * 2048).status_code == 200
 
@@ -987,16 +989,24 @@ def test_the_days_without_an_ioc_are_in_the_series_as_zeros_oldest_first(api):
     }
 
 
+def test_a_series_longer_than_the_retention_window_is_refused(api):
+    """A row expires 30 days after the import that last listed it, and the stats count unexpired rows only: past 30 days the series
+    would be zeros by construction, so `days` is 1..30 and 31 is a 422 (the page asks for 30)."""
+    seed_stats(api)
+    for days in (31, 60, 90, 91):
+        assert api.get("tier2", STATS, days=days).status_code == 422, days
+    assert api.get("tier2", STATS, days=30).status_code == 200
+
+
 def test_days_sets_the_length_of_the_series_and_nothing_else(api):
     seed_stats(api)
     one = api.get("tier2", STATS, days=1).json()
     assert [d["day"] for d in one["by_day"]] == [TODAY]
     assert one["by_day"][0]["total"] == 5
     assert len(api.get("tier2", STATS, days=7).json()["by_day"]) == 7
-    wide = api.get("tier2", STATS, days=31).json()
-    assert len(wide["by_day"]) == 31 and wide["by_day"][0]["day"] == "2026-10-18"
-    assert wide["by_day"][0]["threatfox"] == 1  # the 23:59:59 row of 18/10 is in the 31st day
-    assert len(api.get("tier2", STATS, days=90).json()["by_day"]) == 90
+    wide = api.get("tier2", STATS, days=30).json()
+    assert len(wide["by_day"]) == 30 and wide["by_day"][0]["day"] == "2026-10-19"
+    assert wide["by_day"][0]["threatfox"] == 1  # 00:00 on 19/10: the 30th day back, in
     assert len(api.get("tier2", STATS).json()["by_day"]) == 30
     for key in (
         "top_malware",

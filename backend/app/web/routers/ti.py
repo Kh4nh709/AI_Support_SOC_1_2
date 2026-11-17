@@ -16,7 +16,7 @@ Signed-in users only, the Bearer token as every `/api` route: `tier1`, `tier2` a
 caller of the wrong role gets the `403` whatever they sent. Nothing here writes a row.
 
 **The inputs are bounded and a bad one is the app's usual `422`**, never a `500`: `page` 1..1 000 000, `page_size` 1..200 (default
-50), `days` 1..90 (default 30), `min_confidence` 0..100, `source` one of the three, `expired` a boolean, `q` at most 128
+50), `days` 1..30 (default 30, the retention window: see `queries.DAYS_MAX`), `min_confidence` 0..100, `source` one of the three, `expired` a boolean, `q` at most 128
 characters (a substring search over four columns: a whole URL belongs to the lookup), `value` of the lookup at most 2 048 (the
 importer's bound on a value), `malware` 256, `type` 64, `from` / `to` at most 64 characters and a date or an ISO time
 (`queries.parse_bound`: a date, or a time with no offset, is read in GMT+7). `to` is inclusive in both forms: a date `to` takes in

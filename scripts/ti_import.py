@@ -20,8 +20,11 @@ root's cron line starts it through `runuser` as the checkout's owner, with `env 
 (no bytecode is written into the checkout). Cron's PATH is `/usr/bin:/bin` and `runuser` is in `/usr/sbin`, so every
 program is by absolute path:
 
-    ... abusech_daily100.py && /usr/sbin/runuser -u <owner> -- /usr/bin/env -i <venv>/bin/python -B \\
+    ... abusech_daily100.py ... ; /usr/sbin/runuser -u <owner> -- /usr/bin/env -i <venv>/bin/python -B \\
         <checkout>/scripts/ti_import.py --env-file <checkout>/.env
+
+The importer follows the fetch with `;`, not `&&`, so it runs whatever the fetch did: a fetch that failed leaves no file (the run is
+`no_file`) or a header-only file (`no_rows`), and either is a failed run for the page, from 07:00, instead of nothing until the 26-hour banner.
 
 Output: one line per bad record on stderr (`ti_import: line 17: value_too_long`, or `lines 17-60: row_malformed` for
 a record that swallowed lines; the first 100, then a count), and ONE summary line on stdout (`ti_import: status=ok

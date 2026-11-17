@@ -99,6 +99,8 @@ export const TI_PAGE_SIZE = 50;
 export const TI_PAGE_SIZE_MAX = 200;
 export const TI_PAGE_MAX = 1_000_000;
 export const TI_DAYS = 30;
+/** The longest series the API serves: a row expires 30 days after its last import, so a longer one is zeros (the API refuses it). */
+export const TI_DAYS_MAX = 30;
 export const TI_Q_MAX = 128;
 export const TI_TYPE_MAX = 64;
 export const TI_MALWARE_MAX = 256;
@@ -158,7 +160,11 @@ export function fetchTiIocs(query: TiListQuery, signal?: AbortSignal): Promise<T
 }
 
 export function fetchTiStats(days: number = TI_DAYS, signal?: AbortSignal): Promise<TiStats> {
-  return api<TiStats>(`/ti/stats?${new URLSearchParams({ days: String(days) })}`, { signal });
+  // inside the API's bounds whatever is asked: 1 to TI_DAYS_MAX, a whole number
+  const length = Number.isFinite(days)
+    ? Math.min(Math.max(Math.trunc(days), 1), TI_DAYS_MAX)
+    : TI_DAYS;
+  return api<TiStats>(`/ti/stats?${new URLSearchParams({ days: String(length) })}`, { signal });
 }
 
 export function fetchTiStatus(signal?: AbortSignal): Promise<TiStatus> {

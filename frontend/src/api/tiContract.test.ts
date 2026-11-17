@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   TI_DAYS,
+  TI_DAYS_MAX,
   TI_EXPORT_FILES,
   TI_EXPORT_FORMATS,
   TI_EXPORT_MAX_ROWS,
@@ -182,7 +183,7 @@ describe("the stats", () => {
   it("is the route the page asks, over days 1..90 with 30 as its own default", () => {
     expect(routerPy).toContain('@router.get("/api/ti/stats")');
     expect(pyNumber(queriesPy, "DAYS_DEFAULT")).toBe(TI_DAYS);
-    expect(pyNumber(queriesPy, "DAYS_MAX")).toBe(90);
+    expect(pyNumber(queriesPy, "DAYS_MAX")).toBe(TI_DAYS_MAX);
     expect(tsApi).toContain("/ti/stats?");
   });
 

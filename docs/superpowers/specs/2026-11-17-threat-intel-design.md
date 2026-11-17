@@ -112,8 +112,10 @@ this phase: an expired row stays and is hidden by the API unless asked for.
 - One transaction for the whole file: a database error loads nothing. Then one `ti_import_log` row (also written
   for a failed header) and one summary line on stdout (counts only), which lands in the cron's log.
 - Status: `ok` (no bad row), `partial` (some bad rows, the good ones loaded), `failed` (nothing loaded).
-- The cron line stays in root's crontab and runs the importer as the checkout's owner with an empty environment:
-  `… abusech_daily100.py … && /usr/sbin/runuser -u user1 -- /usr/bin/env -i <venv python> -B /…/scripts/ti_import.py --env-file /…/trial/.env`
+- The cron line stays in root's crontab and runs the importer as the checkout's owner with an empty environment, after the fetch whatever
+  the fetch did (`;`, not `&&`: a fetch that exits non-zero, with no file or a header-only file, must still leave a failed run, `no_file` or
+  `no_rows`, for the page's status bar; only the sourcing of the env file is `&&`):
+  `… abusech_daily100.py … ; /usr/sbin/runuser -u user1 -- /usr/bin/env -i <venv python> -B /…/scripts/ti_import.py --env-file /…/trial/.env`
   (root is not needed, and root must not run code another account can edit; every program by absolute path, because
   root's cron has `PATH=/usr/bin:/bin` and `runuser` is in `/usr/sbin`; the Owner edits the crontab).
 - Hostile input: the file is capped at 20 MB; a record that spans more than one physical line is one bad row; the
@@ -128,7 +130,7 @@ from a closed list, never from the request's text.
   (a case-insensitive substring of `value`, `malware`, `threat`, a tag); `page`, `page_size` (default 50, at most
   200); sorted by `first_seen` descending. Expired rows (`expires_at` in the past) are left out unless
   `expired=true`. Returns the rows and the total.
-- `GET /api/ti/stats?days=30` (1–90): IOCs per day and source (the day of `first_seen` in GMT+7), the top 10
+- `GET /api/ti/stats?days=30` (1–30: a row expires 30 days after the import that last listed it and the stats count unexpired rows, so a longer series would be zeros by construction, and `days` beyond 30 is a 422): IOCs per day and source (the day of `first_seen` in GMT+7), the top 10
   malware, the count with `confidence >= 75`, the count with `hit_count > 0`, the count imported today (GMT+7), and
   the newest three malware names (`newest_malware`, which stays served; the KPI card shows the top three of `top_malware`, the Owner's words).
 - `GET /api/ti/lookup?value=`: the rows whose value equals the input after the importer's normalisation; an IPv4

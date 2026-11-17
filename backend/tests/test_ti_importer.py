@@ -2051,15 +2051,20 @@ def test_the_command_works_with_an_empty_environment(ti_dsn, ti_conn, tmp_path):
     assert len(iocs(ti_conn)) == 12
 
 
-def test_the_runbooks_cron_line_runs_the_importer_as_the_checkouts_owner_without_bytecode():
-    """Root's cron has PATH=/usr/bin:/bin and `runuser` is in /usr/sbin, so every program of the line is by absolute
-    path; the importer runs as the checkout's owner, with an empty environment and no bytecode."""
+def _cron_line_and_section() -> tuple[str, str]:
     text = (conftest.REPO_ROOT / "docs" / "runbook.md").read_text(encoding="utf-8")
     section = text.split("## Threat Intel importer (DEC-224)", 1)[1].split("\n## ", 1)[0]
     cron = [ln.strip() for ln in section.splitlines() if ln.strip().startswith("0 7 * * *")]
     assert len(cron) == 1
-    after_fetch = cron[0].split("abusech_daily100.py", 1)[1]
-    chained = " && /usr/sbin/runuser -u user1 -- /usr/bin/env -i "
+    return cron[0], section
+
+
+def test_the_runbooks_cron_line_runs_the_importer_as_the_checkouts_owner_without_bytecode():
+    """Root's cron has PATH=/usr/bin:/bin and `runuser` is in /usr/sbin, so every program of the line is by absolute
+    path; the importer runs as the checkout's owner, with an empty environment and no bytecode."""
+    line, section = _cron_line_and_section()
+    after_fetch = line.split("abusech_daily100.py", 1)[1]
+    chained = " ; /usr/sbin/runuser -u user1 -- /usr/bin/env -i "
     assert chained in after_fetch
     importer_part = after_fetch.split(chained, 1)[1]
     words = importer_part.split(" ")
@@ -2074,14 +2079,33 @@ def test_the_runbooks_cron_line_runs_the_importer_as_the_checkouts_owner_without
     assert "as root" not in section.lower()
 
 
+def test_the_importer_runs_after_the_fetch_whatever_the_fetch_did():
+    """The importer is joined to the fetch by `;`, not `&&`: a fetch that exits non-zero (no key: exit 2 and no file; every source
+    failed: exit 1 and a header-only file) must still leave a failed run (`no_file`, `no_rows`) for the page's status bar, which
+    `fetch && importer` would never record. Only the sourcing of the env file is `&&` (no environment, no fetch)."""
+    line, section = _cron_line_and_section()
+    assert line.count("&&") == 1
+    assert line.count(" ; ") == 1
+    before_fetch, after_fetch = line.split("abusech_daily100.py", 1)
+    assert before_fetch.endswith(". /etc/abusech.env && /usr/bin/python3 /opt/abusech/")
+    # the fetch's own redirection ends it, the `;` follows, and nothing of `&&` joins it to the importer
+    assert after_fetch.startswith(" >> /var/log/abusech_daily.log 2>&1 ; /usr/sbin/runuser -u user1 -- ")
+    assert "&&" not in after_fetch
+    # the runbook says what each outcome of the fetch records, and that the Owner re-installs the line
+    for word in ("exits 2", "no_file", "exits 1", "no_rows", "re-install"):
+        assert word in section, word
+
+
 def test_the_script_docstring_and_the_spec_show_the_same_cron_form():
-    form = "/usr/sbin/runuser -u"
-    assert form in SCRIPT.read_text(encoding="utf-8")
-    assert "/usr/bin/env -i" in SCRIPT.read_text(encoding="utf-8")
+    form = " ; /usr/sbin/runuser -u"
+    script = SCRIPT.read_text(encoding="utf-8")
+    assert form in script and "/usr/bin/env -i" in script
+    assert "&& /usr/sbin/runuser" not in script
     spec = (
         conftest.REPO_ROOT / "docs" / "superpowers" / "specs" / "2026-11-17-threat-intel-design.md"
     ).read_text(encoding="utf-8")
     assert form in spec and "/usr/bin/env -i" in spec
+    assert "&& /usr/sbin/runuser" not in spec
 
 
 def test_the_command_as_a_subprocess_with_the_database_down_prints_the_type_only(tmp_path):

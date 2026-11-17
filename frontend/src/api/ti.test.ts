@@ -86,6 +86,38 @@ describe("the query of the filters", () => {
   });
 });
 
+describe("the length of the series the page asks for", () => {
+  it("is 30 by default and never more than the API's 30 (a longer series is a 422), nor less than 1", async () => {
+    const seen: string[] = [];
+    server.use(
+      http.get("/api/ti/stats", ({ request }) => {
+        seen.push(new URL(request.url).search);
+        return HttpResponse.json(tiFixture.stats());
+      }),
+    );
+    await fetchTiStats();
+    await fetchTiStats(90);
+    await fetchTiStats(31);
+    await fetchTiStats(30);
+    await fetchTiStats(7);
+    await fetchTiStats(0);
+    await fetchTiStats(-5);
+    await fetchTiStats(7.9);
+    await fetchTiStats(Number.NaN);
+    expect(seen).toEqual([
+      "?days=30",
+      "?days=30",
+      "?days=30",
+      "?days=30",
+      "?days=7",
+      "?days=1",
+      "?days=1",
+      "?days=7",
+      "?days=30",
+    ]);
+  });
+});
+
 describe("the reads", () => {
   it("fetches the list, the stats and the status with the Bearer header", async () => {
     const seen: Array<[string, string | null]> = [];

@@ -323,6 +323,14 @@ describe("what the rule still does not cover (said in DEC-224), as the code does
       "hxxp://x[.]example[.]com/see.other.example.org",
     );
   });
+  it("leaves the host of a scheme that ends in a dot as it is (TI14 N3): the dot is no scheme character, so there is no scheme and no authority", () => {
+    expect(defang("x.://evil.example/", "url")).toBe("x[.]://evil.example/");
+    expect(defang("x.://evil.example/", "domain")).toBe("x[.]://evil.example/");
+    expect(defang("x.://evil.example/", "ip:port")).toBe("x.://evil.example/");
+    // none of them is a URL of a special scheme to a browser (the scheme is `x.`)
+    expect(isLive("x[.]://evil.example/")).toBe(false);
+    expect(isLive("x.://evil.example/")).toBe(false);
+  });
   it("leaves a percent-encoded dot, which is no dot to the text and a dot to a browser, as it is (a special scheme still gets its marker)", () => {
     expect(defang("http://evil%2eexample%2ecom/x", "url")).toBe("hxxp://evil%2eexample%2ecom/x");
     expect(defang("ws://evil%2ecom/x", "url")).toBe("ws://evil%2ecom[.]/x");

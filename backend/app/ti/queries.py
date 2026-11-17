@@ -22,7 +22,7 @@ importer stores it (trimmed, lower-case) and compared for equality; `malware` is
 
 **The stats** count the rows that are not expired, as the list does by default, so a figure here is the `total` the list gives
 for the same question: `high_confidence` is the total of `min_confidence=75`, a `top_malware` count is the total of that
-`malware`. `days` only sets the length of the per-day series, which is dense: every day of the window is there, as zeros when no
+`malware`. `days` (1 to 30, `DAYS_MAX`: a row expires 30 days after its last import) only sets the length of the per-day series, which is dense: every day of the window is there, as zeros when no
 IOC has it, oldest first, today last. The other figures are not windowed.
 
 **The lookup** compares the input, trimmed, the way the importer stored each row: a `domain` and every `*_hash` row is stored
@@ -75,7 +75,9 @@ PAGE_SIZE_MAX = 200
 #: A page number past this is not a page; the offset stays a small integer.
 PAGE_MAX = 1_000_000
 DAYS_DEFAULT = 30
-DAYS_MAX = 90
+#: The longest series the stats serve. A row expires 30 days (`importer.EXPIRES_AFTER`) after the import that last listed it and the stats
+#: count unexpired rows only, so a series longer than that is zeros by construction: the route refuses it (422) rather than draw it.
+DAYS_MAX = 30
 #: The ceilings of the text inputs: the importer's own bounds (a value that is longer than the importer allows names nothing).
 VALUE_MAX = VALUE_MAX_BYTES
 MALWARE_MAX = MALWARE_MAX_BYTES

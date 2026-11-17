@@ -615,20 +615,31 @@ moves first: `make migrate`, then the importer). Running a file twice is safe: a
 - **The database.** The importer takes `DATABASE_URL` from the `--env-file` and from nowhere else (not the arguments, not the process environment),
   so that line must be a DSN of the `app_rw` role that the **host** can reach (the published port of the trial database, not the compose-internal
   name). The DSN is never printed: a connection failure prints the exception's class name only.
-- **The cron line**, written by the Owner into **root's** crontab on the host, the importer chained after the fetch script and run as the
-  checkout's owner:
+- **The cron line**, written by the Owner into **root's** crontab on the host: the importer runs after the fetch script **whatever the fetch did**
+  (joined by `;`, not `&&`), as the checkout's owner:
 
   ```
-  0 7 * * * . /etc/abusech.env && /usr/bin/python3 /opt/abusech/abusech_daily100.py >> /var/log/abusech_daily.log 2>&1 && /usr/sbin/runuser -u user1 -- /usr/bin/env -i /project/project/AI_Support_SOC_1_2/.venv/bin/python -B /project/project/AI_Support_SOC_trial/scripts/ti_import.py --env-file /project/project/AI_Support_SOC_trial/.env >> /var/log/abusech_daily.log 2>&1
+  0 7 * * * . /etc/abusech.env && /usr/bin/python3 /opt/abusech/abusech_daily100.py >> /var/log/abusech_daily.log 2>&1 ; /usr/sbin/runuser -u user1 -- /usr/bin/env -i /project/project/AI_Support_SOC_1_2/.venv/bin/python -B /project/project/AI_Support_SOC_trial/scripts/ti_import.py --env-file /project/project/AI_Support_SOC_trial/.env >> /var/log/abusech_daily.log 2>&1
   ```
+
+  *Why `;` between the fetch and the importer.* With `&&` an importer that follows a fetch that failed never runs, so no run is recorded and the page says
+  nothing until its 26-hour banner (about 09:00 the next day). The fetch script exits non-zero in two ways: **the fetch exits 2** with no file when its key is
+  missing, and **the fetch exits 1** and leaves a file with a header and no row when every source failed. With `;` the importer runs after both, and each
+  is a failed run in `ti_import_log` from 07:00, on the page's status bar: no file today is `no_file`, a header-only file is `no_rows`; a fetch that
+  exits 0 is imported as before (`ok` or `partial`). The one `&&`, after sourcing `/etc/abusech.env`, stays: with no environment there is no fetch to
+  follow, and neither runs (the 26-hour banner is then the page's only sign).
+
+  *The Owner re-installs this line.* The `&&` form was installed in root's crontab on 17/11 (step 2 of the Owner's check): the Owner **re-installs**
+  the line above (`crontab -e` in root's crontab: replace that one line, then `crontab -l` to read it back). Until then a failed fetch shows only as the 26-hour banner. The
+  agent never edits a crontab.
 
   *Why absolute paths.* Root's cron runs a job with `PATH=/usr/bin:/bin`, and `runuser` lives in `/usr/sbin`: written bare, the line would stop with
   `runuser: not found` in the log and the importer would never run. So `/usr/sbin/runuser`, `/usr/bin/env` and the interpreter are all by absolute path.
 
   *Why `runuser`, and no root.* The importer needs no root right: it reads a CSV that is world-readable and writes to a database over the network. The
   code (`scripts/`, `backend/`), the venv and the `.env` it runs from belong to `user1`; a root process that ran code a `user1` process can edit would
-  hand `user1` root. So the `&&` chain stays in root's crontab, where the fetch needs it, and the importer is started as the checkout's owner. `-B`
-  writes no bytecode: no `__pycache__` appears in the checkout, owned by anyone. The importer runs only when the fetch exits 0. It never reads the
+  hand `user1` root. So the line stays in root's crontab, where the fetch needs it, and the importer is started as the checkout's owner. `-B`
+  writes no bytecode: no `__pycache__` appears in the checkout, owned by anyone. The importer runs whatever the fetch's exit code (above). It never reads the
   environment, and `env -i` in front of the interpreter gives it an empty one: `runuser -u` alone would hand on what the first command sourced from
   `/etc/abusech.env` (the abuse.ch key, if that file exports it), which the importer has no use for.
 - **A good run** prints ONE line on stdout, counts and closed words only, and exits 0:
@@ -643,11 +654,13 @@ moves first: `make migrate`, then the importer). Running a file twice is safe: a
   `header_missing: <columns>`, `file_unreadable` (also: not a regular file), `file_too_large` (over 20 MB), `no_file` (today's file is not in the
   directory), `no_rows` (a header only), `no_valid_rows; skipped: ...`, `database_error: <class>` (the whole file is one transaction, so nothing of it
   is in `ti_ioc`; a lock wait over 5 s or a statement over 10 s is `LockNotAvailable` or `QueryCanceled`), and, before any log row is possible,
-  `env_file_unreadable`, `dsn_missing`, `database_unreachable: <class>`.
+  `env_file_unreadable`, `dsn_missing`, `database_unreachable: <class>`. Two are printed with **no log row** when the failure row itself cannot be
+  written: `database_error: <class>` (the database refused the log row too: look at the cron's log, there is no row to read) and `internal_error: <class>`
+  (an error of the importer's own that is not the database's: a bug; the class name is all it prints, and the log row is not written either).
 - **Exit codes.** 0 `ok` or `partial`; 1 `failed`; 2 usage (no `--env-file`, an unknown option).
 - **Looking at it.** `psql "$DATABASE_URL_OWNER" -c "select id, file, status, rows_total, rows_new, rows_updated, rows_error, message, finished_at
   from ti_import_log order by id desc limit 5"`. The page's status bar (**Threat Intel page**, below) reads the same table and turns red when no run has succeeded for 26 hours.
-- **Rollback.** Take the `&& ... ti_import.py ...` half off the cron line. Nothing is deleted by the application; the two tables stay.
+- **Rollback.** Take the `; ... ti_import.py ...` half off the cron line. Nothing is deleted by the application; the two tables stay.
 
 ## Threat Intel page (DEC-224)
 
