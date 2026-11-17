@@ -130,7 +130,7 @@ from a closed list, never from the request's text.
   `expired=true`. Returns the rows and the total.
 - `GET /api/ti/stats?days=30` (1–90): IOCs per day and source (the day of `first_seen` in GMT+7), the top 10
   malware, the count with `confidence >= 75`, the count with `hit_count > 0`, the count imported today (GMT+7), and
-  the newest three malware names for the KPI card.
+  the newest three malware names (`newest_malware`, which stays served; the KPI card shows the top three of `top_malware`, the Owner's words).
 - `GET /api/ti/lookup?value=`: the rows whose value equals the input after the importer's normalisation; an IPv4
   input also matches `ip:port` rows of that address. An empty list when nothing matches.
 - `GET /api/ti/status`: the newest import-log row, the newest successful one, and `stale: true` when no successful

@@ -646,8 +646,54 @@ moves first: `make migrate`, then the importer). Running a file twice is safe: a
   `env_file_unreadable`, `dsn_missing`, `database_unreachable: <class>`.
 - **Exit codes.** 0 `ok` or `partial`; 1 `failed`; 2 usage (no `--env-file`, an unknown option).
 - **Looking at it.** `psql "$DATABASE_URL_OWNER" -c "select id, file, status, rows_total, rows_new, rows_updated, rows_error, message, finished_at
-  from ti_import_log order by id desc limit 5"`. The page's status bar (a later task) reads the same table and turns red when no run has succeeded for 26 hours.
+  from ti_import_log order by id desc limit 5"`. The page's status bar (**Threat Intel page**, below) reads the same table and turns red when no run has succeeded for 26 hours.
 - **Rollback.** Take the `&& ... ti_import.py ...` half off the cron line. Nothing is deleted by the application; the two tables stay.
+
+## Threat Intel page (DEC-224)
+
+The page **Threat Intel** (`/threat-intel`, a link in the header, `tier1`, `tier2` and `admin`) shows what the importer loaded: a status bar, four
+cards, two charts and the table of IOCs with a detail panel. It needs no key, no switch and no migration beyond 026 (the importer's section, above);
+the CSV and CSV-to-database half is the importer's, this is the part a person looks at. The export (CSV and blocklist) is the `admin`'s alone.
+
+- **Deploying it on the trial** (the trial checkout, after the importer's steps; *not run by the agent*, the Owner runs them):
+
+  ```
+  docker compose restart app
+  docker compose build ui && docker compose up -d ui
+  ```
+
+  `app` first: the five `/api/ti/*` routes are code only (the `backend/` mount is live), so a **restart** is enough, and `up -d` would print `Running`
+  and reload nothing. Then the `ui`: it is a **built image**, not a mount, so `restart ui` and a plain `up -d ui` keep serving the old build; `build ui`
+  then `up -d ui` recreates it with the new page (`docker compose up -d --build ui` is the same). An old `ui` on the new `app` simply has no page; a new `ui`
+  on an old `app` shows the page with a "could not load" line in each section. Reload the browser; `index.html` is served `no-cache`.
+- **Checking the page.** Sign in (any role) and open **Threat Intel** in the header (`curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8081/threat-intel`
+  → `200` is only the page shell; there is no token to put on a command line, and the page is the check):
+  1. The **status bar** names the last import's time (GMT+7) and its new, updated and refused counts: the same as
+     `psql "$DATABASE_URL_OWNER" -c "select finished_at, rows_new, rows_updated, rows_error from ti_import_log where status in ('ok','partial') order by finished_at desc limit 1"`.
+     A **red banner** means no successful import finished within 26 hours: look at `ti_import_log` and the cron's log (the importer's section), not at the page.
+  2. The **four cards**: new today, confidence at or above 75, the top three malware with their counts, and "Khớp trong log" (0: the matching of IOCs against logs
+     is not built, DEC-224).
+  3. The **two charts**: IOCs per day for 30 days stacked by source, and the top 10 malware.
+  4. The **table**, 50 rows a page, newest first. A URL, a domain or an address is printed defanged (`hxxp://evil[.]example[.]com`, `192.0.2[.]10:443`) and nothing in
+     it is a link; **Sao chép** puts the *original* value on the clipboard (paste it to see; on a page served over plain http the browser may refuse, and the original value then
+     appears in a box, already selected, for Ctrl+C); a MalwareBazaar row has no confidence (a dash). A row opens the detail panel: every field, and one link, to the IOC's own page
+     on `threatfox.abuse.ch`, `urlhaus.abuse.ch` or `bazaar.abuse.ch`, in a new tab. A reference to any other site is shown as text, not as a link.
+  5. The **filters** (source, type, malware, dates, minimum confidence, a search) act on **Lọc** and are in the address bar, so a reload keeps them. "Any confidence" (empty, or 0)
+     sends nothing: a minimum from 1 leaves out the rows that have no confidence, which is all of MalwareBazaar.
+  6. As `admin`, **Xuất CSV** and **Xuất blocklist** are beside the filters and save `threat-intel-iocs.csv` and `threat-intel-blocklist.txt` for the filters on screen (at most 20 000 rows;
+     more is a message asking for a narrower filter). As `tier1` or `tier2` the buttons are not on the page at all.
+- **The blocklist is read by a person before it is fed to a firewall.** It lists domains and IP addresses only (the port of an `ip:port` dropped), without duplicates, and the server
+  leaves out what no firewall should block (private, loopback, link-local, carrier-grade NAT, multicast and reserved addresses; names under `local`, `lan`, `internal`, `arpa`, `test`,
+  `example` and the like; a name whose last label is not a real top-level label). That is a shape rule, not a judgement: **a shared-hosting apex or a public suffix, a `github.io`-style name
+  or `co.uk`, would be in the file if a feed listed it, and blocking it blocks every site under it**; a legitimate service an attacker abused is in it for the same reason. The file is
+  what the feed says, not a verdict: open it, read each line, delete the ones that are not the attacker's, and only then load it. The CSV starts with a UTF-8 byte order mark so that Excel
+  reads it as UTF-8, and a cell that begins like a formula carries a leading `'`.
+- **When it does not work.** *"Máy chủ đang bận, hãy thử lại sau ít phút"* in a section is a `503` from the server's 5 s statement timeout (the section's own **Thử lại** asks again):
+  the database is loaded, not the page broken. A section's *"Không tải được…"* is any other failure (`docker compose logs app`). *"Bạn không có quyền vào trang đó"* is a `403`; a `401` ends the
+  session and goes to the login page. No page at all after a deploy means the `ui` image was not rebuilt (the row above). An empty table with a good status bar means the filters match nothing
+  (**Xoá bộ lọc**) or `ti_ioc` is empty (`select count(*) from ti_ioc`).
+- **Rollback.** The page is code only: revert the merge, `docker compose restart app`, `docker compose build ui && docker compose up -d ui`. Nothing in the database changes and the importer
+  keeps running; the two tables stay.
 
 ## Alarms
 
