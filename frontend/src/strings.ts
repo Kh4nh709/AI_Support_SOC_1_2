@@ -79,6 +79,8 @@ export const S = {
     admin: "Quản trị",
     // The page of the SOAR review tickets (SR-T2); every role has it, and the link carries the count of open tickets.
     soar: "Phản hồi SOAR",
+    // The page of the abuse.ch IOCs (DEC-224); every role has it.
+    ti: "Threat Intel",
     logout: "Đăng xuất",
   },
 
@@ -2979,6 +2981,153 @@ export const S = {
         summary: "Nội dung gốc SOAR đã gửi (văn bản)",
         empty: "Không có nội dung gốc.",
       },
+    },
+  },
+  // The page "Threat Intel" (`/threat-intel`, DEC-224, all three roles): the abuse.ch IOCs the host's daily script collects. Every IOC
+  // field is text from a public feed: the page prints it as text, and a value that is a URL, a domain or an address is printed defanged.
+  ti: {
+    title: "Threat Intel",
+    count: (n: number) => `${n} IOC`,
+    // A 503 {reason: timeout}: the read outlived the server's limit. Said as "busy", not as a failure.
+    busy: "Máy chủ đang bận, hãy thử lại sau ít phút.",
+    loadError: {
+      status: "Không tải được trạng thái import",
+      stats: "Không tải được số liệu và biểu đồ",
+      list: "Không tải được danh sách IOC",
+    },
+    // The closed set of `source`; a source this table lacks is shown as its code.
+    source: {
+      threatfox: "ThreatFox",
+      urlhaus: "URLhaus",
+      malwarebazaar: "MalwareBazaar",
+    },
+    status: {
+      label: "Trạng thái import",
+      last: "Lần import gần nhất",
+      at: (time: string) => `${time} (GMT+7)`,
+      newCount: (n: number) => `${n} IOC mới`,
+      updatedCount: (n: number) => `${n} cập nhật`,
+      errorCount: (n: number) => `${n} dòng lỗi`,
+      never: "Chưa có lần import thành công nào.",
+      failedLast: (time: string) =>
+        `Lần chạy gần nhất (${time}, GMT+7) thất bại; danh sách giữ dữ liệu của lần import thành công trước.`,
+      stale: (hours: number) =>
+        `Dữ liệu đã cũ: không có lần import thành công nào trong ${hours} giờ qua.`,
+      staleNever: "Dữ liệu chưa có: chưa từng có lần import thành công nào.",
+    },
+    kpi: {
+      label: "Chỉ số",
+      today: "Mới hôm nay",
+      high: (n: number) => `Độ tin cậy ≥ ${n}`,
+      top: "Top 3 malware",
+      topEmpty: "Chưa có",
+      topItem: (name: string, count: number) => `${name} (${count})`,
+      matched: "Khớp trong log",
+    },
+    charts: {
+      label: "Biểu đồ",
+      perDay: {
+        title: (days: number) => `IOC mỗi ngày, ${days} ngày gần nhất`,
+        aria: (days: number, total: number) =>
+          `Biểu đồ cột chồng theo nguồn: số IOC mỗi ngày trong ${days} ngày gần nhất, tổng ${total}`,
+        bar: (day: string, parts: string) => `${day}: ${parts}`,
+        part: (source: string, n: number) => `${source} ${n}`,
+        none: "không có IOC",
+      },
+      topMalware: {
+        title: "Top 10 malware",
+        aria: (n: number) => `Biểu đồ cột ngang: ${n} malware có nhiều IOC nhất`,
+        bar: (name: string, count: number) => `${name}: ${count} IOC`,
+      },
+      legend: "Nguồn",
+      empty: "Chưa có dữ liệu để vẽ.",
+    },
+    filters: {
+      label: "Lọc IOC",
+      source: "Nguồn",
+      sourceAny: "Tất cả nguồn",
+      type: "Loại",
+      typePlaceholder: "ip:port, domain, url, sha256_hash",
+      malware: "Malware",
+      from: "Từ ngày",
+      to: "Đến ngày",
+      confidence: "Độ tin cậy tối thiểu",
+      confidenceHint:
+        "Bỏ trống hoặc 0 là mọi mức. Đặt mức tối thiểu thì IOC chưa có độ tin cậy (—) bị loại.",
+      search: "Tìm theo giá trị, malware, mối đe doạ hoặc thẻ",
+      apply: "Lọc",
+      clear: "Xoá bộ lọc",
+    },
+    tableLabel: "Danh sách IOC",
+    valueNote:
+      "URL, tên miền và IP hiển thị ở dạng đã vô hiệu hoá (hxxp://, [.]) và chỉ là chữ, không bao giờ là liên kết. Nút Sao chép lấy giá trị gốc.",
+    col: {
+      time: "Thấy lúc",
+      source: "Nguồn",
+      type: "Loại",
+      value: "Giá trị",
+      malware: "Malware",
+      confidence: "Tin cậy",
+      tags: "Thẻ",
+      copy: "Sao chép",
+    },
+    moreTags: (n: number) => `+${n}`,
+    empty: "Chưa có IOC nào.",
+    emptyFiltered: "Không có IOC nào khớp bộ lọc.",
+    pageEmpty: "Không có IOC nào ở trang này.",
+    pagination: "Các trang của danh sách IOC",
+    range: (from: number, to: number, total: number) => `${from}–${to} / ${total}`,
+    page: (n: number) => `Trang ${n}`,
+    copy: {
+      button: "Sao chép",
+      copied: "Đã sao chép",
+      label: (id: number) => `Sao chép giá trị gốc của IOC ${id}`,
+      // The clipboard refused: the original value is shown in a box, already selected, for Ctrl+C.
+      fallback: "Trình duyệt không cho sao chép tự động. Giá trị gốc đã được chọn, nhấn Ctrl+C.",
+      boxLabel: "Giá trị gốc của IOC (đã chọn)",
+    },
+    detail: {
+      open: (id: number) => `Xem chi tiết IOC ${id}`,
+      title: (id: number) => `Chi tiết IOC #${id}`,
+      close: "Đóng",
+      field: {
+        id: "ID",
+        value: "Giá trị",
+        type: "Loại",
+        source: "Nguồn",
+        malware: "Malware",
+        threat: "Mối đe doạ",
+        confidence: "Độ tin cậy",
+        tags: "Thẻ",
+        reference: "Tham chiếu",
+        firstSeen: "Thấy lần đầu",
+        lastSeen: "Thấy lần cuối",
+        importedAt: "Import lúc",
+        expiresAt: "Hết hạn lúc",
+        expired: "Đã hết hạn",
+        hitCount: "Số lần khớp trong log",
+        lastHit: "Khớp gần nhất",
+      },
+      yes: "Có",
+      noTags: "Không có thẻ",
+      reference: {
+        open: "Mở trang abuse.ch",
+        newTab: "mở trong tab mới",
+        notLinked: "Không phải trang của abuse.ch nên không là liên kết.",
+      },
+    },
+    export: {
+      label: "Xuất dữ liệu",
+      csv: "Xuất CSV",
+      blocklist: "Xuất blocklist",
+      working: "Đang xuất…",
+      scope: (limit: number) => `Theo bộ lọc hiện tại, tối đa ${limit} dòng.`,
+      review:
+        "Đọc lại blocklist trước khi nạp vào tường lửa: chỉ có tên miền và địa chỉ IP, nhưng người phải duyệt từng dòng.",
+      done: (name: string) => `Đã tải về ${name}`,
+      tooMany: (limit: number) => `Quá nhiều dòng để xuất (tối đa ${limit}). Hãy lọc hẹp hơn.`,
+      forbidden: "Chỉ admin được xuất dữ liệu.",
+      failed: "Không xuất được, hãy thử lại.",
     },
   },
 } as const;

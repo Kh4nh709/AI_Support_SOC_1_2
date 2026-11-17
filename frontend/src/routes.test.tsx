@@ -25,6 +25,10 @@ vi.mock("./features/tier1/AlertPage", () => ({
 vi.mock("./features/soar/SoarPage", () => ({
   SoarPage: () => <h1>{S.soar.title}</h1>,
 }));
+// The page Threat Intel (DEC-224) reads the API (features/ti/TiPage.*.test.tsx test it); here only its place matters.
+vi.mock("./features/ti/TiPage", () => ({
+  TiPage: () => <h1>{S.ti.title}</h1>,
+}));
 // The labelling page reads the label routes with the labeller named in the session's token (LabelsPage.test.tsx
 // tests it); this file looks for its place and its title.
 vi.mock("./features/admin/LabelsPage", () => ({
@@ -528,5 +532,57 @@ describe("the SOAR page (SR-T2)", () => {
     expect(await screen.findByRole("link", { name: S.nav.soar })).toBeInTheDocument();
     expect(screen.getByRole("banner")).toHaveTextContent(S.app.name);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+// DEC-224: the page "Threat Intel" is every role's, like the queue and the SOAR page; the export on it is the admin's alone, which the
+// page itself decides (features/ti/TiPage.export.test.tsx), and the API enforces.
+describe("the Threat Intel page (DEC-224)", () => {
+  it.each<Session["role"]>(["tier1", "tier2", "admin"])(
+    "lets %s open /threat-intel",
+    async (role) => {
+      server.use(
+        http.get("/api/soar/reviews/count", () =>
+          HttpResponse.json({ count: 0, latest_received_at: null }),
+        ),
+      );
+      renderAt("/threat-intel", session(role));
+      expect(where()).toBe("/threat-intel");
+      expect(
+        await screen.findByRole("heading", { level: 1, name: S.ti.title }),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps the filters of the URL when it opens", async () => {
+    server.use(
+      http.get("/api/soar/reviews/count", () =>
+        HttpResponse.json({ count: 0, latest_received_at: null }),
+      ),
+    );
+    renderAt("/threat-intel?source=urlhaus&page=2", session("tier1"));
+    await screen.findByRole("heading", { level: 1, name: S.ti.title });
+    expect(where()).toBe("/threat-intel");
+    expect(whereSearch()).toBe("?source=urlhaus&page=2");
+  });
+
+  it("sends a visitor with no session from /threat-intel to /login, and the login remembers where they were going", () => {
+    renderAt("/threat-intel", null);
+    expect(where()).toBe("/login");
+  });
+
+  it("is a link in the header on every page, and it goes to the page", async () => {
+    server.use(
+      http.get("/api/soar/reviews/count", () =>
+        HttpResponse.json({ count: 0, latest_received_at: null }),
+      ),
+    );
+    renderAt("/queue", session("tier2"));
+    const link = await screen.findByRole("link", { name: S.nav.ti });
+    expect(link).toHaveAttribute("href", "/threat-intel");
+    await userEvent.setup().click(link);
+    expect(where()).toBe("/threat-intel");
+    expect(await screen.findByRole("heading", { level: 1, name: S.ti.title })).toBeInTheDocument();
   });
 });

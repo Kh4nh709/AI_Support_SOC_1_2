@@ -144,7 +144,7 @@ it.each(["tier1", "tier2", "admin"] as const)("gives %s the link to /soar", (rol
   expect(link).not.toHaveAttribute("target");
 });
 
-const NAV = [S.nav.queue, S.nav.cases, S.nav.soar, S.nav.admin];
+const NAV = [S.nav.queue, S.nav.cases, S.nav.soar, S.nav.ti, S.nav.admin];
 
 it("puts the SOAR link after Case and before Quản trị", () => {
   renderHeader(session("admin"));
@@ -153,6 +153,31 @@ it("puts the SOAR link after Case and before Quản trị", () => {
     .map((a) => a.textContent)
     .filter((text) => (NAV as readonly string[]).includes(text ?? ""));
   expect(names).toEqual(NAV);
+});
+
+// DEC-224: the page "Threat Intel" is every role's too (the export on it is the admin's alone, and the page decides that), so its link
+// is in every role's navigation, after the SOAR link and before the console.
+it.each(["tier1", "tier2", "admin"] as const)("gives %s the link to /threat-intel", (role) => {
+  renderHeader(session(role));
+  const link = screen.getByRole("link", { name: S.nav.ti });
+  expect(S.nav.ti).toBe("Threat Intel");
+  expect(link).toHaveAttribute("href", "/threat-intel");
+  expect(link).not.toHaveAttribute("target");
+  expect(link.getAttribute("href")).not.toMatch(/^[a-z]+:/i);
+});
+
+it("puts the Threat Intel link after the SOAR link and before Quản trị, and marks it as the current page on /threat-intel", () => {
+  renderHeader(session("admin"), {}, undefined, "/threat-intel");
+  const names = screen.getAllByRole("link").map((a) => a.textContent);
+  expect(names.indexOf(S.nav.ti)).toBe(names.indexOf(S.nav.soar) + 1);
+  expect(names.indexOf(S.nav.admin)).toBe(names.indexOf(S.nav.ti) + 1);
+  expect(screen.getByRole("link", { name: S.nav.ti })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("link", { name: S.nav.soar })).not.toHaveAttribute("aria-current");
+});
+
+it("shows no Threat Intel link to nobody signed in", () => {
+  renderHeader(null);
+  expect(screen.queryByRole("link", { name: S.nav.ti })).not.toBeInTheDocument();
 });
 
 it("marks the SOAR link as the current page on /soar", () => {

@@ -2,7 +2,8 @@
 // case page P10-T11's. The admin console (P11-T10, admin spec §3) is `/admin` and its pages (`/admin/knowledge` is
 // DEC-210's, P13-T06; `/admin/lab` and `/admin/lab/:runId`, the lab labelling, are DEC-213's, P14-T10; the pages for
 // the auto-close rules and the digest were removed with DEC-214, and a path under either is an unknown path, which
-// the `*` route below answers). The page of the SOAR review tickets (`/soar`, SR-T2) is every role's, like the queue.
+// the `*` route below answers). The page of the SOAR review tickets (`/soar`, SR-T2) is every role's, like the queue, and so is the
+// page Threat Intel (`/threat-intel`, DEC-224): the export on it is the admin's alone, which the page and the API each decide.
 import { lazy, type ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router";
 import { useAuth } from "./auth/AuthProvider";
@@ -15,6 +16,7 @@ import { LazyPage } from "./components/LazyPage";
 import { AdminLayout } from "./features/admin/AdminLayout";
 import { SoarNavBadge } from "./features/soar/SoarNavBadge";
 import { SoarPage } from "./features/soar/SoarPage";
+import { TiPage } from "./features/ti/TiPage";
 import { AlertPage } from "./features/tier1/AlertPage";
 import { QueuePage } from "./features/tier1/QueuePage";
 import { CasePage } from "./features/tier2/CasePage";
@@ -144,6 +146,14 @@ export function AppRoutes() {
           element={
             <RequireRole roles={EVERY_ROLE}>
               <SoarPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="/threat-intel"
+          element={
+            <RequireRole roles={EVERY_ROLE}>
+              <TiPage />
             </RequireRole>
           }
         />

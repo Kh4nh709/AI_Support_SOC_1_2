@@ -1,4 +1,4 @@
-// The app header (spec §3): the name, the navigation for the role (the SOAR page is every role's), the live indicator, the user and Đăng xuất.
+// The app header (spec §3): the name, the navigation for the role (the SOAR page and the Threat Intel page are every role's), the live indicator, the user and Đăng xuất.
 // Nobody signed in (the login page, or while the session is being restored) sees the name alone.
 import type { ReactNode } from "react";
 import { NavLink } from "react-router";
@@ -45,6 +45,12 @@ export function AppHeader({
             >
               {S.nav.soar}
               {soarBadge}
+            </NavLink>
+            <NavLink
+              to="/threat-intel"
+              className={({ isActive }) => `${LINK} ${isActive ? LINK_ACTIVE : ""}`}
+            >
+              {S.nav.ti}
             </NavLink>
             {session.role === "admin" && (
               <NavLink
