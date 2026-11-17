@@ -152,3 +152,42 @@ export function filtersOf(view: TiView): TiFilters {
 export function listQueryOf(view: TiView): TiListQuery {
   return { ...filtersOf(view), page: view.page };
 }
+
+/** What the form holds: the text of each box, as typed. */
+export type Draft = {
+  source: string;
+  type: string;
+  malware: string;
+  from: string;
+  to: string;
+  confidence: string;
+  q: string;
+};
+
+export const draftOf = (view: TiView): Draft => ({
+  source: view.source ?? "",
+  type: view.type,
+  malware: view.malware,
+  from: view.from,
+  to: view.to,
+  confidence: view.minConfidence === null ? "" : String(view.minConfidence),
+  q: view.q,
+});
+
+/** The view the form means when it is sent: every box checked as the URL's values are, page 1. */
+export function viewOfDraft(draft: Draft): TiView {
+  return {
+    source: isTiSource(draft.source) ? draft.source : null,
+    type: cleanType(draft.type),
+    malware: cleanMalware(draft.malware),
+    from: cleanDay(draft.from),
+    to: cleanDay(draft.to),
+    minConfidence: cleanConfidence(draft.confidence.trim()),
+    q: cleanQuery(draft.q),
+    page: 1,
+  };
+}
+
+/** Whether two views filter the same way (the page does not matter). */
+export const sameFilters = (a: TiView, b: TiView): boolean =>
+  viewSearch({ ...a, page: 1 }) === viewSearch({ ...b, page: 1 });

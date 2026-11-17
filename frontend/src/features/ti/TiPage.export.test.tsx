@@ -276,3 +276,122 @@ describe("what a refusal says", () => {
     expect(saved.clicks).toHaveLength(0);
   });
 });
+
+// TI12 M4: the export is for the filters that are APPLIED (the URL's), not for what is typed in the form. While the form says something
+// else the buttons are shut with a hint, so a blocklist is never made for filters nobody applied.
+describe("the export is for the applied filters", () => {
+  const form = () => screen.getByRole("search", { name: S.ti.filters.label });
+  const buttons = async () => {
+    const box = await control();
+    return {
+      csv: within(box).getByRole("button", { name: S.ti.export.csv }),
+      blocklist: within(box).getByRole("button", { name: S.ti.export.blocklist }),
+    };
+  };
+
+  it("says in its label that it is for the applied filters", async () => {
+    serve(server, fake());
+    renderTi({ role: "admin" });
+    await ready();
+    const box = await control();
+    expect(S.ti.export.scope(20000)).toMatch(/bộ lọc đã áp dụng/);
+    expect(within(box).getByText(S.ti.export.scope(20000))).toBeInTheDocument();
+    expect(within(box).queryByText(S.ti.export.unapplied)).not.toBeInTheDocument();
+  });
+
+  it("shuts both buttons, with a hint, while the form holds a filter that is not applied, and opens them when it is sent", async () => {
+    const state = fake();
+    serve(server, state);
+    const user = userEvent.setup();
+    renderTi({ role: "admin", entry: "/threat-intel?source=urlhaus" });
+    await ready();
+    expect((await buttons()).csv).toBeEnabled();
+    await user.selectOptions(
+      within(form()).getByLabelText(S.ti.filters.source),
+      S.ti.source.threatfox,
+    );
+    const shut = await buttons();
+    expect(shut.csv).toBeDisabled();
+    expect(shut.blocklist).toBeDisabled();
+    const hint = within(await control()).getByText(S.ti.export.unapplied);
+    expect(shut.csv).toHaveAccessibleDescription(S.ti.export.unapplied);
+    expect(hint).toBeInTheDocument();
+    // pressing a shut button asks for nothing
+    await user.click(shut.csv);
+    await user.click(shut.blocklist);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(state.exports).toHaveLength(0);
+    // sent: the view is the form's, and the export is for it
+    await user.click(within(form()).getByRole("button", { name: S.ti.filters.apply }));
+    await waitFor(async () => expect((await buttons()).csv).toBeEnabled());
+    expect(within(await control()).queryByText(S.ti.export.unapplied)).not.toBeInTheDocument();
+    await user.click((await buttons()).csv);
+    await waitFor(() => expect(state.exports).toHaveLength(1));
+    expect(state.exports[0]?.url.searchParams.get("source")).toBe("threatfox");
+  });
+
+  it("shuts them for a typed search too, and for a date, a type, a malware and a confidence; and never exports what is typed", async () => {
+    const state = fake();
+    serve(server, state);
+    const user = userEvent.setup();
+    renderTi({ role: "admin" });
+    await ready();
+    await user.type(within(form()).getByLabelText(S.ti.filters.search), "typed but not sent");
+    expect((await buttons()).blocklist).toBeDisabled();
+    await user.clear(within(form()).getByLabelText(S.ti.filters.search));
+    expect((await buttons()).blocklist).toBeEnabled();
+    for (const [label, value] of [
+      [S.ti.filters.type, "domain"],
+      [S.ti.filters.malware, "Example.Rat"],
+      [S.ti.filters.confidence, "75"],
+    ] as const) {
+      const field = within(form()).getByLabelText(label);
+      await user.type(field, value);
+      expect((await buttons()).csv, label).toBeDisabled();
+      await user.clear(field);
+      expect((await buttons()).csv, label).toBeEnabled();
+    }
+    expect(state.exports).toHaveLength(0);
+  });
+
+  it("is not shut by a difference that is no difference: white space, a 0 for any confidence, the same text again", async () => {
+    serve(server, fake());
+    const user = userEvent.setup();
+    renderTi({ role: "admin", entry: "/threat-intel?q=abc" });
+    await ready();
+    const search = within(form()).getByLabelText(S.ti.filters.search);
+    await user.type(search, "  ");
+    expect((await buttons()).csv).toBeEnabled();
+    await user.clear(search);
+    await user.type(search, "  abc  ");
+    expect((await buttons()).csv).toBeEnabled();
+    await user.type(within(form()).getByLabelText(S.ti.filters.confidence), "0");
+    expect((await buttons()).csv).toBeEnabled();
+  });
+
+  it("opens again when the form is cleared with Xoá bộ lọc, and the form goes back to what is applied", async () => {
+    serve(server, fake());
+    const user = userEvent.setup();
+    renderTi({ role: "admin", entry: "/threat-intel?source=urlhaus" });
+    await ready();
+    await user.selectOptions(
+      within(form()).getByLabelText(S.ti.filters.source),
+      S.ti.source.malwarebazaar,
+    );
+    expect((await buttons()).csv).toBeDisabled();
+    await user.click(within(form()).getByRole("button", { name: S.ti.filters.clear }));
+    await waitFor(async () => expect((await buttons()).csv).toBeEnabled());
+    expect((within(form()).getByLabelText(S.ti.filters.source) as HTMLSelectElement).value).toBe(
+      "",
+    );
+  });
+
+  it("is not shut for a tier that has no export at all (nothing is there to shut)", async () => {
+    serve(server, fake());
+    const user = userEvent.setup();
+    renderTi({ role: "tier1" });
+    await ready();
+    await user.type(within(form()).getByLabelText(S.ti.filters.search), "x");
+    expect(screen.queryByText(S.ti.export.unapplied)).not.toBeInTheDocument();
+  });
+});

@@ -17,7 +17,19 @@ import { StatusBar } from "./StatusBar";
 import { TiDetail } from "./TiDetail";
 import { TiFilters } from "./TiFilters";
 import { TiPagination } from "./TiPagination";
-import { filtersOf, listQueryOf, readView, viewToParams, type TiView } from "./tiParams";
+import {
+  EMPTY_VIEW,
+  draftOf,
+  filtersOf,
+  listQueryOf,
+  readView,
+  sameFilters,
+  viewOfDraft,
+  viewSearch,
+  viewToParams,
+  type Draft,
+  type TiView,
+} from "./tiParams";
 import { tiKeys, useTiRetry } from "./tiQueries";
 import { tiColumns } from "./TiTable";
 
@@ -25,6 +37,14 @@ export function TiPage() {
   const [params, setParams] = useSearchParams();
   const view = useMemo(() => readView(params), [params]);
   const retry = useTiRetry();
+  // What the form holds. It follows the URL when the URL changes it (Xoá bộ lọc, the back button), and is left alone while somebody types.
+  const key = viewSearch({ ...view, page: 1 });
+  const [applied, setApplied] = useState(key);
+  const [draft, setDraft] = useState<Draft>(() => draftOf(view));
+  if (applied !== key) {
+    setApplied(key);
+    setDraft(draftOf(view));
+  }
 
   const query = useQuery<TiListResponse>({
     queryKey: tiKeys.list(view),
@@ -40,6 +60,8 @@ export function TiPage() {
   const [opener, setOpener] = useState<HTMLElement | null>(null);
 
   const show = (next: TiView) => setParams(viewToParams(next));
+  // The form says something the URL does not: the export is for the applied filters, so it waits.
+  const unapplied = !sameFilters(viewOfDraft(draft), view);
   const openDetail = (ioc: TiIoc, from: HTMLElement) => {
     setOpener(from);
     setDetail(ioc);
@@ -52,7 +74,7 @@ export function TiPage() {
 
   const data = query.data;
   const columns = tiColumns({ onOpen: openDetail });
-  const filtered = viewToParams({ ...view, page: 1 }).toString() !== "";
+  const filtered = key !== "";
   // The panel follows its IOC when the list still has it (a refetch changed a field), and keeps the one it was opened with when not.
   const shownDetail =
     detail === null ? null : (data?.rows.find((row) => row.id === detail.id) ?? detail);
@@ -73,8 +95,14 @@ export function TiPage() {
       <StatsSection />
 
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <TiFilters view={view} onApply={show} />
-        <ExportControl filters={filtersOf(view)} />
+        <TiFilters
+          draft={draft}
+          onDraft={setDraft}
+          filtered={filtered}
+          onSend={() => show(viewOfDraft(draft))}
+          onClear={() => show(EMPTY_VIEW)}
+        />
+        <ExportControl filters={filtersOf(view)} unapplied={unapplied} />
       </div>
 
       {query.isError && (

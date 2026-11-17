@@ -12,14 +12,17 @@
 //      (http, https, ftp, ftps, ws, wss, file): `mailto:a@evil.com`, `tel:` and `C:\path` have no authority. The authority is the text up to
 //      the next `/`, `\`, `?` or `#`. EVERY dot of it is bracketed (`[.]`; the full stops a browser reads as dots too), its
 //      user name included, an IPv4 host included; a bracketed or bare IPv6 address has every colon bracketed (`[:]`) as well. Only
-//      `http`, `https`, `ftp` and `ftps` are renamed (`hxxp`, `hxxps`, `fxp`, `fxps`; the case of the other letters is kept).
-//      A host with no dot at all (`localhost`, `1234`) has nothing to bracket: under `ws`, `wss`, a `file://` and a scheme-relative start,
-//      which a browser reads as a host, it gets a trailing `[.]` (`ws://localhost[.]/x`), so that no output is a URL of a special scheme.
+//      `http`, `https`, `ftp` and `ftps` are renamed (`hxxp`, `hxxps`, `fxp`, `fxps`; the case of the other letters is kept). An
+//      authority is also cut where a scheme with an authority of its own begins inside it (`javascript://a.com:http://b.com`).
+//      A host with no dot at all (`localhost`, `1234`) has nothing to bracket. Where a value BEGINS (after the white space and control
+//      characters a browser skips) with `ws:`, `wss:`, `file://` or two slashes, a browser reads it as a URL of a special scheme, and its
+//      host is the text after the last `@` of the first authority: if that host has no `[` in it, its name gets a trailing `[.]` that no
+//      host can have (`ws://localhost[.]/x`, `//intranet[.]/x`). So no output is a URL of a special scheme with a host.
 //   2. WHAT IS LEFT. The text that is not in an authority gets the no-scheme rules: a name or an address at the START of the value, up
 //      to the next `/ \ ? # : @` or white space (`evil.com/path`, `1.2.3[.]4/x`, `evil.com:80`, IDN and punycode names), and the name after
 //      an `@` (`mailto:a@evil.com`, `a@evil.com`). A name is labels of letters, digits, `_` and `-` joined by dots, the last label letters
 //      only (2 to 63) or `xn--…`; an IPv4 address there loses only its last dot (the Owner's `1.2.3[.]4`).
-//   3. A TYPE `url` OR `domain` has no unbracketed dot before the first `/`, `\`, `?` or `#` of the value (so none in a scheme, a name, an
+//   3. A TYPE `url` OR `domain` has no unbracketed dot before the first `/`, `?` or `#` of the value (so none in a scheme, a name, an
 //      address, a port or a user, whatever its shape), and none in any authority. The path, the query and the fragment are not touched.
 //   4. IPv6 is only a real IPv6 shape: hexadecimal groups and at least two colons, dots only in a trailing dotted quad. `bad.cafe.de::1`
 //      is a name; the domain rule comes first for a type `domain` that is not that shape. A bare address that is the whole value keeps the

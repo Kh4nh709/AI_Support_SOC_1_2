@@ -3121,7 +3121,9 @@ export const S = {
       csv: "Xuất CSV",
       blocklist: "Xuất blocklist",
       working: "Đang xuất…",
-      scope: (limit: number) => `Theo bộ lọc hiện tại, tối đa ${limit} dòng.`,
+      scope: (limit: number) => `Xuất theo bộ lọc đã áp dụng, tối đa ${limit} dòng.`,
+      // The form holds a filter that "Lọc" has not sent: the export is for the applied ones, so it waits.
+      unapplied: "Bộ lọc trong form chưa được áp dụng: bấm Lọc rồi hãy xuất.",
       review:
         "Đọc lại blocklist trước khi nạp vào tường lửa: chỉ có tên miền và địa chỉ IP, nhưng người phải duyệt từng dòng.",
       done: (name: string) => `Đã tải về ${name}`,
