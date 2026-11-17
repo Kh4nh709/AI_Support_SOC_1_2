@@ -21,12 +21,14 @@ No test prints a DSN, and the sample file `fixtures/ti/ioc_sample.csv` holds mad
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import importlib.util
 import io
 import os
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 from datetime import UTC, date, datetime, timedelta, timezone
@@ -450,11 +452,8 @@ def test_a_quoted_comma_stays_in_its_field(tmp_path):
     assert parsed.errors == []
     assert parsed.iocs[0].value == "http://example.com/a,b,c"
     assert parsed.iocs[0].malware == "win.x,y"
-    assert parsed.iocs[0].tags == (
-        "a",
-        "b",
-        "c",
-    )  # the quoted field is one CSV field; the tags split on commas
+    # The quoted field is one CSV field; the tags split on commas.
+    assert parsed.iocs[0].tags == ("a", "b", "c")
 
 
 def test_a_record_that_spans_lines_is_one_bad_row_counted_as_the_lines_it_swallows(tmp_path):
@@ -551,10 +550,8 @@ def _forging_file(tmp_path: Path) -> Path:
 
 def test_an_over_limit_quoted_multi_line_field_is_one_bad_row_and_forges_no_record(tmp_path):
     parsed = read_file(_forging_file(tmp_path))
-    assert [i.value for i in parsed.iocs] == [
-        "192.0.2.1:1",
-        "192.0.2.3:3",
-    ]  # the forged line is not a record
+    # The forged line is not a record.
+    assert [i.value for i in parsed.iocs] == ["192.0.2.1:1", "192.0.2.3:3"]
     assert parsed.errors == [(3, "row_malformed")]
     assert parsed.spans == {3: 3}
     assert parsed.total == 5 and parsed.error_count == 3
@@ -574,9 +571,8 @@ def test_an_unclosed_quote_swallows_the_rest_of_the_file_and_the_lines_lost_are_
 
 
 def test_the_csv_field_limit_is_raised_for_the_read_and_put_back(tmp_path, monkeypatch):
-    original = csv.field_size_limit(
-        131_072
-    )  # the module's default: a known starting point, put back at the end
+    # The module's default: a known starting point, put back at the end.
+    original = csv.field_size_limit(131_072)
     try:
         read_file(SAMPLE)
         assert csv.field_size_limit() == 131_072
@@ -1095,9 +1091,8 @@ def test_a_formula_markup_or_sql_in_a_field_is_stored_as_the_text_it_is(ti_conn,
     )
     assert (stored[markup]["malware"], stored[markup]["reference"]) == (sql_text, script_url)
     assert (stored[sql_text]["malware"], stored[sql_text]["threat"]) == ("%", "_")
-    assert ti_conn.execute("SELECT count(*) FROM ti_ioc").fetchone() == (
-        4,
-    )  # the table is still there
+    # The table is still there.
+    assert ti_conn.execute("SELECT count(*) FROM ti_ioc").fetchone() == (4,)
 
 
 @needs_db
@@ -1174,9 +1169,8 @@ def test_finished_at_is_never_before_started_at_even_when_the_clock_says_so(ti_c
     bad = import_file(ti_conn, write_csv(tmp_path / "e.csv", []), now=NOW, clock=early)
     assert (ok.status, bad.status) == ("ok", "failed")
     for log in logs(ti_conn):
-        assert (
-            log["started_at"] == NOW and log["finished_at"] == NOW
-        )  # raised to the start, not refused
+        # Raised to the start, not refused.
+        assert log["started_at"] == NOW and log["finished_at"] == NOW
 
 
 @needs_db
@@ -1320,9 +1314,8 @@ def test_a_repeated_key_keeps_the_first_occurrence_but_the_earliest_first_seen(t
     assert (result.new, result.repeated, result.total) == (2, 2, 4)
     row = by_value(ti_conn)["192.0.2.1:1"]
     assert row["malware"] == "first"  # the first occurrence's descriptive fields
-    assert row["first_seen"] == datetime(
-        2026, 11, 16, 5, 0, tzinfo=UTC
-    )  # the earliest first_seen of the repeats
+    # The earliest first_seen of the repeats.
+    assert row["first_seen"] == datetime(2026, 11, 16, 5, 0, tzinfo=UTC)
     assert by_value(ti_conn)["192.0.2.2:2"]["first_seen"] == datetime(
         2026, 11, 17, 7, 0, tzinfo=UTC
     )
@@ -1376,6 +1369,91 @@ def test_the_timeouts_end_with_the_import_transaction(ti_conn):
         assert ti_conn.execute(f"SHOW {name}").fetchone() == ("0",)
     ti_conn.rollback()
     assert (importer.LOCK_TIMEOUT, importer.STATEMENT_TIMEOUT) == ("5s", "10s")
+
+
+@contextlib.contextmanager
+def lock_held(dsn, table):
+    """Another connection holds an ACCESS EXCLUSIVE lock on `table`. A timer lets go after four seconds, so that a
+    run that ignores its timeouts ends (and fails its assertion) instead of hanging the suite."""
+    blocker = psycopg.connect(dsn)
+    blocker.execute(f"LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")
+    timer = threading.Timer(4.0, blocker.rollback)
+    timer.start()
+    try:
+        yield
+    finally:
+        timer.cancel()
+        blocker.rollback()
+        blocker.close()
+
+
+def header_less_file(tmp_path: Path) -> Path:
+    header = [c for c in COLUMNS if c != "value"]
+    return write_csv(
+        tmp_path / "ioc_2026-11-17.csv", [{c: good()[c] for c in header}], header=header
+    )
+
+
+@needs_db
+@pytest.mark.parametrize(
+    ("lock_timeout", "statement_timeout", "error"),
+    [("300ms", "10s", "LockNotAvailable"), ("10s", "300ms", "QueryCanceled")],
+)
+def test_the_log_row_of_a_run_that_loads_nothing_waits_no_longer_than_the_import_does(
+    ti_dsn, ti_conn, tmp_path, monkeypatch, lock_timeout, statement_timeout, error
+):
+    """A held lock on `ti_import_log` must not hang the run: the failure's log row is written under the same lock
+    and statement timeouts as the import. The run ends in the timeout, with the driver's error."""
+    monkeypatch.setattr(importer, "LOCK_TIMEOUT", lock_timeout)
+    monkeypatch.setattr(importer, "STATEMENT_TIMEOUT", statement_timeout)
+    with lock_held(ti_dsn, "ti_import_log"):
+        started = time.monotonic()
+        with pytest.raises(psycopg.Error) as caught:
+            import_file(ti_conn, header_less_file(tmp_path), now=NOW)
+        waited = time.monotonic() - started
+    assert type(caught.value).__name__ == error
+    assert waited < 3
+    assert logs(ti_conn) == []  # no row could be written; the run did not hang
+
+
+@needs_db
+def test_record_failure_is_bounded_in_the_same_way(ti_dsn, ti_conn, monkeypatch):
+    monkeypatch.setattr(importer, "LOCK_TIMEOUT", "300ms")
+    with lock_held(ti_dsn, "ti_import_log"):
+        started = time.monotonic()
+        with pytest.raises(psycopg.errors.LockNotAvailable):
+            importer.record_failure(ti_conn, "ioc_2026-11-17.csv", "no_file", now=NOW)
+        assert time.monotonic() - started < 3
+
+
+@needs_db
+def test_a_load_whose_log_row_is_blocked_is_rolled_back_and_its_failure_row_is_bounded_too(
+    ti_dsn, ti_conn, monkeypatch
+):
+    """The upserts into `ti_ioc` go through, the log row of the success path waits on the held lock and times out,
+    everything is rolled back, and the failure's own log row meets the same lock: the run ends in the timeout and
+    nothing of the file is left in `ti_ioc`."""
+    monkeypatch.setattr(importer, "LOCK_TIMEOUT", "300ms")
+    with lock_held(ti_dsn, "ti_import_log"):
+        started = time.monotonic()
+        with pytest.raises(psycopg.errors.LockNotAvailable):
+            import_file(ti_conn, SAMPLE, now=NOW)
+        assert time.monotonic() - started < 3
+    assert iocs(ti_conn) == [] and logs(ti_conn) == []
+
+
+@needs_db
+def test_main_ends_with_exit_1_and_the_error_class_when_the_log_table_is_locked(
+    ti_dsn, ti_conn, tmp_path, capsys, monkeypatch
+):
+    monkeypatch.setattr(importer, "LOCK_TIMEOUT", "300ms")
+    env = env_file(tmp_path, str(ti_dsn))
+    with lock_held(ti_dsn, "ti_import_log"):
+        code = _load_script().main([str(header_less_file(tmp_path)), "--env-file", str(env)])
+    out = capsys.readouterr()
+    assert code == 1
+    assert "status=failed" in out.out and "message=database_error: LockNotAvailable" in out.out
+    assert str(ti_dsn) not in out.out + out.err
 
 
 DO_NOTHING = """
@@ -1484,9 +1562,8 @@ def test_white_space_in_a_file_name_becomes_an_underscore_so_the_summary_line_st
         status="ok",
         message=None,
     )
-    assert (
-        len(importer.format_summary(result).split(" ")) == 8
-    )  # ti_import: + seven key=value words
+    # `ti_import:` and seven key=value words.
+    assert len(importer.format_summary(result).split(" ")) == 8
 
 
 def test_a_result_refuses_a_status_that_is_not_one_of_the_three():
@@ -1702,9 +1779,8 @@ def _daily(tmp_path: Path) -> Path:
     write_csv(daily / "ioc_2026-11-16.csv", [good(value="192.0.2.16:16")])
     write_csv(daily / "ioc_test.csv", [good(value="192.0.2.98:98")])
     write_csv(daily / "notes.csv", [good(value="192.0.2.99:99")])
-    write_csv(
-        daily / "ioc_2026-11-18.csv", [good(value="192.0.2.18:18")]
-    )  # tomorrow's: not today's
+    # Tomorrow's: not today's.
+    write_csv(daily / "ioc_2026-11-18.csv", [good(value="192.0.2.18:18")])
     (daily / "ioc_2026-11-17.csv.tmp").write_text("not a feed file")
     (daily / "ioc_2026-11-19.csv").mkdir()  # a directory with a feed name is not a file
     return daily
@@ -1715,9 +1791,8 @@ def test_todays_file_is_the_one_named_for_the_hosts_date_and_no_other(tmp_path):
     daily = _daily(tmp_path)
     assert script.todays_file(daily, date(2026, 11, 17)) == daily / "ioc_2026-11-17.csv"
     assert script.todays_file(daily, date(2026, 11, 16)) == daily / "ioc_2026-11-16.csv"
-    assert (
-        script.todays_file(daily, date(2026, 11, 20)) is None
-    )  # an older file is not picked in its place
+    # An older file is not picked in its place.
+    assert script.todays_file(daily, date(2026, 11, 20)) is None
     assert script.todays_file(daily, date(2026, 11, 19)) is None  # a directory is not a file
     assert script.todays_file(tmp_path / "gone", date(2026, 11, 17)) is None
     assert script.DAILY_NAME.fullmatch("ioc_2026-11-17.csv")
@@ -1746,22 +1821,101 @@ def test_main_without_a_file_imports_todays_file_of_the_directory(
     assert list(by_value(ti_conn)) == ["192.0.2.17:17"]
 
 
+PLUS7 = timezone(timedelta(hours=7))
+
+
+def test_the_utc_day_of_a_moment_is_the_day_the_fetch_script_names_its_file_for():
+    script = _load_script()
+    utc = datetime(2026, 11, 17, 23, 59, 59, tzinfo=UTC)
+    assert script.utc_day(utc) == date(2026, 11, 17)
+    assert script.utc_day(utc + timedelta(seconds=1)) == date(2026, 11, 18)
+    # 06:59:59 +07 on the 18th is still the 17th in UTC; 07:00:00 +07 is the 18th
+    assert script.utc_day(datetime(2026, 11, 18, 6, 59, 59, tzinfo=PLUS7)) == date(2026, 11, 17)
+    assert script.utc_day(datetime(2026, 11, 18, 7, 0, 0, tzinfo=PLUS7)) == date(2026, 11, 18)
+    assert script.utc_day(datetime(2026, 11, 17, 0, 0, 0, tzinfo=PLUS7)) == date(2026, 11, 16)
+    # A naive moment has no day to name.
+    naive = datetime(2026, 11, 17, 12, 0, 0)  # noqa: DTZ001
+    with pytest.raises(ValueError):
+        script.utc_day(naive)
+
+
+def _three_days(tmp_path: Path) -> Path:
+    daily = tmp_path / "daily"
+    daily.mkdir()
+    for day in (16, 17, 18):
+        write_csv(daily / f"ioc_2026-11-{day}.csv", [good(value=f"192.0.2.{day}:{day}")])
+    return daily
+
+
 @needs_db
-def test_main_without_a_file_and_without_a_today_uses_the_hosts_local_date(
+@pytest.mark.parametrize(
+    ("moment", "day"),
+    [
+        # either side of the UTC midnight, given in UTC
+        (datetime(2026, 11, 17, 23, 59, 59, tzinfo=UTC), 17),
+        (datetime(2026, 11, 18, 0, 0, 0, tzinfo=UTC), 18),
+        # and as the host's own clock says it (+07): 00:00-06:59 local is still the UTC day before
+        (datetime(2026, 11, 18, 0, 0, 1, tzinfo=PLUS7), 17),
+        (datetime(2026, 11, 18, 3, 0, 0, tzinfo=PLUS7), 17),
+        (datetime(2026, 11, 18, 6, 59, 59, tzinfo=PLUS7), 17),
+        (datetime(2026, 11, 18, 7, 0, 0, tzinfo=PLUS7), 18),
+        (datetime(2026, 11, 18, 23, 59, 59, tzinfo=PLUS7), 18),
+    ],
+)
+def test_main_without_a_file_takes_the_file_of_the_utc_day_whatever_the_hosts_zone_says(
+    ti_dsn, ti_conn, tmp_path, capsys, moment, day
+):
+    daily = _three_days(tmp_path)
+    args = ["--dir", str(daily), "--env-file", str(env_file(tmp_path, str(ti_dsn)))]
+    code = _load_script().main(args, clock=lambda: moment)
+    out = capsys.readouterr()
+    assert code == 0 and f"file=ioc_2026-11-{day}.csv" in out.out
+    assert list(by_value(ti_conn)) == [f"192.0.2.{day}:{day}"]
+    (log,) = logs(ti_conn)
+    assert (
+        log["file"] == f"ioc_2026-11-{day}.csv" and log["started_at"] == moment
+    )  # one clock for both
+
+
+@needs_db
+def test_main_without_a_file_names_the_missing_file_by_its_utc_day(
     ti_dsn, ti_conn, tmp_path, capsys
 ):
     daily = tmp_path / "daily"
     daily.mkdir()
-    local_today = date.today()  # noqa: DTZ011 - the host's LOCAL date is the point
-    write_csv(daily / f"ioc_{local_today.isoformat()}.csv", [good(value="192.0.2.17:17")])
-    write_csv(daily / "ioc_2020-01-01.csv", [good(value="192.0.2.20:20")])
-    code = _load_script().main(
-        ["--dir", str(daily), "--env-file", str(env_file(tmp_path, str(ti_dsn)))]
-    )
+    write_csv(daily / "ioc_2026-11-17.csv", [good(value="192.0.2.17:17")])
+    # 00:30 UTC on the 18th: the file of the 18th is not there yet, and the 17th is not taken in its place
+    moment = datetime(2026, 11, 18, 7, 30, 0, tzinfo=PLUS7)
+    args = ["--dir", str(daily), "--env-file", str(env_file(tmp_path, str(ti_dsn)))]
+    code = _load_script().main(args, clock=lambda: moment)
+    out = capsys.readouterr()
+    assert code == 1 and "file=ioc_2026-11-18.csv" in out.out and "message=no_file" in out.out
+    assert iocs(ti_conn) == []
+
+
+@needs_db
+def test_main_without_a_clock_reads_the_utc_clock_of_the_script(
+    ti_dsn, ti_conn, tmp_path, capsys, monkeypatch
+):
+    script = _load_script()
+    # the default clock is the script's own `_utcnow`; the host's zone and the real time do not matter
+    monkeypatch.setattr(script, "_utcnow", lambda: datetime(2026, 11, 17, 20, 0, 0, tzinfo=UTC))
+    daily = _three_days(tmp_path)
+    code = script.main(["--dir", str(daily), "--env-file", str(env_file(tmp_path, str(ti_dsn)))])
     capsys.readouterr()
     assert code == 0
-    ti_conn.rollback()
     assert list(by_value(ti_conn)) == ["192.0.2.17:17"]
+
+
+@needs_db
+def test_an_injected_today_still_wins_over_the_clock(ti_dsn, ti_conn, tmp_path, capsys):
+    daily = _three_days(tmp_path)
+    args = ["--dir", str(daily), "--env-file", str(env_file(tmp_path, str(ti_dsn)))]
+    code = _load_script().main(
+        args, today=date(2026, 11, 16), clock=lambda: datetime(2026, 11, 18, 0, 0, 0, tzinfo=UTC)
+    )
+    capsys.readouterr()
+    assert code == 0 and list(by_value(ti_conn)) == ["192.0.2.16:16"]
 
 
 @needs_db
@@ -1875,7 +2029,7 @@ def test_the_command_runs_by_a_plain_path_from_any_directory_and_reads_the_file_
 
 @needs_db
 def test_the_command_works_with_an_empty_environment(ti_dsn, ti_conn, tmp_path):
-    """So `env -i` before the interpreter (the runbook's optional hardening) costs it nothing."""
+    """The cron line starts it as `/usr/bin/env -i <python> -B <script> ...`, with nothing in its environment: it needs none."""
     done = subprocess.run(
         [
             sys.executable,
@@ -1898,17 +2052,36 @@ def test_the_command_works_with_an_empty_environment(ti_dsn, ti_conn, tmp_path):
 
 
 def test_the_runbooks_cron_line_runs_the_importer_as_the_checkouts_owner_without_bytecode():
+    """Root's cron has PATH=/usr/bin:/bin and `runuser` is in /usr/sbin, so every program of the line is by absolute
+    path; the importer runs as the checkout's owner, with an empty environment and no bytecode."""
     text = (conftest.REPO_ROOT / "docs" / "runbook.md").read_text(encoding="utf-8")
     section = text.split("## Threat Intel importer (DEC-224)", 1)[1].split("\n## ", 1)[0]
     cron = [ln.strip() for ln in section.splitlines() if ln.strip().startswith("0 7 * * *")]
     assert len(cron) == 1
     after_fetch = cron[0].split("abusech_daily100.py", 1)[1]
-    # as the checkout's owner, and with an empty environment: nothing of /etc/abusech.env reaches the importer
-    assert " && runuser -u user1 -- env -i " in after_fetch
-    runuser = after_fetch.split(" && runuser -u user1 -- env -i ", 1)[1]
-    assert runuser.split(" ")[0].endswith("/.venv/bin/python") and runuser.split(" ")[1] == "-B"
-    assert "scripts/ti_import.py --env-file " in runuser and runuser.endswith("2>&1")
+    chained = " && /usr/sbin/runuser -u user1 -- /usr/bin/env -i "
+    assert chained in after_fetch
+    importer_part = after_fetch.split(chained, 1)[1]
+    words = importer_part.split(" ")
+    assert words[0].startswith("/") and words[0].endswith("/.venv/bin/python") and words[1] == "-B"
+    assert words[2].startswith("/") and words[2].endswith("/scripts/ti_import.py")
+    assert importer_part.split(" --env-file ", 1)[1].split(" ")[0].startswith("/")
+    assert importer_part.endswith(">> /var/log/abusech_daily.log 2>&1")
+    # no program of the importer's half is looked up on cron's PATH
+    for word in (words[0], words[2]):
+        assert word.startswith("/")
+    assert " runuser " not in after_fetch and " env " not in after_fetch
     assert "as root" not in section.lower()
+
+
+def test_the_script_docstring_and_the_spec_show_the_same_cron_form():
+    form = "/usr/sbin/runuser -u"
+    assert form in SCRIPT.read_text(encoding="utf-8")
+    assert "/usr/bin/env -i" in SCRIPT.read_text(encoding="utf-8")
+    spec = (
+        conftest.REPO_ROOT / "docs" / "superpowers" / "specs" / "2026-11-17-threat-intel-design.md"
+    ).read_text(encoding="utf-8")
+    assert form in spec and "/usr/bin/env -i" in spec
 
 
 def test_the_command_as_a_subprocess_with_the_database_down_prints_the_type_only(tmp_path):
