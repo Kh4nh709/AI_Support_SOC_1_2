@@ -6,7 +6,9 @@
     GET /api/ti/status    the newest import-log row, the newest successful one, `stale`
     GET /api/ti/export    admin only: the list as CSV (formula-guarded) or as a plain-text blocklist
 
-Every route needs a login; `tier1`, `tier2` and `admin` read, export is `admin`. The routes only read: nothing here writes a row
+Every route needs a login; `tier1`, `tier2` and `admin` read, export is `admin`. Every read runs under a statement timeout
+(a held lock turns a read into a closed `503 {"detail": {"reason": "timeout"}}`), `q` is at most 128 characters, the CSV starts
+with a UTF-8 byte order mark and the blocklist never carries an address or a name a firewall must not block (Ruling TI9). The routes only read: nothing here writes a row
 of `ti_ioc`, of `ti_import_log` or an audit event (but the `authz.denied` of a refused role).
 
 The module owns a scratch database (`scratch_database`: built through `scripts/migrate.sh`, dropped when the module ends), so what a
@@ -23,6 +25,9 @@ import io
 import ipaddress
 import re
 import socket
+import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -238,7 +243,7 @@ def ids(response) -> list[int]:
 
 def read_csv(response) -> list[dict[str, str]]:
     assert response.status_code == 200, response.text
-    reader = csv.DictReader(io.StringIO(response.text, newline=""))
+    reader = csv.DictReader(io.StringIO(response.content.decode("utf-8-sig"), newline=""))
     return list(reader)
 
 
@@ -665,7 +670,8 @@ BAD_FILTERS = [
     {"source": "ThreatFox"},
     {"source": ""},
     {"source": "threatfox' OR 1=1"},
-    {"q": "x" * 2049},
+    {"q": "x" * 129},
+    {"q": "http://" + "a" * 200 + ".example.com/"},
     {"type": "x" * 65},
     {"malware": "x" * 257},
     {"from": "yesterday"},
@@ -727,7 +733,7 @@ def test_the_edge_values_of_the_bounds_are_accepted(api):
         {"page_size": 200},
         {"min_confidence": 0},
         {"min_confidence": 100},
-        {"q": "x" * 2048},
+        {"q": "x" * 128},
         {"type": "x" * 64},
         {"malware": "x" * 256},
         {"from": "0001-01-02"},
@@ -1416,7 +1422,7 @@ def test_the_csv_holds_the_lists_columns_and_a_row_per_ioc_newest_first(api):
     assert [r["id"] for r in rows] == [str(new), str(old)]
     assert rows[0]["tags"] == "a,b" and rows[0]["confidence"] == ""
     assert rows[0]["first_seen"] == (NOW - timedelta(hours=1)).isoformat()
-    assert response.text.splitlines()[0] == ",".join(IOC_KEYS)
+    assert response.content.decode("utf-8-sig").splitlines()[0] == ",".join(IOC_KEYS)
 
 
 def test_the_csv_guards_every_cell_that_a_spreadsheet_would_run(api):
@@ -1429,6 +1435,14 @@ def test_the_csv_guards_every_cell_that_a_spreadsheet_would_run(api):
         tags=["=x", "fine"],
     )
     api.put(type="url", value="\t=tab", malware="\r=cr", threat="plain", reference=None, tags=[])
+    api.put(
+        type="url",
+        value=" =1+1",
+        malware="\u00a0=1+1",
+        threat="\u2003@SUM(1)",
+        reference="  -2+3",
+        tags=[],
+    )
     response = api.get("admin", EXPORT, format="csv")
     rows = {r["value"]: r for r in read_csv(response)}
     one = rows["'=cmd|' /C calc'!A0"]
@@ -1436,11 +1450,15 @@ def test_the_csv_guards_every_cell_that_a_spreadsheet_would_run(api):
     assert one["reference"] == "'@SUM(A1)" and one["tags"] == "'=x,fine"
     two = rows["'\t=tab"]
     assert two["malware"] == "'\r=cr" and two["threat"] == "plain"
-    for record in read_csv(
-        response
-    ):  # no cell of the file begins with a character a spreadsheet runs
+    spaced = rows[
+        "' =1+1"
+    ]  # white space before the formula character: guarded, the original cell kept behind the `'`
+    assert spaced["malware"] == "'\u00a0=1+1" and spaced["threat"] == "'\u2003@SUM(1)"
+    assert spaced["reference"] == "'  -2+3"
+    for record in read_csv(response):  # no cell of the file reads as a formula, white space or not
         for name, cell in record.items():
-            assert not cell.startswith(("=", "+", "-", "@", "\t", "\r")), (name, cell)
+            assert not cell.startswith(("\t", "\r")), (name, cell)
+            assert not cell.lstrip().startswith(("=", "+", "-", "@")), (name, cell)
 
 
 def test_the_csv_quotes_what_needs_quoting_and_one_row_stays_one_record(api):
@@ -1597,6 +1615,137 @@ def test_an_empty_blocklist_is_an_empty_file(api):
     api.put(type="url", value="http://c2.example.com/x")
     response = api.get("admin", EXPORT, format="blocklist")
     assert response.status_code == 200 and response.text == ""
-    assert (
-        api.get("admin", EXPORT, format="csv", source="urlhaus").text == ",".join(IOC_KEYS) + "\r\n"
+    assert api.get("admin", EXPORT, format="csv", source="urlhaus").text == (
+        "\ufeff" + ",".join(IOC_KEYS) + "\r\n"
     )
+
+
+def test_the_csv_starts_with_a_byte_order_mark_so_excel_reads_it_as_utf_8(api):
+    api.put(type="url", value="http://b\u00fccher.example.com/\u00e4", malware="win.\u00e9tude")
+    response = api.get("admin", EXPORT, format="csv")
+    assert response.headers["content-type"] == "text/csv; charset=utf-8"
+    assert response.content.startswith(b"\xef\xbb\xbfid,source,")
+    assert response.content.count(b"\xef\xbb\xbf") == 1
+    (record,) = read_csv(response)  # `utf-8-sig`: the first header cell is `id`
+    assert next(iter(record)) == "id"
+    assert (
+        record["value"] == "http://b\u00fccher.example.com/\u00e4"
+        and record["malware"] == "win.\u00e9tude"
+    )
+    # the blocklist is not a spreadsheet: no mark
+    assert not api.get("admin", EXPORT, format="blocklist").content.startswith(b"\xef\xbb\xbf")
+
+
+def test_the_blocklist_never_carries_what_a_firewall_or_a_sinkhole_must_not_block(api):
+    api.put(type="ip:port", value="192.0.2.1:80", first_seen=ago(minutes=1))
+    never = [
+        ("ip:port", "127.0.0.1:80"), ("ip:port", "0.0.0.0:80"), ("ip:port", "10.0.0.1:80"),
+        ("ip:port", "172.16.0.5:80"), ("ip:port", "192.168.1.1:80"), ("ip:port", "169.254.1.1:80"),
+        ("ip:port", "100.64.0.1:80"), ("ip:port", "224.0.0.1:80"), ("ip:port", "255.255.255.255:80"),
+        ("ip:port", "[::1]:80"), ("ip:port", "[fe80::1]:80"), ("ip:port", "[fd00::1]:80"),
+        ("ip:port", "[ff02::1]:80"), ("ip:port", "[::ffff:10.0.0.1]:80"), ("ip:port", "[::ffff:127.0.0.1]:80"),
+        ("ip:port", "2001:db8::1:443"), ("ip:port", "::1"),
+        ("domain", "localhost"), ("domain", "127.0.0.1"), ("domain", "10.1.2.3"), ("domain", "0.0.0.0"),
+        ("domain", "x.local"), ("domain", "1.0.0.127.in-addr.arpa"), ("domain", "com"), ("domain", "lan"),
+        ("domain", "printer.lan"), ("domain", "foo.example"),
+    ]  # fmt: skip
+    for number, (kind, value) in enumerate(never, start=2):
+        api.put(type=kind, value=value, first_seen=ago(minutes=number))
+    api.put(type="domain", value="c2.example.com", first_seen=ago(minutes=60))
+    api.put(type="ip:port", value="[2001:db8::1]:443", first_seen=ago(minutes=61))
+    response = api.get("admin", EXPORT, format="blocklist")
+    assert response.text == "192.0.2.1\nc2.example.com\n2001:db8::1\n"
+    # the CSV is the list, never-block values included: it is a record, not a blocklist
+    assert len(read_csv(api.get("admin", EXPORT, format="csv"))) == len(never) + 3
+
+
+# ═══════════════════════════ the statement timeout ═══════════════════════════════════════════
+
+
+@contextmanager
+def tables_locked(api, *tables: str, release_after: float = 20.0):
+    """Another session holds ACCESS EXCLUSIVE on `tables`: a read of them waits. A watchdog lets go after `release_after`
+    seconds, so a read that has NO timeout ends (as a 200, which the test then refuses) instead of hanging the suite.
+    """
+    holder = psycopg.connect(api.dsn)
+    holder.execute(f"LOCK TABLE {', '.join(tables)} IN ACCESS EXCLUSIVE MODE")
+    watchdog = threading.Timer(release_after, holder.rollback)
+    watchdog.start()
+    try:
+        yield
+    finally:
+        watchdog.cancel()
+        holder.rollback()
+        holder.close()
+
+
+TIMEOUT_ROUTES = [
+    ("tier2", IOCS, {}),
+    ("tier2", IOCS, {"q": "needle", "min_confidence": 1}),
+    ("tier1", STATS, {}),
+    ("tier2", LOOKUP, {"value": "c2.example.com"}),
+    ("tier2", LOOKUP, {"value": "192.0.2.1"}),
+    ("admin", STATUS, {}),
+    ("admin", EXPORT, {"format": "csv"}),
+    ("admin", EXPORT, {"format": "blocklist"}),
+]
+
+
+@pytest.mark.parametrize(
+    ("role", "path", "params"),
+    TIMEOUT_ROUTES,
+    ids=[f"{r}-{p}-{len(q)}" for r, p, q in TIMEOUT_ROUTES],
+)
+def test_a_read_that_waits_on_a_lock_is_cut_by_the_statement_timeout_and_answers_a_closed_503(
+    api, monkeypatch, role, path, params
+):
+    api.put(type="domain", value="c2.example.com")
+    api.put_log(ago(hours=1))
+    monkeypatch.setattr(queries, "STATEMENT_TIMEOUT", "300ms")
+    with tables_locked(api, "ti_ioc", "ti_import_log"):
+        started = time.monotonic()
+        response = api.get(role, path, **params)
+        waited = time.monotonic() - started
+    assert response.status_code == 503, response.text
+    assert response.json() == {"detail": {"reason": "timeout"}}
+    assert waited < 10  # the 300 ms limit, not the watchdog
+    shown = response.text.lower()
+    for leaked in (
+        "select",
+        "ti_ioc",
+        "ti_import_log",
+        "statement",
+        "cancel",
+        "psycopg",
+        "postgres",
+        "traceback",
+    ):
+        assert leaked not in shown, leaked
+    # the lock is gone, and so is the cut: the same read is served
+    assert api.get(role, path, **params).status_code == 200
+
+
+def test_the_timeout_is_set_for_the_transaction_of_the_read_and_no_longer(api, monkeypatch):
+    monkeypatch.setattr(queries, "STATEMENT_TIMEOUT", "1234ms")
+    with psycopg.connect(api.dsn) as conn:
+        before = conn.execute("SHOW statement_timeout").fetchone()[0]
+        queries.set_statement_timeout(conn)
+        assert conn.execute("SHOW statement_timeout").fetchone()[0] == "1234ms"
+        conn.rollback()
+        assert conn.execute("SHOW statement_timeout").fetchone()[0] == before != "1234ms"
+
+
+def test_a_read_that_is_not_blocked_is_not_affected_by_the_timeout(api):
+    for number in range(30):
+        api.put(value=f"192.0.2.{number + 1}:{4000 + number}")
+    for role, path, params in TIMEOUT_ROUTES:
+        assert api.get(role, path, **params).status_code == 200, path
+
+
+def test_a_timeout_writes_nothing_and_leaves_no_event(api, monkeypatch):
+    api.put(type="domain", value="c2.example.com")
+    before = api.counts()
+    monkeypatch.setattr(queries, "STATEMENT_TIMEOUT", "200ms")
+    with tables_locked(api, "ti_ioc"):
+        assert api.get("tier2", IOCS).status_code == 503
+    assert api.counts() == before

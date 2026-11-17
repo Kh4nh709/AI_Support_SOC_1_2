@@ -1,12 +1,14 @@
 """DEC-224 T3 — the pure half of the Threat Intel read side (`app.ti.queries`): the functions that touch no database.
 
 * **`csv_cell`**, the CSV-injection guard: a `'` before any cell that begins with `=`, `+`, `-`, `@`, a tab or a carriage
-  return, and nothing else changed;
-* **`export_csv`**, the CSV text: the header, the guard on EVERY cell (the tags too), RFC 4180 quoting, one record per row
-  whatever a cell holds;
+  return, or with one of `= + - @` after leading white space (a space, a no-break space, any Unicode space), the original
+  cell kept behind the `'`; nothing else changed;
+* **`export_csv`**, the CSV text: a UTF-8 byte order mark, the header, the guard on EVERY cell (the tags too), RFC 4180
+  quoting, one record per row whatever a cell holds;
 * **`blocklist_entry` / `blocklist_text`**, the plain-text blocklist: domains and IP addresses only, the port of an `ip:port`
-  dropped, an IPv6 `[addr]:port` handled, a value with anything but the characters of a hostname or an address left out
-  (so a line break in a value can never make two lines), de-duplicated;
+  dropped, an IPv6 only in brackets, a value with anything but the characters of a hostname or an address left out (so a
+  line break in a value can never make two lines), de-duplicated, and NEVER an address or a name a firewall or a DNS
+  sinkhole must not block (`NEVER_BLOCK_V4`, `GLOBAL_UNICAST_V6`, `NEVER_BLOCK_NAME_ENDINGS`: each case below);
 * **`like_contains`**: `%`, `_` and `\\` in the text of a search are literal;
 * **`parse_bound`**: the `from` / `to` of the list, a date or an ISO time, a time with no zone read as GMT+7.
 
@@ -40,10 +42,52 @@ def test_the_classic_payloads_are_neutralised():
 
 @pytest.mark.parametrize(
     "text",
-    ["", "abc", "a=b", "a+b", "x-y", "user@example.com", " =x", "'=x", "1.2.3.4", "0", "é=", "\nx"],
-)
+    [
+        "", "abc", "a=b", "a+b", "x-y", "user@example.com", "'=x", "1.2.3.4", "0", "é=", "\nx",
+        " ", "   ", " x=1", " a+b", "\u00a0abc", "\u2003x@y", " 'x", "\n\n", " \n ",
+    ],
+)  # fmt: skip
 def test_any_other_cell_is_returned_unchanged(text):
     assert queries.csv_cell(text) == text
+
+
+@pytest.mark.parametrize(
+    "space",
+    [
+        " ",
+        "  ",
+        "\u00a0",
+        "\u2003",
+        "\u3000",
+        "\u202f",
+        "\u1680",
+        "\u2009",
+        "\n",
+        "\x0b",
+        "\x0c",
+        " \u00a0 ",
+    ],
+)
+@pytest.mark.parametrize("lead", ["=", "+", "-", "@"])
+def test_a_formula_character_after_white_space_is_guarded_and_the_original_cell_is_kept(
+    space, lead
+):
+    cell = f"{space}{lead}1+1"
+    assert queries.csv_cell(cell) == "'" + cell
+
+
+@pytest.mark.parametrize(
+    ("cell", "guarded"),
+    [
+        ("\t", True), ("\r", True), ("\t\t", True), ("\tabc", True), ("\rabc", True),
+        ("\t =x", True), ("\r =x", True), (" \t=x", True), ("\u00a0\t=x", True),
+        (" \tabc", False), (" \r", False), ("\u00a0\rabc", False),
+    ],
+)  # fmt: skip
+def test_a_tab_or_a_carriage_return_at_the_start_is_guarded_whatever_follows(cell, guarded):
+    """The first character decides for a tab or a CR (white space itself, so the rule after white space must not skip it);
+    after any other white space only a formula character counts."""
+    assert queries.csv_cell(cell) == ("'" + cell if guarded else cell)
 
 
 # ── export_csv ──────────────────────────────────────────────────────────────────────────────
@@ -65,7 +109,8 @@ def row(**over):
 
 
 def read_back(text: str) -> list[list[str]]:
-    return list(csv.reader(io.StringIO(text, newline="")))
+    """The records of an export; the byte order mark every export starts with is not part of the first cell."""
+    return list(csv.reader(io.StringIO(text.removeprefix("\ufeff"), newline="")))
 
 
 def test_the_header_is_the_lists_columns_in_the_lists_order():
@@ -147,6 +192,16 @@ def test_the_records_end_with_crlf_as_rfc_4180_says():
     assert text.count("\r\n") == 2
 
 
+def test_the_csv_starts_with_a_utf_8_byte_order_mark_and_the_first_header_cell_is_still_id():
+    text = queries.export_csv([row(value="bücher.example.com")])
+    assert text.startswith("\ufeffid,source,")
+    assert text.encode("utf-8").startswith(b"\xef\xbb\xbf")
+    # a reader that drops the mark (Excel, `utf-8-sig`) sees `id`; the mark appears once and nowhere else
+    header = next(csv.reader(io.StringIO(text.encode("utf-8").decode("utf-8-sig"), newline="")))
+    assert header[0] == "id" and text.count("\ufeff") == 1
+    assert queries.export_csv([]).startswith("\ufeffid,")
+
+
 # ── blocklist ───────────────────────────────────────────────────────────────────────────────
 
 
@@ -156,9 +211,15 @@ def test_the_records_end_with_crlf_as_rfc_4180_says():
         ("domain", "c2.example.com", "c2.example.com"),
         ("domain", "C2.Example.COM", "c2.example.com"),
         ("domain", "example.com", "example.com"),
-        ("domain", "localhost", "localhost"),
-        ("domain", "xn--bcher-kva.example", "xn--bcher-kva.example"),
+        ("domain", "xn--bcher-kva.example.com", "xn--bcher-kva.example.com"),
         ("domain", "a-b.c_d.example.net", "a-b.c_d.example.net"),
+        ("domain", "1.example.com", "1.example.com"),  # an all-digit label is fine; the LAST one decides
+        ("domain", "127.0.0.1.example.com", "127.0.0.1.example.com"),
+        ("domain", "local.example.com", "local.example.com"),  # a never-block word is judged as the LAST label only
+        ("domain", "home.example.net", "home.example.net"),
+        ("domain", "corp.example.com", "corp.example.com"),
+        ("domain", "notlocal.com", "notlocal.com"),
+        ("domain", "x.localdomain.com", "x.localdomain.com"),
         ("ip:port", "192.0.2.10:443", "192.0.2.10"),
         ("ip:port", "198.51.100.24:8080", "198.51.100.24"),
         ("ip:port", "203.0.113.5:1", "203.0.113.5"),
@@ -166,9 +227,14 @@ def test_the_records_end_with_crlf_as_rfc_4180_says():
         ("ip:port", "192.0.2.10", "192.0.2.10"),
         ("ip:port", "[2001:db8::1]:443", "2001:db8::1"),
         ("ip:port", "[2001:0DB8:0000:0000:0000:0000:0000:0001]:8080", "2001:db8::1"),
-        ("ip:port", "2001:db8::1", "2001:db8::1"),
+        ("ip:port", "[2000::1]:80", "2000::1"),
+        ("ip:port", "[3fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:80", "3fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"),
+        # an IPv4-mapped IPv6 is the IPv4 address it wraps, judged and written as that
+        ("ip:port", "[::ffff:192.0.2.1]:443", "192.0.2.1"),
+        ("ip:port", "[::ffff:c000:201]:443", "192.0.2.1"),
+        ("ip:port", "[::FFFF:203.0.113.9]:1", "203.0.113.9"),
     ],
-)
+)  # fmt: skip
 def test_a_domain_or_an_address_gives_its_line(kind, value, expected):
     assert queries.blocklist_entry(kind, value) == expected
 
@@ -200,7 +266,7 @@ def test_a_domain_or_an_address_gives_its_line(kind, value, expected):
         ("domain", "user@c2.example.com"),
         ("domain", "=cmd.example.com"),
         ("domain", "*.example.com"),
-        ("domain", "bücher.example"),
+        ("domain", "bücher.example.com"),
         ("domain", "c2.example.com."),
         ("domain", ".example.com"),
         ("domain", "a..example.com"),
@@ -227,6 +293,12 @@ def test_a_domain_or_an_address_gives_its_line(kind, value, expected):
         ("ip:port", "[192.0.2.1]:443"),
         ("ip:port", "[2001:db8::1]:443\n"),
         ("ip:port", "fe80::1%eth0"),
+        # an IPv6 address is accepted only in brackets: `2001:db8::1:443` would be another host, not a port
+        ("ip:port", "2001:db8::1:443"),
+        ("ip:port", "2001:db8::1"),
+        ("ip:port", "2001:db8::"),
+        ("ip:port", "2001:0db8:0000:0000:0000:0000:0000:0001"),
+        ("ip:port", "::ffff:192.0.2.1"),
         ("ip:port", ":443"),
         ("ip:port", ""),
     ],
@@ -240,12 +312,13 @@ def test_the_blocklist_is_one_value_per_line_and_de_duplicated_in_the_order_met(
         row(type="ip:port", value="192.0.2.10:443"),
         row(type="domain", value="c2.example.com"),
         row(type="ip:port", value="192.0.2.10:8080"),  # the same address, another port
+        row(type="ip:port", value="[::ffff:192.0.2.10]:80"),  # the same address, wrapped in IPv6
         row(type="domain", value="C2.EXAMPLE.COM"),  # the same name, spelt another way
         row(type="url", value="http://c2.example.com/x"),
         row(type="sha256_hash", value="b" * 64),
         row(type="domain", value="evil.example.net\nc2.example.com"),
         row(type="ip:port", value="[2001:db8::1]:443"),
-        row(type="ip:port", value="2001:0db8::1"),  # the same IPv6 address, spelt another way
+        row(type="ip:port", value="[2001:0db8::1]:80"),  # the same IPv6 address, spelt another way
         row(type="domain", value="payload.example.net"),
     ]
     text = queries.blocklist_text(rows)
@@ -256,6 +329,158 @@ def test_the_blocklist_is_one_value_per_line_and_de_duplicated_in_the_order_met(
 def test_an_empty_blocklist_is_an_empty_text():
     assert queries.blocklist_text([]) == ""
     assert queries.blocklist_text([row(type="url", value="http://x.example.com/")]) == ""
+
+
+# ── what a blocklist must never carry (Ruling TI9, I1) ──────────────────────────────────────
+
+#: Every address a firewall or a DNS sinkhole must never block, by kind; each is tried as `ip:port`, bare (IPv4) and in brackets
+#: (IPv6), and each is also tried wrapped in an IPv4-mapped IPv6 address. The kind is in the id of the case.
+NEVER_V4 = {
+    "unspecified": ["0.0.0.0", "0.0.0.1", "0.1.2.3", "0.255.255.255"],
+    "rfc1918 10/8": ["10.0.0.0", "10.0.0.1", "10.1.2.3", "10.255.255.255"],
+    "rfc1918 172.16/12": ["172.16.0.0", "172.16.0.1", "172.20.5.5", "172.31.255.255"],
+    "rfc1918 192.168/16": ["192.168.0.0", "192.168.1.1", "192.168.255.255"],
+    "cgnat 100.64/10": ["100.64.0.0", "100.64.0.1", "100.100.100.100", "100.127.255.255"],
+    "loopback": ["127.0.0.1", "127.0.0.2", "127.1.2.3", "127.255.255.255"],
+    "link-local": ["169.254.0.0", "169.254.1.1", "169.254.169.254", "169.254.255.255"],
+    "multicast": ["224.0.0.0", "224.0.0.1", "232.1.1.1", "239.255.255.255"],
+    "reserved and broadcast": [
+        "240.0.0.0",
+        "240.0.0.1",
+        "250.1.1.1",
+        "255.255.255.254",
+        "255.255.255.255",
+    ],
+}
+NEVER_V6 = {
+    "unspecified": ["::"],
+    "loopback": ["::1"],
+    "link-local fe80::/10": ["fe80::", "fe80::1", "febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff"],
+    "site-local fec0::/10": ["fec0::1", "feff::1"],
+    "unique local fc00::/7": ["fc00::1", "fd12:3456:789a::1", "fdff:ffff::1"],
+    "multicast": ["ff00::", "ff02::1", "ff05::2"],
+    "ipv4-compatible and other reserved space": [
+        "::192.0.2.1", "::2", "64:ff9b::c000:201", "100::1", "1fff:ffff::1", "4000::1", "8000::1", "fe00::1",
+    ],
+    "ipv4-mapped, wrapping a private address": [
+        "::ffff:127.0.0.1", "::ffff:10.0.0.1", "::ffff:192.168.1.1", "::ffff:0.0.0.0", "::ffff:255.255.255.255",
+        "::ffff:7f00:1", "::ffff:a00:1",
+    ],
+}  # fmt: skip
+#: Addresses just outside each never-block range, and the documentation ranges the committed test data lives in: all stay.
+STAY_V4 = [
+    "1.0.0.1", "9.255.255.255", "11.0.0.1", "100.63.255.255", "100.128.0.0", "126.255.255.255", "128.0.0.1",
+    "169.253.255.255", "169.255.0.1", "172.15.255.255", "172.32.0.0", "192.167.255.255", "192.169.0.1",
+    "223.255.255.254", "192.0.2.0", "192.0.2.1", "192.0.2.255", "198.51.100.1", "203.0.113.254",
+]  # fmt: skip
+STAY_V6 = [
+    "2000::1",
+    "2001:db8::1",
+    "2001:db8:ffff::1",
+    "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff",
+    "3fff:ffff::1",
+]
+
+
+def _forms(address: str) -> list[str]:
+    """The `ip:port` spellings of one address: with and without a port for IPv4, bracketed for IPv6."""
+    if ":" in address:
+        return [f"[{address}]:443", f"[{address}]:1", f"[{address.upper()}]:65535"]
+    return [address, f"{address}:443", f"{address}:1", f"{address}:65535"]
+
+
+NEVER = [(kind, address) for kind, group in {**NEVER_V4, **NEVER_V6}.items() for address in group]
+
+
+@pytest.mark.parametrize(("kind", "address"), NEVER, ids=[f"{k}-{a}" for k, a in NEVER])
+def test_an_address_a_firewall_must_never_block_gives_no_line(kind, address):
+    for value in _forms(address):
+        assert queries.blocklist_entry("ip:port", value) is None, (kind, value)
+    if ":" not in address:  # an IPv4 address wrapped in IPv6 is judged as the IPv4 address it is
+        for value in (f"[::ffff:{address}]:443", f"[::FFFF:{address}]:1"):
+            assert queries.blocklist_entry("ip:port", value) is None, (kind, value)
+
+
+@pytest.mark.parametrize(
+    "address", NEVER_V4["loopback"] + NEVER_V4["rfc1918 10/8"] + ["0.0.0.0", "192.0.2.1"]
+)
+def test_an_ip_literal_written_as_a_domain_is_left_out_and_does_not_become_an_address_line(address):
+    assert queries.blocklist_entry("domain", address) is None
+
+
+@pytest.mark.parametrize("address", STAY_V4)
+def test_an_address_just_outside_a_never_block_range_or_in_a_documentation_range_stays(address):
+    for value in _forms(address):
+        assert queries.blocklist_entry("ip:port", value) == address, value
+    assert queries.blocklist_entry("ip:port", f"[::ffff:{address}]:443") == address
+
+
+@pytest.mark.parametrize("address", STAY_V6)
+def test_an_ipv6_address_in_global_unicast_space_or_the_documentation_range_stays(address):
+    import ipaddress
+
+    canonical = str(ipaddress.ip_address(address))
+    for value in _forms(address):
+        assert queries.blocklist_entry("ip:port", value) == canonical, value
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # fewer than two labels
+        "com", "net", "localhost", "lan", "localdomain", "internal", "example", "x", "a" * 63, "LOCALHOST",
+        # the last label is a word a resolver answers for itself, or that is no name on the internet
+        "x.local", "x.localhost", "x.localdomain", "printer.lan", "nas.home", "db.internal", "wiki.intranet",
+        "dc.corp", "1.0.0.127.in-addr.arpa", "x.arpa", "a.b.ip6.arpa", "a.test", "a.invalid", "foo.example",
+        "abcdefghijklmnop.onion", "X.LOCAL", "C2.Example.INTERNAL", "a.b.c.corp", "a-b.home",
+        # an IP literal written as a domain: the last label is all digits
+        "127.0.0.1", "0.0.0.0", "10.1.2.3", "192.168.1.1", "169.254.1.1", "100.64.0.1", "224.0.0.1",
+        "255.255.255.255", "192.0.2.1", "203.0.113.9", "8.8.8.8", "1.2", "x.123", "0x7f.0.0.1", "a.b.1",
+    ],
+)  # fmt: skip
+def test_a_name_that_is_no_host_to_block_gives_no_line(name):
+    assert queries.blocklist_entry("domain", name) is None
+
+
+def test_the_never_block_constants_are_these_and_no_others():
+    """The closed sets, written out: a test that would not notice one of them changing is no test of the rule."""
+    assert queries.NEVER_BLOCK_V4 == (
+        "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
+        "192.168.0.0/16", "224.0.0.0/4", "240.0.0.0/4",
+    )  # fmt: skip
+    assert queries.GLOBAL_UNICAST_V6 == "2000::/3"
+    assert queries.NEVER_BLOCK_NAME_ENDINGS == frozenset(
+        {"local", "localhost", "localdomain", "lan", "home", "internal", "intranet", "corp", "arpa", "test", "invalid", "example", "onion"}
+    )  # fmt: skip
+
+
+def test_the_documentation_names_and_ranges_of_the_test_data_are_not_in_the_never_block_sets():
+    import ipaddress
+
+    nets = [ipaddress.ip_network(n) for n in queries.NEVER_BLOCK_V4]
+    for doc in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24"):
+        assert not any(ipaddress.ip_network(doc).overlaps(net) for net in nets), doc
+    assert ipaddress.ip_network("2001:db8::/32").subnet_of(
+        ipaddress.ip_network(queries.GLOBAL_UNICAST_V6)
+    )
+    assert not {"com", "net", "org"} & queries.NEVER_BLOCK_NAME_ENDINGS
+
+
+def test_a_blocklist_of_rows_leaves_out_what_must_never_be_blocked_and_keeps_the_rest():
+    rows = [
+        row(type="ip:port", value="127.0.0.1:80"),
+        row(type="ip:port", value="10.0.0.1:80"),
+        row(type="ip:port", value="[::1]:80"),
+        row(type="ip:port", value="[fe80::1]:80"),
+        row(type="ip:port", value="[::ffff:192.168.1.1]:80"),
+        row(type="ip:port", value="192.0.2.1:80"),
+        row(type="domain", value="localhost"),
+        row(type="domain", value="127.0.0.1"),
+        row(type="domain", value="x.local"),
+        row(type="domain", value="c2.example.com"),
+        row(type="ip:port", value="255.255.255.255:80"),
+    ]
+    assert queries.blocklist_text(rows) == "192.0.2.1\nc2.example.com\n"
 
 
 # ── like_contains ───────────────────────────────────────────────────────────────────────────
@@ -369,6 +594,16 @@ def test_the_bounds_of_the_routes_are_the_importers_own_ceilings():
     assert queries.VALUE_MAX == importer.VALUE_MAX_BYTES
     assert queries.MALWARE_MAX == importer.MALWARE_MAX_BYTES
     assert queries.TYPE_MAX == importer.TYPE_MAX_BYTES
+
+
+def test_q_is_capped_at_128_characters_and_a_lookup_keeps_the_importers_2048():
+    # a whole URL belongs to the lookup, not to a four-column substring search (Ruling TI9, I2)
+    assert queries.Q_MAX == 128
+    assert queries.VALUE_MAX == 2048
+
+
+def test_every_read_has_a_statement_timeout_of_five_seconds_by_default():
+    assert queries.STATEMENT_TIMEOUT == "5s"
 
 
 def test_the_read_side_imports_nothing_that_can_open_a_connection():
