@@ -606,26 +606,39 @@ The host's cron writes `/var/lib/abusech/daily/ioc_YYYY-MM-DD.csv` (the newest 1
 `ti_ioc` and writes one `ti_import_log` row per run; the web never reads the CSV. The tables are migration `026_threat_intel.sql` (the database
 moves first: `make migrate`, then the importer). Running a file twice is safe: an IOC is one row, found again and updated, never added twice.
 
-- **By hand.** `<venv>/bin/python scripts/ti_import.py --env-file <checkout>/.env` imports the newest `ioc_*.csv` of `/var/lib/abusech/daily/` (the
-  last one by name); `FILE` names one file, `--dir DIR` another directory. It runs by a plain path from any directory, as root or as another user.
+- **By hand.** `<venv>/bin/python -B scripts/ti_import.py --env-file <checkout>/.env` imports TODAY's file, `ioc_YYYY-MM-DD.csv` of
+  `/var/lib/abusech/daily/` by the host's local date (the day the fetch script names it for); `--dir DIR` names another directory. If today's file is
+  not there the run is `failed` (`no_file`, exit 1, a log row): an older day is never taken in its place, so a fetch that broke shows as a failed run
+  and, after 26 hours, as a stale page, and is not hidden by yesterday's file imported again. `FILE` imports one named file whatever its name or date
+  (running an old day again by hand is fine). It runs by a plain path from any directory, as any user who can read the checkout.
 - **The database.** The importer takes `DATABASE_URL` from the `--env-file` and from nowhere else (not the arguments, not the process environment),
   so that line must be a DSN of the `app_rw` role that the **host** can reach (the published port of the trial database, not the compose-internal
   name). The DSN is never printed: a connection failure prints the exception's class name only.
-- **The cron line**, written by the Owner into **root's** crontab on the host, the importer chained after the fetch script:
+- **The cron line**, written by the Owner into **root's** crontab on the host, the importer chained after the fetch script and run as the
+  checkout's owner:
 
   ```
-  0 7 * * * . /etc/abusech.env && /usr/bin/python3 /opt/abusech/abusech_daily100.py >> /var/log/abusech_daily.log 2>&1 && /project/project/AI_Support_SOC_1_2/.venv/bin/python /project/project/AI_Support_SOC_trial/scripts/ti_import.py --env-file /project/project/AI_Support_SOC_trial/.env >> /var/log/abusech_daily.log 2>&1
+  0 7 * * * . /etc/abusech.env && /usr/bin/python3 /opt/abusech/abusech_daily100.py >> /var/log/abusech_daily.log 2>&1 && runuser -u user1 -- /project/project/AI_Support_SOC_1_2/.venv/bin/python -B /project/project/AI_Support_SOC_trial/scripts/ti_import.py --env-file /project/project/AI_Support_SOC_trial/.env >> /var/log/abusech_daily.log 2>&1
   ```
 
-  (The importer runs only when the fetch exits 0. It does not read the environment the first command sourced; the abuse.ch key is not its business.)
+  *Why `runuser`, and no root.* The importer needs no root right: it reads a CSV that is world-readable and writes to a database over the network. The
+  code (`scripts/`, `backend/`), the venv and the `.env` it runs from belong to `user1`; a root process that ran code a `user1` process can edit would
+  hand `user1` root. So the `&&` chain stays in root's crontab, where the fetch needs it, and the importer is started as the checkout's owner. `-B`
+  writes no bytecode: no `__pycache__` appears in the checkout, owned by anyone. The importer runs only when the fetch exits 0. It never reads the
+  environment, but `runuser -u` hands on what the first command sourced from `/etc/abusech.env`; to give the importer none of it, put `env -i` in front
+  of the interpreter: `runuser -u user1 -- env -i <venv python> -B ...` (the importer needs no variable of its own).
 - **A good run** prints ONE line on stdout, counts and closed words only, and exits 0:
   `ti_import: status=ok file=ioc_2026-11-17.csv total=200 new=200 updated=0 errors=0 repeated=0`. Run again, the same file gives `new=0 updated=200`.
-  `repeated` counts later occurrences of a key already seen in the same file (the first one is loaded). `status=partial` is the same with
-  `errors=N` and `message=skipped: <reason>=<n> ...`: the good rows are loaded, and stderr names each bad row (`ti_import: line 17: value_too_long`; the
-  first 100, then a count). The reasons are a closed list (`REASONS` in `backend/app/ti/importer.py`), never the row's text.
+  `repeated` counts later occurrences of a key already seen in the same file (the first one is loaded, with the earliest `first_seen` of them all).
+  `status=partial` is the same with `errors=N` and `message=skipped: <reason>=<n> ...`: the good rows are loaded, and stderr names each bad record
+  (`ti_import: line 17: value_too_long`; the first 100, then a count). The reasons are a closed list (`REASONS` in `backend/app/ti/importer.py`), never
+  the row's text. No record spans lines (every field refuses a newline), so one that does, typically an unclosed quote that eats the rest of the file,
+  is one bad record named by its span (`ti_import: lines 17-60: row_malformed`) and counted as the lines it swallowed: `total` and `errors` both rise by
+  44 for it, so `total = new + updated + errors + repeated` holds.
 - **A failed run** (`status=failed`, exit 1) loaded nothing, and has a `ti_import_log` row whenever the database could be reached. The `message`:
-  `header_missing: <columns>`, `file_unreadable`, `no_file` (none in the directory), `no_rows` (a header only), `no_valid_rows; skipped: ...`,
-  `database_error: <class>` (the whole file is one transaction, so nothing of it is in `ti_ioc`), and, before any log row is possible,
+  `header_missing: <columns>`, `file_unreadable` (also: not a regular file), `file_too_large` (over 20 MB), `no_file` (today's file is not in the
+  directory), `no_rows` (a header only), `no_valid_rows; skipped: ...`, `database_error: <class>` (the whole file is one transaction, so nothing of it
+  is in `ti_ioc`; a lock wait over 5 s or a statement over 10 s is `LockNotAvailable` or `QueryCanceled`), and, before any log row is possible,
   `env_file_unreadable`, `dsn_missing`, `database_unreachable: <class>`.
 - **Exit codes.** 0 `ok` or `partial`; 1 `failed`; 2 usage (no `--env-file`, an unknown option).
 - **Looking at it.** `psql "$DATABASE_URL_OWNER" -c "select id, file, status, rows_total, rows_new, rows_updated, rows_error, message, finished_at
