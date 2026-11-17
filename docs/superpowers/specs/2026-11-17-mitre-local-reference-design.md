@@ -36,7 +36,9 @@ three technique tables are the vocabulary, and an alert's id is matched the way 
 - Techniques outside Enterprise (Mobile, ICS). Groups, software, mitigations, detections, data sources.
 - Translating ATT&CK text into Vietnamese: the reference text is MITRE's English, verbatim after clean-up.
 - Showing technique names on the Tier 1 alert page, or anywhere but ②'s timeline (G5).
-- Changing the category mapping, the gate, the playbooks or any verdict rule.
+- Changing the category mapping, the gate, the playbooks or any verdict rule. (One exception, made in review: the gate's
+  step 3 refuses a reason whose source is `mitre_reference`, a strengthening that keeps A3 true on three layers; it
+  changes no verdict rule.)
 - Any run-time download or update job. A new ATT&CK version is a new run of the tool and a new commit.
 
 **Anti-goals** (a result with any of these is a failure)
@@ -180,12 +182,22 @@ in the local ATT&CK document. Nothing is rewritten in what the model stored.
 
 ## 10. Deploying on the trial (Owner)
 
+The `ui` is a built image, not a mount, and this feature changes `backend/app`, `kb/` and `frontend/`: the backend is
+recreated and restarted and the `ui` rebuilt (a `ui` that is not rebuilt leaves the timeline without the technique names
+and without the "not in the document" note).
+
 1. Merge the branch into what the trial checkout runs (the Director prepares it; the trial checkout is detached at
    `8c812c7` today).
 2. Add `PROMPT_INCLUDE_MITRE_REFERENCE=true` to the trial's `.env`.
-3. Recreate the trial's `app` and `worker` (an `.env` change needs `--force-recreate`, not `restart`).
-4. Check: open a new alert that has a MITRE id and look at its ① run for the `mitre_reference:20.1` mark.
-No migration: the feature has no table.
+3. From the trial checkout: `docker compose up -d --force-recreate app worker` (an `.env` change needs
+   `--force-recreate`, not `restart`; `backend/app` and `kb/` are live mounts, so the recreate starts the merged code).
+4. `docker compose restart rag-worker` (a merge under `backend/app` needs it, DEC-099).
+5. `docker compose up -d --build ui` (the trial's `ui` binds two addresses: the second must be up first, as in the
+   runbook's Voyage steps).
+6. Check: `docker compose ps app worker rag-worker ui` all `Up` and `printenv PROMPT_INCLUDE_MITRE_REFERENCE` in `worker`
+   prints `true`; open a new alert that has a MITRE id and look at its ① run for the `mitre_reference:20.1` mark; on a case
+   page, the **Diễn biến** tab shows `<id> · <name>` (after step 5).
+No migration: the feature has no table. The runbook's section "MITRE ATT&CK reference (DEC-223)" has the commands.
 
 ## 11. Left to the builder
 

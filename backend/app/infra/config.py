@@ -236,10 +236,11 @@ class Config:
     # (`llm/siem_context.py`); false leaves it out (the no-SIEM-context experiment). Only a prompt is
     # affected: the facts, the gate and the verifier read none of it.
     PROMPT_INCLUDE_SIEM_CONTEXT: bool = True
-    # DEC-223: true = the ① prompt carries MITRE's own text, from the local ATT&CK extract (`kb/mitre/`), for the
-    # alert's technique ids, as one more block, `mitre_reference` (`llm/triage.py`). False (the default) leaves it
-    # out and every prompt is what it was before the key existed. Only a prompt is affected: the facts, the gate
-    # and the verifier read none of it.
+    # DEC-223: true = the ① prompt (`llm/triage.py`, at most 6 entries) and the ② dossier (`tier2/dossier.py`, at most
+    # 10) carry MITRE's own text, from the local ATT&CK extract (`kb/mitre/`), for the technique ids of the alert or
+    # the case, as one more block, `mitre_reference`. False (the default) leaves it out and every prompt and dossier
+    # is what it was before the key existed. Only a prompt is affected: the facts, the verifier and the verdict rules
+    # read none of it; the gate only refuses `mitre_reference` as a reason's source (step 3).
     PROMPT_INCLUDE_MITRE_REFERENCE: bool = False
     INDEXER_URL: str = ""
     INDEXER_USER: str = ""

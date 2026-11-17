@@ -20,7 +20,7 @@
 - Every part of a ① prompt goes through `PromptBuilder`; new fixed strings are template constants in `llm/builder.py`.
 - No secret, DSN, lab address or alert payload in a committed file. Tests call no model.
 - Commits `DEC-223 T<N>: …`, ending with `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
-- Db tests on a private throwaway PostgreSQL cluster (127.0.0.1, trust auth, binaries under `/home/user1/.claude/jobs/a776ace2/tmp/pgs/`, data dir deleted afterwards), never `soc_test`, live or trial. `make` targets need `PY=../AI_Support_SOC_1_2/.venv/bin/python`.
+- Db tests on a private throwaway PostgreSQL cluster (127.0.0.1, trust auth, the coders' private PostgreSQL binaries (outside the repository), data dir deleted afterwards), never `soc_test`, live or trial. `make` targets need `PY=../AI_Support_SOC_1_2/.venv/bin/python`.
 
 ## Review Focus
 
