@@ -137,8 +137,8 @@ The verifier's prompt is not changed.
 ## 6. ② the investigation dossier
 
 With the switch on, the dossier gains one reference section: the distinct valid ids of the case's alerts, most
-frequent first, at most **10** entries, the same entry format, the same fixed sentences and the same line for an
-unknown id. The dossier's own budget drops this section before any alert material. No id on any alert: no section.
+frequent first, at most **10** entries, the same entry format, the same heading and first sentence, a closing sentence of its
+own naming ②'s field (`evidence[].quote`) in place of ①'s `reasons`, and the same line for an unknown id. The dossier's own budget drops this section before any alert material. No id on any alert: no section.
 
 ## 7. What the model returns (G5)
 

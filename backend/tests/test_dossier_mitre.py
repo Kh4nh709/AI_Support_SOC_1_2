@@ -3,7 +3,7 @@
 With `PROMPT_INCLUDE_MITRE_REFERENCE` on and at least one valid ATT&CK id on the case's alerts, `dossier.build`
 adds one section after block 7 (the playbooks): ①'s heading, the version of the local extract as a typed fact on
 the same line as the first fixed sentence, ONE block (source `mitre_reference`) with MITRE's own text for the
-case's ids, and the second fixed sentence. The ids are the distinct valid ones of the case's alerts (heads and the
+case's ids, and ②'s own closing sentence (Ruling M9). The ids are the distinct valid ones of the case's alerts (heads and the
 duplicates absorbed into them), most frequent first, ties by id; the entries are `llm.triage.render_mitre_entries`
 with `MITRE_REFERENCE_MAX_ENTRIES_CASE` (10).
 

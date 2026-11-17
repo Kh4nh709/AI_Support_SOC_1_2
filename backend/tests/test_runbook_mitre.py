@@ -63,7 +63,9 @@ def test_the_runbook_deploys_the_backend_the_rag_worker_and_the_built_ui_in_that
     assert (
         section.index("PROMPT_INCLUDE_MITRE_REFERENCE=true") < where[0]
     )  # the .env line comes before the recreate
-    assert section.index("Merge the branch") < section.index("PROMPT_INCLUDE_MITRE_REFERENCE=true")
+    # step 1 is a command the Owner runs in the trial checkout, and it comes before the .env line
+    merge = "git merge --ff-only feature/mitre-local-reference"
+    assert section.index(merge) < section.index("PROMPT_INCLUDE_MITRE_REFERENCE=true")
     assert "built image" in section and "DEC-099" in section
     assert "does not depend on the switch" in section and "fails until step 5" in section
     assert "docker compose ps app worker rag-worker ui" in section
