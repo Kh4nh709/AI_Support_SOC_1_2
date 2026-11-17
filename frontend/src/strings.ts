@@ -1146,6 +1146,9 @@ export const S = {
       label: "Dòng thời gian",
       none: "Lượt phân tích này không có dòng thời gian.",
       alert: "alert",
+      // DEC-223: beside a technique id the model wrote that the local MITRE ATT&CK document does not hold. A known id
+      // is shown as `<id> · <MITRE's name>`, with no word of ours.
+      notInReference: "không có trong tài liệu ATT&CK cục bộ",
     },
     // Giả thuyết: each hypothesis, then what the knowledge base had (the same card as the alert page's).
     hypothesesTab: {

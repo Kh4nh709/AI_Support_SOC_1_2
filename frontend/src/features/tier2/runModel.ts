@@ -213,6 +213,10 @@ export function timelineOf(run: RunView): TimelineRow[] {
         what,
         tactic: text(row.tactic),
         technique: text(row.technique),
+        // DEC-223: the server's check of `technique` against the local ATT&CK document; a verdict is a boolean or
+        // nothing, and MITRE's name is text or nothing (an older server sends neither key)
+        technique_name: text(row.technique_name),
+        technique_known: typeof row.technique_known === "boolean" ? row.technique_known : null,
       },
     ];
   });

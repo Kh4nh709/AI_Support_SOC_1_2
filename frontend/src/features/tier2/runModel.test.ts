@@ -371,7 +371,30 @@ describe("timelineOf and mitreSteps", () => {
         what: "amsi.dll được nạp bởi splwow64.exe",
         tactic: null,
         technique: null,
+        technique_name: null,
+        technique_known: null,
       },
+    ]);
+  });
+
+  it("reads what the server checked of a technique: MITRE's name as text and the verdict as a boolean only (DEC-223)", () => {
+    const rows = timelineOf(
+      run({
+        timeline: [
+          timelineRow({ technique_name: "Password Guessing", technique_known: true }),
+          timelineRow({ technique: "T9999", technique_name: null, technique_known: false }),
+          timelineRow({ technique_name: "", technique_known: null }),
+          timelineRow({ technique_name: 7, technique_known: "true" }),
+          { alert_id: "9", what: "older server", tactic: null, technique: "T1110" },
+        ],
+      }),
+    );
+    expect(rows.map((row) => [row.technique_name, row.technique_known])).toEqual([
+      ["Password Guessing", true],
+      [null, false],
+      [null, null],
+      [null, null],
+      [null, null],
     ]);
   });
 

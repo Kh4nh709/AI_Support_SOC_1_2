@@ -148,6 +148,11 @@ export type HypothesisRow = {
  * One row of the timeline of a version 4 run (DEC-221). `time` is the alert's own time, taken by the server from the
  * alert the row names; the model writes none. The rows come sorted by it, at most 50, never one naming an alert outside
  * the case. `tactic` and `technique` are the model's text, or null.
+ *
+ * DEC-223: `technique_name` and `technique_known` are what the server made of `technique` against the local MITRE
+ * ATT&CK document (`kb/mitre/`): MITRE's own name and `true` for an id the document holds; `null` and `false` for a
+ * value shaped like an id that it does not hold; `null` and `null` for anything else, and for every row when the
+ * server has no such document. They are `undefined` from an older server. `technique` itself is what the model wrote.
  */
 export type TimelineRow = {
   alert_id: string;
@@ -155,6 +160,8 @@ export type TimelineRow = {
   what: string;
   tactic: string | null;
   technique: string | null;
+  technique_name?: string | null;
+  technique_known?: boolean | null;
 };
 
 /** A next step with its priority (DEC-221): `priority` is null for a run stored before version 4. */
@@ -262,6 +269,11 @@ export type RunView = {
   next_steps_rows?: NextStepRow[];
   tech?: TechView;
   knowledge?: KnowledgeView;
+  /**
+   * DEC-223: how many served timeline rows name an ATT&CK id the local document does not hold
+   * (`technique_known: false`); `null` when the server has no such document. The page marks each such row itself.
+   */
+  checks?: { technique_not_in_reference: number | null };
 };
 
 /**

@@ -34,6 +34,10 @@ export const timelineRow = (over: Over = {}) => ({
   what: "amsi.dll được nạp bởi splwow64.exe",
   tactic: "Né tránh phòng thủ",
   technique: "T1562.001",
+  // DEC-223: what the server made of `technique` against the local ATT&CK document. null, null is the server with no
+  // such document (and a technique that is not an id): the row reads as it did before; the tests of the check set both.
+  technique_name: null,
+  technique_known: null,
   ...over,
 });
 

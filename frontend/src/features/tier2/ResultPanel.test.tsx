@@ -514,6 +514,78 @@ describe("Diễn biến", () => {
     expect(metas).toEqual(["Né tránh phòng thủ · alert 112437", "T1562.001 · alert 2", "alert 3"]);
   });
 
+  it("shows a technique the local ATT&CK document holds as its id and MITRE's own name (DEC-223)", async () => {
+    renderPanel(
+      runV4({
+        timeline: [
+          timelineRow({
+            technique: "T1110.001",
+            technique_name: "Password Guessing",
+            technique_known: true,
+          }),
+        ],
+      }),
+    );
+    await open("Diễn biến");
+    const metas = [...document.querySelectorAll("[data-part='meta']")].map((m) => m.textContent);
+    expect(metas).toEqual(["Né tránh phòng thủ · T1110.001 · Password Guessing · alert 112437"]);
+    expect(document.querySelector("[data-part='technique-note']")).toBeNull();
+  });
+
+  it("says a technique the document does not hold is not in it, beside the id the model wrote (DEC-223)", async () => {
+    renderPanel(
+      runV4({
+        timeline: [
+          timelineRow({ technique: "T9999", technique_name: null, technique_known: false }),
+          timelineRow({
+            alert_id: "2",
+            tactic: null,
+            technique: "T9998",
+            technique_name: null,
+            technique_known: false,
+          }),
+        ],
+      }),
+    );
+    await open("Diễn biến");
+    const metas = [...document.querySelectorAll("[data-part='meta']")].map((m) => m.textContent);
+    expect(metas).toEqual([
+      `Né tránh phòng thủ · T9999 · ${S.ai2.timeline.notInReference} · alert 112437`,
+      `T9998 · ${S.ai2.timeline.notInReference} · alert 2`,
+    ]);
+    const notes = [...document.querySelectorAll("[data-part='technique-note']")];
+    expect(notes.map((n) => n.textContent)).toEqual([
+      S.ai2.timeline.notInReference,
+      S.ai2.timeline.notInReference,
+    ]);
+    expect(S.ai2.timeline.notInReference).toBe("không có trong tài liệu ATT&CK cục bộ");
+  });
+
+  it("says nothing more of a technique with no verdict, or from a server that sends none (DEC-223)", async () => {
+    const bare = { ...timelineRow({ alert_id: "3" }) } as Record<string, unknown>;
+    delete bare.technique_name;
+    delete bare.technique_known;
+    renderPanel(
+      runV4({
+        timeline: [
+          timelineRow({ technique: "brute force", technique_name: null, technique_known: null }),
+          bare,
+          timelineRow({ alert_id: "4", technique_name: "x", technique_known: "yes" }),
+          timelineRow({ alert_id: "5", technique: null, technique_known: false }),
+        ],
+      }),
+    );
+    await open("Diễn biến");
+    const metas = [...document.querySelectorAll("[data-part='meta']")].map((m) => m.textContent);
+    expect(metas).toEqual([
+      "Né tránh phòng thủ · brute force · alert 112437",
+      "Né tránh phòng thủ · T1562.001 · alert 3",
+      "Né tránh phòng thủ · T1562.001 · alert 4",
+      "Né tránh phòng thủ · alert 5",
+    ]);
+    expect(document.querySelector("[data-part='technique-note']")).toBeNull();
+  });
+
   it("marks the last step, where the chain ends", async () => {
     renderPanel(runV4());
     await open("Diễn biến");
@@ -1039,7 +1111,21 @@ describe("everything the model wrote is text", () => {
         evidence: [evidenceRow({ quote: evil, why: evil })],
         evidence_summary: { cited: 1, verified: 1 },
         next_steps_rows: [{ step: evil, priority: "high" }],
-        timeline: [timelineRow({ what: evil, tactic: evil, technique: evil })],
+        timeline: [
+          timelineRow({
+            what: evil,
+            tactic: evil,
+            technique: evil,
+            technique_name: evil,
+            technique_known: true,
+          }),
+          timelineRow({
+            alert_id: "2",
+            technique: evil,
+            technique_name: null,
+            technique_known: false,
+          }),
+        ],
         scope: {
           hosts: [evil],
           accounts: [evil],

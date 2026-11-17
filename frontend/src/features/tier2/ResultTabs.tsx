@@ -2,7 +2,7 @@
 // rendered as text, never as markup. A key a run does not carry (an older run, an older server) is read through
 // `runModel.ts` and leaves its part out or says plainly that it is not there; nothing here throws on a missing key.
 import { Link } from "react-router";
-import type { RunView, Snapshot } from "../../api/tier2";
+import type { RunView, Snapshot, TimelineRow } from "../../api/tier2";
 import { formatClock, formatDateTime, formatTime } from "../../format";
 import { S, failureKindLabel, labelOf } from "../../strings";
 import { Card, FactRows, Figures, IconLine } from "../analysis/Cards";
@@ -11,7 +11,7 @@ import { formatCost, formatCount, formatSeconds } from "../analysis/figures";
 import type { Knowledge } from "../analysis/knowledge";
 import { KnowledgeCandidates } from "../analysis/KnowledgeCandidates";
 import { CARD, FOCUS } from "../analysis/styles";
-import { useId } from "react";
+import { Fragment, useId } from "react";
 import { asText } from "./parts";
 import { TONE_INK } from "./ResultTiles";
 import {
@@ -172,6 +172,27 @@ export function OverviewTab({ run }: { run: RunView }) {
 
 // ── Diễn biến ────────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The parts before "alert <id>" in a step's line, each followed by the separator: the tactic, then the technique the
+ * model wrote. A technique the local ATT&CK document holds (`technique_known: true`) is shown as `<id> · <MITRE's
+ * name>`; one it does not hold (`false`) is followed by the note that it is not in the document, marked as a note;
+ * with no verdict (`null`, or an older server) it stands as the model wrote it. What the model wrote is never replaced.
+ * Every part is text.
+ */
+function leadOf(row: TimelineRow): { text: string; note: boolean }[] {
+  const parts: { text: string; note: boolean }[] = [];
+  if (row.tactic !== null) parts.push({ text: row.tactic, note: false });
+  if (row.technique !== null) {
+    parts.push({ text: row.technique, note: false });
+    if (row.technique_known === true && row.technique_name != null) {
+      parts.push({ text: row.technique_name, note: false });
+    } else if (row.technique_known === false) {
+      parts.push({ text: S.ai2.timeline.notInReference, note: true });
+    }
+  }
+  return parts;
+}
+
 export function TimelineTab({ run }: { run: RunView }) {
   const rows = timelineOf(run);
   const narrative = nonEmpty(run.narrative);
@@ -193,9 +214,7 @@ export function TimelineTab({ run }: { run: RunView }) {
         >
           {rows.map((row, index) => {
             const last = index === rows.length - 1;
-            const lead = [row.tactic, row.technique]
-              .filter((part): part is string => part !== null)
-              .join(S.analysis.separator);
+            const lead = leadOf(row);
             return (
               <li key={index} className="col-span-3 grid grid-cols-subgrid">
                 <time
@@ -215,7 +234,19 @@ export function TimelineTab({ run }: { run: RunView }) {
                 <div className={`flex min-w-0 flex-col gap-1 ${last ? "" : "pb-3.5"}`}>
                   <span className="break-words">{row.what}</span>
                   <span data-part="meta" className="text-xs break-words text-muted">
-                    {`${lead === "" ? "" : `${lead}${S.analysis.separator}`}${S.ai2.timeline.alert} `}
+                    {lead.map((part, at) => (
+                      <Fragment key={at}>
+                        {part.note ? (
+                          <span data-part="technique-note" className="text-medium">
+                            {part.text}
+                          </span>
+                        ) : (
+                          part.text
+                        )}
+                        {S.analysis.separator}
+                      </Fragment>
+                    ))}
+                    {`${S.ai2.timeline.alert} `}
                     <AlertLink id={row.alert_id} />
                   </span>
                 </div>
