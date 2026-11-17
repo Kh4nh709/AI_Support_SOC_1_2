@@ -331,7 +331,7 @@ def test_an_empty_blocklist_is_an_empty_text():
     assert queries.blocklist_text([row(type="url", value="http://x.example.com/")]) == ""
 
 
-# ── what a blocklist must never carry (Ruling TI9, I1) ──────────────────────────────────────
+# ── what a blocklist must never carry (Rulings TI9 and TI10, I1) ──────────────────────────
 
 #: Every address a firewall or a DNS sinkhole must never block, by kind; each is tried as `ip:port`, bare (IPv4) and in brackets
 #: (IPv6), and each is also tried wrapped in an IPv4-mapped IPv6 address. The kind is in the id of the case.
@@ -340,6 +340,19 @@ NEVER_V4 = {
     "rfc1918 10/8": ["10.0.0.0", "10.0.0.1", "10.1.2.3", "10.255.255.255"],
     "rfc1918 172.16/12": ["172.16.0.0", "172.16.0.1", "172.20.5.5", "172.31.255.255"],
     "rfc1918 192.168/16": ["192.168.0.0", "192.168.1.1", "192.168.255.255"],
+    "ietf protocol 192.0.0.0/24": [
+        "192.0.0.0",
+        "192.0.0.1",
+        "192.0.0.8",
+        "192.0.0.170",
+        "192.0.0.255",
+    ],
+    "benchmarking and fake-ip 198.18/15": [
+        "198.18.0.0",
+        "198.18.0.1",
+        "198.19.0.1",
+        "198.19.255.255",
+    ],
     "cgnat 100.64/10": ["100.64.0.0", "100.64.0.1", "100.100.100.100", "100.127.255.255"],
     "loopback": ["127.0.0.1", "127.0.0.2", "127.1.2.3", "127.255.255.255"],
     "link-local": ["169.254.0.0", "169.254.1.1", "169.254.169.254", "169.254.255.255"],
@@ -364,7 +377,10 @@ NEVER_V6 = {
     ],
     "ipv4-mapped, wrapping a private address": [
         "::ffff:127.0.0.1", "::ffff:10.0.0.1", "::ffff:192.168.1.1", "::ffff:0.0.0.0", "::ffff:255.255.255.255",
-        "::ffff:7f00:1", "::ffff:a00:1",
+        "::ffff:7f00:1", "::ffff:a00:1", "::ffff:192.0.0.1", "::ffff:c000:1", "::ffff:198.18.0.1", "::ffff:c612:1",
+    ],
+    "benchmarking 2001:2::/48, inside the global block": [
+        "2001:2::", "2001:2::1", "2001:2:0:1::1", "2001:2:0:ffff:ffff:ffff:ffff:ffff",
     ],
 }  # fmt: skip
 #: Addresses just outside each never-block range, and the documentation ranges the committed test data lives in: all stay.
@@ -372,6 +388,7 @@ STAY_V4 = [
     "1.0.0.1", "9.255.255.255", "11.0.0.1", "100.63.255.255", "100.128.0.0", "126.255.255.255", "128.0.0.1",
     "169.253.255.255", "169.255.0.1", "172.15.255.255", "172.32.0.0", "192.167.255.255", "192.169.0.1",
     "223.255.255.254", "192.0.2.0", "192.0.2.1", "192.0.2.255", "198.51.100.1", "203.0.113.254",
+    "191.255.255.255", "192.0.1.0", "192.0.1.255", "198.17.255.255", "198.20.0.0", "198.20.0.1",
 ]  # fmt: skip
 STAY_V6 = [
     "2000::1",
@@ -379,6 +396,11 @@ STAY_V6 = [
     "2001:db8:ffff::1",
     "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff",
     "3fff:ffff::1",
+    # just outside 2001:2::/48, and the neighbours of the global block's special ranges
+    "2001:2:1::1",
+    "2001:3::1",
+    "2001:1:ffff:ffff::1",
+    "2001::1",
 ]
 
 
@@ -441,19 +463,51 @@ def test_an_ipv6_address_in_global_unicast_space_or_the_documentation_range_stay
         # an IP literal written as a domain: the last label is all digits
         "127.0.0.1", "0.0.0.0", "10.1.2.3", "192.168.1.1", "169.254.1.1", "100.64.0.1", "224.0.0.1",
         "255.255.255.255", "192.0.2.1", "203.0.113.9", "8.8.8.8", "1.2", "x.123", "0x7f.0.0.1", "a.b.1",
+        # the same literals spelt in hex, octal or as one number: getaddrinfo reads them as an address with no DNS query
+        "127.0.0.0x1", "0x7f.0x0.0x0.0x1", "0xa.0x1", "192.168.1.0x1", "169.254.169.0xfe", "0.0.0.0x0",
+        "2130706433", "0177.0.0.1", "127.1", "0x7f000001", "0X7F.0.0.1", "10.0.0.0X1", "0300.0250.0.1",
+        "a.0xff", "x.0x7f", "1.2.3.0x4", "example.0x1",
+        # a last label that is not a real top-level label: one letter, a digit in it, a hyphen at an end, too long
+        "a.b", "example.c", "x.y.z", "example.c0m", "example.co1", "example.1com", "example.com1", "example.c-m",
+        "example.xn--", "example.xn", "example.x_y", "a." + "b" * 64,
     ],
 )  # fmt: skip
 def test_a_name_that_is_no_host_to_block_gives_no_line(name):
     assert queries.blocklist_entry("domain", name) is None
 
 
+@pytest.mark.parametrize(
+    ("name", "line"),
+    [
+        ("example.com", "example.com"),
+        ("c2.example.com", "c2.example.com"),
+        ("example.net", "example.net"),
+        ("example.co", "example.co"),
+        ("a.ab", "a.ab"),
+        ("EXAMPLE.COM", "example.com"),
+        ("example.xn--p1ai", "example.xn--p1ai"),
+        ("EXAMPLE.XN--P1AI", "example.xn--p1ai"),
+        ("example.xn--80asehdb", "example.xn--80asehdb"),
+        ("xn--bcher-kva.xn--p1ai", "xn--bcher-kva.xn--p1ai"),
+        ("example.museum", "example.museum"),
+        ("a." + "b" * 63, "a." + "b" * 63),
+        ("127.0.0.1.example.com", "127.0.0.1.example.com"),
+        ("0x7f.example.com", "0x7f.example.com"),
+        ("1.0xa.example.org", "1.0xa.example.org"),
+    ],
+)
+def test_a_real_top_level_label_is_two_to_63_letters_or_punycode(name, line):
+    assert queries.blocklist_entry("domain", name) == line
+
+
 def test_the_never_block_constants_are_these_and_no_others():
     """The closed sets, written out: a test that would not notice one of them changing is no test of the rule."""
     assert queries.NEVER_BLOCK_V4 == (
         "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
-        "192.168.0.0/16", "224.0.0.0/4", "240.0.0.0/4",
+        "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15", "224.0.0.0/4", "240.0.0.0/4",
     )  # fmt: skip
     assert queries.GLOBAL_UNICAST_V6 == "2000::/3"
+    assert queries.NEVER_BLOCK_V6_WITHIN_GLOBAL == ("2001:2::/48",)
     assert queries.NEVER_BLOCK_NAME_ENDINGS == frozenset(
         {"local", "localhost", "localdomain", "lan", "home", "internal", "intranet", "corp", "arpa", "test", "invalid", "example", "onion"}
     )  # fmt: skip
@@ -468,6 +522,10 @@ def test_the_documentation_names_and_ranges_of_the_test_data_are_not_in_the_neve
     assert ipaddress.ip_network("2001:db8::/32").subnet_of(
         ipaddress.ip_network(queries.GLOBAL_UNICAST_V6)
     )
+    # the exclusions inside the global block are inside it, and the documentation range is not touched by them
+    inside = [ipaddress.ip_network(n) for n in queries.NEVER_BLOCK_V6_WITHIN_GLOBAL]
+    assert all(net.subnet_of(ipaddress.ip_network(queries.GLOBAL_UNICAST_V6)) for net in inside)
+    assert not any(ipaddress.ip_network("2001:db8::/32").overlaps(net) for net in inside)
     assert not {"com", "net", "org"} & queries.NEVER_BLOCK_NAME_ENDINGS
 
 
@@ -482,6 +540,11 @@ def test_a_blocklist_of_rows_leaves_out_what_must_never_be_blocked_and_keeps_the
         row(type="domain", value="localhost"),
         row(type="domain", value="127.0.0.1"),
         row(type="domain", value="x.local"),
+        row(type="domain", value="127.0.0.0x1"),
+        row(type="domain", value="0xa.0x1"),
+        row(type="ip:port", value="192.0.0.1:80"),
+        row(type="ip:port", value="[::ffff:198.18.0.1]:80"),
+        row(type="ip:port", value="[2001:2::1]:80"),
         row(type="domain", value="c2.example.com"),
         row(type="ip:port", value="255.255.255.255:80"),
     ]
@@ -583,6 +646,33 @@ def test_anything_else_is_refused(text):
         queries.parse_bound(text, upper=text in {"9999-12-31"})
     with pytest.raises(ValueError):
         queries.parse_bound(text, upper=True)
+
+
+# ── the byte order mark in the source (Ruling TI10) ─────────────────────────────────────────
+
+
+def test_the_byte_order_mark_is_written_in_the_source_as_an_escape_not_as_an_invisible_character():
+    from pathlib import Path
+
+    source = Path(queries.__file__).read_text(encoding="utf-8")
+    lines = [line for line in source.splitlines() if line.startswith("CSV_BOM = ")]
+    assert lines == ['CSV_BOM = "\\ufeff"']  # the six characters backslash, u, f, e, f, f
+    assert queries.CSV_BOM == "\ufeff" and len(queries.CSV_BOM) == 1
+
+
+def test_no_source_file_of_the_read_side_holds_an_invisible_format_or_separator_character():
+    import unicodedata
+    from pathlib import Path
+
+    root = Path(queries.__file__).resolve().parents[1]
+    for path in (root / "ti" / "queries.py", root / "web" / "routers" / "ti.py"):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            for char in line:
+                assert unicodedata.category(char) not in {"Cf", "Zl", "Zp", "Cc"} or char == "\t", (
+                    path.name,
+                    number,
+                    hex(ord(char)),
+                )
 
 
 # ── the shape of the module ─────────────────────────────────────────────────────────────────

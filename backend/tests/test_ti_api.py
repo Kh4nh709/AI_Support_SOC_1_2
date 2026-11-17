@@ -1648,15 +1648,23 @@ def test_the_blocklist_never_carries_what_a_firewall_or_a_sinkhole_must_not_bloc
         ("domain", "localhost"), ("domain", "127.0.0.1"), ("domain", "10.1.2.3"), ("domain", "0.0.0.0"),
         ("domain", "x.local"), ("domain", "1.0.0.127.in-addr.arpa"), ("domain", "com"), ("domain", "lan"),
         ("domain", "printer.lan"), ("domain", "foo.example"),
+        # a number spelt in hex is an address to getaddrinfo, with no DNS query: not a name to block
+        ("domain", "127.0.0.0x1"), ("domain", "0x7f.0x0.0x0.0x1"), ("domain", "0xa.0x1"),
+        ("domain", "192.168.1.0x1"), ("domain", "169.254.169.0xfe"), ("domain", "0.0.0.0x0"),
+        ("domain", "2130706433"), ("domain", "0177.0.0.1"), ("domain", "127.1"), ("domain", "example.c0m"),
+        # IANA special-purpose ranges that are not globally reachable
+        ("ip:port", "192.0.0.1:80"), ("ip:port", "192.0.0.170:80"), ("ip:port", "198.18.0.1:80"),
+        ("ip:port", "198.19.255.255:80"), ("ip:port", "[::ffff:198.18.0.1]:80"), ("ip:port", "[2001:2::1]:80"),
     ]  # fmt: skip
     for number, (kind, value) in enumerate(never, start=2):
         api.put(type=kind, value=value, first_seen=ago(minutes=number))
     api.put(type="domain", value="c2.example.com", first_seen=ago(minutes=60))
     api.put(type="ip:port", value="[2001:db8::1]:443", first_seen=ago(minutes=61))
+    api.put(type="domain", value="c2.example.xn--p1ai", first_seen=ago(minutes=62))
     response = api.get("admin", EXPORT, format="blocklist")
-    assert response.text == "192.0.2.1\nc2.example.com\n2001:db8::1\n"
+    assert response.text == "192.0.2.1\nc2.example.com\n2001:db8::1\nc2.example.xn--p1ai\n"
     # the CSV is the list, never-block values included: it is a record, not a blocklist
-    assert len(read_csv(api.get("admin", EXPORT, format="csv"))) == len(never) + 3
+    assert len(read_csv(api.get("admin", EXPORT, format="csv"))) == len(never) + 4
 
 
 # ═══════════════════════════ the statement timeout ═══════════════════════════════════════════
