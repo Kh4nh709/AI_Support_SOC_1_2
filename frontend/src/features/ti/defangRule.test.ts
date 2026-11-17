@@ -11,6 +11,15 @@ const head = (text: string): string => {
   const at = text.search(/[/?#]/);
   return at === -1 ? text : text.slice(0, at);
 };
+/** The value without the white space and control characters at its two edges (the ones a browser skips). */
+function trimEdges(text: string): string {
+  const edge = (char: string): boolean => char.charCodeAt(0) <= 0x20 || /\s/.test(char);
+  let start = 0;
+  let end = text.length;
+  while (start < end && edge(text[start] as string)) start += 1;
+  while (end > start && edge(text[end - 1] as string)) end -= 1;
+  return text.slice(start, end);
+}
 /**
  * The authorities of an output, found the way the rule defines them and not the way it is written: what follows a scheme-relative start,
  * a scheme and two or more slashes, or a special scheme and any slashes, up to the next / \ ? # or white space.
@@ -512,7 +521,7 @@ describe("a generated corpus (schemes, slashes and back-slashes, users, nested U
     const failures: string[] = [];
     for (const value of VALUES) {
       for (const type of TYPES) {
-        const inner = value.replace(/^[\s\u0000-\u0020]+|[\s\u0000-\u0020]+$/g, "");
+        const inner = trimEdges(value);
         const wrapped = ` \t${inner}\n `;
         if (defang(wrapped, type) !== ` \t${defang(inner, type)}\n `) {
           failures.push(`${JSON.stringify(inner)} [${type}]`);
