@@ -198,6 +198,16 @@ describe("abuseChHref and isAbuseChReference: the one link of the page", () => {
     );
   });
 
+  it.each<[string, string]>([
+    ["https://threatfox.abuse.ch/ioc/1234567/", "https://threatfox.abuse.ch/ioc/1234567/"],
+    ["HTTPS://ThreatFox.Abuse.CH/ioc/1/", "https://threatfox.abuse.ch/ioc/1/"],
+    ["https://threatfox.abuse.ch", "https://threatfox.abuse.ch/"],
+    ["https://threatfox.abuse.ch:443/ioc/1/", "https://threatfox.abuse.ch/ioc/1/"],
+    ["https://urlhaus.abuse.ch/url/1/?a=b#c", "https://urlhaus.abuse.ch/url/1/?a=b#c"],
+  ])("links %s to the address that was parsed and judged: %s", (url, href) => {
+    expect(abuseChHref(url)).toBe(href);
+  });
+
   const REFUSED: Array<[string, string]> = [
     ["http, not https", "http://threatfox.abuse.ch/ioc/1/"],
     [

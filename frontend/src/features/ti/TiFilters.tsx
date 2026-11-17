@@ -1,7 +1,7 @@
 // The filters of the table: the source, the type, the malware, a range of dates, the minimum confidence, and the search box, in one form.
 // They act when the form is sent, so a half-typed word is not a request; the page puts the view in the URL and the query follows the URL.
 // Every value is checked (`tiParams`) before it leaves the form, so the API never sees one it would refuse: the date inputs give
-// `YYYY-MM-DD` only, "any confidence" (empty, or 0) is NO parameter, and the search is at most 128 characters. The draft of the form
+// `YYYY-MM-DD` only, "any confidence" (empty, or 0, which is the bottom of the box so the arrows can reach it) is NO parameter, and the search is at most 128 characters. The draft of the form
 // follows the URL when the URL changes it (Xoá bộ lọc, the back button), and is left alone while somebody types.
 import { useId, useState, type FormEvent } from "react";
 import { TI_MALWARE_MAX, TI_Q_MAX, TI_SOURCES, TI_TYPE_MAX, isTiSource } from "../../api/ti";
@@ -153,7 +153,7 @@ export function TiFilters({ view, onApply }: { view: TiView; onApply: (next: TiV
         <input
           type="number"
           inputMode="numeric"
-          min={1}
+          min={0}
           max={100}
           step={1}
           value={draft.confidence}

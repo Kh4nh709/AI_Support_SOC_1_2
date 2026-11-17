@@ -101,7 +101,7 @@ describe("each filter", () => {
     expect(lastList(state).search).not.toMatch(/T\d\d|%3A/);
   });
 
-  it("minimum confidence: a number from 1, sent as min_confidence", async () => {
+  it("minimum confidence: a number from 1 to 100, sent as min_confidence", async () => {
     const state = fake();
     serve(server, state);
     const user = userEvent.setup();
@@ -109,7 +109,8 @@ describe("each filter", () => {
     await ready();
     const box = field(S.ti.filters.confidence) as HTMLInputElement;
     expect(box.type).toBe("number");
-    expect(box.min).toBe("1");
+    // 0 is the bottom of the box (the arrows reach it) and means "any": the page never sends it
+    expect(box.min).toBe("0");
     expect(box.max).toBe("100");
     await user.type(box, "75");
     await apply(user);
@@ -133,12 +134,12 @@ describe("each filter", () => {
 
     await user.type(box, "0");
     await apply(user);
-    await waitFor(() => expect(state.lists.length).toBeGreaterThanOrEqual(2));
-    for (const url of state.lists.slice(1))
-      expect(url.searchParams.has("min_confidence")).toBe(false);
+    // nothing changes (the view is the empty one again), and nothing is asked: give a request that would go out time to come
+    await new Promise((resolve) => setTimeout(resolve, 150));
     expect(where()).toBe("/threat-intel");
-    // and no request of the whole page, the first one included, ever carried a 0
+    expect(state.lists.some((u) => u.searchParams.has("min_confidence"))).toBe(true);
     expect(state.lists.some((u) => u.searchParams.get("min_confidence") === "0")).toBe(false);
+    expect(state.lists.at(-1)?.searchParams.has("min_confidence")).toBe(false);
   });
 
   it("says what the confidence filter does with an IOC that has none", async () => {
