@@ -38,8 +38,10 @@ function live(text: string): boolean {
   }
 }
 /** The property of the review: no output is a live URL, and none is one when it is read after `http:` (a scheme-relative value). */
-const isLive = (out: string): boolean =>
+const isLiveAsIs = (out: string): boolean =>
   live(out) || (/^[/\\]{2}/.test(out) && live(`http:${out}`));
+/** And the same after the white space at the edges is trimmed (a browser skips it; so does a chat that links what it finds). */
+const isLive = (out: string): boolean => isLiveAsIs(out) || isLiveAsIs(out.trim());
 
 describe("the cases the review measured (TI12 I1, M1, M2)", () => {
   // [value, type, what it was before: raw host or wrong, output]
@@ -224,6 +226,92 @@ describe("a host that has no dot to bracket cannot be a host of a special scheme
   });
 });
 
+describe("a bracketed host has the colons inside its brackets bracketed, whatever follows the ] (TI14 N1)", () => {
+  // the reviewer's five: a zero-padded port of six digits or more is a port to a browser
+  const CASES: Array<[string, string]> = [
+    ["ws://[2001:db8::1]:000080/x", "ws://[2001[:]db8[:][:]1]:000080/x"],
+    ["wss://u@[::1]:0000000/x", "wss://u@[[:][:]1]:0000000/x"],
+    ["ws:/[::1]:0000080", "ws:/[[:][:]1]:0000080"],
+    ["//[2001:db8::1]:0000080/x", "//[2001[:]db8[:][:]1]:0000080/x"],
+    ["\\\\[2001:db8::a]:0000000443\\x", "\\\\[2001[:]db8[:][:]a]:0000000443\\x"],
+    // twenty digits, garbage, nothing, a second colon, a second bracket, an IPv4 tail
+    ["ws://[::1]:00000000000000000000/x", "ws://[[:][:]1]:00000000000000000000/x"],
+    ["ws://[::1]x/", "ws://[[:][:]1]x/"],
+    ["ws://[::1]:80:90/", "ws://[[:][:]1]:80:90/"],
+    ["ws://[::1]]/", "ws://[[:][:]1]]/"],
+    ["ws://[::1]:8a/", "ws://[[:][:]1]:8a/"],
+    ["ws://[::ffff:1.2.3.4]:000080/", "ws://[[:][:]ffff[:]1[.]2[.]3[.]4]:000080/"],
+    ["ws://[::1]", "ws://[[:][:]1]"],
+    // the same as a value of its own
+    ["[::1]:00000000000000000000", "[[:][:]1]:00000000000000000000"],
+    ["[::1]x", "[[:][:]1]x"],
+    ["[2001:db8::1]:0000080", "[2001[:]db8[:][:]1]:0000080"],
+  ];
+  const ALL_TYPES = ["url", "domain", "ip:port", "md5_hash", "email", "something_new"];
+  it.each(CASES.flatMap(([value, shown]) => ALL_TYPES.map((t) => [value, t, shown] as const)))(
+    "%s [%s] -> %s",
+    (value, type, shown) => {
+      expect(defang(value, type)).toBe(shown);
+      expect(defang(shown, type)).toBe(shown);
+      expect(isLive(shown)).toBe(false);
+    },
+  );
+
+  it("keeps an unbalanced bracket as it is: no `]`, no bracketed host", () => {
+    expect(defang("ws://[::1/x", "url")).toBe("ws://[::1/x");
+    expect(defang("ws://x[::1]/", "url")).toBe("ws://x[::1]/");
+  });
+});
+
+describe("white space at the edges of a value changes nothing (TI14 N2)", () => {
+  it.each<[string, string, string]>([
+    [" //[::1]/x", "ip:port", " //[[:][:]1]/x"],
+    [" //[2001:db8::1]:443/x", "ip:port", " //[2001[:]db8[:][:]1]:443/x"],
+    [" //evil.example/x", "ip:port", " //evil[.]example/x"],
+    ["ws://[::1] ", "url", "ws://[[:][:]1] "],
+    ["\t//evil.example/x\n", "something_new", "\t//evil[.]example/x\n"],
+    ["  ws://localhost  ", "url", "  ws://localhost[.]  "],
+    ["\u00a0http://evil.example/\u00a0", "url", "\u00a0hxxp://evil[.]example/\u00a0"],
+  ])("%j [%s] -> %j", (value, type, shown) => {
+    expect(defang(value, type)).toBe(shown);
+    expect(defang(shown, type)).toBe(shown);
+    expect(isLive(shown)).toBe(false);
+  });
+
+  it("is the same as the trimmed value with the edges put back, for every value of a list and every type", () => {
+    const values = [
+      "http://evil.example/x",
+      "//evil.example",
+      "ws://[::1]:000080/x",
+      "evil.example",
+      "1.2.3.4",
+      "::ffff:1.2.3.4",
+      "mailto:a@evil.example",
+      "abcdef",
+      "",
+      "ws://localhost",
+    ];
+    for (const value of values) {
+      for (const type of ["url", "domain", "ip:port", "something_new"]) {
+        for (const [before, after] of [
+          [" ", ""],
+          ["", " "],
+          ["\t ", "\n"],
+          ["\u0001", " "],
+        ]) {
+          expect(defang(before + value + after, type), `${before + value + after}`).toBe(
+            before + defang(value, type) + after,
+          );
+        }
+      }
+    }
+  });
+
+  it("does not make a value of nothing but white space anything else", () => {
+    for (const value of [" ", "   ", "\t\n", "\u00a0 "]) expect(defang(value, "url")).toBe(value);
+  });
+});
+
 describe("what the rule still does not cover (said in DEC-224), as the code does it", () => {
   it("leaves a name that is not at the start, not in an authority and not after an @, for a type that is not url or domain", () => {
     expect(defang("see evil.example.com now", "something_new")).toBe("see evil.example.com now");
@@ -293,6 +381,13 @@ const HOSTS = [
   "x",
   "1234",
   "[::1]:",
+  "[2001:db8::1]:000080",
+  "[::1]:0000000",
+  "[::1]:00000000000000000000",
+  "[::1]x",
+  "[::1]:80:90",
+  "[::1]]",
+  "[::1]:8a",
   "[1:2:3:4:5:6:7:8]",
   "0x7f.1",
   "2130706433",
@@ -351,6 +446,8 @@ const ALPHABET = [
   "%",
   " ",
 ];
+/** White space and a control character at the edge of a value: a browser skips them, and so does the rule. */
+const EDGES = ["", "", "", "", " ", "  ", "\t", "\n", "\u0001", " \t"];
 const TYPES = ["url", "domain", "ip:port", "md5_hash", "email", "something_new", ""];
 
 function corpus(count: number, seed: number): string[] {
@@ -366,12 +463,12 @@ function corpus(count: number, seed: number): string[] {
       values.push(raw);
       continue;
     }
-    let value = "";
+    let value = pick(EDGES);
     const units = 1 + Math.floor(next() * 3);
     for (let u = 0; u < units; u += 1) {
       value += pick(NOISE) + pick(SCHEMES) + pick(GLUE) + pick(USERS) + pick(HOSTS) + pick(TAILS);
     }
-    values.push(value);
+    values.push(value + pick(EDGES));
   }
   return values;
 }
@@ -385,7 +482,7 @@ describe("a generated corpus (schemes, slashes and back-slashes, users, nested U
 
   it("is a corpus worth the name: varied, and with schemes, slashes, addresses and names in it", () => {
     expect(new Set(VALUES).size).toBeGreaterThan(9_000);
-    expect(VALUES.filter((v) => /^(?:https?|wss?|ftps?|file):/i.test(v)).length).toBeGreaterThan(
+    expect(VALUES.filter((v) => /^\s*(?:https?|wss?|ftps?|file):/i.test(v)).length).toBeGreaterThan(
       500,
     );
     expect(VALUES.filter((v) => v.includes("[::")).length).toBeGreaterThan(300);
@@ -398,6 +495,20 @@ describe("a generated corpus (schemes, slashes and back-slashes, users, nested U
         const out = defang(value, type);
         if (isLive(out))
           failures.push(`${JSON.stringify(value)} [${type}] -> ${JSON.stringify(out)}`);
+      }
+    }
+    expect(failures.slice(0, 10)).toEqual([]);
+  }, 120_000);
+
+  it("treats the white space at the edges of a value as nothing: the same as the trimmed value with the edges put back", () => {
+    const failures: string[] = [];
+    for (const value of VALUES) {
+      for (const type of TYPES) {
+        const inner = value.replace(/^[\s\u0000-\u0020]+|[\s\u0000-\u0020]+$/g, "");
+        const wrapped = ` \t${inner}\n `;
+        if (defang(wrapped, type) !== ` \t${defang(inner, type)}\n `) {
+          failures.push(`${JSON.stringify(inner)} [${type}]`);
+        }
       }
     }
     expect(failures.slice(0, 10)).toEqual([]);

@@ -55,8 +55,8 @@ const IPV4_PLAIN = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 const IPV4 = /^\d{1,3}(?:(?:\.|\[\.\])\d{1,3}){3}(?::\d{1,5})?$/;
 /** An IPv6 address: groups of up to four hex digits with at least two colons (`::` included), the last group a dotted quad at most. */
 const IPV6_ADDRESS = /^(?:[0-9A-Fa-f]{0,4}:){2,}(?:[0-9A-Fa-f]{0,4}|\d{1,3}(?:\.\d{1,3}){3})$/;
-// a port may be empty (`[::1]:` is the address too)
-const IPV6_BRACKETED = /^\[([0-9A-Fa-f:.]+)\](:\d{0,5})?$/;
+/** What may follow the `]` of a whole value that is a bracketed address: a port of any length, or text with no delimiter, scheme or user in it. */
+const ADDRESS_TAIL = /^[^/\\?#:@[\]]*(?::\d*)?$/;
 /** A name: labels of letters, digits, `_` and `-` (any script) joined by dots, the last label letters only or punycode. */
 const NAME_LIKE = new RegExp(
   `^(?:[\\p{L}\\p{N}_-]+[${DOT}])+(?:\\p{L}{2,63}|xn--[a-z0-9-]+)[${DOT}]?$`,
@@ -84,13 +84,39 @@ function ipv4(address: string): string {
   return address.replace(/\.(\d{1,3})((?::\d{1,5})?)$/, "[.]$1$2");
 }
 
-/** The defanged IPv6 address (bracketed with a port, or bare) or null when the text is not one. */
-function ipv6(text: string, everyDot: boolean): string | null {
-  const bracketed = IPV6_BRACKETED.exec(text);
-  if (bracketed !== null) {
-    const inner = bracketed[1] as string;
-    return IPV6_ADDRESS.test(inner) ? `[${ipv6Text(inner, everyDot)}]${bracketed[2] ?? ""}` : null;
+/** Where the `]` that ends the `[` at 0 is, skipping the `[.]` and `[:]` that were put there; -1 when there is none. */
+function closingBracket(text: string): number {
+  let at = 1;
+  while (at < text.length) {
+    if (text.startsWith("[.]", at) || text.startsWith("[:]", at)) at += 3;
+    else if (text[at] === "]") return at;
+    else at += 1;
   }
+  return -1;
+}
+
+/**
+ * A bracketed host: the colons inside the brackets are bracketed, WHATEVER follows the `]` (a port of any length, a zero-padded one, a
+ * second colon, garbage, nothing: a browser reads a port its own way, and a host that is an IPv6 address to it must not be one here), and
+ * the dots after the `]` are too. `address` is for a whole value (not an authority): the inside must be a real IPv6 shape and what
+ * follows a port or plain text (`ADDRESS_TAIL`); null when the text is not a bracketed host.
+ */
+function bracketedHost(text: string, everyDot: boolean, address: boolean): string | null {
+  // a `[.]` or a `[:]` at the start is what an earlier pass wrote for a dot or a colon, not the brackets of a host
+  if (text[0] !== "[" || text.startsWith("[.]") || text.startsWith("[:]")) return null;
+  const close = closingBracket(text);
+  if (close === -1) return null;
+  const inside = text.slice(1, close);
+  const after = text.slice(close + 1);
+  // a whole value is an address with a port or a little garbage after it, not a URL that happens to begin with one (those are read in pieces)
+  if (address && !(IPV6_ADDRESS.test(inside) && ADDRESS_TAIL.test(after))) return null;
+  return `[${ipv6Text(inside, everyDot)}]${bracketDots(after)}`;
+}
+
+/** The defanged IPv6 address (bracketed, with whatever follows, or bare) or null when the text is not one. */
+function ipv6(text: string, everyDot: boolean): string | null {
+  const bracketed = bracketedHost(text, everyDot, true);
+  if (bracketed !== null) return bracketed;
   return IPV6_ADDRESS.test(text) ? ipv6Text(text, everyDot) : null;
 }
 
@@ -99,8 +125,9 @@ function ipv6Text(address: string, everyDot: boolean): string {
   return everyDot ? bracketDots(colons) : colons.replace(/\.(\d{1,3})$/, "[.]$1");
 }
 
-/** A host, with its port: an IPv6 address, or every dot of it. */
-const hostOf = (hostPort: string): string => ipv6(hostPort, true) ?? bracketDots(hostPort);
+/** A host, with its port: a bracketed host (whatever follows its `]`), a bare IPv6 address, or every dot of it. */
+const hostOf = (hostPort: string): string =>
+  bracketedHost(hostPort, true, false) ?? ipv6(hostPort, true) ?? bracketDots(hostPort);
 
 /** An authority: the user name loses every dot, the host as `hostOf` says. */
 function authorityOf(authority: string): string {
@@ -270,9 +297,25 @@ function unparseable(out: string): string {
   return `${out.slice(0, end)}[.]${out.slice(end)}`;
 }
 
-/** The text of a value as the page prints it. Never throws, and returns a string for any input. */
+const isEdge = (char: string): boolean => char.charCodeAt(0) <= 0x20 || /\s/.test(char);
+
+/**
+ * The text of a value as the page prints it. Never throws, and returns a string for any input. The white space and the control
+ * characters at its two edges (which a browser skips, and the importer strips) are set aside and put back unchanged: an edge space
+ * changes nothing.
+ */
 export function defang(value: string, type: string): string {
   if (typeof value !== "string" || value === "") return "";
+  let start = 0;
+  let end = value.length;
+  while (start < end && isEdge(value[start] as string)) start += 1;
+  while (end > start && isEdge(value[end - 1] as string)) end -= 1;
+  if (start === 0 && end === value.length) return defanged(value, type);
+  return value.slice(0, start) + defanged(value.slice(start, end), type) + value.slice(end);
+}
+
+function defanged(value: string, type: string): string {
+  if (value === "") return "";
   if (HEX.test(value)) return value;
   const kind = typeof type === "string" ? type.trim().toLowerCase() : "";
   const strict = kind === "url" || kind === "domain";
