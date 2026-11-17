@@ -34,7 +34,7 @@ from dataclasses import field as dataclass_field
 from typing import Any
 
 from app.security import output_guard
-from app.security.wrap import Block
+from app.security.wrap import REFERENCE_SOURCES, Block
 
 Validator = Callable[[str, Any], list[str]]
 RuleCheck = Callable[[str | None], tuple[bool, str | None]]
@@ -155,12 +155,18 @@ def _norm(text: str) -> str:
 def step3_quotes(state: GateState) -> None:
     """Every reason's quote must be a normalised substring of the block it names. A reason whose quote is
     not verified leaves the reasons the gate hands on (`dropped_reasons` records it); no survivor flags
-    the run, and its result then carries `reasons: []`."""
+    the run, and its result then carries `reasons: []`.
+
+    DEC-223 (defence in depth for A3): a reason whose source is one of `wrap.REFERENCE_SOURCES` (the MITRE
+    reference block) is dropped as `unknown_source` although the block is in `state.blocks`. That block is
+    reference material, never evidence, and a quote taken from it would otherwise be a substring of it and pass.
+    Step 1 (the schema's source enum) and step 7 (`output_guard.REASON_SOURCES`) keep such a reason out of a run
+    already; this makes step 3 refuse it on its own, should either of them ever be widened."""
     survivors: list[dict] = []
     dropped: list[dict] = []
     for index, reason in enumerate(state.reasons):
         block = state.blocks.get(reason["source"])
-        if block is None:
+        if block is None or reason["source"] in REFERENCE_SOURCES:
             dropped.append({"index": index, "why": "unknown_source"})
             continue
         quote = _norm(reason["quote"])

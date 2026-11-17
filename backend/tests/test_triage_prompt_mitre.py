@@ -158,6 +158,9 @@ def test_the_two_sentences_say_what_the_spec_says_in_vietnamese() -> None:
         B.HEADING_MITRE_REFERENCE.startswith("## ") and "MITRE ATT&CK" in B.HEADING_MITRE_REFERENCE
     )
     assert "MITRE ATT&CK" in quoted and "cục bộ" in quoted and "phiên bản" in quoted
+    # "trích từ", not "trích nguyên văn từ": the block also holds our own lines (`<id>: not in the ...`, `tactics:`)
+    # and text MITRE's own wording cleaned and cut (spec 4.2), so it is not all verbatim
+    assert "trích từ tài liệu" in quoted and "nguyên văn" not in quoted
     assert "chỉ nói đúng" in quoted  # say about a technique only what this text says
     assert "không phải bằng chứng" in reference  # not evidence about this alert
     assert (
@@ -212,8 +215,20 @@ def test_the_switch_is_a_pack_key_and_an_env_example_key_defaulting_to_false() -
 
 
 # ───────────────────────────────────────────────────────── off: today's prompt, byte for byte
-#: sha256 of the ① user message, its estimated tokens and its warnings, for `_build(_inp(mitre_ids=...))` with the
-#: nonce `NONCE`, taken from `build_proposer_prompt` as it stood BEFORE this task (a3c910a5 + DEC-223 T1).
+#: sha256 of the ① user message and its estimated tokens, for `_build(_inp(mitre_ids=...))` with the nonce
+#: `NONCE`, taken from `build_proposer_prompt` as it stood BEFORE this task: the commit abdde49d (the tip of
+#: DEC-223 T1), switch off. The warnings were `[]` for all six.
+#:
+#: To regenerate them after a change to the ① message that is meant (a new heading in the playbook section, a new
+#: fixed sentence of the request, ...): check out abdde49d's `backend/app` beside these tests (or take the code of
+#: the commit that made the change, with the switch off) and print, for each key of `TODAY` and `TODAY_LEARNED`
+#: (`learned=LEARNED_OK` for the second),
+#:   `b = _build(_inp(mitre_ids=ids)); hashlib.sha256(b.prompt.user.encode()).hexdigest(), b.estimated_tokens`
+#: with `from tests.test_llm_triage import _build, _inp`. They are whole-prompt digests, so they move with ANY
+#: change of the message; the lasting guard of "off is today's" is the structural one next to them
+#: (`test_taking_the_section_out_leaves_the_off_message_byte_for_byte` and
+#: `test_on_with_no_id_the_message_is_the_off_message_and_says_nothing`), which compares the message with the
+#: same code's own switch-off output and needs no digest.
 TODAY = {
     ("T1110.001", "T1086"): (
         "ae9141d66227ba196c3c318c24249a87f1d8f394c90d488db8302614b85865c7",
@@ -398,11 +413,12 @@ def test_the_sixth_entry_is_the_last_with_a_description_the_rest_are_one_line_ea
     assert built.warnings == [f"mitre_reference:{mitre.version()}"]
 
 
-def test_ten_ids_still_stay_within_the_cap_of_the_section() -> None:
+def test_ten_ids_add_fewer_than_1800_estimated_tokens() -> None:
+    """A measurement, not a cap: the section's cost for ten ids (six entries and four lines) is about 1 470 on
+    the estimate (spec 5: "about 1 500 tokens" at six entries). The cap is `MITRE_REFERENCE_MAX_ENTRIES`.
+    """
     on, off = build(TEN_IDS), build(TEN_IDS, on=False)
-    assert (
-        on.estimated_tokens - off.estimated_tokens < 1_800
-    )  # spec 5: "about 1 500 tokens" at six entries
+    assert on.estimated_tokens - off.estimated_tokens < 1_800
 
 
 def test_an_id_found_through_its_parent_says_so_and_shows_the_parents_entry() -> None:
@@ -413,6 +429,64 @@ def test_an_id_found_through_its_parent_says_so_and_shows_the_parents_entry() ->
     assert built.warnings == [
         f"mitre_reference:{mitre.version()}"
     ]  # found, not unknown: no warning
+
+
+def test_several_ids_found_through_one_parent_print_the_parents_entry_once() -> None:
+    ids = ("T1110.997", "T1110.998", "T1110.999")
+    assert all(mitre.lookup(i).via == "parent" for i in ids)
+    built = build(ids)
+    text = reference_block(built)
+    assert text == nfkc(
+        "\n\n".join(
+            (
+                "T1110.997: not in the reference, parent T1110\n" + expected_entry("T1110"),
+                "T1110.998: not in the reference, parent T1110 Brute Force",
+                "T1110.999: not in the reference, parent T1110 Brute Force",
+            )
+        )
+    )
+    assert text.count("\ntactics: ") == 1
+    assert built.warnings == [f"mitre_reference:{mitre.version()}"]
+    # each parent has its own entry, once
+    two = reference_block(build(("T1110.999", "T1078.999", "T1110.998", "T1078.998")))
+    assert two.count("\ntactics: ") == 2
+    assert two.split("\n\n")[2:] == [
+        "T1110.998: not in the reference, parent T1110 Brute Force",
+        "T1078.998: not in the reference, parent T1078 " + mitre.lookup("T1078").entry.name,
+    ]
+
+
+def test_an_id_whose_parent_was_already_printed_as_an_entry_of_its_own_gets_its_line_only() -> None:
+    text = reference_block(build(("T1110", "T1110.999")))
+    assert text == nfkc(
+        expected_entry("T1110") + "\n\nT1110.999: not in the reference, parent T1110 Brute Force"
+    )
+    assert text.count("\ntactics: ") == 1
+    # the other way round, the entry is printed at the first of the two and the second is its one line
+    text = reference_block(build(("T1110.999", "T1110")))
+    assert text == nfkc(
+        "T1110.999: not in the reference, parent T1110\n"
+        + expected_entry("T1110")
+        + "\n\nT1110 Brute Force"
+    )
+
+
+def test_an_id_that_prints_no_entry_still_takes_one_of_the_six_places() -> None:
+    same_parent = tuple(f"T1110.9{n:02d}" for n in range(6))  # six ids, one parent, one entry
+    text = reference_block(build((*same_parent, "T1078", "T1070")))
+    parts = text.split("\n\n")
+    assert len(parts) == 7 and text.count("\ntactics: ") == 1
+    # the seventh and eighth ids are beyond the sixth place: the one-line group, though only one entry was printed
+    assert parts[6].split("\n") == [
+        "T1078 " + mitre.lookup("T1078").entry.name,
+        "T1070 " + mitre.lookup("T1070").entry.name,
+    ]
+    # the places are counted in ids, not in entries printed: with limit 3 the first three ids are the three
+    # blocks (one entry and two lines) and the other three are the one-line group
+    three = T.render_mitre_entries(list(same_parent), limit=3)[0].split("\n\n")
+    assert len(three) == 4 and three[3].split("\n") == [
+        f"{i}: not in the reference, parent T1110 Brute Force" for i in same_parent[3:]
+    ]
 
 
 def test_an_unknown_id_gives_its_line_and_the_warning_once() -> None:
@@ -542,8 +616,8 @@ def test_render_mitre_entries_takes_its_limit_from_the_caller() -> None:
     for limit in (0, 2, 6, 10, 99):
         text, _ = T.render_mitre_entries(ids, limit=limit)
         assert text.count("\ntactics: ") == min(limit, 10)
-    four = T.render_mitre_entries(ids, limit=2)[0]
-    assert four.split("\n\n")[2].split("\n") == [
+    two_entries = T.render_mitre_entries(ids, limit=2)[0]
+    assert two_entries.split("\n\n")[2].split("\n") == [
         f"{t} {mitre.lookup(t).entry.name}" for t in TEN_IDS[2:]
     ]
 
@@ -800,3 +874,73 @@ def test_the_switch_is_a_parameter_of_the_builder_that_follows_the_config_when_n
     assert "mitre_reference" in run(cfg=_cfg(), include_mitre_reference=True).prompt.block_index
     forced_off = run(cfg=_cfg(PROMPT_INCLUDE_MITRE_REFERENCE=True), include_mitre_reference=False)
     assert "mitre_reference" not in forced_off.prompt.block_index
+
+
+def test_step_3_in_isolation_drops_a_reason_whose_source_is_the_reference() -> None:
+    """Defence in depth for A3 (Ruling M7). Step 1 (the schema) and step 7 (the output guard) already keep such a
+    reason out of a run; this is step 3 ALONE, with step 1 bypassed (`gate.start` on an unvalidated answer), the
+    reference block being in the block index the gate is handed. Before the guard it was kept as verified.
+    """
+    built = build()
+    assert (
+        "mitre_reference" in built.prompt.block_index
+    )  # the precondition: the block is there to be found
+    quote = "Password Guessing"
+    assert quote in reference_block(built)
+    for source in sorted(wrap.REFERENCE_SOURCES):
+        state = gate.start(
+            _answer(source, quote),
+            {"occurrence_count": 3},
+            built.prompt.block_index,
+            repaired=False,
+        )
+        gate.step3_quotes(state)
+        assert state.reasons == []
+        assert state.dropped_reasons == [{"index": 0, "why": "unknown_source"}]
+        assert state.flagged_by == ["step3"] and state.steps["3"] == "dropped:1"
+
+
+def test_step_3_keeps_a_real_source_and_drops_only_the_reference_one_beside_it() -> None:
+    built = build()
+    real = {
+        "claim": "nhiều lần xác thực hỏng",
+        "quote": "Multiple authentication failures followed by a success.",
+        "source": "rule_description",
+    }
+    cited = {
+        "claim": "kỹ thuật dò mật khẩu",
+        "quote": "Password Guessing",
+        "source": "mitre_reference",
+    }
+    parsed = copy.deepcopy(TRIAGE_V4_TRUE_POSITIVE)
+    parsed["reasons"] = [real, cited]
+    state = gate.start(parsed, {"occurrence_count": 3}, built.prompt.block_index, repaired=False)
+    gate.step3_quotes(state)
+    assert state.reasons == [real]
+    assert state.dropped_reasons == [{"index": 1, "why": "unknown_source"}]
+    assert state.flagged_by == [] and state.steps["3"] == "dropped:1"
+
+
+# ───────────────────────────────────────────────────────── the version, for Task 3
+def test_reference_version_is_the_validated_major_dot_minor_or_none(monkeypatch, tmp_path) -> None:
+    version = T.reference_version()
+    assert version == mitre.version() and isinstance(version, str)
+    assert B.Id("attack_version", version).value == version
+    # no usable reference, or a version that is not `major.minor`: None (never the text)
+    use_extract(monkeypatch, tmp_path / "absent.json")
+    assert T.reference_version() is None
+    hostile = write_extract(
+        tmp_path, {"T1110": ("Brute Force", ["credential-access"], None, "text")}, version="v20.1 x"
+    )
+    use_extract(monkeypatch, hostile)
+    assert mitre.version() == "v20.1 x" and T.reference_version() is None
+
+
+def test_mitre_section_asks_for_the_version_once(monkeypatch) -> None:
+    calls = []
+    real = T.reference_version
+    monkeypatch.setattr(T, "reference_version", lambda: calls.append(1) or real())
+    pb = B.PromptBuilder("system", nonce=NONCE)
+    warnings: list[str] = []
+    assert T.mitre_section(pb, IDS, limit=6, warnings=warnings) is True
+    assert len(calls) == 1 and warnings == [f"mitre_reference:{real()}"]

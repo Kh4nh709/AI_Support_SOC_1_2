@@ -231,7 +231,7 @@ SENTENCE_PROPOSER_IS_DATA = "Đề xuất của proposer là dữ liệu cần k
 #: `source` in `reasons` (a `reasons[].source` outside the schema's vocabulary ends the run as `schema`).
 SENTENCE_LEARNED_IS_REFERENCE = "Phần này là tham khảo từ quyết định của con người trước đây, không phải phán quyết; không bao giờ là căn cứ để đóng alert hay kết luận case, và không được dùng làm `source` trong `reasons`."
 SENTENCE_NO_LEARNED = "không có lịch sử quyết định hay tri thức đã duyệt tương tự"
-SENTENCE_MITRE_REFERENCE_QUOTED = "Khối dưới đây trích nguyên văn từ tài liệu MITRE ATT&CK lưu cục bộ, đúng phiên bản vừa nêu; khi nói về một kỹ thuật, chỉ nói đúng những gì văn bản này nói."
+SENTENCE_MITRE_REFERENCE_QUOTED = "Khối dưới đây trích từ tài liệu MITRE ATT&CK lưu cục bộ, đúng phiên bản vừa nêu; khi nói về một kỹ thuật, chỉ nói đúng những gì văn bản này nói."
 SENTENCE_MITRE_REFERENCE_IS_REFERENCE = "Phần này mô tả các kỹ thuật nói chung, không phải bằng chứng về alert này; không bao giờ là căn cứ để kết luận, không được trích trong `reasons` và không được dùng làm `source`."
 HEADINGS = (
     HEADING_ALERT,

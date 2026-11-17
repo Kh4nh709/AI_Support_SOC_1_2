@@ -394,14 +394,14 @@ def _alert_section(
     )
     if len(inp.categories) > 1:
         pb.line(*(fact("categories", Category(c)) for c in inp.categories))
-    mitre: list[str] = []
+    mitre_facts: list[str] = []
     for raw in inp.mitre_ids:
         try:
-            mitre.append(fact("mitre", Id("mitre", raw)))
+            mitre_facts.append(fact("mitre", Id("mitre", raw)))
         except ValueError:
             warnings.append("invalid_mitre_id")  # never the value: it is alert data
-    if mitre:
-        pb.line(*mitre)
+    if mitre_facts:
+        pb.line(*mitre_facts)
     if inp.agent_id is not None:
         try:
             pb.line(fact("agent_id", Id("agent_id", inp.agent_id)))
@@ -541,14 +541,16 @@ def _distinct_mitre_ids(ids: Iterable[str]) -> list[str]:
     return out
 
 
-def _reference_version() -> Id | None:
-    """The extract's version as a typed `Id`, or `None`: no usable reference, or a version that is not
-    `major.minor` (it would be free text, which never reaches the outside of a block)."""
+def reference_version() -> str | None:
+    """The local ATT&CK extract's version as the prompt may show it: the `major.minor` string that passes
+    `Id("attack_version", ...)` ("20.1"), or `None` when there is no usable reference or its version is not that
+    shape (anything else would be free text, which never reaches the outside of a block). ① uses it in
+    `mitre_section`; ②'s dossier takes its version from here too."""
     version = mitre.version()
     if version is None:
         return None
     try:
-        return Id("attack_version", version)
+        return Id("attack_version", version).value
     except ValueError:
         return None
 
@@ -590,6 +592,31 @@ def _mitre_short(tid: str, found: mitre.Found | None) -> str:
     return f"{found.entry.id} {found.entry.name}"
 
 
+def _render_entries(distinct: Sequence[str], limit: int) -> tuple[str, list[str]]:
+    """`render_mitre_entries` for ids already checked and a reference already known to be usable."""
+    entries: list[str] = []
+    short: list[str] = []
+    warnings: list[str] = []
+    printed: set[str] = set()  # the ids of the entries written out in full so far
+    for position, tid in enumerate(distinct):
+        found = mitre.lookup(tid)
+        if found is None and MITRE_UNKNOWN_ID_WARNING not in warnings:
+            warnings.append(MITRE_UNKNOWN_ID_WARNING)
+        if position >= limit:
+            short.append(_mitre_short(tid, found))
+        elif found is not None and found.entry.id in printed:
+            # the entry this id would show is already in the block (several ids found through one parent; an id
+            # after its own parent): its one line, no second copy of MITRE's text. It still takes its place.
+            entries.append(_mitre_short(tid, found))
+        else:
+            entries.append(_mitre_full(tid, found))
+            if found is not None:
+                printed.add(found.entry.id)
+    if short:
+        entries.append("\n".join(short))
+    return "\n\n".join(entries), warnings
+
+
 def render_mitre_entries(ids: Sequence[str], *, limit: int) -> tuple[str, list[str]]:
     """The text of the `mitre_reference` block for `ids` and the warnings it earns, `(text, warnings)`. ① calls
     it through `mitre_section` with `MITRE_REFERENCE_MAX_ENTRIES`; ②'s dossier reuses it with its own limit.
@@ -598,28 +625,18 @@ def render_mitre_entries(ids: Sequence[str], *, limit: int) -> tuple[str, list[s
     distinct valid ids, in the order given, get their entry (a blank line between entries; an id the reference
     does not hold gets its one line `<id>: not in the local ATT&CK reference` and the warning
     `mitre_unknown_id`, once; an id found only through its parent says `<id>: not in the reference, parent
-    <parent id>` and shows the parent's entry). The ids after them are one line each, `<id> <name>`, with no
-    description. No valid id: `("", [])`. Ids but no usable reference: `("", ["mitre_reference_unavailable"])`.
+    <parent id>` and shows the parent's entry). An entry is written out once: a later id that would show the same
+    entry (another id found through the same parent, or an id after its own parent) gets its one line only
+    (`<id>: not in the reference, parent <parent id> <parent name>`, or `<id> <name>`), and still takes its place
+    among the first `limit`. The ids after those are one line each, `<id> <name>`, with no description. No valid
+    id: `("", [])`. Ids but no usable reference: `("", ["mitre_reference_unavailable"])`.
     """
     distinct = _distinct_mitre_ids(ids)
     if not distinct:
         return "", []
-    if _reference_version() is None:
+    if reference_version() is None:
         return "", [MITRE_UNAVAILABLE_WARNING]
-    entries: list[str] = []
-    short: list[str] = []
-    warnings: list[str] = []
-    for position, tid in enumerate(distinct):
-        found = mitre.lookup(tid)
-        if found is None and MITRE_UNKNOWN_ID_WARNING not in warnings:
-            warnings.append(MITRE_UNKNOWN_ID_WARNING)
-        if position < limit:
-            entries.append(_mitre_full(tid, found))
-        else:
-            short.append(_mitre_short(tid, found))
-    if short:
-        entries.append("\n".join(short))
-    return "\n\n".join(entries), warnings
+    return _render_entries(distinct, limit)
 
 
 def mitre_section(
@@ -628,19 +645,22 @@ def mitre_section(
     """The whole section, through the builder: the heading, the typed fact `mitre_version` joined to the first
     fixed sentence on one line, the one `mitre_reference` block, the second fixed sentence. Returns True when it
     was written (and adds `mitre_reference:<version>`, then the entries' own warnings, to `warnings`); False
-    when there was nothing to say or no usable reference (the entries' warnings are still added). Nothing about
-    the reference is free text outside the block: the version is checked to be `major.minor` first.
-    """
-    text, notes = render_mitre_entries(ids, limit=limit)
-    version = _reference_version()
-    if not text or version is None:
-        warnings.extend(notes)
+    when there was nothing to say (no valid id) or no usable reference (then `mitre_reference_unavailable` is
+    added). The reference's version is asked for once, here, through `reference_version`; nothing about the
+    reference is free text outside the block."""
+    distinct = _distinct_mitre_ids(ids)
+    if not distinct:
         return False
+    version = reference_version()
+    if version is None:
+        warnings.append(MITRE_UNAVAILABLE_WARNING)
+        return False
+    text, notes = _render_entries(distinct, limit)
     pb.heading(HEADING_MITRE_REFERENCE)
-    pb.line(fact("mitre_version", version), SENTENCE_MITRE_REFERENCE_QUOTED)
+    pb.line(fact("mitre_version", Id("attack_version", version)), SENTENCE_MITRE_REFERENCE_QUOTED)
     pb.block(text, "mitre_reference")
     pb.sentence(SENTENCE_MITRE_REFERENCE_IS_REFERENCE)
-    warnings.append(f"{MITRE_REFERENCE_WARNING_PREFIX}{version.value}")
+    warnings.append(f"{MITRE_REFERENCE_WARNING_PREFIX}{version}")
     warnings.extend(notes)
     return True
 
