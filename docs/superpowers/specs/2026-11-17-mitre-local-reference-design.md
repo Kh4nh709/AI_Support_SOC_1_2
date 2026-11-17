@@ -20,7 +20,7 @@ three technique tables are the vocabulary, and an alert's id is matched the way 
 
 **Goals**
 - G1. A local ATT&CK reference in the repository: for every Enterprise technique and sub-technique its id, name,
-  tactics, parent, status (live, deprecated, revoked and by which id) and a short description, built by a tool from
+  tactics, parent, status (live, deprecated or revoked) and a short description, built by a tool from
   the official bundle, with the bundle's version and sha256 recorded.
 - G1a. Every technique id of `category.py` (the keys of `WINDOWS_TECHNIQUE_TO_CATEGORY`, `TECHNIQUE_TO_CATEGORY` and
   `EXTENDED_TECHNIQUE_TO_CATEGORY`, 372 distinct ids on 17/11) resolves in the reference to an entry with MITRE's
@@ -67,8 +67,8 @@ three technique tables are the vocabulary, and an alert's id is matched the way 
   is missing. The bundle keeps every revoked or deprecated technique's **own** name, tactics and description (all
   132 revoked ids of the tables have all three), and its `revoked-by` links lead to a live technique (129 in one
   step, 3 in two, such as T1073 → T1574.001).
-- Owner, 17/11: a replaced id is described with the old id's own data, not the replacement's. The rule fired on
-  the old id's meaning, and the replacement is often a narrower or differently cut technique.
+- Owner, 17/11: a replaced id is described with the old id's own data, not the replacement's, and the replacement
+  is not named at all: the id stays the one `category.py` and the rule carry, with MITRE's local text for that id.
 - ATT&CK 20.1 names its tactics as it does today: `stealth` and `defense-impairment` stand where older versions
   had `defense-evasion`. The reference keeps MITRE's names as they are (A2); the product's categories are not
   renamed. The reference also keeps the other 477 live ids of 20.1, so an
@@ -90,7 +90,7 @@ the same bytes.
   `copyright` and `terms` (MITRE's lines), `extracted_by` (the tool's name);
 - `techniques`, keyed by id (`T1110`, `T1110.001`): `name`, `tactics` (the kill-chain phase names, ATT&CK's own
   spelling, in ATT&CK's order), `parent` (the parent id of a sub-technique, else null), `status` (`live`,
-  `deprecated` or `revoked`), `revoked_by` (the id that replaced it, when the bundle says so), `platforms`, and
+  `deprecated` or `revoked`: kept for the tests and for a later reader, never shown to the model), `platforms`, and
   `description`.
 - `description` is the first paragraph of MITRE's description, cleaned: citation marks `(Citation: …)` removed,
   Markdown links reduced to their text, HTML tags such as `<code>` removed, white space collapsed. It is cut at
@@ -100,9 +100,8 @@ the same bytes.
 **4.3 The loader.** `backend/app/kb/mitre.py`: loads the extract once per process (as `kb/lookup.py` does with the
 playbooks), checks its header and shape, and answers `lookup(id)` in the two steps `category.py`'s tiers use: the
 exact id first, then its parent (`T1059.003` → `T1059`) when the exact id is not in the reference. A revoked or
-deprecated id answers with **its own entry** (its own name, tactics and description). For a revoked one the entry
-also carries `revoked_by`: the id and name at the end of the bundle's `revoked-by` chain (two steps at most in
-20.1; a loop or a dead end leaves it empty), as information only. The answer says how it was found (exact or
+deprecated id answers with **its own entry** (its own name, tactics and description), exactly like a live one: the
+`revoked-by` links of the bundle are not followed and not stored. The answer says how it was found (exact or
 parent), so the prompt can show it. A missing or malformed file is not an error of the alert: the loader reports "no reference", the prompt is built
 without the section and the run carries the warning `mitre_reference_unavailable`.
 
@@ -116,9 +115,8 @@ section and comes before the learned (RAG) section:
   describes techniques in general and is not evidence about this alert, so do not quote it in `reasons`;
 - one block, source `mitre_reference`, holding one entry per id in the alert's own order, at most **6** entries:
   `<id> <name>`, a sub-technique's parent as `sub-technique of <parent id> <parent name>`, `tactics: …`, then the
-  description. A revoked id is shown with its own entry (its own name, tactics and description) and one more
-  line, `status: revoked by MITRE, now <new id> <new name>`; the replacement's description is not rendered. A
-  deprecated one keeps its text and says `status: deprecated by MITRE`; an id found through its parent says `<id>: not in the reference, parent <parent id>` and shows the
+  description. A revoked or deprecated id is shown like any other, with its own name, tactics and description and
+  no word about its status or its replacement; an id found through its parent says `<id>: not in the reference, parent <parent id>` and shows the
   parent's entry;
 - ids beyond the sixth are listed on one line each as `<id> <name>` with no description;
 - an id that passes the id pattern but is not in the reference: the line `<id>: not in the local ATT&CK reference`
@@ -169,8 +167,8 @@ in the local ATT&CK document. Nothing is rewritten in what the model stored.
   description with citations, links and tags, one longer than 600 characters) gives the expected extract; a file
   that is not an ATT&CK bundle is refused; two runs give the same bytes; the committed extract matches its header
   (706 live techniques, version 20.1, the sha256 above).
-- The loader: lookup of a live id, a sub-technique with its parent, a revoked id answered with its own text and
-  the replacement named after one step and after two, an id found only through its parent, an unknown id, a missing file, a malformed file.
+- The loader: lookup of a live id, a sub-technique with its parent, a revoked id and a deprecated id each answered
+  with its own text and nothing of a replacement, an id found only through its parent, an unknown id, a missing file, a malformed file.
 - `category.py` (G1a): every key of its three technique tables resolves in the committed extract to an entry with a
   non-empty description of its own; the counts of 17/11 are pinned (229 live, 132 revoked, 11 deprecated).
 - ①: switch off → the prompt is byte-identical to today's (existing prompt tests stay green untouched); switch on →
