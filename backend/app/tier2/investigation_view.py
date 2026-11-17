@@ -612,9 +612,8 @@ def present_run(
     conclusion = result.get("suggested_conclusion")
     facts = alerts if alerts is not None else NO_ALERTS
     shown = served_timeline(result.get("timeline"), facts.times)
-    referenced = (
-        mitre.version() is not None
-    )  # a usable local ATT&CK reference: without one nothing is checked
+    # a usable local ATT&CK reference: without one nothing is checked
+    referenced = mitre.version() is not None
     technique_checks = [
         _technique_check(_text_or_none(entry.get("technique")), referenced=referenced)
         for entry, _ in shown

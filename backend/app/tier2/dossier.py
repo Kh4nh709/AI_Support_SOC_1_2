@@ -1570,12 +1570,10 @@ def build(
     # The MITRE reference section's material (DEC-223), read once, before any render or cut: nothing at all with the
     # switch off (not one query), and for a case with no valid id. `mitre_text` is "" when there is no section to
     # write; `mitre_notes` are the warnings the entries earned (`mitre_unknown_id`) or the one that says there was
-    # no usable extract (`mitre_reference_unavailable`).
-    mitre_text, mitre_version, mitre_notes = (
-        "",
-        None,
-        [],
-    )  # the text is "" exactly when the version is None
+    # no usable extract (`mitre_reference_unavailable`). The text is "" exactly when the version is None.
+    mitre_text: str = ""
+    mitre_version: str | None = None
+    mitre_notes: list[str] = []
     if cfg.PROMPT_INCLUDE_MITRE_REFERENCE:
         mitre_ids = rank_mitre_ids(_fetch_mitre_id_groups(conn, case_id))
         if mitre_ids:
@@ -1583,9 +1581,8 @@ def build(
                 mitre_ids, limit=MITRE_REFERENCE_MAX_ENTRIES_CASE
             )
             mitre_version = reference_version() if mitre_text else None
-            if (
-                mitre_version is None
-            ):  # no usable extract (or a version that is not a version): no section
+            if mitre_version is None:
+                # no usable extract (or a version that is not a version): no section
                 mitre_text = ""
     mitre_dropped = False
 

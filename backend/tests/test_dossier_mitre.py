@@ -577,6 +577,9 @@ def test_the_ids_are_the_distinct_valid_ones_of_heads_and_duplicates_most_freque
 @pytest.mark.db
 def test_a_case_with_no_id_has_no_section_and_the_switch_does_not_change_the_text(db) -> None:
     case_id = case_with(db, heads=[[], []], duplicates=[(0, [])])
+    assert (
+        dossier._fetch_mitre_id_groups(db, case_id) == []
+    )  # alerts with no id are no group at all
     on = real_build(db, case_id)
     off = real_build(db, case_id, on=False)
     assert on == off and B.HEADING_MITRE_REFERENCE not in on.text and on.mitre_warnings == ()
