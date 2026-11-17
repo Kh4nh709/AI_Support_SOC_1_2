@@ -2082,14 +2082,17 @@ def test_the_runbooks_cron_line_runs_the_importer_as_the_checkouts_owner_without
 def test_the_importer_runs_after_the_fetch_whatever_the_fetch_did():
     """The importer is joined to the fetch by `;`, not `&&`: a fetch that exits non-zero (no key: exit 2 and no file; every source
     failed: exit 1 and a header-only file) must still leave a failed run (`no_file`, `no_rows`) for the page's status bar, which
-    `fetch && importer` would never record. Only the sourcing of the env file is `&&` (no environment, no fetch)."""
+    `fetch && importer` would never record. Only the sourcing of the env file is `&&` (no environment, no fetch).
+    """
     line, section = _cron_line_and_section()
     assert line.count("&&") == 1
     assert line.count(" ; ") == 1
     before_fetch, after_fetch = line.split("abusech_daily100.py", 1)
     assert before_fetch.endswith(". /etc/abusech.env && /usr/bin/python3 /opt/abusech/")
     # the fetch's own redirection ends it, the `;` follows, and nothing of `&&` joins it to the importer
-    assert after_fetch.startswith(" >> /var/log/abusech_daily.log 2>&1 ; /usr/sbin/runuser -u user1 -- ")
+    assert after_fetch.startswith(
+        " >> /var/log/abusech_daily.log 2>&1 ; /usr/sbin/runuser -u user1 -- "
+    )
     assert "&&" not in after_fetch
     # the runbook says what each outcome of the fetch records, and that the Owner re-installs the line
     for word in ("exits 2", "no_file", "exits 1", "no_rows", "re-install"):
