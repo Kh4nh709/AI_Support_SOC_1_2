@@ -26,6 +26,7 @@ ALL = frozenset(
         "enrichment",
         "rag",  # DEC-210 (P13-T01)
         "lab",  # DEC-213 (P14-T09)
+        "ti",  # DEC-224 (T2): the Threat Intel importer and its read queries
         "web",
     }
 )
@@ -40,6 +41,9 @@ ALLOWED: dict[str, frozenset[str] | set[str]] = {
     # DEC-213 (P14-T09): the lab runs and labels. It reads the blind view of an alert from `tier1`
     # (`visibility.strip`) and writes audit events; no other package imports it but `web`.
     "lab": {"infra", "audit", "tier1"},
+    # DEC-224 (T2): Threat Intel. The importer is handed a connection and imports nothing of the app; the read
+    # queries of T3 may use `infra`. No other package imports it but `web` (the router of T3).
+    "ti": {"infra"},
     "domain": {"infra", "audit"},
     "infra": set(),
     "audit": {"infra"},
