@@ -32,8 +32,8 @@ the others so each can be tested alone:
    (`LOCK_TIMEOUT` 5 s, `STATEMENT_TIMEOUT` 10 s: a batch job, so more headroom than the web's 3 s, yet bounded:
    a one-row upsert takes a millisecond, a stuck lock ends as `database_error: LockNotAvailable`). On success the
    log row is part of that transaction (the data and its log commit together); on a database error the
-   transaction is rolled back (nothing is loaded) and the failed run is logged in a transaction of its own. A
-   header error, an unreadable or too large file and a file with no good row are logged too.
+   transaction is rolled back (nothing is loaded) and the failed run is logged in a transaction of its own, under the same
+   timeouts. A header error, an unreadable or too large file and a file with no good row are logged the same way.
 
 **The upsert** (spec §6): a new IOC gets `imported_at = last_seen = now`; an existing one gets `last_seen = now`, its
 descriptive fields (malware, threat, confidence, tags, reference) replaced by what the feed says now, and
@@ -349,7 +349,11 @@ def read_file(path: str | Path, *, now: datetime | None = None) -> Parsed:
     """Every record of the file: `Parsed(iocs, errors, total, spans)`. `HeaderError` when a column of `COLUMNS` is
     not in the header (an empty file lacks all nine); `FileError` when the file is over `MAX_FILE_BYTES`, is not a
     regular file or cannot be read as CSV; `OSError` when it cannot be opened or read. `now` (default: the wall
-    clock) is what each `first_seen` is judged against."""
+    clock) is what each `first_seen` is judged against.
+
+    The csv module's field limit is process-wide: this function raises it for the duration of the read and puts it
+    back, so it is for single-threaded callers (the command is one); two threads reading at once could restore it
+    in the wrong order."""
     moment = _utcnow() if now is None else _utc(now)
     with open(path, encoding="utf-8-sig", errors="surrogateescape", newline="") as handle:
         info = os.fstat(handle.fileno())
@@ -533,8 +537,11 @@ def _write_log(
 def _log_alone(
     conn: psycopg.Connection, result: Result, now: datetime, clock: Callable[[], datetime]
 ) -> Result:
-    """The log row of a run that loaded nothing, in a transaction of its own."""
+    """The log row of a run that loaded nothing, in a transaction of its own and under the same lock and statement
+    timeouts as the import: a lock held on `ti_import_log` ends the run in the timeout (the driver's error leaves
+    this function, and the command prints its class), it does not hang it."""
     with conn.transaction():
+        _bound_waits(conn)
         _write_log(conn, result, now, _finish(now, clock))
     return result
 

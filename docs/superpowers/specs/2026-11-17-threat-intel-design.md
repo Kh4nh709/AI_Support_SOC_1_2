@@ -91,7 +91,8 @@ this phase: an expired row stays and is hidden by the API unless asked for.
 ## 6. Importer
 
 - `scripts/ti_import.py [FILE] --env-file PATH`: a thin command over `backend/app/ti/importer.py`. Without `FILE`
-  it takes TODAY's file, `ioc_YYYY-MM-DD.csv` by the host's local date, in `/var/lib/abusech/daily/` (`--dir` to change it),
+  it takes TODAY's file, `ioc_YYYY-MM-DD.csv` by the UTC date (the fetch script names its file by
+  `datetime.now(timezone.utc)`; the host's local calendar is a day ahead from 00:00 to 06:59 at +07), in `/var/lib/abusech/daily/` (`--dir` to change it),
   and fails (`no_file`) when it is not there: an older file is never taken in its place. An explicit `FILE` is always
   imported. The DSN comes from
   `DATABASE_URL` in `--env-file`, never from argv, and is never printed.
@@ -112,8 +113,9 @@ this phase: an expired row stays and is hidden by the API unless asked for.
   for a failed header) and one summary line on stdout (counts only), which lands in the cron's log.
 - Status: `ok` (no bad row), `partial` (some bad rows, the good ones loaded), `failed` (nothing loaded).
 - The cron line stays in root's crontab and runs the importer as the checkout's owner with an empty environment:
-  `… abusech_daily100.py … && runuser -u user1 -- env -i <venv python> -B /…/scripts/ti_import.py --env-file /…/trial/.env`
-  (root is not needed, and root must not run code another account can edit; the Owner edits the crontab).
+  `… abusech_daily100.py … && /usr/sbin/runuser -u user1 -- /usr/bin/env -i <venv python> -B /…/scripts/ti_import.py --env-file /…/trial/.env`
+  (root is not needed, and root must not run code another account can edit; every program by absolute path, because
+  root's cron has `PATH=/usr/bin:/bin` and `runuser` is in `/usr/sbin`; the Owner edits the crontab).
 - Hostile input: the file is capped at 20 MB; a record that spans more than one physical line is one bad row; the
   import transaction has a lock and a statement timeout; a `first_seen` more than a day in the future is a bad row.
 

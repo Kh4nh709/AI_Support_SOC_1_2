@@ -607,7 +607,8 @@ The host's cron writes `/var/lib/abusech/daily/ioc_YYYY-MM-DD.csv` (the newest 1
 moves first: `make migrate`, then the importer). Running a file twice is safe: an IOC is one row, found again and updated, never added twice.
 
 - **By hand.** `<venv>/bin/python -B scripts/ti_import.py --env-file <checkout>/.env` imports TODAY's file, `ioc_YYYY-MM-DD.csv` of
-  `/var/lib/abusech/daily/` by the host's local date (the day the fetch script names it for); `--dir DIR` names another directory. If today's file is
+  `/var/lib/abusech/daily/` by the **UTC** date (the fetch script names its file by `datetime.now(timezone.utc)`; on a host at +07, 00:00 to 06:59 local is
+  still the UTC day before, so the host's own calendar would look for a file that is not there yet); `--dir DIR` names another directory. If today's file is
   not there the run is `failed` (`no_file`, exit 1, a log row): an older day is never taken in its place, so a fetch that broke shows as a failed run
   and, after 26 hours, as a stale page, and is not hidden by yesterday's file imported again. `FILE` imports one named file whatever its name or date
   (running an old day again by hand is fine). It runs by a plain path from any directory, as any user who can read the checkout.
@@ -618,8 +619,11 @@ moves first: `make migrate`, then the importer). Running a file twice is safe: a
   checkout's owner:
 
   ```
-  0 7 * * * . /etc/abusech.env && /usr/bin/python3 /opt/abusech/abusech_daily100.py >> /var/log/abusech_daily.log 2>&1 && runuser -u user1 -- env -i /project/project/AI_Support_SOC_1_2/.venv/bin/python -B /project/project/AI_Support_SOC_trial/scripts/ti_import.py --env-file /project/project/AI_Support_SOC_trial/.env >> /var/log/abusech_daily.log 2>&1
+  0 7 * * * . /etc/abusech.env && /usr/bin/python3 /opt/abusech/abusech_daily100.py >> /var/log/abusech_daily.log 2>&1 && /usr/sbin/runuser -u user1 -- /usr/bin/env -i /project/project/AI_Support_SOC_1_2/.venv/bin/python -B /project/project/AI_Support_SOC_trial/scripts/ti_import.py --env-file /project/project/AI_Support_SOC_trial/.env >> /var/log/abusech_daily.log 2>&1
   ```
+
+  *Why absolute paths.* Root's cron runs a job with `PATH=/usr/bin:/bin`, and `runuser` lives in `/usr/sbin`: written bare, the line would stop with
+  `runuser: not found` in the log and the importer would never run. So `/usr/sbin/runuser`, `/usr/bin/env` and the interpreter are all by absolute path.
 
   *Why `runuser`, and no root.* The importer needs no root right: it reads a CSV that is world-readable and writes to a database over the network. The
   code (`scripts/`, `backend/`), the venv and the `.env` it runs from belong to `user1`; a root process that ran code a `user1` process can edit would

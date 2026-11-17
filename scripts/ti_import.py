@@ -4,21 +4,24 @@
     ti_import.py [FILE] --env-file PATH [--dir DIR]
 
 FILE is the CSV to import, whatever its name or date (running an old file again by hand is a normal thing to do).
-Without it the file is TODAY's, `ioc_YYYY-MM-DD.csv` in DIR (default `/var/lib/abusech/daily`) by the host's local
-date, which is how the fetch script names it at 07:00; if it is not there the run is `failed` (`no_file`, exit 1,
-a log row), and no older file is taken in its place (an old day imported as `ok` would hide a broken fetch from the
-page's stale check). The database is the one `DATABASE_URL` names in the file at PATH: that one key is read from the
-file here and from nowhere else (not from the arguments, not from the process environment), and it is never
-printed; a failure prints the exception's class name and nothing of its text, because a driver's error can quote the
-connection string.
+Without it the file is TODAY's, `ioc_YYYY-MM-DD.csv` in DIR (default `/var/lib/abusech/daily`), and today is the UTC
+date: the fetch script names its file by `datetime.now(timezone.utc)`, so a host in another zone (+07: 00:00 to 06:59
+local is still the UTC day before) must not use its own calendar. If the file is not there the run is `failed`
+(`no_file`, exit 1, a log row), and no older file is taken in its place (an old day imported as `ok` would hide a
+broken fetch from the page's stale check). The database is the one `DATABASE_URL` names in the file at PATH: that one
+key is read from the file here and from nowhere else (not from the arguments, not from the process environment), and
+it is never printed; a failure prints the exception's class name and nothing of its text, because a driver's error
+can quote the connection string.
 
 The work is `backend/app/ti/importer.py`; this file only finds the CSV, opens the connection and prints. It puts the
 repository's `backend/` on `sys.path` itself, so it runs by a plain path from any directory with the project's
-interpreter, as any user who can read the checkout. Root is not needed and not wanted: root's cron line starts it
-through `runuser` as the checkout's owner, with `-B` so that no bytecode is written into the checkout:
+interpreter, as any user who can read the checkout, with an empty environment. Root is not needed and not wanted:
+root's cron line starts it through `runuser` as the checkout's owner, with `env -i` (it reads no variable) and `-B`
+(no bytecode is written into the checkout). Cron's PATH is `/usr/bin:/bin` and `runuser` is in `/usr/sbin`, so every
+program is by absolute path:
 
-    ... abusech_daily100.py && runuser -u <owner> -- <venv>/bin/python -B <checkout>/scripts/ti_import.py \\
-        --env-file <checkout>/.env
+    ... abusech_daily100.py && /usr/sbin/runuser -u <owner> -- /usr/bin/env -i <venv>/bin/python -B \\
+        <checkout>/scripts/ti_import.py --env-file <checkout>/.env
 
 Output: one line per bad record on stderr (`ti_import: line 17: value_too_long`, or `lines 17-60: row_malformed` for
 a record that swallowed lines; the first 100, then a count), and ONE summary line on stdout (`ti_import: status=ok
@@ -32,6 +35,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -75,6 +79,17 @@ def read_env_value(path: str | Path, key: str) -> str | None:
     return found
 
 
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def utc_day(moment: datetime) -> date:
+    """The UTC date of `moment` (timezone-aware): the day the fetch script names its file for."""
+    if moment.tzinfo is None:
+        raise ValueError("a moment without a time zone has no UTC day")
+    return moment.astimezone(UTC).date()
+
+
 def daily_name(day: date) -> str:
     """The file the fetch script writes on `day`."""
     return f"ioc_{day.isoformat()}.csv"
@@ -115,8 +130,14 @@ def _fail(message: str) -> int:
     )
 
 
-def main(argv: list[str] | None = None, *, today: date | None = None) -> int:
-    """The command. `today` (default: the host's local date) is the day whose file is taken when no FILE is given."""
+def main(
+    argv: list[str] | None = None,
+    *,
+    today: date | None = None,
+    clock: Callable[[], datetime] | None = None,
+) -> int:
+    """The command. `clock` (default: the UTC wall clock) gives the run's instant; `today` (default: the UTC day of
+    that instant) is the day whose file is taken when no FILE is given."""
     parser = argparse.ArgumentParser(
         prog="ti_import.py",
         description="Import one day's abuse.ch IOC CSV into the Threat Intel tables.",
@@ -156,13 +177,12 @@ def main(argv: list[str] | None = None, *, today: date | None = None) -> int:
         # The class name only: the text of a connection error can quote the DSN.
         return _fail(f"database_unreachable: {type(exc).__name__}")
     try:
-        now = datetime.now(UTC)
+        now = (clock or _utcnow)()
         if args.file:  # an explicit file is imported whatever its name or date
             result = importer.import_file(conn, Path(args.file), now=now)
         else:
-            day = (
-                date.today() if today is None else today
-            )  # noqa: DTZ011 - the host's LOCAL date, as the fetch names it
+            # The UTC day: the fetch script names its file by `datetime.now(timezone.utc)`.
+            day = today if today is not None else utc_day(now)
             path = todays_file(args.dir, day)
             if path is None:
                 result = importer.record_failure(conn, daily_name(day), "no_file", now=now)
