@@ -389,7 +389,12 @@ def _forms(address: str) -> list[str]:
     return [address, f"{address}:443", f"{address}:1", f"{address}:65535"]
 
 
-NEVER = [(kind, address) for kind, group in {**NEVER_V4, **NEVER_V6}.items() for address in group]
+NEVER = [
+    (f"{family} {kind}", address)
+    for family, groups in (("v4", NEVER_V4), ("v6", NEVER_V6))
+    for kind, group in groups.items()
+    for address in group
+]
 
 
 @pytest.mark.parametrize(("kind", "address"), NEVER, ids=[f"{k}-{a}" for k, a in NEVER])
