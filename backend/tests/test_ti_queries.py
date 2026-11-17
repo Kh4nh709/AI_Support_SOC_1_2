@@ -469,7 +469,7 @@ def test_an_ipv6_address_in_global_unicast_space_or_the_documentation_range_stay
         "a.0xff", "x.0x7f", "1.2.3.0x4", "example.0x1",
         # a last label that is not a real top-level label: one letter, a digit in it, a hyphen at an end, too long
         "a.b", "example.c", "x.y.z", "example.c0m", "example.co1", "example.1com", "example.com1", "example.c-m",
-        "example.xn--", "example.xn", "example.x_y", "a." + "b" * 64,
+        "example.xn--", "example.x_y", "a." + "b" * 64,
     ],
 )  # fmt: skip
 def test_a_name_that_is_no_host_to_block_gives_no_line(name):

@@ -34,7 +34,8 @@ anything (this module imports no networking at all, which a test pins).
 
 The export is a download: the CSV starts with a UTF-8 byte order mark (so Excel reads UTF-8; the first header cell is still `id`)
 and every cell is guarded against a formula; the blocklist carries only addresses and names that are safe to block (see
-`queries.NEVER_BLOCK_V4`, `GLOBAL_UNICAST_V6`, `NEVER_BLOCK_NAME_ENDINGS`).
+`queries.NEVER_BLOCK_V4`, `GLOBAL_UNICAST_V6`, `NEVER_BLOCK_V6_WITHIN_GLOBAL`, `NEVER_BLOCK_NAME_ENDINGS`, and a name's last label
+must be a real top-level label).
 
 The route is a plain `def`, which FastAPI runs in a worker thread. `get_clock` is the clock of every route (a dependency, so a test
 moves it): expiry, "today" and `stale` are all judged against it.

@@ -34,7 +34,8 @@ return, or with `=`, `+`, `-` or `@` after any leading white space, the original
 RFC 4180 text behind a UTF-8 byte order mark with every cell guarded; `blocklist_text` is one domain or address per line, built
 only from values made of the characters of a hostname or an address (so a line break in a stored value can never make a second
 line) and NEVER from an address or a name a firewall or a DNS sinkhole must not block: the closed sets `NEVER_BLOCK_V4`,
-`GLOBAL_UNICAST_V6` and `NEVER_BLOCK_NAME_ENDINGS` (Ruling TI9). `export_iocs` reads at most `EXPORT_MAX_ROWS` rows and RAISES
+`GLOBAL_UNICAST_V6` with `NEVER_BLOCK_V6_WITHIN_GLOBAL`, and `NEVER_BLOCK_NAME_ENDINGS`, and a name's last label must be a real
+top-level label (letters, or punycode), so no spelling of a number passes for a name (Rulings TI9 and TI10). `export_iocs` reads at most `EXPORT_MAX_ROWS` rows and RAISES
 `TooManyRows` beyond it: an export is never silently cut.
 
 **Bounds and timeouts.** `q` is at most `Q_MAX` (128) characters: a four-column ILIKE run twice (the page and its total). Every
@@ -492,7 +493,7 @@ def status(conn: psycopg.Connection, *, now: datetime) -> dict[str, Any]:
 _FORMULA_STARTS = ("=", "+", "-", "@")
 _CONTROL_STARTS = ("\t", "\r")
 #: The UTF-8 byte order mark an export starts with, so that Excel reads the file as UTF-8 and not as the system code page.
-CSV_BOM = "﻿"
+CSV_BOM = "\ufeff"
 
 
 def csv_cell(value: str) -> str:
@@ -532,7 +533,8 @@ def export_csv(rows: Iterable[Mapping[str, Any]]) -> str:
 # ── the blocklist ─────────────────────────────────────────────────────────────────────────────────────────────────
 #
 # A blocklist goes to a firewall or a DNS sinkhole, so it must never carry what they must not block: the host's own address, a
-# private network, a name a resolver answers by itself. The rule is closed and written out here (Ruling TI9).
+# private network, a name a resolver answers by itself, a number a resolver reads as an address. The rule is closed and written
+# out here (Rulings TI9 and TI10).
 
 #: The IPv4 networks a blocklist never carries, after an IPv4-mapped IPv6 address has been unwrapped. The three documentation
 #: ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24) are NOT in it: they are unroutable and the test data lives there.
@@ -543,7 +545,9 @@ NEVER_BLOCK_V4 = (
     "127.0.0.0/8",  # loopback
     "169.254.0.0/16",  # link-local
     "172.16.0.0/12",  # RFC 1918
+    "192.0.0.0/24",  # IETF protocol assignments (DS-Lite, NAT64 discovery): not globally reachable
     "192.168.0.0/16",  # RFC 1918
+    "198.18.0.0/15",  # benchmarking (RFC 2544), and the fake-IP pool of many proxies and sinkholes
     "224.0.0.0/4",  # multicast
     "240.0.0.0/4",  # reserved, and 255.255.255.255 the broadcast
 )
@@ -551,6 +555,9 @@ NEVER_BLOCK_V4 = (
 #: `::` and `::1`, the IPv4-compatible `::a.b.c.d`, fc00::/7 (unique local), fe80::/10 (link-local), fec0::/10 (site-local),
 #: ff00::/8 (multicast) and the rest of the reserved space. The documentation range 2001:db8::/32 is inside it and stays.
 GLOBAL_UNICAST_V6 = "2000::/3"
+#: What is left out although it is INSIDE `GLOBAL_UNICAST_V6`: 2001:2::/48, benchmarking (RFC 5180), not globally reachable. A
+#: closed list of exclusions; 2001:db8::/32 (documentation) is not in it and stays.
+NEVER_BLOCK_V6_WITHIN_GLOBAL = ("2001:2::/48",)
 #: A name whose LAST label is one of these is left out: a resolver answers for it by itself, or it is no name on the internet.
 #: `example.com`, `example.net` and a name that merely CONTAINS one of these words stay.
 NEVER_BLOCK_NAME_ENDINGS = frozenset(
@@ -572,11 +579,17 @@ NEVER_BLOCK_NAME_ENDINGS = frozenset(
 )
 _NEVER_V4 = tuple(ipaddress.ip_network(network) for network in NEVER_BLOCK_V4)
 _GLOBAL_V6 = ipaddress.ip_network(GLOBAL_UNICAST_V6)
+_NEVER_V6 = tuple(ipaddress.ip_network(network) for network in NEVER_BLOCK_V6_WITHIN_GLOBAL)
 
 # A hostname: labels of ASCII letters, digits, `-` and `_` (1..63, not beginning or ending with `-`), joined by single dots, at
 # most 253 characters. `fullmatch` and no `$`: a trailing line break is not a match.
 _LABEL = r"[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?"
 _HOSTNAME = re.compile(rf"(?=.{{1,253}}\Z){_LABEL}(?:\.{_LABEL})*", re.ASCII)
+# The last label of a name worth blocking is a real top-level label: two to 63 ASCII letters, or punycode (`xn--` and letters,
+# digits and hyphens). A POSITIVE rule, so that no spelling of a number can pass for a name: `127.0.0.0x1`, `0xa.0x1`,
+# `0177.0.0.1`, `127.1` and `2130706433` all end in a label with a digit in it, and `getaddrinfo` reads each of them as an IPv4
+# address without a DNS query. (A top-level label never has a digit outside punycode.)
+_TLD = re.compile(r"[a-z]{2,63}|xn--[a-z0-9-]+")
 _ADDRESS_CHARS = re.compile(r"[0-9A-Fa-f:.]+")
 _BRACKETED = re.compile(r"\[([0-9A-Fa-f:.]+)\]:([0-9]{1,5})")
 _PORT = re.compile(r"[0-9]{1,5}")
@@ -628,18 +641,21 @@ def _blockable_address(address: _Address) -> str | None:
         address = address.ipv4_mapped
     if isinstance(address, ipaddress.IPv4Address):
         return None if any(address in network for network in _NEVER_V4) else str(address)
-    return str(address) if address in _GLOBAL_V6 else None
+    if address in _GLOBAL_V6 and not any(address in network for network in _NEVER_V6):
+        return str(address)
+    return None
 
 
 def _blockable_name(value: str) -> str | None:
-    """The line of a hostname, lower-cased, or None: not a hostname, fewer than two labels, a last label that is all digits (an
-    IP literal written as a name: it is left out, it does not become an address line) or one of `NEVER_BLOCK_NAME_ENDINGS`.
+    """The line of a hostname, lower-cased, or None: not a hostname, fewer than two labels, a last label that is not a real
+    top-level label (`_TLD`: letters only, 2 to 63, or punycode; so an IP literal written as a name in ANY spelling, decimal, octal
+    or hex, is left out and does not become an address line) or one of `NEVER_BLOCK_NAME_ENDINGS`.
     """
     if not _HOSTNAME.fullmatch(value):
         return None
     name = value.lower()
     labels = name.split(".")
-    if len(labels) < 2 or labels[-1].isdigit() or labels[-1] in NEVER_BLOCK_NAME_ENDINGS:
+    if len(labels) < 2 or not _TLD.fullmatch(labels[-1]) or labels[-1] in NEVER_BLOCK_NAME_ENDINGS:
         return None
     return name
 
@@ -648,7 +664,7 @@ def blocklist_entry(kind: str, value: str) -> str | None:
     """The line one IOC gives a blocklist, or None when it gives none. Only a `domain` (a hostname, lower-cased) and an
     `ip:port` (the address, its port dropped; IPv6 only in brackets, written in its canonical form) give a line; a URL, a hash, an
     unknown type, a value with anything but the characters of a hostname or an address in it, and everything the module's
-    never-block sets name (`NEVER_BLOCK_V4`, `GLOBAL_UNICAST_V6`, `NEVER_BLOCK_NAME_ENDINGS`) give none.
+    never-block sets name (`NEVER_BLOCK_V4`, `GLOBAL_UNICAST_V6` less `NEVER_BLOCK_V6_WITHIN_GLOBAL`, `NEVER_BLOCK_NAME_ENDINGS`) give none.
     """
     if kind == "domain":
         return _blockable_name(value)
