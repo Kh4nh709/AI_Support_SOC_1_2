@@ -180,7 +180,7 @@ describe("the stats", () => {
     expect(sorted(Object.keys(tiFixture.stats()))).toEqual(sorted(dictKeys(returned)));
   });
 
-  it("is the route the page asks, over days 1..90 with 30 as its own default", () => {
+  it("is the route the page asks, over days 1..30 with 30 as its own default", () => {
     expect(routerPy).toContain('@router.get("/api/ti/stats")');
     expect(pyNumber(queriesPy, "DAYS_DEFAULT")).toBe(TI_DAYS);
     expect(pyNumber(queriesPy, "DAYS_MAX")).toBe(TI_DAYS_MAX);

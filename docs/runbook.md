@@ -623,11 +623,12 @@ moves first: `make migrate`, then the importer). Running a file twice is safe: a
   ```
 
   *Why `;` between the fetch and the importer.* With `&&` an importer that follows a fetch that failed never runs, so no run is recorded and the page says
-  nothing until its 26-hour banner (about 09:00 the next day). The fetch script exits non-zero in two ways: **the fetch exits 2** with no file when its key is
-  missing, and **the fetch exits 1** and leaves a file with a header and no row when every source failed. With `;` the importer runs after both, and each
+  nothing until its 26-hour banner (about 09:00 the next day). The fetch script's two planned failures: **the fetch exits 2** with no file when its key is
+  missing, and **the fetch exits 1** and leaves a file with a header and no row when every source failed (a crash of the script also exits 1, with no file or a cut one). With `;` the importer runs after both, and each
   is a failed run in `ti_import_log` from 07:00, on the page's status bar: no file today is `no_file`, a header-only file is `no_rows`; a fetch that
-  exits 0 is imported as before (`ok` or `partial`). The one `&&`, after sourcing `/etc/abusech.env`, stays: with no environment there is no fetch to
-  follow, and neither runs (the 26-hour banner is then the page's only sign).
+  exits 0 is imported as before (`ok` or `partial`; when no source failed and none returned a row its header-only file is a failed run `no_rows` too). The one `&&`, after sourcing `/etc/abusech.env`, stays: with no environment there is no fetch to
+  follow, and neither runs: cron's `/bin/sh` stops at an env file it cannot open, and its message goes to cron's mail, not to the log (the 26-hour banner
+  is then the page's only sign).
 
   *The Owner re-installs this line.* The `&&` form was installed in root's crontab on 17/11 (step 2 of the Owner's check): the Owner **re-installs**
   the line above (`crontab -e` in root's crontab: replace that one line, then `crontab -l` to read it back). Until then a failed fetch shows only as the 26-hour banner. The
