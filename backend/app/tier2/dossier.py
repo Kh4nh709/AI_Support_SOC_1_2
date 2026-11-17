@@ -23,8 +23,9 @@ existing step.
 **The MITRE reference section (DEC-223, spec §6).** With `cfg.PROMPT_INCLUDE_MITRE_REFERENCE` on (it is off by
 default, and with it off not one query is made for it and the text is byte for byte what it was), a section follows
 block 7 (the playbooks): ①'s heading (`llm.builder.HEADING_MITRE_REFERENCE`), the version of the local ATT&CK
-extract as the typed fact `mitre_version` on the same line as the first fixed sentence, ONE block (source
-`mitre_reference`) with MITRE's own text, and the second fixed sentence (a reference, not evidence about the case).
+extract as the typed fact `mitre_version` on the same line as the first fixed sentence (①'s), ONE block (source
+`mitre_reference`) with MITRE's own text, and a closing sentence of ②'s own (a reference, not evidence about the case,
+never quoted as `evidence[].quote`; ①'s says `reasons` and `source`, which ②'s answer does not have).
 The ids are the distinct valid ones (`Id("mitre", ...)`) of the case's alerts - the heads and the duplicates
 absorbed into them - most frequent first, ties by id (`rank_mitre_ids`); the entries are
 `llm.triage.render_mitre_entries` with `MITRE_REFERENCE_MAX_ENTRIES_CASE` (10) full entries, the rest one line each,
@@ -81,7 +82,6 @@ from app.llm.builder import (
     HEADING_MITRE_REFERENCE,
     SENTENCE_ABSENT,
     SENTENCE_LEARNED_IS_REFERENCE,
-    SENTENCE_MITRE_REFERENCE_IS_REFERENCE,
     SENTENCE_MITRE_REFERENCE_QUOTED,
     SENTENCE_NO_CORRELATION,
     SENTENCE_NO_LEARNED,
@@ -182,6 +182,17 @@ SENTENCE_OUT_OF_SCOPE = (
 #: `SENTENCE_OUT_OF_SCOPE` above, safe outside a wrapper: which of the four hash/domain
 #: kinds an entity is comes from this module's own regex dispatch, never from alert text.
 SENTENCE_HISTORY_NOT_COMPUTED = "history not computed for this entity type"
+#: DEC-223 (Ruling M9): the closing sentence of the MITRE reference section, ②'s own. ①'s
+#: (`llm.builder.SENTENCE_MITRE_REFERENCE_IS_REFERENCE`) says the section is not to be quoted in `reasons` nor used as a
+#: `source` - fields ②'s answer does not have. This one says the same thing in ②'s terms: the section describes
+#: techniques in general, is not evidence about this case, is never a basis for a conclusion, and is never quoted as
+#: evidence (`evidence[].quote`, the field `_check_evidence` verifies against the case's own alerts). A member of
+#: `DOSSIER_TEMPLATE_CONSTANTS`, so the linter and every caller that passes that set know it; it is not in
+#: `llm.builder.TEMPLATE_CONSTANTS`, ①'s vocabulary is untouched.
+SENTENCE_MITRE_REFERENCE_IS_REFERENCE_CASE = (
+    "Phần này mô tả các kỹ thuật nói chung, không phải bằng chứng về case này; "
+    "không bao giờ là căn cứ để kết luận và không bao giờ được trích làm bằng chứng (`evidence[].quote`)."
+)
 HEADING_CASE = "## Case"
 HEADING_CLUSTERS = "## Clusters"
 HEADING_TIMELINE = "## Timeline"
@@ -210,7 +221,7 @@ DOSSIER_TEMPLATE_CONSTANTS = frozenset(
         HEADING_LEARNED,
         HEADING_MITRE_REFERENCE,
         SENTENCE_MITRE_REFERENCE_QUOTED,
-        SENTENCE_MITRE_REFERENCE_IS_REFERENCE,
+        SENTENCE_MITRE_REFERENCE_IS_REFERENCE_CASE,
         SENTENCE_OUT_OF_SCOPE,
         SENTENCE_HISTORY_NOT_COMPUTED,
     }
@@ -1435,8 +1446,8 @@ def _block11_mitre(version: str, text: str, nonce: str, sink: _BlockSink | None 
     """The MITRE reference section (DEC-223, spec §6), ①'s (`llm.triage.mitre_section`) in this module's layout: the
     heading; the version of the local extract as a typed fact on the same line as the first fixed sentence; MITRE's
     own text as the one `mitre_reference` block (it holds backticks and angle brackets, so it is a block and never
-    prose); the second fixed sentence. `version` has passed `Id("attack_version", ...)` (`reference_version`).
-    """
+    prose); the closing sentence, ②'s own (`SENTENCE_MITRE_REFERENCE_IS_REFERENCE_CASE`). `version` has passed
+    `Id("attack_version", ...)` (`reference_version`)."""
     return "\n".join(
         (
             HEADING_MITRE_REFERENCE,
@@ -1447,7 +1458,7 @@ def _block11_mitre(version: str, text: str, nonce: str, sink: _BlockSink | None 
                 )
             ),
             _wrapped(sink, text, "mitre_reference", nonce),
-            SENTENCE_MITRE_REFERENCE_IS_REFERENCE,
+            SENTENCE_MITRE_REFERENCE_IS_REFERENCE_CASE,
         )
     )
 

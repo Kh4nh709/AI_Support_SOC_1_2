@@ -55,6 +55,9 @@ NONCE = "0123456789abcdef"
 SWITCH = "PROMPT_INCLUDE_MITRE_REFERENCE"
 CASE = "3f2b8c1e-5d4a-4e7b-9a60-1c2d3e4f5a6b"
 THIRTEEN_IDS = (*TEN_IDS, "T1047", "T1082", "T1087")
+#: ②'s closing sentence of the section (Ruling M9): ①'s says "not to be quoted in `reasons`, not a `source`", fields
+#: ② does not have; this one says the same of ②'s own, `evidence[].quote`.
+CLOSING = dossier.SENTENCE_MITRE_REFERENCE_IS_REFERENCE_CASE
 
 
 @pytest.fixture(autouse=True)
@@ -94,11 +97,9 @@ def reference_block(result: dossier.Dossier) -> str:
 
 
 def section_of(text: str) -> str:
-    """The section as written: from its heading to the end of its second fixed sentence."""
+    """The section as written: from its heading to the end of its closing sentence, ②'s own."""
     start = text.index(B.HEADING_MITRE_REFERENCE)
-    end = text.index(B.SENTENCE_MITRE_REFERENCE_IS_REFERENCE, start) + len(
-        B.SENTENCE_MITRE_REFERENCE_IS_REFERENCE
-    )
+    end = text.index(CLOSING, start) + len(CLOSING)
     return text[start:end]
 
 
@@ -151,15 +152,44 @@ def test_the_cap_is_ten_and_the_switch_is_the_one_of_the_prompt_builder() -> Non
     assert config.Config.__dataclass_fields__["PROMPT_INCLUDE_MITRE_REFERENCE"].default is False
 
 
-def test_the_heading_and_both_sentences_are_dossier_template_constants() -> None:
-    """Not implied by `B.TEMPLATE_CONSTANTS`, which holds them too: this module's own set names every heading and
-    fixed sentence the dossier writes, as it does for block 10."""
+def test_the_heading_and_the_two_sentences_the_dossier_writes_are_dossier_template_constants() -> (
+    None
+):
+    """The heading and the first sentence are ①'s, shared; the closing sentence is ②'s own (Ruling M9). This
+    module's own set names every heading and fixed sentence the dossier writes, as it does for block 10: ①'s
+    closing sentence is not one of them, the dossier never writes it."""
     for constant in (
         B.HEADING_MITRE_REFERENCE,
         B.SENTENCE_MITRE_REFERENCE_QUOTED,
-        B.SENTENCE_MITRE_REFERENCE_IS_REFERENCE,
+        dossier.SENTENCE_MITRE_REFERENCE_IS_REFERENCE_CASE,
     ):
         assert constant in dossier.DOSSIER_TEMPLATE_CONSTANTS
+    assert B.SENTENCE_MITRE_REFERENCE_IS_REFERENCE not in dossier.DOSSIER_TEMPLATE_CONSTANTS
+
+
+def test_the_closing_sentence_says_what_the_first_one_says_of_the_fields_of_two() -> None:
+    """Ruling M9: ① tells its model not to quote the section in `reasons` nor to use it as a `source`; ②'s answer has
+    neither field, its evidence is `evidence[].quote`. Same meaning - techniques in general, not evidence about this
+    case, never a basis for a conclusion - naming ②'s own field."""
+    sentence = dossier.SENTENCE_MITRE_REFERENCE_IS_REFERENCE_CASE
+    assert sentence == (
+        "Phần này mô tả các kỹ thuật nói chung, không phải bằng chứng về case này; "
+        "không bao giờ là căn cứ để kết luận và không bao giờ được trích làm bằng chứng (`evidence[].quote`)."
+    )
+    assert "`evidence[].quote`" in sentence
+    assert "reasons" not in sentence and "source" not in sentence
+    assert sentence != B.SENTENCE_MITRE_REFERENCE_IS_REFERENCE
+    assert sentence not in B.TEMPLATE_CONSTANTS  # ②'s own: ①'s vocabulary is not touched
+    # ①'s sentence is exactly what it was
+    assert B.SENTENCE_MITRE_REFERENCE_IS_REFERENCE == (
+        "Phần này mô tả các kỹ thuật nói chung, không phải bằng chứng về alert này; "
+        "không bao giờ là căn cứ để kết luận, không được trích trong `reasons` và không được dùng làm `source`."
+    )
+    # the first words of both say the same thing in the same words
+    assert (
+        sentence.split(";")[0].replace("case", "alert")
+        == B.SENTENCE_MITRE_REFERENCE_IS_REFERENCE.split(";")[0]
+    )
 
 
 def test_off_the_ids_are_not_read_and_the_dossier_says_nothing_of_mitre(no_db, monkeypatch) -> None:
@@ -206,12 +236,38 @@ def test_the_section_is_heading_version_fact_with_the_first_sentence_block_secon
             B.HEADING_MITRE_REFERENCE,
             f"mitre_version: {mitre.version()} · {B.SENTENCE_MITRE_REFERENCE_QUOTED}",
             wrap.untrusted_block(text, "mitre_reference", nonce=NONCE).rendered,
-            B.SENTENCE_MITRE_REFERENCE_IS_REFERENCE,
+            dossier.SENTENCE_MITRE_REFERENCE_IS_REFERENCE_CASE,
         )
     )
     assert section_of(result.text) == expected
     assert result.text.count(B.HEADING_MITRE_REFERENCE) == 1
     assert result.mitre_warnings == (f"mitre_reference:{mitre.version()}",)
+
+
+def test_the_section_ends_with_the_dossiers_own_sentence_and_never_with_the_proposers(
+    no_db, monkeypatch
+) -> None:
+    """Ruling M9: ②'s section closes with its own sentence (naming `evidence[].quote`); ①'s sentence, which names
+    `reasons` and `source`, is nowhere in the dossier; and ①'s own section still closes with ①'s sentence.
+    """
+    ids_on_the_case(monkeypatch, ("T1110",))
+    result = build(no_db, learned=LEARNED_OK)
+    section = section_of(result.text)
+    assert section.endswith(dossier.SENTENCE_MITRE_REFERENCE_IS_REFERENCE_CASE)
+    assert dossier.SENTENCE_MITRE_REFERENCE_IS_REFERENCE_CASE in result.text.splitlines()
+    assert B.SENTENCE_MITRE_REFERENCE_IS_REFERENCE not in result.text
+    assert "`reasons`" not in section
+    # ①'s section is untouched: same sentence, none of ②'s
+    proposer = build_proposer(("T1110",))
+    assert B.SENTENCE_MITRE_REFERENCE_IS_REFERENCE in proposer.prompt.user.splitlines()
+    assert dossier.SENTENCE_MITRE_REFERENCE_IS_REFERENCE_CASE not in proposer.prompt.user
+
+
+def build_proposer(ids):
+    """①'s prompt for an alert carrying `ids`, with the switch on (the way `test_triage_prompt_mitre.py` builds it)."""
+    from tests.test_triage_prompt_mitre import build as build_triage
+
+    return build_triage(ids)
 
 
 def test_the_section_follows_the_playbooks_and_precedes_the_learned_section_and_the_scope(
