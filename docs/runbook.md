@@ -655,7 +655,18 @@ The page **Threat Intel** (`/threat-intel`, a link in the header, `tier1`, `tier
 cards, two charts and the table of IOCs with a detail panel. It needs no key, no switch and no migration beyond 026 (the importer's section, above);
 the CSV and CSV-to-database half is the importer's, this is the part a person looks at. The export (CSV and blocklist) is the `admin`'s alone.
 
-- **Deploying it on the trial** (the trial checkout, after the importer's steps; *not run by the agent*, the Owner runs them):
+- **Deploying it on the trial** (the trial checkout, after the importer's steps; *not run by the agent*, the Owner runs them). **First the bind
+  addresses of the `ui`, in a paste of its own** (the known boot race, as in step 5 of **Voyage vector RAG (DEC-213)**, above): the trial's `ui` binds
+  loopback and the host's LAN address, a DHCP one, and exits at start when the address it is asked to bind is not on the host.
+
+  ```
+  grep -n '8081:80' docker-compose.trial.yml
+  ip -4 addr
+  ```
+
+  → the `grep` prints the two entries, and `ip -4 addr` must list the second one. If it does not, wait until it does, and do not go on before; if the lease has
+  moved to another address and stays there, change the second entry of `ports` in `docker-compose.trial.yml` (an untracked file of the trial) to the host's current
+  address first, or `ui` never starts. A `ui` that has already exited is recreated with `docker compose up -d --force-recreate ui` once the address is up. Only then:
 
   ```
   docker compose restart app
@@ -680,8 +691,9 @@ the CSV and CSV-to-database half is the importer's, this is the part a person lo
      on `threatfox.abuse.ch`, `urlhaus.abuse.ch` or `bazaar.abuse.ch`, in a new tab. A reference to any other site is shown as text, not as a link.
   5. The **filters** (source, type, malware, dates, minimum confidence, a search) act on **Lọc** and are in the address bar, so a reload keeps them. "Any confidence" (empty, or 0)
      sends nothing: a minimum from 1 leaves out the rows that have no confidence, which is all of MalwareBazaar.
-  6. As `admin`, **Xuất CSV** and **Xuất blocklist** are beside the filters and save `threat-intel-iocs.csv` and `threat-intel-blocklist.txt` for the filters on screen (at most 20 000 rows;
-     more is a message asking for a narrower filter). As `tier1` or `tier2` the buttons are not on the page at all.
+  6. As `admin`, **Xuất CSV** and **Xuất blocklist** are beside the filters and save `threat-intel-iocs.csv` and `threat-intel-blocklist.txt` for the **applied** filters, the ones in the
+     address bar (at most 20 000 rows; more is a message asking for a narrower filter). While the form holds a filter that **Lọc** has not sent, the two buttons are shut and a line says
+     so: send the filters first. As `tier1` or `tier2` the buttons are not on the page at all.
 - **The blocklist is read by a person before it is fed to a firewall.** It lists domains and IP addresses only (the port of an `ip:port` dropped), without duplicates, and the server
   leaves out what no firewall should block (private, loopback, link-local, carrier-grade NAT, multicast and reserved addresses; names under `local`, `lan`, `internal`, `arpa`, `test`,
   `example` and the like; a name whose last label is not a real top-level label). That is a shape rule, not a judgement: **a shared-hosting apex or a public suffix, a `github.io`-style name
@@ -689,7 +701,7 @@ the CSV and CSV-to-database half is the importer's, this is the part a person lo
   what the feed says, not a verdict: open it, read each line, delete the ones that are not the attacker's, and only then load it. The CSV starts with a UTF-8 byte order mark so that Excel
   reads it as UTF-8, and a cell that begins like a formula carries a leading `'`.
 - **When it does not work.** *"Máy chủ đang bận, hãy thử lại sau ít phút"* in a section is a `503` from the server's 5 s statement timeout (the section's own **Thử lại** asks again):
-  the database is loaded, not the page broken. A section's *"Không tải được…"* is any other failure (`docker compose logs app`). *"Bạn không có quyền vào trang đó"* is a `403`; a `401` ends the
+  the database is loaded, not the page broken (the page asks for it once and does not retry it: asking again is what a loaded database does not need). A section's *"Không tải được…"* is any other failure (`docker compose logs app`). *"Bạn không có quyền vào trang đó"* is a `403`; a `401` ends the
   session and goes to the login page. No page at all after a deploy means the `ui` image was not rebuilt (the row above). An empty table with a good status bar means the filters match nothing
   (**Xoá bộ lọc**) or `ti_ioc` is empty (`select count(*) from ti_ioc`).
 - **Rollback.** The page is code only: revert the merge, `docker compose restart app`, `docker compose build ui && docker compose up -d ui`. Nothing in the database changes and the importer
