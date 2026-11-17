@@ -608,7 +608,7 @@ moves first: `make migrate`, then the importer). Running a file twice is safe: a
 
 - **By hand.** `<venv>/bin/python -B scripts/ti_import.py --env-file <checkout>/.env` imports TODAY's file, `ioc_YYYY-MM-DD.csv` of
   `/var/lib/abusech/daily/` by the **UTC** date (the fetch script names its file by `datetime.now(timezone.utc)`; on a host at +07, 00:00 to 06:59 local is
-  still the UTC day before, so the host's own calendar would look for a file that is not there yet); `--dir DIR` names another directory. If today's file is
+  still the UTC day before, so the host's own calendar would look for a file that is not there yet); `--dir DIR` names another directory (the default is the directory the fetch writes to, its `ABUSECH_OUT`; if that ever changes, add `--dir` to the cron line). If today's file is
   not there the run is `failed` (`no_file`, exit 1, a log row): an older day is never taken in its place, so a fetch that broke shows as a failed run
   and, after 26 hours, as a stale page, and is not hidden by yesterday's file imported again. `FILE` imports one named file whatever its name or date
   (running an old day again by hand is fine). It runs by a plain path from any directory, as any user who can read the checkout.

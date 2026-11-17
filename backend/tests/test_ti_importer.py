@@ -1786,7 +1786,7 @@ def _daily(tmp_path: Path) -> Path:
     return daily
 
 
-def test_todays_file_is_the_one_named_for_the_hosts_date_and_no_other(tmp_path):
+def test_todays_file_is_the_one_named_for_the_given_day_and_no_other(tmp_path):
     script = _load_script()
     daily = _daily(tmp_path)
     assert script.todays_file(daily, date(2026, 11, 17)) == daily / "ioc_2026-11-17.csv"
@@ -1872,9 +1872,9 @@ def test_main_without_a_file_takes_the_file_of_the_utc_day_whatever_the_hosts_zo
     assert code == 0 and f"file=ioc_2026-11-{day}.csv" in out.out
     assert list(by_value(ti_conn)) == [f"192.0.2.{day}:{day}"]
     (log,) = logs(ti_conn)
-    assert (
-        log["file"] == f"ioc_2026-11-{day}.csv" and log["started_at"] == moment
-    )  # one clock for both
+    # one clock for both
+    assert log["file"] == f"ioc_2026-11-{day}.csv"
+    assert log["started_at"] == moment
 
 
 @needs_db
