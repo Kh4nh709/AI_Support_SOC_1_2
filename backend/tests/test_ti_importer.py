@@ -597,6 +597,38 @@ def test_the_csv_field_limit_is_raised_for_the_read_and_put_back(tmp_path, monke
     assert seen and seen[0] > 20 * 1024 * 1024  # above any field a file within the cap can hold
 
 
+def test_a_csv_error_after_all_that_stops_the_file_instead_of_guessing_where_the_next_record_is(
+    tmp_path, monkeypatch
+):
+    """The reader's state after a csv.Error cannot be trusted (it is how a record was once forged): the file is
+    refused whole, as `file_unreadable`, and not read on from the next line."""
+    real = csv.reader
+
+    class FailsOnTheThirdRecord:
+        def __init__(self, handle):
+            self.inner = real(handle)
+            self.count = 0
+
+        @property
+        def line_num(self):
+            return self.inner.line_num
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            self.count += 1
+            if self.count == 3:
+                raise csv.Error("simulated")
+            return next(self.inner)
+
+    monkeypatch.setattr(importer.csv, "reader", FailsOnTheThirdRecord)
+    path = write_csv(tmp_path / "f.csv", [good(value=f"192.0.2.{n}:1") for n in range(5)])
+    with pytest.raises(importer.FileError) as caught:
+        read_file(path)
+    assert caught.value.message == "file_unreadable"
+
+
 def test_the_file_size_cap_is_twenty_megabytes():
     assert importer.MAX_FILE_BYTES == 20 * 1024 * 1024
 
