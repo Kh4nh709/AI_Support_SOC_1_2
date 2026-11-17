@@ -49,7 +49,7 @@ export function TiPage() {
   };
 
   const data = query.data;
-  const columns = useMemo(() => tiColumns({ onOpen: openDetail }), []);
+  const columns = tiColumns({ onOpen: openDetail });
   const filtered = viewToParams({ ...view, page: 1 }).toString() !== "";
   // The panel follows its IOC when the list still has it (a refetch changed a field), and keeps the one it was opened with when not.
   const shownDetail =
