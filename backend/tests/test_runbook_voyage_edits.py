@@ -135,29 +135,29 @@ def test_model_api_down_says_the_lookup_calls_no_model():
     )  # still true
 
 
-def test_the_start_everything_row_is_consistent_with_the_25_migrations():
+def test_the_start_everything_row_is_consistent_with_the_26_migrations():
     row = _row("| start everything |")
     total = len(_migration_files())
-    assert total == 25
+    assert total == 26
     pairs = re.findall(r"`migrate: (\d+) applied, (\d+) already present`", row)
     assert pairs, "no `migrate: N applied, M already present` in the row"
     for applied, present in pairs:
         assert int(applied) + int(present) == total, (applied, present)
     flat = _flat(row)
-    # the trial's database stands at 20 after the wipe (spec §11): 021, 022, 023, 024, 025 are applied
+    # the trial's database stands at 20 after the wipe (spec §11): 021, 022, 023, 024, 025, 026 are applied
     assert (
-        "`migrate: 5 applied, 20 already present` on a dump taken after 020 or on the trial database"
+        "`migrate: 6 applied, 20 already present` on a dump taken after 020 or on the trial database"
         in flat
     )
     assert "on the trial database today" not in flat
-    assert "`migrate: 4 applied, 21 already present` on a dump taken after 021 (" in flat
+    assert "`migrate: 5 applied, 21 already present` on a dump taken after 021 (" in flat
     # the refusal belongs to a database that holds an escalate, not inside the list of counts for one that does not
     counts = flat.split("The counts for a database or a dump that holds no ① `escalate`", 1)[1]
     assert (
         "**refuses" not in counts
     ), "the list of counts for a database with no escalate talks of a refusal"
     assert "has no count" in counts  # a database that does hold one stops at 022: no count at all
-    assert "`migrate: 0 applied, 25 already present` after that." in flat
+    assert "`migrate: 0 applied, 26 already present` after that." in flat
 
 
 def test_the_lookup_is_no_longer_said_to_call_deepseek_and_the_old_stubs_are_gone():

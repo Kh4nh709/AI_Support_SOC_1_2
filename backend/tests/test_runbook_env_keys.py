@@ -388,6 +388,7 @@ def test_the_migration_row_of_start_everything_names_the_trial_and_the_p14_migra
     assert "on the live database today" not in row and "on the trial database today" not in row
     assert "there is no 022" not in row and "the number belongs to another card" not in row
     assert "`024_lab.sql`: the lab runs and labels" in row  # P14-T09: the trial takes all three
-    assert "`migrate: 5 applied, 20 already present`" in row
-    assert "`migrate: 4 applied, 21 already present`" in row
-    assert "`migrate: 0 applied, 25 already present` after that." in row
+    assert "`migrate: 6 applied, 20 already present`" in row  # 021 to 026 (DEC-224 T1 added 026)
+    assert "`migrate: 5 applied, 21 already present`" in row
+    assert "`026_threat_intel.sql`" in row
+    assert "`migrate: 0 applied, 26 already present` after that." in row

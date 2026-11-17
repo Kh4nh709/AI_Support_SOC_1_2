@@ -3,8 +3,9 @@ procedure as it was.
 
 The P14 deploy of the Voyage RAG (step 3, step 7) is a procedure that was written and run when the database held 24 migrations: it
 says `021 to 024`, `4 applied, 20 already present` and a count of `24`. Migration 025 (the SOAR review tickets) came after it, so the
-number 25 belongs to the rows that describe the state of the system now ("start everything", the pilot's precondition b) and to the new
-section of the feature; it does not rewrite a procedure that was carried out. Pure: reads `docs/runbook.md`.
+number 25 belonged to the rows that describe the state of the system now ("start everything", the pilot's precondition b) and to the new
+section of the feature; it does not rewrite a procedure that was carried out. Migration 026 (the Threat Intel tables, DEC-224 T1) came after
+025, so those two rows now say 26 and the SOAR section and the past procedures keep what they said. Pure: reads `docs/runbook.md`.
 """
 
 from __future__ import annotations
@@ -51,15 +52,16 @@ def test_step_7_of_the_past_procedure_still_expects_24():
     assert "25" not in step7
 
 
-def test_the_rows_that_describe_the_state_now_say_25():
+def test_the_rows_that_describe_the_state_now_say_26():
     text = _text()
     start = next(line for line in text.splitlines() if line.startswith("| start everything |"))
-    assert "brings the database to **25**" in start
-    assert "`migrate: 0 applied, 25 already present` after that." in start
+    assert "brings the database to **26**" in start
+    assert "`migrate: 0 applied, 26 already present` after that." in start
     precondition = next(
         line for line in text.splitlines() if line.startswith("| b | migrations current |")
     )
-    assert "`25` (" in precondition and "025_soar_reviews.sql" in precondition
+    assert "`26` (" in precondition and "026_threat_intel.sql" in precondition
+    assert "025_soar_reviews.sql" in precondition
 
 
 def test_the_start_everything_row_points_at_the_new_section_for_025_not_at_step_3():

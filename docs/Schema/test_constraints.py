@@ -214,6 +214,29 @@ case("025 · soar_reviews status='processing' không có khóa", "ck_soar_review
      SREV("S3", status="'processing'"))
 case("025 · soar_reviews prev_status='processing'", "ck_soar_reviews_prev_status",
      SREV("S4", extra="prev_status='processing'"))
+# ── 026 · Threat Intel (ti_ioc, ti_import_log) ───────────────────────────────────────────────
+# Ba nguồn của abuse.ch (tập đóng), confidence 0..100 hoặc NULL, hit_count và các số đếm không âm,
+# trạng thái một lần chạy, và khóa duy nhất (source, type, value).
+def TIOC(source="'threatfox'", type_="'domain'", value="'a.example.com'", extra=""):
+    cols = "source,type,value,last_seen,imported_at,expires_at" + (extra and "," + extra.split("=")[0])
+    vals = f"{source},{type_},{value},now(),now(),now()" + (extra and "," + extra.split("=")[1])
+    return f"INSERT INTO ti_ioc ({cols}) VALUES ({vals});"
+def TLOG(status="'ok'", **dem):
+    d = dict(rows_total=0, rows_new=0, rows_updated=0, rows_error=0)
+    d.update(dem)
+    return ("INSERT INTO ti_import_log (file,started_at,finished_at,rows_total,rows_new,rows_updated,"
+            "rows_error,status) VALUES ('ioc_2026-11-17.csv',now(),now(),"
+            f"{d['rows_total']},{d['rows_new']},{d['rows_updated']},{d['rows_error']},{status});")
+case("026 · ti_ioc source='virustotal' (ngoài ba nguồn)", "ck_ti_ioc_source",
+     TIOC(source="'virustotal'"))
+case("026 · ti_ioc confidence=101", "ck_ti_ioc_confidence", TIOC(extra="confidence=101"))
+case("026 · ti_ioc confidence=-1", "ck_ti_ioc_confidence", TIOC(extra="confidence=-1"))
+case("026 · ti_ioc hit_count=-1", "ck_ti_ioc_hit_count", TIOC(extra="hit_count=-1"))
+case("026 · ti_ioc trùng (source, type, value)", "uq_ti_ioc_key", TIOC() + TIOC())
+case("026 · ti_import_log status='done' (ngoài ok|partial|failed)", "ck_ti_import_log_status",
+     TLOG(status="'done'"))
+case("026 · ti_import_log rows_error=-1", "ck_ti_import_log_rows_error",
+     TLOG(rows_error=-1))
 case("024 · run lab có ends_at = starts_at", "ck_lab_runs_ends_after_starts",
      LRUN("01", st="'2026-11-05 09:00+00'", en="'2026-11-05 09:00+00'"))
 case("024 · run lab có ends_at < starts_at", "ck_lab_runs_ends_after_starts",
@@ -333,6 +356,11 @@ POSITIVE = [
     ("025 · audit soar.review_received (system, KHÔNG actor_id) và soar.review_decided (analyst CÓ actor_id)",
      "INSERT INTO audit_events (event_type,subject_id,actor_role,actor_id) VALUES "
      f"('soar.review_received','K7QM2XHP','system',NULL),('soar.review_decided','K7QM2XHP','analyst',{LAB_U});"),
+    ("026 · cùng value dưới nguồn khác và dưới loại khác; confidence và first_seen NULL; confidence 0 và 100",
+     TIOC() + TIOC(source="'urlhaus'") + TIOC(type_="'ip:port'") +
+     TIOC(value="'b.example.com'", extra="confidence=0") + TIOC(value="'c.example.com'", extra="confidence=100")),
+    ("026 · ti_import_log 'failed' với mọi số đếm 0",
+     TLOG(status="'failed'")),
     ("M4 · auto_closed có closed_at, sealed_at NULL (cụm còn hút)",
      ins(90, status="'auto_closed'", closed_at="now()")),
     ("D-C5 · escalated_tier2 không seal",
