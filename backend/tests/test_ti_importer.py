@@ -27,8 +27,9 @@ import io
 import os
 import subprocess
 import sys
+import time
 import urllib.parse
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 
 import psycopg
@@ -269,6 +270,7 @@ BAD_ROWS = [
     ({"first_seen": "2026-13-45 99:00:00"}, "first_seen_invalid"),
     ({"first_seen": "2026-11-17 08:30:15 PST"}, "first_seen_invalid"),
     ({"first_seen": "0001-01-01T00:00:00+14:00"}, "first_seen_invalid"),  # before the epoch of UTC
+    ({"first_seen": "9999-12-31 23:59:59"}, "first_seen_invalid"),  # ahead of the clock by years
     # type
     ({"type": ""}, "type_invalid"),
     ({"type": "ip port"}, "type_invalid"),
@@ -333,6 +335,23 @@ def test_a_bad_row_raises_its_reason(over, reason):
 def test_every_reason_has_a_test():
     tested = {reason for _, reason in BAD_ROWS} | {"row_malformed"}
     assert tested == set(REASONS)
+
+
+def test_a_first_seen_more_than_a_day_ahead_of_the_run_is_invalid_and_exactly_a_day_is_not():
+    day = timedelta(days=1)
+    edge = (NOW + day).strftime("%Y-%m-%d %H:%M:%S")
+    beyond = (NOW + day + timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
+    assert parse_row(good(first_seen=edge), now=NOW).first_seen == NOW + day
+    with pytest.raises(RowError) as caught:
+        parse_row(good(first_seen=beyond), now=NOW)
+    assert caught.value.reason == "first_seen_invalid"
+    assert parse_row(good(first_seen="2020-01-01 00:00:00"), now=NOW).first_seen.year == 2020
+
+
+def test_read_file_judges_first_seen_against_the_now_it_is_given(tmp_path):
+    path = write_csv(tmp_path / "f.csv", [good(first_seen="2026-11-17 08:30:15")])
+    assert read_file(path, now=NOW).errors == []
+    assert read_file(path, now=NOW - timedelta(days=3)).errors == [(2, "first_seen_invalid")]
 
 
 def test_the_bounds_are_in_bytes_and_a_row_at_the_bound_is_accepted():
@@ -438,7 +457,10 @@ def test_a_quoted_comma_stays_in_its_field(tmp_path):
     )  # the quoted field is one CSV field; the tags split on commas
 
 
-def test_a_quoted_newline_makes_one_bad_row_and_the_next_line_numbers_are_right(tmp_path):
+def test_a_record_that_spans_lines_is_one_bad_row_counted_as_the_lines_it_swallows(tmp_path):
+    """No legitimate record spans lines (every field refuses a newline), so a quoted newline makes the whole record
+    ONE bad row `row_malformed`, whatever field it is in; it counts as the physical lines it takes, so the totals
+    reflect the lines lost: `total = good + error_count`."""
     rows = [
         good(value="192.0.2.1:1"),  # line 2
         good(value="192.0.2.2\n:2"),  # lines 3-4: a newline in a value
@@ -449,11 +471,13 @@ def test_a_quoted_newline_makes_one_bad_row_and_the_next_line_numbers_are_right(
     parsed = read_file(write_csv(tmp_path / "f.csv", rows))
     assert [i.value for i in parsed.iocs] == ["192.0.2.1:1", "192.0.2.3:3"]
     assert parsed.errors == [
-        (3, "value_control_char"),
-        (6, "text_control_char"),
+        (3, "row_malformed"),
+        (6, "row_malformed"),
         (9, "first_seen_invalid"),
     ]
-    assert parsed.total == 5
+    assert parsed.spans == {3: 2, 6: 3}
+    assert parsed.error_count == 2 + 3 + 1
+    assert parsed.total == 8 == len(parsed.iocs) + parsed.error_count
 
 
 def test_blank_lines_are_skipped_and_not_counted(tmp_path):
@@ -498,12 +522,101 @@ def test_a_field_of_five_thousand_characters_is_one_bad_row(tmp_path):
     assert [i.value for i in parsed.iocs] == ["192.0.2.9:9"]
 
 
-def test_a_field_over_the_csv_modules_limit_is_one_bad_row_and_the_run_goes_on(tmp_path):
+def test_a_field_over_the_csv_modules_default_limit_is_read_as_an_ordinary_too_long_field(tmp_path):
     rows = [good(value="192.0.2.1:1"), good(threat="x" * 200_000), good(value="192.0.2.3:3")]
     parsed = read_file(write_csv(tmp_path / "f.csv", rows))
     assert [i.value for i in parsed.iocs] == ["192.0.2.1:1", "192.0.2.3:3"]
+    assert parsed.errors == [(3, "threat_too_long")]
+    assert parsed.total == 3 and parsed.spans == {}
+
+
+FORGED = (
+    "threatfox,2026-11-17 09:00:00,ip:port,192.0.2.66:66,botnet_cc,forged,100,,"
+    "https://threatfox.abuse.ch/ioc/90000066/"
+)
+
+
+def _forging_file(tmp_path: Path) -> Path:
+    """Three records; the middle one is ONE quoted field that runs past the csv module's default limit of 131 072
+    characters on its first line (the limit trips there) and then holds a complete record line of its own, on a
+    line of its own."""
+    hidden = "x" * 140_000 + "\n" + FORGED + "\n" + "y" * 10
+    rows = [
+        good(value="192.0.2.1:1"),  # line 2
+        good(threat=hidden, value="192.0.2.2:2"),  # lines 3-5
+        good(value="192.0.2.3:3"),  # line 6
+    ]
+    return write_csv(tmp_path / "f.csv", rows)
+
+
+def test_an_over_limit_quoted_multi_line_field_is_one_bad_row_and_forges_no_record(tmp_path):
+    parsed = read_file(_forging_file(tmp_path))
+    assert [i.value for i in parsed.iocs] == [
+        "192.0.2.1:1",
+        "192.0.2.3:3",
+    ]  # the forged line is not a record
     assert parsed.errors == [(3, "row_malformed")]
-    assert parsed.total == 3
+    assert parsed.spans == {3: 3}
+    assert parsed.total == 5 and parsed.error_count == 3
+
+
+def test_an_unclosed_quote_swallows_the_rest_of_the_file_and_the_lines_lost_are_counted(tmp_path):
+    ok = line(good(value="192.0.2.1:1"))
+    opened = line(good(value="192.0.2.2:2")).replace(",192.0.2.2:2,", ',"192.0.2.2:2,')
+    rest = [line(good(value=f"192.0.2.{n}:{n}")) for n in (3, 4, 5)]
+    path = write_raw(tmp_path / "f.csv", "\n".join([HEAD, ok, opened, *rest, ""]).encode())
+    parsed = read_file(path)
+    assert [i.value for i in parsed.iocs] == ["192.0.2.1:1"]
+    assert parsed.errors == [(3, "row_malformed")]
+    assert parsed.spans == {3: 4}  # lines 3 to 6: the opened record and the three after it
+    assert parsed.total == 1 + 4 and parsed.error_count == 4
+
+
+def test_the_csv_field_limit_is_raised_for_the_read_and_put_back(tmp_path, monkeypatch):
+    before = csv.field_size_limit()
+    read_file(SAMPLE)
+    assert csv.field_size_limit() == before
+    with pytest.raises(HeaderError):
+        read_file(write_raw(tmp_path / "e.csv", b""))
+    assert csv.field_size_limit() == before
+    monkeypatch.setattr(importer, "MAX_FILE_BYTES", 10)
+    with pytest.raises(importer.FileError):
+        read_file(SAMPLE)
+    assert csv.field_size_limit() == before
+    seen = []
+    real = importer.csv.reader
+
+    def watching(*args, **kwargs):
+        seen.append(csv.field_size_limit())
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(importer, "MAX_FILE_BYTES", 20 * 1024 * 1024)
+    monkeypatch.setattr(importer.csv, "reader", watching)
+    read_file(SAMPLE)
+    assert seen and seen[0] > 20 * 1024 * 1024  # above any field a file within the cap can hold
+
+
+def test_the_file_size_cap_is_twenty_megabytes():
+    assert importer.MAX_FILE_BYTES == 20 * 1024 * 1024
+
+
+def test_a_file_over_the_size_cap_is_refused_before_a_row_is_read_and_one_at_the_cap_is_read(
+    tmp_path, monkeypatch
+):
+    path = write_csv(tmp_path / "f.csv", [good(value=f"192.0.2.{n}:1") for n in range(20)])
+    size = path.stat().st_size
+    monkeypatch.setattr(importer, "MAX_FILE_BYTES", size - 1)
+    with pytest.raises(importer.FileError) as caught:
+        read_file(path)
+    assert caught.value.message == "file_too_large"
+    monkeypatch.setattr(importer, "MAX_FILE_BYTES", size)
+    assert read_file(path).total == 20
+
+
+def test_something_that_is_not_a_regular_file_is_not_read():
+    with pytest.raises(importer.FileError) as caught:
+        read_file("/dev/null")
+    assert caught.value.message == "file_unreadable"
 
 
 def test_a_file_that_is_not_there_raises_oserror(tmp_path):
@@ -1088,6 +1201,167 @@ def test_a_caller_with_a_transaction_open_keeps_control_of_it(ti_conn, tmp_path)
     assert iocs(ti_conn) == [] and logs(ti_conn) == []
 
 
+@needs_db
+def test_a_forged_record_inside_an_over_limit_field_is_not_loaded(ti_conn, tmp_path):
+    result = import_file(ti_conn, _forging_file(tmp_path), now=NOW, clock=_clock())
+    assert (result.status, result.total, result.new, result.updated, result.errors) == (
+        "partial",
+        5,
+        2,
+        0,
+        3,
+    )
+    assert (result.error_rows, result.error_spans) == (((3, "row_malformed"),), ((3, 3),))
+    assert result.message == "skipped: row_malformed=3"
+    assert set(by_value(ti_conn)) == {"192.0.2.1:1", "192.0.2.3:3"}
+    assert not [r for r in iocs(ti_conn) if r["malware"] == "forged" or r["confidence"] == 100]
+    (log,) = logs(ti_conn)
+    assert (log["rows_total"], log["rows_new"], log["rows_error"], log["status"]) == (
+        5,
+        2,
+        3,
+        "partial",
+    )
+
+
+@needs_db
+def test_an_unclosed_quote_is_logged_with_the_lines_it_swallowed(ti_conn, tmp_path):
+    ok = line(good(value="192.0.2.1:1"))
+    opened = line(good(value="192.0.2.2:2")).replace(",192.0.2.2:2,", ',"192.0.2.2:2,')
+    rest = [line(good(value=f"192.0.2.{n}:{n}")) for n in (3, 4, 5)]
+    path = write_raw(tmp_path / "f.csv", "\n".join([HEAD, ok, opened, *rest, ""]).encode())
+    result = import_file(ti_conn, path, now=NOW, clock=_clock())
+    assert (result.status, result.total, result.new, result.errors) == ("partial", 5, 1, 4)
+    assert result.total == result.new + result.updated + result.errors + result.repeated
+    assert result.error_rows == ((3, "row_malformed"),) and result.error_spans == ((3, 4),)
+    (log,) = logs(ti_conn)
+    assert (log["rows_total"], log["rows_new"], log["rows_error"]) == (5, 1, 4)
+    assert (
+        importer.format_error_line(3, "row_malformed", span=4)
+        == "ti_import: lines 3-6: row_malformed"
+    )
+
+
+@needs_db
+def test_a_file_over_the_size_cap_is_a_failed_run_with_nothing_loaded(
+    ti_conn, tmp_path, monkeypatch
+):
+    path = write_csv(
+        tmp_path / "ioc_2026-11-17.csv", [good(value=f"192.0.2.{n}:1") for n in range(20)]
+    )
+    monkeypatch.setattr(importer, "MAX_FILE_BYTES", path.stat().st_size - 1)
+    result = import_file(ti_conn, path, now=NOW, clock=_clock())
+    assert (result.status, result.message, result.total, result.new) == (
+        "failed",
+        "file_too_large",
+        0,
+        0,
+    )
+    assert iocs(ti_conn) == []
+    (log,) = logs(ti_conn)
+    assert (log["file"], log["status"], log["message"]) == (
+        "ioc_2026-11-17.csv",
+        "failed",
+        "file_too_large",
+    )
+
+
+@needs_db
+def test_a_repeated_key_keeps_the_first_occurrence_but_the_earliest_first_seen(ti_conn, tmp_path):
+    rows = [
+        good(value="192.0.2.1:1", malware="first", first_seen="2026-11-17 06:00:00"),
+        good(
+            value="192.0.2.1:1", malware="second", first_seen="2026-11-16 05:00:00"
+        ),  # the earliest
+        good(value="192.0.2.1:1", malware="third", first_seen="2026-11-17 08:00:00"),
+        good(value="192.0.2.2:2", malware="solo", first_seen="2026-11-17 07:00:00"),
+    ]
+    result = import_file(ti_conn, write_csv(tmp_path / "f.csv", rows), now=NOW)
+    assert (result.new, result.repeated, result.total) == (2, 2, 4)
+    row = by_value(ti_conn)["192.0.2.1:1"]
+    assert row["malware"] == "first"  # the first occurrence's descriptive fields
+    assert row["first_seen"] == datetime(
+        2026, 11, 16, 5, 0, tzinfo=UTC
+    )  # the earliest first_seen of the repeats
+    assert by_value(ti_conn)["192.0.2.2:2"]["first_seen"] == datetime(
+        2026, 11, 17, 7, 0, tzinfo=UTC
+    )
+
+
+@needs_db
+def test_a_lock_wait_is_bounded_and_the_failed_run_is_logged(ti_dsn, ti_conn, monkeypatch):
+    import_file(ti_conn, SAMPLE, now=NOW)
+    blocker = psycopg.connect(ti_dsn)
+    try:
+        blocker.execute("LOCK TABLE ti_ioc IN ACCESS EXCLUSIVE MODE")
+        monkeypatch.setattr(importer, "LOCK_TIMEOUT", "300ms")
+        started = time.monotonic()
+        result = import_file(ti_conn, SAMPLE, now=LATER, clock=_clock(LATER))
+        waited = time.monotonic() - started
+    finally:
+        blocker.rollback()
+        blocker.close()
+    assert (result.status, result.message) == ("failed", "database_error: LockNotAvailable")
+    assert waited < 5
+    assert (result.new, result.updated) == (0, 0)
+    assert [r["status"] for r in logs(ti_conn)] == ["ok", "failed"]
+    assert logs(ti_conn)[1]["message"] == "database_error: LockNotAvailable"
+    assert {r["last_seen"] for r in iocs(ti_conn)} == {NOW}  # the first run's rows, untouched
+
+
+@needs_db
+def test_a_statement_that_runs_too_long_is_cancelled_and_the_failed_run_is_logged(
+    ti_dsn, ti_conn, monkeypatch
+):
+    blocker = psycopg.connect(ti_dsn)
+    try:
+        blocker.execute("LOCK TABLE ti_ioc IN ACCESS EXCLUSIVE MODE")
+        monkeypatch.setattr(importer, "LOCK_TIMEOUT", "10s")
+        monkeypatch.setattr(importer, "STATEMENT_TIMEOUT", "300ms")
+        started = time.monotonic()
+        result = import_file(ti_conn, SAMPLE, now=NOW, clock=_clock())
+        waited = time.monotonic() - started
+    finally:
+        blocker.rollback()
+        blocker.close()
+    assert (result.status, result.message) == ("failed", "database_error: QueryCanceled")
+    assert waited < 5
+    assert iocs(ti_conn) == [] and [r["status"] for r in logs(ti_conn)] == ["failed"]
+
+
+@needs_db
+def test_the_timeouts_end_with_the_import_transaction(ti_conn):
+    assert import_file(ti_conn, SAMPLE, now=NOW).status == "ok"
+    for name in ("lock_timeout", "statement_timeout"):
+        assert ti_conn.execute(f"SHOW {name}").fetchone() == ("0",)
+    ti_conn.rollback()
+    assert (importer.LOCK_TIMEOUT, importer.STATEMENT_TIMEOUT) == ("5s", "10s")
+
+
+DO_NOTHING = """
+INSERT INTO ti_ioc (source, type, value, malware, threat, confidence, tags, reference,
+                    first_seen, last_seen, imported_at, expires_at)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT ON CONSTRAINT uq_ti_ioc_key DO NOTHING
+RETURNING (xmax = 0) AS inserted
+"""
+
+
+@needs_db
+def test_an_upsert_that_returns_no_row_is_an_error_and_not_counted_as_an_update(
+    ti_conn, tmp_path, monkeypatch
+):
+    path = _one_row_file(tmp_path, "a.csv")
+    import_file(ti_conn, path, now=NOW)
+    before = iocs(ti_conn)
+    monkeypatch.setattr(importer, "_UPSERT", DO_NOTHING)  # a conflict then returns no row
+    result = import_file(ti_conn, path, now=LATER)
+    assert (result.status, result.new, result.updated) == ("failed", 0, 0)
+    assert result.message == "database_error: UpsertError"
+    assert iocs(ti_conn) == before
+    assert [r["status"] for r in logs(ti_conn)] == ["ok", "failed"]
+
+
 # ═════════════════════════════ what is printed or stored never holds a row's text ═════════════════════════════
 
 
@@ -1154,8 +1428,43 @@ def test_the_summary_line_has_one_fixed_shape():
 
 def test_a_file_name_with_a_control_character_is_made_printable_in_the_line_and_the_log():
     assert importer.safe_name("ioc_2026-11-17.csv") == "ioc_2026-11-17.csv"
-    assert importer.safe_name("a\nb\x00c\x1b[31m.csv") == "a?b?c?[31m.csv"
+    assert importer.safe_name("a\x00c\x1b[31m.csv") == "a?c?[31m.csv"
     assert len(importer.safe_name("x" * 1000)) == 255
+
+
+def test_white_space_in_a_file_name_becomes_an_underscore_so_the_summary_line_stays_unambiguous():
+    assert importer.safe_name("my file\tname\n.csv") == "my_file_name_.csv"
+    assert importer.safe_name("a\u00a0b\u2028c") == "a_b_c"
+    result = importer.Result(
+        file=importer.safe_name("a b.csv"),
+        total=1,
+        new=1,
+        updated=0,
+        errors=0,
+        status="ok",
+        message=None,
+    )
+    assert (
+        len(importer.format_summary(result).split(" ")) == 8
+    )  # ti_import: + seven key=value words
+
+
+def test_a_result_refuses_a_status_that_is_not_one_of_the_three():
+    assert importer.STATUSES == ("ok", "partial", "failed")
+    for status in importer.STATUSES:
+        importer.Result(file="f", total=0, new=0, updated=0, errors=0, status=status, message=None)
+    with pytest.raises(ValueError):
+        importer.Result(file="f", total=0, new=0, updated=0, errors=0, status="done", message=None)
+
+
+def test_the_error_line_of_a_record_that_spans_lines_names_the_span():
+    assert (
+        importer.format_error_line(3, "row_malformed", span=4)
+        == "ti_import: lines 3-6: row_malformed"
+    )
+    assert (
+        importer.format_error_line(3, "row_malformed", span=1) == "ti_import: line 3: row_malformed"
+    )
 
 
 # ═════════════════════════════ the command: scripts/ti_import.py ══════════════════════════════════════════════
@@ -1344,20 +1653,52 @@ def test_main_with_a_missing_column_is_exit_1_and_a_failed_log_row(
     ]
 
 
-@needs_db
-def test_main_without_a_file_takes_the_newest_ioc_csv_of_the_directory(
-    ti_dsn, ti_conn, tmp_path, capsys
-):
+def _daily(tmp_path: Path) -> Path:
+    """A directory like the host's: three days, a stray csv, a temp file, a directory with a feed name."""
     daily = tmp_path / "daily"
     daily.mkdir()
     write_csv(daily / "ioc_2026-11-15.csv", [good(value="192.0.2.15:15")])
     write_csv(daily / "ioc_2026-11-17.csv", [good(value="192.0.2.17:17")])
     write_csv(daily / "ioc_2026-11-16.csv", [good(value="192.0.2.16:16")])
+    write_csv(daily / "ioc_test.csv", [good(value="192.0.2.98:98")])
     write_csv(daily / "notes.csv", [good(value="192.0.2.99:99")])
-    (daily / "ioc_2026-11-18.csv.tmp").write_text("not a feed file")
-    (daily / "ioc_2026-11-19.csv").mkdir()  # a directory with the right name is not a file
+    write_csv(
+        daily / "ioc_2026-11-18.csv", [good(value="192.0.2.18:18")]
+    )  # tomorrow's: not today's
+    (daily / "ioc_2026-11-17.csv.tmp").write_text("not a feed file")
+    (daily / "ioc_2026-11-19.csv").mkdir()  # a directory with a feed name is not a file
+    return daily
+
+
+def test_todays_file_is_the_one_named_for_the_hosts_date_and_no_other(tmp_path):
+    script = _load_script()
+    daily = _daily(tmp_path)
+    assert script.todays_file(daily, date(2026, 11, 17)) == daily / "ioc_2026-11-17.csv"
+    assert script.todays_file(daily, date(2026, 11, 16)) == daily / "ioc_2026-11-16.csv"
+    assert (
+        script.todays_file(daily, date(2026, 11, 20)) is None
+    )  # an older file is not picked in its place
+    assert script.todays_file(daily, date(2026, 11, 19)) is None  # a directory is not a file
+    assert script.todays_file(tmp_path / "gone", date(2026, 11, 17)) is None
+    assert script.DAILY_NAME.fullmatch("ioc_2026-11-17.csv")
+    for name in (
+        "ioc_test.csv",
+        "ioc_2026-11-17.csv.tmp",
+        "ioc_20261117.csv",
+        "xioc_2026-11-17.csv",
+        "notes.csv",
+    ):
+        assert not script.DAILY_NAME.fullmatch(name)
+
+
+@needs_db
+def test_main_without_a_file_imports_todays_file_of_the_directory(
+    ti_dsn, ti_conn, tmp_path, capsys
+):
+    daily = _daily(tmp_path)
     code = _load_script().main(
-        ["--dir", str(daily), "--env-file", str(env_file(tmp_path, str(ti_dsn)))]
+        ["--dir", str(daily), "--env-file", str(env_file(tmp_path, str(ti_dsn)))],
+        today=date(2026, 11, 17),
     )
     out = capsys.readouterr()
     assert code == 0 and "file=ioc_2026-11-17.csv" in out.out
@@ -1366,24 +1707,77 @@ def test_main_without_a_file_takes_the_newest_ioc_csv_of_the_directory(
 
 
 @needs_db
-def test_main_with_nothing_to_import_is_exit_1_and_a_failed_log_row(
+def test_main_without_a_file_and_without_a_today_uses_the_hosts_local_date(
     ti_dsn, ti_conn, tmp_path, capsys
 ):
-    empty = tmp_path / "empty"
-    empty.mkdir()
+    daily = tmp_path / "daily"
+    daily.mkdir()
+    local_today = date.today()  # noqa: DTZ011 - the host's LOCAL date is the point
+    write_csv(daily / f"ioc_{local_today.isoformat()}.csv", [good(value="192.0.2.17:17")])
+    write_csv(daily / "ioc_2020-01-01.csv", [good(value="192.0.2.20:20")])
     code = _load_script().main(
-        ["--dir", str(empty), "--env-file", str(env_file(tmp_path, str(ti_dsn)))]
+        ["--dir", str(daily), "--env-file", str(env_file(tmp_path, str(ti_dsn)))]
+    )
+    capsys.readouterr()
+    assert code == 0
+    ti_conn.rollback()
+    assert list(by_value(ti_conn)) == ["192.0.2.17:17"]
+
+
+@needs_db
+def test_main_when_todays_file_is_missing_is_no_file_exit_1_a_log_row_and_no_older_file_is_taken(
+    ti_dsn, ti_conn, tmp_path, capsys
+):
+    daily = _daily(tmp_path)
+    args = ["--dir", str(daily), "--env-file", str(env_file(tmp_path, str(ti_dsn)))]
+    code = _load_script().main(args, today=date(2026, 11, 20))
+    out = capsys.readouterr()
+    assert code == 1
+    assert out.out == (
+        "ti_import: status=failed file=ioc_2026-11-20.csv total=0 new=0 updated=0 errors=0 repeated=0"
+        " message=no_file\n"
+    )
+    gone = _load_script().main(
+        ["--dir", str(tmp_path / "gone"), "--env-file", str(env_file(tmp_path, str(ti_dsn)))],
+        today=date(2026, 11, 20),
+    )
+    capsys.readouterr()
+    assert gone == 1
+    ti_conn.rollback()
+    assert iocs(ti_conn) == []  # nothing of an older day was imported in its place
+    assert [(r["file"], r["status"], r["message"]) for r in logs(ti_conn)] == [
+        ("ioc_2026-11-20.csv", "failed", "no_file")
+    ] * 2
+    assert all(str(tmp_path) not in r["file"] for r in logs(ti_conn))
+
+
+@needs_db
+def test_an_explicit_file_is_always_imported_whatever_its_name_or_date(
+    ti_dsn, ti_conn, tmp_path, capsys
+):
+    script = _load_script()
+    env = env_file(tmp_path, str(ti_dsn))
+    for name, value in (
+        ("ioc_2026-11-10.csv", "192.0.2.10:10"),
+        ("rerun of monday.csv", "192.0.2.11:11"),
+    ):
+        path = write_csv(tmp_path / name, [good(value=value)])
+        assert script.main([str(path), "--env-file", str(env)], today=date(2030, 1, 1)) == 0
+    out = capsys.readouterr().out
+    assert "file=ioc_2026-11-10.csv" in out and "file=rerun_of_monday.csv" in out
+    ti_conn.rollback()
+    assert set(by_value(ti_conn)) == {"192.0.2.10:10", "192.0.2.11:11"}
+
+
+@needs_db
+def test_main_names_the_span_of_a_record_that_swallowed_lines(ti_dsn, ti_conn, tmp_path, capsys):
+    code = _load_script().main(
+        [str(_forging_file(tmp_path)), "--env-file", str(env_file(tmp_path, str(ti_dsn)))]
     )
     out = capsys.readouterr()
-    assert code == 1 and "status=failed" in out.out and "message=no_file" in out.out
-    gone = _load_script().main(
-        ["--dir", str(tmp_path / "gone"), "--env-file", str(env_file(tmp_path, str(ti_dsn)))]
-    )
-    assert gone == 1
-    capsys.readouterr()
-    ti_conn.rollback()
-    assert [(r["status"], r["message"]) for r in logs(ti_conn)] == [("failed", "no_file")] * 2
-    assert all(str(tmp_path) not in r["file"] for r in logs(ti_conn))
+    assert code == 0
+    assert out.err == "ti_import: lines 3-5: row_malformed\n"
+    assert "total=5 new=2 updated=0 errors=3 repeated=0" in out.out
 
 
 @needs_db
@@ -1437,6 +1831,43 @@ def test_the_command_runs_by_a_plain_path_from_any_directory_and_reads_the_file_
         assert password not in done.stdout + done.stderr
     ti_conn.rollback()
     assert len(iocs(ti_conn)) == 12
+
+
+@needs_db
+def test_the_command_works_with_an_empty_environment(ti_dsn, ti_conn, tmp_path):
+    """So `env -i` before the interpreter (the runbook's optional hardening) costs it nothing."""
+    done = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            str(SCRIPT),
+            str(SAMPLE),
+            "--env-file",
+            str(env_file(tmp_path, str(ti_dsn))),
+        ],
+        cwd=tmp_path,
+        env={},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.startswith("ti_import: status=ok file=ioc_sample.csv total=12 new=12")
+    ti_conn.rollback()
+    assert len(iocs(ti_conn)) == 12
+
+
+def test_the_runbooks_cron_line_runs_the_importer_as_the_checkouts_owner_without_bytecode():
+    text = (conftest.REPO_ROOT / "docs" / "runbook.md").read_text(encoding="utf-8")
+    section = text.split("## Threat Intel importer (DEC-224)", 1)[1].split("\n## ", 1)[0]
+    cron = [ln.strip() for ln in section.splitlines() if ln.strip().startswith("0 7 * * *")]
+    assert len(cron) == 1
+    after_fetch = cron[0].split("abusech_daily100.py", 1)[1]
+    assert " && runuser -u user1 -- " in after_fetch
+    runuser = after_fetch.split(" && runuser -u user1 -- ", 1)[1]
+    assert runuser.split(" ")[0].endswith("/.venv/bin/python") and runuser.split(" ")[1] == "-B"
+    assert "scripts/ti_import.py --env-file " in runuser and runuser.endswith("2>&1")
+    assert "as root" not in section.lower()
 
 
 def test_the_command_as_a_subprocess_with_the_database_down_prints_the_type_only(tmp_path):
