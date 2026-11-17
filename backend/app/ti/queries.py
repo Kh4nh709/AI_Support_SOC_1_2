@@ -15,7 +15,7 @@ page never overlaps or skips). A row is EXPIRED when `expires_at <= now`; the li
 out unless the filter says `include_expired`; the lookup includes them (each row carries `expired`). `min_confidence` is
 `confidence >= n`: a row whose confidence is NULL (every MalwareBazaar row) is left out, even for 0. `type` is read the way the
 importer stores it (trimmed, lower-case) and compared for equality; `malware` is an equality on the trimmed name (the index
-`ix_ti_ioc_malware` serves it); `q` is a case-insensitive substring of `value`, `malware`, `threat` or one tag.
+`ix_ti_ioc_malware` serves it); `q` (at most `Q_MAX` characters) is a case-insensitive substring of `value`, `malware`, `threat` or one tag.
 
 **Time.** Everything is served as ISO 8601 in UTC (`2026-11-17T06:12:44+00:00`). The page's zone is GMT+7
 (`Asia/Ho_Chi_Minh`): a day, for the stats and for a `from` / `to` that is a date, is a day of GMT+7 (`parse_bound`).
@@ -29,10 +29,17 @@ IOC has it, oldest first, today last. The other figures are not windowed.
 lower-case, so it is compared with the lower-cased input; every other type keeps its case. An IPv4 input also finds the `ip:port`
 rows of that address (`value LIKE '1.2.3.4:%'`, the address validated by `ipaddress`).
 
-**Exports.** `csv_cell` puts a `'` before a cell a spreadsheet would run as a formula; `export_csv` is RFC 4180 text with every
-cell guarded; `blocklist_text` is one domain or address per line, built only from values that are made of the characters of a
-hostname or an address (so a line break in a stored value can never make a second line). `export_iocs` reads at most
-`EXPORT_MAX_ROWS` rows and RAISES `TooManyRows` beyond it: an export is never silently cut.
+**Exports.** `csv_cell` puts a `'` before a cell a spreadsheet would run as a formula (one that begins with a tab or a carriage
+return, or with `=`, `+`, `-` or `@` after any leading white space, the original cell kept behind the `'`); `export_csv` is
+RFC 4180 text behind a UTF-8 byte order mark with every cell guarded; `blocklist_text` is one domain or address per line, built
+only from values made of the characters of a hostname or an address (so a line break in a stored value can never make a second
+line) and NEVER from an address or a name a firewall or a DNS sinkhole must not block: the closed sets `NEVER_BLOCK_V4`,
+`GLOBAL_UNICAST_V6` and `NEVER_BLOCK_NAME_ENDINGS` (Ruling TI9). `export_iocs` reads at most `EXPORT_MAX_ROWS` rows and RAISES
+`TooManyRows` beyond it: an export is never silently cut.
+
+**Bounds and timeouts.** `q` is at most `Q_MAX` (128) characters: a four-column ILIKE run twice (the page and its total). Every
+read of the API runs under `STATEMENT_TIMEOUT` (5 s, `set_statement_timeout`, transaction-local); the router answers a cancelled
+statement with a closed `503`.
 """
 
 from __future__ import annotations
@@ -72,6 +79,12 @@ DAYS_MAX = 90
 VALUE_MAX = VALUE_MAX_BYTES
 MALWARE_MAX = MALWARE_MAX_BYTES
 TYPE_MAX = TYPE_MAX_BYTES
+#: `q`, the substring search of the list, is at most this many characters: it is an ILIKE over four columns, run twice (the page
+#: and its total), and a whole URL belongs to the lookup, which keeps `VALUE_MAX`. A longer `q` is a `422`.
+Q_MAX = 128
+#: Every read of the API runs under this `statement_timeout` (transaction-local, `set_statement_timeout`), read at call time; a
+#: statement that outlives it is cancelled and the route answers `503 {"detail": {"reason": "timeout"}}`.
+STATEMENT_TIMEOUT = "5s"
 #: A lookup serves at most this many rows (an IPv4 address with a port per row); `total` says how many there are.
 LOOKUP_MAX_ROWS = 200
 #: An export holds at most this many rows, read at call time. 30 days of three sources of 100 rows a day leave 9 000 rows
@@ -119,6 +132,14 @@ class TooManyRows(Exception):
     def __init__(self, limit: int):
         self.limit = limit
         super().__init__(f"more than {limit} rows")
+
+
+def set_statement_timeout(conn: psycopg.Connection) -> None:
+    """`statement_timeout = STATEMENT_TIMEOUT` for the rest of the connection's current transaction (`set_config(..., true)` is
+    `SET LOCAL`: it dies with the transaction, so a pooled or reused connection is never left with it). `infra/db.transaction()`
+    is not used: it issues its own BEGIN and COMMIT, which inside a request would end the transaction `deps.Conn` owns.
+    """
+    conn.execute("SELECT set_config('statement_timeout', %s, true)", (STATEMENT_TIMEOUT,))
 
 
 # ═════════════════════════════ what a request asks ════════════════════════════════════════════════════════════
@@ -466,14 +487,22 @@ def status(conn: psycopg.Connection, *, now: datetime) -> dict[str, Any]:
 
 # ═════════════════════════════ the exports ════════════════════════════════════════════════════════════════════
 
-#: A cell that begins with one of these is run as a formula by a spreadsheet (OWASP "CSV injection").
-_FORMULA_STARTS = ("=", "+", "-", "@", "\t", "\r")
+#: A cell that begins with one of these, after any leading white space, is run as a formula by a spreadsheet (OWASP "CSV
+#: injection"). A tab or a carriage return is itself white space, so it is judged first, where it stands.
+_FORMULA_STARTS = ("=", "+", "-", "@")
+_CONTROL_STARTS = ("\t", "\r")
+#: The UTF-8 byte order mark an export starts with, so that Excel reads the file as UTF-8 and not as the system code page.
+CSV_BOM = "﻿"
 
 
 def csv_cell(value: str) -> str:
-    """`value` with a `'` in front when it begins with `=`, `+`, `-`, `@`, a tab or a carriage return: the spreadsheet then reads
-    the cell as text. Any other text is returned as it is."""
-    return "'" + value if value.startswith(_FORMULA_STARTS) else value
+    """`value` with a `'` in front when a spreadsheet would run it as a formula: it begins with a tab or a carriage return, or,
+    after any leading white space (a space, a no-break space, any Unicode space, a line break), with `=`, `+`, `-` or `@`. The
+    `'` goes before the ORIGINAL cell, the white space kept behind it. Any other text is returned as it is.
+    """
+    if value.startswith(_CONTROL_STARTS) or value.lstrip().startswith(_FORMULA_STARTS):
+        return "'" + value
+    return value
 
 
 def _text(value: Any) -> str:
@@ -487,17 +516,62 @@ def _text(value: Any) -> str:
 
 
 def export_csv(rows: Iterable[Mapping[str, Any]]) -> str:
-    """The rows (as `serve_ioc` serves them) as RFC 4180 CSV: the header of `IOC_KEYS`, then a record per row with every cell
-    through `csv_cell`; a cell that holds a comma, a quote or a line break is quoted by the csv module, so one row is one
-    record whatever its cells hold. Tags are joined by commas into one cell; a null is an empty cell.
-    """
+    """The rows (as `serve_ioc` serves them) as RFC 4180 CSV behind a UTF-8 byte order mark (`CSV_BOM`; a reader that drops it
+    sees `id` as the first header cell): the header of `IOC_KEYS`, then a record per row with every cell through `csv_cell`; a
+    cell that holds a comma, a quote or a line break is quoted by the csv module, so one row is one record whatever its cells
+    hold. Tags are joined by commas into one cell; a null is an empty cell."""
     out = io.StringIO()
+    out.write(CSV_BOM)
     writer = csv.writer(out, lineterminator="\r\n")
     writer.writerow(IOC_KEYS)
     for row in rows:
         writer.writerow([csv_cell(_text(row[key])) for key in IOC_KEYS])
     return out.getvalue()
 
+
+# ── the blocklist ─────────────────────────────────────────────────────────────────────────────────────────────────
+#
+# A blocklist goes to a firewall or a DNS sinkhole, so it must never carry what they must not block: the host's own address, a
+# private network, a name a resolver answers by itself. The rule is closed and written out here (Ruling TI9).
+
+#: The IPv4 networks a blocklist never carries, after an IPv4-mapped IPv6 address has been unwrapped. The three documentation
+#: ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24) are NOT in it: they are unroutable and the test data lives there.
+NEVER_BLOCK_V4 = (
+    "0.0.0.0/8",  # "this network": the unspecified address
+    "10.0.0.0/8",  # RFC 1918
+    "100.64.0.0/10",  # carrier-grade NAT (RFC 6598)
+    "127.0.0.0/8",  # loopback
+    "169.254.0.0/16",  # link-local
+    "172.16.0.0/12",  # RFC 1918
+    "192.168.0.0/16",  # RFC 1918
+    "224.0.0.0/4",  # multicast
+    "240.0.0.0/4",  # reserved, and 255.255.255.255 the broadcast
+)
+#: An IPv6 address is carried only inside the one block IANA allocates for global unicast. Everything outside it is left out:
+#: `::` and `::1`, the IPv4-compatible `::a.b.c.d`, fc00::/7 (unique local), fe80::/10 (link-local), fec0::/10 (site-local),
+#: ff00::/8 (multicast) and the rest of the reserved space. The documentation range 2001:db8::/32 is inside it and stays.
+GLOBAL_UNICAST_V6 = "2000::/3"
+#: A name whose LAST label is one of these is left out: a resolver answers for it by itself, or it is no name on the internet.
+#: `example.com`, `example.net` and a name that merely CONTAINS one of these words stay.
+NEVER_BLOCK_NAME_ENDINGS = frozenset(
+    {
+        "local",
+        "localhost",
+        "localdomain",
+        "lan",
+        "home",
+        "internal",
+        "intranet",
+        "corp",
+        "arpa",
+        "test",
+        "invalid",
+        "example",
+        "onion",
+    }
+)
+_NEVER_V4 = tuple(ipaddress.ip_network(network) for network in NEVER_BLOCK_V4)
+_GLOBAL_V6 = ipaddress.ip_network(GLOBAL_UNICAST_V6)
 
 # A hostname: labels of ASCII letters, digits, `-` and `_` (1..63, not beginning or ending with `-`), joined by single dots, at
 # most 253 characters. `fullmatch` and no `$`: a trailing line break is not a match.
@@ -507,49 +581,80 @@ _ADDRESS_CHARS = re.compile(r"[0-9A-Fa-f:.]+")
 _BRACKETED = re.compile(r"\[([0-9A-Fa-f:.]+)\]:([0-9]{1,5})")
 _PORT = re.compile(r"[0-9]{1,5}")
 
+_Address = ipaddress.IPv4Address | ipaddress.IPv6Address
+
 
 def _port_ok(text: str) -> bool:
     return _PORT.fullmatch(text) is not None and 1 <= int(text) <= 65535
 
 
-def _address(text: str) -> str | None:
-    """`text` as the canonical form of the IPv4 or IPv6 address it is, or None (a scope id, a space, any other character)."""
+def _address(text: str) -> _Address | None:
+    """`text` as the IPv4 or IPv6 address it is, or None (a scope id, a space, any other character, a leading zero)."""
     if not _ADDRESS_CHARS.fullmatch(text):
         return None
     try:
-        return str(ipaddress.ip_address(text))
+        return ipaddress.ip_address(text)
     except ValueError:
         return None
 
 
-def _ip_without_port(value: str) -> str | None:
-    """The address of an `ip:port` value: `1.2.3.4:443`, `[2001:db8::1]:443`, or an address with no port; None for anything
-    else (a port that is not 1..65535, a name where the address should be, a bracket round an IPv4 address).
-    """
-    bare = _address(value)
-    if bare is not None:
-        return bare
+def _ip_without_port(value: str) -> _Address | None:
+    """The address of an `ip:port` value: `1.2.3.4:443`, an IPv4 address with no port, or `[2001:db8::1]:443`. An IPv6 address
+    is accepted ONLY in brackets: `2001:db8::1:443` is a valid IPv6 address on its own, and reading it as a host with a port
+    (or as that address) would put another host on the list. None for anything else (a port that is not 1..65535, a name where
+    the address belongs, a bracket round an IPv4 address)."""
     bracketed = _BRACKETED.fullmatch(value)
     if bracketed is not None:
         address = _address(bracketed[1])
         return (
-            address if address is not None and ":" in address and _port_ok(bracketed[2]) else None
+            address
+            if isinstance(address, ipaddress.IPv6Address) and _port_ok(bracketed[2])
+            else None
         )
+    bare = _address(value)
+    if isinstance(bare, ipaddress.IPv4Address):
+        return bare
     host, colon, port = value.rpartition(":")
     if colon and ":" not in host and _port_ok(port):
         address = _address(host)
-        return address if address is not None and "." in address else None
+        return address if isinstance(address, ipaddress.IPv4Address) else None
     return None
+
+
+def _blockable_address(address: _Address) -> str | None:
+    """The line of `address`, or None when a blocklist must not carry it. An IPv4-mapped IPv6 address is unwrapped first and
+    judged, and written, as the IPv4 address it wraps."""
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    if isinstance(address, ipaddress.IPv4Address):
+        return None if any(address in network for network in _NEVER_V4) else str(address)
+    return str(address) if address in _GLOBAL_V6 else None
+
+
+def _blockable_name(value: str) -> str | None:
+    """The line of a hostname, lower-cased, or None: not a hostname, fewer than two labels, a last label that is all digits (an
+    IP literal written as a name: it is left out, it does not become an address line) or one of `NEVER_BLOCK_NAME_ENDINGS`.
+    """
+    if not _HOSTNAME.fullmatch(value):
+        return None
+    name = value.lower()
+    labels = name.split(".")
+    if len(labels) < 2 or labels[-1].isdigit() or labels[-1] in NEVER_BLOCK_NAME_ENDINGS:
+        return None
+    return name
 
 
 def blocklist_entry(kind: str, value: str) -> str | None:
     """The line one IOC gives a blocklist, or None when it gives none. Only a `domain` (a hostname, lower-cased) and an
-    `ip:port` (the address, its port dropped; IPv6 in its canonical form) give a line; a URL, a hash, an unknown type, and a value
-    with anything but the characters of a hostname or an address in it give none."""
+    `ip:port` (the address, its port dropped; IPv6 only in brackets, written in its canonical form) give a line; a URL, a hash, an
+    unknown type, a value with anything but the characters of a hostname or an address in it, and everything the module's
+    never-block sets name (`NEVER_BLOCK_V4`, `GLOBAL_UNICAST_V6`, `NEVER_BLOCK_NAME_ENDINGS`) give none.
+    """
     if kind == "domain":
-        return value.lower() if _HOSTNAME.fullmatch(value) else None
+        return _blockable_name(value)
     if kind == "ip:port":
-        return _ip_without_port(value)
+        address = _ip_without_port(value)
+        return None if address is None else _blockable_address(address)
     return None
 
 
