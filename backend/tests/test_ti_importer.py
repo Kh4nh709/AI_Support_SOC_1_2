@@ -909,6 +909,46 @@ def test_a_nul_or_control_character_never_reaches_the_database_the_row_is_skippe
 
 
 @needs_db
+def test_a_formula_markup_or_sql_in_a_field_is_stored_as_the_text_it_is(ti_conn, tmp_path):
+    """Review focus: the importer neither interprets nor rewrites what a field says. A spreadsheet formula, markup,
+    a `javascript:` URL and SQL are data (every statement is parameterised); guarding them is for the export and the
+    page, which read these bytes back as they were."""
+    formula = "=cmd|' /C calc'!A0"
+    markup = "<img src=x onerror=alert(1)>"
+    script_url = "javascript:alert(document.cookie)"
+    sql_text = "x'; DROP TABLE ti_ioc; --"
+    rows = [
+        good(
+            type="url",
+            value=formula,
+            malware="@SUM(1+1)",
+            threat="+1+1",
+            tags="-2+3,=1",
+            reference=markup,
+        ),
+        good(type="url", value=markup, malware=sql_text, reference=script_url),
+        good(type="url", value=script_url, threat=sql_text),
+        good(type="url", value=sql_text, malware="%", threat="_"),
+    ]
+    result = import_file(ti_conn, write_csv(tmp_path / "f.csv", rows), now=NOW)
+    assert (result.status, result.new) == ("ok", 4)
+    stored = by_value(ti_conn)
+    assert set(stored) == {formula, markup, script_url, sql_text}
+    row = stored[formula]
+    assert (row["malware"], row["threat"], row["tags"], row["reference"]) == (
+        "@SUM(1+1)",
+        "+1+1",
+        ["-2+3", "=1"],
+        markup,
+    )
+    assert (stored[markup]["malware"], stored[markup]["reference"]) == (sql_text, script_url)
+    assert (stored[sql_text]["malware"], stored[sql_text]["threat"]) == ("%", "_")
+    assert ti_conn.execute("SELECT count(*) FROM ti_ioc").fetchone() == (
+        4,
+    )  # the table is still there
+
+
+@needs_db
 def test_a_row_at_every_bound_loads_so_the_importers_bounds_sit_inside_the_databases(
     ti_conn, tmp_path
 ):
