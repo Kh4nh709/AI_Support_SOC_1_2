@@ -36,10 +36,8 @@ export function reportUnauthorized(sentToken: string): void {
   if (getToken() === sentToken) unauthorized();
 }
 
-export async function api<T>(
-  path: string,
-  init: RequestInit & { json?: unknown } = {},
-): Promise<T> {
+/** The request both wrappers make: the base, the Bearer header, the JSON body, and the 401 rule (a 401 is thrown here). */
+async function send(path: string, init: RequestInit & { json?: unknown }): Promise<Response> {
   const { json, ...rest } = init;
   const headers = new Headers(init.headers);
   const token = getToken();
@@ -56,10 +54,33 @@ export async function api<T>(
     if (token && getToken() === token) unauthorized();
     throw new ApiError(401, null);
   }
+  return res;
+}
+
+export async function api<T>(
+  path: string,
+  init: RequestInit & { json?: unknown } = {},
+): Promise<T> {
+  const res = await send(path, init);
   const data: unknown = res.status === 204 ? null : await res.json().catch(() => null);
   if (!res.ok) {
     const detail = (data as { detail?: unknown } | null)?.detail ?? data;
     throw new ApiError(res.status, detail, data);
   }
   return data as T;
+}
+
+/**
+ * A file from the API as a Blob (the Threat Intel export): the same Bearer header and 401 rule as `api`, which a plain link to the
+ * route would not carry. The bytes are kept as they came (`blob()`, not `text()`, so a byte order mark stays); an error status is
+ * thrown as the ApiError of `api`, with the server's `detail` read from the JSON body when there is one.
+ */
+export async function apiBlob(path: string, init: RequestInit = {}): Promise<Blob> {
+  const res = await send(path, init);
+  if (!res.ok) {
+    const data: unknown = await res.json().catch(() => null);
+    const detail = (data as { detail?: unknown } | null)?.detail ?? data;
+    throw new ApiError(res.status, detail, data);
+  }
+  return res.blob();
 }
