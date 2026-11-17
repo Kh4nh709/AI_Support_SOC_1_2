@@ -74,13 +74,16 @@ CSV: the path is CSV → importer → database → API → page.
   `value text`; `malware text`; `threat text`; `confidence smallint` (0–100 or NULL: a CHECK); `tags text[]`;
   `reference text`; `first_seen timestamptz`; `last_seen timestamptz`; `imported_at timestamptz`;
   `expires_at timestamptz`; `hit_count integer NOT NULL DEFAULT 0`; `last_hit timestamptz`.
-- Unique `(source, type, value)`.
-- Indexes on `value`, `first_seen DESC`, `source`, `malware`.
+- Unique `(source, type, value)`. `first_seen` is NOT NULL (a row without a usable date is skipped by the importer).
+- Indexes on `value`, `(first_seen DESC, id DESC)` (a stable order for the list), `source`, `malware`.
+- Byte bounds, because `value`, `type` and `malware` sit in btree indexes whose entries hold at most 2 704 bytes:
+  `value` 1–2 048 bytes, `type` 1–64 bytes, `malware` at most 256 bytes (each a CHECK).
 
 `ti_import_log`
 - `id bigint` identity; `file text` (the file's name, not its directory); `started_at`, `finished_at timestamptz`;
   `rows_total`, `rows_new`, `rows_updated`, `rows_error integer`; `status text` (`ok`, `partial`, `failed`: a CHECK);
-  `message text` (a short closed-vocabulary reason, never a row's content).
+  `message text` (a short closed-vocabulary reason, never a row's content); a CHECK that a run finishes at or after
+  its start.
 
 Grants: `app_rw` gets `SELECT, INSERT, UPDATE` on both and no `DELETE`, like every table. Nothing is deleted in
 this phase: an expired row stays and is hidden by the API unless asked for.
@@ -93,8 +96,10 @@ this phase: an expired row stays and is hidden by the API unless asked for.
 - Header: the nine columns must all be present (order free, extra columns ignored). A missing column stops the run:
   nothing is loaded, the log row says `failed`, exit code 1.
 - Each row: `source` one of the three; `type` lower-cased, a short token; `value` trimmed, not empty, at most
-  2 048 characters, no control character; `domain` and every `*_hash` type lower-cased; `confidence` empty or an
-  integer 0–100; `first_seen` parsed as UTC from `YYYY-MM-DD HH:MM:SS[ UTC]` or ISO-8601; `tags` split on commas,
+  2 048 **bytes** of UTF-8, no control character; `type` at most 64 bytes; `malware` at most 256 bytes; `threat` at
+  most 256 bytes, `reference` at most 2 048 bytes, at most 32 tags of at most 64 bytes each (a longer field makes
+  the row a bad row, never a database error); `domain` and every `*_hash` type lower-cased; `confidence` empty or an
+  integer 0–100; `first_seen` required, parsed as UTC from `YYYY-MM-DD HH:MM:SS[ UTC]` or ISO-8601; `tags` split on commas,
   trimmed, empties dropped. A bad row is skipped and counted, and one line names its line number and a closed
   reason (never the row's text).
 - Upsert on `(source, type, value)` with parameters: a new IOC is inserted (`imported_at` = the run's instant); an
