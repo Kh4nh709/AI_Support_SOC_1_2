@@ -104,19 +104,6 @@ IOC_KEYS = (
     "hit_count",
     "last_hit",
 )
-LOG_KEYS = (
-    "id",
-    "file",
-    "started_at",
-    "finished_at",
-    "rows_total",
-    "rows_new",
-    "rows_updated",
-    "rows_error",
-    "status",
-    "message",
-)
-
 _IOC_COLUMNS = (
     "id, source, type, value, malware, threat, confidence, tags, reference, first_seen, last_seen, "
     "imported_at, expires_at, hit_count, last_hit"
@@ -397,8 +384,10 @@ def stats(conn: psycopg.Connection, *, days: int, now: datetime) -> dict[str, An
 
 # ═════════════════════════════ the lookup ═════════════════════════════════════════════════════════════════════
 
-# A `domain` and every `*_hash` row is stored lower-case (`importer.normalise_value`); the test below is that rule's
-# own, and a database test pins the two together over several types.
+# A `domain` and every `*_hash` row is stored lower-case (`importer.normalise_value`); this is that rule's own test on a row's
+# type, and a database test pins the two together over several types. A row matches when its value is exactly what the importer
+# would have stored for the input under the row's type, so a lower-cased type is compared with the lower-cased input and any
+# other with the input as it is.
 _LOWERED_TYPE = "(type = 'domain' OR right(type, 5) = '_hash')"
 
 
@@ -418,7 +407,7 @@ def lookup(
     if needle == lowered:
         exact = "value = %(raw)s"
     else:
-        exact = f"(value = %(raw)s OR (value = %(lowered)s AND {_LOWERED_TYPE}))"
+        exact = f"(({_LOWERED_TYPE} AND value = %(lowered)s) OR (NOT {_LOWERED_TYPE} AND value = %(raw)s))"
     branches = [f"SELECT {_IOC_COLUMNS} FROM ti_ioc WHERE {exact}"]
     if _is_ipv4(needle):
         params["prefix"] = _escape_like(needle + ":") + "%"

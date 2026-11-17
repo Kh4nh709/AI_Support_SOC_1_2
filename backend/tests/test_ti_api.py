@@ -1152,21 +1152,31 @@ def test_lookup_reads_the_input_the_way_the_importer_stored_it(api):
 
 
 def test_the_rule_of_the_lookup_is_the_importers_for_every_type(api):
-    """The SQL tests a row's type for "stored lower-case" itself; this ties it to `normalise_value` over a spread of types."""
-    text = "Ab.Example"
+    """The SQL tests a row's type for "stored lower-case" itself; this ties it to `normalise_value` over a spread of types, with
+    a row of each spelling under each type (a row the importer would never write is a row the database can still hold).
+    """
     types = [
         "domain", "sha256_hash", "sha1_hash", "md5_hash", "imphash_hash", "_hash", "url", "ip:port", "ip",
         "hash", "x_hash_y", "domains", "email",
     ]  # fmt: skip
+    stored: dict[int, tuple[str, str]] = {}
     for kind in types:
-        api.put(type=kind, value=normalise_value(kind, text), **BARE)
+        for spelling in ("Ab.Example", "ab.example"):
+            stored[api.put(type=kind, value=spelling, **BARE)] = (kind, spelling)
     for probe in ("Ab.Example", "ab.example", "AB.EXAMPLE", "  Ab.Example  ", "aB.example"):
         expected = {
-            kind for kind in types if normalise_value(kind, probe) == normalise_value(kind, text)
+            row_id
+            for row_id, (kind, value) in stored.items()
+            if normalise_value(kind, probe) == value
         }
         body = api.get("tier2", LOOKUP, value=probe).json()
-        assert {row["type"] for row in body["rows"]} == expected, probe
+        assert {row["id"] for row in body["rows"]} == expected, probe
         assert body["total"] == len(expected)
+    # the rule is not vacuous: the two spellings are told apart by the type
+    only_lower = {
+        row["type"] for row in api.get("tier2", LOOKUP, value="AB.EXAMPLE").json()["rows"]
+    }
+    assert only_lower == {"domain", "sha256_hash", "sha1_hash", "md5_hash", "imphash_hash", "_hash"}
 
 
 def test_the_value_echoed_is_the_input_trimmed_in_the_case_it_came(api):
