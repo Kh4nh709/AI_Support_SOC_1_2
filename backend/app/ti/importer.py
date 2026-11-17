@@ -106,7 +106,7 @@ REASONS = (
 )
 
 #: C0, DEL, C1 and the two Unicode line separators: what a person reads as a line break or an escape.
-_CONTROL = re.compile("[\x00-\x1f\x7f-\x9f  ]")
+_CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 _SURROGATE = re.compile("[\ud800-\udfff]")
 _TYPE_TOKEN = re.compile(r"[a-z0-9_:.\-]+")
 _INTEGER = re.compile(r"-?[0-9]+")

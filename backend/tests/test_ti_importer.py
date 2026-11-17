@@ -290,8 +290,8 @@ BAD_ROWS = [
     ({"value": "1.2.3.4\x1b[31m:80"}, "value_control_char"),
     ({"value": "1.2.3.4\x7f:80"}, "value_control_char"),
     ({"value": "1.2.3.4\x85:80"}, "value_control_char"),
-    ({"value": "1.2.3.4 :80"}, "value_control_char"),
-    ({"value": "1.2.3.4 :80"}, "value_control_char"),
+    ({"value": "1.2.3.4\u2028:80"}, "value_control_char"),
+    ({"value": "1.2.3.4\u2029:80"}, "value_control_char"),
     # threat, malware
     ({"threat": "t" * 257}, "threat_too_long"),
     ({"threat": THREE_BYTE * 86}, "threat_too_long"),  # 86 characters, 258 bytes
