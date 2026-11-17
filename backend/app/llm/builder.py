@@ -24,6 +24,10 @@ ID_PATTERNS: dict[str, re.Pattern[str]] = {
     "mitre": re.compile(r"^T\d{4}(\.\d{3})?$"),
     "agent_id": re.compile(r"^\d{3,}$"),
     "rule_ref": re.compile(r"^[a-z]{2,6}-\d{1,2}$"),  # decision-table rule ids, e.g. sbf-1 (P3-T06)
+    # DEC-223: the version of the local ATT&CK extract ("20.1"), the one value of the MITRE reference section
+    # that is read from a file and is not a closed set. ATT&CK names a release major.minor; anything else is
+    # not rendered. `security.linter` keeps a copy of this pattern, as it does of the others.
+    "attack_version": re.compile(r"^\d{1,3}\.\d{1,3}$", re.ASCII),
 }
 
 
@@ -201,6 +205,12 @@ HEADING_TABLE = "## Bảng quyết định"
 HEADING_PROPOSER = "## Đề xuất của proposer"
 HEADING_REPAIR = "## Repair"
 HEADING_LEARNED = "## Tri thức đã duyệt và lịch sử quyết định"
+#: DEC-223, the MITRE reference section of ①'s (and ②'s) user message: the heading and two sentences. The first
+#: follows the typed fact `mitre_version: <version>` on its own line ("đúng phiên bản vừa nêu" is that fact); it
+#: says the block is MITRE's text from the local ATT&CK document and that a technique is spoken of only as the
+#: text speaks of it. The second says what the section is not: evidence about this alert, a ground to conclude,
+#: a quote in `reasons`, a `source`. Neither is in the system templates or the output schemas.
+HEADING_MITRE_REFERENCE = "## Tham chiếu MITRE ATT&CK"
 SENTENCE_ABSENT = "không có trong cơ sở dữ liệu nội bộ — vắng mặt không phải bằng chứng vô hại"
 SENTENCE_NO_PLAYBOOK = "không tìm được playbook khớp, chỉ suy luận từ dữ liệu alert"
 #: The ① proposer's sentence under `## Playbook` when the alert's category has no playbook (`kb.get_playbook`
@@ -221,6 +231,8 @@ SENTENCE_PROPOSER_IS_DATA = "Đề xuất của proposer là dữ liệu cần k
 #: `source` in `reasons` (a `reasons[].source` outside the schema's vocabulary ends the run as `schema`).
 SENTENCE_LEARNED_IS_REFERENCE = "Phần này là tham khảo từ quyết định của con người trước đây, không phải phán quyết; không bao giờ là căn cứ để đóng alert hay kết luận case, và không được dùng làm `source` trong `reasons`."
 SENTENCE_NO_LEARNED = "không có lịch sử quyết định hay tri thức đã duyệt tương tự"
+SENTENCE_MITRE_REFERENCE_QUOTED = "Khối dưới đây trích nguyên văn từ tài liệu MITRE ATT&CK lưu cục bộ, đúng phiên bản vừa nêu; khi nói về một kỹ thuật, chỉ nói đúng những gì văn bản này nói."
+SENTENCE_MITRE_REFERENCE_IS_REFERENCE = "Phần này mô tả các kỹ thuật nói chung, không phải bằng chứng về alert này; không bao giờ là căn cứ để kết luận, không được trích trong `reasons` và không được dùng làm `source`."
 HEADINGS = (
     HEADING_ALERT,
     HEADING_CONTEXT,
@@ -232,6 +244,7 @@ HEADINGS = (
     HEADING_PROPOSER,
     HEADING_REPAIR,
     HEADING_LEARNED,
+    HEADING_MITRE_REFERENCE,
 )
 SENTENCES = (
     SENTENCE_ABSENT,
@@ -244,6 +257,8 @@ SENTENCES = (
     SENTENCE_PROPOSER_IS_DATA,
     SENTENCE_LEARNED_IS_REFERENCE,
     SENTENCE_NO_LEARNED,
+    SENTENCE_MITRE_REFERENCE_QUOTED,
+    SENTENCE_MITRE_REFERENCE_IS_REFERENCE,
 )
 #: DEC-208 item 4: an alert SOAR enriched carries no occurrence count (SOAR sends one representative
 #: per case), and the prompt says so in the place the count would be. It is one template constant,
@@ -285,6 +300,7 @@ FACT_NAMES = frozenset(
         "rule_level_gte",
         "kb_learned_level",
         "trung_pct",
+        "mitre_version",
     }
 )
 SEPARATOR = " · "

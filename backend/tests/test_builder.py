@@ -207,10 +207,11 @@ def test_risk_band_thresholds():
 
 
 def test_template_constants_counts():
-    assert len(B.HEADINGS) == 10  # the nine of P3, plus HEADING_LEARNED (DEC-210)
+    # the nine of P3, plus HEADING_LEARNED (DEC-210), plus HEADING_MITRE_REFERENCE (DEC-223)
+    assert len(B.HEADINGS) == 11
     # the seven of P3, plus the two learned-knowledge sentences, plus T1's proposer sentence for a
-    # category with no playbook (trial, 11/11)
-    assert len(B.SENTENCES) == 10
+    # category with no playbook (trial, 11/11), plus the two MITRE reference sentences (DEC-223)
+    assert len(B.SENTENCES) == 12
     assert B.SENTENCE_ABSENT in B.TEMPLATE_CONSTANTS
     assert B.SENTENCE_NO_PLAYBOOK in B.TEMPLATE_CONSTANTS
     assert B.SENTENCE_NO_PLAYBOOK_FP in B.TEMPLATE_CONSTANTS

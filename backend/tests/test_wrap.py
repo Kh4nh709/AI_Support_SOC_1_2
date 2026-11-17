@@ -16,9 +16,10 @@ import pytest
 from app.security import wrap as W
 
 
-def test_block_sources_match_ten_names():
+def test_block_sources_match_eleven_names():
     """The six of §7.1 (the five `reasons[].source` values and the verifier's `proposer`), the three
-    DEC-210 added for the learned-knowledge section, and S2's `siem_context`."""
+    DEC-210 added for the learned-knowledge section, S2's `siem_context`, and DEC-223's `mitre_reference`
+    (a block, not a `reasons[].source`)."""
     assert W.BLOCK_SOURCES == frozenset(
         {
             "wazuh_raw_log",
@@ -31,9 +32,10 @@ def test_block_sources_match_ten_names():
             "kb_learned",
             "decision_history",
             "analyst_note",
+            "mitre_reference",
         }
     )
-    assert len(W.BLOCK_SOURCES) == 10
+    assert len(W.BLOCK_SOURCES) == 11
 
 
 def test_nonce_is_16_hex_and_fresh_per_call():

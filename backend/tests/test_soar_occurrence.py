@@ -240,7 +240,7 @@ def test_the_phrase_is_a_template_constant_and_nothing_wider_is() -> None:
         pb.line("occurrence_count: vài chục")  # a look-alike is not
     with pytest.raises(ValueError):
         pb.line("không rõ")
-    assert len(B.HEADINGS) == 10 and len(B.SENTENCES) == 10  # the two sets test_builder pins
+    assert len(B.HEADINGS) == 11 and len(B.SENTENCES) == 12  # the two sets test_builder pins
 
 
 def test_a_look_alike_of_the_phrase_is_free_text_to_the_linter() -> None:

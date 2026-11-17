@@ -236,6 +236,11 @@ class Config:
     # (`llm/siem_context.py`); false leaves it out (the no-SIEM-context experiment). Only a prompt is
     # affected: the facts, the gate and the verifier read none of it.
     PROMPT_INCLUDE_SIEM_CONTEXT: bool = True
+    # DEC-223: true = the ① prompt carries MITRE's own text, from the local ATT&CK extract (`kb/mitre/`), for the
+    # alert's technique ids, as one more block, `mitre_reference` (`llm/triage.py`). False (the default) leaves it
+    # out and every prompt is what it was before the key existed. Only a prompt is affected: the facts, the gate
+    # and the verifier read none of it.
+    PROMPT_INCLUDE_MITRE_REFERENCE: bool = False
     INDEXER_URL: str = ""
     INDEXER_USER: str = ""
     INDEXER_PASSWORD: str = ""
@@ -486,6 +491,7 @@ def load(*, env_file: str | Path = ".env") -> Config:
         AUTOCLOSE_ENABLED=as_bool("AUTOCLOSE_ENABLED", True),
         ENRICHMENT_ENABLED=as_bool("ENRICHMENT_ENABLED", True),
         PROMPT_INCLUDE_SIEM_CONTEXT=as_bool("PROMPT_INCLUDE_SIEM_CONTEXT", True),
+        PROMPT_INCLUDE_MITRE_REFERENCE=as_bool("PROMPT_INCLUDE_MITRE_REFERENCE", False),
         INDEXER_URL=as_str("INDEXER_URL", ""),
         INDEXER_USER=as_str("INDEXER_USER", ""),
         INDEXER_PASSWORD=as_str("INDEXER_PASSWORD", ""),

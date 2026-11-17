@@ -116,7 +116,7 @@ from app.rag.lookup import (
     prompt_material,
 )
 from app.rag.subject import Subject
-from app.security import detector, gate, linter
+from app.security import detector, gate, linter, wrap
 
 #: The terminal alert statuses phase-5 says a triage job must never overwrite
 #: (`duplicate` never reaches `queued_tier1` either, but a stray job for one must
@@ -338,6 +338,16 @@ def _set_triage_status(conn: psycopg.Connection, alert_id: str, status: str) -> 
         "UPDATE alerts SET triage_status=%s, triaged_count = triaged_count + 1 "
         "WHERE alert_id = %s",
         (status, alert_id),
+    )
+
+
+def _injection_findings(prompt: builder.BuiltPrompt) -> list[detector.Finding]:
+    """Step 5's findings for the ① prompt: the detector over every block of it except the ones whose text is ours
+    (`wrap.REFERENCE_SOURCES`, DEC-223: MITRE's own text from the local extract, not data from an alert). The
+    exclusion is by the block's source and nothing else; every other block, whatever it holds, is scanned.
+    """
+    return detector.scan(
+        block for block in prompt.block_index.values() if block.source not in wrap.REFERENCE_SOURCES
     )
 
 
@@ -890,7 +900,7 @@ def evaluate_alert(
     else:
         built, pv = _with_proposer_template(built, switches.proposer_template)
 
-    findings = detector.scan(built.prompt.block_index.values())
+    findings = _injection_findings(built.prompt)
     violations = linter.lint(
         built.prompt.user,
         nonce=built.prompt.nonce,

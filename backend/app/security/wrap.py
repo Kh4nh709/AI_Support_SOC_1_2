@@ -12,6 +12,9 @@ from dataclasses import dataclass
 # the three of the learned-knowledge section (DEC-210): an approved entry, the rationale of a
 # past decision, an analyst's note — all three are text a person wrote, so all three are untrusted —
 # and S2's `siem_context`: SOAR's `enrichment` object, one untrusted block of the ① prompt.
+# DEC-223 adds `mitre_reference`: MITRE's own text for the alert's technique ids, read from the local ATT&CK
+# extract. It is a block (the linter accepts no prose outside one) but it is not a `reasons[].source`: the
+# output schemas and `output_guard.REASON_SOURCES` do not list it, so a reason cannot cite it.
 BLOCK_SOURCES = frozenset(
     {
         "wazuh_raw_log",
@@ -24,8 +27,13 @@ BLOCK_SOURCES = frozenset(
         "kb_learned",
         "decision_history",
         "analyst_note",
+        "mitre_reference",
     }
 )
+#: The block sources whose text is ours, from a file shipped with the product, not data from an alert or text a
+#: person wrote (DEC-223, spec 5): the injection detector is not run over them. A source is listed here only if
+#: no alert, SIEM, analyst or model text can reach it. The set is a subset of `BLOCK_SOURCES` (a test pins it).
+REFERENCE_SOURCES = frozenset({"mitre_reference"})
 TRUNCATION_MARKER = "[truncated]"
 NONCE_REMOVED = "[nonce-removed]"
 

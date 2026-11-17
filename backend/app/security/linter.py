@@ -19,6 +19,9 @@ _ID_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^T\d{4}(\.\d{3})?$"),  # mitre
     re.compile(r"^\d{3,}$"),  # agent_id
     re.compile(r"^[a-z]{2,6}-\d{1,2}$"),  # rule_ref (decision-table rule ids, e.g. sbf-1)
+    re.compile(
+        r"^\d{1,3}\.\d{1,3}$", re.ASCII
+    ),  # attack_version (DEC-223: "20.1", the MITRE extract's)
 )
 _INT_RE = re.compile(r"^-?\d+$")
 _DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")

@@ -32,6 +32,17 @@ It is a user-message section only: the system template, the schemas and the gate
 `prompt_version` does not move and a reason cannot cite it. With `learned=None` the message is
 byte for byte what it was. It is the first thing the token budget cuts: the entries, then the history.
 
+The MITRE reference section (DEC-223, spec 5): behind `PROMPT_INCLUDE_MITRE_REFERENCE` (off by default), and
+only for an alert that carries at least one valid ATT&CK id, the user message gains one section between the
+playbook and the learned section: the heading, the typed fact `mitre_version` with the first fixed sentence,
+ONE block (source `mitre_reference`) with MITRE's own text for each id from the local extract (`app.kb.mitre`),
+and the second fixed sentence. It is reference material: the system templates and `output_schemas.json` do not
+know it, so a reason cannot cite it (a `reasons[].source` outside the schema's vocabulary ends the run as
+`schema`, `security.output_guard` refuses it again, and a quote taken from it under another source is not a
+substring of that source's block), and ①'s injection detector is not run over it (`tier1.triage`). It is the
+first thing the token budget cuts. With the switch off, and for an alert with no valid id, the message is
+byte for byte what it was.
+
 The repair round (planning decision 9) is a fresh single-turn call: the same system
 prompt, the original user message plus `HEADING_REPAIR`, `SENTENCE_REPAIR` and one bullet
 per validation error. The validator's messages carry field paths and vocabularies, never
@@ -49,7 +60,7 @@ import hashlib
 import json
 import re
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -58,6 +69,7 @@ from typing import Any, Protocol
 
 from app.infra.config import Config
 from app.infra.errors import PermanentError
+from app.kb import mitre
 from app.kb.lookup import DecisionTable
 from app.llm import schemas, siem_context
 from app.llm.adapter import estimate_tokens
@@ -70,6 +82,7 @@ from app.llm.builder import (
     HEADING_CORRELATION,
     HEADING_FACTS,
     HEADING_LEARNED,
+    HEADING_MITRE_REFERENCE,
     HEADING_PLAYBOOK,
     HEADING_PROPOSER,
     HEADING_REPAIR,
@@ -78,6 +91,8 @@ from app.llm.builder import (
     LEARNED_ENTRIES_DROPPED_WARNING,
     SENTENCE_ABSENT,
     SENTENCE_LEARNED_IS_REFERENCE,
+    SENTENCE_MITRE_REFERENCE_IS_REFERENCE,
+    SENTENCE_MITRE_REFERENCE_QUOTED,
     SENTENCE_NO_CORRELATION,
     SENTENCE_NO_LEARNED,
     SENTENCE_NO_PLAYBOOK,
@@ -129,6 +144,17 @@ ROWS_CUT = 10
 #: It is not a step of the budget cuts above: 8 KB is ~2 000 of the 40 000 tokens, and the cuts only run
 #: when the rest is already too big.
 SIEM_CONTEXT_MAX_BYTES = siem_context.MAX_BYTES
+#: DEC-223 (spec 5): the MITRE reference section shows at most this many entries with their text; an id beyond
+#: them is one `<id> <name>` line. ② takes its own limit (10) from the same helper.
+MITRE_REFERENCE_MAX_ENTRIES = 6
+#: The run's warnings (`citation_warnings`) about the section: `mitre_reference:<version>` when the prompt carried
+#: it (so runs with and without it can be told apart later), `mitre_unknown_id` when an id is not in the
+#: reference, `mitre_reference_unavailable` when the alert has ids and there is no usable extract (the alert is
+#: still triaged, without the section), `mitre_reference_dropped` when the token budget cut it.
+MITRE_REFERENCE_WARNING_PREFIX = "mitre_reference:"
+MITRE_UNKNOWN_ID_WARNING = "mitre_unknown_id"
+MITRE_UNAVAILABLE_WARNING = "mitre_reference_unavailable"
+MITRE_DROPPED_WARNING = "mitre_reference_dropped"
 
 _LOOKUP_LABELS = ("asset", "identity", "ioc")
 _LIST_CONDITION_ENUMS: dict[str, type[Enum]] = {
@@ -497,6 +523,128 @@ def _learned_section(
     pb.sentence(SENTENCE_LEARNED_IS_REFERENCE)
 
 
+# ─────────────────────────────────────────────────────────── the MITRE reference section (DEC-223, spec 5)
+def _distinct_mitre_ids(ids: Iterable[str]) -> list[str]:
+    """The ids that pass `Id("mitre", ...)`, each once, in the order given. An id that fails the pattern is
+    dropped without a word here: `_alert_section` already warned `invalid_mitre_id` for it, and it is alert
+    data, never echoed."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in ids:
+        try:
+            tid = Id("mitre", raw).value
+        except (ValueError, TypeError):
+            continue
+        if tid not in seen:
+            seen.add(tid)
+            out.append(tid)
+    return out
+
+
+def _reference_version() -> Id | None:
+    """The extract's version as a typed `Id`, or `None`: no usable reference, or a version that is not
+    `major.minor` (it would be free text, which never reaches the outside of a block)."""
+    version = mitre.version()
+    if version is None:
+        return None
+    try:
+        return Id("attack_version", version)
+    except ValueError:
+        return None
+
+
+def _mitre_entry(entry: mitre.Entry) -> str:
+    """MITRE's own text for one entry: `<id> <name>` (a sub-technique's line adds ` (sub-technique of <parent
+    id> <parent name>)`), `tactics: a, b`, the description. The entry's status is never shown: a revoked or
+    deprecated id reads like any other (spec 4.3, Owner 17/11)."""
+    head = f"{entry.id} {entry.name}"
+    if entry.parent is not None:
+        parent = mitre.lookup(entry.parent)
+        head += (
+            f" (sub-technique of {entry.parent} {parent.entry.name})"
+            if parent is not None
+            else f" (sub-technique of {entry.parent})"
+        )
+    lines = [head]
+    if entry.tactics:
+        lines.append("tactics: " + ", ".join(entry.tactics))
+    if entry.description:
+        lines.append(entry.description)
+    return "\n".join(lines)
+
+
+def _mitre_full(tid: str, found: mitre.Found | None) -> str:
+    if found is None:
+        return f"{tid}: not in the local ATT&CK reference"
+    if found.via == "parent":
+        return f"{tid}: not in the reference, parent {found.entry.id}\n{_mitre_entry(found.entry)}"
+    return _mitre_entry(found.entry)
+
+
+def _mitre_short(tid: str, found: mitre.Found | None) -> str:
+    """The one line of an id beyond the limit: no tactics, no description."""
+    if found is None:
+        return f"{tid}: not in the local ATT&CK reference"
+    if found.via == "parent":
+        return f"{tid}: not in the reference, parent {found.entry.id} {found.entry.name}"
+    return f"{found.entry.id} {found.entry.name}"
+
+
+def render_mitre_entries(ids: Sequence[str], *, limit: int) -> tuple[str, list[str]]:
+    """The text of the `mitre_reference` block for `ids` and the warnings it earns, `(text, warnings)`. ① calls
+    it through `mitre_section` with `MITRE_REFERENCE_MAX_ENTRIES`; ②'s dossier reuses it with its own limit.
+
+    Ids that fail the ATT&CK shape are skipped and a repeated id is rendered once, so the first `limit`
+    distinct valid ids, in the order given, get their entry (a blank line between entries; an id the reference
+    does not hold gets its one line `<id>: not in the local ATT&CK reference` and the warning
+    `mitre_unknown_id`, once; an id found only through its parent says `<id>: not in the reference, parent
+    <parent id>` and shows the parent's entry). The ids after them are one line each, `<id> <name>`, with no
+    description. No valid id: `("", [])`. Ids but no usable reference: `("", ["mitre_reference_unavailable"])`.
+    """
+    distinct = _distinct_mitre_ids(ids)
+    if not distinct:
+        return "", []
+    if _reference_version() is None:
+        return "", [MITRE_UNAVAILABLE_WARNING]
+    entries: list[str] = []
+    short: list[str] = []
+    warnings: list[str] = []
+    for position, tid in enumerate(distinct):
+        found = mitre.lookup(tid)
+        if found is None and MITRE_UNKNOWN_ID_WARNING not in warnings:
+            warnings.append(MITRE_UNKNOWN_ID_WARNING)
+        if position < limit:
+            entries.append(_mitre_full(tid, found))
+        else:
+            short.append(_mitre_short(tid, found))
+    if short:
+        entries.append("\n".join(short))
+    return "\n\n".join(entries), warnings
+
+
+def mitre_section(
+    pb: PromptBuilder, ids: Sequence[str], *, limit: int, warnings: list[str]
+) -> bool:
+    """The whole section, through the builder: the heading, the typed fact `mitre_version` joined to the first
+    fixed sentence on one line, the one `mitre_reference` block, the second fixed sentence. Returns True when it
+    was written (and adds `mitre_reference:<version>`, then the entries' own warnings, to `warnings`); False
+    when there was nothing to say or no usable reference (the entries' warnings are still added). Nothing about
+    the reference is free text outside the block: the version is checked to be `major.minor` first.
+    """
+    text, notes = render_mitre_entries(ids, limit=limit)
+    version = _reference_version()
+    if not text or version is None:
+        warnings.extend(notes)
+        return False
+    pb.heading(HEADING_MITRE_REFERENCE)
+    pb.line(fact("mitre_version", version), SENTENCE_MITRE_REFERENCE_QUOTED)
+    pb.block(text, "mitre_reference")
+    pb.sentence(SENTENCE_MITRE_REFERENCE_IS_REFERENCE)
+    warnings.append(f"{MITRE_REFERENCE_WARNING_PREFIX}{version.value}")
+    warnings.extend(notes)
+    return True
+
+
 def _render_proposer(
     inp: TriageInput,
     facts: Mapping[str, Any],
@@ -511,9 +659,12 @@ def _render_proposer(
     include_context: bool,
     include_correlation: bool,
     include_siem_context: bool,
+    include_mitre_reference: bool = False,
     learned: tuple[str | None, Sequence[tuple[KbLearnedLevel, int, str]], bool] | None = None,
 ) -> tuple[BuiltPrompt, list[str], str | None]:
-    """`learned`: None leaves the section out whole; else `(history_text, entries, nothing_found)`."""
+    """`learned`: None leaves the section out whole; else `(history_text, entries, nothing_found)`.
+    `include_mitre_reference`: the MITRE reference section (DEC-223), after the playbook and before `learned`.
+    """
     warnings: list[str] = []
     pb = PromptBuilder(system, nonce=nonce)
     alert_id = _alert_section(pb, inp, facts, warnings)
@@ -528,6 +679,8 @@ def _render_proposer(
     if include_correlation:
         _correlation_section(pb, rows, samples)
     effective = _playbook_section(pb, inp, playbook_text, table, warnings)
+    if include_mitre_reference:
+        mitre_section(pb, inp.mitre_ids, limit=MITRE_REFERENCE_MAX_ENTRIES, warnings=warnings)
     if learned is not None:
         history_text, entries, nothing_found = learned
         _learned_section(pb, history_text, entries, nothing_found=nothing_found)
@@ -547,6 +700,7 @@ def build_proposer_prompt(
     include_context: bool = True,
     include_correlation: bool = True,
     include_siem_context: bool | None = None,
+    include_mitre_reference: bool | None = None,
     nonce: str | None = None,
     learned: LearnedLike | None = None,
     rag_not_applied: str | None = None,
@@ -556,6 +710,11 @@ def build_proposer_prompt(
     `include_context` / `include_correlation` are P7's B2 switches: the section — its
     heading, sentences and block — is omitted entirely. `include_siem_context` (S2) does the
     same for the `siem_context` block; `None` follows `cfg.PROMPT_INCLUDE_SIEM_CONTEXT`.
+
+    `include_mitre_reference` (DEC-223): the MITRE reference section (`mitre_section`), `None` following
+    `cfg.PROMPT_INCLUDE_MITRE_REFERENCE` (off by default). Off, or on for an alert with no valid id, the message
+    is byte for byte what it was. On with ids and no usable extract: no section and the warning
+    `mitre_reference_unavailable`. The token budget cuts it before everything else (`mitre_reference_dropped`).
 
     `learned` (P13-T07): None - the message is byte for byte what it was before this parameter
     existed. Else the learned section is rendered after the playbook section and before the
@@ -577,6 +736,8 @@ def build_proposer_prompt(
     nonce = nonce if nonce is not None else wrap.new_nonce()
     if include_siem_context is None:
         include_siem_context = cfg.PROMPT_INCLUDE_SIEM_CONTEXT
+    if include_mitre_reference is None:
+        include_mitre_reference = cfg.PROMPT_INCLUDE_MITRE_REFERENCE
     rows: Sequence[CorrelationRowLike] = ()
     samples: Sequence[Mapping[str, Any]] = ()
     if include_correlation and correlation is not None:
@@ -589,6 +750,7 @@ def build_proposer_prompt(
     nothing_found = learned is not None and history_text is None and not entries
     limits = {
         "raw_log": cfg.PROMPT_LOG_MAX_BYTES,
+        "mitre": 1,
         "samples": len(samples),
         "rows": len(rows),
         "entries": len(entries),
@@ -621,6 +783,7 @@ def build_proposer_prompt(
             include_context=include_context,
             include_correlation=include_correlation,
             include_siem_context=include_siem_context,
+            include_mitre_reference=include_mitre_reference and limits["mitre"] == 1,
             learned=learned_view(),
         )
 
@@ -632,7 +795,10 @@ def build_proposer_prompt(
         raw_log_bytes = len(inp.raw_log.encode("utf-8"))
         # (name, limit key, new value, whether the step changes anything) — a no-op is not a cut
         steps = (
-            # the learned section goes first (P13-T07): a reference, never a basis for the verdict
+            # the MITRE reference goes first (DEC-223): the least specific material in the prompt, general text
+            # about techniques, the same for every alert that carries the id
+            (MITRE_DROPPED_WARNING, "mitre", 0, "mitre_reference" in prompt.block_index),
+            # then the learned section (P13-T07): a reference, never a basis for the verdict
             (LEARNED_ENTRIES_DROPPED_WARNING, "entries", 0, len(entries) > 0),
             ("learned_history_dropped", "history", 0, history_text is not None),
             (
