@@ -6,7 +6,7 @@
   "modified": "2026-11-05T15:11:27.678Z",
   "source_sha256": "539a843a7b53ed9749740b2123dddae3726b1a4831841c32aca740b011b910b5",
   "source_url": "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack-20.1.json",
-  "terms": "The MITRE Corporation (MITRE) hereby grants you a non-exclusive, royalty-free license to use ATT&CK for research, development, and commercial purposes. Any copy you make for such purposes is authorized provided that you reproduce MITRE's copyright designation and this license in any such copy. ATT&CK Terms of Use: https://attack.mitre.org/resources/legal-and-branding/terms-of-use/",
+  "terms": "The MITRE Corporation (MITRE) hereby grants you a non-exclusive, royalty-free license to use ATT&CK for research, development, and commercial purposes. Any copy you make for such purposes is authorized provided that you reproduce MITRE's copyright designation and this license in any such copy. ATT&CK Terms of Use: https://attack.mitre.org/resources/legal-and-branding/terms-of-use/ © 2026 The MITRE Corporation. This work is reproduced and distributed with the permission of The MITRE Corporation.",
   "version": "20.1"
  },
  "techniques": {
@@ -1390,7 +1390,7 @@
    ]
   },
   "T1043": {
-   "description": "Adversaries may communicate over a commonly used port to bypass firewalls or network detection systems and to blend with normal network activity to avoid more detailed inspection. They may use commonly open ports such as",
+   "description": "Adversaries may communicate over a commonly used port to bypass firewalls or network detection systems and to blend with normal network activity to avoid more detailed inspection. They may use commonly open ports such as TCP:80 (HTTP); TCP:443 (HTTPS); TCP:25 (SMTP); TCP/UDP:53 (DNS)",
    "name": "Commonly Used Port",
    "parent": null,
    "platforms": [
@@ -2415,7 +2415,7 @@
    ]
   },
   "T1070.002": {
-   "description": "Adversaries may clear system logs to hide evidence of an intrusion. macOS and Linux both keep track of system or user-initiated actions via system logs. The majority of native system logging is stored under the /var/log/ directory. Subfolders in this directory categorize logs by their related functions, such as:",
+   "description": "Adversaries may clear system logs to hide evidence of an intrusion. macOS and Linux both keep track of system or user-initiated actions via system logs. The majority of native system logging is stored under the /var/log/ directory. Subfolders in this directory categorize logs by their related functions, such as: /var/log/messages:: General and system-related messages; /var/log/secure or /var/log/auth.log: Authentication logs; /var/log/utmp or /var/log/wtmp: Login records; /var/log/kern.log: Kernel logs; /var/log/cron.log: Crond logs; /var/log/maillog: Mail server logs; /var/log/httpd/: Web …",
    "name": "Clear Linux or Mac System Logs",
    "parent": "T1070",
    "platforms": [
@@ -5043,7 +5043,7 @@
    ]
   },
   "T1189": {
-   "description": "Adversaries may gain access to a system through a user visiting a website over the normal course of browsing. Multiple ways of delivering exploit code to a browser exist (i.e., Drive-by Target), including:",
+   "description": "Adversaries may gain access to a system through a user visiting a website over the normal course of browsing. Multiple ways of delivering exploit code to a browser exist (i.e., Drive-by Target), including: A legitimate website is compromised, allowing adversaries to inject malicious code; Script files served to a legitimate website from a publicly writeable cloud storage bucket are modified by an adversary; Malicious ads are paid for and served through legitimate ad providers (i.e., Malvertising); Built-in web application interfaces that allow user-controllable content are leveraged for the …",
    "name": "Drive-by Compromise",
    "parent": null,
    "platforms": [
@@ -5554,7 +5554,7 @@
    ]
   },
   "T1213.001": {
-   "description": "Adversaries may leverage Confluence repositories to mine valuable information. Often found in development environments alongside Atlassian JIRA, Confluence is generally used to store development-related documentation; however, it may contain more diverse categories of useful information, such as:",
+   "description": "Adversaries may leverage Confluence repositories to mine valuable information. Often found in development environments alongside Atlassian JIRA, Confluence is generally used to store development-related documentation; however, it may contain more diverse categories of useful information, such as: Policies, procedures, and standards; Physical / logical network diagrams; System architecture diagrams; Technical system documentation; Testing / development credentials (i.e., Unsecured Credentials); Work / project schedules; Source code snippets; Links to network shares and other internal resources",
    "name": "Confluence",
    "parent": "T1213",
    "platforms": [
@@ -5566,7 +5566,7 @@
    ]
   },
   "T1213.002": {
-   "description": "Adversaries may leverage the SharePoint repository as a source to mine valuable information. SharePoint will often contain useful information for an adversary to learn about the structure and functionality of the internal network and systems. For example, the following is a list of example information that may hold potential value to an adversary and may also be found on SharePoint:",
+   "description": "Adversaries may leverage the SharePoint repository as a source to mine valuable information. SharePoint will often contain useful information for an adversary to learn about the structure and functionality of the internal network and systems. For example, the following is a list of example information that may hold potential value to an adversary and may also be found on SharePoint: Policies, procedures, and standards; Physical / logical network diagrams; System architecture diagrams; Technical system documentation; Testing / development credentials (i.e., Unsecured Credentials); Work / …",
    "name": "Sharepoint",
    "parent": "T1213",
    "platforms": [
@@ -11477,7 +11477,7 @@
    ]
   },
   "T1677": {
-   "description": "Adversaries may manipulate continuous integration / continuous development (CI/CD) processes by injecting malicious code into the build process. There are several mechanisms for poisoning pipelines:",
+   "description": "Adversaries may manipulate continuous integration / continuous development (CI/CD) processes by injecting malicious code into the build process. There are several mechanisms for poisoning pipelines: In a Direct Pipeline Execution scenario, the threat actor directly modifies the CI configuration file (e.g., `gitlab-ci.yml` in GitLab). They may include a command to exfiltrate credentials leveraged in the build process to a remote server, or to export them as a workflow artifact. In an Indirect Pipeline Execution scenario, the threat actor injects malicious code into files referenced by the CI …",
    "name": "Poisoned Pipeline Execution",
    "parent": null,
    "platforms": [
@@ -11721,7 +11721,7 @@
    ]
   },
   "T1685.006": {
-   "description": "Adversaries may clear system logs to hide evidence of an intrusion. macOS and Linux both keep track of system or user-initiated actions via system logs. The majority of native system logging is stored under the `/var/log/` directory. Subfolders in this directory categorize logs by their related functions, such as:",
+   "description": "Adversaries may clear system logs to hide evidence of an intrusion. macOS and Linux both keep track of system or user-initiated actions via system logs. The majority of native system logging is stored under the `/var/log/` directory. Subfolders in this directory categorize logs by their related functions, such as: `/var/log/messages:`: General and system-related messages; `/var/log/secure or /var/log/auth.log`: Authentication logs; `/var/log/utmp or /var/log/wtmp`: Login records; `/var/log/kern.log`: Kernel logs; `/var/log/cron.log`: Crond logs; `/var/log/maillog`: Mail server logs; …",
    "name": "Clear Linux or Mac System Logs",
    "parent": "T1685",
    "platforms": [

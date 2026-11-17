@@ -194,6 +194,11 @@ def test_header_is_the_bundles_own_plus_the_given_provenance(extract):
     assert "royalty-free" in header["terms"]
     assert "copyright designation" in header["terms"]
     assert "attack.mitre.org" in header["terms"]
+    # The attribution line MITRE's terms page asks for, verbatim (Ruling M4).
+    assert header["terms"].endswith(
+        "\u00a9 2026 The MITRE Corporation. This work is reproduced and distributed with the"
+        " permission of The MITRE Corporation."
+    )
     assert set(header) == {
         "domain",
         "version",
@@ -352,6 +357,38 @@ def test_a_description_over_600_characters_is_cut_on_a_word_boundary(extract):
             "Run <code>x</code> or <code>.**This technique has been deprecated and should no longer be used.** /path</code> now.",
             "Run x or . /path now.",
         ),
+        # A paragraph that leads in to a list is completed by the list's items (m1): the markers
+        # become plain separators, MITRE's words stay, and nothing after the list is appended.
+        (
+            "Ports such as\n\n* TCP:80 (HTTP)\n* TCP:443 (HTTPS)\n\nThey may use more.",
+            "Ports such as TCP:80 (HTTP); TCP:443 (HTTPS)",
+        ),
+        (
+            "Include:(Citation: X)\n\n* One\n- Two.\n1. Three\n\nAfter.",
+            "Include: One; Two. Three",
+        ),
+        (
+            "Items:\n\n* <code>/var/log/x</code>: Logs\n* [Link](https://a.b/T1) text (Citation: Y)\n",
+            "Items: /var/log/x: Logs; Link text",
+        ),
+        # No list after it: the next paragraphs follow until one ends a sentence.
+        (
+            "Lead in without a stop\n\nNext sentence here.\n\nThird.",
+            "Lead in without a stop Next sentence here.",
+        ),
+        (
+            "Ends with a colon:\n\nA plain paragraph, that ends no sentence\n\nThen a full one.\n\nMore.",
+            "Ends with a colon: A plain paragraph, that ends no sentence Then a full one.",
+        ),
+        # A paragraph that ends a sentence is complete, whatever follows it.
+        ("A complete sentence.\n\n* not appended\n* nor this", "A complete sentence."),
+        ("A sentence (in brackets.)\n\nNext.", "A sentence (in brackets.)"),
+        ('Said "stop."\n\nNext.', 'Said "stop."'),
+        ("Is it?\n\nNext.", "Is it?"),
+        # A lead-in with nothing after it is kept as it is.
+        ("Such as:", "Such as:"),
+        # The notice in other tenses is skipped too (m2).
+        ("This technique was deprecated.\n\nReal.", "Real."),
         # Only the notice: nothing of MITRE's own to show.
         ("**This technique has been deprecated and should no longer be used.**", ""),
         # A live technique that merely talks about a deprecated API keeps its text.
@@ -378,6 +415,83 @@ def test_clean_description_cut_boundaries():
     one_word = "y" * (limit + 50)
     cut = mitre_extract.clean_description(one_word)
     assert len(cut) <= limit and cut.endswith(" …")
+
+
+def test_a_list_after_a_lead_in_is_cut_at_the_cap():
+    items = "\n".join(f"* item number {i:03d}" for i in range(100))
+    out = mitre_extract.clean_description("Such as:\n\n" + items)
+    assert out.startswith("Such as: item number 000; item number 001; item number 002")
+    assert len(out) <= mitre_extract.DESCRIPTION_MAX_CHARS and out.endswith(" \u2026")
+
+
+def test_a_lead_in_is_completed_in_a_built_extract_and_a_deprecated_one_keeps_no_notice():
+    bundle = hand_bundle()
+    bundle["objects"].append(
+        _technique(
+            "T1043",
+            "Commonly Used Port",
+            "**This technique has been deprecated. Please use [Non-Standard Port]"
+            "(https://attack.mitre.org/techniques/T1571) where appropriate.**\n\n"
+            "Adversaries may use commonly open ports such as\n\n* TCP:80 (HTTP)\n* TCP:443 (HTTPS)"
+            "\n\nThey may use the protocol associated with the port.",
+            tactics=("command-and-control",),
+            revoked=None,
+            deprecated=True,
+        )
+    )
+    built = mitre_extract.build_extract(bundle, source_sha256=SHA, source_url=URL)
+    assert built["techniques"]["T1043"]["description"] == (
+        "Adversaries may use commonly open ports such as TCP:80 (HTTP); TCP:443 (HTTPS)"
+    )
+
+
+def test_a_deprecated_entry_whose_text_would_still_say_deprecated_is_refused(tmp_path, capsys):
+    # The tool's notice rule knows MITRE's notice sentences; a text in other words that still
+    # says "deprecated" would put a word about status in front of the model, so nothing is written.
+    bundle = hand_bundle()
+    bundle["objects"] += [
+        _technique(
+            "T1043",
+            "Commonly Used Port",
+            "Deprecated in favour of another technique.\n\nMore.",
+            revoked=None,
+            deprecated=True,
+        ),
+        _technique(
+            "T1044",
+            "File System Permissions Weakness",
+            "Adversaries may overwrite a binary. It was Deprecated in 2019.",
+            revoked=None,
+            deprecated=True,
+        ),
+        # Live and revoked entries may talk about a deprecated API: that is their content.
+        _technique("T1045", "Software Packing", "Although this API is deprecated, it works."),
+        _technique(
+            "T1046",
+            "Some Old One",
+            "The API is deprecated but works.",
+            revoked=True,
+            deprecated=None,
+        ),
+    ]
+    with pytest.raises(mitre_extract.DeprecationWordInDescription) as refused:
+        mitre_extract.build_extract(bundle, source_sha256=SHA, source_url=URL)
+    assert "T1043" in str(refused.value) and "T1044" in str(refused.value)
+    assert "T1045" not in str(refused.value) and "T1046" not in str(refused.value)
+    assert "2 deprecated" in str(refused.value)
+    out = tmp_path / "e.json"
+    path = _write_bundle(tmp_path / "b.json", bundle)
+    assert mitre_extract.main([str(path), "--out", str(out)]) == 2
+    assert not out.exists()
+    err = capsys.readouterr().err
+    assert "2 deprecated" in err and "T1043" in err and "T1044" in err
+
+
+def test_an_external_id_ending_in_a_newline_is_not_a_technique_id():
+    bundle = hand_bundle()
+    bundle["objects"].append(_technique("T1999\n", "Newline", "Text."))
+    built = mitre_extract.build_extract(bundle, source_sha256=SHA, source_url=URL)
+    assert not any("T1999" in key for key in built["techniques"])
 
 
 # --- refusing a file that is not an ATT&CK Enterprise bundle -----------------------------------

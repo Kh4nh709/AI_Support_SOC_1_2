@@ -13,9 +13,11 @@ is kept for tests and a later reader; the prompt does not show it.
 
 A missing or damaged file is not an error of the alert: `version()` and `lookup()` answer `None`
 ("no reference"), the caller builds its prompt without the reference section and carries the warning
-`mitre_reference_unavailable`. The reason is logged once, when the file is first read. A failed read
-is remembered like a good one (until `reset_cache`): the file is part of the deployment, and a bad
-one is not worth re-parsing on every alert.
+`mitre_reference_unavailable`. Nothing the file holds can raise into the caller: whatever goes wrong
+while reading or checking it (a missing file, bad JSON, JSON nested too deep, a value of the wrong
+type, a failure nobody foresaw) is "no reference". The reason is logged once, when the file is first
+read. A failed read is remembered like a good one (until `reset_cache`): the file is part of the
+deployment, and a bad one is not worth re-parsing on every alert.
 
 `kb` may import only `infra` (and `lookup`, its sibling): the id pattern below is a transcription of
 `llm/builder.py`'s `mitre` pattern, as `lookup._ACTIONS` is of `llm/verdicts.py`'s.
@@ -77,7 +79,7 @@ def reset_cache() -> None:
 
 
 def _parse_entry(technique_id: str, raw: Any) -> Entry:
-    if not isinstance(technique_id, str) or not _ID_RE.match(technique_id):
+    if not isinstance(technique_id, str) or not _ID_RE.fullmatch(technique_id):
         raise _Malformed(f"technique key {technique_id!r} is not an ATT&CK id")
     if not isinstance(raw, dict):
         raise _Malformed(f"{technique_id}: entry is not an object")
@@ -87,7 +89,7 @@ def _parse_entry(technique_id: str, raw: Any) -> Entry:
         raise _Malformed(f"{technique_id}: no name")
     if not isinstance(tactics, list) or not all(isinstance(t, str) for t in tactics):
         raise _Malformed(f"{technique_id}: tactics is not a list of strings")
-    if status not in _STATUSES:
+    if not isinstance(status, str) or status not in _STATUSES:  # a list or dict is unhashable
         raise _Malformed(f"{technique_id}: status {status!r}")
     if not isinstance(description, str):
         raise _Malformed(f"{technique_id}: description is not a string")
@@ -126,7 +128,9 @@ def _load(path: Path) -> tuple[str, dict[str, Entry]] | None:
     loaded: tuple[str, dict[str, Entry]] | None
     try:
         loaded = _parse(json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, ValueError, _Malformed) as exc:  # ValueError: bad JSON, bad UTF-8
+    except Exception as exc:  # noqa: BLE001 - never raise into the caller (spec 4.3)
+        # OSError (missing, a directory), ValueError (bad JSON, bad UTF-8), _Malformed (header or
+        # shape), RecursionError (JSON nested too deep) and anything not foreseen: no reference.
         log.warning("MITRE reference unavailable (%s): %s", path.name, exc)
         loaded = None
     _CACHE[path] = loaded
@@ -148,7 +152,7 @@ def lookup(technique_id: str, *, path: Path | None = None) -> Found | None:
     if not isinstance(technique_id, str):
         return None
     tid = technique_id.strip().upper()
-    if not _ID_RE.match(tid):
+    if not _ID_RE.fullmatch(tid):
         return None
     loaded = _load(path if path is not None else MITRE_FILE)
     if loaded is None:

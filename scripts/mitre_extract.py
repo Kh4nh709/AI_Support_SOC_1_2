@@ -17,12 +17,15 @@ What the extract holds, per technique or sub-technique of the Enterprise domain:
 sub-technique, else null), `status` (live, deprecated or revoked), `platforms`, and `description`:
 the first paragraph of MITRE's text, cleaned (citation marks removed, Markdown links reduced to
 their text, HTML tags removed, white space collapsed) and cut at 600 characters on a word boundary.
-Nothing is added or reworded (A2).
+When that paragraph does not end a sentence (it leads in to a list: "... such as:"), MITRE's next
+paragraph follows it, a list's items joined by plain separators in place of their markers, until
+the text ends a sentence, a list has completed it, or the cut. Nothing is added or reworded (A2).
 
 A revoked or deprecated technique keeps its own name, tactics and description. Nothing about what
 replaced it is read or stored (Owner, 17/11): the bundle's `revoked-by` relationships are ignored,
 and MITRE's deprecation notice — the first paragraph of a deprecated technique, "This technique has
-been deprecated. Please use X" — is not a description, so the next paragraph is.
+been deprecated. Please use X" — is not a description, so the next paragraph is. A deprecated
+entry whose chosen text would still say "deprecated" is refused (exit 2, nothing written).
 """
 
 from __future__ import annotations
@@ -47,6 +50,11 @@ SOURCE_URL_BASE = (
 #: number; `tests/test_kb_mitre.py` ties the two together.
 DESCRIPTION_MAX_CHARS = 600
 ELLIPSIS = " …"
+#: The attribution line MITRE's terms page asks for, verbatim.
+ATTRIBUTION = (
+    "\u00a9 2026 The MITRE Corporation. This work is reproduced and distributed with the"
+    " permission of The MITRE Corporation."
+)
 #: MITRE's licence for ATT&CK, which asks for its copyright designation and this licence to be
 #: reproduced in any copy (the copyright line itself is read from the bundle).
 TERMS = (
@@ -54,10 +62,10 @@ TERMS = (
     " ATT&CK for research, development, and commercial purposes. Any copy you make for such"
     " purposes is authorized provided that you reproduce MITRE's copyright designation and this"
     " license in any such copy. ATT&CK Terms of Use:"
-    " https://attack.mitre.org/resources/legal-and-branding/terms-of-use/"
+    " https://attack.mitre.org/resources/legal-and-branding/terms-of-use/ " + ATTRIBUTION
 )
 
-_ID_RE = re.compile(r"^T\d{4}(\.\d{3})?$", re.ASCII)
+_ID_RE = re.compile(r"T\d{4}(\.\d{3})?", re.ASCII)  # used with fullmatch
 #: A citation mark, with the white space before it: `(Citation: Name of the source)`.
 _CITATION_RE = re.compile(r"\s*\(Citation:[^)]*\)")
 #: `[text](url)` -> `text`. MITRE's links hold no nested bracket or parenthesis.
@@ -68,10 +76,16 @@ _HTML_TAG_RE = re.compile(r"</?(?:code|pre|b|i|u|em|strong|p|br|sub|sup)\s*/?>",
 _BREAK_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 _PARAGRAPH_RE = re.compile(r"\n[ \t]*\n")
 _SPACE_RE = re.compile(r"\s+")
+#: A text that ends a sentence: `.`, `!` or `?`, then perhaps closing brackets or quotes.
+_SENTENCE_END_RE = re.compile(r"[.!?][)\]\"'`\u2019\u201d]*$")
+#: A list item's marker at the start of a line: `* `, `- `, `\u2022 `, `1. `, `1) `.
+_LIST_MARKER_RE = re.compile(r"^\s*(?:[*\-\u2022]|\d+[.)])\s+")
 #: MITRE's own first paragraph of a deprecated technique: `**This technique has been deprecated.
 #: Please use [X](...) where appropriate.**`, or `This technique is deprecated due to ...`. It is a
 #: word about status and, mostly, a replacement; the description is the paragraph after it.
-_NOTICE_RE = re.compile(r"^\W*this (?:sub-?)?technique (?:has been|is) deprecated", re.IGNORECASE)
+_NOTICE_RE = re.compile(
+    r"^\W*this (?:sub-?)?technique (?:has been|is|was) deprecated", re.IGNORECASE
+)
 #: The same bold notice pasted by mistake inside a sentence of MITRE's text (T1153 in 20.1 has it in
 #: the middle of a `<code>` span): it is dropped wherever it stands.
 _INLINE_NOTICE_RE = re.compile(
@@ -83,12 +97,18 @@ class NotAnEnterpriseBundle(ValueError):
     """The file is not an ATT&CK Enterprise STIX bundle."""
 
 
+class DeprecationWordInDescription(ValueError):
+    """A deprecated entry's description would still speak of its deprecation."""
+
+
 def clean_description(text: str) -> str:
     """The description of one technique: MITRE's first paragraph, cleaned and cut.
 
-    A leading deprecation notice is skipped (see the module docstring). The result is at most
-    `DESCRIPTION_MAX_CHARS` characters, ` …` included, and is empty when MITRE's text has no
-    paragraph but the notice."""
+    A leading deprecation notice is skipped (see the module docstring). A paragraph that does not
+    end a sentence is completed by MITRE's next one: a list's items, joined by plain separators,
+    end the completion; a plain paragraph is appended and the check is made again. The result is
+    at most `DESCRIPTION_MAX_CHARS` characters, ` …` included, and is empty when MITRE's text has
+    no paragraph but the notice."""
     if not isinstance(text, str):
         return ""
     paragraphs = [p for p in _PARAGRAPH_RE.split(text.strip()) if p.strip()]
@@ -96,14 +116,50 @@ def clean_description(text: str) -> str:
         paragraphs.pop(0)
     if not paragraphs:
         return ""
-    paragraph = paragraphs[0]
+    result = _clean_paragraph(paragraphs[0])
+    rest = paragraphs[1:]
+    while rest and len(result) <= DESCRIPTION_MAX_CHARS and not _SENTENCE_END_RE.search(result):
+        following = rest.pop(0)
+        items = _list_items(following)
+        if items is not None:  # the list completes the lead-in: nothing after it is appended
+            result = _join(result, _join_items(items))
+            break
+        result = _join(result, _clean_paragraph(following))
+    return _cut(result)
+
+
+def _clean_paragraph(paragraph: str) -> str:
     paragraph = _INLINE_NOTICE_RE.sub("", paragraph)
     paragraph = _CITATION_RE.sub("", paragraph)
     paragraph = _LINK_RE.sub(r"\1", paragraph)
     paragraph = _BREAK_RE.sub(" ", paragraph)
     paragraph = _HTML_TAG_RE.sub("", paragraph)
-    paragraph = _SPACE_RE.sub(" ", paragraph).strip()
-    return _cut(paragraph)
+    return _SPACE_RE.sub(" ", paragraph).strip()
+
+
+def _list_items(paragraph: str) -> list[str] | None:
+    """The cleaned items of a paragraph made only of list lines (`* a`, `- b`, `1. c`), else None."""
+    lines = [line for line in paragraph.split("\n") if line.strip()]
+    if not lines or not all(_LIST_MARKER_RE.match(line) for line in lines):
+        return None
+    items = [_clean_paragraph(_LIST_MARKER_RE.sub("", line, count=1)) for line in lines]
+    return [item for item in items if item]
+
+
+def _join_items(items: list[str]) -> str:
+    """The items one after another, `; ` between them unless one already ended a sentence."""
+    text = ""
+    for item in items:
+        text = _join(text, item, separator="; ")
+    return text
+
+
+def _join(text: str, more: str, *, separator: str = " ") -> str:
+    if not text:
+        return more
+    if not more:
+        return text
+    return text + (" " if _SENTENCE_END_RE.search(text) else separator) + more
 
 
 def _cut(text: str) -> str:
@@ -120,7 +176,7 @@ def _technique_id(obj: dict[str, Any]) -> str | None:
     for ref in obj.get("external_references") or []:
         if isinstance(ref, dict) and ref.get("source_name") == "mitre-attack":
             external_id = ref.get("external_id")
-            if isinstance(external_id, str) and _ID_RE.match(external_id):
+            if isinstance(external_id, str) and _ID_RE.fullmatch(external_id):
                 return external_id
     return None
 
@@ -199,6 +255,16 @@ def build_extract(bundle: dict, *, source_sha256: str, source_url: str) -> dict:
         }
     if not techniques:
         raise NotAnEnterpriseBundle(f"no technique of the {DOMAIN} domain")
+    worded = [
+        tid
+        for tid, entry in techniques.items()
+        if entry["status"] == "deprecated" and "deprecat" in entry["description"].lower()
+    ]
+    if worded:
+        raise DeprecationWordInDescription(
+            f"{len(worded)} deprecated {'entry' if len(worded) == 1 else 'entries'} would carry a"
+            f" word about their deprecation in their description: {', '.join(sorted(worded))}"
+        )
 
     return {
         "header": {
@@ -274,6 +340,9 @@ def main(argv: list[str] | None = None) -> int:
             f"mitre_extract: {bundle_path} is not an ATT&CK Enterprise bundle ({exc})",
             file=sys.stderr,
         )
+        return 2
+    except DeprecationWordInDescription as exc:
+        print(f"mitre_extract: refused, {exc}", file=sys.stderr)
         return 2
     out = Path(args.out) if args.out else _default_out()
     out.parent.mkdir(parents=True, exist_ok=True)

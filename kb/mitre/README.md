@@ -29,7 +29,11 @@ ATT&CK is used under MITRE's Terms of Use (https://attack.mitre.org/resources/le
 research, development, and commercial purposes. Any copy you make for such purposes is authorized
 provided that you reproduce MITRE's copyright designation and this license in any such copy."
 
-The extract carries both in its `header` (`copyright` and `terms`).
+Attribution, as MITRE's terms page asks:
+"© 2026 The MITRE Corporation. This work is reproduced and distributed with the permission of The MITRE Corporation."
+
+The extract carries all three in its `header` (`copyright`, and `terms`, which holds the licence
+sentences, the terms URL and the attribution line).
 
 ## What is in the extract
 
@@ -44,13 +48,18 @@ The extract carries both in its `header` (`copyright` and `terms`).
   - `description`: the first paragraph of MITRE's own text, cleaned and cut. Citation marks
     `(Citation: ...)` are removed, Markdown links keep only their text, HTML tags such as `<code>` are
     removed, white space is collapsed, and a paragraph over 600 characters is cut on a word boundary
-    and ends in ` …` (600 characters at most, the ellipsis included). Nothing is added or reworded;
-    placeholders MITRE writes between angle brackets (`<username>`) and its backticks stay.
+    and ends in ` …` (600 characters at most, the ellipsis included). When that paragraph leads in to a
+    list ("... such as:", seven in 20.1) and does not end a sentence, MITRE's list follows it, its items
+    joined by `; ` in place of their markers (a plain paragraph that does not end a sentence is followed
+    by MITRE's next one, until a sentence ends). Nothing is added or reworded; placeholders MITRE writes
+    between angle brackets (`<username>`) and its backticks stay.
 
 A revoked or deprecated technique keeps its **own** name, tactics and description. Nothing about what
 replaced it is stored (Owner, 17/11): the bundle's `revoked-by` relationships are not read, and MITRE's
 deprecation notice (the first paragraph of a deprecated technique, "This technique has been deprecated.
-Please use ...") is not used as the description; the next paragraph of MITRE's text is.
+Please use ...") is not used as the description; the next paragraph of MITRE's text is. The tool
+refuses to write (exit 2) an extract in which a deprecated entry's description would still say
+"deprecated".
 
 Not in the extract: Mobile and ICS techniques, groups, software, mitigations, detections, data sources.
 

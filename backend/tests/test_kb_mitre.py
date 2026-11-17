@@ -12,7 +12,9 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import logging
 import pathlib
+import re
 import sys
 
 import pytest
@@ -22,6 +24,11 @@ from app.kb.lookup import KB_ROOT
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 COMMITTED = REPO_ROOT / "kb" / "mitre" / "enterprise-attack.json"
+#: The attribution line MITRE's terms page asks for, verbatim.
+ATTRIBUTION = (
+    "\u00a9 2026 The MITRE Corporation. This work is reproduced and distributed with the"
+    " permission of The MITRE Corporation."
+)
 BUNDLE = pathlib.Path("/project/project/mitre-attack/enterprise-attack-20.1.json")
 BUNDLE_SHA256 = "539a843a7b53ed9749740b2123dddae3726b1a4831841c32aca740b011b910b5"
 BUNDLE_URL = (
@@ -264,6 +271,16 @@ def _bad_extracts():
     cases["tactics not a list"] = _extract({"T1110": {**_entry("A", "d"), "tactics": "x"}})
     cases["tactic not a string"] = _extract({"T1110": {**_entry("A", "d"), "tactics": [1]}})
     cases["bad status"] = _extract({"T1110": _entry("A", "d", status="retired")})
+    cases["status is a list"] = _extract({"T1110": {**_entry("A", "d"), "status": []}})
+    cases["status is a dict"] = _extract({"T1110": {**_entry("A", "d"), "status": {}}})
+    cases["status is a nested list"] = _extract(
+        {"T1110": {**_entry("A", "d"), "status": [["live"]]}}
+    )
+    cases["status is null"] = _extract({"T1110": {**_entry("A", "d"), "status": None}})
+    cases["id key ending in a newline"] = _extract({"T1110\n": _entry("A", "d")})
+    cases["sub-technique key ending in a newline"] = _extract(
+        {"T1110.001\n": _entry("A", "d", parent="T1110")}
+    )
     cases["description not a string"] = _extract(
         {"T1110": {**_entry("A", "d"), "description": None}}
     )
@@ -284,6 +301,53 @@ def test_a_file_with_a_wrong_header_or_shape_means_no_reference(tmp_path, case):
     path = _write(tmp_path, _bad_extracts()[case])
     assert mitre.version(path=path) is None
     assert mitre.lookup("T1110", path=path) is None
+
+
+def test_a_deeply_nested_file_means_no_reference_and_is_logged_once(tmp_path, caplog):
+    # json.loads raises RecursionError on this: it must not reach the caller (spec 4.3), and the
+    # failure is cached and logged once like any other.
+    path = _write(tmp_path, "[" * 200_000 + "]" * 200_000)
+    with caplog.at_level(logging.WARNING, logger="app.kb.mitre"):
+        assert mitre.version(path=path) is None
+        assert mitre.lookup("T1110", path=path) is None
+        assert mitre.version(path=path) is None
+    assert len([r for r in caplog.records if r.name == "app.kb.mitre"]) == 1
+
+
+def test_a_deeply_nested_value_inside_an_extract_means_no_reference(tmp_path):
+    deep = "[" * 100_000 + "]" * 100_000
+    text = (
+        '{"header": {"domain": "enterprise-attack", "version": "9.9"},'
+        ' "techniques": {"T1110": {"name": "A", "tactics": [], "parent": null,'
+        f' "status": "live", "description": {deep}}}}}'
+    )
+    path = _write(tmp_path, text)
+    assert mitre.version(path=path) is None
+    assert mitre.lookup("T1110", path=path) is None
+
+
+def test_whatever_goes_wrong_while_loading_means_no_reference_never_an_exception(
+    tmp_path, monkeypatch, caplog
+):
+    path = _write(tmp_path, _extract())
+
+    def boom(raw):
+        raise ZeroDivisionError("not something the loader foresaw")
+
+    monkeypatch.setattr(mitre, "_parse", boom)
+    with caplog.at_level(logging.WARNING, logger="app.kb.mitre"):
+        assert mitre.version(path=path) is None
+        assert mitre.lookup("T1110", path=path) is None
+    assert len([r for r in caplog.records if r.name == "app.kb.mitre"]) == 1
+
+
+def test_a_failed_load_is_logged_once_with_the_reason(tmp_path, caplog):
+    path = _write(tmp_path, _extract({"T1110": {**_entry("A", "d"), "status": []}}))
+    with caplog.at_level(logging.WARNING, logger="app.kb.mitre"):
+        assert mitre.version(path=path) is None
+        assert mitre.lookup("T1110", path=path) is None
+    records = [r for r in caplog.records if r.name == "app.kb.mitre"]
+    assert len(records) == 1 and "status" in records[0].getMessage()
 
 
 def test_a_non_utf8_file_means_no_reference(tmp_path):
@@ -363,6 +427,8 @@ def test_committed_header(committed):
     assert header["extracted_by"] == "scripts/mitre_extract.py"
     assert header["copyright"].startswith("Copyright") and "MITRE" in header["copyright"]
     assert "copyright designation" in header["terms"] and "royalty-free" in header["terms"]
+    assert header["terms"].endswith(ATTRIBUTION)
+    assert ATTRIBUTION in (REPO_ROOT / "kb" / "mitre" / "README.md").read_text(encoding="utf-8")
     assert mitre.version() == "20.1"
 
 
@@ -400,6 +466,44 @@ def test_committed_entries_are_well_formed(committed):
         # MITRE's deprecation notice (a word about status, naming a replacement) is not carried.
         assert "has been deprecated" not in entry["description"], tid
         assert "Please use" not in entry["description"], tid
+
+
+def test_no_description_of_a_deprecated_entry_says_deprecated(committed):
+    deprecated = {k: v for k, v in committed["techniques"].items() if v["status"] == "deprecated"}
+    assert len(deprecated) == 12
+    for tid, entry in deprecated.items():
+        assert "deprecat" not in entry["description"].lower(), tid
+
+
+# What 20.1 holds as a paragraph that leads in to a list (m1): the list's items must follow it.
+LEAD_IN_IDS = {
+    "T1043": "TCP:80 (HTTP)",
+    "T1189": "A legitimate website is compromised",
+    "T1677": "Direct Pipeline Execution",
+    "T1070.002": "/var/log/messages",
+    "T1213.001": "Policies, procedures, and standards",
+    "T1213.002": "Policies, procedures, and standards",
+    "T1685.006": "/var/log/messages",
+}
+
+
+@pytest.mark.parametrize(("technique_id", "first_item"), sorted(LEAD_IN_IDS.items()))
+def test_a_paragraph_that_leads_in_to_a_list_is_followed_by_the_lists_items(
+    committed, technique_id, first_item
+):
+    description = committed["techniques"][technique_id]["description"]
+    assert first_item in description
+    visible = description.removesuffix(" \u2026")
+    assert not visible.endswith((":", " such as", " including"))
+    assert len(description) <= mitre.DESCRIPTION_MAX_CHARS
+    assert "* " not in description
+
+
+def test_no_committed_description_ends_in_a_lead_in(committed):
+    for tid, entry in committed["techniques"].items():
+        visible = entry["description"].removesuffix(" \u2026")
+        assert not visible.endswith(":"), tid
+        assert not re.search(r"\b(such as|including|following)$", visible), tid
 
 
 def test_the_committed_extract_is_what_the_tool_makes_of_the_official_bundle(committed):
