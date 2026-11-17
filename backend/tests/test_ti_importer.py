@@ -574,27 +574,33 @@ def test_an_unclosed_quote_swallows_the_rest_of_the_file_and_the_lines_lost_are_
 
 
 def test_the_csv_field_limit_is_raised_for_the_read_and_put_back(tmp_path, monkeypatch):
-    before = csv.field_size_limit()
-    read_file(SAMPLE)
-    assert csv.field_size_limit() == before
-    with pytest.raises(HeaderError):
-        read_file(write_raw(tmp_path / "e.csv", b""))
-    assert csv.field_size_limit() == before
-    monkeypatch.setattr(importer, "MAX_FILE_BYTES", 10)
-    with pytest.raises(importer.FileError):
+    original = csv.field_size_limit(
+        131_072
+    )  # the module's default: a known starting point, put back at the end
+    try:
         read_file(SAMPLE)
-    assert csv.field_size_limit() == before
-    seen = []
-    real = importer.csv.reader
+        assert csv.field_size_limit() == 131_072
+        with pytest.raises(HeaderError):
+            read_file(write_raw(tmp_path / "e.csv", b""))
+        assert csv.field_size_limit() == 131_072
+        monkeypatch.setattr(importer, "MAX_FILE_BYTES", 10)
+        with pytest.raises(importer.FileError):
+            read_file(SAMPLE)
+        assert csv.field_size_limit() == 131_072
+        monkeypatch.setattr(importer, "MAX_FILE_BYTES", 20 * 1024 * 1024)
+        seen = []
+        real = importer.csv.reader
 
-    def watching(*args, **kwargs):
-        seen.append(csv.field_size_limit())
-        return real(*args, **kwargs)
+        def watching(*args, **kwargs):
+            seen.append(csv.field_size_limit())
+            return real(*args, **kwargs)
 
-    monkeypatch.setattr(importer, "MAX_FILE_BYTES", 20 * 1024 * 1024)
-    monkeypatch.setattr(importer.csv, "reader", watching)
-    read_file(SAMPLE)
-    assert seen and seen[0] > 20 * 1024 * 1024  # above any field a file within the cap can hold
+        monkeypatch.setattr(importer.csv, "reader", watching)
+        read_file(SAMPLE)
+        assert seen and seen[0] > 20 * 1024 * 1024  # above any field a file within the cap can hold
+        assert csv.field_size_limit() == 131_072
+    finally:
+        csv.field_size_limit(original)
 
 
 def test_a_csv_error_after_all_that_stops_the_file_instead_of_guessing_where_the_next_record_is(

@@ -399,9 +399,8 @@ def _read_records(handle: Iterable[str], now: datetime) -> Parsed:
         span = reader.line_num - start + 1
         if not record:  # a blank line
             continue
-        if (
-            span > 1
-        ):  # no legitimate record spans lines: one bad record, counted as the lines it swallows
+        # No legitimate record spans lines: one bad record, counted as the lines it swallows.
+        if span > 1:
             total += span
             errors.append((start, "row_malformed"))
             spans[start] = span
