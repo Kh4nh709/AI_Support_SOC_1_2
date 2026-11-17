@@ -91,7 +91,9 @@ this phase: an expired row stays and is hidden by the API unless asked for.
 ## 6. Importer
 
 - `scripts/ti_import.py [FILE] --env-file PATH`: a thin command over `backend/app/ti/importer.py`. Without `FILE`
-  it takes the newest `ioc_*.csv` of `/var/lib/abusech/daily/` (`--dir` to change it). The DSN comes from
+  it takes TODAY's file, `ioc_YYYY-MM-DD.csv` by the host's local date, in `/var/lib/abusech/daily/` (`--dir` to change it),
+  and fails (`no_file`) when it is not there: an older file is never taken in its place. An explicit `FILE` is always
+  imported. The DSN comes from
   `DATABASE_URL` in `--env-file`, never from argv, and is never printed.
 - Header: the nine columns must all be present (order free, extra columns ignored). A missing column stops the run:
   nothing is loaded, the log row says `failed`, exit code 1.
@@ -109,8 +111,11 @@ this phase: an expired row stays and is hidden by the API unless asked for.
 - One transaction for the whole file: a database error loads nothing. Then one `ti_import_log` row (also written
   for a failed header) and one summary line on stdout (counts only), which lands in the cron's log.
 - Status: `ok` (no bad row), `partial` (some bad rows, the good ones loaded), `failed` (nothing loaded).
-- The cron line becomes `… abusech_daily100.py && <venv python> /…/scripts/ti_import.py --env-file /…/trial/.env`
-  (the Owner edits root's crontab; exact line in the hand-over).
+- The cron line stays in root's crontab and runs the importer as the checkout's owner with an empty environment:
+  `… abusech_daily100.py … && runuser -u user1 -- env -i <venv python> -B /…/scripts/ti_import.py --env-file /…/trial/.env`
+  (root is not needed, and root must not run code another account can edit; the Owner edits the crontab).
+- Hostile input: the file is capped at 20 MB; a record that spans more than one physical line is one bad row; the
+  import transaction has a lock and a statement timeout; a `first_seen` more than a day in the future is a bad row.
 
 ## 7. API (read only, every route behind the login)
 

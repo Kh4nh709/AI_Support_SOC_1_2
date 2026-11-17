@@ -618,15 +618,15 @@ moves first: `make migrate`, then the importer). Running a file twice is safe: a
   checkout's owner:
 
   ```
-  0 7 * * * . /etc/abusech.env && /usr/bin/python3 /opt/abusech/abusech_daily100.py >> /var/log/abusech_daily.log 2>&1 && runuser -u user1 -- /project/project/AI_Support_SOC_1_2/.venv/bin/python -B /project/project/AI_Support_SOC_trial/scripts/ti_import.py --env-file /project/project/AI_Support_SOC_trial/.env >> /var/log/abusech_daily.log 2>&1
+  0 7 * * * . /etc/abusech.env && /usr/bin/python3 /opt/abusech/abusech_daily100.py >> /var/log/abusech_daily.log 2>&1 && runuser -u user1 -- env -i /project/project/AI_Support_SOC_1_2/.venv/bin/python -B /project/project/AI_Support_SOC_trial/scripts/ti_import.py --env-file /project/project/AI_Support_SOC_trial/.env >> /var/log/abusech_daily.log 2>&1
   ```
 
   *Why `runuser`, and no root.* The importer needs no root right: it reads a CSV that is world-readable and writes to a database over the network. The
   code (`scripts/`, `backend/`), the venv and the `.env` it runs from belong to `user1`; a root process that ran code a `user1` process can edit would
   hand `user1` root. So the `&&` chain stays in root's crontab, where the fetch needs it, and the importer is started as the checkout's owner. `-B`
   writes no bytecode: no `__pycache__` appears in the checkout, owned by anyone. The importer runs only when the fetch exits 0. It never reads the
-  environment, but `runuser -u` hands on what the first command sourced from `/etc/abusech.env`; to give the importer none of it, put `env -i` in front
-  of the interpreter: `runuser -u user1 -- env -i <venv python> -B ...` (the importer needs no variable of its own).
+  environment, and `env -i` in front of the interpreter gives it an empty one: `runuser -u` alone would hand on what the first command sourced from
+  `/etc/abusech.env` (the abuse.ch key, if that file exports it), which the importer has no use for.
 - **A good run** prints ONE line on stdout, counts and closed words only, and exits 0:
   `ti_import: status=ok file=ioc_2026-11-17.csv total=200 new=200 updated=0 errors=0 repeated=0`. Run again, the same file gives `new=0 updated=200`.
   `repeated` counts later occurrences of a key already seen in the same file (the first one is loaded, with the earliest `first_seen` of them all).

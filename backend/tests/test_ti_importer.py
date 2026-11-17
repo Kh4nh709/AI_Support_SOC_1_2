@@ -1903,8 +1903,9 @@ def test_the_runbooks_cron_line_runs_the_importer_as_the_checkouts_owner_without
     cron = [ln.strip() for ln in section.splitlines() if ln.strip().startswith("0 7 * * *")]
     assert len(cron) == 1
     after_fetch = cron[0].split("abusech_daily100.py", 1)[1]
-    assert " && runuser -u user1 -- " in after_fetch
-    runuser = after_fetch.split(" && runuser -u user1 -- ", 1)[1]
+    # as the checkout's owner, and with an empty environment: nothing of /etc/abusech.env reaches the importer
+    assert " && runuser -u user1 -- env -i " in after_fetch
+    runuser = after_fetch.split(" && runuser -u user1 -- env -i ", 1)[1]
     assert runuser.split(" ")[0].endswith("/.venv/bin/python") and runuser.split(" ")[1] == "-B"
     assert "scripts/ti_import.py --env-file " in runuser and runuser.endswith("2>&1")
     assert "as root" not in section.lower()
