@@ -13,12 +13,18 @@ The Owner asked (17/11): when an alert has a MITRE id, map it to a MITRE documen
 document's text and write it into the prompt, so the model does not make MITRE content up. The data is one official
 MITRE set, downloaded once; nothing is fetched from the network at run time.
 
+The ids to map are those of the product's own technique map, `backend/app/ingest/category.py` (Owner, 17/11): its
+three technique tables are the vocabulary, and an alert's id is matched the way that module matches it.
+
 ## 2. Goals, non-goals, anti-goals
 
 **Goals**
 - G1. A local ATT&CK reference in the repository: for every Enterprise technique and sub-technique its id, name,
   tactics, parent, status (live, deprecated, revoked and by which id) and a short description, built by a tool from
   the official bundle, with the bundle's version and sha256 recorded.
+- G1a. Every technique id of `category.py` (the keys of `WINDOWS_TECHNIQUE_TO_CATEGORY`, `TECHNIQUE_TO_CATEGORY` and
+  `EXTENDED_TECHNIQUE_TO_CATEGORY`, 372 distinct ids on 17/11) resolves in the reference to an entry with MITRE's
+  text; an id added to those tables later that does not resolve fails a test.
 - G2. ① (the proposer prompt): when the alert has MITRE ids, a reference section with the local text of each id.
 - G3. ② (the investigation dossier): the same reference for the ids of the case's alerts.
 - G4. An id the reference does not hold is said to be absent, in the prompt, instead of being left to the model.
@@ -55,6 +61,12 @@ MITRE set, downloaded once; nothing is fetched from the network at run time.
 - Every piece of a ① prompt goes through `PromptBuilder` (a template constant, a `fact()` or a block): the reference
   follows that rule. `output_schemas.json` (context pack §6.2) is a frozen contract and is not changed: the
   reference is not added to the `reasons[].source` values.
+- `category.py` (mapping v3.5, the same file on the branch and in the trial checkout) names 372 distinct technique
+  ids, most of them parent techniques and many in ATT&CK's numbering from before sub-techniques, because that is
+  what the Wazuh rules still carry. Against ATT&CK 20.1: 229 are live, 132 are revoked and lead to a live technique
+  through the bundle's own `revoked-by` links (129 in one step, 3 in two, such as T1073 → T1574.001), and 11 are
+  deprecated with their text kept. None is missing. The reference also keeps the other 477 live ids of 20.1, so an
+  id a rule carries that the tables do not name (a sub-technique, mostly) still gets its own text.
 - On the trial's real alerts (17/11): 813 carry 1 id, 135 carry 2 to 5, 50 carry 8 or 10; 74 distinct ids, 73 live
   and 1 revoked in 20.1.
 - No secret, DSN or lab address in any committed file. Tests never call a model or the network.
@@ -80,8 +92,11 @@ the same bytes.
   Nothing is added or reworded (A2).
 
 **4.3 The loader.** `backend/app/kb/mitre.py`: loads the extract once per process (as `kb/lookup.py` does with the
-playbooks), checks its header and shape, and answers `lookup(id)` with the entry, following `revoked_by` once. A
-missing or malformed file is not an error of the alert: the loader reports "no reference", the prompt is built
+playbooks), checks its header and shape, and answers `lookup(id)` in the two steps `category.py`'s tiers use: the
+exact id first, then its parent (`T1059.003` → `T1059`) when the exact id is not in the reference. A revoked entry
+is followed along `revoked_by` to the end of the chain (two steps at most in 20.1; a loop or a dead end is reported
+as revoked with no replacement). The answer says how it was found (exact or parent, and which ids were followed),
+so the prompt can show it. A missing or malformed file is not an error of the alert: the loader reports "no reference", the prompt is built
 without the section and the run carries the warning `mitre_reference_unavailable`.
 
 ## 5. ① the proposer prompt
@@ -94,8 +109,10 @@ section and comes before the learned (RAG) section:
   describes techniques in general and is not evidence about this alert, so do not quote it in `reasons`;
 - one block, source `mitre_reference`, holding one entry per id in the alert's own order, at most **6** entries:
   `<id> <name>`, a sub-technique's parent as `sub-technique of <parent id> <parent name>`, `tactics: …`, then the
-  description. A revoked id is shown as revoked and replaced by the entry of the id that replaced it; a deprecated
-  one says so;
+  description. A revoked id is shown as `<old id>: revoked, replaced by <new id>` followed by the entry of the id
+  that replaced it (the alert's id stays visible: it is what the rule carries); a deprecated one says so and keeps
+  its text; an id found through its parent says `<id>: not in the reference, parent <parent id>` and shows the
+  parent's entry;
 - ids beyond the sixth are listed on one line each as `<id> <name>` with no description;
 - an id that passes the id pattern but is not in the reference: the line `<id>: not in the local ATT&CK reference`
   (G4) and the warning `mitre_unknown_id` on the run. An id that fails the pattern is dropped as today
@@ -145,8 +162,10 @@ in the local ATT&CK document. Nothing is rewritten in what the model stored.
   description with citations, links and tags, one longer than 600 characters) gives the expected extract; a file
   that is not an ATT&CK bundle is refused; two runs give the same bytes; the committed extract matches its header
   (706 live techniques, version 20.1, the sha256 above).
-- The loader: lookup of a live id, a sub-technique with its parent, a revoked id followed to its replacement, an
-  unknown id, a missing file, a malformed file.
+- The loader: lookup of a live id, a sub-technique with its parent, a revoked id followed to its replacement in one
+  step and in two, an id found only through its parent, an unknown id, a missing file, a malformed file.
+- `category.py` (G1a): every key of its three technique tables resolves in the committed extract to an entry with a
+  non-empty description; the counts of 17/11 are pinned (229 live, 132 revoked to a live technique, 11 deprecated).
 - ①: switch off → the prompt is byte-identical to today's (existing prompt tests stay green untouched); switch on →
   the section, the order, the 6-entry cap, the unknown-id line and warning, the budget cut first, no section without
   ids, the linter passes, a reason citing `mitre_reference` does not pass, the detector reports nothing for the block.
