@@ -14,30 +14,42 @@
 --      instead of adding another (the importer's `ON CONFLICT ON CONSTRAINT uq_ti_ioc_key`).
 --        * `source` is one of `threatfox`, `urlhaus`, `malwarebazaar` (`ck_ti_ioc_source`); `type` is a short
 --          token the importer lower-cases (`ip:port`, `domain`, `url`, `sha256_hash`, ...) and is NOT a closed
---          set: abuse.ch may add a type, and a CHECK here would turn that into a failed run;
+--          set: abuse.ch may add a type, and a closed list here would turn that into a failed run;
 --        * `value` is the indicator as text, whatever it holds: a value is never markup, a link or a formula to
---          the database. The importer bounds its length and refuses control characters; this table does not.
---          One limit is the database's own: `value` is in two btree indexes (the key and `ix_ti_ioc_value`) and
---          an entry holds at most 2 704 bytes, so text that does not compress and is longer than that in BYTES
---          (2 048 characters of 3-byte text is 6 144) is refused with "index row size ... exceeds btree
---          version 4 maximum": the importer's bound on a value has to count bytes, not characters;
+--          the database. The importer refuses control characters; this table does not;
+--        * THE BYTE BOUNDS. Three text columns are in a btree: `value` (the key `uq_ti_ioc_key` and
+--          `ix_ti_ioc_value`), `type` (the key) and `malware` (`ix_ti_ioc_malware`). A btree entry holds at most
+--          2 704 bytes, and a row that does not fit fails its whole statement with "index row size ... exceeds
+--          btree version 4 maximum" (the importer loads a file in ONE transaction, so one such row would load
+--          nothing). The limit counts BYTES of text that does not compress (2 048 characters of 3-byte text is
+--          6 144 bytes), so each of the three has a CHECK in bytes, and a row that breaks it is a refusal that
+--          names the column, not a failed file: `ck_ti_ioc_value_bytes` (`octet_length(value)` 1..2 048),
+--          `ck_ti_ioc_type_bytes` (1..64) and `ck_ti_ioc_malware_bytes` (NULL, or at most 256). The widest key
+--          entry is then 13 + 64 + 2 048 bytes, far under the limit. `threat` and `reference` are in no index
+--          and have no bound here; the importer is specified to bound them, and the three above, in bytes, so a
+--          long row is skipped with its reason before it reaches these checks, which are the database's own
+--          guard behind it;
 --        * `malware`, `threat`, `confidence`, `tags`, `reference` are what the feed says. `confidence` is 0..100
 --          or NULL (`ck_ti_ioc_confidence`; MalwareBazaar sends none). `tags` is `text[]`, empty by default.
 --          `reference` is the feed's own page for the indicator;
---        * `first_seen` is the feed's date for the indicator and may be NULL (the column is left nullable; what
---          the importer accepts is its own rule). `last_seen`, `imported_at`, `expires_at` are the run's: the
---          instant a run last saw the row, the instant it first imported it, and `last_seen + 30 days` (the
---          importer writes it; nothing deletes an expired row, the API hides it);
+--        * `first_seen` is the feed's date for the indicator and is NOT NULL: the importer skips a row without
+--          a usable date, so the list never has an undated row (under `first_seen DESC` a NULL would sort first
+--          and fall out of every date filter and of the per-day counts). `last_seen`, `imported_at`,
+--          `expires_at` are the run's: the instant a run last saw the row, the instant it first imported it,
+--          and `last_seen + 30 days` (the importer writes it; nothing deletes an expired row, the API hides it);
 --        * `hit_count` (never negative, `ck_ti_ioc_hit_count`) and `last_hit` are for matching IOCs against the
 --          logs, which this phase does not build: they exist, stay 0 and NULL, and nothing writes them yet.
---      Four indexes, one per way the page looks an indicator up: `(value)`, `(first_seen DESC)`, `(source)`,
---      `(malware)`. The key's own index covers `(source, type, value)`.
+--      Four indexes, one per way the page looks an indicator up: `(value)`, `(first_seen DESC, id DESC)` (the
+--      list's own order: newest first, and a stable one inside a day), `(source)` and `(malware)`. The key's
+--      index, which leads with `source`, already serves a filter on source alone; `ix_ti_ioc_source` is kept
+--      because the Owner's brief lists it.
 --
 --   2. `ti_import_log`: one row per importer run, written also when the run fails. `file` is the file's name,
 --      not its directory; `started_at` and `finished_at` bound the run; `rows_total`, `rows_new`,
 --      `rows_updated`, `rows_error` are counts and never negative (one CHECK each, so a refusal names the
---      column); `status` is `ok`, `partial` or `failed` (`ck_ti_import_log_status`); `message` is a short
---      closed-vocabulary reason, never a row's content. One index, `(finished_at DESC)`: the status route reads
+--      column); a run does not finish before it starts (`ck_ti_import_log_finished_after_started`); `status` is
+--      `ok`, `partial` or `failed` (`ck_ti_import_log_status`); `message` is a short closed-vocabulary reason,
+--      never a row's content. One index, `(finished_at DESC)`: the status route reads
 --      the newest row and the newest successful one.
 --
 -- The `id` columns are `bigint GENERATED BY DEFAULT AS IDENTITY`, as every identity column of this schema is
@@ -67,20 +79,23 @@ CREATE TABLE ti_ioc (
   confidence   smallint,
   tags         text[]      NOT NULL DEFAULT '{}',
   reference    text,
-  first_seen   timestamptz,
+  first_seen   timestamptz NOT NULL,
   last_seen    timestamptz NOT NULL,
   imported_at  timestamptz NOT NULL,
   expires_at   timestamptz NOT NULL,
   hit_count    integer     NOT NULL DEFAULT 0,
   last_hit     timestamptz,
-  CONSTRAINT uq_ti_ioc_key        UNIQUE (source, type, value),
-  CONSTRAINT ck_ti_ioc_source     CHECK (source IN ('threatfox', 'urlhaus', 'malwarebazaar')),
-  CONSTRAINT ck_ti_ioc_confidence CHECK (confidence IS NULL OR confidence BETWEEN 0 AND 100),
-  CONSTRAINT ck_ti_ioc_hit_count  CHECK (hit_count >= 0)
+  CONSTRAINT uq_ti_ioc_key           UNIQUE (source, type, value),
+  CONSTRAINT ck_ti_ioc_source        CHECK (source IN ('threatfox', 'urlhaus', 'malwarebazaar')),
+  CONSTRAINT ck_ti_ioc_confidence    CHECK (confidence IS NULL OR confidence BETWEEN 0 AND 100),
+  CONSTRAINT ck_ti_ioc_hit_count     CHECK (hit_count >= 0),
+  CONSTRAINT ck_ti_ioc_value_bytes   CHECK (octet_length(value) BETWEEN 1 AND 2048),
+  CONSTRAINT ck_ti_ioc_type_bytes    CHECK (octet_length(type) BETWEEN 1 AND 64),
+  CONSTRAINT ck_ti_ioc_malware_bytes CHECK (malware IS NULL OR octet_length(malware) <= 256)
 );
 
 CREATE INDEX ix_ti_ioc_value      ON ti_ioc (value);
-CREATE INDEX ix_ti_ioc_first_seen ON ti_ioc (first_seen DESC);
+CREATE INDEX ix_ti_ioc_first_seen ON ti_ioc (first_seen DESC, id DESC);
 CREATE INDEX ix_ti_ioc_source     ON ti_ioc (source);
 CREATE INDEX ix_ti_ioc_malware    ON ti_ioc (malware);
 
@@ -98,11 +113,12 @@ CREATE TABLE ti_import_log (
   rows_error    integer     NOT NULL,
   status        text        NOT NULL,
   message       text,
-  CONSTRAINT ck_ti_import_log_status       CHECK (status IN ('ok', 'partial', 'failed')),
-  CONSTRAINT ck_ti_import_log_rows_total   CHECK (rows_total   >= 0),
-  CONSTRAINT ck_ti_import_log_rows_new     CHECK (rows_new     >= 0),
-  CONSTRAINT ck_ti_import_log_rows_updated CHECK (rows_updated >= 0),
-  CONSTRAINT ck_ti_import_log_rows_error   CHECK (rows_error   >= 0)
+  CONSTRAINT ck_ti_import_log_status                 CHECK (status IN ('ok', 'partial', 'failed')),
+  CONSTRAINT ck_ti_import_log_rows_total             CHECK (rows_total   >= 0),
+  CONSTRAINT ck_ti_import_log_rows_new               CHECK (rows_new     >= 0),
+  CONSTRAINT ck_ti_import_log_rows_updated           CHECK (rows_updated >= 0),
+  CONSTRAINT ck_ti_import_log_rows_error             CHECK (rows_error   >= 0),
+  CONSTRAINT ck_ti_import_log_finished_after_started CHECK (finished_at >= started_at)
 );
 
 CREATE INDEX ix_ti_import_log_finished_at ON ti_import_log (finished_at DESC);
