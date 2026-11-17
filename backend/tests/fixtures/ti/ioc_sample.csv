@@ -1,0 +1,13 @@
+source,first_seen,type,value,threat,malware,confidence,tags,reference
+threatfox,2026-11-17 06:12:44 UTC,ip:port,192.0.2.10:443,botnet_cc,win.example_rat,75,"example_rat,c2",https://threatfox.abuse.ch/ioc/90000001/
+threatfox,2026-11-17 05:58:03 UTC,ip:port,198.51.100.24:8080,botnet_cc,elf.example_bot,100,example_bot,https://threatfox.abuse.ch/ioc/90000002/
+threatfox,2026-11-17 05:40:19,domain,c2.Example.COM,botnet_cc,win.example_rat,90,"example_rat,c2,dns",https://threatfox.abuse.ch/ioc/90000003/
+threatfox,2026-11-17 05:31:50 UTC,domain,payload.example.net,payload_delivery,win.example_loader,50,loader,https://threatfox.abuse.ch/ioc/90000004/
+threatfox,2026-11-17 04:47:21 UTC,url,http://203.0.113.7/Drop/Stage2.bin,payload_delivery,win.example_loader,75,"loader,stage2",https://threatfox.abuse.ch/ioc/90000005/
+threatfox,2026-11-16 23:15:00,sha256_hash,91F249717ECB311474E6857DBE078860281CD5AC8969E8C132687AB32621F05E,payload,win.example_rat,100,example_rat,https://threatfox.abuse.ch/ioc/90000006/
+urlhaus,2026-11-17 06:01:12 UTC,url,"http://malware.example.com/a/b.php?id=1,2",malware_download,,100,"example,php",https://urlhaus.abuse.ch/url/90000001/
+urlhaus,2026-11-17 03:22:09 UTC,url,https://download.example.net/Setup.EXE,malware_download,,100,"exe,example",https://urlhaus.abuse.ch/url/90000002/
+malwarebazaar,2026-11-17 06:30:00 UTC,sha256_hash,0e61081acb9d7218ebe241f65f8804445bed0bdab0d4f2e1755d45538786998a,,win.example_stealer,,"stealer,exe",https://bazaar.abuse.ch/sample/0e61081acb9d7218ebe241f65f8804445bed0bdab0d4f2e1755d45538786998a/
+malwarebazaar,2026-11-17 06:05:31,sha256_hash,2c15e946d754b3f2f3fbed500021982783d307f359fa465c9196825211bd08d5,,elf.example_bot,,"elf,example_bot",https://bazaar.abuse.ch/sample/2c15e946d754b3f2f3fbed500021982783d307f359fa465c9196825211bd08d5/
+malwarebazaar,2026-11-17 05:12:47 UTC,sha256_hash,6A4BC1C4E31257237527FCA4749598808B31F399128914FC78616C112A70491A,,win.example_loader,,"dll,loader",https://bazaar.abuse.ch/sample/6a4bc1c4e31257237527fca4749598808b31f399128914fc78616c112a70491a/
+malwarebazaar,2026-11-16 22:41:08 UTC,sha256_hash,9562371d8c04c42084650c7a8f7b466e1dbd686242b24d6d8fcdd71048c863f3,,,,,https://bazaar.abuse.ch/sample/9562371d8c04c42084650c7a8f7b466e1dbd686242b24d6d8fcdd71048c863f3/

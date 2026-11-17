@@ -330,3 +330,21 @@ def test_rag_may_use_httpx_and_its_list_of_app_packages_is_unchanged():
     assert violations_in("import httpx\nfrom httpx import Client\n", "rag.voyage") == []
     assert violations_in("import psycopg\n", "rag.vector_store") == []
     assert ALLOWED["rag"] == {"infra", "audit", "security", "llm", "kb", "domain"}
+
+
+def test_ti_importing_a_tier_or_web_is_a_violation():
+    # DEC-224 (T2): the Threat Intel package stands alone beside `infra`.
+    assert violations_in("from app.tier1 import triage\n", "ti.importer") == [
+        "ti.importer imports tier1 — not in ALLOWED[ti]"
+    ]
+    assert violations_in("from app.web import deps\n", "ti.importer") == [
+        "ti.importer imports web — not in ALLOWED[ti]"
+    ]
+    assert violations_in("from app.infra import db\n", "ti.importer") == []
+
+
+def test_only_web_may_import_ti():
+    assert violations_in("from app.ti import importer\n", "web.routers.ti") == []
+    assert violations_in("from app.ti import importer\n", "soar.risk") == [
+        "soar.risk imports ti — not in ALLOWED[soar]"
+    ]
