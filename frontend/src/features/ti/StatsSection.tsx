@@ -7,15 +7,17 @@ import { DayChart } from "./DayChart";
 import { KpiCards } from "./KpiCards";
 import { MalwareChart } from "./MalwareChart";
 import { SectionError } from "./Notices";
-import { TI_POLL_MS, tiKeys } from "./tiQueries";
+import { TI_POLL_MS, tiKeys, useTiRetry } from "./tiQueries";
 
 const CARD = "flex min-w-0 flex-col gap-2 rounded border border-border bg-surface p-3";
 
 export function StatsSection() {
+  const retry = useTiRetry();
   const query = useQuery<TiStats>({
     queryKey: tiKeys.stats(TI_DAYS),
     queryFn: ({ signal }) => fetchTiStats(TI_DAYS, signal),
     refetchInterval: TI_POLL_MS,
+    retry,
   });
   const stats = query.data;
   if (stats === undefined) {

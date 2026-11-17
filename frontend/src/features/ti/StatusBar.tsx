@@ -6,7 +6,7 @@ import { fetchTiStatus, type TiStatus } from "../../api/ti";
 import { formatDateTime } from "../../format";
 import { S } from "../../strings";
 import { SectionError } from "./Notices";
-import { TI_POLL_MS, tiKeys } from "./tiQueries";
+import { TI_POLL_MS, tiKeys, useTiRetry } from "./tiQueries";
 
 function Body({ status }: { status: TiStatus }) {
   const good = status.latest_success;
@@ -44,10 +44,12 @@ function Body({ status }: { status: TiStatus }) {
 }
 
 export function StatusBar() {
+  const retry = useTiRetry();
   const query = useQuery<TiStatus>({
     queryKey: tiKeys.status,
     queryFn: ({ signal }) => fetchTiStatus(signal),
     refetchInterval: TI_POLL_MS,
+    retry,
   });
   return (
     <section aria-label={S.ti.status.label} className="flex flex-col gap-2">

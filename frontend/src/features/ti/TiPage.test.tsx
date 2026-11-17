@@ -1,9 +1,11 @@
 // src/features/ti/TiPage.test.tsx — the page "Threat Intel" top to bottom: the status bar and its stale banner, the four KPI cards, the two
 // charts, the table's states, and what each section says when its own read is busy, refused or fails.
+import { QueryClient } from "@tanstack/react-query";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse } from "msw";
 import { setupServer } from "msw/node";
+import { shouldRetry } from "../../api/queryClient";
 import { S } from "../../strings";
 import { tiFixture } from "./fixtures";
 import { busy, fake, renderTi, serve } from "./testkit";
@@ -289,5 +291,61 @@ describe("a read that is busy, refused or failing", () => {
     await waitFor(() => expect(onUnauthorized).toHaveBeenCalled());
     expect(screen.queryByText(S.ti.busy)).not.toBeInTheDocument();
     expect(screen.queryByText(S.forbidden)).not.toBeInTheDocument();
+  });
+});
+
+// TI12 M3: the app's query client retries a 5xx twice, which on a database that is already too busy to answer in time runs the same
+// statement three times before the page says it is busy. A 503 `timeout` is not retried; any other failure keeps the app's own rule.
+describe("a busy read is asked once", () => {
+  const appClient = () =>
+    new QueryClient({ defaultOptions: { queries: { retry: shouldRetry, retryDelay: 0 } } });
+  const quiet = () => new Promise((resolve) => setTimeout(resolve, 150));
+
+  it("asks the list once when it is busy, the stats once, the status once", async () => {
+    const state = fake();
+    state.list = busy;
+    state.statsAnswer = busy;
+    state.statusAnswer = busy;
+    serve(server, state);
+    renderTi({ client: appClient() });
+    expect(await screen.findAllByText(S.ti.busy)).toHaveLength(3);
+    await quiet();
+    expect(state.lists).toHaveLength(1);
+    expect(state.statsRequests).toHaveLength(1);
+    expect(state.statusRequests).toBe(1);
+  });
+
+  it("keeps the app's rule for another failure: asked three times (two retries) before the error line", async () => {
+    const state = fake();
+    state.list = () => HttpResponse.json({ detail: "boom" }, { status: 500 });
+    state.statsAnswer = () => HttpResponse.json({ detail: "boom" }, { status: 502 });
+    state.statusAnswer = () => HttpResponse.json({ detail: "boom" }, { status: 500 });
+    serve(server, state);
+    renderTi({ client: appClient() });
+    expect(await screen.findByText(S.ti.loadError.list)).toBeInTheDocument();
+    expect(await screen.findByText(S.ti.loadError.stats)).toBeInTheDocument();
+    expect(await screen.findByText(S.ti.loadError.status)).toBeInTheDocument();
+    expect(state.lists).toHaveLength(3);
+    expect(state.statsRequests).toHaveLength(3);
+    expect(state.statusRequests).toBe(3);
+  });
+
+  it("does not retry a 503 that is not the timeout either way round: only {reason: timeout} is busy", async () => {
+    const state = fake();
+    state.list = () => HttpResponse.json({ detail: "service down" }, { status: 503 });
+    serve(server, state);
+    renderTi({ client: appClient() });
+    expect(await screen.findByText(S.ti.loadError.list)).toBeInTheDocument();
+    expect(state.lists).toHaveLength(3);
+  });
+
+  it("uses what the client says for the rest: a client that never retries asks once", async () => {
+    const state = fake();
+    state.list = () => HttpResponse.json({ detail: "boom" }, { status: 500 });
+    serve(server, state);
+    renderTi();
+    expect(await screen.findByText(S.ti.loadError.list)).toBeInTheDocument();
+    await quiet();
+    expect(state.lists).toHaveLength(1);
   });
 });

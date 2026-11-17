@@ -360,6 +360,22 @@ describe("the reference", () => {
   });
 
   it.each([
+    ["https://threatfox.abuse.ch/ioc/1000001/", "hxxps://threatfox[.]abuse[.]ch/ioc/1000001/"],
+    ["https://urlhaus.abuse.ch/url/2000001/", "hxxps://urlhaus[.]abuse[.]ch/url/2000001/"],
+  ])(
+    "prints the reference beside its link defanged like any other, so the text can be pasted without a live link: %s",
+    async (reference, shown) => {
+      const box = await referenceOf(reference);
+      const dd = within(box).getByText(S.ti.detail.field.reference, { selector: "dt" })
+        .nextElementSibling as HTMLElement;
+      expect(dd.textContent).toContain(shown);
+      // the address is in the link's href and nowhere in the text
+      expect(dd.textContent).not.toContain(reference);
+      expect(within(dd).getByRole("link")).toHaveAttribute("href", reference);
+    },
+  );
+
+  it.each([
     [
       "a look-alike host",
       "https://threatfox.abuse.ch.evil.example/ioc/1/",

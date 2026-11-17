@@ -18,18 +18,20 @@ import { TiDetail } from "./TiDetail";
 import { TiFilters } from "./TiFilters";
 import { TiPagination } from "./TiPagination";
 import { filtersOf, listQueryOf, readView, viewToParams, type TiView } from "./tiParams";
-import { tiKeys } from "./tiQueries";
+import { tiKeys, useTiRetry } from "./tiQueries";
 import { tiColumns } from "./TiTable";
 
 export function TiPage() {
   const [params, setParams] = useSearchParams();
   const view = useMemo(() => readView(params), [params]);
+  const retry = useTiRetry();
 
   const query = useQuery<TiListResponse>({
     queryKey: tiKeys.list(view),
     queryFn: ({ signal }) => fetchTiIocs(listQueryOf(view), signal),
     // The rows stay on screen (dimmed, aria-busy) while the next filter or page loads.
     placeholderData: keepPreviousData,
+    retry,
   });
 
   // The page's own state: the IOC of the open panel (the row as it was served, so the panel stays when the list moves to another
