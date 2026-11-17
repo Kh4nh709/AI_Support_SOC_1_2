@@ -68,6 +68,15 @@ output schema, the injection scan and `_check_evidence` are unchanged: an entry 
 material, and a quote taken from one is not in the alert's own text, so it is refused as any quote
 that is not. With the switch off nothing here runs and nothing differs, the INSERT included.
 
+**The MITRE reference section (DEC-223, spec §6).** With `PROMPT_INCLUDE_MITRE_REFERENCE` on, the dossier carries one
+more section: MITRE's own text, from the local extract `kb/mitre/`, for the distinct technique ids of the case's alerts
+(`tier2.dossier`). It is reference material, not evidence and not data from an alert: `_scan_for_injection` leaves the
+block out (`wrap.REFERENCE_SOURCES`, as ① does) and keeps scanning every other; `_check_evidence` reads the alerts only,
+so a quote taken from the block is `quote_not_found`; the output schema is unchanged. What the dossier says about the
+section (`Dossier.mitre_warnings`: `mitre_reference:<version>`, `mitre_unknown_id`, `mitre_reference_unavailable`,
+`mitre_reference_dropped`) is put on the run's `citation_warnings` of every row the job writes, so a run with the
+section can be told from a run without it. With the switch off the list is empty and the row is today's.
+
 **The definite conclusion (P14-T02, DEC-213, spec 4.2).** The model answers `investigate_v3` (since DEC-221 `investigate_v4`,
 which adds the fields it writes for the analyst and changes nothing of this): one of
 `llm.verdicts.MODEL_CONCLUSIONS`, never `need_more_data` (a prompt that no longer offers it, and a schema
@@ -431,7 +440,9 @@ def _check_evidence(
     Nothing else is evidence (P13-T08): the dossier's learned section (an approved entry, the
     decision history) is reference material about *other* cases, so a quote taken from it is in
     none of this case's alerts' text and comes back `quote_not_found`, with the alert's own id on
-    it or not. The check reads alerts only, by design; a test pins it."""
+    it or not. The same holds for the MITRE reference section (DEC-223): MITRE's text about a technique in general
+    is not the alert's log or description, so a quote from it is refused. The check reads alerts only, by design; a
+    test pins both."""
     rows = conn.execute(_EVIDENCE_ALERTS_SQL, (case_id, case_id)).fetchall()
     texts = {
         alert_id: (*_searchable(raw_log or ""), *_searchable(description or ""))
@@ -482,6 +493,10 @@ def _scan_for_injection(dossier: dossier_mod.Dossier) -> list[detector.Finding]:
             rendered=body,
         )
         for source, body in dossier.blocks
+        # DEC-223: MITRE's own text from the local extract is ours, not data from an alert (`wrap.REFERENCE_SOURCES`):
+        # the detector is not run over it, as it is not over it in ① (`tier1.triage._injection_findings`). The
+        # exclusion is by the block's source and nothing else; every other block, whatever it holds, is scanned.
+        if source not in wrap.REFERENCE_SOURCES
     ]
     return detector.scan(blocks)
 
@@ -685,6 +700,9 @@ def _compute_case(
     # (the way ① puts `built.warnings` on every row it writes). The success row passes its own list, which
     # already ends with it.
     notice = [rag_not_applied_warning(not_applied)] if not_applied is not None else []
+    # DEC-223: the same for what the dossier says of the MITRE reference section: it was part of the prompt of every
+    # row of the run, whatever the outcome (empty with the switch off: the row is then what it was)
+    notice.extend(dossier.mitre_warnings)
 
     def evaluation(
         outcome: str,

@@ -61,6 +61,14 @@ the model's words about untrusted data are served as text.
 * the raw `result` carries that same list in its stored shape (no `time`) in place of the stored one, so a row naming
   an alert outside the case is nowhere in what is served (`GET /api/tier2/runs/{id}` does the same, `served_result`);
   every other key of it is as stored.
+* `timeline` rows also carry `technique_name` and `technique_known` (DEC-223, spec 7, G5): the model's `technique` is
+  free text, checked here against the local ATT&CK reference (`kb.mitre`) and served beside what it said, never in
+  place of it. A value that names an id the reference holds gives MITRE's own name for it and `True`; a value shaped
+  like an id that the reference does not hold (a sub-technique it has only through its parent included: that id is
+  not MITRE's) gives `None` and `False`; anything else (empty, null, prose, a number), and every row when there is no
+  usable reference file, gives `None` and `None`. They are served whatever `PROMPT_INCLUDE_MITRE_REFERENCE` says: they
+  describe what the model returned, not what it was shown. The raw `result`'s rows are not changed. `checks` carries
+  `technique_not_in_reference`, the number of served rows with `technique_known: False` (`None` without a reference).
 * `scope`: the model's `{hosts, accounts}` and, beside it, `system: {hosts, accounts, alert_count}` computed from the
   case's alerts, so the page shows both without trusting the model.
 * `tech`: the run's figures and the case's, and never the model's name (goal G5: the model id is not read at all).
@@ -84,6 +92,7 @@ from typing import Any
 
 import psycopg
 
+from app.kb import mitre
 from app.llm import rag_view, results, verdicts
 from app.rag.entries import entry_cards
 from app.rag.failures import FAILURE_KINDS
@@ -491,6 +500,21 @@ def _text_or_none(value: Any) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
+def _technique_check(value: Any, *, referenced: bool) -> tuple[str | None, bool | None]:
+    """`(technique_name, technique_known)` of a served `technique` (DEC-223, spec 7): MITRE's own name and `True` for
+    a value that names an id the local reference holds, `(None, False)` for a value shaped like an id that it does
+    not hold (an id found only through its parent is not held: the model named an id MITRE does not have), and
+    `(None, None)` for anything else, and for everything when there is no usable reference (`referenced` is False: the
+    page then has nothing to say, and nothing is an error). The value is read as `kb.mitre.lookup` reads one: case and
+    surrounding white space aside."""
+    if not referenced or mitre.attack_id(value) is None:
+        return None, None
+    found = mitre.lookup(value)
+    if found is not None and found.via == "exact":
+        return found.entry.name, True
+    return None, False
+
+
 def _count(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
@@ -588,6 +612,13 @@ def present_run(
     conclusion = result.get("suggested_conclusion")
     facts = alerts if alerts is not None else NO_ALERTS
     shown = served_timeline(result.get("timeline"), facts.times)
+    referenced = (
+        mitre.version() is not None
+    )  # a usable local ATT&CK reference: without one nothing is checked
+    technique_checks = [
+        _technique_check(_text_or_none(entry.get("technique")), referenced=referenced)
+        for entry, _ in shown
+    ]
     evidence = evidence_rows(result, check)
     snap = snapshot(agent_trace)
     scope = results.scope_lists(result.get("scope"))
@@ -621,9 +652,16 @@ def present_run(
                 "what": entry["what"],
                 "tactic": _text_or_none(entry.get("tactic")),
                 "technique": _text_or_none(entry.get("technique")),
+                "technique_name": name,
+                "technique_known": known,
             }
-            for entry, time in shown
+            for (entry, time), (name, known) in zip(shown, technique_checks, strict=True)
         ],
+        "checks": {
+            "technique_not_in_reference": (
+                sum(1 for _, known in technique_checks if known is False) if referenced else None
+            )
+        },
         "scope": {
             "hosts": scope["hosts"][:SCOPE_CAP],
             "accounts": scope["accounts"][:SCOPE_CAP],

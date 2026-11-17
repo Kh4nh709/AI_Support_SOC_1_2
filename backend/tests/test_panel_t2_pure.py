@@ -91,6 +91,8 @@ def _served(result, alerts=None, **kw) -> dict:
 def test_a_rows_time_is_the_time_of_the_alert_it_names():
     times = {"a-1": _t(5), "a-2": _t(1)}
     served = _served(_v4(timeline=_rows(("a-1", "first"), ("a-2", "second"))), _alerts(times))
+    # DEC-223: `technique_name` and `technique_known` say what the local ATT&CK reference makes of `technique`;
+    # a row with no technique has neither (`test_investigation_view_mitre.py` has the rest)
     assert served["timeline"] == [
         {
             "alert_id": "a-2",
@@ -98,6 +100,8 @@ def test_a_rows_time_is_the_time_of_the_alert_it_names():
             "what": "second",
             "tactic": "Execution",
             "technique": None,
+            "technique_name": None,
+            "technique_known": None,
         },
         {
             "alert_id": "a-1",
@@ -105,9 +109,19 @@ def test_a_rows_time_is_the_time_of_the_alert_it_names():
             "what": "first",
             "tactic": "Execution",
             "technique": None,
+            "technique_name": None,
+            "technique_known": None,
         },
     ]
-    assert list(served["timeline"][0]) == ["alert_id", "time", "what", "tactic", "technique"]
+    assert list(served["timeline"][0]) == [
+        "alert_id",
+        "time",
+        "what",
+        "tactic",
+        "technique",
+        "technique_name",
+        "technique_known",
+    ]
 
 
 def test_a_row_naming_an_alert_outside_the_case_is_dropped():

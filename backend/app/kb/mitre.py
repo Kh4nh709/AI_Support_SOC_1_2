@@ -143,16 +143,26 @@ def version(*, path: Path | None = None) -> str | None:
     return None if loaded is None else loaded[0]
 
 
+def attack_id(value: object) -> str | None:
+    """The ATT&CK id `value` names, as the reference spells it (`T1234` or `T1234.567`, case and surrounding white
+    space aside), or `None` for anything else: prose, a number, an id with more or less in it. The shape only: it
+    does not say the reference holds the id (that is `lookup`), and needs no reference file. `lookup` applies it
+    first, so "is this text an id" has one rule (DEC-223 T3: the ② view marks a served `technique` that has the
+    shape and is not in the reference)."""
+    if not isinstance(value, str):
+        return None
+    tid = value.strip().upper()
+    return tid if _ID_RE.fullmatch(tid) else None
+
+
 def lookup(technique_id: str, *, path: Path | None = None) -> Found | None:
     """MITRE's entry for `technique_id`: the id's own, else its parent's (`via="parent"`).
 
     `None` when the id is not in the reference, is not shaped like an ATT&CK id
     (`T1234` or `T1234.567`, case and surrounding white space aside), or there is no
     reference. A `T1234.xyz` never reaches `T1234` through a split on the dot."""
-    if not isinstance(technique_id, str):
-        return None
-    tid = technique_id.strip().upper()
-    if not _ID_RE.fullmatch(tid):
+    tid = attack_id(technique_id)
+    if tid is None:
         return None
     loaded = _load(path if path is not None else MITRE_FILE)
     if loaded is None:

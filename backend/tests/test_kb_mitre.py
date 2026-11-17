@@ -222,6 +222,43 @@ def test_lookup_folds_case_and_trims_like_the_category_tiers(tmp_path):
     assert found is not None and found.entry.id == "T1110.001"
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("T1110", "T1110"),
+        ("T1110.001", "T1110.001"),
+        ("  t1110.001 ", "T1110.001"),
+        ("t1059\t", "T1059"),
+        ("T9999", "T9999"),  # the shape only: whether the reference holds it is `lookup`'s question
+        ("", None),
+        ("   ", None),
+        ("T1110.00", None),
+        ("T1110.001.002", None),
+        ("T1110.abc", None),
+        ("T111", None),
+        ("T1110 T1059", None),
+        ("T1110 Brute Force", None),
+        ("T\u0661\u0661\u0661\u0661", None),  # not ASCII digits
+        ("T1110\n", "T1110"),  # white space around an id is trimmed, as `lookup` trims it
+        (None, None),
+        (1110, None),
+        (["T1110"], None),
+        (b"T1110", None),
+    ],
+)
+def test_attack_id_is_the_id_a_value_names_or_none(value, expected):
+    """DEC-223 T3: the one rule for "this text is an ATT&CK id" (the view marks a served `technique` that has the
+    shape and is not in the reference), the rule `lookup` applies before it looks."""
+    assert mitre.attack_id(value) == expected
+
+
+def test_lookup_and_attack_id_agree_on_what_an_id_is(tmp_path):
+    path = _write(tmp_path, _extract())
+    for value in ("T1110", " t1110.001 ", "T1110.abc", "x", "T9999", "T1110 T1059", ""):
+        if mitre.attack_id(value) is None:
+            assert mitre.lookup(value, path=path) is None
+
+
 def test_version_is_the_headers(tmp_path):
     assert mitre.version(path=_write(tmp_path, _extract())) == "9.9"
 

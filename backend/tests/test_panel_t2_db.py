@@ -334,10 +334,55 @@ def test_the_timeline_takes_its_times_from_the_alerts_and_drops_what_is_not_the_
         T0 + timedelta(minutes=30),
     ]
     assert [row["alert_id"] for row in run["timeline"]] == [h2, dup, h1]
-    assert set(run["timeline"][0]) == {"alert_id", "time", "what", "tactic", "technique"}
+    assert set(run["timeline"][0]) == {
+        "alert_id",
+        "time",
+        "what",
+        "tactic",
+        "technique",
+        "technique_name",  # DEC-223: the local ATT&CK reference's own name for the id the model wrote
+        "technique_known",
+    }
     assert (
         run["timeline"][0]["tactic"] == "Execution" and run["timeline"][0]["technique"] == "T1059"
     )
+    assert run["timeline"][0]["technique_name"] == "Command and Scripting Interpreter"
+    assert run["timeline"][0]["technique_known"] is True
+    assert run["checks"] == {"technique_not_in_reference": 0}
+
+
+def test_the_timeline_techniques_are_checked_against_the_local_reference_through_the_route(
+    client, db
+):
+    """DEC-223: a technique the model wrote that the local ATT&CK reference does not hold is marked and counted; one
+    it holds is served with MITRE's own name; the raw result is the stored shape, and `GET /runs/{id}` serves it as
+    stored (no key of this check there)."""
+    case_id, h1, h2, dup, _foreign = _case_with_two_heads(db, client.user_id)
+    stored = _rows((h1, "a"), (h2, "b"), (dup, "c"))
+    stored[1]["technique"] = "T9999"
+    stored[2]["technique"] = "brute force"
+    job = _insert_job(db, case_id)
+    run_id = _insert_run(db, case_id, job_id=job, result=_v4(timeline=stored))
+
+    body = _view(client, case_id)
+    run = body["run"]
+
+    # sorted by the alerts' own times: h2, the duplicate, h1
+    assert [
+        (r["technique"], r["technique_name"], r["technique_known"]) for r in run["timeline"]
+    ] == [
+        ("T9999", None, False),
+        ("brute force", None, None),
+        ("T1059", "Command and Scripting Interpreter", True),
+    ]
+    assert run["checks"] == {"technique_not_in_reference": 1}
+    assert [set(r) for r in run["result"]["timeline"]] == [
+        {"alert_id", "what", "tactic", "technique"}
+    ] * 3
+    raw = client.http.get(f"/api/tier2/runs/{run_id}").json()
+    assert [set(r) for r in raw["result"]["timeline"]] == [
+        {"alert_id", "what", "tactic", "technique"}
+    ] * 3
 
 
 def test_the_raw_result_of_the_view_carries_the_filtered_timeline_in_its_stored_shape(client, db):

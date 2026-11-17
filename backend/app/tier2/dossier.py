@@ -1,5 +1,6 @@
-"""Assemble the case dossier: nine blocks (facts, logs, timeline, entities, playbooks), and a tenth, the
-learned section, only when `learned` is given (DEC-210, below).
+"""Assemble the case dossier: nine blocks (facts, logs, timeline, entities, playbooks), a tenth, the
+learned section, only when `learned` is given (DEC-210, below), and an eleventh, the MITRE reference section,
+only when `PROMPT_INCLUDE_MITRE_REFERENCE` is on and the case's alerts carry technique ids (DEC-223, below).
 
 P5-T03 (DEC-151 wave 2). `build(conn, case_id, *, nonce, cfg=None) -> Dossier` reads the
 nine blocks of context pack §7.6 / the card's design note 1 from the database only, inside
@@ -18,6 +19,22 @@ for the verdict; or, when the lookup found nothing, the heading and the one sent
 reference material, not evidence about the case: `Dossier.learned_used` says whether it reached the prompt.
 Over `CASE_PROMPT_BUDGET_TOKENS` it is the first thing dropped (`STEP_LEARNED_DROPPED`), before every
 existing step.
+
+**The MITRE reference section (DEC-223, spec §6).** With `cfg.PROMPT_INCLUDE_MITRE_REFERENCE` on (it is off by
+default, and with it off not one query is made for it and the text is byte for byte what it was), a section follows
+block 7 (the playbooks): ①'s heading (`llm.builder.HEADING_MITRE_REFERENCE`), the version of the local ATT&CK
+extract as the typed fact `mitre_version` on the same line as the first fixed sentence, ONE block (source
+`mitre_reference`) with MITRE's own text, and the second fixed sentence (a reference, not evidence about the case).
+The ids are the distinct valid ones (`Id("mitre", ...)`) of the case's alerts - the heads and the duplicates
+absorbed into them - most frequent first, ties by id (`rank_mitre_ids`); the entries are
+`llm.triage.render_mitre_entries` with `MITRE_REFERENCE_MAX_ENTRIES_CASE` (10) full entries, the rest one line each,
+an id the extract does not hold said to be absent. No valid id on any alert: no section. It is reference material, not
+evidence: `tier2.investigate` leaves the block out of its injection scan (`wrap.REFERENCE_SOURCES`), and the evidence
+check reads the alerts only. Over `CASE_PROMPT_BUDGET_TOKENS` it is the very first thing dropped
+(`STEP_MITRE_DROPPED`), before the learned section and before every step that cuts what the case itself is made of.
+`Dossier.mitre_warnings` is what the run records (`mitre_reference:<version>` when the section is in `text`,
+`mitre_unknown_id`, `mitre_reference_unavailable` when the extract could not be read, `mitre_reference_dropped` when
+the budget cut it); it is `()` with the switch off.
 
 **The block boundary is where trust ends (design note 1).** Block 1's closed-set facts
 (severity, cluster/occurrence counts, the time span) are rendered through
@@ -61,11 +78,15 @@ from app.kb.lookup import get_playbook
 from app.llm import results
 from app.llm.builder import (
     HEADING_LEARNED,
+    HEADING_MITRE_REFERENCE,
     SENTENCE_ABSENT,
     SENTENCE_LEARNED_IS_REFERENCE,
+    SENTENCE_MITRE_REFERENCE_IS_REFERENCE,
+    SENTENCE_MITRE_REFERENCE_QUOTED,
     SENTENCE_NO_CORRELATION,
     SENTENCE_NO_LEARNED,
     SENTENCE_NO_PLAYBOOK,
+    SEPARATOR,
     AlertStatus,
     AssetCriticality,
     Category,
@@ -78,6 +99,12 @@ from app.llm.builder import (
     Severity,
     fact,
     prompt_entries,
+)
+from app.llm.triage import (
+    MITRE_DROPPED_WARNING,
+    MITRE_REFERENCE_WARNING_PREFIX,
+    reference_version,
+    render_mitre_entries,
 )
 from app.security import wrap
 
@@ -112,6 +139,13 @@ STEP_STILL_OVER_BUDGET = "budget_exceeded_after_cuts"
 STEP_ENTITIES_CAPPED = "entities_cap_50"
 #: P13-T08: block 10 dropped whole, the first of the budget-driven steps (before `STEP_RAW_LOG_CUT`).
 STEP_LEARNED_DROPPED = "learned_dropped"
+#: DEC-223: the MITRE reference section dropped whole, before every other step (the learned section included): general
+#: text about techniques, the same for every case that carries the id, the least specific material in the dossier.
+#: The same words as the warning ① records for the same cut.
+STEP_MITRE_DROPPED = MITRE_DROPPED_WARNING
+#: DEC-223 (spec §6): the entries of the MITRE reference section that carry MITRE's text; the distinct ids of the case
+#: beyond them are one line each (`llm.triage.render_mitre_entries`). ①'s own cap is 6: a case has more alerts than one.
+MITRE_REFERENCE_MAX_ENTRIES_CASE = 10
 
 #: Should 8: the representatives cut's ranking, worst-first (design note 4 keeps the
 #: *biggest* clusters — the same instinct DEC-034 named for `risk_score`'s own weights).
@@ -174,6 +208,9 @@ DOSSIER_TEMPLATE_CONSTANTS = frozenset(
         HEADING_PREVIOUS_RUN,
         HEADING_SCOPE,
         HEADING_LEARNED,
+        HEADING_MITRE_REFERENCE,
+        SENTENCE_MITRE_REFERENCE_QUOTED,
+        SENTENCE_MITRE_REFERENCE_IS_REFERENCE,
         SENTENCE_OUT_OF_SCOPE,
         SENTENCE_HISTORY_NOT_COMPUTED,
     }
@@ -349,7 +386,13 @@ class Dossier:
 
     `learned_used` (P13-T08) is True when block 10 is in `text` - also in its "nothing found" form -
     and False when `build` got no `learned`, or the budget dropped it: the run whose prompt this is
-    used the lookup only in the first case. Defaults to False for the same reason."""
+    used the lookup only in the first case. Defaults to False for the same reason.
+
+    `mitre_warnings` (DEC-223) is what the run records of the MITRE reference section, in the words ①'s runs use:
+    `mitre_reference:<version>` (the section is in `text`) followed by `mitre_unknown_id` when an id is not in the
+    extract; or `mitre_reference_dropped` (the budget cut it); or `mitre_reference_unavailable` (the case has ids and
+    there is no usable extract). `()` with the switch off, and for a case with no id. Defaults to `()` for the same
+    reason."""
 
     text: str
     nonce: str
@@ -358,6 +401,7 @@ class Dossier:
     estimated_tokens: int
     blocks: tuple[tuple[str, str], ...] = ()
     learned_used: bool = False
+    mitre_warnings: tuple[str, ...] = ()
 
 
 class UnknownCase(Exception):
@@ -449,6 +493,22 @@ _TIMELINE_TAIL_SQL = f"""
 #: Exact count for the capped case's `truncations` entry (should 7) — not needed, and not
 #: run, when `_TIMELINE_SQL` alone already answered the whole case.
 _TIMELINE_COUNT_SQL = f"SELECT count(*) FROM ({_TIMELINE_BASE_SQL}) t"
+
+#: DEC-223: the technique ids of the case's alerts - the heads and the duplicates absorbed into them, the two paths
+#: of `_TIMELINE_BASE_SQL` - as one row per distinct list of ids and how many alerts carry exactly that list: a case
+#: of thousands of duplicates of a few rules is a few rows, not thousands. Ranked in Python (`rank_mitre_ids`).
+#: Read only with `PROMPT_INCLUDE_MITRE_REFERENCE` on.
+_MITRE_IDS_SQL = f"""
+    WITH members AS (
+        SELECT mitre_ids FROM alerts WHERE alert_id IN ({_CASE_ALERT_IDS})
+        UNION ALL
+        SELECT mitre_ids FROM alerts WHERE duplicate_of IN ({_CASE_ALERT_IDS})
+    )
+    SELECT mitre_ids, count(*) FROM members
+     WHERE cardinality(mitre_ids) > 0
+     GROUP BY mitre_ids
+     ORDER BY mitre_ids
+"""
 
 
 #: Blocker 4: this module's own correlation queries, not `domain.correlation`'s —
@@ -625,6 +685,34 @@ def _fetch_correlation(
 def _fetch_trigger_alert_id(conn: psycopg.Connection, case_id: str) -> str | None:
     row = conn.execute(_TRIGGER_ALERT_SQL, (case_id,)).fetchone()
     return row[0] if row and row[0] else None
+
+
+def _fetch_mitre_id_groups(conn: psycopg.Connection, case_id: str) -> list[tuple[list[str], int]]:
+    """`[(ids, alert count)]`: each distinct list of technique ids the case's alerts carry and how many alerts carry
+    it, in the database's order of the lists (`_MITRE_IDS_SQL`)."""
+    rows = conn.execute(_MITRE_IDS_SQL, (case_id, case_id)).fetchall()
+    return [(list(ids), int(count)) for ids, count in rows]
+
+
+def rank_mitre_ids(groups: Sequence[tuple[Sequence[str], int]]) -> list[str]:
+    """The distinct valid technique ids of `_fetch_mitre_id_groups`' rows, most frequent first, ties by id. An id is
+    valid when it passes `Id("mitre", ...)` exactly (no case folding, no white space: the way ① takes an alert's
+    ids); one that fails is skipped, never counted and never echoed. An id counts once for each alert that carries it,
+    whatever the alert's own list repeats."""
+    counts: dict[str, int] = {}
+    for ids, alerts in groups:
+        valid: set[str] = set()
+        for raw in ids:
+            try:
+                # `\d` in the builder's pattern also matches the digits of other scripts; the reference's ids are
+                # ASCII, and an alert's text is not echoed into the block of ours that the injection scan skips
+                if isinstance(raw, str) and raw.isascii():
+                    valid.add(Id("mitre", raw).value)
+            except ValueError:
+                continue
+        for technique in valid:
+            counts[technique] = counts.get(technique, 0) + alerts
+    return sorted(counts, key=lambda technique: (-counts[technique], technique))
 
 
 def _fetch_notes(conn: psycopg.Connection, case_id: str) -> list[tuple[Any, ...]]:
@@ -1343,6 +1431,27 @@ def _block10_learned(
     return "\n".join(parts)
 
 
+def _block11_mitre(version: str, text: str, nonce: str, sink: _BlockSink | None = None) -> str:
+    """The MITRE reference section (DEC-223, spec §6), ①'s (`llm.triage.mitre_section`) in this module's layout: the
+    heading; the version of the local extract as a typed fact on the same line as the first fixed sentence; MITRE's
+    own text as the one `mitre_reference` block (it holds backticks and angle brackets, so it is a block and never
+    prose); the second fixed sentence. `version` has passed `Id("attack_version", ...)` (`reference_version`).
+    """
+    return "\n".join(
+        (
+            HEADING_MITRE_REFERENCE,
+            SEPARATOR.join(
+                (
+                    fact("mitre_version", Id("attack_version", version)),
+                    SENTENCE_MITRE_REFERENCE_QUOTED,
+                )
+            ),
+            _wrapped(sink, text, "mitre_reference", nonce),
+            SENTENCE_MITRE_REFERENCE_IS_REFERENCE,
+        )
+    )
+
+
 def _select_representatives(
     heads: Sequence[_Head], trigger_alert_id: str | None, limit: int
 ) -> frozenset[str]:
@@ -1386,6 +1495,10 @@ def build(
     """The dossier of `case_id`: nine blocks. `learned` (P13-T08): None - those nine blocks, byte for byte
     what this function returned before the parameter existed. Else ten: block 10, the learned section (see
     the module docstring), follows block 8 and the scope sentence stays last.
+
+    `cfg.PROMPT_INCLUDE_MITRE_REFERENCE` (DEC-223): off - the text above, byte for byte, and the technique ids are
+    not even read. On, and the case's alerts carry at least one valid id: the MITRE reference section (the module
+    docstring) follows block 7. The ids do not depend on `as_of`: an alert's ids are those of its rule.
 
     `as_of` (P14-T11, the lab measurement): None - today's dossier. With an instant, block 6 (the tier-1
     audit rows) and block 8 (the case notes and the previous ② run) keep only the rows created strictly
@@ -1454,6 +1567,28 @@ def build(
     nothing_found = learned is not None and history_text is None and not learned_entries
     learned_dropped = False
 
+    # The MITRE reference section's material (DEC-223), read once, before any render or cut: nothing at all with the
+    # switch off (not one query), and for a case with no valid id. `mitre_text` is "" when there is no section to
+    # write; `mitre_notes` are the warnings the entries earned (`mitre_unknown_id`) or the one that says there was
+    # no usable extract (`mitre_reference_unavailable`).
+    mitre_text, mitre_version, mitre_notes = (
+        "",
+        None,
+        [],
+    )  # the text is "" exactly when the version is None
+    if cfg.PROMPT_INCLUDE_MITRE_REFERENCE:
+        mitre_ids = rank_mitre_ids(_fetch_mitre_id_groups(conn, case_id))
+        if mitre_ids:
+            mitre_text, mitre_notes = render_mitre_entries(
+                mitre_ids, limit=MITRE_REFERENCE_MAX_ENTRIES_CASE
+            )
+            mitre_version = reference_version() if mitre_text else None
+            if (
+                mitre_version is None
+            ):  # no usable extract (or a version that is not a version): no section
+                mitre_text = ""
+    mitre_dropped = False
+
     # `Dossier.blocks`: filled by the block functions as they wrap, and emptied at the start
     # of every render — the budget cascade below renders up to four times, and only the
     # last render is `text`.
@@ -1487,8 +1622,10 @@ def build(
             _block5_correlation(display_heads, correlation_by_head, nonce, blocks),
             _block6_tier1(tier1_rows, nonce, blocks),
             _block7_playbooks(categories, nonce, blocks),
-            _block8_notes_and_previous(notes, previous_run, nonce, blocks),
         ]
+        if mitre_version is not None and not mitre_dropped:
+            sections.append(_block11_mitre(mitre_version, mitre_text, nonce, blocks))
+        sections.append(_block8_notes_and_previous(notes, previous_run, nonce, blocks))
         if learned is not None and not learned_dropped:
             sections.append(
                 _block10_learned(
@@ -1505,6 +1642,16 @@ def build(
     text = render()
     estimated = _estimate_tokens(text)
     budget = cfg.CASE_PROMPT_BUDGET_TOKENS
+
+    if estimated > budget and mitre_text and not mitre_dropped:
+        # DEC-223 (spec §6): the reference section is MITRE's general text about techniques, the same for every case
+        # that carries the id: the least specific material in the dossier, so it is the very first thing to go -
+        # before the learned section and before any step that cuts what the case itself is made of. It goes whole.
+        before = estimated
+        mitre_dropped = True
+        text = render()
+        estimated = _estimate_tokens(text)
+        truncations.append({"step": STEP_MITRE_DROPPED, "before": before, "after": estimated})
 
     if estimated > budget and learned is not None and not nothing_found:
         # P13-T08, Review Focus 5: the learned section is a reference, never evidence, so it is the first
@@ -1549,6 +1696,13 @@ def build(
             {"step": STEP_STILL_OVER_BUDGET, "before": estimated, "after": estimated}
         )
 
+    if mitre_dropped:
+        mitre_warnings: tuple[str, ...] = (MITRE_DROPPED_WARNING,)
+    elif mitre_text:
+        mitre_warnings = (f"{MITRE_REFERENCE_WARNING_PREFIX}{mitre_version}", *mitre_notes)
+    else:
+        mitre_warnings = tuple(mitre_notes)  # `mitre_reference_unavailable`, or nothing
+
     return Dossier(
         text=text,
         nonce=nonce,
@@ -1557,4 +1711,5 @@ def build(
         estimated_tokens=estimated,
         blocks=tuple(blocks),
         learned_used=learned is not None and not learned_dropped,
+        mitre_warnings=mitre_warnings,
     )

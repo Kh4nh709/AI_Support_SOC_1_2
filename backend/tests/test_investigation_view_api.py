@@ -411,6 +411,7 @@ def test_done_run_has_evidence_marks_and_labels(client, db):
         "evidence_summary",
         "tech",
         "knowledge",  # DEC-221 AP-T3 follow-up: the RAG panel of the run
+        "checks",  # DEC-223: the timeline's techniques checked against the local ATT&CK reference
     }
     assert run["run_id"] == str(run_id)
     assert run["conclusion"] == "confirmed_incident"
@@ -838,6 +839,7 @@ _DONE_RUN_KEYS = {
     "evidence_summary",
     "tech",
     "knowledge",
+    "checks",  # DEC-223: `{technique_not_in_reference}`, the timeline rows whose technique the local ATT&CK reference lacks
 }
 
 
