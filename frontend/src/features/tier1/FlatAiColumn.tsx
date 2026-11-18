@@ -15,14 +15,7 @@ import { RagNotice } from "../../components/RagNotice";
 import { formatDateTime } from "../../format";
 import { S, labelOf } from "../../strings";
 import { agreementOf, humanDecisionOf } from "./agreement";
-import {
-  aiStateOfView,
-  conclusionOf,
-  heldOf,
-  servedGate,
-  type AiConclusion,
-  type AiState,
-} from "./aiState";
+import { aiStateOfView, conclusionOf, heldOf, type AiConclusion, type AiState } from "./aiState";
 
 const MUTED = "text-muted";
 
@@ -64,9 +57,9 @@ function ForcedFlag() {
  * What the AI concluded (P14-T03, DEC-213): "AI kết luận: **TP** (độ tin cậy cao)", and when the gate's checks raised
  * warnings, "… — **có cảnh báo kiểm chứng**: <reasons>" (DEC-217: the verdict is the model's own, the checks are
  * warnings beside it, and nothing is held back for a person). The conclusion is the verdict ① ended with, which is
- * the model's own answer except for a run below the RAG threshold (DEC-219, below), and the model's own answer for a
- * `needs_review` stored before DEC-217 that still arrives (`heldOf`'s guard half); a reason the UI has no label for
- * is shown as its code. All of it is text.
+ * the model's own answer or, for a run the RAG rule decided (DEC-219, DEC-225), the rule's - the line cannot tell and
+ * does not try - and the model's own answer for a `needs_review` stored before DEC-217 that still arrives (`heldOf`'s
+ * guard half); a reason the UI has no label for is shown as its code. All of it is text.
  *
  * The one component of that line, for the undecided column (`Verdict`) and for the decided one (`Decided`, in the
  * "Gợi ý ①" box): the two pages say the same thing in the same words, and what is added to the line is added here,
@@ -80,14 +73,11 @@ function ForcedFlag() {
  *
  * DEC-220 (trial): a run whose lookup kept no match has no `pct`, and its best candidate under the floor takes the
  * place of the percentage, in the same spot: "AI kết luận: **TP** (độ tin cậy trung bình) — trùng cao nhất 47% với tri
- * thức đã duyệt (dưới mức tối thiểu 50%)". The rule of DEC-219 cannot apply to such a run, so no default clause
- * follows it.
+ * thức đã duyệt (dưới mức tối thiểu 50%)".
  *
- * DEC-219 (trial, amended): for a run the RAG rule applied to (`state.ragDefaultBelow`, the threshold) `false_positive`
- * is ①'s default answer, and the line says so, the same whether the model had said FP itself or not: no confidence
- * note (it is the model's, in its own answer), then, after the percentage clause, a parenthesis, "(dưới 80%: mặc định
- * FP)", then the warning clause as before. With no percentage on the page the parenthesis follows the verdict. The line
- * never names the model's own answer. Any other run reads as it did.
+ * DEC-225 (the Owner, 18/11: "đây là luật ngầm. Không ghi vào UI"): the line says nothing of the RAG rule, in either
+ * direction. A run the rule decided reads "AI kết luận: **TP** — trùng 85% với tri thức đã duyệt" (the server serves no
+ * confidence for it, so there is no confidence note), like any other conclusion; there is no "mặc định" note.
  */
 export function ConclusionLine({
   state,
@@ -102,18 +92,15 @@ export function ConclusionLine({
 }) {
   const reasons = state.heldBy.map((code) => labelOf(S.ai1.heldReason, code));
   const because = S.ai1.heldBecause(reasons);
-  const defaultBelow = state.ragDefaultBelow;
   return (
     <>
       <p className="text-base text-ai-accent">
         {S.ai1.conclusion}: <strong className="text-lg">{labelOf(S.ai1.action, conclusion)}</strong>
-        {defaultBelow === undefined &&
-          state.confidence !== null &&
+        {state.confidence !== null &&
           ` ${S.ai1.confidenceNote(labelOf(S.confidence, state.confidence))}`}
         {rag.pct !== null && ` ${S.rag.dash} ${S.rag.match(rag.pct)}`}
         {rag.belowFloor !== undefined &&
           ` ${S.rag.dash} ${S.rag.belowFloor(rag.belowFloor.pct, rag.belowFloor.floor)}`}
-        {defaultBelow !== undefined && ` ${S.ai1.ragDefault(defaultBelow)}`}
         {heldOf(state) && (
           <>
             {` ${S.ai1.heldDash} `}
@@ -285,11 +272,9 @@ export function Ready({
   view: AlertView;
   state: Extract<AiState, { kind: "ready" }>;
 }) {
-  // The gate as the page reads it: for a run the RAG default applied to it has no verifier verdict, no warning, no
-  // forced flag and no proposed-versus-final pair, whatever the view carries (DEC-219; `servedGate`).
-  const served = view.suggestion ?? null;
-  const gate = servedGate(served?.gate, state.action);
-  const suggestion: Suggestion | null = served === null ? null : { ...served, gate };
+  // The gate as the server serves it: for a run the RAG rule decided it has no verifier verdict, no warning of the rule
+  // the model cited and the verdict ① ended with twice - the page reads it as it is and does not know why (DEC-225).
+  const suggestion: Suggestion | null = view.suggestion ?? null;
   const analysedThen = suggestion?.correlated_at_analysis;
   return (
     <div className="space-y-3">

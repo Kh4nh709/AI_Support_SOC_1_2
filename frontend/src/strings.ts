@@ -267,12 +267,8 @@ export const S = {
     heldDash: "—",
     held: "có cảnh báo kiểm chứng",
     heldBecause: (reasons: string[]) => (reasons.length === 0 ? "" : `: ${reasons.join(", ")}`),
-    // DEC-219 (trial, amended by the Owner): below the RAG threshold `false_positive` is ①'s default answer, whether
-    // the model had said it itself or not. The line says so in a parenthesis after the percentage clause and prints
-    // no confidence note (it is the model's, in its own answer), and never names the model's answer: "AI kết luận: FP
-    // — trùng 62% với tri thức đã duyệt (dưới 80%: mặc định FP) — có cảnh báo kiểm chứng: …". The verdict it names is
-    // always `false_positive`, worded as `action.false_positive` (strings.test.ts compares the two).
-    ragDefault: (threshold: number) => `(dưới ${threshold}%: mặc định FP)`,
+    // DEC-225 (the Owner, 18/11: "đây là luật ngầm. Không ghi vào UI"): there is no word for the RAG rule here, in
+    // either direction. A run the rule decided reads as any other: "AI kết luận: TP — trùng 85% với tri thức đã duyệt".
     // `llm.verdicts.HELD_REASONS`: the checks of the gate that raised a warning, in the gate's step order (the codes
     // kept their names from before DEC-217, when a failed check held the verdict). The keys are compared with the
     // backend's tuple in strings.test.ts; a code with no label is shown as the code.
@@ -354,9 +350,6 @@ export const S = {
         checks: "Kiểm chứng",
         // The line under the conclusion: what the verdict means.
         verdictNote: { true_positive: "tấn công thật", false_positive: "dương tính giả" },
-        // The confidence is the model's, in its own answer, so a verdict the RAG default decided (DEC-219) has none
-        // to show: the tile says it does not apply, and never what the model had answered.
-        confidenceNone: "không áp dụng cho kết luận mặc định",
         // Checks passed over checks that apply, and under it the warnings (in the warning colour) or the calm line.
         checksNote: {
           clean: "không có cảnh báo",
@@ -470,15 +463,6 @@ export const S = {
               : `Không tra cứu được tri thức đã duyệt: ${reason}.`,
           no_lookup: () => "Lượt phân tích này không tra cứu tri thức đã duyệt.",
         },
-        // The rule of DEC-219: below the threshold `false_positive` is the default answer. The sentence says whether it
-        // applied and never what the model had answered.
-        rule: {
-          applied: (threshold: number) =>
-            `Quy tắc "dưới ${threshold}% → mặc định FP" đã áp dụng: kết luận mặc định là FP.`,
-          notApplied: (threshold: number) =>
-            `Quy tắc "dưới ${threshold}% → mặc định FP" không áp dụng.`,
-          off: 'Quy tắc "dưới ngưỡng → mặc định FP" đang tắt.',
-        },
       },
       history: {
         heading: "Lịch sử quyết định",
@@ -531,7 +515,6 @@ export const S = {
           "1": "Đúng định dạng",
           "2": "Dữ kiện",
           "3": "Dẫn chứng",
-          "3r": "Quy tắc RAG",
           "4": "Chính sách FP",
           "5": "Chèn lệnh",
           "6": "Bộ kiểm chứng độc lập",
@@ -545,9 +528,6 @@ export const S = {
           quotes_verified: "mọi dẫn chứng khớp nguyên văn",
           quotes_some_dropped: "một số dẫn chứng không khớp nguyên văn",
           no_verified_quote: "không có dẫn chứng nào khớp nguyên văn",
-          rag_rule_applied: "đã áp dụng, kết luận mặc định là FP",
-          rag_rule_not_applied: "không áp dụng",
-          rag_rule_off: "quy tắc đang tắt",
           fp_policy_ok: "đạt",
           fp_policy_facts: "một dữ kiện của alert không cho phép kết luận FP",
           fp_policy_playbook: "không khớp bảng quyết định đã duyệt",
@@ -569,19 +549,6 @@ export const S = {
         mismatchJoin: "; ",
         // The verdict the verifier gave, beside the step's outcome: "không đồng ý (trả lời: Cần xem xét)".
         verifierSaid: (verdict: string) => ` (trả lời: ${verdict})`,
-        // The RAG rule's outcome and why it did not apply: "không áp dụng, không có mục trùng".
-        withWhy: (detail: string, why: string) => `${detail}, ${why}`,
-        // Why the rule did not apply, from the state of the lookup (`STATES`).
-        ragRuleWhy: {
-          matched: (best: number | null, threshold: number) =>
-            best === null
-              ? "độ trùng không dưới ngưỡng"
-              : `độ trùng ${best}% không dưới ngưỡng ${threshold}%`,
-          below_floor: () => "không có mục nào đạt mức tối thiểu",
-          no_candidate: () => "không có mục trùng",
-          failed: () => "tra cứu bị lỗi",
-          no_lookup: () => "không có tra cứu",
-        },
         // `gate.warnings`: each reason the rule check of step 4 wrote (`llm.verdicts.RULE_CHECK_WARNINGS`).
         ruleWarning: {
           no_rule_cited: "AI không dẫn rule nào của bảng quyết định",
@@ -645,7 +612,7 @@ export const S = {
     match: (pct: number) => `trùng ${pct}% với tri thức đã duyệt`,
     // DEC-220 (trial): a lookup that kept no match still scored candidates; the line says the best one's percentage
     // and the floor it was under, in the place of `match`: "— trùng cao nhất 47% với tri thức đã duyệt (dưới mức tối
-    // thiểu 50%)". The rule of DEC-219 does not apply to such a run, so no "mặc định FP" follows.
+    // thiểu 50%)".
     belowFloor: (pct: number, floor: number) =>
       `trùng cao nhất ${pct}% với tri thức đã duyệt (dưới mức tối thiểu ${floor}%)`,
     notApplied: (subject: "alert" | "case", reason: string) =>

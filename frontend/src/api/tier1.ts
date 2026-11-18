@@ -142,27 +142,13 @@ export type SuggestionReason = {
 };
 
 /**
- * The RAG rule of a ① run (DEC-219, trial, amended), as the alert view serves it: three keys. "A RAG match exists and
- * its best is below `threshold` percent: `false_positive` is ①'s default answer". `threshold` is 0 when the rule is
- * switched off, `best_pct` the number the page shows as "trùng X% với tri thức đã duyệt" (null when the run has none),
- * and `applied` whether the rule applied (a match below the threshold). The line reads only `applied` and `threshold`.
- * The server never sends whether the model had said `false_positive` itself or the default replaced its
- * `true_positive`: that would give the model's answer away. For a run the rule applied to it serves the verdict ①
- * ended with (`false_positive`) as the view's `proposed_action` and the gate's `proposed_verdict`, never the model's
- * own answer, no `confidence` and no `verifier_verdict`, and the gate is not forced (`forced` false, `forced_by`
- * empty).
- */
-export type RagRule = {
-  threshold: number;
-  best_pct: number | null;
-  applied: boolean;
-};
-
-/**
  * What the ① gate did (`queue.latest_suggestion`). `forced_by` is a list of gate rules, or absent. `forced` and
  * `forced_by` are the gate's own record: only a version 1 run (before DEC-217) was ever forced, and its
- * `final_verdict` may be `needs_review` there; a new run has `forced` false and `final_verdict` as `proposed_verdict`,
- * the RAG default of DEC-219 included. `rag_rule` is null or absent for a run stored before DEC-219.
+ * `final_verdict` may be `needs_review` there; a new run has `forced` false and `final_verdict` as `proposed_verdict`.
+ * For a run the RAG rule decided (DEC-219, two-sided since DEC-225) the server serves the verdict ① ended with as
+ * `proposed_verdict`, no `verifier_verdict` and none of the warnings of the rule the model cited, so nothing here gives
+ * the model's own answer away. Tier 1 is not told that a rule exists (the Owner, 18/11): the gate carries no `rag_rule`
+ * key, and the page has no word for one.
  */
 export type SuggestionGate = {
   forced?: boolean | null;
@@ -171,7 +157,6 @@ export type SuggestionGate = {
   final_verdict?: string | null;
   verifier_verdict?: string | null;
   warnings?: unknown[] | null;
-  rag_rule?: RagRule | null;
 };
 
 /** The latest ① result of an alert. Present only where the server shows it (the blind arm never gets it). */
@@ -197,7 +182,7 @@ export type Suggestion = {
 // `strings.test.ts` reads those tuples and holds both sides equal, so a code added there without a word here goes red.
 // A code this UI does not know still arrives as a plain string and is shown as it came.
 
-export const CHECK_IDS = ["1", "2", "3", "3r", "4", "5", "6"] as const;
+export const CHECK_IDS = ["1", "2", "3", "4", "5", "6"] as const;
 export type CheckId = (typeof CHECK_IDS)[number];
 export const CHECK_OUTCOMES = ["pass", "warn", "na"] as const;
 export type CheckOutcome = (typeof CHECK_OUTCOMES)[number];
@@ -209,9 +194,6 @@ export const CHECK_DETAILS = [
   "quotes_verified",
   "quotes_some_dropped",
   "no_verified_quote",
-  "rag_rule_applied",
-  "rag_rule_not_applied",
-  "rag_rule_off",
   "fp_policy_ok",
   "fp_policy_facts",
   "fp_policy_playbook",
@@ -328,8 +310,6 @@ export type AnalysisRag = {
   failure: string | null;
   best_pct: number | null;
   floor_pct: number | null;
-  /** The RAG rule's threshold (0: the rule is off). */
-  threshold_pct: number;
   scored: number | null;
   candidates: AnalysisCandidate[];
 };

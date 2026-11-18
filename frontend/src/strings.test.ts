@@ -390,14 +390,24 @@ describe("① verdict and warning labels follow the backend", () => {
     expect(S.ai1.heldBecause([])).toBe("");
   });
 
-  // DEC-219 (amended): the parenthesis of the line when the verdict is the default below the RAG threshold.
-  it("words the RAG default below the threshold as the spec has it (DEC-219 section 6)", () => {
-    expect(S.ai1.ragDefault(80)).toBe("(dưới 80%: mặc định FP)");
-    expect(S.ai1.ragDefault(65)).toBe("(dưới 65%: mặc định FP)");
-    // the default is `false_positive`: the verdict it names is the label the line gives that verdict
-    expect(S.ai1.ragDefault(80)).toContain(`mặc định ${S.ai1.action.false_positive})`);
-    // nothing of the model's own answer: the page does not say it
-    expect(S.ai1.ragDefault(80)).not.toMatch(/model|TP/);
+  // DEC-225 (the Owner, 18/11: "đây là luật ngầm. Không ghi vào UI"): Tier 1 has no word for the RAG rule, in either
+  // direction - no "mặc định FP" note, no step row, no sentence of the knowledge tab, no tile line.
+  it("has no word for the RAG rule anywhere in what Tier 1 reads (DEC-225)", () => {
+    expect(S.ai1).not.toHaveProperty("ragDefault");
+    expect(S.ai1.panel.tile).not.toHaveProperty("confidenceNone");
+    expect(S.ai1.panel.knowledge).not.toHaveProperty("rule");
+    expect(S.ai1.panel.checks).not.toHaveProperty("withWhy");
+    expect(S.ai1.panel.checks).not.toHaveProperty("ragRuleWhy");
+    expect(S.ai1.panel.checks.step).not.toHaveProperty("3r");
+    const words = (value: unknown): string[] => {
+      if (typeof value === "string") return [value];
+      if (typeof value === "function") return [];
+      if (typeof value === "object" && value !== null) return Object.values(value).flatMap(words);
+      return [];
+    };
+    const said = [...words(S.ai1), ...words(S.analysis), ...words(S.rag)];
+    expect(said.length).toBeGreaterThan(100); // a walk that finds nothing would pass for nothing
+    expect(said.filter((word) => /mặc định|quy tắc rag|rag_rule/i.test(word))).toEqual([]);
   });
 
   it("says no ① warning word that the system held or kept the verdict back for a person", () => {
@@ -621,8 +631,8 @@ describe("the Tier 1 panel's words (DEC-221)", () => {
   };
 
   it("reads the backend's tuples (a parse that finds nothing would compare nothing)", () => {
-    expect(pyTuple("CHECK_IDS")).toEqual(["1", "2", "3", "3r", "4", "5", "6"]);
-    expect(pyTupleWithComments("CHECK_DETAILS")).toHaveLength(20);
+    expect(pyTuple("CHECK_IDS")).toEqual(["1", "2", "3", "4", "5", "6"]);
+    expect(pyTupleWithComments("CHECK_DETAILS")).toHaveLength(17);
     expect(pyTupleWithComments("HIGHLIGHT_CODES")).toHaveLength(16);
     expect(pyTuple("REASON_WHY")).toHaveLength(3);
     expect(pyFrozenset("REASON_SOURCES")).toHaveLength(6);
@@ -704,10 +714,6 @@ describe("the Tier 1 panel's words (DEC-221)", () => {
     expect(Object.keys(P.checks.ruleWarning)).toEqual(pyTuple("RULE_CHECK_WARNINGS"));
   });
 
-  it("says why the RAG rule did not apply for every state of the lookup", () => {
-    expect(Object.keys(P.checks.ragRuleWhy)).toEqual(pyTuple("STATES", join(BACKEND_APP, "llm")));
-  });
-
   it("words the RAG tile of both tiers with one table, in S.analysis and nowhere else, one line for every failure kind", () => {
     expect(S.ai2.tile).not.toHaveProperty("ragNote");
     expect(Object.keys(S.analysis.ragNote.failedKind)).toEqual(pyTuple("FAILURE_KINDS"));
@@ -767,7 +773,6 @@ describe("the Tier 1 panel's words (DEC-221)", () => {
     expect(P.knowledge.state.below_floor(50)).toBe(
       "Không mục nào đạt mức tối thiểu 50%, nên AI không được cung cấp tri thức tham khảo.",
     );
-    expect(P.knowledge.rule.notApplied(80)).toBe('Quy tắc "dưới 80% → mặc định FP" không áp dụng.');
     expect(P.evidence.summary(2, 4)).toBe("2 trên 4 dẫn chứng khớp nguyên văn với dữ liệu alert.");
   });
 });

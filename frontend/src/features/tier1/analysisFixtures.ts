@@ -59,7 +59,6 @@ export const analysis = (over: Partial<Analysis> = {}): Analysis => ({
     { id: "1", outcome: "pass", detail: "schema_ok" },
     { id: "2", outcome: "warn", detail: "facts_mismatch" },
     { id: "3", outcome: "pass", detail: "quotes_some_dropped" },
-    { id: "3r", outcome: "na", detail: "rag_rule_not_applied" },
     { id: "4", outcome: "na", detail: "not_false_positive" },
     { id: "5", outcome: "pass", detail: "no_injection_findings" },
     { id: "6", outcome: "warn", detail: "verifier_disagrees" },
@@ -70,7 +69,6 @@ export const analysis = (over: Partial<Analysis> = {}): Analysis => ({
     failure: null,
     best_pct: 47,
     floor_pct: 50,
-    threshold_pct: 80,
     scored: 23,
     candidates: [
       {
@@ -134,11 +132,12 @@ export const olderAnalysis = (over: Partial<Analysis> = {}): Analysis =>
   });
 
 /**
- * A run the RAG default of DEC-219 applied to (`gate.rag_rule.applied`): what the server then does not send is `null`
- * or left out: the two readings and `would_change`, the model's column of the facts and `match`, and the verifier's
- * check (row 6), and step 4 is told from the system facts only. The lookup matched (62%) under the 80% threshold.
+ * A run the RAG rule decided (DEC-219, DEC-225): the page is not told, but the server withholds what would give the
+ * model's answer away. What it then does not send is `null` or left out: the two readings and `would_change`, the
+ * model's column of the facts and `match`, and the verifier's check (row 6), and step 4 is told from the system facts
+ * only. The lookup matched (62%).
  */
-export const ragDefaultAnalysis = (over: Partial<Analysis> = {}): Analysis =>
+export const ruleDecidedAnalysis = (over: Partial<Analysis> = {}): Analysis =>
   analysis({
     reading_attack: null,
     reading_benign: null,
@@ -155,17 +154,15 @@ export const ragDefaultAnalysis = (over: Partial<Analysis> = {}): Analysis =>
       { id: "1", outcome: "pass", detail: "schema_ok" },
       { id: "2", outcome: "pass", detail: "facts_match" },
       { id: "3", outcome: "pass", detail: "quotes_verified" },
-      { id: "3r", outcome: "pass", detail: "rag_rule_applied" },
       { id: "4", outcome: "pass", detail: "fp_policy_ok" },
       { id: "5", outcome: "pass", detail: "no_injection_findings" },
     ],
-    check_totals: { passed: 6, applicable: 6, warnings: 0 },
+    check_totals: { passed: 5, applicable: 5, warnings: 0 },
     rag: {
       state: "matched",
       failure: null,
       best_pct: 62,
       floor_pct: 50,
-      threshold_pct: 80,
       scored: 12,
       candidates: [
         { pct: 62, title: "Quét cổng từ máy trong mạng nội bộ", conclusion: "closed_fp" },
@@ -182,8 +179,11 @@ export const ragDefaultAnalysis = (over: Partial<Analysis> = {}): Analysis =>
     ...over,
   });
 
-/** The `suggestion` and the keys beside it that go with a run the RAG default applied to (DEC-219). */
-export const ragDefaultKeys = (threshold = 80, best = 62): Partial<AlertView> => ({
+/**
+ * The `suggestion` and the keys beside it that go with a run the RAG rule decided, as the server serves them (DEC-219,
+ * DEC-225): the verdict ① ended with, no confidence, no verifier verdict, and no `rag_rule`.
+ */
+export const ruleDecidedKeys = (best = 62): Partial<AlertView> => ({
   suggestion: {
     run_id: "r1",
     suggested_action: "false_positive",
@@ -196,7 +196,6 @@ export const ragDefaultKeys = (threshold = 80, best = 62): Partial<AlertView> =>
       final_verdict: "false_positive",
       verifier_verdict: null,
       warnings: [],
-      rag_rule: { threshold, best_pct: best, applied: true },
     },
     correlated_at_analysis: 3,
     created_at: "2026-11-15T11:35:56Z",

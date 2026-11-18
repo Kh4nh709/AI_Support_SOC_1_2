@@ -55,7 +55,7 @@ export function AnalysisPanel({
           {
             id: "knowledge",
             label: T.knowledge,
-            content: <KnowledgeTab model={model} ruleApplied={state.ragDefaultBelow} />,
+            content: <KnowledgeTab model={model} />,
           },
           {
             id: "checks",

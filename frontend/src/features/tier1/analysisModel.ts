@@ -7,13 +7,13 @@
 //
 // The model's name is not an input and not an output (G5): nothing below reads a key that could hold one, and the
 // technical figures are the six the Owner approved. `facts[].model` is the value the model DECLARED for a field.
-import type { AlertView, SuggestionGate } from "../../api/tier1";
+import type { AlertView } from "../../api/tier1";
 import { formatTime } from "../../format";
 import { S, labelOf, failureKindLabel, type HighlightWords } from "../../strings";
 import type { MeterLevel } from "../analysis/ConfidenceMeter";
 import { knowledgeFrom, type Knowledge } from "../analysis/knowledge";
 import type { Tone } from "../analysis/styles";
-import { conclusionOf, servedGate, servedHeldBy, type AiState } from "./aiState";
+import { conclusionOf, heldByOf, type AiState } from "./aiState";
 
 const P = S.ai1.panel;
 
@@ -87,8 +87,8 @@ export type FactRow = {
   declared: string | null;
   match: boolean | null;
 };
-/** The lookup of the run (the shape both tiers read) and the threshold of the rule of DEC-219 (0: the rule is off). */
-export type RagModel = Knowledge & { threshold: number };
+/** The lookup of the run, in the shape both tiers read (`analysis/knowledge.ts`). Nothing of the RAG rule: DEC-225. */
+export type RagModel = Knowledge;
 export type PlaybookModel = {
   name: string;
   ruleId: string | null;
@@ -232,25 +232,10 @@ function rawFactsOf(value: unknown): RawFact[] {
 
 const OUTCOMES = ["pass", "warn", "na"] as const;
 
-/**
- * Why the RAG rule did not apply, from the state of the lookup ("không có mục trùng"). A state this page has no words
- * for is shown as the code, never left out.
- */
-function ruleWhy(rag: RagModel | null): string | null {
-  if (rag === null) return null;
-  const why = Object.hasOwn(P.checks.ragRuleWhy, rag.state)
-    ? (P.checks.ragRuleWhy as Record<string, (best: number | null, threshold: number) => string>)[
-        rag.state
-      ]
-    : undefined;
-  return why === undefined ? rag.state : why(rag.best_pct, rag.threshold);
-}
-
 function checksOf(
   value: unknown,
   facts: readonly RawFact[],
   evidence: { verified: number; total: number },
-  rag: RagModel | null,
 ): CheckRow[] {
   return list(value).flatMap((row): CheckRow[] => {
     if (!isRecord(row)) return [];
@@ -282,9 +267,6 @@ function checksOf(
       evidence.total > 0
     ) {
       words = P.checks.quotes(evidence.verified, evidence.total);
-    } else if (detail === "rag_rule_not_applied") {
-      const why = ruleWhy(rag);
-      if (why !== null) words = P.checks.withWhy(words, why);
     }
     return [{ id, name: wordOf(P.checks.step, id), outcome, text: words, detail, notes: [] }];
   });
@@ -348,9 +330,10 @@ function drawnHighlightCodes(value: unknown): Set<string> {
  * What the view says of the gate beside `analysis` and the panel must not leave unread (spec G2): the held reasons
  * (`held_by`) and the reasons the step-4 rule check wrote (`gate.warnings`), each on the row of the step it belongs to,
  * in the words of the flat column, unless the line of that step already says it; the verifier's verdict beside step 6;
- * the verdict before and after the gate of a run the gate forced. For a run the RAG default applied to (DEC-219) the
- * gate and `held_by` are read as `servedGate` and `servedHeldBy` say (aiState.ts, the one place that does), so none of
- * what would tell what the model answered is here. A reason whose step has no row, and a code that names no step, is
+ * the verdict before and after the gate of a run the gate forced. For a run the RAG rule decided (DEC-219, DEC-225) the
+ * server serves a gate and a `held_by` with nothing that would tell what the model answered (no verifier verdict, no
+ * `verifier_disagrees`, none of the warnings of the rule it cited), and the page reads them as they are: it does not
+ * know that a rule exists. A reason whose step has no row, and a code that names no step, is
  * listed apart and never dropped, and the tile counts it (`extra`).
  */
 function withGate(
@@ -360,11 +343,9 @@ function withGate(
 ): { checks: CheckRow[]; gate: GateNotes } {
   const suggestion: unknown = view.suggestion;
   const gateRaw: unknown = isRecord(suggestion) ? suggestion.gate : null;
-  const action = isRecord(suggestion) ? text(suggestion.suggested_action) : null;
-  const served = servedGate(isRecord(gateRaw) ? (gateRaw as SuggestionGate) : null, action);
-  const gate: Record<string, unknown> = served === null ? {} : (served as Record<string, unknown>);
+  const gate: Record<string, unknown> = isRecord(gateRaw) ? gateRaw : {};
 
-  const heldCodes = [...new Set(servedHeldBy(view))];
+  const heldCodes = [...new Set(heldByOf(view))];
   const held = heldCodes.map((code) => labelOf(S.ai1.heldReason, code));
   const warnings = list(gate.warnings).map((w) =>
     typeof w === "string" ? wordOf(P.checks.ruleWarning, w) : JSON.stringify(w),
@@ -391,7 +372,7 @@ function withGate(
   });
   for (const words of warnings) place("4", words, false);
 
-  // The verifier's own verdict, beside the outcome of step 6 (the served gate has none for a run the default decided).
+  // The verifier's own verdict, beside the outcome of step 6 (the server serves none for a run the RAG rule decided).
   const verifier = verifierWords(gate);
   const verifierRow = rows.get("6");
   if (verifier !== null && verifierRow !== undefined) {
@@ -443,11 +424,9 @@ function totalsOf(
 
 // ── the lookup, the history, the playbook, the figures ───────────────────────────────────────────
 
-/** The lookup, read by the reader both tiers share, with the rule's threshold (0: the rule is off). */
+/** The lookup, read by the reader both tiers share. */
 function ragOf(value: unknown): RagModel | null {
-  const knowledge = knowledgeFrom(value);
-  if (knowledge === null || !isRecord(value)) return null;
-  return { ...knowledge, threshold: wholeCount(value.threshold_pct) ?? 0 };
+  return knowledgeFrom(value);
 }
 
 function historyOf(value: unknown): { line: string } | null {
@@ -507,7 +486,7 @@ export function analysisOf(view: AlertView): AnalysisModel | null {
   const rag = ragOf(raw.rag);
   const { checks, gate } = withGate(
     view,
-    checksOf(raw.checks, facts, evidence, rag),
+    checksOf(raw.checks, facts, evidence),
     drawnHighlightCodes(raw.highlights),
   );
   return {
@@ -546,48 +525,36 @@ export type VerdictTile = { label: string; tone: Tone; note: string | null; forc
 
 /**
  * The Kết luận tile: the verdict ① ended with (`conclusionOf`: the action when it is one of the model's two, else the
- * model's own answer for a `needs_review` stored before DEC-217), TP in the high-severity orange and FP in the calm blue.
- * For a run the RAG default applied to (DEC-219) the line under it is the existing "(dưới 80%: mặc định FP)", the
- * same whatever the model had answered. A verdict this page has no scale for is shown as it came, neutral, with no
- * line. The flag is the gate's own (a version 1 row, before DEC-217): a new run never carries it.
+ * model's own answer for a `needs_review` stored before DEC-217), TP in the high-severity orange and FP in the calm blue,
+ * with the words of the verdict under it ("tấn công thật", "dương tính giả"). A verdict this page has no scale for is
+ * shown as it came, neutral, with no line. The flag is the gate's own (a version 1 row, before DEC-217): a new run
+ * never carries it. A run the RAG rule decided (DEC-219, DEC-225) reads like any other: the page is not told.
  */
 export function verdictTile(state: Concluded): VerdictTile {
-  // A run the RAG default decided is never forced (DEC-219, section 6: no flag): whatever the gate's record says.
-  const forced = state.kind === "ready" && state.forced && state.ragDefaultBelow === undefined;
+  const forced = state.kind === "ready" && state.forced;
   const conclusion = conclusionOf(state);
   if (conclusion === null) {
     return { label: labelOf(S.ai1.action, state.action), tone: "neutral", note: null, forced };
   }
-  const note =
-    state.ragDefaultBelow !== undefined
-      ? S.ai1.ragDefault(state.ragDefaultBelow)
-      : wordOf(P.tile.verdictNote, conclusion);
   return {
     label: labelOf(S.ai1.action, conclusion),
     tone:
       conclusion === "true_positive" ? "high" : conclusion === "false_positive" ? "low" : "neutral",
-    note:
-      Object.hasOwn(P.tile.verdictNote, conclusion) || state.ragDefaultBelow !== undefined
-        ? note
-        : null,
+    note: Object.hasOwn(P.tile.verdictNote, conclusion)
+      ? wordOf(P.tile.verdictNote, conclusion)
+      : null,
     forced,
   };
 }
 
 export type ConfidenceTile =
-  | { kind: "level"; level: MeterLevel; word: string }
-  | { kind: "word"; word: string }
-  | { kind: "none"; word: string; note: string };
+  { kind: "level"; level: MeterLevel; word: string } | { kind: "word"; word: string };
 
 /**
  * The Độ tin cậy tile: the word and the meter for low, medium or high; the word alone for a level the page has no scale
- * for; a dash for none. A verdict the RAG default decided (DEC-219) has no confidence of its own to show (it is the
- * model's, in its own answer), and the tile says it does not apply.
+ * for; a dash for none (the server serves no confidence for a run the RAG rule decided, and the page does not say why).
  */
 export function confidenceTile(state: Concluded): ConfidenceTile {
-  if (state.ragDefaultBelow !== undefined) {
-    return { kind: "none", word: S.common.missing, note: P.tile.confidenceNone };
-  }
   const level = state.confidence;
   if (level === "low" || level === "medium" || level === "high") {
     return { kind: "level", level, word: S.analysis.level[level] };

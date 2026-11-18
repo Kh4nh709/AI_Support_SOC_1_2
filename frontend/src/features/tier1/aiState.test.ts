@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AlertView, QueueRow, RagRule } from "../../api/tier1";
+import type { AlertView, QueueRow } from "../../api/tier1";
 import {
   DECIDED,
   MODEL_ACTIONS,
@@ -248,71 +248,95 @@ describe("aiStateOfView", () => {
     });
   });
 
-  // DEC-219: for a run the RAG default applied to, the server leaves out of `held_by` the two reasons that would tell
-  // what the model answered (the verifier's disagreement, the playbook rule it cited). The state leaves them out too, once,
-  // so every consumer of `heldBy` (the line of a decided page, the flat column, the panel) gets the filtered list.
-  describe("for a run the RAG default applied to (DEC-219), whatever arrives", () => {
-    const applied = (over: Partial<AlertView> = {}, gate: Record<string, unknown> = {}) =>
+  // DEC-225: the page is not told that a rule decided a run. For such a run the server serves a verdict, no confidence,
+  // no verifier verdict and a `held_by` without `verifier_disagrees` and `fp_policy:playbook_rule`; the state is what it
+  // is made of, key for key, like that of any other run - there is nothing to filter and no key to carry.
+  describe("for a run the RAG rule decided (DEC-225), as the server serves it", () => {
+    const decidedByTheRule = (over: Partial<AlertView> = {}, gate: Record<string, unknown> = {}) =>
       view({
         suggestion: {
           suggested_action: "false_positive",
           confidence: null,
           gate: {
             forced: false,
-            rag_rule: { threshold: 80, best_pct: 62, applied: true },
+            forced_by: [],
+            proposed_verdict: "false_positive",
+            final_verdict: "false_positive",
+            verifier_verdict: null,
             ...gate,
           },
         },
         proposed_action: "false_positive",
         ...over,
       });
-    const STRAY = [
-      "fp_policy:asset_criticality",
-      "verifier_disagrees",
-      "fp_policy:playbook_rule",
-      "verifier_invalid",
-      "facts_mismatch",
-    ];
 
-    it("leaves out the verifier's disagreement and the playbook rule, and keeps every other reason, in order", () => {
-      expect(aiStateOfView(applied({ held_by: STRAY }))).toMatchObject({
+    it("is an ordinary ready state: the verdict, no confidence, nothing forced, no extra key", () => {
+      expect(aiStateOfView(decidedByTheRule({ held_by: ["fp_policy:severity"] }))).toEqual({
         kind: "ready",
-        heldBy: ["fp_policy:asset_criticality", "verifier_invalid", "facts_mismatch"],
-      });
-    });
-
-    it("does the same for a decided page, whose line reads the same list", () => {
-      const decided = applied({ status: "closed_fp", held_by: STRAY });
-      expect(aiStateOfView(decided)).toMatchObject({
-        kind: "decided",
-        heldBy: ["fp_policy:asset_criticality", "verifier_invalid", "facts_mismatch"],
-      });
-    });
-
-    it("is never forced, whatever the gate's record says", () => {
-      expect(aiStateOfView(applied({}, { forced: true, forced_by: ["step4"] }))).toMatchObject({
-        kind: "ready",
+        action: "false_positive",
+        confidence: null,
         forced: false,
+        proposed: "false_positive",
+        heldBy: ["fp_policy:severity"],
       });
     });
 
-    it("leaves a run the rule did not apply to as it was: both reasons stay", () => {
-      const notApplied = applied(
-        { held_by: STRAY },
-        { rag_rule: { threshold: 80, applied: false } },
-      );
-      expect(aiStateOfView(notApplied)).toMatchObject({ heldBy: STRAY });
-      const noRule = view({ held_by: STRAY });
-      expect(aiStateOfView(noRule)).toMatchObject({ heldBy: STRAY });
+    it("is the other direction too: a true positive with no confidence is an ordinary ready state", () => {
+      const v = decidedByTheRule();
+      v.suggestion = { ...v.suggestion!, suggested_action: "true_positive" };
+      v.proposed_action = "true_positive";
+      expect(aiStateOfView(v)).toEqual({
+        kind: "ready",
+        action: "true_positive",
+        confidence: null,
+        forced: false,
+        proposed: "true_positive",
+        heldBy: [],
+      });
     });
 
-    it("reads `applied` as the server wrote it: only the JSON true", () => {
-      for (const odd of ["true", 1, "yes", null, undefined, {}]) {
-        const state = aiStateOfView(
-          applied({ held_by: STRAY }, { rag_rule: { threshold: 80, applied: odd } }),
-        );
-        expect(state, String(odd)).toMatchObject({ heldBy: STRAY });
+    it("is an ordinary decided state once the alert is decided", () => {
+      for (const status of DECIDED) {
+        expect(aiStateOfView(decidedByTheRule({ status }))).toEqual({
+          kind: "decided",
+          action: "false_positive",
+          confidence: null,
+          proposed: "false_positive",
+          heldBy: [],
+        });
       }
+    });
+
+    it("reads `held_by` as it arrives: the server leaves out what would give the model's answer away, the page filters nothing", () => {
+      const sent = ["fp_policy:asset_criticality", "verifier_invalid", "facts_mismatch"];
+      expect(aiStateOfView(decidedByTheRule({ held_by: sent }))).toMatchObject({ heldBy: sent });
+      expect(aiStateOfView(decidedByTheRule({ status: "closed_fp", held_by: sent }))).toMatchObject(
+        { heldBy: sent },
+      );
+    });
+
+    it("is forced only when the gate says so (a version 1 row): nothing else is read from the gate", () => {
+      expect(
+        aiStateOfView(decidedByTheRule({}, { forced: true, forced_by: ["step4"] })),
+      ).toMatchObject({ kind: "ready", forced: true });
+      expect(aiStateOfView(decidedByTheRule())).toMatchObject({ kind: "ready", forced: false });
+    });
+
+    // A stale cache or an older server may still send a `rag_rule` in the gate: the state has no key for it, whatever
+    // it holds, and the state is the same as without it.
+    it.each([
+      [{ threshold: 80, best_pct: 62, applied: true }],
+      [{ threshold: 80, best_pct: 62, applied: true, changed: true }],
+      [{ threshold: 80, best_pct: null, applied: false }],
+      ["applied"],
+      [null],
+    ])("has no key of the rule when the gate still carries one: %j", (rule) => {
+      const plain = aiStateOfView(decidedByTheRule());
+      const stale = aiStateOfView(decidedByTheRule({}, { rag_rule: rule }));
+      expect(stale).toEqual(plain);
+      expect(Object.keys(stale).sort()).toEqual(
+        ["action", "confidence", "forced", "heldBy", "kind", "proposed"].sort(),
+      );
     });
   });
 
@@ -475,129 +499,9 @@ describe("aiStateOfView", () => {
     });
   });
 
-  // DEC-219 (amended): below the threshold `false_positive` is ①'s default answer. The alert view's
-  // `suggestion.gate.rag_rule` says the rule applied (`applied` true, whether or not the model had said FP itself); the
-  // state keeps the threshold of that rule, and only then (a rule that did not apply, a run with no `rag_rule`, and a
-  // version 1 row have no such key). Only `applied` and `threshold` are read: the page never says what the model answered.
-  describe("the RAG default below the threshold (DEC-219)", () => {
-    const RULE: RagRule = { threshold: 80, best_pct: 62, applied: true };
-    /**
-     * A run the rule applied to as the server serves it: ① ended with FP, nothing of the model's own answer is served
-     * (`proposed_action` and `gate.proposed_verdict` are the verdict ① ended with, the verifier's verdict and the
-     * confidence are null), and nothing is forced. `held_by` never carries `verifier_disagrees`.
-     */
-    const applied = (over: Partial<AlertView> = {}, rule: unknown = RULE): AlertView =>
-      view({
-        suggestion: {
-          suggested_action: "false_positive",
-          confidence: null,
-          gate: {
-            forced: false,
-            forced_by: [],
-            proposed_verdict: "false_positive",
-            final_verdict: "false_positive",
-            verifier_verdict: null,
-            rag_rule: rule as RagRule | null | undefined,
-          },
-        },
-        proposed_action: "false_positive",
-        held_by: [],
-        ...over,
-      });
-
-    it("is carried by a ready state, beside the verdict, with nothing forced", () => {
-      expect(aiStateOfView(applied())).toEqual({
-        kind: "ready",
-        action: "false_positive",
-        confidence: null,
-        forced: false,
-        proposed: "false_positive",
-        heldBy: [],
-        ragDefaultBelow: 80,
-      });
-    });
-
-    it("reads only applied and threshold: a key of the rule it does not read (a `changed` an older server sent) alters nothing", () => {
-      const plain = aiStateOfView(applied());
-      expect(plain).toMatchObject({ kind: "ready", ragDefaultBelow: 80 });
-      for (const changed of [true, false]) {
-        expect(aiStateOfView(applied({}, { ...RULE, changed }))).toEqual(plain);
-      }
-      expect(aiStateOfView(applied({}, { ...RULE, note: "x" }))).toEqual(plain);
-    });
-
-    it("is carried by a decided state too, the decision lifting the blind arm", () => {
-      for (const status of DECIDED) {
-        expect(aiStateOfView(applied({ status }))).toEqual({
-          kind: "decided",
-          action: "false_positive",
-          confidence: null,
-          proposed: "false_positive",
-          heldBy: [],
-          ragDefaultBelow: 80,
-        });
-      }
-      expect(
-        aiStateOfView(applied({ status: "closed_fp", suggestion_visible: false })),
-      ).toMatchObject({ kind: "decided", ragDefaultBelow: 80 });
-    });
-
-    it("takes the threshold from the stored rule, whatever it was", () => {
-      const rule = { ...RULE, threshold: 65, best_pct: 40 };
-      expect(aiStateOfView(applied({}, rule))).toMatchObject({ ragDefaultBelow: 65 });
-    });
-
-    it("keeps the warnings beside it", () => {
-      // a reason about a fact of the alert is the system's own and stays (the playbook rule is the model's and goes)
-      expect(aiStateOfView(applied({ held_by: ["fp_policy:asset_criticality"] }))).toMatchObject({
-        heldBy: ["fp_policy:asset_criticality"],
-        ragDefaultBelow: 80,
-      });
-    });
-
-    it.each([
-      ["a rule that did not apply", { threshold: 80, best_pct: 91, applied: false }],
-      ["a rule switched off", { threshold: 0, best_pct: null, applied: false }],
-      ["a run with no rag_rule (null)", null],
-      ["a run with no rag_rule (not a key)", undefined],
-      ["a rag_rule that is not an object", "applied"],
-      ["an applied rule with no threshold", { applied: true }],
-      ["an applied rule whose threshold is not a number", { ...RULE, threshold: "80" }],
-      [
-        "an applied rule whose threshold is 0 (switched off: nothing is below it)",
-        { ...RULE, threshold: 0 },
-      ],
-      ["a rule whose applied is not true", { ...RULE, applied: "yes" }],
-      [
-        "a rule with no applied key (a `changed` alone is not read)",
-        { threshold: 80, best_pct: 62, changed: true },
-      ],
-    ])("has no threshold for %s", (_name, rule) => {
-      const v = applied({}, rule);
-      if (rule === undefined) delete v.suggestion?.gate?.rag_rule;
-      const state = aiStateOfView(v);
-      expect(state).toMatchObject({ kind: "ready" });
-      expect("ragDefaultBelow" in state).toBe(false);
-    });
-
-    // A server that says the rule applied while the verdict it serves is not `false_positive` is inconsistent: the
-    // state then has no default to announce, and the line is today's.
-    it.each([
-      ["true_positive", "ready"],
-      ["needs_review", "ready"],
-      ["true_positive", "decided"],
-    ])(
-      "has no threshold when the rule applied but the action is %s (an inconsistent server): %s",
-      (action, kind) => {
-        const v = applied(kind === "decided" ? { status: "closed_fp" } : {});
-        v.suggestion = { ...v.suggestion!, suggested_action: action };
-        const state = aiStateOfView(v);
-        expect(state).toMatchObject({ kind, action });
-        expect("ragDefaultBelow" in state).toBe(false);
-      },
-    );
-
-    it("is never in the state of a queue row, which carries no rag_rule", () => {
+  // DEC-225: no key for the RAG rule in any state of the alert view or of a queue row.
+  describe("the RAG rule has no key in any state (DEC-225)", () => {
+    it("is never in the state of a queue row", () => {
       const queued = aiStateOfRow(
         row({
           suggested_action: "false_positive",
@@ -616,7 +520,7 @@ describe("aiStateOfView", () => {
     });
 
     it("is not in a blind, undecided head, which has no suggestion to read it from", () => {
-      const blind = applied({ suggestion_visible: false });
+      const blind = view({ suggestion_visible: false });
       delete blind.suggestion;
       delete blind.triage_status;
       expect(aiStateOfView(blind)).toEqual({ kind: "hidden" });

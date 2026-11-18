@@ -47,21 +47,12 @@ export function AnalysisTiles({
         }
         note={verdict.note}
       />
-      {confidence.kind === "none" ? (
-        <ScoreTile
-          label={P.tile.confidence}
-          tone="ai"
-          value={confidence.word}
-          note={confidence.note}
+      <ScoreTile label={P.tile.confidence} tone="ai">
+        <ConfidenceMeter
+          level={confidence.kind === "level" ? confidence.level : null}
+          word={confidence.word}
         />
-      ) : (
-        <ScoreTile label={P.tile.confidence} tone="ai">
-          <ConfidenceMeter
-            level={confidence.kind === "level" ? confidence.level : null}
-            word={confidence.word}
-          />
-        </ScoreTile>
-      )}
+      </ScoreTile>
       <ScoreTile label={P.tile.rag} figure value={rag.value} note={rag.note} />
       <ScoreTile
         label={P.tile.checks}

@@ -649,9 +649,10 @@ describe("the ① column, from the state of the view", () => {
     expect(within(aiColumn()).getByText(S.ai1.gateForced)).toBeInTheDocument();
   });
 
-  // DEC-219 (amended): the page hands the column the view as it is, and below the threshold the line says FP is the
-  // default: no confidence note, no flag, and nothing of what the model answered.
-  it("says FP is the default below the RAG threshold, with no flag, from the view's own gate (DEC-219)", async () => {
+  // DEC-225: the page hands the column the view as it is. A run the RAG rule decided arrives with no confidence and no
+  // `rag_rule`, and the line reads as any conclusion beside the percentage: no note of a rule, no flag, and nothing of
+  // what the model answered.
+  it("says a run the RAG rule decided as an ordinary conclusion, with no flag and no note of a rule (DEC-225)", async () => {
     views = {
       a1: full({
         suggestion: suggestion({
@@ -663,7 +664,6 @@ describe("the ① column, from the state of the view", () => {
             proposed_verdict: "false_positive",
             final_verdict: "false_positive",
             verifier_verdict: null,
-            rag_rule: { threshold: 80, best_pct: 62, applied: true },
           },
         }),
         proposed_action: "false_positive",
@@ -675,16 +675,17 @@ describe("the ① column, from the state of the view", () => {
     renderPage();
     await loaded();
     expect(within(aiColumn()).getByText(/AI kết luận/).textContent).toBe(
-      "AI kết luận: FP — trùng 62% với tri thức đã duyệt (dưới 80%: mặc định FP) — " +
+      "AI kết luận: FP — trùng 62% với tri thức đã duyệt — " +
         "có cảnh báo kiểm chứng: tài sản quan trọng hoặc chưa rõ",
     );
+    expect(aiColumn().textContent).not.toContain("mặc định");
     expect(
       within(aiColumn()).queryByRole("img", { name: S.ai1.forcedLabel }),
     ).not.toBeInTheDocument();
   });
 
   // DEC-220 (trial): a lookup that kept no match still scored candidates; the page says the best one's percentage
-  // and the floor, from the view's own `rag`, in the place of "trùng 87% …". The rule of DEC-219 did not apply.
+  // and the floor, from the view's own `rag`, in the place of "trùng 87% …".
   it("says the best candidate under the floor, from the view's own rag (DEC-220)", async () => {
     views = {
       a1: full({
@@ -696,7 +697,6 @@ describe("the ① column, from the state of the view", () => {
             proposed_verdict: "true_positive",
             final_verdict: "true_positive",
             verifier_verdict: "agree",
-            rag_rule: { threshold: 80, best_pct: null, applied: false },
           },
         }),
         proposed_action: "true_positive",

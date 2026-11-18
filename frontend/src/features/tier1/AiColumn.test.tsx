@@ -12,7 +12,7 @@ import { S } from "../../strings";
 import { phrasesFound, textOf, wordsFound } from "../../testing/containsWord";
 import { modelNamesIn } from "../../testing/modelName";
 import { AiColumn } from "./AiColumn";
-import { analysis, olderAnalysis, ragDefaultAnalysis, ragDefaultKeys } from "./analysisFixtures";
+import { analysis, olderAnalysis, ruleDecidedAnalysis, ruleDecidedKeys } from "./analysisFixtures";
 
 const P = S.ai1.panel;
 
@@ -49,11 +49,14 @@ const view = (over: Partial<AlertView> = {}): AlertView => ({
   ...over,
 });
 
-/** What the server sends for a run the RAG default of DEC-219 applied to: the verdict ① ended with, and nothing else of the model's. */
-const ragDefault = (over: Partial<AlertView> = {}): AlertView =>
+/**
+ * What the server sends for a run the RAG rule decided (DEC-219, DEC-225): the verdict ① ended with, and nothing else of
+ * the model's; the page is not told that a rule exists.
+ */
+const ruleDecided = (over: Partial<AlertView> = {}): AlertView =>
   view({
-    ...ragDefaultKeys(80, 62),
-    analysis: ragDefaultAnalysis(),
+    ...ruleDecidedKeys(62),
+    analysis: ruleDecidedAnalysis(),
     ...over,
   });
 
@@ -475,7 +478,7 @@ describe("Tri thức", () => {
       "Tác vụ cập nhật định kỳ của Windows",
       "·",
       "lành tính",
-      'Không mục nào đạt mức tối thiểu 50%, nên AI không được cung cấp tri thức tham khảo. Quy tắc "dưới 80% → mặc định FP" không áp dụng.',
+      "Không mục nào đạt mức tối thiểu 50%, nên AI không được cung cấp tri thức tham khảo.",
     ]);
   });
 
@@ -544,28 +547,28 @@ describe("Tri thức", () => {
   it.each([
     [
       "matched",
-      { state: "matched", best_pct: 62, floor_pct: 50, threshold_pct: 0 },
-      'Mục trùng cao nhất đạt 62%, qua mức tối thiểu 50%, nên AI được cung cấp tri thức tham khảo. Quy tắc "dưới ngưỡng → mặc định FP" đang tắt.',
+      { state: "matched", best_pct: 62, floor_pct: 50 },
+      "Mục trùng cao nhất đạt 62%, qua mức tối thiểu 50%, nên AI được cung cấp tri thức tham khảo.",
     ],
     [
       "no_candidate",
       { state: "no_candidate", best_pct: null, candidates: [] },
-      'Không có mục tri thức đã duyệt nào được chấm điểm cho alert này. Quy tắc "dưới 80% → mặc định FP" không áp dụng.',
+      "Không có mục tri thức đã duyệt nào được chấm điểm cho alert này.",
     ],
     [
       "no_lookup",
       { state: "no_lookup", best_pct: null, candidates: [] },
-      'Lượt phân tích này không tra cứu tri thức đã duyệt. Quy tắc "dưới 80% → mặc định FP" không áp dụng.',
+      "Lượt phân tích này không tra cứu tri thức đã duyệt.",
     ],
     [
       "failed",
       { state: "failed", failure: "timeout", best_pct: null, candidates: [] },
-      'Không tra cứu được tri thức đã duyệt: Voyage quá thời gian chờ. Quy tắc "dưới 80% → mặc định FP" không áp dụng.',
+      "Không tra cứu được tri thức đã duyệt: Voyage quá thời gian chờ.",
     ],
     [
       "a state it has no words for (shown as the code)",
       { state: "future_state", best_pct: null, candidates: [] },
-      'future_state Quy tắc "dưới 80% → mặc định FP" không áp dụng.',
+      "future_state",
     ],
   ])("explains the state %s", async (_name, rag, expected) => {
     renderColumn(view({ analysis: analysis({ rag: { ...analysis().rag, ...rag } as never }) }));
@@ -582,11 +585,10 @@ describe("Kiểm chứng", () => {
     const lines = within(panel)
       .getAllByRole("img")
       .map((mark) => mark.getAttribute("aria-label"));
-    expect(lines.slice(0, 7)).toEqual([
+    expect(lines.slice(0, 6)).toEqual([
       "Đạt",
       "Cảnh báo",
       "Đạt",
-      "Không áp dụng",
       "Không áp dụng",
       "Đạt",
       "Cảnh báo",
@@ -599,8 +601,6 @@ describe("Kiểm chứng", () => {
       "— AI khai mức nghiêm trọng high, hệ thống ghi medium",
       "Dẫn chứng",
       "— 2 trên 4 khớp nguyên văn",
-      "Quy tắc RAG",
-      "— không áp dụng, không có mục nào đạt mức tối thiểu",
       "Chính sách FP",
       "— không xét, vì kết luận là TP",
       "Chèn lệnh",
@@ -844,7 +844,7 @@ describe("the gate's own account of the run, on the page (spec G2)", () => {
     ["verifier_invalid", { "6": "verifier_invalid" }, "không trả lời hợp lệ"],
   ])("says the held reason %s once on the Kiểm chứng tab", async (code, details, once) => {
     expect(Object.keys(S.ai1.heldReason)).toContain(code);
-    const rows = ["1", "2", "3", "3r", "4", "5", "6"].map((id) => ({
+    const rows = ["1", "2", "3", "4", "5", "6"].map((id) => ({
       id,
       outcome: id in details ? "warn" : "na",
       detail: (details as Record<string, string>)[id] ?? "not_run",
@@ -900,30 +900,31 @@ describe("the gate's own account of the run, on the page (spec G2)", () => {
     expect(panel).toHaveTextContent("Cảnh báo kiểm chứng: bộ kiểm chứng không đồng ý");
   });
 
-  describe("for a run the RAG default applied to (DEC-219)", () => {
+  describe("for a run the RAG rule decided (DEC-225)", () => {
     /**
      * What the server serves for such a run, whatever the model answered (`served_held_reasons`, `served_warnings`,
      * `served_verifier_verdict`, `served_action` of llm/verdicts.py): the verdict ① ended with, no verifier verdict, no
      * warning, no disagreement of the verifier and no playbook rule. Identical served JSON for two runs that differ in
-     * the model's answer is the server's job (backend tests); this page's job is the next fixture.
+     * the model's answer is the server's job (backend tests): the page does not know that a rule decided the run, so it
+     * cannot filter anything itself, and draws what it is sent.
      */
     const servedRun = (over: Partial<AlertView> = {}) =>
-      ragDefault({
+      ruleDecided({
         held_by: ["fp_policy:asset_criticality"],
         // step 4 warned about the asset, as the server then builds it (from the system facts only); no row 6
-        analysis: ragDefaultAnalysis({
-          checks: ragDefaultAnalysis().checks.map((row) =>
+        analysis: ruleDecidedAnalysis({
+          checks: ruleDecidedAnalysis().checks.map((row) =>
             row.id === "4" ? { ...row, outcome: "warn", detail: "fp_policy_facts" } : row,
           ) as never,
-          check_totals: { passed: 5, applicable: 6, warnings: 1 },
+          check_totals: { passed: 4, applicable: 5, warnings: 1 },
         }),
         ...over,
       });
 
     it("counts the verifier's unusable answer on the tile and names it in a card of its own: no row 6 is drawn for such a run", async () => {
       renderColumn(servedRun({ held_by: ["fp_policy:asset_criticality", "verifier_invalid"] }));
-      // the figure is the server's (5 of 6 passed); the note counts the warning step 4 raised and the reason no row has
-      expect(said(tile("Kiểm chứng"))).toEqual(["Kiểm chứng", "5/6", "2 cảnh báo"]);
+      // the figure is the server's (4 of 5 passed); the note counts the warning step 4 raised and the reason no row has
+      expect(said(tile("Kiểm chứng"))).toEqual(["Kiểm chứng", "4/5", "2 cảnh báo"]);
       expect(tile("Kiểm chứng").querySelector("[data-tone='warn']")).not.toBeNull();
       // the default tab lists both reasons (no highlight says either)
       expect(within(column()).getByRole("tabpanel")).toHaveTextContent(
@@ -941,114 +942,11 @@ describe("the gate's own account of the run, on the page (spec G2)", () => {
 
     it("says there is no warning only when the page lists none", () => {
       renderColumn(servedRun({ held_by: [] }));
-      expect(said(tile("Kiểm chứng"))).toEqual(["Kiểm chứng", "5/6", "1 cảnh báo"]);
+      expect(said(tile("Kiểm chứng"))).toEqual(["Kiểm chứng", "4/5", "1 cảnh báo"]);
       document.body.replaceChildren();
-      renderColumn(ragDefault());
-      expect(said(tile("Kiểm chứng"))).toEqual(["Kiểm chứng", "6/6", "không có cảnh báo"]);
+      renderColumn(ruleDecided());
+      expect(said(tile("Kiểm chứng"))).toEqual(["Kiểm chứng", "5/5", "không có cảnh báo"]);
       expect(within(column()).getByRole("tabpanel")).not.toHaveTextContent("Cảnh báo kiểm chứng:");
-    });
-
-    /**
-     * What a FAULTY server could leak of the model's answer in the keys this page reads, and it differs with the answer:
-     * the verifier's verdict and its disagreement, the playbook rule the model cited, a verdict before and after the
-     * gate, the rule check's warnings, a forced flag and a confidence. `suggested_action` stays the verdict ① ended with.
-     */
-    const leakOf = (answer: "true_positive" | "false_positive"): Partial<AlertView> => {
-      const tp = answer === "true_positive";
-      const keys = ragDefaultKeys(80, 62).suggestion!;
-      return {
-        held_by: [
-          "fp_policy:asset_criticality",
-          ...(tp ? ["fp_policy:playbook_rule", "verifier_disagrees"] : []),
-        ],
-        proposed_action: answer,
-        suggestion: {
-          ...keys,
-          confidence: tp ? "high" : "low",
-          gate: {
-            ...keys.gate!,
-            verifier_verdict: tp ? "needs_review" : "false_positive",
-            proposed_verdict: answer,
-            final_verdict: tp ? "needs_review" : "false_positive",
-            forced: tp,
-            forced_by: tp ? ["step4"] : [],
-            warnings: tp ? ["rule_is_not_false_positive", "no_rule_cited"] : ["brand_new_warning"],
-          },
-        },
-      };
-    };
-
-    it("builds two leaks that really differ in every key the page reads (a control for the tests below)", () => {
-      const tp = leakOf("true_positive");
-      const fp = leakOf("false_positive");
-      const gate = (leak: Partial<AlertView>) => leak.suggestion!.gate!;
-      expect(tp.held_by).not.toEqual(fp.held_by);
-      expect(tp.proposed_action).not.toBe(fp.proposed_action);
-      expect(tp.suggestion!.confidence).not.toBe(fp.suggestion!.confidence);
-      for (const key of [
-        "verifier_verdict",
-        "proposed_verdict",
-        "final_verdict",
-        "forced",
-        "forced_by",
-        "warnings",
-      ] as const) {
-        expect(gate(tp)[key], key).not.toEqual(gate(fp)[key]);
-      }
-      expect(tp.suggestion!.suggested_action).toBe(fp.suggestion!.suggested_action);
-    });
-
-    it("shows the leak where nothing was applied: the same keys on a run the rule did not apply to are on the page", () => {
-      // so the equalities below are not vacuous: the page does draw these keys when the filter is not asked for
-      const keys = leakOf("true_positive").suggestion!;
-      const open = servedRun({
-        ...leakOf("true_positive"),
-        status: "closed_fp",
-        acknowledged_by_name: "An",
-        suggestion: {
-          ...keys,
-          gate: { ...keys.gate!, rag_rule: { threshold: 80, best_pct: 62, applied: false } },
-        },
-      });
-      renderColumn(open);
-      expect(textOf(column())).toContain("bộ kiểm chứng không đồng ý");
-    });
-
-    it("is the same page on every tab whatever a faulty server leaks of the model's answer: a leak of TP, a leak of FP and none", async () => {
-      const clean = renderColumn(servedRun());
-      const expected = await everyTab();
-      clean.unmount();
-      for (const answer of ["true_positive", "false_positive"] as const) {
-        const leaked = renderColumn(servedRun(leakOf(answer)));
-        expect(await everyTab(), `a leak of ${answer}`).toEqual(expected);
-        leaked.unmount();
-      }
-    });
-
-    it("is the same decided comparison, line and Khớp row, whatever a faulty server leaks", () => {
-      const decided = { status: "closed_fp", acknowledged_by_name: "An" };
-      const clean = renderColumn(servedRun(decided));
-      const expected = said(column());
-      clean.unmount();
-      expect(expected.some((line) => line.includes("AI kết luận"))).toBe(true);
-      for (const answer of ["true_positive", "false_positive"] as const) {
-        const leaked = renderColumn(servedRun({ ...decided, ...leakOf(answer) }));
-        expect(said(column()), `a leak of ${answer}`).toEqual(expected);
-        leaked.unmount();
-      }
-    });
-
-    it("is the same flat fallback, for a view with no analysis, whatever a faulty server leaks", () => {
-      const flat = { analysis: null };
-      const clean = renderColumn(servedRun(flat));
-      const expected = said(column());
-      clean.unmount();
-      expect(expected.some((line) => line.includes("AI kết luận"))).toBe(true);
-      for (const answer of ["true_positive", "false_positive"] as const) {
-        const leaked = renderColumn(servedRun({ ...flat, ...leakOf(answer) }));
-        expect(said(column()), `a leak of ${answer}`).toEqual(expected);
-        leaked.unmount();
-      }
     });
 
     it("says only what the system itself checked: a fact that failed, and none of the rule the model cited", async () => {
@@ -1068,23 +966,6 @@ describe("the gate's own account of the run, on the page (spec G2)", () => {
         expect(text, word).not.toContain(word);
       }
       expect(text).toContain("tài sản quan trọng hoặc chưa rõ");
-    });
-
-    it("draws no gate warning at all, whatever its code (the only writer is the rule check of the model's own rule)", async () => {
-      const keys = ragDefaultKeys(80, 62).suggestion!;
-      renderColumn(
-        servedRun({
-          suggestion: {
-            ...keys,
-            gate: { ...keys.gate!, warnings: ["brand_new_warning", "no_table", { odd: 1 }] },
-          },
-        }),
-      );
-      for (const text of await everyTab()) {
-        expect(text).not.toContain("brand_new_warning");
-        expect(text).not.toContain("loại alert này chưa có bảng quyết định");
-        expect(text).not.toContain('{"odd":1}');
-      }
     });
   });
 });
@@ -1220,25 +1101,42 @@ describe("Kỹ thuật", () => {
   });
 });
 
-describe("a run the RAG default applied to (DEC-219)", () => {
-  it("is FP with the line that it is the default below the threshold, with no confidence and no flag", () => {
-    renderColumn(ragDefault());
-    expect(said(tile("Kết luận"))).toEqual(["Kết luận", "FP", "(dưới 80%: mặc định FP)"]);
-    expect(said(tile("Độ tin cậy"))).toEqual([
-      "Độ tin cậy",
-      "—",
-      "không áp dụng cho kết luận mặc định",
-    ]);
-    expect(within(tile("Độ tin cậy")).queryByRole("img")).not.toBeInTheDocument();
+describe("a run the RAG rule decided (DEC-225)", () => {
+  it("is an ordinary FP: the verdict and its words, no note of a rule, no confidence, no flag", () => {
+    renderColumn(ruleDecided());
+    expect(said(tile("Kết luận"))).toEqual(["Kết luận", "FP", "dương tính giả"]);
+    expect(textOf(tile("Độ tin cậy"))).not.toContain("mặc định");
+    expect(said(tile("Độ tin cậy"))).toEqual(["Độ tin cậy", "—"]);
     expect(within(tile("Kết luận")).queryByRole("img")).not.toBeInTheDocument();
     // the matched entry closed a false positive, and the line says so: not an old incident
     expect(said(tile("Tri thức (RAG)"))).toEqual(["Tri thức (RAG)", "62%", "trùng mục đã đóng FP"]);
     expect(tile("Tri thức (RAG)")).toHaveAttribute("data-tone", "neutral");
-    expect(said(tile("Kiểm chứng"))).toEqual(["Kiểm chứng", "6/6", "không có cảnh báo"]);
+    expect(said(tile("Kiểm chứng"))).toEqual(["Kiểm chứng", "5/5", "không có cảnh báo"]);
+  });
+
+  it("is an ordinary TP when the verdict is the other one: the same tiles, the same words of a TP", () => {
+    const keys = ruleDecidedKeys(85);
+    renderColumn(
+      ruleDecided({
+        ...keys,
+        suggestion: {
+          ...keys.suggestion!,
+          suggested_action: "true_positive",
+          gate: {
+            ...keys.suggestion!.gate!,
+            proposed_verdict: "true_positive",
+            final_verdict: "true_positive",
+          },
+        },
+        proposed_action: "true_positive",
+      }),
+    );
+    expect(said(tile("Kết luận"))).toEqual(["Kết luận", "TP", "tấn công thật"]);
+    expect(said(tile("Độ tin cậy"))).toEqual(["Độ tin cậy", "—"]);
   });
 
   it("has no reading and no 'what would change it' in the overview, and no heading for them", () => {
-    renderColumn(ragDefault());
+    renderColumn(ruleDecided());
     const panel = within(column()).getByRole("tabpanel");
     expect(within(panel).getByText(/^amsi\.dll bị nạp/)).toBeInTheDocument();
     expect(within(panel).getByRole("region", { name: "Nên kiểm tra tiếp" })).toBeInTheDocument();
@@ -1248,8 +1146,8 @@ describe("a run the RAG default applied to (DEC-219)", () => {
     expect(within(panel).queryByText(/Điều sẽ làm đổi kết luận/)).not.toBeInTheDocument();
   });
 
-  it("shows the facts table with the system column only, and no verifier line", async () => {
-    renderColumn(ragDefault());
+  it("shows the facts table with the system column only, and no verifier line and no row for a rule", async () => {
+    renderColumn(ruleDecided());
     const panel = await openTab("Kiểm chứng");
     const table = within(panel).getByRole("table", { name: "Dữ kiện đã dùng" });
     expect(
@@ -1270,34 +1168,37 @@ describe("a run the RAG default applied to (DEC-219)", () => {
       ["Số lần xuất hiện", "2"],
     ]);
     expect(within(panel).queryByText("Bộ kiểm chứng độc lập")).not.toBeInTheDocument();
-    expect(within(panel).getByText("Quy tắc RAG")).toBeInTheDocument();
+    expect(within(panel).queryByText("Quy tắc RAG")).not.toBeInTheDocument();
   });
 
-  it("explains in the lookup card that the rule applied, from the threshold", async () => {
-    renderColumn(ragDefault());
+  it("has no word of a rule in the lookup card: the state sentence and nothing after it", async () => {
+    renderColumn(ruleDecided());
     const panel = await openTab("Tri thức");
     const lookup = within(panel).getByRole("region", { name: "Tri thức đã duyệt" });
     expect(said(lookup).at(-1)).toBe(
-      'Mục trùng cao nhất đạt 62%, qua mức tối thiểu 50%, nên AI được cung cấp tri thức tham khảo. Quy tắc "dưới 80% → mặc định FP" đã áp dụng: kết luận mặc định là FP.',
+      "Mục trùng cao nhất đạt 62%, qua mức tối thiểu 50%, nên AI được cung cấp tri thức tham khảo.",
     );
-    expect(within(panel).queryByText(/không áp dụng\./)).not.toBeInTheDocument();
   });
 
-  it("never names the model's own answer, whichever tab is open (no TP, no true_positive, no confidence)", async () => {
-    renderColumn(ragDefault());
+  it("has no word of a rule on any tab, and never names the model's own answer (no TP, no true_positive, no confidence)", async () => {
+    renderColumn(ruleDecided());
     for (const tab of ["Tổng quan", "Bằng chứng", "Tri thức", "Kiểm chứng", "Kỹ thuật"]) {
       await openTab(tab);
       const text = textOf(column());
       expect(wordsFound(text, ["TP"]), tab).toEqual([]);
       expect(phrasesFound(text, ["true_positive", "độ tin cậy", "AI kết luận"]), tab).toEqual([]);
+      expect(
+        phrasesFound(text, ["mặc định", "Quy tắc", "quy tắc", "ngưỡng", "rag_rule"]),
+        tab,
+      ).toEqual([]);
     }
   });
 
   it("is the same page whether the model had answered FP itself or TP: the view the server sends is the same", () => {
-    const first = renderColumn(ragDefault());
+    const first = renderColumn(ruleDecided());
     const once = textOf(column());
     first.unmount();
-    renderColumn(ragDefault({ proposed_action: "false_positive" }));
+    renderColumn(ruleDecided({ proposed_action: "false_positive" }));
     expect(textOf(column())).toBe(once);
   });
 });
@@ -1482,13 +1383,13 @@ describe("a decided alert", () => {
     ).toHaveTextContent(`${S.ai1.match} ${word}`);
   });
 
-  it("compares with the verdict ① ended with, not the model's own answer, for a run the RAG default applied to", () => {
-    renderColumn(ragDefault({ status: "closed_fp", acknowledged_by_name: "An" }));
+  it("compares with the verdict ① ended with, not the model's own answer, for a run the RAG rule decided", () => {
+    renderColumn(ruleDecided({ status: "closed_fp", acknowledged_by_name: "An" }));
     expect(
       within(column()).getByText(S.ai1.match, { exact: true }).parentElement,
     ).toHaveTextContent(`${S.ai1.match} ${S.ai1.matchAgree}`);
     expect(within(column()).getByText(/AI kết luận/)).toHaveTextContent(
-      "AI kết luận: FP — trùng 62% với tri thức đã duyệt (dưới 80%: mặc định FP)",
+      "AI kết luận: FP — trùng 62% với tri thức đã duyệt",
     );
     expect(within(column()).getByText(/AI kết luận/)).not.toHaveTextContent("độ tin cậy");
   });
@@ -1588,7 +1489,7 @@ describe("the model's name appears nowhere (G5)", () => {
   const states: [string, AlertView][] = [
     ["a version 4 run", view()],
     ["an older run", view({ analysis: olderAnalysis() })],
-    ["a run the RAG default applied to", ragDefault()],
+    ["a run the RAG rule decided", ruleDecided()],
     [
       "a run with a lookup that failed",
       view({
@@ -1652,7 +1553,7 @@ describe("accessibility", () => {
   const states: [string, AlertView][] = [
     ["a version 4 run", view()],
     ["an older run", view({ analysis: olderAnalysis() })],
-    ["a run the RAG default applied to", ragDefault()],
+    ["a run the RAG rule decided", ruleDecided()],
     ["a decided alert", view({ status: "closed_benign", acknowledged_by_name: "An" })],
     [
       "a version 1 row the gate forced, with the clusters changed",

@@ -11,7 +11,7 @@ import {
   highlightText,
   verdictTile,
 } from "./analysisModel";
-import { analysis, olderAnalysis, ragDefaultAnalysis, ragDefaultKeys } from "./analysisFixtures";
+import { analysis, olderAnalysis, ruleDecidedAnalysis, ruleDecidedKeys } from "./analysisFixtures";
 
 const baseView = (over: Partial<AlertView> = {}): AlertView => ({
   alert_id: "a1",
@@ -114,7 +114,7 @@ describe("analysisOf", () => {
     expect(older?.wouldChange).toBeNull();
     expect(older?.nextChecks).toEqual([]);
     // what the server builds from the gate and the lookup is there either way
-    expect(older?.checks).toHaveLength(7);
+    expect(older?.checks).toHaveLength(6);
     expect(older?.highlights).toHaveLength(4);
   });
 
@@ -189,17 +189,9 @@ describe("the Kết luận tile", () => {
     });
   });
 
-  it("says the verdict is the default below the threshold for a run the RAG default applied to (DEC-219)", () => {
-    const tile = verdictTile(
-      stateOf({ ...ragDefaultKeys(80, 62), analysis: ragDefaultAnalysis() }),
-    );
-    expect(tile).toEqual({
-      label: "FP",
-      tone: "low",
-      note: "(dưới 80%: mặc định FP)",
-      forced: false,
-    });
-    expect(tile.note).toBe(S.ai1.ragDefault(80));
+  it("reads a run the RAG rule decided like any other: the verdict and its words, no note of a rule (DEC-225)", () => {
+    const tile = verdictTile(stateOf({ ...ruleDecidedKeys(62), analysis: ruleDecidedAnalysis() }));
+    expect(tile).toEqual({ label: "FP", tone: "low", note: "dương tính giả", forced: false });
   });
 
   it("carries the flag of a run the gate forced (a version 1 row), and only then", () => {
@@ -213,17 +205,6 @@ describe("the Kết luận tile", () => {
     });
     expect(verdictTile(forced).forced).toBe(true);
     expect(verdictTile(stateOf()).forced).toBe(false);
-  });
-
-  it("carries no flag for a run the RAG default applied to, even if the gate's record says forced", () => {
-    const stray = stateOf({
-      ...ragDefaultKeys(80, 62),
-      suggestion: {
-        ...ragDefaultKeys(80, 62).suggestion!,
-        gate: { ...ragDefaultKeys(80, 62).suggestion!.gate!, forced: true, forced_by: ["step4"] },
-      },
-    });
-    expect(verdictTile(stray).forced).toBe(false);
   });
 
   it("falls back on the model's own answer for a stored needs_review that still arrives, as the line did", () => {
@@ -266,9 +247,9 @@ describe("the Độ tin cậy tile", () => {
     });
   });
 
-  it("has no confidence for a run the RAG default applied to, and says so rather than naming one", () => {
-    const tile = confidenceTile(stateOf({ ...ragDefaultKeys(), analysis: ragDefaultAnalysis() }));
-    expect(tile).toEqual({ kind: "none", word: "—", note: "không áp dụng cho kết luận mặc định" });
+  it("is a dash with no meter and no note for a run the RAG rule decided: the server serves no confidence for it, and the page does not say why (DEC-225)", () => {
+    const tile = confidenceTile(stateOf({ ...ruleDecidedKeys(), analysis: ruleDecidedAnalysis() }));
+    expect(tile).toEqual({ kind: "word", word: "—" });
   });
 
   it("is a dash with no meter for a run that carries no confidence", () => {
@@ -298,16 +279,16 @@ describe("the Kiểm chứng tile", () => {
   });
 
   it("counts the held reasons no drawn row accounts for beside the server's figure, which stays the server's", () => {
-    // a run the default decided has no row 6, yet the verifier's unusable answer is a held reason (the server keeps it)
+    // a run the rule decided has no row 6, yet the verifier's unusable answer is a held reason (the server keeps it)
     const view = baseView({
       held_by: ["verifier_invalid"],
       analysis: analysis({
-        checks: ragDefaultAnalysis().checks,
-        check_totals: { passed: 6, applicable: 6, warnings: 0 },
+        checks: ruleDecidedAnalysis().checks,
+        check_totals: { passed: 5, applicable: 5, warnings: 0 },
       }),
     });
     const read = analysisOf(view);
-    expect(read && checksTile(read)).toEqual({ value: "6/6", note: "1 cảnh báo", warn: true });
+    expect(read && checksTile(read)).toEqual({ value: "5/5", note: "1 cảnh báo", warn: true });
     // it adds to the checks that warned: the 2 warned steps and 1 code that names no step are 3 (the verifier's
     // answer stands under step 6, which warned, and is not counted again)
     const more = analysisOf(baseView({ held_by: ["verifier_invalid", "brand_new_reason"] }));
@@ -481,7 +462,6 @@ describe("the checks", () => {
       ["1", "schema_ok"],
       ["2", "facts_mismatch"],
       ["3", "quotes_some_dropped"],
-      ["3r", "rag_rule_not_applied"],
       ["4", "not_false_positive"],
       ["5", "no_injection_findings"],
       ["6", "verifier_disagrees"],
@@ -503,13 +483,6 @@ describe("the checks", () => {
         name: "Dẫn chứng",
         outcome: "pass",
         text: "2 trên 4 khớp nguyên văn",
-        notes: [],
-      },
-      {
-        id: "3r",
-        name: "Quy tắc RAG",
-        outcome: "na",
-        text: "không áp dụng, không có mục nào đạt mức tối thiểu",
         notes: [],
       },
       {
@@ -541,13 +514,12 @@ describe("the checks", () => {
     );
   });
 
-  it("says the closed word alone when no fact is flagged (a run the RAG default applied to has no model column)", () => {
-    const model = analysisOf(baseView({ analysis: ragDefaultAnalysis() }));
+  it("says the closed word alone when no fact is flagged (a run the RAG rule decided has no model column)", () => {
+    const model = analysisOf(baseView({ analysis: ruleDecidedAnalysis() }));
     expect(model?.checks.map((row) => row.text)).toEqual([
       "hợp lệ ngay lần đầu",
       "dữ kiện AI khai khớp với hệ thống",
       "2 trên 2 khớp nguyên văn",
-      "đã áp dụng, kết luận mặc định là FP",
       "đạt",
       "không phát hiện",
     ]);
@@ -569,33 +541,28 @@ describe("the checks", () => {
   });
 });
 
-describe("the RAG rule's check says why it did not apply, from the state of the lookup", () => {
-  const rule = (rag: Record<string, unknown>, detail = "rag_rule_not_applied") =>
-    analysisOf(
-      baseView({
-        analysis: analysis({
-          rag: { ...analysis().rag, ...rag } as never,
-          checks: [{ id: "3r", outcome: "na", detail }],
-        } as never),
-      }),
-    )?.checks[0]?.text;
-
+describe("the panel says nothing of the RAG rule (DEC-225)", () => {
   it.each([
-    [{ state: "no_candidate", best_pct: null, candidates: [] }, "không có mục trùng"],
-    [{ state: "no_lookup", best_pct: null, candidates: [] }, "không có tra cứu"],
-    [{ state: "failed", failure: "auth", best_pct: null, candidates: [] }, "tra cứu bị lỗi"],
-    [{ state: "below_floor", best_pct: 47, floor_pct: 50 }, "không có mục nào đạt mức tối thiểu"],
-    [{ state: "matched", best_pct: 85, threshold_pct: 80 }, "độ trùng 85% không dưới ngưỡng 80%"],
-  ])("for %j: 'không áp dụng, %s'", (rag, why) => {
-    expect(rule(rag)).toBe(`không áp dụng, ${why}`);
+    [{ state: "no_candidate", best_pct: null, candidates: [] }],
+    [{ state: "no_lookup", best_pct: null, candidates: [] }],
+    [{ state: "failed", failure: "auth", best_pct: null, candidates: [] }],
+    [{ state: "below_floor", best_pct: 47, floor_pct: 50 }],
+    [{ state: "matched", best_pct: 85 }],
+    [{ state: "future_state" }],
+  ])("draws no row, no word and no threshold for the lookup %j", (rag) => {
+    const model = analysisOf(
+      baseView({ analysis: analysis({ rag: { ...analysis().rag, ...rag } as never } as never) }),
+    );
+    expect(model?.checks.map((row) => row.id)).toEqual(["1", "2", "3", "4", "5", "6"]);
+    expect(model?.rag).not.toHaveProperty("threshold");
+    const said = JSON.stringify([model?.checks, model?.rag]);
+    expect(said).not.toMatch(/mặc định|ngưỡng|Quy tắc|rag_rule/);
   });
 
-  it("shows a state it has no words for as the code, and says nothing more of a rule that is off or applied", () => {
-    expect(rule({ state: "future_state" })).toBe("không áp dụng, future_state");
-    expect(rule({ state: "no_candidate" }, "rag_rule_off")).toBe("quy tắc đang tắt");
-    expect(rule({ state: "matched", best_pct: 62 }, "rag_rule_applied")).toBe(
-      "đã áp dụng, kết luận mặc định là FP",
-    );
+  it("does not read a `threshold_pct` an older server still sends", () => {
+    const rag = { ...analysis().rag, threshold_pct: 80 } as never;
+    const model = analysisOf(baseView({ analysis: analysis({ rag } as never) }));
+    expect(model?.rag).not.toHaveProperty("threshold");
   });
 });
 
@@ -648,7 +615,6 @@ describe("the gate's own account of the run", () => {
       "1": [],
       "2": [],
       "3": ["không có dẫn chứng kiểm chứng được"],
-      "3r": [],
       "4": [
         "alert mức critical",
         "IOC độc hại hoặc đáng ngờ",
@@ -674,7 +640,7 @@ describe("the gate's own account of the run", () => {
   /** Every row of the gate as the server builds it, each with the detail given and `not_run` for the others. */
   const rowsWith = (details: Record<string, string>, outcome = "warn") =>
     analysis({
-      checks: ["1", "2", "3", "3r", "4", "5", "6"].map((id) => ({
+      checks: ["1", "2", "3", "4", "5", "6"].map((id) => ({
         id,
         outcome,
         detail: details[id] ?? "not_run",
@@ -811,62 +777,47 @@ describe("the gate's own account of the run", () => {
     expect(analysisOf(baseView())?.gate.forced).toBeNull();
   });
 
-  describe("for a run the RAG default applied to (DEC-219), whatever arrives", () => {
-    const applied = (gate: Record<string, unknown>, held: unknown, over: Partial<AlertView> = {}) =>
-      gated({ rag_rule: { threshold: 80, best_pct: 62, applied: true }, ...gate }, held, {
-        analysis: ragDefaultAnalysis(),
-        ...over,
-      });
+  // DEC-225: the page is not told that a rule decided a run. The server serves such a run a gate and a `held_by` with
+  // nothing that would tell what the model answered, and the panel reads them as they are.
+  describe("for a run the RAG rule decided (DEC-225), as the server serves it", () => {
+    const decidedByRule = (
+      gate: Record<string, unknown>,
+      held: unknown,
+      over: Partial<AlertView> = {},
+    ) => gated(gate, held, { analysis: ruleDecidedAnalysis(), ...over });
 
-    it("never says what the verifier answered, nor a verdict before and after the gate, even from a stray key", () => {
-      const view = applied(
+    it("says the reasons the server sends, in its order, and the verdict twice with no verifier", () => {
+      const view = decidedByRule(
         {
-          verifier_verdict: "needs_review",
-          forced: true,
-          forced_by: ["step4"],
-          proposed_verdict: "true_positive",
+          verifier_verdict: null,
+          proposed_verdict: "false_positive",
           final_verdict: "false_positive",
         },
-        ["verifier_disagrees"],
-        {
-          analysis: analysis({
-            checks: ragDefaultAnalysis().checks.concat([
-              { id: "6", outcome: "warn", detail: "verifier_disagrees" },
-            ]),
-          }),
-        },
-      );
-      const model = analysisOf(view);
-      expect(model?.checks.find((row) => row.id === "6")?.text).toBe("không đồng ý");
-      expect(model?.gate.forced).toBeNull();
-    });
-
-    it("leaves out the reasons the server leaves out: the verifier's disagreement, the playbook rule and its warnings", () => {
-      const view = applied(
-        { warnings: ["rule_is_not_false_positive", "no_rule_cited", "brand_new_warning"] },
-        [
-          "fp_policy:asset_criticality",
-          "fp_policy:playbook_rule",
-          "verifier_disagrees",
-          "verifier_invalid",
-        ],
+        ["fp_policy:asset_criticality", "verifier_invalid"],
       );
       const model = analysisOf(view);
       expect(model?.gate.held).toEqual([
         "tài sản quan trọng hoặc chưa rõ",
         "bộ kiểm chứng không trả lời hợp lệ",
       ]);
-      const byStep = Object.fromEntries(model?.checks.map((row) => [row.id, row.notes]) ?? []);
-      // EVERY gate warning goes, the unknown one too: its only writer is the rule check of the model's own rule
-      expect(byStep["4"]).toEqual(["tài sản quan trọng hoặc chưa rõ"]);
+      expect(model?.gate.forced).toBeNull();
+      expect(model?.checks.find((row) => row.id === "6")).toBeUndefined();
     });
 
     it("keeps the facts of the alert the system itself checked, and the verifier's unusable answer", () => {
-      const view = applied({}, ["fp_policy:severity", "verifier_invalid"]);
+      const view = decidedByRule({}, ["fp_policy:severity", "verifier_invalid"]);
       expect(analysisOf(view)?.gate.held).toEqual([
         "alert mức critical",
         "bộ kiểm chứng không trả lời hợp lệ",
       ]);
+    });
+
+    it("draws the warnings the server sends and none it left out: the page filters nothing", () => {
+      const view = decidedByRule({ warnings: [] }, ["fp_policy:asset_criticality"]);
+      const byStep = Object.fromEntries(
+        analysisOf(view)?.checks.map((row) => [row.id, row.notes]) ?? [],
+      );
+      expect(byStep["4"]).toEqual(["tài sản quan trọng hoặc chưa rõ"]);
     });
   });
 });
@@ -975,8 +926,8 @@ describe("the facts", () => {
     ]);
   });
 
-  it("has no model column for a run the RAG default applied to: the declared values are null", () => {
-    const model = analysisOf(baseView({ analysis: ragDefaultAnalysis() }));
+  it("has no model column for a run the RAG rule decided: the declared values are null", () => {
+    const model = analysisOf(baseView({ analysis: ruleDecidedAnalysis() }));
     expect(model?.showDeclared).toBe(false);
     expect(model?.facts.map((fact) => [fact.field, fact.system])).toEqual([
       ["Mức nghiêm trọng", "medium"],
@@ -1018,7 +969,7 @@ describe("the lookup, the history, the playbook and the technical figures", () =
     expect(rag?.state).toBe("below_floor");
     expect(rag?.best_pct).toBe(47);
     expect(rag?.floor_pct).toBe(50);
-    expect(rag?.threshold).toBe(80);
+    expect(rag).not.toHaveProperty("threshold");
     expect(rag?.scored).toBe(23);
     expect(rag?.candidates.map((row) => row.pct)).toEqual([47, 43, 41]);
     const long = analysisOf(

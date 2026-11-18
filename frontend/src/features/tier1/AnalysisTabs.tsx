@@ -186,21 +186,8 @@ const failureWords = (kind: string | null): string | null =>
     ? (S.rag.failureKind as Record<string, string>)[kind]!
     : null;
 
-/** Whether the rule of DEC-219 applied to this run, and so what the card says of it (it never says what the model answered). */
-function ruleSentence(threshold: number, applied: boolean): string {
-  const R = P.knowledge.rule;
-  if (applied) return R.applied(threshold);
-  return threshold > 0 ? R.notApplied(threshold) : R.off;
-}
-
-export function KnowledgeTab({
-  model,
-  ruleApplied,
-}: {
-  model: AnalysisModel;
-  /** The threshold of the rule of DEC-219 when the run's verdict is that rule's default, else undefined. */
-  ruleApplied: number | undefined;
-}) {
+/** The Tri thức tab: the lookup's one sentence and its candidates, the decision history, the playbook. Nothing of a rule (DEC-225). */
+export function KnowledgeTab({ model }: { model: AnalysisModel }) {
   const { rag, history, playbook } = model;
   return (
     <div className="flex flex-col gap-3">
@@ -215,9 +202,7 @@ export function KnowledgeTab({
       >
         {rag !== null && rag.candidates.length > 0 && <KnowledgeCandidates rows={rag.candidates} />}
         <p className="text-[13px] leading-[19px]">
-          {rag === null
-            ? S.analysis.ragNote.noData
-            : `${stateSentence(rag)} ${ruleSentence(ruleApplied ?? rag.threshold, ruleApplied !== undefined)}`}
+          {rag === null ? S.analysis.ragNote.noData : stateSentence(rag)}
         </p>
       </Card>
 
