@@ -3900,3 +3900,33 @@ Decision:
   6. **Known and left.** The knowledge tab still lists the top candidates with their conclusions and percentages (DEC-221), so an analyst can see which side the top item is on; nothing says it decided. An incident under the floor is a weak likeness and still gives `false_positive`; the Owner chose it. Stored runs are not re-judged; ② (cases) has no such rule.
   7. **Process.** One Coder (`coder-sonnet55`, Sonnet 5.5, xhigh), reviewed by the Director (Opus 5.5) at the Owner's request, at most three rounds: **passed in round 1**. Coder: `make lint` 0; `make test` 8 965 passed; the rule's db files and the full db suite on a private scratch database (10 failures, the same 10 on an untouched `628a977`: host facts of cron, `pg_restore` and empty-environment subprocesses); `ui-test` 5 352 passed, `ui-lint` and `ui-build` green; a red step (an incident at or over the threshold returning the model's answer). Director: non-db suite and ten db files green on a scratch database; five mutations each turned the rule's tests red (benign under the threshold made `false_positive`, the tie given to benign, the floor case dropped, equal not applying, the confidence served for a rule-decided run); `ui-lint` 0 and `ui-test` 5 352 passed.
 Supersedes: **DEC-219** items 1, 4 and 7 (the one-sided rule, the line that names it, the risk as worded there) and the part of item 5 that served `rag_rule` `{threshold, best_pct, applied}`; **DEC-220** item 3 ("the rule of DEC-219 reads none of it": the rule now reads the below-floor candidate); the step-3r row of **DEC-221**'s checks for Tier 1. The rest of DEC-219 (a default, not a force; the switch; stored runs not re-judged) stands.
+
+## DEC-226 · 2026-11-18 · The trial becomes the system: `main` takes the trial's code (`19cee31d`, DEC-225 included), the trial's database and configuration are the system of record, and the old live stack is stopped and archived — nothing is deleted
+Scope: **operations** (which branch is `main`, which stack and which database are the system, backups) · **process** (the trial line is no longer "never `main`")
+Decided by: **the Owner, 18/11/2026.**
+  - **The request:** "Chốt code và cấu hình cũng như dữ liệu của database. Bây giờ chúng ta có thể chuyển từ trial về main được không".
+  - **What the Director measured first (read-only, 18/11).**
+    - Live: `main` at `a3c910a5` (04/11); the last alert and the last ① run are of **06/11**; ① is dark (the provider answers 402); 214 628 alerts (206 657 of them duplicates), 9 cases, 4 users, 0 knowledge entries; 21 migrations.
+    - Trial: alerts up to 18/11; 7 948 alerts, 27 cases, 7 users, 93 knowledge entries, the lab and Threat Intel tables; 26 migrations (`026_threat_intel`); the extra `vectordb` service.
+    - `.env`: the trial has 42 keys, live 29. 14 keys are the trial's only (Voyage, the vector database, the RAG switches, the SOAR notices, n8n approval, `TRIAGE_RAG_FP_BELOW_PCT`, `LLM_RESPONSE_FORMAT` …), and 11 shared keys differ (the LLM, the database passwords, the ports, `COMPOSE_FILE`, `WEBHOOK_IP_ALLOWLIST`). Compared by name only.
+    - Git: `main` holds 2 commits the trial tip does not (P15-T02's records, documentation only); the trial tip holds 476 that `main` does not.
+  - **The Owner's three answers:** "DB trial (Khuyến nghị)"; "Giữ stack trial, dừng live (Khuyến nghị)"; "19cee31d có DEC-225 (Khuyến nghị)".
+Drafted by: the Director (Opus 5.5).
+Propagated to: the branch `director/promote-trial-main` (the trial tip `19cee31d`, a merge of `main`'s two record commits with `docs/plan/STATE.md` resolved to the trial's rows, and this entry). The runbook is not yet rewritten for the new arrangement (item 6).
+Decision:
+  1. **Code.** `main` fast-forwards to `director/promote-trial-main`: the trial line (P14 onwards, DEC-213 to DEC-225) is `main` from now on. The tag of the frozen code is set on the same commit.
+  2. **Data.** The trial's database (compose project `soc-trial`, `soc_dev` on `127.0.0.1:55433`, 26 migrations) and its `vectordb` are the system of record. The live database (21 migrations, last alert 06/11) is not migrated and not merged: it is dumped, kept on its volume, and read only for history.
+  3. **Where it runs.** The system keeps running as the `soc-trial` stack from `/project/project/AI_Support_SOC_trial`: app `:8001`, ui `:8081` (loopback and LAN), db `55433`, with its own `.env` and its uncommitted overlay `docker-compose.trial.yml`. That overlay mounts `conf/` and `backups/` of the primary checkout read-only and runs the image `ai-support-soc/backend:local`. So neither the primary checkout nor that image may be removed. There is no data movement and no downtime.
+  4. **The old live stack** (`ai_support_soc_1_2`: app `:8000`, ui `:8080`, db `55432`) is stopped with `docker compose stop`, not `down`. Its containers and volumes stay. The primary checkout fast-forwards to `main` only after it has stopped, because that stack mounts its code from there.
+  5. **The freeze, before items 1 and 4, all Owner-run:**
+     1. `19cee31d` deployed on the trial (`restart app worker`, `up -d --build ui`) and checked on new alerts;
+     2. `scripts/backup.sh` run from the trial checkout (the trial database);
+     3. a dump of `vectordb`;
+     4. a 0600 copy of the trial's `.env`;
+     5. `scripts/backup.sh` run from the primary checkout (the live database, for the archive).
+  6. **Left for later, named here so it is not forgotten:**
+     - The nightly backup cron (`conf/soc-backup.cron`) still enters the primary checkout, so it dumps the stopped live database. It must be pointed at the trial checkout.
+     - `docs/runbook.md` still describes the live stack's ports and paths.
+     - Moving the system to the standard ports or renaming the compose project is a separate decision.
+     - Pushing `main` to GitHub is the Owner's call: the remote is public.
+Supersedes: **DEC-213**'s "trial only, never merged into `main`" (Owner 03/11), and the same clause in the Numbering lines of DEC-215 to DEC-225. Those decisions stand as decisions and are now on `main`.
