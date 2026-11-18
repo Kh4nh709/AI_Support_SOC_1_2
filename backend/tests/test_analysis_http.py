@@ -86,7 +86,7 @@ def test_a_normal_run_is_served_as_valid_json_with_datetimes_and_numbers(db, cli
     ] or analysed == dt.datetime.fromisoformat(body["suggestion"]["created_at"])
     assert isinstance(tech["cost_usd"], float) and tech["cost_usd"] == pytest.approx(0.01444)
     assert (tech["input_tokens"], tech["output_tokens"], tech["latency_ms"]) == (1500, 420, 3000)
-    assert [row["id"] for row in built["checks"]] == ["1", "2", "3", "3r", "4", "5", "6"]
+    assert [row["id"] for row in built["checks"]] == ["1", "2", "3", "4", "5", "6"]
     assert (
         built["check_totals"]["applicable"]
         == built["check_totals"]["passed"] + built["check_totals"]["warnings"]
@@ -153,8 +153,8 @@ def test_a_run_the_rag_default_applied_to_is_served_without_the_withheld_parts(d
         and built["would_change"] is None
     )
     assert all(row["model"] is None and row["match"] is None for row in built["facts"])
-    assert [row["id"] for row in built["checks"]] == ["1", "2", "3", "3r", "4", "5"]
-    assert built["summary"] == TEXTS["summary"] and built["rag"]["threshold_pct"] == 80
+    assert [row["id"] for row in built["checks"]] == ["1", "2", "3", "4", "5"]
+    assert built["summary"] == TEXTS["summary"] and built["rag"]["threshold_pct"] == 0
     assert dt.datetime.fromisoformat(built["tech"]["analysed_at"])
     assert isinstance(built["tech"]["cost_usd"], float)
     # the existing keys keep withholding what DEC-219 withholds
@@ -163,6 +163,9 @@ def test_a_run_the_rag_default_applied_to_is_served_without_the_withheld_parts(d
         and body["suggestion"]["gate"]["verifier_verdict"] is None
     )
     assert body["suggestion"]["gate"]["warnings"] == []
+    # DEC-225: over the wire, nothing says a rule exists
+    assert "rag_rule" not in body["suggestion"]["gate"]
+    assert "rag_rule" not in response.text and '"3r"' not in response.text
     assert MODEL_ID not in response.text and VERIFIER_MODEL_ID not in response.text
 
 

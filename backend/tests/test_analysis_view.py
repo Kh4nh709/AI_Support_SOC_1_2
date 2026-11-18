@@ -430,7 +430,14 @@ def test_without_system_facts_the_system_column_is_none(facts):
 
 
 def test_the_ids_the_outcomes_and_every_detail_code_are_pinned():
-    assert analysis.CHECK_IDS == ("1", "2", "3", "3r", "4", "5", "6")
+    assert analysis.CHECK_IDS == (
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+    )  # no row for the RAG rule: Tier 1 is not told
     assert analysis.CHECK_OUTCOMES == ("pass", "warn", "na")
     assert analysis.CHECK_DETAILS == (
         "schema_ok",
@@ -440,9 +447,6 @@ def test_the_ids_the_outcomes_and_every_detail_code_are_pinned():
         "quotes_verified",
         "quotes_some_dropped",
         "no_verified_quote",
-        "rag_rule_applied",
-        "rag_rule_not_applied",
-        "rag_rule_off",
         "fp_policy_ok",
         "fp_policy_facts",
         "fp_policy_playbook",
@@ -456,13 +460,12 @@ def test_the_ids_the_outcomes_and_every_detail_code_are_pinned():
     )
 
 
-def test_a_clean_true_positive_run_has_seven_rows_and_passes_what_applies():
+def test_a_clean_true_positive_run_has_six_rows_and_passes_what_applies():
     built = _build(_run())
     assert built["checks"] == [
         {"id": "1", "outcome": "pass", "detail": "schema_ok"},
         {"id": "2", "outcome": "pass", "detail": "facts_match"},
         {"id": "3", "outcome": "pass", "detail": "quotes_verified"},
-        {"id": "3r", "outcome": "na", "detail": "rag_rule_off"},
         {"id": "4", "outcome": "na", "detail": "not_false_positive"},
         {"id": "5", "outcome": "pass", "detail": "no_injection_findings"},
         {"id": "6", "outcome": "pass", "detail": "verifier_agrees"},
@@ -504,7 +507,6 @@ def test_every_step_that_flags_is_a_warning_with_its_own_code():
         {"id": "1", "outcome": "pass", "detail": "schema_repaired"},
         {"id": "2", "outcome": "warn", "detail": "facts_mismatch"},
         {"id": "3", "outcome": "warn", "detail": "no_verified_quote"},
-        {"id": "3r", "outcome": "na", "detail": "rag_rule_off"},
         {"id": "4", "outcome": "warn", "detail": "fp_policy_facts"},
         {"id": "5", "outcome": "warn", "detail": "injection_findings"},
         {"id": "6", "outcome": "warn", "detail": "verifier_disagrees"},
@@ -565,43 +567,77 @@ def test_the_verifiers_row(status, outcome, detail):
     assert _rows(_build(_run(gate=gate)))["6"] == {"id": "6", "outcome": outcome, "detail": detail}
 
 
-def test_the_rag_rule_row_when_off():
-    assert _rows(_build(_run()))["3r"] == {"id": "3r", "outcome": "na", "detail": "rag_rule_off"}
+#: Every stored shape of `gate_result.rag_rule` (and `steps["3r"]`) a document can carry: DEC-225's seven keys
+#: (applied, in either direction, and not applied), DEC-219's four, the switch off, none at all, and junk.
+STORED_RULES = [
+    (
+        {
+            "threshold": 80,
+            "best_pct": 62,
+            "applied": True,
+            "changed": True,
+            "entry_side": "incident",
+            "rule_verdict": "false_positive",
+            "basis": "match",
+        },
+        "changed",
+    ),
+    (
+        {
+            "threshold": 80,
+            "best_pct": 85,
+            "applied": True,
+            "changed": False,
+            "entry_side": "incident",
+            "rule_verdict": "true_positive",
+            "basis": "match",
+        },
+        "applied",
+    ),
+    (
+        {
+            "threshold": 80,
+            "best_pct": 62,
+            "applied": False,
+            "changed": False,
+            "entry_side": "benign",
+            "rule_verdict": None,
+            "basis": "match",
+        },
+        "n/a",
+    ),
+    ({"threshold": 80, "best_pct": 62, "applied": True, "changed": True}, "changed"),  # DEC-219
+    ({"threshold": 80, "best_pct": 90, "applied": False, "changed": False}, "n/a"),  # DEC-219
+    ({"threshold": 0, "best_pct": None, "applied": False, "changed": False}, "n/a"),  # off
+    (None, None),  # no `rag_rule` at all
+    ("junk", "n/a"),
+]
 
 
-def test_the_rag_rule_row_when_on_but_not_applied():
-    gate = _gate(rag_rule={"threshold": 80, "best_pct": 90, "applied": False, "changed": False})
-    assert _rows(_build(_run(gate=gate)))["3r"] == {
-        "id": "3r",
-        "outcome": "na",
-        "detail": "rag_rule_not_applied",
-    }
-
-
-@pytest.mark.parametrize("status", ["applied", "changed"])
-def test_the_rag_rule_row_when_applied_is_the_same_for_applied_and_changed(status):
-    gate = _gate(
-        proposed_verdict="true_positive",
-        final_verdict="false_positive",
-        steps={**STEPS, "3r": status, "4": "ok"},
-        rag_rule={"threshold": 80, "best_pct": 62, "applied": True, "changed": status == "changed"},
+@pytest.mark.parametrize("rule, step", STORED_RULES)
+def test_no_document_gives_a_row_for_the_rag_rule(rule, step):
+    """DEC-225: Tier 1 is not told that a rule exists. Whatever the stored document says of it, the checks are the six
+    of the gate that are warnings or passes about the model's answer, and no detail names the rule.
+    """
+    steps = dict(STEPS)
+    if step is None:
+        steps.pop("3r")
+    else:
+        steps["3r"] = step
+    gate = _gate(steps=steps, rag_rule=rule)
+    if rule is None:
+        del gate["rag_rule"]
+    built = _build(_run(gate=gate))
+    assert [row["id"] for row in built["checks"]] == ["1", "2", "3", "4", "5"] + (
+        [] if verdicts.rag_rule_applied(gate) else ["6"]
     )
-    assert _rows(_build(_run(gate=gate)))["3r"] == {
-        "id": "3r",
-        "outcome": "pass",
-        "detail": "rag_rule_applied",
+    assert "3r" not in {row["id"] for row in built["checks"]}
+    assert not {row["detail"] for row in built["checks"]} & {
+        "rag_rule_applied",
+        "rag_rule_not_applied",
+        "rag_rule_off",
     }
-
-
-def test_a_document_of_before_the_rag_rule_has_it_off():
-    gate = _gate()
-    del gate["rag_rule"]
-    gate["steps"].pop("3r")
-    assert _rows(_build(_run(gate=gate)))["3r"] == {
-        "id": "3r",
-        "outcome": "na",
-        "detail": "rag_rule_off",
-    }
+    assert "rag_rule" not in repr(built) and "3r" not in repr(built)
 
 
 def test_a_version_1_document_reads_through_forced_by():
@@ -632,20 +668,16 @@ def test_a_version_1_document_reads_through_forced_by():
     assert rows["3"] == {"id": "3", "outcome": "warn", "detail": "no_verified_quote"}
     # step 4 did not run because the old gate had forced the verdict: that is "not run", not "not a false positive"
     assert rows["4"] == {"id": "4", "outcome": "na", "detail": "not_run"}
-    assert rows["3r"]["detail"] == "rag_rule_off"
+    assert "3r" not in rows
     assert built["reasons"][0] == {**REASONS[0], "verified": False, "why": "empty_quote"}
 
 
 @pytest.mark.parametrize("steps", [None, [], "x", 7, {}])
-def test_a_document_with_no_steps_has_seven_rows_that_were_not_run(steps):
+def test_a_document_with_no_steps_has_six_rows_that_were_not_run(steps):
     built = _build(_run(gate=_gate(steps=steps)))
     assert [row["id"] for row in built["checks"]] == list(analysis.CHECK_IDS)
     assert {row["outcome"] for row in built["checks"]} == {"na"}
-    assert {row["detail"] for row in built["checks"]} <= {
-        "not_run",
-        "rag_rule_off",
-        "not_false_positive",
-    }
+    assert {row["detail"] for row in built["checks"]} <= {"not_run", "not_false_positive"}
     assert built["check_totals"] == {"passed": 0, "applicable": 0, "warnings": 0}
 
 
@@ -720,7 +752,7 @@ def test_a_matched_run_lists_its_best_three_with_the_entries_title_and_conclusio
         "failure": None,
         "best_pct": 87,
         "floor_pct": 50,
-        "threshold_pct": 80,
+        "threshold_pct": 0,  # the rule's threshold is not served (DEC-225): the key stays, as ②'s has it
         "scored": 4,
         "candidates": [
             {"pct": 87, "title": "Tiêu đề A", "conclusion": "confirmed_incident"},
@@ -765,11 +797,14 @@ def test_a_failed_lookup_is_failed_with_its_closed_kind(kind):
     assert (rag["state"], rag["failure"], rag["candidates"]) == ("failed", kind, [])
 
 
-def test_the_threshold_is_the_runs_rule_threshold_and_zero_when_the_rule_is_off():
-    assert _build(_run())["rag"]["threshold_pct"] == 0
-    gate = _gate(rag_rule={"threshold": 80, "best_pct": None, "applied": False, "changed": False})
-    assert _build(_run(gate=gate))["rag"]["threshold_pct"] == 80
-    assert _build(_run(gate=_gate(rag_rule="junk")))["rag"]["threshold_pct"] == 0
+@pytest.mark.parametrize("rule, _step", STORED_RULES)
+def test_the_rules_threshold_is_never_served(rule, _step):
+    """DEC-225: the panel's `threshold_pct` is 0 for every stored document - the threshold of a rule Tier 1 is not told
+    of is not served - exactly as ②'s panel has it."""
+    gate = _gate(rag_rule=rule)
+    if rule is None:
+        del gate["rag_rule"]
+    assert _build(_run(gate=gate))["rag"]["threshold_pct"] == 0
 
 
 @pytest.mark.parametrize(
@@ -1331,8 +1366,8 @@ def test_for_such_a_run_the_models_declared_facts_and_the_match_are_withheld_and
 
 def test_for_such_a_run_the_verifier_row_is_left_out_and_does_not_count():
     built = _build(_applied(), read_cards=_cards({}))
-    assert [row["id"] for row in built["checks"]] == ["1", "2", "3", "3r", "4", "5"]
-    assert built["check_totals"] == {"passed": 6, "applicable": 6, "warnings": 0}
+    assert [row["id"] for row in built["checks"]] == ["1", "2", "3", "4", "5"]
+    assert built["check_totals"] == {"passed": 5, "applicable": 5, "warnings": 0}
     assert "warning_verifier_disagrees" not in _codes(built)
     assert "verifier" not in " ".join(_walk(built["checks"]))
 
@@ -1342,14 +1377,14 @@ def test_for_such_a_run_the_summary_the_next_checks_the_reasons_and_the_rest_are
     assert built["summary"] == TEXTS["summary"]
     assert built["next_checks"] == TEXTS["next_checks"][:3]
     assert [r["claim"] for r in built["reasons"]] == ["claim one", "claim two", "claim three"]
-    assert built["rag"]["state"] == "matched" and built["rag"]["threshold_pct"] == 80
+    assert built["rag"]["state"] == "matched" and built["rag"]["threshold_pct"] == 0
     assert built["rag"]["candidates"] == [
         {"pct": 62, "title": "Tiêu đề", "conclusion": "confirmed_incident"}
     ]
     assert built["history"]["total"] == 15
     assert built["playbook"]["name"] == "brute_force_v1"
     assert built["tech"]["input_tokens"] == 1200
-    assert _rows(built)["3r"] == {"id": "3r", "outcome": "pass", "detail": "rag_rule_applied"}
+    assert "3r" not in _rows(built)  # and no row says a rule decided
     assert _rows(built)["4"]["outcome"] == "pass"
 
 
@@ -1672,7 +1707,7 @@ def test_a_decision_table_reader_that_raises_anything_gives_the_all_null_playboo
     monkeypatch.setattr(analysis, "get_decision_table", _boom(exc))
     built = _build(_run())
     assert built["playbook"] == _NULL_PLAYBOOK
-    assert built["summary"] == TEXTS["summary"] and len(built["checks"]) == 7  # the rest is intact
+    assert built["summary"] == TEXTS["summary"] and len(built["checks"]) == 6  # the rest is intact
 
 
 def test_applying_a_table_that_raises_gives_the_all_null_playbook(monkeypatch):

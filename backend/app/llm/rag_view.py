@@ -36,8 +36,11 @@ One set of values, the same on both pages: `{"best_pct": int | None, "not_applie
   `below_floor_pct` is, else `None`. `llm` may not import `rag` and takes plain values, so the readers hand the
   floor in.
 
-The rule of DEC-219 (`tier1.triage._rag_best_pct`, `gate_result.rag_rule`) reads `best_pct` and nothing else here:
-a candidate under the floor never reaches it, and `tests/test_rag_rule_db.py` pins that against this number.
+The RAG rule (DEC-219; two-sided since DEC-225: `tier1.triage._rag_top_item`, `gate_result.rag_rule`) compares the
+number this page prints for the run - `best_pct` of a kept match, else `below_floor_pct` of the best scored candidate -
+and reads the side of that single top item (`top_entry_ids` below names it); `tests/test_rag_rule_db.py` pins the
+rule's `best_pct` against these numbers. Tier 1 is not told that a rule exists: the page shows the percentage and
+nothing of what decided the verdict.
 
 The module reads values and builds no markup. The blind arm (DEC-101) is `tier1/visibility.py`'s: `rag` is an
 `ANALYST_HIDE` key, because "trùng 87%" and "RAG not applied" say something about what ① was shown.
@@ -183,6 +186,26 @@ def _ranking(items: Any) -> list[tuple[str | None, float]]:
             entry = item.get("entry_id")
             found.append((entry if isinstance(entry, str) else None, value))
     return sorted(found, key=lambda pair: -pair[1])
+
+
+def top_entry_ids(items: Any) -> list[str | None]:
+    """The `entry_id`s of the single top item of a stored list (the kept `matches`, or the scored `ranked`), for the
+    RAG rule (DEC-225): the items that share the highest valid `score` (the same `score` rule as every number on this
+    page, so the maximum is the one `best_pct` and `below_floor_pct` print), in stored order, each entry once. One
+    entry in practice; two or more when scores tie exactly, and the rule then decides between their sides. An item
+    whose `entry_id` is not text is listed as `None`: it is the top item and cannot be named, so the caller must not
+    read the next best in its place. Empty when there is no list or no item with a valid score."""
+    ranking = _ranking(items)
+    if not ranking:
+        return []
+    top = ranking[0][1]
+    ids: list[str | None] = []
+    for entry, value in ranking:
+        if value != top:
+            break
+        if entry not in ids:
+            ids.append(entry)
+    return ids
 
 
 def _candidate_pct(value: float, floor: Any) -> int:

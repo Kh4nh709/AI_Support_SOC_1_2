@@ -1,13 +1,15 @@
-"""What Tier 1 is served of a run the RAG low-match rule applied to (DEC-219, as amended:
-`docs/superpowers/specs/2026-11-15-rag-low-match-fp-rule-design.md` section 5). NO DATABASE.
+"""What Tier 1 is served of a run the RAG rule applied to (DEC-219, as amended; two-sided and hidden since DEC-225,
+RR-T3). NO DATABASE.
 
-Below the threshold `false_positive` is ①'s DEFAULT answer, so the Tier 1 API must not hand out the model's own
-answer for such a run: `proposed_action` (the queue row and the alert view) and `Suggestion.gate.proposed_verdict`
-return the verdict ① ended with when the stored run's `gate_result.rag_rule.applied` is true, whether or not
-the model had answered `false_positive` itself. The stored `gate_result.proposed_verdict` is untouched (the admin
-LLM page and the audit log show stored rows as they are), and a run the rule did not apply to is served exactly
-as before. `Suggestion.gate` also gains `rag_rule`: `{threshold, best_pct, applied}` of the stored object
-(never its `changed`, which says what the model answered), or `null` for a run that has none.
+When the rule applies the knowledge decides ①'s verdict, so the Tier 1 API must not hand out the model's own answer
+for such a run: `proposed_action` (the queue row and the alert view) and `Suggestion.gate.proposed_verdict` return
+the verdict ① ended with when the stored run's `gate_result.rag_rule.applied` is true, whether or not the rule's
+verdict differs from the model's (a model `false_positive` turned into `true_positive` is withheld exactly like a
+model `true_positive` turned into `false_positive`). The stored `gate_result.proposed_verdict` is untouched (the admin
+LLM page and the audit log show stored rows as they are), and a run the rule did not apply to is served exactly as
+before. Since DEC-225 Tier 1 is not told that a rule exists ("đây là luật ngầm"): `Suggestion.gate` carries NO
+`rag_rule` key, for any run, whatever the stored document says (a DEC-219 document with four keys, a DEC-225 one with
+seven, none at all, or garbage).
 
 Nor may the API let a reader work the model's answer out (fix round 1, spec section 5): for a run the rule
 applied to, `Suggestion.gate.verifier_verdict` is `null` (the verifier was sent the model's verdict) and `held_by`
@@ -32,15 +34,44 @@ TP, FP = "true_positive", "false_positive"
 RUN_ID = "11111111-1111-1111-1111-111111111111"
 NOW = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
 
-CHANGED = {"threshold": 80, "best_pct": 62, "applied": True, "changed": True}
-APPLIED_ONLY = {"threshold": 80, "best_pct": 62, "applied": True, "changed": False}
-NOT_APPLIED = {"threshold": 80, "best_pct": 91, "applied": False, "changed": False}
-SWITCH_OFF = {"threshold": 0, "best_pct": None, "applied": False, "changed": False}
-
-
-def _served(rule: dict) -> dict:
-    """`Suggestion.gate.rag_rule` as the API serves it: the three keys, never `changed`."""
-    return {key: rule[key] for key in ("threshold", "best_pct", "applied")}
+#: The stored `gate_result.rag_rule` (DEC-225): an incident under the threshold turned a model TP into FP; the rule
+#: applied and agreed with a model FP; an incident at the threshold turned a model FP into TP; a benign item under the
+#: threshold (not applied); the switch off; and the four-key document DEC-219 wrote.
+CHANGED = {
+    "threshold": 80,
+    "best_pct": 62,
+    "applied": True,
+    "changed": True,
+    "entry_side": "incident",
+    "rule_verdict": FP,
+    "basis": "match",
+}
+APPLIED_ONLY = {**CHANGED, "changed": False}
+CHANGED_TO_TP = {
+    **CHANGED,
+    "best_pct": 85,
+    "rule_verdict": TP,
+}
+NOT_APPLIED = {
+    "threshold": 80,
+    "best_pct": 62,
+    "applied": False,
+    "changed": False,
+    "entry_side": "benign",
+    "rule_verdict": None,
+    "basis": "match",
+}
+SWITCH_OFF = {
+    "threshold": 0,
+    "best_pct": None,
+    "applied": False,
+    "changed": False,
+    "entry_side": None,
+    "rule_verdict": None,
+    "basis": None,
+}
+DEC219_APPLIED = {"threshold": 80, "best_pct": 62, "applied": True, "changed": True}
+DEC219_NOT_APPLIED = {"threshold": 80, "best_pct": 91, "applied": False, "changed": False}
 
 
 def _result(action: str) -> dict:
@@ -78,6 +109,25 @@ APPLIED_RUN = (_result(FP), _gate(proposed=FP, final=FP, rag_rule=APPLIED_ONLY))
 NOT_APPLIED_RUN = (_result(TP), _gate(proposed=TP, final=TP, rag_rule=NOT_APPLIED))
 SWITCH_OFF_RUN = (_result(TP), _gate(proposed=TP, final=TP, rag_rule=SWITCH_OFF))
 OLD_RUN = (_result(TP), _gate(proposed=TP, final=TP, rag_rule=None))
+#: A model `false_positive` the rule (an incident at 85 %) turned into `true_positive` (DEC-225), and the documents
+#: DEC-219 wrote (four keys), which every reader must still read.
+CHANGED_TO_TP_RUN = (_result(TP), _gate(proposed=FP, final=TP, rag_rule=CHANGED_TO_TP))
+DEC219_RUN = (_result(FP), _gate(proposed=TP, final=FP, rag_rule=DEC219_APPLIED))
+DEC219_NOT_APPLIED_RUN = (
+    _result(TP),
+    _gate(proposed=TP, final=TP, rag_rule=DEC219_NOT_APPLIED),
+)
+#: Every kind of run, for the claims that hold for all of them.
+EVERY_RUN = [
+    CHANGED_RUN,
+    APPLIED_RUN,
+    CHANGED_TO_TP_RUN,
+    NOT_APPLIED_RUN,
+    SWITCH_OFF_RUN,
+    OLD_RUN,
+    DEC219_RUN,
+    DEC219_NOT_APPLIED_RUN,
+]
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -90,8 +140,14 @@ OLD_RUN = (_result(TP), _gate(proposed=TP, final=TP, rag_rule=None))
     [
         ({"rag_rule": CHANGED}, True),
         ({"rag_rule": APPLIED_ONLY}, True),
+        (
+            {"rag_rule": CHANGED_TO_TP},
+            True,
+        ),  # DEC-225: the model's false_positive made true_positive
+        ({"rag_rule": DEC219_APPLIED}, True),  # a DEC-219 document: four keys
         ({"rag_rule": NOT_APPLIED}, False),
         ({"rag_rule": SWITCH_OFF}, False),
+        ({"rag_rule": DEC219_NOT_APPLIED}, False),
         ({}, False),
         ({"rag_rule": None}, False),
         (
@@ -117,6 +173,8 @@ def test_rag_rule_applied_is_true_only_for_a_stored_applied_true(gate_result, ex
         # the rule applied: the verdict ① ended with, whatever the model said
         (_gate(proposed=TP, final=FP, rag_rule=CHANGED), FP, FP),
         (_gate(proposed=FP, final=FP, rag_rule=APPLIED_ONLY), FP, FP),
+        (_gate(proposed=FP, final=TP, rag_rule=CHANGED_TO_TP), TP, TP),  # the other direction
+        (_gate(proposed=TP, final=FP, rag_rule=DEC219_APPLIED), FP, FP),
         # the rule did not apply, or there is none: the model's own answer, as before
         (_gate(proposed=TP, final=TP, rag_rule=NOT_APPLIED), TP, TP),
         (_gate(proposed=TP, final=TP, rag_rule=SWITCH_OFF), TP, TP),
@@ -158,38 +216,54 @@ class TestSuggestionGate:
         assert suggestion.suggested_action == FP
         assert suggestion.gate["proposed_verdict"] == FP  # not `true_positive`, the model's own
         assert suggestion.gate["final_verdict"] == FP
-        assert suggestion.gate["rag_rule"] == _served(CHANGED)
+        assert "rag_rule" not in suggestion.gate  # Tier 1 is not told that a rule exists
         assert suggestion.gate["forced"] is False and suggestion.gate["forced_by"] == []
 
     def test_a_run_the_rule_applied_to_without_changing_it_is_served_the_same(self):
         suggestion = _suggestion(APPLIED_RUN)
 
         assert suggestion.gate["proposed_verdict"] == FP and suggestion.gate["final_verdict"] == FP
-        assert suggestion.gate["rag_rule"] == _served(APPLIED_ONLY)
+        assert "rag_rule" not in suggestion.gate
 
-    @pytest.mark.parametrize(
-        "run, rule", [(NOT_APPLIED_RUN, NOT_APPLIED), (SWITCH_OFF_RUN, SWITCH_OFF)]
-    )
-    def test_a_run_the_rule_did_not_apply_to_is_served_as_before_plus_the_object(self, run, rule):
+    def test_a_model_false_positive_the_rule_made_true_positive_is_served_like_any_conclusion(self):
+        suggestion = _suggestion(CHANGED_TO_TP_RUN)
+
+        assert suggestion.suggested_action == TP and suggestion.confidence is None
+        assert (
+            suggestion.gate["proposed_verdict"] == TP
+        )  # the verdict ① ended with, not the model's `FP`
+        assert suggestion.gate["final_verdict"] == TP
+        assert suggestion.gate["verifier_verdict"] is None
+        assert "rag_rule" not in suggestion.gate
+
+    @pytest.mark.parametrize("run", [NOT_APPLIED_RUN, SWITCH_OFF_RUN, DEC219_NOT_APPLIED_RUN])
+    def test_a_run_the_rule_did_not_apply_to_is_served_as_before(self, run):
         suggestion = _suggestion(run)
 
         assert suggestion.gate["proposed_verdict"] == TP  # the model's own answer, unchanged
         assert suggestion.gate["final_verdict"] == TP
-        assert suggestion.gate["rag_rule"] == _served(rule)
+        assert "rag_rule" not in suggestion.gate
 
-    def test_a_run_from_before_the_key_has_a_null_rag_rule(self):
+    @pytest.mark.parametrize("run", EVERY_RUN)
+    def test_no_run_is_served_a_rag_rule_key_at_any_depth(self, run):
+        served = _suggestion(run).to_dict()
+
+        assert "rag_rule" not in set(_keys(served))
+        for word in ("rag_rule", "entry_side", "rule_verdict", "basis", "best_pct", "threshold"):
+            assert word not in repr(served)  # nor any of its parts
+
+    def test_a_run_from_before_the_key_has_no_rag_rule_either(self):
         suggestion = _suggestion(OLD_RUN)
 
-        assert suggestion.gate["rag_rule"] is None
-        assert "rag_rule" in suggestion.gate  # the key is there, `null`, as the spec says
+        assert "rag_rule" not in suggestion.gate
         assert suggestion.gate["proposed_verdict"] == TP
 
-    @pytest.mark.parametrize("garbled", ["applied", 7, [True], True])
-    def test_a_stored_rag_rule_that_is_not_an_object_is_null(self, garbled):
+    @pytest.mark.parametrize("garbled", ["applied", 7, [True], True, None, {"applied": "yes"}])
+    def test_a_stored_rag_rule_of_any_shape_gives_no_key_and_no_error(self, garbled):
         result, gate_result = OLD_RUN
         suggestion = queue._suggestion_of(RUN_ID, result, {**gate_result, "rag_rule": garbled}, NOW)
 
-        assert suggestion.gate["rag_rule"] is None
+        assert "rag_rule" not in suggestion.gate
         assert suggestion.gate["proposed_verdict"] == TP
 
     def test_the_stored_gate_result_is_not_touched(self):
@@ -225,7 +299,7 @@ class TestSuggestionGate:
         )  # DEC-217: the model's own verdict, for a stored needs_review
         assert suggestion.gate["proposed_verdict"] == FP
         assert suggestion.gate["final_verdict"] == "needs_review"
-        assert suggestion.gate["forced"] is True and suggestion.gate["rag_rule"] is None
+        assert suggestion.gate["forced"] is True and "rag_rule" not in suggestion.gate
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -266,9 +340,26 @@ class TestAlertView:
     def test_a_run_the_rule_applied_to_without_changing_it_is_served_the_same(self):
         assert _alert_view_pair(APPLIED_RUN)[1] == FP
 
-    @pytest.mark.parametrize("run", [NOT_APPLIED_RUN, SWITCH_OFF_RUN, OLD_RUN])
+    def test_a_model_false_positive_the_rule_made_true_positive_is_served_the_verdict_it_ended_with(
+        self,
+    ):
+        suggestion, proposed_action, held_by = _alert_view_pair(CHANGED_TO_TP_RUN)
+
+        assert proposed_action == TP  # not `false_positive`, the model's own
+        assert suggestion.suggested_action == TP and suggestion.gate["proposed_verdict"] == TP
+        assert held_by == []
+
+    @pytest.mark.parametrize(
+        "run", [NOT_APPLIED_RUN, SWITCH_OFF_RUN, OLD_RUN, DEC219_NOT_APPLIED_RUN]
+    )
     def test_a_run_the_rule_did_not_apply_to_keeps_the_models_answer(self, run):
         assert _alert_view_pair(run)[1] == TP
+
+    def test_a_dec_219_document_still_reads(self):
+        suggestion, proposed_action, held_by = _alert_view_pair(DEC219_RUN)
+
+        assert proposed_action == FP and suggestion.confidence is None and held_by == []
+        assert "rag_rule" not in suggestion.gate
 
     def test_the_held_by_warnings_of_an_applied_run_are_the_system_facts_only(self):
         """Step 4's playbook condition is about the rule the MODEL cited, so it is not served for a run the rule
@@ -385,7 +476,18 @@ class TestQueueRow:
 
         assert row["suggested_action"] == FP and row["proposed_action"] == FP
 
-    @pytest.mark.parametrize("run", [NOT_APPLIED_RUN, SWITCH_OFF_RUN, OLD_RUN])
+    def test_a_model_false_positive_the_rule_made_true_positive_is_served_the_verdict_it_ended_with(
+        self,
+    ):
+        row = _queue_row(CHANGED_TO_TP_RUN, projection=_projection(CHANGED_TO_TP_RUN[1]))
+
+        assert row["suggested_action"] == TP
+        assert row["proposed_action"] == TP  # not `false_positive`, the model's own
+        assert row["confidence"] is None and row["held_by"] == []
+
+    @pytest.mark.parametrize(
+        "run", [NOT_APPLIED_RUN, SWITCH_OFF_RUN, OLD_RUN, DEC219_NOT_APPLIED_RUN]
+    )
     def test_a_run_the_rule_did_not_apply_to_keeps_the_models_answer(self, run):
         row = _queue_row(run, projection=_projection(run[1]))
 
@@ -397,12 +499,15 @@ class TestQueueRow:
 
         assert _queue_row(OLD_RUN, projection=projection)["proposed_action"] == TP
 
-    def test_the_queue_row_gains_no_key_of_its_own(self):
-        """Spec 5: `Suggestion.gate` gains `rag_rule`; the queue row gains nothing (`gate_forced` is false for
-        such a run, and `held_by` is the warnings)."""
-        row = _queue_row(CHANGED_RUN, projection=_projection(CHANGED_RUN[1]))
+    @pytest.mark.parametrize("run", EVERY_RUN)
+    def test_the_queue_row_serves_no_rag_rule_and_no_projection_of_it(self, run):
+        """The statement's `gate_held` projection carries `rag_rule.applied` for the reader's own use; it is
+        popped and never served (DEC-225: Tier 1 is not told that a rule exists)."""
+        row = _queue_row(run, projection=_projection(run[1]))
 
-        assert "rag_rule" not in row and "gate_held" not in row
+        assert "rag_rule" not in set(_keys(row)) and "gate_held" not in row
+        for word in ("rag_rule", "entry_side", "rule_verdict", "basis"):
+            assert word not in repr(row)
 
     def test_the_blind_arm_sees_none_of_it(self):
         row = _queue_row(
@@ -438,7 +543,7 @@ class TestTheQueueStatementProjectsTheFlag:
 
 
 # ---------------------------------------------------------------------------------------------------
-# the blind arm (DEC-101): `rag_rule` is hidden wherever the suggestion is
+# the blind arm (DEC-101) and the labelling page: there is no `rag_rule` to hide any more (DEC-225)
 # ---------------------------------------------------------------------------------------------------
 
 
@@ -464,35 +569,43 @@ def _keys(value):
             yield from _keys(item)
 
 
-class TestBlindArmHidesRagRule:
-    def test_a_blind_undecided_head_has_no_rag_rule_at_any_depth(self):
-        view = _view_with(_suggestion(CHANGED_RUN))
-        assert "rag_rule" in set(_keys(view))  # it is in the full view ...
+class TestNoViewHasARagRule:
+    """The alert view is the one place `Suggestion.gate` is served; whichever arm and whatever the status, no
+    `rag_rule` is in it at any depth (DEC-225), and the blind arm and the labelling page keep what they never had.
+    """
+
+    @pytest.mark.parametrize("run", [CHANGED_RUN, CHANGED_TO_TP_RUN])
+    def test_a_blind_undecided_head_has_no_suggestion_and_no_rag_rule(self, run):
+        view = _view_with(_suggestion(run))
+        assert "rag_rule" not in set(_keys(view))  # not even in the full view
 
         stripped = visibility.strip(
             view, status="queued_tier1", suggestion_visible=False, mode="analyst"
         )
 
-        assert "rag_rule" not in set(_keys(stripped))  # ... and in none of the blind one
+        assert "rag_rule" not in set(_keys(stripped))
         assert "suggestion" not in stripped and "proposed_action" not in stripped
 
-    def test_the_visible_arm_keeps_it_inside_the_suggestion(self):
-        view = _view_with(_suggestion(CHANGED_RUN))
+    @pytest.mark.parametrize("run", EVERY_RUN)
+    def test_the_visible_arm_serves_the_suggestion_without_it(self, run):
+        view = _view_with(_suggestion(run))
 
         stripped = visibility.strip(
             view, status="queued_tier1", suggestion_visible=True, mode="analyst"
         )
 
-        assert stripped["suggestion"]["gate"]["rag_rule"] == _served(CHANGED)
+        assert "gate" in stripped["suggestion"]
+        assert "rag_rule" not in set(_keys(stripped))
 
-    def test_a_decided_head_shows_it(self):
+    def test_a_decided_head_shows_the_suggestion_without_it(self):
         view = _view_with(_suggestion(CHANGED_RUN))
 
         stripped = visibility.strip(
             view, status="closed_fp", suggestion_visible=False, mode="analyst"
         )
 
-        assert stripped["suggestion"]["gate"]["rag_rule"] == _served(CHANGED)
+        assert stripped["suggestion"]["gate"]["final_verdict"] == FP
+        assert "rag_rule" not in set(_keys(stripped))
 
     def test_the_labelling_page_never_has_it(self):
         view = _view_with(_suggestion(CHANGED_RUN))
@@ -523,6 +636,8 @@ class TestBlindArmHidesRagRule:
             _gate(proposed=FP, final=FP, rag_rule=APPLIED_ONLY),
             None,
         ),  # applied, though the model said FP itself
+        (_gate(proposed=FP, final=TP, rag_rule=CHANGED_TO_TP), None),  # the other direction
+        (_gate(proposed=TP, final=FP, rag_rule=DEC219_APPLIED), None),  # a DEC-219 document
         (_gate(proposed=TP, final=TP, rag_rule=NOT_APPLIED), "high"),
         (_gate(proposed=TP, final=TP, rag_rule=SWITCH_OFF), "high"),
         (_gate(proposed=TP, final=TP, rag_rule=None), "high"),
@@ -540,15 +655,19 @@ def test_served_confidence_keeps_a_missing_confidence_missing():
 
 
 class TestSuggestionConfidence:
-    @pytest.mark.parametrize("run", [CHANGED_RUN, APPLIED_RUN])
+    @pytest.mark.parametrize("run", [CHANGED_RUN, APPLIED_RUN, CHANGED_TO_TP_RUN, DEC219_RUN])
     def test_a_run_the_rule_applied_to_is_served_no_confidence(self, run):
         suggestion = _suggestion(run)
 
         assert suggestion.confidence is None
         assert suggestion.to_dict()["confidence"] is None
-        assert suggestion.suggested_action == FP  # the verdict is served, its confidence is not
+        assert (
+            suggestion.suggested_action == run[0]["suggested_action"]
+        )  # the verdict is served, its confidence not
 
-    @pytest.mark.parametrize("run", [NOT_APPLIED_RUN, SWITCH_OFF_RUN, OLD_RUN])
+    @pytest.mark.parametrize(
+        "run", [NOT_APPLIED_RUN, SWITCH_OFF_RUN, OLD_RUN, DEC219_NOT_APPLIED_RUN]
+    )
     def test_every_other_run_is_served_the_models_confidence(self, run):
         assert _suggestion(run).confidence == "high"
 
@@ -569,12 +688,13 @@ class TestSuggestionConfidence:
 
 
 class TestQueueRowConfidence:
-    @pytest.mark.parametrize("run", [CHANGED_RUN, APPLIED_RUN])
+    @pytest.mark.parametrize("run", [CHANGED_RUN, APPLIED_RUN, CHANGED_TO_TP_RUN])
     def test_a_run_the_rule_applied_to_is_served_no_confidence(self, run):
         row = _queue_row(run, projection=_projection(run[1]))
+        served = run[0]["suggested_action"]
 
         assert row["confidence"] is None
-        assert row["suggested_action"] == FP and row["proposed_action"] == FP
+        assert row["suggested_action"] == served and row["proposed_action"] == served
 
     @pytest.mark.parametrize("run", [NOT_APPLIED_RUN, SWITCH_OFF_RUN, OLD_RUN])
     def test_every_other_run_is_served_the_models_confidence(self, run):
@@ -629,6 +749,13 @@ class TestWhatDecideRecords:
         assert recorded["gate_forced"] is False
         assert recorded["llm_run_id"] == RUN_ID
 
+    def test_a_model_false_positive_the_rule_made_true_positive_records_true_positive(
+        self, monkeypatch
+    ):
+        recorded = self._decide(monkeypatch, CHANGED_TO_TP_RUN)
+
+        assert recorded["llm_suggestion"] == TP and recorded["llm_confidence"] is None
+
     def test_any_other_run_records_the_models_confidence_as_before(self, monkeypatch):
         recorded = self._decide(monkeypatch, NOT_APPLIED_RUN)
 
@@ -667,6 +794,10 @@ DISAGREED_NOT_APPLIED = (
     _flagged_by_step6(proposed=TP, final=TP, rag_rule=NOT_APPLIED),
 )
 DISAGREED_OLD = (_result(TP), _flagged_by_step6(proposed=TP, final=TP, rag_rule=None))
+DISAGREED_CHANGED_TO_TP = (
+    _result(TP),
+    _flagged_by_step6(proposed=FP, final=TP, rag_rule=CHANGED_TO_TP),
+)
 INVALID_CHANGED = (
     _result(FP),
     _flagged_by_step6(proposed=TP, final=FP, rag_rule=CHANGED, step6="invalid"),
@@ -679,6 +810,7 @@ INVALID_CHANGED = (
         # disagreement: dropped for an applied run, kept for every other
         (DISAGREED_CHANGED[1], True, ["fp_policy:severity"]),
         (DISAGREED_APPLIED[1], True, ["fp_policy:severity"]),
+        (DISAGREED_CHANGED_TO_TP[1], True, ["fp_policy:severity"]),
         (DISAGREED_NOT_APPLIED[1], False, ["fp_policy:severity", "verifier_disagrees"]),
         (DISAGREED_OLD[1], False, ["fp_policy:severity", "verifier_disagrees"]),
         # an unusable verifier answer says nothing about the model's verdict: it stays
@@ -713,6 +845,7 @@ def test_held_reasons_of_a_stored_document_is_unchanged_whatever_the_rule_did():
     [
         (DISAGREED_CHANGED[1], None),
         (DISAGREED_APPLIED[1], None),
+        (DISAGREED_CHANGED_TO_TP[1], None),
         (DISAGREED_NOT_APPLIED[1], "needs_review"),
         (DISAGREED_OLD[1], "needs_review"),
         (_gate(proposed=TP, final=TP, rag_rule=NOT_APPLIED), TP),
@@ -726,38 +859,10 @@ def test_served_verifier_verdict(gate_result, expected):
 
 
 class TestSuggestionGateServesNothingThatGivesTheModelsAnswerAway:
-    @pytest.mark.parametrize(
-        "run, rule",
-        [
-            (CHANGED_RUN, CHANGED),
-            (APPLIED_RUN, APPLIED_ONLY),
-            (NOT_APPLIED_RUN, NOT_APPLIED),
-            (SWITCH_OFF_RUN, SWITCH_OFF),
-        ],
-    )
-    def test_rag_rule_is_three_keys_and_never_changed(self, run, rule):
-        served = _suggestion(run).gate["rag_rule"]
-
-        assert set(served) == {"threshold", "best_pct", "applied"}
-        assert served == _served(rule)
-        assert "changed" not in served
-        assert "changed" not in repr(_suggestion(run).to_dict())  # nowhere else in what is served
-
-    def test_a_stored_object_missing_a_key_is_served_with_that_key_null(self):
-        result, gate_result = CHANGED_RUN
-        partial = {**gate_result, "rag_rule": {"applied": True, "changed": True}}
-
-        served = queue._suggestion_of(RUN_ID, result, partial, NOW).gate["rag_rule"]
-
-        assert served == {"threshold": None, "best_pct": None, "applied": True}
-
-    @pytest.mark.parametrize("garbled", ["applied", 7, [True], True, None])
-    def test_a_stored_value_that_is_not_an_object_is_null(self, garbled):
-        result, gate_result = CHANGED_RUN
-
-        served = queue._suggestion_of(RUN_ID, result, {**gate_result, "rag_rule": garbled}, NOW)
-
-        assert served.gate["rag_rule"] is None
+    @pytest.mark.parametrize("run", EVERY_RUN)
+    def test_the_stored_changed_flag_is_nowhere_in_what_is_served(self, run):
+        """The stored `changed` says what the model answered; `rag_rule` is not served at all (DEC-225)."""
+        assert "changed" not in repr(_suggestion(run).to_dict())
 
     @pytest.mark.parametrize("run", [DISAGREED_CHANGED, DISAGREED_APPLIED])
     def test_an_applied_run_is_served_no_verifier_verdict(self, run):
@@ -765,6 +870,12 @@ class TestSuggestionGateServesNothingThatGivesTheModelsAnswerAway:
 
         assert gate["verifier_verdict"] is None
         assert gate["proposed_verdict"] == FP and gate["final_verdict"] == FP
+
+    def test_a_model_false_positive_the_rule_made_true_positive_is_served_no_verifier_verdict(self):
+        gate = _suggestion(DISAGREED_CHANGED_TO_TP).gate
+
+        assert gate["verifier_verdict"] is None
+        assert gate["proposed_verdict"] == TP and gate["final_verdict"] == TP
 
     @pytest.mark.parametrize(
         "run", [DISAGREED_NOT_APPLIED, DISAGREED_OLD, NOT_APPLIED_RUN, SWITCH_OFF_RUN]
@@ -781,9 +892,12 @@ class TestSuggestionGateServesNothingThatGivesTheModelsAnswerAway:
         suggestion = queue._suggestion_of(RUN_ID, _result("needs_review"), gate_result, NOW)
 
         assert suggestion.gate["verifier_verdict"] == "needs_review"
-        assert suggestion.gate["rag_rule"] is None
+        assert "rag_rule" not in suggestion.gate
 
-    @pytest.mark.parametrize("run", [DISAGREED_CHANGED, DISAGREED_APPLIED, DISAGREED_NOT_APPLIED])
+    @pytest.mark.parametrize(
+        "run",
+        [DISAGREED_CHANGED, DISAGREED_APPLIED, DISAGREED_NOT_APPLIED, DISAGREED_CHANGED_TO_TP],
+    )
     def test_the_stored_gate_result_is_untouched(self, run):
         result, gate_result = copy.deepcopy(run)
         before = copy.deepcopy(gate_result)
@@ -804,7 +918,7 @@ class TestSuggestionGateServesNothingThatGivesTheModelsAnswerAway:
 
 
 class TestHeldByOfTheAlertView:
-    @pytest.mark.parametrize("run", [DISAGREED_CHANGED, DISAGREED_APPLIED])
+    @pytest.mark.parametrize("run", [DISAGREED_CHANGED, DISAGREED_APPLIED, DISAGREED_CHANGED_TO_TP])
     def test_an_applied_run_has_no_verifier_disagrees(self, run):
         _suggestion_unused, _proposed, held_by = _alert_view_pair(run)
 
@@ -819,12 +933,12 @@ class TestHeldByOfTheAlertView:
 
 
 class TestHeldByOfTheQueueRow:
-    @pytest.mark.parametrize("run", [DISAGREED_CHANGED, DISAGREED_APPLIED])
+    @pytest.mark.parametrize("run", [DISAGREED_CHANGED, DISAGREED_APPLIED, DISAGREED_CHANGED_TO_TP])
     def test_an_applied_run_has_no_verifier_disagrees(self, run):
         row = _queue_row(run, projection=_projection(run[1]))
 
         assert row["held_by"] == ["fp_policy:severity"]
-        assert row["proposed_action"] == FP and row["confidence"] is None
+        assert row["proposed_action"] == run[0]["suggested_action"] and row["confidence"] is None
 
     def test_an_unusable_verifier_answer_stays_in_the_list(self):
         row = _queue_row(INVALID_CHANGED, projection=_projection(INVALID_CHANGED[1]))
@@ -849,6 +963,7 @@ class TestTheAlertViewAndTheQueueRowSayTheSame:
         [
             DISAGREED_CHANGED,
             DISAGREED_APPLIED,
+            DISAGREED_CHANGED_TO_TP,
             DISAGREED_NOT_APPLIED,
             DISAGREED_OLD,
             INVALID_CHANGED,

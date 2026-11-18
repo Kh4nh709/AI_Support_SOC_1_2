@@ -27,7 +27,8 @@ nothing here writes `alerts` — G2), every column list explicit (G10):
   `best_pct` and `not_applied` are DEC-213's; DEC-220 (trial) added `below_floor_pct`, for a run whose lookup kept no
   match the best candidate the rerank scored (the lookup's `ranked`) and `floor_pct`, the `RAG_MIN_SCORE` it was under -
   DEC-221 cuts that number down to a whole percent instead of rounding it, so it is always below `floor_pct`. All four go
-  with `rag`, whole, so the blind arm never has them, and the rule of DEC-219 does not read the last two.
+  with `rag`, whole, so the blind arm never has them. (The RAG rule, DEC-225, compares the same number the page prints
+  - `best_pct` of a kept match, else `below_floor_pct` - and the page says the number and nothing of the rule.)
   DEC-221 (AP-T2) adds `analysis`, the object the Tier 1 AI analysis panel is drawn from (`tier1/analysis.py`: the model's
   summary, readings and next checks, every reason with whether its quote was verified, the facts table, the gate checks,
   the RAG standing with its top candidates, the decision history, the playbook and its rule, the server-built
@@ -49,21 +50,21 @@ never the raw `result.suggested_action`: a run the pre-DEC-217 gate held (stored
 it, so the alert page, `decide`'s `llm_suggestion` and the digest, which read them, do too. The admin LLM
 page and the audit log show stored rows as they are.
 
-DEC-219 (RR-T1, as amended): below `TRIAGE_RAG_FP_BELOW_PCT` `false_positive` is ①'s DEFAULT answer, so for a
-stored run whose `gate_result.rag_rule.applied` is true (`verdicts.rag_rule_applied`, whether or not the model
-had answered `false_positive` itself) Tier 1 is not served the model's own answer or its confidence in it:
-`proposed_action` (the alert view's, and the queue row's from the `gate_held` projection, which carries
-`rag_rule.applied`) and `Suggestion.gate.proposed_verdict` are the verdict ① ended with
-(`verdicts.served_proposed_action`), and `Suggestion.confidence` and the queue row's `confidence` are `None`
-(`verdicts.served_confidence`; what `decide` records follows, `llm_confidence` included). Nor is anything served
-that would let a reader work the model's answer out: the verifier was sent the model's own verdict and step 6
-compared it with that, so for such a run `Suggestion.gate.verifier_verdict` is `None`
-(`verdicts.served_verifier_verdict`) and `held_by` (the queue row's and the alert view's) leaves out
-`verifier_disagrees` (`verdicts.served_held_reasons`; every other code stays, `verifier_invalid` included).
-`Suggestion.gate` also gains `rag_rule`: `{threshold, best_pct, applied}` of the stored object, never its
-`changed` (for an applied run it says what the model answered), or `None`. Nothing stored changes: `llm_runs`
-is as written, and the admin LLM page and the audit log show stored rows as they are. `rag_rule` is nested in `suggestion`, so the blind
-arm (`visibility.strip` drops it with the suggestion) and the labelling page (`gate` is denied) never get it.
+DEC-219 (RR-T1, as amended) and DEC-225 (RR-T3): when the RAG rule applies to a run (`TRIAGE_RAG_FP_BELOW_PCT`,
+two-sided since DEC-225) the knowledge decided ①'s verdict, so for a stored run whose `gate_result.rag_rule.applied`
+is true (`verdicts.rag_rule_applied`, whether or not the rule's verdict differs from the model's) Tier 1 is not
+served the model's own answer or its confidence in it: `proposed_action` (the alert view's, and the queue row's from
+the `gate_held` projection, which carries `rag_rule.applied` for this reader's own use and is never served) and
+`Suggestion.gate.proposed_verdict` are the verdict ① ended with (`verdicts.served_proposed_action`), and
+`Suggestion.confidence` and the queue row's `confidence` are `None` (`verdicts.served_confidence`; what `decide`
+records follows, `llm_confidence` included). Nor is anything served that would let a reader work the model's answer
+out: the verifier was sent the model's own verdict and step 6 compared it with that, so for such a run
+`Suggestion.gate.verifier_verdict` is `None` (`verdicts.served_verifier_verdict`) and `held_by` (the queue row's and
+the alert view's) leaves out `verifier_disagrees` (`verdicts.served_held_reasons`; every other code stays,
+`verifier_invalid` included). Tier 1 is NOT told that a rule exists (the Owner, 18/11: "đây là luật ngầm"): no
+`rag_rule` key is served, for any run, anywhere in the alert view or the queue row; a run the rule decided reads as an
+ordinary ① conclusion beside its percentage. Nothing stored changes: `llm_runs` is as written, and the admin LLM page
+and the audit log show stored rows as they are.
 
 Both readers pass their dict through `visibility.strip` before returning it, so the blind
 branch (context pack §6.4) is enforced here, never in the client. `risk_score` never
@@ -181,10 +182,10 @@ class Suggestion:
     DEC-217): `result["suggested_action"]` for a run that stores the model's own answer, which is every
     run since DEC-217 (G11), and `gate_result.proposed_verdict` for a stored `needs_review` (a run the old
     gate held). `gate` is the stored gate document's keys as they are: `forced` is what the run says, whatever
-    its version. Three values are served, not stored, for a run the RAG rule applied to (DEC-219, module
+    its version. Three values are served, not stored, for a run the RAG rule applied to (DEC-219, DEC-225, module
     docstring): `confidence` is `None`, `gate["proposed_verdict"]` is the verdict ① ended with and
-    `gate["verifier_verdict"]` is `None`. `gate["rag_rule"]` is `{threshold, best_pct, applied}` of the stored
-    object (never its `changed`) or `None`."""
+    `gate["verifier_verdict"]` is `None`. `gate` has no `rag_rule` key: Tier 1 is not told that a rule exists.
+    """
 
     run_id: str
     suggested_action: str | None
@@ -230,10 +231,6 @@ _SUGGESTION_SQL = """
 """
 
 
-#: The keys of the stored `gate_result.rag_rule` that Tier 1 is served (`changed` is not one of them).
-_SERVED_RAG_RULE_KEYS = ("threshold", "best_pct", "applied")
-
-
 def _reason(item: Any) -> dict[str, Any] | None:
     if not isinstance(item, Mapping):
         return None
@@ -253,7 +250,6 @@ def _suggestion_of(
     raw_reasons = result.get("reasons") or []
     reasons = [r for r in (_reason(item) for item in raw_reasons[:10]) if r is not None]
     served = verdicts.served_action(result, gate_result)
-    rag_rule = gate_result.get("rag_rule")
     return Suggestion(
         run_id=str(run_id),
         suggested_action=served,
@@ -264,7 +260,7 @@ def _suggestion_of(
             "forced": gate_result.get("forced"),
             "forced_by": gate_result.get("forced_by"),
             # DEC-219: for a run the RAG rule applied to, the verdict ① ended with, not the model's own answer
-            # (which stays in the stored row): `false_positive` is ①'s default below the threshold.
+            # (which stays in the stored row).
             "proposed_verdict": (
                 served
                 if verdicts.rag_rule_applied(gate_result)
@@ -279,14 +275,8 @@ def _suggestion_of(
             # DEC-219: for a run the RAG rule applied to without the reasons of the rule check, which judged the
             # rule the model cited (`verdicts.served_warnings`); the stored list is untouched
             "warnings": verdicts.served_warnings(gate_result),
-            # DEC-219: `{threshold, best_pct, applied}` of the stored object, `null` for a run that has none
-            # (before the key, or a version 1 document) or whose stored value is not an object. The stored
-            # `changed` is never served: for an applied run it says what the model answered.
-            "rag_rule": (
-                {key: rag_rule.get(key) for key in _SERVED_RAG_RULE_KEYS}
-                if isinstance(rag_rule, Mapping)
-                else None
-            ),
+            # DEC-225: no `rag_rule` key. Tier 1 is not told that a rule exists, in either direction; the stored
+            # record is for the admin LLM page and the audit log.
         },
         correlated_at_analysis=facts.get("correlated_clusters"),
         created_at=created_at,

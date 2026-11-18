@@ -10,6 +10,7 @@ outcomes, never from the model's text.
      "facts": [{field, system, model, match}],                                          the five fields step 2 compares
      "checks": [{id, outcome, detail}], "check_totals": {passed, applicable, warnings}, the gate steps and the tile
      "rag": {state, failure, best_pct, floor_pct, threshold_pct, scored, candidates},   `llm.rag_view.rag_panel` + entries
+                                                       (`threshold_pct` is always 0: Tier 1 is not told of the RAG rule)
      "history": {key, total, by_conclusion, last_seen} | None,
      "playbook": {name, rule_id, rule_action, rule_table_reviewed},                     the decision table, today
      "highlights": [{direction, code, params}],                                         at most four, server-built
@@ -25,16 +26,21 @@ what the Tier 1 pages are served).
 to a page and imports nothing that builds a prompt. `tests/test_panel_readers.py` lists the modules of `backend/app`
 that may name them, and this one is on that list deliberately.
 
-**A run the RAG default applied to (DEC-219, `gate_result.rag_rule.applied` is the JSON `true`)** is served nothing
-that states or gives away the model's own verdict or confidence: no `reading_attack`, `reading_benign`,
-`would_change` (`None`), no model column of `facts` (`None`, and `match` `None`), no verifier row (step 6 is left out
-of `checks` and does not count in `check_totals`, so no highlight is derived from it), and the rule's `changed` is
-never read. `summary`, `next_checks`, `reasons`, the system facts, `rag`, `history`, `playbook` and `tech` are
-served. `tests/test_analysis_view.py` holds this with a pair of runs that differ in everything the model's answer
-touches and must give the same analysis.
+**A run the RAG rule applied to (DEC-219, DEC-225: `gate_result.rag_rule.applied` is the JSON `true`, whether or not
+the rule's verdict differs from the model's)** is served nothing that states or gives away the model's own verdict or
+confidence: no `reading_attack`, `reading_benign`, `would_change` (`None`), no model column of `facts` (`None`, and
+`match` `None`), no verifier row (step 6 is left out of `checks` and does not count in `check_totals`, so no
+highlight is derived from it), and the rule's `changed` is never read. `summary`, `next_checks`, `reasons`, the system
+facts, `rag`, `history`, `playbook` and `tech` are served. `tests/test_analysis_view.py` holds this with a pair of runs
+that differ in everything the model's answer touches and must give the same analysis.
+
+**Tier 1 is not told that a rule exists (the Owner, 18/11, DEC-225: "đây là luật ngầm. Không ghi vào UI").** There is
+no check row for the rule (step 3r) and no detail code that names it, `rag.threshold_pct` is 0 for every run (the key
+stays: ②'s panel has it, 0 too), and nothing else here reads the stored `rag_rule` but the withholding above.
 
 **A stored document of any age gives an analysis, never an error.** A version 1 `gate_result` (before DEC-217: no
-`flagged_by`, no `rag_rule`), a version 3 result (before version 4: none of the five texts), a missing or garbled
+`flagged_by`, no `rag_rule`), a DEC-219 one (`rag_rule` of four keys) and a DEC-225 one (seven), a version 3 result
+(before version 4: none of the five texts), a missing or garbled
 `gate_result` all give what they have; a row that cannot be filled is `None` (or `[]`), a check that cannot be read is
 `na` with the detail `not_run`.
 """
@@ -62,8 +68,9 @@ REASONS_SHOWN = 10
 #: How many highlights are served, at most.
 HIGHLIGHTS_SHOWN = 4
 
-#: The gate steps that have a row, in step order. Step 7 (the output guard) is not a check of the run.
-CHECK_IDS: tuple[str, ...] = ("1", "2", "3", "3r", "4", "5", "6")
+#: The gate steps that have a row, in step order. Step 7 (the output guard) is not a check of the run, and step 3r (the
+#: RAG rule, DEC-219 / DEC-225) is not a check: Tier 1 is not told that it exists, so it has no row.
+CHECK_IDS: tuple[str, ...] = ("1", "2", "3", "4", "5", "6")
 CHECK_OUTCOMES: tuple[str, ...] = ("pass", "warn", "na")
 #: Every `detail` a check row can carry, grouped by step in step order and ending with the one for a step that left no
 #: record. The page words each one; a literal on purpose, pinned by `tests/test_analysis_view.py` the way
@@ -78,9 +85,6 @@ CHECK_DETAILS: tuple[str, ...] = (
     "quotes_verified",  # step 3, pass
     "quotes_some_dropped",  # step 3, pass: at least one quote verified, some did not
     "no_verified_quote",  # step 3, warn
-    "rag_rule_applied",  # step 3r, pass: the RAG default applied (whether or not it changed an answer)
-    "rag_rule_not_applied",  # step 3r, na: the rule is on and did not apply
-    "rag_rule_off",  # step 3r, na: the rule is off (threshold 0), or the document has none
     "fp_policy_ok",  # step 4, pass
     "fp_policy_facts",  # step 4, warn: a fact forbids a false positive (and maybe the playbook too)
     "fp_policy_playbook",  # step 4, warn: only the playbook's rule check failed
@@ -300,7 +304,7 @@ def _check(check_id: str, outcome: str, detail: str) -> dict[str, str]:
 
 def _step4(steps: Mapping[str, Any], gate: Mapping[str, Any], withheld: bool) -> dict[str, str]:
     """Step 4, the false-positive policy. `missing` is read as the API serves it (`verdicts.served_missing`). For a
-    run the RAG default applied to (`withheld`) step 4 is told from the SYSTEM facts only: the playbook condition is
+    run the RAG rule applied to (`withheld`) step 4 is told from the SYSTEM facts only: the playbook condition is
     about the rule the MODEL cited (`gate._step4`: `structured_basis.playbook_rule_applied`), so which rule it cited
     would go with what it answered. It is `fp_policy_facts` (warn) when a fact field is in `missing`, else
     `fp_policy_ok` (pass) - never `fp_policy_playbook`."""
@@ -323,9 +327,10 @@ def _step4(steps: Mapping[str, Any], gate: Mapping[str, Any], withheld: bool) ->
 
 def _checks(gate: Mapping[str, Any], withheld: bool) -> list[dict[str, str]]:
     """One row per gate step in step order, `{id, outcome, detail}` (`CHECK_DETAILS`). The outcome is read from what
-    the gate recorded (`steps`, `flagged_by` or `forced_by`, `missing`, `rag_rule`); a step with no record is `na` /
-    `not_run`. For a run the RAG default applied to there is no row 6: the verifier compared its answer with the
-    model's own verdict, so its row would give that verdict away."""
+    the gate recorded (`steps`, `flagged_by` or `forced_by`, `missing`); a step with no record is `na` /
+    `not_run`. There is no row for the RAG rule (step 3r, DEC-225: Tier 1 is not told that it exists). For a run the
+    rule applied to there is no row 6 either: the verifier compared its answer with the model's own verdict, so its
+    row would give that verdict away."""
     steps = _mapping(gate.get("steps"))
     flagged = verdicts.flagged_steps(gate)
     rows: list[dict[str, str]] = []
@@ -353,16 +358,6 @@ def _checks(gate: Mapping[str, Any], withheld: bool) -> list[dict[str, str]]:
         rows.append(
             _check("3", "pass", "quotes_some_dropped" if dropped > 0 else "quotes_verified")
         )
-
-    rule = _mapping(gate.get("rag_rule"))
-    threshold = rule.get("threshold")
-    if steps.get("3r") in ("applied", "changed") or verdicts.rag_rule_applied(gate):
-        # `applied` and `changed` read the same: which of them it was says what the model answered
-        rows.append(_check("3r", "pass", "rag_rule_applied"))
-    elif _is_count(threshold) and threshold > 0:
-        rows.append(_check("3r", "na", "rag_rule_not_applied"))
-    else:
-        rows.append(_check("3r", "na", "rag_rule_off"))
 
     rows.append(_step4(steps, gate, withheld))
 
@@ -397,20 +392,18 @@ def _totals(checks: Sequence[Mapping[str, str]]) -> dict[str, int]:
 # ── the RAG block, the history, the playbook ────────────────────────────────────────────────────────────────────
 
 
-def _rag(
-    run: StoredRun, gate: Mapping[str, Any], floor: Any, read_cards: CardReader
-) -> dict[str, Any]:
+def _rag(run: StoredRun, floor: Any, read_cards: CardReader) -> dict[str, Any]:
     """`llm.rag_view.rag_panel` for the run (the part the case view will call too), with each listed candidate
     `{pct, title, conclusion}`: the entry's title and conclusion are one database read (`read_cards`), made only when
     there is a candidate to list; an entry that is gone is a row with `title` and `conclusion` `None`.
     """
+    # no `threshold`: the RAG rule's threshold is not served to Tier 1 (DEC-225), so `threshold_pct` is 0 as in ②'s panel
     panel = rag_view.rag_panel(
         run.matches,
         run.citation_warnings,
         FAILURE_KINDS,
         ranked=run.ranked,
         floor=floor,
-        threshold=_mapping(gate.get("rag_rule")).get("threshold", 0),
     )
     ids = [candidate["entry_id"] for candidate in panel["candidates"]]
     cards = read_cards(ids) if ids else {}
@@ -622,7 +615,7 @@ def build(
 
     checks = _checks(gate, withheld)
     history = _history(run.history)
-    rag = _rag(run, gate, floor, read_cards)
+    rag = _rag(run, floor, read_cards)
     return {
         "summary": _text(result.get("summary")),
         # DEC-219: the readings and what would change the verdict are the model's own case for its own answer

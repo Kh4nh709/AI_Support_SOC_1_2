@@ -1,18 +1,19 @@
-"""`tier1.triage` and the RAG low-match rule (DEC-219,
-`docs/superpowers/specs/2026-11-15-rag-low-match-fp-rule-design.md` sections 2, 4, 5 and 7): what the run
-computes (`best_pct`), what the gate is handed, what the verifier is sent, and what is stored. NO DATABASE.
+"""`tier1.triage` and the two-sided RAG rule (DEC-219, as changed by DEC-225 / RR-T3; specs
+`docs/superpowers/specs/2026-11-15-rag-low-match-fp-rule-design.md` and the Owner's rule of 18/11): what the run
+computes (the single top knowledge item: its percentage, its side and how the percentage was made), what the gate
+is handed, what the verifier is sent, and what is stored. NO DATABASE.
 
 `run_triage_job` and `evaluate_alert` are the real code; what touches the database is replaced by recorders (the
 alert read, the correlation read, the idle-timeout statement, `llm_runs.write_run`, `_set_triage_status`,
-`write_event`) and by two stubs for the RAG: the lookup's status and material (`lookup_failure`,
-`lookup_material`) and the stored `matches` of the lookup the prompt held (`_lookup_matches`). The database-backed
-counterpart, which stores real rows and reads them back through the alert page's own statement, is
-`test_rag_rule_db.py` (marked `db`; it cannot run on a host whose `TEST_DATABASE_URL` does not
-authenticate).
+`write_event`) and by three stubs for the RAG: the lookup's status and material (`lookup_failure`,
+`lookup_material`), the stored `matches` and `ranked` of the lookup the prompt held (`_lookup_scored`) and the
+conclusions of the entries (`_entry_conclusions`). The database-backed counterpart, which stores real rows and reads
+them back through the alert page's own statement, is `test_rag_rule_db.py` (marked `db`; it cannot run on a host
+whose `TEST_DATABASE_URL` does not authenticate).
 
 The central claim of the card: `best_pct` is the number the alert page shows for the same stored run. The page
-reads the `matches` of the lookup the run's row names and the run's `citation_warnings` through
-`llm.rag_view.rag_view` (`tier1.queue.latest_suggestion_rag`); the job reads the same two things through the same
+reads the `matches` and `ranked` of the lookup the run's row names and the run's `citation_warnings` through
+`llm.rag_view.rag_view` (`tier1.queue.latest_suggestion_rag`); the job reads the same things through the same
 function, so the tests below feed ONE stored run to both and compare.
 """
 
@@ -21,6 +22,7 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -38,6 +40,7 @@ from tests.test_tier1_json_schema import _ALERT_ID, _Model, _row
 
 TP, FP = "true_positive", "false_positive"
 LOOKUP_ID = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+ENTRY_UUID = uuid.UUID("00000000-0000-0000-0000-0000000000e1")
 ENTRY_TEXT = "# Máy quét nội bộ\n\nCảnh báo quét cổng từ máy quản trị đã được đóng là lành tính."
 HISTORY = (
     "level: 1\nkey_name: rule_id\ntotal: 4\n"
@@ -76,8 +79,12 @@ def world(monkeypatch):
         failure=None,
         material=_material(62),
         matches=[_match(0.62)],
+        ranked=None,
+        # the conclusion of each entry by id; an entry not listed is an incident (the side the rule reads first)
+        conclusions={},
         material_reads=0,
         match_reads=[],
+        conclusion_reads=[],
     )
 
     def _write_run(_conn, **kwargs):
@@ -88,9 +95,18 @@ def world(monkeypatch):
         writes.material_reads += 1
         return writes.material
 
-    def _lookup_matches(_conn, lookup_id):
+    def _lookup_scored(_conn, lookup_id):
         writes.match_reads.append(lookup_id)
-        return writes.matches
+        return writes.matches, writes.ranked
+
+    def _entry_conclusions(_conn, entry_ids):
+        writes.conclusion_reads.append(list(entry_ids))
+        found = {}
+        for entry_id in entry_ids:
+            conclusion = writes.conclusions.get(entry_id, "confirmed_incident")
+            if conclusion is not None:  # `None` in the table: the entry's row is gone
+                found[entry_id] = conclusion
+        return found
 
     monkeypatch.setattr(triage_module, "_raise_idle_timeout", lambda conn, cfg: None)
     monkeypatch.setattr(triage_module, "_load", lambda conn, alert_id: _row())
@@ -110,7 +126,8 @@ def world(monkeypatch):
     monkeypatch.setattr(triage_module, "write_event", lambda *a, **k: writes.events.append((a, k)))
     monkeypatch.setattr(triage_module, "lookup_failure", lambda conn, subject: writes.failure)
     monkeypatch.setattr(triage_module, "lookup_material", _lookup_material)
-    monkeypatch.setattr(triage_module, "_lookup_matches", _lookup_matches)
+    monkeypatch.setattr(triage_module, "_lookup_scored", _lookup_scored)
+    monkeypatch.setattr(triage_module, "_entry_conclusions", _entry_conclusions)
 
     def run(model, **env) -> SimpleNamespace:
         for key, value in env.items():
@@ -146,7 +163,7 @@ def _event(writes, event_type):
 # ---------------------------------------------------------------------------------------------------
 
 
-class TestAMatchBelowTheThreshold:
+class TestAnIncidentMatchBelowTheThreshold:
     def test_a_true_positive_is_stored_as_false_positive_beside_the_models_answer(self, world):
         world.run(_tp_model())
 
@@ -156,13 +173,16 @@ class TestAMatchBelowTheThreshold:
         assert gate_result["version"] == 2
         assert gate_result["proposed_verdict"] == TP  # the model's own answer
         assert gate_result["final_verdict"] == FP
-        # the rule is ①'s default answer below the threshold, not a gate force: the record is `rag_rule`
+        # the rule is not a gate force: the record is `rag_rule`
         assert gate_result["forced"] is False and gate_result["forced_by"] == []
         assert gate_result["rag_rule"] == {
             "threshold": 80,
             "best_pct": 62,
             "applied": True,
             "changed": True,
+            "entry_side": "incident",
+            "rule_verdict": FP,
+            "basis": "match",
         }
         assert gate_result["steps"]["3r"] == "changed"
         assert (
@@ -268,15 +288,16 @@ class TestARuleThatAppliedButChangedNothing:
             "best_pct": 62,
             "applied": True,
             "changed": False,
+            "entry_side": "incident",
+            "rule_verdict": FP,
+            "basis": "match",
         }
         assert gate_result["steps"]["3r"] == "applied"
         assert world.event_types == ["triage.suggested"]  # llm.gate_forced is never written
         assert _event(world, "triage.suggested")["forced"] is False
 
-
-class TestARuleThatDoesNotApply:
     @pytest.mark.parametrize("score, pct", [(0.80, 80), (0.81, 81), (0.95, 95), (1.0, 100)])
-    def test_a_best_match_at_or_above_the_threshold_leaves_the_models_verdict(
+    def test_an_incident_at_or_above_the_threshold_with_a_model_true_positive(
         self, world, score, pct
     ):
         world.matches = [_match(score)]
@@ -289,21 +310,230 @@ class TestARuleThatDoesNotApply:
         assert gate_result["rag_rule"] == {
             "threshold": 80,
             "best_pct": pct,
+            "applied": True,
+            "changed": False,
+            "entry_side": "incident",
+            "rule_verdict": TP,
+            "basis": "match",
+        }
+        assert gate_result["steps"]["3r"] == "applied"
+        assert gate_result["forced"] is False and gate_result["forced_by"] == []
+        assert world.event_types == ["triage.suggested"]
+
+
+class TestAnIncidentAtOrAboveTheThresholdIsATruePositive:
+    """The new direction of the rule (DEC-225): the model said `false_positive`, the top knowledge item is a
+    confirmed incident that matched at or over the threshold."""
+
+    @pytest.mark.parametrize("score, pct", [(0.80, 80), (0.85, 85), (1.0, 100)])
+    def test_a_model_false_positive_is_stored_as_true_positive_beside_the_models_answer(
+        self, world, score, pct
+    ):
+        world.matches = [_match(score)]
+        world.material = _material(pct)
+        model = _Model(
+            [TRIAGE_V4_FALSE_POSITIVE, {**VERIFIER_V2_AGREE, "structured_only_verdict": FP}]
+        )
+
+        world.run(model)
+
+        row = world.proposer
+        assert row["result"]["suggested_action"] == TP  # what ① ended with
+        gate_result = row["gate_result"]
+        assert gate_result["proposed_verdict"] == FP  # the model's own answer
+        assert gate_result["final_verdict"] == TP
+        assert gate_result["forced"] is False and gate_result["forced_by"] == []
+        assert gate_result["rag_rule"] == {
+            "threshold": 80,
+            "best_pct": pct,
+            "applied": True,
+            "changed": True,
+            "entry_side": "incident",
+            "rule_verdict": TP,
+            "basis": "match",
+        }
+        assert gate_result["steps"]["3r"] == "changed"
+        assert (
+            gate_result["proposer_raw"]["suggested_action"] == FP
+        )  # the model's JSON is as it came
+        assert world.event_types == ["triage.suggested"]  # nothing is forced
+        assert _event(world, "triage.suggested")["suggested_action"] == TP
+
+    def test_step_4_is_n_a_for_a_true_positive_the_rule_produced(self, world):
+        world.matches = [_match(0.85)]
+        model = _Model(
+            [TRIAGE_V4_FALSE_POSITIVE, {**VERIFIER_V2_AGREE, "structured_only_verdict": FP}]
+        )
+
+        world.run(model)
+
+        gate_result = world.proposer["gate_result"]
+        assert gate_result["steps"]["4"] == "n/a" and gate_result["missing"] == []
+        assert "step4" not in gate_result["flagged_by"]
+
+    def test_the_verifier_is_sent_the_models_false_positive_and_step_6_compares_with_it(
+        self, world
+    ):
+        world.matches = [_match(0.85)]
+        model = _Model(
+            [TRIAGE_V4_FALSE_POSITIVE, {**VERIFIER_V2_AGREE, "structured_only_verdict": FP}]
+        )
+
+        world.run(model)
+
+        sent = model.requests[1]["user"]
+        assert '"verdict": "false_positive"' in sent and '"verdict": "true_positive"' not in sent
+        assert world.verifier["gate_result"]["compared_to"] == FP
+        assert world.verifier["gate_result"]["step6"] == "agree"
+        assert "step6" not in world.proposer["gate_result"]["flagged_by"]
+        assert world.proposer["result"]["suggested_action"] == TP
+
+
+class TestABenignItem:
+    @pytest.mark.parametrize(
+        "conclusion",
+        ["closed_fp", "closed_benign", "concluded_fp", "concluded_policy_violation"],
+    )
+    def test_at_or_above_the_threshold_a_model_true_positive_is_stored_as_false_positive(
+        self, world, conclusion
+    ):
+        world.matches = [_match(0.89)]
+        world.material = _material(89)
+        world.conclusions = {"e-1": conclusion}
+
+        world.run(_tp_model())
+
+        row = world.proposer
+        assert row["result"]["suggested_action"] == FP
+        gate_result = row["gate_result"]
+        assert gate_result["proposed_verdict"] == TP and gate_result["final_verdict"] == FP
+        assert gate_result["rag_rule"] == {
+            "threshold": 80,
+            "best_pct": 89,
+            "applied": True,
+            "changed": True,
+            "entry_side": "benign",
+            "rule_verdict": FP,
+            "basis": "match",
+        }
+        assert gate_result["steps"]["3r"] == "changed"
+        assert gate_result["forced"] is False and gate_result["forced_by"] == []
+
+    def test_under_the_threshold_the_rule_is_not_applied_and_the_models_true_positive_stands(
+        self, world
+    ):
+        world.matches = [_match(0.62)]
+        world.conclusions = {"e-1": "closed_benign"}
+
+        world.run(_tp_model())
+
+        gate_result = world.proposer["gate_result"]
+        assert world.proposer["result"]["suggested_action"] == TP
+        assert gate_result["proposed_verdict"] == gate_result["final_verdict"] == TP
+        assert gate_result["rag_rule"] == {
+            "threshold": 80,
+            "best_pct": 62,
             "applied": False,
             "changed": False,
+            "entry_side": "benign",
+            "rule_verdict": None,
+            "basis": "match",
         }
         assert gate_result["steps"]["3r"] == "n/a"
         assert gate_result["forced"] is False and gate_result["forced_by"] == []
         assert world.event_types == ["triage.suggested"]
 
-    def test_the_best_of_several_matches_decides_not_the_first_or_the_lowest(self, world):
-        world.matches = [_match(0.55, "e-1"), _match(0.91, "e-2"), _match(0.62, "e-3")]
+    def test_the_conclusion_is_read_whatever_the_entrys_status(self, world):
+        """The entry is read by id and its `conclusion` is the side, not its `status` (a retired entry is read the
+        same): the stub answers for any id, as `rag.entries.entry_cards` does."""
+        world.matches = [_match(0.9)]
+        world.conclusions = {"e-1": "closed_fp"}
 
         world.run(_tp_model())
 
-        assert world.proposer["gate_result"]["rag_rule"]["best_pct"] == 91
+        assert world.conclusion_reads == [["e-1"]]
+        assert world.proposer["gate_result"]["rag_rule"]["entry_side"] == "benign"
+
+
+class TestTheTopItemIsTheOneThatDecides:
+    def test_the_highest_scoring_match_decides_not_the_first_or_the_lowest(self, world):
+        world.matches = [_match(0.55, "e-1"), _match(0.91, "e-2"), _match(0.62, "e-3")]
+        world.conclusions = {
+            "e-1": "confirmed_incident",
+            "e-2": "closed_fp",
+            "e-3": "confirmed_incident",
+        }
+
+        world.run(_tp_model())
+
+        rule = world.proposer["gate_result"]["rag_rule"]
+        assert (rule["best_pct"], rule["entry_side"], rule["basis"]) == (91, "benign", "match")
+        assert rule["applied"] is True and rule["rule_verdict"] == FP
+        assert world.proposer["result"]["suggested_action"] == FP
+        assert world.conclusion_reads == [["e-2"]]  # one item: the top one
+
+    def test_two_entries_tied_on_the_top_score_with_opposite_sides_the_incident_wins(self, world):
+        world.matches = [_match(0.85, "e-1"), _match(0.85, "e-2"), _match(0.5, "e-3")]
+        world.conclusions = {"e-1": "closed_fp", "e-2": "confirmed_incident"}
+        model = _Model(
+            [TRIAGE_V4_FALSE_POSITIVE, {**VERIFIER_V2_AGREE, "structured_only_verdict": FP}]
+        )
+
+        world.run(model)
+
+        rule = world.proposer["gate_result"]["rag_rule"]
+        assert (rule["best_pct"], rule["entry_side"], rule["rule_verdict"]) == (85, "incident", TP)
         assert world.proposer["result"]["suggested_action"] == TP
 
+    def test_a_tie_between_benign_entries_is_benign(self, world):
+        world.matches = [_match(0.85, "e-1"), _match(0.85, "e-2")]
+        world.conclusions = {"e-1": "closed_fp", "e-2": "concluded_policy_violation"}
+
+        world.run(_tp_model())
+
+        rule = world.proposer["gate_result"]["rag_rule"]
+        assert (rule["entry_side"], rule["rule_verdict"]) == ("benign", FP)
+
+    def test_a_tie_with_an_unreadable_entry_and_no_incident_is_no_side(self, world):
+        """The unreadable entry could be the incident: the rule does not guess."""
+        world.matches = [_match(0.85, "e-1"), _match(0.85, "e-2")]
+        world.conclusions = {"e-1": "closed_fp", "e-2": None}  # e-2's row is gone
+
+        world.run(_tp_model())
+
+        rule = world.proposer["gate_result"]["rag_rule"]
+        assert (rule["best_pct"], rule["entry_side"], rule["applied"]) == (85, None, False)
+        assert world.proposer["result"]["suggested_action"] == TP
+
+    def test_a_tie_with_an_unreadable_entry_and_an_incident_is_the_incident(self, world):
+        world.matches = [_match(0.85, "e-1"), _match(0.85, "e-2")]
+        world.conclusions = {"e-1": "confirmed_incident", "e-2": None}
+        model = _Model(
+            [TRIAGE_V4_FALSE_POSITIVE, {**VERIFIER_V2_AGREE, "structured_only_verdict": FP}]
+        )
+
+        world.run(model)
+
+        assert world.proposer["gate_result"]["rag_rule"]["entry_side"] == "incident"
+        assert world.proposer["result"]["suggested_action"] == TP
+
+    @pytest.mark.parametrize("conclusion", [None, "", "closed", "something_else", 7])
+    def test_an_entry_that_is_gone_or_has_no_known_conclusion_gives_no_side(
+        self, world, conclusion
+    ):
+        world.matches = [_match(0.62)]
+        world.conclusions = {"e-1": conclusion}
+
+        world.run(_tp_model())
+
+        rule = world.proposer["gate_result"]["rag_rule"]
+        assert (rule["best_pct"], rule["entry_side"], rule["applied"]) == (62, None, False)
+        assert rule["rule_verdict"] is None and rule["basis"] == "match"
+        assert world.proposer["result"]["suggested_action"] == TP
+        assert world.proposer["gate_result"]["steps"]["3r"] == "n/a"
+
+
+class TestARuleThatDoesNotApply:
     def test_the_switch_off_leaves_it_whatever_the_match_and_reads_nothing_more(self, world):
         world.run(_tp_model(), TRIAGE_RAG_FP_BELOW_PCT="0")
 
@@ -314,9 +544,13 @@ class TestARuleThatDoesNotApply:
             "best_pct": None,
             "applied": False,
             "changed": False,
+            "entry_side": None,
+            "rule_verdict": None,
+            "basis": None,
         }
         assert gate_result["steps"]["3r"] == "n/a"
-        assert world.match_reads == []  # not one statement more than before the key existed
+        # not one statement more than before the key existed
+        assert world.match_reads == [] and world.conclusion_reads == []
         assert world.event_types == ["triage.suggested"]
 
     def test_with_the_switch_unset_it_is_the_same_as_zero(self, world, monkeypatch):
@@ -326,7 +560,7 @@ class TestARuleThatDoesNotApply:
 
         assert world.proposer["gate_result"]["rag_rule"]["threshold"] == 0
         assert world.proposer["result"]["suggested_action"] == TP
-        assert world.match_reads == []
+        assert world.match_reads == [] and world.conclusion_reads == []
 
 
 class TestWithTheSwitchOffARunIsWhatItWasPlusTheRagRuleKey:
@@ -365,6 +599,9 @@ class TestWithTheSwitchOffARunIsWhatItWasPlusTheRagRuleKey:
             "best_pct": None,
             "applied": False,
             "changed": False,
+            "entry_side": None,
+            "rule_verdict": None,
+            "basis": None,
         }
         assert gate_result["proposed_verdict"] == gate_result["final_verdict"] == TP
         assert gate_result["forced"] is False and gate_result["forced_by"] == []
@@ -391,7 +628,7 @@ class TestWithTheSwitchOffARunIsWhatItWasPlusTheRagRuleKey:
 
 
 # ---------------------------------------------------------------------------------------------------
-# best_pct is None where the page shows no number (spec 2)
+# best_pct is None where the page shows no number (spec 2); and then there is no side to read
 # ---------------------------------------------------------------------------------------------------
 
 
@@ -404,10 +641,14 @@ class TestNoNumberNoRule:
             "best_pct": None,
             "applied": False,
             "changed": False,
+            "entry_side": None,
+            "rule_verdict": None,
+            "basis": None,
         }
         assert gate_result["steps"]["3r"] == "n/a"
         assert gate_result["forced"] is False and gate_result["forced_by"] == []
         assert "llm.gate_forced" not in world.event_types
+        assert world.conclusion_reads == []  # no number: no entry was read
 
     def test_rag_off(self, world):
         world.run(_tp_model(), RAG_ENABLED="false")
@@ -453,7 +694,7 @@ class TestNoNumberNoRule:
         self._assert_the_models_verdict_stays(world)
 
     def test_a_lookup_row_that_is_gone(self, world):
-        world.matches = None  # `_lookup_matches` answers None for a missing or an unreadable row
+        world.matches = None  # `_lookup_scored` answers None for a missing or an unreadable row
 
         world.run(_tp_model())
 
@@ -482,7 +723,9 @@ class TestNoNumberNoRule:
             cfg=config.load(),
             switches=EvalSwitches(rag=True),
         )
-        world.match_reads.clear()  # that evaluation read the matches once; this is about the job below
+        # that evaluation read the lookup (and the top entry) once; this is about the job below
+        world.match_reads.clear()
+        world.conclusion_reads.clear()
 
         world.run(_tp_model(), PROMPT_TOTAL_BUDGET_TOKENS=str(full.built.estimated_tokens - 1))
 
@@ -592,37 +835,41 @@ class TestTheNumberIsTheOneThePageShows:
             matches=world.matches,
         )
         assert gate_best == page_best
-        assert world.proposer["gate_result"]["rag_rule"]["applied"] is (
-            gate_best is not None and gate_best < 80
-        )
+        # the default top item is an incident, which the rule applies to on either side of the threshold: it applies
+        # exactly when there is a number
+        assert world.proposer["gate_result"]["rag_rule"]["applied"] is (gate_best is not None)
 
     @pytest.mark.parametrize(
         "warnings", [["learned_entries_dropped"], ["x", "learned_entries_dropped"]]
     )
     @pytest.mark.parametrize("matches", [[_match(0.62)], [_match(0.9)], [], None])
-    def test_the_entries_dropped_warning_gives_no_number_to_both(self, matches, warnings):
-        lookup = LOOKUP_ID
-        job = triage_module._rag_best_pct(_StaticConn(matches), lookup, warnings, 80)
+    def test_the_entries_dropped_warning_gives_no_number_to_both(
+        self, monkeypatch, matches, warnings
+    ):
+        job = _top(monkeypatch, matches, warnings=warnings)
         page = _what_the_page_shows(
             result={"suggested_action": TP},
             gate_result={},
             warnings=warnings,
             matches=matches,
         )
-        assert job is None and page is None
+        assert job == triage_module.RagTop(None, None, None) and page is None
 
     @pytest.mark.parametrize(
         "matches", [[_match(0.62)], [_match(0.9)], [_match(0.5), _match(0.71)]]
     )
-    def test_without_the_warning_both_give_the_best_of_the_stored_matches(self, matches):
-        job = triage_module._rag_best_pct(_StaticConn(matches), LOOKUP_ID, ["no_table:x"], 80)
+    def test_without_the_warning_both_give_the_best_of_the_stored_matches(
+        self, monkeypatch, matches
+    ):
+        job = _top(monkeypatch, matches, warnings=["no_table:x"])
         page = _what_the_page_shows(
             result={"suggested_action": TP},
             gate_result={},
             warnings=["no_table:x"],
             matches=matches,
         )
-        assert job == page == page_best_pct(matches)
+        assert job.best_pct == page == page_best_pct(matches)
+        assert job.basis == "match"
 
     def test_the_prompts_percentages_are_not_what_the_job_reads(self, world):
         """The prompt's entries are the matches that passed the integrity re-check and the section's own
@@ -633,21 +880,52 @@ class TestTheNumberIsTheOneThePageShows:
 
         world.run(_tp_model())
 
-        assert world.proposer["gate_result"]["rag_rule"]["best_pct"] == 91
+        rule = world.proposer["gate_result"]["rag_rule"]
+        assert rule["best_pct"] == 91 and rule["entry_side"] == "incident"
+        assert rule["rule_verdict"] == TP
         assert world.proposer["result"]["suggested_action"] == TP
 
 
-class _StaticConn:
-    """A connection that answers the one `SELECT matches` `_lookup_matches` makes with `matches`."""
+def _top(
+    monkeypatch,
+    matches,
+    *,
+    ranked=None,
+    warnings=(),
+    conclusions=None,
+    threshold=80,
+    floor=0.5,
+    lookup_id=LOOKUP_ID,
+):
+    """`triage._rag_top_item` over a lookup row made of `matches` and `ranked` and entries whose conclusions are
+    `conclusions` (an id not listed is an incident, `None` is a row that is gone). The two reads are stubbed.
+    """
+    table = {} if conclusions is None else conclusions
 
-    def __init__(self, matches):
-        self._matches = matches
+    def conclusions_of(_conn, entry_ids):
+        found = {}
+        for entry_id in entry_ids:
+            conclusion = table.get(entry_id, "confirmed_incident")
+            if conclusion is not None:
+                found[entry_id] = conclusion
+        return found
+
+    monkeypatch.setattr(triage_module, "_lookup_scored", lambda _conn, _id: (matches, ranked))
+    monkeypatch.setattr(triage_module, "_entry_conclusions", conclusions_of)
+    return triage_module._rag_top_item(None, lookup_id, list(warnings), threshold, floor)
+
+
+class _StaticConn:
+    """A connection that answers the one `SELECT matches, ranked` `_lookup_scored` makes."""
+
+    def __init__(self, matches, ranked=None):
+        self._row = (matches, ranked)
 
     def transaction(self):
         return _NullTransaction()
 
     def execute(self, _statement, _params=None):
-        return SimpleNamespace(fetchone=lambda: (self._matches,))
+        return SimpleNamespace(fetchone=lambda: self._row)
 
 
 class _NullTransaction:
@@ -659,7 +937,8 @@ class _NullTransaction:
 
 
 # ---------------------------------------------------------------------------------------------------
-# DEC-220: the number the page shows for a lookup that kept no match is NOT the rule's number
+# DEC-220 / DEC-225: a lookup that kept no match - the best candidate the rerank scored, under the floor, is the
+# top item, and its percentage is the page's `below_floor_pct`
 # ---------------------------------------------------------------------------------------------------
 
 
@@ -688,23 +967,31 @@ def _the_page_pair(proposer, *, matches, ranked, floor=0.5) -> dict:
     return queue.latest_suggestion_rag(_PageConn(row), _ALERT_ID, rag_min_score=floor)[3]
 
 
-_RANKED = [{"entry_id": "c-1", "score": 0.47}, {"entry_id": "c-2", "score": 0.31}]
+_RANKED = [
+    {"entry_id": "c-1", "score": 0.47},
+    {"entry_id": "c-2", "score": 0.31},
+    {"entry_id": "c-3", "score": 0.12},
+]
 
 
-class TestACandidateUnderTheFloorIsNotAMatch:
+def _no_match_lookup(world, ranked=_RANKED, **conclusions):
+    """The lookup kept no match (the history is in the prompt, so the run names it) and scored `ranked`."""
+    world.material = _material(entries=False)
+    world.matches = []
+    world.ranked = ranked
+    world.conclusions = conclusions
+
+
+class TestACandidateUnderTheFloor:
     """The page says "trùng cao nhất 47% (dưới mức tối thiểu 50%)" for a run whose lookup kept no match and
-    scored a 47 % candidate. The rule of DEC-219 reads kept matches only (`_rag_best_pct`): for the same stored run
-    it has no number, does not apply and leaves the model's verdict, whatever the threshold. The two can never be
-    confused: this class pins the one against the other."""
+    scored a 47 % candidate. Since DEC-225 that candidate is the top item of the rule, and 47 is the number it
+    compares (`basis` is `below_floor`): the same number the page prints."""
 
     @pytest.mark.parametrize("threshold", ["80", "100", "51"])
-    def test_a_47_percent_candidate_with_no_kept_match_keeps_the_models_verdict(
+    def test_an_incident_candidate_makes_a_model_true_positive_false_positive(
         self, world, threshold
     ):
-        world.material = _material(
-            entries=False
-        )  # history only: the run holds the lookup; no entry
-        world.matches = []  # the lookup kept no match: 47 % is under the floor of 50 %
+        _no_match_lookup(world, **{"c-1": "confirmed_incident"})
 
         world.run(_tp_model(), TRIAGE_RAG_FP_BELOW_PCT=threshold)
 
@@ -712,18 +999,23 @@ class TestACandidateUnderTheFloorIsNotAMatch:
         assert (
             row["rag_lookup_id"] == LOOKUP_ID
         )  # the run names the lookup the page reads the ranking of
-        assert row["result"]["suggested_action"] == TP
-        assert row["gate_result"]["final_verdict"] == TP
+        assert row["result"]["suggested_action"] == FP
+        assert row["gate_result"]["final_verdict"] == FP
+        assert row["gate_result"]["proposed_verdict"] == TP
         assert row["gate_result"]["rag_rule"] == {
             "threshold": int(threshold),
-            "best_pct": None,
-            "applied": False,
-            "changed": False,
+            "best_pct": 47,
+            "applied": True,
+            "changed": True,
+            "entry_side": "incident",
+            "rule_verdict": FP,
+            "basis": "below_floor",
         }
-        assert row["gate_result"]["steps"]["3r"] == "n/a"
+        assert row["gate_result"]["steps"]["3r"] == "changed"
         assert row["gate_result"]["forced"] is False and row["gate_result"]["forced_by"] == []
         assert "llm.gate_forced" not in world.event_types
-        # ... while the page pair for the same stored run has the candidate's percentage
+        assert world.conclusion_reads == [["c-1"]]  # the top candidate, one entry
+        # ... and the number is the page's: its pair for the same stored run says 47 under the 50 floor
         pair = _the_page_pair(row, matches=world.matches, ranked=_RANKED)
         assert pair == {
             "best_pct": None,
@@ -732,27 +1024,140 @@ class TestACandidateUnderTheFloorIsNotAMatch:
             "floor_pct": 50,
         }
 
-    def test_the_rule_reads_the_stored_matches_and_never_the_ranking(self, world):
-        world.material = _material(entries=False)
-        world.matches = []
-
-        world.run(_tp_model())
-
-        # `_rag_best_pct` read the one thing it always read: the matches of the lookup the prompt held
-        assert world.match_reads == [LOOKUP_ID]
-        assert world.proposer["gate_result"]["rag_rule"]["best_pct"] is None
-
-    def test_a_kept_match_is_the_rules_number_and_the_page_has_no_below_floor_number(self, world):
-        world.matches = [_match(0.62)]
+    def test_a_benign_candidate_is_not_applied_and_the_models_verdict_stands(self, world):
+        _no_match_lookup(world, **{"c-1": "closed_fp"})
 
         world.run(_tp_model())
 
         row = world.proposer
-        assert row["gate_result"]["rag_rule"]["best_pct"] == 62
-        assert row["result"]["suggested_action"] == FP
-        pair = _the_page_pair(
-            row, matches=world.matches, ranked=[{"entry_id": "e-1", "score": 0.62}, *_RANKED]
+        assert row["result"]["suggested_action"] == TP
+        assert row["gate_result"]["rag_rule"] == {
+            "threshold": 80,
+            "best_pct": 47,
+            "applied": False,
+            "changed": False,
+            "entry_side": "benign",
+            "rule_verdict": None,
+            "basis": "below_floor",
+        }
+        assert row["gate_result"]["steps"]["3r"] == "n/a"
+        assert row["gate_result"]["forced"] is False and row["gate_result"]["forced_by"] == []
+
+    def test_an_incident_candidate_with_a_model_false_positive_is_applied_unchanged(self, world):
+        _no_match_lookup(world, **{"c-1": "confirmed_incident"})
+        model = _Model(
+            [TRIAGE_V4_FALSE_POSITIVE, {**VERIFIER_V2_AGREE, "structured_only_verdict": FP}]
         )
+
+        world.run(model)
+
+        rule = world.proposer["gate_result"]["rag_rule"]
+        assert (rule["applied"], rule["changed"], rule["rule_verdict"]) == (True, False, FP)
+        assert world.proposer["result"]["suggested_action"] == FP
+
+    def test_the_percentage_is_the_pages_cut_down_number(self, world):
+        _no_match_lookup(world, ranked=[{"entry_id": "c-1", "score": 0.4999}])
+
+        world.run(_tp_model())
+
+        rule = world.proposer["gate_result"]["rag_rule"]
+        assert rule["best_pct"] == 49  # cut down, never rounded up to the floor (DEC-221)
+        pair = _the_page_pair(
+            world.proposer, matches=world.matches, ranked=[{"entry_id": "c-1", "score": 0.4999}]
+        )
+        assert pair["below_floor_pct"] == 49
+
+    def test_two_candidates_tied_on_the_top_score_with_opposite_sides_the_incident_wins(
+        self, world
+    ):
+        _no_match_lookup(
+            world,
+            ranked=[{"entry_id": "c-1", "score": 0.4}, {"entry_id": "c-2", "score": 0.4}],
+            **{"c-1": "closed_benign", "c-2": "confirmed_incident"},
+        )
+
+        world.run(_tp_model())
+
+        rule = world.proposer["gate_result"]["rag_rule"]
+        assert (rule["best_pct"], rule["entry_side"], rule["basis"]) == (
+            40,
+            "incident",
+            "below_floor",
+        )
+        assert world.proposer["result"]["suggested_action"] == FP  # incident under the threshold
+
+    def test_the_best_candidate_decides_not_the_first_stored(self, world):
+        _no_match_lookup(
+            world,
+            ranked=[{"entry_id": "c-1", "score": 0.2}, {"entry_id": "c-2", "score": 0.45}],
+            **{"c-1": "closed_fp", "c-2": "confirmed_incident"},
+        )
+
+        world.run(_tp_model())
+
+        rule = world.proposer["gate_result"]["rag_rule"]
+        assert (rule["best_pct"], rule["entry_side"]) == (45, "incident")
+
+    def test_a_candidate_whose_entry_is_gone_gives_no_side(self, world):
+        _no_match_lookup(world, **{"c-1": None})
+
+        world.run(_tp_model())
+
+        rule = world.proposer["gate_result"]["rag_rule"]
+        assert (rule["best_pct"], rule["entry_side"], rule["applied"]) == (47, None, False)
+        assert world.proposer["result"]["suggested_action"] == TP
+
+    def test_a_lookup_that_scored_nothing_has_no_number_and_reads_no_entry(self, world):
+        _no_match_lookup(world, ranked=[])
+
+        world.run(_tp_model())
+
+        assert world.proposer["gate_result"]["rag_rule"]["best_pct"] is None
+        assert world.proposer["result"]["suggested_action"] == TP
+        assert world.conclusion_reads == []
+
+    def test_a_best_candidate_the_floor_would_now_keep_is_not_below_the_floor(self, world):
+        """The page's own rule: the configuration's floor may have moved since the lookup ran, and a candidate it
+        would now keep is not "below the floor" - the page shows no number and neither does the rule.
+        """
+        _no_match_lookup(world, ranked=[{"entry_id": "c-1", "score": 0.55}])
+
+        world.run(_tp_model())  # RAG_MIN_SCORE is 0.5: 0.55 is not under it
+
+        rule = world.proposer["gate_result"]["rag_rule"]
+        assert (rule["best_pct"], rule["entry_side"], rule["basis"], rule["applied"]) == (
+            None,
+            None,
+            None,
+            False,
+        )
+        assert world.proposer["result"]["suggested_action"] == TP
+        assert world.conclusion_reads == []
+
+    def test_the_floor_is_the_running_configurations(self, world):
+        _no_match_lookup(world, ranked=[{"entry_id": "c-1", "score": 0.55}])
+
+        world.run(_tp_model(), RAG_MIN_SCORE="0.6")  # now 0.55 is under the floor
+
+        rule = world.proposer["gate_result"]["rag_rule"]
+        assert (rule["best_pct"], rule["basis"], rule["entry_side"]) == (
+            55,
+            "below_floor",
+            "incident",
+        )
+
+    def test_a_kept_match_is_the_top_item_and_the_page_has_no_below_floor_number(self, world):
+        """The two are never both set: with a kept match the basis is `match`, whatever else the rerank scored."""
+        world.matches = [_match(0.62)]
+        world.ranked = [{"entry_id": "e-1", "score": 0.62}, *_RANKED]
+
+        world.run(_tp_model())
+
+        row = world.proposer
+        rule = row["gate_result"]["rag_rule"]
+        assert (rule["best_pct"], rule["basis"], rule["entry_side"]) == (62, "match", "incident")
+        assert row["result"]["suggested_action"] == FP
+        pair = _the_page_pair(row, matches=world.matches, ranked=world.ranked)
         assert pair == {
             "best_pct": 62,
             "not_applied": None,
@@ -760,15 +1165,27 @@ class TestACandidateUnderTheFloorIsNotAMatch:
             "floor_pct": None,
         }
 
+    def test_the_switch_off_reads_neither_the_lookup_nor_the_entry(self, world):
+        _no_match_lookup(world, **{"c-1": "confirmed_incident"})
+
+        world.run(_tp_model(), TRIAGE_RAG_FP_BELOW_PCT="0")
+
+        assert world.proposer["result"]["suggested_action"] == TP
+        assert world.match_reads == [] and world.conclusion_reads == []
+        pair = _the_page_pair(world.proposer, matches=world.matches, ranked=_RANKED)
+        assert pair["below_floor_pct"] == 47  # the display does not depend on the switch
+
 
 class TestTheHelper:
     def test_a_threshold_of_zero_never_touches_the_connection(self):
-        assert triage_module._rag_best_pct(_Conn(), LOOKUP_ID, [], 0) is None
+        got = triage_module._rag_top_item(_Conn(), LOOKUP_ID, [], 0, 0.5)
+        assert got == triage_module.RagTop(None, None, None)
 
     def test_no_lookup_in_the_prompt_never_touches_the_connection(self):
-        assert triage_module._rag_best_pct(_Conn(), None, [], 80) is None
+        got = triage_module._rag_top_item(_Conn(), None, [], 80, 0.5)
+        assert got == triage_module.RagTop(None, None, None)
 
-    def test_it_reads_the_matches_of_the_lookup_the_prompt_held_by_its_id(self):
+    def test_it_reads_the_matches_and_the_ranking_of_the_lookup_the_prompt_held_by_its_id(self):
         seen = []
 
         class Conn(_StaticConn):
@@ -776,26 +1193,114 @@ class TestTheHelper:
                 seen.append((" ".join(str(statement).split()), params))
                 return super().execute(statement, params)
 
-        got = triage_module._rag_best_pct(Conn([_match(0.62)]), LOOKUP_ID, [], 80)
+        matches = [
+            _match(0.62, "not-a-uuid")
+        ]  # no entry read: the id is no uuid (`entry_cards` skips it)
+        got = triage_module._rag_top_item(Conn(matches), LOOKUP_ID, [], 80, 0.5)
 
-        assert got == 62
-        assert seen == [("SELECT matches FROM rag_results WHERE lookup_id = %s", (LOOKUP_ID,))]
+        assert got == triage_module.RagTop(62, None, "match")  # no readable entry, so no side
+        assert seen == [
+            ("SELECT matches, ranked FROM rag_results WHERE lookup_id = %s", (LOOKUP_ID,))
+        ]
+
+    def test_it_reads_the_top_entrys_conclusion_by_id_whatever_its_status(self):
+        seen = []
+
+        class Conn(_StaticConn):
+            def execute(self, statement, params=None):
+                text = " ".join(str(statement).split())
+                seen.append((text, params))
+                if text.startswith("SELECT entry_id, conclusion"):
+                    return SimpleNamespace(fetchall=lambda: [(ENTRY_UUID, "closed_benign", "# t")])
+                return super().execute(statement, params)
+
+        matches = [_match(0.9, str(ENTRY_UUID)), _match(0.5, str(uuid.uuid4()))]
+        got = triage_module._rag_top_item(Conn(matches), LOOKUP_ID, [], 80, 0.5)
+
+        assert got == triage_module.RagTop(90, "benign", "match")
+        statement, params = seen[1]
+        assert (
+            statement
+            == "SELECT entry_id, conclusion, content FROM knowledge_entries WHERE entry_id = ANY(%s)"
+        )
+        assert "status" not in statement  # the entry is read whatever its status
+        assert params == ([ENTRY_UUID],)  # one entry: the top one
 
     def test_a_missing_row_gives_no_number(self):
         class Conn(_StaticConn):
             def execute(self, statement, params=None):
                 return SimpleNamespace(fetchone=lambda: None)
 
-        assert triage_module._rag_best_pct(Conn(None), LOOKUP_ID, [], 80) is None
+        got = triage_module._rag_top_item(Conn(None), LOOKUP_ID, [], 80, 0.5)
+        assert got == triage_module.RagTop(None, None, None)
 
-    def test_a_database_error_is_no_number_never_a_failed_run(self):
+    def test_a_database_error_on_the_lookup_is_no_number_never_a_failed_run(self):
         import psycopg
 
         class Conn(_StaticConn):
             def transaction(self):
                 raise psycopg.OperationalError("boom")
 
-        assert triage_module._rag_best_pct(Conn(None), LOOKUP_ID, [], 80) is None
+        got = triage_module._rag_top_item(Conn(None), LOOKUP_ID, [], 80, 0.5)
+        assert got == triage_module.RagTop(None, None, None)
+
+    def test_a_database_error_on_the_entry_is_a_number_with_no_side_never_a_failed_run(self):
+        import psycopg
+
+        class Conn(_StaticConn):
+            def execute(self, statement, params=None):
+                if " ".join(str(statement).split()).startswith("SELECT entry_id, conclusion"):
+                    raise psycopg.OperationalError("boom")
+                return super().execute(statement, params)
+
+        matches = [_match(0.9, str(ENTRY_UUID))]
+        got = triage_module._rag_top_item(Conn(matches), LOOKUP_ID, [], 80, 0.5)
+        assert got == triage_module.RagTop(90, None, "match")
+
+    @pytest.mark.parametrize("floor", [None, "0.5", True, float("nan"), 1.5])
+    def test_a_floor_that_is_not_a_score_gives_no_below_floor_number(self, monkeypatch, floor):
+        got = _top(monkeypatch, [], ranked=[{"entry_id": "c", "score": 0.3}], floor=floor)
+        assert got == triage_module.RagTop(None, None, None)
+
+    def test_a_failed_lookup_gives_no_number_even_with_stored_matches(self, monkeypatch):
+        got = _top(monkeypatch, [_match(0.9)], warnings=["rag_not_applied:auth"])
+        assert got == triage_module.RagTop(None, None, None)
+
+    @pytest.mark.parametrize(
+        "conclusion, side",
+        [
+            ("confirmed_incident", "incident"),
+            ("closed_fp", "benign"),
+            ("closed_benign", "benign"),
+            ("concluded_fp", "benign"),
+            ("concluded_policy_violation", "benign"),
+            ("need_more_data", None),
+            ("", None),
+            (None, None),
+            (7, None),
+            (["confirmed_incident"], None),
+        ],
+    )
+    def test_the_side_of_a_conclusion(self, conclusion, side):
+        assert triage_module.entry_side(conclusion) == side
+
+    def test_every_conclusion_the_schema_allows_has_a_side(self):
+        """The CHECK of `knowledge_entries.conclusion` (migration 020) is the list; a conclusion added there with no
+        side here would silently give no rule."""
+        schema = (
+            Path(__file__).resolve().parents[2] / "docs" / "Schema" / "020_learned_knowledge.sql"
+        ).read_text(encoding="utf-8")
+        block = schema[schema.index("ck_knowledge_entries_conclusion") :]
+        allowed = re.findall(r"'([a-z_]+)'", block[: block.index("))")])
+        assert set(allowed) == {
+            "closed_fp",
+            "closed_benign",
+            "concluded_fp",
+            "concluded_policy_violation",
+            "confirmed_incident",
+        }
+        assert {triage_module.entry_side(name) for name in allowed} == {"incident", "benign"}
+        assert [n for n in allowed if triage_module.entry_side(n) is None] == []
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -845,8 +1350,34 @@ class TestTheEvaluation:
             "best_pct": 62,
             "applied": True,
             "changed": True,
+            "entry_side": "incident",
+            "rule_verdict": FP,
+            "basis": "match",
         }
         assert ev.result["suggested_action"] == FP
+
+    def test_an_incident_at_the_threshold_turns_a_model_false_positive_into_true_positive_in_both_modes(
+        self, world
+    ):
+        world.matches = [_match(0.85)]
+        answers_fp = {**VERIFIER_V2_AGREE, "structured_only_verdict": FP}
+
+        deployed = self._evaluate(
+            world, EvalSwitches(rag=True), _Model([TRIAGE_V4_FALSE_POSITIVE, answers_fp])
+        )
+        restricted = self._evaluate(
+            world,
+            EvalSwitches(rag=True, gate_mode="steps_1_3"),
+            _Model([TRIAGE_V4_FALSE_POSITIVE]),
+        )
+
+        for ev in (deployed, restricted):
+            assert ev.outcome == "ok"
+            assert (ev.proposed_verdict, ev.final_verdict) == (FP, TP)
+            assert ev.forced_by == () and ev.result["suggested_action"] == TP
+            assert ev.gate_result["steps"]["3r"] == "changed"
+            assert ev.gate_result["rag_rule"]["rule_verdict"] == TP
+        assert deployed.verdict_for_verifier == FP  # the verifier is sent the model's own verdict
 
     def test_the_restricted_mode_with_the_switch_off_is_the_model_and_an_n_a_step(self, world):
         world.setenv("TRIAGE_RAG_FP_BELOW_PCT", "0")

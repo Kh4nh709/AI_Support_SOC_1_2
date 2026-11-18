@@ -40,15 +40,22 @@ so `forced_by` is `()` for a new run and `llm.gate_forced` is not
 written (the event type stays for old rows); `triage.suggested` keeps `forced` (now always false) and gains
 `flagged_by`.
 
-DEC-219 (RR-T1, as amended): below `TRIAGE_RAG_FP_BELOW_PCT` (0 = off, the default) `false_positive` is ①'s
-default answer. `_rag_best_pct` computes the run's `best_pct` - the number the alert page shows for it, by the
-page's own function over the page's own inputs (the stored `matches` of the lookup the prompt held, the run's
-`citation_warnings`) - and the gate's `step3r_rag_rule` (steps 1-3 and the deployed gate alike) turns a model
-`true_positive` into `false_positive`. The model is still called, its reasons are still shown, its own answer is
-kept in `gate_result.proposed_verdict`. It is not a force: `forced_by` stays `()`, `llm.gate_forced` is still
-never written, `triage.suggested.forced` is false and its `suggested_action` is the verdict after the rule. The
-verifier is sent the model's own verdict (`TriageEvaluation.verdict_for_verifier`), and step 6 compares its
-answer with it. `proposed_verdict` and `final_verdict` differ when the rule changed the verdict.
+DEC-219 (RR-T1, as amended) and DEC-225 (RR-T3): the knowledge can decide ①'s verdict, in both directions, when
+`TRIAGE_RAG_FP_BELOW_PCT` is above 0 (0 = off, the default). `_rag_top_item` finds the single top knowledge item of
+the lookup the run's prompt held: its percentage - the number the alert page shows for the run, by the page's own
+functions over the page's own inputs (`llm.rag_view`: a kept match's `best_pct`, else, for a lookup that kept none,
+the best scored candidate's `below_floor_pct`; the stored `matches` and `ranked` of the lookup, the run's
+`citation_warnings`, `RAG_MIN_SCORE`) - and its side, read from the entry's `conclusion` (`entry_side`:
+`confirmed_incident` is an incident; `closed_fp`, `closed_benign`, `concluded_fp` and `concluded_policy_violation`
+are benign). The gate's `step3r_rag_rule` (steps 1-3 and the deployed gate alike) then gives `true_positive` for an
+incident at or over the threshold, `false_positive` for an incident under it and for a benign item at or over it,
+and leaves a benign item under it to the model. The model is still called, its reasons are still shown, its own
+answer is kept in `gate_result.proposed_verdict`. It is not a force: `forced_by` stays `()`, `llm.gate_forced` is
+still never written, `triage.suggested.forced` is false and its `suggested_action` is the verdict after the rule.
+The verifier is sent the model's own verdict (`TriageEvaluation.verdict_for_verifier`), and step 6 compares its
+answer with it. `proposed_verdict` and `final_verdict` differ when the rule changed the verdict. Tier 1 is not told
+that a rule exists: what `tier1/queue.py` and `tier1/analysis.py` serve says the verdict and the percentage, and
+withholds the model's own answer for a run the rule applied to.
 
 `_set_triage_status` is this module's only write to `alerts` — it names
 `triage_status` and `triaged_count` and nothing else (G2). `domain/`, not `tier1/`,
@@ -59,11 +66,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import UUID, uuid4
 
 import psycopg
@@ -106,6 +114,7 @@ from app.llm.triage import (
     propose,
     verify,
 )
+from app.rag.entries import entry_cards
 from app.rag.failures import FAILURE_KINDS
 from app.rag.lookup import (
     UNKNOWN_FAILURE_KIND,
@@ -672,45 +681,129 @@ def _learned_before(
         return None, None
 
 
-def _lookup_matches(conn: psycopg.Connection, lookup_id: UUID) -> Any:
-    """The stored `rag_results.matches` of the lookup `lookup_id`, exactly the value the alert page reads for
-    the same run (`tier1.queue._SUGGESTION_SQL`: the scalar subquery on `llm_runs.rag_lookup_id`). `None` when
-    the row is gone or the read fails: a savepoint like the lookup's own reads, because the number is an
-    extra of a rule and a database error in it must be no number, never a failed ①."""
+def _lookup_scored(conn: psycopg.Connection, lookup_id: UUID) -> tuple[Any, Any]:
+    """`(matches, ranked)`: the stored `rag_results.matches` and `rag_results.ranked` of the lookup `lookup_id`, in
+    ONE statement, exactly the two values the alert page reads for the same run (`tier1.queue._SUGGESTION_SQL`: the
+    join on `llm_runs.rag_lookup_id`). `(None, None)` when the row is gone or the read fails: a savepoint like the
+    lookup's own reads, because the number is an extra of a rule and a database error in it must be no number, never
+    a failed ①."""
     try:
         with conn.transaction():
             row = conn.execute(
-                "SELECT matches FROM rag_results WHERE lookup_id = %s", (lookup_id,)
+                "SELECT matches, ranked FROM rag_results WHERE lookup_id = %s", (lookup_id,)
             ).fetchone()
     except psycopg.Error as exc:
         _log({"rag_lookup": "unreadable", "lookup_id": str(lookup_id), "error": type(exc).__name__})
+        return None, None
+    return (None, None) if row is None else (row[0], row[1])
+
+
+#: DEC-225: the side of a knowledge entry for the RAG rule, from its `knowledge_entries.conclusion` (the CHECK of
+#: migration 020 lists the five; `tests/test_tier1_rag_rule.py` ties this table to it). `incident` is a confirmed
+#: incident; `benign` is every closed conclusion, a false positive or a policy violation.
+_ENTRY_SIDES: dict[str, str] = {
+    "confirmed_incident": "incident",
+    "closed_fp": "benign",
+    "closed_benign": "benign",
+    "concluded_fp": "benign",
+    "concluded_policy_violation": "benign",
+}
+
+
+def entry_side(conclusion: Any) -> str | None:
+    """`"incident"` | `"benign"` for an entry's `conclusion`; `None` for anything that is not one of the five."""
+    return _ENTRY_SIDES.get(conclusion) if isinstance(conclusion, str) else None
+
+
+def _entry_conclusions(conn: psycopg.Connection, entry_ids: Sequence[str]) -> dict[str, str]:
+    """`{entry_id: conclusion}` of the entries of `entry_ids` that exist, whatever their `status` (a retired entry is
+    read the same), in one statement (`rag.entries.entry_cards`; an id that is not a UUID is left out without one). A
+    savepoint like the lookup's own reads: a database error is no conclusion, never a failed ①."""
+    try:
+        with conn.transaction():
+            cards = entry_cards(conn, entry_ids)
+    except psycopg.Error as exc:
+        _log({"rag_lookup": "unreadable", "entries": len(entry_ids), "error": type(exc).__name__})
+        return {}
+    return {entry_id: card[1] for entry_id, card in cards.items()}
+
+
+def _side_of(conn: psycopg.Connection, entry_ids: Sequence[str | None]) -> str | None:
+    """The side of the top item (`rag_view.top_entry_ids`). One entry is the usual case: its `entry_side`, or `None`
+    when its row is gone or its conclusion is not one of the five. Entries tied on the top score with opposite sides:
+    the incident side wins (the Owner's tie rule). The benign side needs every one of them readable and benign: an
+    entry that cannot be read could be the incident, and the rule does not guess."""
+    if not entry_ids:
         return None
-    return None if row is None else row[0]
+    named = [entry_id for entry_id in entry_ids if entry_id is not None]
+    conclusions = _entry_conclusions(conn, named) if named else {}
+    sides = [
+        None if entry_id is None else entry_side(conclusions.get(entry_id))
+        for entry_id in entry_ids
+    ]
+    if "incident" in sides:
+        return "incident"
+    return "benign" if all(side == "benign" for side in sides) else None
 
 
-def _rag_best_pct(
+class RagTop(NamedTuple):
+    """What the RAG rule is handed about a run (DEC-225): the single top knowledge item's percentage (`best_pct`:
+    the page's number for the run), its side (`entry_side`: `incident` | `benign`) and how the percentage was made
+    (`basis`: `match` for a kept match, `below_floor` for the best scored candidate of a lookup that kept none).
+    `None` where the page shows no number, and `entry_side` is also `None` where the entry cannot be read.
+    """
+
+    best_pct: int | None
+    entry_side: str | None
+    basis: str | None
+
+
+_NO_TOP = RagTop(None, None, None)
+
+
+def _rag_top_item(
     conn: psycopg.Connection,
     rag_lookup_id: UUID | None,
     warnings: list[str],
     threshold: int,
-) -> int | None:
-    """The run's `best_pct` (DEC-219): the number the alert page shows as "trùng X% với tri thức đã duyệt" for
-    this run, computed by the page's own function (`llm.rag_view.rag_view`) from the page's own two inputs:
-    the stored `matches` of the lookup the run's prompt held (`rag_lookup_id`: None unless the learned section
-    is in the prompt) and the run's `citation_warnings` (`learned_entries_dropped`: the token budget dropped the
-    entries). So it is `None` for every case the page shows no number: no lookup in the prompt (no lookup, a
-    `failed` or `budget` one, RAG off by the switch or by an evaluation switch, all of which leave
-    `rag_lookup_id` None), a lookup that kept no match, and entries the budget dropped.
+    floor: float,
+) -> RagTop:
+    """The single top knowledge item of the lookup the run's prompt held (`rag_lookup_id`: None unless the learned
+    section is in the prompt), as the RAG rule reads it (DEC-219, two-sided since DEC-225).
 
-    The prompt's own entries are NOT the source: they are the matches that passed the integrity re-check and
-    the section's own checks, at most the section's cap, and the page shows the best of the STORED matches.
-    With `threshold` 0 (the switch off, the default) nothing is read: not one statement more than a run made
-    before the key existed."""
+    The percentage is the number the alert page shows for this run, computed by the page's own functions
+    (`llm.rag_view.rag_view`) from the page's own inputs: the stored `matches` and `ranked` of the lookup, the run's
+    `citation_warnings` and `floor` (`RAG_MIN_SCORE` of the running configuration). When the lookup kept at least one
+    match it is the best kept match's `best_pct` and the basis is `match`; else, when the lookup scored candidates and
+    the best is under the floor, it is that candidate's `below_floor_pct` (cut down) and the basis is `below_floor`.
+    The top item is the kept match (or candidate) with the highest `score` (`rag_view.top_entry_ids`), and its side is
+    its entry's `conclusion` (`_side_of`).
+
+    So it is `RagTop(None, None, None)` for every case the page shows no number: no lookup in the prompt (no lookup,
+    a `failed` or `budget` one, RAG off by the switch or by an evaluation switch, all of which leave
+    `rag_lookup_id` None), a failed lookup (`not_applied`), entries the budget dropped (`entries_dropped`), a lookup
+    that kept no match and scored no candidate under the floor (also when the floor moved so that the best candidate
+    is no longer under it). A number with no side (the entry is gone, or its conclusion is not one of the five) is
+    `RagTop(pct, None, basis)`: the rule does not apply.
+
+    The prompt's own entries are NOT the source: they are the matches that passed the integrity re-check and the
+    section's own checks, at most the section's cap, and the page shows the best of the STORED matches. With
+    `threshold` 0 (the switch off, the default) nothing is read: not one statement more than a run made before the
+    key existed."""
     if threshold <= 0 or rag_lookup_id is None:
-        return None
-    matches = _lookup_matches(conn, rag_lookup_id)
-    best = rag_view.rag_view(matches, warnings, FAILURE_KINDS)["best_pct"]
-    return best if isinstance(best, int) else None
+        return _NO_TOP
+    matches, ranked = _lookup_scored(conn, rag_lookup_id)
+    view = rag_view.rag_view(matches, warnings, FAILURE_KINDS, ranked=ranked, floor=floor)
+    if view["not_applied"] is not None or rag_view.entries_dropped(warnings):
+        return _NO_TOP
+    kept, below = view["best_pct"], view["below_floor_pct"]
+    if isinstance(kept, int):
+        pct, basis, items = kept, "match", matches
+    elif isinstance(below, int):
+        pct, basis, items = below, "below_floor", ranked
+    else:
+        return _NO_TOP
+    return RagTop(pct, _side_of(conn, rag_view.top_entry_ids(items)), basis)
 
 
 def _evaluation(
@@ -941,10 +1034,11 @@ def evaluate_alert(
     if proposal.parsed is None:
         return evaluation("schema", proposal=proposal)
 
-    # DEC-219: the number the alert page shows for this run, for the RAG low-match rule. Read after the model
-    # answered (a run that never reaches the gate reads nothing), and not at all with the switch off.
+    # DEC-219, DEC-225: the single top knowledge item of this run (the percentage the alert page shows for it, and its
+    # side), for the RAG rule. Read after the model answered (a run that never reaches the gate reads nothing), and
+    # not at all with the switch off.
     rag_threshold = cfg.TRIAGE_RAG_FP_BELOW_PCT
-    rag_best_pct = _rag_best_pct(conn, rag_lookup_id, built.warnings, rag_threshold)
+    rag_top = _rag_top_item(conn, rag_lookup_id, built.warnings, rag_threshold, cfg.RAG_MIN_SCORE)
 
     if switches.gate_mode == "steps_1_3":
         # B3 — `gate.py` keeps its step functions importable for exactly this re-run.
@@ -957,7 +1051,10 @@ def evaluate_alert(
         )
         gate.step2_basis(state)
         gate.step3_quotes(state)
-        gate.step3r_rag_rule(state, rag_best_pct, rag_threshold)  # wherever step 3 runs (DEC-219)
+        # wherever step 3 runs (DEC-219, DEC-225)
+        gate.step3r_rag_rule(
+            state, rag_top.best_pct, rag_top.entry_side, rag_threshold, rag_top.basis
+        )
         result = gate.step7_output_guard(state)
         return evaluation("ok", proposal=proposal, state=state, result=result)
 
@@ -970,8 +1067,10 @@ def evaluate_alert(
         rule_check=rule_check,
         scan=lambda _: findings,
         step1_errors=proposal.first_errors,
-        rag_best_pct=rag_best_pct,
+        rag_best_pct=rag_top.best_pct,
+        rag_entry_side=rag_top.entry_side,
         rag_threshold=rag_threshold,
+        rag_basis=rag_top.basis,
     )
     # The verifier row must record what it was actually asked to check: the model's own answer (`false_positive`
     # or `true_positive`), not the verdict ① ends with. Since DEC-217 no check changes the verdict, and since

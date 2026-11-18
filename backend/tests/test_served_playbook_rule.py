@@ -266,14 +266,14 @@ def _analysis(gate, action=FP):
 def test_for_an_applied_run_that_only_failed_the_playbook_rule_step_4_passes():
     built = _analysis(_changed_gate(()))
     assert _rows(built)["4"] == {"id": "4", "outcome": "pass", "detail": "fp_policy_ok"}
-    assert built["check_totals"] == {"passed": 6, "applicable": 6, "warnings": 0}
+    assert built["check_totals"] == {"passed": 5, "applicable": 5, "warnings": 0}
     assert not [h for h in built["highlights"] if h["code"].startswith("warning_")]
 
 
 def test_for_an_applied_run_with_a_fact_missing_step_4_is_the_facts_warning():
     built = _analysis(_changed_gate(("severity",)))
     assert _rows(built)["4"] == {"id": "4", "outcome": "warn", "detail": "fp_policy_facts"}
-    assert built["check_totals"] == {"passed": 5, "applicable": 6, "warnings": 1}
+    assert built["check_totals"] == {"passed": 4, "applicable": 5, "warnings": 1}
     assert "warning_fp_policy_facts" in [h["code"] for h in built["highlights"]]
 
 

@@ -193,3 +193,62 @@ def test_a_blind_undecided_view_loses_rag_and_a_decided_one_keeps_it():
     assert "rag" not in visibility.strip(
         view, status="closed_fp", suggestion_visible=True, mode="labeling"
     )
+
+
+# ── the single top item of a stored list (DEC-225, the RAG rule) ───────────────────────────────
+
+
+def _item(entry: object, score: object) -> dict:
+    return {"entry_id": entry, "score": score}
+
+
+def test_top_entry_ids_is_the_item_with_the_highest_score():
+    items = [_item("a", 0.55), _item("b", 0.91), _item("c", 0.62)]
+    assert rag_view.top_entry_ids(items) == ["b"]
+
+
+def test_top_entry_ids_lists_every_item_tied_on_the_top_score_in_stored_order():
+    items = [_item("a", 0.5), _item("b", 0.85), _item("c", 0.85), _item("d", 0.84)]
+    assert rag_view.top_entry_ids(items) == ["b", "c"]
+
+
+def test_top_entry_ids_lists_an_entry_once():
+    assert rag_view.top_entry_ids([_item("a", 0.8), _item("a", 0.8)]) == ["a"]
+
+
+def test_top_entry_ids_marks_an_item_with_no_text_id_as_none():
+    """The best item cannot be named: the caller must not read the next best in its place."""
+    assert rag_view.top_entry_ids([_item(None, 0.9), _item("b", 0.5)]) == [None]
+    assert rag_view.top_entry_ids([_item(7, 0.9), _item("b", 0.9)]) == [None, "b"]
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        None,
+        [],
+        {"not": "a list"},
+        "text",
+        [_item("a", None)],
+        [_item("a", True)],
+        [_item("a", "0.9")],
+        [_item("a", float("nan"))],
+        [_item("a", 1.5), _item("b", -0.2)],
+        ["not an item", None, 3],
+    ],
+)
+def test_top_entry_ids_is_empty_where_no_item_has_a_valid_score(items):
+    assert rag_view.top_entry_ids(items) == []
+
+
+def test_top_entry_ids_skips_items_without_a_valid_score_but_keeps_the_rest():
+    items = ["x", _item("a", None), _item("b", 1.5), _item("c", 0.4)]
+    assert rag_view.top_entry_ids(items) == ["c"]
+
+
+def test_top_entry_ids_agrees_with_the_percentage_the_page_prints():
+    """The percentage of the top item is `best_pct` (kept matches) - the same maximum, the same `score` rule."""
+    matches = [_item("a", 0.625), _item("b", 0.91), _item("c", 0.62)]
+    top = rag_view.top_entry_ids(matches)
+    assert top == ["b"]
+    assert rag_view.rag_view(matches, None, KINDS)["best_pct"] == rag_view.percent(0.91)

@@ -267,7 +267,7 @@ def test_the_view_carries_the_analysis_of_the_newest_run(db):
         "failure": None,
         "best_pct": 87,
         "floor_pct": 50,
-        "threshold_pct": 80,
+        "threshold_pct": 0,  # the rule's threshold is not served (DEC-225)
         "scored": 2,
         "candidates": [
             {"pct": 87, "title": "Quét cổng nội bộ", "conclusion": "confirmed_incident"},
@@ -294,7 +294,7 @@ def test_the_view_carries_the_analysis_of_the_newest_run(db):
     assert built["tech"]["correlated_at_analysis"] == 2
     # the pair the page already had agrees with the panel for the same run
     assert view["rag"]["best_pct"] == built["rag"]["best_pct"] == 87
-    assert [row["id"] for row in built["checks"]] == ["1", "2", "3", "3r", "4", "5", "6"]
+    assert [row["id"] for row in built["checks"]] == ["1", "2", "3", "4", "5", "6"]
 
 
 def test_an_alert_with_no_run_has_no_analysis_and_no_statement_for_one(db):
@@ -643,8 +643,8 @@ def test_for_a_run_the_rule_applied_to_the_model_own_answer_is_not_served(db, ch
     )
     assert all(row["model"] is None and row["match"] is None for row in built["facts"])
     assert all(row["system"] is not None for row in built["facts"])
-    assert [row["id"] for row in built["checks"]] == ["1", "2", "3", "3r", "4", "5"]
-    assert built["check_totals"] == {"passed": 6, "applicable": 6, "warnings": 0}
+    assert [row["id"] for row in built["checks"]] == ["1", "2", "3", "4", "5"]
+    assert built["check_totals"] == {"passed": 5, "applicable": 5, "warnings": 0}
     assert built["summary"] == TEXTS["summary"] and built["next_checks"] == TEXTS["next_checks"][:3]
     assert len(built["reasons"]) == 3
     assert built["rag"]["state"] == "matched" and built["history"]["total"] == 15
@@ -661,6 +661,58 @@ def test_for_a_run_the_rule_applied_to_the_model_own_answer_is_not_served(db, ch
         ).fetchall()
         == before
     )
+
+
+def test_a_model_false_positive_the_rule_made_true_positive_is_served_like_the_others(db):
+    """DEC-225, the other direction: an incident at 85 % made the model's `false_positive` a `true_positive`. The
+    model's own readings and declared facts are withheld exactly as above, step 4 (n/a for a true positive) and
+    step 6 are not told, and the stored run says it all."""
+    _entry(db, ENTRY_A, "Quét cổng nội bộ", "confirmed_incident")
+    alert_id = _queued(db, suggestion_visible=True)
+    lookup = _lookup(
+        db,
+        alert_id,
+        matches=[_match(ENTRY_A, 0.85)],
+        ranked=[{"entry_id": ENTRY_A, "score": 0.85}],
+        history=HISTORY,
+    )
+    gate = _gate(
+        proposed_verdict="false_positive",
+        final_verdict="true_positive",
+        flagged_by=["step6"],
+        steps={**STEPS, "3r": "changed", "4": "n/a", "6": "disagree"},
+        rag_rule={
+            "threshold": 80,
+            "best_pct": 85,
+            "applied": True,
+            "changed": True,
+            "entry_side": "incident",
+            "rule_verdict": "true_positive",
+            "basis": "match",
+        },
+        verifier_verdict="needs_review",
+    )
+    _insert_run(
+        db,
+        alert_id,
+        result={**RAW, "suggested_action": "true_positive", "confidence": "high"},
+        gate_result=gate,
+        lookup_id=lookup,
+    )
+
+    view = get_alert_view(db, alert_id)
+    built = view["analysis"]
+
+    assert view["proposed_action"] == "true_positive"
+    assert view["suggestion"]["suggested_action"] == "true_positive"
+    assert view["suggestion"]["confidence"] is None
+    assert view["suggestion"]["gate"]["verifier_verdict"] is None
+    assert "rag_rule" not in view["suggestion"]["gate"]
+    assert built["reading_attack"] is None and built["would_change"] is None
+    assert all(row["model"] is None and row["match"] is None for row in built["facts"])
+    assert [row["id"] for row in built["checks"]] == ["1", "2", "3", "4", "5"]
+    assert built["rag"]["state"] == "matched" and built["rag"]["threshold_pct"] == 0
+    assert "rag_rule" not in set(_walk_keys(view))
 
 
 def test_a_changed_run_and_an_unchanged_one_are_served_the_same_analysis(db):
@@ -740,7 +792,7 @@ def test_a_version_1_gate_and_a_version_3_result_still_give_an_analysis(db):
     assert [(r["verified"], r["why"]) for r in built["reasons"]] == [(False, "not_substring")] * 3
     rows = {row["id"]: row for row in built["checks"]}
     assert rows["3"] == {"id": "3", "outcome": "warn", "detail": "no_verified_quote"}
-    assert rows["4"]["detail"] == "not_run" and rows["3r"]["detail"] == "rag_rule_off"
+    assert rows["4"]["detail"] == "not_run" and "3r" not in rows
 
 
 @pytest.mark.parametrize(

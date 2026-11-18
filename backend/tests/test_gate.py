@@ -765,8 +765,16 @@ def test_gate_result_is_version_2_and_shows_the_flags_not_a_force():
         "forced": False,
         "forced_by": [],
         "flagged_by": ["step6"],
-        # DEC-219: on every new run; the switch off (threshold 0) applies nothing
-        "rag_rule": {"threshold": 0, "best_pct": None, "applied": False, "changed": False},
+        # DEC-219, DEC-225: on every new run; the switch off (threshold 0) applies nothing
+        "rag_rule": {
+            "threshold": 0,
+            "best_pct": None,
+            "applied": False,
+            "changed": False,
+            "entry_side": None,
+            "rule_verdict": None,
+            "basis": None,
+        },
         "step1_errors": [],  # DEC-218: the first call was valid, so none
         "steps": state.steps,
         "hallucination_flag": False,

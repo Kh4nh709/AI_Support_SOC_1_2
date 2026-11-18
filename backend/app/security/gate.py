@@ -15,14 +15,18 @@ still recorded (`hallucination_flag`, `mismatched_fields`, `dropped_reasons`, `m
 check forced the verdict to `needs_review` (`forced_by`, `gate_result` version 1); those documents stay in
 the database and the readers still read them (`llm.verdicts`).
 
-DEC-219 (RR-T1, as amended): the one step that can change the verdict. `step3r_rag_rule` runs after step 3 and
-before step 4: when the alert's best RAG match is below the configured threshold, `false_positive` is ①'s
-DEFAULT answer, so a model `true_positive` becomes `false_positive`. It is not a gate force and not a failed
-check: `forced` stays false, `forced_by` stays empty and `flagged_by` is not touched; `steps["3r"]` and
-`gate_result.rag_rule` are the record. `proposed_verdict` stays the model's own answer (the stored record of
-it), which the verifier is sent and step 6 compares with; `verdict` is what ① ends with. `security` imports
-only `infra`, so the rule is handed two plain integers (`best_pct | None`, `threshold`), computed by
-`tier1/triage.py`.
+DEC-219 (RR-T1, as amended) and DEC-225 (RR-T3): the one step that can change the verdict. `step3r_rag_rule` runs
+after step 3 and before step 4. It reads the single top knowledge item of the lookup ①'s prompt held: its percentage
+(`best_pct`), its side (`entry_side`: `incident` for a confirmed incident, `benign` for the four closed conclusions)
+and how the percentage was made (`basis`: `match` for a kept match, `below_floor` for a candidate the rerank scored
+under the floor). An incident at or over the threshold makes ①'s verdict `true_positive`, an incident under it
+`false_positive`; a benign item at or over it `false_positive`; a benign item under it changes nothing. It is not a
+gate force and not a failed check: `forced` stays false, `forced_by` stays empty and `flagged_by` is not touched;
+`steps["3r"]` and `gate_result.rag_rule` are the record. `proposed_verdict` stays the model's own answer (the stored
+record of it), which the verifier is sent and step 6 compares with; `verdict` is what ① ends with. `security` imports
+only `infra`, so the rule is handed plain values (`best_pct | None`, `entry_side | None`, `threshold`, `basis | None`),
+computed by `tier1/triage.py`. Tier 1 is not told that a rule exists (the Owner, 18/11): the readers that serve Tier 1
+(`llm.verdicts`, `tier1.queue`, `tier1.analysis`) use the stored record to withhold, and say nothing of it.
 """
 
 from __future__ import annotations
@@ -43,6 +47,37 @@ Scanner = Callable[[Iterable[Block]], list[Any]]
 _STEP2_STRING_FIELDS = ("severity", "ioc_reputation", "asset_criticality", "identity_privileged")
 _FP_IOC_BLOCKS = frozenset({"malicious", "suspicious"})
 _FP_ASSET_BLOCKS = frozenset({"high", "unknown"})
+
+#: DEC-225: the two sides of the top knowledge item the RAG rule reads (`tier1/triage.py` maps the entry's conclusion
+#: to one of them: `confirmed_incident` is `incident`, the four closed conclusions are `benign`), and the two ways its
+#: percentage was made. Plain strings on purpose: `security` imports only `infra`.
+RAG_SIDES: tuple[str, ...] = ("incident", "benign")
+RAG_BASES: tuple[str, ...] = ("match", "below_floor")
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _rag_rule_record(
+    threshold: int = 0,
+    best_pct: int | None = None,
+    applied: bool = False,
+    changed: bool = False,
+    entry_side: str | None = None,
+    rule_verdict: str | None = None,
+    basis: str | None = None,
+) -> dict[str, Any]:
+    """`gate_result.rag_rule` (DEC-219, DEC-225): the defaults are the switch-off value every document carries."""
+    return {
+        "threshold": threshold,
+        "best_pct": best_pct,
+        "applied": applied,
+        "changed": changed,
+        "entry_side": entry_side,
+        "rule_verdict": rule_verdict,
+        "basis": basis,
+    }
 
 
 @dataclass
@@ -66,16 +101,10 @@ class GateState:
     #: DEC-218: the first call's schema-validator messages when step 1 was `repaired`, else `[]`. They may name a
     #: key the model invented, so they are for `gate_result` (the database) only and never for a prompt.
     step1_errors: list[str] = dataclass_field(default_factory=list)
-    #: DEC-219: `{threshold, best_pct, applied, changed}`, what `step3r_rag_rule` was given and found. Before the
-    #: step runs (and when no caller runs it) it is the switch-off value, so every document carries the key.
-    rag_rule: dict[str, Any] = dataclass_field(
-        default_factory=lambda: {
-            "threshold": 0,
-            "best_pct": None,
-            "applied": False,
-            "changed": False,
-        }
-    )
+    #: DEC-219 / DEC-225: `{threshold, best_pct, applied, changed, entry_side, rule_verdict, basis}`, what
+    #: `step3r_rag_rule` was given and found. Before the step runs (and when no caller runs it) it is the switch-off
+    #: value, so every document carries the key.
+    rag_rule: dict[str, Any] = dataclass_field(default_factory=_rag_rule_record)
 
 
 def step1_schema(
@@ -184,26 +213,46 @@ def step3_quotes(state: GateState) -> None:
         _flag(state, "step3")
 
 
-def step3r_rag_rule(state: GateState, best_pct: int | None, threshold: int) -> None:
-    """The RAG low-match rule (DEC-219). It APPLIES when `threshold > 0`, `best_pct` is a number and
-    `best_pct < threshold` (equal does not apply: 80 is not below 80). When it applies and the model answered
-    `true_positive`, ①'s verdict becomes `false_positive` (its default answer below the threshold) and the step
-    is `changed`; when it applies and the model already answered `false_positive` the step is `applied` and
-    nothing else changes; otherwise `n/a`. The rule reads the model's own answer (`proposed_verdict`), not the
-    verdict so far, so a second call gives the same state. It runs wherever step 3 runs, and step 4 then
-    evaluates the verdict it finds. It is neither a force (`forced` and `forced_by` are not touched: the
-    record is `steps["3r"]` and `rag_rule`) nor a failed check (`flagged_by`, the reasons and `proposed_verdict`
-    are not touched)."""
-    applied = threshold > 0 and best_pct is not None and best_pct < threshold
-    changed = applied and state.proposed_verdict == "true_positive"
-    if changed:
-        state.verdict = "false_positive"
-    state.rag_rule = {
-        "threshold": threshold,
-        "best_pct": best_pct,
-        "applied": applied,
-        "changed": changed,
-    }
+def step3r_rag_rule(
+    state: GateState,
+    best_pct: int | None,
+    entry_side: str | None,
+    threshold: int,
+    basis: str | None = None,
+) -> None:
+    """The RAG rule (DEC-219, two-sided since DEC-225). It reads the single top knowledge item of the lookup ①'s
+    prompt held: `best_pct` (its percentage: a kept match's `round(score * 100)`, or, for a lookup that kept none,
+    the best scored candidate's, cut down), `entry_side` (`"incident"` | `"benign"`, from the entry's conclusion)
+    and `basis` (`"match"` | `"below_floor"`: only recorded). It APPLIES when `threshold > 0`, `best_pct` is an
+    integer and `entry_side` is one of the two, except for a `benign` item under the threshold (then the model's
+    answer stands):
+
+    * `incident`, `best_pct >= threshold`: ①'s verdict is `true_positive`; under the threshold, `false_positive`;
+    * `benign`, `best_pct >= threshold`: `false_positive`.
+
+    Equal applies (80 at threshold 80). `rule_verdict` is that verdict; `changed` is "applied and `rule_verdict`
+    differs from the model's own answer" (`proposed_verdict`), and when the rule applies ①'s verdict
+    (`state.verdict`) is the rule's. The step is `changed`, `applied` (the rule agreed with the model) or `n/a`. The
+    rule reads the model's own answer, not the verdict so far, so a second call gives the same state. It runs
+    wherever step 3 runs, and step 4 then evaluates the verdict it finds. It is neither a force (`forced` and
+    `forced_by` are not touched: the record is `steps["3r"]` and `rag_rule`) nor a failed check (`flagged_by`, the
+    reasons and `proposed_verdict` are not touched). A value that is not what it should be (a side outside
+    `RAG_SIDES`, a percentage that is not an integer, a basis outside `RAG_BASES`) is recorded as `None`, and the
+    rule does not apply to it."""
+    pct = best_pct if _is_number(best_pct) else None
+    side = entry_side if isinstance(entry_side, str) and entry_side in RAG_SIDES else None
+    how = basis if isinstance(basis, str) and basis in RAG_BASES else None
+    rule_verdict: str | None = None
+    if threshold > 0 and pct is not None and side is not None:
+        if pct >= threshold:
+            rule_verdict = "true_positive" if side == "incident" else "false_positive"
+        elif side == "incident":
+            rule_verdict = "false_positive"
+    applied = rule_verdict is not None
+    changed = applied and rule_verdict != state.proposed_verdict
+    if rule_verdict is not None:
+        state.verdict = rule_verdict
+    state.rag_rule = _rag_rule_record(threshold, pct, applied, changed, side, rule_verdict, how)
     state.steps["3r"] = "changed" if changed else "applied" if applied else "n/a"
 
 
@@ -212,8 +261,8 @@ def step4_fp_policy(state: GateState, rule_check: RuleCheck) -> None:
     that failed, not just the first, and any of them flags the run. Evaluated for EVERY `false_positive`
     verdict, whatever step 2 or step 3 found (a flag no longer ends the policy check); `n/a` only for a
     `true_positive` verdict. It evaluates the verdict it finds (`state.verdict`): a `false_positive` the RAG
-    rule produced (`step3r_rag_rule`, DEC-219) gets the same checks as one the model gave. No detector output
-    feeds this step."""
+    rule produced (`step3r_rag_rule`, DEC-219) gets the same checks as one the model gave, and a `true_positive` the
+    rule produced (DEC-225) is `n/a` like any other. No detector output feeds this step."""
     if state.verdict != "false_positive":
         state.steps["4"] = "n/a"
         return
@@ -260,14 +309,17 @@ def run_steps_1_to_5(
     scan: Scanner,
     step1_errors: Sequence[str] = (),
     rag_best_pct: int | None = None,
+    rag_entry_side: str | None = None,
     rag_threshold: int = 0,
+    rag_basis: str | None = None,
 ) -> GateState:
-    """`start` + steps 2..5, in order, the RAG rule (DEC-219) between 3 and 4. Assumes `parsed` already passed
-    step 1. The defaults are the switch off: the rule's step is `n/a` and nothing else changes."""
+    """`start` + steps 2..5, in order, the RAG rule (DEC-219, DEC-225) between 3 and 4. Assumes `parsed` already
+    passed step 1. The defaults are the switch off: the rule's step is `n/a` and nothing else changes.
+    """
     state = start(parsed, facts, blocks, repaired=repaired, step1_errors=step1_errors)
     step2_basis(state)
     step3_quotes(state)
-    step3r_rag_rule(state, rag_best_pct, rag_threshold)
+    step3r_rag_rule(state, rag_best_pct, rag_entry_side, rag_threshold, rag_basis)
     step4_fp_policy(state, rule_check)
     step5_detector(state, scan)
     return state
@@ -276,8 +328,7 @@ def run_steps_1_to_5(
 def step6_verifier(state: GateState, verifier_parsed: dict | None) -> None:
     """Compare against `state.proposed_verdict`: the model's own answer, which is what the verifier prompt
     carried (P3-T09; `false_positive` or `true_positive`). Since DEC-219 that is not always the verdict ① ends
-    with: the verifier is not asked about a `false_positive` the RAG rule produced, it checks the model's
-    claim. A verifier answer that is unusable (`None`) is `invalid` and flags the run; `agree` false, or a
+    with: the verifier is not asked about a verdict the RAG rule produced, it checks the model's claim. A verifier answer that is unusable (`None`) is `invalid` and flags the run; `agree` false, or a
     `structured_only_verdict` that differs from the model's verdict (the verifier may still answer
     `needs_review`), is `disagree` and flags it; otherwise `agree`."""
     if verifier_parsed is None:
@@ -296,7 +347,7 @@ def step6_verifier(state: GateState, verifier_parsed: dict | None) -> None:
 def step7_output_guard(state: GateState) -> dict:
     """`proposer_raw` with `suggested_action`/`reasons` replaced by the gated values, passed
     through `output_guard.enforce()` — the final `triage_v4`-shaped result: ①'s verdict (the model's own, or the
-    `false_positive` the RAG rule put in its place; a `needs_review` raises `OutputGuardError`) and the reasons
+    verdict the RAG rule put in its place; a `needs_review` raises `OutputGuardError`) and the reasons
     whose quote was verified (the model's, also when the rule changed the verdict). DEC-221: the five fields the
     model writes for the analyst (`summary`, `reading_attack`, `reading_benign`, `would_change`, `next_checks`) go
     through `proposer_raw` untouched and `output_guard.enforce` checks their types; no other step reads them.
@@ -326,12 +377,16 @@ def gate_result(
     not affected) is what the first call got wrong when the repair round fixed it, else `[]`; it may name a key
     the model invented and is never read into a prompt.
 
-    DEC-219 (still version 2, same reason): `rag_rule` is `{threshold, best_pct, applied, changed}` on every
-    document (the switch off: threshold 0, nothing applied). `proposed_verdict` is the model's own answer, the
-    stored record of it; `final_verdict` is the verdict after the RAG rule (the rule's default answer below the
-    threshold), so the two differ exactly when `rag_rule.changed` is true. The rule is not a gate force:
-    `forced` stays false and `forced_by` stays empty on every new run, as since DEC-217. `flagged_by` is not
-    touched by the rule either: it is not a failed check."""
+    DEC-219 (still version 2, same reason): `rag_rule` is on every document (the switch off: threshold 0, nothing
+    applied). DEC-225 widens it to `{threshold, best_pct, applied, changed, entry_side, rule_verdict, basis}`:
+    `best_pct` is the percentage the rule compared (a kept match's, or the below-floor candidate's), `entry_side`
+    the top item's side (`incident` | `benign` | null), `rule_verdict` the verdict the rule gave when it applied
+    (`true_positive` | `false_positive` | null) and `basis` how the percentage was made (`match` | `below_floor` |
+    null). A DEC-219 document has the first four keys only and a version 1 document none: the readers
+    (`llm.verdicts`) read what they find. `proposed_verdict` is the model's own answer, the stored record of it;
+    `final_verdict` is the verdict after the RAG rule, so the two differ exactly when `rag_rule.changed` is true.
+    The rule is not a gate force: `forced` stays false and `forced_by` stays empty on every new run, as since
+    DEC-217. `flagged_by` is not touched by the rule either: it is not a failed check."""
     return {
         "version": 2,
         "proposed_verdict": state.proposed_verdict,

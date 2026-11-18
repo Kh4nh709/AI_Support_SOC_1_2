@@ -755,10 +755,13 @@ def put_lookup(
     return lookup_id
 
 
-def approved(db, content: str, level: str, score: float | None = None) -> dict:
+def approved(
+    db, content: str, level: str, score: float | None = None, conclusion: str = "closed_fp"
+) -> dict:
     """An active entry and the match a lookup stores for it. `score` is the rerank's (stored beside the
-    level; the default sits in the middle of the level's band)."""
-    entry_id = add_entry(db, content=content)
+    level; the default sits in the middle of the level's band). `conclusion` is the entry's
+    (`knowledge_entries.conclusion`; DEC-225: the side the RAG rule reads)."""
+    entry_id = add_entry(db, content=content, conclusion=conclusion)
     return {
         "entry_id": entry_id,
         "level": level,
