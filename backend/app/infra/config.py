@@ -328,10 +328,14 @@ class Config:
     VOYAGE_PRICE_EMBED_PER_M: float = 0.06
     VOYAGE_PRICE_RERANK_PER_M: float = 0.05
     VECTOR_DATABASE_URL: str = ""
-    # DEC-219: the RAG low-match rule of ①, trial first. An integer from 0 to 100 (`ConfigError` otherwise): when
-    # the alert's RAG lookup kept a match and its best match is BELOW this percentage, ① answers
-    # `false_positive` whatever the model said (`security.gate.step3r_rag_rule`). 0 (the default) is off: the
-    # rule never applies and a run is exactly what it was before the key existed. `.env` key only.
+    # DEC-219, two-sided since DEC-225: the RAG rule of ①, trial first. An integer from 0 to 100 (`ConfigError`
+    # otherwise). The single top knowledge item of the alert's RAG lookup (its best kept match, else the best
+    # candidate the rerank scored under the floor) decides ①'s verdict by its entry's conclusion
+    # (`security.gate.step3r_rag_rule`): a `confirmed_incident` gives `true_positive` at or over this percentage and
+    # `false_positive` under it, also under the floor; `closed_fp`, `closed_benign`, `concluded_fp` and
+    # `concluded_policy_violation` give `false_positive` at or over it and leave the model's answer under it. 0 (the
+    # default) is off: the rule never applies and a run is exactly what it was before the key existed. Tier 1 is not
+    # told that the rule exists. `.env` key only.
     TRIAGE_RAG_FP_BELOW_PCT: int = 0
     # SR-T1 (SOAR review tickets on the web, spec 2026-11-16 §6), `.env` keys only. SOAR_NOTICE_API_KEY: the key n8n
     # sends as `X-API-Key` to `POST /webhook/soar-notices`; empty answers 503 (a secret). SOAR_NOTICE_IP_ALLOWLIST: a

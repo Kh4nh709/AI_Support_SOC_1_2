@@ -51,10 +51,11 @@ SHOW_STATES: frozenset[str] = frozenset(
 #: model's summary, its two readings, every reason, the checks the gate ran, the RAG candidates and the decision
 #: history of the run, which is ①'s whole answer. It does not start with `llm_`: the labelling page drops it by this
 #: entry alone (at any depth). `tests/test_analysis_db.py` walks the stripped views for it and for the words in it.
-#: DEC-219: `gate.rag_rule` (`{threshold, best_pct, applied, changed}`, "this alert was 62 % like approved
-#: knowledge, below 80") is nested in `suggestion.gate`, so it needs no entry of its own: a blind, undecided head
-#: loses it with `suggestion`, and the labelling page drops `gate` at any depth (`LABELING_DENYLIST`). The queue row
-#: has no such key. `tests/test_served_rag_rule.py` walks the stripped views for it.
+#: DEC-219, DEC-225: the RAG rule's record (`gate_result.rag_rule`) is not served to Tier 1 at all - the Owner: "đây là
+#: luật ngầm. Không ghi vào UI" - so no view, blind or not, has a `rag_rule` key and it needs no entry here. What is
+#: served for a run the rule decided is an ordinary conclusion (`suggestion`, `proposed_action`, `held_by`, `rag`,
+#: `analysis`, all on the list above), and the labelling page drops `gate` at any depth (`LABELING_DENYLIST`).
+#: `tests/test_served_rag_rule.py` walks the views, stripped and not, for the key.
 ANALYST_HIDE: frozenset[str] = frozenset(
     {
         "suggestion",

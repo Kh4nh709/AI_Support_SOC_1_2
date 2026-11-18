@@ -225,8 +225,10 @@ def rag_panel(
 ) -> dict[str, Any]:
     """The RAG standing of one run for the analysis panel: `{"state", "failure", "best_pct", "floor_pct",
     "threshold_pct", "scored", "candidates"}`. The arguments are `rag_view`'s (the stored `matches` and `ranked` of
-    the lookup the run held, the run's `citation_warnings`, `rag.failures.FAILURE_KINDS`, `RAG_MIN_SCORE`) and the
-    rule's `threshold` (`gate_result.rag_rule.threshold`, 0 = off; anything that is not a positive integer is 0).
+    the lookup the run held, the run's `citation_warnings`, `rag.failures.FAILURE_KINDS`, `RAG_MIN_SCORE`) and a
+    `threshold` (0 = none; anything that is not a positive integer is 0). Since DEC-225 no reader passes one: Tier 1
+    is not told that the RAG rule exists (its `gate_result.rag_rule.threshold` is not served) and ② has no such rule,
+    so `threshold_pct` is 0 on both pages; the parameter and the key stay for the shape both pages share.
 
     * `state` is one of `STATES`; `failure` is the closed kind when it is `failed`, else `None`.
     * `best_pct` is the number the page shows for the run: the best kept match (`rag_view`'s `best_pct`) when
