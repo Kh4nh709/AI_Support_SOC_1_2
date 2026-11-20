@@ -50,6 +50,17 @@ function reload(patch, path) {
   location.assign(url);
   if (url.search === location.search) location.reload();
 }
+function previewQueueRow(event) {
+  const target = event.target;
+  if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.detail === 0 ||
+      target.closest("button, input, select") || !window.getSelection()?.isCollapsed) return;
+  const button = target.closest("[data-record]")?.querySelector('[data-column="description"] button[aria-pressed]');
+  if (!button) return;
+  event.preventDefault();
+  event.stopPropagation();
+  button.click();
+}
+
 function Demo() {
   const { pathname } = useLocation(),
     navigate = useNavigate();
@@ -222,7 +233,7 @@ function Demo() {
         </main>
       ) : (
         <AuthContext.Provider value={auth}>
-          <AppRoutes />
+          <div className="wf-app" onClickCapture={previewQueueRow}><AppRoutes /></div>
         </AuthContext.Provider>
       )}
     </>

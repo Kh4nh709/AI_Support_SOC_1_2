@@ -26,6 +26,7 @@ const result = await build({
   },
   build: {
     write: false,
+    assetsInlineLimit: Infinity,
     modulePreload: false,
     reportCompressedSize: false,
     cssCodeSplit: false,
